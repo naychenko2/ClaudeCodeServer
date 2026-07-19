@@ -44,16 +44,40 @@ public record ChangelogItem(
     List<string> Authors,
     List<string> Projects);
 
+/// <summary>
+/// Во сколько обошлась сборка сводки дня: время ожидания, токены и стоимость.
+/// Пишется при генерации, живёт в кеше рядом со сводкой и показывается внизу дня.
+/// </summary>
+/// <param name="DurationMs">Полное время вызова claude, включая старт CLI (столько ждал бы пользователь).</param>
+/// <param name="InputTokens">Входные токены без кеша.</param>
+/// <param name="CacheCreationTokens">Вход, записанный в кеш промптов (тарифицируется как обычный вход).</param>
+/// <param name="CacheReadTokens">Вход, прочитанный из кеша (дешевле обычного).</param>
+/// <param name="OutputTokens">Сгенерированные токены.</param>
+/// <param name="CostUsd">Стоимость в долларах: по ценам провайдера, а для подписки — оценка по тарифам API (null, если цен нет).</param>
+/// <param name="Model">Модель, которой реально считался вызов.</param>
+/// <param name="GeneratedAt">Когда сводка была собрана.</param>
+public record ChangelogGeneration(
+    long DurationMs,
+    long InputTokens,
+    long CacheCreationTokens,
+    long CacheReadTokens,
+    long OutputTokens,
+    double? CostUsd,
+    string? Model,
+    DateTimeOffset GeneratedAt);
+
 /// <summary>Продуктовая сводка изменений за один день (по всем проектам).</summary>
 /// <param name="Date">День в формате yyyy-MM-dd (локальная дата коммитов).</param>
 /// <param name="Items">Пункты сводки (сгенерированы Claude, закешированы).</param>
 /// <param name="Degraded">Сводку собрать не удалось — пункты сырые (subject'ы коммитов), а не осмысленная сводка.</param>
 /// <param name="DegradedReason">Человеческое объяснение, что сломалось и как чинить (null, если всё хорошо).</param>
+/// <param name="Generation">Расход на сборку этой сводки (null у старых записей кеша и когда метрик не дали).</param>
 public record ChangelogDay(
     string Date,
     List<ChangelogItem> Items,
     bool Degraded = false,
-    string? DegradedReason = null);
+    string? DegradedReason = null,
+    ChangelogGeneration? Generation = null);
 
 /// <summary>
 /// Заглушка дня для мгновенного списка (без LLM): дата, сколько коммитов,

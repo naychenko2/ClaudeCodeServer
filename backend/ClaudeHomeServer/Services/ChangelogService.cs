@@ -51,10 +51,11 @@ public class ChangelogService(FileService files, IConfiguration config, ILogger<
 
     private const string CacheFile = "product";
 
-    // Degraded/DegradedReason — опциональные: старые записи кеша (без этих полей)
-    // читаются как «сводка нормальная», формат обратно совместим
+    // Degraded/DegradedReason/Generation — опциональные: старые записи кеша (без этих
+    // полей) читаются как «сводка нормальная, расход неизвестен», формат обратно совместим
     private sealed record CachedDay(string ShasHash, List<ChangelogItem> Items,
-        bool Degraded = false, string? DegradedReason = null);
+        bool Degraded = false, string? DegradedReason = null,
+        ChangelogGeneration? Generation = null);
 
     // ===== Публичное API =====
 
@@ -104,7 +105,7 @@ public class ChangelogService(FileService files, IConfiguration config, ILogger<
         var hash = ShasHash(dayCommits);
         var cache = LoadCache();
         if (cache.TryGetValue(date, out var cached) && cached.ShasHash == hash)
-            return new ChangelogDay(date, cached.Items, cached.Degraded, cached.DegradedReason);
+            return new ChangelogDay(date, cached.Items, cached.Degraded, cached.DegradedReason, cached.Generation);
 
         await _generateLock.WaitAsync();
         try
@@ -112,18 +113,18 @@ public class ChangelogService(FileService files, IConfiguration config, ILogger<
             // Перепроверка под замком: пока ждали, другой запрос мог сгенерировать
             cache = LoadCache();
             if (cache.TryGetValue(date, out cached) && cached.ShasHash == hash)
-                return new ChangelogDay(date, cached.Items, cached.Degraded, cached.DegradedReason);
+                return new ChangelogDay(date, cached.Items, cached.Degraded, cached.DegradedReason, cached.Generation);
 
-            var (items, error) = await SummarizeDay(dayCommits);
+            var (items, error, generation) = await SummarizeDay(dayCommits);
             // Сводки нет — показываем сырые коммиты, но ЧЕСТНО помечаем это, а не выдаём
             // их за настоящую сводку (иначе поломка выглядит как «плохо сгенерилось»)
             var degraded = items is null;
             var reason = degraded ? DescribeFailure(error) : null;
             items ??= FallbackItems(dayCommits);
 
-            cache[date] = new CachedDay(hash, items, degraded, reason);
+            cache[date] = new CachedDay(hash, items, degraded, reason, generation);
             SaveCache(cache);
-            return new ChangelogDay(date, items, degraded, reason);
+            return new ChangelogDay(date, items, degraded, reason, generation);
         }
         finally { _generateLock.Release(); }
     }
@@ -220,18 +221,19 @@ public class ChangelogService(FileService files, IConfiguration config, ILogger<
     /// один вызов — 141 с / 13 пунктов, три чанка — 182 с / 29 пунктов.
     /// От переполнения таймаута страхует Changelog:TimeoutMs, а не батчинг.
     /// </summary>
-    /// <returns>Пункты сводки, либо null + причина сбоя (для честной пометки дня).</returns>
-    private async Task<(List<ChangelogItem>? Items, string? Error)> SummarizeDay(
+    /// <returns>Пункты сводки, либо null + причина сбоя (для честной пометки дня), плюс расход вызова.</returns>
+    private async Task<(List<ChangelogItem>? Items, string? Error, ChangelogGeneration? Generation)> SummarizeDay(
         List<GitCommitRaw> commits, CancellationToken ct = default)
     {
         var knownAreas = KnownAreas();
-        var (json, error) = await TryRunClaude(BuildPrompt(commits, knownAreas), ct);
-        if (json is null) return (null, error);
+        var (json, error, generation) = await TryRunClaude(BuildPrompt(commits, knownAreas), ct);
+        // Расход отдаём и при неудачном разборе: токены на неудачный вызов всё равно потрачены
+        if (json is null) return (null, error, generation);
 
         var items = ParseAndClean(json);
         return items is null
-            ? (null, "модель вернула ответ, который не удалось разобрать")
-            : (NormalizeAreas(items), null);
+            ? (null, "модель вернула ответ, который не удалось разобрать", generation)
+            : (NormalizeAreas(items), null, generation);
     }
 
     // Техническую ошибку переводим в человеческое «что случилось и что делать».
@@ -409,21 +411,28 @@ public class ChangelogService(FileService files, IConfiguration config, ILogger<
     /// (таймаут / ненулевой exit code со stderr) — гасим его в null, на котором стоит фолбэк.
     /// NormalizeModel обязателен: на выключенном провайдере BuildCliEnv внутри раннера кидает,
     /// а так модель мягко откатывается на дефолтный Claude.</summary>
-    private async Task<(string? Json, string? Error)> TryRunClaude(string prompt, CancellationToken ct)
+    private async Task<(string? Json, string? Error, ChangelogGeneration? Generation)> TryRunClaude(
+        string prompt, CancellationToken ct)
     {
         try
         {
-            var output = await claude.RunAsync(prompt, claude.NormalizeModel(_model),
+            // Detailed-режим: вместе с ответом получаем расход вызова — он показывается
+            // пользователю внизу дня, чтобы цена сводки не была невидимой
+            var run = await claude.RunDetailedAsync(prompt, claude.NormalizeModel(_model),
                 TimeSpan.FromMilliseconds(_claudeTimeoutMs), ct);
-            return string.IsNullOrWhiteSpace(output)
-                ? (null, "claude вернул пустой ответ")
-                : (output, null);
+            var generation = run.Usage is { } u
+                ? new ChangelogGeneration(run.DurationMs, u.InputTokens, u.CacheCreationTokens,
+                    u.CacheReadTokens, u.OutputTokens, u.CostUsd, u.Model, DateTimeOffset.Now)
+                : null;
+            return string.IsNullOrWhiteSpace(run.Text)
+                ? (null, "claude вернул пустой ответ", generation)
+                : (run.Text, null, generation);
         }
         catch (Exception ex)
         {
             // ex.Message различает «не ответил за отведённое время» и «завершился с кодом N: <детали>»
             logger.LogWarning("Генерация changelog: {Error}", ex.Message);
-            return (null, ex.Message);
+            return (null, ex.Message, null);
         }
     }
 

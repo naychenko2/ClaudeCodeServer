@@ -1492,6 +1492,11 @@ public class SessionManager
             // При смене модели на стороннего провайдера — обновляем Provider
             if (newModel is not null && _llmProviders.ResolveByModel(newModel) is { } newProv)
                 entry.Info.Provider = newProv.Key;
+            // Родной Claude (ResolveByModel == null, в т.ч. пул подписок): модель меняем на
+            // лету у живого хода — применится к его последующим round-trip'ам. У сторонних
+            // провайдеров модель зашита в env процесса, там смена только со следующего хода.
+            else if (newModel is not null)
+                entry.Process?.TrySetModelLive(newModel);
         }
 
         if (name is not null)

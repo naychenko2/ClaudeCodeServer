@@ -34,5 +34,11 @@ public interface ILlmSessionAdapter : IAsyncDisposable
     // false — процесса нет, режим применится со следующего хода (пересоздание с --permission-mode).
     bool TrySetPermissionModeLive(ClaudeMode mode);
 
+    // Смена модели на лету у живого процесса (control-протокол set_model): новая модель
+    // применяется к последующим round-trip'ам идущего хода. Только родной Claude (для
+    // сторонних провайдеров модель едет в env процесса — там смена лишь со следующего хода).
+    // true — запрос отправлен живому процессу; false — процесса нет.
+    bool TrySetModelLive(string model);
+
     void Interrupt();
 }

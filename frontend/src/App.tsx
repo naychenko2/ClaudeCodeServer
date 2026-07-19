@@ -257,6 +257,11 @@ export default function App() {
       sessionStorage.removeItem('cc_role')
       sessionStorage.removeItem('cc_user_id')
       idbClear() // чистим кэш, чтобы данные не утекли к следующей сессии
+      // Раздел сбрасываем вместе с адресом: initialHash читается один раз при загрузке
+      // модуля, поэтому вход без перезагрузки страницы оставил бы hubTab прошлого
+      // пользователя — при смене аккаунта человек видел бы чужой раздел
+      localStorage.setItem(HUB_TAB_KEY, 'projects')
+      setHubTab('projects')
       navReplace({ screen: 'projects' })
       setProject(null)
       setAuth(null)
@@ -625,6 +630,10 @@ export default function App() {
     sessionStorage.removeItem('cc_role')
     sessionStorage.removeItem('cc_user_id')
     idbClear() // чистим кэш при смене аккаунта/сервера
+    // Раздел сбрасываем вместе с адресом — см. тот же комментарий в обработчике
+    // cc-unauthorized: иначе следующий вход поднимет раздел прошлого пользователя
+    localStorage.setItem(HUB_TAB_KEY, 'projects')
+    setHubTab('projects')
     navReplace({ screen: 'projects' })
     setProject(null)
     setAuth(null)

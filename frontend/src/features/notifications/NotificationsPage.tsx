@@ -319,19 +319,30 @@ export function NotificationsPage({ auth, onLogout, onHubTab }: {
       <div style={{
         flex: 1, overflow: 'auto', padding: '24px 16px',
         display: 'flex', justifyContent: 'center',
+        // Резерв под скроллбар: без него появление/исчезновение полосы сдвигает
+        // весь центрированный контент вбок при переключении режимов
+        scrollbarGutter: 'stable',
       }}>
-        <div style={{ width: '100%', maxWidth: mode === 'notifications' ? 680 : 1180 }}>
+        {/* Ширина каркаса НЕ зависит от режима — иначе заголовок и переключатель
+            ездят по горизонтали при клике. Широкая раскладка нужна только
+            «Диспетчеру»; шапка и лента уведомлений живут в колонке 680. */}
+        <div style={{ width: '100%', maxWidth: 1180 }}>
 
-          {/* Page header */}
-          <div style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-            marginBottom: 24, flexWrap: 'wrap', gap: 12,
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 0 }}>
+          {/* Page header. Ширина шапки следует за контентом режима (680 у ленты,
+              1180 у канбана) — тогда «Период» диспетчера идёт вровень со своей
+              шапкой. При этом заголовок с переключателем ЦЕНТРИРОВАНЫ: оба блока
+              центрированы по одной оси экрана, поэтому переключатель остаётся на
+              месте при смене режима. Тулбар — отдельной строкой ниже, чтобы не
+              сбивать эту центровку. */}
+          <div style={{ maxWidth: mode === 'notifications' ? 680 : 1180, margin: '0 auto 24px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 14, minWidth: 0 }}>
               {!isMobile && (
                 <div style={{
                   fontFamily: FONT.serif, fontSize: FS.h2, fontWeight: 700,
                   color: C.textHeading, letterSpacing: '-0.3px',
+                  // Ширина под более длинное слово («Уведомления»), чтобы смена
+                  // заголовка не сдвигала переключатель рядом
+                  minWidth: 150, whiteSpace: 'nowrap',
                 }}>
                   {mode === 'notifications' ? 'Уведомления' : 'Диспетчер'}
                 </div>
@@ -371,8 +382,12 @@ export function NotificationsPage({ auth, onLogout, onHubTab }: {
                 </button>
               </div>
             </div>
-            {mode === 'notifications' && !isMobile && (
-              <div style={{ display: 'flex', gap: SP.md, alignItems: 'center' }}>
+            {/* Тулбар — своей строкой под заголовком (только у ленты уведомлений).
+                Он идёт ПОСЛЕ центрированного заголовка, поэтому его появление
+                и исчезновение не сдвигает переключатель */}
+            {!isMobile && mode === 'notifications' && (
+              <div style={{ display: 'flex', gap: SP.md, alignItems: 'center', justifyContent: 'flex-end', minHeight: 34, marginTop: SP.lg }}>
+                {(<>
                 {/* Search */}
                 <div style={{ position: 'relative', width: 200 }}>
                   <Search size={14} style={{
@@ -430,13 +445,14 @@ export function NotificationsPage({ auth, onLogout, onHubTab }: {
                     <Trash2 size={14} /> Очистить прочитанные
                   </button>
                 )}
+                </>)}
               </div>
             )}
           </div>
 
           {/* Мобильная строка toolbar: поиск (primary) + «Фильтр» (overflow) + «⋯» действия */}
           {mode === 'notifications' && isMobile && (
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: SP.lg }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', maxWidth: 680, margin: `0 auto ${SP.lg}px` }}>
               <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
                 <Search size={14} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: C.textMuted, pointerEvents: 'none' }} />
                 <input
@@ -452,7 +468,8 @@ export function NotificationsPage({ auth, onLogout, onHubTab }: {
           {mode === 'dispatcher' ? (
             <AgentKanban />
           ) : (
-            <>
+            // Читаемая колонка ленты — 680 по центру, вровень с шапкой
+            <div style={{ maxWidth: 680, margin: '0 auto' }}>
               {/* Filter chips — десктоп; на мобиле фильтр в «⋯ Фильтр» */}
               {!isMobile && (
                 <div style={{ display: 'flex', gap: SP.sm, marginBottom: SP.xl, flexWrap: 'wrap' }}>
@@ -533,7 +550,7 @@ export function NotificationsPage({ auth, onLogout, onHubTab }: {
                   </div>
                 ))
               )}
-            </>
+            </div>
           )}
 
         </div>

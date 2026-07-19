@@ -35,26 +35,25 @@ public sealed class PersonaAgentFileSync
     private readonly PersonaAgentFileGenerator _generator;
     private readonly LlmProviderRegistry _providers;
     private readonly UserStore _users;
-    private readonly AppSettingsService _appSettings;
+    // Домашняя папка владельца ({база по среде}/{username} либо override из конфига)
+    private readonly UserHomeResolver _homes;
     private readonly ILogger<PersonaAgentFileSync> _log;
-    // Корень песочницы для чатов container-пользователей; null — в тестах (все local)
-    private readonly Execution.SandboxManager? _sandbox;
     private readonly string _baseDir;
     private readonly ConcurrentDictionary<string, DateTime> _lastSync = new();
 
     public PersonaAgentFileSync(IConfiguration config, PersonaManager personas,
         ProjectManager projects, LlmProviderRegistry providers, PersonaBindingsService bindings,
         PersonaAgentFileGenerator generator, UserStore users, AppSettingsService appSettings,
-        ILogger<PersonaAgentFileSync> log, Execution.SandboxManager? sandbox = null)
+        ILogger<PersonaAgentFileSync> log, Execution.SandboxManager? sandbox = null,
+        UserHomeResolver? homes = null)
     {
-        _sandbox = sandbox;
+        _homes = homes ?? UserHomeResolver.WithoutOverrides(appSettings, sandbox);
         _personas = personas;
         _projects = projects;
         _providers = providers;
         _bindings = bindings;
         _generator = generator;
         _users = users;
-        _appSettings = appSettings;
         _log = log;
         _filesMax = int.TryParse(config["Persona:AgentFilesMax"], out var max) && max > 0 ? max : 50;
         var dataDir = Path.GetDirectoryName(
@@ -169,7 +168,7 @@ public sealed class PersonaAgentFileSync
             if (p.RootPath is not null)
                 yield return Path.Combine(p.RootPath, ".claude", "agents", persona.Handle + ".md");
 
-        // Чат вне проекта: {DefaultProjectsPath}/{username}/Chats/.claude/agents/{handle}.md
+        // Чат вне проекта: {домашняя папка}/Chats/.claude/agents/{handle}.md
         // CLI использует эту папку как cwd для чатов вне проекта, поэтому agent() находит их.
         if (ChatRoot(ownerId) is { } chatRoot)
             yield return Path.Combine(chatRoot, ".claude", "agents", persona.Handle + ".md");
@@ -180,19 +179,14 @@ public sealed class PersonaAgentFileSync
         yield return AgentFilePath(ownerId, SharedDirKey, persona.Handle);
     }
 
-    // Cwd для чатов без проекта: {база по среде владельца}/{username}/Chats —
-    // у container-пользователей база = корень песочницы (как SessionManager.ResolveChatRoot)
+    // Cwd для чатов без проекта: {домашняя папка владельца}/Chats
+    // (как SessionManager.ResolveChatRoot — общий резолв в UserHomeResolver)
     private string? ChatRoot(string ownerId)
     {
         try
         {
-            var user = _users.GetById(ownerId);
-            if (user is null || string.IsNullOrWhiteSpace(user.Username)) return null;
-            var basePath = user.ExecutionEnvironment == Models.ExecutionEnvironments.Container
-                ? _sandbox?.Options.ProjectsRoot
-                : _appSettings.Get().DefaultProjectsPath;
-            if (string.IsNullOrWhiteSpace(basePath)) return null;
-            return Path.Combine(basePath, user.Username, "Chats");
+            var home = _homes.Resolve(_users.GetById(ownerId));
+            return home is null ? null : Path.Combine(home, "Chats");
         }
         catch { return null; }
     }

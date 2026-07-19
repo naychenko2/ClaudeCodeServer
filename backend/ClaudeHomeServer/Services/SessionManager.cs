@@ -134,6 +134,8 @@ public class SessionManager
     // Драйверы среды исполнения владельцев (local / docker-песочница)
     private readonly Execution.ILauncherFactory _launchers;
     private readonly Execution.SandboxManager _sandbox;
+    // Домашняя папка владельца ({база по среде}/{username} либо override из конфига)
+    private readonly UserHomeResolver _homes;
 
     private readonly PersonaAgentFileSync? _agentSync;
 
@@ -151,9 +153,11 @@ public class SessionManager
         Execution.ILauncherFactory launchers,
         Execution.SandboxManager sandbox,
         // Опционально (в тестах не передаётся): синк файловых сабагентов-персон
-        PersonaAgentFileSync? agentSync = null)
+        PersonaAgentFileSync? agentSync = null,
+        UserHomeResolver? homes = null)
     {
         _agentSync = agentSync;
+        _homes = homes ?? UserHomeResolver.WithoutOverrides(appSettings, sandbox);
         _launchers = launchers;
         _sandbox = sandbox;
         _projects = projects;
@@ -448,7 +452,7 @@ public class SessionManager
         return ResolveChatRoot(ownerId);
     }
 
-    // Рабочая папка чата вне проекта: {DefaultProjectsPath}/{username}/Chats (создаётся при отсутствии)
+    // Рабочая папка чата вне проекта: {домашняя папка владельца}/Chats (создаётся при отсутствии)
 
     // Выбрать подписку Claude для новой сессии: если модель Claude (не сторонний провайдер),
     // выбираем из пула подписок (least-loaded из способных обслужить модель — пин Opus
@@ -466,21 +470,10 @@ public class SessionManager
             ?? throw new KeyNotFoundException($"Пользователь не найден: {ownerId}");
         // Container-пользователи живут в отдельном корне (Sandbox:ProjectsRoot):
         // только он монтируется в песочницу — данные local-пользователей туда не попадают
-        string basePath;
-        if (user.ExecutionEnvironment == Models.ExecutionEnvironments.Container)
-        {
-            basePath = _sandbox.Options.ProjectsRoot;
-            if (string.IsNullOrWhiteSpace(basePath))
-                throw new InvalidOperationException(
-                    "Песочница не настроена: задайте Sandbox:ProjectsRoot в appsettings.Local.json");
-        }
-        else
-        {
-            basePath = _appSettings.Get().DefaultProjectsPath;
-            if (string.IsNullOrWhiteSpace(basePath))
-                throw new InvalidOperationException("Не задана папка проектов по умолчанию");
-        }
-        var path = Path.Combine(basePath, user.Username, "Chats");
+        var home = _homes.Resolve(user)
+            ?? throw new InvalidOperationException(
+                UserHomeResolver.NotConfiguredMessage(user.ExecutionEnvironment));
+        var path = Path.Combine(home, "Chats");
         Directory.CreateDirectory(path);
         return path;
     }
@@ -525,7 +518,7 @@ public class SessionManager
         return session;
     }
 
-    // Создание чата вне проекта: рабочая папка — {DefaultProjectsPath}/{username}/Chats,
+    // Создание чата вне проекта: рабочая папка — {домашняя папка владельца}/Chats,
     // системный промпт — только встроенная часть (rawSystemPrompt=null), без проектных правил.
     public async Task<Session> CreateChatAsync(string ownerId, ClaudeMode mode,
         string? resumeSessionId = null, string? name = null, string? model = null, string? effort = null,

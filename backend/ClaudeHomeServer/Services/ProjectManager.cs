@@ -18,18 +18,19 @@ public class ProjectManager
     private readonly ConcurrentDictionary<string, Project> _projects = new();
     private readonly string _storePath;
     private readonly UserStore _users;
-    private readonly AppSettingsService _appSettings;
     // Песочница container-пользователей: их проекты живут только под Sandbox:ProjectsRoot.
     // null — в тестах (все пользователи считаются local)
     private readonly Execution.SandboxManager? _sandbox;
+    // Домашняя папка владельца ({база по среде}/{username} либо override из конфига)
+    private readonly UserHomeResolver _homes;
     private readonly Lock _saveLock = new();
 
     public ProjectManager(IConfiguration config, UserStore users, AppSettingsService appSettings,
-        Execution.SandboxManager? sandbox = null)
+        Execution.SandboxManager? sandbox = null, UserHomeResolver? homes = null)
     {
         _users = users;
-        _appSettings = appSettings;
         _sandbox = sandbox;
+        _homes = homes ?? UserHomeResolver.WithoutOverrides(appSettings, sandbox);
         _storePath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
         Load();
     }
@@ -42,9 +43,10 @@ public class ProjectManager
         if (_sandbox is null) return;
         if (_users.GetById(userId)?.ExecutionEnvironment != ExecutionEnvironments.Container) return;
         var sandboxRoot = _sandbox.Options.ProjectsRoot;
+        // Сравнение вложенности — общим хелпером: голый StartsWith пропускал бы соседа
+        // «C:\Sandbox-old» при корне «C:\Sandbox»
         if (string.IsNullOrWhiteSpace(sandboxRoot)
-            || !Path.GetFullPath(rootPath).StartsWith(
-                Path.GetFullPath(sandboxRoot), StringComparison.OrdinalIgnoreCase))
+            || !UserHomeResolver.IsInside(rootPath, sandboxRoot))
             throw new ArgumentException(
                 "Проекты изолированного пользователя должны находиться внутри папки песочницы (Sandbox:ProjectsRoot)");
     }
@@ -63,23 +65,16 @@ public class ProjectManager
     {
         if (string.IsNullOrWhiteSpace(rootPath))
         {
-            // База по среде владельца: изолированные — в корне песочницы
-            string? basePath;
-            if (_sandbox is not null
-                && _users.GetById(userId)?.ExecutionEnvironment == ExecutionEnvironments.Container)
-            {
-                basePath = _sandbox.Options.ProjectsRoot;
-                if (string.IsNullOrWhiteSpace(basePath))
-                    throw new ArgumentException(
-                        "Песочница не настроена: задайте Sandbox:ProjectsRoot в appsettings.Local.json");
-            }
-            else
-            {
-                basePath = _appSettings.Get().DefaultProjectsPath;
-                if (string.IsNullOrWhiteSpace(basePath))
-                    throw new ArgumentException("Укажите путь к папке или задайте папку по умолчанию в настройках");
-            }
-            rootPath = Path.Combine(basePath, username, name);
+            // Домашняя папка владельца: у изолированных — в корне песочницы, у остальных —
+            // в DefaultProjectsPath; прослойка {username} может быть снята override'ом конфига
+            var env = _sandbox is not null
+                ? _users.GetById(userId)?.ExecutionEnvironment
+                : ExecutionEnvironments.Local;
+            var home = _homes.Resolve(username, env)
+                ?? throw new ArgumentException(env == ExecutionEnvironments.Container
+                    ? UserHomeResolver.NotConfiguredMessage(env)
+                    : "Укажите путь к папке или задайте папку по умолчанию в настройках");
+            rootPath = Path.Combine(home, name);
             createDirectory = true;
         }
         EnsureRootAllowed(userId, rootPath);

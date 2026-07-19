@@ -7,7 +7,7 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace ClaudeHomeServer.Controllers;
 
-// Чаты вне проекта: сессии Claude без привязки к проекту, рабочая папка — {DefaultProjectsPath}/{username}/Chats
+// Чаты вне проекта: сессии Claude без привязки к проекту, рабочая папка — {домашняя папка}/Chats (UserHomeResolver)
 [ApiController]
 [Authorize]
 [Route("api/chats")]

@@ -45,6 +45,8 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onConnect }) => {
         localStorage.setItem('cc_server_url', serverUrl);
         localStorage.setItem('cc_token', result.token);
         localStorage.setItem('cc_username', result.username);
+        if (result.displayName) localStorage.setItem('cc_display_name', result.displayName);
+        else localStorage.removeItem('cc_display_name');
         if (role) localStorage.setItem('cc_role', role);
         if (userId) localStorage.setItem('cc_user_id', userId);
         sessionStorage.removeItem('cc_token');
@@ -57,10 +59,14 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onConnect }) => {
         localStorage.removeItem('cc_token');
         localStorage.removeItem('cc_server_url');
         localStorage.removeItem('cc_username');
+        localStorage.removeItem('cc_display_name');
         localStorage.removeItem('cc_role');
         localStorage.removeItem('cc_user_id');
       }
-      onConnect({ serverUrl, token: result.token, username: result.username, role, id: userId });
+      onConnect({
+        serverUrl, token: result.token, username: result.username,
+        displayName: result.displayName ?? undefined, role, id: userId,
+      });
     } catch (err: unknown) {
       const message = err instanceof OfflineError
         ? 'Нет соединения с сервером. Проверьте подключение к интернету.'

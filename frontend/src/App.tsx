@@ -63,9 +63,10 @@ export default function App() {
     if (!token) return null
     const url = localStorage.getItem('cc_server_url') || window.location.origin
     const username = localStorage.getItem('cc_username') || ''
+    const displayName = localStorage.getItem('cc_display_name') || undefined
     const role = localStorage.getItem('cc_role') || sessionStorage.getItem('cc_role') || undefined
     const id = localStorage.getItem('cc_user_id') || sessionStorage.getItem('cc_user_id') || undefined
-    return { serverUrl: url, token, username, role, id }
+    return { serverUrl: url, token, username, displayName, role, id }
   })
   // Если токен восстановлен из localStorage — ждём ответа сервера перед показом контента,
   // чтобы не было flash рабочего экрана с последующим переключением на пустой фон.
@@ -220,6 +221,11 @@ export default function App() {
       .then(me => {
         if (me?.featureFlags) setAllFlags(me.featureFlags)
         setCtxThresholdsFromServer(me?.contextThresholds)
+        // Имя могли поправить в профиле после логина — подхватываем без перевхода
+        const fresh = me?.displayName?.trim() || undefined
+        setAuth(prev => (prev && prev.displayName !== fresh ? { ...prev, displayName: fresh } : prev))
+        if (fresh) localStorage.setItem('cc_display_name', fresh)
+        else localStorage.removeItem('cc_display_name')
         loadModels() // актуальный список моделей Claude (fire-and-forget, есть fallback)
         // Таймзона устройства — серверу для напоминаний (fire-and-forget)
         const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
@@ -238,6 +244,7 @@ export default function App() {
     const onUnauthorized = () => {
       localStorage.removeItem('cc_token')
       localStorage.removeItem('cc_username')
+    localStorage.removeItem('cc_display_name')
       localStorage.removeItem('cc_server_url')
       localStorage.removeItem('cc_role')
       localStorage.removeItem('cc_user_id')
@@ -591,6 +598,7 @@ export default function App() {
   const logout = () => {
     localStorage.removeItem('cc_token')
     localStorage.removeItem('cc_username')
+    localStorage.removeItem('cc_display_name')
     localStorage.removeItem('cc_server_url')
     localStorage.removeItem('cc_role')
     localStorage.removeItem('cc_user_id')

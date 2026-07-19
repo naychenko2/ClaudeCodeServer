@@ -14,12 +14,12 @@ export interface DifyDocument {
 export const api = {
   auth: {
     login: (username: string, password: string) =>
-      request<{ token: string; expiresAt: string; username: string }>('/auth/login', {
+      request<{ token: string; expiresAt: string; username: string; displayName?: string | null }>('/auth/login', {
         method: 'POST',
         body: JSON.stringify({ username, password }),
       }),
     me: () =>
-      request<{ userId: string; username: string; role: string; featureFlags?: Record<string, boolean>; contextThresholds?: { warnPct: number; dangerPct: number } | null }>('/auth/me'),
+      request<{ userId: string; username: string; displayName?: string | null; role: string; featureFlags?: Record<string, boolean>; contextThresholds?: { warnPct: number; dangerPct: number } | null }>('/auth/me'),
     changePassword: (currentPassword: string, newPassword: string) =>
       request<void>('/auth/password', {
         method: 'PUT',

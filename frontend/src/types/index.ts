@@ -589,8 +589,16 @@ export interface AuthState {
   serverUrl: string;
   token: string;
   username: string;
+  // Отображаемое имя из профиля («Григорий»); пусто — показываем username.
+  // Для показа пользователю всегда через displayNameOf(), а не напрямую
+  displayName?: string;
   role?: string;
   id?: string;
+}
+
+/** Как обращаться к пользователю: имя из профиля, иначе логин. */
+export function displayNameOf(auth: { displayName?: string; username: string }): string {
+  return auth.displayName?.trim() || auth.username;
 }
 
 export interface UserProfile {

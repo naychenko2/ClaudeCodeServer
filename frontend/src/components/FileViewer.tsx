@@ -19,9 +19,12 @@ import bash from 'react-syntax-highlighter/dist/esm/languages/prism/bash';
 import yaml from 'react-syntax-highlighter/dist/esm/languages/prism/yaml';
 import sql from 'react-syntax-highlighter/dist/esm/languages/prism/sql';
 import markup from 'react-syntax-highlighter/dist/esm/languages/prism/markup';
-import type { Project } from '../types';
+import type { Project, GitBlameLine } from '../types';
 import { api } from '../lib/api';
 import { OfflineError } from '../lib/offline';
+import { useGitState, ensureGit } from '../lib/git';
+import { parseDiffToHunks, buildHunkPatch, buildLinesPatch } from '../lib/gitPatch';
+import { relTime } from './GitPanel';
 import { toggleSyncMark, useSyncMarks, computeSyncState, isDownloaded, loadSyncMarks, loadDownloadedSet } from '../lib/sync';
 import { onFilesChanged } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
@@ -77,6 +80,11 @@ interface Props {
   onToggleFullscreen?: () => void;
   isMobile?: boolean;
   onOpenSidebar?: () => void;
+  // Стартовая вкладка: 'diff' — открытие из git-панели «Изменения»
+  initialTab?: 'file' | 'diff';
+  // Путь файла, открытого из git-«Изменений» как unstaged: включает зернистый stage
+  // хунков/строк на diff-вкладке (diff при этом — worktree против индекса)
+  gitStagePath?: string;
 }
 
 interface FileContent {
@@ -101,7 +109,7 @@ function streamUrl(projectId: string, filePath: string): string {
   return `/api/projects/${projectId}/files/stream?${params}`;
 }
 
-type ViewTab = 'file' | 'diff';
+type ViewTab = 'file' | 'diff' | 'blame';
 
 const DiscardIcon = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
@@ -251,7 +259,7 @@ function AudioFilePlayer({ src, mimeType, fileName, fileSizeMb }: {
   );
 }
 
-export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isMobile, onOpenSidebar }: Props) {
+export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isMobile, onOpenSidebar, initialTab, gitStagePath }: Props) {
   const online = useOnline();
   // Заметки vault (notes/*.md): рендерим [[wikilinks]] и уводим по клику в раздел «Заметки»
   const allNotes = useNotes();
@@ -305,6 +313,14 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
   const [loadError, setLoadError] = useState(false);
   const [diff, setDiff] = useState<string | null>(null);
   const [tab, setTab] = useState<ViewTab>('file');
+  // Git: репо-статус (гейт вкладки «Авторы»), blame-кэш и busy зернистого stage
+  const gitSt = useGitState(project.id);
+  useEffect(() => { ensureGit(project.id); }, [project.id]);
+  const inRepo = gitSt.status?.isRepo ?? false;
+  const [blame, setBlame] = useState<GitBlameLine[] | null>(null);
+  const [blameLoading, setBlameLoading] = useState(false);
+  const [blameError, setBlameError] = useState(false);
+  const [stageBusy, setStageBusy] = useState(false);
   const [editing, setEditing] = useState(false);
   const [htmlTab, setHtmlTab] = useState<'preview' | 'code'>('preview');
   const [officeMode, setOfficeMode] = useState<'view' | 'edit'>('view');
@@ -330,6 +346,12 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
   // Помечен, но содержимое ещё не скачано → спиннер
   const pending = !!syncState && !isDownloaded(project.id, filePath);
 
+  // В режиме зернистого stage дифф — worktree против ИНДЕКСА (git diff без staged),
+  // иначе патчи хунков не соответствовали бы содержимому индекса
+  const fetchDiff = () => gitStagePath
+    ? api.git.diff(project.id, filePath, false)
+    : api.files.getDiff(project.id, filePath);
+
   useEffect(() => {
     setEditing(false);
     setTab('file');
@@ -344,13 +366,32 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
     setFileContent(null);
     setImgDims(null);
     setActionError(null);
+    setBlame(null);
+    setBlameError(false);
     api.files.getContent(project.id, filePath).then(r => {
       setFileContent(r);
       setEditContent(r.content ?? '');
     }).catch(() => setLoadError(true)).finally(() => setLoading(false));
     // diff недоступен офлайн — мягко игнорируем ошибку
-    api.files.getDiff(project.id, filePath).then(r => setDiff(r.diff)).catch(() => setDiff(null));
-  }, [project.id, filePath]);
+    fetchDiff().then(r => setDiff(r.diff)).catch(() => setDiff(null));
+  }, [project.id, filePath, gitStagePath]);
+
+  // Blame — лениво при первом открытии вкладки «Авторы» (кэш до смены файла)
+  useEffect(() => {
+    if (tab !== 'blame' || blame || blameLoading || blameError) return;
+    setBlameLoading(true);
+    api.git.blame(project.id, filePath)
+      .then(b => setBlame(b))
+      .catch(() => setBlameError(true))
+      .finally(() => setBlameLoading(false));
+  }, [tab, blame, blameLoading, blameError, project.id, filePath]);
+
+  // Открытие из git-панели «Изменения» — сразу вкладка Diff (эффект объявлен ПОСЛЕ
+  // основного, чтобы перебить его сброс на 'file'; срабатывает и когда тот же файл
+  // повторно открывают уже в diff-режиме)
+  useEffect(() => {
+    if (initialTab) setTab(initialTab);
+  }, [initialTab, filePath]);
 
   // Метки синхронизации + набор скачанных файлов — в общий стор (синхронно с деревом)
   useEffect(() => {
@@ -368,9 +409,11 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
       const norm = filePath.replace(/\\/g, '/');
       if (!paths.some(p => p.replace(/\\/g, '/') === norm)) return;
       api.files.getContent(project.id, filePath).then(r => { setFileContent(r); setEditContent(r.content ?? ''); setLoadError(false); }).catch(() => {});
-      api.files.getDiff(project.id, filePath).then(r => setDiff(r.diff)).catch(() => {});
+      fetchDiff().then(r => setDiff(r.diff)).catch(() => {});
+      setBlame(null);   // авторство устарело — перечитается при открытии вкладки
+      setBlameError(false);
     });
-  }, [project.id, filePath, editing, drawioMode]);
+  }, [project.id, filePath, editing, drawioMode, gitStagePath]);
 
   const handleToggleSync = () => {
     toggleSyncMark(project.id, {
@@ -389,7 +432,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
       setFileContent(prev => prev ? { ...prev, content: editContent } : prev);
       setEditing(false);
       setActionError(null);
-      const r = await api.files.getDiff(project.id, filePath);
+      const r = await fetchDiff();
       setDiff(r.diff);
       return true;
     } catch (e) {
@@ -416,11 +459,57 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
       setFileContent(r);
       setEditContent(r.content ?? '');
       setDiff(null);
+      setBlame(null);
+      setBlameError(false);
       setTab('file');
       setActionError(null);
     } catch (e) {
       setActionError(mutationErrorText(e, 'Не удалось откатить файл'));
     }
+  };
+
+  // === Зернистый stage хунков/строк (файл открыт из git-«Изменений» как unstaged) ===
+
+  const refreshAfterStage = async () => {
+    // Статус в git-сторе обновится по realtime git_status_changed; дифф перечитываем локально
+    try { const r = await fetchDiff(); setDiff(r.diff); } catch { /* оставляем как есть */ }
+  };
+
+  const handleStageHunk = async (hunkIdx: number) => {
+    if (!gitStagePath || !diff || stageBusy) return;
+    const parsed = parseDiffToHunks(diff);
+    const hunk = parsed.hunks[hunkIdx];
+    if (!hunk) return;
+    setStageBusy(true);
+    try {
+      await api.git.stageHunk(project.id, buildHunkPatch(parsed.fileHeader, hunk));
+      await refreshAfterStage();
+      setActionError(null);
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : 'Не удалось проиндексировать хунк');
+    }
+    setStageBusy(false);
+  };
+
+  const handleStageLines = async (selected: Map<number, Set<number>>) => {
+    if (!gitStagePath || !diff || stageBusy || selected.size === 0) return;
+    const parsed = parseDiffToHunks(diff);
+    setStageBusy(true);
+    try {
+      // По патчу на хунк, по возрастанию — git apply сам компенсирует сдвиг строк
+      const idxs = [...selected.keys()].sort((a, b) => a - b);
+      for (const hunkIdx of idxs) {
+        const hunk = parsed.hunks[hunkIdx];
+        if (!hunk) continue;
+        await api.git.stageHunk(project.id, buildLinesPatch(parsed.fileHeader, hunk, selected.get(hunkIdx)!));
+      }
+      await refreshAfterStage();
+      setActionError(null);
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : 'Не удалось проиндексировать строки');
+      await refreshAfterStage();   // часть хунков могла примениться — дифф уже другой
+    }
+    setStageBusy(false);
   };
 
   const handleClose = async () => {
@@ -465,6 +554,8 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
     added: diff.split('\n').filter(l => l.startsWith('+') && !l.startsWith('+++')).length,
     removed: diff.split('\n').filter(l => l.startsWith('-') && !l.startsWith('---')).length,
   } : null;
+  // Вкладка «Авторы» (blame) — только для текстовых файлов в git-репо
+  const showBlameTab = inRepo && !loading && !loadError && !!fileContent && !fileContent.isBinary && !fileContent.isImage;
   const fileSizeMb = fileContent?.fileSize != null ? (fileContent.fileSize / 1024 / 1024).toFixed(2) : null;
 
   const btnPrimary: React.CSSProperties = {
@@ -487,7 +578,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
       setFileContent(prev => prev ? { ...prev, content: xml } : prev);
       setEditContent(xml);
       setActionError(null);
-      const r = await api.files.getDiff(project.id, filePath);
+      const r = await fetchDiff();
       setDiff(r.diff);
     } catch (e) {
       setActionError(mutationErrorText(e, 'Не удалось сохранить диаграмму'));
@@ -558,11 +649,16 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
           </span>
         )}
 
-        {/* Pill-переключатель Файл / Diff — скрыт для Office-файлов и когда нет диффа */}
-        {!isOfficeFile && !!diff && (
+        {/* Pill-переключатель Файл / Diff / Авторы — скрыт для Office-файлов;
+            Diff — когда файл изменён, Авторы (blame) — когда проект в git-репо */}
+        {!isOfficeFile && (!!diff || showBlameTab) && (
           <PillSwitch<ViewTab>
             value={tab}
-            options={[{ value: 'file', label: 'Файл' }, { value: 'diff', label: 'Diff' }]}
+            options={[
+              { value: 'file', label: 'Файл' },
+              ...(diff ? [{ value: 'diff' as ViewTab, label: 'Diff' }] : []),
+              ...(showBlameTab ? [{ value: 'blame' as ViewTab, label: 'Авторы' }] : []),
+            ]}
             onChange={setTab}
             isMobile={isMobile}
           />
@@ -1021,8 +1117,25 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
 
         {!loading && !loadError && tab === 'diff' && (
           diff
-            ? <DiffView diff={diff} />
+            ? <DiffView
+                diff={diff}
+                staging={gitStagePath ? { busy: stageBusy, onStageHunk: handleStageHunk, onStageLines: handleStageLines } : undefined}
+              />
             : <div style={{ color: C.textMuted, fontSize: 13, padding: 16 }}>Файл не изменён</div>
+        )}
+
+        {/* Вкладка «Авторы» — blame по строкам (lazy, кэш до смены файла) */}
+        {!loading && !loadError && tab === 'blame' && (
+          blameLoading ? (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 10, color: C.textMuted, fontSize: 13 }}>
+              <div style={{ width: 20, height: 20, borderRadius: '50%', border: `2.5px solid ${C.border}`, borderTopColor: C.accent, animation: 'spin 0.7s linear infinite' }} />
+              Загружаю авторство…
+            </div>
+          ) : blame && blame.length > 0 ? (
+            <BlameView lines={blame} />
+          ) : (
+            <div style={{ color: C.textMuted, fontSize: 13, padding: 16 }}>Blame недоступен</div>
+          )
         )}
       </div>
 
@@ -1101,6 +1214,47 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
           }
         />
       )}
+    </div>
+  );
+}
+
+// Вкладка «Авторы»: строки файла с колонкой авторства слева. Подряд идущие строки
+// одного коммита группируются (sha/автор — только у первой, как на GitHub),
+// группы различаются чередующимся фоном.
+function BlameView({ lines }: { lines: GitBlameLine[] }) {
+  const rows = useMemo(() => {
+    let group = -1;
+    let prevSha = '';
+    return lines.map(l => {
+      const first = l.sha !== prevSha;
+      if (first) { group++; prevSha = l.sha; }
+      return { l, first, group };
+    });
+  }, [lines]);
+  return (
+    <div style={{ fontFamily: FONT.mono, fontSize: 12, lineHeight: '1.55' }}>
+      {rows.map(({ l, first, group }) => (
+        <div key={l.line} style={{ display: 'flex', alignItems: 'flex-start', background: group % 2 === 0 ? C.bgMain : C.bgCard }}>
+          <span
+            title={first ? `${l.shortSha} · ${l.author} · ${relTime(l.date)}` : undefined}
+            style={{
+              width: 170, flexShrink: 0, display: 'flex', alignItems: 'baseline', gap: 6,
+              padding: '0 8px', overflow: 'hidden', whiteSpace: 'nowrap',
+              borderRight: `1px solid ${C.border}`,
+            }}
+          >
+            {first && (
+              <>
+                <span style={{ color: C.accent, flexShrink: 0 }}>{l.shortSha}</span>
+                <span style={{ color: C.textSecondary, fontFamily: FONT.sans, fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', flex: 1, minWidth: 0 }}>{l.author}</span>
+                <span style={{ color: C.textMuted, fontFamily: FONT.sans, fontSize: 10, flexShrink: 0 }}>{relTime(l.date)}</span>
+              </>
+            )}
+          </span>
+          <span style={{ width: 40, textAlign: 'right', padding: '0 7px', color: C.textMuted, userSelect: 'none', flexShrink: 0 }}>{l.line}</span>
+          <span style={{ flex: 1, whiteSpace: 'pre-wrap', wordBreak: 'break-all', color: C.textHeading, paddingRight: 10 }}>{l.content || ' '}</span>
+        </div>
+      ))}
     </div>
   );
 }

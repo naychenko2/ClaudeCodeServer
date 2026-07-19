@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef, type ReactNode } from 'react';
-import { X, Folder, FolderPlus, ChevronRight, SquarePen, Trash2, ArrowRight, Paperclip, BookOpen, Search, Plus, Check, Copy, Upload, Monitor, Server } from 'lucide-react';
+import { X, Folder, FolderPlus, ChevronRight, SquarePen, Trash2, ArrowRight, Paperclip, BookOpen, Search, Plus, Check, Copy, Upload, Monitor, Server, GitBranch, History, SlidersHorizontal } from 'lucide-react';
 import type { Project, FileEntry } from '../types';
 import { api } from '../lib/api';
 import { OfflineError } from '../lib/offline';
@@ -24,6 +24,8 @@ import { bumpNotes, getNotesSnapshot } from '../lib/notes';
 import { IconNotes } from '../features/notes/shared';
 import { NewNoteDialog } from '../features/notes/NewNoteDialog';
 import { onFilesChanged } from '../lib/signalr';
+import { useGitState, ensureGit, gitInit } from '../lib/git';
+import { GitChangesPanel, GitHistoryPanel } from './GitPanel';
 import { useOnline } from '../hooks/useOnline';
 import { EmptyState } from './EmptyState';
 import { C, R, FONT, MODAL_W, TB, SHADOW } from '../lib/design';
@@ -45,7 +47,14 @@ interface Props {
   onAttachToChat?: (path: string) => void;
   onRemoveFromKnowledge?: (relativePath: string) => void;
   onOpenKnowledge?: () => void;
+  // Открыть diff файла из панели «Изменения» (staged — дифф индекса);
+  // не передан — фолбэк на onOpenFile
+  onOpenGitDiff?: (path: string, staged: boolean) => void;
+  onOpenCommit?: (sha: string) => void;
 }
+
+// Режим сайдбара «Файлы»: дерево / git-изменения / git-история
+export type GitView = 'files' | 'changes' | 'history';
 
 // Персистентное состояние дерева на уровне модуля — переживает размонтирование
 // при переключении вкладок «Чаты»/«Файлы». Ключ — projectId.
@@ -57,12 +66,24 @@ interface ExplorerState {
   searchResults: FileEntry[] | null;
   createInDir: string;
   scrollTop: number;
+  gitView?: GitView;         // активный сегмент пилюли (файлы/изменения/история)
+  onlyChanged?: boolean;     // фильтр «Только изменённые» в дереве
 }
 const _explorerStore = new Map<string, ExplorerState>();
 
 /** Возвращает текущую папку для создания файлов в проводнике (используется из ChatPanel). */
 export function getExplorerCreateInDir(projectId: string): string {
   return _explorerStore.get(projectId)?.createInDir ?? '';
+}
+
+/** Переключает git-сегмент пилюли извне (пилюля в «Знаниях»): применится при монтировании проводника. */
+export function setExplorerGitView(projectId: string, view: GitView): void {
+  const st = _explorerStore.get(projectId);
+  if (st) { st.gitView = view; return; }
+  _explorerStore.set(projectId, {
+    dirCache: new Map(), expanded: new Set(), mobileDir: '', search: '',
+    searchResults: null, createInDir: '', scrollTop: 0, gitView: view,
+  });
 }
 
 const normPath = (p?: string | null) => (p ?? '').replace(/\\/g, '/');
@@ -380,7 +401,7 @@ interface ContextMenuState {
   entry: FileEntry;
 }
 
-export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = false, alwaysShowIcons = false, onAddToKnowledge, onAddFolderToKnowledge, onRemoveFromKnowledge, indexedFileNames, indexingFiles, indexingFolders, onAttachToChat, onOpenKnowledge }: Props) {
+export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = false, alwaysShowIcons = false, onAddToKnowledge, onAddFolderToKnowledge, onRemoveFromKnowledge, indexedFileNames, indexingFiles, indexingFolders, onAttachToChat, onOpenKnowledge, onOpenGitDiff, onOpenCommit }: Props) {
   const online = useOnline();
   useThemeMode();  // перерисовка дерева при смене темы (плитки типов файлов)
   const marks = useSyncMarks(project.id);
@@ -400,6 +421,65 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
     localStorage.setItem(SORT_MODE_KEY, m);
     setShowSortMenu(false);
   };
+
+  // === Git: режим сайдбара + статус репозитория + фильтр «Только изменённые» ===
+  const [gitView, setGitView] = useState<GitView>(() => initial?.gitView ?? 'files');
+  const [onlyChanged, setOnlyChanged] = useState<boolean>(() => initial?.onlyChanged ?? false);
+  const gitState = useGitState(project.id);
+  useEffect(() => { ensureGit(project.id); }, [project.id]);
+  const isRepo = gitState.status?.isRepo ?? false;
+  // Не репо — git-сегменты недоступны, показываем дерево
+  const view: GitView = isRepo ? gitView : 'files';
+
+  // Подключение git к проекту без репозитория (git init + remote на Forgejo)
+  const [gitInitOpen, setGitInitOpen] = useState(false);
+  const [gitInitBusy, setGitInitBusy] = useState(false);
+  const [gitInitError, setGitInitError] = useState<string | null>(null);
+  const handleGitInit = async () => {
+    if (gitInitBusy) return;
+    setGitInitBusy(true);
+    setGitInitError(null);
+    const r = await gitInit(project.id);
+    setGitInitBusy(false);
+    if (r.ok) setGitInitOpen(false);   // статус в сторе уже свежий → появятся сегменты пилюли
+    else setGitInitError(r.error ?? 'Не удалось создать git-репозиторий');
+  };
+
+  // Наборы изменённых путей из git-статуса: файлы + папки на пути к ним (для фильтра дерева)
+  const changedSets = useMemo(() => {
+    const s = gitState.status;
+    if (!s?.isRepo) return null;
+    const files = new Set<string>();
+    const dirs = new Set<string>();
+    for (const list of [s.staged, s.unstaged, s.untracked]) {
+      for (const c of list) {
+        const p = normPath(c.path).replace(/\/+$/, '');
+        files.add(p);
+        let i = p.lastIndexOf('/');
+        let d = i < 0 ? '' : p.slice(0, i);
+        while (d) {
+          dirs.add(d);
+          const j = d.lastIndexOf('/');
+          d = j < 0 ? '' : d.slice(0, j);
+        }
+      }
+    }
+    return { files, dirs };
+  }, [gitState.status]);
+
+  // Фильтр активен только в git-репо: изменённый файл / папка на пути к изменению.
+  // Пути untracked-папок git отдаёт как «dir/» — такие покрывает префикс-проверка.
+  const passesChangedFilter = useCallback((entry: FileEntry): boolean => {
+    if (entry.isModified || entry.isNew) return true;
+    if (!changedSets) return false;
+    const p = normPath(entry.path);
+    if (entry.isDirectory) {
+      if (changedSets.dirs.has(p)) return true;
+      for (const f of changedSets.files) if (f.startsWith(p + '/')) return true;
+      return false;
+    }
+    return changedSets.files.has(p);
+  }, [changedSets]);
 
   const [search, setSearch] = useState(() => initial?.search ?? '');
   const [searchResults, setSearchResults] = useState<FileEntry[] | null>(() => initial?.searchResults ?? null);
@@ -492,6 +572,8 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
       setCreateInDir(st.createInDir);
       setSearch(st.search);
       setSearchResults(st.searchResults);
+      setGitView(st.gitView ?? 'files');
+      setOnlyChanged(st.onlyChanged ?? false);
       loadDir('');
       if (st.mobileDir) loadDir(st.mobileDir);
     } else {
@@ -501,16 +583,18 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
       setCreateInDir('');
       setSearch('');
       setSearchResults(null);
+      setGitView('files');
+      setOnlyChanged(false);
       loadDir('');
     }
   }, [project.id, loadDir]);
 
   useEffect(() => {
     _explorerStore.set(project.id, {
-      dirCache, expanded, mobileDir, search, searchResults, createInDir,
+      dirCache, expanded, mobileDir, search, searchResults, createInDir, gitView, onlyChanged,
       scrollTop: scrollRef.current?.scrollTop ?? _explorerStore.get(project.id)?.scrollTop ?? 0,
     });
-  }, [project.id, dirCache, expanded, mobileDir, search, searchResults, createInDir]);
+  }, [project.id, dirCache, expanded, mobileDir, search, searchResults, createInDir, gitView, onlyChanged]);
 
   useLayoutEffect(() => {
     const st = _explorerStore.get(project.id);
@@ -864,10 +948,12 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   }, []);
 
   const flatTree = useMemo((): TreeNode[] => {
+    const filterChanged = onlyChanged && isRepo;
     const walk = (path: string, depth: number): TreeNode[] => {
       const entries = sortEntries(dirCache.get(path) ?? [], sortMode);
       const result: TreeNode[] = [];
       for (const entry of entries) {
+        if (filterChanged && !passesChangedFilter(entry)) continue;
         result.push({ entry, depth });
         if (entry.isDirectory && expanded.has(entry.path)) {
           result.push(...walk(entry.path, depth + 1));
@@ -876,15 +962,16 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
       return result;
     };
     return walk('', 0);
-  }, [dirCache, expanded, sortMode]);
+  }, [dirCache, expanded, sortMode, onlyChanged, isRepo, passesChangedFilter]);
 
   const rootLoading = !dirCache.has('') && loadingDirs.has('');
 
   const mobileEntries = useMemo((): FileEntry[] => {
     const entries = dirCache.get(mobileDir);
     if (!entries) return [];
-    return sortEntries(entries, sortMode);
-  }, [dirCache, mobileDir, sortMode]);
+    const sorted = sortEntries(entries, sortMode);
+    return onlyChanged && isRepo ? sorted.filter(passesChangedFilter) : sorted;
+  }, [dirCache, mobileDir, sortMode, onlyChanged, isRepo, passesChangedFilter]);
 
   const breadcrumbs = useMemo(() => {
     const crumbs: { label: string; path: string }[] = [{ label: 'Файлы', path: '' }];
@@ -1196,11 +1283,64 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
     </button>
   );
 
+  // Пилюля режимов сайдбара: Файлы / [Изменения / История — только git-репо] / Знания
+  const pillBtn = (key: string, title: string, active: boolean, onClick: (() => void) | undefined, icon: ReactNode) => (
+    <button
+      key={key}
+      onClick={onClick}
+      title={title}
+      style={{
+        width: 28, height: 28, border: 'none', borderRadius: 6,
+        cursor: active ? 'default' : 'pointer',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: active ? C.bgMain : 'transparent',
+        color: active ? C.accent : C.textMuted,
+        boxShadow: active ? TB.pillThumbShadow : 'none',
+      }}
+    >
+      {icon}
+    </button>
+  );
+  const showPill = !!onOpenKnowledge || isRepo;
+  const pill = showPill ? (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 2, background: TB.pillTrack, borderRadius: 8, padding: 2, flexShrink: 0 }}>
+      {pillBtn('files', 'Файлы', view === 'files', () => setGitView('files'), <Folder size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />)}
+      {isRepo && pillBtn('changes', 'Изменения', view === 'changes', () => setGitView('changes'), <GitBranch size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />)}
+      {isRepo && pillBtn('history', 'История', view === 'history', () => setGitView('history'), <History size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />)}
+      {onOpenKnowledge && pillBtn('knowledge', 'Знания', false, onOpenKnowledge, <BookOpen size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />)}
+    </div>
+  ) : null;
+
+  // === Git-режимы: содержимое сайдбара вместо дерева ===
+  if (view !== 'files') {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+        <div style={{ padding: '4px 12px 10px', display: 'flex', alignItems: 'center', gap: 6 }}>
+          <div style={{ flex: 1, minWidth: 0, fontSize: 13.5, fontWeight: 700, color: C.textHeading, fontFamily: FONT.sans }}>
+            {view === 'changes' ? 'Изменения' : 'История'}
+          </div>
+          {pill}
+        </div>
+        {view === 'changes' ? (
+          <GitChangesPanel
+            project={project}
+            onOpenDiff={(p, staged) => onOpenGitDiff ? onOpenGitDiff(p, staged) : onOpenFile(p)}
+            onOpenFile={onOpenFile}
+          />
+        ) : (
+          <GitHistoryPanel project={project} onOpenCommit={onOpenCommit} />
+        )}
+      </div>
+    );
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       {/* Search */}
       <div style={{ padding: '4px 12px 10px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        {/* position:relative на всей строке: меню сортировки позиционируется от её левого
+            края (200px гарантированно внутри сайдбара), а не от кнопки 28px */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, position: 'relative' }}>
           <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg, padding: '0 11px', height: 36 }}>
             <span style={{ color: C.textMuted, marginRight: 8, display: 'flex', flexShrink: 0 }}>
               <Search size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
@@ -1215,39 +1355,30 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
               <button onClick={() => handleSearch('')} style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.textMuted, padding: 0, display: 'flex', alignItems: 'center' }}><X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /></button>
             )}
           </div>
-          {/* Сортировка дерева: по имени / по дате изменения */}
-          <div style={{ position: 'relative', flexShrink: 0 }}>
+          {/* Сортировка дерева + фильтр «Только изменённые» */}
+          <div style={{ flexShrink: 0 }}>
             <IconButton
               size="md"
               active={showSortMenu}
+              color={onlyChanged && isRepo ? C.accent : undefined}
+              style={onlyChanged && isRepo && !showSortMenu ? { background: C.accentLight } : undefined}
               onClick={() => setShowSortMenu(v => !v)}
               title={
-                sortMode === 'name' ? 'Сортировка: по имени'
+                (sortMode === 'name' ? 'Сортировка: по имени'
                 : sortMode === 'date-desc' ? 'Сортировка: сначала новые'
-                : 'Сортировка: сначала старые'
+                : 'Сортировка: сначала старые')
+                + (onlyChanged && isRepo ? ' · Только изменённые' : '')
               }
             >
-              {sortMode === 'name' ? (
-                // arrow-down-a-z
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="m3 16 4 4 4-4M7 20V4M20 8h-5M15 10V6.5a2.5 2.5 0 0 1 5 0V10M15 14h5l-5 6h5"/>
-                </svg>
-              ) : sortMode === 'date-desc' ? (
-                // clock-arrow-down — сначала новые
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M12 6v6l2 1M12.34 21.98A10 10 0 1 1 21.98 12.33"/>
-                  <path d="m14 18 4 4 4-4M18 14v8"/>
-                </svg>
-              ) : (
-                // clock-arrow-up — сначала старые
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M12 6v6l2 1M12.34 21.98A10 10 0 1 1 21.98 12.33"/>
-                  <path d="m14 18 4-4 4 4M18 22v-8"/>
-                </svg>
-              )}
+              <SlidersHorizontal size={15} strokeWidth={ICON_STROKE} />
             </IconButton>
+            {/* Точка-индикатор активного фильтра */}
+            {onlyChanged && isRepo && (
+              <span style={{ position: 'absolute', top: 3, right: 3, width: 6, height: 6, borderRadius: '50%', background: C.accent, pointerEvents: 'none' }} />
+            )}
             {showSortMenu && (
-              <Menu onClose={() => setShowSortMenu(false)} top={34} minWidth={200}>
+              // align="left": кнопка у левого края сайдбара — правое выравнивание уводило меню за экран
+              <Menu onClose={() => setShowSortMenu(false)} align="left" top={34} minWidth={200}>
                 <MenuItem
                   icon={sortMode === 'name' ? <Check size={15} strokeWidth={2} /> : <></>}
                   label="По имени"
@@ -1263,19 +1394,29 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
                   label="Сначала старые"
                   onClick={() => changeSortMode('date-asc')}
                 />
+                {isRepo ? (
+                  <>
+                    <div style={{ height: 1, background: C.border, margin: '4px 6px' }} />
+                    <MenuItem
+                      icon={onlyChanged ? <Check size={15} strokeWidth={2} /> : <GitBranch size={15} strokeWidth={ICON_STROKE} />}
+                      label="Только изменённые"
+                      onClick={() => { setOnlyChanged(v => !v); setShowSortMenu(false); }}
+                    />
+                  </>
+                ) : gitState.statusLoaded && online && (
+                  <>
+                    <div style={{ height: 1, background: C.border, margin: '4px 6px' }} />
+                    <MenuItem
+                      icon={<GitBranch size={15} strokeWidth={ICON_STROKE} />}
+                      label="Подключить git…"
+                      onClick={() => { setShowSortMenu(false); setGitInitOpen(true); }}
+                    />
+                  </>
+                )}
               </Menu>
             )}
           </div>
-          {onOpenKnowledge && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 2, background: TB.pillTrack, borderRadius: 8, padding: 2, flexShrink: 0 }}>
-              <button title="Файлы" style={{ width: 28, height: 28, border: 'none', borderRadius: 6, cursor: 'default', display: 'flex', alignItems: 'center', justifyContent: 'center', background: C.bgMain, color: C.accent, boxShadow: TB.pillThumbShadow }}>
-                <Folder size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-              </button>
-              <button onClick={onOpenKnowledge} title="Знания" style={{ width: 28, height: 28, border: 'none', borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', color: C.textMuted }}>
-                <BookOpen size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-              </button>
-            </div>
-          )}
+          {pill}
         </div>
 
         {online && (
@@ -1399,7 +1540,13 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
           mobileDirLoading ? (
             <div style={{ padding: '24px 12px', color: C.textMuted, fontSize: 13, textAlign: 'center', fontFamily: FONT.mono }}>Загрузка…</div>
           ) : mobileEntries.length === 0 ? (
-            mobileDir === '' ? <FilesRootEmptyState onCreateFile={online ? () => { setCreateInDir(mobileDir); setShowCreateFile(true); } : undefined} /> : (
+            onlyChanged && isRepo ? (
+              <EmptyState
+                icon={<GitBranch size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} />}
+                title="Нет изменённых файлов"
+                subtitle="Активен фильтр «Только изменённые»"
+              />
+            ) : mobileDir === '' ? <FilesRootEmptyState onCreateFile={online ? () => { setCreateInDir(mobileDir); setShowCreateFile(true); } : undefined} /> : (
               <EmptyState
                 icon={<Folder size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} />}
                 title="Папка пуста"
@@ -1412,7 +1559,15 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         ) : rootLoading ? (
           <div style={{ padding: '24px 12px', color: C.textMuted, fontSize: 13, textAlign: 'center', fontFamily: FONT.mono }}>Загрузка…</div>
         ) : flatTree.length === 0 ? (
-          <FilesRootEmptyState onCreateFile={online ? () => { setCreateInDir(''); setShowCreateFile(true); } : undefined} />
+          onlyChanged && isRepo ? (
+            <EmptyState
+              icon={<GitBranch size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} />}
+              title="Нет изменённых файлов"
+              subtitle="Активен фильтр «Только изменённые»"
+            />
+          ) : (
+            <FilesRootEmptyState onCreateFile={online ? () => { setCreateInDir(''); setShowCreateFile(true); } : undefined} />
+          )
         ) : (
           // width: max-content — строки растягиваются под самое длинное имя,
           // контейнер даёт горизонтальный скролл вместо обрезания
@@ -1467,6 +1622,33 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
       })()}
 
       {/* === Диалог создания файла === */}
+      {/* Подключение git к проекту (git init + при настроенном Forgejo удалённый репозиторий) */}
+      {gitInitOpen && (
+        <Modal
+          width={MODAL_W.confirm}
+          onClose={() => { if (!gitInitBusy) { setGitInitOpen(false); setGitInitError(null); } }}
+          title="Подключить git"
+          footer={
+            <ModalActions
+              confirmLabel={gitInitBusy ? 'Подключаю…' : 'Подключить'}
+              confirmDisabled={gitInitBusy}
+              onConfirm={handleGitInit}
+              onCancel={() => { setGitInitOpen(false); setGitInitError(null); }}
+            />
+          }
+        >
+          <div style={{ fontSize: 13, color: C.textSecondary, fontFamily: FONT.sans, lineHeight: 1.5 }}>
+            В папке проекта будет создан git-репозиторий — появятся панели «Изменения» и «История».
+            Если настроен сервер Forgejo, также будет создан удалённый репозиторий.
+          </div>
+          {gitInitError && (
+            <div style={{ marginTop: 10, fontSize: 12.5, color: C.dangerText, fontFamily: FONT.sans, lineHeight: 1.45 }}>
+              {gitInitError}
+            </div>
+          )}
+        </Modal>
+      )}
+
       {showCreateFile && (
         <Modal
           width={MODAL_W.form}

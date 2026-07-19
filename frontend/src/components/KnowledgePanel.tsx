@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
-import { BookOpen, Database, Folder, Info, RotateCcw, Search, Tag, Trash2, X } from 'lucide-react';
+import { BookOpen, Database, Folder, GitBranch, History, Info, RotateCcw, Search, Tag, Trash2, X } from 'lucide-react';
+import { ensureGit, useGitState } from '../lib/git';
+import { setExplorerGitView } from './FileExplorer';
 import type { Project } from '../types';
 import type { DifyDocument } from '../lib/api';
 import { api } from '../lib/api';
@@ -414,6 +416,9 @@ export function KnowledgePanel({ project, isMobile = false, alwaysShowIcons = fa
   const [searchQuery, setSearchQuery] = useState('');
   const [notification, setNotification] = useState<{ message: string; type: 'error' | 'success' } | null>(null);
   const notifTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // git-статус проекта — чтобы пилюля показывала сегменты «Изменения»/«История» как в проводнике
+  useEffect(() => { ensureGit(project.id); }, [project.id]);
+  const isRepo = useGitState(project.id).status?.isRepo === true;
 
   const loadStatus = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
@@ -517,8 +522,9 @@ export function KnowledgePanel({ project, isMobile = false, alwaysShowIcons = fa
       {/* Шапка — icon-toggle (зеркало строки поиска FileExplorer) */}
       <div style={{ padding: '4px 12px 10px', flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          {/* Поиск по знаниям */}
-          <div style={{ flex: 1, display: 'flex', alignItems: 'center', background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg, padding: '0 11px', height: 36 }}>
+          {/* Поиск по знаниям. minWidth:0 обязателен: без него инпут не даёт строке
+              ужаться и выдавливает пилюлю за край сайдбара */}
+          <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg, padding: '0 11px', height: 36 }}>
             <span style={{ color: C.textMuted, marginRight: 8, display: 'flex', flexShrink: 0 }}>
               <Search size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
             </span>
@@ -527,7 +533,7 @@ export function KnowledgePanel({ project, isMobile = false, alwaysShowIcons = fa
               onChange={e => setSearchQuery(e.target.value)}
               placeholder="Поиск по знаниям…"
               style={{
-                flex: 1, border: 'none', outline: 'none', background: 'transparent',
+                flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent',
                 fontSize: 13, color: C.textPrimary, fontFamily: FONT.sans,
               }}
             />
@@ -540,12 +546,22 @@ export function KnowledgePanel({ project, isMobile = false, alwaysShowIcons = fa
               </button>
             )}
           </div>
-          {/* icon-toggle: Знания активна */}
+          {/* icon-toggle: Знания активна; git-сегменты возвращают в проводник с нужным видом */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 2, background: TB.pillTrack, borderRadius: 8, padding: 2, flexShrink: 0 }}>
             {/* Файлы — неактивна, возврат */}
             <button onClick={onBack} title="Файлы" style={{ width: 28, height: 28, border: 'none', borderRadius: 6, cursor: onBack ? 'pointer' : 'default', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', color: C.textMuted }}>
               <Folder size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
             </button>
+            {isRepo && (
+              <>
+                <button onClick={() => { setExplorerGitView(project.id, 'changes'); onBack?.(); }} title="Изменения" style={{ width: 28, height: 28, border: 'none', borderRadius: 6, cursor: onBack ? 'pointer' : 'default', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', color: C.textMuted }}>
+                  <GitBranch size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+                </button>
+                <button onClick={() => { setExplorerGitView(project.id, 'history'); onBack?.(); }} title="История" style={{ width: 28, height: 28, border: 'none', borderRadius: 6, cursor: onBack ? 'pointer' : 'default', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', color: C.textMuted }}>
+                  <History size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+                </button>
+              </>
+            )}
             {/* Знания — активна */}
             <button title="Знания" style={{ width: 28, height: 28, border: 'none', borderRadius: 6, cursor: 'default', display: 'flex', alignItems: 'center', justifyContent: 'center', background: C.bgMain, color: C.successText, boxShadow: TB.pillThumbShadow }}>
               <BookOpen size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />

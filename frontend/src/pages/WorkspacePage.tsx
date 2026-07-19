@@ -4,6 +4,7 @@ import { SessionList } from '../components/SessionList';
 import { FileExplorer } from '../components/FileExplorer';
 import { ChatPanel } from '../components/ChatPanel';
 import { FileViewer } from '../components/FileViewer';
+import { GitCommitView } from '../components/GitCommitView';
 import { ArtifactsPanel } from '../components/ArtifactsPanel';
 import { KnowledgePanel } from '../components/KnowledgePanel';
 import { UsageScreen } from '../components/UsageScreen';
@@ -221,6 +222,12 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
   });
   const [pendingMessage, setPendingMessage] = useState<string | undefined>();
   const [openFile, setOpenFile] = useState<string | null>(() => loadWorkspaceState(project.id)?.openFile ?? null);
+  // Файл открыт из git-панели «Изменения» → FileViewer стартует на вкладке Diff
+  const [openFileDiffMode, setOpenFileDiffMode] = useState(false);
+  // Путь unstaged-файла из git-«Изменений» — включает зернистый stage хунков в diff-вкладке
+  const [gitStagePath, setGitStagePath] = useState<string | null>(null);
+  // Коммит открыт из git-панели «История» → просмотр в контентной области
+  const [openCommitSha, setOpenCommitSha] = useState<string | null>(null);
   const [fileFullscreen, setFileFullscreen] = useState(() => loadWorkspaceState(project.id)?.fileFullscreen ?? false);
   const [chatFlex, setChatFlex] = useState(1); // 1:1 = 50/50 по умолчанию
   const [workflowRunningFor, setWorkflowRunningFor] = useState<string | null>(null);
@@ -913,16 +920,47 @@ const windowWidth = useWindowWidth();
 
   // из дерева файлов → всегда полноэкранный режим
   const handleOpenFileFromTree = (filePath: string) => {
+    setOpenCommitSha(null);
     setOpenFile(filePath);
+    setOpenFileDiffMode(false);
+    setGitStagePath(null);
     setFileFullscreen(true);
     navPush({ screen: 'project', project, view: mobileView, file: filePath });
   };
 
   // из чата → split на десктопе, fullscreen на планшете/мобайле
   const handleOpenFileFromChat = (filePath: string) => {
+    setOpenCommitSha(null);
     setOpenFile(filePath);
+    setOpenFileDiffMode(false);
+    setGitStagePath(null);
     setFileFullscreen(isMobile || isTablet);
     navPush({ screen: 'project', project, view: mobileView, file: filePath });
+  };
+
+  // из git-панели «Изменения» → тот же FileViewer, но сразу на вкладке Diff;
+  // для unstaged-диффа включаем зернистый stage хунков/строк
+  const handleOpenGitDiff = (filePath: string, staged?: boolean) => {
+    setOpenCommitSha(null);
+    setOpenFile(filePath);
+    setOpenFileDiffMode(true);
+    setGitStagePath(staged ? null : filePath);
+    setFileFullscreen(true);
+    navPush({ screen: 'project', project, view: mobileView, file: filePath });
+  };
+
+  // из git-панели «История» → просмотр коммита в контентной области
+  const handleOpenCommit = (sha: string) => {
+    setOpenFile(null);
+    setOpenFileDiffMode(false);
+    setGitStagePath(null);
+    setFileFullscreen(false);
+    setOpenCommitSha(sha);
+    if (isMobile) setMobileView('chat');
+  };
+  const closeCommitView = () => {
+    setOpenCommitSha(null);
+    if (isMobile) setMobileView('sidebar');
   };
 
   // Тулбар-«назад»: ДЕТЕРМИНИРОВАННЫЙ подъём к списку текущей вкладки внутри проекта.
@@ -930,6 +968,8 @@ const windowWidth = useWindowWidth();
   // история браузера пуста, и history.back() ничего не делает. Всегда ведём на уровень выше.
   const backFromFile = () => {
     setOpenFile(null);
+    setOpenFileDiffMode(false);
+    setGitStagePath(null);
     setFileFullscreen(false);
     if (isMobile) setMobileView('sidebar');
     navReplace({ screen: 'project', project, view: 'sidebar', file: null, task: selectedTaskId ?? null });
@@ -1138,7 +1178,7 @@ const windowWidth = useWindowWidth();
         ) : (
           <div style={{ flex: 1, overflow: 'hidden' }}>
             {fileSubTab === 'files'
-              ? <FileExplorer project={project} activeFilePath={openFile} isMobile={isMobile} alwaysShowIcons={isTablet} onOpenFile={(f) => { handleOpenFileFromTree(f); if (isMobile) setMobileView('chat'); }} onAddToKnowledge={handleAddToKnowledge} onAddFolderToKnowledge={handleAddFolderToKnowledge} onRemoveFromKnowledge={handleRemoveFromKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} indexingFolders={indexingFolders} onAttachToChat={activeSession && !fileFullscreen ? handleAttachToChat : undefined} onOpenKnowledge={() => setFileSubTab('knowledge')} />
+              ? <FileExplorer project={project} activeFilePath={openFile} isMobile={isMobile} alwaysShowIcons={isTablet} onOpenFile={(f) => { handleOpenFileFromTree(f); if (isMobile) setMobileView('chat'); }} onOpenGitDiff={handleOpenGitDiff} onOpenCommit={handleOpenCommit} onAddToKnowledge={handleAddToKnowledge} onAddFolderToKnowledge={handleAddFolderToKnowledge} onRemoveFromKnowledge={handleRemoveFromKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} indexingFolders={indexingFolders} onAttachToChat={activeSession && !fileFullscreen ? handleAttachToChat : undefined} onOpenKnowledge={() => setFileSubTab('knowledge')} />
               : <KnowledgePanel project={project} isMobile={isMobile} alwaysShowIcons={isTablet} onDocumentsChanged={setIndexedFileNames} onBack={() => setFileSubTab('files')} />
             }
           </div>
@@ -1199,7 +1239,7 @@ const windowWidth = useWindowWidth();
               : (
                 <div style={{ flex: 1, overflow: 'hidden' }}>
                   {fileSubTab === 'files'
-                    ? <FileExplorer project={project} activeFilePath={openFile} isMobile={isMobile} alwaysShowIcons={isTablet} onOpenFile={handleOpenFileFromTree} onAddToKnowledge={handleAddToKnowledge} onAddFolderToKnowledge={handleAddFolderToKnowledge} onRemoveFromKnowledge={handleRemoveFromKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} indexingFolders={indexingFolders} onAttachToChat={activeSession && !fileFullscreen ? handleAttachToChat : undefined} onOpenKnowledge={() => setFileSubTab('knowledge')} />
+                    ? <FileExplorer project={project} activeFilePath={openFile} isMobile={isMobile} alwaysShowIcons={isTablet} onOpenFile={handleOpenFileFromTree} onOpenGitDiff={handleOpenGitDiff} onOpenCommit={handleOpenCommit} onAddToKnowledge={handleAddToKnowledge} onAddFolderToKnowledge={handleAddFolderToKnowledge} onRemoveFromKnowledge={handleRemoveFromKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} indexingFolders={indexingFolders} onAttachToChat={activeSession && !fileFullscreen ? handleAttachToChat : undefined} onOpenKnowledge={() => setFileSubTab('knowledge')} />
                     : <KnowledgePanel project={project} isMobile={isMobile} alwaysShowIcons={isTablet} onDocumentsChanged={setIndexedFileNames} onBack={() => setFileSubTab('files')} />
                   }
                 </div>
@@ -1229,7 +1269,13 @@ const windowWidth = useWindowWidth();
         {/* Просмотр файла — FileViewer имеет свою шапку */}
         {openFile && (
           <div style={{ flex: 1, overflow: 'hidden' }}>
-            <FileViewer project={project} filePath={openFile} isMobile onClose={backFromFile} />
+            <FileViewer project={project} filePath={openFile} isMobile onClose={backFromFile} initialTab={openFileDiffMode ? 'diff' : undefined} gitStagePath={gitStagePath ?? undefined} />
+          </div>
+        )}
+        {/* Просмотр коммита из git-«Истории» */}
+        {!openFile && openCommitSha && mobileView === 'chat' && (
+          <div style={{ position: 'absolute', inset: 0, zIndex: 800, display: 'flex' }}>
+            <GitCommitView project={project} sha={openCommitSha} onClose={closeCommitView} isMobile />
           </div>
         )}
         {/* Панель «Артефакты сессии» — мобайл: drawer поверх чата */}
@@ -1375,15 +1421,22 @@ const windowWidth = useWindowWidth();
 
         return (
           <>
+            {/* Коммит из git-«Истории» — просмотр в основной зоне (приоритет над чатом/задачей) */}
+            {!openFile && openCommitSha && (
+              <div style={{ flex: 1, overflow: 'hidden', display: 'flex' }}>
+                <GitCommitView project={project} sha={openCommitSha} onClose={closeCommitView} />
+              </div>
+            )}
+
             {/* Открытая задача — карточка в основной зоне (как открытый файл), ✕ возвращает чат */}
-            {!openFile && selectedTask && (
+            {!openFile && !openCommitSha && selectedTask && (
               <div style={{ flex: 1, overflow: 'hidden' }}>
                 <TaskDetailsPane key={selectedTask.id} task={selectedTask} project={project} startInEdit={selectedTask.id === autoEditTaskId} onOpenSession={handleOpenTaskSession} onOpenFile={handleOpenFileFromTree} onClose={backFromTask} onDeleted={backFromTask} />
               </div>
             )}
 
             {/* Нет открытого файла и задачи — доска задач проекта, иначе чат, иначе инструменты */}
-            {!openFile && !selectedTask && (
+            {!openFile && !openCommitSha && !selectedTask && (
               <div style={{ flex: 1, overflow: 'hidden' }}>
                 {showProjectBoard
                   ? ProjectBoardArea
@@ -1404,7 +1457,7 @@ const windowWidth = useWindowWidth();
                 <Splitter orientation="v" active={draggingSplitter === 'split'}
                   onMouseDown={e => { setDraggingSplitter('split'); handleSplitterMouseDown(e); }} />
                 <div style={{ flex: 1, overflow: 'hidden', minWidth: 200 }}>
-                  <FileViewer project={project} filePath={openFile} onClose={backFromFile} onToggleFullscreen={handleEnterFullscreen} onOpenSidebar={openSidebar} />
+                  <FileViewer project={project} filePath={openFile} onClose={backFromFile} onToggleFullscreen={handleEnterFullscreen} onOpenSidebar={openSidebar} initialTab={openFileDiffMode ? 'diff' : undefined} gitStagePath={gitStagePath ?? undefined} />
                 </div>
               </div>
             )}
@@ -1412,7 +1465,7 @@ const windowWidth = useWindowWidth();
             {/* Fullscreen: файл из дерева или планшет */}
             {openFile && (fileFullscreen || isTablet) && (
               <div style={{ flex: 1, overflow: 'hidden' }}>
-                <FileViewer project={project} filePath={openFile} onClose={backFromFile} onOpenSidebar={openSidebar} />
+                <FileViewer project={project} filePath={openFile} onClose={backFromFile} onOpenSidebar={openSidebar} initialTab={openFileDiffMode ? 'diff' : undefined} gitStagePath={gitStagePath ?? undefined} />
               </div>
             )}
           </>

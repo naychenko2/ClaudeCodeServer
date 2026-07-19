@@ -21,6 +21,7 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
     private readonly LlmProviderRegistry _providers;
     private readonly ClaudeSubscriptionPool _subscriptionPool;
     private readonly FileWatcherOptions _fileWatcherOptions;
+    private readonly TimeSpan? _bgLingerTimeout;
 
     public LlmSessionAdapterFactory(IConfiguration config, SkillsService skills,
         WorkspaceKnowledgeStore workspaceStore, LlmProviderRegistry providers,
@@ -36,9 +37,10 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
             IgnoreDirs: fw.GetSection("IgnoreDirs").Get<string[]>() is { Length: > 0 } dirs ? dirs : d.IgnoreDirs,
             IgnoreFilePatterns: fw.GetSection("IgnoreFilePatterns").Get<string[]>() is { Length: > 0 } pats ? pats : d.IgnoreFilePatterns,
             RespectGitignore: fw.GetValue("RespectGitignore", d.RespectGitignore));
-        // Потолок доживания процесса с фоновыми агентами после конца хода (минуты)
+        // Потолок доживания процесса с фоновыми агентами после конца хода (минуты) —
+        // прокидываем в каждый адаптер, а не мутируем глобальный static
         if (int.TryParse(config["Claude:BgLingerMinutes"], out var lingerMin) && lingerMin > 0)
-            Claude.ClaudeSession.BgLingerTimeout = TimeSpan.FromMinutes(lingerMin);
+            _bgLingerTimeout = TimeSpan.FromMinutes(lingerMin);
         _skills = skills;
         _workspaceStore = workspaceStore;
         _providers = providers;
@@ -57,6 +59,7 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
             throw new InvalidOperationException(
                 $"Провайдер «{provider.DisplayName}» не настроен: задай LlmProviders:{provider.Key}:ApiKey в appsettings.Local.json");
         return new Claude.ClaudeSession(session, context, _mcpConfigPath, _skills,
-            _workspaceStore, _disallowedTools, _providers, _subscriptionPool, _fileWatcherOptions);
+            _workspaceStore, _disallowedTools, _providers, _subscriptionPool, _fileWatcherOptions,
+            _bgLingerTimeout);
     }
 }

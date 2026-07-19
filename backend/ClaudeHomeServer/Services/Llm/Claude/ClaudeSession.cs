@@ -72,7 +72,10 @@ public class ClaudeSession : ILlmSessionAdapter
     // Агенты (Agent run_in_background, Workflow) живут ВНУТРИ процесса CLI: убить его
     // по грейсу — значит убить их на середине (наблюдалось на проде: task-notification
     // «status=stopped» у всех агентов длиннее 15 секунд). Значение — из Claude:BgLingerMinutes.
-    public static TimeSpan BgLingerTimeout { get; set; } = TimeSpan.FromMinutes(30);
+    // Потолок доживания процесса с фоновыми агентами после конца хода. Инстансное поле
+    // (из конфига через фабрику) — раньше был public static settable, мутируемый как скрытый
+    // сайд-эффект конструктора фабрики (глобальное общее состояние на весь процесс).
+    private readonly TimeSpan _bgLingerTimeout;
 
     // Процессный прогон: один запуск claude CLI. Может пережить ход — пока в нём доживают
     // фоновые агенты, процесс не убиваем, а следующий совместимый ход отдаём ему же в stdin
@@ -214,10 +217,12 @@ public class ClaudeSession : ILlmSessionAdapter
         WorkspaceKnowledgeStore? workspaceStore = null, string[]? disallowedTools = null,
         LlmProviderRegistry? providers = null,
         ClaudeSubscriptionPool? subscriptionPool = null,
-        FileWatcherOptions? fileWatcherOptions = null)
+        FileWatcherOptions? fileWatcherOptions = null,
+        TimeSpan? bgLingerTimeout = null)
     {
         _providers = providers;
         _subscriptionPool = subscriptionPool;
+        _bgLingerTimeout = bgLingerTimeout ?? TimeSpan.FromMinutes(30);
         Info = info;
         _rootPath = context.RootPath;
         _onMessage = context.OnMessage;
@@ -1492,7 +1497,7 @@ public class ClaudeSession : ILlmSessionAdapter
                             $"Claude не отвечает более {IdleTimeout.TotalMinutes:0} мин — прерываем"));
                     else if (run.HasPendingBg)
                         Console.Error.WriteLine(
-                            $"[ClaudeSession] Фоновые агенты не завершились за {BgLingerTimeout.TotalMinutes:0} мин тишины — завершаем процесс");
+                            $"[ClaudeSession] Фоновые агенты не завершились за {_bgLingerTimeout.TotalMinutes:0} мин тишины — завершаем процесс");
                     // Иначе: result отдан, фоновых задач нет — процесс держат плагинные
                     // хуки/мосты (наблюдалось с oh-my-claudecode), гасим молча
                     _launcher.Kill(run.Process, run.LaunchTurnId);
@@ -1515,9 +1520,9 @@ public class ClaudeSession : ILlmSessionAdapter
     // Допустимая тишина stdout по состоянию прогона: активный ход — щедрый IdleTimeout;
     // доживание с фоновыми агентами — потолок BgLingerTimeout (агенты работают молча:
     // их транскрипты пишутся на диск, в stdout родителя ничего); иначе — короткий грейс
-    private static TimeSpan WatchdogFor(CliRun run) =>
+    private TimeSpan WatchdogFor(CliRun run) =>
         !run.TurnDone ? IdleTimeout
-        : run.HasPendingBg ? BgLingerTimeout
+        : run.HasPendingBg ? _bgLingerTimeout
         : run.PromptSuggestionsActive ? PromptSuggestionExitGrace
         : ResultExitGrace;
 

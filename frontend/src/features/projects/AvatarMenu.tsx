@@ -99,21 +99,8 @@ export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout
         {!hideStatus && <ConnectionStatus variant="badge" label={serverUrl || 'localhost'} />}
       </div>
 
-      {/* Индикатор новизны «Что нового» на аватаре (мобилка: кнопка уехала в меню) */}
-      {onShowHistory && (historyBadge > 0 || historyNeverSeen) && (
-        <span style={{
-          position: 'absolute', top: -2, right: -2, pointerEvents: 'none',
-          ...(historyBadge > 0
-            ? {
-                minWidth: 15, height: 15, padding: '0 4px', borderRadius: 8,
-                background: C.accent, color: C.onAccent, fontSize: 9.5, fontWeight: 700,
-                lineHeight: '15px', textAlign: 'center', boxSizing: 'border-box',
-              }
-            : { width: 8, height: 8, borderRadius: '50%', background: C.accent }),
-        }}>
-          {historyBadge > 0 ? (historyBadge > 99 ? '99+' : historyBadge) : ''}
-        </span>
-      )}
+      {/* Сам аватар индикатором новизны не обвешиваем: счётчик «Что нового»
+          показывается только на одноимённом пункте внутри меню */}
 
       {open && (
         <div style={{

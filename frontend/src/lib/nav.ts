@@ -53,6 +53,7 @@ export interface HashTarget {
   personaView?: 'automation'; // сразу открыть вкладку студии персоны (бэйдж автоматизации в чате)
   knowledgeId?: string;
   chatId?: string;   // диплинк на конкретный чат: #/chats/{id} — глобальный, #/project/{id}/chat/{chatId} — проектный
+  history?: boolean; // #/history — открыть overlay «Что нового» (поверх дашборда)
 }
 
 export function parseHash(hash: string = window.location.hash): HashTarget | null {
@@ -60,6 +61,8 @@ export function parseHash(hash: string = window.location.hash): HashTarget | nul
   if (parts.length === 0) return null;
   switch (parts[0]) {
     case 'home': return { screen: 'home' };
+    // Overlay «Что нового»: открывается поверх дашборда (App диспатчит событие открытия)
+    case 'history': return { screen: 'home', history: true };
     case 'chats': {
       const target: HashTarget = { screen: 'chats' };
       // #/chats/{id} — диплинк на конкретный чат (уведомления проактивных персон)

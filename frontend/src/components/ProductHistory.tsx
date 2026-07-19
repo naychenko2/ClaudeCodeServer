@@ -1,13 +1,14 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { AlertTriangle, ChevronRight, History, RefreshCw, Settings, Trash2, X } from 'lucide-react';
-import type { ChangelogDay, ChangelogItem, DaySummaryStub, ChangelogStatus } from '../types';
+import { AlertTriangle, ChevronRight, History, RefreshCw, Settings, Trash2 } from 'lucide-react';
+import type { AuthState, ChangelogDay, ChangelogItem, DaySummaryStub, ChangelogStatus } from '../types';
 import { api } from '../lib/api';
-import { C, FONT, R, MODAL_W, SHADOW } from '../lib/design';
+import { C, FONT, FS, R, MODAL_W, SHADOW } from '../lib/design';
 import { useIsMobile } from '../lib/breakpoints';
 import { EmptyState } from './EmptyState';
-import { Toolbar } from './Toolbar';
-import { IconButton, Modal, ModalActions } from './ui';
+import { HubHeader } from './HubHeader';
+import type { HubTab } from './HubTabs';
+import { Modal, ModalActions } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 
 // Продуктовая история — «что мы делали и чем это полезно», по всем проектам.
@@ -40,9 +41,16 @@ function dayLabel(date: string): string {
   return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', ...(d.getFullYear() !== today.getFullYear() ? { year: 'numeric' } : {}) });
 }
 
-// ≤ столько пунктов дня — показываем все категории списком (секциями), а не вкладками:
-// на «тонких» днях кликать по вкладкам ради 1-2 пунктов незачем, лучше сразу весь обзор.
-const LIST_MODE_MAX = 12;
+// Порог «хита» дня: пункты с такой оценкой и выше уходят в hero-карточки сверху,
+// остальные — в компактный список секциями по областям (принцип релиз-нот:
+// главное — крупно, остальное — плотно)
+export const HERO_SCORE = 4;
+// Показывать ли кнопку «Очистить всю историю» в шапке дня. Пока скрыта: операция
+// разовая (сносит все сводки) и в повседневной работе не нужна. Логика очистки
+// (doClearAll / askClearAll / DELETE /api/history) остаётся рабочей.
+const SHOW_CLEAR_ALL = false;
+// Не больше стольких hero-карточек — иначе «главное» перестаёт быть главным
+const HERO_MAX = 4;
 
 // Русская плюрализация: 1 изменение / 2 изменения / 5 изменений
 function plural(n: number, one: string, few: string, many: string): string {
@@ -55,9 +63,14 @@ function plural(n: number, one: string, few: string, many: string): string {
   }
 }
 
-export function ProductHistory({ isMobile, onClose }: {
+export function ProductHistory({ isMobile, onClose, auth, onLogout, onHubTab }: {
   isMobile: boolean;
   onClose: () => void;
+  // Шапка страницы — общий HubHeader (как у «Уведомлений» и прочих разделов):
+  // логотип, разделы, аватар. Переход в раздел закрывает эту страницу.
+  auth: AuthState;
+  onLogout: () => void;
+  onHubTab: (t: HubTab) => void;
 }) {
   const [days, setDays] = useState<DaySummaryStub[] | null>(null);      // null = загрузка списка
   const [daysError, setDaysError] = useState<string | null>(null);
@@ -68,7 +81,6 @@ export function ProductHistory({ isMobile, onClose }: {
   const [selectedDate, setSelectedDate] = useState<string | null>(null); // выбранный в боковой навигации день
   const [windowDays, setWindowDays] = useState(0);                       // 0 = дефолт бэка (30)
   const [authorFilter, setAuthorFilter] = useState<string | null>(null); // null = все исполнители
-  const [activeArea, setActiveArea] = useState<Record<string, string>>({}); // активная вкладка-область по дню
   const [reloadKey, setReloadKey] = useState(0);                          // bump → перезагрузка списка дней (после очистки)
   const [confirm, setConfirm] = useState<null | {                        // единый попап-подтверждение в стиле приложения
     title: string; body: string; confirmLabel: string; variant?: 'primary' | 'danger'; run: () => void;
@@ -223,20 +235,27 @@ export function ProductHistory({ isMobile, onClose }: {
   const selFailed = selectedDate ? failedDays.has(selectedDate) : false;
   const selItems = selSum ? (authorFilter ? selSum.items.filter(it => it.authors.includes(authorFilter)) : selSum.items) : [];
 
-  // Группы-области (вкладки категорий) и активная — вычисляем заранее, чтобы вкладки
-  // можно было вынести в sticky-шапку отдельно от скроллящейся ленты пунктов
-  const groups = selSum && selItems.length > 0 ? groupByArea(selItems) : [];
-  // Мало пунктов → списочный режим (все категории секциями сразу), иначе → вкладки.
-  // Считаем от selItems (после фильтра по автору): сужение фильтром тоже переключает режим.
-  const listMode = groups.length > 0 && selItems.length <= LIST_MODE_MAX;
-  const activeAreaName = groups.length
-    ? (selDay && activeArea[selDay.date] && groups.some(g => g.area === activeArea[selDay.date])
-        ? activeArea[selDay.date] : groups[0].area)
-    : null;
-  const shownGroup = groups.find(g => g.area === activeAreaName) ?? groups[0];
+  // Релиз-ноты дня: «хиты» (score ≥ HERO_SCORE) — hero-карточками сверху,
+  // остальное — компактный список секциями по областям. Всё от selItems
+  // (после фильтра по автору) — фильтр сужает и hero, и список.
+  const heroes = [...selItems].sort((a, b) => b.score - a.score)
+    .filter(i => i.score >= HERO_SCORE).slice(0, HERO_MAX);
+  const rest = selItems.filter(i => !heroes.includes(i));
+  const groups = rest.length > 0 ? groupByArea(rest) : [];
 
   const dayContent = (
-    <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', padding: isMobile ? '14px 16px 30px' : '20px 32px 40px' }}>
+    <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', padding: isMobile ? '10px 16px 30px' : '14px 32px 40px' }}>
+      {/* Заголовок страницы с действиями — как у «Уведомлений»: serif-название слева,
+          действия справа. Живёт В колонке контента (а не во всю ширину): иначе на
+          десктопе он висел бы над календарём и не совпадал с текстом дня по левому краю */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
+        <span style={{
+          fontFamily: FONT.serif, fontSize: FS.h2, fontWeight: 700,
+          color: C.textHeading, letterSpacing: '-0.3px', whiteSpace: 'nowrap',
+        }}>
+          Что нового
+        </span>
+      </div>
       {days === null && !daysError && (
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textMuted, fontSize: 13 }}>Загрузка истории…</div>
       )}
@@ -278,7 +297,21 @@ export function ProductHistory({ isMobile, onClose }: {
                     {selItems.length} {plural(selItems.length, 'обновление', 'обновления', 'обновлений')}
                   </span>
                 )}
-                <RegenButton spinning={selLoading} onClick={() => askRegenerate(selDay.date)} />
+                {/* Действия дня — справа. Кнопка «Очистить всю историю» пока скрыта
+                    (SHOW_CLEAR_ALL): операция разовая и рискованная, а место в шапке дня
+                    занимала постоянно. Вернуть — поменять флаг, код очистки на месте. */}
+                <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 2 }}>
+                  {SHOW_CLEAR_ALL && (
+                    <HintButton hint="Очистить всю историю" onClick={askClearAll}>
+                      <Trash2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+                    </HintButton>
+                  )}
+                  <HintButton hint="Собрать сводку заново" disabled={selLoading}
+                    onClick={() => askRegenerate(selDay.date)}>
+                    <RefreshCw size={ICON_SIZE.sm} strokeWidth={ICON_STROKE}
+                      style={selLoading ? { animation: 'cc-spin 0.8s linear infinite' } : undefined} />
+                  </HintButton>
+                </span>
               </div>
               {/* Мини-фильтр по исполнителю — с количеством пунктов каждого за этот день */}
               {authors.length > 1 && (
@@ -291,12 +324,6 @@ export function ProductHistory({ isMobile, onClose }: {
                       onClick={() => setAuthorFilter(prev => prev === a ? null : a)} />
                   ))}
                 </div>
-              )}
-              {/* Вкладки категорий — часть sticky-шапки. В списочном режиме их нет:
-                  все категории показываются секциями в теле дня. */}
-              {!listMode && groups.length > 0 && shownGroup && (
-                <AreaTabs groups={groups} active={shownGroup.area}
-                  onChange={area => setActiveArea(prev => ({ ...prev, [selDay.date]: area }))} />
               )}
             </div>
             {!selSum && selFailed && (
@@ -333,21 +360,25 @@ export function ProductHistory({ isMobile, onClose }: {
                 {authorFilter ? `Нет изменений (${authorFilter})` : 'Заметных изменений нет'}
               </div>
             )}
-            {/* Списочный режим: все категории секциями (заголовок + свой таймлайн) друг под другом */}
-            {listMode && (
-              <div style={{ animation: 'cc-fade-in 0.2s ease' }}>
-                {groups.map((g, gi) => (
-                  <div key={g.area} style={{ marginTop: gi === 0 ? 0 : 18 }}>
-                    <CategoryHeader area={g.area} list={g.list} />
-                    <GroupTimeline list={g.list} />
-                  </div>
-                ))}
+            {/* Hero-карточки: хиты дня крупно, сеткой в две колонки (на мобилке — в одну) */}
+            {heroes.length > 0 && (
+              <div style={{
+                animation: 'cc-fade-in 0.2s ease', display: 'flex', flexDirection: 'column', gap: 10,
+                marginBottom: groups.length > 0 ? 22 : 0,
+              }}>
+                {heroes.map((item, i) => <HeroCard key={i} item={item} />)}
               </div>
             )}
-            {/* Вкладочный режим: лента пунктов выбранной категории — скроллится под sticky-шапкой */}
-            {!listMode && groups.length > 0 && shownGroup && (
-              <div key={shownGroup.area} style={{ animation: 'cc-fade-in 0.2s ease' }}>
-                <GroupTimeline list={shownGroup.list} />
+            {/* Остальное — компактный список секциями по областям, без таймлайна и бейджей:
+                значимость уже передана позицией (хиты выше, крупно) */}
+            {groups.length > 0 && (
+              <div style={{ animation: 'cc-fade-in 0.2s ease' }}>
+                {groups.map((g, gi) => (
+                  <div key={g.area} style={{ marginTop: gi === 0 ? 0 : 16 }}>
+                    <SectionHeader area={g.area} list={g.list} />
+                    {g.list.map((item, i) => <CompactRow key={i} item={item} />)}
+                  </div>
+                ))}
               </div>
             )}
         </div>
@@ -367,32 +398,9 @@ export function ProductHistory({ isMobile, onClose }: {
       position: 'fixed', inset: 0, zIndex: 1000, display: 'flex', flexDirection: 'column',
       background: C.bgMain, fontFamily: FONT.sans,
     }}>
-      <Toolbar isMobile={isMobile}>
-        {/* Левая секция — логотип (как на главной; скрыт на мобилке) */}
-        <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center' }}>
-          {!isMobile && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-              <img src="/favicon.svg" alt="" width={30} height={30} style={{ display: 'block', flexShrink: 0 }} />
-              <span style={{ fontFamily: FONT.serif, fontSize: 18, fontWeight: 500, color: C.textHeading, whiteSpace: 'nowrap' }}>
-                AI Home
-              </span>
-            </div>
-          )}
-        </div>
-        {/* Центр — заголовок */}
-        <span style={{ fontFamily: FONT.serif, fontSize: 17, fontWeight: 600, color: C.textHeading, whiteSpace: 'nowrap' }}>
-          Что нового
-        </span>
-        {/* Правая секция — очистить историю + закрыть */}
-        <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4 }}>
-          <IconButton size={isMobile ? 'lg' : 'md'} onClick={askClearAll} title="Очистить всю историю">
-            <Trash2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-          </IconButton>
-          <IconButton size={isMobile ? 'lg' : 'md'} onClick={onClose} title="Закрыть">
-            <X size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-          </IconButton>
-        </div>
-      </Toolbar>
+      {/* Шапка — та же, что у остальных разделов (логотип, разделы, аватар):
+          уход в любой раздел закрывает страницу */}
+      <HubHeader value="home" onTab={t => { onClose(); onHubTab(t); }} auth={auth} onLogout={onLogout} historyActive />
       {feed}
       {/* Единый попап-подтверждение (обновление дня / очистка истории) в стиле приложения */}
       {confirm && (
@@ -434,127 +442,46 @@ function groupEmoji(list: ChangelogItem[]): string {
   return list.find(i => i.emoji)?.emoji || '📋';
 }
 
-// Таймлайн одной категории: вертикальная линия + узлы пунктов.
-// Общий для вкладочного (одна активная группа) и списочного (все группы) режимов.
-function GroupTimeline({ list }: { list: ChangelogItem[] }) {
-  return (
-    <div style={{ position: 'relative', paddingLeft: 28 }}>
-      <div style={{ position: 'absolute', left: 5, top: 6, bottom: 10, width: 2, background: C.divider }} />
-      {list.map((item, i) => (
-        <TimelineNode key={i} item={item} last={i === list.length - 1} />
-      ))}
-    </div>
-  );
-}
-
-// Плашка «сводка не собралась»: показывает причину и как починить. Без неё продукт
-// молча выдаёт сырые коммиты за сводку — на этом легко потерять вечер, ища баг не там.
-function DegradedNotice({ reason, onRetry }: { reason?: string; onRetry: () => void }) {
-  return (
-    <div style={{
-      display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 16,
-      padding: '11px 14px', borderRadius: R.xl,
-      background: C.warningBg, border: `1px solid ${C.warning}`,
-    }}>
-      <AlertTriangle size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} color={C.warning}
-        style={{ flexShrink: 0, marginTop: 1 }} />
-      <div style={{ minWidth: 0, flex: 1 }}>
-        <div style={{ fontSize: 13, fontWeight: 600, color: C.warningText, marginBottom: 2 }}>
-          Сводка не собрана
-        </div>
-        <div style={{ fontSize: 12.5, lineHeight: 1.45, color: C.textSecondary }}>
-          {reason || 'Показаны сырые коммиты вместо продуктовой сводки.'}
-        </div>
-      </div>
-      <button onClick={onRetry} style={{
-        flexShrink: 0, fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, cursor: 'pointer',
-        padding: '5px 12px', borderRadius: 8, border: `1px solid ${C.accent}`,
-        background: C.accentLight, color: C.accent,
-      }}>Обновить</button>
-    </div>
-  );
-}
-
-// Заголовок секции-категории в списочном режиме: эмодзи области + название + счётчик.
-// Визуально в духе вкладок, но это статичный заголовок, а не кликабельная вкладка.
-function CategoryHeader({ area, list }: { area: string; list: ChangelogItem[] }) {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 10 }}>
-      <span style={{ fontSize: 15 }}>{groupEmoji(list)}</span>
-      <span style={{ fontSize: 13.5, fontWeight: 700, color: C.textHeading }}>{area}</span>
-      <span style={{ fontSize: 11.5, color: C.textMuted }}>{list.length}</span>
-    </div>
-  );
-}
-
-// Бейдж значимости по оценке 1-5: ярлык + цвет (обоснование — в пузыре-реплике при наведении).
-// Цвета разведены по разным семантическим токенам, чтобы статусы чётко различались:
-// Хит — красный (топ), Круто — зелёный (хорошо), Заметно — синий (норм), По мелочи — серый.
-function scoreBadge(score: number): { label: string; bg: string; color: string } {
-  if (score >= 5) return { label: 'Хит', bg: C.dangerBg, color: C.dangerText };
-  if (score >= 4) return { label: 'Круто', bg: C.successBg, color: C.successText };
-  if (score >= 3) return { label: 'Заметно', bg: C.infoBg, color: C.info };
-  return { label: 'По мелочи', bg: C.bgPanel, color: C.textMuted };
-}
-
-// Маленькая иконка Клауда (favicon) — ставится внутрь бейджа значимости и в пузырь-реплику
-function ClaudeMark({ size = 11 }: { size?: number }) {
-  return <img src="/favicon.svg" alt="" width={size} height={size} style={{ display: 'block', flexShrink: 0 }} />;
-}
-
-// Один узел таймлайна: маркер-кружочек + заголовок + справа колонка (автор сверху, бейдж
-// значимости под ним). При наведении на бейдж он «говорит» обоснование в пузыре-реплике.
-function TimelineNode({ item, last }: { item: ChangelogItem; last: boolean }) {
+// Hero-карточка хита дня — горизонтальная (карточки идут одной колонкой во всю ширину,
+// поэтому раскладка в строку: эмодзи слева, текст по центру, бейдж и автор справа —
+// так карточка низкая, а не башня). Обоснование оценки Claude «говорит» в пузыре-реплике
+// при наведении на бейдж (в самой карточке его нет — не занимает высоту).
+function HeroCard({ item }: { item: ChangelogItem }) {
   const b = scoreBadge(item.score);
   return (
     <div style={{
-      position: 'relative', padding: '2px 0 13px',
-      borderBottom: last ? 'none' : `1px solid ${C.divider}`,
-      marginBottom: last ? 0 : 13,
+      background: C.bgWhite, border: `1px solid ${C.borderLight}`, borderRadius: 14,
+      padding: '12px 14px', boxShadow: SHADOW.card, minWidth: 0,
+      display: 'flex', alignItems: 'flex-start', gap: 12,
     }}>
-      {/* Маркер-кружочек по центру линии — единый акцентный цвет */}
-      <div style={{
-        position: 'absolute', left: -26, top: 7, width: 8, height: 8, borderRadius: '50%',
-        background: C.accent, boxSizing: 'border-box',
-      }} />
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
-        {/* Левая колонка: заголовок и сразу под ним описание (чтобы высота правой колонки
-            автор+бейдж не раздвигала расстояние между названием и описанием) */}
-        <div style={{ minWidth: 0 }}>
-          <span style={{ fontSize: 14.5, fontWeight: 600, color: C.textHeading, lineHeight: 1.4 }}>
-            {item.title}
-          </span>
-          {item.benefit && (
-            <div style={{ fontSize: 12, color: C.textSecondary, lineHeight: 1.45, marginTop: 3, maxWidth: 640 }}>
-              {item.benefit}
-            </div>
-          )}
+      <span style={{
+        width: 34, height: 34, borderRadius: 10, background: C.accentLight, flexShrink: 0,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18,
+      }}>
+        {item.emoji}
+      </span>
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ fontFamily: FONT.serif, fontSize: 15.5, fontWeight: 600, color: C.textHeading, lineHeight: 1.35 }}>
+          {item.title}
         </div>
-        {/* Правая колонка: бейдж значимости сверху, исполнитель под ним */}
-        <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 5, flexShrink: 0 }}>
-          {/* Бейдж значимости — с иконкой Клауда; при наведении на него «говорит» обоснование */}
-          <ScoreBadge badge={b} reason={item.scoreReason} />
-          {item.authors.length > 0 && (
-            <span style={{ display: 'flex', gap: 10 }}>
-              {item.authors.map(a => (
-                <span key={a} title={a} style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 4,
-                  fontSize: 11.5, color: C.textMuted, whiteSpace: 'nowrap',
-                }}>
-                  <span style={{ fontSize: 12 }}>{authorEmoji(a)}</span>{a}
-                </span>
-              ))}
-            </span>
-          )}
-        </span>
+        {item.benefit && (
+          <div style={{ fontSize: 12.5, color: C.textSecondary, lineHeight: 1.45, marginTop: 3 }}>
+            {item.benefit}
+          </div>
+        )}
       </div>
+      <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 5, flexShrink: 0 }}>
+        <ScoreBadge badge={b} reason={item.scoreReason} />
+        <AuthorIcons authors={item.authors} withNames />
+      </span>
     </div>
   );
 }
 
 // Бейдж значимости + всплывающая рядом реплика (только при наведении на сам бейдж).
 // Позицию бейджа фиксируем на hover и отдаём пузырю — он рисуется в portal (см. ScoreSpeech).
-function ScoreBadge({ badge, reason }: { badge: { label: string; bg: string; color: string }; reason: string }) {
+// Экспортируется: тем же бейджем помечаются хиты в виджете «Что нового» на дашборде.
+export function ScoreBadge({ badge, reason }: { badge: { label: string; bg: string; color: string }; reason: string }) {
   const ref = useRef<HTMLSpanElement>(null);
   const [anchor, setAnchor] = useState<DOMRect | null>(null);
   // Пузырь позиционируется по зафиксированному rect (fixed). Если прокрутить/изменить
@@ -577,7 +504,7 @@ function ScoreBadge({ badge, reason }: { badge: { label: string; bg: string; col
       <span style={{
         display: 'inline-flex', alignItems: 'center', gap: 4,
         fontSize: 10, fontWeight: 700, letterSpacing: '0.03em', textTransform: 'uppercase',
-        borderRadius: 8, padding: '2px 8px 2px 6px', whiteSpace: 'nowrap',
+        borderRadius: 8, padding: '3px 9px 3px 7px', whiteSpace: 'nowrap',
         background: badge.bg, color: badge.color, cursor: reason ? 'pointer' : 'default',
         // Кольцо-обводка цветом бейджа: постоянно лёгкое (намёк «я интерактивный»),
         // при наведении усиливается — сигнал, что тег наводящийся и покажет реплику
@@ -591,7 +518,7 @@ function ScoreBadge({ badge, reason }: { badge: { label: string; bg: string; col
   );
 }
 
-// Речевой пузырь-реплика Claude, будто он сам оценивает задачу. Рисуется в portal с
+// Речевой пузырь-реплика Claude, будто он сам оценивает изменение. Рисуется в portal с
 // position:fixed от координат бейджа — так он НЕ влияет на прокрутку контейнера (иначе у
 // последнего пункта раздувал scrollHeight и страница прыгала). Открывается вниз, а если
 // снизу мало места — вверх. Хвостик указывает на бейдж.
@@ -628,6 +555,110 @@ function ScoreSpeech({ anchor, text }: { anchor: DOMRect; text: string }) {
     </div>,
     document.body,
   );
+}
+
+// Иконки-роли авторов пункта; withNames — с подписью имени (hero), иначе только
+// эмодзи с тултипом (компактный список)
+function AuthorIcons({ authors, withNames }: { authors: string[]; withNames?: boolean }) {
+  if (authors.length === 0) return null;
+  return (
+    <span style={{ display: 'inline-flex', gap: withNames ? 10 : 3, flexShrink: 0 }}>
+      {authors.map(a => (
+        <span key={a} title={a} style={{
+          display: 'inline-flex', alignItems: 'center', gap: 4,
+          fontSize: 11.5, color: C.textMuted, whiteSpace: 'nowrap',
+        }}>
+          <span style={{ fontSize: 12 }}>{authorEmoji(a)}</span>
+          {withNames && a}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+// Компактная строка «прочего» улучшения: буллет + заголовок с иконкой автора сразу
+// после него, под ним польза отдельной строкой. Отступ слева (marginLeft) подводит
+// пункты под заголовок категории — визуально они «внутри» неё. Без эмодзи у пунктов
+// (осталось только у категории — иначе рябит), без бейджей и разделителей.
+function CompactRow({ item }: { item: ChangelogItem }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '5px 0', marginLeft: 22, minWidth: 0 }}>
+      {/* Буллет по центру первой строки заголовка */}
+      <span style={{
+        width: 5, height: 5, borderRadius: '50%', background: C.textMuted,
+        flexShrink: 0, marginTop: 8,
+      }} />
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ fontSize: 13.5, fontWeight: 600, color: C.textHeading, lineHeight: 1.4 }}>
+          {item.title}
+          {/* Автор — сразу за заголовком (а не у правого края): взгляд не бегает
+              через всю строку, чтобы понять, чьё изменение */}
+          <span style={{ marginLeft: 7, verticalAlign: 'baseline' }}>
+            <AuthorIcons authors={item.authors} />
+          </span>
+        </div>
+        {item.benefit && (
+          <div style={{ fontSize: 12.5, color: C.textSecondary, lineHeight: 1.45, marginTop: 2 }}>
+            {item.benefit}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Плашка «сводка не собралась»: показывает причину и как починить. Без неё продукт
+// молча выдаёт сырые коммиты за сводку — на этом легко потерять вечер, ища баг не там.
+function DegradedNotice({ reason, onRetry }: { reason?: string; onRetry: () => void }) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 16,
+      padding: '11px 14px', borderRadius: R.xl,
+      background: C.warningBg, border: `1px solid ${C.warning}`,
+    }}>
+      <AlertTriangle size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} color={C.warning}
+        style={{ flexShrink: 0, marginTop: 1 }} />
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: C.warningText, marginBottom: 2 }}>
+          Сводка не собрана
+        </div>
+        <div style={{ fontSize: 12.5, lineHeight: 1.45, color: C.textSecondary }}>
+          {reason || 'Показаны сырые коммиты вместо продуктовой сводки.'}
+        </div>
+      </div>
+      <button onClick={onRetry} style={{
+        flexShrink: 0, fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, cursor: 'pointer',
+        padding: '5px 12px', borderRadius: 8, border: `1px solid ${C.accent}`,
+        background: C.accentLight, color: C.accent,
+      }}>Обновить</button>
+    </div>
+  );
+}
+
+// Заголовок секции-области в компактном списке: эмодзи области + название + счётчик
+function SectionHeader({ area, list }: { area: string; list: ChangelogItem[] }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 6 }}>
+      <span style={{ fontSize: 15 }}>{groupEmoji(list)}</span>
+      <span style={{ fontSize: 13.5, fontWeight: 700, color: C.textHeading }}>{area}</span>
+      <span style={{ fontSize: 11.5, color: C.textMuted }}>{list.length}</span>
+    </div>
+  );
+}
+
+// Бейдж значимости по оценке 1-5: ярлык + цвет (обоснование — в пузыре-реплике при наведении).
+// Цвета разведены по разным семантическим токенам, чтобы статусы чётко различались:
+// Хит — красный (топ), Круто — зелёный (хорошо), Заметно — синий (норм), По мелочи — серый.
+export function scoreBadge(score: number): { label: string; bg: string; color: string } {
+  if (score >= 5) return { label: 'Хит', bg: C.dangerBg, color: C.dangerText };
+  if (score >= 4) return { label: 'Круто', bg: C.successBg, color: C.successText };
+  if (score >= 3) return { label: 'Заметно', bg: C.infoBg, color: C.info };
+  return { label: 'По мелочи', bg: C.bgPanel, color: C.textMuted };
+}
+
+// Маленькая иконка Клауда (favicon) — ставится внутрь бейджа значимости и в пузырь-реплику
+function ClaudeMark({ size = 11 }: { size?: number }) {
+  return <img src="/favicon.svg" alt="" width={size} height={size} style={{ display: 'block', flexShrink: 0 }} />;
 }
 
 // Календарь-навигация по дням: месяц с сеткой, дни с изменениями кликабельны и
@@ -727,19 +758,37 @@ function DayCalendar({ days, selected, onSelect, onNeedOlder, isMobile }: {
 }
 
 // Кнопка перегенерации дня: иконка обновления, крутится пока идет генерация
-function RegenButton({ spinning, onClick }: { spinning: boolean; onClick: () => void }) {
+// Кнопка-иконка с подсказкой в стиле приложения (как в шапке-хабе): всплывает
+// своя плашка, а не системный title — он появляется с задержкой и выглядит чужеродно.
+function HintButton({ hint, onClick, disabled, children }: {
+  hint: string;
+  onClick: () => void;
+  disabled?: boolean;
+  children: ReactNode;
+}) {
   const m = useIsMobile();
+  const [show, setShow] = useState(false);
   return (
-    <button onClick={onClick} disabled={spinning} title="Собрать сводку заново" aria-label="Собрать сводку заново"
+    <button onClick={onClick} disabled={disabled} aria-label={hint}
       style={{
-        marginLeft: 'auto', width: m ? 40 : 30, height: m ? 40 : 30, borderRadius: 8, border: 'none',
-        background: 'none', cursor: spinning ? 'default' : 'pointer', flexShrink: 0,
+        position: 'relative', width: m ? 40 : 30, height: m ? 40 : 30, borderRadius: 8, border: 'none',
+        background: 'none', cursor: disabled ? 'default' : 'pointer', flexShrink: 0,
         display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textSecondary,
       }}
-      onMouseEnter={e => { if (!spinning) e.currentTarget.style.background = C.bgSelected; }}
-      onMouseLeave={e => { e.currentTarget.style.background = 'none'; }}>
-      <RefreshCw size={ICON_SIZE.sm} strokeWidth={ICON_STROKE}
-        style={spinning ? { animation: 'cc-spin 0.8s linear infinite' } : undefined} />
+      onMouseEnter={e => { if (!disabled) e.currentTarget.style.background = C.bgSelected; setShow(true); }}
+      onMouseLeave={e => { e.currentTarget.style.background = 'none'; setShow(false); }}>
+      {children}
+      {show && (
+        <span style={{
+          position: 'absolute', top: 'calc(100% + 7px)', right: 0, zIndex: 200,
+          background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: 8,
+          boxShadow: SHADOW.dropdown, padding: '5px 10px',
+          fontSize: 12, fontWeight: 500, color: C.textHeading, whiteSpace: 'nowrap',
+          fontFamily: FONT.sans, pointerEvents: 'none',
+        }}>
+          {hint}
+        </span>
+      )}
     </button>
   );
 }
@@ -756,70 +805,6 @@ function ArrowBtn({ dir, onClick }: { dir: 'left' | 'right'; onClick: () => void
       <ChevronRight size={ICON_SIZE.sm} strokeWidth={ICON_STROKE}
         style={{ transform: dir === 'right' ? 'none' : 'rotate(180deg)' }} />
     </button>
-  );
-}
-
-// Вкладки-области: одна строка с горизонтальным скроллом (без видимого скроллбара),
-// мягкие fade-края когда есть куда скроллить, автоскролл к активной. Подчёркивание accent.
-function AreaTabs({ groups, active, onChange }: {
-  groups: { area: string; list: ChangelogItem[] }[];
-  active: string;
-  onChange: (area: string) => void;
-}) {
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const activeRef = useRef<HTMLButtonElement>(null);
-  const [fade, setFade] = useState({ left: false, right: false });
-
-  const updateFade = useCallback(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    setFade({
-      left: el.scrollLeft > 4,
-      right: el.scrollLeft + el.clientWidth < el.scrollWidth - 4,
-    });
-  }, []);
-  useEffect(() => { updateFade(); }, [groups, updateFade]);
-  // Прокручиваем к активной вкладке, чтобы она была в зоне видимости
-  useEffect(() => {
-    activeRef.current?.scrollIntoView({ inline: 'nearest', block: 'nearest', behavior: 'smooth' });
-  }, [active]);
-  // Вертикальное колесо → горизонтальный скролл (удобно на десктопе)
-  const onWheel = (e: React.WheelEvent<HTMLDivElement>) => {
-    const el = scrollRef.current;
-    if (el && Math.abs(e.deltaY) > Math.abs(e.deltaX)) el.scrollLeft += e.deltaY;
-  };
-
-  return (
-    <div style={{ position: 'relative', marginBottom: 14, borderBottom: `1px solid ${C.border}` }}>
-      <div ref={scrollRef} className="cc-scroll-x" onScroll={updateFade} onWheel={onWheel}
-        style={{ display: 'flex', gap: 2, overflowX: 'auto' }}>
-        {groups.map(g => {
-          const on = g.area === active;
-          return (
-            <button key={g.area} ref={on ? activeRef : undefined} onClick={() => onChange(g.area)}
-              style={{
-                display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer', flexShrink: 0,
-                fontSize: 13.5, fontWeight: 600, fontFamily: 'inherit',
-                padding: '8px 12px', border: 'none', background: 'none',
-                color: on ? C.accent : C.textMuted, whiteSpace: 'nowrap',
-                borderBottom: `2px solid ${on ? C.accent : 'transparent'}`, marginBottom: -1,
-                transition: 'color 0.2s, border-color 0.2s',
-              }}>
-              <span style={{ fontSize: 14 }}>{groupEmoji(g.list)}</span>
-              {g.area}
-              <span style={{ fontSize: 11, opacity: 0.7 }}>{g.list.length}</span>
-            </button>
-          );
-        })}
-      </div>
-      {/* Мягкие fade-края — намёк, что можно скроллить дальше */}
-      {fade.left && (
-        <div style={{ position: 'absolute', left: 0, top: 0, bottom: 1, width: 36, pointerEvents: 'none', background: `linear-gradient(90deg, ${C.bgMain}, transparent)` }} />
-      )}
-      {fade.right && (
-        <div style={{ position: 'absolute', right: 0, top: 0, bottom: 1, width: 36, pointerEvents: 'none', background: `linear-gradient(270deg, ${C.bgMain}, transparent)` }} />
-      )}
-    </div>
   );
 }
 

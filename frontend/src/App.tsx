@@ -106,6 +106,11 @@ export default function App() {
   useEffect(() => {
     const open = () => {
       setHistoryOpen(true)
+      // Вписываем открытие в browser history (#/history поверх текущего снимка с флагом):
+      // Back закрывает overlay и возвращает на исходную страницу, «вперёд» — открывает снова
+      if (!(window.history.state as { historyOverlay?: boolean } | null)?.historyOverlay) {
+        window.history.pushState({ ...(window.history.state ?? {}), historyOverlay: true }, '', '#/history')
+      }
       // Фиксируем момент просмотра — от него отсчитывается бейдж новых изменений.
       // Ключ per-user (актуальный id на момент открытия), чтобы на одном устройстве
       // у разных аккаунтов была своя отметка.
@@ -115,7 +120,18 @@ export default function App() {
       } catch { /* ignore */ }
     }
     window.addEventListener(PRODUCT_HISTORY_EVENT, open)
+    // Диплинк #/history при полной загрузке страницы — открываем overlay штатным путём
+    if (initialHash?.history) open()
     return () => window.removeEventListener(PRODUCT_HISTORY_EVENT, open)
+  }, [])
+
+  // Синхронизация overlay «Что нового» с кнопками «назад/вперёд»: состояние открытости
+  // повторяет флаг historyOverlay в снимке истории (Back — закрыть, Forward — открыть)
+  useEffect(() => {
+    const onPop = (e: PopStateEvent) =>
+      setHistoryOpen(!!(e.state as { historyOverlay?: boolean } | null)?.historyOverlay)
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
   }, [])
 
   // Единый поиск, открытый из AI-палитры (App-уровневый оверлей, независимый от шапки)
@@ -250,7 +266,9 @@ export default function App() {
     if (seed.screen === 'knowledge' && initialHash?.screen === 'knowledge') seed.knowledge = initialHash.knowledgeId ?? null
     // Диплинк #/calendar/board: сохраняем доску, чтобы URL пережил перезагрузку
     if (seed.screen === 'calendar' && initialHash?.screen === 'calendar' && initialHash.board) seed.board = true
-    navReplace(seed)
+    // Диплинк #/history: сид не должен затирать открытый overlay «Что нового» —
+    // иначе адрес уезжает на #/home, а страница остаётся открытой
+    if (!initialHash?.history) navReplace(seed)
     // Диплинк #/chats/{id}: сохраняем чат в снимок, иначе сид затрёт id в URL
     if (seed.screen === 'chats' && initialHash?.screen === 'chats' && initialHash.chatId) seed.chatId = initialHash.chatId
     // Запись уровня проекта пушим только когда активен именно раздел «Проекты» с открытым
@@ -616,7 +634,18 @@ export default function App() {
                 : <ProjectListPage onOpen={openProject} onLogout={logout} auth={auth} onHubTab={switchHubTab} />
       }
       {auth && historyOpen && (
-        <ProductHistory isMobile={isMobileView} onClose={() => setHistoryOpen(false)} />
+        <ProductHistory
+          isMobile={isMobileView}
+          auth={auth}
+          onLogout={logout}
+          onHubTab={switchHubTab}
+          // Overlay вписан в history — закрытие крестиком идёт через Back, чтобы не копить
+          // запись #/history (иначе следующий Back открыл бы overlay заново)
+          onClose={() => {
+            if ((window.history.state as { historyOverlay?: boolean } | null)?.historyOverlay) window.history.back()
+            else setHistoryOpen(false)
+          }}
+        />
       )}
       {auth && !authChecking && <AiLauncher />}
       {auth && aiSearchOpen && <GlobalSearch onClose={() => setAiSearchOpen(false)} />}

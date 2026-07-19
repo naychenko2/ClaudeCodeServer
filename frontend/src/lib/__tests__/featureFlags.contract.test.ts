@@ -13,11 +13,19 @@ const csFile = resolve(here, '../../../../backend/ClaudeHomeServer/Models/Featur
 
 function readBackendKeys(): string[] {
   const src = readFileSync(csFile, 'utf-8');
-  // Берём только тело класса FeatureFlagKeys — чтобы не зацепить константы из других классов
+  // Берём тело класса FeatureFlagKeys по БАЛАНСУ скобок (а не по первой '}'):
+  // иначе любой вложенный блок внутри класса (метод, свойство с телом) обрезал бы
+  // тело и молча терял ключи после него → ложнозелёный контракт.
   const classStart = src.indexOf('class FeatureFlagKeys');
   expect(classStart, 'класс FeatureFlagKeys не найден в FeatureFlag.cs').toBeGreaterThan(-1);
   const bodyStart = src.indexOf('{', classStart);
-  const bodyEnd = src.indexOf('}', bodyStart);
+  let depth = 0;
+  let bodyEnd = -1;
+  for (let i = bodyStart; i < src.length; i++) {
+    if (src[i] === '{') depth++;
+    else if (src[i] === '}' && --depth === 0) { bodyEnd = i; break; }
+  }
+  expect(bodyEnd, 'не найдена закрывающая скобка класса FeatureFlagKeys').toBeGreaterThan(-1);
   const body = src.slice(bodyStart, bodyEnd);
 
   const keys: string[] = [];

@@ -177,22 +177,16 @@ export default function App() {
   }, [])
 
   // Диплинк #/project/{id}/chat/{chatId} при полной загрузке страницы (клик по пушу
-  // из service worker). Если проект ещё не открыт — загружаем и открываем.
+  // из service worker), когда нужный проект УЖЕ восстановлен из localStorage: WorkspacePage
+  // смонтирован, сам он ничего не перечитает — будим его событием, чат лежит в sessionStorage.
+  // Если проект другой или не открыт, его грузит и пушит в историю эффект диплинка ниже
+  // (он ждёт авторизации и кладёт chatId в снимок) — здесь этого делать НЕ надо, иначе
+  // получаются два api.projects.list() и две записи истории на один диплинк.
   useEffect(() => {
     if (!initialHash || initialHash.screen !== 'project' || !initialHash.chatId) return;
-    const pid = initialHash.projectId;
-    if (!pid) return;
-    if (project?.id === pid) {
-      // Проект уже открыт — WorkspacePage сам подхватит sessionStorage
+    if (initialHash.projectId && project?.id === initialHash.projectId) {
       window.dispatchEvent(new Event('cc-pending-project-chat'));
-      return;
     }
-    api.projects.list()
-      .then(list => {
-        const p = list.find(x => x.id === pid);
-        if (p) openProject(p);
-      })
-      .catch(() => {});
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Переход к чату проектной персоны из раздела «Персоны»: открываем её проект.

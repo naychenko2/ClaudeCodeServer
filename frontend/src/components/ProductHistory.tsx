@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { AlertTriangle, ChevronRight, History, RefreshCw, Settings, Trash2 } from 'lucide-react';
-import type { AuthState, ChangelogDay, ChangelogItem, DaySummaryStub, ChangelogStatus } from '../types';
+import type { AuthState, ChangelogDay, ChangelogGeneration, ChangelogItem, DaySummaryStub, ChangelogStatus } from '../types';
 import { api } from '../lib/api';
 import { C, FONT, FS, R, MODAL_W, SHADOW } from '../lib/design';
 import { useIsMobile } from '../lib/breakpoints';
@@ -61,6 +61,36 @@ function plural(n: number, one: string, few: string, many: string): string {
     case 2: case 3: case 4: return few;
     default: return many;
   }
+}
+
+// --- Форматирование расхода на сборку сводки (плашка внизу дня) ---
+
+function fmtDuration(ms: number): string {
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s} с`;
+  const m = Math.floor(s / 60);
+  const rest = s % 60;
+  return rest ? `${m} мин ${rest} с` : `${m} мин`;
+}
+
+function fmtTokens(n: number): string {
+  if (n < 1000) return String(n);
+  const k = n / 1000;
+  return `${k.toFixed(k < 10 ? 1 : 0).replace('.', ',')} тыс.`;
+}
+
+// Доли цента показываем порогом, а не нулями: «$0,000» читается как «бесплатно»
+function fmtCost(usd: number): string {
+  if (usd <= 0) return '$0';
+  if (usd < 0.001) return '< $0,001';
+  return `$${usd.toFixed(usd < 1 ? 3 : 2).replace('.', ',')}`;
+}
+
+// Полный id модели («claude-haiku-4-5-20251001») в подписи не нужен — хватает тира
+function shortModel(m: string | null | undefined): string | null {
+  if (!m) return null;
+  const tier = /(opus|sonnet|haiku|fable)/i.exec(m);
+  return tier ? tier[1].toLowerCase() : m;
 }
 
 export function ProductHistory({ isMobile, onClose, auth, onLogout, onHubTab }: {
@@ -381,6 +411,10 @@ export function ProductHistory({ isMobile, onClose, auth, onLogout, onHubTab }: 
                 ))}
               </div>
             )}
+            {/* Чем обошлась сборка этой сводки. Показываем и у degraded-дня: неудачный
+                вызов тоже потратил время и токены. Нет у старых записей кеша — они
+                сгенерены до появления метрик, там плашки просто не будет */}
+            {selSum?.generation && <GenerationFooter gen={selSum.generation} />}
         </div>
         )}
     </div>
@@ -631,6 +665,48 @@ function DegradedNotice({ reason, onRetry }: { reason?: string; onRetry: () => v
         padding: '5px 12px', borderRadius: 8, border: `1px solid ${C.accent}`,
         background: C.accentLight, color: C.accent,
       }}>Обновить</button>
+    </div>
+  );
+}
+
+// Во сколько обошлась эта страница: время ожидания, токены и деньги. Цена генерации
+// обычно невидима — а тут она прямо под сводкой, которую оплатила.
+function GenerationFooter({ gen }: { gen: ChangelogGeneration }) {
+  const totalIn = gen.inputTokens + gen.cacheCreationTokens + gen.cacheReadTokens;
+  const total = totalIn + gen.outputTokens;
+  const model = shortModel(gen.model);
+  const when = new Date(gen.generatedAt);
+  const whenText = isNaN(when.getTime()) ? null
+    : when.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+
+  const dot = <span style={{ color: C.border }}>·</span>;
+  return (
+    <div style={{
+      marginTop: 24, paddingTop: 11, borderTop: `1px solid ${C.border}`,
+      display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap',
+      fontSize: 11.5, color: C.textMuted, lineHeight: 1.5,
+    }}>
+      <ClaudeMark size={12} />
+      <span title={whenText ? `Сводка собрана ${whenText}` : undefined}>
+        Сводку собрал Claude{model ? ` (${model})` : ''}
+      </span>
+      {dot}
+      <span title="Полное время ожидания ответа, включая запуск CLI">
+        {fmtDuration(gen.durationMs)}
+      </span>
+      {dot}
+      <span title={`Вход ${totalIn.toLocaleString('ru-RU')} (из них из кеша ${gen.cacheReadTokens.toLocaleString('ru-RU')}), выход ${gen.outputTokens.toLocaleString('ru-RU')}`}>
+        {fmtTokens(total)} {plural(total, 'токен', 'токена', 'токенов')}
+      </span>
+      {gen.costUsd != null && (
+        <>
+          {dot}
+          {/* «≈» не для красоты: на подписке деньги за вызов не списываются вовсе */}
+          <span title="Оценка по тарифам API. На подписке эти деньги не списываются — цифра показывает, во сколько сборка обошлась бы по счётчику">
+            ≈ {fmtCost(gen.costUsd)}
+          </span>
+        </>
+      )}
     </div>
   );
 }

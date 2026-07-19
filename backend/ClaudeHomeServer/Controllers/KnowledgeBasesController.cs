@@ -221,12 +221,7 @@ public class KnowledgeBasesController(KnowledgeService knowledge, IHubContext<Se
 
     // Владелец датасета по префиксу имени ({username}:), или null — глобальная (без префикса).
     private static string? OwnerOf(string name, string username, HashSet<string> others)
-    {
-        if (name.StartsWith(username + ":", StringComparison.OrdinalIgnoreCase)) return username;
-        foreach (var u in others)
-            if (name.StartsWith(u + ":", StringComparison.OrdinalIgnoreCase)) return u;
-        return null;
-    }
+        => KnowledgeAccess.OwnerOf(name, username, others);
 
     // Резолв датасета по id с проверкой доступности (relevant): своя или глобальная —
     // доступна; чужая помеченная — нет. Обязательно с общим Dify-ключом: иначе по
@@ -244,29 +239,10 @@ public class KnowledgeBasesController(KnowledgeService knowledge, IHubContext<Se
     }
 
     private bool IsRelevant(DifyDatasetListItem d, HashSet<string> others)
-    {
-        var name = d.Name ?? "";
-        var owner = OwnerOf(name, Username, others);
-        if (owner is null) return true;                                                  // глобальная
-        if (!owner.Equals(Username, StringComparison.OrdinalIgnoreCase)) return false;   // чужая
-        // Своя, но память персоны/команды — внутренняя (управляется своим разделом), не показываем.
-        var rest = name[(Username.Length + 1)..];
-        return !rest.StartsWith("persona:", StringComparison.Ordinal)
-            && !rest.StartsWith("team:", StringComparison.Ordinal);
-    }
+        => KnowledgeAccess.IsRelevant(d.Name ?? "", Username, others);
 
-    // Удалять здесь можно самостоятельные ({user}:kb:…) и публичные (без префикса);
-    // привязанные (заметок/проектов/персон) — нельзя.
     private bool IsDeletable(DifyDatasetListItem d, HashSet<string> others)
-    {
-        var name = d.Name ?? "";
-        var owner = OwnerOf(name, Username, others);
-        if (owner is null) return IsAdmin;                                              // глобальная — только админ
-        if (!owner.Equals(Username, StringComparison.OrdinalIgnoreCase)) return false;  // чужая (не видна)
-        var rest = name[(Username.Length + 1)..];                                       // после "{user}:"
-        if (rest.StartsWith("team:", StringComparison.Ordinal)) return false;           // память команды — внутренняя
-        return rest.StartsWith("kb:", StringComparison.Ordinal);                        // самостоятельная
-    }
+        => KnowledgeAccess.IsDeletable(d.Name ?? "", Username, others, IsAdmin);
 
     // Сводка с производными полями или null, если датасет чужой (скрытый).
     private KnowledgeBaseSummary? Classify(DifyDatasetListItem d, HashSet<string> others)

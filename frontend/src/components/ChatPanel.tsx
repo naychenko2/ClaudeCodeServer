@@ -32,6 +32,7 @@ import { ToolGroupBlock, AgentActionsBlock, itemKey, type ActivityEntry } from '
 import { splitAgentResultTail } from '../lib/agentTail';
 import { ChatItemView, FileChangedRow } from './chat/ChatItemView';
 import { type ToolUseItem } from './chat/ToolUseView';
+import { extractMediaFromResult } from './chat/MediaBlock';
 import { WorkflowBlockView } from './chat/WorkflowBlockView';
 
 interface Props {
@@ -780,7 +781,14 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         // виден в summary, на своём месте при раскрытии и НЕ входит в счётчик «N действий»
         const isAgentEntry = (it: ChatItem) =>
           it.kind === 'tool_use' && (it.name.toLowerCase() === 'task' || it.name.toLowerCase() === 'agent');
-        const toolCount = slice.filter(([it]) => it.kind === 'tool_use' && !isAgentEntry(it)).length;
+        // Медиа-результаты (сгенерированные fal.ai картинки/видео) тоже не прячем в свёртку:
+        // карточка с изображением и футером ведёт себя как агенты — видна в summary,
+        // на своём месте при раскрытии и не входит в счётчик «N действий»
+        const isMediaEntry = (it: ChatItem) =>
+          it.kind === 'tool_use' && !it.isError && typeof it.result === 'string'
+          && extractMediaFromResult(it.result).length > 0;
+        const isPinnedEntry = (it: ChatItem) => isAgentEntry(it) || isMediaEntry(it);
+        const toolCount = slice.filter(([it]) => it.kind === 'tool_use' && !isPinnedEntry(it)).length;
         // Группа завершена, как только после неё появился следующий видимый элемент
         // (текст ассистента, запрос разрешения, result, error…) — конца хода не ждём.
         // Хвостовые размышления не сигнал: они могут впитаться в группу при следующем
@@ -832,8 +840,8 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
             </Fragment>
           );
         };
-        // В свёрнутой шапке видны агенты (в порядке ленты) и агрегированные плашки файлов
-        const agentSummary = slice.filter(([it]) => isAgentEntry(it))
+        // В свёрнутой шапке видны агенты и медиа-карточки (в порядке ленты) и агрегированные плашки файлов
+        const agentSummary = slice.filter(([it]) => isPinnedEntry(it))
           .map(([it, idx]) => renderGroupEntry(it, idx, true));
         const filesSummary = [...fileAgg.values()].map(f => (
           <div key={`fsum-${f.path}`} style={{ borderTop: `1px solid ${C.bgInset}` }}>

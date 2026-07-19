@@ -160,6 +160,9 @@ UI скрывает недоступное (`useModelCaps` в `lib/models.ts`), 
 `TasksServerLocator`. Модель Claude-исполнителя задач — `Tasks:ExecutorModel`; AI-генерация
 описания/подзадач — `Tasks:AiModel`; сводки «Что нового» — `Changelog:Model` (везде
 валидна модель любого провайдера: one-shot идёт через claude --print с теми же env).
+Локальные one-shot — с `--safe-mode` (CLI 2.1.169+): юзерские кастомизации ~/.claude
+(CLAUDE.md, скиллы, плагины, хуки) не грузятся в контекст — минус ~половина входных
+токенов на вызов; CLAUDE_CONFIG_DIR память НЕ отсекает, а `--bare` ломает OAuth.
 
 ## Claude Code CLI subprocess
 

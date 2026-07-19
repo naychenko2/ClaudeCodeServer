@@ -21,8 +21,8 @@ public interface IOneShotRunner
 // Общий раннер одноразовых вызовов claude --print (без сессии): промпт через stdin,
 // ответ — stdout целиком. Модель стороннего провайдера подключается env-оверрайдами
 // (LlmProviderRegistry.BuildCliEnv). Рабочая папка — пустая temp (claude не получает
-// доступ к файлам). Используется генерациями задач и заметок; ChangelogService
-// исторически держит свою копию.
+// доступ к файлам). Используется сводками «Что нового» (ChangelogService),
+// генерациями задач и заметок, персонами (ask/характер).
 public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILauncherFactory launchers) : IOneShotRunner
 {
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(120);
@@ -41,14 +41,26 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
         Directory.CreateDirectory(workDir);
 
         var args = new List<string> { "--print", "--output-format", "text" };
-        // Хуки плагинов не нужны и плодят окна консоли на хосте — отключаем (скиллы one-shot не зовёт)
+        // Хуки плагинов не нужны и плодят окна консоли на хосте — отключаем (скиллы one-shot не зовёт).
+        // Нужно и при --safe-mode: в песочнице флага нет, а хуки отключить всё равно надо.
         args.AddRange(Claude.ClaudeRuntimeSettings.HooksOffArgs(launcher));
-        // One-shot — чистая генерация текста: инструменты жёстко выключены. Это контракт
-        // (пустая temp-cwd и раньше подразумевала «без файлов», но не мешала Read по
-        // абсолютному пути) и защита от инъекции в промпт — в т.ч. когда вызов сделан
-        // от имени изолированного пользователя, а процесс работает на хосте.
+        // --safe-mode: CLI не тянет пользовательские кастомизации (~/.claude/CLAUDE.md
+        // с правилами, скиллы, плагины, хуки, MCP) в системный промпт. One-shot — чистая
+        // генерация текста, юзерский контекст ей не нужен, а стоил он ~половину входа
+        // (замер на 2.1.207: 31.6 тыс. → 15.3 тыс. токенов обвязки), и личные правила
+        // пользователя протекали в тон продуктовых текстов. CLAUDE_CONFIG_DIR так не
+        // умеет (память CLI грузит мимо него), --bare ломает OAuth-авторизацию
+        // (пропускает чтение кредов). Только локально: флаг появился в CLI 2.1.169,
+        // песочница может нести версию старее — там не рискуем.
+        if (!launcher.IsSandboxed) args.Add("--safe-mode");
+        // Инструменты жёстко выключены. Это контракт (пустая temp-cwd и раньше
+        // подразумевала «без файлов», но не мешала Read по абсолютному пути) и защита
+        // от инъекции в промпт — в т.ч. когда вызов сделан от имени изолированного
+        // пользователя, а процесс работает на хосте. Skill дополнительно отключает
+        // инжекцию каталога скиллов в системный промпт (~3 тыс. токенов), когда
+        // safe-mode недоступен (песочница).
         args.Add("--disallowedTools");
-        args.Add("Bash,Read,Write,Edit,MultiEdit,NotebookEdit,Glob,Grep,WebFetch,WebSearch,Task,Agent,KillShell,BashOutput");
+        args.Add("Bash,Read,Write,Edit,MultiEdit,NotebookEdit,Glob,Grep,WebFetch,WebSearch,Task,Agent,KillShell,BashOutput,Skill");
         if (!string.IsNullOrWhiteSpace(model))
         {
             args.Add("--model");

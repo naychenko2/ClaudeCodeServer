@@ -84,7 +84,7 @@ public class ProjectKnowledgeSyncServiceTests : IDisposable
             })
             .Build();
 
-        _users = new UserStore(_config, NullLogger<UserStore>.Instance);
+        _users = new UserStore(_config, new ClaudeHomeServer.Tests.Helpers.FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         _ownerId = _users.GetFirst()!.Id;
         var appSettings = new AppSettingsService(_config);
         _projects = new ProjectManager(_config, _users, appSettings);

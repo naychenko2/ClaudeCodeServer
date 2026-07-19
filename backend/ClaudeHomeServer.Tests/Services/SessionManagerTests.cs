@@ -33,7 +33,7 @@ public class SessionManagerTests : IDisposable
             })
             .Build();
 
-        var userStore = new UserStore(config, NullLogger<UserStore>.Instance);
+        var userStore = new UserStore(config, new ClaudeHomeServer.Tests.Helpers.FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         _userStore = userStore;
         var appSettings = new AppSettingsService(config);
         _projectManager = new ProjectManager(config, userStore, appSettings);

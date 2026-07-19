@@ -32,7 +32,7 @@ public class PersonaBindingsServiceTests : IDisposable
             })
             .Build();
 
-        _users = new UserStore(config, NullLogger<UserStore>.Instance);
+        _users = new UserStore(config, new ClaudeHomeServer.Tests.Helpers.FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         _userId = _users.GetFirst()!.Id; // дефолтный admin пустого стора
         var appSettings = new AppSettingsService(config);
         _projects = new ProjectManager(config, _users, appSettings);

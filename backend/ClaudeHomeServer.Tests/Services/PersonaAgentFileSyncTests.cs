@@ -30,7 +30,7 @@ public class PersonaAgentFileSyncTests : IDisposable
             })
             .Build();
 
-        var users = new UserStore(config, NullLogger<UserStore>.Instance);
+        var users = new UserStore(config, new ClaudeHomeServer.Tests.Helpers.FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         var appSettings = new AppSettingsService(config);
         var projects = new ProjectManager(config, users, appSettings);
         _projects = projects;

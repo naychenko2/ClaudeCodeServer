@@ -27,7 +27,7 @@ public class AutomationRootResolverTests : IDisposable
                 ["DefaultProjectsPath"] = _tempDir,
             })
             .Build();
-        var users = new UserStore(config, NullLogger<UserStore>.Instance);
+        var users = new UserStore(config, new ClaudeHomeServer.Tests.Helpers.FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         _appSettings = new AppSettingsService(config);
         _projects = new ProjectManager(config, users, _appSettings);
     }

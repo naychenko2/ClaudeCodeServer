@@ -38,7 +38,7 @@ public class SessionStatusTests : IDisposable
             })
             .Build();
 
-        var userStore = new UserStore(_config, NullLogger<UserStore>.Instance);
+        var userStore = new UserStore(_config, new ClaudeHomeServer.Tests.Helpers.FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         var appSettings = new AppSettingsService(_config);
         _projectManager = new ProjectManager(_config, userStore, appSettings);
         _historyService = new ChatHistoryService(_config);
@@ -67,7 +67,7 @@ public class SessionStatusTests : IDisposable
             _config, new SkillsService(), new WorkspaceKnowledgeStore(_config), llmProviders, subPool);
         var falCost = new FalCostService(new Mock<IHttpClientFactory>().Object, _config);
         var usage = new UsageService(_config);
-        var userStore = new UserStore(_config, NullLogger<UserStore>.Instance);
+        var userStore = new UserStore(_config, new ClaudeHomeServer.Tests.Helpers.FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         var appSettings = new AppSettingsService(_config);
         var jwt = new JwtService(_config, NullLogger<JwtService>.Instance);
         var server = new Mock<Microsoft.AspNetCore.Hosting.Server.IServer>();

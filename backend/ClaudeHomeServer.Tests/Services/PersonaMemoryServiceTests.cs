@@ -30,7 +30,7 @@ public class PersonaMemoryServiceTests : IDisposable
             })
             .Build();
 
-        var userStore = new UserStore(config, NullLogger<UserStore>.Instance);
+        var userStore = new UserStore(config, new ClaudeHomeServer.Tests.Helpers.FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         var wkStore = new WorkspaceKnowledgeStore(config);
         var knowledge = new KnowledgeService(new Mock<IHttpClientFactory>().Object,
             Microsoft.Extensions.Options.Options.Create(new DifyOptions()), wkStore);

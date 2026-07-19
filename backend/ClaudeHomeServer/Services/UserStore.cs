@@ -18,12 +18,23 @@ public class UserStore
     // мутирующие методы спокойно вызывают Save() уже из-под взятого лока.
     private readonly object _lock = new();
 
-    public UserStore(IConfiguration config, ILogger<UserStore> logger)
+    public UserStore(IConfiguration config, IHostEnvironment env, ILogger<UserStore> logger)
     {
         var dataPath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
         var dataDir = Path.GetDirectoryName(dataPath) ?? Path.Combine(AppContext.BaseDirectory, "data");
         _filePath = Path.Combine(dataDir, "users.json");
-        _devPassword = config["Auth:DevPassword"];
+
+        // DevPassword — мастер-пароль для всех аккаунтов; допустим ТОЛЬКО в Development.
+        // В проде игнорируем, даже если задан в конфиге (иначе один пароль открывает всё).
+        var devPassword = config["Auth:DevPassword"];
+        if (!string.IsNullOrEmpty(devPassword))
+        {
+            if (env.IsDevelopment())
+                _devPassword = devPassword;
+            else
+                logger.LogWarning("Auth:DevPassword задан вне среды Development — ПРОИГНОРИРОВАН из соображений безопасности.");
+        }
+
         Load(logger); // конструктор однопоточен — отдельный лок не нужен
     }
 
@@ -37,17 +48,23 @@ public class UserStore
             return;
         }
 
+        // Случайный пароль вместо предсказуемого admin/admin: печатается в лог ОДИН раз.
+        // Предсказуемый дефолт = открытый вход при первом старте на любом стенде.
+        var generatedPassword = Convert.ToBase64String(
+            System.Security.Cryptography.RandomNumberGenerator.GetBytes(12))
+            .Replace("+", "").Replace("/", "").Replace("=", "");
         var admin = new User { Username = "admin", Role = "admin" };
-        SetPasswordInternal(admin, "admin");
+        SetPasswordInternal(admin, generatedPassword);
         _users = [admin];
         Save();
 
         logger.LogWarning(
             "\n╔══════════════════════════════════════════════╗\n" +
             "║  СОЗДАН ПОЛЬЗОВАТЕЛЬ ПО УМОЛЧАНИЮ           ║\n" +
-            "║  Логин: admin   Пароль: admin               ║\n" +
-            "║  Смените пароль в data/users.json           ║\n" +
-            "╚══════════════════════════════════════════════╝");
+            "║  Логин: admin                               ║\n" +
+            "║  Пароль: {Password}\n" +
+            "║  Пароль показан ОДИН раз — смените после входа ║\n" +
+            "╚══════════════════════════════════════════════╝", generatedPassword);
     }
 
     private void Save()

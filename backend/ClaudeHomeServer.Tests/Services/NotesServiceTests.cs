@@ -27,7 +27,7 @@ public class NotesServiceTests : IDisposable
         var config = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?> { ["DataPath"] = Path.Combine(_dir, "projects.json") })
             .Build();
-        var users = new UserStore(config, NullLogger<UserStore>.Instance);
+        var users = new UserStore(config, new ClaudeHomeServer.Tests.Helpers.FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         var appSettings = new AppSettingsService(config);
         _projects = new ProjectManager(config, users, appSettings);
         _sut = new NotesService(_projects, config, NullLogger<NotesService>.Instance);

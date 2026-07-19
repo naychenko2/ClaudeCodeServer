@@ -266,15 +266,16 @@ public sealed class TerminalService : IDisposable
 
     public async Task StopAsync(string terminalId, string userId)
     {
-        if (_terminals.TryRemove(terminalId, out var instance))
-        {
-            if (instance.UserId != userId)
-                throw new HubException("Доступ запрещён");
-            instance.Status = "stopped";
-            instance.Dispose();
-            await SendToTerminalGroup(terminalId, new TerminalStatusMessage("stopped", 0, terminalId));
-            _log.LogInformation("Терминал {TerminalId} остановлен", terminalId);
-        }
+        // Сверяем владельца ДО удаления из реестра: иначе чужой вызов вырывал бы терминал
+        // из реестра (а процесс-сирота оставался жив) ещё до броска исключения.
+        if (!_terminals.TryGetValue(terminalId, out var instance)) return;
+        if (instance.UserId != userId)
+            throw new HubException("Доступ запрещён");
+        _terminals.TryRemove(terminalId, out _);
+        instance.Status = "stopped";
+        instance.Dispose();
+        await SendToTerminalGroup(terminalId, new TerminalStatusMessage("stopped", 0, terminalId));
+        _log.LogInformation("Терминал {TerminalId} остановлен", terminalId);
     }
 
     /// <summary>Владеет ли пользователь терминалом (существует и принадлежит ему).</summary>

@@ -10,7 +10,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects/{projectId}/files")]
-public class FilesController(FileService files, ProjectManager projects, SyncService sync, IConfiguration config, ILogger<FilesController> logger) : ControllerBase
+public class FilesController(FileService files, ProjectManager projects, SyncService sync, IConfiguration config, JwtService jwt, ILogger<FilesController> logger) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string? UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub);
@@ -25,9 +25,15 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
     }
 
     // Для анонимных OnlyOffice-эндпоинтов (office-download/office-callback): JWT нет,
-    // доступ защищён download-токеном — владельца не сверяем
-    private ClaudeHomeServer.Models.Project GetProjectByOfficeToken(string projectId) =>
-        projects.GetById(projectId) ?? throw new KeyNotFoundException($"Проект не найден: {projectId}");
+    // доступ защищён подписанным office-токеном, привязанным к владельцу+projectId+path.
+    // ownerId извлекается из проверенного токена — сверяем с владельцем проекта.
+    private ClaudeHomeServer.Models.Project GetProjectByOfficeToken(string projectId, string ownerId)
+    {
+        var p = projects.GetById(projectId);
+        if (p is null || p.OwnerId != ownerId)
+            throw new KeyNotFoundException($"Проект не найден: {projectId}");
+        return p;
+    }
 
     private string GetRoot(string projectId) => GetProject(projectId).RootPath;
 
@@ -249,12 +255,13 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
     [AllowAnonymous]
     public IActionResult OfficeDownload(string projectId, [FromQuery] string path, [FromQuery] string token)
     {
-        if (!TokenMatches(token))
+        var ownerId = jwt.ValidateOfficeToken(token, projectId, path);
+        if (ownerId is null)
             return Unauthorized();
 
         try
         {
-            var root = GetProjectByOfficeToken(projectId).RootPath;
+            var root = GetProjectByOfficeToken(projectId, ownerId).RootPath;
             var safePath = FileService.SafeJoinPublic(root, path);
             if (!System.IO.File.Exists(safePath)) return NotFound();
             var ext = Path.GetExtension(path).TrimStart('.').ToLowerInvariant();
@@ -287,7 +294,8 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
 
             var serverUrl = config["OnlyOffice:ServerUrl"] ?? "http://localhost:8090";
             var backendUrl = config["OnlyOffice:BackendUrl"] ?? "http://host.docker.internal:5000";
-            var token = GetDownloadToken();
+            // Токен привязан к владельцу+projectId+path — office-download/callback сверят владельца
+            var token = jwt.IssueOfficeToken(UserId!, projectId, path);
 
             // Ключ документа: хэш пути + время изменения (DS кеширует по ключу).
             // cacheKey позволяет сбросить кеш OO после сохранения через callback.
@@ -340,25 +348,6 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
         catch (UnauthorizedAccessException) { return StatusCode(403); }
     }
 
-    private string GetDownloadToken()
-    {
-        var token = config["OnlyOffice:DownloadToken"];
-        if (!string.IsNullOrEmpty(token)) return token;
-
-        // Авто-генерация и кеш на время жизни приложения
-        return _downloadTokenCache ??= Convert.ToHexString(
-            System.Security.Cryptography.RandomNumberGenerator.GetBytes(24));
-    }
-
-    // Сравнение токена за постоянное время — статичный токен нельзя подбирать по таймингу
-    private bool TokenMatches(string? token)
-    {
-        if (string.IsNullOrEmpty(token)) return false;
-        return System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(
-            System.Text.Encoding.UTF8.GetBytes(token),
-            System.Text.Encoding.UTF8.GetBytes(GetDownloadToken()));
-    }
-
     // SSRF-защита callback: скачиваем документ только с хостов OnlyOffice
     // (хост ServerUrl + явный список OnlyOffice:AllowedCallbackHosts)
     private bool IsAllowedCallbackSource(string url)
@@ -373,7 +362,6 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
         return allowed.Contains(uri.Host);
     }
 
-    private static string? _downloadTokenCache;
     // Активные edit-ключи: "{projectId}/{path}" → docKey
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _activeEditKeys = new();
     // Ключи для игнорирования в callback (пользователь нажал «Отмена»)
@@ -393,7 +381,8 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
         [FromServices] IHttpClientFactory httpClientFactory,
         CancellationToken ct)
     {
-        if (!TokenMatches(token))
+        var ownerId = jwt.ValidateOfficeToken(token, projectId, path);
+        if (ownerId is null)
             return Unauthorized();
 
         OOCallbackPayload? payload;
@@ -420,7 +409,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
                 return Ok(new { error = 1, message = "url host not allowed" });
             try
             {
-                var root = GetProjectByOfficeToken(projectId).RootPath;
+                var root = GetProjectByOfficeToken(projectId, ownerId).RootPath;
                 var client = httpClientFactory.CreateClient("proxy");
                 var bytes = await client.GetByteArrayAsync(payload.Url, ct);
                 files.WriteFileBytes(root, path, bytes);
@@ -535,11 +524,17 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
             (uri.Scheme != "https" && uri.Scheme != "http"))
             return BadRequest(new { error = "Некорректный URL" });
 
+        // SSRF: не даём серверу скачивать с внутренних адресов (localhost, приватные сети,
+        // cloud metadata). Клиент "safe-download" без авто-редиректов — редирект на приватный
+        // хост не обойдёт проверку (вернётся 3xx → EnsureSuccessStatusCode → 502).
+        if (!await SsrfGuard.IsPubliclyRoutableAsync(uri, ct))
+            return BadRequest(new { error = "URL указывает на недопустимый адрес" });
+
         try
         {
             var root = GetRoot(projectId);
             var safePath = FileService.SafeJoinPublic(root, req.Path);
-            var client = httpClientFactory.CreateClient("proxy");
+            var client = httpClientFactory.CreateClient("safe-download");
 
             // Стриминг в файл вместо буферизации всего ответа в памяти
             using var resp = await client.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, ct);

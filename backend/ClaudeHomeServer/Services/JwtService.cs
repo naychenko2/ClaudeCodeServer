@@ -79,6 +79,73 @@ public class JwtService
         return new JwtSecurityTokenHandler().WriteToken(jwt);
     }
 
+    // Срок office-токена: OnlyOffice DS кеширует download-URL на время сессии
+    // редактирования и дёргает callback после сохранения — берём с запасом.
+    private static readonly TimeSpan OfficeTokenLifetime = TimeSpan.FromDays(1);
+
+    // Подписанный токен доступа OnlyOffice к одному файлу одного владельца.
+    // Заменяет прежний общий статичный download-токен: привязка к userId+projectId+path
+    // закрывает cross-owner чтение/запись (office-download / office-callback анонимны).
+    public string IssueOfficeToken(string userId, string projectId, string path)
+    {
+        var creds = new SigningCredentials(_key, SecurityAlgorithms.HmacSha256);
+        var claims = new[]
+        {
+            new Claim(JwtRegisteredClaimNames.Sub, userId),
+            new Claim("oo_pid", projectId),
+            new Claim("oo_path", path),
+        };
+        var jwt = new JwtSecurityToken(
+            issuer: "ClaudeHomeServer",
+            audience: "ClaudeHomeServer-office",
+            claims: claims,
+            expires: DateTime.UtcNow.Add(OfficeTokenLifetime),
+            signingCredentials: creds);
+        return new JwtSecurityTokenHandler().WriteToken(jwt);
+    }
+
+    // Проверяет office-токен и сверяет привязку к projectId+path. Возвращает userId владельца
+    // либо null (подпись/срок невалидны или токен выписан на другой файл/проект).
+    public string? ValidateOfficeToken(string? token, string projectId, string path)
+    {
+        if (string.IsNullOrWhiteSpace(token)) return null;
+        try
+        {
+            // MapInboundClaims=false — читаем raw "sub"/"oo_*" без ремапа в ClaimTypes.*
+            // (не полагаемся на глобальный DefaultMapInboundClaims, выставленный в Program.cs)
+            var principal = new JwtSecurityTokenHandler { MapInboundClaims = false }.ValidateToken(token, new TokenValidationParameters
+            {
+                ValidateIssuer = true,
+                ValidIssuer = "ClaudeHomeServer",
+                ValidateAudience = true,
+                ValidAudience = "ClaudeHomeServer-office",
+                ValidateLifetime = true,
+                ValidateIssuerSigningKey = true,
+                IssuerSigningKey = _key,
+                ClockSkew = TimeSpan.Zero,
+                NameClaimType = ClaimTypes.Name,
+                RoleClaimType = ClaimTypes.Role,
+            }, out _);
+            if (principal.FindFirstValue("oo_pid") != projectId) return null;
+            if (principal.FindFirstValue("oo_path") != path) return null;
+            return principal.FindFirstValue(JwtRegisteredClaimNames.Sub);
+        }
+        catch { return null; }
+    }
+
+    // Валидирует обычный пользовательский/сервисный JWT и возвращает sub (userId) или null.
+    // Используется вне MVC-пайплайна (preview-middleware), где нет готового ctx.User.
+    public string? ValidateUserToken(string? token)
+    {
+        if (string.IsNullOrWhiteSpace(token)) return null;
+        try
+        {
+            var principal = new JwtSecurityTokenHandler { MapInboundClaims = false }.ValidateToken(token, ValidationParameters, out _);
+            return principal.FindFirstValue(JwtRegisteredClaimNames.Sub);
+        }
+        catch { return null; }
+    }
+
     public TokenValidationParameters ValidationParameters => new()
     {
         ValidateIssuer = true,

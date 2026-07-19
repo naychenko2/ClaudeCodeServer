@@ -170,6 +170,70 @@ public class JwtServiceTests : IDisposable
         act.Should().Throw<SecurityTokenException>();
     }
 
+    // --- Office-токены (cross-owner изоляция OnlyOffice) ---
+
+    [Fact]
+    public void OfficeToken_ValidatedWithMatchingProjectAndPath_ReturnsOwner()
+    {
+        var token = _sut.IssueOfficeToken("owner-1", "proj-A", "docs/a.docx");
+
+        _sut.ValidateOfficeToken(token, "proj-A", "docs/a.docx").Should().Be("owner-1");
+    }
+
+    [Fact]
+    public void OfficeToken_ForDifferentProject_Rejected()
+    {
+        // Токен выписан на proj-A — попытка скачать файл proj-B тем же токеном должна провалиться
+        var token = _sut.IssueOfficeToken("owner-1", "proj-A", "docs/a.docx");
+
+        _sut.ValidateOfficeToken(token, "proj-B", "docs/a.docx").Should().BeNull();
+    }
+
+    [Fact]
+    public void OfficeToken_ForDifferentPath_Rejected()
+    {
+        var token = _sut.IssueOfficeToken("owner-1", "proj-A", "docs/a.docx");
+
+        _sut.ValidateOfficeToken(token, "proj-A", "secret.docx").Should().BeNull();
+    }
+
+    [Fact]
+    public void OfficeToken_IsNotAcceptedAsUserToken_AndViceVersa()
+    {
+        // Разные audience: office-токен нельзя предъявить как пользовательский JWT и наоборот
+        var office = _sut.IssueOfficeToken("owner-1", "proj-A", "a.docx");
+        var user = _sut.Issue(new User { Id = "owner-1", Username = "alice" }).token;
+
+        _sut.ValidateUserToken(office).Should().BeNull();
+        _sut.ValidateOfficeToken(user, "proj-A", "a.docx").Should().BeNull();
+    }
+
+    [Fact]
+    public void OfficeToken_ForgedWithForeignKey_Rejected()
+    {
+        var foreignKey = new SymmetricSecurityKey(RandomNumberGenerator.GetBytes(48));
+        var creds = new SigningCredentials(foreignKey, SecurityAlgorithms.HmacSha256);
+        var forged = new JwtSecurityTokenHandler().WriteToken(new JwtSecurityToken(
+            issuer: "ClaudeHomeServer",
+            audience: "ClaudeHomeServer-office",
+            claims: [new Claim(JwtRegisteredClaimNames.Sub, "intruder"),
+                     new Claim("oo_pid", "proj-A"), new Claim("oo_path", "a.docx")],
+            expires: DateTime.UtcNow.AddHours(1),
+            signingCredentials: creds));
+
+        _sut.ValidateOfficeToken(forged, "proj-A", "a.docx").Should().BeNull();
+    }
+
+    [Fact]
+    public void ValidateUserToken_GoodToken_ReturnsSub_AndNullOnGarbage()
+    {
+        var token = _sut.Issue(new User { Id = "u-7", Username = "alice" }).token;
+
+        _sut.ValidateUserToken(token).Should().Be("u-7");
+        _sut.ValidateUserToken("not-a-token").Should().BeNull();
+        _sut.ValidateUserToken(null).Should().BeNull();
+    }
+
     // --- Секрет ---
 
     [Fact]

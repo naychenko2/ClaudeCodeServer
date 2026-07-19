@@ -160,6 +160,10 @@ builder.Services.AddSingleton<DevServerService>();
 builder.Services.AddSingleton<LaunchConfigService>();
 builder.Services.AddSingleton<ProjectServiceDiscovery>();
 builder.Services.AddHttpClient("proxy");
+// Загрузка произвольных пользовательских URL (save-from-url): без авто-редиректов,
+// чтобы редирект на приватный хост не обошёл SSRF-проверку (см. SsrfGuard).
+builder.Services.AddHttpClient("safe-download")
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
 builder.Services.AddHttpClient("dify");
 builder.Services.AddHttpClient("fal");
 builder.Services.AddHttpClient("llm-provider");
@@ -429,9 +433,41 @@ app.Use(async (ctx, next) =>
             var projectId = match.Groups[1].Value;
             var restPath = match.Groups[2].Value ?? "/";
 
+            // Аутентификация: middleware выполняется ДО endpoint routing, поэтому [Authorize]
+            // тут не действует и ctx.User для iframe-запроса пуст. Токен берём из cookie
+            // cc_preview (её ставит фронт перед загрузкой iframe — уходит и с сабресурсами),
+            // либо из access_token / Bearer (прямое открытие в новой вкладке). Затем сверяем
+            // владельца проекта — иначе любой мог бы проксироваться на чужой dev-сервер.
+            var jwtSvc = ctx.RequestServices.GetRequiredService<JwtService>();
+            var previewToken = ctx.Request.Cookies["cc_preview"];
+            if (string.IsNullOrEmpty(previewToken))
+            {
+                var q = ctx.Request.Query["access_token"].ToString();
+                if (!string.IsNullOrEmpty(q)) previewToken = q;
+                else
+                {
+                    var auth = ctx.Request.Headers.Authorization.ToString();
+                    if (auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+                        previewToken = auth["Bearer ".Length..].Trim();
+                }
+            }
+            var previewUserId = jwtSvc.ValidateUserToken(previewToken);
+            if (previewUserId is null)
+            {
+                ctx.Response.StatusCode = 401;
+                await ctx.Response.WriteAsync("{\"error\":\"Требуется авторизация\"}");
+                return;
+            }
+            var previewProject = ctx.RequestServices.GetRequiredService<ProjectManager>().GetById(projectId);
+            if (previewProject is null || previewProject.OwnerId != previewUserId)
+            {
+                ctx.Response.StatusCode = 403;
+                await ctx.Response.WriteAsync("{\"error\":\"Доступ запрещён\"}");
+                return;
+            }
+
             var devServer = ctx.RequestServices.GetRequiredService<DevServerService>();
             // Порт активного для превью сервиса проекта; если ни один не запущен — 503.
-            // Аутентификация: iframe внутри приложения, которое уже за [Authorize].
             var port = devServer.GetActivePreviewPort(projectId);
             if (port is null)
             {

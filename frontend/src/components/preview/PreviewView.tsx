@@ -10,9 +10,20 @@ interface Props {
   onStop: (serviceId: string) => void
 }
 
+// Preview-прокси /preview/* аутентифицируется по cookie cc_preview (iframe и его сабресурсы
+// не могут слать Authorization). Ставим её из токена сессии перед загрузкой iframe.
+function ensurePreviewCookie() {
+  const token = localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token')
+  if (!token) return
+  const secure = location.protocol === 'https:' ? '; Secure' : ''
+  document.cookie = `cc_preview=${token}; path=/preview; SameSite=Strict${secure}`
+}
+
 export function PreviewView({ service, projectId, onStop }: Props) {
   const iframeRef = useRef<HTMLIFrameElement>(null)
-  const previewUrl = service.status === 'started' ? `/preview/${projectId}/` : null
+  const started = service.status === 'started'
+  if (started) ensurePreviewCookie()
+  const previewUrl = started ? `/preview/${projectId}/` : null
   const port = service.runningPort ?? service.suggestedPort
 
   return (

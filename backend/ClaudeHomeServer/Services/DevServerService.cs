@@ -268,7 +268,8 @@ public sealed class DevServerService
     /// <summary>Назначить активный для превью сервис (на его порт указывает iframe-прокси).</summary>
     public void SetActivePreview(string projectId, string serviceId) => _activePreview[projectId] = serviceId;
 
-    /// <summary>Порт активного для превью сервиса (для middleware, без проверки владельца).</summary>
+    /// <summary>Порт активного для превью сервиса проекта. Владельца проверяет вызывающий
+    /// (preview-middleware сверяет OwnerId по токену до вызова); фолбэк ограничен тем же projectId.</summary>
     public int? GetActivePreviewPort(string projectId)
     {
         if (_activePreview.TryGetValue(projectId, out var serviceId) &&

@@ -533,12 +533,24 @@ public class ClaudeSession : ILlmSessionAdapter
         return true;
     }
 
-    // User-scope MCP-серверы (~/.claude.json, mcpServers) — только для сессий сторонних
-    // провайдеров: у Claude CLI сам читает user-scope, дублировать нельзя (задвоение).
-    // null — сессия Claude, файла нет или mcpServers пуст.
+    // User-scope MCP-серверы (~/.claude.json, mcpServers: fal-ai и др.) — прокидываем в
+    // --mcp-config только когда ход пойдёт с ИЗОЛИРОВАННЫМ CLAUDE_CONFIG_DIR, где CLI не
+    // прочитает ~/.claude.json сам:
+    //  - сторонний провайдер (DeepSeek/GLM) — свой профиль claude-profiles/{key};
+    //  - подписка пула Claude (sub-*) — свой профиль claude-profiles/sub-{key}.
+    // Для основной подписки (CONFIG_DIR = ~/.claude) НЕ дублируем — CLI читает сам (задвоение).
+    // null — основной Claude, файла нет или mcpServers пуст.
     private System.Text.Json.Nodes.JsonObject? LoadUserScopeMcpServers()
     {
-        if (_providers is null || _providers.ResolveByModel(Info.Model) is null) return null;
+        if (_providers is null) return null;
+        var isThirdParty = _providers.ResolveByModel(Info.Model) is not null;
+        // Подписка пула = провайдер сессии не "claude", не сторонний ключ, а активная доп.
+        // подписка (условие 1:1 с применением BuildOAuthCliEnv при выборе env хода)
+        var isPoolSubscription = _subscriptionPool?.HasExtra == true
+            && Info.Provider is not null && Info.Provider != "claude"
+            && _providers.GetByKey(Info.Provider) is null
+            && _subscriptionPool.All.FirstOrDefault(s => s.Key == Info.Provider)?.Enabled == true;
+        if (!isThirdParty && !isPoolSubscription) return null;
         var path = _providers.UserClaudeJsonPath;
         try
         {
@@ -804,6 +816,24 @@ public class ClaudeSession : ILlmSessionAdapter
             type = "control_request",
             request_id = "setmode_" + Guid.NewGuid().ToString("N")[..12],
             request = new { subtype = "set_permission_mode", mode = mode.ToCliFlag() }
+        });
+        WriteLineToStdin(req);
+        return true;
+    }
+
+    // Смена модели на лету: control_request set_model в stdin живого процесса. CLI применяет
+    // её к последующим round-trip'ам идущего хода и отвечает control_response success (reader
+    // игнорирует). Модель нормализуем как для --model (снимаем window-алиас [1m]). Нет
+    // процесса — false: SessionManager уже обновил Info.Model, следующий ход пересоздастся с ней.
+    public bool TrySetModelLive(string model)
+    {
+        var proc = _currentProcess;
+        if (proc is null || proc.HasExited) return false;
+        var req = JsonSerializer.Serialize(new
+        {
+            type = "control_request",
+            request_id = "setmodel_" + Guid.NewGuid().ToString("N")[..12],
+            request = new { subtype = "set_model", model = LlmProviderRegistry.StripClaudeWindowAlias(model) ?? model }
         });
         WriteLineToStdin(req);
         return true;

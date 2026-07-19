@@ -840,6 +840,24 @@ public class ClaudeSession : ILlmSessionAdapter
         return true;
     }
 
+    // Смена модели на лету: control_request set_model в stdin живого процесса. CLI применяет
+    // её к последующим round-trip'ам идущего хода и отвечает control_response success (reader
+    // игнорирует). Модель нормализуем как для --model (снимаем window-алиас [1m]). Нет
+    // процесса — false: SessionManager уже обновил Info.Model, следующий ход пересоздастся с ней.
+    public bool TrySetModelLive(string model)
+    {
+        var proc = _currentProcess;
+        if (proc is null || proc.HasExited) return false;
+        var req = JsonSerializer.Serialize(new
+        {
+            type = "control_request",
+            request_id = "setmodel_" + Guid.NewGuid().ToString("N")[..12],
+            request = new { subtype = "set_model", model = LlmProviderRegistry.StripClaudeWindowAlias(model) ?? model }
+        });
+        WriteLineToStdin(req);
+        return true;
+    }
+
     // Единая точка записи в stdin процесса — под _stdinLock, чтобы параллельные
     // control_response (SignalR-потоки + памп) не перемешали JSON-строки
     private void WriteLineToStdin(string line)

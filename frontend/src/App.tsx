@@ -597,6 +597,13 @@ export default function App() {
       else switchHubTab('knowledge')
       return
     }
+    // Диплинк #/history — это overlay «Что нового», а не раздел: parseHash отдаёт его как
+    // screen:'home' с флагом history, и без этой ветки ссылка внутри приложения молча
+    // уводила на дашборд (overlay открывался только при полной загрузке страницы)
+    if (target?.history) {
+      window.dispatchEvent(new Event(PRODUCT_HISTORY_EVENT))
+      return
+    }
     // Диплинк на раздел без глубокой цели — просто переключаемся на него
     if (target) {
       switchHubTab(target.screen === 'project' ? 'projects' : target.screen)

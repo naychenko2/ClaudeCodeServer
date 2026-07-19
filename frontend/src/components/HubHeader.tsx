@@ -11,7 +11,7 @@ import { ChangePasswordDialog } from './ChangePasswordDialog';
 import { FeatureFlagsModal } from './FeatureFlagsModal';
 import { UsageScreen } from './UsageScreen';
 import { api } from '../lib/api';
-import { getUnreadCount, subscribeToNotifications, ensureNotificationsSubscribed } from '../lib/notifications';
+import { getUnreadCount, subscribeToNotifications, ensureNotificationsSubscribed, ensureUnreadCountLoaded } from '../lib/notifications';
 
 interface Props {
   value: HubTab;
@@ -52,13 +52,22 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive }: Props
   const [neverSeen, setNeverSeen] = useState(false);
   const [showHistoryTip, setShowHistoryTip] = useState(false);   // кастомный tooltip кнопки «Что нового»
   const [notifBadge, setNotifBadge] = useState(0);
+  const [showNotifTip, setShowNotifTip] = useState(false);       // кастомный tooltip колокольчика
 
-  // Подписка на счётчик уведомлений
+  // Подписка на счётчик уведомлений. Счётчик подтягиваем и здесь: шапка живёт во всех
+  // разделах, поэтому бейдж должен быть правдивым сразу, не дожидаясь захода в раздел
+  // уведомлений (список грузит уже он сам).
   useEffect(() => {
     ensureNotificationsSubscribed();
+    void ensureUnreadCountLoaded();
     setNotifBadge(getUnreadCount());
     return subscribeToNotifications(() => setNotifBadge(getUnreadCount()));
   }, []);
+
+  // Один источник текста для тултипа и aria-label колокольчика
+  const notifTip = notifBadge > 0
+    ? `Уведомления (${notifBadge > 99 ? '99+' : notifBadge})`
+    : 'Уведомления';
   const historyTip = (historyBadge ?? 0) > 0
     ? `Что нового (${historyBadge! > 99 ? '99+' : historyBadge})`
     : neverSeen ? 'Что нового — есть свежее' : 'Что нового';
@@ -162,15 +171,15 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive }: Props
         {/* Колокольчик уведомлений — бейдж с числом непрочитанных */}
         <button
           onClick={() => onTab('notifications')}
-          aria-label={`Уведомления${notifBadge > 0 ? ` (${notifBadge})` : ''}`}
+          aria-label={notifTip}
           style={{
             position: 'relative', width: 32, height: 32, borderRadius: 8, border: 'none',
             background: 'none', color: value === 'notifications' ? C.accent : C.textSecondary,
             cursor: 'pointer',
             display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
           }}
-          onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; }}
-          onMouseLeave={e => { e.currentTarget.style.background = 'none'; }}
+          onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; setShowNotifTip(true); }}
+          onMouseLeave={e => { e.currentTarget.style.background = 'none'; setShowNotifTip(false); }}
         >
           <Bell size={17} strokeWidth={2} />
           {notifBadge > 0 && (
@@ -181,6 +190,18 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive }: Props
               boxSizing: 'border-box', pointerEvents: 'none',
             }}>
               {notifBadge > 99 ? '99+' : notifBadge}
+            </span>
+          )}
+          {/* Кастомный tooltip в стиле приложения — как у соседней кнопки «Что нового» */}
+          {showNotifTip && (
+            <span style={{
+              position: 'absolute', top: 'calc(100% + 7px)', right: 0, zIndex: 200,
+              background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: 8,
+              boxShadow: SHADOW.dropdown, padding: '5px 10px',
+              fontSize: 12, fontWeight: 500, color: C.textHeading, whiteSpace: 'nowrap',
+              fontFamily: FONT.sans, pointerEvents: 'none',
+            }}>
+              {notifTip}
             </span>
           )}
         </button>

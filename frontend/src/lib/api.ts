@@ -633,6 +633,13 @@ export const api = {
         method: 'PUT',
         body: JSON.stringify({ enabled }),
       }),
+    // Режим прав: сохраняем сразу при выборе в Composer, иначе он доехал бы до сессии
+    // только вместе со следующим сообщением и терялся при уходе со страницы
+    setMode: (id: string, mode: string) =>
+      request<Session>(`/chats/${id}/mode`, {
+        method: 'PUT',
+        body: JSON.stringify({ mode }),
+      }),
     delete: (id: string) => request<void>(`/chats/${id}`, { method: 'DELETE' }),
     getHistory: (id: string) => request<unknown[]>(`/chats/${id}/history`),
     uploadFile: async (id: string, file: File): Promise<{ path: string }> => {

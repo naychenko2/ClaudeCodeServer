@@ -121,6 +121,21 @@ public class ChatsController(SessionManager sessions, FileService files) : Contr
         return updated is null ? NotFound() : Ok(updated);
     }
 
+    // Режим прав (permission mode) чата. Отдельный эндпоинт нужен, чтобы выбор в Composer
+    // сохранялся сразу, а не только вместе со следующим сообщением: иначе уход со страницы
+    // до первого хода откатывал его на прежний. Как и loop, работает для проектной сессии.
+    [HttpPut("{id}/mode")]
+    public IActionResult SetMode(string id, [FromBody] SetModeRequest req)
+    {
+        if (sessions.GetOwned(id, UserId) is null) return NotFound();
+        try
+        {
+            var updated = sessions.SetMode(id, req.Mode);
+            return updated is null ? NotFound() : Ok(updated);
+        }
+        catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
+    }
+
     [HttpGet("{id}/history")]
     public async Task<IActionResult> GetHistory(string id)
     {
@@ -177,3 +192,5 @@ public record CreateGroupChatRequest(List<string>? PersonaIds, string Mode = "au
 public record SetParticipantsRequest(List<string>? PersonaIds);
 
 public record SetWorkLoopRequest(bool Enabled);
+
+public record SetModeRequest(string Mode);

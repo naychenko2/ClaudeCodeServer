@@ -284,6 +284,14 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   }, []);
 
   const [mode, setMode] = useState<Mode>(session.mode);
+  // Выбор режима сразу уезжает в сессию: иначе он жил бы только в состоянии этой вкладки
+  // и терялся при уходе со страницы (при возврате ChatPanel перечитывает session.mode).
+  // Локальный setMode делаем сразу — переключатель не должен ждать сеть; ход всё равно
+  // передаёт режим ещё раз, так что неудачный запрос не оставит расхождения.
+  const changeMode = (m: Mode) => {
+    setMode(m);
+    api.chats.setMode(session.id, m).catch(() => { /* режим доедет со следующим сообщением */ });
+  };
   const [showAttachPicker, setShowAttachPicker] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
   // Скролл-механика ленты (прилипание к низу, восстановление позиции, кнопка «вниз») — hooks/useChatScroll
@@ -1035,7 +1043,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
             onAttach={project ? (() => setShowAttachPicker(true)) : (() => chatFileInputRef.current?.click())}
             isGenerating={isWaiting}
             mode={mode}
-            onModeChange={setMode}
+            onModeChange={changeMode}
             planAvailable={caps.supportsPlanMode}
             attachments={attachedFiles}
             onRemoveAttachment={path => onAttachedFilesChange(attachedFiles.filter(p => p !== path))}

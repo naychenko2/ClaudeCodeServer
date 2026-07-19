@@ -1498,6 +1498,27 @@ public class SessionManager
     // Включение/выключение цикла «до готово» (флаг work-loop). Включение сбрасывает
     // счётчик итераций; лимит — из конфига Loop:MaxIterations (дефолт 20).
     // userId задан (вызов из API) — сверяется с владельцем; null — внутренний вызов.
+    // Режим прав, выбранный в Composer. Раньше он доезжал до сессии только вместе с
+    // сообщением (см. SendMessageAsync), и выбор, сделанный до первого хода, терялся при
+    // уходе со страницы: UI перечитывал Session.Mode и показывал прежний режим.
+    // На сам ход это не влияет — процесс claude всё равно пересоздаётся в RunTurnAsync
+    // и читает --permission-mode из Info.Mode.
+    public Session? SetMode(string sessionId, string mode, string? userId = null)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
+        if (userId is not null && SessionOwnerId(entry.Info) != userId) return null;
+        if (!Enum.TryParse<ClaudeMode>(mode, true, out var parsed))
+            throw new InvalidOperationException($"Неизвестный режим: {mode}");
+        // «План» у провайдера без поддержки не принимаем — та же защита, что и на ходе
+        var caps = _llmProviders.CapabilitiesFor(entry.Info.Model);
+        if (parsed == ClaudeMode.Plan && !caps.SupportsPlanMode)
+            throw new InvalidOperationException("Провайдер не поддерживает режим «План»");
+        if (entry.Info.Mode == parsed) return entry.Info;
+        entry.Info.Mode = parsed;
+        SaveSessions();
+        return entry.Info;
+    }
+
     public async Task<Session?> SetWorkLoopAsync(string sessionId, bool enabled, string? userId = null)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return null;

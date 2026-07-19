@@ -22,8 +22,11 @@ public class SessionManager
         // без кэша клиент, открывший чат уже после хода (или переподключившийся), никогда
         // не увидит «использовано сейчас», хотя ход реально опирался на память/команду.
         public RecallManifestMessage? LastRecallManifest;
-        // Текст ответа текущего хода — для поиска маркера завершения цикла «до готово»
+        // Текст ответа текущего хода — для поиска маркера завершения цикла «до готово».
+        // StringBuilder не потокобезопасен: Append идёт из read-loop адаптера, а ToString/Clear —
+        // из ContinueWorkLoopAsync (Task.Run) и SetWorkLoopAsync. Все доступы под LoopTurnLock.
         public System.Text.StringBuilder LoopTurnText = new();
+        public readonly object LoopTurnLock = new();
         // Ход завершился ошибкой (result error / error) — цикл не продолжаем
         public bool LoopTurnFailed;
         // Текущий ход нёс протокол цикла «до готово» (выставляет BuildCliTurnText):
@@ -44,6 +47,10 @@ public class SessionManager
         public TaskCompletionSource<TurnResult>? TurnWaiter;
         // Число сообщений истории до хода — чтобы взять реплику ответа именно этого хода
         public int TurnWaiterBaseline;
+        // Сериализует ensure/dispose адаптера. Без него два конкурентных входа
+        // (хаб + REST-агент/work-loop/compact) проходили бы check-then-act на Process/
+        // AdapterStale и создавали два адаптера → два claude --resume на один транскрипт.
+        public readonly SemaphoreSlim EnsureLock = new(1, 1);
     }
 
     private readonly ConcurrentDictionary<string, SessionEntry> _sessions = new();
@@ -1045,14 +1052,18 @@ public class SessionManager
     private void SwitchSpeaker(SessionEntry entry, Persona? persona, string? agentName = null)
     {
         var started = entry.Info.ClaudeSessionId is not null;
-        var switching = started &&
-            (entry.Info.PersonaId != persona?.Id || entry.Info.AgentName is not null || persona is not null);
-
-        entry.Info.PersonaId = persona?.Id;
         // .md-агент и персона взаимоисключающие: назначение одного сбрасывает другого
-        entry.Info.AgentName = persona is null && !string.IsNullOrWhiteSpace(agentName)
+        var newAgentName = persona is null && !string.IsNullOrWhiteSpace(agentName)
             ? agentName.Trim()
             : null;
+        // Спикер реально сменился, только если изменилась личность собеседника (персона ИЛИ
+        // .md-агент). Повторное назначение той же персоны — не смена (иначе PersonaSwitched
+        // взводился бы навсегда и в ленту лез разделитель «теперь отвечает чужие прошлые ответы»).
+        var switching = started &&
+            (entry.Info.PersonaId != persona?.Id || entry.Info.AgentName != newAgentName);
+
+        entry.Info.PersonaId = persona?.Id;
+        entry.Info.AgentName = newAgentName;
         if (persona is not null)
         {
             if (!started)
@@ -1175,6 +1186,13 @@ public class SessionManager
     {
         if (!_sessions.TryGetValue(sessionId, out var entry))
             throw new InvalidOperationException("Сессия не найдена");
+
+        // Идёт awaited-ход агента (REST SendMessageAndWaitAsync выставил TurnWaiter): не
+        // запускаем параллельный пользовательский ход — иначе его result ошибочно разрезолвил
+        // бы чужой ожидатель (agentDepth). Авто-ходы (work-loop/automation) не в счёт: они
+        // не выставляют TurnWaiter и идут строго после result предыдущего.
+        if (!auto && !systemDirective && entry.TurnWaiter is not null)
+            throw new InvalidOperationException("Сессия занята другим ходом");
 
         // Режим, выбранный в Composer, применяется со следующего хода: процесс claude
         // пересоздаётся в RunTurnAsync и читает --permission-mode из Info.Mode.
@@ -1355,6 +1373,18 @@ public class SessionManager
     // После перезапуска сервера Process может быть null — восстанавливаем сессию
     private async Task EnsureProcessAsync(string sessionId, SessionEntry entry)
     {
+        // Сериализуем весь check-then-act под per-entry локом: иначе два конкурентных хода
+        // создали бы два адаптера одной сессии (см. EnsureLock).
+        await entry.EnsureLock.WaitAsync();
+        try
+        {
+            await EnsureProcessCoreAsync(sessionId, entry);
+        }
+        finally { entry.EnsureLock.Release(); }
+    }
+
+    private async Task EnsureProcessCoreAsync(string sessionId, SessionEntry entry)
+    {
         // Отложенная уборка устаревшего адаптера (смена собеседника/правка персоны):
         // дожидаемся dispose ДО старта нового — иначе старый процесс ещё умирает,
         // когда новый уже поднялся с --resume того же транскрипта
@@ -1377,11 +1407,23 @@ public class SessionManager
         var accumulator = entry.Accumulator;
         if (accumulator is null)
         {
-            var existingHistory = entry.Info.ClaudeSessionId != null
-                ? await _history.LoadAsync(entry.Info.ClaudeSessionId)
-                : [];
-            accumulator = new TurnAccumulator(existingHistory, entry.Info.ClaudeSessionId);
-            entry.Accumulator = accumulator;
+            // Оживление под _falPersistLock — сериализуем с прямой записью fal-стоимости в
+            // историю неактивной сессии (PublishFalCostAsync): иначе LoadAsync тут и запись там
+            // теряли бы друг друга (lost update). Повторная проверка под локом.
+            await _falPersistLock.WaitAsync();
+            try
+            {
+                accumulator = entry.Accumulator;
+                if (accumulator is null)
+                {
+                    var existingHistory = entry.Info.ClaudeSessionId != null
+                        ? await _history.LoadAsync(entry.Info.ClaudeSessionId)
+                        : [];
+                    accumulator = new TurnAccumulator(existingHistory, entry.Info.ClaudeSessionId);
+                    entry.Accumulator = accumulator;
+                }
+            }
+            finally { _falPersistLock.Release(); }
         }
 
         // Чат вне проекта — рабочая папка Chats, без проектного промпта и правил;
@@ -1542,7 +1584,7 @@ public class SessionManager
                 MaxIterations = int.TryParse(_config["Loop:MaxIterations"], out var m) ? m : 20,
             }
             : null;
-        entry.LoopTurnText.Clear();
+        lock (entry.LoopTurnLock) entry.LoopTurnText.Clear();
         SaveSessions();
         await BroadcastWorkLoopAsync(sessionId, entry);
         return entry.Info;
@@ -1564,8 +1606,12 @@ public class SessionManager
 
         // Буфер потребляем и чистим здесь (а не при постановке хода): очистка на постановке
         // стирала бы текст стримящегося хода при параллельной отправке пользователя
-        var turnText = entry.LoopTurnText.ToString();
-        entry.LoopTurnText.Clear();
+        string turnText;
+        lock (entry.LoopTurnLock)
+        {
+            turnText = entry.LoopTurnText.ToString();
+            entry.LoopTurnText.Clear();
+        }
 
         if (entry.LoopTurnFailed)
         {
@@ -1749,7 +1795,8 @@ public class SessionManager
                 case TextDeltaMessage m:
                     acc.OnTextDelta(m.Text);
                     // Цикл «до готово»: копим текст хода для поиска маркера завершения
-                    if (entry?.Info.WorkLoop is not null) entry.LoopTurnText.Append(m.Text);
+                    if (entry?.Info.WorkLoop is not null)
+                        lock (entry.LoopTurnLock) entry.LoopTurnText.Append(m.Text);
                     break;
                 case ThinkingDeltaMessage m: acc.OnThinkingDelta(m.Text); break;
                 case AgentTextMessage m:
@@ -1978,29 +2025,43 @@ public class SessionManager
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return;
 
-        if (entry.Accumulator is not null)
+        // Весь выбор ветки (аккумулятор vs прямая запись на диск) — под _falPersistLock, тем же,
+        // что берёт ленивое оживление аккумулятора в EnsureProcessCoreAsync. Иначе check-then-act
+        // на entry.Accumulator гонялся бы с оживлением → двойная запись/потеря стоимости.
+        await _falPersistLock.WaitAsync();
+        bool duplicate = false;
+        try
         {
-            if (!entry.Accumulator.OnFalCost(msg.RequestId, msg.EndpointId, msg.CostUsd, msg.OutputUnits, msg.UnitPrice))
-                return; // дубликат — уже опубликован
-            try { await entry.Accumulator.SaveSnapshotAsync(_history); }
-            catch (Exception ex) { Console.Error.WriteLine($"[FalCost] Сохранение истории ({sessionId}) не удалось: {ex.Message}"); }
-        }
-        else if (entry.Info.ClaudeSessionId is string key)
-        {
-            // Сессия не активна — пишем стоимость напрямую в историю на диске (под локом против гонок)
-            await _falPersistLock.WaitAsync();
-            try
+            if (entry.Accumulator is not null)
             {
-                var stored = await _history.LoadAsync(key);
-                if (stored.Any(m => m is StoredFalCostMessage f && f.RequestId == msg.RequestId))
-                    return; // дубликат — уже в истории
-                stored.Add(new StoredFalCostMessage(msg.RequestId, msg.EndpointId, msg.CostUsd, msg.OutputUnits, msg.UnitPrice));
-                await _history.SaveAsync(key, stored);
+                if (!entry.Accumulator.OnFalCost(msg.RequestId, msg.EndpointId, msg.CostUsd, msg.OutputUnits, msg.UnitPrice))
+                    duplicate = true; // уже опубликован
+                else
+                {
+                    try { await entry.Accumulator.SaveSnapshotAsync(_history); }
+                    catch (Exception ex) { Console.Error.WriteLine($"[FalCost] Сохранение истории ({sessionId}) не удалось: {ex.Message}"); }
+                }
             }
-            catch (Exception ex) { Console.Error.WriteLine($"[FalCost] Прямая запись истории ({sessionId}) не удалась: {ex.Message}"); }
-            finally { _falPersistLock.Release(); }
+            else if (entry.Info.ClaudeSessionId is string key)
+            {
+                // Сессия не активна — пишем стоимость напрямую в историю на диске
+                try
+                {
+                    var stored = await _history.LoadAsync(key);
+                    if (stored.Any(m => m is StoredFalCostMessage f && f.RequestId == msg.RequestId))
+                        duplicate = true; // уже в истории
+                    else
+                    {
+                        stored.Add(new StoredFalCostMessage(msg.RequestId, msg.EndpointId, msg.CostUsd, msg.OutputUnits, msg.UnitPrice));
+                        await _history.SaveAsync(key, stored);
+                    }
+                }
+                catch (Exception ex) { Console.Error.WriteLine($"[FalCost] Прямая запись истории ({sessionId}) не удалась: {ex.Message}"); }
+            }
         }
+        finally { _falPersistLock.Release(); }
 
+        if (duplicate) return; // дубликат — не ретранслируем
         await BroadcastAsync(sessionId, msg);
     }
 
@@ -2011,30 +2072,35 @@ public class SessionManager
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return;
 
-        if (entry.Accumulator is { } acc)
+        // Как в PublishFalCostAsync: выбор ветки под _falPersistLock, чтобы check-then-act на
+        // entry.Accumulator не гонялся с ленивым оживлением аккумулятора (EnsureProcessCoreAsync).
+        await _falPersistLock.WaitAsync();
+        try
         {
-            acc.Append(stored);
-            try { await acc.SaveSnapshotAsync(_history); }
-            catch (Exception ex)
+            if (entry.Accumulator is { } acc)
             {
-                Console.Error.WriteLine($"[SessionManager] Сохранение истории ({sessionId}) после внеходовой записи: {ex.Message}");
+                acc.Append(stored);
+                try { await acc.SaveSnapshotAsync(_history); }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"[SessionManager] Сохранение истории ({sessionId}) после внеходовой записи: {ex.Message}");
+                }
+            }
+            else if (entry.Info.ClaudeSessionId is string key)
+            {
+                try
+                {
+                    var stored0 = await _history.LoadAsync(key);
+                    stored0.Add(stored);
+                    await _history.SaveAsync(key, stored0);
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"[SessionManager] Прямая внеходовая запись истории ({sessionId}): {ex.Message}");
+                }
             }
         }
-        else if (entry.Info.ClaudeSessionId is string key)
-        {
-            await _falPersistLock.WaitAsync();
-            try
-            {
-                var stored0 = await _history.LoadAsync(key);
-                stored0.Add(stored);
-                await _history.SaveAsync(key, stored0);
-            }
-            catch (Exception ex)
-            {
-                Console.Error.WriteLine($"[SessionManager] Прямая внеходовая запись истории ({sessionId}): {ex.Message}");
-            }
-            finally { _falPersistLock.Release(); }
-        }
+        finally { _falPersistLock.Release(); }
 
         await BroadcastSessionMessageAsync(sessionId, broadcast);
     }

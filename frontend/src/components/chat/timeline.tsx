@@ -34,7 +34,7 @@ export function ToolGroupBlock({ isGroupDone, toolCount, summary, children }: {
           onClick={() => setExpanded(v => !v)}
           style={{
             display: 'flex', alignItems: 'center', gap: 5,
-            padding: '2px 14px', border: 'none', background: 'transparent',
+            padding: '2px 0', border: 'none', background: 'transparent',
             cursor: 'pointer', textAlign: 'left',
           }}
         >

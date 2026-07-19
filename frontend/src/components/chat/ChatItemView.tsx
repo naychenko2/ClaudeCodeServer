@@ -217,7 +217,7 @@ export const FileChangedRow = memo(function FileChangedRow({ item, online, onOpe
   const project = useContext(ChatProjectContext);
   const relativePath = relPath(item.path, project?.rootPath);
   return (
-    <div style={{ padding: '9px 0', display: 'flex', alignItems: 'center', gap: 10 }}>
+    <div style={{ padding: '3px 0', display: 'flex', alignItems: 'center', gap: 10 }}>
       <span style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0, color: C.accent }}>
         <SquarePen size={13} strokeWidth={2} style={{ flexShrink: 0 }} />
       </span>

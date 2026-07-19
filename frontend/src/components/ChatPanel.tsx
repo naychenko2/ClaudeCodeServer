@@ -845,11 +845,11 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         const needsTopSpacing = kind === 'text' || kind === 'user_message' || kind === 'result' || kind === 'error';
         pushNode(
           kind === 'user_message'
-            ? <div key={`sp-${i}`} style={{ marginTop: 12, display: 'flex', justifyContent: 'flex-end' }}>{node}</div>
+            ? <div key={`sp-${i}`} style={{ marginTop: 3, display: 'flex', justifyContent: 'flex-end' }}>{node}</div>
             : kind === 'result'
-              ? <div key={`sp-${i}`} style={{ marginTop: 12, display: 'flex', justifyContent: 'center' }}>{node}</div>
+              ? <div key={`sp-${i}`} style={{ marginTop: 3, display: 'flex', justifyContent: 'center' }}>{node}</div>
               : needsTopSpacing
-                ? <div key={`sp-${i}`} style={{ marginTop: 12 }}>{node}</div>
+                ? <div key={`sp-${i}`} style={{ marginTop: 3 }}>{node}</div>
                 : node,
           i
         );
@@ -870,7 +870,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         const groupStart = nodes[j].start;
         while (j < nodes.length && inZone(nodes[j])) { group.push(nodes[j].node); j++; }
         result.push(
-          <div key={`exec-${groupStart}`} style={{ marginLeft: 8, paddingLeft: 14, borderLeft: `3px solid ${C.success}`, display: 'flex', flexDirection: 'column', gap: 6, marginTop: -6 }}>
+          <div key={`exec-${groupStart}`} style={{ marginLeft: 8, paddingLeft: 14, borderLeft: `3px solid ${C.success}`, display: 'flex', flexDirection: 'column', gap: 3, marginTop: -3 }}>
             {group}
           </div>
         );
@@ -920,7 +920,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       />
 
       {/* Сообщения (нижний отступ = высота плавающего composer + зазор) */}
-      <div ref={scrollRef} onScroll={handleMessagesScroll} style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', position: 'relative', paddingTop: isMobile ? 16 : 20, paddingLeft: isMobile ? 12 : 24, paddingRight: isMobile ? 12 : 24, paddingBottom: composerH + 8 }}><div ref={contentRef} style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%', maxWidth: CHAT_MAX_W, margin: '0 auto' }}>
+      <div ref={scrollRef} onScroll={handleMessagesScroll} style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', position: 'relative', paddingTop: isMobile ? 16 : 20, paddingLeft: isMobile ? 12 : 24, paddingRight: isMobile ? 12 : 24, paddingBottom: composerH + 8 }}><div ref={contentRef} style={{ display: 'flex', flexDirection: 'column', gap: 2, width: '100%', maxWidth: CHAT_MAX_W, margin: '0 auto' }}>
         {/* Спиннер загрузки истории */}
         {items.length === 0 && isHistoryLoading && (
           <div style={{

@@ -23,6 +23,10 @@ export const TAB_LABELS: Record<HubTab, string> = {
 };
 // Полный набор разделов таббара по умолчанию (desktop)
 const DEFAULT_TABS: HubTab[] = ['chats', 'projects', 'calendar', 'notes', 'personas'];
+// Разделы, которые НЕ получают вкладку даже когда активны: вход к ним живёт
+// в шапке постоянно (логотип «Домой», колокольчик «Уведомления») и там же
+// подсвечивается активность.
+const TABLESS: HubTab[] = ['home', 'notifications'];
 
 // Сегмент-переключатель хаба «Чаты | Проекты | Календарь | Заметки | Персоны» — на общем PillSwitch.
 // mobile: компакт-режим — неактивные сегменты иконками, подпись только у активного
@@ -35,11 +39,12 @@ export function HubTabs({ value, onChange, mobile, tabs = DEFAULT_TABS }: {
   // остальное уходит в «⋯ Разделы» (overflow), чтобы вкладки не скроллились под обрез.
   tabs?: HubTab[];
 }) {
-  // Активный раздел вне набора табов: 'home' вкладку НЕ получает (вход на дашборд —
-  // только логотип/«⋯ Разделы», в таббаре ничего не подсвечено — PillSwitch умеет
-  // «нет выбранного»), остальные скрытые (knowledge/notifications) — условной вкладкой
-  // в конец (зеркально мобильному паттерну HubHeader).
-  const shown = tabs.includes(value) || value === 'home' ? tabs : [...tabs, value];
+  // Активный раздел вне набора табов: 'home' и 'notifications' вкладку НЕ получают —
+  // у обоих свой постоянный вход в шапке (логотип и колокольчик), и он подсвечивается
+  // сам, так что вкладка-призрак, всплывающая только внутри раздела, не нужна.
+  // PillSwitch умеет «нет выбранного». Остальные скрытые (knowledge) — условной
+  // вкладкой в конец (зеркально мобильному паттерну HubHeader).
+  const shown = tabs.includes(value) || TABLESS.includes(value) ? tabs : [...tabs, value];
   const options = shown.map(v => mobile
     ? { value: v, label: TAB_LABELS[v], icon: TAB_ICONS[v] }
     : { value: v, label: TAB_LABELS[v] });

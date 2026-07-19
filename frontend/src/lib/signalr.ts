@@ -122,6 +122,12 @@ export async function interruptSession(sessionId: string): Promise<void> {
   await conn.invoke('Interrupt', sessionId);
 }
 
+// Смена режима прав на лету (переключатель композера) — применяется к идущему ходу
+export async function setMode(sessionId: string, mode: string): Promise<void> {
+  const conn = await ensureConnected();
+  await conn.invoke('SetMode', sessionId, mode);
+}
+
 // Ручное сворачивание контекста сессии (/compact)
 export async function compactSession(sessionId: string): Promise<void> {
   const conn = await ensureConnected();

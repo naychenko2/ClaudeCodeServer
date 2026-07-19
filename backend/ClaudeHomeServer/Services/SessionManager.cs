@@ -1155,6 +1155,22 @@ public class SessionManager
         SaveSessions();
     }
 
+    // Смена режима прав из UI на лету (переключатель композера), без отправки сообщения.
+    // Обновляет Info.Mode (следующий ход пересоздаст процесс с --permission-mode) и, если ход
+    // живой, толкает set_permission_mode в CLI — новый режим подхватывается уже текущим ходом.
+    // Режим «План» у провайдера без поддержки тихо игнорируем (защита от рассинхрона UI).
+    public void SetMode(string sessionId, string mode)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return;
+        if (!Enum.TryParse<ClaudeMode>(mode, true, out var parsed)) return;
+        if (parsed == ClaudeMode.Plan
+            && !_llmProviders.CapabilitiesFor(entry.Info.Model).SupportsPlanMode) return;
+        if (entry.Info.Mode == parsed) return;
+        entry.Info.Mode = parsed;
+        SaveSessions();
+        entry.Process?.TrySetPermissionModeLive(parsed);
+    }
+
     public async Task SendMessageAsync(string sessionId, string text, IReadOnlyList<string> attachedPaths, string? mode = null, bool systemDirective = false, bool auto = false, string? senderPersonaId = null)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry))

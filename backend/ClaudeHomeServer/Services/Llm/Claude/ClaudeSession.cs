@@ -822,6 +822,24 @@ public class ClaudeSession : ILlmSessionAdapter
         WriteLineToStdin(msg);
     }
 
+    // Смена режима прав на лету: пишем control_request set_permission_mode в stdin живого
+    // процесса. CLI применяет его к идущему ходу (дальнейшие tool-вызовы уже по новому режиму)
+    // и отвечает control_response success (reader его игнорирует как неизвестный тип).
+    // Нет процесса — false: SessionManager уже обновил Info.Mode, следующий ход пересоздастся с флагом.
+    public bool TrySetPermissionModeLive(ClaudeMode mode)
+    {
+        var proc = _currentProcess;
+        if (proc is null || proc.HasExited) return false;
+        var req = JsonSerializer.Serialize(new
+        {
+            type = "control_request",
+            request_id = "setmode_" + Guid.NewGuid().ToString("N")[..12],
+            request = new { subtype = "set_permission_mode", mode = mode.ToCliFlag() }
+        });
+        WriteLineToStdin(req);
+        return true;
+    }
+
     // Единая точка записи в stdin процесса — под _stdinLock, чтобы параллельные
     // control_response (SignalR-потоки + памп) не перемешали JSON-строки
     private void WriteLineToStdin(string line)

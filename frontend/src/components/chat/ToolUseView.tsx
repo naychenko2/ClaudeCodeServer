@@ -187,7 +187,7 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
   return (
     <div>
       <div
-        style={{ padding: '4px 0', display: 'flex', alignItems: 'center', gap: 10, cursor: hasBody ? 'pointer' : 'default' }}
+        style={{ padding: '3px 0', display: 'flex', alignItems: 'center', gap: 10, cursor: hasBody ? 'pointer' : 'default' }}
         onClick={() => hasBody && setOpen(o => !o)}
       >
         {item.result === undefined && <ToolSpinner />}

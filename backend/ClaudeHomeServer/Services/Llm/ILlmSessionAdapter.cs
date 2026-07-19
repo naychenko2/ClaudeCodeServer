@@ -29,5 +29,10 @@ public interface ILlmSessionAdapter : IAsyncDisposable
     // Решение по плану (ExitPlanMode); при !Capabilities.SupportsPlanMode — no-op
     void RespondPlan(string requestId, bool approve, string? feedback);
 
+    // Смена режима прав на лету у живого процесса (control-протокол set_permission_mode):
+    // новый режим подхватывается уже идущим ходом. true — запрос отправлен живому процессу;
+    // false — процесса нет, режим применится со следующего хода (пересоздание с --permission-mode).
+    bool TrySetPermissionModeLive(ClaudeMode mode);
+
     void Interrupt();
 }

@@ -138,6 +138,14 @@ public class SessionHub : Hub
         _sessions.RespondPermission(sessionId, requestId, behavior);
     }
 
+    // Смена режима прав на лету (переключатель в композере) — применяется к идущему ходу,
+    // не дожидаясь следующего сообщения.
+    public void SetMode(string sessionId, string mode)
+    {
+        if (!OwnsSession(sessionId)) throw Denied();
+        _sessions.SetMode(sessionId, mode);
+    }
+
     public void Interrupt(string sessionId)
     {
         if (!OwnsSession(sessionId)) throw Denied();

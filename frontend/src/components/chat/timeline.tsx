@@ -28,22 +28,22 @@ export function ToolGroupBlock({ isGroupDone, toolCount, summary, children }: {
   }, [collapsible]);
 
   return (
-    <div style={{ borderTop: `1px solid ${C.bgInset}`, borderBottom: `1px solid ${C.bgInset}` }}>
+    <div>
       {collapsible && (
         <button
           onClick={() => setExpanded(v => !v)}
           style={{
-            width: '100%', display: 'flex', alignItems: 'center', gap: 6,
-            padding: '5px 14px', border: 'none', background: 'transparent',
+            display: 'flex', alignItems: 'center', gap: 5,
+            padding: '2px 0', border: 'none', background: 'transparent',
             cursor: 'pointer', textAlign: 'left',
           }}
         >
-          <span style={{ fontSize: 11.5, color: C.textMuted, flex: 1, fontFamily: FONT.sans }}>
-            {toolCount} {toolWord(toolCount)}
-          </span>
           {expanded
             ? <ChevronUp size={12} color={C.textMuted} strokeWidth={2} style={{ flexShrink: 0 }} />
             : <ChevronDown size={12} color={C.textMuted} strokeWidth={2} style={{ flexShrink: 0 }} />}
+          <span style={{ fontSize: 11.5, color: C.textMuted, fontFamily: FONT.sans }}>
+            {toolCount} {toolWord(toolCount)}
+          </span>
         </button>
       )}
       {(!collapsible || expanded) ? children : summary}

@@ -100,7 +100,7 @@ function derivePlanPhase(items: ChatItem[], mode: Mode, isWaiting: boolean): Pla
 }
 
 export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, attachedFiles, onAttachedFilesChange, onResume, artifactsOpen, onToggleArtifacts, greetingBubble }: Props) {
-  const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, workLoop: liveWorkLoop, promptSuggestion, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, compact, toggleThinking, noteCompanionSwitch } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
+  const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, workLoop: liveWorkLoop, promptSuggestion, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, compact, toggleThinking, noteCompanionSwitch, changeMode } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
   // Цикл «до готово» (флаг work-loop): live-состояние из событий work_loop,
   // до первого события — из Session.workLoop; null — цикл выключен
   const workLoopState = useMemo<WorkLoopState | null>(() => {
@@ -284,6 +284,11 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   }, []);
 
   const [mode, setMode] = useState<Mode>(session.mode);
+  // Смена режима: локальный стейт + push на сервер (применяется к идущему ходу на лету)
+  const handleModeChange = useCallback((m: Mode) => {
+    setMode(m);
+    changeMode(m);
+  }, [changeMode]);
   const [showAttachPicker, setShowAttachPicker] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
   // Скролл-механика ленты (прилипание к низу, восстановление позиции, кнопка «вниз») — hooks/useChatScroll
@@ -630,7 +635,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       planVersion={planVersions.get(i)?.version}
       planShowBadge={!!planVersions.get(i) && (planVersions.get(i)!.version > 1 || planVersions.get(i)!.hadRejected)}
       planShowSwitch={i === lastApprovedPlanIdx && mode === 'plan'}
-      onSwitchMode={setMode}
+      onSwitchMode={handleModeChange}
       onOpenFile={onOpenFile}
       onRevert={project ? handleRevert : undefined}
       onRetry={handleRetry}
@@ -643,7 +648,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     online, isWaiting, items.length, lastResultIndex, toggleThinking, allowPermission,
     denyPermission, allowAlways, answerQuestion, handleRespondPlan, planVersions,
     lastApprovedPlanIdx, mode, onOpenFile, project, handleRevert, handleRetry,
-    interrupt, lastTaskIdx, taskTodos,
+    interrupt, lastTaskIdx, taskTodos, handleModeChange,
   ]);
 
   // Блок действий: подряд идущие карточки инструментов + изменения файлов объединяем
@@ -840,11 +845,11 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         const needsTopSpacing = kind === 'text' || kind === 'user_message' || kind === 'result' || kind === 'error';
         pushNode(
           kind === 'user_message'
-            ? <div key={`sp-${i}`} style={{ marginTop: 12, display: 'flex', justifyContent: 'flex-end' }}>{node}</div>
+            ? <div key={`sp-${i}`} style={{ marginTop: 3, display: 'flex', justifyContent: 'flex-end' }}>{node}</div>
             : kind === 'result'
-              ? <div key={`sp-${i}`} style={{ marginTop: 12, display: 'flex', justifyContent: 'center' }}>{node}</div>
+              ? <div key={`sp-${i}`} style={{ marginTop: 3, display: 'flex', justifyContent: 'center' }}>{node}</div>
               : needsTopSpacing
-                ? <div key={`sp-${i}`} style={{ marginTop: 12 }}>{node}</div>
+                ? <div key={`sp-${i}`} style={{ marginTop: 3 }}>{node}</div>
                 : node,
           i
         );
@@ -865,7 +870,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         const groupStart = nodes[j].start;
         while (j < nodes.length && inZone(nodes[j])) { group.push(nodes[j].node); j++; }
         result.push(
-          <div key={`exec-${groupStart}`} style={{ marginLeft: 8, paddingLeft: 14, borderLeft: `3px solid ${C.success}`, display: 'flex', flexDirection: 'column', gap: 6, marginTop: -6 }}>
+          <div key={`exec-${groupStart}`} style={{ marginLeft: 8, paddingLeft: 14, borderLeft: `3px solid ${C.success}`, display: 'flex', flexDirection: 'column', gap: 3, marginTop: -3 }}>
             {group}
           </div>
         );
@@ -915,7 +920,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       />
 
       {/* Сообщения (нижний отступ = высота плавающего composer + зазор) */}
-      <div ref={scrollRef} onScroll={handleMessagesScroll} style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', position: 'relative', paddingTop: isMobile ? 16 : 20, paddingLeft: isMobile ? 12 : 24, paddingRight: isMobile ? 12 : 24, paddingBottom: composerH + 8 }}><div ref={contentRef} style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%', maxWidth: CHAT_MAX_W, margin: '0 auto' }}>
+      <div ref={scrollRef} onScroll={handleMessagesScroll} style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', position: 'relative', paddingTop: isMobile ? 16 : 20, paddingLeft: isMobile ? 12 : 24, paddingRight: isMobile ? 12 : 24, paddingBottom: composerH + 8 }}><div ref={contentRef} style={{ display: 'flex', flexDirection: 'column', gap: 2, width: '100%', maxWidth: CHAT_MAX_W, margin: '0 auto' }}>
         {/* Спиннер загрузки истории */}
         {items.length === 0 && isHistoryLoading && (
           <div style={{
@@ -1035,7 +1040,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
             onAttach={project ? (() => setShowAttachPicker(true)) : (() => chatFileInputRef.current?.click())}
             isGenerating={isWaiting}
             mode={mode}
-            onModeChange={setMode}
+            onModeChange={handleModeChange}
             planAvailable={caps.supportsPlanMode}
             attachments={attachedFiles}
             onRemoveAttachment={path => onAttachedFilesChange(attachedFiles.filter(p => p !== path))}

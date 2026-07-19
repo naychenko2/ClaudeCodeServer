@@ -6,7 +6,7 @@ import { Modal } from './ui';
 import { C, FONT, R } from '../lib/design';
 
 // Единый поиск (флаг unified-search): оверлей с поиском по заметкам и задачам сразу.
-// Заметка → открыть в разделе «Заметки»; задача → hash-диплинк (календарь/проект).
+// Заметка → открыть в разделе «Заметки»; задача → диплинк через App (календарь/проект).
 export function GlobalSearch({ onClose }: { onClose: () => void }) {
   const [q, setQ] = useState('');
   const [hits, setHits] = useState<SearchHit[]>([]);
@@ -28,7 +28,10 @@ export function GlobalSearch({ onClose }: { onClose: () => void }) {
   const open = (hit: SearchHit) => {
     onClose();
     if (hit.type === 'note') openNoteById(hit.id);
-    else window.location.hash = hit.url;
+    // Через cc-open-url, а НЕ записью в location.hash: hashchange в приложении никто не
+    // слушает, поэтому прямая запись меняла адрес, оставляя раздел прежним, и добавляла
+    // запись истории со state=null, на которой залипал Back.
+    else window.dispatchEvent(new CustomEvent('cc-open-url', { detail: { url: hit.url } }));
   };
 
   const notes = hits.filter(h => h.type === 'note');

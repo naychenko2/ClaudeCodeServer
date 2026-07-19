@@ -7,7 +7,7 @@ import { ToolbarOverflowMenu, type OverflowItem } from '../../components/Toolbar
 import { useIsMobile } from '../../lib/breakpoints';
 import type { HubTab } from '../../components/HubTabs';
 import type { AuthState } from '../../types';
-import type { NotificationItem, NotificationKind } from '../../types';
+import type { NotificationItem } from '../../types';
 import {
   loadNotifications,
   getNotifications,
@@ -20,35 +20,7 @@ import {
   deleteReadAll,
 } from '../../lib/notifications';
 import { AgentKanban } from '../agent-kanban/AgentKanban';
-
-// Токены design.ts (CSS-переменные) — хардкод-hex ломал тёмную тему
-const KIND_META: Record<NotificationKind, { icon: string; color: string; bg: string }> = {
-  reminder: { icon: '⏰', color: C.warning, bg: C.warningBg },
-  claude: { icon: '●', color: C.accent, bg: C.accentLight },
-  info: { icon: 'ℹ', color: C.info, bg: C.infoBg },
-  success: { icon: '✓', color: C.success, bg: C.successBg },
-  meeting: { icon: '🏁', color: C.plan, bg: C.planLight },
-};
-
-const KIND_LABELS: Record<string, string> = {
-  reminder: 'Напоминание',
-  claude: 'Claude',
-  info: 'Системное',
-  success: 'Выполнено',
-  meeting: 'Совещание',
-};
-
-function formatTime(iso: string) {
-  const d = new Date(iso);
-  const now = new Date();
-  const diff = now.getTime() - d.getTime();
-  const day = 86400000;
-
-  if (diff < day) return d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-  if (diff < 2 * day) return 'Вчера';
-  if (diff < 7 * day) return d.toLocaleDateString('ru-RU', { weekday: 'short' });
-  return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
-}
+import { KIND_META, KIND_LABELS, formatTime, openNotificationUrl } from './kindMeta';
 
 function dateGroupKey(iso: string) {
   const d = new Date(iso);
@@ -199,11 +171,9 @@ function NotificationCard({ item, onRead, onDelete }: {
                 cursor: 'pointer',
                 background: C.accent, color: C.onAccent,
               }}
-              // SPA-переход через обработчик App (cc-open-url): смена location.hash сама по
-              // себе экран не меняет — hashchange в приложении никто не слушает
               onClick={() => {
                 if (!item.isRead) onRead(item.id);
-                window.dispatchEvent(new CustomEvent('cc-open-url', { detail: { url: item.url } }));
+                openNotificationUrl(item.url!);
               }}
               onMouseEnter={e => { e.currentTarget.style.opacity = '0.88'; }}
               onMouseLeave={e => { e.currentTarget.style.opacity = '1'; }}

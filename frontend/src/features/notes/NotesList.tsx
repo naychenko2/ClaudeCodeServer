@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { FolderPlus, Timer } from 'lucide-react';
+import { Check, FileText, FolderPlus, MessageCircle, Timer } from 'lucide-react';
 import type { NoteSummary } from '../../types';
 import { api } from '../../lib/api';
 import { bumpNotes, useNoteFolders } from '../../lib/notes';
@@ -24,7 +24,10 @@ const IconFolderPlus = () => (
   <FolderPlus size={ICON_SIZE.sm} strokeWidth={2} style={{ flexShrink: 0 }} />
 );
 
-interface Group { source: string; label: string; root: FolderNode }
+interface Group { source: string; label: string; root: FolderNode; docGroups: DocGroup[] }
+
+// Комментарии к документу (флаг doc-annotations): узел «документ → его комментарии»
+interface DocGroup { docPath: string; notes: NoteSummary[] }
 
 // Дерево папок источника: notes — заметки этого уровня, children — подпапки
 interface FolderNode {
@@ -164,13 +167,26 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
 
   const groups = useMemo<Group[]>(() => {
     const notesBySrc = new Map<string, { label: string; notes: NoteSummary[] }>();
+    // Комментарии к документам — не в дерево папок, а в группы «документ → комментарии»
+    const docsBySrc = new Map<string, Map<string, NoteSummary[]>>();
     for (const n of notes) {
       let g = notesBySrc.get(n.source);
       if (!g) { g = { label: n.sourceLabel, notes: [] }; notesBySrc.set(n.source, g); }
-      g.notes.push(n);
+      if (n.annotation) {
+        let docs = docsBySrc.get(n.source);
+        if (!docs) { docs = new Map(); docsBySrc.set(n.source, docs); }
+        const arr = docs.get(n.annotation.docPath) ?? [];
+        arr.push(n);
+        docs.set(n.annotation.docPath, arr);
+      } else {
+        g.notes.push(n);
+      }
     }
     const foldersBySrc = new Map<string, string[]>();
     for (const f of folders) {
+      // Физическая папка «Комментарии» служебная: её содержимое показано группами
+      // «документ → комментарии», пустой узел папки в дереве — только шум
+      if (/^Комментарии(\/|$)/i.test(f.path)) continue;
       const arr = foldersBySrc.get(f.source) ?? [];
       arr.push(f.path);
       foldersBySrc.set(f.source, arr);
@@ -181,7 +197,10 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
       .map(source => {
         const gn = notesBySrc.get(source);
         const label = gn?.label ?? srcLabels[source] ?? (source === 'personal' ? 'Личный' : source);
-        return { source, label, root: buildTree(gn?.notes ?? [], foldersBySrc.get(source) ?? []) };
+        const docGroups = [...(docsBySrc.get(source) ?? new Map<string, NoteSummary[]>())]
+          .map(([docPath, ns]) => ({ docPath, notes: ns }))
+          .sort((a, b) => a.docPath.localeCompare(b.docPath, 'ru'));
+        return { source, label, root: buildTree(gn?.notes ?? [], foldersBySrc.get(source) ?? []), docGroups };
       })
       .sort((a, b) => a.source === 'personal' ? -1 : b.source === 'personal' ? 1 : a.label.localeCompare(b.label, 'ru'));
   }, [notes, folders, srcLabels]);
@@ -274,6 +293,14 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
           color: active ? C.textHeading : C.textSecondary, fontWeight: active ? 500 : 400,
           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
         }}>{n.title}</span>
+        {n.annotation && (
+          <span title={n.annotation.status === 'open' ? 'Комментарий открыт' : 'Комментарий решён'} style={{
+            display: 'flex', alignItems: 'center', flexShrink: 0, marginRight: 2,
+            color: n.annotation.status === 'open' ? C.warning : C.success,
+          }}>
+            {n.annotation.status === 'open' ? <MessageCircle size={11} strokeWidth={2.5} /> : <Check size={12} strokeWidth={2.5} />}
+          </span>
+        )}
         {exp && (
           <span style={{
             fontSize: 10, color: exp.urgent ? C.warning : C.textMuted, flexShrink: 0,
@@ -419,6 +446,47 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
     );
   };
 
+  // Узел «документ → комментарии» (флаг doc-annotations): сворачиваемый, со счётчиком
+  const renderDocGroup = (source: string, dg: DocGroup) => {
+    const key = `${source}|doc:${dg.docPath}`;
+    const isCollapsed = collapsed.has(key);
+    const openCount = dg.notes.filter(n => n.annotation?.status === 'open').length;
+    return (
+      <div key={key}>
+        <div
+          onClick={() => setCollapsed(prev => { const next = new Set(prev); isCollapsed ? next.delete(key) : next.add(key); return next; })}
+          title={dg.docPath}
+          style={{
+            cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6,
+            minHeight: 26, boxSizing: 'border-box', padding: '0 6px 0 10px',
+            borderRadius: R.sm, fontFamily: FONT.sans, fontSize: 12, fontWeight: 500,
+            color: C.textSecondary, userSelect: 'none',
+          }}
+        >
+          <span style={{ fontSize: 8, color: C.textMuted, width: 8 }}>{isCollapsed ? '▸' : '▾'}</span>
+          <FileText size={ICON_SIZE.sm} strokeWidth={2} style={{ color: C.textMuted, flexShrink: 0 }} />
+          <span style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontFamily: FONT.mono, fontSize: 11.5 }}>
+            {dg.docPath}
+          </span>
+          <span style={{
+            display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10.5, fontWeight: 600,
+            color: openCount > 0 ? C.warningText : C.successText,
+            background: openCount > 0 ? C.warningBg : C.successBg,
+            borderRadius: 9, padding: '0 7px', flexShrink: 0,
+          }}>
+            {openCount > 0 ? <MessageCircle size={10} strokeWidth={2.5} /> : <Check size={10} strokeWidth={2.5} />}
+            {dg.notes.length}
+          </span>
+        </div>
+        {!isCollapsed && (
+          <div style={{ marginLeft: 8, paddingLeft: 6, borderLeft: `1px solid ${C.border}` }}>
+            {dg.notes.map(n => renderNote(n, 0))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   if (notes.length === 0 && folders.length === 0)
     return (
       <div style={{ padding: '20px 12px', color: C.textMuted, fontSize: 13, fontFamily: FONT.sans, lineHeight: 1.6 }}>
@@ -463,10 +531,11 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
                 <span style={{ fontSize: 12.5, fontWeight: 500, color: C.textPrimary }}>{g.label}</span>
               </span>
             }
-            tail={<span style={{ fontSize: 11, color: C.textMuted }}>{countNotes(g.root)}</span>}
+            tail={<span style={{ fontSize: 11, color: C.textMuted }}>{countNotes(g.root) + g.docGroups.reduce((s, d) => s + d.notes.length, 0)}</span>}
           >
             {g.root.children.map(c => renderFolder(g.source, c, 0))}
             {g.root.notes.map(n => renderNote(n, 0))}
+            {g.docGroups.map(dg => renderDocGroup(g.source, dg))}
           </CollapseGroup>
           {creatingFolder === `${g.source}|` && <div style={{ padding: '4px 8px 4px 28px' }}>{renderCreateFolderInput(g.source, '', 1)}</div>}
         </div>

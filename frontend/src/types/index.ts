@@ -669,6 +669,32 @@ export interface ChangelogStatus {
 
 // ===== Заметки (Obsidian-совместимая база знаний) =====
 
+// Привязка заметки-комментария к MD-документу (флаг doc-annotations)
+export interface NoteAnnotationInfo {
+  docScope: string;        // 'personal' | projectId (путь от корня проекта)
+  docPath: string;
+  status: 'open' | 'resolved';
+  blockId?: string | null;
+  anchorQuote?: string | null;
+  anchorHeading?: string | null;
+}
+
+// Комментарий документа с резолвом привязки — для подсветки при чтении
+export interface DocAnnotation {
+  noteId: string;
+  title: string;
+  status: 'open' | 'resolved';
+  state: 'exact' | 'changed' | 'orphan';
+  start: number;           // офсеты якорного блока в контенте документа; -1 у сироты
+  end: number;
+  blockId?: string | null;
+  anchorHeading?: string | null;
+  quote: string;
+  excerpt: string;
+  tags: string[];
+  updatedAt: string;
+}
+
 // Источник заметки: "personal" (личный vault) или id проекта
 export interface NoteSummary {
   id: string;
@@ -681,6 +707,7 @@ export interface NoteSummary {
   updatedAt: string;
   expiresAt?: string;
   sourceSessionId?: string;
+  annotation?: NoteAnnotationInfo | null;
 }
 
 // Разрешённая исходящая ссылка [[...]]; resolved=false — «призрачная» (цели ещё нет)
@@ -714,6 +741,7 @@ export interface NoteDetail {
   updatedAt: string;
   expiresAt?: string;
   sourceSessionId?: string;
+  annotation?: NoteAnnotationInfo | null;
 }
 
 // Узел графа; ghost=true — «призрачная» заметка (на неё ссылаются, но её нет)

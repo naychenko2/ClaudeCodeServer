@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { MessageCircle, X } from 'lucide-react';
+import { Check, FileText, MessageCircle, Undo2, X } from 'lucide-react';
 import type { NoteDetail } from '../../types';
 import { api } from '../../lib/api';
 import { bumpNotes, useNotesVersion } from '../../lib/notes';
@@ -418,6 +418,54 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
         {!editing && dailyJob.status === 'running' && (
           <div style={{ marginBottom: 12, padding: '9px 12px', background: C.accentLight, borderRadius: R.lg, border: `1px solid ${C.accentMuted}` }}>
             <WaitingIndicator hint="Собираю конспект дня из заметок и активности" />
+          </div>
+        )}
+        {/* Карточка привязки комментария к документу (флаг doc-annotations) */}
+        {note.annotation && (
+          <div style={{
+            marginBottom: 14, padding: '11px 14px', background: C.bgWhite,
+            border: `1px solid ${C.border}`, borderRadius: R.lg,
+            display: 'flex', flexDirection: 'column', gap: 8,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 12.5, color: C.textSecondary }}>
+              <MessageCircle size={14} strokeWidth={2} style={{ color: C.accent, flexShrink: 0 }} />
+              Комментирует
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontFamily: FONT.mono, fontSize: 12, color: C.textPrimary }}>
+                <FileText size={12} strokeWidth={2} />{note.annotation.docPath}
+              </span>
+              {note.annotation.anchorHeading && (
+                <span style={{ color: C.textMuted }}>› {note.annotation.anchorHeading}</span>
+              )}
+              <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 600, borderRadius: 11, padding: '1px 8px',
+                color: note.annotation.status === 'open' ? C.warningText : C.successText,
+                background: note.annotation.status === 'open' ? C.warningBg : C.successBg }}>
+                {note.annotation.status === 'open'
+                  ? <><MessageCircle size={11} strokeWidth={2.5} />открыт</>
+                  : <><Check size={11} strokeWidth={2.5} />решён</>}
+              </span>
+            </div>
+            {note.annotation.anchorQuote && (
+              <div style={{
+                fontSize: 12, color: C.textSecondary, fontStyle: 'italic',
+                borderLeft: `2px solid ${C.accent}`, paddingLeft: 9,
+              }}>«{note.annotation.anchorQuote}»</div>
+            )}
+            <div>
+              <button
+                onClick={() => {
+                  const next = note.annotation!.status === 'open' ? 'resolved' : 'open';
+                  void api.notes.setStatus(note.id, next).then(() => bumpNotes()).catch(() => {});
+                }}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5,
+                  color: C.textSecondary, background: C.bgWhite, border: `1px solid ${C.border}`,
+                  borderRadius: R.sm, padding: '3px 10px', cursor: 'pointer', fontFamily: FONT.sans,
+                }}>
+                {note.annotation.status === 'open'
+                  ? <><Check size={12} strokeWidth={2.5} /> Решён</>
+                  : <><Undo2 size={12} strokeWidth={2.5} /> Снова открыть</>}
+              </button>
+            </div>
           </div>
         )}
         <MarkdownViewer content={note.content} existingTitles={existingTitles} onWikilink={onWikilink}

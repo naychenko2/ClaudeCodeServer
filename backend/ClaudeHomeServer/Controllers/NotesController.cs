@@ -91,6 +91,54 @@ public class NotesController : ControllerBase
     [HttpGet("caps")]
     public ActionResult Caps() => Ok(new { semantic = _kb.Available });
 
+    // --- Комментарии к документам (флаг doc-annotations) ---
+
+    // Создать комментарий к выделению в MD-документе. Verify-before-write:
+    // текст сверяется посимвольно, расхождение → 409 «выделите заново».
+    [HttpPost("annotate")]
+    public async Task<ActionResult<NoteDetail>> Annotate([FromBody] AnnotateRequest req)
+    {
+        try
+        {
+            var note = _notes.Annotate(UserId, req);
+            await Broadcast("created", note.Id);
+            return Ok(note);
+        }
+        catch (AnnotationConflictException ex) { return Conflict(new { error = ex.Message }); }
+        catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (UnauthorizedAccessException) { return Forbid(); }
+    }
+
+    // Комментарии документа с резолвом привязки (для подсветки блоков при чтении).
+    // scope: personal | projectId; path — путь документа внутри области.
+    [HttpGet("annotations")]
+    public ActionResult<IReadOnlyList<DocAnnotationDto>> Annotations(
+        [FromQuery] string scope, [FromQuery] string path)
+    {
+        if (string.IsNullOrWhiteSpace(scope) || string.IsNullOrWhiteSpace(path))
+            return BadRequest();
+        try { return Ok(_notes.GetDocAnnotations(UserId, scope, path)); }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (UnauthorizedAccessException) { return Forbid(); }
+    }
+
+    // Смена статуса комментария (open | resolved)
+    [HttpPost("{id}/status")]
+    public async Task<ActionResult<NoteDetail>> SetStatus(string id, [FromBody] SetNoteStatusRequest req)
+    {
+        try
+        {
+            var note = _notes.SetAnnotationStatus(UserId, id, req.Status);
+            if (note is null) return NotFound();
+            await Broadcast("updated", id);
+            return Ok(note);
+        }
+        catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
+        catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
+        catch (UnauthorizedAccessException) { return Forbid(); }
+    }
+
     // Семантический поиск по заметкам (Dify retrieve). Пустой список — индекс пуст/выключен.
     [HttpGet("semantic")]
     public async Task<ActionResult> Semantic([FromQuery] string q, [FromQuery] int topK = 8)

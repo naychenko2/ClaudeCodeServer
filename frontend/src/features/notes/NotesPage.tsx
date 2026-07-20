@@ -23,6 +23,7 @@ import { ICON_SIZE } from '../../components/ui/icons';
 import { IconSearch, IconPlus, IconNotes, IconCalendarDay, SourceDot } from './shared';
 import { useSidebarDrag } from '../../lib/sidebarWidth';
 import { useIsMobile, useWindowWidth } from '../../lib/breakpoints';
+import { FLAGS, useFeature } from '../../lib/featureFlags';
 
 type Mode = 'notes' | 'graph';
 
@@ -44,6 +45,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   const connectionsBelow = !isMobile && windowWidth < NOTE_CONN_SIDEBAR_MIN;
   const notes = useNotes();
   const online = useOnline();
+  const docAnnotationsOn = useFeature(FLAGS.docAnnotations);
   const [mode, setMode] = useState<Mode>('notes');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState('');
@@ -243,6 +245,27 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
                 color: searchMode === 'semantic' ? C.onAccent : C.textMuted,
               }}>смысл</button>
           )}
+        </div>
+      )}
+      {/* Фильтры комментариев к документам (флаг doc-annotations): чипы = операторы status: */}
+      {mode === 'notes' && docAnnotationsOn && notes.some(n => n.annotation) && (
+        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+          {([
+            ['status:open', 'Открытые', notes.filter(n => n.annotation?.status === 'open').length],
+            ['status:resolved', 'Решённые', notes.filter(n => n.annotation?.status === 'resolved').length],
+            ['status:orphaned', 'Сироты', null],
+          ] as const).map(([q, label, count]) => {
+            const on = query.trim() === q;
+            return (
+              <button key={q} onClick={() => setQuery(on ? '' : q)} style={{
+                display: 'inline-flex', alignItems: 'center', gap: 4,
+                border: `1px solid ${on ? C.accent : C.border}`, borderRadius: 12,
+                padding: '2px 9px', fontSize: 11, cursor: 'pointer', fontFamily: FONT.sans,
+                background: on ? C.accentMuted : 'transparent',
+                color: on ? C.textHeading : C.textMuted, fontWeight: on ? 600 : 400,
+              }}>{label}{count != null && count > 0 ? ` · ${count}` : ''}</button>
+            );
+          })}
         </div>
       )}
       <div style={{ display: 'flex', gap: 6 }}>

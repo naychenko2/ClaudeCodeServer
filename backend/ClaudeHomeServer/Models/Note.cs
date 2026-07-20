@@ -5,6 +5,16 @@ namespace ClaudeHomeServer.Models;
 // владельца), чтобы с ними работал и Claude (через файлы/MCP), и десктопный Obsidian.
 // Здесь — DTO-проекции; хранилища-класса нет, источник правды — файлы (см. NotesService).
 
+// Привязка заметки-комментария к MD-документу (frontmatter annotates/anchor_*/status).
+// DocScope: "personal" (личный vault) | projectId (путь от корня ПРОЕКТА, любые .md).
+public record NoteAnnotationInfo(
+    string DocScope,
+    string DocPath,       // forward slashes
+    string Status,        // open | resolved
+    string? BlockId,      // ^id из annotates — кэш резолва, истина — каскад
+    string? AnchorQuote,  // дословная цитата с нормализованным whitespace
+    string? AnchorHeading); // путь заголовков "H1 › H2" на момент создания
+
 // Компактная запись для списка заметок.
 public record NoteSummary(
     string Id,           // стабильный id = base64url(sourceKey|relPath)
@@ -16,7 +26,8 @@ public record NoteSummary(
     string CreatedAt,    // ISO 8601
     string UpdatedAt,
     string? ExpiresAt = null,         // ISO 8601; null — бессрочно
-    string? SourceSessionId = null);  // ID чата, из которого создана заметка
+    string? SourceSessionId = null,   // ID чата, из которого создана заметка
+    NoteAnnotationInfo? Annotation = null);  // непусто = заметка-комментарий к документу
 
 // Разрешённая исходящая ссылка [[...]] из заметки.
 public record NoteLinkDto(
@@ -49,7 +60,8 @@ public record NoteDetail(
     string CreatedAt,
     string UpdatedAt,
     string? ExpiresAt = null,       // ISO 8601; null — бессрочно
-    string? SourceSessionId = null);  // ID чата, из которого создана заметка
+    string? SourceSessionId = null,   // ID чата, из которого создана заметка
+    NoteAnnotationInfo? Annotation = null);  // непусто = заметка-комментарий к документу
 
 // Узел графа знаний. Ghost=true — «призрачная» заметка (на неё ссылаются, но её нет).
 public record NoteGraphNode(
@@ -107,3 +119,36 @@ public record UpdateNoteRequest(
     string? Title = null,     // непусто и отличается от текущего → переименование файла
     string? Content = null,
     int? ExpiresAfterMinutes = -1);  // -1 = не менять, null = снять, N = установить
+
+// --- Комментарии к документам (флаг doc-annotations) ---
+
+// Ссылка на документ: scope = "personal" (личный vault) | projectId (путь от корня проекта)
+public record AnnotateDocRef(string Scope, string Path);
+
+// Выделение в документе: офсеты — хинт от клиента, истина — посимвольная сверка Text
+public record AnnotateSelection(int Start, int End, string Text);
+
+public record AnnotateRequest(
+    AnnotateDocRef Doc,
+    AnnotateSelection Selection,
+    string? Comment = null,
+    IReadOnlyList<string>? Tags = null,
+    string? Title = null);
+
+// Комментарий документа с результатом резолва якоря — для подсветки при чтении.
+// State: exact (якорь/цитата найдены) | changed (жив только раздел) | orphan.
+public record DocAnnotationDto(
+    string NoteId,
+    string Title,
+    string Status,          // open | resolved
+    string State,           // exact | changed | orphan
+    int Start,              // офсеты якорного блока в контенте документа; -1 у сироты
+    int End,
+    string? BlockId,
+    string? AnchorHeading,
+    string Quote,
+    string Excerpt,         // первая строка комментария (тело без цитаты)
+    IReadOnlyList<string> Tags,
+    string UpdatedAt);
+
+public record SetNoteStatusRequest(string Status);   // open | resolved

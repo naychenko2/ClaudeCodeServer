@@ -108,7 +108,10 @@ public sealed class NotesKnowledgeService
                 Save();
             }
 
-            var summaries = _notes.GetSummaries(userId, null, null);
+            // Комментарии к документам в семантический индекс не попадают (шум: цитаты
+            // дублируют сами документы); исчезнувшие из выборки чистятся штатной веткой ниже.
+            var summaries = _notes.GetSummaries(userId, null, null)
+                .Where(s => s.Annotation is null).ToList();
             var alive = new HashSet<string>(summaries.Select(s => s.Id));
             var changed = 0;
 

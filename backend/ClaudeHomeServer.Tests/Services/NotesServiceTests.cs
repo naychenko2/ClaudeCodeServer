@@ -172,9 +172,10 @@ public class NotesServiceTests : IDisposable
     [Fact]
     public void ParseQuery_РазбираетОператорыИТекст()
     {
-        var (tags, sources, text) = NotesService.ParseQuery("tag:#идея source:Личный про кэш");
+        var (tags, sources, statuses, text) = NotesService.ParseQuery("tag:#идея source:Личный status:open про кэш");
         tags.Should().Equal("идея");
         sources.Should().Equal("Личный");
+        statuses.Should().Equal("open");
         text.Should().Be("про кэш");
     }
 

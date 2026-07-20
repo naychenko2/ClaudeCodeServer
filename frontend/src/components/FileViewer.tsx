@@ -28,6 +28,7 @@ import { useOnline } from '../hooks/useOnline';
 import { EmptyState } from './EmptyState';
 import { getLanguage } from '../lib/getLanguage';
 import { MarkdownViewer } from './MarkdownViewer';
+import { DocCommentedMarkdown } from '../features/notes/DocComments';
 import { useNotes, ensureNotesLoaded, existingTitleSet, useNotesVersion } from '../lib/notes';
 import { NoteConnections } from '../features/notes/NoteConnections';
 import { NoteView } from '../features/notes/NoteView';
@@ -1003,7 +1004,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
                     </div>
                   )
                   : isMarkdown
-                  ? <MarkdownViewer content={content} />
+                  ? <DocCommentedMarkdown project={project} filePath={filePath} content={content} isMobile={isMobile} />
                   : <SyntaxHighlighter
                       language={getLanguage(filePath)}
                       style={codeTheme}

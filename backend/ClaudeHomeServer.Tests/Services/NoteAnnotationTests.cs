@@ -375,6 +375,24 @@ public class NoteAnnotationTests : IDisposable
         _sut.GetSummaries(User, null, "status:open").Should().ContainSingle(n => n.Id == root.Id);
     }
 
+    [Fact]
+    public void Annotate_ВыделениеЧерезПереносСтроки_ПринимаетсяНормализацией()
+    {
+        // Абзац с ручным wrap: рендер отдаёт пробел там, где в источнике \n —
+        // посимвольная сверка и дословный поиск не сходятся, спасает
+        // нормализованный whitespace-фолбэк (третья ступень verify-guard)
+        WriteDoc();
+        var domText = "Все шесть точек запуска идут через единый интерфейс IProcessLauncher. Драйверы стартуют процессы";
+        var note = _sut.Annotate(User, new AnnotateRequest(
+            new AnnotateDocRef("personal", "Архитектура.md"),
+            new AnnotateSelection(0, domText.Length, domText),   // офсеты заведомо мимо
+            Comment: "через перенос"));
+        note.Annotation.Should().NotBeNull();
+        note.Annotation!.AnchorQuote.Should().Contain("Драйверы стартуют процессы");
+        _sut.GetDocAnnotations(User, "personal", "Архитектура.md")
+            .Single().State.Should().Be("exact");
+    }
+
     // ─── Перепривязка к новому выделению ─────────────────────────────────────
 
     [Fact]

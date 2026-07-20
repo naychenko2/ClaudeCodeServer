@@ -92,7 +92,23 @@ public sealed partial class NotesService
             if (first >= 0 && doc.IndexOf(selText, first + 1, StringComparison.Ordinal) < 0)
                 start = first;
             else
-                throw new AnnotationConflictException("Документ изменился — выделите фрагмент заново");
+            {
+                // Выделение из рендера ≠ источник: переносы строк внутри абзаца становятся
+                // пробелами (wrap по ~80 колонок), CRLF, схлопнутые пробелы. Третья ступень —
+                // нормализованный whitespace-поиск с картой офсетов (как каскад цитат);
+                // selText заменяется РЕАЛЬНЫМ срезом документа. Провал → честный 409.
+                var (norm, map) = NormalizeWithMap(doc);
+                var q = NormalizeWs(selText);
+                var idx = q.Length >= 3 ? norm.IndexOf(q, StringComparison.Ordinal) : -1;
+                if (idx >= 0 && norm.IndexOf(q, idx + 1, StringComparison.Ordinal) < 0)
+                {
+                    start = map[idx];
+                    var rawEnd = map[Math.Min(idx + q.Length - 1, map.Count - 1)] + 1;
+                    selText = doc[start..rawEnd];
+                }
+                else
+                    throw new AnnotationConflictException("Документ изменился — выделите фрагмент заново");
+            }
         }
 
         // Якорный блок: параграф (непрерывные непустые строки), содержащий начало выделения

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Check, MessageCircle, Pin, TriangleAlert, Undo2, User, X } from 'lucide-react';
+import { Check, MessageCircle, Pin, Trash2, TriangleAlert, Undo2, User, X } from 'lucide-react';
 import { MarkdownViewer, stripFrontmatter } from '../../components/MarkdownViewer';
 import { api } from '../../lib/api';
 import { C, FONT, R, SHADOW, Z } from '../../lib/design';
@@ -8,6 +8,7 @@ import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { useNotesVersion } from '../../lib/notes';
 import { ensurePersonasLoaded, usePersonas, personaLabel } from '../../lib/personas';
 import { PersonaAvatar } from '../personas/PersonaAvatar';
+import { ConfirmDialog } from '../../components/ui';
 import type { DocAnnotation, NoteReply, Persona } from '../../types';
 import type { ResolvedNote } from '../../components/MarkdownViewer';
 
@@ -172,6 +173,20 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
     window.dispatchEvent(new Event('cc-open-note'));
   };
 
+  // Удаление комментария: вместе с ответами треда (реплики без корня — мусор)
+  const [deleteFor, setDeleteFor] = useState<DocAnnotation | null>(null);
+  const doDelete = async () => {
+    const a = deleteFor;
+    if (!a) return;
+    setDeleteFor(null);
+    try {
+      const replies = await api.notes.replies(a.noteId).catch(() => [] as NoteReply[]);
+      for (const r of replies) await api.notes.delete(r.noteId).catch(() => {});
+      await api.notes.delete(a.noteId);
+      reload();
+    } catch { /* realtime подтянет актуальное */ }
+  };
+
   // «Поручить персоне»: создаёт задачу проекта с персоной-исполнителем и ссылкой
   // на комментарий («create issue from comment» — второй трекер не строим)
   const personas = usePersonas();
@@ -308,10 +323,13 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
       const prev = {
         background: el.style.background, borderLeft: el.style.borderLeft,
         paddingLeft: el.style.paddingLeft, borderRadius: el.style.borderRadius,
-        position: el.style.position,
+        position: el.style.position, marginLeft: el.style.marginLeft,
       };
       el.style.background = C.accentLight;
       el.style.borderLeft = `3px solid ${C.accent}`;
+      // Полоса выносится ЛЕВЕЕ текста (отрицательный margin компенсируется паддингом):
+      // текст остаётся на месте, акцентная линия не наезжает на него
+      el.style.marginLeft = '-13px';
       el.style.paddingLeft = '10px';
       el.style.borderRadius = '0 8px 8px 0';
       el.style.position = 'relative';
@@ -347,6 +365,7 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
         el.style.paddingLeft = prev.paddingLeft;
         el.style.borderRadius = prev.borderRadius;
         el.style.position = prev.position;
+        el.style.marginLeft = prev.marginLeft;
       });
     });
     return () => cleanups.forEach(f => f());
@@ -444,6 +463,19 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
                   <User size={11} /> Поручить ▾
                 </ActionBtn>
               )}
+              <button
+                title="Удалить комментарий"
+                onClick={e => { e.stopPropagation(); setDeleteFor(a); }}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 4, border: `1px solid ${C.border}`,
+                  borderRadius: 7, padding: '3px 7px', fontSize: 11.5, color: C.textMuted,
+                  background: C.bgCard, cursor: 'pointer', fontFamily: FONT.sans, marginLeft: 'auto',
+                }}
+                onMouseEnter={e => { e.currentTarget.style.color = C.danger; e.currentTarget.style.borderColor = C.danger; }}
+                onMouseLeave={e => { e.currentTarget.style.color = C.textMuted; e.currentTarget.style.borderColor = C.border; }}
+              >
+                <Trash2 size={11} />
+              </button>
             </div>
 
             {/* Тред: ответы + инлайн-«Ответить» */}
@@ -637,6 +669,18 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
           anchorEl={assignFor.el}
           onPick={p => void assignTo(assignFor.a, p)}
           onClose={() => setAssignFor(null)}
+        />
+      )}
+
+      {/* Подтверждение удаления комментария (вместе с ответами треда) */}
+      {deleteFor && (
+        <ConfirmDialog
+          title="Удалить комментарий?"
+          subtitle={<>Комментарий «<strong style={{ color: C.textPrimary, fontWeight: 600 }}>{deleteFor.title}</strong>»{deleteFor.replies > 0 ? ` и ${deleteFor.replies} ответ${deleteFor.replies === 1 ? '' : deleteFor.replies < 5 ? 'а' : 'ов'} треда` : ''} будут удалены без возможности восстановления.</>}
+          confirmLabel="Удалить"
+          confirmVariant="danger"
+          onConfirm={() => void doDelete()}
+          onCancel={() => setDeleteFor(null)}
         />
       )}
     </div>

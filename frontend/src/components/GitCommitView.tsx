@@ -54,6 +54,9 @@ export function GitCommitView({ project, sha, onClose, isMobile = false }: {
   const [actionsMenu, setActionsMenu] = useState(false);
   const [revertConfirm, setRevertConfirm] = useState(false);
   const [revertError, setRevertError] = useState<string | null>(null);
+  // Разворот длинного описания коммита (клэмп в шапке)
+  const [bodyExpanded, setBodyExpanded] = useState(false);
+  const bodyIsLong = !!detail?.body && (detail.body.length > 220 || detail.body.split('\n').length > (isMobile ? 2 : 4));
   const [reverting, setReverting] = useState(false);
 
   const handleRevert = async () => {
@@ -71,7 +74,7 @@ export function GitCommitView({ project, sha, onClose, isMobile = false }: {
 
   useEffect(() => {
     setDetail(null); setNotFound(false); setActivePath(null); setDiff(null);
-    setFilter(''); setMobileShowDiff(false);
+    setFilter(''); setMobileShowDiff(false); setBodyExpanded(false);
     let cancelled = false;
     api.git.commitDetail(project.id, sha)
       .then(d => {
@@ -244,8 +247,22 @@ export function GitCommitView({ project, sha, onClose, isMobile = false }: {
               </div>
             )}
             {detail?.body && (
-              <div style={{ marginTop: 7, fontSize: 13, color: C.textPrimary, fontFamily: FONT.sans, whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>
-                {detail.body}
+              <div style={{ marginTop: 7 }}>
+                {/* Длинное описание не должно съедать контентную зону: свёрнуто — клэмп на
+                    несколько строк, развёрнуто — ограниченная высота со своим скроллом */}
+                <div style={bodyExpanded
+                  ? { fontSize: 13, color: C.textPrimary, fontFamily: FONT.sans, whiteSpace: 'pre-wrap', lineHeight: 1.5, maxHeight: isMobile ? '22vh' : '28vh', overflowY: 'auto' }
+                  : { fontSize: 13, color: C.textPrimary, fontFamily: FONT.sans, whiteSpace: 'pre-wrap', lineHeight: 1.5, display: '-webkit-box', WebkitLineClamp: isMobile ? 2 : 4, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                  {detail.body}
+                </div>
+                {bodyIsLong && (
+                  <button
+                    onClick={() => setBodyExpanded(v => !v)}
+                    style={{ marginTop: 3, padding: 0, border: 'none', background: 'none', cursor: 'pointer', fontSize: 12, color: C.accent, fontFamily: FONT.sans }}
+                  >
+                    {bodyExpanded ? 'Свернуть' : 'Показать полностью'}
+                  </button>
+                )}
               </div>
             )}
           </div>

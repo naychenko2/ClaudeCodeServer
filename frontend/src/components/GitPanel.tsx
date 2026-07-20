@@ -3,8 +3,9 @@
 // Данные и мутации — через стор lib/git.ts (realtime git_status_changed).
 
 import { useEffect, useState } from 'react';
-import { GitBranch, ChevronDown, RefreshCw, ArrowDown, ArrowUp, Plus, Minus, Undo2, Check, ExternalLink, Settings, ArchiveRestore, Trash2 } from 'lucide-react';
+import { GitBranch, ChevronDown, RefreshCw, ArrowDown, ArrowUp, Plus, Minus, Undo2, Check, ExternalLink, Settings, ArchiveRestore, Trash2, Sparkles } from 'lucide-react';
 import type { Project, GitFileChange, GitStashEntry } from '../types';
+import { api } from '../lib/api';
 import { C, R, FONT, MODAL_W, GROUP_COLORS } from '../lib/design';
 import {
   useGitState, loadGitLog, loadGitBranches, loadGitStash, loadGitRemote,
@@ -138,6 +139,24 @@ export function GitChangesPanel({ project, onOpenDiff, onOpenFile }: ChangesProp
     setStashOpen(false);
     setStashName('');
     await gitStashPush(project.id, msg || undefined);
+  };
+
+  // ✨ LLM-генерация: описание коммита и название стэша
+  const [aiBusy, setAiBusy] = useState(false);
+  const handleAiMessage = async () => {
+    setAiBusy(true);
+    try {
+      const s = await api.git.aiCommitMessage(project.id);
+      setSummary(s.summary.slice(0, COMMIT_SUMMARY_MAX));
+      if (s.description) setDescription(s.description);
+    } catch { /* 409 «нет изменений»/таймаут — оставляем поле как есть */ }
+    finally { setAiBusy(false); }
+  };
+  const handleAiStashName = async () => {
+    setAiBusy(true);
+    try { setStashName((await api.git.aiStashName(project.id)).name); }
+    catch { /* молча */ }
+    finally { setAiBusy(false); }
   };
 
   const handleStashDrop = async () => {
@@ -484,19 +503,32 @@ export function GitChangesPanel({ project, onOpenDiff, onOpenFile }: ChangesProp
 
       {/* Форма коммита — прижата к низу сайдбара */}
       <div style={{ borderTop: `1px solid ${C.border}`, padding: '10px 12px 12px', display: 'flex', flexDirection: 'column', gap: 7, flexShrink: 0 }}>
-        <div style={{ position: 'relative' }}>
-          <TextField
-            value={summary}
-            onChange={v => setSummary(v.slice(0, COMMIT_SUMMARY_MAX))}
-            placeholder="Кратко опишите изменения"
-            style={{ paddingRight: 52, fontSize: 13 }}
-            onEnter={() => { if (canCommit) void handleCommit(); }}
-          />
-          <span style={{
-            position: 'absolute', right: 9, top: '50%', transform: 'translateY(-50%)',
-            fontSize: 10, fontFamily: FONT.mono, color: summary.length >= COMMIT_SUMMARY_MAX ? C.danger : C.textMuted,
-            pointerEvents: 'none',
-          }}>{summary.length}/{COMMIT_SUMMARY_MAX}</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
+            <TextField
+              value={summary}
+              onChange={v => setSummary(v.slice(0, COMMIT_SUMMARY_MAX))}
+              placeholder="Кратко опишите изменения"
+              style={{ paddingRight: 52, fontSize: 13 }}
+              onEnter={() => { if (canCommit) void handleCommit(); }}
+            />
+            <span style={{
+              position: 'absolute', right: 9, top: '50%', transform: 'translateY(-50%)',
+              fontSize: 10, fontFamily: FONT.mono, color: summary.length >= COMMIT_SUMMARY_MAX ? C.danger : C.textMuted,
+              pointerEvents: 'none',
+            }}>{summary.length}/{COMMIT_SUMMARY_MAX}</span>
+          </div>
+          {/* ✨ LLM-описание по staged-диффу */}
+          <IconButton
+            size="md"
+            disabled={stagedCount === 0 || aiBusy}
+            onClick={() => void handleAiMessage()}
+            title={stagedCount === 0 ? 'Сначала проиндексируйте изменения' : 'Сгенерировать описание по изменениям'}
+          >
+            {aiBusy
+              ? <span style={{ width: 13, height: 13, borderRadius: '50%', border: `2px solid ${C.track}`, borderTopColor: C.accent, animation: 'spin 0.6s linear infinite', display: 'inline-block' }} />
+              : <Sparkles size={15} strokeWidth={ICON_STROKE} />}
+          </IconButton>
         </div>
         <TextArea
           value={description}
@@ -567,13 +599,21 @@ export function GitChangesPanel({ project, onOpenDiff, onOpenFile }: ChangesProp
             />
           }
         >
-          <TextField
-            value={stashName}
-            onChange={setStashName}
-            placeholder="Название (необязательно)"
-            autoFocus
-            onEnter={handleStashPush}
-          />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <TextField
+              value={stashName}
+              onChange={setStashName}
+              placeholder="Название (необязательно)"
+              autoFocus
+              onEnter={handleStashPush}
+              style={{ flex: 1 }}
+            />
+            <IconButton size="md" disabled={aiBusy} onClick={() => void handleAiStashName()} title="Придумать название по изменениям">
+              {aiBusy
+                ? <span style={{ width: 13, height: 13, borderRadius: '50%', border: `2px solid ${C.track}`, borderTopColor: C.accent, animation: 'spin 0.6s linear infinite', display: 'inline-block' }} />
+                : <Sparkles size={15} strokeWidth={ICON_STROKE} />}
+            </IconButton>
+          </div>
         </Modal>
       )}
 

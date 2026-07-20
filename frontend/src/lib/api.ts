@@ -806,6 +806,11 @@ export const api = {
       request<GitStatus>(`/projects/${projectId}/git/commits/${sha}/revert`, { method: 'POST', timeoutMs: 60_000 }),
     blame: (projectId: string, path: string) =>
       request<GitBlameLine[]>(`/projects/${projectId}/git/blame?path=${encodeURIComponent(path)}`),
+    // LLM-помощь: описание коммита по staged-диффу / название стэша (генерация небыстрая — старт CLI)
+    aiCommitMessage: (projectId: string) =>
+      request<{ summary: string; description: string }>(`/projects/${projectId}/git/ai/commit-message`, { method: 'POST', timeoutMs: 120_000 }),
+    aiStashName: (projectId: string) =>
+      request<{ name: string }>(`/projects/${projectId}/git/ai/stash-name`, { method: 'POST', timeoutMs: 120_000 }),
     // git init + при настроенном Forgejo создание удалённого репозитория
     init: (projectId: string) =>
       request<{ status: GitStatus; htmlUrl: string | null }>(`/projects/${projectId}/git/init`, { method: 'POST', timeoutMs: 60_000 }),

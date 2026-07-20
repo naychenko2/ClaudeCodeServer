@@ -415,6 +415,9 @@ export function KnowledgePanel({ project, isMobile = false, alwaysShowIcons = fa
   const [tagEditDoc, setTagEditDoc] = useState<DifyDocument | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [notification, setNotification] = useState<{ message: string; type: 'error' | 'success' } | null>(null);
+  // Активированный поиск занимает весь сайдбар (пилюля схлопывается) — как в «Файлах»
+  const [searchFocused, setSearchFocused] = useState(false);
+  const searchExpanded = searchFocused || searchQuery.trim().length > 0;
   const notifTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // git-статус проекта — чтобы пилюля показывала сегменты «Изменения»/«История» как в проводнике
   useEffect(() => { ensureGit(project.id); }, [project.id]);
@@ -531,6 +534,8 @@ export function KnowledgePanel({ project, isMobile = false, alwaysShowIcons = fa
             <input
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
+              onFocus={() => setSearchFocused(true)}
+              onBlur={() => setSearchFocused(false)}
               placeholder="Поиск по знаниям…"
               style={{
                 flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent',
@@ -546,8 +551,16 @@ export function KnowledgePanel({ project, isMobile = false, alwaysShowIcons = fa
               </button>
             )}
           </div>
-          {/* icon-toggle: Знания активна; git-сегменты возвращают в проводник с нужным видом */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 2, background: TB.pillTrack, borderRadius: 8, padding: 2, flexShrink: 0 }}>
+          {/* icon-toggle: Знания активна; git-сегменты возвращают в проводник с нужным видом.
+              Активный поиск занимает весь сайдбар — пилюля схлопывается (как в «Файлах») */}
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 2, background: TB.pillTrack, borderRadius: 8, padding: 2, flexShrink: 0,
+            maxWidth: searchExpanded ? 0 : 220,
+            opacity: searchExpanded ? 0 : 1,
+            overflow: 'hidden',
+            transition: 'max-width 0.18s ease, opacity 0.15s ease',
+            pointerEvents: searchExpanded ? 'none' : 'auto',
+          }}>
             {/* Файлы — неактивна, возврат */}
             <button onClick={onBack} title="Файлы" style={{ width: 28, height: 28, border: 'none', borderRadius: 6, cursor: onBack ? 'pointer' : 'default', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', color: C.textMuted }}>
               <Folder size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />

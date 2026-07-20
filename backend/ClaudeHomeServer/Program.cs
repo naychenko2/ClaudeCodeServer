@@ -109,6 +109,7 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Git.GitService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Git.GitServerService>();
 // Режим документов: авто-commit/push после каждого хода Claude (Project.GitAutoCommit)
 builder.Services.AddHostedService<ClaudeHomeServer.Services.Git.GitAutoCommitService>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Git.GitAiService>();
 builder.Services.AddSingleton<NotesService>();
 builder.Services.AddSingleton<NotesKnowledgeService>();
 builder.Services.AddSingleton<NotesAiService>();

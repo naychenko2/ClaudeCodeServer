@@ -13,7 +13,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects/{projectId}/git")]
-public class GitController(GitService git, GitServerService gitServer, ProjectManager projects, UserStore users, IHubContext<SessionHub> hub) : ControllerBase
+public class GitController(GitService git, GitServerService gitServer, GitAiService gitAi, ProjectManager projects, UserStore users, IHubContext<SessionHub> hub) : ControllerBase
 {
     private string? UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub);
 
@@ -177,6 +177,35 @@ public class GitController(GitService git, GitServerService gitServer, ProjectMa
     [HttpPost("commits/{sha}/revert")]
     public Task<IActionResult> RevertCommit(string projectId, string sha, CancellationToken ct) =>
         Mutate(projectId, (p) => git.RevertCommitAsync(Owner(p), p.RootPath, sha, ct));
+
+    // LLM-помощь: сообщение коммита по staged-диффу / название стэша по правкам
+    [HttpPost("ai/commit-message")]
+    public async Task<IActionResult> AiCommitMessage(string projectId, CancellationToken ct)
+    {
+        try
+        {
+            var p = GetProject(projectId);
+            var s = await gitAi.SuggestCommitMessageAsync(Owner(p), p.RootPath, ct);
+            return s is null ? Conflict(new { error = "Нет проиндексированных изменений" }) : Ok(s);
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }
+        catch (Exception) { return Conflict(new { error = "Не удалось сгенерировать описание" }); }
+    }
+
+    [HttpPost("ai/stash-name")]
+    public async Task<IActionResult> AiStashName(string projectId, CancellationToken ct)
+    {
+        try
+        {
+            var p = GetProject(projectId);
+            var name = await gitAi.SuggestStashNameAsync(Owner(p), p.RootPath, ct);
+            return name is null ? Conflict(new { error = "Нет изменений" }) : Ok(new { name });
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }
+        catch (Exception) { return Conflict(new { error = "Не удалось сгенерировать название" }); }
+    }
 
     [HttpGet("blame")]
     public async Task<IActionResult> Blame(string projectId, [FromQuery] string path, CancellationToken ct)

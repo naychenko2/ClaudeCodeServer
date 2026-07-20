@@ -5,7 +5,7 @@ import { api } from '../../lib/api';
 import { bumpNotes, useNotesVersion } from '../../lib/notes';
 import { C, FONT, R, TB } from '../../lib/design';
 import { lazy, Suspense } from 'react';
-import { MarkdownViewer } from '../../components/MarkdownViewer';
+import { MarkdownViewer, stripFrontmatter } from '../../components/MarkdownViewer';
 // CodeMirror тяжёлый — редактор грузим лениво, только при входе в правку
 const NoteEditor = lazy(() => import('./NoteEditor').then(m => ({ default: m.NoteEditor })));
 import { BackButton, ConfirmDialog, IconButton, Splitter, Modal, WaitingIndicator } from '../../components/ui';
@@ -16,7 +16,7 @@ import { useNotes } from '../../lib/notes';
 import type { NoteSource } from '../../types';
 import { NoteConnections } from './NoteConnections';
 import { NoteTasksSection } from './NoteTasksSection';
-import { DocCommentedMarkdown } from './DocComments';
+import { DocCommentedMarkdown, PersonaAssignMenu, filterAssignablePersonas } from './DocComments';
 import { useOnline } from '../../hooks/useOnline';
 import { OfflineError } from '../../lib/offline';
 import { getNoteForView, saveNoteOffline, deleteNoteOffline, offlineResolve } from '../../lib/notesOffline';
@@ -179,19 +179,16 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
     }));
   };
 
-  // «Обработать» = создать задачу из комментария (лично или с персоной-исполнителем)
+  // «Обработать» = создать задачу из комментария (лично или с персоной-исполнителем).
+  // Меню персон — общее с панелью комментариев: команда проекта + глобальные,
+  // карточки с аватарами, портал с клэмпом по экрану.
   const personas = usePersonas();
-  const [assignOpen, setAssignOpen] = useState(false);
+  const assignable = ann ? filterAssignablePersonas(personas, ann.docScope) : [];
+  const [assignAnchor, setAssignAnchor] = useState<HTMLElement | null>(null);
   useEffect(() => { if (ann && !ann.isReply) void ensurePersonasLoaded(); }, [ann]);
-  useEffect(() => {
-    if (!assignOpen) return;
-    const close = () => setAssignOpen(false);
-    const t = window.setTimeout(() => window.addEventListener('mousedown', close), 0);
-    return () => { window.clearTimeout(t); window.removeEventListener('mousedown', close); };
-  }, [assignOpen]);
   const createTaskFromComment = async (persona?: Persona) => {
     if (!note || !ann) return;
-    setAssignOpen(false);
+    setAssignAnchor(null);
     try {
       await api.tasks.create(ann.docScope === 'personal' ? null : ann.docScope, {
         title: `Обработать комментарий: ${note.title}`,
@@ -595,34 +592,22 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
               )}
               {/* «Обработать» = задача из комментария: лично или персоне-исполнителю */}
               {!ann.isReply && (
-                <span style={{ position: 'relative', display: 'inline-flex', gap: 6 }}>
+                <span style={{ display: 'inline-flex', gap: 6 }}>
                   <button onClick={() => void createTaskFromComment()} style={annBtn}>
                     Создать задачу
                   </button>
-                  {personas.length > 0 && (
-                    <button onClick={() => setAssignOpen(v => !v)} style={annBtn}>
+                  {assignable.length > 0 && (
+                    <button onClick={e => setAssignAnchor(assignAnchor ? null : e.currentTarget as HTMLElement)} style={annBtn}>
                       Поручить персоне ▾
                     </button>
                   )}
-                  {assignOpen && (
-                    <div onMouseDown={e => e.stopPropagation()} style={{
-                      position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 20,
-                      background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg,
-                      boxShadow: '0 8px 24px rgba(0,0,0,.14)', minWidth: 210, maxHeight: 220,
-                      overflowY: 'auto', padding: 4,
-                    }}>
-                      {personas.map(p => (
-                        <button key={p.id} onClick={() => void createTaskFromComment(p)} style={{
-                          display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '7px 10px',
-                          border: 'none', background: 'transparent', cursor: 'pointer', textAlign: 'left',
-                          fontFamily: FONT.sans, fontSize: 12.5, color: C.textPrimary, borderRadius: 6,
-                        }}
-                        onMouseEnter={e => { e.currentTarget.style.background = C.bgInset; }}
-                        onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}>
-                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{personaLabel(p)}</span>
-                        </button>
-                      ))}
-                    </div>
+                  {assignAnchor && (
+                    <PersonaAssignMenu
+                      personas={assignable}
+                      anchorEl={assignAnchor}
+                      onPick={p => void createTaskFromComment(p)}
+                      onClose={() => setAssignAnchor(null)}
+                    />
                   )}
                 </span>
               )}
@@ -663,7 +648,8 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
             и поверх слоя комментариев */}
         <div data-selection-scope="doc" data-selection-priority="2">
           {ann ? (
-            <MarkdownViewer content={note.content} existingTitles={existingTitles} onWikilink={onWikilink}
+            // Просмотр без frontmatter — служебные поля (annotates/anchor_*) не текст
+            <MarkdownViewer content={stripFrontmatter(note.content).body} existingTitles={existingTitles} onWikilink={onWikilink}
               resolveNote={resolveNote} embedSource={note.source} />
           ) : (
             // Обычная заметка — тоже документ: выделение → комментарий, панель снизу

@@ -37,6 +37,15 @@ interface Props {
 const mono = FONT.mono;
 const serif = FONT.serif;
 
+// Отрезает YAML-frontmatter для ПРОСМОТРА (иначе title/annotates/теги рендерятся
+// как текст: «key: value» перед `---` становится жирным setext-заголовком).
+// offset — длина отрезанного: комментарии к документам сдвигают на неё офсеты якорей.
+export function stripFrontmatter(md: string): { body: string; offset: number } {
+  if (!md.startsWith('---')) return { body: md, offset: 0 };
+  const m = /^---\r?\n[\s\S]*?\r?\n---[ \t]*(\r?\n|$)/.exec(md);
+  return m ? { body: md.slice(m[0].length), offset: m[0].length } : { body: md, offset: 0 };
+}
+
 const IMG_EXT = /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i;
 
 // Сегмент карты офсетов «препроцессированный → сырой» (для blockPos сквозь препроцессинг)
@@ -181,7 +190,7 @@ function NoteEmbed({ name, resolveNote, onWikilink, embedSource }: {
       </a>
       <span style={{ display: 'block' }}>
         <MarkdownViewer
-          content={data.content.length > 1500 ? data.content.slice(0, 1500) + '…' : data.content}
+          content={(() => { const b = stripFrontmatter(data.content).body; return b.length > 1500 ? b.slice(0, 1500) + '…' : b; })()}
           onWikilink={onWikilink} embedDepth={1} embedSource={embedSource}
         />
       </span>
@@ -401,7 +410,7 @@ export function MarkdownViewer({ content, blockPos, onWikilink, existingTitles, 
             {hover.data.title}
           </div>
           <MarkdownViewer
-            content={hover.data.content.length > 900 ? hover.data.content.slice(0, 900) + '…' : hover.data.content}
+            content={(() => { const b = stripFrontmatter(hover.data.content).body; return b.length > 900 ? b.slice(0, 900) + '…' : b; })()}
             onWikilink={() => {}} embedDepth={1} embedSource={embedSource}
           />
         </div>,

@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Check, MessageCircle, Pin, TriangleAlert, Undo2, User, X } from 'lucide-react';
-import { MarkdownViewer } from '../../components/MarkdownViewer';
+import { MarkdownViewer, stripFrontmatter } from '../../components/MarkdownViewer';
 import { api } from '../../lib/api';
 import { C, FONT, R, SHADOW, Z } from '../../lib/design';
 import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { useNotesVersion } from '../../lib/notes';
 import { ensurePersonasLoaded, usePersonas, personaLabel } from '../../lib/personas';
+import { PersonaAvatar } from '../personas/PersonaAvatar';
 import type { DocAnnotation, NoteReply, Persona } from '../../types';
 import type { ResolvedNote } from '../../components/MarkdownViewer';
 
@@ -79,6 +80,9 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
   const docRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const { items, reload } = useDocAnnotations(scope, docPath, enabled);
+  // Просмотр — без frontmatter (иначе title/annotates рендерятся текстом); офсеты
+  // якорей на сервере считаются по ПОЛНОМУ файлу — переводим через fmOffset
+  const { body: renderBody, offset: fmOffset } = useMemo(() => stripFrontmatter(content), [content]);
   const [selection, setSelection] = useState<SelectionInfo | null>(null);
   const [formOpen, setFormOpen] = useState(false);
   const [comment, setComment] = useState('');
@@ -115,11 +119,11 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
       if (blockEl) {
         const bs = Number(blockEl.dataset.mdStart);
         const be = Number(blockEl.dataset.mdEnd);
-        const idx = content.slice(bs, be + 1).indexOf(text);
-        if (idx >= 0) { start = bs + idx; end = start + text.length; }
+        const idx = renderBody.slice(bs, be + 1).indexOf(text);
+        if (idx >= 0) { start = bs + idx + fmOffset; end = start + text.length; }
         else {
-          const first = content.indexOf(text);
-          if (first >= 0) { start = first; end = first + text.length; }
+          const first = renderBody.indexOf(text);
+          if (first >= 0) { start = first + fmOffset; end = start + text.length; }
         }
       }
       const rect = range.getBoundingClientRect();
@@ -171,15 +175,11 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
   // «Поручить персоне»: создаёт задачу проекта с персоной-исполнителем и ссылкой
   // на комментарий («create issue from comment» — второй трекер не строим)
   const personas = usePersonas();
-  const [assignFor, setAssignFor] = useState<string | null>(null);   // noteId открытого подменю
+  const assignable = useMemo(() => filterAssignablePersonas(personas, scope), [personas, scope]);
+  // Открытое меню поручения: комментарий + кнопка-якорь (позиционирование порталом)
+  const [assignFor, setAssignFor] = useState<{ a: DocAnnotation; el: HTMLElement } | null>(null);
   const [assignedMsg, setAssignedMsg] = useState<string | null>(null);
   useEffect(() => { if (enabled) void ensurePersonasLoaded(); }, [enabled]);
-  useEffect(() => {
-    if (!assignFor) return;
-    const close = () => setAssignFor(null);
-    const t = window.setTimeout(() => window.addEventListener('mousedown', close), 0);
-    return () => { window.clearTimeout(t); window.removeEventListener('mousedown', close); };
-  }, [assignFor]);
   const assignTo = async (a: DocAnnotation, p: Persona) => {
     setAssignFor(null);
     try {
@@ -269,7 +269,7 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
   const gotoBlock = (a: DocAnnotation) => {
     setSelectedId(a.noteId);
     if (a.start < 0) return;
-    const el = findBlockEl(docRef.current, a.start);
+    const el = findBlockEl(docRef.current, a.start - fmOffset);
     if (el) {
       el.scrollIntoView({ block: 'center', behavior: 'smooth' });
       el.style.transition = 'outline-color .2s';
@@ -299,7 +299,7 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
     const byBlock = new Map<HTMLElement, DocAnnotation[]>();
     for (const a of shown) {
       if (a.start < 0) continue;
-      const el = findBlockEl(root, a.start);
+      const el = findBlockEl(root, a.start - fmOffset);
       if (!el) continue;
       byBlock.set(el, [...(byBlock.get(el) ?? []), a]);
     }
@@ -436,30 +436,13 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
                   <Pin size={11} /> Перепривязать
                 </ActionBtn>
               )}
-              {personas.length > 0 && (
-                <ActionBtn onClick={e => { e.stopPropagation(); setAssignFor(assignFor === a.noteId ? null : a.noteId); }}>
+              {assignable.length > 0 && (
+                <ActionBtn onClick={e => {
+                  e.stopPropagation();
+                  setAssignFor(assignFor?.a.noteId === a.noteId ? null : { a, el: e.currentTarget as HTMLElement });
+                }}>
                   <User size={11} /> Поручить ▾
                 </ActionBtn>
-              )}
-              {assignFor === a.noteId && (
-                <div onMouseDown={e => e.stopPropagation()} style={{
-                  position: 'absolute', bottom: 'calc(100% + 6px)', left: 0, zIndex: 5,
-                  background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: R.lg,
-                  boxShadow: SHADOW.dropdown, minWidth: 200, maxHeight: 220, overflowY: 'auto', padding: 4,
-                }}>
-                  {personas.map(p => (
-                    <button key={p.id} onClick={e => { e.stopPropagation(); void assignTo(a, p); }} style={{
-                      display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '7px 10px',
-                      border: 'none', background: 'transparent', cursor: 'pointer', textAlign: 'left',
-                      fontFamily: FONT.sans, fontSize: 12.5, color: C.textPrimary, borderRadius: 6,
-                    }}
-                    onMouseEnter={e => { e.currentTarget.style.background = C.bgInset; }}
-                    onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}>
-                      <User size={12} style={{ color: C.textMuted, flexShrink: 0 }} />
-                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{personaLabel(p)}</span>
-                    </button>
-                  ))}
-                </div>
               )}
             </div>
 
@@ -530,7 +513,7 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
             }}><X size={13} /></button>
           </div>
         )}
-        <MarkdownViewer content={content} blockPos={enabled}
+        <MarkdownViewer content={renderBody} blockPos={enabled}
           onWikilink={viewer?.onWikilink} existingTitles={viewer?.existingTitles}
           resolveNote={viewer?.resolveNote} embedSource={viewer?.embedSource} />
         {below && panel && (
@@ -646,7 +629,117 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
         </div>,
         document.body,
       )}
+
+      {/* Меню «Поручить персоне» — портал с клэмпом по вьюпорту */}
+      {assignFor && (
+        <PersonaAssignMenu
+          personas={assignable}
+          anchorEl={assignFor.el}
+          onPick={p => void assignTo(assignFor.a, p)}
+          onClose={() => setAssignFor(null)}
+        />
+      )}
     </div>
+  );
+}
+
+// Персоны, которым можно поручить обработку комментария: команда проекта документа
+// + обычные глобальные (материализованный пантеон — templateKey — как в композере, не включаем)
+export function filterAssignablePersonas(personas: Persona[], scope: string): Persona[] {
+  const project = scope === 'personal' ? [] : personas.filter(p => p.scope === 'project' && p.projectId === scope);
+  const globals = personas.filter(p => p.scope === 'global' && !p.templateKey);
+  return [...project, ...globals];
+}
+
+// Меню выбора персоны — карточки как в селекторе собеседника композера (аватар,
+// «Роль (Имя)», краткое описание), группы «Команда проекта»/«Глобальные».
+// Портал с fixed-позицией и клэмпом: меню всегда целиком в пределах экрана.
+export function PersonaAssignMenu({ personas, anchorEl, onPick, onClose }: {
+  personas: Persona[];
+  anchorEl: HTMLElement;
+  onPick: (p: Persona) => void;
+  onClose: () => void;
+}) {
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+
+  useEffect(() => {
+    const el = menuRef.current;
+    if (!el) return;
+    const rect = anchorEl.getBoundingClientRect();
+    const w = Math.min(300, window.innerWidth - 16);
+    const h = el.offsetHeight;
+    const left = clamp(rect.left, 8, window.innerWidth - w - 8);
+    // Вниз от кнопки; не влезает — вверх; и там и там тесно — прижать в границы
+    let top = rect.bottom + 6;
+    if (top + h > window.innerHeight - 8) top = rect.top - h - 6;
+    top = clamp(top, 8, Math.max(8, window.innerHeight - h - 8));
+    setPos({ left, top });
+  }, [anchorEl, personas.length]);
+
+  useEffect(() => {
+    const onDown = (e: MouseEvent | TouchEvent) => {
+      if (!menuRef.current?.contains(e.target as Node) && !anchorEl.contains(e.target as Node)) onClose();
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('mousedown', onDown);
+    window.addEventListener('touchstart', onDown);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', onDown);
+      window.removeEventListener('touchstart', onDown);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [anchorEl, onClose]);
+
+  const project = personas.filter(p => p.scope === 'project');
+  const globals = personas.filter(p => p.scope === 'global');
+  const header = (text: string) => (
+    <div style={{
+      padding: '7px 10px 3px', fontSize: 10.5, fontWeight: 700, color: C.textMuted,
+      textTransform: 'uppercase', letterSpacing: '0.06em', fontFamily: FONT.sans,
+    }}>{text}</div>
+  );
+  const item = (p: Persona) => {
+    const desc = (p.description ?? '').trim();
+    return (
+      <button key={p.id} onClick={e => { e.stopPropagation(); onPick(p); }}
+        onMouseEnter={e => { e.currentTarget.style.background = C.accentLight; }}
+        onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+        style={{
+          width: '100%', display: 'flex', alignItems: 'center', gap: 9, padding: '8px 10px',
+          borderRadius: R.md, border: 'none', background: 'transparent',
+          cursor: 'pointer', textAlign: 'left', fontFamily: FONT.sans,
+        }}>
+        <PersonaAvatar persona={p} size={28} />
+        <span style={{ flex: 1, minWidth: 0 }}>
+          <span style={{ display: 'block', fontSize: 13, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {personaLabel(p)}
+          </span>
+          {desc && (
+            <span style={{ display: 'block', fontSize: 11.5, color: C.textMuted, marginTop: 1, lineHeight: 1.35, overflow: 'hidden' }}>
+              {desc.length > 80 ? desc.slice(0, 80) + '…' : desc}
+            </span>
+          )}
+        </span>
+      </button>
+    );
+  };
+
+  return createPortal(
+    <div ref={menuRef} onMouseDown={e => e.stopPropagation()} style={{
+      position: 'fixed', zIndex: Z.modal,
+      left: pos?.left ?? -9999, top: pos?.top ?? -9999,
+      width: Math.min(300, window.innerWidth - 16), maxHeight: 'min(60vh, 360px)', overflowY: 'auto',
+      background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
+      boxShadow: SHADOW.dropdown, padding: 4,
+    }}>
+      {project.length > 0 && header('Команда проекта')}
+      {project.map(item)}
+      {globals.length > 0 && header('Глобальные')}
+      {globals.map(item)}
+    </div>,
+    document.body,
   );
 }
 

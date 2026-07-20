@@ -173,6 +173,19 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
     }
 
     [Fact]
+    public async Task CommitDetail_Кириллическое_Имя_Файла_Читаемо()
+    {
+        // Регресс: без core.quotepath=false git отдаёт «\320\232…» вместо кириллицы в путях
+        Directory.CreateDirectory(Path.Combine(_repo, "Комментарии"));
+        await File.WriteAllTextAsync(Path.Combine(_repo, "Комментарии", "Этот шаг.md"), "текст\n");
+        await _git.StageAllAsync(null, _repo);
+        var sha = await _git.CommitAsync(null, _repo, "кириллический файл");
+
+        var detail = await _git.CommitDetailAsync(null, _repo, sha);
+        detail!.Files.Should().ContainSingle(f => f.Path == "Комментарии/Этот шаг.md");
+    }
+
+    [Fact]
     public async Task Discard_Возвращает_Файл_К_HEAD()
     {
         // Сравнение с нормализацией переводов строк: git на Windows восстанавливает CRLF (autocrlf)

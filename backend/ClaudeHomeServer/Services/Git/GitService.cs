@@ -54,7 +54,9 @@ public sealed class GitService(ILauncherFactory launchers)
         var spec = new ProcessSpec
         {
             FileName = "git",
-            Args = args,
+            // core.quotepath=false: иначе не-ASCII пути в выводе (--name-status и др.)
+            // экранируются восьмеричными последовательностями («\320\232…» вместо кириллицы)
+            Args = ["-c", "core.quotepath=false", .. args],
             WorkingDirectory = root,
             Env = env,
             RedirectStdin = stdin is not null,

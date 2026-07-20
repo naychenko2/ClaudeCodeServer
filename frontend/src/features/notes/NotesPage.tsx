@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronLeft, Menu as MenuIcon, Pin } from 'lucide-react';
+import { ChevronLeft, Menu as MenuIcon, MessageCircle, Pin } from 'lucide-react';
 import type { AuthState, NoteDetail, NoteSemanticHit, NoteSummary } from '../../types';
 import type { HubTab } from '../../components/HubTabs';
 import { HubHeader } from '../../components/HubHeader';
@@ -20,12 +20,53 @@ import { useGraphSettings } from './graph/graphSettings';
 import { EmptyState } from '../../components/EmptyState';
 import { Splitter, IconButton, ConfirmDialog } from '../../components/ui';
 import { ICON_SIZE } from '../../components/ui/icons';
-import { IconSearch, IconPlus, IconNotes, IconCalendarDay, SourceDot } from './shared';
+import { CollapseGroup, IconSearch, IconPlus, IconNotes, IconCalendarDay, SourceDot } from './shared';
 import { useSidebarDrag } from '../../lib/sidebarWidth';
 import { useIsMobile, useWindowWidth } from '../../lib/breakpoints';
 import { FLAGS, useFeature } from '../../lib/featureFlags';
 
 type Mode = 'notes' | 'graph';
+
+// --- Чипы-фильтры списка: патчат операторы (tag:/status:) в строке поиска ---
+
+const TAGS_COLLAPSED = 8;   // тегов в свёрнутом виде (остальные — за «+N»)
+
+// Есть ли токен-оператор в запросе (регистронезависимо, по словам)
+function hasToken(query: string, token: string): boolean {
+  return query.toLowerCase().split(/\s+/).includes(token.toLowerCase());
+}
+
+// Добавить/убрать токен, сохранив остальной текст запроса. exclusivePrefix —
+// взаимоисключающая группа (status:): при установке другие её токены снимаются.
+function toggleToken(query: string, token: string, exclusivePrefix?: string): string {
+  let parts = query.split(/\s+/).filter(Boolean);
+  const had = parts.some(p => p.toLowerCase() === token.toLowerCase());
+  parts = parts.filter(p => p.toLowerCase() !== token.toLowerCase());
+  if (!had) {
+    if (exclusivePrefix)
+      parts = parts.filter(p => !p.toLowerCase().startsWith(exclusivePrefix.toLowerCase()));
+    parts.push(token);
+  }
+  return parts.join(' ');
+}
+
+function FilterChip({ on, label, onClick }: { on: boolean; label: string; onClick: () => void }) {
+  return (
+    <button onClick={onClick} style={{
+      display: 'inline-flex', alignItems: 'center', gap: 4,
+      border: `1px solid ${on ? C.accent : C.border}`, borderRadius: 12,
+      padding: '2px 9px', fontSize: 11, cursor: 'pointer', fontFamily: FONT.sans,
+      background: on ? C.accentMuted : 'transparent',
+      color: on ? C.textHeading : C.textMuted, fontWeight: on ? 600 : 400,
+      maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+    }}>{label}</button>
+  );
+}
+
+const filterCap: React.CSSProperties = {
+  fontSize: 10, fontWeight: 600, letterSpacing: '.05em', textTransform: 'uppercase',
+  color: C.textMuted, fontFamily: FONT.sans, marginBottom: 4,
+};
 
 // Правый сайдбар связей внутри заметки уместен только на широком экране: список
 // слева + контент + связи справа. Ниже этого порога (планшет/раскладной Galaxy
@@ -46,9 +87,22 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   const notes = useNotes();
   const online = useOnline();
   const docAnnotationsOn = useFeature(FLAGS.docAnnotations);
+  // Теги всех заметок по частоте — чипы-фильтры списка (клик = оператор tag: в поиске)
+  const allTags = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const n of notes)
+      for (const t of n.tags) counts.set(t, (counts.get(t) ?? 0) + 1);
+    return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'ru'));
+  }, [notes]);
+  const [tagsExpanded, setTagsExpanded] = useState(false);
+  const hasCommentRoots = docAnnotationsOn && notes.some(n => n.annotation && !n.annotation.isReply);
   const [mode, setMode] = useState<Mode>('notes');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState('');
+  // Активные фильтры-операторы в запросе — бейдж на свёрнутой группе «Фильтры»
+  const activeFilterCount = useMemo(
+    () => query.split(/\s+/).filter(p => /^(tag|status):/i.test(p)).length,
+    [query]);
   // Диалог создания: null — закрыт; поля — préfill (создание из «+» на папке)
   const [newDialog, setNewDialog] = useState<{ source?: string; folder?: string } | null>(null);
   const [mobileView, setMobileView] = useState<'list' | 'note'>('list');
@@ -247,27 +301,63 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
           )}
         </div>
       )}
-      {/* Фильтры комментариев к документам (флаг doc-annotations): чипы = операторы status:.
-          Ответы тредов не считаются — статус живёт у корневого комментария */}
-      {mode === 'notes' && docAnnotationsOn && notes.some(n => n.annotation && !n.annotation.isReply) && (
-        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
-          {([
-            ['status:open', 'Открытые', notes.filter(n => n.annotation && !n.annotation.isReply && n.annotation.status === 'open').length],
-            ['status:resolved', 'Решённые', notes.filter(n => n.annotation && !n.annotation.isReply && n.annotation.status === 'resolved').length],
-            ['status:orphaned', 'Сироты', null],
-          ] as const).map(([q, label, count]) => {
-            const on = query.trim() === q;
-            return (
-              <button key={q} onClick={() => setQuery(on ? '' : q)} style={{
-                display: 'inline-flex', alignItems: 'center', gap: 4,
-                border: `1px solid ${on ? C.accent : C.border}`, borderRadius: 12,
-                padding: '2px 9px', fontSize: 11, cursor: 'pointer', fontFamily: FONT.sans,
-                background: on ? C.accentMuted : 'transparent',
-                color: on ? C.textHeading : C.textMuted, fontWeight: on ? 600 : 400,
-              }}>{label}{count != null && count > 0 ? ` · ${count}` : ''}</button>
-            );
-          })}
-        </div>
+      {/* Фильтры списка — свёрнутая группа (бейдж показывает активные, когда закрыта).
+          Чипы патчат операторы в строке поиска, текст запроса сохраняется.
+          «Теги» — по всем заметкам; «Комментарии» — только заметки-комментарии к документам */}
+      {mode === 'notes' && (allTags.length > 0 || hasCommentRoots) && (
+        <CollapseGroup
+          defaultOpen={false}
+          title={<span style={{ fontSize: 12, fontWeight: 500 }}>Фильтры</span>}
+          tail={activeFilterCount > 0 ? (
+            <span style={{
+              fontSize: 10.5, fontWeight: 700, color: C.onAccent, background: C.accent,
+              borderRadius: 9, padding: '0 6px', flexShrink: 0,
+            }}>{activeFilterCount}</span>
+          ) : undefined}
+        >
+          {allTags.length > 0 && (
+            <div style={{ marginBottom: 8 }}>
+              <div style={filterCap}>Теги</div>
+              <div style={{
+                display: 'flex', gap: 5, flexWrap: 'wrap',
+                // Тегов может быть очень много: раскрытый список живёт в своей
+                // скролл-области, а не растягивает сайдбар
+                ...(tagsExpanded ? { maxHeight: 150, overflowY: 'auto' as const } : {}),
+              }}>
+                {(tagsExpanded ? allTags : allTags.slice(0, TAGS_COLLAPSED)).map(([tag, count]) => {
+                  const token = `tag:${tag}`;
+                  return (
+                    <FilterChip key={tag} on={hasToken(query, token)} label={`#${tag} · ${count}`}
+                      onClick={() => setQuery(toggleToken(query, token))} />
+                  );
+                })}
+                {allTags.length > TAGS_COLLAPSED && (
+                  <FilterChip on={false} label={tagsExpanded ? 'Свернуть' : `+${allTags.length - TAGS_COLLAPSED}`}
+                    onClick={() => setTagsExpanded(v => !v)} />
+                )}
+              </div>
+            </div>
+          )}
+          {hasCommentRoots && (
+            <div>
+              <div style={filterCap}>
+                <MessageCircle size={10} strokeWidth={2.5} style={{ verticalAlign: -1, marginRight: 4 }} />
+                Комментарии к документам
+              </div>
+              <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+                {([
+                  ['status:open', 'Открытые', notes.filter(n => n.annotation && !n.annotation.isReply && n.annotation.status === 'open').length],
+                  ['status:resolved', 'Решённые', notes.filter(n => n.annotation && !n.annotation.isReply && n.annotation.status === 'resolved').length],
+                  ['status:orphaned', 'Сироты', null],
+                ] as const).map(([token, label, count]) => (
+                  <FilterChip key={token} on={hasToken(query, token)}
+                    label={count != null && count > 0 ? `${label} · ${count}` : label}
+                    onClick={() => setQuery(toggleToken(query, token, 'status:'))} />
+                ))}
+              </div>
+            </div>
+          )}
+        </CollapseGroup>
       )}
       <div style={{ display: 'flex', gap: 6 }}>
         <button onClick={() => setNewDialog({})} style={{ ...newBtn, flex: 1, justifyContent: 'center' }}>

@@ -14,6 +14,7 @@ export interface GraphSettings {
     search: string;
     existingOnly: boolean;     // скрыть призрачные узлы (ссылки без заметок)
     showOrphans: boolean;      // показывать узлы без связей
+    showComments: boolean;     // комментарии к документам как узлы (флаг doc-annotations)
     hiddenSources: string[];
     selectedTags: string[];
     depth: number;             // 1..3 — глубина соседства (только локальный граф)
@@ -34,7 +35,7 @@ export interface GraphSettings {
 }
 
 export const GRAPH_DEFAULTS: GraphSettings = {
-  filters: { search: '', existingOnly: false, showOrphans: true, hiddenSources: [], selectedTags: [], depth: 1 },
+  filters: { search: '', existingOnly: false, showOrphans: true, showComments: false, hiddenSources: [], selectedTags: [], depth: 1 },
   groups: [],
   display: { arrows: false, textFade: 1, nodeSize: 1, lineWidth: 1 },
   forces: { center: 0.5, repel: 10, link: 1, linkDistance: 120 },

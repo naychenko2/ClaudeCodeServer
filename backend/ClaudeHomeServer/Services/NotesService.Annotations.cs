@@ -147,10 +147,14 @@ public sealed partial class NotesService
     // DocMissing — документ-цель удалён (для ghost-узла в дереве).
     private void ComputeAnnotationDerived(string userId, List<RawNote> notes)
     {
+        // Ключи целей — канонический документный путь + легаси-вариант без notes/
         var annPaths = new Dictionary<(string Scope, string Path), RawNote>();
         foreach (var n in notes)
             if (n.Annotation is not null)
+            {
+                annPaths[(n.SourceKey, DocPathOf(n.SourceKey, n.RelPath).ToLowerInvariant())] = n;
                 annPaths[(n.SourceKey, n.RelPath.ToLowerInvariant())] = n;
+            }
         if (annPaths.Count == 0) return;
 
         var docExists = new Dictionary<(string, string), bool>();
@@ -189,7 +193,9 @@ public sealed partial class NotesService
         var title = norm.Length >= 3
             ? (norm.Length > 50 ? norm[..50].TrimEnd() + "…" : norm)
             : $"Ответ — {root.Title}";
-        var annotates = $"{root.SourceKey}/{root.RelPath}";
+        // Канонический документный путь (у проектов — от корня, с notes/): единый
+        // формат annotates для комментариев и ответов
+        var annotates = $"{root.SourceKey}/{DocPathOf(root.SourceKey, root.RelPath)}";
 
         var sb = new StringBuilder();
         sb.Append("---\n");
@@ -207,10 +213,12 @@ public sealed partial class NotesService
         var model = GetModel(userId);
         if (!model.ById.TryGetValue(rootId, out var root))
             throw new KeyNotFoundException("Комментарий не найден");
+        var canonical = DocPathOf(root.SourceKey, root.RelPath);
         return model.Notes
             .Where(r => r.Annotation is { IsReply: true } a &&
                         a.DocScope.Equals(root.SourceKey, StringComparison.Ordinal) &&
-                        a.DocPath.Equals(root.RelPath, StringComparison.OrdinalIgnoreCase))
+                        (a.DocPath.Equals(canonical, StringComparison.OrdinalIgnoreCase) ||
+                         a.DocPath.Equals(root.RelPath, StringComparison.OrdinalIgnoreCase)))   // легаси без notes/
             .OrderBy(r => r.CreatedAt, StringComparer.Ordinal)
             .Select(r => new NoteReplyDto(r.Id, r.Title, ExtractExcerpt(r.Content), r.CreatedAt, r.Tags))
             .ToList();

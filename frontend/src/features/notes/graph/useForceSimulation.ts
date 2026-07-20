@@ -21,6 +21,8 @@ export interface SimNode extends SimulationNodeDatum {
   degree: number;
   ghost: boolean;
   tags?: string[];
+  kind?: 'comment' | 'reply' | 'doc' | null;   // комментарии в графе (?annotations=true)
+  status?: 'open' | 'resolved' | null;
   r: number;       // радиус (мировые единицы); назначает NotesGraph по degree и слайдеру
   color: string;   // резолвленный цвет заливки (группа или источник)
   fade: number;    // текущая альфа hover-подсветки (анимируется в draw loop)
@@ -127,6 +129,7 @@ export function useForceSimulation(graph: NoteGraph | null, forces: GraphSetting
         // обновляем данные, позиция/скорость остаются
         old.title = g.title; old.source = g.source; old.sourceLabel = g.sourceLabel;
         old.degree = g.degree; old.ghost = g.ghost; old.tags = g.tags;
+        old.kind = g.kind; old.status = g.status;
         return old;
       }
       return { ...g, r: 6, color: '#888888', fade: 1 };

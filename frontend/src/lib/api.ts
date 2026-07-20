@@ -228,7 +228,8 @@ export const api = {
       return request<NoteSummary[]>(`/notes${s ? `?${s}` : ''}`);
     },
     sources: () => request<NoteSource[]>('/notes/sources'),
-    graph: () => request<NoteGraph>('/notes/graph'),
+    graph: (annotations?: boolean) =>
+      request<NoteGraph>(`/notes/graph${annotations ? '?annotations=true' : ''}`),
     templates: () => request<NoteTemplate[]>('/notes/templates'),
     // Резолв по имени вики-ссылки (+ фрагмент по якорю) — hover-preview и embeds
     resolve: (name: string, anchor?: string) => {

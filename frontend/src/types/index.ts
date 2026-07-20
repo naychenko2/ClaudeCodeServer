@@ -765,6 +765,10 @@ export interface NoteGraphNode {
   degree: number;
   ghost: boolean;
   tags?: string[];
+  // Комментарии в графе (?annotations=true): 'comment'/'reply' — узлы комментариев,
+  // 'doc' — призрачный узел документа-файла; status — open|resolved у корневых
+  kind?: 'comment' | 'reply' | 'doc' | null;
+  status?: 'open' | 'resolved' | null;
 }
 
 // Шаблон заметки (templates/ личного vault)

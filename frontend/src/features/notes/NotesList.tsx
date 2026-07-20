@@ -505,12 +505,19 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
         </div>
         {!isCollapsed && (
           <div style={{ marginLeft: 8, paddingLeft: 6, borderLeft: `1px solid ${C.border}` }}>
-            {dg.notes.map(n => (
-              <div key={n.id}>
-                {renderNote(n, 0)}
-                {(repliesIndex.get(`${n.source}|${n.path.toLowerCase()}`) ?? []).map(r => renderNote(r, 1))}
-              </div>
-            ))}
+            {dg.notes.map(n => {
+              // Канонический докпуть корня (у проектов — notes/…) + легаси без префикса
+              const keys = n.source === 'personal'
+                ? [`${n.source}|${n.path.toLowerCase()}`]
+                : [`${n.source}|notes/${n.path.toLowerCase()}`, `${n.source}|${n.path.toLowerCase()}`];
+              const replies = keys.flatMap(k => repliesIndex.get(k) ?? []);
+              return (
+                <div key={n.id}>
+                  {renderNote(n, 0)}
+                  {replies.map(r => renderNote(r, 1))}
+                </div>
+              );
+            })}
           </div>
         )}
       </div>

@@ -68,6 +68,9 @@ public record NoteDetail(
     NoteAnnotationInfo? Annotation = null);  // непусто = заметка-комментарий к документу
 
 // Узел графа знаний. Ghost=true — «призрачная» заметка (на неё ссылаются, но её нет).
+// Kind: null — обычная заметка; "comment"/"reply" — комментарий к документу и ответ
+// в треде (показываются по запросу ?annotations=true); "doc" — призрачный узел
+// документа-файла (не заметки), на который указывает комментарий.
 public record NoteGraphNode(
     string Id,
     string Title,
@@ -75,7 +78,9 @@ public record NoteGraphNode(
     string SourceLabel,
     int Degree,             // число связей (для размера узла)
     bool Ghost,
-    IReadOnlyList<string>? Tags = null);   // теги заметки — для фильтра графа
+    IReadOnlyList<string>? Tags = null,   // теги заметки — для фильтра графа
+    string? Kind = null,
+    string? Status = null);  // open | resolved — у корневых комментариев
 
 public record NoteGraphEdge(string Source, string Target);
 

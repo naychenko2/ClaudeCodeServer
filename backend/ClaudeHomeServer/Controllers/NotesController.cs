@@ -54,8 +54,10 @@ public class NotesController : ControllerBase
         Ok(_notes.GetSources(UserId));
 
     // Единый per-owner граф связей (узлы + рёбра, включая «призрачные» заметки).
+    // annotations=true — включить комментарии к документам (узлы + связи привязки).
     [HttpGet("graph")]
-    public ActionResult<NoteGraph> Graph() => Ok(_notes.GetGraph(UserId));
+    public ActionResult<NoteGraph> Graph([FromQuery] bool annotations = false) =>
+        Ok(_notes.GetGraph(UserId, annotations));
 
     // Резолв заметки по имени вики-ссылки (+ фрагмент по якорю #Заголовок / #^блок) —
     // для hover-preview и embed-вставок ![[…]].

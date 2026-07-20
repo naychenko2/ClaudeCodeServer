@@ -535,12 +535,43 @@ public sealed partial class NotesService
         return model.Backlinks.TryGetValue(id, out var bl) ? bl : Array.Empty<NoteBacklinkDto>();
     }
 
-    public NoteGraph GetGraph(string userId)
+    // includeAnnotations=false (дефолт): комментарии к документам в граф не попадают
+    // (решение панели: не шумят связями). true — тумблер в настройках графа: комментарии
+    // и ответы становятся узлами со связями «комментарий → документ» и «ответ → корень».
+    public NoteGraph GetGraph(string userId, bool includeAnnotations = false)
     {
         var model = GetModel(userId);
-        // Комментарии к документам в граф не попадают (решение панели: не шумят связями)
         var annIds = model.Notes.Where(n => n.Annotation is not null).Select(n => n.Id).ToHashSet();
-        var edgesRaw = model.Edges.Where(e => !annIds.Contains(e.Item1) && !annIds.Contains(e.Item2)).ToList();
+        var edgesRaw = includeAnnotations
+            ? new HashSet<(string, string)>(model.Edges)
+            : new HashSet<(string, string)>(model.Edges.Where(e => !annIds.Contains(e.Item1) && !annIds.Contains(e.Item2)));
+
+        // Рёбра привязки: комментарий → документ-заметка (или призрачный узел файла),
+        // ответ → корневой комментарий (annotates ответа указывает на его файл)
+        var ghostDocs = new Dictionary<string, string>();
+        if (includeAnnotations)
+        {
+            var byDocPath = new Dictionary<(string, string), string>();
+            foreach (var n in model.Notes)
+            {
+                byDocPath[(n.SourceKey, DocPathOf(n.SourceKey, n.RelPath).ToLowerInvariant())] = n.Id;
+                // Легаси-формат annotates у ответов (путь заметки без notes/)
+                byDocPath[(n.SourceKey, n.RelPath.ToLowerInvariant())] = n.Id;
+            }
+            foreach (var n in model.Notes)
+            {
+                var a = n.Annotation;
+                if (a is null) continue;
+                if (byDocPath.TryGetValue((a.DocScope, a.DocPath.ToLowerInvariant()), out var targetId))
+                    edgesRaw.Add((n.Id, targetId));
+                else
+                {
+                    var gid = $"doc:{a.DocScope}/{a.DocPath.ToLowerInvariant()}";
+                    ghostDocs[gid] = Path.GetFileName(a.DocPath);
+                    edgesRaw.Add((n.Id, gid));
+                }
+            }
+        }
 
         var degree = new Dictionary<string, int>();
         foreach (var (s, t) in edgesRaw)
@@ -551,12 +582,19 @@ public sealed partial class NotesService
 
         var nodes = new List<NoteGraphNode>();
         foreach (var n in model.Notes)
-            if (n.Annotation is null)
-                nodes.Add(new NoteGraphNode(n.Id, n.Title, n.SourceKey, n.SourceLabel,
-                    degree.GetValueOrDefault(n.Id), false, n.Tags));
+        {
+            var a = n.Annotation;
+            if (a is not null && !includeAnnotations) continue;
+            var kind = a is null ? null : a.IsReply ? "reply" : "comment";
+            var status = a is { IsReply: false } ? a.Status : null;
+            nodes.Add(new NoteGraphNode(n.Id, n.Title, n.SourceKey, n.SourceLabel,
+                degree.GetValueOrDefault(n.Id), false, n.Tags, kind, status));
+        }
         foreach (var (gid, name) in model.Ghosts)
             if (degree.GetValueOrDefault(gid) > 0)
                 nodes.Add(new NoteGraphNode(gid, name, "", "", degree.GetValueOrDefault(gid), true));
+        foreach (var (gid, name) in ghostDocs)
+            nodes.Add(new NoteGraphNode(gid, name, "", "", degree.GetValueOrDefault(gid), true, null, "doc"));
 
         var edges = edgesRaw.Select(e => new NoteGraphEdge(e.Item1, e.Item2)).ToList();
         return new NoteGraph(nodes, edges);

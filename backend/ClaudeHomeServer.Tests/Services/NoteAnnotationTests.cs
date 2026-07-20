@@ -264,6 +264,44 @@ public class NoteAnnotationTests : IDisposable
     }
 
     [Fact]
+    public void GetGraph_СВключённымиКомментариями_ДаётУзлыИСвязи()
+    {
+        var root = CreateRootComment();
+        var reply = _sut.Reply(User, root.Id, new ReplyRequest("ответ в тред"));
+
+        var graph = _sut.GetGraph(User, includeAnnotations: true);
+        var rootNode = graph.Nodes.Single(n => n.Id == root.Id);
+        rootNode.Kind.Should().Be("comment");
+        rootNode.Status.Should().Be("open");
+        graph.Nodes.Single(n => n.Id == reply.Id).Kind.Should().Be("reply");
+
+        // Комментарий → документ-заметка «Архитектура»; ответ → корневой комментарий
+        var docId = _sut.GetSummaries(User, null, null).Single(n => n.Title == "Архитектура").Id;
+        graph.Edges.Should().Contain(e => e.Source == root.Id && e.Target == docId);
+        graph.Edges.Should().Contain(e => e.Source == reply.Id && e.Target == root.Id);
+
+        // Дефолт (без параметра) — комментариев в графе по-прежнему нет
+        _sut.GetGraph(User).Nodes.Should().NotContain(n => n.Kind != null);
+    }
+
+    [Fact]
+    public void GetGraph_КомментарийНаФайлПроекта_ДаётПризрачныйУзелДокумента()
+    {
+        WriteDoc();
+        var note = _sut.Annotate(User, new AnnotateRequest(
+            new AnnotateDocRef("personal", "Архитектура.md"),
+            Sel(Doc, "Убийство docker-клиента на хосте не трогает процесс внутри контейнера."), "к"));
+        // Симулируем цель-файл вне заметок: перепишем annotates на несуществующую заметку
+        _sut.RewriteAnnotationTargets(User, "personal", "Архитектура.md", "personal", "docs/чужой-файл.md");
+
+        var graph = _sut.GetGraph(User, includeAnnotations: true);
+        var ghost = graph.Nodes.Single(n => n.Kind == "doc");
+        ghost.Ghost.Should().BeTrue();
+        ghost.Title.Should().Be("чужой-файл.md");
+        graph.Edges.Should().Contain(e => e.Source == note.Id && e.Target == ghost.Id);
+    }
+
+    [Fact]
     public void GetGraph_КомментарииНеПопадаютВГраф()
     {
         WriteDoc();

@@ -4,6 +4,7 @@ import { C, FONT, GROUP_COLORS, R } from '../../../lib/design';
 import { ICON_SIZE } from '../../../components/ui/icons';
 import { Toggle } from '../../../components/ui';
 import { CollapseGroup, SourceDot } from '../shared';
+import { FLAGS, useFeature } from '../../../lib/featureFlags';
 import type { GraphSettings } from './graphSettings';
 import { GRAPH_DEFAULTS } from './graphSettings';
 
@@ -17,6 +18,7 @@ export function GraphSettingsBody({ settings, onChange, sources, tags, localMode
   tags: string[];
   localMode: boolean;    // локальный граф: добавляет слайдер глубины
 }) {
+  const docAnnotationsOn = useFeature(FLAGS.docAnnotations);
   // Поиск с дебаунсом — не дёргать фильтрацию/симуляцию на каждый символ
   const [search, setSearch] = useState(settings.filters.search);
   useEffect(() => { setSearch(settings.filters.search); }, [settings.filters.search]);
@@ -53,6 +55,11 @@ export function GraphSettingsBody({ settings, onChange, sources, tags, localMode
         <ToggleRow label="Одиночные заметки" hint="Показывать узлы без единой связи"
           checked={settings.filters.showOrphans}
           onChange={v => patchFilters({ showOrphans: v })} />
+        {docAnnotationsOn && (
+          <ToggleRow label="Комментарии к документам" hint="Узлы-комментарии со связями к документам и тредам (охра — открыт, зелёный — решён)"
+            checked={settings.filters.showComments}
+            onChange={v => patchFilters({ showComments: v })} />
+        )}
         {localMode && (
           <SettingSlider label="Глубина" min={1} max={3} step={1}
             value={settings.filters.depth}

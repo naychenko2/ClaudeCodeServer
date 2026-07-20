@@ -1,5 +1,5 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, X, File, Trash2, Maximize2, RotateCcw, Save, Download, Music, Menu, SquarePen, Eye, Copy, Check, FileDiff, History, Users } from 'lucide-react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AlertTriangle, X, File, Trash2, Maximize2, RotateCcw, Save, Download, Music, Menu, SquarePen, Eye, Copy, Check, FileDiff, History, Users, MessageCircle } from 'lucide-react';
 import SyntaxHighlighter from 'react-syntax-highlighter/dist/esm/prism-light';
 import { oneLight, oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import tsx from 'react-syntax-highlighter/dist/esm/languages/prism/tsx';
@@ -31,6 +31,7 @@ import { useOnline } from '../hooks/useOnline';
 import { EmptyState } from './EmptyState';
 import { getLanguage } from '../lib/getLanguage';
 import { MarkdownViewer } from './MarkdownViewer';
+import { DocCommentedMarkdown } from '../features/notes/DocComments';
 import { useNotes, ensureNotesLoaded, existingTitleSet, useNotesVersion } from '../lib/notes';
 import { NoteConnections } from '../features/notes/NoteConnections';
 import { NoteView } from '../features/notes/NoteView';
@@ -351,6 +352,10 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
   // Ошибка мутации (сохранение/откат/удаление) офлайн или при сбое — inline-фидбек
   const [actionError, setActionError] = useState<string | null>(null);
   const [imgDims, setImgDims] = useState<{ w: number; h: number } | null>(null);
+  // Счётчики комментариев к документу — чип в тулбаре (данные поднимает DocCommentedMarkdown)
+  const [commentCounts, setCommentCounts] = useState<{ total: number; open: number } | null>(null);
+  useEffect(() => { setCommentCounts(null); }, [filePath]);
+  const onCommentCounts = useCallback((total: number, open: number) => setCommentCounts({ total, open }), []);
   const drawioRef = useRef<DrawioHandle>(null);
   const marks = useSyncMarks(project.id);
   // Фидбек кнопки «Скопировать» в тулбаре
@@ -743,6 +748,23 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
         <span style={{ fontFamily: FONT.mono, fontWeight: 700, fontSize: 13, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: C.textHeading }}>
           {fileName}
         </span>
+
+        {/* Комментарии к документу (флаг doc-annotations): счётчик в тулбаре */}
+        {commentCounts && commentCounts.total > 0 && !editing && tab === 'file' && (
+          <span
+            title={`Комментариев: ${commentCounts.total}, открытых: ${commentCounts.open}`}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0,
+              fontSize: 11.5, fontWeight: 600, borderRadius: 11, padding: '1px 8px',
+              color: commentCounts.open > 0 ? C.warningText : C.successText,
+              background: commentCounts.open > 0 ? C.warningBg : C.successBg,
+            }}>
+            {commentCounts.open > 0
+              ? <MessageCircle size={11} strokeWidth={2.5} />
+              : <Check size={11} strokeWidth={2.5} />}
+            {commentCounts.total}{commentCounts.open > 0 && !isMobile ? ` · ${commentCounts.open} откр.` : ''}
+          </span>
+        )}
 
         {/* Статистика diff */}
         {diffStats && (
@@ -1218,7 +1240,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
                     </div>
                   )
                   : isMarkdown
-                  ? <div data-selection-scope="doc" data-selection-priority="2"><MarkdownViewer content={content} /></div>
+                  ? <div data-selection-scope="doc" data-selection-priority="2"><DocCommentedMarkdown scope={project.id} docPath={filePath} content={content} isMobile={isMobile} onCounts={onCommentCounts} /></div>
                   : <div data-selection-scope="doc" data-selection-priority="2"><SyntaxHighlighter
                       language={getLanguage(filePath)}
                       style={codeTheme}

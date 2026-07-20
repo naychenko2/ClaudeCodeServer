@@ -10,7 +10,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects/{projectId}/files")]
-public class FilesController(FileService files, ProjectManager projects, SyncService sync, IConfiguration config, JwtService jwt, ILogger<FilesController> logger) : ControllerBase
+public class FilesController(FileService files, ProjectManager projects, SyncService sync, IConfiguration config, JwtService jwt, ILogger<FilesController> logger, NotesService notes) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string? UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub);
@@ -185,7 +185,15 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
     [HttpPost("rename")]
     public IActionResult Rename(string projectId, [FromBody] RenameRequest req)
     {
-        try { files.Rename(GetRoot(projectId), req.OldPath, req.NewPath); return Ok(); }
+        try
+        {
+            files.Rename(GetRoot(projectId), req.OldPath, req.NewPath);
+            // Комментарии к переименованному/перенесённому документу (или документам
+            // внутри папки) следуют за новым путём — привязка не сиротеет
+            try { notes.RewriteAnnotationTargets(UserId!, projectId, req.OldPath, projectId, req.NewPath, prefix: true); }
+            catch (Exception ex) { logger.LogWarning(ex, "Перепись привязок комментариев при rename {Old}", req.OldPath); }
+            return Ok();
+        }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (UnauthorizedAccessException) { return StatusCode(403); }
     }

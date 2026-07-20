@@ -49,9 +49,9 @@ export function NotesGraph({
 
   useEffect(() => {
     let alive = true;
-    api.notes.graph().then(g => { if (alive) setGraph(g); }).catch(() => {});
+    api.notes.graph(settings.filters.showComments).then(g => { if (alive) setGraph(g); }).catch(() => {});
     return () => { alive = false; };
-  }, [version]);
+  }, [version, settings.filters.showComments]);
 
   const filtered = useMemo(
     () => graph ? filterGraph(graph, { filters: settings.filters, focusId, maxNodes }) : null,
@@ -88,7 +88,11 @@ export function NotesGraph({
   useEffect(() => {
     for (const n of simApi.nodes()) {
       const rule = groupRules.find(g => matchNode(n, g.terms));
-      n.color = colors.resolve(rule ? rule.color : sourceColor(n.source));
+      // Комментарии красятся статусом (охра — открыт, зелёный — решён), ответы — приглушённо
+      const kindColor = n.kind === 'comment'
+        ? (n.status === 'open' ? C.warning : C.success)
+        : n.kind === 'reply' ? C.textMuted : null;
+      n.color = colors.resolve(rule ? rule.color : kindColor ?? sourceColor(n.source));
     }
   }, [paintKey, simApi, groupRules, colors]);
 

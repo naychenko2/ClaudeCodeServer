@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { cloneElement, isValidElement, useEffect, useMemo, useRef, useState } from 'react';
+import type { ReactElement, ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -16,6 +17,10 @@ export interface ResolvedNote {
 
 interface Props {
   content: string;
+  // Позиции блоков в ИСХОДНОМ markdown: блочные элементы получают data-md-start/end
+  // (сквозь препроцессинг wikilinks — офсеты переводятся картой). Нужны комментариям
+  // к документам: выделение → офсеты источника, подсветка якорных блоков.
+  blockPos?: boolean;
   // Клик по вики-ссылке [[Заголовок]] — target = «сырой» текст цели (до | и #)
   onWikilink?: (target: string) => void;
   // Нормализованные (lower/trim) заголовки существующих заметок — чтобы отличить
@@ -32,26 +37,83 @@ interface Props {
 const mono = FONT.mono;
 const serif = FONT.serif;
 
-// [[Заметка]] / [[Заметка|подпись]] → markdown-ссылка со схемой wikilink:
-// (urlTransform ниже пропускает эту схему, иначе санитайзер react-markdown её вырежет).
-function preprocessWikilinks(md: string): string {
-  return md.replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g,
-    (_m, target: string, label?: string) =>
-      `[${(label ?? target).trim()}](wikilink:${encodeURIComponent(target.trim())})`);
-}
-
 const IMG_EXT = /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i;
 
-// ![[Заметка]] → embed-вставка (схема noteembed:), ![[img.png]] → картинка-вложение
-// (noteatt:). Вызывается ДО preprocessWikilinks — иначе [[…]]-часть съест общий regex.
-function preprocessEmbeds(md: string, depth: number): string {
-  return md.replace(/!\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_m, target: string, label?: string) => {
-    const t = target.trim();
-    const text = (label ?? t).trim();
-    if (IMG_EXT.test(t)) return `![${text}](noteatt:${encodeURIComponent(t)})`;
-    if (depth >= 1) return `[${text}](wikilink:${encodeURIComponent(t)})`;
-    return `[${text}](noteembed:${encodeURIComponent(t)})`;
-  });
+// Сегмент карты офсетов «препроцессированный → сырой» (для blockPos сквозь препроцессинг)
+interface MapSegment { pre: number; raw: number; preLen: number; literal: boolean }
+
+// Единый проход по [[Заметка]] / [[Заметка|подпись]] / ![[…]]: embeds и wikilinks
+// переписываются в markdown-ссылки со схемами wikilink:/noteembed:/noteatt:
+// (urlTransform ниже пропускает эти схемы, иначе санитайзер react-markdown их вырежет).
+// Параллельно строится карта офсетов — blockPos переводит позиции блоков в сырой текст.
+function preprocessNotes(md: string, depth: number): { text: string; map: MapSegment[] } {
+  const re = /(!?)\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g;
+  let out = '';
+  const map: MapSegment[] = [];
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(md)) !== null) {
+    if (m.index > last) {
+      map.push({ pre: out.length, raw: last, preLen: m.index - last, literal: true });
+      out += md.slice(last, m.index);
+    }
+    const [full, bang, targetRaw, labelRaw] = m;
+    const t = targetRaw.trim();
+    const text = (labelRaw ?? targetRaw).trim();
+    let replaced: string;
+    if (bang) {
+      if (IMG_EXT.test(t)) replaced = `![${text}](noteatt:${encodeURIComponent(t)})`;
+      else if (depth >= 1) replaced = `[${text}](wikilink:${encodeURIComponent(t)})`;
+      else replaced = `[${text}](noteembed:${encodeURIComponent(t)})`;
+    } else {
+      replaced = `[${text}](wikilink:${encodeURIComponent(t)})`;
+    }
+    map.push({ pre: out.length, raw: m.index, preLen: replaced.length, literal: false });
+    out += replaced;
+    last = m.index + full.length;
+  }
+  if (last < md.length) {
+    map.push({ pre: out.length, raw: last, preLen: md.length - last, literal: true });
+    out += md.slice(last);
+  }
+  return { text: out, map };
+}
+
+// Перевод офсета препроцессированного текста в сырой: внутри литерального сегмента 1:1,
+// внутри заменённого — начало исходной [[…]]-конструкции.
+function makeToRaw(map: MapSegment[] | null): (off: number) => number {
+  if (!map || map.length === 0) return off => off;
+  return (off: number) => {
+    let lo = 0, hi = map.length - 1, idx = 0;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (map[mid].pre <= off) { idx = mid; lo = mid + 1; } else hi = mid - 1;
+    }
+    const seg = map[idx];
+    return seg.literal ? seg.raw + Math.min(off - seg.pre, seg.preLen) : seg.raw;
+  };
+}
+
+// Обёртка блочных компонентов: data-md-start/end с позициями исходного markdown
+const POS_KEYS = ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'ul', 'ol', 'li', 'blockquote', 'table'] as const;
+
+function withBlockPos(base: Components, toRaw: (off: number) => number): Components {
+  const out = { ...base } as Record<string, unknown>;
+  for (const k of POS_KEYS) {
+    const orig = base[k] as (props: Record<string, unknown>) => ReactNode;
+    out[k] = (props: Record<string, unknown>) => {
+      const el = orig(props);
+      const node = props.node as { position?: { start?: { offset?: number }; end?: { offset?: number } } } | undefined;
+      const start = node?.position?.start?.offset;
+      const end = node?.position?.end?.offset;
+      if (!isValidElement(el) || start == null || end == null) return el;
+      return cloneElement(el as ReactElement, {
+        'data-md-start': toRaw(start),
+        'data-md-end': toRaw(end),
+      } as Record<string, unknown>);
+    };
+  }
+  return out as Components;
 }
 
 // Имя цели для проверки существования: последний сегмент пути, без якоря, lower/trim
@@ -236,11 +298,15 @@ const CUSTOM_SCHEMES = ['wikilink:', 'noteembed:', 'noteatt:'];
 
 interface HoverState { x: number; y: number; data: ResolvedNote }
 
-export function MarkdownViewer({ content, onWikilink, existingTitles, resolveNote, embedSource, embedDepth = 0 }: Props) {
+export function MarkdownViewer({ content, blockPos, onWikilink, existingTitles, resolveNote, embedSource, embedDepth = 0 }: Props) {
   // Режим заметок: включаем рендер [[wikilinks]]/![[embeds]] и внешние ссылки синим
   // (info), чтобы три класса ссылок различались (живая accent / призрак / внешняя).
   const notesMode = onWikilink != null;
-  const source = notesMode ? preprocessWikilinks(preprocessEmbeds(content, embedDepth)) : content;
+  const pre = useMemo(
+    () => (notesMode ? preprocessNotes(content, embedDepth) : null),
+    [notesMode, content, embedDepth]);
+  const source = pre ? pre.text : content;
+  const toRaw = useMemo(() => makeToRaw(pre?.map ?? null), [pre]);
 
   // Hover-preview вики-ссылок (только при resolveNote, не на тач-устройствах)
   const [hover, setHover] = useState<HoverState | null>(null);
@@ -311,12 +377,18 @@ export function MarkdownViewer({ content, onWikilink, existingTitles, resolveNot
       }
     : components;
 
+  const finalComponents = useMemo(
+    () => (blockPos ? withBlockPos(merged, toRaw) : merged),
+    // merged пересобирается каждый рендер — зависимость от стабильных первопричин
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [blockPos, toRaw, notesMode, existingTitles, resolveNote, embedSource]);
+
   return (
     <div style={{ fontFamily: FONT.sans, fontSize: 14, lineHeight: 1.7, color: C.textHeading, width: '100%' }}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         urlTransform={url => (CUSTOM_SCHEMES.some(s => url.startsWith(s)) ? url : defaultUrlTransform(url))}
-        components={merged}
+        components={finalComponents}
       >{source}</ReactMarkdown>
       {hover && createPortal(
         <div style={{

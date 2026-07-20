@@ -11,7 +11,7 @@ namespace ClaudeHomeServer.Services;
 // Единый per-owner граф агрегирует все источники владельца (Модель 3 из плана).
 // Класс не хранит состояние заметок — сканирует файлы на каждый запрос
 // (заметок немного; кэш-инвалидация — возможная оптимизация позже).
-public sealed class NotesService
+public sealed partial class NotesService
 {
     private readonly ProjectManager _projects;
     private readonly ILogger<NotesService> _logger;
@@ -91,6 +91,7 @@ public sealed class NotesService
         public required string UpdatedAt;
         public string? ExpiresAt;
         public string? SourceSessionId;
+        public NoteAnnotationInfo? Annotation;   // непусто = заметка-комментарий к документу
     }
 
     private List<RawNote> Scan(string userId)
@@ -112,7 +113,8 @@ public sealed class NotesService
                 var rel = NormalizeRel(Path.GetRelativePath(src.RootDir, full));
                 // templates/ — шаблоны, не заметки: в список/граф не попадают
                 if (rel.StartsWith("templates/", StringComparison.OrdinalIgnoreCase)) continue;
-                var (title, tags, expires, sourceSessionId) = ParseFrontmatter(text, Path.GetFileNameWithoutExtension(full));
+                var fm = ParseFrontmatter(text, Path.GetFileNameWithoutExtension(full));
+                var tags = fm.Tags;
                 // Inline-теги #тег из тела + теги из frontmatter (без дублей)
                 foreach (var it in InlineTag.Matches(text).Select(m => m.Groups[1].Value))
                     if (!tags.Contains(it, StringComparer.OrdinalIgnoreCase)) tags.Add(it);
@@ -124,32 +126,42 @@ public sealed class NotesService
                     SourceLabel = src.Label,
                     RelPath = rel,
                     FullPath = full,
-                    Title = title,
+                    Title = fm.Title,
                     Content = text,
                     Tags = tags,
                     RawLinks = links,
                     CreatedAt = SafeTime(() => File.GetCreationTimeUtc(full)),
                     UpdatedAt = SafeTime(() => File.GetLastWriteTimeUtc(full)),
-                    ExpiresAt = expires,
-                    SourceSessionId = sourceSessionId,
+                    ExpiresAt = fm.ExpiresAt,
+                    SourceSessionId = fm.SourceSessionId,
+                    Annotation = fm.Annotation,
                 });
             }
         }
         return notes;
     }
 
-    // Минимальный разбор YAML-frontmatter: title, tags, expires и source_session_id (без внешней либы).
-    private static (string Title, List<string> Tags, string? ExpiresAt, string? SourceSessionId) ParseFrontmatter(string text, string fallbackTitle)
+    // Результат разбора frontmatter (внутренний; Annotation собирается из annotates/anchor_*/status)
+    internal sealed record NoteFm(
+        string Title, List<string> Tags, string? ExpiresAt, string? SourceSessionId,
+        NoteAnnotationInfo? Annotation);
+
+    // Минимальный разбор YAML-frontmatter: title, tags, expires, source_session_id
+    // и поля комментария к документу (annotates/anchor_quote/anchor_heading/status) — без внешней либы.
+    internal static NoteFm ParseFrontmatter(string text, string fallbackTitle)
     {
         var title = fallbackTitle;
         var tags = new List<string>();
         string? expires = null;
         string? sourceSessionId = null;
-        if (!text.StartsWith("---")) return (title, tags, expires, sourceSessionId);
+        string? annotates = null, anchorQuote = null, anchorHeading = null, status = null;
+        NoteFm Done() => new(title, tags.Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
+            expires, sourceSessionId, BuildAnnotation(annotates, anchorQuote, anchorHeading, status));
+        if (!text.StartsWith("---")) return Done();
 
         using var reader = new StringReader(text);
         var first = reader.ReadLine();
-        if (first is null || first.Trim() != "---") return (title, tags, expires, sourceSessionId);
+        if (first is null || first.Trim() != "---") return Done();
 
         var lines = new List<string>();
         string? line;
@@ -159,7 +171,7 @@ public sealed class NotesService
             if (line.Trim() == "---") { closed = true; break; }
             lines.Add(line);
         }
-        if (!closed) return (title, tags, expires, sourceSessionId);
+        if (!closed) return Done();
 
         for (var i = 0; i < lines.Count; i++)
         {
@@ -171,6 +183,15 @@ public sealed class NotesService
             if (e.Success) { expires = e.Groups[1].Value.Trim().Trim('"', '\''); continue; }
             var s = Regex.Match(l, @"^source_session_id:\s*(.+)$", RegexOptions.IgnoreCase);
             if (s.Success) { sourceSessionId = s.Groups[1].Value.Trim().Trim('"', '\''); continue; }
+
+            var a = Regex.Match(l, @"^annotates:\s*(.+)$", RegexOptions.IgnoreCase);
+            if (a.Success) { annotates = a.Groups[1].Value.Trim().Trim('"', '\''); continue; }
+            var aq = Regex.Match(l, @"^anchor_quote:\s*(.+)$", RegexOptions.IgnoreCase);
+            if (aq.Success) { anchorQuote = aq.Groups[1].Value.Trim().Trim('"', '\''); continue; }
+            var ah = Regex.Match(l, @"^anchor_heading:\s*(.+)$", RegexOptions.IgnoreCase);
+            if (ah.Success) { anchorHeading = ah.Groups[1].Value.Trim().Trim('"', '\''); continue; }
+            var st = Regex.Match(l, @"^status:\s*(.+)$", RegexOptions.IgnoreCase);
+            if (st.Success) { status = st.Groups[1].Value.Trim().Trim('"', '\''); continue; }
 
             var t = Regex.Match(l, @"^tags:\s*(.*)$", RegexOptions.IgnoreCase);
             if (t.Success)
@@ -189,7 +210,28 @@ public sealed class NotesService
                     }
             }
         }
-        return (title, tags.Distinct(StringComparer.OrdinalIgnoreCase).ToList(), expires, sourceSessionId);
+        return Done();
+    }
+
+    // Сборка привязки из полей frontmatter. annotates: "<scope>/<путь>[#^id]".
+    private static NoteAnnotationInfo? BuildAnnotation(string? annotates, string? quote, string? heading, string? status)
+    {
+        if (string.IsNullOrWhiteSpace(annotates)) return null;
+        var val = annotates.Trim();
+        string? blockId = null;
+        var hash = val.IndexOf('#');
+        if (hash >= 0)
+        {
+            var anchor = val[(hash + 1)..].Trim();
+            if (anchor.StartsWith('^')) blockId = anchor[1..].Trim();
+            val = val[..hash];
+        }
+        var slash = val.IndexOf('/');
+        if (slash <= 0 || slash == val.Length - 1) return null;   // битое поле — не привязка
+        var scope = val[..slash].Trim();
+        var path = val[(slash + 1)..].Trim().Replace('\\', '/');
+        var st = status?.Trim().ToLowerInvariant() is "resolved" ? "resolved" : "open";
+        return new NoteAnnotationInfo(scope, path, st, blockId, quote, heading);
     }
 
     private static List<(string, string)> ParseLinks(string text)
@@ -249,6 +291,7 @@ public sealed class NotesService
         // Истёкшие заметки исключаем из модели — они не видны в списке/графе,
         // а ссылки на них становятся «призрачными» (unresolved).
         notes.RemoveAll(n => IsExpired(n, now));
+        ComputeAnnotationDerived(userId, notes);
         var byId = notes.ToDictionary(n => n.Id);
 
         // Индекс имя -> заметки (для резолва [[...]])
@@ -435,13 +478,19 @@ public sealed class NotesService
         if (!string.IsNullOrWhiteSpace(source)) q = q.Where(n => n.SourceKey == source);
         if (!string.IsNullOrWhiteSpace(query))
         {
-            // Операторы в запросе: tag:идея source:Личный — остальное полнотекст
-            var (tags, sources, text) = ParseQuery(query);
+            // Операторы в запросе: tag:идея source:Личный status:open — остальное полнотекст
+            var (tags, sources, statuses, text) = ParseQuery(query);
             foreach (var tag in tags)
                 q = q.Where(n => n.Tags.Any(t => t.Equals(tag, StringComparison.OrdinalIgnoreCase)));
             foreach (var s in sources)
                 q = q.Where(n => n.SourceKey.Equals(s, StringComparison.OrdinalIgnoreCase) ||
                                  n.SourceLabel.Equals(s, StringComparison.OrdinalIgnoreCase));
+            // Ответы в тредах статусом не фильтруются: статус живёт у корневого комментария
+            foreach (var st in statuses)
+                q = st.Equals("orphaned", StringComparison.OrdinalIgnoreCase)
+                    ? q.Where(n => n.Annotation is { IsReply: false } && IsAnnotationOrphan(userId, n))
+                    : q.Where(n => n.Annotation is { IsReply: false } &&
+                                   n.Annotation.Status.Equals(st, StringComparison.OrdinalIgnoreCase));
             if (text.Length > 0)
                 q = q.Where(n =>
                     n.Title.Contains(text, StringComparison.OrdinalIgnoreCase) ||
@@ -452,11 +501,13 @@ public sealed class NotesService
                 .Select(ToSummary).ToList();
     }
 
-    // Разбор операторов запроса: tag:x source:y (можно несколько), остаток — полнотекст
-    internal static (List<string> Tags, List<string> Sources, string Text) ParseQuery(string query)
+    // Разбор операторов запроса: tag:x source:y status:open|resolved|orphaned (можно
+    // несколько), остаток — полнотекст
+    internal static (List<string> Tags, List<string> Sources, List<string> Statuses, string Text) ParseQuery(string query)
     {
         var tags = new List<string>();
         var sources = new List<string>();
+        var statuses = new List<string>();
         var rest = new List<string>();
         foreach (var token in query.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
@@ -464,9 +515,11 @@ public sealed class NotesService
                 tags.Add(token[4..].TrimStart('#'));
             else if (token.StartsWith("source:", StringComparison.OrdinalIgnoreCase) && token.Length > 7)
                 sources.Add(token[7..]);
+            else if (token.StartsWith("status:", StringComparison.OrdinalIgnoreCase) && token.Length > 7)
+                statuses.Add(token[7..]);
             else rest.Add(token);
         }
-        return (tags, sources, string.Join(' ', rest));
+        return (tags, sources, statuses, string.Join(' ', rest));
     }
 
     public NoteDetail? GetDetail(string userId, string id)
@@ -482,11 +535,46 @@ public sealed class NotesService
         return model.Backlinks.TryGetValue(id, out var bl) ? bl : Array.Empty<NoteBacklinkDto>();
     }
 
-    public NoteGraph GetGraph(string userId)
+    // includeAnnotations=false (дефолт): комментарии к документам в граф не попадают
+    // (решение панели: не шумят связями). true — тумблер в настройках графа: комментарии
+    // и ответы становятся узлами со связями «комментарий → документ» и «ответ → корень».
+    public NoteGraph GetGraph(string userId, bool includeAnnotations = false)
     {
         var model = GetModel(userId);
+        var annIds = model.Notes.Where(n => n.Annotation is not null).Select(n => n.Id).ToHashSet();
+        var edgesRaw = includeAnnotations
+            ? new HashSet<(string, string)>(model.Edges)
+            : new HashSet<(string, string)>(model.Edges.Where(e => !annIds.Contains(e.Item1) && !annIds.Contains(e.Item2)));
+
+        // Рёбра привязки: комментарий → документ-заметка (или призрачный узел файла),
+        // ответ → корневой комментарий (annotates ответа указывает на его файл)
+        var ghostDocs = new Dictionary<string, string>();
+        if (includeAnnotations)
+        {
+            var byDocPath = new Dictionary<(string, string), string>();
+            foreach (var n in model.Notes)
+            {
+                byDocPath[(n.SourceKey, DocPathOf(n.SourceKey, n.RelPath).ToLowerInvariant())] = n.Id;
+                // Легаси-формат annotates у ответов (путь заметки без notes/)
+                byDocPath[(n.SourceKey, n.RelPath.ToLowerInvariant())] = n.Id;
+            }
+            foreach (var n in model.Notes)
+            {
+                var a = n.Annotation;
+                if (a is null) continue;
+                if (byDocPath.TryGetValue((a.DocScope, a.DocPath.ToLowerInvariant()), out var targetId))
+                    edgesRaw.Add((n.Id, targetId));
+                else
+                {
+                    var gid = $"doc:{a.DocScope}/{a.DocPath.ToLowerInvariant()}";
+                    ghostDocs[gid] = Path.GetFileName(a.DocPath);
+                    edgesRaw.Add((n.Id, gid));
+                }
+            }
+        }
+
         var degree = new Dictionary<string, int>();
-        foreach (var (s, t) in model.Edges)
+        foreach (var (s, t) in edgesRaw)
         {
             degree[s] = degree.GetValueOrDefault(s) + 1;
             degree[t] = degree.GetValueOrDefault(t) + 1;
@@ -494,12 +582,21 @@ public sealed class NotesService
 
         var nodes = new List<NoteGraphNode>();
         foreach (var n in model.Notes)
+        {
+            var a = n.Annotation;
+            if (a is not null && !includeAnnotations) continue;
+            var kind = a is null ? null : a.IsReply ? "reply" : "comment";
+            var status = a is { IsReply: false } ? a.Status : null;
             nodes.Add(new NoteGraphNode(n.Id, n.Title, n.SourceKey, n.SourceLabel,
-                degree.GetValueOrDefault(n.Id), false, n.Tags));
+                degree.GetValueOrDefault(n.Id), false, n.Tags, kind, status));
+        }
         foreach (var (gid, name) in model.Ghosts)
-            nodes.Add(new NoteGraphNode(gid, name, "", "", degree.GetValueOrDefault(gid), true));
+            if (degree.GetValueOrDefault(gid) > 0)
+                nodes.Add(new NoteGraphNode(gid, name, "", "", degree.GetValueOrDefault(gid), true));
+        foreach (var (gid, name) in ghostDocs)
+            nodes.Add(new NoteGraphNode(gid, name, "", "", degree.GetValueOrDefault(gid), true, null, "doc"));
 
-        var edges = model.Edges.Select(e => new NoteGraphEdge(e.Item1, e.Item2)).ToList();
+        var edges = edgesRaw.Select(e => new NoteGraphEdge(e.Item1, e.Item2)).ToList();
         return new NoteGraph(nodes, edges);
     }
 
@@ -662,6 +759,9 @@ public sealed class NotesService
         }
 
         Invalidate(userId);
+        // Комментарии, привязанные к перенесённой заметке-документу, переезжают вместе с ней
+        RewriteAnnotationTargets(userId, sourceKey, DocPathOf(sourceKey, NormalizeRel(relPath)),
+            newSource, DocPathOf(newSource, newRel));
         return GetDetail(userId, EncodeId(newSource, newRel));
     }
 
@@ -695,6 +795,9 @@ public sealed class NotesService
         Directory.CreateDirectory(Path.GetDirectoryName(newFull)!);
         Directory.Move(oldFull, newFull);
         Invalidate(userId);
+        // Привязки комментариев к документам внутри перенесённой папки — по префиксу
+        RewriteAnnotationTargets(userId, sourceKey, DocPathOf(sourceKey, oldFolder),
+            sourceKey, DocPathOf(sourceKey, newFolder), prefix: true);
 
         return before.Select(rel =>
         {
@@ -789,12 +892,26 @@ public sealed class NotesService
                     File.Move(full, newFull);
                     full = newFull;
                     effectiveId = EncodeId(sourceKey, newRel);
+                    // Комментарии на переименованную заметку-документ следуют за ней
+                    RewriteAnnotationTargets(userId, sourceKey, DocPathOf(sourceKey, NormalizeRel(relPath)),
+                        sourceKey, DocPathOf(sourceKey, newRel));
                 }
             }
         }
 
         if (req.Content is not null)
-            File.WriteAllText(full, req.Content, new UTF8Encoding(false));
+        {
+            // Merge-защита системных полей комментария: если текущий файл — комментарий,
+            // а новый контент потерял annotates (агент/редактор переписал frontmatter),
+            // поля привязки восстанавливаются — перезапись не сиротит комментарий молча.
+            var newContent = req.Content;
+            var curText = File.ReadAllText(full, Encoding.UTF8);
+            var curFm = ParseFrontmatter(curText, "");
+            if (curFm.Annotation is not null &&
+                ParseFrontmatter(newContent, "").Annotation is null)
+                newContent = ReinjectAnnotationFields(newContent, curFm.Annotation);
+            File.WriteAllText(full, newContent, new UTF8Encoding(false));
+        }
 
         // Время жизни: -1 (по умолчанию) — не менять; null — снять; N — установить
         if (req.ExpiresAfterMinutes != -1)
@@ -882,7 +999,8 @@ public sealed class NotesService
 
                     var rel = NormalizeRel(Path.GetRelativePath(src.RootDir, full));
                     if (rel.StartsWith("templates/", StringComparison.OrdinalIgnoreCase)) continue;
-                    var (title, _, expires, _) = ParseFrontmatter(text, Path.GetFileNameWithoutExtension(full));
+                    var fm = ParseFrontmatter(text, Path.GetFileNameWithoutExtension(full));
+                    var (title, expires) = (fm.Title, fm.ExpiresAt);
                     if (expires is null) continue;
                     if (DateTime.TryParse(expires, null, System.Globalization.DateTimeStyles.RoundtripKind, out var exp)
                         && exp <= nowUtc)
@@ -973,14 +1091,15 @@ public sealed class NotesService
     // --- Проекции ---
 
     private NoteSummary ToSummary(RawNote n) =>
-        new(n.Id, n.Title, n.SourceKey, n.SourceLabel, n.RelPath, n.Tags, n.CreatedAt, n.UpdatedAt, n.ExpiresAt, n.SourceSessionId);
+        new(n.Id, n.Title, n.SourceKey, n.SourceLabel, n.RelPath, n.Tags, n.CreatedAt, n.UpdatedAt,
+            n.ExpiresAt, n.SourceSessionId, n.Annotation);
 
     private NoteDetail ToDetail(Model model, RawNote n) =>
         new(n.Id, n.Title, n.SourceKey, n.SourceLabel, n.RelPath, n.Content, n.Tags,
             model.OutLinks.GetValueOrDefault(n.Id) ?? new(),
             model.Backlinks.GetValueOrDefault(n.Id) ?? new(),
             model.Unlinked.GetValueOrDefault(n.Id) ?? new(),
-            n.CreatedAt, n.UpdatedAt, n.ExpiresAt, n.SourceSessionId);
+            n.CreatedAt, n.UpdatedAt, n.ExpiresAt, n.SourceSessionId, n.Annotation);
 
     // --- Разрешение источника и валидация владения ---
 

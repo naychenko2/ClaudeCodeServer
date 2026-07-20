@@ -63,11 +63,14 @@ const TOOLS = [
   },
   {
     name: 'notes_search',
-    description: 'Поиск заметок по заголовку, тексту и тегам — по всем источникам пользователя.',
+    description: 'Поиск заметок по заголовку, тексту и тегам — по всем источникам пользователя. Поддерживает операторы в query (tag:идея source:Личный status:open) и отдельный фильтр status для комментариев к документам.',
     inputSchema: {
       type: 'object',
       required: ['query'],
-      properties: { query: { type: 'string', description: 'Строка поиска' } },
+      properties: {
+        query: { type: 'string', description: 'Строка поиска (можно с операторами tag:/source:/status:)' },
+        status: { type: 'string', enum: ['open', 'resolved', 'orphaned'], description: 'Только комментарии к документам с этим статусом (open — необработанные)' },
+      },
     },
   },
   {
@@ -130,6 +133,67 @@ const TOOLS = [
     },
   },
   {
+    name: 'notes_annotate',
+    description: 'Оставить комментарий к месту в markdown-документе (создаёт заметку-комментарий со статусом open, привязанную к блоку). anchorText — ДОСЛОВНЫЙ фрагмент текста документа (скопируй точно из прочитанного файла): сервер сверяет его посимвольно и откажет, если текст не найден или неуникален. Документ — любой .md проекта (docs/, README…) или личного vault.',
+    inputSchema: {
+      type: 'object',
+      required: ['path', 'anchorText', 'comment'],
+      properties: {
+        path: { type: 'string', description: 'Путь документа: для проекта — от корня проекта (docs/architecture.md), для личного vault — внутри vault' },
+        scope: { type: 'string', description: 'Область документа: id проекта или "personal". По умолчанию — контекст сессии' },
+        anchorText: { type: 'string', description: 'Дословный фрагмент документа, к которому привязать комментарий (минимум несколько слов, без пересказа!)' },
+        comment: { type: 'string', description: 'Текст комментария' },
+        tags: { type: 'array', items: { type: 'string' }, description: 'Теги (без #)' },
+      },
+    },
+  },
+  {
+    name: 'notes_annotations',
+    description: 'Комментарии к документу с резолвом привязки: статус (open/resolved), состояние якоря (exact/changed/orphan), цитата и позиция блока.',
+    inputSchema: {
+      type: 'object',
+      required: ['path'],
+      properties: {
+        path: { type: 'string', description: 'Путь документа внутри области' },
+        scope: { type: 'string', description: 'id проекта или "personal". По умолчанию — контекст сессии' },
+      },
+    },
+  },
+  {
+    name: 'notes_reply',
+    description: 'Ответить в треде комментария к документу (реплика — отдельная заметка, привязанная к корневому комментарию; тред плоский, отвечать можно только на корневой).',
+    inputSchema: {
+      type: 'object',
+      required: ['id', 'comment'],
+      properties: {
+        id: { type: 'string', description: 'ID корневого комментария (из notes_annotations)' },
+        comment: { type: 'string', description: 'Текст ответа' },
+        tags: { type: 'array', items: { type: 'string' }, description: 'Теги (без #)' },
+      },
+    },
+  },
+  {
+    name: 'notes_thread',
+    description: 'Тред комментария: корневая заметка-комментарий целиком + все ответы по времени.',
+    inputSchema: {
+      type: 'object',
+      required: ['id'],
+      properties: { id: { type: 'string', description: 'ID корневого комментария' } },
+    },
+  },
+  {
+    name: 'notes_set_status',
+    description: 'Сменить статус комментария к документу: resolved — обработан («решён»), open — снова открыт.',
+    inputSchema: {
+      type: 'object',
+      required: ['id', 'status'],
+      properties: {
+        id: { type: 'string', description: 'ID заметки-комментария' },
+        status: { type: 'string', enum: ['open', 'resolved'] },
+      },
+    },
+  },
+  {
     name: 'notes_semantic_search',
     description: 'Семантический поиск по заметкам (по смыслу, не по подстроке): находит близкие по содержанию заметки со score и сниппетом. Используй, когда точный текст неизвестен.',
     inputSchema: {
@@ -158,9 +222,11 @@ async function callTool(name, args) {
     }
 
     case 'notes_search': {
-      const params = new URLSearchParams({ q: String(args.query ?? '') });
+      let q = String(args.query ?? '');
+      if (args.status) q = `status:${args.status} ${q}`.trim();
+      const params = new URLSearchParams({ q });
       const data = await api(`/api/notes?${params}`);
-      return json(data.map(brief));
+      return json(data.map(n => n.annotation ? { ...brief(n), annotation: n.annotation } : brief(n)));
     }
 
     case 'notes_read':
@@ -194,6 +260,47 @@ async function callTool(name, args) {
     case 'notes_delete':
       await api(`/api/notes/${encodeURIComponent(args.id)}`, { method: 'DELETE' });
       return { content: [{ type: 'text', text: `Заметка ${args.id} удалена.` }] };
+
+    case 'notes_annotate': {
+      const scope = args.scope || PROJECT_ID || 'personal';
+      const text = String(args.anchorText ?? '');
+      // Офсеты — хинт: сервер сам найдёт единственное дословное вхождение
+      // (verify-before-write); не нашёл/неуникально — честная ошибка без порчи документа.
+      const body = {
+        doc: { scope, path: String(args.path ?? '') },
+        selection: { start: 0, end: text.length, text },
+        comment: args.comment,
+      };
+      if (Array.isArray(args.tags) && args.tags.length) body.tags = args.tags;
+      return json(await api('/api/notes/annotate', { method: 'POST', body: JSON.stringify(body) }));
+    }
+
+    case 'notes_annotations': {
+      const scope = args.scope || PROJECT_ID || 'personal';
+      const params = new URLSearchParams({ scope, path: String(args.path ?? '') });
+      return json(await api(`/api/notes/annotations?${params}`));
+    }
+
+    case 'notes_reply': {
+      const body = { comment: args.comment };
+      if (Array.isArray(args.tags) && args.tags.length) body.tags = args.tags;
+      return json(await api(`/api/notes/${encodeURIComponent(args.id)}/reply`, {
+        method: 'POST', body: JSON.stringify(body),
+      }));
+    }
+
+    case 'notes_thread': {
+      const [root, replies] = await Promise.all([
+        api(`/api/notes/${encodeURIComponent(args.id)}`),
+        api(`/api/notes/${encodeURIComponent(args.id)}/replies`),
+      ]);
+      return json({ root, replies });
+    }
+
+    case 'notes_set_status':
+      return json(await api(`/api/notes/${encodeURIComponent(args.id)}/status`, {
+        method: 'POST', body: JSON.stringify({ status: args.status }),
+      }));
 
     case 'notes_semantic_search': {
       const params = new URLSearchParams({ q: String(args.query ?? '') });

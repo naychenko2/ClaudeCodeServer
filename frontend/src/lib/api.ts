@@ -1,4 +1,4 @@
-import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitBlameLine, GitRemoteInfo } from '../types';
+import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitBlameLine, GitRemoteInfo } from '../types';
 import { request } from './offline';
 
 export type { WorkflowAgentInfo, WorkflowAgentBlock };
@@ -229,7 +229,8 @@ export const api = {
       return request<NoteSummary[]>(`/notes${s ? `?${s}` : ''}`);
     },
     sources: () => request<NoteSource[]>('/notes/sources'),
-    graph: () => request<NoteGraph>('/notes/graph'),
+    graph: (annotations?: boolean) =>
+      request<NoteGraph>(`/notes/graph${annotations ? '?annotations=true' : ''}`),
     templates: () => request<NoteTemplate[]>('/notes/templates'),
     // Резолв по имени вики-ссылки (+ фрагмент по якорю) — hover-preview и embeds
     resolve: (name: string, anchor?: string) => {
@@ -241,6 +242,29 @@ export const api = {
     daily: (date: string) =>
       request<NoteDetail>('/notes/daily', { method: 'POST', body: JSON.stringify({ date }) }),
     caps: () => request<{ semantic: boolean }>('/notes/caps'),
+    // Комментарии к документам (флаг doc-annotations): создание с verify-guard (409 —
+    // документ изменился), список с резолвом привязки, смена статуса open/resolved
+    annotate: (dto: {
+      doc: { scope: string; path: string };
+      selection: { start: number; end: number; text: string };
+      comment?: string; tags?: string[]; title?: string;
+    }) => request<NoteDetail>('/notes/annotate', { method: 'POST', body: JSON.stringify(dto) }),
+    annotations: (scope: string, path: string) =>
+      request<DocAnnotation[]>(
+        `/notes/annotations?scope=${encodeURIComponent(scope)}&path=${encodeURIComponent(path)}`),
+    setStatus: (id: string, status: 'open' | 'resolved') =>
+      request<NoteDetail>(`/notes/${encodeURIComponent(id)}/status`, {
+        method: 'POST', body: JSON.stringify({ status }),
+      }),
+    repin: (id: string, selection: { start: number; end: number; text: string }) =>
+      request<NoteDetail>(`/notes/${encodeURIComponent(id)}/repin`, {
+        method: 'POST', body: JSON.stringify(selection),
+      }),
+    reply: (id: string, comment: string, tags?: string[]) =>
+      request<NoteDetail>(`/notes/${encodeURIComponent(id)}/reply`, {
+        method: 'POST', body: JSON.stringify({ comment, tags }),
+      }),
+    replies: (id: string) => request<NoteReply[]>(`/notes/${encodeURIComponent(id)}/replies`),
     semantic: (q: string, topK = 8) =>
       request<{ available: boolean; results: NoteSemanticHit[] }>(
         `/notes/semantic?q=${encodeURIComponent(q)}&topK=${topK}`),

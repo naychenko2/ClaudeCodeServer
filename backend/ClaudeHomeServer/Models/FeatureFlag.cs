@@ -30,6 +30,9 @@ public static class FeatureFlagKeys
 
     // Подсказка следующего сообщения в композере (prompt_suggestion от claude CLI).
     public const string PromptSuggestions = "prompt-suggestions";
+
+    // Комментарии к MD-документам: выделение → заметка-комментарий с привязкой к блоку.
+    public const string DocAnnotations = "doc-annotations";
 }
 
 /// <summary>
@@ -67,6 +70,16 @@ public static class FeatureFlagCatalog
             Description: "После ответа Claude над полем ввода появляется чип с вероятным следующим сообщением — тап, → или Tab вставляют его в композер. Работает в чатах на моделях Claude.",
             Default: false,
             Stage: "dev"),
+
+        // Комментарии к документам: выделил текст в .md → попап → заметка-комментарий
+        // с привязкой к блоку (annotates/anchor_*/status), панель при чтении, фильтры
+        // status: в «Заметках». Снять флаг после недели реального использования.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.DocAnnotations,
+            Title: "Комментарии к документам",
+            Description: "Выделите текст в markdown-документе — и создайте комментарий, привязанный к этому месту. Пометки видны при чтении в панели справа, необработанные ищутся фильтром, комментарии сгруппированы под документами в «Заметках».",
+            Default: false,
+            Stage: "beta"),
     ];
 
     private static readonly HashSet<string> Keys = All.Select(f => f.Key).ToHashSet();

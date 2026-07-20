@@ -1,11 +1,26 @@
 import { useRegisterSW } from 'virtual:pwa-register/react'
 import { C, FONT, R, SHADOW } from '../lib/design'
 
+// Как часто спрашивать сервер о новой версии SW (браузер сам делает это только при навигации)
+const UPDATE_CHECK_INTERVAL_MS = 60_000
+
 export function UpdatePrompt() {
   const {
     needRefresh: [needRefresh],
     updateServiceWorker,
-  } = useRegisterSW()
+  } = useRegisterSW({
+    onRegisteredSW(_swUrl, registration) {
+      if (!registration) return
+      const check = () => {
+        if (registration.installing || !navigator.onLine) return
+        registration.update().catch(() => {})
+      }
+      setInterval(check, UPDATE_CHECK_INTERVAL_MS)
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) check()
+      })
+    },
+  })
 
   if (!needRefresh) return null
 

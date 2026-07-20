@@ -17,9 +17,9 @@ type Mode = 'new' | 'existing';
 type GitMode = 'none' | 'manual' | 'auto';
 
 const GIT_MODES: { value: GitMode; label: string; hint: string }[] = [
-  { value: 'none', label: 'Без git', hint: 'Обычная папка, версии не отслеживаются' },
-  { value: 'manual', label: 'Git, ручное сохранение', hint: 'Кодовый режим: коммиты по кнопке в разделе «Файлы»' },
-  { value: 'auto', label: 'Git, авто-сохранение', hint: 'Режим документов: каждый ход ИИ фиксируется коммитом. Не для кода с параллельной ручной работой' },
+  { value: 'none', label: 'Без ведения истории', hint: 'Обычная папка — версии файлов не сохраняются' },
+  { value: 'manual', label: 'Ручное ведение истории', hint: 'Версии сохраняются, когда вы сами нажмёте «Зафиксировать» в разделе «Файлы». Рекомендуется для разработки кода' },
+  { value: 'auto', label: 'Автоматическое ведение истории', hint: 'Каждый ход ИИ сохраняется в историю сам. Рекомендуется для работы с документами' },
 ];
 
 // Единый диалог добавления проекта: сегмент «Новый / Существующий».
@@ -87,8 +87,8 @@ export function AddProjectDialog({ groups, defaultGroupId, onSuccess, onClose }:
         </Field>
       )}
 
-      {/* Git-режим: без git / ручной (код) / авто-сохранение (документы) */}
-      <Field label="Git">
+      {/* Ведение истории файлов (git): без истории / ручной (код) / авто (документы) */}
+      <Field label="История файлов (Git)">
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           {GIT_MODES.map(m => {
             const active = gitMode === m.value;
@@ -122,7 +122,7 @@ export function AddProjectDialog({ groups, defaultGroupId, onSuccess, onClose }:
               style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '2px 11px 0 34px', cursor: 'pointer' }}
             >
               <Toggle checked={gitPush} onChange={setGitPush} />
-              <span style={{ fontSize: 12.5, fontFamily: FONT.sans, color: C.textPrimary }}>Ещё и отправлять на сервер (push)</span>
+              <span style={{ fontSize: 12.5, fontFamily: FONT.sans, color: C.textPrimary }}>Ещё и отправлять копию на git-сервер (push)</span>
             </div>
           )}
         </div>

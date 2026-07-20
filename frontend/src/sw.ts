@@ -19,11 +19,11 @@ precacheAndRoute(self.__WB_MANIFEST);
 cleanupOutdatedCaches();
 
 // SPA-fallback. /api/*, OnlyOffice-пути (версионированные /X.Y.Z-hash/... и статика),
-// /drawio/* (iframe self-hosted draw.io) и /preview/* (iframe dev-сервера проекта)
-// не должны перехватываться SW — иначе навигация iframe получит index.html
-// приложения вместо самого редактора/дев-сервера.
+// /drawio/* (iframe self-hosted draw.io), /preview/* (iframe dev-сервера проекта) и
+// /forgejo/* (веб-UI git-сервера через YARP) не должны перехватываться SW — иначе
+// навигация получит index.html приложения вместо самого редактора/сервера.
 registerRoute(new NavigationRoute(createHandlerBoundToURL('index.html'), {
-  denylist: [/^\/api\//, /^\/\d/, /^\/web-apps\//, /^\/sdkjs\//, /^\/doceditor\//, /^\/doc\//, /^\/coauthoring\//, /^\/cache\//, /^\/drawio\//, /^\/preview\//],
+  denylist: [/^\/api\//, /^\/\d/, /^\/web-apps\//, /^\/sdkjs\//, /^\/doceditor\//, /^\/doc\//, /^\/coauthoring\//, /^\/cache\//, /^\/drawio\//, /^\/preview\//, /^\/forgejo(\/|$)/],
 }));
 
 // === Web push ===

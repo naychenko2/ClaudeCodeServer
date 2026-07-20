@@ -170,11 +170,13 @@ public sealed class GitServerService(IConfiguration config, IHttpClientFactory h
         for (var i = 1; i <= 20; i++)
         {
             var name = i == 1 ? baseName : $"{baseName}-{i}";
+            // private=false по решению владельца: анонимный просмотр внутри инстанса разрешён
+            // (приватные репо отдавали 404 без логина в веб-UI)
             var create = await http.PostAsJsonAsync($"admin/users/{login}/repos", new
             {
                 name,
                 description = $"claude-home:{projectId}",
-                @private = true,
+                @private = false,
                 auto_init = false,
             }, ct);
             if (create.IsSuccessStatusCode)

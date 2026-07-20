@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Трей-супервизор прод-сервера (Windows-only). Отдельный проект, чтобы сам сервер
+       (ClaudeHomeServer) оставался кросс-платформенным и собирался под Docker без WinForms.
+       WinExe => без консольного окна; запускается в трее и следит за дочерним сервером. -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWindowsForms>true</UseWindowsForms>
+    <AssemblyName>ClaudeHomeServer.Tray</AssemblyName>
+    <RootNamespace>ClaudeHomeServer.Tray</RootNamespace>
+    <ApplicationIcon></ApplicationIcon>
+  </PropertyGroup>
+
+</Project>

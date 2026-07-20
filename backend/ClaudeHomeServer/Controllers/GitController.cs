@@ -178,6 +178,37 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
     public Task<IActionResult> RevertCommit(string projectId, string sha, CancellationToken ct) =>
         Mutate(projectId, (p) => git.RevertCommitAsync(Owner(p), p.RootPath, sha, ct));
 
+    // Данные входа в веб-UI Forgejo (владелец видит свои; пароль хранится открыто — решение владельца)
+    [HttpGet("forgejo-credentials")]
+    public IActionResult ForgejoCredentials(string projectId)
+    {
+        try
+        {
+            var p = GetProject(projectId);
+            var owner = p.OwnerId is null ? null : users.GetById(p.OwnerId);
+            if (owner?.ForgejoUsername is null)
+                return Conflict(new { error = "Аккаунт Forgejo ещё не создан — подключите git-сервер" });
+            return Ok(new { login = owner.ForgejoUsername, password = owner.ForgejoPassword });
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+    }
+
+    // Сброс пароля Forgejo (утерян — например аккаунт создан до хранения паролей)
+    [HttpPost("forgejo-credentials/reset")]
+    public async Task<IActionResult> ResetForgejoPassword(string projectId, CancellationToken ct)
+    {
+        try
+        {
+            var p = GetProject(projectId);
+            var owner = p.OwnerId is null ? null : users.GetById(p.OwnerId);
+            if (owner is null) return NotFound();
+            var password = await gitServer.ResetPasswordAsync(owner, ct);
+            return Ok(new { login = owner.ForgejoUsername, password });
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }
+    }
+
     // История одного файла (--follow) — вкладка «История» в просмотре файла
     [HttpGet("file-log")]
     public async Task<IActionResult> FileLog(string projectId, [FromQuery] string path, [FromQuery] int limit = 100, CancellationToken ct = default)
@@ -354,7 +385,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
             string? htmlUrl = null;
             if (gitServer.Enabled && p.OwnerId is not null && users.GetById(p.OwnerId) is { } owner)
             {
-                var repo = await gitServer.CreateRepoAsync(owner, p.Name, ct);
+                var repo = await gitServer.CreateRepoAsync(owner, p.Name, p.Id, ct);
                 await git.SetRemoteAsync(Owner(p), p.RootPath, repo.CloneUrl, ct);
                 projects.UpdateGitSettings(p.Id, remoteUrl: repo.CloneUrl);
                 htmlUrl = repo.HtmlUrl;

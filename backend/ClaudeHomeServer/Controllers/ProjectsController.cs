@@ -140,7 +140,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
                     await git.InitAsync(p.OwnerId, p.RootPath);
                     if (gitServer.Enabled && p.OwnerId is not null && users.GetById(p.OwnerId) is { } owner)
                     {
-                        var repo = await gitServer.CreateRepoAsync(owner, p.Name);
+                        var repo = await gitServer.CreateRepoAsync(owner, p.Name, p.Id);
                         await git.SetRemoteAsync(p.OwnerId, p.RootPath, repo.CloneUrl);
                         projects.UpdateGitSettings(p.Id, remoteUrl: repo.CloneUrl,
                             autoCommit: req.GitAutoCommit, autoPush: req.GitAutoPush);

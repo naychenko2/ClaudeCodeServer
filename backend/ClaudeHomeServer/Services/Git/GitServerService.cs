@@ -56,8 +56,8 @@ public sealed class GitServerService(IConfiguration config, IHttpClientFactory h
         if (!string.IsNullOrEmpty(user.ForgejoUsername) && !string.IsNullOrEmpty(user.ForgejoToken))
             return user.ForgejoUsername;
 
-        // Пароль одноразовый: нужен лишь чтобы выпустить токен basic-аутентификацией
-        // (создание PAT в Gitea/Forgejo API требует basic, не token). Дальше не храним.
+        // Пароль сохраняем в User (открыто — решение владельца, как токен): им пользователь
+        // входит в веб-UI Forgejo, иначе приватные репо отдают анониму 404
         var password = RandomNumberGenerator.GetHexString(24, lowercase: true);
 
         using var http = Client();
@@ -115,56 +115,88 @@ public sealed class GitServerService(IConfiguration config, IHttpClientFactory h
         var token = tokenJson.GetProperty("sha1").GetString()
             ?? throw new GitCommandException("Forgejo: токен без sha1");
 
-        users.SetForgejoAccount(user.Id, login, token);
+        users.SetForgejoAccount(user.Id, login, token, password);
         user.ForgejoUsername = login;
         user.ForgejoToken = token;
+        user.ForgejoPassword = password;
         logger.LogInformation("Forgejo: провижн пользователя {Login} завершён", login);
         return login;
     }
 
-    /// <summary>
-    /// Создаёт (или находит существующий) репозиторий под аккаунтом пользователя.
-    /// </summary>
-    public async Task<ForgejoRepo> CreateRepoAsync(User user, string repoName, CancellationToken ct = default)
+    /// <summary>Сброс пароля веб-входа (утерян/скомпрометирован) — новый сохраняется в User.</summary>
+    public async Task<string> ResetPasswordAsync(User user, CancellationToken ct = default)
     {
         if (!Enabled) throw new GitCommandException("Forgejo не настроен");
         var login = await EnsureUserAsync(user, ct);
-        var name = SlugifyRepoName(repoName);
+        var password = RandomNumberGenerator.GetHexString(24, lowercase: true);
+        using var http = Client();
+        http.DefaultRequestHeaders.Authorization = TokenAuth(AdminToken);
+        var patch = await http.SendAsync(new HttpRequestMessage(HttpMethod.Patch, $"admin/users/{login}")
+        {
+            Content = JsonContent.Create(new { login_name = login, source_id = 0, password, must_change_password = false }),
+        }, ct);
+        if (!patch.IsSuccessStatusCode)
+            throw new GitCommandException($"Forgejo: не удалось сбросить пароль ({(int)patch.StatusCode})");
+        users.SetForgejoAccount(user.Id, login, user.ForgejoToken!, password);
+        user.ForgejoPassword = password;
+        return password;
+    }
+
+    /// <summary>
+    /// Создаёт (или находит) репозиторий проекта под аккаунтом пользователя. Идемпотентность
+    /// и коллизии слагов («Проект» vs «проект!») решаются меткой projectId в description репо:
+    /// свой — переиспользуем, чужой с тем же именем — берём слаг с суффиксом -2, -3…
+    /// </summary>
+    public async Task<ForgejoRepo> CreateRepoAsync(User user, string repoName, string projectId, CancellationToken ct = default)
+    {
+        if (!Enabled) throw new GitCommandException("Forgejo не настроен");
+        var login = await EnsureUserAsync(user, ct);
+        var baseName = SlugifyRepoName(repoName);
 
         using var http = Client();
         http.DefaultRequestHeaders.Authorization = TokenAuth(AdminToken);
-        var create = await http.PostAsJsonAsync($"admin/users/{login}/repos", new
+        for (var i = 1; i <= 20; i++)
         {
-            name,
-            @private = true,
-            auto_init = false,
-        }, ct);
+            var name = i == 1 ? baseName : $"{baseName}-{i}";
+            var create = await http.PostAsJsonAsync($"admin/users/{login}/repos", new
+            {
+                name,
+                description = $"claude-home:{projectId}",
+                @private = true,
+                auto_init = false,
+            }, ct);
+            if (create.IsSuccessStatusCode)
+                return ToRepo(login, name);
 
-        if (create.IsSuccessStatusCode)
-            return ToRepo(await create.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct), login, name);
-
-        if (create.StatusCode == HttpStatusCode.Conflict)
-        {
-            var existing = await http.GetAsync($"repos/{login}/{name}", ct);
-            if (existing.IsSuccessStatusCode)
-                return ToRepo(await existing.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct), login, name);
+            if (create.StatusCode == HttpStatusCode.Conflict)
+            {
+                var existing = await http.GetAsync($"repos/{login}/{name}", ct);
+                if (existing.IsSuccessStatusCode)
+                {
+                    var json = await existing.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct);
+                    var desc = json.TryGetProperty("description", out var d) ? d.GetString() : null;
+                    if (desc == $"claude-home:{projectId}")
+                        return ToRepo(login, name);   // репо этого же проекта — переиспользуем
+                }
+                continue;   // занят другим проектом — следующий суффикс
+            }
+            throw new GitCommandException($"Forgejo: не удалось создать репозиторий {login}/{name} ({(int)create.StatusCode})");
         }
-        throw new GitCommandException($"Forgejo: не удалось создать репозиторий {login}/{name} ({(int)create.StatusCode})");
+        throw new GitCommandException($"Forgejo: не удалось подобрать имя репозитория для «{repoName}»");
     }
 
-    private ForgejoRepo ToRepo(JsonElement json, string login, string name)
+    private ForgejoRepo ToRepo(string login, string name)
     {
         // clone_url от Forgejo собран из его ROOT_URL и может быть недостижим с бэкенда —
         // строим от своего BaseUrl; html-ссылку для браузера — от PublicUrl
         return new ForgejoRepo($"{BaseUrl}/{login}/{name}.git", $"{PublicUrl}/{login}/{name}");
     }
 
+    // Транслит кириллицы ОБЯЗАТЕЛЕН: «Стратсессия» без него давала пустой слаг → фолбэк
+    // «project», и разные проекты молча цеплялись к одному репозиторию (инцидент на проде 20.07)
     private static string SlugifyRepoName(string name)
     {
-        var sb = new StringBuilder();
-        foreach (var c in name.ToLowerInvariant())
-            sb.Append(char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.' ? c : '-');
-        var slug = sb.ToString().Trim('-', '.');
+        var slug = PersonaManager.Slugify(name);
         return slug.Length > 0 ? slug : "project";
     }
 }

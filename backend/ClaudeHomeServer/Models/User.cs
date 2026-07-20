@@ -28,6 +28,8 @@ public class User
     // владельца, консистентно с остальным users.json), в git/логи не попадает
     public string? ForgejoUsername { get; set; }
     public string? ForgejoToken { get; set; }
+    // Пароль веб-входа в Forgejo (открыто, как токен) — приватные репо анониму отдают 404
+    public string? ForgejoPassword { get; set; }
 }
 
 // Значения User.ExecutionEnvironment

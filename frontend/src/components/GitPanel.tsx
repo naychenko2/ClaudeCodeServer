@@ -159,6 +159,20 @@ export function GitChangesPanel({ project, onOpenDiff, onOpenFile }: ChangesProp
     finally { setAiBusy(false); }
   };
 
+  // Данные входа в веб-UI Forgejo
+  const [forgejoCreds, setForgejoCreds] = useState<{ login: string; password: string | null } | null>(null);
+  const [credsBusy, setCredsBusy] = useState(false);
+  const openForgejoCreds = async () => {
+    try { setForgejoCreds(await api.git.forgejoCredentials(project.id)); }
+    catch { /* сервер не настроен/аккаунта нет — пункт меню и так за serverEnabled */ }
+  };
+  const resetForgejoPass = async () => {
+    setCredsBusy(true);
+    try { setForgejoCreds(await api.git.resetForgejoPassword(project.id)); }
+    catch { /* молча */ }
+    finally { setCredsBusy(false); }
+  };
+
   const handleStashDrop = async () => {
     if (!stashDropConfirm) return;
     const index = stashDropConfirm.index;
@@ -474,10 +488,48 @@ export function GitChangesPanel({ project, onOpenDiff, onOpenFile }: ChangesProp
                 label="…и отправлять на сервер"
                 onClick={handleToggleAutoPush}
               />
+              {remote.serverEnabled && (
+                <MenuItem
+                  icon={<ExternalLink size={15} strokeWidth={ICON_STROKE} />}
+                  label="Вход в Forgejo…"
+                  onClick={() => { setSettingsMenu(false); void openForgejoCreds(); }}
+                />
+              )}
             </Menu>
           )}
         </div>
       </div>
+
+      {/* Данные входа в веб-UI Forgejo (приватные репо анониму отдают 404) */}
+      {forgejoCreds && (
+        <Modal
+          width={MODAL_W.confirm}
+          onClose={() => setForgejoCreds(null)}
+          title="Вход в Forgejo"
+          subtitle="Логин и пароль для веб-интерфейса git-сервера"
+          footer={<ModalActions confirmLabel="Готово" onConfirm={() => setForgejoCreds(null)} onCancel={() => setForgejoCreds(null)} />}
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontFamily: FONT.mono, fontSize: 13 }}>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <span style={{ color: C.textMuted, width: 64, flexShrink: 0, fontFamily: FONT.sans, fontSize: 12.5 }}>Логин</span>
+              <span style={{ color: C.textHeading, userSelect: 'all' }}>{forgejoCreds.login}</span>
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <span style={{ color: C.textMuted, width: 64, flexShrink: 0, fontFamily: FONT.sans, fontSize: 12.5 }}>Пароль</span>
+              {forgejoCreds.password
+                ? <span style={{ color: C.textHeading, userSelect: 'all', overflowWrap: 'anywhere' }}>{forgejoCreds.password}</span>
+                : <span style={{ color: C.textMuted, fontFamily: FONT.sans, fontSize: 12.5 }}>не сохранён — сбросьте</span>}
+            </div>
+            <button
+              onClick={() => void resetForgejoPass()}
+              disabled={credsBusy}
+              style={{ alignSelf: 'flex-start', marginTop: 2, padding: '5px 11px', borderRadius: R.md, cursor: 'pointer', border: `1px dashed ${C.dashed}`, background: 'none', color: C.textSecondary, fontSize: 12.5, fontFamily: FONT.sans }}
+            >
+              {credsBusy ? 'Сбрасываю…' : 'Сбросить пароль'}
+            </button>
+          </div>
+        </Modal>
+      )}
 
       {/* Ошибка последней операции (409 { error }) — клик скрывает */}
       {st.error && (

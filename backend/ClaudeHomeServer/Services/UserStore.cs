@@ -235,7 +235,7 @@ public class UserStore
     }
 
     /// <summary>Сохраняет аккаунт Forgejo (логин + персональный токен) после провижна.</summary>
-    public bool SetForgejoAccount(string id, string username, string token)
+    public bool SetForgejoAccount(string id, string username, string token, string? password = null)
     {
         lock (_lock)
         {
@@ -243,6 +243,7 @@ public class UserStore
             if (user is null) return false;
             user.ForgejoUsername = username;
             user.ForgejoToken = token;
+            if (password is not null) user.ForgejoPassword = password;
             Save();
             return true;
         }

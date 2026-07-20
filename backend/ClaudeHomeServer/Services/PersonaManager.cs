@@ -604,7 +604,8 @@ public class PersonaManager
         ['ъ'] = "", ['ы'] = "y", ['ь'] = "", ['э'] = "e", ['ю'] = "yu", ['я'] = "ya",
     };
 
-    private static string Slugify(string s)
+    // public: переиспользуется GitServerService для имён репозиториев (транслит кириллицы)
+    public static string Slugify(string s)
     {
         var sb = new StringBuilder();
         var prevDash = false;

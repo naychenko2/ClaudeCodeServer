@@ -806,6 +806,11 @@ export const api = {
       request<GitStatus>(`/projects/${projectId}/git/commits/${sha}/revert`, { method: 'POST', timeoutMs: 60_000 }),
     blame: (projectId: string, path: string) =>
       request<GitBlameLine[]>(`/projects/${projectId}/git/blame?path=${encodeURIComponent(path)}`),
+    // Данные входа в веб-UI Forgejo (пароль нужен: приватные репо анониму отдают 404)
+    forgejoCredentials: (projectId: string) =>
+      request<{ login: string; password: string | null }>(`/projects/${projectId}/git/forgejo-credentials`),
+    resetForgejoPassword: (projectId: string) =>
+      request<{ login: string; password: string }>(`/projects/${projectId}/git/forgejo-credentials/reset`, { method: 'POST', timeoutMs: 30_000 }),
     // История одного файла (--follow) — вкладка «История» просмотра файла
     fileLog: (projectId: string, path: string, limit = 100) =>
       request<GitLogEntry[]>(`/projects/${projectId}/git/file-log?path=${encodeURIComponent(path)}&limit=${limit}`),

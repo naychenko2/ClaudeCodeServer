@@ -146,10 +146,24 @@ public sealed class GitService(ILauncherFactory launchers)
             "--pretty=format:%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s%x1e" };
         if (!string.IsNullOrWhiteSpace(branch)) args.Add(branch);
         var r = await RunAsync(ownerId, root, args, ct: ct);
-        if (!r.Ok) return [];
+        return r.Ok ? ParseLog(r.Stdout) : [];
+    }
 
+    // История одного файла (--follow: переживает переименования)
+    public async Task<IReadOnlyList<GitLogEntry>> FileLogAsync(string? ownerId, string root, string relPath, int limit = 100, CancellationToken ct = default)
+    {
+        if (!IsGitRepo(root)) return [];
+        ValidateRel(root, relPath);
+        var r = await RunAsync(ownerId, root,
+            ["log", "--follow", "-n", limit.ToString(),
+             "--pretty=format:%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s%x1e", "--", relPath], ct: ct);
+        return r.Ok ? ParseLog(r.Stdout) : [];
+    }
+
+    private static List<GitLogEntry> ParseLog(string stdout)
+    {
         var list = new List<GitLogEntry>();
-        foreach (var rec in r.Stdout.Split('\x1e', StringSplitOptions.RemoveEmptyEntries))
+        foreach (var rec in stdout.Split('\x1e', StringSplitOptions.RemoveEmptyEntries))
         {
             var f = rec.Trim('\n', '\r').Split('\x1f');
             if (f.Length < 6) continue;

@@ -19,10 +19,10 @@ import bash from 'react-syntax-highlighter/dist/esm/languages/prism/bash';
 import yaml from 'react-syntax-highlighter/dist/esm/languages/prism/yaml';
 import sql from 'react-syntax-highlighter/dist/esm/languages/prism/sql';
 import markup from 'react-syntax-highlighter/dist/esm/languages/prism/markup';
-import type { Project, GitBlameLine } from '../types';
+import type { Project, GitBlameLine, GitLogEntry } from '../types';
 import { api } from '../lib/api';
 import { OfflineError } from '../lib/offline';
-import { useGitState, ensureGit } from '../lib/git';
+import { useGitState, ensureGit, gitRestoreFile, loadGitRemote } from '../lib/git';
 import { parseDiffToHunks, buildHunkPatch, buildLinesPatch } from '../lib/gitPatch';
 import { relTime } from './GitPanel';
 import { toggleSyncMark, useSyncMarks, computeSyncState, isDownloaded, loadSyncMarks, loadDownloadedSet } from '../lib/sync';
@@ -110,7 +110,7 @@ function streamUrl(projectId: string, filePath: string): string {
   return `/api/projects/${projectId}/files/stream?${params}`;
 }
 
-type ViewTab = 'file' | 'diff' | 'blame';
+type ViewTab = 'file' | 'diff' | 'blame' | 'history';
 
 const DiscardIcon = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
@@ -321,6 +321,15 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
   const [blame, setBlame] = useState<GitBlameLine[] | null>(null);
   const [blameLoading, setBlameLoading] = useState(false);
   const [blameError, setBlameError] = useState(false);
+  // Вкладка «История» — версии этого файла (git log --follow) + diff выбранной версии
+  const [fileLog, setFileLog] = useState<GitLogEntry[] | null>(null);
+  const [fileLogLoading, setFileLogLoading] = useState(false);
+  const [versionSha, setVersionSha] = useState<string | null>(null);
+  const [versionDiff, setVersionDiff] = useState<string | null>(null);
+  const [versionDiffLoading, setVersionDiffLoading] = useState(false);
+  const [restoreConfirmSha, setRestoreConfirmSha] = useState<string | null>(null);
+  const [restoring, setRestoring] = useState(false);
+  const docMode = gitSt.remote?.autoCommit === true;
   const [stageBusy, setStageBusy] = useState(false);
   const [editing, setEditing] = useState(false);
   const [htmlTab, setHtmlTab] = useState<'preview' | 'code'>('preview');
@@ -373,6 +382,10 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
     setActionError(null);
     setBlame(null);
     setBlameError(false);
+    setFileLog(null);
+    setVersionSha(null);
+    setVersionDiff(null);
+    setRestoreConfirmSha(null);
     api.files.getContent(project.id, filePath).then(r => {
       setFileContent(r);
       setEditContent(r.content ?? '');
@@ -390,6 +403,52 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
       .catch(() => setBlameError(true))
       .finally(() => setBlameLoading(false));
   }, [tab, blame, blameLoading, blameError, project.id, filePath]);
+
+  // История файла — лениво при первом открытии вкладки (кэш до смены файла)
+  useEffect(() => {
+    if (tab !== 'history' || fileLog || fileLogLoading) return;
+    setFileLogLoading(true);
+    void loadGitRemote(project.id);
+    api.git.fileLog(project.id, filePath)
+      .then(log => {
+        setFileLog(log);
+        if (log.length) setVersionSha(log[0].sha);
+      })
+      .catch(() => setFileLog([]))
+      .finally(() => setFileLogLoading(false));
+  }, [tab, fileLog, fileLogLoading, project.id, filePath]);
+
+  // Diff выбранной версии файла
+  useEffect(() => {
+    if (tab !== 'history' || !versionSha) return;
+    let cancelled = false;
+    setVersionDiffLoading(true);
+    api.git.commitFileDiff(project.id, versionSha, filePath)
+      .then(r => { if (!cancelled) setVersionDiff(r.diff); })
+      .catch(() => { if (!cancelled) setVersionDiff(null); })
+      .finally(() => { if (!cancelled) setVersionDiffLoading(false); });
+    return () => { cancelled = true; };
+  }, [tab, versionSha, project.id, filePath]);
+
+  const handleRestoreVersion = async () => {
+    if (!restoreConfirmSha) return;
+    setRestoring(true);
+    const ok = await gitRestoreFile(project.id, restoreConfirmSha, filePath);
+    setRestoring(false);
+    if (ok) {
+      setRestoreConfirmSha(null);
+      // Содержимое файла изменилось — перечитать файл и diff, вернуться на «Файл»
+      setTab('file');
+      setLoading(true);
+      api.files.getContent(project.id, filePath).then(r => {
+        setFileContent(r);
+        setEditContent(r.content ?? '');
+      }).catch(() => {}).finally(() => setLoading(false));
+      fetchDiff().then(r => setDiff(r.diff)).catch(() => {});
+      setFileLog(null);
+      setBlame(null);
+    }
+  };
 
   // Открытие из git-панели «Изменения» — сразу вкладка Diff (эффект объявлен ПОСЛЕ
   // основного, чтобы перебить его сброс на 'file'; срабатывает и когда тот же файл
@@ -676,15 +735,16 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
           </span>
         )}
 
-        {/* Pill-переключатель Файл / Diff / Авторы — скрыт для Office-файлов;
-            Diff — когда файл изменён, Авторы (blame) — когда проект в git-репо */}
+        {/* Pill-переключатель Файл / Diff / Кто менял / История — скрыт для Office-файлов;
+            Diff — когда файл изменён, «Кто менял» (blame) и «История» — когда проект в git-репо */}
         {!isOfficeFile && (!!diff || showBlameTab) && (
           <PillSwitch<ViewTab>
             value={tab}
             options={[
               { value: 'file', label: 'Файл' },
               ...(diff ? [{ value: 'diff' as ViewTab, label: 'Diff' }] : []),
-              ...(showBlameTab ? [{ value: 'blame' as ViewTab, label: 'Авторы' }] : []),
+              ...(showBlameTab ? [{ value: 'blame' as ViewTab, label: 'Кто менял' }] : []),
+              ...(showBlameTab ? [{ value: 'history' as ViewTab, label: 'История' }] : []),
             ]}
             onChange={setTab}
             isMobile={isMobile}
@@ -1164,7 +1224,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
             : <div style={{ color: C.textMuted, fontSize: 13, padding: 16 }}>Файл не изменён</div>
         )}
 
-        {/* Вкладка «Авторы» — blame по строкам (lazy, кэш до смены файла) */}
+        {/* Вкладка «Кто менял» — blame по строкам (lazy, кэш до смены файла) */}
         {!loading && !loadError && tab === 'blame' && (
           blameLoading ? (
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 10, color: C.textMuted, fontSize: 13 }}>
@@ -1174,7 +1234,64 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
           ) : blame && blame.length > 0 ? (
             <BlameView lines={blame} />
           ) : (
-            <div style={{ color: C.textMuted, fontSize: 13, padding: 16 }}>Blame недоступен</div>
+            <div style={{ color: C.textMuted, fontSize: 13, padding: 16 }}>Авторство недоступно</div>
+          )
+        )}
+
+        {/* Вкладка «История» — версии файла: лента сверху, diff выбранной ниже */}
+        {!loading && !loadError && tab === 'history' && (
+          fileLogLoading ? (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 10, color: C.textMuted, fontSize: 13 }}>
+              <div style={{ width: 20, height: 20, borderRadius: '50%', border: `2.5px solid ${C.border}`, borderTopColor: C.accent, animation: 'spin 0.7s linear infinite' }} />
+              Загружаю историю…
+            </div>
+          ) : !fileLog || fileLog.length === 0 ? (
+            <div style={{ color: C.textMuted, fontSize: 13, padding: 16 }}>У файла пока нет сохранённых версий</div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+              {/* Лента версий */}
+              <div style={{ maxHeight: isMobile ? '38%' : '34%', overflowY: 'auto', borderBottom: `1px solid ${C.border}`, padding: '6px 8px', flexShrink: 0 }}>
+                {fileLog.map(v => {
+                  const active = v.sha === versionSha;
+                  return (
+                    <div
+                      key={v.sha}
+                      onClick={() => setVersionSha(v.sha)}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 8, padding: '5px 8px', cursor: 'pointer',
+                        borderRadius: 8, background: active ? C.bgSelected : 'transparent',
+                      }}
+                    >
+                      <span style={{ fontFamily: FONT.mono, fontSize: 11, color: C.accent, background: C.accentLight, padding: '1px 6px', borderRadius: 4, flexShrink: 0 }}>{v.shortSha}</span>
+                      <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: active ? C.textHeading : C.textPrimary, fontWeight: active ? 600 : 400, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={v.subject}>{v.subject}</span>
+                      <span style={{ fontSize: 11, color: C.textMuted, flexShrink: 0 }}>{v.author} · {relTime(v.date)}</span>
+                      {active && (
+                        <button
+                          onClick={e => { e.stopPropagation(); setRestoreConfirmSha(v.sha); }}
+                          style={{
+                            flexShrink: 0, padding: '3px 9px', borderRadius: 6, cursor: 'pointer',
+                            border: `1px solid ${C.accent}`, background: C.accentLight, color: C.accent,
+                            fontSize: 11.5, fontWeight: 600,
+                          }}
+                        >
+                          Вернуть эту версию
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              {/* Diff выбранной версии */}
+              <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+                {versionDiffLoading ? (
+                  <div style={{ color: C.textMuted, fontSize: 13, padding: 16, fontFamily: FONT.mono }}>Загрузка…</div>
+                ) : versionDiff ? (
+                  <DiffView diff={versionDiff} />
+                ) : (
+                  <div style={{ color: C.textMuted, fontSize: 13, padding: 16 }}>Изменений файла в этой версии не найдено</div>
+                )}
+              </div>
+            </div>
           )
         )}
       </div>
@@ -1193,6 +1310,32 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
         >
           <SquarePen size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} />
         </button>
+      )}
+
+      {/* Подтверждение возврата файла к версии из «Истории» */}
+      {restoreConfirmSha && (
+        <Modal
+          width={MODAL_W.confirm}
+          onClose={() => { if (!restoring) setRestoreConfirmSha(null); }}
+          title="Вернуть эту версию файла"
+          subtitle={<span style={{ fontFamily: FONT.mono, color: C.textPrimary }}>{fileName}</span>}
+          footer={
+            <ModalActions
+              confirmLabel={restoring ? 'Возвращаю…' : 'Вернуть'}
+              confirmDisabled={restoring}
+              onConfirm={handleRestoreVersion}
+              onCancel={() => setRestoreConfirmSha(null)}
+            />
+          }
+        >
+          <div style={{ fontSize: 13, color: C.textPrimary, lineHeight: 1.5 }}>
+            Файл станет таким, каким был в версии {fileLog?.find(v => v.sha === restoreConfirmSha)?.shortSha ?? restoreConfirmSha.slice(0, 7)}.
+            {docMode
+              ? ' Возврат сразу сохранится в историю — его можно отменить тем же способом.'
+              : ' Возврат появится в «Изменениях» — зафиксируйте его коммитом или отмените.'}
+          </div>
+          {gitSt.error && <div style={{ marginTop: 8, fontSize: 12.5, color: C.dangerText }}>{gitSt.error}</div>}
+        </Modal>
       )}
 
       {/* Диалог удаления */}

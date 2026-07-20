@@ -178,6 +178,20 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
     public Task<IActionResult> RevertCommit(string projectId, string sha, CancellationToken ct) =>
         Mutate(projectId, (p) => git.RevertCommitAsync(Owner(p), p.RootPath, sha, ct));
 
+    // История одного файла (--follow) — вкладка «История» в просмотре файла
+    [HttpGet("file-log")]
+    public async Task<IActionResult> FileLog(string projectId, [FromQuery] string path, [FromQuery] int limit = 100, CancellationToken ct = default)
+    {
+        try
+        {
+            var p = GetProject(projectId);
+            return Ok(await git.FileLogAsync(Owner(p), p.RootPath, path, limit, ct));
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (UnauthorizedAccessException) { return BadRequest(new { error = "Недопустимый путь" }); }
+        catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }
+    }
+
     // Документный режим: вернуть файл к версии из коммита. При авто-режиме возврат
     // сразу фиксируется отдельным коммитом (человеку не нужен «индекс»)
     [HttpPost("commits/{sha}/restore-file")]

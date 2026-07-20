@@ -806,6 +806,9 @@ export const api = {
       request<GitStatus>(`/projects/${projectId}/git/commits/${sha}/revert`, { method: 'POST', timeoutMs: 60_000 }),
     blame: (projectId: string, path: string) =>
       request<GitBlameLine[]>(`/projects/${projectId}/git/blame?path=${encodeURIComponent(path)}`),
+    // История одного файла (--follow) — вкладка «История» просмотра файла
+    fileLog: (projectId: string, path: string, limit = 100) =>
+      request<GitLogEntry[]>(`/projects/${projectId}/git/file-log?path=${encodeURIComponent(path)}&limit=${limit}`),
     // Документный режим: вернуть файл к версии из коммита (в авто-режиме сразу коммитится)
     restoreFile: (projectId: string, sha: string, path: string) =>
       request<GitStatus>(`/projects/${projectId}/git/commits/${sha}/restore-file`, {

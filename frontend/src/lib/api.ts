@@ -814,6 +814,9 @@ export const api = {
     // История одного файла (--follow) — вкладка «История» просмотра файла
     fileLog: (projectId: string, path: string, limit = 100) =>
       request<GitLogEntry[]>(`/projects/${projectId}/git/file-log?path=${encodeURIComponent(path)}&limit=${limit}`),
+    // Содержимое файла в конкретной версии («открыть, как было»); null — бинарь/нет файла
+    fileAtCommit: (projectId: string, sha: string, path: string) =>
+      request<{ content: string | null }>(`/projects/${projectId}/git/commits/${sha}/file?path=${encodeURIComponent(path)}`),
     // Документный режим: вернуть файл к версии из коммита (в авто-режиме сразу коммитится)
     restoreFile: (projectId: string, sha: string, path: string) =>
       request<GitStatus>(`/projects/${projectId}/git/commits/${sha}/restore-file`, {

@@ -713,6 +713,25 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       return <PermissionRequestView item={item} online={online}
         onAllow={onAllowPermission} onDeny={onDenyPermission} onAllowAlways={onAllowAlways} />;
 
+    case 'git_turn_commit':
+      // Документный режим: ход сохранён авто-коммитом — компактная плашка со ссылкой
+      return (
+        <div
+          onClick={() => window.dispatchEvent(new CustomEvent('cc-open-commit', { detail: { projectId: item.projectId, sha: item.sha } }))}
+          title="Открыть изменения этого хода"
+          style={{
+            display: 'flex', alignItems: 'center', gap: 8, padding: '6px 11px',
+            borderRadius: 10, cursor: 'pointer', alignSelf: 'flex-start',
+            background: C.successBg, color: C.successText,
+            fontSize: 12.5, fontFamily: FONT.sans,
+          }}
+        >
+          <span style={{ fontWeight: 600 }}>✓ Изменения сохранены в историю</span>
+          <span style={{ fontFamily: FONT.mono, fontSize: 11, opacity: 0.85 }}>{item.sha.slice(0, 7)}</span>
+          <span style={{ textDecoration: 'underline' }}>посмотреть</span>
+        </div>
+      );
+
     case 'file_changed': {
       const fileName = relPath(item.path, project?.rootPath);
       // Заметка (notes/*.md): подпись «Заметка · …», клик ведёт в раздел «Заметки»

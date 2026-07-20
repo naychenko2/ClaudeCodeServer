@@ -52,9 +52,13 @@ public sealed class GitAutoCommitService(
                 return; // ход ничего не поменял
 
             await git.StageAllAsync(ownerId, project.RootPath);
-            var message = $"Авто-сохранение: ход Claude в чате «{session.Name}»\n\n" +
-                          $"{DateTime.Now:dd.MM.yyyy HH:mm}";
-            await git.CommitAsync(ownerId, project.RootPath, message);
+            var subject = $"Авто-сохранение: ход Claude в чате «{session.Name}»";
+            var message = $"{subject}\n\n{DateTime.Now:dd.MM.yyyy HH:mm}";
+            var sha = await git.CommitAsync(ownerId, project.RootPath, message);
+
+            // Плашка «Изменения сохранены» в ленту чата — со ссылкой на просмотр коммита
+            await hub.Clients.Group(session.Id)
+                .SendAsync("message", new GitTurnCommitMessage(session.Id, project.Id, sha, subject));
 
             if (project.GitAutoPush && project.GitRemoteUrl is not null)
             {

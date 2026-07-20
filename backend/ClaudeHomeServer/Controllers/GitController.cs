@@ -223,6 +223,21 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
         catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }
     }
 
+    // Содержимое файла в конкретной версии — «открыть, как было» во вкладке «История»
+    [HttpGet("commits/{sha}/file")]
+    public async Task<IActionResult> FileAtCommit(string projectId, string sha, [FromQuery] string path, CancellationToken ct)
+    {
+        try
+        {
+            var p = GetProject(projectId);
+            var content = await git.FileAtCommitAsync(Owner(p), p.RootPath, sha, path, ct);
+            return Ok(new { content });
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (UnauthorizedAccessException) { return BadRequest(new { error = "Недопустимый путь" }); }
+        catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }
+    }
+
     // Документный режим: вернуть файл к версии из коммита. При авто-режиме возврат
     // сразу фиксируется отдельным коммитом (человеку не нужен «индекс»)
     [HttpPost("commits/{sha}/restore-file")]

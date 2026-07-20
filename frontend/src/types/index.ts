@@ -461,6 +461,7 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'team_memory_changed'; action: 'added' | 'updated' | 'removed'; projectId: string; entryId?: string }
   // Изменение git-статуса проекта (commit/stage/checkout/…) — клиент перезапрашивает статус
   | { type: 'git_status_changed'; projectId: string }
+  | { type: 'git_turn_commit'; sessionId: string; projectId: string; sha: string; subject: string }
   | { type: 'speaker_changed'; personaId: string; label: string }
   // Чат переключён на другой аккаунт/провайдер: auto — тихий фейловер пула подписок
   // (в ленту не попадает); label — разделитель «Продолжено на …» явной миграции
@@ -638,6 +639,7 @@ export type ChatItem =
   // Карточка-предложение: лимит подписки исчерпан — продолжить на стороннем провайдере.
   // resolved — миграция состоялась (карточка гаснет)
   | { kind: 'provider_limit'; resetsAt?: string; providers: ProviderFallbackOption[]; resolved?: boolean }
+  | { kind: 'git_turn_commit'; projectId: string; sha: string; subject: string }
   | { kind: 'error'; text: string; canRetry?: boolean };
 
 // Скиллы и агенты

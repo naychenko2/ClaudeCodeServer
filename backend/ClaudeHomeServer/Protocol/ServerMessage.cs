@@ -179,6 +179,11 @@ public record KnowledgeChangedMessage(string Action, string? DatasetId = null)
 public record GitStatusChangedMessage(string ProjectId)
     : ServerMessage("git_status_changed");
 
+// Авто-коммит хода Claude (документный режим) — в группу сессии: чат показывает плашку
+// «Изменения сохранены» со ссылкой на просмотр коммита.
+public record GitTurnCommitMessage(string SessionId, string ProjectId, string Sha, string Subject)
+    : ServerMessage("git_turn_commit");
+
 // Изменение персон — created/updated/deleted — в группу user_{userId},
 // чтобы все устройства обновили раздел «Персоны».
 public record PersonasChangedMessage(string Action, string? PersonaId = null)

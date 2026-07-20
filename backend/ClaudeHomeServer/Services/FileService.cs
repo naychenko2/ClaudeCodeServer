@@ -5,8 +5,18 @@ public record FileEntry(string Name, string Path, bool IsDirectory, long? Size, 
 // Вид мутации файла через файловый сервис — для подписчиков OnMutated
 public enum FileMutationKind { Write, Create, Delete, Rename }
 
-public class FileService
+public class FileService(
+    ClaudeHomeServer.Services.Git.GitService? git = null,
+    ProjectManager? projects = null)
 {
+    // git/projects опциональны (DI подставляет): git-операции идут через слой Execution
+    // с резолвом владельца по корню — статусы/дифф/револт честны и для container-юзеров.
+    // Без них (юнит-тесты) — прежний прямой запуск git на хосте.
+
+    // Владелец по корню проекта: у соседей по папке владелец один по построению
+    private string? OwnerOf(string rootPath) =>
+        projects?.GetByRootPath(rootPath).FirstOrDefault()?.OwnerId;
+
     // Мутации через файловый API (UI, OnlyOffice, upload; правки Claude идут мимо — их ловят
     // ватчеры). Подписчик — ProjectKnowledgeSyncService (синк базы знаний).
     // Аргументы: root, относительный путь, вид, новый путь (только для Rename).
@@ -281,10 +291,10 @@ public class FileService
             // Путь через SafeJoin — валидация до передачи в git
             SafeJoin(rootPath, relativePath);
             // diff рабочего дерева vs HEAD (покрывает изменённые отслеживаемые файлы)
-            var output = GitRun(rootPath, "diff", "HEAD", "--", relativePath);
+            var output = RunGit(rootPath, "diff", "HEAD", "--", relativePath);
             // Если пусто — файл может быть новым в индексе (git add, но ещё не commit)
             if (string.IsNullOrWhiteSpace(output))
-                output = GitRun(rootPath, "diff", "--cached", "--", relativePath);
+                output = RunGit(rootPath, "diff", "--cached", "--", relativePath);
             return string.IsNullOrWhiteSpace(output) ? null : output;
         }
         catch
@@ -292,6 +302,12 @@ public class FileService
             return null;
         }
     }
+
+    // Запуск git с учётом среды владельца (Execution через GitService); без DI — прежний хостовый
+    private string RunGit(string rootPath, params string[] args) =>
+        git is not null
+            ? git.RunAsync(OwnerOf(rootPath), rootPath, args).GetAwaiter().GetResult().Stdout
+            : GitRun(rootPath, args);
 
     /// <summary>
     /// Последние коммиты репозитория (сырье для продуктовой сводки). Алиасы авторов:
@@ -354,6 +370,14 @@ public class FileService
         try
         {
             SafeJoin(rootPath, relativePath);
+            if (git is not null)
+            {
+                // Через слой Execution (container-юзеры) — DiscardAsync бросает при ошибке
+                git.DiscardAsync(OwnerOf(rootPath), rootPath, relativePath).GetAwaiter().GetResult();
+                // Откат меняет содержимое файла — подписчики (синк знаний) должны узнать
+                NotifyMutated(rootPath, relativePath, FileMutationKind.Write);
+                return true;
+            }
             var psi = new System.Diagnostics.ProcessStartInfo("git")
             {
                 WorkingDirectory = rootPath,
@@ -401,7 +425,7 @@ public class FileService
         return isRepo;
     }
 
-    private static (HashSet<string> modified, HashSet<string> @new) GetGitStatus(string rootPath)
+    private (HashSet<string> modified, HashSet<string> @new) GetGitStatus(string rootPath)
     {
         // Не git-репо — не спавним git (иначе на каждый листинг летит
         // `fatal: not a git repository` в stderr и плодятся процессы)
@@ -420,29 +444,42 @@ public class FileService
         var @new = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         try
         {
-            var psi = new System.Diagnostics.ProcessStartInfo("git", "status --porcelain")
+            if (git is not null)
             {
-                WorkingDirectory = rootPath,
-                RedirectStandardOutput = true,
-                UseShellExecute = false
-            };
-            using var proc = System.Diagnostics.Process.Start(psi)!;
-            string? line;
-            while ((line = proc.StandardOutput.ReadLine()) != null)
-            {
-                if (line.Length < 4) continue;
-                if (line[0] == '!' && line[1] == '!') continue; // ignored
-                var path = line[3..];
-                // для переименований: "R  old -> new" берём новый путь
-                var arrowIdx = path.IndexOf(" -> ", StringComparison.Ordinal);
-                if (arrowIdx >= 0) path = path[(arrowIdx + 4)..];
-                var normalizedPath = path.Trim().Replace('\\', '/');
-                if (line[0] == '?' && line[1] == '?')
-                    @new.Add(normalizedPath);
-                else
-                    modified.Add(normalizedPath);
+                // Через слой Execution: для container-юзеров git выполняется в песочнице
+                // по правильному дереву (владелец резолвится по корню проекта)
+                var st = git.StatusAsync(OwnerOf(rootPath), rootPath).GetAwaiter().GetResult();
+                foreach (var f in st.Staged) modified.Add(f.Path.Replace('\\', '/'));
+                foreach (var f in st.Unstaged) modified.Add(f.Path.Replace('\\', '/'));
+                foreach (var f in st.Untracked) @new.Add(f.Path.Replace('\\', '/'));
             }
-            proc.WaitForExit(3000);
+            else
+            {
+                // Фолбэк без DI (юнит-тесты): прежний прямой запуск git на хосте
+                var psi = new System.Diagnostics.ProcessStartInfo("git", "status --porcelain")
+                {
+                    WorkingDirectory = rootPath,
+                    RedirectStandardOutput = true,
+                    UseShellExecute = false
+                };
+                using var proc = System.Diagnostics.Process.Start(psi)!;
+                string? line;
+                while ((line = proc.StandardOutput.ReadLine()) != null)
+                {
+                    if (line.Length < 4) continue;
+                    if (line[0] == '!' && line[1] == '!') continue; // ignored
+                    var path = line[3..];
+                    // для переименований: "R  old -> new" берём новый путь
+                    var arrowIdx = path.IndexOf(" -> ", StringComparison.Ordinal);
+                    if (arrowIdx >= 0) path = path[(arrowIdx + 4)..];
+                    var normalizedPath = path.Trim().Replace('\\', '/');
+                    if (line[0] == '?' && line[1] == '?')
+                        @new.Add(normalizedPath);
+                    else
+                        modified.Add(normalizedPath);
+                }
+                proc.WaitForExit(3000);
+            }
         }
         catch { }
 

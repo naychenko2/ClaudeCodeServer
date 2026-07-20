@@ -395,6 +395,10 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
         ? prev
         : withItems([...prev.items, { kind: 'provider_limit', resetsAt: msg.resetsAt, providers: msg.providers }]);
 
+    case 'git_turn_commit':
+      // Документный режим: ход зафиксирован авто-коммитом — плашка со ссылкой на просмотр
+      return withItems([...prev.items, { kind: 'git_turn_commit', projectId: msg.projectId, sha: msg.sha, subject: msg.subject }]);
+
     case 'work_loop':
       // Цикл «до готово»: приходит при каждом изменении состояния (вкл/итерация/верификация/стоп)
       return {

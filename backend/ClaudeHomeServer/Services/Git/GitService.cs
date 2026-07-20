@@ -320,6 +320,18 @@ public sealed class GitService(ILauncherFactory launchers)
         finally { sem.Release(); }
     }
 
+    // Содержимое файла в конкретной версии (git show sha:path); null — нет файла/бинарь
+    public async Task<string?> FileAtCommitAsync(string? ownerId, string root, string sha, string relPath, CancellationToken ct = default)
+    {
+        if (!IsGitRepo(root) || !IsValidSha(sha)) return null;
+        ValidateRel(root, relPath);
+        var spec = relPath.Replace('\\', '/');
+        var r = await RunAsync(ownerId, root, ["show", $"{sha}:{spec}"], ct: ct);
+        if (!r.Ok) return null;
+        // Бинарь не показываем как текст
+        return r.Stdout.Contains('\0') ? null : r.Stdout;
+    }
+
     // Вернуть файл к версии из коммита (рабочее дерево; фиксацию решает вызывающий)
     public async Task RestoreFileFromCommitAsync(string? ownerId, string root, string sha, string relPath, CancellationToken ct = default)
     {
@@ -463,7 +475,23 @@ public sealed class GitService(ILauncherFactory launchers)
         if (!isRepo)
             await RunOkAsync(ownerId, root, ["init", "-b", "main"], ct: ct);
         if (!File.Exists(gitignore))
+        {
             await File.WriteAllTextAsync(gitignore, DefaultGitignore, ct);
+            // .gitignore не действует на уже отслеживаемые файлы: если репо существовал и
+            // служебное успело попасть в историю (авто-add -A) — убираем из отслеживания
+            if (isRepo) await UntrackIgnoredAsync(ownerId, root, ct);
+        }
+    }
+
+    // Убрать из индекса отслеживаемые файлы, которые теперь под .gitignore
+    // (сами файлы на диске остаются). Список даёт git ls-files -ci --exclude-standard.
+    public async Task UntrackIgnoredAsync(string? ownerId, string root, CancellationToken ct = default)
+    {
+        var r = await RunAsync(ownerId, root, ["ls-files", "-ci", "--exclude-standard"], ct: ct);
+        var files = r.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(f => f.Trim('\r')).Where(f => f.Length > 0).ToList();
+        foreach (var batch in files.Chunk(50))
+            await RunAsync(ownerId, root, ["rm", "-r", "--cached", "--ignore-unmatch", "--", .. batch], ct: ct);
     }
 
     // Подключить/обновить origin (идемпотентно)

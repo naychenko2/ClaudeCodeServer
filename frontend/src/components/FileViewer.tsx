@@ -327,6 +327,10 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
   const [versionSha, setVersionSha] = useState<string | null>(null);
   const [versionDiff, setVersionDiff] = useState<string | null>(null);
   const [versionDiffLoading, setVersionDiffLoading] = useState(false);
+  // Вид выбранной версии: изменения (diff) либо файл целиком «как был»
+  const [versionView, setVersionView] = useState<'diff' | 'content'>('diff');
+  const [versionContent, setVersionContent] = useState<string | null>(null);
+  const [versionContentLoading, setVersionContentLoading] = useState(false);
   const [restoreConfirmSha, setRestoreConfirmSha] = useState<string | null>(null);
   const [restoring, setRestoring] = useState(false);
   const docMode = gitSt.remote?.autoCommit === true;
@@ -418,17 +422,30 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
       .finally(() => setFileLogLoading(false));
   }, [tab, fileLog, fileLogLoading, project.id, filePath]);
 
-  // Diff выбранной версии файла
+  // Diff выбранной версии файла (смена версии сбрасывает кэш «содержимого»)
   useEffect(() => {
     if (tab !== 'history' || !versionSha) return;
     let cancelled = false;
     setVersionDiffLoading(true);
+    setVersionContent(null);
     api.git.commitFileDiff(project.id, versionSha, filePath)
       .then(r => { if (!cancelled) setVersionDiff(r.diff); })
       .catch(() => { if (!cancelled) setVersionDiff(null); })
       .finally(() => { if (!cancelled) setVersionDiffLoading(false); });
     return () => { cancelled = true; };
   }, [tab, versionSha, project.id, filePath]);
+
+  // Содержимое файла «как был» в версии — лениво при переключении на вид «Содержимое»
+  useEffect(() => {
+    if (tab !== 'history' || versionView !== 'content' || !versionSha || versionContent !== null) return;
+    let cancelled = false;
+    setVersionContentLoading(true);
+    api.git.fileAtCommit(project.id, versionSha, filePath)
+      .then(r => { if (!cancelled) setVersionContent(r.content ?? ''); })
+      .catch(() => { if (!cancelled) setVersionContent(''); })
+      .finally(() => { if (!cancelled) setVersionContentLoading(false); });
+    return () => { cancelled = true; };
+  }, [tab, versionView, versionSha, versionContent, project.id, filePath]);
 
   const handleRestoreVersion = async () => {
     if (!restoreConfirmSha) return;
@@ -1283,14 +1300,43 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
                   );
                 })}
               </div>
-              {/* Diff выбранной версии */}
+              {/* Вид версии: изменения (diff) / файл целиком «как был» */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '6px 10px 0', flexShrink: 0 }}>
+                {(['diff', 'content'] as const).map(v => (
+                  <button
+                    key={v}
+                    onClick={() => setVersionView(v)}
+                    style={{
+                      padding: '3px 10px', borderRadius: 999, cursor: 'pointer', fontSize: 11.5, fontWeight: 600,
+                      border: `1px solid ${versionView === v ? C.accent : C.border}`,
+                      background: versionView === v ? C.accentLight : 'transparent',
+                      color: versionView === v ? C.accent : C.textSecondary, fontFamily: FONT.sans,
+                    }}
+                  >
+                    {v === 'diff' ? 'Изменения' : 'Как было'}
+                  </button>
+                ))}
+              </div>
               <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
-                {versionDiffLoading ? (
-                  <div style={{ color: C.textMuted, fontSize: 13, padding: 16, fontFamily: FONT.mono }}>Загрузка…</div>
-                ) : versionDiff ? (
-                  <DiffView diff={versionDiff} />
+                {versionView === 'diff' ? (
+                  versionDiffLoading ? (
+                    <div style={{ color: C.textMuted, fontSize: 13, padding: 16, fontFamily: FONT.mono }}>Загрузка…</div>
+                  ) : versionDiff ? (
+                    <DiffView diff={versionDiff} />
+                  ) : (
+                    <div style={{ color: C.textMuted, fontSize: 13, padding: 16 }}>Изменений файла в этой версии не найдено</div>
+                  )
                 ) : (
-                  <div style={{ color: C.textMuted, fontSize: 13, padding: 16 }}>Изменений файла в этой версии не найдено</div>
+                  versionContentLoading || versionContent === null ? (
+                    <div style={{ color: C.textMuted, fontSize: 13, padding: 16, fontFamily: FONT.mono }}>Загрузка…</div>
+                  ) : versionContent === '' ? (
+                    <div style={{ color: C.textMuted, fontSize: 13, padding: 16 }}>Содержимое недоступно (бинарный файл?)</div>
+                  ) : (
+                    <pre style={{
+                      margin: 0, padding: '10px 14px', fontFamily: FONT.mono, fontSize: 12.5,
+                      color: C.textPrimary, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', lineHeight: 1.55,
+                    }}>{versionContent}</pre>
+                  )
                 )}
               </div>
             </div>

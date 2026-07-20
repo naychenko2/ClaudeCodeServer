@@ -248,6 +248,17 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
     window.addEventListener('cc-open-project-session', open);
     return () => window.removeEventListener('cc-open-project-session', open);
   }, [project.id]);
+
+  // Плашка «Изменения сохранены» в чате (док-режим) → открыть просмотр коммита хода
+  useEffect(() => {
+    const openCommit = (e: Event) => {
+      const d = (e as CustomEvent<{ projectId?: string; sha?: string }>).detail;
+      if (d?.sha && d.projectId === project.id) handleOpenCommit(d.sha);
+    };
+    window.addEventListener('cc-open-commit', openCommit);
+    return () => window.removeEventListener('cc-open-commit', openCommit);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.id]);
   const [editProjectOpen, setEditProjectOpen] = useState(false);
   const [projectForEdit, setProjectForEdit] = useState(project);
   type ToolsTab = 'terminal' | 'preview';

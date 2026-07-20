@@ -114,10 +114,11 @@ export function installSelectionScopes(): () => void {
     if (isEditable(e.target)) return;
 
     if (key === 'a' || key === 'ф') {
+      // Без документа на странице Ctrl+A не должен выделять весь сайт
+      e.preventDefault();
       const scope = resolveScope(lastPointer);
       const selection = window.getSelection();
       if (!scope || !selection) return;
-      e.preventDefault();
       const range = document.createRange();
       range.selectNodeContents(selectionRoot(scope));
       selection.removeAllRanges();

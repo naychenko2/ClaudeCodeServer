@@ -411,12 +411,13 @@ export function UsageScreen({ onClose }: { onClose: () => void }) {
           ))}
           {typeof falBalance === 'number' && <span> · fal <span style={{ fontFamily: FONT.mono, color: lowBal ? C.dangerText : MONEY, fontWeight: 700 }}>{money(falBalance)}</span></span>}
         </div>
-        <div style={{ display: 'flex', gap: 6, padding: '0 18px', borderBottom: `1px solid ${C.bgInset}`, flexShrink: 0 }}>
+        <div style={{ display: 'flex', gap: 6, padding: '0 18px', borderBottom: `1px solid ${C.bgInset}`, flexShrink: 0, overflowX: 'auto', scrollbarWidth: 'none' }}>
           {tabs.map(([key, lbl]) => (
             <button key={key} type="button" onClick={() => setTab(key)}
               style={{ padding: '7px 14px', border: 'none', background: 'none', cursor: 'pointer', fontFamily: FONT.sans, fontSize: 13,
                 fontWeight: tab === key ? 700 : 500, color: tab === key ? C.textHeading : C.textMuted,
-                borderBottom: `2px solid ${tab === key ? C.accent : 'transparent'}`, marginBottom: -1, display: 'flex', alignItems: 'center', gap: 6 }}>
+                borderBottom: `2px solid ${tab === key ? C.accent : 'transparent'}`, marginBottom: -1, display: 'flex', alignItems: 'center', gap: 6,
+                flexShrink: 0, whiteSpace: 'nowrap' }}>
               {lbl}
               {key === 'fal' && lowBal && <span style={{ width: 6, height: 6, borderRadius: '50%', background: C.danger }} />}
               {key !== 'fal' && key !== 'claude' && !subKeys.includes(key) && provLow(key) && <span style={{ width: 6, height: 6, borderRadius: '50%', background: C.danger }} />}

@@ -277,11 +277,14 @@ function hasProviderCostInfo(stats: CostStats, balance: ProviderBalance | null):
   return stats.results > 0 || !!balance;
 }
 
-// Подсветка по балансу CLI-провайдера: < $1 — предупреждение, < $0.2 — критично
+// Подсветка по балансу CLI-провайдера. Деньги (<$1 warn, <$0.2 danger) и квота
+// подписки в процентах (currency='%', остаток; <10% warn, <3% danger) — разные шкалы.
 function providerBalanceTone(balance: ProviderBalance | null): 'warn' | 'danger' | undefined {
   if (!balance) return undefined;
   const balNum = parseFloat(balance.totalBalance);
   if (isNaN(balNum)) return undefined;
+  if (balance.currency === '%')
+    return balNum < 3 ? 'danger' : balNum < 10 ? 'warn' : undefined;
   return balNum < 0.2 ? 'danger' : balNum < 1 ? 'warn' : undefined;
 }
 
@@ -291,6 +294,7 @@ function ProviderCostPopoverBody({ providerName, stats, balance }: {
 }) {
   const tone = providerBalanceTone(balance);
   const hasCost = stats.cost > 0;
+  const isQuota = balance?.currency === '%';
   return (
     <>
       <div style={badgeTitleStyle}>{hasCost ? 'Стоимость' : 'Расход'} {providerName}</div>
@@ -303,11 +307,13 @@ function ProviderCostPopoverBody({ providerName, stats, balance }: {
       </>}
       {balance && (
         <>
-          <div style={badgeSectionStyle}>Баланс аккаунта</div>
-          <BadgeRow k="Остаток" v={`${balance.totalBalance} ${balance.currency}`} />
+          <div style={badgeSectionStyle}>{isQuota ? 'Квота подписки' : 'Баланс аккаунта'}</div>
+          <BadgeRow k={isQuota ? 'Осталось (5 ч)' : 'Остаток'} v={`${balance.totalBalance} ${balance.currency}`} />
           {tone && (
             <div style={{ fontFamily: FONT.sans, fontSize: 11, color: RATE_COLORS[tone].text, marginTop: 4, lineHeight: 1.4 }}>
-              {tone === 'danger' ? 'Баланс почти исчерпан — пополните аккаунт.' : 'Баланс на исходе.'}
+              {isQuota
+                ? (tone === 'danger' ? 'Квота почти исчерпана — обновится в следующем 5-часовом окне.' : 'Квота на исходе.')
+                : (tone === 'danger' ? 'Баланс почти исчерпан — пополните аккаунт.' : 'Баланс на исходе.')}
             </div>
           )}
         </>
@@ -315,7 +321,9 @@ function ProviderCostPopoverBody({ providerName, stats, balance }: {
       <div style={{ fontFamily: FONT.sans, fontSize: 10.5, color: C.textMuted, marginTop: 8, lineHeight: 1.4 }}>
         {hasCost
           ? `${providerName} работает по балансовой модели — стоимость списывается с аккаунта по факту.`
-          : `${providerName} не отдаёт цены через API — показываем расход в токенах. Квоты смотрите в кабинете провайдера.`}
+          : isQuota
+            ? `${providerName} работает по подписке Coding Plan — показываем остаток квоты 5-часового окна; расход в токенах для справки.`
+            : `${providerName} не отдаёт цены через API — показываем расход в токенах. Квоты смотрите в кабинете провайдера.`}
       </div>
     </>
   );

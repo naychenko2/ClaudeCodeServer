@@ -21,8 +21,12 @@ public class LlmProviderConfig
     // CLAUDE_CODE_SUBAGENT_MODEL); пусто — берётся модель сессии
     public string SmallModel { get; set; } = "";
     // Источник состояния аккаунта: "deepseek" (GET /user/balance) или "moonshot"
-    // (GET /users/me/balance), деньги; пусто — нет
+    // (GET /users/me/balance) — деньги; "glm" (GET BalanceUrl) — квота подписки
+    // Coding Plan в процентах; пусто — нет
     public string Balance { get; set; } = "";
+    // Явный URL эндпоинта баланса/квоты — когда он не выводится из ApiBaseUrl
+    // (у GLM монитор живёт вне /paas/v4). Пусто — URL строит сам обработчик источника
+    public string BalanceUrl { get; set; } = "";
     // Префикс id моделей провайдера — по нему резолвится провайдер для моделей
     // не из конфига (напр. пришедших из GET /models); пусто — используется Key
     public string ModelPrefix { get; set; } = "";

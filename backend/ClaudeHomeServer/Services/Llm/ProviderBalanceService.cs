@@ -10,7 +10,8 @@ public sealed record ProviderBalanceSnapshot(DateTime Timestamp, double Balance,
 
 // Состояние аккаунта CLI-провайдера. Источник задаётся конфигом провайдера (Balance):
 // "deepseek" — GET {ApiBaseUrl}/user/balance; "moonshot" — GET {ApiBaseUrl}/users/me/balance
-// (деньги). Провайдер без источника —
+// (деньги); "glm" — GET {BalanceUrl} (квота подписки Coding Plan, остаток в % 5-часового
+// окна). Провайдер без источника —
 // баланс недоступен (UI скрывает блок). Кэш 5 мин; каждое успешное обновление пишет
 // снапшот в data/provider-usage-{key}.json (история для графика).
 public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderRegistry providers,
@@ -56,6 +57,7 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
             {
                 "deepseek" => await FetchDeepSeekAsync(p, ct),
                 "moonshot" => await FetchMoonshotAsync(p, ct),
+                "glm" => await FetchGlmAsync(p, ct),
                 _ => null,
             };
             if (balance is null) return cache.Cached; // протухший лучше, чем ничего
@@ -126,6 +128,64 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
                     ? bal.GetDouble().ToString(System.Globalization.CultureInfo.InvariantCulture)
                     : bal.GetString() ?? "";
             return new ProviderBalance(available, "USD", total);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[ProviderBalance] Не удалось получить баланс {p.Key}: {ex.Message}");
+            return null;
+        }
+    }
+
+    // Формат GLM (z.ai Coding Plan, недокументированный монитор):
+    // { data: { limits: [ { type: "TOKENS_LIMIT", percentage, nextResetTime }, ... ] } }
+    // TOKENS_LIMIT-элементов два — 5-часовое окно и недельное; берём с ближайшим
+    // nextResetTime (самое короткое = 5-часовое). percentage — израсходовано;
+    // показываем остаток (100 − percentage). Хедер Authorization БЕЗ префикса "Bearer".
+    private async Task<ProviderBalance?> FetchGlmAsync(LlmProviderConfig p, CancellationToken ct)
+    {
+        var url = string.IsNullOrWhiteSpace(p.BalanceUrl)
+            ? $"{p.ApiBaseUrl.TrimEnd('/')}/monitor/usage/quota/limit"
+            : p.BalanceUrl;
+        try
+        {
+            var client = httpFactory.CreateClient("llm-provider");
+            using var req = new HttpRequestMessage(HttpMethod.Get, url);
+            req.Headers.TryAddWithoutValidation("Authorization", p.ApiKey);
+            req.Headers.TryAddWithoutValidation("Accept-Language", "en-US,en");
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(10));
+            using var resp = await client.SendAsync(req, timeoutCts.Token);
+            resp.EnsureSuccessStatusCode();
+
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(timeoutCts.Token));
+            var root = doc.RootElement;
+            var data = root.TryGetProperty("data", out var d) && d.ValueKind == JsonValueKind.Object ? d : root;
+            if (!data.TryGetProperty("limits", out var limits) || limits.ValueKind != JsonValueKind.Array)
+                return null;
+
+            // Среди TOKENS_LIMIT выбираем окно с ближайшим сбросом (5-часовое)
+            double bestUsed = double.NaN;
+            long bestReset = long.MaxValue;
+            foreach (var item in limits.EnumerateArray())
+            {
+                if (!item.TryGetProperty("type", out var t)
+                    || !string.Equals(t.GetString(), "TOKENS_LIMIT", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (!item.TryGetProperty("percentage", out var pct)) continue;
+                var used = pct.ValueKind == JsonValueKind.Number ? pct.GetDouble()
+                    : double.TryParse(pct.GetString(), System.Globalization.NumberStyles.Float,
+                        System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : double.NaN;
+                if (double.IsNaN(used)) continue;
+                var reset = item.TryGetProperty("nextResetTime", out var nr) && nr.ValueKind == JsonValueKind.Number
+                    ? nr.GetInt64() : long.MaxValue;
+                if (reset < bestReset) { bestReset = reset; bestUsed = used; }
+            }
+            if (double.IsNaN(bestUsed)) return null; // окна TOKENS_LIMIT нет — квоту показать нечем
+
+            var remaining = Math.Clamp(100 - bestUsed, 0, 100);
+            return new ProviderBalance(true, "%",
+                remaining.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture));
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)

@@ -321,18 +321,21 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
     byBlock.forEach((anns, el) => {
       const hasOpen = anns.some(a => a.status === 'open');
       const prev = {
-        background: el.style.background, borderLeft: el.style.borderLeft,
-        paddingLeft: el.style.paddingLeft, borderRadius: el.style.borderRadius,
-        position: el.style.position, marginLeft: el.style.marginLeft,
+        background: el.style.background, borderRadius: el.style.borderRadius,
+        position: el.style.position,
       };
+      // Геометрию блока НЕ трогаем (у списков паддинг держит маркеры) — только фон;
+      // акцентная полоса — отдельный absolute-элемент левее текста
       el.style.background = C.accentLight;
-      el.style.borderLeft = `3px solid ${C.accent}`;
-      // Полоса выносится ЛЕВЕЕ текста (отрицательный margin компенсируется паддингом):
-      // текст остаётся на месте, акцентная линия не наезжает на него
-      el.style.marginLeft = '-13px';
-      el.style.paddingLeft = '10px';
-      el.style.borderRadius = '0 8px 8px 0';
+      el.style.borderRadius = '6px';
       el.style.position = 'relative';
+
+      const bar = document.createElement('span');
+      Object.assign(bar.style, {
+        position: 'absolute', left: '-14px', top: '2px', bottom: '2px', width: '3px',
+        borderRadius: '3px', background: C.accent, pointerEvents: 'none',
+      } satisfies Partial<CSSStyleDeclaration>);
+      el.appendChild(bar);
 
       // Балун: иконка-статус (пузырёк — есть открытые, галочка — решены) + счётчик
       const mark = document.createElement('button');
@@ -360,12 +363,10 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
 
       cleanups.push(() => {
         mark.remove();
+        bar.remove();
         el.style.background = prev.background;
-        el.style.borderLeft = prev.borderLeft;
-        el.style.paddingLeft = prev.paddingLeft;
         el.style.borderRadius = prev.borderRadius;
         el.style.position = prev.position;
-        el.style.marginLeft = prev.marginLeft;
       });
     });
     return () => cleanups.forEach(f => f());

@@ -13,6 +13,7 @@ import { AiLauncher } from './components/ai/AiLauncher'
 import { OPEN_GLOBAL_SEARCH_EVENT } from './lib/ai/actions'
 import { PRODUCT_HISTORY_EVENT, productHistorySeenKey } from './components/HubHeader'
 import { initConnectivity } from './lib/offline'
+import { installSelectionScopes } from './lib/selectionScope'
 import { C } from './lib/design'
 import { useOnline } from './hooks/useOnline'
 import { runOfflineSnapshot, syncProjectFiles, drainOfflineQueues } from './lib/sync'
@@ -213,6 +214,9 @@ export default function App() {
   projectIdRef.current = project?.id
 
   useEffect(() => { initConnectivity() }, [])
+
+  // Ctrl+A/Ctrl+C по «активному документу» (файл, заметка, последний ответ в чате)
+  useEffect(() => installSelectionScopes(), [])
 
   // При наличии сохранённых credentials — немедленно зондируем сервер, чтобы _online
   // выставился правильно ещё до первого рендера страниц (navigator.onLine ≠ «сервер доступен»)

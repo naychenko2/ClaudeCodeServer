@@ -265,7 +265,8 @@ function TextMessageView({ text, online, onRetry, streaming }: { text: string; o
   };
   return (
     <div className="cc-msg" style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 6, maxWidth: '100%', overflow: 'hidden' }}>
-      <div style={{ fontSize: 14, color: C.textHeading, wordBreak: 'break-word' }}>
+      {/* data-selection-doc: Ctrl+A в чате выделяет последний ответ ассистента (см. selectionScope) */}
+      <div data-selection-doc="" style={{ fontSize: 14, color: C.textHeading, wordBreak: 'break-word' }}>
         <MarkdownContent text={text} />
         {/* Мигающая каретка стриминга (B2) */}
         {streaming && <span style={{ display: 'inline-block', width: 7, height: 15, marginTop: 3, borderRadius: 1, background: C.accent, animation: 'blink 1s step-start infinite', verticalAlign: 'text-bottom' }} />}

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { MessageCircle, X } from 'lucide-react';
+import { MessageCircle, X, Copy, Check } from 'lucide-react';
 import type { NoteDetail } from '../../types';
 import { api } from '../../lib/api';
 import { bumpNotes, useNotesVersion } from '../../lib/notes';
@@ -20,6 +20,7 @@ import { useOnline } from '../../hooks/useOnline';
 import { OfflineError } from '../../lib/offline';
 import { getNoteForView, saveNoteOffline, deleteNoteOffline, offlineResolve } from '../../lib/notesOffline';
 import { showToast } from '../../lib/toast';
+import { registerCopyDoc, copyMarkdown, copyRenderedHtml } from '../../lib/selectionScope';
 import {
   SourceBadge, usePanelWidth,
   IconTrash, IconLink, IconSparkle, IconFolder, IconFolderMove,
@@ -56,6 +57,32 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
   const [saving, setSaving] = useState(false);
   const editingRef = useRef(false);
   editingRef.current = editing;
+  // Фидбек кнопки «Скопировать» + корень отрендеренного markdown (для копии с форматированием)
+  const [copied, setCopied] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  // Ctrl+C без выделения: отдаём исходник заметки (см. selectionScope)
+  const noteRef = useRef<NoteDetail | null>(null);
+  noteRef.current = note;
+  // Регистрируемся после появления заметки: до неё root ещё не отрендерен (ранние return)
+  const hasNote = note != null;
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    return registerCopyDoc(el, () => noteRef.current?.content ?? null);
+  }, [hasNote]);
+
+  // Клик — скопировать исходный markdown заметки; Shift+клик — с форматированием
+  const copyNote = async (e: React.MouseEvent) => {
+    if (!noteRef.current) return;
+    const rendered = e.shiftKey
+      ? rootRef.current?.querySelector<HTMLElement>('[data-selection-scope]')
+      : null;
+    const ok = rendered
+      ? await copyRenderedHtml(rendered)
+      : await copyMarkdown(noteRef.current.content);
+    if (ok) { setCopied(true); setTimeout(() => setCopied(false), 1500); }
+  };
 
   useEffect(() => {
     let alive = true;
@@ -260,7 +287,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
     return <div style={{ padding: 40, textAlign: 'center', color: C.textMuted, fontFamily: FONT.sans }}>Заметка не найдена</div>;
 
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+    <div ref={rootRef} style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       {/* Тулбар заметки — единый стиль тулбаров приложения (как FileViewer) */}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 10, flex: 'none',
@@ -317,6 +344,9 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
           ) : (
             <>
               {/* AI-действия (связи, теги, конспект дня, «спросить Claude») — только через AI-палитру (⌘/Ctrl+K) */}
+              <IconButton title={copied ? 'Скопировано' : 'Скопировать Markdown (Shift — с форматированием)'} onClick={copyNote}>
+                {copied ? <Check size={ICON_SIZE.sm} color={C.success} strokeWidth={2.5} /> : <Copy size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
+              </IconButton>
               <IconButton title={online ? 'Переместить…' : 'Перенос недоступен офлайн'} onClick={openMove} disabled={!online}><IconFolderMove /></IconButton>
               <IconButton title="Удалить" tone="danger" onClick={del}><IconTrash /></IconButton>
               <button onClick={startEdit} style={{ ...tbBtnPrimary, marginLeft: 6 }}>Править</button>
@@ -420,8 +450,10 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
             <WaitingIndicator hint="Собираю конспект дня из заметок и активности" />
           </div>
         )}
-        <MarkdownViewer content={note.content} existingTitles={existingTitles} onWikilink={onWikilink}
-          resolveNote={resolveNote} embedSource={note.source} />
+        <div data-selection-scope="doc" data-selection-priority="2">
+          <MarkdownViewer content={note.content} existingTitles={existingTitles} onWikilink={onWikilink}
+            resolveNote={resolveNote} embedSource={note.source} />
+        </div>
 
         {/* Мобильный/планшет: задачи из заметки + связи снизу под контентом (сайдбару нет места) */}
         {(isMobile || connectionsBelow) && (

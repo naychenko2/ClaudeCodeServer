@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, X, File, Trash2, Maximize2, RotateCcw, Save, Download, Music, Menu, SquarePen, Eye } from 'lucide-react';
+import { AlertTriangle, X, File, Trash2, Maximize2, RotateCcw, Save, Download, Music, Menu, SquarePen, Eye, Copy, Check } from 'lucide-react';
 import SyntaxHighlighter from 'react-syntax-highlighter/dist/esm/prism-light';
 import { oneLight, oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import tsx from 'react-syntax-highlighter/dist/esm/languages/prism/tsx';
@@ -44,6 +44,7 @@ import { C, FONT, MODAL_W, SHADOW } from '../lib/design';
 import { Toolbar, ToolbarIconButton, PillSwitch, tbBtnPrimary, tbBtnGhost } from './Toolbar';
 import { BackButton, Modal, ModalActions, Button, ConfirmDialog, useIsMobileModal } from './ui';
 import { DiffView } from './DiffView';
+import { registerCopyDoc, copyMarkdown, copyRenderedHtml } from '../lib/selectionScope';
 import { useThemeMode, getEffectiveTheme } from '../lib/themeMode';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 
@@ -339,6 +340,10 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
   const [imgDims, setImgDims] = useState<{ w: number; h: number } | null>(null);
   const drawioRef = useRef<DrawioHandle>(null);
   const marks = useSyncMarks(project.id);
+  // Фидбек кнопки «Скопировать» в тулбаре
+  const [copied, setCopied] = useState(false);
+  // Контент-зона просмотра: корень «форматированного» копирования + источник Ctrl+C без выделения
+  const contentAreaRef = useRef<HTMLDivElement>(null);
 
   const content = fileContent?.content ?? '';
   const hasUnsavedChanges = editing && editContent !== content;
@@ -547,6 +552,28 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
 
   const fileName = filePath.split('/').pop() ?? filePath;
   const isMarkdown = /\.(md|mdx)$/i.test(fileName);
+  // Текстовый файл, содержимое которого можно скопировать целиком
+  const isCopyableText = !!fileContent && !fileContent.isBinary && !fileContent.isImage
+    && !fileContent.isDocument && !fileContent.isVideo && !fileContent.isAudio;
+
+  // Ctrl+C без выделения: отдаём исходник открытого текстового файла (см. selectionScope)
+  const copySourceRef = useRef<() => string | null>(() => null);
+  copySourceRef.current = () => (isCopyableText ? (fileContent?.content ?? null) : null);
+  useEffect(() => {
+    const el = contentAreaRef.current;
+    if (!el) return;
+    return registerCopyDoc(el, () => copySourceRef.current());
+  }, []);
+
+  // Клик — скопировать исходник (raw markdown/код); Shift+клик по .md — с форматированием
+  const handleCopyContent = async (e: React.MouseEvent) => {
+    const raw = editing ? editContent : content;
+    const rendered = e.shiftKey && isMarkdown && !editing
+      ? contentAreaRef.current?.querySelector<HTMLElement>('[data-selection-scope]')
+      : null;
+    const ok = rendered ? await copyRenderedHtml(rendered) : await copyMarkdown(raw);
+    if (ok) { setCopied(true); setTimeout(() => setCopied(false), 1500); }
+  };
   const isMermaid = /\.mmd$/i.test(fileName);
   const isHtml = /\.html?$/i.test(fileName);
   const isDrawio = /\.(drawio|dio)$/i.test(fileName);
@@ -773,6 +800,19 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
 
         {/* Кнопки действий */}
         <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexShrink: 0 }}>
+          {/* Скопировать содержимое текстового файла (для .md — Shift = с форматированием) */}
+          {tab === 'file' && isCopyableText && !isDrawio && !(isHtml && htmlTab === 'preview') && (
+            <ToolbarIconButton
+              isMobile={isMobile}
+              onClick={handleCopyContent}
+              title={copied ? 'Скопировано' : isMarkdown ? 'Скопировать Markdown (Shift — с форматированием)' : 'Скопировать содержимое'}
+              color={copied ? C.success : undefined}
+            >
+              {copied
+                ? <Check size={ICON_SIZE.sm} strokeWidth={2.5} />
+                : <Copy size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
+            </ToolbarIconButton>
+          )}
           {online && !editing && !fileContent?.isBinary && (
             <>
               {diff && (
@@ -893,7 +933,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
       )}
 
       {/* Содержимое */}
-      <div style={{ flex: 1, overflow: (isOfficeFile || isCodeEditing || isPdfViewing || isHtmlPreviewing || isDrawioViewing) ? 'hidden' : 'auto', padding: (isOfficeFile || isCodeEditing || isPdfViewing || isHtmlPreviewing || isDrawioViewing) ? 0 : 16, display: 'flex', flexDirection: 'column' }}>
+      <div ref={contentAreaRef} style={{ flex: 1, overflow: (isOfficeFile || isCodeEditing || isPdfViewing || isHtmlPreviewing || isDrawioViewing) ? 'hidden' : 'auto', padding: (isOfficeFile || isCodeEditing || isPdfViewing || isHtmlPreviewing || isDrawioViewing) ? 0 : 16, display: 'flex', flexDirection: 'column' }}>
         {loading && (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 14 }}>
             <div style={{ width: 36, height: 36, borderRadius: '50%', border: `3px solid ${C.border}`, borderTopColor: C.accent, animation: 'spin 0.8s linear infinite' }} />
@@ -1074,7 +1114,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
                   : isMarkdown && isNotesFile
                   ? (
                     <div style={{ display: 'flex', alignItems: 'flex-start', gap: 18 }}>
-                      <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ flex: 1, minWidth: 0 }} data-selection-scope="doc" data-selection-priority="2">
                         <MarkdownViewer content={content}
                           existingTitles={noteTitles} onWikilink={openNoteByTitle}
                           resolveNote={resolveNoteByName} embedSource={project.id} />
@@ -1099,8 +1139,8 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
                     </div>
                   )
                   : isMarkdown
-                  ? <MarkdownViewer content={content} />
-                  : <SyntaxHighlighter
+                  ? <div data-selection-scope="doc" data-selection-priority="2"><MarkdownViewer content={content} /></div>
+                  : <div data-selection-scope="doc" data-selection-priority="2"><SyntaxHighlighter
                       language={getLanguage(filePath)}
                       style={codeTheme}
                       customStyle={{ margin: 0, padding: 0, background: 'transparent', fontSize: 13, lineHeight: '1.6', fontFamily: FONT.mono }}
@@ -1110,17 +1150,17 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
                       wrapLongLines
                     >
                       {content}
-                    </SyntaxHighlighter>
+                    </SyntaxHighlighter></div>
             )}
           </>
         )}
 
         {!loading && !loadError && tab === 'diff' && (
           diff
-            ? <DiffView
+            ? <div data-selection-scope="doc" data-selection-priority="2"><DiffView
                 diff={diff}
                 staging={gitStagePath ? { busy: stageBusy, onStageHunk: handleStageHunk, onStageLines: handleStageLines } : undefined}
-              />
+              /></div>
             : <div style={{ color: C.textMuted, fontSize: 13, padding: 16 }}>Файл не изменён</div>
         )}
 

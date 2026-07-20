@@ -24,6 +24,8 @@ import { bumpNotes, getNotesSnapshot } from '../lib/notes';
 import { IconNotes } from '../features/notes/shared';
 import { NewNoteDialog } from '../features/notes/NewNoteDialog';
 import { onFilesChanged } from '../lib/signalr';
+import { showToast } from '../lib/toast';
+import { copyMarkdown } from '../lib/selectionScope';
 import { useGitState, ensureGit, gitInit } from '../lib/git';
 import { GitChangesPanel, GitHistoryPanel } from './GitPanel';
 import { useOnline } from '../hooks/useOnline';
@@ -343,6 +345,9 @@ function BookMinusIcon() {
 // Иконки для контекстного меню — 16×16, currentColor, Lucide-style
 function MI_Attach() {
   return <Paperclip size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />;
+}
+function MI_Copy() {
+  return <Copy size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />;
 }
 function MI_BookPlus() {
   return (
@@ -823,6 +828,17 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
     e.stopPropagation();
     setContextMenu({ x: e.clientX, y: e.clientY, entry });
   }, []);
+
+  // «Копировать Markdown» из контекстного меню — содержимое файла в буфер без открытия
+  const copyMdFromTree = async (path: string) => {
+    try {
+      const r = await api.files.getContent(project.id, path);
+      if (r.isBinary || r.content == null) { showToast('Не скопировано', 'Файл не текстовый'); return; }
+      if (await copyMarkdown(r.content)) showToast('Скопировано', path.split('/').pop() ?? path);
+    } catch {
+      showToast('Не скопировано', 'Не удалось прочитать файл');
+    }
+  };
 
   // === Delete handler ===
   const handleDelete = useCallback(async (entry: FileEntry) => {
@@ -1831,6 +1847,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
                 </div>
                 {entry.isDirectory && inNotesVault(entry.path) && menuItem(<MI_NotePlus />, 'Новая заметка', () => { setContextMenu(null); setNoteDialog({ folder: noteFolderOf(entry.path) }); })}
                 {!entry.isDirectory && onAttachToChat && menuItem(<MI_Attach />, 'Прикрепить к чату', () => { setContextMenu(null); onAttachToChat(entry.path); })}
+                {!entry.isDirectory && /\.(md|mdx)$/i.test(entry.name) && menuItem(<MI_Copy />, 'Копировать Markdown', () => { setContextMenu(null); void copyMdFromTree(entry.path); })}
                 {!entry.isDirectory && !inNotesVault(entry.path) && onAddToKnowledge && !indexedFileNames?.has(entry.path) && isKnowledgeIndexable(entry.name) && menuItem(<MI_BookPlus />, 'Добавить в знания', () => { setContextMenu(null); onAddToKnowledge(entry.path); })}
                 {!entry.isDirectory && onRemoveFromKnowledge && indexedFileNames?.has(entry.path) && menuItem(<MI_BookMinus />, 'Удалить из знаний', () => { setContextMenu(null); onRemoveFromKnowledge(entry.path); })}
                 {entry.isDirectory && !inNotesVault(entry.path) && onAddFolderToKnowledge && !indexingFolders?.has(entry.path) && menuItem(<MI_BookPlus />, 'Добавить папку в знания', () => { setContextMenu(null); onAddFolderToKnowledge(entry.path); })}
@@ -1867,6 +1884,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
           >
             {entry.isDirectory && inNotesVault(entry.path) && menuItem(<MI_NotePlus />, 'Новая заметка', () => { setContextMenu(null); setNoteDialog({ folder: noteFolderOf(entry.path) }); })}
             {!entry.isDirectory && onAttachToChat && menuItem(<MI_Attach />, 'Прикрепить к чату', () => { setContextMenu(null); onAttachToChat(entry.path); })}
+            {!entry.isDirectory && /\.(md|mdx)$/i.test(entry.name) && menuItem(<MI_Copy />, 'Копировать Markdown', () => { setContextMenu(null); void copyMdFromTree(entry.path); })}
             {!entry.isDirectory && !inNotesVault(entry.path) && onAddToKnowledge && !indexedFileNames?.has(entry.path) && isKnowledgeIndexable(entry.name) && menuItem(<MI_BookPlus />, 'Добавить в знания', () => { setContextMenu(null); onAddToKnowledge(entry.path); })}
             {!entry.isDirectory && onRemoveFromKnowledge && indexedFileNames?.has(entry.path) && menuItem(<MI_BookMinus />, 'Удалить из знаний', () => { setContextMenu(null); onRemoveFromKnowledge(entry.path); })}
             {entry.isDirectory && !inNotesVault(entry.path) && onAddFolderToKnowledge && !indexingFolders?.has(entry.path) && menuItem(<MI_BookPlus />, 'Добавить папку в знания', () => { setContextMenu(null); onAddFolderToKnowledge(entry.path); })}

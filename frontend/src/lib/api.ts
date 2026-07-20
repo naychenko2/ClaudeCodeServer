@@ -120,8 +120,9 @@ export const api = {
       }),
     removeTeamMemory: (id: string, entryId: string) =>
       request<void>(`/projects/${encodeURIComponent(id)}/team-memory/${encodeURIComponent(entryId)}`, { method: 'DELETE' }),
-    create: (name: string, rootPath: string | null, createDirectory = false, groupId?: string | null) =>
-      request<Project>('/projects', { method: 'POST', body: JSON.stringify({ name, rootPath, createDirectory, groupId }) }),
+    create: (name: string, rootPath: string | null, createDirectory = false, groupId?: string | null,
+      git?: { enableGit?: boolean; gitAutoCommit?: boolean; gitAutoPush?: boolean }) =>
+      request<Project>('/projects', { method: 'POST', body: JSON.stringify({ name, rootPath, createDirectory, groupId, ...git }) }),
     update: (id: string, data: { name?: string; rootPath?: string; systemPrompt?: string; showHiddenFiles?: boolean; toolsEnabled?: boolean; permissionRules?: PermissionRule[]; groupId?: string | null }) =>
       request<Project>(`/projects/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
     delete: (id: string) => request<void>(`/projects/${id}`, { method: 'DELETE' }),

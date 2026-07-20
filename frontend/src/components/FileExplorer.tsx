@@ -416,6 +416,9 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
 
   const [sortMode, setSortMode] = useState<FileSortMode>(loadSortMode);
   const [showSortMenu, setShowSortMenu] = useState(false);
+  // Активированный поиск занимает весь сайдбар (сортировка и пилюля схлопываются);
+  // остаётся развёрнутым, пока в поле есть текст (searchExpanded считается ниже по search)
+  const [searchFocused, setSearchFocused] = useState(false);
   const changeSortMode = (m: FileSortMode) => {
     setSortMode(m);
     localStorage.setItem(SORT_MODE_KEY, m);
@@ -482,6 +485,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   }, [changedSets]);
 
   const [search, setSearch] = useState(() => initial?.search ?? '');
+  const searchExpanded = searchFocused || search.trim().length > 0;
   const [searchResults, setSearchResults] = useState<FileEntry[] | null>(() => initial?.searchResults ?? null);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [hoveredPath, setHoveredPath] = useState<string | null>(null);
@@ -1349,14 +1353,25 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
               placeholder="Поиск…"
               value={search}
               onChange={e => handleSearch(e.target.value)}
+              onFocus={() => setSearchFocused(true)}
+              onBlur={() => setSearchFocused(false)}
               style={{ flex: 1, border: 'none', background: 'none', fontSize: 13, fontFamily: FONT.mono, color: C.textHeading, outline: 'none' }}
             />
             {search && (
               <button onClick={() => handleSearch('')} style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.textMuted, padding: 0, display: 'flex', alignItems: 'center' }}><X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /></button>
             )}
           </div>
+          {/* Активный поиск разворачивается на весь сайдбар: сортировка и пилюля схлопываются */}
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
+            maxWidth: searchExpanded ? 0 : 220,
+            opacity: searchExpanded ? 0 : 1,
+            overflow: 'hidden',
+            transition: 'max-width 0.18s ease, opacity 0.15s ease',
+            pointerEvents: searchExpanded ? 'none' : 'auto',
+          }}>
           {/* Сортировка дерева + фильтр «Только изменённые» */}
-          <div style={{ flexShrink: 0 }}>
+          <span style={{ position: 'relative', flexShrink: 0, display: 'inline-flex' }}>
             <IconButton
               size="md"
               active={showSortMenu}
@@ -1376,7 +1391,10 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
             {onlyChanged && isRepo && (
               <span style={{ position: 'absolute', top: 3, right: 3, width: 6, height: 6, borderRadius: '50%', background: C.accent, pointerEvents: 'none' }} />
             )}
-            {showSortMenu && (
+          </span>
+          {pill}
+          </div>
+          {showSortMenu && (
               // align="left": кнопка у левого края сайдбара — правое выравнивание уводило меню за экран
               <Menu onClose={() => setShowSortMenu(false)} align="left" top={34} minWidth={200}>
                 <MenuItem
@@ -1415,8 +1433,6 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
                 )}
               </Menu>
             )}
-          </div>
-          {pill}
         </div>
 
         {online && (

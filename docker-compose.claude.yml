@@ -123,6 +123,9 @@ services:
       FORGEJO__security__INSTALL_LOCK: "true"
       FORGEJO__service__DISABLE_REGISTRATION: "true"
       FORGEJO__server__ROOT_URL: http://localhost:3000/
+      # Русский интерфейс по умолчанию (первый язык списка)
+      FORGEJO__i18n__LANGS: ru-RU,en-US
+      FORGEJO__i18n__NAMES: Русский,English
     ports:
       - "3000:3000"   # web + git по HTTP (push/pull бэкенда идёт сюда)
       - "2222:22"     # ssh (на будущее; MVP ходит по HTTP с токеном)

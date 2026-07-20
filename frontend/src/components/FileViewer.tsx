@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, X, File, Trash2, Maximize2, RotateCcw, Save, Download, Music, Menu, SquarePen, Eye, Copy, Check } from 'lucide-react';
+import { AlertTriangle, X, File, Trash2, Maximize2, RotateCcw, Save, Download, Music, Menu, SquarePen, Eye, Copy, Check, FileDiff, History, Users } from 'lucide-react';
 import SyntaxHighlighter from 'react-syntax-highlighter/dist/esm/prism-light';
 import { oneLight, oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import tsx from 'react-syntax-highlighter/dist/esm/languages/prism/tsx';
@@ -735,19 +735,21 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
           </span>
         )}
 
-        {/* Pill-переключатель Файл / Diff / Кто менял / История — скрыт для Office-файлов;
-            Diff — когда файл изменён, «Кто менял» (blame) и «История» — когда проект в git-репо */}
+        {/* Pill-переключатель Файл / Diff / История / Кто менял — скрыт для Office-файлов;
+            Diff — когда файл изменён, «История» и «Кто менял» — когда проект в git-репо.
+            На мобиле — компакт (только иконки) */}
         {!isOfficeFile && (!!diff || showBlameTab) && (
           <PillSwitch<ViewTab>
             value={tab}
             options={[
-              { value: 'file', label: 'Файл' },
-              ...(diff ? [{ value: 'diff' as ViewTab, label: 'Diff' }] : []),
-              ...(showBlameTab ? [{ value: 'blame' as ViewTab, label: 'Кто менял' }] : []),
-              ...(showBlameTab ? [{ value: 'history' as ViewTab, label: 'История' }] : []),
+              { value: 'file', label: 'Файл', icon: <File size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> },
+              ...(diff ? [{ value: 'diff' as ViewTab, label: 'Diff', icon: <FileDiff size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> }] : []),
+              ...(showBlameTab ? [{ value: 'history' as ViewTab, label: 'История', icon: <History size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> }] : []),
+              ...(showBlameTab ? [{ value: 'blame' as ViewTab, label: 'Кто менял', icon: <Users size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> }] : []),
             ]}
             onChange={setTab}
             isMobile={isMobile}
+            compact={isMobile}
           />
         )}
 

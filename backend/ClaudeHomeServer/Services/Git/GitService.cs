@@ -432,10 +432,38 @@ public sealed class GitService(ILauncherFactory launchers)
 
     // ---------- Инициализация и remote ----------
 
+    // Технический мусор, который не должен попадать в историю (особенно в документных
+    // проектах с авто-`git add -A`): служебные папки ассистента (.claude, .omc — состояние
+    // oh-my-claudecode), локи офисных редакторов, ОС-мусор, node_modules
+    private const string DefaultGitignore = """
+        # Служебное ассистента
+        .claude/
+        .omc/
+        .playwright-mcp/
+        # Временные файлы офисных редакторов
+        ~$*
+        *.tmp
+        .~lock.*
+        # Мусор ОС
+        Thumbs.db
+        desktop.ini
+        .DS_Store
+        # Зависимости/сборка (если появится код)
+        node_modules/
+        __pycache__/
+
+        """;
+
     public async Task InitAsync(string? ownerId, string root, CancellationToken ct = default)
     {
-        if (IsGitRepo(root)) return; // идемпотентно: папка уже репозиторий
-        await RunOkAsync(ownerId, root, ["init", "-b", "main"], ct: ct);
+        // Дефолтный .gitignore кладём и в уже существующий репозиторий, если файла нет:
+        // авто-режим иначе утащит в историю .claude/.omc и офисные локи
+        var gitignore = Path.Combine(root, ".gitignore");
+        var isRepo = IsGitRepo(root);
+        if (!isRepo)
+            await RunOkAsync(ownerId, root, ["init", "-b", "main"], ct: ct);
+        if (!File.Exists(gitignore))
+            await File.WriteAllTextAsync(gitignore, DefaultGitignore, ct);
     }
 
     // Подключить/обновить origin (идемпотентно)

@@ -9,7 +9,8 @@ public sealed record ProviderBalance(bool Available, string Currency, string Tot
 public sealed record ProviderBalanceSnapshot(DateTime Timestamp, double Balance, string Currency);
 
 // Состояние аккаунта CLI-провайдера. Источник задаётся конфигом провайдера (Balance):
-// "deepseek" — GET {ApiBaseUrl}/user/balance (деньги). Провайдер без источника —
+// "deepseek" — GET {ApiBaseUrl}/user/balance; "moonshot" — GET {ApiBaseUrl}/users/me/balance
+// (деньги). Провайдер без источника —
 // баланс недоступен (UI скрывает блок). Кэш 5 мин; каждое успешное обновление пишет
 // снапшот в data/provider-usage-{key}.json (история для графика).
 public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderRegistry providers,
@@ -54,6 +55,7 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
             var balance = p.Balance switch
             {
                 "deepseek" => await FetchDeepSeekAsync(p, ct),
+                "moonshot" => await FetchMoonshotAsync(p, ct),
                 _ => null,
             };
             if (balance is null) return cache.Cached; // протухший лучше, чем ничего
@@ -91,6 +93,39 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
                 total = first.TryGetProperty("total_balance", out var t) ? t.GetString() ?? "" : "";
             }
             return new ProviderBalance(available, currency, total);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[ProviderBalance] Не удалось получить баланс {p.Key}: {ex.Message}");
+            return null;
+        }
+    }
+
+    // Формат Moonshot (Kimi): { status, data: { available_balance, voucher_balance, cash_balance } }
+    // available_balance — остаток в USD (наличные + ваучеры). GET {ApiBaseUrl}/users/me/balance
+    private async Task<ProviderBalance?> FetchMoonshotAsync(LlmProviderConfig p, CancellationToken ct)
+    {
+        try
+        {
+            var client = httpFactory.CreateClient("llm-provider");
+            using var req = new HttpRequestMessage(HttpMethod.Get, $"{p.ApiBaseUrl.TrimEnd('/')}/users/me/balance");
+            req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", p.ApiKey);
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(10));
+            using var resp = await client.SendAsync(req, timeoutCts.Token);
+            resp.EnsureSuccessStatusCode();
+
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(timeoutCts.Token));
+            var root = doc.RootElement;
+            var available = root.TryGetProperty("status", out var st) && st.ValueKind == JsonValueKind.True;
+            string total = "";
+            if (root.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Object
+                && data.TryGetProperty("available_balance", out var bal))
+                total = bal.ValueKind == JsonValueKind.Number
+                    ? bal.GetDouble().ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    : bal.GetString() ?? "";
+            return new ProviderBalance(available, "USD", total);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)

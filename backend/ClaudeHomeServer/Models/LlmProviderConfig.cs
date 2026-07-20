@@ -20,7 +20,8 @@ public class LlmProviderConfig
     // Модель для haiku-слота и субагентов (ANTHROPIC_DEFAULT_HAIKU_MODEL,
     // CLAUDE_CODE_SUBAGENT_MODEL); пусто — берётся модель сессии
     public string SmallModel { get; set; } = "";
-    // Источник состояния аккаунта: "deepseek" (GET /user/balance, деньги); пусто — нет
+    // Источник состояния аккаунта: "deepseek" (GET /user/balance) или "moonshot"
+    // (GET /users/me/balance), деньги; пусто — нет
     public string Balance { get; set; } = "";
     // Префикс id моделей провайдера — по нему резолвится провайдер для моделей
     // не из конфига (напр. пришедших из GET /models); пусто — используется Key

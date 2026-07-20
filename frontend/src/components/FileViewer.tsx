@@ -1004,7 +1004,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
                     </div>
                   )
                   : isMarkdown
-                  ? <DocCommentedMarkdown project={project} filePath={filePath} content={content} isMobile={isMobile} />
+                  ? <DocCommentedMarkdown scope={project.id} docPath={filePath} content={content} isMobile={isMobile} />
                   : <SyntaxHighlighter
                       language={getLanguage(filePath)}
                       style={codeTheme}

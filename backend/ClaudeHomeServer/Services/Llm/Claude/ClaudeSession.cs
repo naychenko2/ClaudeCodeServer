@@ -1105,6 +1105,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     "Когда пользователь просит записать/законспектировать/связать мысль или найти по заметкам — используй эти инструменты. " +
                     "Комментарии к markdown-документам: notes_annotate (оставить комментарий к дословному фрагменту документа — " +
                     "anchorText копируй точно из файла), notes_annotations (комментарии документа с их статусами), " +
+                    "notes_reply/notes_thread (ответы в треде комментария), " +
                     "notes_set_status (resolved = обработан), notes_search со status:open — найти необработанные.";
                 basePrompt = string.IsNullOrWhiteSpace(basePrompt)
                     ? notesHint

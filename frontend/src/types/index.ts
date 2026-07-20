@@ -677,6 +677,17 @@ export interface NoteAnnotationInfo {
   blockId?: string | null;
   anchorQuote?: string | null;
   anchorHeading?: string | null;
+  isReply?: boolean;       // ответ в треде (annotates указывает на заметку-комментарий)
+  docMissing?: boolean;    // документ-цель удалён (ghost-узел в дереве)
+}
+
+// Ответ в треде комментария
+export interface NoteReply {
+  noteId: string;
+  title: string;
+  excerpt: string;
+  createdAt: string;
+  tags: string[];
 }
 
 // Комментарий документа с резолвом привязки — для подсветки при чтении
@@ -693,6 +704,7 @@ export interface DocAnnotation {
   excerpt: string;
   tags: string[];
   updatedAt: string;
+  replies: number;         // число ответов в треде
 }
 
 // Источник заметки: "personal" (личный vault) или id проекта

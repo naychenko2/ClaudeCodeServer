@@ -7,13 +7,17 @@ namespace ClaudeHomeServer.Models;
 
 // Привязка заметки-комментария к MD-документу (frontmatter annotates/anchor_*/status).
 // DocScope: "personal" (личный vault) | projectId (путь от корня ПРОЕКТА, любые .md).
+// IsReply/DocMissing — derived (вычисляются при скане, не персистятся): ответ в треде
+// (annotates указывает на другую заметку-комментарий) и «документ удалён».
 public record NoteAnnotationInfo(
     string DocScope,
     string DocPath,       // forward slashes
     string Status,        // open | resolved
     string? BlockId,      // ^id из annotates — кэш резолва, истина — каскад
     string? AnchorQuote,  // дословная цитата с нормализованным whitespace
-    string? AnchorHeading); // путь заголовков "H1 › H2" на момент создания
+    string? AnchorHeading, // путь заголовков "H1 › H2" на момент создания
+    bool IsReply = false,
+    bool DocMissing = false);
 
 // Компактная запись для списка заметок.
 public record NoteSummary(
@@ -149,6 +153,17 @@ public record DocAnnotationDto(
     string Quote,
     string Excerpt,         // первая строка комментария (тело без цитаты)
     IReadOnlyList<string> Tags,
-    string UpdatedAt);
+    string UpdatedAt,
+    int Replies = 0);       // число ответов в треде
 
 public record SetNoteStatusRequest(string Status);   // open | resolved
+
+// Ответ в треде комментария (реплика = заметка с annotates на корневую)
+public record ReplyRequest(string Comment, IReadOnlyList<string>? Tags = null);
+
+public record NoteReplyDto(
+    string NoteId,
+    string Title,
+    string Excerpt,
+    string CreatedAt,
+    IReadOnlyList<string> Tags);

@@ -142,6 +142,120 @@ public sealed partial class NotesService
     // Кавычки внутри значений frontmatter ломают наш простой парсер — заменяем
     private static string Escape(string s) => s.Replace('"', '\'').Replace("\n", " ");
 
+    // Derived-поля комментариев при построении модели (не персистятся):
+    // IsReply — annotates указывает на другую заметку-комментарий (тред);
+    // DocMissing — документ-цель удалён (для ghost-узла в дереве).
+    private void ComputeAnnotationDerived(string userId, List<RawNote> notes)
+    {
+        var annPaths = new Dictionary<(string Scope, string Path), RawNote>();
+        foreach (var n in notes)
+            if (n.Annotation is not null)
+                annPaths[(n.SourceKey, n.RelPath.ToLowerInvariant())] = n;
+        if (annPaths.Count == 0) return;
+
+        var docExists = new Dictionary<(string, string), bool>();
+        foreach (var n in notes)
+        {
+            var a = n.Annotation;
+            if (a is null) continue;
+            var key = (a.DocScope, a.DocPath.ToLowerInvariant());
+            var isReply = annPaths.ContainsKey(key);
+            if (!docExists.TryGetValue(key, out var exists))
+            {
+                try { exists = File.Exists(ResolveDoc(userId, a.DocScope, a.DocPath).FullPath); }
+                catch { exists = false; }
+                docExists[key] = exists;
+            }
+            if (isReply || !exists)
+                n.Annotation = a with { IsReply = isReply, DocMissing = !exists };
+        }
+    }
+
+    // --- Треды: ответы на комментарий (реплика = заметка с annotates на корневую) ---
+
+    public NoteDetail Reply(string userId, string rootId, ReplyRequest req)
+    {
+        var model = GetModel(userId);
+        if (!model.ById.TryGetValue(rootId, out var root))
+            throw new KeyNotFoundException("Комментарий не найден");
+        if (root.Annotation is null)
+            throw new InvalidOperationException("Отвечать можно только на комментарий к документу");
+        if (root.Annotation.IsReply)
+            throw new InvalidOperationException("Ответить можно только на корневой комментарий (тред плоский)");
+        var comment = req.Comment?.Trim() ?? "";
+        if (comment.Length == 0) throw new ArgumentException("Пустой ответ");
+
+        var norm = NormalizeWs(comment);
+        var title = norm.Length >= 3
+            ? (norm.Length > 50 ? norm[..50].TrimEnd() + "…" : norm)
+            : $"Ответ — {root.Title}";
+        var annotates = $"{root.SourceKey}/{root.RelPath}";
+
+        var sb = new StringBuilder();
+        sb.Append("---\n");
+        sb.Append($"title: {Escape(title)}\n");
+        sb.Append($"annotates: \"{Escape(annotates)}\"\n");
+        var clean = (req.Tags ?? []).Select(t => t.Trim().TrimStart('#')).Where(t => t.Length > 0).Distinct().ToList();
+        if (clean.Count > 0) sb.Append($"tags: [{string.Join(", ", clean)}]\n");
+        sb.Append("---\n\n").Append(comment).Append('\n');
+
+        return Create(userId, new CreateNoteRequest(title, sb.ToString(), root.SourceKey, Folder: AnnotationsFolder));
+    }
+
+    public IReadOnlyList<NoteReplyDto> GetReplies(string userId, string rootId)
+    {
+        var model = GetModel(userId);
+        if (!model.ById.TryGetValue(rootId, out var root))
+            throw new KeyNotFoundException("Комментарий не найден");
+        return model.Notes
+            .Where(r => r.Annotation is { IsReply: true } a &&
+                        a.DocScope.Equals(root.SourceKey, StringComparison.Ordinal) &&
+                        a.DocPath.Equals(root.RelPath, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(r => r.CreatedAt, StringComparer.Ordinal)
+            .Select(r => new NoteReplyDto(r.Id, r.Title, ExtractExcerpt(r.Content), r.CreatedAt, r.Tags))
+            .ToList();
+    }
+
+    // --- Миграция привязки при переносе/переименовании документа ---
+
+    // Документный путь заметки: для проектов annotates ссылается на путь ОТ КОРНЯ
+    // проекта (заметки живут в notes/), для личного vault — путь внутри vault.
+    internal static string DocPathOf(string sourceKey, string relPath) =>
+        sourceKey == PersonalKey ? relPath : "notes/" + relPath;
+
+    // Переписывает annotates всех комментариев/ответов со старого пути документа на
+    // новый (точечно или по префиксу — для переноса папки); ^id сохраняется.
+    public int RewriteAnnotationTargets(string userId, string oldScope, string oldPath,
+        string newScope, string newPath, bool prefix = false)
+    {
+        var oldRel = NormalizeRel(oldPath);
+        var newRel = NormalizeRel(newPath);
+        if (oldScope == newScope && oldRel.Equals(newRel, StringComparison.OrdinalIgnoreCase)) return 0;
+        var changed = 0;
+        foreach (var n in GetModel(userId).Notes)
+        {
+            var a = n.Annotation;
+            if (a is null || !a.DocScope.Equals(oldScope, StringComparison.Ordinal)) continue;
+            string? updatedPath = null;
+            if (a.DocPath.Equals(oldRel, StringComparison.OrdinalIgnoreCase)) updatedPath = newRel;
+            else if (prefix && a.DocPath.StartsWith(oldRel + "/", StringComparison.OrdinalIgnoreCase))
+                updatedPath = newRel + a.DocPath[oldRel.Length..];
+            if (updatedPath is null) continue;
+
+            var annotates = $"{newScope}/{updatedPath}" + (a.BlockId is not null ? $"#^{a.BlockId}" : "");
+            try
+            {
+                var content = File.ReadAllText(n.FullPath, Encoding.UTF8);
+                File.WriteAllText(n.FullPath, SetFrontmatterField(content, "annotates", $"\"{Escape(annotates)}\""),
+                    new UTF8Encoding(false));
+                changed++;
+            }
+            catch (Exception ex) { _logger.LogWarning(ex, "Перепись annotates в {File}", n.FullPath); }
+        }
+        if (changed > 0) Invalidate(userId);
+        return changed;
+    }
+
     // --- Комментарии документа с резолвом привязки ---
 
     public IReadOnlyList<DocAnnotationDto> GetDocAnnotations(string userId, string scope, string relPath)
@@ -155,16 +269,27 @@ public sealed partial class NotesService
         }
         catch (ArgumentException) { /* не-markdown — комментариев нет */ }
 
+        var model = GetModel(userId);
+        // Ответы тредов: считаем по цели (пути корневой заметки-комментария)
+        var replyCounts = new Dictionary<(string, string), int>();
+        foreach (var r in model.Notes)
+            if (r.Annotation is { IsReply: true } ra)
+            {
+                var k = (ra.DocScope, ra.DocPath.ToLowerInvariant());
+                replyCounts[k] = replyCounts.GetValueOrDefault(k) + 1;
+            }
+
         var result = new List<DocAnnotationDto>();
-        foreach (var n in GetModel(userId).Notes)
+        foreach (var n in model.Notes)
         {
             var a = n.Annotation;
-            if (a is null || !a.DocScope.Equals(scope, StringComparison.Ordinal) ||
+            if (a is null || a.IsReply || !a.DocScope.Equals(scope, StringComparison.Ordinal) ||
                 !a.DocPath.Equals(rel, StringComparison.OrdinalIgnoreCase)) continue;
             var (state, s, e) = ResolveAnchor(doc, a);
+            var replies = replyCounts.GetValueOrDefault((n.SourceKey, n.RelPath.ToLowerInvariant()));
             result.Add(new DocAnnotationDto(
                 n.Id, n.Title, a.Status, state, s, e, a.BlockId, a.AnchorHeading,
-                a.AnchorQuote ?? "", ExtractExcerpt(n.Content), n.Tags, n.UpdatedAt));
+                a.AnchorQuote ?? "", ExtractExcerpt(n.Content), n.Tags, n.UpdatedAt, replies));
         }
         return result.OrderBy(x => x.Start < 0 ? int.MaxValue : x.Start).ThenBy(x => x.Title).ToList();
     }

@@ -291,6 +291,7 @@ public sealed partial class NotesService
         // Истёкшие заметки исключаем из модели — они не видны в списке/графе,
         // а ссылки на них становятся «призрачными» (unresolved).
         notes.RemoveAll(n => IsExpired(n, now));
+        ComputeAnnotationDerived(userId, notes);
         var byId = notes.ToDictionary(n => n.Id);
 
         // Индекс имя -> заметки (для резолва [[...]])
@@ -484,10 +485,11 @@ public sealed partial class NotesService
             foreach (var s in sources)
                 q = q.Where(n => n.SourceKey.Equals(s, StringComparison.OrdinalIgnoreCase) ||
                                  n.SourceLabel.Equals(s, StringComparison.OrdinalIgnoreCase));
+            // Ответы в тредах статусом не фильтруются: статус живёт у корневого комментария
             foreach (var st in statuses)
                 q = st.Equals("orphaned", StringComparison.OrdinalIgnoreCase)
-                    ? q.Where(n => n.Annotation is not null && IsAnnotationOrphan(userId, n))
-                    : q.Where(n => n.Annotation is not null &&
+                    ? q.Where(n => n.Annotation is { IsReply: false } && IsAnnotationOrphan(userId, n))
+                    : q.Where(n => n.Annotation is { IsReply: false } &&
                                    n.Annotation.Status.Equals(st, StringComparison.OrdinalIgnoreCase));
             if (text.Length > 0)
                 q = q.Where(n =>
@@ -719,6 +721,9 @@ public sealed partial class NotesService
         }
 
         Invalidate(userId);
+        // Комментарии, привязанные к перенесённой заметке-документу, переезжают вместе с ней
+        RewriteAnnotationTargets(userId, sourceKey, DocPathOf(sourceKey, NormalizeRel(relPath)),
+            newSource, DocPathOf(newSource, newRel));
         return GetDetail(userId, EncodeId(newSource, newRel));
     }
 
@@ -752,6 +757,9 @@ public sealed partial class NotesService
         Directory.CreateDirectory(Path.GetDirectoryName(newFull)!);
         Directory.Move(oldFull, newFull);
         Invalidate(userId);
+        // Привязки комментариев к документам внутри перенесённой папки — по префиксу
+        RewriteAnnotationTargets(userId, sourceKey, DocPathOf(sourceKey, oldFolder),
+            sourceKey, DocPathOf(sourceKey, newFolder), prefix: true);
 
         return before.Select(rel =>
         {
@@ -846,6 +854,9 @@ public sealed partial class NotesService
                     File.Move(full, newFull);
                     full = newFull;
                     effectiveId = EncodeId(sourceKey, newRel);
+                    // Комментарии на переименованную заметку-документ следуют за ней
+                    RewriteAnnotationTargets(userId, sourceKey, DocPathOf(sourceKey, NormalizeRel(relPath)),
+                        sourceKey, DocPathOf(sourceKey, newRel));
                 }
             }
         }

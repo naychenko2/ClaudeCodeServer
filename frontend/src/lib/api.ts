@@ -1,4 +1,4 @@
-import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry } from '../types';
+import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry } from '../types';
 import { request } from './offline';
 
 export type { WorkflowAgentInfo, WorkflowAgentBlock };
@@ -254,6 +254,11 @@ export const api = {
       request<NoteDetail>(`/notes/${encodeURIComponent(id)}/status`, {
         method: 'POST', body: JSON.stringify({ status }),
       }),
+    reply: (id: string, comment: string, tags?: string[]) =>
+      request<NoteDetail>(`/notes/${encodeURIComponent(id)}/reply`, {
+        method: 'POST', body: JSON.stringify({ comment, tags }),
+      }),
+    replies: (id: string) => request<NoteReply[]>(`/notes/${encodeURIComponent(id)}/replies`),
     semantic: (q: string, topK = 8) =>
       request<{ available: boolean; results: NoteSemanticHit[] }>(
         `/notes/semantic?q=${encodeURIComponent(q)}&topK=${topK}`),

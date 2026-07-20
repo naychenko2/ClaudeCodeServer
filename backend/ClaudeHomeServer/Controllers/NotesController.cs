@@ -123,6 +123,31 @@ public class NotesController : ControllerBase
         catch (UnauthorizedAccessException) { return Forbid(); }
     }
 
+    // Ответ в треде комментария (реплика = заметка с annotates на корневую; тред плоский)
+    [HttpPost("{id}/reply")]
+    public async Task<ActionResult<NoteDetail>> Reply(string id, [FromBody] ReplyRequest req)
+    {
+        try
+        {
+            var note = _notes.Reply(UserId, id, req);
+            await Broadcast("created", note.Id);
+            return Ok(note);
+        }
+        catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
+        catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (UnauthorizedAccessException) { return Forbid(); }
+    }
+
+    // Ответы треда комментария (по времени создания)
+    [HttpGet("{id}/replies")]
+    public ActionResult<IReadOnlyList<NoteReplyDto>> Replies(string id)
+    {
+        try { return Ok(_notes.GetReplies(UserId, id)); }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (UnauthorizedAccessException) { return Forbid(); }
+    }
+
     // Смена статуса комментария (open | resolved)
     [HttpPost("{id}/status")]
     public async Task<ActionResult<NoteDetail>> SetStatus(string id, [FromBody] SetNoteStatusRequest req)

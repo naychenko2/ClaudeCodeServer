@@ -281,6 +281,113 @@ public class NoteAnnotationTests : IDisposable
         graph.Edges.Should().ContainSingle();   // Архитектура → ghost:Песочница
     }
 
+    // ─── Треды: ответы (этап 3) ──────────────────────────────────────────────
+
+    private NoteDetail CreateRootComment()
+    {
+        WriteDoc();
+        return _sut.Annotate(User, new AnnotateRequest(
+            new AnnotateDocRef("personal", "Архитектура.md"),
+            Sel(Doc, "Все шесть точек запуска идут через единый интерфейс IProcessLauncher."),
+            Comment: "Корневой комментарий"));
+    }
+
+    [Fact]
+    public void Reply_СоздаётсяИВозвращаетсяВТреде()
+    {
+        var root = CreateRootComment();
+        var reply = _sut.Reply(User, root.Id, new ReplyRequest("Согласен, дополню список", ["обсудить"]));
+
+        reply.Annotation.Should().NotBeNull();
+        reply.Annotation!.IsReply.Should().BeTrue("annotates указывает на заметку-комментарий");
+        reply.Annotation.DocPath.Should().Be(root.Path);
+
+        var replies = _sut.GetReplies(User, root.Id);
+        replies.Should().ContainSingle(r => r.NoteId == reply.Id);
+        replies[0].Excerpt.Should().Be("Согласен, дополню список");
+    }
+
+    [Fact]
+    public void Reply_НеПопадаетВАннотацииДокументаНоСчитается()
+    {
+        var root = CreateRootComment();
+        _sut.Reply(User, root.Id, new ReplyRequest("ответ раз"));
+        _sut.Reply(User, root.Id, new ReplyRequest("ответ два"));
+
+        var anns = _sut.GetDocAnnotations(User, "personal", "Архитектура.md");
+        anns.Should().ContainSingle("ответы не аннотируют документ");
+        anns[0].Replies.Should().Be(2);
+    }
+
+    [Fact]
+    public void Reply_НаОтвет_Ошибка()
+    {
+        var root = CreateRootComment();
+        var reply = _sut.Reply(User, root.Id, new ReplyRequest("ответ"));
+        var act = () => _sut.Reply(User, reply.Id, new ReplyRequest("ответ на ответ"));
+        act.Should().Throw<InvalidOperationException>();
+    }
+
+    [Fact]
+    public void Reply_НеФильтруетсяСтатусами()
+    {
+        var root = CreateRootComment();
+        _sut.Reply(User, root.Id, new ReplyRequest("ответ"));
+        // status:open — только корневой комментарий, ответ статусом не считается
+        _sut.GetSummaries(User, null, "status:open").Should().ContainSingle(n => n.Id == root.Id);
+    }
+
+    // ─── Миграция привязки при переносе (этап 4) ─────────────────────────────
+
+    [Fact]
+    public void Move_ЗаметкиДокумента_ПереписываетAnnotates()
+    {
+        // Документ — заметка личного vault; комментируем, переносим документ в папку
+        var root = CreateRootComment();
+        var docId = _sut.GetSummaries(User, null, null).Single(n => n.Title == "Архитектура").Id;
+        _sut.Move(User, docId, "Архив");
+
+        var anns = _sut.GetDocAnnotations(User, "personal", "Архив/Архитектура.md");
+        anns.Should().ContainSingle("привязка переехала вместе с документом");
+        anns[0].State.Should().Be("exact");
+        anns[0].NoteId.Should().Be(root.Id);
+        // По старому пути — пусто
+        _sut.GetDocAnnotations(User, "personal", "Архитектура.md").Should().BeEmpty();
+    }
+
+    [Fact]
+    public void RewriteAnnotationTargets_ТочечноИПоПрефиксу()
+    {
+        var root = CreateRootComment();
+        // Точечный перенос (эмуляция rename документа через files API)
+        _sut.RewriteAnnotationTargets(User, "personal", "Архитектура.md", "personal", "docs/Архитектура.md")
+            .Should().Be(1);
+        _sut.GetDetail(User, root.Id)!.Annotation!.DocPath.Should().Be("docs/Архитектура.md");
+        // Префиксный перенос (эмуляция rename папки)
+        _sut.RewriteAnnotationTargets(User, "personal", "docs", "personal", "архив", prefix: true)
+            .Should().Be(1);
+        _sut.GetDetail(User, root.Id)!.Annotation!.DocPath.Should().Be("архив/Архитектура.md");
+    }
+
+    [Fact]
+    public void DocMissing_ВзводитсяПослеУдаленияДокумента()
+    {
+        var docPath = WriteDoc();
+        _sut.Annotate(User, new AnnotateRequest(
+            new AnnotateDocRef("personal", "Архитектура.md"),
+            Sel(Doc, "Убийство docker-клиента на хосте не трогает процесс внутри контейнера."), "к"));
+
+        _sut.GetSummaries(User, null, null)
+            .Single(n => n.Annotation != null).Annotation!.DocMissing.Should().BeFalse();
+
+        File.Delete(docPath);
+        // Мутация через сервис — сбрасывает 2-секундный кэш модели (внешнее удаление
+        // файла кэш не инвалидирует, тест не должен ждать TTL)
+        _sut.Create(User, new CreateNoteRequest("Инвалидация кэша", "x"));
+        _sut.GetSummaries(User, null, null)
+            .Single(n => n.Annotation != null).Annotation!.DocMissing.Should().BeTrue();
+    }
+
     // ─── Резолвер как чистая функция ─────────────────────────────────────────
 
     [Fact]

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Check, FileText, MessageCircle, Undo2, X } from 'lucide-react';
-import type { NoteDetail } from '../../types';
+import type { NoteDetail, NoteReply } from '../../types';
 import { api } from '../../lib/api';
 import { bumpNotes, useNotesVersion } from '../../lib/notes';
 import { C, FONT, R, TB } from '../../lib/design';
@@ -16,6 +16,7 @@ import { useNotes } from '../../lib/notes';
 import type { NoteSource } from '../../types';
 import { NoteConnections } from './NoteConnections';
 import { NoteTasksSection } from './NoteTasksSection';
+import { DocCommentedMarkdown } from './DocComments';
 import { useOnline } from '../../hooks/useOnline';
 import { OfflineError } from '../../lib/offline';
 import { getNoteForView, saveNoteOffline, deleteNoteOffline, offlineResolve } from '../../lib/notesOffline';
@@ -105,6 +106,47 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
   const dailyDay = note && isDaily ? note.path.replace(/^Journal\//, '').replace(/\.md$/, '') : null;
   const dailyKey = `notes:daily-summary:${dailyDay ?? '_none'}`;
   const dailyJob = useAiJob<NoteDetail>(dailyKey);
+
+  // Комментарий к документу (флаг doc-annotations): ответы треда + переходы
+  const ann = note?.annotation ?? null;
+  const [annReplies, setAnnReplies] = useState<NoteReply[] | null>(null);
+  const [annReplyDraft, setAnnReplyDraft] = useState('');
+  const [annReplySending, setAnnReplySending] = useState(false);
+  useEffect(() => {
+    if (!note || !ann || ann.isReply) { setAnnReplies(null); return; }
+    let alive = true;
+    api.notes.replies(note.id).then(r => { if (alive) setAnnReplies(r); }).catch(() => {});
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [note?.id, version]);
+  const sendAnnReply = async () => {
+    if (!note || !annReplyDraft.trim()) return;
+    setAnnReplySending(true);
+    try {
+      await api.notes.reply(note.id, annReplyDraft.trim());
+      setAnnReplyDraft('');
+      setAnnReplies(await api.notes.replies(note.id));
+      bumpNotes();
+    } catch { /* realtime подтянет */ }
+    finally { setAnnReplySending(false); }
+  };
+  // «Перейти к месту»: проектный документ → файл проекта; личный vault → заметка.
+  // Для ответа в треде та же кнопка ведёт к корневому комментарию (docPath = его файл).
+  const findDocNote = () =>
+    ann && allNotes.find(n => n.source === ann.docScope &&
+      (n.path.toLowerCase() === ann.docPath.toLowerCase() ||
+       ('notes/' + n.path).toLowerCase() === ann.docPath.toLowerCase()));
+  const gotoAnnTarget = () => {
+    if (!ann) return;
+    if (ann.docScope === 'personal' || ann.isReply) {
+      const target = findDocNote();
+      if (target) onSelectNote(target.id);
+      return;
+    }
+    window.dispatchEvent(new CustomEvent('cc-open-url', {
+      detail: { url: `#/project/${ann.docScope}/file/${encodeURIComponent(ann.docPath)}` },
+    }));
+  };
 
   const suggestLinks = () => {
     if (!note) return;
@@ -421,7 +463,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
           </div>
         )}
         {/* Карточка привязки комментария к документу (флаг doc-annotations) */}
-        {note.annotation && (
+        {ann && (
           <div style={{
             marginBottom: 14, padding: '11px 14px', background: C.bgWhite,
             border: `1px solid ${C.border}`, borderRadius: R.lg,
@@ -429,47 +471,111 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 12.5, color: C.textSecondary }}>
               <MessageCircle size={14} strokeWidth={2} style={{ color: C.accent, flexShrink: 0 }} />
-              Комментирует
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontFamily: FONT.mono, fontSize: 12, color: C.textPrimary }}>
-                <FileText size={12} strokeWidth={2} />{note.annotation.docPath}
-              </span>
-              {note.annotation.anchorHeading && (
-                <span style={{ color: C.textMuted }}>› {note.annotation.anchorHeading}</span>
+              {ann.isReply ? 'Отвечает на комментарий' : 'Комментирует'}
+              {!ann.isReply && (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontFamily: FONT.mono, fontSize: 12, color: ann.docMissing ? C.textMuted : C.textPrimary, textDecoration: ann.docMissing ? 'line-through' : undefined }}>
+                  <FileText size={12} strokeWidth={2} />{ann.docPath}
+                </span>
               )}
-              <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 600, borderRadius: 11, padding: '1px 8px',
-                color: note.annotation.status === 'open' ? C.warningText : C.successText,
-                background: note.annotation.status === 'open' ? C.warningBg : C.successBg }}>
-                {note.annotation.status === 'open'
-                  ? <><MessageCircle size={11} strokeWidth={2.5} />открыт</>
-                  : <><Check size={11} strokeWidth={2.5} />решён</>}
-              </span>
+              {ann.docMissing && !ann.isReply && (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 600, borderRadius: 11, padding: '1px 8px', color: C.textMuted, background: C.bgInset }}>
+                  <X size={11} strokeWidth={2.5} />документ удалён
+                </span>
+              )}
+              {ann.anchorHeading && !ann.isReply && (
+                <span style={{ color: C.textMuted }}>› {ann.anchorHeading}</span>
+              )}
+              {!ann.isReply && (
+                <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 600, borderRadius: 11, padding: '1px 8px',
+                  color: ann.status === 'open' ? C.warningText : C.successText,
+                  background: ann.status === 'open' ? C.warningBg : C.successBg }}>
+                  {ann.status === 'open'
+                    ? <><MessageCircle size={11} strokeWidth={2.5} />открыт</>
+                    : <><Check size={11} strokeWidth={2.5} />решён</>}
+                </span>
+              )}
             </div>
-            {note.annotation.anchorQuote && (
+            {ann.anchorQuote && !ann.isReply && (
               <div style={{
                 fontSize: 12, color: C.textSecondary, fontStyle: 'italic',
                 borderLeft: `2px solid ${C.accent}`, paddingLeft: 9,
-              }}>«{note.annotation.anchorQuote}»</div>
+              }}>«{ann.anchorQuote}»</div>
             )}
-            <div>
-              <button
-                onClick={() => {
-                  const next = note.annotation!.status === 'open' ? 'resolved' : 'open';
-                  void api.notes.setStatus(note.id, next).then(() => bumpNotes()).catch(() => {});
-                }}
-                style={{
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              {!ann.isReply && (
+                <button
+                  onClick={() => {
+                    const next = ann.status === 'open' ? 'resolved' : 'open';
+                    void api.notes.setStatus(note.id, next).then(() => bumpNotes()).catch(() => {});
+                  }}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5,
+                    color: C.textSecondary, background: C.bgWhite, border: `1px solid ${C.border}`,
+                    borderRadius: R.sm, padding: '3px 10px', cursor: 'pointer', fontFamily: FONT.sans,
+                  }}>
+                  {ann.status === 'open'
+                    ? <><Check size={12} strokeWidth={2.5} /> Решён</>
+                    : <><Undo2 size={12} strokeWidth={2.5} /> Снова открыть</>}
+                </button>
+              )}
+              {(!ann.docMissing || ann.isReply) && (
+                <button onClick={gotoAnnTarget} style={{
                   display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5,
                   color: C.textSecondary, background: C.bgWhite, border: `1px solid ${C.border}`,
                   borderRadius: R.sm, padding: '3px 10px', cursor: 'pointer', fontFamily: FONT.sans,
                 }}>
-                {note.annotation.status === 'open'
-                  ? <><Check size={12} strokeWidth={2.5} /> Решён</>
-                  : <><Undo2 size={12} strokeWidth={2.5} /> Снова открыть</>}
-              </button>
+                  {ann.isReply ? 'К корневому комментарию →' : 'Перейти к месту →'}
+                </button>
+              )}
             </div>
+            {/* Тред: ответы + поле «Ответить» (только у корневого комментария) */}
+            {!ann.isReply && annReplies !== null && (
+              <div style={{ borderTop: `1px solid ${C.borderLight}`, paddingTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {annReplies.map(r => (
+                  <div key={r.noteId} style={{ fontSize: 12.5, color: C.textSecondary, display: 'flex', gap: 6, alignItems: 'baseline' }}>
+                    <span style={{ flex: 1 }}>{r.excerpt || r.title}</span>
+                    <button onClick={() => onSelectNote(r.noteId)} title="Открыть ответ" style={{
+                      border: 'none', background: 'none', cursor: 'pointer', color: C.textMuted, fontSize: 10.5, padding: 0, fontFamily: FONT.sans,
+                    }}>{new Date(r.createdAt).toLocaleDateString('ru')}</button>
+                  </div>
+                ))}
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <input
+                    value={annReplyDraft}
+                    onChange={e => setAnnReplyDraft(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') void sendAnnReply(); }}
+                    placeholder="Ответить…"
+                    style={{
+                      flex: 1, minWidth: 0, border: `1px solid ${C.border}`, borderRadius: 8,
+                      background: C.bgMain, color: C.textHeading, font: `12.5px ${FONT.sans}`, padding: '5px 9px',
+                    }}
+                  />
+                  <button onClick={() => void sendAnnReply()} disabled={annReplySending} style={{
+                    fontSize: 11.5, color: C.textSecondary, background: C.bgWhite,
+                    border: `1px solid ${C.border}`, borderRadius: R.sm, padding: '3px 10px',
+                    cursor: 'pointer', fontFamily: FONT.sans, opacity: annReplySending ? 0.6 : 1,
+                  }}>Отправить</button>
+                </div>
+              </div>
+            )}
           </div>
         )}
-        <MarkdownViewer content={note.content} existingTitles={existingTitles} onWikilink={onWikilink}
-          resolveNote={resolveNote} embedSource={note.source} />
+        {ann ? (
+          <MarkdownViewer content={note.content} existingTitles={existingTitles} onWikilink={onWikilink}
+            resolveNote={resolveNote} embedSource={note.source} />
+        ) : (
+          // Обычная заметка — тоже документ: выделение → комментарий, панель снизу
+          // (правая колонка занята связями). Заметки-комментарии не аннотируются
+          // выделением — тред ведётся ответами.
+          <DocCommentedMarkdown
+            scope={note.source}
+            docPath={note.source === 'personal' ? note.path : 'notes/' + note.path}
+            content={note.content}
+            isMobile={isMobile}
+            panelBelow
+            viewer={{ onWikilink, existingTitles, resolveNote, embedSource: note.source }}
+          />
+        )}
 
         {/* Мобильный/планшет: задачи из заметки + связи снизу под контентом (сайдбару нет места) */}
         {(isMobile || connectionsBelow) && (

@@ -72,7 +72,10 @@ function preprocessNotes(md: string, depth: number): { text: string; map: MapSeg
     out += replaced;
     last = m.index + full.length;
   }
-  if (last < md.length) map.push({ pre: out.length, raw: last, preLen: md.length - last, literal: true });
+  if (last < md.length) {
+    map.push({ pre: out.length, raw: last, preLen: md.length - last, literal: true });
+    out += md.slice(last);
+  }
   return { text: out, map };
 }
 

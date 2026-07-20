@@ -160,6 +160,28 @@ const TOOLS = [
     },
   },
   {
+    name: 'notes_reply',
+    description: 'Ответить в треде комментария к документу (реплика — отдельная заметка, привязанная к корневому комментарию; тред плоский, отвечать можно только на корневой).',
+    inputSchema: {
+      type: 'object',
+      required: ['id', 'comment'],
+      properties: {
+        id: { type: 'string', description: 'ID корневого комментария (из notes_annotations)' },
+        comment: { type: 'string', description: 'Текст ответа' },
+        tags: { type: 'array', items: { type: 'string' }, description: 'Теги (без #)' },
+      },
+    },
+  },
+  {
+    name: 'notes_thread',
+    description: 'Тред комментария: корневая заметка-комментарий целиком + все ответы по времени.',
+    inputSchema: {
+      type: 'object',
+      required: ['id'],
+      properties: { id: { type: 'string', description: 'ID корневого комментария' } },
+    },
+  },
+  {
     name: 'notes_set_status',
     description: 'Сменить статус комментария к документу: resolved — обработан («решён»), open — снова открыт.',
     inputSchema: {
@@ -257,6 +279,22 @@ async function callTool(name, args) {
       const scope = args.scope || PROJECT_ID || 'personal';
       const params = new URLSearchParams({ scope, path: String(args.path ?? '') });
       return json(await api(`/api/notes/annotations?${params}`));
+    }
+
+    case 'notes_reply': {
+      const body = { comment: args.comment };
+      if (Array.isArray(args.tags) && args.tags.length) body.tags = args.tags;
+      return json(await api(`/api/notes/${encodeURIComponent(args.id)}/reply`, {
+        method: 'POST', body: JSON.stringify(body),
+      }));
+    }
+
+    case 'notes_thread': {
+      const [root, replies] = await Promise.all([
+        api(`/api/notes/${encodeURIComponent(args.id)}`),
+        api(`/api/notes/${encodeURIComponent(args.id)}/replies`),
+      ]);
+      return json({ root, replies });
     }
 
     case 'notes_set_status':

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Check, FileText, FolderPlus, MessageCircle, Timer } from 'lucide-react';
+import { Check, FileText, FolderPlus, MessageCircle, Timer, X } from 'lucide-react';
 import type { NoteSummary } from '../../types';
 import { api } from '../../lib/api';
 import { bumpNotes, useNoteFolders } from '../../lib/notes';
@@ -173,6 +173,8 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
       let g = notesBySrc.get(n.source);
       if (!g) { g = { label: n.sourceLabel, notes: [] }; notesBySrc.set(n.source, g); }
       if (n.annotation) {
+        // Ответы тредов в дерево документов не попадают — вложатся под корневым
+        if (n.annotation.isReply) continue;
         let docs = docsBySrc.get(n.source);
         if (!docs) { docs = new Map(); docsBySrc.set(n.source, docs); }
         const arr = docs.get(n.annotation.docPath) ?? [];
@@ -293,7 +295,7 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
           color: active ? C.textHeading : C.textSecondary, fontWeight: active ? 500 : 400,
           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
         }}>{n.title}</span>
-        {n.annotation && (
+        {n.annotation && !n.annotation.isReply && (
           <span title={n.annotation.status === 'open' ? 'Комментарий открыт' : 'Комментарий решён'} style={{
             display: 'flex', alignItems: 'center', flexShrink: 0, marginRight: 2,
             color: n.annotation.status === 'open' ? C.warning : C.success,
@@ -446,16 +448,32 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
     );
   };
 
-  // Узел «документ → комментарии» (флаг doc-annotations): сворачиваемый, со счётчиком
+  // Ответы тредов по цели (source|путь корневой заметки-комментария) — вложатся под корнем
+  const repliesIndex = useMemo(() => {
+    const m = new Map<string, NoteSummary[]>();
+    for (const n of notes) {
+      const a = n.annotation;
+      if (!a?.isReply) continue;
+      const key = `${a.docScope}|${a.docPath.toLowerCase()}`;
+      const arr = m.get(key) ?? [];
+      arr.push(n);
+      m.set(key, arr);
+    }
+    return m;
+  }, [notes]);
+
+  // Узел «документ → комментарии» (флаг doc-annotations): сворачиваемый, со счётчиком;
+  // удалённый документ — ghost (зачёркнутый путь). Ответы — под корневым комментарием.
   const renderDocGroup = (source: string, dg: DocGroup) => {
     const key = `${source}|doc:${dg.docPath}`;
     const isCollapsed = collapsed.has(key);
     const openCount = dg.notes.filter(n => n.annotation?.status === 'open').length;
+    const ghost = dg.notes.length > 0 && dg.notes.every(n => n.annotation?.docMissing);
     return (
       <div key={key}>
         <div
           onClick={() => setCollapsed(prev => { const next = new Set(prev); isCollapsed ? next.delete(key) : next.add(key); return next; })}
-          title={dg.docPath}
+          title={ghost ? `${dg.docPath} — документ удалён` : dg.docPath}
           style={{
             cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6,
             minHeight: 26, boxSizing: 'border-box', padding: '0 6px 0 10px',
@@ -465,22 +483,34 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
         >
           <span style={{ fontSize: 8, color: C.textMuted, width: 8 }}>{isCollapsed ? '▸' : '▾'}</span>
           <FileText size={ICON_SIZE.sm} strokeWidth={2} style={{ color: C.textMuted, flexShrink: 0 }} />
-          <span style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontFamily: FONT.mono, fontSize: 11.5 }}>
+          <span style={{
+            flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+            fontFamily: FONT.mono, fontSize: 11.5,
+            color: ghost ? C.textMuted : undefined,
+            textDecoration: ghost ? 'line-through' : undefined,
+            textDecorationThickness: ghost ? '1px' : undefined,
+          }}>
             {dg.docPath}
           </span>
+          {ghost && <span style={{ fontSize: 10, color: C.textMuted, flexShrink: 0 }}>удалён</span>}
           <span style={{
             display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10.5, fontWeight: 600,
-            color: openCount > 0 ? C.warningText : C.successText,
-            background: openCount > 0 ? C.warningBg : C.successBg,
+            color: ghost ? C.textMuted : openCount > 0 ? C.warningText : C.successText,
+            background: ghost ? C.bgInset : openCount > 0 ? C.warningBg : C.successBg,
             borderRadius: 9, padding: '0 7px', flexShrink: 0,
           }}>
-            {openCount > 0 ? <MessageCircle size={10} strokeWidth={2.5} /> : <Check size={10} strokeWidth={2.5} />}
+            {ghost ? <X size={10} strokeWidth={2.5} /> : openCount > 0 ? <MessageCircle size={10} strokeWidth={2.5} /> : <Check size={10} strokeWidth={2.5} />}
             {dg.notes.length}
           </span>
         </div>
         {!isCollapsed && (
           <div style={{ marginLeft: 8, paddingLeft: 6, borderLeft: `1px solid ${C.border}` }}>
-            {dg.notes.map(n => renderNote(n, 0))}
+            {dg.notes.map(n => (
+              <div key={n.id}>
+                {renderNote(n, 0)}
+                {(repliesIndex.get(`${n.source}|${n.path.toLowerCase()}`) ?? []).map(r => renderNote(r, 1))}
+              </div>
+            ))}
           </div>
         )}
       </div>

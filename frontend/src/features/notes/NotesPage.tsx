@@ -247,12 +247,13 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
           )}
         </div>
       )}
-      {/* Фильтры комментариев к документам (флаг doc-annotations): чипы = операторы status: */}
-      {mode === 'notes' && docAnnotationsOn && notes.some(n => n.annotation) && (
+      {/* Фильтры комментариев к документам (флаг doc-annotations): чипы = операторы status:.
+          Ответы тредов не считаются — статус живёт у корневого комментария */}
+      {mode === 'notes' && docAnnotationsOn && notes.some(n => n.annotation && !n.annotation.isReply) && (
         <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
           {([
-            ['status:open', 'Открытые', notes.filter(n => n.annotation?.status === 'open').length],
-            ['status:resolved', 'Решённые', notes.filter(n => n.annotation?.status === 'resolved').length],
+            ['status:open', 'Открытые', notes.filter(n => n.annotation && !n.annotation.isReply && n.annotation.status === 'open').length],
+            ['status:resolved', 'Решённые', notes.filter(n => n.annotation && !n.annotation.isReply && n.annotation.status === 'resolved').length],
             ['status:orphaned', 'Сироты', null],
           ] as const).map(([q, label, count]) => {
             const on = query.trim() === q;

@@ -7,7 +7,8 @@ import { C, FONT, R, SHADOW, Z } from '../../lib/design';
 import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { useNotesVersion } from '../../lib/notes';
 import { ensurePersonasLoaded, usePersonas, personaLabel } from '../../lib/personas';
-import type { DocAnnotation, Persona, Project } from '../../types';
+import type { DocAnnotation, NoteReply, Persona } from '../../types';
+import type { ResolvedNote } from '../../components/MarkdownViewer';
 
 // Комментарии к MD-документам (флаг doc-annotations): обёртка над MarkdownViewer
 // для просмотра .md проекта — выделение → попап «Комментировать», подсветка якорных
@@ -54,17 +55,28 @@ export function useDocAnnotations(scope: string, path: string, enabled: boolean)
 }
 
 interface Props {
-  project: Project;
-  filePath: string;
+  scope: string;      // 'personal' | projectId
+  docPath: string;    // путь документа внутри области (для проекта — от корня)
   content: string;
   isMobile?: boolean;
+  // Панель комментариев снизу вместо правой колонки (NoteView — там справа связи)
+  panelBelow?: boolean;
+  // Прокидка режима заметок во внутренний MarkdownViewer ([[wikilinks]], embeds)
+  viewer?: {
+    onWikilink?: (target: string) => void;
+    existingTitles?: Set<string>;
+    resolveNote?: (name: string, anchor?: string) => Promise<ResolvedNote | null>;
+    embedSource?: string;
+  };
 }
 
-export function DocCommentedMarkdown({ project, filePath, content, isMobile }: Props) {
+const HINT_KEY = 'cc_doc_comments_hint';
+
+export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelBelow, viewer }: Props) {
   const enabled = useFeature(FLAGS.docAnnotations);
   const docRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
-  const { items, reload } = useDocAnnotations(project.id, filePath, enabled);
+  const { items, reload } = useDocAnnotations(scope, docPath, enabled);
   const [selection, setSelection] = useState<SelectionInfo | null>(null);
   const [formOpen, setFormOpen] = useState(false);
   const [comment, setComment] = useState('');
@@ -123,7 +135,7 @@ export function DocCommentedMarkdown({ project, filePath, content, isMobile }: P
     setSaving(true); setFormError(null);
     try {
       await api.notes.annotate({
-        doc: { scope: project.id, path: filePath },
+        doc: { scope, path: docPath },
         selection: { start: selection.start, end: selection.end, text: selection.text },
         comment: comment.trim() || undefined,
         tags: tags.length ? tags : undefined,
@@ -166,10 +178,10 @@ export function DocCommentedMarkdown({ project, filePath, content, isMobile }: P
   const assignTo = async (a: DocAnnotation, p: Persona) => {
     setAssignFor(null);
     try {
-      await api.tasks.create(project.id, {
+      await api.tasks.create(scope === 'personal' ? null : scope, {
         title: `Обработать комментарий: ${a.title}`,
         description: [
-          `Комментарий к документу \`${filePath}\`${a.anchorHeading ? ` (${a.anchorHeading})` : ''}:`,
+          `Комментарий к документу \`${docPath}\`${a.anchorHeading ? ` (${a.anchorHeading})` : ''}:`,
           '',
           `> ${a.quote}`,
           '',
@@ -188,6 +200,38 @@ export function DocCommentedMarkdown({ project, filePath, content, isMobile }: P
       window.setTimeout(() => setAssignedMsg(null), 3500);
     }
   };
+
+  // Треды: ответы раскрываются по клику, инлайн-поле «Ответить»
+  const [openReplies, setOpenReplies] = useState<Set<string>>(new Set());
+  const [repliesMap, setRepliesMap] = useState<Record<string, NoteReply[]>>({});
+  const [replyDraft, setReplyDraft] = useState<Record<string, string>>({});
+  const [replySending, setReplySending] = useState<string | null>(null);
+  const loadReplies = (id: string) =>
+    api.notes.replies(id).then(r => setRepliesMap(m => ({ ...m, [id]: r }))).catch(() => {});
+  const toggleReplies = (a: DocAnnotation) => {
+    setOpenReplies(prev => {
+      const n = new Set(prev);
+      if (n.has(a.noteId)) n.delete(a.noteId);
+      else { n.add(a.noteId); void loadReplies(a.noteId); }
+      return n;
+    });
+  };
+  const sendReply = async (a: DocAnnotation) => {
+    const text = (replyDraft[a.noteId] ?? '').trim();
+    if (!text) return;
+    setReplySending(a.noteId);
+    try {
+      await api.notes.reply(a.noteId, text);
+      setReplyDraft(d => ({ ...d, [a.noteId]: '' }));
+      await loadReplies(a.noteId);
+      reload();
+    } catch { /* realtime подтянет */ }
+    finally { setReplySending(null); }
+  };
+
+  // Подсказка первого использования — один раз, пока в документе нет комментариев
+  const [hintDismissed, setHintDismissed] = useState(() => !!localStorage.getItem(HINT_KEY));
+  const dismissHint = () => { localStorage.setItem(HINT_KEY, '1'); setHintDismissed(true); };
 
   const gotoBlock = (a: DocAnnotation) => {
     setSelectedId(a.noteId);
@@ -352,20 +396,82 @@ export function DocCommentedMarkdown({ project, filePath, content, isMobile }: P
                 </div>
               )}
             </div>
+
+            {/* Тред: ответы + инлайн-«Ответить» */}
+            <div onClick={e => e.stopPropagation()}>
+              <button onClick={() => toggleReplies(a)} style={{
+                border: 'none', background: 'none', cursor: 'pointer', padding: 0,
+                fontSize: 11.5, color: C.textMuted, fontFamily: FONT.sans,
+                display: 'inline-flex', alignItems: 'center', gap: 4,
+              }}>
+                <span style={{ fontSize: 9 }}>{openReplies.has(a.noteId) ? '▾' : '▸'}</span>
+                {(repliesMap[a.noteId]?.length ?? a.replies) > 0
+                  ? `Ответы · ${repliesMap[a.noteId]?.length ?? a.replies}`
+                  : 'Ответить'}
+              </button>
+              {openReplies.has(a.noteId) && (
+                <div style={{ marginTop: 6, paddingLeft: 8, borderLeft: `2px solid ${C.border}`, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {(repliesMap[a.noteId] ?? []).map(r => (
+                    <div key={r.noteId} style={{ fontSize: 12, color: C.textSecondary }}>
+                      {r.excerpt || r.title}
+                      <span style={{ color: C.textMuted, fontSize: 10.5, marginLeft: 6 }}>
+                        {new Date(r.createdAt).toLocaleDateString('ru')}
+                      </span>
+                    </div>
+                  ))}
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <input
+                      value={replyDraft[a.noteId] ?? ''}
+                      onChange={e => setReplyDraft(d => ({ ...d, [a.noteId]: e.target.value }))}
+                      onKeyDown={e => { if (e.key === 'Enter') void sendReply(a); }}
+                      placeholder="Ответить…"
+                      style={{
+                        flex: 1, minWidth: 0, border: `1px solid ${C.border}`, borderRadius: 8,
+                        background: C.bgMain, color: C.textHeading, font: `12px ${FONT.sans}`,
+                        padding: '4px 8px',
+                      }}
+                    />
+                    <ActionBtn onClick={() => void sendReply(a)}>
+                      {replySending === a.noteId ? '…' : 'Отправить'}
+                    </ActionBtn>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         ))}
     </div>
   );
 
+  const below = isMobile || panelBelow;
   return (
     <div style={{ display: 'flex', alignItems: 'flex-start', gap: 18 }}>
       <div ref={docRef} onMouseUp={onMouseUp} style={{ flex: 1, minWidth: 0 }}>
-        <MarkdownViewer content={content} blockPos={enabled} />
-        {isMobile && panel && (
+        {/* Подсказка первого использования — пока нет ни одного комментария */}
+        {enabled && !hintDismissed && items.length === 0 && (
+          <div style={{
+            display: 'flex', alignItems: 'flex-start', gap: 8, margin: '0 0 14px',
+            border: `1px dashed ${C.accent}`, borderRadius: R.lg, padding: '9px 12px',
+            background: C.accentLight, fontSize: 12.5, color: C.textSecondary,
+          }}>
+            <MessageCircle size={14} style={{ color: C.accent, flexShrink: 0, marginTop: 2 }} />
+            <span style={{ flex: 1 }}>
+              Выделите текст, чтобы оставить комментарий. Комментарии видны при чтении
+              и в разделе «Заметки» под своим документом.
+            </span>
+            <button onClick={dismissHint} aria-label="Закрыть подсказку" style={{
+              border: 'none', background: 'none', cursor: 'pointer', color: C.textMuted, padding: 0, display: 'flex',
+            }}><X size={13} /></button>
+          </div>
+        )}
+        <MarkdownViewer content={content} blockPos={enabled}
+          onWikilink={viewer?.onWikilink} existingTitles={viewer?.existingTitles}
+          resolveNote={viewer?.resolveNote} embedSource={viewer?.embedSource} />
+        {below && panel && (
           <div style={{ marginTop: 20, borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>{panel}</div>
         )}
       </div>
-      {!isMobile && panel && (
+      {!below && panel && (
         <aside style={{
           width: 290, flex: 'none', position: 'sticky', top: 0,
           maxHeight: 'calc(100vh - 160px)', overflowY: 'auto',

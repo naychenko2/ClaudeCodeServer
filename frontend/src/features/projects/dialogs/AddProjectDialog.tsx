@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import type { Project, ProjectGroup } from '../../../types';
 import { api } from '../../../lib/api';
-import { C, FONT, R, MODAL_W } from '../../../lib/design';
-import { Modal, ModalActions, TextField, Field, SegmentedControl, Toggle } from '../../../components/ui';
+import { C, MODAL_W } from '../../../lib/design';
+import { Modal, ModalActions, TextField, Field, SegmentedControl } from '../../../components/ui';
 import { GroupSelect } from '../GroupSelect';
 import { SyncToggleRow } from '../components/SyncToggleRow';
+import { GIT_MODES, GitModeCard, GitPushRow, type GitMode } from '../components/GitModeCards';
 
 interface Props {
   groups: ProjectGroup[];
@@ -14,13 +15,6 @@ interface Props {
 }
 
 type Mode = 'new' | 'existing';
-type GitMode = 'none' | 'manual' | 'auto';
-
-const GIT_MODES: { value: GitMode; label: string; hint: string }[] = [
-  { value: 'none', label: 'Без ведения истории', hint: 'Обычная папка — версии файлов не сохраняются' },
-  { value: 'manual', label: 'Ручное ведение истории', hint: 'Версии сохраняются, когда вы сами нажмёте «Зафиксировать» в разделе «Файлы». Рекомендуется для разработки кода' },
-  { value: 'auto', label: 'Автоматическое ведение истории', hint: 'Каждый ход ИИ сохраняется в историю сам. Рекомендуется для работы с документами' },
-];
 
 // Единый диалог добавления проекта: сегмент «Новый / Существующий».
 //  • Новый — создаём новую папку под путём по умолчанию (path = null).
@@ -87,44 +81,21 @@ export function AddProjectDialog({ groups, defaultGroupId, onSuccess, onClose }:
         </Field>
       )}
 
-      {/* Ведение истории файлов (git): без истории / ручной (код) / авто (документы) */}
+      {/* Ведение истории файлов (git): без истории / ручной (код) / авто (документы).
+          Карточки однострочные (подсказка в title) — тот же компактный паттерн, что и
+          в «Редактировать проект» (GitModeCards), иначе секция разносит диалог по высоте. */}
       <Field label="История файлов (Git)">
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          {GIT_MODES.map(m => {
-            const active = gitMode === m.value;
-            return (
-              <div
-                key={m.value}
-                onClick={() => setGitMode(m.value)}
-                title={m.hint}
-                style={{
-                  display: 'flex', alignItems: 'flex-start', gap: 9, padding: '8px 11px', cursor: 'pointer',
-                  borderRadius: R.lg, border: `1px solid ${active ? C.accent : C.border}`,
-                  background: active ? C.accentLight : C.bgWhite,
-                }}
-              >
-                <span style={{
-                  width: 14, height: 14, borderRadius: '50%', marginTop: 2, flexShrink: 0,
-                  border: `1.5px solid ${active ? C.accent : C.dashed}`,
-                  background: active ? C.accent : 'transparent',
-                  boxShadow: active ? `inset 0 0 0 2.5px ${C.bgWhite}` : 'none',
-                }} />
-                <span style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
-                  <span style={{ fontSize: 13, fontFamily: FONT.sans, fontWeight: 600, color: active ? C.textHeading : C.textPrimary }}>{m.label}</span>
-                  <span style={{ fontSize: 11.5, fontFamily: FONT.sans, color: C.textSecondary, lineHeight: 1.35 }}>{m.hint}</span>
-                </span>
-              </div>
-            );
-          })}
-          {gitMode === 'auto' && (
-            <div
-              onClick={() => setGitPush(v => !v)}
-              style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '2px 11px 0 34px', cursor: 'pointer' }}
-            >
-              <Toggle checked={gitPush} onChange={setGitPush} />
-              <span style={{ fontSize: 12.5, fontFamily: FONT.sans, color: C.textPrimary }}>Ещё и отправлять копию на git-сервер (push)</span>
-            </div>
-          )}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+          {GIT_MODES.map(m => (
+            <GitModeCard
+              key={m.value}
+              active={gitMode === m.value}
+              label={m.label}
+              hint={m.hint}
+              onClick={() => setGitMode(m.value)}
+            />
+          ))}
+          {gitMode === 'auto' && <GitPushRow checked={gitPush} onChange={setGitPush} />}
         </div>
       </Field>
 

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { GitBranch, Lock, X } from 'lucide-react';
+import type { ReactNode } from 'react';
+import { Folder, GitBranch, Lock, X } from 'lucide-react';
 import type { Project, ProjectGroup, PermissionRule, SystemPromptPart } from '../../../types';
 import { api } from '../../../lib/api';
 import { useOnline } from '../../../hooks/useOnline';
@@ -7,12 +8,14 @@ import { C, FONT, R } from '../../../lib/design';
 import { Modal, ModalActions, TextField, TextArea, Field, Button, Toggle } from '../../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
 import { GroupSelect } from '../GroupSelect';
+import { GitModeCard, GitPushRow } from '../components/GitModeCards';
 import { ProjectSyncToggle } from '../../../components/ProjectSyncToggle';
 
 // === История файлов (Git) в настройках проекта ===
 // Включение необратимо by design: «выключить» означало бы удалить .git со всей историей,
 // поэтому для ведущегося репозитория показываем статус-строку и выбор ручное/авто,
 // а карточки «Без ведения истории» больше нет.
+// Карточки — однострочные (подсказка в title), иначе секция «съедала» весь диалог по высоте.
 function GitHistorySection({ project }: { project: Project }) {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -58,38 +61,15 @@ function GitHistorySection({ project }: { project: Project }) {
   const setMode = (auto: boolean) => run(() => api.git.setAutoCommit(project.id, auto, auto ? autoPush : false));
   const togglePush = () => run(() => api.git.setAutoCommit(project.id, true, !autoPush));
 
-  const card = (active: boolean, label: string, hint: string, onClick: () => void) => (
-    <div
-      onClick={busy ? undefined : onClick}
-      style={{
-        display: 'flex', alignItems: 'flex-start', gap: 9, padding: '8px 11px',
-        cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.6 : 1,
-        borderRadius: R.lg, border: `1px solid ${active ? C.accent : C.border}`,
-        background: active ? C.accentLight : C.bgWhite,
-      }}
-    >
-      <span style={{
-        width: 14, height: 14, borderRadius: '50%', marginTop: 2, flexShrink: 0,
-        border: `1.5px solid ${active ? C.accent : C.dashed}`,
-        background: active ? C.accent : 'transparent',
-        boxShadow: active ? `inset 0 0 0 2.5px ${C.bgWhite}` : 'none',
-      }} />
-      <span style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
-        <span style={{ fontSize: 13, fontFamily: FONT.sans, fontWeight: 600, color: active ? C.textHeading : C.textPrimary }}>{label}</span>
-        <span style={{ fontSize: 11.5, fontFamily: FONT.sans, color: C.textSecondary, lineHeight: 1.35 }}>{hint}</span>
-      </span>
-    </div>
-  );
-
   const firstDateStr = firstDate
     ? new Date(firstDate).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })
     : null;
 
   return (
     <div style={{
-      padding: '11px 14px', background: C.bgWhite,
+      padding: '9px 12px', background: C.bgWhite,
       border: `1px solid ${C.border}`, borderRadius: R.xl,
-      display: 'flex', flexDirection: 'column', gap: 8,
+      display: 'flex', flexDirection: 'column', gap: 5,
     }}>
       <div style={{ fontSize: 12, fontWeight: 600, color: C.textSecondary, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
         История файлов (Git)
@@ -99,40 +79,53 @@ function GitHistorySection({ project }: { project: Project }) {
         <div style={{ fontSize: 12.5, color: C.textMuted }}>Загрузка…</div>
       ) : !isRepo ? (
         <>
-          {card(true, 'Без ведения истории', 'Обычная папка — версии файлов не сохраняются', () => {})}
-          {card(false, 'Ручное ведение истории', 'Версии сохраняются, когда вы сами нажмёте «Зафиксировать» в разделе «Файлы». Рекомендуется для разработки кода', () => enable(false))}
-          {card(false, 'Автоматическое ведение истории', 'Каждый ход ИИ сохраняется в историю сам. Рекомендуется для работы с документами', () => enable(true))}
+          <GitModeCard active label="Без ведения истории" hint="Обычная папка — версии файлов не сохраняются" onClick={() => {}} />
+          <GitModeCard active={false} label="Ручное ведение истории" hint="Версии сохраняются, когда вы сами нажмёте «Зафиксировать» в разделе «Файлы». Рекомендуется для разработки кода" disabled={busy} onClick={() => enable(false)} />
+          <GitModeCard active={false} label="Автоматическое ведение истории" hint="Каждый ход ИИ сохраняется в историю сам. Рекомендуется для работы с документами" disabled={busy} onClick={() => enable(true)} />
         </>
       ) : (
         <>
           {/* История уже ведётся — выключения нет by design (означало бы удалить .git) */}
           <div style={{
-            display: 'flex', alignItems: 'center', gap: 8, padding: '7px 11px',
+            display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px',
             borderRadius: R.lg, background: C.successBg, color: C.successText,
-            fontSize: 12.5, fontFamily: FONT.sans,
+            fontSize: 12, fontFamily: FONT.sans,
           }}>
             <GitBranch size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
-            <span>
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               История ведётся{commitCount !== null ? ` · ${commitCount >= 1000 ? '1000+' : commitCount} коммитов` : ''}{firstDateStr ? ` · с ${firstDateStr}` : ''}
             </span>
           </div>
-          {card(!autoCommit, 'Ручное ведение истории', 'Версии сохраняются, когда вы сами нажмёте «Зафиксировать» в разделе «Файлы». Рекомендуется для разработки кода', () => setMode(false))}
-          {card(autoCommit, 'Автоматическое ведение истории', 'Каждый ход ИИ сохраняется в историю сам. Рекомендуется для работы с документами', () => setMode(true))}
+          <GitModeCard active={!autoCommit} label="Ручное ведение истории" hint="Версии сохраняются, когда вы сами нажмёте «Зафиксировать» в разделе «Файлы». Рекомендуется для разработки кода" disabled={busy} onClick={() => setMode(false)} />
+          <GitModeCard active={autoCommit} label="Автоматическое ведение истории" hint="Каждый ход ИИ сохраняется в историю сам. Рекомендуется для работы с документами" disabled={busy} onClick={() => setMode(true)} />
           {autoCommit && (
-            <div
-              onClick={remoteUrl && !busy ? togglePush : undefined}
-              title={remoteUrl ? undefined : 'Git-сервер не настроен — отправлять некуда'}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 8, padding: '2px 11px 0 34px',
-                cursor: remoteUrl && !busy ? 'pointer' : 'default', opacity: remoteUrl ? 1 : 0.5,
-              }}
-            >
-              <Toggle checked={autoPush} onChange={() => { if (remoteUrl && !busy) void togglePush(); }} />
-              <span style={{ fontSize: 12.5, fontFamily: FONT.sans, color: C.textPrimary }}>Ещё и отправлять копию на git-сервер (push)</span>
-            </div>
+            <GitPushRow
+              checked={autoPush}
+              onChange={() => void togglePush()}
+              disabled={!remoteUrl || busy}
+              disabledTitle={remoteUrl ? undefined : 'Git-сервер не настроен — отправлять некуда'}
+            />
           )}
         </>
       )}
+    </div>
+  );
+}
+
+// Однострочная строка настроек внутри общей карточки-списка (путь/промпт/тумблеры/правила).
+// Разделитель вместо отдельных карточек — экономит паддинги и межблочные отступы,
+// это и было главным вкладом диалога в вертикальный скролл.
+function SettingsRow({ children, last, title }: { children: ReactNode; last?: boolean; title?: string }) {
+  return (
+    <div
+      title={title}
+      style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
+        padding: '9px 14px',
+        borderBottom: last ? 'none' : `1px solid ${C.borderLight}`,
+      }}
+    >
+      {children}
     </div>
   );
 }
@@ -353,7 +346,7 @@ export function EditDialog({ project, groups = [], onSuccess, onClose }: Props) 
   return (
     <Modal
       title="Редактировать проект"
-      width={480}
+      width={500}
       onClose={onClose}
       footer={
         <ModalActions
@@ -370,122 +363,50 @@ export function EditDialog({ project, groups = [], onSuccess, onClose }: Props) 
           <GroupSelect groups={groups} value={groupId} onChange={setGroupId} />
         </Field>
       )}
-      <div style={{
-        padding: '9px 13px', background: C.bgPanel,
-        border: `1px solid ${C.border}`, borderRadius: R.xl,
-        display: 'flex', flexDirection: 'column', gap: 2,
-      }}>
-        <div style={{ fontSize: 11, fontWeight: 600, color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-          Путь
-        </div>
-        <div style={{
-          fontFamily: 'JetBrains Mono, monospace', fontSize: 12.5,
-          color: C.textSecondary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        }} title={project.rootPath}>
-          {project.rootPath}
-        </div>
-      </div>
-      <hr style={{ border: 'none', borderTop: `1px solid ${C.border}`, margin: 0 }} />
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: 12,
-        padding: '12px 14px', background: C.bgWhite,
-        border: `1px solid ${C.border}`, borderRadius: R.xl,
-      }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 12, fontWeight: 600, color: C.textSecondary, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 3 }}>
-            Системный промпт
+      {/* Путь / системный промпт / скрытые файлы / инструменты / правила — единая карточка-
+          список вместо пяти отдельных карточек: экономит паддинги и межблочные отступы */}
+      <div style={{ background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl, overflow: 'hidden' }}>
+        <SettingsRow title={project.rootPath}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+            <Folder size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0, color: C.textMuted }} />
+            <span style={{
+              fontFamily: 'JetBrains Mono, monospace', fontSize: 12.5, color: C.textSecondary,
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            }}>
+              {project.rootPath}
+            </span>
           </div>
-          <div style={{ fontSize: 13, color: systemPrompt ? C.textHeading : C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {systemPrompt || 'Не задан'}
+        </SettingsRow>
+        <SettingsRow>
+          <div style={{ minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', fontSize: 13 }}>
+            <span style={{ fontWeight: 600, color: C.textHeading }}>Системный промпт</span>
+            {systemPrompt
+              ? <span style={{ color: C.textMuted }}> · {systemPrompt}</span>
+              : <span style={{ color: C.textMuted }}> · не задан</span>}
           </div>
-        </div>
-        <Button variant="ghost" size="sm" onClick={handleEditPrompt} style={{ flexShrink: 0 }}>
-          Редактировать
-        </Button>
-      </div>
-      {/* Скрытые файлы */}
-      <div style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        padding: '11px 14px', background: C.bgWhite,
-        border: `1px solid ${C.border}`, borderRadius: R.xl,
-      }}>
-        <div>
-          <div style={{ fontSize: 12, fontWeight: 600, color: C.textSecondary, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 2 }}>
-            Скрытые файлы и папки
-          </div>
-          <div style={{ fontSize: 12, color: C.textMuted }}>
-            Показывать файлы и папки, начинающиеся с точки
-          </div>
-        </div>
-        <button
-          onClick={() => setShowHiddenFiles(v => !v)}
-          style={{
-            flexShrink: 0,
-            width: 40, height: 22,
-            background: showHiddenFiles ? C.accent : C.border,
-            border: 'none', borderRadius: 11, cursor: 'pointer',
-            position: 'relative', transition: 'background 0.15s',
-          }}
-        >
-          <span style={{
-            position: 'absolute', top: 3,
-            left: showHiddenFiles ? 21 : 3,
-            width: 16, height: 16,
-            background: C.bgWhite, borderRadius: '50%',
-            transition: 'left 0.15s',
-          }} />
-        </button>
-      </div>
-      {/* Инструменты (терминал + preview) */}
-      <div style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        padding: '11px 14px', background: C.bgWhite,
-        border: `1px solid ${C.border}`, borderRadius: R.xl,
-      }}>
-        <div>
-          <div style={{ fontSize: 12, fontWeight: 600, color: C.textSecondary, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 2 }}>
-            Инструменты
-          </div>
-          <div style={{ fontSize: 12, color: C.textMuted }}>
-            Встроенный терминал и предпросмотр dev-сервера
-          </div>
-        </div>
-        <button
-          onClick={() => setToolsEnabled(v => !v)}
-          style={{
-            flexShrink: 0,
-            width: 40, height: 22,
-            background: toolsEnabled ? C.accent : C.border,
-            border: 'none', borderRadius: 11, cursor: 'pointer',
-            position: 'relative', transition: 'background 0.15s',
-          }}
-        >
-          <span style={{
-            position: 'absolute', top: 3,
-            left: toolsEnabled ? 21 : 3,
-            width: 16, height: 16,
-            background: C.bgWhite, borderRadius: '50%',
-            transition: 'left 0.15s',
-          }} />
-        </button>
-      </div>
-      {/* Правила разрешений */}
-      <div style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        padding: '11px 14px', background: C.bgWhite,
-        border: `1px solid ${C.border}`, borderRadius: R.xl,
-      }}>
-        <div style={{ minWidth: 0 }}>
-          <div style={{ fontSize: 12, fontWeight: 600, color: C.textSecondary, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 2 }}>
+          <Button variant="ghost" size="sm" onClick={handleEditPrompt} style={{ flexShrink: 0 }}>
+            Редактировать
+          </Button>
+        </SettingsRow>
+        <SettingsRow title="Показывать файлы и папки, начинающиеся с точки">
+          <span style={{ fontSize: 13, color: C.textPrimary }}>Скрытые файлы и папки</span>
+          <Toggle checked={showHiddenFiles} onChange={setShowHiddenFiles} />
+        </SettingsRow>
+        <SettingsRow title="Встроенный терминал и предпросмотр dev-сервера">
+          <span style={{ fontSize: 13, color: C.textPrimary }}>Инструменты</span>
+          <Toggle checked={toolsEnabled} onChange={setToolsEnabled} />
+        </SettingsRow>
+        <SettingsRow last>
+          <span style={{ fontSize: 13, color: C.textPrimary }}>
             Правила разрешений
-          </div>
-          <div style={{ fontSize: 12, color: C.textMuted }}>
-            {rules.length ? `${rules.length} ${rules.length === 1 ? 'правило' : 'правил'}` : 'Нет правил — спрашивать каждый раз'}
-          </div>
-        </div>
-        <Button variant="ghost" size="sm" onClick={() => setView('rules')} style={{ flexShrink: 0 }}>
-          Настроить
-        </Button>
+            <span style={{ color: C.textMuted }}>
+              {' · '}{rules.length ? `${rules.length} ${rules.length === 1 ? 'правило' : 'правил'}` : 'спрашивать каждый раз'}
+            </span>
+          </span>
+          <Button variant="ghost" size="sm" onClick={() => setView('rules')} style={{ flexShrink: 0 }}>
+            Настроить
+          </Button>
+        </SettingsRow>
       </div>
       <GitHistorySection project={project} />
       <ProjectSyncToggle projectId={project.id} online={online} />

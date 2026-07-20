@@ -153,10 +153,16 @@ public class ClaudeSession : ILlmSessionAdapter
     // --disallowedTools (см. сборку _disallowedTools в конструкторе), чтобы модель звала
     // mcp__tasks__*, а не пустой встроенный трекер. ВНИМАНИЕ: «Task» (без суффикса) —
     // это тул ЗАПУСКА СУБАГЕНТА (делегирование), его НЕ трогаем; только трекерные
-    // TaskGet/TaskList/TaskCreate/... Совпадающие с реальными именами сработают,
-    // несуществующие claude молча проигнорирует.
+    // TaskGet/TaskList/TaskCreate/TaskUpdate.
+    //
+    // ВНИМАНИЕ: раньше тут стояло «несуществующие claude молча проигнорирует» и список
+    // содержал TaskComplete/TaskDelete/TaskSearch. Это допущение сломалось: CLI 2.1.x
+    // ВАЛИДИРУЕТ имена в deny-правилах. В интерактивном режиме он ругается в stderr на
+    // каждый ход, а в `--print` (one-shot) вообще падает с кодом 1 — так у нас разом легли
+    // все ИИ-фичи из-за мёртвого MultiEdit. Мёртвые имена сюда не добавлять: список сверять
+    // с реальным набором инструментов CLI при его обновлении.
     private static readonly string[] BuiltInTaskTools =
-        ["TaskGet", "TaskList", "TaskCreate", "TaskUpdate", "TaskComplete", "TaskDelete", "TaskSearch"];
+        ["TaskGet", "TaskList", "TaskCreate", "TaskUpdate"];
 
     // Свои MCP-серверы (mcp/*-server, mcp-dify — код этого репозитория, собираются в
     // BuildTurnMcpConfig): работа с данными самого пользователя внутри системы, не внешнее

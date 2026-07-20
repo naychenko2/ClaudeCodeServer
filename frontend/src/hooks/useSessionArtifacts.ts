@@ -81,10 +81,12 @@ export interface WorkflowGroup {
   settled: boolean;   // workflow целиком завершён
 }
 
-// Комментарий к документу, созданный агентом через mcp__notes__notes_annotate
+// Комментарий к документу из notes-MCP: созданный (notes_annotate/notes_reply)
+// или упомянутый в разговоре (перечислен в результате notes_annotations/set_status)
 export interface CommentArtifact {
   title: string;   // первые слова комментария (= заголовок заметки-комментария)
   doc: string;     // путь документа
+  mentioned?: boolean;   // true — агент читал/менял, а не создавал
 }
 
 export interface SessionArtifacts {
@@ -115,6 +117,12 @@ function annotateTitle(comment: string): string {
   const c = comment.replace(/\s+/g, ' ').trim();
   if (c.length < 3) return 'Комментарий';
   return c.length > 50 ? c.slice(0, 50).trimEnd() + '…' : c;
+}
+
+// JSON из результата MCP-инструмента (notes-server отдаёт pretty-printed JSON)
+function parseToolJson(result: string | undefined): unknown {
+  if (!result) return null;
+  try { return JSON.parse(result); } catch { return null; }
 }
 
 const URL_RE = /https?:\/\/[^\s<>()[\]"'`]+/g;
@@ -431,6 +439,32 @@ export function computeArtifacts(items: ChatItem[], rootPath: string, executingT
           const doc = typeof o?.path === 'string' ? o.path : '';
           const title = annotateTitle(typeof o?.comment === 'string' ? o.comment : '');
           comments.set(`${title}|${doc}`, { title, doc });
+        } else if (it.name === 'mcp__notes__notes_reply') {
+          // Ответ в треде: заголовок из комментария, документ — из результата (NoteDetail)
+          const o = it.input as Record<string, unknown> | null;
+          const title = annotateTitle(typeof o?.comment === 'string' ? o.comment : '');
+          const parsed = parseToolJson(it.result) as { annotation?: { docPath?: string } } | null;
+          const doc = parsed?.annotation?.docPath ?? '';
+          comments.set(`${title}|${doc}`, { title, doc });
+        } else if (it.name === 'mcp__notes__notes_annotations') {
+          // Просмотр комментариев документа: перечисленные — «упомянутые» (создания не перетираем)
+          const o = it.input as Record<string, unknown> | null;
+          const doc = typeof o?.path === 'string' ? o.path : '';
+          const arr = parseToolJson(it.result);
+          if (Array.isArray(arr))
+            for (const a of arr as { title?: string }[]) {
+              if (typeof a?.title !== 'string' || !a.title) continue;
+              const key = `${a.title}|${doc}`;
+              if (!comments.has(key)) comments.set(key, { title: a.title, doc, mentioned: true });
+            }
+        } else if (it.name === 'mcp__notes__notes_set_status') {
+          // Смена статуса: заголовок и документ — из результата (NoteDetail)
+          const parsed = parseToolJson(it.result) as { title?: string; annotation?: { docPath?: string } } | null;
+          if (typeof parsed?.title === 'string' && parsed.title) {
+            const doc = parsed.annotation?.docPath ?? '';
+            const key = `${parsed.title}|${doc}`;
+            if (!comments.has(key)) comments.set(key, { title: parsed.title, doc, mentioned: true });
+          }
         }
         break;
       }

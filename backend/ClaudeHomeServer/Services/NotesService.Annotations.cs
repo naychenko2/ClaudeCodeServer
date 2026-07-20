@@ -55,17 +55,37 @@ public sealed partial class NotesService
         var (docFull, canWriteId) = ResolveDoc(userId, scope, relPath);
         if (!File.Exists(docFull)) throw new KeyNotFoundException("Документ не найден");
 
+        var anchor = ResolveSelectionAnchor(docFull, canWriteId, req.Selection);
+
+        // Заметка-комментарий: источник = область документа, папка «Комментарии»
+        var sourceKey = scope;                       // personal | projectId — совпадает с ключом источника
+        var title = !string.IsNullOrWhiteSpace(req.Title) ? req.Title!.Trim() : AutoTitle(req.Comment, relPath);
+        var annotates = $"{scope}/{relPath}" + (anchor.BlockId is not null ? $"#^{anchor.BlockId}" : "");
+        var content = BuildAnnotationContent(title, annotates, anchor.Quote, anchor.Heading,
+            req.Tags, req.Selection.Text ?? "", req.Comment);
+        var note = Create(userId, new CreateNoteRequest(title, content, sourceKey, Folder: AnnotationsFolder));
+
+        Invalidate(userId);   // документ мог получить ^id — блочный якорь виден сразу
+        return note;
+    }
+
+    private sealed record SelectionAnchor(string? BlockId, string? Heading, string Quote);
+
+    // Резолв выделения в якорь: verify-before-write (посимвольная сверка, иначе
+    // единственное вхождение; провал → 409 без порчи), якорный параграф, ^id
+    // (существующий переиспользуется; новый пишется только в источниках заметок),
+    // путь заголовков и нормализованная цитата. Общее ядро Annotate и Repin.
+    private SelectionAnchor ResolveSelectionAnchor(string docFull, bool canWriteId, AnnotateSelection selection)
+    {
         var doc = File.ReadAllText(docFull, Encoding.UTF8);
-        var selText = req.Selection.Text ?? "";
+        var selText = selection.Text ?? "";
         if (selText.Trim().Length < 3)
             throw new ArgumentException("Выделение слишком короткое");
 
-        // Verify-before-write: офсеты клиента — только хинт. Посимвольное совпадение,
-        // иначе единственное вхождение текста; ничего не совпало → 409, не порча.
-        var start = req.Selection.Start;
-        var ok = start >= 0 && req.Selection.End > start && req.Selection.End <= doc.Length
+        var start = selection.Start;
+        var ok = start >= 0 && selection.End > start && selection.End <= doc.Length
                  && string.CompareOrdinal(doc, start, selText, 0, selText.Length) == 0
-                 && req.Selection.End - start == selText.Length;
+                 && selection.End - start == selText.Length;
         if (!ok)
         {
             var first = doc.IndexOf(selText, StringComparison.Ordinal);
@@ -78,7 +98,7 @@ public sealed partial class NotesService
         // Якорный блок: параграф (непрерывные непустые строки), содержащий начало выделения
         var lines = SplitLinesWithOffsets(doc);
         var selLine = LineAt(lines, start);
-        var (blockFirst, blockLast) = BlockBounds(lines, selLine);
+        var (_, blockLast) = BlockBounds(lines, selLine);
 
         // ^id: в конце последней строки блока; существующий переиспользуем
         string? blockId = null;
@@ -96,16 +116,36 @@ public sealed partial class NotesService
         var heading = HeadingPathAbove(lines, selLine);
         var quote = NormalizeWs(selText);
         if (quote.Length > MaxQuoteStored) quote = quote[..MaxQuoteStored];
+        return new SelectionAnchor(blockId, heading, quote);
+    }
 
-        // Заметка-комментарий: источник = область документа, папка «Комментарии»
-        var sourceKey = scope;                       // personal | projectId — совпадает с ключом источника
-        var title = !string.IsNullOrWhiteSpace(req.Title) ? req.Title!.Trim() : AutoTitle(req.Comment, relPath);
-        var annotates = $"{scope}/{relPath}" + (blockId is not null ? $"#^{blockId}" : "");
-        var content = BuildAnnotationContent(title, annotates, quote, heading, req.Tags, selText, req.Comment);
-        var note = Create(userId, new CreateNoteRequest(title, content, sourceKey, Folder: AnnotationsFolder));
+    // Перепривязка комментария к новому выделению («место изменилось»/«сирота» при
+    // живом документе): пересчитывает ^id/заголовки/цитату, статус и тред не трогает.
+    public NoteDetail RepinAnnotation(string userId, string id, AnnotateSelection selection)
+    {
+        var model = GetModel(userId);
+        if (!model.ById.TryGetValue(id, out var note))
+            throw new KeyNotFoundException("Комментарий не найден");
+        var ann = note.Annotation
+            ?? throw new InvalidOperationException("Заметка не является комментарием к документу");
+        if (ann.IsReply)
+            throw new InvalidOperationException("Перепривязывается корневой комментарий, а не ответ");
 
-        Invalidate(userId);   // документ мог получить ^id — блочный якорь виден сразу
-        return note;
+        var (docFull, canWriteId) = ResolveDoc(userId, ann.DocScope, ann.DocPath);
+        if (!File.Exists(docFull)) throw new KeyNotFoundException("Документ не найден");
+        var anchor = ResolveSelectionAnchor(docFull, canWriteId, selection);
+
+        var annotates = $"{ann.DocScope}/{ann.DocPath}" + (anchor.BlockId is not null ? $"#^{anchor.BlockId}" : "");
+        var content = File.ReadAllText(note.FullPath, Encoding.UTF8);
+        content = SetFrontmatterField(content, "annotates", $"\"{Escape(annotates)}\"");
+        content = SetFrontmatterField(content, "anchor_quote", $"\"{Escape(anchor.Quote)}\"");
+        if (!string.IsNullOrWhiteSpace(anchor.Heading))
+            content = SetFrontmatterField(content, "anchor_heading", $"\"{Escape(anchor.Heading!)}\"");
+        File.WriteAllText(note.FullPath, content, new UTF8Encoding(false));
+
+        Invalidate(userId);
+        return GetDetail(userId, id)
+            ?? throw new InvalidOperationException("Комментарий перепривязан, но не читается");
     }
 
     private static string AutoTitle(string? comment, string relPath)

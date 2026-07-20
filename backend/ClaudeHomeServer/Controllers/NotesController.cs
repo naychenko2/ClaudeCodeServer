@@ -125,6 +125,24 @@ public class NotesController : ControllerBase
         catch (UnauthorizedAccessException) { return Forbid(); }
     }
 
+    // Перепривязка комментария к новому выделению (место изменилось/сирота при живом
+    // документе); тот же verify-guard, что при создании — 409 при гонке с правкой
+    [HttpPost("{id}/repin")]
+    public async Task<ActionResult<NoteDetail>> Repin(string id, [FromBody] AnnotateSelection selection)
+    {
+        try
+        {
+            var note = _notes.RepinAnnotation(UserId, id, selection);
+            await Broadcast("updated", id);
+            return Ok(note);
+        }
+        catch (AnnotationConflictException ex) { return Conflict(new { error = ex.Message }); }
+        catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
+        catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (UnauthorizedAccessException) { return Forbid(); }
+    }
+
     // Ответ в треде комментария (реплика = заметка с annotates на корневую; тред плоский)
     [HttpPost("{id}/reply")]
     public async Task<ActionResult<NoteDetail>> Reply(string id, [FromBody] ReplyRequest req)

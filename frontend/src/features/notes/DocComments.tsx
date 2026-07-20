@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Check, MessageCircle, TriangleAlert, Undo2, User, X } from 'lucide-react';
+import { Check, MessageCircle, Pin, TriangleAlert, Undo2, User, X } from 'lucide-react';
 import { MarkdownViewer } from '../../components/MarkdownViewer';
 import { api } from '../../lib/api';
 import { C, FONT, R, SHADOW, Z } from '../../lib/design';
@@ -68,11 +68,13 @@ interface Props {
     resolveNote?: (name: string, anchor?: string) => Promise<ResolvedNote | null>;
     embedSource?: string;
   };
+  // Счётчики комментариев наверх (чип в тулбаре файла)
+  onCounts?: (total: number, open: number) => void;
 }
 
 const HINT_KEY = 'cc_doc_comments_hint';
 
-export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelBelow, viewer }: Props) {
+export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelBelow, viewer, onCounts }: Props) {
   const enabled = useFeature(FLAGS.docAnnotations);
   const docRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -91,6 +93,7 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
     () => (filter === 'none' ? [] : items.filter(a => filter === 'all' || a.status === 'open')),
     [items, filter]);
   const openCount = items.filter(a => a.status === 'open').length;
+  useEffect(() => { onCounts?.(items.length, openCount); }, [items.length, openCount, onCounts]);
 
   // ── Выделение → плавающая кнопка «Комментировать» ──
   const onMouseUp = () => {
@@ -142,6 +145,8 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
       });
       setFormOpen(false); setSelection(null);
       window.getSelection()?.removeAllRanges();
+      // Первый комментарий создан — подсказка первого использования больше не нужна нигде
+      localStorage.setItem(HINT_KEY, '1'); setHintDismissed(true);
       reload();
     } catch (e) {
       const msg = e instanceof Error ? e.message : '';
@@ -233,6 +238,34 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
   const [hintDismissed, setHintDismissed] = useState(() => !!localStorage.getItem(HINT_KEY));
   const dismissHint = () => { localStorage.setItem(HINT_KEY, '1'); setHintDismissed(true); };
 
+  // Перепривязка «место изменилось»/«сирота»: режим «выделите новое место»,
+  // следующее выделение уходит в repin с тем же verify-guard (409 при гонке)
+  const [repinFor, setRepinFor] = useState<DocAnnotation | null>(null);
+  const [repinError, setRepinError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!repinFor) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setRepinFor(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [repinFor]);
+  const doRepin = async () => {
+    if (!selection || !repinFor) return;
+    setRepinError(null);
+    try {
+      await api.notes.repin(repinFor.noteId, {
+        start: selection.start, end: selection.end, text: selection.text,
+      });
+      setRepinFor(null); setSelection(null);
+      window.getSelection()?.removeAllRanges();
+      reload();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : '';
+      setRepinError(msg.includes('409') || msg.toLowerCase().includes('изменился')
+        ? 'Текст не найден — выделите фрагмент заново'
+        : 'Не удалось перепривязать');
+    }
+  };
+
   const gotoBlock = (a: DocAnnotation) => {
     setSelectedId(a.noteId);
     if (a.start < 0) return;
@@ -245,6 +278,18 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
       window.setTimeout(() => { el.style.outline = ''; el.style.outlineOffset = ''; }, 900);
     }
   };
+
+  // Deep-link «Перейти к месту» из заметки-комментария: скроллим к якорному блоку
+  useEffect(() => {
+    const pending = sessionStorage.getItem('cc_pending_annotation');
+    if (!pending || items.length === 0) return;
+    const a = items.find(x => x.noteId === pending);
+    if (!a) return;
+    sessionStorage.removeItem('cc_pending_annotation');
+    const t = window.setTimeout(() => gotoBlock(a), 400);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items]);
 
   // ── Подсветка якорных блоков + балуны-маркеры (DOM-слой поверх рендера) ──
   useEffect(() => {
@@ -330,6 +375,22 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
           {assignedMsg}
         </div>
       )}
+      {repinFor && (
+        <div style={{
+          fontSize: 12, color: C.textHeading, background: C.accentLight,
+          border: `1px dashed ${C.accent}`, borderRadius: R.sm, padding: '6px 9px',
+          display: 'flex', alignItems: 'center', gap: 8,
+        }}>
+          <Pin size={12} style={{ color: C.accent, flexShrink: 0 }} />
+          <span style={{ flex: 1 }}>
+            Выделите новое место в документе для «{repinFor.title}»
+            {repinError && <span style={{ color: C.danger }}> — {repinError}</span>}
+          </span>
+          <button onClick={() => setRepinFor(null)} style={{ border: 'none', background: 'none', cursor: 'pointer', color: C.textMuted, padding: 0, display: 'flex' }}>
+            <X size={13} />
+          </button>
+        </div>
+      )}
       {filter === 'none'
         ? <div style={{ fontSize: 12, color: C.textMuted }}>Комментарии скрыты фильтром.</div>
         : shown.map(a => (
@@ -370,6 +431,11 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
                 {a.status === 'open' ? <><Check size={11} /> Решён</> : <><Undo2 size={11} /> Снова открыть</>}
               </ActionBtn>
               <ActionBtn onClick={e => { e.stopPropagation(); openNote(a); }}>Открыть заметку</ActionBtn>
+              {a.state !== 'exact' && (
+                <ActionBtn onClick={e => { e.stopPropagation(); setRepinError(null); setRepinFor(a); }}>
+                  <Pin size={11} /> Перепривязать
+                </ActionBtn>
+              )}
               {personas.length > 0 && (
                 <ActionBtn onClick={e => { e.stopPropagation(); setAssignFor(assignFor === a.noteId ? null : a.noteId); }}>
                   <User size={11} /> Поручить ▾
@@ -446,7 +512,7 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
   const below = isMobile || panelBelow;
   return (
     <div style={{ display: 'flex', alignItems: 'flex-start', gap: 18 }}>
-      <div ref={docRef} onMouseUp={onMouseUp} style={{ flex: 1, minWidth: 0 }}>
+      <div ref={docRef} onMouseUp={onMouseUp} onTouchEnd={onMouseUp} style={{ flex: 1, minWidth: 0 }}>
         {/* Подсказка первого использования — пока нет ни одного комментария */}
         {enabled && !hintDismissed && items.length === 0 && (
           <div style={{
@@ -479,30 +545,38 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
         }}>{panel}</aside>
       )}
 
-      {/* Плавающая кнопка над выделением */}
+      {/* Плавающая кнопка над выделением: создание или перепривязка (режим repin) */}
       {selection && !formOpen && createPortal(
-        <button onClick={openForm} style={{
+        <button onClick={repinFor ? () => void doRepin() : openForm} style={{
           position: 'fixed', zIndex: Z.modal,
-          left: clamp(selection.x - 80, 8, window.innerWidth - 180),
+          left: clamp(selection.x - 80, 8, window.innerWidth - (repinFor ? 210 : 180)),
           top: Math.max(8, selection.y - 44),
           display: 'flex', alignItems: 'center', gap: 7, padding: '7px 13px',
-          background: C.textHeading, color: C.bgMain, border: 'none', borderRadius: 10,
+          background: repinFor ? C.accent : C.textHeading,
+          color: repinFor ? '#fff' : C.bgMain, border: 'none', borderRadius: 10,
           fontSize: 13, fontWeight: 600, cursor: 'pointer', boxShadow: SHADOW.dropdown,
           fontFamily: FONT.sans,
         }}>
-          <MessageCircle size={13} /> Комментировать
+          {repinFor
+            ? <><Pin size={13} /> Перепривязать сюда</>
+            : <><MessageCircle size={13} /> Комментировать</>}
         </button>,
         document.body,
       )}
 
-      {/* Форма создания */}
+      {/* Форма создания: на десктопе — поповер у выделения, на мобиле — шторка снизу */}
       {selection && formOpen && createPortal(
         <div style={{
           position: 'fixed', zIndex: Z.modal,
-          left: clamp(selection.x - 165, 8, window.innerWidth - 348),
-          top: Math.min(selection.y + 14, window.innerHeight - 320),
-          width: 330, background: C.bgCard, border: `1px solid ${C.border}`,
-          borderRadius: R.xl, boxShadow: SHADOW.dropdown, overflow: 'hidden',
+          ...(isMobile
+            ? { left: 8, right: 8, bottom: 8, width: 'auto', borderRadius: 16 }
+            : {
+                left: clamp(selection.x - 165, 8, window.innerWidth - 348),
+                top: Math.min(selection.y + 14, window.innerHeight - 320),
+                width: 330, borderRadius: R.xl,
+              }),
+          background: C.bgCard, border: `1px solid ${C.border}`,
+          boxShadow: SHADOW.dropdown, overflow: 'hidden',
           fontFamily: FONT.sans,
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '11px 14px', borderBottom: `1px solid ${C.border}`, fontWeight: 600, fontSize: 13, color: C.textHeading }}>

@@ -255,6 +255,10 @@ export const api = {
       request<NoteDetail>(`/notes/${encodeURIComponent(id)}/status`, {
         method: 'POST', body: JSON.stringify({ status }),
       }),
+    repin: (id: string, selection: { start: number; end: number; text: string }) =>
+      request<NoteDetail>(`/notes/${encodeURIComponent(id)}/repin`, {
+        method: 'POST', body: JSON.stringify(selection),
+      }),
     reply: (id: string, comment: string, tags?: string[]) =>
       request<NoteDetail>(`/notes/${encodeURIComponent(id)}/reply`, {
         method: 'POST', body: JSON.stringify({ comment, tags }),

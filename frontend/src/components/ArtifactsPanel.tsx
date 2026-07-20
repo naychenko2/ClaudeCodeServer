@@ -547,7 +547,7 @@ function NavArrow({ dir, disabled, onClick }: { dir: 'prev' | 'next'; disabled: 
 }
 
 // Строка комментария к документу: клик — открыть заметку-комментарий (резолв по заголовку)
-function CommentRow({ title, doc }: { title: string; doc: string }) {
+function CommentRow({ title, doc, mentioned }: { title: string; doc: string; mentioned?: boolean }) {
   const [opening, setOpening] = useState(false);
   return (
     <button disabled={opening}
@@ -573,10 +573,13 @@ function CommentRow({ title, doc }: { title: string; doc: string }) {
       onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
     >
       <span style={{ display: 'flex', alignItems: 'center', gap: 9, minWidth: 0 }}>
-        <MessageCircle size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={C.accent} style={{ flexShrink: 0 }} />
+        <MessageCircle size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={mentioned ? C.textMuted : C.accent} style={{ flexShrink: 0 }} />
         <span style={{ fontFamily: FONT.sans, fontSize: 12.5, color: C.textSecondary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 } as CSSProperties}>
           {title}
         </span>
+        {mentioned && (
+          <span style={{ fontSize: 10, color: C.textMuted, flexShrink: 0 }}>упомянут</span>
+        )}
         <ArrowUpRight size={12} strokeWidth={2} color={C.textMuted} style={{ flexShrink: 0, opacity: 0.5 }} />
       </span>
       {doc && (
@@ -852,7 +855,7 @@ export function ArtifactsPanel({ sessionId, projectId, rootPath, onOpenFile, onC
                     Комментарии к документам не создавались
                   </div>
                 ) : comments.map((c, i) => (
-                  <CommentRow key={i} title={c.title} doc={c.doc} />
+                  <CommentRow key={i} title={c.title} doc={c.doc} mentioned={c.mentioned} />
                 ))}
               </div>
             )}

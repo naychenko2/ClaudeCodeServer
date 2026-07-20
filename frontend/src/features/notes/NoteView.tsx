@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Check, FileText, MessageCircle, Undo2, X } from 'lucide-react';
-import type { NoteDetail, NoteReply } from '../../types';
+import type { NoteDetail, NoteReply, Persona } from '../../types';
 import { api } from '../../lib/api';
 import { bumpNotes, useNotesVersion } from '../../lib/notes';
 import { C, FONT, R, TB } from '../../lib/design';
@@ -21,6 +21,7 @@ import { useOnline } from '../../hooks/useOnline';
 import { OfflineError } from '../../lib/offline';
 import { getNoteForView, saveNoteOffline, deleteNoteOffline, offlineResolve } from '../../lib/notesOffline';
 import { showToast } from '../../lib/toast';
+import { ensurePersonasLoaded, personaLabel, usePersonas } from '../../lib/personas';
 import {
   SourceBadge, usePanelWidth,
   IconTrash, IconLink, IconSparkle, IconFolder, IconFolderMove,
@@ -132,12 +133,15 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
   };
   // «Перейти к месту»: проектный документ → файл проекта; личный vault → заметка.
   // Для ответа в треде та же кнопка ведёт к корневому комментарию (docPath = его файл).
+  // Якорь для скролла к блоку передаётся через sessionStorage — его подберёт
+  // DocCommentedMarkdown в открывшемся документе.
   const findDocNote = () =>
     ann && allNotes.find(n => n.source === ann.docScope &&
       (n.path.toLowerCase() === ann.docPath.toLowerCase() ||
        ('notes/' + n.path).toLowerCase() === ann.docPath.toLowerCase()));
   const gotoAnnTarget = () => {
-    if (!ann) return;
+    if (!note || !ann) return;
+    if (!ann.isReply) sessionStorage.setItem('cc_pending_annotation', note.id);
     if (ann.docScope === 'personal' || ann.isReply) {
       const target = findDocNote();
       if (target) onSelectNote(target.id);
@@ -146,6 +150,38 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
     window.dispatchEvent(new CustomEvent('cc-open-url', {
       detail: { url: `#/project/${ann.docScope}/file/${encodeURIComponent(ann.docPath)}` },
     }));
+  };
+
+  // «Обработать» = создать задачу из комментария (лично или с персоной-исполнителем)
+  const personas = usePersonas();
+  const [assignOpen, setAssignOpen] = useState(false);
+  useEffect(() => { if (ann && !ann.isReply) void ensurePersonasLoaded(); }, [ann]);
+  useEffect(() => {
+    if (!assignOpen) return;
+    const close = () => setAssignOpen(false);
+    const t = window.setTimeout(() => window.addEventListener('mousedown', close), 0);
+    return () => { window.clearTimeout(t); window.removeEventListener('mousedown', close); };
+  }, [assignOpen]);
+  const createTaskFromComment = async (persona?: Persona) => {
+    if (!note || !ann) return;
+    setAssignOpen(false);
+    try {
+      await api.tasks.create(ann.docScope === 'personal' ? null : ann.docScope, {
+        title: `Обработать комментарий: ${note.title}`,
+        description: [
+          `Комментарий к документу \`${ann.docPath}\`${ann.anchorHeading ? ` (${ann.anchorHeading})` : ''}:`,
+          '',
+          ann.anchorQuote ? `> ${ann.anchorQuote}` : '',
+          '',
+          `Заметка-комментарий: [${note.title}](#/notes/${encodeURIComponent(note.id)}). ` +
+          'После обработки пометь комментарий решённым (notes_set_status).',
+        ].filter(l => l !== '').join('\n'),
+        ...(persona ? { assignee: 'claude' as const, personaId: persona.id } : {}),
+      });
+      showToast('Задачи', persona
+        ? `Задача создана и поручена: ${personaLabel(persona)}`
+        : 'Задача из комментария создана');
+    } catch { showToast('Задачи', 'Не удалось создать задачу'); }
   };
 
   const suggestLinks = () => {
@@ -527,6 +563,39 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
                   {ann.isReply ? 'К корневому комментарию →' : 'Перейти к месту →'}
                 </button>
               )}
+              {/* «Обработать» = задача из комментария: лично или персоне-исполнителю */}
+              {!ann.isReply && (
+                <span style={{ position: 'relative', display: 'inline-flex', gap: 6 }}>
+                  <button onClick={() => void createTaskFromComment()} style={annBtn}>
+                    Создать задачу
+                  </button>
+                  {personas.length > 0 && (
+                    <button onClick={() => setAssignOpen(v => !v)} style={annBtn}>
+                      Поручить персоне ▾
+                    </button>
+                  )}
+                  {assignOpen && (
+                    <div onMouseDown={e => e.stopPropagation()} style={{
+                      position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 20,
+                      background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg,
+                      boxShadow: '0 8px 24px rgba(0,0,0,.14)', minWidth: 210, maxHeight: 220,
+                      overflowY: 'auto', padding: 4,
+                    }}>
+                      {personas.map(p => (
+                        <button key={p.id} onClick={() => void createTaskFromComment(p)} style={{
+                          display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '7px 10px',
+                          border: 'none', background: 'transparent', cursor: 'pointer', textAlign: 'left',
+                          fontFamily: FONT.sans, fontSize: 12.5, color: C.textPrimary, borderRadius: 6,
+                        }}
+                        onMouseEnter={e => { e.currentTarget.style.background = C.bgInset; }}
+                        onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}>
+                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{personaLabel(p)}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </span>
+              )}
             </div>
             {/* Тред: ответы + поле «Ответить» (только у корневого комментария) */}
             {!ann.isReply && annReplies !== null && (
@@ -634,6 +703,13 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
 
 // Диалог переноса: выбор источника (личный vault / проекты) + папки выбранного
 // источника + ввод новой папки; «Корень» — наверх выбранного источника.
+// Кнопка действий карточки привязки комментария
+const annBtn: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5,
+  color: C.textSecondary, background: C.bgWhite, border: `1px solid ${C.border}`,
+  borderRadius: R.sm, padding: '3px 10px', cursor: 'pointer', fontFamily: FONT.sans,
+};
+
 function MoveDialog({ currentDir, currentSource, sources, foldersFor, error, onMove, onClose }: {
   currentDir: string;
   currentSource: string;

@@ -375,6 +375,49 @@ public class NoteAnnotationTests : IDisposable
         _sut.GetSummaries(User, null, "status:open").Should().ContainSingle(n => n.Id == root.Id);
     }
 
+    // ─── Перепривязка к новому выделению ─────────────────────────────────────
+
+    [Fact]
+    public void Repin_ПереносимПривязкуНаДругоеМесто()
+    {
+        var docPath = WriteDoc();
+        var note = _sut.Annotate(User, new AnnotateRequest(
+            new AnnotateDocRef("personal", "Архитектура.md"),
+            Sel(Doc, "Все шесть точек запуска идут через единый интерфейс IProcessLauncher."), "к"));
+        var oldBlockId = note.Annotation!.BlockId;
+
+        // Блок переписан — привязка деградировала в «changed»
+        var doc = File.ReadAllText(docPath)
+            .Replace("Все шесть точек запуска идут через единый интерфейс IProcessLauncher.", "Совсем другой текст.")
+            .Replace("Драйверы стартуют процессы и пробрасывают stdio насквозь. ^" + oldBlockId, "И тут иначе.");
+        File.WriteAllText(docPath, doc);
+        _sut.Create(User, new CreateNoteRequest("Кэш-инвалидация", "x"));
+        _sut.GetDocAnnotations(User, "personal", "Архитектура.md").Single().State.Should().Be("changed");
+
+        // Перепривязка к новому выделению
+        var newSel = "Убийство docker-клиента на хосте не трогает процесс внутри контейнера.";
+        var updated = _sut.RepinAnnotation(User, note.Id, Sel(File.ReadAllText(docPath), newSel));
+        updated.Annotation!.BlockId.Should().NotBe(oldBlockId);
+        updated.Annotation.AnchorQuote.Should().Be(newSel);
+        updated.Annotation.AnchorHeading.Should().Be("Архитектура › Прерывание хода");
+        updated.Annotation.Status.Should().Be("open", "статус перепривязка не трогает");
+        _sut.GetDocAnnotations(User, "personal", "Архитектура.md").Single().State.Should().Be("exact");
+    }
+
+    [Fact]
+    public void Repin_ТекстНеНайден_409БезИзменений()
+    {
+        WriteDoc();
+        var note = _sut.Annotate(User, new AnnotateRequest(
+            new AnnotateDocRef("personal", "Архитектура.md"),
+            Sel(Doc, "Все шесть точек запуска идут через единый интерфейс IProcessLauncher."), "к"));
+        var act = () => _sut.RepinAnnotation(User, note.Id,
+            new AnnotateSelection(0, 10, "нет такого текста в документе"));
+        act.Should().Throw<AnnotationConflictException>();
+        _sut.GetDetail(User, note.Id)!.Annotation!.AnchorQuote
+            .Should().Contain("Все шесть точек", "привязка не изменилась");
+    }
+
     // ─── Миграция привязки при переносе (этап 4) ─────────────────────────────
 
     [Fact]

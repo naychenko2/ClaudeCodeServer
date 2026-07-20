@@ -1,13 +1,141 @@
 import { useEffect, useState } from 'react';
-import { Lock, X } from 'lucide-react';
+import { GitBranch, Lock, X } from 'lucide-react';
 import type { Project, ProjectGroup, PermissionRule, SystemPromptPart } from '../../../types';
 import { api } from '../../../lib/api';
 import { useOnline } from '../../../hooks/useOnline';
-import { C, R } from '../../../lib/design';
-import { Modal, ModalActions, TextField, TextArea, Field, Button } from '../../../components/ui';
+import { C, FONT, R } from '../../../lib/design';
+import { Modal, ModalActions, TextField, TextArea, Field, Button, Toggle } from '../../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
 import { GroupSelect } from '../GroupSelect';
 import { ProjectSyncToggle } from '../../../components/ProjectSyncToggle';
+
+// === История файлов (Git) в настройках проекта ===
+// Включение необратимо by design: «выключить» означало бы удалить .git со всей историей,
+// поэтому для ведущегося репозитория показываем статус-строку и выбор ручное/авто,
+// а карточки «Без ведения истории» больше нет.
+function GitHistorySection({ project }: { project: Project }) {
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [isRepo, setIsRepo] = useState(false);
+  const [autoCommit, setAutoCommit] = useState(false);
+  const [autoPush, setAutoPush] = useState(false);
+  const [remoteUrl, setRemoteUrl] = useState<string | null>(null);
+  const [commitCount, setCommitCount] = useState<number | null>(null);
+  const [firstDate, setFirstDate] = useState<string | null>(null);
+  const [err, setErr] = useState('');
+
+  const reload = async () => {
+    try {
+      const st = await api.git.status(project.id);
+      setIsRepo(st.isRepo);
+      if (st.isRepo) {
+        const [remote, log] = await Promise.all([
+          api.git.remote(project.id),
+          api.git.log(project.id, 1000),
+        ]);
+        setAutoCommit(remote.autoCommit);
+        setAutoPush(remote.autoPush);
+        setRemoteUrl(remote.remoteUrl);
+        setCommitCount(log.length);
+        setFirstDate(log.length ? log[log.length - 1].date : null);
+      }
+    } catch { /* оффлайн/ошибка — секция покажет «недоступно» через isRepo=false без карточек? нет: просто молчим */ }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { void reload(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [project.id]);
+
+  const run = async (op: () => Promise<unknown>) => {
+    setBusy(true); setErr('');
+    try { await op(); await reload(); }
+    catch (e: any) { setErr(e.message ?? 'Не получилось'); }
+    finally { setBusy(false); }
+  };
+
+  const enable = (auto: boolean) => run(async () => {
+    await api.git.init(project.id);
+    if (auto) await api.git.setAutoCommit(project.id, true, false);
+  });
+  const setMode = (auto: boolean) => run(() => api.git.setAutoCommit(project.id, auto, auto ? autoPush : false));
+  const togglePush = () => run(() => api.git.setAutoCommit(project.id, true, !autoPush));
+
+  const card = (active: boolean, label: string, hint: string, onClick: () => void) => (
+    <div
+      onClick={busy ? undefined : onClick}
+      style={{
+        display: 'flex', alignItems: 'flex-start', gap: 9, padding: '8px 11px',
+        cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.6 : 1,
+        borderRadius: R.lg, border: `1px solid ${active ? C.accent : C.border}`,
+        background: active ? C.accentLight : C.bgWhite,
+      }}
+    >
+      <span style={{
+        width: 14, height: 14, borderRadius: '50%', marginTop: 2, flexShrink: 0,
+        border: `1.5px solid ${active ? C.accent : C.dashed}`,
+        background: active ? C.accent : 'transparent',
+        boxShadow: active ? `inset 0 0 0 2.5px ${C.bgWhite}` : 'none',
+      }} />
+      <span style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
+        <span style={{ fontSize: 13, fontFamily: FONT.sans, fontWeight: 600, color: active ? C.textHeading : C.textPrimary }}>{label}</span>
+        <span style={{ fontSize: 11.5, fontFamily: FONT.sans, color: C.textSecondary, lineHeight: 1.35 }}>{hint}</span>
+      </span>
+    </div>
+  );
+
+  const firstDateStr = firstDate
+    ? new Date(firstDate).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })
+    : null;
+
+  return (
+    <div style={{
+      padding: '11px 14px', background: C.bgWhite,
+      border: `1px solid ${C.border}`, borderRadius: R.xl,
+      display: 'flex', flexDirection: 'column', gap: 8,
+    }}>
+      <div style={{ fontSize: 12, fontWeight: 600, color: C.textSecondary, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+        История файлов (Git)
+      </div>
+      {err && <div style={{ fontSize: 12, color: C.dangerText }}>{err}</div>}
+      {loading ? (
+        <div style={{ fontSize: 12.5, color: C.textMuted }}>Загрузка…</div>
+      ) : !isRepo ? (
+        <>
+          {card(true, 'Без ведения истории', 'Обычная папка — версии файлов не сохраняются', () => {})}
+          {card(false, 'Ручное ведение истории', 'Версии сохраняются, когда вы сами нажмёте «Зафиксировать» в разделе «Файлы». Рекомендуется для разработки кода', () => enable(false))}
+          {card(false, 'Автоматическое ведение истории', 'Каждый ход ИИ сохраняется в историю сам. Рекомендуется для работы с документами', () => enable(true))}
+        </>
+      ) : (
+        <>
+          {/* История уже ведётся — выключения нет by design (означало бы удалить .git) */}
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 8, padding: '7px 11px',
+            borderRadius: R.lg, background: C.successBg, color: C.successText,
+            fontSize: 12.5, fontFamily: FONT.sans,
+          }}>
+            <GitBranch size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+            <span>
+              История ведётся{commitCount !== null ? ` · ${commitCount >= 1000 ? '1000+' : commitCount} коммитов` : ''}{firstDateStr ? ` · с ${firstDateStr}` : ''}
+            </span>
+          </div>
+          {card(!autoCommit, 'Ручное ведение истории', 'Версии сохраняются, когда вы сами нажмёте «Зафиксировать» в разделе «Файлы». Рекомендуется для разработки кода', () => setMode(false))}
+          {card(autoCommit, 'Автоматическое ведение истории', 'Каждый ход ИИ сохраняется в историю сам. Рекомендуется для работы с документами', () => setMode(true))}
+          {autoCommit && (
+            <div
+              onClick={remoteUrl && !busy ? togglePush : undefined}
+              title={remoteUrl ? undefined : 'Git-сервер не настроен — отправлять некуда'}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 8, padding: '2px 11px 0 34px',
+                cursor: remoteUrl && !busy ? 'pointer' : 'default', opacity: remoteUrl ? 1 : 0.5,
+              }}
+            >
+              <Toggle checked={autoPush} onChange={() => { if (remoteUrl && !busy) void togglePush(); }} />
+              <span style={{ fontSize: 12.5, fontFamily: FONT.sans, color: C.textPrimary }}>Ещё и отправлять копию на git-сервер (push)</span>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
 
 interface Props {
   project: Project;
@@ -359,6 +487,7 @@ export function EditDialog({ project, groups = [], onSuccess, onClose }: Props) 
           Настроить
         </Button>
       </div>
+      <GitHistorySection project={project} />
       <ProjectSyncToggle projectId={project.id} online={online} />
     </Modal>
   );

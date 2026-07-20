@@ -405,12 +405,10 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
         {
             var p = GetProject(projectId);
             var owner = p.OwnerId is null ? null : users.GetById(p.OwnerId);
-            string? htmlUrl = null;
-            if (p.GitRemoteUrl is not null && owner?.ForgejoUsername is not null)
-            {
-                // clone URL → html: срезать .git
-                htmlUrl = p.GitRemoteUrl.EndsWith(".git") ? p.GitRemoteUrl[..^4] : p.GitRemoteUrl;
-            }
+            // clone URL (внутренний, напр. localhost:3005) → публичная веб-ссылка (PublicUrl)
+            var htmlUrl = p.GitRemoteUrl is not null && owner?.ForgejoUsername is not null
+                ? gitServer.ToPublicHtmlUrl(p.GitRemoteUrl)
+                : null;
             return Ok(new { serverEnabled = gitServer.Enabled, remoteUrl = p.GitRemoteUrl, htmlUrl, autoCommit = p.GitAutoCommit, autoPush = p.GitAutoPush });
         }
         catch (KeyNotFoundException) { return NotFound(); }

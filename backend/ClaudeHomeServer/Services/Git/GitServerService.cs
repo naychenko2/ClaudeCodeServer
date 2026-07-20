@@ -24,6 +24,18 @@ public sealed class GitServerService(IConfiguration config, IHttpClientFactory h
 
     public bool Enabled => BaseUrl.Length > 0 && AdminToken.Length > 0;
 
+    /// <summary>
+    /// Публичная веб-ссылка из clone-URL: внутренний хост (BaseUrl, напр. localhost:3005)
+    /// заменяется на PublicUrl (домен), суффикс .git срезается. Чужой remote — как есть без .git.
+    /// </summary>
+    public string ToPublicHtmlUrl(string cloneUrl)
+    {
+        var noGit = cloneUrl.EndsWith(".git", StringComparison.OrdinalIgnoreCase) ? cloneUrl[..^4] : cloneUrl;
+        if (BaseUrl.Length > 0 && noGit.StartsWith(BaseUrl, StringComparison.OrdinalIgnoreCase))
+            return PublicUrl + noGit[BaseUrl.Length..];
+        return noGit;
+    }
+
     private HttpClient Client()
     {
         var http = httpFactory.CreateClient("forgejo");

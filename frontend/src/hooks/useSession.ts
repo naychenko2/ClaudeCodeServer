@@ -24,6 +24,10 @@ interface SessionState extends ChatState {
 const _store = new Map<string, SessionState>();
 const _listeners = new Map<string, Set<() => void>>();
 const _joining = new Map<string, Promise<void>>();
+const _lastSeen = new Map<string, number>(); // LRU: sid → ts последней мутации состояния
+
+// Потолок LRU-кэша холодных сессий (см. evictColdSessions). Открытые/активные не считаются.
+const MAX_CACHED_SESSIONS = 20;
 
 // История чата: у проектной сессии — через /projects/{id}/sessions, у чата вне проекта — через /chats
 const loadHistory = (sid: string, projectId?: string) =>
@@ -38,9 +42,37 @@ function getState(sid: string): SessionState {
   return _store.get(sid)!;
 }
 
+// Единственная точка мутации _store: любая запись освежает LRU-метку. getState
+// при lazy-init метку НЕ ставит намеренно — LRU считаем по мутациям, не по чтениям
+// (иначе фоновый onMessage от project-групп держал бы чужие сессии вечно горячими).
+function touch(sid: string, next: SessionState) {
+  _store.set(sid, next);
+  _lastSeen.set(sid, Date.now());
+}
+
 function setState(sid: string, updater: (prev: SessionState) => SessionState) {
-  _store.set(sid, updater(getState(sid)));
+  touch(sid, updater(getState(sid)));
   _listeners.get(sid)?.forEach(fn => fn());
+}
+
+// LRU-потолок: держим не более MAX_CACHED_SESSIONS холодных сессий. Холодная =
+// никто не смотрит (нет подписчиков), ход не идёт (isWaiting) и мы вышли из её
+// SignalR-группы (isJoined). Открытые/активные не считаем и не выселяем. Ленты
+// выселенных освобождаются; история восстановится через loadHistory при повторном
+// открытии. Зовётся из cleanup при закрытии последнего зрителя сессии.
+function evictColdSessions() {
+  const cold: Array<[string, number]> = [];
+  for (const [sid, s] of _store) {
+    const watched = (_listeners.get(sid)?.size ?? 0) > 0;
+    if (watched || s.isWaiting || s.isJoined) continue;
+    cold.push([sid, _lastSeen.get(sid) ?? 0]);
+  }
+  if (cold.length <= MAX_CACHED_SESSIONS) return;
+  cold.sort((a, b) => a[1] - b[1]); // старые первыми
+  for (const [sid] of cold.slice(0, cold.length - MAX_CACHED_SESSIONS)) {
+    _store.delete(sid);
+    _lastSeen.delete(sid);
+  }
 }
 
 function updateItems(sid: string, fn: (items: ChatItem[]) => ChatItem[]) {
@@ -106,7 +138,7 @@ function ensureHandler() {
     const prev = getState(sid);
     const next = applyServerMessage(prev, msg);
     if (next !== prev) {
-      _store.set(sid, next);
+      touch(sid, next);
       _listeners.get(sid)?.forEach(fn => fn());
     }
 
@@ -208,6 +240,7 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
       if ((_listeners.get(sessionId)?.size ?? 0) === 0) {
         leaveSession(sessionId);
         setState(sessionId, prev => ({ ...prev, isJoined: false }));
+        evictColdSessions();
       }
     };
   }, [sessionId, projectId, isGroup]);

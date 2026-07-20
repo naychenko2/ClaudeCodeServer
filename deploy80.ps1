@@ -133,12 +133,16 @@ if ($SkipSandbox) {
 if (-not $Console -and -not $NoAutostart) {
     try {
         $startup = [Environment]::GetFolderPath('Startup')
-        $lnk = Join-Path $startup 'ClaudeHomeServer.lnk'
+        # Снести старый ярлык (переименование на «AI Home»)
+        Remove-Item (Join-Path $startup 'ClaudeHomeServer.lnk') -Force -ErrorAction SilentlyContinue
+        $lnk = Join-Path $startup 'AI Home.lnk'
+        $trayExe = Join-Path $PublishDir 'ClaudeHomeServer.Tray.exe'
         $ws = New-Object -ComObject WScript.Shell
         $sc = $ws.CreateShortcut($lnk)
-        $sc.TargetPath = Join-Path $PublishDir 'ClaudeHomeServer.Tray.exe'
+        $sc.TargetPath = $trayExe
         $sc.WorkingDirectory = $PublishDir
-        $sc.Description = 'ClaudeHomeServer tray supervisor'
+        $sc.Description = 'AI Home'
+        $sc.IconLocation = "$trayExe,0"
         $sc.Save()
         Write-Host "  Автозапуск: $lnk" -ForegroundColor DarkGray
     } catch {

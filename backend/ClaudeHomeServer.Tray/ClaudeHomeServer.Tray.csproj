@@ -11,7 +11,14 @@
     <UseWindowsForms>true</UseWindowsForms>
     <AssemblyName>ClaudeHomeServer.Tray</AssemblyName>
     <RootNamespace>ClaudeHomeServer.Tray</RootNamespace>
-    <ApplicationIcon></ApplicationIcon>
+    <ApplicationIcon>appicon.ico</ApplicationIcon>
+    <Product>AI Home</Product>
+    <AssemblyTitle>AI Home</AssemblyTitle>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Иконка трея: кладём рядом с exe, грузим в рантайме (NotifyIcon требует Icon-объект). -->
+    <Content Include="appicon.ico" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 
 </Project>

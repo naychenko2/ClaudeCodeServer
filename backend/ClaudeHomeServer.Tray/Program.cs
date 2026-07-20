@@ -44,6 +44,7 @@ sealed class ServerSupervisor : IDisposable
     private readonly StreamWriter _log;
     private readonly object _lock = new();
 
+    private readonly Icon _appIcon;
     private Process? _server;
     private DateTime _startedAt;
     private int _restarts;
@@ -63,11 +64,12 @@ sealed class ServerSupervisor : IDisposable
         _log = new StreamWriter(new FileStream(logPath, FileMode.Append, FileAccess.Write, FileShare.Read),
             new UTF8Encoding(false)) { AutoFlush = true };
 
+        _appIcon = LoadAppIcon();
         _icon = new NotifyIcon
         {
-            Icon = SystemIcons.Application,
+            Icon = _appIcon,
             Visible = true,
-            Text = "ClaudeHomeServer",
+            Text = "AI Home",
             ContextMenuStrip = BuildMenu(),
         };
         _icon.DoubleClick += (_, _) => OpenBrowser(_cfg.Url);
@@ -87,6 +89,18 @@ sealed class ServerSupervisor : IDisposable
         }
         catch { /* дефолты */ }
         return new TrayConfig();
+    }
+
+    // Иконка приложения (appicon.ico рядом с exe) под размер трея; фолбэк — системная.
+    private Icon LoadAppIcon()
+    {
+        try
+        {
+            var p = Path.Combine(_baseDir, "appicon.ico");
+            if (File.Exists(p)) return new Icon(p, SystemInformation.SmallIconSize);
+        }
+        catch { /* фолбэк ниже */ }
+        return SystemIcons.Application;
     }
 
     private ContextMenuStrip BuildMenu()
@@ -115,7 +129,7 @@ sealed class ServerSupervisor : IDisposable
             if (!File.Exists(exe))
             {
                 WriteLog($"[tray] НЕ НАЙДЕН сервер: {exe}");
-                _icon.ShowBalloonTip(5000, "ClaudeHomeServer", $"Не найден {_cfg.ServerExe}", ToolTipIcon.Error);
+                _icon.ShowBalloonTip(5000, "AI Home",$"Не найден {_cfg.ServerExe}", ToolTipIcon.Error);
                 return;
             }
 
@@ -143,7 +157,7 @@ sealed class ServerSupervisor : IDisposable
             _startedAt = DateTime.Now;
 
             WriteLog($"[tray] сервер запущен PID={_server.Id} env={_cfg.Environment}");
-            _icon.Text = $"ClaudeHomeServer — работает (PID {_server.Id})";
+            _icon.Text = $"AI Home —работает (PID {_server.Id})";
         }
     }
 
@@ -157,7 +171,7 @@ sealed class ServerSupervisor : IDisposable
 
         // Неожиданное падение — авто-рестарт через 3с (супервизия).
         _restarts++;
-        _icon.Text = "ClaudeHomeServer — перезапуск…";
+        _icon.Text = "AI Home —перезапуск…";
         _ = Task.Run(async () =>
         {
             await Task.Delay(3000);
@@ -169,7 +183,7 @@ sealed class ServerSupervisor : IDisposable
     {
         StopServer();
         StartServer();
-        _icon.ShowBalloonTip(2000, "ClaudeHomeServer", "Сервер перезапущен", ToolTipIcon.Info);
+        _icon.ShowBalloonTip(2000, "AI Home","Сервер перезапущен", ToolTipIcon.Info);
     }
 
     private void StopServer()
@@ -211,7 +225,7 @@ sealed class ServerSupervisor : IDisposable
             $"Окружение: {_cfg.Environment}\n" +
             $"URL: {_cfg.Url}";
 
-        MessageBox.Show(text, "ClaudeHomeServer — статистика", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        MessageBox.Show(text, "AI Home —статистика", MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 
     private void OpenLogs()
@@ -266,6 +280,7 @@ sealed class ServerSupervisor : IDisposable
         _disposed = true;
         StopServer();
         try { _icon.Visible = false; _icon.Dispose(); } catch { /* ignore */ }
+        try { if (_appIcon != SystemIcons.Application) _appIcon.Dispose(); } catch { /* ignore */ }
         try { _log.Dispose(); } catch { /* ignore */ }
         SystemEvents.SessionEnding -= (_, _) => StopServer();
     }

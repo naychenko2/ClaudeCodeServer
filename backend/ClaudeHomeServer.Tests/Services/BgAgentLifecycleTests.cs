@@ -69,6 +69,50 @@ public class BgAgentLifecycleTests : IDisposable
             .Should().BeTrue();
     }
 
+    // --- Завершение фоновой задачи через опрос TaskOutput (модели вроде Kimi) ---
+
+    [Fact]
+    public void ParseTaskOutputCompletion_Completed_ВозвращаетAgentIdБезAborted()
+    {
+        var content = "<retrieval_status>success</retrieval_status>\n\n<task_id>abc3224d352c8d131</task_id>\n\n"
+            + "<task_type>local_agent</task_type>\n\n<status>completed</status>\n\n<output>готовый ответ</output>";
+
+        var r = ClaudeHomeServer.Services.Llm.Claude.ClaudeSession.ParseTaskOutputCompletion(content);
+
+        r.Should().NotBeNull();
+        r!.Value.AgentId.Should().Be("abc3224d352c8d131");
+        r.Value.Aborted.Should().BeFalse();
+    }
+
+    [Fact]
+    public void ParseTaskOutputCompletion_Failed_ПомечаетAborted()
+    {
+        var r = ClaudeHomeServer.Services.Llm.Claude.ClaudeSession.ParseTaskOutputCompletion(
+            "<task_id>a824ed2f614ce2e90</task_id>\n<status>failed</status>");
+
+        r.Should().NotBeNull();
+        r!.Value.Aborted.Should().BeTrue();
+    }
+
+    [Fact]
+    public void ParseTaskOutputCompletion_Running_ВозвращаетNull()
+    {
+        // Агент ещё работает (block:false) — не сигнал завершения
+        ClaudeHomeServer.Services.Llm.Claude.ClaudeSession.ParseTaskOutputCompletion(
+            "<task_id>a1d9a08b4c5de1fa5</task_id>\n<status>running</status>")
+            .Should().BeNull();
+    }
+
+    [Fact]
+    public void ParseTaskOutputCompletion_ОбычныйToolResult_ВозвращаетNull()
+    {
+        // Квитанция запуска и произвольный вывод не должны триггерить завершение
+        ClaudeHomeServer.Services.Llm.Claude.ClaudeSession.ParseTaskOutputCompletion(
+            "Async agent launched successfully… agentId: abc123").Should().BeNull();
+        ClaudeHomeServer.Services.Llm.Claude.ClaudeSession.ParseTaskOutputCompletion(
+            "обычный текст без тегов").Should().BeNull();
+    }
+
     // --- TurnAccumulator: поздние события доживающих агентов ---
 
     [Fact]

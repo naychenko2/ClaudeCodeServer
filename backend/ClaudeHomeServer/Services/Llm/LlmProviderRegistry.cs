@@ -49,12 +49,16 @@ public class LlmProviderRegistry
     // (ходы без CLAUDE_CONFIG_DIR-оверрайда); нужен TranscriptMigrator при фейловере
     public string UserProfileDir => _userProfileDir;
 
-    // Возвращает пути к projects/ внутри профилей всех включённых провайдеров —
-    // для WorkflowAgentParser (транскрипты workflow лежат там, а не в ~/.claude/projects/
-    // при использовании стороннего провайдера).
+    // Возвращает пути к projects/ внутри профилей ВСЕХ сконфигурированных провайдеров —
+    // для WorkflowAgentParser (транскрипты workflow и завершения фоновых задач лежат там,
+    // а не в ~/.claude/projects/ при использовании стороннего провайдера).
+    // Без фильтра по существованию: профиль провайдера создаётся ЛЕНИВО при первом ходе, а
+    // регистрация корней — одноразовая на старте. Отфильтруй по Directory.Exists — и провайдер,
+    // впервые использованный после старта (как Kimi), остался бы без разрешённого корня, и
+    // MainTranscriptTailer/SubagentStreamWatcher не нашли бы его транскрипт (спиннеры навсегда).
+    // Несуществующий корень безвреден: резолверы путей всё равно проверяют Directory/File.Exists.
     public IEnumerable<string> GetProviderProjectsDirs() =>
-        _providers.Keys.Select(k => Path.Combine(_profilesDir, k, "projects"))
-            .Where(d => Directory.Exists(d));
+        _providers.Keys.Select(k => Path.Combine(_profilesDir, k, "projects"));
 
     public IEnumerable<LlmProviderConfig> Enabled => _providers.Values.Where(p => p.Enabled);
 

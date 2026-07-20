@@ -1997,6 +1997,10 @@ public class ClaudeSession : ILlmSessionAdapter
             // берём её id на учёт прогона: пока pending не пуст, процесс переживает ход
             TrackBgLaunch(run, toolUseId, resultContent, isError);
 
+            // Обратная сторона: модель сама опросила результат фоновой задачи через TaskOutput —
+            // это сигнал её завершения (Kimi и др. не ждут task-notification)
+            if (!isError) HandleTaskOutputCompletion(run, resultContent);
+
             // Если это результат Workflow с транскриптом — запускаем watcher
             if (!isError && resultContent.Contains("Transcript dir:"))
             {
@@ -2028,6 +2032,32 @@ public class ClaudeSession : ILlmSessionAdapter
         new(@"runId:\s*(wf_[0-9a-zA-Z_-]{4,})", System.Text.RegularExpressions.RegexOptions.Compiled);
     private static readonly System.Text.RegularExpressions.Regex TaskIdRe =
         new(@"<task-id>([^<]+)</task-id>", System.Text.RegularExpressions.RegexOptions.Compiled);
+    // Опрос результата фоновой задачи инструментом TaskOutput: его tool_result несёт
+    // <task_id>X</task_id> (подчёркивание, не дефис как у task-notification) и
+    // <status>completed|failed…</status>. Некоторые модели (Kimi/Moonshot) не ждут
+    // task-notification, а сами тянут результат через TaskOutput — это тоже сигнал завершения.
+    private static readonly System.Text.RegularExpressions.Regex TaskOutputIdRe =
+        new(@"<task_id>\s*([0-9a-zA-Z_-]{6,})\s*</task_id>", System.Text.RegularExpressions.RegexOptions.Compiled);
+    private static readonly System.Text.RegularExpressions.Regex TaskOutputStatusRe =
+        new(@"<status>\s*([a-zA-Z_]+)\s*</status>", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    // Разбор tool_result инструмента TaskOutput → (agentId, aborted) при ТЕРМИНАЛЬНОМ статусе;
+    // null — это не TaskOutput-результат либо агент ещё работает (running/pending/queued).
+    // Чистая функция (вынесена ради юнит-тестов): без побочных эффектов и состояния прогона.
+    internal static (string AgentId, bool Aborted)? ParseTaskOutputCompletion(string? content)
+    {
+        if (string.IsNullOrEmpty(content)) return null;
+        var idm = TaskOutputIdRe.Match(content);
+        if (!idm.Success) return null;
+        var statusM = TaskOutputStatusRe.Match(content);
+        if (!statusM.Success) return null;
+        return statusM.Groups[1].Value.Trim().ToLowerInvariant() switch
+        {
+            "completed" => (idm.Groups[1].Value.Trim(), false),
+            "failed" or "error" or "cancelled" or "canceled" => (idm.Groups[1].Value.Trim(), true),
+            _ => null, // running / pending / queued — ещё не готов, ждём дальше
+        };
+    }
 
     // Учёт запуска фоновой задачи по tool_result: async-агент — «Async agent launched …
     // agentId: X», возобновление — «Agent "X" … resumed from transcript in the background»,
@@ -2099,6 +2129,42 @@ public class ClaudeSession : ILlmSessionAdapter
                     Console.Error.WriteLine($"[ClaudeSession] bg_agent_done не разослан: {ex.Message}");
                 }
             });
+        CloseStdinIfIdle(run);
+    }
+
+    // Завершение фоновой задачи, замеченное по tool_result инструмента TaskOutput (модели,
+    // которые сами опрашивают результат, а не ждут task-notification). Вычёркиваем агента
+    // из pending и шлём bg_agent_done — иначе карточка консультации крутила бы спиннер вечно.
+    // Идемпотентно: повторный опрос того же агента уже не найдёт его в pending и no-op.
+    private void HandleTaskOutputCompletion(CliRun run, string content)
+    {
+        if (ParseTaskOutputCompletion(content) is not { } completion) return;
+        var (agentId, aborted) = completion;
+
+        string? doneTool;
+        int left;
+        lock (run.PendingBg)
+        {
+            run.PendingBg.Remove(agentId, out doneTool);
+            left = run.PendingBg.Count;
+        }
+        if (string.IsNullOrEmpty(doneTool)) return;
+
+        Console.WriteLine($"[ClaudeSession] Фоновая задача завершилась через TaskOutput (aborted={aborted}), осталось {left}");
+        var tool = doneTool;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                // Финальный текст агента должен лечь в ленту РАНЬШЕ события завершения
+                if (_subagentWatcher is { IsDisposed: false } watcher) await watcher.DrainAsync();
+                await _onMessage(new BgAgentDoneMessage([tool], Aborted: aborted));
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[ClaudeSession] bg_agent_done (TaskOutput) не разослан: {ex.Message}");
+            }
+        });
         CloseStdinIfIdle(run);
     }
 

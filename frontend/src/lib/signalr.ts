@@ -157,6 +157,17 @@ export function onFilesChanged(handler: (data: { projectId: string; paths: strin
   return () => conn.off('filesChanged', handler);
 }
 
+// Git-статус проекта изменился (commit/stage/checkout/…) — приходит событием
+// message с type=git_status_changed в группу user_*; клиент перезапрашивает статус
+export function onGitStatusChanged(handler: (data: { projectId: string }) => void): () => void {
+  const conn = getConnection();
+  const h = (msg: ServerMessage) => {
+    if (msg.type === 'git_status_changed') handler({ projectId: msg.projectId });
+  };
+  conn.on('message', h);
+  return () => conn.off('message', h);
+}
+
 export async function joinProject(projectId: string): Promise<void> {
   const conn = await ensureConnected();
   await conn.invoke('JoinProject', projectId);

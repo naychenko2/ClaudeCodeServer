@@ -1,4 +1,4 @@
-import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry } from '../types';
+import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitBlameLine, GitRemoteInfo } from '../types';
 import { request } from './offline';
 
 export type { WorkflowAgentInfo, WorkflowAgentBlock };
@@ -120,8 +120,9 @@ export const api = {
       }),
     removeTeamMemory: (id: string, entryId: string) =>
       request<void>(`/projects/${encodeURIComponent(id)}/team-memory/${encodeURIComponent(entryId)}`, { method: 'DELETE' }),
-    create: (name: string, rootPath: string | null, createDirectory = false, groupId?: string | null) =>
-      request<Project>('/projects', { method: 'POST', body: JSON.stringify({ name, rootPath, createDirectory, groupId }) }),
+    create: (name: string, rootPath: string | null, createDirectory = false, groupId?: string | null,
+      git?: { enableGit?: boolean; gitAutoCommit?: boolean; gitAutoPush?: boolean }) =>
+      request<Project>('/projects', { method: 'POST', body: JSON.stringify({ name, rootPath, createDirectory, groupId, ...git }) }),
     update: (id: string, data: { name?: string; rootPath?: string; systemPrompt?: string; showHiddenFiles?: boolean; toolsEnabled?: boolean; permissionRules?: PermissionRule[]; groupId?: string | null }) =>
       request<Project>(`/projects/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
     delete: (id: string) => request<void>(`/projects/${id}`, { method: 'DELETE' }),
@@ -745,6 +746,75 @@ export const api = {
         throw new Error(err.error ?? res.statusText);
       }
     },
+  },
+
+  // Git проекта (раздел «Файлы» → «Изменения»/«История»); ошибки операций — 409 { error }
+  git: {
+    status: (projectId: string) =>
+      request<GitStatus>(`/projects/${projectId}/git/status`),
+    diff: (projectId: string, path: string, staged = false) =>
+      request<{ diff: string | null }>(`/projects/${projectId}/git/diff?path=${encodeURIComponent(path)}&staged=${staged}`),
+    log: (projectId: string, limit = 100, branch?: string) =>
+      request<GitLogEntry[]>(`/projects/${projectId}/git/log?limit=${limit}${branch ? `&branch=${encodeURIComponent(branch)}` : ''}`),
+    branches: (projectId: string) =>
+      request<GitBranchInfo[]>(`/projects/${projectId}/git/branches`),
+    commitDetail: (projectId: string, sha: string) =>
+      request<GitCommitDetail>(`/projects/${projectId}/git/commits/${sha}`),
+    commitFileDiff: (projectId: string, sha: string, path: string) =>
+      request<{ diff: string | null }>(`/projects/${projectId}/git/commits/${sha}/diff?path=${encodeURIComponent(path)}`),
+    stage: (projectId: string, path: string) =>
+      request<GitStatus>(`/projects/${projectId}/git/stage`, { method: 'POST', body: JSON.stringify({ path }) }),
+    unstage: (projectId: string, path: string) =>
+      request<GitStatus>(`/projects/${projectId}/git/unstage`, { method: 'POST', body: JSON.stringify({ path }) }),
+    stageAll: (projectId: string) =>
+      request<GitStatus>(`/projects/${projectId}/git/stage-all`, { method: 'POST' }),
+    // Откат правок файла к HEAD — необратимо (подтверждение на фронте)
+    discard: (projectId: string, path: string) =>
+      request<GitStatus>(`/projects/${projectId}/git/discard`, { method: 'POST', body: JSON.stringify({ path }) }),
+    commit: (projectId: string, message: string, amend = false) =>
+      request<{ sha: string }>(`/projects/${projectId}/git/commit`, {
+        method: 'POST', body: JSON.stringify({ message, amend }),
+      }),
+    checkout: (projectId: string, branch: string) =>
+      request<GitStatus>(`/projects/${projectId}/git/checkout`, { method: 'POST', body: JSON.stringify({ branch }) }),
+    createBranch: (projectId: string, name: string, from?: string) =>
+      request<GitStatus>(`/projects/${projectId}/git/branches`, {
+        method: 'POST', body: JSON.stringify({ name, from: from ?? null }),
+      }),
+    fetch: (projectId: string) =>
+      request<GitStatus>(`/projects/${projectId}/git/fetch`, { method: 'POST', timeoutMs: 60_000 }),
+    pull: (projectId: string) =>
+      request<GitStatus>(`/projects/${projectId}/git/pull`, { method: 'POST', timeoutMs: 120_000 }),
+    push: (projectId: string) =>
+      request<GitStatus>(`/projects/${projectId}/git/push`, { method: 'POST', timeoutMs: 120_000 }),
+    // Частичный stage: patch — unified diff одного хунка/строк (сервер применяет с --recount)
+    stageHunk: (projectId: string, patch: string) =>
+      request<GitStatus>(`/projects/${projectId}/git/stage-hunk`, { method: 'POST', body: JSON.stringify({ patch }) }),
+    unstageHunk: (projectId: string, patch: string) =>
+      request<GitStatus>(`/projects/${projectId}/git/unstage-hunk`, { method: 'POST', body: JSON.stringify({ patch }) }),
+    stashList: (projectId: string) =>
+      request<GitStashEntry[]>(`/projects/${projectId}/git/stash`),
+    stashPush: (projectId: string, message?: string) =>
+      request<GitStatus>(`/projects/${projectId}/git/stash`, { method: 'POST', body: JSON.stringify({ message: message ?? null }) }),
+    stashPop: (projectId: string, index: number) =>
+      request<GitStatus>(`/projects/${projectId}/git/stash/${index}/pop`, { method: 'POST' }),
+    // Удаление стэша — необратимо (подтверждение на фронте)
+    stashDrop: (projectId: string, index: number) =>
+      request<GitStatus>(`/projects/${projectId}/git/stash/${index}`, { method: 'DELETE' }),
+    // Безопасная отмена коммита: новый обратный коммит; конфликт → 409 { error }
+    revertCommit: (projectId: string, sha: string) =>
+      request<GitStatus>(`/projects/${projectId}/git/commits/${sha}/revert`, { method: 'POST', timeoutMs: 60_000 }),
+    blame: (projectId: string, path: string) =>
+      request<GitBlameLine[]>(`/projects/${projectId}/git/blame?path=${encodeURIComponent(path)}`),
+    // git init + при настроенном Forgejo создание удалённого репозитория
+    init: (projectId: string) =>
+      request<{ status: GitStatus; htmlUrl: string | null }>(`/projects/${projectId}/git/init`, { method: 'POST', timeoutMs: 60_000 }),
+    remote: (projectId: string) =>
+      request<GitRemoteInfo>(`/projects/${projectId}/git/remote`),
+    setAutoCommit: (projectId: string, enabled: boolean, push: boolean) =>
+      request<{ autoCommit: boolean; autoPush: boolean }>(`/projects/${projectId}/git/auto-commit`, {
+        method: 'PUT', body: JSON.stringify({ enabled, push }),
+      }),
   },
 
   knowledge: {

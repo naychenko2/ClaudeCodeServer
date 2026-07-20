@@ -23,6 +23,11 @@ public class User
     // local — на машине сервера с полным доступом; container — в общей Docker-песочнице.
     // Меняется только пока у пользователя нет чатов (корни проектов и профили сред различаются)
     public string ExecutionEnvironment { get; set; } = ExecutionEnvironments.Local;
+    // Аккаунт на локальном git-сервере Forgejo (провижнится лениво при первом git/init).
+    // Токен — персональный PAT со scope write:repository; хранится открыто (решение
+    // владельца, консистентно с остальным users.json), в git/логи не попадает
+    public string? ForgejoUsername { get; set; }
+    public string? ForgejoToken { get; set; }
 }
 
 // Значения User.ExecutionEnvironment

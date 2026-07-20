@@ -299,6 +299,84 @@ export interface FileEntry {
   synced?: 'direct' | 'inherited' | null;
 }
 
+// === Git в разделе «Файлы» ===
+
+// Одно изменение файла: status — односимвольный код git (M/A/D/R/?/U);
+// oldPath заполняется только для переименований (R)
+export interface GitFileChange {
+  path: string;
+  status: string;
+  oldPath?: string | null;
+}
+
+// Статус рабочего дерева проекта (GET /api/projects/{id}/git/status)
+export interface GitStatus {
+  isRepo: boolean;
+  branch: string | null;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+  detached: boolean;
+  staged: GitFileChange[];
+  unstaged: GitFileChange[];
+  untracked: GitFileChange[];
+}
+
+// Ветка репозитория: current — текущая (HEAD)
+export interface GitBranchInfo {
+  name: string;
+  current: boolean;
+  upstream: string | null;
+}
+
+// Запись истории коммитов (GET /api/projects/{id}/git/log)
+export interface GitLogEntry {
+  sha: string;
+  shortSha: string;
+  author: string;
+  email: string;
+  date: string;
+  subject: string;
+}
+
+// Детали коммита (GET /api/projects/{id}/git/commits/{sha})
+export interface GitCommitDetail {
+  sha: string;
+  shortSha: string;
+  author: string;
+  email: string;
+  date: string;
+  subject: string;
+  body: string;
+  files: GitFileChange[];
+}
+
+// Запись стэша (GET /api/projects/{id}/git/stash)
+export interface GitStashEntry {
+  index: number;
+  message: string;
+  date: string;
+}
+
+// Строка blame файла (GET /api/projects/{id}/git/blame?path=)
+export interface GitBlameLine {
+  line: number;
+  sha: string;
+  shortSha: string;
+  author: string;
+  date: string;
+  content: string;
+}
+
+// Удалённый репозиторий и авто-коммит (GET /api/projects/{id}/git/remote)
+export interface GitRemoteInfo {
+  serverEnabled: boolean;
+  remoteUrl: string | null;
+  htmlUrl: string | null;
+  autoCommit: boolean;
+  autoPush: boolean;
+}
+
 export interface SyncMark {
   path: string;
   isDirectory: boolean;
@@ -381,6 +459,8 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'knowledge_changed'; action: string; datasetId?: string }
   | { type: 'personas_changed'; action: 'created' | 'updated' | 'deleted' | 'memory'; personaId?: string }
   | { type: 'team_memory_changed'; action: 'added' | 'updated' | 'removed'; projectId: string; entryId?: string }
+  // Изменение git-статуса проекта (commit/stage/checkout/…) — клиент перезапрашивает статус
+  | { type: 'git_status_changed'; projectId: string }
   | { type: 'speaker_changed'; personaId: string; label: string }
   // Чат переключён на другой аккаунт/провайдер: auto — тихий фейловер пула подписок
   // (в ленту не попадает); label — разделитель «Продолжено на …» явной миграции

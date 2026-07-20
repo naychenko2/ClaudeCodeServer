@@ -108,6 +108,29 @@ services:
         fi
         exec dotnet ClaudeHomeServer.dll
 
+  # Локальный git-сервер: remote-репозитории проектов, веб-UI (deep-link «Открыть в Forgejo»).
+  # Первичная настройка один раз после старта (регистрация выключена, админ создаётся CLI):
+  #   docker exec -u 1000 forgejo forgejo admin user create --admin --username root --password <пароль> --email root@local
+  #   docker exec -u 1000 forgejo forgejo admin user generate-access-token --username root --scopes all --token-name claude-home
+  # Токен → appsettings.Local.json: Forgejo:BaseUrl=http://localhost:3000, Forgejo:AdminToken=<токен>
+  forgejo:
+    image: codeberg.org/forgejo/forgejo:11
+    container_name: forgejo
+    environment:
+      USER_UID: "1000"
+      USER_GID: "1000"
+      # Без веб-визарда установки и без публичной регистрации
+      FORGEJO__security__INSTALL_LOCK: "true"
+      FORGEJO__service__DISABLE_REGISTRATION: "true"
+      FORGEJO__server__ROOT_URL: http://localhost:3000/
+    ports:
+      - "3000:3000"   # web + git по HTTP (push/pull бэкенда идёт сюда)
+      - "2222:22"     # ssh (на будущее; MVP ходит по HTTP с токеном)
+    volumes:
+      - forgejo-data:/data
+    restart: unless-stopped
+
 volumes:
   claude-data:
   claude-home:
+  forgejo-data:

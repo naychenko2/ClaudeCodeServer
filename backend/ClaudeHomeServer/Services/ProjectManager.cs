@@ -158,6 +158,19 @@ public class ProjectManager
         return project;
     }
 
+    /// <summary>Сохраняет git-настройки проекта (remote и режим авто-коммита).</summary>
+    public Project UpdateGitSettings(string id, string? remoteUrl = null, bool? autoCommit = null, bool? autoPush = null)
+    {
+        var project = _projects.GetValueOrDefault(id)
+            ?? throw new KeyNotFoundException($"Проект не найден: {id}");
+        if (remoteUrl is not null) project.GitRemoteUrl = remoteUrl.Length == 0 ? null : remoteUrl;
+        if (autoCommit is not null) project.GitAutoCommit = autoCommit.Value;
+        if (autoPush is not null) project.GitAutoPush = autoPush.Value;
+        project.UpdatedAt = DateTime.UtcNow;
+        Save();
+        return project;
+    }
+
     // Кастомные колонки Kanban-доски проекта; пустой список/null → дефолтные 3
     public Project UpdateBoardColumns(string id, List<BoardColumn>? columns)
     {

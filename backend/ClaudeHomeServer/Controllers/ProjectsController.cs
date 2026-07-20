@@ -13,7 +13,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects")]
-public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings, UserStore users, UserHomeResolver homes, WorkspaceKnowledgeStore wkStore, TaskManager tasks, ProjectEventLogService events, TeamMemoryService teamMemory, KnowledgeService knowledge, NotesKnowledgeService notesKb, PersonaManager personas, PersonaMemoryService personaMemory, IHubContext<SessionHub> hub) : ControllerBase
+public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings, UserStore users, UserHomeResolver homes, WorkspaceKnowledgeStore wkStore, TaskManager tasks, ProjectEventLogService events, TeamMemoryService teamMemory, KnowledgeService knowledge, NotesKnowledgeService notesKb, PersonaManager personas, PersonaMemoryService personaMemory, ClaudeHomeServer.Services.Git.GitService git, ClaudeHomeServer.Services.Git.GitServerService gitServer, ILogger<ProjectsController> logger, IHubContext<SessionHub> hub) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -124,12 +124,35 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     }
 
     [HttpPost]
-    public IActionResult Create([FromBody] CreateProjectRequest req)
+    public async Task<IActionResult> Create([FromBody] CreateProjectRequest req)
     {
         try
         {
             var username = User.FindFirstValue(ClaimTypes.Name) ?? UserId;
             var p = projects.Create(req.Name, req.RootPath, UserId, username, req.CreateDirectory, req.GroupId);
+
+            // Git-режим из диалога создания: init (+ Forgejo-репо при настроенном сервере).
+            // Best-effort: сбой git/Forgejo не отменяет создание проекта — подключить можно позже
+            if (req.EnableGit)
+            {
+                try
+                {
+                    await git.InitAsync(p.OwnerId, p.RootPath);
+                    if (gitServer.Enabled && p.OwnerId is not null && users.GetById(p.OwnerId) is { } owner)
+                    {
+                        var repo = await gitServer.CreateRepoAsync(owner, p.Name);
+                        await git.SetRemoteAsync(p.OwnerId, p.RootPath, repo.CloneUrl);
+                        projects.UpdateGitSettings(p.Id, remoteUrl: repo.CloneUrl,
+                            autoCommit: req.GitAutoCommit, autoPush: req.GitAutoPush);
+                    }
+                    else if (req.GitAutoCommit)
+                        projects.UpdateGitSettings(p.Id, autoCommit: true, autoPush: false);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Git при создании проекта {Name} не подключился (проект создан)", p.Name);
+                }
+            }
             return CreatedAtAction(nameof(GetById), new { id = p.Id }, WithCount(p));
         }
         catch (DirectoryNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
@@ -232,7 +255,8 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     }
 }
 
-public record CreateProjectRequest(string Name, string? RootPath, bool CreateDirectory = false, string? GroupId = null);
+public record CreateProjectRequest(string Name, string? RootPath, bool CreateDirectory = false, string? GroupId = null,
+    bool EnableGit = false, bool GitAutoCommit = false, bool GitAutoPush = false);
 public record UpdateProjectRequest(string? Name, string? RootPath, string? SystemPrompt, bool? ShowHiddenFiles, bool? ToolsEnabled = null, List<PermissionRule>? PermissionRules = null, string? GroupId = null);
 public record UpdateBoardColumnsRequest(List<BoardColumn>? Columns);
 public record TeamMemoryRequest(string Text, TeamMemoryType? Type = null);

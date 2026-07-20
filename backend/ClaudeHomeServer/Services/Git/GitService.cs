@@ -454,6 +454,8 @@ public sealed class GitService(ILauncherFactory launchers)
         .claude/
         .omc/
         .playwright-mcp/
+        # Заметки и комментарии проекта — живут в приложении, не в истории документов
+        /notes/
         # Временные файлы офисных редакторов
         ~$*
         *.tmp

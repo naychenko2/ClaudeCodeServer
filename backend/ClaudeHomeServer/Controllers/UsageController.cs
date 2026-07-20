@@ -36,24 +36,17 @@ public class UsageController(UsageService usage, ClaudeSubscriptionPool? subscri
         // Для подписок из пула — проставляем DisplayName + статус роутинга (в ротации / выведен)
         if (bySub.Count > 1 && subscriptionPool?.HasExtra == true)
         {
-            // Показываем только ключи из текущего конфига пула (основной + настроенные подписки).
-            // Отсекаем чужие снапшоты в per-subscription сторе: ключи сторонних провайдеров
-            // (уходят в блок Providers) и сирот после переименования аккаунта.
-            var poolKeys = new HashSet<string>(StringComparer.Ordinal) { ClaudeSubscriptionPool.PrimaryKey };
-            foreach (var sub in subscriptionPool.All)
-                poolKeys.Add(sub.Key);
+            // Показываем только ключи настроенных подписок пула (включая "claude", если она —
+            // подписка с токеном). Отсекаем чужие снапшоты в per-subscription сторе: ключи
+            // сторонних провайдеров (уходят в блок Providers) и сирот после переименования аккаунта.
+            var poolKeys = new HashSet<string>(subscriptionPool.All.Select(s => s.Key), StringComparer.Ordinal);
 
             var named = new Dictionary<string, SubscriptionUsage>();
             foreach (var (key, snaps) in bySub)
             {
                 if (!poolKeys.Contains(key)) continue;
-                var displayName = key == ClaudeSubscriptionPool.PrimaryKey
-                    ? config[$"{ClaudeSubscriptionPool.Section}:{ClaudeSubscriptionPool.PrimaryKey}:DisplayName"]
-                    : subscriptionPool.All.FirstOrDefault(s => s.Key == key)?.DisplayName;
-                // Тариф основной подписки: явно заданный в конфиге, иначе — авто-детект из
-                // .credentials.json (тот же, что показывается в общей плашке плана).
-                var tier = subscriptionPool.TierLabel(key)
-                    ?? (key == ClaudeSubscriptionPool.PrimaryKey ? plan?.Label : null);
+                var displayName = subscriptionPool.All.FirstOrDefault(s => s.Key == key)?.DisplayName;
+                var tier = subscriptionPool.TierLabel(key);
                 named[key] = new SubscriptionUsage(snaps, displayName,
                     InRotation: subscriptionPool.IsInRotation(key),
                     Utilization: subscriptionPool.EffectiveUtilization(key),

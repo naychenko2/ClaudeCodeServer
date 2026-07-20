@@ -1371,9 +1371,11 @@ public class ClaudeSession : ILlmSessionAdapter
                 envOverrides[k] = v;
         }
         else if (_subscriptionPool?.HasExtra == true
-            && Info.Provider != "claude"
             && _providers?.GetByKey(Info.Provider) is null)
         {
+            // Подписка пула (включая "claude", если задана с токеном) — свой OAuth-профиль и
+            // токен. Если ключ не найден в пуле (локальный режим — пул пуст, HasExtra=false, сюда
+            // не входим) — оверрайдов нет, ход идёт по ~/.claude/.credentials.json (вход без ключа).
             var sub = _subscriptionPool.All.FirstOrDefault(s => s.Key == Info.Provider);
             if (sub?.Enabled == true)
             {

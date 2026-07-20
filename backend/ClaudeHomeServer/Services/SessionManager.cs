@@ -488,17 +488,20 @@ public class SessionManager
         return path;
     }
 
-    // Корень профиля CLI (CLAUDE_CONFIG_DIR) для ключа провайдера сессии: "claude"/null —
-    // пользовательский ~/.claude (ходы основной подписки идут без оверрайда), ключ
-    // CLI-провайдера — claude-profiles/{key}, ключ подписки пула — claude-profiles/sub-{key}.
-    // Зеркалит выбор env хода в ClaudeSession (BuildCliEnv / BuildOAuthCliEnv).
+    // Корень профиля CLI (CLAUDE_CONFIG_DIR) для ключа провайдера сессии: подписка пула
+    // (включая "claude", если задана с токеном) — claude-profiles/sub-{key}; ключ CLI-провайдера
+    // — claude-profiles/{key}; иначе (локальный Claude — пул пуст, или provider не задан) —
+    // пользовательский ~/.claude без оверрайда. Зеркалит выбор env хода в ClaudeSession
+    // (BuildOAuthCliEnv / BuildCliEnv).
     private string ConfigRootForProvider(string? providerKey)
     {
-        if (string.IsNullOrEmpty(providerKey) || providerKey == ClaudeSubscriptionPool.PrimaryKey)
+        if (string.IsNullOrEmpty(providerKey))
             return _llmProviders.UserProfileDir;
         if (_llmProviders.GetByKey(providerKey) is not null)
             return _llmProviders.GetProfileDir(providerKey);
-        return _llmProviders.GetProfileDir("sub-" + providerKey);
+        if (_subscriptionPool.All.Any(s => s.Key == providerKey && s.Enabled))
+            return _llmProviders.GetProfileDir("sub-" + providerKey);
+        return _llmProviders.UserProfileDir;
     }
 
     // Рабочая папка сессии (для поиска транскрипта по уплощённому cwd);

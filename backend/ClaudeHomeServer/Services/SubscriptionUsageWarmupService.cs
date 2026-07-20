@@ -55,13 +55,10 @@ public sealed class SubscriptionUsageWarmupService(
         catch (OperationCanceledException) { /* остановка приложения */ }
     }
 
-    // Основной аккаунт + все дополнительные подписки.
+    // Все настроенные подписки пула (каждая — по своему токену). Локальный Claude не пробуем:
+    // warmup вообще работает только при непустом пуле (HasExtra), а вход без ключа лимиты не копит.
     private List<string> AllKeys()
-    {
-        var keys = new List<string> { ClaudeSubscriptionPool.PrimaryKey };
-        keys.AddRange(pool.All.Where(s => s.Enabled).Select(s => s.Key));
-        return keys;
-    }
+        => pool.All.Where(s => s.Enabled).Select(s => s.Key).ToList();
 
     // Пробуем последовательно, чтобы не плодить процессы claude и не жечь окна параллельно.
     private async Task ProbeKeysAsync(IEnumerable<string> keys, TimeSpan timeout, CancellationToken ct)
@@ -112,17 +109,13 @@ public sealed class SubscriptionUsageWarmupService(
         foreach (var a in ClaudeRuntimeSettings.HooksOffArgs(Execution.LocalProcessRunner.Instance))
             psi.ArgumentList.Add(a);
 
-        // Env подписки: для дополнительной — изолированный профиль + её токен; для основной
-        // ('claude') оверрайдов нет, используется базовый ~/.claude (текущий логин).
-        if (key != ClaudeSubscriptionPool.PrimaryKey)
-        {
-            var sub = pool.All.FirstOrDefault(s => s.Key == key);
-            if (sub is null || !sub.Enabled) return;
-            var env = providers.BuildOAuthCliEnv(sub.Key, sub.OAuthToken, sub.ApiKey);
-            if (env is null) return;
-            foreach (var (k, v) in env)
-                psi.Environment[k] = v;
-        }
+        // Env подписки пула: изолированный профиль + её токен (для всех, включая "claude").
+        var sub = pool.All.FirstOrDefault(s => s.Key == key);
+        if (sub is null || !sub.Enabled) return;
+        var env = providers.BuildOAuthCliEnv(sub.Key, sub.OAuthToken, sub.ApiKey);
+        if (env is null) return;
+        foreach (var (k, v) in env)
+            psi.Environment[k] = v;
 
         using var process = Process.Start(psi)
             ?? throw new InvalidOperationException("не удалось запустить claude");

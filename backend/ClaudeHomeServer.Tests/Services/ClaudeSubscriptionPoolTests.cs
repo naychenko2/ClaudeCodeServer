@@ -48,13 +48,60 @@ public class ClaudeSubscriptionPoolTests : IDisposable
     }
 
     [Fact]
+    public void ПустойПул_ЛокальныйClaude()
+    {
+        // Инвариант: ни одной подписки с токеном в конфиге → пул пуст, работаем по
+        // локальному входу (~/.claude/.credentials.json), Pick возвращает PrimaryKey.
+        var pool = new ClaudeSubscriptionPool(Config());
+        pool.HasExtra.Should().BeFalse();
+        pool.All.Should().BeEmpty();
+        pool.Pick().Should().Be(ClaudeSubscriptionPool.PrimaryKey);
+    }
+
+    [Fact]
+    public void Claude_СТокеном_РавноправныйУчастникПула()
+    {
+        // Инвариант новой модели: запись "claude" с токеном — обычная подписка пула
+        // наравне с остальными (входит в All, несёт свой тариф, может быть выбрана Pick).
+        var config = ConfigWithTiers("max20", ("small", "pro"));
+        var pool = new ClaudeSubscriptionPool(config, new UsageService(config));
+
+        pool.All.Select(s => s.Key).Should().Contain(ClaudeSubscriptionPool.PrimaryKey);
+        pool.TierLabel(ClaudeSubscriptionPool.PrimaryKey).Should().Be("Max 20×");
+        // claude (Max 20×) приоритетнее small (Pro) → Pick её и возвращает
+        for (var i = 0; i < 20; i++)
+            pool.Pick().Should().Be(ClaudeSubscriptionPool.PrimaryKey);
+    }
+
+    [Fact]
+    public void Claude_БезТокена_НеВходитВПул()
+    {
+        // Запись только с DisplayName/Tier (без OAuthToken/ApiKey) → Enabled=false → не в пуле,
+        // хотя настроена другая подписка (пул при этом не пуст).
+        var dict = new Dictionary<string, string?>
+        {
+            ["DataPath"] = Path.Combine(_tempDir, "projects.json"),
+            [$"{ClaudeSubscriptionPool.Section}:{ClaudeSubscriptionPool.PrimaryKey}:DisplayName"] = "Основная",
+            [$"{ClaudeSubscriptionPool.Section}:{ClaudeSubscriptionPool.PrimaryKey}:Tier"] = "max20",
+            [$"{ClaudeSubscriptionPool.Section}:second:OAuthToken"] = "token-second",
+        };
+        var config = new ConfigurationBuilder().AddInMemoryCollection(dict).Build();
+        var pool = new ClaudeSubscriptionPool(config);
+
+        pool.All.Select(s => s.Key).Should().NotContain(ClaudeSubscriptionPool.PrimaryKey);
+        pool.All.Select(s => s.Key).Should().ContainSingle().Which.Should().Be("second");
+    }
+
+    [Fact]
     public void Pick_НеВозвращаетИсчерпанную()
     {
-        var pool = new ClaudeSubscriptionPool(Config("second"));
+        // Пул из двух подписок: исчерпанная выпадает из ротации, берётся вторая
+        // (при непустом пуле локальный вход не используется).
+        var pool = new ClaudeSubscriptionPool(Config("second", "third"));
         pool.MarkExhausted("second", DateTime.UtcNow.AddHours(2));
 
         for (var i = 0; i < 20; i++)
-            pool.Pick().Should().Be(ClaudeSubscriptionPool.PrimaryKey);
+            pool.Pick().Should().Be("third");
     }
 
     [Fact]
@@ -163,17 +210,18 @@ public class ClaudeSubscriptionPoolTests : IDisposable
     [Fact]
     public void Pick_ОкноСброшено_СчитаетсяНоль()
     {
-        // У основной высокая утилизация, но её ResetsAt в прошлом → окно сброшено → 0%.
-        var config = Config("second");
+        // У "reset" высокая утилизация, но её ResetsAt в прошлом → окно сброшено → 0%,
+        // поэтому она менее загружена, чем "other" (0.4), и выбирается.
+        var config = Config("reset", "other");
         var usage = new UsageService(config);
-        RecordUtil(usage, ClaudeSubscriptionPool.PrimaryKey, 0.95,
+        RecordUtil(usage, "reset", 0.95,
             resetsAt: DateTime.UtcNow.AddMinutes(-5).ToString("o"));
-        RecordUtil(usage, "second", 0.4);
+        RecordUtil(usage, "other", 0.4);
 
         var pool = new ClaudeSubscriptionPool(config, usage);
 
         for (var i = 0; i < 20; i++)
-            pool.Pick().Should().Be(ClaudeSubscriptionPool.PrimaryKey);
+            pool.Pick().Should().Be("reset");
     }
 
     [Fact]
@@ -271,23 +319,24 @@ public class ClaudeSubscriptionPoolTests : IDisposable
     [Fact]
     public void Pick_ПинOpus_НеПопадаетНаПланБезOpus_ДажеСвободный()
     {
-        var config = ConfigWithProPlan("pro");
+        // В пуле "pro" (без Opus, но свободнее) и "full" (умеет Opus) — Opus-пин идёт на full.
+        var config = ConfigWithProPlan("pro", "full");
         var usage = new UsageService(config);
-        RecordUtil(usage, ClaudeSubscriptionPool.PrimaryKey, 0.7);
+        RecordUtil(usage, "full", 0.7);
         RecordUtil(usage, "pro", 0.0); // pro свободнее, но Opus не умеет
 
         var pool = new ClaudeSubscriptionPool(config, usage);
 
         for (var i = 0; i < 20; i++)
-            pool.Pick("opus").Should().Be(ClaudeSubscriptionPool.PrimaryKey);
+            pool.Pick("opus").Should().Be("full");
     }
 
     [Fact]
     public void Pick_ПолныйIdOpus_ТожеФильтрует()
     {
-        var pool = new ClaudeSubscriptionPool(ConfigWithProPlan("pro"));
+        var pool = new ClaudeSubscriptionPool(ConfigWithProPlan("pro", "full"));
         for (var i = 0; i < 20; i++)
-            pool.Pick("claude-opus-4-8[1m]").Should().Be(ClaudeSubscriptionPool.PrimaryKey);
+            pool.Pick("claude-opus-4-8[1m]").Should().Be("full");
     }
 
     [Fact]
@@ -331,7 +380,9 @@ public class ClaudeSubscriptionPoolTests : IDisposable
 
     // --- Приоритизация по тарифу (высший тариф среди доступных выигрывает) ---
 
-    // Конфиг с тарифами: словарь key → tier ("" = не задавать). primaryTier — тариф основной.
+    // Конфиг с тарифами: словарь key → tier ("" = не задавать). primaryTier задаёт тариф
+    // подписке "claude" — в новой модели это обычный участник пула, поэтому ей выдаётся токен
+    // (запись без токена в пул не входит).
     private IConfiguration ConfigWithTiers(string? primaryTier, params (string key, string tier)[] subs)
     {
         var dict = new Dictionary<string, string?>
@@ -339,7 +390,10 @@ public class ClaudeSubscriptionPoolTests : IDisposable
             ["DataPath"] = Path.Combine(_tempDir, "projects.json"),
         };
         if (!string.IsNullOrEmpty(primaryTier))
+        {
+            dict[$"{ClaudeSubscriptionPool.Section}:{ClaudeSubscriptionPool.PrimaryKey}:OAuthToken"] = "token-claude";
             dict[$"{ClaudeSubscriptionPool.Section}:{ClaudeSubscriptionPool.PrimaryKey}:Tier"] = primaryTier;
+        }
         foreach (var (key, tier) in subs)
         {
             dict[$"{ClaudeSubscriptionPool.Section}:{key}:OAuthToken"] = "token-" + key;

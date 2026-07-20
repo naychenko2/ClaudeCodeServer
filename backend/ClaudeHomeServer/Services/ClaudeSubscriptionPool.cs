@@ -11,6 +11,10 @@ namespace ClaudeHomeServer.Services;
 public class ClaudeSubscriptionPool
 {
     public const string Section = "ClaudeSubscriptions";
+    // Ключ, под которым идёт ЛОКАЛЬНЫЙ Claude (вход без ключа, по ~/.claude/.credentials.json)
+    // — режим, когда в конфиге не настроено ни одной подписки (пул пуст). Если запись с этим
+    // ключом задана С токеном (OAuthToken/ApiKey), она становится обычной подпиской пула
+    // наравне с остальными — «локальным» тогда не считается.
     public const string PrimaryKey = "claude";
 
     // Окно лимита, по которому роутим новые чаты (короткое, самое частое ограничение).
@@ -25,8 +29,6 @@ public class ClaudeSubscriptionPool
     private readonly UsageService? _usage;
     // Аккаунт с утилизацией 5h-окна >= порога выводится из ротации (если есть кто ниже).
     private readonly double _softThreshold;
-    // Тариф основной подписки из конфига ("ClaudeSubscriptions:claude:Tier"); пусто — не задан.
-    private readonly string _primaryTier;
     // exhaustedKey → resetsAt (UTC, null = пока не сбросится вручную / DefaultExhaustion)
     private readonly ConcurrentDictionary<string, DateTime?> _exhausted = new();
 
@@ -35,9 +37,10 @@ public class ClaudeSubscriptionPool
         var list = new List<ClaudeSubscriptionConfig>();
         foreach (var child in config.GetSection(Section).GetChildren())
         {
-            // Запись с ключом основной подписки задаёт только её DisplayName/Tier (читает
-            // UsageController и приоритизация пула) — участником ротации не становится
-            if (child.Key == PrimaryKey) continue;
+            // Каждая запись с ключом-именем подписки и способом аутентификации (OAuthToken/ApiKey)
+            // — равноправный участник пула, включая "claude". Не-подписочные ключи секции
+            // (SoftThreshold, WarmupOnStartup, комментарии) не биндятся в объект и отсекаются по
+            // Enabled=false. Пул пуст (ни одной подписки) => используется локальный Claude (Pick).
             var cfg = child.Get<ClaudeSubscriptionConfig>();
             if (cfg is null) continue;
             cfg.Key = child.Key;
@@ -47,7 +50,6 @@ public class ClaudeSubscriptionPool
         _subscriptions = list.AsReadOnly();
         _usage = usage;
         _softThreshold = config.GetValue($"{Section}:SoftThreshold", DefaultSoftThreshold);
-        _primaryTier = config[$"{Section}:{PrimaryKey}:Tier"] ?? "";
 
         if (usage is not null)
             RestoreFromSnapshots(usage);
@@ -79,14 +81,15 @@ public class ClaudeSubscriptionPool
     public bool HasExtra => _subscriptions.Count > 0;
 
     /// <summary>Выбрать ключ подписки для новой сессии: доступный аккаунт с высшим тарифом.</summary>
-    /// Жёстко отсекаются исчерпанные (rejected/100% без overage) и аккаунты без доступа
-    /// к запрошенной модели (Opus есть не на всех планах — CLI на таком аккаунте падает
-    /// «issue with the selected model»). Среди оставшихся приоритет отдаётся аккаунтам «в
-    /// ротации» (утилизация 5h-окна ниже мягкого порога) — из них берётся высший тариф
-    /// (Max 20× > Max 5× > Max > Pro), при равенстве тарифа — минимальная утилизация. Если
-    /// доступных «свободных» нет (все выше порога), спилл на них же с той же логикой; если
-    /// все исчерпаны — минимум из способных по модели: лучше упереться в лимит на правильном
-    /// аккаунте, чем гарантированно упасть на неправильном.
+    /// Пул пуст (ни одной подписки в конфиге) => PrimaryKey — локальный Claude (вход без ключа).
+    /// Иначе выбираем СРЕДИ настроенных подписок (локальный в ротации не участвует). Жёстко
+    /// отсекаются исчерпанные (rejected/100% без overage) и аккаунты без доступа к запрошенной
+    /// модели (Opus есть не на всех планах — CLI на таком аккаунте падает «issue with the
+    /// selected model»). Среди оставшихся приоритет аккаунтам «в ротации» (утилизация 5h-окна
+    /// ниже мягкого порога) — из них высший тариф (Max 20× > Max 5× > Max > Pro), при равенстве
+    /// — минимальная утилизация. Свободных нет (все выше порога) — спилл на них же; все исчерпаны
+    /// — минимум из способных по модели: лучше упереться в лимит на правильном аккаунте, чем
+    /// гарантированно упасть на неправильном.
     public string Pick(string? model = null)
     {
         if (_subscriptions.Count == 0)
@@ -114,23 +117,13 @@ public class ClaudeSubscriptionPool
         return LeastLoaded(top);
     }
 
-    // Ранг тарифа аккаунта: основная — из конфига primary:Tier, дополнительная — из её Tier.
+    // Ранг тарифа подписки из её конфига (Tier). Ключ вне пула — 0 (не задан).
     private int TierRank(string key)
-    {
-        var tier = key == PrimaryKey
-            ? _primaryTier
-            : _subscriptions.FirstOrDefault(s => s.Key == key)?.Tier;
-        return ClaudeSubscriptionTier.Rank(tier);
-    }
+        => ClaudeSubscriptionTier.Rank(_subscriptions.FirstOrDefault(s => s.Key == key)?.Tier);
 
     /// <summary>Ярлык тарифа аккаунта для UI ("Max 20×", "Pro", …); null — тариф не задан.</summary>
     public string? TierLabel(string key)
-    {
-        var tier = key == PrimaryKey
-            ? _primaryTier
-            : _subscriptions.FirstOrDefault(s => s.Key == key)?.Tier;
-        return ClaudeSubscriptionTier.Label(tier);
-    }
+        => ClaudeSubscriptionTier.Label(_subscriptions.FirstOrDefault(s => s.Key == key)?.Tier);
 
     // Модель требует Opus-тира (алиасы opus/opus[1m] и полные id claude-opus-*)
     public static bool RequiresOpus(string? model) =>
@@ -141,7 +134,6 @@ public class ClaudeSubscriptionPool
     public bool SupportsModel(string key, string? model)
     {
         if (!RequiresOpus(model)) return true;
-        if (key == PrimaryKey) return true; // основная — полный план владельца
         var sub = _subscriptions.FirstOrDefault(s => s.Key == key);
         return sub is null || sub.SupportsOpus;
     }
@@ -195,14 +187,8 @@ public class ClaudeSubscriptionPool
         return winners.Count == 0 ? PrimaryKey : winners[Random.Shared.Next(winners.Count)];
     }
 
-    // Основная + все дополнительные подписки.
-    private List<string> AllKeys()
-    {
-        var keys = new List<string>(_subscriptions.Count + 1) { PrimaryKey };
-        foreach (var sub in _subscriptions)
-            keys.Add(sub.Key);
-        return keys;
-    }
+    // Ключи всех настроенных подписок пула (пустой список = пул не настроен, локальный режим).
+    private List<string> AllKeys() => _subscriptions.Select(s => s.Key).ToList();
 
     /// <summary>Пометить подписку как исчерпанную.</summary>
     /// resetsAt — время сброса лимита (из rate_limit_event); null — DefaultExhaustion.

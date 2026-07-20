@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Check, MessageCircle, TriangleAlert, Undo2, X } from 'lucide-react';
+import { Check, MessageCircle, TriangleAlert, Undo2, User, X } from 'lucide-react';
 import { MarkdownViewer } from '../../components/MarkdownViewer';
 import { api } from '../../lib/api';
 import { C, FONT, R, SHADOW, Z } from '../../lib/design';
 import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { useNotesVersion } from '../../lib/notes';
-import type { DocAnnotation, Project } from '../../types';
+import { ensurePersonasLoaded, usePersonas, personaLabel } from '../../lib/personas';
+import type { DocAnnotation, Persona, Project } from '../../types';
 
 // Комментарии к MD-документам (флаг doc-annotations): обёртка над MarkdownViewer
 // для просмотра .md проекта — выделение → попап «Комментировать», подсветка якорных
@@ -150,6 +151,44 @@ export function DocCommentedMarkdown({ project, filePath, content, isMobile }: P
     window.dispatchEvent(new Event('cc-open-note'));
   };
 
+  // «Поручить персоне»: создаёт задачу проекта с персоной-исполнителем и ссылкой
+  // на комментарий («create issue from comment» — второй трекер не строим)
+  const personas = usePersonas();
+  const [assignFor, setAssignFor] = useState<string | null>(null);   // noteId открытого подменю
+  const [assignedMsg, setAssignedMsg] = useState<string | null>(null);
+  useEffect(() => { if (enabled) void ensurePersonasLoaded(); }, [enabled]);
+  useEffect(() => {
+    if (!assignFor) return;
+    const close = () => setAssignFor(null);
+    const t = window.setTimeout(() => window.addEventListener('mousedown', close), 0);
+    return () => { window.clearTimeout(t); window.removeEventListener('mousedown', close); };
+  }, [assignFor]);
+  const assignTo = async (a: DocAnnotation, p: Persona) => {
+    setAssignFor(null);
+    try {
+      await api.tasks.create(project.id, {
+        title: `Обработать комментарий: ${a.title}`,
+        description: [
+          `Комментарий к документу \`${filePath}\`${a.anchorHeading ? ` (${a.anchorHeading})` : ''}:`,
+          '',
+          `> ${a.quote}`,
+          '',
+          a.excerpt && a.excerpt !== a.title ? a.excerpt : a.title,
+          '',
+          `Заметка-комментарий: [${a.title}](#/notes/${encodeURIComponent(a.noteId)}). ` +
+          'После обработки пометь комментарий решённым (notes_set_status).',
+        ].join('\n'),
+        assignee: 'claude',
+        personaId: p.id,
+      });
+      setAssignedMsg(`Задача создана и поручена: ${personaLabel(p)}`);
+      window.setTimeout(() => setAssignedMsg(null), 3500);
+    } catch {
+      setAssignedMsg('Не удалось создать задачу');
+      window.setTimeout(() => setAssignedMsg(null), 3500);
+    }
+  };
+
   const gotoBlock = (a: DocAnnotation) => {
     setSelectedId(a.noteId);
     if (a.start < 0) return;
@@ -242,6 +281,11 @@ export function DocCommentedMarkdown({ project, filePath, content, isMobile }: P
           ))}
         </div>
       </div>
+      {assignedMsg && (
+        <div style={{ fontSize: 12, color: C.successText, background: C.successBg, borderRadius: R.sm, padding: '5px 9px' }}>
+          {assignedMsg}
+        </div>
+      )}
       {filter === 'none'
         ? <div style={{ fontSize: 12, color: C.textMuted }}>Комментарии скрыты фильтром.</div>
         : shown.map(a => (
@@ -277,11 +321,36 @@ export function DocCommentedMarkdown({ project, filePath, content, isMobile }: P
                 ))}
               </div>
             )}
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', position: 'relative' }}>
               <ActionBtn onClick={e => { e.stopPropagation(); void toggleStatus(a); }}>
                 {a.status === 'open' ? <><Check size={11} /> Решён</> : <><Undo2 size={11} /> Снова открыть</>}
               </ActionBtn>
               <ActionBtn onClick={e => { e.stopPropagation(); openNote(a); }}>Открыть заметку</ActionBtn>
+              {personas.length > 0 && (
+                <ActionBtn onClick={e => { e.stopPropagation(); setAssignFor(assignFor === a.noteId ? null : a.noteId); }}>
+                  <User size={11} /> Поручить ▾
+                </ActionBtn>
+              )}
+              {assignFor === a.noteId && (
+                <div onMouseDown={e => e.stopPropagation()} style={{
+                  position: 'absolute', bottom: 'calc(100% + 6px)', left: 0, zIndex: 5,
+                  background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: R.lg,
+                  boxShadow: SHADOW.dropdown, minWidth: 200, maxHeight: 220, overflowY: 'auto', padding: 4,
+                }}>
+                  {personas.map(p => (
+                    <button key={p.id} onClick={e => { e.stopPropagation(); void assignTo(a, p); }} style={{
+                      display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '7px 10px',
+                      border: 'none', background: 'transparent', cursor: 'pointer', textAlign: 'left',
+                      fontFamily: FONT.sans, fontSize: 12.5, color: C.textPrimary, borderRadius: 6,
+                    }}
+                    onMouseEnter={e => { e.currentTarget.style.background = C.bgInset; }}
+                    onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}>
+                      <User size={12} style={{ color: C.textMuted, flexShrink: 0 }} />
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{personaLabel(p)}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         ))}

@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, type CSSProperties, type ReactNode } from 'react';
-import { Copy, File, FileText, StickyNote, ChevronRight, ChevronLeft, ChevronDown, ChevronsRight, List, ArrowUpRight } from 'lucide-react';
+import { Copy, File, FileText, StickyNote, MessageCircle, ChevronRight, ChevronLeft, ChevronDown, ChevronsRight, List, ArrowUpRight } from 'lucide-react';
 import type { Session } from '../types';
 import { C, FONT, R, SHADOW } from '../lib/design';
 import { PillSwitch } from './Toolbar';
@@ -29,7 +29,7 @@ interface Props {
   session?: Session | null;
 }
 
-type TabKey = 'plan' | 'todos' | 'notes' | 'agents' | 'files' | 'links' | 'context';
+type TabKey = 'plan' | 'todos' | 'notes' | 'comments' | 'agents' | 'files' | 'links' | 'context';
 
 function basename(p: string): string {
   const norm = p.replace(/\\/g, '/');
@@ -546,6 +546,48 @@ function NavArrow({ dir, disabled, onClick }: { dir: 'prev' | 'next'; disabled: 
   );
 }
 
+// Строка комментария к документу: клик — открыть заметку-комментарий (резолв по заголовку)
+function CommentRow({ title, doc }: { title: string; doc: string }) {
+  const [opening, setOpening] = useState(false);
+  return (
+    <button disabled={opening}
+      onClick={async () => {
+        setOpening(true);
+        try {
+          const r = await api.notes.resolve(title);
+          if (r?.note) {
+            window.dispatchEvent(new CustomEvent('cc-open-url', {
+              detail: { url: `#/notes/${encodeURIComponent(r.note.id)}` }
+            }));
+          }
+        } catch { /* заметка не найдена */ }
+        setOpening(false);
+      }}
+      style={{
+        display: 'flex', flexDirection: 'column', gap: 2, padding: '7px 14px',
+        width: '100%', boxSizing: 'border-box', textAlign: 'left',
+        border: 'none', cursor: 'pointer', background: 'transparent',
+        fontFamily: 'inherit', opacity: opening ? 0.6 : 1,
+      }}
+      onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; }}
+      onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+    >
+      <span style={{ display: 'flex', alignItems: 'center', gap: 9, minWidth: 0 }}>
+        <MessageCircle size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={C.accent} style={{ flexShrink: 0 }} />
+        <span style={{ fontFamily: FONT.sans, fontSize: 12.5, color: C.textSecondary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 } as CSSProperties}>
+          {title}
+        </span>
+        <ArrowUpRight size={12} strokeWidth={2} color={C.textMuted} style={{ flexShrink: 0, opacity: 0.5 }} />
+      </span>
+      {doc && (
+        <span style={{ fontFamily: FONT.mono, fontSize: 10.5, color: C.textMuted, paddingLeft: 23, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } as CSSProperties}>
+          {doc}
+        </span>
+      )}
+    </button>
+  );
+}
+
 // Строка заметки в артефактах: клик — открыть заметку
 function NoteRow({ title }: { title: string }) {
   const [opening, setOpening] = useState(false);
@@ -588,7 +630,7 @@ export function ArtifactsPanel({ sessionId, projectId, rootPath, onOpenFile, onC
   const executingTaskTitle = executingTask?.title ?? null;
   // Контекст происхождения (задача/автоматизация) — единый баннер в шапке панели
   const origin = session ? resolveChatOrigin(session) : null;
-  const { files, plans, todos, links, agents, workflows, notes } = useSessionArtifacts(sessionId, projectId, rootPath, executingTaskTitle);
+  const { files, plans, todos, links, agents, workflows, notes, comments } = useSessionArtifacts(sessionId, projectId, rootPath, executingTaskTitle);
   // Чат-режим (без проекта): файлы открывать некуда — вкладку «Файлы» не показываем.
   const isChat = !projectId;
 
@@ -604,6 +646,7 @@ export function ArtifactsPanel({ sessionId, projectId, rootPath, onOpenFile, onC
   if (plans.length) tabs.push({ value: 'plan', label: 'План' });
   if (todos.length || executingTask) tabs.push({ value: 'todos', label: `Задачи · ${todosDone + (executingTask ? 1 : 0)}/${todos.length + (executingTask ? 1 : 0)}` });
   if (notes.length) tabs.push({ value: 'notes', label: `Заметки · ${notes.length}` });
+  if (comments.length) tabs.push({ value: 'comments', label: `Комментарии · ${comments.length}` });
   if (agentsTotal > 0) {
     // Прогресс завершённых/всего — единый формат с вкладкой «Задачи».
     // «Завершено» = всё, что перестало работать (done + error), чтобы счётчик
@@ -798,6 +841,18 @@ export function ArtifactsPanel({ sessionId, projectId, rootPath, onOpenFile, onC
                   </div>
                 ) : notes.map((title, i) => (
                   <NoteRow key={i} title={title} />
+                ))}
+              </div>
+            )}
+
+            {activeKey === 'comments' && (
+              <div style={{ flex: 1, overflowY: 'auto', padding: '8px 0' }}>
+                {comments.length === 0 ? (
+                  <div style={{ padding: '20px 14px', fontFamily: FONT.sans, fontSize: 13, color: C.textMuted, textAlign: 'center' }}>
+                    Комментарии к документам не создавались
+                  </div>
+                ) : comments.map((c, i) => (
+                  <CommentRow key={i} title={c.title} doc={c.doc} />
                 ))}
               </div>
             )}

@@ -1102,7 +1102,10 @@ public class ClaudeSession : ILlmSessionAdapter
                     "обратными ссылками и графом). Веди её через MCP-инструменты mcp__notes__* (notes_list, notes_search, " +
                     "notes_read, notes_create, notes_update, notes_backlinks, notes_graph, notes_delete). " + scope + " " +
                     "Связывай заметки друг с другом через [[Заголовок другой заметки]] — по этим ссылкам строится граф знаний. " +
-                    "Когда пользователь просит записать/законспектировать/связать мысль или найти по заметкам — используй эти инструменты.";
+                    "Когда пользователь просит записать/законспектировать/связать мысль или найти по заметкам — используй эти инструменты. " +
+                    "Комментарии к markdown-документам: notes_annotate (оставить комментарий к дословному фрагменту документа — " +
+                    "anchorText копируй точно из файла), notes_annotations (комментарии документа с их статусами), " +
+                    "notes_set_status (resolved = обработан), notes_search со status:open — найти необработанные.";
                 basePrompt = string.IsNullOrWhiteSpace(basePrompt)
                     ? notesHint
                     : basePrompt + "\n\n" + notesHint;

@@ -81,6 +81,12 @@ export interface WorkflowGroup {
   settled: boolean;   // workflow целиком завершён
 }
 
+// Комментарий к документу, созданный агентом через mcp__notes__notes_annotate
+export interface CommentArtifact {
+  title: string;   // первые слова комментария (= заголовок заметки-комментария)
+  doc: string;     // путь документа
+}
+
 export interface SessionArtifacts {
   files: ArtifactFile[];
   plans: PlanArtifact[];
@@ -89,6 +95,7 @@ export interface SessionArtifacts {
   agents: AgentArtifact[];      // одиночные субагенты (workflow-агенты — в workflows)
   workflows: WorkflowGroup[];
   notes: string[];              // заголовки заметок, созданных через mcp__notes__*
+  comments: CommentArtifact[];  // комментарии к документам (mcp__notes__notes_annotate)
   executingTask: string | null; // заголовок задачи, если чат запущен для её выполнения
 }
 
@@ -100,6 +107,15 @@ const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'writ
 const WEBFETCH_TOOLS = new Set(['WebFetch', 'web_fetch']);
 // MCP-инструменты управления заметками приложения.
 const MCP_NOTES_NAMES = new Set(['mcp__notes__notes_create']);
+// Комментарий к документу (тот же notes-server; заголовок заметки = первые слова комментария)
+const MCP_ANNOTATE_NAME = 'mcp__notes__notes_annotate';
+
+// Повторяет AutoTitle бэкенда: по нему заметка-комментарий ищется через notes.resolve
+function annotateTitle(comment: string): string {
+  const c = comment.replace(/\s+/g, ' ').trim();
+  if (c.length < 3) return 'Комментарий';
+  return c.length > 50 ? c.slice(0, 50).trimEnd() + '…' : c;
+}
 
 const URL_RE = /https?:\/\/[^\s<>()[\]"'`]+/g;
 // Хвостовая пунктуация, прилипающая к URL в тексте (точка в конце предложения, запятая, скобка)
@@ -356,6 +372,7 @@ export function computeArtifacts(items: ChatItem[], rootPath: string, executingT
   const plans: PlanArtifact[] = [];
   const links = new Map<string, ArtifactLink>();
   const notes: string[] = [];
+  const comments = new Map<string, CommentArtifact>();
 
   // Изменённый файл (file_changed/Write): дельты + флаг changed
   const touchChanged = (path: string, added: number, removed: number, hasDelta: boolean) => {
@@ -409,6 +426,11 @@ export function computeArtifacts(items: ChatItem[], rootPath: string, executingT
           const o = it.input as Record<string, unknown> | null;
           const title = typeof o?.title === 'string' && o.title.trim() ? o.title.trim() : null;
           if (title && !notes.includes(title)) notes.push(title);
+        } else if (it.name === MCP_ANNOTATE_NAME) {
+          const o = it.input as Record<string, unknown> | null;
+          const doc = typeof o?.path === 'string' ? o.path : '';
+          const title = annotateTitle(typeof o?.comment === 'string' ? o.comment : '');
+          comments.set(`${title}|${doc}`, { title, doc });
         }
         break;
       }
@@ -443,6 +465,7 @@ export function computeArtifacts(items: ChatItem[], rootPath: string, executingT
     links: [...links.values()],
     ...computeAgents(items),
     notes,
+    comments: [...comments.values()],
     executingTask,
   };
 }

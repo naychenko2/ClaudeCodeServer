@@ -23,49 +23,102 @@ export function subscribeOnline(fn: () => void): () => void {
 }
 
 function setOnline(value: boolean) {
+  // Успех (обычный запрос ответил, зонд достучался) сбрасывает счётчик промахов —
+  // иначе накопленные фейлы могли бы тут же снова увести в офлайн.
+  if (value) _consecutiveFailures = 0;
   if (_online === value) {
     return;
   }
   _online = value;
-  // Пока офлайн — активно зондируем сервер: иначе при «мигнувшей» сети
-  // (упал один запрос, но событие window 'online' не пришло) UI застрянет в офлайне
-  if (value) stopConnectivityProbe(); else startConnectivityProbe();
+  // Состояние сменилось — пересчитаем каденс монитора немедленно
+  // (offline → частый зонд возврата; online → спокойный heartbeat).
+  rescheduleMonitor();
   _listeners.forEach(fn => fn());
 }
 
-// --- Probe восстановления связи ---
-// Если _online опустился в false из-за единичного сбоя fetch, а ОС-событие 'online'
-// не приходит (сеть на уровне ОС не пропадала) и фоновых GET нет — без зонда UI
-// остался бы офлайн навсегда. Зонд бьёт по API раз в N секунд, пока не получит ответ.
-let _probeTimer: ReturnType<typeof setInterval> | null = null;
-const PROBE_INTERVAL_MS = 4_000;
+// --- Монитор связи (health-ping) ---
+// Активно проверяем достижимость сервера лёгким пингом. Один цикл, два режима:
+//   online  — heartbeat раз в HEARTBEAT_INTERVAL; OFFLINE_FAIL_THRESHOLD промахов
+//             подряд уводят в офлайн. Это ловит «зависшую» сеть (мобильный интернет
+//             то есть, то нет): сокет цел, navigator.onLine=true, обычных запросов
+//             нет — раньше UI узнавал о пропаже только через server-timeout SignalR
+//             (~60с) или упёршись в 30-сек таймаут ручного действия.
+//   offline — probe раз в PROBE_INTERVAL; первый же ответ возвращает в онлайн.
+// Пинг гейтится видимостью вкладки: в фоне сеть/батарею не жжём, при возврате —
+// немедленная проверка (см. initConnectivity).
+let _monitorTimer: ReturnType<typeof setTimeout> | null = null;
+let _consecutiveFailures = 0;
+const HEARTBEAT_INTERVAL_MS = 15_000; // спокойный опрос, когда связь есть
+const FAST_RETRY_MS = 3_000;          // добор до порога после первого промаха
+const PROBE_INTERVAL_MS = 4_000;      // частый зонд возврата из офлайна
+const PING_TIMEOUT_MS = 6_000;        // короткий таймаут пинга — не ждём 30с
+const OFFLINE_FAIL_THRESHOLD = 2;     // столько промахов подряд уводят в офлайн
 
-function startConnectivityProbe() {
-  if (_probeTimer !== null || typeof window === 'undefined') return;
-  _probeTimer = setInterval(async () => {
-    try {
-      const token = typeof localStorage !== 'undefined'
-        ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
-        : null;
-      // HEAD к API: важен сам факт ответа (сеть жива), тело не нужно. Не идёт через
-      // request(), чтобы не триггерить IDB-fallback/логаут. SW не кэширует /api.
-      const res = await fetch(BASE + '/projects', {
-        method: 'HEAD',
-        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-      });
-      // Любой HTTP-ответ (включая 401) означает, что сеть восстановлена
-      if (res) setOnline(true);
-    } catch {
-      /* всё ещё нет сети — ждём следующего тика */
-    }
-  }, PROBE_INTERVAL_MS);
+// Один пинг сервера. true = сервер достижим (любой HTTP-ответ, включая 401/404/500),
+// false = сеть недоступна или ответ не пришёл за PING_TIMEOUT_MS.
+async function pingServer(): Promise<boolean> {
+  const token = typeof localStorage !== 'undefined'
+    ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
+    : null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), PING_TIMEOUT_MS);
+  try {
+    // Лёгкий health-эндпоинт. Не через request() — чтобы не триггерить IDB-fallback/логаут.
+    // На старом сервере без /health вернётся 404 — это тоже «достижим». SW не кэширует /api.
+    await fetch(BASE + '/health', {
+      method: 'GET',
+      cache: 'no-store',
+      signal: controller.signal,
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    });
+    return true;
+  } catch {
+    return false; // reject (сетевой сбой) или abort по таймауту
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
-function stopConnectivityProbe() {
-  if (_probeTimer !== null) {
-    clearInterval(_probeTimer);
-    _probeTimer = null;
+// Задержка до следующего тика — по текущему состоянию связи и серии промахов.
+function nextMonitorDelay(): number {
+  if (!_online) return PROBE_INTERVAL_MS;
+  return _consecutiveFailures > 0 ? FAST_RETRY_MS : HEARTBEAT_INTERVAL_MS;
+}
+
+function scheduleNextTick() {
+  if (_monitorTimer !== null || typeof window === 'undefined') return;
+  _monitorTimer = setTimeout(runMonitorTick, nextMonitorDelay());
+}
+
+// Пересобрать таймер под новый каденс (после смены _online). Немедленного пинга не шлём.
+function rescheduleMonitor() {
+  if (_monitorTimer !== null) { clearTimeout(_monitorTimer); _monitorTimer = null; }
+  scheduleNextTick();
+}
+
+async function runMonitorTick() {
+  _monitorTimer = null;
+  // Вкладка в фоне — пропускаем пинг (возврат на вкладку форсит проверку сам)
+  if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+    scheduleNextTick();
+    return;
   }
+  const reachable = await pingServer();
+  if (reachable) {
+    _consecutiveFailures = 0;
+    if (!_online) setOnline(true);
+  } else {
+    _consecutiveFailures++;
+    if (_online && _consecutiveFailures >= OFFLINE_FAIL_THRESHOLD) setOnline(false);
+  }
+  scheduleNextTick();
+}
+
+// Немедленная внеплановая проверка (возврат на вкладку, ОС-событие online, фокус окна).
+function forceConnectivityCheck() {
+  if (typeof window === 'undefined') return;
+  if (_monitorTimer !== null) { clearTimeout(_monitorTimer); _monitorTimer = null; }
+  void runMonitorTick();
 }
 
 // Вызываются из signalr.ts по событиям соединения
@@ -176,11 +229,20 @@ export function initConnectivity() {
   if (_initialized || typeof window === 'undefined') return;
   _initialized = true;
 
+  // ОС однозначно потеряла сеть — сразу офлайн, без ожидания пинга
   window.addEventListener('offline', () => setOnline(false));
-  // 'online' — оптимистично считаем себя онлайн; ближайший fetch/SignalR подтвердит или откатит
-  window.addEventListener('online', () => setOnline(true));
+  // ОС сообщает о сети, но до НАШЕГО сервера она может не дойти — не верим слепо,
+  // а тут же проверяем пингом (за ≤6с подтвердит или оставит офлайн).
+  window.addEventListener('online', () => forceConnectivityCheck());
+  // Возврат на вкладку/фокус окна — момент, когда точность статуса важнее всего
+  window.addEventListener('focus', () => forceConnectivityCheck());
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') forceConnectivityCheck();
+    });
+  }
 
-  // Стартанули в офлайне (navigator.onLine=false): setOnline не вызывался,
-  // поэтому зонд не активен — запускаем его вручную, чтобы поймать восстановление
-  if (!_online) startConnectivityProbe();
+  // Запускаем цикл монитора: heartbeat в онлайне ловит пропажу сервера,
+  // probe в офлайне — его возвращение.
+  scheduleNextTick();
 }

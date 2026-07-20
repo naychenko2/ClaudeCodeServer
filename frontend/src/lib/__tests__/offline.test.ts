@@ -145,14 +145,14 @@ describe('request: HTTP-ошибки', () => {
 });
 
 describe('зонд восстановления связи', () => {
-  it('в офлайне раз в 4с шлёт HEAD и при ответе возвращает онлайн', async () => {
+  it('в офлайне раз в 4с пингует /health и при ответе возвращает онлайн', async () => {
     offline.notifyOffline();
     expect(offline.isOnline()).toBe(false);
 
     fetchMock.mockResolvedValue(jsonResponse({}, 401)); // даже 401 = сеть жива
     await vi.advanceTimersByTimeAsync(4000);
 
-    expect(fetchMock).toHaveBeenCalledWith('/api/projects', expect.objectContaining({ method: 'HEAD' }));
+    expect(fetchMock).toHaveBeenCalledWith('/api/health', expect.objectContaining({ method: 'GET' }));
     expect(offline.isOnline()).toBe(true);
   });
 
@@ -164,6 +164,36 @@ describe('зонд восстановления связи', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(offline.isOnline()).toBe(false);
+  });
+});
+
+describe('heartbeat: детекция пропажи сервера в онлайне', () => {
+  // initConnectivity запускает цикл монитора; вкладка видима
+  function bootOnline() {
+    vi.stubGlobal('document', { visibilityState: 'visible', addEventListener: vi.fn() });
+    offline.initConnectivity();
+  }
+
+  it('два промаха подряд уводят в офлайн (одного мало)', async () => {
+    bootOnline();
+    fetchMock.mockRejectedValue(new TypeError('failed to fetch'));
+
+    // Первый heartbeat (~15с): промах №1 — ещё онлайн
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(offline.isOnline()).toBe(true);
+
+    // Добор через FAST_RETRY (~3с): промах №2 — порог достигнут, уходим в офлайн
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(offline.isOnline()).toBe(false);
+  });
+
+  it('успешный heartbeat держит онлайн и сбрасывает серию промахов', async () => {
+    bootOnline();
+    fetchMock.mockResolvedValue(jsonResponse({}, 204));
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(offline.isOnline()).toBe(true);
+    expect(fetchMock).toHaveBeenCalledWith('/api/health', expect.objectContaining({ method: 'GET' }));
   });
 });
 

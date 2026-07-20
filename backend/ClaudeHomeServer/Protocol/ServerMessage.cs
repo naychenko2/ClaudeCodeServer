@@ -194,6 +194,19 @@ public record SpeakerChangedMessage(string PersonaId, string Label)
 public record WorkLoopMessage(bool Active, int Iteration, int MaxIterations, string? Phase)
     : ServerMessage("work_loop");
 
+// Чат переключён на другой аккаунт/провайдер. Auto=true — тихий фейловер внутри пула
+// подписок Claude (та же модель и эндпоинт, в ленту не попадает); иначе — явная миграция
+// на стороннего провайдера, Label — подпись разделителя «Продолжено на …».
+public record ProviderSwitchedMessage(string Provider, string? Model = null, string? Label = null, bool Auto = false)
+    : ServerMessage("provider_switched");
+
+// Лимит подписки исчерпан и внутри пула переключиться некуда: предложение продолжить
+// чат на стороннем провайдере (карточка с кнопками в ленте). Providers — доступные
+// варианты: ключ, имя для кнопки и модель, с которой пойдёт продолжение.
+public record ProviderFallbackOption(string Key, string DisplayName, string Model);
+public record ProviderLimitMessage(string? ResetsAt, IReadOnlyList<ProviderFallbackOption> Providers)
+    : ServerMessage("provider_limit");
+
 // Пользовательское уведомление (напоминание о задаче, событие Claude-исполнителя и т.п.) —
 // в группу user_{userId}: открытое приложение показывает тост + сохраняет в центр уведомлений.
 // Kind — семантика для иконки/цвета: reminder | claude | info | success

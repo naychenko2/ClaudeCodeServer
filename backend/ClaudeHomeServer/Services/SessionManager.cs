@@ -488,6 +488,144 @@ public class SessionManager
         return path;
     }
 
+    // Корень профиля CLI (CLAUDE_CONFIG_DIR) для ключа провайдера сессии: "claude"/null —
+    // пользовательский ~/.claude (ходы основной подписки идут без оверрайда), ключ
+    // CLI-провайдера — claude-profiles/{key}, ключ подписки пула — claude-profiles/sub-{key}.
+    // Зеркалит выбор env хода в ClaudeSession (BuildCliEnv / BuildOAuthCliEnv).
+    private string ConfigRootForProvider(string? providerKey)
+    {
+        if (string.IsNullOrEmpty(providerKey) || providerKey == ClaudeSubscriptionPool.PrimaryKey)
+            return _llmProviders.UserProfileDir;
+        if (_llmProviders.GetByKey(providerKey) is not null)
+            return _llmProviders.GetProfileDir(providerKey);
+        return _llmProviders.GetProfileDir("sub-" + providerKey);
+    }
+
+    // Рабочая папка сессии (для поиска транскрипта по уплощённому cwd);
+    // null — папку определить не удалось (миграцию в этом случае не делаем)
+    private string? TryResolveCwd(Session s)
+    {
+        try
+        {
+            if (s.ProjectId is not null) return _projects.GetById(s.ProjectId)?.RootPath;
+            return s.OwnerId is null ? null : ResolveChatRoot(s.OwnerId);
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    // Авто-фейловер пула подписок: аккаунт чата исчерпан, а в пуле есть здоровая
+    // альтернатива — тихо перевозим транскрипт в её профиль и меняем Session.Provider.
+    // Для пользователя незаметно: та же модель, тот же эндпоинт, та же предоплаченная
+    // подписка. Сторонние провайдеры сюда не входят — другая модель/качество/оплата,
+    // это только явная миграция (MigrateProviderAsync + карточка-предложение).
+    private void TryPoolFailover(string sessionId, SessionEntry entry)
+    {
+        if (_llmProviders.ResolveByModel(entry.Info.Model) is not null) return; // сторонний — не пул
+        if (!_subscriptionPool.HasExtra) return;
+        var current = entry.Info.Provider ?? ClaudeSubscriptionPool.PrimaryKey;
+        if (!_subscriptionPool.IsExhausted(current)) return;
+        var pick = _subscriptionPool.Pick(entry.Info.Model);
+        if (pick == current || _subscriptionPool.IsExhausted(pick)) return; // переключаться некуда
+
+        // Транскрипты container-пользователей живут в песочных профилях с другой
+        // раскладкой — не мигрируем (штатная деградация: чат ждёт сброса окна, как раньше)
+        var ownerId = ResolveOwnerId(entry.Info);
+        if (ownerId is not null
+            && _users.GetById(ownerId)?.ExecutionEnvironment == ExecutionEnvironments.Container)
+            return;
+
+        if (entry.Info.ClaudeSessionId is not null)
+        {
+            var cwd = TryResolveCwd(entry.Info);
+            if (cwd is null) return;
+            if (!TranscriptMigrator.TryMigrate(ConfigRootForProvider(current),
+                    ConfigRootForProvider(pick), cwd, entry.Info.ClaudeSessionId, out var error))
+            {
+                Console.Error.WriteLine($"[SessionManager] Фейловер пула отменён ({sessionId}): {error}");
+                return;
+            }
+        }
+
+        entry.Info.Provider = pick;
+        entry.Info.UpdatedAt = DateTime.UtcNow;
+        SaveSessions();
+        Console.WriteLine($"[SessionManager] Чат {sessionId} переключён на подписку «{pick}» (лимит «{current}»)");
+        FireAndForget(BroadcastAsync(sessionId, new ProviderSwitchedMessage(pick, Auto: true)),
+            $"broadcast provider_switched ({sessionId})");
+    }
+
+    // Карточка «Продолжить на …»: чат родного Claude упёрся в лимит, внутри пула
+    // переключиться не вышло, но настроены сторонние провайдеры. Эфемерно (в history
+    // не пишется): после сброса окна предложение неактуально.
+    private async Task OfferProviderFallbackAsync(string sessionId, SessionEntry entry, string? resetsAt)
+    {
+        if (_llmProviders.ResolveByModel(entry.Info.Model) is not null) return; // уже сторонний
+        if (!_subscriptionPool.IsExhausted(entry.Info.Provider ?? ClaudeSubscriptionPool.PrimaryKey)) return;
+        var options = _llmProviders.Enabled
+            .Select(p => new ProviderFallbackOption(p.Key,
+                string.IsNullOrWhiteSpace(p.DisplayName) ? p.Key : p.DisplayName,
+                p.Models.FirstOrDefault()?.Id ?? ""))
+            .Where(o => !string.IsNullOrEmpty(o.Model))
+            .ToList();
+        if (options.Count > 0)
+            await BroadcastAsync(sessionId, new ProviderLimitMessage(resetsAt, options));
+    }
+
+    // Явная миграция начатого чата на другого провайдера (кнопка «Продолжить на …» при
+    // исчерпании лимитов). Guard «смена провайдера у начатой сессии — 400» в Update
+    // остаётся: здесь обход осознанный — транскрипт CLI локальный, переносим его в
+    // профиль целевого провайдера и продолжаем разговор через --resume без потери контекста.
+    public async Task<Session> MigrateProviderAsync(string sessionId, string ownerId, string model)
+    {
+        if (GetOwned(sessionId, ownerId) is null || !_sessions.TryGetValue(sessionId, out var entry))
+            throw new KeyNotFoundException("Чат не найден");
+
+        var newModel = model?.Trim();
+        if (string.IsNullOrEmpty(newModel))
+            throw new InvalidOperationException("Не указана модель");
+
+        var target = _llmProviders.ResolveByModel(newModel);
+        if (target is { Enabled: false })
+            throw new InvalidOperationException(
+                $"Провайдер «{target.DisplayName}» не настроен: задай LlmProviders:{target.Key}:ApiKey");
+
+        var currentKey = _llmProviders.ResolveByModel(entry.Info.Model)?.Key
+            ?? entry.Info.Provider ?? ClaudeSubscriptionPool.PrimaryKey;
+        // Цель: сторонний провайдер — его ключ; родной Claude — доступный аккаунт пула
+        var targetKey = target?.Key ?? _subscriptionPool.Pick(newModel);
+        if (string.Equals(targetKey, currentKey, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Чат уже на этом провайдере");
+
+        if (_users.GetById(ownerId)?.ExecutionEnvironment == ExecutionEnvironments.Container)
+            throw new InvalidOperationException("Миграция чата в контейнерной среде пока недоступна");
+
+        if (entry.Info.ClaudeSessionId is not null)
+        {
+            var cwd = TryResolveCwd(entry.Info)
+                ?? throw new InvalidOperationException("Не удалось определить рабочую папку чата");
+            if (!TranscriptMigrator.TryMigrate(ConfigRootForProvider(currentKey),
+                    ConfigRootForProvider(targetKey), cwd, entry.Info.ClaudeSessionId, out var error))
+                throw new InvalidOperationException($"Не удалось перенести транскрипт: {error}");
+        }
+
+        entry.Info.Model = newModel;
+        entry.Info.Provider = targetKey;
+        entry.Info.UpdatedAt = DateTime.UtcNow;
+        // Адаптер собран под прежнего провайдера (env и сигнатура хода) — убираем лениво,
+        // как при смене собеседника: мгновенный dispose рвал бы доживающих агентов
+        if (entry.Process is not null) entry.AdapterStale = true;
+        SaveSessions();
+
+        var label = target is null ? "Claude"
+            : string.IsNullOrWhiteSpace(target.DisplayName) ? target.Key : target.DisplayName;
+        await BroadcastAsync(sessionId, new ProviderSwitchedMessage(targetKey, newModel, $"Продолжено на {label}"));
+        Console.WriteLine($"[SessionManager] Чат {sessionId} мигрирован: {currentKey} → {targetKey} ({newModel})");
+        return entry.Info;
+    }
+
     public Session? GetById(string id) =>
         _sessions.TryGetValue(id, out var entry) ? entry.Info : null;
 
@@ -1173,6 +1311,10 @@ public class SessionManager
         // ДО пересоздания процесса — новый персона-слой применяется уже к этому ходу
         await RouteGroupSpeakerAsync(sessionId, entry, text);
 
+        // Аккаунт чата могли исчерпать другие чаты, пока этот простаивал: перед ходом
+        // тихо перевозим его на здоровую подписку пула (та же модель и эндпоинт)
+        TryPoolFailover(sessionId, entry);
+
         // Авто-отправка (командный ход, автоматизация, задача): клиент не добавляет её
         // оптимистично — показываем сразу, до тяжёлого старта CLI-процесса. ТОЛЬКО в
         // session-группу: клиент открытого чата состоит и в user_/project_-группе, широкая
@@ -1848,6 +1990,12 @@ public class SessionManager
                         var resetsAt = m.ResetsAt is not null && DateTime.TryParse(m.ResetsAt, out var dt)
                             ? (DateTime?)dt.ToUniversalTime() : null;
                         _subscriptionPool.MarkExhausted(entry.Info.Provider, resetsAt);
+                        // Сразу перевозим чат на здоровый аккаунт пула — кнопка «Повторить»
+                        // упавшего хода пойдёт уже через него. Если переключиться некуда,
+                        // а ход реально отбит — предлагаем сторонний провайдер карточкой.
+                        TryPoolFailover(sessionId, entry);
+                        if (m.Status == "rejected")
+                            await OfferProviderFallbackAsync(sessionId, entry, m.ResetsAt);
                     }
                     break;
                 case ErrorMessage m:

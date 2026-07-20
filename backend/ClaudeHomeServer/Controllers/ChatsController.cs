@@ -136,6 +136,21 @@ public class ChatsController(SessionManager sessions, FileService files) : Contr
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
     }
 
+    // Миграция начатого чата на другого провайдера (кнопка «Продолжить на …» при
+    // исчерпании лимита подписки): транскрипт CLI переносится в профиль целевого
+    // провайдера, разговор продолжается через --resume с сохранением контекста.
+    // Как и loop, работает и для проектной сессии (владелец резолвится через проект).
+    [HttpPost("{id}/migrate-provider")]
+    public async Task<IActionResult> MigrateProvider(string id, [FromBody] MigrateProviderRequest req)
+    {
+        try
+        {
+            return Ok(await sessions.MigrateProviderAsync(id, UserId, req.Model));
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
+    }
+
     [HttpGet("{id}/history")]
     public async Task<IActionResult> GetHistory(string id)
     {
@@ -192,5 +207,7 @@ public record CreateGroupChatRequest(List<string>? PersonaIds, string Mode = "au
 public record SetParticipantsRequest(List<string>? PersonaIds);
 
 public record SetWorkLoopRequest(bool Enabled);
+
+public record MigrateProviderRequest(string Model);
 
 public record SetModeRequest(string Mode);

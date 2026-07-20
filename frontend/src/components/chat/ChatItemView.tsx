@@ -390,6 +390,8 @@ interface ItemProps {
   onRevert?: (path: string) => void;
   onRetry: () => void;
   onInterrupt: () => void;
+  // Миграция чата на другого провайдера (карточка «Продолжить на …» при исчерпании лимита)
+  onMigrateProvider?: (model: string) => Promise<void>;
   // Агрегированный чек-лист TaskCreate/TaskUpdate — приходит только на последний task-вызов ленты
   taskPlan?: TodoItem[];
   // Вложенная активность сабагента-персоны (дочерние tool_use/text/thinking с индексами) —
@@ -404,7 +406,89 @@ interface ItemProps {
 // React.memo: переключатель по kind — самый массовый компонент ленты. Элементы ChatItem
 // иммутабельны по ссылке (обновление элемента = новый объект), пропсы-функции стабильны
 // (useCallback в ChatPanel) — при дописывании ленты старые элементы не перерендериваются.
-export const ChatItemView = memo(function ChatItemView({ item, index, online, streaming, isLastResult, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, taskPlan, agentActivity, agentRenderChild }: ItemProps) {
+// Карточка «Лимит исчерпан — продолжить на стороннем провайдере»: кнопка на каждый
+// настроенный провайдер; клик мигрирует чат (транскрипт переезжает, контекст сохраняется).
+// После миграции карточка гаснет по provider_switched (resolved в chatReducer).
+function ProviderLimitCard({ item, online, onMigrate }: {
+  item: Extract<ChatItem, { kind: 'provider_limit' }>;
+  online: boolean;
+  onMigrate?: (model: string) => Promise<void>;
+}) {
+  const [busyModel, setBusyModel] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  if (item.resolved || item.providers.length === 0) return null;
+
+  let when = '';
+  if (item.resetsAt) {
+    const dt = new Date(item.resetsAt);
+    if (!isNaN(dt.getTime())) {
+      const sameDay = dt.toDateString() === new Date().toDateString();
+      const hhmm = dt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+      when = sameDay
+        ? `сбросится в ${hhmm}`
+        : `сбросится ${dt.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })} в ${hhmm}`;
+    }
+  }
+
+  const migrate = async (model: string) => {
+    if (!onMigrate || busyModel) return;
+    setBusyModel(model);
+    setError(null);
+    try {
+      await onMigrate(model);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Не удалось переключить чат');
+    } finally {
+      setBusyModel(null);
+    }
+  };
+
+  return (
+    <div style={{
+      alignSelf: 'center', maxWidth: '100%',
+      background: C.warningBg, border: `1px solid ${C.warning}`, borderRadius: 10,
+      padding: '10px 14px', fontSize: 12.5, color: C.warningText,
+      display: 'flex', flexDirection: 'column', gap: 8,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <span>⏳</span>
+        <span>
+          Лимит подписки исчерпан{when ? <span style={{ opacity: 0.75 }}> · {when}</span> : null}.
+          Можно продолжить этот чат на другом провайдере — контекст сохранится.
+        </span>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        {item.providers.map(p => (
+          <button
+            key={p.key}
+            onClick={() => void migrate(p.model)}
+            disabled={!online || !onMigrate || busyModel !== null}
+            style={{
+              padding: '5px 12px', borderRadius: 8, border: `1px solid ${C.warning}`,
+              background: C.bgWhite, color: C.textHeading, fontSize: 12.5, fontWeight: 600,
+              cursor: !online || busyModel ? 'default' : 'pointer',
+              opacity: !online || (busyModel !== null && busyModel !== p.model) ? 0.55 : 1,
+              fontFamily: 'inherit',
+            }}
+          >
+            {busyModel === p.model ? 'Переключаю…' : `Продолжить на ${p.displayName}`}
+          </button>
+        ))}
+        <span style={{ fontSize: 11.5, color: C.textMuted }}>
+          Оплата — с баланса провайдера, модель сменится
+        </span>
+      </div>
+      {error && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: C.dangerText, fontSize: 12 }}>
+          <AlertCircle size={13} style={{ flexShrink: 0 }} />
+          {error}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export const ChatItemView = memo(function ChatItemView({ item, index, online, streaming, isLastResult, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, onMigrateProvider, taskPlan, agentActivity, agentRenderChild }: ItemProps) {
   const project = useContext(ChatProjectContext);
   const persona = useContext(PersonaContext);
   const asstName = useAssistantName();
@@ -885,6 +969,25 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
         </div>
       );
     }
+
+    case 'provider_switched':
+      // Разделитель «Продолжено на …» — явная миграция чата на другого провайдера
+      return (
+        <div style={{ alignSelf: 'center', display: 'flex', alignItems: 'center', gap: 8, maxWidth: '100%' }}>
+          <div style={{ flex: 1, minWidth: 24, height: 1, background: C.border }} />
+          <span style={{
+            fontSize: 12, color: C.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden',
+            textOverflow: 'ellipsis', padding: '3px 10px', borderRadius: 999,
+            background: C.bgSelected, border: `1px solid ${C.border}`,
+          }}>
+            {item.label}
+          </span>
+          <div style={{ flex: 1, minWidth: 24, height: 1, background: C.border }} />
+        </div>
+      );
+
+    case 'provider_limit':
+      return <ProviderLimitCard item={item} online={online} onMigrate={onMigrateProvider} />;
 
     case 'interrupted':
       return (

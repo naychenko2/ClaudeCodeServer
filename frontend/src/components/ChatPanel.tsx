@@ -438,6 +438,14 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     if (lastUser && lastUser.kind === 'user_message') { atBottomRef.current = true; send(lastUser.text, lastUser.attachedPaths ?? [], modeRef.current); }
   }, [send]);
 
+  // Миграция чата на другого провайдера (кнопка карточки provider_limit при исчерпании
+  // лимита): сервер перевозит транскрипт, событие provider_switched гасит карточку и
+  // рисует разделитель; ошибку показывает сама карточка
+  const handleMigrateProvider = useCallback(async (model: string) => {
+    const updated = await api.chats.migrateProvider(session.id, model);
+    onSessionUpdated?.(updated);
+  }, [session.id, onSessionUpdated]);
+
   // Режим «План» — персистентный: после одобрения остаёмся в нём (следующие задачи тоже
   // планируются). Исполнение именно этого плана гарантирует backend (один ход без plan-режима).
   const handleRespondPlan = useCallback((requestId: string, approve: boolean, feedback?: string) => {
@@ -650,6 +658,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       onRevert={project ? handleRevert : undefined}
       onRetry={handleRetry}
       onInterrupt={interrupt}
+      onMigrateProvider={handleMigrateProvider}
       taskPlan={i === lastTaskIdx && taskTodos.length > 0 ? taskTodos : undefined}
       agentActivity={extras?.agentActivity}
       agentRenderChild={extras?.agentRenderChild}
@@ -658,7 +667,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     online, isWaiting, items.length, lastResultIndex, toggleThinking, allowPermission,
     denyPermission, allowAlways, answerQuestion, handleRespondPlan, planVersions,
     lastApprovedPlanIdx, mode, onOpenFile, project, handleRevert, handleRetry,
-    interrupt, lastTaskIdx, taskTodos, changeMode,
+    interrupt, handleMigrateProvider, lastTaskIdx, taskTodos, changeMode,
   ]);
 
   // Блок действий: подряд идущие карточки инструментов + изменения файлов объединяем

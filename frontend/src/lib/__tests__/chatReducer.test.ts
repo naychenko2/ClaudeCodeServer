@@ -470,6 +470,44 @@ describe('normalizeHistory', () => {
   });
 });
 
+// --- Фейловер провайдера: provider_limit / provider_switched ---
+
+describe('фейловер провайдера', () => {
+  const limitMsg = {
+    type: 'provider_limit' as const,
+    resetsAt: '2026-07-20T18:00:00Z',
+    providers: [{ key: 'glm', displayName: 'GLM', model: 'glm-4.7' }],
+  };
+
+  it('provider_limit добавляет карточку-предложение', () => {
+    const next = run([limitMsg]);
+    expect(next.items).toEqual([
+      { kind: 'provider_limit', resetsAt: '2026-07-20T18:00:00Z', providers: limitMsg.providers },
+    ]);
+  });
+
+  it('повторный provider_limit при висящей карточке не плодит вторую', () => {
+    const next = run([limitMsg, limitMsg]);
+    expect(next.items).toHaveLength(1);
+  });
+
+  it('provider_switched гасит карточку и добавляет разделитель с label', () => {
+    const next = run([
+      limitMsg,
+      { type: 'provider_switched', provider: 'glm', model: 'glm-4.7', label: 'Продолжено на GLM' },
+    ]);
+    expect(next.items).toEqual([
+      { kind: 'provider_limit', resetsAt: '2026-07-20T18:00:00Z', providers: limitMsg.providers, resolved: true },
+      { kind: 'provider_switched', label: 'Продолжено на GLM' },
+    ]);
+  });
+
+  it('тихий фейловер пула (auto) не оставляет следов в ленте', () => {
+    const next = run([{ type: 'provider_switched', provider: 'my-second', auto: true }]);
+    expect(next.items).toEqual([]);
+  });
+});
+
 // --- Групповой чат: speaker_changed + derive разделителей из истории ---
 
 describe('групповой чат', () => {

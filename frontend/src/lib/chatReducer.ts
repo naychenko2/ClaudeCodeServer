@@ -378,6 +378,23 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
       // локальный разделитель тем же рендером, что и смена собеседника вручную
       return withItems([...prev.items, { kind: 'companion_switched', label: msg.label, personaId: msg.personaId }]);
 
+    case 'provider_switched': {
+      // Смена аккаунта/провайдера: висящие карточки-предложения гасим (миграция состоялась
+      // или чат тихо переехал внутри пула); явная миграция добавляет разделитель
+      const items = prev.items.map(it =>
+        it.kind === 'provider_limit' && !it.resolved ? { ...it, resolved: true } : it);
+      return withItems(msg.auto || !msg.label
+        ? items
+        : [...items, { kind: 'provider_switched', label: msg.label }]);
+    }
+
+    case 'provider_limit':
+      // Лимит исчерпан, пул не помог — карточка «Продолжить на …».
+      // Дедуп: пока висит неиспользованная карточка, вторую не плодим
+      return prev.items.some(it => it.kind === 'provider_limit' && !it.resolved)
+        ? prev
+        : withItems([...prev.items, { kind: 'provider_limit', resetsAt: msg.resetsAt, providers: msg.providers }]);
+
     case 'work_loop':
       // Цикл «до готово»: приходит при каждом изменении состояния (вкл/итерация/верификация/стоп)
       return {

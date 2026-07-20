@@ -633,6 +633,14 @@ export const api = {
         method: 'PUT',
         body: JSON.stringify({ enabled }),
       }),
+    // Миграция чата на другого провайдера («Продолжить на …» при исчерпании лимита):
+    // транскрипт переезжает в профиль провайдера, контекст сохраняется. Работает и для
+    // проектных сессий
+    migrateProvider: (id: string, model: string) =>
+      request<Session>(`/chats/${id}/migrate-provider`, {
+        method: 'POST',
+        body: JSON.stringify({ model }),
+      }),
     // Режим прав: сохраняем сразу при выборе в Composer, иначе он доехал бы до сессии
     // только вместе со следующим сообщением и терялся при уходе со страницы
     setMode: (id: string, mode: string) =>

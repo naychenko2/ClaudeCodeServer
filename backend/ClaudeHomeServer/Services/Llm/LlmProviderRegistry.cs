@@ -45,6 +45,10 @@ public class LlmProviderRegistry
     // Папка, где лежат изолированные профили CLI-провайдеров (claude-profiles/{key})
     public string ProfilesDir => _profilesDir;
 
+    // Пользовательский профиль CLI (~/.claude) — корень транскриптов основной подписки
+    // (ходы без CLAUDE_CONFIG_DIR-оверрайда); нужен TranscriptMigrator при фейловере
+    public string UserProfileDir => _userProfileDir;
+
     // Возвращает пути к projects/ внутри профилей всех включённых провайдеров —
     // для WorkflowAgentParser (транскрипты workflow лежат там, а не в ~/.claude/projects/
     // при использовании стороннего провайдера).

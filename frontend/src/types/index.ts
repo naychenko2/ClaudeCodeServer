@@ -382,6 +382,12 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'personas_changed'; action: 'created' | 'updated' | 'deleted' | 'memory'; personaId?: string }
   | { type: 'team_memory_changed'; action: 'added' | 'updated' | 'removed'; projectId: string; entryId?: string }
   | { type: 'speaker_changed'; personaId: string; label: string }
+  // Чат переключён на другой аккаунт/провайдер: auto — тихий фейловер пула подписок
+  // (в ленту не попадает); label — разделитель «Продолжено на …» явной миграции
+  | { type: 'provider_switched'; provider: string; model?: string; label?: string; auto?: boolean }
+  // Лимит подписки исчерпан, в пуле переключиться некуда — предложение продолжить
+  // чат на стороннем провайдере (карточка с кнопками)
+  | { type: 'provider_limit'; resetsAt?: string; providers: ProviderFallbackOption[] }
   | { type: 'work_loop'; active: boolean; iteration: number; maxIterations: number; phase: string | null }
   | { type: 'preview_status'; status: string; port?: number; error?: string; serviceId?: string }
   | { type: 'notification'; title: string; body: string; url?: string; kind: 'reminder' | 'claude' | 'info' | 'success' | 'meeting'; notificationId?: string; notifType?: string; projectId?: string; sessionId?: string; taskId?: string; source?: string; tag?: string }
@@ -424,6 +430,13 @@ export interface LaunchConfigEntry {
   autoPort?: boolean;
   cwd?: string;
   env?: Record<string, string>;
+}
+
+// Вариант продолжения чата на стороннем провайдере (из события provider_limit)
+export interface ProviderFallbackOption {
+  key: string;
+  displayName: string;
+  model: string;
 }
 
 // Состояние одного окна лимита подписки (из rate_limit_event). utilization: 0..1.
@@ -540,6 +553,11 @@ export type ChatItem =
   // Разделитель «сменился собеседник»: label задан явно (смена вручную / speaker_changed
   // с сервера) либо резолвится по personaId (derived из истории группового чата)
   | { kind: 'companion_switched'; label: string; personaId?: string }
+  // Разделитель «Продолжено на …» — явная миграция чата на другого провайдера
+  | { kind: 'provider_switched'; label: string }
+  // Карточка-предложение: лимит подписки исчерпан — продолжить на стороннем провайдере.
+  // resolved — миграция состоялась (карточка гаснет)
+  | { kind: 'provider_limit'; resetsAt?: string; providers: ProviderFallbackOption[]; resolved?: boolean }
   | { kind: 'error'; text: string; canRetry?: boolean };
 
 // Скиллы и агенты

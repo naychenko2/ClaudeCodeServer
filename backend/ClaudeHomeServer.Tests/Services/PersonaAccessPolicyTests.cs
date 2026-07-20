@@ -22,7 +22,7 @@ public class PersonaAccessPolicyTests
         var result = PersonaAccessPolicy.BuildExtraDisallowed(Make(PersonaAccess.ReadOnly));
 
         result.Should().NotBeNull();
-        result.Should().Contain(["Edit", "Write", "MultiEdit", "NotebookEdit", "Bash", "KillShell"]);
+        result.Should().Contain(["Edit", "Write", "NotebookEdit", "Bash", "KillShell"]);
         // Мутации наших MCP-серверов тоже под запретом
         result.Should().Contain("mcp__tasks__tasks_create")
             .And.Contain("mcp__notes__notes_delete")

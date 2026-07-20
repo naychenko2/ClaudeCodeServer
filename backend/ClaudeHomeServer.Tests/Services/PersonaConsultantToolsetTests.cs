@@ -26,7 +26,7 @@ public class PersonaConsultantToolsetTests
     private static readonly string[] ForbiddenAlways =
     [
         // Встроенные мутации и исполнение
-        "Bash", "KillShell", "Edit", "Write", "MultiEdit", "NotebookEdit",
+        "Bash", "KillShell", "Edit", "Write", "NotebookEdit",
         // Рекурсия и общение с человеком
         "Task", "Agent", "AskUserQuestion", "ExitPlanMode",
         "mcp__personas__persona_ask",

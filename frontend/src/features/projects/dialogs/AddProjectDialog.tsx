@@ -71,7 +71,7 @@ export function AddProjectDialog({ groups, defaultGroupId, onSuccess, onClose }:
 
       {mode === 'existing' && (
         <Field label="Путь к папке" hint="Абсолютный путь к существующей папке проекта">
-          <TextField value={path} onChange={setPath} placeholder="C:\\Sources\\my-project" mono />
+          <TextField value={path} onChange={setPath} placeholder="C:\Sources\my-project" mono />
         </Field>
       )}
 

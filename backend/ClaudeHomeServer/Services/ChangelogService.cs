@@ -23,9 +23,11 @@ public class ChangelogService(FileService files, IConfiguration config, ILogger<
         "changelog");
 
     private readonly string _model = config["Changelog:Model"] ?? "haiku";
-    // Запас на самый жирный день: 59 коммитов генерятся ~141 с, так что 480 с хватает
-    // с большим запасом. Не уложились — день уходит в fallback (сырые subject'ы коммитов).
-    private readonly int _claudeTimeoutMs = int.TryParse(config["Changelog:TimeoutMs"], out var t) ? t : 480_000;
+    // Запас на самый жирный день. Старый замер (59 коммитов за ~141 с) больше не актуален:
+    // 18.07.2026 день из 35 коммитов занял 194 с, а 58 коммитов 19.07 не уложились и в 480 с —
+    // на коммит стало примерно вдвое медленнее. Отсюда 900 с; причина замедления не выяснена,
+    // так что это запас, а не расчет. Не уложились — день уходит в fallback (сырые subject'ы).
+    private readonly int _claudeTimeoutMs = int.TryParse(config["Changelog:TimeoutMs"], out var t) ? t : 900_000;
 
     // Источник changelog. Если задан SourceRepoPath — «Что нового» строится ТОЛЬКО из этой
     // репы (changelog самого продукта, одинаковый для всех, независимо от проектов юзера).

@@ -92,7 +92,11 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
         // инжекцию каталога скиллов в системный промпт (~3 тыс. токенов), когда
         // safe-mode недоступен (песочница).
         args.Add("--disallowedTools");
-        args.Add("Bash,Read,Write,Edit,MultiEdit,NotebookEdit,Glob,Grep,WebFetch,WebSearch,Task,Agent,KillShell,BashOutput,Skill");
+        // MultiEdit тут был до CLI 2.1.x: инструмент убрали без прямой замены (он батчил
+        // несколько правок одного файла в одно одобрение; теперь это просто отдельные вызовы
+        // Edit), а новый CLI ВАЛИДИРУЕТ имена и падает с кодом 1 на неизвестном правиле, роняя
+        // весь one-shot. Не возвращать несуществующие имена — список сверять с набором CLI.
+        args.Add("Bash,Read,Write,Edit,NotebookEdit,Glob,Grep,WebFetch,WebSearch,Task,Agent,KillShell,BashOutput,Skill");
         if (!string.IsNullOrWhiteSpace(model))
         {
             args.Add("--model");

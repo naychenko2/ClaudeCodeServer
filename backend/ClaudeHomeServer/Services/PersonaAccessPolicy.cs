@@ -14,7 +14,10 @@ public static class PersonaAccessPolicy
     public static readonly string[] ReadOnlyDisallowed =
     [
         // Файловые мутации CLI
-        "Edit", "Write", "MultiEdit", "NotebookEdit",
+        // MultiEdit убран: в CLI 2.1.x такого инструмента нет, а неизвестное имя в deny-правиле
+        // роняет запуск claude с кодом 1. Прямой замены у него нет — правки идут вызовами Edit,
+        // который и так в списке, так что запрет на мутации файлов не ослаб.
+        "Edit", "Write", "NotebookEdit",
         // Bash целиком (и фоновые процессы)
         "Bash", "KillShell",
         // MCP задач (mcp__tasks__*)

@@ -75,7 +75,7 @@ export function AiLauncher() {
     let stableSince = Date.now();
     let firedForSig = '';
     const DWELL = 4000;
-    const sigOf = (n: ReturnType<typeof getNav>) => n ? `${n.screen}|${n.note ?? ''}|${n.task ?? ''}` : '';
+    const sigOf = (n: ReturnType<typeof getNav>) => n ? `${n.screen}|${n.note ?? ''}|${n.task ?? ''}|${n.persona ?? ''}|${n.knowledge ?? ''}|${n.file ?? ''}|${n.project?.id ?? ''}` : '';
     const tick = () => {
       if (open || !isProactiveEnabled()) return;
       const ctx = buildCtx();
@@ -229,6 +229,8 @@ function sectionLabelForScreen(screen?: string): string | null {
     case 'calendar': return 'Задачи';
     case 'chats': return 'Чат';
     case 'project': return 'Проект';
+    case 'personas': return 'Персоны';
+    case 'knowledge': return 'Знания';
     default: return null;
   }
 }

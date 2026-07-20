@@ -30,6 +30,17 @@ export async function computeSuggestion(ctx: AiActionCtx): Promise<Suggestion | 
       // Содержательная заметка без раздела «Связанное» — предложить связи
       if (note.content.trim().length > 200 && !/(^|\n)##\s*Связанное/i.test(note.content))
         return { key: `note-links:${nav.note}`, actionId: 'note.links', text: 'У заметки нет связей — найти похожие?' };
+      // Есть незавершённые чекбоксы — предложить превратить их в задачи
+      if (/(^|\n)\s*[-*]\s+\[ \]\s+\S/.test(note.content))
+        return { key: `note-tasks:${nav.note}`, actionId: 'note.promoteTasks', text: 'Превратить пункты заметки в задачи?' };
+      // Документ с необработанными комментариями (флаг doc-annotations) — разобрать
+      if (ctx.flag('doc-annotations')) {
+        try {
+          const anns = await api.notes.annotations(note.source, note.path);
+          if (anns.some(a => a.status === 'open'))
+            return { key: `note-annot:${nav.note}`, actionId: 'note.annotations', text: 'Есть необработанные комментарии — разобрать?' };
+        } catch { /* нет комментариев/офлайн */ }
+      }
     } catch { /* офлайн/ошибка — без подсказки */ }
     return null;
   }
@@ -45,6 +56,38 @@ export async function computeSuggestion(ctx: AiActionCtx): Promise<Suggestion | 
       if (task.assignee === 'claude' && !running)
         return { key: `task-exec:${nav.task}`, actionId: 'task.execute', text: 'Поручить эту задачу Claude-исполнителю?' };
     } catch { /* без подсказки */ }
+    return null;
+  }
+
+  // Открыта персона с пустым характером — предложить сгенерировать
+  if (nav.screen === 'personas' && nav.persona && ctx.online) {
+    try {
+      const p = await api.personas.get(nav.persona);
+      const hasCharacter = !!(p.contract?.character?.trim() || p.systemPrompt?.trim());
+      if (!hasCharacter)
+        return { key: `persona-char:${nav.persona}`, actionId: 'persona.character', text: 'У персоны пустой характер — сгенерировать?' };
+    } catch { /* без подсказки */ }
+    return null;
+  }
+
+  // Открыт проект — если в рабочем дереве есть незакоммиченные изменения, предложить разбор
+  if (nav.screen === 'project' && nav.project && ctx.online) {
+    try {
+      const st = await api.git.status(nav.project.id);
+      if (st.isRepo && (st.staged.length > 0 || st.unstaged.length > 0 || st.untracked.length > 0))
+        return { key: `git-review:${nav.project.id}`, actionId: 'project.gitReview', text: 'Есть незакоммиченные изменения — разобрать и предложить коммиты?' };
+    } catch { /* не git-репо/офлайн — без подсказки */ }
+    return null;
+  }
+
+  // Календарь + есть просроченные задачи — предложить их разобрать
+  if (nav.screen === 'calendar' && ctx.online) {
+    try {
+      const today = todayKey();
+      const tasks = await api.tasks.listAll(undefined, today);
+      if (tasks.some(t => t.status !== 'done' && !!t.dueDate && t.dueDate < today))
+        return { key: `overdue:${today}`, actionId: 'tasks.overdue', text: 'Есть просроченные задачи — разобрать?' };
+    } catch { /* офлайн — без подсказки */ }
     return null;
   }
 

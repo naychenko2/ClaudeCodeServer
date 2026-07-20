@@ -93,6 +93,18 @@ export function KnowledgeView({ kb, isMobile, onBack, onAddDocument, onDelete }:
   // Смена базы — закрываем просмотр документа (содержимое принадлежит старой базе)
   useEffect(() => { setViewDoc(null); }, [kb.id]);
 
+  // AI-хаб: действие «Поиск по смыслу в базе» из палитры — включаем семантический
+  // режим и фокусируем поле поиска (переиспользуем существующее состояние поиска).
+  useEffect(() => {
+    const onRun = (e: Event) => {
+      if ((e as CustomEvent<{ action?: string }>).detail?.action !== 'knowledge.search') return;
+      setMode('semantic');
+      searchRef.current?.focus();
+    };
+    window.addEventListener('cc-ai-run', onRun);
+    return () => window.removeEventListener('cc-ai-run', onRun);
+  }, []);
+
   useEffect(() => {
     const q = query.trim();
     if (!q) { setHits(null); setSearching(false); return; }

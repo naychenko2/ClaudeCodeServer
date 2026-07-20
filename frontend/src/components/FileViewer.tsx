@@ -598,6 +598,31 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
     setStageBusy(false);
   };
 
+  // «Спросить Claude про файл» (AI-хаб, action file.ask) — эквивалент note.ask заметки:
+  // кладём затравку с путём файла и (для текстовых файлов) его содержимым в общий канал
+  // композера. Любой смонтированный композер заберёт её по событию, а следующий — при
+  // монтировании (Composer.consume). Закрываем файл, открывая чат проекта.
+  const askAboutFile = () => {
+    const isText = !!fileContent && !fileContent.isBinary && !fileContent.isImage
+      && !fileContent.isDocument && !fileContent.isVideo && !fileContent.isAudio;
+    const body = isText && fileContent?.content
+      ? `\n\n\`\`\`\n${fileContent.content}\n\`\`\`\n\n`
+      : '\n\n';
+    sessionStorage.setItem('cc_pending_chat_prompt', `Про файл «${filePath}»:${body}`);
+    window.dispatchEvent(new Event('cc-compose-prefill'));
+    onClose();
+  };
+
+  // Подписка на контекстное действие AI-хаба (снимается на unmount)
+  useEffect(() => {
+    const onRun = (e: Event) => {
+      if ((e as CustomEvent<{ action?: string }>).detail?.action === 'file.ask') askAboutFile();
+    };
+    window.addEventListener('cc-ai-run', onRun);
+    return () => window.removeEventListener('cc-ai-run', onRun);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filePath, fileContent]);
+
   const handleClose = async () => {
     // draw.io в режиме edit — сохраняем текущие правки перед закрытием
     if (isDrawio && drawioMode === 'edit') await drawioRef.current?.flush();

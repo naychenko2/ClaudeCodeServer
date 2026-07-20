@@ -327,6 +327,26 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [characterJob.status]);
 
+  // AI-хаб: контекстные действия из палитры делегируются сюда — над открытой персоной,
+  // переиспользуя те же обработчики, что и ✨-кнопки формы.
+  useEffect(() => {
+    const onRun = (e: Event) => {
+      const action = (e as CustomEvent<{ action?: string }>).detail?.action;
+      if (!action) return;
+      if (action === 'persona.character') {
+        // Есть заполненный контракт — улучшаем, иначе генерируем с нуля (как кнопки тулбара)
+        runAiCharacter(contractFilled ? 'improve' : 'generate');
+      } else if (action === 'persona.avatar') {
+        // Раскрываем панель «Внешность», чтобы кандидаты/сообщение были видны, и запускаем генерацию
+        setShowAppearance(true);
+        generateAvatar();
+      }
+    };
+    window.addEventListener('cc-ai-run', onRun);
+    return () => window.removeEventListener('cc-ai-run', onRun);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [persona, contractFilled, characterBusy, generating]);
+
   // При выборе зоны «Проект» без выбранного проекта — подставим первый доступный
   useEffect(() => {
     if (scope === 'project' && !projectId && projects.length > 0) setProjectId(projects[0].id);

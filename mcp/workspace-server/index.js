@@ -6,7 +6,7 @@
 //   WORKSPACE_API_URL         — базовый URL бэкенда (http://127.0.0.1:5000)
 //   WORKSPACE_API_TOKEN       — сервисный JWT владельца сессии
 //   WORKSPACE_PROJECT_ID      — id проекта текущей сессии; пусто = чат вне проекта
-//   WORKSPACE_SECTIONS        — csv включённых секций (projects,files,knowledge,search[,chats,destructive])
+//   WORKSPACE_SECTIONS        — csv включённых секций (projects,files,knowledge,search[,chats,git,knowledge_bases,destructive])
 //   WORKSPACE_PROJECT_IDS     — csv разрешённых projectId; пусто = все проекты владельца
 //   WORKSPACE_SELF_SESSION_ID — id самой сессии (запрет chats_send самому себе)
 //   WORKSPACE_AGENT_DEPTH     — глубина делегирования; chats_send шлёт X-Agent-Depth = depth + 1
@@ -38,6 +38,7 @@ const WRITE = process.env.WORKSPACE_WRITE !== '0';
 const WRITE_TOOLS = new Set([
   'projects_create', 'projects_update', 'files_write', 'files_mkdir', 'files_rename',
   'knowledge_index', 'chats_create', 'chats_send', 'chats_update',
+  'git_commit', 'git_stage', 'kb_add_document',
 ]);
 
 // Ограничение выдачи files_tree — дерево большого проекта не должно раздувать контекст
@@ -267,6 +268,145 @@ const SECTION_TOOLS = {
         properties: {
           query: { type: 'string', description: 'Поисковый запрос' },
           limit: { type: 'integer', minimum: 1, maximum: 20, description: 'Максимум результатов (по умолчанию 8)' },
+        },
+      },
+    },
+  ],
+  // Секция git — работа с git-репозиторием ЛЮБОГО проекта владельца (read всегда,
+  // write git_commit/git_stage — только при WORKSPACE_WRITE). Все инструменты требуют
+  // projectId и уважают WORKSPACE_PROJECT_IDS (checkProjectAllowed).
+  git: [
+    {
+      name: 'git_status',
+      description: 'Статус git-репозитория проекта: текущая ветка, upstream, staged/unstaged/untracked файлы. ' +
+        'Если папка проекта не git-репозиторий — возвращается ошибка.',
+      inputSchema: {
+        type: 'object',
+        required: ['projectId'],
+        properties: { projectId: { type: 'string', description: 'ID проекта' } },
+      },
+    },
+    {
+      name: 'git_diff',
+      description: 'Diff файла проекта: рабочие правки (staged=false, по умолчанию) либо проиндексированные (staged=true). ' +
+        'path — относительный путь файла.',
+      inputSchema: {
+        type: 'object',
+        required: ['projectId', 'path'],
+        properties: {
+          projectId: { type: 'string', description: 'ID проекта' },
+          path: { type: 'string', description: 'Относительный путь файла' },
+          staged: { type: 'boolean', description: 'true — diff проиндексированных изменений (git diff --staged); false — рабочих (по умолчанию)' },
+        },
+      },
+    },
+    {
+      name: 'git_log',
+      description: 'История коммитов проекта (последние limit, по умолчанию 100). branch — конкретная ветка (пусто — текущая).',
+      inputSchema: {
+        type: 'object',
+        required: ['projectId'],
+        properties: {
+          projectId: { type: 'string', description: 'ID проекта' },
+          limit: { type: 'integer', minimum: 1, description: 'Сколько коммитов вернуть (по умолчанию 100)' },
+          branch: { type: 'string', description: 'Ветка (пусто — текущая)' },
+        },
+      },
+    },
+    {
+      name: 'git_blame',
+      description: 'Аннотация авторства файла построчно (git blame): по строкам — коммит, автор, дата.',
+      inputSchema: {
+        type: 'object',
+        required: ['projectId', 'path'],
+        properties: {
+          projectId: { type: 'string', description: 'ID проекта' },
+          path: { type: 'string', description: 'Относительный путь файла' },
+        },
+      },
+    },
+    {
+      name: 'git_file_log',
+      description: 'История коммитов одного файла (git log --follow — учитывает переименования).',
+      inputSchema: {
+        type: 'object',
+        required: ['projectId', 'path'],
+        properties: {
+          projectId: { type: 'string', description: 'ID проекта' },
+          path: { type: 'string', description: 'Относительный путь файла' },
+        },
+      },
+    },
+    {
+      name: 'git_commit',
+      description: 'Зафиксировать проиндексированные изменения проекта коммитом с сообщением message. ' +
+        'Возвращает sha созданного коммита. Требует непустого сообщения.',
+      inputSchema: {
+        type: 'object',
+        required: ['projectId', 'message'],
+        properties: {
+          projectId: { type: 'string', description: 'ID проекта' },
+          message: { type: 'string', description: 'Сообщение коммита' },
+        },
+      },
+    },
+    {
+      name: 'git_stage',
+      description: 'Проиндексировать (git add) файл проекта по относительному пути path перед коммитом.',
+      inputSchema: {
+        type: 'object',
+        required: ['projectId', 'path'],
+        properties: {
+          projectId: { type: 'string', description: 'ID проекта' },
+          path: { type: 'string', description: 'Относительный путь файла' },
+        },
+      },
+    },
+  ],
+  // Секция knowledge_bases — личные и публичные базы знаний Dify владельца (раздел «Знания»),
+  // НЕ проектные базы (для тех — секция knowledge). Инструменты — уровня владельца, projectId нет.
+  knowledge_bases: [
+    {
+      name: 'kb_list',
+      description: 'Список баз знаний владельца (личные + публичные): id, название, тип, видимость, число документов. ' +
+        'Не путать с базой знаний текущего проекта (knowledge_status/knowledge_search).',
+      inputSchema: { type: 'object', properties: {} },
+    },
+    {
+      name: 'kb_get',
+      description: 'Карточка базы знаний по id: метаданные + список документов с их статусом индексации.',
+      inputSchema: {
+        type: 'object',
+        required: ['id'],
+        properties: { id: { type: 'string', description: 'ID базы знаний' } },
+      },
+    },
+    {
+      name: 'kb_search',
+      description: 'Поиск по базе знаний: method="semantic" (по смыслу, по умолчанию) либо "fulltext" (точные совпадения). ' +
+        'Возвращает чанки со score.',
+      inputSchema: {
+        type: 'object',
+        required: ['id', 'query'],
+        properties: {
+          id: { type: 'string', description: 'ID базы знаний' },
+          query: { type: 'string', description: 'Поисковый запрос' },
+          topK: { type: 'integer', minimum: 1, maximum: 20, description: 'Сколько чанков вернуть (по умолчанию 8)' },
+          method: { type: 'string', enum: ['semantic', 'fulltext'], description: 'Стратегия поиска (по умолчанию semantic)' },
+        },
+      },
+    },
+    {
+      name: 'kb_add_document',
+      description: 'Добавить документ в базу знаний текстом: name — имя документа, text — содержимое. ' +
+        'Индексация продолжается в фоне (статус — через kb_get).',
+      inputSchema: {
+        type: 'object',
+        required: ['id', 'name', 'text'],
+        properties: {
+          id: { type: 'string', description: 'ID базы знаний' },
+          name: { type: 'string', description: 'Имя документа' },
+          text: { type: 'string', description: 'Текстовое содержимое документа' },
         },
       },
     },
@@ -705,6 +845,91 @@ async function callTool(name, args) {
         return json(body ?? { status: res.status });
       if (res.status === 404) throw new Error(`Сессия ${sessionId} не найдена`);
       throw new Error(`HTTP ${res.status}: ${body ? JSON.stringify(body) : ''}`);
+    }
+
+    case 'git_status': {
+      checkProjectAllowed(args.projectId);
+      return json(await api(`/api/projects/${args.projectId}/git/status`));
+    }
+
+    case 'git_diff': {
+      checkProjectAllowed(args.projectId);
+      const params = new URLSearchParams({ path: String(args.path ?? '') });
+      if (args.staged) params.set('staged', 'true');
+      // Ответ — { diff } (строка унифицированного diff)
+      return json(await api(`/api/projects/${args.projectId}/git/diff?${params}`));
+    }
+
+    case 'git_log': {
+      checkProjectAllowed(args.projectId);
+      const params = new URLSearchParams();
+      if (args.limit) params.set('limit', String(args.limit));
+      if (args.branch) params.set('branch', String(args.branch));
+      return json(await api(`/api/projects/${args.projectId}/git/log?${params}`));
+    }
+
+    case 'git_blame': {
+      checkProjectAllowed(args.projectId);
+      const params = new URLSearchParams({ path: String(args.path ?? '') });
+      return json(await api(`/api/projects/${args.projectId}/git/blame?${params}`));
+    }
+
+    case 'git_file_log': {
+      checkProjectAllowed(args.projectId);
+      const params = new URLSearchParams({ path: String(args.path ?? '') });
+      return json(await api(`/api/projects/${args.projectId}/git/file-log?${params}`));
+    }
+
+    case 'git_commit': {
+      checkProjectAllowed(args.projectId);
+      const message = String(args.message ?? '').trim();
+      if (!message) throw new Error('Пустое сообщение коммита');
+      // Тело — GitCommitRequest(Message, Amend); ответ — { sha }
+      return json(await api(`/api/projects/${args.projectId}/git/commit`, {
+        method: 'POST', body: JSON.stringify({ message }),
+      }));
+    }
+
+    case 'git_stage': {
+      checkProjectAllowed(args.projectId);
+      // Тело — GitPathRequest(Path); ответ — свежий git-статус
+      const status = await api(`/api/projects/${args.projectId}/git/stage`, {
+        method: 'POST', body: JSON.stringify({ path: String(args.path ?? '') }),
+      });
+      return json(status);
+    }
+
+    case 'kb_list': {
+      // Базы знаний владельца — уровень пользователя, projectId не участвует
+      return json(await api('/api/knowledge'));
+    }
+
+    case 'kb_get': {
+      const id = String(args.id ?? '');
+      if (!id) throw new Error('Не указан id базы знаний');
+      return json(await api(`/api/knowledge/${encodeURIComponent(id)}`));
+    }
+
+    case 'kb_search': {
+      const id = String(args.id ?? '');
+      if (!id) throw new Error('Не указан id базы знаний');
+      const params = new URLSearchParams({ q: String(args.query ?? '') });
+      if (args.topK) params.set('topK', String(args.topK));
+      if (args.method) params.set('method', String(args.method));
+      return json(await api(`/api/knowledge/${encodeURIComponent(id)}/search?${params}`));
+    }
+
+    case 'kb_add_document': {
+      const id = String(args.id ?? '');
+      if (!id) throw new Error('Не указан id базы знаний');
+      const name = String(args.name ?? '').trim();
+      if (!name) throw new Error('Не задано имя документа');
+      const text = String(args.text ?? '');
+      if (!text) throw new Error('Пустой текст документа');
+      // Тело — AddDocumentTextRequest(Name, Text); ответ — { id, name, indexingStatus }
+      return json(await api(`/api/knowledge/${encodeURIComponent(id)}/documents`, {
+        method: 'POST', body: JSON.stringify({ name, text }),
+      }));
     }
 
     case 'search_unified': {

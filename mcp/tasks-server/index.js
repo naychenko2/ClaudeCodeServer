@@ -153,6 +153,8 @@ const TOOLS = [
         status: { type: 'string', enum: ENUMS.status, description: 'Фильтр по статусу' },
         priority: { type: 'string', enum: ENUMS.priority, description: 'Фильтр по приоритету' },
         assignee: { type: 'string', enum: ENUMS.assignee, description: 'Фильтр по исполнителю (me — пользователь, claude — Claude)' },
+        from: { type: 'string', description: 'Показывать задачи со сроком от даты (включительно), YYYY-MM-DD. Задачи без срока не попадают в выборку.' },
+        to: { type: 'string', description: 'Показывать задачи со сроком до даты (включительно), YYYY-MM-DD. Задачи без срока не попадают в выборку.' },
         scope: { type: 'string', enum: ['context', 'all'], description: 'context (по умолчанию) — текущий проект/личные; all — все задачи пользователя' },
       },
     },
@@ -308,7 +310,8 @@ async function callTool(name, args) {
   switch (name) {
     case 'tasks_list': {
       const params = new URLSearchParams();
-      for (const k of ['status', 'priority', 'assignee'])
+      // from/to — фильтр по диапазону срока (DueDate) на бэке, границы включительно
+      for (const k of ['status', 'priority', 'assignee', 'from', 'to'])
         if (args[k]) params.set(k, String(args[k]));
       if (args.scope !== 'all') {
         if (PROJECT_ID) params.set('projectId', PROJECT_ID);

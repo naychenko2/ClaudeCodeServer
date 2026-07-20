@@ -1099,6 +1099,12 @@ public class SessionManager
         if (_bindings.EffectiveToolEnabled(ownerId, persona, "chats"))
             sections.Add("chats");
         if (sections.Count == 0) return null;
+        // Git-инструменты (read: status/diff/log/blame/file_log; write: commit/stage за
+        // WORKSPACE_WRITE) идут вместе с доступом к файлам — кто видит файлы проекта, видит и
+        // его историю. Базы знаний Dify владельца (kb_list/search/add_document) — вместе со
+        // знаниями. Обе — надстройки над базовыми секциями, отдельного tool-ключа не заводим.
+        if (sections.Contains("files")) sections.Add("git");
+        if (sections.Contains("knowledge")) sections.Add("knowledge_bases");
         // Разрушающие операции (files_delete/chats_delete) — за отдельным флагом
         // workspace-destructive; персоне дополнительно нужен tool-ключ destructive
         // (Tool-привязка или Persona.Tools). Одна destructive без базовых секций не монтируется.

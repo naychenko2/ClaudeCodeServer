@@ -1202,6 +1202,16 @@ public class ClaudeSession : ILlmSessionAdapter
                     ? " Разрушающие операции files_delete и chats_delete НЕВОССТАНОВИМЫ: применяй их ТОЛЬКО " +
                       "по явной просьбе пользователя удалить конкретный файл или чат, никогда по своей инициативе."
                     : "";
+                // Git — только когда секция git смонтирована (идёт с files). Read всегда; write — при wsWrite.
+                var gitHint = _workspaceMcp.Sections.Contains("git")
+                    ? " Git любого проекта: git_status, git_diff, git_log, git_blame, git_file_log" +
+                      (wsWrite ? ", а по явной просьбе — git_stage и git_commit." : ".")
+                    : "";
+                // Базы знаний Dify пользователя (личные и публичные, не проектные) — секция knowledge_bases.
+                var kbHint = _workspaceMcp.Sections.Contains("knowledge_bases")
+                    ? " Базы знаний пользователя: kb_list, kb_get, kb_search (семантика/полнотекст)" +
+                      (wsWrite ? ", kb_add_document." : ".")
+                    : "";
                 var workspaceHint =
                     "Тебе доступно всё рабочее пространство пользователя через MCP-инструменты mcp__wsp__*: " +
                     "список проектов и их карточки (projects_list → projects_get), файлы любого проекта " +
@@ -1211,7 +1221,7 @@ public class ClaudeSession : ILlmSessionAdapter
                         ? " Запись: projects_create/projects_update, files_write/files_mkdir/files_rename, " +
                           "knowledge_index (добавить файл в базу). files_write используй только для ДРУГИХ проектов."
                         : "") +
-                    chatsHint + destructiveHint + " " + wsScope + " " +
+                    gitHint + kbHint + chatsHint + destructiveHint + " " + wsScope + " " +
                     "Когда пользователь спрашивает «где-то у меня было…» — начинай с search_unified." +
                     (wsWrite
                         ? ""

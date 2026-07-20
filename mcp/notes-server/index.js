@@ -194,6 +194,55 @@ const TOOLS = [
     },
   },
   {
+    name: 'notes_move',
+    description: 'Переместить заметку в другую папку и/или другой источник. id заметки при этом меняется (путь входит в id) — используй возвращённый id дальше. Входящие [[wikilinks]] на неё сервер чинит автоматически. Переименование (смена заголовка) делается отдельно через notes_update.',
+    inputSchema: {
+      type: 'object',
+      required: ['id'],
+      properties: {
+        id: { type: 'string', description: 'ID заметки' },
+        folder: { type: 'string', description: 'Целевая папка внутри источника ("Идеи/Черновики"); пусто или отсутствует — корень источника' },
+        targetSource: { type: 'string', description: 'Перенести в другой источник: "personal" или id проекта. По умолчанию — текущий источник заметки' },
+      },
+    },
+  },
+  {
+    name: 'notes_daily',
+    description: 'Открыть или создать дневниковую заметку (Journal/YYYY-MM-DD.md в личном vault). Если передан content — дописать его в конец заметки. Удобно для быстрых записей «в дневник за сегодня».',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        date: { type: 'string', description: 'Дата в формате YYYY-MM-DD. По умолчанию — сегодня.' },
+        content: { type: 'string', description: 'Текст (markdown) для дописывания в конец дневниковой заметки. Пусто — просто открыть/создать.' },
+      },
+    },
+  },
+  {
+    name: 'notes_resolve',
+    description: 'Резолв вики-ссылки [[Имя]] в конкретную заметку (с учётом коллизий вида [[Проект/Имя]]). При заданном anchor вернёт и фрагмент заметки по якорю "#Заголовок" или "#^блок". Отвечает на вопрос «на какую именно заметку указывает эта ссылка».',
+    inputSchema: {
+      type: 'object',
+      required: ['name'],
+      properties: {
+        name: { type: 'string', description: 'Имя из вики-ссылки, как в [[…]] (можно "Проект/Имя" для устранения коллизии)' },
+        anchor: { type: 'string', description: 'Якорь внутри заметки: заголовок ("#Раздел") или блок ("#^abc123") — вернёт соответствующий фрагмент' },
+      },
+    },
+  },
+  {
+    name: 'notes_promote_task',
+    description: 'Превратить чекбокс-пункт заметки (- [ ] …) в настоящую задачу (появится в календаре, работают напоминания). Чекбокс задаётся номером строки line (0-базовый индекс строки в markdown-содержимом из notes_read) ЛИБО его текстом text (сервер сам найдёт строку). Повторный промоут той же строки вернёт уже существующую задачу.',
+    inputSchema: {
+      type: 'object',
+      required: ['id'],
+      properties: {
+        id: { type: 'string', description: 'ID заметки с чекбоксом' },
+        line: { type: 'integer', minimum: 0, description: '0-базовый номер строки чекбокса в содержимом заметки (notes_read)' },
+        text: { type: 'string', description: 'Текст чекбокса (без "- [ ]") — альтернатива line: строка найдётся по совпадению текста' },
+      },
+    },
+  },
+  {
     name: 'notes_semantic_search',
     description: 'Семантический поиск по заметкам (по смыслу, не по подстроке): находит близкие по содержанию заметки со score и сниппетом. Используй, когда точный текст неизвестен.',
     inputSchema: {
@@ -301,6 +350,57 @@ async function callTool(name, args) {
       return json(await api(`/api/notes/${encodeURIComponent(args.id)}/status`, {
         method: 'POST', body: JSON.stringify({ status: args.status }),
       }));
+
+    case 'notes_move': {
+      const body = {};
+      if (args.folder !== undefined) body.folder = args.folder;
+      if (args.targetSource !== undefined) body.targetSource = args.targetSource;
+      return json(await api(`/api/notes/${encodeURIComponent(args.id)}/move`, {
+        method: 'POST', body: JSON.stringify(body),
+      }));
+    }
+
+    case 'notes_daily': {
+      const dailyBody = {};
+      if (args.date !== undefined) dailyBody.date = args.date;
+      const note = await api('/api/notes/daily', { method: 'POST', body: JSON.stringify(dailyBody) });
+      // Дописывание не поддержано эндпоинтом — делаем сами: читаем текущий текст и PUT-им склейку
+      if (args.content) {
+        const base = String(note.content ?? '');
+        const merged = base.length ? `${base.replace(/\s*$/, '')}\n\n${args.content}` : String(args.content);
+        return json(await api(`/api/notes/${encodeURIComponent(note.id)}`, {
+          method: 'PUT', body: JSON.stringify({ content: merged }),
+        }));
+      }
+      return json(note);
+    }
+
+    case 'notes_resolve': {
+      const params = new URLSearchParams({ name: String(args.name ?? '') });
+      if (args.anchor) params.set('anchor', String(args.anchor));
+      return json(await api(`/api/notes/resolve?${params}`));
+    }
+
+    case 'notes_promote_task': {
+      let line = args.line;
+      // Строку можно задать текстом чекбокса — резолвим по списку задач заметки
+      if (line === undefined || line === null) {
+        if (!args.text)
+          throw new Error('Укажи line (номер строки) или text (текст чекбокса)');
+        const rows = await api(`/api/notes/${encodeURIComponent(args.id)}/tasks`);
+        const needle = String(args.text).trim();
+        const hits = rows.filter(r => r.text === needle);
+        const matches = hits.length ? hits : rows.filter(r => r.text.includes(needle));
+        if (matches.length === 0)
+          throw new Error(`Чекбокс с текстом "${needle}" не найден в заметке`);
+        if (matches.length > 1)
+          throw new Error(`Найдено несколько чекбоксов "${needle}" — уточни line (строки: ${matches.map(m => m.line).join(', ')})`);
+        line = matches[0].line;
+      }
+      return json(await api(`/api/notes/${encodeURIComponent(args.id)}/tasks/promote`, {
+        method: 'POST', body: JSON.stringify({ line }),
+      }));
+    }
 
     case 'notes_semantic_search': {
       const params = new URLSearchParams({ q: String(args.query ?? '') });

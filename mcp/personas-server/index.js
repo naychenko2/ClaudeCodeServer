@@ -389,6 +389,22 @@ const TOOLS = [
         prompt: { type: 'string', description: 'Описание внешности для генерации (необязательно)' },
       },
     },
+  },
+  {
+    name: 'personas_ai_team',
+    description: 'Сгенерировать команду персон (роли, характеры, аватары) под задачу/проект. ' +
+      'ИИ по промпту и контексту проекта (CLAUDE.md) предлагает сбалансированный состав 3-6 персон. ' +
+      'Возвращает ЧЕРНОВИКИ (поле members) — НЕ создаёт персон: покажи состав пользователю и создай ' +
+      'нужных через personas_create (поля черновика совпадают с параметрами создания). ' +
+      'Требуется проект: projectId обязателен (по умолчанию — проект текущей сессии; вне проекта — укажи явно).',
+    inputSchema: {
+      type: 'object',
+      required: ['prompt'],
+      properties: {
+        prompt: { type: 'string', description: 'Какая команда нужна и подо что (задача/цели проекта)' },
+        projectId: { type: 'string', description: 'ID проекта, под который формируется команда (по умолчанию — проект текущей сессии)' },
+      },
+    },
   }] : []),
   // @упоминания (флаг persona-mentions): спросить другую персону — она ответит one-shot'ом
   // от своего лица, со своим характером, памятью и моделью. Глубина делегирования строго 1:
@@ -449,7 +465,7 @@ function contractFrom(args) {
 const WRITE_TOOLS = new Set([
   'personas_create', 'personas_update', 'personas_delete', 'personas_bindings_set',
   'personas_automation_create', 'personas_automation_update', 'personas_automation_delete',
-  'personas_automation_test', 'personas_generate_avatar',
+  'personas_automation_test', 'personas_generate_avatar', 'personas_ai_team',
 ]);
 
 async function callTool(name, args) {
@@ -605,6 +621,18 @@ async function callTool(name, args) {
           throw new Error('Сервис генерации изображений не ответил — попробуй позже.');
         throw err;
       }
+    }
+
+    case 'personas_ai_team': {
+      // ИИ формирует состав команды по промпту + контексту проекта; нужен projectId
+      // (по умолчанию — проект сессии). Ответ — черновики (members), персоны НЕ создаются.
+      const projectId = args.projectId || PROJECT_ID;
+      if (!projectId)
+        throw new Error('Нужен projectId: текущая сессия вне проекта — укажи projectId проекта, под который формируется команда.');
+      return json(await api('/api/personas/ai/team', {
+        method: 'POST',
+        body: JSON.stringify({ projectId, prompt: String(args.prompt ?? '') }),
+      }));
     }
 
     case 'persona_ask': {

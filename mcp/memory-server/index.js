@@ -125,6 +125,38 @@ const TOOLS = [
       },
     },
   },
+  {
+    name: 'memory_to_note',
+    description: 'Вынести запись памяти в заметку: инсайт выходит из твоего личного датасета в общий ' +
+      'vault — становится виден и доступен всей команде и вне чата с тобой. Возвращает id и заголовок ' +
+      'созданной заметки. id записи узнаёшь через memory_list/memory_search.',
+    inputSchema: {
+      type: 'object',
+      required: ['id'],
+      properties: { id: { type: 'string', description: 'ID выносимой записи памяти' } },
+    },
+  },
+  {
+    name: 'memory_from_note',
+    description: 'Закрепить существующую заметку в своей долгой памяти: текст заметки попадает в recall ' +
+      'как устойчивый (semantic) факт с высокой важностью. Указывай id заметки (noteId).',
+    inputSchema: {
+      type: 'object',
+      required: ['noteId'],
+      properties: { noteId: { type: 'string', description: 'ID заметки, которую закрепить в памяти' } },
+    },
+  },
+  {
+    name: 'memory_get_focus',
+    description: 'Показать текущий рабочий фокус — «над чем я сейчас работаю» (незавершённое дело: ' +
+      'что делаю, статус, следующий шаг). Если фокуса нет — сообщает об этом.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'memory_clear_focus',
+    description: 'Сбросить рабочий фокус — когда текущее дело завершено и «над чем я работаю» больше не актуально.',
+    inputSchema: { type: 'object', properties: {} },
+  },
 ];
 
 // team_memory_* — только у проектных персон (PROJECT_ID задан). Память команды не типизирована
@@ -239,6 +271,28 @@ async function callTool(name, args) {
         method: 'PUT',
         body: JSON.stringify({ text: args.text }),
       }));
+
+    case 'memory_to_note': {
+      const r = await api(`${base}/${encodeURIComponent(args.id)}/to-note`, { method: 'POST' });
+      return { content: [{ type: 'text', text: `Запись вынесена в заметку «${r?.noteTitle ?? ''}» (id ${r?.noteId ?? '?'}).` }] };
+    }
+
+    case 'memory_from_note':
+      await api(`${base}/from-note`, {
+        method: 'POST',
+        body: JSON.stringify({ noteId: args.noteId }),
+      });
+      return { content: [{ type: 'text', text: `Заметка ${args.noteId} закреплена в долгой памяти.` }] };
+
+    case 'memory_get_focus': {
+      const focus = await api(`${base}/focus`);
+      if (!focus) return { content: [{ type: 'text', text: 'Рабочий фокус не задан.' }] };
+      return json(focus);
+    }
+
+    case 'memory_clear_focus':
+      await api(`${base}/focus`, { method: 'DELETE' });
+      return { content: [{ type: 'text', text: 'Рабочий фокус сброшен.' }] };
 
     case 'team_memory_remember': {
       const body = { text: args.text };

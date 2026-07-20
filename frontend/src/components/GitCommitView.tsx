@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight, MoreHorizontal, Search, Undo2, X } from 'lucide-react';
 import type { Project, GitCommitDetail, GitFileChange } from '../types';
 import { api } from '../lib/api';
-import { gitRevertCommit } from '../lib/git';
+import { gitRevertCommit, gitRestoreFile, useGitState, loadGitRemote } from '../lib/git';
 import { C, FONT, MODAL_W, R } from '../lib/design';
 import { DiffView } from './DiffView';
 import { IconButton, Menu, MenuItem, Modal, ModalActions } from './ui';
@@ -58,6 +58,20 @@ export function GitCommitView({ project, sha, onClose, isMobile = false }: {
   const [bodyExpanded, setBodyExpanded] = useState(false);
   const bodyIsLong = !!detail?.body && (detail.body.length > 220 || detail.body.split('\n').length > (isMobile ? 2 : 4));
   const [reverting, setReverting] = useState(false);
+  // Документный режим (авто-история): технический revert скрыт, вместо него —
+  // адресный «Вернуть эту версию файла» у выбранного файла
+  const gitState = useGitState(project.id);
+  useEffect(() => { void loadGitRemote(project.id); }, [project.id]);
+  const docMode = gitState.remote?.autoCommit === true;
+  const [restoreConfirm, setRestoreConfirm] = useState<string | null>(null);
+  const [restoring, setRestoring] = useState(false);
+  const handleRestoreFile = async () => {
+    if (!restoreConfirm) return;
+    setRestoring(true);
+    const ok = await gitRestoreFile(project.id, sha, restoreConfirm);
+    setRestoring(false);
+    if (ok) { setRestoreConfirm(null); onClose(); }
+  };
 
   const handleRevert = async () => {
     setReverting(true);
@@ -210,7 +224,20 @@ export function GitCommitView({ project, sha, onClose, isMobile = false }: {
             </button>
           )}
           {badgeEl(detail?.files.find(f => f.path === activePath)?.status ?? 'M', 16)}
-          <span style={{ fontFamily: FONT.mono, fontSize: 12, color: C.textPrimary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{activePath}</span>
+          <span style={{ flex: 1, minWidth: 0, fontFamily: FONT.mono, fontSize: 12, color: C.textPrimary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{activePath}</span>
+          {/* Документный режим: адресный возврат файла к этой версии */}
+          {docMode && (
+            <button
+              onClick={() => setRestoreConfirm(activePath)}
+              style={{
+                flexShrink: 0, padding: '4px 10px', borderRadius: R.md, cursor: 'pointer',
+                border: `1px solid ${C.accent}`, background: C.accentLight, color: C.accent,
+                fontSize: 12, fontFamily: FONT.sans, fontWeight: 600,
+              }}
+            >
+              Вернуть эту версию
+            </button>
+          )}
         </div>
       )}
       <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
@@ -267,26 +294,54 @@ export function GitCommitView({ project, sha, onClose, isMobile = false }: {
             )}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>
-            <div style={{ position: 'relative' }}>
-              <IconButton size="md" active={actionsMenu} onClick={() => setActionsMenu(v => !v)} title="Действия">
-                <MoreHorizontal size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-              </IconButton>
-              {actionsMenu && (
-                <Menu onClose={() => setActionsMenu(false)} align="right" top={36} minWidth={230}>
-                  <MenuItem
-                    icon={<Undo2 size={15} strokeWidth={ICON_STROKE} />}
-                    label="Откатить коммит (revert)"
-                    onClick={() => { setActionsMenu(false); setRevertError(null); setRevertConfirm(true); }}
-                  />
-                </Menu>
-              )}
-            </div>
+            {/* Технический revert скрыт в документном режиме — там адресный возврат файла */}
+            {!docMode && (
+              <div style={{ position: 'relative' }}>
+                <IconButton size="md" active={actionsMenu} onClick={() => setActionsMenu(v => !v)} title="Действия">
+                  <MoreHorizontal size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+                </IconButton>
+                {actionsMenu && (
+                  <Menu onClose={() => setActionsMenu(false)} align="right" top={36} minWidth={230}>
+                    <MenuItem
+                      icon={<Undo2 size={15} strokeWidth={ICON_STROKE} />}
+                      label="Откатить коммит (revert)"
+                      onClick={() => { setActionsMenu(false); setRevertError(null); setRevertConfirm(true); }}
+                    />
+                  </Menu>
+                )}
+              </div>
+            )}
             <IconButton size="md" onClick={onClose} title="Закрыть">
               <X size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
             </IconButton>
           </div>
         </div>
       </div>
+
+      {/* === Подтверждение возврата файла к версии (документный режим) === */}
+      {restoreConfirm && (
+        <Modal
+          width={MODAL_W.confirm}
+          onClose={() => { if (!restoring) setRestoreConfirm(null); }}
+          title="Вернуть эту версию файла"
+          subtitle={<span style={{ fontFamily: FONT.mono, color: C.textPrimary }}>{restoreConfirm.split('/').pop()}</span>}
+          footer={
+            <ModalActions
+              confirmLabel={restoring ? 'Возвращаю…' : 'Вернуть'}
+              confirmDisabled={restoring}
+              onConfirm={handleRestoreFile}
+              onCancel={() => setRestoreConfirm(null)}
+            />
+          }
+        >
+          <div style={{ fontSize: 13, color: C.textPrimary, lineHeight: 1.5, fontFamily: FONT.sans }}>
+            Файл станет таким, каким был в версии {detail?.shortSha ?? sha.slice(0, 7)}
+            {detail ? ` от ${new Date(detail.date).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })}` : ''}.
+            Текущее состояние тоже останется в истории — возврат можно отменить тем же способом.
+          </div>
+          {gitState.error && <div style={{ marginTop: 8, fontSize: 12.5, color: C.dangerText }}>{gitState.error}</div>}
+        </Modal>
+      )}
 
       {/* === Подтверждение отката коммита (revert) === */}
       {revertConfirm && (

@@ -806,6 +806,14 @@ export const api = {
       request<GitStatus>(`/projects/${projectId}/git/commits/${sha}/revert`, { method: 'POST', timeoutMs: 60_000 }),
     blame: (projectId: string, path: string) =>
       request<GitBlameLine[]>(`/projects/${projectId}/git/blame?path=${encodeURIComponent(path)}`),
+    // Документный режим: вернуть файл к версии из коммита (в авто-режиме сразу коммитится)
+    restoreFile: (projectId: string, sha: string, path: string) =>
+      request<GitStatus>(`/projects/${projectId}/git/commits/${sha}/restore-file`, {
+        method: 'POST', body: JSON.stringify({ path }), timeoutMs: 60_000,
+      }),
+    // Документный режим: «Сохранить сейчас» (✨-сообщение + push при авто-пуше)
+    saveNow: (projectId: string) =>
+      request<{ committed: boolean; sha?: string }>(`/projects/${projectId}/git/save-now`, { method: 'POST', timeoutMs: 180_000 }),
     // LLM-помощь: описание коммита по staged-диффу / название стэша (генерация небыстрая — старт CLI)
     aiCommitMessage: (projectId: string) =>
       request<{ summary: string; description: string }>(`/projects/${projectId}/git/ai/commit-message`, { method: 'POST', timeoutMs: 120_000 }),

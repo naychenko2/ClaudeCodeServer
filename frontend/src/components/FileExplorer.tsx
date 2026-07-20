@@ -26,7 +26,7 @@ import { NewNoteDialog } from '../features/notes/NewNoteDialog';
 import { onFilesChanged } from '../lib/signalr';
 import { showToast } from '../lib/toast';
 import { copyMarkdown } from '../lib/selectionScope';
-import { useGitState, ensureGit, gitInit } from '../lib/git';
+import { useGitState, ensureGit, gitInit, loadGitRemote } from '../lib/git';
 import { GitChangesPanel, GitHistoryPanel } from './GitPanel';
 import { useOnline } from '../hooks/useOnline';
 import { EmptyState } from './EmptyState';
@@ -436,8 +436,12 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   const gitState = useGitState(project.id);
   useEffect(() => { ensureGit(project.id); }, [project.id]);
   const isRepo = gitState.status?.isRepo ?? false;
-  // Не репо — git-сегменты недоступны, показываем дерево
-  const view: GitView = isRepo ? gitView : 'files';
+  // Документный режим (авто-ведение истории): работа с индексом скрыта — сегмент
+  // «Изменения» недоступен, вся жизнь в «Истории» (плашка + «Сохранить сейчас»)
+  useEffect(() => { if (isRepo) void loadGitRemote(project.id); }, [project.id, isRepo]);
+  const docMode = isRepo && gitState.remote?.autoCommit === true;
+  // Не репо — git-сегменты недоступны; в документном режиме «Изменения» → «История»
+  const view: GitView = !isRepo ? 'files' : (docMode && gitView === 'changes' ? 'history' : gitView);
 
   // Подключение git к проекту без репозитория (git init + remote на Forgejo)
   const [gitInitOpen, setGitInitOpen] = useState(false);
@@ -1325,7 +1329,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   const pill = showPill ? (
     <div style={{ display: 'flex', alignItems: 'center', gap: 2, background: TB.pillTrack, borderRadius: 8, padding: 2, flexShrink: 0 }}>
       {pillBtn('files', 'Файлы', view === 'files', () => setGitView('files'), <Folder size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />)}
-      {isRepo && pillBtn('changes', 'Изменения', view === 'changes', () => setGitView('changes'), <GitBranch size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />)}
+      {isRepo && !docMode && pillBtn('changes', 'Изменения', view === 'changes', () => setGitView('changes'), <GitBranch size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />)}
       {isRepo && pillBtn('history', 'История', view === 'history', () => setGitView('history'), <History size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />)}
       {onOpenKnowledge && pillBtn('knowledge', 'Знания', false, onOpenKnowledge, <BookOpen size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />)}
     </div>
@@ -1348,7 +1352,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
             onOpenFile={onOpenFile}
           />
         ) : (
-          <GitHistoryPanel project={project} onOpenCommit={onOpenCommit} />
+          <GitHistoryPanel project={project} onOpenCommit={onOpenCommit} docMode={docMode} />
         )}
       </div>
     );

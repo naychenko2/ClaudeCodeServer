@@ -11,7 +11,7 @@ import {
   useGitState, loadGitLog, loadGitBranches, loadGitStash, loadGitRemote,
   gitStage, gitUnstage, gitStageAll, gitDiscard, gitCommit,
   gitCheckout, gitCreateBranch, gitFetch, gitPull, gitPush, clearGitError,
-  gitStashPush, gitStashPop, gitStashDrop, gitSetAutoCommit,
+  gitStashPush, gitStashPop, gitStashDrop, gitSetAutoCommit, gitSaveNow,
 } from '../lib/git';
 import { Modal, ModalActions, TextField, TextArea, IconButton, Button, Menu, MenuItem, Toggle } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
@@ -666,14 +666,46 @@ export function GitChangesPanel({ project, onOpenDiff, onOpenFile }: ChangesProp
 
 // === История коммитов ===
 
-export function GitHistoryPanel({ project, onOpenCommit }: { project: Project; onOpenCommit?: (sha: string) => void }) {
+export function GitHistoryPanel({ project, onOpenCommit, docMode = false }: { project: Project; onOpenCommit?: (sha: string) => void; docMode?: boolean }) {
   const st = useGitState(project.id);
   const [selectedSha, setSelectedSha] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => { void loadGitLog(project.id); }, [project.id]);
 
+  // Документный режим: несохранённые правки (сохранятся сами после хода / кнопкой)
+  const pendingCount = (st.status?.staged.length ?? 0) + (st.status?.unstaged.length ?? 0) + (st.status?.untracked.length ?? 0);
+  const handleSaveNow = async () => {
+    setSaving(true);
+    try { await gitSaveNow(project.id); } finally { setSaving(false); }
+  };
+
   return (
     <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 8px 12px' }}>
+      {/* Плашка авто-сохранения — вместо панели «Изменения», скрытой в документном режиме */}
+      {docMode && (
+        <div style={{
+          margin: '8px 4px 10px', padding: '9px 12px', borderRadius: R.lg,
+          background: pendingCount === 0 ? C.successBg : C.warningBg,
+          display: 'flex', flexDirection: 'column', gap: 7,
+        }}>
+          <span style={{ fontSize: 12.5, fontFamily: FONT.sans, color: pendingCount === 0 ? C.successText : C.warningText, lineHeight: 1.4 }}>
+            {pendingCount === 0
+              ? '✓ Все изменения сохранены — история ведётся автоматически'
+              : `Изменений: ${pendingCount} — сохранятся после хода ИИ`}
+          </span>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            <Button size="sm" variant="primary" disabled={pendingCount === 0 || saving || st.busy} onClick={() => void handleSaveNow()}>
+              {saving ? 'Сохраняю…' : 'Сохранить сейчас'}
+            </Button>
+            {st.remote?.remoteUrl && !st.remote.autoPush && (st.status?.ahead ?? 0) > 0 && (
+              <Button size="sm" variant="ghost" disabled={st.busy} onClick={() => void gitPush(project.id)}>
+                Отправить на сервер (↑{st.status?.ahead})
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
       {st.error && (
         <div
           onClick={() => clearGitError(project.id)}

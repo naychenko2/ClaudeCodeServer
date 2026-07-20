@@ -178,6 +178,72 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
     public Task<IActionResult> RevertCommit(string projectId, string sha, CancellationToken ct) =>
         Mutate(projectId, (p) => git.RevertCommitAsync(Owner(p), p.RootPath, sha, ct));
 
+    // Документный режим: вернуть файл к версии из коммита. При авто-режиме возврат
+    // сразу фиксируется отдельным коммитом (человеку не нужен «индекс»)
+    [HttpPost("commits/{sha}/restore-file")]
+    public async Task<IActionResult> RestoreFile(string projectId, string sha, [FromBody] GitPathRequest body, CancellationToken ct)
+    {
+        try
+        {
+            var p = GetProject(projectId);
+            await git.RestoreFileFromCommitAsync(Owner(p), p.RootPath, sha, body.Path, ct);
+            if (p.GitAutoCommit)
+            {
+                await git.StageAsync(Owner(p), p.RootPath, body.Path, ct);
+                var fileName = body.Path.Replace('\\', '/').Split('/')[^1];
+                var shortSha = sha.Length > 7 ? sha[..7] : sha;
+                await git.CommitAsync(Owner(p), p.RootPath, $"Возврат: {fileName} к версии {shortSha}", ct: ct);
+            }
+            await NotifyChanged(projectId);
+            return Ok(await git.StatusAsync(Owner(p), p.RootPath, ct));
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (UnauthorizedAccessException) { return BadRequest(new { error = "Недопустимый путь" }); }
+        catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }
+    }
+
+    // Документный режим: «Сохранить сейчас» — всё с авто-сообщением (✨ по диффу;
+    // не вышло — честный таймстемп), при GitAutoPush — отправить
+    [HttpPost("save-now")]
+    public async Task<IActionResult> SaveNow(string projectId, CancellationToken ct)
+    {
+        try
+        {
+            var p = GetProject(projectId);
+            var status = await git.StatusAsync(Owner(p), p.RootPath, ct);
+            if (status.Staged.Count == 0 && status.Unstaged.Count == 0 && status.Untracked.Count == 0)
+                return Ok(new { committed = false });
+
+            await git.StageAllAsync(Owner(p), p.RootPath, ct);
+            string message;
+            try
+            {
+                var s = await gitAi.SuggestCommitMessageAsync(Owner(p), p.RootPath, ct);
+                message = s is null ? $"Сохранение: {DateTime.Now:dd.MM.yyyy HH:mm}"
+                    : (string.IsNullOrWhiteSpace(s.Description) ? s.Summary : $"{s.Summary}\n\n{s.Description}");
+            }
+            catch { message = $"Сохранение: {DateTime.Now:dd.MM.yyyy HH:mm}"; }
+            var sha = await git.CommitAsync(Owner(p), p.RootPath, message, ct: ct);
+
+            if (p.GitAutoPush && p.GitRemoteUrl is not null)
+            {
+                try
+                {
+                    var fresh = await git.StatusAsync(Owner(p), p.RootPath, ct);
+                    if (fresh.Upstream is null && fresh.Branch is not null)
+                        await git.PushSetUpstreamAsync(Owner(p), p.RootPath, fresh.Branch, CredsFor(p), ct);
+                    else
+                        await git.PushAsync(Owner(p), p.RootPath, CredsFor(p), ct);
+                }
+                catch { /* push best-effort — сохранение важнее */ }
+            }
+            await NotifyChanged(projectId);
+            return Ok(new { committed = true, sha });
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }
+    }
+
     // LLM-помощь: сообщение коммита по staged-диффу / название стэша по правкам
     [HttpPost("ai/commit-message")]
     public async Task<IActionResult> AiCommitMessage(string projectId, CancellationToken ct)

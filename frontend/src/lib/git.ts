@@ -177,6 +177,28 @@ export const gitPull = (projectId: string) =>
 export const gitPush = (projectId: string) =>
   mutate(projectId, () => api.git.push(projectId));
 
+// Документный режим: вернуть файл к версии коммита (в авто-режиме сразу фиксируется)
+export const gitRestoreFile = (projectId: string, sha: string, path: string) =>
+  mutate(projectId, () => api.git.restoreFile(projectId, sha, path)).then(ok => {
+    if (ok && get(projectId).logLoaded) void loadGitLog(projectId);
+    return ok;
+  });
+
+// Документный режим: «Сохранить сейчас» — commit всего с ✨-сообщением (+push при авто-пуше)
+export async function gitSaveNow(projectId: string): Promise<boolean> {
+  patch(projectId, { busy: true, error: null });
+  try {
+    await api.git.saveNow(projectId);
+    patch(projectId, { busy: false });
+    await loadGitStatus(projectId);
+    if (get(projectId).logLoaded) void loadGitLog(projectId);
+    return true;
+  } catch (e) {
+    patch(projectId, { busy: false, error: e instanceof Error ? e.message : 'Не удалось сохранить' });
+    return false;
+  }
+}
+
 // Коммит: message = summary + описание; после успеха обновляем статус и историю
 export async function gitCommit(projectId: string, message: string, amend = false): Promise<boolean> {
   patch(projectId, { busy: true, error: null });

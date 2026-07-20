@@ -306,6 +306,17 @@ public sealed class GitService(ILauncherFactory launchers)
         finally { sem.Release(); }
     }
 
+    // Вернуть файл к версии из коммита (рабочее дерево; фиксацию решает вызывающий)
+    public async Task RestoreFileFromCommitAsync(string? ownerId, string root, string sha, string relPath, CancellationToken ct = default)
+    {
+        if (!IsValidSha(sha)) throw new GitCommandException("Некорректный sha");
+        ValidateRel(root, relPath);
+        var sem = LockFor(root);
+        await sem.WaitAsync(ct);
+        try { await RunOkAsync(ownerId, root, ["checkout", sha, "--", relPath], ct: ct); }
+        finally { sem.Release(); }
+    }
+
     // ---------- Blame ----------
 
     public async Task<IReadOnlyList<GitBlameLine>> BlameAsync(string? ownerId, string root, string relPath, CancellationToken ct = default)

@@ -350,6 +350,8 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
         border: `1px solid ${color}`, borderRadius: '12px', background: C.bgCard,
         color, fontSize: '11px', fontWeight: '700', cursor: 'pointer',
         boxShadow: '0 1px 4px rgba(0,0,0,.12)', fontFamily: FONT.sans, lineHeight: '1.3',
+        // Счётчик балуна не должен попадать в выделение текста (ломал verify-guard)
+        userSelect: 'none',
       } satisfies Partial<CSSStyleDeclaration>);
       mark.innerHTML = (hasOpen ? SVG_BUBBLE : SVG_CHECK) + `<span>${anns.length}</span>`;
       mark.addEventListener('click', e => {

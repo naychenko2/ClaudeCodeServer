@@ -93,12 +93,13 @@ public sealed partial class NotesService
                 start = first;
             else
             {
-                // Выделение из рендера ≠ источник: переносы строк внутри абзаца становятся
-                // пробелами (wrap по ~80 колонок), CRLF, схлопнутые пробелы. Третья ступень —
-                // нормализованный whitespace-поиск с картой офсетов (как каскад цитат);
-                // selText заменяется РЕАЛЬНЫМ срезом документа. Провал → честный 409.
-                var (norm, map) = NormalizeWithMap(doc);
-                var q = NormalizeWs(selText);
+                // Выделение из рендера ≠ источник: переносы строк абзаца становятся
+                // пробелами (wrap/CRLF), инлайн-разметка (**жирный**, `код`, [ссылки](url),
+                // [[вики|подписи]]) в DOM не видна. Третья ступень — канонизация «как
+                // рендер» с картой офсетов, единственное вхождение; selText заменяется
+                // РЕАЛЬНЫМ срезом документа. Провал → честный 409.
+                var (norm, map) = NormalizeForMatch(doc);
+                var q = NormalizeForMatch(selText).Norm;
                 var idx = q.Length >= 3 ? norm.IndexOf(q, StringComparison.Ordinal) : -1;
                 if (idx >= 0 && norm.IndexOf(q, idx + 1, StringComparison.Ordinal) < 0)
                 {
@@ -530,6 +531,45 @@ public sealed partial class NotesService
 
     private static readonly Regex Ws = new(@"\s+", RegexOptions.Compiled);
     internal static string NormalizeWs(string s) => Ws.Replace(s, " ").Trim();
+
+    // Канонизация текста «как рендер» — для сверки DOM-выделения с источником:
+    // markdown-ссылки и вики-ссылки заменяются видимым текстом, маркеры эмфазиса/кода
+    // выбрасываются, whitespace схлопывается. Карта — норм-индекс → исходный офсет.
+    private static readonly Regex RenderLinks = new(
+        @"\[\[(?<t>[^\]|]+)(?:\|(?<l>[^\]]+))?\]\]|!?\[(?<x>[^\]]*)\]\((?<u>[^)\s]*)\)",
+        RegexOptions.Compiled);
+    private static readonly char[] MarkupChars = ['*', '`', '_', '~', '\\'];
+
+    internal static (string Norm, List<int> Map) NormalizeForMatch(string doc)
+    {
+        // Шаг 1: ссылки → видимый текст (позиции символов подписи — исходные)
+        var buf = new StringBuilder(doc.Length);
+        var map1 = new List<int>(doc.Length);
+        var last = 0;
+        foreach (Match m in RenderLinks.Matches(doc))
+        {
+            for (var i = last; i < m.Index; i++) { buf.Append(doc[i]); map1.Add(i); }
+            var g = m.Groups["l"].Success ? m.Groups["l"] : m.Groups["t"].Success ? m.Groups["t"] : m.Groups["x"];
+            for (var i = 0; i < g.Length; i++) { buf.Append(doc[g.Index + i]); map1.Add(g.Index + i); }
+            last = m.Index + m.Length;
+        }
+        for (var i = last; i < doc.Length; i++) { buf.Append(doc[i]); map1.Add(i); }
+
+        // Шаг 2: whitespace collapse + дроп маркеров эмфазиса/кода (симметрично для
+        // обеих сторон сверки — подчёркивания в идентификаторах матчу не мешают)
+        var sb = new StringBuilder(buf.Length);
+        var map = new List<int>(buf.Length);
+        var pendingSpace = false;
+        for (var i = 0; i < buf.Length; i++)
+        {
+            var ch = buf[i];
+            if (char.IsWhiteSpace(ch)) { pendingSpace = sb.Length > 0; continue; }
+            if (Array.IndexOf(MarkupChars, ch) >= 0) continue;
+            if (pendingSpace) { sb.Append(' '); map.Add(map1[i]); pendingSpace = false; }
+            sb.Append(ch); map.Add(map1[i]);
+        }
+        return (sb.ToString(), map);
+    }
 
     // Нормализация whitespace с картой «нормализованный индекс → сырой индекс»
     internal static (string Norm, List<int> Map) NormalizeWithMap(string doc)

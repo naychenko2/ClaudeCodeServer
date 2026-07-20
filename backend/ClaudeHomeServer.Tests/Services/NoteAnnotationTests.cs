@@ -376,6 +376,27 @@ public class NoteAnnotationTests : IDisposable
     }
 
     [Fact]
+    public void Annotate_ВыделениеЧерезИнлайнРазметку_Принимается()
+    {
+        // DOM-выделение не содержит **, `, [ссылок](url) и [[вики|подписей]] источника —
+        // четвёртая ступень verify-guard канонизирует обе стороны «как рендер»
+        var doc = "# Тест\n\nСессия по **Platform Design Toolkit 2.2** с файлом `гайд.md` и " +
+                  "[внешней ссылкой](https://example.com) плюс [[Вики-цель|подписью]] в тексте.\n";
+        File.WriteAllText(Path.Combine(_vault, "Разметка.md"), doc);
+
+        var domText = "Сессия по Platform Design Toolkit 2.2 с файлом гайд.md и внешней ссылкой плюс подписью в тексте.";
+        var note = _sut.Annotate(User, new AnnotateRequest(
+            new AnnotateDocRef("personal", "Разметка.md"),
+            new AnnotateSelection(0, domText.Length, domText),
+            Comment: "через разметку"));
+        note.Annotation.Should().NotBeNull();
+        // Цитата — реальный срез источника (с разметкой), резолв exact
+        note.Annotation!.AnchorQuote.Should().Contain("**Platform Design Toolkit 2.2**");
+        _sut.GetDocAnnotations(User, "personal", "Разметка.md")
+            .Single().State.Should().Be("exact");
+    }
+
+    [Fact]
     public void Annotate_ВыделениеЧерезПереносСтроки_ПринимаетсяНормализацией()
     {
         // Абзац с ручным wrap: рендер отдаёт пробел там, где в источнике \n —

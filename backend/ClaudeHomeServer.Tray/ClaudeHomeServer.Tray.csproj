@@ -12,6 +12,10 @@
     <AssemblyName>ClaudeHomeServer.Tray</AssemblyName>
     <RootNamespace>ClaudeHomeServer.Tray</RootNamespace>
     <ApplicationIcon>appicon.ico</ApplicationIcon>
+    <!-- CI собирает солюшен на ubuntu: без этого линуксовый SDK отказывается трогать
+         windows-таргет (NETSDK1100). Свойство разрешает КОМПИЛЯЦИЮ на не-Windows
+         (ref-паки Windows Desktop тянутся из NuGet); запуск, понятно, только на Windows. -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <Product>AI Home</Product>
     <AssemblyTitle>AI Home</AssemblyTitle>
   </PropertyGroup>

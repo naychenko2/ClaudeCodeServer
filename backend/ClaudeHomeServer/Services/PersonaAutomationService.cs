@@ -31,6 +31,7 @@ public sealed class PersonaAutomationService : IDisposable
     private readonly AutomationRootResolver _roots;
     private readonly IReadOnlyDictionary<AutomationTriggerType, ITriggerSource> _sources;
     private readonly IConfiguration _config;
+    private readonly Llm.ICheapTextRunner _cheap;
     private readonly ILogger<PersonaAutomationService> _log;
 
     private int DefaultMinIntervalMinutes => _config.GetValue("Persona:AutomationMinIntervalMinutes", 5);
@@ -52,11 +53,11 @@ public sealed class PersonaAutomationService : IDisposable
         NotificationService notif,
         AutomationStateStore state, MentionTriggerSource mentions, ProjectManager projects,
         UserStore users, AutomationRootResolver roots, IEnumerable<ITriggerSource> sources,
-        IConfiguration config, ILogger<PersonaAutomationService> log)
+        IConfiguration config, Llm.ICheapTextRunner cheap, ILogger<PersonaAutomationService> log)
     {
         _personas = personas; _sessions = sessions; _push = push; _hub = hub; _notif = notif;
         _state = state; _mentions = mentions; _projects = projects; _users = users; _roots = roots;
-        _config = config; _log = log;
+        _config = config; _cheap = cheap; _log = log;
         _sources = sources.ToDictionary(s => s.Type);
         _sessions.OnUserMessage += OnUserMessageAsync;
         _sessions.OnSessionMessage += OnSessionMessageAsync;
@@ -150,6 +151,18 @@ public sealed class PersonaAutomationService : IDisposable
         var state = _state.GetRule(persona.Id, rule.Id);
         var now = DateTime.UtcNow;
 
+        // 0. Дешёвый гейт условия OnlyIf ДО throttle и платного хода: если событие явно НЕ
+        // удовлетворяет условию — не тратим ни лимит, ни платную сессию. Только когда действие
+        // на бесплатной локали (иначе OnlyIf оценивается внутри хода, как раньше). Фейл-открыто:
+        // сомнение/ошибка/недоступность → реагируем как обычно.
+        if (!bypassThrottle && rule.Condition?.OnlyIf is { } onlyIf && !string.IsNullOrWhiteSpace(onlyIf)
+            && _cheap.UsesLocal(Llm.LocalActionCatalog.AutomationGate)
+            && await EventFailsGateAsync(rule, ev, onlyIf))
+        {
+            MarkResult(state, "gated");
+            return;
+        }
+
         // 0-1. Троттлинг (fail-fast до LLM) + mark-fired ДО запуска. Проверка и установка
         // LastFiredAt — атомарно под локом state: Mention (push) и тик конкурируют за одно
         // правило, без лока два потока проходили throttle-проверку и дублировали реакцию.
@@ -204,6 +217,25 @@ public sealed class PersonaAutomationService : IDisposable
         }
 
         MarkResult(state, "fired");
+    }
+
+    // true = событие УВЕРЕННО не удовлетворяет условию OnlyIf (гейт отсекает платный ход).
+    // Любая неопределённость/ошибка → false (реагируем как раньше). Локальная модель.
+    private async Task<bool> EventFailsGateAsync(PersonaAutomationRule rule, TriggerEvent ev, string onlyIf)
+    {
+        try
+        {
+            var prompt =
+                "Правило проактивности срабатывает только при выполнении условия. Реши, удовлетворяет ли " +
+                "СОБЫТИЕ этому условию. Ответь СТРОГО одним словом: yes или no.\n\n" +
+                $"Условие: {onlyIf}\n\nСобытие: {ev.Summary}";
+            var raw = await _cheap.RunAsync(Llm.LocalActionCatalog.AutomationGate, prompt);
+            var ans = raw.Trim().ToLowerInvariant();
+            var no = ans.StartsWith("no") || ans.Contains("нет");
+            var yes = ans.StartsWith("yes") || ans.Contains("да");
+            return no && !yes;   // отсекаем только при явном «нет»
+        }
+        catch (Exception ex) { _log.LogDebug(ex, "gate правило {Rule}", rule.Id); return false; }
     }
 
     // Создать/переиспользовать закреплённый чат правила (один на правило, брендирован персоной).

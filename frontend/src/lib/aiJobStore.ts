@@ -4,6 +4,7 @@
 // размонтировался и смонтировался заново — job на месте), но не F5.
 
 import { useSyncExternalStore } from 'react';
+import { beginAiBusy, endAiBusy } from './ai/busy';
 
 export type AiJobStatus = 'idle' | 'running' | 'done' | 'error';
 
@@ -49,9 +50,10 @@ export function runAiJob<T>(key: string, fn: () => Promise<T>): void {
   if (cur?.status === 'running') return;
   jobs.set(key, { status: 'running' });
   notify(key);
+  beginAiBusy();   // общий индикатор AI-хаба на время операции
   fn().then(
-    result => { jobs.set(key, { status: 'done', result }); notify(key); },
-    err => { jobs.set(key, { status: 'error', error: err instanceof Error ? err.message : String(err) }); notify(key); },
+    result => { jobs.set(key, { status: 'done', result }); notify(key); endAiBusy(); },
+    err => { jobs.set(key, { status: 'error', error: err instanceof Error ? err.message : String(err) }); notify(key); endAiBusy(); },
   );
 }
 

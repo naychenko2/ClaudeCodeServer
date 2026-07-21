@@ -19,6 +19,7 @@ import { BackButton, Modal, ModalActions } from '../ui';
 import { bumpNotes } from '../../lib/notes';
 import { createTask } from '../../lib/tasks';
 import { showToast } from '../../lib/toast';
+import { beginAiBusy, endAiBusy } from '../../lib/ai/busy';
 import { openNoteById } from '../../features/notes/saveToNote';
 import type { ExtractedTaskCandidate } from '../../types';
 import { ChatOriginBadge } from '../ChatOriginBadge';
@@ -722,10 +723,11 @@ function SessionSummaryButton({ session, hasMessages, online }: { session: Sessi
   const run = () => {
     if (busy) return;
     setBusy(true);
+    beginAiBusy();
     api.sessions.summary(session.id)
       .then(n => { bumpNotes(); openNoteById(n.id); })
       .catch(() => showToast('Итог сессии', 'Не удалось составить итог (claude не залогинен?)', 'info'))
-      .finally(() => setBusy(false));
+      .finally(() => { setBusy(false); endAiBusy(); });
   };
   useEffect(() => {
     if (!online || !hasMessages) return;
@@ -750,6 +752,7 @@ function ExtractTasksButton({ session, hasMessages, online }: { session: Session
   const run = () => {
     if (busy) return;
     setBusy(true);
+    beginAiBusy();
     api.sessions.extractTasks(session.id)
       .then(r => {
         if (r.tasks.length === 0) {
@@ -759,7 +762,7 @@ function ExtractTasksButton({ session, hasMessages, online }: { session: Session
         setDialog({ projectId: r.projectId ?? null, items: r.tasks.map(t => ({ ...t, sel: true })) });
       })
       .catch(() => showToast('Задачи из чата', 'Не удалось извлечь задачи из чата', 'info'))
-      .finally(() => setBusy(false));
+      .finally(() => { setBusy(false); endAiBusy(); });
   };
   // AI-хаб: запуск «Задачи из чата» из палитры/подсказки (тот же обработчик, что и кнопка)
   useEffect(() => {

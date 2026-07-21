@@ -455,9 +455,10 @@ const toggleThumb: React.CSSProperties = {
   background: C.bgWhite, boxShadow: SHADOW.thumb, transition: 'transform .16s',
 };
 
-// Круговой индикатор работы AI-действия: SVG-кольцо чуть больше кнопки, вращается (cc-spin)
+// Круговой индикатор работы AI-действия: SVG-кольцо чуть ВНУТРИ кнопки (по краю, не за ним),
+// вращается (cc-spin)
 const busyRing: React.CSSProperties = {
-  position: 'absolute', inset: -3, width: 'calc(100% + 6px)', height: 'calc(100% + 6px)',
+  position: 'absolute', inset: 5, width: 'calc(100% - 10px)', height: 'calc(100% - 10px)',
   animation: 'cc-spin 0.9s linear infinite', pointerEvents: 'none',
 };
 

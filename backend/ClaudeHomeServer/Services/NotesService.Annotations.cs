@@ -556,19 +556,85 @@ public sealed partial class NotesService
         for (var i = last; i < doc.Length; i++) { buf.Append(doc[i]); map1.Add(i); }
 
         // Шаг 2: whitespace collapse + дроп маркеров эмфазиса/кода (симметрично для
-        // обеих сторон сверки — подчёркивания в идентификаторах матчу не мешают)
+        // обеих сторон сверки — подчёркивания в идентификаторах матчу не мешают) +
+        // вычищение построчных структурных маркеров (заголовки #, маркеры списков
+        // -/+/1., цитаты >): в рендере их не видно, DOM-выделение их не содержит, а
+        // без этого любое выделение, пересекающее такую границу, отбивалось ложным 409.
         var sb = new StringBuilder(buf.Length);
         var map = new List<int>(buf.Length);
         var pendingSpace = false;
+        var atLineStart = true;
         for (var i = 0; i < buf.Length; i++)
         {
             var ch = buf[i];
-            if (char.IsWhiteSpace(ch)) { pendingSpace = sb.Length > 0; continue; }
+            if (char.IsWhiteSpace(ch))
+            {
+                if (ch == '\n') atLineStart = true;   // индент-пробелы начало строки не сбрасывают
+                pendingSpace = sb.Length > 0;
+                continue;
+            }
+            if (atLineStart)
+            {
+                // Съедаем ведущие маркеры строки (в т.ч. вложенные: «> - пункт»)
+                int after;
+                while ((after = SkipLineMarkers(buf, i)) > i) i = after;
+                atLineStart = false;
+                if (i >= buf.Length) break;
+                ch = buf[i];
+            }
             if (Array.IndexOf(MarkupChars, ch) >= 0) continue;
             if (pendingSpace) { sb.Append(' '); map.Add(map1[i]); pendingSpace = false; }
             sb.Append(ch); map.Add(map1[i]);
         }
         return (sb.ToString(), map);
+    }
+
+    // Ведущий структурный маркер строки, начиная с непробельной позиции i (первый
+    // контентный символ строки). Возвращает индекс за маркером и его хвостовыми
+    // пробелами, либо i, если маркера нет. «Как рендер»: заголовки/списки/цитаты
+    // теряют свой синтаксис, но не текст.
+    private static int SkipLineMarkers(StringBuilder s, int i)
+    {
+        var n = s.Length;
+        // ATX-заголовок: 1..6 '#' + пробел (без пробела — это #тег, не заголовок)
+        if (s[i] == '#')
+        {
+            var j = i; var cnt = 0;
+            while (j < n && s[j] == '#' && cnt < 6) { j++; cnt++; }
+            if (j < n && (s[j] == ' ' || s[j] == '\t'))
+            {
+                while (j < n && (s[j] == ' ' || s[j] == '\t')) j++;
+                return j;
+            }
+            return i;
+        }
+        // Цитата: один+ '>' с необязательными пробелами
+        if (s[i] == '>')
+        {
+            var j = i;
+            while (j < n && (s[j] == '>' || s[j] == ' ' || s[j] == '\t')) j++;
+            return j;
+        }
+        // Маркированный список: -/+ + пробел ('*' и так дропается как эмфазис)
+        if ((s[i] == '-' || s[i] == '+') && i + 1 < n && (s[i + 1] == ' ' || s[i + 1] == '\t'))
+        {
+            var j = i + 1;
+            while (j < n && (s[j] == ' ' || s[j] == '\t')) j++;
+            return j;
+        }
+        // Нумерованный список: цифры + ('.'|')') + пробел
+        if (char.IsDigit(s[i]))
+        {
+            var j = i;
+            while (j < n && char.IsDigit(s[j])) j++;
+            if (j + 1 < n && (s[j] == '.' || s[j] == ')') && (s[j + 1] == ' ' || s[j + 1] == '\t'))
+            {
+                j++;
+                while (j < n && (s[j] == ' ' || s[j] == '\t')) j++;
+                return j;
+            }
+        }
+        return i;
     }
 
     // Нормализация whitespace с картой «нормализованный индекс → сырой индекс»

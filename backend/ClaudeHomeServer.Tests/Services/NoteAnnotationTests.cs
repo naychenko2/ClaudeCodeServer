@@ -414,6 +414,59 @@ public class NoteAnnotationTests : IDisposable
             .Single().State.Should().Be("exact");
     }
 
+    [Fact]
+    public void Annotate_ВыделениеЧерезЗаголовок_ПринимаетсяБезЛожного409()
+    {
+        // Выделение из рендера тянется из абзаца ЧЕРЕЗ заголовок «## Слой запуска»
+        // в следующий абзац: в источнике между словами стоит «## », в DOM — пробел.
+        // Без вычищения строчных маркеров сверка не сходилась → ложный 409.
+        WriteDoc();
+        var domText = "подробнее в песочнице. Слой запуска Все шесть точек запуска " +
+                      "идут через единый интерфейс IProcessLauncher.";
+        var note = _sut.Annotate(User, new AnnotateRequest(
+            new AnnotateDocRef("personal", "Архитектура.md"),
+            new AnnotateSelection(0, domText.Length, domText),   // офсеты заведомо мимо
+            Comment: "через заголовок"));
+        note.Annotation.Should().NotBeNull();
+        note.Annotation!.AnchorQuote.Should().Contain("Слой запуска");
+    }
+
+    [Fact]
+    public void Annotate_ВыделениеЧерезМаркерыСписка_ПринимаетсяБезЛожного409()
+    {
+        // Выделение через маркированный и нумерованный списки: в источнике «- »/«1. »,
+        // в DOM их нет. Канонизация обеих сторон должна снять маркеры.
+        var doc = "# Список\n\nВводный абзац перед списком.\n\n" +
+                  "- первый пункт списка\n- второй пункт списка\n\n" +
+                  "1. раз нумерованный\n2. два нумерованный\n";
+        File.WriteAllText(Path.Combine(_vault, "Список.md"), doc);
+
+        var domText = "Вводный абзац перед списком. первый пункт списка второй пункт списка " +
+                      "раз нумерованный два нумерованный";
+        var note = _sut.Annotate(User, new AnnotateRequest(
+            new AnnotateDocRef("personal", "Список.md"),
+            new AnnotateSelection(0, domText.Length, domText),
+            Comment: "через списки"));
+        note.Annotation.Should().NotBeNull();
+        note.Annotation!.AnchorQuote.Should().Contain("первый пункт списка");
+    }
+
+    [Fact]
+    public void Annotate_ВыделениеЧерезЦитату_ПринимаетсяБезЛожного409()
+    {
+        // Выделение через blockquote: в источнике «> », в DOM — нет.
+        var doc = "# Цитаты\n\nОбычный абзац.\n\n> строка цитаты одна\n> строка цитаты две\n\nПосле цитаты.\n";
+        File.WriteAllText(Path.Combine(_vault, "Цитаты.md"), doc);
+
+        var domText = "Обычный абзац. строка цитаты одна строка цитаты две После цитаты.";
+        var note = _sut.Annotate(User, new AnnotateRequest(
+            new AnnotateDocRef("personal", "Цитаты.md"),
+            new AnnotateSelection(0, domText.Length, domText),
+            Comment: "через цитату"));
+        note.Annotation.Should().NotBeNull();
+        note.Annotation!.AnchorQuote.Should().Contain("строка цитаты одна");
+    }
+
     // ─── Перепривязка к новому выделению ─────────────────────────────────────
 
     [Fact]

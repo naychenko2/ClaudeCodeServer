@@ -177,16 +177,31 @@ UI скрывает недоступное (`useModelCaps` в `lib/models.ts`), 
 (CLAUDE.md, скиллы, плагины, хуки) не грузятся в контекст — минус ~половина входных
 токенов на вызов; CLAUDE_CONFIG_DIR память НЕ отсекает, а `--bare` ломает OAuth.
 
-### Локальная модель для фоновых задач (Ollama, бесплатно)
+### Бесплатные модели для фоновых задач (Ollama + OpenRouter)
 
 Фоновые one-shot задачи (классификация, извлечение JSON, теги, суммаризация, память —
-НЕ чаты) можно считать бесплатной локальной моделью Ollama вместо платного Claude.
-Ollama не Anthropic-совместим, поэтому идёт прямым HTTP (`OllamaClient.GenerateTextAsync`,
-`/api/chat`, `think:false`), мимо claude CLI. Маршрутизация — per-action:
+НЕ чаты) можно считать бесплатно вместо платного Claude — **тремя** исполнителями по
+цепочке деградации: локальная Ollama, бесплатная модель OpenRouter (прямой HTTP-адаптер),
+и как последний рубеж — claude CLI. Ollama идёт прямым HTTP (`OllamaClient.GenerateTextAsync`,
+`/api/chat`, `think:false`), OpenRouter — прямым HTTP (`CloudCheapClient`, OpenAI-совместимый
+`/chat/completions`), оба мимо claude CLI (старт CLI ~15с убил бы смысл «быстро и часто»).
+Маршрутизация — per-action, исполнителя выбирает админ:
 - **Каталог** — [LocalActionCatalog.cs](backend/ClaudeHomeServer/Services/Llm/LocalActionCatalog.cs):
   все фоновые действия (ключ, группа, профиль вызова small/text/large, `DefaultLocal` —
-  рекомендация). НЕ входят: задача-исполнитель (агентная сессия с инструментами, не one-shot),
-  fal.ai (картинки), а также changelog/persona-ask (нужны detailed-usage/effort — всегда claude).
+  рекомендация). **changelog** («Что нового») входит — идёт через `RunDetailedAsync` (сохраняет
+  usage/стоимость на claude-пути; на бесплатной модели usage=null, стоимость 0). НЕ входят:
+  задача-исполнитель (агентная сессия, не one-shot), fal.ai (картинки), persona-ask (нужен
+  `effort` персоны — всегда claude).
+- **Бесплатные модели OpenRouter** — отбираются КОДОМ ([OpenRouterCatalogService.cs](backend/ClaudeHomeServer/Services/Llm/OpenRouterCatalogService.cs),
+  опрос `GET /models`), не ручным списком: **агентские** (free + tools + tool_choice + окно ≥
+  `OpenRouter:AgenticMinContext`) — для провайдера `openrouter` (через claude CLI, годятся и в
+  чатах); **любые free** (окно ≥ `OpenRouter:DirectMinContext`) — для прямого адаптера
+  [CloudCheapClient.cs](backend/ClaudeHomeServer/Services/Llm/CloudCheapClient.cs) (HTTP, только
+  фоновые). Два транспорта различаются в маршруте префиксом `direct:` (модель без него — через
+  провайдер/CLI, с ним — через адаптер). В `ModelCatalogService` направляются двумя группами:
+  `provider=openrouter` и `provider=openrouter-direct`. ВАЖНО: у `:free` общий на аккаунт лимит
+  20 запросов/мин и 50/сутки (1000/сутки после разовой покупки кредитов на $10). В агентском
+  ModelPicker (чат/сессия/персона) `direct:`-модели СКРЫТЫ — там нужны агентские вызовы.
 - **Роутер** — [LocalActionRouter.cs](backend/ClaudeHomeServer/Services/Llm/LocalActionRouter.cs):
   `Resolve(key)` → `ActionRoute(Kind, Model, Source)`, где `Kind` — исполнитель ПЕРВОГО шага
   (`Local` | `Claude` | `Model` c id конкретной модели провайдера), а приоритет источников —
@@ -197,11 +212,11 @@ Ollama не Anthropic-совместим, поэтому идёт прямым H
   Профиль (`num_ctx`/`num_predict`/timeout) — из каталога, переопределяется `Ollama:Profiles`.
   `num_ctx` важен: дефолт Ollama (~4k) молча режет большой вход.
 - **Цепочка исполнения** (одна для всех действий): **выбранное → локальная модель → claude**.
-  Шаг выбранной модели считается неудавшимся при исключении (ненастроенный провайдер, ненулевой
-  код CLI, таймаут — `OneShotClaudeRunner` на всё это бросает `InvalidOperationException`) или
-  пустом ответе; шаг локали — при недоступности Ollama. **Последний шаг без страховки**: отказ
-  claude уходит наверх исключением, и потребитель деградирует как раньше (у каждого своя
-  стратегия). Отмену `CancellationToken` по цепочке НЕ фолбэчим — это не сбой модели.
+  Выбранная модель с префиксом `direct:` идёт через `CloudCheapClient` (прямой HTTP-адаптер),
+  без префикса — через провайдер (claude CLI). Шаг считается неудавшимся при исключении/429/
+  пустом ответе (адаптер на 429 бесплатной модели тихо отдаёт null), шаг локали — при недоступности
+  Ollama. **Последний шаг без страховки**: отказ claude уходит наверх исключением, и потребитель
+  деградирует как раньше. Отмену `CancellationToken` по цепочке НЕ фолбэчим — это не сбой модели.
   При `Kind=Claude` шаг локали пропускается, иначе выбор «Claude» не отличался бы от «локаль».
 - **Выбор админа** — [LocalActionOverridesStore.cs](backend/ClaudeHomeServer/Services/Llm/LocalActionOverridesStore.cs):
   `data/local-actions.json` (путь от `DataPath`), значение — `"local"` | `"claude"` | id модели;
@@ -212,25 +227,28 @@ Ollama не Anthropic-совместим, поэтому идёт прямым H
   модель по `ModelCatalogService` и настроенности провайдера — опечатка в id иначе всплыла бы
   только при первом фоновом вызове.
 - **Раннер** — [CheapTextRunner.cs](backend/ClaudeHomeServer/Services/Llm/CheapTextRunner.cs)
-  (`ICheapTextRunner.RunAsync(actionKey, prompt, fallbackModel?, ownerId?, jsonFormat?)`):
+  (`ICheapTextRunner.RunAsync(actionKey, prompt, fallbackModel?, ownerId?, jsonFormat?)` +
+  `RunDetailedAsync(...)` для changelog — тот же маршрут, но с usage и override таймаута/лимита):
   локаль по профилю; `jsonFormat` (обычно строка `"json"`) уводит локальный путь в
   `OllamaClient.ChatJsonAsync` — без него мелкая модель оборачивает JSON прозой, парсер падает
-  и действие всё равно уходит в фолбэк;
-  при недоступности/ошибке/пустом ответе — **фолбэк на `OneShotClaudeRunner`**. Ollama выключен →
-  сразу claude (нулевая регрессия). Потребители (NotesAiService, ChatTaskExtractionService,
-  MemoryWriteResolver, TaskAiService, SessionSummaryService, GitAiService, Skill*Service,
-  Persona/TeamMemory autolearn+consolidate, DailyBriefingService, OllamaActionRankService)
-  передают свой `actionKey` — разбирают ответ теми же парсерами, что и раньше ответ claude.
+  и действие всё равно уходит в фолбэк; `direct:`-маршрут → `CloudCheapClient.GenerateTextAsync`
+  (прямой HTTP); при недоступности/ошибке/429/пустом ответе — **фолбэк дальше по цепочке до
+  `OneShotClaudeRunner`**. Ollama и OpenRouter выключены → сразу claude (нулевая регрессия).
+  Потребители (NotesAiService, ChatTaskExtractionService, MemoryWriteResolver, TaskAiService,
+  SessionSummaryService, GitAiService, Skill*Service, Persona/TeamMemory autolearn+consolidate,
+  DailyBriefingService, OllamaActionRankService, ChangelogService) передают свой `actionKey` —
+  разбирают ответ теми же парсерами, что и раньше ответ claude.
 - **Конфиг** — секция `Ollama` (`Model`, опц. `TextModel`, `BaseUrl`, `KeepAlive`,
-  `Actions` — словарь ключ→bool, `Profiles`). Пустой `Model` = локаль выключена.
-- **UI** — вкладка «Локально» на экране «Использование» (`GET /api/usage` → `OllamaUsageInfo`):
-  модель + маршрут каждого действия (локаль/claude). У Ollama нет лимитов/баланса — блок
-  без цифр расхода. **Админу** бейдж маршрута — тумблер: клик переключает действие на лету
-  (оптимистично, с откатом при ошибке), у переопределённых — кнопка сброса к конфигу.
-  Роль берётся из `cc_role` в localStorage/sessionStorage (как в `HubHeader`).
-  Не входят в каталог по структурной причине: `PersonaAskService` (нужен `effort` персоны) и
-  `ChangelogService` (нужен `RunDetailedAsync` с usage для показа стоимости) — `ICheapTextRunner`
-  не пробрасывает ни того, ни другого.
+  `Actions` — словарь ключ→bool, `Profiles`); секция `OpenRouter` (`Provider`, `AgenticMinContext`,
+  `DirectMinContext`) + провайдер `LlmProviders:openrouter` (ключ/эндпоинт). Пустой `Ollama:Model`
+  = локаль выключена; ненастроенный провайдер openrouter = облачный адаптер выключен.
+- **UI** — вкладка «Локально» на экране «Использование» показывает ТОЛЬКО локальную модель Ollama
+  (какая, адрес, сколько действий на ней). Сам выбор исполнителя каждого действия — в отдельном
+  админском диалоге [BackgroundTasksModal.tsx](frontend/src/components/BackgroundTasksModal.tsx)
+  («Фоновые задачи», пункт меню профиля, только `cc_role=admin`): строки действий по разделам,
+  `<select>` исполнителя с группами провайдеров (бесплатные OpenRouter — двумя группами: «OpenRouter»
+  через CLI и «OpenRouter · прямой вызов»), у переопределённых — кнопка сброса к конфигу.
+  Применяется на лету (оптимистично, с откатом). Persona-ask в каталог не входит (нужен `effort`).
 
 ## Claude Code CLI subprocess
 

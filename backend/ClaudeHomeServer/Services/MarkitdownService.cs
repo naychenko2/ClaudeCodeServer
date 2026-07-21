@@ -36,6 +36,12 @@ public sealed class MarkitdownService(IConfiguration config, ILogger<MarkitdownS
             for (var i = 1; i < parts.Length; i++) psi.ArgumentList.Add(parts[i]);
             psi.ArgumentList.Add(absolutePath);
 
+            // markitdown — python-утилита; на Windows дефолтный stdout идёт в системной кодировке
+            // (cp1251), а мы читаем UTF-8 → кириллица превращается в кракозябры. Заставляем python
+            // выводить UTF-8, тогда StandardOutputEncoding=UTF-8 читает корректно.
+            psi.Environment["PYTHONUTF8"] = "1";
+            psi.Environment["PYTHONIOENCODING"] = "utf-8";
+
             using var p = Process.Start(psi);
             if (p is null) return null;
 

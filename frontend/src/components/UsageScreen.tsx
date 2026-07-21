@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { X, AlertTriangle } from 'lucide-react';
 import { api } from '../lib/api';
-import type { UsageResponse, FalAccountResponse, UsageSnapshot } from '../types';
+import type { UsageResponse, FalAccountResponse, UsageSnapshot, OllamaUsageInfo } from '../types';
 import { C, FONT, SHADOW } from '../lib/design';
 import { type RateWindow, RATE_COLORS, windowLabel, fmtReset, latestPerWindow, seriesByWindow, worstWindow } from '../lib/rateLimit';
 import { cliProviderKeys, providerCapsByKey, providerLabel } from '../lib/models';
@@ -345,6 +345,69 @@ function FalTab({ days, setDays }: { days: number; setDays: (d: number) => void 
   );
 }
 
+// «Локальная модель» — Ollama: какая модель и на какие фоновые действия она заведена.
+// Лимитов/баланса нет (бесплатно), поэтому показываем модель + маршрут каждого действия.
+function OllamaTab({ info }: { info: OllamaUsageInfo | undefined }) {
+  if (info === undefined)
+    return <div style={{ padding: '40px 0', textAlign: 'center', color: C.textMuted, fontSize: 13 }}>Загрузка…</div>;
+  if (!info.enabled)
+    return (
+      <div style={{ padding: '36px 12px', textAlign: 'center', color: C.textMuted, fontSize: 12.5, lineHeight: 1.5 }}>
+        <div style={{ fontSize: 24, marginBottom: 6, opacity: 0.5 }}>◌</div>
+        Локальная модель не настроена. Задайте <span style={{ fontFamily: FONT.mono }}>Ollama:Model</span> и{' '}
+        <span style={{ fontFamily: FONT.mono }}>Ollama:BaseUrl</span> в appsettings.Local.json — и фоновые действия
+        (теги, извлечение задач, память и др.) смогут работать на ней бесплатно, без обращений к платным моделям.
+      </div>
+    );
+
+  const onLocal = info.actions.filter(a => a.routedToOllama);
+  const onClaude = info.actions.filter(a => !a.routedToOllama);
+  // Группируем в порядке появления групп
+  const groups: string[] = [];
+  for (const a of info.actions) if (!groups.includes(a.group)) groups.push(a.group);
+
+  return (
+    <div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
+        <MetricCard value={info.model ?? '—'} label="локальная модель · Ollama" valueColor={C.accent}>
+          {info.baseUrl && <div style={{ fontSize: 11, color: C.textMuted, marginTop: 6, fontFamily: FONT.mono, overflow: 'hidden', textOverflow: 'ellipsis' }}>{info.baseUrl}</div>}
+        </MetricCard>
+        <MetricCard value={`${onLocal.length} / ${info.actions.length}`} label="действий на локальной модели" valueColor={C.textHeading} />
+      </div>
+
+      <div style={{ fontSize: 11.5, color: C.textMuted, marginTop: 14, lineHeight: 1.5 }}>
+        Ниже — какие фоновые задачи считает бесплатная локальная модель, а какие остаются на платном Claude.
+        Переключается в <span style={{ fontFamily: FONT.mono }}>Ollama:Actions</span> (appsettings.Local.json).
+      </div>
+
+      {groups.map(g => (
+        <div key={g}>
+          <div style={blockLabel}>{g}</div>
+          {info.actions.filter(a => a.group === g).map(a => (
+            <div key={a.key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '5px 0' }}>
+              <span style={{ fontSize: 12.5, color: C.textSecondary }}>{a.title}</span>
+              <span style={{ flexShrink: 0, fontFamily: FONT.sans, fontSize: 11, fontWeight: 600,
+                padding: '2px 9px', borderRadius: 20,
+                color: a.routedToOllama ? C.accent : C.textMuted,
+                background: a.routedToOllama ? C.accentMuted : C.bgInset,
+                border: `1px solid ${a.routedToOllama ? C.accent : C.border}` }}>
+                {a.routedToOllama ? 'локально' : 'Claude'}
+              </span>
+            </div>
+          ))}
+        </div>
+      ))}
+
+      {onClaude.length > 0 && onLocal.length > 0 && (
+        <div style={{ fontSize: 11, color: C.textMuted, marginTop: 14, lineHeight: 1.5 }}>
+          «Лицо продукта» (сводки «Что нового», характеры персон, ответы персон) намеренно остаётся на Claude —
+          там важны качество и длинный контекст.
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function UsageScreen({ onClose }: { onClose: () => void }) {
   const [tab, setTab] = useState<string>('claude');
   const [usage, setUsage] = useState<UsageResponse | null>(null);
@@ -391,6 +454,7 @@ export function UsageScreen({ onClose }: { onClose: () => void }) {
   const tabs = ([['claude', usage?.subscriptions?.['claude']?.name ?? 'Claude']] as [string, string][])
     .concat(subKeys.filter(k => k !== 'claude').map(k => [k, usage!.subscriptions![k].name ?? k] as [string, string]))
     .concat(providerKeys.map(k => [k, providerLabel(k)] as [string, string]))
+    .concat([['ollama', 'Локально']])
     .concat([['fal', 'fal.ai']]);
 
   return (
@@ -428,6 +492,7 @@ export function UsageScreen({ onClose }: { onClose: () => void }) {
           {tab === 'claude' ? <ClaudeTab snapshots={usage?.subscriptions?.['claude']?.snapshots ?? (usage ? claudeSnaps : usage)} rotation={rotationOf('claude')} tier={usage?.subscriptions?.['claude']?.tier} />
             : subKeys.includes(tab) ? <ClaudeTab snapshots={usage?.subscriptions?.[tab]?.snapshots} rotation={rotationOf(tab)} tier={usage?.subscriptions?.[tab]?.tier} />
             : tab === 'fal' ? <FalTab days={days} setDays={setDays} />
+            : tab === 'ollama' ? <OllamaTab info={usage?.ollama} />
             : <ProviderTab providerKey={tab} data={provData[tab]} />}
         </div>
       </div>

@@ -19,14 +19,13 @@ public sealed class SummaryGenerationException(string message) : Exception(messa
 // Повторный вызов обновляет ту же заметку (Session.SummaryNoteId), а не плодит дубли.
 public class SessionSummaryService(
     SessionManager sessions, ProjectManager projects, NotesService notes,
-    NotesKnowledgeService kb, Llm.OneShotClaudeRunner runner,
+    NotesKnowledgeService kb, Llm.ICheapTextRunner cheap,
     IHubContext<SessionHub> hub, PushService push,
     NotificationService notif, IConfiguration config,
     ILogger<SessionSummaryService> logger)
 {
     // Бюджет транскрипта в символах: длиннее — сокращаем (голова + хвост)
     private const int TranscriptBudget = 30_000;
-    private static readonly TimeSpan LlmTimeout = TimeSpan.FromSeconds(180);
 
     // Сессии с генерацией в полёте — защита от параллельных кликов
     private readonly ConcurrentDictionary<string, byte> _inFlight = new();
@@ -53,10 +52,10 @@ public class SessionSummaryService(
             string summary;
             try
             {
-                summary = await runner.RunAsync(
+                summary = await cheap.RunAsync(
+                    Llm.LocalActionCatalog.SessionSummary,
                     BuildPrompt(session.Name, transcript),
-                    runner.NormalizeModel(config["Notes:SummaryModel"] ?? config["Notes:AiModel"] ?? "haiku"),
-                    LlmTimeout, ct);
+                    config["Notes:SummaryModel"] ?? config["Notes:AiModel"] ?? "haiku", ct: ct);
             }
             catch (InvalidOperationException ex)
             {

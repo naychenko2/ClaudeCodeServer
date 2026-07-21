@@ -4,11 +4,11 @@ using ClaudeHomeServer.Models;
 
 namespace ClaudeHomeServer.Services;
 
-// Генерация контента задач одноразовым вызовом claude --print (без сессии).
-// Модель — Tasks:AiModel; запуск — общий Llm.OneShotClaudeRunner.
+// Генерация контента задач одноразовым вызовом (без сессии). Идёт через «дешёвый» раннер:
+// локальная модель Ollama (если действие task-ai на неё заведено) или claude (Tasks:AiModel).
 // Контекст проекта передаётся в промпте (имя + выдержка из CLAUDE.md).
 public class TaskAiService(ProjectManager projects, IConfiguration config,
-    Llm.OneShotClaudeRunner runner)
+    Llm.ICheapTextRunner cheap)
 {
 
     public async Task<string> GenerateDescriptionAsync(string title, string? projectId, CancellationToken ct)
@@ -66,7 +66,7 @@ public class TaskAiService(ProjectManager projects, IConfiguration config,
     }
 
     private Task<string> RunAsync(string prompt, CancellationToken ct) =>
-        runner.RunAsync(prompt, runner.NormalizeModel(config["Tasks:AiModel"]), ct: ct);
+        cheap.RunAsync(Llm.LocalActionCatalog.TaskAi, prompt, config["Tasks:AiModel"], ct: ct);
 
     // Снимаем возможную ```-обёртку вокруг ответа
     private static string CleanupText(string raw)

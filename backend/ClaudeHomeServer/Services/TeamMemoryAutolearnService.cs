@@ -18,14 +18,13 @@ namespace ClaudeHomeServer.Services;
 public sealed class TeamMemoryAutolearnService : IHostedService
 {
     private const int TranscriptBudget = 8_000;
-    private static readonly TimeSpan LlmTimeout = TimeSpan.FromSeconds(90);
     private static readonly JsonSerializerOptions JsonOpts = new() { PropertyNameCaseInsensitive = true };
 
     private readonly SessionManager _sessions;
     private readonly ProjectManager _projects;
     private readonly TeamMemoryService _memory;
     private readonly TeamMemoryConsolidationService _consolidation;
-    private readonly Llm.OneShotClaudeRunner _runner;
+    private readonly Llm.ICheapTextRunner _cheap;
     private readonly FeatureFlagService _flags;
     private readonly IConfiguration _config;
     private readonly ILogger<TeamMemoryAutolearnService> _log;
@@ -38,7 +37,7 @@ public sealed class TeamMemoryAutolearnService : IHostedService
 
     public TeamMemoryAutolearnService(SessionManager sessions, ProjectManager projects,
         TeamMemoryService memory, TeamMemoryConsolidationService consolidation,
-        Llm.OneShotClaudeRunner runner, FeatureFlagService flags,
+        Llm.ICheapTextRunner cheap, FeatureFlagService flags,
         IConfiguration config, ILogger<TeamMemoryAutolearnService> log, IHubContext<SessionHub> hub,
         ProjectEventLogService? events = null)
     {
@@ -46,7 +45,7 @@ public sealed class TeamMemoryAutolearnService : IHostedService
         _projects = projects;
         _memory = memory;
         _consolidation = consolidation;
-        _runner = runner;
+        _cheap = cheap;
         _flags = flags;
         _config = config;
         _log = log;
@@ -101,9 +100,9 @@ public sealed class TeamMemoryAutolearnService : IHostedService
             if (transcript.Length - prevLen < minGrowth) return;
             _lastLen[sessionId] = transcript.Length;
 
-            var model = _runner.NormalizeModel(
+            var raw = await _cheap.RunAsync(Llm.LocalActionCatalog.TeamMemoryAutolearn,
+                BuildTeamPrompt(transcript),
                 _config["Notes:AiModel"] ?? _config["Tasks:AiModel"] ?? "haiku");
-            var raw = await _runner.RunAsync(BuildTeamPrompt(transcript), model, LlmTimeout, default);
 
             var items = Parse(raw);
             if (items.Count == 0) return;

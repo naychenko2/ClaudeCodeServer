@@ -10,7 +10,8 @@ namespace ClaudeHomeServer.Controllers;
 [Authorize]
 [Route("api/usage")]
 public class UsageController(UsageService usage, ClaudeSubscriptionPool? subscriptionPool,
-    LlmProviderRegistry providers, IConfiguration config) : ControllerBase
+    LlmProviderRegistry providers, LocalActionRouter localRouter, OllamaClient ollama,
+    IConfiguration config) : ControllerBase
 {
     // История снимков использования лимитов подписки + тариф + per-subscription (для экрана usage)
     [HttpGet]
@@ -19,6 +20,7 @@ public class UsageController(UsageService usage, ClaudeSubscriptionPool? subscri
         var all = usage.GetAll();
         var plan = usage.GetPlan();
         var bySub = usage.GetAllBySubscription();
+        var ollamaInfo = BuildOllamaInfo();
 
         // Снимки окон лимитов сторонних CLI-провайдеров: их Anthropic-совместимые
         // эндпоинты тоже шлют rate_limit_event, и снимок пишется под ключ провайдера.
@@ -53,9 +55,19 @@ public class UsageController(UsageService usage, ClaudeSubscriptionPool? subscri
                     Exhausted: subscriptionPool.IsExhausted(key),
                     Tier: tier);
             }
-            return Ok(new UsageResponse(all, plan, named, subscriptionPool.SoftThreshold, providerSnaps));
+            return Ok(new UsageResponse(all, plan, named, subscriptionPool.SoftThreshold, providerSnaps, ollamaInfo));
         }
 
-        return Ok(new UsageResponse(all, plan, null, null, providerSnaps));
+        return Ok(new UsageResponse(all, plan, null, null, providerSnaps, ollamaInfo));
+    }
+
+    // Блок локальной модели: настройки Ollama + маршрут каждого фонового действия (локаль/claude)
+    private OllamaUsageInfo BuildOllamaInfo()
+    {
+        var actions = LocalActionCatalog.All
+            .Select(a => new OllamaActionInfo(a.Key, a.Title, a.Group, localRouter.UsesLocal(a.Key)))
+            .ToList();
+        return new OllamaUsageInfo(ollama.Enabled, ollama.Enabled ? ollama.TextModel : null,
+            ollama.Enabled ? ollama.BaseUrl : null, actions);
     }
 }

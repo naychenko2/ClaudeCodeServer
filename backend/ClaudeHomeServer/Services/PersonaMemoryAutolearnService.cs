@@ -13,21 +13,20 @@ namespace ClaudeHomeServer.Services;
 public sealed class PersonaMemoryAutolearnService : IHostedService
 {
     private const int TranscriptBudget = 8_000;
-    private static readonly TimeSpan LlmTimeout = TimeSpan.FromSeconds(90);
     private static readonly JsonSerializerOptions JsonOpts = new() { PropertyNameCaseInsensitive = true };
 
     private readonly SessionManager _sessions;
     private readonly PersonaManager _personas;
     private readonly PersonaMemoryService _memory;
     private readonly PersonaMemoryConsolidationService _consolidation;
-    private readonly Llm.OneShotClaudeRunner _runner;
+    private readonly Llm.ICheapTextRunner _cheap;
     private readonly IConfiguration _config;
     private readonly ILogger<PersonaMemoryAutolearnService> _log;
     private readonly ProjectEventLogService? _events;
 
     public PersonaMemoryAutolearnService(SessionManager sessions, PersonaManager personas,
         PersonaMemoryService memory, PersonaMemoryConsolidationService consolidation,
-        Llm.OneShotClaudeRunner runner,
+        Llm.ICheapTextRunner cheap,
         IConfiguration config, ILogger<PersonaMemoryAutolearnService> log,
         ProjectEventLogService? events = null)
     {
@@ -35,7 +34,7 @@ public sealed class PersonaMemoryAutolearnService : IHostedService
         _personas = personas;
         _memory = memory;
         _consolidation = consolidation;
-        _runner = runner;
+        _cheap = cheap;
         _config = config;
         _log = log;
         _events = events;
@@ -74,9 +73,9 @@ public sealed class PersonaMemoryAutolearnService : IHostedService
             var transcript = SessionSummaryService.BuildTranscript(history, TranscriptBudget);
             if (string.IsNullOrWhiteSpace(transcript)) return;
 
-            var model = _runner.NormalizeModel(
+            var raw = await _cheap.RunAsync(Llm.LocalActionCatalog.PersonaMemoryAutolearn,
+                BuildPrompt(persona, transcript),
                 _config["Notes:AiModel"] ?? _config["Tasks:AiModel"] ?? "haiku");
-            var raw = await _runner.RunAsync(BuildPrompt(persona, transcript), model, LlmTimeout, default);
 
             var result = Parse(raw);
             var saved = 0;
@@ -148,9 +147,9 @@ public sealed class PersonaMemoryAutolearnService : IHostedService
             var transcript = $"Ассистент (по поручению пользователя): {question}\n\n{persona.Name}: {answer}";
             if (transcript.Length > TranscriptBudget) transcript = transcript[..TranscriptBudget];
 
-            var model = _runner.NormalizeModel(
+            var raw = await _cheap.RunAsync(Llm.LocalActionCatalog.PersonaMemoryAutolearn,
+                BuildPrompt(persona, transcript),
                 _config["Notes:AiModel"] ?? _config["Tasks:AiModel"] ?? "haiku");
-            var raw = await _runner.RunAsync(BuildPrompt(persona, transcript), model, LlmTimeout, default);
 
             var saved = 0;
             foreach (var item in Parse(raw).Items)

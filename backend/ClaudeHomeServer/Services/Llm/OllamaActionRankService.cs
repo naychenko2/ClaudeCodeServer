@@ -16,10 +16,16 @@ public sealed record RankedAction(string Id, string Level);
 public sealed class OllamaActionRankService
 {
     private readonly OllamaClient _ollama;
+    private readonly LocalActionRouter _router;
 
-    public bool Enabled => _ollama.Enabled;
+    // Ранжир доступен, если Ollama настроена И действие action-rank заведено на локаль (конфиг)
+    public bool Enabled => _router.UsesLocal(LocalActionCatalog.ActionRank);
 
-    public OllamaActionRankService(OllamaClient ollama) => _ollama = ollama;
+    public OllamaActionRankService(OllamaClient ollama, LocalActionRouter router)
+    {
+        _ollama = ollama;
+        _router = router;
+    }
 
     private static readonly HashSet<string> ValidLevels = new(StringComparer.OrdinalIgnoreCase)
         { "strong", "medium", "minor" };
@@ -62,7 +68,7 @@ public sealed class OllamaActionRankService
         string contextType, string contextText, IReadOnlyList<RankCandidate> actions, int maxK,
         CancellationToken ct = default)
     {
-        if (!_ollama.Enabled || actions.Count == 0) return [];
+        if (!Enabled || actions.Count == 0) return [];
 
         var menu = actions.Select(a => new { id = a.Id, desc = a.Title + " — " + a.Hint });
         var userPrompt =

@@ -24,7 +24,17 @@ public record PlanInfo(string? SubscriptionType, string? RateLimitTier, string L
 // Anthropic-совместимые эндпоинты тоже шлют rate_limit_event, снимок пишется под ключ провайдера.
 public record UsageResponse(IReadOnlyList<UsageSnapshot> Snapshots, PlanInfo? Plan,
     Dictionary<string, SubscriptionUsage>? Subscriptions = null, double? RotationThreshold = null,
-    Dictionary<string, IReadOnlyList<UsageSnapshot>>? Providers = null);
+    Dictionary<string, IReadOnlyList<UsageSnapshot>>? Providers = null,
+    OllamaUsageInfo? Ollama = null);
+
+// Блок «Локальная модель (Ollama)» для экрана использования. У Ollama нет лимитов/баланса
+// (локальная, бесплатная) — показываем только модель и на какие действия она заведена.
+// Enabled=false → раздел показывает «не настроена». Actions — весь каталог фоновых действий
+// с флагом RoutedToOllama (идёт на локаль сейчас) — прозрачно, что бесплатно, а что на claude.
+public record OllamaUsageInfo(bool Enabled, string? Model, string? BaseUrl,
+    IReadOnlyList<OllamaActionInfo> Actions);
+
+public record OllamaActionInfo(string Key, string Title, string Group, bool RoutedToOllama);
 
 // Utilisation одной подписки: снимки + опциональное имя + статус роутинга.
 // InRotation — берёт ли пул этот аккаунт для новых чатов; Utilization — эффективная

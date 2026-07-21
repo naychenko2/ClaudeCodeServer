@@ -13,15 +13,11 @@ public record GeneratedSkill(string Name, string Description, string Body);
 // (дефолт haiku), one-shot через общий OneShotClaudeRunner. Сервис только генерирует кандидата,
 // сохранение — за вызывающим (POST api/skills → SaveGlobalSkill), чтобы показать превью для правки.
 public class SkillGenerationService(
-    IOneShotRunner runner,
+    ICheapTextRunner cheap,
     IConfiguration config,
     ILogger<SkillGenerationService> log)
 {
     private string? AiModel => config["Skills:AiModel"] is { Length: > 0 } m ? m : "haiku";
-
-    private TimeSpan Timeout =>
-        TimeSpan.FromMilliseconds(int.TryParse(config["Skills:GenerateTimeoutMs"], out var ms) ? ms
-            : int.TryParse(config["Skills:SuggestTimeoutMs"], out var ms2) ? ms2 : 120_000);
 
     public async Task<GeneratedSkill?> GenerateAsync(string prompt, CancellationToken ct = default)
     {
@@ -29,7 +25,7 @@ public class SkillGenerationService(
         string answer;
         try
         {
-            answer = await runner.RunAsync(full, runner.NormalizeModel(AiModel), Timeout, ct);
+            answer = await cheap.RunAsync(LocalActionCatalog.SkillGenerate, full, AiModel, ct: ct);
         }
         catch (Exception ex)
         {

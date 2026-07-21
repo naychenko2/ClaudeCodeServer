@@ -177,6 +177,34 @@ UI скрывает недоступное (`useModelCaps` в `lib/models.ts`), 
 (CLAUDE.md, скиллы, плагины, хуки) не грузятся в контекст — минус ~половина входных
 токенов на вызов; CLAUDE_CONFIG_DIR память НЕ отсекает, а `--bare` ломает OAuth.
 
+### Локальная модель для фоновых задач (Ollama, бесплатно)
+
+Фоновые one-shot задачи (классификация, извлечение JSON, теги, суммаризация, память —
+НЕ чаты) можно считать бесплатной локальной моделью Ollama вместо платного Claude.
+Ollama не Anthropic-совместим, поэтому идёт прямым HTTP (`OllamaClient.GenerateTextAsync`,
+`/api/chat`, `think:false`), мимо claude CLI. Маршрутизация — per-action:
+- **Каталог** — [LocalActionCatalog.cs](backend/ClaudeHomeServer/Services/Llm/LocalActionCatalog.cs):
+  все фоновые действия (ключ, группа, профиль вызова small/text/large, `DefaultLocal` —
+  рекомендация). НЕ входят: задача-исполнитель (агентная сессия с инструментами, не one-shot),
+  fal.ai (картинки), а также changelog/persona-ask (нужны detailed-usage/effort — всегда claude).
+- **Роутер** — [LocalActionRouter.cs](backend/ClaudeHomeServer/Services/Llm/LocalActionRouter.cs):
+  `UsesLocal(key)` = `Ollama.Enabled && (Ollama:Actions[key] ?? DefaultLocal)` (политика A —
+  при настроенном Ollama рекомендованные действия уходят на локаль, если конфиг не сказал иначе).
+  Профиль (`num_ctx`/`num_predict`/timeout) — из каталога, переопределяется `Ollama:Profiles`.
+  `num_ctx` важен: дефолт Ollama (~4k) молча режет большой вход.
+- **Раннер** — [CheapTextRunner.cs](backend/ClaudeHomeServer/Services/Llm/CheapTextRunner.cs)
+  (`ICheapTextRunner.RunAsync(actionKey, prompt, fallbackModel?, ownerId?)`): локаль по профилю,
+  при недоступности/ошибке/пустом ответе — **фолбэк на `OneShotClaudeRunner`**. Ollama выключен →
+  сразу claude (нулевая регрессия). Потребители (NotesAiService, ChatTaskExtractionService,
+  MemoryWriteResolver, TaskAiService, SessionSummaryService, GitAiService, Skill*Service,
+  Persona/TeamMemory autolearn+consolidate, DailyBriefingService, OllamaActionRankService)
+  передают свой `actionKey` — разбирают ответ теми же парсерами, что и раньше ответ claude.
+- **Конфиг** — секция `Ollama` (`Model`, опц. `TextModel`, `BaseUrl`, `KeepAlive`,
+  `Actions` — словарь ключ→bool, `Profiles`). Пустой `Model` = локаль выключена.
+- **UI** — вкладка «Локально» на экране «Использование» (`GET /api/usage` → `OllamaUsageInfo`):
+  модель + маршрут каждого действия (локаль/claude). У Ollama нет лимитов/баланса — блок
+  информационный.
+
 ## Claude Code CLI subprocess
 
 `ClaudeSession` запускает: `claude --print --output-format stream-json --input-format stream-json --include-partial-messages --permission-prompt-tool stdio [--resume <id>]`

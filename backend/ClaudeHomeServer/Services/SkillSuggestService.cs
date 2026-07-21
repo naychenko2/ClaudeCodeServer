@@ -15,7 +15,7 @@ public record SkillSuggestion(RegistrySkill Skill, string Reason);
 // по безлимитному реестру остаётся обычный текстовый поиск (SkillsCliService.FindAsync).
 public class SkillSuggestService(
     SkillsCliService cli,
-    IOneShotRunner runner,
+    ICheapTextRunner cheap,
     SkillTranslationService translation,
     PersonaManager personas,
     ProjectManager projects,
@@ -28,9 +28,6 @@ public class SkillSuggestService(
         config.GetSection("Skills:CatalogRepos").Get<string[]>() is { Length: > 0 } r ? r : DefaultCatalogRepos;
 
     private string? AiModel => config["Skills:AiModel"] is { Length: > 0 } m ? m : "haiku";
-
-    private TimeSpan Timeout =>
-        TimeSpan.FromMilliseconds(int.TryParse(config["Skills:SuggestTimeoutMs"], out var ms) ? ms : 120_000);
 
     // Кэш агрегированного каталога (TTL). Клонирование репозиториев в ListRepoAsync дорогое —
     // держим общий снимок на всех пользователей (каталог публичный).
@@ -129,7 +126,7 @@ public class SkillSuggestService(
         string answer;
         try
         {
-            answer = await runner.RunAsync(prompt, runner.NormalizeModel(AiModel), Timeout, ct);
+            answer = await cheap.RunAsync(LocalActionCatalog.SkillSuggest, prompt, AiModel, ct: ct);
         }
         catch (Exception ex)
         {

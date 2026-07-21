@@ -562,6 +562,24 @@ export interface UsageResponse {
   // Снимки окон лимитов сторонних CLI-провайдеров (glm/deepseek) — их Anthropic-совместимые
   // эндпоинты тоже шлют rate_limit_event, снимки пишутся под ключ провайдера
   providers?: Record<string, UsageSnapshot[]>;
+  // Локальная модель (Ollama): какая модель и на какие фоновые действия она заведена
+  ollama?: OllamaUsageInfo;
+}
+
+// Блок «Локальная модель» на экране использования. У Ollama нет лимитов/баланса (бесплатно),
+// показываем модель и маршрут каждого фонового действия (локаль/claude).
+export interface OllamaUsageInfo {
+  enabled: boolean;
+  model?: string | null;
+  baseUrl?: string | null;
+  actions: OllamaActionInfo[];
+}
+
+export interface OllamaActionInfo {
+  key: string;
+  title: string;
+  group: string;
+  routedToOllama: boolean;
 }
 
 export interface SubscriptionUsage {

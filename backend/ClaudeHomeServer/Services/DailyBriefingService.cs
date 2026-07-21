@@ -23,7 +23,7 @@ public sealed class DailyBriefingService
     private readonly UserStore _users;
     private readonly PersonaManager _personas;
     private readonly ProjectEventLogService? _events;
-    private readonly Llm.OneShotClaudeRunner _runner;
+    private readonly Llm.ICheapTextRunner _cheap;
     private readonly PushService _push;
     private readonly IHubContext<SessionHub> _hub;
     private readonly NotificationService _notif;
@@ -39,7 +39,7 @@ public sealed class DailyBriefingService
     public DailyBriefingService(
         TaskManager tasks, NotesService notes, ProjectManager projects, UserStore users,
         PersonaManager personas,
-        Llm.OneShotClaudeRunner runner, PushService push,
+        Llm.ICheapTextRunner cheap, PushService push,
         IHubContext<SessionHub> hub, NotificationService notif,
         IConfiguration config, ILogger<DailyBriefingService> log,
         ProjectEventLogService? events = null)
@@ -49,7 +49,7 @@ public sealed class DailyBriefingService
         _projects = projects;
         _users = users;
         _personas = personas;
-        _runner = runner;
+        _cheap = cheap;
         _push = push;
         _hub = hub;
         _notif = notif;
@@ -199,8 +199,8 @@ public sealed class DailyBriefingService
         if (teamEvents.Count == 0) sb.AppendLine("Нет командной активности.");
         else foreach (var e in teamEvents.Take(30)) sb.AppendLine($"- [{e.Type}] {e.Summary}");
 
-        var model = _runner.NormalizeModel(_config["Briefing:Model"] ?? "haiku");
-        return await _runner.RunAsync(sb.ToString(), model, ct: ct);
+        return await _cheap.RunAsync(Llm.LocalActionCatalog.DailyBriefing,
+            sb.ToString(), _config["Briefing:Model"] ?? "haiku", ct: ct);
     }
 
     private static string FormatTask(TaskItem t)

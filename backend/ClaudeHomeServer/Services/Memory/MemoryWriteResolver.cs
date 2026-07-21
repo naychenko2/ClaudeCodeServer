@@ -30,9 +30,8 @@ public readonly record struct MemoryWriteCandidate(string Id, string Text);
 // Гейт: Enabled (конфиг Memory:ConflictResolution, дефолт true) + Available (Dify) проверяет фасад.
 // Любая ошибка/мусор в ответе → консервативный фолбэк на ADD (autolearn не должен падать).
 public sealed class MemoryWriteResolver(
-    IOneShotRunner runner, IConfiguration config, ILogger<MemoryWriteResolver> log)
+    ICheapTextRunner cheap, IConfiguration config, ILogger<MemoryWriteResolver> log)
 {
-    private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(60);
     private static readonly JsonSerializerOptions JsonOpts = new() { PropertyNameCaseInsensitive = true };
 
     // Разрешение противоречий включено (Memory:ConflictResolution, дефолт true)
@@ -47,10 +46,11 @@ public sealed class MemoryWriteResolver(
         if (candidates.Count == 0 || string.IsNullOrWhiteSpace(newText)) return MemoryWriteDecision.Add;
         try
         {
-            var model = runner.NormalizeModel(
-                config["Notes:AiModel"] ?? config["Tasks:AiModel"] ?? "haiku");
-            var raw = await runner.RunAsync(
-                BuildPrompt(newText, typeLabel, candidates), model, timeout ?? DefaultTimeout, ct);
+            // timeout игнорируется для локали (профиль каталога задаёт таймаут); для claude-пути — дефолт раннера
+            var raw = await cheap.RunAsync(
+                LocalActionCatalog.MemoryWriteResolve,
+                BuildPrompt(newText, typeLabel, candidates),
+                config["Notes:AiModel"] ?? config["Tasks:AiModel"] ?? "haiku", ct: ct);
             return ParseDecision(raw);
         }
         catch (Exception ex)

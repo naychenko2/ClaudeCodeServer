@@ -16,11 +16,10 @@ public sealed class PersonaMemoryConsolidationService : BackgroundService
 {
     // Как часто проверяем заявки (сама полная проходка — раз в ConsolidateIntervalHours)
     private static readonly TimeSpan PendingTick = TimeSpan.FromMinutes(5);
-    private static readonly TimeSpan LlmTimeout = TimeSpan.FromSeconds(120);
 
     private readonly PersonaMemoryService _memory;
     private readonly PersonaManager _personas;
-    private readonly Llm.OneShotClaudeRunner _runner;
+    private readonly Llm.ICheapTextRunner _cheap;
     private readonly IConfiguration _config;
     private readonly ILogger<PersonaMemoryConsolidationService> _log;
 
@@ -28,12 +27,12 @@ public sealed class PersonaMemoryConsolidationService : BackgroundService
     private readonly ConcurrentDictionary<string, string> _pending = new();
 
     public PersonaMemoryConsolidationService(PersonaMemoryService memory, PersonaManager personas,
-        Llm.OneShotClaudeRunner runner, IConfiguration config,
+        Llm.ICheapTextRunner cheap, IConfiguration config,
         ILogger<PersonaMemoryConsolidationService> log)
     {
         _memory = memory;
         _personas = personas;
-        _runner = runner;
+        _cheap = cheap;
         _config = config;
         _log = log;
     }
@@ -102,8 +101,8 @@ public sealed class PersonaMemoryConsolidationService : BackgroundService
         if (entries.Count <= SoftLimit) return;   // софт-порог: мало записей — не трогаем
 
         // Шаг 1: LLM-merge (невалидный/пустой ответ = no-op)
-        var model = _runner.NormalizeModel(_config["Notes:AiModel"] ?? "haiku");
-        var raw = await _runner.RunAsync(BuildPrompt(entries), model, LlmTimeout, ct);
+        var raw = await _cheap.RunAsync(Llm.LocalActionCatalog.PersonaMemoryConsolidate,
+            BuildPrompt(entries), _config["Notes:AiModel"] ?? "haiku", ct: ct);
         var ops = FilterOps(ParseOps(raw), entries);
         var merged = ops.Count > 0 ? _memory.ApplyConsolidation(persona.OwnerId, persona.Id, ops) : 0;
 

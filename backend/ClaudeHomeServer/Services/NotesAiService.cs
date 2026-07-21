@@ -4,9 +4,10 @@ using ClaudeHomeServer.Models;
 
 namespace ClaudeHomeServer.Services;
 
-// ИИ-помощь по заметкам одноразовыми вызовами claude --print: предложение связей,
-// авто-теги, конспект дня. Модель — Notes:AiModel (дефолт haiku).
-public class NotesAiService(NotesService notes, IConfiguration config, Llm.OneShotClaudeRunner runner)
+// ИИ-помощь по заметкам одноразовыми вызовами: предложение связей, авто-теги, конспект дня.
+// Идут через «дешёвый» раннер — локальная модель Ollama (если действие на неё заведено) или
+// claude (модель Notes:AiModel, дефолт haiku) как фолбэк/по умолчанию.
+public class NotesAiService(NotesService notes, IConfiguration config, Llm.ICheapTextRunner cheap)
 {
     private static readonly JsonSerializerOptions JsonOpts = new() { PropertyNameCaseInsensitive = true };
 
@@ -36,7 +37,7 @@ public class NotesAiService(NotesService notes, IConfiguration config, Llm.OneSh
         sb.AppendLine("Заголовки остальных заметок:");
         foreach (var t in candidates) sb.AppendLine($"- {t}");
 
-        var raw = await RunAsync(sb.ToString(), ct);
+        var raw = await RunAsync(Llm.LocalActionCatalog.NotesLinks, sb.ToString(), ct);
         var parsed = ParseArray<SuggestedLink>(raw);
         // Отсекаем галлюцинации: только реально существующие заголовки
         var valid = new HashSet<string>(candidates, StringComparer.OrdinalIgnoreCase);
@@ -64,7 +65,7 @@ public class NotesAiService(NotesService notes, IConfiguration config, Llm.OneSh
             sb.AppendLine("Существующие теги базы: " + string.Join(", ", existingTags));
         }
 
-        var raw = await RunAsync(sb.ToString(), ct);
+        var raw = await RunAsync(Llm.LocalActionCatalog.NotesTags, sb.ToString(), ct);
         return ParseArray<string>(raw)
             .Select(t => t.Trim().TrimStart('#'))
             .Where(t => t.Length is > 1 and <= 30 && !note.Tags.Contains(t, StringComparer.OrdinalIgnoreCase))
@@ -102,7 +103,7 @@ public class NotesAiService(NotesService notes, IConfiguration config, Llm.OneSh
                 sb.AppendLine(Truncate(d.Content, 1500));
                 sb.AppendLine();
             }
-            summary = await RunAsync(sb.ToString(), ct);
+            summary = await RunAsync(Llm.LocalActionCatalog.NotesDailySummary, sb.ToString(), ct);
         }
 
         // Секцию «Итоги дня» заменяем при повторном вызове, иначе дописываем
@@ -115,8 +116,8 @@ public class NotesAiService(NotesService notes, IConfiguration config, Llm.OneSh
             ?? throw new InvalidOperationException("Дневниковая заметка не обновилась");
     }
 
-    private Task<string> RunAsync(string prompt, CancellationToken ct) =>
-        runner.RunAsync(prompt, runner.NormalizeModel(config["Notes:AiModel"] ?? "haiku"), ct: ct);
+    private Task<string> RunAsync(string actionKey, string prompt, CancellationToken ct) =>
+        cheap.RunAsync(actionKey, prompt, config["Notes:AiModel"] ?? "haiku", ct: ct);
 
     private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max] + "\n…";
 

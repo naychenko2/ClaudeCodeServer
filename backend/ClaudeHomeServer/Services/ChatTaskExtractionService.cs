@@ -10,11 +10,10 @@ namespace ClaudeHomeServer.Services;
 // на фронте через обычный tasks-API по выбору пользователя.
 public sealed class ChatTaskExtractionService(
     SessionManager sessions, ProjectManager projects,
-    Llm.OneShotClaudeRunner runner, IConfiguration config,
+    Llm.ICheapTextRunner cheap, IConfiguration config,
     ILogger<ChatTaskExtractionService> log)
 {
     private const int TranscriptBudget = 30_000;
-    private static readonly TimeSpan LlmTimeout = TimeSpan.FromSeconds(120);
     private static readonly JsonSerializerOptions JsonOpts = new() { PropertyNameCaseInsensitive = true };
 
     public async Task<ExtractTasksResult> ExtractAsync(string userId, string sessionId, CancellationToken ct)
@@ -32,10 +31,11 @@ public sealed class ChatTaskExtractionService(
         if (string.IsNullOrWhiteSpace(transcript))
             throw new InvalidOperationException("В сессии ещё нет сообщений");
 
-        var raw = await runner.RunAsync(
+        var raw = await cheap.RunAsync(
+            Llm.LocalActionCatalog.ChatExtractTasks,
             BuildPrompt(transcript),
-            runner.NormalizeModel(config["Tasks:AiModel"] ?? config["Notes:AiModel"] ?? "haiku"),
-            LlmTimeout, ct);
+            config["Tasks:AiModel"] ?? config["Notes:AiModel"] ?? "haiku",
+            ct: ct);
 
         var result = ParseTasks(raw);
         log.LogInformation(

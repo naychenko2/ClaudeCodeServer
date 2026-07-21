@@ -4,13 +4,13 @@ using ClaudeHomeServer.Services.Llm;
 namespace ClaudeHomeServer.Services.Git;
 
 // LLM-помощь в git-UI: сообщение коммита по staged-диффу и название стэша по правкам.
-// One-shot через общий OneShotClaudeRunner (модель Git:AiModel, дефолт haiku).
-public sealed class GitAiService(OneShotClaudeRunner runner, GitService git, IConfiguration config)
+// Идёт через «дешёвый» раннер: локальная модель Ollama (если действие заведено на неё)
+// или claude (модель Git:AiModel, дефолт haiku) как фолбэк/по умолчанию.
+public sealed class GitAiService(ICheapTextRunner cheap, GitService git, IConfiguration config)
 {
     private const int DiffBudget = 12_000; // символов диффа в промпт — хвост обрезаем
-    private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(90);
 
-    private string Model => runner.NormalizeModel(config["Git:AiModel"] ?? "haiku") ?? "haiku";
+    private string Model => config["Git:AiModel"] ?? "haiku";
 
     public sealed record CommitSuggestion(string Summary, string Description);
 
@@ -36,7 +36,7 @@ public sealed class GitAiService(OneShotClaudeRunner runner, GitService git, ICo
             Дифф:
             {{diff}}
             """;
-        var raw = await runner.RunAsync(prompt, Model, Timeout, ct);
+        var raw = await cheap.RunAsync(LocalActionCatalog.GitCommitMsg, prompt, Model, ct: ct);
         return ParseSuggestion(raw);
     }
 
@@ -60,7 +60,7 @@ public sealed class GitAiService(OneShotClaudeRunner runner, GitService git, ICo
             Дифф:
             {diff}
             """;
-        var raw = (await runner.RunAsync(prompt, Model, Timeout, ct)).Trim().Trim('"', '«', '»');
+        var raw = (await cheap.RunAsync(LocalActionCatalog.GitStashName, prompt, Model, ct: ct)).Trim().Trim('"', '«', '»');
         var line = raw.Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim();
         return string.IsNullOrWhiteSpace(line) ? null : (line.Length > 80 ? line[..80] : line);
     }

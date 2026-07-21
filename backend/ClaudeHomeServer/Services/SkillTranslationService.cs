@@ -10,13 +10,11 @@ namespace ClaudeHomeServer.Services;
 //  • описания навыков EN→RU для показа в LLM-подборе.
 // Модель — Skills:AiModel (дефолт haiku), one-shot через OneShotClaudeRunner. Всё кэшируется.
 public class SkillTranslationService(
-    IOneShotRunner runner,
+    ICheapTextRunner cheap,
     IConfiguration config,
     ILogger<SkillTranslationService> log)
 {
     private string? AiModel => config["Skills:AiModel"] is { Length: > 0 } m ? m : "haiku";
-    private TimeSpan Timeout =>
-        TimeSpan.FromMilliseconds(int.TryParse(config["Skills:TranslateTimeoutMs"], out var ms) ? ms : 60_000);
 
     // Кэш переводов запросов (RU-запрос → EN)
     private readonly ConcurrentDictionary<string, string> _queryCache = new(StringComparer.OrdinalIgnoreCase);
@@ -41,7 +39,7 @@ public class SkillTranslationService(
             $"Запрос: {q}";
         try
         {
-            var ans = await runner.RunAsync(prompt, runner.NormalizeModel(AiModel), Timeout, ct);
+            var ans = await cheap.RunAsync(LocalActionCatalog.SkillTranslate, prompt, AiModel, ct: ct);
             var en = FirstLine(ans);
             if (en.Length == 0) return q;
             _queryCache[q] = en;
@@ -86,7 +84,8 @@ public class SkillTranslationService(
 
         try
         {
-            var ans = await runner.RunAsync(sb.ToString(), runner.NormalizeModel(AiModel), timeout ?? Timeout, ct);
+            // timeout игнорируется: профиль действия из каталога задаёт таймаут локали/claude
+            var ans = await cheap.RunAsync(LocalActionCatalog.SkillTranslate, sb.ToString(), AiModel, ct: ct);
             var map = ParseTranslations(ans);
             for (var i = 0; i < toTranslate.Count; i++)
             {

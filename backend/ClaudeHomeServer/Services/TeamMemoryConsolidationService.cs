@@ -15,21 +15,20 @@ public sealed class TeamMemoryConsolidationService : BackgroundService
 {
     // Как часто проверяем заявки (сама полная проходка — раз в ConsolidateIntervalHours)
     private static readonly TimeSpan PendingTick = TimeSpan.FromMinutes(5);
-    private static readonly TimeSpan LlmTimeout = TimeSpan.FromSeconds(120);
 
     private readonly TeamMemoryService _memory;
-    private readonly Llm.OneShotClaudeRunner _runner;
+    private readonly Llm.ICheapTextRunner _cheap;
     private readonly IConfiguration _config;
     private readonly ILogger<TeamMemoryConsolidationService> _log;
 
     // Заявки «пора консолидировать» ((owner, project) → 0) — ставит autolearn при переполнении
     private readonly ConcurrentDictionary<(string Owner, string Project), byte> _pending = new();
 
-    public TeamMemoryConsolidationService(TeamMemoryService memory, Llm.OneShotClaudeRunner runner,
+    public TeamMemoryConsolidationService(TeamMemoryService memory, Llm.ICheapTextRunner cheap,
         IConfiguration config, ILogger<TeamMemoryConsolidationService> log)
     {
         _memory = memory;
-        _runner = runner;
+        _cheap = cheap;
         _config = config;
         _log = log;
     }
@@ -92,8 +91,8 @@ public sealed class TeamMemoryConsolidationService : BackgroundService
         if (entries.Count <= SoftLimit) return;   // софт-порог: мало записей — не трогаем
 
         // Шаг 1: LLM-merge (невалидный/пустой ответ = no-op)
-        var model = _runner.NormalizeModel(_config["Notes:AiModel"] ?? "haiku");
-        var raw = await _runner.RunAsync(BuildPrompt(entries), model, LlmTimeout, ct);
+        var raw = await _cheap.RunAsync(Llm.LocalActionCatalog.TeamMemoryConsolidate,
+            BuildPrompt(entries), _config["Notes:AiModel"] ?? "haiku", ct: ct);
         var ops = FilterOps(ParseOps(raw), entries);
         var merged = ops.Count > 0 ? _memory.ApplyConsolidation(ownerId, projectId, ops) : 0;
 

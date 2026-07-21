@@ -274,36 +274,39 @@ public sealed class PersonaAutomationService : IDisposable
         if (string.IsNullOrEmpty(session.AutomationRuleId)) return;
         var ownerId = ResolveOwner(session);
         if (ownerId is null) return;
-        var (persona, _) = FindRule(ownerId, session.AutomationRuleId);
-        var label = persona is null
-            ? "Персона"
-            : (string.IsNullOrWhiteSpace(persona.Role) ? persona.Name : $"{persona.Role} ({persona.Name})");
+        var (persona, rule) = FindRule(ownerId, session.AutomationRuleId);
 
         // Если пользователь смотрит этот чат — не шлём уведомление (он видит в реальном времени)
         if (_sessions.HasViewers(session.Id)) return;
 
         try
         {
+            // Имя/аватар персоны денормализует NotificationService по PersonaId — в title
+            // и body имя не вклеиваем (оно идёт мета-строкой с лицом персоны).
             string title, body;
             if (msg is ResultMessage)
             {
-                title = $"{label} написала вам";
-                body = "Новое сообщение по правилу автоматизации";
+                title = "Новое сообщение";
+                // Осмысленную суть пытаемся собрать локальной моделью из последнего ответа;
+                // без локали/при ошибке — понятный шаблон с названием правила.
+                body = await TrySummarizeLastReplyAsync(session.Id)
+                    ?? (rule is null ? "Ответ по правилу автоматизации"
+                                     : $"Ответ по правилу «{rule.Name}»");
             }
             else if (msg is AskQuestionMessage)
             {
-                title = $"{label} ждёт ответа на вопрос";
-                body = "Персона спрашивает — ответьте, чтобы продолжить";
+                title = "Ждёт вашего ответа";
+                body = "Персона задала вопрос — откройте чат, чтобы продолжить";
             }
             else if (msg is PermissionRequestMessage)
             {
-                title = $"{label} запрашивает разрешение";
-                body = "Персона хочет выполнить действие — разрешите или отклоните";
+                title = "Запрашивает разрешение";
+                body = "Хочет выполнить действие — разрешите или отклоните";
             }
             else // PlanReviewMessage
             {
-                title = $"{label} представила план";
-                body = "Персона предлагает план — согласуйте его";
+                title = "Представлен план";
+                body = "Предложен план — согласуйте его, чтобы продолжить";
             }
 
 	            var chatUrl = string.IsNullOrEmpty(session.ProjectId)
@@ -313,9 +316,35 @@ public sealed class PersonaAutomationService : IDisposable
             await _notif.SendNotificationMessageAsync(ownerId, new NotificationMessage(
                 Title: title, Body: body,
                 Url: chatUrl,
-                Kind: "claude", Tag: "Автоматизация"), sendPush: true);
+                Kind: "claude", Tag: "Автоматизация",
+                PersonaId: persona?.Id,
+                ProjectId: session.ProjectId,
+                SessionId: session.Id), sendPush: true);
         }
         catch { /* уведомление — best-effort */ }
+    }
+
+    // Краткая осмысленная суть уведомления из последнего ответа персоны — локальной
+    // моделью (бесплатно). best-effort: нет локали/ошибка/пусто → null, вызывающий
+    // оставляет шаблонный текст. Платный claude на «украшение» уведомления НЕ тратим.
+    private async Task<string?> TrySummarizeLastReplyAsync(string sessionId)
+    {
+        try
+        {
+            if (!_cheap.UsesLocal(Llm.LocalActionCatalog.NotificationSummary)) return null;
+            var history = await _sessions.GetHistoryAsync(sessionId);
+            var reply = history.OfType<StoredTextMessage>()
+                .LastOrDefault(t => t.ParentToolUseId is null && !string.IsNullOrWhiteSpace(t.Text))?.Text;
+            if (string.IsNullOrWhiteSpace(reply)) return null;
+
+            var prompt =
+                "Ниже — ответ ассистента пользователю. Сожми его СУТЬ в одно короткое предложение " +
+                "(до 120 символов) по-русски, чтобы было понятно из уведомления. " +
+                "Без вступлений и кавычек — только суть.\n\n" + Truncate(reply, 4000);
+            var summary = (await _cheap.RunLocalOnlyAsync(Llm.LocalActionCatalog.NotificationSummary, prompt))?.Trim();
+            return string.IsNullOrWhiteSpace(summary) ? null : Truncate(summary, 200);
+        }
+        catch (Exception ex) { _log.LogDebug(ex, "суть уведомления для сессии {Session}", sessionId); return null; }
     }
 
     // Чат правила удалили (вручную или авто-удалением временного) — сбросим ссылку state.SessionId,

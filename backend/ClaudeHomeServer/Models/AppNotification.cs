@@ -30,6 +30,16 @@ public class AppNotification
     // Тег для отображения (напр. "Напоминание", "Персона", "Исполнитель", "Дайджест")
     public string? Tag { get; set; }
 
+    // Атрибуция персоны (аватар/лицо на уведомлении) — денормализуется по PersonaId
+    public string? PersonaId { get; set; }
+    public string? PersonaName { get; set; }
+    public string? PersonaRole { get; set; }
+    public string? PersonaColor { get; set; }       // цвет аватара (Persona.Avatar.Color)
+    public bool PersonaHasAvatar { get; set; }       // есть ли фото (Avatar.Kind == Image)
+
+    // Денормализованное имя проекта (по ProjectId) — для контекста уведомления
+    public string? ProjectName { get; set; }
+
     public bool IsRead { get; set; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime? ReadAt { get; set; }
@@ -48,6 +58,13 @@ public class CreateNotificationRequest
     public string? TaskId { get; set; }
     public string? Source { get; set; }
     public string? Tag { get; set; }
+    // Персона-атрибуция: отправитель шлёт PersonaId, остальное денормализует NotificationService
+    public string? PersonaId { get; set; }
+    public string? PersonaName { get; set; }
+    public string? PersonaRole { get; set; }
+    public string? PersonaColor { get; set; }
+    public bool PersonaHasAvatar { get; set; }
+    public string? ProjectName { get; set; }
 }
 
 // DTO для списка (без лишних деталей)
@@ -64,6 +81,12 @@ public class NotificationListItem
     public string? TaskId { get; init; }
     public string? Source { get; init; }
     public string? Tag { get; init; }
+    public string? PersonaId { get; init; }
+    public string? PersonaName { get; init; }
+    public string? PersonaRole { get; init; }
+    public string? PersonaColor { get; init; }
+    public bool PersonaHasAvatar { get; init; }
+    public string? ProjectName { get; init; }
     public bool IsRead { get; init; }
     public DateTime CreatedAt { get; init; }
     public DateTime? ReadAt { get; init; }

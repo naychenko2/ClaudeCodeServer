@@ -13,11 +13,15 @@ public class NotificationService(
     NotificationStore store,
     IHubContext<SessionHub> hub,
     PushService push,
+    PersonaManager personas,
+    ProjectManager projects,
     ILogger<NotificationService> log)
 {
     // Создать уведомление, сохранить, разослать. Возвращает id созданного уведомления.
     public async Task<string> SendAsync(string userId, CreateNotificationRequest req, bool sendPush = false)
     {
+        Enrich(userId, req);   // денормализация персоны/проекта — единая точка
+
         var item = await store.AddAsync(userId, req);
 
         var msg = new NotificationMessage(
@@ -31,7 +35,13 @@ public class NotificationService(
             SessionId: item.SessionId,
             TaskId: item.TaskId,
             Source: item.Source,
-            Tag: item.Tag);
+            Tag: item.Tag,
+            PersonaId: item.PersonaId,
+            PersonaName: item.PersonaName,
+            PersonaRole: item.PersonaRole,
+            PersonaColor: item.PersonaColor,
+            PersonaHasAvatar: item.PersonaHasAvatar,
+            ProjectName: item.ProjectName);
 
         // In-app тост (SignalR)
         await hub.Clients.Group("user_" + userId).SendAsync("message", msg);
@@ -119,18 +129,47 @@ public class NotificationService(
 
     // Для ответов персон
     public async Task SendPersonaReplyAsync(string userId, string sessionId,
-        string personaName, string summary, string url)
+        string personaId, string summary, string url)
     {
         await SendAsync(userId, new CreateNotificationRequest
         {
             Kind = "claude",
             Type = "persona_reply",
-            Title = $"Новое сообщение от {personaName}",
+            Title = "Новое сообщение",   // имя персоны денормализуется и идёт мета-строкой
             Body = summary,
             Url = url,
             SessionId = sessionId,
-            Source = $"Чат: {personaName}",
+            PersonaId = personaId,
             Tag = "Персона",
         }, sendPush: true);
+    }
+
+    // Денормализация персоны/проекта: отправители шлют только id, здесь подставляем
+    // имя/роль/аватар персоны и имя проекта. Best-effort — не роняет рассылку.
+    private void Enrich(string userId, CreateNotificationRequest req)
+    {
+        try
+        {
+            if (!string.IsNullOrEmpty(req.PersonaId) && string.IsNullOrEmpty(req.PersonaName)
+                && personas.Get(req.PersonaId, userId) is { } p)
+            {
+                req.PersonaName = p.Name;
+                req.PersonaRole = p.Role;
+                req.PersonaColor = p.Avatar.Color;
+                req.PersonaHasAvatar = p.Avatar.Kind == Models.PersonaAvatarKind.Image
+                    && !string.IsNullOrEmpty(p.Avatar.ImageFile);
+            }
+
+            if (!string.IsNullOrEmpty(req.ProjectId) && string.IsNullOrEmpty(req.ProjectName)
+                && projects.GetById(req.ProjectId) is { } proj)
+            {
+                req.ProjectName = proj.Name;
+            }
+        }
+        catch (Exception ex)
+        {
+            log.LogDebug(ex, "Денормализация уведомления (persona={PersonaId}, project={ProjectId})",
+                req.PersonaId, req.ProjectId);
+        }
     }
 }

@@ -190,6 +190,12 @@ export function ensureNotificationsSubscribed() {
         taskId: msg.taskId,
         source: msg.source,
         tag: msg.tag,
+        personaId: msg.personaId,
+        personaName: msg.personaName,
+        personaRole: msg.personaRole,
+        personaColor: msg.personaColor,
+        personaHasAvatar: msg.personaHasAvatar,
+        projectName: msg.projectName,
         isRead: false,
         createdAt: new Date().toISOString(),
       };

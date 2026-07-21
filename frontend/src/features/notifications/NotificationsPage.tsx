@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Bell, CheckCheck, Search, Trash2, Columns, SlidersHorizontal } from 'lucide-react';
+import { Bell, CheckCheck, Search, Trash2, Columns, SlidersHorizontal, Folder } from 'lucide-react';
 import { C, FONT, FS, R, SP, SHADOW } from '../../lib/design';
+import { NotificationAvatar, hasPersona, notifPersonaLabel, notifAccentColor } from './NotificationAvatar';
 import { HubHeader } from '../../components/HubHeader';
 import { ConfirmDialog } from '../../components/ui';
 import { ToolbarOverflowMenu, type OverflowItem } from '../../components/ToolbarOverflowMenu';
@@ -40,12 +41,14 @@ function NotificationCard({ item, onRead, onDelete }: {
   onDelete: (id: string) => void;
 }) {
   const meta = KIND_META[item.kind] ?? KIND_META.info;
+  const withPersona = hasPersona(item);
+  const stripColor = notifAccentColor(item, item.kind);
 
   return (
     <div
       style={{
         display: 'flex',
-        gap: SP.xl,
+        gap: SP.lg,
         padding: SP.xl,
         background: C.bgCard,
         borderRadius: R.lg,
@@ -69,30 +72,36 @@ function NotificationCard({ item, onRead, onDelete }: {
         el.style.transform = 'none';
       }}
     >
-      {/* Color strip */}
+      {/* Color strip — цвет персоны или вида */}
       <div style={{
         position: 'absolute',
         left: -1, top: -1, bottom: -1, width: 4,
-        background: meta.color,
+        background: stripColor,
         borderRadius: '12px 0 0 12px',
       }} />
 
-      {/* Icon */}
-      <div style={{
-        width: 40, height: 40, minWidth: 40,
-        borderRadius: R.lg,
-        background: meta.bg,
-        color: meta.color,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        fontSize: 17,
-        marginTop: 2,
-        flexShrink: 0,
-      }}>
-        {meta.icon}
+      {/* Аватар персоны (круг) или плитка вида (квадрат) */}
+      <div style={{ marginTop: 2, flexShrink: 0 }}>
+        <NotificationAvatar
+          personaId={item.personaId}
+          personaName={item.personaName}
+          personaColor={item.personaColor}
+          kind={item.kind}
+          size={44}
+        />
       </div>
 
       {/* Body */}
       <div style={{ flex: 1, minWidth: 0 }}>
+        {withPersona && (
+          <div style={{
+            fontSize: FS.xs, fontWeight: 600, color: C.textSecondary,
+            marginBottom: SP.xxs, maxWidth: 320,
+            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          }}>
+            {notifPersonaLabel(item)}
+          </div>
+        )}
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: SP.md }}>
           <div style={{
             fontWeight: 600,
@@ -146,7 +155,20 @@ function NotificationCard({ item, onRead, onDelete }: {
           }}>
             {KIND_LABELS[item.kind] ?? item.kind}
           </span>
-          {item.source && (
+          {item.projectName ? (
+            <span style={{
+              display: 'inline-flex', alignItems: 'center', gap: SP.xs,
+              padding: '2px 8px', borderRadius: R.sm,
+              fontSize: FS.xs, fontWeight: 500,
+              background: C.bgInset, color: C.textMuted,
+              maxWidth: 180, overflow: 'hidden',
+            }}>
+              <Folder size={11} strokeWidth={2} style={{ flexShrink: 0 }} />
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {item.projectName}
+              </span>
+            </span>
+          ) : item.source && (
             <span style={{ fontSize: FS.xs, color: C.textMuted }}>
               · {item.source}
             </span>

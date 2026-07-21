@@ -10,15 +10,20 @@ namespace ClaudeHomeServer.Services;
 public class PushService
 {
     private readonly PushSubscriptionStore _store;
+    private readonly JwtService _jwt;
     private readonly ILogger<PushService> _log;
     private readonly WebPushClient _client = new();
     private readonly VapidDetails _vapid;
+    // Публичная база для иконки-аватара персоны в push (в SW инициалы не нарисовать).
+    // Push:PublicBaseUrl (напр. https://naychenko.me) или VAPID-subject как фолбэк.
+    private readonly string? _publicBase;
 
     public string PublicKey => _vapid.PublicKey;
 
-    public PushService(IConfiguration config, PushSubscriptionStore store, ILogger<PushService> log)
+    public PushService(IConfiguration config, PushSubscriptionStore store, JwtService jwt, ILogger<PushService> log)
     {
         _store = store;
+        _jwt = jwt;
         _log = log;
 
         var dataDir = Path.GetDirectoryName(
@@ -26,6 +31,10 @@ public class PushService
         var keysPath = Path.Combine(dataDir, "vapid-keys.json");
         // Subject обязателен по спеке VAPID: mailto: или https:-URL владельца сервера
         var subject = config["Push:Subject"] ?? "https://naychenko.me";
+
+        var baseUrl = config["Push:PublicBaseUrl"] ?? subject;
+        _publicBase = baseUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+            ? baseUrl.TrimEnd('/') : null;   // только https-домен годится для внешней иконки
 
         if (File.Exists(keysPath))
         {
@@ -55,14 +64,41 @@ public class PushService
         var subscriptions = _store.GetByUser(userId);
         if (subscriptions.Count == 0) return;
 
-        // tag: браузер заменяет уведомление с тем же тегом — нет дублей по одной задаче
+        // Иконка-аватар персоны (фото). В SW инициалы/цвет не отрисовать, поэтому только
+        // фото; при его отсутствии SW берёт статичный лого-icon приложения. Токен —
+        // сервисный JWT владельца (payload web-push шифруется VAPID, токен не утекает).
+        string? icon = null;
+        if (message is { PersonaHasAvatar: true, PersonaId: { } pid } && _publicBase is not null)
+        {
+            var token = _jwt.IssueServiceToken(userId);
+            icon = $"{_publicBase}/api/personas/{pid}/avatar?access_token={Uri.EscapeDataString(token)}";
+        }
+
+        // Идентичность «Роль (Имя) · Проект» первой строкой body — видна и без картинки.
+        var body = message.Body;
+        if (!string.IsNullOrEmpty(message.PersonaName))
+        {
+            var who = string.IsNullOrWhiteSpace(message.PersonaRole)
+                ? message.PersonaName!
+                : $"{message.PersonaRole} ({message.PersonaName})";
+            if (!string.IsNullOrEmpty(message.ProjectName)) who += $" · {message.ProjectName}";
+            body = $"{who}\n{body}";
+        }
+        else if (!string.IsNullOrEmpty(message.ProjectName))
+        {
+            body = $"{message.ProjectName}\n{body}";
+        }
+
+        // tag: браузер заменяет уведомление с тем же тегом — нет дублей по одной задаче/чату
         var payload = JsonSerializer.Serialize(new
         {
             title = message.Title,
-            body = message.Body,
+            body,
             url = message.Url,
             kind = message.Kind,
+            icon,
             tag = message.Url ?? message.Title,
+            renotify = true,
         });
 
         foreach (var sub in subscriptions)

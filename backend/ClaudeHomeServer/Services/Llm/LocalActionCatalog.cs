@@ -50,6 +50,7 @@ public static class LocalActionCatalog
     public const string TaskDedup = "task-dedup";
     public const string SkillSuggest = "skill-suggest";
     public const string SessionSummary = "session-summary";
+    public const string NotificationSummary = "notification-summary";
     public const string GitCommitMsg = "git-commit-msg";
     public const string GitStashName = "git-stash-name";
     public const string SkillTranslate = "skill-translate";
@@ -95,6 +96,7 @@ public static class LocalActionCatalog
         new(TaskDedup, "Поиск дублей задач", "Задачи", CheapProfile.Small, DefaultLocal: true),
         new(SkillSuggest, "Подбор навыка", "Навыки", CheapProfile.Small, DefaultLocal: true),
         new(SessionSummary, "Сводка сессии", "Сессии", CheapProfile.Large, DefaultLocal: true),
+        new(NotificationSummary, "Суть уведомления", "Уведомления", CheapProfile.Small, DefaultLocal: true),
         new(GitCommitMsg, "Commit-сообщения", "Git", CheapProfile.Text, DefaultLocal: true),
         new(GitStashName, "Названия стэшей", "Git", CheapProfile.Small, DefaultLocal: true),
         // Ниже — по умолчанию остаются на claude (лицо продукта / генерация артефактов),

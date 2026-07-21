@@ -12,14 +12,14 @@ import {
   markRead,
   markAllRead,
 } from '../../lib/notifications';
-import { KIND_META, formatTime, openNotificationUrl } from '../notifications/kindMeta';
+import { formatTime, openNotificationUrl } from '../notifications/kindMeta';
+import { NotificationAvatar } from '../notifications/NotificationAvatar';
 import { WidgetCard, WidgetAction, WidgetEmpty } from './WidgetCard';
 
 // Сколько непрочитанных показываем: виджет — сигнал «загляни», а не лента.
 const SHOWN = 3;
 
 function NotificationRow({ item, onOpen }: { item: NotificationItem; onOpen: () => void }) {
-  const meta = KIND_META[item.kind] ?? KIND_META.info;
   return (
     <button
       onClick={onOpen}
@@ -32,13 +32,13 @@ function NotificationRow({ item, onOpen }: { item: NotificationItem; onOpen: () 
       onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; }}
       onMouseLeave={e => { e.currentTarget.style.background = 'none'; }}
     >
-      <span style={{
-        width: 22, height: 22, borderRadius: 7, flexShrink: 0,
-        background: meta.bg, color: meta.color,
-        display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11,
-      }}>
-        {meta.icon}
-      </span>
+      <NotificationAvatar
+        personaId={item.personaId}
+        personaName={item.personaName}
+        personaColor={item.personaColor}
+        kind={item.kind}
+        size={22}
+      />
       <span style={{
         fontFamily: FONT.sans, fontSize: 13, color: C.textPrimary, flex: 1, minWidth: 0,
         whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',

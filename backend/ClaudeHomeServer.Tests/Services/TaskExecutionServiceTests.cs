@@ -59,9 +59,11 @@ public class TaskExecutionServiceTests
 
         var n = TaskExecutionService.BuildResultNotification(task, ok: true);
 
-        n.Title.Should().Be("Claude завершил работу над задачей");
+        // Title чистый (без вклейки исполнителя — персона идёт структурно через PersonaId)
+        n.Title.Should().Be("Завершил работу над задачей");
         n.Body.Should().Be("Задача");
-        n.Kind.Should().Be("claude");
+        n.Kind.Should().Be("success");
+        n.PersonaId.Should().BeNull();
         n.Url.Should().Be(TaskSchedulerService.TaskUrl(task));
     }
 
@@ -83,7 +85,8 @@ public class TaskExecutionServiceTests
 
         var n = TaskExecutionService.BuildResultNotification(task, ok: false);
 
-        n.Title.Should().Be("Claude не смог выполнить задачу");
+        n.Title.Should().Be("Не смог выполнить задачу");
+        n.Kind.Should().Be("claude");
     }
 
     [Fact]
@@ -93,9 +96,10 @@ public class TaskExecutionServiceTests
 
         var n = TaskExecutionService.BuildWaitingNotification(task);
 
-        n.Title.Should().Be("Claude ждёт ответа по задаче");
+        n.Title.Should().Be("Ждёт ответа по задаче");
         n.Body.Should().Be("Задача");
         n.Kind.Should().Be("claude");
+        n.ProjectId.Should().Be("p1");
         n.Url.Should().Be($"/project/p1/task/{task.Id}");
     }
 
@@ -166,26 +170,30 @@ public class TaskExecutionServiceTests
     }
 
     // ─── Уведомления от лица персоны ─────────────────────────────────────────
+    // Персона теперь передаётся структурно (PersonaId), а не вклеивается в заголовок:
+    // имя/роль/аватар денормализует NotificationService и показывает мета-строкой.
 
     [Fact]
-    public void BuildResultNotification_СПерсоной_ОтЕёЛица()
+    public void BuildResultNotification_СПерсоной_ПробрасываетPersonaId()
     {
         var task = new TaskItem { Title = "Задача", Status = TaskItemStatus.Done };
         var persona = new Persona { Name = "Вера", Role = "Планировщик" };
 
         var n = TaskExecutionService.BuildResultNotification(task, ok: true, persona);
 
-        n.Title.Should().Be("Планировщик (Вера) завершил работу над задачей");
+        n.Title.Should().Be("Завершил работу над задачей");   // без имени в тексте
+        n.PersonaId.Should().Be(persona.Id);
     }
 
     [Fact]
-    public void BuildWaitingNotification_СПерсоной_ОтЕёЛица()
+    public void BuildWaitingNotification_СПерсоной_ПробрасываетPersonaId()
     {
         var task = new TaskItem { Title = "Задача" };
-        var persona = new Persona { Name = "Вера" };   // без роли — просто имя
+        var persona = new Persona { Name = "Вера" };
 
         var n = TaskExecutionService.BuildWaitingNotification(task, persona);
 
-        n.Title.Should().Be("Вера ждёт ответа по задаче");
+        n.Title.Should().Be("Ждёт ответа по задаче");
+        n.PersonaId.Should().Be(persona.Id);
     }
 }

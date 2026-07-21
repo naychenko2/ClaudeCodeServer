@@ -15,6 +15,10 @@ public interface ICheapTextRunner
     // ownerId — владелец для среды исполнения claude-пути (Ollama ходит по HTTP независимо).
     Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
         string? ownerId = null, CancellationToken ct = default);
+
+    // Только локаль, БЕЗ фолбэка на платный claude. null — локаль выключена/недоступна/пусто.
+    // Для необязательных «украшений» (суть уведомления), где платный вызов нежелателен.
+    Task<string?> RunLocalOnlyAsync(string actionKey, string prompt, CancellationToken ct = default);
 }
 
 public sealed class CheapTextRunner(
@@ -38,5 +42,15 @@ public sealed class CheapTextRunner(
         }
 
         return await claude.RunAsync(prompt, claude.NormalizeModel(fallbackModel), ct: ct, ownerId: ownerId);
+    }
+
+    public async Task<string?> RunLocalOnlyAsync(string actionKey, string prompt, CancellationToken ct = default)
+    {
+        if (!router.UsesLocal(actionKey)) return null;
+        var spec = router.ProfileFor(actionKey);
+        var local = await ollama.GenerateTextAsync(
+            prompt, model: null, timeout: TimeSpan.FromMilliseconds(spec.TimeoutMs),
+            numPredict: spec.NumPredict, numCtx: spec.NumCtx, ct);
+        return string.IsNullOrWhiteSpace(local) ? null : local;
     }
 }

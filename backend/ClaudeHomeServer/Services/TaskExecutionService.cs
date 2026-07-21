@@ -93,10 +93,14 @@ public class TaskExecutionService
 
         if (auto)
             await NotifyAsync(updated, new NotificationMessage(
-                Title: persona is null ? "Claude взял задачу в работу" : $"{PersonaLabel(persona)} взял задачу в работу",
+                Title: "Взял задачу в работу",
                 Body: updated.Title,
                 Url: TaskSchedulerService.TaskUrl(updated),
-                Kind: "claude"));
+                Kind: "claude",
+                PersonaId: persona?.Id,
+                ProjectId: updated.ProjectId,
+                TaskId: updated.Id,
+                Tag: "Исполнитель"));
 
         _log.LogInformation("Claude-исполнитель запущен ({Trigger}): задача {TaskId} «{Title}», сессия {SessionId}",
             auto ? "автозапуск" : "вручную", updated.Id, updated.Title, session.Id);
@@ -295,26 +299,28 @@ public class TaskExecutionService
         var body = updated.Status == TaskItemStatus.Done
             ? updated.Title
             : $"{updated.Title} — проверь результат в чате";
-        var title = (ok, persona) switch
-        {
-            (true, null) => "Claude завершил работу над задачей",
-            (false, null) => "Claude не смог выполнить задачу",
-            (true, not null) => $"{PersonaLabel(persona)} завершил работу над задачей",
-            (false, not null) => $"{PersonaLabel(persona)} не смог выполнить задачу",
-        };
+        var title = ok ? "Завершил работу над задачей" : "Не смог выполнить задачу";
         return new NotificationMessage(
             Title: title,
             Body: body,
             Url: TaskSchedulerService.TaskUrl(updated),
-            Kind: "claude");
+            Kind: ok ? "success" : "claude",
+            PersonaId: persona?.Id,
+            ProjectId: updated.ProjectId,
+            TaskId: updated.Id,
+            Tag: "Исполнитель");
     }
 
     // Уведомление «ждёт ответа» (permission_request / AskUserQuestion)
     internal static NotificationMessage BuildWaitingNotification(TaskItem task, Persona? persona = null) => new(
-        Title: persona is null ? "Claude ждёт ответа по задаче" : $"{PersonaLabel(persona)} ждёт ответа по задаче",
+        Title: "Ждёт ответа по задаче",
         Body: task.Title,
         Url: TaskSchedulerService.TaskUrl(task),
-        Kind: "claude");
+        Kind: "claude",
+        PersonaId: persona?.Id,
+        ProjectId: task.ProjectId,
+        TaskId: task.Id,
+        Tag: "Исполнитель");
 
     // Задача, привязанная к сессии, по которой идёт незавершённый запуск исполнителя
     private TaskItem? FindTracked(string sessionId) =>

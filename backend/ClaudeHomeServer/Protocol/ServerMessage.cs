@@ -229,7 +229,11 @@ public record ProviderLimitMessage(string? ResetsAt, IReadOnlyList<ProviderFallb
 public record NotificationMessage(string Title, string Body, string? Url = null,
     string Kind = "info", string? NotificationId = null, string? Type = null,
     string? ProjectId = null, string? SessionId = null, string? TaskId = null,
-    string? Source = null, string? Tag = null)
+    string? Source = null, string? Tag = null,
+    // Атрибуция персоны (для аватара/лица в тосте, центре и web-push) и имя проекта.
+    // Денормализуются в NotificationService по PersonaId/ProjectId — отправители шлют id.
+    string? PersonaId = null, string? PersonaName = null, string? PersonaRole = null,
+    string? PersonaColor = null, bool PersonaHasAvatar = false, string? ProjectName = null)
     : ServerMessage("notification");
 
 // Манифест recall (F3): что персона подтянула в ход из памяти/заметок/базы/команды — для

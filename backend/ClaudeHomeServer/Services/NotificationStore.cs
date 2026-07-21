@@ -100,6 +100,12 @@ public class NotificationStore
             TaskId = req.TaskId,
             Source = req.Source,
             Tag = req.Tag,
+            PersonaId = req.PersonaId,
+            PersonaName = req.PersonaName,
+            PersonaRole = req.PersonaRole,
+            PersonaColor = req.PersonaColor,
+            PersonaHasAvatar = req.PersonaHasAvatar,
+            ProjectName = req.ProjectName,
         };
 
         var all = await GetAllAsync(userId);
@@ -292,6 +298,12 @@ public class NotificationStore
         TaskId = n.TaskId,
         Source = n.Source,
         Tag = n.Tag,
+        PersonaId = n.PersonaId,
+        PersonaName = n.PersonaName,
+        PersonaRole = n.PersonaRole,
+        PersonaColor = n.PersonaColor,
+        PersonaHasAvatar = n.PersonaHasAvatar,
+        ProjectName = n.ProjectName,
         IsRead = n.IsRead,
         CreatedAt = n.CreatedAt,
         ReadAt = n.ReadAt,

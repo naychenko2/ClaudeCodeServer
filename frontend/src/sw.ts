@@ -34,6 +34,8 @@ interface PushPayload {
   url?: string;
   kind?: string;
   tag?: string;
+  icon?: string;       // абсолютный URL аватара персоны (фото) с access_token; иначе лого
+  renotify?: boolean;  // повторно привлечь внимание при замене уведомления с тем же tag
 }
 
 self.addEventListener('push', e => {
@@ -42,13 +44,16 @@ self.addEventListener('push', e => {
   try { payload = e.data.json() as PushPayload; }
   catch { payload = { body: e.data.text() }; }
 
-  e.waitUntil(self.registration.showNotification(payload.title ?? 'AI Home', {
+  // renotify не описан в lib.dom NotificationOptions, но поддерживается браузерами
+  const options: NotificationOptions & { renotify?: boolean } = {
     body: payload.body ?? '',
     tag: payload.tag,           // одинаковый tag → уведомление заменяется, а не дублируется
-    icon: '/pwa-192x192.png',
+    renotify: payload.renotify, // при замене — снова просигналить (иначе тихо подменяется)
+    icon: payload.icon || '/pwa-192x192.png',   // фото персоны или лого приложения
     badge: '/pwa-64x64.png',
     data: { url: payload.url },
-  }));
+  };
+  e.waitUntil(self.registration.showNotification(payload.title ?? 'AI Home', options));
 });
 
 // Клик по уведомлению: фокусируем открытое окно приложения (с переходом по диплинку)

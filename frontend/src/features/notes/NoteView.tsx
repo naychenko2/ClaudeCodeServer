@@ -276,7 +276,11 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
             const { title } = await api.notes.suggestTitle(note.id);
             if (!title) { showToast('Заголовок', 'Не удалось придумать заголовок', 'info'); return; }
             const updated = await api.notes.update(note.id, { title });
-            setNote(updated);
+            bumpNotes();
+            // Переименование меняет id заметки (id = путь файла) — переключаемся на новый,
+            // иначе навигация останется на старом id и покажет «заметка не найдена».
+            if (updated.id !== note.id) onSelectNote(updated.id);
+            else setNote(updated);
             showToast('Заголовок обновлён', title, 'info');
           } catch { showToast('Ошибка', 'Не удалось придумать заголовок', 'info'); }
           finally { endAiBusy(); }

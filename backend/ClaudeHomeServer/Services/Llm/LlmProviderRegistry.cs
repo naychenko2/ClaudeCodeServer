@@ -69,16 +69,27 @@ public class LlmProviderRegistry
     // затем по префиксу (модели из GET /models, не описанные в конфиге).
     // null → Claude. Выключенные провайдеры тоже резолвятся — доступность
     // проверяется отдельно (IsAvailable), чтобы отличать «не Claude» от «не настроен».
+    // Среди префиксов выигрывает САМЫЙ ДЛИННЫЙ: id агрегатора («deepseek/deepseek-v4-pro»
+    // у OpenRouter) начинается с ключа прямого провайдера («deepseek») и без этого
+    // правила уходил бы к нему — на чужой эндпоинт с чужим ключом.
     public LlmProviderConfig? ResolveByModel(string? model)
     {
         if (string.IsNullOrWhiteSpace(model)) return null;
         foreach (var p in _providers.Values)
             if (p.FindModel(model) is not null)
                 return p;
+
+        LlmProviderConfig? best = null;
+        var bestLen = 0;
         foreach (var p in _providers.Values)
-            if (model.StartsWith(p.EffectiveModelPrefix, StringComparison.OrdinalIgnoreCase))
-                return p;
-        return null;
+            foreach (var prefix in p.EffectiveModelPrefixes)
+                if (prefix.Length > bestLen
+                    && model.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    best = p;
+                    bestLen = prefix.Length;
+                }
+        return best;
     }
 
     // Wire-токен провайдера модели ("claude" | key) — для guard смены провайдера и фронта

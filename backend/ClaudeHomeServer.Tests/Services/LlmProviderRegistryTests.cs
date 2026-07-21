@@ -67,6 +67,26 @@ public class LlmProviderRegistryTests
         Create().ResolveByModel("deepseek-v5-super")!.Key.Should().Be("deepseek");
     }
 
+    // Агрегатор (OpenRouter) несёт id вида "deepseek/…", начинающиеся с ключа прямого
+    // провайдера. Побеждать должен САМЫЙ ДЛИННЫЙ префикс, иначе ход уехал бы к DeepSeek —
+    // на его эндпоинт с его ключом, но с несуществующей там моделью
+    [Theory]
+    [InlineData("deepseek/deepseek-v9-unknown", "openrouter")]
+    [InlineData("openai/gpt-9", "openrouter")]
+    [InlineData("deepseek-v5-super", "deepseek")]
+    public void ResolveByModel_ПрефиксАгрегатора_ПобеждаетДлиннейший(string model, string expected)
+    {
+        var registry = Create(new Dictionary<string, string?>
+        {
+            ["LlmProviders:openrouter:DisplayName"] = "OpenRouter",
+            ["LlmProviders:openrouter:AnthropicBaseUrl"] = "https://openrouter.ai/api",
+            ["LlmProviders:openrouter:ApiKey"] = "sk-or-test",
+            ["LlmProviders:openrouter:ModelPrefixes:0"] = "deepseek/",
+            ["LlmProviders:openrouter:ModelPrefixes:1"] = "openai/",
+        });
+        registry.ResolveByModel(model)!.Key.Should().Be(expected);
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]

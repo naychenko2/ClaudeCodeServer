@@ -122,6 +122,10 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.OneShotClaudeRunner>
 // AI-хаб: локальное ранжирование действий через Ollama (бесплатно, мимо claude CLI)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.OllamaClient>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.OllamaActionRankService>();
+// Бесплатные модели OpenRouter: отбор из /models (агентские / любые free) + прямой HTTP-адаптер
+// для фоновых one-shot задач (второй транспорт рядом с провайдером через claude CLI)
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.OpenRouterCatalogService>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.CloudCheapClient>();
 // Интерфейс one-shot раннера → тот же singleton (мокируется в тестах)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.IOneShotRunner>(
     sp => sp.GetRequiredService<ClaudeHomeServer.Services.Llm.OneShotClaudeRunner>());

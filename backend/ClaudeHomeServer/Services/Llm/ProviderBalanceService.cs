@@ -9,9 +9,9 @@ public sealed record ProviderBalance(bool Available, string Currency, string Tot
 public sealed record ProviderBalanceSnapshot(DateTime Timestamp, double Balance, string Currency);
 
 // Состояние аккаунта CLI-провайдера. Источник задаётся конфигом провайдера (Balance):
-// "deepseek" — GET {ApiBaseUrl}/user/balance; "moonshot" — GET {ApiBaseUrl}/users/me/balance
-// (деньги); "glm" — GET {BalanceUrl} (квота подписки Coding Plan, остаток в % 5-часового
-// окна). Провайдер без источника —
+// "deepseek" — GET {ApiBaseUrl}/user/balance; "moonshot" — GET {ApiBaseUrl}/users/me/balance;
+// "openrouter" — GET {ApiBaseUrl}/credits (деньги); "glm" — GET {BalanceUrl} (квота подписки
+// Coding Plan, остаток в % 5-часового окна). Провайдер без источника —
 // баланс недоступен (UI скрывает блок). Кэш 5 мин; каждое успешное обновление пишет
 // снапшот в data/provider-usage-{key}.json (история для графика).
 public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderRegistry providers,
@@ -57,6 +57,7 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
             {
                 "deepseek" => await FetchDeepSeekAsync(p, ct),
                 "moonshot" => await FetchMoonshotAsync(p, ct),
+                "openrouter" => await FetchOpenRouterAsync(p, ct),
                 "glm" => await FetchGlmAsync(p, ct),
                 _ => null,
             };
@@ -135,6 +136,49 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
             Console.Error.WriteLine($"[ProviderBalance] Не удалось получить баланс {p.Key}: {ex.Message}");
             return null;
         }
+    }
+
+    // Формат OpenRouter: { data: { total_credits, total_usage } } — GET {ApiBaseUrl}/credits.
+    // Остатка отдельным полем нет: он равен разнице (сколько зачислено минус потрачено).
+    // Кредиты и расход — в USD.
+    private async Task<ProviderBalance?> FetchOpenRouterAsync(LlmProviderConfig p, CancellationToken ct)
+    {
+        try
+        {
+            var client = httpFactory.CreateClient("llm-provider");
+            using var req = new HttpRequestMessage(HttpMethod.Get, $"{p.ApiBaseUrl.TrimEnd('/')}/credits");
+            req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", p.ApiKey);
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(10));
+            using var resp = await client.SendAsync(req, timeoutCts.Token);
+            resp.EnsureSuccessStatusCode();
+
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(timeoutCts.Token));
+            if (!doc.RootElement.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Object)
+                return null;
+            var credits = ReadNumber(data, "total_credits");
+            var used = ReadNumber(data, "total_usage");
+            if (double.IsNaN(credits) || double.IsNaN(used)) return null;
+
+            var remaining = credits - used;
+            return new ProviderBalance(remaining > 0, "USD",
+                remaining.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture));
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[ProviderBalance] Не удалось получить баланс {p.Key}: {ex.Message}");
+            return null;
+        }
+    }
+
+    // Число из JSON, приходящее как number или как строка; NaN — поля нет либо не разобрать
+    private static double ReadNumber(JsonElement obj, string name)
+    {
+        if (!obj.TryGetProperty(name, out var el)) return double.NaN;
+        if (el.ValueKind == JsonValueKind.Number) return el.GetDouble();
+        return double.TryParse(el.GetString(), System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : double.NaN;
     }
 
     // Формат GLM (z.ai Coding Plan, недокументированный монитор):

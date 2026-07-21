@@ -20,9 +20,9 @@ public class LlmProviderConfig
     // Модель для haiku-слота и субагентов (ANTHROPIC_DEFAULT_HAIKU_MODEL,
     // CLAUDE_CODE_SUBAGENT_MODEL); пусто — берётся модель сессии
     public string SmallModel { get; set; } = "";
-    // Источник состояния аккаунта: "deepseek" (GET /user/balance) или "moonshot"
-    // (GET /users/me/balance) — деньги; "glm" (GET BalanceUrl) — квота подписки
-    // Coding Plan в процентах; пусто — нет
+    // Источник состояния аккаунта: "deepseek" (GET /user/balance), "moonshot"
+    // (GET /users/me/balance) или "openrouter" (GET /credits) — деньги; "glm"
+    // (GET BalanceUrl) — квота подписки Coding Plan в процентах; пусто — нет
     public string Balance { get; set; } = "";
     // Явный URL эндпоинта баланса/квоты — когда он не выводится из ApiBaseUrl
     // (у GLM монитор живёт вне /paas/v4). Пусто — URL строит сам обработчик источника
@@ -30,6 +30,10 @@ public class LlmProviderConfig
     // Префикс id моделей провайдера — по нему резолвится провайдер для моделей
     // не из конфига (напр. пришедших из GET /models); пусто — используется Key
     public string ModelPrefix { get; set; } = "";
+    // Несколько префиксов — для агрегаторов, где id несут имя первоисточника
+    // ("anthropic/…", "openai/…", "z-ai/…" у OpenRouter) и общего префикса нет.
+    // Задан — полностью заменяет ModelPrefix/Key при резолве по префиксу
+    public List<string> ModelPrefixes { get; set; } = [];
     // Опрашивать ли GET {ApiBaseUrl}/models для пополнения каталога
     public bool QueryModelsApi { get; set; }
     public bool SupportsImages { get; set; } = true;
@@ -41,6 +45,12 @@ public class LlmProviderConfig
         !string.IsNullOrWhiteSpace(ApiKey) && !string.IsNullOrWhiteSpace(AnthropicBaseUrl);
 
     public string EffectiveModelPrefix => string.IsNullOrWhiteSpace(ModelPrefix) ? Key : ModelPrefix;
+
+    // Все префиксы для резолва по id модели (см. ModelPrefixes). Пустые строки
+    // отбрасываем: такой «префикс» подошёл бы любой модели и увёл бы чужие ходы сюда
+    public IReadOnlyList<string> EffectiveModelPrefixes =>
+        ModelPrefixes.Where(p => !string.IsNullOrWhiteSpace(p)).ToList() is { Count: > 0 } list
+            ? list : [EffectiveModelPrefix];
 
     public LlmModelConfig? FindModel(string? id) =>
         id is null ? null : Models.FirstOrDefault(m => string.Equals(m.Id, id, StringComparison.OrdinalIgnoreCase));

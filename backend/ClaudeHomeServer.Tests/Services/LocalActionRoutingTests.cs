@@ -19,6 +19,12 @@ public class LocalActionRoutingTests
     private static OllamaClient Ollama(IConfiguration config) =>
         new(new NullHttpFactory(), config, NullLogger<OllamaClient>.Instance);
 
+    // Прямой HTTP-адаптер. Без настроенного провайдера openrouter в конфиге он Enabled=false —
+    // ровно как в тестах цепочки (шаг адаптера «не сработал», управление уходит дальше).
+    private static CloudCheapClient Cloud(IConfiguration config) =>
+        new(new NullHttpFactory(), config, new LlmProviderRegistry(config),
+            NullLogger<CloudCheapClient>.Instance);
+
     // Стор оверрайдов пишет файл рядом с DataPath — в тестах уводим его во временную папку,
     // чтобы прогоны не делили состояние между собой и с рабочей data/.
     private static IConfiguration ConfigWithTempData(Dictionary<string, string?> d)
@@ -244,7 +250,7 @@ public class LocalActionRoutingTests
         var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });
         var router = new LocalActionRouter(Ollama(config), Store(config), config,
             NullLogger<LocalActionRouter>.Instance);
-        var runner = new CheapTextRunner(router, Ollama(config), new FakeOneShot(),
+        var runner = new CheapTextRunner(router, Ollama(config), Cloud(config), new FakeOneShot(),
             NullLogger<CheapTextRunner>.Instance);
 
         var result = await runner.RunAsync(LocalActionCatalog.NotesTags, "prompt-text", "haiku");
@@ -264,7 +270,7 @@ public class LocalActionRoutingTests
         store.Set(LocalActionCatalog.NotesTags, "deepseek-chat");
         var router = new LocalActionRouter(Ollama(config), store, config, NullLogger<LocalActionRouter>.Instance);
         var claude = new FakeOneShot();
-        var runner = new CheapTextRunner(router, Ollama(config), claude, NullLogger<CheapTextRunner>.Instance);
+        var runner = new CheapTextRunner(router, Ollama(config), Cloud(config), claude, NullLogger<CheapTextRunner>.Instance);
 
         var result = await runner.RunAsync(LocalActionCatalog.NotesTags, "prompt-text", "haiku");
 
@@ -280,7 +286,7 @@ public class LocalActionRoutingTests
         store.Set(LocalActionCatalog.NotesTags, "deepseek-chat");
         var router = new LocalActionRouter(Ollama(config), store, config, NullLogger<LocalActionRouter>.Instance);
         var claude = new FakeOneShot(failModel: "deepseek-chat");
-        var runner = new CheapTextRunner(router, Ollama(config), claude, NullLogger<CheapTextRunner>.Instance);
+        var runner = new CheapTextRunner(router, Ollama(config), Cloud(config), claude, NullLogger<CheapTextRunner>.Instance);
 
         var result = await runner.RunAsync(LocalActionCatalog.NotesTags, "prompt-text", "haiku");
 
@@ -297,7 +303,7 @@ public class LocalActionRoutingTests
         store.Set(LocalActionCatalog.NotesTags, "glm-4");
         var router = new LocalActionRouter(Ollama(config), store, config, NullLogger<LocalActionRouter>.Instance);
         var claude = new FakeOneShot(emptyModel: "glm-4");
-        var runner = new CheapTextRunner(router, Ollama(config), claude, NullLogger<CheapTextRunner>.Instance);
+        var runner = new CheapTextRunner(router, Ollama(config), Cloud(config), claude, NullLogger<CheapTextRunner>.Instance);
 
         var result = await runner.RunAsync(LocalActionCatalog.NotesTags, "prompt-text", "haiku");
         Assert.Equal("CLAUDE[haiku]:prompt-text", result);
@@ -311,11 +317,43 @@ public class LocalActionRoutingTests
         var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });
         var router = new LocalActionRouter(Ollama(config), Store(config), config,
             NullLogger<LocalActionRouter>.Instance);
-        var runner = new CheapTextRunner(router, Ollama(config), new FakeOneShot(failModel: "haiku"),
+        var runner = new CheapTextRunner(router, Ollama(config), Cloud(config), new FakeOneShot(failModel: "haiku"),
             NullLogger<CheapTextRunner>.Instance);
 
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => runner.RunAsync(LocalActionCatalog.NotesTags, "prompt-text", "haiku"));
+    }
+
+    [Fact]
+    public async Task ПрямойМаршрут_БезАдаптера_УходитНаClaude()
+    {
+        // Маршрут с префиксом "direct:" — прямой HTTP-адаптер. Провайдер openrouter в тестовом
+        // конфиге не настроен → адаптер Enabled=false → шаг отдаёт null, цепочка идёт на claude.
+        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });
+        var store = Store(config);
+        store.Set(LocalActionCatalog.NotesTags, CloudCheapClient.RoutePrefix + "nvidia/nemotron:free");
+        var router = new LocalActionRouter(Ollama(config), store, config, NullLogger<LocalActionRouter>.Instance);
+        var claude = new FakeOneShot();
+        var runner = new CheapTextRunner(router, Ollama(config), Cloud(config), claude,
+            NullLogger<CheapTextRunner>.Instance);
+
+        var result = await runner.RunAsync(LocalActionCatalog.NotesTags, "prompt-text", "haiku");
+
+        // Маршрут распознан как Model (не local/claude), но адаптер выключен → фолбэк на claude
+        Assert.Equal(RouteKind.Model, router.Resolve(LocalActionCatalog.NotesTags).Kind);
+        Assert.Equal("CLAUDE[haiku]:prompt-text", result);
+        Assert.Equal(["haiku"], claude.Calls);  // выбранная модель шла через адаптер, не через claude CLI
+    }
+
+    [Theory]
+    [InlineData("direct:nvidia/nemotron:free", true)]
+    [InlineData("nvidia/nemotron:free", false)]
+    [InlineData("local", false)]
+    [InlineData("claude", false)]
+    public void IsDirectRoute_РаспознаётПрефикс(string route, bool expected)
+    {
+        Assert.Equal(expected, CloudCheapClient.IsDirectRoute(route));
+        if (expected) Assert.Equal("nvidia/nemotron:free", CloudCheapClient.StripPrefix(route));
     }
 
     [Fact]

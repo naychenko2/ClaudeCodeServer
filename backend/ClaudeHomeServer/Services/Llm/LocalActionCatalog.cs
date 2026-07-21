@@ -62,6 +62,7 @@ public static class LocalActionCatalog
     public const string PersonaBindingsSuggest = "persona-bindings-suggest";
     public const string PersonaQuickCreate = "persona-quick-create";
     public const string PersonaAiTeam = "persona-ai-team";
+    public const string Changelog = "changelog";
 
     // Дефолты профилей. Переопределяются Ollama:Profiles:{small|text|large}:{NumCtx|NumPredict|TimeoutMs}.
     public static readonly IReadOnlyDictionary<CheapProfile, CheapProfileSpec> ProfileDefaults =
@@ -116,6 +117,10 @@ public static class LocalActionCatalog
         new(DailyBriefing, "Утренний бриф", "Продукт", CheapProfile.Large, DefaultLocal: false),
         new(PersonaQuickCreate, "Черновик персоны по промпту", "Персоны", CheapProfile.Text, DefaultLocal: false),
         new(PersonaAiTeam, "Состав команды персон", "Персоны", CheapProfile.Large, DefaultLocal: false),
+        // Сводка «Что нового»: тяжелее прочих (много коммитов, до 12 пунктов JSON, свой большой
+        // таймаут Changelog:TimeoutMs) — потребитель передаёт timeout/maxTokens поверх профиля.
+        // Дефолт claude: на бесплатной модели показ стоимости отпадает (она 0), что корректно.
+        new(Changelog, "Сводка «Что нового»", "Продукт", CheapProfile.Large, DefaultLocal: false),
     ];
 
     private static readonly Dictionary<string, LocalAction> ByKey =

@@ -26,10 +26,19 @@ public interface ICheapTextRunner
     // Только локаль, БЕЗ фолбэка на платный claude. null — локаль выключена/недоступна/пусто.
     // Для необязательных «украшений» (суть уведомления), где платный вызов нежелателен.
     Task<string?> RunLocalOnlyAsync(string actionKey, string prompt, CancellationToken ct = default);
+
+    // То же, что RunAsync, но с расходом вызова (OneShotResult.Usage) — для действий, которым
+    // важна стоимость (сводка «Что нового»). На claude-пути usage приходит как раньше; на
+    // локали и прямом адаптере usage=null (бесплатно — стоимости нет, что для них корректно).
+    // timeout/maxTokens перекрывают профиль действия — для тяжёлых задач с собственными лимитами
+    // (changelog: свой большой таймаут, длинный JSON-ответ). null → значения из профиля.
+    Task<OneShotResult> RunDetailedAsync(string actionKey, string prompt, string? fallbackModel = null,
+        string? ownerId = null, TimeSpan? timeout = null, int? maxTokens = null,
+        CancellationToken ct = default);
 }
 
 public sealed class CheapTextRunner(
-    LocalActionRouter router, OllamaClient ollama, IOneShotRunner claude,
+    LocalActionRouter router, OllamaClient ollama, CloudCheapClient cloud, IOneShotRunner claude,
     ILogger<CheapTextRunner> log) : ICheapTextRunner
 {
     public bool UsesLocal(string actionKey) => router.UsesLocal(actionKey);
@@ -42,10 +51,14 @@ public sealed class CheapTextRunner(
     {
         var route = router.Resolve(actionKey);
 
-        // Шаг 1 — выбранная админом модель конкретного провайдера.
+        // Шаг 1 — выбранная админом модель. Два транспорта: префикс "direct:" → прямой
+        // HTTP-адаптер (быстро, для бесплатных моделей агрегатора), иначе → провайдер через
+        // claude CLI. Оба при неудаче отдают null и уходят дальше по цепочке.
         if (route.Kind == RouteKind.Model && !string.IsNullOrWhiteSpace(route.Model))
         {
-            var picked = await TryModelAsync(actionKey, route.Model!, prompt, ownerId, ct);
+            var picked = CloudCheapClient.IsDirectRoute(route.Model)
+                ? await TryDirectAsync(actionKey, route.Model!, prompt, ct)
+                : await TryModelAsync(actionKey, route.Model!, prompt, ownerId, ct);
             if (picked is not null) return picked;
         }
 
@@ -83,6 +96,27 @@ public sealed class CheapTextRunner(
         return null;
     }
 
+    // Прямой HTTP-адаптер (CloudCheapClient) на бесплатной модели агрегатора. maxTokens и
+    // timeout — из профиля действия. null — 429/ошибка/пусто/адаптер не настроен → дальше по цепочке.
+    private async Task<string?> TryDirectAsync(string actionKey, string route, string prompt, CancellationToken ct)
+    {
+        var model = CloudCheapClient.StripPrefix(route);
+        var spec = router.ProfileFor(actionKey);
+        try
+        {
+            var text = await cloud.GenerateTextAsync(
+                model, prompt, TimeSpan.FromMilliseconds(spec.TimeoutMs), spec.NumPredict, ct);
+            if (!string.IsNullOrWhiteSpace(text)) return text;
+            log.LogDebug("cheap-runner: действие {Action} — прямой вызов {Model} пуст/недоступен", actionKey, model);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            log.LogWarning(ex, "cheap-runner: действие {Action} — прямой вызов {Model} упал, дальше по цепочке",
+                actionKey, model);
+        }
+        return null;
+    }
+
     private Task<string?> RunLocalAsync(string actionKey, string prompt, object? jsonFormat, CancellationToken ct)
     {
         var spec = router.ProfileFor(actionKey);
@@ -104,5 +138,69 @@ public sealed class CheapTextRunner(
             prompt, model: null, timeout: TimeSpan.FromMilliseconds(spec.TimeoutMs),
             numPredict: spec.NumPredict, numCtx: spec.NumCtx, ct);
         return string.IsNullOrWhiteSpace(local) ? null : local;
+    }
+
+    // Та же цепочка «выбранное → локаль → claude», но с расходом. Текст локали/адаптера
+    // оборачивается в OneShotResult без usage (бесплатно — стоимости нет); у claude/провайдера
+    // usage приходит из RunDetailedAsync. Последний шаг без страховки — как в RunAsync.
+    public async Task<OneShotResult> RunDetailedAsync(string actionKey, string prompt,
+        string? fallbackModel = null, string? ownerId = null, TimeSpan? timeout = null,
+        int? maxTokens = null, CancellationToken ct = default)
+    {
+        var route = router.Resolve(actionKey);
+        var spec = router.ProfileFor(actionKey);
+        var effTimeout = timeout ?? TimeSpan.FromMilliseconds(spec.TimeoutMs);
+        var effMaxTokens = maxTokens ?? spec.NumPredict;
+
+        // Шаг 1 — выбранная модель. Direct → прямой адаптер (usage нет), иначе провайдер через
+        // claude CLI (usage есть).
+        if (route.Kind == RouteKind.Model && !string.IsNullOrWhiteSpace(route.Model))
+        {
+            if (CloudCheapClient.IsDirectRoute(route.Model))
+            {
+                var model = CloudCheapClient.StripPrefix(route.Model!);
+                try
+                {
+                    var text = await cloud.GenerateTextAsync(model, prompt, effTimeout, effMaxTokens, ct);
+                    if (!string.IsNullOrWhiteSpace(text)) return new OneShotResult(text, null, 0);
+                }
+                catch (Exception ex) when (!ct.IsCancellationRequested)
+                {
+                    log.LogWarning(ex, "cheap-runner (detailed): {Action} — прямой вызов {Model} упал", actionKey, model);
+                }
+            }
+            else
+            {
+                var picked = await TryDetailedModelAsync(actionKey, route.Model!, prompt, ownerId, effTimeout, ct);
+                if (picked is not null) return picked;
+            }
+        }
+
+        // Шаг 2 — локальная модель (usage нет).
+        if ((route.Kind is RouteKind.Local or RouteKind.Model) && ollama.Enabled)
+        {
+            var local = await RunLocalAsync(actionKey, prompt, jsonFormat: null, ct);
+            if (!string.IsNullOrWhiteSpace(local)) return new OneShotResult(local, null, 0);
+        }
+
+        // Шаг 3 — claude с моделью действия по умолчанию (usage есть).
+        return await claude.RunDetailedAsync(prompt, claude.NormalizeModel(fallbackModel), effTimeout, ct, ownerId);
+    }
+
+    // Выбранная провайдерская модель через claude CLI, с расходом. null — шаг не удался.
+    private async Task<OneShotResult?> TryDetailedModelAsync(string actionKey, string model, string prompt,
+        string? ownerId, TimeSpan timeout, CancellationToken ct)
+    {
+        try
+        {
+            var run = await claude.RunDetailedAsync(prompt, model, timeout, ct, ownerId);
+            if (!string.IsNullOrWhiteSpace(run.Text)) return run;
+            log.LogDebug("cheap-runner (detailed): {Action} — модель {Model} вернула пустой ответ", actionKey, model);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            log.LogWarning(ex, "cheap-runner (detailed): {Action} — модель {Model} недоступна", actionKey, model);
+        }
+        return null;
     }
 }

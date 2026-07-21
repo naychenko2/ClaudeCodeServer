@@ -52,6 +52,15 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
   const online = useOnline();
   // Перетаскиваемая ширина сайдбара связей (справа: тянем влево — растёт)
   const [connWidth, connDragging, startConnDrag] = usePanelWidth('cc_notes_conn_width', 280, 230, 460, true);
+  // Правый сайдбар: вкладки «Комментарии» / «Связи». При наличии комментариев активна «Комментарии».
+  const [sideTab, setSideTab] = useState<'comments' | 'connections'>('connections');
+  const [commentTotal, setCommentTotal] = useState(0);
+  const [panelEl, setPanelEl] = useState<HTMLElement | null>(null);   // контейнер вкладки комментариев (портал панели)
+  const autoTabRef = useRef(false);
+  useEffect(() => {
+    if (commentTotal > 0 && !autoTabRef.current) { setSideTab('comments'); autoTabRef.current = true; }
+  }, [commentTotal]);
+  useEffect(() => { autoTabRef.current = false; setSideTab('connections'); setCommentTotal(0); }, [noteId]);
   const [note, setNote] = useState<NoteDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
@@ -678,7 +687,10 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
               docPath={note.source === 'personal' ? note.path : 'notes/' + note.path}
               content={note.content}
               isMobile={isMobile}
-              panelBelow
+              panelBelow={isMobile || connectionsBelow}
+              panelTarget={!isMobile && !connectionsBelow ? panelEl : null}
+              deferPanel={!isMobile && !connectionsBelow}
+              onCounts={total => setCommentTotal(total)}
               viewer={{ onWikilink, existingTitles, resolveNote, embedSource: note.source }}
             />
           )}
@@ -702,12 +714,38 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
         <>
           <Splitter active={connDragging} onMouseDown={startConnDrag} />
           <aside style={{
-            width: connWidth, flex: 'none', overflowY: 'auto',
-            padding: '12px 14px 24px', boxSizing: 'border-box',
+            width: connWidth, flex: 'none', display: 'flex', flexDirection: 'column',
+            overflow: 'hidden', boxSizing: 'border-box',
           }}>
-            <NoteTasksSection noteId={note.id} version={version} />
-            <NoteConnections note={note} onOpenNote={id => onSelectNote(id)}
-              onWikilink={onWikilink} onLinkMention={linkMention} />
+            {/* Вкладки показываем только когда у документа есть комментарии — иначе просто связи */}
+            {commentTotal > 0 && (
+              <div style={{ display: 'flex', gap: 2, padding: '8px 12px 0', flexShrink: 0, borderBottom: `1px solid ${C.borderLight}` }}>
+                {(['comments', 'connections'] as const).map(t => (
+                  <button key={t} onClick={() => setSideTab(t)} style={{
+                    flex: 1, padding: '6px 8px', border: 'none', background: 'none', cursor: 'pointer',
+                    fontFamily: FONT.sans, fontSize: 12.5, fontWeight: sideTab === t ? 700 : 500,
+                    color: sideTab === t ? C.textHeading : C.textMuted,
+                    borderBottom: `2px solid ${sideTab === t ? C.accent : 'transparent'}`, marginBottom: -1,
+                  }}>
+                    {t === 'comments' ? `Комментарии${commentTotal ? ` · ${commentTotal}` : ''}` : 'Связи'}
+                  </button>
+                ))}
+              </div>
+            )}
+            {/* Вкладка «Комментарии» — контейнер для портала панели (всегда в DOM, скрыт вне активной вкладки) */}
+            <div ref={setPanelEl} style={{
+              display: commentTotal > 0 && sideTab === 'comments' ? 'block' : 'none',
+              flex: 1, overflowY: 'auto', padding: '12px 14px 24px',
+            }} />
+            {/* Вкладка «Связи» — задачи + backlinks/упоминания/граф */}
+            <div style={{
+              display: commentTotal > 0 && sideTab === 'comments' ? 'none' : 'block',
+              flex: 1, overflowY: 'auto', padding: '12px 14px 24px',
+            }}>
+              <NoteTasksSection noteId={note.id} version={version} />
+              <NoteConnections note={note} onOpenNote={id => onSelectNote(id)}
+                onWikilink={onWikilink} onLinkMention={linkMention} />
+            </div>
           </aside>
         </>
       )}

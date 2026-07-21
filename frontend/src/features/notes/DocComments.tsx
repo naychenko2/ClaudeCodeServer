@@ -72,11 +72,17 @@ interface Props {
   };
   // Счётчики комментариев наверх (чип в тулбаре файла)
   onCounts?: (total: number, open: number) => void;
+  // Если задан — панель комментариев рендерится (порталится) в этот контейнер, а не снизу/сбоку.
+  // NoteView так кладёт панель во вкладку своего правого сайдбара рядом со связями/графом.
+  panelTarget?: HTMLElement | null;
+  // Панель предназначена для внешнего контейнера (panelTarget). Пока контейнер не готов
+  // (первый рендер, ref ещё не назначен) — не рисуем собственную панель, чтобы не мелькала.
+  deferPanel?: boolean;
 }
 
 const HINT_KEY = 'cc_doc_comments_hint';
 
-export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelBelow, viewer, onCounts }: Props) {
+export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelBelow, viewer, onCounts, panelTarget, deferPanel }: Props) {
   const enabled = useFeature(FLAGS.docAnnotations);
   const docRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -527,7 +533,11 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
     </div>
   );
 
-  const below = isMobile || panelBelow;
+  // panelTarget (NoteView-сайдбар) старше below: панель уходит в переданный контейнер порталом.
+  const useTarget = !!panelTarget;
+  // Внешний контейнер ожидается, но ещё не готов — панель временно не рисуем нигде
+  const defer = !!deferPanel && !panelTarget;
+  const below = !useTarget && !defer && (isMobile || panelBelow);
   return (
     <div style={{ display: 'flex', alignItems: 'flex-start', gap: 18 }}>
       <div ref={docRef} onMouseUp={onMouseUp} onTouchEnd={onMouseUp} style={{ flex: 1, minWidth: 0 }}>
@@ -555,7 +565,9 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
           <div style={{ marginTop: 20, borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>{panel}</div>
         )}
       </div>
-      {!below && panel && (
+      {/* Панель в контейнере NoteView (вкладка сайдбара) — через портал */}
+      {useTarget && panel && createPortal(panel, panelTarget!)}
+      {!useTarget && !below && !defer && panel && (
         <aside style={{
           width: 290, flex: 'none', position: 'sticky', top: 0,
           maxHeight: 'calc(100vh - 160px)', overflowY: 'auto',

@@ -4,6 +4,7 @@ import type { Persona, Session } from '../types';
 import { C, R, FONT, SHADOW, Z } from '../lib/design';
 import { personaLabel } from '../lib/personas';
 import { PersonaAvatar } from '../features/personas/PersonaAvatar';
+import { ALL_ORIGINS } from '../lib/chatFilters';
 
 // === Компактный триггер фильтрации списка чатов ===
 // Одна едва заметная ссылка/иконка — при нажатии открывается поповер с настройками.
@@ -19,7 +20,7 @@ const ORIGIN_OPTIONS: { value: ChatOriginFilter; label: string }[] = [
 const ORIGIN_HIDDEN_LABEL: Record<ChatOriginFilter, string> = {
   manual: 'обычных', task: 'задач', automation: 'автоматизации',
 };
-const ALL_ORIGINS = new Set<ChatOriginFilter>(['manual', 'task', 'automation']);
+const ALL_ORIGINS_SET = new Set<ChatOriginFilter>(ALL_ORIGINS);
 
 interface FilterBarProps {
   visibleOrigins: Set<ChatOriginFilter>;
@@ -227,7 +228,7 @@ export function FilterBar({
               </div>
               {hiddenOrigins.length > 0 && (
                 <button
-                  onClick={() => onChangeVisibleOrigins(new Set(ALL_ORIGINS))}
+                  onClick={() => onChangeVisibleOrigins(new Set(ALL_ORIGINS_SET))}
                   style={{
                     border: 'none', background: 'none', padding: 0, cursor: 'pointer',
                     fontFamily: FONT.sans, fontSize: 11, color: C.accent, fontWeight: 600,

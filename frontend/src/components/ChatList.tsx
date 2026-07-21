@@ -14,7 +14,8 @@ import { PersonaAvatar } from '../features/personas/PersonaAvatar';
 import { agentDotColor } from './AgentSelector';
 import { FilterBar } from './FilterBar';
 import { ChatOriginBadge } from './ChatOriginBadge';
-import { resolveChatOrigin, loadVisibleOrigins, persistVisibleOrigins } from '../lib/chatOrigin';
+import { resolveChatOrigin } from '../lib/chatOrigin';
+import { useChatFilters, useSanitizePersonaFilter } from '../lib/chatFilters';
 import { TeamMechanicBadge } from '../features/team/TeamMechanicBadge';
 import { teamTurnPreview } from '../features/team/teamMechanics';
 import { getLastMechanic, useLastMechanicVersion } from '../lib/lastMechanic';
@@ -53,22 +54,21 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
 
   // === Фильтры списка чатов ===
-  // Тип чата — персистится в localStorage отдельно от проектных списков (scope 'global')
-  const [visibleOrigins, setVisibleOriginsState] = useState<Set<Session['origin']>>(() => loadVisibleOrigins('global'));
-  const setVisibleOrigins = (v: Set<Session['origin']>) => { setVisibleOriginsState(v); persistVisibleOrigins('global', v); };
-  const [activeOnly, setActiveOnly] = useState(false);
-  const [filterPersonaId, setFilterPersonaId] = useState<string | null>(null);
+  // Персистятся в localStorage отдельно от проектных списков (scope 'global')
+  const { filters, patch } = useChatFilters('global');
+  const visibleOrigins = new Set(filters.origins);
 
   const personas = usePersonas();
 
   // Персоны в списке (для селектора фильтра)
   const personaIdsInList = [...new Set(chats.filter(c => c.personaId).map(c => c.personaId!))];
+  useSanitizePersonaFilter(filters, patch, personaIdsInList, chats.length > 0);
 
   // Применение фильтров
   const filteredChats = chats.filter(c => {
     if (!visibleOrigins.has(c.origin)) return false;
-    if (activeOnly && Date.now() - new Date(c.updatedAt).getTime() > 5 * 60 * 1000) return false;
-    if (filterPersonaId && c.personaId !== filterPersonaId) return false;
+    if (filters.activeOnly && Date.now() - new Date(c.updatedAt).getTime() > 5 * 60 * 1000) return false;
+    if (filters.personaId && c.personaId !== filters.personaId) return false;
     return true;
   });
   const hiddenCount = chats.length - filteredChats.length;
@@ -110,11 +110,11 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
       {/* Строка фильтров */}
       <FilterBar
         visibleOrigins={visibleOrigins}
-        onChangeVisibleOrigins={setVisibleOrigins}
-        activeOnly={activeOnly}
-        onChangeActiveOnly={setActiveOnly}
-        filterPersonaId={filterPersonaId}
-        onChangeFilterPersona={setFilterPersonaId}
+        onChangeVisibleOrigins={v => patch({ origins: [...v] })}
+        activeOnly={filters.activeOnly}
+        onChangeActiveOnly={v => patch({ activeOnly: v })}
+        filterPersonaId={filters.personaId}
+        onChangeFilterPersona={id => patch({ personaId: id })}
         personaIdsInList={personaIdsInList}
         allPersonas={personas}
         hiddenCount={hiddenCount}

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { Session } from '../types';
 import { api } from '../lib/api';
-import { useModels, useModelCaps, modelProvider } from '../lib/models';
+import { useModels, useModelCaps, modelProvider, providerLabel } from '../lib/models';
 import { effortsForProvider } from '../lib/effort';
 import { C, FONT, MODAL_W } from '../lib/design';
 import { Modal, ModalActions, Field, TextField, SegmentedControl, Toggle } from './ui';
@@ -34,22 +34,37 @@ export function EditSessionDialog({ session, onSaved, onClose }: Props) {
   const [error, setError] = useState<string | null>(null);
   // Поле effort скрываем, если провайдер модели его не поддерживает
   const caps = useModelCaps(model);
+  // Выбрана модель другого провайдера, чем у чата: смена провайдера у начатого
+  // чата упирается в guard (нельзя менять эндпоинт), поэтому её проводим не через
+  // update, а через миграцию — перенос транскрипта на нового провайдера (тот же
+  // механизм, что кнопка «Продолжить на …» при лимите). Контекст сохраняется.
+  const newProvider = modelProvider(model);
+  const crossProvider = !!model && newProvider !== modelProvider(session.model);
 
   const handleSave = async () => {
     setLoading(true);
     setError(null);
     try {
-      const data = {
+      const rest = {
         name: name.trim() || null,
-        model: model || null,
         effort: effort || null,
         expiresAfterMinutes: temporary ? ttl : null,
       };
       // Проектная сессия обновляется через /projects/{id}/sessions,
       // чат вне проекта (нет projectId) — через /chats
-      const updated = session.projectId
-        ? await api.sessions.update(session.projectId, session.id, data)
-        : await api.chats.update(session.id, data);
+      const saveRest = (data: typeof rest & { model?: string | null }) => session.projectId
+        ? api.sessions.update(session.projectId, session.id, data)
+        : api.chats.update(session.id, data);
+
+      let updated: Session;
+      if (crossProvider) {
+        // Прочие поля сохраняем без модели (иначе guard вернёт 400 «нельзя сменить
+        // провайдера»), затем переносим чат на нового провайдера через миграцию.
+        await saveRest(rest);
+        updated = await api.chats.migrateProvider(session.id, model);
+      } else {
+        updated = await saveRest({ ...rest, model: model || null });
+      }
       onSaved(updated);
       onClose();
     } catch (err) {
@@ -103,7 +118,12 @@ export function EditSessionDialog({ session, onSaved, onClose }: Props) {
             <TextField value={name} onChange={setName} placeholder="авто из первого сообщения" autoFocus onEnter={handleSave} />
           </Field>
 
-          <Field label="Модель" hint="Применится со следующего сообщения.">
+          <Field
+            label="Модель"
+            hint={crossProvider
+              ? `Чат переедет на «${providerLabel(newProvider)}» — контекст сохранится (перенос транскрипта).`
+              : 'Применится со следующего сообщения.'}
+          >
             <ModelPicker value={model} options={models} onChange={setModel} columns={2} />
           </Field>
 

@@ -21,6 +21,15 @@ public sealed class FileTriggerSource(AutomationRootResolver roots, ILogger<File
     // Cap защиты от огромных деревьев (снапшот не разрастается бесконечно)
     private const int MaxEntries = 20000;
 
+    // Здоровье корня per-rule (in-memory, singleton источник; тик однопоточный, но lock — на всякий).
+    // Нужно, чтобы недоступный корень (неверный резолв домашней папки / удалённая папка) был ВИДЕН
+    // в логах, но без спама на каждом 30-секундном тике: пишем только при смене доступности либо
+    // повторно не чаще RootWarnThrottleMinutes. Не персистится: после рестарта первый недоступ
+    // снова залогируется — это желаемо (свежая диагностика).
+    private const int RootWarnThrottleMinutes = 30;
+    private sealed class RootHealth { public bool Available; public DateTime LastWarnUtc; }
+    private readonly Dictionary<string, RootHealth> _rootHealth = new();
+
     public Task<IReadOnlyList<TriggerEvent>> EvaluateAsync(TriggerContext ctx, CancellationToken ct)
     {
         var args = TriggerArgs.Of(ctx.Rule.Trigger);
@@ -31,7 +40,9 @@ public sealed class FileTriggerSource(AutomationRootResolver roots, ILogger<File
         var watchChanged = kinds.Contains("changed", StringComparer.OrdinalIgnoreCase);
 
         var (root, label) = roots.Resolve(args, ctx.User);
-        if (root is null || !Directory.Exists(root))
+        var available = root is not null && Directory.Exists(root);
+        NoteRootHealth(ctx, root, available);
+        if (root is null || !available)
             return Task.FromResult<IReadOnlyList<TriggerEvent>>(Array.Empty<TriggerEvent>());
 
         var cur = BuildSnapshot(root, glob);
@@ -67,6 +78,42 @@ public sealed class FileTriggerSource(AutomationRootResolver roots, ILogger<File
         {
             new TriggerEvent(ctx.Rule.Id, AutomationTriggerType.File, summary, details),
         });
+    }
+
+    // Диагностика доступности корня. Undetected-инцидент (folder-правило месяцами молчало из-за
+    // неверного резолва домашней папки) был не виден в логах — тут делаем состояние наблюдаемым.
+    // Троттлинг: warning при переходе «доступен → недоступен» либо повторно раз в N минут; при
+    // восстановлении — info. Первый контакт считаем «был доступен», чтобы недоступ на старте залогировался.
+    private void NoteRootHealth(TriggerContext ctx, string? root, bool available)
+    {
+        var ruleId = ctx.Rule.Id;
+        lock (_rootHealth)
+        {
+            if (!_rootHealth.TryGetValue(ruleId, out var h))
+                _rootHealth[ruleId] = h = new RootHealth { Available = true };
+
+            if (!available)
+            {
+                var reWarnDue = ctx.NowUtc - h.LastWarnUtc >= TimeSpan.FromMinutes(RootWarnThrottleMinutes);
+                if (h.Available || reWarnDue)
+                {
+                    log.LogWarning(
+                        "File-триггер правила {Rule} («{RuleName}»): {RootState} — папка не существует, правило не сработает",
+                        ruleId, ctx.Rule.Name,
+                        root is null ? "корень не резолвится (root=null)" : $"корень «{root}»");
+                    h.LastWarnUtc = ctx.NowUtc;
+                }
+                h.Available = false;
+            }
+            else
+            {
+                if (!h.Available)
+                    log.LogInformation(
+                        "File-триггер правила {Rule} («{RuleName}»): корень «{Root}» снова доступен — правило активно",
+                        ruleId, ctx.Rule.Name, root);
+                h.Available = true;
+            }
+        }
     }
 
     private static void AddCapped(Dictionary<string, string> d, string key, List<string> items)

@@ -301,13 +301,14 @@ export function CalendarPage({ auth, onLogout, onHubTab, onOpenTask }: Props) {
         </div>
       </div>
 
-      {/* Мобила: FAB «+» */}
+      {/* Мобила: FAB «+». ЛЕВЫЙ нижний угол — правый занят глобальным AiLauncher (⌘/Ctrl+K),
+          иначе кнопки наложились бы (как и у PersonaEditFab). */}
       {isMobile && (
         <button
           onClick={() => setCreateDialog({})}
           title="Новая задача"
           style={{
-            position: 'fixed', right: 18, bottom: 'calc(20px + env(safe-area-inset-bottom))', zIndex: 20,
+            position: 'fixed', left: 18, bottom: 'calc(20px + env(safe-area-inset-bottom))', zIndex: 20,
             width: 54, height: 54, borderRadius: 18,
             background: C.accent, border: 'none', cursor: 'pointer',
             display: 'flex', alignItems: 'center', justifyContent: 'center',

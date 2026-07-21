@@ -1438,13 +1438,14 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
         )}
       </div>
 
-      {/* Плавающая кнопка редактирования на мобиле (MA4) */}
+      {/* Плавающая кнопка редактирования на мобиле (MA4). ЛЕВЫЙ нижний угол — правый занят
+          глобальным AiLauncher (⌘/Ctrl+K), чтобы кнопки не накладывались. */}
       {isMobile && online && !editing && tab === 'file' && fileContent && !fileContent.isBinary && !fileContent.isImage && !fileContent.isDocument && !fileContent.isVideo && !fileContent.isAudio && !isDrawio && !(isHtml && htmlTab === 'preview') && (
         <button
           onClick={() => { setEditing(true); setTab('file'); }}
           title="Редактировать"
           style={{
-            position: 'absolute', right: 18, bottom: 18, width: 52, height: 52, borderRadius: '50%',
+            position: 'absolute', left: 18, bottom: 18, width: 52, height: 52, borderRadius: '50%',
             border: 'none', background: C.accent, color: C.onAccent, cursor: 'pointer',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             boxShadow: SHADOW.fab, zIndex: 20,

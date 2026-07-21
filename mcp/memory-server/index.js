@@ -42,6 +42,8 @@ async function api(path, options = {}) {
 }
 
 const base = `/api/personas/${encodeURIComponent(PERSONA_ID)}/memory`;
+// Рабочий фокус — на уровне персоны (не под /memory): /api/personas/{id}/focus
+const focusPath = `/api/personas/${encodeURIComponent(PERSONA_ID)}/focus`;
 const teamBase = `/api/projects/${encodeURIComponent(PROJECT_ID)}/team-memory`;
 
 const TOOLS = [
@@ -285,13 +287,14 @@ async function callTool(name, args) {
       return { content: [{ type: 'text', text: `Заметка ${args.noteId} закреплена в долгой памяти.` }] };
 
     case 'memory_get_focus': {
-      const focus = await api(`${base}/focus`);
+      // Фокус живёт на уровне персоны (/api/personas/{id}/focus), НЕ под /memory
+      const focus = await api(focusPath);
       if (!focus) return { content: [{ type: 'text', text: 'Рабочий фокус не задан.' }] };
       return json(focus);
     }
 
     case 'memory_clear_focus':
-      await api(`${base}/focus`, { method: 'DELETE' });
+      await api(focusPath, { method: 'DELETE' });
       return { content: [{ type: 'text', text: 'Рабочий фокус сброшен.' }] };
 
     case 'team_memory_remember': {

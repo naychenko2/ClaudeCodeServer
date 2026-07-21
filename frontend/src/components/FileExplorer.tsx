@@ -25,6 +25,11 @@ import { IconNotes } from '../features/notes/shared';
 import { NewNoteDialog } from '../features/notes/NewNoteDialog';
 import { onFilesChanged } from '../lib/signalr';
 import { showToast } from '../lib/toast';
+import { beginAiBusy, endAiBusy } from '../lib/ai/busy';
+
+// Форматы, которые markitdown умеет превращать в Markdown (для пункта «Трансформировать в Markdown»)
+const MD_CONVERTIBLE = new Set(['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp', 'epub', 'csv', 'rtf', 'html', 'htm', 'msg']);
+const isMdConvertible = (name: string) => MD_CONVERTIBLE.has((name.split('.').pop() ?? '').toLowerCase());
 import { copyMarkdown } from '../lib/selectionScope';
 import { useGitState, ensureGit, gitInit, loadGitRemote } from '../lib/git';
 import { GitChangesPanel, GitHistoryPanel } from './GitPanel';
@@ -543,6 +548,23 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   // === Move modal state ===
   const [showMoveModal, setShowMoveModal] = useState(false);
   const [movingEntry, setMovingEntry] = useState<FileEntry | null>(null);
+
+  // === Трансформация в Markdown (markitdown) — выбор папки назначения ===
+  const [mdEntry, setMdEntry] = useState<FileEntry | null>(null);
+  const doTransformMd = async (entry: FileEntry, targetDir: string | null) => {
+    setMdEntry(null);
+    beginAiBusy();
+    try {
+      const r = await api.files.toMarkdown(project.id, entry.path, targetDir);
+      showToast('Трансформировано в Markdown', r.savedPath);
+      const [dir] = splitPath(r.savedPath);
+      await invalidateDir(dir);
+    } catch {
+      showToast('Ошибка', 'Не удалось трансформировать файл', 'info');
+    } finally {
+      endAiBusy();
+    }
+  };
 
   const loadDir = useCallback(async (path: string) => {
     if (inFlight.current.has(path)) return;
@@ -1818,6 +1840,48 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         );
       })()}
 
+      {/* === Трансформация в Markdown: выбор папки назначения === */}
+      {mdEntry && (() => {
+        const [mdParent] = splitPath(mdEntry.path);
+        const folderBtn: React.CSSProperties = {
+          display: 'flex', alignItems: 'center', gap: 8, padding: '9px 8px', background: 'none',
+          border: 'none', cursor: 'pointer', borderRadius: R.md, textAlign: 'left',
+          fontFamily: FONT.mono, fontSize: 12.5, color: C.textPrimary, width: '100%',
+        };
+        return (
+          <Modal
+            width={MODAL_W.form}
+            onClose={() => setMdEntry(null)}
+            title={`В Markdown: ${mdEntry.name}`}
+            subtitle="Куда сохранить .md — рядом с файлом или в другую папку"
+          >
+            <div style={{ maxHeight: 340, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 2, margin: '0 -4px' }}>
+              <button
+                onPointerDown={e => { e.stopPropagation(); void doTransformMd(mdEntry, null); }}
+                style={{ ...folderBtn, background: C.bgInset, fontFamily: FONT.sans, fontWeight: 600, fontSize: 13 }}
+              >
+                <span style={{ flexShrink: 0, display: 'flex' }}><FolderIcon /></span>
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  Рядом с файлом{mdParent ? ` · ${mdParent}` : ''}
+                </span>
+              </button>
+              {allDirs.map(d => (
+                <button
+                  key={d.path}
+                  onPointerDown={e => { e.stopPropagation(); void doTransformMd(mdEntry, d.path); }}
+                  style={folderBtn}
+                  onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = C.bgInset; }}
+                  onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'none'; }}
+                >
+                  <span style={{ flexShrink: 0, display: 'flex' }}><FolderIcon /></span>
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.label}</span>
+                </button>
+              ))}
+            </div>
+          </Modal>
+        );
+      })()}
+
       {/* === Контекстное меню === */}
       {contextMenu && (() => {
         const { entry } = contextMenu;
@@ -1852,6 +1916,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
                 {entry.isDirectory && inNotesVault(entry.path) && menuItem(<MI_NotePlus />, 'Новая заметка', () => { setContextMenu(null); setNoteDialog({ folder: noteFolderOf(entry.path) }); })}
                 {!entry.isDirectory && onAttachToChat && menuItem(<MI_Attach />, 'Прикрепить к чату', () => { setContextMenu(null); onAttachToChat(entry.path); })}
                 {!entry.isDirectory && /\.(md|mdx)$/i.test(entry.name) && menuItem(<MI_Copy />, 'Копировать Markdown', () => { setContextMenu(null); void copyMdFromTree(entry.path); })}
+                {!entry.isDirectory && online && isMdConvertible(entry.name) && menuItem(<MI_Copy />, 'Трансформировать в Markdown…', () => { setContextMenu(null); setMdEntry(entry); })}
                 {!entry.isDirectory && !inNotesVault(entry.path) && onAddToKnowledge && !indexedFileNames?.has(entry.path) && isKnowledgeIndexable(entry.name) && menuItem(<MI_BookPlus />, 'Добавить в знания', () => { setContextMenu(null); onAddToKnowledge(entry.path); })}
                 {!entry.isDirectory && onRemoveFromKnowledge && indexedFileNames?.has(entry.path) && menuItem(<MI_BookMinus />, 'Удалить из знаний', () => { setContextMenu(null); onRemoveFromKnowledge(entry.path); })}
                 {entry.isDirectory && !inNotesVault(entry.path) && onAddFolderToKnowledge && !indexingFolders?.has(entry.path) && menuItem(<MI_BookPlus />, 'Добавить папку в знания', () => { setContextMenu(null); onAddFolderToKnowledge(entry.path); })}
@@ -1889,6 +1954,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
             {entry.isDirectory && inNotesVault(entry.path) && menuItem(<MI_NotePlus />, 'Новая заметка', () => { setContextMenu(null); setNoteDialog({ folder: noteFolderOf(entry.path) }); })}
             {!entry.isDirectory && onAttachToChat && menuItem(<MI_Attach />, 'Прикрепить к чату', () => { setContextMenu(null); onAttachToChat(entry.path); })}
             {!entry.isDirectory && /\.(md|mdx)$/i.test(entry.name) && menuItem(<MI_Copy />, 'Копировать Markdown', () => { setContextMenu(null); void copyMdFromTree(entry.path); })}
+                {!entry.isDirectory && online && isMdConvertible(entry.name) && menuItem(<MI_Copy />, 'Трансформировать в Markdown…', () => { setContextMenu(null); setMdEntry(entry); })}
             {!entry.isDirectory && !inNotesVault(entry.path) && onAddToKnowledge && !indexedFileNames?.has(entry.path) && isKnowledgeIndexable(entry.name) && menuItem(<MI_BookPlus />, 'Добавить в знания', () => { setContextMenu(null); onAddToKnowledge(entry.path); })}
             {!entry.isDirectory && onRemoveFromKnowledge && indexedFileNames?.has(entry.path) && menuItem(<MI_BookMinus />, 'Удалить из знаний', () => { setContextMenu(null); onRemoveFromKnowledge(entry.path); })}
             {entry.isDirectory && !inNotesVault(entry.path) && onAddFolderToKnowledge && !indexingFolders?.has(entry.path) && menuItem(<MI_BookPlus />, 'Добавить папку в знания', () => { setContextMenu(null); onAddFolderToKnowledge(entry.path); })}

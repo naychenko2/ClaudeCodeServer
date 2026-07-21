@@ -131,8 +131,8 @@ export function AiLauncher() {
         setFabLevel(level); // FAB отражает уровень всегда (даже без всплытия балуна)
         setRecs(recommendations); // полный список — для hover-балуна и палитры
         if (!sug) return;
-        // Порог всплытия: при активной градации — medium+, иначе (старое поведение) — любой
-        const surface = gradedFab ? shouldSurface(sug.level) : true;
+        // Балун всплывает сам только на сильной рекомендации (shouldSurface = strong)
+        const surface = shouldSurface(sug.level);
         if (!surface || !canShow(sug.key)) return;
         markShown();
         setSuggestion(sug);
@@ -184,9 +184,12 @@ export function AiLauncher() {
 
   // Градация FAB по уровню (только при флаге): none — бледный, medium+ — яркий + пульс,
   // strong — добавляется анимация привлечения. Без флага — старое поведение (пульс = есть подсказка).
-  const showPulse = gradedFab ? (fabLevel === 'medium' || fabLevel === 'strong') : !!suggestion;
-  const fabDim = gradedFab && fabLevel === 'none';
-  const fabStrong = gradedFab && fabLevel === 'strong';
+  // Кнопка «просыпается» (пульс + акцент + анимация) ТОЛЬКО при сильной рекомендации.
+  // medium/minor её не будят — они лишь подсвечиваются в открытой палитре. Пока реальной
+  // идеи нет — кнопка приглушена, чтобы не создавать ложного ощущения «есть что предложить».
+  const showPulse = fabLevel === 'strong';
+  const fabDim = fabLevel !== 'strong';
+  const fabStrong = fabLevel === 'strong';
 
   return (
     <>

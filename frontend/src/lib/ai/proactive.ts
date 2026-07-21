@@ -143,10 +143,9 @@ async function computeRuleSuggestion(ctx: AiActionCtx): Promise<Suggestion | nul
     return null;
   }
 
-  // Обзорные экраны + включён бриф — предложить собрать план дня (раз в день)
-  if ((nav.screen === 'chats' || nav.screen === 'projects') && ctx.online)
-    return { key: `briefing:${todayKey()}`, actionId: 'global.briefing', text: 'Собрать план дня — задачи, заметки, активность?', level: 'minor' };
-
+  // Обзорные экраны: НЕ навязываем подсказку без конкретного повода — раньше здесь всегда
+  // предлагался «план дня» (minor), из-за чего кнопка казалась активной постоянно. Бриф
+  // остаётся доступным в палитре, но сам не всплывает.
   return null;
 }
 

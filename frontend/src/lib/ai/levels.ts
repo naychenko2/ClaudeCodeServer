@@ -12,9 +12,10 @@ export function maxLevel(levels: SuggestionLevel[]): SuggestionLevel {
   return levels.reduce<SuggestionLevel>((acc, l) => (ORDER[l] > ORDER[acc] ? l : acc), 'none');
 }
 
-// Порог, с которого балун всплывает сам (medium и выше). minor/none — только подсветка FAB.
+// Порог, с которого балун всплывает сам — только сильная рекомендация (strong).
+// medium/minor не всплывают и не «будят» кнопку; они видны лишь в открытой палитре.
 export function shouldSurface(level: SuggestionLevel): boolean {
-  return ORDER[level] >= ORDER.medium;
+  return ORDER[level] >= ORDER.strong;
 }
 
 // Метка уровня для бейджа в балуне.

@@ -376,7 +376,10 @@ public class ClaudeSession : ILlmSessionAdapter
                 };
             }
 
-            if (hasPersonas)
+            // Проверка _personasMcp избыточна по смыслу (hasPersonas истинен только когда контекст
+            // есть — см. резолв пути выше), но без неё компилятор теряет null-состояние поля через
+            // промежуточную bool и требует ! на каждом обращении внутри блока.
+            if (hasPersonas && _personasMcp is not null)
             {
                 // persona_ask выключен когда есть файловые сабагенты-персоны:
                 // модель должна использовать Task(agentType=...) в Workflow, а не путаться.
@@ -398,7 +401,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     ["alwaysLoad"] = true,
                     ["env"] = new System.Text.Json.Nodes.JsonObject
                     {
-                        ["PERSONAS_API_URL"] = _personasMcp!.ApiUrl,
+                        ["PERSONAS_API_URL"] = _personasMcp.ApiUrl,
                         ["PERSONAS_API_TOKEN"] = _personasMcp.Token,
                         ["PERSONAS_PROJECT_ID"] = _personasMcp.ProjectId ?? "",
                         ["PERSONAS_SELF_ID"] = _personasMcp.SelfPersonaId ?? "",

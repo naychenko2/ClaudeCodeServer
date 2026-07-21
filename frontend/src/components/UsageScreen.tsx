@@ -454,8 +454,8 @@ export function UsageScreen({ onClose }: { onClose: () => void }) {
   const tabs = ([['claude', usage?.subscriptions?.['claude']?.name ?? 'Claude']] as [string, string][])
     .concat(subKeys.filter(k => k !== 'claude').map(k => [k, usage!.subscriptions![k].name ?? k] as [string, string]))
     .concat(providerKeys.map(k => [k, providerLabel(k)] as [string, string]))
-    .concat([['ollama', 'Локально']])
-    .concat([['fal', 'fal.ai']]);
+    .concat([['fal', 'fal.ai']])
+    .concat([['ollama', 'Локально']]);
 
   return (
     <div

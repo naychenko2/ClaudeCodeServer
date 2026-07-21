@@ -61,6 +61,9 @@ export function AiLauncher() {
   // что именно советует AI). Пусто — рекомендаций нет.
   const [recs, setRecs] = useState<ActionRec[]>([]);
   const [fabHover, setFabHover] = useState(false);
+  // Свайп-закрытие проактивного балуна на тач-экране (смещение вправо за экран)
+  const [dragX, setDragX] = useState(0);
+  const swipeStart = useRef<number | null>(null);
 
   // Список действий пересчитывается на каждый ввод, пока палитра открыта. Рекомендованные
   // (recs) получают уровень (recLevel) для бейджа/подсветки и поднимаются в начало группы.
@@ -163,6 +166,18 @@ export function AiLauncher() {
   const dismissSuggestion = () => {
     if (suggestion) markDismissed(suggestion.key);
     setSuggestion(null);
+    setDragX(0);
+  };
+  // Свайп проактивного балуна: тянем только вправо, за порогом — закрыть
+  const onSwipeStart = (e: React.TouchEvent) => { swipeStart.current = e.touches[0].clientX; };
+  const onSwipeMove = (e: React.TouchEvent) => {
+    if (swipeStart.current == null) return;
+    setDragX(Math.max(0, e.touches[0].clientX - swipeStart.current));
+  };
+  const onSwipeEnd = () => {
+    if (dragX > 70) dismissSuggestion();
+    else setDragX(0);
+    swipeStart.current = null;
   };
   const toggleProactive = () => {
     const next = !proactiveOn;
@@ -173,7 +188,9 @@ export function AiLauncher() {
 
   // Наведение на FAB → балун со списком рекомендаций. Таймер на уход, чтобы курсор
   // успел перейти с кнопки на балун через зазор (иначе балун схлопывается).
-  const enterFab = () => { if (hoverTimer.current) { clearTimeout(hoverTimer.current); hoverTimer.current = null; } setFabHover(true); };
+  // На тач-экране hover нет: тап эмулирует mouseenter и балун «AI рекомендует» залипал бы
+  // без возможности закрыть. Поэтому на мобилке hover-балун не поднимаем вовсе.
+  const enterFab = () => { if (isMobile) return; if (hoverTimer.current) { clearTimeout(hoverTimer.current); hoverTimer.current = null; } setFabHover(true); };
   const leaveFab = () => { hoverTimer.current = window.setTimeout(() => setFabHover(false), 140); };
   // Клик по пункту hover-балуна — сразу запустить действие
   const runRec = (id: string) => { setFabHover(false); setSuggestion(null); runActionById(id, buildCtx()); };
@@ -205,7 +222,19 @@ export function AiLauncher() {
       {/* Проактивная подсказка (push) — тихий балун у кнопки. При наведении на FAB
           уступает место hover-балуну со списком рекомендаций. */}
       {!open && suggestion && !fabHover && (
-        <div style={balloonStyle} role="status">
+        <div
+          style={{
+            ...balloonStyle,
+            transform: dragX ? `translateX(${dragX}px)` : undefined,
+            opacity: dragX ? Math.max(0, 1 - dragX / 200) : 1,
+            transition: dragX ? 'none' : 'transform .16s, opacity .16s',
+            touchAction: 'pan-y',
+          }}
+          role="status"
+          onTouchStart={onSwipeStart}
+          onTouchMove={onSwipeMove}
+          onTouchEnd={onSwipeEnd}
+        >
           <div style={balloonHead}>
             <span style={{ color: C.accent, display: 'flex' }}><SparkleIcon size={15} /></span>
             <b style={{ fontSize: 12.5, color: C.textHeading }}>AI может помочь</b>
@@ -229,7 +258,7 @@ export function AiLauncher() {
 
       {/* Hover-балун: наведение на FAB → список рекомендованных действий, клик запускает.
           Показываем при наведении, если есть рекомендации и активна градация (флаг). */}
-      {!open && fabHover && gradedFab && recActions.length > 0 && (
+      {!open && fabHover && gradedFab && recActions.length > 0 && !isMobile && (
         <div style={hoverBalloonStyle} role="menu" onMouseEnter={enterFab} onMouseLeave={leaveFab}>
           <div style={{ ...balloonHead, marginBottom: 8 }}>
             <span style={{ color: C.accent, display: 'flex' }}><SparkleIcon size={15} /></span>

@@ -1343,9 +1343,11 @@ public class SessionManager
         entry.Accumulator?.SetPersona(entry.Info.PersonaId);
 
         // Авто-имя сессии по первому сообщению (Claude в --print не отдаёт title/summary).
-        // Ставим только если имя ещё не задано — последующие сообщения название не меняют.
+        // Только у по-настоящему нового чата: имя ещё пустое, не залочено явным заданием
+        // (вручную/MCP/ретайтл) и ход ещё НЕ запускался (ClaudeSessionId == null). Иначе после
+        // рестарта сообщение-продолжение («продолжи») перетирало бы уже сложившееся название.
         // Работает и для чатов вне проекта, и для проектных сессий.
-        if (string.IsNullOrWhiteSpace(entry.Info.Name))
+        if (string.IsNullOrWhiteSpace(entry.Info.Name) && !entry.Info.NameLocked && entry.Info.ClaudeSessionId is null)
         {
             var title = MakeChatTitle(text);
             if (!string.IsNullOrEmpty(title))
@@ -1442,7 +1444,7 @@ public class SessionManager
         entry.Accumulator?.SetPersona(entry.Info.PersonaId);
 
         // Авто-имя по первому сообщению — как при отправке человеком
-        if (string.IsNullOrWhiteSpace(entry.Info.Name))
+        if (string.IsNullOrWhiteSpace(entry.Info.Name) && !entry.Info.NameLocked && entry.Info.ClaudeSessionId is null)
         {
             var title = MakeChatTitle(text);
             if (!string.IsNullOrEmpty(title))
@@ -1669,6 +1671,7 @@ public class SessionManager
 
         if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
         entry.Info.Name = line;
+        entry.Info.NameLocked = true; // явное действие пользователя — авто больше не трогает
         entry.Info.UpdatedAt = DateTime.UtcNow;
         SaveSessions();
         await BroadcastChatRenamedAsync(sessionId, entry.Info, line);
@@ -1732,7 +1735,13 @@ public class SessionManager
         }
 
         if (name is not null)
-            entry.Info.Name = string.IsNullOrWhiteSpace(name) ? null : name.Trim();
+        {
+            var trimmed = string.IsNullOrWhiteSpace(name) ? null : name.Trim();
+            entry.Info.Name = trimmed;
+            // Явно заданное имя (вручную/MCP chats_update) — лочим от авто-переименования;
+            // очистка имени (пустое) снимает лок, чтобы авто-заголовок мог сработать снова.
+            entry.Info.NameLocked = trimmed is not null;
+        }
         if (effort is not null)
             entry.Info.Effort = string.IsNullOrWhiteSpace(effort) ? null : effort.Trim();
 

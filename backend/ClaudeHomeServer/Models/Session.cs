@@ -67,6 +67,9 @@ public class Session
     public string? LastMessage { get; set; }
     public int MessageCount { get; set; }
     public string? Name { get; set; }
+    // Имя задано явно (вручную/MCP/действие «Обновить название») — авто-заголовок по первому
+    // сообщению его НЕ перезаписывает. Очистка имени снимает лок.
+    public bool NameLocked { get; set; }
     // Имя агента (.claude/agents/<name>.md), чей промпт инжектируется в системный контекст
     public string? AgentName { get; set; }
     // Персона, от лица которой ведётся чат: задаёт характер,

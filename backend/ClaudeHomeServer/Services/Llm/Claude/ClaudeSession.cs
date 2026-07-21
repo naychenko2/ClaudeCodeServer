@@ -462,6 +462,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     {
                         ["NOTIFICATIONS_API_URL"] = _notificationsMcp!.ApiUrl,
                         ["NOTIFICATIONS_API_TOKEN"] = _notificationsMcp.Token,
+                        ["NOTIFICATIONS_SELF_PERSONA_ID"] = _notificationsMcp.SelfPersonaId ?? "",
                     },
                 };
             }

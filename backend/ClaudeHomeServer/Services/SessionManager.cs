@@ -1135,11 +1135,11 @@ public class SessionManager
 
     // Контекст MCP-сервера уведомлений: всегда подключается, когда есть владелец.
     // Тот же сервисный токен, что у tasks/notes/workspace.
-    private NotificationsMcpContext? BuildNotificationsContext(string? ownerId)
+    private NotificationsMcpContext? BuildNotificationsContext(string? ownerId, string? personaId)
     {
         if (ownerId is null) return null;
         var token = GetServiceToken(ownerId);
-        return new NotificationsMcpContext(ResolveTasksApiUrl(ownerId), token);
+        return new NotificationsMcpContext(ResolveTasksApiUrl(ownerId), token, personaId);
     }
 
     // Гейт подсказки следующего сообщения: делегат проверяет флаг prompt-suggestions
@@ -1284,7 +1284,7 @@ public class SessionManager
             PersonaRecallProvider: persona.Recall,
             ExtraDisallowedTools: BuildExtraDisallowed(ownerId, persona.Persona),
             PersonasMcp: BuildPersonasContext(ownerId, session.ProjectId, session),
-            NotificationsMcp: BuildNotificationsContext(ownerId),
+            NotificationsMcp: BuildNotificationsContext(ownerId, session.PersonaId),
             WorkspaceMcp: workspace,
             BindingsProvider: BuildBindingsProvider(ownerId, session.PersonaId, workspace?.Sections),
             PersonaAgentsProvider: BuildPersonaAgentsProvider(ownerId, session),
@@ -1568,7 +1568,7 @@ public class SessionManager
                 PersonaRecallProvider: persona.Recall,
                 ExtraDisallowedTools: BuildExtraDisallowed(entry.Info.OwnerId, persona.Persona),
                 PersonasMcp: BuildPersonasContext(entry.Info.OwnerId, null, entry.Info),
-                NotificationsMcp: BuildNotificationsContext(entry.Info.OwnerId),
+                NotificationsMcp: BuildNotificationsContext(entry.Info.OwnerId, entry.Info.PersonaId),
                 WorkspaceMcp: workspace,
                 BindingsProvider: BuildBindingsProvider(entry.Info.OwnerId, entry.Info.PersonaId, workspace?.Sections),
                 PersonaAgentsProvider: BuildPersonaAgentsProvider(entry.Info.OwnerId, entry.Info),
@@ -1593,7 +1593,7 @@ public class SessionManager
                 PersonaRecallProvider: persona.Recall,
                 ExtraDisallowedTools: BuildExtraDisallowed(project.OwnerId, persona.Persona),
                 PersonasMcp: BuildPersonasContext(project.OwnerId, project.Id, entry.Info),
-                NotificationsMcp: BuildNotificationsContext(project.OwnerId),
+                NotificationsMcp: BuildNotificationsContext(project.OwnerId, entry.Info.PersonaId),
                 WorkspaceMcp: workspace,
                 BindingsProvider: BuildBindingsProvider(project.OwnerId, entry.Info.PersonaId, workspace?.Sections),
                 PersonaAgentsProvider: BuildPersonaAgentsProvider(project.OwnerId, entry.Info),

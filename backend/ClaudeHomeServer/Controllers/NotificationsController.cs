@@ -13,8 +13,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController, Authorize, Route("api/notifications")]
 public class NotificationsController(
     NotificationStore store,
-    IHubContext<SessionHub> hub,
-    PushService push,
+    NotificationService notif,
     ILogger<NotificationsController> log) : ControllerBase
 {
     // Текущий пользователь из JWT sub claim
@@ -53,29 +52,14 @@ public class NotificationsController(
     [HttpPost]
     public async Task<ActionResult<NotificationListItem>> Create([FromBody] CreateNotificationRequest req)
     {
-        var item = await store.AddAsync(UserId, req);
+        // Через NotificationService — денормализация персоны/проекта (Enrich) + SignalR + push
+        // единой точкой. Push для важных: напоминания, ответы персон/агентов, завершение задач.
+        var sendPush = req.Kind is "reminder" or "claude" or "success";
+        var id = await notif.SendAsync(UserId, req, sendPush);
+        var item = await store.GetByIdAsync(UserId, id);
 
-        // SignalR + web push (как старый dual-channel)
-        var msg = new NotificationMessage(
-            Title: item.Title,
-            Body: item.Body,
-            Url: item.Url,
-            Kind: item.Kind,
-            NotificationId: item.Id,
-            Type: item.Type,
-            ProjectId: item.ProjectId,
-            SessionId: item.SessionId,
-            TaskId: item.TaskId,
-            Source: item.Source,
-            Tag: item.Tag);
-
-        await hub.Clients.Group("user_" + UserId).SendAsync("message", msg);
-        // Push — для важных (напоминания, ответы персон, завершение задач)
-        if (req.Kind is "reminder" or "claude" or "success")
-            await push.SendToUserAsync(UserId, msg);
-
-        log.LogInformation("Уведомление создано: {Id} «{Title}» ({Kind})", item.Id, item.Title, item.Kind);
-        return CreatedAtAction(nameof(GetById), new { id = item.Id }, item);
+        log.LogInformation("Уведомление создано: {Id} «{Title}» ({Kind})", id, req.Title, req.Kind);
+        return CreatedAtAction(nameof(GetById), new { id }, item);
     }
 
     /// <summary>PUT /api/notifications/{id}/read — отметить прочитанным</summary>

@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Bell, CheckCheck, Search, Trash2, Columns, SlidersHorizontal, Folder } from 'lucide-react';
 import { C, FONT, FS, R, SP, SHADOW } from '../../lib/design';
-import { NotificationAvatar, hasPersona, notifPersonaLabel, notifAccentColor } from './NotificationAvatar';
+import { NotificationAvatar, hasPersona, notifAccentColor } from './NotificationAvatar';
 import { HubHeader } from '../../components/HubHeader';
 import { ConfirmDialog } from '../../components/ui';
 import { ToolbarOverflowMenu, type OverflowItem } from '../../components/ToolbarOverflowMenu';
@@ -21,7 +21,7 @@ import {
   deleteReadAll,
 } from '../../lib/notifications';
 import { AgentKanban } from '../agent-kanban/AgentKanban';
-import { KIND_META, KIND_LABELS, formatTime, openNotificationUrl } from './kindMeta';
+import { KIND_META, KIND_LABELS, eventContext, formatTime, openNotificationUrl } from './kindMeta';
 
 function dateGroupKey(iso: string) {
   const d = new Date(iso);
@@ -41,194 +41,132 @@ function NotificationCard({ item, onRead, onDelete }: {
   onDelete: (id: string) => void;
 }) {
   const meta = KIND_META[item.kind] ?? KIND_META.info;
-  const withPersona = hasPersona(item);
-  const stripColor = notifAccentColor(item, item.kind);
+  const isPersona = hasPersona(item);
+  const senderColor = notifAccentColor(item, item.kind);   // цвет персоны (hex) или вида
+  // Лёгкая тонировка шапки: цвет персоны с alpha (только валидный hex), иначе фон вида
+  const headBg = isPersona
+    ? (senderColor.startsWith('#') ? senderColor + '14' : C.bgInset)
+    : meta.bg;
+  const context = eventContext(item);
+
+  const linkStyle = (color: string): React.CSSProperties => ({
+    fontFamily: FONT.sans, fontSize: FS.xs, fontWeight: 600,
+    border: 'none', background: 'transparent', cursor: 'pointer',
+    padding: '3px 7px', borderRadius: R.sm, color,
+  });
 
   return (
     <div
       style={{
-        display: 'flex',
-        gap: SP.lg,
-        padding: SP.xl,
-        background: C.bgCard,
+        background: C.bgWhite,
         borderRadius: R.lg,
         border: `1px solid ${item.isRead ? C.border : C.accent}`,
         boxShadow: SHADOW.card,
-        cursor: 'default',
-        position: 'relative',
-        transition: 'all 0.2s ease',
         overflow: 'hidden',
+        transition: 'box-shadow 0.16s ease, transform 0.16s ease',
       }}
-      onMouseEnter={e => {
-        const el = e.currentTarget;
-        el.style.borderColor = C.accentMuted;
-        el.style.boxShadow = SHADOW.dropdown;
-        el.style.transform = 'translateY(-1px)';
-      }}
-      onMouseLeave={e => {
-        const el = e.currentTarget;
-        el.style.borderColor = item.isRead ? C.border : C.accent;
-        el.style.boxShadow = SHADOW.card;
-        el.style.transform = 'none';
-      }}
+      onMouseEnter={e => { e.currentTarget.style.boxShadow = SHADOW.dropdown; e.currentTarget.style.transform = 'translateY(-1px)'; }}
+      onMouseLeave={e => { e.currentTarget.style.boxShadow = SHADOW.card; e.currentTarget.style.transform = 'none'; }}
     >
-      {/* Color strip — цвет персоны или вида */}
-      <div style={{
-        position: 'absolute',
-        left: -1, top: -1, bottom: -1, width: 4,
-        background: stripColor,
-        borderRadius: '12px 0 0 12px',
-      }} />
-
-      {/* Аватар персоны (круг) или плитка вида (квадрат) */}
-      <div style={{ marginTop: 2, flexShrink: 0 }}>
+      {/* Шапка-идентичность: аватар + «отправитель» и заголовок события в две строки */}
+      <div style={{ display: 'flex', gap: SP.md, padding: '9px 13px', background: headBg }}>
         <NotificationAvatar
           personaId={item.personaId}
           personaName={item.personaName}
           personaColor={item.personaColor}
           kind={item.kind}
-          size={44}
+          size={34}
         />
-      </div>
-
-      {/* Body */}
-      <div style={{ flex: 1, minWidth: 0 }}>
-        {withPersona && (
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 1 }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: SP.sm }}>
+            {isPersona ? (
+              <>
+                <span style={{ fontSize: FS.sm, fontWeight: 700, color: senderColor, whiteSpace: 'nowrap' }}>
+                  {item.personaRole || item.personaName}
+                </span>
+                {item.personaRole && item.personaName && (
+                  <span style={{ fontSize: FS.xs, color: C.textSecondary, whiteSpace: 'nowrap' }}>
+                    {item.personaName}
+                  </span>
+                )}
+              </>
+            ) : (
+              <span style={{ fontSize: FS.sm, fontWeight: 700, color: meta.color, whiteSpace: 'nowrap' }}>
+                {KIND_LABELS[item.kind] ?? item.kind}
+              </span>
+            )}
+            <span style={{
+              marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 5,
+              fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap',
+            }}>
+              {!item.isRead && <span style={{ width: 7, height: 7, borderRadius: '50%', background: C.accent }} />}
+              {formatTime(item.createdAt)}
+            </span>
+          </div>
           <div style={{
-            fontSize: FS.xs, fontWeight: 600, color: C.textSecondary,
-            marginBottom: SP.xxs, maxWidth: 320,
+            fontSize: FS.base, fontWeight: 600, color: C.textHeading,
             whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
           }}>
-            {notifPersonaLabel(item)}
-          </div>
-        )}
-        <div style={{ display: 'flex', justifyContent: 'space-between', gap: SP.md }}>
-          <div style={{
-            fontWeight: 600,
-            fontSize: FS.base,
-            color: C.textHeading,
-            display: 'flex', alignItems: 'center', gap: SP.md,
-            flex: 1,
-          }}>
             {item.title}
-            {!item.isRead && (
-              <div style={{
-                width: 8, height: 8, borderRadius: '50%',
-                background: C.accent, flexShrink: 0,
-              }} />
-            )}
           </div>
-          <span style={{
-            fontSize: FS.xs, color: C.textMuted,
-            whiteSpace: 'nowrap', flexShrink: 0,
-            marginTop: 2,
-          }}>
-            {formatTime(item.createdAt)}
-          </span>
         </div>
+      </div>
 
+      {/* Тело: превью + контекст + действия, с отступом под шапкой и выравниванием под текстом */}
+      <div style={{ padding: '10px 14px 11px 59px' }}>
         <div style={{
-          fontSize: FS.sm,
-          color: C.textSecondary,
-          marginTop: 3,
-          lineHeight: 1.55,
-          display: '-webkit-box',
-          WebkitLineClamp: 2,
-          WebkitBoxOrient: 'vertical',
-          overflow: 'hidden',
-          maxWidth: 520,
+          fontSize: FS.sm, color: C.textSecondary, lineHeight: 1.5,
+          display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
         }}>
           {item.body}
         </div>
 
-        {/* Meta row */}
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: SP.md,
-          marginTop: SP.md, flexWrap: 'wrap',
-        }}>
-          <span style={{
-            display: 'inline-flex', alignItems: 'center', gap: 4,
-            padding: '2px 8px', borderRadius: 4,
-            fontSize: 10, fontWeight: 600, textTransform: 'uppercase',
-            letterSpacing: '0.3px', lineHeight: 1.5,
-            background: meta.bg, color: meta.color,
-          }}>
-            {KIND_LABELS[item.kind] ?? item.kind}
-          </span>
-          {item.projectName ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: SP.md, marginTop: SP.sm, flexWrap: 'wrap' }}>
+          {item.projectName && (
             <span style={{
               display: 'inline-flex', alignItems: 'center', gap: SP.xs,
-              padding: '2px 8px', borderRadius: R.sm,
+              padding: '1px 7px', borderRadius: R.sm,
               fontSize: FS.xs, fontWeight: 500,
-              background: C.bgInset, color: C.textMuted,
-              maxWidth: 180, overflow: 'hidden',
+              background: C.bgInset, color: C.textMuted, maxWidth: 170, overflow: 'hidden',
             }}>
               <Folder size={11} strokeWidth={2} style={{ flexShrink: 0 }} />
               <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {item.projectName}
               </span>
             </span>
-          ) : item.source && (
-            <span style={{ fontSize: FS.xs, color: C.textMuted }}>
-              · {item.source}
-            </span>
           )}
-          {item.tag && (
-            <span style={{ fontSize: FS.xs, color: C.textMuted }}>
-              · {item.tag}
-            </span>
-          )}
-        </div>
+          {context && <span style={{ fontSize: FS.xs, color: C.textMuted }}>{context}</span>}
 
-        {/* Actions */}
-        <div style={{
-          display: 'flex', gap: SP.sm, marginTop: SP.lg,
-          opacity: 0.95,
-        }}>
-          {item.url && (
+          <span style={{ marginLeft: 'auto', display: 'flex', gap: SP.xs, alignItems: 'center' }}>
+            {item.url && (
+              <button
+                style={linkStyle(C.accent)}
+                onClick={() => { if (!item.isRead) onRead(item.id); openNotificationUrl(item.url!); }}
+                onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; }}
+                onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+              >
+                Открыть
+              </button>
+            )}
+            {!item.isRead && (
+              <button
+                style={linkStyle(C.textMuted)}
+                onClick={() => onRead(item.id)}
+                onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; e.currentTarget.style.color = C.textPrimary; }}
+                onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = C.textMuted; }}
+              >
+                Прочитано
+              </button>
+            )}
             <button
-              style={{
-                padding: '6px 12px', borderRadius: R.sm, border: 'none',
-                fontFamily: FONT.sans, fontSize: FS.xs, fontWeight: 600,
-                cursor: 'pointer',
-                background: C.accent, color: C.onAccent,
-              }}
-              onClick={() => {
-                if (!item.isRead) onRead(item.id);
-                openNotificationUrl(item.url!);
-              }}
-              onMouseEnter={e => { e.currentTarget.style.opacity = '0.88'; }}
-              onMouseLeave={e => { e.currentTarget.style.opacity = '1'; }}
+              style={linkStyle(C.textMuted)}
+              onClick={() => onDelete(item.id)}
+              onMouseEnter={e => { e.currentTarget.style.color = C.danger; e.currentTarget.style.background = C.dangerBg; }}
+              onMouseLeave={e => { e.currentTarget.style.color = C.textMuted; e.currentTarget.style.background = 'transparent'; }}
             >
-              Открыть
+              Удалить
             </button>
-          )}
-          {item.isRead ? null : (
-            <button
-              style={{
-                padding: '6px 12px', borderRadius: R.sm, border: 'none',
-                fontFamily: FONT.sans, fontSize: FS.xs, fontWeight: 500,
-                cursor: 'pointer', background: 'transparent', color: C.textSecondary,
-              }}
-              onClick={() => onRead(item.id)}
-              onMouseEnter={e => { e.currentTarget.style.background = C.bgPanel; e.currentTarget.style.color = C.textPrimary; }}
-              onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = C.textSecondary; }}
-            >
-              ✓ Прочитано
-            </button>
-          )}
-          <button
-            style={{
-              padding: '6px 12px', borderRadius: R.sm, border: 'none',
-              fontFamily: FONT.sans, fontSize: FS.xs, fontWeight: 500,
-              cursor: 'pointer', background: 'transparent', color: C.textMuted,
-            }}
-            onClick={() => onDelete(item.id)}
-            onMouseEnter={e => { e.currentTarget.style.color = C.danger; e.currentTarget.style.background = C.dangerBg; }}
-            onMouseLeave={e => { e.currentTarget.style.color = C.textMuted; e.currentTarget.style.background = 'transparent'; }}
-          >
-            ✕ Удалить
-          </button>
+          </span>
         </div>
       </div>
     </div>

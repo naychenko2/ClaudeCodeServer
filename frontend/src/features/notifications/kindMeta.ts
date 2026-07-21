@@ -19,6 +19,15 @@ export const KIND_LABELS: Record<string, string> = {
   meeting: 'Совещание',
 };
 
+// Человеческий контекст события под телом уведомления — вместо сырых тегов
+// («Саммари», «Персона»). null — контекста нет, строку не показываем.
+export function eventContext(n: { kind: string; type?: string; title?: string }): string | null {
+  if (n.kind === 'success') return 'Задача выполнена';
+  if (n.kind === 'meeting') return 'Совещание команды';
+  if (n.type === 'summary' || (n.title ?? '').startsWith('Итог сессии')) return 'Итог сессии';
+  return null;
+}
+
 // Время уведомления: сегодня — часы:минуты, дальше — «Вчера» / день недели / дата
 export function formatTime(iso: string) {
   const d = new Date(iso);

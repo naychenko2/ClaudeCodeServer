@@ -17,6 +17,8 @@ import { createInterface } from 'node:readline';
 const API_URL = (process.env.NOTIFICATIONS_API_URL ?? 'http://localhost:5000').replace(/\/$/, '');
 const API_TOKEN = process.env.NOTIFICATIONS_API_TOKEN ?? '';
 const PROJECT_ID = process.env.NOTIFICATIONS_PROJECT_ID || null;
+// Персона текущей сессии — проставляется в уведомление как personaId (лицо персоны).
+const SELF_PERSONA_ID = process.env.NOTIFICATIONS_SELF_PERSONA_ID || null;
 
 async function api(path, options = {}) {
   const res = await fetch(`${API_URL}${path}`, {
@@ -161,9 +163,13 @@ rl.on('line', async (line) => {
     try {
       switch (name) {
         case 'notifications_create': {
+          // Уведомление от персоны — проставляем её personaId (если сессия персоны и
+          // модель не указала явно), бэкенд денормализует имя/роль/аватар.
+          const body = { ...args };
+          if (SELF_PERSONA_ID && !body.personaId) body.personaId = SELF_PERSONA_ID;
           const notif = await api('/api/notifications', {
             method: 'POST',
-            body: JSON.stringify(args),
+            body: JSON.stringify(body),
           });
           respond(msg.id, {
             content: [{ type: 'text', text: JSON.stringify(notif, null, 2) }],

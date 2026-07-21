@@ -265,15 +265,16 @@ public sealed class DailyBriefingService
 
     private async Task NotifyAsync(string userId, string dailyNoteId)
     {
-        // Имя секретаря в заголовке — бриф приходит «от персонажа», а не от системы
+        // Бриф приходит «от персонажа»-секретаря: лицо/имя даёт PersonaId (денормализует
+        // NotificationService), в заголовок имя не вклеиваем.
         var secretary = FindSecretary(userId);
-        var label = secretary is not null ? PersonaManager.PersonaLabel(secretary) : null;
         var msg = new NotificationMessage(
-            Title: label is not null ? $"Доброе утро! Это {label}" : "Утренний бриф готов",
+            Title: secretary is not null ? "Доброе утро! План на день готов" : "Утренний бриф готов",
             Body: "План на день собран в дневнике",
             Url: $"/notes/{dailyNoteId}",
             Kind: "info",
-            Tag: "Дайджест");
+            Tag: "Дайджест",
+            PersonaId: secretary?.Id);
         await _notif.SendNotificationMessageAsync(userId, msg);
     }
 

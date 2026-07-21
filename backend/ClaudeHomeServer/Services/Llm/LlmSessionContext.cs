@@ -50,7 +50,9 @@ public sealed record RecallBlock(string? Text, IReadOnlyList<RecallItem> Items);
 // Контекст MCP-сервера уведомлений: адрес API и сервисный токен владельца.
 // Всегда подключается, когда есть владелец сессии — Claude и агенты могут
 // создавать уведомления через инструмент notifications_create.
-public record NotificationsMcpContext(string ApiUrl, string Token);
+// SelfPersonaId — персона текущей сессии: notifications-server проставит её как
+// personaId в создаваемое уведомление (лицо персоны на уведомлении).
+public record NotificationsMcpContext(string ApiUrl, string Token, string? SelfPersonaId = null);
 
 // Выделенный memory-сервер персоны-консультанта (файлового сабагента): ключ сервера
 // в MCP-конфиге хода ("pmem_<handle>") + env memory-server ЭТОЙ персоны. Файл агента

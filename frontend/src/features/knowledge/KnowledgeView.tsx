@@ -3,6 +3,7 @@ import type { KnowledgeBaseSummary, KnowledgeDocument, KnowledgeSearchHit } from
 import { C, FONT, R } from '../../lib/design';
 import { api } from '../../lib/api';
 import { bumpKnowledge, useKnowledgeVersion } from '../../lib/knowledge';
+import { showToast } from '../../lib/toast';
 import { Toolbar, ToolbarIconButton, tbBtnPrimary } from '../../components/Toolbar';
 import { Splitter } from '../../components/ui';
 import { typeIcon, IconBack, IconPlus, IconDots, IconFile, IconTrash, IconSearch, IconLock, IconChevronRight } from './shared';
@@ -97,13 +98,23 @@ export function KnowledgeView({ kb, isMobile, onBack, onAddDocument, onDelete }:
   // режим и фокусируем поле поиска (переиспользуем существующее состояние поиска).
   useEffect(() => {
     const onRun = (e: Event) => {
-      if ((e as CustomEvent<{ action?: string }>).detail?.action !== 'knowledge.search') return;
-      setMode('semantic');
-      searchRef.current?.focus();
+      const action = (e as CustomEvent<{ action?: string }>).detail?.action;
+      if (action === 'knowledge.search') {
+        setMode('semantic');
+        searchRef.current?.focus();
+      } else if (action === 'knowledge.describe') {
+        void (async () => {
+          try {
+            const r = await api.knowledgeBases.describe(kb.id);
+            showToast('Описание базы обновлено', r.description);
+            bumpKnowledge();
+          } catch { showToast('Ошибка', 'Не удалось сгенерировать описание', 'info'); }
+        })();
+      }
     };
     window.addEventListener('cc-ai-run', onRun);
     return () => window.removeEventListener('cc-ai-run', onRun);
-  }, []);
+  }, [kb.id]);
 
   useEffect(() => {
     const q = query.trim();

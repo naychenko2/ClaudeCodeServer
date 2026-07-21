@@ -530,4 +530,13 @@ public class KnowledgeService
         var resp = await client.PatchAsJsonAsync($"datasets/{datasetId}", new { name = WithNs(newName) });
         resp.EnsureSuccessStatusCode();
     }
+
+    // Обновить описание датасета (PATCH description). Имя не трогаем.
+    public async Task UpdateDatasetDescriptionAsync(string datasetId, string description)
+    {
+        if (!IsConfigured) return;
+        var client = CreateClient();
+        var resp = await client.PatchAsJsonAsync($"datasets/{datasetId}", new { description });
+        resp.EnsureSuccessStatusCode();
+    }
 }

@@ -923,6 +923,9 @@ export const api = {
   knowledgeBases: {
     list: () => request<KnowledgeListResponse>('/knowledge'),
     get: (id: string) => request<KnowledgeBaseDetail>(`/knowledge/${encodeURIComponent(id)}`),
+    // Сгенерировать описание базы по составу документов (локальная модель / claude) и сохранить
+    describe: (id: string) =>
+      request<{ description: string }>(`/knowledge/${encodeURIComponent(id)}/ai/describe`, { method: 'POST' }),
     create: (dto: CreateKnowledgeBaseDto) =>
       request<{ id: string; title: string; visibility: string }>('/knowledge', {
         method: 'POST', body: JSON.stringify(dto),

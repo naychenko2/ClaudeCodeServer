@@ -21,7 +21,8 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/knowledge")]
-public class KnowledgeBasesController(KnowledgeService knowledge, IHubContext<SessionHub> hub, UserStore userStore) : ControllerBase
+public class KnowledgeBasesController(KnowledgeService knowledge, IHubContext<SessionHub> hub, UserStore userStore,
+    Services.Llm.ICheapTextRunner cheap) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
     private string Username => User.FindFirstValue(ClaimTypes.Name) ?? UserId;
@@ -64,6 +65,33 @@ public class KnowledgeBasesController(KnowledgeService knowledge, IHubContext<Se
             return Ok(new KnowledgeBaseDetail(
                 c.Id, c.Title, c.Type, c.Visibility, c.DocumentCount, c.CreatedAt, c.Deletable, c.Description,
                 docs.Data.Select(x => new KnowledgeDocumentDto(x.Id, x.Name, x.IndexingStatus)).ToList()));
+        }
+        catch (HttpRequestException ex) { return StatusCode(502, new { error = $"Dify недоступен: {ex.Message}" }); }
+    }
+
+    // POST /api/knowledge/{id}/ai/describe — сгенерировать описание базы по составу документов
+    // (локальная модель / claude) и сохранить его в Dify. Возвращает { description }.
+    [HttpPost("{id}/ai/describe")]
+    public async Task<IActionResult> Describe(string id, CancellationToken ct)
+    {
+        var d = await ResolveReadableAsync(id);
+        if (d is null) return NotFound();
+        try
+        {
+            var docs = await knowledge.ListAllDocumentsAsync(id);
+            var names = docs.Data.Select(x => x.Name).Where(n => !string.IsNullOrWhiteSpace(n)).Take(50).ToList();
+            if (names.Count == 0) return BadRequest(new { error = "В базе нет документов для описания" });
+            var c = Classify(d, OtherUsers())!;
+            var prompt = $"База знаний «{c.Title}» содержит документы:\n" +
+                string.Join("\n", names.Select(n => "- " + n)) +
+                "\n\nСоставь короткое описание (1-2 предложения, по-русски), о чём эта база знаний и что в ней искать. " +
+                "Ответь ТОЛЬКО описанием, без вступлений.";
+            var desc = (await cheap.RunAsync(Services.Llm.LocalActionCatalog.KbDescribe, prompt, ct: ct)).Trim();
+            if (desc.Length == 0) return StatusCode(502, new { error = "Не удалось сгенерировать описание" });
+            if (desc.Length > 400) desc = desc[..400].TrimEnd();
+            await knowledge.UpdateDatasetDescriptionAsync(id, desc);
+            await Broadcast("updated", id);
+            return Ok(new { description = desc });
         }
         catch (HttpRequestException ex) { return StatusCode(502, new { error = $"Dify недоступен: {ex.Message}" }); }
     }

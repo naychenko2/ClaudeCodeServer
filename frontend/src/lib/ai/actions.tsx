@@ -245,6 +245,12 @@ export const AI_ACTIONS: AiAction[] = [
     run: () => dispatchAiRun('knowledge.search'),
   },
   {
+    id: 'knowledge.describe', title: 'Сгенерировать описание базы', hint: 'описание по составу документов',
+    section: 'knowledge', sectionLabel: 'Знания', icon: IcDoc,
+    when: c => knowledgeOpen(c), contextual: knowledgeOpen,
+    run: () => dispatchAiRun('knowledge.describe'),
+  },
+  {
     id: 'knowledge.ask', title: 'Спросить Claude по базе', hint: 'ответы с опорой на базу знаний',
     section: 'knowledge', sectionLabel: 'Знания', icon: IcAsk,
     when: c => knowledgeOpen(c) && c.online, contextual: knowledgeOpen,

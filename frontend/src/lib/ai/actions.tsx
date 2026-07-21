@@ -10,6 +10,7 @@ import {
   Sparkles, ImagePlus, BookOpen,
   GitBranch, GitCompare, FileClock, MessageCircleQuestion, BookPlus, ListChecks, MessagesSquare,
   CalendarClock, CalendarX2, Users,
+  ShieldCheck, Copy, Zap, Network, UserPlus, LayoutDashboard, RotateCcw, ListPlus,
 } from 'lucide-react';
 import { ICON_SIZE } from '../../components/ui/icons';
 import type { NavSnapshot } from '../nav';
@@ -82,6 +83,17 @@ const IcComments = <MessagesSquare {...ico} />;
 const IcWeek = <CalendarClock {...ico} />;
 const IcOverdue = <CalendarX2 {...ico} />;
 const IcTeam = <Users {...ico} />;
+// --- Иконки волны 3 (ревью diff, дедуп, проактивность, привязки, исполнитель, дашборд) ---
+const IcReview = <ShieldCheck {...ico} />;
+const IcDedup = <Copy {...ico} />;
+const IcAutomation = <Zap {...ico} />;
+const IcBindings = <Network {...ico} />;
+const IcAssignee = <UserPlus {...ico} />;
+const IcOverview = <LayoutDashboard {...ico} />;
+const IcResume = <RotateCcw {...ico} />;
+const IcCapture = <ListPlus {...ico} />;
+const IcToc = <List {...ico} />;
+const IcTranslate = <Sparkles {...ico} />;
 
 // --- Предикаты контекста ---
 const noteOpen = (c: AiActionCtx) => c.nav?.screen === 'notes' && !!c.nav.note;
@@ -100,6 +112,7 @@ const TEXT_EXTS = new Set(['md', 'markdown', 'mdx', 'txt', 'text', 'rst', 'tex',
 const summarizableOpen = (c: AiActionCtx) => fileOpen(c) && (DOC_EXTS.has(fileExt(c)) || TEXT_EXTS.has(fileExt(c)));
 const calendarScreen = (c: AiActionCtx) => c.nav?.screen === 'calendar';
 const projectOpen = (c: AiActionCtx) => c.nav?.screen === 'project' && !!c.nav.project;
+const homeScreen = (c: AiActionCtx) => c.nav?.screen === 'home';
 
 // --- Каталог действий (порядок задаёт ранжирование контекстной группы) ---
 export const AI_ACTIONS: AiAction[] = [
@@ -157,6 +170,18 @@ export const AI_ACTIONS: AiAction[] = [
       `Разбери необработанные (open) комментарии документа (заметка id ${c.nav?.note}): прочитай их (notes_annotations), `
       + `по каждому внеси правку или ответь (notes_reply), затем закрой (notes_set_status). Сначала покажи план.`, c),
   },
+  {
+    id: 'note.toc', title: 'Собрать оглавление', hint: 'вставить оглавление по заголовкам',
+    section: 'notes', sectionLabel: 'Заметки', icon: IcToc,
+    when: c => noteOpen(c), contextual: noteOpen,
+    run: () => dispatchAiRun('note.toc'),
+  },
+  {
+    id: 'note.translate', title: 'Перевести заметку', hint: 'перевод на другой язык в конце заметки',
+    section: 'notes', sectionLabel: 'Заметки', icon: IcTranslate,
+    when: c => noteOpen(c) && c.online, contextual: noteOpen,
+    run: () => dispatchAiRun('note.translate'),
+  },
 
   // ===== Задачи =====
   {
@@ -188,6 +213,15 @@ export const AI_ACTIONS: AiAction[] = [
     section: 'tasks', sectionLabel: 'Задачи', icon: IcSearch,
     when: c => taskOpen(c), contextual: taskOpen,
     run: () => dispatchAiRun('task.dedup'),
+  },
+  {
+    id: 'task.suggestPersona', title: 'Подобрать исполнителя', hint: 'какая персона лучше выполнит',
+    section: 'tasks', sectionLabel: 'Задачи', icon: IcAssignee,
+    when: c => taskOpen(c) && c.online, contextual: taskOpen,
+    run: c => startChatWithPrompt(
+      `Подбери исполнителя для задачи (id ${c.nav?.task}): посмотри доступные персоны (personas_list), выбери `
+      + `наиболее подходящую по роли и специализации, обоснуй. Назначь её исполнителем (tasks_update personaId) `
+      + `после моего подтверждения.`, c),
   },
   {
     id: 'tasks.weekPlan', title: 'План недели', hint: 'задачи недели + приоритеты',
@@ -240,6 +274,22 @@ export const AI_ACTIONS: AiAction[] = [
       `Предложи команду персон (personas_ai_team): роли и характеры под задачу/проект. `
       + `Покажи черновики — я решу, кого создать.`, c),
   },
+  {
+    id: 'persona.automation', title: 'Настроить проактивность', hint: 'правила реакций персоны на события',
+    section: 'personas', sectionLabel: 'Персоны', icon: IcAutomation,
+    when: c => personaOpen(c) && c.online, contextual: personaOpen,
+    run: c => startChatWithPrompt(
+      `Предложи для персоны (id ${c.nav?.persona}) правила проактивности под её роль: на какие события реагировать `
+      + `и как. Покажи черновики, создавай через personas_automation_create только с моего согласия.`, c),
+  },
+  {
+    id: 'persona.bindings', title: 'Предложить привязки', hint: 'к каким проектам и базам подключить',
+    section: 'personas', sectionLabel: 'Персоны', icon: IcBindings,
+    when: c => personaOpen(c) && c.online, contextual: personaOpen,
+    run: c => startChatWithPrompt(
+      `Предложи для персоны (id ${c.nav?.persona}) уместные привязки знаний и правил `
+      + `(personas_suggest_bindings), объясни каждую. Применяй (personas_bindings_set) после подтверждения.`, c),
+  },
 
   // ===== Знания =====
   {
@@ -268,6 +318,14 @@ export const AI_ACTIONS: AiAction[] = [
     run: c => startChatWithPrompt(
       `Помоги наполнить базу знаний (id ${c.nav?.knowledge}): предложи материалы и по моему согласию `
       + `добавляй через kb_add_document.`, c),
+  },
+  {
+    id: 'knowledge.dedup', title: 'Найти дубли документов', hint: 'похожие и устаревшие материалы',
+    section: 'knowledge', sectionLabel: 'Знания', icon: IcDedup,
+    when: c => knowledgeOpen(c) && c.online, contextual: knowledgeOpen,
+    run: c => startChatWithPrompt(
+      `Просмотри документы базы знаний (id ${c.nav?.knowledge}): найди дубли и устаревшие материалы, `
+      + `сравнивая по смыслу, и покажи группы похожих. Удаляй только с моего подтверждения.`, c),
   },
 
   // ===== Проект / файлы =====
@@ -317,6 +375,23 @@ export const AI_ACTIONS: AiAction[] = [
     run: c => startChatWithPrompt(
       `Пройди по git-логу за последнюю неделю и кратко суммируй ключевые изменения проекта и их смысл.`, c),
   },
+  {
+    id: 'project.reviewDiff', title: 'Ревью изменений перед коммитом', hint: 'найти баги и риски в git diff',
+    section: 'project', sectionLabel: 'Проект', icon: IcReview,
+    when: c => projectOpen(c) && c.online, contextual: projectOpen,
+    run: c => startChatWithPrompt(
+      `Сделай ревью незакоммиченных изменений проекта перед коммитом: пройди по git diff, найди возможные баги, `
+      + `риски и небрежности, сгруппируй находки по важности (критично / стоит поправить / мелочи). `
+      + `Ничего не меняй без моего согласия.`, c),
+  },
+  {
+    id: 'file.indexKnowledge', title: 'Добавить файл в знания', hint: 'проиндексировать в базу знаний',
+    section: 'project', sectionLabel: 'Проект', icon: IcBookPlus,
+    when: c => fileOpen(c) && c.online, contextual: fileOpen,
+    run: c => startChatWithPrompt(
+      `Добавь файл «${c.nav?.file}» в подходящую базу знаний: предложи, в какую именно (или новую), `
+      + `и по моему согласию проиндексируй через kb_add_document.`, c),
+  },
 
   // ===== Глобальные =====
   {
@@ -342,6 +417,29 @@ export const AI_ACTIONS: AiAction[] = [
     section: 'global', sectionLabel: 'Глобально', icon: IcHistory,
     when: () => true,
     run: () => window.dispatchEvent(new Event(PRODUCT_HISTORY_EVENT)),
+  },
+  {
+    id: 'home.overview', title: 'Обзор за меня', hint: 'приоритеты на сегодня по задачам и заметкам',
+    section: 'global', sectionLabel: 'Глобально', icon: IcOverview,
+    when: c => c.online, contextual: homeScreen,
+    run: c => startChatWithPrompt(
+      `Собери короткий обзор на сегодня: активные и просроченные задачи (tasks_list), свежие заметки `
+      + `(notes_list/notes_search) — и что из этого важнее всего. Дай 3 приоритета на день.`, c),
+  },
+  {
+    id: 'home.resume', title: 'На чём остановился', hint: 'вспомнить контекст последней работы',
+    section: 'global', sectionLabel: 'Глобально', icon: IcResume,
+    when: c => c.online, contextual: homeScreen,
+    run: c => startChatWithPrompt(
+      `Помоги вспомнить, на чём я остановился: покажи мои недавно изменённые заметки и задачи в работе, `
+      + `кратко суммируй по каждому направлению и предложи следующий шаг.`, c),
+  },
+  {
+    id: 'global.capture', title: 'Быстро в задачу', hint: 'создать задачу из мысли',
+    section: 'global', sectionLabel: 'Глобально', icon: IcCapture,
+    when: c => c.online,
+    run: c => startChatWithPrompt(
+      `Создай задачу через tasks_create по моему описанию, уточнив срок и приоритет при необходимости. Вот что нужно записать: `, c),
   },
 ];
 

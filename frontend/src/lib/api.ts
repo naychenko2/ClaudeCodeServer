@@ -313,6 +313,10 @@ export const api = {
       request<{ title: string }>(`/notes/${encodeURIComponent(id)}/suggest-title`, { method: 'POST' }),
     dailySummary: (date: string) =>
       request<NoteDetail>('/notes/daily/summary', { method: 'POST', body: JSON.stringify({ date }) }),
+    toc: (id: string) =>
+      request<NoteDetail>(`/notes/${encodeURIComponent(id)}/toc`, { method: 'POST' }),
+    translate: (id: string) =>
+      request<NoteDetail>(`/notes/${encodeURIComponent(id)}/translate`, { method: 'POST' }),
     get: (id: string) => request<NoteDetail>(`/notes/${encodeURIComponent(id)}`),
     backlinks: (id: string) => request<NoteBacklink[]>(`/notes/${encodeURIComponent(id)}/backlinks`),
     create: (dto: CreateNoteDto) =>

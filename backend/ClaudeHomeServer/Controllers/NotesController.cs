@@ -251,6 +251,34 @@ public class NotesController : ControllerBase
         catch (InvalidOperationException ex) { return StatusCode(502, new { error = ex.Message }); }
     }
 
+    // ✨ Оглавление — секция «## Оглавление» в начале заметки (one-shot AI)
+    [HttpPost("{id}/toc")]
+    public async Task<ActionResult<NoteDetail>> Toc(string id, CancellationToken ct)
+    {
+        try
+        {
+            var note = await _ai.SuggestTocAsync(UserId, id, ct);
+            await Broadcast("updated", note.Id);
+            return Ok(note);
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (InvalidOperationException ex) { return StatusCode(502, new { error = ex.Message }); }
+    }
+
+    // ✨ Перевод — секция «## Перевод» в конце заметки (one-shot AI)
+    [HttpPost("{id}/translate")]
+    public async Task<ActionResult<NoteDetail>> Translate(string id, CancellationToken ct)
+    {
+        try
+        {
+            var note = await _ai.TranslateAsync(UserId, id, ct);
+            await Broadcast("updated", note.Id);
+            return Ok(note);
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (InvalidOperationException ex) { return StatusCode(502, new { error = ex.Message }); }
+    }
+
     // ✨ Конспект дня — секция «Итоги дня» в daily note (one-shot AI)
     [HttpPost("daily/summary")]
     public async Task<ActionResult<NoteDetail>> DailySummary([FromBody] DailyNoteRequest req, CancellationToken ct)

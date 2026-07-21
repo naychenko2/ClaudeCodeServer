@@ -295,6 +295,22 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
           finally { endAiBusy(); }
         })();
       }
+      else if (action === 'note.toc' || action === 'note.translate') {
+        const isToc = action === 'note.toc';
+        void (async () => {
+          beginAiBusy();
+          try {
+            const updated = isToc ? await api.notes.toc(note.id) : await api.notes.translate(note.id);
+            bumpNotes();
+            // id мог смениться при обновлении — переключаемся на новый
+            if (updated.id !== note.id) onSelectNote(updated.id);
+            else setNote(updated);
+            showToast(isToc ? 'Оглавление собрано' : 'Перевод добавлен', updated.title, 'info');
+          } catch {
+            showToast('Ошибка', isToc ? 'Не удалось собрать оглавление' : 'Не удалось перевести заметку', 'info');
+          } finally { endAiBusy(); }
+        })();
+      }
     };
     window.addEventListener('cc-ai-run', onRun);
     return () => window.removeEventListener('cc-ai-run', onRun);

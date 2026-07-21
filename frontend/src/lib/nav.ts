@@ -114,14 +114,22 @@ export function parseHash(hash: string = window.location.hash): HashTarget | nul
   }
 }
 
+// Событие смены навигации — для потребителей, которым нужен немедленный отклик на переход
+// (напр. AI-хаб сбрасывает свой статус сразу, не дожидаясь опросного тика). pushState/
+// replaceState сами не шлют popstate/hashchange, поэтому уведомляем явно.
+export const NAV_CHANGE_EVENT = 'cc-nav-change';
+function notifyNavChange() { window.dispatchEvent(new Event(NAV_CHANGE_EVENT)); }
+
 // Новая запись истории (переход «вглубь»)
 export function navPush(s: NavSnapshot) {
   window.history.pushState(s, '', toHash(s));
+  notifyNavChange();
 }
 
 // Перезапись текущей записи (сидирование/латеральные смены)
 export function navReplace(s: NavSnapshot) {
   window.history.replaceState(s, '', toHash(s));
+  notifyNavChange();
 }
 
 export function getNav(): NavSnapshot | null {

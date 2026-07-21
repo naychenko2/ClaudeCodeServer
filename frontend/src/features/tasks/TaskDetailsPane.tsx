@@ -13,6 +13,7 @@ import { Toolbar } from '../../components/Toolbar';
 import { MarkdownViewer } from '../../components/MarkdownViewer';
 import { api } from '../../lib/api';
 import { showToast } from '../../lib/toast';
+import { beginAiBusy, endAiBusy } from '../../lib/ai/busy';
 import {
   NO_PROJECT_COLOR, NO_PROJECT_LABEL, PRIORITY_LABEL, STATUS_DOT, STATUS_LABEL,
   deleteTask, dueLabel, projectColor, projectInitial, recurrenceLabel, reminderLabel, updateTask,
@@ -159,6 +160,7 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
         setEditing(true);
       } else if (action === 'task.classify') {
         void (async () => {
+          beginAiBusy();
           try {
             const r = await api.tasks.aiClassify(task.title, task.description, task.projectId);
             const labels = Array.from(new Set([...(task.labels ?? []), ...r.labels]));
@@ -167,14 +169,17 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
             await api.tasks.update(task.id, { priority, labels });
             showToast('Задача оценена', `Приоритет: ${r.priority ?? '—'}; метки: ${r.labels.join(', ') || '—'}`);
           } catch { showToast('Ошибка', 'Не удалось оценить задачу'); }
+          finally { endAiBusy(); }
         })();
       } else if (action === 'task.dedup') {
         void (async () => {
+          beginAiBusy();
           try {
             const r = await api.tasks.aiFindDuplicate(task.title, task.description, task.projectId);
             if (r.duplicateId) showToast('Возможный дубль', r.reason ?? 'Похоже на существующую задачу');
             else showToast('Дублей не найдено', 'Похожих задач нет');
           } catch { showToast('Ошибка', 'Не удалось проверить дубли'); }
+          finally { endAiBusy(); }
         })();
       }
     };

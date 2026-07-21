@@ -4,6 +4,7 @@ import { C, FONT, R } from '../../lib/design';
 import { api } from '../../lib/api';
 import { bumpKnowledge, useKnowledgeVersion } from '../../lib/knowledge';
 import { showToast } from '../../lib/toast';
+import { beginAiBusy, endAiBusy } from '../../lib/ai/busy';
 import { Toolbar, ToolbarIconButton, tbBtnPrimary } from '../../components/Toolbar';
 import { Splitter } from '../../components/ui';
 import { typeIcon, IconBack, IconPlus, IconDots, IconFile, IconTrash, IconSearch, IconLock, IconChevronRight } from './shared';
@@ -104,11 +105,13 @@ export function KnowledgeView({ kb, isMobile, onBack, onAddDocument, onDelete }:
         searchRef.current?.focus();
       } else if (action === 'knowledge.describe') {
         void (async () => {
+          beginAiBusy();
           try {
             const r = await api.knowledgeBases.describe(kb.id);
             showToast('Описание базы обновлено', r.description);
             bumpKnowledge();
           } catch { showToast('Ошибка', 'Не удалось сгенерировать описание', 'info'); }
+          finally { endAiBusy(); }
         })();
       }
     };

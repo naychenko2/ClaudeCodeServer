@@ -32,6 +32,7 @@ import { EmptyState } from './EmptyState';
 import { getLanguage } from '../lib/getLanguage';
 import { MarkdownViewer } from './MarkdownViewer';
 import { showToast } from '../lib/toast';
+import { beginAiBusy, endAiBusy } from '../lib/ai/busy';
 import { DocCommentedMarkdown } from '../features/notes/DocComments';
 import { useNotes, ensureNotesLoaded, existingTitleSet, useNotesVersion } from '../lib/notes';
 import { NoteConnections } from '../features/notes/NoteConnections';
@@ -609,6 +610,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
   const runDocAi = async (kind: 'summary' | 'extract' | 'tags' | 'convert') => {
     if (!fileContent?.isDocument || docAiBusy) return;
     setDocAiBusy(true);
+    beginAiBusy();
     try {
       if (kind === 'summary') {
         const r = await api.files.documentSummary(project.id, filePath);
@@ -629,6 +631,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
       showToast('Ошибка', 'Не удалось обработать документ', 'info');
     } finally {
       setDocAiBusy(false);
+      endAiBusy();
     }
   };
 
@@ -653,10 +656,12 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
       else if (a === 'file.tags') void runDocAi('tags');
       else if (a === 'file.convert') void runDocAi('convert');
       else if (a === 'file.toMarkdown') void (async () => {
+        beginAiBusy();
         try {
           const r = await api.files.toMarkdown(project.id, filePath);
           showToast('Сохранено в Markdown', r.savedPath);
         } catch { showToast('Ошибка', 'Не удалось трансформировать файл', 'info'); }
+        finally { endAiBusy(); }
       })();
     };
     window.addEventListener('cc-ai-run', onRun);

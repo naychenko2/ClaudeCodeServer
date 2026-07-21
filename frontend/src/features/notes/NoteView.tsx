@@ -21,6 +21,7 @@ import { useOnline } from '../../hooks/useOnline';
 import { OfflineError } from '../../lib/offline';
 import { getNoteForView, saveNoteOffline, deleteNoteOffline, offlineResolve } from '../../lib/notesOffline';
 import { showToast } from '../../lib/toast';
+import { beginAiBusy, endAiBusy } from '../../lib/ai/busy';
 import { registerCopyDoc, copyMarkdown, copyRenderedHtml } from '../../lib/selectionScope';
 import { ensurePersonasLoaded, personaLabel, usePersonas } from '../../lib/personas';
 import {
@@ -270,6 +271,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
       }
       else if (action === 'note.title') {
         void (async () => {
+          beginAiBusy();
           try {
             const { title } = await api.notes.suggestTitle(note.id);
             if (!title) { showToast('Заголовок', 'Не удалось придумать заголовок', 'info'); return; }
@@ -277,6 +279,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
             setNote(updated);
             showToast('Заголовок обновлён', title, 'info');
           } catch { showToast('Ошибка', 'Не удалось придумать заголовок', 'info'); }
+          finally { endAiBusy(); }
         })();
       }
     };

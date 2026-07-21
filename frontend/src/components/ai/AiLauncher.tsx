@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { C, FONT, R, Z, SHADOW } from '../../lib/design';
-import { getNav } from '../../lib/nav';
+import { getNav, NAV_CHANGE_EVENT } from '../../lib/nav';
+import { useAiBusy } from '../../lib/ai/busy';
 import { getFlag } from '../../lib/featureFlags';
 import { api } from '../../lib/api';
 import { useOnline } from '../../hooks/useOnline';
@@ -40,7 +41,16 @@ export function AiLauncher() {
   const [semanticCaps, setSemanticCaps] = useState(false);
   // Мобильный вид — палитра становится нижней шторкой
   const isMobile = useIsMobile();
+  const aiBusy = useAiBusy();
   useEffect(() => { api.notes.caps().then(c => setSemanticCaps(c.semantic)).catch(() => {}); }, []);
+
+  // Немедленный сброс статуса FAB при смене раздела — не ждём опросного тика (иначе старая
+  // подсказка/уровень «залипают» до 1.5 с и кажется, что статус не сбрасывается).
+  useEffect(() => {
+    const onNav = () => { setSuggestion(null); setFabLevel('none'); setRecs([]); };
+    window.addEventListener(NAV_CHANGE_EVENT, onNav);
+    return () => window.removeEventListener(NAV_CHANGE_EVENT, onNav);
+  }, []);
 
   // Контекст собираем на момент открытия (getNav синхронен вне React)
   const buildCtx = (): AiActionCtx => ({ nav: getNav(), online, flag: getFlag, caps: { semantic: semanticCaps }, chat: getChatContext() });
@@ -253,12 +263,19 @@ export function AiLauncher() {
           style={{
             ...fabStyle,
             ...(isMobile ? { right: 16, width: FAB_MOBILE, height: FAB_MOBILE } : {}),
-            ...(fabDim ? { opacity: 0.5, filter: 'grayscale(0.7)' } : {}),
+            ...(fabDim && !aiBusy ? { opacity: 0.5, filter: 'grayscale(0.7)' } : {}),
           }}
           onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-2px)'; enterFab(); }}
           onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)'; leaveFab(); }}
         >
-          {showPulse && <span style={isMobile ? pulseDotMobile : pulseDot} />}
+          {/* Круговой индикатор работы: дуга «бегает» вокруг кнопки, пока идёт AI-действие */}
+          {aiBusy && (
+            <svg viewBox="0 0 100 100" aria-hidden style={busyRing}>
+              <circle cx="50" cy="50" r="45" fill="none" stroke={C.onAccent}
+                strokeWidth="6" strokeLinecap="round" strokeDasharray="65 220" opacity={0.95} />
+            </svg>
+          )}
+          {showPulse && !aiBusy && <span style={isMobile ? pulseDotMobile : pulseDot} />}
           <SparkleIcon size={isMobile ? 16 : 24} />
         </button>
       )}
@@ -436,6 +453,12 @@ const toggleTrack: React.CSSProperties = {
 const toggleThumb: React.CSSProperties = {
   position: 'absolute', top: 2, left: 2, width: 11, height: 11, borderRadius: '50%',
   background: C.bgWhite, boxShadow: SHADOW.thumb, transition: 'transform .16s',
+};
+
+// Круговой индикатор работы AI-действия: SVG-кольцо чуть больше кнопки, вращается (cc-spin)
+const busyRing: React.CSSProperties = {
+  position: 'absolute', inset: -3, width: 'calc(100% + 6px)', height: 'calc(100% + 6px)',
+  animation: 'cc-spin 0.9s linear infinite', pointerEvents: 'none',
 };
 
 // --- Push-слой: пульс на кнопке + балун подсказки ---

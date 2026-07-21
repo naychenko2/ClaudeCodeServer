@@ -3,7 +3,7 @@ import { C, R, SHADOW, Z } from '../../lib/design';
 import { ConnectionStatus } from '../../components/ConnectionStatus';
 import { SegmentedControl } from '../../components/ui';
 import { useThemeMode, setThemeMode, type ThemeMode } from '../../lib/themeMode';
-import { History, Book, Gauge, Users, Lock, FlaskConical, LogOut, Mic } from 'lucide-react';
+import { History, Book, Gauge, Users, Lock, FlaskConical, LogOut, Mic, Cpu } from 'lucide-react';
 import { ICON_SIZE } from '../../components/ui/icons';
 import { isMicKeyboardFallback, clearMicKeyboardFallback } from '../../lib/voiceInput';
 import { showToast } from '../../lib/toast';
@@ -49,9 +49,11 @@ interface Props {
   onOpenKnowledge?: () => void;
   // «Использование» (лимиты подписок Claude, баланс провайдеров) — вызов из меню аватара
   onShowUsage?: () => void;
+  // «Фоновые задачи» (исполнитель фоновых ИИ-действий) — только админ, undefined = не показывать
+  onShowBackgroundTasks?: () => void;
 }
 
-export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout, onShowChangePassword, onShowFeatureFlags, onShowUserManagement, hideStatus, onShowHistory, historyBadge = 0, historyNeverSeen = false, historyActive = false, onOpenKnowledge, onShowUsage }: Props) {
+export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout, onShowChangePassword, onShowFeatureFlags, onShowUserManagement, hideStatus, onShowHistory, historyBadge = 0, historyNeverSeen = false, historyActive = false, onOpenKnowledge, onShowUsage, onShowBackgroundTasks }: Props) {
   // Как обращаемся к пользователю; логин остаётся видимым отдельной строкой,
   // чтобы было понятно, под каким аккаунтом сидишь
   const name = displayName?.trim() || username;
@@ -148,6 +150,15 @@ export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout
             >
               <Users size={ICON_SIZE.xs} strokeWidth={2} />
               Пользователи
+            </button>
+          )}
+          {isAdmin && onShowBackgroundTasks && (
+            <button
+              onClick={() => { setOpen(false); onShowBackgroundTasks(); }}
+              style={dropdownItem}
+            >
+              <Cpu size={ICON_SIZE.xs} strokeWidth={2} />
+              Фоновые задачи
             </button>
           )}
           <button

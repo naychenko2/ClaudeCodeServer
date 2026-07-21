@@ -127,9 +127,16 @@ export function assistantName(value?: string | null): string {
   return modelCaps(value).displayName || 'Claude';
 }
 
+// Метки виртуальных «провайдеров» — групп, которых нет в реестре LlmProviders, но которые
+// появляются в каталоге моделей отдельной группой (напр. прямой HTTP-адаптер OpenRouter).
+const VIRTUAL_PROVIDER_LABELS: Record<string, string> = {
+  'openrouter-direct': 'OpenRouter · прямой вызов',
+};
+
 // Подпись провайдера по ключу (для группировки в ModelPicker, вкладок и т.п.)
 export function providerLabel(key: string): string {
-  return _providers[key]?.displayName
+  return VIRTUAL_PROVIDER_LABELS[key]
+    ?? _providers[key]?.displayName
     ?? (key === 'claude' ? 'Claude' : key.charAt(0).toUpperCase() + key.slice(1));
 }
 

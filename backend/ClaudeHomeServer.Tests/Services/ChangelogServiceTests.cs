@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Llm;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -30,9 +31,8 @@ public class ChangelogServiceTests : IDisposable
                 ["DataPath"] = Path.Combine(_tempDir, "data", "projects.json")
             }).Build();
 
-        var providers = new ClaudeHomeServer.Services.Llm.LlmProviderRegistry(config);
         _sut = new ChangelogService(new FileService(), config, NullLogger<ChangelogService>.Instance,
-            new ClaudeHomeServer.Services.Llm.OneShotClaudeRunner(providers, TestLauncherFactory.Instance));
+            BuildCheapRunner(config));
     }
 
     // ─── Источник не задан ──────────────────────────────────────────────────
@@ -251,6 +251,26 @@ public class ChangelogServiceTests : IDisposable
         var json = File.ReadAllText(cacheFile);
         json.Should().NotContain("2026-07-01");
         json.Should().Contain("2026-07-02");
+    }
+
+    // Реальный CheapTextRunner поверх claude-раннера: Ollama и openrouter в тестовом конфиге
+    // не настроены (Enabled=false), поэтому цепочка вырождается в claude. Здесь коммитов нет,
+    // так что раннер вообще не дёргается — нужен лишь для сборки ChangelogService.
+    private sealed class NullHttpFactory : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name) => new();
+    }
+
+    private static ICheapTextRunner BuildCheapRunner(IConfiguration config)
+    {
+        var httpFactory = new NullHttpFactory();
+        var ollama = new OllamaClient(httpFactory, config, NullLogger<OllamaClient>.Instance);
+        var store = new LocalActionOverridesStore(config, NullLogger<LocalActionOverridesStore>.Instance);
+        var router = new LocalActionRouter(ollama, store, config, NullLogger<LocalActionRouter>.Instance);
+        var providers = new LlmProviderRegistry(config);
+        var cloud = new CloudCheapClient(httpFactory, config, providers, NullLogger<CloudCheapClient>.Instance);
+        var claude = new OneShotClaudeRunner(providers, TestLauncherFactory.Instance);
+        return new CheapTextRunner(router, ollama, cloud, claude, NullLogger<CheapTextRunner>.Instance);
     }
 
     public void Dispose()

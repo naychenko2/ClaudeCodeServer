@@ -10,6 +10,7 @@ import { UserManagementModal } from './UserManagementModal';
 import { ChangePasswordDialog } from './ChangePasswordDialog';
 import { FeatureFlagsModal } from './FeatureFlagsModal';
 import { UsageScreen } from './UsageScreen';
+import { BackgroundTasksModal } from './BackgroundTasksModal';
 import { api } from '../lib/api';
 import { getUnreadCount, subscribeToNotifications, ensureNotificationsSubscribed, ensureUnreadCountLoaded } from '../lib/notifications';
 
@@ -40,6 +41,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive }: Props
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [showFeatureFlags, setShowFeatureFlags] = useState(false);
   const [showUsage, setShowUsage] = useState(false);
+  const [showBackgroundTasks, setShowBackgroundTasks] = useState(false);
 
   const isAdmin = auth.role === 'admin';
   const serverUrl = localStorage.getItem('cc_server_url') ?? '';
@@ -209,6 +211,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive }: Props
           onShowChangePassword={() => setShowChangePassword(true)}
           onShowFeatureFlags={() => setShowFeatureFlags(true)}
           onShowUsage={() => setShowUsage(true)}
+          onShowBackgroundTasks={isAdmin ? () => setShowBackgroundTasks(true) : undefined}
           onShowUserManagement={() => setShowUserMgmt(true)}
           hideStatus={isMobile}
           // «Знания» и «Что нового» живут здесь на обеих платформах: в таббар они не
@@ -225,6 +228,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive }: Props
       {showChangePassword && <ChangePasswordDialog onClose={() => setShowChangePassword(false)} />}
       {showFeatureFlags && <FeatureFlagsModal onClose={() => setShowFeatureFlags(false)} />}
       {showUsage && <UsageScreen onClose={() => setShowUsage(false)} />}
+      {showBackgroundTasks && <BackgroundTasksModal onClose={() => setShowBackgroundTasks(false)} />}
     </div>
   );
 }

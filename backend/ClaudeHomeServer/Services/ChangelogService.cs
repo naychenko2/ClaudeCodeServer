@@ -15,8 +15,12 @@ namespace ClaudeHomeServer.Services;
 /// коммитах дня.
 /// </summary>
 public class ChangelogService(FileService files, IConfiguration config, ILogger<ChangelogService> logger,
-    Llm.OneShotClaudeRunner claude)
+    Llm.ICheapTextRunner cheap)
 {
+    // Длинному JSON-ответу сводки дня (до 12 пунктов) профильного лимита вывода мало —
+    // задаём свой большой maxTokens (на claude-путь не влияет: там лимит не ограничиваем)
+    private const int ChangelogMaxTokens = 8192;
+
     private readonly string _cacheDir = Path.Combine(
         Path.GetDirectoryName(config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))
             ?? Path.Combine(AppContext.BaseDirectory, "data"),
@@ -419,9 +423,12 @@ public class ChangelogService(FileService files, IConfiguration config, ILogger<
         try
         {
             // Detailed-режим: вместе с ответом получаем расход вызова — он показывается
-            // пользователю внизу дня, чтобы цена сводки не была невидимой
-            var run = await claude.RunDetailedAsync(prompt, claude.NormalizeModel(_model),
-                TimeSpan.FromMilliseconds(_claudeTimeoutMs), ct);
+            // пользователю внизу дня, чтобы цена сводки не была невидимой. Идёт через маршрут
+            // действия (локаль/бесплатное облако/claude — выбор админа); _model — модель
+            // claude-пути по умолчанию. На бесплатной модели usage=null → стоимость не рисуется.
+            var run = await cheap.RunDetailedAsync(Llm.LocalActionCatalog.Changelog, prompt,
+                fallbackModel: _model, timeout: TimeSpan.FromMilliseconds(_claudeTimeoutMs),
+                maxTokens: ChangelogMaxTokens, ct: ct);
             var generation = run.Usage is { } u
                 ? new ChangelogGeneration(run.DurationMs, u.InputTokens, u.CacheCreationTokens,
                     u.CacheReadTokens, u.OutputTokens, u.CostUsd, u.Model, DateTimeOffset.Now)

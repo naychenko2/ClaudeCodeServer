@@ -27,15 +27,22 @@ export async function startChatWithPrompt(text: string, ctx: AiActionCtx): Promi
       window.dispatchEvent(new Event('cc-compose-prefill'));
       return;
     }
+    // Подбираем максимально релевантную персону под задачу (best-effort: ошибка/нет персоны —
+    // создаём обычный чат, как раньше). Так чат-действие сразу ведёт нужный специалист.
+    let personaId: string | null = null;
+    try { personaId = (await api.personas.match(text, project?.id)).personaId; } catch { /* без персоны */ }
     if (project) {
-      // Чат В ПРОЕКТЕ: создаём сессию и открываем её каналом диплинка проектного чата.
-      const s = await api.sessions.create(project.id);
+      // Чат В ПРОЕКТЕ: создаём сессию (от лица персоны, если подобрана) и открываем каналом диплинка.
+      const s = personaId
+        ? await api.personas.createChat(personaId, { projectId: project.id })
+        : await api.sessions.create(project.id);
       sessionStorage.setItem('cc_pending_project_chat', `${project.id}|${s.id}`);
       window.dispatchEvent(new Event('cc-pending-project-chat'));
     } else {
-      // ГЛОБАЛЬНЫЙ чат: создаём чат вне проекта и открываем его (App переключит на «Чаты»,
-      // ChatsPage смонтирует ChatPanel c композером, который заберёт затравку).
-      const chat = await api.chats.create();
+      // ГЛОБАЛЬНЫЙ чат: от лица персоны (если подобрана) либо обычный чат вне проекта.
+      const chat = personaId
+        ? await api.personas.createChat(personaId, {})
+        : await api.chats.create();
       window.dispatchEvent(new CustomEvent('cc-open-chat', { detail: { chatId: chat.id } }));
     }
   } catch (e) {

@@ -40,6 +40,7 @@ public static class LocalActionCatalog
     public const string DocTags = "doc-tags";
     public const string DocFormat = "doc-format";
     public const string KbDescribe = "kb-describe";
+    public const string PersonaMatch = "persona-match";
     public const string TaskAi = "task-ai";
     public const string TaskClassify = "task-classify";
     public const string TaskNormalizeTitle = "task-normalize-title";
@@ -81,6 +82,7 @@ public static class LocalActionCatalog
         new(DocTags, "Теги документа", "Документы", CheapProfile.Text, DefaultLocal: true),
         new(DocFormat, "Разметка Markdown при трансформации", "Документы", CheapProfile.Large, DefaultLocal: true),
         new(KbDescribe, "Описание базы знаний", "Знания", CheapProfile.Small, DefaultLocal: true),
+        new(PersonaMatch, "Подбор персоны под задачу", "Персоны", CheapProfile.Small, DefaultLocal: true),
         new(TaskAi, "Описание и подзадачи задач", "Задачи", CheapProfile.Text, DefaultLocal: true),
         new(TaskClassify, "Приоритет и метки задач", "Задачи", CheapProfile.Small, DefaultLocal: true),
         new(TaskNormalizeTitle, "Нормализация заголовка задачи", "Задачи", CheapProfile.Small, DefaultLocal: true),

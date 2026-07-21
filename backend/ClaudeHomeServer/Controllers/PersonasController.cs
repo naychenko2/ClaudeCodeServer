@@ -28,6 +28,7 @@ public class PersonasController : ControllerBase
     private readonly KnowledgeService _knowledge;
     private readonly FalImageService _falImage;
     private readonly Services.Llm.OneShotClaudeRunner _oneShot;
+    private readonly Services.Llm.ICheapTextRunner _cheap;
     private readonly PersonaPromptBuilder _promptBuilder;
     private readonly PersonaAskService _ask;
     private readonly PersonaAutomationService _automation;
@@ -39,10 +40,11 @@ public class PersonasController : ControllerBase
         SessionManager sessions, PersonaMemoryService memory, PersonaBindingsService bindings,
         NotesService notes, SkillsService skills, KnowledgeService knowledge,
         FalImageService falImage,
-        Services.Llm.OneShotClaudeRunner oneShot,
+        Services.Llm.OneShotClaudeRunner oneShot, Services.Llm.ICheapTextRunner cheap,
         PersonaPromptBuilder promptBuilder, PersonaAskService ask, PersonaAutomationService automation, IConfiguration config,
         ILogger<PersonasController> log, IHubContext<SessionHub> hub)
     {
+        _cheap = cheap;
         _personas = personas;
         _projects = projects;
         _sessions = sessions;
@@ -83,6 +85,40 @@ public class PersonasController : ControllerBase
             return Ok(_personas.GetByOwner(UserId)
                 .Where(p => p.Scope == PersonaScope.Global).ToList());
         return Ok(_personas.GetByOwner(UserId));
+    }
+
+    // Подбор максимально релевантной персоны под задачу (для чат-действий AI-хаба, которые
+    // открывают новый чат). Локальная модель выбирает из доступных персон; нет подходящей /
+    // нет персон / ошибка → personaId=null (чат создаётся без персоны, как раньше).
+    [HttpPost("match")]
+    public async Task<IActionResult> MatchPersona([FromBody] MatchPersonaRequest req)
+    {
+        var task = (req?.Task ?? "").Trim();
+        var personas = _personas.GetForContext(UserId, req?.ProjectId);
+        if (task.Length == 0 || personas.Count == 0) return Ok(new { personaId = (string?)null });
+
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("Ниже — задача пользователя и список доступных персон-ассистентов. Выбери ОДНУ персону, " +
+            "максимально релевантную задаче по её роли и специализации. Ответь ТОЛЬКО id выбранной персоны " +
+            "(одной строкой). Если ни одна явно не подходит — ответь none.");
+        sb.AppendLine($"\nЗадача: {task}\n");
+        sb.AppendLine("Персоны (id | роль | описание):");
+        foreach (var p in personas.Take(40))
+        {
+            var desc = p.Description ?? p.Contract?.Character ?? "";
+            if (desc.Length > 120) desc = desc[..120];
+            sb.AppendLine($"{p.Id} | {p.Role ?? p.Name} | {desc.Replace('\n', ' ')}");
+        }
+        try
+        {
+            var raw = await _cheap.RunAsync(Services.Llm.LocalActionCatalog.PersonaMatch, sb.ToString(),
+                _config["Notes:AiModel"] ?? _config["Tasks:AiModel"] ?? "haiku", ct: HttpContext.RequestAborted);
+            var first = raw.Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim() ?? "";
+            // Устойчиво к обрамлению: ищем id из списка внутри ответа модели
+            var id = personas.FirstOrDefault(p => first.Contains(p.Id, StringComparison.Ordinal))?.Id;
+            return Ok(new { personaId = id });
+        }
+        catch { return Ok(new { personaId = (string?)null }); }
     }
 
     // Каталог пантеона OmO: карточки-шаблоны + связь с уже подключёнными персонами
@@ -1957,6 +1993,7 @@ public record CreatePersonaChatRequest(string Mode = "auto", string? ResumeSessi
     string? ProjectId = null);
 
 public record ConnectPantheonRequest(List<string>? Keys = null);
+public record MatchPersonaRequest(string? Task = null, string? ProjectId = null);
 
 // Правило автоматизации персоны (CRUD /automation). TriggerArgs — гибкий JSON-мешок
 // (ключи зависят от TriggerType, см. комментарий к AutomationTrigger).

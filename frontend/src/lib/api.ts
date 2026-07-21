@@ -360,6 +360,11 @@ export const api = {
     chats: (id: string) => request<Session[]>(`/personas/${encodeURIComponent(id)}/chats`),
     createChat: (id: string, body: { mode?: string; resumeSessionId?: string; name?: string; projectId?: string }) =>
       request<Session>(`/personas/${encodeURIComponent(id)}/chats`, { method: 'POST', body: JSON.stringify(body) }),
+    // Подобрать максимально релевантную персону под задачу (для чат-действий AI-хаба). null — нет подходящей.
+    match: (task: string, projectId?: string | null) =>
+      request<{ personaId: string | null }>('/personas/match', {
+        method: 'POST', body: JSON.stringify({ task, projectId: projectId ?? null }),
+      }),
 
     // Пантеон OmO: каталог ролей-специалистов с бэкенда + идемпотентное подключение
     // всей команды (keys не передаём = все роли). После connect прилетит personas_changed.

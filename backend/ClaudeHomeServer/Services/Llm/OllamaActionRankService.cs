@@ -78,7 +78,12 @@ public sealed class OllamaActionRankService
             $"МАКСИМУМ: {maxK}\n\n" +
             $"ДОСТУПНЫЕ ДЕЙСТВИЯ:\n{JsonSerializer.Serialize(menu)}";
 
-        var raw = await _ollama.ChatJsonAsync(SystemPrompt, userPrompt, FormatSchema, ct);
+        // Профиль каталога применяем явно: раньше вызов шёл с дефолтами ChatJsonAsync, и
+        // num_ctx/num_predict/timeout из CheapProfile.Small молча не действовали — меню
+        // действий с длинным контекстом обрезалось на входе.
+        var spec = _router.ProfileFor(LocalActionCatalog.ActionRank);
+        var raw = await _ollama.ChatJsonAsync(SystemPrompt, userPrompt, FormatSchema, ct,
+            timeoutMs: spec.TimeoutMs, numPredict: spec.NumPredict, numCtx: spec.NumCtx);
         if (string.IsNullOrWhiteSpace(raw)) return [];
 
         var allowed = actions.Select(a => a.Id).ToHashSet(StringComparer.Ordinal);

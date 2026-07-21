@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { X, AlertTriangle } from 'lucide-react';
 import { api } from '../lib/api';
-import type { UsageResponse, FalAccountResponse, UsageSnapshot, OllamaUsageInfo } from '../types';
+import type { UsageResponse, FalAccountResponse, UsageSnapshot, OllamaUsageInfo, OllamaActionInfo } from '../types';
 import { C, FONT, SHADOW } from '../lib/design';
 import { type RateWindow, RATE_COLORS, windowLabel, fmtReset, latestPerWindow, seriesByWindow, worstWindow } from '../lib/rateLimit';
-import { cliProviderKeys, providerCapsByKey, providerLabel } from '../lib/models';
+import { cliProviderKeys, providerCapsByKey, providerLabel, useModels, modelProvider, modelLabel, type ModelOption } from '../lib/models';
 
 const STALE_MS = 30 * 60 * 1000;
 const MONEY = C.accent;
@@ -347,63 +347,161 @@ function FalTab({ days, setDays }: { days: number; setDays: (d: number) => void 
 
 // «Локальная модель» — Ollama: какая модель и на какие фоновые действия она заведена.
 // Лимитов/баланса нет (бесплатно), поэтому показываем модель + маршрут каждого действия.
-function OllamaTab({ info }: { info: OllamaUsageInfo | undefined }) {
+// Админу маршрут доступен на переключение прямо здесь (настройка серверная, общая для всех):
+// применяется сразу, без перезапуска сервера.
+function OllamaTab({ info, onChanged }: { info: OllamaUsageInfo | undefined; onChanged: (a: OllamaActionInfo) => void }) {
+  const isAdmin = (localStorage.getItem('cc_role') || sessionStorage.getItem('cc_role')) === 'admin';
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const models = useModels();
+
+  // Модели по провайдерам для селектора; Claude — первой группой, как в ModelPicker
+  const modelGroups = useMemo(() => {
+    const by = new Map<string, ModelOption[]>();
+    for (const o of models) {
+      const p = o.provider ?? modelProvider(o.value);
+      (by.get(p) ?? by.set(p, []).get(p)!).push(o);
+    }
+    return [...by.entries()].sort(([a], [b]) => (a === 'claude' ? -1 : b === 'claude' ? 1 : 0));
+  }, [models]);
+
+  // Подпись маршрута для не-админа: у выбранной модели показываем её человеческое имя
+  const routeLabel = (route?: string) =>
+    !route || route === 'claude' ? 'Claude' : modelLabel(route);
+
+  // Оптимистично: сразу применяем в родителе, при ошибке возвращаем прежнее значение.
+  async function pick(a: OllamaActionInfo, route: string) {
+    setBusy(a.key);
+    setError(null);
+    onChanged({ ...a, route, routedToOllama: route === 'local', source: 'admin' });
+    try {
+      const res = await api.localActions.setRoute(a.key, route);
+      onChanged({ ...a, route: res.route, routedToOllama: res.route === 'local',
+        source: res.source as OllamaActionInfo['source'] });
+    } catch (e) {
+      onChanged(a);
+      setError(e instanceof Error ? e.message : 'Не удалось сохранить');
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function reset(a: OllamaActionInfo) {
+    setBusy(a.key);
+    setError(null);
+    try {
+      const res = await api.localActions.reset(a.key);
+      onChanged({ ...a, route: res.route, routedToOllama: res.route === 'local',
+        source: res.source as OllamaActionInfo['source'] });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Не удалось сбросить');
+    } finally {
+      setBusy(null);
+    }
+  }
+
   if (info === undefined)
     return <div style={{ padding: '40px 0', textAlign: 'center', color: C.textMuted, fontSize: 13 }}>Загрузка…</div>;
-  if (!info.enabled)
-    return (
-      <div style={{ padding: '36px 12px', textAlign: 'center', color: C.textMuted, fontSize: 12.5, lineHeight: 1.5 }}>
-        <div style={{ fontSize: 24, marginBottom: 6, opacity: 0.5 }}>◌</div>
-        Локальная модель не настроена. Задайте <span style={{ fontFamily: FONT.mono }}>Ollama:Model</span> и{' '}
-        <span style={{ fontFamily: FONT.mono }}>Ollama:BaseUrl</span> в appsettings.Local.json — и фоновые действия
-        (теги, извлечение задач, память и др.) смогут работать на ней бесплатно, без обращений к платным моделям.
-      </div>
-    );
 
   const onLocal = info.actions.filter(a => a.routedToOllama);
-  const onClaude = info.actions.filter(a => !a.routedToOllama);
   // Группируем в порядке появления групп
   const groups: string[] = [];
   for (const a of info.actions) if (!groups.includes(a.group)) groups.push(a.group);
 
   return (
     <div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
-        <MetricCard value={info.model ?? '—'} label="локальная модель · Ollama" valueColor={C.accent}>
-          {info.baseUrl && <div style={{ fontSize: 11, color: C.textMuted, marginTop: 6, fontFamily: FONT.mono, overflow: 'hidden', textOverflow: 'ellipsis' }}>{info.baseUrl}</div>}
-        </MetricCard>
-        <MetricCard value={`${onLocal.length} / ${info.actions.length}`} label="действий на локальной модели" valueColor={C.textHeading} />
-      </div>
+      {/* Ollama не настроена — список действий всё равно показываем: выбрать модель провайдера
+          можно и без локали, она в этом случае просто выпадает из цепочки */}
+      {!info.enabled && (
+        <div style={{ padding: '10px 12px', marginBottom: 12, borderRadius: 8, fontSize: 12, lineHeight: 1.5,
+          color: C.textSecondary, background: C.bgInset, border: `1px solid ${C.border}` }}>
+          Локальная модель не настроена — задайте <span style={{ fontFamily: FONT.mono }}>Ollama:Model</span> и{' '}
+          <span style={{ fontFamily: FONT.mono }}>Ollama:BaseUrl</span> в appsettings.Local.json, и фоновые действия
+          смогут считаться бесплатно. Сейчас шаг локальной модели в цепочке пропускается.
+        </div>
+      )}
+
+      {info.enabled && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
+          <MetricCard value={info.model ?? '—'} label="локальная модель · Ollama" valueColor={C.accent}>
+            {info.baseUrl && <div style={{ fontSize: 11, color: C.textMuted, marginTop: 6, fontFamily: FONT.mono, overflow: 'hidden', textOverflow: 'ellipsis' }}>{info.baseUrl}</div>}
+          </MetricCard>
+          <MetricCard value={`${onLocal.length} / ${info.actions.length}`} label="действий на локальной модели" valueColor={C.textHeading} />
+        </div>
+      )}
 
       <div style={{ fontSize: 11.5, color: C.textMuted, marginTop: 14, lineHeight: 1.5 }}>
-        Ниже — какие фоновые задачи считает бесплатная локальная модель, а какие остаются на платном Claude.
-        Переключается в <span style={{ fontFamily: FONT.mono }}>Ollama:Actions</span> (appsettings.Local.json).
+        Чем начинается каждая фоновая задача. Если выбранный исполнитель не ответил, действие
+        пробует локальную модель, затем Claude — цепочка одинакова для всех.
+        {isAdmin
+          ? ' Выбор применяется сразу для всех пользователей; дефолты задаются в Ollama:Actions (appsettings.Local.json).'
+          : <> Настраивается администратором и в <span style={{ fontFamily: FONT.mono }}>Ollama:Actions</span> (appsettings.Local.json).</>}
       </div>
+
+      {error && (
+        <div style={{ marginTop: 10, padding: '7px 10px', borderRadius: 6, fontSize: 12,
+          color: C.dangerText, background: C.dangerBg, border: `1px solid ${C.dangerBorder}` }}>
+          {error}
+        </div>
+      )}
 
       {groups.map(g => (
         <div key={g}>
           <div style={blockLabel}>{g}</div>
           {info.actions.filter(a => a.group === g).map(a => (
             <div key={a.key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '5px 0' }}>
-              <span style={{ fontSize: 12.5, color: C.textSecondary }}>{a.title}</span>
-              <span style={{ flexShrink: 0, fontFamily: FONT.sans, fontSize: 11, fontWeight: 600,
-                padding: '2px 9px', borderRadius: 20,
-                color: a.routedToOllama ? C.accent : C.textMuted,
-                background: a.routedToOllama ? C.accentMuted : C.bgInset,
-                border: `1px solid ${a.routedToOllama ? C.accent : C.border}` }}>
-                {a.routedToOllama ? 'локально' : 'Claude'}
+              <span style={{ fontSize: 12.5, color: C.textSecondary }}>
+                {a.title}
+                {isAdmin && a.source === 'admin' && (
+                  <button
+                    onClick={() => reset(a)}
+                    disabled={busy === a.key}
+                    title="Вернуть значение из конфигурации"
+                    style={{ marginLeft: 6, padding: '0 5px', fontSize: 10.5, fontFamily: FONT.sans,
+                      color: C.textMuted, background: 'transparent', border: `1px solid ${C.border}`,
+                      borderRadius: 20, cursor: busy === a.key ? 'default' : 'pointer' }}>
+                    переопределено ✕
+                  </button>
+                )}
               </span>
+              {isAdmin ? (
+                <select
+                  value={a.route ?? 'claude'}
+                  onChange={e => pick(a, e.target.value)}
+                  disabled={busy === a.key}
+                  title="С чего начинать действие; дальше — локальная модель, затем Claude"
+                  style={{ flexShrink: 0, maxWidth: 230, fontFamily: FONT.sans, fontSize: 11.5,
+                    padding: '3px 7px', borderRadius: 6, cursor: busy === a.key ? 'default' : 'pointer',
+                    opacity: busy === a.key ? 0.5 : 1,
+                    color: a.routedToOllama ? C.accent : C.textSecondary,
+                    background: C.bgWhite, border: `1px solid ${a.routedToOllama ? C.accent : C.border}` }}>
+                  <option value="local">Локальная{info.model ? ` · ${info.model}` : ''}</option>
+                  <option value="claude">Claude (модель по умолчанию)</option>
+                  {modelGroups.map(([provider, opts]) => (
+                    <optgroup key={provider} label={providerLabel(provider)}>
+                      {opts.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                    </optgroup>
+                  ))}
+                </select>
+              ) : (
+                <span style={{ flexShrink: 0, fontFamily: FONT.sans, fontSize: 11, fontWeight: 600,
+                  padding: '2px 9px', borderRadius: 20,
+                  color: a.routedToOllama ? C.accent : C.textMuted,
+                  background: a.routedToOllama ? C.accentMuted : C.bgInset,
+                  border: `1px solid ${a.routedToOllama ? C.accent : C.border}` }}>
+                  {a.routedToOllama ? 'локально' : routeLabel(a.route)}
+                </span>
+              )}
             </div>
           ))}
         </div>
       ))}
 
-      {onClaude.length > 0 && onLocal.length > 0 && (
-        <div style={{ fontSize: 11, color: C.textMuted, marginTop: 14, lineHeight: 1.5 }}>
-          «Лицо продукта» (сводки «Что нового», характеры персон, ответы персон) намеренно остаётся на Claude —
-          там важны качество и длинный контекст.
-        </div>
-      )}
+      <div style={{ fontSize: 11, color: C.textMuted, marginTop: 14, lineHeight: 1.5 }}>
+        «Лицо продукта» (генерация навыков, утренний бриф, черновик персоны и состав команды) по умолчанию
+        остаётся на Claude — там важны качество и длинный контекст. Сводки «Что нового» и ответы персон
+        в списке отсутствуют: им нужны расход по вызову и усилие модели, которых локальный путь не даёт.
+      </div>
     </div>
   );
 }
@@ -428,6 +526,12 @@ export function UsageScreen({ onClose }: { onClose: () => void }) {
     }
     return () => { c = true; };
   }, []);
+
+  // Точечное обновление маршрута действия после админского тумблера — без перезапроса /usage
+  const applyActionRoute = (a: OllamaActionInfo) =>
+    setUsage(prev => prev?.ollama
+      ? { ...prev, ollama: { ...prev.ollama, actions: prev.ollama.actions.map(x => x.key === a.key ? a : x) } }
+      : prev);
 
   // Снимки сторонних провайдеров (glm/deepseek) лежат под их ключами — из сводки Claude
   // исключаем, чтобы лимит чужого эндпоинта не выглядел клодовским
@@ -492,7 +596,7 @@ export function UsageScreen({ onClose }: { onClose: () => void }) {
           {tab === 'claude' ? <ClaudeTab snapshots={usage?.subscriptions?.['claude']?.snapshots ?? (usage ? claudeSnaps : usage)} rotation={rotationOf('claude')} tier={usage?.subscriptions?.['claude']?.tier} />
             : subKeys.includes(tab) ? <ClaudeTab snapshots={usage?.subscriptions?.[tab]?.snapshots} rotation={rotationOf(tab)} tier={usage?.subscriptions?.[tab]?.tier} />
             : tab === 'fal' ? <FalTab days={days} setDays={setDays} />
-            : tab === 'ollama' ? <OllamaTab info={usage?.ollama} />
+            : tab === 'ollama' ? <OllamaTab info={usage?.ollama} onChanged={applyActionRoute} />
             : <ProviderTab providerKey={tab} data={provData[tab]} />}
         </div>
       </div>

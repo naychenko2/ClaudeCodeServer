@@ -188,12 +188,34 @@ Ollama не Anthropic-совместим, поэтому идёт прямым H
   рекомендация). НЕ входят: задача-исполнитель (агентная сессия с инструментами, не one-shot),
   fal.ai (картинки), а также changelog/persona-ask (нужны detailed-usage/effort — всегда claude).
 - **Роутер** — [LocalActionRouter.cs](backend/ClaudeHomeServer/Services/Llm/LocalActionRouter.cs):
-  `UsesLocal(key)` = `Ollama.Enabled && (Ollama:Actions[key] ?? DefaultLocal)` (политика A —
-  при настроенном Ollama рекомендованные действия уходят на локаль, если конфиг не сказал иначе).
+  `Resolve(key)` → `ActionRoute(Kind, Model, Source)`, где `Kind` — исполнитель ПЕРВОГО шага
+  (`Local` | `Claude` | `Model` c id конкретной модели провайдера), а приоритет источников —
+  **выбор админа → `Ollama:Actions` конфига → `DefaultLocal` каталога** (политика A —
+  при настроенном Ollama рекомендованные действия начинаются с локали).
+  `Source` (`default|config|admin`) — по нему UI показывает, что переопределено, и даёт сброс.
+  `UsesLocal(key)` = `Ollama.Enabled && Kind == Local` (нужен `RunLocalOnlyAsync` и ранжиру).
   Профиль (`num_ctx`/`num_predict`/timeout) — из каталога, переопределяется `Ollama:Profiles`.
   `num_ctx` важен: дефолт Ollama (~4k) молча режет большой вход.
+- **Цепочка исполнения** (одна для всех действий): **выбранное → локальная модель → claude**.
+  Шаг выбранной модели считается неудавшимся при исключении (ненастроенный провайдер, ненулевой
+  код CLI, таймаут — `OneShotClaudeRunner` на всё это бросает `InvalidOperationException`) или
+  пустом ответе; шаг локали — при недоступности Ollama. **Последний шаг без страховки**: отказ
+  claude уходит наверх исключением, и потребитель деградирует как раньше (у каждого своя
+  стратегия). Отмену `CancellationToken` по цепочке НЕ фолбэчим — это не сбой модели.
+  При `Kind=Claude` шаг локали пропускается, иначе выбор «Claude» не отличался бы от «локаль».
+- **Выбор админа** — [LocalActionOverridesStore.cs](backend/ClaudeHomeServer/Services/Llm/LocalActionOverridesStore.cs):
+  `data/local-actions.json` (путь от `DataPath`), значение — `"local"` | `"claude"` | id модели;
+  снимок в неизменяемом словаре заменяется целиком при записи. Старый формат (`bool`: true=локаль,
+  false=claude) мигрируется при чтении. Роутер — singleton, но читает стор на каждом вызове,
+  поэтому выбор действует **сразу, без рестарта**. API — `PUT|DELETE /api/admin/local-actions/{key}`
+  (`[Authorize(Roles = "admin")]`); настройка глобальная, поэтому не per-user. PUT валидирует
+  модель по `ModelCatalogService` и настроенности провайдера — опечатка в id иначе всплыла бы
+  только при первом фоновом вызове.
 - **Раннер** — [CheapTextRunner.cs](backend/ClaudeHomeServer/Services/Llm/CheapTextRunner.cs)
-  (`ICheapTextRunner.RunAsync(actionKey, prompt, fallbackModel?, ownerId?)`): локаль по профилю,
+  (`ICheapTextRunner.RunAsync(actionKey, prompt, fallbackModel?, ownerId?, jsonFormat?)`):
+  локаль по профилю; `jsonFormat` (обычно строка `"json"`) уводит локальный путь в
+  `OllamaClient.ChatJsonAsync` — без него мелкая модель оборачивает JSON прозой, парсер падает
+  и действие всё равно уходит в фолбэк;
   при недоступности/ошибке/пустом ответе — **фолбэк на `OneShotClaudeRunner`**. Ollama выключен →
   сразу claude (нулевая регрессия). Потребители (NotesAiService, ChatTaskExtractionService,
   MemoryWriteResolver, TaskAiService, SessionSummaryService, GitAiService, Skill*Service,
@@ -203,7 +225,12 @@ Ollama не Anthropic-совместим, поэтому идёт прямым H
   `Actions` — словарь ключ→bool, `Profiles`). Пустой `Model` = локаль выключена.
 - **UI** — вкладка «Локально» на экране «Использование» (`GET /api/usage` → `OllamaUsageInfo`):
   модель + маршрут каждого действия (локаль/claude). У Ollama нет лимитов/баланса — блок
-  информационный.
+  без цифр расхода. **Админу** бейдж маршрута — тумблер: клик переключает действие на лету
+  (оптимистично, с откатом при ошибке), у переопределённых — кнопка сброса к конфигу.
+  Роль берётся из `cc_role` в localStorage/sessionStorage (как в `HubHeader`).
+  Не входят в каталог по структурной причине: `PersonaAskService` (нужен `effort` персоны) и
+  `ChangelogService` (нужен `RunDetailedAsync` с usage для показа стоимости) — `ICheapTextRunner`
+  не пробрасывает ни того, ни другого.
 
 ## Claude Code CLI subprocess
 
@@ -575,6 +602,7 @@ POST                /api/personas/ask                  { handle, question, conte
 POST                /api/chats/group                   { personaIds[], mode?, name? } → Session  (групповой чат, флаг persona-group-chats)
 PUT                 /api/chats/{id}/participants       { personaIds[] } → Session  (состав группы; спикер сохраняется, иначе ведущая)
 PUT                 /api/chats/{id}/loop               { enabled } → Session  (цикл «до готово», флаг work-loop; работает и для проектных сессий)
+PUT/DELETE          /api/admin/local-actions/{key}     { enabled } → { key, enabled, source }  (маршрут фонового действия локаль/claude; только admin; DELETE — сброс к конфигу/дефолту)
 GET/POST/DELETE     /api/knowledge                     (базы знаний Dify: список релевантных + CRUD; раздел «Знания»)
 GET                 /api/knowledge/{id}                → база знаний + документы
 POST                /api/knowledge                     { title, description?, visibility: personal|public } → { id, title, visibility }

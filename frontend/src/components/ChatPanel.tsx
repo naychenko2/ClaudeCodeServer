@@ -278,6 +278,9 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   useEffect(() => {
     api.settings.get().then(s => { if (s?.claudeBilling) setClaudeBilling(s.claudeBilling); }).catch(() => {});
   }, []);
+  // Настройка серверная и общая для всех — менять её вправе только админ (PUT /api/settings
+  // закрыт ролью). Обычному пользователю показываем режим, но без переключателя.
+  const canEditBilling = (localStorage.getItem('cc_role') || sessionStorage.getItem('cc_role')) === 'admin';
   const changeBilling = useCallback((b: ClaudeBilling) => {
     setClaudeBilling(b);
     // Сохраняем, не затирая остальные настройки
@@ -940,7 +943,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         cost={costStats}
         falCost={falCostStats}
         billing={claudeBilling}
-        onBillingChange={changeBilling}
+        onBillingChange={canEditBilling ? changeBilling : undefined}
         rateWindows={rateWindows}
         onOpenSettings={() => setShowEdit(true)}
         isMobile={isMobile}

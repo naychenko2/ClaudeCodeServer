@@ -65,7 +65,19 @@ public class UsageController(UsageService usage, ClaudeSubscriptionPool? subscri
     private OllamaUsageInfo BuildOllamaInfo()
     {
         var actions = LocalActionCatalog.All
-            .Select(a => new OllamaActionInfo(a.Key, a.Title, a.Group, localRouter.UsesLocal(a.Key)))
+            .Select(a =>
+            {
+                var route = localRouter.Resolve(a.Key);
+                return new OllamaActionInfo(a.Key, a.Title, a.Group,
+                    RoutedToOllama: route.Kind == RouteKind.Local && ollama.Enabled,
+                    Source: route.Source.ToString().ToLowerInvariant(),
+                    Route: route.Kind switch
+                    {
+                        RouteKind.Local => LocalActionOverridesStore.LocalRoute,
+                        RouteKind.Claude => LocalActionOverridesStore.ClaudeRoute,
+                        _ => route.Model ?? LocalActionOverridesStore.ClaudeRoute,
+                    });
+            })
             .ToList();
         return new OllamaUsageInfo(ollama.Enabled, ollama.Enabled ? ollama.TextModel : null,
             ollama.Enabled ? ollama.BaseUrl : null, actions);

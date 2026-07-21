@@ -34,7 +34,13 @@ public record UsageResponse(IReadOnlyList<UsageSnapshot> Snapshots, PlanInfo? Pl
 public record OllamaUsageInfo(bool Enabled, string? Model, string? BaseUrl,
     IReadOnlyList<OllamaActionInfo> Actions);
 
-public record OllamaActionInfo(string Key, string Title, string Group, bool RoutedToOllama);
+// Route — исполнитель первого шага: "local", "claude" или id конкретной модели провайдера
+// (дальше действие идёт по цепочке «выбранное → локаль → claude»). RoutedToOllama — начинается
+// ли действие с локальной модели прямо сейчас (с учётом доступности Ollama).
+// Source — откуда взято значение: "default" (каталог), "config" (Ollama:Actions) или "admin"
+// (выбор в UI); по нему видно, что переопределено и что можно сбросить.
+public record OllamaActionInfo(string Key, string Title, string Group, bool RoutedToOllama,
+    string Source = "default", string Route = "claude");
 
 // Utilisation одной подписки: снимки + опциональное имя + статус роутинга.
 // InRotation — берёт ли пул этот аккаунт для новых чатов; Utilization — эффективная

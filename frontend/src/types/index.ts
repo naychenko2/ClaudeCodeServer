@@ -580,7 +580,13 @@ export interface OllamaActionInfo {
   key: string;
   title: string;
   group: string;
+  // Начинается ли действие с локальной модели прямо сейчас (с учётом доступности Ollama)
   routedToOllama: boolean;
+  // Откуда взято действующее значение: дефолт каталога, конфиг Ollama:Actions или выбор админа
+  source?: 'default' | 'config' | 'admin';
+  // Исполнитель первого шага: 'local' | 'claude' | id модели провайдера.
+  // Дальше действие идёт по цепочке «выбранное → локаль → claude»
+  route?: string;
 }
 
 export interface SubscriptionUsage {

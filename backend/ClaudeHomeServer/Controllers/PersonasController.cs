@@ -548,7 +548,8 @@ public class PersonasController : ControllerBase
         var prompt = BuildCharacterPrompt(req);
         try
         {
-            var raw = await _oneShot.RunAsync(prompt, model, TimeSpan.FromSeconds(90), HttpContext.RequestAborted);
+            var raw = await _cheap.RunAsync(Services.Llm.LocalActionCatalog.PersonaAiCharacter,
+                prompt, model, jsonFormat: "json", ct: HttpContext.RequestAborted);
             var contract = PersonaManager.NormalizeContract(ParseJsonObject<PersonaContract>(raw));
             if (contract is null)
             {
@@ -612,8 +613,9 @@ public class PersonasController : ControllerBase
             string raw;
             try
             {
-                raw = await _oneShot.RunAsync(BuildDraftPrompt(req.Prompt), model,
-                    TimeSpan.FromSeconds(90), HttpContext.RequestAborted);
+                raw = await _cheap.RunAsync(Services.Llm.LocalActionCatalog.PersonaQuickCreate,
+                    BuildDraftPrompt(req.Prompt), model, jsonFormat: "json",
+                    ct: HttpContext.RequestAborted);
             }
             catch (Exception ex)
             {
@@ -678,8 +680,9 @@ public class PersonasController : ControllerBase
         var model = _oneShot.NormalizeModel(_config["Notes:AiModel"] ?? _config["Tasks:AiModel"] ?? "haiku");
         try
         {
-            var raw = await _oneShot.RunAsync(BuildTeamPrompt(project, req.Prompt), model,
-                TimeSpan.FromSeconds(120), HttpContext.RequestAborted);
+            var raw = await _cheap.RunAsync(Services.Llm.LocalActionCatalog.PersonaAiTeam,
+                BuildTeamPrompt(project, req.Prompt), model, jsonFormat: "json",
+                ct: HttpContext.RequestAborted);
             var drafts = ParseTeamDrafts(raw);
             if (drafts is null || drafts.Count == 0)
             {
@@ -1062,8 +1065,8 @@ public class PersonasController : ControllerBase
         List<SuggestRuleRaw>? raws = null;
         for (var attempt = 1; attempt <= 2 && raws is null; attempt++)
         {
-            var raw = await _oneShot.RunAsync(prompt, model,
-                TimeSpan.FromSeconds(90), HttpContext.RequestAborted);
+            var raw = await _cheap.RunAsync(Services.Llm.LocalActionCatalog.PersonaAutomationSuggest,
+                prompt, model, jsonFormat: "json", ct: HttpContext.RequestAborted);
             raws = ParseSuggestRuleArray(raw);
             if (raws is null)
                 _log.LogWarning("suggest automation: ответ не распознан (попытка {Attempt}); сырой ответ: {Raw}",
@@ -1428,8 +1431,9 @@ public class PersonasController : ControllerBase
         var model = _oneShot.NormalizeModel(_config["Notes:AiModel"] ?? _config["Tasks:AiModel"] ?? "haiku");
         try
         {
-            var text = await _oneShot.RunAsync(sb.ToString(), model,
-                TimeSpan.FromSeconds(60), HttpContext.RequestAborted);
+            // Свободный текст (1-2 предложения) — JSON-режим здесь не нужен
+            var text = await _cheap.RunAsync(Services.Llm.LocalActionCatalog.PersonaAiCondition,
+                sb.ToString(), model, ct: HttpContext.RequestAborted);
             var condition = text.Trim().Trim('"');
             if (string.IsNullOrWhiteSpace(condition))
                 return StatusCode(502, new { error = "Пустой ответ модели" });
@@ -1530,8 +1534,8 @@ public class PersonasController : ControllerBase
         List<SuggestRaw>? raws = null;
         for (var attempt = 1; attempt <= 2 && raws is null; attempt++)
         {
-            var raw = await _oneShot.RunAsync(prompt, model,
-                TimeSpan.FromSeconds(90), HttpContext.RequestAborted);
+            var raw = await _cheap.RunAsync(Services.Llm.LocalActionCatalog.PersonaBindingsSuggest,
+                prompt, model, jsonFormat: "json", ct: HttpContext.RequestAborted);
             raws = ParseSuggestArray(raw);
             if (raws is null)
                 _log.LogWarning("suggest bindings: ответ не распознан (попытка {Attempt}); сырой ответ: {Raw}",

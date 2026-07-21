@@ -125,7 +125,9 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.OllamaActionRankServ
 // Интерфейс one-shot раннера → тот же singleton (мокируется в тестах)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.IOneShotRunner>(
     sp => sp.GetRequiredService<ClaudeHomeServer.Services.Llm.OneShotClaudeRunner>());
-// Роутинг фоновых действий локаль(Ollama)/claude + единый «дешёвый» текстовый раннер с фолбэком
+// Роутинг фоновых действий локаль(Ollama)/claude + единый «дешёвый» текстовый раннер с фолбэком.
+// Стор оверрайдов — админские тумблеры маршрута из UI, слой поверх конфига Ollama:Actions.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.LocalActionOverridesStore>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.LocalActionRouter>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ICheapTextRunner,
     ClaudeHomeServer.Services.Llm.CheapTextRunner>();

@@ -191,7 +191,7 @@ function hasClaudeCostInfo(stats: CostStats, windows: RateWindow[]): boolean {
 // Тело поповера стоимости Claude (разбивка токенов/ходов + лимиты подписки + переключатель оплаты).
 // Вынесено для переиспользования в отдельном CostBadge и в объединённом мобильном чипе.
 function ClaudeCostPopoverBody({ stats, billing, onBillingChange, windows }: {
-  stats: CostStats; billing: ClaudeBilling; onBillingChange: (b: ClaudeBilling) => void; windows: RateWindow[];
+  stats: CostStats; billing: ClaudeBilling; onBillingChange?: (b: ClaudeBilling) => void; windows: RateWindow[];
 }) {
   const sub = billing === 'subscription';
   return (
@@ -218,7 +218,12 @@ function ClaudeCostPopoverBody({ stats, billing, onBillingChange, windows }: {
       )}
       <div style={{ marginTop: 10, paddingTop: 8, borderTop: `1px solid ${C.bgInset}`, display: 'flex', alignItems: 'center', gap: 6, fontFamily: FONT.sans, fontSize: 11 }}>
         <span style={{ color: C.textMuted }}>Оплата:</span>
-        {(['subscription', 'api'] as ClaudeBilling[]).map(b => (
+        {/* Настройка серверная, общая для всех — не-админу показываем режим без переключателя */}
+        {!onBillingChange ? (
+          <span style={{ color: C.textSecondary, fontWeight: 600 }}>
+            {sub ? 'Подписка' : 'API-ключ'}
+          </span>
+        ) : (['subscription', 'api'] as ClaudeBilling[]).map(b => (
           <button key={b} type="button" onClick={() => onBillingChange(b)}
             style={{
               padding: '2px 9px', borderRadius: 6, cursor: 'pointer', fontSize: 11,
@@ -238,7 +243,7 @@ function ClaudeCostPopoverBody({ stats, billing, onBillingChange, windows }: {
 // Бейдж стоимости Claude (токены/ходы). Клик раскрывает разбивку (аналог /cost).
 // В режиме подписки сумма — это ≈ API-эквивалент (отдельно не списывается), что и поясняется.
 function CostBadge({ stats, isMobile, billing, onBillingChange, windows }: {
-  stats: CostStats; isMobile?: boolean; billing: ClaudeBilling; onBillingChange: (b: ClaudeBilling) => void;
+  stats: CostStats; isMobile?: boolean; billing: ClaudeBilling; onBillingChange?: (b: ClaudeBilling) => void;
   windows: RateWindow[];
 }) {
   const worst = worstWindow(windows);
@@ -585,7 +590,7 @@ function MobileCombinedBadge(props: {
   canCompact: boolean; compactNote?: string; onCompact: () => void; online: boolean; assistantName: string;
   // стоимость
   isCliProvider: boolean; providerName: string; cost: CostStats; falCost: FalCostStats;
-  balance: ProviderBalance | null; billing: ClaudeBilling; onBillingChange: (b: ClaudeBilling) => void;
+  balance: ProviderBalance | null; billing: ClaudeBilling; onBillingChange?: (b: ClaudeBilling) => void;
   windows: RateWindow[];
   // workflow (мобилка): прогресс фаз втягивается в этот же чип вместо отдельного бейджа
   activeWorkflow?: { phasesDone: number; phasesTotal: number };
@@ -684,7 +689,8 @@ interface ChatHeaderBarProps {
   cost: CostStats;
   falCost: FalCostStats;
   billing: ClaudeBilling;
-  onBillingChange: (b: ClaudeBilling) => void;
+  // Не задан — переключать нельзя (не админ): показывается только текущий режим
+  onBillingChange?: (b: ClaudeBilling) => void;
   rateWindows: RateWindow[];
   onOpenSettings: () => void;
   isMobile?: boolean;

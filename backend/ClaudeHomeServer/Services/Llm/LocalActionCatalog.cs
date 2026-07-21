@@ -56,6 +56,12 @@ public static class LocalActionCatalog
     public const string SkillTranslate = "skill-translate";
     public const string SkillGenerate = "skill-generate";
     public const string DailyBriefing = "daily-briefing";
+    public const string PersonaAiCondition = "persona-ai-condition";
+    public const string PersonaAiCharacter = "persona-ai-character";
+    public const string PersonaAutomationSuggest = "persona-automation-suggest";
+    public const string PersonaBindingsSuggest = "persona-bindings-suggest";
+    public const string PersonaQuickCreate = "persona-quick-create";
+    public const string PersonaAiTeam = "persona-ai-team";
 
     // Дефолты профилей. Переопределяются Ollama:Profiles:{small|text|large}:{NumCtx|NumPredict|TimeoutMs}.
     public static readonly IReadOnlyDictionary<CheapProfile, CheapProfileSpec> ProfileDefaults =
@@ -99,11 +105,17 @@ public static class LocalActionCatalog
         new(NotificationSummary, "Суть уведомления", "Уведомления", CheapProfile.Small, DefaultLocal: true),
         new(GitCommitMsg, "Commit-сообщения", "Git", CheapProfile.Text, DefaultLocal: true),
         new(GitStashName, "Названия стэшей", "Git", CheapProfile.Small, DefaultLocal: true),
+        new(PersonaAiCondition, "Условие применения привязки", "Персоны", CheapProfile.Small, DefaultLocal: true),
+        new(PersonaAiCharacter, "Характер персоны", "Персоны", CheapProfile.Text, DefaultLocal: true),
+        new(PersonaAutomationSuggest, "Подсказка правил проактивности", "Персоны", CheapProfile.Text, DefaultLocal: true),
+        new(PersonaBindingsSuggest, "Подбор привязок знаний", "Персоны", CheapProfile.Text, DefaultLocal: true),
         // Ниже — по умолчанию остаются на claude (лицо продукта / генерация артефактов),
-        // но конфиг поддерживает и их перевод на локаль при желании.
+        // но конфиг и админский тумблер поддерживают и их перевод на локаль при желании.
         new(SkillTranslate, "Перевод описаний навыков", "Навыки", CheapProfile.Small, DefaultLocal: false),
         new(SkillGenerate, "Генерация тела навыка", "Навыки", CheapProfile.Text, DefaultLocal: false),
         new(DailyBriefing, "Утренний бриф", "Продукт", CheapProfile.Large, DefaultLocal: false),
+        new(PersonaQuickCreate, "Черновик персоны по промпту", "Персоны", CheapProfile.Text, DefaultLocal: false),
+        new(PersonaAiTeam, "Состав команды персон", "Персоны", CheapProfile.Large, DefaultLocal: false),
     ];
 
     private static readonly Dictionary<string, LocalAction> ByKey =

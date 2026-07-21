@@ -39,28 +39,38 @@ public sealed class OllamaClient
     // Один синхронный чат-ход со структурированным JSON-выводом. Возвращает строку
     // message.content (валидный JSON по schema) либо null при любой ошибке/таймауте.
     // think:false обязателен — иначе qwen3 тратит вывод на размышления и тупит.
+    //
+    // Параметры профиля (model/timeoutMs/numPredict/numCtx) опциональны: без них работает
+    // прежнее поведение ранжира AI-хаба. numCtx особенно важен для длинных промптов —
+    // дефолт Ollama (~4k) МОЛЧА срезает хвост входа, и модель отвечает по обрубку.
     public async Task<string?> ChatJsonAsync(
-        string systemPrompt, string userPrompt, object formatSchema, CancellationToken ct = default)
+        string systemPrompt, string userPrompt, object formatSchema, CancellationToken ct = default,
+        string? model = null, int? timeoutMs = null, int? numPredict = null, int? numCtx = null)
     {
-        if (!Enabled) return null;
+        var used = string.IsNullOrWhiteSpace(model) ? Model : model!;
+        if (string.IsNullOrWhiteSpace(BaseUrl) || string.IsNullOrWhiteSpace(used)) return null;
         try
         {
             var client = _http.CreateClient();
-            client.Timeout = TimeSpan.FromMilliseconds(TimeoutMs);
+            client.Timeout = TimeSpan.FromMilliseconds(timeoutMs ?? TimeoutMs);
+
+            // Пустой system не шлём: часть моделей на пустой роли ведёт себя хуже, чем без него.
+            var messages = string.IsNullOrWhiteSpace(systemPrompt)
+                ? new[] { new { role = "user", content = userPrompt } }
+                : new[] { new { role = "system", content = systemPrompt },
+                          new { role = "user", content = userPrompt } };
 
             using var resp = await client.PostAsJsonAsync($"{BaseUrl}/api/chat", new
             {
-                model = Model,
+                model = used,
                 stream = false,
                 think = false,
                 keep_alive = _keepAlive,
                 format = formatSchema,
-                options = new { temperature = 0, num_predict = 120 },
-                messages = new[]
-                {
-                    new { role = "system", content = systemPrompt },
-                    new { role = "user", content = userPrompt },
-                },
+                options = numCtx is { } nc
+                    ? new { temperature = 0, num_predict = numPredict ?? 120, num_ctx = nc }
+                    : (object)new { temperature = 0, num_predict = numPredict ?? 120 },
+                messages,
             }, ct);
 
             if (!resp.IsSuccessStatusCode)

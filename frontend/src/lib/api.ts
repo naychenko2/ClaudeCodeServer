@@ -67,6 +67,18 @@ export const api = {
     get: () => request<UsageResponse>('/usage'),
   },
 
+  // Исполнитель фоновых действий — правит только админ (настройка серверная, общая для всех).
+  // route: 'local' | 'claude' | id модели провайдера. Текущее состояние приходит в блоке
+  // ollama ответа /usage.
+  localActions: {
+    setRoute: (key: string, route: string) =>
+      request<{ key: string; route: string; source: string }>(`/admin/local-actions/${key}`,
+        { method: 'PUT', body: JSON.stringify({ route }) }),
+    reset: (key: string) =>
+      request<{ key: string; route: string; source: string }>(`/admin/local-actions/${key}`,
+        { method: 'DELETE' }),
+  },
+
   fal: {
     account: (days = 7) => request<FalAccountResponse>(`/fal/account?days=${days}`),
   },

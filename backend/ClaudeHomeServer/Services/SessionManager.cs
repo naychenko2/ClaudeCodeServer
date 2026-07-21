@@ -56,6 +56,7 @@ public class SessionManager
     private readonly ConcurrentDictionary<string, SessionEntry> _sessions = new();
     private readonly ProjectManager _projects;
     private readonly IHubContext<Hubs.SessionHub> _hub;
+    private readonly Llm.ICheapTextRunner? _cheap;
     private readonly ChatHistoryService _history;
     private readonly string _sessionsFilePath;
     private readonly Lock _saveLock = new();
@@ -160,9 +161,12 @@ public class SessionManager
         Execution.SandboxManager sandbox,
         // Опционально (в тестах не передаётся): синк файловых сабагентов-персон
         PersonaAgentFileSync? agentSync = null,
-        UserHomeResolver? homes = null)
+        UserHomeResolver? homes = null,
+        // Опционально: «дешёвый» раннер для авто-заголовка чата (локальная модель / claude)
+        Llm.ICheapTextRunner? cheap = null)
     {
         _agentSync = agentSync;
+        _cheap = cheap;
         _homes = homes ?? UserHomeResolver.WithoutOverrides(appSettings, sandbox);
         _launchers = launchers;
         _sandbox = sandbox;
@@ -1348,6 +1352,8 @@ public class SessionManager
             {
                 entry.Info.Name = title;
                 SaveSessions();
+                // Фоново уточняем заголовок локальной моделью (best-effort, не блокирует ход)
+                _ = RefineChatTitleAsync(sessionId, text, title);
             }
         }
 
@@ -1443,6 +1449,8 @@ public class SessionManager
             {
                 entry.Info.Name = title;
                 SaveSessions();
+                // Фоново уточняем заголовок локальной моделью (best-effort, не блокирует ход)
+                _ = RefineChatTitleAsync(sessionId, text, title);
             }
         }
 
@@ -1604,6 +1612,47 @@ public class SessionManager
         const int max = 48;
         if (t.Length > max) t = string.Concat(t.AsSpan(0, max).TrimEnd(), "…");
         return t;
+    }
+
+    // Уточнение авто-заголовка чата локальной моделью (действие chat-title): по первому
+    // сообщению строим осмысленный короткий заголовок и заменяем обрезку. Гейт по UsesLocal —
+    // уточняем только когда действие реально идёт на бесплатную локаль (не платим claude за
+    // каждый чат). Best-effort: молчим при любой проблеме, не трогаем имя, переименованное вручную.
+    private async Task RefineChatTitleAsync(string sessionId, string firstMessage, string expectedTitle)
+    {
+        if (_cheap is null || !_cheap.UsesLocal(Llm.LocalActionCatalog.ChatTitle)) return;
+        try
+        {
+            var prompt =
+                "Придумай короткий заголовок (3-6 слов, по-русски, без кавычек и точки в конце) для чата " +
+                "по первому сообщению пользователя. Ответь ТОЛЬКО заголовком одной строкой.\n\n" +
+                (firstMessage.Length > 1500 ? firstMessage[..1500] : firstMessage);
+            var raw = await _cheap.RunAsync(Llm.LocalActionCatalog.ChatTitle, prompt);
+            var line = raw.Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim() ?? "";
+            line = line.Trim('"', '«', '»', '#', '*', ' ').Trim();
+            if (line.Length is 0 or > 80) return;
+
+            if (!_sessions.TryGetValue(sessionId, out var entry)) return;
+            // Пользователь мог переименовать вручную, пока модель думала — тогда не трогаем
+            if (entry.Info.Name != expectedTitle) return;
+            entry.Info.Name = line;
+            entry.Info.UpdatedAt = DateTime.UtcNow;
+            SaveSessions();
+            await BroadcastChatRenamedAsync(sessionId, entry.Info, line);
+        }
+        catch (Exception ex) { _log.LogDebug(ex, "Уточнение заголовка чата {Session}", sessionId); }
+    }
+
+    // Уведомить клиентов об авто-переименовании чата (адресация как у BroadcastChatDeletedAsync)
+    private async Task BroadcastChatRenamedAsync(string sessionId, Session info, string name)
+    {
+        var msg = new ChatRenamedMessage(name) with { SessionId = sessionId };
+        var tasks = new List<Task> { _hub.Clients.Group(sessionId).SendAsync("message", msg) };
+        if (info.ProjectId is string pid)
+            tasks.Add(_hub.Clients.Group("project_" + pid).SendAsync("message", msg));
+        else if (info.OwnerId is string oid)
+            tasks.Add(_hub.Clients.Group("user_" + oid).SendAsync("message", msg));
+        await Task.WhenAll(tasks);
     }
 
     // Редактирование названия и модели. Модель применяется со следующего хода

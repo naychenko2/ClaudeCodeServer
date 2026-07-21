@@ -110,6 +110,12 @@ export const AI_ACTIONS: AiAction[] = [
     run: () => dispatchAiRun('note.tags'),
   },
   {
+    id: 'note.title', title: 'Придумать заголовок', hint: 'заголовок по содержимому',
+    section: 'notes', sectionLabel: 'Заметки', icon: IcSparkle,
+    when: c => noteOpen(c), contextual: noteOpen,
+    run: () => dispatchAiRun('note.title'),
+  },
+  {
     id: 'note.daily', title: 'Конспект дня', hint: 'итоги в дневниковую заметку',
     section: 'notes', sectionLabel: 'Заметки', icon: IcCalendar,
     when: c => noteOpen(c) && c.online, contextual: noteOpen,

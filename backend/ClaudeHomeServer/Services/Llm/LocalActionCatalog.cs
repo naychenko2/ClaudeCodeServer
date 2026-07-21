@@ -26,6 +26,8 @@ public static class LocalActionCatalog
     public const string NotesTags = "notes-tags";
     public const string NotesLinks = "notes-links";
     public const string NotesDailySummary = "notes-daily-summary";
+    public const string NoteTitle = "note-title";
+    public const string ChatTitle = "chat-title";
     public const string ChatExtractTasks = "chat-extract-tasks";
     public const string MemoryWriteResolve = "memory-write-resolve";
     public const string PersonaMemoryAutolearn = "persona-memory-autolearn";
@@ -59,6 +61,8 @@ public static class LocalActionCatalog
         new(NotesTags, "Теги заметок", "Заметки", CheapProfile.Small, DefaultLocal: true),
         new(NotesLinks, "Связи заметок", "Заметки", CheapProfile.Text, DefaultLocal: true),
         new(NotesDailySummary, "Конспект дня", "Заметки", CheapProfile.Large, DefaultLocal: true),
+        new(NoteTitle, "Заголовок заметки", "Заметки", CheapProfile.Small, DefaultLocal: true),
+        new(ChatTitle, "Заголовок чата", "Чаты", CheapProfile.Small, DefaultLocal: true),
         new(ChatExtractTasks, "Извлечение задач из чата", "Задачи", CheapProfile.Large, DefaultLocal: true),
         new(MemoryWriteResolve, "Резолвер записи памяти", "Память", CheapProfile.Small, DefaultLocal: true),
         new(PersonaMemoryAutolearn, "Автолёрн памяти персон", "Память", CheapProfile.Large, DefaultLocal: true),

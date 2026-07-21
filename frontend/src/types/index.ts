@@ -453,6 +453,7 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'exited' }
   | { type: 'status_changed'; status: string; lastMessage?: string; messageCount?: number }
   | { type: 'chat_deleted' }
+  | { type: 'chat_renamed'; name: string }
   | { type: 'workflow_progress'; toolUseId: string; agents: WorkflowAgentInfo[]; isDone: boolean }
   | { type: 'task_changed'; action: 'created' | 'updated' | 'deleted'; task: Task }
   | { type: 'notes_changed'; action: 'created' | 'updated' | 'deleted'; noteId?: string }

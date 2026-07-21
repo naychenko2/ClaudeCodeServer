@@ -126,6 +126,10 @@ public record TerminalStatusMessage(string Status, int? ExitCode = null, string?
 public record TerminalRenamedMessage(string TerminalId, string Name)
     : ServerMessage("terminal_renamed");
 
+// Чат авто-переименован (локальная модель уточнила заголовок по первому сообщению)
+public record ChatRenamedMessage(string Name)
+    : ServerMessage("chat_renamed");
+
 // Preview dev-server: смена статуса конкретного сервиса
 public record PreviewStatusMessage(string Status, int? Port = null, string? Error = null, string? ServiceId = null)
     : ServerMessage("preview_status");

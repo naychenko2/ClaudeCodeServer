@@ -83,6 +83,16 @@ const TOOLS = [
     },
   },
   {
+    name: 'notes_suggest_title',
+    description: 'Предложить короткий заголовок заметки по её содержимому (напр. для «Без названия»). ' +
+      'Возвращает {title}. Ничего не сохраняет. Бесплатная локальная модель, если настроена, иначе Claude.',
+    inputSchema: {
+      type: 'object',
+      required: ['id'],
+      properties: { id: { type: 'string', description: 'ID заметки' } },
+    },
+  },
+  {
     name: 'notes_create',
     description: `Создать заметку (.md). В тексте связывай с другими заметками через [[Заголовок]]. ${CONTEXT_NOTE}`,
     inputSchema: {
@@ -280,6 +290,9 @@ async function callTool(name, args) {
 
     case 'notes_read':
       return json(await api(`/api/notes/${encodeURIComponent(args.id)}`));
+
+    case 'notes_suggest_title':
+      return json(await api(`/api/notes/${encodeURIComponent(args.id)}/suggest-title`, { method: 'POST' }));
 
     case 'notes_create': {
       const body = { title: args.title };

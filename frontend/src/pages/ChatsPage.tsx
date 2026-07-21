@@ -118,6 +118,10 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
           return null;
         });
       }
+      // Авто-заголовок уточнён локальной моделью — обновляем имя в списке на лету
+      if (msg.type === 'chat_renamed') {
+        setChats(prev => prev.map(c => c.id === msg.sessionId ? { ...c, name: msg.name } : c));
+      }
     });
     return () => {
       clearInterval(poll);

@@ -268,6 +268,17 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
         if (isDaily) makeDailySummary();
         else showToast('Конспект дня', 'Доступно только в дневниковой заметке (раздел «Заметки» → сегодня)', 'info');
       }
+      else if (action === 'note.title') {
+        void (async () => {
+          try {
+            const { title } = await api.notes.suggestTitle(note.id);
+            if (!title) { showToast('Заголовок', 'Не удалось придумать заголовок', 'info'); return; }
+            const updated = await api.notes.update(note.id, { title });
+            setNote(updated);
+            showToast('Заголовок обновлён', title, 'info');
+          } catch { showToast('Ошибка', 'Не удалось придумать заголовок', 'info'); }
+        })();
+      }
     };
     window.addEventListener('cc-ai-run', onRun);
     return () => window.removeEventListener('cc-ai-run', onRun);

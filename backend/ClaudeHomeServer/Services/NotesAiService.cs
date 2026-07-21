@@ -72,6 +72,23 @@ public class NotesAiService(NotesService notes, IConfiguration config, Llm.IChea
             .Take(5).ToList();
     }
 
+    // Предложить короткий заголовок заметки по её содержимому (для «Без названия»)
+    public async Task<string> SuggestTitleAsync(string userId, string noteId, CancellationToken ct)
+    {
+        var note = notes.GetDetail(userId, noteId)
+            ?? throw new KeyNotFoundException("Заметка не найдена");
+        var prompt =
+            "Придумай короткий заголовок (3-6 слов, по-русски, без кавычек и точки в конце) " +
+            "для заметки по её содержимому. Ответь ТОЛЬКО заголовком, одной строкой.\n\n" +
+            Truncate(note.Content, 2000);
+        var raw = await RunAsync(Llm.LocalActionCatalog.NoteTitle, prompt, ct);
+        // Берём первую непустую строку, снимаем обрамление/маркеры
+        var line = raw.Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim() ?? "";
+        line = line.Trim('"', '«', '»', '#', '*', ' ').Trim();
+        if (line.Length > 80) line = line[..80].TrimEnd() + "…";
+        return line;
+    }
+
     // Конспект дня: сводка по заметкам, изменённым сегодня, дописывается в daily note
     public async Task<NoteDetail> DailySummaryAsync(string userId, string? date, CancellationToken ct)
     {

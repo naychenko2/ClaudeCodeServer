@@ -197,7 +197,6 @@ export function AiLauncher() {
   // Кнопка «просыпается» (пульс + акцент + анимация) ТОЛЬКО при сильной рекомендации.
   // medium/minor её не будят — они лишь подсвечиваются в открытой палитре. Пока реальной
   // идеи нет — кнопка приглушена, чтобы не создавать ложного ощущения «есть что предложить».
-  const showPulse = fabLevel === 'strong';
   const fabDim = fabLevel !== 'strong';
   const fabStrong = fabLevel === 'strong';
 
@@ -259,24 +258,27 @@ export function AiLauncher() {
           onClick={() => { setQ(''); setOpen(true); }}
           aria-label="AI-действия (Ctrl/⌘ + K)"
           title="AI-действия · ⌘K"
-          className={fabStrong ? 'cc-fab-strong' : undefined}
+          className={fabStrong && !aiBusy ? 'cc-fab-hop' : undefined}
           style={{
             ...fabStyle,
+            background: 'none', padding: 0, overflow: 'visible',
             ...(isMobile ? { right: 16, width: FAB_MOBILE, height: FAB_MOBILE } : {}),
-            ...(fabDim && !aiBusy ? { opacity: 0.5, filter: 'grayscale(0.7)' } : {}),
           }}
           onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-2px)'; enterFab(); }}
           onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)'; leaveFab(); }}
         >
-          {/* Круговой индикатор работы: дуга «бегает» вокруг кнопки, пока идёт AI-действие */}
-          {aiBusy && (
-            <svg viewBox="0 0 100 100" aria-hidden style={busyRing}>
-              <circle cx="50" cy="50" r="45" fill="none" stroke={C.onAccent}
-                strokeWidth="6" strokeLinecap="round" strokeDasharray="65 220" opacity={0.95} />
-            </svg>
-          )}
-          {showPulse && !aiBusy && <span style={isMobile ? pulseDotMobile : pulseDot} />}
-          <SparkleIcon size={isMobile ? 16 : 24} />
+          {/* Логотип «AI Home» (домик с трубой) на весь круг. Покой — серый; идея — подскок
+              (cc-fab-hop на кнопке); работа — «пыхтит» (cc-fab-huff) + дым из трубы. */}
+          <img
+            src="/pwa-64x64.png" alt="" aria-hidden
+            className={aiBusy ? 'cc-fab-huff' : undefined}
+            style={{
+              position: 'absolute', inset: 0, width: '100%', height: '100%',
+              objectFit: 'cover', borderRadius: '50%', display: 'block',
+              ...(fabDim && !aiBusy ? { opacity: 0.55, filter: 'grayscale(0.9)' } : {}),
+            }}
+          />
+          {aiBusy && <span className="cc-smoke cc-fab-smoke" aria-hidden><i /><i /><i /><i /></span>}
         </button>
       )}
 
@@ -455,22 +457,6 @@ const toggleThumb: React.CSSProperties = {
   background: C.bgWhite, boxShadow: SHADOW.thumb, transition: 'transform .16s',
 };
 
-// Круговой индикатор работы AI-действия: SVG-кольцо чуть ВНУТРИ кнопки (по краю, не за ним),
-// вращается (cc-spin)
-const busyRing: React.CSSProperties = {
-  position: 'absolute', inset: 5, width: 'calc(100% - 10px)', height: 'calc(100% - 10px)',
-  animation: 'cc-spin 0.9s linear infinite', pointerEvents: 'none',
-};
-
-// --- Push-слой: пульс на кнопке + балун подсказки ---
-const pulseDot: React.CSSProperties = {
-  position: 'absolute', top: 3, right: 4, width: 12, height: 12, borderRadius: '50%',
-  background: C.success, border: `2px solid ${C.accent}`,
-};
-// Точка на уменьшенной мобильной кнопке — тоже мельче, иначе съедает пол-иконки
-const pulseDotMobile: React.CSSProperties = {
-  ...pulseDot, top: 2, right: 2, width: 8, height: 8, borderWidth: 1.5,
-};
 const balloonStyle: React.CSSProperties = {
   position: 'fixed', right: 20, bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px) + 66px)',
   width: 280, background: C.bgCard, border: `1px solid ${C.accentMuted}`, borderRadius: R.xl,

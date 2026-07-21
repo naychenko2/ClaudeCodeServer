@@ -316,3 +316,28 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .cc-fab-strong { animation: none; box-shadow: 0 4px 18px rgba(217, 119, 87, 0.6); }
 }
+
+/* Кнопка AI-хаба с логотипом «AI Home» (домик с трубой): три настроения по режиму хаба.
+   F · «есть идея» — логотип коротко подпрыгивает; I · «работа» — логотип пыхтит + дым из трубы. */
+@keyframes cc-fab-hop {
+  0%, 100% { transform: translateY(0); }
+  30%      { transform: translateY(-7px); }
+  45%      { transform: translateY(0); }
+  55%      { transform: translateY(-2px); }
+  68%      { transform: translateY(0); }
+}
+.cc-fab-hop { animation: cc-fab-hop 1.6s ease-in-out infinite; }
+@keyframes cc-fab-huff {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(.95) translateY(1px); }
+}
+.cc-fab-huff { animation: cc-fab-huff .5s ease-in-out infinite; transform-origin: 50% 82%; }
+/* Дым из трубы FAB — переопределяем позицию базового .cc-smoke под логотип, дым светлый и частый */
+.cc-fab-smoke { top: 20%; left: 60%; }
+.cc-fab-smoke i { background: rgba(255, 250, 245, .9); animation-duration: 1.5s; }
+.cc-fab-smoke i:nth-child(2) { animation-delay: .37s; }
+.cc-fab-smoke i:nth-child(3) { animation-delay: .75s; }
+.cc-fab-smoke i:nth-child(4) { animation-delay: 1.12s; }
+@media (prefers-reduced-motion: reduce) {
+  .cc-fab-hop, .cc-fab-huff { animation: none; }
+}

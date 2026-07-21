@@ -33,6 +33,9 @@ public static class LocalActionCatalog
     public const string PersonaMemoryConsolidate = "persona-memory-consolidate";
     public const string TeamMemoryConsolidate = "team-memory-consolidate";
     public const string TaskAi = "task-ai";
+    public const string TaskClassify = "task-classify";
+    public const string TaskNormalizeTitle = "task-normalize-title";
+    public const string TaskDedup = "task-dedup";
     public const string SkillSuggest = "skill-suggest";
     public const string SessionSummary = "session-summary";
     public const string GitCommitMsg = "git-commit-msg";
@@ -63,6 +66,9 @@ public static class LocalActionCatalog
         new(PersonaMemoryConsolidate, "Консолидация памяти персон", "Память", CheapProfile.Text, DefaultLocal: true),
         new(TeamMemoryConsolidate, "Консолидация памяти команды", "Память", CheapProfile.Text, DefaultLocal: true),
         new(TaskAi, "Описание и подзадачи задач", "Задачи", CheapProfile.Text, DefaultLocal: true),
+        new(TaskClassify, "Приоритет и метки задач", "Задачи", CheapProfile.Small, DefaultLocal: true),
+        new(TaskNormalizeTitle, "Нормализация заголовка задачи", "Задачи", CheapProfile.Small, DefaultLocal: true),
+        new(TaskDedup, "Поиск дублей задач", "Задачи", CheapProfile.Small, DefaultLocal: true),
         new(SkillSuggest, "Подбор навыка", "Навыки", CheapProfile.Small, DefaultLocal: true),
         new(SessionSummary, "Сводка сессии", "Сессии", CheapProfile.Large, DefaultLocal: true),
         new(GitCommitMsg, "Commit-сообщения", "Git", CheapProfile.Text, DefaultLocal: true),

@@ -5,13 +5,14 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Bell, ChevronRight, Check, MessageCircle, Repeat, SquarePen, Trash2, X } from 'lucide-react';
-import type { Project, Session, Task, TaskStatus, UpdateTaskDto } from '../../types';
+import type { Project, Session, Task, TaskStatus, TaskPriority, UpdateTaskDto } from '../../types';
 import { C, FONT, R, SHADOW } from '../../lib/design';
 import { Button, IconButton, Modal, BackButton } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { Toolbar } from '../../components/Toolbar';
 import { MarkdownViewer } from '../../components/MarkdownViewer';
 import { api } from '../../lib/api';
+import { showToast } from '../../lib/toast';
 import {
   NO_PROJECT_COLOR, NO_PROJECT_LABEL, PRIORITY_LABEL, STATUS_DOT, STATUS_LABEL,
   deleteTask, dueLabel, projectColor, projectInitial, recurrenceLabel, reminderLabel, updateTask,
@@ -156,6 +157,25 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
       } else if (action === 'task.description' || action === 'task.subtasks') {
         setPendingAi(action);
         setEditing(true);
+      } else if (action === 'task.classify') {
+        void (async () => {
+          try {
+            const r = await api.tasks.aiClassify(task.title, task.description, task.projectId);
+            const labels = Array.from(new Set([...(task.labels ?? []), ...r.labels]));
+            const priority = (['urgent', 'high', 'medium', 'low'].includes(r.priority ?? '')
+              ? r.priority : undefined) as TaskPriority | undefined;
+            await api.tasks.update(task.id, { priority, labels });
+            showToast('Задача оценена', `Приоритет: ${r.priority ?? '—'}; метки: ${r.labels.join(', ') || '—'}`);
+          } catch { showToast('Ошибка', 'Не удалось оценить задачу'); }
+        })();
+      } else if (action === 'task.dedup') {
+        void (async () => {
+          try {
+            const r = await api.tasks.aiFindDuplicate(task.title, task.description, task.projectId);
+            if (r.duplicateId) showToast('Возможный дубль', r.reason ?? 'Похоже на существующую задачу');
+            else showToast('Дублей не найдено', 'Похожих задач нет');
+          } catch { showToast('Ошибка', 'Не удалось проверить дубли'); }
+        })();
       }
     };
     window.addEventListener('cc-ai-run', onRun);

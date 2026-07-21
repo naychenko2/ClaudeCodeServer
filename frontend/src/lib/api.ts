@@ -217,6 +217,19 @@ export const api = {
       request<{ subtasks: string[] }>('/tasks/ai/subtasks', {
         method: 'POST', body: JSON.stringify({ title, description, projectId: projectId ?? null }),
       }),
+    // Локальная модель (если настроена, иначе Claude): приоритет+метки, нормализация заголовка, дедуп
+    aiClassify: (title: string, description?: string | null, projectId?: string | null) =>
+      request<{ priority: string | null; labels: string[] }>('/tasks/ai/classify', {
+        method: 'POST', body: JSON.stringify({ title, description: description ?? null, projectId: projectId ?? null }),
+      }),
+    aiNormalizeTitle: (title: string) =>
+      request<{ title: string; dueHint: string | null }>('/tasks/ai/normalize-title', {
+        method: 'POST', body: JSON.stringify({ title }),
+      }),
+    aiFindDuplicate: (title: string, description?: string | null, projectId?: string | null) =>
+      request<{ duplicateId: string | null; reason: string | null }>('/tasks/ai/find-duplicate', {
+        method: 'POST', body: JSON.stringify({ title, description: description ?? null, projectId: projectId ?? null }),
+      }),
   },
 
   // Заметки (Obsidian-совместимая база знаний): .md файлы в личном vault + notes/ проектов

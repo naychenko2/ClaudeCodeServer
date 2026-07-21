@@ -165,6 +165,18 @@ export const AI_ACTIONS: AiAction[] = [
     run: () => dispatchAiRun('task.execute'),
   },
   {
+    id: 'task.classify', title: 'Оценить приоритет и метки', hint: 'предложить приоритет и метки задаче',
+    section: 'tasks', sectionLabel: 'Задачи', icon: IcTag,
+    when: c => taskOpen(c), contextual: taskOpen,
+    run: () => dispatchAiRun('task.classify'),
+  },
+  {
+    id: 'task.dedup', title: 'Проверить на дубли', hint: 'нет ли похожей существующей задачи',
+    section: 'tasks', sectionLabel: 'Задачи', icon: IcSearch,
+    when: c => taskOpen(c), contextual: taskOpen,
+    run: () => dispatchAiRun('task.dedup'),
+  },
+  {
     id: 'tasks.weekPlan', title: 'План недели', hint: 'задачи недели + приоритеты',
     section: 'tasks', sectionLabel: 'Задачи', icon: IcWeek,
     when: c => calendarScreen(c) && c.online, contextual: calendarScreen,

@@ -99,6 +99,58 @@ public class TasksController(
         catch (InvalidOperationException ex) { return StatusCode(502, new { error = ex.Message }); }
     }
 
+    // Классификация (локальная модель): приоритет + метки по названию/описанию
+    [HttpPost("ai/classify")]
+    public async Task<IActionResult> Classify([FromBody] ClassifyTaskRequest req, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(req.Title))
+            return BadRequest(new { error = "Нужно название задачи" });
+        var existing = tasks.GetByOwner(UserId).SelectMany(t => t.Labels)
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        try
+        {
+            var r = await ai.ClassifyAsync(req.Title.Trim(), req.Description, existing, OwnProjectId(req.ProjectId), ct);
+            return Ok(new { priority = r.Priority, labels = r.Labels });
+        }
+        catch (InvalidOperationException ex) { return StatusCode(502, new { error = ex.Message }); }
+    }
+
+    // Нормализация заголовка (чистка голосового ввода) → аккуратный title + подсказка срока
+    [HttpPost("ai/normalize-title")]
+    public async Task<IActionResult> NormalizeTitle([FromBody] NormalizeTitleRequest req, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(req.Title))
+            return BadRequest(new { error = "Нужен текст заголовка" });
+        try
+        {
+            var r = await ai.NormalizeTitleAsync(req.Title, ct);
+            return Ok(new { title = r.Title, dueHint = r.DueHint });
+        }
+        catch (InvalidOperationException ex) { return StatusCode(502, new { error = ex.Message }); }
+    }
+
+    // Поиск дубля среди существующих задач владельца (предфильтр по ключевым словам + модель)
+    [HttpPost("ai/find-duplicate")]
+    public async Task<IActionResult> FindDuplicate([FromBody] FindDuplicateRequest req, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(req.Title))
+            return BadRequest(new { error = "Нужно название задачи" });
+        var projectId = OwnProjectId(req.ProjectId);
+        // Ключевые слова нового заголовка (≥4 букв) для дешёвого предотбора кандидатов
+        var words = System.Text.RegularExpressions.Regex.Matches(req.Title.ToLowerInvariant(), @"\p{L}{4,}")
+            .Select(m => m.Value).ToHashSet();
+        var candidates = tasks.GetByOwner(UserId)
+            .Where(t => t.ProjectId == projectId && !string.IsNullOrWhiteSpace(t.Title))
+            .Where(t => words.Count == 0 || words.Any(w => t.Title.ToLowerInvariant().Contains(w)))
+            .Take(20).Select(t => (t.Id, t.Title)).ToList();
+        try
+        {
+            var r = await ai.FindDuplicateAsync(req.Title.Trim(), req.Description, candidates, ct);
+            return Ok(new { duplicateId = r.Id, reason = r.Reason });
+        }
+        catch (InvalidOperationException ex) { return StatusCode(502, new { error = ex.Message }); }
+    }
+
     // Личная задача — без привязки к проекту
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateTaskRequest req)
@@ -244,6 +296,9 @@ public class TasksController(
 
 public record GenerateDescriptionRequest(string Title, string? ProjectId = null);
 public record GenerateSubtasksRequest(string Title, string? Description = null, string? ProjectId = null);
+public record ClassifyTaskRequest(string Title, string? Description = null, string? ProjectId = null);
+public record NormalizeTitleRequest(string Title);
+public record FindDuplicateRequest(string Title, string? Description = null, string? ProjectId = null);
 
 // Валидация персоны-исполнителя задачи: персона существует и принадлежит владельцу,
 // проектная персона допустима только у задач её проекта. null — ошибок нет.

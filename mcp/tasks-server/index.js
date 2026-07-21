@@ -282,6 +282,42 @@ const TOOLS = [
       },
     },
   },
+  {
+    name: 'tasks_suggest_meta',
+    description: 'Предложить приоритет (low/medium/high/urgent) и до 3 меток по названию и описанию задачи. ' +
+      'Считает бесплатная локальная модель (если настроена), иначе Claude. Ничего не сохраняет — только предложение.',
+    inputSchema: {
+      type: 'object',
+      required: ['title'],
+      properties: {
+        title: { type: 'string', description: 'Название задачи' },
+        description: { type: 'string', description: 'Описание задачи (опционально)' },
+      },
+    },
+  },
+  {
+    name: 'tasks_normalize_title',
+    description: 'Привести заголовок задачи к аккуратному виду (повелительное наклонение, чистка голосового ввода), ' +
+      'вынести упомянутый срок в dueHint. Возвращает {title, dueHint}. Бесплатная локальная модель, если настроена.',
+    inputSchema: {
+      type: 'object',
+      required: ['title'],
+      properties: { title: { type: 'string', description: 'Сырой заголовок (напр. из голосового ввода)' } },
+    },
+  },
+  {
+    name: 'tasks_find_duplicate',
+    description: 'Проверить, дублирует ли новая задача одну из существующих задач владельца (предотбор по ключевым словам + ' +
+      'модель). Возвращает {duplicateId, reason} или duplicateId=null. Полезно перед tasks_create, чтобы не плодить дубли.',
+    inputSchema: {
+      type: 'object',
+      required: ['title'],
+      properties: {
+        title: { type: 'string', description: 'Название новой задачи' },
+        description: { type: 'string', description: 'Описание (опционально)' },
+      },
+    },
+  },
 ];
 
 // tasks_execute — только на пользовательском ходу (env выставляет ClaudeSession):
@@ -396,6 +432,21 @@ async function callTool(name, args) {
       return json(await api(`/api/tasks/${args.taskId}`, {
         method: 'PUT', body: JSON.stringify({ subtasks }),
       }));
+    }
+
+    case 'tasks_suggest_meta': {
+      const body = { title: String(args.title), description: args.description, projectId: PROJECT_ID || null };
+      return json(await api('/api/tasks/ai/classify', { method: 'POST', body: JSON.stringify(body) }));
+    }
+
+    case 'tasks_normalize_title':
+      return json(await api('/api/tasks/ai/normalize-title', {
+        method: 'POST', body: JSON.stringify({ title: String(args.title) }),
+      }));
+
+    case 'tasks_find_duplicate': {
+      const body = { title: String(args.title), description: args.description, projectId: PROJECT_ID || null };
+      return json(await api('/api/tasks/ai/find-duplicate', { method: 'POST', body: JSON.stringify(body) }));
     }
 
     default:

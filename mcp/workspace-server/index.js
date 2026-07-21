@@ -37,6 +37,7 @@ const AGENT_DEPTH = parseInt(process.env.WORKSPACE_AGENT_DEPTH || '0', 10) || 0;
 const WRITE = process.env.WORKSPACE_WRITE !== '0';
 const WRITE_TOOLS = new Set([
   'projects_create', 'projects_update', 'files_write', 'files_mkdir', 'files_rename',
+  'files_to_markdown',
   'knowledge_index', 'chats_create', 'chats_send', 'chats_update',
   'git_commit', 'git_stage', 'kb_add_document',
 ]);
@@ -165,6 +166,47 @@ const SECTION_TOOLS = {
           path: { type: 'string', description: 'Относительный путь файла' },
           offset: { type: 'integer', minimum: 0, description: 'С какой строки читать (0 по умолчанию)' },
           limit: { type: 'integer', minimum: 1, description: 'Сколько строк вернуть (по умолчанию весь файл)' },
+        },
+      },
+    },
+    {
+      name: 'files_document_read',
+      description: 'Конвертировать бинарный документ проекта (pdf/docx/xlsx/pptx) в Markdown и вернуть текст ' +
+        '(markitdown, без модели). Так можно «прочитать» офисный документ, который files_read не отдаёт.',
+      inputSchema: {
+        type: 'object', required: ['projectId', 'path'],
+        properties: { projectId: { type: 'string' }, path: { type: 'string', description: 'Путь к документу' } },
+      },
+    },
+    {
+      name: 'files_document_summary',
+      description: 'Краткое содержание документа проекта (pdf/docx/xlsx/pptx): 5-8 пунктов сути. ' +
+        'Бесплатная локальная модель, если настроена.',
+      inputSchema: {
+        type: 'object', required: ['projectId', 'path'],
+        properties: { projectId: { type: 'string' }, path: { type: 'string' } },
+      },
+    },
+    {
+      name: 'files_document_extract',
+      description: 'Структурная выжимка из документа: {decisions, dates, people, actionItems}. Локальная модель.',
+      inputSchema: {
+        type: 'object', required: ['projectId', 'path'],
+        properties: { projectId: { type: 'string' }, path: { type: 'string' } },
+      },
+    },
+    {
+      name: 'files_to_markdown',
+      description: 'Трансформировать ЛЮБОЙ файл (pdf/docx/xlsx/pptx/html/csv и др.) в Markdown и СОХРАНИТЬ его ' +
+        '(markitdown, без модели). По умолчанию .md кладётся рядом с исходником; можно указать targetDir — ' +
+        'папку назначения (относительно корня проекта, создаётся при отсутствии). Возвращает { savedPath }. ' +
+        'Используй, когда просят «трансформировать/переделать файл в markdown» и (опционально) сохранить в папку.',
+      inputSchema: {
+        type: 'object', required: ['projectId', 'path'],
+        properties: {
+          projectId: { type: 'string' },
+          path: { type: 'string', description: 'Путь исходного файла' },
+          targetDir: { type: 'string', description: 'Папка назначения (относительно корня проекта). Пусто — рядом с исходником.' },
         },
       },
     },
@@ -635,6 +677,36 @@ async function callTool(name, args) {
         return json({ path: args.path, offsetLines: start, totalLines: lines.length, content: slice.join('\n') });
       }
       return json({ path: args.path, content: text });
+    }
+
+    case 'files_document_read': {
+      checkProjectAllowed(args.projectId);
+      const params = new URLSearchParams({ path: String(args.path ?? '') });
+      const r = await api(`/api/projects/${args.projectId}/files/document/convert?${params}`, { method: 'POST' });
+      return json({ path: args.path, markdown: r.markdown });
+    }
+
+    case 'files_document_summary': {
+      checkProjectAllowed(args.projectId);
+      const params = new URLSearchParams({ path: String(args.path ?? '') });
+      const r = await api(`/api/projects/${args.projectId}/files/document/summary?${params}`, { method: 'POST' });
+      return json({ path: args.path, summary: r.summary });
+    }
+
+    case 'files_document_extract': {
+      checkProjectAllowed(args.projectId);
+      const params = new URLSearchParams({ path: String(args.path ?? '') });
+      const r = await api(`/api/projects/${args.projectId}/files/document/extract?${params}`, { method: 'POST' });
+      return json(r);
+    }
+
+    case 'files_to_markdown': {
+      checkProjectAllowed(args.projectId);
+      const body = { path: String(args.path ?? ''), targetDir: args.targetDir ?? null };
+      const r = await api(`/api/projects/${args.projectId}/files/document/to-markdown`, {
+        method: 'POST', body: JSON.stringify(body),
+      });
+      return json({ savedPath: r.savedPath, note: `Файл трансформирован в Markdown → ${r.savedPath}` });
     }
 
     case 'files_write': {

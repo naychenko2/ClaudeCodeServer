@@ -105,6 +105,9 @@ builder.Services.AddHostedService<PersonaProjectBindingsMigration>();
 builder.Services.AddSingleton<TaskManager>();
 builder.Services.AddSingleton<TaskAiService>();
 builder.Services.AddSingleton<FileService>();
+// Документы: конвертация в Markdown (markitdown) + ИИ-помощь (суммари/выжимка/теги) на локальной модели
+builder.Services.AddSingleton<MarkitdownService>();
+builder.Services.AddSingleton<DocumentAiService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Git.GitService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Git.GitServerService>();
 // Режим документов: авто-commit/push после каждого хода Claude (Project.GitAutoCommit)

@@ -35,6 +35,9 @@ public static class LocalActionCatalog
     public const string PersonaMemoryConsolidate = "persona-memory-consolidate";
     public const string TeamMemoryConsolidate = "team-memory-consolidate";
     public const string AutomationGate = "automation-gate";
+    public const string DocSummary = "doc-summary";
+    public const string DocExtract = "doc-extract";
+    public const string DocTags = "doc-tags";
     public const string TaskAi = "task-ai";
     public const string TaskClassify = "task-classify";
     public const string TaskNormalizeTitle = "task-normalize-title";
@@ -71,6 +74,9 @@ public static class LocalActionCatalog
         new(PersonaMemoryConsolidate, "Консолидация памяти персон", "Память", CheapProfile.Text, DefaultLocal: true),
         new(TeamMemoryConsolidate, "Консолидация памяти команды", "Память", CheapProfile.Text, DefaultLocal: true),
         new(AutomationGate, "Гейт проактивности персон", "Персоны", CheapProfile.Small, DefaultLocal: true),
+        new(DocSummary, "Краткое содержание документа", "Документы", CheapProfile.Large, DefaultLocal: true),
+        new(DocExtract, "Выжимка из документа", "Документы", CheapProfile.Large, DefaultLocal: true),
+        new(DocTags, "Теги документа", "Документы", CheapProfile.Text, DefaultLocal: true),
         new(TaskAi, "Описание и подзадачи задач", "Задачи", CheapProfile.Text, DefaultLocal: true),
         new(TaskClassify, "Приоритет и метки задач", "Задачи", CheapProfile.Small, DefaultLocal: true),
         new(TaskNormalizeTitle, "Нормализация заголовка задачи", "Задачи", CheapProfile.Small, DefaultLocal: true),

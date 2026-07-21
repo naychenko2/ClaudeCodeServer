@@ -31,6 +31,7 @@ import { useOnline } from '../hooks/useOnline';
 import { EmptyState } from './EmptyState';
 import { getLanguage } from '../lib/getLanguage';
 import { MarkdownViewer } from './MarkdownViewer';
+import { showToast } from '../lib/toast';
 import { DocCommentedMarkdown } from '../features/notes/DocComments';
 import { useNotes, ensureNotesLoaded, existingTitleSet, useNotesVersion } from '../lib/notes';
 import { NoteConnections } from '../features/notes/NoteConnections';
@@ -602,6 +603,35 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
   // кладём затравку с путём файла и (для текстовых файлов) его содержимым в общий канал
   // композера. Любой смонтированный композер заберёт её по событию, а следующий — при
   // монтировании (Composer.consume). Закрываем файл, открывая чат проекта.
+  // ИИ по документу (pdf/docx/xlsx/pptx) через локальную модель: результат — в модалку
+  const [docAi, setDocAi] = useState<{ title: string; markdown: string } | null>(null);
+  const [docAiBusy, setDocAiBusy] = useState(false);
+  const runDocAi = async (kind: 'summary' | 'extract' | 'tags' | 'convert') => {
+    if (!fileContent?.isDocument || docAiBusy) return;
+    setDocAiBusy(true);
+    try {
+      if (kind === 'summary') {
+        const r = await api.files.documentSummary(project.id, filePath);
+        setDocAi({ title: 'Краткое содержание', markdown: r.summary || '_пусто_' });
+      } else if (kind === 'convert') {
+        const r = await api.files.documentConvert(project.id, filePath);
+        setDocAi({ title: 'Markdown документа', markdown: r.markdown || '_пусто_' });
+      } else if (kind === 'tags') {
+        const r = await api.files.documentTags(project.id, filePath);
+        setDocAi({ title: 'Теги документа', markdown: r.tags.map(t => `\`${t}\``).join('  ') || '_нет тегов_' });
+      } else {
+        const r = await api.files.documentExtract(project.id, filePath);
+        const sec = (h: string, xs: string[]) => xs.length ? `## ${h}\n${xs.map(x => `- ${x}`).join('\n')}\n\n` : '';
+        const md = sec('Решения', r.decisions) + sec('Даты', r.dates) + sec('Участники', r.people) + sec('Действия', r.actionItems);
+        setDocAi({ title: 'Выжимка из документа', markdown: md || '_ничего не извлечено_' });
+      }
+    } catch {
+      showToast('Ошибка', 'Не удалось обработать документ', 'info');
+    } finally {
+      setDocAiBusy(false);
+    }
+  };
+
   const askAboutFile = () => {
     const isText = !!fileContent && !fileContent.isBinary && !fileContent.isImage
       && !fileContent.isDocument && !fileContent.isVideo && !fileContent.isAudio;
@@ -616,7 +646,18 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
   // Подписка на контекстное действие AI-хаба (снимается на unmount)
   useEffect(() => {
     const onRun = (e: Event) => {
-      if ((e as CustomEvent<{ action?: string }>).detail?.action === 'file.ask') askAboutFile();
+      const a = (e as CustomEvent<{ action?: string }>).detail?.action;
+      if (a === 'file.ask') askAboutFile();
+      else if (a === 'file.summary') void runDocAi('summary');
+      else if (a === 'file.extract') void runDocAi('extract');
+      else if (a === 'file.tags') void runDocAi('tags');
+      else if (a === 'file.convert') void runDocAi('convert');
+      else if (a === 'file.toMarkdown') void (async () => {
+        try {
+          const r = await api.files.toMarkdown(project.id, filePath);
+          showToast('Сохранено в Markdown', r.savedPath);
+        } catch { showToast('Ошибка', 'Не удалось трансформировать файл', 'info'); }
+      })();
     };
     window.addEventListener('cc-ai-run', onRun);
     return () => window.removeEventListener('cc-ai-run', onRun);
@@ -1430,6 +1471,20 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
               : ' Возврат появится в «Изменениях» — зафиксируйте его коммитом или отмените.'}
           </div>
           {gitSt.error && <div style={{ marginTop: 8, fontSize: 12.5, color: C.dangerText }}>{gitSt.error}</div>}
+        </Modal>
+      )}
+
+      {/* Результат ИИ по документу (краткое содержание / выжимка / теги / markdown) */}
+      {docAi && (
+        <Modal
+          width={MODAL_W.form}
+          onClose={() => setDocAi(null)}
+          title={docAi.title}
+          subtitle={<span style={{ fontFamily: FONT.mono, color: C.textPrimary }}>{fileName}</span>}
+        >
+          <div style={{ maxHeight: '60vh', overflowY: 'auto' }}>
+            <MarkdownViewer content={docAi.markdown} />
+          </div>
         </Modal>
       )}
 

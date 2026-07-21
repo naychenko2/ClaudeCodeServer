@@ -91,6 +91,9 @@ const personaOpen = (c: AiActionCtx) => c.nav?.screen === 'personas' && !!c.nav.
 const knowledgeScreen = (c: AiActionCtx) => c.nav?.screen === 'knowledge';
 const knowledgeOpen = (c: AiActionCtx) => c.nav?.screen === 'knowledge' && !!c.nav.knowledge;
 const fileOpen = (c: AiActionCtx) => c.nav?.screen === 'project' && !!c.nav.file;
+// Документ (pdf/docx/xlsx/pptx…) — по расширению открытого файла; ИИ-действия документа только для них
+const DOC_EXTS = new Set(['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp', 'epub', 'csv', 'htm', 'html']);
+const docOpen = (c: AiActionCtx) => fileOpen(c) && DOC_EXTS.has((c.nav?.file?.split('.').pop() ?? '').toLowerCase());
 const calendarScreen = (c: AiActionCtx) => c.nav?.screen === 'calendar';
 const projectOpen = (c: AiActionCtx) => c.nav?.screen === 'project' && !!c.nav.project;
 
@@ -263,6 +266,24 @@ export const AI_ACTIONS: AiAction[] = [
     section: 'project', sectionLabel: 'Проект', icon: IcChat,
     when: c => fileOpen(c) && c.online, contextual: fileOpen,
     run: () => dispatchAiRun('file.ask'),
+  },
+  {
+    id: 'file.summary', title: 'Краткое содержание документа', hint: 'суть pdf/docx/xlsx за 5-8 пунктов',
+    section: 'project', sectionLabel: 'Проект', icon: IcDoc,
+    when: docOpen, contextual: docOpen,
+    run: () => dispatchAiRun('file.summary'),
+  },
+  {
+    id: 'file.extract', title: 'Выжимка из документа', hint: 'решения, даты, участники, действия',
+    section: 'project', sectionLabel: 'Проект', icon: IcChecks,
+    when: docOpen, contextual: docOpen,
+    run: () => dispatchAiRun('file.extract'),
+  },
+  {
+    id: 'file.toMarkdown', title: 'Сохранить как Markdown', hint: 'трансформировать документ в .md рядом',
+    section: 'project', sectionLabel: 'Проект', icon: IcBookPlus,
+    when: docOpen, contextual: docOpen,
+    run: () => dispatchAiRun('file.toMarkdown'),
   },
   {
     id: 'file.history', title: 'История и авторы файла', hint: 'git log + blame по файлу',

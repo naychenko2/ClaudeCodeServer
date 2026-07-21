@@ -10,7 +10,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects/{projectId}/files")]
-public class FilesController(FileService files, ProjectManager projects, SyncService sync, IConfiguration config, JwtService jwt, ILogger<FilesController> logger, NotesService notes) : ControllerBase
+public class FilesController(FileService files, ProjectManager projects, SyncService sync, IConfiguration config, JwtService jwt, ILogger<FilesController> logger, NotesService notes, DocumentAiService docAi) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string? UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub);
@@ -134,6 +134,109 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
         catch (KeyNotFoundException) { return NotFound(); }
         catch (FileNotFoundException) { return NotFound(); }
         catch (UnauthorizedAccessException) { return StatusCode(403); }
+    }
+
+    // Абсолютный путь документа с проверкой, что это просматриваемый документ (pdf/docx/xlsx/pptx).
+    // null → клиенту 400 (не документ). Иначе — безопасный абсолютный путь для markitdown.
+    private string? DocumentAbsPath(string projectId, string path)
+    {
+        if (files.GetDocumentInfo(path) is null) return null;
+        return FileService.SafeJoinPublic(GetRoot(projectId), path);
+    }
+
+    // Конвертация документа в Markdown (markitdown, без модели). Возвращает { markdown }.
+    [HttpPost("document/convert")]
+    public async Task<IActionResult> DocumentConvert(string projectId, [FromQuery] string path, CancellationToken ct)
+    {
+        try
+        {
+            if (DocumentAbsPath(projectId, path) is not { } abs)
+                return BadRequest(new { error = "Это не документ (pdf/docx/xlsx/pptx)" });
+            var md = await docAi.ConvertAsync(abs, ct);
+            return md is null
+                ? StatusCode(502, new { error = "Не удалось конвертировать документ (markitdown недоступен?)" })
+                : Ok(new { markdown = md });
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+    }
+
+    // Краткое содержание документа (локальная модель / claude).
+    [HttpPost("document/summary")]
+    public async Task<IActionResult> DocumentSummary(string projectId, [FromQuery] string path, CancellationToken ct)
+    {
+        try
+        {
+            if (DocumentAbsPath(projectId, path) is not { } abs)
+                return BadRequest(new { error = "Это не документ" });
+            var summary = await docAi.SummaryAsync(abs, ct);
+            return summary is null ? StatusCode(502, new { error = "Не удалось прочитать документ" }) : Ok(new { summary });
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+    }
+
+    // Структурная выжимка: решения, даты, участники, action items.
+    [HttpPost("document/extract")]
+    public async Task<IActionResult> DocumentExtract(string projectId, [FromQuery] string path, CancellationToken ct)
+    {
+        try
+        {
+            if (DocumentAbsPath(projectId, path) is not { } abs)
+                return BadRequest(new { error = "Это не документ" });
+            var r = await docAi.ExtractAsync(abs, ct);
+            return r is null
+                ? StatusCode(502, new { error = "Не удалось прочитать документ" })
+                : Ok(new { decisions = r.Decisions, dates = r.Dates, people = r.People, actionItems = r.ActionItems });
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+    }
+
+    // Трансформация ЛЮБОГО файла в Markdown с СОХРАНЕНИЕМ (markitdown, без модели).
+    // targetDir (относительно корня проекта) — куда положить .md; пусто → рядом с исходником.
+    // Возвращает { savedPath, markdown }.
+    [HttpPost("document/to-markdown")]
+    public async Task<IActionResult> ToMarkdown(string projectId, [FromBody] ToMarkdownRequest req, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(req.Path))
+            return BadRequest(new { error = "Нужен путь файла" });
+        try
+        {
+            var root = GetRoot(projectId);
+            var abs = FileService.SafeJoinPublic(root, req.Path);
+            if (!System.IO.File.Exists(abs))
+                return NotFound(new { error = "Файл не найден" });
+
+            var md = await docAi.ConvertAsync(abs, ct);
+            if (md is null)
+                return StatusCode(502, new { error = "Не удалось конвертировать файл (markitdown недоступен или формат не поддержан)" });
+
+            // Имя целевого .md — по исходному имени; каталог — targetDir или рядом с исходником
+            var baseName = System.IO.Path.GetFileNameWithoutExtension(req.Path) + ".md";
+            var dir = string.IsNullOrWhiteSpace(req.TargetDir)
+                ? (System.IO.Path.GetDirectoryName(req.Path.Replace('\\', '/')) ?? "")
+                : req.TargetDir.Replace('\\', '/').Trim('/');
+            var targetRel = string.IsNullOrEmpty(dir) ? baseName : $"{dir}/{baseName}";
+
+            // Целевая папка может не существовать (пользователь указал новую) — создаём
+            if (!string.IsNullOrEmpty(dir)) files.CreateDirectory(root, dir);
+            files.WriteFile(root, targetRel, md);
+            return Ok(new { savedPath = targetRel, markdown = md });
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (UnauthorizedAccessException) { return StatusCode(403); }
+    }
+
+    // Теги документа по содержимому.
+    [HttpPost("document/tags")]
+    public async Task<IActionResult> DocumentTags(string projectId, [FromQuery] string path, CancellationToken ct)
+    {
+        try
+        {
+            if (DocumentAbsPath(projectId, path) is not { } abs)
+                return BadRequest(new { error = "Это не документ" });
+            var tags = await docAi.TagsAsync(abs, ct);
+            return tags is null ? StatusCode(502, new { error = "Не удалось прочитать документ" }) : Ok(new { tags });
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
     }
 
     [HttpPut("content")]
@@ -594,4 +697,5 @@ public record SaveContentRequest(string Content);
 public record PathRequest(string Path);
 public record RenameRequest(string OldPath, string NewPath);
 public record SaveFromUrlRequest(string Url, string Path);
+public record ToMarkdownRequest(string Path, string? TargetDir = null);
 public record OOCallbackPayload(int Status, string? Url, string? Key);

@@ -740,6 +740,20 @@ export const api = {
         method: 'PUT',
         body: JSON.stringify({ content }),
       }),
+    // Документы (pdf/docx/xlsx/pptx): конвертация в MD + ИИ-помощь (локальная модель / claude)
+    documentConvert: (projectId: string, path: string) =>
+      request<{ markdown: string }>(`/projects/${projectId}/files/document/convert?path=${encodeURIComponent(path)}`, { method: 'POST' }),
+    documentSummary: (projectId: string, path: string) =>
+      request<{ summary: string }>(`/projects/${projectId}/files/document/summary?path=${encodeURIComponent(path)}`, { method: 'POST' }),
+    documentExtract: (projectId: string, path: string) =>
+      request<{ decisions: string[]; dates: string[]; people: string[]; actionItems: string[] }>(`/projects/${projectId}/files/document/extract?path=${encodeURIComponent(path)}`, { method: 'POST' }),
+    documentTags: (projectId: string, path: string) =>
+      request<{ tags: string[] }>(`/projects/${projectId}/files/document/tags?path=${encodeURIComponent(path)}`, { method: 'POST' }),
+    // Трансформировать любой файл в Markdown и сохранить (рядом или в targetDir)
+    toMarkdown: (projectId: string, path: string, targetDir?: string | null) =>
+      request<{ savedPath: string; markdown: string }>(`/projects/${projectId}/files/document/to-markdown`, {
+        method: 'POST', body: JSON.stringify({ path, targetDir: targetDir ?? null }),
+      }),
     getDiff: (projectId: string, path: string) =>
       request<{ diff: string | null }>(`/projects/${projectId}/files/diff?path=${encodeURIComponent(path)}`),
     revert: (projectId: string, path: string) =>

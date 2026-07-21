@@ -15,7 +15,8 @@ import { agentDotColor } from './AgentSelector';
 import { ExpiryBadge } from './ExpiryBadge';
 import { FilterBar } from './FilterBar';
 import { ChatOriginBadge } from './ChatOriginBadge';
-import { resolveChatOrigin, loadVisibleOrigins, persistVisibleOrigins } from '../lib/chatOrigin';
+import { resolveChatOrigin } from '../lib/chatOrigin';
+import { useChatFilters, useSanitizePersonaFilter } from '../lib/chatFilters';
 import { TeamMechanicBadge } from '../features/team/TeamMechanicBadge';
 import { teamTurnPreview } from '../features/team/teamMechanics';
 import { getLastMechanic, useLastMechanicVersion } from '../lib/lastMechanic';
@@ -183,20 +184,19 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   };
 
   // === Фильтры списка чатов ===
-  // Тип чата — персистится в localStorage отдельно для каждого проекта (scope = project.id)
-  const [visibleOrigins, setVisibleOriginsState] = useState<Set<Session['origin']>>(() => loadVisibleOrigins(project.id));
-  const setVisibleOrigins = (v: Set<Session['origin']>) => { setVisibleOriginsState(v); persistVisibleOrigins(project.id, v); };
-  const [activeOnly, setActiveOnly] = useState(false);
-  const [filterPersonaId, setFilterPersonaId] = useState<string | null>(null);
+  // Персистятся в localStorage отдельно для каждого проекта (scope = project.id)
+  const { filters, patch } = useChatFilters(project.id);
+  const visibleOrigins = new Set(filters.origins);
 
   // Персоны в списке (для селектора фильтра)
   const personaIdsInList = [...new Set(sessions.filter(s => s.personaId).map(s => s.personaId!))];
+  useSanitizePersonaFilter(filters, patch, personaIdsInList, sessions.length > 0);
 
   // Применение фильтров
   const filteredSessions = sessions.filter(s => {
     if (!visibleOrigins.has(s.origin)) return false;
-    if (activeOnly && Date.now() - new Date(s.updatedAt).getTime() > 5 * 60 * 1000) return false;
-    if (filterPersonaId && s.personaId !== filterPersonaId) return false;
+    if (filters.activeOnly && Date.now() - new Date(s.updatedAt).getTime() > 5 * 60 * 1000) return false;
+    if (filters.personaId && s.personaId !== filters.personaId) return false;
     return true;
   });
   const hiddenCount = sessions.length - filteredSessions.length;
@@ -220,11 +220,11 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
       {/* Строка фильтров — всегда видна (для консистентности) */}
       <FilterBar
         visibleOrigins={visibleOrigins}
-        onChangeVisibleOrigins={setVisibleOrigins}
-        activeOnly={activeOnly}
-        onChangeActiveOnly={setActiveOnly}
-        filterPersonaId={filterPersonaId}
-        onChangeFilterPersona={setFilterPersonaId}
+        onChangeVisibleOrigins={v => patch({ origins: [...v] })}
+        activeOnly={filters.activeOnly}
+        onChangeActiveOnly={v => patch({ activeOnly: v })}
+        filterPersonaId={filters.personaId}
+        onChangeFilterPersona={id => patch({ personaId: id })}
         personaIdsInList={personaIdsInList}
         allPersonas={personas}
         hiddenCount={hiddenCount}

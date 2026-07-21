@@ -31,25 +31,3 @@ export function resolveChatOrigin(session: Session): ChatOriginInfo | null {
 
   return null;
 }
-
-// === Персистентность фильтра «Тип чата» (localStorage) ===
-// Раздельно по областям: глобальный список чатов (scopeKey='global') и каждый проект
-// отдельно (scopeKey=projectId) — переключение проекта не должно смешивать их настройки.
-
-const VISIBLE_ORIGINS_PREFIX = 'cc_chat_visible_origins:';
-const DEFAULT_VISIBLE_ORIGINS: Session['origin'][] = ['manual', 'automation'];
-
-export function loadVisibleOrigins(scopeKey: string): Set<Session['origin']> {
-  try {
-    const raw = localStorage.getItem(VISIBLE_ORIGINS_PREFIX + scopeKey);
-    if (raw) {
-      const arr = JSON.parse(raw) as Session['origin'][];
-      if (Array.isArray(arr)) return new Set(arr);
-    }
-  } catch { /* повреждённое значение — дефолт */ }
-  return new Set(DEFAULT_VISIBLE_ORIGINS);
-}
-
-export function persistVisibleOrigins(scopeKey: string, v: Set<Session['origin']>): void {
-  try { localStorage.setItem(VISIBLE_ORIGINS_PREFIX + scopeKey, JSON.stringify([...v])); } catch { /* квота/приватный режим */ }
-}

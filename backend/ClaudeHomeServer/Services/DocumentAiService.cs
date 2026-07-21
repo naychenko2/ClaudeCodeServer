@@ -22,40 +22,61 @@ public sealed class DocumentAiService(
     public Task<string?> ConvertAsync(string absolutePath, CancellationToken ct) =>
         markitdown.ConvertAsync(absolutePath, ct);
 
-    // Краткое содержание документа: 5-8 пунктов сути.
-    public async Task<string?> SummaryAsync(string absolutePath, CancellationToken ct)
+    // Восстановление Markdown-разметки локальной моделью: markitdown из pdf даёт плоский текст
+    // без заголовков/списков. Модель расставляет #/##, списки, выделения — НЕ меняя и не сокращая
+    // текст. Пустой ввод / ошибка → исходный текст (безопасная деградация).
+    public async Task<string> EnhanceMarkdownAsync(string markdown, CancellationToken ct)
     {
-        var md = await markitdown.ConvertAsync(absolutePath, ct);
-        if (string.IsNullOrWhiteSpace(md)) return null;
+        if (string.IsNullOrWhiteSpace(markdown)) return markdown;
         var prompt =
-            "Ниже — документ в Markdown. Составь краткое содержание: 5-8 пунктов маркированного списка " +
-            "по сути, по-русски. Ответь ТОЛЬКО markdown-списком, без вступлений.\n\n" + Truncate(md, MdBudget);
+            "Ниже — текст документа, извлечённый из PDF (без разметки). Оформи его как аккуратный Markdown: " +
+            "расставь заголовки (#/##/###), маркированные и нумерованные списки, выдели важное **жирным**, " +
+            "оформи таблицы если они есть. СТРОГО сохрани весь текст дословно — ничего не добавляй, не сокращай " +
+            "и не перефразируй, только разметка и структура. Ответь ТОЛЬКО готовым Markdown, без пояснений.\n\n" +
+            Truncate(markdown, MdBudget);
+        var enhanced = (await cheap.RunAsync(Llm.LocalActionCatalog.DocFormat, prompt, Model, ct: ct)).Trim();
+        // Снимаем возможную ```markdown-обёртку
+        if (enhanced.StartsWith("```"))
+        {
+            var nl = enhanced.IndexOf('\n');
+            var lastFence = enhanced.LastIndexOf("```", StringComparison.Ordinal);
+            if (nl > 0 && lastFence > nl) enhanced = enhanced[(nl + 1)..lastFence].Trim();
+        }
+        return string.IsNullOrWhiteSpace(enhanced) ? markdown : enhanced;
+    }
+
+    // Краткое содержание: 5-8 пунктов сути. text — готовое содержимое (markdown документа или
+    // текст .md/.txt): добывание текста (markitdown для бинарных / чтение для текстовых) — на вызывающем.
+    public async Task<string?> SummaryAsync(string text, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        var prompt =
+            "Ниже — содержимое документа. Составь краткое содержание: 5-8 пунктов маркированного списка " +
+            "по сути, по-русски. Ответь ТОЛЬКО markdown-списком, без вступлений.\n\n" + Truncate(text, MdBudget);
         return await cheap.RunAsync(Llm.LocalActionCatalog.DocSummary, prompt, Model, ct: ct);
     }
 
     // Структурная выжимка: решения, даты/сроки, участники, action items.
-    public async Task<DocExtractResult?> ExtractAsync(string absolutePath, CancellationToken ct)
+    public async Task<DocExtractResult?> ExtractAsync(string text, CancellationToken ct)
     {
-        var md = await markitdown.ConvertAsync(absolutePath, ct);
-        if (string.IsNullOrWhiteSpace(md)) return null;
+        if (string.IsNullOrWhiteSpace(text)) return null;
         var prompt =
-            "Ниже — документ в Markdown. Извлеки структурированную выжимку. Ответь ТОЛЬКО JSON-объектом " +
+            "Ниже — содержимое документа. Извлеки структурированную выжимку. Ответь ТОЛЬКО JSON-объектом " +
             "без пояснений: {\"decisions\":[],\"dates\":[],\"people\":[],\"actionItems\":[]}. " +
             "decisions — принятые решения; dates — важные даты/сроки (с контекстом); people — упомянутые " +
             "участники/ответственные; actionItems — задачи/следующие шаги. Пусто → []. По-русски.\n\n" +
-            Truncate(md, MdBudget);
+            Truncate(text, MdBudget);
         var raw = await cheap.RunAsync(Llm.LocalActionCatalog.DocExtract, prompt, Model, ct: ct);
         return ParseExtract(raw);
     }
 
-    // До 6 тегов по содержимому документа.
-    public async Task<IReadOnlyList<string>?> TagsAsync(string absolutePath, CancellationToken ct)
+    // До 6 тегов по содержимому.
+    public async Task<IReadOnlyList<string>?> TagsAsync(string text, CancellationToken ct)
     {
-        var md = await markitdown.ConvertAsync(absolutePath, ct);
-        if (string.IsNullOrWhiteSpace(md)) return null;
+        if (string.IsNullOrWhiteSpace(text)) return null;
         var prompt =
-            "Ниже — документ в Markdown. Предложи до 6 коротких тегов (одно-два слова, по-русски, без #) " +
-            "по теме документа. Ответь ТОЛЬКО JSON-массивом строк.\n\n" + Truncate(md, MdBudget);
+            "Ниже — содержимое документа. Предложи до 6 коротких тегов (одно-два слова, по-русски, без #) " +
+            "по теме. Ответь ТОЛЬКО JSON-массивом строк.\n\n" + Truncate(text, MdBudget);
         var raw = await cheap.RunAsync(Llm.LocalActionCatalog.DocTags, prompt, Model, ct: ct);
         return ParseStringArray(raw).Select(t => t.Trim().TrimStart('#').Trim())
             .Where(t => t.Length is > 1 and <= 30).Distinct(StringComparer.OrdinalIgnoreCase).Take(6).ToList();

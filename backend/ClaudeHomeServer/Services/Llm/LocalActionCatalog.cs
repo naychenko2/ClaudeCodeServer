@@ -38,6 +38,7 @@ public static class LocalActionCatalog
     public const string DocSummary = "doc-summary";
     public const string DocExtract = "doc-extract";
     public const string DocTags = "doc-tags";
+    public const string DocFormat = "doc-format";
     public const string KbDescribe = "kb-describe";
     public const string TaskAi = "task-ai";
     public const string TaskClassify = "task-classify";
@@ -78,6 +79,7 @@ public static class LocalActionCatalog
         new(DocSummary, "Краткое содержание документа", "Документы", CheapProfile.Large, DefaultLocal: true),
         new(DocExtract, "Выжимка из документа", "Документы", CheapProfile.Large, DefaultLocal: true),
         new(DocTags, "Теги документа", "Документы", CheapProfile.Text, DefaultLocal: true),
+        new(DocFormat, "Разметка Markdown при трансформации", "Документы", CheapProfile.Large, DefaultLocal: true),
         new(KbDescribe, "Описание базы знаний", "Знания", CheapProfile.Small, DefaultLocal: true),
         new(TaskAi, "Описание и подзадачи задач", "Задачи", CheapProfile.Text, DefaultLocal: true),
         new(TaskClassify, "Приоритет и метки задач", "Задачи", CheapProfile.Small, DefaultLocal: true),

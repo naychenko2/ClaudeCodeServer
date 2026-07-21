@@ -608,7 +608,8 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
   const [docAi, setDocAi] = useState<{ title: string; markdown: string } | null>(null);
   const [docAiBusy, setDocAiBusy] = useState(false);
   const runDocAi = async (kind: 'summary' | 'extract' | 'tags' | 'convert') => {
-    if (!fileContent?.isDocument || docAiBusy) return;
+    // Разрешаем документы (pdf/docx/…) и текстовые файлы; блокируем прочие бинарные и повторный клик
+    if (docAiBusy || !fileContent || (fileContent.isBinary && !fileContent.isDocument)) return;
     setDocAiBusy(true);
     beginAiBusy();
     try {

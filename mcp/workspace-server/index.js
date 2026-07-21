@@ -207,6 +207,7 @@ const SECTION_TOOLS = {
           projectId: { type: 'string' },
           path: { type: 'string', description: 'Путь исходного файла' },
           targetDir: { type: 'string', description: 'Папка назначения (относительно корня проекта). Пусто — рядом с исходником.' },
+          enhance: { type: 'boolean', description: 'Восстановить Markdown-разметку локальной моделью (заголовки/списки/выделения) — полезно для PDF, дающих плоский текст. По умолчанию false.' },
         },
       },
     },
@@ -702,7 +703,7 @@ async function callTool(name, args) {
 
     case 'files_to_markdown': {
       checkProjectAllowed(args.projectId);
-      const body = { path: String(args.path ?? ''), targetDir: args.targetDir ?? null };
+      const body = { path: String(args.path ?? ''), targetDir: args.targetDir ?? null, enhance: Boolean(args.enhance) };
       const r = await api(`/api/projects/${args.projectId}/files/document/to-markdown`, {
         method: 'POST', body: JSON.stringify(body),
       });

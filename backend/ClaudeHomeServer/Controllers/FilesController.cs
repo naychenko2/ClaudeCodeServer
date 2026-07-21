@@ -144,6 +144,19 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
         return FileService.SafeJoinPublic(GetRoot(projectId), path);
     }
 
+    // Текст файла для ИИ-действий (суть/выжимка/теги): бинарный документ (pdf/docx/xlsx/pptx) →
+    // markitdown; текстовый файл (.md/.txt/.csv/код) → читаем как есть; прочие бинарные → null.
+    private async Task<string?> GetAiTextAsync(string projectId, string path, CancellationToken ct)
+    {
+        var root = GetRoot(projectId);
+        if (files.GetDocumentInfo(path) is not null)
+        {
+            var abs = FileService.SafeJoinPublic(root, path);
+            return System.IO.File.Exists(abs) ? await docAi.ConvertAsync(abs, ct) : null;
+        }
+        return files.IsBinaryFile(root, path) ? null : files.ReadFile(root, path);
+    }
+
     // Конвертация документа в Markdown (markitdown, без модели). Возвращает { markdown }.
     [HttpPost("document/convert")]
     public async Task<IActionResult> DocumentConvert(string projectId, [FromQuery] string path, CancellationToken ct)
@@ -166,10 +179,10 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
     {
         try
         {
-            if (DocumentAbsPath(projectId, path) is not { } abs)
-                return BadRequest(new { error = "Это не документ" });
-            var summary = await docAi.SummaryAsync(abs, ct);
-            return summary is null ? StatusCode(502, new { error = "Не удалось прочитать документ" }) : Ok(new { summary });
+            var text = await GetAiTextAsync(projectId, path, ct);
+            if (text is null) return BadRequest(new { error = "Файл не поддерживается (нужен документ или текст)" });
+            var summary = await docAi.SummaryAsync(text, ct);
+            return summary is null ? StatusCode(502, new { error = "Не удалось обработать файл" }) : Ok(new { summary });
         }
         catch (KeyNotFoundException) { return NotFound(); }
     }
@@ -180,11 +193,11 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
     {
         try
         {
-            if (DocumentAbsPath(projectId, path) is not { } abs)
-                return BadRequest(new { error = "Это не документ" });
-            var r = await docAi.ExtractAsync(abs, ct);
+            var text = await GetAiTextAsync(projectId, path, ct);
+            if (text is null) return BadRequest(new { error = "Файл не поддерживается (нужен документ или текст)" });
+            var r = await docAi.ExtractAsync(text, ct);
             return r is null
-                ? StatusCode(502, new { error = "Не удалось прочитать документ" })
+                ? StatusCode(502, new { error = "Не удалось обработать файл" })
                 : Ok(new { decisions = r.Decisions, dates = r.Dates, people = r.People, actionItems = r.ActionItems });
         }
         catch (KeyNotFoundException) { return NotFound(); }
@@ -209,6 +222,9 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
             if (md is null)
                 return StatusCode(502, new { error = "Не удалось конвертировать файл (markitdown недоступен или формат не поддержан)" });
 
+            // Опционально: восстановить Markdown-разметку локальной моделью (для pdf без структуры)
+            if (req.Enhance) md = await docAi.EnhanceMarkdownAsync(md, ct);
+
             // Имя целевого .md — по исходному имени; каталог — targetDir или рядом с исходником
             var baseName = System.IO.Path.GetFileNameWithoutExtension(req.Path) + ".md";
             var dir = string.IsNullOrWhiteSpace(req.TargetDir)
@@ -231,10 +247,10 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
     {
         try
         {
-            if (DocumentAbsPath(projectId, path) is not { } abs)
-                return BadRequest(new { error = "Это не документ" });
-            var tags = await docAi.TagsAsync(abs, ct);
-            return tags is null ? StatusCode(502, new { error = "Не удалось прочитать документ" }) : Ok(new { tags });
+            var text = await GetAiTextAsync(projectId, path, ct);
+            if (text is null) return BadRequest(new { error = "Файл не поддерживается (нужен документ или текст)" });
+            var tags = await docAi.TagsAsync(text, ct);
+            return tags is null ? StatusCode(502, new { error = "Не удалось обработать файл" }) : Ok(new { tags });
         }
         catch (KeyNotFoundException) { return NotFound(); }
     }
@@ -697,5 +713,5 @@ public record SaveContentRequest(string Content);
 public record PathRequest(string Path);
 public record RenameRequest(string OldPath, string NewPath);
 public record SaveFromUrlRequest(string Url, string Path);
-public record ToMarkdownRequest(string Path, string? TargetDir = null);
+public record ToMarkdownRequest(string Path, string? TargetDir = null, bool Enhance = false);
 public record OOCallbackPayload(int Status, string? Url, string? Key);

@@ -749,10 +749,11 @@ export const api = {
       request<{ decisions: string[]; dates: string[]; people: string[]; actionItems: string[] }>(`/projects/${projectId}/files/document/extract?path=${encodeURIComponent(path)}`, { method: 'POST' }),
     documentTags: (projectId: string, path: string) =>
       request<{ tags: string[] }>(`/projects/${projectId}/files/document/tags?path=${encodeURIComponent(path)}`, { method: 'POST' }),
-    // Трансформировать любой файл в Markdown и сохранить (рядом или в targetDir)
-    toMarkdown: (projectId: string, path: string, targetDir?: string | null) =>
+    // Трансформировать любой файл в Markdown и сохранить (рядом или в targetDir).
+    // enhance — восстановить разметку локальной моделью (заголовки/списки, для pdf).
+    toMarkdown: (projectId: string, path: string, targetDir?: string | null, enhance = false) =>
       request<{ savedPath: string; markdown: string }>(`/projects/${projectId}/files/document/to-markdown`, {
-        method: 'POST', body: JSON.stringify({ path, targetDir: targetDir ?? null }),
+        method: 'POST', body: JSON.stringify({ path, targetDir: targetDir ?? null, enhance }),
       }),
     getDiff: (projectId: string, path: string) =>
       request<{ diff: string | null }>(`/projects/${projectId}/files/diff?path=${encodeURIComponent(path)}`),

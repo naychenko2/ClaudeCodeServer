@@ -91,9 +91,13 @@ const personaOpen = (c: AiActionCtx) => c.nav?.screen === 'personas' && !!c.nav.
 const knowledgeScreen = (c: AiActionCtx) => c.nav?.screen === 'knowledge';
 const knowledgeOpen = (c: AiActionCtx) => c.nav?.screen === 'knowledge' && !!c.nav.knowledge;
 const fileOpen = (c: AiActionCtx) => c.nav?.screen === 'project' && !!c.nav.file;
-// Документ (pdf/docx/xlsx/pptx…) — по расширению открытого файла; ИИ-действия документа только для них
+// Документ (pdf/docx/xlsx/pptx…) — по расширению открытого файла; трансформация в MD только для них
 const DOC_EXTS = new Set(['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp', 'epub', 'csv', 'htm', 'html']);
-const docOpen = (c: AiActionCtx) => fileOpen(c) && DOC_EXTS.has((c.nav?.file?.split('.').pop() ?? '').toLowerCase());
+const fileExt = (c: AiActionCtx) => (c.nav?.file?.split('.').pop() ?? '').toLowerCase();
+const docOpen = (c: AiActionCtx) => fileOpen(c) && DOC_EXTS.has(fileExt(c));
+// Суть/выжимка осмысленны и для текстовых файлов (markdown, txt, код) — не только бинарных документов
+const TEXT_EXTS = new Set(['md', 'markdown', 'mdx', 'txt', 'text', 'rst', 'tex', 'json', 'yaml', 'yml', 'log', 'ini', 'cfg', 'toml']);
+const summarizableOpen = (c: AiActionCtx) => fileOpen(c) && (DOC_EXTS.has(fileExt(c)) || TEXT_EXTS.has(fileExt(c)));
 const calendarScreen = (c: AiActionCtx) => c.nav?.screen === 'calendar';
 const projectOpen = (c: AiActionCtx) => c.nav?.screen === 'project' && !!c.nav.project;
 
@@ -274,15 +278,15 @@ export const AI_ACTIONS: AiAction[] = [
     run: () => dispatchAiRun('file.ask'),
   },
   {
-    id: 'file.summary', title: 'Краткое содержание документа', hint: 'суть pdf/docx/xlsx за 5-8 пунктов',
+    id: 'file.summary', title: 'Краткое содержание', hint: 'суть файла за 5-8 пунктов',
     section: 'project', sectionLabel: 'Проект', icon: IcDoc,
-    when: docOpen, contextual: docOpen,
+    when: summarizableOpen, contextual: summarizableOpen,
     run: () => dispatchAiRun('file.summary'),
   },
   {
-    id: 'file.extract', title: 'Выжимка из документа', hint: 'решения, даты, участники, действия',
+    id: 'file.extract', title: 'Выжимка', hint: 'решения, даты, участники, действия',
     section: 'project', sectionLabel: 'Проект', icon: IcChecks,
-    when: docOpen, contextual: docOpen,
+    when: summarizableOpen, contextual: summarizableOpen,
     run: () => dispatchAiRun('file.extract'),
   },
   {

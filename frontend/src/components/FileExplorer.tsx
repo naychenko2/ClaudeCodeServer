@@ -551,11 +551,13 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
 
   // === Трансформация в Markdown (markitdown) — выбор папки назначения ===
   const [mdEntry, setMdEntry] = useState<FileEntry | null>(null);
+  const [mdEnhance, setMdEnhance] = useState(false);
   const doTransformMd = async (entry: FileEntry, targetDir: string | null) => {
+    const enhance = mdEnhance;
     setMdEntry(null);
     beginAiBusy();
     try {
-      const r = await api.files.toMarkdown(project.id, entry.path, targetDir);
+      const r = await api.files.toMarkdown(project.id, entry.path, targetDir, enhance);
       showToast('Трансформировано в Markdown', r.savedPath);
       const [dir] = splitPath(r.savedPath);
       await invalidateDir(dir);
@@ -1855,6 +1857,10 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
             title={`В Markdown: ${mdEntry.name}`}
             subtitle="Куда сохранить .md — рядом с файлом или в другую папку"
           >
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 4px 10px', cursor: 'pointer', fontFamily: FONT.sans, fontSize: 12.5, color: C.textSecondary }}>
+              <input type="checkbox" checked={mdEnhance} onChange={e => setMdEnhance(e.target.checked)} />
+              Восстановить разметку (ИИ): заголовки, списки — полезно для PDF
+            </label>
             <div style={{ maxHeight: 340, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 2, margin: '0 -4px' }}>
               <button
                 onPointerDown={e => { e.stopPropagation(); void doTransformMd(mdEntry, null); }}

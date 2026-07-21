@@ -39,7 +39,8 @@ export interface AiActionCtx {
   caps: { semantic: boolean };
   // Открыт ли сейчас чат (проектный или в разделе «Чаты») и есть ли в нём переписка.
   // Активная сессия проекта не отражается в nav — ChatPanel сообщает это отдельно.
-  chat: { active: boolean; hasMessages: boolean };
+  // tail — краткий хвост переписки для локального ранжирования (опционально).
+  chat: { active: boolean; hasMessages: boolean; tail?: string };
 }
 
 export interface AiAction {

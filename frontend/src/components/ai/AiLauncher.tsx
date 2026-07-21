@@ -6,10 +6,14 @@ import { getFlag } from '../../lib/featureFlags';
 import { api } from '../../lib/api';
 import { useOnline } from '../../hooks/useOnline';
 import { rankedActions, runActionById, type AiAction, type AiActionCtx } from '../../lib/ai/actions';
-import { getChatContext } from '../../lib/ai/chatContext';
+import { getChatContext, AI_RECOMPUTE_EVENT } from '../../lib/ai/chatContext';
 import { useIsMobile } from '../../lib/breakpoints';
+import { FLAGS } from '../../lib/featureFlags';
+import { shouldSurface, levelLabel, type SuggestionLevel } from '../../lib/ai/levels';
+import { rankContext } from '../../lib/ai/suggest';
+import { aiOllamaAvailable } from '../../lib/ai/ollama';
 import {
-  computeSuggestion, canShow, markShown, markDismissed,
+  computeContextState, canShow, markShown, markDismissed,
   isProactiveEnabled, setProactiveEnabled, type Suggestion,
 } from '../../lib/ai/proactive';
 
@@ -27,6 +31,10 @@ export function AiLauncher() {
   // Push-слой: активная проактивная подсказка + состояние тумблера
   const [suggestion, setSuggestion] = useState<Suggestion | null>(null);
   const [proactiveOn, setProactiveOn] = useState(isProactiveEnabled());
+  // Агрегатный уровень контекста — определяет вид FAB (бледный/яркий/анимация), даже
+  // когда балун подавлен дозировкой. Активна градация только при флаге ai-local-suggest.
+  const [fabLevel, setFabLevel] = useState<SuggestionLevel>('none');
+  const gradedFab = getFlag(FLAGS.aiLocalSuggest);
   // Доступность семантики (Dify) — для действия «Поиск по смыслу»
   const [semanticCaps, setSemanticCaps] = useState(false);
   // Мобильный вид — палитра становится нижней шторкой
@@ -36,12 +44,36 @@ export function AiLauncher() {
   // Контекст собираем на момент открытия (getNav синхронен вне React)
   const buildCtx = (): AiActionCtx => ({ nav: getNav(), online, flag: getFlag, caps: { semantic: semanticCaps }, chat: getChatContext() });
 
+  // Порядок контекстных действий от LLM (pull): при открытии палитры переупорядочиваем
+  // группу «Здесь и сейчас» под реальное содержание сущности. Пусто — порядок каталога.
+  const [llmRank, setLlmRank] = useState<string[]>([]);
+
   // Список действий пересчитывается на каждый ввод, пока палитра открыта
-  const items = useMemo(
-    () => (open ? rankedActions(buildCtx(), q) : []),
+  const items = useMemo(() => {
+    if (!open) return [];
+    const ranked = rankedActions(buildCtx(), q);
+    if (llmRank.length === 0) return ranked;
+    // Контекстные действия — по порядку llmRank (кто есть), затем остальные как были
+    const pos = (id: string) => { const i = llmRank.indexOf(id); return i < 0 ? Number.MAX_SAFE_INTEGER : i; };
+    const ctxItems = ranked.filter(r => r.contextual).sort((a, b) => pos(a.action.id) - pos(b.action.id));
+    const rest = ranked.filter(r => !r.contextual);
+    return [...ctxItems, ...rest];
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [open, q, online, semanticCaps],
-  );
+  }, [open, q, online, semanticCaps, llmRank]);
+
+  // При открытии палитры — тихо получить LLM-порядок контекстной группы (при флаге+Ollama)
+  useEffect(() => {
+    if (!open || !gradedFab) { setLlmRank([]); return; }
+    let alive = true;
+    void aiOllamaAvailable().then(ok => {
+      if (!ok || !alive) return;
+      return rankContext(buildCtx()).then(r => {
+        if (alive && r?.available && r.ranked.length) setLlmRank(r.ranked.map(x => x.id));
+      });
+    });
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, gradedFab]);
 
   useEffect(() => { setIdx(0); }, [q, open]);
   // На мобиле НЕ автофокусим поле — иначе сразу выскакивает клавиатура и перекрывает
@@ -74,27 +106,37 @@ export function AiLauncher() {
     let lastSig = '';
     let stableSince = Date.now();
     let firedForSig = '';
-    const DWELL = 4000;
+    const DWELL = 4000;          // обзорные экраны — полное «дожитие»
+    const ENTITY_DWELL = 900;    // открыта конкретная сущность — быстрый пересчёт (триггер «смена сущности»)
     const sigOf = (n: ReturnType<typeof getNav>) => n ? `${n.screen}|${n.note ?? ''}|${n.task ?? ''}|${n.persona ?? ''}|${n.knowledge ?? ''}|${n.file ?? ''}|${n.project?.id ?? ''}` : '';
+    const hasEntity = (n: ReturnType<typeof getNav>) => !!(n && (n.note || n.task || n.file || n.persona || n.knowledge));
+    // Форс-пересчёт (завершение хода Claude) — сбрасываем отметку, чтобы tick пересчитал
+    const onRecompute = () => { firedForSig = ''; };
+    window.addEventListener(AI_RECOMPUTE_EVENT, onRecompute);
     const tick = () => {
       if (open || !isProactiveEnabled()) return;
       const ctx = buildCtx();
       const sig = sigOf(ctx.nav);
-      if (sig !== lastSig) { lastSig = sig; stableSince = Date.now(); firedForSig = ''; setSuggestion(null); return; }
-      if (firedForSig === sig || Date.now() - stableSince < DWELL) return;
+      if (sig !== lastSig) { lastSig = sig; stableSince = Date.now(); firedForSig = ''; setSuggestion(null); setFabLevel('none'); return; }
+      const dwell = hasEntity(ctx.nav) ? ENTITY_DWELL : DWELL;
+      if (firedForSig === sig || Date.now() - stableSince < dwell) return;
       firedForSig = sig; // помечаем сразу, чтобы не дёргать данные каждый тик
-      void computeSuggestion(ctx).then(sug => {
-        if (!sug || !canShow(sug.key)) return;
-        // За время запроса контекст мог смениться — не показываем устаревшую подсказку
+      void computeContextState(ctx).then(({ suggestion: sug, level }) => {
+        // За время запроса контекст мог смениться — игнорируем устаревший результат
         if (sigOf(getNav()) !== sig || open) return;
+        setFabLevel(level); // FAB отражает уровень всегда (даже без всплытия балуна)
+        if (!sug) return;
+        // Порог всплытия: при активной градации — medium+, иначе (старое поведение) — любой
+        const surface = gradedFab ? shouldSurface(sug.level) : true;
+        if (!surface || !canShow(sug.key)) return;
         markShown();
         setSuggestion(sug);
       });
     };
     const h = setInterval(tick, 1500);
-    return () => clearInterval(h);
+    return () => { clearInterval(h); window.removeEventListener(AI_RECOMPUTE_EVENT, onRecompute); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, online]);
+  }, [open, online, gradedFab]);
 
   const acceptSuggestion = () => {
     if (!suggestion) return;
@@ -124,6 +166,12 @@ export function AiLauncher() {
   const nav = getNav();
   const ctxLabel = sectionLabelForScreen(nav?.screen);
 
+  // Градация FAB по уровню (только при флаге): none — бледный, medium+ — яркий + пульс,
+  // strong — добавляется анимация привлечения. Без флага — старое поведение (пульс = есть подсказка).
+  const showPulse = gradedFab ? (fabLevel === 'medium' || fabLevel === 'strong') : !!suggestion;
+  const fabDim = gradedFab && fabLevel === 'none';
+  const fabStrong = gradedFab && fabLevel === 'strong';
+
   return (
     <>
       {/* Проактивная подсказка (push) — тихий балун у кнопки */}
@@ -132,6 +180,14 @@ export function AiLauncher() {
           <div style={balloonHead}>
             <span style={{ color: C.accent, display: 'flex' }}><SparkleIcon size={15} /></span>
             <b style={{ fontSize: 12.5, color: C.textHeading }}>AI может помочь</b>
+            {gradedFab && (
+              <span style={{
+                fontFamily: FONT.mono, fontSize: 9.5, textTransform: 'uppercase', letterSpacing: 0.4,
+                color: suggestion.level === 'strong' ? C.onAccent : C.accent,
+                background: suggestion.level === 'strong' ? C.accent : C.accentLight,
+                borderRadius: R.sm, padding: '2px 6px',
+              }}>{levelLabel(suggestion.level)}</span>
+            )}
             <button onClick={dismissSuggestion} aria-label="Скрыть" style={balloonClose}>×</button>
           </div>
           <p style={{ margin: '0 0 11px', fontSize: 13, color: C.textPrimary, lineHeight: 1.4 }}>{suggestion.text}</p>
@@ -148,11 +204,16 @@ export function AiLauncher() {
           onClick={() => { setQ(''); setOpen(true); }}
           aria-label="AI-действия (Ctrl/⌘ + K)"
           title="AI-действия · ⌘K"
-          style={{ ...fabStyle, ...(isMobile ? { right: 16, width: FAB_MOBILE, height: FAB_MOBILE } : {}) }}
+          className={fabStrong ? 'cc-fab-strong' : undefined}
+          style={{
+            ...fabStyle,
+            ...(isMobile ? { right: 16, width: FAB_MOBILE, height: FAB_MOBILE } : {}),
+            ...(fabDim ? { opacity: 0.5, filter: 'grayscale(0.7)' } : {}),
+          }}
           onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-2px)'; }}
           onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)'; }}
         >
-          {suggestion && <span style={isMobile ? pulseDotMobile : pulseDot} />}
+          {showPulse && <span style={isMobile ? pulseDotMobile : pulseDot} />}
           <SparkleIcon size={isMobile ? 16 : 24} />
         </button>
       )}

@@ -22,7 +22,7 @@ import { useModelCaps, assistantName } from '../lib/models';
 import { Composer } from './Composer';
 import { EditSessionDialog } from './EditSessionDialog';
 import { C, R, SHADOW, CHAT_MAX_W } from '../lib/design';
-import { setChatContext } from '../lib/ai/chatContext';
+import { setChatContext, AI_RECOMPUTE_EVENT } from '../lib/ai/chatContext';
 import { ChatHeaderBar, RateLimitBar, type CostStats, type FalCostStats } from './chat/ChatHeaderBar';
 import { ChatProjectContext, FalCostContext, AssistantNameContext, PersonaContext } from './chat/contexts';
 import { WaitingIndicator } from './ui/WaitingIndicator';
@@ -469,12 +469,31 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   // «Итог сессии» и «Задачи из чата» в шапке.
   const hasMessages = useMemo(() => items.some(it => it.kind === 'user_message'), [items]);
 
-  // Сообщаем AI-палитре, что чат открыт (и есть ли переписка) — чтобы действия чата
-  // были доступны и в проектных чатах, где активная сессия не отражается в nav.
+  // Краткий хвост переписки (последние текстовые реплики) — для локального ранжирования
+  // действий чата («Извлечь задачи», «Итог сессии») по реальному содержанию диалога.
+  const chatTail = useMemo(() => {
+    const parts: string[] = [];
+    for (const it of items.slice(-10)) {
+      const t = (it as { text?: string }).text;
+      if (typeof t === 'string' && t.trim()) parts.push(t.trim());
+    }
+    return parts.slice(-6).join('\n---\n').slice(0, 1500);
+  }, [items]);
+
+  // Сообщаем AI-палитре, что чат открыт (переписка + хвост) — чтобы действия чата были
+  // доступны и в проектных чатах, где активная сессия не отражается в nav.
   useEffect(() => {
-    setChatContext(true, hasMessages);
+    setChatContext(true, hasMessages, chatTail);
     return () => setChatContext(false, false);
-  }, [hasMessages]);
+  }, [hasMessages, chatTail]);
+
+  // Триггер «завершение хода Claude»: по переходу isWaiting → false просим AI-хаб
+  // переоценить контекст (уместно ли извлечь задачи, собрать итог в заметку и т.п.).
+  const prevWaiting = useRef(isWaiting);
+  useEffect(() => {
+    if (prevWaiting.current && !isWaiting) window.dispatchEvent(new Event(AI_RECOMPUTE_EVENT));
+    prevWaiting.current = isWaiting;
+  }, [isWaiting]);
 
   // Фаза режима «План» (для контекстного индикатора и подписи WaitingIndicator)
   const planPhase = useMemo(() => derivePlanPhase(items, mode, isWaiting), [items, mode, isWaiting]);

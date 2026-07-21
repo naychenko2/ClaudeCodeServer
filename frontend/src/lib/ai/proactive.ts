@@ -5,18 +5,62 @@
 // открытия — чтобы не предлагать уже сделанное. Частотный лимит + дедуп + тумблер
 // держат подсказки тихими.
 
-import type { AiActionCtx } from './actions';
+import { AI_ACTIONS, type AiActionCtx } from './actions';
 import { api } from '../api';
+import { rankContext } from './suggest';
+import { aiOllamaAvailable } from './ollama';
+import type { SuggestionLevel } from './levels';
 
 export interface Suggestion {
-  key: string;       // ключ дедупа (на сущность/день) — не показываем повторно
-  actionId: string;  // какое действие реестра предложить
-  text: string;      // что написать в балуне
+  key: string;              // ключ дедупа (на сущность/день) — не показываем повторно
+  actionId: string;         // какое действие реестра предложить
+  text: string;             // что написать в балуне
+  level: SuggestionLevel;   // уровень пользы (для реакции FAB и порога всплытия)
 }
 
-// Асинхронная оценка контекста → одна подсказка или ничего. Тянет данные открытой
-// сущности, чтобы правило было точным. Вызывается редко (раз на «дожитие» контекста).
-export async function computeSuggestion(ctx: AiActionCtx): Promise<Suggestion | null> {
+// Состояние контекста для AI-хаба: подсказка к показу (если её стоит всплыть) и
+// агрегатный уровень (для реакции FAB, даже когда балун подавлен).
+export interface ContextState { suggestion: Suggestion | null; level: SuggestionLevel }
+const EMPTY: ContextState = { suggestion: null, level: 'none' };
+
+// Сигнатура nav — часть ключа дедупа LLM-подсказки (на конкретную сущность).
+function navSig(nav: NonNullable<AiActionCtx['nav']>): string {
+  return `${nav.screen}|${nav.note ?? ''}|${nav.task ?? ''}|${nav.persona ?? ''}|${nav.knowledge ?? ''}|${nav.file ?? ''}|${nav.project?.id ?? ''}`;
+}
+
+// Главная оценка контекста. При включённом флаге и доступной Ollama — уровни от модели;
+// иначе — альтернативный rule-based механизм с эвристическим уровнем. Вызывается редко
+// (на «дожитие» контекста / смену сущности / завершение хода).
+export async function computeContextState(ctx: AiActionCtx): Promise<ContextState> {
+  const nav = ctx.nav;
+  if (!nav) return EMPTY;
+
+  // LLM-путь: только при флаге и сконфигурированной Ollama
+  if (ctx.flag('ai-local-suggest') && await aiOllamaAvailable()) {
+    try {
+      const r = await rankContext(ctx);
+      if (r && r.available) {
+        if (r.ranked.length === 0) return EMPTY;
+        // Лучший кандидат; порог всплытия балуна применяет AiLauncher (по level).
+        const top = r.ranked[0];
+        const action = AI_ACTIONS.find(a => a.id === top.id);
+        const suggestion = action
+          ? { key: `llm:${navSig(nav)}:${top.id}`, actionId: top.id, text: `${action.title}?`, level: top.level }
+          : null;
+        return { suggestion, level: r.aggregate };
+      }
+    } catch { /* фолбэк на правила */ }
+  }
+
+  // Альтернативный механизм (без LLM): правила с эвристическим уровнем
+  const rule = await computeRuleSuggestion(ctx);
+  return { suggestion: rule, level: rule?.level ?? 'none' };
+}
+
+// Rule-based подсказка: проверяет реальные данные сущности (есть ли раздел «Связанное»,
+// подзадачи, просроченные) и назначает эвристический уровень. strong — «жёсткие» сигналы
+// (готовая к запуску задача, незакоммиченные правки, просрочка), medium — «стоит предложить».
+async function computeRuleSuggestion(ctx: AiActionCtx): Promise<Suggestion | null> {
   const nav = ctx.nav;
   if (!nav) return null;
 
@@ -26,19 +70,19 @@ export async function computeSuggestion(ctx: AiActionCtx): Promise<Suggestion | 
       const note = await api.notes.get(nav.note);
       const isDaily = note.source === 'personal' && note.path.startsWith('Journal/');
       if (isDaily && !/(^|\n)##\s*Итоги дня/i.test(note.content))
-        return { key: `note-daily:${nav.note}`, actionId: 'note.daily', text: 'Собрать конспект этого дня?' };
+        return { key: `note-daily:${nav.note}`, actionId: 'note.daily', text: 'Собрать конспект этого дня?', level: 'medium' };
       // Содержательная заметка без раздела «Связанное» — предложить связи
       if (note.content.trim().length > 200 && !/(^|\n)##\s*Связанное/i.test(note.content))
-        return { key: `note-links:${nav.note}`, actionId: 'note.links', text: 'У заметки нет связей — найти похожие?' };
+        return { key: `note-links:${nav.note}`, actionId: 'note.links', text: 'У заметки нет связей — найти похожие?', level: 'medium' };
       // Есть незавершённые чекбоксы — предложить превратить их в задачи
       if (/(^|\n)\s*[-*]\s+\[ \]\s+\S/.test(note.content))
-        return { key: `note-tasks:${nav.note}`, actionId: 'note.promoteTasks', text: 'Превратить пункты заметки в задачи?' };
+        return { key: `note-tasks:${nav.note}`, actionId: 'note.promoteTasks', text: 'Превратить пункты заметки в задачи?', level: 'medium' };
       // Документ с необработанными комментариями (флаг doc-annotations) — разобрать
       if (ctx.flag('doc-annotations')) {
         try {
           const anns = await api.notes.annotations(note.source, note.path);
           if (anns.some(a => a.status === 'open'))
-            return { key: `note-annot:${nav.note}`, actionId: 'note.annotations', text: 'Есть необработанные комментарии — разобрать?' };
+            return { key: `note-annot:${nav.note}`, actionId: 'note.annotations', text: 'Есть необработанные комментарии — разобрать?', level: 'medium' };
         } catch { /* нет комментариев/офлайн */ }
       }
     } catch { /* офлайн/ошибка — без подсказки */ }
@@ -51,10 +95,10 @@ export async function computeSuggestion(ctx: AiActionCtx): Promise<Suggestion | 
       const task = await api.tasks.get(nav.task);
       if (task.status === 'done') return null;
       if (task.subtasks.length === 0)
-        return { key: `task-subs:${nav.task}`, actionId: 'task.subtasks', text: 'Разбить задачу на подзадачи?' };
+        return { key: `task-subs:${nav.task}`, actionId: 'task.subtasks', text: 'Разбить задачу на подзадачи?', level: 'medium' };
       const running = !!task.claudeStartedAt && !task.claudeResult;
       if (task.assignee === 'claude' && !running)
-        return { key: `task-exec:${nav.task}`, actionId: 'task.execute', text: 'Поручить эту задачу Claude-исполнителю?' };
+        return { key: `task-exec:${nav.task}`, actionId: 'task.execute', text: 'Поручить эту задачу Claude-исполнителю?', level: 'strong' };
     } catch { /* без подсказки */ }
     return null;
   }
@@ -65,7 +109,7 @@ export async function computeSuggestion(ctx: AiActionCtx): Promise<Suggestion | 
       const p = await api.personas.get(nav.persona);
       const hasCharacter = !!(p.contract?.character?.trim() || p.systemPrompt?.trim());
       if (!hasCharacter)
-        return { key: `persona-char:${nav.persona}`, actionId: 'persona.character', text: 'У персоны пустой характер — сгенерировать?' };
+        return { key: `persona-char:${nav.persona}`, actionId: 'persona.character', text: 'У персоны пустой характер — сгенерировать?', level: 'medium' };
     } catch { /* без подсказки */ }
     return null;
   }
@@ -75,7 +119,7 @@ export async function computeSuggestion(ctx: AiActionCtx): Promise<Suggestion | 
     try {
       const st = await api.git.status(nav.project.id);
       if (st.isRepo && (st.staged.length > 0 || st.unstaged.length > 0 || st.untracked.length > 0))
-        return { key: `git-review:${nav.project.id}`, actionId: 'project.gitReview', text: 'Есть незакоммиченные изменения — разобрать и предложить коммиты?' };
+        return { key: `git-review:${nav.project.id}`, actionId: 'project.gitReview', text: 'Есть незакоммиченные изменения — разобрать и предложить коммиты?', level: 'strong' };
     } catch { /* не git-репо/офлайн — без подсказки */ }
     return null;
   }
@@ -86,14 +130,14 @@ export async function computeSuggestion(ctx: AiActionCtx): Promise<Suggestion | 
       const today = todayKey();
       const tasks = await api.tasks.listAll(undefined, today);
       if (tasks.some(t => t.status !== 'done' && !!t.dueDate && t.dueDate < today))
-        return { key: `overdue:${today}`, actionId: 'tasks.overdue', text: 'Есть просроченные задачи — разобрать?' };
+        return { key: `overdue:${today}`, actionId: 'tasks.overdue', text: 'Есть просроченные задачи — разобрать?', level: 'strong' };
     } catch { /* офлайн — без подсказки */ }
     return null;
   }
 
   // Обзорные экраны + включён бриф — предложить собрать план дня (раз в день)
   if ((nav.screen === 'chats' || nav.screen === 'projects') && ctx.online)
-    return { key: `briefing:${todayKey()}`, actionId: 'global.briefing', text: 'Собрать план дня — задачи, заметки, активность?' };
+    return { key: `briefing:${todayKey()}`, actionId: 'global.briefing', text: 'Собрать план дня — задачи, заметки, активность?', level: 'minor' };
 
   return null;
 }

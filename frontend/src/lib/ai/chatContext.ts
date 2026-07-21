@@ -2,13 +2,19 @@
 // в nav (в отличие от раздела «Чаты»), поэтому ChatPanel сам сообщает сюда, что чат
 // открыт и есть ли в нём переписка — по этому палитра показывает действия чата
 // («Извлечь задачи», «Итог сессии») и в проектных чатах, и в разделе «Чаты».
+// tail — краткий хвост переписки (последние реплики) для локального ранжирования.
 
-let _state: { active: boolean; hasMessages: boolean } = { active: false, hasMessages: false };
+// Событие форс-пересчёта рекомендаций AI-хаба (диспатчит чат по завершении хода Claude).
+export const AI_RECOMPUTE_EVENT = 'cc-ai-recompute';
 
-export function setChatContext(active: boolean, hasMessages: boolean): void {
-  _state = { active, hasMessages };
+interface ChatCtx { active: boolean; hasMessages: boolean; tail?: string }
+
+let _state: ChatCtx = { active: false, hasMessages: false };
+
+export function setChatContext(active: boolean, hasMessages: boolean, tail?: string): void {
+  _state = { active, hasMessages, tail };
 }
 
-export function getChatContext(): { active: boolean; hasMessages: boolean } {
+export function getChatContext(): ChatCtx {
   return _state;
 }

@@ -662,6 +662,9 @@ export const api = {
         method: 'PUT',
         body: JSON.stringify(data),
       }),
+    // Обновить название чата по текущей переписке (AI-хаб, действие chat.retitle)
+    retitle: (id: string) =>
+      request<Session>(`/chats/${encodeURIComponent(id)}/retitle`, { method: 'POST' }),
     // Групповой чат персон (флаг persona-group-chats): 2-4 участника, первый — ведущая.
     // Зона — по ведущей: проектная персона → сессия её проекта, глобальная → чат вне проекта.
     createGroup: (personaIds: string[], mode = 'auto', name?: string) =>

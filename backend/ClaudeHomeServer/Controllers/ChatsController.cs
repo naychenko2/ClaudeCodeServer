@@ -158,6 +158,19 @@ public class ChatsController(SessionManager sessions, FileService files) : Contr
         return Ok(await sessions.GetHistoryAsync(id));
     }
 
+    // Обновить название чата по текущей переписке (AI-хаб): в отличие от авто-имени по первому
+    // сообщению — по всему транскрипту, с перезаписью. Как loop, работает и для проектной сессии.
+    [HttpPost("{id}/retitle")]
+    public async Task<IActionResult> Retitle(string id, CancellationToken ct)
+    {
+        try
+        {
+            var updated = await sessions.RetitleAsync(UserId, id, ct);
+            return updated is null ? NotFound() : Ok(updated);
+        }
+        catch (InvalidOperationException ex) { return StatusCode(502, new { error = ex.Message }); }
+    }
+
     [HttpDelete("{id}")]
     public async Task<IActionResult> Delete(string id)
     {

@@ -30,6 +30,7 @@ public static class LocalActionCatalog
     public const string NoteToc = "note-toc";
     public const string NoteTranslate = "note-translate";
     public const string ChatTitle = "chat-title";
+    public const string ChatRetitle = "chat-retitle";
     public const string ChatExtractTasks = "chat-extract-tasks";
     public const string MemoryWriteResolve = "memory-write-resolve";
     public const string PersonaMemoryAutolearn = "persona-memory-autolearn";
@@ -74,6 +75,7 @@ public static class LocalActionCatalog
         new(NoteToc, "Оглавление заметки", "Заметки", CheapProfile.Text, DefaultLocal: true),
         new(NoteTranslate, "Перевод заметки", "Заметки", CheapProfile.Large, DefaultLocal: true),
         new(ChatTitle, "Заголовок чата", "Чаты", CheapProfile.Small, DefaultLocal: true),
+        new(ChatRetitle, "Обновление названия чата", "Чаты", CheapProfile.Text, DefaultLocal: true),
         new(ChatExtractTasks, "Извлечение задач из чата", "Задачи", CheapProfile.Large, DefaultLocal: true),
         new(MemoryWriteResolve, "Резолвер записи памяти", "Память", CheapProfile.Small, DefaultLocal: true),
         new(PersonaMemoryAutolearn, "Автолёрн памяти персон", "Память", CheapProfile.Large, DefaultLocal: true),

@@ -739,6 +739,30 @@ function SessionSummaryButton({ session, hasMessages, online }: { session: Sessi
   return null;
 }
 
+// «Обновить название чата» — запускается через AI-палитру (действие chat.retitle).
+// Невидимый слушатель cc-ai-run: перечитывает переписку и переименовывает чат по её смыслу.
+function RetitleButton({ session, hasMessages, online }: { session: Session; hasMessages: boolean; online: boolean }) {
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { setBusy(false); }, [session.id]);
+  const run = () => {
+    if (busy) return;
+    setBusy(true);
+    beginAiBusy();
+    api.chats.retitle(session.id)
+      .then(s => showToast('Название обновлено', s.name ?? '', 'claude'))
+      .catch(() => showToast('Название чата', 'Не удалось обновить название', 'info'))
+      .finally(() => { setBusy(false); endAiBusy(); });
+  };
+  useEffect(() => {
+    if (!online || !hasMessages) return;
+    const onRun = (e: Event) => { if ((e as CustomEvent<{ action?: string }>).detail?.action === 'chat.retitle') run(); };
+    window.addEventListener('cc-ai-run', onRun);
+    return () => window.removeEventListener('cc-ai-run', onRun);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [online, session.id, hasMessages, busy]);
+  return null;
+}
+
 // Иконка «задачи из чата» — документ с плюсом
 // «Задачи из чата» — запускаются ТОЛЬКО через AI-палитру (действие chat.extract).
 // Кнопка убрана; компонент остаётся смонтированным ради слушателя cc-ai-run и
@@ -1075,9 +1099,10 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // читаются как единая группа действий чата; на десктопе — как раньше, врозь.
   const summaryBtn = <SessionSummaryButton session={session} hasMessages={hasMessages} online={online} />;
   const extractBtn = <ExtractTasksButton session={session} hasMessages={hasMessages} online={online} />;
+  const retitleBtn = <RetitleButton session={session} hasMessages={hasMessages} online={online} />;
   const actionBtns = isMobile
-    ? <div style={{ display: 'flex', alignItems: 'center', gap: 0, flexShrink: 0 }}>{extractBtn}{summaryBtn}{artifactsBtn}{settingsBtn}</div>
-    : <>{extractBtn}{summaryBtn}{artifactsBtn}{settingsBtn}</>;
+    ? <div style={{ display: 'flex', alignItems: 'center', gap: 0, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{artifactsBtn}{settingsBtn}</div>
+    : <>{retitleBtn}{extractBtn}{summaryBtn}{artifactsBtn}{settingsBtn}</>;
 
   return (
     <Toolbar isMobile={isMobile} style={personaAccent ? { borderLeft: `3px solid ${personaAccent}` } : undefined}>

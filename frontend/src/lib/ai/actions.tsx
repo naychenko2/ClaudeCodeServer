@@ -10,7 +10,7 @@ import {
   Sparkles, ImagePlus, BookOpen,
   GitBranch, GitCompare, FileClock, MessageCircleQuestion, BookPlus, ListChecks, MessagesSquare,
   CalendarClock, CalendarX2, Users,
-  ShieldCheck, Copy, Zap, Network, UserPlus, LayoutDashboard, RotateCcw, ListPlus,
+  ShieldCheck, Copy, Zap, Network, UserPlus, LayoutDashboard, RotateCcw, ListPlus, PenLine,
 } from 'lucide-react';
 import { ICON_SIZE } from '../../components/ui/icons';
 import type { NavSnapshot } from '../nav';
@@ -92,6 +92,7 @@ const IcAssignee = <UserPlus {...ico} />;
 const IcOverview = <LayoutDashboard {...ico} />;
 const IcResume = <RotateCcw {...ico} />;
 const IcCapture = <ListPlus {...ico} />;
+const IcRetitle = <PenLine {...ico} />;
 const IcToc = <List {...ico} />;
 const IcTranslate = <Sparkles {...ico} />;
 
@@ -250,6 +251,12 @@ export const AI_ACTIONS: AiAction[] = [
     section: 'chat', sectionLabel: 'Чат', icon: IcDoc,
     when: c => chatOpen(c) && c.chat.hasMessages && c.online, contextual: chatOpen,
     run: () => dispatchAiRun('chat.summary'),
+  },
+  {
+    id: 'chat.retitle', title: 'Обновить название чата', hint: 'переименовать по смыслу переписки',
+    section: 'chat', sectionLabel: 'Чат', icon: IcRetitle,
+    when: c => chatOpen(c) && c.chat.hasMessages && c.online, contextual: chatOpen,
+    run: () => dispatchAiRun('chat.retitle'),
   },
 
   // ===== Персоны =====

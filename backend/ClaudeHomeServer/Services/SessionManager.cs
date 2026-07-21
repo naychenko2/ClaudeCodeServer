@@ -1643,6 +1643,38 @@ public class SessionManager
         catch (Exception ex) { _log.LogDebug(ex, "Уточнение заголовка чата {Session}", sessionId); }
     }
 
+    // Обновление названия чата по ТЕКУЩЕЙ переписке — явное действие пользователя (AI-хаб).
+    // В отличие от авто-заголовка (только первое сообщение, ставится один раз) — читает весь
+    // транскрипт и ВСЕГДА перезаписывает имя. Раннер как у «Итога сессии»: локаль или claude-фолбэк.
+    public async Task<Session?> RetitleAsync(string userId, string sessionId, CancellationToken ct)
+    {
+        var session = GetOwned(sessionId, userId);
+        if (session is null) return null;
+        if (_cheap is null) throw new InvalidOperationException("ИИ недоступен");
+
+        var history = await GetHistoryAsync(sessionId);
+        var transcript = SessionSummaryService.BuildTranscript(history, 8000);
+        if (string.IsNullOrWhiteSpace(transcript))
+            throw new InvalidOperationException("В чате ещё нет сообщений");
+
+        var prompt =
+            "Ниже — переписка чата. Придумай короткое название (3-6 слов, по-русски, без кавычек и точки в конце), " +
+            "отражающее суть текущего разговора. Ответь ТОЛЬКО названием одной строкой.\n\n" + transcript;
+        var raw = await _cheap.RunAsync(Llm.LocalActionCatalog.ChatRetitle, prompt,
+            _config["Notes:AiModel"] ?? "haiku", ct: ct);
+        var line = raw.Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim() ?? "";
+        line = line.Trim('"', '«', '»', '#', '*', ' ').Trim();
+        if (line.Length is 0 or > 80)
+            throw new InvalidOperationException("Модель вернула пустое название");
+
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
+        entry.Info.Name = line;
+        entry.Info.UpdatedAt = DateTime.UtcNow;
+        SaveSessions();
+        await BroadcastChatRenamedAsync(sessionId, entry.Info, line);
+        return entry.Info;
+    }
+
     // Уведомить клиентов об авто-переименовании чата (адресация как у BroadcastChatDeletedAsync)
     private async Task BroadcastChatRenamedAsync(string sessionId, Session info, string name)
     {

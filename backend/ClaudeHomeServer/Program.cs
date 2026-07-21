@@ -116,6 +116,9 @@ builder.Services.AddSingleton<NotesAiService>();
 builder.Services.AddSingleton<NoteTaskSyncService>();
 builder.Services.AddSingleton<UnifiedSearchService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.OneShotClaudeRunner>();
+// AI-хаб: локальное ранжирование действий через Ollama (бесплатно, мимо claude CLI)
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.OllamaClient>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.OllamaActionRankService>();
 // Интерфейс one-shot раннера → тот же singleton (мокируется в тестах)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.IOneShotRunner>(
     sp => sp.GetRequiredService<ClaudeHomeServer.Services.Llm.OneShotClaudeRunner>());
@@ -282,6 +285,8 @@ catch (Exception ex)
 app.Services.GetRequiredService<UserStore>();
 // Фоновый прогрев каталога моделей (опрос claude CLI ~5 с — не задерживаем старт)
 _ = Task.Run(() => app.Services.GetRequiredService<ModelCatalogService>().GetModelsAsync());
+// Фоновый прогрев локальной модели Ollama (грузим веса в память заранее; best-effort)
+_ = Task.Run(() => app.Services.GetRequiredService<ClaudeHomeServer.Services.Llm.OllamaClient>().WarmUpAsync());
 app.Services.GetRequiredService<JwtService>();
 // Синк файловых сабагентов-персон: подписки на события PersonaManager должны встать
 // до первых запросов (иначе ранние правки персон не долетят до .md-файлов)

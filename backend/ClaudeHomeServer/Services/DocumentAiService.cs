@@ -63,8 +63,9 @@ public sealed class DocumentAiService(
         var prompt =
             "Ниже — содержимое документа. Извлеки структурированную выжимку. Ответь ТОЛЬКО JSON-объектом " +
             "без пояснений: {\"decisions\":[],\"dates\":[],\"people\":[],\"actionItems\":[]}. " +
-            "decisions — принятые решения; dates — важные даты/сроки (с контекстом); people — упомянутые " +
-            "участники/ответственные; actionItems — задачи/следующие шаги. Пусто → []. По-русски.\n\n" +
+            "Каждое поле — массив СТРОК (НЕ объектов). decisions — принятые решения; dates — важные " +
+            "даты/сроки строкой вида «дата — контекст»; people — упомянутые участники/ответственные; " +
+            "actionItems — задачи/следующие шаги. Пусто → []. По-русски.\n\n" +
             Truncate(text, MdBudget);
         var raw = await cheap.RunAsync(Llm.LocalActionCatalog.DocExtract, prompt, Model, ct: ct);
         return ParseExtract(raw);
@@ -89,16 +90,44 @@ public sealed class DocumentAiService(
         if (json is null) return empty;
         try
         {
-            var d = JsonSerializer.Deserialize<ExtractRaw>(json, JsonOpts);
-            if (d is null) return empty;
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
             return new DocExtractResult(
-                Clean(d.Decisions), Clean(d.Dates), Clean(d.People), Clean(d.ActionItems));
+                ReadStrings(root, "decisions"), ReadStrings(root, "dates"),
+                ReadStrings(root, "people"), ReadStrings(root, "actionItems"));
         }
         catch (JsonException) { return empty; }
     }
 
-    private static IReadOnlyList<string> Clean(List<string>? xs) =>
-        xs?.Select(s => s?.Trim() ?? "").Where(s => s.Length > 0).Take(20).ToList() ?? [];
+    // Массив строк из поля — устойчиво к тому, что модель вместо строки кладёт объект
+    // (напр. dates: [{date, context}]): такой объект склеиваем в строку через « — ».
+    private static IReadOnlyList<string> ReadStrings(JsonElement root, string prop)
+    {
+        if (!root.TryGetProperty(prop, out var arr) || arr.ValueKind != JsonValueKind.Array) return [];
+        var list = new List<string>();
+        foreach (var e in arr.EnumerateArray())
+        {
+            var s = e.ValueKind switch
+            {
+                JsonValueKind.String => e.GetString(),
+                JsonValueKind.Object => FlattenObject(e),
+                JsonValueKind.Number => e.ToString(),
+                _ => null,
+            };
+            if (!string.IsNullOrWhiteSpace(s)) list.Add(s.Trim());
+            if (list.Count >= 20) break;
+        }
+        return list;
+    }
+
+    private static string FlattenObject(JsonElement obj)
+    {
+        var parts = new List<string>();
+        foreach (var p in obj.EnumerateObject())
+            if (p.Value.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(p.Value.GetString()))
+                parts.Add(p.Value.GetString()!.Trim());
+        return string.Join(" — ", parts);
+    }
 
     private static IReadOnlyList<string> ParseStringArray(string raw)
     {
@@ -126,7 +155,4 @@ public sealed class DocumentAiService(
     }
 
     private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max] + "\n…";
-
-    private sealed record ExtractRaw(
-        List<string>? Decisions, List<string>? Dates, List<string>? People, List<string>? ActionItems);
 }

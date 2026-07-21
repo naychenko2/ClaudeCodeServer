@@ -18,10 +18,14 @@ export interface Suggestion {
   level: SuggestionLevel;   // уровень пользы (для реакции FAB и порога всплытия)
 }
 
-// Состояние контекста для AI-хаба: подсказка к показу (если её стоит всплыть) и
-// агрегатный уровень (для реакции FAB, даже когда балун подавлен).
-export interface ContextState { suggestion: Suggestion | null; level: SuggestionLevel }
-const EMPTY: ContextState = { suggestion: null, level: 'none' };
+// Рекомендованное действие с уровнем — для выделения в палитре и hover-балуна FAB.
+export interface ActionRec { id: string; level: SuggestionLevel }
+
+// Состояние контекста для AI-хаба: подсказка к показу (если её стоит всплыть),
+// агрегатный уровень (для реакции FAB, даже когда балун подавлен) и полный список
+// рекомендаций (для выделения в палитре и hover-балуна).
+export interface ContextState { suggestion: Suggestion | null; level: SuggestionLevel; recommendations: ActionRec[] }
+const EMPTY: ContextState = { suggestion: null, level: 'none', recommendations: [] };
 
 // Сигнатура nav — часть ключа дедупа LLM-подсказки (на конкретную сущность).
 function navSig(nav: NonNullable<AiActionCtx['nav']>): string {
@@ -47,14 +51,18 @@ export async function computeContextState(ctx: AiActionCtx): Promise<ContextStat
         const suggestion = action
           ? { key: `llm:${navSig(nav)}:${top.id}`, actionId: top.id, text: `${action.title}?`, level: top.level }
           : null;
-        return { suggestion, level: r.aggregate };
+        return { suggestion, level: r.aggregate, recommendations: r.ranked };
       }
     } catch { /* фолбэк на правила */ }
   }
 
   // Альтернативный механизм (без LLM): правила с эвристическим уровнем
   const rule = await computeRuleSuggestion(ctx);
-  return { suggestion: rule, level: rule?.level ?? 'none' };
+  return {
+    suggestion: rule,
+    level: rule?.level ?? 'none',
+    recommendations: rule ? [{ id: rule.actionId, level: rule.level }] : [],
+  };
 }
 
 // Rule-based подсказка: проверяет реальные данные сущности (есть ли раздел «Связанное»,

@@ -5,7 +5,7 @@ import { getNav } from '../../lib/nav';
 import { getFlag } from '../../lib/featureFlags';
 import { api } from '../../lib/api';
 import { useOnline } from '../../hooks/useOnline';
-import { rankedActions, runActionById, type AiAction, type AiActionCtx } from '../../lib/ai/actions';
+import { rankedActions, runActionById, AI_ACTIONS, type AiAction, type AiActionCtx } from '../../lib/ai/actions';
 import { getChatContext, AI_RECOMPUTE_EVENT } from '../../lib/ai/chatContext';
 import { useIsMobile } from '../../lib/breakpoints';
 import { FLAGS } from '../../lib/featureFlags';
@@ -14,7 +14,7 @@ import { rankContext } from '../../lib/ai/suggest';
 import { aiOllamaAvailable } from '../../lib/ai/ollama';
 import {
   computeContextState, canShow, markShown, markDismissed,
-  isProactiveEnabled, setProactiveEnabled, type Suggestion,
+  isProactiveEnabled, setProactiveEnabled, type Suggestion, type ActionRec,
 } from '../../lib/ai/proactive';
 
 // AI-хаб (pull-слой): плавающая кнопка + командная палитра. Открывается кликом,
@@ -28,6 +28,7 @@ export function AiLauncher() {
   const [q, setQ] = useState('');
   const [idx, setIdx] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const hoverTimer = useRef<number | null>(null);
   // Push-слой: активная проактивная подсказка + состояние тумблера
   const [suggestion, setSuggestion] = useState<Suggestion | null>(null);
   const [proactiveOn, setProactiveOn] = useState(isProactiveEnabled());
@@ -44,31 +45,34 @@ export function AiLauncher() {
   // Контекст собираем на момент открытия (getNav синхронен вне React)
   const buildCtx = (): AiActionCtx => ({ nav: getNav(), online, flag: getFlag, caps: { semantic: semanticCaps }, chat: getChatContext() });
 
-  // Порядок контекстных действий от LLM (pull): при открытии палитры переупорядочиваем
-  // группу «Здесь и сейчас» под реальное содержание сущности. Пусто — порядок каталога.
-  const [llmRank, setLlmRank] = useState<string[]>([]);
+  // Рекомендации модели (id + уровень) — единый источник для: выделения в палитре,
+  // hover-балуна FAB и переупорядочивания. Обновляются проактивным тиком и при открытии
+  // палитры/наведении. Уровень минорнее medium в палитре тоже помечаем (пользователь видит,
+  // что именно советует AI). Пусто — рекомендаций нет.
+  const [recs, setRecs] = useState<ActionRec[]>([]);
+  const [fabHover, setFabHover] = useState(false);
 
-  // Список действий пересчитывается на каждый ввод, пока палитра открыта
+  // Список действий пересчитывается на каждый ввод, пока палитра открыта. Рекомендованные
+  // (recs) получают уровень (recLevel) для бейджа/подсветки и поднимаются в начало группы.
   const items = useMemo(() => {
     if (!open) return [];
-    const ranked = rankedActions(buildCtx(), q);
-    if (llmRank.length === 0) return ranked;
-    // Контекстные действия — по порядку llmRank (кто есть), затем остальные как были
-    const pos = (id: string) => { const i = llmRank.indexOf(id); return i < 0 ? Number.MAX_SAFE_INTEGER : i; };
+    const ranked = rankedActions(buildCtx(), q).map(r => ({ ...r, recLevel: recs.find(x => x.id === r.action.id)?.level }));
+    if (recs.length === 0) return ranked;
+    const pos = (id: string) => { const i = recs.findIndex(x => x.id === id); return i < 0 ? Number.MAX_SAFE_INTEGER : i; };
     const ctxItems = ranked.filter(r => r.contextual).sort((a, b) => pos(a.action.id) - pos(b.action.id));
     const rest = ranked.filter(r => !r.contextual);
     return [...ctxItems, ...rest];
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, q, online, semanticCaps, llmRank]);
+  }, [open, q, online, semanticCaps, recs]);
 
-  // При открытии палитры — тихо получить LLM-порядок контекстной группы (при флаге+Ollama)
+  // При открытии палитры — обновить рекомендации под текущее содержание (при флаге+Ollama)
   useEffect(() => {
-    if (!open || !gradedFab) { setLlmRank([]); return; }
+    if (!open || !gradedFab) return;
     let alive = true;
     void aiOllamaAvailable().then(ok => {
       if (!ok || !alive) return;
       return rankContext(buildCtx()).then(r => {
-        if (alive && r?.available && r.ranked.length) setLlmRank(r.ranked.map(x => x.id));
+        if (alive && r?.available && r.ranked.length) setRecs(r.ranked);
       });
     });
     return () => { alive = false; };
@@ -117,14 +121,15 @@ export function AiLauncher() {
       if (open || !isProactiveEnabled()) return;
       const ctx = buildCtx();
       const sig = sigOf(ctx.nav);
-      if (sig !== lastSig) { lastSig = sig; stableSince = Date.now(); firedForSig = ''; setSuggestion(null); setFabLevel('none'); return; }
+      if (sig !== lastSig) { lastSig = sig; stableSince = Date.now(); firedForSig = ''; setSuggestion(null); setFabLevel('none'); setRecs([]); return; }
       const dwell = hasEntity(ctx.nav) ? ENTITY_DWELL : DWELL;
       if (firedForSig === sig || Date.now() - stableSince < dwell) return;
       firedForSig = sig; // помечаем сразу, чтобы не дёргать данные каждый тик
-      void computeContextState(ctx).then(({ suggestion: sug, level }) => {
+      void computeContextState(ctx).then(({ suggestion: sug, level, recommendations }) => {
         // За время запроса контекст мог смениться — игнорируем устаревший результат
         if (sigOf(getNav()) !== sig || open) return;
         setFabLevel(level); // FAB отражает уровень всегда (даже без всплытия балуна)
+        setRecs(recommendations); // полный список — для hover-балуна и палитры
         if (!sug) return;
         // Порог всплытия: при активной градации — medium+, иначе (старое поведение) — любой
         const surface = gradedFab ? shouldSurface(sug.level) : true;
@@ -156,6 +161,17 @@ export function AiLauncher() {
     if (!next) setSuggestion(null);
   };
 
+  // Наведение на FAB → балун со списком рекомендаций. Таймер на уход, чтобы курсор
+  // успел перейти с кнопки на балун через зазор (иначе балун схлопывается).
+  const enterFab = () => { if (hoverTimer.current) { clearTimeout(hoverTimer.current); hoverTimer.current = null; } setFabHover(true); };
+  const leaveFab = () => { hoverTimer.current = window.setTimeout(() => setFabHover(false), 140); };
+  // Клик по пункту hover-балуна — сразу запустить действие
+  const runRec = (id: string) => { setFabHover(false); setSuggestion(null); runActionById(id, buildCtx()); };
+  // Рекомендации с их действиями (для hover-балуна), в порядке уровня от модели
+  const recActions = recs
+    .map(r => ({ action: AI_ACTIONS.find(a => a.id === r.id), level: r.level }))
+    .filter((r): r is { action: AiAction; level: SuggestionLevel } => !!r.action);
+
   const onInputKey = (e: React.KeyboardEvent) => {
     if (e.key === 'ArrowDown') { e.preventDefault(); if (items.length) setIdx(i => (i + 1) % items.length); }
     else if (e.key === 'ArrowUp') { e.preventDefault(); if (items.length) setIdx(i => (i - 1 + items.length) % items.length); }
@@ -174,8 +190,9 @@ export function AiLauncher() {
 
   return (
     <>
-      {/* Проактивная подсказка (push) — тихий балун у кнопки */}
-      {!open && suggestion && (
+      {/* Проактивная подсказка (push) — тихий балун у кнопки. При наведении на FAB
+          уступает место hover-балуну со списком рекомендаций. */}
+      {!open && suggestion && !fabHover && (
         <div style={balloonStyle} role="status">
           <div style={balloonHead}>
             <span style={{ color: C.accent, display: 'flex' }}><SparkleIcon size={15} /></span>
@@ -198,6 +215,31 @@ export function AiLauncher() {
         </div>
       )}
 
+      {/* Hover-балун: наведение на FAB → список рекомендованных действий, клик запускает.
+          Показываем при наведении, если есть рекомендации и активна градация (флаг). */}
+      {!open && fabHover && gradedFab && recActions.length > 0 && (
+        <div style={hoverBalloonStyle} role="menu" onMouseEnter={enterFab} onMouseLeave={leaveFab}>
+          <div style={{ ...balloonHead, marginBottom: 8 }}>
+            <span style={{ color: C.accent, display: 'flex' }}><SparkleIcon size={15} /></span>
+            <b style={{ fontSize: 12.5, color: C.textHeading }}>AI рекомендует</b>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {recActions.map(({ action, level }) => (
+              <button key={action.id} role="menuitem" onClick={() => runRec(action.id)} style={hoverItemStyle}
+                onMouseEnter={e => { e.currentTarget.style.background = C.accentLight; }}
+                onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}>
+                <span style={{ ...itemIco, width: 26, height: 26, background: level === 'strong' ? C.accent : C.bgSelected, color: level === 'strong' ? C.onAccent : C.accent }}>{action.icon}</span>
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  <span style={{ ...itemTitle, fontSize: 13 }}>{action.title}</span>
+                  <span style={itemHint}>{action.hint}</span>
+                </span>
+                <span style={recBadge(level)}>{levelLabel(level)}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Плавающая кнопка */}
       {!open && (
         <button
@@ -210,8 +252,8 @@ export function AiLauncher() {
             ...(isMobile ? { right: 16, width: FAB_MOBILE, height: FAB_MOBILE } : {}),
             ...(fabDim ? { opacity: 0.5, filter: 'grayscale(0.7)' } : {}),
           }}
-          onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-2px)'; }}
-          onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)'; }}
+          onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-2px)'; enterFab(); }}
+          onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)'; leaveFab(); }}
         >
           {showPulse && <span style={isMobile ? pulseDotMobile : pulseDot} />}
           <SparkleIcon size={isMobile ? 16 : 24} />
@@ -249,14 +291,21 @@ export function AiLauncher() {
                     <button
                       onClick={() => fire(it.action)}
                       onMouseEnter={() => setIdx(i)}
-                      style={{ ...itemStyle, background: i === idx ? C.accentLight : 'transparent' }}
+                      style={{
+                        ...itemStyle,
+                        background: i === idx ? C.accentLight : (it.recLevel ? C.bgSelected : 'transparent'),
+                        // Рекомендованные — акцентная левая полоса, чтобы явно выделялись в общем списке
+                        boxShadow: it.recLevel ? `inset 3px 0 0 ${C.accent}` : undefined,
+                      }}
                     >
-                      <span style={{ ...itemIco, background: i === idx ? C.bgWhite : C.bgSelected }}>{it.action.icon}</span>
+                      <span style={{ ...itemIco, background: it.recLevel ? C.accent : (i === idx ? C.bgWhite : C.bgSelected), color: it.recLevel ? C.onAccent : C.accent }}>{it.action.icon}</span>
                       <span style={{ flex: 1, minWidth: 0 }}>
                         <span style={itemTitle}>{it.action.title}</span>
                         <span style={itemHint}>{it.action.hint}</span>
                       </span>
-                      <span style={itemSec}>{it.action.sectionLabel}</span>
+                      {it.recLevel
+                        ? <span style={recBadge(it.recLevel)}>{levelLabel(it.recLevel)}</span>
+                        : <span style={itemSec}>{it.action.sectionLabel}</span>}
                     </button>
                   </div>
                 );
@@ -412,3 +461,23 @@ const balloonGhost: React.CSSProperties = {
   border: `1px solid ${C.border}`, background: 'transparent', color: C.textMuted, borderRadius: R.md, padding: '7px 12px',
   fontFamily: FONT.sans, fontSize: 12.5, fontWeight: 600, cursor: 'pointer',
 };
+
+// Hover-балун со списком рекомендаций (шире проактивного, с прокруткой при длинном списке)
+const hoverBalloonStyle: React.CSSProperties = {
+  position: 'fixed', right: 20, bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px) + 66px)',
+  width: 300, maxHeight: '60vh', overflowY: 'auto', background: C.bgCard, border: `1px solid ${C.accentMuted}`,
+  borderRadius: R.xl, boxShadow: SHADOW.modal, padding: '12px 12px 10px', zIndex: Z.modal - 1, fontFamily: FONT.sans,
+};
+const hoverItemStyle: React.CSSProperties = {
+  display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left',
+  border: 'none', background: 'transparent', cursor: 'pointer', borderRadius: R.md, padding: '7px 8px',
+};
+// Бейдж уровня рекомендации (палитра + hover-балун)
+function recBadge(level: SuggestionLevel): React.CSSProperties {
+  const strong = level === 'strong';
+  return {
+    flex: 'none', fontFamily: FONT.mono, fontSize: 9.5, textTransform: 'uppercase', letterSpacing: 0.4,
+    color: strong ? C.onAccent : C.accent, background: strong ? C.accent : C.accentLight,
+    borderRadius: R.sm, padding: '2px 6px',
+  };
+}

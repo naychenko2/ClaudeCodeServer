@@ -17,10 +17,38 @@ namespace ClaudeHomeServer.Controllers;
 [Authorize(Roles = "admin")]
 public class LocalActionsAdminController(
     LocalActionOverridesStore store, LocalActionRouter router,
-    LlmProviderRegistry providers, ModelCatalogService models) : ControllerBase
+    LlmProviderRegistry providers, ModelCatalogService models,
+    LocalActionPresetService presets) : ControllerBase
 {
     // route: "local" | "claude" | id модели любого настроенного провайдера
     public record RouteRequest(string Route);
+
+    // preset: "recommended" | "free" | "local"
+    public record PresetRequest(string Preset);
+
+    // Массово подобрать исполнителя всем действиям по пресету. Возвращает применённый пресет и
+    // число затронутых действий; актуальный список маршрутов фронт перечитывает из GET /api/usage.
+    [HttpPost("preset")]
+    public async Task<IActionResult> ApplyPreset([FromBody] PresetRequest req, CancellationToken ct)
+    {
+        var preset = (req.Preset ?? "").Trim().ToLowerInvariant() switch
+        {
+            "recommended" => ActionPreset.Recommended,
+            "free" => ActionPreset.FreeOnly,
+            "local" => ActionPreset.LocalFirst,
+            _ => (ActionPreset?)null,
+        };
+        if (preset is null)
+            return BadRequest(new { error = $"Неизвестный пресет «{req.Preset}»" });
+
+        // Пресеты с бесплатной облачной моделью требуют настроенного агрегатора — иначе
+        // «бесплатный» выбор молча выродился бы в Claude, что вводит в заблуждение.
+        if (preset is ActionPreset.FreeOnly && !await presets.FreeAvailableAsync(ct))
+            return BadRequest(new { error = "Бесплатные модели OpenRouter не настроены — пресет недоступен" });
+
+        var count = await presets.ApplyAsync(preset.Value, ct);
+        return Ok(new { preset = req.Preset, count });
+    }
 
     [HttpPut("{key}")]
     public async Task<IActionResult> Set(string key, [FromBody] RouteRequest req, CancellationToken ct)

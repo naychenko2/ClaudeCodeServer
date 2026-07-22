@@ -122,9 +122,9 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.OneShotClaudeRunner>
 // AI-хаб: локальное ранжирование действий через Ollama (бесплатно, мимо claude CLI)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.OllamaClient>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.OllamaActionRankService>();
-// Бесплатные модели OpenRouter: отбор из /models (агентские / любые free) + прямой HTTP-адаптер
-// для фоновых one-shot задач (второй транспорт рядом с провайдером через claude CLI)
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.OpenRouterCatalogService>();
+// Прямой HTTP-адаптер бесплатных моделей OpenRouter для фоновых one-shot задач
+// (второй транспорт рядом с провайдером через claude CLI; модели — курируемый список
+// OpenRouter:DirectModels)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.CloudCheapClient>();
 // Интерфейс one-shot раннера → тот же singleton (мокируется в тестах)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.IOneShotRunner>(
@@ -133,6 +133,8 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.IOneShotRunner>(
 // Стор оверрайдов — админские тумблеры маршрута из UI, слой поверх конфига Ollama:Actions.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.LocalActionOverridesStore>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.LocalActionRouter>();
+// Пресеты автоподбора исполнителя фоновых действий (рекомендованное/бесплатные/локальные)
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.LocalActionPresetService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ICheapTextRunner,
     ClaudeHomeServer.Services.Llm.CheapTextRunner>();
 // Общий LLM-резолвер записи памяти (Mem0 ADD/UPDATE/DELETE/NOOP) — авто-путь обоих слоёв памяти

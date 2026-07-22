@@ -39,8 +39,10 @@ public record OllamaUsageInfo(bool Enabled, string? Model, string? BaseUrl,
 // ли действие с локальной модели прямо сейчас (с учётом доступности Ollama).
 // Source — откуда взято значение: "default" (каталог), "config" (Ollama:Actions) или "admin"
 // (выбор в UI); по нему видно, что переопределено и что можно сбросить.
+// RequiresStrong — действию нужна сильная модель (лицо продукта, генерация артефактов):
+// локаль ему не годится, поэтому пресеты подбирают Claude/облачную модель, а не Ollama.
 public record OllamaActionInfo(string Key, string Title, string Group, bool RoutedToOllama,
-    string Source = "default", string Route = "claude");
+    string Source = "default", string Route = "claude", bool RequiresStrong = false);
 
 // Utilisation одной подписки: снимки + опциональное имя + статус роутинга.
 // InRotation — берёт ли пул этот аккаунт для новых чатов; Utilization — эффективная

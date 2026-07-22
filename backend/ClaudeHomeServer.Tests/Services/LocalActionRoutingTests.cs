@@ -356,6 +356,23 @@ public class LocalActionRoutingTests
         if (expected) Assert.Equal("nvidia/nemotron:free", CloudCheapClient.StripPrefix(route));
     }
 
+    // --- Пропуск шага локали для «сильных» действий (DefaultLocal=false) ---
+    // Kind=Local (явный выбор админа) уважаем всегда; Kind=Model (локаль как страховка) —
+    // только там, где локаль вообще уместна; Kind=Claude — локаль никогда.
+    [Theory]
+    // Лёгкое действие (DefaultLocal=true)
+    [InlineData(LocalActionCatalog.NotesTags, RouteKind.Local, true)]
+    [InlineData(LocalActionCatalog.NotesTags, RouteKind.Model, true)]
+    [InlineData(LocalActionCatalog.NotesTags, RouteKind.Claude, false)]
+    // «Сильное» действие (DefaultLocal=false)
+    [InlineData(LocalActionCatalog.SkillTranslate, RouteKind.Local, true)]   // явный выбор — уважаем
+    [InlineData(LocalActionCatalog.SkillTranslate, RouteKind.Model, false)]  // страховку пропускаем
+    [InlineData(LocalActionCatalog.SkillTranslate, RouteKind.Claude, false)]
+    public void LocalStepApplies_SkipsFallbackForStrong(string key, RouteKind kind, bool expected)
+    {
+        Assert.Equal(expected, CheapTextRunner.LocalStepApplies(key, kind));
+    }
+
     [Fact]
     public void Catalog_AllKeysUnique()
     {

@@ -11,7 +11,7 @@ namespace ClaudeHomeServer.Services;
 // записи конфига (окна/цены) + опциональный опрос GET {ApiBaseUrl}/models
 // (OpenAI-совместимый) — новые модели дописываются с дефолтами.
 public class ModelCatalogService(LlmProviderRegistry providers, IHttpClientFactory httpFactory,
-    IConfiguration config, Llm.OpenRouterCatalogService? openRouter = null)
+    IConfiguration config)
 {
     // Опрос claude CLI можно выключить конфигом (ModelCatalog:QueryCli=false): интеграционные
     // тесты поднимают приложение десятки раз, и каждый прогрев каталога спавнил бы настоящий
@@ -92,33 +92,26 @@ public class ModelCatalogService(LlmProviderRegistry providers, IHttpClientFacto
         var result = new List<ModelInfo>(claude);
         foreach (var p in providers.Enabled)
             await AppendProviderModelsAsync(result, p, ct);
-        await AppendOpenRouterFreeAsync(result, ct);
+        AppendOpenRouterDirect(result);
         return result;
     }
 
-    // Бесплатные модели OpenRouter отбираются КОДОМ (OpenRouterCatalogService), а не ручным
-    // списком в конфиге. Две группы для двух транспортов:
-    //   • провайдер (claude CLI) — агентские free (provider="openrouter"): работают в чатах;
-    //   • прямой адаптер (HTTP) — любые free с префиксом "direct:" (provider=openrouter-direct):
-    //     для фоновых one-shot задач.
-    // Обе видны в пикере фоновых действий; по префиксу маршрута роутер выбирает транспорт.
-    private async Task AppendOpenRouterFreeAsync(List<ModelInfo> result, CancellationToken ct)
+    // Модели прямого HTTP-адаптера OpenRouter (для фоновых one-shot задач) — КУРИРУЕМЫЙ список
+    // из конфига OpenRouter:DirectModels, с префиксом "direct:" и виртуальным провайдером
+    // openrouter-direct (в пикере фоновых задач — отдельная группа). Агентские модели чата
+    // приходят обычным путём через LlmProviders:openrouter:Models (AppendProviderModelsAsync).
+    // Показываем, только если провайдер-источник настроен (есть ключ) — иначе адаптер не работает.
+    private void AppendOpenRouterDirect(List<ModelInfo> result)
     {
-        if (openRouter is not { Configured: true }) return;
-        try
+        var providerKey = config["OpenRouter:Provider"] is { Length: > 0 } p ? p : "openrouter";
+        if (providers.GetByKey(providerKey) is not { Enabled: true }) return;
+
+        foreach (var child in config.GetSection("OpenRouter:DirectModels").GetChildren())
         {
-            foreach (var m in await openRouter.GetAgenticFreeModelsAsync(ct))
-                result.Add(new ModelInfo(m.Id, m.DisplayName, "Бесплатная · агентский режим (через провайдера)",
-                    "openrouter", m.ContextWindow));
-            foreach (var m in await openRouter.GetFreeModelsAsync(ct))
-                result.Add(new ModelInfo(Llm.CloudCheapClient.RoutePrefix + m.Id, m.DisplayName,
-                    "Бесплатная · прямой вызов (для фоновых задач)",
-                    Llm.CloudCheapClient.DirectProviderKey, m.ContextWindow));
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine($"[ModelCatalog] Отбор бесплатных моделей OpenRouter не удался: {ex.Message}");
+            var m = child.Get<LlmModelConfig>();
+            if (m is null || string.IsNullOrWhiteSpace(m.Id)) continue;
+            result.Add(new ModelInfo(Llm.CloudCheapClient.RoutePrefix + m.Id, m.DisplayName,
+                m.Description, Llm.CloudCheapClient.DirectProviderKey, m.ContextWindow));
         }
     }
 

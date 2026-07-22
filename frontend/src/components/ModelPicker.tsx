@@ -20,6 +20,9 @@ interface Props {
   onChange: (v: string) => void;
   columns?: number;      // не используется — оставлен для совместимости вызовов
   collapsible?: boolean; // сворачивать до выбранной модели (по умолчанию true)
+  // Показывать ли модели прямого HTTP-адаптера (openrouter-direct/"direct:"). По умолчанию нет —
+  // в чате идут агентские вызовы, где они не годятся; включается в настройке фоновых задач.
+  includeDirect?: boolean;
 }
 
 const groupHeaderStyle: React.CSSProperties = {
@@ -90,7 +93,7 @@ function ModelRow({
   );
 }
 
-export function ModelPicker({ value, options: allOptions, onChange, collapsible = true }: Props) {
+export function ModelPicker({ value, options: allOptions, onChange, collapsible = true, includeDirect = false }: Props) {
   // Развёрнутость блоков легаси, по ключу провайдера
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   // Показ полного списка при сворачивании (collapsible)
@@ -100,8 +103,8 @@ export function ModelPicker({ value, options: allOptions, onChange, collapsible 
 
   // Бесплатные модели прямого HTTP-адаптера (openrouter-direct, id с префиксом "direct:")
   // предназначены только для фоновых one-shot задач — в чате идут агентские вызовы, где
-  // они не годятся. Здесь их скрываем; выбор такой модели живёт лишь в диалоге «Фоновые задачи».
-  const options = allOptions.filter(o =>
+  // они не годятся. По умолчанию скрываем; в настройке фоновых задач — includeDirect.
+  const options = includeDirect ? allOptions : allOptions.filter(o =>
     providerOf(o) !== 'openrouter-direct' && !o.value.startsWith('direct:'));
 
   // Группы в порядке первого появления, Claude всегда первой
@@ -166,12 +169,10 @@ export function ModelPicker({ value, options: allOptions, onChange, collapsible 
           Свернуть
         </button>
       )}
-      {/* Моделей много (провайдеры + бесплатные) — фиксируем высоту списка и скроллим
-          внутри него, чтобы список не распирал диалог целиком */}
-      <div style={{
-        display: 'flex', flexDirection: 'column', gap: keys.length > 1 ? 12 : 5,
-        maxHeight: '46vh', overflowY: 'auto', margin: '0 -4px', padding: '2px 4px',
-      }}>
+      {/* Скролл — забота внешнего контейнера (попап выбора в чате, форма/Modal, dropdown
+          фоновых задач). Свой скролл ModelPicker НЕ держит: иначе во вложенном скролл-контейнере
+          получались два скроллбара. Курируемый список моделей короткий и обычно влезает целиком. */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: keys.length > 1 ? 12 : 5 }}>
       {keys.map(key => {
         const inGroup = options.filter(o => providerOf(o) === key);
         // Курируемые (с карточкой) отдельно от легаси (без описания)

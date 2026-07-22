@@ -9,8 +9,8 @@ namespace ClaudeHomeServer.Services.Llm;
 // HTTP отвечает за ~3.5с. Ответ разбирают те же парсеры потребителей, что и ответ claude.
 //
 // Конкретную модель выбирает админ в пикере фоновых действий (приходит в GenerateTextAsync);
-// список доступных моделей даёт OpenRouterCatalogService (любые free). Эндпоинт и ключ —
-// из настроенного CLI-провайдера (LlmProviders:{Provider}), здесь не дублируются.
+// список доступных моделей — курируемый OpenRouter:DirectModels (см. ModelCatalogService).
+// Эндпоинт и ключ — из настроенного CLI-провайдера (LlmProviders:{Provider}), здесь не дублируются.
 // Провайдер не настроен → Enabled=false (маршрут молча уходит на локаль/claude).
 public sealed class CloudCheapClient
 {

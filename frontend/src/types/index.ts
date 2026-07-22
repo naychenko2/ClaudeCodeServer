@@ -587,6 +587,9 @@ export interface OllamaActionInfo {
   // Исполнитель первого шага: 'local' | 'claude' | id модели провайдера.
   // Дальше действие идёт по цепочке «выбранное → локаль → claude»
   route?: string;
+  // Действию нужна сильная модель (лицо продукта, генерация артефактов) — локаль ему не
+  // годится; пресеты подбирают Claude/облачную модель. В UI помечается бейджем.
+  requiresStrong?: boolean;
 }
 
 export interface SubscriptionUsage {

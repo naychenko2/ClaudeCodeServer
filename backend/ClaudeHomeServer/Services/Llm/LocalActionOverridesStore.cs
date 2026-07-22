@@ -63,6 +63,39 @@ public sealed class LocalActionOverridesStore
         return true;
     }
 
+    // Массовая замена оверрайдов (применение пресета автоподбора). Пары с неизвестным ключом
+    // или пустым значением молча отбрасываются. keepUnlisted=false — ключи вне набора снимаются
+    // (пресет — цельная картина), true — сохраняются (частичное применение). Одна запись на диск.
+    public void SetMany(IEnumerable<KeyValuePair<string, string>> routes, bool keepUnlisted = false)
+    {
+        lock (_writeLock)
+        {
+            var next = keepUnlisted
+                ? new Dictionary<string, string>(_overrides, StringComparer.OrdinalIgnoreCase)
+                : new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (key, route) in routes)
+            {
+                if (LocalActionCatalog.Find(key) is not { } a || string.IsNullOrWhiteSpace(route)) continue;
+                next[a.Key] = route.Trim();
+            }
+            _overrides = next;
+            Persist(next);
+        }
+        _log?.LogInformation("Маршруты фоновых действий заданы пресетом ({Count})", _overrides.Count);
+    }
+
+    // Снять все оверрайды разом — все действия возвращаются к значению из конфига/каталога.
+    public void ResetAll()
+    {
+        lock (_writeLock)
+        {
+            if (_overrides.Count == 0) return;
+            _overrides = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            Persist(_overrides);
+        }
+        _log?.LogInformation("Все оверрайды маршрутов фоновых действий сняты");
+    }
+
     // Снять оверрайд — действие возвращается к значению из конфига/каталога.
     public bool Reset(string actionKey)
     {

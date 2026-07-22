@@ -76,7 +76,8 @@ public class UsageController(UsageService usage, ClaudeSubscriptionPool? subscri
                         RouteKind.Local => LocalActionOverridesStore.LocalRoute,
                         RouteKind.Claude => LocalActionOverridesStore.ClaudeRoute,
                         _ => route.Model ?? LocalActionOverridesStore.ClaudeRoute,
-                    });
+                    },
+                    RequiresStrong: !a.DefaultLocal);
             })
             .ToList();
         return new OllamaUsageInfo(ollama.Enabled, ollama.Enabled ? ollama.TextModel : null,

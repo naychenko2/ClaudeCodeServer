@@ -192,16 +192,19 @@ UI скрывает недоступное (`useModelCaps` в `lib/models.ts`), 
   usage/стоимость на claude-пути; на бесплатной модели usage=null, стоимость 0). НЕ входят:
   задача-исполнитель (агентная сессия, не one-shot), fal.ai (картинки), persona-ask (нужен
   `effort` персоны — всегда claude).
-- **Бесплатные модели OpenRouter** — отбираются КОДОМ ([OpenRouterCatalogService.cs](backend/ClaudeHomeServer/Services/Llm/OpenRouterCatalogService.cs),
-  опрос `GET /models`), не ручным списком: **агентские** (free + tools + tool_choice + окно ≥
-  `OpenRouter:AgenticMinContext`) — для провайдера `openrouter` (через claude CLI, годятся и в
-  чатах); **любые free** (окно ≥ `OpenRouter:DirectMinContext`) — для прямого адаптера
-  [CloudCheapClient.cs](backend/ClaudeHomeServer/Services/Llm/CloudCheapClient.cs) (HTTP, только
-  фоновые). Два транспорта различаются в маршруте префиксом `direct:` (модель без него — через
-  провайдер/CLI, с ним — через адаптер). В `ModelCatalogService` направляются двумя группами:
-  `provider=openrouter` и `provider=openrouter-direct`. ВАЖНО: у `:free` общий на аккаунт лимит
-  20 запросов/мин и 50/сутки (1000/сутки после разовой покупки кредитов на $10). В агентском
-  ModelPicker (чат/сессия/персона) `direct:`-модели СКРЫТЫ — там нужны агентские вызовы.
+- **Бесплатные модели OpenRouter** — КУРИРУЕМЫЙ короткий список в конфиге (не полный `/models`:
+  там 300+ моделей, много мусора и перегруженных upstream-провайдером): **агентские** для чата —
+  `LlmProviders:openrouter:Models` (обычный путь провайдера через claude CLI); **для прямого
+  адаптера** [CloudCheapClient.cs](backend/ClaudeHomeServer/Services/Llm/CloudCheapClient.cs)
+  (HTTP, только фоновые) — `OpenRouter:DirectModels`, `ModelCatalogService.AppendOpenRouterDirect`
+  добавляет их с префиксом `direct:` и `provider=openrouter-direct`. Два транспорта различаются
+  в маршруте префиксом `direct:` (модель без него — через провайдер/CLI, с ним — через адаптер).
+  ВАЖНО: у `:free` лимит 20 запросов/мин и 50/сутки на аккаунт (1000/сутки после разовой покупки
+  кредитов на $10), плюс **upstream rate-limit провайдера модели** (429 посреди стрима — модель
+  показывает thinking, но text не доходит; в чате выглядит как «висит»). Потому в список включены
+  только проверенные на стабильный streaming (Nemotron 3 Ultra/Super, Laguna S 2.1, North Mini
+  Code; Gemma/Muse Spark исключены как нестабильные). В агентском ModelPicker (чат/сессия/персона)
+  `direct:`-модели СКРЫТЫ (проп `includeDirect`) — там нужны агентские вызовы.
 - **Роутер** — [LocalActionRouter.cs](backend/ClaudeHomeServer/Services/Llm/LocalActionRouter.cs):
   `Resolve(key)` → `ActionRoute(Kind, Model, Source)`, где `Kind` — исполнитель ПЕРВОГО шага
   (`Local` | `Claude` | `Model` c id конкретной модели провайдера), а приоритет источников —

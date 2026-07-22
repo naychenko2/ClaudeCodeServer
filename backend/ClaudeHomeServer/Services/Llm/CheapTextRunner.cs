@@ -64,8 +64,10 @@ public sealed class CheapTextRunner(
 
         // Шаг 2 — локальная модель. Идёт и как основной путь (Kind=Local), и как страховка
         // выбранной модели; при Kind=Claude локаль пропускаем, иначе выбор «claude» ничем
-        // не отличался бы от «локаль».
-        if ((route.Kind is RouteKind.Local or RouteKind.Model) && ollama.Enabled)
+        // не отличался бы от «локаль». Для «сильных» действий (DefaultLocal=false) локаль
+        // пропускаем и как страховку: слабая модель на сложной задаче даёт мусор, который ещё
+        // и «сойдёт» за успех и оборвёт цепочку до качественного claude.
+        if (LocalStepApplies(actionKey, route.Kind) && ollama.Enabled)
         {
             var local = await RunLocalAsync(actionKey, prompt, jsonFormat, ct);
             if (!string.IsNullOrWhiteSpace(local)) return local;
@@ -116,6 +118,14 @@ public sealed class CheapTextRunner(
         }
         return null;
     }
+
+    // Идёт ли шаг локальной модели. Kind=Local — явный выбор админа, уважаем всегда.
+    // Kind=Model — локаль лишь как страховка выбранной модели, и только для действий, где
+    // локаль вообще уместна (DefaultLocal=true): «сильным» слабая модель не поможет, а её
+    // «успешный» мусорный ответ оборвал бы цепочку до качественного claude.
+    internal static bool LocalStepApplies(string actionKey, RouteKind kind) =>
+        kind == RouteKind.Local
+        || (kind == RouteKind.Model && LocalActionCatalog.Find(actionKey)?.DefaultLocal == true);
 
     private Task<string?> RunLocalAsync(string actionKey, string prompt, object? jsonFormat, CancellationToken ct)
     {
@@ -176,8 +186,8 @@ public sealed class CheapTextRunner(
             }
         }
 
-        // Шаг 2 — локальная модель (usage нет).
-        if ((route.Kind is RouteKind.Local or RouteKind.Model) && ollama.Enabled)
+        // Шаг 2 — локальная модель (usage нет). Для «сильных» действий локаль-страховка пропускается — см. RunAsync.
+        if (LocalStepApplies(actionKey, route.Kind) && ollama.Enabled)
         {
             var local = await RunLocalAsync(actionKey, prompt, jsonFormat: null, ct);
             if (!string.IsNullOrWhiteSpace(local)) return new OneShotResult(local, null, 0);

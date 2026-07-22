@@ -16,7 +16,7 @@ import { C, FONT, R, SHADOW } from '../../lib/design';
 import { PersonaAvatar } from './PersonaAvatar';
 import { SPECIALTY_LABEL } from './automationMeta';
 import { TeamMemoryPanel } from './TeamMemoryPanel';
-import { Modal, IconButton, Menu, MenuItem, WaitingIndicator } from '../../components/ui';
+import { Modal, IconButton, Button, Menu, MenuItem, WaitingIndicator } from '../../components/ui';
 import { Toolbar, PillSwitch, tbBtnPrimary } from '../../components/Toolbar';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { NewTaskDialog } from '../tasks/NewTaskDialog';
@@ -220,8 +220,8 @@ function OverviewPanel(props: {
           Создайте персон — или попросите LLM сформировать команду по описанию.
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
-          <button onClick={onNewPersona} style={primaryBtn}><UserPlus size={15} /> Новая персона</button>
-          <button onClick={onFormTeamOpen} style={ghostBtn}><Wand2 size={15} /> Сформировать команду</button>
+          <Button variant="primary" size="sm" leftIcon={<UserPlus size={15} />} onClick={onNewPersona}>Новая персона</Button>
+          <Button variant="ghost" size="sm" leftIcon={<Wand2 size={15} />} onClick={onFormTeamOpen}>Сформировать команду</Button>
         </div>
       </div>
     );
@@ -242,10 +242,14 @@ function OverviewPanel(props: {
           <StatusChip color={C.textSecondary}>{chatsToday} чатов сегодня</StatusChip>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
-          <button onClick={onPickerOpen} disabled={team.length < 2} style={primaryBtn}><MessageSquare size={15} /> Созвать команду</button>
-          <button onClick={onNewTaskOpen} style={ghostBtn}><Plus size={15} /> Новая задача</button>
-          <button onClick={onNewPersona} style={ghostBtn}><UserPlus size={15} /> Новая персона</button>
-          <IconButton variant="soft" size="sm" title="Создать командный чат" onClick={onMenuOpen}><MoreHorizontal size={16} /></IconButton>
+          <Button variant="primary" size="sm" disabled={team.length < 2} leftIcon={<MessageSquare size={15} />}
+            title={team.length < 2 ? 'Нужно минимум 2 персоны в команде' : undefined}
+            onClick={onPickerOpen}>Созвать команду</Button>
+          <Button variant="ghost" size="sm" leftIcon={<Plus size={15} />} onClick={onNewTaskOpen}>Новая задача</Button>
+          <Button variant="ghost" size="sm" leftIcon={<UserPlus size={15} />} onClick={onNewPersona}>Новая персона</Button>
+          <IconButton variant="soft" size="sm" disabled={team.length < 2}
+            title={team.length < 2 ? 'Нужно минимум 2 персоны в команде' : 'Создать командный чат'}
+            onClick={onMenuOpen}><MoreHorizontal size={16} /></IconButton>
         </div>
       </div>
 
@@ -448,8 +452,8 @@ function GroupChatPicker({ team, onClose, onCreated }: { team: Persona[]; onClos
   return (
     <Modal width={420} title="Созвать команду" subtitle="Выберите 2–8 участников. Первый — ведущий." onClose={onClose}
       footer={<div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-        <button onClick={onClose} style={ghostBtn}>Отмена</button>
-        <button onClick={() => void create()} disabled={sel.length < 2 || busy} style={primaryBtn}>Создать чат</button>
+        <Button variant="ghost" size="sm" onClick={onClose}>Отмена</Button>
+        <Button variant="primary" size="sm" loading={busy} disabled={sel.length < 2} onClick={() => void create()}>Создать чат</Button>
       </div>}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         {team.map((p, i) => {
@@ -523,10 +527,10 @@ function FormTeamDialog({ project, onClose, onCreated }: { project: Project; onC
       footer={members.length > 0 ? (
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', alignItems: 'center' }}>
           <span style={{ fontSize: 12, color: C.textMuted, fontFamily: FONT.sans }}>{selCount} из {members.length}</span>
-          <button onClick={onClose} style={ghostBtn}>Отмена</button>
-          <button onClick={() => void create()} disabled={selCount === 0 || creating} style={primaryBtn}>
+          <Button variant="ghost" size="sm" onClick={onClose}>Отмена</Button>
+          <Button variant="primary" size="sm" disabled={selCount === 0 || creating} onClick={() => void create()}>
             {creating ? `Создаю… ${createdCount}/${selCount}` : `Создать ${selCount || ''}`}
-          </button>
+          </Button>
         </div>
       ) : undefined}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -537,7 +541,7 @@ function FormTeamDialog({ project, onClose, onCreated }: { project: Project; onC
               <div style={{ fontSize: 12.5, color: C.dangerText, fontFamily: FONT.sans }}>{error || teamJob.error}</div>
             )}
             {generating && <WaitingIndicator hint="Анализирую проект и подбираю состав — обычно 10–20 секунд" />}
-            <button onClick={generate} disabled={!prompt.trim() || generating} style={primaryBtn}>{generating ? 'Анализирую проект…' : 'Сформировать состав'}</button>
+            <Button variant="primary" size="sm" disabled={!prompt.trim() || generating} onClick={generate}>{generating ? 'Анализирую проект…' : 'Сформировать состав'}</Button>
           </>
         )}
         {teamJob.status === 'done' && members.length === 0 && (
@@ -573,7 +577,11 @@ function FormTeamDialog({ project, onClose, onCreated }: { project: Project; onC
 }
 
 async function createTeamChat(team: Persona[], onOpenSession: (s: Session) => void) {
-  try { const s = await api.chats.createGroup(team.slice(0, 8).map(p => p.id)); onOpenSession(s); } catch { /* тишина */ }
+  // Групповой чат требует 2-8 персон (SessionManager.ValidateParticipants). При меньшем составе
+  // бэкенд кидает ошибку — раньше её глотал пустой catch и кнопка «молча не работала».
+  if (team.length < 2) { showToast('Командный чат', 'Нужно минимум 2 персоны в команде.'); return; }
+  try { const s = await api.chats.createGroup(team.slice(0, 8).map(p => p.id)); onOpenSession(s); }
+  catch (e) { showToast('Командный чат', e instanceof Error ? e.message : 'Не удалось создать чат.'); }
 }
 
 // ===== Shared: мета событий, навигация, хелперы, стили =====
@@ -653,8 +661,6 @@ function fmtDay(d: string): string {
 
 // --- стили ---
 const cardStyle: CSSProperties = { background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl, boxShadow: SHADOW.card, padding: 16 };
-const primaryBtn: CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 6, background: C.accent, color: C.onAccent, border: 'none', borderRadius: R.xl, padding: '8px 14px', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: FONT.sans };
-const ghostBtn: CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 6, background: 'transparent', color: C.textSecondary, border: `1px solid ${C.border}`, borderRadius: R.xl, padding: '8px 14px', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: FONT.sans };
 const linkBtn: CSSProperties = { background: 'transparent', border: 'none', color: C.accent, fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: FONT.sans, padding: '4px 8px' };
 const memberCard: CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left', background: C.bgWhite, border: `1px solid ${C.borderLight}`, borderRadius: R.lg, padding: '10px 12px', cursor: 'pointer', transition: 'border-color .12s, box-shadow .12s' };
 const specialtyBadge: CSSProperties = { display: 'inline-block', fontSize: 10.5, fontWeight: 600, color: C.textSecondary, background: C.bgInset, borderRadius: R.sm, padding: '1px 7px', fontFamily: FONT.sans, marginTop: 3 };

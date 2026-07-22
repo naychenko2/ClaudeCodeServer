@@ -295,6 +295,43 @@ public class LocalActionRoutingTests
         Assert.Equal(["deepseek-chat", "haiku"], claude.Calls);
     }
 
+    // --- Бесплатная цепочка (RunFreeAsync): direct-адаптер → локаль, claude НИКОГДА ---
+
+    [Fact]
+    public async Task RunFree_БезБесплатныхИсполнителей_ОтдаётNull()
+    {
+        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });
+        var router = new LocalActionRouter(Ollama(config), Store(config), config,
+            NullLogger<LocalActionRouter>.Instance);
+        var claude = new FakeOneShot();
+        var runner = new CheapTextRunner(router, Ollama(config), Cloud(config), claude,
+            NullLogger<CheapTextRunner>.Instance);
+
+        var result = await runner.RunFreeAsync(LocalActionCatalog.ChatTitle, "prompt-text");
+
+        Assert.Null(result);
+        Assert.Empty(claude.Calls);
+    }
+
+    [Fact]
+    public async Task RunFree_ВыбранаПровайдерскаяМодель_НеПлатитClaude()
+    {
+        // Модель без префикса direct: идёт через claude CLI — в бесплатной цепочке ей не место,
+        // даже будучи выбранной админом. Иначе фоновое «украшение» молча стало бы платным.
+        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });
+        var store = Store(config);
+        store.Set(LocalActionCatalog.ChatTitle, "deepseek-chat");
+        var router = new LocalActionRouter(Ollama(config), store, config, NullLogger<LocalActionRouter>.Instance);
+        var claude = new FakeOneShot();
+        var runner = new CheapTextRunner(router, Ollama(config), Cloud(config), claude,
+            NullLogger<CheapTextRunner>.Instance);
+
+        var result = await runner.RunFreeAsync(LocalActionCatalog.ChatTitle, "prompt-text");
+
+        Assert.Null(result);
+        Assert.Empty(claude.Calls);
+    }
+
     [Fact]
     public async Task ВыбраннаяМодельВернулаПустое_УходитНаClaude()
     {

@@ -27,6 +27,14 @@ public interface ICheapTextRunner
     // Для необязательных «украшений» (суть уведомления), где платный вызов нежелателен.
     Task<string?> RunLocalOnlyAsync(string actionKey, string prompt, CancellationToken ct = default);
 
+    // Бесплатная часть цепочки: прямой адаптер агрегатора → локальная модель, БЕЗ claude.
+    // Шире RunLocalOnlyAsync (та требует именно Kind=Local и живой Ollama) и уже RunAsync
+    // (та в конце всегда платит claude). Для «украшений», которые нужны на каждом шаге
+    // сценария и потому не должны стоить денег, но и локалью не ограничены.
+    // null — бесплатного маршрута нет либо он не дал ответа; вызывающий деградирует молча.
+    Task<string?> RunFreeAsync(string actionKey, string prompt, object? jsonFormat = null,
+        CancellationToken ct = default);
+
     // То же, что RunAsync, но с расходом вызова (OneShotResult.Usage) — для действий, которым
     // важна стоимость (сводка «Что нового»). На claude-пути usage приходит как раньше; на
     // локали и прямом адаптере usage=null (бесплатно — стоимости нет, что для них корректно).
@@ -138,6 +146,29 @@ public sealed class CheapTextRunner(
                 systemPrompt: "", userPrompt: prompt, formatSchema: jsonFormat, ct,
                 model: ollama.TextModel, timeoutMs: spec.TimeoutMs,
                 numPredict: spec.NumPredict, numCtx: spec.NumCtx);
+    }
+
+    // Бесплатная цепочка: direct-модель агрегатора → локаль. Провайдерские модели через CLI
+    // сюда НЕ берём, даже когда они :free: бесплатность модели по её id не определить, а
+    // ошибиться здесь — значит начать молча платить за фоновое «украшение».
+    public async Task<string?> RunFreeAsync(string actionKey, string prompt, object? jsonFormat = null,
+        CancellationToken ct = default)
+    {
+        var route = router.Resolve(actionKey);
+
+        if (route.Kind == RouteKind.Model && CloudCheapClient.IsDirectRoute(route.Model))
+        {
+            var picked = await TryDirectAsync(actionKey, route.Model!, prompt, ct);
+            if (!string.IsNullOrWhiteSpace(picked)) return picked;
+        }
+
+        if (LocalStepApplies(actionKey, route.Kind) && ollama.Enabled)
+        {
+            var local = await RunLocalAsync(actionKey, prompt, jsonFormat, ct);
+            if (!string.IsNullOrWhiteSpace(local)) return local;
+        }
+
+        return null;
     }
 
     public async Task<string?> RunLocalOnlyAsync(string actionKey, string prompt, CancellationToken ct = default)

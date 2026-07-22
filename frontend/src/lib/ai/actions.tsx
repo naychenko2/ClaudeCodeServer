@@ -42,6 +42,10 @@ export interface AiActionCtx {
   // Активная сессия проекта не отражается в nav — ChatPanel сообщает это отдельно.
   // tail — краткий хвост переписки для локального ранжирования (опционально).
   chat: { active: boolean; hasMessages: boolean; tail?: string };
+  // Является ли текущий открытый проект git-репозиторием (undefined — ещё не выяснено).
+  // Гейтит git-действия, чтобы AI не предлагал их (в палитре и в LLM-рекомендациях)
+  // в проекте без git.
+  git?: { isRepo: boolean };
 }
 
 export interface AiAction {
@@ -114,6 +118,10 @@ const summarizableOpen = (c: AiActionCtx) => fileOpen(c) && (DOC_EXTS.has(fileEx
 const calendarScreen = (c: AiActionCtx) => c.nav?.screen === 'calendar';
 const projectOpen = (c: AiActionCtx) => c.nav?.screen === 'project' && !!c.nav.project;
 const homeScreen = (c: AiActionCtx) => c.nav?.screen === 'home';
+// Git-действия осмысленны только в git-репозитории. Пока статус не выяснен (undefined) —
+// действие скрыто: лучше не предложить, чем предложить разбор коммитов в проекте без git.
+const gitRepoOpen = (c: AiActionCtx) => projectOpen(c) && c.git?.isRepo === true;
+const fileInGitRepo = (c: AiActionCtx) => fileOpen(c) && c.git?.isRepo === true;
 
 // --- Каталог действий (порядок задаёт ранжирование контекстной группы) ---
 export const AI_ACTIONS: AiAction[] = [
@@ -363,14 +371,14 @@ export const AI_ACTIONS: AiAction[] = [
   {
     id: 'file.history', title: 'История и авторы файла', hint: 'git log + blame по файлу',
     section: 'project', sectionLabel: 'Проект', icon: IcFileHistory,
-    when: c => fileOpen(c) && c.online, contextual: fileOpen,
+    when: c => fileInGitRepo(c) && c.online, contextual: fileOpen,
     run: c => startChatWithPrompt(
       `Покажи историю изменений файла «${c.nav?.file}»: кто и что менял (git log + blame), кратко суммируй эволюцию.`, c),
   },
   {
     id: 'project.gitReview', title: 'Разобрать незакоммиченные изменения', hint: 'сгруппировать и предложить коммиты',
     section: 'project', sectionLabel: 'Проект', icon: IcGit,
-    when: c => projectOpen(c) && c.online, contextual: projectOpen,
+    when: c => gitRepoOpen(c) && c.online, contextual: projectOpen,
     run: c => startChatWithPrompt(
       `Посмотри git-статус и незакоммиченные изменения проекта, сгруппируй по смыслу и предложи атомарные коммиты `
       + `с сообщениями (Conventional Commits на русском). Ничего не коммить без моего подтверждения.`, c),
@@ -378,14 +386,14 @@ export const AI_ACTIONS: AiAction[] = [
   {
     id: 'project.gitOverview', title: 'Что менялось за неделю', hint: 'сводка git-лога за 7 дней',
     section: 'project', sectionLabel: 'Проект', icon: IcGitLog,
-    when: c => projectOpen(c) && c.online, contextual: projectOpen,
+    when: c => gitRepoOpen(c) && c.online, contextual: projectOpen,
     run: c => startChatWithPrompt(
       `Пройди по git-логу за последнюю неделю и кратко суммируй ключевые изменения проекта и их смысл.`, c),
   },
   {
     id: 'project.reviewDiff', title: 'Ревью изменений перед коммитом', hint: 'найти баги и риски в git diff',
     section: 'project', sectionLabel: 'Проект', icon: IcReview,
-    when: c => projectOpen(c) && c.online, contextual: projectOpen,
+    when: c => gitRepoOpen(c) && c.online, contextual: projectOpen,
     run: c => startChatWithPrompt(
       `Сделай ревью незакоммиченных изменений проекта перед коммитом: пройди по git diff, найди возможные баги, `
       + `риски и небрежности, сгруппируй находки по важности (критично / стоит поправить / мелочи). `

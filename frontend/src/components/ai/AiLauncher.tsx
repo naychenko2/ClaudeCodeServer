@@ -44,6 +44,28 @@ export function AiLauncher() {
   const aiBusy = useAiBusy();
   useEffect(() => { api.notes.caps().then(c => setSemanticCaps(c.semantic)).catch(() => {}); }, []);
 
+  // Git-статус текущего проекта — чтобы git-действия (разбор коммитов, ревью diff, история
+  // файла) не предлагались в проекте без git ни в палитре, ни в LLM-рекомендациях. Опрашиваем
+  // при смене открытого проекта; результат кэшируем по projectId (не перезапрашиваем на каждой
+  // навигации внутри проекта — напр. при переключении файлов).
+  const [gitRepo, setGitRepo] = useState<{ projectId: string; isRepo: boolean } | null>(null);
+  const gitReqPid = useRef<string | null>(null);
+  useEffect(() => {
+    gitReqPid.current = null; // сброс при смене online — перезапросить статус
+    const resolve = () => {
+      const n = getNav();
+      const pid = n?.screen === 'project' ? (n.project?.id ?? null) : null;
+      if (!pid || !online) { gitReqPid.current = null; setGitRepo(null); return; }
+      if (gitReqPid.current === pid) return; // статус этого проекта уже запрошен
+      gitReqPid.current = pid;
+      api.git.status(pid)
+        .then(s => setGitRepo({ projectId: pid, isRepo: s.isRepo }))
+        .catch(() => setGitRepo({ projectId: pid, isRepo: false }));
+    };
+    resolve();
+    window.addEventListener(NAV_CHANGE_EVENT, resolve);
+    return () => window.removeEventListener(NAV_CHANGE_EVENT, resolve);
+  }, [online]);
 
   // Немедленный сброс статуса FAB при смене раздела — не ждём опросного тика (иначе старая
   // подсказка/уровень «залипают» до 1.5 с и кажется, что статус не сбрасывается).
@@ -54,7 +76,14 @@ export function AiLauncher() {
   }, []);
 
   // Контекст собираем на момент открытия (getNav синхронен вне React)
-  const buildCtx = (): AiActionCtx => ({ nav: getNav(), online, flag: getFlag, caps: { semantic: semanticCaps }, chat: getChatContext() });
+  const buildCtx = (): AiActionCtx => {
+    const nav = getNav();
+    // git прокидываем только если кэш относится к текущему открытому проекту —
+    // иначе статус из прежнего проекта «протёк» бы в новый
+    const pid = nav?.screen === 'project' ? nav.project?.id : undefined;
+    const git = gitRepo && pid && gitRepo.projectId === pid ? { isRepo: gitRepo.isRepo } : undefined;
+    return { nav, online, flag: getFlag, caps: { semantic: semanticCaps }, chat: getChatContext(), git };
+  };
 
   // Рекомендации модели (id + уровень) — единый источник для: выделения в палитре,
   // hover-балуна FAB и переупорядочивания. Обновляются проактивным тиком и при открытии
@@ -77,7 +106,7 @@ export function AiLauncher() {
     const rest = ranked.filter(r => !r.contextual);
     return [...ctxItems, ...rest];
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, q, online, semanticCaps, recs]);
+  }, [open, q, online, semanticCaps, recs, gitRepo]);
 
   // При открытии палитры — обновить рекомендации под текущее содержание (при флаге+Ollama)
   useEffect(() => {

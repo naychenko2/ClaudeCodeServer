@@ -58,6 +58,8 @@ export const C = {
 
   // Оверлей модальных окон
   overlay:     'var(--c-overlay)',
+  // Полупрозрачная подложка под текст поверх картинки
+  glass:       'var(--c-glass)',
 
   // Статусы
   success:     'var(--c-success)',

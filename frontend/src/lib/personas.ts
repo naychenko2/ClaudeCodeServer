@@ -87,6 +87,14 @@ export function personaLabel(p: { role?: string; name: string }): string {
   return p.role && p.role.trim() ? `${p.role.trim()} (${p.name})` : p.name;
 }
 
+// Инициалы из имени: две первые буквы (по словам, иначе первые две буквы слова)
+export function personaInitials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '?';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[1][0]).toUpperCase();
+}
+
 // Две строки подписи для мест с аватаром: роль сверху (главная), имя под ней.
 // Если роль пустая — одна строка (primary = имя, secondary отсутствует).
 export function personaTitleLines(p: { role?: string; name: string }): { primary: string; secondary?: string } {

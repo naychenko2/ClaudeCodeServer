@@ -3,14 +3,7 @@ import type { Persona } from '../../types';
 import { R, FONT } from '../../lib/design';
 import { agentDotColor } from '../../components/AgentSelector';
 import { api } from '../../lib/api';
-
-// Инициалы из имени: две первые буквы (по словам, иначе первые две буквы слова)
-function initials(name: string): string {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return '?';
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return (parts[0][0] + parts[1][0]).toUpperCase();
-}
+import { personaInitials } from '../../lib/personas';
 
 // Круглый аватар персоны. kind==='image' и есть картинка — рендерим <img>
 // (с фолбэком на инициалы при ошибке загрузки). Иначе — инициалы на цветном
@@ -47,7 +40,7 @@ export function PersonaAvatar({ persona, size = 40 }: { persona: Persona; size?:
         lineHeight: 1,
       }}
     >
-      {initials(persona.name)}
+      {personaInitials(persona.name)}
     </div>
   );
 }

@@ -582,9 +582,11 @@ type Nav = 'session' | 'task' | 'persona' | 'note' | 'knowledge' | null;
 function eventTarget(e: EventRow): { nav: Nav; id: string } | null {
   if (!e.entityRef) return null;
   switch (e.type) {
-    case 'chat_turn': case 'meeting': case 'pipeline': return { nav: 'session', id: e.entityRef };
+    // memory_learned пишет в entityRef id чата, где факт был выучен (см. PersonaMemoryAutolearnService),
+    // поэтому ведёт на сессию, а НЕ на персону — иначе openPersona(sessionId) открывает пустую «Новая персона».
+    case 'chat_turn': case 'meeting': case 'pipeline': case 'memory_learned': return { nav: 'session', id: e.entityRef };
     case 'task_created': case 'task_completed': case 'task_spawned': return { nav: 'task', id: e.entityRef };
-    case 'memory_learned': case 'team_joined': return { nav: 'persona', id: e.entityRef };
+    case 'team_joined': return { nav: 'persona', id: e.entityRef };
     case 'note_changed': return { nav: 'note', id: e.entityRef };
     case 'knowledge_changed': return { nav: 'knowledge', id: e.entityRef };
     default: return null;

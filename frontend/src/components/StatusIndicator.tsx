@@ -25,16 +25,13 @@ interface Props {
   // Шапка тултипа — кто собеседник. Единственное место, где он назван словами:
   // в самой карточке имя и роль не показываются, чтобы не съедать строку
   title?: ReactNode
-  children?: ReactNode
 }
 
 /**
- * Индикатор статуса чата: цвет = статус, подпись — в тултипе над индикатором.
- * Без детей рисует точку; с ребёнком (аватар собеседника) — кольцо вокруг него,
- * чтобы не городить рядом с лицом ещё и точку. Мигание и тултип в обоих случаях общие.
+ * Индикатор статуса чата: точка цветом статуса, подпись — в тултипе над ней.
  * Тултип рендерится порталом в body: карточка чата обрезает содержимое (overflow: hidden).
  */
-export function StatusIndicator({ status, title, children }: Props) {
+export function StatusIndicator({ status, title }: Props) {
   const cfg = STATUS_CONFIG[status] ?? STATUS_CONFIG.finished
   const pulse = PULSE_STATUSES.has(status)
   const ref = useRef<HTMLSpanElement>(null)
@@ -74,26 +71,6 @@ export function StatusIndicator({ status, title, children }: Props) {
     </span>,
     document.body,
   )
-
-  // Кольцо вокруг аватара: мигает только оно, само лицо остаётся статичным
-  if (children) {
-    return (
-      <>
-        <span {...bind} style={{ position: 'relative', display: 'inline-flex', flexShrink: 0 }}>
-          {pulse && <style>{PULSE_CSS}</style>}
-          {children}
-          <span
-            className={pulse ? 'sb-pulse' : undefined}
-            style={{
-              position: 'absolute', inset: -3, borderRadius: '50%',
-              border: `2px solid ${cfg.dot}`, pointerEvents: 'none',
-            }}
-          />
-        </span>
-        {tooltip}
-      </>
-    )
-  }
 
   return (
     <>

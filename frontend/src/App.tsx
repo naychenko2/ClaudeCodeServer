@@ -15,6 +15,7 @@ import { PRODUCT_HISTORY_EVENT, productHistorySeenKey } from './components/HubHe
 import { initConnectivity } from './lib/offline'
 import { installSelectionScopes } from './lib/selectionScope'
 import { C } from './lib/design'
+import { recordRecentProject } from './lib/pinnedProjects'
 import { useOnline } from './hooks/useOnline'
 import { runOfflineSnapshot, syncProjectFiles, drainOfflineQueues } from './lib/sync'
 import { onFilesChanged } from './lib/signalr'
@@ -410,6 +411,7 @@ export default function App() {
   useEffect(() => { ensureNotificationsSubscribed(); }, []);
 
   const openProject = (p: Project) => {
+    recordRecentProject(p.id)
     localStorage.setItem(OPEN_PROJECT_KEY, JSON.stringify(p))
     navPush({ screen: 'project', project: p, view: 'sidebar', file: null })
     setProject(p)

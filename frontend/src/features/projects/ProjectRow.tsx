@@ -5,8 +5,9 @@ import { C, FONT, SHADOW } from '../../lib/design';
 import { tileColors, firstLetter, relativeTime } from './projectUtil';
 import { ProjectActionsMenu } from './ProjectActionsMenu';
 import { useThemeMode } from '../../lib/themeMode';
-import { ChevronRight } from 'lucide-react';
+import { ChevronRight, Pin } from 'lucide-react';
 import { ICON_SIZE } from '../../components/ui/icons';
+import { usePinnedIds } from '../../lib/pinnedProjects';
 
 interface Props {
   project: Project;
@@ -24,6 +25,7 @@ export function ProjectRow({ project: p, index, online, hasActiveSession, onOpen
   useThemeMode();  // перекраска плашки при смене темы
   const [tileBg, tileFg] = tileColors(index);
   const [hover, setHover] = useState(false);
+  const pinned = usePinnedIds().includes(p.id);
 
   const rel = relativeTime(p.updatedAt);
   const last = hasActiveSession && rel === 'только что' ? 'активна · только что' : rel;
@@ -49,8 +51,11 @@ export function ProjectRow({ project: p, index, online, hasActiveSession, onOpen
       </div>
 
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 15, fontWeight: 600, color: C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-          {p.name}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+          <span style={{ fontSize: 15, fontWeight: 600, color: C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {p.name}
+          </span>
+          {pinned && <Pin size={13} strokeWidth={2} color={C.accent} style={{ flexShrink: 0 }} aria-label="Закреплён" />}
         </div>
         <div style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={p.rootPath}>
           {path}

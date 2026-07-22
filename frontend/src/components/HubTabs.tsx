@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { Book, Calendar, Folder, House, MessageCircle, Share2, Users } from 'lucide-react';
 import { PillSwitch } from './Toolbar';
+import { ProjectSwitcherZone } from '../features/projects/ProjectSwitcherZone';
 
 export type HubTab = 'home' | 'chats' | 'projects' | 'calendar' | 'notes' | 'personas' | 'knowledge' | 'notifications';
 
@@ -32,14 +33,20 @@ const TABLESS: HubTab[] = ['home', 'notifications', 'knowledge'];
 // Сегмент-переключатель хаба «Чаты | Проекты | Календарь | Заметки | Персоны» — на общем PillSwitch.
 // mobile: компакт-режим — неактивные сегменты иконками, подпись только у активного
 // (разделы помещаются на 320px без обрезания и скролла).
-export function HubTabs({ value, onChange, mobile, tabs = DEFAULT_TABS }: {
+export function HubTabs({ value, onChange, mobile, tabs = DEFAULT_TABS, currentProjectId }: {
   value: HubTab;
   onChange: (t: HubTab) => void;
   mobile?: boolean;
   // Какие разделы показать. На мобиле HubHeader передаёт сокращённый primary-набор,
   // остальное уходит в «⋯ Разделы» (overflow), чтобы вкладки не скроллились под обрез.
   tabs?: HubTab[];
+  // Открытый проект — для подсветки активного значка в зоне переключения. Зона
+  // раскрывается только когда активен раздел «Проекты» и это десктоп (не mobile).
+  currentProjectId?: string;
 }) {
+  // Зона проектов заменяет вкладку «Проекты», когда раздел активен (десктоп). Вне
+  // раздела и на мобиле — обычная вкладка.
+  const showZone = !mobile && value === 'projects';
   // Активный раздел вне набора табов: из TABLESS — не получает вкладку вовсе
   // (PillSwitch умеет «нет выбранного»), остальные скрытые дописываются условной
   // вкладкой в конец. На мобиле так всплывают «Заметки» и «Персоны» из «⋯ Разделы»,
@@ -57,6 +64,9 @@ export function HubTabs({ value, onChange, mobile, tabs = DEFAULT_TABS }: {
       persistKey="hub-tabs"
       variant="hub"
       options={options}
+      renderOption={showZone
+        ? opt => opt.value === 'projects' ? <ProjectSwitcherZone currentProjectId={currentProjectId} /> : null
+        : undefined}
     />
   );
 }

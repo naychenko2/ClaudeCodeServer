@@ -4,6 +4,8 @@ import { C, R, FONT, SHADOW } from '../../lib/design';
 import { tileColors, firstLetter, pluralChats } from './projectUtil';
 import { ProjectActionsMenu } from './ProjectActionsMenu';
 import { useThemeMode } from '../../lib/themeMode';
+import { Pin } from 'lucide-react';
+import { usePinnedIds } from '../../lib/pinnedProjects';
 
 interface Props {
   project: Project;
@@ -20,6 +22,7 @@ interface Props {
 export function ProjectCard({ project: p, index, online, hasActiveSession, onOpen, onMove, onEdit, onDelete }: Props) {
   useThemeMode();  // перекраска плашки при смене темы
   const [tileBg, tileFg] = tileColors(index);
+  const pinned = usePinnedIds().includes(p.id);
 
   const count = p.sessionCount ?? 0;
   const date = new Date(p.updatedAt).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
@@ -57,6 +60,7 @@ export function ProjectCard({ project: p, index, online, hasActiveSession, onOpe
           <span style={{ flex: 1, fontSize: 16, fontWeight: 600, color: C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {p.name}
           </span>
+          {pinned && <Pin size={13} strokeWidth={2} color={C.accent} style={{ flexShrink: 0 }} aria-label="Закреплён" />}
           {online && <ProjectActionsMenu project={p} onMove={onMove} onEdit={onEdit} onDelete={onDelete} />}
         </div>
         {/* Путь */}

@@ -1322,7 +1322,7 @@ const windowWidth = useWindowWidth();
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, overflow: 'hidden' }}>
       {/* Единый верхний хаб-хедер на всю ширину (симметрия с разделом «Чаты») */}
-      <HubHeader value="projects" onTab={onSwitchHub} auth={auth} onLogout={onLogout} />
+      <HubHeader value="projects" onTab={onSwitchHub} auth={auth} onLogout={onLogout} currentProjectId={project.id} />
 
       {/* Тело: сайдбар + контент. position:relative — чтобы drawer/overlay легли под хедер */}
       <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden', position: 'relative' }}>

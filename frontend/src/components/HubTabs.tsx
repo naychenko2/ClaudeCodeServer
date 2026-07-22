@@ -65,7 +65,9 @@ export function HubTabs({ value, onChange, mobile, tabs = DEFAULT_TABS, currentP
       variant="hub"
       options={options}
       renderOption={showZone
-        ? opt => opt.value === 'projects' ? <ProjectSwitcherZone currentProjectId={currentProjectId} /> : null
+        ? opt => opt.value === 'projects'
+          ? <ProjectSwitcherZone currentProjectId={currentProjectId} onOpenHub={() => onChange('projects')} />
+          : null
         : undefined}
     />
   );

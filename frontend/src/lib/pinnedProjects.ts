@@ -52,6 +52,19 @@ export function togglePin(id: string) {
   if (pinned.includes(id)) unpinProject(id); else pinProject(id);
 }
 
+// Переставить закреплённый проект на позицию другого (drag-and-drop сортировка в зоне)
+export function movePinned(dragId: string, targetId: string) {
+  const from = pinned.indexOf(dragId);
+  const to = pinned.indexOf(targetId);
+  if (from < 0 || to < 0 || from === to) return;
+  const next = [...pinned];
+  next.splice(from, 1);
+  next.splice(to, 0, dragId);
+  pinned = next;
+  persist(PINNED_KEY, pinned);
+  emit();
+}
+
 // === Недавние (MRU) ===
 
 // Отметить проект открытым: поднимаем в начало списка, схлопываем дубли, режем хвост.

@@ -263,8 +263,18 @@ function TextMessageView({ text, online, onRetry, streaming }: { text: string; o
     width: 26, height: 26, borderRadius: 7, border: 'none', background: C.bgSelected,
     color: C.textMuted, cursor: 'pointer', fontFamily: 'inherit', padding: 0,
   };
+  // Тач: действия показываются по тапу на сообщении (на десктопе — по hover, это CSS).
+  // Тап по ссылке/кнопке/коду и тап, завершающий выделение текста, не считаем — иначе
+  // панель дёргалась бы при обычном чтении и копировании.
+  const [tapped, setTapped] = useState(false);
+  const handleTap = (e: React.MouseEvent) => {
+    if ((e.target as HTMLElement).closest('a, button, input, textarea, pre, code')) return;
+    if (window.getSelection()?.toString()) return;
+    setTapped(t => !t);
+  };
   return (
-    <div className="cc-msg" style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 6, maxWidth: '100%', overflow: 'hidden' }}>
+    <div className={`cc-msg${tapped ? ' cc-msg--tapped' : ''}`} onClick={handleTap}
+      style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 6, maxWidth: '100%', overflow: 'hidden' }}>
       {/* data-selection-doc: Ctrl+A в чате выделяет последний ответ ассистента (см. selectionScope) */}
       <div data-selection-doc="" style={{ fontSize: 14, color: C.textHeading, wordBreak: 'break-word' }}>
         <MarkdownContent text={text} />

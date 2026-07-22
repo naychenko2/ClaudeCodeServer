@@ -1595,26 +1595,42 @@ public class ClaudeSession : ILlmSessionAdapter
         catch (OperationCanceledException) { /* отмена сессии — штатно */ }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[ClaudeSession] Цикл чтения прогона упал: {ex.Message}");
+            // Полный стек — иначе не видно, ГДЕ упал разбор (напр. небезопасное чтение числа
+            // из stream-json стороннего провайдера). Message в одиночку тут бесполезен.
+            Console.Error.WriteLine($"[ClaudeSession] Цикл чтения прогона упал: {ex}");
+            // Активный ход из-за краха цикла не дождётся result — без явной ошибки клиенту
+            // UI навсегда завис бы на «Размышление…» (ExitedMessage из finally не гасит плашку
+            // размышления). Шлём ошибку, чтобы ход честно завершился.
+            if (!run.TurnDone)
+                try { await _onMessage(new ErrorMessage("Ход прерван из-за ошибки обработки ответа модели")); }
+                catch { /* сообщение клиенту best-effort */ }
         }
         finally { await FinalizeRunAsync(run); }
     }
 
     // Допустимая тишина stdout по состоянию прогона: активный ход — щедрый таймаут во время
-    // инструмента, короткий во время генерации (см. ActiveTurnWatchdog); доживание с фоновыми
-    // агентами — потолок BgLingerTimeout (агенты работают молча: их транскрипты пишутся на диск,
-    // в stdout родителя ничего); иначе — короткий грейс
+    // инструмента/ожидания пользователя, короткий во время генерации (см. ActiveTurnWatchdog);
+    // доживание с фоновыми агентами — потолок BgLingerTimeout (агенты работают молча: их
+    // транскрипты пишутся на диск, в stdout родителя ничего); иначе — короткий грейс
     private TimeSpan WatchdogFor(CliRun run) =>
-        !run.TurnDone ? ActiveTurnWatchdog(run.PendingToolUses, IdleTimeout, GenerationSilenceTimeout)
+        !run.TurnDone ? ActiveTurnWatchdog(run.PendingToolUses, AwaitingUserInput, IdleTimeout, GenerationSilenceTimeout)
         : run.HasPendingBg ? _bgLingerTimeout
         : run.PromptSuggestionsActive ? PromptSuggestionExitGrace
         : ResultExitGrace;
 
-    // Таймаут тишины АКТИВНОГО хода. Пока выполняется инструмент (pendingToolUses > 0) — щедрый
-    // whileTool (Bash/сборка молчат легитимно); при генерации/размышлении — короткий whileGenerating
+    // Ход ждёт ответа пользователя: показан вопрос AskUserQuestion или план на согласование
+    // ExitPlanMode — stdout молчит легитимно, пока пользователь думает (может и час). Эти два
+    // канала НЕ блокируют цикл чтения (HandleControlRequestAsync возвращается сразу), поэтому
+    // короткий watchdog ложно рубил бы ход. permission-запрос сюда не входит: он блокирует
+    // цикл в await tcs.Task, и watchdog для него и так не тикает.
+    private bool AwaitingUserInput => !_pendingQuestions.IsEmpty || !_pendingPlans.IsEmpty;
+
+    // Таймаут тишины АКТИВНОГО хода. Пока выполняется инструмент (pendingToolUses > 0) или ход
+    // ждёт ответа пользователя (awaitingUser) — щедрый whileTool (Bash/сборка молчат легитимно,
+    // пользователь думает сколько угодно); при генерации/размышлении — короткий whileGenerating
     // (молчащий стрим почти всегда обрыв провайдера). Вынесено чистой функцией ради теста.
-    internal static TimeSpan ActiveTurnWatchdog(int pendingToolUses, TimeSpan whileTool, TimeSpan whileGenerating) =>
-        pendingToolUses > 0 ? whileTool : whileGenerating;
+    internal static TimeSpan ActiveTurnWatchdog(int pendingToolUses, bool awaitingUser, TimeSpan whileTool, TimeSpan whileGenerating) =>
+        pendingToolUses > 0 || awaitingUser ? whileTool : whileGenerating;
 
     // Финализация прогона: единственная точка уборки после смерти процесса
     private async Task FinalizeRunAsync(CliRun run)
@@ -2425,15 +2441,17 @@ public class ClaudeSession : ILlmSessionAdapter
         );
     }
 
-    // Безопасное чтение числовых полей stream-json. TryGetProperty возвращает true и для
-    // JSON null, а Get*() на null-элементе кидает InvalidOperationException — на openrouter-
+    // Безопасное чтение числовых полей stream-json. TryGetProperty возвращает true и для JSON
+    // null, а Get*/TryGet* на НЕ-числовом элементе (Null/String) КИДАЮТ InvalidOperationException
+    // (TryGetInt32 отдаёт false лишь при переполнении Number, но не при Null!) — на openrouter-
     // совместимом потоке (usage/стоимость приходят null) это роняло цикл чтения прогона.
-    private static int IntProp(JsonElement o, string name, int def = 0) =>
-        o.TryGetProperty(name, out var e) && e.TryGetInt32(out var v) ? v : def;
-    private static long LongProp(JsonElement o, string name, long def = 0) =>
-        o.TryGetProperty(name, out var e) && e.TryGetInt64(out var v) ? v : def;
-    private static double? DoubleProp(JsonElement o, string name) =>
-        o.TryGetProperty(name, out var e) && e.TryGetDouble(out var v) ? v : (double?)null;
+    // Поэтому обязательна явная проверка ValueKind == Number перед чтением.
+    internal static int IntProp(JsonElement o, string name, int def = 0) =>
+        o.TryGetProperty(name, out var e) && e.ValueKind == JsonValueKind.Number && e.TryGetInt32(out var v) ? v : def;
+    internal static long LongProp(JsonElement o, string name, long def = 0) =>
+        o.TryGetProperty(name, out var e) && e.ValueKind == JsonValueKind.Number && e.TryGetInt64(out var v) ? v : def;
+    internal static double? DoubleProp(JsonElement o, string name) =>
+        o.TryGetProperty(name, out var e) && e.ValueKind == JsonValueKind.Number && e.TryGetDouble(out var v) ? v : (double?)null;
 
     public async ValueTask DisposeAsync()
     {

@@ -1832,9 +1832,12 @@ public class ClaudeSession : ILlmSessionAdapter
                     }
                 }
                 var subtype = root.TryGetProperty("subtype", out var st) ? st.GetString() ?? "success" : "success";
-                var durationMs = root.TryGetProperty("duration_ms", out var d) ? d.GetInt64() : 0;
-                var numTurns = root.TryGetProperty("num_turns", out var nt) ? nt.GetInt32() : 0;
-                var totalCost = root.TryGetProperty("total_cost_usd", out var tc) ? tc.GetDouble() : (double?)null;
+                // Числа читаем через безопасные хелперы: openrouter-совместимый поток шлёт
+                // эти поля как JSON null (Anthropic — всегда число), а прямой GetInt64/GetDouble
+                // на null кидает и роняет весь цикл чтения прогона (ход виснет без ответа).
+                var durationMs = LongProp(root, "duration_ms");
+                var numTurns = IntProp(root, "num_turns");
+                var totalCost = DoubleProp(root, "total_cost_usd");
                 var apiErr = root.TryGetProperty("api_error_status", out var ae) && ae.ValueKind == JsonValueKind.String
                     ? ae.GetString() : null;
                 List<string>? denials = null;
@@ -2362,9 +2365,9 @@ public class ClaudeSession : ILlmSessionAdapter
         if (!root.TryGetProperty("message", out var msg)) return;
         if (!msg.TryGetProperty("usage", out var u)) return;
 
-        var tokens = (u.TryGetProperty("input_tokens", out var i) ? i.GetInt32() : 0)
-            + (u.TryGetProperty("cache_read_input_tokens", out var cr) ? cr.GetInt32() : 0)
-            + (u.TryGetProperty("cache_creation_input_tokens", out var cc) ? cc.GetInt32() : 0);
+        var tokens = IntProp(u, "input_tokens")
+            + IntProp(u, "cache_read_input_tokens")
+            + IntProp(u, "cache_creation_input_tokens");
         if (tokens > 0) _lastContextTokens = tokens;
     }
 
@@ -2372,12 +2375,22 @@ public class ClaudeSession : ILlmSessionAdapter
     {
         if (!root.TryGetProperty("usage", out var u)) return null;
         return new UsageInfo(
-            u.TryGetProperty("input_tokens", out var i) ? i.GetInt32() : 0,
-            u.TryGetProperty("output_tokens", out var o) ? o.GetInt32() : 0,
-            u.TryGetProperty("cache_read_input_tokens", out var cr) ? cr.GetInt32() : 0,
-            u.TryGetProperty("cache_creation_input_tokens", out var cc) ? cc.GetInt32() : 0
+            IntProp(u, "input_tokens"),
+            IntProp(u, "output_tokens"),
+            IntProp(u, "cache_read_input_tokens"),
+            IntProp(u, "cache_creation_input_tokens")
         );
     }
+
+    // Безопасное чтение числовых полей stream-json. TryGetProperty возвращает true и для
+    // JSON null, а Get*() на null-элементе кидает InvalidOperationException — на openrouter-
+    // совместимом потоке (usage/стоимость приходят null) это роняло цикл чтения прогона.
+    private static int IntProp(JsonElement o, string name, int def = 0) =>
+        o.TryGetProperty(name, out var e) && e.TryGetInt32(out var v) ? v : def;
+    private static long LongProp(JsonElement o, string name, long def = 0) =>
+        o.TryGetProperty(name, out var e) && e.TryGetInt64(out var v) ? v : def;
+    private static double? DoubleProp(JsonElement o, string name) =>
+        o.TryGetProperty(name, out var e) && e.TryGetDouble(out var v) ? v : (double?)null;
 
     public async ValueTask DisposeAsync()
     {

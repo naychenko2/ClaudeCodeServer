@@ -40,6 +40,18 @@ const SOURCE_META: Record<string, { label: string; order: number }> = {
 }
 const sourceMeta = (s: string) => SOURCE_META[s] ?? { label: s, order: 9 }
 
+// Группировка сервисов по источнику — используется и здесь, и панелькой «Preview»
+// нового интерфейса (workspace-cc-panels), чтобы списки выглядели одинаково
+export function groupServices(services: ProjectService[]): [string, ProjectService[]][] {
+  const map = new Map<string, ProjectService[]>()
+  for (const s of services) {
+    const arr = map.get(s.source) ?? []
+    arr.push(s)
+    map.set(s.source, arr)
+  }
+  return [...map.entries()].sort((a, b) => sourceMeta(a[0]).order - sourceMeta(b[0]).order)
+}
+
 export function ToolsSidebar({
   projectId, activeTab, onTabChange,
   terminals, onCreateTerminal, onStopTerminal, onRenameTerminal,
@@ -65,15 +77,7 @@ export function ToolsSidebar({
   }, [activeTab, projectId])
 
   // Группировка сервисов по источнику
-  const groups = (() => {
-    const map = new Map<string, ProjectService[]>()
-    for (const s of previewServices) {
-      const arr = map.get(s.source) ?? []
-      arr.push(s)
-      map.set(s.source, arr)
-    }
-    return [...map.entries()].sort((a, b) => sourceMeta(a[0]).order - sourceMeta(b[0]).order)
-  })()
+  const groups = groupServices(previewServices)
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: C.bgPanel }}>
@@ -173,7 +177,9 @@ export function ToolsSidebar({
   )
 }
 
-function PreviewServiceList({
+// Список сервисов Preview с группировкой и формой «Добавить свой…» — экспортирован:
+// его же рендерит панелька «Preview» нового интерфейса (workspace-cc-panels)
+export function PreviewServiceList({
   projectId, groups, hasAny, activePreviewId,
   onRefreshServices, onStartService, onStopService, onSelectPreview,
 }: {

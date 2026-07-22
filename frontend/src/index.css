@@ -102,6 +102,15 @@ body {
   inherits: true;
   initial-value: 20px;
 }
+/* Правый отступ FAB: в новом интерфейсе проекта (workspace-cc-panels) правую кромку
+   занимают рельса и панели инструментов — FAB встаёт у зоны чата, а не лезет на них.
+   НЕ анимируется намеренно: кнопка мгновенно оказывается на новом месте —
+   движение через полэкрана суетило. */
+@property --cc-fab-right {
+  syntax: '<length>';
+  inherits: true;
+  initial-value: 20px;
+}
 :root { transition: --cc-fab-bottom 0.3s ease; }
 
 

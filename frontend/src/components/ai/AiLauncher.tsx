@@ -44,6 +44,7 @@ export function AiLauncher() {
   const aiBusy = useAiBusy();
   useEffect(() => { api.notes.caps().then(c => setSemanticCaps(c.semantic)).catch(() => {}); }, []);
 
+
   // Немедленный сброс статуса FAB при смене раздела — не ждём опросного тика (иначе старая
   // подсказка/уровень «залипают» до 1.5 с и кажется, что статус не сбрасывается).
   useEffect(() => {
@@ -425,7 +426,9 @@ const FAB_MOBILE = 36;
 const fabStyle: React.CSSProperties = {
   // --cc-fab-bottom задаёт страница снизу (в чате — высота композера + зазор), чтобы
   // FAB вставал НАД композером и не сталкивался с кнопкой «вниз». Дефолт — угол 20px.
-  position: 'fixed', right: 20, bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px))',
+  // --cc-fab-right сдвигает FAB влево, когда правую кромку занимают панели
+  // нового интерфейса проекта (ставит RightPanelStack); дефолт — угол 20px
+  position: 'fixed', right: 'var(--cc-fab-right, 20px)', bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px))',
   width: 54, height: 54, borderRadius: '50%', border: 'none', cursor: 'pointer',
   background: C.accent, color: C.onAccent, boxShadow: SHADOW.fab,
   // bottom едет плавно за счёт анимируемой @property --cc-fab-bottom (см. index.css)
@@ -493,7 +496,7 @@ const toggleThumb: React.CSSProperties = {
 };
 
 const balloonStyle: React.CSSProperties = {
-  position: 'fixed', right: 20, bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px) + 66px)',
+  position: 'fixed', right: 'var(--cc-fab-right, 20px)', bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px) + 66px)',
   width: 280, background: C.bgCard, border: `1px solid ${C.accentMuted}`, borderRadius: R.xl,
   boxShadow: SHADOW.modal, padding: '13px 14px 12px', zIndex: Z.modal - 1, fontFamily: FONT.sans,
 };
@@ -512,7 +515,7 @@ const balloonGhost: React.CSSProperties = {
 
 // Hover-балун со списком рекомендаций (шире проактивного, с прокруткой при длинном списке)
 const hoverBalloonStyle: React.CSSProperties = {
-  position: 'fixed', right: 20, bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px) + 66px)',
+  position: 'fixed', right: 'var(--cc-fab-right, 20px)', bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px) + 66px)',
   width: 300, maxHeight: '60vh', overflowY: 'auto', background: C.bgCard, border: `1px solid ${C.accentMuted}`,
   borderRadius: R.xl, boxShadow: SHADOW.modal, padding: '12px 12px 10px', zIndex: Z.modal - 1, fontFamily: FONT.sans,
 };

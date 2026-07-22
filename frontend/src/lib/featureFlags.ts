@@ -16,6 +16,7 @@ export const FLAGS = {
   promptSuggestions: 'prompt-suggestions',
   docAnnotations: 'doc-annotations',
   aiLocalSuggest: 'ai-local-suggest',
+  personaWatermark: 'persona-watermark',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

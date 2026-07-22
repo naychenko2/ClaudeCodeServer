@@ -1,34 +1,18 @@
 import { useEffect, useState, useRef } from 'react';
-import { Plus, SquarePen, Trash2 } from 'lucide-react';
+import { Plus } from 'lucide-react';
 import type { Project, Session } from '../types';
 import { api } from '../lib/api';
 import { onMessage, onReconnected } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
 import { isOnline } from '../lib/offline';
-import { StatusBadge } from './StatusBadge';
 import { EditSessionDialog } from './EditSessionDialog';
-import { C, R, SHADOW, MODAL_W, FONT } from '../lib/design';
-import { Modal, ModalActions, Button, IconButton } from './ui';
-import { getPersonaById, usePersonas, usePersonasVersion, personaLabel } from '../lib/personas';
-import { PersonaAvatar } from '../features/personas/PersonaAvatar';
-import { agentDotColor } from './AgentSelector';
-import { ExpiryBadge } from './ExpiryBadge';
+import { C, MODAL_W } from '../lib/design';
+import { Modal, ModalActions, Button } from './ui';
+import { usePersonas, usePersonasVersion } from '../lib/personas';
 import { FilterBar } from './FilterBar';
-import { ChatOriginBadge } from './ChatOriginBadge';
-import { resolveChatOrigin } from '../lib/chatOrigin';
 import { useChatFilters, useSanitizePersonaFilter } from '../lib/chatFilters';
-import { TeamMechanicBadge } from '../features/team/TeamMechanicBadge';
-import { teamTurnPreview } from '../features/team/teamMechanics';
-import { getLastMechanic, useLastMechanicVersion } from '../lib/lastMechanic';
-
-// Время создания сессии: сегодня — часы:минуты, иначе — дата
-function sessTime(iso: string): string {
-  const d = new Date(iso);
-  const now = new Date();
-  if (d.toDateString() === now.toDateString())
-    return d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-  return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
-}
+import { useLastMechanicVersion } from '../lib/lastMechanic';
+import { ChatCard } from './ChatCard';
 
 interface Props {
   project: Project;
@@ -50,6 +34,8 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   const [sessions, setSessions] = useState<Session[]>([]);
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
   const [editTarget, setEditTarget] = useState<Session | null>(null);
+  // Карточка под курсором — на ней показываем действия (на тач-устройствах hover нет, там действия видны всегда)
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
   const initializedRef = useRef(false);
   // Свежие activeSession/onSelect для обработчика chat_deleted (realtime-подписка живёт дольше рендера)
   const activeRef = useRef(activeSession);
@@ -237,131 +223,22 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
             Все чаты скрыты фильтрами
           </div>
         )}
-        {filteredSessions.map((s, index) => {
-          const isActive = activeSession?.id === s.id;
-          // Сессия от лица персоны: слева мини-аватар, имя персоны и акцент её цвета
-          const persona = s.personaId ? getPersonaById(s.personaId) : undefined;
-          // Групповой чат: стек мини-аватаров участников + подпись «Групповой»
-          const group = (s.participants?.length ?? 0) > 1
-            ? s.participants!.map(id => getPersonaById(id)).filter(p => p !== undefined)
-            : [];
-          const accent = persona ? agentDotColor(persona.avatar?.color) : C.accent;
-          // Происхождение чата (задача/автоматизация) — контекст на плашке
-          const origin = resolveChatOrigin(s);
-          // Последняя запущенная в чате механика команды — компактный бейдж
-          const mechanic = getLastMechanic(s.id);
-          return (
-          <div
+        {filteredSessions.map((s, index) => (
+          <ChatCard
             key={s.id}
-            onClick={() => onSelect(s)}
-            style={{
-              position: 'relative',
-              // отдельные longhand-свойства: со shorthand + undefined React обнуляет padding-left
-              paddingTop: isMobile ? 14 : 11,
-              paddingBottom: isMobile ? 14 : 11,
-              paddingRight: isMobile ? 16 : 12,
-              // у активной карточки добавляем слева место под акцентную полосу
-              paddingLeft: (isMobile ? 16 : 12) + (isActive ? 6 : 0),
-              borderRadius: isMobile ? 16 : R.xl,
-              marginBottom: 5,
-              cursor: 'pointer',
-              overflow: 'hidden',
-              background: isActive ? C.accentLight : C.bgWhite,
-              border: '1px solid ' + (isActive ? accent : C.borderLight),
-              boxShadow: isActive
-                ? SHADOW.button
-                : SHADOW.card,
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'flex-start',
-              gap: (persona || group.length > 1) ? 9 : 0,
-            }}
-          >
-            {/* Акцентная полоса слева — явный маркер текущего чата (у сессий персоны — её цветом) */}
-            {isActive && (
-              <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 4, background: accent }} />
-            )}
-            {group.length > 1 ? (
-              // Вертикальный плотный стек: важно количество участников, а не лица —
-              // карточку не распирает по ширине даже при 4 персонах
-              <div style={{ flexShrink: 0, marginTop: 1, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                {group.map((p, i) => (
-                  <div key={p!.id} style={{
-                    marginTop: i === 0 ? 0 : -15, position: 'relative', zIndex: group.length - i,
-                    borderRadius: '50%', border: `1.5px solid ${C.bgWhite}`,
-                  }}>
-                    <PersonaAvatar persona={p!} size={22} />
-                  </div>
-                ))}
-              </div>
-            ) : persona && (
-              <div style={{ flexShrink: 0, marginTop: 1 }}><PersonaAvatar persona={persona} size={28} /></div>
-            )}
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-                {(s.status === 'active') && (
-                  <div style={{ width: 7, height: 7, borderRadius: '50%', background: C.success, flexShrink: 0 }} />
-                )}
-                {s.status === 'finished' && (
-                  <div style={{ width: 7, height: 7, borderRadius: '50%', background: C.textMuted, flexShrink: 0 }} />
-                )}
-                <span style={{ fontSize: 13.5, fontWeight: isActive ? 700 : 600, color: C.textHeading, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {s.name ?? `Чат #${index + 1}`}
-                </span>
-                {(s.status === 'starting' || s.status === 'working' || s.status === 'waiting' || s.status === 'error' || s.status === 'orphaned') && (
-                  <StatusBadge status={s.status} />
-                )}
-                {workflowRunningFor === s.id && (
-                  <div title="Выполняется Workflow" style={{
-                    display: 'flex', alignItems: 'center', gap: 3,
-                    padding: '1px 5px',
-                    background: C.accentLight, border: `1px solid ${C.accentMuted}`, borderRadius: 4,
-                    flexShrink: 0,
-                  }}>
-                    <div className="tool-spinner" style={{ width: 8, height: 8 }} />
-                    <span style={{ fontFamily: 'Hanken Grotesk, sans-serif', fontSize: 10, fontWeight: 600, color: C.accent, lineHeight: 1 }}>WF</span>
-                  </div>
-                )}
-              </div>
-              {(group.length > 1 || persona || origin || mechanic) && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 3, minWidth: 0 }}>
-                  {origin && <ChatOriginBadge origin={origin} style={{ flexShrink: 0 }} />}
-                  {mechanic && <TeamMechanicBadge id={mechanic} size="sm" />}
-                  {group.length > 1 ? (
-                    <span style={{ fontSize: 11.5, fontWeight: 600, color: accent, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      Групповой · {group.length} участника
-                    </span>
-                  ) : persona && (
-                    <span style={{ fontSize: 11.5, fontWeight: 600, color: accent, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {personaLabel(persona)}
-                    </span>
-                  )}
-                </div>
-              )}
-              {s.lastMessage && (
-                <div style={{ fontSize: 12, color: C.textMuted, lineHeight: 1.4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {teamTurnPreview(s.lastMessage) ?? s.lastMessage}
-                </div>
-              )}
-            </div>
-            {/* Правая колонка: время создания (сверху, вправо) + действия */}
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 5, flexShrink: 0, paddingLeft: 6 }}>
-              <span style={{ fontFamily: FONT.mono, fontSize: 10.5, color: C.textMuted, lineHeight: 1, whiteSpace: 'nowrap' }}>
-                {sessTime(s.createdAt)}
-              </span>
-              <ExpiryBadge session={s} />
-              {online && (<div style={{ display: 'flex' }}>
-              <IconButton onClick={e => { e.stopPropagation(); setEditTarget(s); }} title="Настройки чата" size="xs">
-                <SquarePen size={14} strokeWidth={2} />
-              </IconButton>
-              <IconButton onClick={e => { e.stopPropagation(); setDeleteTarget(s); }} title="Удалить чат" size="xs" tone="danger">
-                <Trash2 size={14} strokeWidth={2} />
-              </IconButton>
-              </div>)}
-            </div>
-          </div>
-          );
-        })}
+            session={s}
+            isActive={activeSession?.id === s.id}
+            isMobile={isMobile}
+            fallbackName={`Чат #${index + 1}`}
+            online={online}
+            hovered={hoveredId === s.id}
+            workflowRunning={workflowRunningFor === s.id}
+            onSelect={() => onSelect(s)}
+            onHover={h => setHoveredId(h ? s.id : null)}
+            onEdit={() => setEditTarget(s)}
+            onDelete={() => setDeleteTarget(s)}
+          />
+        ))}
       </div>
 
       {editTarget && (

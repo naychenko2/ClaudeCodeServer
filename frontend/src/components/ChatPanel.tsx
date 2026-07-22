@@ -18,7 +18,7 @@ import { estimateContext } from '../lib/context';
 import { useCtxThresholds } from '../lib/contextPrefs';
 import { notify } from '../lib/notify';
 import { type Mode, ModeIcon } from '../lib/modes';
-import { useModelCaps, assistantName } from '../lib/models';
+import { useModelCaps, assistantName, modelProvider } from '../lib/models';
 import { Composer } from './Composer';
 import { EditSessionDialog } from './EditSessionDialog';
 import { C, R, SHADOW, CHAT_MAX_W } from '../lib/design';
@@ -152,19 +152,19 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   );
   const isGroupChat = participantPersonas.length > 1;
   // Есть ли уже ходы — назначать/менять персону можно только у пустого чата (бэкенд иначе 400)
-  const chatEmpty = items.length === 0;
   // Персоны, доступные в контексте чата (глобальные + этого проекта) — для селектора,
-  // пилюль пустого состояния и форка. Грузим лениво, пока чат пуст либо ведётся персоной.
+  // пилюль пустого состояния и форка. Грузим всегда: смена собеседника разрешена и по
+  // ходу разговора, а на пустом списке селектор не рисуется вовсе — раньше из-за этого
+  // в начатом чате без персоны выбрать её было негде.
   const [ctxPersonas, setCtxPersonas] = useState<Persona[]>([]);
   useEffect(() => {
     if (!online) return;
-    if (!chatEmpty && !persona) return; // список нужен только для пустого чата или форка
     let alive = true;
     api.personas.list({ scope: 'context', projectId: project?.id })
       .then(list => { if (alive) setCtxPersonas(list); })
       .catch(() => { /* персоны — необязательная фича */ });
     return () => { alive = false; };
-  }, [online, chatEmpty, persona, project?.id]);
+  }, [online, project?.id]);
 
   // Назначить/сменить/снять собеседника чата: персона либо .md-агент — взаимоисключающе
   // (проектная сессия ↔ чат вне проекта — разные эндпоинты). Разрешено и по ходу
@@ -448,6 +448,40 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     const updated = await api.chats.migrateProvider(session.id, model);
     onSessionUpdated?.(updated);
   }, [session.id, onSessionUpdated]);
+
+  // Смена модели из полосы контролов композера. В рамках одного провайдера — обычный
+  // update; смена провайдера у НАЧАТОГО чата упирается в guard (транскрипт живёт у
+  // эндпоинта), поэтому идёт миграцией — тот же путь, что в «Настройках чата».
+  // У ещё не начатого чата (нет claudeSessionId) update проходит и на чужого провайдера.
+  const handleModelChange = useCallback(async (model: string) => {
+    const crossProvider = modelProvider(model) !== modelProvider(session.model);
+    // «По умолчанию» — пустой value каталога, и слать его надо именно пустой строкой:
+    // на бэкенде null означает «поле не менять», а сброс модели — это IsNullOrWhiteSpace.
+    const payload = { model };
+    try {
+      const updated = crossProvider && session.claudeSessionId
+        ? await api.chats.migrateProvider(session.id, model)
+        : session.projectId
+          ? await api.sessions.update(session.projectId, session.id, payload)
+          : await api.chats.update(session.id, payload);
+      onSessionUpdated?.(updated);
+    } catch (err) {
+      showToast('Модель', err instanceof Error ? err.message : 'Не удалось сменить модель');
+    }
+  }, [session.id, session.model, session.projectId, session.claudeSessionId, onSessionUpdated]);
+
+  // Усилие рассуждения из полосы контролов. Тот же контракт, что у модели: пустая
+  // строка — сброс на дефолт CLI, null бэкенд трактует как «поле не менять».
+  const handleEffortChange = useCallback(async (effort: string) => {
+    try {
+      const updated = session.projectId
+        ? await api.sessions.update(session.projectId, session.id, { effort })
+        : await api.chats.update(session.id, { effort });
+      onSessionUpdated?.(updated);
+    } catch (err) {
+      showToast('Усилие', err instanceof Error ? err.message : 'Не удалось сменить усилие');
+    }
+  }, [session.id, session.projectId, onSessionUpdated]);
 
   // Режим «План» — персистентный: после одобрения остаёмся в нём (следующие задачи тоже
   // планируются). Исполнение именно этого плана гарантирует backend (один ход без plan-режима).
@@ -968,7 +1002,12 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       />
 
       {/* Сообщения (нижний отступ = высота плавающего composer + зазор) */}
-      <div ref={scrollRef} onScroll={handleMessagesScroll} data-selection-scope="chat" data-selection-target="[data-selection-doc]" data-selection-priority="1" style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', position: 'relative', paddingTop: isMobile ? 16 : 20, paddingLeft: isMobile ? 12 : 24, paddingRight: isMobile ? 12 : 24, paddingBottom: composerH + 8 }}><div ref={contentRef} style={{ display: 'flex', flexDirection: 'column', gap: 2, width: '100%', maxWidth: CHAT_MAX_W, margin: '0 auto' }}>
+      <div ref={scrollRef} onScroll={handleMessagesScroll} data-selection-scope="chat" data-selection-target="[data-selection-doc]" data-selection-priority="1" style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', position: 'relative', paddingTop: isMobile ? 16 : 20, paddingLeft: isMobile ? 12 : 24, paddingRight: isMobile ? 12 : 24, paddingBottom: 8,
+        // Лента заканчивается НАД композером, а не подлезает под него: раньше это был
+        // paddingBottom, и контент прокручивался в прозрачных промежутках композера
+        // (между карточкой ввода и полосой кнопок). marginBottom ужимает саму область
+        // прокрутки, поэтому overflow обрезает сообщения по её нижней границе.
+        marginBottom: composerH }}><div ref={contentRef} style={{ display: 'flex', flexDirection: 'column', gap: 2, width: '100%', maxWidth: CHAT_MAX_W, margin: '0 auto' }}>
         {/* Спиннер загрузки истории */}
         {items.length === 0 && isHistoryLoading && (
           <div style={{
@@ -1071,7 +1110,10 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
           )}
           {/* Вариант В: строка-предупреждение о лимите подписки у места отправки (warning/rejected) */}
           {worstRate && worstRate.level !== 'normal' && <RateLimitBar w={worstRate} />}
-          <div style={{ borderRadius: 14, boxShadow: SHADOW.dropdown }}>
+          {/* Подъём композера над лентой даёт сама белая карточка (Composer), а не эта
+              обёртка: полоса контролов вынесена из карточки, и тень на обёртке рисовала
+              серый ореол вокруг пустой области под ней и полоску над полем ввода. */}
+          <div>
           <input
             ref={chatFileInputRef}
             type="file"
@@ -1101,6 +1143,11 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
             selectedAgentName={session.agentName ?? null}
             onCompanionChange={handleCompanionChange}
             canPickCompanion={online}
+            model={session.model}
+            onModelChange={handleModelChange}
+            chatStarted={!!session.claudeSessionId}
+            effort={session.effort}
+            onEffortChange={caps.supportsEffort ? handleEffortChange : undefined}
             hasMessages={items.length > 0}
             participantIds={session.participants}
             onCreateGroup={handleCreateGroup}

@@ -91,6 +91,9 @@
   --shadow-sheet:    0 -8px 40px rgba(23, 19, 15, 0.22);
   --shadow-button:   0 4px 14px rgba(217, 119, 87, 0.30);
   --shadow-fab:      0 6px 18px rgba(217, 119, 87, 0.42);
+  /* Та же геометрия свечения, но нейтральная — для FAB без accent-заливки
+     (кнопка-логотип AI-хаба): ореол должен быть в цвет самой кнопки, а не accent */
+  --shadow-fab-neutral: 0 6px 18px rgba(60, 50, 35, 0.22);
   --shadow-thumb:    0 1px 3px rgba(42, 37, 31, 0.12);
 
   /* Скроллбар (index.css) */
@@ -187,6 +190,7 @@
   --shadow-sheet:    0 -10px 46px rgba(0, 0, 0, 0.55);
   --shadow-button:   0 4px 16px rgba(227, 138, 106, 0.34);
   --shadow-fab:      0 6px 20px rgba(227, 138, 106, 0.46);
+  --shadow-fab-neutral: 0 6px 20px rgba(0, 0, 0, 0.50);
   --shadow-thumb:    0 1px 3px rgba(0, 0, 0, 0.45);
 
   /* Скроллбар */

@@ -134,7 +134,8 @@ export const SHADOW = {
   modal:    'var(--shadow-modal)',      // модальные окна
   sheet:    'var(--shadow-sheet)',      // мобильная шторка (тень кверху)
   button:   'var(--shadow-button)',     // свечение основной кнопки
-  fab:      'var(--shadow-fab)',        // плавающая круглая кнопка (FAB)
+  fab:      'var(--shadow-fab)',        // плавающая круглая кнопка (FAB) с accent-заливкой
+  fabNeutral: 'var(--shadow-fab-neutral)', // тот же ореол, но нейтральный — FAB без заливки
   thumb:    'var(--shadow-thumb)',      // бегунок переключателя
 } as const
 

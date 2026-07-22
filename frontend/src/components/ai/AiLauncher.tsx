@@ -290,7 +290,11 @@ export function AiLauncher() {
           className={fabStrong && !aiBusy ? 'cc-fab-hop' : undefined}
           style={{
             ...fabStyle,
-            background: 'none', padding: 0, overflow: 'visible',
+            // Ореол сохраняем, но нейтральный: SHADOW.fab из fabStyle — accent-свечение
+            // под сплошной оранжевый круг, а здесь заливки нет (весь круг занимает
+            // логотип), и оранжевый ореол выглядел беспричинным. Цвет свечения должен
+            // идти от самой кнопки — отсюда парный токен той же геометрии.
+            background: 'none', padding: 0, overflow: 'visible', boxShadow: SHADOW.fabNeutral,
             ...(isMobile ? { right: 16, width: FAB_MOBILE, height: FAB_MOBILE } : {}),
           }}
           onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-2px)'; enterFab(); }}
@@ -425,7 +429,9 @@ const fabStyle: React.CSSProperties = {
   width: 54, height: 54, borderRadius: '50%', border: 'none', cursor: 'pointer',
   background: C.accent, color: C.onAccent, boxShadow: SHADOW.fab,
   // bottom едет плавно за счёт анимируемой @property --cc-fab-bottom (см. index.css)
-  display: 'grid', placeItems: 'center', zIndex: Z.modal - 1, transition: 'transform .16s',
+  // Ниже выпадающих меню (Z.dropdown): FAB висит в том же углу, что и попапы кнопок
+  // композера, и на Z.modal-1 перекрывал их собой. Выше обычного контента остаётся.
+  display: 'grid', placeItems: 'center', zIndex: Z.dropdown - 1, transition: 'transform .16s',
 };
 
 const overlayStyle: React.CSSProperties = {

@@ -22,6 +22,9 @@ interface Props {
   // Открыта страница «Что нового» (она не вкладка хаба, а overlay) — подсвечиваем
   // её кнопку в шапке, как подсвечен колокольчик в разделе уведомлений
   historyActive?: boolean;
+  // Открытый проект (в разделе «Проекты») — для подсветки активного значка в зоне
+  // быстрого переключения. В списке проектов не задан.
+  currentProjectId?: string;
 }
 
 // Событие открытия продуктовой истории — слушает App (overlay на верхнем уровне)
@@ -35,7 +38,7 @@ export const productHistorySeenKey = (userId?: string | null) =>
 
 // Верхняя шапка-хаб главной страницы: логотип слева, переключатель «Чаты | Проекты» по центру,
 // аватар/меню справа. На мобилке логотип и URL-бейдж скрыты (не помещаются).
-export function HubHeader({ value, onTab, auth, onLogout, historyActive }: Props) {
+export function HubHeader({ value, onTab, auth, onLogout, historyActive, currentProjectId }: Props) {
   const isMobile = useIsMobile();
   const [showUserMgmt, setShowUserMgmt] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
@@ -155,7 +158,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive }: Props
           <ToolbarOverflowMenu isMobile title="Разделы" items={sectionItems} />
         </div>
       ) : (
-        <HubTabs value={value} onChange={onTab} />
+        <HubTabs value={value} onChange={onTab} currentProjectId={currentProjectId} />
       )}
 
       {/* Правая секция — меню аватара (управление пользователями — внутри меню, admin) */}

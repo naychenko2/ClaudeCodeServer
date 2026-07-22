@@ -3,8 +3,9 @@ import type { MouseEvent } from 'react';
 import type { Project } from '../../types';
 import { C } from '../../lib/design';
 import { IconButton, Menu, MenuItem } from '../../components/ui';
-import { MoreVertical, Folder, SquarePen, Trash2 } from 'lucide-react';
+import { MoreVertical, Folder, SquarePen, Trash2, Pin, PinOff } from 'lucide-react';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
+import { isPinned, togglePin } from '../../lib/pinnedProjects';
 
 interface Props {
   project: Project;
@@ -17,6 +18,7 @@ interface Props {
 // Меню действий карточки проекта: «⋯» → переместить / редактировать / удалить.
 export function ProjectActionsMenu({ project: p, color = C.textMuted, onMove, onEdit, onDelete }: Props) {
   const [open, setOpen] = useState(false);
+  const pinned = isPinned(p.id);
   return (
     <div style={{ position: 'relative', flexShrink: 0 }} onClick={e => e.stopPropagation()}>
       <IconButton onClick={() => setOpen(v => !v)} title="Действия" size="sm" color={color}>
@@ -24,6 +26,8 @@ export function ProjectActionsMenu({ project: p, color = C.textMuted, onMove, on
       </IconButton>
       {open && (
         <Menu onClose={() => setOpen(false)}>
+          <MenuItem label={pinned ? 'Открепить' : 'Закрепить'} onClick={() => { setOpen(false); togglePin(p.id); }}
+            icon={pinned ? <PinOff size={15} strokeWidth={ICON_STROKE} /> : <Pin size={15} strokeWidth={ICON_STROKE} />} />
           <MenuItem label="Переместить в группу" onClick={() => { setOpen(false); onMove(p); }}
             icon={<Folder size={15} strokeWidth={ICON_STROKE} />} />
           <MenuItem label="Редактировать" onClick={(e) => { setOpen(false); onEdit(p, e); }}

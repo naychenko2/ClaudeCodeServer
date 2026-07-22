@@ -79,7 +79,7 @@ type PillGeom = { left: number; width: number };
 // так тап между вкладками анимируется, а не перескакивает.
 const pillMemory = new Map<string, PillGeom>();
 
-export function PillSwitch<T extends string>({ value, options, onChange, fill, isMobile, draggable, persistKey, compact, autoCompact, variant = 'default' }: {
+export function PillSwitch<T extends string>({ value, options, onChange, fill, isMobile, draggable, persistKey, compact, autoCompact, variant = 'default', renderOption }: {
   value: T;
   options: { value: T; label: string; icon?: ReactNode }[];
   onChange: (v: T) => void;
@@ -91,6 +91,9 @@ export function PillSwitch<T extends string>({ value, options, onChange, fill, i
   /** Авто-компакт: включает compact при переполнении трека */
   autoCompact?: boolean;
   variant?: 'default' | 'hub';
+  /** Кастомный рендер конкретного сегмента (вернуть null — обычная кнопка). Активный
+   *  кастомный сегмент рисует свой фон и подавляет скользящую пилюлю под собой. */
+  renderOption?: (opt: { value: T; label: string; icon?: ReactNode }, active: boolean) => ReactNode;
 }) {
   const hub = variant === 'hub';
   const trackRef = useRef<HTMLDivElement>(null);
@@ -185,8 +188,12 @@ export function PillSwitch<T extends string>({ value, options, onChange, fill, i
     return best;
   }, [activeIndex]);
 
+  // Активный сегмент с кастомным контентом (напр. зона проектов): рисует свой фон,
+  // поэтому скользящую пилюлю под ним не показываем и drag от него не начинаем.
+  const activeCustom = !!(renderOption && activeIndex >= 0 && renderOption(options[activeIndex], true) != null);
+
   const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
-    if (!draggable || !thumb || e.button !== 0) return;
+    if (!draggable || !thumb || activeCustom || e.button !== 0) return;
     e.preventDefault();
     // Снимок геометрии всех сегментов на момент старта.
     const rects = (btnRefs.current.filter(Boolean) as HTMLButtonElement[])
@@ -241,7 +248,7 @@ export function PillSwitch<T extends string>({ value, options, onChange, fill, i
     window.addEventListener('pointerup', onUp);
   };
 
-  const geom = drag ?? thumb;
+  const geom = activeCustom ? null : (drag ?? thumb);
 
   return (
     <div
@@ -289,6 +296,17 @@ export function PillSwitch<T extends string>({ value, options, onChange, fill, i
       )}
       {options.map((opt, i) => {
         const active = highlight === i;
+        // Кастомный сегмент (напр. зона проектов): рендерим свой контент вместо кнопки.
+        // Держим ref для геометрии соседей, но своих кнопок/фона PillSwitch не навязывает.
+        const custom = renderOption ? renderOption(opt, opt.value === value) : null;
+        if (custom != null) {
+          return (
+            <div key={opt.value} ref={el => { btnRefs.current[i] = el as unknown as HTMLButtonElement; }}
+              style={{ position: 'relative', zIndex: 1, flex: fill ? 1 : undefined, display: 'inline-flex', alignItems: 'center' }}>
+              {custom}
+            </div>
+          );
+        }
         // В compact подпись привязана к value (не к highlight): при drag ширины
         // сегментов не меняются под пальцем — снапшот rects остаётся валидным
         const showLabel = !effectiveCompact || opt.value === value;

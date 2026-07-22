@@ -38,6 +38,10 @@ const DOC_TYPES: Record<string, string> = {
   docx: 'word', doc: 'word',
   xlsx: 'cell', xls: 'cell',
   pptx: 'slide', ppt: 'slide',
+  // Visio — Diagram Viewer OnlyOffice (только просмотр)
+  vsdx: 'diagram', vsdm: 'diagram',
+  vssx: 'diagram', vssm: 'diagram',
+  vstx: 'diagram', vstm: 'diagram',
 };
 
 // Цвета темы AI Home — пишем в localStorage перед инициализацией OO,

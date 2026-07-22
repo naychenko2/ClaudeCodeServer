@@ -744,6 +744,8 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
   };
 
   const isOfficeFile = !loading && !loadError && tab === 'file' && !!fileContent?.isDocument && fileContent.docKind !== 'pdf';
+  // Visio OnlyOffice открывает только на просмотр — переключатель «Редактировать» не показываем
+  const isVisioFile = fileContent?.docKind === 'visio';
   const isCodeEditing = editing && tab === 'file' && !fileContent?.isBinary && !fileContent?.isImage;
   const isPdfViewing = !loading && !loadError && tab === 'file' && !!fileContent?.isDocument && fileContent.docKind === 'pdf';
   const isHtmlPreviewing = !loading && !loadError && tab === 'file' && isHtml && htmlTab === 'preview' && !editing && !fileContent?.isBinary;
@@ -897,8 +899,8 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
           )
         )}
 
-        {/* Переключатель режима просмотра/редактирования для Office-файлов */}
-        {isOfficeFile && (
+        {/* Переключатель режима просмотра/редактирования для Office-файлов (Visio — только просмотр) */}
+        {isOfficeFile && !isVisioFile && (
           officeSwitching ? (
             // Загрузка
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: isMobile ? '5px 8px' : '5px 12px', borderRadius: 8, border: `1px solid ${C.border}`, background: C.border, color: C.textMuted, fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap', pointerEvents: 'none' }}>

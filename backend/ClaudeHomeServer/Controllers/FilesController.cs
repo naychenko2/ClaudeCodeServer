@@ -138,9 +138,10 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
 
     // Абсолютный путь документа с проверкой, что это просматриваемый документ (pdf/docx/xlsx/pptx).
     // null → клиенту 400 (не документ). Иначе — безопасный абсолютный путь для markitdown.
+    // Visio исключён: markitdown его не конвертирует.
     private string? DocumentAbsPath(string projectId, string path)
     {
-        if (files.GetDocumentInfo(path) is null) return null;
+        if (files.GetDocumentInfo(path) is not { } d || d.Kind == "visio") return null;
         return FileService.SafeJoinPublic(GetRoot(projectId), path);
     }
 
@@ -149,8 +150,9 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
     private async Task<string?> GetAiTextAsync(string projectId, string path, CancellationToken ct)
     {
         var root = GetRoot(projectId);
-        if (files.GetDocumentInfo(path) is not null)
+        if (files.GetDocumentInfo(path) is { } d)
         {
+            if (d.Kind == "visio") return null; // markitdown не конвертирует Visio
             var abs = FileService.SafeJoinPublic(root, path);
             return System.IO.File.Exists(abs) ? await docAi.ConvertAsync(abs, ct) : null;
         }
@@ -391,14 +393,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
             var root = GetProjectByOfficeToken(projectId, ownerId).RootPath;
             var safePath = FileService.SafeJoinPublic(root, path);
             if (!System.IO.File.Exists(safePath)) return NotFound();
-            var ext = Path.GetExtension(path).TrimStart('.').ToLowerInvariant();
-            var mime = ext switch {
-                "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                "pdf"  => "application/pdf",
-                _ => "application/octet-stream",
-            };
+            var mime = files.GetDocumentInfo(path)?.Mime ?? "application/octet-stream";
             // Стриминг с диска вместо буферизации всего файла в памяти
             return PhysicalFile(safePath, mime);
         }
@@ -418,6 +413,10 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
             var modTime = System.IO.File.GetLastWriteTimeUtc(safePath).Ticks;
             var fileName = Path.GetFileName(path);
             var ext = Path.GetExtension(path).TrimStart('.').ToLowerInvariant();
+
+            // Visio DS умеет только просматривать — режим редактирования не выдаём
+            if (files.GetDocumentInfo(path)?.Kind == "visio")
+                mode = "view";
 
             var serverUrl = config["OnlyOffice:ServerUrl"] ?? "http://localhost:8090";
             var backendUrl = config["OnlyOffice:BackendUrl"] ?? "http://host.docker.internal:5000";

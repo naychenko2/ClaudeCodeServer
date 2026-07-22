@@ -149,6 +149,13 @@ public class FilesControllerTests : IClassFixture<TestWebApplicationFactory>
     }
 
     [Fact]
+    public async Task GetContent_VsdxFile_ReturnsDocumentBase64()
+    {
+        await AssertDocumentAsync("diagram.vsdx", [0x50, 0x4B, 0x03, 0x04, 4, 5, 6],
+            "visio", "application/vnd.ms-visio.drawing");
+    }
+
+    [Fact]
     public async Task GetContent_NonExistentFile_Returns404()
     {
         var id = await CreateProjectAsync("GetContentMissing");

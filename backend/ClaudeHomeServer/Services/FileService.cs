@@ -213,6 +213,13 @@ public class FileService(
         [".docx"] = ("docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
         [".xlsx"] = ("xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
         [".pptx"] = ("pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation"),
+        // Visio-диаграммы: OnlyOffice DS открывает их только на просмотр (Diagram Viewer, DS 9.0+)
+        [".vsdx"] = ("visio", "application/vnd.ms-visio.drawing"),
+        [".vsdm"] = ("visio", "application/vnd.ms-visio.drawing.macroenabled.12"),
+        [".vssx"] = ("visio", "application/vnd.ms-visio.stencil"),
+        [".vssm"] = ("visio", "application/vnd.ms-visio.stencil.macroenabled.12"),
+        [".vstx"] = ("visio", "application/vnd.ms-visio.template"),
+        [".vstm"] = ("visio", "application/vnd.ms-visio.template.macroenabled.12"),
     };
 
     // Предельный размер документа для отдачи base64; больше — только скачивание.

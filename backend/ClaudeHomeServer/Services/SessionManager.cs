@@ -47,11 +47,6 @@ public class SessionManager
         public TaskCompletionSource<TurnResult>? TurnWaiter;
         // Число сообщений истории до хода — чтобы взять реплику ответа именно этого хода
         public int TurnWaiterBaseline;
-        // Первое сообщение чата, ждущее уточнения авто-заголовка (см. RefineChatTitleAsync).
-        // Ставится вместе с обрезкой-заглушкой при отправке, потребляется по result первого
-        // хода: к этому моменту виден и запрос, и ответ — только по паре можно понять, о чём
-        // разговор («глянь вот это» само по себе смысла не несёт).
-        public string? PendingTitleMessage;
         // Сериализует ensure/dispose адаптера. Без него два конкурентных входа
         // (хаб + REST-агент/work-loop/compact) проходили бы check-then-act на Process/
         // AdapterStale и создавали два адаптера → два claude --resume на один транскрипт.
@@ -1359,9 +1354,8 @@ public class SessionManager
             {
                 entry.Info.Name = title;
                 SaveSessions();
-                // Обрезка — лишь заглушка, чтобы чат не висел безымянным. Осмысленный
-                // заголовок уточняем по КОНЦУ хода (OnMessageAsync, result), когда виден ответ
-                entry.PendingTitleMessage = text;
+                // Фоново уточняем заголовок локальной моделью (best-effort, не блокирует ход)
+                _ = RefineChatTitleAsync(sessionId, text, title);
             }
         }
 
@@ -1457,9 +1451,8 @@ public class SessionManager
             {
                 entry.Info.Name = title;
                 SaveSessions();
-                // Обрезка — лишь заглушка, чтобы чат не висел безымянным. Осмысленный
-                // заголовок уточняем по КОНЦУ хода (OnMessageAsync, result), когда виден ответ
-                entry.PendingTitleMessage = text;
+                // Фоново уточняем заголовок локальной моделью (best-effort, не блокирует ход)
+                _ = RefineChatTitleAsync(sessionId, text, title);
             }
         }
 
@@ -1623,79 +1616,23 @@ public class SessionManager
         return t;
     }
 
-    // Промпт заголовка чата. Расчёт на МЕЛКУЮ модель (локаль/бесплатный агрегатор), отсюда
-    // формат: жёсткие правила + примеры. Примеры тут работают лучше словесных инструкций —
-    // именно они удерживают модель от родового «Помощь с кодом» и от вводных фраз.
-    private static string BuildChatTitlePrompt(string firstMessage, string answer)
+    // Уточнение авто-заголовка чата локальной моделью (действие chat-title): по первому
+    // сообщению строим осмысленный короткий заголовок и заменяем обрезку. Гейт по UsesLocal —
+    // уточняем только когда действие реально идёт на бесплатную локаль (не платим claude за
+    // каждый чат). Best-effort: молчим при любой проблеме, не трогаем имя, переименованное вручную.
+    private async Task RefineChatTitleAsync(string sessionId, string firstMessage, string expectedTitle)
     {
-        static string Cut(string s, int max) =>
-            s.Length > max ? s[..max] : s;
-
-        var sb = new System.Text.StringBuilder();
-        sb.AppendLine("Придумай короткое название чата по его началу.");
-        sb.AppendLine();
-        sb.AppendLine("Правила:");
-        sb.AppendLine("- 3-6 слов на русском языке");
-        sb.AppendLine("- назови ПРЕДМЕТ разговора, а не действие: «Повторный resume роняет сессию», " +
-                      "а не «Помощь с кодом» и не «Вопрос пользователя»");
-        sb.AppendLine("- без кавычек и без точки в конце");
-        sb.AppendLine("- ответ начинается сразу с названия: без вступлений, пояснений и слова «Название»");
-        sb.AppendLine();
-        sb.AppendLine("Пример 1.");
-        sb.AppendLine("Сообщение: глянь чё за фигня");
-        sb.AppendLine("Ответ: Ошибка возникает в ClaudeSession: при повторном --resume процесс стартует дважды…");
-        sb.AppendLine("Название: Повторный resume дублирует процесс");
-        sb.AppendLine();
-        sb.AppendLine("Пример 2.");
-        sb.AppendLine("Сообщение: помоги с формой");
-        sb.AppendLine("Ответ: Для валидации email в React лучше вынести правило в отдельный хук…");
-        sb.AppendLine("Название: Валидация email в форме React");
-        sb.AppendLine();
-        sb.AppendLine("Теперь настоящий чат.");
-        sb.AppendLine("Сообщение: " + Cut(firstMessage.Trim(), 1200));
-        if (!string.IsNullOrWhiteSpace(answer))
-            sb.AppendLine("Ответ: " + Cut(answer.Trim(), 800));
-        sb.Append("Название:");
-        return sb.ToString();
-    }
-
-    // Приведение ответа модели к чистому заголовку: берём первую непустую строку и снимаем
-    // обрамление. Префиксы срезаем потому, что мелкая модель регулярно эхо-повторяет метку
-    // из промпта («Название: …») — без этого она уезжала бы прямо в имя чата.
-    private static string SanitizeChatTitle(string raw)
-    {
-        var line = raw.Split('\n', StringSplitOptions.RemoveEmptyEntries)
-            .Select(l => l.Trim())
-            .FirstOrDefault(l => l.Length > 0) ?? "";
-
-        foreach (var prefix in (string[])["Название:", "Заголовок:", "Title:"])
-            if (line.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-            {
-                line = line[prefix.Length..].Trim();
-                break;
-            }
-
-        return line.Trim('"', '«', '»', '#', '*', '.', ' ').Trim();
-    }
-
-    // Уточнение авто-заголовка чата локальной моделью (действие chat-title): по паре
-    // «первое сообщение + ответ» строим осмысленный короткий заголовок и заменяем обрезку.
-    // Ответ обязателен по сути: первые сообщения сплошь дейктичные («глянь вот это»,
-    // «продолжаем»), предмет разговора виден только из ответа. Идём ТОЛЬКО бесплатным
-    // маршрутом (RunFreeAsync): заголовок нужен каждому чату, и платить за него claude —
-    // не тот размен; нет бесплатного исполнителя → остаётся обрезка MakeChatTitle.
-    // Best-effort: молчим при любой проблеме, не трогаем имя, переименованное вручную.
-    private async Task RefineChatTitleAsync(string sessionId, string firstMessage, string expectedTitle,
-        string answer)
-    {
-        if (_cheap is null) return;
+        if (_cheap is null || !_cheap.UsesLocal(Llm.LocalActionCatalog.ChatTitle)) return;
         try
         {
-            var prompt = BuildChatTitlePrompt(firstMessage, answer);
-            var raw = await _cheap.RunFreeAsync(Llm.LocalActionCatalog.ChatTitle, prompt);
-            if (raw is null) return;
-            var line = SanitizeChatTitle(raw);
-            if (line.Length is 0 or > 80) return;
+            var prompt =
+                "Придумай короткий заголовок (3-6 слов, по-русски, без кавычек и точки в конце) для чата " +
+                "по первому сообщению пользователя. " + Llm.TitleExtraction.JsonHint + "\n\n" +
+                (firstMessage.Length > 1500 ? firstMessage[..1500] : firstMessage);
+            var raw = await _cheap.RunAsync(Llm.LocalActionCatalog.ChatTitle, prompt,
+                jsonFormat: Llm.TitleExtraction.Schema);
+            var line = Llm.TitleExtraction.Extract(raw);
+            if (line is null || line.Length > 80) return;
 
             if (!_sessions.TryGetValue(sessionId, out var entry)) return;
             // Пользователь мог переименовать вручную, пока модель думала — тогда не трогаем
@@ -1724,11 +1661,11 @@ public class SessionManager
 
         var prompt =
             "Ниже — переписка чата. Придумай короткое название (3-6 слов, по-русски, без кавычек и точки в конце), " +
-            "отражающее суть текущего разговора. Ответь ТОЛЬКО названием одной строкой.\n\n" + transcript;
+            "отражающее суть текущего разговора. " + Llm.TitleExtraction.JsonHint + "\n\n" + transcript;
         var raw = await _cheap.RunAsync(Llm.LocalActionCatalog.ChatRetitle, prompt,
-            _config["Notes:AiModel"] ?? "haiku", ct: ct);
-        var line = SanitizeChatTitle(raw);
-        if (line.Length is 0 or > 80)
+            _config["Notes:AiModel"] ?? "haiku", jsonFormat: Llm.TitleExtraction.Schema, ct: ct);
+        var line = Llm.TitleExtraction.Extract(raw);
+        if (line is null || line.Length > 80)
             throw new InvalidOperationException("Модель вернула пустое название");
 
         if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
@@ -2249,19 +2186,6 @@ public class SessionManager
                             Console.Error.WriteLine($"[SessionManager] Цикл «до готово» ({sessionId}): {ex.Message}");
                         }
                     });
-            }
-
-            // Уточнение авто-заголовка чата — по result ПЕРВОГО хода: только здесь видна пара
-            // «запрос + ответ», а по одному первому сообщению осмысленное имя не построить
-            // («глянь вот это», «продолжаем»). Interlocked — потребляем ровно один раз, дальше
-            // ходы заголовок не трогают. Фоном: сеть модели не должна держать read-loop адаптера.
-            if (msg is ResultMessage
-                && Interlocked.Exchange(ref entry.PendingTitleMessage, null) is { } titleSource)
-            {
-                var answer = LastAssistantText(acc, 0);
-                var expected = entry.Info.Name ?? "";
-                FireAndForget(RefineChatTitleAsync(sessionId, titleSource, expected, answer),
-                    $"Уточнение заголовка чата ({sessionId})");
             }
         }
 

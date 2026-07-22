@@ -79,12 +79,11 @@ public class NotesAiService(NotesService notes, IConfiguration config, Llm.IChea
             ?? throw new KeyNotFoundException("Заметка не найдена");
         var prompt =
             "Придумай короткий заголовок (3-6 слов, по-русски, без кавычек и точки в конце) " +
-            "для заметки по её содержимому. Ответь ТОЛЬКО заголовком, одной строкой.\n\n" +
+            "для заметки по её содержимому. " + Llm.TitleExtraction.JsonHint + "\n\n" +
             Truncate(note.Content, 2000);
-        var raw = await RunAsync(Llm.LocalActionCatalog.NoteTitle, prompt, ct);
-        // Берём первую непустую строку, снимаем обрамление/маркеры
-        var line = raw.Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim() ?? "";
-        line = line.Trim('"', '«', '»', '#', '*', ' ').Trim();
+        var raw = await RunAsync(Llm.LocalActionCatalog.NoteTitle, prompt, ct, Llm.TitleExtraction.Schema);
+        // Заголовок из строгого JSON (или первой строки — фолбэк), снимаем обрамление/маркеры
+        var line = Llm.TitleExtraction.Extract(raw) ?? "";
         if (line.Length > 80) line = line[..80].TrimEnd() + "…";
         return line;
     }
@@ -220,8 +219,8 @@ public class NotesAiService(NotesService notes, IConfiguration config, Llm.IChea
         return block + (content.Length > 0 ? "\n" + content : "");
     }
 
-    private Task<string> RunAsync(string actionKey, string prompt, CancellationToken ct) =>
-        cheap.RunAsync(actionKey, prompt, config["Notes:AiModel"] ?? "haiku", ct: ct);
+    private Task<string> RunAsync(string actionKey, string prompt, CancellationToken ct, object? jsonFormat = null) =>
+        cheap.RunAsync(actionKey, prompt, config["Notes:AiModel"] ?? "haiku", jsonFormat: jsonFormat, ct: ct);
 
     private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max] + "\n…";
 

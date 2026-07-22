@@ -23,7 +23,7 @@ public class LocalActionsAdminController(
     // route: "local" | "claude" | id модели любого настроенного провайдера
     public record RouteRequest(string Route);
 
-    // preset: "recommended" | "free" | "local"
+    // preset: "recommended" | "free" | "local" | "balanced"
     public record PresetRequest(string Preset);
 
     // Массово подобрать исполнителя всем действиям по пресету. Возвращает применённый пресет и
@@ -36,6 +36,7 @@ public class LocalActionsAdminController(
             "recommended" => ActionPreset.Recommended,
             "free" => ActionPreset.FreeOnly,
             "local" => ActionPreset.LocalFirst,
+            "balanced" => ActionPreset.Balanced,
             _ => (ActionPreset?)null,
         };
         if (preset is null)

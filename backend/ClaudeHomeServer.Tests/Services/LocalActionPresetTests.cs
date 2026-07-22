@@ -117,6 +117,51 @@ public class LocalActionPresetTests
     }
 
     [Fact]
+    public async Task Balanced_RoutesBySophistication()
+    {
+        var (service, store) = Build(WithFreeModel(new()
+        {
+            ["Ollama:Model"] = "qwen3:4b",
+            ["Ollama:BaseUrl"] = "http://localhost:11434",
+        }));
+        await service.ApplyAsync(ActionPreset.Balanced);
+
+        var direct = CloudCheapClient.RoutePrefix + "nvidia/nemotron:free";
+        // Small + лёгкое (теги) → локальная модель
+        Assert.Equal(LocalActionOverridesStore.LocalRoute, store.TryGet(LocalActionCatalog.NotesTags));
+        // Text + лёгкое (связи) → бесплатная облачная
+        Assert.Equal(direct, store.TryGet(LocalActionCatalog.NotesLinks));
+        // Large + лёгкое (конспект дня) → тир Claude (large = sonnet)
+        Assert.Equal("sonnet", store.TryGet(LocalActionCatalog.NotesDailySummary));
+        // Сильное (DefaultLocal=false, changelog) → тир Claude, никакой локали/бесплатной
+        Assert.Equal("sonnet", store.TryGet(LocalActionCatalog.Changelog));
+    }
+
+    [Fact]
+    public async Task Balanced_OllamaOff_SmallGetsClaudeTier()
+    {
+        // Без локали Small честно уходит на дешёвый Claude (haiku), а не local
+        var (service, store) = Build(WithFreeModel(new() { ["Ollama:Model"] = "" }));
+        await service.ApplyAsync(ActionPreset.Balanced);
+        Assert.Equal("haiku", store.TryGet(LocalActionCatalog.NotesTags));
+    }
+
+    [Fact]
+    public async Task Balanced_NoFree_TextGetsClaudeTier()
+    {
+        // Бесплатная облачная не настроена → Text падает на тир Claude (text = sonnet),
+        // а Small всё равно остаётся на локали
+        var (service, store) = Build(new()
+        {
+            ["Ollama:Model"] = "qwen3:4b",
+            ["Ollama:BaseUrl"] = "http://localhost:11434",
+        });
+        await service.ApplyAsync(ActionPreset.Balanced);
+        Assert.Equal(LocalActionOverridesStore.LocalRoute, store.TryGet(LocalActionCatalog.NotesTags));
+        Assert.Equal("sonnet", store.TryGet(LocalActionCatalog.NotesLinks));
+    }
+
+    [Fact]
     public async Task FreeUnavailable_WhenAggregatorNotConfigured()
     {
         var (service, _) = Build(new() { ["Ollama:Model"] = "qwen3:14b" });

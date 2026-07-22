@@ -13,11 +13,21 @@ namespace ClaudeHomeServer.Services.Llm;
 //   FreeOnly            │ бесплатная облачная (direct:)    │ бесплатная облачная (direct:)
 //   ────────────────────┼─────────────────────────────────┼──────────────────────────────────
 //   LocalFirst          │ local                            │ бесплатная облачная (direct:)
+//   ────────────────────┼─────────────────────────────────┼──────────────────────────────────
+//   Balanced            │ Small→local (нет Ollama→haiku),  │ тир Claude по Profile
+//     (по сложности)    │ Text→free (нет free→Claude),     │
+//                       │ Large→тир Claude                 │
+//
+// Balanced распределяет по РЕАЛЬНОЙ сложности (CheapProfile), а не по бинарному DefaultLocal:
+// простое (Small: теги/заголовки/классификация) тянет слабая локаль qwen, среднее (Text) — на
+// бесплатной облачной (мощнее локали, но без затрат), тяжёлое (Large: суммаризация/автолёрн/
+// конспекты) — на Claude ради качества на больших входах. «Сильные» действия (артефакты, лицо
+// продукта) всегда на Claude.
 //
 // Тир Claude по профилю — из конфига Recommended:ClaudeTiers; бесплатная модель — из каталога
 // прямых моделей OpenRouter (provider=openrouter-direct, курируемый список OpenRouter:DirectModels),
 // ранжирование — по OpenRouter:PreferredFree с фолбэком на эвристику «наибольшее окно».
-public enum ActionPreset { Recommended, FreeOnly, LocalFirst }
+public enum ActionPreset { Recommended, FreeOnly, LocalFirst, Balanced }
 
 public sealed class LocalActionPresetService(
     LocalActionOverridesStore store, LocalActionRouter router, OllamaClient ollama,
@@ -55,7 +65,7 @@ public sealed class LocalActionPresetService(
     {
         // Бесплатная облачная модель под каждый профиль — считаем один раз (список общий).
         var freeByProfile = new Dictionary<CheapProfile, string?>();
-        if (preset is ActionPreset.FreeOnly or ActionPreset.LocalFirst)
+        if (preset is ActionPreset.FreeOnly or ActionPreset.LocalFirst or ActionPreset.Balanced)
         {
             var direct = await DirectModelsAsync(ct);
             foreach (var p in Enum.GetValues<CheapProfile>())
@@ -75,6 +85,20 @@ public sealed class LocalActionPresetService(
                 ActionPreset.LocalFirst => a.DefaultLocal
                     ? LocalActionOverridesStore.LocalRoute
                     : freeByProfile[a.Profile] ?? TierFor(a.Profile),
+                // Balanced — по реальной сложности профиля. «Сильные» (артефакты) всегда на Claude.
+                ActionPreset.Balanced => !a.DefaultLocal
+                    ? TierFor(a.Profile)
+                    : a.Profile switch
+                    {
+                        // Простое тянет слабая локаль; без Ollama честно уходит на дешёвый Claude.
+                        CheapProfile.Small => ollama.Enabled
+                            ? LocalActionOverridesStore.LocalRoute
+                            : TierFor(CheapProfile.Small),
+                        // Среднее — на бесплатную облачную (мощнее локали); нет free — на Claude.
+                        CheapProfile.Text => freeByProfile[CheapProfile.Text] ?? TierFor(CheapProfile.Text),
+                        // Тяжёлое — на Claude ради качества на больших входах.
+                        _ => TierFor(a.Profile),
+                    },
                 _ => LocalActionOverridesStore.ClaudeRoute,
             };
             routes[a.Key] = route;

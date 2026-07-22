@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ChevronDown, RotateCcw, Sparkles, Gift, Cpu, Zap } from 'lucide-react';
+import { ChevronDown, RotateCcw, Sparkles, Gift, Cpu, Zap, Scale } from 'lucide-react';
 import { Modal, IconButton } from './ui';
 import { ModelPicker } from './ModelPicker';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
@@ -28,10 +28,12 @@ const groupHeaderStyle: React.CSSProperties = {
 };
 
 // Пресеты автоподбора: сервер проставляет исполнителя всем действиям по единому правилу.
-type PresetKey = 'recommended' | 'free' | 'local';
+type PresetKey = 'recommended' | 'balanced' | 'free' | 'local';
 const PRESETS: { key: PresetKey; icon: typeof Sparkles; title: string; desc: string }[] = [
   { key: 'recommended', icon: Sparkles, title: 'Рекомендованное',
     desc: 'Лучшее качество: локаль и Claude под сложность задачи (могут быть платные)' },
+  { key: 'balanced', icon: Scale, title: 'Сбалансированный',
+    desc: 'По сложности: простое — на локальной модели, среднее — бесплатные облачные, тяжёлое — Claude' },
   { key: 'free', icon: Gift, title: 'Только бесплатные',
     desc: 'Бесплатные облачные модели OpenRouter — без затрат' },
   { key: 'local', icon: Cpu, title: 'Локальные',

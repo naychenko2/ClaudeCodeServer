@@ -14,7 +14,13 @@ function ctx(partial: Partial<AiActionCtx> & { nav: AiActionCtx['nav'] }): AiAct
 describe('rankedActions — доступность и ранжирование', () => {
   it('на «Чатах» без открытого чата видны глобальные действия', () => {
     const r = rankedActions(ctx({ nav: { screen: 'chats' } }));
-    expect(r.map(x => x.action.id)).toEqual(['global.briefing', 'global.search', 'global.whatsnew']);
+    // Все действия секции «Глобально» с when=online доступны вне домашнего экрана
+    // (home.overview/home.resume контекстны только на Home, но видны везде). Порядок —
+    // каталожный: контекстных на «Чатах» нет, поэтому все идут в порядке AI_ACTIONS.
+    expect(r.map(x => x.action.id)).toEqual([
+      'global.briefing', 'global.search', 'global.whatsnew',
+      'home.overview', 'home.resume', 'global.capture',
+    ]);
   });
 
   it('в открытой заметке действия заметки идут первыми (контекстные)', () => {

@@ -1,16 +1,17 @@
 import type { Persona, Project } from '../../types';
-import { Plus } from 'lucide-react';
+import { Plus, Users } from 'lucide-react';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { C, FONT, R } from '../../lib/design';
 import { personaTitleLines } from '../../lib/personas';
 import { PillSwitch } from '../../components/Toolbar';
+import { Button } from '../../components/ui';
 import { PersonaAvatar } from './PersonaAvatar';
 
 // Что показывать в разделе: только глобальных или вообще всех (с проектными)
 export type PersonaListMode = 'global' | 'all';
 
 // Сайдбар раздела «Персоны»: кнопка создания сверху, ниже — список персон.
-export function PersonaList({ personas, selectedId, onSelect, onNew, mode, onModeChange, projects }: {
+export function PersonaList({ personas, selectedId, onSelect, onNew, mode, onModeChange, projects, dashedNewButton, teamCenter }: {
   personas: Persona[];
   selectedId: string | null;
   onSelect: (id: string) => void;
@@ -20,13 +21,26 @@ export function PersonaList({ personas, selectedId, onSelect, onNew, mode, onMod
   mode?: PersonaListMode;
   onModeChange?: (m: PersonaListMode) => void;
   projects?: Project[];
+  // Пунктирная кнопка создания «как Новый чат» — включается в панели «Команда» проекта
+  // (единый вид с сайдбаром чатов). Хаб «Персоны» оставляет прежнюю залитую кнопку.
+  dashedNewButton?: boolean;
+  // «Командный центр» — первый пункт списка (только панель «Команда»): та же строка-строка,
+  // что и персоны, но с иконкой команды. active — открыт ли центр (персона не выбрана).
+  teamCenter?: { active: boolean; onClick: () => void };
 }) {
   return (
     <>
       <div style={{ padding: '10px 10px 9px', borderBottom: `1px solid ${C.border}`, flex: 'none', display: 'flex', flexDirection: 'column', gap: 8 }}>
-        <button onClick={onNew} style={newBtn}>
-          <Plus size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />Новая персона
-        </button>
+        {dashedNewButton ? (
+          <Button variant="dashed" size="md" fullWidth onClick={onNew}
+            leftIcon={<Plus size={15} strokeWidth={2.2} />}>
+            Новая персона
+          </Button>
+        ) : (
+          <button onClick={onNew} style={newBtn}>
+            <Plus size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />Новая персона
+          </button>
+        )}
         {onModeChange && (
           <PillSwitch<PersonaListMode>
             value={mode ?? 'global'} onChange={onModeChange} fill
@@ -35,6 +49,44 @@ export function PersonaList({ personas, selectedId, onSelect, onNew, mode, onMod
         )}
       </div>
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 6 }}>
+        {teamCenter && (
+          <>
+            <button
+              onClick={teamCenter.onClick}
+              onMouseEnter={e => { if (!teamCenter.active) (e.currentTarget as HTMLElement).style.background = C.accentLight; }}
+              onMouseLeave={e => { if (!teamCenter.active) (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+              style={{
+                width: '100%', display: 'flex', alignItems: 'center', gap: 10,
+                padding: '8px 10px', borderRadius: R.md, border: 'none', cursor: 'pointer',
+                textAlign: 'left', background: teamCenter.active ? C.accentMuted : 'transparent',
+              }}
+            >
+              {/* Иконка команды в кружке 32 — на месте аватара персоны, тот же ритм строки */}
+              <span style={{
+                width: 32, height: 32, borderRadius: '50%', background: `${C.accent}1F`,
+                display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+              }}>
+                <Users size={17} color={C.accent} strokeWidth={2} />
+              </span>
+              <span style={{ flex: 1, minWidth: 0 }}>
+                <span style={{
+                  display: 'block', fontSize: 13, fontWeight: 600, color: C.textHeading,
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                }}>
+                  Командный центр
+                </span>
+                <span style={{
+                  display: 'block', fontSize: 11.5, color: C.textMuted, marginTop: 1,
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                }}>
+                  Обзор · память · активность
+                </span>
+              </span>
+            </button>
+            {/* Тонкий разделитель: «домой раздела» отделён от списка персон */}
+            <div style={{ height: 1, background: C.border, margin: '6px 4px' }} />
+          </>
+        )}
         {personas.length === 0 ? (
           <div style={{ padding: '20px 12px', color: C.textMuted, fontSize: 13, fontFamily: FONT.sans, lineHeight: 1.5 }}>
             Пока нет персон. Создай первую — задай ей имя, характер и аватар.

@@ -36,6 +36,9 @@ import { ToolsSidebar } from '../components/tools/ToolsSidebar';
 import { TerminalView } from '../components/terminal/TerminalView';
 import { PreviewView } from '../components/preview/PreviewView';
 import * as terminalApi from '../lib/terminalSignalr';
+import { useFeature, FLAGS } from '../lib/featureFlags';
+import { DesktopWorkspace } from './workspace/DesktopWorkspace';
+import { TerminalPanelContent, PreviewPanelContent } from './workspace/panels';
 
 interface Props {
   project: Project;
@@ -261,6 +264,10 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
   }, [project.id]);
   const [editProjectOpen, setEditProjectOpen] = useState(false);
   const [projectForEdit, setProjectForEdit] = useState(project);
+  // Флаг нового интерфейса (workspace-cc-panels) объявлен ДО эффекта терминалов:
+  // в новом режиме вкладки «Инструменты» нет, но панелька терминала должна получать
+  // список всегда. Режим (ccPanelsMode) считается ниже — ему нужна ширина окна.
+  const ccPanels = useFeature(FLAGS.workspaceCcPanels);
   type ToolsTab = 'terminal' | 'preview';
   const [toolsTab, setToolsTab] = useState<ToolsTab>('terminal');
   const [activeTerminalId, setActiveTerminalId] = useState<string | null>(null);
@@ -276,9 +283,10 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
     try { setTerminals(await terminalApi.listTerminals(project.id)); } catch { /* офлайн */ }
   }, [project.id]);
 
-  // Пока открыта вкладка «Инструменты» — держим список и слушаем статусы/переименования
+  // Пока открыта вкладка «Инструменты» (или включён новый режим панелей, где
+  // панелька терминала доступна всегда) — держим список и слушаем статусы
   useEffect(() => {
-    if (leftTab !== 'tools') return;
+    if (leftTab !== 'tools' && !ccPanels) return;
     void refreshTerminals();
     return terminalApi.onTerminalMessage(msg => {
       if (msg.type === 'terminal_status') void refreshTerminals();
@@ -373,6 +381,9 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
   const personasMode = leftTab === 'personas';
   const [selectedPersonaId, setSelectedPersonaId] = useState<string | null>(null);
   const [personaCreating, setPersonaCreating] = useState(false);
+  // Командный центр в центре нового режима (workspace-cc-panels): открывается
+  // кнопкой «Команда» в панельке персон; в старом режиме не используется
+  const [teamCenterOpen, setTeamCenterOpen] = useState(false);
   // Вкладка студии персоны, на которую нужно сразу открыться (бэйдж автоматизации в чате) —
   // одноразовая, сбрасывается любым обычным выбором персоны
   const [pendingPersonaView, setPendingPersonaView] = useState<PersonaView | null>(null);
@@ -459,6 +470,11 @@ const windowWidth = useWindowWidth();
   const viewportH = useViewportHeight();
   const isMobile = windowWidth <= MOBILE_MAX;
   const isTablet = windowWidth > MOBILE_MAX && windowWidth <= TABLET_MAX;
+  // Новый интерфейс «как десктопный Claude Code» — десктоп и планшет (на планшете —
+  // упрощённый solo-вариант внутри DesktopWorkspace); мобилка остаётся на старом UX
+  const ccPanelsMode = ccPanels && !isMobile;
+  // Выбранный в панельке «Preview» сервис — его окно живёт в центре нового режима
+  const ccActivePreview = previewServices.find(s => s.id === activePreviewId) ?? null;
 
   // Задачи (за фич-флагом): вкладка «Задачи» в сайдбаре + карточка задачи в центре.
   // Открытая задача ведёт себя как открытый файл: переключение вкладок сайдбара
@@ -1327,6 +1343,71 @@ const windowWidth = useWindowWidth();
       {/* Тело: сайдбар + контент. position:relative — чтобы drawer/overlay легли под хедер */}
       <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden', position: 'relative' }}>
 
+      {/* Флаг workspace-cc-panels: альтернативное тело «как десктопный Claude Code»
+          (слева только чаты, справа рельса + стек панелей); выключен → всё как раньше */}
+      {ccPanelsMode ? (
+        <DesktopWorkspace
+          isTablet={isTablet}
+          project={project}
+          projectForEdit={projectForEdit}
+          onGoToProjects={onGoToProjects}
+          onOpenUsage={() => setShowUsage(true)}
+          onOpenProjectSettings={() => setEditProjectOpen(true)}
+          sidebarMode={sidebarMode}
+          setSidebarMode={setSidebarMode}
+          activeSession={activeSession}
+          onSelectSession={handleSelectSession}
+          onSessionUpdated={handleSessionUpdated}
+          workflowRunningFor={workflowRunningFor ?? undefined}
+          pendingMessage={pendingMessage}
+          onPendingMessageSent={() => setPendingMessage(undefined)}
+          onWorkflowRunning={handleWorkflowRunning}
+          skills={composerSkills}
+          agents={skillsData?.agents}
+          attachedFiles={attachedFiles}
+          onAttachedFilesChange={setAttachedFiles}
+          onResume={handleResume}
+          openFile={openFile}
+          openFileDiffMode={openFileDiffMode}
+          gitStagePath={gitStagePath}
+          fileFullscreen={fileFullscreen}
+          onEnterFullscreen={handleEnterFullscreen}
+          openCommitSha={openCommitSha}
+          onCloseCommit={closeCommitView}
+          onOpenFileFromChat={handleOpenFileFromChat}
+          onCloseFile={backFromFile}
+          selectedTask={selectedTask}
+          autoEditTaskId={autoEditTaskId}
+          onOpenTaskSession={handleOpenTaskSession}
+          onOpenFileFromTree={handleOpenFileFromTree}
+          onCloseTask={backFromTask}
+          selectedPersonaId={selectedPersonaId}
+          personaCreating={personaCreating}
+          onOpenPersonaChat={handleOpenPersonaChat}
+          onPersonaSelectAfterCreate={handlePersonaSelectAfterCreate}
+          onPersonaCleared={handlePersonaCleared}
+          teamCenterOpen={teamCenterOpen}
+          onCloseTeamCenter={() => setTeamCenterOpen(false)}
+          teamCenterArea={<TeamCommandCenter project={project} onOpenPersona={handlePersonaSelect} onNewPersona={handlePersonaNew} onOpenSession={handleOpenPersonaChat} onOpenSessionById={handleOpenTaskSession} />}
+          boardOpen={projectBoard}
+          boardArea={ProjectBoardArea}
+          previewOpen={!!ccActivePreview}
+          previewArea={ccActivePreview ? <PreviewView service={ccActivePreview} projectId={project.id} onStop={stopService} /> : null}
+          onClosePreview={() => setActivePreviewId(null)}
+          toolsEnabled={!!project.toolsEnabled}
+          panels={{
+            files: fileSubTab === 'files'
+              ? <FileExplorer project={project} activeFilePath={openFile} isMobile={false} onOpenFile={handleOpenFileFromTree} onOpenGitDiff={handleOpenGitDiff} onOpenCommit={handleOpenCommit} onAddToKnowledge={handleAddToKnowledge} onAddFolderToKnowledge={handleAddFolderToKnowledge} onRemoveFromKnowledge={handleRemoveFromKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} indexingFolders={indexingFolders} onAttachToChat={activeSession && !fileFullscreen ? handleAttachToChat : undefined} onOpenKnowledge={() => setFileSubTab('knowledge')} />
+              : <KnowledgePanel project={project} isMobile={false} onDocumentsChanged={setIndexedFileNames} onBack={() => setFileSubTab('files')} />,
+            tasks: <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={false} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} />,
+            team: <ProjectPersonasPanel project={project} selectedId={personaCreating ? null : selectedPersonaId} onSelect={handlePersonaSelect} onNew={handlePersonaNew} onShowTeam={() => { handlePersonaCleared(); setTeamCenterOpen(true); }} teamActive={teamCenterOpen && !selectedPersonaId && !personaCreating} />,
+            terminal: <TerminalPanelContent terminals={terminals} activeTerminalId={activeTerminalId} onSelect={handleSelectTerminal} onCreate={handleCreateTerminal} onStop={handleStopTerminal} onActivity={setTerminalBusy} />,
+            preview: <PreviewPanelContent projectId={project.id} services={previewServices} activePreviewId={activePreviewId} onSelect={setActivePreviewId} onStart={startService} onStop={stopService} onRefresh={refreshServices} />,
+          }}
+        />
+      ) : (
+        <>
+
       {/* === Pinned: sidebar в flex-потоке, толкает контент === */}
       {sidebarMode === 'pinned' && (
         <>
@@ -1504,6 +1585,9 @@ const windowWidth = useWindowWidth();
             <ArtifactsPanel sessionId={activeSession.id} projectId={project.id} rootPath={project.rootPath} personaId={activeSession.personaId} session={activeSession}
               onOpenFile={(f) => { handleOpenFileFromChat(f); setArtifactsOpen(false); }} onClose={() => setArtifactsOpen(false)} />
           </div>
+        </>
+      )}
+
         </>
       )}
 

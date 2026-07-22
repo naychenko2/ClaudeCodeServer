@@ -1,0 +1,340 @@
+// Тело нового интерфейса проекта «как десктопный Claude Code» (флаг workspace-cc-panels,
+// только десктоп ≥1200): слева — панель ТОЛЬКО с чатами проекта, в центре — чат
+// (или файл/задача/персона/доска/коммит), справа — рельса рабочих инструментов
+// со стеком панелей (RightPanelStack): План, Файлы, Задачи, Команда, Терминал, Preview.
+// WorkspacePage остаётся владельцем состояния и обработчиков — сюда всё приходит
+// пропсами (контент панелек тоже собирается там); HubHeader и диалоги тоже там.
+import { useState, useRef, type ReactNode, type PointerEvent as ReactPointerEvent } from 'react';
+import type { Project, Session, Task, SkillInfo, AgentInfo } from '../../types';
+import { C } from '../../lib/design';
+import { useSidebarWidth, SIDEBAR_MIN, SIDEBAR_MAX } from '../../lib/sidebarWidth';
+import { IconButton } from '../../components/ui';
+import { Splitter } from '../../components/ui/Splitter';
+import { SessionList } from '../../components/SessionList';
+import { ChatPanel } from '../../components/ChatPanel';
+import { FileViewer } from '../../components/FileViewer';
+import { GitCommitView } from '../../components/GitCommitView';
+import { TaskDetailsPane } from '../../features/tasks/TaskDetailsPane';
+import { ProjectPersonaPane } from '../../features/personas/ProjectPersonasPanel';
+import { RightPanelStack } from './RightPanelStack';
+import type { PanelKey } from './panelStackState';
+
+export type SidebarMode = 'pinned' | 'collapsed' | 'open';
+
+interface Props {
+  // Планшет (601–1199): файл всегда fullscreen, правая зона — упрощённый solo
+  isTablet?: boolean;
+  project: Project;
+  // Имя проекта в шапке сайдбара — из projectForEdit (обновляется после настроек)
+  projectForEdit: Project;
+  onGoToProjects: () => void;
+  onOpenUsage: () => void;
+  onOpenProjectSettings: () => void;
+  // Сайдбар: общий стейт WorkspacePage (persist cc_sidebar_mode)
+  sidebarMode: SidebarMode;
+  setSidebarMode: (m: SidebarMode) => void;
+  // Сессии
+  activeSession: Session | null;
+  onSelectSession: (s: Session, firstMessage?: string, autoSelect?: boolean) => void;
+  onSessionUpdated: (s: Session) => void;
+  workflowRunningFor?: string;
+  // Бандл ChatPanel
+  pendingMessage?: string;
+  onPendingMessageSent: () => void;
+  onWorkflowRunning: (active: boolean, sessionId: string) => void;
+  skills?: SkillInfo[];
+  agents?: AgentInfo[];
+  attachedFiles: string[];
+  onAttachedFilesChange: (files: string[]) => void;
+  onResume: (message?: string) => void;
+  // Центр: файл/коммит/задача, открытые из чата или диплинка
+  openFile: string | null;
+  openFileDiffMode: boolean;
+  gitStagePath?: string | null;
+  fileFullscreen: boolean;
+  onEnterFullscreen: () => void;
+  openCommitSha: string | null;
+  onCloseCommit: () => void;
+  onOpenFileFromChat: (path: string) => void;
+  onCloseFile: () => void;
+  selectedTask: Task | null;
+  autoEditTaskId: string | null;
+  onOpenTaskSession: (sessionId: string) => void;
+  onOpenFileFromTree: (path: string) => void;
+  onCloseTask: () => void;
+  // Персона из панельки «Команда» — студия в центре (приоритет ниже задачи, выше доски)
+  selectedPersonaId: string | null;
+  personaCreating: boolean;
+  onOpenPersonaChat: (session: Session) => void;
+  onPersonaSelectAfterCreate: (id: string) => void;
+  onPersonaCleared: () => void;
+  // Командный центр (кнопка «Команда» в панельке персон) — в центре, ниже персоны
+  teamCenterOpen: boolean;
+  onCloseTeamCenter: () => void;
+  teamCenterArea: ReactNode;
+  // Доска задач: включается вкладкой «Доска» в панельке задач, рендерится в центре
+  boardOpen: boolean;
+  boardArea: ReactNode;
+  // Превью dev-сервиса: выбирается в панельке «Preview», окно живёт в центре
+  previewOpen: boolean;
+  previewArea: ReactNode;
+  onClosePreview: () => void;
+  // Правая рельса: доступность инструментов + готовый контент панелек
+  toolsEnabled: boolean;
+  panels: Partial<Record<Exclude<PanelKey, 'plan'>, ReactNode>>;
+}
+
+export function DesktopWorkspace(p: Props) {
+  const [sidebarWidth, setSidebarWidth] = useSidebarWidth();
+  // Подсветка активного сплиттера: сайдбар или split чат|файл
+  const [dragging, setDragging] = useState<'sidebar' | 'split' | null>(null);
+
+  // Пропорция чат/файл в split-режиме (как chatFlex в старой ветке; не персистится)
+  const [chatFlex, setChatFlex] = useState(1);
+  const splitContainerRef = useRef<HTMLDivElement>(null);
+
+  const handleSidebarDrag = (e: ReactPointerEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = sidebarWidth;
+    const onMove = (ev: PointerEvent) => {
+      setSidebarWidth(Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, startW + (ev.clientX - startX))));
+    };
+    const onUp = () => {
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      setDragging(null);
+    };
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
+    setDragging('sidebar');
+  };
+
+  // Split чат|файл: пересчёт пропорции из пиксельных ширин (копия handleSplitterMouseDown)
+  const handleSplitDrag = (e: ReactPointerEvent) => {
+    e.preventDefault();
+    const container = splitContainerRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    const onMove = (ev: PointerEvent) => {
+      const chatW = Math.max(200, Math.min(rect.width - 200, ev.clientX - rect.left));
+      const fileW = rect.width - chatW;
+      setChatFlex(chatW / fileW);
+    };
+    const onUp = () => {
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      setDragging(null);
+    };
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
+    setDragging('split');
+  };
+
+  const openSidebar = p.sidebarMode !== 'pinned' ? () => p.setSidebarMode('open') : undefined;
+
+  // Явный выбор чата в списке закрывает открытые в центре студию персоны,
+  // командный центр и превью сервиса
+  const handleSelectSession = (s: Session, firstMessage?: string, autoSelect?: boolean) => {
+    if (!autoSelect) {
+      if (p.selectedPersonaId || p.personaCreating) p.onPersonaCleared();
+      if (p.teamCenterOpen) p.onCloseTeamCenter();
+      if (p.previewOpen) p.onClosePreview();
+    }
+    p.onSelectSession(s, firstMessage, autoSelect);
+  };
+
+  const personaOpen = !!p.selectedPersonaId || p.personaCreating;
+
+  // Панель чатов: шапка проекта (без вкладок) + SessionList
+  const sidebar = (
+    <div style={{ width: '100%', display: 'flex', flexDirection: 'column', background: C.bgPanel, flexShrink: 0, height: '100%' }}>
+      <div style={{ padding: '16px 16px 6px', flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0 2px' }}>
+          <IconButton
+            size="sm"
+            onClick={() => p.setSidebarMode('collapsed')}
+            title="Свернуть панель"
+            style={{ marginLeft: -2 }}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M15 6l-6 6 6 6"/>
+            </svg>
+          </IconButton>
+          <div
+            onClick={p.onGoToProjects}
+            title="Все проекты"
+            onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+            style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0, cursor: 'pointer', borderRadius: 7, padding: '4px 6px', transition: 'background 0.12s' }}
+          >
+            <div style={{ width: 8, height: 8, borderRadius: '50%', background: C.accent, flexShrink: 0 }} />
+            <span style={{ fontSize: 13, fontWeight: 500, color: C.textPrimary, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {p.projectForEdit.name}
+            </span>
+          </div>
+          {p.sidebarMode === 'open' && (
+            <IconButton size="sm" onClick={() => p.setSidebarMode('pinned')} title="Закрепить панель">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/>
+              </svg>
+            </IconButton>
+          )}
+          <IconButton size="sm" onClick={p.onOpenUsage} title="Использование (модели + fal.ai)">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+            </svg>
+          </IconButton>
+          <IconButton size="sm" onClick={p.onOpenProjectSettings} title="Настройки проекта">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+            </svg>
+          </IconButton>
+        </div>
+      </div>
+      <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+        <SessionList project={p.project} activeSession={p.activeSession} onSelect={handleSelectSession} onSessionUpdated={p.onSessionUpdated} isMobile={false} workflowRunningFor={p.workflowRunningFor} />
+      </div>
+    </div>
+  );
+
+  const chatPanel = p.activeSession ? (
+    <ChatPanel
+      session={p.activeSession} project={p.project} onOpenFile={p.onOpenFileFromChat}
+      pendingMessage={p.pendingMessage} onPendingMessageSent={p.onPendingMessageSent}
+      onSessionUpdated={p.onSessionUpdated} isMobile={false} onWorkflowRunning={p.onWorkflowRunning}
+      onOpenSidebar={openSidebar} skills={p.skills} agents={p.agents}
+      attachedFiles={p.attachedFiles} onAttachedFilesChange={p.onAttachedFilesChange} onResume={p.onResume}
+    />
+  ) : (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      {p.sidebarMode === 'collapsed' && (
+        <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', padding: '0 8px', height: 52, borderBottom: `1px solid ${C.divider}`, background: C.bgMain }}>
+          <IconButton size="md" variant="soft" onClick={() => p.setSidebarMode('open')} title="Открыть панель">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+              <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
+            </svg>
+          </IconButton>
+        </div>
+      )}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1, color: C.textMuted, fontSize: 14 }}>
+        Выберите или создайте чат
+      </div>
+    </div>
+  );
+
+  return (
+    <>
+      {/* === Сайдбар чатов: pinned в потоке / collapsed-open drawer === */}
+      {p.sidebarMode === 'pinned' && (
+        <>
+          <div style={{ width: sidebarWidth, flexShrink: 0, height: '100%' }}>
+            {sidebar}
+          </div>
+          <Splitter orientation="v" active={dragging === 'sidebar'} onMouseDown={handleSidebarDrag} />
+        </>
+      )}
+      {p.sidebarMode !== 'pinned' && (
+        <div style={{
+          position: 'absolute', top: 0, left: 0, bottom: 0, zIndex: 10,
+          width: 320,
+          transform: p.sidebarMode === 'open' ? 'translateX(0)' : 'translateX(-320px)',
+          transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+          boxShadow: p.sidebarMode === 'open' ? '4px 0 20px rgba(20,16,10,0.15)' : 'none',
+        }}>
+          {sidebar}
+        </div>
+      )}
+      {p.sidebarMode === 'open' && (
+        <div
+          onClick={() => p.setSidebarMode('collapsed')}
+          style={{ position: 'absolute', inset: 0, zIndex: 9, background: C.overlay }}
+        />
+      )}
+
+      {/* === Центр: коммит → задача → персона → доска → файл (split/fullscreen) → чат === */}
+      {!p.openFile && p.openCommitSha && (
+        <div style={{ flex: 1, overflow: 'hidden', display: 'flex' }}>
+          <GitCommitView project={p.project} sha={p.openCommitSha} onClose={p.onCloseCommit} />
+        </div>
+      )}
+
+      {!p.openFile && !p.openCommitSha && p.selectedTask && (
+        <div style={{ flex: 1, overflow: 'hidden' }}>
+          <TaskDetailsPane key={p.selectedTask.id} task={p.selectedTask} project={p.project} startInEdit={p.selectedTask.id === p.autoEditTaskId} onOpenSession={p.onOpenTaskSession} onOpenFile={p.onOpenFileFromTree} onClose={p.onCloseTask} onDeleted={p.onCloseTask} />
+        </div>
+      )}
+
+      {/* Студия персоны из панельки «Команда» */}
+      {!p.openFile && !p.openCommitSha && !p.selectedTask && personaOpen && (
+        <div style={{ flex: 1, overflow: 'hidden' }}>
+          <ProjectPersonaPane project={p.project} personaId={p.personaCreating ? null : p.selectedPersonaId} creating={p.personaCreating} onOpenChat={p.onOpenPersonaChat} onSelectPersona={p.onPersonaSelectAfterCreate} onCleared={p.onPersonaCleared} onBack={p.onPersonaCleared} />
+        </div>
+      )}
+
+      {/* Командный центр (кнопка «Команда» в панельке персон) */}
+      {!p.openFile && !p.openCommitSha && !p.selectedTask && !personaOpen && p.teamCenterOpen && (
+        <div style={{ flex: 1, overflow: 'hidden' }}>
+          {p.teamCenterArea}
+        </div>
+      )}
+
+      {/* Доска задач (вкладка «Доска» в панельке задач) */}
+      {!p.openFile && !p.openCommitSha && !p.selectedTask && !personaOpen && !p.teamCenterOpen && p.boardOpen && (
+        <div style={{ flex: 1, overflow: 'hidden' }}>
+          {p.boardArea}
+        </div>
+      )}
+
+      {/* Превью dev-сервиса (выбран в панельке «Preview») */}
+      {!p.openFile && !p.openCommitSha && !p.selectedTask && !personaOpen && !p.teamCenterOpen && !p.boardOpen && p.previewOpen && (
+        <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+          {p.previewArea}
+        </div>
+      )}
+
+      {!p.openFile && !p.openCommitSha && !p.selectedTask && !personaOpen && !p.teamCenterOpen && !p.boardOpen && !p.previewOpen && (
+        <div style={{ flex: 1, overflow: 'hidden' }}>
+          {chatPanel}
+        </div>
+      )}
+
+      {p.openFile && !p.fileFullscreen && !p.isTablet && (
+        <div ref={splitContainerRef} style={{ flex: 1, display: 'flex', overflow: 'hidden', minWidth: 0 }}>
+          <div style={{ flex: chatFlex, overflow: 'hidden', minWidth: 200 }}>
+            {chatPanel}
+          </div>
+          <Splitter orientation="v" active={dragging === 'split'} onMouseDown={handleSplitDrag} />
+          <div style={{ flex: 1, overflow: 'hidden', minWidth: 200 }}>
+            <FileViewer project={p.project} filePath={p.openFile} onClose={p.onCloseFile} onToggleFullscreen={p.onEnterFullscreen} onOpenSidebar={openSidebar} initialTab={p.openFileDiffMode ? 'diff' : undefined} gitStagePath={p.gitStagePath ?? undefined} />
+          </div>
+        </div>
+      )}
+
+      {p.openFile && (p.fileFullscreen || p.isTablet) && (
+        <div style={{ flex: 1, overflow: 'hidden' }}>
+          <FileViewer project={p.project} filePath={p.openFile} onClose={p.onCloseFile} onOpenSidebar={openSidebar} initialTab={p.openFileDiffMode ? 'diff' : undefined} gitStagePath={p.gitStagePath ?? undefined} />
+        </div>
+      )}
+
+      {/* === Справа: стек рабочих панелей + рельса иконок === */}
+      <RightPanelStack
+        isTablet={p.isTablet}
+        session={p.activeSession}
+        projectId={p.project.id}
+        rootPath={p.project.rootPath}
+        toolsEnabled={p.toolsEnabled}
+        panels={p.panels}
+      />
+    </>
+  );
+}

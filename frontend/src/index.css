@@ -114,6 +114,45 @@ body {
 }
 .cc-composer-input::-webkit-scrollbar { width: 0; height: 0; display: none; }
 
+/* Ползунок усилия рассуждения в композере. Берём нативный input[type=range] ради
+   бесплатных клавиатуры, драга и доступности — трек рисуем сами (точки ступеней
+   лежат отдельным слоем под ним), поэтому у трека фон прозрачный. Псевдоэлементы
+   бегунка нельзя задать инлайновым стилем, отсюда класс. */
+.cc-effort-range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 28px;
+  background: transparent;
+  cursor: pointer;
+  margin: 0;
+}
+.cc-effort-range:focus { outline: none; }
+.cc-effort-range::-webkit-slider-runnable-track { height: 28px; background: transparent; }
+.cc-effort-range::-moz-range-track { height: 28px; background: transparent; }
+.cc-effort-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 22px; height: 22px; margin-top: 3px;
+  border-radius: 50%;
+  background: var(--c-bg-white);
+  box-shadow: var(--shadow-card);
+  border: 1px solid var(--c-border);
+}
+.cc-effort-range::-moz-range-thumb {
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  background: var(--c-bg-white);
+  box-shadow: var(--shadow-card);
+  border: 1px solid var(--c-border);
+}
+.cc-effort-range:focus-visible::-webkit-slider-thumb { border-color: var(--c-accent); }
+.cc-effort-range:focus-visible::-moz-range-thumb { border-color: var(--c-accent); }
+/* Состояние «По умолчанию»: уровень не выбран — бегунок прячем, чтобы шкала не врала
+   про несуществующую ступень. Клик/драг по треку сразу задаёт уровень. */
+.cc-effort-range--empty::-webkit-slider-thumb { opacity: 0; }
+.cc-effort-range--empty::-moz-range-thumb { opacity: 0; }
+
 /* Горизонтальные ленты чипов (фильтры календаря и т.п.): скроллятся, но без видимого скроллбара */
 .cc-hide-scrollbar {
   scrollbar-width: none;        /* Firefox */
@@ -196,9 +235,13 @@ body {
   .cc-actions { opacity: 0; transition: opacity 0.15s ease; }
   .cc-msg:hover .cc-actions, .cc-actions:focus-within { opacity: 1; }
 }
-/* Тач (мобайл): действия «копировать/повторить» всегда видимы — без hover до них не дотянуться */
+/* Тач (мобайл): hover'а нет, поэтому действия проявляются по тапу на сообщении —
+   класс cc-msg--tapped вешает сам компонент. Раньше они висели поверх каждого
+   ответа постоянно и мешали читать. pointer-events гасим, пока скрыты, чтобы
+   невидимые кнопки не перехватывали тап по тексту. */
 @media (hover: none), (pointer: coarse) {
-  .cc-actions { opacity: 1; }
+  .cc-actions { opacity: 0; pointer-events: none; transition: opacity 0.15s ease; }
+  .cc-msg--tapped .cc-actions { opacity: 1; pointer-events: auto; }
   /* Длинные пути обрезаем слева (видно имя файла/конец пути, а не начало) */
   .cc-trunc-left { direction: rtl; text-align: left; unicode-bidi: plaintext; }
 }

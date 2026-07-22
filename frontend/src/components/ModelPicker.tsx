@@ -40,8 +40,8 @@ function formatWindow(tokens?: number): string | null {
   return `${Math.round(tokens / 1000)}K`;
 }
 
-// Бейдж размера контекстного окна
-function WindowBadge({ tokens }: { tokens?: number }) {
+// Бейдж размера контекстного окна (используется и компактным ComposerModelPicker)
+export function WindowBadge({ tokens }: { tokens?: number }) {
   const label = formatWindow(tokens);
   if (!label) return null;
   return (

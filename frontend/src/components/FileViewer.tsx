@@ -1107,8 +1107,9 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
         </div>
       )}
 
-      {/* Содержимое */}
-      <div ref={contentAreaRef} style={{ flex: 1, overflow: (isOfficeFile || isCodeEditing || isPdfViewing || isHtmlPreviewing || isDrawioViewing) ? 'hidden' : 'auto', padding: (isOfficeFile || isCodeEditing || isPdfViewing || isHtmlPreviewing || isDrawioViewing) ? 0 : 16, display: 'flex', flexDirection: 'column' }}>
+      {/* Содержимое. Для .md (просмотр и редактирование) — белый «лист» вместо
+          карточного фона; в тёмной теме bgWhite = карточный тон, глаз не режет. */}
+      <div ref={contentAreaRef} style={{ flex: 1, overflow: (isOfficeFile || isCodeEditing || isPdfViewing || isHtmlPreviewing || isDrawioViewing) ? 'hidden' : 'auto', padding: (isOfficeFile || isCodeEditing || isPdfViewing || isHtmlPreviewing || isDrawioViewing) ? 0 : 16, display: 'flex', flexDirection: 'column', background: (isMarkdown && tab === 'file') ? C.bgWhite : undefined }}>
         {loading && (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 14 }}>
             <div style={{ width: 36, height: 36, borderRadius: '50%', border: `3px solid ${C.border}`, borderTopColor: C.accent, animation: 'spin 0.8s linear infinite' }} />

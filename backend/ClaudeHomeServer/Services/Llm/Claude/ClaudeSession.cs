@@ -55,15 +55,13 @@ public class ClaudeSession : ILlmSessionAdapter
     // создаётся на system/init каждого хода, диспозится по завершении процесса
     private SubagentStreamWatcher? _subagentWatcher;
 
-    // Тишина активного хода, ПОКА CLI выполняет инструмент (ждём tool_result): щедрый потолок —
-    // Bash/сборка/тесты легитимно молчат в stdout минутами, рубить их нельзя.
+    // Максимальная тишина stdout активного хода: при живой работе (генерация, инструмент,
+    // субагент, компакция, ожидание пользователя) CLI шлёт события регулярно; полное молчание
+    // 60 мин — крайняя защита от вечно висящего процесса (напр. провайдер оборвал стрим, а CLI
+    // не завершился). Реальный обрыв, при котором CLI сам падает/выходит, ловится раньше в цикле
+    // чтения (result/EOF/исключение). Не занижаем: короткий порог ложно рубил бы долгие
+    // инструменты, субагентов OMO/workflow, компакцию и медленные ответы провайдера.
     private static readonly TimeSpan IdleTimeout = TimeSpan.FromMinutes(60);
-
-    // Тишина активного хода во время ГЕНЕРАЦИИ/размышления (инструмент не выполняется): короткий
-    // потолок. При живой генерации CLI шлёт дельты часто (каждая строка переармирует watchdog);
-    // полная тишина stdout здесь почти всегда означает оборванный провайдером стрим (напр. 502/
-    // ResourceExhausted у бесплатных моделей OpenRouter после блока thinking) — ждать час незачем.
-    private static readonly TimeSpan GenerationSilenceTimeout = TimeSpan.FromMinutes(2);
 
     // Грейс после result: штатно CLI выходит сам, но плагинные хуки/MCP-мосты (наблюдалось
     // с oh-my-claudecode) могут держать процесс живым бесконечно — тогда завершаем ход сами,
@@ -132,12 +130,6 @@ public class ClaudeSession : ILlmSessionAdapter
         // Прогон запущен с --prompt-suggestions: после result ждём выхода CLI дольше
         // (PromptSuggestionExitGrace) — подсказка генерится и приходит после result
         public bool PromptSuggestionsActive { get; init; }
-
-        // Сколько инструментов основного агента запущено и ещё не вернули tool_result. >0 —
-        // CLI занят выполнением инструмента (stdout молчит легитимно), watchdog даёт щедрый
-        // таймаут; 0 — идёт генерация, тишина подозрительна (короткий таймаут). Меняется только
-        // из потока reader'а (ProcessLine последователен) — без блокировки.
-        public int PendingToolUses;
 
         public bool HasPendingBg
         {
@@ -1608,29 +1600,19 @@ public class ClaudeSession : ILlmSessionAdapter
         finally { await FinalizeRunAsync(run); }
     }
 
-    // Допустимая тишина stdout по состоянию прогона: активный ход — щедрый таймаут во время
-    // инструмента/ожидания пользователя, короткий во время генерации (см. ActiveTurnWatchdog);
-    // доживание с фоновыми агентами — потолок BgLingerTimeout (агенты работают молча: их
-    // транскрипты пишутся на диск, в stdout родителя ничего); иначе — короткий грейс
+    // Допустимая тишина stdout по состоянию прогона. Активный ход — щедрый IdleTimeout (60 мин):
+    // при активном ходе молчание stdout почти всегда легитимно (CLI выполняет инструмент/субагента,
+    // ждёт ответа пользователя, сжимает контекст, медленно генерирует или ретраит провайдера) —
+    // короткий таймаут по любому из этих состояний ложно рубил бы ход, а надёжно отличить их от
+    // обрыва по одному таймауту нельзя. Реальный обрыв провайдера отлавливается иначе: если CLI
+    // сам завершится/упадёт — это увидит цикл чтения (result/EOF/исключение → ErrorMessage
+    // клиенту), а IdleTimeout — лишь крайняя защита от вечно висящего процесса.
+    // Доживание с фоновыми агентами — потолок BgLingerTimeout; иначе — короткий грейс выхода CLI.
     private TimeSpan WatchdogFor(CliRun run) =>
-        !run.TurnDone ? ActiveTurnWatchdog(run.PendingToolUses, AwaitingUserInput, IdleTimeout, GenerationSilenceTimeout)
+        !run.TurnDone ? IdleTimeout
         : run.HasPendingBg ? _bgLingerTimeout
         : run.PromptSuggestionsActive ? PromptSuggestionExitGrace
         : ResultExitGrace;
-
-    // Ход ждёт ответа пользователя: показан вопрос AskUserQuestion или план на согласование
-    // ExitPlanMode — stdout молчит легитимно, пока пользователь думает (может и час). Эти два
-    // канала НЕ блокируют цикл чтения (HandleControlRequestAsync возвращается сразу), поэтому
-    // короткий watchdog ложно рубил бы ход. permission-запрос сюда не входит: он блокирует
-    // цикл в await tcs.Task, и watchdog для него и так не тикает.
-    private bool AwaitingUserInput => !_pendingQuestions.IsEmpty || !_pendingPlans.IsEmpty;
-
-    // Таймаут тишины АКТИВНОГО хода. Пока выполняется инструмент (pendingToolUses > 0) или ход
-    // ждёт ответа пользователя (awaitingUser) — щедрый whileTool (Bash/сборка молчат легитимно,
-    // пользователь думает сколько угодно); при генерации/размышлении — короткий whileGenerating
-    // (молчащий стрим почти всегда обрыв провайдера). Вынесено чистой функцией ради теста.
-    internal static TimeSpan ActiveTurnWatchdog(int pendingToolUses, bool awaitingUser, TimeSpan whileTool, TimeSpan whileGenerating) =>
-        pendingToolUses > 0 || awaitingUser ? whileTool : whileGenerating;
 
     // Финализация прогона: единственная точка уборки после смерти процесса
     private async Task FinalizeRunAsync(CliRun run)
@@ -1920,7 +1902,6 @@ public class ClaudeSession : ILlmSessionAdapter
                 {
                     var doneRun = run;
                     doneRun.TurnDone = true;
-                    doneRun.PendingToolUses = 0; // ход закрыт — сбрасываем на случай рассинхрона счётчика
                     if (!doneRun.HasPendingBg) CloseStdin(doneRun);
                     else
                     {
@@ -2059,10 +2040,6 @@ public class ClaudeSession : ILlmSessionAdapter
             // должен лечь в ленту раньше tool_result (и продолжения текста основного агента)
             if (_subagentWatcher is not null) await _subagentWatcher.DrainAsync();
 
-            // Инструмент вернул результат — CLI снова генерирует, watchdog возвращается к
-            // короткому таймауту генерации (клампим: служебные tool_result без парного инкремента
-            // не должны увести счётчик в минус)
-            if (run.PendingToolUses > 0) run.PendingToolUses--;
             await _onMessage(new ToolResultMessage(toolUseId, resultContent, isError));
 
             // Запуск фоновой задачи (async-агент, resume через SendMessage, workflow) —
@@ -2345,10 +2322,6 @@ public class ClaudeSession : ILlmSessionAdapter
                         && bgEl.ValueKind == JsonValueKind.True)))
                 lock (run.PendingBg) run.BgLaunchCandidates.Add(toolId);
 
-            // Инструмент основного агента запущен — дальше CLI выполняет его (stdout молчит),
-            // watchdog переходит на щедрый таймаут до прихода tool_result. Сабагентские (parentId
-            // != null) не считаем: их tool_result в основной stdout не приходит — счётчик залип бы.
-            if (parentId is null) run.PendingToolUses++;
             await _onMessage(new ToolUseMessage(toolId, toolName, toolInput, parentId));
         }
 

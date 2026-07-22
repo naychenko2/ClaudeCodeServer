@@ -32,36 +32,3 @@ public class ClaudeSessionNumberParsingTests
         Assert.Null(ClaudeSession.DoubleProp(e, "missing"));
     }
 }
-
-// Выбор таймаута тишины активного хода: короткий во время генерации, щедрый во время инструмента.
-// Так зависшая генерация (обрыв провайдера после thinking) прерывается быстро, а долгие
-// инструменты (Bash/сборка, молчащие в stdout) не рубятся преждевременно.
-public class ClaudeSessionWatchdogTests
-{
-    private static readonly TimeSpan WhileTool = TimeSpan.FromMinutes(60);
-    private static readonly TimeSpan WhileGenerating = TimeSpan.FromMinutes(2);
-
-    [Fact]
-    public void Generation_UsesShortTimeout()
-    {
-        // Инструмент не выполняется, пользователя не ждём → короткий таймаут: молчащий стрим = обрыв
-        Assert.Equal(WhileGenerating, ClaudeSession.ActiveTurnWatchdog(0, false, WhileTool, WhileGenerating));
-    }
-
-    [Theory]
-    [InlineData(1)]
-    [InlineData(3)]
-    public void ToolRunning_UsesLongTimeout(int pending)
-    {
-        // Есть незавершённые инструменты → щедрый таймаут (сборки/тесты молчат легитимно)
-        Assert.Equal(WhileTool, ClaudeSession.ActiveTurnWatchdog(pending, false, WhileTool, WhileGenerating));
-    }
-
-    [Fact]
-    public void AwaitingUser_UsesLongTimeout()
-    {
-        // Ход ждёт ответа пользователя (AskUserQuestion/ExitPlanMode) — не рубить коротким таймаутом,
-        // даже когда инструмент не выполняется: пользователь думает сколько угодно
-        Assert.Equal(WhileTool, ClaudeSession.ActiveTurnWatchdog(0, true, WhileTool, WhileGenerating));
-    }
-}

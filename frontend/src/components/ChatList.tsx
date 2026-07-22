@@ -12,6 +12,7 @@ import { FilterBar } from './FilterBar';
 import { useChatFilters, useSanitizePersonaFilter } from '../lib/chatFilters';
 import { useLastMechanicVersion } from '../lib/lastMechanic';
 import { ChatCard } from './ChatCard';
+import { ListDateDivider } from './ListDateDivider';
 
 interface Props {
   chats: Session[];
@@ -120,9 +121,7 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
         )}
         {groups.map(g => (
           <div key={g.title} style={{ marginBottom: 6 }}>
-            <div style={{ padding: '9px 4px 6px', fontSize: 11, fontWeight: 700, color: C.textSecondary }}>
-              {g.title}
-            </div>
+            <ListDateDivider title={g.title} />
             {g.items.map(chat => (
               <ChatCard
                 key={chat.id}

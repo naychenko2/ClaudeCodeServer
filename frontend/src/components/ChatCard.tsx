@@ -1,25 +1,78 @@
+import { useState } from 'react';
 import { Pin, SquarePen, Trash2 } from 'lucide-react';
-import type { Session } from '../types';
+import type { Persona, Session } from '../types';
 import { C, R, SHADOW, FONT } from '../lib/design';
+import { api } from '../lib/api';
 import { IconButton } from './ui';
 import { StatusIndicator } from './StatusIndicator';
 import { ExpiryBadge } from './ExpiryBadge';
 import { ChatOriginBadge } from './ChatOriginBadge';
 import { resolveChatOrigin } from '../lib/chatOrigin';
-import { getPersonaById, personaLabel } from '../lib/personas';
-import { PersonaAvatar } from '../features/personas/PersonaAvatar';
+import { getPersonaById, personaLabel, personaInitials } from '../lib/personas';
 import { agentDotColor } from './AgentSelector';
 import { TeamMechanicBadge } from '../features/team/TeamMechanicBadge';
 import { teamTurnPreview } from '../features/team/teamMechanics';
 import { getLastMechanic } from '../lib/lastMechanic';
 
-// Время создания чата: сегодня — часы:минуты, иначе — дата (группы и так разбиты по дням)
-function chatTime(iso: string): string {
-  const d = new Date(iso);
-  const now = new Date();
-  if (d.toDateString() === now.toDateString())
-    return d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-  return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
+// Ширина правой зоны: под ней ровно помещаются три кнопки действий (по 24) с их
+// отступом. Лицо собеседника занимает эту же полосу, кнопки всплывают поверх него
+const COMPANION_W = 84;
+// Лицо плотное у правого края и тает влево; хвост доводит до левого края цветовая вуаль
+const BACKDROP_FADE = 'linear-gradient(to left, #000 40%, transparent)';
+
+// Умеет ли устройство наводить курсор. На тач-экранах hover не наступает никогда,
+// поэтому кнопки действий там показываем постоянно (приём как в MarkdownViewer)
+const CAN_HOVER = typeof window !== 'undefined' && !window.matchMedia('(hover: none)').matches;
+
+// Стекло под кнопками действий: они лежат поверх лица собеседника, глухая
+// подложка вырезала бы в нём прямоугольник. Текст в зону лица не заходит вовсе,
+// поэтому под надписями никаких облачек нет
+const GLASS: React.CSSProperties = {
+  background: C.glass,
+  backdropFilter: 'blur(6px)',
+  WebkitBackdropFilter: 'blur(6px)',
+  borderRadius: R.md,
+  padding: '2px 7px',
+};
+
+/**
+ * Собеседник в правом углу карточки: фото персоны почти в полную силу (а если
+ * фото нет — крупные инициалы её цветом), плюс вуаль того же цвета, уводящая
+ * лицо влево. Ширина полосы — как у блока кнопок, которые лежат поверх.
+ */
+function PersonaBackdrop({ persona }: { persona: Persona }) {
+  const [hasError, setHasError] = useState(false);
+  const imageUrl = persona.avatar?.kind === 'image' ? api.personas.avatarUrl(persona) : null;
+  const color = agentDotColor(persona.avatar?.color);
+  const base: React.CSSProperties = {
+    position: 'absolute', top: 0, right: 0, bottom: 0, width: COMPANION_W,
+    pointerEvents: 'none', userSelect: 'none',
+    WebkitMaskImage: BACKDROP_FADE, maskImage: BACKDROP_FADE,
+  };
+
+  return (
+    <>
+      {/* Вуаль цветом персоны — подхватывает растворение лица и доводит его до левого края */}
+      <div aria-hidden style={{
+        position: 'absolute', inset: 0, pointerEvents: 'none', opacity: 0.16,
+        background: `linear-gradient(to left, ${color}, transparent 88%)`,
+      }} />
+      {imageUrl && !hasError ? (
+        <img
+          src={imageUrl} alt="" aria-hidden onError={() => setHasError(true)}
+          style={{ ...base, objectFit: 'cover', objectPosition: 'right center', opacity: 0.92 }}
+        />
+      ) : (
+        <div aria-hidden style={{
+          ...base, opacity: 0.85,
+          display: 'flex', alignItems: 'center', justifyContent: 'flex-end', paddingRight: 10,
+          color, fontFamily: FONT.sans, fontWeight: 800, fontSize: 38, lineHeight: 1, letterSpacing: -1,
+        }}>
+          {personaInitials(persona.name)}
+        </div>
+      )}
+    </>
+  );
 }
 
 interface Props {
@@ -61,11 +114,18 @@ export function ChatCard({
   const origin = resolveChatOrigin(s);
   // Последняя запущенная в чате механика команды — компактный бейдж
   const mechanic = getLastMechanic(s.id);
-  // Действия: по наведению, у активной карточки — всегда; на мобиле hover'а нет
-  const showActions = online && (isMobile || isActive || hovered);
+  // Действия — строго по наведению; выбранная карточка их больше не показывает.
+  // На тач-устройствах наведения нет — там показываем всегда, иначе кнопки стали бы
+  // недостижимы. Проверяем именно возможность hover, а не ширину: на планшете в
+  // широкой раскладке isMobile=false, но навести всё равно нечем
+  const showActions = online && (hovered || !CAN_HOVER);
   const cardBg = isActive ? C.accentLight : C.bgWhite;
-  // Собеседник назван словами только в тултипе индикатора — в самой карточке
-  // его держит аватар с кольцом статуса, строку под текст он не занимает
+  // Лицо для подложки: у группы — ведущая (первая в составе)
+  const backdropPersona = group.length > 1 ? group[0] : persona;
+  // Стекло — только когда под кнопками есть лицо; на чистом фоне глухая подложка
+  const glass = backdropPersona ? GLASS : { background: cardBg, borderRadius: R.md, padding: '2px 4px' };
+  // Собеседник назван словами только в тултипе точки статуса — в самой карточке
+  // его показывает подложка, строку под текст он не занимает
   const companionTitle = group.length > 1 ? (
     <>
       Групповой · {group.length} участника
@@ -100,85 +160,71 @@ export function ChatCard({
         gap: 3,
       }}
     >
+      {/* Собеседник — в правом углу; в группе лицо даёт ведущая.
+          Рисуется до акцентной полосы, иначе накрыла бы её собой */}
+      {backdropPersona && <PersonaBackdrop persona={backdropPersona} />}
+
       {/* Акцентная полоса слева — явный маркер текущего чата (у чатов персоны — её цветом) */}
       {isActive && (
         <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 4, background: accent }} />
       )}
 
-      {/* Строка 1: статус, собеседник, название, время.
-          Есть собеседник — статус показывает кольцо вокруг его аватара, отдельной точки нет */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: group.length > 1 || persona ? 9 : 6, minWidth: 0 }}>
-        {group.length > 1 ? (
-          // Горизонтальный стек внахлёст: важно количество участников, а не лица.
-          // Кольцо статуса — на ведущей (первой): она поверх остальных по z-index
-          <div style={{ display: 'flex', flexShrink: 0 }}>
-            {group.map((p, i) => (
-              <div key={p!.id} style={{
-                marginLeft: i === 0 ? 0 : -7, position: 'relative', zIndex: group.length - i,
-                borderRadius: '50%', border: `1.5px solid ${cardBg}`, display: 'flex',
-              }}>
-                {i === 0 ? (
-                  <StatusIndicator status={s.status} title={companionTitle}>
-                    <PersonaAvatar persona={p!} size={18} />
-                  </StatusIndicator>
-                ) : (
-                  <PersonaAvatar persona={p!} size={18} />
-                )}
-              </div>
-            ))}
-          </div>
-        ) : persona ? (
-          <StatusIndicator status={s.status} title={companionTitle}>
-            <PersonaAvatar persona={persona} size={22} />
-          </StatusIndicator>
-        ) : (
-          <StatusIndicator status={s.status} />
-        )}
-        <span style={{
-          fontSize: 13.5, fontWeight: isActive ? 700 : 600, color: C.textHeading,
-          flex: '1 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        }}>
-          {s.name ?? fallbackName}
-        </span>
-        {workflowRunning && (
-          <div title="Выполняется Workflow" style={{
-            display: 'flex', alignItems: 'center', gap: 3, padding: '1px 5px',
-            background: C.accentLight, border: `1px solid ${C.accentMuted}`, borderRadius: 4, flexShrink: 0,
+      {/* Текст карточки. Правая полоса не его: там лицо собеседника и кнопки действий,
+          поэтому заголовок и превью обрываются на её границе, а не наезжают.
+          Резерв держим и без персоны — иначе кнопки накрыли бы хвост превью */}
+      <div style={{
+        position: 'relative', display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0,
+        paddingRight: COMPANION_W - (isMobile ? 16 : 12),
+      }}>
+        {/* Строка 1: статус точкой, название, метки срока и закрепления */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+          <StatusIndicator status={s.status} title={companionTitle} />
+          <span style={{
+            fontSize: 13.5, fontWeight: isActive ? 700 : 600, color: C.textHeading,
+            flex: '0 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           }}>
-            <div className="tool-spinner" style={{ width: 8, height: 8 }} />
-            <span style={{ fontFamily: FONT.sans, fontSize: 10, fontWeight: 600, color: C.accent, lineHeight: 1 }}>WF</span>
+            {s.name ?? fallbackName}
+          </span>
+          <ExpiryBadge session={s} />
+          {/* Закрепление: иконка-признак, сама кнопка живёт в блоке действий */}
+          {s.isPinned && (
+            <Pin size={11} strokeWidth={2} fill="currentColor" style={{ color: C.textMuted, flexShrink: 0 }} />
+          )}
+          {workflowRunning && (
+            <div title="Выполняется Workflow" style={{
+              display: 'flex', alignItems: 'center', gap: 3, padding: '1px 5px',
+              background: C.accentLight, border: `1px solid ${C.accentMuted}`, borderRadius: 4, flexShrink: 0,
+            }}>
+              <div className="tool-spinner" style={{ width: 8, height: 8 }} />
+              <span style={{ fontFamily: FONT.sans, fontSize: 10, fontWeight: 600, color: C.accent, lineHeight: 1 }}>WF</span>
+            </div>
+          )}
+        </div>
+
+        {/* Строка 2: происхождение и механика. Собеседник ушёл в подложку */}
+        {(origin || mechanic) && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
+            {origin && <ChatOriginBadge origin={origin} style={{ flexShrink: 0 }} />}
+            {mechanic && <TeamMechanicBadge id={mechanic} size="sm" />}
           </div>
         )}
-        <ExpiryBadge session={s} />
-        {/* Закреплённый чат: пока кнопки скрыты, признак держит статичная иконка */}
-        {s.isPinned && !showActions && (
-          <Pin size={11} strokeWidth={2} fill="currentColor" style={{ color: C.textMuted, flexShrink: 0 }} />
+
+        {/* Строка 3: превью последнего сообщения */}
+        {s.lastMessage && (
+          <div style={{
+            minWidth: 0, fontSize: 12, color: C.textMuted, lineHeight: 1.4,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>
+            {teamTurnPreview(s.lastMessage) ?? s.lastMessage}
+          </div>
         )}
-        <span style={{ fontFamily: FONT.mono, fontSize: 10.5, color: C.textMuted, lineHeight: 1, whiteSpace: 'nowrap', flexShrink: 0 }}>
-          {chatTime(s.createdAt)}
-        </span>
       </div>
 
-      {/* Строка 2: происхождение и механика. Собеседник переехал в заголовок */}
-      {(origin || mechanic) && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
-          {origin && <ChatOriginBadge origin={origin} style={{ flexShrink: 0 }} />}
-          {mechanic && <TeamMechanicBadge id={mechanic} size="sm" />}
-        </div>
-      )}
-
-      {/* Строка 3: превью последнего сообщения — во всю ширину карточки */}
-      {s.lastMessage && (
-        <div style={{ fontSize: 12, color: C.textMuted, lineHeight: 1.4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {teamTurnPreview(s.lastMessage) ?? s.lastMessage}
-        </div>
-      )}
-
-      {/* Действия — поверх времени: так текст карточки не отдаёт им ширину */}
+      {/* Действия — в правой полосе поверх лица, прижаты к низу карточки */}
       {showActions && (
         <div style={{
-          position: 'absolute', top: isMobile ? 8 : 5, right: isMobile ? 10 : 6,
-          display: 'flex', background: cardBg, borderRadius: R.md, paddingLeft: 4,
+          ...glass, position: 'absolute', bottom: isMobile ? 8 : 6, right: isMobile ? 12 : 8, zIndex: 1,
+          display: 'flex', alignItems: 'center',
         }}>
           {onTogglePin && (
             <IconButton

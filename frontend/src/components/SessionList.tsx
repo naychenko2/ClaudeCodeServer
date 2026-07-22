@@ -13,6 +13,8 @@ import { FilterBar } from './FilterBar';
 import { useChatFilters, useSanitizePersonaFilter } from '../lib/chatFilters';
 import { useLastMechanicVersion } from '../lib/lastMechanic';
 import { ChatCard } from './ChatCard';
+import { ListDateDivider } from './ListDateDivider';
+import { groupChats } from '../lib/chatGroups';
 
 interface Props {
   project: Project;
@@ -187,6 +189,11 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   });
   const hiddenCount = sessions.length - filteredSessions.length;
 
+  // Номер в подписи безымянного чата берём из исходного порядка списка:
+  // группировка тасует карточки по дням, и позиция в группе давала бы скачущие номера
+  const numberById = new Map(sessions.map((s, i) => [s.id, i + 1]));
+  const groups = groupChats(filteredSessions);
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       {online && (
@@ -223,21 +230,26 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
             Все чаты скрыты фильтрами
           </div>
         )}
-        {filteredSessions.map((s, index) => (
-          <ChatCard
-            key={s.id}
-            session={s}
-            isActive={activeSession?.id === s.id}
-            isMobile={isMobile}
-            fallbackName={`Чат #${index + 1}`}
-            online={online}
-            hovered={hoveredId === s.id}
-            workflowRunning={workflowRunningFor === s.id}
-            onSelect={() => onSelect(s)}
-            onHover={h => setHoveredId(h ? s.id : null)}
-            onEdit={() => setEditTarget(s)}
-            onDelete={() => setDeleteTarget(s)}
-          />
+        {groups.map(g => (
+          <div key={g.title} style={{ marginBottom: 6 }}>
+            <ListDateDivider title={g.title} />
+            {g.items.map(s => (
+              <ChatCard
+                key={s.id}
+                session={s}
+                isActive={activeSession?.id === s.id}
+                isMobile={isMobile}
+                fallbackName={`Чат #${numberById.get(s.id) ?? 1}`}
+                online={online}
+                hovered={hoveredId === s.id}
+                workflowRunning={workflowRunningFor === s.id}
+                onSelect={() => onSelect(s)}
+                onHover={h => setHoveredId(h ? s.id : null)}
+                onEdit={() => setEditTarget(s)}
+                onDelete={() => setDeleteTarget(s)}
+              />
+            ))}
+          </div>
         ))}
       </div>
 

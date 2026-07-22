@@ -1,5 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import { Check, ChevronDown, MessageCircle, Users } from 'lucide-react';
+import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import type { Persona, AgentInfo } from '../types';
 import { C, R, FONT, SHADOW, Z } from '../lib/design';
 import { personaLabel } from '../lib/personas';
@@ -31,12 +32,15 @@ interface Props {
   // Просторный контекст (нижняя полоса разнесённого композера): ослабляем обрезку
   // длинного «Роль (Имя)» — места там достаточно
   wide?: boolean;
+  // Схлопнуть триггер до квадрата с аватаром/иконкой (узкая полоса контролов):
+  // подпись и шеврон убираются, «Роль (Имя)» остаётся в тултипе
+  compact?: boolean;
 }
 
 // Единый селектор «собеседника» чата: персоны (наша фича) и стандартные .md-агенты
 // Claude в одном дропдауне. Заменяет пару PersonaSelector + AgentSelector в композере.
 // Раскрытие/мобильное позиционирование — по образцу PersonaSelector.
-export function CompanionSelector({ personas, agents, selectedPersona, selectedAgentName, onSelect, isMobile, dropUp = true, onCreateGroup, wide }: Props) {
+export function CompanionSelector({ personas, agents, selectedPersona, selectedAgentName, onSelect, isMobile, dropUp = true, onCreateGroup, wide, compact }: Props) {
   const [open, setOpen] = useState(false);
   // Режим мультивыбора участников группового чата (внутри того же дропдауна)
   const [groupMode, setGroupMode] = useState(false);
@@ -217,60 +221,108 @@ export function CompanionSelector({ personas, agents, selectedPersona, selectedA
     );
   };
 
+  // Схлопнутый триггер — аватар/иконка + шеврон без подписи (шеврон отличает список
+  // выбора от кнопки-действия, поэтому остаётся и в узкой полосе)
+  const compactStyle: React.CSSProperties = {
+    height: isMobile ? 36 : 32, padding: '0 6px',
+    borderRadius: R.md, border: 'none',
+    background: open ? C.bgSelected : 'transparent', color: C.textSecondary,
+    cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+    gap: 3, flexShrink: 0, transition: 'background 0.15s',
+  };
+  // Шеврон схлопнутого вида — общий для всех трёх веток триггера
+  const compactChevron = (
+    <ChevronDown size={10} strokeWidth={ICON_STROKE}
+      style={{ flexShrink: 0, opacity: 0.55, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
+  );
+  // Подпись собеседника уходит в тултип, когда плашка схлопнута
+  const compactTitle = selectedPersona
+    ? `Собеседник: ${personaLabel(selectedPersona)}`
+    : selectedAgentName ? `Собеседник: ${agentDisplayName}` : 'Выбрать собеседника';
+
   return (
     <div ref={rootRef} style={{ position: 'relative', flexShrink: 0, minWidth: 0 }}>
       {selectedPersona ? (
         // Выбрана персона — плашка с мини-аватаром и «Роль (Имя)»
         <button
           onClick={() => setOpen(o => !o)}
-          title="Выбрать собеседника"
-          style={{
+          title={compactTitle}
+          // Фон только на наведении/открытии — иначе плашка режет тень карточки композера
+          onMouseEnter={e => { if (!open) e.currentTarget.style.background = C.accentLight; }}
+          onMouseLeave={e => { if (!open) e.currentTarget.style.background = 'transparent'; }}
+          style={compact ? compactStyle : {
             height: isMobile ? 32 : 28, padding: '0 8px 0 4px', borderRadius: R.md, border: 'none',
-            background: open ? C.bgSelected : C.accentLight, color: C.textSecondary,
+            background: open ? C.bgSelected : 'transparent', color: C.textSecondary,
+            transition: 'background 0.15s',
             fontSize: 12.5, fontWeight: 600, cursor: 'pointer',
             display: 'flex', alignItems: 'center', gap: 6,
             maxWidth: isMobile ? 120 : wide ? 360 : 200, overflow: 'hidden',
           }}
         >
-          <PersonaAvatar persona={selectedPersona} size={isMobile ? 24 : 20} />
-          <span style={{ fontFamily: FONT.sans, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flex: 1 }}>
-            {personaLabel(selectedPersona)}
-          </span>
-          <ChevronDown size={9} strokeWidth={2.5}
-            style={{ flexShrink: 0, opacity: 0.55, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
+          <PersonaAvatar persona={selectedPersona} size={compact ? 24 : isMobile ? 24 : 20} />
+          {compact ? compactChevron : (
+            <>
+              <span style={{ fontFamily: FONT.sans, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flex: 1 }}>
+                {personaLabel(selectedPersona)}
+              </span>
+              <ChevronDown size={ICON_SIZE.xs} strokeWidth={ICON_STROKE}
+                style={{ flexShrink: 0, opacity: 0.55, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
+            </>
+          )}
         </button>
       ) : selectedAgentName ? (
         // Выбран .md-агент — плашка с цветной точкой и именем (как триггер AgentSelector)
         <button
           onClick={() => setOpen(o => !o)}
-          title="Выбрать собеседника"
-          style={{
+          title={compactTitle}
+          // Фон только на наведении/открытии — иначе плашка режет тень карточки композера
+          onMouseEnter={e => { if (!open) e.currentTarget.style.background = C.accentLight; }}
+          onMouseLeave={e => { if (!open) e.currentTarget.style.background = 'transparent'; }}
+          style={compact ? compactStyle : {
             height: isMobile ? 32 : 28, padding: '0 8px', borderRadius: R.md, border: 'none',
-            background: open ? C.bgSelected : C.accentLight, color: C.textSecondary,
+            background: open ? C.bgSelected : 'transparent', color: C.textSecondary,
+            transition: 'background 0.15s',
             fontSize: 12.5, fontWeight: 600, cursor: 'pointer',
             display: 'flex', alignItems: 'center', gap: 5,
             maxWidth: isMobile ? 110 : wide ? 360 : 200, overflow: 'hidden',
           }}
         >
-          <span style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: agentDotColor(selectedAgent?.color) }} />
-          <span style={{ fontFamily: FONT.sans, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flex: 1 }}>
-            {agentDisplayName}
-          </span>
-          <ChevronDown size={9} strokeWidth={2.5}
-            style={{ flexShrink: 0, opacity: 0.55, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
+          <span style={{ width: compact ? 10 : 8, height: compact ? 10 : 8, borderRadius: '50%', flexShrink: 0, background: agentDotColor(selectedAgent?.color) }} />
+          {compact ? compactChevron : (
+            <>
+              <span style={{ fontFamily: FONT.sans, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flex: 1 }}>
+                {agentDisplayName}
+              </span>
+              <ChevronDown size={ICON_SIZE.xs} strokeWidth={ICON_STROKE}
+                style={{ flexShrink: 0, opacity: 0.55, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
+            </>
+          )}
         </button>
       ) : (
-        // Никто не выбран — компактная иконка «собеседник»
+        // Никто не выбран — плашка с подписью. Голая иконка читалась как декорация:
+        // было не догадаться, что здесь выбирается персона-собеседник.
         <button
           onClick={() => setOpen(o => !o)}
           title="Выбрать собеседника"
-          style={{
-            width: isMobile ? 32 : 28, height: isMobile ? 32 : 28, borderRadius: R.md, border: 'none',
-            background: open ? C.bgSelected : 'transparent', color: C.textMuted, cursor: 'pointer',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0, flexShrink: 0,
+          // Фон только на наведении/открытии — иначе плашка режет тень карточки композера
+          onMouseEnter={e => { if (!open) e.currentTarget.style.background = C.accentLight; }}
+          onMouseLeave={e => { if (!open) e.currentTarget.style.background = 'transparent'; }}
+          style={compact ? compactStyle : {
+            height: isMobile ? 32 : 28, padding: '0 8px', borderRadius: R.md, border: 'none',
+            background: open ? C.bgSelected : 'transparent', color: C.textSecondary,
+            transition: 'background 0.15s',
+            fontSize: 12.5, fontWeight: 600, cursor: 'pointer', fontFamily: FONT.sans,
+            display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0, whiteSpace: 'nowrap',
           }}
         >
-          <MessageCircle size={16} strokeWidth={2} />
+          <MessageCircle size={compact ? 16 : 14} strokeWidth={2} style={{ flexShrink: 0 }} />
+          {compact ? compactChevron : (
+            <>
+              Собеседник
+              <ChevronDown size={ICON_SIZE.xs} strokeWidth={ICON_STROKE}
+                style={{ flexShrink: 0, opacity: 0.55, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
+            </>
+          )}
         </button>
       )}
 

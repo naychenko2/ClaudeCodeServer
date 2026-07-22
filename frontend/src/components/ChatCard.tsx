@@ -64,9 +64,16 @@ export function ChatCard({
   // Действия: по наведению, у активной карточки — всегда; на мобиле hover'а нет
   const showActions = online && (isMobile || isActive || hovered);
   const cardBg = isActive ? C.accentLight : C.bgWhite;
-  const subtitle = group.length > 1
-    ? `Групповой · ${group.length} участника`
-    : persona ? personaLabel(persona) : null;
+  // Собеседник назван словами только в тултипе индикатора — в самой карточке
+  // его держит аватар с кольцом статуса, строку под текст он не занимает
+  const companionTitle = group.length > 1 ? (
+    <>
+      Групповой · {group.length} участника
+      <span style={{ display: 'block', fontWeight: 400, color: C.textMuted, marginTop: 2 }}>
+        {group.map(p => personaLabel(p!)).join(' · ')}
+      </span>
+    </>
+  ) : persona ? personaLabel(persona) : undefined;
 
   return (
     <div
@@ -111,7 +118,9 @@ export function ChatCard({
                 borderRadius: '50%', border: `1.5px solid ${cardBg}`, display: 'flex',
               }}>
                 {i === 0 ? (
-                  <StatusIndicator status={s.status}><PersonaAvatar persona={p!} size={18} /></StatusIndicator>
+                  <StatusIndicator status={s.status} title={companionTitle}>
+                    <PersonaAvatar persona={p!} size={18} />
+                  </StatusIndicator>
                 ) : (
                   <PersonaAvatar persona={p!} size={18} />
                 )}
@@ -119,13 +128,15 @@ export function ChatCard({
             ))}
           </div>
         ) : persona ? (
-          <StatusIndicator status={s.status}><PersonaAvatar persona={persona} size={22} /></StatusIndicator>
+          <StatusIndicator status={s.status} title={companionTitle}>
+            <PersonaAvatar persona={persona} size={22} />
+          </StatusIndicator>
         ) : (
           <StatusIndicator status={s.status} />
         )}
         <span style={{
           fontSize: 13.5, fontWeight: isActive ? 700 : 600, color: C.textHeading,
-          flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          flex: '1 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         }}>
           {s.name ?? fallbackName}
         </span>
@@ -148,16 +159,11 @@ export function ChatCard({
         </span>
       </div>
 
-      {/* Строка 2: происхождение, механика, подпись собеседника — под аватаром, во всю ширину */}
-      {(subtitle || origin || mechanic) && (
+      {/* Строка 2: происхождение и механика. Собеседник переехал в заголовок */}
+      {(origin || mechanic) && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
           {origin && <ChatOriginBadge origin={origin} style={{ flexShrink: 0 }} />}
           {mechanic && <TeamMechanicBadge id={mechanic} size="sm" />}
-          {subtitle && (
-            <span style={{ fontSize: 11.5, fontWeight: 600, color: accent, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {subtitle}
-            </span>
-          )}
         </div>
       )}
 

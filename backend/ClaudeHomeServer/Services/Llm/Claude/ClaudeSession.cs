@@ -55,8 +55,15 @@ public class ClaudeSession : ILlmSessionAdapter
     // создаётся на system/init каждого хода, диспозится по завершении процесса
     private SubagentStreamWatcher? _subagentWatcher;
 
-    // Если claude не выдаёт ни одной строки дольше этого — считаем зависшим
+    // Тишина активного хода, ПОКА CLI выполняет инструмент (ждём tool_result): щедрый потолок —
+    // Bash/сборка/тесты легитимно молчат в stdout минутами, рубить их нельзя.
     private static readonly TimeSpan IdleTimeout = TimeSpan.FromMinutes(60);
+
+    // Тишина активного хода во время ГЕНЕРАЦИИ/размышления (инструмент не выполняется): короткий
+    // потолок. При живой генерации CLI шлёт дельты часто (каждая строка переармирует watchdog);
+    // полная тишина stdout здесь почти всегда означает оборванный провайдером стрим (напр. 502/
+    // ResourceExhausted у бесплатных моделей OpenRouter после блока thinking) — ждать час незачем.
+    private static readonly TimeSpan GenerationSilenceTimeout = TimeSpan.FromMinutes(2);
 
     // Грейс после result: штатно CLI выходит сам, но плагинные хуки/MCP-мосты (наблюдалось
     // с oh-my-claudecode) могут держать процесс живым бесконечно — тогда завершаем ход сами,
@@ -125,6 +132,12 @@ public class ClaudeSession : ILlmSessionAdapter
         // Прогон запущен с --prompt-suggestions: после result ждём выхода CLI дольше
         // (PromptSuggestionExitGrace) — подсказка генерится и приходит после result
         public bool PromptSuggestionsActive { get; init; }
+
+        // Сколько инструментов основного агента запущено и ещё не вернули tool_result. >0 —
+        // CLI занят выполнением инструмента (stdout молчит легитимно), watchdog даёт щедрый
+        // таймаут; 0 — идёт генерация, тишина подозрительна (короткий таймаут). Меняется только
+        // из потока reader'а (ProcessLine последователен) — без блокировки.
+        public int PendingToolUses;
 
         public bool HasPendingBg
         {
@@ -1528,36 +1541,50 @@ public class ClaudeSession : ILlmSessionAdapter
     // продолжает транслировать события доживающих фоновых агентов и ходов-продолжений CLI
     private async Task ReadLoopAsync(CliRun run, CancellationToken ct)
     {
+        // Ридер stdout переиспользуется между итерациями: нельзя запустить второе чтение
+        // того же потока, пока предыдущее не завершилось. При срабатывании watchdog чтение
+        // остаётся висеть — убийство процесса закроет stdout и разблокирует его.
+        Task<string?>? pendingRead = null;
         try
         {
             while (!ct.IsCancellationRequested)
             {
-                // Watchdog: пересоздаём linked CTS на каждую строку; допустимая тишина
-                // зависит от состояния прогона (активный ход / доживание / выход CLI)
                 var armedTurnDone = run.TurnDone;
-                using var watchdogCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                watchdogCts.CancelAfter(WatchdogFor(run));
+                pendingRead ??= run.Process.StandardOutput.ReadLineAsync(ct).AsTask();
 
+                // Watchdog через гонку «строка против таймера», а НЕ через отмену ReadLineAsync:
+                // на Windows-пайпе токен НЕ прерывает уже начатое чтение молчащего stdout, поэтому
+                // старый watchdogCts.CancelAfter не срабатывал и зависший процесс жил часами.
                 string? line;
-                try
+                using (var delayCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
                 {
-                    line = await run.Process.StandardOutput.ReadLineAsync(watchdogCts.Token);
-                }
-                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-                {
-                    // Пока ждали с коротким таймаутом, начался same-process ход — переармируем
-                    if (armedTurnDone && !run.TurnDone) continue;
-                    if (!run.TurnDone)
-                        // Активный ход молчит дольше IdleTimeout — прерываем с ошибкой
-                        await _onMessage(new ErrorMessage(
-                            $"Claude не отвечает более {IdleTimeout.TotalMinutes:0} мин — прерываем"));
-                    else if (run.HasPendingBg)
-                        Console.Error.WriteLine(
-                            $"[ClaudeSession] Фоновые агенты не завершились за {_bgLingerTimeout.TotalMinutes:0} мин тишины — завершаем процесс");
-                    // Иначе: result отдан, фоновых задач нет — процесс держат плагинные
-                    // хуки/мосты (наблюдалось с oh-my-claudecode), гасим молча
-                    _launcher.Kill(run.Process, run.LaunchTurnId);
-                    break;
+                    var timeout = WatchdogFor(run);
+                    var completed = await Task.WhenAny(pendingRead, Task.Delay(timeout, delayCts.Token));
+                    if (completed != pendingRead)
+                    {
+                        // Тишина дольше таймаута. Пока ждали, мог начаться same-process ход —
+                        // тогда переармируем (чтение держим, оно ещё валидно)
+                        if (armedTurnDone && !run.TurnDone) continue;
+                        if (!run.TurnDone)
+                            // Активный ход молчит дольше допустимого (генерация оборвана или
+                            // инструмент завис) — прерываем с ошибкой, спиннер снимется
+                            await _onMessage(new ErrorMessage(
+                                $"Модель не отвечает более {timeout.TotalMinutes:0} мин — ход прерван"));
+                        else if (run.HasPendingBg)
+                            Console.Error.WriteLine(
+                                $"[ClaudeSession] Фоновые агенты не завершились за {_bgLingerTimeout.TotalMinutes:0} мин тишины — завершаем процесс");
+                        // Иначе: result отдан, фоновых задач нет — процесс держат плагинные
+                        // хуки/мосты (наблюдалось с oh-my-claudecode), гасим молча
+                        _launcher.Kill(run.Process, run.LaunchTurnId);
+                        // Добираем висящее чтение: kill закрыл stdout → оно завершится (null/ошибка),
+                        // без await остался бы unobserved-таск
+                        try { await pendingRead; } catch { /* пайп закрыт убийством — ожидаемо */ }
+                        break;
+                    }
+                    delayCts.Cancel(); // чтение выиграло — гасим таймер, иначе на активном стриме
+                                       // копились бы тысячи висящих Task.Delay
+                    line = await pendingRead;
+                    pendingRead = null; // следующей итерации нужно новое чтение
                 }
 
                 if (line is null) break; // stdout закрыт — процесс завершился
@@ -1573,14 +1600,21 @@ public class ClaudeSession : ILlmSessionAdapter
         finally { await FinalizeRunAsync(run); }
     }
 
-    // Допустимая тишина stdout по состоянию прогона: активный ход — щедрый IdleTimeout;
-    // доживание с фоновыми агентами — потолок BgLingerTimeout (агенты работают молча:
-    // их транскрипты пишутся на диск, в stdout родителя ничего); иначе — короткий грейс
+    // Допустимая тишина stdout по состоянию прогона: активный ход — щедрый таймаут во время
+    // инструмента, короткий во время генерации (см. ActiveTurnWatchdog); доживание с фоновыми
+    // агентами — потолок BgLingerTimeout (агенты работают молча: их транскрипты пишутся на диск,
+    // в stdout родителя ничего); иначе — короткий грейс
     private TimeSpan WatchdogFor(CliRun run) =>
-        !run.TurnDone ? IdleTimeout
+        !run.TurnDone ? ActiveTurnWatchdog(run.PendingToolUses, IdleTimeout, GenerationSilenceTimeout)
         : run.HasPendingBg ? _bgLingerTimeout
         : run.PromptSuggestionsActive ? PromptSuggestionExitGrace
         : ResultExitGrace;
+
+    // Таймаут тишины АКТИВНОГО хода. Пока выполняется инструмент (pendingToolUses > 0) — щедрый
+    // whileTool (Bash/сборка молчат легитимно); при генерации/размышлении — короткий whileGenerating
+    // (молчащий стрим почти всегда обрыв провайдера). Вынесено чистой функцией ради теста.
+    internal static TimeSpan ActiveTurnWatchdog(int pendingToolUses, TimeSpan whileTool, TimeSpan whileGenerating) =>
+        pendingToolUses > 0 ? whileTool : whileGenerating;
 
     // Финализация прогона: единственная точка уборки после смерти процесса
     private async Task FinalizeRunAsync(CliRun run)
@@ -1870,6 +1904,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 {
                     var doneRun = run;
                     doneRun.TurnDone = true;
+                    doneRun.PendingToolUses = 0; // ход закрыт — сбрасываем на случай рассинхрона счётчика
                     if (!doneRun.HasPendingBg) CloseStdin(doneRun);
                     else
                     {
@@ -2008,6 +2043,10 @@ public class ClaudeSession : ILlmSessionAdapter
             // должен лечь в ленту раньше tool_result (и продолжения текста основного агента)
             if (_subagentWatcher is not null) await _subagentWatcher.DrainAsync();
 
+            // Инструмент вернул результат — CLI снова генерирует, watchdog возвращается к
+            // короткому таймауту генерации (клампим: служебные tool_result без парного инкремента
+            // не должны увести счётчик в минус)
+            if (run.PendingToolUses > 0) run.PendingToolUses--;
             await _onMessage(new ToolResultMessage(toolUseId, resultContent, isError));
 
             // Запуск фоновой задачи (async-агент, resume через SendMessage, workflow) —
@@ -2290,6 +2329,10 @@ public class ClaudeSession : ILlmSessionAdapter
                         && bgEl.ValueKind == JsonValueKind.True)))
                 lock (run.PendingBg) run.BgLaunchCandidates.Add(toolId);
 
+            // Инструмент основного агента запущен — дальше CLI выполняет его (stdout молчит),
+            // watchdog переходит на щедрый таймаут до прихода tool_result. Сабагентские (parentId
+            // != null) не считаем: их tool_result в основной stdout не приходит — счётчик залип бы.
+            if (parentId is null) run.PendingToolUses++;
             await _onMessage(new ToolUseMessage(toolId, toolName, toolInput, parentId));
         }
 

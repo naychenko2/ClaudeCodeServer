@@ -1,15 +1,14 @@
-import { useState } from 'react';
 import { Pin, SquarePen, Trash2 } from 'lucide-react';
 import type { Persona, Session } from '../types';
 import { C, R, SHADOW, FONT } from '../lib/design';
-import { api } from '../lib/api';
 import { IconButton } from './ui';
 import { StatusIndicator } from './StatusIndicator';
 import { ExpiryBadge } from './ExpiryBadge';
 import { ChatOriginBadge } from './ChatOriginBadge';
 import { resolveChatOrigin } from '../lib/chatOrigin';
-import { getPersonaById, personaLabel, personaInitials } from '../lib/personas';
+import { getPersonaById, personaLabel } from '../lib/personas';
 import { agentDotColor } from './AgentSelector';
+import { PersonaFace } from '../features/personas/PersonaFace';
 import { TeamMechanicBadge } from '../features/team/TeamMechanicBadge';
 import { teamTurnPreview } from '../features/team/teamMechanics';
 import { getLastMechanic } from '../lib/lastMechanic';
@@ -19,6 +18,15 @@ import { getLastMechanic } from '../lib/lastMechanic';
 const COMPANION_W = 84;
 // Лицо плотное у правого края и тает влево; хвост доводит до левого края цветовая вуаль
 const BACKDROP_FADE = 'linear-gradient(to left, #000 40%, transparent)';
+
+// Стоп цветовой вуали. Цвета персон — hex, но фолбэк палитры это CSS-переменная,
+// к которой альфу не приклеить, поэтому для неё считаем прозрачность через color-mix
+function veilStop(color: string, alpha: number, pos: number): string {
+  const c = /^#[0-9a-f]{6}$/i.test(color)
+    ? color + Math.round(alpha * 255).toString(16).padStart(2, '0')
+    : `color-mix(in srgb, ${color} ${Math.round(alpha * 100)}%, transparent)`;
+  return `${c} ${pos}%`;
+}
 
 // Умеет ли устройство наводить курсор. На тач-экранах hover не наступает никогда,
 // поэтому кнопки действий там показываем постоянно (приём как в MarkdownViewer)
@@ -36,41 +44,42 @@ const GLASS: React.CSSProperties = {
 };
 
 /**
- * Собеседник в правом углу карточки: фото персоны почти в полную силу (а если
- * фото нет — крупные инициалы её цветом), плюс вуаль того же цвета, уводящая
- * лицо влево. Ширина полосы — как у блока кнопок, которые лежат поверх.
+ * Собеседник в правом углу карточки: лицо персоны почти в полную силу плюс вуаль
+ * её цветом, уводящая изображение влево. Ширина полосы — как у блока кнопок,
+ * которые лежат поверх. Прозрачность у фото и инициалов разная: буквы визуально
+ * легче фотографии и при равной прозрачности выглядели бы бледнее
  */
 function PersonaBackdrop({ persona }: { persona: Persona }) {
-  const [hasError, setHasError] = useState(false);
-  const imageUrl = persona.avatar?.kind === 'image' ? api.personas.avatarUrl(persona) : null;
   const color = agentDotColor(persona.avatar?.color);
-  const base: React.CSSProperties = {
-    position: 'absolute', top: 0, right: 0, bottom: 0, width: COMPANION_W,
-    pointerEvents: 'none', userSelect: 'none',
-    WebkitMaskImage: BACKDROP_FADE, maskImage: BACKDROP_FADE,
-  };
+  const hasPhoto = persona.avatar?.kind === 'image';
 
   return (
     <>
-      {/* Вуаль цветом персоны — подхватывает растворение лица и доводит его до левого края */}
+      {/* Вуаль цветом персоны: подхватывает лицо у его края и длинной мягкой
+          растяжкой уводит цвет влево — стык картинки с фоном карточки не читается.
+          Ступени по альфе, а не один линейный переход: так спад плавнее */}
       <div aria-hidden style={{
-        position: 'absolute', inset: 0, pointerEvents: 'none', opacity: 0.16,
-        background: `linear-gradient(to left, ${color}, transparent 88%)`,
+        position: 'absolute', inset: 0, pointerEvents: 'none', opacity: 0.22,
+        background: 'linear-gradient(to left, '
+          + [
+            veilStop(color, 1, 0),
+            veilStop(color, 0.82, 16),
+            veilStop(color, 0.5, 38),
+            veilStop(color, 0.22, 62),
+            veilStop(color, 0.06, 82),
+            veilStop(color, 0, 100),
+          ].join(', ') + ')',
       }} />
-      {imageUrl && !hasError ? (
-        <img
-          src={imageUrl} alt="" aria-hidden onError={() => setHasError(true)}
-          style={{ ...base, objectFit: 'cover', objectPosition: 'right center', opacity: 0.92 }}
-        />
-      ) : (
-        <div aria-hidden style={{
-          ...base, opacity: 0.85,
-          display: 'flex', alignItems: 'center', justifyContent: 'flex-end', paddingRight: 10,
-          color, fontFamily: FONT.sans, fontWeight: 800, fontSize: 38, lineHeight: 1, letterSpacing: -1,
-        }}>
-          {personaInitials(persona.name)}
-        </div>
-      )}
+      <PersonaFace
+        persona={persona} align="right" fontSize={38}
+        style={{
+          position: 'absolute', top: 0, right: 0, bottom: 0, width: COMPANION_W,
+          pointerEvents: 'none', userSelect: 'none',
+          WebkitMaskImage: BACKDROP_FADE, maskImage: BACKDROP_FADE,
+          opacity: hasPhoto ? 0.92 : 0.85,
+          paddingRight: hasPhoto ? undefined : 10,
+        }}
+      />
     </>
   );
 }
@@ -114,11 +123,12 @@ export function ChatCard({
   const origin = resolveChatOrigin(s);
   // Последняя запущенная в чате механика команды — компактный бейдж
   const mechanic = getLastMechanic(s.id);
-  // Действия — строго по наведению; выбранная карточка их больше не показывает.
-  // На тач-устройствах наведения нет — там показываем всегда, иначе кнопки стали бы
-  // недостижимы. Проверяем именно возможность hover, а не ширину: на планшете в
-  // широкой раскладке isMobile=false, но навести всё равно нечем
-  const showActions = online && (hovered || !CAN_HOVER);
+  // Действия: с мышью — по наведению, на тач-устройствах — у выбранного чата.
+  // Показывать их на тач всегда нельзя: они висели бы поверх лица собеседника на
+  // каждой карточке. Тап по чату и открывает его, и раскрывает кнопки.
+  // Проверяем возможность hover, а не ширину: на планшете в широкой раскладке
+  // isMobile=false, но навести всё равно нечем
+  const showActions = online && (CAN_HOVER ? hovered : isActive);
   const cardBg = isActive ? C.accentLight : C.bgWhite;
   // Лицо для подложки: у группы — ведущая (первая в составе)
   const backdropPersona = group.length > 1 ? group[0] : persona;

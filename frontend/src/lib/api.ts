@@ -953,6 +953,8 @@ export const api = {
     // Откат правок файла к HEAD — необратимо (подтверждение на фронте)
     discard: (projectId: string, path: string) =>
       request<GitStatus>(`/projects/${projectId}/git/discard`, { method: 'POST', body: JSON.stringify({ path }) }),
+    discardAll: (projectId: string) =>
+      request<GitStatus>(`/projects/${projectId}/git/discard-all`, { method: 'POST' }),
     commit: (projectId: string, message: string, amend = false) =>
       request<{ sha: string }>(`/projects/${projectId}/git/commit`, {
         method: 'POST', body: JSON.stringify({ message, amend }),

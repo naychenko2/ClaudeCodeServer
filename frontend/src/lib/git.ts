@@ -161,6 +161,9 @@ export const gitStageAll = (projectId: string) =>
   mutate(projectId, () => api.git.stageAll(projectId));
 export const gitDiscard = (projectId: string, path: string) =>
   mutate(projectId, () => api.git.discard(projectId, path));
+
+export const gitDiscardAll = (projectId: string) =>
+  mutate(projectId, () => api.git.discardAll(projectId));
 export const gitCheckout = (projectId: string, branch: string) =>
   mutate(projectId, () => api.git.checkout(projectId, branch)).then(ok => {
     if (ok) void loadGitBranches(projectId);

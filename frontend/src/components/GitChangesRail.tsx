@@ -7,7 +7,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { CSSProperties } from 'react';
 import {
-  GitBranch, GitCommit, ChevronDown, ChevronRight, ArrowDownRight, ArrowDownToLine,
+  GitBranch, GitCommit, ChevronDown, ChevronRight, RefreshCw, ArrowDownToLine,
   Settings, Sparkles, Undo2, Pencil, CloudUpload, X, List, ListTree, Wand2, FolderClosed,
   ListChecks, CheckCheck, FoldVertical, UnfoldVertical, MessageSquarePlus, MessageSquare,
   Check, Plus, Archive, ArchiveRestore, Trash2,
@@ -16,8 +16,8 @@ import type { Project, GitFileChange, GitLogEntry, GitStashEntry } from '../type
 import { api } from '../lib/api';
 import { C, R, FONT, MODAL_W } from '../lib/design';
 import {
-  useGitState, ensureGit, loadUnpushedLog, loadGitRemote, loadGitBranches, loadGitStash,
-  gitStage, gitUnstage, gitDiscard, gitCommit, gitPush, gitFetch, gitPull, gitCheckout, gitCreateBranch,
+  useGitState, ensureGit, loadUnpushedLog, loadGitLog, loadGitRemote, loadGitBranches, loadGitStash,
+  gitStage, gitUnstage, gitDiscard, gitDiscardAll, gitCommit, gitPush, gitFetch, gitPull, gitCheckout, gitCreateBranch,
   gitStashPush, gitStashPop, gitStashDrop, clearGitError,
 } from '../lib/git';
 import { splitPath, relTime } from './GitPanel';
@@ -43,6 +43,7 @@ interface Props {
   onOpenFile: (path: string) => void;
   onOpenCommit: (sha: string, filePath?: string) => void;
   activeFilePath?: string | null;  // подсветка открытого файла в дереве/списке
+  activeCommitSha?: string | null; // подсветка открытого коммита в истории ветки
   onCommit?: (where: 'chat' | 'newChat') => void;  // делегировать фиксацию чату / новому чату
   onScopeChange?: () => void;  // сменили скоуп/коммит — центральную область сбросить к чату
 }
@@ -125,7 +126,7 @@ function buildTree(files: RowFile[]): TreeNode[] {
   return sortRec(collapse(root.children));
 }
 
-export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, activeFilePath, onCommit, onScopeChange }: Props) {
+export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, activeFilePath, activeCommitSha, onCommit, onScopeChange }: Props) {
   const st = useGitState(project.id);
   const status = st.status;
 
@@ -139,6 +140,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
   const [summary, setSummary] = useState('');
   const [aiBusy, setAiBusy] = useState(false);
   const [discardPath, setDiscardPath] = useState<string | null>(null);
+  const [discardAllConfirm, setDiscardAllConfirm] = useState(false);  // отмена всех изменений
   const [hoveredRow, setHoveredRow] = useState<string | null>(null);
   const [commitFiles, setCommitFiles] = useState<GitFileChange[]>([]);
   const [promptOpen, setPromptOpen] = useState(false);
@@ -169,9 +171,22 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
     () => status ? mergeWorking(status.staged, status.unstaged, status.untracked) : [],
     [status]);
 
+  // Полная история ветки — грузим лениво при выборе скоупа ветки (потом держится
+  // свежей через realtime: onGitStatusChanged перечитывает лог, если он был загружен)
+  useEffect(() => {
+    if (activeScope === 'branch') void loadGitLog(project.id);
+  }, [activeScope, project.id]);
+
+  // Скоуп ветки показывает уже опубликованные коммиты: незапушенные живут в нижнем
+  // списке отдельными скоупами — не дублируем их здесь
+  const pushedCommits = useMemo(() => {
+    const un = new Set(st.unpushed.map(c => c.sha));
+    return st.log.filter(c => !un.has(c.sha));
+  }, [st.log, st.unpushed]);
+
   // Файлы выбранного скоупа (read-only) — коммит или стэш; грузим при активации
   useEffect(() => {
-    if (activeScope === 'working') { setCommitFiles([]); return; }
+    if (activeScope === 'working' || activeScope === 'branch') { setCommitFiles([]); return; }
     let alive = true;
     const stashIdx = activeScope.startsWith('stash:') ? Number(activeScope.slice(6)) : null;
     const load = stashIdx != null
@@ -231,6 +246,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
     () => commitFiles.map(f => ({ path: f.path, status: f.status, staged: false, added: f.added ?? null, deleted: f.deleted ?? null })),
     [commitFiles]);
   const isWorking = activeScope === 'working';
+  const isBranch = activeScope === 'branch';
   const isStash = activeScope.startsWith('stash:');
   const rows = isWorking ? workingFiles : commitRows;
   const tree = useMemo(() => buildTree(rows), [rows]);
@@ -286,8 +302,10 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
     }
   };
 
-  // Открыть форму: заранее проиндексировать выбранные, чтобы ✨ видела дифф индекса
+  // Открыть форму: показать сверху фиксируемые файлы (а не историю ветки/чужой скоуп)
+  // и заранее проиндексировать выбранные, чтобы ✨ видела дифф индекса
   const openCommitForm = async () => {
+    setActiveScope('working');
     setMode('commit');
     await syncIndexToSelection();
   };
@@ -392,6 +410,29 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
     );
   };
 
+  // Строка коммита истории ветки (скоуп «ветка») — клик открывает экран коммита в центре
+  const renderCommitRow = (c: GitLogEntry) => {
+    const active = !!activeCommitSha && c.sha === activeCommitSha;
+    const rowKey = `log:${c.sha}`;
+    const hovered = hoveredRow === rowKey;
+    return (
+      <div
+        key={c.sha}
+        onClick={() => onOpenCommit(c.sha)}
+        onMouseEnter={() => setHoveredRow(rowKey)}
+        onMouseLeave={() => setHoveredRow(null)}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 7, minHeight: 30, padding: '4px 8px',
+          borderRadius: 8, cursor: 'pointer', background: active ? C.accentLight : hovered ? C.bgSelected : 'transparent',
+        }}
+      >
+        <GitCommit size={13} strokeWidth={ICON_STROKE} color={active ? C.accent : C.textSecondary} style={{ flexShrink: 0 }} />
+        <span title={c.subject} style={{ flex: 1, minWidth: 0, fontSize: 12, color: active ? C.accent : C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.subject}</span>
+        <span title={relTime(c.date)} style={{ fontFamily: FONT.mono, fontSize: 10, color: active ? C.accent : C.textMuted, flexShrink: 0 }}>{c.shortSha}</span>
+      </div>
+    );
+  };
+
   // Рекурсивный рендер дерева
   const renderTree = (nodes: TreeNode[], depth: number): React.ReactNode =>
     nodes.map(n => {
@@ -433,8 +474,11 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
         {/* Шапка зоны файлов: подпись скоупа + выбор + свернуть/развернуть + toggle список/дерево */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '10px 10px 6px' }}>
           <span style={{ flex: 1, fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.04em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            Файлы · {scopeLabel}
+            {isBranch ? `Коммиты · ${status?.branch ?? '—'}` : `Файлы · ${scopeLabel}`}
           </span>
+          {/* Управление списком файлов — только для файловых скоупов (не для истории ветки) */}
+          {!isBranch && (
+          <>
           {/* Режим выбора файлов (чекбоксы) — только для текущих изменений */}
           {isWorking && rows.length > 0 && (
             <>
@@ -473,10 +517,18 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
               <ListTree size={14} strokeWidth={ICON_STROKE} color={viewMode === 'tree' ? C.accent : C.textMuted} />
             </button>
           </div>
+          </>
+          )}
         </div>
-        {/* Список/дерево файлов */}
+        {/* Тело: история ветки (скоуп «ветка») ИЛИ список/дерево файлов */}
         <div style={{ flex: 1, overflowY: 'auto', padding: '0 8px 6px' }}>
-          {rows.length === 0 ? (
+          {isBranch ? (
+            pushedCommits.length === 0 ? (
+              <div style={{ padding: '20px 12px', textAlign: 'center', fontSize: 12.5, color: C.textMuted, fontFamily: FONT.sans }}>
+                {st.logLoaded ? 'Нет опубликованных коммитов' : 'Загрузка…'}
+              </div>
+            ) : pushedCommits.map(renderCommitRow)
+          ) : rows.length === 0 ? (
             <div style={{ padding: '20px 12px', textAlign: 'center', fontSize: 12.5, color: C.textMuted, fontFamily: FONT.sans }}>
               {isWorking ? 'Рабочее дерево чистое' : 'Нет файлов'}
             </div>
@@ -565,15 +617,23 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
               >
                 <Pencil size={13} strokeWidth={ICON_STROKE} color={isWorking ? C.accent : C.textSecondary} style={{ flexShrink: 0 }} />
                 <span style={{ flex: 1, minWidth: 0, fontSize: 12, color: isWorking ? C.accent : C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Не зафиксировано</span>
-                {/* Кнопка фиксации — без дропдауна, чтобы строка спокойно скроллилась */}
-                {isWorking && (
-                  <button
-                    onClick={e => { e.stopPropagation(); void openCommitForm(); }}
-                    title="Зафиксировать изменения"
-                    style={{ flexShrink: 0, fontSize: 11, fontWeight: 600, color: C.onAccent, background: C.accent, border: 'none', borderRadius: 6, padding: '3px 10px', cursor: 'pointer', whiteSpace: 'nowrap' }}
-                  >Зафиксировать</button>
+                {/* Выделено: «Зафиксировать» + отмена всех изменений (вместо счётчика);
+                    не выделено: счётчик файлов */}
+                {isWorking ? (
+                  <>
+                    <button
+                      onClick={e => { e.stopPropagation(); void openCommitForm(); }}
+                      title="Зафиксировать изменения"
+                      style={{ flexShrink: 0, fontSize: 11, fontWeight: 600, color: C.onAccent, background: C.accent, border: 'none', borderRadius: 6, padding: '3px 10px', cursor: 'pointer', whiteSpace: 'nowrap' }}
+                    >Зафиксировать</button>
+                    <IconButton size="xs" tone="danger" color={C.danger} title="Отменить все изменения"
+                      onClick={e => { e.stopPropagation(); setDiscardAllConfirm(true); }}>
+                      <Undo2 size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+                    </IconButton>
+                  </>
+                ) : (
+                  <span style={{ fontFamily: FONT.mono, fontSize: 10.5, color: C.textMuted, minWidth: 14, textAlign: 'right' }}>{workingFiles.length}</span>
                 )}
-                <span style={{ fontFamily: FONT.mono, fontSize: 10.5, color: isWorking ? C.accent : C.textMuted, minWidth: 14, textAlign: 'right' }}>{selectMode ? selectedCount : workingFiles.length}</span>
               </div>
               )}
 
@@ -636,35 +696,51 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
       {/* === Ветка: строка в стиле скоупа (селектор ветки + fetch/pull); в режиме фиксации скрыта === */}
       {mode === 'list' && (
       <div style={{ background: C.bgInset, padding: '0 8px 6px', flexShrink: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        {/* Весь ряд ветки = один скоуп: подсветка на всю длину, включая fetch/pull */}
+        <div
+          onMouseEnter={() => setHoveredRow('branch')}
+          onMouseLeave={() => setHoveredRow(null)}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 6, borderRadius: 8, padding: '0 2px 0 0',
+            background: (isBranch || branchMenu) ? C.accentLight : hoveredRow === 'branch' ? C.bgSelected : 'transparent',
+          }}
+        >
           <div style={{ position: 'relative', flex: 1, minWidth: 0, display: 'flex' }}>
-            <button
-              onClick={openBranchMenu}
-              disabled={st.busy}
-              onMouseEnter={() => setHoveredRow('branch')}
-              onMouseLeave={() => setHoveredRow(null)}
+            {/* Тело строки = выбор скоупа «ветка» (история в верхней зоне);
+                стрелка вниз — отдельная кнопка, открывает меню выбора/создания ветки */}
+            <div
+              onClick={() => selectScope('branch')}
               title={status?.branch ?? undefined}
               style={{
                 flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 7, minHeight: 30,
-                padding: '4px 8px', borderRadius: 8, cursor: st.busy ? 'default' : 'pointer', textAlign: 'left',
-                border: `1px solid ${branchMenu ? C.accent : C.border}`,
-                background: branchMenu ? C.accentLight : hoveredRow === 'branch' ? C.bgSelected : 'transparent', opacity: st.busy ? 0.7 : 1,
+                padding: '4px 4px 4px 8px', borderRadius: 8, cursor: 'pointer', textAlign: 'left',
+                background: 'transparent',
               }}
             >
               {st.busy
                 ? <span style={{ width: 13, height: 13, flexShrink: 0, borderRadius: '50%', border: `2px solid ${C.track}`, borderTopColor: C.accent, animation: 'cc-spin 0.6s linear infinite' }} />
-                : <GitBranch size={13} strokeWidth={ICON_STROKE} color={C.accent} style={{ flexShrink: 0 }} />}
-              <span style={{ flex: 1, minWidth: 0, fontSize: 12, color: C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                : <GitBranch size={13} strokeWidth={ICON_STROKE} color={isBranch ? C.accent : C.textSecondary} style={{ flexShrink: 0 }} />}
+              <span style={{ flex: 1, minWidth: 0, fontSize: 12, color: isBranch ? C.accent : C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 {status?.detached ? `${status.branch ?? 'HEAD'} (detached)` : (status?.branch ?? '—')}
               </span>
               {(ahead > 0 || (status?.behind ?? 0) > 0) && (
-                <span style={{ fontFamily: FONT.mono, fontSize: 10, color: C.textMuted, flexShrink: 0, display: 'flex', gap: 3 }}>
+                <span style={{ fontFamily: FONT.mono, fontSize: 10, color: isBranch ? C.accent : C.textMuted, flexShrink: 0, display: 'flex', gap: 3 }}>
                   {ahead > 0 && <span>↑{ahead}</span>}
                   {(status?.behind ?? 0) > 0 && <span>↓{status?.behind}</span>}
                 </span>
               )}
-              <ChevronDown size={12} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} />
-            </button>
+              <button
+                onClick={e => { e.stopPropagation(); openBranchMenu(); }}
+                disabled={st.busy}
+                title="Выбрать ветку"
+                style={{
+                  display: 'flex', alignItems: 'center', flexShrink: 0, padding: '3px 4px', margin: '-3px 0',
+                  border: 'none', background: 'transparent', borderRadius: 6, cursor: st.busy ? 'default' : 'pointer',
+                }}
+              >
+                <ChevronDown size={12} strokeWidth={ICON_STROKE} color={branchMenu ? C.accent : C.textMuted} />
+              </button>
+            </div>
             {branchMenu && (
               <Menu onClose={() => setBranchMenu(false)} align="left" bottom={40} minWidth={220}>
                 {st.branches.map(b => (
@@ -684,23 +760,23 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
               </Menu>
             )}
           </div>
-          <IconButton size="sm" title="Проверить обновления (fetch)" disabled={st.busy} onClick={() => void gitFetch(project.id)}>
-            <ArrowDownRight size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-          </IconButton>
           <IconButton size="sm" title="Забрать и слить (pull)" disabled={st.busy} onClick={() => void gitPull(project.id)}>
             <ArrowDownToLine size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+          </IconButton>
+          <IconButton size="sm" title="Проверить обновления (fetch)" disabled={st.busy} onClick={() => void gitFetch(project.id)}>
+            <RefreshCw size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
           </IconButton>
         </div>
       </div>
       )}
 
-      {/* Опубликовать — вне режима фиксации */}
-      {mode === 'list' && canPublish && (
+      {/* Опубликовать — вне режима фиксации; когда публиковать нечего — дизейблим, не скрываем */}
+      {mode === 'list' && (
         <div style={{ borderTop: `1px solid ${C.border}`, padding: '9px 10px', flexShrink: 0 }}>
-          <Button variant="primary" fullWidth size="sm" loading={st.busy}
+          <Button variant="primary" fullWidth size="sm" loading={st.busy} disabled={!canPublish}
             leftIcon={<CloudUpload size={14} strokeWidth={ICON_STROKE} />}
             onClick={() => setPublishConfirm(true)}>
-            Опубликовать {ahead || st.unpushed.length}
+            {canPublish ? `Опубликовать ${ahead || st.unpushed.length}` : 'Опубликовать'}
           </Button>
         </div>
       )}
@@ -723,6 +799,28 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
         >
           <div style={{ fontSize: 13, color: C.textSecondary, fontFamily: FONT.sans, lineHeight: 1.5 }}>
             Правки в <span style={{ fontFamily: FONT.mono, color: C.textPrimary }}>{splitPath(discardPath)[1]}</span> будут потеряны безвозвратно.
+          </div>
+        </Modal>
+      )}
+
+      {/* === Подтверждение отмены ВСЕХ изменений === */}
+      {discardAllConfirm && (
+        <Modal
+          width={MODAL_W.confirm}
+          onClose={() => setDiscardAllConfirm(false)}
+          title="Отменить все изменения"
+          subtitle={<span>{workingFiles.length} файл(ов) в рабочем дереве</span>}
+          footer={
+            <ModalActions
+              confirmLabel="Отменить все"
+              confirmVariant="danger"
+              onConfirm={() => { setDiscardAllConfirm(false); setActiveScope('working'); void gitDiscardAll(project.id); }}
+              onCancel={() => setDiscardAllConfirm(false)}
+            />
+          }
+        >
+          <div style={{ fontSize: 13, color: C.textSecondary, fontFamily: FONT.sans, lineHeight: 1.5 }}>
+            Все незафиксированные правки будут сброшены к последнему коммиту, а новые (неотслеживаемые) файлы — удалены безвозвратно. Игнорируемые файлы (сборки, артефакты) не тронем.
           </div>
         </Modal>
       )}

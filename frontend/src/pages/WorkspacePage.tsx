@@ -26,6 +26,7 @@ import { navPush, navReplace, parseHash, type NavSnapshot } from '../lib/nav';
 import { EditDialog } from '../features/projects/dialogs/EditDialog';
 import { ProjectIcon } from '../features/projects/ProjectIcon';
 import { TasksPanel } from '../features/tasks/TasksPanel';
+import { PillViewSwitcher, ListIcon, ByDateIcon, BoardIcon } from '../features/tasks/bits';
 import { TaskDetailsPane } from '../features/tasks/TaskDetailsPane';
 import { TaskBoard } from '../features/tasks/board/TaskBoard';
 import { BoardColumnsDialog } from '../features/tasks/board/BoardColumnsDialog';
@@ -510,6 +511,20 @@ const windowWidth = useWindowWidth();
     if (on && isMobile) setMobileView('chat');
     navPush({ screen: 'project', project, view, file: null, task: null, board: on });
   };
+  // Группировка списка задач («Список»/«По дате») — поднята сюда, чтобы переключатель
+  // видов можно было вынести в шапку карточки «Задачи» в cc-panels (общее состояние
+  // с содержимым панели). В старом сайдбаре переключатель остаётся внутри TasksPanel.
+  const [projectGroupTab, setProjectGroupTab] = useState<'status' | 'date'>('status');
+  // Значение и обработчик единого переключателя «Список | По дате | Доска»
+  const ccTasksView: 'status' | 'date' | 'board' = projectBoard ? 'board' : projectGroupTab;
+  const onCcTasksView = (v: 'status' | 'date' | 'board') => {
+    // handleProjectBoard пушит в историю навигации и localStorage — дёргаем его
+    // только при реальной смене режима доски, а не на каждом Список↔По дате
+    if (v === 'board') { if (!projectBoard) handleProjectBoard(true); return; }
+    if (projectBoard) handleProjectBoard(false);
+    setProjectGroupTab(v);
+  };
+
   const projectTasks = useMemo(
     () => allTasks.filter(t => t.projectId === project.id),
     [allTasks, project.id],
@@ -1197,7 +1212,7 @@ const windowWidth = useWindowWidth();
         {leftTab === 'sessions' ? (
           <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} onCleared={handleClearSession} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} />
         ) : leftTab === 'tasks' ? (
-          <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={isMobile} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} />
+          <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={isMobile} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} groupTab={projectGroupTab} onGroupTab={setProjectGroupTab} />
         ) : leftTab === 'personas' ? (
           <ProjectPersonasPanel project={project} selectedId={personaCreating ? null : selectedPersonaId} onSelect={handlePersonaSelect} onNew={handlePersonaNew} onShowTeam={handleShowTeam} teamActive={!selectedPersonaId && !personaCreating} />
         ) : leftTab === 'tools' ? (
@@ -1283,7 +1298,7 @@ const windowWidth = useWindowWidth();
             {leftTab === 'sessions'
               ? <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} onCleared={handleClearSession} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} />
               : leftTab === 'tasks'
-              ? <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={isMobile} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} />
+              ? <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={isMobile} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} groupTab={projectGroupTab} onGroupTab={setProjectGroupTab} />
               : leftTab === 'personas'
               ? <ProjectPersonasPanel project={project} selectedId={personaCreating ? null : selectedPersonaId} onSelect={handlePersonaSelect} onNew={handlePersonaNew} onShowTeam={handleShowTeam} teamActive={!selectedPersonaId && !personaCreating} />
               : leftTab === 'tools'
@@ -1428,10 +1443,27 @@ const windowWidth = useWindowWidth();
             files: fileSubTab === 'files'
               ? <FileExplorer project={project} activeFilePath={openFile} isMobile={false} onOpenFile={handleOpenFileFromTree} onOpenGitDiff={handleOpenGitDiff} onOpenCommit={handleOpenCommit} onAddToKnowledge={handleAddToKnowledge} onAddFolderToKnowledge={handleAddFolderToKnowledge} onRemoveFromKnowledge={handleRemoveFromKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} indexingFolders={indexingFolders} onAttachToChat={activeSession && !fileFullscreen ? handleAttachToChat : undefined} onOpenKnowledge={() => setFileSubTab('knowledge')} />
               : <KnowledgePanel project={project} isMobile={false} onDocumentsChanged={setIndexedFileNames} onBack={() => setFileSubTab('files')} />,
-            tasks: <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={false} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} />,
+            tasks: <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={false} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} groupTab={projectGroupTab} onGroupTab={setProjectGroupTab} hideViewSwitcher />,
             team: <ProjectPersonasPanel project={project} selectedId={personaCreating ? null : selectedPersonaId} onSelect={handlePersonaSelect} onNew={handlePersonaNew} onShowTeam={() => { handlePersonaCleared(); setTeamCenterOpen(true); }} teamActive={teamCenterOpen && !selectedPersonaId && !personaCreating} />,
             terminal: <TerminalPanelContent terminals={terminals} activeTerminalId={activeTerminalId} onSelect={handleSelectTerminal} onCreate={handleCreateTerminal} onStop={handleStopTerminal} onActivity={setTerminalBusy} />,
             preview: <PreviewPanelContent projectId={project.id} services={previewServices} activePreviewId={activePreviewId} onSelect={setActivePreviewId} onStart={startService} onStop={stopService} onRefresh={refreshServices} />,
+          }}
+          panelHeaderExtras={{
+            // Переключатель видов задач в шапке карточки (только иконки) — общее
+            // состояние с содержимым панели (projectGroupTab / projectBoard)
+            tasks: (
+              <PillViewSwitcher<'status' | 'date' | 'board'>
+                compact
+                trackBg={C.track}
+                value={ccTasksView}
+                options={[
+                  { value: 'status', label: 'Список', icon: <ListIcon size={16} /> },
+                  { value: 'date', label: 'По дате', icon: <ByDateIcon size={16} /> },
+                  { value: 'board', label: 'Доска', icon: <BoardIcon size={16} /> },
+                ]}
+                onChange={onCcTasksView}
+              />
+            ),
           }}
         />
       ) : (

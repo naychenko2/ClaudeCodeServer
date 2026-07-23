@@ -46,6 +46,9 @@ interface Props {
   // Готовый контент панелек (кроме Плана — он собирается здесь из артефактов сессии).
   // Строится в WorkspacePage, где живут состояние и обработчики этих инструментов.
   panels: Partial<Record<Exclude<PanelKey, 'plan'>, ReactNode>>;
+  // Контролы в шапку карточки (слева от fullscreen/close) — напр. переключатель
+  // видов задач. Собираются в WorkspacePage, состояние живёт там же.
+  panelHeaderExtras?: Partial<Record<PanelKey, ReactNode>>;
 }
 
 // Вертикальный разделитель между колонками (и по краям зоны): в покое — пустой
@@ -145,9 +148,11 @@ function GapHandle({ active, onPointerDown }: { active: boolean; onPointerDown: 
 
 // Карточка панельки: скруглённая, с шапкой 40px (drag-хендл для перестановки),
 // кнопками fullscreen и закрытия
-function PanelShell({ k, badge, fullscreen, canDrag, onToggleFullscreen, onClose, dragged, dropTarget, onDragStart, onDragEnd, onDragOver, onDragLeave, onDrop, children }: {
+function PanelShell({ k, badge, headerExtras, fullscreen, canDrag, onToggleFullscreen, onClose, dragged, dropTarget, onDragStart, onDragEnd, onDragOver, onDragLeave, onDrop, children }: {
   k: PanelKey;
   badge: string | null;
+  // Кастомные контролы в шапке (напр. переключатель видов задач) — слева от кнопок
+  headerExtras?: ReactNode;
   fullscreen: boolean;
   // Solo-режим: одна панель без перетаскивания — шапка не drag-хендл
   canDrag: boolean;
@@ -221,6 +226,17 @@ function PanelShell({ k, badge, fullscreen, canDrag, onToggleFullscreen, onClose
             {badge}
           </span>
         )}
+        {/* Контролы шапки (переключатель видов и т.п.): draggable=false, чтобы взаимодействие
+            с ними не инициировало перетаскивание карточки за шапку */}
+        {headerExtras && (
+          <span
+            draggable={false}
+            onDragStart={e => e.preventDefault()}
+            style={{ flexShrink: 0, display: 'flex', alignItems: 'center' }}
+          >
+            {headerExtras}
+          </span>
+        )}
         {iconBtn(onToggleFullscreen, fullscreen ? 'Свернуть к раскладке' : 'Развернуть на всю область',
           fullscreen ? <Minimize2 size={13} strokeWidth={ICON_STROKE} /> : <Maximize2 size={13} strokeWidth={ICON_STROKE} />)}
         {iconBtn(onClose, 'Скрыть панель', <X size={14} strokeWidth={ICON_STROKE} />)}
@@ -232,7 +248,7 @@ function PanelShell({ k, badge, fullscreen, canDrag, onToggleFullscreen, onClose
   );
 }
 
-export function RightPanelStack({ session, projectId, rootPath, isTablet, toolsEnabled, panels }: Props) {
+export function RightPanelStack({ session, projectId, rootPath, isTablet, toolsEnabled, panels, panelHeaderExtras }: Props) {
   const { layout, weights, width, fullscreen, mode, toggle, close, collapsed, toggleCollapsed, setWeights, setWidth, moveTo, moveToNewColumn, moveAt, setFullscreen, setMode } = usePanelStack();
   const windowWidth = useWindowWidth();
   // Планшет: до ДВУХ панелей стеком в одной колонке; выбор локальный эфемерный —
@@ -369,6 +385,7 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, toolsE
         <PanelShell
           k={k}
           badge={k === 'plan' && plansCount > 1 ? `${plansCount}` : null}
+          headerExtras={panelHeaderExtras?.[k]}
           fullscreen={isFs}
           canDrag={!soloMode && !isTablet}
           onToggleFullscreen={() => setFullscreen(isFs ? null : k)}

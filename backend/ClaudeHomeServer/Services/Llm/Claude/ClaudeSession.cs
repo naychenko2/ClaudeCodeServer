@@ -306,6 +306,14 @@ public class ClaudeSession : ILlmSessionAdapter
         try
         {
             var servers = new System.Text.Json.Nodes.JsonObject();
+            // Отпечаток СОСТАВА инструментов сервера (ключ сервера → суффикс сигнатуры).
+            // Per-turn env, меняющие набор tools (PERSONAS_WRITE/MENTIONS, WORKSPACE_WRITE,
+            // TASKS_EXECUTE, …), не попадают в токены/URL (те исключены из сигнатуры как
+            // изменчивые). Без этого отпечатка смена, напр., PERSONAS_WRITE 0→1 не меняла
+            // сигнатуру запуска — ход уходил в живой процесс доживания, personas_create там
+            // так и не поднимался («No such tool available»). Копится параллельно servers,
+            // вклеивается в ServerKeys ниже.
+            var shapes = new Dictionary<string, string>(StringComparer.Ordinal);
 
             // User-scope серверы (только у сторонних провайдеров) — первыми:
             // одноимённые из базового конфига ниже их перекроют
@@ -353,6 +361,9 @@ public class ClaudeSession : ILlmSessionAdapter
 
             if (hasTasks)
             {
+                // tasks_execute порождает новую сессию Claude — на агентном ходу
+                // (chats_send из другой сессии) не даём, та же анти-рекурсия, что у chats
+                var tasksExecute = _currentTurnAgentDepth < 1 ? "1" : "0";
                 servers["tasks"] = new System.Text.Json.Nodes.JsonObject
                 {
                     ["command"] = "node",
@@ -367,11 +378,10 @@ public class ClaudeSession : ILlmSessionAdapter
                         // меняется по ходу разговора (SetPersona, смена спикера в группе)
                         ["TASKS_SESSION_ID"] = Info.Id,
                         ["TASKS_SELF_PERSONA_ID"] = Info.PersonaId ?? "",
-                        // tasks_execute порождает новую сессию Claude — на агентном ходу
-                        // (chats_send из другой сессии) не даём, та же анти-рекурсия, что у chats
-                        ["TASKS_EXECUTE"] = _currentTurnAgentDepth < 1 ? "1" : "0",
+                        ["TASKS_EXECUTE"] = tasksExecute,
                     },
                 };
+                shapes["tasks"] = $"e{tasksExecute}";
             }
 
             if (hasNotes)
@@ -445,6 +455,9 @@ public class ClaudeSession : ILlmSessionAdapter
                         ["PERSONAS_WRITE"] = personaWrite,
                     },
                 };
+                // Состав инструментов персон зависит от write/mentions/bindings — в сигнатуру,
+                // иначе поднятие write-канала (personas_create/…) не пробьёт доживание процесса
+                shapes["personas"] = $"w{personaWrite}m{personaMentions}b{(_personasMcp.BindingsEnabled ? "1" : "0")}";
             }
 
             if (hasWorkspace)
@@ -455,6 +468,8 @@ public class ClaudeSession : ILlmSessionAdapter
                 var sections = _currentTurnAgentDepth >= 1
                     ? _workspaceMcp!.Sections.Where(s => s != "chats" && s != "destructive")
                     : _workspaceMcp!.Sections;
+                var sectionsJoined = string.Join(",", sections);
+                var workspaceWrite = Prompts.WriteIntentGate.WorkspaceWrite(turnText) ? "1" : "0";
                 // Ключ сервера — "wsp", НЕ "workspace": claude CLI молча отбрасывает
                 // MCP-сервер с зарезервированным именем "workspace" из --mcp-config
                 // (сервер не стартует, инструменты не появляются). Отсюда же префикс
@@ -468,7 +483,7 @@ public class ClaudeSession : ILlmSessionAdapter
                         ["WORKSPACE_API_URL"] = _workspaceMcp!.ApiUrl,
                         ["WORKSPACE_API_TOKEN"] = _workspaceMcp.Token,
                         ["WORKSPACE_PROJECT_ID"] = _workspaceMcp.ProjectId ?? "",
-                        ["WORKSPACE_SECTIONS"] = string.Join(",", sections),
+                        ["WORKSPACE_SECTIONS"] = sectionsJoined,
                         ["WORKSPACE_PROJECT_IDS"] = _workspaceMcp.AllowedProjectIds is { Count: > 0 } allowed
                             ? string.Join(",", allowed) : "",
                         ["WORKSPACE_SELF_SESSION_ID"] = _workspaceMcp.SelfSessionId ?? "",
@@ -478,13 +493,15 @@ public class ClaudeSession : ILlmSessionAdapter
                         // пространство. Read (list/tree/read/search/status/history) — всегда.
                         // Depth-гейта нет: делегированный ход тоже может нести интент записи; chats
                         // и destructive и так режутся секциями на агентном ходу выше.
-                        ["WORKSPACE_WRITE"] = Prompts.WriteIntentGate.WorkspaceWrite(turnText) ? "1" : "0",
+                        ["WORKSPACE_WRITE"] = workspaceWrite,
                     },
                     // alwaysLoad как у memory/personas: аккаунт-коннекторы claude.ai переводят
                     // CLI в режим deferred-tools, где ленивые серверы прячут инструменты от модели.
                     // Персона-секретарь опирается на workspace-инструменты — держим их всегда видимыми.
                     ["alwaysLoad"] = true,
                 };
+                // Состав wsp-инструментов зависит от write-режима и набора секций — в сигнатуру
+                shapes["wsp"] = $"w{workspaceWrite}:{sectionsJoined}";
             }
 
             if (hasNotifications)
@@ -580,7 +597,12 @@ public class ClaudeSession : ILlmSessionAdapter
             // HostTempDir среды: для песочницы это bind-mount — процесс claude увидит файл
             var tmpPath = Path.Combine(_launcher.HostTempDir, $"claude-mcp-{Guid.NewGuid():N}.json");
             File.WriteAllText(tmpPath, combined.ToJsonString());
-            return (tmpPath, string.Join(",", servers.Select(kv => kv.Key).OrderBy(k => k, StringComparer.Ordinal)));
+            // Ключ + отпечаток состава инструментов (если есть): смена per-turn флагов
+            // (PERSONAS_WRITE/MENTIONS, WORKSPACE_WRITE/секции, TASKS_EXECUTE) меняет сигнатуру
+            // запуска → живой процесс доживания не переиспользуется, инструменты поднимаются
+            return (tmpPath, string.Join(",", servers
+                .Select(kv => shapes.TryGetValue(kv.Key, out var shp) ? $"{kv.Key}:{shp}" : kv.Key)
+                .OrderBy(k => k, StringComparer.Ordinal)));
         }
         catch (Exception ex)
         {
@@ -1024,7 +1046,10 @@ public class ClaudeSession : ILlmSessionAdapter
             {
                 Interlocked.Increment(ref run.SkipResults);
                 run.ContinuationActive = false;
+                CorrTrace("submit-turn(skip++)", Info.Id, run);
             }
+            else
+                CorrTrace("submit-turn(no-skip)", Info.Id, run);
             run.TurnTcs = CliRun.NewTcs();
             run.TurnDone = false;
             run.Process.StandardInput.WriteLine(userMessageJson);
@@ -1662,10 +1687,14 @@ public class ClaudeSession : ILlmSessionAdapter
                         // тогда переармируем (чтение держим, оно ещё валидно)
                         if (armedTurnDone && !run.TurnDone) continue;
                         if (!run.TurnDone)
-                            // Активный ход молчит дольше допустимого (генерация оборвана или
-                            // инструмент завис) — прерываем с ошибкой, спиннер снимется
+                        {
+                            // Активный ход молчит дольше допустимого (генерация оборвана,
+                            // инструмент завис ИЛИ result хода проглочен корреляцией — тогда
+                            // индикатор залипал до этого момента) — прерываем с ошибкой, спиннер снимется
+                            CorrTrace($"watchdog-timeout({timeout.TotalMinutes:0}min)", Info.Id, run);
                             await _onMessage(new ErrorMessage(
                                 $"Модель не отвечает более {timeout.TotalMinutes:0} мин — ход прерван"));
+                        }
                         else if (run.HasPendingBg)
                             Console.Error.WriteLine(
                                 $"[ClaudeSession] Фоновые агенты не завершились за {_bgLingerTimeout.TotalMinutes:0} мин тишины — завершаем процесс");
@@ -1810,9 +1839,10 @@ public class ClaudeSession : ILlmSessionAdapter
     // Сигнатура окружения прогона — жёсткая часть запуска процесса. Совпала у следующего
     // хода → его можно отдать живому процессу в stdin; отличие → новый процесс.
     // Исключены изменчивые на каждый ход части: --resume (не меняется в рамках сессии),
-    // путь temp MCP-конфига (вместо него набор ключей серверов: содержимое несёт свежий JWT)
-    // и системный промпт целиком — из него в сигнатуре только слой персоны, recall/подсказки
-    // деградируют мягко.
+    // путь temp MCP-конфига (вместо него набор ключей серверов + отпечаток СОСТАВА их
+    // инструментов — write/mentions/секции; токены/URL из содержимого намеренно опущены как
+    // изменчивые) и системный промпт целиком — из него в сигнатуре только слой персоны,
+    // recall/подсказки деградируют мягко.
     private static string BuildLaunchSignature(
         IReadOnlyList<string> args, string mcpServerKeys,
         IReadOnlyDictionary<string, string> envOverrides, string? personaLayerPrompt)
@@ -1828,6 +1858,20 @@ public class ClaudeSession : ILlmSessionAdapter
         if (!string.IsNullOrEmpty(personaLayerPrompt))
             sb.Append("persona=").Append(personaLayerPrompt);
         return sb.ToString();
+    }
+
+    // Трассировка корреляции result↔ход (диагностика залипающего индикатора «дымящийся домик»):
+    // по этим строкам на реальном залипшем кейсе восстанавливается ФАКТИЧЕСКИЙ порядок событий
+    // CLI (сливает ли он ход-продолжение с пользовательским ходом или всегда выдаёт отдельный
+    // result) — без этого нельзя отличить отказной сценарий проглатывания от штатного пропуска.
+    private static void CorrTrace(string ev, string sid, CliRun? run, JsonElement? root = null)
+    {
+        var nt = root is { } r && r.TryGetProperty("num_turns", out var n) && n.ValueKind == JsonValueKind.Number
+            ? n.GetInt32() : -1;
+        Console.WriteLine(
+            $"[ClaudeSession][corr] {ev} sid={sid} turnDone={run?.TurnDone} "
+            + $"skip={(run is null ? -1 : Volatile.Read(ref run.SkipResults))} "
+            + $"cont={run?.ContinuationActive} bg={run?.HasPendingBg} numTurns={nt}");
     }
 
     // run — прогон-владелец read-loop'а, из которого пришла строка. Корреляцию ведём по нему,
@@ -1929,14 +1973,20 @@ public class ClaudeSession : ILlmSessionAdapter
                 // (ответ на task-notification); его result не должен завершить будущий ход
                 // (см. case "result"). Сообщения сабагентов (parent_tool_use_id) — это стрим
                 // доживающих фоновых агентов, а не продолжение.
-                if (run is { TurnDone: true } && !HasParentToolUseId(root))
+                if (run is { TurnDone: true, ContinuationActive: false } && !HasParentToolUseId(root))
+                {
+                    CorrTrace("continuation-start(stream_event)", Info.Id, run, root);
                     run.ContinuationActive = true;
+                }
                 await HandleStreamEventAsync(root);
                 break;
 
             case "assistant":
-                if (run is { TurnDone: true } && !HasParentToolUseId(root))
+                if (run is { TurnDone: true, ContinuationActive: false } && !HasParentToolUseId(root))
+                {
+                    CorrTrace("continuation-start(assistant)", Info.Id, run, root);
                     run.ContinuationActive = true;
+                }
                 TrackContextTokens(root);
                 await HandleAssistantToolsAsync(run, root);
                 break;
@@ -1955,6 +2005,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     var contRun = run;
                     if (contRun.TurnDone)
                     {
+                        CorrTrace("result-skip(turnDone)", Info.Id, contRun, root);
                         contRun.ContinuationActive = false;
                         Console.WriteLine("[ClaudeSession] Result хода-продолжения CLI между ходами — пропущен");
                         CloseStdinIfIdle(contRun);
@@ -1962,10 +2013,12 @@ public class ClaudeSession : ILlmSessionAdapter
                     }
                     if (Volatile.Read(ref contRun.SkipResults) > 0)
                     {
+                        CorrTrace("result-skip(skipResults)", Info.Id, contRun, root);
                         Interlocked.Decrement(ref contRun.SkipResults);
                         Console.WriteLine("[ClaudeSession] Result хода-продолжения CLI при ожидающем ходе — пропущен");
                         break;
                     }
+                    CorrTrace("result-emit", Info.Id, contRun, root);
                 }
                 var subtype = root.TryGetProperty("subtype", out var st) ? st.GetString() ?? "success" : "success";
                 // Числа читаем через безопасные хелперы: openrouter-совместимый поток шлёт

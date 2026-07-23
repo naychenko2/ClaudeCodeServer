@@ -22,6 +22,18 @@ export interface Project {
   permissionRules?: PermissionRule[];
   boardColumns?: BoardColumn[];   // кастомные колонки Kanban-доски; отсутствует = дефолтные 3
   builtInSystemPrompt?: string;
+  icon?: ProjectIcon;             // иконка проекта: инициалы+цвет или картинка
+}
+
+// Иконка проекта (по образцу PersonaAvatar): инициалы на цветном фоне или картинка
+// (сгенерированная/загруженная). color — ключ палитры AGENT_COLORS; imageFile — имя файла
+// в хранилище проекта; originalFile/crop — оригинал и параметры кропа (для «Перекроить»).
+export interface ProjectIcon {
+  kind: 'initials' | 'image';
+  color?: string;
+  imageFile?: string;
+  originalFile?: string | null;
+  crop?: AvatarCropStateDto | null;
 }
 
 // Колонка Kanban-доски проекта. category — семантическая категория статуса

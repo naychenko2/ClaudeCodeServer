@@ -157,11 +157,77 @@ export const api = {
     removeTeamMemory: (id: string, entryId: string) =>
       request<void>(`/projects/${encodeURIComponent(id)}/team-memory/${encodeURIComponent(entryId)}`, { method: 'DELETE' }),
     create: (name: string, rootPath: string | null, createDirectory = false, groupId?: string | null,
-      git?: { enableGit?: boolean; gitAutoCommit?: boolean; gitAutoPush?: boolean }) =>
-      request<Project>('/projects', { method: 'POST', body: JSON.stringify({ name, rootPath, createDirectory, groupId, ...git }) }),
-    update: (id: string, data: { name?: string; rootPath?: string; systemPrompt?: string; showHiddenFiles?: boolean; toolsEnabled?: boolean; permissionRules?: PermissionRule[]; groupId?: string | null }) =>
+      git?: { enableGit?: boolean; gitAutoCommit?: boolean; gitAutoPush?: boolean }, color?: string | null) =>
+      request<Project>('/projects', { method: 'POST', body: JSON.stringify({ name, rootPath, createDirectory, groupId, ...git, color }) }),
+    update: (id: string, data: { name?: string; rootPath?: string; systemPrompt?: string; showHiddenFiles?: boolean; toolsEnabled?: boolean; permissionRules?: PermissionRule[]; groupId?: string | null; color?: string | null }) =>
       request<Project>(`/projects/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
     delete: (id: string) => request<void>(`/projects/${id}`, { method: 'DELETE' }),
+
+    // --- Иконка проекта (по образцу аватара персоны) ---
+    // Можно ли генерировать иконку (настроен ли fal)
+    iconCaps: () => request<{ generate: boolean }>('/projects/icon/caps'),
+    // Генерация галереи кандидатов: возвращает имена файлов (иконка НЕ меняется до выбора). count 1..4.
+    generateIcon: (id: string, opts?: { prompt?: string; count?: number }) =>
+      request<{ candidates: string[] }>(`/projects/${encodeURIComponent(id)}/icon/generate`, {
+        method: 'POST',
+        body: JSON.stringify({ prompt: opts?.prompt?.trim() || undefined, count: opts?.count }),
+      }),
+    // Выбор кандидата — он становится иконкой проекта, возвращается обновлённый проект
+    selectIcon: (id: string, file: string) =>
+      request<Project>(`/projects/${encodeURIComponent(id)}/icon/select`, {
+        method: 'POST', body: JSON.stringify({ file }),
+      }),
+    // URL картинки-иконки для браузерного <img>: токен через ?access_token=, cache-busting по imageFile.
+    // Возвращает null, если у проекта нет картинки.
+    iconUrl: (project: Project): string | null => {
+      if (project.icon?.kind !== 'image' || !project.icon.imageFile) return null;
+      const token = typeof localStorage !== 'undefined'
+        ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
+        : null;
+      const params = new URLSearchParams();
+      if (token) params.set('access_token', token);
+      params.set('v', project.icon.imageFile);
+      return `/api/projects/${encodeURIComponent(project.id)}/icon?${params}`;
+    },
+    // Загрузка своей иконки: оригинал + кропнутый квадрат + параметры кропа
+    uploadIcon: (id: string, original: File, cropped: Blob, crop: { scale: number; offsetX: number; offsetY: number }) => {
+      const form = new FormData();
+      form.append('original', original, original.name || 'original');
+      form.append('cropped', cropped, 'icon.jpg');
+      form.append('crop', JSON.stringify(crop));
+      return request<Project>(`/projects/${encodeURIComponent(id)}/icon/upload`, {
+        method: 'POST', body: form, timeoutMs: 60_000,
+      });
+    },
+    // Перекроп сохранённого оригинала (без повторной загрузки файла)
+    recropIcon: (id: string, cropped: Blob, crop: { scale: number; offsetX: number; offsetY: number }) => {
+      const form = new FormData();
+      form.append('cropped', cropped, 'icon.jpg');
+      form.append('crop', JSON.stringify(crop));
+      return request<Project>(`/projects/${encodeURIComponent(id)}/icon/recrop`, {
+        method: 'POST', body: form, timeoutMs: 60_000,
+      });
+    },
+    // URL оригинала загруженной иконки (для перекропа) — токен через ?access_token=
+    iconOriginalUrl: (project: Project): string | null => {
+      if (!project.icon?.originalFile) return null;
+      const token = typeof localStorage !== 'undefined'
+        ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
+        : null;
+      const params = new URLSearchParams();
+      if (token) params.set('access_token', token);
+      params.set('v', project.icon.originalFile);
+      return `/api/projects/${encodeURIComponent(project.id)}/icon/original?${params}`;
+    },
+    // URL картинки-кандидата (галерея генерации) для <img>: токен через ?access_token=
+    iconCandidateUrl: (id: string, file: string): string => {
+      const token = typeof localStorage !== 'undefined'
+        ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
+        : null;
+      const params = new URLSearchParams();
+      if (token) params.set('access_token', token);
+      return `/api/projects/${encodeURIComponent(id)}/icon/candidate/${encodeURIComponent(file)}?${params}`;
+    },
     getBuiltinPrompt: () => request<{ content: string }>('/projects/builtin-prompt'),
     getEffectivePrompt: (id: string) => request<{ parts: SystemPromptPart[] }>(`/projects/${id}/effective-prompt`),
     // Кастомные колонки Kanban-доски проекта (пустой массив → дефолтные 3)

@@ -4,8 +4,6 @@ import type { Project, Session, ChatItem, SkillInfo, AgentInfo, ClaudeBilling, P
 import { useSession } from '../hooks/useSession';
 import { usePersonasVersion, getPersonaById, getPersonasSnapshot, ensurePersonasLoaded, personaLabel } from '../lib/personas';
 import { findConsultedPersona } from './chat/PersonaTaskView';
-import { PersonaWatermark } from './chat/PersonaWatermark';
-import { useFeature, FLAGS } from '../lib/featureFlags';
 import { showToast } from '../lib/toast';
 import { PersonaGreeting } from '../features/personas/PersonaGreeting';
 import { countFiles, computeTodos } from '../hooks/useSessionArtifacts';
@@ -144,8 +142,6 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     [session.personaId, personasVersion]
   );
   useEffect(() => { void ensurePersonasLoaded(); }, []);
-  // Лицо собеседника фоном ленты — за флагом (dark launch)
-  const showWatermark = useFeature(FLAGS.personaWatermark);
   // Участники группового чата (резолв из стора персон); < 2 — обычный чат
   const participantPersonas = useMemo(
     () => (session.participants ?? [])
@@ -973,10 +969,6 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     <AssistantNameContext.Provider value={asstName}>
     <PersonaContext.Provider value={persona}>
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative', background: C.bgMain }}>
-      {/* Собеседник водяным знаком. Первым в разметке — чтобы уйти под шапку и
-          композер (у них свой непрозрачный фон) и не перекрывать их собой */}
-      {showWatermark && persona && <PersonaWatermark persona={persona} />}
-
       <ChatHeaderBar
         session={session}
         project={project}

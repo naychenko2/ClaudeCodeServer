@@ -14,7 +14,6 @@ export const FLAGS = {
   docAnnotations: 'doc-annotations',
   aiLocalSuggest: 'ai-local-suggest',
   workspaceCcPanels: 'workspace-cc-panels',
-  personaWatermark: 'persona-watermark',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

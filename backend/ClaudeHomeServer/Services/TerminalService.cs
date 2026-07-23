@@ -152,13 +152,23 @@ public sealed class TerminalService : IDisposable
 
         if (isWindows)
         {
-            // Windows: PowerShell с перенаправлением (без PTY)
+            // Windows: PowerShell с перенаправлением (без PTY).
+            // Кодировки: Windows PowerShell 5.1 при перенаправлении пишет вывод в OEM-кодировку
+            // консоли (cp866 на русской Windows), а мы читаем UTF-8 → кириллица кракозябрами.
+            // Поэтому явно переводим дочерний pwsh на UTF-8 стартовой командой ([Console]::*Encoding
+            // + $OutputEncoding), а StdioEncoding=UTF-8-без-BOM синхронизирует чтение наших потоков.
             shell = "powershell.exe";
+            const string bootstrap =
+                "[Console]::OutputEncoding=[Text.Encoding]::UTF8; " +
+                "[Console]::InputEncoding=[Text.Encoding]::UTF8; " +
+                "$OutputEncoding=[Text.Encoding]::UTF8; " +
+                "$Host.UI.RawUI.WindowTitle='terminal'";
             process = launcher.Start(new Execution.ProcessSpec
             {
                 FileName = "powershell.exe",
-                Args = ["-NoLogo", "-NoExit", "-Command", "$Host.UI.RawUI.WindowTitle='terminal'"],
+                Args = ["-NoLogo", "-NoExit", "-Command", bootstrap],
                 WorkingDirectory = project.RootPath,
+                StdioEncoding = new System.Text.UTF8Encoding(false),
                 EnableRaisingEvents = true,
                 TurnId = turnId,
             });
@@ -203,7 +213,10 @@ public sealed class TerminalService : IDisposable
                 });
             }
         }
-        stdin = new StreamWriter(process.StandardInput.BaseStream, Console.OutputEncoding) { AutoFlush = true };
+        // UTF-8 БЕЗ BOM: Console.OutputEncoding — это UTF-8 с преамбулой (Program.cs), и StreamWriter
+        // писал бы BOM в начало stdin. PowerShell тогда получал первую команду как «<BOM>ls» → ls не
+        // распознаётся (CommandNotFoundException). Без BOM ввод чистый.
+        stdin = new StreamWriter(process.StandardInput.BaseStream, new System.Text.UTF8Encoding(false)) { AutoFlush = true };
 
         var instance = new TerminalInstance(terminalId, projectId, name, process, userId,
             cols, rows, stdin, isWindows, usesPtyBridge, shell, launcher, turnId);

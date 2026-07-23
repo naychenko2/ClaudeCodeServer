@@ -8,7 +8,7 @@
 // Панели — «воздушные» скруглённые карточки с зазорами; границы высот тянутся
 // невидимыми хендлами в зазорах, ширина колонок — сплиттером слева от зоны.
 import { useEffect, useRef, useState, type ReactNode, type DragEvent, type PointerEvent as ReactPointerEvent } from 'react';
-import { X, Maximize2, Minimize2, Columns2, Square, ChevronsRight, ChevronsLeft, ClipboardList, FolderTree, GitCompare, ListTodo, Users, SquareTerminal, MonitorPlay, type LucideIcon } from 'lucide-react';
+import { X, Maximize2, Minimize2, Columns2, Square, ChevronsRight, ChevronsLeft, ClipboardList, FolderTree, GitCompare, ListTodo, Bot, User, Users, SquareTerminal, MonitorPlay, type LucideIcon } from 'lucide-react';
 import type { Session } from '../../types';
 import { C, FONT, R, SHADOW } from '../../lib/design';
 import { ICON_STROKE } from '../../components/ui/icons';
@@ -16,6 +16,9 @@ import { Splitter } from '../../components/ui/Splitter';
 import { ToolbarIconButton } from '../../components/Toolbar';
 import { useSessionArtifacts } from '../../hooks/useSessionArtifacts';
 import { PlanSection } from '../../components/artifacts/PlanSection';
+import { AgentsSection } from '../../components/artifacts/AgentsSection';
+import { ContextSection } from '../../components/artifacts/ContextSection';
+import { panelBadge } from '../../components/artifacts/meta';
 import { useWindowWidth } from '../../lib/breakpoints';
 import { usePanelStack, PANEL_MIN_H, RAIL_W, type PanelKey } from './panelStackState';
 
@@ -25,6 +28,9 @@ const TABLET_INLINE_MIN = 1000;
 // Иконки и заголовки панелей рельсы
 const PANEL_META: Record<PanelKey, { title: string; Icon: LucideIcon }> = {
   plan: { title: 'План', Icon: ClipboardList },
+  agents: { title: 'Агенты', Icon: Bot },
+  // 'context' — досье персоны-собеседника (память/привязки/recall); отображается «Персона».
+  context: { title: 'Персона', Icon: User },
   files: { title: 'Файлы', Icon: FolderTree },
   changes: { title: 'Изменения', Icon: GitCompare },
   tasks: { title: 'Задачи', Icon: ListTodo },
@@ -35,9 +41,9 @@ const PANEL_META: Record<PanelKey, { title: string; Icon: LucideIcon }> = {
 
 // Рельса разбита на две группы, разделённые сепаратором. Сверху — инструменты
 // ПРОЕКТА (файлы, изменения, задачи, команда, терминал, preview), снизу — панели
-// ТЕКУЩЕЙ СЕССИИ (пока только План). Порядок: проектные раньше сессионных.
+// ТЕКУЩЕЙ СЕССИИ (План, Агенты, Персона). Порядок: проектные раньше сессионных.
 const PROJECT_RAIL_KEYS: PanelKey[] = ['files', 'changes', 'tasks', 'team', 'terminal', 'preview'];
-const SESSION_RAIL_KEYS: PanelKey[] = ['plan'];
+const SESSION_RAIL_KEYS: PanelKey[] = ['plan', 'agents', 'context'];
 
 const GAP = 8; // зазор между карточками — та самая «воздушность»
 
@@ -56,6 +62,10 @@ interface Props {
   // Контролы в шапку карточки (слева от fullscreen/close) — напр. переключатель
   // видов задач. Собираются в WorkspacePage, состояние живёт там же.
   panelHeaderExtras?: Partial<Record<PanelKey, ReactNode>>;
+  // Числа-кружки на кнопках ПРОЕКТА (changes/tasks/terminal/preview) — считаются в
+  // WorkspacePage (там живут данные git/задач/терминалов/сервисов). Сессионные кнопки
+  // свои числа берут из артефактов сессии (railBadgeCount), не отсюда.
+  railCounts?: Partial<Record<PanelKey, number>>;
 }
 
 // Вертикальный разделитель между колонками (и по краям зоны): в покое — пустой
@@ -255,7 +265,7 @@ function PanelShell({ k, badge, headerExtras, fullscreen, canDrag, onToggleFulls
   );
 }
 
-export function RightPanelStack({ session, projectId, rootPath, isTablet, toolsEnabled, panels, panelHeaderExtras }: Props) {
+export function RightPanelStack({ session, projectId, rootPath, isTablet, toolsEnabled, panels, panelHeaderExtras, railCounts }: Props) {
   const { layout, weights, width, fullscreen, mode, toggle, close, collapsed, toggleCollapsed, setWeights, setWidth, moveTo, moveToNewColumn, moveAt, setFullscreen, setMode } = usePanelStack();
   const windowWidth = useWindowWidth();
   // Планшет: до ДВУХ панелей стеком в одной колонке; выбор локальный эфемерный —
@@ -263,9 +273,13 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, toolsE
   const [tabletPanels, setTabletPanels] = useState<PanelKey[]>([]);
   const tabletInline = windowWidth >= TABLET_INLINE_MIN;
   const sessionId = session?.id ?? null;
-  // Артефакты сессии нужны только Плану (бейдж на рельсе + содержимое панельки)
+  // Артефакты сессии питают сессионную группу рельсы: План, Чек-лист (todos), Агенты
+  // (бейджи + содержимое панелек). Персона (context) данные тянет сама через ContextSection.
   const artifacts = useSessionArtifacts(sessionId, projectId, rootPath ?? '', null);
   const plansCount = artifacts.plans.length;
+  // Опции расчёта видимости/бейджей сессионных кнопок (единый источник — panelBadge из meta).
+  // executingTask=false: в рельсе artifacts считаются без заголовка задачи-исполнителя.
+  const badgeOpts = { executingTask: false, personaId: session?.personaId ?? null, isChat: !projectId };
 
   // Терминал/Preview скрыты при выключенных инструментах проекта
   const keyAvailable = (k: PanelKey): boolean =>
@@ -357,15 +371,27 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, toolsE
     setDragging(tag);
   };
 
+  // Пустой стейт панельки (когда открыта, но контента ещё нет)
+  const emptyPanel = (text: string): ReactNode => (
+    <div style={{ padding: '20px 14px', fontFamily: FONT.sans, fontSize: 12.5, color: C.textMuted, textAlign: 'center' }}>
+      {text}
+    </div>
+  );
+
   const panelContent = (k: PanelKey): ReactNode => {
     if (k === 'plan') {
       return plansCount > 0
         ? <PlanSection plans={artifacts.plans} projectId={projectId} />
-        : (
-          <div style={{ padding: '20px 14px', fontFamily: FONT.sans, fontSize: 12.5, color: C.textMuted, textAlign: 'center' }}>
-            План появится после ExitPlanMode в чате
-          </div>
-        );
+        : emptyPanel('План появится после ExitPlanMode в чате');
+    }
+    if (k === 'agents') {
+      return <AgentsSection agents={artifacts.agents} workflows={artifacts.workflows} />;
+    }
+    if (k === 'context') {
+      const pid = session?.personaId;
+      return pid
+        ? <ContextSection personaId={pid} sessionId={sessionId} />
+        : emptyPanel('Доступно в чате с персоной');
     }
     return panels[k] ?? null;
   };
@@ -391,7 +417,13 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, toolsE
       >
         <PanelShell
           k={k}
-          badge={k === 'plan' && plansCount > 1 ? `${plansCount}` : null}
+          badge={
+            k === 'plan'
+              ? (plansCount > 1 ? `${plansCount}` : null)
+              : (k === 'agents' || k === 'context')
+                ? panelBadge(k, artifacts, badgeOpts).badge
+                : null
+          }
           headerExtras={panelHeaderExtras?.[k]}
           fullscreen={isFs}
           canDrag={!soloMode && !isTablet}
@@ -411,13 +443,32 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, toolsE
     );
   };
 
-  // Видимость иконки на рельсе. Сессионные кнопки (пока только План) показываются
-  // ТОЛЬКО когда есть что открывать: без планов иконка Плана скрыта целиком
-  // (а не дизейблится) — вместе с ней прячется и разделитель групп.
+  // Видимость иконки на рельсе. Сессионные кнопки показываются ТОЛЬКО когда есть что
+  // открывать (План — если был план, Чек-лист/Агенты — если есть контент, Персона — если
+  // собеседник-персона): иначе иконка скрыта целиком (а не дизейблится), вместе с ней
+  // прячется и разделитель групп. Единый расчёт — panelBadge из meta.
   const railKeyVisible = (k: PanelKey): boolean => {
     if (!keyAvailable(k)) return false;
     if (k === 'plan') return plansCount > 0 || openKeys.includes(k);
+    if (k === 'agents' || k === 'context') {
+      return panelBadge(k, artifacts, badgeOpts).visible || openKeys.includes(k);
+    }
     return true;
+  };
+
+  // Число в кружке над иконкой кнопки. Сессионные — «сколько требует внимания» (не «всего»):
+  // План — неодобренные (status ≠ approved), Чек-лист — не закрытые (≠ completed),
+  // Агенты — открытые (running); Персона счётчика не имеет. Проектные (changes/tasks/
+  // terminal/preview) берут готовое число из railCounts (считается в WorkspacePage).
+  // 0 → кружок не рисуем.
+  const railBadgeCount = (k: PanelKey): number | null => {
+    let n = 0;
+    if (k === 'plan') n = artifacts.plans.filter(p => p.status !== 'approved').length;
+    else if (k === 'agents') n = [...artifacts.agents, ...artifacts.workflows.flatMap(w => w.agents)]
+      .filter(a => a.status === 'running').length;
+    else if (k === 'changes' || k === 'tasks' || k === 'terminal' || k === 'preview') n = railCounts?.[k] ?? 0;
+    else return null; // context (Персона), files — без кружка
+    return n > 0 ? n : null;
   };
 
   // Одна иконка рельсы (используется обеими группами: проектной и сессионной).
@@ -438,15 +489,18 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, toolsE
           title={title} active={isOpen}>
           <div style={{ position: 'relative', display: 'flex' }}>
             <Icon size={17} strokeWidth={ICON_STROKE} />
-            {k === 'plan' && plansCount > 0 && (
-              <span style={{
-                position: 'absolute', top: -6, right: -7, minWidth: 14, height: 14, padding: '0 3px',
-                borderRadius: 7, background: C.accent, color: C.onAccent,
-                fontFamily: FONT.sans, fontSize: 9, fontWeight: 700, lineHeight: '14px', textAlign: 'center',
-              }}>
-                {plansCount}
-              </span>
-            )}
+            {(() => {
+              const rc = railBadgeCount(k);
+              return rc ? (
+                <span style={{
+                  position: 'absolute', top: -6, right: -7, minWidth: 14, height: 14, padding: '0 3px',
+                  borderRadius: 7, background: C.accent, color: C.onAccent,
+                  fontFamily: FONT.sans, fontSize: 9, fontWeight: 700, lineHeight: '14px', textAlign: 'center',
+                }}>
+                  {rc}
+                </span>
+              ) : null;
+            })()}
           </div>
         </ToolbarIconButton>
       </div>

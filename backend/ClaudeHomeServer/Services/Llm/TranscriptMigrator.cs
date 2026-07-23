@@ -65,6 +65,39 @@ public static class TranscriptMigrator
         }
     }
 
+    // Переезд транскрипта между РАБОЧИМИ ПАПКАМИ в рамках одного профиля (worktree чата):
+    // CLI ищет транскрипт в projects/{уплощённый cwd}, поэтому смена cwd без копии рвёт
+    // --resume. Целевая папка считается от НОВОГО cwd (в отличие от TryMigrate, где она
+    // намеренно берётся от источника). Исходник не удаляем — обратный переезд дешевле.
+    public static bool TryRelocateCwd(string configRoot, string oldCwd, string newCwd,
+        string claudeSessionId, out string? error)
+    {
+        error = null;
+        try
+        {
+            var src = FindTranscript(configRoot, oldCwd, claudeSessionId);
+            if (src is null)
+            {
+                error = $"транскрипт {claudeSessionId} не найден в {configRoot}";
+                return false;
+            }
+
+            var dstDir = Path.Combine(configRoot, "projects", FlattenCwd(newCwd));
+            Directory.CreateDirectory(dstDir);
+            File.Copy(src, Path.Combine(dstDir, claudeSessionId + ".jsonl"), overwrite: true);
+
+            var srcSessionDir = Path.Combine(Path.GetDirectoryName(src)!, claudeSessionId);
+            if (Directory.Exists(srcSessionDir))
+                CopyDirectory(srcSessionDir, Path.Combine(dstDir, claudeSessionId));
+            return true;
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            return false;
+        }
+    }
+
     // Папка сессии (сабагенты и пр.) — без неё resume работает, поэтому ошибки глотаем
     private static void CopyDirectory(string src, string dst)
     {

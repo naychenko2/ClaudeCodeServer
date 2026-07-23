@@ -121,6 +121,23 @@ public class ChatsController(SessionManager sessions, FileService files) : Contr
         return updated is null ? NotFound() : Ok(updated);
     }
 
+    // Отдельное git worktree чата: вкл — сессия переезжает в изолированное дерево на новой
+    // ветке (начатый чат — с переносом контекста), выкл — возврат в корень проекта.
+    // Force подтверждает потерю несохранённых правок дерева. Как loop, работает и для
+    // проектной сессии (GetOwned резолвит владельца через проект).
+    [HttpPut("{id}/worktree")]
+    public async Task<IActionResult> SetWorktree(string id, [FromBody] SetWorktreeRequest req)
+    {
+        if (sessions.GetOwned(id, UserId) is null) return NotFound();
+        try
+        {
+            var updated = await sessions.SetWorktreeAsync(id, req.Enabled, req.Branch, req.Force);
+            return updated is null ? NotFound() : Ok(updated);
+        }
+        catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
+        catch (Services.Git.GitCommandException ex) { return Conflict(new { error = ex.Message }); }
+    }
+
     // Режим прав (permission mode) чата. Отдельный эндпоинт нужен, чтобы выбор в Composer
     // сохранялся сразу, а не только вместе со следующим сообщением: иначе уход со страницы
     // до первого хода откатывал его на прежний. Как и loop, работает для проектной сессии.
@@ -220,6 +237,8 @@ public record CreateGroupChatRequest(List<string>? PersonaIds, string Mode = "au
 public record SetParticipantsRequest(List<string>? PersonaIds);
 
 public record SetWorkLoopRequest(bool Enabled);
+
+public record SetWorktreeRequest(bool Enabled, string? Branch = null, bool Force = false);
 
 public record MigrateProviderRequest(string Model);
 

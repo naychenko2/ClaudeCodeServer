@@ -104,6 +104,12 @@ public class Session
     // Origin автоматизации: null — обычный чат; иначе — id правила PersonaAutomationRule,
     // чат которого создан движком проактивности. Для фильтрации авто-чатов и трассировки.
     public string? AutomationRuleId { get; set; }
+    // Отдельное git worktree чата: рабочая папка сессии вместо project.RootPath.
+    // Путь всегда ХОСТОВЫЙ (как Project.RootPath); в песочницу транслируется при запуске.
+    // null — чат живёт в основном дереве проекта. Только для проектных сессий.
+    public string? WorktreePath { get; set; }
+    // Имя ветки worktree (для метки в git-баре); заполняется вместе с WorktreePath
+    public string? WorktreeBranch { get; set; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 

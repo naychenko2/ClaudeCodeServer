@@ -148,6 +148,8 @@ public class SessionManager
     private readonly UserHomeResolver _homes;
 
     private readonly PersonaAgentFileSync? _agentSync;
+    // Git-операции worktree чата (null — в тестах: worktree-фича выключена)
+    private readonly Git.GitService? _git;
 
     public SessionManager(ProjectManager projects, IHubContext<Hubs.SessionHub> hub,
         ChatHistoryService history, IConfiguration config, ILlmSessionAdapterFactory adapters,
@@ -170,12 +172,15 @@ public class SessionManager
         // Опционально (в тестах не передаётся): платформа внешних модулей —
         // реестр манифестов + выпуск модульных токенов для их MCP-серверов (R7)
         Modules.ModuleRegistry? modules = null,
-        Modules.ModuleTokenService? moduleTokens = null)
+        Modules.ModuleTokenService? moduleTokens = null,
+        // Опционально (в тестах не передаётся): git-операции worktree чата
+        Git.GitService? git = null)
     {
         _agentSync = agentSync;
         _cheap = cheap;
         _modules = modules;
         _moduleTokens = moduleTokens;
+        _git = git;
         _homes = homes ?? UserHomeResolver.WithoutOverrides(appSettings, sandbox);
         _launchers = launchers;
         _sandbox = sandbox;
@@ -523,13 +528,22 @@ public class SessionManager
         return _llmProviders.UserProfileDir;
     }
 
+    // Рабочая папка сессии: отдельное worktree чата приоритетнее корня проекта.
+    // Единая точка подмены cwd — через неё идут обе funnel-точки LlmSessionContext.
+    private static string EffectiveRoot(Session session, string fallbackRoot) =>
+        session.WorktreePath ?? fallbackRoot;
+
     // Рабочая папка сессии (для поиска транскрипта по уплощённому cwd);
     // null — папку определить не удалось (миграцию в этом случае не делаем)
     private string? TryResolveCwd(Session s)
     {
         try
         {
-            if (s.ProjectId is not null) return _projects.GetById(s.ProjectId)?.RootPath;
+            if (s.ProjectId is not null)
+            {
+                var root = _projects.GetById(s.ProjectId)?.RootPath;
+                return root is null ? null : EffectiveRoot(s, root);
+            }
             return s.OwnerId is null ? null : ResolveChatRoot(s.OwnerId);
         }
         catch (Exception)
@@ -1314,6 +1328,9 @@ public class SessionManager
         var persona = BuildPersonaLayer(session, ownerId);
         var workspace = BuildWorkspaceContext(ownerId, session.ProjectId, session.Id, persona.Persona);
 
+        // Чат в отдельном worktree: рабочая папка сессии — его дерево, не корень проекта
+        rootPath = EffectiveRoot(session, rootPath);
+
         var adapter = _adapters.Create(session, new LlmSessionContext(rootPath,
             msg => OnMessageAsync(session.Id, accumulator, msg),
             rawSystemPrompt, permissionRules,
@@ -1625,7 +1642,7 @@ public class SessionManager
                 ?? throw new InvalidOperationException("Проект не найден");
             var persona = BuildPersonaLayer(entry.Info, project.OwnerId);
             var workspace = BuildWorkspaceContext(project.OwnerId, project.Id, entry.Info.Id, persona.Persona);
-            context = new LlmSessionContext(project.RootPath,
+            context = new LlmSessionContext(EffectiveRoot(entry.Info, project.RootPath),
                 msg => OnMessageAsync(sessionId, accumulator, msg),
                 project.SystemPrompt,
                 () => _projects.GetById(entry.Info.ProjectId!)?.PermissionRules ?? (IReadOnlyList<PermissionRule>)Array.Empty<PermissionRule>(),
@@ -1870,6 +1887,105 @@ public class SessionManager
             loop is not null, loop?.Iteration ?? 0, loop?.MaxIterations ?? 0, loop?.Phase));
     }
 
+    // Отдельное git worktree чата: вкл — создать дерево на новой ветке от HEAD проекта и
+    // перевести туда рабочую папку сессии; выкл — вернуть чат в корень проекта и снять дерево.
+    // Начатый чат переезжает С КОНТЕКСТОМ: транскрипт CLI копируется в папку нового cwd
+    // (--resume ищет его по уплощённому cwd); не удалось скопировать — операция отменяется,
+    // контекст дороже фичи. Процесс не трогаем: между ходами его нет, AdapterStale
+    // пересоберёт контекст со следующего хода.
+    public async Task<Session?> SetWorktreeAsync(string sessionId, bool enabled,
+        string? branch = null, bool force = false, string? userId = null)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
+        var ownerId = ResolveOwnerId(entry.Info);
+        if (userId is not null && ownerId != userId) return null;
+        if (_git is null)
+            throw new InvalidOperationException("Git-операции недоступны");
+        if (entry.Info.ProjectId is not string projectId)
+            throw new InvalidOperationException("Отдельное дерево доступно только в чате проекта");
+        var project = _projects.GetById(projectId)
+            ?? throw new InvalidOperationException("Проект не найден");
+
+        // Идемпотентность: повторное включение/выключение — no-op
+        if (enabled == (entry.Info.WorktreePath is not null)) return entry.Info;
+
+        // Переезд НАЧАТОГО чата требует переноса транскрипта; профили container-пользователей
+        // живут в песочной раскладке (см. TryPoolFailover) — там поддержано только включение
+        // worktree ДО первого хода
+        var isContainer = ownerId is not null
+            && _users.GetById(ownerId)?.ExecutionEnvironment == ExecutionEnvironments.Container;
+        if (entry.Info.ClaudeSessionId is not null && isContainer)
+            throw new InvalidOperationException(
+                "Переезд начатого чата в песочнице не поддерживается — включите отдельное дерево в новом чате");
+
+        if (enabled)
+        {
+            if (!Git.GitService.IsGitRepo(project.RootPath))
+                throw new Git.GitCommandException("В папке проекта нет git-репозитория");
+
+            // Ветка: заданная вручную либо wt/<slug имени чата>; коллизии решаем суффиксом
+            var slug = PersonaManager.Slugify(entry.Info.Name ?? "");
+            if (slug.Length == 0) slug = sessionId[..Math.Min(8, sessionId.Length)];
+            var branchName = string.IsNullOrWhiteSpace(branch) ? $"wt/{slug}" : branch.Trim();
+            var taken = (await _git.BranchesAsync(ownerId, project.RootPath))
+                .Select(b => b.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var unique = branchName;
+            for (var n = 2; taken.Contains(unique); n++) unique = $"{branchName}-{n}";
+            branchName = unique;
+
+            // Папка: {home}/.worktrees/<проект>/<ветка> — вне дерева главной репы и
+            // гарантированно внутри Sandbox:ProjectsRoot у container-пользователей
+            var user = ownerId is null ? null : _users.GetById(ownerId);
+            var home = (user is null ? null : _homes.Resolve(user))
+                ?? throw new InvalidOperationException("Не удалось определить домашнюю папку владельца");
+            var projSlug = PersonaManager.Slugify(project.Name);
+            if (projSlug.Length == 0) projSlug = project.Id[..Math.Min(8, project.Id.Length)];
+            var wtPath = Path.Combine(home, ".worktrees", projSlug, branchName.Replace('/', '-'));
+            Directory.CreateDirectory(Path.GetDirectoryName(wtPath)!);
+
+            await _git.WorktreeAddAsync(ownerId, project.RootPath, wtPath, branchName);
+
+            if (entry.Info.ClaudeSessionId is string csid
+                && !Llm.TranscriptMigrator.TryRelocateCwd(
+                    ConfigRootForProvider(entry.Info.Provider), project.RootPath, wtPath, csid, out var err))
+            {
+                // Дерево без контекста бесполезно — откатываем и отдаём причину наружу
+                try { await _git.WorktreeRemoveAsync(ownerId, project.RootPath, wtPath, force: true); }
+                catch { /* уборка best-effort */ }
+                throw new Git.GitCommandException($"Не удалось перенести контекст разговора: {err}");
+            }
+
+            entry.Info.WorktreePath = wtPath;
+            entry.Info.WorktreeBranch = branchName;
+        }
+        else
+        {
+            var wtPath = entry.Info.WorktreePath!;
+            // Гейт: незакоммиченные правки в дереве пропадут вместе с ним (ветка остаётся)
+            if (!force)
+            {
+                var st = await _git.StatusAsync(ownerId, wtPath);
+                if (st.Staged.Count > 0 || st.Unstaged.Count > 0 || st.Untracked.Count > 0)
+                    throw new Git.GitCommandException(
+                        "В отдельном дереве есть несохранённые изменения — зафиксируйте их или подтвердите принудительное удаление");
+            }
+
+            if (entry.Info.ClaudeSessionId is string csid
+                && !Llm.TranscriptMigrator.TryRelocateCwd(
+                    ConfigRootForProvider(entry.Info.Provider), wtPath, project.RootPath, csid, out var err))
+                throw new Git.GitCommandException($"Не удалось перенести контекст разговора: {err}");
+
+            await _git.WorktreeRemoveAsync(ownerId, project.RootPath, wtPath, force);
+            entry.Info.WorktreePath = null;
+            entry.Info.WorktreeBranch = null;
+        }
+
+        // Следующий ход пересоздаст адаптер с новым cwd (между ходами процесса нет)
+        entry.AdapterStale = true;
+        SaveSessions();
+        return entry.Info;
+    }
+
     // Автопродолжение цикла «до готово»: вызывается по result хода, нёсшего протокол цикла.
     // Маркер найден → верификационный ход, затем стоп; нет → продолжение до лимита итераций.
     private async Task ContinueWorkLoopAsync(string sessionId)
@@ -1989,6 +2105,19 @@ public class SessionManager
         // Дочищаем историю на диске — иначе data/sessions/{id} копится мусором
         if (entry.Info.ClaudeSessionId is string csid)
             _history.Delete(csid);
+        // Отдельное worktree чата сносим вместе с чатом (best-effort; ветка остаётся в репе)
+        if (entry.Info.WorktreePath is string wt && entry.Info.ProjectId is string wpid && _git is not null)
+        {
+            try
+            {
+                if (_projects.GetById(wpid) is { } wproj)
+                    await _git.WorktreeRemoveAsync(ResolveOwnerId(entry.Info), wproj.RootPath, wt, force: true);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[SessionManager] Worktree чата не удалён ({sessionId}): {ex.Message}");
+            }
+        }
         SaveSessions();
         try { OnSessionDeleted?.Invoke(entry.Info); } catch { /* наблюдатель не должен ронять удаление */ }
         await BroadcastChatDeletedAsync(sessionId, entry.Info);

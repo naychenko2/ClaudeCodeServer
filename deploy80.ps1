@@ -99,6 +99,20 @@ foreach ($srv in 'tasks-server', 'notes-server', 'memory-server', 'personas-serv
     New-Item -ItemType Directory -Force $mcpDst -ErrorAction Stop | Out-Null
     Copy-Item (Join-Path $repo "mcp\$srv\*") $mcpDst -Recurse -Force -ErrorAction Stop
 }
+# mcp-dify (TypeScript, dist собран заранее + node_modules): нужен рядом с сервером —
+# DockerPathMapper мапит {PublishDir}/mcp-dify -> /app/mcp-dify, иначе dify в песочнице
+# молча пропускается (путь из .mcp.json не переводится в контейнерный)
+$difySrc = Join-Path $repo 'mcp-dify'
+if (Test-Path (Join-Path $difySrc 'dist\index.js')) {
+    $difyDst = Join-Path $PublishDir 'mcp-dify'
+    if (Test-Path $difyDst) { Remove-Item $difyDst -Recurse -Force -ErrorAction Stop }
+    New-Item -ItemType Directory -Force $difyDst -ErrorAction Stop | Out-Null
+    foreach ($item in 'dist', 'node_modules', 'package.json') {
+        Copy-Item (Join-Path $difySrc $item) $difyDst -Recurse -Force -ErrorAction Stop
+    }
+} else {
+    Write-Host '  mcp-dify пропущен: нет dist/index.js (собери mcp-dify перед деплоем)' -ForegroundColor DarkYellow
+}
 
 # --- 7. Пересборка образа песочницы (синхронизация с версией хоста) ---
 # Образ claude-sandbox несёт В СЕБЕ код MCP-серверов (/app/mcp), run-turn.sh, claude-defaults

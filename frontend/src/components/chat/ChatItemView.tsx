@@ -18,6 +18,7 @@ import { MarkdownContent } from './MarkdownContent';
 import { ToolUseView } from './ToolUseView';
 import { PersonaAskView, isPersonaAsk } from './PersonaAskView';
 import { PersonaTaskView, isAgentToolUse } from './PersonaTaskView';
+import { TaskCreatedView, isTasksCreate } from './TaskCreatedView';
 import type { ActivityEntry } from './timeline';
 import { AskQuestionView } from './AskQuestionView';
 import { PlanReviewView } from './PlanReviewView';
@@ -706,6 +707,9 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       if (taskPlan) return <TodoPlanView todos={taskPlan} />;
       // Вопрос другой персоне (persona_ask) — фирменная карточка с идентичностью персоны
       if (isPersonaAsk(item.name)) return <PersonaAskView item={item} />;
+      // Создание задачи (tasks_create) — карточка «Задача создана» с переходом к задаче
+      // (ошибка/непарсибельный ответ — фолбэк на ToolUseView внутри)
+      if (isTasksCreate(item.name)) return <TaskCreatedView item={item} online={online} onOpenFile={onOpenFile} />;
       // Сабагент Task/Agent: subagent_type = handle персоны → карточка консультации
       // (несовпадение — обычный ToolUseView, фолбэк внутри PersonaTaskView)
       if (isAgentToolUse(item.name))

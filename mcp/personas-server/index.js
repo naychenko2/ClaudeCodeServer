@@ -73,6 +73,14 @@ const COLORS = ['yellow', 'orange', 'blue', 'green', 'purple', 'red', 'brown', '
 // Общие поля персоны для create/update (кроме name — у create он обязателен)
 const PERSONA_FIELDS = {
   role: { type: 'string', description: 'Роль — главное в отображении («Роль (Имя)»), например «Дизайнер»' },
+  specialty: {
+    type: 'string',
+    enum: ['none', 'analyst', 'planner', 'reviewer', 'executor', 'secretary',
+      'coordinator', 'mentor', 'designer', 'consultant', 'librarian', 'tester'],
+    description: 'Функциональная специализация для оркестрации команды: роутинг типовых ' +
+      'сабагентов oh-my-claudecode на эту персону (analyst/planner/reviewer/executor/…), ' +
+      'а также брифинг и общая память команды. none — не задана (дефолт).',
+  },
   description: { type: 'string', description: 'Короткое описание, кто это (для карточки)' },
   // Контракт характера — по слотам (собирается в contract на бэкенде)
   character: { type: 'string', description: 'Характер и ценности персоны на «ты» («Ты — …»), 2-5 предложений' },
@@ -191,7 +199,8 @@ const TOOLS = [
     description: `Создать персону — AI-собеседника с именем, ролью и характером. ${CONTEXT_NOTE} ` +
       'scope: "global" — доступна во всех чатах (по умолчанию); "project" — привязана к проекту. ' +
       'Заполняй ВСЕ слоты характера: character (на «ты»), tone, mustDo, mustNot, outputFormat, ' +
-      'speechExamples; приветствие — в greeting от лица персоны.',
+      'speechExamples; приветствие — в greeting от лица персоны. specialty — функциональная ' +
+      'специализация для оркестрации (analyst/planner/reviewer/executor/…), если персона под неё.',
     inputSchema: {
       type: 'object',
       required: ['name'],
@@ -209,7 +218,8 @@ const TOOLS = [
   {
     name: 'personas_update',
     description: 'Изменить персону: передавай только изменяемые поля. Пустая строка очищает ' +
-      'role/model/effort/color/greeting. Смена scope на "project" требует projectId.' +
+      'role/model/effort/color/greeting. specialty — функциональная специализация для ' +
+      'оркестрации (none сбрасывает). Смена scope на "project" требует projectId.' +
       (BINDINGS ? ' bindings — ПОЛНАЯ замена набора привязок (свои собственные привязки менять нельзя).' : ''),
     inputSchema: {
       type: 'object',
@@ -439,7 +449,7 @@ function personaBody(args, keys) {
   return body;
 }
 
-const FIELD_KEYS = ['name', 'role', 'description', 'systemPrompt', 'model', 'effort', 'color', 'greeting', 'memoryEnabled', 'scope', 'projectId', 'handle'];
+const FIELD_KEYS = ['name', 'role', 'specialty', 'description', 'systemPrompt', 'model', 'effort', 'color', 'greeting', 'memoryEnabled', 'scope', 'projectId', 'handle'];
 
 // Запрет самоэскалации: персона не может менять СОБСТВЕННЫЕ привязки
 // (проверка до любого fetch — изменение прав себе блокируется по построению)

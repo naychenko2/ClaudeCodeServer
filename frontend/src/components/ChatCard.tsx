@@ -1,11 +1,11 @@
-import { Pin, SquarePen, Trash2 } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Clock, Pin, SquarePen, Trash2, Wrench } from 'lucide-react';
 import type { Persona, Session } from '../types';
 import { C, R, SHADOW, FONT } from '../lib/design';
 import { IconButton } from './ui';
 import { StatusIndicator } from './StatusIndicator';
 import { ExpiryBadge } from './ExpiryBadge';
 import { ChatOriginBadge } from './ChatOriginBadge';
-import { resolveChatOrigin } from '../lib/chatOrigin';
+import { describeTaskChat, resolveChatOrigin, type TaskChatInfo, type TaskChatStatusKind } from '../lib/chatOrigin';
 import { getPersonaById, personaLabel } from '../lib/personas';
 import { agentDotColor } from './AgentSelector';
 import { PersonaFace } from '../features/personas/PersonaFace';
@@ -84,6 +84,41 @@ function PersonaBackdrop({ persona }: { persona: Persona }) {
   );
 }
 
+// Цвет и иконка строки статуса выполнения задачи (вариант A)
+const TASK_STATUS_COLOR: Record<TaskChatStatusKind, string> = {
+  run: C.accent, wait: C.warningText, done: C.successText,
+  todo: C.textMuted, error: C.danger, deleted: C.textMuted,
+};
+const TASK_STATUS_ICON: Partial<Record<TaskChatStatusKind, typeof Clock>> = {
+  wait: Clock, done: CheckCircle2, error: AlertCircle,
+};
+
+// Строка статуса чата-задачи вместо шумного превью промпта: маркер + подпись
+// статуса + прогресс подзадач + срок. Заменяет и превью, и плашку происхождения.
+function TaskStatusLine({ info }: { info: TaskChatInfo }) {
+  const { status, subDone, subTotal, dueText, dueUrgent } = info;
+  const color = TASK_STATUS_COLOR[status.kind];
+  const Icon = TASK_STATUS_ICON[status.kind];
+  const meta: React.CSSProperties = { fontFamily: FONT.mono, fontSize: 10, color: C.textMuted, flexShrink: 0 };
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 5, minWidth: 0, marginTop: 1,
+      fontSize: 11.5, color,
+    }}>
+      {status.spinner
+        ? <div className="tool-spinner" style={{ width: 11, height: 11 }} />
+        : Icon
+          ? <Icon size={11} strokeWidth={2.2} style={{ flexShrink: 0 }} />
+          : <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'currentColor', flexShrink: 0 }} />}
+      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{status.label}</span>
+      {subTotal > 0 && status.kind !== 'deleted' && <span style={meta}>{subDone}/{subTotal}</span>}
+      {dueText && status.kind !== 'done' && status.kind !== 'deleted' && (
+        <span style={{ ...meta, color: dueUrgent ? C.danger : C.textMuted }}>{dueText}</span>
+      )}
+    </div>
+  );
+}
+
 interface Props {
   session: Session;
   isActive: boolean;
@@ -121,6 +156,10 @@ export function ChatCard({
   const accent = persona ? agentDotColor(persona.avatar?.color) : C.accent;
   // Происхождение чата (задача/автоматизация) — контекст на плашке
   const origin = resolveChatOrigin(s);
+  // Чат-исполнитель задачи: компактная раскладка без тройного повтора заголовка
+  // (имя без «Задача:», статус выполнения вместо промпта, без плашки-дубля)
+  const taskChat = describeTaskChat(s);
+  const displayName = (taskChat ? taskChat.title : s.name) || fallbackName;
   // Последняя запущенная в чате механика команды — компактный бейдж
   const mechanic = getLastMechanic(s.id);
   // Действия: с мышью — по наведению, на тач-устройствах — у выбранного чата.
@@ -187,14 +226,20 @@ export function ChatCard({
         position: 'relative', display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0,
         paddingRight: backdropPersona ? COMPANION_W - (isMobile ? 16 : 12) : 0,
       }}>
-        {/* Строка 1: статус точкой, название, метки срока и закрепления */}
+        {/* Строка 1: статус точкой, признак задачи, название, метки срока и закрепления */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
           <StatusIndicator status={s.status} title={companionTitle} />
-          <span style={{
+          {/* Тихий ключ-признак задачи: «Задача» уходит в иконку, весь текст — в тултип */}
+          {taskChat && (
+            <span title={taskChat.fullLabel} aria-label={taskChat.fullLabel} style={{ display: 'flex', flexShrink: 0, color: C.textMuted }}>
+              <Wrench size={12} strokeWidth={2.2} />
+            </span>
+          )}
+          <span title={displayName} style={{
             fontSize: 13.5, fontWeight: isActive ? 700 : 600, color: C.textHeading,
             flex: '0 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           }}>
-            {s.name ?? fallbackName}
+            {displayName}
           </span>
           <ExpiryBadge session={s} />
           {/* Закрепление: иконка-признак, сама кнопка живёт в блоке действий */}
@@ -212,23 +257,31 @@ export function ChatCard({
           )}
         </div>
 
-        {/* Строка 2: превью последнего сообщения */}
-        {s.lastMessage && (
-          <div style={{
-            minWidth: 0, fontSize: 12, color: C.textMuted, lineHeight: 1.4,
-            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-          }}>
-            {teamTurnPreview(s.lastMessage) ?? s.lastMessage}
-          </div>
-        )}
+        {/* Чат-задача: одна строка статуса выполнения вместо превью-промпта и
+            плашки-дубля. Обычный чат — превью + плашка происхождения как раньше */}
+        {taskChat ? (
+          <TaskStatusLine info={taskChat} />
+        ) : (
+          <>
+            {/* Строка 2: превью последнего сообщения */}
+            {s.lastMessage && (
+              <div style={{
+                minWidth: 0, fontSize: 12, color: C.textMuted, lineHeight: 1.4,
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}>
+                {teamTurnPreview(s.lastMessage) ?? s.lastMessage}
+              </div>
+            )}
 
-        {/* Под описанием: происхождение и механика — иконка с подписью, прижаты
-            влево (собеседник ушёл в подложку) */}
-        {(origin || mechanic) && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0, marginTop: 1 }}>
-            {origin && <ChatOriginBadge origin={origin} style={{ flexShrink: 0 }} />}
-            {mechanic && <TeamMechanicBadge id={mechanic} size="sm" />}
-          </div>
+            {/* Под описанием: происхождение и механика — иконка с подписью, прижаты
+                влево (собеседник ушёл в подложку) */}
+            {(origin || mechanic) && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0, marginTop: 1 }}>
+                {origin && <ChatOriginBadge origin={origin} style={{ flexShrink: 0 }} />}
+                {mechanic && <TeamMechanicBadge id={mechanic} size="sm" />}
+              </div>
+            )}
+          </>
         )}
       </div>
 

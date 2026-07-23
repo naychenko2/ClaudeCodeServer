@@ -1,0 +1,726 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Макет: карточка чата-задачи в списке</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=PT+Serif:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+<style>
+  /* ==== Токены дизайн-системы (frontend/src/lib/theme.css, светлая тема) ==== */
+  :root {
+    --bg-main:      #F4F0E8;
+    --bg-panel:     #EDE7DC;
+    --bg-card:      #FBF8F2;
+    --bg-white:     #FFFFFF;
+    --bg-selected:  #E8E1D4;
+    --heading:      #2A251F;
+    --primary:      #39332B;
+    --secondary:    #756B5E;
+    --muted:        #9A8F7E;
+    --accent:       #D97757;
+    --accent-light: #F4ECE1;
+    --accent-muted: #E7C4B3;
+    --border:       #E0D7C8;
+    --border-light: #E8E1D4;
+    --divider:      #DDD4C4;
+    --success:      #5E8B4E;
+    --success-bg:   #E9F1E8;
+    --success-text: #3F7A4F;
+    --warning:      #C9923E;
+    --warning-text: #9A6E2E;
+    --warning-bg:   #F6ECD9;
+    --danger:       #B4452F;
+    --danger-bg:    #FBF1EC;
+    --info:         #3E7CA6;
+    --info-bg:      #E7EEF4;
+    --shadow-card:  0 2px 8px rgba(60, 50, 35, 0.05);
+    --shadow-hover: 0 4px 14px rgba(60, 50, 35, 0.11);
+    --shadow-btn:   0 2px 6px rgba(217, 119, 87, 0.20);
+    --sans: 'Hanken Grotesk', -apple-system, 'Segoe UI', sans-serif;
+    --serif: 'PT Serif', Georgia, serif;
+    --mono: 'JetBrains Mono', 'Courier New', monospace;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg-panel);
+    font-family: var(--sans);
+    color: var(--primary);
+    padding: 40px 20px 90px;
+  }
+  .page { max-width: 1080px; margin: 0 auto; }
+
+  /* ==== Шапка-легенда ==== */
+  .legend {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 26px 30px;
+    margin-bottom: 40px;
+  }
+  .legend h1 { font-family: var(--serif); font-size: 28px; color: var(--heading); margin-bottom: 10px; }
+  .legend p  { font-size: 14px; line-height: 1.6; color: var(--secondary); max-width: 760px; }
+  .legend ul { margin: 16px 0 0; padding-left: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+  .legend li { font-size: 13.5px; line-height: 1.5; color: var(--primary); display: flex; gap: 9px; align-items: baseline; }
+  .legend li b { font-weight: 700; color: var(--heading); }
+  .legend li .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex-shrink: 0; position: relative; top: -2px; }
+  .legend li .dot.rec { background: var(--success); }
+  .legend .note { margin-top: 16px; font-size: 12px; color: var(--muted); }
+
+  /* ==== Секции ==== */
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 30px; align-items: start; }
+  @media (max-width: 900px) { .cols { grid-template-columns: 1fr; } }
+
+  .variant { margin-bottom: 46px; }
+  .variant > h2 { font-family: var(--serif); font-size: 21px; color: var(--heading); margin-bottom: 5px; display: flex; align-items: center; gap: 10px; }
+  .badge-rec { font-family: var(--sans); font-size: 10.5px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--success-text); background: var(--success-bg); padding: 3px 9px; border-radius: 999px; }
+  .badge-as { font-family: var(--sans); font-size: 10.5px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--danger); background: var(--danger-bg); padding: 3px 9px; border-radius: 999px; }
+  .variant > .desc { font-size: 13.5px; line-height: 1.55; color: var(--secondary); margin-bottom: 18px; max-width: 820px; }
+  .proscons { margin-top: 14px; font-size: 12.5px; line-height: 1.6; color: var(--secondary); max-width: 820px; }
+  .proscons b { color: var(--heading); }
+
+  .subhead { font-size: 11px; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); margin-bottom: 12px; }
+
+  /* ==== Имитация панели списка чатов ==== */
+  .rail {
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 16px 14px;
+  }
+  .rail-head {
+    display: flex; align-items: center; gap: 8px; padding: 2px 4px 14px;
+  }
+  .rail-head .rtitle { display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 700; color: var(--heading); }
+  .rail-head .rlogo { width: 20px; height: 20px; border-radius: 5px; background: #8B7355; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 8px; font-weight: 700; }
+  .segmented { margin-left: auto; display: flex; gap: 2px; background: var(--bg-selected); border-radius: 8px; padding: 2px; }
+  .segmented span { font-size: 11px; font-weight: 600; color: var(--secondary); padding: 3px 9px; border-radius: 6px; display: flex; align-items: center; gap: 4px; }
+  .segmented span.on { background: var(--bg-white); color: var(--heading); box-shadow: var(--shadow-card); }
+
+  /* ==== Общее для кликабельных карточек ==== */
+  a.link-card { text-decoration: none; color: inherit; display: block; outline: none; }
+  a.link-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 12px; }
+
+  .i { flex-shrink: 0; display: block; }
+  .i-fill path, .i-fill polyline, .i-fill circle { fill: currentColor; }
+
+  /* ==== Спиннер (как .tool-spinner) ==== */
+  .spin { width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid var(--accent-muted); border-top-color: var(--accent); animation: sp 0.7s linear infinite; flex-shrink: 0; }
+  @keyframes sp { to { transform: rotate(360deg); } }
+
+  /* ==== Базовая карточка чата (ChatCard) ==== */
+  .card {
+    position: relative; overflow: hidden;
+    background: var(--bg-white);
+    border: 1px solid var(--border-light);
+    border-radius: 14px;
+    box-shadow: var(--shadow-card);
+    padding: 11px 12px;
+    margin-bottom: 5px;
+    display: flex; flex-direction: column; gap: 3px;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  a.link-card:hover .card { border-color: var(--accent-muted); box-shadow: var(--shadow-hover); }
+  .card.active { background: var(--accent-light); border-color: var(--accent); box-shadow: var(--shadow-btn); padding-left: 18px; }
+  .card.active .abar { position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--accent); }
+
+  /* Статус-точка процесса чата */
+  .sdot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .sdot.idle { background: var(--muted); }
+  .sdot.run  { background: var(--accent); box-shadow: 0 0 0 3px rgba(217,119,87,0.15); }
+  .sdot.done { background: var(--success); }
+
+  .row1 { display: flex; align-items: center; gap: 6px; min-width: 0; }
+  .ctitle { font-size: 13.5px; font-weight: 600; color: var(--heading); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; min-width: 0; }
+  .card.active .ctitle { font-weight: 700; }
+  .ctitle.serif { font-family: var(--serif); }
+
+  /* Метка срока (ExpiryBadge / due) */
+  .expiry { display: inline-flex; align-items: center; gap: 3px; font-family: var(--mono); font-size: 10px; color: var(--muted); flex-shrink: 0; }
+  .expiry.urgent { color: var(--danger); }
+
+  /* Признак задачи — тихий ключ без фона */
+  .task-mark { color: var(--muted); flex-shrink: 0; display: flex; }
+  .task-mark.info { color: var(--info); }
+
+  /* Превью (как было) — для секции as-is */
+  .preview { font-size: 12px; color: var(--muted); line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+
+  /* Плашка происхождения (ChatOriginBadge) — для секции as-is */
+  .origin { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; font-size: 11px; font-weight: 600; line-height: 1.5; color: var(--info); background: var(--info-bg); border-radius: 6px; padding: 1px 6px; }
+  .origin span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* Строка статуса выполнения задачи (вариант A) */
+  .tstatus { display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--secondary); min-width: 0; overflow: hidden; }
+  .tstatus .lbl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tstatus.run  { color: var(--accent); }
+  .tstatus.wait { color: var(--warning-text); }
+  .tstatus.done { color: var(--success-text); }
+  .tstatus.todo { color: var(--muted); }
+  .tstatus .meta { font-family: var(--mono); font-size: 10px; color: var(--muted); flex-shrink: 0; }
+  .tstatus .meta.urgent { color: var(--danger); }
+  .qdot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
+
+  /* Прогресс-трек (вариант D) */
+  .track { position: relative; height: 4px; border-radius: 999px; background: var(--border-light); flex: 1; min-width: 40px; overflow: hidden; }
+  .track > i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 999px; display: block; }
+
+  /* Лицо персоны-исполнителя (backdrop) */
+  .face {
+    position: absolute; top: 0; right: 0; bottom: 0; width: 84px; pointer-events: none;
+    -webkit-mask-image: linear-gradient(to left, #000 40%, transparent); mask-image: linear-gradient(to left, #000 40%, transparent);
+    display: flex; align-items: center; justify-content: flex-end; padding-right: 8px;
+    font-weight: 700; color: #fff; opacity: 0.9; font-size: 30px; user-select: none;
+  }
+  .veil { position: absolute; inset: 0; pointer-events: none; opacity: 0.20; }
+  .text-wrap { position: relative; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+  .text-wrap.reserve { padding-right: 74px; }
+
+  /* Мини-аватар (вариант B) */
+  .ava { width: 18px; height: 18px; border-radius: 50%; color: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: 8px; font-weight: 700; flex-shrink: 0; }
+  .ava.me { background: var(--bg-panel); border: 1px solid var(--border); color: var(--secondary); }
+  .spark { color: var(--accent); flex-shrink: 0; display: flex; }
+
+  /* ==== Вариант B — квитанция ==== */
+  .receipt {
+    position: relative; overflow: hidden;
+    background: var(--bg-white); border: 1px solid var(--border-light);
+    border-radius: 9px; box-shadow: var(--shadow-card);
+    padding: 8px 11px; margin-bottom: 5px;
+    display: flex; align-items: center; gap: 8px;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  a.link-card:hover .receipt { border-color: var(--accent-muted); box-shadow: var(--shadow-hover); }
+  .receipt.active { background: var(--accent-light); border-color: var(--accent); }
+  .receipt .rtit { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; color: var(--primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .receipt .rmeta { display: flex; align-items: center; gap: 7px; flex-shrink: 0; }
+
+  /* ==== Вариант C — задача-шапка ==== */
+  .task-head {
+    display: flex; align-items: center; gap: 7px;
+    background: var(--accent-light); border: 1px solid var(--accent-muted);
+    border-radius: 9px; padding: 7px 11px; margin-bottom: 6px;
+  }
+  .task-head .htit { font-family: var(--serif); font-size: 13.5px; font-weight: 700; color: var(--heading); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; min-width: 0; }
+  .task-head .prog { margin-left: auto; font-family: var(--mono); font-size: 10.5px; font-weight: 600; color: var(--accent); flex-shrink: 0; }
+  .task-head .chev { color: var(--accent); flex-shrink: 0; }
+
+  /* ==== Дерево: connector-линии (упрощённо, 1 уровень) ==== */
+  .tree { position: relative; }
+  .branch { position: relative; padding-left: 20px; }
+  .branch > .vline { position: absolute; left: 9px; top: 0; width: 1px; background: var(--divider); }
+  .branch > .child { position: relative; }
+  .branch > .child > .elbow { position: absolute; left: -11px; top: 20px; width: 11px; height: 1px; background: var(--divider); }
+  .branch > .child > .elbow.accent { background: var(--accent); }
+  .branch.accent > .vline { background: var(--accent); }
+  .chev-ctl { position: absolute; left: -20px; top: 4px; width: 20px; height: 32px; display: flex; align-items: center; justify-content: center; color: var(--muted); }
+  .chev-ctl.on { color: var(--accent); }
+
+  .caption { font-size: 11.5px; color: var(--muted); margin: 10px 2px 0; line-height: 1.5; }
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="ic-wrench" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M14.7 6.3a4 4 0 0 0-5.4 5.2L3 17.8 6.2 21l6.3-6.3a4 4 0 0 0 5.2-5.4l-2.3 2.3-2.6-.6-.6-2.6z"/>
+    </symbol>
+    <symbol id="ic-zap" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M13 2 3 14h7l-1 8 10-12h-7z"/>
+    </symbol>
+    <symbol id="ic-check-circle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="9"/><polyline points="16.5 8.5 10.5 15.5 7.5 12.5"/>
+    </symbol>
+    <symbol id="ic-clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>
+    </symbol>
+    <symbol id="ic-hourglass" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M6 3h12M6 21h12M6 3c0 5 6 5 6 9s-6 4-6 9M18 3c0 5-6 5-6 9s6 4 6 9"/>
+    </symbol>
+    <symbol id="ic-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="m9 6 6 6-6 6"/>
+    </symbol>
+    <symbol id="ic-spark" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+      <path d="M12 2l2.1 7.9L22 12l-7.9 2.1L12 22l-2.1-7.9L2 12l7.9-2.1Z"/>
+    </symbol>
+    <symbol id="ic-pin" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+      <path d="M12 2a3 3 0 0 0-1 5.8V13l-3 3v2h8v-2l-3-3V7.8A3 3 0 0 0 12 2z"/>
+    </symbol>
+    <symbol id="ic-list" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>
+    </symbol>
+    <symbol id="ic-tree" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M4 4h7M4 4v16h4M8 12h3M8 20h3"/>
+    </symbol>
+  </defs>
+</svg>
+
+<div class="page">
+
+  <!-- ================= Легенда ================= -->
+  <div class="legend">
+    <h1>Карточка чата-задачи в списке</h1>
+    <p>
+      У чата, порождённого задачей (<span style="font-family:var(--mono);font-size:12.5px;">origin&nbsp;=&nbsp;task</span>),
+      заголовок задачи звучит трижды: в <b>названии чата</b> («Задача: …»), в <b>плашке происхождения</b> (🔧 «Задача: …»)
+      и косвенно — техническим промптом в <b>превью</b> («## ЗАДАЧА Выполни…»). Карточка раздувается до 4 строк, а стопка
+      таких карточек в иерархии выглядит стеной повторов. Ниже — текущее состояние и 4 варианта редизайна.
+      Все цвета — из токенов <b>lib/design.ts / theme.css</b> (светлая тема).
+    </p>
+    <ul>
+      <li><span class="dot rec"></span><span><b>Вариант A — «Одна правда».</b> Заголовок один раз, «Задача» → тихий ключ-признак, превью → живой статус выполнения. 2 строки вместо 4. <b>Рекомендуется.</b></span></li>
+      <li><span class="dot"></span><span><b>Вариант B — «Квитанция».</b> Однострочная карточка-прогон: чаты-задачи визуально отделены от «живых» разговоров.</span></li>
+      <li><span class="dot"></span><span><b>Вариант C — «Задача-узел».</b> В дереве задача становится группирующей шапкой, чаты-исполнители вложены под ней без повтора заголовка.</span></li>
+      <li><span class="dot"></span><span><b>Вариант D — «Прогресс».</b> Строка статуса как тонкий трек подзадач — надстройка над A, где у задачи есть подзадачи.</span></li>
+    </ul>
+    <div class="note">Данные на макете — с реального скриншота: оркестратор «Создание и запуск экспертной команды» и три вложенных чата-задачи. Шрифты: PT Serif / Hanken Grotesk / JetBrains Mono. Тёмная тема не показана — цвета берутся из CSS-переменных автоматически.</div>
+  </div>
+
+  <!-- ================= AS-IS ================= -->
+  <div class="variant">
+    <h2>Сейчас <span class="badge-as">как есть</span></h2>
+    <div class="desc">Воспроизведение скриншота. Красным подсвечены три канала, несущие одно и то же имя задачи.</div>
+    <div style="max-width: 380px;">
+      <div class="rail">
+        <div class="rail-head">
+          <div class="rtitle"><span class="rlogo">ML</span>ML в банке</div>
+          <div class="segmented"><span><svg class="i" width="12" height="12"><use href="#ic-list"/></svg>Плоский</span><span class="on"><svg class="i" width="12" height="12"><use href="#ic-tree"/></svg>Иерархия</span></div>
+        </div>
+        <div class="tree">
+          <!-- Родитель -->
+          <a class="link-card" href="#" onclick="return false">
+            <div class="card active">
+              <div class="abar"></div>
+              <div class="face" style="background:linear-gradient(135deg,#5B7A9E,#3E5C7E)">А</div>
+              <div class="veil" style="background:linear-gradient(to left,#3E7CA6,transparent 70%)"></div>
+              <div class="text-wrap reserve">
+                <div class="row1"><span class="sdot run"></span><span class="ctitle">Создание и запуск экспертной к…</span></div>
+                <div class="preview">поехали</div>
+              </div>
+            </div>
+          </a>
+          <!-- Дети -->
+          <div class="branch">
+            <div class="vline" style="bottom:20px;"></div>
+            <div class="child"><div class="elbow"></div>
+              <a class="link-card" href="#" onclick="return false">
+                <div class="card">
+                  <div class="face" style="background:linear-gradient(135deg,#8B7B6B,#6B5B4B)">Г</div>
+                  <div class="veil" style="background:linear-gradient(to left,#8B7B6B,transparent 70%)"></div>
+                  <div class="text-wrap reserve">
+                    <div class="row1">
+                      <span class="sdot idle"></span>
+                      <span class="ctitle" style="color:var(--danger)">Задача: Каркас документ…</span>
+                      <span class="expiry"><svg class="i" width="10" height="10"><use href="#ic-hourglass"/></svg>24 ч</span>
+                    </div>
+                    <div class="preview" style="color:var(--danger)">## ЗАДАЧА Выполни задачу из трекера…</div>
+                    <div><span class="origin" style="color:var(--danger);background:var(--danger-bg)"><svg class="i" width="11" height="11"><use href="#ic-wrench"/></svg><span>Задача: Каркас документа-концепци…</span></span></div>
+                  </div>
+                </div>
+              </a>
+            </div>
+            <div class="child"><div class="elbow"></div>
+              <a class="link-card" href="#" onclick="return false">
+                <div class="card">
+                  <div class="face" style="background:linear-gradient(135deg,#6B8B7B,#4B6B5B)">М</div>
+                  <div class="veil" style="background:linear-gradient(to left,#6B8B7B,transparent 70%)"></div>
+                  <div class="text-wrap reserve">
+                    <div class="row1">
+                      <span class="sdot idle"></span>
+                      <span class="ctitle" style="color:var(--danger)">Задача: Направления це…</span>
+                      <span class="expiry"><svg class="i" width="10" height="10"><use href="#ic-hourglass"/></svg>24 ч</span>
+                    </div>
+                    <div class="preview" style="color:var(--danger)">## ЗАДАЧА Выполни задачу из трекера…</div>
+                    <div><span class="origin" style="color:var(--danger);background:var(--danger-bg)"><svg class="i" width="11" height="11"><use href="#ic-wrench"/></svg><span>Задача: Направления ценности ИИ д…</span></span></div>
+                  </div>
+                </div>
+              </a>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="caption">Каждая карточка-задача — 4 строки, слово «Задача» и заголовок повторяются 2–3 раза, превью занято техническим промптом.</div>
+    </div>
+  </div>
+
+  <!-- ================= Вариант A ================= -->
+  <div class="variant">
+    <h2>Вариант A — «Одна правда» <span class="badge-rec">рекомендуется</span></h2>
+    <div class="desc">
+      Заголовок задачи — <b>ровно один раз</b> в строке названия, взят из <span style="font-family:var(--mono);font-size:12.5px;">task.title</span>
+      (без префикса «Задача:»). Тип элемента показывает <b>тихий ключ-признак</b> 🔧 без фона и текста (весь заголовок — в тултипе).
+      Строка превью с промптом заменена на <b>живой статус выполнения</b>: выполняется / ждёт ответа / готово / в очереди, плюс
+      прогресс подзадач и срок. Итого 2 строки вместо 4.
+    </div>
+    <div class="cols">
+      <!-- Плоский -->
+      <div>
+        <div class="subhead">Плоский вид</div>
+        <div class="rail">
+          <!-- in_progress + персона -->
+          <a class="link-card" href="#" onclick="return false">
+            <div class="card">
+              <div class="face" style="background:linear-gradient(135deg,#8B7B6B,#6B5B4B)">Г</div>
+              <div class="veil" style="background:linear-gradient(to left,#8B7B6B,transparent 70%)"></div>
+              <div class="text-wrap reserve">
+                <div class="row1">
+                  <span class="sdot run"></span>
+                  <span class="task-mark" title="Задача · выполняется"><svg class="i" width="12" height="12"><use href="#ic-wrench"/></svg></span>
+                  <span class="ctitle">Каркас документа-концепции</span>
+                  <span class="expiry"><svg class="i" width="10" height="10"><use href="#ic-hourglass"/></svg>24 ч</span>
+                </div>
+                <div class="tstatus run"><span class="spin"></span><span class="lbl">Выполняется</span><span class="meta">2/5</span></div>
+              </div>
+            </div>
+          </a>
+          <!-- waiting -->
+          <a class="link-card" href="#" onclick="return false">
+            <div class="card">
+              <div class="face" style="background:linear-gradient(135deg,#6B8B7B,#4B6B5B)">М</div>
+              <div class="veil" style="background:linear-gradient(to left,#6B8B7B,transparent 70%)"></div>
+              <div class="text-wrap reserve">
+                <div class="row1">
+                  <span class="sdot idle"></span>
+                  <span class="task-mark" title="Задача · ждёт ответа"><svg class="i" width="12" height="12"><use href="#ic-wrench"/></svg></span>
+                  <span class="ctitle">Направления ценности ИИ для банка</span>
+                </div>
+                <div class="tstatus wait"><svg class="i" width="11" height="11"><use href="#ic-clock"/></svg><span class="lbl">Ждёт ответа</span><span class="meta urgent">сегодня · 18:00</span></div>
+              </div>
+            </div>
+          </a>
+          <!-- done -->
+          <a class="link-card" href="#" onclick="return false">
+            <div class="card">
+              <div class="face" style="background:linear-gradient(135deg,#9E7A5B,#7E5C3E)">А</div>
+              <div class="veil" style="background:linear-gradient(to left,#9E7A5B,transparent 70%)"></div>
+              <div class="text-wrap reserve">
+                <div class="row1">
+                  <span class="sdot done"></span>
+                  <span class="task-mark" title="Задача · готово"><svg class="i" width="12" height="12"><use href="#ic-wrench"/></svg></span>
+                  <span class="ctitle">Шорт-лист use-cases ИИ</span>
+                </div>
+                <div class="tstatus done"><svg class="i" width="11" height="11"><use href="#ic-check-circle"/></svg><span class="lbl">Готово</span><span class="meta">3/3</span></div>
+              </div>
+            </div>
+          </a>
+          <!-- Claude, todo, без персоны -->
+          <a class="link-card" href="#" onclick="return false">
+            <div class="card">
+              <div class="text-wrap">
+                <div class="row1">
+                  <span class="sdot idle"></span>
+                  <span class="task-mark" title="Задача · в очереди"><svg class="i" width="12" height="12"><use href="#ic-wrench"/></svg></span>
+                  <span class="ctitle">Собрать сводку по коммитам за неделю</span>
+                  <span class="spark" title="Исполнитель — Claude"><svg class="i" width="13" height="13"><use href="#ic-spark"/></svg></span>
+                </div>
+                <div class="tstatus todo"><span class="qdot"></span><span class="lbl">В очереди</span></div>
+              </div>
+            </div>
+          </a>
+          <!-- Активная + удалённая -->
+          <a class="link-card" href="#" onclick="return false">
+            <div class="card active">
+              <div class="abar"></div>
+              <div class="text-wrap">
+                <div class="row1">
+                  <span class="sdot idle"></span>
+                  <span class="task-mark" title="Задача удалена"><svg class="i" width="12" height="12"><use href="#ic-wrench"/></svg></span>
+                  <span class="ctitle">Прогон по старой задаче</span>
+                </div>
+                <div class="tstatus todo"><span class="qdot"></span><span class="lbl">Задача удалена</span></div>
+              </div>
+            </div>
+          </a>
+        </div>
+      </div>
+      <!-- Иерархия -->
+      <div>
+        <div class="subhead">Иерархический вид</div>
+        <div class="rail">
+          <div class="tree">
+            <a class="link-card" href="#" onclick="return false">
+              <div class="card active">
+                <div class="abar"></div>
+                <div class="face" style="background:linear-gradient(135deg,#5B7A9E,#3E5C7E)">А</div>
+                <div class="veil" style="background:linear-gradient(to left,#3E7CA6,transparent 70%)"></div>
+                <div class="text-wrap reserve">
+                  <div class="row1"><span class="sdot run"></span><span class="ctitle">Создание и запуск экспертной команды</span></div>
+                  <div class="preview">Оркестратор · 3 подзадачи в работе</div>
+                </div>
+              </div>
+            </a>
+            <div class="branch accent">
+              <div class="vline" style="bottom:20px;"></div>
+              <div class="child"><div class="elbow accent"></div>
+                <a class="link-card" href="#" onclick="return false">
+                  <div class="card">
+                    <div class="face" style="background:linear-gradient(135deg,#8B7B6B,#6B5B4B)">Г</div>
+                    <div class="veil" style="background:linear-gradient(to left,#8B7B6B,transparent 70%)"></div>
+                    <div class="text-wrap reserve">
+                      <div class="row1"><span class="sdot run"></span><span class="task-mark"><svg class="i" width="12" height="12"><use href="#ic-wrench"/></svg></span><span class="ctitle">Каркас документа-концепции</span><span class="expiry"><svg class="i" width="10" height="10"><use href="#ic-hourglass"/></svg>24 ч</span></div>
+                      <div class="tstatus run"><span class="spin"></span><span class="lbl">Выполняется</span><span class="meta">2/5</span></div>
+                    </div>
+                  </div>
+                </a>
+              </div>
+              <div class="child"><div class="elbow"></div>
+                <a class="link-card" href="#" onclick="return false">
+                  <div class="card">
+                    <div class="face" style="background:linear-gradient(135deg,#6B8B7B,#4B6B5B)">М</div>
+                    <div class="veil" style="background:linear-gradient(to left,#6B8B7B,transparent 70%)"></div>
+                    <div class="text-wrap reserve">
+                      <div class="row1"><span class="sdot idle"></span><span class="task-mark"><svg class="i" width="12" height="12"><use href="#ic-wrench"/></svg></span><span class="ctitle">Направления ценности ИИ</span><span class="expiry"><svg class="i" width="10" height="10"><use href="#ic-hourglass"/></svg>24 ч</span></div>
+                      <div class="tstatus wait"><svg class="i" width="11" height="11"><use href="#ic-clock"/></svg><span class="lbl">Ждёт ответа</span></div>
+                    </div>
+                  </div>
+                </a>
+              </div>
+              <div class="child"><div class="elbow"></div>
+                <a class="link-card" href="#" onclick="return false">
+                  <div class="card">
+                    <div class="face" style="background:linear-gradient(135deg,#9E7A5B,#7E5C3E)">А</div>
+                    <div class="veil" style="background:linear-gradient(to left,#9E7A5B,transparent 70%)"></div>
+                    <div class="text-wrap reserve">
+                      <div class="row1"><span class="sdot done"></span><span class="task-mark"><svg class="i" width="12" height="12"><use href="#ic-wrench"/></svg></span><span class="ctitle">Шорт-лист use-cases ИИ</span></div>
+                      <div class="tstatus done"><svg class="i" width="11" height="11"><use href="#ic-check-circle"/></svg><span class="lbl">Готово</span><span class="meta">3/3</span></div>
+                    </div>
+                  </div>
+                </a>
+              </div>
+            </div>
+            <a class="link-card" href="#" onclick="return false">
+              <div class="card">
+                <div class="text-wrap">
+                  <div class="row1"><span class="sdot idle"></span><span class="ctitle">Структура команды для ML в банке</span></div>
+                  <div class="preview">попробуй снова</div>
+                </div>
+              </div>
+            </a>
+          </div>
+        </div>
+        <div class="caption">Связь входит ровно в строку с именем задачи. Стопка исполнителей больше не «стена повторов».</div>
+      </div>
+    </div>
+    <div class="proscons">
+      <b>Плюсы:</b> минимальная правка (структура ChatCard та же), закрывает все 4 боли, одинаково работает в плоском и дереве, generic-природа карточки сохранена.<br>
+      <b>Минусы:</b> серый ключ-признак менее заметен, чем синий чип. Мягкая эскалация при потере — тот же 🔧 цветом <span style="color:var(--info);font-weight:600">info</span> без фона (см. вторую карточку ниже).
+    </div>
+    <div style="max-width:380px;margin-top:14px">
+      <div class="subhead">Эскалация признака (если серый теряется)</div>
+      <div class="rail">
+        <a class="link-card" href="#" onclick="return false">
+          <div class="card">
+            <div class="text-wrap">
+              <div class="row1"><span class="sdot run"></span><span class="task-mark info"><svg class="i" width="12" height="12"><use href="#ic-wrench"/></svg></span><span class="ctitle">Каркас документа-концепции</span></div>
+              <div class="tstatus run"><span class="spin"></span><span class="lbl">Выполняется</span><span class="meta">2/5</span></div>
+            </div>
+          </div>
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= Вариант B ================= -->
+  <div class="variant">
+    <h2>Вариант B — «Квитанция»</h2>
+    <div class="desc">
+      Чат-задача — это «прогон», а не разговор. Даём ему <b>однострочную</b> карточку, визуально отличную от обычных чатов:
+      статус-точка · ключ · заголовок · справа мини-аватар исполнителя (18px вместо крупного лица) + чип статуса/срока.
+      Максимальная компактность; чаты-задачи явно отделены от «живых» разговоров.
+    </div>
+    <div class="cols">
+      <div>
+        <div class="subhead">Плоский вид</div>
+        <div class="rail">
+          <a class="link-card" href="#" onclick="return false"><div class="receipt">
+            <span class="sdot run"></span><span class="task-mark"><svg class="i" width="12" height="12"><use href="#ic-wrench"/></svg></span>
+            <span class="rtit">Каркас документа-концепции</span>
+            <span class="rmeta"><span class="spin"></span><span class="ava" style="background:#8B7B6B">Г</span></span>
+          </div></a>
+          <a class="link-card" href="#" onclick="return false"><div class="receipt">
+            <span class="sdot idle"></span><span class="task-mark"><svg class="i" width="12" height="12"><use href="#ic-wrench"/></svg></span>
+            <span class="rtit">Направления ценности ИИ для банка</span>
+            <span class="rmeta"><span class="expiry urgent"><svg class="i" width="10" height="10"><use href="#ic-clock"/></svg>18:00</span><span class="ava" style="background:#6B8B7B">М</span></span>
+          </div></a>
+          <a class="link-card" href="#" onclick="return false"><div class="receipt">
+            <span class="sdot done"></span><span class="task-mark" style="color:var(--success-text)"><svg class="i" width="12" height="12"><use href="#ic-check-circle"/></svg></span>
+            <span class="rtit" style="color:var(--muted)">Шорт-лист use-cases ИИ</span>
+            <span class="rmeta"><span class="expiry" style="color:var(--success-text)">3/3</span><span class="ava" style="background:#9E7A5B">А</span></span>
+          </div></a>
+          <a class="link-card" href="#" onclick="return false"><div class="receipt active">
+            <span class="sdot idle"></span><span class="task-mark"><svg class="i" width="12" height="12"><use href="#ic-wrench"/></svg></span>
+            <span class="rtit">Собрать сводку по коммитам</span>
+            <span class="rmeta"><span class="spark"><svg class="i" width="13" height="13"><use href="#ic-spark"/></svg></span></span>
+          </div></a>
+        </div>
+      </div>
+      <div>
+        <div class="subhead">Иерархический вид</div>
+        <div class="rail">
+          <div class="tree">
+            <a class="link-card" href="#" onclick="return false">
+              <div class="card active">
+                <div class="abar"></div>
+                <div class="face" style="background:linear-gradient(135deg,#5B7A9E,#3E5C7E)">А</div>
+                <div class="veil" style="background:linear-gradient(to left,#3E7CA6,transparent 70%)"></div>
+                <div class="text-wrap reserve">
+                  <div class="row1"><span class="sdot run"></span><span class="ctitle">Создание и запуск экспертной команды</span></div>
+                  <div class="preview">Оркестратор · 3 подзадачи</div>
+                </div>
+              </div>
+            </a>
+            <div class="branch accent">
+              <div class="vline" style="bottom:16px;"></div>
+              <div class="child"><div class="elbow accent" style="top:16px"></div>
+                <a class="link-card" href="#" onclick="return false"><div class="receipt">
+                  <span class="sdot run"></span><span class="task-mark"><svg class="i" width="12" height="12"><use href="#ic-wrench"/></svg></span>
+                  <span class="rtit">Каркас документа-концепции</span>
+                  <span class="rmeta"><span class="spin"></span><span class="ava" style="background:#8B7B6B">Г</span></span>
+                </div></a>
+              </div>
+              <div class="child"><div class="elbow" style="top:16px"></div>
+                <a class="link-card" href="#" onclick="return false"><div class="receipt">
+                  <span class="sdot idle"></span><span class="task-mark"><svg class="i" width="12" height="12"><use href="#ic-wrench"/></svg></span>
+                  <span class="rtit">Направления ценности ИИ</span>
+                  <span class="rmeta"><span class="ava" style="background:#6B8B7B">М</span></span>
+                </div></a>
+              </div>
+              <div class="child"><div class="elbow" style="top:16px"></div>
+                <a class="link-card" href="#" onclick="return false"><div class="receipt">
+                  <span class="sdot done"></span><span class="task-mark" style="color:var(--success-text)"><svg class="i" width="12" height="12"><use href="#ic-check-circle"/></svg></span>
+                  <span class="rtit" style="color:var(--muted)">Шорт-лист use-cases ИИ</span>
+                  <span class="rmeta"><span class="ava" style="background:#9E7A5B">А</span></span>
+                </div></a>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="caption">Низкие «квитанции» под родителем читаются как список подпунктов.</div>
+      </div>
+    </div>
+    <div class="proscons">
+      <b>Плюсы:</b> самая компактная, чаты-задачи явно ≠ разговоры.<br>
+      <b>Минусы:</b> теряем крупное лицо-персону (падает до 18px) и подробный статус; карточки задачи и обычного чата разной высоты — список менее ровный.
+    </div>
+  </div>
+
+  <!-- ================= Вариант C ================= -->
+  <div class="variant">
+    <h2>Вариант C — «Задача-узел»</h2>
+    <div class="desc">
+      Надстройка над A для дерева: когда под оркестратором несколько исполнителей одной задачи — <b>сама задача становится
+      группирующей шапкой</b> (serif-заголовок, прогресс, chevron), а чаты-исполнители вложены под ней <b>без origin-признака</b>
+      (шапка уже сказала, чья это ветка). Заголовок задачи живёт один раз на всю группу. В плоском виде деградирует к варианту A.
+    </div>
+    <div style="max-width:420px">
+      <div class="subhead">Иерархический вид</div>
+      <div class="rail">
+        <div class="tree">
+          <a class="link-card" href="#" onclick="return false">
+            <div class="card active">
+              <div class="abar"></div>
+              <div class="face" style="background:linear-gradient(135deg,#5B7A9E,#3E5C7E)">А</div>
+              <div class="veil" style="background:linear-gradient(to left,#3E7CA6,transparent 70%)"></div>
+              <div class="text-wrap reserve">
+                <div class="row1"><span class="sdot run"></span><span class="ctitle">Создание и запуск экспертной команды</span></div>
+                <div class="preview">Оркестратор</div>
+              </div>
+            </div>
+          </a>
+          <div class="branch accent">
+            <div class="vline" style="bottom:20px;"></div>
+            <div class="child"><div class="elbow accent"></div>
+              <!-- Задача-шапка -->
+              <div style="position:relative">
+                <div class="chev-ctl on"><svg class="i" width="14" height="14" style="transform:rotate(90deg)"><use href="#ic-chevron"/></svg></div>
+                <a class="link-card" href="#" onclick="return false">
+                  <div class="task-head">
+                    <svg class="i" width="13" height="13" style="color:var(--accent)"><use href="#ic-wrench"/></svg>
+                    <span class="htit">Каркас документа-концепции</span>
+                    <span class="prog">2/5</span>
+                  </div>
+                </a>
+                <!-- Вложенные прогоны без origin -->
+                <div class="branch">
+                  <div class="vline" style="bottom:20px;"></div>
+                  <div class="child"><div class="elbow"></div>
+                    <a class="link-card" href="#" onclick="return false"><div class="card">
+                      <div class="face" style="background:linear-gradient(135deg,#8B7B6B,#6B5B4B)">Г</div>
+                      <div class="veil" style="background:linear-gradient(to left,#8B7B6B,transparent 70%)"></div>
+                      <div class="text-wrap reserve">
+                        <div class="row1"><span class="sdot run"></span><span class="ctitle">Прогон 1 · черновик</span></div>
+                        <div class="tstatus run"><span class="spin"></span><span class="lbl">Выполняется</span></div>
+                      </div>
+                    </div></a>
+                  </div>
+                  <div class="child"><div class="elbow"></div>
+                    <a class="link-card" href="#" onclick="return false"><div class="card">
+                      <div class="face" style="background:linear-gradient(135deg,#8B7B6B,#6B5B4B)">Г</div>
+                      <div class="veil" style="background:linear-gradient(to left,#8B7B6B,transparent 70%)"></div>
+                      <div class="text-wrap reserve">
+                        <div class="row1"><span class="sdot done"></span><span class="ctitle">Прогон 2 · правки ревью</span></div>
+                        <div class="tstatus done"><svg class="i" width="11" height="11"><use href="#ic-check-circle"/></svg><span class="lbl">Готово</span></div>
+                      </div>
+                    </div></a>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="child"><div class="elbow"></div>
+              <!-- Одиночная задача = обычная карточка A (шапка не нужна) -->
+              <a class="link-card" href="#" onclick="return false"><div class="card">
+                <div class="face" style="background:linear-gradient(135deg,#6B8B7B,#4B6B5B)">М</div>
+                <div class="veil" style="background:linear-gradient(to left,#6B8B7B,transparent 70%)"></div>
+                <div class="text-wrap reserve">
+                  <div class="row1"><span class="sdot idle"></span><span class="task-mark"><svg class="i" width="12" height="12"><use href="#ic-wrench"/></svg></span><span class="ctitle">Направления ценности ИИ</span></div>
+                  <div class="tstatus wait"><svg class="i" width="11" height="11"><use href="#ic-clock"/></svg><span class="lbl">Ждёт ответа</span></div>
+                </div>
+              </div></a>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="caption">Шапка появляется только при ≥2 прогонах одной задачи; одиночная задача (нижняя) остаётся карточкой A — без лишнего уровня.</div>
+    </div>
+    <div class="proscons">
+      <b>Плюсы:</b> самый сильный ответ на «стену повторов» — заголовок один раз на группу; serif-шапка задаёт «документный» ритм.<br>
+      <b>Минусы:</b> требует группировки узлов по <span style="font-family:var(--mono);font-size:12px">taskId</span> в chatTree.ts — это уже логика дерева, а не косметика. Внедрять поверх A, когда дойдут руки.
+    </div>
+  </div>
+
+  <!-- ================= Вариант D ================= -->
+  <div class="variant">
+    <h2>Вариант D — «Прогресс»</h2>
+    <div class="desc">
+      Декоративная надстройка над строкой статуса A: вместо текста — <b>тонкий трек подзадач</b> (4px) с подписью N/M.
+      Мгновенно читается «насколько готово». Применимо только там, где у задачи есть подзадачи; иначе — фолбэк на текст-статус A.
+    </div>
+    <div style="max-width:380px">
+      <div class="rail">
+        <a class="link-card" href="#" onclick="return false"><div class="card">
+          <div class="face" style="background:linear-gradient(135deg,#8B7B6B,#6B5B4B)">Г</div>
+          <div class="veil" style="background:linear-gradient(to left,#8B7B6B,transparent 70%)"></div>
+          <div class="text-wrap reserve">
+            <div class="row1"><span class="sdot run"></span><span class="task-mark"><svg class="i" width="12" height="12"><use href="#ic-wrench"/></svg></span><span class="ctitle">Каркас документа-концепции</span></div>
+            <div class="tstatus run" style="gap:7px"><div class="track"><i style="width:40%;background:var(--accent)"></i></div><span class="meta">2/5</span></div>
+          </div>
+        </div></a>
+        <a class="link-card" href="#" onclick="return false"><div class="card">
+          <div class="face" style="background:linear-gradient(135deg,#9E7A5B,#7E5C3E)">А</div>
+          <div class="veil" style="background:linear-gradient(to left,#9E7A5B,transparent 70%)"></div>
+          <div class="text-wrap reserve">
+            <div class="row1"><span class="sdot done"></span><span class="task-mark"><svg class="i" width="12" height="12"><use href="#ic-wrench"/></svg></span><span class="ctitle">Шорт-лист use-cases ИИ</span></div>
+            <div class="tstatus done" style="gap:7px"><div class="track"><i style="width:100%;background:var(--success)"></i></div><span class="meta" style="color:var(--success-text)">3/3</span></div>
+          </div>
+        </div></a>
+      </div>
+      <div class="caption">Годится как украшение поверх A, не как самостоятельное решение (у многих прогонов нет подзадач).</div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

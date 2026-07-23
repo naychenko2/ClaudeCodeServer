@@ -862,8 +862,11 @@ const windowWidth = useWindowWidth();
     setActiveSession(session);
     setPendingMessage(firstMessage);
     if (!autoSelect) {
-      // явный выбор — закрываем файл и открытую задачу, показываем чат во весь экран
+      // явный выбор — закрываем файл, просмотр коммита и открытую задачу, показываем чат во весь экран
       setOpenFile(null);
+      setOpenFileDiffMode(false);
+      setOpenCommitSha(null);
+      setOpenCommitFile(null);
       setSelectedTaskId(null);
       // Пишем запись истории с chatId — для URL #/project/{id}/chat/{chatId}
       // и кнопки «назад/вперёд» браузера.
@@ -1054,6 +1057,21 @@ const windowWidth = useWindowWidth();
   const closeCommitView = () => {
     setOpenCommitSha(null);
     if (isMobile) setMobileView('sidebar');
+  };
+
+  // Смена git-скоупа/коммита в панели «Изменения» — центральную область сбрасываем
+  // к чату: убираем открытый файл, просмотр коммита и открытую задачу (если что-то показано)
+  const clearCenterToChat = () => {
+    if (!openFile && !openCommitSha && !selectedTaskId) return;  // уже чат — ничего не делаем
+    setOpenFile(null);
+    setOpenFileDiffMode(false);
+    setGitStagePath(null);
+    setFileFullscreen(false);
+    setOpenCommitSha(null);
+    setOpenCommitFile(null);
+    setSelectedTaskId(null);
+    if (isMobile) setMobileView('chat');
+    navReplace({ screen: 'project', project, view: isMobile ? 'chat' : 'sidebar', file: null, task: null });
   };
 
   // Тулбар-«назад»: ДЕТЕРМИНИРОВАННЫЙ подъём к списку текущей вкладки внутри проекта.
@@ -1477,7 +1495,7 @@ const windowWidth = useWindowWidth();
             files: fileSubTab === 'files'
               ? <FileExplorer project={project} activeFilePath={openFile} isMobile={false} onOpenFile={handleOpenFileFromTree} onOpenGitDiff={handleOpenGitDiff} onOpenCommit={handleOpenCommit} onAddToKnowledge={handleAddToKnowledge} onAddFolderToKnowledge={handleAddFolderToKnowledge} onRemoveFromKnowledge={handleRemoveFromKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} indexingFolders={indexingFolders} onAttachToChat={activeSession && !fileFullscreen ? handleAttachToChat : undefined} onOpenKnowledge={() => setFileSubTab('knowledge')} />
               : <KnowledgePanel project={project} isMobile={false} onDocumentsChanged={setIndexedFileNames} onBack={() => setFileSubTab('files')} />,
-            changes: <GitChangesRail project={project} onOpenDiff={handleOpenGitDiff} onOpenFile={handleOpenFileFromTree} onOpenCommit={handleOpenCommit} activeFilePath={openFile ?? openCommitFile} onCommit={handleCommitVia} />,
+            changes: <GitChangesRail project={project} onOpenDiff={handleOpenGitDiff} onOpenFile={handleOpenFileFromTree} onOpenCommit={handleOpenCommit} activeFilePath={openFile ?? openCommitFile} onCommit={handleCommitVia} onScopeChange={clearCenterToChat} />,
             tasks: <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={false} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} groupTab={projectGroupTab} onGroupTab={setProjectGroupTab} hideViewSwitcher />,
             team: <ProjectPersonasPanel project={project} selectedId={personaCreating ? null : selectedPersonaId} onSelect={handlePersonaSelect} onNew={handlePersonaNew} onShowTeam={() => { handlePersonaCleared(); setTeamCenterOpen(true); }} teamActive={teamCenterOpen && !selectedPersonaId && !personaCreating} />,
             terminal: <TerminalPanelContent terminals={terminals} activeTerminalId={activeTerminalId} onSelect={handleSelectTerminal} onCreate={handleCreateTerminal} onStop={handleStopTerminal} onActivity={setTerminalBusy} />,

@@ -179,12 +179,13 @@ export function ChatCard({
         <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 4, background: accent }} />
       )}
 
-      {/* Текст карточки. Правая полоса не его: там лицо собеседника и кнопки действий,
-          поэтому заголовок и превью обрываются на её границе, а не наезжают.
-          Резерв держим и без персоны — иначе кнопки накрыли бы хвост превью */}
+      {/* Текст карточки. Когда есть собеседник, справа под него отведена полоса
+          (лицо + кнопки поверх) — заголовок и превью обрываются на её границе.
+          Без персоны резерв не держим: текст идёт во всю ширину, а кнопки действий
+          (при наведении, с непрозрачной подложкой cardBg) перекрывают его хвост */}
       <div style={{
         position: 'relative', display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0,
-        paddingRight: COMPANION_W - (isMobile ? 16 : 12),
+        paddingRight: backdropPersona ? COMPANION_W - (isMobile ? 16 : 12) : 0,
       }}>
         {/* Строка 1: статус точкой, название, метки срока и закрепления */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
@@ -211,21 +212,22 @@ export function ChatCard({
           )}
         </div>
 
-        {/* Строка 2: происхождение и механика. Собеседник ушёл в подложку */}
-        {(origin || mechanic) && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
-            {origin && <ChatOriginBadge origin={origin} style={{ flexShrink: 0 }} />}
-            {mechanic && <TeamMechanicBadge id={mechanic} size="sm" />}
-          </div>
-        )}
-
-        {/* Строка 3: превью последнего сообщения */}
+        {/* Строка 2: превью последнего сообщения */}
         {s.lastMessage && (
           <div style={{
             minWidth: 0, fontSize: 12, color: C.textMuted, lineHeight: 1.4,
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           }}>
             {teamTurnPreview(s.lastMessage) ?? s.lastMessage}
+          </div>
+        )}
+
+        {/* Под описанием: происхождение и механика — иконка с подписью, прижаты
+            влево (собеседник ушёл в подложку) */}
+        {(origin || mechanic) && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0, marginTop: 1 }}>
+            {origin && <ChatOriginBadge origin={origin} style={{ flexShrink: 0 }} />}
+            {mechanic && <TeamMechanicBadge id={mechanic} size="sm" />}
           </div>
         )}
       </div>

@@ -181,6 +181,7 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onC
         permissionRules: rules.filter(r => r.pattern.trim()).map(r => ({ pattern: r.pattern.trim(), action: r.action })),
         color: iconColor ?? '',
       });
+      invalidateProjectsCache(); // полка/палитра проектов подхватывают новое имя/иконку
       onSuccess(updated);
     } catch (e: any) {
       setError(e.message);

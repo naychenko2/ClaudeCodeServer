@@ -5,6 +5,7 @@ import { C, R, FONT, MODAL_W } from '../../../lib/design';
 import { Modal } from '../../../components/ui';
 import { Check } from 'lucide-react';
 import { ICON_SIZE } from '../../../components/ui/icons';
+import { invalidateProjectsCache } from '../useAllProjects';
 
 interface Props {
   project: Project;
@@ -25,6 +26,7 @@ export function MoveToGroupDialog({ project, groups, onSuccess, onClose }: Props
     setError('');
     try {
       const updated = await api.projects.update(project.id, { groupId });
+      invalidateProjectsCache(); // кэш списка проектов не должен отставать от мутаций
       onSuccess(updated);
     } catch (e: any) { setError(e.message); setBusy(false); }
   };

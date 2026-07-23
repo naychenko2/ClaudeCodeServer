@@ -19,6 +19,8 @@ import { GitCommitView } from '../../components/GitCommitView';
 import { TaskDetailsPane } from '../../features/tasks/TaskDetailsPane';
 import { ProjectPersonaPane } from '../../features/personas/ProjectPersonasPanel';
 import { ProjectIcon } from '../../features/projects/ProjectIcon';
+import { SidebarProjectSwitcher } from '../../features/projects/SidebarProjectSwitcher';
+import { useFeature, FLAGS } from '../../lib/featureFlags';
 import { RightPanelStack } from './RightPanelStack';
 import type { PanelKey } from './panelStackState';
 
@@ -95,6 +97,8 @@ interface Props {
 
 export function DesktopWorkspace(p: Props) {
   const [sidebarWidth, setSidebarWidth] = useSidebarWidth();
+  // Переключатель проектов в плашке сайдбара (флаг sidebar-project-switcher)
+  const sidebarSwitcher = useFeature(FLAGS.sidebarProjectSwitcher);
   // Подсветка активного сплиттера: сайдбар или split чат|файл
   const [dragging, setDragging] = useState<'sidebar' | 'split' | null>(null);
 
@@ -168,6 +172,10 @@ export function DesktopWorkspace(p: Props) {
     <div style={{ width: '100%', display: 'flex', flexDirection: 'column', background: C.bgPanel, flexShrink: 0, height: '100%' }}>
       <div style={{ padding: '8px 10px 6px', flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, minHeight: 28 }}>
+          {sidebarSwitcher ? (
+            // Флаг sidebar-project-switcher: плашка = переключатель проектов
+            <SidebarProjectSwitcher project={p.projectForEdit} onOpenSettings={p.onOpenProjectSettings} />
+          ) : (
           <div
             onClick={p.onGoToProjects}
             title="Все проекты"
@@ -180,12 +188,17 @@ export function DesktopWorkspace(p: Props) {
               {p.projectForEdit.name}
             </span>
           </div>
+          )}
+          {/* Шестеренка нужна только старой плашке: в переключателе настройки
+              открываются кликом по иконке активного проекта */}
+          {!sidebarSwitcher && (
           <IconButton size="sm" onClick={p.onOpenProjectSettings} title="Настройки проекта">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="12" cy="12" r="3"/>
               <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
             </svg>
           </IconButton>
+          )}
           {/* Пин — самая правая кнопка: закрепляет (drawer→в потоке) либо откепляет-сворачивает панель */}
           <IconButton
             size="sm"

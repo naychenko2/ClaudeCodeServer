@@ -26,6 +26,7 @@ import { showToast } from '../lib/toast';
 import { navPush, navReplace, parseHash, type NavSnapshot } from '../lib/nav';
 import { EditDialog } from '../features/projects/dialogs/EditDialog';
 import { ProjectIcon } from '../features/projects/ProjectIcon';
+import { SidebarProjectSwitcher } from '../features/projects/SidebarProjectSwitcher';
 import { TasksPanel } from '../features/tasks/TasksPanel';
 import { PillViewSwitcher, ListIcon, ByDateIcon, BoardIcon } from '../features/tasks/bits';
 import { TaskDetailsPane } from '../features/tasks/TaskDetailsPane';
@@ -276,6 +277,8 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
   // в новом режиме вкладки «Инструменты» нет, но панелька терминала должна получать
   // список всегда. Режим (ccPanelsMode) считается ниже — ему нужна ширина окна.
   const ccPanels = useFeature(FLAGS.workspaceCcPanels);
+  // Переключатель проектов в плашке сайдбара (вместо зоны в шапке)
+  const sidebarSwitcher = useFeature(FLAGS.sidebarProjectSwitcher);
   type ToolsTab = 'terminal' | 'preview';
   const [toolsTab, setToolsTab] = useState<ToolsTab>('terminal');
   const [activeTerminalId, setActiveTerminalId] = useState<string | null>(null);
@@ -1187,7 +1190,12 @@ const windowWidth = useWindowWidth();
               лишнего padding; hover-подложка кликабельной зоны компенсируется margin -6, чтобы
               иконка/текст стояли вровень с краем панели, а фон при наведении чуть выступал. */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 13, minHeight: 28 }}>
-            {/* Индикатор + имя проекта — кликабельны, ведут к списку проектов */}
+            {sidebarSwitcher ? (
+              // Флаг sidebar-project-switcher: плашка = переключатель проектов
+              // (таблетка активного + иконки других со статусами + палитра)
+              <SidebarProjectSwitcher project={projectForEdit} onOpenSettings={() => setEditProjectOpen(true)} />
+            ) : (
+            /* Индикатор + имя проекта — кликабельны, ведут к списку проектов */
             <div
               onClick={onGoToProjects}
               title="Все проекты"
@@ -1200,6 +1208,10 @@ const windowWidth = useWindowWidth();
                 {projectForEdit.name}
               </span>
             </div>
+            )}
+            {/* Шестеренка нужна только старой плашке: в переключателе настройки
+                открываются кликом по иконке активного проекта */}
+            {!sidebarSwitcher && (
             <IconButton
               size="sm"
               onClick={() => setEditProjectOpen(true)}
@@ -1210,6 +1222,7 @@ const windowWidth = useWindowWidth();
                 <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
               </svg>
             </IconButton>
+            )}
             {/* Пин — самая правая кнопка: закрепляет (drawer→в потоке) либо откепляет-сворачивает панель */}
             <IconButton
               size="sm"

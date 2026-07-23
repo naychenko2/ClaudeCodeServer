@@ -3,6 +3,7 @@ import { Book, Calendar, Folder, House, MessageCircle, Puzzle, Share2, Users } f
 import { PillSwitch } from './Toolbar';
 import { ProjectSwitcherZone } from '../features/projects/ProjectSwitcherZone';
 import { useModules } from '../lib/modules';
+import { useFeature, FLAGS } from '../lib/featureFlags';
 
 export type HubTab = 'home' | 'chats' | 'projects' | 'calendar' | 'notes' | 'personas' | 'knowledge' | 'notifications';
 
@@ -63,8 +64,11 @@ export function HubTabs({ value, onChange, mobile, tabs = DEFAULT_TABS, currentP
     .map(m => ({ value: `module:${m.id}` as HubTabValue, label: m.tab!.label, icon: <Puzzle size={18} strokeWidth={2} /> }));
 
   // Зона проектов заменяет вкладку «Проекты», когда раздел активен (десктоп). Вне
-  // раздела и на мобиле — обычная вкладка.
-  const showZone = !mobile && value === 'projects';
+  // раздела и на мобиле — обычная вкладка. При включенном переключателе проектов
+  // в сайдбаре (флаг sidebar-project-switcher) зона скрыта совсем — переключение
+  // живет в плашке воркспейса, вкладка «Проекты» остается обычной пилюлей.
+  const sidebarSwitcher = useFeature(FLAGS.sidebarProjectSwitcher);
+  const showZone = !mobile && value === 'projects' && !sidebarSwitcher;
   // Активный раздел вне набора табов: из TABLESS — не получает вкладку вовсе
   // (PillSwitch умеет «нет выбранного»), остальные скрытые дописываются условной
   // вкладкой в конец. На мобиле так всплывают «Заметки» и «Персоны» из «⋯ Разделы»,

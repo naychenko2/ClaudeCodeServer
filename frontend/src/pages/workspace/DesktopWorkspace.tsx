@@ -227,9 +227,10 @@ export function DesktopWorkspace(p: Props) {
   );
 
   // Центральный остров: карточка на холсте, внутри — оригинальная обёртка режима
-  // (flex:1 в колонке острова растягивает её на всю высоту)
+  // (flex:1 в колонке острова растягивает её на всю высоту). По бокам — доп. воздух
+  // (ISLAND.centerGap сверх зазора-сплиттера), чтобы карточка не липла к соседям
   const centerIsland = (children: ReactNode) => (
-    <Island bg={C.bgMain} style={{ flex: 1, minWidth: 0 }}>
+    <Island bg={C.bgMain} style={{ flex: 1, minWidth: 0, margin: `0 ${ISLAND.centerGap}px` }}>
       {children}
     </Island>
   );
@@ -305,7 +306,7 @@ export function DesktopWorkspace(p: Props) {
 
       {/* Split чат|файл — ДВА острова, ресайз живёт в зазоре между ними */}
       {p.openFile && !p.fileFullscreen && !p.isTablet && (
-        <div ref={splitContainerRef} style={{ flex: 1, display: 'flex', overflow: 'hidden', minWidth: 0 }}>
+        <div ref={splitContainerRef} style={{ flex: 1, display: 'flex', overflow: 'hidden', minWidth: 0, margin: `0 ${ISLAND.centerGap}px` }}>
           <Island bg={C.bgMain} style={{ flex: chatFlex, minWidth: 200 }}>
             <div style={{ flex: 1, overflow: 'hidden' }}>
               {chatPanel(false)}

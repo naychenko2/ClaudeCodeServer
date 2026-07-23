@@ -163,6 +163,15 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
     void loadGitStash(project.id);
   }, [project.id]);
 
+  // Git-бар чата просит показать текущие изменения: сбрасываем скоуп на «Не
+  // зафиксировано» (если панель была открыта на коммите/стэше/ветке). При закрытой
+  // панели событие безвредно теряется — при монтировании скоуп и так 'working'.
+  useEffect(() => {
+    const onOpenWorking = () => { setActiveScope('working'); setMode('list'); };
+    window.addEventListener('cc-git-open-working', onOpenWorking);
+    return () => window.removeEventListener('cc-git-open-working', onOpenWorking);
+  }, []);
+
   const setView = (v: 'list' | 'tree') => { setViewMode(v); try { localStorage.setItem(VIEW_KEY, v); } catch { /* квота */ } };
   const toggleDir = (p: string) =>
     setCollapsedDirs(prev => { const n = new Set(prev); n.has(p) ? n.delete(p) : n.add(p); return n; });

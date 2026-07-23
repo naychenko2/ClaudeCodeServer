@@ -20,6 +20,7 @@ import { notify } from '../lib/notify';
 import { type Mode, ModeIcon } from '../lib/modes';
 import { useModelCaps, assistantName, modelProvider } from '../lib/models';
 import { Composer } from './Composer';
+import { ProjectGitBar } from './ProjectGitBar';
 import { EditSessionDialog } from './EditSessionDialog';
 import { C, R, SHADOW, CHAT_MAX_W } from '../lib/design';
 import { setChatContext, AI_RECOMPUTE_EVENT } from '../lib/ai/chatContext';
@@ -399,6 +400,29 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     atBottomRef.current = true; // своё сообщение — прыгаем вниз и снова прилипаем
     await send(text, paths, mode);
   };
+
+  // Git-бар «Зафиксировать своё»: делегируем текущему чату коммит ТОЛЬКО файлов,
+  // затронутых в этом диалоге (из ленты file_changed). Список даём явно, чтобы
+  // Claude не захватил чужие изменения рабочего дерева. Плюс подмешиваем стиль
+  // сообщения из панели «Изменения» (effective — тот же, что у ✨-генерации), чтобы
+  // делегированный коммит и кнопка ✨ давали один формат.
+  const handleCommitOwn = useCallback(() => {
+    if (!project) return;
+    const own = [...new Set(items.filter(i => i.kind === 'file_changed').map(i => i.path))];
+    const list = own.length ? ` Файлы, которые ты менял в этом чате: ${own.join(', ')} — закоммить только их.` : '';
+    void (async () => {
+      let style = '';
+      try {
+        const info = await api.git.getCommitPrompt(project.id);
+        if (info.effective?.trim()) style = `\n\nОформи сообщение коммита строго по этому стилю:\n${info.effective.trim()}`;
+      } catch { /* офлайн/нет промпта — коммитим по общим правилам */ }
+      atBottomRef.current = true;
+      await send(
+        `Зафиксируй (git commit) изменения, сделанные в рамках этого чата — только то, что ты правил в этом диалоге, не затрагивая остальные изменения рабочего дерева.${list} Сам придумай осмысленное сообщение коммита по сути изменений.${style}`,
+        [], mode);
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project, items, send, mode]);
 
   // Загрузка вставленных/перетащенных картинок в проект → относительные пути в attachedFiles.
   // Бэкенд по расширению отправит их claude как image-блоки base64.
@@ -1145,6 +1169,10 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
               Режим «Без ограничений» — {asstName} действует без подтверждений
             </div>
           )}
+          {/* Git-бар над композером (только проектный чат на десктопе): ветка/worktree,
+              суммарный diff и кнопки «Зафиксировать»/«Опубликовать». Правой панели
+              «Изменения» на мобиле нет — отсюда гейт !isMobile. */}
+          {project && !isMobile && <ProjectGitBar project={project} onCommitOwn={handleCommitOwn} />}
           {/* Подъём композера над лентой даёт сама белая карточка (Composer), а не эта
               обёртка: полоса контролов вынесена из карточки, и тень на обёртке рисовала
               серый ореол вокруг пустой области под ней и полоску над полем ввода. */}

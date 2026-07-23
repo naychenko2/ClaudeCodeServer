@@ -120,6 +120,11 @@ public sealed class GitService(ILauncherFactory launchers)
             return new GitStatusDto(false, null, null, 0, 0, false, [], [], []);
         var dto = ParsePorcelainV2(r.Stdout);
 
+        // Признак linked worktree: в его корне `.git` — файл-ссылка (`gitdir: …`), а не папка.
+        // Ставим ДО раннего return ниже, иначе worktree с чистым деревом (но незапушенными
+        // коммитами) вернётся без флага, и UI покажет ветку вместо имени worktree.
+        dto = dto with { IsWorktree = File.Exists(Path.Combine(root, ".git")) };
+
         // Обогащаем файлы статистикой строк (+N/−M): tracked — суммарно vs HEAD, untracked — числом строк
         var stats = await NumstatAsync(ownerId, root, dto.Untracked.Select(f => f.Path), ct);
         if (stats.Count == 0) return dto;

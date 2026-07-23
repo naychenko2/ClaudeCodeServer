@@ -2,6 +2,8 @@ namespace ClaudeHomeServer.Models;
 
 // Статус рабочего дерева: ветка, upstream, ahead/behind и списки изменений
 // по группам (staged/unstaged/untracked). Парсится из `git status --porcelain=v2 --branch -z`.
+// IsWorktree — проект открыт как linked git worktree (в его корне .git это файл-ссылка,
+// а не папка); UI показывает имя папки worktree вместо ветки.
 public record GitStatusDto(
     bool IsRepo,
     string? Branch,
@@ -11,7 +13,8 @@ public record GitStatusDto(
     bool Detached,
     IReadOnlyList<GitFileChange> Staged,
     IReadOnlyList<GitFileChange> Unstaged,
-    IReadOnlyList<GitFileChange> Untracked);
+    IReadOnlyList<GitFileChange> Untracked,
+    bool IsWorktree = false);
 
 // Одно изменение файла. Status — односимвольный код git (M/A/D/R/C/?);
 // OldPath заполняется только для переименований (R).

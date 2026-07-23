@@ -1038,7 +1038,13 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         <FalCostContext.Provider value={falCostByRequest}><ChatProjectContext.Provider value={projectCtx}>{renderedItems}</ChatProjectContext.Provider></FalCostContext.Provider>
 
         {online && showWaiting && (
-          <WaitingIndicator planning={planningKind} />
+          // Текст индикатора ставим по левому краю чата (как пузыри), а домик уезжает
+          // в жёлоб перед ним: домик 19px + зазор 10px = 29px сдвига. Под левым краем
+          // пузырей дым из трубы (вверх-влево) наезжал на контент сверху; в жёлобе над
+          // домиком и слева пузырей нет — дым пыхтит в пустоту.
+          <div style={{ marginLeft: isMobile ? -12 : -29, marginTop: 5 }}>
+            <WaitingIndicator planning={planningKind} />
+          </div>
         )}
 
         {/* Баннер прерванной сессии — в конце ленты, после истории */}

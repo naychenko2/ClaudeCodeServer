@@ -217,6 +217,16 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         try { await teamMemory.DeleteProjectTeamMemoryAsync(UserId, id); }
         catch { /* удаление проекта не зависит от уборки памяти команды */ }
 
+        // Worktree чатов проекта: сессии при удалении проекта НЕ удаляются (осознанно),
+        // но их деревья без проекта — мусор на диске и записи в .git/worktrees главной репы.
+        // Явный обход обязателен — автокаскада сессий нет. Best-effort + force: судьба
+        // незакоммиченных правок решена удалением самого проекта.
+        foreach (var s in sessions.GetByProject(id).Where(s => s.WorktreePath is not null).ToList())
+        {
+            try { await git.WorktreeRemoveAsync(p.OwnerId, p.RootPath, s.WorktreePath!, force: true); }
+            catch { /* дерево могло быть удалено руками — запись подчистит prune */ }
+        }
+
         // База знаний проекта: Dify-датасет + запись WorkspaceKnowledge. Датасет общий для
         // проектов в одной папке — чистим, только если RootPath больше никем не используется
         if (projects.GetByRootPath(p.RootPath).Count == 0)

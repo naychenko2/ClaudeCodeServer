@@ -35,26 +35,28 @@ public sealed class GitAutoCommitService(
     {
         if (msg is not ResultMessage || session.ProjectId is null) return Task.CompletedTask;
         var project = projects.GetById(session.ProjectId);
-        if (project is null || !project.GitAutoCommit || !GitService.IsGitRepo(project.RootPath))
+        // Чат в отдельном worktree меняет файлы ТАМ — коммитим его дерево, не корень проекта
+        var root = session.WorktreePath ?? project?.RootPath;
+        if (project is null || root is null || !project.GitAutoCommit || !GitService.IsGitRepo(root))
             return Task.CompletedTask;
 
-        _ = Task.Run(() => AutoCommitSafeAsync(project, session));
+        _ = Task.Run(() => AutoCommitSafeAsync(project, session, root));
         return Task.CompletedTask;
     }
 
-    private async Task AutoCommitSafeAsync(Project project, Session session)
+    private async Task AutoCommitSafeAsync(Project project, Session session, string root)
     {
         try
         {
             var ownerId = project.OwnerId;
-            var status = await git.StatusAsync(ownerId, project.RootPath);
+            var status = await git.StatusAsync(ownerId, root);
             if (status.Staged.Count == 0 && status.Unstaged.Count == 0 && status.Untracked.Count == 0)
                 return; // ход ничего не поменял
 
-            await git.StageAllAsync(ownerId, project.RootPath);
+            await git.StageAllAsync(ownerId, root);
             var subject = $"Авто-сохранение: ход Claude в чате «{session.Name}»";
             var message = $"{subject}\n\n{DateTime.Now:dd.MM.yyyy HH:mm}";
-            var sha = await git.CommitAsync(ownerId, project.RootPath, message);
+            var sha = await git.CommitAsync(ownerId, root, message);
 
             // Плашка «Изменения сохранены» в ленту чата — со ссылкой на просмотр коммита
             await hub.Clients.Group(session.Id)
@@ -65,11 +67,11 @@ public sealed class GitAutoCommitService(
                 var owner = ownerId is null ? null : users.GetById(ownerId);
                 var creds = owner is { ForgejoUsername: { Length: > 0 } u, ForgejoToken: { Length: > 0 } t }
                     ? new GitCredentials(u, t) : null;
-                var fresh = await git.StatusAsync(ownerId, project.RootPath);
+                var fresh = await git.StatusAsync(ownerId, root);
                 if (fresh.Upstream is null && fresh.Branch is not null)
-                    await git.PushSetUpstreamAsync(ownerId, project.RootPath, fresh.Branch, creds);
+                    await git.PushSetUpstreamAsync(ownerId, root, fresh.Branch, creds);
                 else
-                    await git.PushAsync(ownerId, project.RootPath, creds);
+                    await git.PushAsync(ownerId, root, creds);
             }
 
             if (project.OwnerId is not null)

@@ -13,9 +13,22 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects/{projectId}/git")]
-public class GitController(GitService git, GitServerService gitServer, GitAiService gitAi, ProjectManager projects, UserStore users, IHubContext<SessionHub> hub) : ControllerBase
+public class GitController(GitService git, GitServerService gitServer, GitAiService gitAi, ProjectManager projects, UserStore users, SessionManager sessions, IHubContext<SessionHub> hub) : ControllerBase
 {
     private string? UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub);
+
+    // Рабочее дерево запроса: ?sessionId= чата в отдельном worktree переводит операцию в его
+    // дерево (бар чата обязан слать его во ВСЕ вызовы — иначе коммит/дискард уйдёт в корень
+    // проекта). Чужая/несуществующая сессия → 404; сессия без worktree — корень проекта.
+    private string RootFor(Models.Project p)
+    {
+        var sessionId = Request.Query["sessionId"].ToString();
+        if (string.IsNullOrEmpty(sessionId)) return p.RootPath;
+        var s = UserId is null ? null : sessions.GetOwned(sessionId, UserId);
+        if (s is null || s.ProjectId != p.Id)
+            throw new KeyNotFoundException($"Сессия не найдена: {sessionId}");
+        return s.WorktreePath ?? p.RootPath;
+    }
 
     // Креды Forgejo владельца проекта — для push/pull/fetch по HTTP (null — без кред,
     // git попробует анонимно/системный helper, публичные remote так тоже работают)
@@ -57,7 +70,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
         try
         {
             var p = GetProject(projectId);
-            return Ok(await git.StatusAsync(Owner(p), p.RootPath, ct));
+            return Ok(await git.StatusAsync(Owner(p), RootFor(p), ct));
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }
@@ -69,7 +82,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
         try
         {
             var p = GetProject(projectId);
-            var diff = await git.DiffFileAsync(Owner(p), p.RootPath, path, staged, ct);
+            var diff = await git.DiffFileAsync(Owner(p), RootFor(p), path, staged, ct);
             return Ok(new { diff });
         }
         catch (KeyNotFoundException) { return NotFound(); }
@@ -83,7 +96,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
         try
         {
             var p = GetProject(projectId);
-            return Ok(await git.LogAsync(Owner(p), p.RootPath, limit, branch, ct));
+            return Ok(await git.LogAsync(Owner(p), RootFor(p), limit, branch, ct));
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }
@@ -96,7 +109,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
         try
         {
             var p = GetProject(projectId);
-            return Ok(await git.UnpushedLogAsync(Owner(p), p.RootPath, limit, ct));
+            return Ok(await git.UnpushedLogAsync(Owner(p), RootFor(p), limit, ct));
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }
@@ -108,7 +121,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
         try
         {
             var p = GetProject(projectId);
-            var detail = await git.CommitDetailAsync(Owner(p), p.RootPath, sha, ct);
+            var detail = await git.CommitDetailAsync(Owner(p), RootFor(p), sha, ct);
             return detail is null ? NotFound() : Ok(detail);
         }
         catch (KeyNotFoundException) { return NotFound(); }
@@ -121,7 +134,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
         try
         {
             var p = GetProject(projectId);
-            var diff = await git.CommitFileDiffAsync(Owner(p), p.RootPath, sha, path, ct);
+            var diff = await git.CommitFileDiffAsync(Owner(p), RootFor(p), sha, path, ct);
             return Ok(new { diff });
         }
         catch (KeyNotFoundException) { return NotFound(); }
@@ -135,7 +148,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
         try
         {
             var p = GetProject(projectId);
-            return Ok(await git.BranchesAsync(Owner(p), p.RootPath, ct));
+            return Ok(await git.BranchesAsync(Owner(p), RootFor(p), ct));
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }
@@ -143,34 +156,34 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
 
     [HttpPost("stage")]
     public Task<IActionResult> Stage(string projectId, [FromBody] GitPathRequest body, CancellationToken ct) =>
-        Mutate(projectId, (p) => git.StageAsync(Owner(p), p.RootPath, body.Path, ct));
+        Mutate(projectId, (p) => git.StageAsync(Owner(p), RootFor(p), body.Path, ct));
 
     [HttpPost("unstage")]
     public Task<IActionResult> Unstage(string projectId, [FromBody] GitPathRequest body, CancellationToken ct) =>
-        Mutate(projectId, (p) => git.UnstageAsync(Owner(p), p.RootPath, body.Path, ct));
+        Mutate(projectId, (p) => git.UnstageAsync(Owner(p), RootFor(p), body.Path, ct));
 
     [HttpPost("stage-all")]
     public Task<IActionResult> StageAll(string projectId, CancellationToken ct) =>
-        Mutate(projectId, (p) => git.StageAllAsync(Owner(p), p.RootPath, ct));
+        Mutate(projectId, (p) => git.StageAllAsync(Owner(p), RootFor(p), ct));
 
     // Откат правок файла к HEAD — теряет несохранённые изменения (подтверждение на фронте)
     [HttpPost("discard")]
     public Task<IActionResult> Discard(string projectId, [FromBody] GitPathRequest body, CancellationToken ct) =>
-        Mutate(projectId, (p) => git.DiscardAsync(Owner(p), p.RootPath, body.Path, ct));
+        Mutate(projectId, (p) => git.DiscardAsync(Owner(p), RootFor(p), body.Path, ct));
 
     // Откат ВСЕХ изменений рабочего дерева (опасно — фронт гейтит подтверждением)
     [HttpPost("discard-all")]
     public Task<IActionResult> DiscardAll(string projectId, CancellationToken ct) =>
-        Mutate(projectId, (p) => git.DiscardAllAsync(Owner(p), p.RootPath, ct));
+        Mutate(projectId, (p) => git.DiscardAllAsync(Owner(p), RootFor(p), ct));
 
     // Зернистый stage: патч хунка/выбранных строк (синтезирует фронт)
     [HttpPost("stage-hunk")]
     public Task<IActionResult> StageHunk(string projectId, [FromBody] GitPatchRequest body, CancellationToken ct) =>
-        Mutate(projectId, (p) => git.StageHunkAsync(Owner(p), p.RootPath, body.Patch, ct));
+        Mutate(projectId, (p) => git.StageHunkAsync(Owner(p), RootFor(p), body.Patch, ct));
 
     [HttpPost("unstage-hunk")]
     public Task<IActionResult> UnstageHunk(string projectId, [FromBody] GitPatchRequest body, CancellationToken ct) =>
-        Mutate(projectId, (p) => git.UnstageHunkAsync(Owner(p), p.RootPath, body.Patch, ct));
+        Mutate(projectId, (p) => git.UnstageHunkAsync(Owner(p), RootFor(p), body.Patch, ct));
 
     // ---------- Stash ----------
 
@@ -180,7 +193,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
         try
         {
             var p = GetProject(projectId);
-            return Ok(await git.StashListAsync(Owner(p), p.RootPath, ct));
+            return Ok(await git.StashListAsync(Owner(p), RootFor(p), ct));
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }
@@ -193,7 +206,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
         try
         {
             var p = GetProject(projectId);
-            return Ok(new { files = await git.StashShowAsync(Owner(p), p.RootPath, index, ct) });
+            return Ok(new { files = await git.StashShowAsync(Owner(p), RootFor(p), index, ct) });
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }
@@ -201,21 +214,21 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
 
     [HttpPost("stash")]
     public Task<IActionResult> StashPush(string projectId, [FromBody] GitStashRequest body, CancellationToken ct) =>
-        Mutate(projectId, (p) => git.StashPushAsync(Owner(p), p.RootPath, body.Message, ct));
+        Mutate(projectId, (p) => git.StashPushAsync(Owner(p), RootFor(p), body.Message, ct));
 
     [HttpPost("stash/{index:int}/pop")]
     public Task<IActionResult> StashPop(string projectId, int index, CancellationToken ct) =>
-        Mutate(projectId, (p) => git.StashPopAsync(Owner(p), p.RootPath, index, ct));
+        Mutate(projectId, (p) => git.StashPopAsync(Owner(p), RootFor(p), index, ct));
 
     // Удаление стэша необратимо — фронт спрашивает подтверждение
     [HttpDelete("stash/{index:int}")]
     public Task<IActionResult> StashDrop(string projectId, int index, CancellationToken ct) =>
-        Mutate(projectId, (p) => git.StashDropAsync(Owner(p), p.RootPath, index, ct));
+        Mutate(projectId, (p) => git.StashDropAsync(Owner(p), RootFor(p), index, ct));
 
     // Безопасная отмена коммита: git revert — новый коммит, история не переписывается
     [HttpPost("commits/{sha}/revert")]
     public Task<IActionResult> RevertCommit(string projectId, string sha, CancellationToken ct) =>
-        Mutate(projectId, (p) => git.RevertCommitAsync(Owner(p), p.RootPath, sha, ct));
+        Mutate(projectId, (p) => git.RevertCommitAsync(Owner(p), RootFor(p), sha, ct));
 
     // Данные входа в веб-UI Forgejo (владелец видит свои; пароль хранится открыто — решение владельца)
     [HttpGet("forgejo-credentials")]
@@ -255,7 +268,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
         try
         {
             var p = GetProject(projectId);
-            return Ok(await git.FileLogAsync(Owner(p), p.RootPath, path, limit, ct));
+            return Ok(await git.FileLogAsync(Owner(p), RootFor(p), path, limit, ct));
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (UnauthorizedAccessException) { return BadRequest(new { error = "Недопустимый путь" }); }
@@ -269,7 +282,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
         try
         {
             var p = GetProject(projectId);
-            var content = await git.FileAtCommitAsync(Owner(p), p.RootPath, sha, path, ct);
+            var content = await git.FileAtCommitAsync(Owner(p), RootFor(p), sha, path, ct);
             return Ok(new { content });
         }
         catch (KeyNotFoundException) { return NotFound(); }
@@ -285,16 +298,16 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
         try
         {
             var p = GetProject(projectId);
-            await git.RestoreFileFromCommitAsync(Owner(p), p.RootPath, sha, body.Path, ct);
+            await git.RestoreFileFromCommitAsync(Owner(p), RootFor(p), sha, body.Path, ct);
             if (p.GitAutoCommit)
             {
-                await git.StageAsync(Owner(p), p.RootPath, body.Path, ct);
+                await git.StageAsync(Owner(p), RootFor(p), body.Path, ct);
                 var fileName = body.Path.Replace('\\', '/').Split('/')[^1];
                 var shortSha = sha.Length > 7 ? sha[..7] : sha;
-                await git.CommitAsync(Owner(p), p.RootPath, $"Возврат: {fileName} к версии {shortSha}", ct: ct);
+                await git.CommitAsync(Owner(p), RootFor(p), $"Возврат: {fileName} к версии {shortSha}", ct: ct);
             }
             await NotifyChanged(projectId);
-            return Ok(await git.StatusAsync(Owner(p), p.RootPath, ct));
+            return Ok(await git.StatusAsync(Owner(p), RootFor(p), ct));
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (UnauthorizedAccessException) { return BadRequest(new { error = "Недопустимый путь" }); }
@@ -309,31 +322,31 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
         try
         {
             var p = GetProject(projectId);
-            var status = await git.StatusAsync(Owner(p), p.RootPath, ct);
+            var status = await git.StatusAsync(Owner(p), RootFor(p), ct);
             if (status.Staged.Count == 0 && status.Unstaged.Count == 0 && status.Untracked.Count == 0)
                 return Ok(new { committed = false });
 
-            await git.StageAllAsync(Owner(p), p.RootPath, ct);
+            await git.StageAllAsync(Owner(p), RootFor(p), ct);
             string message;
             try
             {
                 // Авто-коммит на дефолтном стиле (кастомный промпт — только для ручной ✨-генерации)
-                var s = await gitAi.SuggestCommitMessageAsync(Owner(p), p.RootPath, null, ct);
+                var s = await gitAi.SuggestCommitMessageAsync(Owner(p), RootFor(p), null, ct);
                 message = s is null ? $"Сохранение: {DateTime.Now:dd.MM.yyyy HH:mm}"
                     : (string.IsNullOrWhiteSpace(s.Description) ? s.Summary : $"{s.Summary}\n\n{s.Description}");
             }
             catch { message = $"Сохранение: {DateTime.Now:dd.MM.yyyy HH:mm}"; }
-            var sha = await git.CommitAsync(Owner(p), p.RootPath, message, ct: ct);
+            var sha = await git.CommitAsync(Owner(p), RootFor(p), message, ct: ct);
 
             if (p.GitAutoPush && p.GitRemoteUrl is not null)
             {
                 try
                 {
-                    var fresh = await git.StatusAsync(Owner(p), p.RootPath, ct);
+                    var fresh = await git.StatusAsync(Owner(p), RootFor(p), ct);
                     if (fresh.Upstream is null && fresh.Branch is not null)
-                        await git.PushSetUpstreamAsync(Owner(p), p.RootPath, fresh.Branch, CredsFor(p), ct);
+                        await git.PushSetUpstreamAsync(Owner(p), RootFor(p), fresh.Branch, CredsFor(p), ct);
                     else
-                        await git.PushAsync(Owner(p), p.RootPath, CredsFor(p), ct);
+                        await git.PushAsync(Owner(p), RootFor(p), CredsFor(p), ct);
                 }
                 catch { /* push best-effort — сохранение важнее */ }
             }
@@ -351,7 +364,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
         try
         {
             var p = GetProject(projectId);
-            var s = await gitAi.SuggestCommitMessageAsync(Owner(p), p.RootPath, EffectiveCommitPrompt(p), ct);
+            var s = await gitAi.SuggestCommitMessageAsync(Owner(p), RootFor(p), EffectiveCommitPrompt(p), ct);
             return s is null ? Conflict(new { error = "Нет проиндексированных изменений" }) : Ok(s);
         }
         catch (KeyNotFoundException) { return NotFound(); }
@@ -404,7 +417,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
         try
         {
             var p = GetProject(projectId);
-            var prompt = await gitAi.DetectCommitStyleAsync(Owner(p), p.RootPath, ct);
+            var prompt = await gitAi.DetectCommitStyleAsync(Owner(p), RootFor(p), ct);
             return prompt is null ? Conflict(new { error = "Недостаточно истории для анализа" }) : Ok(new { prompt });
         }
         catch (KeyNotFoundException) { return NotFound(); }
@@ -418,7 +431,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
         try
         {
             var p = GetProject(projectId);
-            var name = await gitAi.SuggestStashNameAsync(Owner(p), p.RootPath, ct);
+            var name = await gitAi.SuggestStashNameAsync(Owner(p), RootFor(p), ct);
             return name is null ? Conflict(new { error = "Нет изменений" }) : Ok(new { name });
         }
         catch (KeyNotFoundException) { return NotFound(); }
@@ -432,7 +445,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
         try
         {
             var p = GetProject(projectId);
-            return Ok(await git.BlameAsync(Owner(p), p.RootPath, path, ct));
+            return Ok(await git.BlameAsync(Owner(p), RootFor(p), path, ct));
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (UnauthorizedAccessException) { return BadRequest(new { error = "Недопустимый путь" }); }
@@ -447,7 +460,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
         try
         {
             var p = GetProject(projectId);
-            var sha = await git.CommitAsync(Owner(p), p.RootPath, body.Message, body.Amend, ct);
+            var sha = await git.CommitAsync(Owner(p), RootFor(p), body.Message, body.Amend, ct);
             await NotifyChanged(projectId);
             return Ok(new { sha });
         }
@@ -457,11 +470,11 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
 
     [HttpPost("fetch")]
     public Task<IActionResult> Fetch(string projectId, CancellationToken ct) =>
-        Mutate(projectId, (p) => git.FetchAsync(Owner(p), p.RootPath, CredsFor(p), ct));
+        Mutate(projectId, (p) => git.FetchAsync(Owner(p), RootFor(p), CredsFor(p), ct));
 
     [HttpPost("pull")]
     public Task<IActionResult> Pull(string projectId, CancellationToken ct) =>
-        Mutate(projectId, (p) => git.PullAsync(Owner(p), p.RootPath, CredsFor(p), ct));
+        Mutate(projectId, (p) => git.PullAsync(Owner(p), RootFor(p), CredsFor(p), ct));
 
     [HttpPost("push")]
     public async Task<IActionResult> Push(string projectId, CancellationToken ct)
@@ -469,14 +482,14 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
         try
         {
             var p = GetProject(projectId);
-            var status = await git.StatusAsync(Owner(p), p.RootPath, ct);
+            var status = await git.StatusAsync(Owner(p), RootFor(p), ct);
             // Ветка без upstream (первый push) — сразу с -u origin <branch>
             if (status.Upstream is null && status.Branch is not null)
-                await git.PushSetUpstreamAsync(Owner(p), p.RootPath, status.Branch, CredsFor(p), ct);
+                await git.PushSetUpstreamAsync(Owner(p), RootFor(p), status.Branch, CredsFor(p), ct);
             else
-                await git.PushAsync(Owner(p), p.RootPath, CredsFor(p), ct);
+                await git.PushAsync(Owner(p), RootFor(p), CredsFor(p), ct);
             await NotifyChanged(projectId);
-            return Ok(await git.StatusAsync(Owner(p), p.RootPath, ct));
+            return Ok(await git.StatusAsync(Owner(p), RootFor(p), ct));
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }
@@ -489,6 +502,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
         try
         {
             var p = GetProject(projectId);
+            // Инициализация — всегда про КОРЕНЬ проекта, worktree-чата здесь быть не может
             await git.InitAsync(Owner(p), p.RootPath, ct);
             string? htmlUrl = null;
             if (gitServer.Enabled && p.OwnerId is not null && users.GetById(p.OwnerId) is { } owner)
@@ -537,11 +551,11 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
 
     [HttpPost("checkout")]
     public Task<IActionResult> Checkout(string projectId, [FromBody] GitCheckoutRequest body, CancellationToken ct) =>
-        Mutate(projectId, (p) => git.CheckoutAsync(Owner(p), p.RootPath, body.Branch, ct));
+        Mutate(projectId, (p) => git.CheckoutAsync(Owner(p), RootFor(p), body.Branch, ct));
 
     [HttpPost("branches")]
     public Task<IActionResult> CreateBranch(string projectId, [FromBody] GitCreateBranchRequest body, CancellationToken ct) =>
-        Mutate(projectId, (p) => git.CreateBranchAsync(Owner(p), p.RootPath, body.Name, body.From, ct));
+        Mutate(projectId, (p) => git.CreateBranchAsync(Owner(p), RootFor(p), body.Name, body.From, ct));
 
     // Общая обёртка write-операции: guard проекта → операция → realtime + свежий статус
     private async Task<IActionResult> Mutate(string projectId, Func<Models.Project, Task> op)
@@ -551,7 +565,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
             var p = GetProject(projectId);
             await op(p);
             await NotifyChanged(projectId);
-            return Ok(await git.StatusAsync(Owner(p), p.RootPath));
+            return Ok(await git.StatusAsync(Owner(p), RootFor(p)));
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (UnauthorizedAccessException) { return BadRequest(new { error = "Недопустимый путь" }); }

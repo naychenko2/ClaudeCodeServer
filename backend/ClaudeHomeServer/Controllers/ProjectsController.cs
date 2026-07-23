@@ -295,6 +295,30 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         return Ok(new { candidates = files });
     }
 
+    // Генерация кандидатов иконки ДО создания проекта (в диалоге «Добавить проект»): проекта
+    // ещё нет, поэтому байты возвращаем инлайн как data-url и на диск НИЧЕГО не пишем.
+    // Литерал «icon» первым сегментом не конфликтует с «{id}/icon/...» (как и «icon/caps»).
+    [HttpPost("icon/generate-preview")]
+    public async Task<ActionResult> GenerateIconPreview([FromBody] GenerateIconPreviewRequest req)
+    {
+        if (!falImage.Enabled) return BadRequest(new { error = "Генерация изображений не настроена (нет Fal:ApiKey)" });
+
+        var prompt = string.IsNullOrWhiteSpace(req.Prompt)
+            ? BuildIconPrompt(req.Name ?? "")
+            : $"Flat minimalist 2D vector emblem, full-bleed filling the entire square canvas edge to edge, "
+              + "solid flat background color, bold simple shapes, no rounded-rectangle app-icon frame, "
+              + $"no border, no drop shadow, no 3D, no gloss, no padding, no text. {req.Prompt.Trim()}";
+        var count = req.Count is >= 1 and <= 4 ? req.Count.Value : 4;
+
+        var images = await falImage.GenerateManyAsync(prompt, count);
+        if (images.Count == 0) return StatusCode(502, new { error = "Не удалось сгенерировать изображение" });
+
+        var candidates = images
+            .Select(i => new { dataUrl = $"data:{i.ContentType};base64,{Convert.ToBase64String(i.Bytes)}" })
+            .ToList();
+        return Ok(new { candidates });
+    }
+
     // Отдать кандидата иконки (превью в галерее выбора). access_token в query для <img>.
     [HttpGet("{id}/icon/candidate/{file}")]
     public IActionResult IconCandidate(string id, string file)
@@ -329,6 +353,28 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         try { Directory.Delete(Path.Combine(dir, "candidates"), recursive: true); } catch { }
 
         return Ok(WithCount(projects.SetIconImage(id, fileName)));
+    }
+
+    // Прикрепить готовую картинку-иконку к УЖЕ созданному проекту (паритет с SetIconImage:
+    // без оригинала/кропа). Нужен, чтобы досылать СГЕНЕРИРОВАННУЮ в диалоге создания иконку
+    // после create() — генерация там была stateless, файла на сервере ещё нет.
+    [HttpPost("{id}/icon/set-image")]
+    [RequestSizeLimit(15_000_000)]
+    public async Task<ActionResult> SetIconImageFile(string id, [FromForm] IFormFile? image)
+    {
+        var p = projects.GetById(id);
+        if (p is null || p.OwnerId != UserId) return NotFound();
+        if (image is null) return BadRequest(new { error = "Нужен файл image" });
+
+        var check = await ImageAssetHelper.ValidateImageAsync(image);
+        if (check.Error is not null) return BadRequest(new { error = check.Error });
+
+        var dir = Path.Combine(projects.IconsDir, id);
+        Directory.CreateDirectory(dir);
+        var name = $"icon-{Guid.NewGuid():N}{check.Ext}";
+        await ImageAssetHelper.SaveFormFileAsync(image, Path.Combine(dir, name));
+
+        return Ok(WithCount(projects.SetIconImage(id, name)));
     }
 
     // Переключить режим иконки: буквы (initials) ↔ картинка (image). Файлы картинки НЕ стираются —
@@ -432,15 +478,25 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     // Промпт иконки по умолчанию — из имени проекта. Просим ПЛОСКИЙ символ во всю площадь
     // без рамки/фона-плитки/тени/полей: иначе модель рисует «иконку приложения» с рамкой и
     // мелким символом в центре, а наша плитка добавляет вторую рамку.
-    private static string BuildIconPrompt(Project project) =>
-        $"Flat minimalist 2D vector emblem representing a project named '{project.Name}'. " +
-        "A single bold symbol that fills the entire square canvas edge to edge (full-bleed), " +
-        "simple flat shapes, solid flat background color, high contrast, centered composition. " +
-        "No rounded-rectangle app-icon frame, no border, no drop shadow, no 3D, no gloss, " +
-        "no small padding around the symbol, no text, no letters.";
+    private static string BuildIconPrompt(Project project) => BuildIconPrompt(project.Name);
+
+    // Перегрузка по имени — для генерации ДО создания проекта (проекта ещё нет). Пустое имя →
+    // безымянный фолбэк (абстрактная эмблема).
+    private static string BuildIconPrompt(string name)
+    {
+        var subject = string.IsNullOrWhiteSpace(name)
+            ? "an abstract project emblem"
+            : $"a project named '{name.Trim()}'";
+        return $"Flat minimalist 2D vector emblem representing {subject}. " +
+            "A single bold symbol that fills the entire square canvas edge to edge (full-bleed), " +
+            "simple flat shapes, solid flat background color, high contrast, centered composition. " +
+            "No rounded-rectangle app-icon frame, no border, no drop shadow, no 3D, no gloss, " +
+            "no small padding around the symbol, no text, no letters.";
+    }
 }
 
 public record GenerateIconRequest(string? Prompt, int? Count);
+public record GenerateIconPreviewRequest(string? Name, string? Prompt, int? Count);
 public record SelectIconRequest(string File);
 public record SetIconModeRequest(string? Kind);
 

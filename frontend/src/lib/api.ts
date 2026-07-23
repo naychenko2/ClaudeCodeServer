@@ -183,6 +183,22 @@ export const api = {
       request<Project>(`/projects/${encodeURIComponent(id)}/icon/mode`, {
         method: 'POST', body: JSON.stringify({ kind }),
       }),
+    // Генерация кандидатов иконки ДО создания проекта (диалог «Добавить проект»): байты
+    // приходят инлайн как data-url, на сервере ничего не сохраняется.
+    generateIconPreview: (opts?: { name?: string; prompt?: string; count?: number }) =>
+      request<{ candidates: { dataUrl: string }[] }>('/projects/icon/generate-preview', {
+        method: 'POST',
+        body: JSON.stringify({ name: opts?.name?.trim() || undefined, prompt: opts?.prompt?.trim() || undefined, count: opts?.count }),
+      }),
+    // Прикрепить готовую картинку (генеративную, без оригинала/кропа) к уже созданному проекту —
+    // используется диалогом создания после create() для досыла сгенерированной иконки.
+    setIconImageFile: (id: string, image: Blob) => {
+      const form = new FormData();
+      form.append('image', image, 'icon.png');
+      return request<Project>(`/projects/${encodeURIComponent(id)}/icon/set-image`, {
+        method: 'POST', body: form, timeoutMs: 60_000,
+      });
+    },
     // URL картинки-иконки для браузерного <img>: токен через ?access_token=, cache-busting по imageFile.
     // Возвращает null, если у проекта нет картинки.
     iconUrl: (project: Project): string | null => {

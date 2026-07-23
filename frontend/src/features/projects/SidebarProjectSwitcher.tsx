@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Pin, Plus, Search, Settings } from 'lucide-react';
+import { Pin, Search, Settings } from 'lucide-react';
 import { C, R, FS, FONT, Z, SHADOW } from '../../lib/design';
 import type { Project } from '../../types';
 import { ProjectIcon } from './ProjectIcon';
@@ -20,8 +20,7 @@ import { ProjectPalette } from './ProjectPalette';
 const ICON_W = 38;    // шаг иконки проекта (36px кнопка + gap 2)
 const CHIP_MIN = 84;  // минимальная ширина чипа (иконка + немного имени)
 const CHIP_RICH = 140; // ширина чипа, при которой имя читаемо → включаем «богатый» режим
-const PLUS_W = 36;    // кнопка «+ новый проект»
-const LUPA_W = 46;    // резерв под лупу «+N»
+const LUPA_W = 46;    // резерв под лупу «+N» (единственный хвостовой контрол)
 const SEP_W = 10;     // вертикальный разделитель групп + отступы
 const MAX_SLOTS = 16; // страховочный потолок значков
 const DRAG_THRESHOLD = 5;  // порог в px: клик → перетаскивание
@@ -104,6 +103,7 @@ export function SidebarProjectSwitcher({ project, onOpenSettings }: {
   useEffect(() => { recordSwitcherProject(project.id); }, [project.id]);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [chipHover, setChipHover] = useState(false);
+  const [labelHover, setLabelHover] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number; p: Project } | null>(null);
 
   const rowRef = useRef<HTMLDivElement>(null);
@@ -146,13 +146,19 @@ export function SidebarProjectSwitcher({ project, onOpenSettings }: {
   // «Богатый» режим (чип активного с именем) — пока читаемый чип + все остальные иконки
   // влезают. Тесно → «компактный»: активный обычной иконкой с кольцом. Режим зависит от
   // rowW → при ресайзе панели переключается автоматически.
-  const rich = rowW > 0 && (CHIP_RICH + otherCount * ICON_W + sepReserve + PLUS_W + 6) <= rowW;
+  // Проекты, которых нет в плашке (только в палитре) → лупа «+N» будет в любом случае
+  const tailW = projects.length > items.length ? LUPA_W : 0;
+  const rich = rowW > 0 && (CHIP_RICH + otherCount * ICON_W + sepReserve + tailW + 6) <= rowW;
+  const activeItem = items.find(p => p.id === project.id) ?? null;
+  // rowItems — то, что идёт иконками в ряду (и участвует в группах/DnD).
+  // В богатом режиме активный вынесен чипом ВЛЕВО и в ряду иконок не участвует;
+  // в компактном он остаётся на своём месте обычной иконкой с кольцом.
   let shown: Project[];
   if (rich) {
-    shown = items.slice(0, MAX_SLOTS);
+    shown = items.filter(p => p.id !== project.id).slice(0, MAX_SLOTS);
   } else {
     // Компактный: все проекты как иконки. Влезают все → «+», иначе окно + лупа «+N».
-    const fitAll = Math.floor((rowW - PLUS_W - sepReserve - 6) / ICON_W) >= items.length;
+    const fitAll = Math.floor((rowW - tailW - sepReserve - 6) / ICON_W) >= items.length;
     const slots = Math.max(0, Math.min(MAX_SLOTS, fitAll
       ? items.length
       : Math.floor((rowW - LUPA_W - sepReserve - 6) / ICON_W)));
@@ -164,8 +170,11 @@ export function SidebarProjectSwitcher({ project, onOpenSettings }: {
     }
   }
   const firstRecentIdx = shown.findIndex(p => !isPinned(p.id));
-  const hiddenCount = Math.max(0, projects.length - shown.length);
+  // В богатом режиме активный показан чипом вне ряда — считаем его в видимых
+  const totalShown = shown.length + (rich && activeItem ? 1 : 0);
+  const hiddenCount = Math.max(0, projects.length - totalShown);
   const shownIds = new Set(shown.map(p => p.id));
+  if (rich && activeItem) shownIds.add(activeItem.id);
   const hiddenWaiting = items.some(p => !shownIds.has(p.id) && activity.get(p.id)?.status === 'waiting');
   const pinsShown = shown.some(p => isPinned(p.id));
 
@@ -182,11 +191,6 @@ export function SidebarProjectSwitcher({ project, onOpenSettings }: {
     }
     openProjectViaEvent(p);
   }, [activity]);
-
-  const openNewProject = () => {
-    sessionStorage.setItem('cc_pending_new_project', '1');
-    window.dispatchEvent(new CustomEvent('cc-open-url', { detail: { url: '#/projects' } }));
-  };
 
   // === Перетаскивание на pointer-событиях (среди иконок; активный чип — только позиция) ===
   const dragRef = useRef<{ id: string; sx: number; sy: number; started: boolean; insertIdx: number; zone: 'pin' | 'recent' } | null>(null);
@@ -267,10 +271,8 @@ export function SidebarProjectSwitcher({ project, onOpenSettings }: {
 
   const onIconClick = useCallback((p: Project) => {
     if (suppressClick.current) { suppressClick.current = false; return; }
-    // Компактный режим: клик по активной иконке (шестерёнки нет) — настройки проекта
-    if (p.id === project.id) onOpenSettings();
-    else openCandidate(p);
-  }, [openCandidate, onOpenSettings, project.id]);
+    openCandidate(p);
+  }, [openCandidate]);
 
   const openMenu = (e: React.MouseEvent, p: Project) => {
     e.preventDefault();
@@ -299,12 +301,50 @@ export function SidebarProjectSwitcher({ project, onOpenSettings }: {
   };
 
   return (
-    <div style={{ display: 'flex', flex: 1, minWidth: 0 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 1, minWidth: 0 }}>
       <style>{`
         @keyframes ccGhostPop { from { transform: scale(0.8) rotate(-3deg); opacity: 0 } to { transform: scale(1) rotate(-3deg); opacity: 0.95 } }
         @keyframes ccLineIn { from { opacity: 0; transform: scaleY(0.4) } to { opacity: 1; transform: scaleY(1) } }
       `}</style>
-      <div ref={rowRef} style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0 }}>
+      <div ref={rowRef} style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+        {/* Богатый режим: активный проект — чип с именем ВСЕГДА СЛЕВА, растянут на всю
+            ширину. В ряду иконок и в перетаскивании не участвует. Настройки — по шестерёнке. */}
+        {rich && activeItem && (
+          <div
+            title={activeItem.name}
+            onMouseEnter={() => setChipHover(true)}
+            onMouseLeave={() => setChipHover(false)}
+            style={{
+              position: 'relative', display: 'flex', alignItems: 'center', gap: 9,
+              flex: '1 1 auto', minWidth: CHIP_MIN,
+              padding: '4px 30px 4px 5px', textAlign: 'left',
+              background: chipHover ? C.bgInset : C.bgSelected, borderRadius: 9,
+              transition: 'background 0.12s',
+            }}
+          >
+            <span style={{ display: 'flex', flexShrink: 0 }}><ProjectIcon project={activeItem} size={32} radius={8} /></span>
+            <span style={{
+              fontFamily: FONT.sans, fontSize: 13, fontWeight: 600, color: C.textHeading,
+              flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            }}>
+              {activeItem.name}
+            </span>
+            <button
+              title="Настройки проекта"
+              aria-label="Настройки проекта"
+              onClick={e => { e.stopPropagation(); onOpenSettings(); }}
+              style={{
+                position: 'absolute', right: 3, top: '50%', transform: 'translateY(-50%)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', width: 22, height: 22,
+                padding: 0, border: 'none', background: 'transparent', cursor: 'pointer', borderRadius: R.sm,
+                color: chipHover ? C.textHeading : C.textSecondary, transition: 'color 0.12s',
+              }}
+            >
+              <Settings size={13} strokeWidth={2.2} />
+            </button>
+          </div>
+        )}
+
         {/* Пинов среди показанных нет: при драге СЛЕВА (зона пинов) появляется цель
             «закрепить» + разделитель. Сторона разделителя решает пин/недавние. */}
         {dragView && !pinsShown && (
@@ -331,50 +371,6 @@ export function SidebarProjectSwitcher({ project, onOpenSettings }: {
               transition: 'transform 0.13s cubic-bezier(0.2, 0, 0, 1)',
             }} />
           ) : null;
-          if (p.id === project.id && rich) {
-            // Богатый режим: активный проект — чип с именем на своём месте (drag не участвует)
-            return (
-              <Fragment key={p.id}>
-                {sep}
-                <div
-                  data-swicon={p.id}
-                  title={p.name}
-                  onMouseEnter={() => setChipHover(true)}
-                  onMouseLeave={() => setChipHover(false)}
-                  style={{
-                    position: 'relative', display: 'flex', alignItems: 'center', gap: 9,
-                    flex: '1 1 auto', minWidth: CHIP_MIN,
-                    padding: '4px 30px 4px 5px', textAlign: 'left',
-                    background: chipHover ? C.bgInset : C.bgSelected, borderRadius: 9,
-                    transform: shift ? `translateX(${shift}px)` : undefined,
-                    transition: 'background 0.12s, transform 0.13s cubic-bezier(0.2, 0, 0, 1)',
-                  }}
-                >
-                  <span style={{ display: 'flex', flexShrink: 0 }}><ProjectIcon project={p} size={32} radius={8} /></span>
-                  <span style={{
-                    fontFamily: FONT.sans, fontSize: 13, fontWeight: 600, color: C.textHeading,
-                    flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                  }}>
-                    {p.name}
-                  </span>
-                  {/* Настройки открываются ТОЛЬКО по клику на шестерёнку */}
-                  <button
-                    title="Настройки проекта"
-                    aria-label="Настройки проекта"
-                    onClick={e => { e.stopPropagation(); onOpenSettings(); }}
-                    style={{
-                      position: 'absolute', right: 3, top: '50%', transform: 'translateY(-50%)',
-                      display: 'flex', alignItems: 'center', justifyContent: 'center', width: 22, height: 22,
-                      padding: 0, border: 'none', background: 'transparent', cursor: 'pointer', borderRadius: R.sm,
-                      color: chipHover ? C.textHeading : C.textSecondary, transition: 'color 0.12s',
-                    }}
-                  >
-                    <Settings size={13} strokeWidth={2.2} />
-                  </button>
-                </div>
-              </Fragment>
-            );
-          }
           return (
             <Fragment key={p.id}>
               {sep}
@@ -391,22 +387,6 @@ export function SidebarProjectSwitcher({ project, onOpenSettings }: {
             </Fragment>
           );
         })}
-
-        {/* «+» новый проект — только когда есть место (нет «+N») */}
-        {hiddenCount === 0 && (
-          <button
-            aria-label="Новый проект"
-            title="Новый проект"
-            onClick={openNewProject}
-            style={{
-              ...iconBtn, width: 32, height: 32, borderRadius: 8, border: `1.5px dashed ${C.dashed}`,
-              // В богатом режиме вправо толкает растянутый чип; в компактном — auto-отступ
-              marginLeft: rich ? undefined : 'auto',
-            }}
-          >
-            <Plus size={16} strokeWidth={2} />
-          </button>
-        )}
 
         {/* Лупа / «+N»: палитра всех проектов; микро-точка — скрытый «ждущий» проект */}
         {hiddenCount > 0 && (
@@ -440,6 +420,36 @@ export function SidebarProjectSwitcher({ project, onOpenSettings }: {
           }} />
         )}
       </div>
+
+      {/* Компактный режим: имени в ряду нет — возвращаем нижний этаж
+          [имя по центру · шестерёнка справа] = кнопка настроек. В богатом режиме имя
+          уже в чипе, дублировать незачем. */}
+      {!rich && (
+        <button
+          title="Настройки проекта"
+          aria-label="Настройки проекта"
+          onClick={onOpenSettings}
+          onMouseEnter={() => setLabelHover(true)}
+          onMouseLeave={() => setLabelHover(false)}
+          style={{
+            position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            width: '100%', minWidth: 0, padding: '4px 8px', border: 'none', cursor: 'pointer',
+            background: labelHover ? C.bgInset : C.bgSelected,
+            borderRadius: R.md, transition: 'background 0.12s',
+          }}
+        >
+          <span style={{
+            fontFamily: FONT.sans, fontSize: 12, fontWeight: 600, color: C.textHeading,
+            maxWidth: 'calc(100% - 44px)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>
+            {project.name}
+          </span>
+          <Settings size={13} strokeWidth={2.2} style={{
+            position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)',
+            color: labelHover ? C.textHeading : C.textSecondary, transition: 'color 0.12s',
+          }} />
+        </button>
+      )}
 
       {/* Призрак перетаскиваемой иконки под курсором */}
       {dragView && dragProject && (

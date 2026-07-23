@@ -35,9 +35,10 @@ const AUTO_COLLAPSE_FROM = 20;
 
 // Просмотр коммита: слева список файлов (поиск + группы по папкам), справа diff выбранного.
 // Компоновка по макету дизайнера — ряд чипов не масштабировался на десятки файлов.
-export function GitCommitView({ project, sha, onClose, isMobile = false }: {
+export function GitCommitView({ project, sha, initialPath, onClose, isMobile = false }: {
   project: Project;
   sha: string;
+  initialPath?: string | null;   // файл, на котором открыть diff сразу (клик по файлу коммита)
   onClose: () => void;
   isMobile?: boolean;
 }) {
@@ -56,7 +57,7 @@ export function GitCommitView({ project, sha, onClose, isMobile = false }: {
   const [revertError, setRevertError] = useState<string | null>(null);
   // Разворот длинного описания коммита (клэмп в шапке)
   const [bodyExpanded, setBodyExpanded] = useState(false);
-  const bodyIsLong = !!detail?.body && (detail.body.length > 220 || detail.body.split('\n').length > (isMobile ? 2 : 4));
+  const bodyIsLong = !!detail?.body && (detail.body.length > 140 || detail.body.split('\n').length > 2);
   const [reverting, setReverting] = useState(false);
   // Документный режим (авто-история): технический revert скрыт, вместо него —
   // адресный «Вернуть эту версию файла» у выбранного файла
@@ -94,7 +95,10 @@ export function GitCommitView({ project, sha, onClose, isMobile = false }: {
       .then(d => {
         if (cancelled) return;
         setDetail(d);
-        setActivePath(d.files[0]?.path ?? null);
+        // Открываем на переданном файле (клик по файлу коммита), иначе на первом
+        const wanted = initialPath && d.files.some(f => f.path === initialPath) ? initialPath : d.files[0]?.path;
+        setActivePath(wanted ?? null);
+        if (isMobile && initialPath) setMobileShowDiff(true);
         // Большой коммит — все группы, кроме первой, свёрнуты
         if (d.files.length >= AUTO_COLLAPSE_FROM) {
           const dirs = [...new Set(d.files.map(f => topDir(f.path)))];
@@ -106,6 +110,14 @@ export function GitCommitView({ project, sha, onClose, isMobile = false }: {
       .catch(() => { if (!cancelled) setNotFound(true); });
     return () => { cancelled = true; };
   }, [project.id, sha]);
+
+  // Смена запрошенного файла при уже открытом коммите (клик по другому файлу того же коммита)
+  useEffect(() => {
+    if (initialPath && detail?.files.some(f => f.path === initialPath)) {
+      setActivePath(initialPath);
+      if (isMobile) setMobileShowDiff(true);
+    }
+  }, [initialPath, detail, isMobile]);
 
   useEffect(() => {
     if (!activePath) { setDiff(null); return; }
@@ -121,6 +133,10 @@ export function GitCommitView({ project, sha, onClose, isMobile = false }: {
   const dateStr = detail
     ? new Date(detail.date).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })
     : '';
+
+  // Открыто из панели «Изменения» (клик по файлу коммита): список файлов уже есть в панели
+  // справа — в центральной области его не дублируем, показываем только diff.
+  const hideList = !!initialPath;
 
   // Фильтр по подстроке пути + группировка по верхней папке
   const groups = useMemo(() => {
@@ -279,7 +295,7 @@ export function GitCommitView({ project, sha, onClose, isMobile = false }: {
                     несколько строк, развёрнуто — ограниченная высота со своим скроллом */}
                 <div style={bodyExpanded
                   ? { fontSize: 13, color: C.textPrimary, fontFamily: FONT.sans, whiteSpace: 'pre-wrap', lineHeight: 1.5, maxHeight: isMobile ? '22vh' : '28vh', overflowY: 'auto' }
-                  : { fontSize: 13, color: C.textPrimary, fontFamily: FONT.sans, whiteSpace: 'pre-wrap', lineHeight: 1.5, display: '-webkit-box', WebkitLineClamp: isMobile ? 2 : 4, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                  : { fontSize: 13, color: C.textPrimary, fontFamily: FONT.sans, whiteSpace: 'pre-wrap', lineHeight: 1.5, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
                   {detail.body}
                 </div>
                 {bodyIsLong && (
@@ -374,9 +390,9 @@ export function GitCommitView({ project, sha, onClose, isMobile = false }: {
         </Modal>
       )}
 
-      {/* Тело: список файлов + diff (на мобиле — по очереди) */}
+      {/* Тело: список файлов + diff. Из панели «Изменения» (hideList) список скрыт — только diff */}
       <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
-        {isMobile ? (mobileShowDiff ? diffPane : fileList) : (<>{fileList}{diffPane}</>)}
+        {hideList ? diffPane : isMobile ? (mobileShowDiff ? diffPane : fileList) : (<>{fileList}{diffPane}</>)}
       </div>
     </div>
   );

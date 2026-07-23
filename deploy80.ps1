@@ -46,7 +46,7 @@ Write-Host "=== Деплой ClaudeCodeServer -> $PublishDir (env $Environment) 
 
 # --- 1. Остановка запущенных процессов (снять локи файлов ДО публикации) ---
 # Трей глушим ПЕРВЫМ, чтобы его супервизор не перезапустил сервер, пока мы его убиваем.
-Write-Host '[1/8] Остановка запущенных процессов...' -ForegroundColor Yellow
+Write-Host '[1/9] Остановка запущенных процессов...' -ForegroundColor Yellow
 Get-Process ClaudeHomeServer.Tray -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep -Milliseconds 400
 Get-Process ClaudeHomeServer -ErrorAction SilentlyContinue | Stop-Process -Force
@@ -54,7 +54,7 @@ Start-Sleep -Milliseconds 700
 
 # --- 2. Сборка фронта ---
 if (-not $SkipFrontend) {
-    Write-Host '[2/8] Сборка фронта (npm run build)...' -ForegroundColor Yellow
+    Write-Host '[2/9] Сборка фронта (npm run build)...' -ForegroundColor Yellow
     Push-Location $frontendDir
     if (-not (Test-Path 'node_modules')) { npm ci }
     # build:quiet = vite build --logLevel warn: без простыни ассетов в логах раннера,
@@ -65,35 +65,42 @@ if (-not $SkipFrontend) {
     Pop-Location
     if ($code -ne 0) { throw "Сборка фронта упала (exit $code)" }
 } else {
-    Write-Host '[2/8] Фронт пропущен (-SkipFrontend)' -ForegroundColor DarkGray
+    Write-Host '[2/9] Фронт пропущен (-SkipFrontend)' -ForegroundColor DarkGray
 }
 
 # --- 3. Публикация бэка ---
-Write-Host '[3/8] Публикация бэка (dotnet publish -c Release)...' -ForegroundColor Yellow
+Write-Host '[3/9] Публикация бэка (dotnet publish -c Release)...' -ForegroundColor Yellow
 dotnet publish $csproj -c Release -o $PublishDir
 if ($LASTEXITCODE -ne 0) { throw "Публикация бэка упала (exit $LASTEXITCODE)" }
 
-# --- 4. Публикация трей-супервизора (рядом с сервером) ---
+# --- 4. Публикация ConPTY-моста терминала (рядом с сервером) ---
+# ConPtyBridgeLocator ищет ConPtyBridge.exe от AppContext.BaseDirectory; без него
+# веб-терминал молча деградирует в голое перенаправление (без backspace/стрелок)
+Write-Host '[4/9] Публикация ConPTY-моста терминала...' -ForegroundColor Yellow
+dotnet publish (Join-Path $repo 'backend\ConPtyBridge\ConPtyBridge.csproj') -c Release -o $PublishDir
+if ($LASTEXITCODE -ne 0) { throw "Публикация ConPtyBridge упала (exit $LASTEXITCODE)" }
+
+# --- 5. Публикация трей-супервизора (рядом с сервером) ---
 if (-not $Console) {
-    Write-Host '[4/8] Публикация трей-супервизора...' -ForegroundColor Yellow
+    Write-Host '[5/9] Публикация трей-супервизора...' -ForegroundColor Yellow
     dotnet publish $trayproj -c Release -o $PublishDir
     if ($LASTEXITCODE -ne 0) { throw "Публикация трея упала (exit $LASTEXITCODE)" }
     # Конфиг трея: окружение дочернего сервера и URL «Открыть в браузере» — из параметров деплоя.
     $trayCfg = [ordered]@{ ServerExe = 'ClaudeHomeServer.exe'; Environment = $Environment; Url = $AppUrl; Port = $Port }
     ($trayCfg | ConvertTo-Json) | Set-Content -Path (Join-Path $PublishDir 'tray.json') -Encoding UTF8
 } else {
-    Write-Host '[4/8] Трей пропущен (-Console)' -ForegroundColor DarkGray
+    Write-Host '[5/9] Трей пропущен (-Console)' -ForegroundColor DarkGray
 }
 
 # --- 5. Свежий фронт в wwwroot (рядом с exe) ---
-Write-Host '[5/8] Копирование фронта в wwwroot...' -ForegroundColor Yellow
+Write-Host '[6/9] Копирование фронта в wwwroot...' -ForegroundColor Yellow
 $wwwroot = Join-Path $PublishDir 'wwwroot'
 if (Test-Path $wwwroot) { Remove-Item "$wwwroot\*" -Recurse -Force -ErrorAction Stop }
 else { New-Item -ItemType Directory -Force $wwwroot -ErrorAction Stop | Out-Null }
 Copy-Item (Join-Path $frontendDir 'dist\*') $wwwroot -Recurse -Force -ErrorAction Stop
 
 # --- 6. MCP-серверы (чистый Node, сборка не нужна) ---
-Write-Host '[6/8] Копирование MCP-серверов...' -ForegroundColor Yellow
+Write-Host '[7/9] Копирование MCP-серверов...' -ForegroundColor Yellow
 foreach ($srv in 'tasks-server', 'notes-server', 'memory-server', 'personas-server', 'workspace-server') {
     $mcpDst = Join-Path $PublishDir "mcp\$srv"
     New-Item -ItemType Directory -Force $mcpDst -ErrorAction Stop | Out-Null
@@ -120,9 +127,9 @@ if (Test-Path (Join-Path $difySrc 'dist\index.js')) {
 # ВНУТРИ песочницы из образа — если его не пересобрать, доработки после последней сборки
 # образа молча не работают в песочнице (рассинхрон). Поэтому пересборка — часть деплоя.
 if ($SkipSandbox) {
-    Write-Host '[7/8] Песочница пропущена (-SkipSandbox)' -ForegroundColor DarkGray
+    Write-Host '[8/9] Песочница пропущена (-SkipSandbox)' -ForegroundColor DarkGray
 } else {
-    Write-Host '[7/8] Пересборка образа песочницы claude-sandbox...' -ForegroundColor Yellow
+    Write-Host '[8/9] Пересборка образа песочницы claude-sandbox...' -ForegroundColor Yellow
     $dockerfile = Join-Path $repo 'backend\ClaudeHomeServer\Dockerfile'
     # Без --no-cache COPY-слои mcp/claude-defaults/run-turn.sh обновятся, но слой
     # `npm install -g claude` закэширован — для свежего CLI из npm нужен -SandboxNoCache.
@@ -165,12 +172,12 @@ if (-not $Console -and -not $NoAutostart) {
 }
 
 if ($NoRestart) {
-    Write-Host '[8/8] Запуск пропущен (-NoRestart)' -ForegroundColor DarkGray
+    Write-Host '[9/9] Запуск пропущен (-NoRestart)' -ForegroundColor DarkGray
 } elseif ($Console) {
-    Write-Host '[8/8] Запуск сервера (консольный режим)...' -ForegroundColor Yellow
+    Write-Host '[9/9] Запуск сервера (консольный режим)...' -ForegroundColor Yellow
     Start-Process (Join-Path $PublishDir 'ClaudeHomeServer.exe') -WorkingDirectory $PublishDir
 } else {
-    Write-Host '[8/8] Запуск трей-супервизора (он поднимет сервер)...' -ForegroundColor Yellow
+    Write-Host '[9/9] Запуск трей-супервизора (он поднимет сервер)...' -ForegroundColor Yellow
     Start-Process (Join-Path $PublishDir 'ClaudeHomeServer.Tray.exe') -WorkingDirectory $PublishDir
 }
 

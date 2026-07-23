@@ -12,6 +12,8 @@ export interface GitProjectState {
   statusLoaded: boolean;   // статус хоть раз получен (для гейта сегментов пилюли)
   log: GitLogEntry[];
   logLoaded: boolean;
+  unpushed: GitLogEntry[];     // незапушенные коммиты (стек скоупов панели «Изменения»)
+  unpushedLoaded: boolean;
   branches: GitBranchInfo[];
   stashes: GitStashEntry[];
   remote: GitRemoteInfo | null;  // удалённый репозиторий + авто-коммит (null — не загружено)
@@ -22,6 +24,7 @@ export interface GitProjectState {
 const EMPTY: GitProjectState = {
   status: null, statusLoaded: false,
   log: [], logLoaded: false,
+  unpushed: [], unpushedLoaded: false,
   branches: [], stashes: [], remote: null, error: null, busy: false,
 };
 
@@ -52,6 +55,9 @@ function wireRealtime() {
     if (!_state.has(projectId)) return;   // проект не открывали — не дёргаем
     void loadGitStatus(projectId);
     if (get(projectId).logLoaded) void loadGitLog(projectId);
+    // Стек незапушенных меняется коммитом/публикацией — держим свежим (иначе после
+    // commit/push панель «Изменения» не обновится сама, лишь ahead в статусе)
+    if (get(projectId).unpushedLoaded) void loadUnpushedLog(projectId);
     // Стэш меняется теми же мутациями (push/pop/drop, в т.ч. с другого устройства)
     void loadGitStash(projectId);
   });
@@ -100,6 +106,16 @@ export async function loadGitLog(projectId: string, limit = 100): Promise<void> 
     patch(projectId, { log, logLoaded: true });
   } catch (e) {
     patch(projectId, { logLoaded: true, error: e instanceof Error ? e.message : 'Не удалось загрузить историю' });
+  }
+}
+
+export async function loadUnpushedLog(projectId: string, limit = 100): Promise<void> {
+  try {
+    const unpushed = await api.git.unpushed(projectId, limit);
+    patch(projectId, { unpushed, unpushedLoaded: true });
+  } catch {
+    // без upstream/ошибка — стек пуст (панель покажет только «Не зафиксировано»)
+    patch(projectId, { unpushed: [], unpushedLoaded: true });
   }
 }
 

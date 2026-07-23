@@ -2,4 +2,5 @@
   <Project Path="ClaudeHomeServer/ClaudeHomeServer.csproj" />
   <Project Path="ClaudeHomeServer.Tests/ClaudeHomeServer.Tests.csproj" />
   <Project Path="ClaudeHomeServer.Tray/ClaudeHomeServer.Tray.csproj" />
+  <Project Path="ConPtyBridge/ConPtyBridge.csproj" />
 </Solution>

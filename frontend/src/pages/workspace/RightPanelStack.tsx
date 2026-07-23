@@ -8,7 +8,7 @@
 // Панели — «воздушные» скруглённые карточки с зазорами; границы высот тянутся
 // невидимыми хендлами в зазорах, ширина колонок — сплиттером слева от зоны.
 import { useEffect, useRef, useState, type ReactNode, type DragEvent, type PointerEvent as ReactPointerEvent } from 'react';
-import { X, Maximize2, Minimize2, Columns2, Square, ChevronsRight, ChevronsLeft, ClipboardList, FolderTree, ListTodo, Users, SquareTerminal, MonitorPlay, type LucideIcon } from 'lucide-react';
+import { X, Maximize2, Minimize2, Columns2, Square, ChevronsRight, ChevronsLeft, ClipboardList, FolderTree, GitCompare, ListTodo, Users, SquareTerminal, MonitorPlay, type LucideIcon } from 'lucide-react';
 import type { Session } from '../../types';
 import { C, FONT, R, SHADOW } from '../../lib/design';
 import { ICON_STROKE } from '../../components/ui/icons';
@@ -26,6 +26,7 @@ const TABLET_INLINE_MIN = 1000;
 const PANEL_META: Record<PanelKey, { title: string; Icon: LucideIcon }> = {
   plan: { title: 'План', Icon: ClipboardList },
   files: { title: 'Файлы', Icon: FolderTree },
+  changes: { title: 'Изменения', Icon: GitCompare },
   tasks: { title: 'Задачи', Icon: ListTodo },
   team: { title: 'Команда', Icon: Users },
   terminal: { title: 'Терминал', Icon: SquareTerminal },

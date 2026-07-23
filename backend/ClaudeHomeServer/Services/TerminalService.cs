@@ -152,26 +152,60 @@ public sealed class TerminalService : IDisposable
 
         if (isWindows)
         {
-            // Windows: PowerShell с перенаправлением (без PTY).
-            // Кодировки: Windows PowerShell 5.1 при перенаправлении пишет вывод в OEM-кодировку
-            // консоли (cp866 на русской Windows), а мы читаем UTF-8 → кириллица кракозябрами.
-            // Поэтому явно переводим дочерний pwsh на UTF-8 стартовой командой ([Console]::*Encoding
-            // + $OutputEncoding), а StdioEncoding=UTF-8-без-BOM синхронизирует чтение наших потоков.
+            // Windows: сначала пробуем ConPTY-мост (полноценный псевдотерминал — живые
+            // backspace/стрелки/история/Tab/Ctrl+C, тот же кадровый протокол, что у
+            // Linux-моста), при недоступности — фолбэк на голое перенаправление.
             shell = "powershell.exe";
-            const string bootstrap =
-                "[Console]::OutputEncoding=[Text.Encoding]::UTF8; " +
-                "[Console]::InputEncoding=[Text.Encoding]::UTF8; " +
-                "$OutputEncoding=[Text.Encoding]::UTF8; " +
-                "$Host.UI.RawUI.WindowTitle='terminal'";
-            process = launcher.Start(new Execution.ProcessSpec
+            var bridgePath = launcher.IsSandboxed ? null : Execution.ConPtyBridgeLocator.Find();
+            process = null!;
+            if (bridgePath is not null)
             {
-                FileName = "powershell.exe",
-                Args = ["-NoLogo", "-NoExit", "-Command", bootstrap],
-                WorkingDirectory = project.RootPath,
-                StdioEncoding = new System.Text.UTF8Encoding(false),
-                EnableRaisingEvents = true,
-                TurnId = turnId,
-            });
+                try
+                {
+                    process = launcher.Start(new Execution.ProcessSpec
+                    {
+                        FileName = bridgePath,
+                        Args = [cols.ToString(), rows.ToString()],
+                        WorkingDirectory = project.RootPath,
+                        // stdout моста — UTF-8 VT-поток от ConPTY; кодировочный bootstrap
+                        // не нужен: conhost сам транслирует консольный вывод в UTF-8
+                        StdioEncoding = new System.Text.UTF8Encoding(false),
+                        EnableRaisingEvents = true,
+                        TurnId = turnId,
+                    });
+                    usesPtyBridge = true;
+                }
+                catch (Exception ex)
+                {
+                    _log.LogWarning(ex, "ConPtyBridge не запустился — фолбэк на перенаправление");
+                }
+            }
+            else
+            {
+                _log.LogWarning("ConPtyBridge.exe не найден или Windows без ConPTY — powershell с перенаправлением");
+            }
+            if (!usesPtyBridge)
+            {
+                // Фолбэк без PTY: PowerShell с перенаправлением.
+                // Кодировки: Windows PowerShell 5.1 при перенаправлении пишет вывод в OEM-кодировку
+                // консоли (cp866 на русской Windows), а мы читаем UTF-8 → кириллица кракозябрами.
+                // Поэтому явно переводим дочерний pwsh на UTF-8 стартовой командой ([Console]::*Encoding
+                // + $OutputEncoding), а StdioEncoding=UTF-8-без-BOM синхронизирует чтение наших потоков.
+                const string bootstrap =
+                    "[Console]::OutputEncoding=[Text.Encoding]::UTF8; " +
+                    "[Console]::InputEncoding=[Text.Encoding]::UTF8; " +
+                    "$OutputEncoding=[Text.Encoding]::UTF8; " +
+                    "$Host.UI.RawUI.WindowTitle='terminal'";
+                process = launcher.Start(new Execution.ProcessSpec
+                {
+                    FileName = "powershell.exe",
+                    Args = ["-NoLogo", "-NoExit", "-Command", bootstrap],
+                    WorkingDirectory = project.RootPath,
+                    StdioEncoding = new System.Text.UTF8Encoding(false),
+                    EnableRaisingEvents = true,
+                    TurnId = turnId,
+                });
+            }
         }
         else
         {

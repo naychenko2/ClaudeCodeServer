@@ -40,6 +40,14 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
     // OwnerId nullable по модели; ForOwner(null) корректно даёт локальную среду.
     private static string? Owner(Models.Project p) => p.OwnerId;
 
+    // Эффективный промпт AI-генерации сообщения коммита: проектный override → глобальный → null (дефолт)
+    private string? EffectiveCommitPrompt(Models.Project p)
+    {
+        if (!string.IsNullOrWhiteSpace(p.CommitPromptOverride)) return p.CommitPromptOverride;
+        var owner = p.OwnerId is null ? null : users.GetById(p.OwnerId);
+        return string.IsNullOrWhiteSpace(owner?.GitCommitPrompt) ? null : owner!.GitCommitPrompt;
+    }
+
     private Task NotifyChanged(string projectId) =>
         hub.Clients.Group("user_" + UserId).SendAsync("message", new GitStatusChangedMessage(projectId));
 
@@ -76,6 +84,19 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
         {
             var p = GetProject(projectId);
             return Ok(await git.LogAsync(Owner(p), p.RootPath, limit, branch, ct));
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }
+    }
+
+    // Незапушенные коммиты (впереди upstream) — стек скоупов в панели «Изменения»
+    [HttpGet("unpushed")]
+    public async Task<IActionResult> Unpushed(string projectId, [FromQuery] int limit = 100, CancellationToken ct = default)
+    {
+        try
+        {
+            var p = GetProject(projectId);
+            return Ok(await git.UnpushedLogAsync(Owner(p), p.RootPath, limit, ct));
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }
@@ -278,7 +299,8 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
             string message;
             try
             {
-                var s = await gitAi.SuggestCommitMessageAsync(Owner(p), p.RootPath, ct);
+                // Авто-коммит на дефолтном стиле (кастомный промпт — только для ручной ✨-генерации)
+                var s = await gitAi.SuggestCommitMessageAsync(Owner(p), p.RootPath, null, ct);
                 message = s is null ? $"Сохранение: {DateTime.Now:dd.MM.yyyy HH:mm}"
                     : (string.IsNullOrWhiteSpace(s.Description) ? s.Summary : $"{s.Summary}\n\n{s.Description}");
             }
@@ -311,12 +333,65 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
         try
         {
             var p = GetProject(projectId);
-            var s = await gitAi.SuggestCommitMessageAsync(Owner(p), p.RootPath, ct);
+            var s = await gitAi.SuggestCommitMessageAsync(Owner(p), p.RootPath, EffectiveCommitPrompt(p), ct);
             return s is null ? Conflict(new { error = "Нет проиндексированных изменений" }) : Ok(s);
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }
         catch (Exception) { return Conflict(new { error = "Не удалось сгенерировать описание" }); }
+    }
+
+    // Настройка промпта AI-генерации сообщения коммита: глобальный (per-user) + проектный override.
+    // effective — что реально применится; default — дефолтные правила (для плейсхолдера).
+    [HttpGet("commit-prompt")]
+    public IActionResult GetCommitPrompt(string projectId)
+    {
+        try
+        {
+            var p = GetProject(projectId);
+            var owner = p.OwnerId is null ? null : users.GetById(p.OwnerId);
+            var global = owner?.GitCommitPrompt;
+            var projectOverride = p.CommitPromptOverride;
+            return Ok(new
+            {
+                global,
+                projectOverride,
+                useProject = !string.IsNullOrWhiteSpace(projectOverride),
+                effective = EffectiveCommitPrompt(p) ?? GitAiService.DefaultStyleRules,
+                @default = GitAiService.DefaultStyleRules,
+            });
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+    }
+
+    // Сохранить оба промпта: глобальный (User) пишем всегда; проектный override — только
+    // если useProject=true (иначе снимаем, активным становится глобальный).
+    [HttpPut("commit-prompt")]
+    public IActionResult SetCommitPrompt(string projectId, [FromBody] GitCommitPromptRequest body)
+    {
+        try
+        {
+            var p = GetProject(projectId);
+            if (p.OwnerId is not null) users.SetGitCommitPrompt(p.OwnerId, body.Global);
+            projects.UpdateGitSettings(p.Id, commitPromptOverride: body.UseProject ? (body.Project ?? "") : "");
+            return GetCommitPrompt(projectId);
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+    }
+
+    // Определить стиль коммитов по истории репы → инструкция для поля настройки (не сохраняет)
+    [HttpPost("ai/detect-commit-style")]
+    public async Task<IActionResult> DetectCommitStyle(string projectId, CancellationToken ct)
+    {
+        try
+        {
+            var p = GetProject(projectId);
+            var prompt = await gitAi.DetectCommitStyleAsync(Owner(p), p.RootPath, ct);
+            return prompt is null ? Conflict(new { error = "Недостаточно истории для анализа" }) : Ok(new { prompt });
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }
+        catch (Exception) { return Conflict(new { error = "Не удалось определить стиль" }); }
     }
 
     [HttpPost("ai/stash-name")]
@@ -473,3 +548,5 @@ public record GitAutoCommitRequest(bool Enabled, bool Push = false);
 public record GitCommitRequest(string Message, bool Amend = false);
 public record GitCheckoutRequest(string Branch);
 public record GitCreateBranchRequest(string Name, string? From = null);
+// Оба уровня промпта + активный: Global → User (всегда), Project → override при UseProject
+public record GitCommitPromptRequest(string? Global, string? Project, bool UseProject);

@@ -218,14 +218,18 @@ public class ProjectManager
         try { File.Delete(Path.Combine(IconsDir, projectId, file)); } catch { /* не критично */ }
     }
 
-    /// <summary>Сохраняет git-настройки проекта (remote и режим авто-коммита).</summary>
-    public Project UpdateGitSettings(string id, string? remoteUrl = null, bool? autoCommit = null, bool? autoPush = null)
+    /// <summary>Сохраняет git-настройки проекта (remote, режим авто-коммита, override промпта коммита).</summary>
+    /// <remarks>Конвенция строковых полей: null = «не менять», "" = «очистить» (сбросить в null).</remarks>
+    public Project UpdateGitSettings(string id, string? remoteUrl = null, bool? autoCommit = null,
+        bool? autoPush = null, string? commitPromptOverride = null)
     {
         var project = _projects.GetValueOrDefault(id)
             ?? throw new KeyNotFoundException($"Проект не найден: {id}");
         if (remoteUrl is not null) project.GitRemoteUrl = remoteUrl.Length == 0 ? null : remoteUrl;
         if (autoCommit is not null) project.GitAutoCommit = autoCommit.Value;
         if (autoPush is not null) project.GitAutoPush = autoPush.Value;
+        if (commitPromptOverride is not null)
+            project.CommitPromptOverride = commitPromptOverride.Length == 0 ? null : commitPromptOverride;
         project.UpdatedAt = DateTime.UtcNow;
         Save();
         return project;

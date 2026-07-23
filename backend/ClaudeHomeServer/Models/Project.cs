@@ -41,6 +41,9 @@ public class Project
     // Режим документов: авто-commit после каждого хода Claude (+push при GitAutoPush)
     public bool GitAutoCommit { get; set; } = false;
     public bool GitAutoPush { get; set; } = false;
+    // Проектный override промпта AI-генерации сообщения коммита (панель «Изменения»);
+    // null — использовать глобальный (User.GitCommitPrompt) или дефолт. Пусто ("") = очищено.
+    public string? CommitPromptOverride { get; set; }
     // Иконка проекта: инициалы+цвет по умолчанию, картинка (сгенерированная/загруженная) опционально
     public ProjectIcon Icon { get; set; } = new();
 }

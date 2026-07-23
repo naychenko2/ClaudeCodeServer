@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- ConPTY-мост для Windows-терминала: аналог backend/pty-bridge/pty-bridge.c (Linux).
+       TFM намеренно net10.0 (НЕ net10.0-windows): весь Windows-специфичный код — ручной
+       P/Invoke в kernel32, поэтому Linux CI собирает проект без EnableWindowsTargeting.
+       Запуск не на Windows отсекается рантайм-гвардом в Program.cs (exit 64). -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Мост не форматирует ничего локале-зависимого — экономим на ICU -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <!-- Юнит-тесты парсера кадров живут в ClaudeHomeServer.Tests (форма — как в ClaudeHomeServer.csproj) -->
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+</Project>

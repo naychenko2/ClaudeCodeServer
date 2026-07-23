@@ -118,8 +118,79 @@ public sealed class GitService(ILauncherFactory launchers)
         var r = await RunAsync(ownerId, root, ["status", "--porcelain=v2", "--branch", "-z"], ct: ct);
         if (!r.Ok)
             return new GitStatusDto(false, null, null, 0, 0, false, [], [], []);
-        return ParsePorcelainV2(r.Stdout);
+        var dto = ParsePorcelainV2(r.Stdout);
+
+        // Обогащаем файлы статистикой строк (+N/−M): tracked — суммарно vs HEAD, untracked — числом строк
+        var stats = await NumstatAsync(ownerId, root, dto.Untracked.Select(f => f.Path), ct);
+        if (stats.Count == 0) return dto;
+        return dto with
+        {
+            Staged = ApplyStats(dto.Staged, stats),
+            Unstaged = ApplyStats(dto.Unstaged, stats),
+            Untracked = ApplyStats(dto.Untracked, stats),
+        };
     }
+
+    // Статистика строк по файлам: tracked — `git diff HEAD --numstat` (staged+unstaged суммарно vs
+    // HEAD), untracked — `git diff --no-index` по каждому. Пустой репо/нет HEAD → tracked-часть пуста
+    // (не кидаем: файлы всё равно untracked). Ключ словаря — путь файла (для rename — новый путь).
+    private async Task<Dictionary<string, (int add, int del, bool binary)>> NumstatAsync(
+        string? ownerId, string root, IEnumerable<string> untracked, CancellationToken ct)
+    {
+        var map = new Dictionary<string, (int, int, bool)>();
+
+        var tracked = await RunAsync(ownerId, root, ["diff", "HEAD", "--numstat", "-z"], ct: ct);
+        if (tracked.Ok) ParseNumstatZ(tracked.Stdout, map);
+
+        // untracked нет в `diff HEAD` — считаем по одному через --no-index (даёт числа и `-` для бинаря)
+        foreach (var rel in untracked)
+        {
+            var r = await RunAsync(ownerId, root,
+                ["diff", "--no-index", "--numstat", "-z", "--", "/dev/null", rel], ct: ct);
+            // --no-index при различиях возвращает exit 1 — это норма, парсим stdout независимо от Ok
+            ParseNumstatZ(r.Stdout, map);
+        }
+        return map;
+    }
+
+    // Парсер `--numstat -z`: записи `add\tdel\tpath\0`; для rename — `add\tdel\t\0old\0new\0`
+    // (пустой path в первом токене → следующие два токена old/new, ключ — new). Бинарь: add/del = «-».
+    private static void ParseNumstatZ(string stdout, Dictionary<string, (int, int, bool)> map)
+    {
+        var tokens = stdout.Split('\0');
+        int i = 0;
+        while (i < tokens.Length)
+        {
+            var tok = tokens[i];
+            if (tok.Length == 0) { i++; continue; }
+            int tab1 = tok.IndexOf('\t');
+            int tab2 = tab1 >= 0 ? tok.IndexOf('\t', tab1 + 1) : -1;
+            if (tab2 < 0) { i++; continue; }
+            var addS = tok[..tab1];
+            var delS = tok[(tab1 + 1)..tab2];
+            var path = tok[(tab2 + 1)..];
+            string key;
+            if (path.Length == 0)
+            {
+                // rename: old/new в следующих токенах, ключуем по новому пути
+                key = i + 2 < tokens.Length ? tokens[i + 2] : "";
+                i += 3;
+            }
+            else { key = path; i += 1; }
+            if (key.Length == 0) continue;
+            bool binary = addS == "-" || delS == "-";
+            int add = binary || !int.TryParse(addS, out var a) ? 0 : a;
+            int del = binary || !int.TryParse(delS, out var d) ? 0 : d;
+            map[key] = (add, del, binary);
+        }
+    }
+
+    // Проставить Added/Deleted файлам из словаря numstat (бинарь → null/null)
+    private static List<GitFileChange> ApplyStats(
+        IReadOnlyList<GitFileChange> files, Dictionary<string, (int add, int del, bool binary)> stats) =>
+        files.Select(f => stats.TryGetValue(f.Path, out var s) && !s.binary
+            ? f with { Added = s.add, Deleted = s.del }
+            : f).ToList();
 
     public async Task<string?> DiffFileAsync(string? ownerId, string root, string relPath, bool staged, CancellationToken ct = default)
     {
@@ -148,6 +219,17 @@ public sealed class GitService(ILauncherFactory launchers)
             "--pretty=format:%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s%x1e" };
         if (!string.IsNullOrWhiteSpace(branch)) args.Add(branch);
         var r = await RunAsync(ownerId, root, args, ct: ct);
+        return r.Ok ? ParseLog(r.Stdout) : [];
+    }
+
+    // Незапушенные коммиты (впереди upstream): `git log @{u}..HEAD`. Без отслеживаемой ветки
+    // (@{u} не резолвится) git падает → возвращаем пустой список: стек = строго незапушенное.
+    public async Task<IReadOnlyList<GitLogEntry>> UnpushedLogAsync(string? ownerId, string root, int limit = 100, CancellationToken ct = default)
+    {
+        if (!IsGitRepo(root)) return [];
+        var r = await RunAsync(ownerId, root,
+            ["log", "-n", limit.ToString(),
+             "--pretty=format:%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s%x1e", "@{u}..HEAD"], ct: ct);
         return r.Ok ? ParseLog(r.Stdout) : [];
     }
 
@@ -203,6 +285,16 @@ public sealed class GitService(ILauncherFactory launchers)
                 files.Add(new GitFileChange(parts[2], status[0].ToString(), parts[1]));
             else
                 files.Add(new GitFileChange(parts[1], status[0].ToString()));
+        }
+
+        // Статистика строк файлов коммита (+N/−M)
+        var stat = await RunAsync(ownerId, root,
+            ["show", "--numstat", "--format=", "--first-parent", "-m", "-z", sha], ct: ct);
+        if (stat.Ok)
+        {
+            var stats = new Dictionary<string, (int, int, bool)>();
+            ParseNumstatZ(stat.Stdout, stats);
+            if (stats.Count > 0) files = ApplyStats(files, stats);
         }
         return new GitCommitDetail(f[0], f[1], f[2], f[3], date, f[5], f[6].Trim(), files);
     }

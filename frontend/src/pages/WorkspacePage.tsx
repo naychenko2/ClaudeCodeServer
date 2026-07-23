@@ -6,6 +6,7 @@ import { FileExplorer } from '../components/FileExplorer';
 import { ChatPanel } from '../components/ChatPanel';
 import { FileViewer } from '../components/FileViewer';
 import { GitCommitView } from '../components/GitCommitView';
+import { GitChangesRail } from '../components/GitChangesRail';
 import { ArtifactsPanel } from '../components/ArtifactsPanel';
 import { KnowledgePanel } from '../components/KnowledgePanel';
 import { UsageScreen } from '../components/UsageScreen';
@@ -236,6 +237,8 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
   const [gitStagePath, setGitStagePath] = useState<string | null>(null);
   // Коммит открыт из git-панели «История» → просмотр в контентной области
   const [openCommitSha, setOpenCommitSha] = useState<string | null>(null);
+  // Файл коммита, на котором сразу открыть diff (клик по файлу в стеке «Изменения»); null — первый
+  const [openCommitFile, setOpenCommitFile] = useState<string | null>(null);
   const [fileFullscreen, setFileFullscreen] = useState(() => loadWorkspaceState(project.id)?.fileFullscreen ?? false);
   const [chatFlex, setChatFlex] = useState(1); // 1:1 = 50/50 по умолчанию
   const [workflowRunningFor, setWorkflowRunningFor] = useState<string | null>(null);
@@ -892,6 +895,21 @@ const windowWidth = useWindowWidth();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.id, creatingSession]);
 
+  // Делегировать фиксацию изменений чату: в текущем чате или в новом (панель «Изменения»)
+  const handleCommitVia = useCallback((where: 'chat' | 'newChat') => {
+    const msg = 'Зафиксируй (сделай git commit) текущие изменения в проекте. Сам придумай осмысленное сообщение коммита по сути изменений.';
+    void (async () => {
+      try {
+        if (where === 'chat' && activeSession) { handleSelectSession(activeSession, msg); return; }
+        const s = await api.sessions.create(project.id, 'auto');
+        handleSelectSession(s, msg);
+      } catch (e) {
+        showToast('Чат', e instanceof Error ? e.message : 'Не удалось открыть чат');
+      }
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.id, activeSession]);
+
   // Список чатов опустел (удалён последний) — сбрасываем активную сессию в пустое состояние
   const handleClearSession = useCallback(() => {
     setActiveSession(null);
@@ -1019,12 +1037,14 @@ const windowWidth = useWindowWidth();
     navPush({ screen: 'project', project, view: mobileView, file: filePath });
   };
 
-  // из git-панели «История» → просмотр коммита в контентной области
-  const handleOpenCommit = (sha: string) => {
+  // из git-панели «История»/«Изменения» → просмотр коммита в контентной области;
+  // filePath — открыть diff сразу на этом файле (клик по файлу коммита), иначе первый
+  const handleOpenCommit = (sha: string, filePath?: string) => {
     setOpenFile(null);
     setOpenFileDiffMode(false);
     setGitStagePath(null);
     setFileFullscreen(false);
+    setOpenCommitFile(filePath ?? null);
     setOpenCommitSha(sha);
     if (isMobile) setMobileView('chat');
   };
@@ -1349,7 +1369,7 @@ const windowWidth = useWindowWidth();
         {/* Просмотр коммита из git-«Истории» */}
         {!openFile && openCommitSha && mobileView === 'chat' && (
           <div style={{ position: 'absolute', inset: 0, zIndex: 800, display: 'flex' }}>
-            <GitCommitView project={project} sha={openCommitSha} onClose={closeCommitView} isMobile />
+            <GitCommitView project={project} sha={openCommitSha} initialPath={openCommitFile} onClose={closeCommitView} isMobile />
           </div>
         )}
         {/* Панель «Артефакты сессии» — мобайл: drawer поверх чата */}
@@ -1417,6 +1437,7 @@ const windowWidth = useWindowWidth();
           fileFullscreen={fileFullscreen}
           onEnterFullscreen={handleEnterFullscreen}
           openCommitSha={openCommitSha}
+          openCommitFile={openCommitFile}
           onCloseCommit={closeCommitView}
           onOpenFileFromChat={handleOpenFileFromChat}
           onCloseFile={backFromFile}
@@ -1443,6 +1464,7 @@ const windowWidth = useWindowWidth();
             files: fileSubTab === 'files'
               ? <FileExplorer project={project} activeFilePath={openFile} isMobile={false} onOpenFile={handleOpenFileFromTree} onOpenGitDiff={handleOpenGitDiff} onOpenCommit={handleOpenCommit} onAddToKnowledge={handleAddToKnowledge} onAddFolderToKnowledge={handleAddFolderToKnowledge} onRemoveFromKnowledge={handleRemoveFromKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} indexingFolders={indexingFolders} onAttachToChat={activeSession && !fileFullscreen ? handleAttachToChat : undefined} onOpenKnowledge={() => setFileSubTab('knowledge')} />
               : <KnowledgePanel project={project} isMobile={false} onDocumentsChanged={setIndexedFileNames} onBack={() => setFileSubTab('files')} />,
+            changes: <GitChangesRail project={project} onOpenDiff={handleOpenGitDiff} onOpenFile={handleOpenFileFromTree} onOpenCommit={handleOpenCommit} activeFilePath={openFile ?? openCommitFile} onCommit={handleCommitVia} />,
             tasks: <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={false} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} groupTab={projectGroupTab} onGroupTab={setProjectGroupTab} hideViewSwitcher />,
             team: <ProjectPersonasPanel project={project} selectedId={personaCreating ? null : selectedPersonaId} onSelect={handlePersonaSelect} onNew={handlePersonaNew} onShowTeam={() => { handlePersonaCleared(); setTeamCenterOpen(true); }} teamActive={teamCenterOpen && !selectedPersonaId && !personaCreating} />,
             terminal: <TerminalPanelContent terminals={terminals} activeTerminalId={activeTerminalId} onSelect={handleSelectTerminal} onCreate={handleCreateTerminal} onStop={handleStopTerminal} onActivity={setTerminalBusy} />,
@@ -1577,7 +1599,7 @@ const windowWidth = useWindowWidth();
             {/* Коммит из git-«Истории» — просмотр в основной зоне (приоритет над чатом/задачей) */}
             {!openFile && openCommitSha && (
               <div style={{ flex: 1, overflow: 'hidden', display: 'flex' }}>
-                <GitCommitView project={project} sha={openCommitSha} onClose={closeCommitView} />
+                <GitCommitView project={project} sha={openCommitSha} initialPath={openCommitFile} onClose={closeCommitView} />
               </div>
             )}
 

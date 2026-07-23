@@ -25,7 +25,6 @@ import { ICON_SIZE } from '../components/ui/icons';
 import { showToast } from '../lib/toast';
 import { navPush, navReplace, parseHash, type NavSnapshot } from '../lib/nav';
 import { EditDialog } from '../features/projects/dialogs/EditDialog';
-import { ProjectIcon } from '../features/projects/ProjectIcon';
 import { SidebarProjectSwitcher } from '../features/projects/SidebarProjectSwitcher';
 import { TasksPanel } from '../features/tasks/TasksPanel';
 import { PillViewSwitcher, ListIcon, ByDateIcon, BoardIcon } from '../features/tasks/bits';
@@ -43,7 +42,6 @@ import { ToolsSidebar } from '../components/tools/ToolsSidebar';
 import { TerminalView } from '../components/terminal/TerminalView';
 import { PreviewView } from '../components/preview/PreviewView';
 import * as terminalApi from '../lib/terminalSignalr';
-import { useFeature, FLAGS } from '../lib/featureFlags';
 import { DesktopWorkspace } from './workspace/DesktopWorkspace';
 import { TerminalPanelContent, PreviewPanelContent } from './workspace/panels';
 
@@ -273,12 +271,6 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
   }, [project.id]);
   const [editProjectOpen, setEditProjectOpen] = useState(false);
   const [projectForEdit, setProjectForEdit] = useState(project);
-  // Флаг нового интерфейса (workspace-cc-panels) объявлен ДО эффекта терминалов:
-  // в новом режиме вкладки «Инструменты» нет, но панелька терминала должна получать
-  // список всегда. Режим (ccPanelsMode) считается ниже — ему нужна ширина окна.
-  const ccPanels = useFeature(FLAGS.workspaceCcPanels);
-  // Переключатель проектов в плашке сайдбара (вместо зоны в шапке)
-  const sidebarSwitcher = useFeature(FLAGS.sidebarProjectSwitcher);
   type ToolsTab = 'terminal' | 'preview';
   const [toolsTab, setToolsTab] = useState<ToolsTab>('terminal');
   const [activeTerminalId, setActiveTerminalId] = useState<string | null>(null);
@@ -294,10 +286,9 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
     try { setTerminals(await terminalApi.listTerminals(project.id)); } catch { /* офлайн */ }
   }, [project.id]);
 
-  // Пока открыта вкладка «Инструменты» (или включён новый режим панелей, где
-  // панелька терминала доступна всегда) — держим список и слушаем статусы
+  // Список терминалов держим всегда: он нужен и вкладке «Инструменты», и панельке
+  // терминала в интерфейсе панелей проекта (она доступна независимо от активной вкладки)
   useEffect(() => {
-    if (leftTab !== 'tools' && !ccPanels) return;
     void refreshTerminals();
     return terminalApi.onTerminalMessage(msg => {
       if (msg.type === 'terminal_status') void refreshTerminals();
@@ -481,9 +472,9 @@ const windowWidth = useWindowWidth();
   const viewportH = useViewportHeight();
   const isMobile = windowWidth <= MOBILE_MAX;
   const isTablet = windowWidth > MOBILE_MAX && windowWidth <= TABLET_MAX;
-  // Новый интерфейс «как десктопный Claude Code» — десктоп и планшет (на планшете —
+  // Интерфейс «как десктопный Claude Code» — десктоп и планшет (на планшете —
   // упрощённый solo-вариант внутри DesktopWorkspace); мобилка остаётся на старом UX
-  const ccPanelsMode = ccPanels && !isMobile;
+  const ccPanelsMode = !isMobile;
   // Выбранный в панельке «Preview» сервис — его окно живёт в центре нового режима
   const ccActivePreview = previewServices.find(s => s.id === activePreviewId) ?? null;
 
@@ -1206,39 +1197,10 @@ const windowWidth = useWindowWidth();
               лишнего padding; hover-подложка кликабельной зоны компенсируется margin -6, чтобы
               иконка/текст стояли вровень с краем панели, а фон при наведении чуть выступал. */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 13, minHeight: 28 }}>
-            {sidebarSwitcher ? (
-              // Флаг sidebar-project-switcher: плашка = переключатель проектов
-              // (таблетка активного + иконки других со статусами + палитра)
-              <SidebarProjectSwitcher project={projectForEdit} onOpenSettings={() => setEditProjectOpen(true)} />
-            ) : (
-            /* Индикатор + имя проекта — кликабельны, ведут к списку проектов */
-            <div
-              onClick={onGoToProjects}
-              title="Все проекты"
-              onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; }}
-              onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
-              style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0, cursor: 'pointer', borderRadius: 7, padding: '4px 6px', margin: '0 -6px', transition: 'background 0.12s' }}
-            >
-              <ProjectIcon project={projectForEdit} size={18} radius={5} />
-              <span style={{ fontSize: 14, fontWeight: 600, color: C.textHeading, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {projectForEdit.name}
-              </span>
-            </div>
-            )}
-            {/* Шестеренка нужна только старой плашке: в переключателе настройки
-                открываются кликом по иконке активного проекта */}
-            {!sidebarSwitcher && (
-            <IconButton
-              size="sm"
-              onClick={() => setEditProjectOpen(true)}
-              title="Настройки проекта"
-            >
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="3"/>
-                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-              </svg>
-            </IconButton>
-            )}
+            {/* Плашка проекта = переключатель проектов: таблетка активного +
+                иконки других со статусами + палитра; настройки открываются
+                кликом по иконке активного проекта */}
+            <SidebarProjectSwitcher project={projectForEdit} onOpenSettings={() => setEditProjectOpen(true)} />
           </div>
           <PillSwitch<LeftTab>
             value={leftTab}
@@ -1421,7 +1383,7 @@ const windowWidth = useWindowWidth();
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, overflow: 'hidden' }}>
       {/* Единый верхний хаб-хедер на всю ширину (симметрия с разделом «Чаты») */}
-      <HubHeader value="projects" onTab={onSwitchHub} auth={auth} onLogout={onLogout} currentProjectId={project.id} />
+      <HubHeader value="projects" onTab={onSwitchHub} auth={auth} onLogout={onLogout} />
 
       {/* Тело: сайдбар + контент. position:relative — чтобы drawer/overlay легли под хедер */}
       <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden', position: 'relative' }}>
@@ -1433,7 +1395,6 @@ const windowWidth = useWindowWidth();
           isTablet={isTablet}
           project={project}
           projectForEdit={projectForEdit}
-          onGoToProjects={onGoToProjects}
           onOpenProjectSettings={() => setEditProjectOpen(true)}
           sidebarMode={sidebarMode}
           setSidebarMode={setSidebarMode}

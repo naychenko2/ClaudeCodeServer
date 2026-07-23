@@ -7,7 +7,7 @@ import { C, FONT, R } from '../../lib/design';
 import { useKnowledge, useKnowledgeConfigured, ensureKnowledgeLoaded, bumpKnowledge } from '../../lib/knowledge';
 import { api } from '../../lib/api';
 import { parseHash, navPush, navReplace, getNav, type NavSnapshot } from '../../lib/nav';
-import { Splitter, IconButton, ConfirmDialog } from '../../components/ui';
+import { SidebarSplitter, IconButton, ConfirmDialog } from '../../components/ui';
 import { ICON_SIZE } from '../../components/ui/icons';
 import { useSidebarDrag } from '../../lib/sidebarWidth';
 import { useIsMobile } from '../../lib/breakpoints';
@@ -15,7 +15,7 @@ import { KnowledgeList, KnowledgeEmptyState } from './KnowledgeList';
 import { KnowledgeView } from './KnowledgeView';
 import { NewKnowledgeBaseDialog } from './NewKnowledgeBaseDialog';
 import { AddDocumentDialog } from './AddDocumentDialog';
-import { IconSearch, IconPlus, IconPin } from './shared';
+import { IconSearch, IconPlus } from './shared';
 
 export function KnowledgePage({ auth, onLogout, onHubTab }: {
   auth: AuthState;
@@ -34,10 +34,11 @@ export function KnowledgePage({ auth, onLogout, onHubTab }: {
 
   const { width: listWidth, dragging: listDragging, startDrag: startListDrag } = useSidebarDrag();
 
-  // Режим сайдбара: pinned | collapsed | open (как в «Заметках»/«Чатах»/воркспейсе).
-  const [sidebarMode, setSidebarMode] = useState<'pinned' | 'collapsed' | 'open'>(() =>
+  // Режим сайдбара: pinned (в потоке) | collapsed (свёрнут). Сворачивание — кнопкой
+  // на сплиттере, разворот — гамбургером обратно в поток.
+  const [sidebarMode, setSidebarMode] = useState<'pinned' | 'collapsed'>(() =>
     localStorage.getItem('cc_knowledge_sidebar_mode') === 'collapsed' ? 'collapsed' : 'pinned');
-  useEffect(() => { if (sidebarMode !== 'open') localStorage.setItem('cc_knowledge_sidebar_mode', sidebarMode); }, [sidebarMode]);
+  useEffect(() => { localStorage.setItem('cc_knowledge_sidebar_mode', sidebarMode); }, [sidebarMode]);
 
   useEffect(() => { void ensureKnowledgeLoaded(); }, []);
 
@@ -91,7 +92,6 @@ export function KnowledgePage({ auth, onLogout, onHubTab }: {
 
   const selectKb = (id: string) => {
     setSelectedId(id); setMobileView('item'); navPush({ screen: 'knowledge', knowledge: id });
-    setSidebarMode(m => m === 'open' ? 'collapsed' : m);
   };
   const clearKb = () => {
     setSelectedId(null); setMobileView('list');
@@ -109,24 +109,7 @@ export function KnowledgePage({ auth, onLogout, onHubTab }: {
     if (selectedId === id) clearKb();
   };
 
-  // --- Сайдбар: шапка (свернуть/закрепить) + управление (фильтр + «Новая») + список ---
-  const sidebarHeader = (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 10px 0', minHeight: 28, flex: 'none' }}>
-      <span style={{
-        flex: 1, minWidth: 0, fontSize: 14, fontWeight: 600, color: C.textHeading,
-        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-      }}>Знания</span>
-      {/* Пин — самая правая кнопка: закрепляет (drawer→в потоке) либо откепляет-сворачивает панель */}
-      <IconButton
-        onClick={() => setSidebarMode(sidebarMode === 'open' ? 'pinned' : 'collapsed')}
-        title={sidebarMode === 'open' ? 'Закрепить панель' : 'Открепить панель'}
-        size="sm"
-      >
-        <IconPin size={16} filled={sidebarMode === 'pinned'} />
-      </IconButton>
-    </div>
-  );
-
+  // --- Сайдбар: управление (фильтр + «Новая») + список ---
   const sidebarControls = (
     <div style={{ padding: '10px 10px 9px', borderBottom: `1px solid ${C.border}`, display: 'flex', flexDirection: 'column', gap: 8, flex: 'none' }}>
       <div style={{
@@ -145,7 +128,6 @@ export function KnowledgePage({ auth, onLogout, onHubTab }: {
 
   const sidebar = (
     <>
-      {!isMobile && sidebarHeader}
       {sidebarControls}
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
         <KnowledgeList
@@ -186,24 +168,8 @@ export function KnowledgePage({ auth, onLogout, onHubTab }: {
           <div style={{ width: listWidth, flex: 'none', background: C.bgPanel, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
             {sidebar}
           </div>
-          <Splitter active={listDragging} onMouseDown={startListDrag} />
+          <SidebarSplitter active={listDragging} onMouseDown={startListDrag} onCollapse={() => setSidebarMode('collapsed')} />
         </>
-      )}
-
-      {sidebarMode !== 'pinned' && (
-        <div style={{
-          position: 'absolute', top: 0, left: 0, bottom: 0, zIndex: 10, width: Math.min(listWidth, 320),
-          background: C.bgPanel, borderRight: `1px solid ${C.border}`, display: 'flex', flexDirection: 'column',
-          transform: sidebarMode === 'open' ? 'translateX(0)' : 'translateX(-110%)',
-          transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-          boxShadow: sidebarMode === 'open' ? '4px 0 20px rgba(20,16,10,0.15)' : 'none',
-        }}>
-          {sidebar}
-        </div>
-      )}
-
-      {sidebarMode === 'open' && (
-        <div onClick={() => setSidebarMode('collapsed')} style={{ position: 'absolute', inset: 0, zIndex: 9, background: C.overlay }} />
       )}
 
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
@@ -212,7 +178,7 @@ export function KnowledgePage({ auth, onLogout, onHubTab }: {
             flex: 'none', display: 'flex', alignItems: 'center', padding: '0 8px', height: 48,
             borderBottom: `1px solid ${C.divider}`,
           }}>
-            <IconButton onClick={() => setSidebarMode('open')} title="Открыть панель" size="md" variant="soft">
+            <IconButton onClick={() => setSidebarMode('pinned')} title="Открыть панель" size="md" variant="soft">
               <MenuIcon size={ICON_SIZE.sm} strokeWidth={2} />
             </IconButton>
           </div>

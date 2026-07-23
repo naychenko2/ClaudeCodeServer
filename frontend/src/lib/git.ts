@@ -76,9 +76,31 @@ function wireRealtime() {
       void loadGitStatus(projectId);
     }, 1500));
   });
+  // Возврат фокуса на вкладку/окно → перечитываем статус всех открытых проектов.
+  // Закрывает дыру file-watcher'а: внешние правки (терминал, Rider, коммит/чекаут
+  // вне приложения) меняют .git — а он исключён из watcher'а, так что realtime их
+  // не ловит. Без этого приходилось обновлять страницу руками.
+  const onFocus = () => {
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+    // focus + visibilitychange стреляют парой на один возврат — троттлим, чтобы не
+    // дёргать git status дважды
+    const now = Date.now();
+    if (now - _lastFocusRefresh < 800) return;
+    _lastFocusRefresh = now;
+    for (const id of _state.keys()) {
+      void loadGitStatus(id);
+      if (get(id).unpushedLoaded) void loadUnpushedLog(id);
+      void loadGitStash(id);
+    }
+  };
+  if (typeof window !== 'undefined') {
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onFocus);
+  }
 }
 
 const _fileDebounce = new Map<string, ReturnType<typeof setTimeout>>();
+let _lastFocusRefresh = 0;   // троттл refresh по фокусу окна
 
 // Подключение стора для проекта: realtime + первичная загрузка статуса
 export function ensureGit(projectId: string): void {
@@ -161,6 +183,9 @@ export const gitStageAll = (projectId: string) =>
   mutate(projectId, () => api.git.stageAll(projectId));
 export const gitDiscard = (projectId: string, path: string) =>
   mutate(projectId, () => api.git.discard(projectId, path));
+
+export const gitDiscardAll = (projectId: string) =>
+  mutate(projectId, () => api.git.discardAll(projectId));
 export const gitCheckout = (projectId: string, branch: string) =>
   mutate(projectId, () => api.git.checkout(projectId, branch)).then(ok => {
     if (ok) void loadGitBranches(projectId);

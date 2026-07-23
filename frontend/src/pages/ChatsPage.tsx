@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Menu as MenuIcon, MessageCircle, Pin, Plus } from 'lucide-react';
+import { Menu as MenuIcon, MessageCircle, Plus } from 'lucide-react';
 import type { AuthState, Session, SkillInfo } from '../types';
 import { api } from '../lib/api';
 import { joinUser, onMessage } from '../lib/signalr';
@@ -8,7 +8,7 @@ import { showToast } from '../lib/toast';
 import { C, FONT } from '../lib/design';
 import { useSidebarDrag } from '../lib/sidebarWidth';
 import { useIsMobile } from '../lib/breakpoints';
-import { Button, IconButton, Splitter } from '../components/ui';
+import { Button, IconButton, Splitter, SidebarSplitter } from '../components/ui';
 import { ICON_SIZE } from '../components/ui/icons';
 import type { HubTabValue } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
@@ -51,13 +51,13 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
   // Вложения относятся к конкретному чату — сбрасываем при смене активного
   useEffect(() => { setAttachedFiles([]); }, [activeId]);
 
-  // Режим сайдбара чатов: pinned (в потоке) | collapsed (свёрнут) | open (drawer поверх).
-  // Персистируем только pinned/collapsed; open — временное состояние.
-  const [sidebarMode, setSidebarMode] = useState<'pinned' | 'collapsed' | 'open'>(() =>
+  // Режим сайдбара чатов: pinned (в потоке) | collapsed (свёрнут). Сворачивание —
+  // кнопкой на сплиттере, разворот — гамбургером обратно в поток.
+  const [sidebarMode, setSidebarMode] = useState<'pinned' | 'collapsed'>(() =>
     localStorage.getItem('cc_chats_sidebar_mode') === 'collapsed' ? 'collapsed' : 'pinned'
   );
   useEffect(() => {
-    if (sidebarMode !== 'open') localStorage.setItem('cc_chats_sidebar_mode', sidebarMode);
+    localStorage.setItem('cc_chats_sidebar_mode', sidebarMode);
   }, [sidebarMode]);
 
   // Ширина сайдбара — общая для всех разделов (единый хук: та же ширина и клампы,
@@ -167,8 +167,6 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
     setActiveId(chat.id);
     localStorage.setItem(OPEN_CHAT_KEY, chat.id);
     navPush({ screen: 'chats', chatId: chat.id });
-    // В режиме drawer после выбора — закрываем оверлей
-    setSidebarMode(m => m === 'open' ? 'collapsed' : m);
   };
 
   // Возврат из открытого чата к списку (мобилка). Детерминированно, не полагаясь на history.back():
@@ -205,27 +203,14 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
     if (activeId === id) backToList();
   };
 
-  // Открыть drawer (когда сайдбар не закреплён) — проброс в шапку ChatPanel
-  const openSidebar = sidebarMode !== 'pinned' ? () => setSidebarMode('open') : undefined;
+  // Развернуть свёрнутый сайдбар в поток — проброс в шапку ChatPanel
+  const openSidebar = sidebarMode !== 'pinned' ? () => setSidebarMode('pinned') : undefined;
 
-  // Внутренность сайдбара: строка управления (закрепить/свернуть) + список чатов
+  // Внутренность сайдбара: список чатов (управление сворачиванием — на сплиттере)
   const sidebarInner = (
-    <>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8, minHeight: 28 }}>
-        <span style={{ flex: 1, minWidth: 0, fontSize: 14, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Чаты</span>
-        {/* Пин — самая правая кнопка: закрепляет (drawer→в потоке) либо откепляет-сворачивает панель */}
-        <IconButton
-          onClick={() => setSidebarMode(sidebarMode === 'open' ? 'pinned' : 'collapsed')}
-          title={sidebarMode === 'open' ? 'Закрепить панель' : 'Открепить панель'}
-          size="sm"
-        >
-          <Pin size={ICON_SIZE.sm} strokeWidth={2} fill={sidebarMode === 'pinned' ? 'currentColor' : 'none'} />
-        </IconButton>
-      </div>
-      <div style={{ flex: 1, minHeight: 0 }}>
-        <ChatList chats={chats} activeId={activeId} onSelect={selectChat} onNew={newChat} creating={creating} onEdited={handleChatEdited} onDeleted={handleChatDeleted} workflowRunningFor={workflowRunningFor ?? undefined} />
-      </div>
-    </>
+    <div style={{ flex: 1, minHeight: 0 }}>
+      <ChatList chats={chats} activeId={activeId} onSelect={selectChat} onNew={newChat} creating={creating} onEdited={handleChatEdited} onDeleted={handleChatDeleted} workflowRunningFor={workflowRunningFor ?? undefined} />
+    </div>
   );
 
   // === Мобильная раскладка: список ИЛИ полноэкранный чат (не две панели) ===
@@ -273,36 +258,17 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
     <div style={{ height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <HubHeader value="chats" onTab={onHubTab} auth={auth} onLogout={onLogout} />
 
-      {/* Тело: сайдбар списка (pinned/collapsed/open) + центр */}
+      {/* Тело: сайдбар списка (pinned/collapsed) + центр */}
       <div style={{ flex: 1, minHeight: 0, display: 'flex', position: 'relative' }}>
 
-        {/* === Pinned: сайдбар в потоке (перетаскиваемая ширина) === */}
+        {/* === Pinned: сайдбар в потоке + сплиттер с всплывающей кнопкой «свернуть» === */}
         {sidebarMode === 'pinned' && (
           <>
             <div style={{ width: sidebarWidth, flexShrink: 0, background: C.bgPanel, padding: '8px 10px 14px', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
               {sidebarInner}
             </div>
-            <Splitter active={draggingSplitter} onMouseDown={handleSidebarSplitterMouseDown} />
+            <SidebarSplitter active={draggingSplitter} onMouseDown={handleSidebarSplitterMouseDown} onCollapse={() => setSidebarMode('collapsed')} />
           </>
-        )}
-
-        {/* === Collapsed / Open: drawer поверх === */}
-        {sidebarMode !== 'pinned' && (
-          <div style={{
-            position: 'absolute', top: 0, left: 0, bottom: 0, zIndex: 10, width: 288,
-            background: C.bgPanel, borderRight: `1px solid ${C.border}`, padding: '8px 10px 14px',
-            display: 'flex', flexDirection: 'column',
-            transform: sidebarMode === 'open' ? 'translateX(0)' : 'translateX(-300px)',
-            transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-            boxShadow: sidebarMode === 'open' ? '4px 0 20px rgba(20,16,10,0.15)' : 'none',
-          }}>
-            {sidebarInner}
-          </div>
-        )}
-
-        {/* Backdrop — только когда drawer открыт */}
-        {sidebarMode === 'open' && (
-          <div onClick={() => setSidebarMode('collapsed')} style={{ position: 'absolute', inset: 0, zIndex: 9, background: C.overlay }} />
         )}
 
         {/* Центр */}
@@ -324,7 +290,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
             <>
               {sidebarMode === 'collapsed' && (
                 <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', padding: '0 8px', height: 52, borderBottom: `1px solid ${C.divider}` }}>
-                  <IconButton onClick={() => setSidebarMode('open')} title="Открыть панель" size="md" variant="soft">
+                  <IconButton onClick={() => setSidebarMode('pinned')} title="Открыть панель" size="md" variant="soft">
                     <MenuIcon size={ICON_SIZE.sm} strokeWidth={2} />
                   </IconButton>
                 </div>

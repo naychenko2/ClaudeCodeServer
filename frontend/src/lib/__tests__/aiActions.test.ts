@@ -18,6 +18,7 @@ describe('rankedActions — доступность и ранжирование',
     // (home.overview/home.resume контекстны только на Home, но видны везде). Порядок —
     // каталожный: контекстных на «Чатах» нет, поэтому все идут в порядке AI_ACTIONS.
     expect(r.map(x => x.action.id)).toEqual([
+      'chat.widget',
       'global.briefing', 'global.search', 'global.whatsnew',
       'home.overview', 'home.resume', 'global.capture',
     ]);

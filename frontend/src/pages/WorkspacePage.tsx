@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo, useLayoutEffect, type ReactNode } from 'react';
-import { Plus, MessageCircle, Pin } from 'lucide-react';
+import { Plus, MessageCircle } from 'lucide-react';
 import type { Project, Session, SkillsData, AuthState, Task, ProjectService } from '../types';
 import { SessionList } from '../components/SessionList';
 import { FileExplorer } from '../components/FileExplorer';
@@ -20,12 +20,13 @@ import { PillSwitch } from '../components/Toolbar';
 import { ToolbarOverflowMenu, type OverflowItem } from '../components/ToolbarOverflowMenu';
 import type { HubTabValue } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
-import { BackButton, Button, IconButton, Splitter } from '../components/ui';
+import { BackButton, Button, IconButton, Splitter, SidebarSplitter } from '../components/ui';
 import { ICON_SIZE } from '../components/ui/icons';
 import { showToast } from '../lib/toast';
 import { navPush, navReplace, parseHash, type NavSnapshot } from '../lib/nav';
 import { EditDialog } from '../features/projects/dialogs/EditDialog';
 import { ProjectIcon } from '../features/projects/ProjectIcon';
+import { SidebarProjectSwitcher } from '../features/projects/SidebarProjectSwitcher';
 import { TasksPanel } from '../features/tasks/TasksPanel';
 import { PillViewSwitcher, ListIcon, ByDateIcon, BoardIcon } from '../features/tasks/bits';
 import { TaskDetailsPane } from '../features/tasks/TaskDetailsPane';
@@ -276,6 +277,8 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
   // в новом режиме вкладки «Инструменты» нет, но панелька терминала должна получать
   // список всегда. Режим (ccPanelsMode) считается ниже — ему нужна ширина окна.
   const ccPanels = useFeature(FLAGS.workspaceCcPanels);
+  // Переключатель проектов в плашке сайдбара (вместо зоны в шапке)
+  const sidebarSwitcher = useFeature(FLAGS.sidebarProjectSwitcher);
   type ToolsTab = 'terminal' | 'preview';
   const [toolsTab, setToolsTab] = useState<ToolsTab>('terminal');
   const [activeTerminalId, setActiveTerminalId] = useState<string | null>(null);
@@ -785,16 +788,14 @@ const windowWidth = useWindowWidth();
   // Ширина сайдбара — общая для всех областей (перетаскиваемая, персистится)
   const [sidebarWidth, setSidebarWidth] = useSidebarWidth();
 
-  // Режим сайдбара: pinned (в потоке) | collapsed (свёрнут) | open (drawer поверх контента)
-  // Персистируется только 'pinned'/'collapsed'; 'open' — временное состояние
-  const [sidebarMode, setSidebarMode] = useState<'pinned' | 'collapsed' | 'open'>(() => {
+  // Режим сайдбара: pinned (в потоке) | collapsed (свёрнут). Сворачивание — кнопкой
+  // на сплиттере, разворот — гамбургером обратно в поток.
+  const [sidebarMode, setSidebarMode] = useState<'pinned' | 'collapsed'>(() => {
     const v = localStorage.getItem('cc_sidebar_mode');
     return v === 'collapsed' ? 'collapsed' : 'pinned';
   });
   useEffect(() => {
-    if (sidebarMode !== 'open') {
-      localStorage.setItem('cc_sidebar_mode', sidebarMode);
-    }
+    localStorage.setItem('cc_sidebar_mode', sidebarMode);
   }, [sidebarMode]);
 
   // Панель «Артефакты сессии»: открыта/закрыта + ширина, персист в localStorage
@@ -859,8 +860,11 @@ const windowWidth = useWindowWidth();
     setActiveSession(session);
     setPendingMessage(firstMessage);
     if (!autoSelect) {
-      // явный выбор — закрываем файл и открытую задачу, показываем чат во весь экран
+      // явный выбор — закрываем файл, просмотр коммита и открытую задачу, показываем чат во весь экран
       setOpenFile(null);
+      setOpenFileDiffMode(false);
+      setOpenCommitSha(null);
+      setOpenCommitFile(null);
       setSelectedTaskId(null);
       // Пишем запись истории с chatId — для URL #/project/{id}/chat/{chatId}
       // и кнопки «назад/вперёд» браузера.
@@ -1053,6 +1057,21 @@ const windowWidth = useWindowWidth();
     if (isMobile) setMobileView('sidebar');
   };
 
+  // Смена git-скоупа/коммита в панели «Изменения» — центральную область сбрасываем
+  // к чату: убираем открытый файл, просмотр коммита и открытую задачу (если что-то показано)
+  const clearCenterToChat = () => {
+    if (!openFile && !openCommitSha && !selectedTaskId) return;  // уже чат — ничего не делаем
+    setOpenFile(null);
+    setOpenFileDiffMode(false);
+    setGitStagePath(null);
+    setFileFullscreen(false);
+    setOpenCommitSha(null);
+    setOpenCommitFile(null);
+    setSelectedTaskId(null);
+    if (isMobile) setMobileView('chat');
+    navReplace({ screen: 'project', project, view: isMobile ? 'chat' : 'sidebar', file: null, task: null });
+  };
+
   // Тулбар-«назад»: ДЕТЕРМИНИРОВАННЫЙ подъём к списку текущей вкладки внутри проекта.
   // НЕ history.back — при открытии приложения сразу на глубоком месте (восстановление/диплинк)
   // история браузера пуста, и history.back() ничего не делает. Всегда ведём на уровень выше.
@@ -1187,7 +1206,12 @@ const windowWidth = useWindowWidth();
               лишнего padding; hover-подложка кликабельной зоны компенсируется margin -6, чтобы
               иконка/текст стояли вровень с краем панели, а фон при наведении чуть выступал. */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 13, minHeight: 28 }}>
-            {/* Индикатор + имя проекта — кликабельны, ведут к списку проектов */}
+            {sidebarSwitcher ? (
+              // Флаг sidebar-project-switcher: плашка = переключатель проектов
+              // (таблетка активного + иконки других со статусами + палитра)
+              <SidebarProjectSwitcher project={projectForEdit} onOpenSettings={() => setEditProjectOpen(true)} />
+            ) : (
+            /* Индикатор + имя проекта — кликабельны, ведут к списку проектов */
             <div
               onClick={onGoToProjects}
               title="Все проекты"
@@ -1200,6 +1224,10 @@ const windowWidth = useWindowWidth();
                 {projectForEdit.name}
               </span>
             </div>
+            )}
+            {/* Шестеренка нужна только старой плашке: в переключателе настройки
+                открываются кликом по иконке активного проекта */}
+            {!sidebarSwitcher && (
             <IconButton
               size="sm"
               onClick={() => setEditProjectOpen(true)}
@@ -1210,14 +1238,7 @@ const windowWidth = useWindowWidth();
                 <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
               </svg>
             </IconButton>
-            {/* Пин — самая правая кнопка: закрепляет (drawer→в потоке) либо откепляет-сворачивает панель */}
-            <IconButton
-              size="sm"
-              onClick={() => setSidebarMode(sidebarMode === 'open' ? 'pinned' : 'collapsed')}
-              title={sidebarMode === 'open' ? 'Закрепить панель' : 'Открепить панель'}
-            >
-              <Pin size={ICON_SIZE.sm} strokeWidth={2} fill={sidebarMode === 'pinned' ? 'currentColor' : 'none'} />
-            </IconButton>
+            )}
           </div>
           <PillSwitch<LeftTab>
             value={leftTab}
@@ -1464,7 +1485,7 @@ const windowWidth = useWindowWidth();
             files: fileSubTab === 'files'
               ? <FileExplorer project={project} activeFilePath={openFile} isMobile={false} onOpenFile={handleOpenFileFromTree} onOpenGitDiff={handleOpenGitDiff} onOpenCommit={handleOpenCommit} onAddToKnowledge={handleAddToKnowledge} onAddFolderToKnowledge={handleAddFolderToKnowledge} onRemoveFromKnowledge={handleRemoveFromKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} indexingFolders={indexingFolders} onAttachToChat={activeSession && !fileFullscreen ? handleAttachToChat : undefined} onOpenKnowledge={() => setFileSubTab('knowledge')} />
               : <KnowledgePanel project={project} isMobile={false} onDocumentsChanged={setIndexedFileNames} onBack={() => setFileSubTab('files')} />,
-            changes: <GitChangesRail project={project} onOpenDiff={handleOpenGitDiff} onOpenFile={handleOpenFileFromTree} onOpenCommit={handleOpenCommit} activeFilePath={openFile ?? openCommitFile} onCommit={handleCommitVia} />,
+            changes: <GitChangesRail project={project} onOpenDiff={handleOpenGitDiff} onOpenFile={handleOpenFileFromTree} onOpenCommit={handleOpenCommit} activeFilePath={openFile ?? openCommitFile} activeCommitSha={openCommitSha} onCommit={handleCommitVia} onScopeChange={clearCenterToChat} />,
             tasks: <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={false} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} groupTab={projectGroupTab} onGroupTab={setProjectGroupTab} hideViewSwitcher />,
             team: <ProjectPersonasPanel project={project} selectedId={personaCreating ? null : selectedPersonaId} onSelect={handlePersonaSelect} onNew={handlePersonaNew} onShowTeam={() => { handlePersonaCleared(); setTeamCenterOpen(true); }} teamActive={teamCenterOpen && !selectedPersonaId && !personaCreating} />,
             terminal: <TerminalPanelContent terminals={terminals} activeTerminalId={activeTerminalId} onSelect={handleSelectTerminal} onCreate={handleCreateTerminal} onStop={handleStopTerminal} onActivity={setTerminalBusy} />,
@@ -1491,41 +1512,21 @@ const windowWidth = useWindowWidth();
       ) : (
         <>
 
-      {/* === Pinned: sidebar в flex-потоке, толкает контент === */}
+      {/* === Pinned: sidebar в flex-потоке + сплиттер с кнопкой «свернуть» === */}
       {sidebarMode === 'pinned' && (
         <>
           <div style={{ width: sidebarWidth, flexShrink: 0, height: '100%' }}>
             {Sidebar}
           </div>
-          <Splitter orientation="v" active={draggingSplitter === 'sidebar'}
-            onMouseDown={e => { setDraggingSplitter('sidebar'); handleSidebarSplitterMouseDown(e); }} />
+          <SidebarSplitter active={draggingSplitter === 'sidebar'}
+            onMouseDown={e => { setDraggingSplitter('sidebar'); handleSidebarSplitterMouseDown(e); }}
+            onCollapse={() => setSidebarMode('collapsed')} />
         </>
       )}
 
-      {/* === Collapsed / Open: sidebar absolute drawer === */}
-      {sidebarMode !== 'pinned' && (
-        <div style={{
-          position: 'absolute', top: 0, left: 0, bottom: 0, zIndex: 10,
-          width: 320,
-          transform: sidebarMode === 'open' ? 'translateX(0)' : 'translateX(-320px)',
-          transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-          boxShadow: sidebarMode === 'open' ? '4px 0 20px rgba(20,16,10,0.15)' : 'none',
-        }}>
-          {Sidebar}
-        </div>
-      )}
-
-      {/* Overlay — только когда drawer открыт */}
-      {sidebarMode === 'open' && (
-        <div
-          onClick={() => setSidebarMode('collapsed')}
-          style={{ position: 'absolute', inset: 0, zIndex: 9, background: C.overlay }}
-        />
-      )}
-
-      {/* Проп для ChatPanel — открывает drawer когда sidebar не pinned */}
+      {/* Проп для ChatPanel — разворачивает свёрнутый sidebar в поток */}
       {(() => {
-        const openSidebar = sidebarMode !== 'pinned' ? () => setSidebarMode('open') : undefined;
+        const openSidebar = sidebarMode !== 'pinned' ? () => setSidebarMode('pinned') : undefined;
 
         // NoSession с топбаром для ☰ (когда нет активного чата)
         const NoSessionWithBar = (
@@ -1535,7 +1536,7 @@ const windowWidth = useWindowWidth();
                 <IconButton
                   size="md"
                   variant="soft"
-                  onClick={() => setSidebarMode('open')}
+                  onClick={() => setSidebarMode('pinned')}
                   title="Открыть панель"
                 >
                   <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
@@ -1552,7 +1553,7 @@ const windowWidth = useWindowWidth();
         if (leftTab === 'tools') {
           const collapsedBar = sidebarMode === 'collapsed' && (
             <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', padding: '0 8px', height: 52, borderBottom: `1px solid ${C.divider}`, background: C.bgMain }}>
-              <IconButton size="md" variant="soft" onClick={() => setSidebarMode('open')} title="Открыть панель">
+              <IconButton size="md" variant="soft" onClick={() => setSidebarMode('pinned')} title="Открыть панель">
                 <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
                   <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
                 </svg>
@@ -1570,7 +1571,7 @@ const windowWidth = useWindowWidth();
         if (personasMode) {
           const collapsedBar = sidebarMode === 'collapsed' && (
             <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', padding: '0 8px', height: 52, borderBottom: `1px solid ${C.divider}`, background: C.bgMain }}>
-              <IconButton size="md" variant="soft" onClick={() => setSidebarMode('open')} title="Открыть панель">
+              <IconButton size="md" variant="soft" onClick={() => setSidebarMode('pinned')} title="Открыть панель">
                 <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
                   <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
                 </svg>

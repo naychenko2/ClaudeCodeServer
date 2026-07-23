@@ -206,11 +206,22 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
       ));
 
     case 'tool_result':
-      return withItems(prev.items.map(item =>
-        item.kind === 'tool_use' && item.id === msg.toolUseId
-          ? { ...item, result: msg.content, isError: msg.isError }
-          : item
-      ));
+      // streamingArg сбрасываем и здесь: результат пришёл — стрим аргументов точно кончился.
+      // Страховка от пропуска финального tool_use (реконнект/гонка) — иначе карточка,
+      // рендерящая по streamingArg (WidgetView), навсегда зависает в состоянии «готовлю».
+      // Если input так и остался пустым (ранняя карточка), достраиваем его из накопленного
+      // стрима: streamingArg к этому моменту обычно содержит полный JSON аргументов.
+      return withItems(prev.items.map(item => {
+        if (!(item.kind === 'tool_use' && item.id === msg.toolUseId)) return item;
+        let input = item.input;
+        const inputEmpty = input == null
+          || (typeof input === 'object' && Object.keys(input as object).length === 0);
+        if (item.streamingArg !== undefined && inputEmpty) {
+          try { input = JSON.parse(item.streamingArg); }
+          catch { /* неполный json — оставляем как было */ }
+        }
+        return { ...item, input, result: msg.content, isError: msg.isError, streamingArg: undefined };
+      }));
 
     // Ожидающие карточки сервер РЕПЛЕИТ при JoinSession (реконнект, пока CLI ждёт ответа) —
     // обработка идемпотентна: дубль по requestId/toolUseId не добавляется повторно.

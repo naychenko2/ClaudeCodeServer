@@ -182,6 +182,34 @@ describe('applyServerMessage: инструменты', () => {
     const next = run([{ type: 'workflow_progress', toolUseId: 't1', agents, isDone: true }], initial);
     expect(next.items[0]).toMatchObject({ workflowAgents: agents, workflowDone: true });
   });
+
+  it('tool_result без финального tool_use: сбрасывает streamingArg и достраивает input из стрима', () => {
+    // Реконнект/гонка: финальный tool_use с полным input потерялся, но дельты накопили полный JSON
+    const initial = state({ items: [toolUse('t1', { input: {}, streamingArg: '{"html":"<b>w</b>","title":"Т"}' })] });
+    const next = run([{ type: 'tool_result', toolUseId: 't1', content: 'ok', isError: false }], initial);
+    expect(next.items[0]).toMatchObject({
+      result: 'ok', streamingArg: undefined, input: { html: '<b>w</b>', title: 'Т' },
+    });
+  });
+
+  it('tool_result с неполным streamingArg: спиннер снят, input не трогаем', () => {
+    const initial = state({ items: [toolUse('t1', { input: {}, streamingArg: '{"html":"<b' })] });
+    const next = run([{ type: 'tool_result', toolUseId: 't1', content: 'ok', isError: false }], initial);
+    expect(next.items[0]).toMatchObject({ result: 'ok', streamingArg: undefined, input: {} });
+  });
+
+  // Смок: widget_show — обычный generic tool_use, спец-веток в редьюсере нет и не нужно
+  // (страховка от будущих спец-веток: рендер решается на уровне ChatItemView)
+  it('widget_show проходит цепочку stream → final → result как обычный tool_use', () => {
+    const initial = run([{ type: 'tool_use', id: 'w1', name: 'mcp__widgets__widget_show', input: {} }]);
+    const streamed = run([{ type: 'tool_input_delta', toolUseId: 'w1', partialJson: '{"html":"<b>' }], initial);
+    expect(streamed.items[0]).toMatchObject({ streamingArg: '{"html":"<b>' });
+    const finalized = run([{ type: 'tool_use', id: 'w1', name: 'mcp__widgets__widget_show', input: { html: '<b>hi</b>', title: 'Т' } }], streamed);
+    expect(finalized.items).toHaveLength(1);
+    expect(finalized.items[0]).toMatchObject({ input: { html: '<b>hi</b>', title: 'Т' }, streamingArg: undefined });
+    const done = run([{ type: 'tool_result', toolUseId: 'w1', content: 'Виджет показан', isError: false }], finalized);
+    expect(done.items[0]).toMatchObject({ result: 'Виджет показан', isError: false });
+  });
 });
 
 // --- bg_agent_done (завершение фоновых агентов) ---

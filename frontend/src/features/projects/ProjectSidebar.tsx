@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import type { ProjectGroup } from '../../types';
 import { C, R, FONT, SHADOW } from '../../lib/design';
 import { IconButton } from '../../components/ui';
-import { Pin, Settings, LayoutGrid, Inbox } from 'lucide-react';
+import { Settings, LayoutGrid, Inbox } from 'lucide-react';
 import { ICON_SIZE } from '../../components/ui/icons';
 
 export type ProjectView = 'all' | 'sleeping' | string;   // string = groupId
@@ -13,31 +13,16 @@ interface Props {
   total: number;
   groups: { group: ProjectGroup; count: number }[];
   sleepingCount: number;
-  onCollapse?: () => void;
-  onPin?: () => void;        // «закрепить» — показывается в режиме drawer (open)
   onManageGroups?: () => void;
 }
 
 // Левый сайдбар навигации: «Все проекты» + список групп + «Без группы».
-export function ProjectSidebar({ view, onSelect, total, groups, sleepingCount, onCollapse, onPin, onManageGroups }: Props) {
+export function ProjectSidebar({ view, onSelect, total, groups, sleepingCount, onManageGroups }: Props) {
   return (
     <aside style={{
       width: '100%', height: '100%', boxSizing: 'border-box', background: C.bgPanel,
       padding: '8px 10px 14px', overflowY: 'auto', display: 'flex', flexDirection: 'column',
     }}>
-      {onCollapse && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8, minHeight: 28 }}>
-          <span style={{ flex: 1, minWidth: 0, fontSize: 14, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Проекты</span>
-          {/* Пин — самая правая кнопка: onPin (в режиме drawer — закрепить) либо onCollapse (открепить-свернуть) */}
-          <IconButton
-            onClick={onPin ?? onCollapse}
-            title={onPin ? 'Закрепить панель' : 'Открепить панель'}
-            size="sm"
-          >
-            <Pin size={ICON_SIZE.sm} strokeWidth={2} fill={onPin ? 'none' : 'currentColor'} />
-          </IconButton>
-        </div>
-      )}
       <Row
         selected={view === 'all'}
         onClick={() => onSelect('all')}

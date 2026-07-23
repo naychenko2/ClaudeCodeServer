@@ -3,6 +3,7 @@ export type { ButtonVariant, ButtonSize } from './Button';
 export { IconButton } from './IconButton';
 export type { IconButtonSize, IconButtonTone, IconButtonVariant } from './IconButton';
 export { Splitter } from './Splitter';
+export { SidebarSplitter } from './SidebarSplitter';
 export { Menu, MenuItem } from './Menu';
 export { Modal } from './Modal';
 export { ModalActions, useIsMobileModal } from './ModalActions';

@@ -54,6 +54,10 @@ public sealed record RecallBlock(string? Text, IReadOnlyList<RecallItem> Items);
 // personaId в создаваемое уведомление (лицо персоны на уведомлении).
 public record NotificationsMcpContext(string ApiUrl, string Token, string? SelfPersonaId = null);
 
+// Контекст MCP-сервера виджетов (widget_show): чистый маркер «сессия с владельцем» —
+// серверу не нужны ни API, ни токен, он только валидирует input; HTML рендерит фронт.
+public sealed record WidgetsMcpContext;
+
 // Один MCP-сервер внешнего модуля (контракт docs/module-platform-integration-contract.md §6):
 // Key — ключ сервера в mcp-конфиге хода, Command/Args — запуск из манифеста (args уже
 // резолвнуты от каталога модуля), ModuleId — id модуля, ApiUrl — адрес модуля ЧЕРЕЗ gateway
@@ -128,4 +132,6 @@ public sealed record LlmSessionContext(
     Execution.IProcessLauncher? Launcher = null,
     // MCP-серверы внешних модулей из реестра (контракт §6, ТЗ R7); null — модулей нет
     // или скрыты фич-флагами. Аддитивно к встроенным серверам, коллизии ключей — пропуск.
-    ModulesMcpContext? ModulesMcp = null);
+    ModulesMcpContext? ModulesMcp = null,
+    // MCP-сервер виджетов чата (widget_show): null — нет владельца сессии.
+    WidgetsMcpContext? WidgetsMcp = null);

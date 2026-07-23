@@ -34,6 +34,7 @@ import { ChatItemView, FileChangedRow } from './chat/ChatItemView';
 import { type ToolUseItem } from './chat/ToolUseView';
 import { extractMediaFromResult } from './chat/MediaBlock';
 import { isTasksCreate } from './chat/TaskCreatedView';
+import { isWidgetShow } from './chat/WidgetView';
 import { WorkflowBlockView } from './chat/WorkflowBlockView';
 
 interface Props {
@@ -859,7 +860,12 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         // Карточка «Задача создана» (tasks_create) — тоже не прячется в свёртку;
         // ошибочный вызов деградирует в обычную строку инструмента и сворачивается как все
         const isTaskCardEntry = (it: ChatItem) => it.kind === 'tool_use' && !it.isError && isTasksCreate(it.name);
-        const isPinnedEntry = (it: ChatItem) => isAgentEntry(it) || isMediaEntry(it) || isTaskCardEntry(it);
+        // HTML-виджет (widget_show) — визуальный результат для пользователя, как медиа:
+        // всегда виден в ленте, в свёртку не прячется. Ошибка — обычная строка
+        // инструмента, сворачивается как все
+        const isWidgetEntry = (it: ChatItem) =>
+          it.kind === 'tool_use' && !it.isError && isWidgetShow(it.name);
+        const isPinnedEntry = (it: ChatItem) => isAgentEntry(it) || isMediaEntry(it) || isTaskCardEntry(it) || isWidgetEntry(it);
         const toolCount = slice.filter(([it]) => it.kind === 'tool_use' && !isPinnedEntry(it)).length;
         // Группа завершена, как только после неё появился следующий видимый элемент
         // (текст ассистента, запрос разрешения, result, error…) — конца хода не ждём.
@@ -1038,7 +1044,13 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         <FalCostContext.Provider value={falCostByRequest}><ChatProjectContext.Provider value={projectCtx}>{renderedItems}</ChatProjectContext.Provider></FalCostContext.Provider>
 
         {online && showWaiting && (
-          <WaitingIndicator planning={planningKind} />
+          // Текст индикатора ставим по левому краю чата (как пузыри), а домик уезжает
+          // в жёлоб перед ним: домик 19px + зазор 10px = 29px сдвига. Под левым краем
+          // пузырей дым из трубы (вверх-влево) наезжал на контент сверху; в жёлобе над
+          // домиком и слева пузырей нет — дым пыхтит в пустоту.
+          <div style={{ marginLeft: isMobile ? -12 : -29, marginTop: 5 }}>
+            <WaitingIndicator planning={planningKind} />
+          </div>
         )}
 
         {/* Баннер прерванной сессии — в конце ленты, после истории */}

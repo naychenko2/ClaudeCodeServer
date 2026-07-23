@@ -29,6 +29,7 @@ export function AiLauncher() {
   const [q, setQ] = useState('');
   const [idx, setIdx] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
   const hoverTimer = useRef<number | null>(null);
   // Push-слой: активная проактивная подсказка + состояние тумблера
   const [suggestion, setSuggestion] = useState<Suggestion | null>(null);
@@ -100,11 +101,21 @@ export function AiLauncher() {
   const items = useMemo(() => {
     if (!open) return [];
     const ranked = rankedActions(buildCtx(), q).map(r => ({ ...r, recLevel: recs.find(x => x.id === r.action.id)?.level }));
-    if (recs.length === 0) return ranked;
-    const pos = (id: string) => { const i = recs.findIndex(x => x.id === id); return i < 0 ? Number.MAX_SAFE_INTEGER : i; };
-    const ctxItems = ranked.filter(r => r.contextual).sort((a, b) => pos(a.action.id) - pos(b.action.id));
-    const rest = ranked.filter(r => !r.contextual);
-    return [...ctxItems, ...rest];
+    // Базовый порядок: рекомендованные/контекстные выше (rankedActions уже даёт
+    // contextual-first; при наличии recs подтягиваем рекомендованные по их рангу).
+    let base = ranked;
+    if (recs.length > 0) {
+      const pos = (id: string) => { const i = recs.findIndex(x => x.id === id); return i < 0 ? Number.MAX_SAFE_INTEGER : i; };
+      const ctxItems = ranked.filter(r => r.contextual).sort((a, b) => pos(a.action.id) - pos(b.action.id));
+      const rest = ranked.filter(r => !r.contextual);
+      base = [...ctxItems, ...rest];
+    }
+    // Группируем по зонам (Чат / Проект / Глобально). Порядок зон — по первому
+    // появлению в base, т.е. релевантные контексту зоны оказываются выше.
+    // sort стабилен → внутризонный порядок (контекстность/ранг) сохраняется.
+    const zoneRank: string[] = [];
+    for (const it of base) { const z = zoneOf(it.action.section); if (!zoneRank.includes(z)) zoneRank.push(z); }
+    return base.slice().sort((a, b) => zoneRank.indexOf(zoneOf(a.action.section)) - zoneRank.indexOf(zoneOf(b.action.section)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, q, online, semanticCaps, recs, gitRepo]);
 
@@ -123,6 +134,12 @@ export function AiLauncher() {
   }, [open, gradedFab]);
 
   useEffect(() => { setIdx(0); }, [q, open]);
+  // Держим активный (стрелками) пункт в видимой области списка. block:'nearest' —
+  // не дёргает, если пункт уже виден (напр. при наведении мышью).
+  useEffect(() => {
+    if (!open) return;
+    listRef.current?.querySelector<HTMLElement>(`[data-idx="${idx}"]`)?.scrollIntoView({ block: 'nearest' });
+  }, [idx, open]);
   // На мобиле НЕ автофокусим поле — иначе сразу выскакивает клавиатура и перекрывает
   // список действий. Фокус (и клавиатура) — только по явному тапу пользователя.
   useEffect(() => { if (open && !isMobile) setTimeout(() => inputRef.current?.focus(), 40); }, [open, isMobile]);
@@ -364,18 +381,18 @@ export function AiLauncher() {
             </div>
 
             {/* Список */}
-            <div style={{ overflowY: 'auto', padding: 8, maxHeight: 'min(52vh, 400px)' }}>
+            <div ref={listRef} style={{ overflowY: 'auto', padding: 8, maxHeight: 'min(52vh, 400px)' }}>
               {items.length === 0 && (
                 <div style={emptyStyle}>{q ? 'Ничего не найдено' : 'Нет доступных действий'}</div>
               )}
               {items.map((it, i) => {
                 const prev = items[i - 1];
-                const showCtxHeader = it.contextual && i === 0;
-                const showSecHeader = !it.contextual && (!prev || prev.contextual || prev.action.section !== it.action.section);
+                const zone = zoneOf(it.action.section);
+                // Разделитель зоны — перед первым действием зоны (стиль дат в списке чатов)
+                const showZoneHeader = !prev || zoneOf(prev.action.section) !== zone;
                 return (
-                  <div key={it.action.id}>
-                    {showCtxHeader && <div style={{ ...groupHeader, color: C.accent }}>Здесь и сейчас{ctxLabel ? ` · ${ctxLabel}` : ''}</div>}
-                    {showSecHeader && <div style={groupHeader}>{it.action.sectionLabel}</div>}
+                  <div key={it.action.id} data-idx={i}>
+                    {showZoneHeader && <ZoneDivider title={ZONE_LABEL[zone]} first={i === 0} />}
                     <button
                       onClick={() => fire(it.action)}
                       onMouseEnter={() => setIdx(i)}
@@ -391,9 +408,7 @@ export function AiLauncher() {
                         <span style={itemTitle}>{it.action.title}</span>
                         <span style={itemHint}>{it.action.hint}</span>
                       </span>
-                      {it.recLevel
-                        ? <span style={recBadge(it.recLevel)}>{levelLabel(it.recLevel)}</span>
-                        : <span style={itemSec}>{it.action.sectionLabel}</span>}
+                      {it.recLevel && <span style={recBadge(it.recLevel)}>{levelLabel(it.recLevel)}</span>}
                     </button>
                   </div>
                 );
@@ -418,6 +433,26 @@ export function AiLauncher() {
         document.body,
       )}
     </>
+  );
+}
+
+// Зоны палитры: действия чата, действия проекта и всё прочее («Глобально» —
+// заметки/задачи/персоны/знания, не привязанные к текущему проекту/чату). Группы
+// разделяются в ленте линией-разделителем (стиль дат в списке чатов).
+type AiZone = 'chat' | 'project' | 'global';
+const zoneOf = (section: string): AiZone => section === 'chat' ? 'chat' : section === 'project' ? 'project' : 'global';
+const ZONE_LABEL: Record<AiZone, string> = { chat: 'Чат', project: 'Проект', global: 'Глобально' };
+
+// Разделитель зоны: бледная черта по бокам + подпись в старом моно-uppercase стиле
+// (как прежние заголовки групп). Черта — borderLight, чтобы не спорить с контентом.
+function ZoneDivider({ title, first }: { title: string; first?: boolean }) {
+  const line: React.CSSProperties = { flex: 1, height: 1, background: C.borderLight };
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: `${first ? 0 : 10}px 8px 5px` }}>
+      <div style={line} />
+      <span style={{ fontFamily: FONT.mono, fontSize: 10.5, textTransform: 'uppercase', letterSpacing: 0.6, color: C.textMuted, whiteSpace: 'nowrap' }}>{title}</span>
+      <div style={line} />
+    </div>
   );
 }
 
@@ -479,8 +514,7 @@ const paletteStyle: React.CSSProperties = {
   display: 'flex', flexDirection: 'column',
 };
 const searchRow: React.CSSProperties = {
-  display: 'flex', alignItems: 'center', gap: 10, padding: '13px 16px',
-  borderBottom: `1px solid ${C.border}`,
+  display: 'flex', alignItems: 'center', gap: 10, padding: '13px 16px 8px',
 };
 const inputStyle: React.CSSProperties = {
   flex: 1, minWidth: 0, border: 'none', background: 'transparent', outline: 'none',
@@ -489,10 +523,6 @@ const inputStyle: React.CSSProperties = {
 const ctxBadge: React.CSSProperties = {
   flex: 'none', fontFamily: FONT.mono, fontSize: 10.5, textTransform: 'uppercase', letterSpacing: 0.4,
   color: C.textMuted, background: C.bgInset, border: `1px solid ${C.border}`, borderRadius: R.sm, padding: '3px 8px',
-};
-const groupHeader: React.CSSProperties = {
-  fontFamily: FONT.mono, fontSize: 10.5, textTransform: 'uppercase', letterSpacing: 0.6,
-  color: C.textMuted, padding: '10px 10px 4px',
 };
 const itemStyle: React.CSSProperties = {
   display: 'flex', alignItems: 'center', gap: 12, width: '100%', textAlign: 'left',
@@ -505,9 +535,6 @@ const itemIco: React.CSSProperties = {
 const itemTitle: React.CSSProperties = { display: 'block', fontSize: 14, fontWeight: 600, color: C.textHeading };
 const itemHint: React.CSSProperties = {
   display: 'block', fontSize: 12, color: C.textMuted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-};
-const itemSec: React.CSSProperties = {
-  flex: 'none', fontFamily: FONT.mono, fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.4, color: C.textMuted,
 };
 const emptyStyle: React.CSSProperties = { padding: 26, textAlign: 'center', fontSize: 13.5, color: C.textMuted, fontFamily: FONT.sans };
 const footStyle: React.CSSProperties = {

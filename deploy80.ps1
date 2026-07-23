@@ -101,7 +101,7 @@ Copy-Item (Join-Path $frontendDir 'dist\*') $wwwroot -Recurse -Force -ErrorActio
 
 # --- 6. MCP-серверы (чистый Node, сборка не нужна) ---
 Write-Host '[7/9] Копирование MCP-серверов...' -ForegroundColor Yellow
-foreach ($srv in 'tasks-server', 'notes-server', 'memory-server', 'personas-server', 'workspace-server') {
+foreach ($srv in 'tasks-server', 'notes-server', 'memory-server', 'personas-server', 'workspace-server', 'notifications-server', 'widgets-server') {
     $mcpDst = Join-Path $PublishDir "mcp\$srv"
     New-Item -ItemType Directory -Force $mcpDst -ErrorAction Stop | Out-Null
     Copy-Item (Join-Path $repo "mcp\$srv\*") $mcpDst -Recurse -Force -ErrorAction Stop

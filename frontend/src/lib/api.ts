@@ -1,4 +1,4 @@
-import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo } from '../types';
+import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo } from '../types';
 import { request } from './offline';
 
 export type { WorkflowAgentInfo, WorkflowAgentBlock };
@@ -953,6 +953,8 @@ export const api = {
     // Откат правок файла к HEAD — необратимо (подтверждение на фронте)
     discard: (projectId: string, path: string) =>
       request<GitStatus>(`/projects/${projectId}/git/discard`, { method: 'POST', body: JSON.stringify({ path }) }),
+    discardAll: (projectId: string) =>
+      request<GitStatus>(`/projects/${projectId}/git/discard-all`, { method: 'POST' }),
     commit: (projectId: string, message: string, amend = false) =>
       request<{ sha: string }>(`/projects/${projectId}/git/commit`, {
         method: 'POST', body: JSON.stringify({ message, amend }),
@@ -976,6 +978,9 @@ export const api = {
       request<GitStatus>(`/projects/${projectId}/git/unstage-hunk`, { method: 'POST', body: JSON.stringify({ patch }) }),
     stashList: (projectId: string) =>
       request<GitStashEntry[]>(`/projects/${projectId}/git/stash`),
+    // Файлы отложенного (для просмотра в верхней зоне панели «Изменения», как у коммита)
+    stashShow: (projectId: string, index: number) =>
+      request<{ files: GitFileChange[] }>(`/projects/${projectId}/git/stash/${index}`),
     stashPush: (projectId: string, message?: string) =>
       request<GitStatus>(`/projects/${projectId}/git/stash`, { method: 'POST', body: JSON.stringify({ message: message ?? null }) }),
     stashPop: (projectId: string, index: number) =>

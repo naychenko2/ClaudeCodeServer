@@ -4,7 +4,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   sanitizeLayout, parseLayout, addPanel, removePanel, movePanel, movePanelToNewColumn, movePanelAt,
-  parseWeights, parseWidth, normalizeWeights,
+  parseWeights, parseWidth, parseFullscreen, normalizeWeights,
   COL_DEFAULT, COL_MIN, COL_MAX,
 } from '../../pages/workspace/panelStackState';
 
@@ -155,6 +155,16 @@ describe('parseWidth', () => {
     expect(parseWidth('100')).toBe(COL_MIN);
     expect(parseWidth('9000')).toBe(COL_MAX);
     expect(parseWidth('400')).toBe(400);
+  });
+});
+
+describe('parseFullscreen', () => {
+  it('известный ключ проходит, мусор/пусто/null → null', () => {
+    expect(parseFullscreen('terminal')).toBe('terminal');
+    expect(parseFullscreen('plan')).toBe('plan');
+    expect(parseFullscreen('zzz')).toBeNull();
+    expect(parseFullscreen('')).toBeNull();
+    expect(parseFullscreen(null)).toBeNull();
   });
 });
 

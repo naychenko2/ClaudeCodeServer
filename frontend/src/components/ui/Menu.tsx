@@ -4,10 +4,12 @@ import { C, R, FONT, SHADOW, Z } from '../../lib/design';
 
 // Единое выпадающее меню: карточка + подложка для закрытия по клику вне.
 // Позиционирование задаёт родитель (обёртка position:relative); Menu рисует карточку абсолютно.
-export function Menu({ onClose, align = 'right', top = 30, minWidth = 200, children }: {
+// bottom (если задан) вместо top — карточка растёт ВВЕРХ (для триггеров у нижнего края панели).
+export function Menu({ onClose, align = 'right', top = 30, bottom, minWidth = 200, children }: {
   onClose: () => void;
   align?: 'left' | 'right';
   top?: number;
+  bottom?: number;
   minWidth?: number;
   children: ReactNode;
 }) {
@@ -15,7 +17,7 @@ export function Menu({ onClose, align = 'right', top = 30, minWidth = 200, child
     <>
       <div style={{ position: 'fixed', inset: 0, zIndex: Z.dropdown }} onClick={onClose} />
       <div style={{
-        position: 'absolute', top, [align]: 0, zIndex: Z.dropdown + 1,
+        position: 'absolute', ...(bottom != null ? { bottom } : { top }), [align]: 0, zIndex: Z.dropdown + 1,
         background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
         boxShadow: SHADOW.dropdown, padding: 5, minWidth, display: 'flex', flexDirection: 'column',
       }}>

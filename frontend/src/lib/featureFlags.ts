@@ -13,6 +13,7 @@ export const FLAGS = {
   docAnnotations: 'doc-annotations',
   aiLocalSuggest: 'ai-local-suggest',
   workspaceCcPanels: 'workspace-cc-panels',
+  sidebarProjectSwitcher: 'sidebar-project-switcher',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

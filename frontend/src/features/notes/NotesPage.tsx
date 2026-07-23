@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Menu as MenuIcon, MessageCircle, Pin } from 'lucide-react';
+import { Menu as MenuIcon, MessageCircle } from 'lucide-react';
 import type { AuthState, NoteDetail, NoteSemanticHit, NoteSummary } from '../../types';
 import type { HubTabValue } from '../../components/HubTabs';
 import { HubHeader } from '../../components/HubHeader';
@@ -18,7 +18,7 @@ import { NotesGraph, type GraphStats } from './NotesGraph';
 import { GraphSettingsBody } from './graph/GraphSettingsBody';
 import { useGraphSettings } from './graph/graphSettings';
 import { EmptyState } from '../../components/EmptyState';
-import { Splitter, IconButton, ConfirmDialog } from '../../components/ui';
+import { SidebarSplitter, IconButton, ConfirmDialog } from '../../components/ui';
 import { ICON_SIZE } from '../../components/ui/icons';
 import { CollapseGroup, IconSearch, IconPlus, IconNotes, IconCalendarDay, SourceDot } from './shared';
 import { useSidebarDrag } from '../../lib/sidebarWidth';
@@ -113,11 +113,11 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   // Ширина сайдбара — общая со всеми разделами (чаты/проекты/воркспейс)
   const { width: listWidth, dragging: listDragging, startDrag: startListDrag } = useSidebarDrag();
 
-  // Режим сайдбара: pinned (в потоке) | collapsed (свёрнут) | open (drawer поверх),
-  // как в «Чатах»/«Проектах»/воркспейсе. Персистим только pinned/collapsed.
-  const [sidebarMode, setSidebarMode] = useState<'pinned' | 'collapsed' | 'open'>(() =>
+  // Режим сайдбара: pinned (в потоке) | collapsed (свёрнут). Сворачивание — кнопкой
+  // на сплиттере, разворот — гамбургером обратно в поток.
+  const [sidebarMode, setSidebarMode] = useState<'pinned' | 'collapsed'>(() =>
     localStorage.getItem('cc_notes_sidebar_mode') === 'collapsed' ? 'collapsed' : 'pinned');
-  useEffect(() => { if (sidebarMode !== 'open') localStorage.setItem('cc_notes_sidebar_mode', sidebarMode); }, [sidebarMode]);
+  useEffect(() => { localStorage.setItem('cc_notes_sidebar_mode', sidebarMode); }, [sidebarMode]);
 
   useEffect(() => { void ensureNotesLoaded(); }, []);
 
@@ -225,8 +225,6 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
 
   const selectNote = (id: string) => {
     setSelectedId(id); setMobileView('note'); navPush({ screen: 'notes', note: id });
-    // В режиме drawer после выбора — закрываем оверлей (как в «Чатах»)
-    setSidebarMode(m => m === 'open' ? 'collapsed' : m);
   };
 
   // Возврат к списку (удаление/кнопка «назад» на мобилке): снимаем выбор и
@@ -409,25 +407,9 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
           if (hit) { setSelectedId(hit.newId); navReplace({ screen: 'notes', note: hit.newId }); }
         }} />;
 
-  // Строка управления панелью (только десктоп): свернуть (◀) + «Закрепить» (📌) в режиме drawer
-  const sidebarHeader = (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 10px 0', minHeight: 28, flex: 'none' }}>
-      <span style={{ flex: 1, minWidth: 0, fontSize: 14, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Заметки</span>
-      {/* Пин — самая правая кнопка: закрепляет (drawer→в потоке) либо откепляет-сворачивает панель */}
-      <IconButton
-        onClick={() => setSidebarMode(sidebarMode === 'open' ? 'pinned' : 'collapsed')}
-        title={sidebarMode === 'open' ? 'Закрепить панель' : 'Открепить панель'}
-        size="sm"
-      >
-        <Pin size={ICON_SIZE.sm} strokeWidth={2} fill={sidebarMode === 'pinned' ? 'currentColor' : 'none'} />
-      </IconButton>
-    </div>
-  );
-
   // Сайдбар целиком: управление сверху, ниже — список (режим «Заметки») или фильтры («Граф»)
   const sidebar = (
     <>
-      {!isMobile && sidebarHeader}
       {sidebarControls}
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
         {mode === 'notes' ? listPane : graphSidebar}
@@ -465,41 +447,23 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
         // Возврат к списку — стрелкой/заголовком в тулбаре заметки (onBack), как у файлов
         : <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>{centerPane}</div>
   ) : (
-    // Десктоп: сайдбар (pinned/collapsed/open) | центр — как в «Чатах»/«Проектах»
+    // Десктоп: сайдбар (pinned) + сплиттер с кнопкой сворачивания | центр
     <div style={{ height: '100%', display: 'flex', position: 'relative' }}>
-      {/* Pinned: в потоке + перетаскиваемый сплиттер */}
+      {/* Pinned: в потоке + сплиттер с всплывающей кнопкой «свернуть» */}
       {sidebarMode === 'pinned' && (
         <>
           <div style={{ width: listWidth, flex: 'none', background: C.bgPanel, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
             {sidebar}
           </div>
-          <Splitter active={listDragging} onMouseDown={startListDrag} />
+          <SidebarSplitter active={listDragging} onMouseDown={startListDrag} onCollapse={() => setSidebarMode('collapsed')} />
         </>
       )}
 
-      {/* Collapsed/Open: drawer поверх контента */}
-      {sidebarMode !== 'pinned' && (
-        <div style={{
-          position: 'absolute', top: 0, left: 0, bottom: 0, zIndex: 10, width: Math.min(listWidth, 320),
-          background: C.bgPanel, borderRight: `1px solid ${C.border}`, display: 'flex', flexDirection: 'column',
-          transform: sidebarMode === 'open' ? 'translateX(0)' : 'translateX(-110%)',
-          transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-          boxShadow: sidebarMode === 'open' ? '4px 0 20px rgba(20,16,10,0.15)' : 'none',
-        }}>
-          {sidebar}
-        </div>
-      )}
-
-      {/* Backdrop — только когда drawer открыт */}
-      {sidebarMode === 'open' && (
-        <div onClick={() => setSidebarMode('collapsed')} style={{ position: 'absolute', inset: 0, zIndex: 9, background: C.overlay }} />
-      )}
-
-      {/* Центр: в свёрнутом режиме — тонкая шапка с гамбургером «открыть панель» */}
+      {/* Центр: в свёрнутом режиме — тонкая шапка с гамбургером «открыть панель» (в поток) */}
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
         {sidebarMode === 'collapsed' && (
           <div style={{ flex: 'none', display: 'flex', alignItems: 'center', padding: '0 8px', height: 48, borderBottom: `1px solid ${C.divider}` }}>
-            <IconButton onClick={() => setSidebarMode('open')} title="Открыть панель" size="md" variant="soft">
+            <IconButton onClick={() => setSidebarMode('pinned')} title="Открыть панель" size="md" variant="soft">
               <MenuIcon size={ICON_SIZE.sm} strokeWidth={2} />
             </IconButton>
           </div>

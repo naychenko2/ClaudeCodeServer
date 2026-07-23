@@ -5,13 +5,14 @@
 // WorkspacePage остаётся владельцем состояния и обработчиков — сюда всё приходит
 // пропсами (контент панелек тоже собирается там); HubHeader и диалоги тоже там.
 import { useState, useRef, type ReactNode, type PointerEvent as ReactPointerEvent } from 'react';
-import { Plus, MessageCircle, Pin } from 'lucide-react';
+import { Plus, MessageCircle } from 'lucide-react';
 import type { Project, Session, Task, SkillInfo, AgentInfo } from '../../types';
 import { C, FONT } from '../../lib/design';
 import { useSidebarWidth, SIDEBAR_MIN, SIDEBAR_MAX } from '../../lib/sidebarWidth';
 import { Button, IconButton } from '../../components/ui';
 import { ICON_SIZE } from '../../components/ui/icons';
 import { Splitter } from '../../components/ui/Splitter';
+import { SidebarSplitter } from '../../components/ui/SidebarSplitter';
 import { SessionList } from '../../components/SessionList';
 import { ChatPanel } from '../../components/ChatPanel';
 import { FileViewer } from '../../components/FileViewer';
@@ -19,10 +20,12 @@ import { GitCommitView } from '../../components/GitCommitView';
 import { TaskDetailsPane } from '../../features/tasks/TaskDetailsPane';
 import { ProjectPersonaPane } from '../../features/personas/ProjectPersonasPanel';
 import { ProjectIcon } from '../../features/projects/ProjectIcon';
+import { SidebarProjectSwitcher } from '../../features/projects/SidebarProjectSwitcher';
+import { useFeature, FLAGS } from '../../lib/featureFlags';
 import { RightPanelStack } from './RightPanelStack';
 import type { PanelKey } from './panelStackState';
 
-export type SidebarMode = 'pinned' | 'collapsed' | 'open';
+export type SidebarMode = 'pinned' | 'collapsed';
 
 interface Props {
   // Планшет (601–1199): файл всегда fullscreen, правая зона — упрощённый solo
@@ -95,6 +98,8 @@ interface Props {
 
 export function DesktopWorkspace(p: Props) {
   const [sidebarWidth, setSidebarWidth] = useSidebarWidth();
+  // Переключатель проектов в плашке сайдбара (флаг sidebar-project-switcher)
+  const sidebarSwitcher = useFeature(FLAGS.sidebarProjectSwitcher);
   // Подсветка активного сплиттера: сайдбар или split чат|файл
   const [dragging, setDragging] = useState<'sidebar' | 'split' | null>(null);
 
@@ -148,7 +153,7 @@ export function DesktopWorkspace(p: Props) {
     setDragging('split');
   };
 
-  const openSidebar = p.sidebarMode !== 'pinned' ? () => p.setSidebarMode('open') : undefined;
+  const openSidebar = p.sidebarMode !== 'pinned' ? () => p.setSidebarMode('pinned') : undefined;
 
   // Явный выбор чата в списке закрывает открытые в центре студию персоны,
   // командный центр и превью сервиса
@@ -168,6 +173,10 @@ export function DesktopWorkspace(p: Props) {
     <div style={{ width: '100%', display: 'flex', flexDirection: 'column', background: C.bgPanel, flexShrink: 0, height: '100%' }}>
       <div style={{ padding: '8px 10px 6px', flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, minHeight: 28 }}>
+          {sidebarSwitcher ? (
+            // Флаг sidebar-project-switcher: плашка = переключатель проектов
+            <SidebarProjectSwitcher project={p.projectForEdit} onOpenSettings={p.onOpenProjectSettings} />
+          ) : (
           <div
             onClick={p.onGoToProjects}
             title="Все проекты"
@@ -180,20 +189,17 @@ export function DesktopWorkspace(p: Props) {
               {p.projectForEdit.name}
             </span>
           </div>
+          )}
+          {/* Шестеренка нужна только старой плашке: в переключателе настройки
+              открываются кликом по иконке активного проекта */}
+          {!sidebarSwitcher && (
           <IconButton size="sm" onClick={p.onOpenProjectSettings} title="Настройки проекта">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="12" cy="12" r="3"/>
               <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
             </svg>
           </IconButton>
-          {/* Пин — самая правая кнопка: закрепляет (drawer→в потоке) либо откепляет-сворачивает панель */}
-          <IconButton
-            size="sm"
-            onClick={() => p.setSidebarMode(p.sidebarMode === 'open' ? 'pinned' : 'collapsed')}
-            title={p.sidebarMode === 'open' ? 'Закрепить панель' : 'Открепить панель'}
-          >
-            <Pin size={ICON_SIZE.sm} strokeWidth={2} fill={p.sidebarMode === 'pinned' ? 'currentColor' : 'none'} />
-          </IconButton>
+          )}
         </div>
       </div>
       <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
@@ -214,7 +220,7 @@ export function DesktopWorkspace(p: Props) {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       {p.sidebarMode === 'collapsed' && (
         <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', padding: '0 8px', height: 52, borderBottom: `1px solid ${C.divider}`, background: C.bgMain }}>
-          <IconButton size="md" variant="soft" onClick={() => p.setSidebarMode('open')} title="Открыть панель">
+          <IconButton size="md" variant="soft" onClick={() => p.setSidebarMode('pinned')} title="Открыть панель">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
               <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
             </svg>
@@ -246,31 +252,14 @@ export function DesktopWorkspace(p: Props) {
 
   return (
     <>
-      {/* === Сайдбар чатов: pinned в потоке / collapsed-open drawer === */}
+      {/* === Сайдбар чатов: pinned в потоке + сплиттер с кнопкой «свернуть» === */}
       {p.sidebarMode === 'pinned' && (
         <>
           <div style={{ width: sidebarWidth, flexShrink: 0, height: '100%' }}>
             {sidebar}
           </div>
-          <Splitter orientation="v" active={dragging === 'sidebar'} onMouseDown={handleSidebarDrag} />
+          <SidebarSplitter active={dragging === 'sidebar'} onMouseDown={handleSidebarDrag} onCollapse={() => p.setSidebarMode('collapsed')} />
         </>
-      )}
-      {p.sidebarMode !== 'pinned' && (
-        <div style={{
-          position: 'absolute', top: 0, left: 0, bottom: 0, zIndex: 10,
-          width: 320,
-          transform: p.sidebarMode === 'open' ? 'translateX(0)' : 'translateX(-320px)',
-          transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-          boxShadow: p.sidebarMode === 'open' ? '4px 0 20px rgba(20,16,10,0.15)' : 'none',
-        }}>
-          {sidebar}
-        </div>
-      )}
-      {p.sidebarMode === 'open' && (
-        <div
-          onClick={() => p.setSidebarMode('collapsed')}
-          style={{ position: 'absolute', inset: 0, zIndex: 9, background: C.overlay }}
-        />
       )}
 
       {/* === Центр: коммит → задача → персона → доска → файл (split/fullscreen) → чат === */}

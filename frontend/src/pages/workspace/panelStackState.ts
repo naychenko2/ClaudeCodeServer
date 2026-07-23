@@ -25,6 +25,7 @@ const KEY_WEIGHTS = 'cc_ws_panels_weights';
 const KEY_WIDTH = 'cc_ws_panels_width';
 const KEY_MODE = 'cc_ws_panels_mode';   // 'multi' (раскладка, дефолт) | 'solo' (одна панель)
 const KEY_STASH = 'cc_ws_panels_stash'; // раскладка, спрятанная кнопкой «Свернуть все»
+const KEY_FULLSCREEN = 'cc_ws_panels_fullscreen'; // развёрнутая «в центр» панель
 
 // Режим зоны панелей: раскладка колонками (дефолт) или одна выбранная панель.
 // Состояние ЕДИНОЕ (без отдельной памяти на режим): вход в solo схлопывает
@@ -163,6 +164,12 @@ export function parseWidth(raw: string | null): number {
   return Math.min(COL_MAX, Math.max(COL_MIN, Math.round(n)));
 }
 
+// Сохранённая развёрнутая панель: только известный ключ, иначе null (пустая
+// строка = null; после F5 разворот восстанавливается, если панель ещё открыта)
+export function parseFullscreen(raw: string | null): PanelKey | null {
+  return isPanelKey(raw) ? raw : null;
+}
+
 // Нормализация весов открытых панелей: сумма = числу открытых (защита от дрейфа
 // к 0/∞ после многих drag'ов). Панели без веса получают 1.
 export function normalizeWeights(open: PanelKey[], weights: Partial<Record<PanelKey, number>>): Partial<Record<PanelKey, number>> {
@@ -185,8 +192,9 @@ let _mode: PanelMode = lsGet(KEY_MODE) === 'solo' ? 'solo' : 'multi';
 let _stash: PanelKey[][] = (() => {
   try { return sanitizeLayout(JSON.parse(lsGet(KEY_STASH) ?? '[]')); } catch { return []; }
 })();
-// Развёрнутая на всю рабочую область панель (не персистится: после F5 — обычный вид)
-let _fullscreen: PanelKey | null = null;
+// Развёрнутая «в центр» панель: персистится — после F5 разворот сохраняется
+// (простая семантика: переключение/закрытие панели сворачивает, как и раньше)
+let _fullscreen: PanelKey | null = parseFullscreen(lsGet(KEY_FULLSCREEN));
 
 const listeners = new Set<() => void>();
 function emit() { listeners.forEach(l => l()); }
@@ -198,6 +206,7 @@ function persist() {
   lsSet(KEY_WIDTH, String(_width));
   lsSet(KEY_MODE, _mode);
   lsSet(KEY_STASH, JSON.stringify(_stash));
+  lsSet(KEY_FULLSCREEN, _fullscreen ?? '');
 }
 
 function setLayout(next: PanelKey[][]) {
@@ -303,6 +312,7 @@ export function usePanelStack(): PanelStack {
 
   const setFullscreen = useCallback((k: PanelKey | null) => {
     _fullscreen = k;
+    persist();
     emit();
   }, []);
 

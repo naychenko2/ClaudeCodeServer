@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Menu, Pin } from 'lucide-react';
+import { Menu } from 'lucide-react';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import type { AuthState, Persona, Project, Session } from '../../types';
 import type { HubTabValue } from '../../components/HubTabs';
@@ -10,7 +10,7 @@ import { api } from '../../lib/api';
 import { usePersonas, ensurePersonasLoaded, bumpPersonas, personaLabel } from '../../lib/personas';
 import { navPush, navReplace, getNav, parseHash, type NavSnapshot } from '../../lib/nav';
 import { showToast } from '../../lib/toast';
-import { ConfirmDialog, Splitter, IconButton } from '../../components/ui';
+import { ConfirmDialog, SidebarSplitter, IconButton } from '../../components/ui';
 import { useSidebarDrag } from '../../lib/sidebarWidth';
 import { useIsMobile } from '../../lib/breakpoints';
 import { PersonaList, type PersonaListMode } from './PersonaList';
@@ -33,10 +33,11 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
   const isMobile = useIsMobile();
   // Ширина сайдбара — общая со всеми разделами (cc_sidebar_width) + перетаскиваемый сплиттер
   const { width: listWidth, dragging: listDragging, startDrag: startListDrag } = useSidebarDrag();
-  // Режим сайдбара: pinned | collapsed | open (как в «Заметках»/«Чатах»/воркспейсе)
-  const [sidebarMode, setSidebarMode] = useState<'pinned' | 'collapsed' | 'open'>(() =>
+  // Режим сайдбара: pinned (в потоке) | collapsed (свёрнут). Сворачивание — кнопкой
+  // на сплиттере, разворот — гамбургером обратно в поток.
+  const [sidebarMode, setSidebarMode] = useState<'pinned' | 'collapsed'>(() =>
     localStorage.getItem('cc_personas_sidebar_mode') === 'collapsed' ? 'collapsed' : 'pinned');
-  useEffect(() => { if (sidebarMode !== 'open') localStorage.setItem('cc_personas_sidebar_mode', sidebarMode); }, [sidebarMode]);
+  useEffect(() => { localStorage.setItem('cc_personas_sidebar_mode', sidebarMode); }, [sidebarMode]);
   // Раздел показывает глобальных персон, а по переключателю — вообще всех, вместе с
   // проектными. Дефолт «Глобальные»: у кого много проектных персон, список иначе
   // распухает и глобальные в нём тонут. Выбор запоминается на устройстве.
@@ -124,8 +125,6 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
     setCreating(false);
     setSelectedId(id); setMobileView('card'); setPendingView(view ?? null);
     navPush({ screen: 'personas', persona: id });
-    // В режиме drawer после выбора — закрываем оверлей (как в «Заметках»)
-    setSidebarMode(m => m === 'open' ? 'collapsed' : m);
   };
   const clearSelection = () => {
     setCreating(false);
@@ -193,24 +192,8 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
     }
   };
 
-  // Строка управления панелью (только десктоп): свернуть (◀◀) + «Закрепить» (📌) в режиме drawer
-  const sidebarHeader = (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 10px 0', minHeight: 28, flex: 'none' }}>
-      <span style={{ flex: 1, minWidth: 0, fontSize: 14, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Персоны</span>
-      {/* Пин — самая правая кнопка: закрепляет (drawer→в потоке) либо откепляет-сворачивает панель */}
-      <IconButton
-        onClick={() => setSidebarMode(sidebarMode === 'open' ? 'pinned' : 'collapsed')}
-        title={sidebarMode === 'open' ? 'Закрепить панель' : 'Открепить панель'}
-        size="sm"
-      >
-        <Pin size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} fill={sidebarMode === 'pinned' ? 'currentColor' : 'none'} style={{ flexShrink: 0 }} />
-      </IconButton>
-    </div>
-  );
-
   const sidebar = (
     <>
-      {!isMobile && sidebarHeader}
       <PersonaList personas={personas} selectedId={selectedId} onSelect={selectPersona} onNew={startCreate}
         mode={listMode} onModeChange={setListMode} projects={projects} />
     </>
@@ -251,39 +234,21 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
       : <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: C.bgPanel }}>{sidebar}</div>
   ) : (
     <div style={{ height: '100%', display: 'flex', position: 'relative' }}>
-      {/* Pinned: в потоке + перетаскиваемый сплиттер (ширина общая со всеми разделами) */}
+      {/* Pinned: в потоке + сплиттер с всплывающей кнопкой «свернуть» */}
       {sidebarMode === 'pinned' && (
         <>
           <div style={{ width: listWidth, flex: 'none', background: C.bgPanel, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
             {sidebar}
           </div>
-          <Splitter active={listDragging} onMouseDown={startListDrag} />
+          <SidebarSplitter active={listDragging} onMouseDown={startListDrag} onCollapse={() => setSidebarMode('collapsed')} />
         </>
       )}
 
-      {/* Collapsed/Open: drawer поверх контента */}
-      {sidebarMode !== 'pinned' && (
-        <div style={{
-          position: 'absolute', top: 0, left: 0, bottom: 0, zIndex: 10, width: Math.min(listWidth, 320),
-          background: C.bgPanel, borderRight: `1px solid ${C.border}`, display: 'flex', flexDirection: 'column',
-          transform: sidebarMode === 'open' ? 'translateX(0)' : 'translateX(-110%)',
-          transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-          boxShadow: sidebarMode === 'open' ? '4px 0 20px rgba(20,16,10,0.15)' : 'none',
-        }}>
-          {sidebar}
-        </div>
-      )}
-
-      {/* Backdrop — только когда drawer открыт */}
-      {sidebarMode === 'open' && (
-        <div onClick={() => setSidebarMode('collapsed')} style={{ position: 'absolute', inset: 0, zIndex: 9, background: C.overlay }} />
-      )}
-
-      {/* Центр: в свёрнутом режиме — тонкая шапка с гамбургером «открыть панель» */}
+      {/* Центр: в свёрнутом режиме — тонкая шапка с гамбургером «открыть панель» (в поток) */}
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
         {sidebarMode === 'collapsed' && (
           <div style={{ flex: 'none', display: 'flex', alignItems: 'center', padding: '0 8px', height: 48, borderBottom: `1px solid ${C.divider}` }}>
-            <IconButton onClick={() => setSidebarMode('open')} title="Открыть панель" size="md" variant="soft">
+            <IconButton onClick={() => setSidebarMode('pinned')} title="Открыть панель" size="md" variant="soft">
               <Menu size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
             </IconButton>
           </div>

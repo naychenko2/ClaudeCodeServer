@@ -4,6 +4,7 @@ import { api } from '../../../lib/api';
 import { personaLabel } from '../../../lib/personas';
 import { C, MODAL_W, R } from '../../../lib/design';
 import { Modal, ModalActions } from '../../../components/ui';
+import { invalidateProjectsCache } from '../useAllProjects';
 
 interface Props {
   project: Project;
@@ -47,6 +48,7 @@ export function DeleteDialog({ project, onSuccess, onClose }: Props) {
     setError('');
     try {
       await api.projects.delete(project.id);
+      invalidateProjectsCache(); // удаленный проект уходит из полки/палитры сразу
       onSuccess();
     } catch (e: any) {
       setError(e.message || 'Ошибка удаления');

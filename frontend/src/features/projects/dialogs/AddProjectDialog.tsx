@@ -7,6 +7,7 @@ import { AGENT_COLORS, agentDotColor } from '../../../components/AgentSelector';
 import { GroupSelect } from '../GroupSelect';
 import { SyncToggleRow } from '../components/SyncToggleRow';
 import { GIT_MODES, GitModeCard, GitPushRow, type GitMode } from '../components/GitModeCards';
+import { invalidateProjectsCache } from '../useAllProjects';
 
 interface Props {
   groups: ProjectGroup[];
@@ -41,6 +42,7 @@ export function AddProjectDialog({ groups, defaultGroupId, onSuccess, onClose }:
         gitAutoPush: gitMode === 'auto' && gitPush,
       }, color);
       if (sync) api.sync.add(p.id, '', true).catch(() => {});
+      invalidateProjectsCache(); // полка/палитра проектов видят новый проект сразу
       onSuccess(p);
     } catch (e: any) {
       setError(e.message);

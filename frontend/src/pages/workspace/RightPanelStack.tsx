@@ -17,7 +17,7 @@ import { ToolbarIconButton } from '../../components/Toolbar';
 import { useSessionArtifacts } from '../../hooks/useSessionArtifacts';
 import { PlanSection } from '../../components/artifacts/PlanSection';
 import { useWindowWidth } from '../../lib/breakpoints';
-import { usePanelStack, PANEL_KEYS, PANEL_MIN_H, RAIL_W, type PanelKey } from './panelStackState';
+import { usePanelStack, PANEL_MIN_H, RAIL_W, type PanelKey } from './panelStackState';
 
 // Порог планшета: шире — панель в потоке рядом с чатом, уже — drawer поверх
 const TABLET_INLINE_MIN = 1000;
@@ -32,6 +32,12 @@ const PANEL_META: Record<PanelKey, { title: string; Icon: LucideIcon }> = {
   terminal: { title: 'Терминал', Icon: SquareTerminal },
   preview: { title: 'Preview', Icon: MonitorPlay },
 };
+
+// Рельса разбита на две группы, разделённые сепаратором. Сверху — инструменты
+// ПРОЕКТА (файлы, изменения, задачи, команда, терминал, preview), снизу — панели
+// ТЕКУЩЕЙ СЕССИИ (пока только План). Порядок: проектные раньше сессионных.
+const PROJECT_RAIL_KEYS: PanelKey[] = ['files', 'changes', 'tasks', 'team', 'terminal', 'preview'];
+const SESSION_RAIL_KEYS: PanelKey[] = ['plan'];
 
 const GAP = 8; // зазор между карточками — та самая «воздушность»
 
@@ -405,6 +411,48 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, toolsE
     );
   };
 
+  // Видимость иконки на рельсе. Сессионные кнопки (пока только План) показываются
+  // ТОЛЬКО когда есть что открывать: без планов иконка Плана скрыта целиком
+  // (а не дизейблится) — вместе с ней прячется и разделитель групп.
+  const railKeyVisible = (k: PanelKey): boolean => {
+    if (!keyAvailable(k)) return false;
+    if (k === 'plan') return plansCount > 0 || openKeys.includes(k);
+    return true;
+  };
+
+  // Одна иконка рельсы (используется обеими группами: проектной и сессионной).
+  const renderRailIcon = (k: PanelKey): ReactNode => {
+    if (!railKeyVisible(k)) return null;
+    const isOpen = openKeys.includes(k);
+    const { title, Icon } = PANEL_META[k];
+    return (
+      <div key={k}>
+        <ToolbarIconButton
+          onClick={() => {
+            if (isTablet) {
+              setFullscreen(null);
+              // До двух панелей: третья вытесняет самую старую (FIFO)
+              setTabletPanels(cur => cur.includes(k) ? cur.filter(x => x !== k) : [...cur, k].slice(-2));
+            } else toggle(k);
+          }}
+          title={title} active={isOpen}>
+          <div style={{ position: 'relative', display: 'flex' }}>
+            <Icon size={17} strokeWidth={ICON_STROKE} />
+            {k === 'plan' && plansCount > 0 && (
+              <span style={{
+                position: 'absolute', top: -6, right: -7, minWidth: 14, height: 14, padding: '0 3px',
+                borderRadius: 7, background: C.accent, color: C.onAccent,
+                fontFamily: FONT.sans, fontSize: 9, fontWeight: 700, lineHeight: '14px', textAlign: 'center',
+              }}>
+                {plansCount}
+              </span>
+            )}
+          </div>
+        </ToolbarIconButton>
+      </div>
+    );
+  };
+
   return (
     <>
       {/* Планшет: стек до двух панелей — в потоке на широком экране, drawer поверх
@@ -504,10 +552,16 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, toolsE
         </>
       )}
 
-      {/* Рельса иконок — видна всегда */}
+      {/* Рельса иконок — видна всегда. Высота ПО КОНТЕНТУ (alignSelf: flex-start),
+          поэтому низ идёт сразу под последней иконкой, сколько бы их ни было.
+          Низ прямой горизонтальный, скруглён только нижне-левый угол; правый угол
+          прямой (примыкает к краю окна). Ниже рельсы проступает фон рабочей области. */}
       <div style={{
-        width: RAIL_W, flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'center',
-        gap: 6, paddingTop: 8, background: C.bgPanel, borderLeft: `1px solid ${C.border}`,
+        width: RAIL_W, flexShrink: 0, alignSelf: 'flex-start',
+        display: 'flex', flexDirection: 'column', alignItems: 'center',
+        gap: 6, paddingTop: 8, paddingBottom: 16, background: C.bgPanel,
+        borderLeft: `1px solid ${C.border}`, borderBottom: `1px solid ${C.border}`,
+        borderBottomLeftRadius: 26, borderBottomRightRadius: 0,
         boxSizing: 'border-box', overflow: 'hidden',
       }}>
         {/* Переключатель режима зоны: раскладка колонками (дефолт) ↔ одна панель.
@@ -525,55 +579,38 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, toolsE
             <div style={{ width: 22, height: 1, background: C.border, flexShrink: 0, margin: '1px 0 2px' }} />
           </>
         )}
-        {PANEL_KEYS.map(k => {
-          if (!keyAvailable(k)) return null;
-          const isOpen = openKeys.includes(k);
-          // План без планов дизейблится (открывать нечего), открытый — закрываем той же иконкой
-          const disabled = k === 'plan' && plansCount === 0 && !isOpen;
-          const { title, Icon } = PANEL_META[k];
-          return (
-            <div key={k} style={{ opacity: disabled ? 0.45 : 1 }}>
-              <ToolbarIconButton
-                onClick={() => {
-                  if (isTablet) {
-                    setFullscreen(null);
-                    // До двух панелей: третья вытесняет самую старую (FIFO)
-                    setTabletPanels(cur => cur.includes(k) ? cur.filter(x => x !== k) : [...cur, k].slice(-2));
-                  } else toggle(k);
-                }}
-                title={title} active={isOpen} disabled={disabled}>
-                <div style={{ position: 'relative', display: 'flex' }}>
-                  <Icon size={17} strokeWidth={ICON_STROKE} />
-                  {k === 'plan' && plansCount > 0 && (
-                    <span style={{
-                      position: 'absolute', top: -6, right: -7, minWidth: 14, height: 14, padding: '0 3px',
-                      borderRadius: 7, background: C.accent, color: C.onAccent,
-                      fontFamily: FONT.sans, fontSize: 9, fontWeight: 700, lineHeight: '14px', textAlign: 'center',
-                    }}>
-                      {plansCount}
-                    </span>
-                  )}
-                </div>
-              </ToolbarIconButton>
-            </div>
-          );
-        })}
+        {/* Инструменты ПРОЕКТА (первыми) */}
+        {PROJECT_RAIL_KEYS.map(renderRailIcon)}
+        {/* Разделитель групп: проектные ↔ сессионные. Прячется, когда сессионных
+            кнопок нет (напр. Плана без планов) — по railKeyVisible, не keyAvailable */}
+        {PROJECT_RAIL_KEYS.some(railKeyVisible) && SESSION_RAIL_KEYS.some(railKeyVisible) && (
+          <div style={{ width: 22, height: 1, background: C.border, flexShrink: 0, margin: '2px 0' }} />
+        )}
+        {/* Панели ТЕКУЩЕЙ СЕССИИ (после проектных) — пока только План */}
+        {SESSION_RAIL_KEYS.map(renderRailIcon)}
         {/* Под иконками панелей, через сепаратор: свернуть все / вернуть набор как был.
             На планшете скрыта — панель одна, закрывается своей же иконкой */}
         {!isTablet && (
           <>
             <div style={{ width: 22, height: 1, background: C.border, flexShrink: 0, margin: '2px 0 1px' }} />
-            <div style={{ opacity: openKeys.length === 0 && !collapsed ? 0.45 : 1 }}>
-              <ToolbarIconButton
-                onClick={toggleCollapsed}
-                disabled={openKeys.length === 0 && !collapsed}
-                title={collapsed ? 'Открыть свёрнутые панели' : 'Свернуть все панели'}
-              >
-                {collapsed
-                  ? <ChevronsLeft size={16} strokeWidth={ICON_STROKE} />
-                  : <ChevronsRight size={16} strokeWidth={ICON_STROKE} />}
-              </ToolbarIconButton>
-            </div>
+            {(() => {
+              const collapseDisabled = openKeys.length === 0 && !collapsed;
+              return (
+                <div style={{ opacity: collapseDisabled ? 0.3 : 1 }}>
+                  <ToolbarIconButton
+                    onClick={toggleCollapsed}
+                    disabled={collapseDisabled}
+                    title={collapsed ? 'Открыть свёрнутые панели' : 'Свернуть все панели'}
+                  >
+                    <div style={{ display: 'flex', color: collapseDisabled ? C.textMuted : undefined }}>
+                      {collapsed
+                        ? <ChevronsLeft size={16} strokeWidth={ICON_STROKE} />
+                        : <ChevronsRight size={16} strokeWidth={ICON_STROKE} />}
+                    </div>
+                  </ToolbarIconButton>
+                </div>
+              );
+            })()}
           </>
         )}
       </div>

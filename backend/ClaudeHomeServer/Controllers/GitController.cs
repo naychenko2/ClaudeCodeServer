@@ -158,6 +158,11 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
     public Task<IActionResult> Discard(string projectId, [FromBody] GitPathRequest body, CancellationToken ct) =>
         Mutate(projectId, (p) => git.DiscardAsync(Owner(p), p.RootPath, body.Path, ct));
 
+    // Откат ВСЕХ изменений рабочего дерева (опасно — фронт гейтит подтверждением)
+    [HttpPost("discard-all")]
+    public Task<IActionResult> DiscardAll(string projectId, CancellationToken ct) =>
+        Mutate(projectId, (p) => git.DiscardAllAsync(Owner(p), p.RootPath, ct));
+
     // Зернистый stage: патч хунка/выбранных строк (синтезирует фронт)
     [HttpPost("stage-hunk")]
     public Task<IActionResult> StageHunk(string projectId, [FromBody] GitPatchRequest body, CancellationToken ct) =>
@@ -176,6 +181,19 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
         {
             var p = GetProject(projectId);
             return Ok(await git.StashListAsync(Owner(p), p.RootPath, ct));
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }
+    }
+
+    // Файлы отложенного для просмотра в верхней зоне панели «Изменения» (как у коммита)
+    [HttpGet("stash/{index:int}")]
+    public async Task<IActionResult> StashShow(string projectId, int index, CancellationToken ct)
+    {
+        try
+        {
+            var p = GetProject(projectId);
+            return Ok(new { files = await git.StashShowAsync(Owner(p), p.RootPath, index, ct) });
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }

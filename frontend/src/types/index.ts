@@ -452,6 +452,10 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'session_started'; claudeSessionId: string; isResume: boolean; model: string; mode: string; cwd?: string; toolCount?: number; mcpServers?: { name: string; status: string }[] }
   | { type: 'text_delta'; text: string }
   | { type: 'user_message'; text: string; attachedPaths?: string[]; senderPersonaId?: string; auto?: boolean }
+  // Гостевая реплика персоны без агентского хода (0 токенов) — доклад о завершении
+  // делегированной задачи (модель Z); маркер доклада распознаётся на рендере (см.
+  // lib/delegationReport.ts). Живой аналог StoredTextMessage.PersonaId из истории.
+  | { type: 'guest_text'; text: string; personaId: string }
   | { type: 'thinking_delta'; text: string }
   // Текст/thinking сабагента (Task/Agent) — целыми блоками, с привязкой к родительскому tool_use
   | { type: 'agent_text'; parentToolUseId: string; text: string }

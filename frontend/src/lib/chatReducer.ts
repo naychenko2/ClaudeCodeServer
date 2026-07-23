@@ -166,6 +166,12 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
         ...(msg.auto ? { auto: true } : {}),
       }]);
 
+    case 'guest_text':
+      // Модель Z: гостевая реплика исполнителя-персоны, вставленная без агентского хода.
+      // Рендерится как обычная text-реплика с её личностью (personaId) — маркер доклада
+      // распознаётся в ChatItemView (parseDelegationReport), не здесь.
+      return withItems([...prev.items, { kind: 'text', text: msg.text, personaId: msg.personaId }]);
+
     case 'thinking_delta': {
       const last = prev.items[prev.items.length - 1];
       if (last?.kind === 'thinking' && !last.parentToolUseId)

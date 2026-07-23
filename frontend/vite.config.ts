@@ -29,8 +29,12 @@ export default defineConfig({
     VitePWA({
       registerType: 'prompt',
       // Свой sw (src/sw.ts): прежний precache/SPA-fallback + обработчики web push.
-      // В dev SW подключается как module (требование injectManifest dev-режима)
-      devOptions: { enabled: true, type: 'module' },
+      // В DEV service worker ОТКЛЮЧЁН: под Vite 8/Rolldown dev-обёртка падает
+      // («Cannot use import statement outside a module»), а NavigationRoute на
+      // непрекэшированный index.html ломает навигацию — при остановке dev-сервера
+      // SW отдавал пустоту (белый экран). Офлайн в dev всё равно не работает
+      // (нечего прекэшировать); PWA/офлайн тестируем в preview/prod-сборке.
+      devOptions: { enabled: false, type: 'module' },
       strategies: 'injectManifest',
       srcDir: 'src',
       filename: 'sw.ts',

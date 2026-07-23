@@ -894,21 +894,6 @@ export function Composer({
     </button>
   );
 
-  // Офлайн: заглушка вместо полей. Компонент остаётся смонтированным,
-  // поэтому набранный текст (text) сохраняется до возврата в онлайн.
-  if (offline) {
-    return (
-      <div style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-        padding: '14px', borderRadius: 14, background: C.bgPanel,
-        border: `1px solid ${C.border}`, color: C.textMuted, fontSize: 13, fontWeight: 600,
-      }}>
-        <WifiOff size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-        Отправка недоступна офлайн
-      </div>
-    );
-  }
-
   // Единый селектор собеседника (персона или .md-агент). Доступен и в начатом чате:
   // смена по ходу разговора разрешена (персона-слой пересобирается каждый ход).
   const companionSelector = canPickCompanion && (personas.length > 0 || agents.length > 0) && onCompanionChange ? (
@@ -944,6 +929,23 @@ export function Composer({
     menuWidth: isMobile ? 40 : 34,
   });
   const hiddenItems = collapsible.slice(visibleCount).map(c => c.item);
+
+  // Офлайн: заглушка вместо полей. Компонент остаётся смонтированным, поэтому
+  // набранный текст (text) сохраняется до возврата в онлайн. Ранний return строго
+  // ПОСЛЕ всех хуков (useToolbarOverflow и пр.) — иначе число хуков между рендерами
+  // расходится и React падает с «Rendered fewer hooks than expected».
+  if (offline) {
+    return (
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+        padding: '14px', borderRadius: 14, background: C.bgPanel,
+        border: `1px solid ${C.border}`, color: C.textMuted, fontSize: 13, fontWeight: 600,
+      }}>
+        <WifiOff size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+        Отправка недоступна офлайн
+      </div>
+    );
+  }
 
   return (
     <div>

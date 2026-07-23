@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Plus } from 'lucide-react';
 import type { Session } from '../types';
 import { api } from '../lib/api';
@@ -64,10 +64,16 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
     return true;
   };
   const filteredChats = chats.filter(isVisible);
-  // В иерархии фильтры применяются только к корням: видимый родитель тянет всех детей
-  const tree = view === 'tree'
-    ? buildChatTreeRows(chats, { isRootVisible: isVisible, collapsedIds, activeId })
-    : null;
+  // В иерархии фильтры применяются только к корням: видимый родитель тянет всех детей.
+  // Сборка леса мемоизирована — hover по карточке (hoveredId) не пересобирает дерево;
+  // isVisible пересоздаётся каждый рендер, его исходные данные покрывает зависимость filters
+  const tree = useMemo(
+    () => view === 'tree'
+      ? buildChatTreeRows(chats, { isRootVisible: isVisible, collapsedIds, activeId })
+      : null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [chats, view, collapsedIds, activeId, filters],
+  );
   const hiddenCount = tree
     ? chats.length - tree.renderedCount
     : chats.length - filteredChats.length;

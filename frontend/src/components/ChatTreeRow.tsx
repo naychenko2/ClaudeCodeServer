@@ -76,7 +76,10 @@ export function ChatTreeRow({ row, isMobile, onToggleCollapse, children }: Props
 
       {children}
 
-      {/* Контрол сворачивания — снаружи карточки, в gutter-колонке; поверх неё */}
+      {/* Контрол сворачивания — снаружи карточки, строго в gutter-колонке:
+          hit-зона по ширине не выходит за cardLeftX, иначе перекрывала бы левый
+          край карточки и клик по нему сворачивал бы ветку вместо открытия чата.
+          Иконка flex-центром сидит на оси spineX. */}
       {hasChildren && (
         <button
           onClick={e => { e.stopPropagation(); onToggleCollapse(row.chat.id); }}
@@ -85,8 +88,8 @@ export function ChatTreeRow({ row, isMobile, onToggleCollapse, children }: Props
           title={collapsed ? 'Развернуть вложенные чаты' : 'Свернуть вложенные чаты'}
           aria-label={collapsed ? 'Развернуть вложенные чаты' : 'Свернуть вложенные чаты'}
           style={{
-            position: 'absolute', left: spineX(depth) - 16, top: elbowY - 16,
-            width: 32, height: 32, zIndex: 2,
+            position: 'absolute', left: offset(depth), top: elbowY - 16,
+            width: GUTTER, height: 32, zIndex: 2,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             border: 'none', background: 'none', padding: 0, cursor: 'pointer',
             color: row.onActivePath ? C.accent : chevronHover ? C.textSecondary : C.textMuted,
@@ -103,6 +106,7 @@ export function ChatTreeRow({ row, isMobile, onToggleCollapse, children }: Props
       {hasChildren && collapsed && (
         <div aria-hidden style={{
           position: 'absolute', left: spineX(depth) - 1, top: elbowY - 19, zIndex: 2,
+          pointerEvents: 'none',
           minWidth: 14, height: 14, padding: '0 2px', boxSizing: 'border-box',
           borderRadius: R.max, background: C.accentLight, color: C.accent,
           fontFamily: FONT.mono, fontSize: FS.xs, fontWeight: 600,

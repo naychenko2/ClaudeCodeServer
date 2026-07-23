@@ -142,9 +142,11 @@ function RateStripe({ w, isMobile }: { w: RateWindow; isMobile?: boolean }) {
   const c = RATE_COLORS[w.level];
   const reached = w.level === 'danger';
   const reset = fmtReset(w.resetsAt);
+  // Оверрасход всегда даёт level=danger (см. rateLevel), поэтому «+» уместен только в
+  // danger-ветке, а не в warn — здесь его нет
   const detail = reached
     ? `${windowLabel(w.limitType)} — лимит достигнут${reset ? ` · сброс ${reset}` : ''}`
-    : `${windowLabel(w.limitType)} — ${w.pct}%${w.isUsingOverage ? '+' : ''}${reset ? ` · сброс ${reset}` : ''}`;
+    : `${windowLabel(w.limitType)} — ${w.pct}%${reset ? ` · сброс ${reset}` : ''}`;
   // desktop — hover; mobile — tap с overlay для закрытия по нажатию вне
   const hostEvents = isMobile
     ? { onClick: () => setOpen(o => !o) }
@@ -158,7 +160,9 @@ function RateStripe({ w, isMobile }: { w: RateWindow; isMobile?: boolean }) {
         {...hostEvents}
         title={detail}
         style={{
-          position: 'absolute', top: 0, left: 0, right: 0, height: isMobile ? 10 : 7,
+          // Высота хит-зоны = верхний padding карточки (mobile 8 / desktop 7), чтобы
+          // зона hover/tap полоски не залезала на первую строку поля ввода
+          position: 'absolute', top: 0, left: 0, right: 0, height: isMobile ? 8 : 7,
           zIndex: 3, cursor: reached ? 'default' : 'pointer',
         }}
       >

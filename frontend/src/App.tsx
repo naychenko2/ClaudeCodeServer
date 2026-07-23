@@ -622,6 +622,17 @@ export default function App() {
       window.dispatchEvent(new Event(PRODUCT_HISTORY_EVENT))
       return
     }
+    // Диплинк на СПИСОК проектов (#/projects) — явный выход из открытого проекта к списку.
+    // Просто switchHubTab сбрасывает проект лишь когда мы уже в разделе «Проекты»; с
+    // дашборда проект бы остался и показался его воркспейс вместо списка.
+    if (target?.screen === 'projects') {
+      localStorage.removeItem(OPEN_PROJECT_KEY)
+      localStorage.setItem(HUB_TAB_KEY, 'projects')
+      setProject(null)
+      setHubTab('projects')
+      navPush({ screen: 'projects' })
+      return
+    }
     // Диплинк на раздел без глубокой цели — просто переключаемся на него
     if (target) {
       const dest: HubTabValue = target.screen === 'project' ? 'projects'

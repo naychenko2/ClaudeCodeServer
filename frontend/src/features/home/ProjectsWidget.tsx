@@ -4,16 +4,18 @@ import type { Project, ProjectGroup } from '../../types';
 import { api } from '../../lib/api';
 import { C, FONT, R } from '../../lib/design';
 import { ProjectIcon } from '../projects/ProjectIcon';
-import type { HubTab } from '../../components/HubTabs';
 import { AddProjectDialog } from '../projects/dialogs/AddProjectDialog';
 import { WidgetCard, WidgetAction, WidgetEmpty, relTime } from './WidgetCard';
 
 // «Проекты»: недавние проекты с активностью, клик открывает проект
 // (через prop onOpenProject — Back вернет на дашборд).
-export function ProjectsWidget({ onHubTab, onOpenProject }: {
-  onHubTab: (t: HubTab) => void;
+export function ProjectsWidget({ onOpenProject }: {
   onOpenProject: (p: Project) => void;
 }) {
+  // «Все проекты» — к СПИСКУ проектов (сброс открытого проекта): диплинк #/projects,
+  // как в палитре. Просто переключение раздела при открытом проекте показало бы его
+  // воркспейс, а не список.
+  const goAllProjects = () => window.dispatchEvent(new CustomEvent('cc-open-url', { detail: { url: '#/projects' } }));
   const [projects, setProjects] = useState<Project[]>([]);
   const [newOpen, setNewOpen] = useState(false);
   const [groups, setGroups] = useState<ProjectGroup[]>([]);
@@ -38,7 +40,7 @@ export function ProjectsWidget({ onHubTab, onOpenProject }: {
       title="Проекты"
       onCreate={openNew}
       createTitle="Новый проект"
-      action={<WidgetAction label="Все проекты →" onClick={() => onHubTab('projects')} />}
+      action={<WidgetAction label="Все проекты →" onClick={goAllProjects} />}
     >
       {recent.length === 0
         ? <WidgetEmpty text="Проектов пока нет." />

@@ -76,7 +76,7 @@ export function HomePage({ auth, onLogout, onHubTab, onOpenProject }: Props) {
               {/* «Мои пространства» — то, ради чего заходят с телефона */}
               <TasksWidget onHubTab={onHubTab} />
               <RecentSessionsWidget recent={data?.recent ?? []} onHubTab={onHubTab} />
-              <ProjectsWidget onHubTab={onHubTab} onOpenProject={onOpenProject} />
+              <ProjectsWidget onOpenProject={onOpenProject} />
               <NotesWidget onHubTab={onHubTab} />
               <TeamWidget onHubTab={onHubTab} />
               {/* Справочные сводки — хвостом */}
@@ -96,7 +96,7 @@ export function HomePage({ auth, onLogout, onHubTab, onOpenProject }: Props) {
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0 }}>
                 <TasksWidget onHubTab={onHubTab} />
                 <RecentSessionsWidget recent={data?.recent ?? []} onHubTab={onHubTab} />
-                <ProjectsWidget onHubTab={onHubTab} onOpenProject={onOpenProject} />
+                <ProjectsWidget onOpenProject={onOpenProject} />
                 <NotesWidget onHubTab={onHubTab} />
                 <TeamWidget onHubTab={onHubTab} />
               </div>

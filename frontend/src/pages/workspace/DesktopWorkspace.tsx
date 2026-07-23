@@ -7,12 +7,12 @@
 import { useState, useRef, type ReactNode, type PointerEvent as ReactPointerEvent } from 'react';
 import { Plus, MessageCircle } from 'lucide-react';
 import type { Project, Session, Task, SkillInfo, AgentInfo } from '../../types';
-import { C, FONT } from '../../lib/design';
+import { C, FONT, ISLAND } from '../../lib/design';
 import { useSidebarWidth, SIDEBAR_MIN, SIDEBAR_MAX } from '../../lib/sidebarWidth';
-import { Button, IconButton } from '../../components/ui';
+import { Button, IconButton, Island } from '../../components/ui';
 import { ICON_SIZE } from '../../components/ui/icons';
-import { Splitter } from '../../components/ui/Splitter';
-import { SidebarSplitter } from '../../components/ui/SidebarSplitter';
+import { IslandSplitter } from '../../components/ui/IslandSplitter';
+import { IslandSidebarSplitter } from '../../components/ui/IslandSidebarSplitter';
 import { SessionList } from '../../components/SessionList';
 import { ChatPanel } from '../../components/ChatPanel';
 import { FileViewer } from '../../components/FileViewer';
@@ -181,13 +181,16 @@ export function DesktopWorkspace(p: Props) {
     </div>
   );
 
-  const chatPanel = p.activeSession ? (
+  // Фабрика центра-чата: одиночный режим — чат без рамки с шапкой-островом
+  // (headerIsland), в split рядом с файлом — обычный вид внутри своего острова
+  const chatPanel = (headerIsland: boolean) => p.activeSession ? (
     <ChatPanel
       session={p.activeSession} project={p.project} onOpenFile={p.onOpenFileFromChat}
       pendingMessage={p.pendingMessage} onPendingMessageSent={p.onPendingMessageSent}
       onSessionUpdated={p.onSessionUpdated} isMobile={false} onWorkflowRunning={p.onWorkflowRunning}
       onOpenSidebar={openSidebar} skills={p.skills} agents={p.agents}
       attachedFiles={p.attachedFiles} onAttachedFilesChange={p.onAttachedFilesChange} onResume={p.onResume}
+      headerIsland={headerIsland}
     />
   ) : (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -223,78 +226,101 @@ export function DesktopWorkspace(p: Props) {
     </div>
   );
 
+  // Центральный остров: карточка на холсте, внутри — оригинальная обёртка режима
+  // (flex:1 в колонке острова растягивает её на всю высоту)
+  const centerIsland = (children: ReactNode) => (
+    <Island bg={C.bgMain} style={{ flex: 1, minWidth: 0 }}>
+      {children}
+    </Island>
+  );
+
   return (
-    <>
-      {/* === Сайдбар чатов: pinned в потоке + сплиттер с кнопкой «свернуть» === */}
+    // Холст Islands: собственный relative-контекст (fullscreen-панель и планшетный
+    // drawer RightPanelStack позиционируются absolute от него). Справа padding нет —
+    // рельса инструментов прижата к краю окна.
+    <div style={{
+      flex: 1, minWidth: 0, display: 'flex', position: 'relative',
+      // Слева/снизу — просторный pad, сверху — узкий gap под шапкой,
+      // справа 0 — рельса инструментов остаётся прижатой к краю окна
+      background: ISLAND.canvas, padding: `${ISLAND.gap}px 0 ${ISLAND.pad}px ${ISLAND.pad}px`,
+    }}>
+      {/* === Сайдбар чатов: остров + ресайз-зазор с кнопкой «свернуть» === */}
       {p.sidebarMode === 'pinned' && (
         <>
-          <div style={{ width: sidebarWidth, flexShrink: 0, height: '100%' }}>
+          <Island style={{ width: sidebarWidth, flexShrink: 0 }}>
             {sidebar}
-          </div>
-          <SidebarSplitter active={dragging === 'sidebar'} onMouseDown={handleSidebarDrag} onCollapse={() => p.setSidebarMode('collapsed')} />
+          </Island>
+          <IslandSidebarSplitter active={dragging === 'sidebar'} onMouseDown={handleSidebarDrag} onCollapse={() => p.setSidebarMode('collapsed')} />
         </>
       )}
 
       {/* === Центр: коммит → задача → персона → доска → файл (split/fullscreen) → чат === */}
-      {!p.openFile && p.openCommitSha && (
+      {!p.openFile && p.openCommitSha && centerIsland(
         <div style={{ flex: 1, overflow: 'hidden', display: 'flex' }}>
           <GitCommitView project={p.project} sha={p.openCommitSha} initialPath={p.openCommitFile} onClose={p.onCloseCommit} />
         </div>
       )}
 
-      {!p.openFile && !p.openCommitSha && p.selectedTask && (
+      {!p.openFile && !p.openCommitSha && p.selectedTask && centerIsland(
         <div style={{ flex: 1, overflow: 'hidden' }}>
           <TaskDetailsPane key={p.selectedTask.id} task={p.selectedTask} project={p.project} startInEdit={p.selectedTask.id === p.autoEditTaskId} onOpenSession={p.onOpenTaskSession} onOpenFile={p.onOpenFileFromTree} onClose={p.onCloseTask} onDeleted={p.onCloseTask} />
         </div>
       )}
 
-      {/* Студия персоны из панельки «Команда» */}
-      {!p.openFile && !p.openCommitSha && !p.selectedTask && personaOpen && (
+      {/* Студия персоны из панельки «Команда»: закрытие — крестиком справа
+          (левой стрелки «назад» на десктопе нет) */}
+      {!p.openFile && !p.openCommitSha && !p.selectedTask && personaOpen && centerIsland(
         <div style={{ flex: 1, overflow: 'hidden' }}>
-          <ProjectPersonaPane project={p.project} personaId={p.personaCreating ? null : p.selectedPersonaId} creating={p.personaCreating} onOpenChat={p.onOpenPersonaChat} onSelectPersona={p.onPersonaSelectAfterCreate} onCleared={p.onPersonaCleared} onBack={p.onPersonaCleared} />
+          <ProjectPersonaPane project={p.project} personaId={p.personaCreating ? null : p.selectedPersonaId} creating={p.personaCreating} onOpenChat={p.onOpenPersonaChat} onSelectPersona={p.onPersonaSelectAfterCreate} onCleared={p.onPersonaCleared} onClose={p.onPersonaCleared} />
         </div>
       )}
 
       {/* Командный центр (кнопка «Команда» в панельке персон) */}
-      {!p.openFile && !p.openCommitSha && !p.selectedTask && !personaOpen && p.teamCenterOpen && (
+      {!p.openFile && !p.openCommitSha && !p.selectedTask && !personaOpen && p.teamCenterOpen && centerIsland(
         <div style={{ flex: 1, overflow: 'hidden' }}>
           {p.teamCenterArea}
         </div>
       )}
 
       {/* Доска задач (вкладка «Доска» в панельке задач) */}
-      {!p.openFile && !p.openCommitSha && !p.selectedTask && !personaOpen && !p.teamCenterOpen && p.boardOpen && (
+      {!p.openFile && !p.openCommitSha && !p.selectedTask && !personaOpen && !p.teamCenterOpen && p.boardOpen && centerIsland(
         <div style={{ flex: 1, overflow: 'hidden' }}>
           {p.boardArea}
         </div>
       )}
 
       {/* Превью dev-сервиса (выбран в панельке «Preview») */}
-      {!p.openFile && !p.openCommitSha && !p.selectedTask && !personaOpen && !p.teamCenterOpen && !p.boardOpen && p.previewOpen && (
+      {!p.openFile && !p.openCommitSha && !p.selectedTask && !personaOpen && !p.teamCenterOpen && !p.boardOpen && p.previewOpen && centerIsland(
         <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
           {p.previewArea}
         </div>
       )}
 
+      {/* Одиночный чат — без рамки на холсте, в остров выделена только его шапка */}
       {!p.openFile && !p.openCommitSha && !p.selectedTask && !personaOpen && !p.teamCenterOpen && !p.boardOpen && !p.previewOpen && (
-        <div style={{ flex: 1, overflow: 'hidden' }}>
-          {chatPanel}
+        <div style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
+          {chatPanel(true)}
         </div>
       )}
 
+      {/* Split чат|файл — ДВА острова, ресайз живёт в зазоре между ними */}
       {p.openFile && !p.fileFullscreen && !p.isTablet && (
         <div ref={splitContainerRef} style={{ flex: 1, display: 'flex', overflow: 'hidden', minWidth: 0 }}>
-          <div style={{ flex: chatFlex, overflow: 'hidden', minWidth: 200 }}>
-            {chatPanel}
-          </div>
-          <Splitter orientation="v" active={dragging === 'split'} onMouseDown={handleSplitDrag} />
-          <div style={{ flex: 1, overflow: 'hidden', minWidth: 200 }}>
-            <FileViewer project={p.project} filePath={p.openFile} onClose={p.onCloseFile} onToggleFullscreen={p.onEnterFullscreen} onOpenSidebar={openSidebar} initialTab={p.openFileDiffMode ? 'diff' : undefined} gitStagePath={p.gitStagePath ?? undefined} />
-          </div>
+          <Island bg={C.bgMain} style={{ flex: chatFlex, minWidth: 200 }}>
+            <div style={{ flex: 1, overflow: 'hidden' }}>
+              {chatPanel(false)}
+            </div>
+          </Island>
+          <IslandSplitter orientation="v" active={dragging === 'split'} onMouseDown={handleSplitDrag} />
+          <Island bg={C.bgMain} style={{ flex: 1, minWidth: 200 }}>
+            <div style={{ flex: 1, overflow: 'hidden' }}>
+              <FileViewer project={p.project} filePath={p.openFile} onClose={p.onCloseFile} onToggleFullscreen={p.onEnterFullscreen} onOpenSidebar={openSidebar} initialTab={p.openFileDiffMode ? 'diff' : undefined} gitStagePath={p.gitStagePath ?? undefined} />
+            </div>
+          </Island>
         </div>
       )}
 
-      {p.openFile && (p.fileFullscreen || p.isTablet) && (
+      {p.openFile && (p.fileFullscreen || p.isTablet) && centerIsland(
         <div style={{ flex: 1, overflow: 'hidden' }}>
           <FileViewer project={p.project} filePath={p.openFile} onClose={p.onCloseFile} onOpenSidebar={openSidebar} initialTab={p.openFileDiffMode ? 'diff' : undefined} gitStagePath={p.gitStagePath ?? undefined} />
         </div>
@@ -311,6 +337,6 @@ export function DesktopWorkspace(p: Props) {
         panelHeaderExtras={p.panelHeaderExtras}
         railCounts={p.railCounts}
       />
-    </>
+    </div>
   );
 }

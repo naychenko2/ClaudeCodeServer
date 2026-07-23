@@ -1451,7 +1451,7 @@ const windowWidth = useWindowWidth();
           onPersonaCleared={handlePersonaCleared}
           teamCenterOpen={teamCenterOpen}
           onCloseTeamCenter={() => setTeamCenterOpen(false)}
-          teamCenterArea={<TeamCommandCenter project={project} onOpenPersona={handlePersonaSelect} onNewPersona={handlePersonaNew} onOpenSession={handleOpenPersonaChat} onOpenSessionById={handleOpenTaskSession} />}
+          teamCenterArea={<TeamCommandCenter project={project} onOpenPersona={handlePersonaSelect} onNewPersona={handlePersonaNew} onOpenSession={handleOpenPersonaChat} onOpenSessionById={handleOpenTaskSession} onClose={() => setTeamCenterOpen(false)} />}
           boardOpen={projectBoard}
           boardArea={ProjectBoardArea}
           previewOpen={!!ccActivePreview}

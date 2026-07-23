@@ -29,6 +29,8 @@
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
     "@microsoft/signalr": "^10.0.0",
+    "@module-federation/runtime": "^2.8.0",
+    "@module-federation/vite": "^1.19.1",
     "@types/react-syntax-highlighter": "^15.5.13",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/xterm": "^5.5.0",

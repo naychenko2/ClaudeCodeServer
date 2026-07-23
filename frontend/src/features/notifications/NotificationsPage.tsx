@@ -6,7 +6,7 @@ import { HubHeader } from '../../components/HubHeader';
 import { ConfirmDialog } from '../../components/ui';
 import { ToolbarOverflowMenu, type OverflowItem } from '../../components/ToolbarOverflowMenu';
 import { useIsMobile } from '../../lib/breakpoints';
-import type { HubTab } from '../../components/HubTabs';
+import type { HubTabValue } from '../../components/HubTabs';
 import type { AuthState } from '../../types';
 import type { NotificationItem } from '../../types';
 import {
@@ -187,7 +187,7 @@ const FILTERS = [
 export function NotificationsPage({ auth, onLogout, onHubTab }: {
   auth: AuthState;
   onLogout: () => void;
-  onHubTab: (t: HubTab) => void;
+  onHubTab: (t: HubTabValue) => void;
 }) {
   // Режим: 'notifications' (по умолчанию) или 'dispatcher'
   const [mode, setMode] = useState<'notifications' | 'dispatcher'>('notifications');

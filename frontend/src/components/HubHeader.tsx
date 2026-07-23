@@ -3,7 +3,7 @@ import { Bell, House, Share2, Users } from 'lucide-react';
 import type { AuthState } from '../types';
 import { C, FONT, TB, SHADOW } from '../lib/design';
 import { useIsMobile } from '../lib/breakpoints';
-import { HubTabs, type HubTab } from './HubTabs';
+import { HubTabs, type HubTab, type HubTabValue, isModuleTab } from './HubTabs';
 import { ToolbarOverflowMenu, type OverflowItem } from './ToolbarOverflowMenu';
 import { AvatarMenu } from '../features/projects/AvatarMenu';
 import { UserManagementModal } from './UserManagementModal';
@@ -15,8 +15,8 @@ import { api } from '../lib/api';
 import { getUnreadCount, subscribeToNotifications, ensureNotificationsSubscribed, ensureUnreadCountLoaded } from '../lib/notifications';
 
 interface Props {
-  value: HubTab;
-  onTab: (t: HubTab) => void;
+  value: HubTabValue;
+  onTab: (t: HubTabValue) => void;
   auth: AuthState;
   onLogout: () => void;
   // Открыта страница «Что нового» (она не вкладка хаба, а overlay) — подсвечиваем
@@ -95,7 +95,9 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, current
   const PRIMARY_MOBILE: HubTab[] = ['chats', 'projects', 'calendar'];
   const HIDDEN_MOBILE: HubTab[] = ['notes', 'personas'];
   // Активен спрятанный раздел — показываем его 4-й вкладкой, чтобы подсветка была верной
-  const mobileTabs = HIDDEN_MOBILE.includes(value) ? [...PRIMARY_MOBILE, value] : PRIMARY_MOBILE;
+  // (модульные табы — не из HubTab, их добавляет сам HubTabs из реестра)
+  const mobileTabs = !isModuleTab(value) && HIDDEN_MOBILE.includes(value)
+    ? [...PRIMARY_MOBILE, value] : PRIMARY_MOBILE;
   // active — подсветка текущего раздела: эти пункты живут в «⋯», и без неё
   // не видно, где находишься
   const sectionItems: OverflowItem[] = [

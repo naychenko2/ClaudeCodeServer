@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Menu as MenuIcon } from 'lucide-react';
 import type { AuthState, KnowledgeBaseSummary } from '../../types';
-import type { HubTab } from '../../components/HubTabs';
+import type { HubTabValue } from '../../components/HubTabs';
 import { HubHeader } from '../../components/HubHeader';
 import { C, FONT, R } from '../../lib/design';
 import { useKnowledge, useKnowledgeConfigured, ensureKnowledgeLoaded, bumpKnowledge } from '../../lib/knowledge';
@@ -20,7 +20,7 @@ import { IconSearch, IconPlus, IconChevronsLeft, IconPin } from './shared';
 export function KnowledgePage({ auth, onLogout, onHubTab }: {
   auth: AuthState;
   onLogout: () => void;
-  onHubTab: (t: HubTab) => void;
+  onHubTab: (t: HubTabValue) => void;
 }) {
   const isMobile = useIsMobile();
   const items = useKnowledge();

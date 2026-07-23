@@ -132,6 +132,7 @@ public class FeatureFlagServiceTests : IDisposable
     [Fact]
     public void GetDefinitions_ReturnsCatalog()
     {
-        _sut.GetDefinitions().Should().BeSameAs(FeatureFlagCatalog.All);
+        // Без реестра модулей definitions = статический каталог (модульные флаги добавляются динамически)
+        _sut.GetDefinitions().Should().BeEquivalentTo(FeatureFlagCatalog.All);
     }
 }

@@ -9,7 +9,7 @@ import { useSidebarDrag } from '../lib/sidebarWidth';
 import { MOBILE_MAX } from '../lib/breakpoints';
 import { Button, IconButton, Splitter } from '../components/ui';
 import { ICON_SIZE } from '../components/ui/icons';
-import type { HubTab } from '../components/HubTabs';
+import type { HubTabValue } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
 import { ProjectCard } from '../features/projects/ProjectCard';
 import { ProjectRow } from '../features/projects/ProjectRow';
@@ -36,7 +36,7 @@ interface Props {
   onOpen: (project: Project) => void;
   onLogout: () => void;
   auth?: AuthState | null;
-  onHubTab: (t: HubTab) => void;
+  onHubTab: (t: HubTabValue) => void;
 }
 
 const ACTIVE_STATUSES = new Set(['starting', 'working', 'active', 'waiting']);

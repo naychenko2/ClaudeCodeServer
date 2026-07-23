@@ -31,7 +31,8 @@ public class FeatureFlagsController(FeatureFlagService flags, UserStore users) :
     {
         if (UserId is null) return Unauthorized();
 
-        if (!Models.FeatureFlagCatalog.Exists(key))
+        // Через сервис, не каталог напрямую: динамические флаги модулей (module-{id}) тоже валидны
+        if (!flags.Exists(key))
             return BadRequest(new { error = $"Неизвестный фич-флаг: {key}" });
 
         if (!users.SetFeatureFlag(UserId, key, req.Enabled))

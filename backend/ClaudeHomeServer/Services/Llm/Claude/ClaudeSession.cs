@@ -187,6 +187,9 @@ public class ClaudeSession : ILlmSessionAdapter
 
     private readonly string? _rawSystemPrompt;
     private readonly string? _mcpConfigPath;
+    // Ключ HTTP MCP-сервера fal-ai (Fal:McpApiKey) — сервер инжектится в конфиг хода
+    // из appsettings, а не хардкодится в .mcp.json (секрет вне git); пусто — без fal-ai
+    private readonly string? _falMcpApiKey;
     private readonly SkillsService? _skills;
     private readonly WorkspaceKnowledgeStore? _wkStore;
     // Провайдер правил разрешений проекта — резолвим каждый запрос (правила могут меняться)
@@ -209,6 +212,8 @@ public class ClaudeSession : ILlmSessionAdapter
     private readonly WorkspaceMcpContext? _workspaceMcp;
     // MCP-сервер уведомлений: создание уведомлений из Claude/агентов
     private readonly NotificationsMcpContext? _notificationsMcp;
+    // MCP-серверы внешних модулей из реестра (контракт §6): аддитивно к встроенным
+    private readonly ModulesMcpContext? _modulesMcp;
     // Файловые сабагенты-персоны: план хода — папки --add-dir
     // + pmem-серверы памяти консультантов; вычисляется на каждый ход
     private readonly Func<PersonaAgentsContext?>? _personaAgentsProvider;
@@ -229,7 +234,8 @@ public class ClaudeSession : ILlmSessionAdapter
         LlmProviderRegistry? providers = null,
         ClaudeSubscriptionPool? subscriptionPool = null,
         FileWatcherOptions? fileWatcherOptions = null,
-        TimeSpan? bgLingerTimeout = null)
+        TimeSpan? bgLingerTimeout = null,
+        string? falMcpApiKey = null)
     {
         _providers = providers;
         _subscriptionPool = subscriptionPool;
@@ -238,6 +244,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _rootPath = context.RootPath;
         _onMessage = context.OnMessage;
         _mcpConfigPath = mcpConfigPath;
+        _falMcpApiKey = falMcpApiKey;
         _rawSystemPrompt = context.RawSystemPrompt;
         _skills = skills;
         _wkStore = workspaceStore;
@@ -252,6 +259,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _personasMcp = context.PersonasMcp;
         _workspaceMcp = context.WorkspaceMcp;
         _notificationsMcp = context.NotificationsMcp;
+        _modulesMcp = context.ModulesMcp;
         _personaAgentsProvider = context.PersonaAgentsProvider;
         _promptSuggestionsEnabled = context.PromptSuggestionsEnabled;
         _launcher = context.Launcher ?? Execution.LocalProcessRunner.Instance;
@@ -291,9 +299,12 @@ public class ClaudeSession : ILlmSessionAdapter
         var notificationsServerPath = _notificationsMcp is not null ? MapMcpPath(NotificationsServerLocator.FindNotificationsServerPath()) : null;
         var hasNotifications = notificationsServerPath is not null;
         var hasDataset = !string.IsNullOrEmpty(datasetId);
+        var hasModules = _modulesMcp is { Servers.Count: > 0 };
+        var hasFalAi = !string.IsNullOrEmpty(_falMcpApiKey);
         var userServers = LoadUserScopeMcpServers();
         if (!hasTasks && !hasNotes && !hasMemory && !hasPersonas && !hasWorkspace && !hasNotifications
-            && !hasDataset && userServers is null && !(hasConsultants && memoryServerPath is not null)) return (null, "");
+            && !hasDataset && !hasModules && !hasFalAi && userServers is null
+            && !(hasConsultants && memoryServerPath is not null)) return (null, "");
 
         try
         {
@@ -324,6 +335,23 @@ public class ClaudeSession : ILlmSessionAdapter
                         servers[key] = clone;
                     }
                 }
+            }
+
+            // Продуктовый HTTP-сервер fal-ai (генерация изображений/видео): инжектится из
+            // Fal:McpApiKey одинаково для хоста и песочницы (паритет сред). Ставим ПОСЛЕ
+            // user-scope и базового конфига — одноимённый сервер оттуда перекрывается,
+            // ключ не задваивается.
+            if (hasFalAi)
+            {
+                servers["fal-ai"] = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["type"] = "http",
+                    ["url"] = "https://mcp.fal.ai/mcp",
+                    ["headers"] = new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["Authorization"] = $"Bearer {_falMcpApiKey}",
+                    },
+                };
             }
 
             if (hasTasks)
@@ -497,6 +525,54 @@ public class ClaudeSession : ILlmSessionAdapter
                 }
             }
 
+            // MCP-серверы внешних модулей (контракт §6, ТЗ R7) — строго аддитивно:
+            // коллизия ключа со встроенным/пользовательским сервером → пропуск с логом
+            // (модуль не может перекрыть tasks/notes/memory/…). Трафик инструментов идёт
+            // через gateway ядра (MODULE_API_URL), токен chan=mcp свежий на каждый ход.
+            if (hasModules)
+            {
+                foreach (var mod in _modulesMcp!.Servers)
+                {
+                    if (servers.ContainsKey(mod.Key))
+                    {
+                        Console.Error.WriteLine(
+                            $"[ClaudeSession] MCP модуля «{mod.ModuleId}» пропущен: ключ «{mod.Key}» уже занят");
+                        continue;
+                    }
+                    var argsArr = new System.Text.Json.Nodes.JsonArray();
+                    var skip = false;
+                    foreach (var arg in mod.Args)
+                    {
+                        // В песочнице абсолютные хост-пути args переводим в контейнерные
+                        // (как AdaptServerForRuntime); непереводимый путь → сервер пропускается
+                        if (_launcher.IsSandboxed && arg is { Length: > 2 } && char.IsLetter(arg[0]) && arg[1] == ':')
+                        {
+                            try { argsArr.Add(_launcher.Paths.ToRuntime(arg)); }
+                            catch (InvalidOperationException)
+                            {
+                                Console.Error.WriteLine(
+                                    $"[ClaudeSession] MCP модуля «{mod.ModuleId}» пропущен: путь {arg} недоступен в песочнице");
+                                skip = true;
+                                break;
+                            }
+                        }
+                        else argsArr.Add(arg);
+                    }
+                    if (skip) continue;
+                    servers[mod.Key] = new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["command"] = mod.Command,
+                        ["args"] = argsArr,
+                        ["env"] = new System.Text.Json.Nodes.JsonObject
+                        {
+                            ["MODULE_API_URL"] = mod.ApiUrl,
+                            ["MODULE_API_TOKEN"] = mod.TokenFactory(),
+                            ["MODULE_ID"] = mod.ModuleId,
+                        },
+                    };
+                }
+            }
+
             if (servers.Count == 0) return (null, "");
             var combined = new System.Text.Json.Nodes.JsonObject { ["mcpServers"] = servers };
             // HostTempDir среды: для песочницы это bind-mount — процесс claude увидит файл
@@ -532,6 +608,18 @@ public class ClaudeSession : ILlmSessionAdapter
     private bool AdaptServerForRuntime(string key, System.Text.Json.Nodes.JsonNode node)
     {
         if (!_launcher.IsSandboxed) return true;
+        // localhost/127.0.0.1 в env-URL — это loopback ХОСТА (напр. DIFY_API_URL у dify):
+        // из контейнера недостижим, переписываем на host.docker.internal (он в no_proxy песочницы)
+        if (node["env"] is System.Text.Json.Nodes.JsonObject envObj)
+        {
+            foreach (var name in envObj.Select(kv => kv.Key).ToArray())
+            {
+                if (envObj[name] is not System.Text.Json.Nodes.JsonValue jv
+                    || !jv.TryGetValue<string>(out var envVal)) continue;
+                var rewritten = RewriteLoopbackUrl(envVal);
+                if (!ReferenceEquals(rewritten, envVal)) envObj[name] = rewritten;
+            }
+        }
         if (node["args"] is not System.Text.Json.Nodes.JsonArray argsArr) return true;
         for (var i = 0; i < argsArr.Count; i++)
         {
@@ -546,6 +634,21 @@ public class ClaudeSession : ILlmSessionAdapter
             }
         }
         return true;
+    }
+
+    // http://localhost:…/http://127.0.0.1:… → http://host.docker.internal:… (для env песочницы).
+    // Возвращает исходную строку (тот же экземпляр), если переписывать нечего.
+    private static string RewriteLoopbackUrl(string value)
+    {
+        foreach (var prefix in (string[])["http://localhost", "http://127.0.0.1"])
+        {
+            if (!value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) continue;
+            var rest = value[prefix.Length..];
+            // Граница хоста: конец строки, порт или путь — «localhost-foo» не трогаем
+            if (rest.Length == 0 || rest[0] == ':' || rest[0] == '/')
+                return "http://host.docker.internal" + rest;
+        }
+        return value;
     }
 
     // User-scope MCP-серверы (~/.claude.json, mcpServers: fal-ai и др.) — прокидываем в

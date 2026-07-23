@@ -5,7 +5,8 @@ import type { Project } from '../types';
 // отражается в hash-части URL (#/calendar, #/project/{id}/task/{taskId}…) —
 // адрес можно копировать/обновлять, серверного роутинга под пути не нужно.
 export interface NavSnapshot {
-  screen: 'home' | 'projects' | 'project' | 'chats' | 'calendar' | 'notes' | 'personas' | 'knowledge' | 'notifications';
+  screen: 'home' | 'projects' | 'project' | 'chats' | 'calendar' | 'notes' | 'personas' | 'knowledge' | 'notifications' | 'module';
+  moduleId?: string;              // когда screen === 'module' (внешний модуль платформы)
   project?: Project;              // когда screen === 'project'
   chatId?: string;                // активный чат: screen === 'chats' — глобальный, screen === 'project' — проектный
   view?: 'sidebar' | 'chat';     // мобильный вид внутри проекта / чатов
@@ -26,6 +27,7 @@ function toHash(s: NavSnapshot): string {
     case 'notes': return s.note ? `#/notes/${encodeURIComponent(s.note)}` : '#/notes';
     case 'personas': return s.persona ? `#/personas/${encodeURIComponent(s.persona)}` : '#/personas';
     case 'knowledge': return s.knowledge ? `#/knowledge/${encodeURIComponent(s.knowledge)}` : '#/knowledge';
+    case 'module': return s.moduleId ? `#/module/${encodeURIComponent(s.moduleId)}` : '#/home';
     case 'notifications': return '#/notifications';
     case 'projects': return '#/projects';
     case 'project': {
@@ -43,8 +45,9 @@ function toHash(s: NavSnapshot): string {
 
 // Разбор hash при загрузке страницы (диплинк/обновление)
 export interface HashTarget {
-  screen: 'home' | 'projects' | 'chats' | 'calendar' | 'project' | 'notes' | 'personas' | 'knowledge' | 'notifications';
+  screen: 'home' | 'projects' | 'chats' | 'calendar' | 'project' | 'notes' | 'personas' | 'knowledge' | 'notifications' | 'module';
   projectId?: string;
+  moduleId?: string;             // #/module/{id}
   taskId?: string;
   file?: string;
   board?: boolean;
@@ -95,6 +98,10 @@ export function parseHash(hash: string = window.location.hash): HashTarget | nul
       return target;
     }
     case 'notifications': return { screen: 'notifications' };
+    case 'module': {
+      if (!parts[1]) return { screen: 'home' };
+      return { screen: 'module', moduleId: decodeURIComponent(parts[1]) };
+    }
     case 'projects': return { screen: 'projects' };
     case 'project': {
       if (!parts[1]) return { screen: 'projects' };

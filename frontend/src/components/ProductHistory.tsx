@@ -7,7 +7,7 @@ import { C, FONT, FS, R, MODAL_W, SHADOW } from '../lib/design';
 import { useIsMobile } from '../lib/breakpoints';
 import { EmptyState } from './EmptyState';
 import { HubHeader } from './HubHeader';
-import type { HubTab } from './HubTabs';
+import type { HubTabValue } from './HubTabs';
 import { Modal, ModalActions } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 
@@ -100,7 +100,7 @@ export function ProductHistory({ isMobile, onClose, auth, onLogout, onHubTab }: 
   // логотип, разделы, аватар. Переход в раздел закрывает эту страницу.
   auth: AuthState;
   onLogout: () => void;
-  onHubTab: (t: HubTab) => void;
+  onHubTab: (t: HubTabValue) => void;
 }) {
   const [days, setDays] = useState<DaySummaryStub[] | null>(null);      // null = загрузка списка
   const [daysError, setDaysError] = useState<string | null>(null);

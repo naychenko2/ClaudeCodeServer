@@ -57,6 +57,9 @@ public class SessionManager
     private readonly ProjectManager _projects;
     private readonly IHubContext<Hubs.SessionHub> _hub;
     private readonly Llm.ICheapTextRunner? _cheap;
+    // Платформа внешних модулей: реестр манифестов + выпуск модульных токенов (R7)
+    private readonly Modules.ModuleRegistry? _modules;
+    private readonly Modules.ModuleTokenService? _moduleTokens;
     private readonly ChatHistoryService _history;
     private readonly string _sessionsFilePath;
     private readonly Lock _saveLock = new();
@@ -163,10 +166,16 @@ public class SessionManager
         PersonaAgentFileSync? agentSync = null,
         UserHomeResolver? homes = null,
         // Опционально: «дешёвый» раннер для авто-заголовка чата (локальная модель / claude)
-        Llm.ICheapTextRunner? cheap = null)
+        Llm.ICheapTextRunner? cheap = null,
+        // Опционально (в тестах не передаётся): платформа внешних модулей —
+        // реестр манифестов + выпуск модульных токенов для их MCP-серверов (R7)
+        Modules.ModuleRegistry? modules = null,
+        Modules.ModuleTokenService? moduleTokens = null)
     {
         _agentSync = agentSync;
         _cheap = cheap;
+        _modules = modules;
+        _moduleTokens = moduleTokens;
         _homes = homes ?? UserHomeResolver.WithoutOverrides(appSettings, sandbox);
         _launchers = launchers;
         _sandbox = sandbox;
@@ -1133,6 +1142,37 @@ public class SessionManager
             sections, allowedIds, selfSessionId);
     }
 
+    // Контекст MCP-серверов внешних модулей (контракт §6, ТЗ R7): по каждому модулю
+    // с mcp[] в манифесте и включённым у владельца флагом module-{id} (R8) — записи
+    // серверов с адресом ЧЕРЕЗ gateway ядра и фабрикой свежего токена chan=mcp (TTL 60 мин;
+    // ход длиннее часа получит 401 на инструментах модуля — по контракту это корректно).
+    // args манифеста резолвятся от каталога модуля. null — модулей нет/все скрыты.
+    private ModulesMcpContext? BuildModulesContext(string? ownerId)
+    {
+        if (ownerId is null || _modules is null || _moduleTokens is null) return null;
+        var user = _users.GetById(ownerId);
+        if (user is null) return null;
+        var apiBase = ResolveTasksApiUrl(ownerId);
+        var servers = new List<ModuleMcpServer>();
+        foreach (var module in _modules.All)
+        {
+            if (module.Manifest.Mcp is not { Count: > 0 } mcpList) continue;
+            if (!_flags.IsEnabled(ownerId, module.FeatureFlagKey)) continue;
+            var moduleRef = module;
+            foreach (var mcp in mcpList)
+            {
+                var args = (mcp.Args ?? [])
+                    .Select(a => Path.IsPathRooted(a) ? a : Path.GetFullPath(Path.Combine(module.ModuleDir, a)))
+                    .ToList();
+                servers.Add(new ModuleMcpServer(
+                    mcp.Key, mcp.Command, args, module.Id,
+                    $"{apiBase}{module.Manifest.Backend!.RoutePrefix}",
+                    () => _moduleTokens.Issue(moduleRef, user.Id, user.DisplayName ?? user.Username, "mcp")));
+            }
+        }
+        return servers.Count > 0 ? new ModulesMcpContext(servers) : null;
+    }
+
     // Контекст MCP-сервера уведомлений: всегда подключается, когда есть владелец.
     // Тот же сервисный токен, что у tasks/notes/workspace.
     private NotificationsMcpContext? BuildNotificationsContext(string? ownerId, string? personaId)
@@ -1289,7 +1329,8 @@ public class SessionManager
             BindingsProvider: BuildBindingsProvider(ownerId, session.PersonaId, workspace?.Sections),
             PersonaAgentsProvider: BuildPersonaAgentsProvider(ownerId, session),
             PromptSuggestionsEnabled: BuildPromptSuggestionsGate(ownerId),
-            Launcher: _launchers.ForOwner(ownerId)));
+            Launcher: _launchers.ForOwner(ownerId),
+            ModulesMcp: BuildModulesContext(ownerId)));
         entry.Process = adapter;
 
         await adapter.StartAsync();
@@ -1573,7 +1614,8 @@ public class SessionManager
                 BindingsProvider: BuildBindingsProvider(entry.Info.OwnerId, entry.Info.PersonaId, workspace?.Sections),
                 PersonaAgentsProvider: BuildPersonaAgentsProvider(entry.Info.OwnerId, entry.Info),
                 PromptSuggestionsEnabled: BuildPromptSuggestionsGate(entry.Info.OwnerId),
-                Launcher: _launchers.ForOwner(entry.Info.OwnerId));
+                Launcher: _launchers.ForOwner(entry.Info.OwnerId),
+                ModulesMcp: BuildModulesContext(entry.Info.OwnerId));
         }
         else
         {
@@ -1598,7 +1640,8 @@ public class SessionManager
                 BindingsProvider: BuildBindingsProvider(project.OwnerId, entry.Info.PersonaId, workspace?.Sections),
                 PersonaAgentsProvider: BuildPersonaAgentsProvider(project.OwnerId, entry.Info),
                 PromptSuggestionsEnabled: BuildPromptSuggestionsGate(project.OwnerId),
-                Launcher: _launchers.ForOwner(project.OwnerId));
+                Launcher: _launchers.ForOwner(project.OwnerId),
+                ModulesMcp: BuildModulesContext(project.OwnerId));
         }
         var adapter = _adapters.Create(entry.Info, context);
         entry.Process = adapter;

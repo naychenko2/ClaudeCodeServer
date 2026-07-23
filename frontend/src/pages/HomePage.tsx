@@ -4,7 +4,7 @@ import { C, FONT } from '../lib/design';
 import { useIsMobile } from '../lib/breakpoints';
 import { ensurePersonasLoaded } from '../lib/personas';
 import { HubHeader } from '../components/HubHeader';
-import type { HubTab } from '../components/HubTabs';
+import type { HubTabValue } from '../components/HubTabs';
 import { useHomeSummary } from '../features/home/useHomeSummary';
 import { ActivityWidget } from '../features/home/ActivityWidget';
 import { TasksWidget } from '../features/home/TasksWidget';
@@ -20,7 +20,7 @@ import { NotificationsWidget } from '../features/home/NotificationsWidget';
 interface Props {
   auth: AuthState;
   onLogout: () => void;
-  onHubTab: (t: HubTab) => void;
+  onHubTab: (t: HubTabValue) => void;
   onOpenProject: (p: Project) => void;
 }
 

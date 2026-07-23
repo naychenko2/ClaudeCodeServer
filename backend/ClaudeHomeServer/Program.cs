@@ -6,11 +6,13 @@ using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.TriggerSources;
+using ClaudeHomeServer.Services.Modules;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authentication.Negotiate;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.StaticFiles;
 using Yarp.ReverseProxy.Forwarder;
+using Yarp.ReverseProxy.Model;
 
 JwtSecurityTokenHandler.DefaultMapInboundClaims = false;
 
@@ -205,6 +207,14 @@ builder.Services.AddHttpClient("anthropic-oauth");
 builder.Services.AddHttpForwarder();
 builder.Services.AddReverseProxy()
     .LoadFromConfig(builder.Configuration.GetSection("ReverseProxy"));
+// Платформа внешних модулей (docs/module-platform-integration-contract.md): реестр манифестов,
+// RS256-токены с JWKS и ДОБАВОЧНЫЙ провайдер YARP-конфига из реестра (LoadFromConfig выше
+// не заменяется — YARP объединяет несколько IProxyConfigProvider, существующие маршруты
+// OnlyOffice/drawio/forgejo работают как раньше).
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Modules.ModuleRegistry>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Modules.ModuleTokenService>();
+builder.Services.AddSingleton<Yarp.ReverseProxy.Configuration.IProxyConfigProvider,
+    ClaudeHomeServer.Services.Modules.ModuleProxyConfigProvider>();
 builder.Services.Configure<DifyOptions>(builder.Configuration.GetSection(DifyOptions.Section));
 builder.Services.AddSingleton<KnowledgeService>();
 // Синк «файл проекта ↔ документ БЗ»: singleton + hosted-мост событий хода Claude
@@ -379,6 +389,10 @@ app.UseCors();
 app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
+
+// Gateway внешних модулей (контракт §5.2): срезка клиентских identity-заголовков,
+// валидация cc_token и инъекция модульного токена — ДО YARP-прокси
+app.UseModuleGateway();
 
 // WebDAV — middleware перехватывает /projects/* до роутинга.
 // Собственный Basic Auth внутри хендлера, вне JWT pipeline.
@@ -563,7 +577,47 @@ if (Directory.Exists(distPath))
     app.MapFallbackToFile("index.html", new StaticFileOptions { FileProvider = fp, OnPrepareResponse = setCacheHeaders });
 }
 
-app.MapReverseProxy();
+// JWKS модульных токенов (контракт §5.3) — публичный well-known, модули валидируют
+// подписи RS256 по нему; аутентификации не требует по определению
+app.MapGet("/.well-known/aihome-modules/jwks.json",
+    (ModuleTokenService tokens) => Results.Json(tokens.BuildJwks()));
+
+// Кастомный proxy-pipeline = дефолтный YARP + оформление ошибок модулей (§3.2):
+// gateway обязан отдавать зарезервированные формы module_unavailable/module_timeout.
+// Маршруты из конфига (OnlyOffice/drawio/forgejo) в ветку ошибок модулей не попадают.
+app.MapReverseProxy(proxyPipeline =>
+{
+    proxyPipeline.Use(async (ctx, next) =>
+    {
+        await next();
+
+        var routeId = ctx.GetReverseProxyFeature().Route.Config.RouteId;
+        if (!routeId.StartsWith("module-", StringComparison.Ordinal) || ctx.Response.HasStarted)
+            return;
+        var moduleId = routeId["module-".Length..];
+
+        var error = ctx.Features.Get<IForwarderErrorFeature>()?.Error;
+        if (error == ForwarderError.RequestTimedOut)
+        {
+            // §3.1/§3.2: activity timeout 300 с бездействия → форма module_timeout
+            ctx.Response.Clear();
+            ctx.Response.StatusCode = StatusCodes.Status504GatewayTimeout;
+            await ctx.Response.WriteAsJsonAsync(new { error = "module_timeout", moduleId });
+        }
+        else if (error is not null and not ForwarderError.RequestCanceled
+                 || ctx.Response.StatusCode is StatusCodes.Status502BadGateway or StatusCodes.Status503ServiceUnavailable)
+        {
+            // Модуль погашен/unhealthy (нет доступных destinations или ошибка соединения)
+            ctx.Response.Clear();
+            ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+            ctx.Response.Headers.RetryAfter = "15";
+            await ctx.Response.WriteAsJsonAsync(new { error = "module_unavailable", moduleId, retryAfterSeconds = 15 });
+        }
+    });
+    proxyPipeline.UseSessionAffinity();
+    proxyPipeline.UseLoadBalancing();
+    proxyPipeline.UsePassiveHealthChecks();
+});
 app.MapControllers();
 app.MapHub<SessionHub>("/hubs/session");
 app.MapHub<TerminalHub>("/hubs/terminal");

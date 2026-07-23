@@ -3,6 +3,19 @@ import { request } from './offline';
 
 export type { WorkflowAgentInfo, WorkflowAgentBlock };
 
+// Метаданные внешнего модуля из GET /api/modules (контракт §2/§7)
+export interface ModuleInfo {
+  id: string;
+  displayName: string;
+  description?: string | null;
+  version: string;
+  schemaVersion: string;
+  apiBase: string;                 // "/api/modules/{id}"
+  tab?: { label: string; icon?: string | null; order: number } | null;
+  remoteEntry?: string | null;     // с ?v={version}
+  exposedModule?: string | null;   // "./Tab"
+}
+
 export interface DifyDocument {
   id: string;
   name: string;
@@ -86,6 +99,12 @@ export const api = {
 
   fal: {
     account: (days = 7) => request<FalAccountResponse>(`/fal/account?days=${days}`),
+  },
+
+  // Внешние модули (платформа): список включённых у юзера модулей для оболочки (R6).
+  // Данные к самим модулям идут мимо этого API — через gateway /api/modules/{id}/** (YARP).
+  modules: {
+    list: () => request<{ items: ModuleInfo[] }>('/modules'),
   },
 
   providers: {

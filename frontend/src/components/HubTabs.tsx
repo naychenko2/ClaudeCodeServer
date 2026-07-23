@@ -1,9 +1,21 @@
 import type { ReactNode } from 'react';
-import { Book, Calendar, Folder, House, MessageCircle, Share2, Users } from 'lucide-react';
+import { Book, Calendar, Folder, House, MessageCircle, Puzzle, Share2, Users } from 'lucide-react';
 import { PillSwitch } from './Toolbar';
 import { ProjectSwitcherZone } from '../features/projects/ProjectSwitcherZone';
+import { useModules } from '../lib/modules';
 
 export type HubTab = 'home' | 'chats' | 'projects' | 'calendar' | 'notes' | 'personas' | 'knowledge' | 'notifications';
+
+// Значение таба хаба: фиксированный раздел ЛИБО внешний модуль (`module:{id}`, ТЗ R6).
+// Модульные табы приходят из реестра (GET /api/modules) и генерятся динамически.
+export type HubTabValue = HubTab | `module:${string}`;
+
+export function isModuleTab(v: HubTabValue): v is `module:${string}` {
+  return typeof v === 'string' && v.startsWith('module:');
+}
+export function moduleIdOf(v: HubTabValue): string | null {
+  return isModuleTab(v) ? v.slice('module:'.length) : null;
+}
 
 // Иконки разделов для мобильного компакт-режима (lucide-react, Feather-стиль).
 const TAB_ICONS: Record<HubTab, ReactNode> = {
@@ -34,8 +46,8 @@ const TABLESS: HubTab[] = ['home', 'notifications', 'knowledge'];
 // mobile: компакт-режим — неактивные сегменты иконками, подпись только у активного
 // (разделы помещаются на 320px без обрезания и скролла).
 export function HubTabs({ value, onChange, mobile, tabs = DEFAULT_TABS, currentProjectId }: {
-  value: HubTab;
-  onChange: (t: HubTab) => void;
+  value: HubTabValue;
+  onChange: (t: HubTabValue) => void;
   mobile?: boolean;
   // Какие разделы показать. На мобиле HubHeader передаёт сокращённый primary-набор,
   // остальное уходит в «⋯ Разделы» (overflow), чтобы вкладки не скроллились под обрез.
@@ -44,19 +56,29 @@ export function HubTabs({ value, onChange, mobile, tabs = DEFAULT_TABS, currentP
   // раскрывается только когда активен раздел «Проекты» и это десктоп (не mobile).
   currentProjectId?: string;
 }) {
+  // Вкладки внешних модулей из реестра (ТЗ R6): дописываются в конец, значение `module:{id}`.
+  const modules = useModules();
+  const moduleOptions = modules
+    .filter(m => m.tab)
+    .map(m => ({ value: `module:${m.id}` as HubTabValue, label: m.tab!.label, icon: <Puzzle size={18} strokeWidth={2} /> }));
+
   // Зона проектов заменяет вкладку «Проекты», когда раздел активен (десктоп). Вне
   // раздела и на мобиле — обычная вкладка.
   const showZone = !mobile && value === 'projects';
   // Активный раздел вне набора табов: из TABLESS — не получает вкладку вовсе
   // (PillSwitch умеет «нет выбранного»), остальные скрытые дописываются условной
   // вкладкой в конец. На мобиле так всплывают «Заметки» и «Персоны» из «⋯ Разделы»,
-  // чтобы было видно, где находишься.
-  const shown = tabs.includes(value) || TABLESS.includes(value) ? tabs : [...tabs, value];
-  const options = shown.map(v => mobile
-    ? { value: v, label: TAB_LABELS[v], icon: TAB_ICONS[v] }
-    : { value: v, label: TAB_LABELS[v] });
+  // чтобы было видно, где находишься. Модульный таб в набор фиксированных не входит —
+  // он живёт в moduleOptions ниже, поэтому из проверки исключаем.
+  const isKnownFixed = !isModuleTab(value) && (tabs.includes(value) || TABLESS.includes(value));
+  const shown = isKnownFixed || isModuleTab(value) ? tabs : [...tabs, value as HubTab];
+  const fixedOptions = shown.map(v => mobile
+    ? { value: v as HubTabValue, label: TAB_LABELS[v], icon: TAB_ICONS[v] }
+    : { value: v as HubTabValue, label: TAB_LABELS[v] });
+  const options = mobile ? [...fixedOptions, ...moduleOptions]
+    : [...fixedOptions, ...moduleOptions.map(o => ({ value: o.value, label: o.label }))];
   return (
-    <PillSwitch<HubTab>
+    <PillSwitch<HubTabValue>
       value={value}
       onChange={onChange}
       draggable

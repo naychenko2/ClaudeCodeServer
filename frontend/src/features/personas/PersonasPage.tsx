@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronsLeft, Menu, Pin } from 'lucide-react';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import type { AuthState, Persona, Project, Session } from '../../types';
-import type { HubTab } from '../../components/HubTabs';
+import type { HubTabValue } from '../../components/HubTabs';
 import { HubHeader } from '../../components/HubHeader';
 import { C, FONT } from '../../lib/design';
 import { AGENT_COLORS } from '../../components/AgentSelector';
@@ -28,7 +28,7 @@ import { PersonasHub } from './PersonasHub';
 export function PersonasPage({ auth, onLogout, onHubTab }: {
   auth: AuthState;
   onLogout: () => void;
-  onHubTab: (t: HubTab) => void;
+  onHubTab: (t: HubTabValue) => void;
 }) {
   const isMobile = useIsMobile();
   // Ширина сайдбара — общая со всеми разделами (cc_sidebar_width) + перетаскиваемый сплиттер

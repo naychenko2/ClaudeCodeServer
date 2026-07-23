@@ -16,7 +16,7 @@ import { useSidebarWidth } from '../lib/sidebarWidth';
 import { MOBILE_MAX, MOBILE_QUERY, TABLET_MAX } from '../lib/breakpoints';
 import { PillSwitch } from '../components/Toolbar';
 import { ToolbarOverflowMenu, type OverflowItem } from '../components/ToolbarOverflowMenu';
-import type { HubTab } from '../components/HubTabs';
+import type { HubTabValue } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
 import { BackButton, IconButton, Splitter } from '../components/ui';
 import { navPush, navReplace, parseHash, type NavSnapshot } from '../lib/nav';
@@ -44,7 +44,7 @@ interface Props {
   project: Project;
   onGoToProjects: () => void;
   // Переключение раздела хаба «Чаты | Проекты» из верхней шапки проекта
-  onSwitchHub: (t: HubTab) => void;
+  onSwitchHub: (t: HubTabValue) => void;
   auth: AuthState;
   onLogout: () => void;
 }

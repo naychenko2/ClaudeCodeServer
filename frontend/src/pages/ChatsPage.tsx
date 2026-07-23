@@ -10,7 +10,7 @@ import { useSidebarDrag } from '../lib/sidebarWidth';
 import { useIsMobile } from '../lib/breakpoints';
 import { Button, IconButton, Splitter } from '../components/ui';
 import { ICON_SIZE } from '../components/ui/icons';
-import type { HubTab } from '../components/HubTabs';
+import type { HubTabValue } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
 import { ChatList } from '../components/ChatList';
 import { ChatPanel } from '../components/ChatPanel';
@@ -23,7 +23,7 @@ const OPEN_CHAT_KEY = 'cc_open_chat';
 interface Props {
   auth: AuthState;
   onLogout: () => void;
-  onHubTab: (t: HubTab) => void;
+  onHubTab: (t: HubTabValue) => void;
 }
 
 export function ChatsPage({ auth, onLogout, onHubTab }: Props) {

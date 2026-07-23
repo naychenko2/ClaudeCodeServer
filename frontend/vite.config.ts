@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
+import { federation } from '@module-federation/vite';
 
 // Порт бэкенда для прокси /api и /hubs (по умолчанию 5000; переопределяется BACKEND_PORT)
 const backendPort = process.env.BACKEND_PORT || '5000';
@@ -12,6 +13,19 @@ const backendUrl = `http://127.0.0.1:${backendPort}`;
 export default defineConfig({
   plugins: [
     react(),
+    // Host Module Federation (контракт §7, ТЗ R5): устанавливает shared-scope с
+    // singleton react/react-dom для внешних модулей. Remotes регистрируются в рантайме
+    // (registerRemotes по списку GET /api/modules) — статических remotes нет.
+    // Спайк R5a подтвердил: Vite 8/Rolldown + MF + PWA injectManifest собираются,
+    // React-инстанс один, remote-чанки не попадают в precache (живут под /api/modules/**/ui/).
+    federation({
+      name: 'aihome_shell',
+      remotes: {},
+      shared: {
+        react: { singleton: true, requiredVersion: '^19.2.0' },
+        'react-dom': { singleton: true, requiredVersion: '^19.2.0' },
+      },
+    }),
     VitePWA({
       registerType: 'prompt',
       // Свой sw (src/sw.ts): прежний precache/SPA-fallback + обработчики web push.

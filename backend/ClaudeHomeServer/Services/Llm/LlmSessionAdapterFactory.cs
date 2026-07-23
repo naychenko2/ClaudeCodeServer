@@ -15,6 +15,8 @@ public interface ILlmSessionAdapterFactory
 public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
 {
     private readonly string? _mcpConfigPath;
+    // Ключ HTTP MCP-сервера fal-ai (инжектится в конфиг хода в BuildTurnMcpConfig)
+    private readonly string? _falMcpApiKey;
     private readonly string[] _disallowedTools;
     private readonly SkillsService _skills;
     private readonly WorkspaceKnowledgeStore _workspaceStore;
@@ -28,6 +30,7 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
         ClaudeSubscriptionPool subscriptionPool)
     {
         _mcpConfigPath = config["McpConfigPath"];
+        _falMcpApiKey = config["Fal:McpApiKey"];
         _disallowedTools = config.GetSection("Claude:DisallowedTools").Get<string[]>() ?? [];
         // Шумоподавление ватчера изменений файлов (секция FileWatcher) — пустые списки
         // в конфиге дают дефолты, отдельные ключи переопределяют только себя
@@ -60,6 +63,6 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
                 $"Провайдер «{provider.DisplayName}» не настроен: задай LlmProviders:{provider.Key}:ApiKey в appsettings.Local.json");
         return new Claude.ClaudeSession(session, context, _mcpConfigPath, _skills,
             _workspaceStore, _disallowedTools, _providers, _subscriptionPool, _fileWatcherOptions,
-            _bgLingerTimeout);
+            _bgLingerTimeout, _falMcpApiKey);
     }
 }

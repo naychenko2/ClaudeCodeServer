@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronLeft, Menu as MenuIcon, MessageCircle, Pin } from 'lucide-react';
 import type { AuthState, NoteDetail, NoteSemanticHit, NoteSummary } from '../../types';
-import type { HubTab } from '../../components/HubTabs';
+import type { HubTabValue } from '../../components/HubTabs';
 import { HubHeader } from '../../components/HubHeader';
 import { PillSwitch } from '../../components/Toolbar';
 import { NewNoteDialog } from './NewNoteDialog';
@@ -77,7 +77,7 @@ const NOTE_CONN_SIDEBAR_MIN = 1000;
 export function NotesPage({ auth, onLogout, onHubTab }: {
   auth: AuthState;
   onLogout: () => void;
-  onHubTab: (t: HubTab) => void;
+  onHubTab: (t: HubTabValue) => void;
 }) {
   const isMobile = useIsMobile();
   const windowWidth = useWindowWidth();

@@ -54,6 +54,18 @@ public sealed record RecallBlock(string? Text, IReadOnlyList<RecallItem> Items);
 // personaId в создаваемое уведомление (лицо персоны на уведомлении).
 public record NotificationsMcpContext(string ApiUrl, string Token, string? SelfPersonaId = null);
 
+// Один MCP-сервер внешнего модуля (контракт docs/module-platform-integration-contract.md §6):
+// Key — ключ сервера в mcp-конфиге хода, Command/Args — запуск из манифеста (args уже
+// резолвнуты от каталога модуля), ModuleId — id модуля, ApiUrl — адрес модуля ЧЕРЕЗ gateway
+// ядра ({ядро}/api/modules/{id}), TokenFactory — свежий модульный токен chan=mcp (TTL 60 мин)
+// на каждый ход. Не Claude-специфичен.
+public sealed record ModuleMcpServer(string Key, string Command, IReadOnlyList<string> Args,
+    string ModuleId, string ApiUrl, Func<string> TokenFactory);
+
+// Контекст MCP-серверов внешних модулей: аддитивный список поверх встроенных серверов
+// (null/пусто — модулей нет или все скрыты фич-флагами module-{id}).
+public sealed record ModulesMcpContext(IReadOnlyList<ModuleMcpServer> Servers);
+
 // Выделенный memory-сервер персоны-консультанта (файлового сабагента): ключ сервера
 // в MCP-конфиге хода ("pmem_<handle>") + env memory-server ЭТОЙ персоны. Файл агента
 // ссылается на сервер по имени (mcpServers: [pmem_<handle>]), а определение с токеном
@@ -116,4 +128,7 @@ public sealed record LlmSessionContext(
     Func<bool>? PromptSuggestionsEnabled = null,
     // Драйвер среды исполнения владельца (local / docker-песочница);
     // null — локальный запуск, историческое поведение
-    Execution.IProcessLauncher? Launcher = null);
+    Execution.IProcessLauncher? Launcher = null,
+    // MCP-серверы внешних модулей из реестра (контракт §6, ТЗ R7); null — модулей нет
+    // или скрыты фич-флагами. Аддитивно к встроенным серверам, коллизии ключей — пропуск.
+    ModulesMcpContext? ModulesMcp = null);

@@ -4,7 +4,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Plus } from 'lucide-react';
 import type { AuthState, Project, ProjectGroup, Task } from '../../types';
-import type { HubTab } from '../../components/HubTabs';
+import type { HubTabValue } from '../../components/HubTabs';
 import { navPush, navReplace, parseHash, type NavSnapshot } from '../../lib/nav';
 import { HubHeader } from '../../components/HubHeader';
 import { PillSwitch } from '../../components/Toolbar';
@@ -24,7 +24,7 @@ import { NewTaskDialog } from './NewTaskDialog';
 interface Props {
   auth: AuthState;
   onLogout: () => void;
-  onHubTab: (t: HubTab) => void;
+  onHubTab: (t: HubTabValue) => void;
   // Открыть задачу в воркспейсе её проекта (вкладка «Задачи»)
   onOpenTask: (project: Project, taskId: string) => void;
 }

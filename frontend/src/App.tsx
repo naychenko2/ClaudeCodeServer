@@ -4,7 +4,10 @@ import { LoginPage } from './pages/LoginPage'
 import { ProjectListPage } from './pages/ProjectListPage'
 import { ChatsPage } from './pages/ChatsPage'
 import { WorkspacePage } from './pages/WorkspacePage'
-import type { HubTab } from './components/HubTabs'
+import type { HubTabValue } from './components/HubTabs'
+import { moduleIdOf } from './components/HubTabs'
+import { ModuleScreen } from './components/modules/ModuleScreen'
+import { loadModules } from './lib/modules'
 import { UpdatePrompt } from './components/UpdatePrompt'
 import { NotificationToasts } from './components/NotificationToasts'
 import { ProductHistory } from './components/ProductHistory'
@@ -90,7 +93,7 @@ export default function App() {
   // hash-диплинк приоритетнее, а без hash всегда открывается 'home'. Ключ HUB_TAB_KEY
   // теперь write-only (старт его НЕ читает) — записи по коду оставлены как навигационная
   // память для будущего, но на выбор стартового экрана не влияют.
-  const [hubTab, setHubTab] = useState<HubTab>(() => {
+  const [hubTab, setHubTab] = useState<HubTabValue>(() => {
     if (initialHash?.screen === 'home') return 'home'
     if (initialHash?.screen === 'calendar') return 'calendar'
     if (initialHash?.screen === 'chats') return 'chats'
@@ -98,10 +101,11 @@ export default function App() {
     if (initialHash?.screen === 'personas') return 'personas'
     if (initialHash?.screen === 'knowledge') return 'knowledge'
     if (initialHash?.screen === 'notifications') return 'notifications'
+    if (initialHash?.screen === 'module' && initialHash.moduleId) return `module:${initialHash.moduleId}` as HubTabValue
     if (initialHash?.screen === 'projects' || initialHash?.screen === 'project') return 'projects'
     return 'home'
   })
-  const effectiveHubTab: HubTab = hubTab
+  const effectiveHubTab: HubTabValue = hubTab
 
   // «Что нового» — продуктовая история по всем проектам. Overlay на верхнем уровне,
   // открывается из HubHeader (событие) из любого раздела.
@@ -236,6 +240,7 @@ export default function App() {
         if (fresh) localStorage.setItem('cc_display_name', fresh)
         else localStorage.removeItem('cc_display_name')
         loadModels() // актуальный список моделей Claude (fire-and-forget, есть fallback)
+        void loadModules() // список внешних модулей платформы для вкладок оболочки (R6)
         // Таймзона устройства — серверу для напоминаний (fire-and-forget)
         const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
         if (tz) api.auth.setTimeZone(tz).catch(() => {})
@@ -341,6 +346,10 @@ export default function App() {
       } else if (s?.screen === 'notifications') {
         // Раздел «Уведомления» — проект «спит»
         if (hubTab !== 'notifications') { localStorage.setItem(HUB_TAB_KEY, 'notifications'); setHubTab('notifications') }
+      } else if (s?.screen === 'module' && s.moduleId) {
+        // Раздел внешнего модуля — проект «спит»
+        const tab = `module:${s.moduleId}` as HubTabValue
+        if (hubTab !== tab) { localStorage.setItem(HUB_TAB_KEY, tab); setHubTab(tab) }
       } else if (s?.screen === 'projects') {
         // Список проектов — явный выход из проекта
         if (project) { localStorage.removeItem(OPEN_PROJECT_KEY); setProject(null) }
@@ -433,7 +442,7 @@ export default function App() {
   }
   // Переключатель раздела «Чаты | Проекты». НЕ сбрасывает открытый проект — он «спит»
   // при уходе в «Чаты» и восстанавливается при возврате в «Проекты» (навигационная память).
-  const switchHubTab = (t: HubTab) => {
+  const switchHubTab = (t: HubTabValue) => {
     // Уход в раздел закрывает overlay «Что нового» ЗАМЕНОЙ записи #/history, а не Back'ом:
     // history.back() асинхронен, и его popstate прилетел бы уже ПОСЛЕ смены раздела, вернув
     // hubTab на снимок, из которого overlay открывали (клик по «Персонам» кидал в «Проекты»).
@@ -458,7 +467,10 @@ export default function App() {
     }
     localStorage.setItem(HUB_TAB_KEY, t)
     setHubTab(t)
-    const dest: NavSnapshot = { screen: t === 'home' ? 'home' : t === 'chats' ? 'chats' : t === 'calendar' ? 'calendar' : t === 'notes' ? 'notes' : t === 'personas' ? 'personas' : t === 'knowledge' ? 'knowledge' : t === 'notifications' ? 'notifications' : 'projects' }
+    const moduleId = moduleIdOf(t)
+    const dest: NavSnapshot = moduleId
+      ? { screen: 'module', moduleId }
+      : { screen: t === 'home' ? 'home' : t === 'chats' ? 'chats' : t === 'calendar' ? 'calendar' : t === 'notes' ? 'notes' : t === 'personas' ? 'personas' : t === 'knowledge' ? 'knowledge' : t === 'notifications' ? 'notifications' : 'projects' }
     // Если на текущем табе открыто «глубокое» состояние (заметка/файл/задача/персона/база) — уходя,
     // сохраняем его в истории (navPush), чтобы Back вернул именно к нему. Уход С дашборда
     // «Домой» — тоже push: дашборд — хаб-центр, Back с любого раздела возвращает на него.
@@ -612,7 +624,10 @@ export default function App() {
     }
     // Диплинк на раздел без глубокой цели — просто переключаемся на него
     if (target) {
-      switchHubTab(target.screen === 'project' ? 'projects' : target.screen)
+      const dest: HubTabValue = target.screen === 'project' ? 'projects'
+        : target.screen === 'module' ? `module:${target.moduleId ?? ''}` as HubTabValue
+        : target.screen
+      switchHubTab(dest)
       return
     }
     // Не диплинк (абсолютный внешний URL) — полная загрузка, как раньше
@@ -674,6 +689,9 @@ export default function App() {
               ? <KnowledgePage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
               : effectiveHubTab === 'notifications'
                 ? <NotificationsPage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
+              : moduleIdOf(effectiveHubTab)
+                // Внешний модуль платформы (generic module-screen, ТЗ R6)
+                ? <ModuleScreen key={effectiveHubTab} moduleId={moduleIdOf(effectiveHubTab)!} auth={auth} onLogout={logout} onHubTab={switchHubTab} />
               : project
                 // key: прямой переход проект→проект (back/forward) обязан перемонтировать
                 // WorkspacePage — иначе useState-инициализаторы не перечитают состояние

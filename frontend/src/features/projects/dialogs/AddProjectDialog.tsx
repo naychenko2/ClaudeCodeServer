@@ -3,10 +3,10 @@ import type { Project, ProjectGroup } from '../../../types';
 import { api } from '../../../lib/api';
 import { C, MODAL_W } from '../../../lib/design';
 import { Modal, ModalActions, TextField, Field, SegmentedControl } from '../../../components/ui';
-import { AGENT_COLORS, agentDotColor } from '../../../components/AgentSelector';
 import { GroupSelect } from '../GroupSelect';
 import { SyncToggleRow } from '../components/SyncToggleRow';
 import { GIT_MODES, GitModeCard, GitPushRow, type GitMode } from '../components/GitModeCards';
+import { ProjectIconSection, type DraftIcon } from '../ProjectIconSection';
 import { invalidateProjectsCache } from '../useAllProjects';
 
 interface Props {
@@ -30,6 +30,7 @@ export function AddProjectDialog({ groups, defaultGroupId, onSuccess, onClose }:
   const [gitMode, setGitMode] = useState<GitMode>('none');
   const [gitPush, setGitPush] = useState(false);
   const [color, setColor] = useState<string | null>(null);
+  const [draftIcon, setDraftIcon] = useState<DraftIcon | null>(null);
   const [error, setError] = useState('');
 
   const handleConfirm = async () => {
@@ -41,9 +42,20 @@ export function AddProjectDialog({ groups, defaultGroupId, onSuccess, onClose }:
         gitAutoCommit: gitMode === 'auto',
         gitAutoPush: gitMode === 'auto' && gitPush,
       }, color);
+      // Картинку иконки прикрепляем ВТОРЫМ вызовом к уже созданному проекту (best-effort, как git):
+      // загрузка своего файла — uploadIcon (есть оригинал+кроп), генеративная — setIconImageFile.
+      // Сбой не отменяет создание — иконку можно задать в «Редактировать проект».
+      let created = p;
+      if (draftIcon) {
+        try {
+          created = draftIcon.original
+            ? await api.projects.uploadIcon(p.id, draftIcon.original, draftIcon.blob, draftIcon.crop!)
+            : await api.projects.setIconImageFile(p.id, draftIcon.blob);
+        } catch { /* проект создан, иконку можно доставить в настройках проекта */ }
+      }
       if (sync) api.sync.add(p.id, '', true).catch(() => {});
       invalidateProjectsCache(); // полка/палитра проектов видят новый проект сразу
-      onSuccess(p);
+      onSuccess(created);
     } catch (e: any) {
       setError(e.message);
     }
@@ -71,36 +83,19 @@ export function AddProjectDialog({ groups, defaultGroupId, onSuccess, onClose }:
         options={[{ value: 'new', label: 'Новый' }, { value: 'existing', label: 'Существующий' }]}
       />
 
-      <TextField value={name} onChange={setName} placeholder="Название" autoFocus />
-
-      {/* Цвет иконки: инициалы на цветном фоне. Картинку/генерацию задают уже после создания
-          (в «Редактировать проект» — там есть id). Не выбран → авто-цвет по проекту. */}
-      <Field label="Цвет иконки">
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          <span style={{
-            width: 26, height: 26, borderRadius: 7, flexShrink: 0,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            background: color ? agentDotColor(color) : C.textMuted, color: '#fff',
-            fontSize: 11, fontWeight: 700,
-          }}>
-            {(name.trim().slice(0, 2) || '?').toUpperCase()}
-          </span>
-          {Object.keys(AGENT_COLORS).map(key => (
-            <button
-              key={key}
-              type="button"
-              title={key}
-              onClick={() => setColor(c => (c === key ? null : key))}
-              style={{
-                width: 22, height: 22, borderRadius: '50%', cursor: 'pointer',
-                background: agentDotColor(key), flexShrink: 0,
-                border: color === key ? `2px solid ${C.textHeading}` : '2px solid transparent',
-                boxShadow: color === key ? `0 0 0 1px ${C.bgWhite} inset` : undefined,
-              }}
-            />
-          ))}
-        </div>
-      </Field>
+      {/* Иконка + название проекта (тот же блок, что в «Редактировать проект»). В режиме создания
+          картинка (генерация/загрузка) держится в draftIcon и прикрепляется после create().
+          Черновой Project несёт актуальные name/color для живого превью инициалов. */}
+      <ProjectIconSection
+        creating
+        project={{ id: '', name, rootPath: '', createdAt: '', updatedAt: '', icon: { kind: 'initials', color: color ?? undefined } }}
+        name={name}
+        onNameChange={setName}
+        color={color}
+        onColorChange={setColor}
+        onIconUpdated={() => {}}
+        onDraftIconChange={setDraftIcon}
+      />
 
       {mode === 'existing' && (
         <Field label="Путь к папке" hint="Абсолютный путь к существующей папке проекта">

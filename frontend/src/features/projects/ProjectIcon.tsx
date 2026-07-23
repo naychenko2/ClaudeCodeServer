@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { Project } from '../../types';
 import { FONT } from '../../lib/design';
 import { agentDotColor } from '../../components/AgentSelector';
@@ -11,9 +11,13 @@ import { projectInitials } from './projectUtil';
 // (с фолбэком на инициалы при ошибке). Иначе — две буквы на цветном фоне.
 // Цвет: icon.color из палитры AGENT_COLORS; если не задан — детерминированный
 // projectColor(id), чтобы старые проекты без иконки не «побелели».
-export function ProjectIcon({ project, size = 40, radius }: { project: Project; size?: number; radius?: number }) {
+export function ProjectIcon({ project, size = 40, radius, imageUrl: imageUrlOverride }: { project: Project; size?: number; radius?: number; imageUrl?: string | null }) {
   const [hasError, setHasError] = useState(false);
-  const imageUrl = project.icon?.kind === 'image' ? api.projects.iconUrl(project) : null;
+  // imageUrlOverride — локальный objectURL для превью ещё не сохранённой картинки (диалог создания).
+  const imageUrl = imageUrlOverride ?? (project.icon?.kind === 'image' ? api.projects.iconUrl(project) : null);
+  // Сброс ошибки при смене картинки — иначе после одного сбоя hasError залипает и валидный
+  // новый src (перекроп/новый кандидат) не рисуется (компонент не перемонтируется по смене пропа).
+  useEffect(() => { setHasError(false); }, [imageUrl]);
   const br = radius ?? Math.round(size * 0.22);
 
   const base: React.CSSProperties = {
@@ -26,6 +30,7 @@ export function ProjectIcon({ project, size = 40, radius }: { project: Project; 
         src={imageUrl}
         alt=""
         aria-hidden
+        draggable={false}
         onError={() => setHasError(true)}
         style={{ ...base, objectFit: 'cover', display: 'block' }}
       />

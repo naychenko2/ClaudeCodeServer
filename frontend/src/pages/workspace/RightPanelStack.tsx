@@ -69,70 +69,80 @@ interface Props {
   railCounts?: Partial<Record<PanelKey, number>>;
 }
 
-// Вертикальный разделитель между колонками (и по краям зоны): в покое — пустой
-// зазор GAP, во время drag-and-drop панели — дроп-зона для выноса в НОВУЮ колонку
-// (расширяется, пунктирная направляющая; при наведении — акцентная)
-function ColumnSep({ dndActive, over, onDragOver, onDragLeave, onDrop }: {
+// Ширина/высота дроп-зоны сепаратора при перетаскивании (только оверлей, в потоке
+// места не занимает — иначе панели ужимались бы на время DnD)
+const SEP_HIT = 22;
+
+// Вертикальный разделитель между колонками (и по краям зоны): в потоке всегда
+// занимает ровно `base` px (в покое и при DnD — одинаково), а дроп-зона выноса в
+// НОВУЮ колонку рисуется absolute-оверлеем поверх зазора: пунктирная направляющая,
+// при наведении — акцентная. Так раскладка при перетаскивании не «дышит».
+function ColumnSep({ dndActive, over, base = GAP, onDragOver, onDragLeave, onDrop }: {
   dndActive: boolean;
   over: boolean;
+  base?: number;
   onDragOver: (e: DragEvent) => void;
   onDragLeave: () => void;
   onDrop: (e: DragEvent) => void;
 }) {
   return (
-    <div
-      onDragOver={onDragOver}
-      onDragLeave={onDragLeave}
-      onDrop={onDrop}
-      style={{
-        width: dndActive ? 22 : GAP, flexShrink: 0, alignSelf: 'stretch',
-        display: 'flex', alignItems: 'stretch', justifyContent: 'center',
-        transition: 'width 0.1s ease-out', padding: dndActive ? '2px 0' : 0, boxSizing: 'border-box',
-      }}
-    >
+    <div style={{ width: base, flexShrink: 0, alignSelf: 'stretch', position: 'relative' }}>
       {dndActive && (
-        <div style={{
-          width: 2, borderRadius: 2, margin: '0 auto',
-          background: over ? C.accent : 'transparent',
-          borderLeft: over ? 'none' : `1px dashed ${C.textMuted}`,
-          opacity: over ? 1 : 0.5,
-          transition: 'background 0.12s ease, opacity 0.12s ease',
-        }} />
+        <div
+          onDragOver={onDragOver}
+          onDragLeave={onDragLeave}
+          onDrop={onDrop}
+          style={{
+            position: 'absolute', top: 0, bottom: 0, left: (base - SEP_HIT) / 2, width: SEP_HIT, zIndex: 5,
+            display: 'flex', alignItems: 'stretch', justifyContent: 'center',
+            padding: '2px 0', boxSizing: 'border-box',
+          }}
+        >
+          <div style={{
+            width: 2, borderRadius: 2, margin: '0 auto',
+            background: over ? C.accent : 'transparent',
+            borderLeft: over ? 'none' : `1px dashed ${C.textMuted}`,
+            opacity: over ? 1 : 0.5,
+            transition: 'background 0.12s ease, opacity 0.12s ease',
+          }} />
+        </div>
       )}
     </div>
   );
 }
 
 // Горизонтальный плейсхолдер вставки внутри колонки (над/между/под панелями):
-// появляется только во время drag-and-drop — пунктирная направляющая,
-// при наведении — акцентная (парный к вертикальному ColumnSep)
-function RowSep({ dndActive, over, onDragOver, onDragLeave, onDrop }: {
+// парный к ColumnSep — в потоке занимает `base` px (0 по краям колонки, GAP между
+// панелями, где он подменяет хендл ресайза), сама дроп-зона — absolute-оверлей
+function RowSep({ dndActive, over, base = 0, onDragOver, onDragLeave, onDrop }: {
   dndActive: boolean;
   over: boolean;
+  base?: number;
   onDragOver: (e: DragEvent) => void;
   onDragLeave: () => void;
   onDrop: (e: DragEvent) => void;
 }) {
   return (
-    <div
-      onDragOver={onDragOver}
-      onDragLeave={onDragLeave}
-      onDrop={onDrop}
-      style={{
-        height: dndActive ? 18 : 0, flexShrink: 0,
-        display: 'flex', alignItems: 'center', justifyContent: 'stretch',
-        transition: 'height 0.1s ease-out', padding: dndActive ? '0 2px' : 0, boxSizing: 'border-box',
-        overflow: 'hidden',
-      }}
-    >
+    <div style={{ height: base, flexShrink: 0, position: 'relative' }}>
       {dndActive && (
-        <div style={{
-          height: 2, borderRadius: 2, flex: 1,
-          background: over ? C.accent : 'transparent',
-          borderTop: over ? 'none' : `1px dashed ${C.textMuted}`,
-          opacity: over ? 1 : 0.5,
-          transition: 'background 0.12s ease, opacity 0.12s ease', boxSizing: 'border-box',
-        }} />
+        <div
+          onDragOver={onDragOver}
+          onDragLeave={onDragLeave}
+          onDrop={onDrop}
+          style={{
+            position: 'absolute', left: 0, right: 0, top: (base - SEP_HIT) / 2, height: SEP_HIT, zIndex: 5,
+            display: 'flex', alignItems: 'center', justifyContent: 'stretch',
+            padding: '0 2px', boxSizing: 'border-box',
+          }}
+        >
+          <div style={{
+            height: 2, borderRadius: 2, flex: 1,
+            background: over ? C.accent : 'transparent',
+            borderTop: over ? 'none' : `1px dashed ${C.textMuted}`,
+            opacity: over ? 1 : 0.5,
+            transition: 'background 0.12s ease, opacity 0.12s ease', boxSizing: 'border-box',
+          }} />
+        </div>
       )}
     </div>
   );
@@ -542,10 +552,9 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, toolsE
           <IslandSplitter orientation="v" active={dragging === 'width'} onMouseDown={handleWidthDrag} />
           <div style={{
             // В покое крайний ЛЕВЫЙ ColumnSep не рендерится (зазор от центра уже даёт
-            // ресайз-сплиттер) — сепараторов columns.length; при DnD появляются все
-            // (columns.length + 1) как дроп-зоны. Ширина зоны при DnD НЕ меняется:
-            // расширенные сепараторы вписываются лёгким ужатием колонок (flex),
-            // иначе зона «прыгала» бы на время перетаскивания.
+            // ресайз-сплиттер) — сепараторов columns.length; при DnD появляется и он,
+            // но нулевой ширины. Ни ширина зоны, ни размеры панелей при DnD НЕ меняются:
+            // дроп-зоны сепараторов — absolute-оверлеи, места в потоке не занимают.
             width: columns.length * (width + GAP),
             // Вертикальные отступы зоны даёт холст DesktopWorkspace (padding GAP).
             // overflow visible — иначе зона срезала бы тени крайних панелей-островов
@@ -560,6 +569,7 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, toolsE
                 {(ci > 0 || dndFrom !== null) && (
                   <ColumnSep
                     dndActive={dndFrom !== null}
+                    base={ci > 0 ? GAP : 0}
                     over={dndOverSep === ci}
                     onDragOver={e => { if (dndFrom) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDndOverSep(ci); } }}
                     onDragLeave={() => setDndOverSep(cur => (cur === ci ? null : cur))}
@@ -568,11 +578,14 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, toolsE
                 )}
                 <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
                   {(() => {
-                    // Горизонтальный плейсхолдер вставки на позицию ri колонки ci
-                    const rowSep = (ri: number) => (
+                    // Горизонтальный плейсхолдер вставки на позицию ri колонки ci.
+                    // base — место в потоке: по краям колонки 0 (в покое их нет),
+                    // между панелями GAP (подменяет хендл ресайза той же высоты)
+                    const rowSep = (ri: number, base = 0) => (
                       <RowSep
                         key={`sep-${ri}`}
                         dndActive={dndFrom !== null}
+                        base={base}
                         over={dndOverRow === `${ci}:${ri}`}
                         onDragOver={e => { if (dndFrom) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDndOverRow(`${ci}:${ri}`); } }}
                         onDragLeave={() => setDndOverRow(cur => (cur === `${ci}:${ri}` ? null : cur))}
@@ -586,7 +599,7 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, toolsE
                           <div key={k} style={{ display: 'contents' }}>
                             {ri > 0 && fsKey !== k && fsKey !== col[ri - 1] && (
                               dndFrom !== null
-                                ? rowSep(ri)
+                                ? rowSep(ri, GAP)
                                 : <GapHandle active={dragging === `${ci}:${ri}`} onPointerDown={handleRowDrag(col[ri - 1], k, `${ci}:${ri}`)} />
                             )}
                             {renderPanel(k)}

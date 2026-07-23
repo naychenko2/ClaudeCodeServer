@@ -28,6 +28,25 @@
     <None Include="..\..\claude-defaults\**\*" LinkBase="claude-defaults" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <!-- ConPTY-мост Windows-терминала нужен рядом с сервером как ФАЙЛ (exe+dll+runtimeconfig),
+       не как сборка: референс задаёт только порядок сборки, копирует Copy-таргет ниже.
+       Условие на Windows обязательно: Docker-сборка (Linux) рестает ГОЛЫЙ ClaudeHomeServer.csproj
+       до COPY backend/ — безусловный референс на ещё не скопированный проект уронил бы restore.
+       На бою мост кладёт рядом с exe отдельный publish-шаг deploy80.ps1 -->
+  <ItemGroup>
+    <ProjectReference Include="..\ConPtyBridge\ConPtyBridge.csproj"
+        Condition="'$(OS)' == 'Windows_NT'" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <!-- Копия выхода моста в bin сервера: ConPtyBridgeLocator ищет ConPtyBridge.exe
+       от AppContext.BaseDirectory (dev-запуск dotnet run/F5) -->
+  <Target Name="CopyConPtyBridge" AfterTargets="Build" Condition="'$(OS)' == 'Windows_NT'">
+    <ItemGroup>
+      <ConPtyBridgeFiles Include="..\ConPtyBridge\bin\$(Configuration)\net10.0\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(ConPtyBridgeFiles)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
+
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.0" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.Negotiate" Version="10.0.0" />

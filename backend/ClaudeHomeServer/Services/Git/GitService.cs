@@ -380,6 +380,39 @@ public sealed class GitService(ILauncherFactory launchers)
         return list;
     }
 
+    // Файлы отложенного (stash@{index}) — дифф стэша к его родителю. Аналог CommitDetailAsync,
+    // но для стэша: --include-untracked, т.к. пушим стэши с ним (иначе новые файлы не видны).
+    public async Task<IReadOnlyList<GitFileChange>> StashShowAsync(string? ownerId, string root, int index, CancellationToken ct = default)
+    {
+        if (!IsGitRepo(root) || index < 0) return [];
+        var stashRef = $"stash@{{{index}}}";
+        var names = await RunAsync(ownerId, root,
+            ["stash", "show", "--name-status", "--include-untracked", stashRef], ct: ct);
+        if (!names.Ok) return [];
+        var files = new List<GitFileChange>();
+        foreach (var line in names.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var parts = line.Trim('\r').Split('\t');
+            if (parts.Length < 2) continue;
+            var status = parts[0].Trim();
+            if (status.Length == 0) continue;
+            if ((status[0] == 'R' || status[0] == 'C') && parts.Length >= 3)
+                files.Add(new GitFileChange(parts[2], status[0].ToString(), parts[1]));
+            else
+                files.Add(new GitFileChange(parts[1], status[0].ToString()));
+        }
+        // Статистика строк (+N/−M); при неудаче — просто список файлов без чисел
+        var stat = await RunAsync(ownerId, root,
+            ["stash", "show", "--numstat", "--include-untracked", "-z", stashRef], ct: ct);
+        if (stat.Ok)
+        {
+            var stats = new Dictionary<string, (int, int, bool)>();
+            ParseNumstatZ(stat.Stdout, stats);
+            if (stats.Count > 0) files = ApplyStats(files, stats);
+        }
+        return files;
+    }
+
     public Task StashPushAsync(string? ownerId, string root, string? message, CancellationToken ct = default) =>
         WriteOp(ownerId, root,
             string.IsNullOrWhiteSpace(message)

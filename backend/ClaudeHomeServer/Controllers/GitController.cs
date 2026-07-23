@@ -181,6 +181,19 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
         catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }
     }
 
+    // Файлы отложенного для просмотра в верхней зоне панели «Изменения» (как у коммита)
+    [HttpGet("stash/{index:int}")]
+    public async Task<IActionResult> StashShow(string projectId, int index, CancellationToken ct)
+    {
+        try
+        {
+            var p = GetProject(projectId);
+            return Ok(new { files = await git.StashShowAsync(Owner(p), p.RootPath, index, ct) });
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }
+    }
+
     [HttpPost("stash")]
     public Task<IActionResult> StashPush(string projectId, [FromBody] GitStashRequest body, CancellationToken ct) =>
         Mutate(projectId, (p) => git.StashPushAsync(Owner(p), p.RootPath, body.Message, ct));

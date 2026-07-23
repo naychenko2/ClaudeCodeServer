@@ -123,6 +123,23 @@ const homeScreen = (c: AiActionCtx) => c.nav?.screen === 'home';
 const gitRepoOpen = (c: AiActionCtx) => projectOpen(c) && c.git?.isRepo === true;
 const fileInGitRepo = (c: AiActionCtx) => fileOpen(c) && c.git?.isRepo === true;
 
+// Контекстный промпт действия «Показать интерактивный виджет» (chat.widget):
+// в проекте — дашборд состояния, в календаре — сводка задач, в заметках — статистика
+// базы, иначе — свободная тема. Сам виджет модель строит инструментом widget_show.
+function widgetPrompt(c: AiActionCtx): string {
+  if (c.nav?.screen === 'project' && c.nav.project)
+    return 'Сделай интерактивный виджет-дашборд по состоянию проекта: git-статус и последние '
+      + 'изменения (git log), структура ключевых папок. Покажи через widget_show.';
+  if (c.nav?.screen === 'calendar')
+    return 'Покажи виджетом наглядную сводку моих задач (tasks_list): статусы, сроки, '
+      + 'приоритеты, просроченные. Покажи через widget_show.';
+  if (c.nav?.screen === 'notes')
+    return 'Покажи виджетом статистику моей базы заметок (notes_list, notes_graph): '
+      + 'количество по источникам, теги, связность графа. Покажи через widget_show.';
+  return 'Сделай наглядный интерактивный виджет (widget_show) по теме, которую я укажу '
+    + 'следующим сообщением: дашборд, график, таблица или калькулятор.';
+}
+
 // --- Каталог действий (порядок задаёт ранжирование контекстной группы) ---
 export const AI_ACTIONS: AiAction[] = [
   // ===== Заметки =====
@@ -265,6 +282,15 @@ export const AI_ACTIONS: AiAction[] = [
     section: 'chat', sectionLabel: 'Чат', icon: IcRetitle,
     when: c => chatOpen(c) && c.chat.hasMessages && c.online, contextual: chatOpen,
     run: () => dispatchAiRun('chat.retitle'),
+  },
+  {
+    // Интерактивный HTML-виджет в ленте чата (флаг chat-widgets): промпт подстраивается
+    // под открытый раздел — дашборд проекта / сводка задач / статистика заметок / свободная тема
+    id: 'chat.widget', title: 'Показать интерактивный виджет', hint: 'дашборд, график или сводка прямо в чате',
+    section: 'chat', sectionLabel: 'Чат', icon: IcOverview,
+    when: c => c.online && c.flag('chat-widgets'),
+    contextual: c => projectOpen(c) || calendarScreen(c) || noteOpen(c),
+    run: c => startChatWithPrompt(widgetPrompt(c), c),
   },
 
   // ===== Персоны =====

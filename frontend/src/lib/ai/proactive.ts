@@ -139,6 +139,10 @@ async function computeRuleSuggestion(ctx: AiActionCtx): Promise<Suggestion | nul
       const tasks = await api.tasks.listAll(undefined, today);
       if (tasks.some(t => t.status !== 'done' && !!t.dueDate && t.dueDate < today))
         return { key: `overdue:${today}`, actionId: 'tasks.overdue', text: 'Есть просроченные задачи — разобрать?', level: 'strong' };
+      // Задач ощутимо много (флаг chat-widgets) — предложить наглядную сводку виджетом.
+      // medium: это возможность, а не срочность — домик не прыгает, подсказка в hover-балуне
+      if (ctx.flag('chat-widgets') && tasks.filter(t => t.status !== 'done').length >= 5)
+        return { key: `tasks-widget:${today}`, actionId: 'chat.widget', text: 'Могу показать интерактивную сводку задач виджетом', level: 'medium' };
     } catch { /* офлайн — без подсказки */ }
     return null;
   }

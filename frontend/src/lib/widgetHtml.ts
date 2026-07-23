@@ -6,8 +6,10 @@
 // до валидации — совсем гигантский html не рендерим вовсе (плашка вместо iframe).
 export const WIDGET_MAX_RENDER_BYTES = 256 * 1024;
 
-// Пределы высоты iframe (px); база — когда виджет ещё не сообщил свою высоту
-export const WIDGET_MIN_HEIGHT = 120;
+// Пределы высоты iframe (px); база — когда виджет ещё не сообщил свою высоту.
+// Минимум низкий (48): авто-замер плотно облегает мелкие виджеты — без пустоты
+// снизу, из-за которой контент выглядел «прижатым к верху» карточки
+export const WIDGET_MIN_HEIGHT = 48;
 export const WIDGET_MAX_HEIGHT = 800;
 export const WIDGET_MAX_HEIGHT_MOBILE = 560;
 export const WIDGET_DEFAULT_HEIGHT = 320;
@@ -70,10 +72,14 @@ const CSP =
 
 // Скрипт авто-высоты: iframe в sandbox без allow-same-origin — DOM недоступен родителю,
 // единственный канал — postMessage. ResizeObserver шлёт высоту при каждом изменении.
+// Меряем body (реальная высота контента), а НЕ documentElement: его scrollHeight не
+// бывает меньше высоты iframe, из-за чего мелкий виджет не мог ужаться ниже базы
+// и висел «прижатым к верху» с пустотой снизу. Скрипт стоит В КОНЦЕ body — body
+// уже существует, observer вешается сразу.
 const HEIGHT_SCRIPT =
   '<script>(function(){var p=function(){parent.postMessage({type:"' + WIDGET_HEIGHT_MSG + '",' +
-  'h:document.documentElement.scrollHeight},"*")};' +
-  'new ResizeObserver(p).observe(document.documentElement);addEventListener("load",p)})();</script>';
+  'h:Math.ceil(document.body.scrollHeight)},"*")};' +
+  'new ResizeObserver(p).observe(document.body);addEventListener("load",p)})();</script>';
 
 // Полный документ для iframe.srcDoc: CSP + тема + авто-высота + html модели.
 // Модель шлёт фрагмент без <html>/<head>/<body>; если пришёл полный документ —
@@ -89,9 +95,9 @@ export function buildWidgetSrcDoc(html: string, theme: 'light' | 'dark'): string
     `<style>:root{color-scheme:${theme};${vars}}` +
     'body{margin:0;background:var(--cc-bg);color:var(--cc-text);' +
     "font-family:'Hanken Grotesk',-apple-system,'Segoe UI',sans-serif}</style>" +
-    HEIGHT_SCRIPT +
     '</head><body>' +
     html +
+    HEIGHT_SCRIPT +
     '</body></html>'
   );
 }

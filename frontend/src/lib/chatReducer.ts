@@ -18,7 +18,7 @@ export interface ChatState {
   // Live-состояние цикла «до готово» (событие work_loop, флаг work-loop).
   // undefined — событий ещё не было (UI берёт значение из Session.workLoop)
   workLoop?: WorkLoopState;
-  // Подсказка следующего сообщения (флаг prompt-suggestions) — чип в композере.
+  // Подсказка следующего сообщения — чип в композере.
   // Эфемерная: в историю не пишется, сбрасывается при отправке хода (в хуке).
   promptSuggestion: string | null;
 }

@@ -217,8 +217,6 @@ public class ClaudeSession : ILlmSessionAdapter
     // Файловые сабагенты-персоны: план хода — папки --add-dir
     // + pmem-серверы памяти консультантов; вычисляется на каждый ход
     private readonly Func<PersonaAgentsContext?>? _personaAgentsProvider;
-    // Подсказка следующего сообщения: флаг prompt-suggestions владельца, проверка на каждый ход
-    private readonly Func<bool>? _promptSuggestionsEnabled;
     // Реестр CLI-провайдеров: env-оверрайды процесса (ANTHROPIC_BASE_URL и др.)
     // для сторонних моделей; null — всегда родной Claude
     private readonly LlmProviderRegistry? _providers;
@@ -261,7 +259,6 @@ public class ClaudeSession : ILlmSessionAdapter
         _notificationsMcp = context.NotificationsMcp;
         _modulesMcp = context.ModulesMcp;
         _personaAgentsProvider = context.PersonaAgentsProvider;
-        _promptSuggestionsEnabled = context.PromptSuggestionsEnabled;
         _launcher = context.Launcher ?? Execution.LocalProcessRunner.Instance;
         // Запреты конфига + ограничения возможностей персоны (ExtraDisallowedTools)
         _disallowedTools = context.ExtraDisallowedTools is { Count: > 0 } extra
@@ -1098,8 +1095,7 @@ public class ClaudeSession : ILlmSessionAdapter
         // (генерация фоном с переиспользованием prompt cache хода; при холодном кэше CLI
         // сам пропускает). Только родной Claude — сторонним провайдерам фоновые запросы
         // не включаем (кэш-экономика чужая).
-        var promptSuggestionsActive = _promptSuggestionsEnabled?.Invoke() == true
-            && (_providers is null || _providers.ResolveByModel(Info.Model) is null);
+        var promptSuggestionsActive = _providers is null || _providers.ResolveByModel(Info.Model) is null;
         if (promptSuggestionsActive)
             args.AddRange(["--prompt-suggestions", "true"]);
 

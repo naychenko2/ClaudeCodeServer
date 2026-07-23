@@ -10,7 +10,6 @@ import { useSyncExternalStore } from 'react';
 export const FLAGS = {
   workspaceDestructive: 'workspace-destructive',
   teamMemoryAutolearn: 'team-memory-autolearn',
-  promptSuggestions: 'prompt-suggestions',
   docAnnotations: 'doc-annotations',
   aiLocalSuggest: 'ai-local-suggest',
   workspaceCcPanels: 'workspace-cc-panels',

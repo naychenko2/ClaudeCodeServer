@@ -474,7 +474,7 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'preview_status'; status: string; port?: number; error?: string; serviceId?: string }
   | { type: 'notification'; title: string; body: string; url?: string; kind: 'reminder' | 'claude' | 'info' | 'success' | 'meeting'; notificationId?: string; notifType?: string; projectId?: string; sessionId?: string; taskId?: string; source?: string; tag?: string; personaId?: string; personaName?: string; personaRole?: string; personaColor?: string; personaHasAvatar?: boolean; projectName?: string }
   | { type: 'recall_manifest'; items: RecallItem[] }
-  // Подсказка следующего сообщения (флаг prompt-suggestions) — чип в композере
+  // Подсказка следующего сообщения — чип в композере
   | { type: 'prompt_suggestion'; text: string }
 );
 

@@ -123,9 +123,6 @@ public sealed record LlmSessionContext(
     // (актуальные персоны/модель сессии), внутри — троттлёный reconcile файлов.
     // null — фича выключена или нет владельца; вызов может вернуть null.
     Func<PersonaAgentsContext?>? PersonaAgentsProvider = null,
-    // Подсказка следующего сообщения (флаг prompt-suggestions): делегат проверяет флаг
-    // владельца на каждый ход. null — фича недоступна (нет владельца).
-    Func<bool>? PromptSuggestionsEnabled = null,
     // Драйвер среды исполнения владельца (local / docker-песочница);
     // null — локальный запуск, историческое поведение
     Execution.IProcessLauncher? Launcher = null,

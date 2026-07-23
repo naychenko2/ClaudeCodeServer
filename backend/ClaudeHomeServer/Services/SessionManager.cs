@@ -1182,11 +1182,6 @@ public class SessionManager
         return new NotificationsMcpContext(ResolveTasksApiUrl(ownerId), token, personaId);
     }
 
-    // Гейт подсказки следующего сообщения: делегат проверяет флаг prompt-suggestions
-    // владельца на каждый ход (включение/выключение применяется без пересоздания адаптера).
-    private Func<bool>? BuildPromptSuggestionsGate(string? ownerId) =>
-        ownerId is null ? null : () => _flags.IsEnabled(ownerId, FeatureFlagKeys.PromptSuggestions);
-
     // Дополнительные запреты сессии персоны: профиль доступа (PersonaAccessPolicy — «пол»
     // запретов: ReadOnly/Custom) + capability-решение «web» через привязки
     // (EffectiveToolEnabled: Tool-привязка приоритетнее Persona.Tools). Web-решение передаём
@@ -1328,7 +1323,6 @@ public class SessionManager
             WorkspaceMcp: workspace,
             BindingsProvider: BuildBindingsProvider(ownerId, session.PersonaId, workspace?.Sections),
             PersonaAgentsProvider: BuildPersonaAgentsProvider(ownerId, session),
-            PromptSuggestionsEnabled: BuildPromptSuggestionsGate(ownerId),
             Launcher: _launchers.ForOwner(ownerId),
             ModulesMcp: BuildModulesContext(ownerId)));
         entry.Process = adapter;
@@ -1613,7 +1607,6 @@ public class SessionManager
                 WorkspaceMcp: workspace,
                 BindingsProvider: BuildBindingsProvider(entry.Info.OwnerId, entry.Info.PersonaId, workspace?.Sections),
                 PersonaAgentsProvider: BuildPersonaAgentsProvider(entry.Info.OwnerId, entry.Info),
-                PromptSuggestionsEnabled: BuildPromptSuggestionsGate(entry.Info.OwnerId),
                 Launcher: _launchers.ForOwner(entry.Info.OwnerId),
                 ModulesMcp: BuildModulesContext(entry.Info.OwnerId));
         }
@@ -1639,7 +1632,6 @@ public class SessionManager
                 WorkspaceMcp: workspace,
                 BindingsProvider: BuildBindingsProvider(project.OwnerId, entry.Info.PersonaId, workspace?.Sections),
                 PersonaAgentsProvider: BuildPersonaAgentsProvider(project.OwnerId, entry.Info),
-                PromptSuggestionsEnabled: BuildPromptSuggestionsGate(project.OwnerId),
                 Launcher: _launchers.ForOwner(project.OwnerId),
                 ModulesMcp: BuildModulesContext(project.OwnerId));
         }

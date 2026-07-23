@@ -1,25 +1,31 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Search, Settings } from 'lucide-react';
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Pin, Plus, Search, Settings } from 'lucide-react';
 import { C, R, FS, FONT, Z, SHADOW } from '../../lib/design';
 import type { Project } from '../../types';
 import { ProjectIcon } from './ProjectIcon';
 import { useAllProjects, openProjectViaEvent } from './useAllProjects';
-import { usePinnedIds, useRecentIds, isPinned, togglePin, movePinned } from '../../lib/pinnedProjects';
+import { usePinnedIds, useSwitcherOrder, recordSwitcherProject, isPinned, togglePin, unpinProject, pinInsertAt, switcherInsertBefore } from '../../lib/pinnedProjects';
 import { useProjectActivity, type ProjectActivity } from '../../lib/projectActivity';
 import { ProjectPalette } from './ProjectPalette';
 
-// Переключатель проектов в плашке сайдбара (флаг sidebar-project-switcher):
-// [иконка активного с акцент-кольцом + имя] <-> [иконки проектов со статус-точками]
-// [лупа / «+N» → палитра] — полка и лупа прижаты к правому краю, имя занимает
-// остаток и жмется ellipsis'ом. Приоритет слотов: ждет ответа > работает >
-// закрепленные (по порядку) > недавние (MRU). Активный слот не занимает.
-// Клик по «ждущему» проекту открывает его сразу на ждущем чате (cc-open-url).
+// Переключатель проектов в плашке сайдбара — единая строка. Проекты идут в СТАБИЛЬНОМ
+// порядке (закрепленные > незакрепленные, append-only); активный стоит НА СВОЕМ месте и
+// разворачивается в «чип» [иконка + имя + шестерёнка], остальные — компактные иконки.
+// При выборе другого проекта чип просто переезжает на него — порядок НЕ меняется.
+// Когда проект один — чип растягивается на всю строку (аккуратная «шапка»).
+// В хвосте: «+» новый проект (только если всё влезло) либо лупа «+N» → палитра.
+// Перетаскивание иконок — pointer-events: призрак + placeholder; сторона разделителя
+// решает пин/недавние. Активный чип в перетаскивании не участвует (только позиция).
 
-const ICON_W = 38;    // шаг иконки кандидата (32px + паддинги)
-const LUPA_W = 32;    // лупа/«+N»
-const ACTIVE_W = 42;  // иконка активного с кольцом и отступами
-const NAME_MIN = 64;  // минимум под имя активного, дальше ellipsis
-const MAX_SLOTS = 3;
+const ICON_W = 38;    // шаг иконки проекта (36px кнопка + gap 2)
+const CHIP_MIN = 84;  // минимальная ширина чипа (иконка + немного имени)
+const CHIP_RICH = 140; // ширина чипа, при которой имя читаемо → включаем «богатый» режим
+const PLUS_W = 36;    // кнопка «+ новый проект»
+const LUPA_W = 46;    // резерв под лупу «+N»
+const SEP_W = 10;     // вертикальный разделитель групп + отступы
+const MAX_SLOTS = 16; // страховочный потолок значков
+const DRAG_THRESHOLD = 5;  // порог в px: клик → перетаскивание
+const GAP_OPEN = 22;       // расступание иконок перед placeholder-линией
 
 const STATUS_COLOR: Record<ProjectActivity['status'], string> = {
   waiting: C.accent,
@@ -31,57 +37,55 @@ const STATUS_TITLE: Record<ProjectActivity['status'], string> = {
   working: 'агент работает',
 };
 
-// Иконка проекта-кандидата со статус-точкой, drag-сортировкой пинов и контекст-меню
-function CandidateIcon({ p, activity, dragging, over, onOpen, onContextMenu, onDragStart, onDragOver, onDrop, onDragEnd }: {
+// Иконка проекта-кандидата (не активного) со статус-точкой и контекст-меню.
+// Перетаскивание — снаружи (pointer-события ловит родитель).
+function CandidateIcon({ p, activity, active, dragging, shift, onPointerDown, onClick, onContextMenu }: {
   p: Project;
   activity?: ProjectActivity;
+  active?: boolean;               // компактный режим: текущий проект — двойное акцент-кольцо
   dragging: boolean;
-  over: boolean;
-  onOpen: (p: Project) => void;
+  shift: number;
+  onPointerDown: (e: React.PointerEvent, p: Project) => void;
+  onClick: (p: Project) => void;
   onContextMenu: (e: React.MouseEvent, p: Project) => void;
-  onDragStart: () => void; onDragOver: () => void; onDrop: () => void; onDragEnd: () => void;
 }) {
-  const pinned = isPinned(p.id);
-  // long-press (~500мс) как контекст-меню для планшета (там нет правого клика)
   const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const longPressed = useRef(false);
-  // Иконка может уехать из слотов между touchstart и срабатыванием таймера
   useEffect(() => () => { if (pressTimer.current) clearTimeout(pressTimer.current); }, []);
   const title = activity ? `${p.name} — ${STATUS_TITLE[activity.status]}` : p.name;
   return (
     <button
+      data-swicon={p.id}
       title={title}
       aria-label={title}
-      draggable={pinned}
-      onClick={() => { if (!longPressed.current) onOpen(p); longPressed.current = false; }}
+      onPointerDown={e => onPointerDown(e, p)}
+      onClick={() => onClick(p)}
       onContextMenu={e => onContextMenu(e, p)}
       onTouchStart={e => {
         const t = e.touches[0];
         pressTimer.current = setTimeout(() => {
-          longPressed.current = true;
           onContextMenu({ preventDefault: () => {}, clientX: t.clientX, clientY: t.clientY } as React.MouseEvent, p);
         }, 500);
       }}
       onTouchEnd={() => { if (pressTimer.current) clearTimeout(pressTimer.current); }}
       onTouchMove={() => { if (pressTimer.current) clearTimeout(pressTimer.current); }}
-      onDragStart={e => { e.dataTransfer.effectAllowed = 'move'; onDragStart(); }}
-      onDragOver={e => { if (pinned) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; onDragOver(); } }}
-      onDrop={e => { e.preventDefault(); e.stopPropagation(); onDrop(); }}
-      onDragEnd={onDragEnd}
       style={{
-        position: 'relative', padding: 3, border: 'none', background: 'transparent',
+        position: 'relative', padding: 2, border: 'none', background: 'transparent',
         cursor: 'pointer', display: 'flex', flexShrink: 0, borderRadius: R.sm,
-        opacity: dragging ? 0.4 : 1,
-        boxShadow: over ? `0 0 0 2px ${C.bgSelected}, 0 0 0 3px ${C.accent}` : undefined,
-        transition: 'opacity 0.12s',
+        opacity: dragging ? 0.35 : 1, transform: shift ? `translateX(${shift}px)` : undefined,
+        transition: 'opacity 0.12s, transform 0.13s cubic-bezier(0.2, 0, 0, 1)', touchAction: 'none',
       }}
     >
-      <ProjectIcon project={p} size={32} radius={8} />
+      <span style={{
+        display: 'flex', borderRadius: 8, pointerEvents: 'none',
+        boxShadow: active ? `0 0 0 2px ${C.bgPanel}, 0 0 0 4px ${C.accent}` : undefined,
+      }}>
+        <ProjectIcon project={p} size={32} radius={8} />
+      </span>
       {activity && (
         <span style={{
           position: 'absolute', right: 0, top: 0, width: 10, height: 10, borderRadius: '50%',
           background: STATUS_COLOR[activity.status], border: `2px solid ${C.bgPanel}`,
-          boxSizing: 'content-box',
+          boxSizing: 'content-box', pointerEvents: 'none',
         }} />
       )}
     </button>
@@ -90,38 +94,34 @@ function CandidateIcon({ p, activity, dragging, over, onOpen, onContextMenu, onD
 
 export function SidebarProjectSwitcher({ project, onOpenSettings }: {
   project: Project;               // активный проект (свежая версия из WorkspacePage)
-  onOpenSettings: () => void;     // клик по иконке активного — настройки проекта
+  onOpenSettings: () => void;     // клик по чипу активного — настройки проекта
 }) {
   const projects = useAllProjects();
   const pinnedIds = usePinnedIds();
-  const recentIds = useRecentIds();
+  const switcherOrder = useSwitcherOrder();
   const activity = useProjectActivity();
-  const [paletteOpen, setPaletteOpen] = useState(false);
-  const [activeHover, setActiveHover] = useState(false);
-  const [menu, setMenu] = useState<{ x: number; y: number; p: Project } | null>(null);
-  const [dragId, setDragId] = useState<string | null>(null);
-  const [overId, setOverId] = useState<string | null>(null);
 
-  // Ширина строки — от нее число слотов (сайдбар тянется сплиттером)
+  useEffect(() => { recordSwitcherProject(project.id); }, [project.id]);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [chipHover, setChipHover] = useState(false);
+  const [menu, setMenu] = useState<{ x: number; y: number; p: Project } | null>(null);
+
   const rowRef = useRef<HTMLDivElement>(null);
   const [rowW, setRowW] = useState(0);
   useLayoutEffect(() => {
     const el = rowRef.current;
     if (!el) return;
-    // Сидируем ширину синхронно: первая замерка RO приходит не сразу, без сида
-    // один кадр рисовался бы «пустой» вариант (slots=0, все проекты в «+N»)
     setRowW(el.getBoundingClientRect().width);
     const ro = new ResizeObserver(entries => setRowW(entries[0]?.contentRect.width ?? 0));
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
 
-  // Кандидаты по приоритету: ждущие > работающие > пины (по порядку) > недавние (MRU).
-  // Активный проект исключен; дубли схлопываются порядком добавления (пин со
-  // статусом уже добавлен как статусный — один слот).
-  const candidates = useMemo(() => {
+  // Все проекты плашки в СТАБИЛЬНОМ порядке, включая активного НА ЕГО месте (пины >
+  // незакрепленные append-only). Активный не прыгает при переключении — просто становится чипом.
+  const items = useMemo(() => {
     const byId = new Map(projects.map(p => [p.id, p]));
-    const seen = new Set<string>([project.id]);
+    const seen = new Set<string>();
     const out: Project[] = [];
     const push = (id: string) => {
       if (seen.has(id)) return;
@@ -130,44 +130,155 @@ export function SidebarProjectSwitcher({ project, onOpenSettings }: {
       seen.add(id);
       out.push(p);
     };
-    const withStatus = (s: ProjectActivity['status']) =>
-      [...activity.entries()].filter(([, a]) => a.status === s).map(([id]) => id);
-    withStatus('waiting').forEach(push);
-    withStatus('working').forEach(push);
     pinnedIds.forEach(push);
-    recentIds.forEach(push);
+    switcherOrder.forEach(push);
+    if (!seen.has(project.id)) {
+      const p = byId.get(project.id);
+      if (p) out.push(p);
+    }
     return out;
-  }, [projects, project.id, activity, pinnedIds, recentIds]);
+  }, [projects, project.id, pinnedIds, switcherOrder]);
 
-  // −8 — запас на flex-gap (2px) между элементами строки
-  const slots = Math.max(0, Math.min(MAX_SLOTS, Math.floor((rowW - ACTIVE_W - NAME_MIN - LUPA_W - 8) / ICON_W)));
-  const shown = candidates.slice(0, slots);
-  // «+N» — все непоказанные проекты (кандидаты за слотами + прочие из палитры)
-  const hiddenCount = Math.max(0, projects.length - 1 - shown.length);
-  // Ждущий проект не влез в слоты → оранжевая микро-точка на «+N» (не прячем молча)
-  const hiddenWaiting = candidates.slice(slots).some(p => activity.get(p.id)?.status === 'waiting');
+  const hasPins = items.some(p => isPinned(p.id));
+  const hasRecent = items.some(p => !isPinned(p.id));
+  const sepReserve = hasPins && hasRecent ? SEP_W : 0;
+  const otherCount = Math.max(0, items.length - 1);
+  // «Богатый» режим (чип активного с именем) — пока читаемый чип + все остальные иконки
+  // влезают. Тесно → «компактный»: активный обычной иконкой с кольцом. Режим зависит от
+  // rowW → при ресайзе панели переключается автоматически.
+  const rich = rowW > 0 && (CHIP_RICH + otherCount * ICON_W + sepReserve + PLUS_W + 6) <= rowW;
+  let shown: Project[];
+  if (rich) {
+    shown = items.slice(0, MAX_SLOTS);
+  } else {
+    // Компактный: все проекты как иконки. Влезают все → «+», иначе окно + лупа «+N».
+    const fitAll = Math.floor((rowW - PLUS_W - sepReserve - 6) / ICON_W) >= items.length;
+    const slots = Math.max(0, Math.min(MAX_SLOTS, fitAll
+      ? items.length
+      : Math.floor((rowW - LUPA_W - sepReserve - 6) / ICON_W)));
+    shown = items.slice(0, slots);
+    // Активный обязан быть виден (редкий случай переполнения)
+    if (slots > 0 && !shown.some(p => p.id === project.id)) {
+      const a = items.find(p => p.id === project.id);
+      if (a) shown = [...items.slice(0, slots - 1), a];
+    }
+  }
+  const firstRecentIdx = shown.findIndex(p => !isPinned(p.id));
+  const hiddenCount = Math.max(0, projects.length - shown.length);
+  const shownIds = new Set(shown.map(p => p.id));
+  const hiddenWaiting = items.some(p => !shownIds.has(p.id) && activity.get(p.id)?.status === 'waiting');
+  const pinsShown = shown.some(p => isPinned(p.id));
 
-  const openCandidate = (p: Project) => {
+  const shownRef = useRef<Project[]>(shown);
+  shownRef.current = shown;
+
+  const openCandidate = useCallback((p: Project) => {
     const a = activity.get(p.id);
     if (a?.status === 'waiting' && a.waitingChatId) {
-      // Сразу в ждущий чат: готовый роутинг диплинков в App (openNotificationUrl)
       window.dispatchEvent(new CustomEvent('cc-open-url', {
         detail: { url: `#/project/${p.id}/chat/${encodeURIComponent(a.waitingChatId)}` },
       }));
       return;
     }
     openProjectViaEvent(p);
+  }, [activity]);
+
+  const openNewProject = () => {
+    sessionStorage.setItem('cc_pending_new_project', '1');
+    window.dispatchEvent(new CustomEvent('cc-open-url', { detail: { url: '#/projects' } }));
   };
+
+  // === Перетаскивание на pointer-событиях (среди иконок; активный чип — только позиция) ===
+  const dragRef = useRef<{ id: string; sx: number; sy: number; started: boolean; insertIdx: number; zone: 'pin' | 'recent' } | null>(null);
+  const suppressClick = useRef(false);
+  const [dragView, setDragView] = useState<{ id: string; x: number; y: number; lineLeft: number; insertIdx: number; zone: 'pin' | 'recent' } | null>(null);
+
+  const computeInsert = useCallback((clientX: number) => {
+    const row = rowRef.current;
+    if (!row) return { insertIdx: 0, lineLeft: 0, zone: 'recent' as const };
+    const localX = clientX - row.getBoundingClientRect().left;
+    const icons = Array.from(row.querySelectorAll<HTMLElement>('[data-swicon]'));
+    let idx = icons.length;
+    for (let i = 0; i < icons.length; i++) {
+      const el = icons[i];
+      if (localX < el.offsetLeft + el.offsetWidth / 2) { idx = i; break; }
+    }
+    let lineLeft: number;
+    if (idx < icons.length) lineLeft = icons[idx].offsetLeft + GAP_OPEN / 2 - 1;
+    else if (icons.length) { const last = icons[icons.length - 1]; lineLeft = last.offsetLeft + last.offsetWidth + 2; }
+    else lineLeft = 0;
+    const sep = row.querySelector<HTMLElement>('[data-sep]');
+    let zone: 'pin' | 'recent';
+    if (sep) zone = localX < sep.offsetLeft + sep.offsetWidth / 2 ? 'pin' : 'recent';
+    else {
+      const sh = shownRef.current;
+      zone = sh.length > 0 && sh.every(p => isPinned(p.id)) ? 'pin' : 'recent';
+    }
+    return { insertIdx: idx, lineLeft, zone };
+  }, []);
+
+  // insertIdx считается среди ВСЕХ data-swicon (иконки + чип активного). Для магазина
+  // порядок shown совпадает со стором (пины > недавние), поэтому индексы согласованы.
+  const applyDrop = useCallback((id: string, insertIdx: number, zone: 'pin' | 'recent') => {
+    const sh = shownRef.current;
+    const pinsCount = sh.filter(p => isPinned(p.id)).length;
+    if (zone === 'pin') {
+      pinInsertAt(id, Math.min(insertIdx, pinsCount));
+    } else {
+      if (isPinned(id)) unpinProject(id);
+      const beforeId = insertIdx < sh.length ? sh[insertIdx].id : null;
+      switcherInsertBefore(id, beforeId);
+    }
+  }, []);
+
+  const onDragMove = useCallback((e: PointerEvent) => {
+    const g = dragRef.current;
+    if (!g) return;
+    if (!g.started) {
+      if (Math.hypot(e.clientX - g.sx, e.clientY - g.sy) < DRAG_THRESHOLD) return;
+      g.started = true;
+    }
+    const { insertIdx, lineLeft, zone } = computeInsert(e.clientX);
+    g.insertIdx = insertIdx;
+    g.zone = zone;
+    setDragView({ id: g.id, x: e.clientX, y: e.clientY, lineLeft, insertIdx, zone });
+  }, [computeInsert]);
+
+  const onDragUp = useCallback(() => {
+    window.removeEventListener('pointermove', onDragMove);
+    window.removeEventListener('pointerup', onDragUp);
+    const g = dragRef.current;
+    dragRef.current = null;
+    setDragView(null);
+    if (g?.started) { suppressClick.current = true; applyDrop(g.id, g.insertIdx, g.zone); }
+  }, [onDragMove, applyDrop]);
+
+  const onIconPointerDown = useCallback((e: React.PointerEvent, p: Project) => {
+    if (e.button !== 0) return;
+    dragRef.current = { id: p.id, sx: e.clientX, sy: e.clientY, started: false, insertIdx: 0, zone: 'recent' };
+    window.addEventListener('pointermove', onDragMove);
+    window.addEventListener('pointerup', onDragUp);
+  }, [onDragMove, onDragUp]);
+
+  useEffect(() => () => {
+    window.removeEventListener('pointermove', onDragMove);
+    window.removeEventListener('pointerup', onDragUp);
+  }, [onDragMove, onDragUp]);
+
+  const onIconClick = useCallback((p: Project) => {
+    if (suppressClick.current) { suppressClick.current = false; return; }
+    // Компактный режим: клик по активной иконке (шестерёнки нет) — настройки проекта
+    if (p.id === project.id) onOpenSettings();
+    else openCandidate(p);
+  }, [openCandidate, onOpenSettings, project.id]);
 
   const openMenu = (e: React.MouseEvent, p: Project) => {
     e.preventDefault();
-    // Кламп к вьюпорту, чтобы меню не уезжало за правый/нижний край
     const x = Math.min(e.clientX, window.innerWidth - 180);
     const y = Math.min(e.clientY, window.innerHeight - 90);
     setMenu({ x, y, p });
   };
 
-  // Закрытие контекст-меню по Escape (клик закрывает overlay ниже)
   useEffect(() => {
     if (!menu) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMenu(null); };
@@ -181,82 +292,165 @@ export function SidebarProjectSwitcher({ project, onOpenSettings }: {
     fontFamily: FONT.sans, fontSize: FS.base, color: C.textPrimary,
   };
 
+  const dragProject = dragView ? projects.find(p => p.id === dragView.id) : null;
+  const iconBtn: React.CSSProperties = {
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+    border: 'none', background: 'transparent', cursor: 'pointer', color: C.textSecondary,
+  };
+
   return (
-    <div ref={rowRef} style={{ display: 'flex', alignItems: 'center', gap: 2, flex: 1, minWidth: 0 }}>
-      {/* Активный проект: [иконка с акцент-кольцом и бейджем-шестеренкой][имя] —
-          единая кнопка настроек проекта. Бейдж в правом нижнем углу иконки виден
-          всегда — назначение читается без наведения; ховер подсвечивает всю зону.
-          Кнопка занимает остаток строки (flex:1) — полка и лупа уходят вправо */}
-      <button
-        title="Настройки проекта"
-        aria-label="Настройки проекта"
-        onClick={onOpenSettings}
-        onMouseEnter={() => setActiveHover(true)}
-        onMouseLeave={() => setActiveHover(false)}
-        style={{
-          display: 'flex', alignItems: 'center', flex: 1, minWidth: 0,
-          padding: '3px 6px 3px 3px', margin: '0 2px 0 0', border: 'none', cursor: 'pointer',
-          background: activeHover ? C.bgSelected : 'transparent',
-          borderRadius: R.md, transition: 'background 0.12s', textAlign: 'left',
-        }}
-      >
-        <span style={{ position: 'relative', display: 'flex', borderRadius: 8, flexShrink: 0, margin: 2, boxShadow: `0 0 0 1.5px ${C.accent}` }}>
-          <ProjectIcon project={project} size={32} radius={8} />
-          <span style={{
-            position: 'absolute', right: -4, bottom: -4, width: 15, height: 15, borderRadius: '50%',
-            background: C.bgPanel, border: `1px solid ${C.border}`,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            color: activeHover ? C.textHeading : C.textSecondary, transition: 'color 0.12s',
-          }}>
-            <Settings size={10} strokeWidth={2.2} />
-          </span>
-        </span>
-        <span style={{
-          fontFamily: FONT.sans, fontSize: 14, fontWeight: 600, color: C.textHeading,
-          flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-          margin: '0 6px 0 9px',
-        }}>
-          {project.name}
-        </span>
-      </button>
-      {shown.map(p => (
-        <CandidateIcon
-          key={p.id}
-          p={p}
-          activity={activity.get(p.id)}
-          dragging={dragId === p.id}
-          over={!!dragId && overId === p.id && dragId !== p.id}
-          onOpen={openCandidate}
-          onContextMenu={openMenu}
-          onDragStart={() => setDragId(p.id)}
-          onDragOver={() => setOverId(p.id)}
-          onDrop={() => { if (dragId && dragId !== p.id) movePinned(dragId, p.id); setDragId(null); setOverId(null); }}
-          onDragEnd={() => { setDragId(null); setOverId(null); }}
-        />
-      ))}
-      {/* Лупа / «+N»: палитра всех проектов; микро-точка — скрытый «ждущий» проект */}
-      <button
-        aria-label="Все проекты (палитра)"
-        title={hiddenCount > 0 ? `Еще ${hiddenCount} проектов` : 'Поиск проектов'}
-        onClick={() => setPaletteOpen(true)}
-        style={{
-          position: 'relative', display: 'inline-flex', alignItems: 'center', gap: 2,
-          padding: hiddenCount > 0 ? '3px 6px' : 3, border: 'none', borderRadius: R.sm,
-          background: hiddenCount > 0 ? C.bgSelected : 'transparent',
-          color: C.textSecondary, cursor: 'pointer', flexShrink: 0,
-        }}
-      >
-        <Search size={16} strokeWidth={2} />
-        {hiddenCount > 0 && (
-          <span style={{ fontFamily: FONT.sans, fontSize: FS.xs, fontWeight: 600 }}>+{hiddenCount}</span>
+    <div style={{ display: 'flex', flex: 1, minWidth: 0 }}>
+      <style>{`
+        @keyframes ccGhostPop { from { transform: scale(0.8) rotate(-3deg); opacity: 0 } to { transform: scale(1) rotate(-3deg); opacity: 0.95 } }
+        @keyframes ccLineIn { from { opacity: 0; transform: scaleY(0.4) } to { opacity: 1; transform: scaleY(1) } }
+      `}</style>
+      <div ref={rowRef} style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0 }}>
+        {/* Пинов среди показанных нет: при драге СЛЕВА (зона пинов) появляется цель
+            «закрепить» + разделитель. Сторона разделителя решает пин/недавние. */}
+        {dragView && !pinsShown && (
+          <>
+            <span aria-hidden title="Перетащите сюда, чтобы закрепить" style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+              width: 34, height: 34, borderRadius: 8,
+              border: `2px dashed ${dragView.zone === 'pin' ? C.accent : C.textMuted}`,
+              background: dragView.zone === 'pin' ? C.bgSelected : 'transparent',
+              color: C.accent, transition: 'border-color 0.12s, background 0.12s',
+            }}>
+              <Pin size={14} strokeWidth={2} />
+            </span>
+            <span data-sep style={{ width: 2, height: 26, background: C.divider, borderRadius: 1, flexShrink: 0, margin: '0 3px' }} />
+          </>
         )}
-        {hiddenWaiting && (
-          <span style={{
-            position: 'absolute', right: -1, top: -1, width: 8, height: 8, borderRadius: '50%',
-            background: C.accent, border: `2px solid ${C.bgPanel}`, boxSizing: 'content-box',
+        {shown.map((p, i) => {
+          const shift = dragView && i >= dragView.insertIdx ? GAP_OPEN : 0;
+          const sepShift = dragView && firstRecentIdx >= dragView.insertIdx ? GAP_OPEN : 0;
+          const sep = i === firstRecentIdx && firstRecentIdx > 0 ? (
+            <span data-sep style={{
+              width: 2, height: 26, background: C.divider, borderRadius: 1, flexShrink: 0, margin: '0 3px',
+              transform: sepShift ? `translateX(${sepShift}px)` : undefined,
+              transition: 'transform 0.13s cubic-bezier(0.2, 0, 0, 1)',
+            }} />
+          ) : null;
+          if (p.id === project.id && rich) {
+            // Богатый режим: активный проект — чип с именем на своём месте (drag не участвует)
+            return (
+              <Fragment key={p.id}>
+                {sep}
+                <div
+                  data-swicon={p.id}
+                  title={p.name}
+                  onMouseEnter={() => setChipHover(true)}
+                  onMouseLeave={() => setChipHover(false)}
+                  style={{
+                    position: 'relative', display: 'flex', alignItems: 'center', gap: 9,
+                    flex: '1 1 auto', minWidth: CHIP_MIN,
+                    padding: '4px 30px 4px 5px', textAlign: 'left',
+                    background: chipHover ? C.bgInset : C.bgSelected, borderRadius: 9,
+                    transform: shift ? `translateX(${shift}px)` : undefined,
+                    transition: 'background 0.12s, transform 0.13s cubic-bezier(0.2, 0, 0, 1)',
+                  }}
+                >
+                  <span style={{ display: 'flex', flexShrink: 0 }}><ProjectIcon project={p} size={32} radius={8} /></span>
+                  <span style={{
+                    fontFamily: FONT.sans, fontSize: 13, fontWeight: 600, color: C.textHeading,
+                    flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                  }}>
+                    {p.name}
+                  </span>
+                  {/* Настройки открываются ТОЛЬКО по клику на шестерёнку */}
+                  <button
+                    title="Настройки проекта"
+                    aria-label="Настройки проекта"
+                    onClick={e => { e.stopPropagation(); onOpenSettings(); }}
+                    style={{
+                      position: 'absolute', right: 3, top: '50%', transform: 'translateY(-50%)',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center', width: 22, height: 22,
+                      padding: 0, border: 'none', background: 'transparent', cursor: 'pointer', borderRadius: R.sm,
+                      color: chipHover ? C.textHeading : C.textSecondary, transition: 'color 0.12s',
+                    }}
+                  >
+                    <Settings size={13} strokeWidth={2.2} />
+                  </button>
+                </div>
+              </Fragment>
+            );
+          }
+          return (
+            <Fragment key={p.id}>
+              {sep}
+              <CandidateIcon
+                p={p}
+                active={p.id === project.id}
+                activity={activity.get(p.id)}
+                dragging={dragView?.id === p.id}
+                shift={shift}
+                onPointerDown={onIconPointerDown}
+                onClick={onIconClick}
+                onContextMenu={openMenu}
+              />
+            </Fragment>
+          );
+        })}
+
+        {/* «+» новый проект — только когда есть место (нет «+N») */}
+        {hiddenCount === 0 && (
+          <button
+            aria-label="Новый проект"
+            title="Новый проект"
+            onClick={openNewProject}
+            style={{
+              ...iconBtn, width: 32, height: 32, borderRadius: 8, border: `1.5px dashed ${C.dashed}`,
+              // В богатом режиме вправо толкает растянутый чип; в компактном — auto-отступ
+              marginLeft: rich ? undefined : 'auto',
+            }}
+          >
+            <Plus size={16} strokeWidth={2} />
+          </button>
+        )}
+
+        {/* Лупа / «+N»: палитра всех проектов; микро-точка — скрытый «ждущий» проект */}
+        {hiddenCount > 0 && (
+          <button
+            aria-label="Все проекты (палитра)"
+            title={`Еще ${hiddenCount} проектов`}
+            onClick={() => setPaletteOpen(true)}
+            style={{
+              ...iconBtn, gap: 2, position: 'relative', padding: '3px 6px', borderRadius: R.sm, background: C.bgSelected,
+              // В богатом режиме вправо толкает растянутый чип; в компактном — auto-отступ
+              marginLeft: rich ? undefined : 'auto',
+            }}
+          >
+            <Search size={16} strokeWidth={2} />
+            <span style={{ fontFamily: FONT.sans, fontSize: FS.xs, fontWeight: 600 }}>+{hiddenCount}</span>
+            {hiddenWaiting && (
+              <span style={{
+                position: 'absolute', right: -1, top: -1, width: 8, height: 8, borderRadius: '50%',
+                background: C.accent, border: `2px solid ${C.bgPanel}`, boxSizing: 'content-box',
+              }} />
+            )}
+          </button>
+        )}
+
+        {/* Placeholder-линия (прячем, когда цель — зона закрепления) */}
+        {dragView && !(dragView.zone === 'pin' && !pinsShown) && (
+          <span aria-hidden style={{
+            position: 'absolute', left: dragView.lineLeft, top: 2, width: 2, height: 34,
+            background: C.accent, borderRadius: 1, pointerEvents: 'none', transformOrigin: 'center',
+            transition: 'left 0.13s cubic-bezier(0.2, 0, 0, 1)', animation: 'ccLineIn 0.12s ease-out',
           }} />
         )}
-      </button>
+      </div>
+
+      {/* Призрак перетаскиваемой иконки под курсором */}
+      {dragView && dragProject && (
+        <div aria-hidden style={{
+          position: 'fixed', left: dragView.x - 18, top: dragView.y - 18, zIndex: Z.modal,
+          pointerEvents: 'none', opacity: 0.95, transform: 'scale(1) rotate(-3deg)',
+          boxShadow: SHADOW.dropdown, borderRadius: 8, animation: 'ccGhostPop 0.12s ease-out',
+        }}>
+          <ProjectIcon project={dragProject} size={36} radius={8} />
+        </div>
+      )}
       {paletteOpen && <ProjectPalette currentProjectId={project.id} onClose={() => setPaletteOpen(false)} />}
       {menu && (
         <div onClick={() => setMenu(null)} onContextMenu={e => { e.preventDefault(); setMenu(null); }}

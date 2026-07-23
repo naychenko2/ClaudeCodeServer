@@ -122,7 +122,7 @@ export function KnowledgePage({ auth, onLogout, onHubTab }: {
         title={sidebarMode === 'open' ? 'Закрепить панель' : 'Открепить панель'}
         size="sm"
       >
-        <IconPin size={15} filled={sidebarMode === 'pinned'} />
+        <IconPin size={16} filled={sidebarMode === 'pinned'} />
       </IconButton>
     </div>
   );

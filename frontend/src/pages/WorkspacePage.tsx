@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo, useLayoutEffect, type ReactNode } from 'react';
-import { Plus, MessageCircle } from 'lucide-react';
+import { Plus, MessageCircle, Pin } from 'lucide-react';
 import type { Project, Session, SkillsData, AuthState, Task, ProjectService } from '../types';
 import { SessionList } from '../components/SessionList';
 import { FileExplorer } from '../components/FileExplorer';
@@ -24,6 +24,7 @@ import { ICON_SIZE } from '../components/ui/icons';
 import { showToast } from '../lib/toast';
 import { navPush, navReplace, parseHash, type NavSnapshot } from '../lib/nav';
 import { EditDialog } from '../features/projects/dialogs/EditDialog';
+import { ProjectIcon } from '../features/projects/ProjectIcon';
 import { TasksPanel } from '../features/tasks/TasksPanel';
 import { TaskDetailsPane } from '../features/tasks/TaskDetailsPane';
 import { TaskBoard } from '../features/tasks/board/TaskBoard';
@@ -1145,19 +1146,22 @@ const windowWidth = useWindowWidth();
     <div style={{ width: '100%', display: 'flex', flexDirection: 'column', background: C.bgPanel, flexShrink: 0, height: '100%' }}>
       {/* Планшет/десктоп: строка управления панелью + строка проекта + tabs (логотип — в HubHeader) */}
       {!isMobile && (
-        <div style={{ padding: '16px 16px 14px', flexShrink: 0 }}>
-          {/* Строка проекта: кликабельное имя (→ к списку) + управление + пин панели */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 13, padding: '0 2px' }}>
+        <div style={{ padding: '8px 10px 14px', flexShrink: 0 }}>
+          {/* Строка проекта: кликабельное имя (→ к списку) + управление + пин панели.
+              Выровнено с заголовками других панелек (напр. «Чаты»): minHeight 28, край без
+              лишнего padding; hover-подложка кликабельной зоны компенсируется margin -6, чтобы
+              иконка/текст стояли вровень с краем панели, а фон при наведении чуть выступал. */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 13, minHeight: 28 }}>
             {/* Индикатор + имя проекта — кликабельны, ведут к списку проектов */}
             <div
               onClick={onGoToProjects}
               title="Все проекты"
               onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; }}
               onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
-              style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0, cursor: 'pointer', borderRadius: 7, padding: '4px 6px', transition: 'background 0.12s' }}
+              style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0, cursor: 'pointer', borderRadius: 7, padding: '4px 6px', margin: '0 -6px', transition: 'background 0.12s' }}
             >
-              <div style={{ width: 8, height: 8, borderRadius: '50%', background: C.accent, flexShrink: 0 }} />
-              <span style={{ fontSize: 13, fontWeight: 500, color: C.textPrimary, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <ProjectIcon project={projectForEdit} size={18} radius={5} />
+              <span style={{ fontSize: 14, fontWeight: 600, color: C.textHeading, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {projectForEdit.name}
               </span>
             </div>
@@ -1177,9 +1181,7 @@ const windowWidth = useWindowWidth();
               onClick={() => setSidebarMode(sidebarMode === 'open' ? 'pinned' : 'collapsed')}
               title={sidebarMode === 'open' ? 'Закрепить панель' : 'Открепить панель'}
             >
-              <svg width="15" height="15" viewBox="0 0 24 24" fill={sidebarMode === 'pinned' ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/>
-              </svg>
+              <Pin size={ICON_SIZE.sm} strokeWidth={2} fill={sidebarMode === 'pinned' ? 'currentColor' : 'none'} />
             </IconButton>
           </div>
           <PillSwitch<LeftTab>
@@ -1352,6 +1354,7 @@ const windowWidth = useWindowWidth();
           <EditDialog
             project={projectForEdit}
             onSuccess={updated => { setProjectForEdit(updated); setEditProjectOpen(false); }}
+            onIconUpdated={setProjectForEdit}
             onClose={() => setEditProjectOpen(false)}
           />
         )}
@@ -1625,6 +1628,7 @@ const windowWidth = useWindowWidth();
         <EditDialog
           project={projectForEdit}
           onSuccess={updated => { setProjectForEdit(updated); setEditProjectOpen(false); }}
+          onIconUpdated={setProjectForEdit}
           onClose={() => setEditProjectOpen(false)}
         />
       )}

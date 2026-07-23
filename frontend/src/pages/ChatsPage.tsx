@@ -279,7 +279,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
         {/* === Pinned: сайдбар в потоке (перетаскиваемая ширина) === */}
         {sidebarMode === 'pinned' && (
           <>
-            <div style={{ width: sidebarWidth, flexShrink: 0, background: C.bgPanel, padding: '12px 14px 14px', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+            <div style={{ width: sidebarWidth, flexShrink: 0, background: C.bgPanel, padding: '8px 10px 14px', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
               {sidebarInner}
             </div>
             <Splitter active={draggingSplitter} onMouseDown={handleSidebarSplitterMouseDown} />
@@ -290,7 +290,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
         {sidebarMode !== 'pinned' && (
           <div style={{
             position: 'absolute', top: 0, left: 0, bottom: 0, zIndex: 10, width: 288,
-            background: C.bgPanel, borderRight: `1px solid ${C.border}`, padding: '12px 14px 14px',
+            background: C.bgPanel, borderRight: `1px solid ${C.border}`, padding: '8px 10px 14px',
             display: 'flex', flexDirection: 'column',
             transform: sidebarMode === 'open' ? 'translateX(0)' : 'translateX(-300px)',
             transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)',

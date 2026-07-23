@@ -23,7 +23,7 @@ export function ProjectSidebar({ view, onSelect, total, groups, sleepingCount, o
   return (
     <aside style={{
       width: '100%', height: '100%', boxSizing: 'border-box', background: C.bgPanel,
-      padding: 14, overflowY: 'auto', display: 'flex', flexDirection: 'column',
+      padding: '8px 10px 14px', overflowY: 'auto', display: 'flex', flexDirection: 'column',
     }}>
       {onCollapse && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8, minHeight: 28 }}>

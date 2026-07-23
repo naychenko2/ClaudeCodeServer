@@ -54,8 +54,8 @@ const PROBE_INTERVAL_MS = 4_000;      // частый зонд возврата 
 const PING_TIMEOUT_MS = 6_000;        // короткий таймаут пинга — не ждём 30с
 const OFFLINE_FAIL_THRESHOLD = 2;     // столько промахов подряд уводят в офлайн
 
-// Один пинг сервера. true = сервер достижим (любой HTTP-ответ, включая 401/404/500),
-// false = сеть недоступна или ответ не пришёл за PING_TIMEOUT_MS.
+// Один пинг сервера. true = сервер достижим (200/401/404 и т.п.),
+// false = сеть недоступна, таймаут ИЛИ gateway-ошибка реверс-прокси (502/503/504).
 async function pingServer(): Promise<boolean> {
   const token = typeof localStorage !== 'undefined'
     ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
@@ -65,12 +65,16 @@ async function pingServer(): Promise<boolean> {
   try {
     // Лёгкий health-эндпоинт. Не через request() — чтобы не триггерить IDB-fallback/логаут.
     // На старом сервере без /health вернётся 404 — это тоже «достижим». SW не кэширует /api.
-    await fetch(BASE + '/health', {
+    const res = await fetch(BASE + '/health', {
       method: 'GET',
       cache: 'no-store',
       signal: controller.signal,
       headers: token ? { Authorization: `Bearer ${token}` } : undefined,
     });
+    // За реверс-прокси (боевой :80/:8080) убитый бэкенд отдаёт 502/503/504 при живом
+    // прокси. Раньше это считалось «доступен» → приложение не уходило в офлайн, а
+    // запросы к API падали. Трактуем gateway-ошибки как недоступность бэкенда.
+    if (res.status === 502 || res.status === 503 || res.status === 504) return false;
     return true;
   } catch {
     return false; // reject (сетевой сбой) или abort по таймауту

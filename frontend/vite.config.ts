@@ -22,8 +22,15 @@ export default defineConfig({
       name: 'aihome_shell',
       remotes: {},
       shared: {
-        react: { singleton: true, requiredVersion: '^19.2.0' },
-        'react-dom': { singleton: true, requiredVersion: '^19.2.0' },
+        // eager: react/react-dom бандлятся в основной синхронный chunk, а не в
+        // async loadShare-обёртку. Без eager MF выносит shared react в отдельный
+        // чанк с top-level-await — и при «офлайн → reconnect → re-render» соседние
+        // проходы дерева ловят разные снапшоты React-диспетчера → React error #300
+        // («Rendered fewer hooks than expected») → краш всего UI. Host здесь —
+        // ПОСТАВЩИК singleton-инстанса (remotes пустые), для него eager штатен и
+        // не мешает модулям-потребителям.
+        react: { singleton: true, eager: true, requiredVersion: '^19.2.0' },
+        'react-dom': { singleton: true, eager: true, requiredVersion: '^19.2.0' },
       },
     }),
     VitePWA({

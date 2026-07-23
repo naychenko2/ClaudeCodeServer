@@ -284,10 +284,18 @@ export async function runOfflineSnapshot(priorityProjectId?: string): Promise<vo
       const [sessions, treeEntries] = await Promise.all([
         api.sessions.list(p.id).catch(() => []),
         api.sync.list(p.id).catch(() => []), // прогрев кэша меток
-        api.files.tree(p.id).catch(() => [] as FileEntry[]),
+        // null (а не []) при ошибке: пустой список стёр бы весь офлайн-кэш проекта
+        // на этапе чистки ниже. Отличаем «дерево не пришло» от «проект реально пуст».
+        api.files.tree(p.id).catch(() => null),
       ]).then(([s, , t]) => [s, t] as const);
 
       await mapLimit(sessions, 4, async s => { await api.sessions.getHistory(p.id, s.id).catch(() => {}); });
+
+      // Дерево не получено (сервер недоступен/ошибка) — НЕ трогаем кэш этого проекта:
+      // ни листинги, ни валидные пути, ни чистку. Проект просто не участвует в снапшоте.
+      // Иначе гонка health-ping'а с флапающей сетью стирала бы офлайн-контент.
+      if (treeEntries === null) continue;
+
       // Обновляем дерево в кэше — новые файлы появляются, удалённые исчезают из листингов
       await cacheTreeAsListings(p.id, treeEntries);
 

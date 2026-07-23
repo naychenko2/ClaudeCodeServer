@@ -303,6 +303,25 @@ export function clearGitError(projectId: string): void {
   if (get(projectId).error) patch(projectId, { error: null });
 }
 
+// Сводная статистика рабочих изменений: суммарные +added/−deleted и число файлов.
+// Мерж по пути (файл может быть и в staged, и в unstaged — не задваиваем; numstat
+// tracked-файлов считается vs HEAD, значения по группам совпадают). Untracked
+// добавляем только если пути ещё нет. Повторяет логику mergeWorking из GitChangesRail.
+export function workingDiffStat(status: GitStatus | null): { added: number; deleted: number; files: number } {
+  if (!status) return { added: 0, deleted: 0, files: 0 };
+  const seen = new Map<string, { added: number; deleted: number }>();
+  const put = (path: string, added: number | null | undefined, deleted: number | null | undefined) => {
+    if (seen.has(path)) return;
+    seen.set(path, { added: added ?? 0, deleted: deleted ?? 0 });
+  };
+  for (const f of status.staged) put(f.path, f.added, f.deleted);
+  for (const f of status.unstaged) put(f.path, f.added, f.deleted);
+  for (const f of status.untracked) put(f.path, f.added, f.deleted);
+  let added = 0, deleted = 0;
+  for (const v of seen.values()) { added += v.added; deleted += v.deleted; }
+  return { added, deleted, files: seen.size };
+}
+
 // Состояние git проекта (статус/история/ветки/busy/ошибка)
 export function useGitState(projectId: string): GitProjectState {
   return useSyncExternalStore(

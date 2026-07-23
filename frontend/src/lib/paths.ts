@@ -39,6 +39,12 @@ export function relPath(p: string, root?: string | null): string {
   return p;
 }
 
+// Последний сегмент пути (имя файла/папки) для Windows и posix.
+// «C:\a\b\worktree» → «worktree»; хвостовые разделители игнорируются.
+export function basename(p: string): string {
+  return p.replace(/\\/g, '/').replace(/\/+$/, '').split('/').pop() ?? '';
+}
+
 // Делает пути относительными в произвольном тексте (командах, выводе, плане):
 // «<root>\sub\file» → «sub\file», голый «<root>» → «.». Учитывает оба разделителя и регистр (Windows).
 export function stripRoot(text: string, root?: string | null): string {

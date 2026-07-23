@@ -338,6 +338,8 @@ export interface GitStatus {
   staged: GitFileChange[];
   unstaged: GitFileChange[];
   untracked: GitFileChange[];
+  // Проект открыт как linked git worktree (UI показывает имя папки worktree вместо ветки)
+  isWorktree: boolean;
 }
 
 // Ветка репозитория: current — текущая (HEAD)

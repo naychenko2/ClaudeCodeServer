@@ -63,6 +63,7 @@ COPY mcp/memory-server ./mcp/memory-server
 COPY mcp/personas-server ./mcp/personas-server
 COPY mcp/workspace-server ./mcp/workspace-server
 COPY mcp/notifications-server ./mcp/notifications-server
+COPY mcp/widgets-server ./mcp/widgets-server
 COPY claude-defaults ./claude-defaults
 # Обвязка убиваемости ходов (см. комментарий в самом скрипте); sed снимает CRLF
 # на случай Windows-чекаута
@@ -111,13 +112,14 @@ COPY --from=backend /app/publish ./
 COPY --from=mcp /src/mcp-dify/dist        ./mcp-dify/dist
 COPY --from=mcp /src/mcp-dify/node_modules ./mcp-dify/node_modules
 COPY --from=mcp /src/mcp-dify/package.json ./mcp-dify/package.json
-# MCP-серверы задач, заметок, памяти, персон и рабочего пространства: чистый Node без зависимостей — сборка не нужна
+# MCP-серверы задач, заметок, памяти, персон, рабочего пространства и виджетов: чистый Node без зависимостей — сборка не нужна
 COPY mcp/tasks-server ./mcp/tasks-server
 COPY mcp/notes-server ./mcp/notes-server
 COPY mcp/memory-server ./mcp/memory-server
 COPY mcp/personas-server ./mcp/personas-server
 COPY mcp/workspace-server ./mcp/workspace-server
 COPY mcp/notifications-server ./mcp/notifications-server
+COPY mcp/widgets-server ./mcp/widgets-server
 # Дефолтная конфигурация CLI, поставляемая с приложением (workflow-скрипты и т.п.):
 # entrypoint compose-файла копирует её в ~/.claude при КАЖДОМ старте с перезаписью (cp -f) —
 # источник истины репозиторий, ручные правки этих файлов в volume живут до рестарта

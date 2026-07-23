@@ -180,7 +180,7 @@ public class ClaudeSession : ILlmSessionAdapter
     // сабагенты): их permission-запросы падают в фоновом контексте сабагента, где отвечать
     // некому — авторазрешаем, как и остальные свои серверы (доступ ограничен allow-list агента).
     private static readonly string[] BuiltInMcpServerPrefixes =
-        ["mcp__tasks__", "mcp__notes__", "mcp__memory__", "mcp__personas__", "mcp__wsp__", "mcp__notifications__", "mcp__dify__", "mcp__pmem_"];
+        ["mcp__tasks__", "mcp__notes__", "mcp__memory__", "mcp__personas__", "mcp__wsp__", "mcp__notifications__", "mcp__widgets__", "mcp__dify__", "mcp__pmem_"];
 
     // Отслеживание изменений файлов на время хода
     private readonly TurnFileWatcher _fileWatcher;
@@ -214,6 +214,8 @@ public class ClaudeSession : ILlmSessionAdapter
     private readonly NotificationsMcpContext? _notificationsMcp;
     // MCP-серверы внешних модулей из реестра (контракт §6): аддитивно к встроенным
     private readonly ModulesMcpContext? _modulesMcp;
+    // MCP-сервер виджетов чата (widget_show): маркер «флаг chat-widgets включён»
+    private readonly WidgetsMcpContext? _widgetsMcp;
     // Файловые сабагенты-персоны: план хода — папки --add-dir
     // + pmem-серверы памяти консультантов; вычисляется на каждый ход
     private readonly Func<PersonaAgentsContext?>? _personaAgentsProvider;
@@ -258,6 +260,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _workspaceMcp = context.WorkspaceMcp;
         _notificationsMcp = context.NotificationsMcp;
         _modulesMcp = context.ModulesMcp;
+        _widgetsMcp = context.WidgetsMcp;
         _personaAgentsProvider = context.PersonaAgentsProvider;
         _launcher = context.Launcher ?? Execution.LocalProcessRunner.Instance;
         // Запреты конфига + ограничения возможностей персоны (ExtraDisallowedTools)
@@ -295,12 +298,14 @@ public class ClaudeSession : ILlmSessionAdapter
         var hasWorkspace = workspaceServerPath is not null;
         var notificationsServerPath = _notificationsMcp is not null ? MapMcpPath(NotificationsServerLocator.FindNotificationsServerPath()) : null;
         var hasNotifications = notificationsServerPath is not null;
+        var widgetsServerPath = _widgetsMcp is not null ? MapMcpPath(WidgetsServerLocator.FindWidgetsServerPath()) : null;
+        var hasWidgets = widgetsServerPath is not null;
         var hasDataset = !string.IsNullOrEmpty(datasetId);
         var hasModules = _modulesMcp is { Servers.Count: > 0 };
         var hasFalAi = !string.IsNullOrEmpty(_falMcpApiKey);
         var userServers = LoadUserScopeMcpServers();
         if (!hasTasks && !hasNotes && !hasMemory && !hasPersonas && !hasWorkspace && !hasNotifications
-            && !hasDataset && !hasModules && !hasFalAi && userServers is null
+            && !hasWidgets && !hasDataset && !hasModules && !hasFalAi && userServers is null
             && !(hasConsultants && memoryServerPath is not null)) return (null, "");
 
         try
@@ -382,6 +387,19 @@ public class ClaudeSession : ILlmSessionAdapter
                         ["NOTES_PROJECT_ID"] = _notesMcp.ProjectId ?? "",
                         ["NOTES_SESSION_ID"] = Info.Id,
                     },
+                };
+            }
+
+            if (hasWidgets)
+            {
+                // Сервер виджетов: без env (API ему не нужен). alwaysLoad — единственный
+                // крохотный инструмент; без него первый вызов в ходе падает «No such tool
+                // available» (claude-code#19282), а ретраить показ виджета модели не свойственно.
+                servers["widgets"] = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["command"] = "node",
+                    ["args"] = new System.Text.Json.Nodes.JsonArray { widgetsServerPath! },
+                    ["alwaysLoad"] = true,
                 };
             }
 
@@ -1224,6 +1242,24 @@ public class ClaudeSession : ILlmSessionAdapter
                 basePrompt = string.IsNullOrWhiteSpace(basePrompt)
                     ? notesHint
                     : basePrompt + "\n\n" + notesHint;
+            }
+
+            // Подсказка про виджеты — только когда widgets-server подключён (флаг chat-widgets)
+            if (_widgetsMcp is not null)
+            {
+                var widgetsHint =
+                    "Тебе доступен инструмент mcp__widgets__widget_show — интерактивный HTML-виджет прямо в ленте чата. " +
+                    "Используй его, когда наглядность лучше текста: дашборды и сводки с метриками, графики и диаграммы " +
+                    "(рисуй сам через inline SVG/canvas), таблицы с сортировкой, калькуляторы, мини-игры, интерактивные " +
+                    "демонстрации. Требования к html: self-contained фрагмент БЕЗ <html>/<head>/<body>, все стили и " +
+                    "скрипты — inline; внешние ресурсы (CDN-скрипты, картинки по URL, шрифты, fetch) заблокированы " +
+                    "песочницей — не используй их вовсе. Лимит 64 КБ. Для попадания в тему приложения используй " +
+                    "CSS-переменные var(--cc-bg), var(--cc-text), var(--cc-accent), var(--cc-border), var(--cc-muted). " +
+                    "Верстай адаптивно: лента бывает узкой (320px). Виджет уже показан пользователю — не пересказывай " +
+                    "его содержимое текстом, достаточно короткого комментария.";
+                basePrompt = string.IsNullOrWhiteSpace(basePrompt)
+                    ? widgetsHint
+                    : basePrompt + "\n\n" + widgetsHint;
             }
 
             // Манифест recall (F3): что персона подтянула в этот ход — заметки + память.

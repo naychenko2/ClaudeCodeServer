@@ -273,6 +273,12 @@ public class SessionManager
         return new NotesMcpContext(ResolveTasksApiUrl(ownerId), token, projectId);
     }
 
+    // Контекст MCP-сервера виджетов чата: чистый маркер за флагом chat-widgets —
+    // серверу не нужны ни API, ни токен, он только валидирует input (HTML рендерит фронт).
+    private WidgetsMcpContext? BuildWidgetsContext(string? ownerId) =>
+        ownerId is not null && _flags.IsEnabled(ownerId, FeatureFlagKeys.ChatWidgets)
+            ? new WidgetsMcpContext() : null;
+
     // Контекст MCP-сервера памяти персоны (тот же сервисный токен владельца, что и tasks/notes).
     // projectId — только у проектных персон (③-3.4: даёт доступ к team_memory_* команды).
     private MemoryMcpContext BuildMemoryContext(string ownerId, string personaId, string? projectId)
@@ -1324,7 +1330,8 @@ public class SessionManager
             BindingsProvider: BuildBindingsProvider(ownerId, session.PersonaId, workspace?.Sections),
             PersonaAgentsProvider: BuildPersonaAgentsProvider(ownerId, session),
             Launcher: _launchers.ForOwner(ownerId),
-            ModulesMcp: BuildModulesContext(ownerId)));
+            ModulesMcp: BuildModulesContext(ownerId),
+            WidgetsMcp: BuildWidgetsContext(ownerId)));
         entry.Process = adapter;
 
         await adapter.StartAsync();
@@ -1608,7 +1615,8 @@ public class SessionManager
                 BindingsProvider: BuildBindingsProvider(entry.Info.OwnerId, entry.Info.PersonaId, workspace?.Sections),
                 PersonaAgentsProvider: BuildPersonaAgentsProvider(entry.Info.OwnerId, entry.Info),
                 Launcher: _launchers.ForOwner(entry.Info.OwnerId),
-                ModulesMcp: BuildModulesContext(entry.Info.OwnerId));
+                ModulesMcp: BuildModulesContext(entry.Info.OwnerId),
+                WidgetsMcp: BuildWidgetsContext(entry.Info.OwnerId));
         }
         else
         {
@@ -1633,7 +1641,8 @@ public class SessionManager
                 BindingsProvider: BuildBindingsProvider(project.OwnerId, entry.Info.PersonaId, workspace?.Sections),
                 PersonaAgentsProvider: BuildPersonaAgentsProvider(project.OwnerId, entry.Info),
                 Launcher: _launchers.ForOwner(project.OwnerId),
-                ModulesMcp: BuildModulesContext(project.OwnerId));
+                ModulesMcp: BuildModulesContext(project.OwnerId),
+                WidgetsMcp: BuildWidgetsContext(project.OwnerId));
         }
         var adapter = _adapters.Create(entry.Info, context);
         entry.Process = adapter;

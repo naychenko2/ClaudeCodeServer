@@ -273,11 +273,11 @@ public class SessionManager
         return new NotesMcpContext(ResolveTasksApiUrl(ownerId), token, projectId);
     }
 
-    // Контекст MCP-сервера виджетов чата: чистый маркер за флагом chat-widgets —
+    // Контекст MCP-сервера виджетов чата: чистый маркер «сессия с владельцем» —
     // серверу не нужны ни API, ни токен, он только валидирует input (HTML рендерит фронт).
+    // Фича штатная (без фич-флага), как personas/notifications.
     private WidgetsMcpContext? BuildWidgetsContext(string? ownerId) =>
-        ownerId is not null && _flags.IsEnabled(ownerId, FeatureFlagKeys.ChatWidgets)
-            ? new WidgetsMcpContext() : null;
+        ownerId is not null ? new WidgetsMcpContext() : null;
 
     // Контекст MCP-сервера памяти персоны (тот же сервисный токен владельца, что и tasks/notes).
     // projectId — только у проектных персон (③-3.4: даёт доступ к team_memory_* команды).

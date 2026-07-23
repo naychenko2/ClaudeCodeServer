@@ -42,10 +42,6 @@ public static class FeatureFlagKeys
     // Переключатель проектов в сайдбаре воркспейса: плашка проекта становится переключалкой
     // (иконки других проектов со статусами агентов), зона проектов в шапке скрывается.
     public const string SidebarProjectSwitcher = "sidebar-project-switcher";
-
-    // Интерактивные HTML-виджеты в ленте чата: MCP-сервер widgets (widget_show),
-    // фронт рендерит html вызова в sandbox-iframe.
-    public const string ChatWidgets = "chat-widgets";
 }
 
 /// <summary>
@@ -114,15 +110,6 @@ public static class FeatureFlagCatalog
             Description: "Плашка проекта в сайдбаре становится переключателем: рядом с именем — значки других проектов с точками статусов агентов (оранжевая — ждет вашего ответа, зеленая — работает). Клик по «ждущему» проекту открывает сразу нужный чат. Зона проектов в верхней навигации при этом скрывается.",
             Default: false,
             Stage: "dev"),
-
-        // Интерактивные HTML-виджеты в ленте чата: модель зовёт mcp__widgets__widget_show,
-        // фронт рендерит HTML в изолированном sandbox-iframe (без сети и доступа к приложению).
-        new FeatureFlagDefinition(
-            Key: FeatureFlagKeys.ChatWidgets,
-            Title: "Виджеты в чате",
-            Description: "Claude может показывать интерактивные HTML-виджеты прямо в ленте чата: дашборды, графики, таблицы, калькуляторы, мини-игры. Виджет живёт в изолированной песочнице без доступа к сети и данным приложения.",
-            Default: false,
-            Stage: "beta"),
     ];
 
     private static readonly HashSet<string> Keys = All.Select(f => f.Key).ToHashSet();

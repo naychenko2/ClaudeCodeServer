@@ -14,7 +14,6 @@ export const FLAGS = {
   aiLocalSuggest: 'ai-local-suggest',
   workspaceCcPanels: 'workspace-cc-panels',
   sidebarProjectSwitcher: 'sidebar-project-switcher',
-  chatWidgets: 'chat-widgets',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

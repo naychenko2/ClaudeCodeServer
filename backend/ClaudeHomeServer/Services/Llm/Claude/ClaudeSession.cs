@@ -214,7 +214,7 @@ public class ClaudeSession : ILlmSessionAdapter
     private readonly NotificationsMcpContext? _notificationsMcp;
     // MCP-серверы внешних модулей из реестра (контракт §6): аддитивно к встроенным
     private readonly ModulesMcpContext? _modulesMcp;
-    // MCP-сервер виджетов чата (widget_show): маркер «флаг chat-widgets включён»
+    // MCP-сервер виджетов чата (widget_show): null — сессия без владельца
     private readonly WidgetsMcpContext? _widgetsMcp;
     // Файловые сабагенты-персоны: план хода — папки --add-dir
     // + pmem-серверы памяти консультантов; вычисляется на каждый ход
@@ -1244,7 +1244,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     : basePrompt + "\n\n" + notesHint;
             }
 
-            // Подсказка про виджеты — только когда widgets-server подключён (флаг chat-widgets)
+            // Подсказка про виджеты — только когда widgets-server подключён
             if (_widgetsMcp is not null)
             {
                 var widgetsHint =

@@ -284,11 +284,11 @@ export const AI_ACTIONS: AiAction[] = [
     run: () => dispatchAiRun('chat.retitle'),
   },
   {
-    // Интерактивный HTML-виджет в ленте чата (флаг chat-widgets): промпт подстраивается
-    // под открытый раздел — дашборд проекта / сводка задач / статистика заметок / свободная тема
+    // Интерактивный HTML-виджет в ленте чата: промпт подстраивается под открытый
+    // раздел — дашборд проекта / сводка задач / статистика заметок / свободная тема
     id: 'chat.widget', title: 'Показать интерактивный виджет', hint: 'дашборд, график или сводка прямо в чате',
     section: 'chat', sectionLabel: 'Чат', icon: IcOverview,
-    when: c => c.online && c.flag('chat-widgets'),
+    when: c => c.online,
     contextual: c => projectOpen(c) || calendarScreen(c) || noteOpen(c),
     run: c => startChatWithPrompt(widgetPrompt(c), c),
   },

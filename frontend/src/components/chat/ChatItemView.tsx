@@ -19,7 +19,6 @@ import { ToolUseView } from './ToolUseView';
 import { PersonaAskView, isPersonaAsk } from './PersonaAskView';
 import { PersonaTaskView, isAgentToolUse } from './PersonaTaskView';
 import { WidgetView, isWidgetShow } from './WidgetView';
-import { useFeature, FLAGS } from '../../lib/featureFlags';
 import { TaskCreatedView, isTasksCreate } from './TaskCreatedView';
 import type { ActivityEntry } from './timeline';
 import { AskQuestionView } from './AskQuestionView';
@@ -508,8 +507,6 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
   const asstName = useAssistantName();
   // Подписка на стор персон: авторские аватары реплик (personaId) обновятся после загрузки стора
   usePersonasVersion();
-  // Флаг виджетов — хук, поэтому читаем до switch (в ветке tool_use звать нельзя)
-  const widgetsEnabled = useFeature(FLAGS.chatWidgets);
   switch (item.kind) {
     case 'user_message': {
       // Служебная директива цикла «до готово» (continuation/verification) — компактная
@@ -711,9 +708,8 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       if (taskPlan) return <TodoPlanView todos={taskPlan} />;
       // Вопрос другой персоне (persona_ask) — фирменная карточка с идентичностью персоны
       if (isPersonaAsk(item.name)) return <PersonaAskView item={item} />;
-      // HTML-виджет (widget_show) — рендер в sandbox-iframe; без флага chat-widgets
-      // тот же вызов graceful рисуется обычной строкой ToolUseView ниже
-      if (widgetsEnabled && isWidgetShow(item.name)) return <WidgetView item={item} />;
+      // HTML-виджет (widget_show) — рендер в sandbox-iframe
+      if (isWidgetShow(item.name)) return <WidgetView item={item} />;
       // Создание задачи (tasks_create) — карточка «Задача создана» с переходом к задаче
       // (ошибка/непарсибельный ответ — фолбэк на ToolUseView внутри)
       if (isTasksCreate(item.name)) return <TaskCreatedView item={item} online={online} onOpenFile={onOpenFile} />;

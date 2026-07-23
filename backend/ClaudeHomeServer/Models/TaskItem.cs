@@ -57,6 +57,11 @@ public class TaskItem
     // из него — второй источник истины не заводим).
     public string? CreatedByPersonaId { get; set; }
     public string? SourceSessionId { get; set; }
+    // Глубина цепочки делегирования: 0 — создана не из чата-исполнителя (обычный чат/UI/API);
+    // из чата-исполнителя родительской задачи — её DelegationDepth + 1 (TaskManager.Create).
+    // Гейт TASKS_EXECUTE (ClaudeSession, через Session.TaskDelegationDepth) запрещает запуск
+    // нового исполнителя при >= 3 — обрывает рекурсивное размножение задач-исполнителей.
+    public int DelegationDepth { get; set; }
     // Порядок карточки на Kanban-доске (ручная сортировка внутри колонки).
     // double — чтобы вставлять между соседями через midpoint без перенумерации.
     // 0 = не назначен (миграция/сортировка по дефолту); задаётся в Create и при drag.

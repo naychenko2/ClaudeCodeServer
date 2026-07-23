@@ -196,4 +196,41 @@ public class TaskExecutionServiceTests
         n.Title.Should().Be("Ждёт ответа по задаче");
         n.PersonaId.Should().Be(persona.Id);
     }
+
+    // ─── Модель Z: доклад делегированной задачи в чат ────────────────────────
+
+    [Fact]
+    public void BuildDelegationReportText_СИтогом_МаркерПлюсResultMarkdown()
+    {
+        var task = new TaskItem { Title = "Починить сборку", ResultMarkdown = "Собрал, тесты зелёные." };
+
+        var text = TaskExecutionService.BuildDelegationReportText(task);
+
+        text.Should().StartWith(TaskExecutionService.DelegationReportMarker + "Починить сборку");
+        text.Should().Contain("Собрал, тесты зелёные.");
+    }
+
+    [Fact]
+    public void BuildDelegationReportText_БезИтога_Фолбэк()
+    {
+        var task = new TaskItem { Title = "Задача без итога", ResultMarkdown = null };
+
+        var text = TaskExecutionService.BuildDelegationReportText(task);
+
+        text.Should().Contain("(итог не указан)");
+    }
+
+    [Fact]
+    public void BuildDelegatorReactionPrompt_СодержитИсполнителяЗадачуИИтог()
+    {
+        var task = new TaskItem { Title = "Починить сборку", ResultMarkdown = "Готово." };
+        var executor = new Persona { Name = "Вера", Role = "Тестировщик" };
+
+        var prompt = TaskExecutionService.BuildDelegatorReactionPrompt(task, executor);
+
+        prompt.Should().Contain("Тестировщик (Вера)");
+        prompt.Should().Contain("Починить сборку");
+        prompt.Should().Contain("Готово.");
+        prompt.Should().Contain("Отреагируй");
+    }
 }

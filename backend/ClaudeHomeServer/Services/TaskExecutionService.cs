@@ -279,6 +279,10 @@ public class TaskExecutionService
                     await NotifyAsync(updated, BuildResultNotification(updated, ok, persona));
                     await NotifyDelegatorAsync(updated, ok);
                 }
+                // Модель Z: активный доклад в чат (в дополнение к L0-тосту выше) — только
+                // при реальном завершении делегированной задачи, не при упавшем ходе
+                if (updated.Status == TaskItemStatus.Done)
+                    await ReportToDelegatorAsync(updated, persona);
                 break;
             }
             case PermissionRequestMessage or AskQuestionMessage:
@@ -348,6 +352,67 @@ public class TaskExecutionService
         ProjectId: task.ProjectId,
         TaskId: task.Id,
         Tag: "Постановщик");
+
+    // Модель Z: активный доклад о завершении делегированной задачи — в отличие от L0-тоста
+    // (NotifyDelegatorAsync) кладёт репорт прямо в чат постановщика. ШАГ 1 — гостевая реплика
+    // исполнителя B с готовым resultMarkdown (0 токенов, без агентского хода); ШАГ 2 — сразу
+    // за ней платный авто-ход постановщика A с реакцией (--resume). Исходный чат S мёртв/чужой/
+    // не найден → fallback в новый чат A. Применимо только когда исполнитель — персона
+    // (без неё нет «лица» для гостевой реплики; L0-тост выше это уже покрывает).
+    private async Task ReportToDelegatorAsync(TaskItem task, Persona? executor)
+    {
+        if (executor is null) return;
+        if (task.CreatedByPersonaId is null || task.CreatedByPersonaId == executor.Id) return;
+        var delegator = _personas.Get(task.CreatedByPersonaId, task.OwnerId!);
+        if (delegator is null) return;
+
+        // Владелец S — как в NotifyDelegatorAsync: чужая/неизвестная сессия не годится
+        var sourceSession = task.SourceSessionId is not null ? _sessions.GetById(task.SourceSessionId) : null;
+        if (sourceSession is not null && _sessions.ResolveOwnerId(sourceSession) != task.OwnerId)
+            sourceSession = null;
+
+        string targetSessionId;
+        if (sourceSession is not null)
+            targetSessionId = sourceSession.Id;
+        else
+        {
+            var title = task.Title.Length > 60 ? task.Title[..60] + "…" : task.Title;
+            var fresh = await _sessions.CreatePersonaChatAsync(task.OwnerId!, delegator.Id,
+                ClaudeMode.AcceptEdits, name: $"Отчёт: {title}");
+            targetSessionId = fresh.Id;
+        }
+
+        // ШАГ 1: гостевая реплика исполнителя — StoredTextMessage.PersonaId=B рендерит её его
+        // лицом; текст с маркера «↩ Отчёт по делегированной задаче: …» первой строкой —
+        // контракт для фронта (формат карточки/маркера — фронт)
+        var reportText = BuildDelegationReportText(task);
+        await _sessions.AppendStoredAsync(targetSessionId,
+            new StoredTextMessage(reportText, personaId: executor.Id),
+            new GuestTextMessage(reportText, executor.Id));
+
+        // ШАГ 2: постановщик реагирует ВСЕГДА — платный авто-ход с контекстом отчёта
+        await _sessions.SendMessageAsync(targetSessionId, BuildDelegatorReactionPrompt(task, executor),
+            [], auto: true, senderPersonaId: delegator.Id);
+    }
+
+    // Маркер гостевой реплики-доклада: контракт для фронта — по нему отличают доклад
+    // делегированной задачи от обычной реплики персоны в ленте
+    internal const string DelegationReportMarker = "↩ Отчёт по делегированной задаче: ";
+
+    // Тело resultMarkdown задачи для доклада — фолбэк на случай, если исполнитель завершил
+    // задачу (done) не через tasks_complete с итогом (напр. вручную через UI/PUT)
+    private static string DelegationReportBody(TaskItem task) =>
+        string.IsNullOrWhiteSpace(task.ResultMarkdown) ? "(итог не указан)" : task.ResultMarkdown;
+
+    // Текст гостевой реплики B: маркер + пустая строка + итог задачи
+    internal static string BuildDelegationReportText(TaskItem task) =>
+        $"{DelegationReportMarker}{task.Title}\n\n{DelegationReportBody(task)}";
+
+    // Промпт авто-хода постановщика A: контекст отчёта B + просьба отреагировать
+    internal static string BuildDelegatorReactionPrompt(TaskItem task, Persona executor) =>
+        $"Персона-исполнитель {PersonaLabel(executor)} завершила делегированную тобой задачу " +
+        $"«{task.Title}». Её отчёт: {DelegationReportBody(task)}\n\n" +
+        "Отреагируй и продолжи работу при необходимости.";
 
     // Уведомление «ждёт ответа» (permission_request / AskUserQuestion)
     internal static NotificationMessage BuildWaitingNotification(TaskItem task, Persona? persona = null) => new(

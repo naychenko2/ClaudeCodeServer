@@ -367,8 +367,11 @@ public class ClaudeSession : ILlmSessionAdapter
             if (hasTasks)
             {
                 // tasks_execute порождает новую сессию Claude — на агентном ходу
-                // (chats_send из другой сессии) не даём, та же анти-рекурсия, что у chats
-                var tasksExecute = _currentTurnAgentDepth < 1 ? "1" : "0";
+                // (chats_send из другой сессии) не даём, та же анти-рекурсия, что у chats.
+                // Плюс гард глубины делегирования: чат-исполнитель задачи глубины >= 3 не
+                // запускает нового исполнителя — обрыв рекурсивного размножения (Info.TaskId →
+                // TaskItem.DelegationDepth, см. Session.TaskDelegationDepth).
+                var tasksExecute = _currentTurnAgentDepth < 1 && Info.TaskDelegationDepth < 3 ? "1" : "0";
                 servers["tasks"] = new System.Text.Json.Nodes.JsonObject
                 {
                     ["command"] = "node",

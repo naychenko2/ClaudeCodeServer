@@ -8,13 +8,14 @@ import { showToast } from '../lib/toast';
 import { C, FONT } from '../lib/design';
 import { useSidebarDrag } from '../lib/sidebarWidth';
 import { useIsMobile } from '../lib/breakpoints';
-import { Button, IconButton, Island, IslandScaffold, IslandSplitter } from '../components/ui';
+import { Button, IconButton, IslandScaffold } from '../components/ui';
 import { ICON_SIZE } from '../components/ui/icons';
 import type { HubTabValue } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
 import { ChatList } from '../components/ChatList';
 import { ChatPanel } from '../components/ChatPanel';
-import { ArtifactsPanel } from '../components/ArtifactsPanel';
+import { RightPanelStack } from './workspace/RightPanelStack';
+import { chatPanelStack } from './workspace/panelStackState';
 import { ensurePersonasLoaded } from '../lib/personas';
 import { ensureTasksLoaded } from '../lib/tasks';
 
@@ -64,39 +65,15 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
   // что в «Проектах», «Заметках», воркспейсе).
   const { width: sidebarWidth, dragging: draggingSplitter, startDrag: handleSidebarSplitterMouseDown } = useSidebarDrag();
 
-  // Панель «Артефакты сессии»: открыта/закрыта + ширина, персист в localStorage.
-  // Ключи отдельные от проектов (cc_chat_artifacts_*), чтобы состояния не пересекались.
-  const [artifactsOpen, setArtifactsOpen] = useState(() => localStorage.getItem('cc_chat_artifacts_open') === '1');
-  useEffect(() => { localStorage.setItem('cc_chat_artifacts_open', artifactsOpen ? '1' : '0'); }, [artifactsOpen]);
-  const [artifactsWidth, setArtifactsWidth] = useState(() => {
-    const v = localStorage.getItem('cc_chat_artifacts_width');
-    return v ? Math.max(240, Math.min(480, Number(v))) : 300;
-  });
-  useEffect(() => { localStorage.setItem('cc_chat_artifacts_width', String(artifactsWidth)); }, [artifactsWidth]);
-  const toggleArtifacts = useCallback(() => setArtifactsOpen(v => !v), []);
-  const [draggingArtifacts, setDraggingArtifacts] = useState(false);
+  // Артефакты сессии живут в правой рельсе (RightPanelStack в режиме sessionOnly):
+  // открытие панелей и их ширина хранятся в собственном инстансе стора (cc_chat_panels_*),
+  // поэтому отдельного состояния здесь больше нет.
+
   // Активный workflow текущего чата — для плашки «WF» на карточке в списке
   const [workflowRunningFor, setWorkflowRunningFor] = useState<string | null>(null);
   const handleWorkflowRunning = useCallback((active: boolean, sessionId: string) => {
     setWorkflowRunningFor(prev => (active ? sessionId : prev === sessionId ? null : prev));
   }, []);
-
-  const handleArtifactsSplitterMouseDown = (e: React.PointerEvent) => {
-    e.preventDefault();
-    setDraggingArtifacts(true);
-    const startX = e.clientX;
-    const startW = artifactsWidth;
-    // Панель справа: тянем влево (clientX уменьшается) → ширина растёт
-    const onMove = (ev: PointerEvent) =>
-      setArtifactsWidth(Math.max(240, Math.min(480, startW - (ev.clientX - startX))));
-    const onUp = () => {
-      setDraggingArtifacts(false);
-      document.removeEventListener('pointermove', onMove);
-      document.removeEventListener('pointerup', onUp);
-    };
-    document.addEventListener('pointermove', onMove);
-    document.addEventListener('pointerup', onUp);
-  };
 
   const refresh = () => api.chats.list().then(setChats).catch(() => {});
 
@@ -221,30 +198,29 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
     return (
       <div style={{ height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
         {activeChat ? (
-          <>
-            <ChatPanel
-              key={activeChat.id}
-              session={activeChat}
+          // Чат + сессионная рельса в ОДНОЙ строке: рельса — flex-сосед справа
+          // (сам пейн колоночный, без row-обёртки рельса встала бы под чатом)
+          <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden', position: 'relative' }}>
+            <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+              <ChatPanel
+                key={activeChat.id}
+                session={activeChat}
+                isMobile
+                onBack={backToList}
+                skills={skills}
+                attachedFiles={attachedFiles}
+                onAttachedFilesChange={setAttachedFiles}
+                onSessionUpdated={updated => setChats(prev => prev.map(c => c.id === updated.id ? updated : c))}
+                onWorkflowRunning={handleWorkflowRunning}
+              />
+            </div>
+            <RightPanelStack
+              sessionOnly
               isMobile
-              onBack={backToList}
-              skills={skills}
-              attachedFiles={attachedFiles}
-              onAttachedFilesChange={setAttachedFiles}
-              onSessionUpdated={updated => setChats(prev => prev.map(c => c.id === updated.id ? updated : c))}
-              onWorkflowRunning={handleWorkflowRunning}
-              artifactsOpen={artifactsOpen}
-              onToggleArtifacts={toggleArtifacts}
+              panelStack={chatPanelStack}
+              session={activeChat}
             />
-            {artifactsOpen && (
-              <>
-                <div onClick={() => setArtifactsOpen(false)}
-                  style={{ position: 'absolute', inset: 0, zIndex: 900, background: C.overlay }} />
-                <div style={{ position: 'absolute', top: 0, right: 0, bottom: 0, zIndex: 901, width: 'min(92vw, 380px)', boxShadow: '-4px 0 20px rgba(20,16,10,0.18)' }}>
-                  <ArtifactsPanel sessionId={activeChat.id} personaId={activeChat.personaId} session={activeChat} isMobile onClose={() => setArtifactsOpen(false)} />
-                </div>
-              </>
-            )}
-          </>
+          </div>
         ) : (
           <>
             <HubHeader value="chats" onTab={onHubTab} auth={auth} onLogout={onLogout} />
@@ -282,8 +258,6 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
               onOpenSidebar={openSidebar}
               onSessionUpdated={updated => setChats(prev => prev.map(c => c.id === updated.id ? updated : c))}
               onWorkflowRunning={handleWorkflowRunning}
-              artifactsOpen={artifactsOpen}
-              onToggleArtifacts={toggleArtifacts}
             />
           ) : (
             <>
@@ -318,13 +292,10 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
               </div>
             </>
           )}
-          right={artifactsOpen && activeChat ? (
-            <>
-              <IslandSplitter active={draggingArtifacts} onMouseDown={handleArtifactsSplitterMouseDown} />
-              <Island style={{ width: artifactsWidth, flexShrink: 0 }}>
-                <ArtifactsPanel sessionId={activeChat.id} personaId={activeChat.personaId} session={activeChat} onClose={() => setArtifactsOpen(false)} />
-              </Island>
-            </>
+          // Сессионная рельса (План/Агенты/Персона) — постоянная, как в проектах:
+          // сама приносит сплиттер ширины, панели-острова и полосу иконок
+          right={activeChat ? (
+            <RightPanelStack sessionOnly panelStack={chatPanelStack} session={activeChat} />
           ) : undefined}
         />
       </div>

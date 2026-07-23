@@ -7,7 +7,7 @@ import { ChatPanel } from '../components/ChatPanel';
 import { FileViewer } from '../components/FileViewer';
 import { GitCommitView } from '../components/GitCommitView';
 import { GitChangesRail } from '../components/GitChangesRail';
-import { ArtifactsPanel } from '../components/ArtifactsPanel';
+import { RightPanelStack } from './workspace/RightPanelStack';
 import { KnowledgePanel } from '../components/KnowledgePanel';
 import { UsageScreen } from '../components/UsageScreen';
 import { joinProject, leaveProject, onMessage, onReconnected } from '../lib/signalr';
@@ -804,18 +804,11 @@ const windowWidth = useWindowWidth();
     localStorage.setItem('cc_sidebar_mode', sidebarMode);
   }, [sidebarMode]);
 
-  // Панель «Артефакты сессии»: открыта/закрыта + ширина, персист в localStorage
-  const [artifactsOpen, setArtifactsOpen] = useState(() => localStorage.getItem('cc_artifacts_open') === '1');
-  useEffect(() => { localStorage.setItem('cc_artifacts_open', artifactsOpen ? '1' : '0'); }, [artifactsOpen]);
-  const [artifactsWidth, setArtifactsWidth] = useState(() => {
-    const v = localStorage.getItem('cc_artifacts_width');
-    return v ? Math.max(240, Math.min(480, Number(v))) : 300;
-  });
-  useEffect(() => { localStorage.setItem('cc_artifacts_width', String(artifactsWidth)); }, [artifactsWidth]);
-  const toggleArtifacts = useCallback(() => setArtifactsOpen(v => !v), []);
+  // Артефакты сессии живут в правой рельсе (RightPanelStack): открытие панелей и их
+  // ширина хранятся в сторе панелей, отдельного состояния здесь не нужно.
 
   // Какой сплиттер сейчас тащим — для подсветки на всём протяжении drag (даже если курсор соскользнул)
-  const [draggingSplitter, setDraggingSplitter] = useState<null | 'sidebar' | 'split' | 'artifacts'>(null);
+  const [draggingSplitter, setDraggingSplitter] = useState<null | 'sidebar' | 'split'>(null);
   useEffect(() => {
     if (!draggingSplitter) return;
     const up = () => setDraggingSplitter(null);
@@ -829,26 +822,6 @@ const windowWidth = useWindowWidth();
     const startW = sidebarWidth;
     const onMove = (ev: PointerEvent) => {
       setSidebarWidth(Math.max(220, Math.min(520, startW + (ev.clientX - startX))));
-    };
-    const onUp = () => {
-      document.removeEventListener('pointermove', onMove);
-      document.removeEventListener('pointerup', onUp);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-    };
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-    document.addEventListener('pointermove', onMove);
-    document.addEventListener('pointerup', onUp);
-  };
-
-  const handleArtifactsSplitterMouseDown = (e: React.PointerEvent) => {
-    e.preventDefault();
-    const startX = e.clientX;
-    const startW = artifactsWidth;
-    const onMove = (ev: PointerEvent) => {
-      // Панель справа: тянем влево (clientX уменьшается) → ширина растёт
-      setArtifactsWidth(Math.max(240, Math.min(480, startW - (ev.clientX - startX))));
     };
     const onUp = () => {
       document.removeEventListener('pointermove', onMove);
@@ -1354,7 +1327,15 @@ const windowWidth = useWindowWidth();
                 ? ProjectBoardArea
                 : <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: C.textMuted, fontSize: 14 }}>Выберите задачу</div>)
             : activeSession
-            ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onBack={backFromChat} onWorkflowRunning={handleWorkflowRunning} skills={composerSkills} agents={skillsData?.agents} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} onResume={handleResume} artifactsOpen={artifactsOpen} onToggleArtifacts={toggleArtifacts} />
+            ? (
+              // Чат + сессионная рельса в одной строке (пейн колоночный — нужна row-обёртка)
+              <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden' }}>
+                <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                  <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onBack={backFromChat} onWorkflowRunning={handleWorkflowRunning} skills={composerSkills} agents={skillsData?.agents} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} onResume={handleResume} />
+                </div>
+                <RightPanelStack sessionOnly isMobile session={activeSession} projectId={project.id} rootPath={project.rootPath} />
+              </div>
+            )
             : NoSession
           }
         </div>
@@ -1369,17 +1350,6 @@ const windowWidth = useWindowWidth();
           <div style={{ position: 'absolute', inset: 0, zIndex: 800, display: 'flex' }}>
             <GitCommitView project={project} sha={openCommitSha} initialPath={openCommitFile} onClose={closeCommitView} isMobile />
           </div>
-        )}
-        {/* Панель «Артефакты сессии» — мобайл: drawer поверх чата */}
-        {artifactsOpen && activeSession && !openFile && !personasMode && (
-          <>
-            <div onClick={() => setArtifactsOpen(false)}
-              style={{ position: 'absolute', inset: 0, zIndex: 900, background: C.overlay }} />
-            <div style={{ position: 'absolute', top: 0, right: 0, bottom: 0, zIndex: 901, width: 'min(92vw, 380px)', boxShadow: '-4px 0 20px rgba(20,16,10,0.18)' }}>
-              <ArtifactsPanel sessionId={activeSession.id} projectId={project.id} rootPath={project.rootPath} isMobile personaId={activeSession.personaId} session={activeSession}
-                onOpenFile={(f) => { setArtifactsOpen(false); handleOpenFileFromChat(f); }} onClose={() => setArtifactsOpen(false)} />
-            </div>
-          </>
         )}
         {columnsDialogEl}
         {showUsage && <UsageScreen onClose={() => setShowUsage(false)} />}
@@ -1594,7 +1564,7 @@ const windowWidth = useWindowWidth();
                 {showProjectBoard
                   ? ProjectBoardArea
                   : activeSession
-                  ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onWorkflowRunning={handleWorkflowRunning} onOpenSidebar={openSidebar} skills={composerSkills} agents={skillsData?.agents} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} onResume={handleResume} artifactsOpen={artifactsOpen} onToggleArtifacts={toggleArtifacts} />
+                  ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onWorkflowRunning={handleWorkflowRunning} onOpenSidebar={openSidebar} skills={composerSkills} agents={skillsData?.agents} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} onResume={handleResume} />
                   : NoSessionWithBar}
               </div>
             )}
@@ -1604,7 +1574,7 @@ const windowWidth = useWindowWidth();
               <div ref={splitContainerRef} style={{ flex: 1, display: 'flex', overflow: 'hidden', minWidth: 0 }}>
                 <div style={{ flex: chatFlex, overflow: 'hidden', minWidth: 200 }}>
                   {activeSession
-                    ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onWorkflowRunning={handleWorkflowRunning} onOpenSidebar={openSidebar} skills={composerSkills} agents={skillsData?.agents} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} onResume={handleResume} artifactsOpen={artifactsOpen} onToggleArtifacts={toggleArtifacts} />
+                    ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onWorkflowRunning={handleWorkflowRunning} onOpenSidebar={openSidebar} skills={composerSkills} agents={skillsData?.agents} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} onResume={handleResume} />
                     : NoSessionWithBar}
                 </div>
                 <Splitter orientation="v" active={draggingSplitter === 'split'}
@@ -1624,30 +1594,6 @@ const windowWidth = useWindowWidth();
           </>
         );
       })()}
-
-      {/* Панель «Артефакты сессии» — десктоп: боковая колонка в потоке (никогда поверх) */}
-      {artifactsOpen && activeSession && !isTablet && !personasMode && (
-        <>
-          <Splitter orientation="v" active={draggingSplitter === 'artifacts'}
-            onMouseDown={e => { setDraggingSplitter('artifacts'); handleArtifactsSplitterMouseDown(e); }} />
-          <div style={{ width: artifactsWidth, flexShrink: 0, height: '100%' }}>
-            <ArtifactsPanel sessionId={activeSession.id} projectId={project.id} rootPath={project.rootPath} personaId={activeSession.personaId} session={activeSession}
-              onOpenFile={handleOpenFileFromChat} onClose={() => setArtifactsOpen(false)} />
-          </div>
-        </>
-      )}
-
-      {/* Панель «Артефакты сессии» — планшет: drawer поверх контента (узкий экран) */}
-      {artifactsOpen && activeSession && isTablet && !personasMode && (
-        <>
-          <div onClick={() => setArtifactsOpen(false)}
-            style={{ position: 'absolute', inset: 0, zIndex: 19, background: C.overlay }} />
-          <div style={{ position: 'absolute', top: 0, right: 0, bottom: 0, zIndex: 20, width: 'min(85vw, 360px)', boxShadow: '-4px 0 20px rgba(20,16,10,0.15)' }}>
-            <ArtifactsPanel sessionId={activeSession.id} projectId={project.id} rootPath={project.rootPath} personaId={activeSession.personaId} session={activeSession}
-              onOpenFile={(f) => { handleOpenFileFromChat(f); setArtifactsOpen(false); }} onClose={() => setArtifactsOpen(false)} />
-          </div>
-        </>
-      )}
 
         </>
       )}

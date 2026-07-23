@@ -4,7 +4,6 @@ import type { Project, Session } from '../types';
 import { api } from '../lib/api';
 import { onMessage, onReconnected } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
-import { isOnline } from '../lib/offline';
 import { EditSessionDialog } from './EditSessionDialog';
 import { C, MODAL_W } from '../lib/design';
 import { Modal, ModalActions, Button } from './ui';
@@ -22,11 +21,14 @@ interface Props {
   onSelect: (session: Session, firstMessage?: string, autoSelect?: boolean) => void;
   onSessionUpdated?: (session: Session) => void;
   onSessionsChanged?: (count: number) => void;
+  // Список опустел (удалён последний чат) — центр показывает пустое состояние,
+  // а не автосоздаёт новый чат. Владелец сбрасывает activeSession в null.
+  onCleared?: () => void;
   isMobile?: boolean;
   workflowRunningFor?: string;
 }
 
-export function SessionList({ project, activeSession, onSelect, onSessionUpdated, onSessionsChanged, isMobile = false, workflowRunningFor }: Props) {
+export function SessionList({ project, activeSession, onSelect, onSessionUpdated, onSessionsChanged, onCleared, isMobile = false, workflowRunningFor }: Props) {
   const online = useOnline();
   // Подписка на стор персон — перерисоваться, когда список подгрузится (аватары сессий персон)
   usePersonasVersion();
@@ -44,6 +46,8 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   activeRef.current = activeSession;
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
+  const onClearedRef = useRef(onCleared);
+  onClearedRef.current = onCleared;
 
   useEffect(() => { onSessionsChanged?.(sessions.length); }, [sessions.length, onSessionsChanged]);
 
@@ -67,15 +71,10 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
       setSessions(list);
       if (!initializedRef.current) {
         initializedRef.current = true;
-        if (!activeSession) {
-          if (list.length > 0) {
-            onSelect(list[0], undefined, true);
-          } else if (isOnline()) {
-            // Офлайн чат не создаём — мутации недоступны
-            const s = await api.sessions.create(project.id);
-            setSessions([s]);
-            onSelect(s, undefined, true);
-          }
+        // Автовыбор первого чата, если он есть. Пустой список чат НЕ создаём —
+        // центр показывает пустое состояние с кнопкой «Новый чат» (создание только по клику).
+        if (!activeSession && list.length > 0) {
+          onSelect(list[0], undefined, true);
         }
       }
     };
@@ -106,8 +105,11 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
       if (msg.type === 'chat_deleted') {
         setSessions(prev => {
           const updated = prev.filter(s => s.id !== msg.sessionId);
-          if (activeRef.current?.id === msg.sessionId && updated.length > 0)
-            queueMicrotask(() => onSelectRef.current(updated[0], undefined, true));
+          if (activeRef.current?.id === msg.sessionId) {
+            if (updated.length > 0) queueMicrotask(() => onSelectRef.current(updated[0], undefined, true));
+            // Удалён последний активный чат — сбрасываем в пустое состояние
+            else queueMicrotask(() => onClearedRef.current?.());
+          }
           return updated;
         });
         return;
@@ -132,13 +134,21 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   }, [project.id]);
 
   // Если активную сессию отредактировали из шапки чата — подхватываем название/модель,
-  // не затирая статус, который приходит по realtime
+  // не затирая статус, который приходит по realtime. Если активной сессии ещё нет в списке
+  // (создана из пустого состояния в центре, мимо SessionList) — добавляем её сразу,
+  // не дожидаясь 5-секундного поллинга.
   useEffect(() => {
     if (!activeSession) return;
-    setSessions(prev => prev.map(s =>
-      s.id === activeSession.id ? { ...s, name: activeSession.name, model: activeSession.model } : s
-    ));
-  }, [activeSession?.id, activeSession?.name, activeSession?.model]);
+    setSessions(prev => {
+      if (prev.some(s => s.id === activeSession.id)) {
+        return prev.map(s =>
+          s.id === activeSession.id ? { ...s, name: activeSession.name, model: activeSession.model } : s
+        );
+      }
+      // Чужую (глобальную) сессию в список этого проекта не добавляем
+      return activeSession.projectId === project.id ? [activeSession, ...prev] : prev;
+    });
+  }, [activeSession?.id, activeSession?.name, activeSession?.model, project.id]);
 
   const handleSessionUpdated = (updated: Session) => {
     setSessions(prev => prev.map(s => s.id === updated.id ? { ...s, ...updated } : s));
@@ -162,11 +172,9 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
       if (updated.length > 0) {
         onSelect(updated[0], undefined, true);
       } else {
-        try {
-          const s = await api.sessions.create(project.id);
-          setSessions([s]);
-          onSelect(s);
-        } catch { /* офлайн/сбой — список пуст, создастся при возврате онлайн */ }
+        // Удалён последний чат — не создаём новый автоматически, показываем
+        // пустое состояние с кнопкой (создание только по клику).
+        onCleared?.();
       }
     }
   };

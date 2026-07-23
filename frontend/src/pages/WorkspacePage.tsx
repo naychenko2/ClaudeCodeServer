@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo, useLayoutEffect, type ReactNode } from 'react';
+import { Plus, MessageCircle } from 'lucide-react';
 import type { Project, Session, SkillsData, AuthState, Task, ProjectService } from '../types';
 import { SessionList } from '../components/SessionList';
 import { FileExplorer } from '../components/FileExplorer';
@@ -18,7 +19,9 @@ import { PillSwitch } from '../components/Toolbar';
 import { ToolbarOverflowMenu, type OverflowItem } from '../components/ToolbarOverflowMenu';
 import type { HubTabValue } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
-import { BackButton, IconButton, Splitter } from '../components/ui';
+import { BackButton, Button, IconButton, Splitter } from '../components/ui';
+import { ICON_SIZE } from '../components/ui/icons';
+import { showToast } from '../lib/toast';
 import { navPush, navReplace, parseHash, type NavSnapshot } from '../lib/nav';
 import { EditDialog } from '../features/projects/dialogs/EditDialog';
 import { TasksPanel } from '../features/tasks/TasksPanel';
@@ -855,6 +858,30 @@ const windowWidth = useWindowWidth();
     setActiveSession(prev => (prev?.id === updated.id ? updated : prev));
   };
 
+  // Создание чата только по клику (кнопка в центре пустого состояния и «Новый чат»
+  // в сайдбаре) — авто-создание при заходе убрано. Открываем созданный чат сразу;
+  // SessionList подхватит его в список через activeSession.
+  const [creatingSession, setCreatingSession] = useState(false);
+  const handleCreateSession = useCallback(async () => {
+    if (creatingSession) return;
+    setCreatingSession(true);
+    try {
+      const s = await api.sessions.create(project.id, 'auto');
+      handleSelectSession(s);
+    } catch (e) {
+      showToast('Чат', e instanceof Error ? e.message : 'Не удалось создать чат');
+    } finally {
+      setCreatingSession(false);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.id, creatingSession]);
+
+  // Список чатов опустел (удалён последний) — сбрасываем активную сессию в пустое состояние
+  const handleClearSession = useCallback(() => {
+    setActiveSession(null);
+    setPendingMessage(undefined);
+  }, []);
+
   const handleResume = useCallback(async (message?: string) => {
     if (!activeSession || activeSession.status !== 'orphaned') return;
     try {
@@ -1188,7 +1215,7 @@ const windowWidth = useWindowWidth();
       )}
       <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         {leftTab === 'sessions' ? (
-          <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} />
+          <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} onCleared={handleClearSession} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} />
         ) : leftTab === 'tasks' ? (
           <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={isMobile} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} />
         ) : leftTab === 'personas' ? (
@@ -1210,6 +1237,31 @@ const windowWidth = useWindowWidth();
             }
           </div>
         )}
+      </div>
+    </div>
+  );
+
+  // Пустое состояние центра (нет активного чата) — единый вид для мобилки и десктопа.
+  // Создание чата только по клику: авто-создание при заходе убрано.
+  const NoSession = (
+    <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', maxWidth: 400, gap: 10 }}>
+        <div style={{ width: 56, height: 56, borderRadius: 16, background: C.bgPanel, color: C.accent, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 4 }}>
+          <MessageCircle size={ICON_SIZE.xl} strokeWidth={2} />
+        </div>
+        <div style={{ fontFamily: FONT.serif, fontWeight: 500, fontSize: 22, color: C.textHeading, letterSpacing: '-0.01em' }}>
+          С чего начнём?
+        </div>
+        <div style={{ fontSize: 13.5, color: C.textSecondary, lineHeight: 1.55, maxWidth: 360 }}>
+          Начните новый чат по этому проекту или выберите существующий слева.
+        </div>
+        <Button
+          variant="primary" size="md" glow loading={creatingSession}
+          onClick={handleCreateSession} style={{ marginTop: 10 }}
+          leftIcon={<Plus size={ICON_SIZE.sm} strokeWidth={2} />}
+        >
+          Новый чат
+        </Button>
       </div>
     </div>
   );
@@ -1249,7 +1301,7 @@ const windowWidth = useWindowWidth();
         <div style={{ flex: 1, display: !openFile && mobileView === 'sidebar' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
           <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
             {leftTab === 'sessions'
-              ? <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} />
+              ? <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} onCleared={handleClearSession} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} />
               : leftTab === 'tasks'
               ? <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={isMobile} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} />
               : leftTab === 'personas'
@@ -1290,7 +1342,7 @@ const windowWidth = useWindowWidth();
                 : <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: C.textMuted, fontSize: 14 }}>Выберите задачу</div>)
             : activeSession
             ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onBack={backFromChat} onWorkflowRunning={handleWorkflowRunning} skills={composerSkills} agents={skillsData?.agents} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} onResume={handleResume} artifactsOpen={artifactsOpen} onToggleArtifacts={toggleArtifacts} />
-            : <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: C.textMuted, fontSize: 14 }}>Выберите или создайте чат</div>
+            : NoSession
           }
         </div>
         {/* Просмотр файла — FileViewer имеет свою шапку */}
@@ -1329,12 +1381,6 @@ const windowWidth = useWindowWidth();
     );
   }
 
-  const NoSession = (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: C.textMuted, fontSize: 14 }}>
-      Выберите или создайте чат
-    </div>
-  );
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, overflow: 'hidden' }}>
       {/* Единый верхний хаб-хедер на всю ширину (симметрия с разделом «Чаты») */}
@@ -1358,6 +1404,9 @@ const windowWidth = useWindowWidth();
           activeSession={activeSession}
           onSelectSession={handleSelectSession}
           onSessionUpdated={handleSessionUpdated}
+          onCreateSession={handleCreateSession}
+          onClearSession={handleClearSession}
+          creatingSession={creatingSession}
           workflowRunningFor={workflowRunningFor ?? undefined}
           pendingMessage={pendingMessage}
           onPendingMessageSent={() => setPendingMessage(undefined)}

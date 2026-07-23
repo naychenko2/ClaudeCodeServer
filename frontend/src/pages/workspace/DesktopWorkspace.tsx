@@ -5,10 +5,12 @@
 // WorkspacePage остаётся владельцем состояния и обработчиков — сюда всё приходит
 // пропсами (контент панелек тоже собирается там); HubHeader и диалоги тоже там.
 import { useState, useRef, type ReactNode, type PointerEvent as ReactPointerEvent } from 'react';
+import { Plus, MessageCircle } from 'lucide-react';
 import type { Project, Session, Task, SkillInfo, AgentInfo } from '../../types';
-import { C } from '../../lib/design';
+import { C, FONT } from '../../lib/design';
 import { useSidebarWidth, SIDEBAR_MIN, SIDEBAR_MAX } from '../../lib/sidebarWidth';
-import { IconButton } from '../../components/ui';
+import { Button, IconButton } from '../../components/ui';
+import { ICON_SIZE } from '../../components/ui/icons';
 import { Splitter } from '../../components/ui/Splitter';
 import { SessionList } from '../../components/SessionList';
 import { ChatPanel } from '../../components/ChatPanel';
@@ -37,6 +39,10 @@ interface Props {
   activeSession: Session | null;
   onSelectSession: (s: Session, firstMessage?: string, autoSelect?: boolean) => void;
   onSessionUpdated: (s: Session) => void;
+  // Создание чата по клику (кнопка в пустом состоянии центра) + сброс при удалении последнего
+  onCreateSession: () => void;
+  onClearSession: () => void;
+  creatingSession?: boolean;
   workflowRunningFor?: string;
   // Бандл ChatPanel
   pendingMessage?: string;
@@ -202,7 +208,7 @@ export function DesktopWorkspace(p: Props) {
         </div>
       </div>
       <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-        <SessionList project={p.project} activeSession={p.activeSession} onSelect={handleSelectSession} onSessionUpdated={p.onSessionUpdated} isMobile={false} workflowRunningFor={p.workflowRunningFor} />
+        <SessionList project={p.project} activeSession={p.activeSession} onSelect={handleSelectSession} onSessionUpdated={p.onSessionUpdated} onCleared={p.onClearSession} isMobile={false} workflowRunningFor={p.workflowRunningFor} />
       </div>
     </div>
   );
@@ -226,8 +232,25 @@ export function DesktopWorkspace(p: Props) {
           </IconButton>
         </div>
       )}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1, color: C.textMuted, fontSize: 14 }}>
-        Выберите или создайте чат
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', maxWidth: 400, gap: 10 }}>
+          <div style={{ width: 56, height: 56, borderRadius: 16, background: C.bgPanel, color: C.accent, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 4 }}>
+            <MessageCircle size={ICON_SIZE.xl} strokeWidth={2} />
+          </div>
+          <div style={{ fontFamily: FONT.serif, fontWeight: 500, fontSize: 22, color: C.textHeading, letterSpacing: '-0.01em' }}>
+            С чего начнём?
+          </div>
+          <div style={{ fontSize: 13.5, color: C.textSecondary, lineHeight: 1.55, maxWidth: 360 }}>
+            Начните новый чат по этому проекту или выберите существующий слева.
+          </div>
+          <Button
+            variant="primary" size="md" glow loading={p.creatingSession}
+            onClick={p.onCreateSession} style={{ marginTop: 10 }}
+            leftIcon={<Plus size={ICON_SIZE.sm} strokeWidth={2} />}
+          >
+            Новый чат
+          </Button>
+        </div>
       </div>
     </div>
   );

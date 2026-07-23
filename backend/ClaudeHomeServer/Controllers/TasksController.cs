@@ -50,6 +50,11 @@ public class ProjectTasksController(
             && TaskPersonaValidator.Error(personas, UserId, req.PersonaId, projectId) is { } personaError)
             return BadRequest(new { error = personaError });
 
+        // Персона-постановщик (происхождение): та же валидация — своя и в правильном проекте
+        if (!string.IsNullOrEmpty(req.CreatedByPersonaId)
+            && TaskPersonaValidator.Error(personas, UserId, req.CreatedByPersonaId, projectId) is { } creatorError)
+            return BadRequest(new { error = creatorError });
+
         var task = tasks.Create(projectId, UserId, req);
         await hub.BroadcastTaskChangedAsync(UserId, "created", task);
         return Ok(task);
@@ -166,6 +171,11 @@ public class TasksController(
         if (!string.IsNullOrEmpty(req.PersonaId)
             && TaskPersonaValidator.Error(personas, UserId, req.PersonaId, taskProjectId: null) is { } personaError)
             return BadRequest(new { error = personaError });
+
+        // Персона-постановщик (происхождение): та же валидация, что у исполнителя
+        if (!string.IsNullOrEmpty(req.CreatedByPersonaId)
+            && TaskPersonaValidator.Error(personas, UserId, req.CreatedByPersonaId, taskProjectId: null) is { } creatorError)
+            return BadRequest(new { error = creatorError });
 
         var task = tasks.Create(null, UserId, req);
         await hub.BroadcastTaskChangedAsync(UserId, "created", task);

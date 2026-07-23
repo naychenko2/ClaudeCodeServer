@@ -24,6 +24,8 @@ public class TaskManager
             config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))!;
         _storePath = Path.Combine(dataDir, "tasks.json");
         Load();
+        // Вычисляемый Session.ParentSessionId (иерархия чатов): резолв TaskId → SourceSessionId
+        Session.TaskSourceSessionResolver = id => GetById(id)?.SourceSessionId;
     }
 
     // Запись в проектный лог (только для задач с projectId — личные в лог не попадают).
@@ -94,6 +96,8 @@ public class TaskManager
             Labels = req.Labels ?? [],
             SourceNoteId = req.SourceNoteId,
             SourceNoteLine = req.SourceNoteLine,
+            CreatedByPersonaId = string.IsNullOrEmpty(req.CreatedByPersonaId) ? null : req.CreatedByPersonaId,
+            SourceSessionId = string.IsNullOrEmpty(req.SourceSessionId) ? null : req.SourceSessionId,
             Order = NextOrder(ownerId),
             // Создаём задачу сразу готовой (редко) — фиксируем момент завершения
             CompletedAt = req.Status == TaskItemStatus.Done ? DateTime.UtcNow : null,
@@ -226,6 +230,10 @@ public class TaskManager
             // задача теряла бы персону и падала на обычного Claude (ClaudeStartedAt/
             // ClaudeResult/LinkedSessionId у нового экземпляра дефолтные → отработает заново)
             PersonaId = completed.PersonaId,
+            // Постановщик — устойчивый атрибут серии (как PersonaId): без переноса со 2-го
+            // экземпляра терялось бы уведомление постановщика. SourceSessionId НЕ переносим —
+            // конкретная сессия (как LinkedSessionId) у нового экземпляра начинается заново
+            CreatedByPersonaId = completed.CreatedByPersonaId,
             Recurrence = completed.Recurrence,
             SeriesId = completed.SeriesId ?? completed.Id,
             LinkedFiles = [.. completed.LinkedFiles],
@@ -365,7 +373,11 @@ public record CreateTaskRequest(
     int? SourceNoteLine = null,
     // Время жизни чата исполнения (мин); не передано — дефолт 1440 (сутки),
     // отрицательное — бессрочно, N>=0 — TTL. Имеет смысл только при исполнителе Claude.
-    int? ExecutionExpiresAfterMinutes = null);
+    int? ExecutionExpiresAfterMinutes = null,
+    // Происхождение: персона-постановщик и чат-источник (проставляет tasks-server из env
+    // хода; UI/API их не шлют — null). См. TaskItem.CreatedByPersonaId/SourceSessionId.
+    string? CreatedByPersonaId = null,
+    string? SourceSessionId = null);
 
 public record CreateSubtaskRequest(string Title);
 

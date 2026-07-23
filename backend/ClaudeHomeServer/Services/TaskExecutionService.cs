@@ -172,6 +172,8 @@ public class TaskExecutionService
         sb.AppendLine("## ИНСТРУМЕНТЫ");
         sb.AppendLine("- Статус задачи веди через MCP-инструменты tasks_*.");
         sb.AppendLine("- Выполненные подзадачи отмечай через tasks_toggle_subtask.");
+        sb.AppendLine("- Делегируя часть работы другой персоне через tasks_create (personaId), " +
+                      "сразу запусти её исполнение через tasks_execute — сама она не стартует.");
         sb.AppendLine();
         sb.AppendLine("## ОБЯЗАТЕЛЬНО");
         sb.AppendLine("- Задача уже переведена в статус inProgress — поддерживай статус актуальным.");
@@ -273,7 +275,10 @@ public class TaskExecutionService
                 // Финальное уведомление — только когда задача реально завершена (done) либо ход упал.
                 // Промежуточные успешные ходы многошаговой задачи не спамят «завершил работу» (②-2.1).
                 if (!ok || updated.Status == TaskItemStatus.Done)
+                {
                     await NotifyAsync(updated, BuildResultNotification(updated, ok, persona));
+                    await NotifyDelegatorAsync(updated, ok);
+                }
                 break;
             }
             case PermissionRequestMessage or AskQuestionMessage:
@@ -310,6 +315,39 @@ public class TaskExecutionService
             TaskId: updated.Id,
             Tag: "Исполнитель");
     }
+
+    // L0-доставка постановщику: задача делегирована персоной из чата → отдельное уведомление
+    // от её лица со ссылкой на исходный чат (без агентского хода — бесплатный дефолт).
+    // Скип: постановщик не задан, совпадает с исполнителем (дубль «Завершил работу») или удалён.
+    private async Task NotifyDelegatorAsync(TaskItem task, bool ok)
+    {
+        if (task.CreatedByPersonaId is null || task.CreatedByPersonaId == task.PersonaId) return;
+        var delegator = _personas.Get(task.CreatedByPersonaId, task.OwnerId!);
+        if (delegator is null) return;
+        // SourceSessionId приходит из тела POST и мог указать на чужой чат — ссылку строим
+        // только по сессии владельца задачи, иначе fallback на TaskUrl
+        var sourceSession = task.SourceSessionId is not null ? _sessions.GetById(task.SourceSessionId) : null;
+        if (sourceSession is not null && _sessions.ResolveOwnerId(sourceSession) != task.OwnerId)
+            sourceSession = null;
+        await NotifyAsync(task, BuildDelegatorNotification(task, ok, delegator, sourceSession));
+    }
+
+    // Уведомление постановщику о завершении делегированной задачи: Url — исходный чат
+    // (SourceSessionId); чат удалён/неизвестен → ссылка на задачу
+    internal static NotificationMessage BuildDelegatorNotification(
+        TaskItem task, bool ok, Persona delegator, Session? sourceSession) => new(
+        Title: ok ? "Делегированная задача выполнена" : "Делегированная задача не выполнена",
+        Body: task.Title,
+        Url: sourceSession is null
+            ? TaskSchedulerService.TaskUrl(task)
+            : string.IsNullOrEmpty(sourceSession.ProjectId)
+                ? $"/chats/{sourceSession.Id}"
+                : $"/project/{sourceSession.ProjectId}/chat/{sourceSession.Id}",
+        Kind: ok ? "success" : "claude",
+        PersonaId: delegator.Id,
+        ProjectId: task.ProjectId,
+        TaskId: task.Id,
+        Tag: "Постановщик");
 
     // Уведомление «ждёт ответа» (permission_request / AskUserQuestion)
     internal static NotificationMessage BuildWaitingNotification(TaskItem task, Persona? persona = null) => new(

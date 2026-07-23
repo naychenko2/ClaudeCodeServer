@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
-import { Filter } from 'lucide-react';
+import { Filter, List, ListTree } from 'lucide-react';
 import type { Persona, Session } from '../types';
-import { C, R, FONT, SHADOW, Z } from '../lib/design';
+import { C, R, FONT, FS, SHADOW, TB, Z } from '../lib/design';
 import { personaLabel } from '../lib/personas';
 import { PersonaAvatar } from '../features/personas/PersonaAvatar';
 import { ALL_ORIGINS } from '../lib/chatFilters';
+import type { ChatViewMode } from '../lib/chatTree';
 
 // === Компактный триггер фильтрации списка чатов ===
 // Одна едва заметная ссылка/иконка — при нажатии открывается поповер с настройками.
@@ -33,6 +34,56 @@ interface FilterBarProps {
   allPersonas: Persona[];
   hiddenCount: number;
   isMobile?: boolean;
+  // Режим вида списка «Плоский/Иерархия» — тумблер справа (не задан — без тумблера)
+  view?: ChatViewMode;
+  onChangeView?: (v: ChatViewMode) => void;
+}
+
+// === Тумблер вида «Плоский / Иерархия» ===
+// Нейтральный TB.pill*-сегмент (не accent: accent занят фильтрами, а режим — не фильтр).
+// На мобиле — только иконки, подпись уходит в title/aria-label.
+const VIEW_OPTIONS: { value: ChatViewMode; label: string; Icon: typeof List }[] = [
+  { value: 'flat', label: 'Плоский', Icon: List },
+  { value: 'tree', label: 'Иерархия', Icon: ListTree },
+];
+
+function ViewToggle({ view, onChange, isMobile }: {
+  view: ChatViewMode;
+  onChange: (v: ChatViewMode) => void;
+  isMobile?: boolean;
+}) {
+  return (
+    <div style={{
+      display: 'flex', flexShrink: 0, padding: 2,
+      background: TB.pillTrack, borderRadius: TB.pillRadius,
+    }}>
+      {VIEW_OPTIONS.map(o => {
+        const active = view === o.value;
+        return (
+          <button
+            key={o.value}
+            onClick={() => onChange(o.value)}
+            title={o.label}
+            aria-label={o.label}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 5,
+              padding: '4px 10px',
+              fontSize: FS.sm, fontWeight: 600, fontFamily: FONT.sans,
+              border: 'none', cursor: 'pointer',
+              borderRadius: TB.pillRadius - 2,
+              background: active ? TB.pillThumbBg : 'transparent',
+              boxShadow: active ? TB.pillThumbShadow : 'none',
+              color: active ? C.textHeading : C.textMuted,
+              transition: 'background 0.12s, color 0.12s',
+            }}
+          >
+            <o.Icon size={14} strokeWidth={2.2} style={{ flexShrink: 0 }} />
+            {!isMobile && <span>{o.label}</span>}
+          </button>
+        );
+      })}
+    </div>
+  );
 }
 
 // === Pill-кнопка внутри сегмента ===
@@ -112,6 +163,7 @@ export function FilterBar({
   filterPersonaId, onChangeFilterPersona,
   personaIdsInList, allPersonas,
   hiddenCount, isMobile,
+  view, onChangeView,
 }: FilterBarProps) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -180,38 +232,45 @@ export function FilterBar({
 
   return (
     <div ref={rootRef} style={{ position: 'relative', flexShrink: 0 }}>
-      {/* Триггер — компактный, почти незаметный когда фильтры по умолчанию */}
-      <div
-        onClick={() => setOpen(o => !o)}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 4,
-          cursor: 'pointer',
-          userSelect: 'none',
-          padding: '2px 0',
-          color: hasFilters ? C.accent : C.textMuted,
-          fontSize: 12,
-          fontWeight: 600,
-          fontFamily: FONT.sans,
-          transition: 'color 0.15s',
-          opacity: hasFilters ? 1 : 0.5,
-        }}
-        title={hasFilters ? summaryParts.join(', ') : 'Фильтры'}
-      >
-        <Filter size={12} strokeWidth={2.2} style={{ flexShrink: 0 }} />
-        <span style={{ marginLeft: 1 }}>
-          {hasFilters ? summaryParts.join(', ') : 'Фильтр'}
-        </span>
-        {hiddenCount > 0 && (
-          <span style={{
-            fontSize: 10, fontWeight: 700, fontFamily: FONT.mono,
-            color: C.onAccent, background: C.accent,
-            padding: '0 5px', borderRadius: R.pill, lineHeight: '16px',
-            minWidth: 16, textAlign: 'center',
-          }}>
-            {hiddenCount}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+        {/* Триггер — компактный, почти незаметный когда фильтры по умолчанию */}
+        <div
+          onClick={() => setOpen(o => !o)}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 4,
+            minWidth: 0,
+            cursor: 'pointer',
+            userSelect: 'none',
+            padding: '2px 0',
+            color: hasFilters ? C.accent : C.textMuted,
+            fontSize: 12,
+            fontWeight: 600,
+            fontFamily: FONT.sans,
+            transition: 'color 0.15s',
+            opacity: hasFilters ? 1 : 0.5,
+          }}
+          title={hasFilters ? summaryParts.join(', ') : 'Фильтры'}
+        >
+          <Filter size={12} strokeWidth={2.2} style={{ flexShrink: 0 }} />
+          <span style={{ marginLeft: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {hasFilters ? summaryParts.join(', ') : 'Фильтр'}
           </span>
+          {hiddenCount > 0 && (
+            <span style={{
+              fontSize: 10, fontWeight: 700, fontFamily: FONT.mono,
+              color: C.onAccent, background: C.accent,
+              padding: '0 5px', borderRadius: R.pill, lineHeight: '16px',
+              minWidth: 16, textAlign: 'center', flexShrink: 0,
+            }}>
+              {hiddenCount}
+            </span>
+          )}
+        </div>
+
+        {view !== undefined && onChangeView && (
+          <ViewToggle view={view} onChange={onChangeView} isMobile={isMobile} />
         )}
       </div>
 

@@ -5,7 +5,7 @@ import {
   Calendar, Repeat, LayoutGrid, List, CalendarDays, CalendarRange, Rows3, CalendarCheck,
 } from 'lucide-react';
 import type { Task, TaskAssignee, TaskPriority } from '../../types';
-import { C, FONT, R } from '../../lib/design';
+import { C, FONT, R, TB } from '../../lib/design';
 import { PRIORITY_COLOR, PRIORITY_FILL, dueLabel, isDueUrgent } from '../../lib/tasks';
 
 // Флаг приоритета (срочный — залитый)
@@ -107,6 +107,51 @@ export function IconViewSwitcher<T extends string>({ value, options, onChange }:
           >
             {opt.icon}
             {opt.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// Переключатель видов в стиле пилюли (как сегменты в панели «Файлы»):
+// дорожка-track + активная плашка-ползунок с тенью, иконка и подпись в один ряд.
+// Отличие от IconViewSwitcher — горизонтальная компоновка и «ползунок» вместо accentLight.
+// compact — только иконки (подпись уходит в tooltip), квадратные кнопки: для шапки панели.
+// trackBg — фон дорожки (по умолчанию TB.pillTrack); на утопленном фоне шапки (bgInset)
+// он сливается, поэтому там передаётся более контрастный C.track.
+export function PillViewSwitcher<T extends string>({ value, options, onChange, compact, trackBg }: {
+  value: T;
+  options: { value: T; label: string; icon: ReactNode }[];
+  onChange: (v: T) => void;
+  compact?: boolean;
+  trackBg?: string;
+}) {
+  return (
+    <div style={{ display: compact ? 'inline-flex' : 'flex', gap: 2, background: trackBg ?? TB.pillTrack, borderRadius: 8, padding: 2 }}>
+      {options.map(opt => {
+        const active = value === opt.value;
+        return (
+          <button
+            key={opt.value}
+            onClick={() => onChange(opt.value)}
+            title={compact ? opt.label : undefined}
+            style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+              cursor: active ? 'default' : 'pointer',
+              border: 'none', borderRadius: 6,
+              background: active ? C.bgMain : 'transparent',
+              color: active ? C.accent : C.textMuted,
+              boxShadow: active ? TB.pillThumbShadow : 'none',
+              fontFamily: FONT.sans, fontSize: 12.5, fontWeight: 600,
+              transition: 'background 0.15s, color 0.15s',
+              ...(compact
+                ? { width: 28, height: 28, padding: 0, flexShrink: 0 }
+                : { flex: 1, padding: '7px 0' }),
+            }}
+          >
+            {opt.icon}
+            {!compact && opt.label}
           </button>
         );
       })}

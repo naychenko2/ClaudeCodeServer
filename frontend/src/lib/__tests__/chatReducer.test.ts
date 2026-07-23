@@ -183,6 +183,21 @@ describe('applyServerMessage: инструменты', () => {
     expect(next.items[0]).toMatchObject({ workflowAgents: agents, workflowDone: true });
   });
 
+  it('tool_result без финального tool_use: сбрасывает streamingArg и достраивает input из стрима', () => {
+    // Реконнект/гонка: финальный tool_use с полным input потерялся, но дельты накопили полный JSON
+    const initial = state({ items: [toolUse('t1', { input: {}, streamingArg: '{"html":"<b>w</b>","title":"Т"}' })] });
+    const next = run([{ type: 'tool_result', toolUseId: 't1', content: 'ok', isError: false }], initial);
+    expect(next.items[0]).toMatchObject({
+      result: 'ok', streamingArg: undefined, input: { html: '<b>w</b>', title: 'Т' },
+    });
+  });
+
+  it('tool_result с неполным streamingArg: спиннер снят, input не трогаем', () => {
+    const initial = state({ items: [toolUse('t1', { input: {}, streamingArg: '{"html":"<b' })] });
+    const next = run([{ type: 'tool_result', toolUseId: 't1', content: 'ok', isError: false }], initial);
+    expect(next.items[0]).toMatchObject({ result: 'ok', streamingArg: undefined, input: {} });
+  });
+
   // Смок: widget_show — обычный generic tool_use, спец-веток в редьюсере нет и не нужно
   // (страховка от будущих спец-веток: рендер решается на уровне ChatItemView)
   it('widget_show проходит цепочку stream → final → result как обычный tool_use', () => {

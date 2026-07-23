@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo, useLayoutEffect, type ReactNode } from 'react';
-import { Plus, MessageCircle, Pin } from 'lucide-react';
+import { Plus, MessageCircle } from 'lucide-react';
 import type { Project, Session, SkillsData, AuthState, Task, ProjectService } from '../types';
 import { SessionList } from '../components/SessionList';
 import { FileExplorer } from '../components/FileExplorer';
@@ -20,7 +20,7 @@ import { PillSwitch } from '../components/Toolbar';
 import { ToolbarOverflowMenu, type OverflowItem } from '../components/ToolbarOverflowMenu';
 import type { HubTabValue } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
-import { BackButton, Button, IconButton, Splitter } from '../components/ui';
+import { BackButton, Button, IconButton, Splitter, SidebarSplitter } from '../components/ui';
 import { ICON_SIZE } from '../components/ui/icons';
 import { showToast } from '../lib/toast';
 import { navPush, navReplace, parseHash, type NavSnapshot } from '../lib/nav';
@@ -788,16 +788,14 @@ const windowWidth = useWindowWidth();
   // Ширина сайдбара — общая для всех областей (перетаскиваемая, персистится)
   const [sidebarWidth, setSidebarWidth] = useSidebarWidth();
 
-  // Режим сайдбара: pinned (в потоке) | collapsed (свёрнут) | open (drawer поверх контента)
-  // Персистируется только 'pinned'/'collapsed'; 'open' — временное состояние
-  const [sidebarMode, setSidebarMode] = useState<'pinned' | 'collapsed' | 'open'>(() => {
+  // Режим сайдбара: pinned (в потоке) | collapsed (свёрнут). Сворачивание — кнопкой
+  // на сплиттере, разворот — гамбургером обратно в поток.
+  const [sidebarMode, setSidebarMode] = useState<'pinned' | 'collapsed'>(() => {
     const v = localStorage.getItem('cc_sidebar_mode');
     return v === 'collapsed' ? 'collapsed' : 'pinned';
   });
   useEffect(() => {
-    if (sidebarMode !== 'open') {
-      localStorage.setItem('cc_sidebar_mode', sidebarMode);
-    }
+    localStorage.setItem('cc_sidebar_mode', sidebarMode);
   }, [sidebarMode]);
 
   // Панель «Артефакты сессии»: открыта/закрыта + ширина, персист в localStorage
@@ -1241,14 +1239,6 @@ const windowWidth = useWindowWidth();
               </svg>
             </IconButton>
             )}
-            {/* Пин — самая правая кнопка: закрепляет (drawer→в потоке) либо откепляет-сворачивает панель */}
-            <IconButton
-              size="sm"
-              onClick={() => setSidebarMode(sidebarMode === 'open' ? 'pinned' : 'collapsed')}
-              title={sidebarMode === 'open' ? 'Закрепить панель' : 'Открепить панель'}
-            >
-              <Pin size={ICON_SIZE.sm} strokeWidth={2} fill={sidebarMode === 'pinned' ? 'currentColor' : 'none'} />
-            </IconButton>
           </div>
           <PillSwitch<LeftTab>
             value={leftTab}
@@ -1522,41 +1512,21 @@ const windowWidth = useWindowWidth();
       ) : (
         <>
 
-      {/* === Pinned: sidebar в flex-потоке, толкает контент === */}
+      {/* === Pinned: sidebar в flex-потоке + сплиттер с кнопкой «свернуть» === */}
       {sidebarMode === 'pinned' && (
         <>
           <div style={{ width: sidebarWidth, flexShrink: 0, height: '100%' }}>
             {Sidebar}
           </div>
-          <Splitter orientation="v" active={draggingSplitter === 'sidebar'}
-            onMouseDown={e => { setDraggingSplitter('sidebar'); handleSidebarSplitterMouseDown(e); }} />
+          <SidebarSplitter active={draggingSplitter === 'sidebar'}
+            onMouseDown={e => { setDraggingSplitter('sidebar'); handleSidebarSplitterMouseDown(e); }}
+            onCollapse={() => setSidebarMode('collapsed')} />
         </>
       )}
 
-      {/* === Collapsed / Open: sidebar absolute drawer === */}
-      {sidebarMode !== 'pinned' && (
-        <div style={{
-          position: 'absolute', top: 0, left: 0, bottom: 0, zIndex: 10,
-          width: 320,
-          transform: sidebarMode === 'open' ? 'translateX(0)' : 'translateX(-320px)',
-          transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-          boxShadow: sidebarMode === 'open' ? '4px 0 20px rgba(20,16,10,0.15)' : 'none',
-        }}>
-          {Sidebar}
-        </div>
-      )}
-
-      {/* Overlay — только когда drawer открыт */}
-      {sidebarMode === 'open' && (
-        <div
-          onClick={() => setSidebarMode('collapsed')}
-          style={{ position: 'absolute', inset: 0, zIndex: 9, background: C.overlay }}
-        />
-      )}
-
-      {/* Проп для ChatPanel — открывает drawer когда sidebar не pinned */}
+      {/* Проп для ChatPanel — разворачивает свёрнутый sidebar в поток */}
       {(() => {
-        const openSidebar = sidebarMode !== 'pinned' ? () => setSidebarMode('open') : undefined;
+        const openSidebar = sidebarMode !== 'pinned' ? () => setSidebarMode('pinned') : undefined;
 
         // NoSession с топбаром для ☰ (когда нет активного чата)
         const NoSessionWithBar = (
@@ -1566,7 +1536,7 @@ const windowWidth = useWindowWidth();
                 <IconButton
                   size="md"
                   variant="soft"
-                  onClick={() => setSidebarMode('open')}
+                  onClick={() => setSidebarMode('pinned')}
                   title="Открыть панель"
                 >
                   <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
@@ -1583,7 +1553,7 @@ const windowWidth = useWindowWidth();
         if (leftTab === 'tools') {
           const collapsedBar = sidebarMode === 'collapsed' && (
             <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', padding: '0 8px', height: 52, borderBottom: `1px solid ${C.divider}`, background: C.bgMain }}>
-              <IconButton size="md" variant="soft" onClick={() => setSidebarMode('open')} title="Открыть панель">
+              <IconButton size="md" variant="soft" onClick={() => setSidebarMode('pinned')} title="Открыть панель">
                 <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
                   <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
                 </svg>
@@ -1601,7 +1571,7 @@ const windowWidth = useWindowWidth();
         if (personasMode) {
           const collapsedBar = sidebarMode === 'collapsed' && (
             <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', padding: '0 8px', height: 52, borderBottom: `1px solid ${C.divider}`, background: C.bgMain }}>
-              <IconButton size="md" variant="soft" onClick={() => setSidebarMode('open')} title="Открыть панель">
+              <IconButton size="md" variant="soft" onClick={() => setSidebarMode('pinned')} title="Открыть панель">
                 <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
                   <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
                 </svg>

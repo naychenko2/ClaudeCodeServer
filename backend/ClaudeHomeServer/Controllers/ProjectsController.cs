@@ -13,7 +13,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects")]
-public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings, UserStore users, UserHomeResolver homes, WorkspaceKnowledgeStore wkStore, TaskManager tasks, ProjectEventLogService events, TeamMemoryService teamMemory, KnowledgeService knowledge, NotesKnowledgeService notesKb, PersonaManager personas, PersonaMemoryService personaMemory, ClaudeHomeServer.Services.Git.GitService git, ClaudeHomeServer.Services.Git.GitServerService gitServer, ILogger<ProjectsController> logger, IHubContext<SessionHub> hub) : ControllerBase
+public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings, UserStore users, UserHomeResolver homes, WorkspaceKnowledgeStore wkStore, TaskManager tasks, ProjectEventLogService events, TeamMemoryService teamMemory, KnowledgeService knowledge, NotesKnowledgeService notesKb, PersonaManager personas, PersonaMemoryService personaMemory, ClaudeHomeServer.Services.Git.GitService git, ClaudeHomeServer.Services.Git.GitServerService gitServer, FalImageService falImage, ILogger<ProjectsController> logger, IHubContext<SessionHub> hub) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -27,7 +27,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         // не совпадать с DefaultProjectsPath (иначе получилось бы «..\..\GIT\myproj»)
         var basePath = homes.Resolve(users.GetById(UserId)) ?? appSettings.Get().DefaultProjectsPath;
         var relativePath = string.IsNullOrEmpty(basePath) ? p.RootPath : Path.GetRelativePath(basePath, p.RootPath);
-        return new { p.Id, p.Name, p.RootPath, RelativePath = relativePath, p.CreatedAt, p.UpdatedAt, p.GroupId, p.SystemPrompt, p.ShowHiddenFiles, p.ToolsEnabled, p.PermissionRules, p.BoardColumns, BuiltInSystemPrompt = ProjectManager.BuiltInSystemPrompt, SessionCount = sessions.CountByProject(p.Id) };
+        return new { p.Id, p.Name, p.RootPath, RelativePath = relativePath, p.CreatedAt, p.UpdatedAt, p.GroupId, p.SystemPrompt, p.ShowHiddenFiles, p.ToolsEnabled, p.PermissionRules, p.BoardColumns, p.Icon, BuiltInSystemPrompt = ProjectManager.BuiltInSystemPrompt, SessionCount = sessions.CountByProject(p.Id) };
     }
 
     [HttpGet("builtin-prompt")]
@@ -129,7 +129,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         try
         {
             var username = User.FindFirstValue(ClaimTypes.Name) ?? UserId;
-            var p = projects.Create(req.Name, req.RootPath, UserId, username, req.CreateDirectory, req.GroupId);
+            var p = projects.Create(req.Name, req.RootPath, UserId, username, req.CreateDirectory, req.GroupId, req.Color);
 
             // Git-режим из диалога создания: init (+ Forgejo-репо при настроенном сервере).
             // Best-effort: сбой git/Forgejo не отменяет создание проекта — подключить можно позже
@@ -169,7 +169,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         var oldRoot = p.RootPath;
         try
         {
-            var updated = projects.Update(id, req.Name, req.RootPath, req.SystemPrompt, req.ShowHiddenFiles, req.PermissionRules, req.GroupId, req.ToolsEnabled);
+            var updated = projects.Update(id, req.Name, req.RootPath, req.SystemPrompt, req.ShowHiddenFiles, req.PermissionRules, req.GroupId, req.ToolsEnabled, req.Color);
 
             // Смена папки проекта: перенести запись знаний под новый ключ — иначе запись сиротеет,
             // для нового пути создаётся дубль-датасет, а mcp dify молча теряет dataset_id
@@ -253,10 +253,170 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
 
         return NoContent();
     }
+
+    // --- Иконка проекта (по образцу аватара персоны) ---
+
+    // Доступна ли AI-генерация иконки (настроен ли fal)
+    [HttpGet("icon/caps")]
+    public ActionResult IconCaps() => Ok(new { generate = falImage.Enabled });
+
+    // Сгенерировать НЕСКОЛЬКО вариантов иконки через fal по описанию (для выбора).
+    // Кандидаты сохраняются во временную папку, иконка проекта НЕ меняется до выбора.
+    [HttpPost("{id}/icon/generate")]
+    public async Task<ActionResult> GenerateIcon(string id, [FromBody] GenerateIconRequest req)
+    {
+        var p = projects.GetById(id);
+        if (p is null || p.OwnerId != UserId) return NotFound();
+        if (!falImage.Enabled) return BadRequest(new { error = "Генерация изображений не настроена (нет Fal:ApiKey)" });
+
+        var prompt = string.IsNullOrWhiteSpace(req.Prompt)
+            ? BuildIconPrompt(p)
+            : $"App icon logo, minimalist, flat, modern, centered, square. {req.Prompt.Trim()}";
+        var count = req.Count is >= 1 and <= 4 ? req.Count.Value : 4;
+
+        var images = await falImage.GenerateManyAsync(prompt, count);
+        if (images.Count == 0) return StatusCode(502, new { error = "Не удалось сгенерировать изображение" });
+
+        // Свежая папка кандидатов (перезатираем прошлую генерацию)
+        var candDir = Path.Combine(projects.IconsDir, id, "candidates");
+        try { if (Directory.Exists(candDir)) Directory.Delete(candDir, recursive: true); } catch { }
+        Directory.CreateDirectory(candDir);
+
+        var files = new List<string>();
+        foreach (var img in images)
+        {
+            var ext = ImageAssetHelper.ExtFor(img.ContentType);
+            var name = $"cand-{Guid.NewGuid():N}{ext}";
+            await System.IO.File.WriteAllBytesAsync(Path.Combine(candDir, name), img.Bytes);
+            files.Add(name);
+        }
+        return Ok(new { candidates = files });
+    }
+
+    // Отдать кандидата иконки (превью в галерее выбора). access_token в query для <img>.
+    [HttpGet("{id}/icon/candidate/{file}")]
+    public IActionResult IconCandidate(string id, string file)
+    {
+        var p = projects.GetById(id);
+        if (p is null || p.OwnerId != UserId) return NotFound();
+        var safe = Path.GetFileName(file);   // защита от path-traversal
+        var full = Path.Combine(projects.IconsDir, id, "candidates", safe);
+        if (!System.IO.File.Exists(full)) return NotFound();
+        return ImageAssetHelper.PhysicalFileByExt(full);
+    }
+
+    // Выбрать кандидата как иконку проекта: делаем основным, чистим остальных кандидатов.
+    [HttpPost("{id}/icon/select")]
+    public ActionResult SelectIcon(string id, [FromBody] SelectIconRequest req)
+    {
+        var p = projects.GetById(id);
+        if (p is null || p.OwnerId != UserId) return NotFound();
+        if (string.IsNullOrWhiteSpace(req.File)) return BadRequest(new { error = "Не указан файл" });
+
+        var dir = Path.Combine(projects.IconsDir, id);
+        var candPath = Path.Combine(dir, "candidates", Path.GetFileName(req.File));
+        if (!System.IO.File.Exists(candPath)) return NotFound(new { error = "Кандидат не найден" });
+
+        var ext = Path.GetExtension(candPath);
+        var fileName = $"icon-{Guid.NewGuid():N}{ext}";   // cache-busting
+        System.IO.File.Copy(candPath, Path.Combine(dir, fileName), overwrite: true);
+
+        // Удаляем прежнюю иконку и всю папку кандидатов
+        if (!string.IsNullOrEmpty(p.Icon.ImageFile))
+            try { System.IO.File.Delete(Path.Combine(dir, p.Icon.ImageFile)); } catch { }
+        try { Directory.Delete(Path.Combine(dir, "candidates"), recursive: true); } catch { }
+
+        return Ok(WithCount(projects.SetIconImage(id, fileName)));
+    }
+
+    // Отдать картинку иконки. JWT принимается и в query access_token (браузерный <img>).
+    [HttpGet("{id}/icon")]
+    public IActionResult Icon(string id)
+    {
+        var p = projects.GetById(id);
+        if (p is null || p.OwnerId != UserId || p.Icon.Kind != ProjectIconKind.Image
+            || string.IsNullOrEmpty(p.Icon.ImageFile))
+            return NotFound();
+
+        var full = Path.Combine(projects.IconsDir, id, p.Icon.ImageFile);
+        return System.IO.File.Exists(full) ? ImageAssetHelper.PhysicalFileByExt(full) : NotFound();
+    }
+
+    // Оригинал загруженной иконки (для перекропа). access_token в query — как GET icon.
+    [HttpGet("{id}/icon/original")]
+    public IActionResult IconOriginal(string id)
+    {
+        var p = projects.GetById(id);
+        if (p is null || p.OwnerId != UserId || string.IsNullOrEmpty(p.Icon.OriginalFile))
+            return NotFound();
+
+        var full = Path.Combine(projects.IconsDir, id, p.Icon.OriginalFile);
+        return System.IO.File.Exists(full) ? ImageAssetHelper.PhysicalFileByExt(full) : NotFound();
+    }
+
+    // Загрузка своей иконки: оригинал + кропнутый квадрат + параметры кропа (JSON).
+    // Валидация: заявленный ContentType из белого списка И настоящие magic bytes.
+    [HttpPost("{id}/icon/upload")]
+    [RequestSizeLimit(15_000_000)]
+    public async Task<ActionResult> UploadIcon(string id,
+        [FromForm] IFormFile? original, [FromForm] IFormFile? cropped, [FromForm] string? crop)
+    {
+        var p = projects.GetById(id);
+        if (p is null || p.OwnerId != UserId) return NotFound();
+        if (original is null || cropped is null)
+            return BadRequest(new { error = "Нужны файлы original и cropped" });
+
+        var originalCheck = await ImageAssetHelper.ValidateImageAsync(original);
+        if (originalCheck.Error is not null) return BadRequest(new { error = originalCheck.Error });
+        var croppedCheck = await ImageAssetHelper.ValidateImageAsync(cropped);
+        if (croppedCheck.Error is not null) return BadRequest(new { error = croppedCheck.Error });
+
+        var cropState = ImageAssetHelper.ParseCrop(crop);
+
+        var dir = Path.Combine(projects.IconsDir, id);
+        Directory.CreateDirectory(dir);
+        var originalName = $"original-{Guid.NewGuid():N}{originalCheck.Ext}";
+        var imageName = $"icon-{Guid.NewGuid():N}{croppedCheck.Ext}";
+        await ImageAssetHelper.SaveFormFileAsync(original, Path.Combine(dir, originalName));
+        await ImageAssetHelper.SaveFormFileAsync(cropped, Path.Combine(dir, imageName));
+
+        return Ok(WithCount(projects.SetIconUploaded(id, imageName, originalName, cropState)));
+    }
+
+    // Перекроп сохранённого оригинала: новая кропнутая картинка + параметры.
+    [HttpPost("{id}/icon/recrop")]
+    [RequestSizeLimit(5_000_000)]
+    public async Task<ActionResult> RecropIcon(string id,
+        [FromForm] IFormFile? cropped, [FromForm] string? crop)
+    {
+        var p = projects.GetById(id);
+        if (p is null || p.OwnerId != UserId) return NotFound();
+        if (string.IsNullOrEmpty(p.Icon.OriginalFile))
+            return BadRequest(new { error = "У проекта нет оригинала для перекропа" });
+        if (cropped is null) return BadRequest(new { error = "Нужен файл cropped" });
+
+        var croppedCheck = await ImageAssetHelper.ValidateImageAsync(cropped);
+        if (croppedCheck.Error is not null) return BadRequest(new { error = croppedCheck.Error });
+
+        var dir = Path.Combine(projects.IconsDir, id);
+        Directory.CreateDirectory(dir);
+        var imageName = $"icon-{Guid.NewGuid():N}{croppedCheck.Ext}";
+        await ImageAssetHelper.SaveFormFileAsync(cropped, Path.Combine(dir, imageName));
+
+        return Ok(WithCount(projects.SetIconRecropped(id, imageName, ImageAssetHelper.ParseCrop(crop))));
+    }
+
+    // Промпт иконки приложения по умолчанию — из имени проекта (не фото человека)
+    private static string BuildIconPrompt(Project project) =>
+        $"App icon logo for a project named '{project.Name}'. Minimalist, flat, modern, bold " +
+        "symbol, solid background, centered, square, high detail, no text.";
 }
 
+public record GenerateIconRequest(string? Prompt, int? Count);
+public record SelectIconRequest(string File);
+
 public record CreateProjectRequest(string Name, string? RootPath, bool CreateDirectory = false, string? GroupId = null,
-    bool EnableGit = false, bool GitAutoCommit = false, bool GitAutoPush = false);
-public record UpdateProjectRequest(string? Name, string? RootPath, string? SystemPrompt, bool? ShowHiddenFiles, bool? ToolsEnabled = null, List<PermissionRule>? PermissionRules = null, string? GroupId = null);
+    bool EnableGit = false, bool GitAutoCommit = false, bool GitAutoPush = false, string? Color = null);
+public record UpdateProjectRequest(string? Name, string? RootPath, string? SystemPrompt, bool? ShowHiddenFiles, bool? ToolsEnabled = null, List<PermissionRule>? PermissionRules = null, string? GroupId = null, string? Color = null);
 public record UpdateBoardColumnsRequest(List<BoardColumn>? Columns);
 public record TeamMemoryRequest(string Text, TeamMemoryType? Type = null);

@@ -310,7 +310,7 @@ public class PersonasController : ControllerBase
         var files = new List<string>();
         foreach (var img in images)
         {
-            var ext = ExtFor(img.ContentType);
+            var ext = ImageAssetHelper.ExtFor(img.ContentType);
             var name = $"cand-{Guid.NewGuid():N}{ext}";
             await System.IO.File.WriteAllBytesAsync(Path.Combine(candDir, name), img.Bytes);
             files.Add(name);
@@ -326,7 +326,7 @@ public class PersonasController : ControllerBase
         var safe = Path.GetFileName(file);   // защита от path-traversal
         var full = Path.Combine(_personas.AssetsDir, id, "candidates", safe);
         if (!System.IO.File.Exists(full)) return NotFound();
-        return PhysicalFileByExt(full);
+        return ImageAssetHelper.PhysicalFileByExt(full);
     }
 
     // Выбрать кандидата как аватар персоны: делаем основным, чистим остальных кандидатов.
@@ -365,7 +365,7 @@ public class PersonasController : ControllerBase
             return NotFound();
 
         var full = Path.Combine(_personas.AssetsDir, id, persona.Avatar.ImageFile);
-        return System.IO.File.Exists(full) ? PhysicalFileByExt(full) : NotFound();
+        return System.IO.File.Exists(full) ? ImageAssetHelper.PhysicalFileByExt(full) : NotFound();
     }
 
     // Оригинал загруженного аватара (для перекропа). access_token в query — как GET avatar.
@@ -377,7 +377,7 @@ public class PersonasController : ControllerBase
             return NotFound();
 
         var full = Path.Combine(_personas.AssetsDir, id, persona.Avatar.OriginalFile);
-        return System.IO.File.Exists(full) ? PhysicalFileByExt(full) : NotFound();
+        return System.IO.File.Exists(full) ? ImageAssetHelper.PhysicalFileByExt(full) : NotFound();
     }
 
     // Загрузка своего аватара: оригинал + кропнутый квадрат + параметры кропа (JSON).
@@ -393,19 +393,19 @@ public class PersonasController : ControllerBase
         if (original is null || cropped is null)
             return BadRequest(new { error = "Нужны файлы original и cropped" });
 
-        var originalCheck = await ValidateImageAsync(original);
+        var originalCheck = await ImageAssetHelper.ValidateImageAsync(original);
         if (originalCheck.Error is not null) return BadRequest(new { error = originalCheck.Error });
-        var croppedCheck = await ValidateImageAsync(cropped);
+        var croppedCheck = await ImageAssetHelper.ValidateImageAsync(cropped);
         if (croppedCheck.Error is not null) return BadRequest(new { error = croppedCheck.Error });
 
-        var cropState = ParseCrop(crop);
+        var cropState = ImageAssetHelper.ParseCrop(crop);
 
         var dir = Path.Combine(_personas.AssetsDir, id);
         Directory.CreateDirectory(dir);
         var originalName = $"original-{Guid.NewGuid():N}{originalCheck.Ext}";
         var imageName = $"avatar-{Guid.NewGuid():N}{croppedCheck.Ext}";
-        await SaveFormFileAsync(original, Path.Combine(dir, originalName));
-        await SaveFormFileAsync(cropped, Path.Combine(dir, imageName));
+        await ImageAssetHelper.SaveFormFileAsync(original, Path.Combine(dir, originalName));
+        await ImageAssetHelper.SaveFormFileAsync(cropped, Path.Combine(dir, imageName));
 
         var updated = _personas.SetAvatarUploaded(id, UserId, imageName, originalName, cropState);
         await Broadcast("updated", id);
@@ -424,82 +424,17 @@ public class PersonasController : ControllerBase
             return BadRequest(new { error = "У персоны нет оригинала для перекропа" });
         if (cropped is null) return BadRequest(new { error = "Нужен файл cropped" });
 
-        var croppedCheck = await ValidateImageAsync(cropped);
+        var croppedCheck = await ImageAssetHelper.ValidateImageAsync(cropped);
         if (croppedCheck.Error is not null) return BadRequest(new { error = croppedCheck.Error });
 
         var dir = Path.Combine(_personas.AssetsDir, id);
         Directory.CreateDirectory(dir);
         var imageName = $"avatar-{Guid.NewGuid():N}{croppedCheck.Ext}";
-        await SaveFormFileAsync(cropped, Path.Combine(dir, imageName));
+        await ImageAssetHelper.SaveFormFileAsync(cropped, Path.Combine(dir, imageName));
 
-        var updated = _personas.SetAvatarRecropped(id, UserId, imageName, ParseCrop(crop));
+        var updated = _personas.SetAvatarRecropped(id, UserId, imageName, ImageAssetHelper.ParseCrop(crop));
         await Broadcast("updated", id);
         return Ok(updated);
-    }
-
-    private static readonly string[] AllowedImageTypes = ["image/jpeg", "image/png", "image/webp"];
-
-    // Проверка загружаемой картинки: заявленный ContentType из белого списка
-    // И настоящие magic bytes (FF D8 FF / PNG / RIFF..WEBP). Ext — по фактическому типу.
-    private static async Task<(string? Error, string Ext)> ValidateImageAsync(IFormFile file)
-    {
-        if (!AllowedImageTypes.Contains(file.ContentType, StringComparer.OrdinalIgnoreCase))
-            return ("Допустимы только изображения JPEG, PNG или WebP", "");
-
-        var head = new byte[12];
-        await using (var stream = file.OpenReadStream())
-        {
-            var read = await stream.ReadAtLeastAsync(head, 12, throwOnEndOfStream: false);
-            if (read < 12) return ("Файл не похож на изображение", "");
-        }
-
-        var ext = DetectImageExt(head);
-        return ext is null ? ("Файл не похож на изображение (сигнатура не совпадает)", "") : (null, ext);
-    }
-
-    // Определение типа по magic bytes; null — не картинка из белого списка
-    private static string? DetectImageExt(byte[] head)
-    {
-        if (head is [0xFF, 0xD8, 0xFF, ..]) return ".jpg";
-        if (head is [0x89, 0x50, 0x4E, 0x47, ..]) return ".png";
-        if (head.Length >= 12
-            && head[0] == (byte)'R' && head[1] == (byte)'I' && head[2] == (byte)'F' && head[3] == (byte)'F'
-            && head[8] == (byte)'W' && head[9] == (byte)'E' && head[10] == (byte)'B' && head[11] == (byte)'P')
-            return ".webp";
-        return null;
-    }
-
-    private static async Task SaveFormFileAsync(IFormFile file, string path)
-    {
-        await using var target = System.IO.File.Create(path);
-        await file.CopyToAsync(target);
-    }
-
-    // Параметры кропа из multipart-поля (JSON {scale, offsetX, offsetY}); мусор → null
-    private static AvatarCropState? ParseCrop(string? raw)
-    {
-        if (string.IsNullOrWhiteSpace(raw)) return null;
-        try
-        {
-            return System.Text.Json.JsonSerializer.Deserialize<AvatarCropState>(raw,
-                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-        }
-        catch (System.Text.Json.JsonException) { return null; }
-    }
-
-    private static string ExtFor(string contentType) => contentType switch
-    {
-        "image/jpeg" => ".jpg",
-        "image/webp" => ".webp",
-        _ => ".png",
-    };
-
-    private IActionResult PhysicalFileByExt(string full)
-    {
-        var provider = new Microsoft.AspNetCore.StaticFiles.FileExtensionContentTypeProvider();
-        if (!provider.TryGetContentType(full, out var contentType))
-            contentType = "application/octet-stream";
-        return PhysicalFile(full, contentType);
     }
 
     // Фото-промпт аватара по умолчанию — из имени и описания персоны
@@ -529,7 +464,7 @@ public class PersonasController : ControllerBase
             if (images.Count == 0) return persona;
             var dir = Path.Combine(_personas.AssetsDir, persona.Id);
             Directory.CreateDirectory(dir);
-            var fileName = $"avatar-{Guid.NewGuid():N}{ExtFor(images[0].ContentType)}";
+            var fileName = $"avatar-{Guid.NewGuid():N}{ImageAssetHelper.ExtFor(images[0].ContentType)}";
             await System.IO.File.WriteAllBytesAsync(Path.Combine(dir, fileName), images[0].Bytes);
             return _personas.SetAvatarImage(persona.Id, persona.OwnerId, fileName);
         }

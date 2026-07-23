@@ -35,6 +35,10 @@ public class ProjectManager
         Load();
     }
 
+    // Папка с ассетами иконок проектов: data/project-icons/ (рядом со стором projects.json).
+    // Ассеты конкретного проекта — data/project-icons/{id}/ (аналог PersonaManager.AssetsDir).
+    public string IconsDir => Path.Combine(Path.GetDirectoryName(_storePath)!, "project-icons");
+
     // Container-пользователь заперт в корне песочницы: путь вне него claude не увидит
     // (в контейнер монтируется только Sandbox:ProjectsRoot), а FileService увидел бы хост —
     // расхождение недопустимо
@@ -77,7 +81,7 @@ public class ProjectManager
             throw new ArgumentException($"Эта папка уже подключена как проект «{taken.Name}»");
     }
 
-    public Project Create(string name, string? rootPath, string userId, string username, bool createDirectory = false, string? groupId = null)
+    public Project Create(string name, string? rootPath, string userId, string username, bool createDirectory = false, string? groupId = null, string? color = null)
     {
         // Путь не задан — «Новый проект»: папку под него придумываем сами
         var autoPath = string.IsNullOrWhiteSpace(rootPath);
@@ -120,6 +124,7 @@ public class ProjectManager
             RootPath = rootPath,
             OwnerId = userId,
             GroupId = string.IsNullOrEmpty(groupId) ? null : groupId,
+            Icon = new ProjectIcon { Color = string.IsNullOrEmpty(color) ? null : color },
         };
         _projects[project.Id] = project;
         Save();
@@ -128,7 +133,7 @@ public class ProjectManager
 
     public Project Update(string id, string? name, string? rootPath, string? systemPrompt = null,
         bool? showHiddenFiles = null, List<PermissionRule>? permissionRules = null, string? groupId = null,
-        bool? toolsEnabled = null)
+        bool? toolsEnabled = null, string? color = null)
     {
         var project = _projects.GetValueOrDefault(id)
             ?? throw new KeyNotFoundException($"Проект не найден: {id}");
@@ -153,9 +158,64 @@ public class ProjectManager
         if (permissionRules is not null) project.PermissionRules = permissionRules.Count == 0 ? null : permissionRules;
         // groupId: null = не менять; "" = убрать из группы; иначе — привязать к группе
         if (groupId is not null) project.GroupId = groupId.Length == 0 ? null : groupId;
+        // color: null = не менять; "" = сброс цвета (дефолтный фолбэк на фронте); иначе — ключ палитры.
+        // Смена цвета картинку НЕ сбрасывает — она приоритетнее инициалов при Kind==Image.
+        if (color is not null) project.Icon.Color = color.Length == 0 ? null : color;
         project.UpdatedAt = DateTime.UtcNow;
         Save();
         return project;
+    }
+
+    // Установить сгенерированную иконку-картинку. Оригинал/кроп загруженного файла теряют смысл.
+    public Project SetIconImage(string id, string imageFile)
+    {
+        var project = _projects.GetValueOrDefault(id)
+            ?? throw new KeyNotFoundException($"Проект не найден: {id}");
+        DeleteAsset(id, project.Icon.OriginalFile, keep: null);
+        project.Icon.Kind = ProjectIconKind.Image;
+        project.Icon.ImageFile = imageFile;
+        project.Icon.OriginalFile = null;
+        project.Icon.Crop = null;
+        project.UpdatedAt = DateTime.UtcNow;
+        Save();
+        return project;
+    }
+
+    // Загруженная иконка: кропнутая картинка + оригинал (для перекропа) + параметры кропа.
+    public Project SetIconUploaded(string id, string imageFile, string originalFile, AvatarCropState? crop)
+    {
+        var project = _projects.GetValueOrDefault(id)
+            ?? throw new KeyNotFoundException($"Проект не найден: {id}");
+        DeleteAsset(id, project.Icon.ImageFile, keep: imageFile);
+        DeleteAsset(id, project.Icon.OriginalFile, keep: originalFile);
+        project.Icon.Kind = ProjectIconKind.Image;
+        project.Icon.ImageFile = imageFile;
+        project.Icon.OriginalFile = originalFile;
+        project.Icon.Crop = crop;
+        project.UpdatedAt = DateTime.UtcNow;
+        Save();
+        return project;
+    }
+
+    // Перекроп существующего оригинала: заменяется только кропнутая картинка и параметры.
+    public Project SetIconRecropped(string id, string imageFile, AvatarCropState? crop)
+    {
+        var project = _projects.GetValueOrDefault(id)
+            ?? throw new KeyNotFoundException($"Проект не найден: {id}");
+        DeleteAsset(id, project.Icon.ImageFile, keep: imageFile);
+        project.Icon.Kind = ProjectIconKind.Image;
+        project.Icon.ImageFile = imageFile;
+        project.Icon.Crop = crop;
+        project.UpdatedAt = DateTime.UtcNow;
+        Save();
+        return project;
+    }
+
+    // Удалить файл-ассет иконки проекта (кроме keep); ошибки удаления не критичны
+    private void DeleteAsset(string projectId, string? file, string? keep)
+    {
+        if (string.IsNullOrEmpty(file) || file == keep) return;
+        try { File.Delete(Path.Combine(IconsDir, projectId, file)); } catch { /* не критично */ }
     }
 
     /// <summary>Сохраняет git-настройки проекта (remote и режим авто-коммита).</summary>
@@ -264,7 +324,17 @@ public class ProjectManager
     public bool Delete(string id)
     {
         var removed = _projects.TryRemove(id, out _);
-        if (removed) Save();
+        if (removed)
+        {
+            // Чистим ассеты иконки проекта (best-effort, как у PersonaManager.Delete)
+            try
+            {
+                var dir = Path.Combine(IconsDir, id);
+                if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+            }
+            catch { /* не критично */ }
+            Save();
+        }
         return removed;
     }
 

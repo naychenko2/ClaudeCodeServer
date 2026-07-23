@@ -623,8 +623,8 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
                 <Pencil size={13} strokeWidth={ICON_STROKE} color={isWorking ? C.accent : C.textSecondary} style={{ flexShrink: 0 }} />
                 <span style={{ flex: 1, minWidth: 0, fontSize: 12, color: isWorking ? C.accent : C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Не зафиксировано</span>
                 {/* Есть изменения и скоуп активен: «Зафиксировать» + отмена всех;
-                    есть изменения, но не активен: счётчик; дерево чистое: без кнопок */}
-                {workingFiles.length === 0 ? null : isWorking ? (
+                    иначе счётчик файлов (при чистом дереве — 0, без кнопок) */}
+                {workingFiles.length > 0 && isWorking ? (
                   <>
                     <button
                       onClick={e => { e.stopPropagation(); void openCommitForm(); }}

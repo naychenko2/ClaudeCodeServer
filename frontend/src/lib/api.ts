@@ -177,6 +177,12 @@ export const api = {
       request<Project>(`/projects/${encodeURIComponent(id)}/icon/select`, {
         method: 'POST', body: JSON.stringify({ file }),
       }),
+    // Смена режима иконки (буквы ↔ картинка) без стирания картинки — «путь назад» на инициалы.
+    // Переход в 'image' на бэке требует наличия картинки (иначе 400).
+    setIconMode: (id: string, kind: 'initials' | 'image') =>
+      request<Project>(`/projects/${encodeURIComponent(id)}/icon/mode`, {
+        method: 'POST', body: JSON.stringify({ kind }),
+      }),
     // URL картинки-иконки для браузерного <img>: токен через ?access_token=, cache-busting по imageFile.
     // Возвращает null, если у проекта нет картинки.
     iconUrl: (project: Project): string | null => {

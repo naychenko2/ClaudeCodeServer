@@ -5,7 +5,7 @@ import type { Project, ProjectGroup, PermissionRule, SystemPromptPart } from '..
 import { api } from '../../../lib/api';
 import { useOnline } from '../../../hooks/useOnline';
 import { C, FONT, R } from '../../../lib/design';
-import { Modal, ModalActions, TextField, TextArea, Field, Button, Toggle } from '../../../components/ui';
+import { Modal, ModalActions, TextArea, Field, Button, Toggle } from '../../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
 import { GroupSelect } from '../GroupSelect';
 import { GitModeCard, GitPushRow } from '../components/GitModeCards';
@@ -365,9 +365,10 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onC
       }
     >
       {error && <div style={{ color: C.danger, fontSize: 13 }}>{error}</div>}
-      <TextField value={name} onChange={setName} placeholder="Название" />
       <ProjectIconSection
         project={project}
+        name={name}
+        onNameChange={setName}
         color={iconColor}
         onColorChange={setIconColor}
         onIconUpdated={updated => { setIconColor(updated.icon?.color ?? null); invalidateProjectsCache(); onIconUpdated?.(updated); }}

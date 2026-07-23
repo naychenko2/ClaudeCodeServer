@@ -331,6 +331,27 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         return Ok(WithCount(projects.SetIconImage(id, fileName)));
     }
 
+    // Переключить режим иконки: буквы (initials) ↔ картинка (image). Файлы картинки НЕ стираются —
+    // это возврат к инициалам без потери загруженной/сгенерированной картинки (и обратно к ней).
+    [HttpPost("{id}/icon/mode")]
+    public ActionResult SetIconMode(string id, [FromBody] SetIconModeRequest req)
+    {
+        var p = projects.GetById(id);
+        if (p is null || p.OwnerId != UserId) return NotFound();
+
+        var kind = (req.Kind ?? "").Trim().ToLowerInvariant() switch
+        {
+            "initials" => ProjectIconKind.Initials,
+            "image" => ProjectIconKind.Image,
+            _ => (ProjectIconKind?)null,
+        };
+        if (kind is null) return BadRequest(new { error = "Режим должен быть 'initials' или 'image'" });
+        if (kind == ProjectIconKind.Image && string.IsNullOrEmpty(p.Icon.ImageFile))
+            return BadRequest(new { error = "У проекта нет картинки — сначала сгенерируйте или загрузите" });
+
+        return Ok(WithCount(projects.SetIconKind(id, kind.Value)));
+    }
+
     // Отдать картинку иконки. JWT принимается и в query access_token (браузерный <img>).
     [HttpGet("{id}/icon")]
     public IActionResult Icon(string id)
@@ -421,6 +442,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
 
 public record GenerateIconRequest(string? Prompt, int? Count);
 public record SelectIconRequest(string File);
+public record SetIconModeRequest(string? Kind);
 
 public record CreateProjectRequest(string Name, string? RootPath, bool CreateDirectory = false, string? GroupId = null,
     bool EnableGit = false, bool GitAutoCommit = false, bool GitAutoPush = false, string? Color = null);

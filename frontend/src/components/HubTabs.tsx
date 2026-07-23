@@ -1,9 +1,7 @@
 import type { ReactNode } from 'react';
 import { Book, Calendar, Folder, House, MessageCircle, Puzzle, Share2, Users } from 'lucide-react';
 import { PillSwitch } from './Toolbar';
-import { ProjectSwitcherZone } from '../features/projects/ProjectSwitcherZone';
 import { useModules } from '../lib/modules';
-import { useFeature, FLAGS } from '../lib/featureFlags';
 
 export type HubTab = 'home' | 'chats' | 'projects' | 'calendar' | 'notes' | 'personas' | 'knowledge' | 'notifications';
 
@@ -46,16 +44,13 @@ const TABLESS: HubTab[] = ['home', 'notifications', 'knowledge'];
 // Сегмент-переключатель хаба «Чаты | Проекты | Календарь | Заметки | Персоны» — на общем PillSwitch.
 // mobile: компакт-режим — неактивные сегменты иконками, подпись только у активного
 // (разделы помещаются на 320px без обрезания и скролла).
-export function HubTabs({ value, onChange, mobile, tabs = DEFAULT_TABS, currentProjectId }: {
+export function HubTabs({ value, onChange, mobile, tabs = DEFAULT_TABS }: {
   value: HubTabValue;
   onChange: (t: HubTabValue) => void;
   mobile?: boolean;
   // Какие разделы показать. На мобиле HubHeader передаёт сокращённый primary-набор,
   // остальное уходит в «⋯ Разделы» (overflow), чтобы вкладки не скроллились под обрез.
   tabs?: HubTab[];
-  // Открытый проект — для подсветки активного значка в зоне переключения. Зона
-  // раскрывается только когда активен раздел «Проекты» и это десктоп (не mobile).
-  currentProjectId?: string;
 }) {
   // Вкладки внешних модулей из реестра (ТЗ R6): дописываются в конец, значение `module:{id}`.
   const modules = useModules();
@@ -63,12 +58,8 @@ export function HubTabs({ value, onChange, mobile, tabs = DEFAULT_TABS, currentP
     .filter(m => m.tab)
     .map(m => ({ value: `module:${m.id}` as HubTabValue, label: m.tab!.label, icon: <Puzzle size={18} strokeWidth={2} /> }));
 
-  // Зона проектов заменяет вкладку «Проекты», когда раздел активен (десктоп). Вне
-  // раздела и на мобиле — обычная вкладка. При включенном переключателе проектов
-  // в сайдбаре (флаг sidebar-project-switcher) зона скрыта совсем — переключение
-  // живет в плашке воркспейса, вкладка «Проекты» остается обычной пилюлей.
-  const sidebarSwitcher = useFeature(FLAGS.sidebarProjectSwitcher);
-  const showZone = !mobile && value === 'projects' && !sidebarSwitcher;
+  // Переключение проектов живёт в плашке воркспейса (SidebarProjectSwitcher), поэтому
+  // вкладка «Проекты» в таббаре — обычная пилюля, отдельной зоны переключения нет.
   // Активный раздел вне набора табов: из TABLESS — не получает вкладку вовсе
   // (PillSwitch умеет «нет выбранного»), остальные скрытые дописываются условной
   // вкладкой в конец. На мобиле так всплывают «Заметки» и «Персоны» из «⋯ Разделы»,
@@ -90,11 +81,6 @@ export function HubTabs({ value, onChange, mobile, tabs = DEFAULT_TABS, currentP
       persistKey="hub-tabs"
       variant="hub"
       options={options}
-      renderOption={showZone
-        ? opt => opt.value === 'projects'
-          ? <ProjectSwitcherZone currentProjectId={currentProjectId} onOpenHub={() => onChange('projects')} />
-          : null
-        : undefined}
     />
   );
 }

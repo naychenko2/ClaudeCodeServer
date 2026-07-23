@@ -6,7 +6,7 @@ namespace ClaudeHomeServer.Services.Git;
 // LLM-помощь в git-UI: сообщение коммита по staged-диффу и название стэша по правкам.
 // Идёт через «дешёвый» раннер: локальная модель Ollama (если действие заведено на неё)
 // или claude (модель Git:AiModel, дефолт haiku) как фолбэк/по умолчанию.
-public sealed class GitAiService(ICheapTextRunner cheap, IOneShotRunner claude, GitService git, IConfiguration config)
+public sealed class GitAiService(ICheapTextRunner cheap, GitService git, IConfiguration config)
 {
     private const int DiffBudget = 12_000; // символов диффа в промпт — хвост обрезаем
 
@@ -44,12 +44,12 @@ public sealed class GitAiService(ICheapTextRunner cheap, IOneShotRunner claude, 
             Дифф:
             {{diff}}
             """;
-        // Кастомный промпт = пользователь осознанно настроил стиль → нужно точное следование:
-        // идём напрямую через claude (локальная модель дешёвой цепочки слабо держит произвольные
-        // правила). Дефолтный стиль — обычной дешёвой цепочкой (Ollama справляется с Conventional).
-        var raw = hasCustom
-            ? await claude.RunAsync(prompt, claude.NormalizeModel(Model), ct: ct, ownerId: ownerId)
-            : await cheap.RunAsync(LocalActionCatalog.GitCommitMsg, prompt, Model, ct: ct);
+        // И дефолтный, и кастомный стиль идут единой дешёвой цепочкой действия git-commit-msg
+        // (выбранное → локаль → claude), чтобы исполнителем полностью управлял админ через
+        // «Фоновые задачи». Кастомные правила требовательнее к модели: нужно точное следование —
+        // админ ставит действию Claude или сильную модель; дефолтный Conventional-стиль локаль
+        // держит и на рекомендованной настройке.
+        var raw = await cheap.RunAsync(LocalActionCatalog.GitCommitMsg, prompt, Model, ct: ct);
         return ParseSuggestion(raw);
     }
 

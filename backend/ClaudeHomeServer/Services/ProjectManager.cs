@@ -197,6 +197,19 @@ public class ProjectManager
         return project;
     }
 
+    // Переключить режим отображения иконки (буквы ↔ картинка) БЕЗ стирания файлов картинки —
+    // это «путь назад» на инициалы с сохранённой картинкой (и обратно). Переход в Image
+    // допустим только при наличии ImageFile (иначе показывать нечего) — гарантирует контроллер.
+    public Project SetIconKind(string id, ProjectIconKind kind)
+    {
+        var project = _projects.GetValueOrDefault(id)
+            ?? throw new KeyNotFoundException($"Проект не найден: {id}");
+        project.Icon.Kind = kind;
+        project.UpdatedAt = DateTime.UtcNow;
+        Save();
+        return project;
+    }
+
     // Перекроп существующего оригинала: заменяется только кропнутая картинка и параметры.
     public Project SetIconRecropped(string id, string imageFile, AvatarCropState? crop)
     {

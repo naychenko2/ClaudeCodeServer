@@ -551,7 +551,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
 
       {/* === Нижняя зона: форма фиксации ИЛИ селектор скоупов === */}
       {mode === 'commit' ? (
-        <div style={{ borderTop: `1px solid ${C.border}`, background: C.bgInset, padding: '8px 10px 10px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div style={{ borderTop: `1px solid ${C.border}`, padding: '8px 10px 10px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <Pencil size={14} strokeWidth={ICON_STROKE} color={C.accent} />
             <span style={{ flex: 1, fontSize: 12, fontWeight: 600, color: C.textSecondary }}>Фиксация · {selectedCount} файл(ов)</span>
@@ -606,7 +606,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
           </div>
         </div>
       ) : (
-        <div style={{ borderTop: `1px solid ${C.border}`, background: C.bgInset, padding: '6px 8px', flexShrink: 0 }}>
+        <div style={{ borderTop: `1px solid ${C.border}`, padding: '6px 8px', flexShrink: 0 }}>
           {/* Хендл ресайза высоты зоны скоупов — когда есть что скроллить (стэши/коммиты) */}
           {(st.stashes.length > 0 || st.unpushed.length > 0) && (
             <div
@@ -708,7 +708,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
 
       {/* === Ветка: строка в стиле скоупа (селектор ветки + fetch/pull); в режиме фиксации скрыта === */}
       {mode === 'list' && (
-      <div style={{ background: C.bgInset, padding: '0 8px 6px', flexShrink: 0 }}>
+      <div style={{ padding: '0 8px 6px', flexShrink: 0 }}>
         {/* Весь ряд ветки = один скоуп: подсветка на всю длину, включая fetch/pull */}
         <div
           onMouseEnter={() => setHoveredRow('branch')}

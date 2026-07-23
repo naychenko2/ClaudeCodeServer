@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo, useCallback, Fragment } from 'react';
-import { ArrowDown } from 'lucide-react';
+import { ArrowDown, RotateCw, CircleHelp } from 'lucide-react';
 import type { Project, Session, ChatItem, SkillInfo, AgentInfo, ClaudeBilling, Persona, WorkLoopState } from '../types';
 import { useSession } from '../hooks/useSession';
 import { usePersonasVersion, getPersonaById, getPersonasSnapshot, ensurePersonasLoaded, personaLabel } from '../lib/personas';
@@ -1040,28 +1040,46 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
             (it.kind === 'ask_question' || it.kind === 'permission_request' || it.kind === 'plan_review')
             && !it.resolved
           );
+          const BannerIcon = hasPending ? CircleHelp : RotateCw;
           return (
             <div style={{
-              display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10,
-              padding: '20px 16px', marginTop: 8,
-              background: C.bgPanel, borderRadius: 12,
-              border: `1px solid ${C.border}`,
+              alignSelf: 'center', width: '100%', maxWidth: 440,
+              display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14,
+              padding: '26px 24px', marginTop: 28,
+              background: C.bgPanel, borderRadius: 16,
+              border: `1px solid ${C.border}`, boxShadow: SHADOW.card,
             }}>
-              <span style={{ fontSize: 13, color: C.textSecondary, textAlign: 'center' }}>
-                {hasPending
-                  ? 'Чат ожидал вашего ответа. После возобновления ответьте на незакрытый запрос.'
-                  : `Чат был прерван при перезапуске сервера. ${asstName} продолжит с того же места.`}
-              </span>
+              {/* Иконка в тёплом кружке — статус паузы, а не ошибка */}
+              <div style={{
+                width: 46, height: 46, borderRadius: R.full, flexShrink: 0,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                background: C.accentSoft, color: C.accent,
+              }}>
+                <BannerIcon size={22} strokeWidth={2} />
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5 }}>
+                <span style={{ fontSize: 15, fontWeight: 600, color: C.textHeading, textAlign: 'center' }}>
+                  {hasPending ? 'Чат ждёт вашего ответа' : 'Чат приостановлен'}
+                </span>
+                <span style={{ fontSize: 13, lineHeight: 1.5, color: C.textSecondary, textAlign: 'center', maxWidth: 340 }}>
+                  {hasPending
+                    ? 'Сервер перезапустился во время диалога. После возобновления ответьте на незакрытый запрос.'
+                    : `Диалог прервался при перезапуске сервера. ${asstName} продолжит с того же места.`}
+                </span>
+              </div>
               {onResume && (
                 <button
                   onClick={() => onResume(hasPending ? undefined : 'Продолжи')}
                   style={{
-                    padding: '8px 20px', borderRadius: 10, fontSize: 13, fontWeight: 600,
+                    display: 'inline-flex', alignItems: 'center', gap: 7,
+                    padding: '9px 22px', borderRadius: R.lg, fontSize: 13, fontWeight: 600,
                     background: C.accent, border: 'none', cursor: 'pointer', color: C.onAccent,
+                    boxShadow: SHADOW.button, transition: 'opacity 0.12s',
                   }}
                   onMouseEnter={e => { e.currentTarget.style.opacity = '0.88'; }}
                   onMouseLeave={e => { e.currentTarget.style.opacity = '1'; }}
                 >
+                  <RotateCw size={15} strokeWidth={2.2} />
                   Возобновить
                 </button>
               )}

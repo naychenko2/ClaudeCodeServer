@@ -274,6 +274,9 @@ export interface Session {
   taskExecution?: boolean;
   // Задача-владелец чата-исполнителя (для отображения контекста «в рамках какой задачи»)
   taskId?: string | null;
+  // Чат-родитель (породивший задачу этого чата-исполнителя) — вычисляется на бэке
+  // из TaskId → Task.SourceSessionId; null у обычных чатов и при удалённой задаче
+  parentSessionId?: string | null;
   // Тип происхождения чата — производный от taskId/automationRuleId на бэке
   origin: 'manual' | 'task' | 'automation';
 }

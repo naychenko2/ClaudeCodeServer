@@ -5,13 +5,15 @@ import { api } from '../lib/api';
 import { onMessage, onReconnected } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
 import { EditSessionDialog } from './EditSessionDialog';
-import { C, MODAL_W } from '../lib/design';
+import { C, FS, MODAL_W } from '../lib/design';
 import { Modal, ModalActions, Button } from './ui';
 import { usePersonas, usePersonasVersion } from '../lib/personas';
 import { FilterBar } from './FilterBar';
 import { useChatFilters, useSanitizePersonaFilter } from '../lib/chatFilters';
+import { buildChatTreeRows, useChatView, useTreeCollapse } from '../lib/chatTree';
 import { useLastMechanicVersion } from '../lib/lastMechanic';
 import { ChatCard } from './ChatCard';
+import { ChatTreeRow } from './ChatTreeRow';
 import { ListDateDivider } from './ListDateDivider';
 import { groupChats } from '../lib/chatGroups';
 
@@ -183,24 +185,52 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   // Персистятся в localStorage отдельно для каждого проекта (scope = project.id)
   const { filters, patch } = useChatFilters(project.id);
   const visibleOrigins = new Set(filters.origins);
+  // Режим вида «Плоский/Иерархия» и память свёрнутых веток дерева
+  const { view, setView } = useChatView(project.id);
+  const { collapsedIds, toggleCollapse } = useTreeCollapse(project.id);
 
   // Персоны в списке (для селектора фильтра)
   const personaIdsInList = [...new Set(sessions.filter(s => s.personaId).map(s => s.personaId!))];
   useSanitizePersonaFilter(filters, patch, personaIdsInList, sessions.length > 0);
 
   // Применение фильтров
-  const filteredSessions = sessions.filter(s => {
+  const isVisible = (s: Session) => {
     if (!visibleOrigins.has(s.origin)) return false;
     if (filters.activeOnly && Date.now() - new Date(s.updatedAt).getTime() > 5 * 60 * 1000) return false;
     if (filters.personaId && s.personaId !== filters.personaId) return false;
     return true;
-  });
-  const hiddenCount = sessions.length - filteredSessions.length;
+  };
+  const filteredSessions = sessions.filter(isVisible);
+  // В иерархии фильтры применяются только к корням: видимый родитель тянет всех детей
+  const tree = view === 'tree'
+    ? buildChatTreeRows(sessions, { isRootVisible: isVisible, collapsedIds, activeId: activeSession?.id ?? null })
+    : null;
+  const hiddenCount = tree
+    ? sessions.length - tree.renderedCount
+    : sessions.length - filteredSessions.length;
 
   // Номер в подписи безымянного чата берём из исходного порядка списка:
   // группировка тасует карточки по дням, и позиция в группе давала бы скачущие номера
   const numberById = new Map(sessions.map((s, i) => [s.id, i + 1]));
-  const groups = groupChats(filteredSessions);
+  // В режиме «Иерархия» группировка по датам не используется
+  const groups = tree ? [] : groupChats(filteredSessions);
+
+  const renderCard = (s: Session) => (
+    <ChatCard
+      key={s.id}
+      session={s}
+      isActive={activeSession?.id === s.id}
+      isMobile={isMobile}
+      fallbackName={`Чат #${numberById.get(s.id) ?? 1}`}
+      online={online}
+      hovered={hoveredId === s.id}
+      workflowRunning={workflowRunningFor === s.id}
+      onSelect={() => onSelect(s)}
+      onHover={h => setHoveredId(h ? s.id : null)}
+      onEdit={() => setEditTarget(s)}
+      onDelete={() => setDeleteTarget(s)}
+    />
+  );
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -230,33 +260,33 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         allPersonas={personas}
         hiddenCount={hiddenCount}
         isMobile={isMobile}
+        view={view}
+        onChangeView={setView}
       />
 
       <div style={{ flex: 1, overflowY: 'auto', padding: '8px 8px' }}>
-        {filteredSessions.length === 0 && sessions.length > 0 && (
+        {(tree ? tree.rows.length === 0 : filteredSessions.length === 0) && sessions.length > 0 && (
           <div style={{ padding: '24px 8px', textAlign: 'center', color: C.textMuted, fontSize: 13 }}>
             Все чаты скрыты фильтрами
           </div>
         )}
-        {groups.map(g => (
+        {tree ? (
+          <>
+            {tree.linkCount === 0 && tree.rows.length > 0 && (
+              <div style={{ padding: '10px 8px', fontSize: FS.sm, color: C.textMuted }}>
+                ⋔ Пока нет вложенных чатов — здесь появятся исполнители делегированных задач.
+              </div>
+            )}
+            {tree.rows.map(row => (
+              <ChatTreeRow key={row.chat.id} row={row} isMobile={isMobile} onToggleCollapse={toggleCollapse}>
+                {renderCard(row.chat)}
+              </ChatTreeRow>
+            ))}
+          </>
+        ) : groups.map(g => (
           <div key={g.title} style={{ marginBottom: 6 }}>
             <ListDateDivider title={g.title} />
-            {g.items.map(s => (
-              <ChatCard
-                key={s.id}
-                session={s}
-                isActive={activeSession?.id === s.id}
-                isMobile={isMobile}
-                fallbackName={`Чат #${numberById.get(s.id) ?? 1}`}
-                online={online}
-                hovered={hoveredId === s.id}
-                workflowRunning={workflowRunningFor === s.id}
-                onSelect={() => onSelect(s)}
-                onHover={h => setHoveredId(h ? s.id : null)}
-                onEdit={() => setEditTarget(s)}
-                onDelete={() => setDeleteTarget(s)}
-              />
-            ))}
+            {g.items.map(renderCard)}
           </div>
         ))}
       </div>

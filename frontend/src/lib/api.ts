@@ -23,6 +23,23 @@ export interface DifyDocument {
   tags?: string[];
 }
 
+// Контекст worktree-чата для git-запросов: пока активен чат в отдельном git worktree,
+// ВСЕ git-вызовы его проекта несут ?sessionId= — бэкенд переводит операции в дерево чата.
+// Без контекста (или для другого проекта) запросы идут в корень проекта, как раньше.
+// Выставляет ChatPanel по активной сессии; частичная передача сломала бы инвариант
+// «коммит/дискард — в том же дереве, что и статус».
+let gitSessionCtx: { projectId: string; sessionId: string } | null = null;
+export function setGitSessionContext(projectId: string, sessionId: string | null) {
+  gitSessionCtx = sessionId ? { projectId, sessionId } : null;
+}
+export function getGitSessionContext(): { projectId: string; sessionId: string } | null {
+  return gitSessionCtx;
+}
+// Суффикс query для git-URL; sep — '?' для URL без параметров, '&' для URL с ними
+function gq(projectId: string, sep: '?' | '&' = '?'): string {
+  return gitSessionCtx?.projectId === projectId ? `${sep}sessionId=${gitSessionCtx.sessionId}` : '';
+}
+
 // Projects
 export const api = {
   auth: {
@@ -809,6 +826,16 @@ export const api = {
         method: 'PUT',
         body: JSON.stringify({ enabled }),
       }),
+    // Отдельное git worktree чата: вкл — сессия переезжает в изолированное дерево на новой
+    // ветке (начатый чат — с переносом контекста), выкл — возврат в корень проекта.
+    // force подтверждает потерю несохранённых правок дерева. Только проектные чаты.
+    // Создание дерева = checkout репы, на большой может быть небыстрым
+    setWorktree: (id: string, enabled: boolean, branch?: string, force = false) =>
+      request<Session>(`/chats/${id}/worktree`, {
+        method: 'PUT',
+        body: JSON.stringify({ enabled, branch: branch ?? null, force }),
+        timeoutMs: 120_000,
+      }),
     // Миграция чата на другого провайдера («Продолжить на …» при исчерпании лимита):
     // транскрипт переезжает в профиль провайдера, контекст сохраняется. Работает и для
     // проектных сессий
@@ -940,15 +967,17 @@ export const api = {
 
   // Git проекта (раздел «Файлы» → «Изменения»/«История»); ошибки операций — 409 { error }
   git: {
+    // ?sessionId= (gq): активный worktree-чат переводит запросы в своё дерево — суффикс
+    // добавляется ко всем операциям, достижимым из git-бара и панели «Изменения»
     status: (projectId: string) =>
-      request<GitStatus>(`/projects/${projectId}/git/status`),
+      request<GitStatus>(`/projects/${projectId}/git/status${gq(projectId)}`),
     diff: (projectId: string, path: string, staged = false) =>
-      request<{ diff: string | null }>(`/projects/${projectId}/git/diff?path=${encodeURIComponent(path)}&staged=${staged}`),
+      request<{ diff: string | null }>(`/projects/${projectId}/git/diff?path=${encodeURIComponent(path)}&staged=${staged}${gq(projectId, '&')}`),
     log: (projectId: string, limit = 100, branch?: string) =>
-      request<GitLogEntry[]>(`/projects/${projectId}/git/log?limit=${limit}${branch ? `&branch=${encodeURIComponent(branch)}` : ''}`),
+      request<GitLogEntry[]>(`/projects/${projectId}/git/log?limit=${limit}${branch ? `&branch=${encodeURIComponent(branch)}` : ''}${gq(projectId, '&')}`),
     // Незапушенные коммиты (впереди upstream) — стек скоупов панели «Изменения»
     unpushed: (projectId: string, limit = 100) =>
-      request<GitLogEntry[]>(`/projects/${projectId}/git/unpushed?limit=${limit}`),
+      request<GitLogEntry[]>(`/projects/${projectId}/git/unpushed?limit=${limit}${gq(projectId, '&')}`),
     // Настройка промпта AI-описания коммита: чтение (global/projectOverride/effective/default)
     getCommitPrompt: (projectId: string) =>
       request<GitCommitPromptInfo>(`/projects/${projectId}/git/commit-prompt`),
@@ -961,60 +990,60 @@ export const api = {
     detectCommitStyle: (projectId: string) =>
       request<{ prompt: string }>(`/projects/${projectId}/git/ai/detect-commit-style`, { method: 'POST', timeoutMs: 60_000 }),
     branches: (projectId: string) =>
-      request<GitBranchInfo[]>(`/projects/${projectId}/git/branches`),
+      request<GitBranchInfo[]>(`/projects/${projectId}/git/branches${gq(projectId)}`),
     commitDetail: (projectId: string, sha: string) =>
-      request<GitCommitDetail>(`/projects/${projectId}/git/commits/${sha}`),
+      request<GitCommitDetail>(`/projects/${projectId}/git/commits/${sha}${gq(projectId)}`),
     commitFileDiff: (projectId: string, sha: string, path: string) =>
-      request<{ diff: string | null }>(`/projects/${projectId}/git/commits/${sha}/diff?path=${encodeURIComponent(path)}`),
+      request<{ diff: string | null }>(`/projects/${projectId}/git/commits/${sha}/diff?path=${encodeURIComponent(path)}${gq(projectId, '&')}`),
     stage: (projectId: string, path: string) =>
-      request<GitStatus>(`/projects/${projectId}/git/stage`, { method: 'POST', body: JSON.stringify({ path }) }),
+      request<GitStatus>(`/projects/${projectId}/git/stage${gq(projectId)}`, { method: 'POST', body: JSON.stringify({ path }) }),
     unstage: (projectId: string, path: string) =>
-      request<GitStatus>(`/projects/${projectId}/git/unstage`, { method: 'POST', body: JSON.stringify({ path }) }),
+      request<GitStatus>(`/projects/${projectId}/git/unstage${gq(projectId)}`, { method: 'POST', body: JSON.stringify({ path }) }),
     stageAll: (projectId: string) =>
-      request<GitStatus>(`/projects/${projectId}/git/stage-all`, { method: 'POST' }),
+      request<GitStatus>(`/projects/${projectId}/git/stage-all${gq(projectId)}`, { method: 'POST' }),
     // Откат правок файла к HEAD — необратимо (подтверждение на фронте)
     discard: (projectId: string, path: string) =>
-      request<GitStatus>(`/projects/${projectId}/git/discard`, { method: 'POST', body: JSON.stringify({ path }) }),
+      request<GitStatus>(`/projects/${projectId}/git/discard${gq(projectId)}`, { method: 'POST', body: JSON.stringify({ path }) }),
     discardAll: (projectId: string) =>
-      request<GitStatus>(`/projects/${projectId}/git/discard-all`, { method: 'POST' }),
+      request<GitStatus>(`/projects/${projectId}/git/discard-all${gq(projectId)}`, { method: 'POST' }),
     commit: (projectId: string, message: string, amend = false) =>
-      request<{ sha: string }>(`/projects/${projectId}/git/commit`, {
+      request<{ sha: string }>(`/projects/${projectId}/git/commit${gq(projectId)}`, {
         method: 'POST', body: JSON.stringify({ message, amend }),
       }),
     checkout: (projectId: string, branch: string) =>
-      request<GitStatus>(`/projects/${projectId}/git/checkout`, { method: 'POST', body: JSON.stringify({ branch }) }),
+      request<GitStatus>(`/projects/${projectId}/git/checkout${gq(projectId)}`, { method: 'POST', body: JSON.stringify({ branch }) }),
     createBranch: (projectId: string, name: string, from?: string) =>
-      request<GitStatus>(`/projects/${projectId}/git/branches`, {
+      request<GitStatus>(`/projects/${projectId}/git/branches${gq(projectId)}`, {
         method: 'POST', body: JSON.stringify({ name, from: from ?? null }),
       }),
     fetch: (projectId: string) =>
-      request<GitStatus>(`/projects/${projectId}/git/fetch`, { method: 'POST', timeoutMs: 60_000 }),
+      request<GitStatus>(`/projects/${projectId}/git/fetch${gq(projectId)}`, { method: 'POST', timeoutMs: 60_000 }),
     pull: (projectId: string) =>
-      request<GitStatus>(`/projects/${projectId}/git/pull`, { method: 'POST', timeoutMs: 120_000 }),
+      request<GitStatus>(`/projects/${projectId}/git/pull${gq(projectId)}`, { method: 'POST', timeoutMs: 120_000 }),
     push: (projectId: string) =>
-      request<GitStatus>(`/projects/${projectId}/git/push`, { method: 'POST', timeoutMs: 120_000 }),
+      request<GitStatus>(`/projects/${projectId}/git/push${gq(projectId)}`, { method: 'POST', timeoutMs: 120_000 }),
     // Частичный stage: patch — unified diff одного хунка/строк (сервер применяет с --recount)
     stageHunk: (projectId: string, patch: string) =>
-      request<GitStatus>(`/projects/${projectId}/git/stage-hunk`, { method: 'POST', body: JSON.stringify({ patch }) }),
+      request<GitStatus>(`/projects/${projectId}/git/stage-hunk${gq(projectId)}`, { method: 'POST', body: JSON.stringify({ patch }) }),
     unstageHunk: (projectId: string, patch: string) =>
-      request<GitStatus>(`/projects/${projectId}/git/unstage-hunk`, { method: 'POST', body: JSON.stringify({ patch }) }),
+      request<GitStatus>(`/projects/${projectId}/git/unstage-hunk${gq(projectId)}`, { method: 'POST', body: JSON.stringify({ patch }) }),
     stashList: (projectId: string) =>
-      request<GitStashEntry[]>(`/projects/${projectId}/git/stash`),
+      request<GitStashEntry[]>(`/projects/${projectId}/git/stash${gq(projectId)}`),
     // Файлы отложенного (для просмотра в верхней зоне панели «Изменения», как у коммита)
     stashShow: (projectId: string, index: number) =>
-      request<{ files: GitFileChange[] }>(`/projects/${projectId}/git/stash/${index}`),
+      request<{ files: GitFileChange[] }>(`/projects/${projectId}/git/stash/${index}${gq(projectId)}`),
     stashPush: (projectId: string, message?: string) =>
-      request<GitStatus>(`/projects/${projectId}/git/stash`, { method: 'POST', body: JSON.stringify({ message: message ?? null }) }),
+      request<GitStatus>(`/projects/${projectId}/git/stash${gq(projectId)}`, { method: 'POST', body: JSON.stringify({ message: message ?? null }) }),
     stashPop: (projectId: string, index: number) =>
-      request<GitStatus>(`/projects/${projectId}/git/stash/${index}/pop`, { method: 'POST' }),
+      request<GitStatus>(`/projects/${projectId}/git/stash/${index}/pop${gq(projectId)}`, { method: 'POST' }),
     // Удаление стэша — необратимо (подтверждение на фронте)
     stashDrop: (projectId: string, index: number) =>
-      request<GitStatus>(`/projects/${projectId}/git/stash/${index}`, { method: 'DELETE' }),
+      request<GitStatus>(`/projects/${projectId}/git/stash/${index}${gq(projectId)}`, { method: 'DELETE' }),
     // Безопасная отмена коммита: новый обратный коммит; конфликт → 409 { error }
     revertCommit: (projectId: string, sha: string) =>
-      request<GitStatus>(`/projects/${projectId}/git/commits/${sha}/revert`, { method: 'POST', timeoutMs: 60_000 }),
+      request<GitStatus>(`/projects/${projectId}/git/commits/${sha}/revert${gq(projectId)}`, { method: 'POST', timeoutMs: 60_000 }),
     blame: (projectId: string, path: string) =>
-      request<GitBlameLine[]>(`/projects/${projectId}/git/blame?path=${encodeURIComponent(path)}`),
+      request<GitBlameLine[]>(`/projects/${projectId}/git/blame?path=${encodeURIComponent(path)}${gq(projectId, '&')}`),
     // Данные входа в веб-UI Forgejo (пароль нужен: приватные репо анониму отдают 404)
     forgejoCredentials: (projectId: string) =>
       request<{ login: string; password: string | null }>(`/projects/${projectId}/git/forgejo-credentials`),
@@ -1022,23 +1051,23 @@ export const api = {
       request<{ login: string; password: string }>(`/projects/${projectId}/git/forgejo-credentials/reset`, { method: 'POST', timeoutMs: 30_000 }),
     // История одного файла (--follow) — вкладка «История» просмотра файла
     fileLog: (projectId: string, path: string, limit = 100) =>
-      request<GitLogEntry[]>(`/projects/${projectId}/git/file-log?path=${encodeURIComponent(path)}&limit=${limit}`),
+      request<GitLogEntry[]>(`/projects/${projectId}/git/file-log?path=${encodeURIComponent(path)}&limit=${limit}${gq(projectId, '&')}`),
     // Содержимое файла в конкретной версии («открыть, как было»); null — бинарь/нет файла
     fileAtCommit: (projectId: string, sha: string, path: string) =>
-      request<{ content: string | null }>(`/projects/${projectId}/git/commits/${sha}/file?path=${encodeURIComponent(path)}`),
+      request<{ content: string | null }>(`/projects/${projectId}/git/commits/${sha}/file?path=${encodeURIComponent(path)}${gq(projectId, '&')}`),
     // Документный режим: вернуть файл к версии из коммита (в авто-режиме сразу коммитится)
     restoreFile: (projectId: string, sha: string, path: string) =>
-      request<GitStatus>(`/projects/${projectId}/git/commits/${sha}/restore-file`, {
+      request<GitStatus>(`/projects/${projectId}/git/commits/${sha}/restore-file${gq(projectId)}`, {
         method: 'POST', body: JSON.stringify({ path }), timeoutMs: 60_000,
       }),
     // Документный режим: «Сохранить сейчас» (✨-сообщение + push при авто-пуше)
     saveNow: (projectId: string) =>
-      request<{ committed: boolean; sha?: string }>(`/projects/${projectId}/git/save-now`, { method: 'POST', timeoutMs: 180_000 }),
+      request<{ committed: boolean; sha?: string }>(`/projects/${projectId}/git/save-now${gq(projectId)}`, { method: 'POST', timeoutMs: 180_000 }),
     // LLM-помощь: описание коммита по staged-диффу / название стэша (генерация небыстрая — старт CLI)
     aiCommitMessage: (projectId: string) =>
-      request<{ summary: string; description: string }>(`/projects/${projectId}/git/ai/commit-message`, { method: 'POST', timeoutMs: 120_000 }),
+      request<{ summary: string; description: string }>(`/projects/${projectId}/git/ai/commit-message${gq(projectId)}`, { method: 'POST', timeoutMs: 120_000 }),
     aiStashName: (projectId: string) =>
-      request<{ name: string }>(`/projects/${projectId}/git/ai/stash-name`, { method: 'POST', timeoutMs: 120_000 }),
+      request<{ name: string }>(`/projects/${projectId}/git/ai/stash-name${gq(projectId)}`, { method: 'POST', timeoutMs: 120_000 }),
     // git init + при настроенном Forgejo создание удалённого репозитория
     init: (projectId: string) =>
       request<{ status: GitStatus; htmlUrl: string | null }>(`/projects/${projectId}/git/init`, { method: 'POST', timeoutMs: 60_000 }),

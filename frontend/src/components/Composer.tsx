@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, type CSSProperties } from 'react';
-import { AlertTriangle, Ban, ArrowUp, Check, ChevronDown, Mic, Plus, RefreshCw, Users, WifiOff, X } from 'lucide-react';
+import { AlertTriangle, Ban, ArrowUp, Check, ChevronDown, FolderGit2, Mic, Plus, RefreshCw, Users, WifiOff, X } from 'lucide-react';
 import { C, R, FONT, SHADOW, Z } from '../lib/design';
 import { type RateWindow, RATE_COLORS, windowLabel, fmtReset } from '../lib/rateLimit';
 import { SkillsDropdown } from './SkillsDropdown';
@@ -71,6 +71,10 @@ export interface ComposerProps {
   // Promise — чтобы автопилот с «до готово» мог дождаться включения цикла до отправки
   workLoop?: WorkLoopState | null;
   onToggleWorkLoop?: () => void | Promise<void>;
+  // Отдельное git worktree чата: имя ветки (null — чат в основном дереве проекта).
+  // Тумблер виден при заданном onToggleWorktree (только проектный чат с git)
+  worktreeBranch?: string | null;
+  onToggleWorktree?: () => void | Promise<void>;
   // Краткий контекст последних реплик чата — для механики «Панель экспертов»
   // с настройкой «Приложить контекст чата» (собирает ChatPanel из ленты)
   chatContext?: string;
@@ -233,6 +237,8 @@ export function Composer({
   onCreateGroup,
   workLoop = null,
   onToggleWorkLoop,
+  worktreeBranch = null,
+  onToggleWorktree,
   chatContext,
   promptSuggestion = null,
   rateWindow,
@@ -649,6 +655,36 @@ export function Composer({
     </span>
   ) : null;
 
+  // Отдельное git worktree: тумблер + бейдж ветки (как loopButton/loopBadge)
+  const worktreeActive = !!worktreeBranch;
+  const worktreeButton = onToggleWorktree ? (
+    <button
+      onClick={onToggleWorktree}
+      title={worktreeActive
+        ? `Чат работает в отдельном дереве (ветка ${worktreeBranch}) — нажми, чтобы вернуть в проект`
+        : 'Отдельное дерево: чат работает в изолированном git worktree на своей ветке'}
+      style={{
+        width: isMobile ? 36 : 32, height: isMobile ? 36 : 32, borderRadius: R.pill, border: 'none',
+        background: worktreeActive ? C.accentLight : 'none',
+        cursor: 'pointer', color: worktreeActive ? C.accent : C.textMuted,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+        transition: 'color 0.15s, background 0.15s',
+      }}
+    >
+      <FolderGit2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+    </button>
+  ) : null;
+  const worktreeBadge = onToggleWorktree && worktreeActive ? (
+    <span title={`Изолированное дерево чата, ветка ${worktreeBranch}`} style={{
+      display: 'inline-flex', alignItems: 'center', height: isMobile ? 26 : 24, maxWidth: 180,
+      padding: '0 9px', borderRadius: R.pill, background: C.accentLight, color: C.accent,
+      fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden',
+      textOverflow: 'ellipsis', flexShrink: 0,
+    }}>
+      {worktreeBranch}
+    </span>
+  ) : null;
+
   const inputArea = isListening ? (
     <div style={{ ...dotsStyle, gap: 10 }}>
       <span style={{ width: 9, height: 9, borderRadius: '50%', background: C.danger, animation: 'pulsedot 1s ease-in-out infinite', flexShrink: 0 }} />
@@ -917,6 +953,7 @@ export function Composer({
     { key: 'attach', node: attachButton, item: { key: 'attach', icon: <Plus size={16} strokeWidth={ICON_STROKE} />, label: 'Прикрепить файл', sublabel: 'Добавить файл к сообщению', onClick: onAttach } },
     slashButton && { key: 'slash', node: slashButton, item: { key: 'slash', icon: <span style={{ fontFamily: FONT.mono, fontSize: 15, fontWeight: 700, lineHeight: 1 }}>/</span>, label: 'Вставить скилл', sublabel: 'Список навыков через «/»', onClick: handleSlashButton } },
     loopButton && { key: 'loop', node: loopButton, item: { key: 'loop', icon: <RefreshCw size={16} strokeWidth={ICON_STROKE} />, label: 'Цикл «до готово»', sublabel: 'Повторять итерациями, пока не готово', toggle: loopActive, onClick: () => { void onToggleWorkLoop?.(); } } },
+    worktreeButton && { key: 'worktree', node: worktreeButton, item: { key: 'worktree', icon: <FolderGit2 size={16} strokeWidth={ICON_STROKE} />, label: 'Отдельное дерево', sublabel: 'Чат в изолированном git worktree', toggle: worktreeActive, onClick: () => { void onToggleWorktree?.(); } } },
     discussButton && { key: 'discuss', node: discussButton, item: { key: 'discuss', icon: <Users size={16} strokeWidth={ICON_STROKE} />, label: 'Обсудить с командой', sublabel: 'Выбрать механику совместной работы', toggle: teamOpen, onClick: () => setTeamOpen(o => !o) } },
   ].filter(Boolean) as { key: string; node: React.ReactNode; item: OverflowItem }[];
 
@@ -1082,6 +1119,7 @@ export function Composer({
       )}
       <div ref={badgesRef} style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 6 : 4, minWidth: 0, overflow: 'hidden' }}>
         {loopBadge}
+        {worktreeBadge}
         {teamChip}
       </div>
       {/* Правая группа: модель → усилие → собеседник, прижаты к правому краю */}

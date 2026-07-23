@@ -9,7 +9,9 @@ import { PersonaGreeting } from '../features/personas/PersonaGreeting';
 import { countFiles, computeTodos } from '../hooks/useSessionArtifacts';
 import { useChatScroll } from '../hooks/useChatScroll';
 import { useOnline } from '../hooks/useOnline';
-import { api } from '../lib/api';
+import { api, setGitSessionContext } from '../lib/api';
+import { ensureGit, loadUnpushedLog } from '../lib/git';
+import { slugify } from '../lib/slug';
 import { parseWorkflowMeta } from '../lib/workflowMeta';
 import { detectTeamMechanic } from '../features/team/teamMechanics';
 import { setLastMechanic } from '../lib/lastMechanic';
@@ -27,6 +29,7 @@ import { setChatContext, AI_RECOMPUTE_EVENT } from '../lib/ai/chatContext';
 import { ChatHeaderBar, type CostStats, type FalCostStats } from './chat/ChatHeaderBar';
 import { ChatProjectContext, FalCostContext, AssistantNameContext, PersonaContext } from './chat/contexts';
 import { WaitingIndicator } from './ui/WaitingIndicator';
+import { Modal, ModalActions } from './ui';
 import { ChatEmptyState } from './chat/EmptyState';
 import { AttachPicker } from './chat/AttachPicker';
 import { ToolGroupBlock, AgentActionsBlock, itemKey, type ActivityEntry } from './chat/timeline';
@@ -124,6 +127,50 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       showToast('Цикл «до готово»', err instanceof Error ? err.message : 'Не удалось переключить цикл');
     }
   }, [session.id, workLoopState, onSessionUpdated]);
+
+  // === Отдельное git worktree чата ===
+  // Пока активен чат в worktree, все git-запросы проекта несут его sessionId —
+  // бар/панель «Изменения» показывают и мутируют дерево чата, не корень проекта
+  useEffect(() => {
+    if (!project) return;
+    setGitSessionContext(project.id, session.worktreePath ? session.id : null);
+    return () => setGitSessionContext(project.id, null);
+  }, [project, session.id, session.worktreePath]);
+  const [worktreeForceConfirm, setWorktreeForceConfirm] = useState(false);
+  // Предупреждение перед сменой дерева (в обе стороны): переезд меняет рабочую папку
+  // агента — без объяснения тумблер выглядит «кнопкой-сюрпризом»
+  const [worktreeConfirm, setWorktreeConfirm] = useState(false);
+  // Имя ветки нового дерева — предзаполняется авто-вариантом (slug имени чата,
+  // как посчитает бэкенд), юзер может поправить перед подтверждением
+  const [worktreeBranchInput, setWorktreeBranchInput] = useState('');
+  const openWorktreeConfirm = useCallback(() => {
+    setWorktreeBranchInput(`wt/${slugify(session.name ?? '') || session.id.slice(0, 8)}`);
+    setWorktreeConfirm(true);
+  }, [session.name, session.id]);
+  const handleToggleWorktree = useCallback(async (force = false, branch?: string) => {
+    const enabling = !session.worktreePath;
+    try {
+      const updated = await api.chats.setWorktree(session.id, enabling, branch, force);
+      onSessionUpdated?.(updated);
+      if (project) {
+        // Контекст сменился — статус/стек незапушенных перечитать из нового дерева
+        setGitSessionContext(project.id, updated.worktreePath ? updated.id : null);
+        void ensureGit(project.id, true);
+        void loadUnpushedLog(project.id);
+      }
+      showToast('Отдельное дерево', enabling
+        ? `Чат работает в ветке ${updated.worktreeBranch ?? ''}`.trim()
+        : 'Чат вернулся в основное дерево проекта');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Не удалось переключить дерево';
+      // Гейт незакоммиченных правок: предлагаем принудительное удаление
+      if (!enabling && !force && msg.includes('несохранённые изменения')) {
+        setWorktreeForceConfirm(true);
+        return;
+      }
+      showToast('Отдельное дерево', msg);
+    }
+  }, [session.id, session.worktreePath, project, onSessionUpdated]);
   // Окна лимитов подписки (из rate_limit-телеметрии) — для индикатора в бейдже и строки у composer
   const rateWindows = useMemo(() => toRateWindows(rateLimits), [rateLimits]);
   const worstRate = useMemo(() => worstWindow(rateWindows), [rateWindows]);
@@ -1182,7 +1229,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
           {/* Git-бар над композером (только проектный чат на десктопе): ветка/worktree,
               суммарный diff и кнопки «Зафиксировать»/«Опубликовать». Правой панели
               «Изменения» на мобиле нет — отсюда гейт !isMobile. */}
-          {project && !isMobile && <ProjectGitBar project={project} onCommitOwn={handleCommitOwn} />}
+          {project && !isMobile && <ProjectGitBar project={project} session={session} onCommitOwn={handleCommitOwn} />}
           {/* Подъём композера над лентой даёт сама белая карточка (Composer), а не эта
               обёртка: полоса контролов вынесена из карточки, и тень на обёртке рисовала
               серый ореол вокруг пустой области под ней и полоску над полем ввода. */}
@@ -1226,6 +1273,8 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
             onCreateGroup={handleCreateGroup}
             workLoop={workLoopState}
             onToggleWorkLoop={handleToggleWorkLoop}
+            worktreeBranch={session.worktreeBranch}
+            onToggleWorktree={project ? openWorktreeConfirm : undefined}
             chatContext={chatContext}
             promptSuggestion={promptSuggestion}
             rateWindow={worstRate}
@@ -1253,6 +1302,77 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
           onSaved={s => onSessionUpdated?.(s)}
           onClose={() => setShowEdit(false)}
         />
+      )}
+
+      {/* Предупреждение перед сменой дерева: что именно произойдёт с чатом и файлами */}
+      {worktreeConfirm && (
+        <Modal
+          width={480}
+          onClose={() => setWorktreeConfirm(false)}
+          title={session.worktreePath ? 'Вернуть чат в проект?' : 'Перевести чат в отдельное дерево?'}
+          footer={
+            <ModalActions
+              confirmLabel={session.worktreePath ? 'Вернуть' : 'Перевести'}
+              onConfirm={() => {
+                setWorktreeConfirm(false);
+                void handleToggleWorktree(false, session.worktreePath ? undefined : (worktreeBranchInput.trim() || undefined));
+              }}
+              onCancel={() => setWorktreeConfirm(false)}
+            />
+          }
+        >
+          <div style={{ fontSize: 13, color: C.textSecondary, lineHeight: 1.55, display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {session.worktreePath ? (
+              <div>
+                Чат вернётся к файлам проекта, папка дерева будет удалена.
+                Ветка <span style={{ fontFamily: 'monospace' }}>{session.worktreeBranch}</span> с коммитами останется —
+                её можно влить позже.
+              </div>
+            ) : (
+              <>
+                <div>
+                  Чат продолжится в отдельной копии проекта на своей ветке —
+                  основные файлы не изменятся, разговор не прервётся.
+                </div>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                  <span style={{ fontSize: 12, color: C.textMuted }}>Ветка</span>
+                  <input
+                    value={worktreeBranchInput}
+                    onChange={e => setWorktreeBranchInput(e.target.value)}
+                    spellCheck={false}
+                    style={{
+                      height: 32, padding: '0 10px', fontFamily: 'monospace', fontSize: 12.5,
+                      border: `1px solid ${C.border}`, borderRadius: 8, background: C.bgWhite,
+                      color: C.textPrimary, outline: 'none',
+                    }}
+                  />
+                </label>
+              </>
+            )}
+          </div>
+        </Modal>
+      )}
+
+      {/* Выключение worktree при несохранённых правках: подтверждение принудительного удаления */}
+      {worktreeForceConfirm && (
+        <Modal
+          width={460}
+          onClose={() => setWorktreeForceConfirm(false)}
+          title="В дереве есть несохранённые правки"
+          footer={
+            <ModalActions
+              confirmLabel="Удалить с правками"
+              confirmVariant="danger"
+              onConfirm={() => { setWorktreeForceConfirm(false); void handleToggleWorktree(true); }}
+              onCancel={() => setWorktreeForceConfirm(false)}
+            />
+          }
+        >
+          <div style={{ fontSize: 13, color: C.textSecondary, lineHeight: 1.5 }}>
+            Они будут потеряны. Чтобы сохранить — сначала зафиксируй их в git-баре
+            (коммиты ветки {session.worktreeBranch} не пропадут).
+          </div>
+        </Modal>
       )}
     </div>
     </PersonaContext.Provider>

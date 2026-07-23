@@ -103,11 +103,15 @@ const _fileDebounce = new Map<string, ReturnType<typeof setTimeout>>();
 let _lastFocusRefresh = 0;   // троттл refresh по фокусу окна
 
 // Подключение стора для проекта: realtime + первичная загрузка статуса
-export function ensureGit(projectId: string): void {
+// refresh — перечитать статус даже при уже инициализированном сторе (смена
+// worktree-контекста активного чата: закешированный статус — от другого дерева)
+export function ensureGit(projectId: string, refresh = false): void {
   wireRealtime();
   joinUserGroup();
   if (!_state.has(projectId)) {
     _state.set(projectId, { ...EMPTY });
+    void loadGitStatus(projectId);
+  } else if (refresh) {
     void loadGitStatus(projectId);
   }
 }

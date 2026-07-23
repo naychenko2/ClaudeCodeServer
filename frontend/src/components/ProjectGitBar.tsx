@@ -4,8 +4,8 @@
 // фиксации живёт в правой панели «Изменения» (сюда только ведём). Виден только в
 // проектном чате на десктопе; прячется, когда фиксировать и публиковать нечего.
 import { useEffect, useState } from 'react';
-import { GitBranch, GitCommit, CloudUpload } from 'lucide-react';
-import type { Project } from '../types';
+import { GitBranch, FolderGit2, GitCommit, CloudUpload } from 'lucide-react';
+import type { Project, Session } from '../types';
 import { C, FONT, R } from '../lib/design';
 import { basename } from '../lib/paths';
 import { ensureGit, useGitState, loadUnpushedLog, gitPush, workingDiffStat } from '../lib/git';
@@ -13,17 +13,20 @@ import { usePanelStack } from '../pages/workspace/panelStackState';
 import { Modal, ModalActions } from './ui';
 import { ICON_STROKE } from './ui/icons';
 
-export function ProjectGitBar({ project, onCommitOwn }: { project: Project; onCommitOwn: () => void }) {
+export function ProjectGitBar({ project, session, onCommitOwn }: { project: Project; session?: Session; onCommitOwn: () => void }) {
   const st = useGitState(project.id);
   const status = st.status;
   const { layout, toggle } = usePanelStack();
   const [publishConfirm, setPublishConfirm] = useState(false);
+  // Чат в отдельном worktree: запросы стора уже идут в его дерево (gitSessionContext),
+  // перечитываем статус при переключении дерева у активной сессии
+  const worktreeBranch = session?.worktreeBranch ?? null;
 
   // Статус + стек незапушенных (для кнопки «Опубликовать»); realtime держит их свежими
   useEffect(() => {
-    ensureGit(project.id);
+    ensureGit(project.id, true);
     void loadUnpushedLog(project.id);
-  }, [project.id]);
+  }, [project.id, worktreeBranch]);
 
   const diff = workingDiffStat(status);
   const ahead = status?.ahead ?? 0;
@@ -33,7 +36,8 @@ export function ProjectGitBar({ project, onCommitOwn }: { project: Project; onCo
   // Нечего ни фиксировать, ни публиковать — бар не показываем
   if (!status?.isRepo || (diff.files === 0 && !canPublish)) return null;
 
-  const label = status.isWorktree ? basename(project.rootPath) : (status.branch ?? '—');
+  // Метка: ветка worktree чата > имя папки (проект сам открыт как worktree) > ветка
+  const label = worktreeBranch ?? (status.isWorktree ? basename(project.rootPath) : (status.branch ?? '—'));
 
   // Открыть правую панель «Изменения» на скоупе «Не зафиксировано» (working).
   // toggle не закрывает уже открытую панель — гейтим по наличию в раскладке.
@@ -48,10 +52,12 @@ export function ProjectGitBar({ project, onCommitOwn }: { project: Project; onCo
       height: 40, padding: '0 8px 0 12px',
       background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: 12,
     }}>
-      {/* Ветка / имя worktree */}
+      {/* Ветка / имя worktree; папка-иконка — чат в отдельном дереве */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
-        <GitBranch size={15} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} />
-        <span title={label} style={{
+        {worktreeBranch
+          ? <FolderGit2 size={15} strokeWidth={ICON_STROKE} color={C.accent} style={{ flexShrink: 0 }} />
+          : <GitBranch size={15} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} />}
+        <span title={worktreeBranch ? `Отдельное дерево чата: ${label}` : label} style={{
           fontFamily: FONT.mono, fontSize: 12.5, color: C.textSecondary,
           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
         }}>{label}</span>

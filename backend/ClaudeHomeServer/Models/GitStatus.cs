@@ -25,6 +25,10 @@ public record GitFileChange(string Path, string Status, string? OldPath = null,
 // Ветка репозитория. Current — текущая (HEAD); Upstream — отслеживаемая ветка, если есть.
 public record GitBranchInfo(string Name, bool Current, string? Upstream);
 
+// Запись `git worktree list --porcelain`. Path — ХОСТОВЫЙ путь дерева (вывод git в песочнице
+// переводится через IPathMapper.ToHost); Branch — короткое имя ветки (null у detached/bare).
+public record GitWorktreeInfo(string Path, string? Head, string? Branch, bool Locked, bool Prunable);
+
 // Запись истории коммитов для UI (короткий sha + метаданные автора).
 public record GitLogEntry(
     string Sha,

@@ -658,6 +658,85 @@ public sealed class GitService(ILauncherFactory launchers)
     public Task CreateBranchAsync(string? ownerId, string root, string name, string? from, CancellationToken ct = default) =>
         WriteOp(ownerId, root, from is null ? ["checkout", "-b", name] : ["checkout", "-b", name, from], ct: ct);
 
+    // ---------- Worktree ----------
+    // Пути worktree в API — всегда ХОСТОВЫЕ. Git в args принимает пути ЦЕЛЕВОЙ среды
+    // (DockerProcessRunner транслирует только WorkingDirectory, не аргументы), поэтому
+    // абсолютные пути гоняем через IPathMapper (ToRuntime в args, ToHost из вывода list).
+    // Лок — по ГЛАВНОЙ репе (mainRoot): add/remove меняют общий .git/worktrees/.
+
+    // Создать linked worktree на новой ветке от текущего HEAD главной репы.
+    // Checkout большой репы небыстрый — таймаут сетевого класса.
+    public async Task WorktreeAddAsync(string? ownerId, string mainRoot, string worktreePath, string branch, CancellationToken ct = default)
+    {
+        var paths = launchers.ForOwner(ownerId).Paths;
+        var runtimePath = paths.ToRuntime(worktreePath);
+        var sem = LockFor(mainRoot);
+        await sem.WaitAsync(ct);
+        try
+        {
+            await RunOkAsync(ownerId, mainRoot, ["worktree", "add", "-b", branch, runtimePath],
+                timeoutMs: NetworkTimeoutMs, ct: ct);
+        }
+        finally { sem.Release(); }
+    }
+
+    public async Task<IReadOnlyList<GitWorktreeInfo>> WorktreeListAsync(string? ownerId, string mainRoot, CancellationToken ct = default)
+    {
+        if (!IsGitRepo(mainRoot)) return [];
+        var r = await RunAsync(ownerId, mainRoot, ["worktree", "list", "--porcelain"], ct: ct);
+        if (!r.Ok) return [];
+
+        var paths = launchers.ForOwner(ownerId).Paths;
+        var list = new List<GitWorktreeInfo>();
+        // Записи разделены пустой строкой; поля — токен-префиксы в начале строки
+        foreach (var block in r.Stdout.Replace("\r\n", "\n").Split("\n\n", StringSplitOptions.RemoveEmptyEntries))
+        {
+            string? path = null, head = null, branch = null;
+            bool locked = false, prunable = false;
+            foreach (var line in block.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (line.StartsWith("worktree ")) path = line["worktree ".Length..];
+                else if (line.StartsWith("HEAD ")) head = line["HEAD ".Length..];
+                else if (line.StartsWith("branch ")) branch = line["branch ".Length..].Replace("refs/heads/", "");
+                else if (line == "locked" || line.StartsWith("locked ")) locked = true;
+                else if (line == "prunable" || line.StartsWith("prunable ")) prunable = true;
+            }
+            if (path is null) continue;
+            // Вывод git — в путях целевой среды; наружу отдаём хостовые
+            string hostPath;
+            try { hostPath = paths.ToHost(path); }
+            catch { hostPath = path; /* путь вне маппинга (главная репа в контейнере) — как есть */ }
+            list.Add(new GitWorktreeInfo(hostPath, head, branch, locked, prunable));
+        }
+        return list;
+    }
+
+    // Удалить worktree. Без force git откажет при незакоммиченных изменениях в дереве —
+    // вызывающий гейтит подтверждением. prune подчищает запись, если папку снесли руками.
+    public async Task WorktreeRemoveAsync(string? ownerId, string mainRoot, string worktreePath, bool force = false, CancellationToken ct = default)
+    {
+        var paths = launchers.ForOwner(ownerId).Paths;
+        var runtimePath = paths.ToRuntime(worktreePath);
+        var sem = LockFor(mainRoot);
+        await sem.WaitAsync(ct);
+        try
+        {
+            var args = force
+                ? new[] { "worktree", "remove", "--force", runtimePath }
+                : new[] { "worktree", "remove", runtimePath };
+            var r = await RunAsync(ownerId, mainRoot, args, timeoutMs: NetworkTimeoutMs, ct: ct);
+            if (!r.Ok)
+            {
+                // Папка уже снесена руками → git видит «missing but locked/registered»: prune решает
+                if (!Directory.Exists(worktreePath))
+                    await RunAsync(ownerId, mainRoot, ["worktree", "prune"], ct: ct);
+                else
+                    throw new GitCommandException(FirstLine(r.Stderr) ?? "Не удалось удалить worktree");
+            }
+        }
+        finally { sem.Release(); }
+    }
+
     private async Task WriteOp(string? ownerId, string root, IReadOnlyList<string> args, int timeoutMs = DefaultTimeoutMs, CancellationToken ct = default)
     {
         var sem = LockFor(root);

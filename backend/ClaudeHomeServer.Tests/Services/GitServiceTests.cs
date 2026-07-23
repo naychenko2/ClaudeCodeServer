@@ -202,4 +202,91 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
         var act = () => _git.PushAsync(null, _repo);
         await act.Should().ThrowAsync<GitCommandException>();
     }
+
+    // ---------- Worktree ----------
+
+    private string WtPath(string name) => Path.Combine(Path.GetTempPath(), "gitsvc_wt_" + name + "_" + Guid.NewGuid().ToString("N"));
+
+    [Fact]
+    public async Task Worktree_Add_List_Status_Remove()
+    {
+        var wt = WtPath("basic");
+        await _git.WorktreeAddAsync(null, _repo, wt, "wt/тест-фича");
+
+        Directory.Exists(wt).Should().BeTrue();
+        File.Exists(Path.Combine(wt, ".git")).Should().BeTrue("в linked worktree .git — файл-ссылка");
+
+        var list = await _git.WorktreeListAsync(null, _repo);
+        list.Should().Contain(w => w.Branch == "wt/тест-фича");
+
+        // Статус ИЗ worktree: своя ветка + признак IsWorktree
+        var st = await _git.StatusAsync(null, wt);
+        st.IsRepo.Should().BeTrue();
+        st.IsWorktree.Should().BeTrue();
+        st.Branch.Should().Be("wt/тест-фича");
+
+        await _git.WorktreeRemoveAsync(null, _repo, wt);
+        Directory.Exists(wt).Should().BeFalse();
+        (await _git.WorktreeListAsync(null, _repo)).Should().NotContain(w => w.Branch == "wt/тест-фича");
+        // Ветка переживает удаление дерева — коммиты не теряются
+        (await _git.BranchesAsync(null, _repo)).Should().Contain(b => b.Name == "wt/тест-фича");
+    }
+
+    [Fact]
+    public async Task Worktree_Remove_Гейтит_Грязное_Дерево_Force_Пробивает()
+    {
+        var wt = WtPath("dirty");
+        await _git.WorktreeAddAsync(null, _repo, wt, "wt/dirty");
+        await File.WriteAllTextAsync(Path.Combine(wt, "новый.txt"), "несохранённое\n");
+
+        var act = () => _git.WorktreeRemoveAsync(null, _repo, wt);
+        await act.Should().ThrowAsync<GitCommandException>("без force git отказывает при незакоммиченном");
+
+        await _git.WorktreeRemoveAsync(null, _repo, wt, force: true);
+        Directory.Exists(wt).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Worktree_Remove_Прунит_Снесённую_Руками_Папку()
+    {
+        var wt = WtPath("orphan");
+        await _git.WorktreeAddAsync(null, _repo, wt, "wt/orphan");
+        Directory.Delete(wt, recursive: true); // «руками» мимо git
+
+        // Не кидает: папки нет — запись подчищается prune
+        await _git.WorktreeRemoveAsync(null, _repo, wt);
+        (await _git.WorktreeListAsync(null, _repo)).Should().NotContain(w => w.Branch == "wt/orphan");
+    }
+
+    [Fact]
+    public async Task Worktree_Коммит_В_Дереве_Не_Трогает_Главную_Репу()
+    {
+        var wt = WtPath("commit");
+        await _git.WorktreeAddAsync(null, _repo, wt, "wt/commit");
+        await RawGitIn(wt, "config", "user.email", "test@test");
+        await RawGitIn(wt, "config", "user.name", "Тест");
+
+        await File.WriteAllTextAsync(Path.Combine(wt, "wt-файл.txt"), "изменение из worktree\n");
+        await _git.StageAllAsync(null, wt);
+        await _git.CommitAsync(null, wt, "коммит из worktree");
+
+        // Главная репа чиста и на своей ветке, файла из worktree в ней нет
+        var main = await _git.StatusAsync(null, _repo);
+        main.Branch.Should().Be("main");
+        main.Staged.Should().BeEmpty();
+        main.Unstaged.Should().BeEmpty();
+        main.Untracked.Should().BeEmpty();
+        File.Exists(Path.Combine(_repo, "wt-файл.txt")).Should().BeFalse();
+
+        await _git.WorktreeRemoveAsync(null, _repo, wt);
+    }
+
+    // Прямой git в произвольной папке (конфиг тестового worktree)
+    private static async Task RawGitIn(string dir, params string[] args)
+    {
+        var psi = new ProcessStartInfo("git") { WorkingDirectory = dir, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
+        foreach (var a in args) psi.ArgumentList.Add(a);
+        using var p = Process.Start(psi)!;
+        await p.WaitForExitAsync();
+    }
 }

@@ -7,7 +7,7 @@ import { C, FONT, R } from '../../lib/design';
 import { useKnowledge, useKnowledgeConfigured, ensureKnowledgeLoaded, bumpKnowledge } from '../../lib/knowledge';
 import { api } from '../../lib/api';
 import { parseHash, navPush, navReplace, getNav, type NavSnapshot } from '../../lib/nav';
-import { SidebarSplitter, IconButton, ConfirmDialog } from '../../components/ui';
+import { IslandScaffold, IconButton, ConfirmDialog } from '../../components/ui';
 import { ICON_SIZE } from '../../components/ui/icons';
 import { useSidebarDrag } from '../../lib/sidebarWidth';
 import { useIsMobile } from '../../lib/breakpoints';
@@ -162,30 +162,30 @@ export function KnowledgePage({ auth, onLogout, onHubTab }: {
       ? <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: C.bgPanel }}>{sidebar}</div>
       : <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>{centerPane}</div>
   ) : (
-    <div style={{ height: '100%', display: 'flex', position: 'relative' }}>
-      {sidebarMode === 'pinned' && (
+    // Десктоп: остров-сайдбар + ресайз-зазор | центральный остров (Islands)
+    <IslandScaffold
+      sidebarOpen={sidebarMode === 'pinned'}
+      sidebar={sidebar}
+      sidebarWidth={listWidth}
+      sidebarDragging={listDragging}
+      onSidebarDrag={startListDrag}
+      onSidebarCollapse={() => setSidebarMode('collapsed')}
+      center={
         <>
-          <div style={{ width: listWidth, flex: 'none', background: C.bgPanel, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-            {sidebar}
-          </div>
-          <SidebarSplitter active={listDragging} onMouseDown={startListDrag} onCollapse={() => setSidebarMode('collapsed')} />
+          {sidebarMode === 'collapsed' && (
+            <div style={{
+              flex: 'none', display: 'flex', alignItems: 'center', padding: '0 8px', height: 48,
+              borderBottom: `1px solid ${C.divider}`,
+            }}>
+              <IconButton onClick={() => setSidebarMode('pinned')} title="Открыть панель" size="md" variant="soft">
+                <MenuIcon size={ICON_SIZE.sm} strokeWidth={2} />
+              </IconButton>
+            </div>
+          )}
+          <div style={{ flex: 1, minWidth: 0, minHeight: 0 }}>{centerPane}</div>
         </>
-      )}
-
-      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-        {sidebarMode === 'collapsed' && (
-          <div style={{
-            flex: 'none', display: 'flex', alignItems: 'center', padding: '0 8px', height: 48,
-            borderBottom: `1px solid ${C.divider}`,
-          }}>
-            <IconButton onClick={() => setSidebarMode('pinned')} title="Открыть панель" size="md" variant="soft">
-              <MenuIcon size={ICON_SIZE.sm} strokeWidth={2} />
-            </IconButton>
-          </div>
-        )}
-        <div style={{ flex: 1, minWidth: 0, minHeight: 0 }}>{centerPane}</div>
-      </div>
-    </div>
+      }
+    />
   );
 
   return (

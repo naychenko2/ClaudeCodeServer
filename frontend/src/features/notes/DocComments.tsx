@@ -69,6 +69,8 @@ interface Props {
     existingTitles?: Set<string>;
     resolveNote?: (name: string, anchor?: string) => Promise<ResolvedNote | null>;
     embedSource?: string;
+    // Hero-режим NoteView: заголовок рендерит шапка, ведущий H1 контента глушится
+    hideLeadingH1?: boolean;
   };
   // Счётчики комментариев наверх (чип в тулбаре файла)
   onCounts?: (total: number, open: number) => void;
@@ -560,7 +562,8 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
         )}
         <MarkdownViewer content={renderBody} blockPos={enabled}
           onWikilink={viewer?.onWikilink} existingTitles={viewer?.existingTitles}
-          resolveNote={viewer?.resolveNote} embedSource={viewer?.embedSource} />
+          resolveNote={viewer?.resolveNote} embedSource={viewer?.embedSource}
+          hideLeadingH1={viewer?.hideLeadingH1} />
         {below && panel && (
           <div style={{ marginTop: 20, borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>{panel}</div>
         )}

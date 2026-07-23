@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Menu as MenuIcon, MessageCircle } from 'lucide-react';
+import { Menu as MenuIcon, MessageCircle, Plus } from 'lucide-react';
 import type { AuthState, NoteDetail, NoteSemanticHit, NoteSummary } from '../../types';
 import type { HubTabValue } from '../../components/HubTabs';
 import { HubHeader } from '../../components/HubHeader';
 import { PillSwitch } from '../../components/Toolbar';
 import { NewNoteDialog } from './NewNoteDialog';
-import { C, FONT, R } from '../../lib/design';
+import { C, FONT, ISLAND, R, CHAT_MAX_W } from '../../lib/design';
 import { api } from '../../lib/api';
 import { useNotes, ensureNotesLoaded, existingTitleSet, bumpNotes } from '../../lib/notes';
 import { useOnline } from '../../hooks/useOnline';
@@ -17,10 +17,9 @@ import { NoteView } from './NoteView';
 import { NotesGraph, type GraphStats } from './NotesGraph';
 import { GraphSettingsBody } from './graph/GraphSettingsBody';
 import { useGraphSettings } from './graph/graphSettings';
-import { EmptyState } from '../../components/EmptyState';
-import { SidebarSplitter, IconButton, ConfirmDialog } from '../../components/ui';
+import { Button, IslandScaffold, IconButton, ConfirmDialog } from '../../components/ui';
 import { ICON_SIZE } from '../../components/ui/icons';
-import { CollapseGroup, IconSearch, IconPlus, IconNotes, IconCalendarDay, SourceDot } from './shared';
+import { CollapseGroup, IconSearch, IconPlus, IconCalendarDay, SourceDot } from './shared';
 import { useSidebarDrag } from '../../lib/sidebarWidth';
 import { useIsMobile, useWindowWidth } from '../../lib/breakpoints';
 import { FLAGS, useFeature } from '../../lib/featureFlags';
@@ -417,22 +416,45 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
     </>
   );
 
-  // Центральная зона: заметка/пустое состояние или граф
+  // Центральная зона: заметка/пустое состояние или граф. Десктоп (hero-стиль
+  // «как календарь и чаты»): центр без общего острова — заметка сама рисует
+  // заголовок на холсте + тело-остров; граф оборачивается в остров здесь.
   const centerPane = mode === 'graph'
-    ? <NotesGraph selectedId={selectedId} onSelectNode={id => { setMode('notes'); selectNote(id); }}
-        maxNodes={isMobile ? 40 : undefined}
-        settings={graphSettings} onSettingsChange={setGraphSettings}
-        hidePanel={false} onStats={setGraphStats} />
+    ? <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden',
+        ...(!isMobile ? { background: C.bgMain, border: `1px solid ${ISLAND.border}`, borderRadius: ISLAND.radius, boxShadow: ISLAND.shadow } : {}) }}>
+        <NotesGraph selectedId={selectedId} onSelectNode={id => { setMode('notes'); selectNote(id); }}
+          maxNodes={isMobile ? 40 : undefined}
+          settings={graphSettings} onSettingsChange={setGraphSettings}
+          hidePanel={false} onStats={setGraphStats} />
+      </div>
     : selectedId
       ? <NoteView key={selectedId} noteId={selectedId} existingTitles={existingTitles} onWikilink={onWikilink}
           onAskClaude={askClaude} onSelectNote={selectNote} onTag={setQuery} isMobile={isMobile}
           connectionsBelow={connectionsBelow}
           onBack={isMobile ? clearNote : undefined}
+          hero={!isMobile}
           onDeleted={clearNote} />
-      : <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <EmptyState icon={<IconNotes />} title="Заметки"
-            subtitle={notes.length ? 'Выбери заметку слева или создай новую' : 'Создай первую заметку или попроси ассистента законспектировать разговор'}
-            action={<button onClick={() => setNewDialog({})} style={newBtn}><IconPlus />Новая заметка</button>} />
+      // Приветствие раздела — в стиле хаба «Персон»: заголовок как у Календаря,
+      // кнопка создания — справа от него, общим Button (как «Проект» и «Задача»)
+      : <div style={{ height: '100%', overflowY: 'auto' }}>
+          {/* Ширина колонки — как у центра раздела «Проекты» (CHAT_MAX_W) */}
+          <div style={{ maxWidth: CHAT_MAX_W, margin: '0 auto', padding: '28px 32px 60px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+              <div style={{ flex: 1, minWidth: 0, fontFamily: FONT.serif, fontSize: 28, fontWeight: 500, color: C.textHeading, lineHeight: 1.28, letterSpacing: '-0.01em' }}>
+                Заметки
+              </div>
+              <Button variant="primary" size="md" glow onClick={() => setNewDialog({})}
+                leftIcon={<Plus size={ICON_SIZE.sm} strokeWidth={2} />}>
+                Заметка
+              </Button>
+            </div>
+            <div style={{ fontSize: 14, color: C.textMuted, lineHeight: 1.65, maxWidth: 560 }}>
+              Записывай мысли, планы и итоги разговоров. Заметки можно связывать между собой,
+              находить поиском и смотреть на карте связей. {notes.length
+                ? 'Выбери заметку слева или создай новую.'
+                : 'Создай первую — или попроси ассистента законспектировать разговор прямо в заметку.'}
+            </div>
+          </div>
         </div>;
 
   const body = isMobile ? (
@@ -447,30 +469,30 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
         // Возврат к списку — стрелкой/заголовком в тулбаре заметки (onBack), как у файлов
         : <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>{centerPane}</div>
   ) : (
-    // Десктоп: сайдбар (pinned) + сплиттер с кнопкой сворачивания | центр
-    <div style={{ height: '100%', display: 'flex', position: 'relative' }}>
-      {/* Pinned: в потоке + сплиттер с всплывающей кнопкой «свернуть» */}
-      {sidebarMode === 'pinned' && (
+    // Десктоп: остров-сайдбар + ресайз-зазор | центр на холсте (hero-стиль:
+    // заметка сама рисует заголовок на холсте + тело-остров, граф — остров)
+    <IslandScaffold
+      sidebarOpen={sidebarMode === 'pinned'}
+      sidebar={sidebar}
+      sidebarWidth={listWidth}
+      sidebarDragging={listDragging}
+      onSidebarDrag={startListDrag}
+      onSidebarCollapse={() => setSidebarMode('collapsed')}
+      centerBare
+      center={
         <>
-          <div style={{ width: listWidth, flex: 'none', background: C.bgPanel, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-            {sidebar}
-          </div>
-          <SidebarSplitter active={listDragging} onMouseDown={startListDrag} onCollapse={() => setSidebarMode('collapsed')} />
+          {/* В свёрнутом режиме — тонкая шапка с гамбургером «открыть панель» */}
+          {sidebarMode === 'collapsed' && (
+            <div style={{ flex: 'none', display: 'flex', alignItems: 'center', padding: '0 8px', height: 48, borderBottom: `1px solid ${C.divider}` }}>
+              <IconButton onClick={() => setSidebarMode('pinned')} title="Открыть панель" size="md" variant="soft">
+                <MenuIcon size={ICON_SIZE.sm} strokeWidth={2} />
+              </IconButton>
+            </div>
+          )}
+          <div style={{ flex: 1, minWidth: 0, minHeight: 0 }}>{centerPane}</div>
         </>
-      )}
-
-      {/* Центр: в свёрнутом режиме — тонкая шапка с гамбургером «открыть панель» (в поток) */}
-      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-        {sidebarMode === 'collapsed' && (
-          <div style={{ flex: 'none', display: 'flex', alignItems: 'center', padding: '0 8px', height: 48, borderBottom: `1px solid ${C.divider}` }}>
-            <IconButton onClick={() => setSidebarMode('pinned')} title="Открыть панель" size="md" variant="soft">
-              <MenuIcon size={ICON_SIZE.sm} strokeWidth={2} />
-            </IconButton>
-          </div>
-        )}
-        <div style={{ flex: 1, minWidth: 0, minHeight: 0 }}>{centerPane}</div>
-      </div>
-    </div>
+      }
+    />
   );
 
   return (

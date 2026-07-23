@@ -32,6 +32,10 @@ interface Props {
   embedSource?: string;
   // Глубина вложенности embed (защита от циклов: на глубине ≥1 embed → просто ссылка)
   embedDepth?: number;
+  // Скрыть H1-блок в самом начале документа (offset 0): заголовок рендерит
+  // потребитель (hero-шапка заметки), дубль не нужен. Контент НЕ режется —
+  // оффсеты остальных блоков не меняются, якоря комментариев продолжают жить.
+  hideLeadingH1?: boolean;
 }
 
 const mono = FONT.mono;
@@ -307,7 +311,7 @@ const CUSTOM_SCHEMES = ['wikilink:', 'noteembed:', 'noteatt:'];
 
 interface HoverState { x: number; y: number; data: ResolvedNote }
 
-export function MarkdownViewer({ content, blockPos, onWikilink, existingTitles, resolveNote, embedSource, embedDepth = 0 }: Props) {
+export function MarkdownViewer({ content, blockPos, onWikilink, existingTitles, resolveNote, embedSource, embedDepth = 0, hideLeadingH1 }: Props) {
   // Режим заметок: включаем рендер [[wikilinks]]/![[embeds]] и внешние ссылки синим
   // (info), чтобы три класса ссылок различались (живая accent / призрак / внешняя).
   const notesMode = onWikilink != null;
@@ -386,11 +390,24 @@ export function MarkdownViewer({ content, blockPos, onWikilink, existingTitles, 
       }
     : components;
 
+  // hideLeadingH1: глушим ТОЛЬКО H1-узел с позицией 0 (самое начало документа) —
+  // это дубль заголовка, который рендерит hero-шапка; заголовки ниже по тексту живут
+  const withHidden: Components = hideLeadingH1
+    ? {
+        ...merged,
+        h1: props => {
+          const node = (props as { node?: { position?: { start?: { offset?: number } } } }).node;
+          if (node?.position?.start?.offset === 0) return null;
+          return (merged.h1 as (p: unknown) => ReactNode)(props);
+        },
+      }
+    : merged;
+
   const finalComponents = useMemo(
-    () => (blockPos ? withBlockPos(merged, toRaw) : merged),
+    () => (blockPos ? withBlockPos(withHidden, toRaw) : withHidden),
     // merged пересобирается каждый рендер — зависимость от стабильных первопричин
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [blockPos, toRaw, notesMode, existingTitles, resolveNote, embedSource]);
+    [blockPos, toRaw, notesMode, existingTitles, resolveNote, embedSource, hideLeadingH1]);
 
   return (
     <div style={{ fontFamily: FONT.sans, fontSize: 14, lineHeight: 1.7, color: C.textHeading, width: '100%' }}>

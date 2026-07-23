@@ -3,12 +3,12 @@ import { Check, Copy, FileText, MessageCircle, Undo2, X } from 'lucide-react';
 import type { NoteDetail, NoteReply, Persona } from '../../types';
 import { api } from '../../lib/api';
 import { bumpNotes, useNotesVersion } from '../../lib/notes';
-import { C, FONT, R, TB } from '../../lib/design';
+import { C, FONT, ISLAND, R, TB } from '../../lib/design';
 import { lazy, Suspense } from 'react';
 import { MarkdownViewer, stripFrontmatter } from '../../components/MarkdownViewer';
 // CodeMirror тяжёлый — редактор грузим лениво, только при входе в правку
 const NoteEditor = lazy(() => import('./NoteEditor').then(m => ({ default: m.NoteEditor })));
-import { BackButton, ConfirmDialog, IconButton, Splitter, Modal, WaitingIndicator } from '../../components/ui';
+import { BackButton, ConfirmDialog, IconButton, Splitter, IslandSplitter, Modal, WaitingIndicator } from '../../components/ui';
 import { useAiJob, runAiJob, patchAiJobResult, resetAiJob } from '../../lib/aiJobStore';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { tbBtnPrimary, tbBtnGhost } from '../../components/Toolbar';
@@ -31,7 +31,7 @@ import {
 
 // Просмотр и правка одной заметки; связи (backlinks/исходящие/упоминания/граф) —
 // в правом сайдбаре на десктопе, снизу на мобильном.
-export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSelectNote, onDeleted, onTag, isMobile, connectionsBelow, onBack, extraToolbar }: {
+export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSelectNote, onDeleted, onTag, isMobile, connectionsBelow, onBack, extraToolbar, hero }: {
   noteId: string;
   existingTitles: Set<string>;
   onWikilink: (target: string) => void;
@@ -47,6 +47,9 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
   onBack?: () => void;
   // Дополнительные кнопки справа в тулбаре (закрыть/fullscreen при встраивании в файлы)
   extraToolbar?: React.ReactNode;
+  // Стиль Islands (раздел «Заметки», десктоп): шапка — заголовок раздела прямо
+  // на холсте (как в календаре/чатах), тело заметки — карточка-остров
+  hero?: boolean;
 }) {
   const version = useNotesVersion();
   const online = useOnline();
@@ -406,12 +409,18 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
 
   return (
     <div ref={rootRef} style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      {/* Тулбар заметки — единый стиль тулбаров приложения (как FileViewer) */}
+      {/* Тулбар заметки — единый стиль тулбаров приложения (как FileViewer);
+          в hero-режиме — заголовок раздела прямо на холсте (без фона и границы),
+          тело заметки ниже отделяется собственной карточкой-островом */}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 10, flex: 'none',
-        minHeight: isMobile ? TB.heightMobile : TB.heightDesktop,
+        // Hero: тулбар без заголовка — строка компактнее, чтобы заметка
+        // начиналась выше (меньше пустого места над заголовком)
+        minHeight: isMobile ? TB.heightMobile : hero ? 40 : TB.heightDesktop,
         padding: `4px ${isMobile ? TB.padXMobile : TB.padX}px`,
-        boxSizing: 'border-box', background: TB.bg, borderBottom: TB.borderBottom,
+        boxSizing: 'border-box',
+        background: hero ? 'transparent' : TB.bg,
+        borderBottom: hero ? 'none' : TB.borderBottom,
       }}>
         {/* Мобайл: стрелка «назад» у заголовка — как у файлов/чатов */}
         {onBack && !editing && <BackButton onClick={onBack} title="К списку" style={{ height: 32 }} />}
@@ -429,10 +438,14 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
                 borderRadius: R.md, padding: '5px 10px',
               }}
             />
-          : <h1 title={note.title} onClick={onBack}
-              style={{ flex: 1, minWidth: 0, margin: 0, fontFamily: FONT.serif, fontSize: 16, fontWeight: 700, color: C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', cursor: onBack ? 'pointer' : 'default' }}>
-              {note.title}
-            </h1>}
+          : hero
+            // Hero: заголовок НЕ в тулбаре — он рендерится крупно над контентом
+            // (тулбар — только мета и действия), иначе задваивался с H1 заметки
+            ? <div style={{ flex: 1, minWidth: 0 }} />
+            : <h1 title={note.title} onClick={onBack}
+                style={{ flex: 1, minWidth: 0, margin: 0, fontFamily: FONT.serif, fontSize: 16, fontWeight: 700, color: C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', cursor: onBack ? 'pointer' : 'default' }}>
+                {note.title}
+              </h1>}
         {!isMobile && <SourceBadge source={note.source} label={note.sourceLabel} />}
         {!editing && !isMobile && <span style={{ fontSize: 11, color: C.textMuted, flex: 'none' }}>изменено {relTime(note.updatedAt)}</span>}
         {!editing && note.sourceSessionId && (
@@ -474,7 +487,8 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
         </div>
       </div>
 
-      {/* Тело: контент + сайдбар связей (десктоп) */}
+      {/* Тело: контент + сайдбар связей (десктоп). В hero-режиме контент живёт
+          прямо на холсте (без рамки), островом оформлен только сайдбар связей */}
       <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden' }}>
       {editing ? (
         /* Правка — редактор на всю контентную зону (как правка файла); кнопки — в тулбаре */
@@ -486,6 +500,13 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
         </div>
       ) : (
       <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', padding: '4px 18px 24px' }}>
+        {/* Hero: заголовок заметки — крупно над тегами (в стиле markdown-H1);
+            ведущий H1 самого контента глушится (hideLeadingH1), чтобы не дублировался */}
+        {!editing && hero && (
+          <h1 style={{ fontFamily: FONT.serif, fontSize: 28, fontWeight: 500, margin: '0 0 8px', color: C.textHeading, letterSpacing: '-0.01em', lineHeight: 1.25 }}>
+            {note.title}
+          </h1>
+        )}
         {!editing && (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12, alignItems: 'center' }}>
             {note.tags.map(t => (
@@ -693,7 +714,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
           {ann ? (
             // Просмотр без frontmatter — служебные поля (annotates/anchor_*) не текст
             <MarkdownViewer content={stripFrontmatter(note.content).body} existingTitles={existingTitles} onWikilink={onWikilink}
-              resolveNote={resolveNote} embedSource={note.source} />
+              resolveNote={resolveNote} embedSource={note.source} hideLeadingH1={hero} />
           ) : (
             // Обычная заметка — тоже документ: выделение → комментарий, панель снизу
             // (правая колонка занята связями). Заметки-комментарии не аннотируются
@@ -707,7 +728,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
               panelTarget={!isMobile && !connectionsBelow ? panelEl : null}
               deferPanel={!isMobile && !connectionsBelow}
               onCounts={total => setCommentTotal(total)}
-              viewer={{ onWikilink, existingTitles, resolveNote, embedSource: note.source }}
+              viewer={{ onWikilink, existingTitles, resolveNote, embedSource: note.source, hideLeadingH1: hero }}
             />
           )}
         </div>
@@ -725,13 +746,17 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
 
       {/* Десктоп: сайдбар связей справа — стиль как при просмотре заметки в файлах
           (прозрачный фон, тонкая линия-сплиттер), ширина перетаскивается.
+          В hero-режиме связи — карточка-остров, ресайз живёт в прозрачном зазоре.
           На планшете/узком экране (connectionsBelow) связи уходят под контент. */}
       {!editing && !isMobile && !connectionsBelow && (
         <>
-          <Splitter active={connDragging} onMouseDown={startConnDrag} />
+          {hero
+            ? <IslandSplitter active={connDragging} onMouseDown={startConnDrag} />
+            : <Splitter active={connDragging} onMouseDown={startConnDrag} />}
           <aside style={{
             width: connWidth, flex: 'none', display: 'flex', flexDirection: 'column',
             overflow: 'hidden', boxSizing: 'border-box',
+            ...(hero ? { background: ISLAND.bg, border: `1px solid ${ISLAND.border}`, borderRadius: ISLAND.radius, boxShadow: ISLAND.shadow } : {}),
           }}>
             {/* Вкладки показываем только когда у документа есть комментарии — иначе просто связи */}
             {commentTotal > 0 && (

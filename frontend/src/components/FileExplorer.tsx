@@ -193,7 +193,8 @@ function hexToRgba(hex: string, a: number): string {
   return `rgba(${r}, ${g}, ${b}, ${a})`;
 }
 
-function getExtMeta(name: string) {
+// Экспорт — переиспользуется в GitChangesRail (тег расширения перед именем файла)
+export function getExtMeta(name: string) {
   const ext = name.split('.').pop()?.toLowerCase() ?? '';
   const m = EXT_META[ext] ?? { bg: '#EFEAE0', fg: '#9A8F7E', label: ext.slice(0, 3) || '•' };
   // В тёмной теме светлый пастельный фон плитки заменяем на тёмный тонированный

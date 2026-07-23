@@ -373,6 +373,9 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   // а не перезапускаться при смене режима или пересоздании колбэка родителя
   const onPendingSentRef = useRef(onPendingMessageSent);
   useEffect(() => { onPendingSentRef.current = onPendingMessageSent; });
+  // Реагируем и на смену pendingMessage: в УЖЕ открытом чате (isJoined) новое отложенное
+  // сообщение иначе не отправится (эффект бы не перезапустился). Guard pendingRef — от
+  // повторов (после отправки ref=undefined, а сброс pendingMessage родителем сюда же вернёт no-op)
   useEffect(() => {
     if (isJoined && pendingRef.current) {
       const msg = pendingRef.current;
@@ -380,7 +383,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       onPendingSentRef.current?.();
       send(msg, [], modeRef.current);
     }
-  }, [isJoined, send]);
+  }, [isJoined, send, pendingMessage]);
 
   const handleSend = async (text: string, _attachments?: string[], opts?: { auto?: boolean }) => {
     // Авто-обвязка «Обсудить с командой» вложений не несёт — берём только при ручной отправке

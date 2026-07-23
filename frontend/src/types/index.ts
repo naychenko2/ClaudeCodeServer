@@ -319,6 +319,9 @@ export interface GitFileChange {
   path: string;
   status: string;
   oldPath?: string | null;
+  // Статистика строк (git numstat): +added / −deleted. null — бинарный/не считалось.
+  added?: number | null;
+  deleted?: number | null;
 }
 
 // Статус рабочего дерева проекта (GET /api/projects/{id}/git/status)
@@ -339,6 +342,15 @@ export interface GitBranchInfo {
   name: string;
   current: boolean;
   upstream: string | null;
+}
+
+// Настройка промпта AI-описания коммита (GET/PUT /api/projects/{id}/git/commit-prompt)
+export interface GitCommitPromptInfo {
+  global: string | null;          // глобальный (per-user) промпт
+  projectOverride: string | null; // проектный override
+  useProject: boolean;            // активен ли проектный override
+  effective: string;              // что реально применится к генерации
+  default: string;                // дефолтные правила стиля (для плейсхолдера)
 }
 
 // Запись истории коммитов (GET /api/projects/{id}/git/log)

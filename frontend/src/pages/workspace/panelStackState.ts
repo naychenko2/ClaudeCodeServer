@@ -9,7 +9,7 @@ import { useCallback, useSyncExternalStore } from 'react';
 // Набор рабочих панелей рельсы (порядок = порядок иконок). Артефактные категории
 // сессии из рельсы убраны (живут в старой панели «Артефакты сессии») — остался
 // только План; остальное — инструменты проекта, как в десктопном Claude Code.
-export const PANEL_KEYS = ['plan', 'files', 'tasks', 'team', 'terminal', 'preview'] as const;
+export const PANEL_KEYS = ['plan', 'files', 'changes', 'tasks', 'team', 'terminal', 'preview'] as const;
 export type PanelKey = typeof PANEL_KEYS[number];
 
 export const PANEL_MIN_H = 120;  // минимальная высота панельки, px (шапка 40 + контент)

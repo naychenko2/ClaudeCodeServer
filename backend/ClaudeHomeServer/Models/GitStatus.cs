@@ -15,7 +15,9 @@ public record GitStatusDto(
 
 // Одно изменение файла. Status — односимвольный код git (M/A/D/R/C/?);
 // OldPath заполняется только для переименований (R).
-public record GitFileChange(string Path, string Status, string? OldPath = null);
+// Added/Deleted — статистика строк (git numstat); null = бинарный файл либо статистика не считалась.
+public record GitFileChange(string Path, string Status, string? OldPath = null,
+                            int? Added = null, int? Deleted = null);
 
 // Ветка репозитория. Current — текущая (HEAD); Upstream — отслеживаемая ветка, если есть.
 public record GitBranchInfo(string Name, bool Current, string? Upstream);

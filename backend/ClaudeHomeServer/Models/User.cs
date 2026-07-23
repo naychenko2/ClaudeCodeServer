@@ -16,6 +16,9 @@ public class User
     public Dictionary<string, bool>? FeatureFlags { get; set; }
     // Per-user пороги индикатора заполнения контекста (проценты); null — дефолты фронта
     public ContextThresholds? ContextThresholds { get; set; }
+    // Глобальный (per-user) промпт AI-генерации сообщения коммита; null/пусто — дефолт.
+    // Проект может переопределить своим Project.CommitPromptOverride.
+    public string? GitCommitPrompt { get; set; }
     // IANA-таймзона пользователя (например "Europe/Moscow") — фронт присылает при старте;
     // нужна планировщику для перевода локальных сроков задач в UTC. null — считаем UTC
     public string? TimeZone { get; set; }

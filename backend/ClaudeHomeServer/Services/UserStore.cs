@@ -284,6 +284,23 @@ public class UserStore
     }
 
     /// <summary>
+    /// Сохраняет глобальный (per-user) промпт AI-генерации сообщения коммита.
+    /// Пустая строка → null (сброс к дефолту). Возвращает false если пользователь не найден.
+    /// </summary>
+    public bool SetGitCommitPrompt(string id, string? prompt)
+    {
+        lock (_lock)
+        {
+            var user = _users.FirstOrDefault(u => u.Id == id);
+            if (user is null) return false;
+
+            user.GitCommitPrompt = string.IsNullOrWhiteSpace(prompt) ? null : prompt;
+            Save();
+            return true;
+        }
+    }
+
+    /// <summary>
     /// Устанавливает per-user пороги индикатора контекста (null — сброс к дефолтам).
     /// Возвращает false если пользователь не найден.
     /// </summary>

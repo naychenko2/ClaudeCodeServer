@@ -60,6 +60,7 @@ interface Props {
   fileFullscreen: boolean;
   onEnterFullscreen: () => void;
   openCommitSha: string | null;
+  openCommitFile?: string | null;
   onCloseCommit: () => void;
   onOpenFileFromChat: (path: string) => void;
   onCloseFile: () => void;
@@ -275,7 +276,7 @@ export function DesktopWorkspace(p: Props) {
       {/* === Центр: коммит → задача → персона → доска → файл (split/fullscreen) → чат === */}
       {!p.openFile && p.openCommitSha && (
         <div style={{ flex: 1, overflow: 'hidden', display: 'flex' }}>
-          <GitCommitView project={p.project} sha={p.openCommitSha} onClose={p.onCloseCommit} />
+          <GitCommitView project={p.project} sha={p.openCommitSha} initialPath={p.openCommitFile} onClose={p.onCloseCommit} />
         </div>
       )}
 

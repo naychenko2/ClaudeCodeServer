@@ -1,4 +1,4 @@
-import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitBlameLine, GitRemoteInfo } from '../types';
+import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo } from '../types';
 import { request } from './offline';
 
 export type { WorkflowAgentInfo, WorkflowAgentBlock };
@@ -924,6 +924,20 @@ export const api = {
       request<{ diff: string | null }>(`/projects/${projectId}/git/diff?path=${encodeURIComponent(path)}&staged=${staged}`),
     log: (projectId: string, limit = 100, branch?: string) =>
       request<GitLogEntry[]>(`/projects/${projectId}/git/log?limit=${limit}${branch ? `&branch=${encodeURIComponent(branch)}` : ''}`),
+    // Незапушенные коммиты (впереди upstream) — стек скоупов панели «Изменения»
+    unpushed: (projectId: string, limit = 100) =>
+      request<GitLogEntry[]>(`/projects/${projectId}/git/unpushed?limit=${limit}`),
+    // Настройка промпта AI-описания коммита: чтение (global/projectOverride/effective/default)
+    getCommitPrompt: (projectId: string) =>
+      request<GitCommitPromptInfo>(`/projects/${projectId}/git/commit-prompt`),
+    // Сохранить оба промпта: global (per-user, всегда) + project (override при useProject)
+    setCommitPrompt: (projectId: string, global: string, project: string, useProject: boolean) =>
+      request<GitCommitPromptInfo>(`/projects/${projectId}/git/commit-prompt`, {
+        method: 'PUT', body: JSON.stringify({ global, project, useProject }),
+      }),
+    // Определить стиль коммитов по истории репы → инструкция для поля (не сохраняет)
+    detectCommitStyle: (projectId: string) =>
+      request<{ prompt: string }>(`/projects/${projectId}/git/ai/detect-commit-style`, { method: 'POST', timeoutMs: 60_000 }),
     branches: (projectId: string) =>
       request<GitBranchInfo[]>(`/projects/${projectId}/git/branches`),
     commitDetail: (projectId: string, sha: string) =>

@@ -16,8 +16,8 @@ import {
 import { Modal, ModalActions, TextField, TextArea, IconButton, Button, Menu, MenuItem, Toggle } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 
-// Цвета статус-бейджа по односимвольному коду git
-function statusBadge(status: string): { fg: string; bg: string } {
+// Цвета статус-бейджа по односимвольному коду git (экспорт — переиспользуется в GitChangesRail)
+export function statusBadge(status: string): { fg: string; bg: string } {
   switch (status) {
     case 'M': return { fg: C.accent, bg: C.accentLight };
     case 'A': return { fg: C.successText, bg: C.successBg };
@@ -29,8 +29,8 @@ function statusBadge(status: string): { fg: string; bg: string } {
   }
 }
 
-// [папка-родитель, имя файла] из относительного пути
-function splitPath(p: string): [string, string] {
+// [папка-родитель, имя файла] из относительного пути (экспорт — переиспользуется в GitChangesRail)
+export function splitPath(p: string): [string, string] {
   const norm = p.replace(/\\/g, '/').replace(/\/+$/, '');
   const i = norm.lastIndexOf('/');
   return i < 0 ? ['', norm] : [norm.slice(0, i), norm.slice(i + 1)];

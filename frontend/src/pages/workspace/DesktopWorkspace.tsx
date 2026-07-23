@@ -30,7 +30,6 @@ interface Props {
   // Имя проекта в шапке сайдбара — из projectForEdit (обновляется после настроек)
   projectForEdit: Project;
   onGoToProjects: () => void;
-  onOpenUsage: () => void;
   onOpenProjectSettings: () => void;
   // Сайдбар: общий стейт WorkspacePage (persist cc_sidebar_mode)
   sidebarMode: SidebarMode;
@@ -177,11 +176,6 @@ export function DesktopWorkspace(p: Props) {
               {p.projectForEdit.name}
             </span>
           </div>
-          <IconButton size="sm" onClick={p.onOpenUsage} title="Использование (модели + fal.ai)">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
-            </svg>
-          </IconButton>
           <IconButton size="sm" onClick={p.onOpenProjectSettings} title="Настройки проекта">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="12" cy="12" r="3"/>

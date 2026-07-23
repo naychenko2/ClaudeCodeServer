@@ -1041,7 +1041,10 @@ public class ClaudeSession : ILlmSessionAdapter
             {
                 Interlocked.Increment(ref run.SkipResults);
                 run.ContinuationActive = false;
+                CorrTrace("submit-turn(skip++)", Info.Id, run);
             }
+            else
+                CorrTrace("submit-turn(no-skip)", Info.Id, run);
             run.TurnTcs = CliRun.NewTcs();
             run.TurnDone = false;
             run.Process.StandardInput.WriteLine(userMessageJson);
@@ -1679,10 +1682,14 @@ public class ClaudeSession : ILlmSessionAdapter
                         // тогда переармируем (чтение держим, оно ещё валидно)
                         if (armedTurnDone && !run.TurnDone) continue;
                         if (!run.TurnDone)
-                            // Активный ход молчит дольше допустимого (генерация оборвана или
-                            // инструмент завис) — прерываем с ошибкой, спиннер снимется
+                        {
+                            // Активный ход молчит дольше допустимого (генерация оборвана,
+                            // инструмент завис ИЛИ result хода проглочен корреляцией — тогда
+                            // индикатор залипал до этого момента) — прерываем с ошибкой, спиннер снимется
+                            CorrTrace($"watchdog-timeout({timeout.TotalMinutes:0}min)", Info.Id, run);
                             await _onMessage(new ErrorMessage(
                                 $"Модель не отвечает более {timeout.TotalMinutes:0} мин — ход прерван"));
+                        }
                         else if (run.HasPendingBg)
                             Console.Error.WriteLine(
                                 $"[ClaudeSession] Фоновые агенты не завершились за {_bgLingerTimeout.TotalMinutes:0} мин тишины — завершаем процесс");
@@ -1848,6 +1855,20 @@ public class ClaudeSession : ILlmSessionAdapter
         return sb.ToString();
     }
 
+    // Трассировка корреляции result↔ход (диагностика залипающего индикатора «дымящийся домик»):
+    // по этим строкам на реальном залипшем кейсе восстанавливается ФАКТИЧЕСКИЙ порядок событий
+    // CLI (сливает ли он ход-продолжение с пользовательским ходом или всегда выдаёт отдельный
+    // result) — без этого нельзя отличить отказной сценарий проглатывания от штатного пропуска.
+    private static void CorrTrace(string ev, string sid, CliRun? run, JsonElement? root = null)
+    {
+        var nt = root is { } r && r.TryGetProperty("num_turns", out var n) && n.ValueKind == JsonValueKind.Number
+            ? n.GetInt32() : -1;
+        Console.WriteLine(
+            $"[ClaudeSession][corr] {ev} sid={sid} turnDone={run?.TurnDone} "
+            + $"skip={(run is null ? -1 : Volatile.Read(ref run.SkipResults))} "
+            + $"cont={run?.ContinuationActive} bg={run?.HasPendingBg} numTurns={nt}");
+    }
+
     // run — прогон-владелец read-loop'а, из которого пришла строка. Корреляцию ведём по нему,
     // а НЕ по полю _run: после механики доживания _run мог быть заменён новым прогоном, пока
     // старый reader дочитывает хвост — тогда поздние строки замещённого прогона (в т.ч. его
@@ -1947,14 +1968,20 @@ public class ClaudeSession : ILlmSessionAdapter
                 // (ответ на task-notification); его result не должен завершить будущий ход
                 // (см. case "result"). Сообщения сабагентов (parent_tool_use_id) — это стрим
                 // доживающих фоновых агентов, а не продолжение.
-                if (run is { TurnDone: true } && !HasParentToolUseId(root))
+                if (run is { TurnDone: true, ContinuationActive: false } && !HasParentToolUseId(root))
+                {
+                    CorrTrace("continuation-start(stream_event)", Info.Id, run, root);
                     run.ContinuationActive = true;
+                }
                 await HandleStreamEventAsync(root);
                 break;
 
             case "assistant":
-                if (run is { TurnDone: true } && !HasParentToolUseId(root))
+                if (run is { TurnDone: true, ContinuationActive: false } && !HasParentToolUseId(root))
+                {
+                    CorrTrace("continuation-start(assistant)", Info.Id, run, root);
                     run.ContinuationActive = true;
+                }
                 TrackContextTokens(root);
                 await HandleAssistantToolsAsync(run, root);
                 break;
@@ -1973,6 +2000,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     var contRun = run;
                     if (contRun.TurnDone)
                     {
+                        CorrTrace("result-skip(turnDone)", Info.Id, contRun, root);
                         contRun.ContinuationActive = false;
                         Console.WriteLine("[ClaudeSession] Result хода-продолжения CLI между ходами — пропущен");
                         CloseStdinIfIdle(contRun);
@@ -1980,10 +2008,12 @@ public class ClaudeSession : ILlmSessionAdapter
                     }
                     if (Volatile.Read(ref contRun.SkipResults) > 0)
                     {
+                        CorrTrace("result-skip(skipResults)", Info.Id, contRun, root);
                         Interlocked.Decrement(ref contRun.SkipResults);
                         Console.WriteLine("[ClaudeSession] Result хода-продолжения CLI при ожидающем ходе — пропущен");
                         break;
                     }
+                    CorrTrace("result-emit", Info.Id, contRun, root);
                 }
                 var subtype = root.TryGetProperty("subtype", out var st) ? st.GetString() ?? "success" : "success";
                 // Числа читаем через безопасные хелперы: openrouter-совместимый поток шлёт

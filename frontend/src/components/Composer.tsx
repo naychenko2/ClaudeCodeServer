@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback, type CSSProperties } from 'react';
-import { AlertTriangle, ArrowUp, Check, ChevronDown, Mic, Plus, RefreshCw, Users, WifiOff, X } from 'lucide-react';
+import { AlertTriangle, Ban, ArrowUp, Check, ChevronDown, Mic, Plus, RefreshCw, Users, WifiOff, X } from 'lucide-react';
 import { C, R, FONT, SHADOW, Z } from '../lib/design';
+import { type RateWindow, RATE_COLORS, windowLabel, fmtReset } from '../lib/rateLimit';
 import { SkillsDropdown } from './SkillsDropdown';
 import { MentionsDropdown } from './MentionsDropdown';
 import { CompanionSelector, type CompanionSelection } from './CompanionSelector';
@@ -76,6 +77,9 @@ export interface ComposerProps {
   // Подсказка следующего сообщения: текст от сервера после хода,
   // null — подсказки нет. Чип виден при пустом поле; принятие — тап / → / Tab
   promptSuggestion?: string | null;
+  // Худшее окно лимита подписки (worstWindow) — для полоски-индикатора по кромке
+  // композера. Полоска видна при level !== 'normal' (warn/danger).
+  rateWindow?: RateWindow;
 }
 
 // Получить имя файла из пути
@@ -129,6 +133,72 @@ function fmtRecTime(s: number): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
+// Полоска-индикатор лимита подписки по верхней кромке карточки композера.
+// Absolute внутри карточки — не сдвигает ленту и композер (никаких «прыжков» высоты).
+// Толщина одна (3px) и для warn, и для danger — серьёзность несёт только цвет
+// (RATE_COLORS[level].fill). Детали — в поповере: hover на desktop, tap на mobile.
+function RateStripe({ w, isMobile }: { w: RateWindow; isMobile?: boolean }) {
+  const [open, setOpen] = useState(false);
+  const c = RATE_COLORS[w.level];
+  const reached = w.level === 'danger';
+  const reset = fmtReset(w.resetsAt);
+  const detail = reached
+    ? `${windowLabel(w.limitType)} — лимит достигнут${reset ? ` · сброс ${reset}` : ''}`
+    : `${windowLabel(w.limitType)} — ${w.pct}%${w.isUsingOverage ? '+' : ''}${reset ? ` · сброс ${reset}` : ''}`;
+  // desktop — hover; mobile — tap с overlay для закрытия по нажатию вне
+  const hostEvents = isMobile
+    ? { onClick: () => setOpen(o => !o) }
+    : { onMouseEnter: () => setOpen(true), onMouseLeave: () => setOpen(false) };
+  return (
+    <>
+      {open && isMobile && (
+        <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: Z.dropdown - 1 }} />
+      )}
+      <div
+        {...hostEvents}
+        title={detail}
+        style={{
+          position: 'absolute', top: 0, left: 0, right: 0, height: isMobile ? 10 : 7,
+          zIndex: 3, cursor: reached ? 'default' : 'pointer',
+        }}
+      >
+        {/* Маска повторяет скругление верхних углов карточки — полоска садится по кромке */}
+        <div style={{
+          position: 'absolute', top: 0, left: 0, right: 0, height: R.xxl,
+          borderTopLeftRadius: R.xxl, borderTopRightRadius: R.xxl,
+          overflow: 'hidden', pointerEvents: 'none',
+        }}>
+          <div style={{ height: 3, width: '100%', background: c.fill }} />
+        </div>
+        {open && (
+          <div style={{
+            position: 'absolute', bottom: 'calc(100% + 8px)', left: isMobile ? 6 : 10, zIndex: Z.dropdown,
+            background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg,
+            boxShadow: SHADOW.dropdown, padding: '8px 11px', width: 'max-content',
+            maxWidth: 'min(300px, calc(100vw - 24px))',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontFamily: FONT.sans, fontSize: 12.5, color: c.text, lineHeight: 1.35 }}>
+              <span style={{ flexShrink: 0, display: 'flex', color: c.text }}>
+                {reached
+                  ? <Ban size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+                  : <AlertTriangle size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+              </span>
+              <span>{detail}</span>
+            </div>
+            {/* Стрелка вниз к полоске */}
+            <span style={{
+              position: 'absolute', top: '100%', left: isMobile ? 14 : 18, width: 10, height: 10,
+              marginTop: -5, background: C.bgWhite,
+              borderRight: `1px solid ${C.border}`, borderBottom: `1px solid ${C.border}`,
+              transform: 'rotate(45deg)',
+            }} />
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
 export function Composer({
   sessionId,
   onSend,
@@ -161,6 +231,7 @@ export function Composer({
   onToggleWorkLoop,
   chatContext,
   promptSuggestion = null,
+  rateWindow,
 }: ComposerProps) {
   const asstName = useAssistantName();
   // Черновик per-session: инициализируем из стора и синхронизируем при переключении чата
@@ -894,6 +965,8 @@ export function Composer({
         />
       )}
     <div style={containerStyle} onDrop={handleDrop} onDragOver={handleDragOver} onDragLeave={() => setDragOver(false)}>
+      {/* Полоска-индикатор лимита подписки по кромке карточки (warn/danger) */}
+      {rateWindow && rateWindow.level !== 'normal' && <RateStripe w={rateWindow} isMobile={isMobile} />}
       {/* Dropdown скиллов (показывается над полем ввода при /query) */}
       {showSkillsDropdown && skills.length > 0 && (
         <SkillsDropdown

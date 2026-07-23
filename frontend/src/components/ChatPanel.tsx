@@ -23,7 +23,7 @@ import { Composer } from './Composer';
 import { EditSessionDialog } from './EditSessionDialog';
 import { C, R, SHADOW, CHAT_MAX_W } from '../lib/design';
 import { setChatContext, AI_RECOMPUTE_EVENT } from '../lib/ai/chatContext';
-import { ChatHeaderBar, RateLimitBar, type CostStats, type FalCostStats } from './chat/ChatHeaderBar';
+import { ChatHeaderBar, type CostStats, type FalCostStats } from './chat/ChatHeaderBar';
 import { ChatProjectContext, FalCostContext, AssistantNameContext, PersonaContext } from './chat/contexts';
 import { WaitingIndicator } from './ui/WaitingIndicator';
 import { ChatEmptyState } from './chat/EmptyState';
@@ -1126,8 +1126,6 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
               Режим «Без ограничений» — {asstName} действует без подтверждений
             </div>
           )}
-          {/* Вариант В: строка-предупреждение о лимите подписки у места отправки (warning/rejected) */}
-          {worstRate && worstRate.level !== 'normal' && <RateLimitBar w={worstRate} />}
           {/* Подъём композера над лентой даёт сама белая карточка (Composer), а не эта
               обёртка: полоса контролов вынесена из карточки, и тень на обёртке рисовала
               серый ореол вокруг пустой области под ней и полоску над полем ввода. */}
@@ -1173,6 +1171,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
             onToggleWorkLoop={handleToggleWorkLoop}
             chatContext={chatContext}
             promptSuggestion={promptSuggestion}
+            rateWindow={worstRate}
           />
           </div>
         </div>

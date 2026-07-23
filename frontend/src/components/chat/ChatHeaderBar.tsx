@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { AlertTriangle, Ban, Plus, Menu, Hourglass, FileText, Settings } from 'lucide-react';
+import { Plus, Menu, Hourglass, FileText, Settings } from 'lucide-react';
 import type { Project, Session, ClaudeBilling, Persona } from '../../types';
 import { api } from '../../lib/api';
 import { modelLabel, modelProvider, assistantName, useModelLabel } from '../../lib/models';
@@ -85,33 +85,6 @@ function RateRow({ w }: { w: RateWindow }) {
         <div style={{ width: `${Math.min(100, w.pct)}%`, height: '100%', background: c.fill }} />
       </div>
       {reset && <div style={{ fontFamily: FONT.sans, fontSize: 10.5, color: C.textMuted }}>сброс {reset}</div>}
-    </div>
-  );
-}
-
-// Закреплённая строка-предупреждение над composer (вариант В) — при warning/rejected
-export function RateLimitBar({ w }: { w: RateWindow }) {
-  const c = RATE_COLORS[w.level];
-  const reset = fmtReset(w.resetsAt);
-  const reached = w.level === 'danger';
-  return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', marginBottom: 8,
-      background: c.bg, border: `1px solid ${c.border}`, borderRadius: 8, fontSize: 12, color: c.text,
-    }}>
-      <span style={{ flexShrink: 0, display: 'flex', color: c.text }}>
-        {reached
-          ? <Ban size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-          : <AlertTriangle size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
-      </span>
-      <span style={{ flexShrink: 0, fontFamily: FONT.sans, whiteSpace: 'nowrap' }}>
-        {windowLabel(w.limitType)} — {reached ? 'лимит достигнут' : 'лимит близко'}
-      </span>
-      <div style={{ flex: 1, minWidth: 30, height: 5, borderRadius: 3, background: C.track, overflow: 'hidden' }}>
-        <div style={{ width: `${Math.min(100, w.pct)}%`, height: '100%', background: c.fill }} />
-      </div>
-      <span style={{ flexShrink: 0, fontFamily: FONT.mono, fontWeight: 700 }}>{w.pct}%{w.isUsingOverage ? '+' : ''}</span>
-      {reset && <span style={{ flexShrink: 0, fontFamily: FONT.sans, color: C.textMuted, whiteSpace: 'nowrap' }}>· сброс {reset}</span>}
     </div>
   );
 }

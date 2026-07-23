@@ -39,8 +39,7 @@ export function PersonasHub({ personas, talking, onTalk, onOpenSession, onNew, o
         {/* Шапка: текст слева, компактная карточка «что умеет персона» справа */}
         <div style={heroRow}>
           <div style={{ flex: 1, minWidth: 320 }}>
-            <div style={eyebrow}>Персоны</div>
-            <div style={h1}>Твои помощники со своим характером</div>
+            <div style={h1}>Персоны</div>
             <div style={heroText}>
               Персона — не ещё один режим чата, а помощник со своим лицом: у него есть роль, характер,
               память о прошлых разговорах и свои инструменты. Разговаривай с ним как с коллегой,
@@ -182,12 +181,9 @@ const heroRow: React.CSSProperties = {
   display: 'flex', alignItems: 'stretch', justifyContent: 'space-between', gap: 32, flexWrap: 'wrap',
   paddingBottom: 26, borderBottom: `1px solid ${C.borderLight}`, marginBottom: 28,
 };
-const eyebrow: React.CSSProperties = {
-  fontFamily: FONT.mono, fontSize: 11, fontWeight: 700, letterSpacing: '0.08em',
-  color: C.accent, textTransform: 'uppercase', marginBottom: 10,
-};
+// Заголовок хаба — в стиле заголовка раздела «Календарь» (serif 28 / 500)
 const h1: React.CSSProperties = {
-  fontFamily: FONT.serif, fontSize: 30, fontWeight: 700, color: C.textHeading,
+  fontFamily: FONT.serif, fontSize: 28, fontWeight: 500, color: C.textHeading,
   lineHeight: 1.28, letterSpacing: '-0.01em', marginBottom: 12, maxWidth: 600,
 };
 const heroText: React.CSSProperties = { fontSize: 14, color: C.textMuted, lineHeight: 1.65, maxWidth: 560 };

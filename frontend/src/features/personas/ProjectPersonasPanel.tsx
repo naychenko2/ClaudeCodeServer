@@ -52,7 +52,7 @@ export function ProjectPersonasPanel({ project, selectedId, onSelect, onNew, onS
 
 // Центральная зона проектных персон: тулбар (аватар + подпись + Удалить/Поговорить/Сохранить)
 // над широкой двухколоночной формой профиля. personaId=null — создание.
-export function ProjectPersonaPane({ project, personaId, creating, initialView, onOpenChat, onSelectPersona, onCleared, onBack }: {
+export function ProjectPersonaPane({ project, personaId, creating, initialView, onOpenChat, onSelectPersona, onCleared, onBack, onClose }: {
   project: Project;
   personaId: string | null;
   creating: boolean;
@@ -65,6 +65,8 @@ export function ProjectPersonaPane({ project, personaId, creating, initialView, 
   // Сброс выбора/создания (после удаления или «Отмена»)
   onCleared: () => void;
   onBack?: () => void;
+  // Десктопный центр воркспейса: крестик закрытия справа (вместо левой стрелки)
+  onClose?: () => void;
 }) {
   const personas = usePersonas();
   const persona = personaId ? personas.find(p => p.id === personaId) ?? null : null;
@@ -164,6 +166,7 @@ export function ProjectPersonaPane({ project, personaId, creating, initialView, 
           onDelete={() => onDelete(persona)}
           onSave={() => void formRef.current?.save()}
           onBack={onBack}
+          onClose={onClose}
           isMobile={isMobile}
         />
       ) : (

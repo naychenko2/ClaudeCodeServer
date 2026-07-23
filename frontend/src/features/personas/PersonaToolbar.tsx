@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Book, CheckSquare, ChevronLeft, EllipsisVertical, Layers, Pencil, Trash2, User, Zap } from 'lucide-react';
+import { Book, CheckSquare, ChevronLeft, EllipsisVertical, Layers, Pencil, Trash2, User, X, Zap } from 'lucide-react';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import type { Persona } from '../../types';
 import { C, FONT, R } from '../../lib/design';
@@ -39,6 +39,12 @@ interface CommonProps {
   onSave: () => void;
   onBack?: () => void;
   isMobile?: boolean;
+  // Стиль Islands (глобальная студия, десктоп): тулбар — заголовок раздела прямо
+  // на холсте (без фона и нижней границы), контент студии ниже — карточка-остров
+  hero?: boolean;
+  // Крестик закрытия справа (студия в ЦЕНТРЕ воркспейса — возврат к чату);
+  // взаимоисключим по смыслу с левой стрелкой onBack
+  onClose?: () => void;
 }
 
 interface EditProps extends CommonProps {
@@ -62,7 +68,7 @@ interface CreateProps extends CommonProps {
 }
 
 export function PersonaToolbar(props: EditProps | CreateProps) {
-  const { accent, status, onSave, onBack, isMobile } = props;
+  const { accent, status, onSave, onBack, isMobile, hero, onClose } = props;
   const creating = props.mode === 'create';
   const viewOptions = VIEW_OPTIONS;
 
@@ -103,7 +109,7 @@ export function PersonaToolbar(props: EditProps | CreateProps) {
 
   if (creating) {
     return (
-      <Toolbar isMobile={isMobile} style={rowOverride}>
+      <Toolbar isMobile={isMobile} noBorder={hero} bg={hero ? 'transparent' : undefined} style={rowOverride}>
         {backBtn}
         <div style={{ flex: 1, minWidth: 0, fontFamily: FONT.serif, fontSize: 15, fontWeight: 600, color: C.textHeading, letterSpacing: '-0.01em' }}>
           Новая персона
@@ -118,13 +124,14 @@ export function PersonaToolbar(props: EditProps | CreateProps) {
   const lines = personaTitleLines(persona);
 
   return (
-    <Toolbar isMobile={isMobile} style={rowOverride}>
+    <Toolbar isMobile={isMobile} noBorder={hero} bg={hero ? 'transparent' : undefined} style={rowOverride}>
       {backBtn}
-      <PersonaAvatar persona={persona} size={32} />
+      <PersonaAvatar persona={persona} size={hero ? 40 : 32} />
 
       {/* Идентичность: роль (serif, цвет персоны) + имя + бейдж зоны */}
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
-        <div style={{ fontFamily: FONT.serif, fontSize: 15, fontWeight: 600, color: accent, letterSpacing: '-0.01em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {/* Hero: размер заголовка — как у раздела «Календарь» (serif 28 / 500) */}
+        <div style={{ fontFamily: FONT.serif, fontSize: hero ? 28 : 15, fontWeight: hero ? 500 : 600, color: accent, letterSpacing: '-0.01em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {lines.primary}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
@@ -182,6 +189,13 @@ export function PersonaToolbar(props: EditProps | CreateProps) {
             isMobile={isMobile}
           />
         </>
+      )}
+      {/* Крестик закрытия (студия в центре воркспейса). В режиме правки скрыт —
+          выход только через Отмена/Сохранить, чтобы не потерять несохранённое */}
+      {!editing && onClose && (
+        <IconButton onClick={onClose} title="Закрыть" size="md">
+          <X size={ICON_SIZE.md} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+        </IconButton>
       )}
     </Toolbar>
   );

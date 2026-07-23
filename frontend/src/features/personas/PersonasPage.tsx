@@ -10,7 +10,7 @@ import { api } from '../../lib/api';
 import { usePersonas, ensurePersonasLoaded, bumpPersonas, personaLabel } from '../../lib/personas';
 import { navPush, navReplace, getNav, parseHash, type NavSnapshot } from '../../lib/nav';
 import { showToast } from '../../lib/toast';
-import { ConfirmDialog, SidebarSplitter, IconButton } from '../../components/ui';
+import { ConfirmDialog, IslandScaffold, IconButton } from '../../components/ui';
 import { useSidebarDrag } from '../../lib/sidebarWidth';
 import { useIsMobile } from '../../lib/breakpoints';
 import { PersonaList, type PersonaListMode } from './PersonaList';
@@ -217,6 +217,7 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
         onTalk={() => talk(selected)}
         onOpenSession={openSession}
         onBack={isMobile ? clearSelection : undefined}
+        hero={!isMobile}
         isMobile={isMobile} />
     : <PersonasHub
         personas={personas}
@@ -233,29 +234,30 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
       ? <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>{centerPane}</div>
       : <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: C.bgPanel }}>{sidebar}</div>
   ) : (
-    <div style={{ height: '100%', display: 'flex', position: 'relative' }}>
-      {/* Pinned: в потоке + сплиттер с всплывающей кнопкой «свернуть» */}
-      {sidebarMode === 'pinned' && (
+    // Десктоп: остров-сайдбар + ресайз-зазор | центр на холсте (hero-стиль:
+    // студия сама рисует тулбар на холсте + контент-остров; хаб — на холсте)
+    <IslandScaffold
+      sidebarOpen={sidebarMode === 'pinned'}
+      sidebar={sidebar}
+      sidebarWidth={listWidth}
+      sidebarDragging={listDragging}
+      onSidebarDrag={startListDrag}
+      onSidebarCollapse={() => setSidebarMode('collapsed')}
+      centerBare
+      center={
         <>
-          <div style={{ width: listWidth, flex: 'none', background: C.bgPanel, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-            {sidebar}
-          </div>
-          <SidebarSplitter active={listDragging} onMouseDown={startListDrag} onCollapse={() => setSidebarMode('collapsed')} />
+          {/* В свёрнутом режиме — тонкая шапка с гамбургером «открыть панель» */}
+          {sidebarMode === 'collapsed' && (
+            <div style={{ flex: 'none', display: 'flex', alignItems: 'center', padding: '0 8px', height: 48, borderBottom: `1px solid ${C.divider}` }}>
+              <IconButton onClick={() => setSidebarMode('pinned')} title="Открыть панель" size="md" variant="soft">
+                <Menu size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+              </IconButton>
+            </div>
+          )}
+          <div style={{ flex: 1, minWidth: 0, minHeight: 0 }}>{centerPane}</div>
         </>
-      )}
-
-      {/* Центр: в свёрнутом режиме — тонкая шапка с гамбургером «открыть панель» (в поток) */}
-      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-        {sidebarMode === 'collapsed' && (
-          <div style={{ flex: 'none', display: 'flex', alignItems: 'center', padding: '0 8px', height: 48, borderBottom: `1px solid ${C.divider}` }}>
-            <IconButton onClick={() => setSidebarMode('pinned')} title="Открыть панель" size="md" variant="soft">
-              <Menu size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
-            </IconButton>
-          </div>
-        )}
-        <div style={{ flex: 1, minWidth: 0, minHeight: 0 }}>{centerPane}</div>
-      </div>
-    </div>
+      }
+    />
   );
 
   return (
@@ -302,7 +304,7 @@ function PersonaCreatePane({ projects, onOpenStudio, onStartChat, onCancel, onBa
 // Студия персоны: центральная область = обзор-визитка (дефолт), инлайн-форма
 // профиля ИЛИ долгая память. Чата здесь нет — разговор живёт среди обычных
 // чатов (кнопка «Поговорить»).
-function PersonaStudio({ persona, projects, talking, initialView, onDelete, onTalk, onOpenSession, onBack, isMobile }: {
+function PersonaStudio({ persona, projects, talking, initialView, onDelete, onTalk, onOpenSession, onBack, isMobile, hero }: {
   persona: Persona;
   projects: Project[];
   talking: boolean;
@@ -313,6 +315,8 @@ function PersonaStudio({ persona, projects, talking, initialView, onDelete, onTa
   onOpenSession: (s: Session) => void;
   onBack?: () => void;
   isMobile: boolean;
+  // Стиль Islands (десктоп): тулбар — заголовок раздела на холсте, контент — остров
+  hero?: boolean;
 }) {
   // Активный вид: профиль (визитка/форма), умения, память или задачи.
   // Компонент перемонтируется по key={persona.id} — смена персоны сама сбрасывает вид на профиль.
@@ -402,8 +406,10 @@ function PersonaStudio({ persona, projects, talking, initialView, onDelete, onTa
         onSave={() => void formRef.current?.save()}
         onBack={onBack}
         isMobile={isMobile}
+        hero={hero}
       />
-      {/* Тонкая акцентная полоса персоны */}
+      {/* Тонкая акцентная полоса персоны — разделитель шапки и контента
+          (в hero заменяет нижнюю границу тулбара, контент живёт прямо на холсте) */}
       <div style={{ flex: 'none', height: 2, background: `${accent}55` }} />
       {content}
 

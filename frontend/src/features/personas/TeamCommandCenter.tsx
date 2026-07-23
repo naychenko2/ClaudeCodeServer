@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import {
   Users, MessageSquare, Mic, Workflow, Plus, CheckCircle2, Repeat, Trash2,
   Brain, BookOpen, FileText, UserPlus, UserMinus, ChevronRight,
-  MoreHorizontal, Settings, Wand2, EllipsisVertical,
+  MoreHorizontal, Settings, Wand2, EllipsisVertical, X,
 } from 'lucide-react';
 import type { ComponentType } from 'react';
 import type { Persona, Project, Session, Task, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft } from '../../types';
@@ -33,13 +33,15 @@ const TAB_OPTIONS: { value: Tab; label: string }[] = [
 ];
 
 export function TeamCommandCenter({
-  project, onOpenPersona, onNewPersona, onOpenSession, onOpenSessionById,
+  project, onOpenPersona, onNewPersona, onOpenSession, onOpenSessionById, onClose,
 }: {
   project: Project;
   onOpenPersona: (id: string) => void;
   onNewPersona: () => void;
   onOpenSession: (session: Session) => void;
   onOpenSessionById: (sessionId: string) => void;
+  // Крестик закрытия справа (командный центр в ЦЕНТРЕ воркспейса — возврат к чату)
+  onClose?: () => void;
 }) {
   const personas = usePersonas();
   const team = useMemo(() => personas.filter(p => p.scope === 'project' && p.projectId === project.id), [personas, project.id]);
@@ -169,6 +171,12 @@ export function TeamCommandCenter({
             </Menu>
           )}
         </div>
+        {/* Крестик закрытия — возврат из командного центра к чату */}
+        {onClose && (
+          <IconButton onClick={onClose} title="Закрыть" size={isMobile ? 'lg' : 'md'}>
+            <X size={ICON_SIZE.md} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+          </IconButton>
+        )}
       </Toolbar>
       {/* Тонкая полоса проекта */}
       <div style={{ flex: 'none', height: 2, background: `${stripe}55` }} />

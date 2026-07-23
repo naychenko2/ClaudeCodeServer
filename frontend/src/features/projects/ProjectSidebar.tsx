@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import type { ProjectGroup } from '../../types';
 import { C, R, FONT, SHADOW } from '../../lib/design';
 import { IconButton } from '../../components/ui';
-import { ChevronLeft, Pin, Settings, LayoutGrid, Inbox } from 'lucide-react';
+import { Pin, Settings, LayoutGrid, Inbox } from 'lucide-react';
 import { ICON_SIZE } from '../../components/ui/icons';
 
 export type ProjectView = 'all' | 'sleeping' | string;   // string = groupId
@@ -27,15 +27,15 @@ export function ProjectSidebar({ view, onSelect, total, groups, sleepingCount, o
     }}>
       {onCollapse && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8, minHeight: 28 }}>
-          <IconButton onClick={onCollapse} title="Свернуть панель" size="sm" style={{ marginLeft: -2 }}>
-            <ChevronLeft size={ICON_SIZE.sm} strokeWidth={2} />
-          </IconButton>
           <span style={{ flex: 1, minWidth: 0, fontSize: 14, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Проекты</span>
-          {onPin && (
-            <IconButton onClick={onPin} title="Закрепить панель" size="sm">
-              <Pin size={ICON_SIZE.sm} strokeWidth={2} />
-            </IconButton>
-          )}
+          {/* Пин — самая правая кнопка: onPin (в режиме drawer — закрепить) либо onCollapse (открепить-свернуть) */}
+          <IconButton
+            onClick={onPin ?? onCollapse}
+            title={onPin ? 'Закрепить панель' : 'Открепить панель'}
+            size="sm"
+          >
+            <Pin size={ICON_SIZE.sm} strokeWidth={2} fill={onPin ? 'none' : 'currentColor'} />
+          </IconButton>
         </div>
       )}
       <Row

@@ -15,7 +15,7 @@ import { KnowledgeList, KnowledgeEmptyState } from './KnowledgeList';
 import { KnowledgeView } from './KnowledgeView';
 import { NewKnowledgeBaseDialog } from './NewKnowledgeBaseDialog';
 import { AddDocumentDialog } from './AddDocumentDialog';
-import { IconSearch, IconPlus, IconChevronsLeft, IconPin } from './shared';
+import { IconSearch, IconPlus, IconPin } from './shared';
 
 export function KnowledgePage({ auth, onLogout, onHubTab }: {
   auth: AuthState;
@@ -112,18 +112,18 @@ export function KnowledgePage({ auth, onLogout, onHubTab }: {
   // --- Сайдбар: шапка (свернуть/закрепить) + управление (фильтр + «Новая») + список ---
   const sidebarHeader = (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 10px 0', minHeight: 28, flex: 'none' }}>
-      <IconButton onClick={() => setSidebarMode('collapsed')} title="Свернуть панель" size="sm" style={{ marginLeft: -2 }}>
-        <IconChevronsLeft size={16} />
-      </IconButton>
       <span style={{
         flex: 1, minWidth: 0, fontSize: 14, fontWeight: 600, color: C.textHeading,
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
       }}>Знания</span>
-      {sidebarMode === 'open' && (
-        <IconButton onClick={() => setSidebarMode('pinned')} title="Закрепить панель" size="sm">
-          <IconPin size={15} />
-        </IconButton>
-      )}
+      {/* Пин — самая правая кнопка: закрепляет (drawer→в потоке) либо откепляет-сворачивает панель */}
+      <IconButton
+        onClick={() => setSidebarMode(sidebarMode === 'open' ? 'pinned' : 'collapsed')}
+        title={sidebarMode === 'open' ? 'Закрепить панель' : 'Открепить панель'}
+        size="sm"
+      >
+        <IconPin size={15} filled={sidebarMode === 'pinned'} />
+      </IconButton>
     </div>
   );
 

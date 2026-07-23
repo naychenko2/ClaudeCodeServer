@@ -19,7 +19,7 @@ export const IconTrash = ({ size = 18 }: { size?: number }) => <Trash2 size={siz
 export const IconLock = ({ size = 18 }: { size?: number }) => <Lock size={size} strokeWidth={2} style={ICON_STYLE} />;
 export const IconDots = ({ size = 18 }: { size?: number }) => <Ellipsis size={size} strokeWidth={2} style={ICON_STYLE} />;
 export const IconChevronsLeft = ({ size = 18 }: { size?: number }) => <ChevronsLeft size={size} strokeWidth={2} style={ICON_STYLE} />;
-export const IconPin = ({ size = 18 }: { size?: number }) => <Pin size={size} strokeWidth={2} style={ICON_STYLE} />;
+export const IconPin = ({ size = 18, filled }: { size?: number; filled?: boolean }) => <Pin size={size} strokeWidth={2} fill={filled ? 'currentColor' : 'none'} style={ICON_STYLE} />;
 export const IconBack = ({ size = 18 }: { size?: number }) => <ArrowLeft size={size} strokeWidth={2} style={ICON_STYLE} />;
 // Закрытие модалки/просмотра
 export const IconClose = ({ size = 18 }: { size?: number }) => <X size={size} strokeWidth={2} style={ICON_STYLE} />;

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ChevronLeft, Menu as MenuIcon, MessageCircle, Pin, Plus } from 'lucide-react';
+import { Menu as MenuIcon, MessageCircle, Pin, Plus } from 'lucide-react';
 import type { AuthState, Session, SkillInfo } from '../types';
 import { api } from '../lib/api';
 import { joinUser, onMessage } from '../lib/signalr';
@@ -212,17 +212,15 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
   const sidebarInner = (
     <>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8, minHeight: 28 }}>
-        {/* Свернуть панель (◀) */}
-        <IconButton onClick={() => setSidebarMode('collapsed')} title="Свернуть панель" size="sm" style={{ marginLeft: -2 }}>
-          <ChevronLeft size={ICON_SIZE.sm} strokeWidth={2} />
-        </IconButton>
         <span style={{ flex: 1, minWidth: 0, fontSize: 14, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Чаты</span>
-        {/* В режиме open — закрепить (📌) */}
-        {sidebarMode === 'open' && (
-          <IconButton onClick={() => setSidebarMode('pinned')} title="Закрепить панель" size="sm">
-            <Pin size={ICON_SIZE.sm} strokeWidth={2} />
-          </IconButton>
-        )}
+        {/* Пин — самая правая кнопка: закрепляет (drawer→в потоке) либо откепляет-сворачивает панель */}
+        <IconButton
+          onClick={() => setSidebarMode(sidebarMode === 'open' ? 'pinned' : 'collapsed')}
+          title={sidebarMode === 'open' ? 'Закрепить панель' : 'Открепить панель'}
+          size="sm"
+        >
+          <Pin size={ICON_SIZE.sm} strokeWidth={2} fill={sidebarMode === 'pinned' ? 'currentColor' : 'none'} />
+        </IconButton>
       </div>
       <div style={{ flex: 1, minHeight: 0 }}>
         <ChatList chats={chats} activeId={activeId} onSelect={selectChat} onNew={newChat} creating={creating} onEdited={handleChatEdited} onDeleted={handleChatDeleted} workflowRunningFor={workflowRunningFor ?? undefined} />

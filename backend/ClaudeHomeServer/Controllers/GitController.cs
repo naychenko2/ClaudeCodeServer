@@ -158,6 +158,11 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
     public Task<IActionResult> Discard(string projectId, [FromBody] GitPathRequest body, CancellationToken ct) =>
         Mutate(projectId, (p) => git.DiscardAsync(Owner(p), p.RootPath, body.Path, ct));
 
+    // Откат ВСЕХ изменений рабочего дерева (опасно — фронт гейтит подтверждением)
+    [HttpPost("discard-all")]
+    public Task<IActionResult> DiscardAll(string projectId, CancellationToken ct) =>
+        Mutate(projectId, (p) => git.DiscardAllAsync(Owner(p), p.RootPath, ct));
+
     // Зернистый stage: патч хунка/выбранных строк (синтезирует фронт)
     [HttpPost("stage-hunk")]
     public Task<IActionResult> StageHunk(string projectId, [FromBody] GitPatchRequest body, CancellationToken ct) =>

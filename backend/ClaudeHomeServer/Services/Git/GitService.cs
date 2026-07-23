@@ -344,6 +344,23 @@ public sealed class GitService(ILauncherFactory launchers)
     public Task DiscardAsync(string? ownerId, string root, string relPath, CancellationToken ct = default) =>
         WriteOp(ownerId, root, ["checkout", "HEAD", "--", ValidateRel(root, relPath)], ct: ct);
 
+    // Откат ВСЕХ изменений рабочего дерева: отслеживаемые (индекс+дерево) к HEAD +
+    // удаление неотслеживаемых файлов/папок (clean -fd уважает .gitignore — сборки/артефакты
+    // не трогаем). Оба шага под одним локом. Вызывающий гейтит опасность подтверждением.
+    public async Task DiscardAllAsync(string? ownerId, string root, CancellationToken ct = default)
+    {
+        var sem = LockFor(root);
+        await sem.WaitAsync(ct);
+        try
+        {
+            // reset --hard: отслеживаемые (индекс+дерево, включая staged-new) к HEAD;
+            // clean -fd: удалить оставшиеся неотслеживаемые файлы/папки
+            await RunOkAsync(ownerId, root, ["reset", "--hard", "HEAD"], ct: ct);
+            await RunOkAsync(ownerId, root, ["clean", "-fd"], ct: ct);
+        }
+        finally { sem.Release(); }
+    }
+
     // Зернистый stage: патч (целый хунк или синтезированный из выбранных строк) — через stdin,
     // в индекс без изменения рабочего дерева. --recount: фронт мог пересчитать заголовки неточно.
     public async Task StageHunkAsync(string? ownerId, string root, string patch, CancellationToken ct = default)

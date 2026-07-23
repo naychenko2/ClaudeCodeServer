@@ -34,6 +34,7 @@ import { BoardColumnsDialog } from '../features/tasks/board/BoardColumnsDialog';
 import { resolveColumns, taskColumnKey, ensureTasksLoaded } from '../lib/tasks';
 import type { BoardColumn } from '../types';
 import { useTasks } from '../lib/tasks';
+import { useGitState, ensureGit } from '../lib/git';
 import { ensurePersonasLoaded } from '../lib/personas';
 import { ProjectPersonasPanel, ProjectPersonaPane } from '../features/personas/ProjectPersonasPanel';
 import type { PersonaView } from '../features/personas/PersonaToolbar';
@@ -482,6 +483,20 @@ const windowWidth = useWindowWidth();
   // Открытая задача ведёт себя как открытый файл: переключение вкладок сайдбара
   // основную зону не трогает — карточка открывается кликом и закрывается крестиком.
   const allTasks = useTasks();
+  // Числа-кружки на кнопках проекта в рельсе (changes/tasks/terminal/preview).
+  // Все источники — уже подписанные сторы/стейт; git тянем тем же глобальным стором
+  // (ensureGit — идемпотентная первичная загрузка, чтобы кружок был виден до открытия панели).
+  const gitState = useGitState(project.id);
+  useEffect(() => { ensureGit(project.id); }, [project.id]);
+  const railCounts = useMemo(() => ({
+    // Число изменённых файлов — дедуп по пути (файл может быть и staged, и unstaged)
+    changes: gitState.status
+      ? new Set([...gitState.status.staged, ...gitState.status.unstaged, ...gitState.status.untracked].map(f => f.path)).size
+      : 0,
+    tasks: allTasks.filter(t => t.projectId === project.id && t.status !== 'done').length,
+    terminal: terminals.length,
+    preview: previewServices.filter(s => s.status === 'started').length,
+  }), [gitState.status, allTasks, project.id, terminals, previewServices]);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   // Свежесозданная задача — её карточка открывается сразу в режиме редактирования
   const [autoEditTaskId, setAutoEditTaskId] = useState<string | null>(null);
@@ -1395,6 +1410,7 @@ const windowWidth = useWindowWidth();
           isTablet={isTablet}
           project={project}
           projectForEdit={projectForEdit}
+          railCounts={railCounts}
           onOpenProjectSettings={() => setEditProjectOpen(true)}
           sidebarMode={sidebarMode}
           setSidebarMode={setSidebarMode}

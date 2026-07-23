@@ -91,6 +91,8 @@ interface Props {
   panels: Partial<Record<Exclude<PanelKey, 'plan'>, ReactNode>>;
   // Контролы в шапки карточек панелей (напр. переключатель видов задач)
   panelHeaderExtras?: Partial<Record<PanelKey, ReactNode>>;
+  // Числа-кружки на кнопках проекта в рельсе (changes/tasks/terminal/preview)
+  railCounts?: Partial<Record<PanelKey, number>>;
 }
 
 export function DesktopWorkspace(p: Props) {
@@ -307,6 +309,7 @@ export function DesktopWorkspace(p: Props) {
         toolsEnabled={p.toolsEnabled}
         panels={p.panels}
         panelHeaderExtras={p.panelHeaderExtras}
+        railCounts={p.railCounts}
       />
     </>
   );

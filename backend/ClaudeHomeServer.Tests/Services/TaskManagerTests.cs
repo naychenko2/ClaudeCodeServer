@@ -274,6 +274,23 @@ public class TaskManagerTests : IDisposable
         next.LinkedSessionId.Should().BeNull();
     }
 
+    [Fact]
+    public void SpawnNext_Делегированная_ПереноситПостановщикаНоНеСессию()
+    {
+        var task = _sut.Create("proj-1", "u", new CreateTaskRequest("регулярная делегированная",
+            DueDate: "2026-07-01",
+            Recurrence: new TaskRecurrence { Type = TaskRecurrenceType.Daily },
+            PersonaId: "prs-executor",
+            CreatedByPersonaId: "prs-delegator",
+            SourceSessionId: "sess-1"));
+
+        var next = _sut.SpawnNextOccurrence(task);
+
+        next.Should().NotBeNull();
+        next!.CreatedByPersonaId.Should().Be("prs-delegator"); // постановщик — атрибут серии
+        next.SourceSessionId.Should().BeNull();                // сессия у нового экземпляра своя
+    }
+
     // ─── Инвариант «персона ⇒ Claude» ────────────────────────────────────────
 
     [Fact]

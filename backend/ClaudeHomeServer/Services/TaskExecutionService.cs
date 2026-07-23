@@ -324,8 +324,12 @@ public class TaskExecutionService
         if (task.CreatedByPersonaId is null || task.CreatedByPersonaId == task.PersonaId) return;
         var delegator = _personas.Get(task.CreatedByPersonaId, task.OwnerId!);
         if (delegator is null) return;
-        await NotifyAsync(task, BuildDelegatorNotification(task, ok, delegator,
-            task.SourceSessionId is not null ? _sessions.GetById(task.SourceSessionId) : null));
+        // SourceSessionId приходит из тела POST и мог указать на чужой чат — ссылку строим
+        // только по сессии владельца задачи, иначе fallback на TaskUrl
+        var sourceSession = task.SourceSessionId is not null ? _sessions.GetById(task.SourceSessionId) : null;
+        if (sourceSession is not null && _sessions.ResolveOwnerId(sourceSession) != task.OwnerId)
+            sourceSession = null;
+        await NotifyAsync(task, BuildDelegatorNotification(task, ok, delegator, sourceSession));
     }
 
     // Уведомление постановщику о завершении делегированной задачи: Url — исходный чат

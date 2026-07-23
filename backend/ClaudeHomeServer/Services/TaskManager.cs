@@ -230,6 +230,10 @@ public class TaskManager
             // задача теряла бы персону и падала на обычного Claude (ClaudeStartedAt/
             // ClaudeResult/LinkedSessionId у нового экземпляра дефолтные → отработает заново)
             PersonaId = completed.PersonaId,
+            // Постановщик — устойчивый атрибут серии (как PersonaId): без переноса со 2-го
+            // экземпляра терялось бы уведомление постановщика. SourceSessionId НЕ переносим —
+            // конкретная сессия (как LinkedSessionId) у нового экземпляра начинается заново
+            CreatedByPersonaId = completed.CreatedByPersonaId,
             Recurrence = completed.Recurrence,
             SeriesId = completed.SeriesId ?? completed.Id,
             LinkedFiles = [.. completed.LinkedFiles],

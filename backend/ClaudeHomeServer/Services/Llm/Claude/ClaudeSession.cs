@@ -362,6 +362,11 @@ public class ClaudeSession : ILlmSessionAdapter
                         ["TASKS_API_URL"] = _tasksMcp!.ApiUrl,
                         ["TASKS_API_TOKEN"] = _tasksMcp.Token,
                         ["TASKS_PROJECT_ID"] = _tasksMcp.ProjectId ?? "",
+                        // Происхождение создаваемых задач: чат-источник и персона-постановщик.
+                        // Берём из Info на каждый ход (как NOTES_SESSION_ID) — PersonaId сессии
+                        // меняется по ходу разговора (SetPersona, смена спикера в группе)
+                        ["TASKS_SESSION_ID"] = Info.Id,
+                        ["TASKS_SELF_PERSONA_ID"] = Info.PersonaId ?? "",
                         // tasks_execute порождает новую сессию Claude — на агентном ходу
                         // (chats_send из другой сессии) не даём, та же анти-рекурсия, что у chats
                         ["TASKS_EXECUTE"] = _currentTurnAgentDepth < 1 ? "1" : "0",

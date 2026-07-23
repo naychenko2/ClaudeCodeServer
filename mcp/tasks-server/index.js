@@ -6,6 +6,8 @@
 //   TASKS_API_TOKEN  — сервисный JWT владельца сессии
 //   TASKS_PROJECT_ID — id проекта сессии; пусто = контекст личных задач
 //   TASKS_EXECUTE    — "1" = регистрировать tasks_execute (запуск Claude-исполнителя)
+//   TASKS_SESSION_ID — id чата-источника: проставляется в sourceSessionId создаваемых задач
+//   TASKS_SELF_PERSONA_ID — персона текущего чата: постановщик (createdByPersonaId) создаваемых задач
 
 import { createInterface } from 'node:readline';
 
@@ -13,6 +15,8 @@ const API_URL = (process.env.TASKS_API_URL ?? 'http://localhost:5000').replace(/
 const API_TOKEN = process.env.TASKS_API_TOKEN ?? '';
 const PROJECT_ID = process.env.TASKS_PROJECT_ID || null;
 const EXECUTE_ENABLED = process.env.TASKS_EXECUTE === '1';
+const SESSION_ID = process.env.TASKS_SESSION_ID || null;
+const SELF_PERSONA_ID = process.env.TASKS_SELF_PERSONA_ID || null;
 
 // --- HTTP к бэкенду ---
 
@@ -378,6 +382,12 @@ async function callTool(name, args) {
       const body = { title: args.title };
       for (const k of ['description', 'priority', 'dueDate', 'dueTime', 'reminderMinutes', 'recurrence', 'assignee', 'personaId', 'labels', 'columnId', 'executionExpiresAfterMinutes'])
         if (args[k] !== undefined) body[k] = args[k];
+      // Происхождение задачи из окружения хода: персона-постановщик и её чат-источник.
+      // Без персоны оба поля не шлём (обратная совместимость: поведение как раньше)
+      if (SELF_PERSONA_ID) {
+        body.createdByPersonaId = SELF_PERSONA_ID;
+        if (SESSION_ID) body.sourceSessionId = SESSION_ID;
+      }
       if (Array.isArray(args.subtasks) && args.subtasks.length)
         body.subtasks = args.subtasks.map(t => ({ title: String(t) }));
       const path = PROJECT_ID ? `/api/projects/${PROJECT_ID}/tasks` : '/api/tasks';

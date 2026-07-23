@@ -50,6 +50,13 @@ public class TaskItem
     // индекс строки в контенте заметки на момент промоута (best-effort при правках).
     public string? SourceNoteId { get; set; }
     public int? SourceNoteLine { get; set; }
+    // Происхождение задачи: персона-постановщик (создала задачу через tasks_create из своего
+    // чата) и чат, породивший задачу. Оба null у задач из UI/API без персоны (старые задачи —
+    // тоже null, обратная совместимость). SourceSessionId — общее поле двух фич: уведомление
+    // постановщика о завершении (L0) и иерархия чатов (Session.ParentSessionId вычисляется
+    // из него — второй источник истины не заводим).
+    public string? CreatedByPersonaId { get; set; }
+    public string? SourceSessionId { get; set; }
     // Порядок карточки на Kanban-доске (ручная сортировка внутри колонки).
     // double — чтобы вставлять между соседями через midpoint без перенумерации.
     // 0 = не назначен (миграция/сортировка по дефолту); задаётся в Create и при drag.

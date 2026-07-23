@@ -111,4 +111,15 @@ public class Session
     public ChatOrigin Origin => TaskId != null ? ChatOrigin.Task
         : AutomationRuleId != null ? ChatOrigin.Automation
         : ChatOrigin.Manual;
+
+    // Резолвер «задача → чат-источник»: назначает TaskManager при старте (DI в модель не
+    // пробросить — Session сериализуется напрямую во всех точках отдачи). Истина живёт
+    // в TaskItem.SourceSessionId, здесь только вычисление.
+    public static Func<string, string?>? TaskSourceSessionResolver { get; set; }
+
+    // Родительский чат сессии-исполнителя: чат, в котором была создана её задача
+    // (TaskId → Task.SourceSessionId). Вычисляется, не хранится — как Origin.
+    // null — корневой чат либо задача удалена (чат всплывает в корень — принято осознанно).
+    public string? ParentSessionId =>
+        TaskId != null ? TaskSourceSessionResolver?.Invoke(TaskId) : null;
 }

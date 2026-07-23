@@ -353,6 +353,22 @@ public class TaskExecutionService
         TaskId: task.Id,
         Tag: "Постановщик");
 
+    // Применим ли активный доклад (модель Z) к завершённой задаче: исполнитель — персона,
+    // отличная от постановщика, и (MAJOR 2) есть живой SourceSessionId. У 2-го+ экземпляра
+    // регулярной делегированной задачи SourceSessionId не переносится SpawnNextOccurrence
+    // (конкретная сессия начинается заново каждый раз) — без него уходили бы в fallback
+    // НОВЫЙ чат + платный ход на каждый повтор (30/месяц у ежедневной); ограничиваемся уже
+    // отправленным L0-тостом (NotifyDelegatorAsync).
+    internal static bool ShouldReportToDelegator(TaskItem task, Persona? executor) =>
+        executor is not null && task.CreatedByPersonaId is not null &&
+        task.CreatedByPersonaId != executor.Id && task.SourceSessionId is not null;
+
+    // MINOR 2: реакцию постановщика A можно слать, только если S — не групповой чат, либо A
+    // входит в его участников (иначе переключить спикера не на кого — реагировать некому,
+    // а ход по текущему/ведущему спикеру пришёл бы не от лица постановщика)
+    internal static bool CanSendDelegatorReaction(IReadOnlyList<string>? participants, string delegatorPersonaId) =>
+        participants is not { Count: > 1 } || participants.Contains(delegatorPersonaId);
+
     // Модель Z: активный доклад о завершении делегированной задачи — в отличие от L0-тоста
     // (NotifyDelegatorAsync) кладёт репорт прямо в чат постановщика. ШАГ 1 — гостевая реплика
     // исполнителя B с готовым resultMarkdown (0 токенов, без агентского хода); ШАГ 2 — сразу
@@ -361,25 +377,29 @@ public class TaskExecutionService
     // (без неё нет «лица» для гостевой реплики; L0-тост выше это уже покрывает).
     private async Task ReportToDelegatorAsync(TaskItem task, Persona? executor)
     {
-        if (executor is null) return;
-        if (task.CreatedByPersonaId is null || task.CreatedByPersonaId == executor.Id) return;
-        var delegator = _personas.Get(task.CreatedByPersonaId, task.OwnerId!);
+        if (executor is null || !ShouldReportToDelegator(task, executor)) return;
+        var delegator = _personas.Get(task.CreatedByPersonaId!, task.OwnerId!);
         if (delegator is null) return;
 
         // Владелец S — как в NotifyDelegatorAsync: чужая/неизвестная сессия не годится
-        var sourceSession = task.SourceSessionId is not null ? _sessions.GetById(task.SourceSessionId) : null;
+        var sourceSession = _sessions.GetById(task.SourceSessionId!);
         if (sourceSession is not null && _sessions.ResolveOwnerId(sourceSession) != task.OwnerId)
             sourceSession = null;
 
         string targetSessionId;
+        Session? targetSession;
         if (sourceSession is not null)
+        {
             targetSessionId = sourceSession.Id;
+            targetSession = sourceSession;
+        }
         else
         {
             var title = task.Title.Length > 60 ? task.Title[..60] + "…" : task.Title;
             var fresh = await _sessions.CreatePersonaChatAsync(task.OwnerId!, delegator.Id,
                 ClaudeMode.AcceptEdits, name: $"Отчёт: {title}");
             targetSessionId = fresh.Id;
+            targetSession = fresh;
         }
 
         // ШАГ 1: гостевая реплика исполнителя — StoredTextMessage.PersonaId=B рендерит её его
@@ -390,9 +410,22 @@ public class TaskExecutionService
             new StoredTextMessage(reportText, personaId: executor.Id),
             new GuestTextMessage(reportText, executor.Id));
 
-        // ШАГ 2: постановщик реагирует ВСЕГДА — платный авто-ход с контекстом отчёта
+        // MINOR 2: S — групповой чат. Без @упоминания реакция построилась бы по текущему/
+        // ведущему спикеру, а не по постановщику A (senderPersonaId — только атрибуция
+        // реплики, не смена спикера). A ∈ участников — переключаем спикера на него перед
+        // ходом; иначе реагировать некому — ограничиваемся гостевой репликой B + L0-тостом.
+        if (!CanSendDelegatorReaction(targetSession?.Participants, delegator.Id)) return;
+        if (targetSession?.Participants is { Count: > 1 })
+            _sessions.SetPersona(targetSessionId, task.OwnerId!, delegator.Id);
+
+        // ШАГ 2: постановщик реагирует ВСЕГДА — платный авто-ход с контекстом отчёта.
+        // MAJOR 1: tasks_execute запрещён на этом ходу — A может отреагировать и даже
+        // создать новую задачу (tasks_create), но не самозапустить её. Без запрета A по
+        // промпту «продолжи работу» мог бы tasks_create+tasks_execute → новая задача
+        // глубины 0 → новый доклад → новая реакция → бесконечный платный цикл A↔B
+        // (гард DelegationDepth<3 цепочку исполнителей ловит, а не переделегирование A).
         await _sessions.SendMessageAsync(targetSessionId, BuildDelegatorReactionPrompt(task, executor),
-            [], auto: true, senderPersonaId: delegator.Id);
+            [], auto: true, senderPersonaId: delegator.Id, suppressTasksExecute: true);
     }
 
     // Маркер гостевой реплики-доклада: контракт для фронта — по нему отличают доклад
@@ -408,10 +441,12 @@ public class TaskExecutionService
     internal static string BuildDelegationReportText(TaskItem task) =>
         $"{DelegationReportMarker}{task.Title}\n\n{DelegationReportBody(task)}";
 
-    // Промпт авто-хода постановщика A: контекст отчёта B + просьба отреагировать
+    // Промпт авто-хода постановщика A: выжимка (id/название) + просьба отреагировать.
+    // MINOR 1: полное тело resultMarkdown сюда НЕ дублируем — оно уже перед этим ходом
+    // легло в ленту гостевой репликой B (ШАГ 1), A видит его при resume без пересказа
     internal static string BuildDelegatorReactionPrompt(TaskItem task, Persona executor) =>
         $"Персона-исполнитель {PersonaLabel(executor)} завершила делегированную тобой задачу " +
-        $"«{task.Title}». Её отчёт: {DelegationReportBody(task)}\n\n" +
+        $"«{task.Title}» (id: {task.Id}) — её отчёт только что появился выше в ленте.\n\n" +
         "Отреагируй и продолжи работу при необходимости.";
 
     // Уведомление «ждёт ответа» (permission_request / AskUserQuestion)

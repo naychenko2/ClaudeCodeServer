@@ -14,8 +14,11 @@ public interface ILlmSessionAdapter : IAsyncDisposable
 
     Task StartAsync();
     // agentDepth > 0 — ход инициирован агентом из другой сессии (chats_send):
-    // адаптер урезает инструменты делегирования на этот ход, чтобы не допустить рекурсию агентов
-    Task SendMessageAsync(string text, IReadOnlyList<string>? attachedPaths = null, int agentDepth = 0);
+    // адаптер урезает инструменты делегирования на этот ход, чтобы не допустить рекурсию агентов.
+    // suppressTasksExecute — реакционный авто-ход постановщика на доклад делегированной задачи:
+    // tasks_execute недоступен на этот ход даже при agentDepth=0 (см. TaskExecutionService.ReportToDelegatorAsync)
+    Task SendMessageAsync(string text, IReadOnlyList<string>? attachedPaths = null, int agentDepth = 0,
+        bool suppressTasksExecute = false);
 
     // Сворачивание контекста; при !Capabilities.SupportsCompact — no-op
     Task CompactAsync();

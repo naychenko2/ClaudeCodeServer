@@ -221,16 +221,111 @@ public class TaskExecutionServiceTests
     }
 
     [Fact]
-    public void BuildDelegatorReactionPrompt_СодержитИсполнителяЗадачуИИтог()
+    public void BuildDelegatorReactionPrompt_СодержитИсполнителяИЗадачуБезДубляТела()
     {
-        var task = new TaskItem { Title = "Починить сборку", ResultMarkdown = "Готово." };
+        // MINOR 1: полный resultMarkdown в промпт реакции не дублируем — его уже видно
+        // выше в ленте гостевой репликой B (ШАГ 1); здесь только выжимка (id/название)
+        var task = new TaskItem { Title = "Починить сборку", ResultMarkdown = "Готово, собрал и прогнал тесты." };
         var executor = new Persona { Name = "Вера", Role = "Тестировщик" };
 
         var prompt = TaskExecutionService.BuildDelegatorReactionPrompt(task, executor);
 
         prompt.Should().Contain("Тестировщик (Вера)");
         prompt.Should().Contain("Починить сборку");
-        prompt.Should().Contain("Готово.");
+        prompt.Should().Contain(task.Id);
         prompt.Should().Contain("Отреагируй");
+        prompt.Should().NotContain("Готово, собрал и прогнал тесты.");
+    }
+
+    // ─── MAJOR 1: гейт TASKS_EXECUTE не даёт постановщику самозапустить задачу ──
+
+    [Theory]
+    [InlineData(0, 0, false, true)]   // обычный пользовательский ход — доступен
+    [InlineData(0, 0, true, false)]   // реакционный авто-ход постановщика — подавлен явно
+    [InlineData(1, 0, false, false)]  // агентный ход (chats_send) — анти-рекурсия как раньше
+    [InlineData(0, 3, false, false)]  // исчерпан гард глубины делегирования исполнителей
+    [InlineData(1, 0, true, false)]   // подавлен и агентный — тем более недоступен
+    public void ResolveTasksExecuteEnabled_Гейт(
+        int currentTurnAgentDepth, int taskDelegationDepth, bool suppressTasksExecute, bool expected)
+    {
+        ClaudeHomeServer.Services.Llm.Claude.ClaudeSession
+            .ResolveTasksExecuteEnabled(currentTurnAgentDepth, taskDelegationDepth, suppressTasksExecute)
+            .Should().Be(expected);
+    }
+
+    // ─── MAJOR 2: регулярная задача без SourceSessionId — доклад не заводит чат ─
+
+    [Fact]
+    public void ShouldReportToDelegator_БезSourceSessionId_Неприменимо()
+    {
+        // 2-й+ экземпляр регулярной делегированной задачи: CreatedByPersonaId перенесён
+        // SpawnNextOccurrence, а SourceSessionId — нет (сессия начинается заново). Без него
+        // ReportToDelegatorAsync должен выйти сразу же, не создавая fallback-чат на повтор.
+        var executor = new Persona { Name = "Вера" };
+        var task = new TaskItem
+        {
+            Title = "Ежедневная сводка",
+            Status = TaskItemStatus.Done,
+            CreatedByPersonaId = Guid.NewGuid().ToString(),
+            PersonaId = executor.Id,
+            SourceSessionId = null,
+        };
+
+        TaskExecutionService.ShouldReportToDelegator(task, executor).Should().BeFalse();
+    }
+
+    [Fact]
+    public void ShouldReportToDelegator_СSourceSessionIdИЧужимИсполнителем_Применимо()
+    {
+        var executor = new Persona { Name = "Вера" };
+        var task = new TaskItem
+        {
+            Title = "Ежедневная сводка",
+            Status = TaskItemStatus.Done,
+            CreatedByPersonaId = Guid.NewGuid().ToString(),
+            PersonaId = executor.Id,
+            SourceSessionId = Guid.NewGuid().ToString(),
+        };
+
+        TaskExecutionService.ShouldReportToDelegator(task, executor).Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData(null)]       // постановщик не задан
+    [InlineData("self")]     // исполнитель делегировал сам себе — дубль «Завершил работу»
+    public void ShouldReportToDelegator_НетПостановщикаИлиОнЖеИсполнитель_Неприменимо(string? createdByPersonaId)
+    {
+        var executor = new Persona { Name = "Вера" };
+        var task = new TaskItem
+        {
+            Title = "t",
+            CreatedByPersonaId = createdByPersonaId == "self" ? executor.Id : createdByPersonaId,
+            SourceSessionId = Guid.NewGuid().ToString(),
+        };
+
+        TaskExecutionService.ShouldReportToDelegator(task, executor).Should().BeFalse();
+    }
+
+    // ─── MINOR 2: групповой чат — реакция только от лица постановщика ───────────
+
+    [Fact]
+    public void CanSendDelegatorReaction_НеГрупповойЧат_Можно()
+    {
+        TaskExecutionService.CanSendDelegatorReaction(null, "a").Should().BeTrue();
+        TaskExecutionService.CanSendDelegatorReaction(["a"], "a").Should().BeTrue();
+    }
+
+    [Fact]
+    public void CanSendDelegatorReaction_ГрупповойЧатСПостановщикомСредиУчастников_Можно()
+    {
+        TaskExecutionService.CanSendDelegatorReaction(["a", "b", "c"], "b").Should().BeTrue();
+    }
+
+    [Fact]
+    public void CanSendDelegatorReaction_ГрупповойЧатБезПостановщика_Нельзя()
+    {
+        // Переключить спикера не на кого — реагировать в группе некому,
+        // ограничиваемся гостевой репликой B + L0-тостом
+        TaskExecutionService.CanSendDelegatorReaction(["b", "c"], "a").Should().BeFalse();
     }
 }

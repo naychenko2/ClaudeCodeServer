@@ -1338,7 +1338,7 @@ public class SessionManager
         SaveSessions();
     }
 
-    public async Task SendMessageAsync(string sessionId, string text, IReadOnlyList<string> attachedPaths, string? mode = null, bool systemDirective = false, bool auto = false, string? senderPersonaId = null)
+    public async Task SendMessageAsync(string sessionId, string text, IReadOnlyList<string> attachedPaths, string? mode = null, bool systemDirective = false, bool auto = false, string? senderPersonaId = null, bool suppressTasksExecute = false)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry))
             throw new InvalidOperationException("Сессия не найдена");
@@ -1420,7 +1420,8 @@ public class SessionManager
         }
         // Обвязки хода (OmO) дописываются только к тексту для CLI —
         // история и UI хранят исходное сообщение пользователя
-        await entry.Process!.SendMessageAsync(BuildCliTurnText(entry, text), attachedPaths);
+        await entry.Process!.SendMessageAsync(BuildCliTurnText(entry, text), attachedPaths,
+            suppressTasksExecute: suppressTasksExecute);
         // Превью чата (LastMessage выставляет адаптер из текста для CLI) — исходным сообщением
         entry.Info.LastMessage = text.Length > 100 ? text[..100] + "…" : text;
     }

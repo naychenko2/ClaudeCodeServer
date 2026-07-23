@@ -271,7 +271,9 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
 
         var prompt = string.IsNullOrWhiteSpace(req.Prompt)
             ? BuildIconPrompt(p)
-            : $"App icon logo, minimalist, flat, modern, centered, square. {req.Prompt.Trim()}";
+            : $"Flat minimalist 2D vector emblem, full-bleed filling the entire square canvas edge to edge, "
+              + "solid flat background color, bold simple shapes, no rounded-rectangle app-icon frame, "
+              + $"no border, no drop shadow, no 3D, no gloss, no padding, no text. {req.Prompt.Trim()}";
         var count = req.Count is >= 1 and <= 4 ? req.Count.Value : 4;
 
         var images = await falImage.GenerateManyAsync(prompt, count);
@@ -406,10 +408,15 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         return Ok(WithCount(projects.SetIconRecropped(id, imageName, ImageAssetHelper.ParseCrop(crop))));
     }
 
-    // Промпт иконки приложения по умолчанию — из имени проекта (не фото человека)
+    // Промпт иконки по умолчанию — из имени проекта. Просим ПЛОСКИЙ символ во всю площадь
+    // без рамки/фона-плитки/тени/полей: иначе модель рисует «иконку приложения» с рамкой и
+    // мелким символом в центре, а наша плитка добавляет вторую рамку.
     private static string BuildIconPrompt(Project project) =>
-        $"App icon logo for a project named '{project.Name}'. Minimalist, flat, modern, bold " +
-        "symbol, solid background, centered, square, high detail, no text.";
+        $"Flat minimalist 2D vector emblem representing a project named '{project.Name}'. " +
+        "A single bold symbol that fills the entire square canvas edge to edge (full-bleed), " +
+        "simple flat shapes, solid flat background color, high contrast, centered composition. " +
+        "No rounded-rectangle app-icon frame, no border, no drop shadow, no 3D, no gloss, " +
+        "no small padding around the symbol, no text, no letters.";
 }
 
 public record GenerateIconRequest(string? Prompt, int? Count);

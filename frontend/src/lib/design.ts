@@ -132,6 +132,7 @@ export const SP = {
 export const SHADOW = {
   focus:    'var(--shadow-focus)',      // focus-ring контролов
   card:     'var(--shadow-card)',       // лёгкая тень карточек
+  island:   'var(--shadow-island)',     // панель-остров: заметнее card (контакт + разлёт)
   dropdown: 'var(--shadow-dropdown)',   // выпадающие меню
   modal:    'var(--shadow-modal)',      // модальные окна
   sheet:    'var(--shadow-sheet)',      // мобильная шторка (тень кверху)
@@ -139,6 +140,21 @@ export const SHADOW = {
   fab:      'var(--shadow-fab)',        // плавающая круглая кнопка (FAB) с accent-заливкой
   fabNeutral: 'var(--shadow-fab-neutral)', // тот же ореол, но нейтральный — FAB без заливки
   thumb:    'var(--shadow-thumb)',      // бегунок переключателя
+} as const
+
+// === Панели-острова (стиль Rider Islands) ===
+// Панель — отдельная скруглённая карточка на общем фоне-холсте с зазорами,
+// вместо сплошных панелей встык с 1px-бордерами. Эталон — карточки RightPanelStack.
+export const ISLAND = {
+  canvas:   C.bgMain,      // фон-холст под островами
+  bg:       C.bgPanel,     // фон карточки-острова по умолчанию
+  gap:      8,             // зазор между островами — та самая «воздушность»
+  pad:      16,            // внешний отступ холста от краёв окна (бока/низ); сверху — gap под шапкой
+  radius:   R.xxl,         // радиус карточки
+  border:   C.borderLight, // 1px-рамка карточки
+  shadow:   SHADOW.island,
+  headerH:  40,            // высота шапки острова
+  headerBg: C.bgInset,     // шапка утоплена относительно тела карточки
 } as const
 
 // === Слои (z-index) ===

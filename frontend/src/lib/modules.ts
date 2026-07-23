@@ -3,7 +3,7 @@
 // ./Tab грузятся через Module Federation в рантайме. Паттерн стора — как featureFlags.ts.
 
 import { useSyncExternalStore } from 'react';
-import { init, loadRemote, registerRemotes } from '@module-federation/runtime';
+import { loadRemote, registerRemotes } from '@module-federation/runtime';
 import type { ComponentType } from 'react';
 import { api, type ModuleInfo } from './api';
 
@@ -22,27 +22,13 @@ export type ModuleTabComponent = ComponentType<AIHomeModuleContext>;
 
 let _modules: ModuleInfo[] = [];
 const _listeners = new Set<() => void>();
-let _mfReady = false;
 const _registered = new Set<string>();
 
 function emit() { _listeners.forEach(fn => fn()); }
 
-// Инициализация MF host-runtime единожды: shared singleton react/react-dom (§7.1).
-// Версии берём из установленного пакета — тот же React, что и в оболочке.
-function ensureMf() {
-  if (_mfReady) return;
-  _mfReady = true;
-  // Динамические импорты, чтобы не тянуть React в этот модуль лишний раз
-  // (react уже загружен оболочкой; здесь только регистрируем его как shared).
-  const React = (window as unknown as { React?: unknown }).React;
-  init({
-    name: 'aihome_shell',
-    remotes: [],
-    shared: React ? {
-      react: { version: '19.2.0', lib: () => React, shareConfig: { singleton: true, requiredVersion: '^19.2.0' } },
-    } : {},
-  });
-}
+// Хост-рантайм MF поднимает плагин @module-federation/vite (vite.config.ts) с shared
+// singleton react/react-dom (§7.1). Повторный init() здесь ЗАПРЕЩЁН: init с пустым
+// shared перетирает синглтоны плагина → remote тянет свой react-dom → React #300.
 
 // Загрузка списка модулей с бэка (на старте/после логина). Ошибку глушим — оболочка
 // работает и без модулей (R9): раздел просто не покажет вкладок.
@@ -76,7 +62,6 @@ export function useModules(): ModuleInfo[] {
 // установлено спайком R5a). Бросает при недоступности remote (ModuleHost покажет ошибку).
 export async function loadModuleTab(m: ModuleInfo): Promise<ModuleTabComponent> {
   if (!m.remoteEntry) throw new Error(`У модуля «${m.id}» нет frontend.remoteEntry`);
-  ensureMf();
   if (!_registered.has(m.id)) {
     registerRemotes([{ name: m.id, entry: m.remoteEntry, type: 'module' }]);
     _registered.add(m.id);

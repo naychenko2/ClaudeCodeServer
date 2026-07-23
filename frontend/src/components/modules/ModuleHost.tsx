@@ -1,11 +1,23 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ModuleInfo } from '../../lib/api';
 import { loadModuleTab, type ModuleTabComponent, type AIHomeModuleContext } from '../../lib/modules';
+import { ErrorBoundary } from '../ErrorBoundary';
 import { C, FONT } from '../../lib/design';
+
+// Плашка деградации (R9) — общая для ошибки загрузки remote и ошибки его рендера.
+function ModuleFallback({ name, detail }: { name: string; detail: string }) {
+  return (
+    <div style={{ padding: 32, fontFamily: FONT.sans, color: C.textMuted, textAlign: 'center' }}>
+      <p style={{ fontSize: 15, marginBottom: 8 }}>Модуль «{name}» временно недоступен</p>
+      <p style={{ fontSize: 13, opacity: 0.7 }}>{detail}</p>
+    </div>
+  );
+}
 
 // Монтирует remote-компонент ./Tab модуля через Module Federation и передаёт ему
 // AIHomeModuleContext (контракт §7, ТЗ R5). Деградация (R9): недоступный remote →
-// сообщение об ошибке вместо падения оболочки. Ремоунт при смене id модуля.
+// сообщение об ошибке вместо падения оболочки; ошибка РЕНДЕРА remote-компонента
+// локализуется ErrorBoundary — shell не размонтируется. Ремоунт при смене id модуля.
 export function ModuleHost({ module, theme, user, onTitleChange }: {
   module: ModuleInfo;
   theme: 'light' | 'dark';
@@ -28,12 +40,7 @@ export function ModuleHost({ module, theme, user, onTitleChange }: {
   }, [module.id, module.remoteEntry]);
 
   if (error) {
-    return (
-      <div style={{ padding: 32, fontFamily: FONT.sans, color: C.textMuted, textAlign: 'center' }}>
-        <p style={{ fontSize: 15, marginBottom: 8 }}>Модуль «{module.displayName}» временно недоступен</p>
-        <p style={{ fontSize: 13, opacity: 0.7 }}>{error}</p>
-      </div>
-    );
+    return <ModuleFallback name={module.displayName} detail={error} />;
   }
   if (!Tab) {
     return <div style={{ padding: 32, fontFamily: FONT.sans, color: C.textMuted }}>Загрузка модуля…</div>;
@@ -48,5 +55,12 @@ export function ModuleHost({ module, theme, user, onTitleChange }: {
     onTitleChange,
     schemaVersion: module.schemaVersion,
   };
-  return <Tab {...ctx} />;
+  return (
+    <ErrorBoundary
+      key={module.id}
+      fallback={err => <ModuleFallback name={module.displayName} detail={String(err?.message ?? err)} />}
+    >
+      <Tab {...ctx} />
+    </ErrorBoundary>
+  );
 }

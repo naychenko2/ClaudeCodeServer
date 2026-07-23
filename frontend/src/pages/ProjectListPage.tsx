@@ -7,7 +7,7 @@ import { OfflineError } from '../lib/offline';
 import { C, R, FONT } from '../lib/design';
 import { useSidebarDrag } from '../lib/sidebarWidth';
 import { MOBILE_MAX } from '../lib/breakpoints';
-import { Button, IconButton, Splitter } from '../components/ui';
+import { Button, IconButton, SidebarSplitter } from '../components/ui';
 import { ICON_SIZE } from '../components/ui/icons';
 import type { HubTabValue } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
@@ -86,11 +86,12 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
   const [loadState, setLoadState] = useState<'loading' | 'ok' | 'offline' | 'error'>('loading');
   const [retryKey, setRetryKey] = useState(0);
 
-  // Сайдбар: общая ширина + режим (закреплён / свёрнут / drawer), как в чатах и воркспейсе
+  // Сайдбар: общая ширина + режим (закреплён / свёрнут), как в чатах и воркспейсе.
+  // Сворачивание — кнопкой на сплиттере, разворот — гамбургером обратно в поток.
   const { width: sidebarWidth, dragging: draggingSplitter, startDrag: handleSidebarSplitterMouseDown } = useSidebarDrag();
-  const [sidebarMode, setSidebarMode] = useState<'pinned' | 'collapsed' | 'open'>(() =>
+  const [sidebarMode, setSidebarMode] = useState<'pinned' | 'collapsed'>(() =>
     localStorage.getItem('cc_projects_sidebar_mode') === 'collapsed' ? 'collapsed' : 'pinned');
-  useEffect(() => { if (sidebarMode !== 'open') localStorage.setItem('cc_projects_sidebar_mode', sidebarMode); }, [sidebarMode]);
+  useEffect(() => { localStorage.setItem('cc_projects_sidebar_mode', sidebarMode); }, [sidebarMode]);
 
   // Кнопка «Новый проект» в палитре проектов: переход сюда с флагом в sessionStorage —
   // открываем диалог создания сразу после монтирования
@@ -246,37 +247,21 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
             const sidebar = (
               <ProjectSidebar
                 view={view}
-                onSelect={v => { setView(v); if (sidebarMode === 'open') setSidebarMode('collapsed'); }}
+                onSelect={setView}
                 total={filtered.length}
                 groups={byGroup.map(({ group, items }) => ({ group, count: items.length }))}
                 sleepingCount={ungrouped.length}
-                onCollapse={() => setSidebarMode('collapsed')}
-                onPin={sidebarMode === 'open' ? () => setSidebarMode('pinned') : undefined}
                 onManageGroups={() => setActiveDialog({ type: 'groups' })}
               />
             );
             return (
               <>
-                {/* Закреплён: в потоке + перетаскиваемый сплиттер */}
+                {/* Закреплён: в потоке + сплиттер с всплывающей кнопкой «свернуть» */}
                 {sidebarMode === 'pinned' && (
                   <>
                     <div style={{ width: sidebarWidth, flexShrink: 0, height: '100%' }}>{sidebar}</div>
-                    <Splitter active={draggingSplitter} onMouseDown={handleSidebarSplitterMouseDown} />
+                    <SidebarSplitter active={draggingSplitter} onMouseDown={handleSidebarSplitterMouseDown} onCollapse={() => setSidebarMode('collapsed')} />
                   </>
-                )}
-                {/* Свёрнут/drawer: поверх контента */}
-                {sidebarMode !== 'pinned' && (
-                  <div style={{
-                    position: 'absolute', top: 0, left: 0, bottom: 0, zIndex: 10,
-                    width: Math.min(sidebarWidth, 320),
-                    transform: sidebarMode === 'open' ? 'translateX(0)' : 'translateX(-110%)',
-                    transition: 'transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-                    boxShadow: sidebarMode === 'open' ? '4px 0 20px rgba(20,16,10,0.15)' : 'none',
-                    borderRight: `1px solid ${C.border}`,
-                  }}>{sidebar}</div>
-                )}
-                {sidebarMode === 'open' && (
-                  <div onClick={() => setSidebarMode('collapsed')} style={{ position: 'absolute', inset: 0, zIndex: 9, background: C.overlay }} />
                 )}
               </>
             );
@@ -285,7 +270,7 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
             {/* Шапка панели: заголовок + сортировка + Проект */}
             <div style={{ flexShrink: 0, padding: '20px 26px 14px', display: 'flex', alignItems: 'center', gap: 12 }}>
               {sidebarMode === 'collapsed' && (
-                <IconButton onClick={() => setSidebarMode('open')} title="Показать панель" size="md" variant="soft" style={{ marginLeft: -4 }}>
+                <IconButton onClick={() => setSidebarMode('pinned')} title="Показать панель" size="md" variant="soft" style={{ marginLeft: -4 }}>
                   <MenuIcon size={ICON_SIZE.sm} strokeWidth={2} />
                 </IconButton>
               )}

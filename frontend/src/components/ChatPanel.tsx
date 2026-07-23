@@ -62,6 +62,9 @@ interface Props {
   // Приветственный бабл персоны: показывается в пустом чате вместо обычного empty state
   // (чисто визуально, в бэкенд не отправляется). Как только пойдут реальные сообщения — исчезает.
   greetingBubble?: React.ReactNode;
+  // Стиль Islands: чат живёт БЕЗ рамки прямо на холсте (корень прозрачный),
+  // а шапка выделена в собственную карточку-остров с зазором снизу
+  headerIsland?: boolean;
 }
 
 // Фаза работы режима «План» — выводится из ленты, mode и isWaiting (сервер фазу не присылает)
@@ -103,7 +106,7 @@ function derivePlanPhase(items: ChatItem[], mode: Mode, isWaiting: boolean): Pla
   return null;
 }
 
-export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, attachedFiles, onAttachedFilesChange, onResume, artifactsOpen, onToggleArtifacts, greetingBubble }: Props) {
+export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, attachedFiles, onAttachedFilesChange, onResume, artifactsOpen, onToggleArtifacts, greetingBubble, headerIsland }: Props) {
   const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, workLoop: liveWorkLoop, promptSuggestion, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, compact, toggleThinking, noteCompanionSwitch } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
   // Цикл «до готово» (флаг work-loop): live-состояние из событий work_loop,
   // до первого события — из Session.workLoop; null — цикл выключен
@@ -1002,41 +1005,48 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     // карточки консультаций пересобираются с активностью внутри
   }, [items, renderItem, lastTaskIdx, execZone, online, onOpenFile, project, handleRevert, personasVersion, sessionBusy]);
 
+  const headerBar = (
+    <ChatHeaderBar
+      island={headerIsland}
+      session={session}
+      project={project}
+      hasMessages={hasMessages}
+      online={online}
+      cost={costStats}
+      falCost={falCostStats}
+      billing={claudeBilling}
+      onBillingChange={canEditBilling ? changeBilling : undefined}
+      rateWindows={rateWindows}
+      onOpenSettings={() => setShowEdit(true)}
+      isMobile={isMobile}
+      onBack={onBack}
+      activeWorkflow={activeWorkflowInfo ?? undefined}
+      lastMechanic={lastMechanic}
+      onOpenSidebar={onOpenSidebar}
+      artifactsOpen={artifactsOpen}
+      onToggleArtifacts={onToggleArtifacts}
+      artifactFileCount={artifactFileCount}
+      ctxEstimate={ctxEstimate}
+      isWaiting={isWaiting}
+      isCompacting={isCompacting}
+      canCompact={canCompact}
+      compactNote={compactNote}
+      onCompact={compact}
+      persona={persona}
+      personaZoneName={project?.name ?? null}
+      agent={persona ? null : chatAgent}
+      participants={isGroupChat ? participantPersonas : null}
+      onSessionUpdated={onSessionUpdated}
+    />
+  );
+
   return (
     <AssistantNameContext.Provider value={asstName}>
     <PersonaContext.Provider value={persona}>
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative', background: C.bgMain }}>
-      <ChatHeaderBar
-        session={session}
-        project={project}
-        hasMessages={hasMessages}
-        online={online}
-        cost={costStats}
-        falCost={falCostStats}
-        billing={claudeBilling}
-        onBillingChange={canEditBilling ? changeBilling : undefined}
-        rateWindows={rateWindows}
-        onOpenSettings={() => setShowEdit(true)}
-        isMobile={isMobile}
-        onBack={onBack}
-        activeWorkflow={activeWorkflowInfo ?? undefined}
-        lastMechanic={lastMechanic}
-        onOpenSidebar={onOpenSidebar}
-        artifactsOpen={artifactsOpen}
-        onToggleArtifacts={onToggleArtifacts}
-        artifactFileCount={artifactFileCount}
-        ctxEstimate={ctxEstimate}
-        isWaiting={isWaiting}
-        isCompacting={isCompacting}
-        canCompact={canCompact}
-        compactNote={compactNote}
-        onCompact={compact}
-        persona={persona}
-        personaZoneName={project?.name ?? null}
-        agent={persona ? null : chatAgent}
-        participants={isGroupChat ? participantPersonas : null}
-        onSessionUpdated={onSessionUpdated}
-      />
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative', background: headerIsland ? 'transparent' : C.bgMain }}>
+      {/* В режиме headerIsland шапка сама рисует себя hero-вариантом прямо на
+          холсте (ChatHeaderBar, ветка island) — обёртки не нужно */}
+      {headerBar}
 
       {/* Сообщения (нижний отступ = высота плавающего composer + зазор) */}
       <div ref={scrollRef} onScroll={handleMessagesScroll} data-selection-scope="chat" data-selection-target="[data-selection-doc]" data-selection-priority="1" style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', position: 'relative', paddingTop: isMobile ? 16 : 20, paddingLeft: isMobile ? 12 : 24, paddingRight: isMobile ? 12 : 24, paddingBottom: 8,

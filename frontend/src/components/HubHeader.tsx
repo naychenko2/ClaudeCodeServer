@@ -134,7 +134,10 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive }: Props
       flexShrink: 0, display: 'flex', alignItems: 'center', gap: 12,
       height: isMobile ? TB.heightMobile : TB.heightDesktop,
       padding: `0 ${isMobile ? TB.padXMobile : TB.padX}px`,
-      boxSizing: 'border-box', borderBottom: `1px solid ${C.border}`,
+      // Десктоп: шапка сливается с холстом (Islands) — граница не нужна, острова
+      // начинаются под ней с зазором. Мобилка: полноэкранные списки без островов,
+      // без границы шапка повисла бы в воздухе.
+      boxSizing: 'border-box', borderBottom: isMobile ? `1px solid ${C.border}` : 'none',
     }}>
       {/* Левая секция — логотип, он же вход на дашборд. На мобиле скрыт: место нужно
           вкладкам, а на дашборд там ведёт пункт «Домой» в «⋯ Разделы» */}

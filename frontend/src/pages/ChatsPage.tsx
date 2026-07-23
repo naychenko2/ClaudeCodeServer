@@ -8,7 +8,7 @@ import { showToast } from '../lib/toast';
 import { C, FONT } from '../lib/design';
 import { useSidebarDrag } from '../lib/sidebarWidth';
 import { useIsMobile } from '../lib/breakpoints';
-import { Button, IconButton, Splitter, SidebarSplitter } from '../components/ui';
+import { Button, IconButton, Island, IslandScaffold, IslandSplitter } from '../components/ui';
 import { ICON_SIZE } from '../components/ui/icons';
 import type { HubTabValue } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
@@ -206,10 +206,13 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
   // Развернуть свёрнутый сайдбар в поток — проброс в шапку ChatPanel
   const openSidebar = sidebarMode !== 'pinned' ? () => setSidebarMode('pinned') : undefined;
 
-  // Внутренность сайдбара: список чатов (управление сворачиванием — на сплиттере)
+  // Внутренность сайдбара-острова: список чатов (управление сворачиванием — на
+  // сплиттере). Паддинг здесь, а не на обёртке: IslandScaffold отступы не добавляет.
   const sidebarInner = (
-    <div style={{ flex: 1, minHeight: 0 }}>
-      <ChatList chats={chats} activeId={activeId} onSelect={selectChat} onNew={newChat} creating={creating} onEdited={handleChatEdited} onDeleted={handleChatDeleted} workflowRunningFor={workflowRunningFor ?? undefined} />
+    <div style={{ flex: 1, minHeight: 0, padding: '8px 10px 14px', display: 'flex', flexDirection: 'column' }}>
+      <div style={{ flex: 1, minHeight: 0 }}>
+        <ChatList chats={chats} activeId={activeId} onSelect={selectChat} onNew={newChat} creating={creating} onEdited={handleChatEdited} onDeleted={handleChatDeleted} workflowRunningFor={workflowRunningFor ?? undefined} />
+      </div>
     </div>
   );
 
@@ -258,25 +261,21 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
     <div style={{ height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <HubHeader value="chats" onTab={onHubTab} auth={auth} onLogout={onLogout} />
 
-      {/* Тело: сайдбар списка (pinned/collapsed) + центр */}
-      <div style={{ flex: 1, minHeight: 0, display: 'flex', position: 'relative' }}>
-
-        {/* === Pinned: сайдбар в потоке + сплиттер с всплывающей кнопкой «свернуть» === */}
-        {sidebarMode === 'pinned' && (
-          <>
-            <div style={{ width: sidebarWidth, flexShrink: 0, background: C.bgPanel, padding: '8px 10px 14px', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-              {sidebarInner}
-            </div>
-            <SidebarSplitter active={draggingSplitter} onMouseDown={handleSidebarSplitterMouseDown} onCollapse={() => setSidebarMode('collapsed')} />
-          </>
-        )}
-
-        {/* Центр */}
-        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', background: C.bgMain }}>
-          {activeChat ? (
+      {/* Тело: остров-сайдбар + центральный остров (+ остров артефактов) на холсте */}
+      <div style={{ flex: 1, minHeight: 0 }}>
+        <IslandScaffold
+          sidebarOpen={sidebarMode === 'pinned'}
+          sidebar={sidebarInner}
+          sidebarWidth={sidebarWidth}
+          sidebarDragging={draggingSplitter}
+          onSidebarDrag={handleSidebarSplitterMouseDown}
+          onSidebarCollapse={() => setSidebarMode('collapsed')}
+          centerBare
+          center={activeChat ? (
             <ChatPanel
               key={activeChat.id}
               session={activeChat}
+              headerIsland
               skills={skills}
               attachedFiles={attachedFiles}
               onAttachedFilesChange={setAttachedFiles}
@@ -319,17 +318,15 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
               </div>
             </>
           )}
-        </div>
-
-        {/* Панель артефактов сессии (за фич-флагом) — колонка справа от чата */}
-        {artifactsOpen && activeChat && (
-          <>
-            <Splitter active={draggingArtifacts} onMouseDown={handleArtifactsSplitterMouseDown} />
-            <div style={{ width: artifactsWidth, flexShrink: 0, height: '100%' }}>
-              <ArtifactsPanel sessionId={activeChat.id} personaId={activeChat.personaId} session={activeChat} onClose={() => setArtifactsOpen(false)} />
-            </div>
-          </>
-        )}
+          right={artifactsOpen && activeChat ? (
+            <>
+              <IslandSplitter active={draggingArtifacts} onMouseDown={handleArtifactsSplitterMouseDown} />
+              <Island style={{ width: artifactsWidth, flexShrink: 0 }}>
+                <ArtifactsPanel sessionId={activeChat.id} personaId={activeChat.personaId} session={activeChat} onClose={() => setArtifactsOpen(false)} />
+              </Island>
+            </>
+          ) : undefined}
+        />
       </div>
     </div>
   );

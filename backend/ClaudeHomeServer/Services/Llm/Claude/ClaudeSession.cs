@@ -35,6 +35,12 @@ public class ClaudeSession : ILlmSessionAdapter
     // (chats_send). Выставляется в начале RunTurnAsync и сбрасывается после хода;
     // при глубине >= 1 BuildTurnMcpConfig урезает инструменты делегирования (анти-рекурсия)
     private volatile int _currentTurnAgentDepth;
+    // Реакционный авто-ход постановщика на доклад делегированной задачи (TaskExecutionService.
+    // ReportToDelegatorAsync) — отдельный от agentDepth флаг: ход обычного пользовательского
+    // чата (agentDepth=0), но tasks_execute всё равно должен быть недоступен, иначе A может
+    // сам себе запустить только что созданную задачу → новый доклад → новая реакция →
+    // бесконечный платный цикл A↔B. Выставляется/сбрасывается вместе с _currentTurnAgentDepth.
+    private volatile bool _currentTurnSuppressTasksExecute;
     // Стриминг tool_use: индекс content-блока → (id инструмента, накопленный partial_json).
     // Concurrent — для видимости между потоками пампа разных ходов
     private readonly ConcurrentDictionary<int, (string Id, System.Text.StringBuilder Sb)> _toolStream = new();
@@ -276,6 +282,14 @@ public class ClaudeSession : ILlmSessionAdapter
         _fileWatcher = new TurnFileWatcher(_rootPath, _onMessage, fileWatcherOptions);
     }
 
+    // Гейт TASKS_EXECUTE (вынесен ради юнит-тестов): доступен только на пользовательском
+    // ходу (не агентном), при неисчерпанной глубине делегирования исполнителей и когда
+    // ход явно не подавил его (реакция постановщика на доклад делегированной задачи —
+    // TaskExecutionService.ReportToDelegatorAsync — иначе A мог бы сам себе запустить
+    // только что созданную задачу и зациклить пинг-понг A↔B).
+    internal static bool ResolveTasksExecuteEnabled(int currentTurnAgentDepth, int taskDelegationDepth, bool suppressTasksExecute) =>
+        currentTurnAgentDepth < 1 && taskDelegationDepth < 3 && !suppressTasksExecute;
+
     // Объединённый MCP-конфиг хода: серверы из базового конфига (Dify с инжекцией
     // dataset id) + tasks-server с контекстом сессии; для сессий сторонних провайдеров —
     // ещё и user-scope серверы из ~/.claude.json (fal-ai и др.: изолированный
@@ -367,8 +381,11 @@ public class ClaudeSession : ILlmSessionAdapter
             if (hasTasks)
             {
                 // tasks_execute порождает новую сессию Claude — на агентном ходу
-                // (chats_send из другой сессии) не даём, та же анти-рекурсия, что у chats
-                var tasksExecute = _currentTurnAgentDepth < 1 ? "1" : "0";
+                // (chats_send из другой сессии) не даём, та же анти-рекурсия, что у chats.
+                // Плюс гард глубины делегирования: чат-исполнитель задачи глубины >= 3 не
+                // запускает нового исполнителя — обрыв рекурсивного размножения (Info.TaskId →
+                // TaskItem.DelegationDepth, см. Session.TaskDelegationDepth).
+                var tasksExecute = ResolveTasksExecuteEnabled(_currentTurnAgentDepth, Info.TaskDelegationDepth, _currentTurnSuppressTasksExecute) ? "1" : "0";
                 servers["tasks"] = new System.Text.Json.Nodes.JsonObject
                 {
                     ["command"] = "node",
@@ -729,7 +746,8 @@ public class ClaudeSession : ILlmSessionAdapter
     // Ничего не делаем при старте — процесс запускается при первом сообщении
     public Task StartAsync() => Task.CompletedTask;
 
-    public Task SendMessageAsync(string text, IReadOnlyList<string>? attachedPaths = null, int agentDepth = 0)
+    public Task SendMessageAsync(string text, IReadOnlyList<string>? attachedPaths = null, int agentDepth = 0,
+        bool suppressTasksExecute = false)
     {
         Info.MessageCount++;
         Info.LastMessage = text.Length > 100 ? text[..100] + "…" : text;
@@ -741,21 +759,21 @@ public class ClaudeSession : ILlmSessionAdapter
         var (imagePaths, otherPaths) = AttachmentInliner.SplitImagePaths(attachedPaths);
         var fullText = AttachmentInliner.BuildMessageText(_rootPath, effectiveText, otherPaths);
 
-        return QueueTurnAsync(fullText, imagePaths, agentDepth);
+        return QueueTurnAsync(fullText, imagePaths, agentDepth, suppressTasksExecute);
     }
 
     // Ручное сворачивание контекста: /compact как обычный ход,
     // минуя счётчики сообщений, авто-имя чата и разворачивание скиллов
-    public Task CompactAsync() => QueueTurnAsync("/compact", [], 0);
+    public Task CompactAsync() => QueueTurnAsync("/compact", [], 0, false);
 
     // Ставит ход в очередь в фоне, чтобы не блокировать SignalR-соединение
-    private Task QueueTurnAsync(string fullText, List<string> imagePaths, int agentDepth)
+    private Task QueueTurnAsync(string fullText, List<string> imagePaths, int agentDepth, bool suppressTasksExecute)
     {
         _ = Task.Run(async () =>
         {
             if (_cts.IsCancellationRequested) return;
             await _turnLock.WaitAsync(_cts.Token);
-            try { await RunTurnAsync(fullText, imagePaths, agentDepth, _cts.Token); }
+            try { await RunTurnAsync(fullText, imagePaths, agentDepth, suppressTasksExecute, _cts.Token); }
             catch (OperationCanceledException) { /* остановка сессии — штатно */ }
             catch (Exception ex)
             {
@@ -767,6 +785,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 // Ход закончился — следующий (если его инициирует человек) идёт с полным
                 // набором инструментов; действует ровно на ход внутри _turnLock
                 _currentTurnAgentDepth = 0;
+                _currentTurnSuppressTasksExecute = false;
                 _turnLock.Release();
             }
         });
@@ -1101,11 +1120,13 @@ public class ClaudeSession : ILlmSessionAdapter
         _forceNonPlanNextTurn = false;
     }
 
-    private async Task RunTurnAsync(string text, IReadOnlyList<string> imagePaths, int agentDepth, CancellationToken ct)
+    private async Task RunTurnAsync(string text, IReadOnlyList<string> imagePaths, int agentDepth,
+        bool suppressTasksExecute, CancellationToken ct)
     {
         // Глубина делегирования действует ровно на этот ход (внутри _turnLock):
         // MCP-конфиг ниже собирается уже с учётом анти-рекурсии, сброс — в finally
         _currentTurnAgentDepth = agentDepth;
+        _currentTurnSuppressTasksExecute = suppressTasksExecute;
 
         // --print обязателен: без него --output-format/--input-format/--include-partial-messages/--permission-prompt-tool не работают
         // --input-format stream-json нужен: мы посылаем JSON-объекты в stdin, а не plain text
@@ -1230,7 +1251,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     ? " У проекта может быть Kanban-доска с кастомными колонками: получи их через tasks_board_columns и клади задачу в нужную колонку, передавая columnId в tasks_create/tasks_update (статус выставится по категории колонки)."
                     : "";
                 // tasks_execute доступен только на пользовательском ходу (см. TASKS_EXECUTE выше)
-                var executeHint = _currentTurnAgentDepth < 1
+                var executeHint = ResolveTasksExecuteEnabled(_currentTurnAgentDepth, Info.TaskDelegationDepth, _currentTurnSuppressTasksExecute)
                     ? " tasks_execute запускает Claude-исполнителя задачи (отдельная сессия, работает в фоне)."
                     : "";
                 // Поручение задачи персоне — только когда доступен и personas-server (есть personas_list)

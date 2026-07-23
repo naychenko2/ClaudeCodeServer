@@ -15,6 +15,7 @@ import { getPersonaById, usePersonasVersion, personaLabel, ensurePersonasLoaded 
 import { IconNotes } from '../../features/notes/shared';
 import { saveChatNote, openNoteById } from '../../features/notes/saveToNote';
 import { MarkdownContent } from './MarkdownContent';
+import { parseDelegationReport } from '../../lib/delegationReport';
 import { ToolUseView } from './ToolUseView';
 import { PersonaAskView, isPersonaAsk } from './PersonaAskView';
 import { PersonaTaskView, isAgentToolUse } from './PersonaTaskView';
@@ -328,6 +329,24 @@ function TextMessageView({ text, online, onRetry, streaming }: { text: string; o
   );
 }
 
+// Бейдж гостевой реплики-доклада (модель Z): в чате с собеседником A появляется реплика
+// от лица персоны-исполнителя B — маркер, чтобы чужое лицо не спуталось с ответом A
+// (ADR-001, инвариант-риск гостевой реплики).
+function DelegationReportBadge({ title }: { title: string }) {
+  return (
+    <div style={{
+      display: 'inline-flex', alignItems: 'center', gap: 6, alignSelf: 'flex-start',
+      maxWidth: '100%', background: C.accentLight, border: `1px solid ${C.accentMuted}`,
+      borderRadius: R.max, padding: '3px 11px', fontSize: 11, fontWeight: 600, color: C.accent,
+    }}>
+      <span style={{ flexShrink: 0 }}>↩</span>
+      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        Отчёт по делегированной задаче: <span style={{ color: C.textHeading }}>{title}</span>
+      </span>
+    </div>
+  );
+}
+
 // Нейтральный акцент для агента без персоны (как в PersonaAskView)
 const AGENT_NEUTRAL = '#8A8070';
 
@@ -601,7 +620,15 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       return null;
 
     case 'text': {
-      const msg = <TextMessageView text={item.text} online={online} onRetry={onRetry} streaming={streaming} />;
+      // Доклад делегированной задачи (модель Z) — гостевая реплика несёт маркер первой
+      // строкой; распознаём его и рендерим бейджем, а в тело идёт только сам доклад
+      const report = parseDelegationReport(item.text);
+      const msg = (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {report && <DelegationReportBadge title={report.title} />}
+          <TextMessageView text={report ? report.body : item.text} online={online} onRetry={onRetry} streaming={streaming} />
+        </div>
+      );
       // В персон-чате слева от реплики ассистента — её аватар (главный сигнал «говорит она»).
       // Авторство реплики (personaId из истории) главнее текущей персоны чата: после
       // смены собеседника старые реплики сохраняют аватар прежней персоны.

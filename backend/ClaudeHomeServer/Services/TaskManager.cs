@@ -26,6 +26,8 @@ public class TaskManager
         Load();
         // Вычисляемый Session.ParentSessionId (иерархия чатов): резолв TaskId → SourceSessionId
         Session.TaskSourceSessionResolver = id => GetById(id)?.SourceSessionId;
+        // Вычисляемый Session.TaskDelegationDepth (гейт TASKS_EXECUTE): резолв TaskId → глубина
+        Session.TaskDelegationDepthResolver = id => GetById(id)?.DelegationDepth ?? 0;
     }
 
     // Запись в проектный лог (только для задач с projectId — личные в лог не попадают).
@@ -98,6 +100,7 @@ public class TaskManager
             SourceNoteLine = req.SourceNoteLine,
             CreatedByPersonaId = string.IsNullOrEmpty(req.CreatedByPersonaId) ? null : req.CreatedByPersonaId,
             SourceSessionId = string.IsNullOrEmpty(req.SourceSessionId) ? null : req.SourceSessionId,
+            DelegationDepth = ComputeDelegationDepth(req.SourceSessionId),
             Order = NextOrder(ownerId),
             // Создаём задачу сразу готовой (редко) — фиксируем момент завершения
             CompletedAt = req.Status == TaskItemStatus.Done ? DateTime.UtcNow : null,
@@ -119,6 +122,14 @@ public class TaskManager
     {
         if (task.PersonaId is not null) task.Assignee = TaskItemAssignee.Claude;
     }
+
+    // Глубина цепочки делегирования новой задачи: если её создали из чата, который сам
+    // сейчас исполняет родительскую задачу (её LinkedSessionId == sourceSessionId) —
+    // глубина родителя + 1; иначе (обычный чат, UI, API) — 0.
+    private int ComputeDelegationDepth(string? sourceSessionId) =>
+        !string.IsNullOrEmpty(sourceSessionId) && GetBySession(sourceSessionId) is { } parent
+            ? parent.DelegationDepth + 1
+            : 0;
 
     // Следующее значение Order для новой задачи владельца — в конец глобального порядка.
     // Внутри колонки относительный порядок сохраняется (сортировка на доске по Order).
@@ -234,6 +245,9 @@ public class TaskManager
             // экземпляра терялось бы уведомление постановщика. SourceSessionId НЕ переносим —
             // конкретная сессия (как LinkedSessionId) у нового экземпляра начинается заново
             CreatedByPersonaId = completed.CreatedByPersonaId,
+            // Глубина делегирования — устойчивый атрибут серии (как CreatedByPersonaId):
+            // без переноса регулярная делегированная задача «сбрасывала» бы гард на 2-м экземпляре
+            DelegationDepth = completed.DelegationDepth,
             Recurrence = completed.Recurrence,
             SeriesId = completed.SeriesId ?? completed.Id,
             LinkedFiles = [.. completed.LinkedFiles],

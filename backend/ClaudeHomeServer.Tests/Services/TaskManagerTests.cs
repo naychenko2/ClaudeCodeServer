@@ -359,4 +359,64 @@ public class TaskManagerTests : IDisposable
 
         _sut.MarkClaudeResult(task.Id, "success")!.ClaudeResult.Should().Be("success");
     }
+
+    // ─── Глубина делегирования ────────────────────────────────────────────────
+
+    [Fact]
+    public void Create_БезSourceSessionId_ГлубинаНоль()
+    {
+        var task = _sut.Create(null, "u", new CreateTaskRequest("t"));
+        task.DelegationDepth.Should().Be(0);
+    }
+
+    [Fact]
+    public void Create_SourceSessionIdНеЯвляетсяЧатомИсполнителя_ГлубинаНоль()
+    {
+        // Обычный чат (не LinkedSessionId ни одной задачи) — не считается делегированием
+        var task = _sut.Create(null, "u", new CreateTaskRequest("t", SourceSessionId: "some-chat"));
+        task.DelegationDepth.Should().Be(0);
+    }
+
+    [Fact]
+    public void Create_ИзЧатаИсполнителя_ГлубинаРодителяПлюсОдин()
+    {
+        var parent = _sut.Create(null, "u", new CreateTaskRequest("родитель"));
+        _sut.MarkClaudeStarted(parent.Id, "exec-sess-1", DateTime.UtcNow); // parent.LinkedSessionId = exec-sess-1
+
+        var child = _sut.Create(null, "u",
+            new CreateTaskRequest("ребёнок", SourceSessionId: "exec-sess-1"));
+
+        child.DelegationDepth.Should().Be(1);
+    }
+
+    [Fact]
+    public void Create_ЦепочкаДелегирования_ГлубинаНарастает()
+    {
+        var depth0 = _sut.Create(null, "u", new CreateTaskRequest("d0"));
+        _sut.MarkClaudeStarted(depth0.Id, "sess-0", DateTime.UtcNow);
+
+        var depth1 = _sut.Create(null, "u", new CreateTaskRequest("d1", SourceSessionId: "sess-0"));
+        _sut.MarkClaudeStarted(depth1.Id, "sess-1", DateTime.UtcNow);
+
+        var depth2 = _sut.Create(null, "u", new CreateTaskRequest("d2", SourceSessionId: "sess-1"));
+
+        depth1.DelegationDepth.Should().Be(1);
+        depth2.DelegationDepth.Should().Be(2);
+    }
+
+    [Fact]
+    public void SpawnNextOccurrence_ПереноситГлубинуДелегирования()
+    {
+        var parent = _sut.Create(null, "u", new CreateTaskRequest("родитель"));
+        _sut.MarkClaudeStarted(parent.Id, "exec-sess-1", DateTime.UtcNow);
+        var task = _sut.Create(null, "u", new CreateTaskRequest("регулярная",
+            SourceSessionId: "exec-sess-1", DueDate: "2026-07-01",
+            Recurrence: new TaskRecurrence { Type = TaskRecurrenceType.Daily }));
+        task.DelegationDepth.Should().Be(1);
+        _sut.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+
+        var next = _sut.SpawnNextOccurrence(_sut.GetById(task.Id)!);
+
+        next!.DelegationDepth.Should().Be(1);
+    }
 }

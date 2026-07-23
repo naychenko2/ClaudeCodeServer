@@ -122,4 +122,14 @@ public class Session
     // null — корневой чат либо задача удалена (чат всплывает в корень — принято осознанно).
     public string? ParentSessionId =>
         TaskId != null ? TaskSourceSessionResolver?.Invoke(TaskId) : null;
+
+    // Резолвер «задача → глубина делегирования»: назначает TaskManager при старте (как
+    // TaskSourceSessionResolver). Истина живёт в TaskItem.DelegationDepth.
+    public static Func<string, int>? TaskDelegationDepthResolver { get; set; }
+
+    // Глубина цепочки делегирования задачи-исполнителя этого чата (0 — обычный чат либо
+    // задача без глубины). Вычисляется, не хранится. Используется гейтом TASKS_EXECUTE
+    // (ClaudeSession.BuildTurnMcpConfig): чат-исполнитель глубины >= 3 не запускает нового.
+    public int TaskDelegationDepth =>
+        TaskId != null ? TaskDelegationDepthResolver?.Invoke(TaskId) ?? 0 : 0;
 }

@@ -29,6 +29,13 @@ public record TextDeltaMessage(string Text)
 public record UserMessageMessage(string Text, IReadOnlyList<string>? AttachedPaths, string? SenderPersonaId, bool Auto)
     : ServerMessage("user_message");
 
+// Гостевая реплика персоны, вставленная в историю без агентского хода (0 токенов) — доклад
+// о завершении делегированной задачи (модель Z, TaskExecutionService.ReportToDelegatorAsync).
+// Live-аналог StoredTextMessage: клиент не получал текст через text_delta, бродкастим целиком,
+// как UserMessageMessage для сервер-инициированной отправки. PersonaId — автор реплики (её лицо).
+public record GuestTextMessage(string Text, string PersonaId)
+    : ServerMessage("guest_text");
+
 public record ThinkingDeltaMessage(string Text)
     : ServerMessage("thinking_delta");
 

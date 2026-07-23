@@ -17,26 +17,8 @@ import { SectionLabel } from '../tasks/bits';
 import { PersonaAvatar } from './PersonaAvatar';
 import { AvatarCropDialog, type AvatarCropResult } from './AvatarCropDialog';
 
-// Транслит кириллицы — та же таблица, что в backend PersonaManager.Translit: без неё
-// slug русского имени рассинхронится с сохранённым на бэке (превью ≠ факт).
-const TRANSLIT: Record<string, string> = {
-  а: 'a', б: 'b', в: 'v', г: 'g', д: 'd', е: 'e', ё: 'e', ж: 'zh', з: 'z', и: 'i', й: 'y',
-  к: 'k', л: 'l', м: 'm', н: 'n', о: 'o', п: 'p', р: 'r', с: 's', т: 't', у: 'u', ф: 'f',
-  х: 'h', ц: 'ts', ч: 'ch', ш: 'sh', щ: 'sch', ъ: '', ы: 'y', ь: '', э: 'e', ю: 'yu', я: 'ya',
-};
-
-// Slug для @handle — зеркалит backend Slugify. live=true не обрезает хвостовой дефис,
-// чтобы его можно было печатать (финальную обрезку сделает бэкенд при сохранении).
-function slugifyHandle(s: string, live = false): string {
-  let out = '';
-  let prevDash = false;
-  for (const ch of s.trim().toLowerCase()) {
-    if (/[a-z0-9]/.test(ch)) { out += ch; prevDash = false; }
-    else if (ch in TRANSLIT) { const t = TRANSLIT[ch]; if (t) { out += t; prevDash = false; } }
-    else if (!prevDash && out.length > 0) { out += '-'; prevDash = true; }
-  }
-  return live ? out : out.replace(/-+$/, '');
-}
+// Slug для @handle — общий хелпер, зеркалящий backend Slugify (см. lib/slug)
+import { slugify as slugifyHandle } from '../../lib/slug';
 
 // Императивный API формы для тулбара-родителя: сохранить / удалить.
 export interface PersonaFormHandle {

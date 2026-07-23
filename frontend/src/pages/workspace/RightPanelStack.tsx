@@ -21,7 +21,7 @@ import { AgentsSection } from '../../components/artifacts/AgentsSection';
 import { ContextSection } from '../../components/artifacts/ContextSection';
 import { panelBadge } from '../../components/artifacts/meta';
 import { useWindowWidth } from '../../lib/breakpoints';
-import { usePanelStack, PANEL_MIN_H, RAIL_W, type PanelKey } from './panelStackState';
+import { wsPanelStack, PANEL_MIN_H, RAIL_W, type PanelKey, type PanelStack } from './panelStackState';
 
 // Порог планшета: шире — панель в потоке рядом с чатом, уже — drawer поверх
 const TABLET_INLINE_MIN = 1000;
@@ -55,11 +55,20 @@ interface Props {
   // Планшет: упрощённый режим — всегда одна панель (эфемерный solo, локальный стейт,
   // десктопная раскладка layout НЕ трогается), без DnD/колонок/сворачивания
   isTablet?: boolean;
+  // Телефон: тот же компактный режим, что и планшет (одна панель + drawer)
+  isMobile?: boolean;
+  // Только сессионная группа (План/Агенты/Персона) — для раздела «Чаты» и мобилки:
+  // проектные инструменты не рендерятся, пустая рельса скрывается целиком
+  sessionOnly?: boolean;
+  // Инстанс стора раскладки: воркспейс и «Чаты» держат НЕЗАВИСИМЫЕ раскладки
+  // (по умолчанию — воркспейсный, см. panelStackState.createPanelStack)
+  panelStack?: { use: () => PanelStack };
   // Терминал и Preview доступны только при включённых инструментах проекта
   toolsEnabled?: boolean;
   // Готовый контент панелек (кроме Плана — он собирается здесь из артефактов сессии).
   // Строится в WorkspacePage, где живут состояние и обработчики этих инструментов.
-  panels: Partial<Record<Exclude<PanelKey, 'plan'>, ReactNode>>;
+  // В sessionOnly не нужен — проектных панелей там нет.
+  panels?: Partial<Record<Exclude<PanelKey, 'plan'>, ReactNode>>;
   // Контролы в шапку карточки (слева от fullscreen/close) — напр. переключатель
   // видов задач. Собираются в WorkspacePage, состояние живёт там же.
   panelHeaderExtras?: Partial<Record<PanelKey, ReactNode>>;
@@ -263,9 +272,14 @@ function PanelShell({ k, badge, headerExtras, fullscreen, canDrag, onToggleFulls
   );
 }
 
-export function RightPanelStack({ session, projectId, rootPath, isTablet, toolsEnabled, panels, panelHeaderExtras, railCounts }: Props) {
-  const { layout, weights, width, fullscreen, mode, toggle, close, collapsed, toggleCollapsed, setWeights, setWidth, moveTo, moveToNewColumn, moveAt, setFullscreen, setMode } = usePanelStack();
+export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobile, sessionOnly, panelStack, toolsEnabled, panels = {}, panelHeaderExtras, railCounts }: Props) {
+  // Инстанс стора раскладки: оба объявлены на уровне модуля, поэтому вызов хука
+  // безусловный и стабильный между рендерами (проп не меняется по ходу жизни экрана)
+  const usePanels = (panelStack ?? wsPanelStack).use;
+  const { layout, weights, width, fullscreen, mode, toggle, close, collapsed, toggleCollapsed, setWeights, setWidth, moveTo, moveToNewColumn, moveAt, setFullscreen, setMode } = usePanels();
   const windowWidth = useWindowWidth();
+  // Компактный режим (планшет и телефон): одна панель + drawer, без колонок/DnD/solo
+  const compact = !!isTablet || !!isMobile;
   // Планшет: до ДВУХ панелей стеком в одной колонке; выбор локальный эфемерный —
   // десктопный layout не трогаем. Третья открытая вытесняет самую старую (FIFO).
   const [tabletPanels, setTabletPanels] = useState<PanelKey[]>([]);
@@ -286,10 +300,28 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, toolsE
   // Состояние ЕДИНОЕ для обоих режимов: в solo layout содержит максимум одну
   // панель (toggle заменяет её), поэтому рендер одинаковый.
   // На планшете колонки из layout не рендерятся — там свой стек до двух панелей.
-  const columns = isTablet ? [] : layout.map(col => col.filter(keyAvailable)).filter(col => col.length > 0);
-  const tabletKeys = isTablet ? tabletPanels.filter(keyAvailable) : [];
-  const openKeys = isTablet ? tabletKeys : columns.flat();
+  const columns = compact ? [] : layout.map(col => col.filter(keyAvailable)).filter(col => col.length > 0);
+  const tabletKeys = compact ? tabletPanels.filter(keyAvailable) : [];
+  const openKeys = compact ? tabletKeys : columns.flat();
   const fsKey = fullscreen && openKeys.includes(fullscreen) ? fullscreen : null;
+
+  // Видимость иконки на рельсе. Сессионные кнопки показываются ТОЛЬКО когда есть что
+  // открывать (План — если был план, Агенты — если есть контент, Персона — если
+  // собеседник-персона): иначе иконка скрыта целиком (а не дизейблится), вместе с ней
+  // прячется и разделитель групп. Единый расчёт — panelBadge из meta.
+  // Объявлено до расчёта ширины зоны: от него зависит скрытие пустой сессионной рельсы.
+  const railKeyVisible = (k: PanelKey): boolean => {
+    if (!keyAvailable(k)) return false;
+    if (k === 'plan') return plansCount > 0 || openKeys.includes(k);
+    if (k === 'agents' || k === 'context') {
+      return panelBadge(k, artifacts, badgeOpts).visible || openKeys.includes(k);
+    }
+    return true;
+  };
+
+  // Режим sessionOnly без контента: рельсу не рисуем вовсе, чтобы у чата не торчала
+  // пустая полоса. Ширина зоны при этом 0 — иначе FAB AI-хаба уедет под невидимую рельсу.
+  const railHidden = !!sessionOnly && !SESSION_RAIL_KEYS.some(railKeyVisible) && openKeys.length === 0;
 
   // Сдвиг FAB AI-хаба к зоне чата: правую кромку занимают рельса и панели —
   // пробрасываем их суммарную ширину в глобальную переменную (читает AiLauncher).
@@ -298,7 +330,7 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, toolsE
   // кнопка просто оказывается на новом месте, без движения и миганий.
   // Слагаемые зазоров: при открытой зоне — ресайз-сплиттер GAP + межколоночные/крайний
   // правый ColumnSep (GAP на колонку); при закрытой — marginLeft GAP самой рельсы
-  const rightZoneW = RAIL_W + (isTablet
+  const rightZoneW = railHidden ? 0 : RAIL_W + (compact
     ? (tabletKeys.length > 0 && tabletInline ? width + GAP * 3 : GAP)
     : (columns.length > 0 ? columns.length * width + GAP * (columns.length + 1) : GAP));
   useEffect(() => {
@@ -428,9 +460,9 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, toolsE
           }
           headerExtras={panelHeaderExtras?.[k]}
           fullscreen={isFs}
-          canDrag={!soloMode && !isTablet}
+          canDrag={!soloMode && !compact}
           onToggleFullscreen={() => setFullscreen(isFs ? null : k)}
-          onClose={() => { if (isTablet) setTabletPanels(cur => cur.filter(x => x !== k)); else close(k); }}
+          onClose={() => { if (compact) setTabletPanels(cur => cur.filter(x => x !== k)); else close(k); }}
           dragged={dndFrom === k}
           dropTarget={dndOver === k && dndFrom !== null && dndFrom !== k}
           onDragStart={e => { setDndFrom(k); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', k); }}
@@ -443,19 +475,6 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, toolsE
         </PanelShell>
       </div>
     );
-  };
-
-  // Видимость иконки на рельсе. Сессионные кнопки показываются ТОЛЬКО когда есть что
-  // открывать (План — если был план, Чек-лист/Агенты — если есть контент, Персона — если
-  // собеседник-персона): иначе иконка скрыта целиком (а не дизейблится), вместе с ней
-  // прячется и разделитель групп. Единый расчёт — panelBadge из meta.
-  const railKeyVisible = (k: PanelKey): boolean => {
-    if (!keyAvailable(k)) return false;
-    if (k === 'plan') return plansCount > 0 || openKeys.includes(k);
-    if (k === 'agents' || k === 'context') {
-      return panelBadge(k, artifacts, badgeOpts).visible || openKeys.includes(k);
-    }
-    return true;
   };
 
   // Число в кружке над иконкой кнопки. Сессионные — «сколько требует внимания» (не «всего»):
@@ -482,7 +501,7 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, toolsE
       <div key={k}>
         <ToolbarIconButton
           onClick={() => {
-            if (isTablet) {
+            if (compact) {
               setFullscreen(null);
               // До двух панелей: третья вытесняет самую старую (FIFO)
               setTabletPanels(cur => cur.includes(k) ? cur.filter(x => x !== k) : [...cur, k].slice(-2));
@@ -513,7 +532,7 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, toolsE
     <>
       {/* Планшет: стек до двух панелей — в потоке на широком экране, drawer поверх
           на узком; между двумя панелями — хендл ресайза высот */}
-      {isTablet && tabletKeys.length > 0 && (() => {
+      {compact && tabletKeys.length > 0 && (() => {
         const stack = (
           // overflow visible — тени панелей-островов не должны срезаться обёрткой
           <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
@@ -628,7 +647,7 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, toolsE
           Скруглены оба левых угла (капсула у правого края окна); правые углы прямые.
           Когда слева от рельсы ЦЕНТР (панели закрыты / drawer) — зазор GAP, чтобы
           контент не прижимался; при открытой зоне зазор даёт её крайний ColumnSep. */}
-      <div style={{
+      {!railHidden && <div style={{
         width: RAIL_W, flexShrink: 0, alignSelf: 'flex-start',
         display: 'flex', flexDirection: 'column', alignItems: 'center',
         gap: 6, paddingTop: 12, paddingBottom: 16, background: C.bgPanel,
@@ -637,11 +656,11 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, toolsE
         boxSizing: 'border-box', overflow: 'hidden',
         // Рельса — полукапсула-остров у края окна: тень как у остальных островов
         boxShadow: ISLAND.shadow,
-        marginLeft: (isTablet ? !(tabletKeys.length > 0 && tabletInline) : columns.length === 0) ? GAP : 0,
+        marginLeft: (compact ? !(tabletKeys.length > 0 && tabletInline) : columns.length === 0) ? GAP : 0,
       }}>
         {/* Переключатель режима зоны: раскладка колонками (дефолт) ↔ одна панель.
-            На планшете скрыт — там всегда одна панель */}
-        {!isTablet && (
+            В компактном режиме (планшет/телефон) скрыт — там всегда одна панель */}
+        {!compact && (
           <>
             <ToolbarIconButton
               onClick={() => setMode(soloMode ? 'multi' : 'solo')}
@@ -654,18 +673,19 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, toolsE
             <div style={{ width: 22, height: 1, background: C.border, flexShrink: 0, margin: '1px 0 2px' }} />
           </>
         )}
-        {/* Инструменты ПРОЕКТА (первыми) */}
-        {PROJECT_RAIL_KEYS.map(renderRailIcon)}
+        {/* Инструменты ПРОЕКТА (первыми). В sessionOnly (Чаты, мобилка) их нет —
+            проекта там либо нет вовсе, либо инструменты живут в левых вкладках */}
+        {!sessionOnly && PROJECT_RAIL_KEYS.map(renderRailIcon)}
         {/* Разделитель групп: проектные ↔ сессионные. Прячется, когда сессионных
             кнопок нет (напр. Плана без планов) — по railKeyVisible, не keyAvailable */}
-        {PROJECT_RAIL_KEYS.some(railKeyVisible) && SESSION_RAIL_KEYS.some(railKeyVisible) && (
+        {!sessionOnly && PROJECT_RAIL_KEYS.some(railKeyVisible) && SESSION_RAIL_KEYS.some(railKeyVisible) && (
           <div style={{ width: 22, height: 1, background: C.border, flexShrink: 0, margin: '2px 0' }} />
         )}
-        {/* Панели ТЕКУЩЕЙ СЕССИИ (после проектных) — пока только План */}
+        {/* Панели ТЕКУЩЕЙ СЕССИИ (после проектных): План, Агенты, Персона */}
         {SESSION_RAIL_KEYS.map(renderRailIcon)}
         {/* Под иконками панелей, через сепаратор: свернуть все / вернуть набор как был.
-            На планшете скрыта — панель одна, закрывается своей же иконкой */}
-        {!isTablet && (
+            В компактном режиме скрыта — панель одна, закрывается своей же иконкой */}
+        {!compact && (
           <>
             <div style={{ width: 22, height: 1, background: C.border, flexShrink: 0, margin: '2px 0 1px' }} />
             {(() => {
@@ -688,7 +708,7 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, toolsE
             })()}
           </>
         )}
-      </div>
+      </div>}
     </>
   );
 }

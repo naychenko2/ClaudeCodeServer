@@ -347,8 +347,10 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
         onMouseEnter={() => setHoveredRow(rowKey)}
         onMouseLeave={() => setHoveredRow(null)}
         style={{
-          display: 'flex', alignItems: 'center', gap: 7, height: 30, position: 'relative',
-          padding: '0 6px', paddingLeft: 8 + depth * 14,
+          // Список (showParent) — двухстрочная строка (имя + путь): даём высоту и
+          // вертикальные отступы, чтобы не было тесно. Дерево — одна строка, как было.
+          display: 'flex', alignItems: 'center', gap: 7, position: 'relative',
+          minHeight: showParent ? 42 : 30, padding: showParent ? '6px 6px' : '0 6px', paddingLeft: 8 + depth * 14,
           borderRadius: 8, cursor: 'pointer',
           background: isActiveFile ? C.accentLight : hovered ? C.bgSelected : 'transparent', transition: 'background 0.1s',
         }}
@@ -569,29 +571,32 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
                 : <Sparkles size={15} strokeWidth={ICON_STROKE} color={C.accent} />}
             </span>
           </div>
-          {/* Действия: настройки слева; делегирование чату + «Зафиксировать» справа */}
-          {/* Кнопки в группе с переносом — на узкой панели «Зафиксировать» съезжает
-              на новую строку, а не вылезает за край карточки */}
+          {/* Действия: настройки слева; делегирование чату + «Зафиксировать» справа
+              в один ряд. nowrap + primary flexShrink:0 — «Зафиксировать» всегда стоит
+              на своём месте справа и не перескакивает на другую строку; при нехватке
+              места ужимаются вторичные кнопки, а не главная */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <IconButton size="sm" title="Настройки промпта коммита" onClick={() => setPromptOpen(true)}>
               <Settings size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
             </IconButton>
-            <div style={{ marginLeft: 'auto', minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap', gap: 6 }}>
+            <div style={{ marginLeft: 'auto', minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'nowrap', gap: 6, overflow: 'hidden' }}>
               <button onClick={() => onCommit?.('chat')} title="Зафиксировать в текущем чате"
-                style={chatBtnStyle}>
+                style={{ ...chatBtnStyle, minWidth: 0, overflow: 'hidden' }}>
                 <MessageSquare size={13} strokeWidth={ICON_STROKE} color={C.accent} /> В чате
               </button>
               <button onClick={() => onCommit?.('newChat')} title="Зафиксировать в новом чате"
-                style={chatBtnStyle}>
+                style={{ ...chatBtnStyle, minWidth: 0, overflow: 'hidden' }}>
                 <MessageSquarePlus size={13} strokeWidth={ICON_STROKE} color={C.accent} /> В новом
               </button>
-              <Button variant="primary" size="sm" disabled={!canCommit} loading={st.busy} onClick={() => void doCommit()}>
-                Зафиксировать
-              </Button>
+              <span style={{ flexShrink: 0, display: 'flex' }}>
+                <Button variant="primary" size="sm" disabled={!canCommit} loading={st.busy} onClick={() => void doCommit()}>
+                  Зафиксировать
+                </Button>
+              </span>
             </div>
           </div>
         </div>
-      ) : (workingFiles.length > 0 || st.unpushed.length > 0 || st.stashes.length > 0) ? (
+      ) : (
         <div style={{ borderTop: `1px solid ${C.border}`, background: C.bgInset, padding: '6px 8px', flexShrink: 0 }}>
           {/* Хендл ресайза высоты зоны скоупов — когда есть что скроллить (стэши/коммиты) */}
           {(st.stashes.length > 0 || st.unpushed.length > 0) && (
@@ -605,8 +610,8 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
           )}
           {/* Скролл скоупов: «Не зафиксировано» → стэши → коммиты; высота — хендлом */}
           <div style={{ maxHeight: scopeH, overflowY: 'auto' }}>
-              {/* «Не зафиксировано» — первым элементом списка */}
-              {workingFiles.length > 0 && (
+              {/* «Не зафиксировано» — первым элементом списка, показываем всегда
+                  (даже при чистом дереве); при пустом дереве — без кнопок и счётчика */}
               <div
                 onClick={() => selectScope('working')}
                 style={{
@@ -617,9 +622,9 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
               >
                 <Pencil size={13} strokeWidth={ICON_STROKE} color={isWorking ? C.accent : C.textSecondary} style={{ flexShrink: 0 }} />
                 <span style={{ flex: 1, minWidth: 0, fontSize: 12, color: isWorking ? C.accent : C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Не зафиксировано</span>
-                {/* Выделено: «Зафиксировать» + отмена всех изменений (вместо счётчика);
-                    не выделено: счётчик файлов */}
-                {isWorking ? (
+                {/* Есть изменения и скоуп активен: «Зафиксировать» + отмена всех;
+                    есть изменения, но не активен: счётчик; дерево чистое: без кнопок */}
+                {workingFiles.length === 0 ? null : isWorking ? (
                   <>
                     <button
                       onClick={e => { e.stopPropagation(); void openCommitForm(); }}
@@ -635,7 +640,6 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
                   <span style={{ fontFamily: FONT.mono, fontSize: 10.5, color: C.textMuted, minWidth: 14, textAlign: 'right' }}>{workingFiles.length}</span>
                 )}
               </div>
-              )}
 
               {/* Отложенное (stash): кнопки pop/drop появляются на месте времени по наведению */}
               {st.stashes.map((s: GitStashEntry) => {
@@ -691,7 +695,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
               })}
           </div>
         </div>
-      ) : null}
+      )}
 
       {/* === Ветка: строка в стиле скоупа (селектор ветки + fetch/pull); в режиме фиксации скрыта === */}
       {mode === 'list' && (

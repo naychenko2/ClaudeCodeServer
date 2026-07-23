@@ -213,7 +213,10 @@ export function AiLauncher() {
     const next = !proactiveOn;
     setProactiveEnabled(next);
     setProactiveOn(next);
-    if (!next) setSuggestion(null);
+    // При выключении гасим и статус FAB: опросный тик при выключенном тумблере сразу
+    // делает return и не сбросит уровень сам — иначе уже зажжённый strong-повод оставил
+    // бы домик прыгать (cc-fab-hop) до смены раздела.
+    if (!next) { setSuggestion(null); setFabLevel('none'); setRecs([]); }
   };
 
   // Наведение на FAB → балун со списком рекомендаций. Таймер на уход, чтобы курсор

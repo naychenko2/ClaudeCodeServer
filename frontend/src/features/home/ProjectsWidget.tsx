@@ -3,7 +3,7 @@ import { Folder, MessageCircle } from 'lucide-react';
 import type { Project, ProjectGroup } from '../../types';
 import { api } from '../../lib/api';
 import { C, FONT, R } from '../../lib/design';
-import { projectColor, projectInitial } from '../../lib/tasks';
+import { ProjectIcon } from '../projects/ProjectIcon';
 import type { HubTab } from '../../components/HubTabs';
 import { AddProjectDialog } from '../projects/dialogs/AddProjectDialog';
 import { WidgetCard, WidgetAction, WidgetEmpty, relTime } from './WidgetCard';
@@ -45,7 +45,6 @@ export function ProjectsWidget({ onHubTab, onOpenProject }: {
         : (
           <div style={{ display: 'flex', flexDirection: 'column' }}>
             {recent.map(p => {
-              const color = projectColor(p.id);
               return (
                 <button
                   key={p.id}
@@ -58,15 +57,8 @@ export function ProjectsWidget({ onHubTab, onOpenProject }: {
                   onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; }}
                   onMouseLeave={e => { e.currentTarget.style.background = 'none'; }}
                 >
-                  {/* Цветная плитка-инициал — мини-версия ProjectCard */}
-                  <span style={{
-                    width: 28, height: 28, borderRadius: R.md, flexShrink: 0,
-                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                    background: color.soft, color: color.main,
-                    fontFamily: FONT.serif, fontSize: 14, fontWeight: 600,
-                  }}>
-                    {projectInitial(p.name)}
-                  </span>
+                  {/* Иконка проекта — мини-версия */}
+                  <ProjectIcon project={p} size={28} radius={R.md} />
                   <span style={{
                     fontFamily: FONT.sans, fontSize: 13, color: C.textPrimary, flex: 1, minWidth: 0,
                     whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',

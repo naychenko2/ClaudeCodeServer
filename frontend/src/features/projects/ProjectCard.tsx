@@ -1,9 +1,9 @@
 import type { MouseEvent } from 'react';
 import type { Project } from '../../types';
-import { C, R, FONT, SHADOW } from '../../lib/design';
-import { tileColors, firstLetter, pluralChats } from './projectUtil';
+import { C, FONT, SHADOW } from '../../lib/design';
+import { pluralChats } from './projectUtil';
+import { ProjectIcon } from './ProjectIcon';
 import { ProjectActionsMenu } from './ProjectActionsMenu';
-import { useThemeMode } from '../../lib/themeMode';
 import { Pin } from 'lucide-react';
 import { usePinnedIds } from '../../lib/pinnedProjects';
 
@@ -19,9 +19,7 @@ interface Props {
 }
 
 // Мобильная карточка проекта: плитка + имя (+ меню) + путь + подпись «N чатов · дата».
-export function ProjectCard({ project: p, index, online, hasActiveSession, onOpen, onMove, onEdit, onDelete }: Props) {
-  useThemeMode();  // перекраска плашки при смене темы
-  const [tileBg, tileFg] = tileColors(index);
+export function ProjectCard({ project: p, online, hasActiveSession, onOpen, onMove, onEdit, onDelete }: Props) {
   const pinned = usePinnedIds().includes(p.id);
 
   const count = p.sessionCount ?? 0;
@@ -45,13 +43,7 @@ export function ProjectCard({ project: p, index, online, hasActiveSession, onOpe
             <span className="pc-pulse" style={{ position: 'absolute', top: 1, right: 1, width: 9, height: 9, borderRadius: '50%', background: C.accent, border: `2px solid ${C.bgMain}`, zIndex: 1 }} />
           </>
         )}
-        <div style={{
-          width: 50, height: 50, borderRadius: R.xxl, background: tileBg, color: tileFg,
-          fontFamily: FONT.serif, fontSize: 22, fontWeight: 600,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}>
-          {firstLetter(p.name)}
-        </div>
+        <ProjectIcon project={p} size={50} radius={16} />
       </div>
 
       <div style={{ flex: 1, minWidth: 0 }}>

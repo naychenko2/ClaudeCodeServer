@@ -10,6 +10,8 @@ import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
 import { GroupSelect } from '../GroupSelect';
 import { GitModeCard, GitPushRow } from '../components/GitModeCards';
 import { ProjectSyncToggle } from '../../../components/ProjectSyncToggle';
+import { ProjectIconSection } from '../ProjectIconSection';
+import { invalidateProjectsCache } from '../useAllProjects';
 
 // === История файлов (Git) в настройках проекта ===
 // Включение необратимо by design: «выключить» означало бы удалить .git со всей историей,
@@ -134,16 +136,20 @@ interface Props {
   project: Project;
   groups?: ProjectGroup[];
   onSuccess: (updated: Project) => void;
+  // Проброс обновлённого проекта в стор после иконочной мутации (generate/select/upload/recrop),
+  // не дожидаясь «Сохранить» — иначе список стухнет при закрытии крестиком. Realtime у проектов нет.
+  onIconUpdated?: (updated: Project) => void;
   onClose: () => void;
 }
 
 type View = 'main' | 'prompt' | 'rules';
 
-export function EditDialog({ project, groups = [], onSuccess, onClose }: Props) {
+export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onClose }: Props) {
   const online = useOnline();
   const [view, setView] = useState<View>('main');
   const [name, setName] = useState(project.name);
   const [groupId, setGroupId] = useState(project.groupId ?? '');
+  const [iconColor, setIconColor] = useState<string | null>(project.icon?.color ?? null);
   const [systemPrompt, setSystemPrompt] = useState(project.systemPrompt ?? '');
   const [showHiddenFiles, setShowHiddenFiles] = useState(project.showHiddenFiles ?? false);
   const [toolsEnabled, setToolsEnabled] = useState(project.toolsEnabled ?? false);
@@ -173,6 +179,7 @@ export function EditDialog({ project, groups = [], onSuccess, onClose }: Props) 
         showHiddenFiles,
         toolsEnabled,
         permissionRules: rules.filter(r => r.pattern.trim()).map(r => ({ pattern: r.pattern.trim(), action: r.action })),
+        color: iconColor ?? '',
       });
       onSuccess(updated);
     } catch (e: any) {
@@ -358,6 +365,12 @@ export function EditDialog({ project, groups = [], onSuccess, onClose }: Props) 
     >
       {error && <div style={{ color: C.danger, fontSize: 13 }}>{error}</div>}
       <TextField value={name} onChange={setName} placeholder="Название" />
+      <ProjectIconSection
+        project={project}
+        color={iconColor}
+        onColorChange={setIconColor}
+        onIconUpdated={updated => { setIconColor(updated.icon?.color ?? null); invalidateProjectsCache(); onIconUpdated?.(updated); }}
+      />
       {groups.length > 0 && (
         <Field label="Группа">
           <GroupSelect groups={groups} value={groupId} onChange={setGroupId} />

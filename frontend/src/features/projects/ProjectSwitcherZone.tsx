@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react';
 import { Search } from 'lucide-react';
 import { C, R, FS } from '../../lib/design';
-import { projectColor, projectInitial } from '../../lib/tasks';
 import type { Project } from '../../types';
+import { ProjectIcon as ProjectIconTile } from './ProjectIcon';
 import { useAllProjects, openProjectViaEvent } from './useAllProjects';
 import { usePinnedIds, PINNED_ZONE_MAX, movePinned } from '../../lib/pinnedProjects';
 import { ProjectPalette } from './ProjectPalette';
@@ -11,12 +11,11 @@ import { ProjectPalette } from './ProjectPalette';
 // рамке (navInk) — тёмная «голова» с подписью + значки закреплённых проектов на сером теле
 // + лупа (палитра). Показывается только в разделе «Проекты» на десктопе (см. HubTabs).
 
-function ProjectIcon({ p, active, dragging, over, onOpen, onDragStart, onDragOver, onDrop, onDragEnd }: {
+function PinnedCell({ p, active, dragging, over, onOpen, onDragStart, onDragOver, onDrop, onDragEnd }: {
   p: Project; active: boolean; dragging: boolean; over: boolean;
   onOpen: (p: Project) => void;
   onDragStart: () => void; onDragOver: () => void; onDrop: () => void; onDragEnd: () => void;
 }) {
-  const col = projectColor(p.id);
   return (
     // Ячейка на всю высоту тела с ровными краями: активный проект выделяется тёмной
     // прямоугольной подложкой (без скруглений), цель переноса — кольцом accent.
@@ -35,14 +34,15 @@ function ProjectIcon({ p, active, dragging, over, onOpen, onDragStart, onDragOve
         onDragStart={e => { e.stopPropagation(); e.dataTransfer.effectAllowed = 'move'; onDragStart(); }}
         onDragEnd={onDragEnd}
         style={{
-          width: 22, height: 22, borderRadius: R.sm, border: `0.5px solid ${C.border}`, cursor: 'grab',
-          background: col.soft, color: col.main, fontSize: FS.sm, fontWeight: 600, flexShrink: 0,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          padding: 0, border: 'none', background: 'transparent', cursor: 'pointer', flexShrink: 0,
+          display: 'flex', borderRadius: R.sm,
           opacity: dragging ? 0.4 : 1,
           boxShadow: over ? `0 0 0 2px ${C.bgSelected}, 0 0 0 3px ${C.accent}` : undefined,
           transition: 'opacity 0.12s',
         }}
-      >{projectInitial(p.name)}</button>
+      >
+        <ProjectIconTile project={p} size={22} radius={R.sm} />
+      </button>
     </span>
   );
 }
@@ -86,7 +86,7 @@ export function ProjectSwitcherZone({ currentProjectId, onOpenHub }: { currentPr
       {/* Серое тело: значки закреплённых (ячейки без зазора — подложка активного примыкает ровно) + лупа */}
       <span style={{ display: 'inline-flex', alignItems: 'stretch', background: C.bgSelected }}>
         {zoneProjects.map(p => (
-          <ProjectIcon
+          <PinnedCell
             key={p.id}
             p={p}
             active={p.id === currentProjectId}

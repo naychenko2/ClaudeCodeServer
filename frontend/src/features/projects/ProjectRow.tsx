@@ -2,9 +2,9 @@ import { useState } from 'react';
 import type { MouseEvent } from 'react';
 import type { Project } from '../../types';
 import { C, FONT, SHADOW } from '../../lib/design';
-import { tileColors, firstLetter, relativeTime } from './projectUtil';
+import { relativeTime } from './projectUtil';
+import { ProjectIcon } from './ProjectIcon';
 import { ProjectActionsMenu } from './ProjectActionsMenu';
-import { useThemeMode } from '../../lib/themeMode';
 import { ChevronRight, Pin } from 'lucide-react';
 import { ICON_SIZE } from '../../components/ui/icons';
 import { usePinnedIds } from '../../lib/pinnedProjects';
@@ -21,9 +21,7 @@ interface Props {
 }
 
 // Десктопная строка проекта: плитка + имя/путь, справа — статус, действия, шеврон.
-export function ProjectRow({ project: p, index, online, hasActiveSession, onOpen, onMove, onEdit, onDelete }: Props) {
-  useThemeMode();  // перекраска плашки при смене темы
-  const [tileBg, tileFg] = tileColors(index);
+export function ProjectRow({ project: p, online, hasActiveSession, onOpen, onMove, onEdit, onDelete }: Props) {
   const [hover, setHover] = useState(false);
   const pinned = usePinnedIds().includes(p.id);
 
@@ -42,13 +40,7 @@ export function ProjectRow({ project: p, index, online, hasActiveSession, onOpen
         cursor: 'pointer', boxShadow: SHADOW.card,
       }}
     >
-      <div style={{
-        width: 42, height: 42, borderRadius: 12, background: tileBg, color: tileFg,
-        fontFamily: FONT.serif, fontSize: 19, fontWeight: 700, flexShrink: 0,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-      }}>
-        {firstLetter(p.name)}
-      </div>
+      <ProjectIcon project={p} size={42} radius={12} />
 
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>

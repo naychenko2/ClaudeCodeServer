@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Search, Pin, PinOff } from 'lucide-react';
 import { C, R, SHADOW, Z, FONT, FS } from '../../lib/design';
-import { projectColor, projectInitial } from '../../lib/tasks';
 import type { Project } from '../../types';
+import { ProjectIcon } from './ProjectIcon';
 import { useAllProjects, openProjectViaEvent } from './useAllProjects';
 import { usePinnedIds, useRecentIds, isPinned, togglePin } from '../../lib/pinnedProjects';
 
@@ -10,7 +10,6 @@ import { usePinnedIds, useRecentIds, isPinned, togglePin } from '../../lib/pinne
 // Открывается лупой в зоне проектов (Ctrl+K занят AI-палитрой). Значки — projectColor/Initial.
 
 function ProjectRowItem({ p, active, onOpen }: { p: Project; active: boolean; onOpen: (p: Project) => void }) {
-  const col = projectColor(p.id);
   const [hover, setHover] = useState(false);
   const pinned = isPinned(p.id);
   return (
@@ -25,10 +24,11 @@ function ProjectRowItem({ p, active, onOpen }: { p: Project; active: boolean; on
       }}
     >
       <span style={{
-        width: 26, height: 26, borderRadius: R.md, background: col.soft, color: col.main,
-        display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: FS.sm, fontWeight: 600,
-        flexShrink: 0, boxShadow: active ? `0 0 0 2px ${C.bgWhite}, 0 0 0 3px ${C.accent}` : undefined,
-      }}>{projectInitial(p.name)}</span>
+        display: 'flex', borderRadius: R.md, flexShrink: 0,
+        boxShadow: active ? `0 0 0 2px ${C.bgWhite}, 0 0 0 3px ${C.accent}` : undefined,
+      }}>
+        <ProjectIcon project={p} size={26} radius={R.md} />
+      </span>
       <span style={{ flex: 1, minWidth: 0, fontSize: FS.md, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {p.name}
       </span>

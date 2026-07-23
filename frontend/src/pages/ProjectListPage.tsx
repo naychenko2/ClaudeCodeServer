@@ -1,14 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
-import { List, Menu as MenuIcon, Plus, Search } from 'lucide-react';
+import { ArrowDownAZ, Clock, List, Menu as MenuIcon, Plus, Search } from 'lucide-react';
 import type { Project, ProjectGroup, Session, AuthState } from '../types';
 import { api } from '../lib/api';
 import { useOnline } from '../hooks/useOnline';
 import { OfflineError } from '../lib/offline';
-import { C, R, FONT } from '../lib/design';
+import { C, R, FONT, CHAT_MAX_W } from '../lib/design';
 import { useSidebarDrag } from '../lib/sidebarWidth';
 import { MOBILE_MAX } from '../lib/breakpoints';
-import { Button, IconButton, SidebarSplitter } from '../components/ui';
+import { Button, IconButton, IslandScaffold } from '../components/ui';
 import { ICON_SIZE } from '../components/ui/icons';
+import { PillSwitch } from '../components/Toolbar';
 import type { HubTabValue } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
 import { ProjectCard } from '../features/projects/ProjectCard';
@@ -154,7 +155,7 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
   type Section = { key: string; name: string; color?: string; items: Project[] };
   const UNGROUPED_COLOR = C.textMuted;
   let sections: Section[] = [];
-  let title = 'Все проекты';
+  let title = 'Проекты';
   if (view === 'all') {
     sections = byGroup.map(({ group, items }) => ({ key: group.id, name: group.name, color: group.color, items }));
     if (ungrouped.length) sections.push({ key: '__ungrouped', name: 'Без группы', color: UNGROUPED_COLOR, items: ungrouped });
@@ -242,9 +243,10 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
     return (
       <div style={{ height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <HubHeader value="projects" onTab={onHubTab} auth={auth!} onLogout={onLogout} />
-        <div style={{ flex: 1, minHeight: 0, display: 'flex', position: 'relative' }}>
-          {(() => {
-            const sidebar = (
+        <div style={{ flex: 1, minHeight: 0 }}>
+          <IslandScaffold
+            sidebarOpen={sidebarMode === 'pinned'}
+            sidebar={
               <ProjectSidebar
                 view={view}
                 onSelect={setView}
@@ -253,20 +255,15 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
                 sleepingCount={ungrouped.length}
                 onManageGroups={() => setActiveDialog({ type: 'groups' })}
               />
-            );
-            return (
-              <>
-                {/* Закреплён: в потоке + сплиттер с всплывающей кнопкой «свернуть» */}
-                {sidebarMode === 'pinned' && (
-                  <>
-                    <div style={{ width: sidebarWidth, flexShrink: 0, height: '100%' }}>{sidebar}</div>
-                    <SidebarSplitter active={draggingSplitter} onMouseDown={handleSidebarSplitterMouseDown} onCollapse={() => setSidebarMode('collapsed')} />
-                  </>
-                )}
-              </>
-            );
-          })()}
-          <main style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', background: C.bgMain }}>
+            }
+            sidebarWidth={sidebarWidth}
+            sidebarDragging={draggingSplitter}
+            onSidebarDrag={handleSidebarSplitterMouseDown}
+            onSidebarCollapse={() => setSidebarMode('collapsed')}
+            centerBare
+            center={
+          // Центр без острова, шириной как контент чата (CHAT_MAX_W по центру)
+          <main style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', background: C.bgMain, width: '100%', maxWidth: CHAT_MAX_W, margin: '0 auto' }}>
             {/* Шапка панели: заголовок + сортировка + Проект */}
             <div style={{ flexShrink: 0, padding: '20px 26px 14px', display: 'flex', alignItems: 'center', gap: 12 }}>
               {sidebarMode === 'collapsed' && (
@@ -274,23 +271,22 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
                   <MenuIcon size={ICON_SIZE.sm} strokeWidth={2} />
                 </IconButton>
               )}
-              <div style={{ flex: 1, minWidth: 0, fontFamily: FONT.serif, fontSize: 24, color: C.textHeading, letterSpacing: '-0.01em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {/* Заголовок раздела — единый стиль с «Календарём» (serif 28 / 500) */}
+              <div style={{ flex: 1, minWidth: 0, fontFamily: FONT.serif, fontSize: 28, fontWeight: 500, color: C.textHeading, letterSpacing: '-0.01em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 {title}
               </div>
-              <button
-                onClick={() => setSortMode(m => m === 'activity' ? 'name' : 'activity')}
-                title="Сортировка"
-                style={{
-                  flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 7,
-                  fontSize: 12.5, color: C.textSecondary, fontWeight: 600, fontFamily: FONT.sans,
-                  background: C.bgPanel, border: `1px solid ${C.border}`, padding: '7px 12px', borderRadius: R.pill, cursor: 'pointer',
-                }}
-              >
-                {sortMode === 'activity' ? 'По активности' : 'По названию'}
-              </button>
+              {/* Сортировка — pill-переключатель с иконками, как виды в «Календаре» */}
+              <PillSwitch<SortMode>
+                value={sortMode}
+                onChange={setSortMode}
+                options={[
+                  { value: 'activity', label: 'По активности', icon: <Clock size={ICON_SIZE.xs} strokeWidth={2} style={{ flexShrink: 0 }} /> },
+                  { value: 'name', label: 'По названию', icon: <ArrowDownAZ size={ICON_SIZE.xs} strokeWidth={2} style={{ flexShrink: 0 }} /> },
+                ]}
+              />
               {online && (
                 <Button
-                  variant="primary" size="md"
+                  variant="primary" size="md" glow
                   onClick={() => setActiveDialog({ type: 'add' })}
                   leftIcon={<Plus size={ICON_SIZE.sm} strokeWidth={2} />}
                 >
@@ -342,6 +338,8 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
               ))}
             </div>
           </main>
+            }
+          />
         </div>
         {dialogs}
       </div>

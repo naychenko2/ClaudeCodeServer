@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { Plus } from 'lucide-react';
-import { C, FONT, SHADOW, TB } from '../../lib/design';
+import { C, FONT, ISLAND, SHADOW, TB } from '../../lib/design';
 
 // Неявная кнопка «создать» после заголовка виджета: тихий плюсик,
 // проявляется на hover (bgSelected + чуть темнее иконка)
@@ -41,7 +41,7 @@ export function WidgetCard({ icon, title, action, fill, onCreate, createTitle, c
 }) {
   return (
     <div style={{
-      background: C.bgWhite, border: `1px solid ${C.borderLight}`, borderRadius: 16,
+      background: C.bgWhite, border: `1px solid ${C.borderLight}`, borderRadius: ISLAND.radius,
       padding: 16, boxShadow: SHADOW.card, minWidth: 0,
       display: 'flex', flexDirection: 'column', gap: 10,
       ...(fill ? { height: '100%', boxSizing: 'border-box' as const } : {}),

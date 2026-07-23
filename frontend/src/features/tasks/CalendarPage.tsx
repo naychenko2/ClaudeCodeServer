@@ -8,8 +8,9 @@ import type { HubTabValue } from '../../components/HubTabs';
 import { navPush, navReplace, parseHash, type NavSnapshot } from '../../lib/nav';
 import { HubHeader } from '../../components/HubHeader';
 import { PillSwitch } from '../../components/Toolbar';
-import { C, FONT, R, SHADOW } from '../../lib/design';
+import { C, FONT, ISLAND, SHADOW } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
+import { Button, Island } from '../../components/ui';
 import { api } from '../../lib/api';
 import { addDaysIso, DEFAULT_BOARD_COLUMNS, ensureTasksLoaded, expandRecurringTasks, todayIso, toIsoDate, useTasks } from '../../lib/tasks';
 import { useIsMobile } from '../../lib/breakpoints';
@@ -259,47 +260,45 @@ export function CalendarPage({ auth, onLogout, onHubTab, onOpenTask }: Props) {
         </div>
       )}
 
-      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
-        <div style={{ maxWidth: 1180, margin: '0 auto', padding: isMobile ? '0 16px' : '20px 32px 0', boxSizing: 'border-box' }}>
-          {!isMobile && (
-            <>
-              {/* Заголовок + переключатель вида + «Задача» */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 14 }}>
-                <h1 style={{ margin: 0, fontFamily: FONT.serif, fontSize: 28, fontWeight: 500, color: C.textHeading, flex: 1 }}>
-                  Календарь
-                </h1>
-                <PillSwitch<CalView>
-                  value={view}
-                  options={[
-                    { value: 'month', label: 'Месяц', icon: <MonthIcon /> },
-                    { value: 'week', label: 'Неделя', icon: <WeekIcon /> },
-                    { value: 'agenda', label: 'Агенда', icon: <AgendaIcon /> },
-                    { value: 'board' as const, label: 'Доска', icon: <BoardIcon /> },
-                  ]}
-                  onChange={setView}
-                />
-                <button
-                  onClick={() => setCreateDialog({})}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 7,
-                    padding: '0 18px', height: 38, cursor: 'pointer',
-                    border: 'none', borderRadius: R.lg,
-                    background: C.accent, color: C.onAccent,
-                    fontFamily: FONT.sans, fontSize: 13.5, fontWeight: 700,
-                    boxShadow: SHADOW.button,
-                  }}
-                >
-                  <Plus size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-                  Задача
-                </button>
-              </div>
-              {filters}
-            </>
-          )}
-
-          {currentView}
+      {isMobile ? (
+        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+          <div style={{ maxWidth: 1180, margin: '0 auto', padding: '0 16px', boxSizing: 'border-box' }}>
+            {currentView}
+          </div>
         </div>
-      </div>
+      ) : (
+        // Десктоп (Islands): шапка раздела — на холсте, текущий вид — остров
+        // со своим внутренним скроллом (раньше шапка и вид скроллились вместе)
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', maxWidth: 1244, width: '100%', margin: '0 auto', padding: `0 32px ${ISLAND.pad}px`, boxSizing: 'border-box' }}>
+          {/* Заголовок + переключатель вида + «Задача» */}
+          <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 14, margin: '20px 0 14px' }}>
+            <h1 style={{ margin: 0, fontFamily: FONT.serif, fontSize: 28, fontWeight: 500, color: C.textHeading, flex: 1 }}>
+              Календарь
+            </h1>
+            <PillSwitch<CalView>
+              value={view}
+              options={[
+                { value: 'month', label: 'Месяц', icon: <MonthIcon /> },
+                { value: 'week', label: 'Неделя', icon: <WeekIcon /> },
+                { value: 'agenda', label: 'Агенда', icon: <AgendaIcon /> },
+                { value: 'board' as const, label: 'Доска', icon: <BoardIcon /> },
+              ]}
+              onChange={setView}
+            />
+            {/* Общий Button — той же высоты, что «Проект» в разделе проектов */}
+            <Button variant="primary" size="md" glow onClick={() => setCreateDialog({})}
+              leftIcon={<Plus size={ICON_SIZE.sm} strokeWidth={2} />}>
+              Задача
+            </Button>
+          </div>
+          <div style={{ flexShrink: 0, marginBottom: 12 }}>{filters}</div>
+          <Island bg={C.bgMain} style={{ flex: 1, minHeight: 0 }}>
+            <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '16px 20px' }}>
+              {currentView}
+            </div>
+          </Island>
+        </div>
+      )}
 
       {/* Мобила: FAB «+». ЛЕВЫЙ нижний угол — правый занят глобальным AiLauncher (⌘/Ctrl+K),
           иначе кнопки наложились бы (как и у PersonaEditFab). */}

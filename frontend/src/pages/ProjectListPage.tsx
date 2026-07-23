@@ -92,6 +92,15 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
     localStorage.getItem('cc_projects_sidebar_mode') === 'collapsed' ? 'collapsed' : 'pinned');
   useEffect(() => { if (sidebarMode !== 'open') localStorage.setItem('cc_projects_sidebar_mode', sidebarMode); }, [sidebarMode]);
 
+  // Кнопка «Новый проект» в палитре проектов: переход сюда с флагом в sessionStorage —
+  // открываем диалог создания сразу после монтирования
+  useEffect(() => {
+    if (sessionStorage.getItem('cc_pending_new_project')) {
+      sessionStorage.removeItem('cc_pending_new_project');
+      setActiveDialog({ type: 'add' });
+    }
+  }, []);
+
   useEffect(() => {
     setLoadState('loading');
     Promise.all([api.projects.list(), api.projectGroups.list().catch(() => [] as ProjectGroup[])])

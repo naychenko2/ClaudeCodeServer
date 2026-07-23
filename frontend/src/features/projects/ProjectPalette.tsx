@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Search, Pin, PinOff } from 'lucide-react';
+import { Search, Pin, PinOff, Plus, LayoutGrid } from 'lucide-react';
 import { C, R, SHADOW, Z, FONT, FS } from '../../lib/design';
 import type { Project } from '../../types';
 import { ProjectIcon } from './ProjectIcon';
@@ -66,6 +66,12 @@ export function ProjectPalette({ currentProjectId, onClose }: { currentProjectId
   const byId = useMemo(() => new Map(projects.map(p => [p.id, p])), [projects]);
   const match = (p: Project) => p.name.toLowerCase().includes(q.trim().toLowerCase());
 
+  // Текущий проект — отдельной секцией сверху (незакреплённый иначе не попадал бы
+  // в палитру вовсе, и закрепить его было бы негде). Закреплённый уже виден в
+  // «Закреплённых» с обводкой — не дублируем.
+  const currentProject = currentProjectId ? byId.get(currentProjectId) : undefined;
+  const currentList = currentProject && !isPinned(currentProject.id) && match(currentProject)
+    ? [currentProject] : [];
   // Закреплённые — по порядку закрепления; недавние — по MRU, исключая уже закреплённые
   const pinnedList = pinnedIds.map(id => byId.get(id)).filter((p): p is Project => !!p && match(p));
   const recentList = recentIds
@@ -78,6 +84,18 @@ export function ProjectPalette({ currentProjectId, onClose }: { currentProjectId
 
   const open = (p: Project) => { openProjectViaEvent(p); onClose(); };
 
+  // «Все проекты» — к списку проектов (из открытого проекта диплинк #/projects выводит
+  // к списку через switchHubTab); «Новый проект» — туда же + флаг, по которому
+  // ProjectListPage сразу откроет диалог создания
+  const goAllProjects = () => {
+    onClose();
+    window.dispatchEvent(new CustomEvent('cc-open-url', { detail: { url: '#/projects' } }));
+  };
+  const goNewProject = () => {
+    sessionStorage.setItem('cc_pending_new_project', '1');
+    goAllProjects();
+  };
+
   const Section = ({ title, items }: { title: string; items: Project[] }) => items.length ? (
     <>
       <div style={{ padding: '8px 14px 4px', fontSize: FS.xs, color: C.textMuted, letterSpacing: '.04em', textTransform: 'uppercase' }}>{title}</div>
@@ -85,7 +103,7 @@ export function ProjectPalette({ currentProjectId, onClose }: { currentProjectId
     </>
   ) : null;
 
-  const empty = !pinnedList.length && !recentList.length && !restList.length;
+  const empty = !currentList.length && !pinnedList.length && !recentList.length && !restList.length;
 
   return (
     <div
@@ -115,6 +133,7 @@ export function ProjectPalette({ currentProjectId, onClose }: { currentProjectId
           />
         </div>
         <div style={{ overflowY: 'auto', padding: '4px 0 8px' }}>
+          <Section title="Текущий" items={currentList} />
           <Section title="Закреплённые" items={pinnedList} />
           <Section title="Недавние" items={recentList} />
           <Section title={pinnedList.length || recentList.length ? 'Все проекты' : 'Проекты'} items={restList} />
@@ -124,7 +143,34 @@ export function ProjectPalette({ currentProjectId, onClose }: { currentProjectId
             </div>
           )}
         </div>
+        {/* Футер: создание проекта + переход к списку проектов */}
+        <div style={{ display: 'flex', gap: 6, padding: '8px 10px', borderTop: `1px solid ${C.border}`, flexShrink: 0 }}>
+          <FooterButton icon={<Plus size={15} strokeWidth={2} />} label="Новый проект" onClick={goNewProject} />
+          <span style={{ flex: 1 }} />
+          <FooterButton icon={<LayoutGrid size={15} strokeWidth={2} />} label="Все проекты" onClick={goAllProjects} />
+        </div>
       </div>
     </div>
+  );
+}
+
+function FooterButton({ icon, label, onClick }: { icon: React.ReactNode; label: string; onClick: () => void }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <button
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 10px',
+        border: 'none', borderRadius: R.md, cursor: 'pointer',
+        background: hover ? C.bgSelected : 'transparent',
+        fontFamily: 'inherit', fontSize: FS.base, color: C.textPrimary,
+        transition: 'background 0.12s',
+      }}
+    >
+      {icon}
+      {label}
+    </button>
   );
 }

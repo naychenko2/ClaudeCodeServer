@@ -318,7 +318,9 @@ export function SidebarProjectSwitcher({ project, onOpenSettings }: {
               position: 'relative', display: 'flex', alignItems: 'center', gap: 9,
               flex: '1 1 auto', minWidth: CHIP_MIN,
               padding: '4px 30px 4px 5px', textAlign: 'left',
-              background: chipHover ? C.bgInset : C.bgSelected, borderRadius: 9,
+              // Без подложки в покое: активный проект и так очевиден, а плашка
+              // спорила с фоном сайдбара. Подсветка — только на наведении
+              background: chipHover ? C.bgSelected : 'transparent', borderRadius: 9,
               transition: 'background 0.12s',
             }}
           >

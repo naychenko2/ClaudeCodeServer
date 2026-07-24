@@ -1190,7 +1190,9 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
             position: 'sticky' as const, right: 0,
             alignSelf: 'stretch',
             paddingLeft: 4, paddingRight: 8,
-            background: rowBg === 'transparent' ? C.bgPanel : rowBg,
+            // Прозрачный на невыделенной строке: собственный фон-заглушка выдавал бы
+            // «хвост» справа, когда он не совпадает с фоном панели (та бывает и белой)
+            background: rowBg,
             borderRadius: '0 8px 8px 0',
           } : {}),
         }}>

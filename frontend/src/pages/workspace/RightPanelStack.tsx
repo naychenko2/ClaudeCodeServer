@@ -3,12 +3,11 @@
 // Раскладка — ЯВНЫЕ колонки (как в Claude Code Desktop): дефолт «по две на колонку»
 // в порядке открытия, drag-and-drop за шапку переносит панель в колонку цели
 // (вставка перед ней) — можно получить любое распределение, например одну панель
-// в первой колонке и две во второй. У каждой панельки есть режим fullscreen —
-// карточка разворачивается на всю рабочую область (кроме рельсы).
+// в первой колонке и две во второй.
 // Панели — «воздушные» скруглённые карточки с зазорами; границы высот тянутся
 // невидимыми хендлами в зазорах, ширина колонок — сплиттером слева от зоны.
 import { useEffect, useRef, useState, type ReactNode, type DragEvent, type PointerEvent as ReactPointerEvent } from 'react';
-import { X, Maximize2, Minimize2, Columns2, Square, ChevronsRight, ChevronsLeft, ClipboardList, FolderTree, GitCompare, ListTodo, Bot, User, Users, SquareTerminal, MonitorPlay, type LucideIcon } from 'lucide-react';
+import { X, Columns2, Square, ChevronsRight, ChevronsLeft, ClipboardList, FolderTree, GitCompare, ListTodo, Bot, User, Users, SquareTerminal, MonitorPlay, type LucideIcon } from 'lucide-react';
 import type { Session } from '../../types';
 import { C, FONT, ISLAND, R, SHADOW } from '../../lib/design';
 import { ICON_STROKE } from '../../components/ui/icons';
@@ -69,7 +68,7 @@ interface Props {
   // Строится в WorkspacePage, где живут состояние и обработчики этих инструментов.
   // В sessionOnly не нужен — проектных панелей там нет.
   panels?: Partial<Record<Exclude<PanelKey, 'plan'>, ReactNode>>;
-  // Контролы в шапку карточки (слева от fullscreen/close) — напр. переключатель
+  // Контролы в шапку карточки (слева от кнопки закрытия) — напр. переключатель
   // видов задач. Собираются в WorkspacePage, состояние живёт там же.
   panelHeaderExtras?: Partial<Record<PanelKey, ReactNode>>;
   // Числа-кружки на кнопках ПРОЕКТА (changes/tasks/terminal/preview) — считаются в
@@ -183,17 +182,15 @@ function GapHandle({ active, onPointerDown }: { active: boolean; onPointerDown: 
   );
 }
 
-// Карточка панельки: скруглённая, с шапкой 40px (drag-хендл для перестановки),
-// кнопками fullscreen и закрытия
-function PanelShell({ k, badge, headerExtras, fullscreen, canDrag, onToggleFullscreen, onClose, dragged, dropTarget, onDragStart, onDragEnd, onDragOver, onDragLeave, onDrop, children }: {
+// Карточка панельки: скруглённая, с шапкой 40px (drag-хендл для перестановки)
+// и кнопкой закрытия
+function PanelShell({ k, badge, headerExtras, canDrag, onClose, dragged, dropTarget, onDragStart, onDragEnd, onDragOver, onDragLeave, onDrop, children }: {
   k: PanelKey;
   badge: string | null;
   // Кастомные контролы в шапке (напр. переключатель видов задач) — слева от кнопок
   headerExtras?: ReactNode;
-  fullscreen: boolean;
   // Solo-режим: одна панель без перетаскивания — шапка не drag-хендл
   canDrag: boolean;
-  onToggleFullscreen: () => void;
   onClose: () => void;
   dragged: boolean;
   dropTarget: boolean;
@@ -228,7 +225,7 @@ function PanelShell({ k, badge, headerExtras, fullscreen, canDrag, onToggleFulls
     <Island
       rootProps={{ onDragOver, onDragLeave, onDrop }}
       borderColor={dropTarget ? C.accent : ISLAND.border}
-      shadow={dropTarget ? `0 0 0 1px ${C.accent}` : fullscreen ? SHADOW.modal : ISLAND.shadow}
+      shadow={dropTarget ? `0 0 0 1px ${C.accent}` : ISLAND.shadow}
       style={{
         flex: 1,
         opacity: dragged ? 0.5 : mounted ? 1 : 0,
@@ -241,17 +238,13 @@ function PanelShell({ k, badge, headerExtras, fullscreen, canDrag, onToggleFulls
         title={title}
         badge={badge}
         headerProps={{
-          draggable: canDrag && !fullscreen,
+          draggable: canDrag,
           onDragStart,
           onDragEnd,
-          title: canDrag && !fullscreen ? 'Перетащите, чтобы поменять панели местами' : undefined,
-          style: { cursor: canDrag && !fullscreen ? 'grab' : 'default' },
+          title: canDrag ? 'Перетащите, чтобы поменять панели местами' : undefined,
+          style: { cursor: canDrag ? 'grab' : 'default' },
         }}
-        actions={<>
-          {iconBtn(onToggleFullscreen, fullscreen ? 'Свернуть к раскладке' : 'Развернуть на всю область',
-            fullscreen ? <Minimize2 size={13} strokeWidth={ICON_STROKE} /> : <Maximize2 size={13} strokeWidth={ICON_STROKE} />)}
-          {iconBtn(onClose, 'Скрыть панель', <X size={14} strokeWidth={ICON_STROKE} />)}
-        </>}
+        actions={iconBtn(onClose, 'Скрыть панель', <X size={14} strokeWidth={ICON_STROKE} />)}
       >
         {/* Контролы шапки (переключатель видов и т.п.): draggable=false, чтобы взаимодействие
             с ними не инициировало перетаскивание карточки за шапку */}
@@ -278,7 +271,7 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobi
   // Инстанс стора раскладки: оба объявлены на уровне модуля, поэтому вызов хука
   // безусловный и стабильный между рендерами (проп не меняется по ходу жизни экрана)
   const usePanels = (panelStack ?? wsPanelStack).use;
-  const { layout, weights, width, fullscreen, mode, toggle, close, collapsed, toggleCollapsed, setWeights, setWidth, moveTo, moveToNewColumn, moveAt, setFullscreen, setMode } = usePanels();
+  const { layout, weights, width, mode, toggle, close, collapsed, toggleCollapsed, setWeights, setWidth, moveTo, moveToNewColumn, moveAt, setMode } = usePanels();
   const windowWidth = useWindowWidth();
   // Компактный режим (планшет и телефон): одна панель + drawer, без колонок/DnD/solo
   const compact = !!isTablet || !!isMobile;
@@ -305,7 +298,6 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobi
   const columns = compact ? [] : layout.map(col => col.filter(keyAvailable)).filter(col => col.length > 0);
   const tabletKeys = compact ? tabletPanels.filter(keyAvailable) : [];
   const openKeys = compact ? tabletKeys : columns.flat();
-  const fsKey = fullscreen && openKeys.includes(fullscreen) ? fullscreen : null;
 
   // Видимость иконки на рельсе. Сессионные кнопки показываются ТОЛЬКО когда есть что
   // открывать (План — если был план, Агенты — если есть контент, Персона — если
@@ -430,26 +422,20 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobi
     return panels[k] ?? null;
   };
 
-  // Панелька в раскладке или fullscreen-оверлеем. Контент НЕ дублируется:
-  // в fullscreen тот же wrapper вырывается absolute'ом из потока (см. стиль ниже) —
-  // важно для терминала: xterm остаётся смонтированным, буфер не теряется.
-  // Absolute позиционируется от body-div WorkspacePage (position:relative), рельса не перекрывается.
+  // Панелька в раскладке колонок
   const renderPanel = (k: PanelKey) => {
-    const isFs = fsKey === k;
     return (
       <div
         key={k}
         ref={el => { panelRefs.current[k] = el; }}
         // overflow НЕ hidden: контент клипает сама карточка-остров (PanelShell),
         // а обёртке нельзя — иначе она срезает тень острова (ISLAND.shadow)
-        style={isFs
-          ? { position: 'absolute', top: GAP, left: GAP, right: RAIL_W + GAP, bottom: GAP, zIndex: 15, display: 'flex', flexDirection: 'column' }
-          : {
-              flex: `${weights[k] ?? 1} 1 0`, minHeight: PANEL_MIN_H, display: 'flex', flexDirection: 'column', minWidth: 0,
-              // Быстрое перераспределение высот при открытии/закрытии соседей;
-              // во время ручного drag хендла — без transition, чтобы не отставать от курсора
-              transition: dragging == null ? 'flex-grow 0.15s ease-out' : 'none',
-            }}
+        style={{
+          flex: `${weights[k] ?? 1} 1 0`, minHeight: PANEL_MIN_H, display: 'flex', flexDirection: 'column', minWidth: 0,
+          // Быстрое перераспределение высот при открытии/закрытии соседей;
+          // во время ручного drag хендла — без transition, чтобы не отставать от курсора
+          transition: dragging == null ? 'flex-grow 0.15s ease-out' : 'none',
+        }}
       >
         <PanelShell
           k={k}
@@ -461,9 +447,7 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobi
                 : null
           }
           headerExtras={panelHeaderExtras?.[k]}
-          fullscreen={isFs}
           canDrag={!soloMode && !compact}
-          onToggleFullscreen={() => setFullscreen(isFs ? null : k)}
           onClose={() => { if (compact) setTabletPanels(cur => cur.filter(x => x !== k)); else close(k); }}
           dragged={dndFrom === k}
           dropTarget={dndOver === k && dndFrom !== null && dndFrom !== k}
@@ -504,7 +488,6 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobi
         <ToolbarIconButton
           onClick={() => {
             if (compact) {
-              setFullscreen(null);
               // До двух панелей: третья вытесняет самую старую (FIFO)
               setTabletPanels(cur => cur.includes(k) ? cur.filter(x => x !== k) : [...cur, k].slice(-2));
             } else toggle(k);
@@ -540,7 +523,7 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobi
           <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
             {tabletKeys.map((k, ri) => (
               <div key={k} style={{ display: 'contents' }}>
-                {ri > 0 && fsKey !== k && fsKey !== tabletKeys[ri - 1] && (
+                {ri > 0 && (
                   <GapHandle active={dragging === 'tablet'} onPointerDown={handleRowDrag(tabletKeys[ri - 1], k, 'tablet')} />
                 )}
                 {renderPanel(k)}
@@ -618,7 +601,7 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobi
                         {dndFrom !== null && rowSep(0)}
                         {col.map((k, ri) => (
                           <div key={k} style={{ display: 'contents' }}>
-                            {ri > 0 && fsKey !== k && fsKey !== col[ri - 1] && (
+                            {ri > 0 && (
                               dndFrom !== null
                                 ? rowSep(ri, GAP)
                                 : <GapHandle active={dragging === `${ci}:${ri}`} onPointerDown={handleRowDrag(col[ri - 1], k, `${ci}:${ri}`)} />

@@ -159,12 +159,6 @@ export function parseWidth(raw: string | null): number {
   return Math.min(COL_MAX, Math.max(COL_MIN, Math.round(n)));
 }
 
-// Сохранённая развёрнутая панель: только известный ключ, иначе null (пустая
-// строка = null; после F5 разворот восстанавливается, если панель ещё открыта)
-export function parseFullscreen(raw: string | null): PanelKey | null {
-  return isPanelKey(raw) ? raw : null;
-}
-
 // Нормализация весов открытых панелей: сумма = числу открытых (защита от дрейфа
 // к 0/∞ после многих drag'ов). Панели без веса получают 1.
 export function normalizeWeights(open: PanelKey[], weights: Partial<Record<PanelKey, number>>): Partial<Record<PanelKey, number>> {
@@ -181,7 +175,6 @@ export interface PanelStack {
   layout: PanelKey[][];
   weights: Partial<Record<PanelKey, number>>;
   width: number;
-  fullscreen: PanelKey | null;
   // Режим зоны: 'multi' — раскладка колонками (дефолт), 'solo' — одна выбранная панель
   mode: PanelMode;
   toggle: (k: PanelKey) => void;
@@ -197,7 +190,6 @@ export interface PanelStack {
   moveToNewColumn: (from: PanelKey, insertIdx: number) => void;
   // Drag-and-drop в горизонтальный плейсхолдер: вставить в колонку colIdx на позицию rowIdx
   moveAt: (from: PanelKey, colIdx: number, rowIdx: number) => void;
-  setFullscreen: (k: PanelKey | null) => void;
   setMode: (m: PanelMode) => void;
 }
 
@@ -212,7 +204,6 @@ function createPanelStack(ns: string, opts?: { legacyOpenKey?: string }) {
   const KEY_WIDTH = `cc_${ns}_panels_width`;
   const KEY_MODE = `cc_${ns}_panels_mode`;     // 'multi' (раскладка, дефолт) | 'solo' (одна панель)
   const KEY_STASH = `cc_${ns}_panels_stash`;   // раскладка, спрятанная кнопкой «Свернуть все»
-  const KEY_FULLSCREEN = `cc_${ns}_panels_fullscreen`; // развёрнутая «в центр» панель
   // Старый плоский список — мигрируется в layout (только у воркспейсного инстанса)
   const legacyOpen = opts?.legacyOpenKey ? lsGet(opts.legacyOpenKey) : null;
 
@@ -224,10 +215,6 @@ function createPanelStack(ns: string, opts?: { legacyOpenKey?: string }) {
   let _stash: PanelKey[][] = (() => {
     try { return sanitizeLayout(JSON.parse(lsGet(KEY_STASH) ?? '[]')); } catch { return []; }
   })();
-  // Развёрнутая «в центр» панель: персистится — после F5 разворот сохраняется
-  // (простая семантика: переключение/закрытие панели сворачивает, как и раньше)
-  let _fullscreen: PanelKey | null = parseFullscreen(lsGet(KEY_FULLSCREEN));
-
   const listeners = new Set<() => void>();
   function emit() { listeners.forEach(l => l()); }
   function subscribe(l: () => void) { listeners.add(l); return () => { listeners.delete(l); }; }
@@ -238,7 +225,6 @@ function createPanelStack(ns: string, opts?: { legacyOpenKey?: string }) {
     lsSet(KEY_WIDTH, String(_width));
     lsSet(KEY_MODE, _mode);
     lsSet(KEY_STASH, JSON.stringify(_stash));
-    lsSet(KEY_FULLSCREEN, _fullscreen ?? '');
   }
 
   function setLayout(next: PanelKey[][]) {
@@ -252,12 +238,9 @@ function createPanelStack(ns: string, opts?: { legacyOpenKey?: string }) {
     const layout = useSyncExternalStore(subscribe, () => _layout);
     const weights = useSyncExternalStore(subscribe, () => _weights);
     const width = useSyncExternalStore(subscribe, () => _width);
-    const fullscreen = useSyncExternalStore(subscribe, () => _fullscreen);
     const mode = useSyncExternalStore(subscribe, () => _mode);
 
     const toggle = useCallback((k: PanelKey) => {
-      // Любой toggle снимает fullscreen — возвращаемся к обычной раскладке
-      _fullscreen = null;
       const isOpen = _layout.flat().includes(k);
       if (_mode === 'solo') {
         // Solo: иконки работают как радио — открытая панель ЗАМЕНЯЕТСЯ выбранной,
@@ -275,7 +258,6 @@ function createPanelStack(ns: string, opts?: { legacyOpenKey?: string }) {
     }, []);
 
     const close = useCallback((k: PanelKey) => {
-      if (_fullscreen === k) _fullscreen = null;
       setLayout(removePanel(_layout, k));
     }, []);
 
@@ -283,7 +265,6 @@ function createPanelStack(ns: string, opts?: { legacyOpenKey?: string }) {
 
     // Свернуть все панели (набор прячется в stash) / вернуть спрятанный набор как был
     const toggleCollapsed = useCallback(() => {
-      _fullscreen = null;
       if (_layout.flat().length > 0) {
         _stash = _layout;
         setLayout([]);
@@ -318,16 +299,9 @@ function createPanelStack(ns: string, opts?: { legacyOpenKey?: string }) {
       setLayout(movePanelAt(_layout, from, colIdx, rowIdx));
     }, []);
 
-    const setFullscreen = useCallback((k: PanelKey | null) => {
-      _fullscreen = k;
-      persist();
-      emit();
-    }, []);
-
     const setMode = useCallback((m: PanelMode) => {
       if (_mode === m) return;
       _mode = m;
-      _fullscreen = null;
       // Вход в solo СХЛОПЫВАЕТ раскладку до одной панели (первой открытой) —
       // остальные реально закрываются; возврат в multi продолжает с текущего
       // состояния, старый набор не восстанавливается.
@@ -340,7 +314,7 @@ function createPanelStack(ns: string, opts?: { legacyOpenKey?: string }) {
       emit();
     }, []);
 
-    return { layout, weights, width, fullscreen, mode, toggle, close, collapsed, toggleCollapsed, setWeights, setWidth, moveTo, moveToNewColumn, moveAt, setFullscreen, setMode };
+    return { layout, weights, width, mode, toggle, close, collapsed, toggleCollapsed, setWeights, setWidth, moveTo, moveToNewColumn, moveAt, setMode };
   }
 
   return { use: usePanelStack };

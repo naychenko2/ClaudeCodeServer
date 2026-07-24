@@ -11,25 +11,11 @@ import { CanvasBackdrop } from './ui/CanvasBackdrop';
 import type { HubTabValue } from './HubTabs';
 import { Modal, ModalActions } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
+import { AUTHOR_EMOJI, authorEmoji } from '../lib/authorEmoji';
 
 // Продуктовая история — «что мы делали и чем это полезно», по всем проектам.
 // Одноколоночная лента по дням (Сегодня / Вчера / дата), карточки: что нового +
 // польза + автор + проект. Без кода и diff — сводная продуктовая информация.
-
-// Иконка-роль автора — чтобы «на глаз» различать, кто сделал (ненавязчиво, тегом).
-// Известные закреплены по имени; новые авторы получают роль из пула детерминированно
-// по имени (стабильно и без правки кода) — так у любого нового будет своя иконка.
-const AUTHOR_EMOJI: Record<string, string> = {
-  'Григорий': '🧑‍💼',
-  'Андрей': '👨‍💻',
-};
-const ROLE_POOL = ['🧑‍🚀', '🥷', '🧑‍🎨', '🧑‍🍳', '🕵️', '🧑‍🏭', '🧑‍🌾', '🧑‍⚕️', '🧑‍🏫', '🧑‍✈️'];
-function authorEmoji(name: string): string {
-  if (AUTHOR_EMOJI[name]) return AUTHOR_EMOJI[name];
-  let h = 0;
-  for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
-  return ROLE_POOL[h % ROLE_POOL.length];
-}
 
 // «Сегодня» / «Вчера» / «2 июля» — заголовок секции дня
 function dayLabel(date: string): string {

@@ -137,7 +137,14 @@ export function ProjectGitBar({ project, session, onCommitOwn }: { project: Proj
           footer={
             <ModalActions
               confirmLabel="Опубликовать"
-              onConfirm={() => { setPublishConfirm(false); void gitPush(project.id); }}
+              // Панель «Изменения» (если открыта) после публикации возвращаем на
+              // «Не зафиксировано»: опубликованные коммиты ушли из её селектора
+              onConfirm={() => {
+                setPublishConfirm(false);
+                void gitPush(project.id).then(ok => {
+                  if (ok) window.dispatchEvent(new CustomEvent('cc-git-open-working'));
+                });
+              }}
               onCancel={() => setPublishConfirm(false)}
             />
           }

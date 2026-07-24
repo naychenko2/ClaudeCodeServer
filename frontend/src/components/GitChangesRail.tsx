@@ -358,6 +358,16 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
     if (ok) { setSummary(''); setUnchecked(new Set()); setSelectMode(false); setMode('list'); void loadUnpushedLog(project.id); }
   };
 
+  // Публикация: после успешного push опубликованные коммиты уходят из селектора
+  // скоупов — если активным был один из них, панель осталась бы на пустом месте.
+  // Возвращаем фокус на «Не зафиксировано».
+  const doPublish = async () => {
+    if (await gitPush(project.id)) {
+      setActiveScope('working');
+      setMode('list');
+    }
+  };
+
   const toggleCheck = (path: string) =>
     setUnchecked(prev => { const n = new Set(prev); n.has(path) ? n.delete(path) : n.add(path); return n; });
 
@@ -912,7 +922,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
           footer={
             <ModalActions
               confirmLabel="Опубликовать"
-              onConfirm={() => { setPublishConfirm(false); void gitPush(project.id); }}
+              onConfirm={() => { setPublishConfirm(false); void doPublish(); }}
               onCancel={() => setPublishConfirm(false)}
             />
           }

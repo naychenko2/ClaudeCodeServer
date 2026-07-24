@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Threading;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Llm;
@@ -9,7 +10,7 @@ using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Services;
 
-public class SessionManager
+public class SessionManager : IDisposable
 {
     private class SessionEntry
     {
@@ -63,7 +64,10 @@ public class SessionManager
     private readonly ChatHistoryService _history;
     private readonly string _sessionsFilePath;
     private readonly Lock _saveLock = new();
-    // Сериализует прямую запись стоимости fal.ai в историю неактивных сессий (load-modify-save)
+    // Автосохранение сессий каждые 30с
+    private static readonly TimeSpan AutoSaveInterval = TimeSpan.FromSeconds(30);
+    private Timer? _autoSaveTimer;
+    // Сериализует прямую запись стоимости fal.ai в историю неактивных сессий
     private readonly SemaphoreSlim _falPersistLock = new(1, 1);
 
     // Enum (в т.ч. ClaudeMode) сериализуем строками — устойчиво к изменению порядка значений.
@@ -216,6 +220,10 @@ public class SessionManager
         _sessionsFilePath = Path.Combine(dataDir, "sessions.json");
 
         LoadSessions();
+
+        // Автосохранение: периодический сброс in-memory данных на диск
+        _autoSaveTimer = new Timer(_ => SaveSessions(), null,
+            AutoSaveInterval, AutoSaveInterval);
     }
 
     // --- MCP tasks-server ---
@@ -2606,6 +2614,10 @@ public class SessionManager
     // иначе после остановки сервера остаются зомби-процессы (claude + node MCP-серверов)
     public void KillAllProcesses()
     {
+        // Сохраняем сессии перед остановкой — последний шанс записать in-memory изменения
+        SaveSessions();
+        _autoSaveTimer?.Dispose();
+
         var tasks = _sessions.Values
             .Select(e => e.Process)
             .OfType<ILlmSessionAdapter>()
@@ -2617,6 +2629,12 @@ public class SessionManager
         {
             Console.Error.WriteLine($"[SessionManager] Остановка процессов при завершении: {ex.GetBaseException().Message}");
         }
+    }
+
+    public void Dispose()
+    {
+        _autoSaveTimer?.Dispose();
+        GC.SuppressFinalize(this);
     }
 
     private Task BroadcastAsync(string sessionId, ServerMessage msg) =>

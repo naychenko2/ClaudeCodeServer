@@ -8,6 +8,10 @@
 //   TASKS_EXECUTE    — "1" = регистрировать tasks_execute (запуск Claude-исполнителя)
 //   TASKS_SESSION_ID — id чата-источника: проставляется в sourceSessionId создаваемых задач
 //   TASKS_SELF_PERSONA_ID — персона текущего чата: постановщик (createdByPersonaId) создаваемых задач
+//   TASKS_EXTRA_PROJECT_IDS          — CSV id проектов из кросс-проектных привязок ProjectTasks
+//                                      текущей персоны: их задачи доступны в дополнение к TASKS_PROJECT_ID
+//   TASKS_EXTRA_PROJECT_IDS_READONLY — CSV подмножество TASKS_EXTRA_PROJECT_IDS только для чтения
+//                                      (create/update/delete там запрещены)
 
 import { createInterface } from 'node:readline';
 
@@ -17,6 +21,48 @@ const PROJECT_ID = process.env.TASKS_PROJECT_ID || null;
 const EXECUTE_ENABLED = process.env.TASKS_EXECUTE === '1';
 const SESSION_ID = process.env.TASKS_SESSION_ID || null;
 const SELF_PERSONA_ID = process.env.TASKS_SELF_PERSONA_ID || null;
+const EXTRA_PROJECT_IDS = new Set((process.env.TASKS_EXTRA_PROJECT_IDS || '').split(',').map(s => s.trim()).filter(Boolean));
+const EXTRA_PROJECT_IDS_READONLY = new Set((process.env.TASKS_EXTRA_PROJECT_IDS_READONLY || '').split(',').map(s => s.trim()).filter(Boolean));
+
+// Все проекты, чьи задачи видны в этом ходу (текущий + кросс-проектные привязки)
+function allowedProjectIds() {
+  const set = new Set(EXTRA_PROJECT_IDS);
+  if (PROJECT_ID) set.add(PROJECT_ID);
+  return set;
+}
+
+// Проект доступен для ЧТЕНИЯ (текущий или любая ProjectTasks-привязка, включая readonly).
+// PROJECT_ID пуст (личный/глобальный контекст) — сужения нет вовсе (как у tasks_list scope=all):
+// владение всё равно перепроверяет бэкенд, а тут это уже весь воркспейс владельца по дизайну.
+function assertProjectReadable(projectId) {
+  if (!PROJECT_ID || projectId === PROJECT_ID) return;
+  if (!EXTRA_PROJECT_IDS.has(projectId))
+    throw new Error(`Нет доступа к проекту ${projectId} — нужна привязка ProjectTasks персоне (см. tasks_list_projects).`);
+}
+
+// Проект доступен для ЗАПИСИ (текущий или полная — не readonly — привязка ProjectTasks)
+function assertProjectWritable(projectId) {
+  if (!PROJECT_ID) return;
+  assertProjectReadable(projectId);
+  if (projectId !== PROJECT_ID && EXTRA_PROJECT_IDS_READONLY.has(projectId))
+    throw new Error(`Доступ к проекту ${projectId} только для чтения (привязка ProjectTasks с readonly) — создавать/менять задачи нельзя.`);
+}
+
+// Задача принадлежит проекту, видимому в этом ходу (проверка при непустом PROJECT_ID —
+// закрывает дыру, когда tasks_get/tasks_list(scope=all)/tasks_search по чужому проекту
+// возвращали задачу любого проекта владельца безотносительно контекста чата)
+function assertTaskAccessible(task) {
+  if (!PROJECT_ID) return; // чат вне проекта / глобальная персона — весь воркспейс, как и раньше
+  if (!task.projectId || !allowedProjectIds().has(task.projectId))
+    throw new Error(`Задача ${task.id} недоступна в этом контексте — она принадлежит другому проекту.`);
+}
+
+// Задача видна в scope=all/tasks_search текущего контекста (та же проверка, но фильтрующая,
+// не бросающая — используется на списках, где недоступные записи просто отфильтровываются)
+function isTaskInScope(task) {
+  if (!PROJECT_ID) return true;
+  return !!task.projectId && allowedProjectIds().has(task.projectId);
+}
 
 // --- HTTP к бэкенду ---
 
@@ -149,6 +195,13 @@ const LINKED_FILES_SCHEMA = {
 
 const TOOLS = [
   {
+    name: 'tasks_list_projects',
+    description: 'Проекты, чьи задачи доступны в этом ходу: текущий проект чата плюс проекты из ' +
+      'кросс-проектных привязок ProjectTasks персоны — с id, именем и readOnly. Используй, чтобы узнать, ' +
+      'куда можно адресовать задачу через projectId в tasks_create/tasks_list.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
     name: 'tasks_list',
     description: `Список задач. ${CONTEXT_NOTE} scope=all — все задачи пользователя по всем проектам и личные.`,
     inputSchema: {
@@ -160,6 +213,7 @@ const TOOLS = [
         from: { type: 'string', description: 'Показывать задачи со сроком от даты (включительно), YYYY-MM-DD. Задачи без срока не попадают в выборку.' },
         to: { type: 'string', description: 'Показывать задачи со сроком до даты (включительно), YYYY-MM-DD. Задачи без срока не попадают в выборку.' },
         scope: { type: 'string', enum: ['context', 'all'], description: 'context (по умолчанию) — текущий проект/личные; all — все задачи пользователя' },
+        projectId: { type: 'string', description: 'Явный проект (текущий или из tasks_list_projects) — переопределяет scope/контекст, список только его задач.' },
       },
     },
   },
@@ -203,6 +257,7 @@ const TOOLS = [
         labels: { type: 'array', items: { type: 'string' }, description: 'Метки' },
         columnId: COLUMN_ID_SCHEMA,
         executionExpiresAfterMinutes: EXECUTION_TTL_SCHEMA,
+        projectId: { type: 'string', description: 'Проект для задачи, если не текущий (см. tasks_list_projects) — нужна привязка ProjectTasks с полным доступом (не readonly).' },
       },
     },
   },
@@ -229,6 +284,7 @@ const TOOLS = [
         labels: { type: 'array', items: { type: 'string' }, description: 'Метки (заменяют список целиком)' },
         columnId: { ...COLUMN_ID_SCHEMA, description: COLUMN_ID_SCHEMA.description + ' Пустая строка — сброс на дефолтную колонку категории.' },
         executionExpiresAfterMinutes: { ...EXECUTION_TTL_SCHEMA, description: EXECUTION_TTL_SCHEMA.description + ' Отрицательное значение — сделать бессрочным.' },
+        projectId: { type: 'string', description: 'Перенести задачу в другой проект (см. tasks_list_projects, нужна привязка ProjectTasks с полным доступом) или "" — сделать личной.' },
       },
     },
   },
@@ -348,15 +404,41 @@ function json(data) {
 
 async function callTool(name, args) {
   switch (name) {
+    case 'tasks_list_projects': {
+      const entries = [];
+      if (PROJECT_ID) entries.push({ id: PROJECT_ID, readOnly: false });
+      for (const id of EXTRA_PROJECT_IDS) entries.push({ id, readOnly: EXTRA_PROJECT_IDS_READONLY.has(id) });
+      const result = [];
+      for (const e of entries) {
+        try {
+          const proj = await api(`/api/projects/${encodeURIComponent(e.id)}`);
+          result.push({ id: e.id, name: proj.name, readOnly: e.readOnly, current: e.id === PROJECT_ID });
+        } catch { /* проект удалён/недоступен — пропускаем */ }
+      }
+      return json(result);
+    }
+
     case 'tasks_list': {
       const params = new URLSearchParams();
       // from/to — фильтр по диапазону срока (DueDate) на бэке, границы включительно
       for (const k of ['status', 'priority', 'assignee', 'from', 'to'])
         if (args[k]) params.set(k, String(args[k]));
-      if (args.scope !== 'all') {
-        if (PROJECT_ID) params.set('projectId', PROJECT_ID);
-        else params.set('personal', 'true');
+
+      // projectId явно указан — точечный запрос по одному (доступному) проекту, вне scope
+      if (args.projectId) {
+        const pid = String(args.projectId);
+        assertProjectReadable(pid);
+        params.set('projectId', pid);
+        return json((await api(`/api/tasks?${params}`)).map(brief));
       }
+
+      if (args.scope === 'all') {
+        const data = await api(`/api/tasks?${params}`);
+        return json(data.filter(isTaskInScope).map(brief));
+      }
+
+      if (PROJECT_ID) params.set('projectId', PROJECT_ID);
+      else params.set('personal', 'true');
       const data = await api(`/api/tasks?${params}`);
       return json(data.map(brief));
     }
@@ -364,11 +446,14 @@ async function callTool(name, args) {
     case 'tasks_search': {
       const params = new URLSearchParams({ q: String(args.query ?? '') });
       const data = await api(`/api/tasks?${params}`);
-      return json(data.map(brief));
+      return json(data.filter(isTaskInScope).map(brief));
     }
 
-    case 'tasks_get':
-      return json(await api(`/api/tasks/${args.id}`));
+    case 'tasks_get': {
+      const task = await api(`/api/tasks/${args.id}`);
+      assertTaskAccessible(task);
+      return json(task);
+    }
 
     case 'tasks_board_columns': {
       if (!PROJECT_ID)
@@ -390,16 +475,26 @@ async function callTool(name, args) {
       }
       if (Array.isArray(args.subtasks) && args.subtasks.length)
         body.subtasks = args.subtasks.map(t => ({ title: String(t) }));
-      const path = PROJECT_ID ? `/api/projects/${PROJECT_ID}/tasks` : '/api/tasks';
+      // Целевой проект: по умолчанию текущий; явный projectId, отличный от текущего,
+      // требует полной (не readonly) привязки ProjectTasks
+      const targetProjectId = args.projectId ? String(args.projectId) : PROJECT_ID;
+      if (targetProjectId && targetProjectId !== PROJECT_ID) assertProjectWritable(targetProjectId);
+      const path = targetProjectId ? `/api/projects/${targetProjectId}/tasks` : '/api/tasks';
       return json(await api(path, { method: 'POST', body: JSON.stringify(body) }));
     }
 
     case 'tasks_update': {
       const { id, ...rest } = args;
+      // Текущая задача должна быть видна в этом контексте (закрывает дыру: без этого можно
+      // было редактировать чужой проект по одному только taskId, зная его)
+      if (PROJECT_ID) assertTaskAccessible(await api(`/api/tasks/${id}`));
+      // Перенос в другой проект — целевой проект должен быть доступен на запись
+      if (rest.projectId) assertProjectWritable(String(rest.projectId));
       return json(await api(`/api/tasks/${id}`, { method: 'PUT', body: JSON.stringify(rest) }));
     }
 
     case 'tasks_complete': {
+      if (PROJECT_ID) assertTaskAccessible(await api(`/api/tasks/${args.id}`));
       const body = { status: 'done' };
       if (args.resultMarkdown !== undefined) body.resultMarkdown = args.resultMarkdown;
       if (args.linkedFiles !== undefined) body.linkedFiles = args.linkedFiles;
@@ -418,13 +513,16 @@ async function callTool(name, args) {
       });
     }
 
-    case 'tasks_delete':
+    case 'tasks_delete': {
+      if (PROJECT_ID) assertTaskAccessible(await api(`/api/tasks/${args.id}`));
       await api(`/api/tasks/${args.id}`, { method: 'DELETE' });
       return { content: [{ type: 'text', text: `Задача ${args.id} удалена.` }] };
+    }
 
     case 'tasks_add_subtask': {
       // Подзадачи обновляются списком целиком: читаем, добавляем, сохраняем
       const task = await api(`/api/tasks/${args.taskId}`);
+      if (PROJECT_ID) assertTaskAccessible(task);
       const subtasks = [...task.subtasks, { id: '', title: String(args.title), isDone: false }];
       return json(await api(`/api/tasks/${args.taskId}`, {
         method: 'PUT', body: JSON.stringify({ subtasks }),
@@ -433,6 +531,7 @@ async function callTool(name, args) {
 
     case 'tasks_toggle_subtask': {
       const task = await api(`/api/tasks/${args.taskId}`);
+      if (PROJECT_ID) assertTaskAccessible(task);
       const match = s =>
         (args.subtaskId && s.id === args.subtaskId) ||
         (args.subtaskTitle && s.title === args.subtaskTitle);

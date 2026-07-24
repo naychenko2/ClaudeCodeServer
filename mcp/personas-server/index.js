@@ -19,6 +19,11 @@
 //                         AUTOMATION_FIELDS ~основная масса контекста сервера) не грузились
 //                         каждый ход. Read/ask-инструменты остаются всегда. Дефолт — включено
 //                         (обратная совместимость прямых запусков); выключается только явным "0".
+//   PERSONAS_EXTRA_PROJECT_IDS  — CSV id проектов из кросс-проектных привязок ProjectPersonas
+//                         текущей персоны: вся их команда видна в personas_list(scope=context)
+//                         и резолвится по handle в persona_ask (в дополнение к своему контексту)
+//   PERSONAS_EXTRA_PERSONA_IDS  — CSV id точечных персон из тех же привязок (сужение до одной
+//                         персоны вместо всей команды её проекта)
 //
 //   Правила проактивности (personas_automation_*) доступны ВСЕГДА, без флага (как
 //   personas_create/update) — automation-эндпоинты бэкенда ничем не гейтятся. Персона может
@@ -40,6 +45,9 @@ const BINDINGS = process.env.PERSONAS_BINDINGS === '1';
 // Write-инструменты управления персонами. Выключаются только явным "0" (ClaudeSession
 // ставит его на ходах без интента управления командой) — иначе включены (совместимость).
 const WRITE = process.env.PERSONAS_WRITE !== '0';
+// Кросс-проектные привязки ProjectPersonas: доступ к команде/точечным персонам ДРУГОГО проекта
+const EXTRA_PROJECT_IDS = (process.env.PERSONAS_EXTRA_PROJECT_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
+const EXTRA_PERSONA_IDS = (process.env.PERSONAS_EXTRA_PERSONA_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
 
 // --- HTTP к бэкенду ---
 
@@ -60,6 +68,19 @@ async function api(path, options = {}) {
   }
   if (res.status === 204) return null;
   return res.json();
+}
+
+// Себя ли спрашивают по handle (без запроса — если SELF_ID не задан, вопрос не может быть о себе)
+async function isSelfHandle(handle) {
+  const self = await api(`/api/personas/${encodeURIComponent(SELF_ID)}`).catch(() => null);
+  return !!(self && String(self.handle).toLowerCase() === handle.toLowerCase());
+}
+
+// Тело JSON-ошибки бэкенда из сообщения api() — "HTTP <код>: <json>"
+function parseErrorBody(message) {
+  const idx = message.indexOf(': ');
+  if (idx < 0) return null;
+  try { return JSON.parse(message.slice(idx + 2)); } catch { return null; }
 }
 
 // --- Инструменты ---
@@ -106,11 +127,11 @@ const BINDING_ITEM_SCHEMA = {
   properties: {
     type: {
       type: 'string',
-      enum: ['project', 'projectPath', 'knowledge', 'notes', 'tool', 'skill'],
-      description: 'Тип: project — проект целиком; projectPath — папка/файл проекта; knowledge — база знаний (datasetId); notes — источник заметок; tool — рубильник инструмента; skill — глобальный скилл',
+      enum: ['project', 'projectPath', 'knowledge', 'notes', 'tool', 'skill', 'projectPersonas', 'projectTasks'],
+      description: 'Тип: project — проект целиком; projectPath — папка/файл проекта; knowledge — база знаний (datasetId); notes — источник заметок; tool — рубильник инструмента; skill — глобальный скилл; projectPersonas — команда ЧУЖОГО проекта (persona_ask/@упоминание); projectTasks — задачи ЧУЖОГО проекта',
     },
-    target: { type: 'string', description: 'Цель: projectId | datasetId | source заметок ("personal"/projectId) | ключ инструмента (tasks/notes/web/…) | имя скилла' },
-    path: { type: 'string', description: 'Путь внутри цели (для projectPath — обязателен; для notes — папка источника)' },
+    target: { type: 'string', description: 'Цель: projectId | datasetId | source заметок ("personal"/projectId) | ключ инструмента (tasks/notes/web/…) | имя скилла | projectId (для projectPersonas/projectTasks)' },
+    path: { type: 'string', description: 'Путь внутри цели (для projectPath — обязателен; для notes — папка источника; для projectPersonas — id персоны, сужающий до неё одной, пусто = вся команда; для projectTasks — "readonly" для доступа только для чтения, пусто = полный доступ)' },
     condition: { type: 'string', description: 'Когда персоне применять источник (1-2 предложения; пусто = «всегда под рукой»)' },
     mode: { type: 'string', enum: ['auto', 'always', 'off'], description: 'Режим: auto — по условию (дефолт); always — выжимка в каждый ход; off — выключена' },
   },
@@ -425,12 +446,14 @@ const TOOLS = [
       'долгой памятью. Используй, когда пользователь упоминает @handle персоны или когда нужна её ' +
       'экспертиза (например, мнение ревьюера о плане). handle персоны есть в personas_list. ' +
       'Вопрос формулируй самодостаточно — персона не видит этот разговор; важный контекст передай ' +
-      'в поле context.',
+      'в поле context. Если тёзка есть в нескольких проектах (кросс-проектная привязка) — вызов по ' +
+      'handle вернёт список кандидатов с их id и проектом; повтори вызов с personaId вместо handle.',
     inputSchema: {
       type: 'object',
-      required: ['handle', 'question'],
+      required: ['question'],
       properties: {
-        handle: { type: 'string', description: 'handle персоны (без @), см. personas_list' },
+        handle: { type: 'string', description: 'handle персоны (без @), см. personas_list. Не нужен, если указан personaId' },
+        personaId: { type: 'string', description: 'ID персоны — однозначная альтернатива handle (используй при коллизии тёзок из разных проектов)' },
         question: { type: 'string', description: 'Самодостаточный вопрос к персоне' },
         context: { type: 'string', description: 'Необязательный контекст разговора (кратко, только нужное для ответа)' },
       },
@@ -489,6 +512,11 @@ async function callTool(name, args) {
         throw new Error('Текущая сессия вне проекта — проектных персон здесь нет (используй scope "global" или "all").');
       const params = new URLSearchParams({ scope });
       if (scope !== 'global') params.set('projectId', PROJECT_ID ?? '');
+      // Кросс-проектные привязки ProjectPersonas — команда/точечные персоны другого проекта
+      if (scope === 'context') {
+        if (EXTRA_PROJECT_IDS.length) params.set('extraProjectIds', EXTRA_PROJECT_IDS.join(','));
+        if (EXTRA_PERSONA_IDS.length) params.set('extraPersonaIds', EXTRA_PERSONA_IDS.join(','));
+      }
       return json(await api(`/api/personas?${params}`));
     }
 
@@ -647,22 +675,37 @@ async function callTool(name, args) {
 
     case 'persona_ask': {
       if (!MENTIONS) throw new Error('Инструмент persona_ask выключен (флаг persona-mentions).');
-      const body = {
-        handle: String(args.handle ?? '').replace(/^@/, ''),
-        question: String(args.question ?? ''),
-      };
-      if (SELF_ID && body.handle) {
-        // Себя не спрашивают — подсказка вместо бессмысленного one-shot
-        const self = await api(`/api/personas/${encodeURIComponent(SELF_ID)}`).catch(() => null);
-        if (self && String(self.handle).toLowerCase() === body.handle.toLowerCase())
-          throw new Error('Это твой собственный handle — отвечай сам, спрашивать себя не нужно.');
-      }
+      const personaId = args.personaId ? String(args.personaId) : '';
+      const handle = personaId ? '' : String(args.handle ?? '').replace(/^@/, '');
+      if (!personaId && !handle) throw new Error('Укажи handle или personaId персоны.');
+      if (SELF_ID && (personaId === SELF_ID
+        || (handle && await isSelfHandle(handle))))
+        throw new Error('Это твой собственный id/handle — отвечай сам, спрашивать себя не нужно.');
+
+      const body = { question: String(args.question ?? '') };
+      if (personaId) body.personaId = personaId;
+      else body.handle = handle;
       if (args.context) body.context = String(args.context);
       // Контекст проекта: handle резолвится среди глобальных + проектных этого проекта
-      // (две проектные «маши» из разных проектов не путаются)
+      // (две проектные «маши» из разных проектов не путаются) + кросс-проектные привязки
+      // ProjectPersonas — расширяют резолв на команду/точечных персон другого проекта
       if (PROJECT_ID) body.projectId = PROJECT_ID;
-      const res = await api('/api/personas/ask', { method: 'POST', body: JSON.stringify(body) });
-      return { content: [{ type: 'text', text: res?.answer ?? '' }] };
+      if (EXTRA_PROJECT_IDS.length) body.extraProjectIds = EXTRA_PROJECT_IDS;
+      if (EXTRA_PERSONA_IDS.length) body.extraPersonaIds = EXTRA_PERSONA_IDS;
+      try {
+        const res = await api('/api/personas/ask', { method: 'POST', body: JSON.stringify(body) });
+        return { content: [{ type: 'text', text: res?.answer ?? '' }] };
+      } catch (err) {
+        if (err?.status === 409) {
+          const parsed = parseErrorBody(err.message);
+          const candidates = Array.isArray(parsed?.candidates) ? parsed.candidates : [];
+          const list = candidates.map(c =>
+            `- personaId=${c.id} — ${c.role ? `${c.role} (${c.name})` : c.name}${c.projectName ? `, проект «${c.projectName}»` : ''}`
+          ).join('\n');
+          throw new Error(`${parsed?.error ?? 'Неоднозначный handle'}. Повтори вызов с personaId одного из кандидатов:\n${list}`);
+        }
+        throw err;
+      }
     }
 
     default:

@@ -41,6 +41,10 @@ public class TaskExecutionService
         _notif = notif;
         _executorModel = config["Tasks:ExecutorModel"];
         _sessions.OnSessionMessage += OnSessionMessageAsync;
+        // Точка B join-а (CT-8): D-сигнал (Status=Done из tasks_complete/PUT/UI) может прийти
+        // раньше или позже R-сигнала (ResultMessage хода, точка A ниже) — TaskManager.Update
+        // единственный путь в Done, поднимает событие ровно на переходе
+        _tasks.TaskCompleted += OnTaskCompleted;
     }
 
     /// <summary>
@@ -252,17 +256,16 @@ public class TaskExecutionService
         return sb.ToString();
     }
 
-    // Наблюдатель сообщений всех сессий: реагируем только на сессии, привязанные к задачам
-    private async Task OnSessionMessageAsync(Session session, ServerMessage msg)
+    // Наблюдатель сообщений всех сессий: реагируем только на сессии, привязанные к задачам.
+    // internal — для юнит-тестов join-логики (TaskExecutionServiceJoinTests), вызывающих
+    // метод напрямую с синтетическими Session/ResultMessage вместо живого хода claude.exe.
+    internal async Task OnSessionMessageAsync(Session session, ServerMessage msg)
     {
         if (msg is not (ResultMessage or PermissionRequestMessage or AskQuestionMessage)) return;
 
         // Ищем задачу этой сессии с незавершённым запуском исполнителя
         var task = FindTracked(session.Id);
         if (task is null) return;
-
-        // Уведомления от лица персоны-исполнителя (если назначена и всё ещё своя)
-        var persona = task.PersonaId is not null ? _personas.Get(task.PersonaId, task.OwnerId!) : null;
 
         switch (msg)
         {
@@ -272,23 +275,76 @@ public class TaskExecutionService
                 var updated = _tasks.MarkClaudeResult(task.Id, ok ? "success" : "error");
                 if (updated is null) return;
                 await _hub.BroadcastTaskChangedAsync(updated.OwnerId!, "updated", updated);
-                // Финальное уведомление — только когда задача реально завершена (done) либо ход упал.
-                // Промежуточные успешные ходы многошаговой задачи не спамят «завершил работу» (②-2.1).
-                if (!ok || updated.Status == TaskItemStatus.Done)
+                if (!ok)
                 {
+                    // Провал хода — L0 «не выполнена» требует только сигнал R (этот ход),
+                    // join с сигналом D не нужен — задача обычно даже не Done
+                    var persona = updated.PersonaId is not null ? _personas.Get(updated.PersonaId, updated.OwnerId!) : null;
                     await NotifyAsync(updated, BuildResultNotification(updated, ok, persona));
                     await NotifyDelegatorAsync(updated, ok);
                 }
-                // Модель Z: активный доклад в чат (в дополнение к L0-тосту выше) — только
-                // при реальном завершении делегированной задачи, не при упавшем ходе
-                if (updated.Status == TaskItemStatus.Done)
-                    await ReportToDelegatorAsync(updated, persona);
+                else
+                {
+                    // Успех хода — точка A join-а: сигнал R есть, доставка (L0 + Z) зависит
+                    // от сигнала D (Status=Done). Промежуточные успешные ходы многошаговой
+                    // задачи (Status ещё не Done) молча пропускаются гейтом внутри — не спамят.
+                    await TryDeliverCompletionAsync(updated);
+                }
                 break;
             }
             case PermissionRequestMessage or AskQuestionMessage:
+            {
+                var persona = task.PersonaId is not null ? _personas.Get(task.PersonaId, task.OwnerId!) : null;
                 await NotifyAsync(task, BuildWaitingNotification(task, persona));
                 break;
+            }
         }
+    }
+
+    // Точка B join-а: TaskManager.TaskCompleted — синхронное событие (Update не может стать
+    // async без переделки всех вызывающих — UI/MCP/NoteTaskSyncService), поэтому доставку
+    // уводим в фон. Ошибки логируем — фоновая доставка не должна ронять вызывающий PUT/MCP-запрос.
+    private void OnTaskCompleted(TaskItem task)
+    {
+        _ = Task.Run(async () =>
+        {
+            try { await TryDeliverCompletionAsync(task); }
+            catch (Exception ex)
+            {
+                _log.LogError(ex, "Ошибка доставки завершения задачи {TaskId}", task.Id);
+            }
+        });
+    }
+
+    // Единая точка доставки завершения задачи — join двух независимых сигналов: R (конец хода,
+    // ClaudeResult) и D (Status=Done, из tasks_complete/PUT/UI). Вызывается из двух мест —
+    // конца успешного хода (OnSessionMessageAsync) и перехода в Done (TaskManager.TaskCompleted) —
+    // в любом порядке их прихода. Идемпотентность — CAS-флаг TaskItem.CompletionDelivered.
+    // internal — для юнит-тестов (TaskExecutionServiceJoinTests).
+    internal async Task TryDeliverCompletionAsync(TaskItem task)
+    {
+        if (task.ClaudeResult is null)
+        {
+            _log.LogInformation("Доклад задачи {TaskId}: пропуск — ждём конца хода (сигнал R)", task.Id);
+            return;
+        }
+        if (task.Status != TaskItemStatus.Done)
+        {
+            _log.LogInformation("Доклад задачи {TaskId}: пропуск — статус не Done (сигнал D)", task.Id);
+            return;
+        }
+        if (!_tasks.TryMarkCompletionDelivered(task.Id))
+        {
+            _log.LogInformation("Доклад задачи {TaskId}: пропуск — уже доставлено", task.Id);
+            return;
+        }
+
+        var persona = task.PersonaId is not null ? _personas.Get(task.PersonaId, task.OwnerId!) : null;
+        // L0: тост владельцу «завершил работу» + отдельное уведомление постановщику (если делегировано)
+        await NotifyAsync(task, BuildResultNotification(task, ok: true, persona));
+        await NotifyDelegatorAsync(task, ok: true);
+        // Модель Z: активный доклад в чат постановщика (в дополнение к L0-тосту выше)
+        await ReportToDelegatorAsync(task, persona);
     }
 
     // --- Чистая логика маппинга (извлечена для юнит-тестов) ---
@@ -325,15 +381,24 @@ public class TaskExecutionService
     // Скип: постановщик не задан, совпадает с исполнителем (дубль «Завершил работу») или удалён.
     private async Task NotifyDelegatorAsync(TaskItem task, bool ok)
     {
-        if (task.CreatedByPersonaId is null || task.CreatedByPersonaId == task.PersonaId) return;
+        if (task.CreatedByPersonaId is null || task.CreatedByPersonaId == task.PersonaId)
+        {
+            _log.LogInformation("L0 задачи {TaskId}: пропуск — не делегирование (постановщик не задан или совпадает с исполнителем)", task.Id);
+            return;
+        }
         var delegator = _personas.Get(task.CreatedByPersonaId, task.OwnerId!);
-        if (delegator is null) return;
+        if (delegator is null)
+        {
+            _log.LogInformation("L0 задачи {TaskId}: пропуск — постановщик {PersonaId} не найден", task.Id, task.CreatedByPersonaId);
+            return;
+        }
         // SourceSessionId приходит из тела POST и мог указать на чужой чат — ссылку строим
         // только по сессии владельца задачи, иначе fallback на TaskUrl
         var sourceSession = task.SourceSessionId is not null ? _sessions.GetById(task.SourceSessionId) : null;
         if (sourceSession is not null && _sessions.ResolveOwnerId(sourceSession) != task.OwnerId)
             sourceSession = null;
         await NotifyAsync(task, BuildDelegatorNotification(task, ok, delegator, sourceSession));
+        _log.LogInformation("L0 задачи {TaskId}: отправлено постановщику {PersonaId}", task.Id, delegator.Id);
     }
 
     // Уведомление постановщику о завершении делегированной задачи: Url — исходный чат
@@ -377,14 +442,25 @@ public class TaskExecutionService
     // (без неё нет «лица» для гостевой реплики; L0-тост выше это уже покрывает).
     private async Task ReportToDelegatorAsync(TaskItem task, Persona? executor)
     {
-        if (executor is null || !ShouldReportToDelegator(task, executor)) return;
+        if (executor is null || !ShouldReportToDelegator(task, executor))
+        {
+            _log.LogInformation("Доклад Z задачи {TaskId}: пропуск — не делегирование персоне (нет исполнителя-персоны, постановщика или SourceSessionId)", task.Id);
+            return;
+        }
         var delegator = _personas.Get(task.CreatedByPersonaId!, task.OwnerId!);
-        if (delegator is null) return;
+        if (delegator is null)
+        {
+            _log.LogInformation("Доклад Z задачи {TaskId}: пропуск — постановщик {PersonaId} не найден", task.Id, task.CreatedByPersonaId);
+            return;
+        }
 
         // Владелец S — как в NotifyDelegatorAsync: чужая/неизвестная сессия не годится
         var sourceSession = _sessions.GetById(task.SourceSessionId!);
         if (sourceSession is not null && _sessions.ResolveOwnerId(sourceSession) != task.OwnerId)
+        {
+            _log.LogInformation("Доклад Z задачи {TaskId}: исходный чат {SessionId} чужой — fallback в новый чат", task.Id, task.SourceSessionId);
             sourceSession = null;
+        }
 
         string targetSessionId;
         Session? targetSession;
@@ -414,7 +490,11 @@ public class TaskExecutionService
         // ведущему спикеру, а не по постановщику A (senderPersonaId — только атрибуция
         // реплики, не смена спикера). A ∈ участников — переключаем спикера на него перед
         // ходом; иначе реагировать некому — ограничиваемся гостевой репликой B + L0-тостом.
-        if (!CanSendDelegatorReaction(targetSession?.Participants, delegator.Id)) return;
+        if (!CanSendDelegatorReaction(targetSession?.Participants, delegator.Id))
+        {
+            _log.LogInformation("Доклад Z задачи {TaskId}: групповой чат {SessionId} без постановщика среди участников — реакция не отправлена", task.Id, targetSessionId);
+            return;
+        }
         if (targetSession?.Participants is { Count: > 1 })
             _sessions.SetPersona(targetSessionId, task.OwnerId!, delegator.Id);
 
@@ -426,6 +506,7 @@ public class TaskExecutionService
         // (гард DelegationDepth<3 цепочку исполнителей ловит, а не переделегирование A).
         await _sessions.SendMessageAsync(targetSessionId, BuildDelegatorReactionPrompt(task, executor),
             [], auto: true, senderPersonaId: delegator.Id, suppressTasksExecute: true);
+        _log.LogInformation("Доклад Z задачи {TaskId}: отправлен (гостевая реплика + реакция) в чат {SessionId}", task.Id, targetSessionId);
     }
 
     // Маркер гостевой реплики-доклада: контракт для фронта — по нему отличают доклад

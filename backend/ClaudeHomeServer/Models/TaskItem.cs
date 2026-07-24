@@ -38,6 +38,11 @@ public class TaskItem
     public DateTime? ClaudeStartedAt { get; set; }
     // Итог последнего запуска: success | error; null — ещё выполняется или не запускалась
     public string? ClaudeResult { get; set; }
+    // Идемпотентность join двух независимых сигналов завершения (CT-8): R — конец хода
+    // (ClaudeResult) и D — Status=Done (tasks_complete/PUT). CAS TaskManager.TryMarkCompletionDelivered
+    // гарантирует ровно одну доставку L0/Z-доклада вне зависимости от порядка их прихода.
+    // НЕ переносится в SpawnNextOccurrence (как ClaudeResult — серия начинается заново).
+    public bool CompletionDelivered { get; set; }
     // Markdown-описание итога выполнения (прикрепляет исполнитель через tasks_complete/
     // tasks_update). null — результата нет; "" — очищен. Не переносится в следующий
     // экземпляр регулярной задачи (как ClaudeResult/LinkedSessionId — серия начинается заново).

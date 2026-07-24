@@ -14,6 +14,10 @@ public class TaskManager
     private readonly NotificationService? _notif;
     private readonly PersonaManager? _personas;
 
+    // Единственный путь в Done (UI/MCP/планировщик — всё через Update). Подписчик —
+    // TaskExecutionService.TryDeliverCompletionAsync (join сигналов R/D, см. CompletionDelivered).
+    public event Action<TaskItem>? TaskCompleted;
+
     public TaskManager(IConfiguration config, ProjectEventLogService? events = null,
         NotificationService? notif = null, PersonaManager? personas = null)
     {
@@ -212,8 +216,12 @@ public class TaskManager
         task.UpdatedAt = DateTime.UtcNow;
         Save();
         // Завершение задачи фиксируем в логе (переход в Done — заметное командное событие)
+        // и поднимаем сигнал D для join-а с сигналом R (конец хода) — ровно один раз на переход
         if (task.Status == TaskItemStatus.Done && statusBefore != TaskItemStatus.Done)
+        {
             LogTask(task, ProjectEventTypes.TaskCompleted, $"Завершена задача «{task.Title}»");
+            TaskCompleted?.Invoke(task);
+        }
         return task;
     }
 
@@ -304,6 +312,26 @@ public class TaskManager
         task.UpdatedAt = DateTime.UtcNow;
         Save();
         return task;
+    }
+
+    // CAS: атомарно проверяет и занимает флаг доставки завершения — join двух независимых
+    // сигналов (R/D) в TaskExecutionService.TryDeliverCompletionAsync может прийти из двух
+    // потоков почти одновременно (SignalR-колбэк хода vs HTTP PUT tasks_complete), но
+    // доставить доклад нужно ровно один раз. true — вызывающий занял флаг первым (доставляет),
+    // false — уже занят (пропуск). Save — ВНЕ лока: не завязываемся на реентрантность
+    // System.Threading.Lock (Save берёт тот же _saveLock).
+    public bool TryMarkCompletionDelivered(string id)
+    {
+        bool claimed;
+        lock (_saveLock)
+        {
+            var task = _tasks.GetValueOrDefault(id);
+            if (task is null || task.CompletionDelivered) return false;
+            task.CompletionDelivered = true;
+            claimed = true;
+        }
+        Save();
+        return claimed;
     }
 
     public bool Delete(string id)

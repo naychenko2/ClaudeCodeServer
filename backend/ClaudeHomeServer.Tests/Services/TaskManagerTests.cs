@@ -360,6 +360,71 @@ public class TaskManagerTests : IDisposable
         _sut.MarkClaudeResult(task.Id, "success")!.ClaudeResult.Should().Be("success");
     }
 
+    // ─── CT-8: join двух сигналов завершения (R/D) ───────────────────────────
+
+    [Fact]
+    public void TryMarkCompletionDelivered_ПерваяДоставка_ЗанимаетФлагИВозвращаетTrue()
+    {
+        var task = _sut.Create(null, "u", new CreateTaskRequest("t"));
+
+        _sut.TryMarkCompletionDelivered(task.Id).Should().BeTrue();
+        _sut.GetById(task.Id)!.CompletionDelivered.Should().BeTrue();
+    }
+
+    [Fact]
+    public void TryMarkCompletionDelivered_ПовторныйВызов_False()
+    {
+        var task = _sut.Create(null, "u", new CreateTaskRequest("t"));
+        _sut.TryMarkCompletionDelivered(task.Id).Should().BeTrue();
+
+        // Второй триггер join-а (гонка R/D) — флаг уже занят, доставки не будет
+        _sut.TryMarkCompletionDelivered(task.Id).Should().BeFalse();
+    }
+
+    [Fact]
+    public void TryMarkCompletionDelivered_НесуществующаяЗадача_False()
+    {
+        _sut.TryMarkCompletionDelivered("ghost").Should().BeFalse();
+    }
+
+    [Fact]
+    public void Update_ПереходВDone_ПоднимаетTaskCompleted()
+    {
+        var task = _sut.Create(null, "u", new CreateTaskRequest("t"));
+        var fired = new List<string>();
+        _sut.TaskCompleted += t => fired.Add(t.Id);
+
+        _sut.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+
+        fired.Should().ContainSingle().Which.Should().Be(task.Id);
+    }
+
+    [Fact]
+    public void Update_УжеБылDone_НеПоднимаетTaskCompletedПовторно()
+    {
+        var task = _sut.Create(null, "u", new CreateTaskRequest("t"));
+        _sut.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+        var fired = new List<string>();
+        _sut.TaskCompleted += t => fired.Add(t.Id);
+
+        // Повторный PUT с тем же статусом (напр. tasks_update без смены статуса) — не переход
+        _sut.Update(task.Id, new UpdateTaskRequest(Title: "переименовали"));
+
+        fired.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Update_НеДошёлДоDone_НеПоднимаетTaskCompleted()
+    {
+        var task = _sut.Create(null, "u", new CreateTaskRequest("t"));
+        var fired = new List<string>();
+        _sut.TaskCompleted += t => fired.Add(t.Id);
+
+        _sut.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.InProgress));
+
+        fired.Should().BeEmpty();
+    }
+
     // ─── Глубина делегирования ────────────────────────────────────────────────
 
     [Fact]

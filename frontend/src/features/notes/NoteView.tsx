@@ -499,7 +499,10 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
           </Suspense>
         </div>
       ) : (
-      <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', padding: '4px 18px 24px' }}>
+      // Полупрозрачный «лист» под текстом — тот же тон, что у ответа Claude в чате:
+      // заметка лежит на фоне страницы с дудл-паттерном
+      <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', padding: '10px 18px 24px',
+        ...(hero ? { background: C.msgBg, borderRadius: ISLAND.radius } : {}) }}>
         {/* Hero: заголовок заметки — крупно над тегами (в стиле markdown-H1);
             ведущий H1 самого контента глушится (hideLeadingH1), чтобы не дублировался */}
         {!editing && hero && (
@@ -756,7 +759,8 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
           <aside style={{
             width: connWidth, flex: 'none', display: 'flex', flexDirection: 'column',
             overflow: 'hidden', boxSizing: 'border-box',
-            ...(hero ? { background: ISLAND.bg, border: `1px solid ${ISLAND.border}`, borderRadius: ISLAND.radius, boxShadow: ISLAND.shadow } : {}),
+            // Фон — bgMain, в тон левому сайдбару-острову
+            ...(hero ? { background: C.bgMain, border: `1px solid ${ISLAND.border}`, borderRadius: ISLAND.radius, boxShadow: ISLAND.shadow } : {}),
           }}>
             {/* Вкладки показываем только когда у документа есть комментарии — иначе просто связи */}
             {commentTotal > 0 && (

@@ -165,9 +165,10 @@ export function DesktopWorkspace(p: Props) {
 
   const personaOpen = !!p.selectedPersonaId || p.personaCreating;
 
-  // Панель чатов: шапка проекта (без вкладок) + SessionList
+  // Панель чатов: шапка проекта (без вкладок) + SessionList. Фон прозрачный —
+  // подложку (bgPanel) даёт карточка-остров
   const sidebar = (
-    <div style={{ width: '100%', display: 'flex', flexDirection: 'column', background: C.bgPanel, flexShrink: 0, height: '100%' }}>
+    <div style={{ width: '100%', display: 'flex', flexDirection: 'column', background: 'transparent', flexShrink: 0, height: '100%' }}>
       <div style={{ padding: '8px 10px 6px', flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, minHeight: 28 }}>
           {/* Плашка проекта = переключатель проектов; настройки открываются
@@ -195,7 +196,7 @@ export function DesktopWorkspace(p: Props) {
   ) : (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       {p.sidebarMode === 'collapsed' && (
-        <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', padding: '0 8px', height: 52, borderBottom: `1px solid ${C.divider}`, background: C.bgMain }}>
+        <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', padding: '0 8px', height: 52 }}>
           <IconButton size="md" variant="soft" onClick={() => p.setSidebarMode('pinned')} title="Открыть панель">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
               <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
@@ -242,13 +243,15 @@ export function DesktopWorkspace(p: Props) {
     <div style={{
       flex: 1, minWidth: 0, display: 'flex', position: 'relative',
       // Слева/снизу — просторный pad, сверху — узкий gap под шапкой,
-      // справа 0 — рельса инструментов остаётся прижатой к краю окна
-      background: ISLAND.canvas, padding: `${ISLAND.gap}px 0 ${ISLAND.pad}px ${ISLAND.pad}px`,
+      // справа 0 — рельса инструментов остаётся прижатой к краю окна.
+      // Фон прозрачный: дудл-холст (CanvasBackdrop) рисует корень WorkspacePage
+      padding: `${ISLAND.gap}px 0 ${ISLAND.pad}px ${ISLAND.pad}px`,
     }}>
       {/* === Сайдбар чатов: остров + ресайз-зазор с кнопкой «свернуть» === */}
       {p.sidebarMode === 'pinned' && (
         <>
-          <Island style={{ width: sidebarWidth, flexShrink: 0 }}>
+          {/* Фон — bgMain, в тон шапкам панелей рельсы и «губе» под композером */}
+          <Island bg={C.bgMain} style={{ width: sidebarWidth, flexShrink: 0 }}>
             {sidebar}
           </Island>
           <IslandSidebarSplitter active={dragging === 'sidebar'} onMouseDown={handleSidebarDrag} onCollapse={() => p.setSidebarMode('collapsed')} />

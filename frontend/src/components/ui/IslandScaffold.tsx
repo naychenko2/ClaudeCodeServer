@@ -28,12 +28,16 @@ export function IslandScaffold({ sidebarOpen, sidebar, sidebarWidth, sidebarDrag
   return (
     <div style={{
       height: '100%', minHeight: 0, display: 'flex', position: 'relative',
-      // Сверху — узкий gap под шапкой, по бокам и снизу — просторнее (pad)
-      background: ISLAND.canvas, padding: `${ISLAND.gap}px ${ISLAND.pad}px ${ISLAND.pad}px`,
+      // Сверху — узкий gap под шапкой, по бокам и снизу — просторнее (pad).
+      // Справа при наличии рельсы инструментов — 0, чтобы она прижималась к краю
+      // окна ровно как в проекте (DesktopWorkspace).
+      // Фон прозрачный: дудл-холст (CanvasBackdrop) рисует корень страницы
+      padding: `${ISLAND.gap}px ${right ? 0 : ISLAND.pad}px ${ISLAND.pad}px ${ISLAND.pad}px`,
     }}>
       {sidebarOpen && (
         <>
-          <Island style={{ width: sidebarWidth, flexShrink: 0 }}>
+          {/* Фон — bgMain, в тон шапкам островов (единый тон «оправы» интерфейса) */}
+          <Island bg={C.bgMain} style={{ width: sidebarWidth, flexShrink: 0 }}>
             {sidebar}
           </Island>
           <IslandSidebarSplitter active={sidebarDragging} onMouseDown={onSidebarDrag} onCollapse={onSidebarCollapse} />

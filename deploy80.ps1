@@ -73,6 +73,15 @@ Write-Host '[3/9] Публикация бэка (dotnet publish -c Release)...' 
 dotnet publish $csproj -c Release -o $PublishDir
 if ($LASTEXITCODE -ne 0) { throw "Публикация бэка упала (exit $LASTEXITCODE)" }
 
+# --- 3.1 Обеспечить appsettings.Production80.json (gitignored, машинно-специфичный) ---
+# При Environment=Production80 ASP.NET Core грузит именно его; без него Kestrel поднимается
+# на дефолтном порту 5000. При первом деплое создаём из Production.json; правки сохраняются.
+$prod80 = Join-Path $PublishDir 'appsettings.Production80.json'
+if (-not (Test-Path $prod80)) {
+    Copy-Item (Join-Path $repo 'backend\ClaudeHomeServer\appsettings.Production.json') $prod80
+    Write-Host '  appsettings.Production80.json создан из Production.json (первый деплой)' -ForegroundColor DarkGray
+}
+
 # --- 4. Публикация ConPTY-моста терминала (рядом с сервером) ---
 # ConPtyBridgeLocator ищет ConPtyBridge.exe от AppContext.BaseDirectory; без него
 # веб-терминал молча деградирует в голое перенаправление (без backspace/стрелок)

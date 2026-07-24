@@ -1856,17 +1856,19 @@ public class PersonasController : ControllerBase
     {
         if (string.IsNullOrWhiteSpace(req.Question)) return BadRequest(new { error = "Пустой вопрос" });
 
+        var projectId = string.IsNullOrWhiteSpace(req.ProjectId) ? null : req.ProjectId;
         Persona? persona;
         if (!string.IsNullOrWhiteSpace(req.PersonaId))
         {
-            persona = _personas.Get(req.PersonaId, UserId);
-            if (persona is null) return NotFound(new { error = "Персона не найдена" });
+            // Тот же пул достижимости, что и у резолва по handle (AccessiblePool) — personaId
+            // не должен быть лазейкой мимо кросс-проектных привязок в любую чужую персону
+            persona = _personas.GetReachable(UserId, req.PersonaId, projectId, req.ExtraProjectIds, req.ExtraPersonaIds);
+            if (persona is null) return NotFound(new { error = "Персона не найдена или недоступна в этом контексте" });
         }
         else
         {
             if (string.IsNullOrWhiteSpace(req.Handle)) return BadRequest(new { error = "Не указан handle персоны" });
             var handle = req.Handle.Trim().TrimStart('@');
-            var projectId = string.IsNullOrWhiteSpace(req.ProjectId) ? null : req.ProjectId;
             var candidates = _personas.ResolveHandleCandidates(UserId, handle, projectId,
                 req.ExtraProjectIds, req.ExtraPersonaIds);
             if (candidates.Count == 0) return NotFound(new { error = $"Персона @{handle} не найдена" });

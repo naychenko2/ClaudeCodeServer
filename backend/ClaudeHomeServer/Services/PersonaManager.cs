@@ -104,11 +104,12 @@ public class PersonaManager
             .OrderByDescending(p => p.Scope == PersonaScope.Project)
             .FirstOrDefault();
 
-    // Кандидаты по handle в контексте персоны-вызывающего + внешних кросс-проектных scope-ов
-    // (ProjectPersonas-привязки: extraProjectIds — вся команда проекта, extraPersonaIds —
-    // точечные персоны). Используется persona_ask при возможной коллизии handle между
-    // проектами — 0 совпадений, 1 (однозначно) или >1 (клиент должен уточнить personaId).
-    public IReadOnlyList<Persona> ResolveHandleCandidates(string userId, string handle, string? projectId,
+    // Пул персон, ДОСТИЖИМЫХ из контекста вызывающего: глобальные + текущего проекта (как
+    // GetForContext) + внешние кросс-проектные scope-ы (ProjectPersonas-привязки вызывающей
+    // персоны): extraProjectIds — вся команда проекта, extraPersonaIds — точечные персоны.
+    // Общая точка правды для persona_ask (и по handle, и по personaId) — обходить её нельзя,
+    // иначе personaId стал бы лазейкой мимо привязок в ЛЮБУЮ персону владельца.
+    private List<Persona> AccessiblePool(string userId, string? projectId,
         IReadOnlyList<string>? extraProjectIds, IReadOnlyList<string>? extraPersonaIds)
     {
         var pool = GetForContext(userId, projectId).ToList();
@@ -127,8 +128,26 @@ public class PersonaManager
                 seen.Add(p.Id);
             }
         }
-        return pool.Where(p => string.Equals(p.Handle, handle, StringComparison.OrdinalIgnoreCase)).ToList();
+        return pool;
     }
+
+    // Кандидаты по handle в достижимом пуле (см. AccessiblePool). Используется persona_ask
+    // при возможной коллизии handle между проектами — 0 совпадений, 1 (однозначно) или
+    // >1 (клиент должен уточнить personaId).
+    public IReadOnlyList<Persona> ResolveHandleCandidates(string userId, string handle, string? projectId,
+        IReadOnlyList<string>? extraProjectIds, IReadOnlyList<string>? extraPersonaIds) =>
+        AccessiblePool(userId, projectId, extraProjectIds, extraPersonaIds)
+            .Where(p => string.Equals(p.Handle, handle, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+    // Персона по id, ЕСЛИ она достижима из контекста вызывающего (см. AccessiblePool) — иначе
+    // null, даже если персона существует и принадлежит тому же владельцу. Однозначный путь
+    // persona_ask (personaId вместо handle) обязан идти через ту же проверку, что и резолв по
+    // handle — иначе personaId стал бы обходом кросс-проектных привязок.
+    public Persona? GetReachable(string userId, string id, string? projectId,
+        IReadOnlyList<string>? extraProjectIds, IReadOnlyList<string>? extraPersonaIds) =>
+        AccessiblePool(userId, projectId, extraProjectIds, extraPersonaIds)
+            .FirstOrDefault(p => p.Id == id);
 
     // Известные ключи возможностей персоны. Полный набор эквивалентен «без ограничений»
     // и нормализуется в null (поведение как раньше, по фич-флагам владельца).

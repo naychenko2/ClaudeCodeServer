@@ -8,17 +8,23 @@ import aiHome from '../../assets/ai-home.png';
 // затем стирается и сменяется новым случайным синонимом. Общий для чата и любых
 // других долгих ИИ-операций (подбор/генерация по кнопке «✨ …») — hint поясняет,
 // что именно происходит и сколько примерно ждать.
-export function WaitingIndicator({ planning, hint }: {
+// В режиме awaitingResponse=true — фиксированный текст «Ожидаю ответа…» без анимации,
+// т.к. Claude ждёт ввода пользователя.
+export function WaitingIndicator({ planning, hint, awaitingResponse }: {
   planning?: 'planning' | 'replanning';
   hint?: string;
+  awaitingResponse?: boolean;
 } = {}) {
-  const [text, setText] = useState('');
   const reduced = typeof window !== 'undefined'
     && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
   // Шутливые глаголы крутятся всегда; в режиме планирования отличается только цвет пульса (индиго)
   const pulseColor = planning ? C.plan : C.accent;
 
+  const [text, setText] = useState(awaitingResponse ? 'Ожидаю ответа…' : '');
+
   useEffect(() => {
+    // Режим «Ожидаю ответа» — фиксированный текст без анимации печатания (дымок остаётся)
+    if (awaitingResponse) { setText('Ожидаю ответа…'); return; }
     // При reduced-motion — статичная подпись без анимации печати
     if (reduced) { setText(pickVerb() + '…'); return; }
     let timer = 0;
@@ -44,7 +50,7 @@ export function WaitingIndicator({ planning, hint }: {
     };
     timer = window.setTimeout(tick, 140);
     return () => clearTimeout(timer);
-  }, [reduced]);
+  }, [reduced, awaitingResponse]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -69,7 +75,7 @@ export function WaitingIndicator({ planning, hint }: {
           <span style={{
             display: 'inline-block', width: 2, height: '0.95em', marginLeft: 2,
             background: pulseColor, borderRadius: 1, alignSelf: 'center',
-            animation: reduced ? 'none' : 'blink 1s step-start infinite',
+            animation: (reduced || awaitingResponse) ? 'none' : 'blink 1s step-start infinite',
           }} />
         </span>
       </div>

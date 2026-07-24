@@ -687,14 +687,20 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     if (lastMechanic) setLastMechanic(session.id, lastMechanic);
   }, [lastMechanic, session.id]);
 
-  // Единое условие показа WaitingIndicator — синхронизировано с флагом активности на карточке.
-  // session.status покрывает случай когда isWaiting ещё не обновился (перезагрузка, переключение чата).
-  // items.length > 0: не показывать спиннер на пустом чате до первого сообщения.
-  const sessionBusy = isWaiting || session.status === 'working' || session.status === 'starting';
+  // Единое условие показа WaitingIndicator — только по isWaiting из редьюсера (реагирует
+  // на result/error/exited/status_changed/отправку — консистентно с реальной активностью).
+  // fallback на starting: при холодном старте чата isWaiting ещё false, а сессия стартует.
+  // Без этого индикатор не появился бы до первого status_changed:working.
+  // Не используем session.status === 'working': это внешний пропс, который может застрять
+  // stale после переподключения SignalR и давать ложный positive.
+  const sessionBusy = isWaiting || (session.status === 'starting' && items.length === 0);
   const showWaiting =
     items.length > 0
-    && sessionBusy
-    && !items.some(it => (it.kind === 'permission_request' || it.kind === 'plan_review' || it.kind === 'ask_question') && !it.resolved);
+    && sessionBusy;
+  // Ждёт ответа от пользователя (permission_request / ask_question) — для режима текста
+  const awaitingResponse = items.some(it =>
+    (it.kind === 'permission_request' || it.kind === 'ask_question') && !it.resolved
+  );
 
   // Номера версий plan_review: счётчик с последнего user_message включительно (1, 2, …).
   // Также помечаем, был ли в текущем ходе отклонённый план — тогда показываем бейдж даже для v1.
@@ -1130,7 +1136,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
           // пузырей дым из трубы (вверх-влево) наезжал на контент сверху; в жёлобе над
           // домиком и слева пузырей нет — дым пыхтит в пустоту.
           <div style={{ marginLeft: isMobile ? -12 : -29, marginTop: 5 }}>
-            <WaitingIndicator planning={planningKind} />
+            <WaitingIndicator planning={planningKind} awaitingResponse={awaitingResponse} />
           </div>
         )}
 

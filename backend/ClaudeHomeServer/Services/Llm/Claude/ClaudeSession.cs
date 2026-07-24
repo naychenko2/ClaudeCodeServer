@@ -2638,9 +2638,37 @@ public class ClaudeSession : ILlmSessionAdapter
         if (tokens > 0) _lastContextTokens = tokens;
     }
 
+    // Метрики — из modelUsage (агрегат по всем итерациям), а не usage (только последняя).
+    // На длинных ответах с переписыванием разница — в разы. Логика та же, что в
+    // OneShotClaudeRunner.ParseJsonResult.
     private static UsageInfo? ParseUsage(JsonElement root)
     {
-        if (!root.TryGetProperty("usage", out var u)) return null;
+        if (TryReadModelUsage(root, out var u)) return u;
+        // Фолбэк на usage, если modelUsage отсутствует (старые версии CLI / нестандартный вывод)
+        if (root.TryGetProperty("usage", out var u2)) return ReadUsageObject(u2);
+        return null;
+    }
+
+    private static bool TryReadModelUsage(JsonElement root, out UsageInfo usage)
+    {
+        usage = default!;
+        if (!root.TryGetProperty("modelUsage", out var mu) || mu.ValueKind != JsonValueKind.Object)
+            return false;
+        long input = 0, cacheCreate = 0, cacheRead = 0, output = 0;
+        foreach (var m in mu.EnumerateObject())
+        {
+            var v = m.Value;
+            input += LongProp(v, "inputTokens");
+            cacheCreate += LongProp(v, "cacheCreationInputTokens");
+            cacheRead += LongProp(v, "cacheReadInputTokens");
+            output += LongProp(v, "outputTokens");
+        }
+        usage = new UsageInfo((int)input, (int)output, (int)cacheRead, (int)cacheCreate);
+        return true;
+    }
+
+    private static UsageInfo ReadUsageObject(JsonElement u)
+    {
         return new UsageInfo(
             IntProp(u, "input_tokens"),
             IntProp(u, "output_tokens"),

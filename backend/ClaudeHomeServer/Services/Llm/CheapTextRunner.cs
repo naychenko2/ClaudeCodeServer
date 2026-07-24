@@ -47,7 +47,7 @@ public interface ICheapTextRunner
 
 public sealed class CheapTextRunner(
     LocalActionRouter router, OllamaClient ollama, CloudCheapClient cloud, IOneShotRunner claude,
-    ILogger<CheapTextRunner> log) : ICheapTextRunner
+    SpendLogService spendLog, ILogger<CheapTextRunner> log) : ICheapTextRunner
 {
     public bool UsesLocal(string actionKey) => router.UsesLocal(actionKey);
 
@@ -184,6 +184,7 @@ public sealed class CheapTextRunner(
     // Та же цепочка «выбранное → локаль → claude», но с расходом. Текст локали/адаптера
     // оборачивается в OneShotResult без usage (бесплатно — стоимости нет); у claude/провайдера
     // usage приходит из RunDetailedAsync. Последний шаг без страховки — как в RunAsync.
+    // Все успешные результаты логируются в SpendLogService для аналитики.
     public async Task<OneShotResult> RunDetailedAsync(string actionKey, string prompt,
         string? fallbackModel = null, string? ownerId = null, TimeSpan? timeout = null,
         int? maxTokens = null, CancellationToken ct = default)
@@ -203,7 +204,11 @@ public sealed class CheapTextRunner(
                 try
                 {
                     var text = await cloud.GenerateTextAsync(model, prompt, effTimeout, effMaxTokens, ct);
-                    if (!string.IsNullOrWhiteSpace(text)) return new OneShotResult(text, null, 0);
+                    if (!string.IsNullOrWhiteSpace(text))
+                    {
+                        LogOneShotResult(ownerId, null, actionKey, "openrouter-direct", 0, null, true);
+                        return new OneShotResult(text, null, 0);
+                    }
                 }
                 catch (Exception ex) when (!ct.IsCancellationRequested)
                 {
@@ -221,11 +226,47 @@ public sealed class CheapTextRunner(
         if (LocalStepApplies(actionKey, route.Kind) && ollama.Enabled)
         {
             var local = await RunLocalAsync(actionKey, prompt, jsonFormat: null, ct);
-            if (!string.IsNullOrWhiteSpace(local)) return new OneShotResult(local, null, 0);
+            if (!string.IsNullOrWhiteSpace(local))
+            {
+                LogOneShotResult(ownerId, null, actionKey, "ollama", 0, null, true);
+                return new OneShotResult(local, null, 0);
+            }
         }
 
         // Шаг 3 — claude с моделью действия по умолчанию (usage есть).
-        return await claude.RunDetailedAsync(prompt, claude.NormalizeModel(fallbackModel), effTimeout, ct, ownerId);
+        var claudeResult = await claude.RunDetailedAsync(prompt, claude.NormalizeModel(fallbackModel), effTimeout, ct, ownerId);
+        LogOneShotResult(ownerId, claudeResult.Usage, actionKey, "oneshot",
+            claudeResult.Usage?.CostUsd, claudeResult.Usage?.Model, true);
+        return claudeResult;
+    }
+
+    // Стоимость и модель из usage → SpendLogService. ownerId может быть null (системные вызовы).
+    private void LogOneShotResult(string? ownerId, OneShotUsage? usage, string actionKey,
+        string source, double? costUsd, string? model, bool completed)
+    {
+        if (ownerId is null) return;
+        try
+        {
+            spendLog.Append(
+                ownerId: ownerId,
+                projectId: null,
+                sessionId: null,
+                taskId: null,
+                personaId: null,
+                provider: model is not null && !model.StartsWith("ollama") ? "claude" : source,
+                model: model ?? source,
+                source: source,
+                ts: DateTime.UtcNow.ToString("O"),
+                inputTokens: (int)(usage?.InputTokens ?? 0),
+                outputTokens: (int)(usage?.OutputTokens ?? 0),
+                cacheReadTokens: (int)(usage?.CacheReadTokens ?? 0),
+                cacheCreationTokens: (int)(usage?.CacheCreationTokens ?? 0),
+                costUsd: costUsd ?? 0,
+                durationMs: null,
+                completed: completed,
+                entityRef: actionKey);
+        }
+        catch { /* Лог не должен ломать генерацию */ }
     }
 
     // Выбранная провайдерская модель через claude CLI, с расходом. null — шаг не удался.
@@ -235,8 +276,13 @@ public sealed class CheapTextRunner(
         try
         {
             var run = await claude.RunDetailedAsync(prompt, model, timeout, ct, ownerId);
-            if (!string.IsNullOrWhiteSpace(run.Text)) return run;
-            log.LogDebug("cheap-runner (detailed): {Action} — модель {Model} вернула пустой ответ", actionKey, model);
+            if (string.IsNullOrWhiteSpace(run.Text))
+            {
+                log.LogDebug("cheap-runner (detailed): {Action} — модель {Model} вернула пустой ответ", actionKey, model);
+                return null;
+            }
+            LogOneShotResult(ownerId, run.Usage, actionKey, "oneshot", run.Usage?.CostUsd, run.Usage?.Model, true);
+            return run;
         }
         catch (Exception ex) when (!ct.IsCancellationRequested)
         {

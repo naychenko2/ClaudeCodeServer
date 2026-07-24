@@ -248,7 +248,7 @@ internal class TurnAccumulator
         lock (_lock)
         {
             FlushBuffers();
-            _currentTurn.Add(new StoredResultMessage(subtype, durationMs, numTurns, usage, totalCostUsd, apiErrorStatus, permissionDenials, contextTokens));
+            _currentTurn.Add(new StoredResultMessage(subtype, durationMs, numTurns, usage, totalCostUsd, apiErrorStatus, permissionDenials, contextTokens, timestamp: DateTime.UtcNow));
         }
         await FlushAsync(svc);
     }

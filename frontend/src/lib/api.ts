@@ -1215,6 +1215,27 @@ export const api = {
       ),
   },
 
+  spend: {
+    aggregate: (from: string, to: string, projectId?: string, provider?: string, model?: string) =>
+      request<import("../types").SpendAggregate>(
+        `/spend/aggregate?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}${projectId ? `&projectId=${encodeURIComponent(projectId)}` : ""}${provider ? `&provider=${encodeURIComponent(provider)}` : ""}${model ? `&model=${encodeURIComponent(model)}` : ""}`),
+    daily: (from: string, to: string, projectId?: string, provider?: string) =>
+      request<import("../types").DailySpendPoint[]>(
+        `/spend/daily?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}${projectId ? `&projectId=${encodeURIComponent(projectId)}` : ""}${provider ? `&provider=${encodeURIComponent(provider)}` : ""}`),
+    byProject: (from: string, to: string) =>
+      request<import("../types").ProjectSpendSummary[]>(
+        `/spend/by-project?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
+    byModel: (from: string, to: string) =>
+      request<import("../types").ModelSpendSummary[]>(
+        `/spend/by-model?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
+    entries: (from: string, to: string, projectId?: string, sessionId?: string, source?: string, limit?: number, offset?: number) =>
+      request<import("../types").SpendEntry[]>(
+        `/spend/entries?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}${projectId ? `&projectId=${encodeURIComponent(projectId)}` : ""}${sessionId ? `&sessionId=${encodeURIComponent(sessionId)}` : ""}${source ? `&source=${encodeURIComponent(source)}` : ""}${limit !== undefined ? `&limit=${limit}` : ""}${offset !== undefined ? `&offset=${offset}` : ""}`),
+    adminAggregate: (from: string, to: string) =>
+      request<import("../types").UserSpendSummary[]>(
+        `/spend/admin/aggregate?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
+    boundary: () => request<import("../types").SpendBoundary>("/spend/boundary"),
+  },
   sync: {
     list: (projectId: string) => request<SyncMark[]>(`/projects/${projectId}/sync`),
     add: (projectId: string, path: string, isDirectory: boolean) =>

@@ -296,4 +296,8 @@ public class LlmProviderRegistry
                 + usage.CacheReadTokens * m.PriceInHitPer1M
                 + usage.OutputTokens * m.PriceOutPer1M) / 1_000_000;
     }
+
+    // Для аналитики: всегда возвращает число. null от ComputeCost → 0.
+    public double ComputeCostOrZero(string? model, UsageInfo? usage) =>
+        ComputeCost(model, usage) ?? 0;
 }

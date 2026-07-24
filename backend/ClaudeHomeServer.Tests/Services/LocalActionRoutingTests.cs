@@ -251,7 +251,7 @@ public class LocalActionRoutingTests
         var router = new LocalActionRouter(Ollama(config), Store(config), config,
             NullLogger<LocalActionRouter>.Instance);
         var runner = new CheapTextRunner(router, Ollama(config), Cloud(config), new FakeOneShot(),
-            NullLogger<CheapTextRunner>.Instance);
+            null!, NullLogger<CheapTextRunner>.Instance);
 
         var result = await runner.RunAsync(LocalActionCatalog.NotesTags, "prompt-text", "haiku");
         Assert.Equal("CLAUDE[haiku]:prompt-text", result);
@@ -270,7 +270,7 @@ public class LocalActionRoutingTests
         store.Set(LocalActionCatalog.NotesTags, "deepseek-chat");
         var router = new LocalActionRouter(Ollama(config), store, config, NullLogger<LocalActionRouter>.Instance);
         var claude = new FakeOneShot();
-        var runner = new CheapTextRunner(router, Ollama(config), Cloud(config), claude, NullLogger<CheapTextRunner>.Instance);
+        var runner = new CheapTextRunner(router, Ollama(config), Cloud(config), claude, null!, NullLogger<CheapTextRunner>.Instance);
 
         var result = await runner.RunAsync(LocalActionCatalog.NotesTags, "prompt-text", "haiku");
 
@@ -286,7 +286,7 @@ public class LocalActionRoutingTests
         store.Set(LocalActionCatalog.NotesTags, "deepseek-chat");
         var router = new LocalActionRouter(Ollama(config), store, config, NullLogger<LocalActionRouter>.Instance);
         var claude = new FakeOneShot(failModel: "deepseek-chat");
-        var runner = new CheapTextRunner(router, Ollama(config), Cloud(config), claude, NullLogger<CheapTextRunner>.Instance);
+        var runner = new CheapTextRunner(router, Ollama(config), Cloud(config), claude, null!, NullLogger<CheapTextRunner>.Instance);
 
         var result = await runner.RunAsync(LocalActionCatalog.NotesTags, "prompt-text", "haiku");
 
@@ -305,7 +305,7 @@ public class LocalActionRoutingTests
             NullLogger<LocalActionRouter>.Instance);
         var claude = new FakeOneShot();
         var runner = new CheapTextRunner(router, Ollama(config), Cloud(config), claude,
-            NullLogger<CheapTextRunner>.Instance);
+            null!, NullLogger<CheapTextRunner>.Instance);
 
         var result = await runner.RunFreeAsync(LocalActionCatalog.ChatTitle, "prompt-text");
 
@@ -324,7 +324,7 @@ public class LocalActionRoutingTests
         var router = new LocalActionRouter(Ollama(config), store, config, NullLogger<LocalActionRouter>.Instance);
         var claude = new FakeOneShot();
         var runner = new CheapTextRunner(router, Ollama(config), Cloud(config), claude,
-            NullLogger<CheapTextRunner>.Instance);
+            null!, NullLogger<CheapTextRunner>.Instance);
 
         var result = await runner.RunFreeAsync(LocalActionCatalog.ChatTitle, "prompt-text");
 
@@ -340,7 +340,7 @@ public class LocalActionRoutingTests
         store.Set(LocalActionCatalog.NotesTags, "glm-4");
         var router = new LocalActionRouter(Ollama(config), store, config, NullLogger<LocalActionRouter>.Instance);
         var claude = new FakeOneShot(emptyModel: "glm-4");
-        var runner = new CheapTextRunner(router, Ollama(config), Cloud(config), claude, NullLogger<CheapTextRunner>.Instance);
+        var runner = new CheapTextRunner(router, Ollama(config), Cloud(config), claude, null!, NullLogger<CheapTextRunner>.Instance);
 
         var result = await runner.RunAsync(LocalActionCatalog.NotesTags, "prompt-text", "haiku");
         Assert.Equal("CLAUDE[haiku]:prompt-text", result);
@@ -355,7 +355,7 @@ public class LocalActionRoutingTests
         var router = new LocalActionRouter(Ollama(config), Store(config), config,
             NullLogger<LocalActionRouter>.Instance);
         var runner = new CheapTextRunner(router, Ollama(config), Cloud(config), new FakeOneShot(failModel: "haiku"),
-            NullLogger<CheapTextRunner>.Instance);
+            null!, NullLogger<CheapTextRunner>.Instance);
 
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => runner.RunAsync(LocalActionCatalog.NotesTags, "prompt-text", "haiku"));
@@ -372,7 +372,7 @@ public class LocalActionRoutingTests
         var router = new LocalActionRouter(Ollama(config), store, config, NullLogger<LocalActionRouter>.Instance);
         var claude = new FakeOneShot();
         var runner = new CheapTextRunner(router, Ollama(config), Cloud(config), claude,
-            NullLogger<CheapTextRunner>.Instance);
+            null!, NullLogger<CheapTextRunner>.Instance);
 
         var result = await runner.RunAsync(LocalActionCatalog.NotesTags, "prompt-text", "haiku");
 

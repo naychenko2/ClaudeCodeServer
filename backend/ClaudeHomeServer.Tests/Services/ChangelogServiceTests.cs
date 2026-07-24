@@ -270,7 +270,7 @@ public class ChangelogServiceTests : IDisposable
         var providers = new LlmProviderRegistry(config);
         var cloud = new CloudCheapClient(httpFactory, config, providers, NullLogger<CloudCheapClient>.Instance);
         var claude = new OneShotClaudeRunner(providers, TestLauncherFactory.Instance);
-        return new CheapTextRunner(router, ollama, cloud, claude, NullLogger<CheapTextRunner>.Instance);
+        return new CheapTextRunner(router, ollama, cloud, claude, null!, NullLogger<CheapTextRunner>.Instance);
     }
 
     public void Dispose()

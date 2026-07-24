@@ -657,6 +657,72 @@ export interface FalAccountResponse {
   usage?: FalUsageSummary | null;
 }
 
+
+export interface SpendAggregate {
+  totalTokens: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  costUsd: number | null;
+  turnCount: number;
+  completedCount: number;
+  cacheHitRate: number | null;
+  inputOutputRatio: number | null;
+}
+export interface DailySpendPoint {
+  date: string;
+  totalTokens: number;
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number | null;
+  turnCount: number;
+  completedCount: number;
+}
+export interface ProjectSpendSummary {
+  projectId: string | null;
+  totalTokens: number;
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number | null;
+  turnCount: number;
+}
+export interface ModelSpendSummary {
+  provider: string;
+  model: string;
+  totalTokens: number;
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number | null;
+  turnCount: number;
+}
+export interface SpendEntry {
+  id: number;
+  ts: string;
+  sessionId: string | null;
+  projectId: string | null;
+  provider: string;
+  model: string;
+  source: string;
+  totalTokens: number;
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number | null;
+  durationMs: number | null;
+  completed: boolean;
+  entityRef: string | null;
+}
+export interface UserSpendSummary {
+  ownerId: string;
+  totalTokens: number;
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number | null;
+  turnCount: number;
+}
+export interface SpendBoundary {
+  since: string | null;
+}
 // Live-состояние цикла «до готово» (из события work_loop; флаг work-loop)
 export interface WorkLoopState {
   active: boolean;

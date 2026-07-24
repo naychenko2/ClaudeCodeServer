@@ -82,6 +82,7 @@ builder.Services.AddSingleton<UserHomeResolver>();
 builder.Services.AddSingleton<ProjectManager>();
 builder.Services.AddSingleton<ProjectGroupManager>();
 builder.Services.AddSingleton<ProjectEventLogService>();
+builder.Services.AddSingleton<SpendLogService>();
 builder.Services.AddSingleton<PersonaManager>();
 builder.Services.AddSingleton<PersonaPromptBuilder>();
 builder.Services.AddSingleton<PersonaMemoryService>();
@@ -192,6 +193,7 @@ builder.Services.AddSingleton<PersonaAutomationService>();
 builder.Services.AddHostedService<TaskSchedulerService>();
 builder.Services.AddHostedService<ChatExpiryService>();
 builder.Services.AddHostedService<ChatTurnLoggerService>();
+builder.Services.AddHostedService<SpendCollectorService>();
 builder.Services.AddHostedService<NoteExpiryService>();
 // Фоновый прогрев сводок «Что нового» — чтобы клик по дню отдавал кеш, а не ждал генерацию
 builder.Services.AddHostedService<ChangelogWarmupService>();

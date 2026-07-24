@@ -10,6 +10,7 @@ import { UserManagementModal } from './UserManagementModal';
 import { ChangePasswordDialog } from './ChangePasswordDialog';
 import { FeatureFlagsModal } from './FeatureFlagsModal';
 import { UsageScreen } from './UsageScreen';
+import { TokenAnalyticsOverlay } from '../features/analytics/TokenAnalyticsOverlay';
 import { BackgroundTasksModal } from './BackgroundTasksModal';
 import { api } from '../lib/api';
 import { getUnreadCount, subscribeToNotifications, ensureNotificationsSubscribed, ensureUnreadCountLoaded } from '../lib/notifications';
@@ -41,6 +42,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive }: Props
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [showFeatureFlags, setShowFeatureFlags] = useState(false);
   const [showUsage, setShowUsage] = useState(false);
+  const [showAnalytics, setShowAnalytics] = useState(false);
   const [showBackgroundTasks, setShowBackgroundTasks] = useState(false);
 
   const isAdmin = auth.role === 'admin';
@@ -218,6 +220,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive }: Props
           onShowChangePassword={() => setShowChangePassword(true)}
           onShowFeatureFlags={() => setShowFeatureFlags(true)}
           onShowUsage={() => setShowUsage(true)}
+          onShowAnalytics={() => setShowAnalytics(true)}
           onShowBackgroundTasks={isAdmin ? () => setShowBackgroundTasks(true) : undefined}
           onShowUserManagement={() => setShowUserMgmt(true)}
           hideStatus={isMobile}
@@ -235,6 +238,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive }: Props
       {showChangePassword && <ChangePasswordDialog onClose={() => setShowChangePassword(false)} />}
       {showFeatureFlags && <FeatureFlagsModal onClose={() => setShowFeatureFlags(false)} />}
       {showUsage && <UsageScreen onClose={() => setShowUsage(false)} />}
+      {showAnalytics && <TokenAnalyticsOverlay onClose={() => setShowAnalytics(false)} />}
       {showBackgroundTasks && <BackgroundTasksModal onClose={() => setShowBackgroundTasks(false)} />}
     </div>
   );

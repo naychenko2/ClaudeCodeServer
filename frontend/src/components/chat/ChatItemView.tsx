@@ -277,7 +277,12 @@ function TextMessageView({ text, online, onRetry, streaming }: { text: string; o
   };
   return (
     <div className={`cc-msg${tapped ? ' cc-msg--tapped' : ''}`} onClick={handleTap}
-      style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 6, maxWidth: '100%', overflow: 'hidden' }}>
+      style={{
+        position: 'relative', display: 'flex', flexDirection: 'column', gap: 6, maxWidth: '100%', overflow: 'hidden',
+        // Полупрозрачный «лист» под ответом: лента лежит на фоне с дудл-паттерном,
+        // и без подложки рисунок лез бы прямо под текст
+        background: C.msgBg, borderRadius: R.xl, padding: '9px 12px',
+      }}>
       {/* data-selection-doc: Ctrl+A в чате выделяет последний ответ ассистента (см. selectionScope) */}
       <div data-selection-doc="" style={{ fontSize: 14, color: C.textHeading, wordBreak: 'break-word' }}>
         <MarkdownContent text={text} />
@@ -286,7 +291,7 @@ function TextMessageView({ text, online, onRetry, streaming }: { text: string; o
       </div>
       {/* Действия — компактными иконками в правом верхнем углу (CSS управляет hover/тач) */}
       {!streaming && (
-        <div className="cc-actions" style={{ position: 'absolute', top: 0, right: 0, display: 'flex', gap: 4 }}>
+        <div className="cc-actions" style={{ position: 'absolute', top: 6, right: 8, display: 'flex', gap: 4 }}>
           <button onClick={copy} style={iconBtn} title={copied ? 'Скопировано' : 'Скопировать ответ'} aria-label="Скопировать ответ"
             onMouseEnter={e => { if (!copied) e.currentTarget.style.background = C.bgInset; }}
             onMouseLeave={e => { if (!copied) e.currentTarget.style.background = C.bgSelected; }}>

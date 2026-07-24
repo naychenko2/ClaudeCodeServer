@@ -273,7 +273,14 @@ WorkingDirectory = `project.RootPath`
 Один файл [mcp/tasks-server/index.js](mcp/tasks-server/index.js) — чистый Node (stdio JSON-RPC,
 **без зависимостей**, npm install не нужен). Инструменты: `tasks_list`, `tasks_search`,
 `tasks_get`, `tasks_create`, `tasks_update`, `tasks_complete`, `tasks_delete`,
-`tasks_add_subtask`, `tasks_toggle_subtask`.
+`tasks_add_subtask`, `tasks_toggle_subtask`, `tasks_run_executor`, `tasks_suggest_meta`,
+`tasks_normalize_title`, `tasks_find_duplicate`.
+
+> **Принцип именования MCP-инструментов.** Имена инструментов в одном MCP-сервере не должны
+> быть однокоренными или отличаться на 2-5 букв при пересекающейся семантике — LLM путает их.
+> Разносите корни: `run_executor` vs `complete`, а не `execute` vs `complete`; `get` vs `search`
+> приемлемо, если семантика очевидна и не пересекается. Критерий: если человек может спутать
+> два инструмента по названию в списке из 10+ — LLM тоже спутает.
 
 Подключение автоматическое (за фич-флагом `tasks` владельца): `ClaudeSession.BuildTurnMcpConfig`
 каждый ход собирает временный MCP-конфиг (серверы из `McpConfigPath` + `tasks`) и передаёт env:

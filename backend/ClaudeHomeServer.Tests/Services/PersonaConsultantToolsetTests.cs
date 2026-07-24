@@ -33,7 +33,7 @@ public class PersonaConsultantToolsetTests
         // Write-инструменты MCP-серверов
         "mcp__tasks__tasks_create", "mcp__tasks__tasks_update", "mcp__tasks__tasks_complete",
         "mcp__tasks__tasks_delete", "mcp__tasks__tasks_add_subtask", "mcp__tasks__tasks_toggle_subtask",
-        "mcp__tasks__tasks_execute",
+        "mcp__tasks__tasks_run_executor",
         "mcp__notes__notes_create", "mcp__notes__notes_update", "mcp__notes__notes_delete",
         "mcp__personas__personas_create", "mcp__personas__personas_update", "mcp__personas__personas_delete",
         "mcp__personas__personas_generate_avatar", "mcp__personas__personas_bindings_set",

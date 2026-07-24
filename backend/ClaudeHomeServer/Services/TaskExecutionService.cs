@@ -177,7 +177,7 @@ public class TaskExecutionService
         sb.AppendLine("- Статус задачи веди через MCP-инструменты tasks_*.");
         sb.AppendLine("- Выполненные подзадачи отмечай через tasks_toggle_subtask.");
         sb.AppendLine("- Делегируя часть работы другой персоне через tasks_create (personaId), " +
-                      "сразу запусти её исполнение через tasks_execute — сама она не стартует.");
+                      "сразу запусти её исполнение через tasks_run_executor — сама она не стартует.");
         sb.AppendLine();
         sb.AppendLine("## ОБЯЗАТЕЛЬНО");
         sb.AppendLine("- Задача уже переведена в статус inProgress — поддерживай статус актуальным.");
@@ -499,9 +499,9 @@ public class TaskExecutionService
             _sessions.SetPersona(targetSessionId, task.OwnerId!, delegator.Id);
 
         // ШАГ 2: постановщик реагирует ВСЕГДА — платный авто-ход с контекстом отчёта.
-        // MAJOR 1: tasks_execute запрещён на этом ходу — A может отреагировать и даже
+        // MAJOR 1: tasks_run_executor запрещён на этом ходу — A может отреагировать и даже
         // создать новую задачу (tasks_create), но не самозапустить её. Без запрета A по
-        // промпту «продолжи работу» мог бы tasks_create+tasks_execute → новая задача
+        // промпту «продолжи работу» мог бы tasks_create+tasks_run_executor → новая задача
         // глубины 0 → новый доклад → новая реакция → бесконечный платный цикл A↔B
         // (гард DelegationDepth<3 цепочку исполнителей ловит, а не переделегирование A).
         await _sessions.SendMessageAsync(targetSessionId, BuildDelegatorReactionPrompt(task, executor),

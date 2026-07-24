@@ -5,7 +5,7 @@
 //   TASKS_API_URL    — базовый URL бэкенда (http://127.0.0.1:5000)
 //   TASKS_API_TOKEN  — сервисный JWT владельца сессии
 //   TASKS_PROJECT_ID — id проекта сессии; пусто = контекст личных задач
-//   TASKS_EXECUTE    — "1" = регистрировать tasks_execute (запуск Claude-исполнителя)
+//   TASKS_EXECUTE    — "1" = регистрировать tasks_run_executor (запуск Claude-исполнителя)
 //   TASKS_SESSION_ID — id чата-источника: проставляется в sourceSessionId создаваемых задач
 //   TASKS_SELF_PERSONA_ID — персона текущего чата: постановщик (createdByPersonaId) создаваемых задач
 //   TASKS_EXTRA_PROJECT_IDS          — CSV id проектов из кросс-проектных привязок ProjectTasks
@@ -296,7 +296,8 @@ const TOOLS = [
   {
     name: 'tasks_complete',
     description: 'Пометить задачу выполненной (status → done). Можно сразу прикрепить итог: ' +
-      'resultMarkdown (короткое описание сделанного) и linkedFiles (пути итоговых файлов проекта).',
+      'resultMarkdown (короткое описание сделанного) и linkedFiles (пути итоговых файлов проекта). ' +
+      'Это ТОЛЬКО смена статуса на done. НЕ запускает исполнителя — для запуска используй tasks_run_executor.',
     inputSchema: {
       type: 'object',
       required: ['id'],
@@ -380,14 +381,15 @@ const TOOLS = [
   },
 ];
 
-// tasks_execute — только на пользовательском ходу (env выставляет ClaudeSession):
+// tasks_run_executor — только на пользовательском ходу (env выставляет ClaudeSession):
 // исполнитель порождает новую сессию Claude, на агентных ходах не даётся (анти-рекурсия)
 if (EXECUTE_ENABLED) {
   TOOLS.push({
-    name: 'tasks_execute',
+    name: 'tasks_run_executor',
     description: 'Запустить Claude-исполнителя задачи: отдельная сессия в проекте задачи ' +
       '(личная — чат вне проекта), работает в фоне и сама ведёт статус через tasks_*. ' +
-      'Возвращает задачу с id сессии-исполнителя.',
+      'Возвращает задачу с id сессии-исполнителя. ' +
+      'НЕ отмечает задачу выполненной — для смены статуса на done используй tasks_complete.',
     inputSchema: {
       type: 'object',
       required: ['taskId'],
@@ -501,8 +503,8 @@ async function callTool(name, args) {
       return json(await api(`/api/tasks/${args.id}`, { method: 'PUT', body: JSON.stringify(body) }));
     }
 
-    case 'tasks_execute': {
-      if (!EXECUTE_ENABLED) throw new Error('tasks_execute недоступен на этом ходу');
+    case 'tasks_run_executor': {
+      if (!EXECUTE_ENABLED) throw new Error('tasks_run_executor недоступен на этом ходу');
       const t = await api(`/api/tasks/${args.taskId}/execute`, { method: 'POST' });
       return json({
         id: t.id,

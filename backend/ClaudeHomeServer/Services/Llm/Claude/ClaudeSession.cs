@@ -37,7 +37,7 @@ public class ClaudeSession : ILlmSessionAdapter
     private volatile int _currentTurnAgentDepth;
     // Реакционный авто-ход постановщика на доклад делегированной задачи (TaskExecutionService.
     // ReportToDelegatorAsync) — отдельный от agentDepth флаг: ход обычного пользовательского
-    // чата (agentDepth=0), но tasks_execute всё равно должен быть недоступен, иначе A может
+    // чата (agentDepth=0), но tasks_run_executor всё равно должен быть недоступен, иначе A может
     // сам себе запустить только что созданную задачу → новый доклад → новая реакция →
     // бесконечный платный цикл A↔B. Выставляется/сбрасывается вместе с _currentTurnAgentDepth.
     private volatile bool _currentTurnSuppressTasksExecute;
@@ -380,7 +380,7 @@ public class ClaudeSession : ILlmSessionAdapter
 
             if (hasTasks)
             {
-                // tasks_execute порождает новую сессию Claude — на агентном ходу
+                // tasks_run_executor порождает новую сессию Claude — на агентном ходу
                 // (chats_send из другой сессии) не даём, та же анти-рекурсия, что у chats.
                 // Плюс гард глубины делегирования: чат-исполнитель задачи глубины >= 3 не
                 // запускает нового исполнителя — обрыв рекурсивного размножения (Info.TaskId →
@@ -1269,9 +1269,9 @@ public class ClaudeSession : ILlmSessionAdapter
                 var columnsHint = _tasksMcp.ProjectId is not null
                     ? " У проекта может быть Kanban-доска с кастомными колонками: получи их через tasks_board_columns и клади задачу в нужную колонку, передавая columnId в tasks_create/tasks_update (статус выставится по категории колонки)."
                     : "";
-                // tasks_execute доступен только на пользовательском ходу (см. TASKS_EXECUTE выше)
+                // tasks_run_executor доступен только на пользовательском ходу (см. TASKS_EXECUTE выше)
                 var executeHint = ResolveTasksExecuteEnabled(_currentTurnAgentDepth, Info.TaskDelegationDepth, _currentTurnSuppressTasksExecute)
-                    ? " tasks_execute запускает Claude-исполнителя задачи (отдельная сессия, работает в фоне)."
+                    ? " tasks_run_executor запускает Claude-исполнителя задачи (отдельная сессия, работает в фоне)."
                     : "";
                 // Поручение задачи персоне — только когда доступен и personas-server (есть personas_list)
                 var personaExecHint = _personasMcp is not null

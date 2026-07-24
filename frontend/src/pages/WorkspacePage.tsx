@@ -498,6 +498,11 @@ const windowWidth = useWindowWidth();
     terminal: terminals.length,
     preview: previewServices.filter(s => s.status === 'started').length,
   }), [gitState.status, allTasks, project.id, terminals, previewServices]);
+  // Контролы шапки панели «Изменения»: собирает их сама панель (состояние вида и
+  // выбора живёт там), сюда приходит готовый узел. Колбэк стабильный — иначе
+  // публикация узла и ререндер страницы гоняли бы друг друга по кругу.
+  const [changesToolbar, setChangesToolbar] = useState<ReactNode>(null);
+  const handleChangesToolbar = useCallback((node: ReactNode) => setChangesToolbar(node), []);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   // Свежесозданная задача — её карточка открывается сразу в режиме редактирования
   const [autoEditTaskId, setAutoEditTaskId] = useState<string | null>(null);
@@ -1437,13 +1442,16 @@ const windowWidth = useWindowWidth();
             files: fileSubTab === 'files'
               ? <FileExplorer project={project} activeFilePath={openFile} isMobile={false} onOpenFile={handleOpenFileFromTree} onOpenGitDiff={handleOpenGitDiff} onOpenCommit={handleOpenCommit} onAddToKnowledge={handleAddToKnowledge} onAddFolderToKnowledge={handleAddFolderToKnowledge} onRemoveFromKnowledge={handleRemoveFromKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} indexingFolders={indexingFolders} onAttachToChat={activeSession && !fileFullscreen ? handleAttachToChat : undefined} onOpenKnowledge={() => setFileSubTab('knowledge')} />
               : <KnowledgePanel project={project} isMobile={false} onDocumentsChanged={setIndexedFileNames} onBack={() => setFileSubTab('files')} />,
-            changes: <GitChangesRail project={project} onOpenDiff={handleOpenGitDiff} onOpenFile={handleOpenFileFromTree} onOpenCommit={handleOpenCommit} activeFilePath={openFile ?? openCommitFile} activeCommitSha={openCommitSha} onCommit={handleCommitVia} onScopeChange={clearCenterToChat} />,
+            changes: <GitChangesRail project={project} onOpenDiff={handleOpenGitDiff} onOpenFile={handleOpenFileFromTree} onOpenCommit={handleOpenCommit} activeFilePath={openFile ?? openCommitFile} activeCommitSha={openCommitSha} onCommit={handleCommitVia} onScopeChange={clearCenterToChat} onToolbar={handleChangesToolbar} />,
             tasks: <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={false} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} groupTab={projectGroupTab} onGroupTab={setProjectGroupTab} hideViewSwitcher />,
             team: <ProjectPersonasPanel project={project} selectedId={personaCreating ? null : selectedPersonaId} onSelect={handlePersonaSelect} onNew={handlePersonaNew} onShowTeam={() => { handlePersonaCleared(); setTeamCenterOpen(true); }} teamActive={teamCenterOpen && !selectedPersonaId && !personaCreating} />,
             terminal: <TerminalPanelContent terminals={terminals} activeTerminalId={activeTerminalId} onSelect={handleSelectTerminal} onCreate={handleCreateTerminal} onStop={handleStopTerminal} onActivity={setTerminalBusy} />,
             preview: <PreviewPanelContent projectId={project.id} services={previewServices} activePreviewId={activePreviewId} onSelect={setActivePreviewId} onStart={startService} onStop={stopService} onRefresh={refreshServices} />,
           }}
           panelHeaderExtras={{
+            // Управление списком «Изменений» (выбор файлов, свернуть/развернуть,
+            // список/дерево) — панель собирает контролы сама и отдаёт сюда
+            changes: changesToolbar,
             // Переключатель видов задач в шапке карточки (только иконки) — общее
             // состояние с содержимым панели (projectGroupTab / projectBoard)
             tasks: (

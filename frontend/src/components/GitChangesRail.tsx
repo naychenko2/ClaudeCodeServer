@@ -8,7 +8,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { CSSProperties } from 'react';
 import {
   GitBranch, GitCommit, ChevronDown, ChevronRight, RefreshCw, ArrowDownToLine,
-  Settings, Sparkles, Undo2, Pencil, CloudUpload, X, List, ListTree, Wand2, FolderClosed,
+  Settings, Sparkles, Undo2, Pencil, X, List, ListTree, Wand2, FolderClosed,
   ListChecks, CheckCheck, FoldVertical, UnfoldVertical, MessageSquarePlus, MessageSquare,
   Check, Plus, Archive, ArchiveRestore, Trash2,
 } from 'lucide-react';
@@ -21,6 +21,9 @@ import {
   gitStashPush, gitStashPop, gitStashDrop, clearGitError,
 } from '../lib/git';
 import { splitPath, relTime } from './GitPanel';
+import { ListDateDivider } from './ListDateDivider';
+import { dayGroupTitle } from '../lib/chatGroups';
+import { authorEmoji, authorName } from '../lib/authorEmoji';
 import { getExtMeta } from './FileExplorer';
 import { Modal, ModalActions, TextArea, TextField, IconButton, Button, Menu, MenuItem } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
@@ -29,6 +32,16 @@ const COMMIT_SUMMARY_MAX = 72;
 const VIEW_KEY = 'cc_git_changes_view';
 const SCOPE_H_KEY = 'cc_git_scope_h';   // высота стека коммитов зоны скоупов (ресайз)
 const SCOPE_H_DEFAULT = 4 * 34;         // по умолчанию видно ~4 скоупа
+
+// Кнопка действия в строке скоупа: белая у «Зафиксировать», акцентная у публикации
+// (она перекрывает фон в своём месте использования). Ширина фиксированная и общая —
+// кнопки стоят одна под другой, и разъезжающиеся по длине текста края читались бы
+// как небрежность
+const scopeActionStyle: CSSProperties = {
+  flexShrink: 0, width: 110, fontSize: 11, fontWeight: 600, color: C.textHeading, background: C.bgWhite,
+  border: `1px solid ${C.border}`, borderRadius: 6, padding: '3px 0', textAlign: 'center',
+  cursor: 'pointer', whiteSpace: 'nowrap',
+};
 
 // Светлая компактная кнопка делегирования фиксации чату (в форме)
 const chatBtnStyle: CSSProperties = {
@@ -46,6 +59,10 @@ interface Props {
   activeCommitSha?: string | null; // подсветка открытого коммита в истории ветки
   onCommit?: (where: 'chat' | 'newChat') => void;  // делегировать фиксацию чату / новому чату
   onScopeChange?: () => void;  // сменили скоуп/коммит — центральную область сбросить к чату
+  // Контролы управления списком (выбор файлов, свернуть/развернуть, список/дерево)
+  // живут в ШАПКЕ карточки-панели, а не над списком: панель отдаёт их владельцу,
+  // а тот кладёт в panelHeaderExtras. Колбэк обязан быть стабильным (useCallback).
+  onToolbar?: (node: React.ReactNode) => void;
 }
 
 // Строка файла активного скоупа после объединения групп статуса
@@ -126,7 +143,7 @@ function buildTree(files: RowFile[]): TreeNode[] {
   return sortRec(collapse(root.children));
 }
 
-export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, activeFilePath, activeCommitSha, onCommit, onScopeChange }: Props) {
+export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, activeFilePath, activeCommitSha, onCommit, onScopeChange, onToolbar }: Props) {
   const st = useGitState(project.id);
   const status = st.status;
 
@@ -192,6 +209,19 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
     const un = new Set(st.unpushed.map(c => c.sha));
     return st.log.filter(c => !un.has(c.sha));
   }, [st.log, st.unpushed]);
+
+  // Коммиты по дням — разделителем-чертой, как чаты в списке (лог уже отсортирован
+  // от свежих к старым, поэтому просто режем его на подряд идущие дни)
+  const commitDays = useMemo(() => {
+    const out: { title: string; items: GitLogEntry[] }[] = [];
+    for (const c of pushedCommits) {
+      const title = dayGroupTitle(new Date(c.date));
+      const last = out[out.length - 1];
+      if (last && last.title === title) last.items.push(c);
+      else out.push({ title, items: [c] });
+    }
+    return out;
+  }, [pushedCommits]);
 
   // Файлы выбранного скоупа (read-only) — коммит или стэш; грузим при активации
   useEffect(() => {
@@ -433,11 +463,17 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
         onMouseEnter={() => setHoveredRow(rowKey)}
         onMouseLeave={() => setHoveredRow(null)}
         style={{
-          display: 'flex', alignItems: 'center', gap: 7, minHeight: 30, padding: '4px 8px',
+          display: 'flex', alignItems: 'center', gap: 7, minHeight: 32, padding: '4px 8px',
           borderRadius: 8, cursor: 'pointer', background: active ? C.accentLight : hovered ? C.bgSelected : 'transparent',
         }}
       >
-        <GitCommit size={13} strokeWidth={ICON_STROKE} color={active ? C.accent : C.textSecondary} style={{ flexShrink: 0 }} />
+        {/* Автор — иконкой-ролью, как в «Что нового»: кто сделал, видно на глаз
+            и без имени. Строка коммита узкая, поэтому имя — в подсказке.
+            Имя резолвим по e-mail — иначе иконка разошлась бы с историей продукта */}
+        {(() => {
+          const who = authorName(c.author, c.email);
+          return <span title={who} style={{ fontSize: 12, lineHeight: 1, flexShrink: 0 }}>{authorEmoji(who)}</span>;
+        })()}
         <span title={c.subject} style={{ flex: 1, minWidth: 0, fontSize: 12, color: active ? C.accent : C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.subject}</span>
         <span title={relTime(c.date)} style={{ fontFamily: FONT.mono, fontSize: 10, color: active ? C.accent : C.textMuted, flexShrink: 0 }}>{c.shortSha}</span>
       </div>
@@ -467,9 +503,61 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
       );
     });
 
-  const scopeLabel = isWorking ? 'не зафиксировано'
-    : isStash ? (st.stashes.find(s => `stash:${s.index}` === activeScope)?.message || 'отложенное')
-    : (st.unpushed.find(c => c.sha === activeScope)?.subject ?? 'коммит');
+  // === Контролы шапки карточки-панели ===
+  // Раньше это была отдельная строка над списком (с подписью скоупа слева); теперь
+  // кнопки живут в шапке панели, а подпись убрана — активный скоуп и так подсвечен
+  // в нижнем селекторе. Состояние (вид, режим выбора, свёрнутые папки) остаётся
+  // внутри компонента, наружу уходит только готовый узел.
+  useEffect(() => {
+    if (!onToolbar) return;
+    // История ветки списком файлов не управляется — кнопок там нет
+    onToolbar(isBranch ? null : (
+      <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+        {/* Режим выбора файлов (чекбоксы) — только для текущих изменений */}
+        {isWorking && rows.length > 0 && (
+          <>
+            <IconButton size="sm" title={selectMode ? 'Скрыть выбор файлов' : 'Выбрать файлы для коммита'}
+              active={selectMode} onClick={() => setSelectMode(v => !v)}>
+              <ListChecks size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+            </IconButton>
+            {selectMode && (
+              <IconButton size="sm" title={allSelected ? 'Снять все' : 'Выбрать все'}
+                tone="accent" onClick={toggleAll}>
+                {allSelected
+                  ? <span style={{ fontSize: 13, fontWeight: 700 }}>—</span>
+                  : <CheckCheck size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+              </IconButton>
+            )}
+          </>
+        )}
+        {/* Свернуть/развернуть на уровень — только в дереве */}
+        {viewMode === 'tree' && dirDepths.size > 0 && (
+          <>
+            <IconButton size="sm" title="Свернуть на уровень" onClick={collapseOne}>
+              <FoldVertical size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+            </IconButton>
+            <IconButton size="sm" title="Развернуть на уровень" onClick={expandOne}>
+              <UnfoldVertical size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+            </IconButton>
+          </>
+        )}
+        <span style={{ display: 'flex', border: `1px solid ${C.border}`, borderRadius: R.md, overflow: 'hidden', flexShrink: 0 }}>
+          <button onClick={() => setView('list')} title="Списком"
+            style={{ display: 'flex', padding: '3px 7px', border: 'none', cursor: 'pointer', background: viewMode === 'list' ? C.accentLight : 'transparent' }}>
+            <List size={14} strokeWidth={ICON_STROKE} color={viewMode === 'list' ? C.accent : C.textMuted} />
+          </button>
+          <button onClick={() => setView('tree')} title="Деревом"
+            style={{ display: 'flex', padding: '3px 7px', border: 'none', cursor: 'pointer', background: viewMode === 'tree' ? C.accentLight : 'transparent' }}>
+            <ListTree size={14} strokeWidth={ICON_STROKE} color={viewMode === 'tree' ? C.accent : C.textMuted} />
+          </button>
+        </span>
+      </span>
+    ));
+    return () => onToolbar(null);
+    // Узел пересобирается при изменении того, от чего зависит вид кнопок и их
+    // обработчики (collapseOne/expandOne читают collapsedDirs и dirDepths)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onToolbar, isBranch, isWorking, rows.length, selectMode, allSelected, viewMode, dirDepths, collapsedDirs]);
 
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
@@ -480,65 +568,23 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
         </div>
       )}
 
-      {/* === Верхняя зона: файлы активного скоупа (видны всегда, даже при фиксации) === */}
+      {/* === Верхняя зона: файлы активного скоупа (видны всегда, даже при фиксации).
+             Своей шапки у зоны нет — управление списком уехало в шапку карточки
+             панели (см. toolbar и проп onToolbar) === */}
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-        {/* Шапка зоны файлов: подпись скоупа + выбор + свернуть/развернуть + toggle список/дерево */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '10px 10px 6px' }}>
-          <span style={{ flex: 1, fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.04em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            {isBranch ? `Коммиты · ${status?.branch ?? '—'}` : `Файлы · ${scopeLabel}`}
-          </span>
-          {/* Управление списком файлов — только для файловых скоупов (не для истории ветки) */}
-          {!isBranch && (
-          <>
-          {/* Режим выбора файлов (чекбоксы) — только для текущих изменений */}
-          {isWorking && rows.length > 0 && (
-            <>
-              <IconButton size="sm" title={selectMode ? 'Скрыть выбор файлов' : 'Выбрать файлы для коммита'}
-                active={selectMode} onClick={() => setSelectMode(v => !v)}>
-                <ListChecks size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-              </IconButton>
-              {selectMode && (
-                <IconButton size="sm" title={allSelected ? 'Снять все' : 'Выбрать все'}
-                  tone="accent" onClick={toggleAll}>
-                  {allSelected
-                    ? <span style={{ fontSize: 13, fontWeight: 700 }}>—</span>
-                    : <CheckCheck size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
-                </IconButton>
-              )}
-            </>
-          )}
-          {/* Свернуть/развернуть на уровень — только в дереве */}
-          {viewMode === 'tree' && dirDepths.size > 0 && (
-            <>
-              <IconButton size="sm" title="Свернуть на уровень" onClick={collapseOne}>
-                <FoldVertical size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-              </IconButton>
-              <IconButton size="sm" title="Развернуть на уровень" onClick={expandOne}>
-                <UnfoldVertical size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-              </IconButton>
-            </>
-          )}
-          <div style={{ display: 'flex', border: `1px solid ${C.border}`, borderRadius: R.md, overflow: 'hidden', flexShrink: 0 }}>
-            <button onClick={() => setView('list')} title="Списком"
-              style={{ display: 'flex', padding: '3px 7px', border: 'none', cursor: 'pointer', background: viewMode === 'list' ? C.accentLight : 'transparent' }}>
-              <List size={14} strokeWidth={ICON_STROKE} color={viewMode === 'list' ? C.accent : C.textMuted} />
-            </button>
-            <button onClick={() => setView('tree')} title="Деревом"
-              style={{ display: 'flex', padding: '3px 7px', border: 'none', cursor: 'pointer', background: viewMode === 'tree' ? C.accentLight : 'transparent' }}>
-              <ListTree size={14} strokeWidth={ICON_STROKE} color={viewMode === 'tree' ? C.accent : C.textMuted} />
-            </button>
-          </div>
-          </>
-          )}
-        </div>
         {/* Тело: история ветки (скоуп «ветка») ИЛИ список/дерево файлов */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: '0 8px 6px' }}>
+        <div style={{ flex: 1, overflowY: 'auto', padding: '8px 8px 6px' }}>
           {isBranch ? (
             pushedCommits.length === 0 ? (
               <div style={{ padding: '20px 12px', textAlign: 'center', fontSize: 12.5, color: C.textMuted, fontFamily: FONT.sans }}>
                 {st.logLoaded ? 'Нет опубликованных коммитов' : 'Загрузка…'}
               </div>
-            ) : pushedCommits.map(renderCommitRow)
+            ) : commitDays.map(g => (
+              <div key={g.title}>
+                <ListDateDivider title={g.title} />
+                {g.items.map(renderCommitRow)}
+              </div>
+            ))
           ) : rows.length === 0 ? (
             <div style={{ padding: '20px 12px', textAlign: 'center', fontSize: 12.5, color: C.textMuted, fontFamily: FONT.sans }}>
               {isWorking ? 'Рабочее дерево чистое' : 'Нет файлов'}
@@ -624,29 +670,33 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
               <div
                 onClick={() => selectScope('working')}
                 style={{
-                  display: 'flex', alignItems: 'center', gap: 7, minHeight: 30, padding: '4px 8px',
+                  // Геометрия как у строки ветки ниже (gap 6, кнопки 28): счётчик и
+                  // отмена встают ровно под fetch/pull, а «Зафиксировать» — под публикацией
+                  display: 'flex', alignItems: 'center', gap: 6, minHeight: 32, padding: '2px 8px',
                   borderRadius: 8, cursor: 'pointer',
                   background: isWorking ? C.accentLight : 'transparent',
                 }}
               >
                 <Pencil size={13} strokeWidth={ICON_STROKE} color={isWorking ? C.accent : C.textSecondary} style={{ flexShrink: 0 }} />
                 <span style={{ flex: 1, minWidth: 0, fontSize: 12, color: isWorking ? C.accent : C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Не зафиксировано</span>
-                {/* Есть изменения и скоуп активен: «Зафиксировать» + отмена всех;
-                    иначе счётчик файлов (при чистом дереве — 0, без кнопок) */}
-                {workingFiles.length > 0 && isWorking ? (
+                {/* Счётчик файлов — всегда (при чистом дереве 0), перед кнопками:
+                    сколько правок ждёт фиксации, видно и с раскрытыми действиями.
+                    Ширина в размер кнопки рельсы — колонка под иконкой fetch */}
+                <span style={{ fontFamily: FONT.mono, fontSize: 10.5, color: C.textMuted, width: 28, textAlign: 'center', flexShrink: 0 }}>{workingFiles.length}</span>
+                {/* Есть изменения и скоуп активен: отмена всех + «Зафиксировать».
+                    Главное действие — крайним справа, разрушительное перед ним */}
+                {workingFiles.length > 0 && isWorking && (
                   <>
-                    <button
-                      onClick={e => { e.stopPropagation(); void openCommitForm(); }}
-                      title="Зафиксировать изменения"
-                      style={{ flexShrink: 0, fontSize: 11, fontWeight: 600, color: C.onAccent, background: C.accent, border: 'none', borderRadius: 6, padding: '3px 10px', cursor: 'pointer', whiteSpace: 'nowrap' }}
-                    >Зафиксировать</button>
-                    <IconButton size="xs" tone="danger" color={C.danger} title="Отменить все изменения"
+                    <IconButton size="sm" title="Отменить все изменения"
                       onClick={e => { e.stopPropagation(); setDiscardAllConfirm(true); }}>
                       <Undo2 size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
                     </IconButton>
+                    <button
+                      onClick={e => { e.stopPropagation(); void openCommitForm(); }}
+                      title="Зафиксировать изменения"
+                      style={scopeActionStyle}
+                    >Зафиксировать</button>
                   </>
-                ) : (
-                  <span style={{ fontFamily: FONT.mono, fontSize: 10.5, color: C.textMuted, minWidth: 14, textAlign: 'right' }}>{workingFiles.length}</span>
                 )}
               </div>
 
@@ -661,7 +711,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
                     onClick={() => selectScope(rowKey)}
                     onMouseEnter={() => setHoveredRow(rowKey)}
                     onMouseLeave={() => setHoveredRow(null)}
-                    style={{ display: 'flex', alignItems: 'center', gap: 7, minHeight: 30, position: 'relative', padding: '4px 8px', borderRadius: 8, cursor: 'pointer', background: active ? C.accentLight : hovered ? C.bgSelected : 'transparent' }}
+                    style={{ display: 'flex', alignItems: 'center', gap: 7, minHeight: 32, position: 'relative', padding: '4px 8px', borderRadius: 8, cursor: 'pointer', background: active ? C.accentLight : hovered ? C.bgSelected : 'transparent' }}
                   >
                     <Archive size={13} strokeWidth={ICON_STROKE} color={active ? C.accent : C.textSecondary} style={{ flexShrink: 0 }} />
                     <span title={s.message} style={{ flex: 1, minWidth: 0, fontSize: 12, color: active ? C.accent : C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -692,7 +742,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
                     key={c.sha}
                     onClick={() => selectScope(c.sha)}
                     style={{
-                      display: 'flex', alignItems: 'center', gap: 7, minHeight: 30, padding: '4px 8px',
+                      display: 'flex', alignItems: 'center', gap: 7, minHeight: 32, padding: '4px 8px',
                       borderRadius: 8, cursor: 'pointer', background: active ? C.accentLight : 'transparent',
                     }}
                   >
@@ -725,7 +775,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
               onClick={() => selectScope('branch')}
               title={status?.branch ?? undefined}
               style={{
-                flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 7, minHeight: 30,
+                flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 7, minHeight: 32,
                 padding: '4px 4px 4px 8px', borderRadius: 8, cursor: 'pointer', textAlign: 'left',
                 background: 'transparent',
               }}
@@ -773,25 +823,39 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
               </Menu>
             )}
           </div>
-          <IconButton size="sm" title="Забрать и слить (pull)" disabled={st.busy} onClick={() => void gitPull(project.id)}>
-            <ArrowDownToLine size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-          </IconButton>
+          {/* Обмен с remote по нарастанию: сначала лёгкий fetch, за ним pull */}
           <IconButton size="sm" title="Проверить обновления (fetch)" disabled={st.busy} onClick={() => void gitFetch(project.id)}>
             <RefreshCw size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
           </IconButton>
+          <IconButton size="sm" title="Забрать и слить (pull)" disabled={st.busy} onClick={() => void gitPull(project.id)}>
+            <ArrowDownToLine size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+          </IconButton>
+          {/* Публикация — тем же стилем, что «Зафиксировать»: только подпись, без
+              иконки и числа (счёт коммитов и так виден стрелкой ↑N в строке ветки).
+              Кнопка на месте всегда (нечего публиковать → приглушена и не нажимается),
+              чтобы ряд не прыгал */}
+          <button
+            onClick={() => setPublishConfirm(true)}
+            disabled={!canPublish || st.busy}
+            title={canPublish
+              ? `Опубликовать (git push): ${ahead || st.unpushed.length} коммит(ов)`
+              : 'Публиковать нечего'}
+            style={{
+              // Габариты общие с «Зафиксировать», вид — акцентный: публикация
+              // остаётся главным действием панели
+              ...scopeActionStyle,
+              background: C.accent, color: C.onAccent, border: 'none',
+              cursor: canPublish && !st.busy ? 'pointer' : 'default',
+              opacity: canPublish && !st.busy ? 1 : 0.4,
+              // Правый край в одну линию с «Зафиксировать»: строка скоупа отступает
+              // от края на 8px, а ряд ветки — на 2px, добираем разницу
+              marginRight: 6,
+            }}
+          >
+            Опубликовать
+          </button>
         </div>
       </div>
-      )}
-
-      {/* Опубликовать — вне режима фиксации; когда публиковать нечего — дизейблим, не скрываем */}
-      {mode === 'list' && (
-        <div style={{ borderTop: `1px solid ${C.border}`, padding: '9px 10px', flexShrink: 0 }}>
-          <Button variant="primary" fullWidth size="sm" loading={st.busy} disabled={!canPublish}
-            leftIcon={<CloudUpload size={14} strokeWidth={ICON_STROKE} />}
-            onClick={() => setPublishConfirm(true)}>
-            {canPublish ? `Опубликовать ${ahead || st.unpushed.length}` : 'Опубликовать'}
-          </Button>
-        </div>
       )}
 
       {/* === Подтверждение отмены изменений === */}

@@ -47,10 +47,12 @@ export function ProjectGitBar({ project, session, onCommitOwn }: { project: Proj
   };
 
   return (
+    // Отдельная плашка над композером: ширина — от общего контейнера ChatPanel
+    // (CHAT_MAX_W, ровно как у композера), высота — в размер карточки поля ввода
     <div style={{
-      display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8,
-      height: 40, padding: '0 8px 0 12px',
-      background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: 12,
+      display: 'flex', alignItems: 'center', gap: 12, margin: '10px 0 8px',
+      height: 51, padding: '0 8px 0 12px',
+      background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: R.xxl,
     }}>
       {/* Ветка / имя worktree; папка-иконка — чат в отдельном дереве */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>

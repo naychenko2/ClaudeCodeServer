@@ -117,12 +117,14 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive }: Props
       onMouseEnter={() => setLogoHover(true)}
       onMouseLeave={() => setLogoHover(false)}
       style={{
-        display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, cursor: 'pointer',
-        padding: '4px 8px', margin: '-4px -8px', borderRadius: 8,
-        background: logoHover ? C.bgSelected : 'transparent', transition: 'background 0.15s',
+        display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, cursor: 'pointer',
+        // Плашка в тон кнопке аватара, но со скруглением hover-подложки (не пилюля).
+        // Левый край выровнен с карточками списка чатов под ней (padX 16 + 9)
+        padding: '4px 12px 4px 7px', marginLeft: 9, borderRadius: 8,
+        background: logoHover ? C.bgSelected : C.bgPanel, transition: 'background 0.15s',
       }}
     >
-      <img src="/favicon.svg" alt="" width={30} height={30} style={{ display: 'block', flexShrink: 0 }} />
+      <img src="/favicon.svg" alt="" width={26} height={26} style={{ display: 'block', flexShrink: 0 }} />
       <span style={{ fontFamily: FONT.serif, fontSize: 18, fontWeight: 500, color: C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
         AI Home
       </span>

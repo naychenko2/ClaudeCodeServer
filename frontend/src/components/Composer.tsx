@@ -1102,12 +1102,23 @@ export function Composer({
       </div>
     </div>
 
-    {/* Полоса контролов — ПОД рамкой композера, на фоне страницы. Строка всегда одна:
-        на узком экране пикеры справа схлопнуты в иконки, а левые кнопки по мере нехватки
-        места уезжают справа налево в «⋯» (см. useToolbarOverflow). */}
+    {/* Полоса контролов — ПОД рамкой композера, на собственной «губе»: на десктопе
+        чат живёт на холсте с дудл-паттерном, и без опаковой плашки фон просвечивал бы
+        прямо под кнопками. Губа ПРИМЫКАЕТ к карточке композера (стиль Claude Desktop):
+        отрицательный margin заводит её верх под карточку (карточка positioned и
+        рисуется поверх static-губы), скруглены только нижние углы. Строка всегда одна:
+        на узком экране пикеры справа схлопнуты в иконки, а левые кнопки по мере
+        нехватки места уезжают справа налево в «⋯» (см. useToolbarOverflow). */}
     <div ref={stripRef} style={{
       display: 'flex', alignItems: 'center', gap: isMobile ? 6 : 4,
-      flexWrap: 'nowrap', minWidth: 0, marginTop: 7, padding: '0 2px',
+      flexWrap: 'nowrap', minWidth: 0,
+      ...(isMobile
+        ? { marginTop: 7, padding: '0 2px' }
+        : {
+            margin: '-12px 0 0', padding: '15px 8px 4px',
+            background: C.bgMain, border: `1px solid ${C.borderLight}`,
+            borderRadius: `0 0 ${R.xxl}px ${R.xxl}px`,
+          }),
     }}>
       <div ref={fixedLeftRef} style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 6 : 4, flexShrink: 0 }}>
         {modeButton}

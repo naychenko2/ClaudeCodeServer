@@ -16,7 +16,7 @@ namespace ClaudeHomeServer.Controllers;
 [Route("api/projects/{projectId}/tasks")]
 public class ProjectTasksController(
     TaskManager tasks, ProjectManager projects, PersonaManager personas,
-    IHubContext<SessionHub> hub) : ControllerBase
+    IHubContext<SessionHub> hub, PersonaBindingsService bindings) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -45,15 +45,23 @@ public class ProjectTasksController(
         var cat = BoardColumnHelper.Category(project, req.ColumnId);
         if (cat is not null) req = req with { Status = cat };
 
-        // Персона-исполнитель: своя и в правильном проекте
-        if (!string.IsNullOrEmpty(req.PersonaId)
-            && TaskPersonaValidator.Error(personas, UserId, req.PersonaId, projectId) is { } personaError)
-            return BadRequest(new { error = personaError });
+        // Персона-исполнитель: своя и в правильном проекте (или есть ProjectTasks-привязка)
+        if (!string.IsNullOrEmpty(req.PersonaId))
+        {
+            var p = personas.Get(req.PersonaId, UserId);
+            var scopes = p is not null ? bindings.BuildExternalTaskScopes(UserId, p) : [];
+            if (TaskPersonaValidator.Error(personas, UserId, req.PersonaId, projectId, scopes) is { } personaError)
+                return BadRequest(new { error = personaError });
+        }
 
         // Персона-постановщик (происхождение): та же валидация — своя и в правильном проекте
-        if (!string.IsNullOrEmpty(req.CreatedByPersonaId)
-            && TaskPersonaValidator.Error(personas, UserId, req.CreatedByPersonaId, projectId) is { } creatorError)
-            return BadRequest(new { error = creatorError });
+        if (!string.IsNullOrEmpty(req.CreatedByPersonaId))
+        {
+            var p = personas.Get(req.CreatedByPersonaId, UserId);
+            var scopes = p is not null ? bindings.BuildExternalTaskScopes(UserId, p) : [];
+            if (TaskPersonaValidator.Error(personas, UserId, req.CreatedByPersonaId, projectId, scopes) is { } creatorError)
+                return BadRequest(new { error = creatorError });
+        }
 
         var task = tasks.Create(projectId, UserId, req);
         await hub.BroadcastTaskChangedAsync(UserId, "created", task);
@@ -67,7 +75,8 @@ public class ProjectTasksController(
 [Route("api/tasks")]
 public class TasksController(
     TaskManager tasks, IHubContext<SessionHub> hub, TaskAiService ai, ProjectManager projects,
-    PersonaManager personas, TaskExecutionService executor, NoteTaskSyncService noteSync) : ControllerBase
+    PersonaManager personas, TaskExecutionService executor, NoteTaskSyncService noteSync,
+    PersonaBindingsService bindings) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -249,10 +258,15 @@ public class TasksController(
         if (cat is not null) req = req with { Status = cat };
 
         // Персона-исполнитель: "" = убрать (валидировать нечего), непустая — проверяем.
-        // Валидация по целевому проекту: проектная персона прежнего проекта в новом недействительна.
-        if (!string.IsNullOrEmpty(req.PersonaId)
-            && TaskPersonaValidator.Error(personas, UserId, req.PersonaId, targetProjectId) is { } personaError)
-            return BadRequest(new { error = personaError });
+        // Валидация по целевому проекту: проектная персона прежнего проекта в новом недействительна,
+        // если не имеет кросс-проектной ProjectTasks-привязки с полным доступом.
+        if (!string.IsNullOrEmpty(req.PersonaId))
+        {
+            var p = personas.Get(req.PersonaId, UserId);
+            var scopes = p is not null ? bindings.BuildExternalTaskScopes(UserId, p) : [];
+            if (TaskPersonaValidator.Error(personas, UserId, req.PersonaId, targetProjectId, scopes) is { } personaError)
+                return BadRequest(new { error = personaError });
+        }
 
         var wasDone = task.Status == TaskItemStatus.Done;
         var updated = tasks.Update(taskId, req)!;
@@ -310,16 +324,28 @@ public record ClassifyTaskRequest(string Title, string? Description = null, stri
 public record NormalizeTitleRequest(string Title);
 public record FindDuplicateRequest(string Title, string? Description = null, string? ProjectId = null);
 
-// Валидация персоны-исполнителя задачи: персона существует и принадлежит владельцу,
-// проектная персона допустима только у задач её проекта. null — ошибок нет.
+// Валидация персоны-исполнителя/постановщика задачи: персона существует и принадлежит
+// владельцу; проектная персона допустима только у задач своего проекта, если не имеет
+// кросс-проектной ProjectTasks-привязки с полным доступом (externalScopes). null — ошибок нет.
 public static class TaskPersonaValidator
 {
-    public static string? Error(PersonaManager personas, string userId, string personaId, string? taskProjectId)
+    public static string? Error(PersonaManager personas, string userId, string personaId,
+        string? taskProjectId,
+        IReadOnlyList<(string ProjectId, bool ReadOnly)>? externalScopes = null)
     {
         var persona = personas.Get(personaId, userId);
         if (persona is null) return "Персона не найдена или недоступна";
         if (persona.Scope == PersonaScope.Project && persona.ProjectId != taskProjectId)
+        {
+            // Кросс-проектная ProjectTasks-привязка с полным доступом разрешает
+            if (externalScopes is not null)
+            {
+                var scope = externalScopes.FirstOrDefault(s => s.ProjectId == taskProjectId);
+                if (scope != default && !scope.ReadOnly)
+                    return null;
+            }
             return "Проектная персона может выполнять только задачи своего проекта";
+        }
         return null;
     }
 }

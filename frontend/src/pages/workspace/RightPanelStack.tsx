@@ -265,7 +265,9 @@ function PanelShell({ k, badge, headerExtras, fullscreen, canDrag, onToggleFulls
           </span>
         )}
       </IslandHeader>
-      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      {/* Контентная зона панели — белая: отделяет рабочую область от кремовой шапки
+          карточки и от фона страницы с дудл-паттерном */}
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: C.bgWhite }}>
         {children}
       </div>
     </Island>

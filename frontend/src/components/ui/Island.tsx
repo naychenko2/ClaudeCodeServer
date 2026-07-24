@@ -52,7 +52,9 @@ export function IslandHeader({ icon, title, badge, actions, headerProps, childre
       style={{
         flexShrink: 0, height: ISLAND.headerH, display: 'flex', alignItems: 'center', gap: 7,
         padding: '0 6px 0 12px', borderBottom: `1px solid ${C.border}`,
-        background: ISLAND.headerBg,
+        // Тон «губы» под композером (bgMain): шапка светлее белого контента панели,
+        // но не такая тёмная, как утопленный bgInset
+        background: C.bgMain,
         ...headerStyle,
       }}
     >

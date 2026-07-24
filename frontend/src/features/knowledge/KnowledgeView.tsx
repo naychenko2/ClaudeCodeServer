@@ -159,7 +159,8 @@ export function KnowledgeView({ kb, isMobile, onBack, onAddDocument, onDelete }:
   );
 
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: C.bgMain }}>
+    // Фон прозрачный: под центром виден дудл-фон страницы (CanvasBackdrop)
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       {/* На мобиле при открытом документе базовый тулбар базы прячем — иначе он
           дублируется с шапкой DocumentViewer (два тулбара). Возврат к списку — «назад»
           в шапке документа (onClose). На десктопе просмотр — правая панель, тулбар нужен. */}

@@ -3,7 +3,7 @@ import { Menu as MenuIcon } from 'lucide-react';
 import type { AuthState, KnowledgeBaseSummary } from '../../types';
 import type { HubTabValue } from '../../components/HubTabs';
 import { HubHeader } from '../../components/HubHeader';
-import { C, FONT, R } from '../../lib/design';
+import { C, FONT, ISLAND, R } from '../../lib/design';
 import { useKnowledge, useKnowledgeConfigured, ensureKnowledgeLoaded, bumpKnowledge } from '../../lib/knowledge';
 import { api } from '../../lib/api';
 import { parseHash, navPush, navReplace, getNav, type NavSnapshot } from '../../lib/nav';
@@ -163,7 +163,8 @@ export function KnowledgePage({ auth, onLogout, onHubTab }: {
       ? <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: C.bgPanel }}>{sidebar}</div>
       : <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>{centerPane}</div>
   ) : (
-    // Десктоп: остров-сайдбар + ресайз-зазор | центральный остров (Islands)
+    // Десктоп: остров-сайдбар + ресайз-зазор | центр на холсте (как в «Заметках»:
+    // контент лежит полупрозрачным листом прямо на дудл-фоне страницы)
     <IslandScaffold
       sidebarOpen={sidebarMode === 'pinned'}
       sidebar={sidebar}
@@ -171,6 +172,7 @@ export function KnowledgePage({ auth, onLogout, onHubTab }: {
       sidebarDragging={listDragging}
       onSidebarDrag={startListDrag}
       onSidebarCollapse={() => setSidebarMode('collapsed')}
+      centerBare
       center={
         <>
           {sidebarMode === 'collapsed' && (
@@ -183,7 +185,8 @@ export function KnowledgePage({ auth, onLogout, onHubTab }: {
               </IconButton>
             </div>
           )}
-          <div style={{ flex: 1, minWidth: 0, minHeight: 0 }}>{centerPane}</div>
+          {/* Лист в тон ответу Claude в чате — фон страницы просвечивает, но не мешает */}
+          <div style={{ flex: 1, minWidth: 0, minHeight: 0, background: C.msgBg, borderRadius: ISLAND.radius, overflow: 'hidden' }}>{centerPane}</div>
         </>
       }
     />

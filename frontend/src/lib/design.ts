@@ -215,7 +215,8 @@ export const TB = {
   padX: 16,
   padXMobile: 14,
   gap: 8,
-  bg: C.bgPanel,
+  // Тон шапок островов и сайдбаров — единая «оправа» интерфейса (см. IslandHeader)
+  bg: C.bgMain,
   borderBottom: `1px solid ${C.border}`,
   iconHitDesktop: 32,
   iconHitMobile: 40,

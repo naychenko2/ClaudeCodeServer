@@ -635,7 +635,8 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobi
       {!railHidden && <div style={{
         width: RAIL_W, flexShrink: 0, alignSelf: 'flex-start',
         display: 'flex', flexDirection: 'column', alignItems: 'center',
-        gap: 6, paddingTop: 12, paddingBottom: 16, background: C.bgPanel,
+        // Тон шапок островов и сайдбаров — единая «оправа» интерфейса
+        gap: 6, paddingTop: 12, paddingBottom: 16, background: C.bgMain,
         borderLeft: `1px solid ${C.border}`, borderTop: `1px solid ${C.border}`, borderBottom: `1px solid ${C.border}`,
         borderTopLeftRadius: 26, borderBottomLeftRadius: 26, borderTopRightRadius: 0, borderBottomRightRadius: 0,
         boxSizing: 'border-box', overflow: 'hidden',

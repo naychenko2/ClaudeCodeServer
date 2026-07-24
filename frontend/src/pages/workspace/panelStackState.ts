@@ -94,20 +94,16 @@ export function removePanel(layout: PanelKey[][], k: PanelKey): PanelKey[][] {
   return layout.map(c => c.filter(x => x !== k)).filter(c => c.length > 0);
 }
 
-// Drag-and-drop: перенести from в колонку панели to, ВСТАВИВ ПЕРЕД ней.
-// Так можно получить любое распределение (например 1-я колонка с одной панелью,
-// 2-я с двумя): вместимость COL_CAP при ручном переносе не ограничивает.
-export function movePanel(layout: PanelKey[][], from: PanelKey, to: PanelKey): PanelKey[][] {
-  if (from === to) return layout;
+// Drag-and-drop панели НА панель: они МЕНЯЮТСЯ МЕСТАМИ (a встаёт в слот b и
+// наоборот), в том числе между колонками. Сама раскладка при этом не меняется —
+// число колонок и порядок слотов те же, переезжает только содержимое.
+// Другое распределение (вставка, вынос в новую колонку) делают дроп-зоны
+// плейсхолдеров: movePanelAt и movePanelToNewColumn.
+export function swapPanels(layout: PanelKey[][], a: PanelKey, b: PanelKey): PanelKey[][] {
+  if (a === b) return layout;
   const flat = layout.flat();
-  if (!flat.includes(from) || !flat.includes(to)) return layout;
-  const without = layout.map(c => c.filter(x => x !== from));
-  const out = without.map(c => [...c]);
-  for (const col of out) {
-    const ti = col.indexOf(to);
-    if (ti >= 0) { col.splice(ti, 0, from); break; }
-  }
-  return out.filter(c => c.length > 0);
+  if (!flat.includes(a) || !flat.includes(b)) return layout;
+  return layout.map(col => col.map(k => (k === a ? b : k === b ? a : k)));
 }
 
 // Drag-and-drop в разделитель: вынести from в НОВУЮ колонку на позицию insertIdx
@@ -184,8 +180,8 @@ export interface PanelStack {
   toggleCollapsed: () => void;
   setWeights: (next: Partial<Record<PanelKey, number>>) => void;
   setWidth: (n: number) => void;
-  // Drag-and-drop: перенести панель from в колонку панели to (вставить перед ней)
-  moveTo: (from: PanelKey, to: PanelKey) => void;
+  // Drag-and-drop панели на панель: поменять их местами
+  swapWith: (a: PanelKey, b: PanelKey) => void;
   // Drag-and-drop в разделитель: вынести панель в новую колонку на позицию insertIdx
   moveToNewColumn: (from: PanelKey, insertIdx: number) => void;
   // Drag-and-drop в горизонтальный плейсхолдер: вставить в колонку colIdx на позицию rowIdx
@@ -287,8 +283,16 @@ function createPanelStack(ns: string, opts?: { legacyOpenKey?: string }) {
       emit();
     }, []);
 
-    const moveTo = useCallback((from: PanelKey, to: PanelKey) => {
-      setLayout(movePanel(_layout, from, to));
+    const swapWith = useCallback((a: PanelKey, b: PanelKey) => {
+      const flat = _layout.flat();
+      if (a !== b && flat.includes(a) && flat.includes(b)) {
+        // Вес — высота СЛОТА, а не панели: вместе с местами меняем и веса,
+        // иначе панель утащила бы свою высоту и раскладка «прыгнула» бы
+        const wa = _weights[a] ?? 1;
+        const wb = _weights[b] ?? 1;
+        _weights = { ..._weights, [a]: wb, [b]: wa };
+      }
+      setLayout(swapPanels(_layout, a, b));
     }, []);
 
     const moveToNewColumn = useCallback((from: PanelKey, insertIdx: number) => {
@@ -314,7 +318,7 @@ function createPanelStack(ns: string, opts?: { legacyOpenKey?: string }) {
       emit();
     }, []);
 
-    return { layout, weights, width, mode, toggle, close, collapsed, toggleCollapsed, setWeights, setWidth, moveTo, moveToNewColumn, moveAt, setMode };
+    return { layout, weights, width, mode, toggle, close, collapsed, toggleCollapsed, setWeights, setWidth, swapWith, moveToNewColumn, moveAt, setMode };
   }
 
   return { use: usePanelStack };

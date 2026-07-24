@@ -1,9 +1,10 @@
 // Правая зона нового интерфейса проекта (workspace-cc-panels): вертикальная рельса
 // иконок РАБОЧИХ ИНСТРУМЕНТОВ у правого края + открытые панели-карточки.
 // Раскладка — ЯВНЫЕ колонки (как в Claude Code Desktop): дефолт «по две на колонку»
-// в порядке открытия, drag-and-drop за шапку переносит панель в колонку цели
-// (вставка перед ней) — можно получить любое распределение, например одну панель
-// в первой колонке и две во второй.
+// в порядке открытия. Drag-and-drop за шапку: дроп НА панель меняет две панели
+// местами (слоты остаются на месте), дроп в плейсхолдер между панелями или в
+// разделитель колонок вставляет/выносит — можно получить любое распределение,
+// например одну панель в первой колонке и две во второй.
 // Панели — «воздушные» скруглённые карточки с зазорами; границы высот тянутся
 // невидимыми хендлами в зазорах, ширина колонок — сплиттером слева от зоны.
 import { useEffect, useRef, useState, type ReactNode, type DragEvent, type PointerEvent as ReactPointerEvent } from 'react';
@@ -184,7 +185,7 @@ function GapHandle({ active, onPointerDown }: { active: boolean; onPointerDown: 
 
 // Карточка панельки: скруглённая, с шапкой 40px (drag-хендл для перестановки)
 // и кнопкой закрытия
-function PanelShell({ k, badge, headerExtras, canDrag, onClose, dragged, dropTarget, onDragStart, onDragEnd, onDragOver, onDragLeave, onDrop, children }: {
+function PanelShell({ k, badge, headerExtras, canDrag, onClose, dragged, dropTarget, flash, onDragStart, onDragEnd, onDragOver, onDragLeave, onDrop, children }: {
   k: PanelKey;
   badge: string | null;
   // Кастомные контролы в шапке (напр. переключатель видов задач) — слева от кнопок
@@ -194,6 +195,8 @@ function PanelShell({ k, badge, headerExtras, canDrag, onClose, dragged, dropTar
   onClose: () => void;
   dragged: boolean;
   dropTarget: boolean;
+  // Кратковременная подсветка «панель уже открыта» — по событию cc-panel-flash
+  flash: boolean;
   onDragStart: (e: DragEvent) => void;
   onDragEnd: () => void;
   onDragOver: (e: DragEvent) => void;
@@ -223,8 +226,10 @@ function PanelShell({ k, badge, headerExtras, canDrag, onClose, dragged, dropTar
   );
   return (
     <Island
-      rootProps={{ onDragOver, onDragLeave, onDrop }}
-      borderColor={dropTarget ? C.accent : ISLAND.border}
+      // Вспышка «панель уже открыта» — CSS-анимацией (cc-panel-flash в index.css):
+      // два быстрых удара акцентным кольцом поверх обычной тени острова
+      rootProps={{ onDragOver, onDragLeave, onDrop, className: flash ? 'cc-panel-flash' : undefined }}
+      borderColor={dropTarget || flash ? C.accent : ISLAND.border}
       shadow={dropTarget ? `0 0 0 1px ${C.accent}` : ISLAND.shadow}
       style={{
         flex: 1,
@@ -271,7 +276,7 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobi
   // Инстанс стора раскладки: оба объявлены на уровне модуля, поэтому вызов хука
   // безусловный и стабильный между рендерами (проп не меняется по ходу жизни экрана)
   const usePanels = (panelStack ?? wsPanelStack).use;
-  const { layout, weights, width, mode, toggle, close, collapsed, toggleCollapsed, setWeights, setWidth, moveTo, moveToNewColumn, moveAt, setMode } = usePanels();
+  const { layout, weights, width, mode, toggle, close, collapsed, toggleCollapsed, setWeights, setWidth, swapWith, moveToNewColumn, moveAt, setMode } = usePanels();
   const windowWidth = useWindowWidth();
   // Компактный режим (планшет и телефон): одна панель + drawer, без колонок/DnD/solo
   const compact = !!isTablet || !!isMobile;
@@ -331,6 +336,26 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobi
     document.documentElement.style.setProperty('--cc-fab-right', `${rightZoneW + 20}px`);
     return () => { document.documentElement.style.removeProperty('--cc-fab-right'); };
   }, [rightZoneW]);
+
+  // Флеш «панель уже открыта»: внешние кнопки (git-бар над композером) шлют
+  // cc-panel-flash, карточка на мгновение обводится акцентом. Счётчик n нужен,
+  // чтобы повторный клик по той же панели перезапускал таймер.
+  const [flash, setFlash] = useState<{ key: PanelKey; n: number } | null>(null);
+  useEffect(() => {
+    const onFlash = (e: Event) => {
+      const key = (e as CustomEvent<{ key?: PanelKey }>).detail?.key;
+      if (key) setFlash(cur => ({ key, n: (cur?.n ?? 0) + 1 }));
+    };
+    window.addEventListener('cc-panel-flash', onFlash);
+    return () => window.removeEventListener('cc-panel-flash', onFlash);
+  }, []);
+  useEffect(() => {
+    if (!flash) return;
+    // Снимаем класс сразу по окончании анимации (0.55s в index.css) — иначе
+    // повторный клик по кнопке не перезапустил бы вспышку
+    const id = setTimeout(() => setFlash(null), 600);
+    return () => clearTimeout(id);
+  }, [flash]);
 
   // Подсветка активного ресайза: 'width' — сплиттер зоны, 'ci:ri' — хендл высот
   const [dragging, setDragging] = useState<'width' | string | null>(null);
@@ -449,13 +474,14 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobi
           headerExtras={panelHeaderExtras?.[k]}
           canDrag={!soloMode && !compact}
           onClose={() => { if (compact) setTabletPanels(cur => cur.filter(x => x !== k)); else close(k); }}
+          flash={flash?.key === k}
           dragged={dndFrom === k}
           dropTarget={dndOver === k && dndFrom !== null && dndFrom !== k}
           onDragStart={e => { setDndFrom(k); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', k); }}
           onDragEnd={() => { setDndFrom(null); setDndOver(null); setDndOverSep(null); setDndOverRow(null); }}
           onDragOver={e => { if (dndFrom && dndFrom !== k) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDndOver(k); } }}
           onDragLeave={() => { setDndOver(cur => (cur === k ? null : cur)); }}
-          onDrop={e => { e.preventDefault(); if (dndFrom && dndFrom !== k) moveTo(dndFrom, k); setDndFrom(null); setDndOver(null); }}
+          onDrop={e => { e.preventDefault(); if (dndFrom && dndFrom !== k) swapWith(dndFrom, k); setDndFrom(null); setDndOver(null); }}
         >
           {panelContent(k)}
         </PanelShell>

@@ -3,7 +3,7 @@
 // мусора из localStorage и нормализация весов.
 import { describe, it, expect } from 'vitest';
 import {
-  sanitizeLayout, parseLayout, addPanel, removePanel, movePanel, movePanelToNewColumn, movePanelAt,
+  sanitizeLayout, parseLayout, addPanel, removePanel, swapPanels, movePanelToNewColumn, movePanelAt,
   parseWeights, parseWidth, normalizeWeights,
   COL_DEFAULT, COL_MIN, COL_MAX,
 } from '../../pages/workspace/panelStackState';
@@ -62,27 +62,32 @@ describe('removePanel', () => {
   });
 });
 
-describe('movePanel — drag-and-drop', () => {
-  it('переносит в колонку цели, вставляя перед ней', () => {
-    // [plan, files] [tasks] → тащим files на tasks → [plan] [files, tasks]
-    expect(movePanel([['plan', 'files'], ['tasks']], 'files', 'tasks'))
-      .toEqual([['plan'], ['files', 'tasks']]);
+describe('swapPanels — дроп панели на панель', () => {
+  it('меняет местами панели из разных колонок, раскладку не трогает', () => {
+    // [plan, files] [tasks] → тащим files на tasks → [plan, tasks] [files]
+    expect(swapPanels([['plan', 'files'], ['tasks']], 'files', 'tasks'))
+      .toEqual([['plan', 'tasks'], ['files']]);
   });
 
-  it('даёт несимметричную раскладку: одна панель слева, две справа', () => {
-    // [plan, files] [tasks, team] → тащим files на team → [plan] [tasks, files, team]
-    expect(movePanel([['plan', 'files'], ['tasks', 'team']], 'files', 'team'))
-      .toEqual([['plan'], ['tasks', 'files', 'team']]);
+  it('форма колонок сохраняется (2+2 остаётся 2+2)', () => {
+    // [plan, files] [tasks, team] → тащим files на team → [plan, team] [tasks, files]
+    expect(swapPanels([['plan', 'files'], ['tasks', 'team']], 'files', 'team'))
+      .toEqual([['plan', 'team'], ['tasks', 'files']]);
   });
 
-  it('перенос внутри колонки меняет порядок', () => {
-    expect(movePanel([['plan', 'files']], 'files', 'plan')).toEqual([['files', 'plan']]);
+  it('обмен внутри одной колонки меняет порядок', () => {
+    expect(swapPanels([['plan', 'files']], 'files', 'plan')).toEqual([['files', 'plan']]);
   });
 
-  it('неизвестные ключи и from===to — без изменений', () => {
-    const l = [['plan'], ['files']] as Parameters<typeof movePanel>[0];
-    expect(movePanel(l, 'plan', 'plan')).toEqual(l);
-    expect(movePanel(l, 'tasks', 'plan')).toEqual(l);
+  it('обмен симметричен (порядок аргументов не важен)', () => {
+    const l = [['plan', 'files'], ['tasks']] as Parameters<typeof swapPanels>[0];
+    expect(swapPanels(l, 'files', 'tasks')).toEqual(swapPanels(l, 'tasks', 'files'));
+  });
+
+  it('неизвестные ключи и a===b — без изменений', () => {
+    const l = [['plan'], ['files']] as Parameters<typeof swapPanels>[0];
+    expect(swapPanels(l, 'plan', 'plan')).toEqual(l);
+    expect(swapPanels(l, 'tasks', 'plan')).toEqual(l);
   });
 });
 

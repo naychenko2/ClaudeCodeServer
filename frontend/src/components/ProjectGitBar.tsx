@@ -41,8 +41,14 @@ export function ProjectGitBar({ project, session, onCommitOwn }: { project: Proj
 
   // Открыть правую панель «Изменения» на скоупе «Не зафиксировано» (working).
   // toggle не закрывает уже открытую панель — гейтим по наличию в раскладке.
+  // Панель УЖЕ открыта — просим её мигнуть: иначе клик выглядит как «ничего не
+  // произошло», хотя скоуп в панели переключился.
   const openChanges = () => {
-    if (!layout.flat().includes('changes')) toggle('changes');
+    if (layout.flat().includes('changes')) {
+      window.dispatchEvent(new CustomEvent('cc-panel-flash', { detail: { key: 'changes' } }));
+    } else {
+      toggle('changes');
+    }
     window.dispatchEvent(new CustomEvent('cc-git-open-working'));
   };
 

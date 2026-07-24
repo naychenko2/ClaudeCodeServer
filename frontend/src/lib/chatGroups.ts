@@ -16,6 +16,18 @@ function dayTitle(d: Date): string {
   return `${d.toLocaleDateString('ru-RU', opts)} (${weekday(d)})`;
 }
 
+const startOfDayTs = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+
+// Заголовок группы дня: «Сегодня» / «Вчера (пн)» / «14 июля (пн)». Общий для
+// списков чатов и коммитов — даты в разделителях выглядят одинаково везде.
+export function dayGroupTitle(d: Date): string {
+  const today = startOfDayTs(new Date());
+  const t = startOfDayTs(d);
+  if (t >= today) return 'Сегодня';
+  if (t >= today - 86_400_000) return `Вчера (${weekday(d)})`;
+  return dayTitle(d);
+}
+
 // Группировка чатов для сайдбара: Закреплённые → Сегодня → Вчера → по дням.
 // Дни идут отдельными группами (а не общим «Ранее») — по разделителю видно,
 // какие чаты относятся к одной дате. Внутри группы — свежие сверху.
@@ -46,11 +58,12 @@ export function groupChats(chats: Session[]): ChatGroup[] {
     }
   }
 
+  // Заголовки — общим dayGroupTitle (тот же текст, что у разделителей коммитов)
   const groups: ChatGroup[] = [];
   if (pinned.length) groups.push({ title: 'Закреплённые', items: pinned });
   if (todayItems.length) groups.push({ title: 'Сегодня', items: todayItems });
   if (yesterdayItems.length)
-    groups.push({ title: `Вчера (${weekday(new Date(today - day))})`, items: yesterdayItems });
-  for (const [d, items] of earlierDays) groups.push({ title: dayTitle(new Date(d)), items });
+    groups.push({ title: dayGroupTitle(new Date(today - day)), items: yesterdayItems });
+  for (const [d, items] of earlierDays) groups.push({ title: dayGroupTitle(new Date(d)), items });
   return groups;
 }

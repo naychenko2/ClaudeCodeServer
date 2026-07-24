@@ -2614,8 +2614,9 @@ public class SessionManager : IDisposable
     // иначе после остановки сервера остаются зомби-процессы (claude + node MCP-серверов)
     public void KillAllProcesses()
     {
-        // Сохраняем сессии перед остановкой — последний шанс записать in-memory изменения
-        SaveSessions();
+        // Таймер не должен пытаться писать одновременно с убийством процессов:
+        // сценарий — shutdown, SaveSessions() ждёт _saveLock, а в это время адаптеры
+        // claude не диспозятся → процессы зависают в памяти (боролись ранее).
         _autoSaveTimer?.Dispose();
 
         var tasks = _sessions.Values
@@ -2631,6 +2632,8 @@ public class SessionManager : IDisposable
         }
     }
 
+    // IDisposable — только для _autoSaveTimer. Адаптеры (процессы claude) убивает
+    // KillAllProcesses() из ApplicationStopping. Не дублируем — иначе два cleanup-пути.
     public void Dispose()
     {
         _autoSaveTimer?.Dispose();

@@ -237,19 +237,15 @@ public class TaskExecutionServiceTests
         prompt.Should().NotContain("Готово, собрал и прогнал тесты.");
     }
 
-    // ─── MAJOR 1: гейт TASKS_EXECUTE не даёт постановщику самозапустить задачу ──
+    // ─── MAJOR 1: гейт TASKS_EXECUTE (теперь только по agentDepth — стабильный per-сессию) ──
 
     [Theory]
-    [InlineData(0, 0, false, true)]   // обычный пользовательский ход — доступен
-    [InlineData(0, 0, true, false)]   // реакционный авто-ход постановщика — подавлен явно
-    [InlineData(1, 0, false, false)]  // агентный ход (chats_send) — анти-рекурсия как раньше
-    [InlineData(0, 3, false, false)]  // исчерпан гард глубины делегирования исполнителей
-    [InlineData(1, 0, true, false)]   // подавлен и агентный — тем более недоступен
-    public void ResolveTasksExecuteEnabled_Гейт(
-        int currentTurnAgentDepth, int taskDelegationDepth, bool suppressTasksExecute, bool expected)
+    [InlineData(0, true)]   // обычный пользовательский ход — доступен
+    [InlineData(1, false)]  // агентный ход (chats_send) — не доступен
+    public void ResolveTasksExecuteEnabled_Гейт(int currentTurnAgentDepth, bool expected)
     {
         ClaudeHomeServer.Services.Llm.Claude.ClaudeSession
-            .ResolveTasksExecuteEnabled(currentTurnAgentDepth, taskDelegationDepth, suppressTasksExecute)
+            .ResolveTasksExecuteEnabled(currentTurnAgentDepth)
             .Should().Be(expected);
     }
 

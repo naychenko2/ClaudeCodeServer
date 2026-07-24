@@ -351,7 +351,9 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
 
   // ===== Мобильный: одна колонка =====
   return (
-    <div style={{ height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+    <div style={{ height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative', isolation: 'isolate' }}>
+      {/* Дудл-фон и на мобиле — под списком проектов */}
+      <CanvasBackdrop />
       <HubHeader value="projects" onTab={onHubTab} auth={auth!} onLogout={onLogout} />
       <div style={{ maxWidth: 640, width: '100%', margin: '0 auto', display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, padding: '0 22px' }}>
 

@@ -1255,7 +1255,9 @@ const windowWidth = useWindowWidth();
 
   if (isMobile) {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', height: viewportH, background: C.bgPanel, fontFamily: FONT.sans, overflow: 'hidden', position: 'relative' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', height: viewportH, background: C.bgMain, fontFamily: FONT.sans, overflow: 'hidden', position: 'relative', isolation: 'isolate' }}>
+        {/* Дудл-фон и на мобиле: виден под лентой чата и в пустых состояниях */}
+        <CanvasBackdrop />
         {/* Верхняя шапка — только в режиме списка (sidebar). В режиме чата своя
             самодостаточная шапка ChatHeaderBar с кнопкой «назад»; у файла — шапка FileViewer */}
         {!openFile && mobileView === 'sidebar' && (

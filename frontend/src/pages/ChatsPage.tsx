@@ -197,7 +197,9 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
   // === Мобильная раскладка: список ИЛИ полноэкранный чат (не две панели) ===
   if (isMobile) {
     return (
-      <div style={{ height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
+      <div style={{ height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative', isolation: 'isolate' }}>
+        {/* Дудл-фон и на мобиле: виден под лентой чата и в пустых состояниях */}
+        <CanvasBackdrop />
         {activeChat ? (
           // Чат + сессионная рельса в ОДНОЙ строке: рельса — flex-сосед справа
           // (сам пейн колоночный, без row-обёртки рельса встала бы под чатом)

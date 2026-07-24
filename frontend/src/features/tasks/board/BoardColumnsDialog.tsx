@@ -86,7 +86,7 @@ export function BoardColumnsDialog({ projectId, columns, taskCounts, onSaved, on
         <div style={{ padding: '18px 20px 12px', flexShrink: 0 }}>
           <h2 style={{ margin: 0, fontFamily: FONT.serif, fontSize: 20, fontWeight: 500, color: C.textHeading }}>Колонки доски</h2>
           <p style={{ margin: '6px 0 0', fontFamily: FONT.sans, fontSize: 12.5, color: C.textMuted, lineHeight: 1.4 }}>
-            Каждая колонка привязана к категории — от неё зависит логика готовности, календарь и Claude.
+            Каждая колонка привязана к категории — от неё зависит логика готовности, календарь и AI.
           </p>
         </div>
 

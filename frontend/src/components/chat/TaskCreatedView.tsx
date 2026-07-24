@@ -159,7 +159,7 @@ export const TaskCreatedView = memo(function TaskCreatedView({ item, online, onO
                       </span>
                     </>
                   ) : task.assignee === 'claude' ? (
-                    <><ClaudeBadge size={18} />Claude</>
+                    <><ClaudeBadge size={18} />AI</>
                   ) : (
                     <><MeBadge size={20} />Я</>
                   )}

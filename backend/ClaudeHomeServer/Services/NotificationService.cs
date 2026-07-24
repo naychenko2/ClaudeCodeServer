@@ -107,7 +107,7 @@ public class NotificationService(
             SessionId = sessionId,
             TaskId = taskId,
             ProjectId = projectId,
-            Source = projectId is null ? "Claude" : $"Проект",
+            Source = projectId is null ? "AI" : $"Проект",
             Tag = tag,
         }, sendPush: true);
     }

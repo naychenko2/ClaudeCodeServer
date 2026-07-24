@@ -33,7 +33,7 @@ function WindowRow({ w }: { w: RateWindow }) {
           }}
           // Долю CLI присылает только при приближении к лимиту, и молчание —
           // это «расход невелик», а не «ноль». Поясняем, чтобы прочерк не выглядел сбоем.
-          title={w.hasUtil ? undefined : 'Claude сообщает долю использования только при приближении к лимиту'}
+          title={w.hasUtil ? undefined : 'AI сообщает долю использования только при приближении к лимиту'}
         >
           {w.hasUtil ? `${w.pct}%` : 'в пределах нормы'}
         </span>
@@ -95,7 +95,7 @@ export function UsageWidget() {
   const subs = usage?.subscriptions;
   const accounts = subs
     ? Object.entries(subs)
-        .map(([key, s]) => ({ key, name: s.name ?? (key === 'claude' ? 'Claude' : key), windows: latestPerWindow(s.snapshots ?? []) }))
+        .map(([key, s]) => ({ key, name: s.name ?? (key === 'claude' ? 'AI' : key), windows: latestPerWindow(s.snapshots ?? []) }))
         .filter(a => a.windows.length > 0)
     : claudeSnaps.length > 0
       ? [{ key: 'claude', name: null as string | null, windows: latestPerWindow(claudeSnaps) }]

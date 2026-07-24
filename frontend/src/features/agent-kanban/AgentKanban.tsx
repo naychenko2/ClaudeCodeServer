@@ -233,7 +233,7 @@ export function AgentKanban() {
           <div style={{ fontFamily: FONT.sans, fontSize: 12.5, color: C.textMuted, lineHeight: 1.5 }}>
             {timeWindow !== 'all'
               ? 'За выбранный период ничего нет'
-              : 'Задачи с исполнителем Claude или персоной появятся здесь'}
+              : 'Задачи с исполнителем AI или персоной появятся здесь'}
           </div>
         </div>
       ) : (

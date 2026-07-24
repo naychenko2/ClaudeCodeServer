@@ -573,7 +573,7 @@ const DUE_BUCKET_COLOR: Record<DueBucket, string> = {
   week: C.success, later: C.textMuted, none: C.textMuted,
 };
 
-export const ASSIGNEE_LABEL: Record<string, string> = { me: 'Я', claude: 'Claude', none: 'Не назначен' };
+export const ASSIGNEE_LABEL: Record<string, string> = { me: 'Я', claude: 'AI', none: 'Не назначен' };
 
 // Разбить задачи на дорожки согласно groupBy. Порядок дорожек фиксирован
 // (приоритет/срок — по важности), у проектов — личные первыми. Пустые дорожки не рисуем.

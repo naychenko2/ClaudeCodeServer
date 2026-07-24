@@ -84,10 +84,10 @@ export function ExecutorPicker({ assignee, personaId, projectId, onChange, disab
             : <MeBadge size={34} />}
         <span style={{ flex: 1, minWidth: 0 }}>
           <span style={{ display: 'block', fontFamily: FONT.sans, fontSize: 14, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {selectedPersona ? personaLabel(selectedPersona) : assignee === 'claude' ? 'Claude' : 'Я'}
+            {selectedPersona ? personaLabel(selectedPersona) : assignee === 'claude' ? 'AI' : 'Я'}
           </span>
           <span style={{ display: 'block', fontFamily: FONT.sans, fontSize: 12, color: C.textMuted, marginTop: 1 }}>
-            {selectedPersona ? 'Выполнит от своего лица' : assignee === 'claude' ? 'Выполнит Claude' : 'Задача на вас'}
+            {selectedPersona ? 'Выполнит от своего лица' : assignee === 'claude' ? 'Выполнит AI' : 'Задача на вас'}
           </span>
         </span>
         <ChevronDown size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0, transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
@@ -109,7 +109,7 @@ export function ExecutorPicker({ assignee, personaId, projectId, onChange, disab
             onClick={() => pick({ assignee: 'me', personaId: null })}
           />
           <BasicItem
-            icon={<ClaudeBadge size={28} />} label="Claude"
+            icon={<ClaudeBadge size={28} />} label="AI"
             active={assignee === 'claude' && !personaId}
             onClick={() => pick({ assignee: 'claude', personaId: null })}
           />

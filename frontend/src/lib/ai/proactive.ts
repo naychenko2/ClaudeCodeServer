@@ -106,7 +106,7 @@ async function computeRuleSuggestion(ctx: AiActionCtx): Promise<Suggestion | nul
         return { key: `task-subs:${nav.task}`, actionId: 'task.subtasks', text: 'Разбить задачу на подзадачи?', level: 'medium' };
       const running = !!task.claudeStartedAt && !task.claudeResult;
       if (task.assignee === 'claude' && !running)
-        return { key: `task-exec:${nav.task}`, actionId: 'task.execute', text: 'Поручить эту задачу Claude-исполнителю?', level: 'strong' };
+        return { key: `task-exec:${nav.task}`, actionId: 'task.execute', text: 'Поручить эту задачу AI-исполнителю?', level: 'strong' };
     } catch { /* без подсказки */ }
     return null;
   }

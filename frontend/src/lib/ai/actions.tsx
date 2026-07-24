@@ -175,7 +175,7 @@ export const AI_ACTIONS: AiAction[] = [
     run: () => dispatchAiRun('note.semantic'),
   },
   {
-    id: 'note.ask', title: 'Спросить Claude про заметку', hint: 'открыть чат с текстом заметки',
+    id: 'note.ask', title: 'Спросить AI про заметку', hint: 'открыть чат с текстом заметки',
     section: 'notes', sectionLabel: 'Заметки', icon: IcChat,
     when: c => noteOpen(c), contextual: noteOpen,
     run: () => dispatchAiRun('note.ask'),
@@ -223,7 +223,7 @@ export const AI_ACTIONS: AiAction[] = [
     run: () => dispatchAiRun('task.description'),
   },
   {
-    id: 'task.execute', title: 'Выполнить задачу с Claude', hint: 'запустить Claude-исполнителя',
+    id: 'task.execute', title: 'Выполнить задачу с AI', hint: 'запустить AI-исполнителя',
     section: 'tasks', sectionLabel: 'Задачи', icon: IcPlay,
     when: c => taskOpen(c) && c.online, contextual: taskOpen,
     run: () => dispatchAiRun('task.execute'),
@@ -346,7 +346,7 @@ export const AI_ACTIONS: AiAction[] = [
     run: () => dispatchAiRun('knowledge.describe'),
   },
   {
-    id: 'knowledge.ask', title: 'Спросить Claude по базе', hint: 'ответы с опорой на базу знаний',
+    id: 'knowledge.ask', title: 'Спросить AI по базе', hint: 'ответы с опорой на базу знаний',
     section: 'knowledge', sectionLabel: 'Знания', icon: IcAsk,
     when: c => knowledgeOpen(c) && c.online, contextual: knowledgeOpen,
     run: c => startChatWithPrompt(
@@ -371,7 +371,7 @@ export const AI_ACTIONS: AiAction[] = [
 
   // ===== Проект / файлы =====
   {
-    id: 'file.ask', title: 'Спросить Claude про файл', hint: 'открыть чат с содержимым файла',
+    id: 'file.ask', title: 'Спросить AI про файл', hint: 'открыть чат с содержимым файла',
     section: 'project', sectionLabel: 'Проект', icon: IcChat,
     when: c => fileOpen(c) && c.online, contextual: fileOpen,
     run: () => dispatchAiRun('file.ask'),
@@ -486,10 +486,10 @@ export const AI_ACTIONS: AiAction[] = [
 
 // Сбор дневного брифа (утренний бриф / план дня в календаре) — общая логика
 function runBriefing(): void {
-  showToast('Собираю бриф', 'Claude готовит план дня…', 'claude');
+  showToast('Собираю бриф', 'AI готовит план дня…', 'claude');
   api.briefing.today(localDate())
     .then(n => openNoteById(n.id))
-    .catch(() => showToast('Не удалось собрать бриф', 'ИИ недоступен (claude не залогинен на сервере)', 'info'));
+    .catch(() => showToast('Не удалось собрать бриф', 'ИИ недоступен (AI не залогинен на сервере)', 'info'));
 }
 
 // Локальная дата YYYY-MM-DD (для брифа)

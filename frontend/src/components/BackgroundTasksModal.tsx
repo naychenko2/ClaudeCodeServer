@@ -31,9 +31,9 @@ const groupHeaderStyle: React.CSSProperties = {
 type PresetKey = 'recommended' | 'balanced' | 'free' | 'local';
 const PRESETS: { key: PresetKey; icon: typeof Sparkles; title: string; desc: string }[] = [
   { key: 'recommended', icon: Sparkles, title: 'Рекомендованное',
-    desc: 'Лучшее качество: локаль и Claude под сложность задачи (могут быть платные)' },
+    desc: 'Лучшее качество: локаль и AI под сложность задачи (могут быть платные)' },
   { key: 'balanced', icon: Scale, title: 'Сбалансированный',
-    desc: 'По сложности: простое — на локальной модели, среднее — бесплатные облачные, тяжёлое — Claude' },
+    desc: 'По сложности: простое — на локальной модели, среднее — бесплатные облачные, тяжёлое — AI' },
   { key: 'free', icon: Gift, title: 'Только бесплатные',
     desc: 'Бесплатные облачные модели OpenRouter — без затрат' },
   { key: 'local', icon: Cpu, title: 'Локальные',
@@ -43,7 +43,7 @@ const PRESETS: { key: PresetKey; icon: typeof Sparkles; title: string; desc: str
 // Настройка исполнителя каждого фонового ИИ-действия (теги, заголовки, сводки, память и т.д.):
 // локальная модель (Ollama), бесплатная модель OpenRouter (прямой вызов или через провайдера),
 // конкретная модель любого провайдера или Claude. Дальше действие идёт по цепочке
-// «выбранное → локаль → claude». Настройка серверная и общая для всех — только админ.
+// «выбранное → локаль → AI». Настройка серверная и общая для всех — только админ.
 export function BackgroundTasksModal({ onClose }: Props) {
   const [info, setInfo] = useState<OllamaUsageInfo | undefined>(undefined);
   const [busy, setBusy] = useState<string | null>(null);
@@ -167,7 +167,7 @@ export function BackgroundTasksModal({ onClose }: Props) {
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, margin: '14px 2px 2px' }}>
             <Zap size={12} strokeWidth={ICON_STROKE} style={{ color: C.accent, flexShrink: 0 }} />
             <span style={{ fontSize: 11, color: C.textMuted, lineHeight: 1.4 }}>
-              — задаче нужна сильная модель, локальная не подойдёт: для неё подбирается Claude или облачная.
+              — задаче нужна сильная модель, локальная не подойдёт: для неё подбирается AI или облачная.
             </span>
           </div>
 
@@ -241,7 +241,7 @@ function QuickOptionCard({ title, subtitle, active, onClick }: {
 function routeLabel(route: string | null | undefined, ollamaModel?: string): string {
   const r = route ?? 'claude';
   if (r === 'local') return `Локальная${ollamaModel ? ` · ${ollamaModel}` : ''}`;
-  if (r === 'claude') return 'Claude';
+  if (r === 'claude') return 'AI';
   return modelLabel(r);
 }
 
@@ -325,7 +325,7 @@ function ActionRow({ action: a, first, busy, ollamaModel, models, onPick, onRese
           <span
             style={{ display: 'inline-flex', flexShrink: 0 }}
             title={localOnStrong
-              ? 'Нужна сильная модель — локальная будет пропущена, пойдёт Claude'
+              ? 'Нужна сильная модель — локальная будет пропущена, пойдёт AI'
               : 'Нужна сильная модель — локальная не подойдёт'}
           >
             <Zap size={ICON_SIZE.xs} strokeWidth={ICON_STROKE}
@@ -351,7 +351,7 @@ function ActionRow({ action: a, first, busy, ollamaModel, models, onPick, onRese
           type="button"
           onClick={() => setOpen(o => !o)}
           disabled={busy}
-          title="С чего начинать действие; дальше — локальная модель, затем Claude"
+          title="С чего начинать действие; дальше — локальная модель, затем AI"
           style={{
             display: 'flex', alignItems: 'center', gap: 6, maxWidth: 230,
             fontFamily: FONT.sans, fontSize: FS.xs,
@@ -389,7 +389,7 @@ function ActionRow({ action: a, first, busy, ollamaModel, models, onPick, onRese
               onClick={() => pick('local')}
             />
             <QuickOptionCard
-              title="Claude"
+              title="AI"
               subtitle="модель по умолчанию"
               active={route === 'claude'}
               onClick={() => pick('claude')}

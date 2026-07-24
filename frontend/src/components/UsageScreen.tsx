@@ -427,7 +427,7 @@ export function UsageScreen({ onClose }: { onClose: () => void }) {
     if (!s || s.inRotation === undefined) return undefined;
     return { inRotation: s.inRotation, utilization: s.utilization, threshold: usage?.rotationThreshold, exhausted: s.exhausted };
   };
-  const tabs = ([['claude', usage?.subscriptions?.['claude']?.name ?? 'Claude']] as [string, string][])
+  const tabs = ([['claude', usage?.subscriptions?.['claude']?.name ?? 'AI']] as [string, string][])
     .concat(subKeys.filter(k => k !== 'claude').map(k => [k, usage!.subscriptions![k].name ?? k] as [string, string]))
     .concat(providerKeys.map(k => [k, providerLabel(k)] as [string, string]))
     .concat([['fal', 'fal.ai']])

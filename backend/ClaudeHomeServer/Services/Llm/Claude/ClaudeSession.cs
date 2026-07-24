@@ -386,6 +386,13 @@ public class ClaudeSession : ILlmSessionAdapter
                 // запускает нового исполнителя — обрыв рекурсивного размножения (Info.TaskId →
                 // TaskItem.DelegationDepth, см. Session.TaskDelegationDepth).
                 var tasksExecute = ResolveTasksExecuteEnabled(_currentTurnAgentDepth, Info.TaskDelegationDepth, _currentTurnSuppressTasksExecute) ? "1" : "0";
+                // Кросс-проектные ProjectTasks-привязки текущей персоны: доступ к задачам
+                // ДРУГИХ проектов владельца (extraProjectIdsCsv), подмножество только для
+                // чтения — extraReadOnlyCsv (create/update/delete там запрещены)
+                var extraProjectIdsCsv = _tasksMcp.ExtraProjectIds is { Count: > 0 } extraIds
+                    ? string.Join(",", extraIds) : "";
+                var extraReadOnlyCsv = _tasksMcp.ExtraProjectIdsReadOnly is { Count: > 0 } extraRo
+                    ? string.Join(",", extraRo) : "";
                 servers["tasks"] = new System.Text.Json.Nodes.JsonObject
                 {
                     ["command"] = "node",
@@ -401,9 +408,13 @@ public class ClaudeSession : ILlmSessionAdapter
                         ["TASKS_SESSION_ID"] = Info.Id,
                         ["TASKS_SELF_PERSONA_ID"] = Info.PersonaId ?? "",
                         ["TASKS_EXECUTE"] = tasksExecute,
+                        ["TASKS_EXTRA_PROJECT_IDS"] = extraProjectIdsCsv,
+                        ["TASKS_EXTRA_PROJECT_IDS_READONLY"] = extraReadOnlyCsv,
                     },
                 };
-                shapes["tasks"] = $"e{tasksExecute}";
+                // Кросс-проектные скоупы влияют на видимость/доступность задач других проектов —
+                // смена привязок должна пробить доживание живого процесса (как e{tasksExecute})
+                shapes["tasks"] = $"e{tasksExecute}:{extraProjectIdsCsv}:{extraReadOnlyCsv}";
             }
 
             if (hasNotes)
@@ -474,6 +485,12 @@ public class ClaudeSession : ILlmSessionAdapter
                 // (agentDepth >= 1) управление персонами не нужно — та же анти-рекурсия, что у
                 // mentions. Read/ask-инструменты остаются всегда (надёжные @упоминания без «No such tool»).
                 var personaWrite = _currentTurnAgentDepth < 1 && Prompts.WriteIntentGate.PersonaManagement(turnText) ? "1" : "0";
+                // Кросс-проектные ProjectPersonas-привязки: доступ к команде/точечным персонам
+                // ДРУГОГО проекта — расширяют personas_list(scope=context) и резолв handle в persona_ask
+                var extraProjectIdsCsv = _personasMcp.ExtraProjectIds is { Count: > 0 } extraProjects
+                    ? string.Join(",", extraProjects) : "";
+                var extraPersonaIdsCsv = _personasMcp.ExtraPersonaIds is { Count: > 0 } extraPersonas
+                    ? string.Join(",", extraPersonas) : "";
                 servers["personas"] = new System.Text.Json.Nodes.JsonObject
                 {
                     ["command"] = "node",
@@ -488,11 +505,13 @@ public class ClaudeSession : ILlmSessionAdapter
                         ["PERSONAS_MENTIONS"] = personaMentions,
                         ["PERSONAS_BINDINGS"] = _personasMcp.BindingsEnabled ? "1" : "0",
                         ["PERSONAS_WRITE"] = personaWrite,
+                        ["PERSONAS_EXTRA_PROJECT_IDS"] = extraProjectIdsCsv,
+                        ["PERSONAS_EXTRA_PERSONA_IDS"] = extraPersonaIdsCsv,
                     },
                 };
-                // Состав инструментов персон зависит от write/mentions/bindings — в сигнатуру,
+                // Состав/область персон зависит от write/mentions/bindings/extra-скоупов — в сигнатуру,
                 // иначе поднятие write-канала (personas_create/…) не пробьёт доживание процесса
-                shapes["personas"] = $"w{personaWrite}m{personaMentions}b{(_personasMcp.BindingsEnabled ? "1" : "0")}";
+                shapes["personas"] = $"w{personaWrite}m{personaMentions}b{(_personasMcp.BindingsEnabled ? "1" : "0")}:{extraProjectIdsCsv}:{extraPersonaIdsCsv}";
             }
 
             if (hasWorkspace)
@@ -1263,12 +1282,18 @@ public class ClaudeSession : ILlmSessionAdapter
                 var resultHint = _tasksMcp.ProjectId is not null
                     ? " Завершая задачу через tasks_complete, прикрепляй итог: resultMarkdown — короткое описание сделанного, linkedFiles — пути затронутых файлов проекта (от корня, через /)."
                     : " Завершая задачу через tasks_complete, прикрепляй итог: resultMarkdown — короткое описание сделанного.";
+                // Кросс-проектные ProjectTasks-привязки: тебе доступны задачи ещё каких-то проектов
+                var crossProjectHint = _tasksMcp.ExtraProjectIds is { Count: > 0 }
+                    ? " Тебе также доступны задачи ДРУГИХ проектов владельца (кросс-проектная привязка) — " +
+                      "список и доступность (полный/только чтение) — tasks_list_projects; в tasks_create/tasks_list " +
+                      "передай их projectId явно, чтобы адресовать задачу туда."
+                    : "";
                 var tasksHint =
                     "У пользователя есть встроенная система задач (вкладка «Задачи» в проекте и раздел «Календарь»). " +
                     "Управляй ею через MCP-инструменты mcp__tasks__* (tasks_list, tasks_search, tasks_get, tasks_create, " +
                     "tasks_update, tasks_complete, tasks_delete, tasks_add_subtask, tasks_toggle_subtask, tasks_board_columns). " + scope + " " +
                     "Когда пользователь просит создать/найти/изменить задачу, напоминание или список дел — используй эти инструменты, " +
-                    "а не файлы или собственный список. Даты — в формате YYYY-MM-DD, время HH:MM." + columnsHint + executeHint + personaExecHint + resultHint;
+                    "а не файлы или собственный список. Даты — в формате YYYY-MM-DD, время HH:MM." + columnsHint + executeHint + personaExecHint + resultHint + crossProjectHint;
                 basePrompt = string.IsNullOrWhiteSpace(basePrompt)
                     ? tasksHint
                     : basePrompt + "\n\n" + tasksHint;

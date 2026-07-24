@@ -5,8 +5,12 @@ namespace ClaudeHomeServer.Services.Llm;
 
 // Контекст MCP-сервера задач для сессии: адрес API, сервисный токен владельца
 // и проект (null — чат вне проекта, контекст личных задач).
+// ExtraProjectIds/ExtraProjectIdsReadOnly — кросс-проектные ProjectTasks-привязки текущей
+// персоны (§ Кросс-проектные привязки): доступ к задачам ДРУГИХ проектов владельца поверх
+// ProjectId; ReadOnly — подмножество только для чтения (create/update/delete запрещены).
 // Не Claude-специфичен: DeepSeek-адаптер может реализовать те же tasks_* инструменты нативно.
-public record TasksMcpContext(string ApiUrl, string Token, string? ProjectId);
+public record TasksMcpContext(string ApiUrl, string Token, string? ProjectId,
+    IReadOnlyList<string>? ExtraProjectIds = null, IReadOnlyList<string>? ExtraProjectIdsReadOnly = null);
 
 // Контекст MCP-сервера заметок: адрес API, сервисный токен владельца и проект
 // (задаёт источник по умолчанию для создания заметок; null — личный vault).
@@ -35,9 +39,13 @@ public record WorkspaceMcpContext(string ApiUrl, string Token, string? ProjectId
 // собеседников), а MentionsHint — готовый блок-подсказка для системного промпта.
 // BindingsEnabled — у владельца включён флаг persona-bindings: сервер персон получает
 // инструменты привязок (personas_bindings_*), а подсказка в промпте упоминает их.
+// ExtraProjectIds/ExtraPersonaIds — кросс-проектные ProjectPersonas-привязки текущей персоны:
+// расширяют personas_list(scope=context) и резолв handle в persona_ask за пределы ProjectId —
+// ExtraProjectIds даёт всю команду проекта, ExtraPersonaIds — точечных персон.
 // Не Claude-специфичен, как и остальные контексты.
 public record PersonasMcpContext(string ApiUrl, string Token, string? ProjectId,
-    string? SelfPersonaId = null, string? MentionsHint = null, bool BindingsEnabled = false);
+    string? SelfPersonaId = null, string? MentionsHint = null, bool BindingsEnabled = false,
+    IReadOnlyList<string>? ExtraProjectIds = null, IReadOnlyList<string>? ExtraPersonaIds = null);
 
 // Элемент манифеста recall — что персона подтянула в ход (память/заметка/база/команда) для
 // атрибуции «опирается на…» / «использовано сейчас» (F3). Kind ∈ memory|note|knowledge|team

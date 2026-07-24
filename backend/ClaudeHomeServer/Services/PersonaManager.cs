@@ -104,6 +104,32 @@ public class PersonaManager
             .OrderByDescending(p => p.Scope == PersonaScope.Project)
             .FirstOrDefault();
 
+    // Кандидаты по handle в контексте персоны-вызывающего + внешних кросс-проектных scope-ов
+    // (ProjectPersonas-привязки: extraProjectIds — вся команда проекта, extraPersonaIds —
+    // точечные персоны). Используется persona_ask при возможной коллизии handle между
+    // проектами — 0 совпадений, 1 (однозначно) или >1 (клиент должен уточнить personaId).
+    public IReadOnlyList<Persona> ResolveHandleCandidates(string userId, string handle, string? projectId,
+        IReadOnlyList<string>? extraProjectIds, IReadOnlyList<string>? extraPersonaIds)
+    {
+        var pool = GetForContext(userId, projectId).ToList();
+        if (extraProjectIds is { Count: > 0 } || extraPersonaIds is { Count: > 0 })
+        {
+            var seen = pool.Select(p => p.Id).ToHashSet(StringComparer.Ordinal);
+            var extraPersonaSet = (extraPersonaIds ?? []).ToHashSet(StringComparer.Ordinal);
+            foreach (var p in GetByOwner(userId))
+            {
+                if (seen.Contains(p.Id)) continue;
+                var included = extraPersonaSet.Contains(p.Id)
+                    || (p.Scope == PersonaScope.Project && p.ProjectId is not null
+                        && extraProjectIds is not null && extraProjectIds.Contains(p.ProjectId));
+                if (!included) continue;
+                pool.Add(p);
+                seen.Add(p.Id);
+            }
+        }
+        return pool.Where(p => string.Equals(p.Handle, handle, StringComparison.OrdinalIgnoreCase)).ToList();
+    }
+
     // Известные ключи возможностей персоны. Полный набор эквивалентен «без ограничений»
     // и нормализуется в null (поведение как раньше, по фич-флагам владельца).
     private static readonly string[] AllTools = ["tasks", "notes", "web"];

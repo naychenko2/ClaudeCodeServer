@@ -101,6 +101,39 @@ public class PersonaBindingsService
         return ids.Count == 0 ? null : ids;
     }
 
+    // Кросс-проектные привязки ProjectPersonas (Mode != Off) — (ProjectId, PersonaId?):
+    // PersonaId == null → вся команда проекта (текущие + будущие Project-персоны), иначе —
+    // сужение до одной персоны. Используется для примешивания персон другого проекта в
+    // @упоминания/persona_ask (SessionManager.ResolveOtherPersonas) — не сужает файлы/задачи.
+    public IReadOnlyList<(string ProjectId, string? PersonaId)> BuildExternalPersonaScopes(
+        string ownerId, Persona? persona)
+    {
+        if (persona?.Bindings is null) return [];
+        return persona.Bindings
+            .Where(b => b.Mode != PersonaBindingMode.Off && b.Type == PersonaBindingType.ProjectPersonas
+                && !string.IsNullOrWhiteSpace(b.Target))
+            .Select(b => (b.Target, string.IsNullOrWhiteSpace(b.Path) ? null : b.Path))
+            .Distinct()
+            .ToList();
+    }
+
+    // Кросс-проектные привязки ProjectTasks (Mode != Off) — (ProjectId, ReadOnly), по проекту
+    // сгруппированные (несколько привязок на один проект — конфликт полного/readonly решается
+    // консервативно: любая readonly-привязка делает доступ к проекту readonly). Используется
+    // MCP tasks-server (env TASKS_EXTRA_PROJECT_IDS[_READONLY]) — доступ к задачам ЧУЖОГО проекта.
+    public IReadOnlyList<(string ProjectId, bool ReadOnly)> BuildExternalTaskScopes(
+        string ownerId, Persona? persona)
+    {
+        if (persona?.Bindings is null) return [];
+        return persona.Bindings
+            .Where(b => b.Mode != PersonaBindingMode.Off && b.Type == PersonaBindingType.ProjectTasks
+                && !string.IsNullOrWhiteSpace(b.Target))
+            .GroupBy(b => b.Target)
+            .Select(g => (ProjectId: g.Key,
+                ReadOnly: g.Any(b => string.Equals(b.Path, "readonly", StringComparison.OrdinalIgnoreCase))))
+            .ToList();
+    }
+
     // Датасеты из Knowledge-привязок (Mode != Off) — симметричный хелпер для сужения знаний
     public IReadOnlyList<string>? BuildKnowledgeDatasetIds(string ownerId, Persona? persona)
     {
@@ -335,6 +368,8 @@ public class PersonaBindingsService
         PersonaBindingType.Notes => "заметки",
         PersonaBindingType.Tool => "инструмент",
         PersonaBindingType.Skill => "навык",
+        PersonaBindingType.ProjectPersonas => "команда проекта",
+        PersonaBindingType.ProjectTasks => "задачи проекта",
         _ => "источник",
     };
 
@@ -389,6 +424,27 @@ public class PersonaBindingsService
             {
                 var label = ToolCatalog.TryGetValue(binding.Target, out var t) ? t.Label : binding.Target;
                 return $"применяй инструменты «{label}» ({binding.Target})";
+            }
+            case PersonaBindingType.ProjectPersonas:
+            {
+                var project = _projects.GetById(binding.Target);
+                if (project is null || project.OwnerId != ownerId) return null;
+                if (!string.IsNullOrWhiteSpace(binding.Path))
+                {
+                    var target = _personas.Get(binding.Path, ownerId);
+                    var who = target is null ? binding.Path : PersonaManager.PersonaLabel(target);
+                    return $"@{(target?.Handle ?? binding.Path)} — {who} из проекта «{project.Name}», доступна через persona_ask/@упоминание";
+                }
+                return $"вся команда проекта «{project.Name}» — доступна через persona_ask/@упоминание";
+            }
+            case PersonaBindingType.ProjectTasks:
+            {
+                var project = _projects.GetById(binding.Target);
+                if (project is null || project.OwnerId != ownerId) return null;
+                var readOnly = string.Equals(binding.Path, "readonly", StringComparison.OrdinalIgnoreCase);
+                return readOnly
+                    ? $"tasks_list/tasks_get с projectId \"{project.Id}\" (проект «{project.Name}», только просмотр)"
+                    : $"tasks_create/tasks_update/tasks_list с projectId \"{project.Id}\" (проект «{project.Name}»)";
             }
             default:
                 return null;
@@ -535,6 +591,19 @@ public class PersonaBindingsService
             }
             case PersonaBindingType.Tool:
                 return ToolCatalog.TryGetValue(binding.Target, out var t) ? t.Label : binding.Target;
+            case PersonaBindingType.ProjectPersonas:
+            {
+                var name = _projects.GetById(binding.Target)?.Name ?? binding.Target;
+                if (string.IsNullOrWhiteSpace(binding.Path)) return name;
+                var target = _personas.Get(binding.Path, ownerId);
+                return target is null ? $"{name}/{binding.Path}" : $"{name}/{PersonaManager.PersonaLabel(target)}";
+            }
+            case PersonaBindingType.ProjectTasks:
+            {
+                var name = _projects.GetById(binding.Target)?.Name ?? binding.Target;
+                return string.Equals(binding.Path, "readonly", StringComparison.OrdinalIgnoreCase)
+                    ? $"{name} (только чтение)" : name;
+            }
             default:
                 return binding.Target;
         }
@@ -553,9 +622,12 @@ public class PersonaBindingsService
     // Проверка привязки перед сохранением: цель существует и принадлежит владельцу,
     // Path безопасен, дубликат Type+Target+Path запрещён. existing — текущие привязки
     // персоны (привязка с тем же Id при апдейте не считается дубликатом самой себя).
+    // owningPersona — Scope/ProjectId персоны, которой добавляется привязка (нужен только для
+    // отклонения ProjectPersonas/ProjectTasks к СВОЕМУ ЖЕ проекту — no-op, персона и так видит
+    // свою команду/задачи); null — проверка пропускается (напр. персона ещё не создана).
     // Возвращает текст ошибки или null (ок).
     public async Task<string?> ValidateAsync(string ownerId, PersonaBinding binding,
-        IReadOnlyList<PersonaBinding>? existing)
+        IReadOnlyList<PersonaBinding>? existing, Persona? owningPersona = null)
     {
         if (string.IsNullOrWhiteSpace(binding.Target))
             return "Не указана цель привязки (target)";
@@ -600,6 +672,33 @@ public class PersonaBindingsService
                     return $"Неизвестный ключ инструмента: {binding.Target} " +
                            $"(допустимы: {string.Join(", ", ToolCatalog.Keys)})";
                 break;
+            case PersonaBindingType.ProjectPersonas:
+            {
+                var project = _projects.GetById(binding.Target);
+                if (project is null || project.OwnerId != ownerId)
+                    return "Проект не найден или недоступен";
+                if (owningPersona is { Scope: PersonaScope.Project } && owningPersona.ProjectId == binding.Target)
+                    return "Персона уже в команде этого проекта — привязка к своему же проекту не нужна";
+                if (!string.IsNullOrEmpty(binding.Path))
+                {
+                    var target = _personas.Get(binding.Path, ownerId);
+                    if (target is null || target.Scope != PersonaScope.Project || target.ProjectId != binding.Target)
+                        return "Персона не найдена в этом проекте";
+                }
+                break;
+            }
+            case PersonaBindingType.ProjectTasks:
+            {
+                var project = _projects.GetById(binding.Target);
+                if (project is null || project.OwnerId != ownerId)
+                    return "Проект не найден или недоступен";
+                if (owningPersona is { Scope: PersonaScope.Project } && owningPersona.ProjectId == binding.Target)
+                    return "Персона уже в этом проекте — привязка к своему же проекту не нужна";
+                if (!string.IsNullOrEmpty(binding.Path)
+                    && !string.Equals(binding.Path, "readonly", StringComparison.OrdinalIgnoreCase))
+                    return "Путь привязки ProjectTasks может быть только \"readonly\" или пустым";
+                break;
+            }
             default:
                 return "Неизвестный тип привязки";
         }

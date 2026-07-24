@@ -261,13 +261,18 @@ public class SessionManager
                 ? (_jwt.IssueServiceToken(id), DateTime.UtcNow)
                 : old).Token;
 
-    // Контекст MCP-сервера задач для сессии; null — только для чата без владельца
-    private TasksMcpContext? BuildTasksContext(string? ownerId, string? projectId)
+    // Контекст MCP-сервера задач для сессии; null — только для чата без владельца.
+    // persona — для кросс-проектных ProjectTasks-привязок (доступ к задачам ДРУГИХ проектов).
+    private TasksMcpContext? BuildTasksContext(string? ownerId, string? projectId, Persona? persona = null)
     {
         if (ownerId is null) return null;
         // Перевыпуск за сутки до истечения — сервер может жить дольше срока токена
         var token = GetServiceToken(ownerId);
-        return new TasksMcpContext(ResolveTasksApiUrl(ownerId), token, projectId);
+        var extraScopes = _bindings.BuildExternalTaskScopes(ownerId, persona);
+        var extraIds = extraScopes.Select(s => s.ProjectId).Distinct().ToList();
+        var extraReadOnly = extraScopes.Where(s => s.ReadOnly).Select(s => s.ProjectId).Distinct().ToList();
+        return new TasksMcpContext(ResolveTasksApiUrl(ownerId), token, projectId,
+            extraIds.Count > 0 ? extraIds : null, extraReadOnly.Count > 0 ? extraReadOnly : null);
     }
 
     // Контекст MCP-сервера заметок; null — только для чата без владельца
@@ -973,15 +978,39 @@ public class SessionManager
     }
 
     // Кандидаты на консультацию: участники группового чата либо доступные в контексте
-    // персоны (глобальные + текущего проекта), без персоны самого чата
-    private List<Persona> ResolveOtherPersonas(string ownerId, string? projectId, Session session)
+    // персоны (глобальные + текущего проекта) + кросс-проектные ProjectPersonas-привязки
+    // персоны САМОГО ЧАТА (persona) — команда/точечные персоны другого проекта; без персоны
+    // самого чата. Внешние персоны НЕ примешиваются в групповом чате — там роутинг строго
+    // по составу участников (GroupChatRouter).
+    private List<Persona> ResolveOtherPersonas(string ownerId, string? projectId, Session session, Persona? persona = null)
     {
         var isGroup = session.Participants is { Count: > 1 };
-        return (isGroup
+        var result = (isGroup
                 ? session.Participants!.Select(id => _personas.Get(id, ownerId)).OfType<Persona>()
                 : _personas.GetForContext(ownerId, projectId))
             .Where(p => p.Id != session.PersonaId)
             .ToList();
+
+        if (!isGroup && persona is not null)
+        {
+            var seen = result.Select(p => p.Id).ToHashSet(StringComparer.Ordinal);
+            foreach (var (extProjectId, extPersonaId) in _bindings.BuildExternalPersonaScopes(ownerId, persona))
+            {
+                IEnumerable<Persona> toAdd;
+                if (extPersonaId is not null)
+                    toAdd = _personas.Get(extPersonaId, ownerId) is { } single
+                        ? new[] { single } : Array.Empty<Persona>();
+                else
+                    toAdd = _personas.GetByOwner(ownerId).Where(p =>
+                        p.Scope == PersonaScope.Project && p.ProjectId == extProjectId);
+                foreach (var p in toAdd)
+                {
+                    if (p.Id == session.PersonaId || !seen.Add(p.Id)) continue;
+                    result.Add(p);
+                }
+            }
+        }
+        return result;
     }
 
     // Разделение персон по способу консультации: с файлом сабагента — через встроенный
@@ -1000,7 +1029,12 @@ public class SessionManager
         var viaAsk = new List<Persona>();
         foreach (var p in personas)
         {
-            if (eligible.Contains(p.Id) && !PersonaAgentFileSync.IsReserved(p.Handle))
+            // Файл сабагента персоны физически лежит в ЭТОМ проекте (Project-персона своего
+            // проекта) либо во всех проектах (Global) — см. PersonaAgentFileSync. Персона
+            // чужого проекта (видна здесь только через ProjectPersonas-привязку) файла тут не
+            // имеет — Task(agentType=handle) её не найдёт, консультация только через persona_ask.
+            var reachable = p.Scope == PersonaScope.Global || p.ProjectId == session.ProjectId;
+            if (reachable && eligible.Contains(p.Id) && !PersonaAgentFileSync.IsReserved(p.Handle))
                 subagents.Add(p);
             else
                 viaAsk.Add(p);
@@ -1063,7 +1097,7 @@ public class SessionManager
                 "распределяй роли панели между этими персонами: передавай их handle в args.participants " +
                 "(роли по порядку: Генератор, Критик, Адвокат, Модератор), подбирая персону под роль " +
                 "по её характеру. Доступные консультанты:");
-            AppendPersonaLines(sb, subagents);
+            AppendPersonaLines(sb, subagents, session.ProjectId);
         }
         if (viaAsk.Count > 0)
         {
@@ -1077,17 +1111,23 @@ public class SessionManager
                     "через persona_ask и учти её ответ. Вопрос формулируй самодостаточно: персона не " +
                     "видит этот разговор. Если вызов вернул «No such tool available» — сервер персон ещё " +
                     "подключается: подожди мгновение и повтори тот же вызов. Доступные собеседники:");
-            AppendPersonaLines(sb, viaAsk);
+            AppendPersonaLines(sb, viaAsk, session.ProjectId);
         }
         return sb.ToString().TrimEnd();
     }
 
-    private static void AppendPersonaLines(System.Text.StringBuilder sb, List<Persona> personas)
+    // currentProjectId — ProjectId сессии: персона Project-скоупа ДРУГОГО проекта (видна здесь
+    // только через кросс-проектную ProjectPersonas-привязку) помечается «[проект «Имя»]», чтобы
+    // не путать тёзок из разных команд.
+    private void AppendPersonaLines(System.Text.StringBuilder sb, List<Persona> personas, string? currentProjectId)
     {
         foreach (var p in personas)
         {
             var title = string.IsNullOrWhiteSpace(p.Role) ? p.Name : $"{p.Role} ({p.Name})";
             sb.Append($"- @{p.Handle} — {title}");
+            if (p.Scope == PersonaScope.Project && p.ProjectId != currentProjectId
+                && _projects.GetById(p.ProjectId!) is { } foreignProject)
+                sb.Append($" [проект «{foreignProject.Name}»]");
             if (!string.IsNullOrWhiteSpace(p.Description)) sb.Append($": {p.Description.Trim()}");
             sb.AppendLine();
         }
@@ -1098,18 +1138,27 @@ public class SessionManager
     // @упоминания: MentionsHint (блок «@handle — Роль (Имя)» для промпта) и persona_ask.
     // В групповом чате mentions-режим (persona_ask + подсказка по УЧАСТНИКАМ) включён
     // всегда, независимо от флага persona-mentions — иначе спикер не сможет спросить коллег.
-    private PersonasMcpContext? BuildPersonasContext(string? ownerId, string? projectId, Session session)
+    // persona — для кросс-проектных ProjectPersonas-привязок (доступ к команде ДРУГОГО проекта).
+    private PersonasMcpContext? BuildPersonasContext(string? ownerId, string? projectId, Session session, Persona? persona = null)
     {
         if (ownerId is null) return null;
 
         var selfPersonaId = session.PersonaId;
         // @упоминания (persona_ask + подсказка) теперь всегда включены
         var mentionsHint = BuildMentionsHint(ownerId, session,
-            ResolveOtherPersonas(ownerId, projectId, session));
+            ResolveOtherPersonas(ownerId, projectId, session, persona));
+
+        var externalPersonaScopes = _bindings.BuildExternalPersonaScopes(ownerId, persona);
+        var extraProjectIds = externalPersonaScopes.Where(s => s.PersonaId is null)
+            .Select(s => s.ProjectId).Distinct().ToList();
+        var extraPersonaIds = externalPersonaScopes.Where(s => s.PersonaId is not null)
+            .Select(s => s.PersonaId!).Distinct().ToList();
 
         var token = GetServiceToken(ownerId);
         return new PersonasMcpContext(ResolveTasksApiUrl(ownerId), token, projectId, selfPersonaId,
-            mentionsHint, BindingsEnabled: true);
+            mentionsHint, BindingsEnabled: true,
+            extraProjectIds.Count > 0 ? extraProjectIds : null,
+            extraPersonaIds.Count > 0 ? extraPersonaIds : null);
     }
 
     // Контекст MCP-сервера рабочего пространства: доступ ко всем проектам владельца
@@ -1334,14 +1383,14 @@ public class SessionManager
         var adapter = _adapters.Create(session, new LlmSessionContext(rootPath,
             msg => OnMessageAsync(session.Id, accumulator, msg),
             rawSystemPrompt, permissionRules,
-            TasksMcp: TasksMcpEnabled(ownerId, session, persona.Persona) ? BuildTasksContext(ownerId, session.ProjectId) : null,
+            TasksMcp: TasksMcpEnabled(ownerId, session, persona.Persona) ? BuildTasksContext(ownerId, session.ProjectId, persona.Persona) : null,
             NotesMcp: _bindings.EffectiveToolEnabled(ownerId, persona.Persona, "notes") ? BuildNotesContext(ownerId, session.ProjectId) : null,
             RecallProvider: BuildRecallProvider(ownerId),
             PersonaPromptProvider: persona.Prompt,
             MemoryMcp: persona.Memory ?? BuildTeamMemoryContext(ownerId, session.ProjectId),
             PersonaRecallProvider: persona.Recall,
             ExtraDisallowedTools: BuildExtraDisallowed(ownerId, persona.Persona),
-            PersonasMcp: BuildPersonasContext(ownerId, session.ProjectId, session),
+            PersonasMcp: BuildPersonasContext(ownerId, session.ProjectId, session, persona.Persona),
             NotificationsMcp: BuildNotificationsContext(ownerId, session.PersonaId),
             WorkspaceMcp: workspace,
             BindingsProvider: BuildBindingsProvider(ownerId, session.PersonaId, workspace?.Sections),
@@ -1620,14 +1669,14 @@ public class SessionManager
             context = new LlmSessionContext(rootPath,
                 msg => OnMessageAsync(sessionId, accumulator, msg),
                 RawSystemPrompt: null, PermissionRules: null,
-                TasksMcp: TasksMcpEnabled(entry.Info.OwnerId, entry.Info, persona.Persona) ? BuildTasksContext(entry.Info.OwnerId, null) : null,
+                TasksMcp: TasksMcpEnabled(entry.Info.OwnerId, entry.Info, persona.Persona) ? BuildTasksContext(entry.Info.OwnerId, null, persona.Persona) : null,
                 NotesMcp: _bindings.EffectiveToolEnabled(entry.Info.OwnerId, persona.Persona, "notes") ? BuildNotesContext(entry.Info.OwnerId, null) : null,
                 RecallProvider: BuildRecallProvider(entry.Info.OwnerId),
                 PersonaPromptProvider: persona.Prompt,
                 MemoryMcp: persona.Memory,
                 PersonaRecallProvider: persona.Recall,
                 ExtraDisallowedTools: BuildExtraDisallowed(entry.Info.OwnerId, persona.Persona),
-                PersonasMcp: BuildPersonasContext(entry.Info.OwnerId, null, entry.Info),
+                PersonasMcp: BuildPersonasContext(entry.Info.OwnerId, null, entry.Info, persona.Persona),
                 NotificationsMcp: BuildNotificationsContext(entry.Info.OwnerId, entry.Info.PersonaId),
                 WorkspaceMcp: workspace,
                 BindingsProvider: BuildBindingsProvider(entry.Info.OwnerId, entry.Info.PersonaId, workspace?.Sections),
@@ -1646,14 +1695,14 @@ public class SessionManager
                 msg => OnMessageAsync(sessionId, accumulator, msg),
                 project.SystemPrompt,
                 () => _projects.GetById(entry.Info.ProjectId!)?.PermissionRules ?? (IReadOnlyList<PermissionRule>)Array.Empty<PermissionRule>(),
-                TasksMcp: TasksMcpEnabled(project.OwnerId, entry.Info, persona.Persona) ? BuildTasksContext(project.OwnerId, project.Id) : null,
+                TasksMcp: TasksMcpEnabled(project.OwnerId, entry.Info, persona.Persona) ? BuildTasksContext(project.OwnerId, project.Id, persona.Persona) : null,
                 NotesMcp: _bindings.EffectiveToolEnabled(project.OwnerId, persona.Persona, "notes") ? BuildNotesContext(project.OwnerId, project.Id) : null,
                 RecallProvider: BuildRecallProvider(project.OwnerId),
                 PersonaPromptProvider: persona.Prompt,
                 MemoryMcp: persona.Memory ?? BuildTeamMemoryContext(project.OwnerId, project.Id),
                 PersonaRecallProvider: persona.Recall,
                 ExtraDisallowedTools: BuildExtraDisallowed(project.OwnerId, persona.Persona),
-                PersonasMcp: BuildPersonasContext(project.OwnerId, project.Id, entry.Info),
+                PersonasMcp: BuildPersonasContext(project.OwnerId, project.Id, entry.Info, persona.Persona),
                 NotificationsMcp: BuildNotificationsContext(project.OwnerId, entry.Info.PersonaId),
                 WorkspaceMcp: workspace,
                 BindingsProvider: BuildBindingsProvider(project.OwnerId, entry.Info.PersonaId, workspace?.Sections),

@@ -69,15 +69,36 @@ public class PersonasController : ControllerBase
         _hub.Clients.Group("user_" + UserId)
             .SendAsync("message", new PersonasChangedMessage(action, personaId));
 
-    // Список персон владельца. scope: "context" — глобальные + этого проекта;
+    // Список персон владельца. scope: "context" — глобальные + этого проекта (+ extraProjectIds/
+    // extraPersonaIds — кросс-проектные привязки ProjectPersonas текущей персоны-вызывающего);
     // "project" — только привязанные к projectId; "global" — только глобальные;
     // иначе — все персоны владельца.
     [HttpGet]
     public ActionResult<IReadOnlyList<Persona>> List(
-        [FromQuery] string? scope, [FromQuery] string? projectId)
+        [FromQuery] string? scope, [FromQuery] string? projectId,
+        [FromQuery] string? extraProjectIds = null, [FromQuery] string? extraPersonaIds = null)
     {
         if (string.Equals(scope, "context", StringComparison.OrdinalIgnoreCase))
-            return Ok(_personas.GetForContext(UserId, projectId));
+        {
+            var result = _personas.GetForContext(UserId, projectId).ToList();
+            var extraProjects = SplitCsv(extraProjectIds);
+            var extraPersonas = SplitCsv(extraPersonaIds).ToHashSet(StringComparer.Ordinal);
+            if (extraProjects.Count > 0 || extraPersonas.Count > 0)
+            {
+                var seen = result.Select(p => p.Id).ToHashSet(StringComparer.Ordinal);
+                foreach (var p in _personas.GetByOwner(UserId))
+                {
+                    if (seen.Contains(p.Id)) continue;
+                    var included = extraPersonas.Contains(p.Id)
+                        || (p.Scope == PersonaScope.Project && p.ProjectId is not null
+                            && extraProjects.Contains(p.ProjectId));
+                    if (!included) continue;
+                    result.Add(p);
+                    seen.Add(p.Id);
+                }
+            }
+            return Ok(result);
+        }
         if (string.Equals(scope, "project", StringComparison.OrdinalIgnoreCase))
             return Ok(_personas.GetByOwner(UserId)
                 .Where(p => p.Scope == PersonaScope.Project && p.ProjectId == projectId).ToList());
@@ -178,7 +199,10 @@ public class PersonasController : ControllerBase
         if (!TryParseAccess(req.Access, out var access))
             return BadRequest("Неверный профиль доступа (ожидается full | readOnly | custom)");
 
-        // Явные привязки валидируем ДО создания персоны — ошибка не оставляет полусозданную
+        // Явные привязки валидируем ДО создания персоны — ошибка не оставляет полусозданную.
+        // Персона ещё не существует — для само-проверки ProjectPersonas/ProjectTasks передаём
+        // лёгкую заглушку с планируемыми Scope/ProjectId (полноценная персона не нужна).
+        var draftOwner = new Persona { Scope = scope, ProjectId = req.ProjectId };
         var bindings = new List<PersonaBinding>();
         if (req.Bindings is { Count: > 0 })
         {
@@ -186,7 +210,7 @@ public class PersonasController : ControllerBase
             {
                 var (binding, parseError) = ParseBinding(b);
                 if (binding is null) return BadRequest(new { error = parseError });
-                var err = await _bindings.ValidateAsync(UserId, binding, bindings);
+                var err = await _bindings.ValidateAsync(UserId, binding, bindings, draftOwner);
                 if (err is not null) return BadRequest(new { error = err });
                 bindings.Add(binding);
             }
@@ -773,7 +797,7 @@ public class PersonasController : ControllerBase
 
         var (binding, parseError) = ParseBinding(req);
         if (binding is null) return BadRequest(new { error = parseError });
-        var err = await _bindings.ValidateAsync(UserId, binding, persona.Bindings);
+        var err = await _bindings.ValidateAsync(UserId, binding, persona.Bindings, persona);
         if (err is not null) return BadRequest(new { error = err });
 
         var list = new List<PersonaBinding>(persona.Bindings ?? []) { binding };
@@ -795,7 +819,7 @@ public class PersonasController : ControllerBase
         {
             var (binding, parseError) = ParseBinding(b);
             if (binding is null) return BadRequest(new { error = parseError });
-            var err = await _bindings.ValidateAsync(UserId, binding, list);
+            var err = await _bindings.ValidateAsync(UserId, binding, list, persona);
             if (err is not null) return BadRequest(new { error = err });
             list.Add(binding);
         }
@@ -828,7 +852,7 @@ public class PersonasController : ControllerBase
             Mode = parsed.Mode,
             CreatedAt = current.CreatedAt,
         };
-        var err = await _bindings.ValidateAsync(UserId, candidate, persona.Bindings);
+        var err = await _bindings.ValidateAsync(UserId, candidate, persona.Bindings, persona);
         if (err is not null) return BadRequest(new { error = err });
 
         current.Type = candidate.Type;
@@ -1229,7 +1253,8 @@ public class PersonasController : ControllerBase
     }
 
     // Каталог возможных целей привязки для пикера фронта: type = project | knowledge |
-    // notes | tool | skill; для notes с ?source= — папки внутри источника.
+    // notes | tool | skill; для notes с ?source= — папки внутри источника; для узкого пикера
+    // ProjectPersonas — personasInProject?source={projectId} (персоны команды проекта).
     [HttpGet("binding-targets")]
     public async Task<ActionResult> BindingTargets([FromQuery] string? type, [FromQuery] string? source)
     {
@@ -1238,6 +1263,13 @@ public class PersonasController : ControllerBase
             case "project":
                 return Ok(_projects.GetByOwner(UserId)
                     .Select(p => new { id = p.Id, label = p.Name, hint = p.RootPath, meta = (string?)null }));
+
+            case "personasinproject" when !string.IsNullOrWhiteSpace(source):
+                // Второй уровень пикера ProjectPersonas: команда конкретного (чужого) проекта —
+                // сужение привязки до одной персоны вместо всей команды.
+                return Ok(_personas.GetByOwner(UserId)
+                    .Where(p => p.Scope == PersonaScope.Project && p.ProjectId == source)
+                    .Select(p => new { id = p.Id, label = PersonaManager.PersonaLabel(p), hint = p.Description, meta = source }));
 
             case "knowledge":
                 // Все базы знаний Dify, доступные пользователю (его проекты/заметки + датасеты
@@ -1485,7 +1517,7 @@ public class PersonasController : ControllerBase
             var (binding, _) = ParseBinding(new PersonaBindingRequest(
                 r.Type ?? "", r.Target ?? "", r.Path, r.Condition, r.Mode ?? "auto"));
             if (binding is null) continue;
-            var err = await _bindings.ValidateAsync(UserId, binding, accepted);
+            var err = await _bindings.ValidateAsync(UserId, binding, accepted, persona);
             if (err is not null) continue;
             accepted.Add(binding);
             result.Add(binding);
@@ -1816,16 +1848,41 @@ public class PersonasController : ControllerBase
     // --- @упоминания: спросить персону (persona_ask из MCP personas-server) ---
 
     // One-shot ответ персоны от своего лица (PersonaAskService): слой персоны + recall
-    // долгой памяти + вопрос; модель — модель персоны. Поведение эндпоинта прежнее.
+    // долгой памяти + вопрос; модель — модель персоны. PersonaId — однозначный путь (обходит
+    // резолв по handle); без него handle резолвится в контексте + кросс-проектных extra-скоупах
+    // (ProjectPersonas) — коллизия (тёзки в разных проектах) → 409 со списком кандидатов.
     [HttpPost("ask")]
     public async Task<ActionResult> Ask([FromBody] PersonaAskRequest req)
     {
-        if (string.IsNullOrWhiteSpace(req.Handle)) return BadRequest(new { error = "Не указан handle персоны" });
         if (string.IsNullOrWhiteSpace(req.Question)) return BadRequest(new { error = "Пустой вопрос" });
 
-        var persona = _personas.GetByHandle(UserId, req.Handle.Trim().TrimStart('@'),
-            string.IsNullOrWhiteSpace(req.ProjectId) ? null : req.ProjectId);
-        if (persona is null) return NotFound(new { error = $"Персона @{req.Handle} не найдена" });
+        Persona? persona;
+        if (!string.IsNullOrWhiteSpace(req.PersonaId))
+        {
+            persona = _personas.Get(req.PersonaId, UserId);
+            if (persona is null) return NotFound(new { error = "Персона не найдена" });
+        }
+        else
+        {
+            if (string.IsNullOrWhiteSpace(req.Handle)) return BadRequest(new { error = "Не указан handle персоны" });
+            var handle = req.Handle.Trim().TrimStart('@');
+            var projectId = string.IsNullOrWhiteSpace(req.ProjectId) ? null : req.ProjectId;
+            var candidates = _personas.ResolveHandleCandidates(UserId, handle, projectId,
+                req.ExtraProjectIds, req.ExtraPersonaIds);
+            if (candidates.Count == 0) return NotFound(new { error = $"Персона @{handle} не найдена" });
+            if (candidates.Count > 1)
+                return Conflict(new
+                {
+                    error = $"Персона @{handle} есть в нескольких проектах — уточни personaId",
+                    candidates = candidates.Select(p => new
+                    {
+                        id = p.Id, name = p.Name, role = p.Role,
+                        projectId = p.ProjectId,
+                        projectName = p.ProjectId is null ? null : _projects.GetById(p.ProjectId)?.Name,
+                    }),
+                });
+            persona = candidates[0];
+        }
 
         try
         {
@@ -1850,6 +1907,12 @@ public class PersonasController : ControllerBase
         access = parsed;
         return true;
     }
+
+    // Разбор CSV-параметра запроса (extraProjectIds/extraPersonaIds) в список id
+    private static List<string> SplitCsv(string? csv) =>
+        string.IsNullOrWhiteSpace(csv)
+            ? []
+            : csv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
 
     // Проект существует и принадлежит владельцу
     private bool ValidProject(string? projectId)
@@ -1999,4 +2062,9 @@ public record KnowledgeSearchFilter(string Name, string Operator, string? Value 
 
 public record SelectAvatarRequest(string File);
 
-public record PersonaAskRequest(string Handle, string Question, string? Context = null, string? ProjectId = null);
+public record PersonaAskRequest(string? Handle, string Question, string? Context = null, string? ProjectId = null,
+    // Однозначный путь резолва — обходит поиск по handle (и его возможную коллизию)
+    string? PersonaId = null,
+    // Кросс-проектные extra-скоупы вызывающей персоны (ProjectPersonas-привязки) — расширяют
+    // резолв handle за пределы контекста ProjectId; заполняет MCP personas-server
+    List<string>? ExtraProjectIds = null, List<string>? ExtraPersonaIds = null);

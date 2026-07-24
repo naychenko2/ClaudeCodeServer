@@ -18,8 +18,12 @@ public enum PersonaAvatarKind { Initials, Image }
 // Тип привязки персоны к источнику знаний или правилу (фича persona-bindings):
 // Project — проект целиком (файлы через workspace); ProjectPath — папка/файл проекта;
 // Knowledge — Dify-датасет (база знаний проекта или заметок); Notes — источник заметок;
-// Tool — рубильник инструмента (tasks/notes/web/…); Skill — глобальный скилл (~/.claude/skills).
-public enum PersonaBindingType { Project, ProjectPath, Knowledge, Notes, Tool, Skill }
+// Tool — рубильник инструмента (tasks/notes/web/…); Skill — глобальный скилл (~/.claude/skills);
+// ProjectPersonas — команда ЧУЖОГО проекта (persona_ask/@упоминание, Target=projectId,
+// Path=personaId сужает до одной персоны — пусто = вся команда); ProjectTasks — задачи
+// ЧУЖОГО проекта (Target=projectId, Path="readonly" — только просмотр, пусто — полный доступ).
+public enum PersonaBindingType { Project, ProjectPath, Knowledge, Notes, Tool, Skill,
+    ProjectPersonas, ProjectTasks }
 
 // Режим привязки: Auto — источник в индексе, персона подгружает по условию;
 // Always — вдобавок выжимка из источника подмешивается в каждый ход; Off — выключена.

@@ -326,4 +326,88 @@ public class PersonaBindingsServiceTests : IDisposable
         var bad = new PersonaBinding { Type = PersonaBindingType.Notes, Target = "no-such-source" };
         (await _sut.ValidateAsync(_userId, bad, null)).Should().Contain("не найден");
     }
+
+    // --- Кросс-проектные привязки: ProjectPersonas / ProjectTasks ---
+
+    [Fact]
+    public async Task ValidateAsync_ProjectPersonas_ЧужойПроектНеНайден()
+    {
+        var binding = new PersonaBinding { Type = PersonaBindingType.ProjectPersonas, Target = "no-such-project" };
+        (await _sut.ValidateAsync(_userId, binding, null)).Should().Contain("не найден");
+    }
+
+    [Fact]
+    public async Task ValidateAsync_ProjectPersonas_ПривязкаКСвоемуПроекту_НоОп()
+    {
+        var project = MakeProject("Свой");
+        var owner = new Persona { OwnerId = _userId, Scope = PersonaScope.Project, ProjectId = project.Id };
+        var binding = new PersonaBinding { Type = PersonaBindingType.ProjectPersonas, Target = project.Id };
+        (await _sut.ValidateAsync(_userId, binding, null, owner)).Should().Contain("своему же проекту");
+    }
+
+    [Fact]
+    public async Task ValidateAsync_ProjectPersonas_СужениеДоКонкретнойПерсоны()
+    {
+        var project = MakeProject("Чужой");
+        var teammate = _personas.Create(_userId, "Тимейт", null, null, null, null, null,
+            PersonaScope.Project, project.Id, null, null, true);
+
+        var ok = new PersonaBinding { Type = PersonaBindingType.ProjectPersonas, Target = project.Id, Path = teammate.Id };
+        (await _sut.ValidateAsync(_userId, ok, null)).Should().BeNull();
+
+        var bad = new PersonaBinding { Type = PersonaBindingType.ProjectPersonas, Target = project.Id, Path = "no-such-persona" };
+        (await _sut.ValidateAsync(_userId, bad, null)).Should().Contain("не найдена");
+    }
+
+    [Fact]
+    public async Task ValidateAsync_ProjectTasks_PathТолькоReadonlyИлиПусто()
+    {
+        var project = MakeProject("Задачи");
+        var full = new PersonaBinding { Type = PersonaBindingType.ProjectTasks, Target = project.Id };
+        (await _sut.ValidateAsync(_userId, full, null)).Should().BeNull();
+
+        var readOnly = new PersonaBinding { Type = PersonaBindingType.ProjectTasks, Target = project.Id, Path = "ReadOnly" };
+        (await _sut.ValidateAsync(_userId, readOnly, null)).Should().BeNull();
+
+        var bad = new PersonaBinding { Type = PersonaBindingType.ProjectTasks, Target = project.Id, Path = "write" };
+        (await _sut.ValidateAsync(_userId, bad, null)).Should().Contain("readonly");
+    }
+
+    [Fact]
+    public async Task ValidateAsync_ProjectTasks_ПривязкаКСвоемуПроекту_НоОп()
+    {
+        var project = MakeProject("Свой2");
+        var owner = new Persona { OwnerId = _userId, Scope = PersonaScope.Project, ProjectId = project.Id };
+        var binding = new PersonaBinding { Type = PersonaBindingType.ProjectTasks, Target = project.Id };
+        (await _sut.ValidateAsync(_userId, binding, null, owner)).Should().Contain("своему же проекту");
+    }
+
+    [Fact]
+    public void BuildExternalPersonaScopes_КомандаЦеликомИТочечнаяПерсона_ВыключенныеПропускаются()
+    {
+        var persona = MakePersona(bindings:
+        [
+            new PersonaBinding { Type = PersonaBindingType.ProjectPersonas, Target = "projB" },
+            new PersonaBinding { Type = PersonaBindingType.ProjectPersonas, Target = "projC", Path = "persX" },
+            new PersonaBinding { Type = PersonaBindingType.ProjectPersonas, Target = "projD", Mode = PersonaBindingMode.Off },
+        ]);
+        var scopes = _sut.BuildExternalPersonaScopes(_userId, persona);
+        scopes.Should().BeEquivalentTo(new (string, string?)[] { ("projB", null), ("projC", "persX") });
+    }
+
+    [Fact]
+    public void BuildExternalTaskScopes_КонфликтПолногоИReadonly_РешаетсяКонсервативно()
+    {
+        // Один и тот же проект дважды — полный доступ и readonly: побеждает readonly (наименьшее расширение прав)
+        var persona = MakePersona(bindings:
+        [
+            new PersonaBinding { Type = PersonaBindingType.ProjectTasks, Target = "projB" },
+            new PersonaBinding { Type = PersonaBindingType.ProjectTasks, Target = "projB", Path = "readonly" },
+            new PersonaBinding { Type = PersonaBindingType.ProjectTasks, Target = "projC", Mode = PersonaBindingMode.Off },
+        ]);
+        var scopes = _sut.BuildExternalTaskScopes(_userId, persona);
+        scopes.Should().ContainSingle();
+        scopes[0].ProjectId.Should().Be("projB");
+        scopes[0].ReadOnly.Should().BeTrue();
+    }
 }

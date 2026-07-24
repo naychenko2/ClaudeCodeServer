@@ -47,7 +47,8 @@ export function NavArrow({ dir, onClick }: { dir: -1 | 1; onClick: () => void })
       aria-label={dir < 0 ? 'Назад' : 'Вперёд'}
       style={{
         width: m ? 40 : 34, height: m ? 40 : 34, padding: 0, cursor: 'pointer', flexShrink: 0,
-        border: `1px solid ${C.border}`, borderRadius: '50%', background: C.bgWhite,
+        // Светлая (bgMain): на белой панели календаря белая кнопка не читалась бы
+        border: `1px solid ${C.border}`, borderRadius: '50%', background: C.bgMain,
         color: C.textSecondary, display: 'flex', alignItems: 'center', justifyContent: 'center',
       }}
     >
@@ -381,7 +382,9 @@ export function CalendarMonth({ tasks, projectsById, navDate, onNavigate, onOpen
               } : undefined}
               style={{
                 minHeight: 86, minWidth: 0, overflow: 'hidden', boxSizing: 'border-box', padding: '7px 8px',
-                background: isToday ? C.accentLight : inMonth ? C.bgWhite : 'transparent',
+                // Панель календаря белая, поэтому клетки — светло-кремовые (bgMain),
+                // а текущий день, наоборот, белый и выделен accent-рамкой
+                background: isToday ? C.bgWhite : inMonth ? C.bgMain : 'transparent',
                 border: `1px solid ${isToday ? C.accentMuted : inMonth ? C.borderLight : C.divider}`,
                 borderRadius: 10,
                 opacity: inMonth ? 1 : 0.55,

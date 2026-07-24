@@ -11,6 +11,7 @@ import { PillSwitch } from '../../components/Toolbar';
 import { C, FONT, ISLAND, SHADOW } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { Button, Island } from '../../components/ui';
+import { CanvasBackdrop } from '../../components/ui/CanvasBackdrop';
 import { api } from '../../lib/api';
 import { addDaysIso, DEFAULT_BOARD_COLUMNS, ensureTasksLoaded, expandRecurringTasks, todayIso, toIsoDate, useTasks } from '../../lib/tasks';
 import { useIsMobile } from '../../lib/breakpoints';
@@ -241,7 +242,9 @@ export function CalendarPage({ auth, onLogout, onHubTab, onOpenTask }: Props) {
   );
 
   return (
-    <div style={{ height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+    <div style={{ height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative', isolation: 'isolate' }}>
+      {/* Дудл-фон на всю страницу — от самого верха окна, шапка лежит на нём */}
+      <CanvasBackdrop />
       <HubHeader value="calendar" onTab={onHubTab} auth={auth} onLogout={onLogout} />
 
       {/* Мобила: переключатель вида и фильтры закреплены над скролл-областью */}
@@ -292,7 +295,7 @@ export function CalendarPage({ auth, onLogout, onHubTab, onOpenTask }: Props) {
             </Button>
           </div>
           <div style={{ flexShrink: 0, marginBottom: 12 }}>{filters}</div>
-          <Island bg={C.bgMain} style={{ flex: 1, minHeight: 0 }}>
+          <Island bg={C.bgWhite} style={{ flex: 1, minHeight: 0 }}>
             <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '16px 20px' }}>
               {currentView}
             </div>

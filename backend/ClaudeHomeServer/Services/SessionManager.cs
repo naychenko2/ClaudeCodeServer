@@ -980,8 +980,8 @@ public class SessionManager
     // Кандидаты на консультацию: участники группового чата либо доступные в контексте
     // персоны (глобальные + текущего проекта) + кросс-проектные ProjectPersonas-привязки
     // персоны САМОГО ЧАТА (persona) — команда/точечные персоны другого проекта; без персоны
-    // самого чата. Внешние персоны НЕ примешиваются в групповом чате — там роутинг строго
-    // по составу участников (GroupChatRouter).
+    // самого чата. В групповом чате extra-персоны тоже примешиваются: остаются
+    // консультантами через persona_ask (в MentionsHint, не участники/спикеры).
     private List<Persona> ResolveOtherPersonas(string ownerId, string? projectId, Session session, Persona? persona = null)
     {
         var isGroup = session.Participants is { Count: > 1 };
@@ -991,7 +991,7 @@ public class SessionManager
             .Where(p => p.Id != session.PersonaId)
             .ToList();
 
-        if (!isGroup && persona is not null)
+        if (persona is not null)
         {
             var seen = result.Select(p => p.Id).ToHashSet(StringComparer.Ordinal);
             foreach (var (extProjectId, extPersonaId) in _bindings.BuildExternalPersonaScopes(ownerId, persona))

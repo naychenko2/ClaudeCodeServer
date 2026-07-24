@@ -660,7 +660,7 @@ public class SessionManager
         if (entry.Process is not null) entry.AdapterStale = true;
         SaveSessions();
 
-        var label = target is null ? "Claude"
+        var label = target is null ? "AI"
             : string.IsNullOrWhiteSpace(target.DisplayName) ? target.Key : target.DisplayName;
         await BroadcastAsync(sessionId, new ProviderSwitchedMessage(targetKey, newModel, $"Продолжено на {label}"));
         Console.WriteLine($"[SessionManager] Чат {sessionId} мигрирован: {currentKey} → {targetKey} ({newModel})");
@@ -1178,7 +1178,12 @@ public class SessionManager
         var sections = new List<string>();
         foreach (var key in new[] { "projects", "files", "knowledge" })
             if (_bindings.EffectiveToolEnabled(ownerId, persona, key)) sections.Add(key);
-        if (_bindings.EffectiveToolEnabled(ownerId, persona, "chats"))
+        // chats — явный Tool-ключ ИЛИ неявный opt-in через ProjectPersonas-привязки:
+        // персона, допущенная к чужому проекту, может писать в его чаты.
+        // Явный Tool-ключ(Off) перекрывает авто-включение (приоритет привязок).
+        var chatScopes = _bindings.BuildChatScopes(ownerId, persona);
+        if (_bindings.EffectiveToolEnabled(ownerId, persona, "chats")
+            || (chatScopes is { Count: > 0 }))
             sections.Add("chats");
         if (sections.Count == 0) return null;
         // Git-инструменты (read: status/diff/log/blame/file_log; write: commit/stage за
@@ -1198,10 +1203,13 @@ public class SessionManager
         sections.Add("search");
 
         IReadOnlyList<string>? allowedIds = null;
-        if (_bindings.BuildFileScopes(ownerId, persona) is { } scopes)
+        var fileScopes = _bindings.BuildFileScopes(ownerId, persona);
+        if (fileScopes is { Count: > 0 } || chatScopes is { Count: > 0 })
         {
             // Привязки есть — зона ужимается; проект самой сессии всегда доступен
-            var set = new HashSet<string>(scopes);
+            var set = new HashSet<string>(fileScopes ?? []);
+            if (chatScopes is { Count: > 0 })
+                foreach (var id in chatScopes) set.Add(id);
             if (projectId is not null) set.Add(projectId);
             allowedIds = set.ToList();
         }

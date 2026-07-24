@@ -101,6 +101,24 @@ public class PersonaBindingsService
         return ids.Count == 0 ? null : ids;
     }
 
+    // Проекты из ProjectPersonas-привязок (Mode != Off) — для сужения AllowedProjectIds
+    // workspace-сервера в части чатов. Аналог BuildFileScopes, но для ProjectPersonas:
+    // персона с такой привязкой попадает в ограниченную зону проектов, куда может писать
+    // через chats_send (а не получает доступ ко всем проектам владельца).
+    // null — таких привязок нет: зона не сужается (поведение как раньше).
+    public IReadOnlyList<string>? BuildChatScopes(string ownerId, Persona? persona)
+    {
+        if (persona?.Bindings is null) return null;
+        var ids = persona.Bindings
+            .Where(b => b.Mode != PersonaBindingMode.Off
+                && b.Type == PersonaBindingType.ProjectPersonas
+                && !string.IsNullOrWhiteSpace(b.Target))
+            .Select(b => b.Target)
+            .Distinct()
+            .ToList();
+        return ids.Count == 0 ? null : ids;
+    }
+
     // Кросс-проектные привязки ProjectPersonas (Mode != Off) — (ProjectId, PersonaId?):
     // PersonaId == null → вся команда проекта (текущие + будущие Project-персоны), иначе —
     // сужение до одной персоны. Используется для примешивания персон другого проекта в

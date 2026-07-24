@@ -4,6 +4,7 @@ import { C, FONT } from '../lib/design';
 import { useIsMobile } from '../lib/breakpoints';
 import { ensurePersonasLoaded } from '../lib/personas';
 import { HubHeader } from '../components/HubHeader';
+import { CanvasBackdrop } from '../components/ui/CanvasBackdrop';
 import type { HubTabValue } from '../components/HubTabs';
 import { useHomeSummary } from '../features/home/useHomeSummary';
 import { ActivityWidget } from '../features/home/ActivityWidget';
@@ -44,7 +45,9 @@ export function HomePage({ auth, onLogout, onHubTab, onOpenProject }: Props) {
   const today = new Date().toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' });
 
   return (
-    <div style={{ height: '100dvh', display: 'flex', flexDirection: 'column', background: C.bgMain }}>
+    <div style={{ height: '100dvh', display: 'flex', flexDirection: 'column', background: C.bgMain, position: 'relative', isolation: 'isolate' }}>
+      {/* Дудл-фон на всю страницу — от самого верха окна, шапка лежит на нём */}
+      <CanvasBackdrop />
       <HubHeader value="home" onTab={onHubTab} auth={auth} onLogout={onLogout} />
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
         <div style={{ maxWidth: 1080, margin: '0 auto', padding: isMobile ? '18px 14px 28px' : '26px 26px 40px' }}>

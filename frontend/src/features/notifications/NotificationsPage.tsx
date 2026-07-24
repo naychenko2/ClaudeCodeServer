@@ -3,6 +3,7 @@ import { Bell, CheckCheck, Search, Trash2, Columns, SlidersHorizontal, Folder } 
 import { C, FONT, FS, R, SP, SHADOW } from '../../lib/design';
 import { NotificationAvatar, hasPersona, notifAccentColor } from './NotificationAvatar';
 import { HubHeader } from '../../components/HubHeader';
+import { CanvasBackdrop } from '../../components/ui/CanvasBackdrop';
 import { ConfirmDialog } from '../../components/ui';
 import { ToolbarOverflowMenu, type OverflowItem } from '../../components/ToolbarOverflowMenu';
 import { useIsMobile } from '../../lib/breakpoints';
@@ -243,7 +244,9 @@ export function NotificationsPage({ auth, onLogout, onHubTab }: {
   });
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: C.bgMain, position: 'relative', isolation: 'isolate' }}>
+      {/* Дудл-фон на всю страницу — от самого верха окна, шапка лежит на нём */}
+      <CanvasBackdrop />
       <HubHeader value="notifications" onTab={onHubTab} auth={auth} onLogout={onLogout} />
 
       <div style={{

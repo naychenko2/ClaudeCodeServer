@@ -7,6 +7,7 @@ import { C, FONT, FS, R, MODAL_W, SHADOW } from '../lib/design';
 import { useIsMobile } from '../lib/breakpoints';
 import { EmptyState } from './EmptyState';
 import { HubHeader } from './HubHeader';
+import { CanvasBackdrop } from './ui/CanvasBackdrop';
 import type { HubTabValue } from './HubTabs';
 import { Modal, ModalActions } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
@@ -402,9 +403,14 @@ export function ProductHistory({ isMobile, onClose, auth, onLogout, onHubTab }: 
             {/* Остальное — компактный список секциями по областям, без таймлайна и бейджей:
                 значимость уже передана позицией (хиты выше, крупно) */}
             {groups.length > 0 && (
+              // Каждая группа — полупрозрачный «лист» (тон ответа Claude в чате):
+              // иначе компактные списки сливались бы с дудл-фоном страницы
               <div style={{ animation: 'cc-fade-in 0.2s ease' }}>
                 {groups.map((g, gi) => (
-                  <div key={g.area} style={{ marginTop: gi === 0 ? 0 : 16 }}>
+                  <div key={g.area} style={{
+                    marginTop: gi === 0 ? 0 : 10,
+                    background: C.msgBg, borderRadius: R.xl, padding: '4px 12px 8px',
+                  }}>
                     <SectionHeader area={g.area} list={g.list} />
                     {g.list.map((item, i) => <CompactRow key={i} item={item} />)}
                   </div>
@@ -430,8 +436,10 @@ export function ProductHistory({ isMobile, onClose, auth, onLogout, onHubTab }: 
   return (
     <div style={{
       position: 'fixed', inset: 0, zIndex: 1000, display: 'flex', flexDirection: 'column',
-      background: C.bgMain, fontFamily: FONT.sans,
+      background: C.bgMain, fontFamily: FONT.sans, isolation: 'isolate',
     }}>
+      {/* Дудл-фон на всю страницу — от самого верха окна, шапка лежит на нём */}
+      <CanvasBackdrop />
       {/* Шапка — та же, что у остальных разделов (логотип, разделы, аватар):
           уход в любой раздел закрывает страницу */}
       <HubHeader value="home" onTab={onHubTab} auth={auth} onLogout={onLogout} historyActive />
@@ -681,8 +689,11 @@ function GenerationFooter({ gen }: { gen: ChangelogGeneration }) {
 
   const dot = <span style={{ color: C.border }}>·</span>;
   return (
+    // «Нижняя губа» (как полоса контролов под композером): опаковая плашка со
+    // скруглением, чтобы служебная строка не висела на дудл-фоне
     <div style={{
-      marginTop: 24, paddingTop: 11, borderTop: `1px solid ${C.border}`,
+      marginTop: 16, padding: '9px 14px',
+      background: C.bgMain, border: `1px solid ${C.borderLight}`, borderRadius: R.xxl,
       display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap',
       fontSize: 11.5, color: C.textMuted, lineHeight: 1.5,
     }}>

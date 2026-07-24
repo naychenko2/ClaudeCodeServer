@@ -119,6 +119,15 @@ public class PersonaBindingsService
         return ids.Count == 0 ? null : ids;
     }
 
+    // Решение «монтировать ли секцию chats workspace»: явный Tool-ключ chats (или старая
+    // семантика Persona.Tools) ИЛИ неявный opt-in через ProjectPersonas-привязки — персона,
+    // допущенная к чужому проекту, может писать в его чаты. Единая точка правды: решение
+    // обязано быть детерминированным (одинаковым на всех ходах персоны), иначе набор
+    // chats-инструментов «мерцает» и claude переподключает wsp-сервер между ходами.
+    public bool ChatsSectionEnabled(string ownerId, Persona? persona) =>
+        EffectiveToolEnabled(ownerId, persona, "chats")
+        || BuildChatScopes(ownerId, persona) is { Count: > 0 };
+
     // Кросс-проектные привязки ProjectPersonas (Mode != Off) — (ProjectId, PersonaId?):
     // PersonaId == null → вся команда проекта (текущие + будущие Project-персоны), иначе —
     // сужение до одной персоны. Используется для примешивания персон другого проекта в

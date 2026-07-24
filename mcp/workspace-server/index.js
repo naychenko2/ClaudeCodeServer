@@ -11,11 +11,13 @@
 //   WORKSPACE_SELF_SESSION_ID — id самой сессии (запрет chats_send самому себе)
 //   WORKSPACE_AGENT_DEPTH     — глубина делегирования; chats_send шлёт X-Agent-Depth = depth + 1
 //   WORKSPACE_WRITE           — "0" = скрыть write-инструменты (projects_create/update,
-//                               files_write/mkdir/rename, knowledge_index, chats_create/send/update).
-//                               ClaudeSession выключает их на ходах без интента записи в рабочее
-//                               пространство — read-инструменты (list/tree/read/search/status/history)
-//                               остаются всегда. Дефолт — включено; выключается только явным "0".
+//                               files_write/mkdir/rename, knowledge_index, git_commit/stage,
+//                               kb_add_document). ClaudeSession выключает их на ходах без интента
+//                               записи в рабочее пространство — read-инструменты
+//                               (list/tree/read/search/status/history) остаются всегда. Дефолт —
+//                               включено; выключается только явным "0".
 //                               (destructive-инструменты гейтятся отдельной секцией сверх этого.)
+//                               chats_create/send/update под этот гейт НЕ попадают — см. WRITE_TOOLS.
 
 import { createInterface } from 'node:readline';
 
@@ -33,12 +35,20 @@ const SELF_SESSION_ID = process.env.WORKSPACE_SELF_SESSION_ID || null;
 const AGENT_DEPTH = parseInt(process.env.WORKSPACE_AGENT_DEPTH || '0', 10) || 0;
 // Write-инструменты рабочего пространства — скрыты при WORKSPACE_WRITE="0" (гейт по интенту хода).
 // Выключается только явным "0" (обратная совместимость прямых запусков). Тяжёлые схемы записи
-// (files_write с content, projects/chats create/update) не грузятся в контекст на ходах чтения.
+// (files_write с content, projects_create/update) не грузятся в контекст на ходах чтения.
+//
+// chats_create/chats_send/chats_update СЮДА НЕ ВХОДЯТ, хотя и пишут: их состав обязан быть
+// детерминированным на всех ходах сессии. Под гейтом по тексту хода они то появлялись, то
+// исчезали (ход «отправь сообщение в чат» поднимал их, следующий «что там по задаче» — нет),
+// а вместе с ними менялась сигнатура MCP → claude переподключал wsp-сервер. Персона-постановщик
+// с ProjectPersonas-привязкой видела это как «функции то есть, то нет». Гейт им и не нужен:
+// схемы лёгкие, а сама секция chats монтируется только персоне, допущенной к чужим чатам
+// (tool-ключ chats / ProjectPersonas), и снимается вовсе на агентном ходу (анти-рекурсия).
 const WRITE = process.env.WORKSPACE_WRITE !== '0';
 const WRITE_TOOLS = new Set([
   'projects_create', 'projects_update', 'files_write', 'files_mkdir', 'files_rename',
   'files_to_markdown',
-  'knowledge_index', 'chats_create', 'chats_send', 'chats_update',
+  'knowledge_index',
   'git_commit', 'git_stage', 'kb_add_document',
 ]);
 

@@ -1179,12 +1179,22 @@ public class SessionManager
         foreach (var key in new[] { "projects", "files", "knowledge" })
             if (_bindings.EffectiveToolEnabled(ownerId, persona, key)) sections.Add(key);
         // chats — явный Tool-ключ ИЛИ неявный opt-in через ProjectPersonas-привязки:
-        // персона, допущенная к чужому проекту, может писать в его чаты.
-        // Явный Tool-ключ(Off) перекрывает авто-включение (приоритет привязок).
+        // персона, допущенная к чужому проекту, может писать в его чаты (решение —
+        // PersonaBindingsService.ChatsSectionEnabled, там же семантика).
         var chatScopes = _bindings.BuildChatScopes(ownerId, persona);
-        if (_bindings.EffectiveToolEnabled(ownerId, persona, "chats")
-            || (chatScopes is { Count: > 0 }))
-            sections.Add("chats");
+        var chatsEnabled = _bindings.ChatsSectionEnabled(ownerId, persona);
+        if (chatsEnabled) sections.Add("chats");
+        // Диагностика решения по chats: набор chats-инструментов обязан быть одинаковым на всех
+        // ходах персоны — по этой строке видно, из чего решение сложилось в конкретной сессии
+        if (persona is not null)
+            _log.LogDebug("Секция chats для персоны {Persona}: {Decision} (tools={Tools}, " +
+                "toolBinding={Binding}, chatScopes={Scopes})",
+                persona.Handle ?? persona.Id, chatsEnabled ? "on" : "off",
+                persona.Tools is null ? "null" : string.Join("|", persona.Tools),
+                persona.Bindings?.LastOrDefault(b => b.Type == PersonaBindingType.Tool
+                    && string.Equals(b.Target, "chats", StringComparison.OrdinalIgnoreCase))?.Mode
+                    .ToString() ?? "нет",
+                chatScopes is null ? "null" : string.Join("|", chatScopes));
         if (sections.Count == 0) return null;
         // Git-инструменты (read: status/diff/log/blame/file_log; write: commit/stage за
         // WORKSPACE_WRITE) идут вместе с доступом к файлам — кто видит файлы проекта, видит и

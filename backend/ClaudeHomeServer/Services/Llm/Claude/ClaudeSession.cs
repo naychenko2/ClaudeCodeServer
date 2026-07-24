@@ -542,9 +542,12 @@ public class ClaudeSession : ILlmSessionAdapter
                             ? string.Join(",", allowed) : "",
                         ["WORKSPACE_SELF_SESSION_ID"] = _workspaceMcp.SelfSessionId ?? "",
                         ["WORKSPACE_AGENT_DEPTH"] = Math.Max(_workspaceMcp.AgentDepth, _currentTurnAgentDepth).ToString(),
-                        // Тяжёлые write-схемы (files_write с content, projects/chats create/update,
+                        // Тяжёлые write-схемы (files_write с content, projects_create/update,
                         // knowledge_index) грузим в контекст только когда ход про запись в рабочее
                         // пространство. Read (list/tree/read/search/status/history) — всегда.
+                        // chats_create/send/update под гейт НЕ попадают (см. WRITE_TOOLS в
+                        // workspace-server): их состав должен быть одинаков на всех ходах, иначе
+                        // инструменты «мерцают» между ходами вместе с сигнатурой MCP.
                         // Depth-гейта нет: делегированный ход тоже может нести интент записи; chats
                         // и destructive и так режутся секциями на агентном ходу выше.
                         ["WORKSPACE_WRITE"] = workspaceWrite,
@@ -1409,13 +1412,12 @@ public class ClaudeSession : ILlmSessionAdapter
                 // без него write-инструменты не загружены, и подсказка их не перечисляет.
                 var wsWrite = Prompts.WriteIntentGate.WorkspaceWrite(text);
                 // Подсказка про чаты — только когда секция chats реально подключена этим ходом.
-                // Read-инструменты (list/history) — всегда; write (create/update/send) — при wsWrite.
+                // От wsWrite НЕ зависит: chats-инструменты вне write-гейта (детерминированный
+                // состав), значит и обещать их можно на любом ходу.
                 var chatsHint = _workspaceMcp.Sections.Contains("chats") && _currentTurnAgentDepth < 1
-                    ? " Плюс чаты пользователя: chats_list, chats_history" +
-                      (wsWrite
-                        ? ", chats_create, chats_update (переименование) и chats_send — полноценный ход в " +
-                          "другом чате от имени пользователя (результат виден ему в ленте)."
-                        : ".")
+                    ? " Плюс чаты пользователя: chats_list, chats_history, chats_create, " +
+                      "chats_update (переименование) и chats_send — полноценный ход в другом чате " +
+                      "от имени пользователя (результат виден ему в ленте)."
                     : "";
                 // Предупреждение про разрушающие операции — только когда секция destructive смонтирована
                 var destructiveHint = _workspaceMcp.Sections.Contains("destructive") && _currentTurnAgentDepth < 1

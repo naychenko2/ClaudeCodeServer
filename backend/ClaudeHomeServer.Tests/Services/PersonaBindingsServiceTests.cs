@@ -143,6 +143,64 @@ public class PersonaBindingsServiceTests : IDisposable
         _sut.BuildFileScopes(_userId, persona).Should().BeEquivalentTo(["p1", "p2"]);
     }
 
+    // --- BuildChatScopes / ChatsSectionEnabled ---
+
+    [Fact]
+    public void BuildChatScopes_ТолькоProjectPersonasБезOff()
+    {
+        var persona = MakePersona(bindings:
+        [
+            new PersonaBinding { Type = PersonaBindingType.ProjectPersonas, Target = "p1", Mode = PersonaBindingMode.Always },
+            new PersonaBinding { Type = PersonaBindingType.ProjectTasks, Target = "p2" },   // другой тип — не чаты
+            new PersonaBinding { Type = PersonaBindingType.ProjectPersonas, Target = "p3", Mode = PersonaBindingMode.Off },
+        ]);
+        _sut.BuildChatScopes(_userId, persona).Should().BeEquivalentTo(["p1"]);
+    }
+
+    // Регресс на баг прода: у персоны-постановщика (Tools=null + постоянная ProjectPersonas-привязка)
+    // chats_send/chats_create «мерцали» между ходами. Решение по секции обязано быть
+    // детерминированным — имитируем несколько последовательных ходов (сборок контекста).
+    [Fact]
+    public void ChatsSectionEnabled_ProjectPersonas_СтабильноOnНаВсехХодах()
+    {
+        var persona = MakePersona(bindings:
+        [
+            new PersonaBinding { Type = PersonaBindingType.ProjectPersonas, Target = "p1", Mode = PersonaBindingMode.Always },
+        ]);
+
+        for (var turn = 1; turn <= 5; turn++)
+            _sut.ChatsSectionEnabled(_userId, persona).Should().BeTrue($"ход {turn}");
+    }
+
+    [Fact]
+    public void ChatsSectionEnabled_ToolsБезChats_ВключаетсяПривязкойКоманды()
+    {
+        // Ограниченный Tools (без chats) сам по себе секцию не даёт…
+        var narrow = MakePersona(tools: ["notes"]);
+        _sut.ChatsSectionEnabled(_userId, narrow).Should().BeFalse();
+
+        // …а ProjectPersonas-привязка включает её неявным opt-in
+        var delegator = MakePersona(tools: ["notes"], bindings:
+        [
+            new PersonaBinding { Type = PersonaBindingType.ProjectPersonas, Target = "p1" },
+        ]);
+        _sut.ChatsSectionEnabled(_userId, delegator).Should().BeTrue();
+    }
+
+    [Fact]
+    public void ChatsSectionEnabled_ToolПривязкаOff_НоПривязкаКомандыВключает()
+    {
+        var persona = MakePersona(bindings:
+        [
+            ToolBinding("chats", PersonaBindingMode.Off),
+            new PersonaBinding { Type = PersonaBindingType.ProjectPersonas, Target = "p1" },
+        ]);
+        // Off гасит Tool-ключ, но неявный opt-in по ProjectPersonas — независимое основание:
+        // допуск к чужой команде подразумевает и переписку с её чатами (условие «ИЛИ»)
+        _sut.EffectiveToolEnabled(_userId, persona, "chats").Should().BeFalse();
+        _sut.ChatsSectionEnabled(_userId, persona).Should().BeTrue();
+    }
+
     // --- BuildIndex ---
 
     [Fact]

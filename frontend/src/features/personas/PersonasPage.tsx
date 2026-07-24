@@ -11,6 +11,7 @@ import { usePersonas, ensurePersonasLoaded, bumpPersonas, personaLabel } from '.
 import { navPush, navReplace, getNav, parseHash, type NavSnapshot } from '../../lib/nav';
 import { showToast } from '../../lib/toast';
 import { ConfirmDialog, IslandScaffold, IconButton } from '../../components/ui';
+import { CanvasBackdrop } from '../../components/ui/CanvasBackdrop';
 import { useSidebarDrag } from '../../lib/sidebarWidth';
 import { useIsMobile } from '../../lib/breakpoints';
 import { PersonaList, type PersonaListMode } from './PersonaList';
@@ -261,7 +262,9 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
   );
 
   return (
-    <div style={{ height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+    <div style={{ height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative', isolation: 'isolate' }}>
+      {/* Дудл-фон на всю страницу — от самого верха окна, шапка лежит на нём */}
+      <CanvasBackdrop />
       <HubHeader value="personas" onTab={onHubTab} auth={auth} onLogout={onLogout} />
       <div style={{ flex: 1, minHeight: 0 }}>{body}</div>
       {deleteTarget && (

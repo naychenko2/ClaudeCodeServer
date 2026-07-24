@@ -18,6 +18,7 @@ import { NotesGraph, type GraphStats } from './NotesGraph';
 import { GraphSettingsBody } from './graph/GraphSettingsBody';
 import { useGraphSettings } from './graph/graphSettings';
 import { Button, IslandScaffold, IconButton, ConfirmDialog } from '../../components/ui';
+import { CanvasBackdrop } from '../../components/ui/CanvasBackdrop';
 import { ICON_SIZE } from '../../components/ui/icons';
 import { CollapseGroup, IconSearch, IconPlus, IconCalendarDay, SourceDot } from './shared';
 import { useSidebarDrag } from '../../lib/sidebarWidth';
@@ -496,7 +497,9 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   );
 
   return (
-    <div style={{ height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+    <div style={{ height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative', isolation: 'isolate' }}>
+      {/* Дудл-фон на всю страницу — от самого верха окна, шапка лежит на нём */}
+      <CanvasBackdrop />
       <HubHeader value="notes" onTab={onHubTab} auth={auth} onLogout={onLogout} />
       <div style={{ flex: 1, minHeight: 0 }}>
         {body}

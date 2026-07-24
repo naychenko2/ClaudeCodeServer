@@ -8,6 +8,7 @@ import { C, R, FONT, CHAT_MAX_W } from '../lib/design';
 import { useSidebarDrag } from '../lib/sidebarWidth';
 import { MOBILE_MAX } from '../lib/breakpoints';
 import { Button, IconButton, IslandScaffold } from '../components/ui';
+import { CanvasBackdrop } from '../components/ui/CanvasBackdrop';
 import { ICON_SIZE } from '../components/ui/icons';
 import { PillSwitch } from '../components/Toolbar';
 import type { HubTabValue } from '../components/HubTabs';
@@ -241,7 +242,9 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
   // ===== Десктоп/планшет: две панели =====
   if (wide) {
     return (
-      <div style={{ height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <div style={{ height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative', isolation: 'isolate' }}>
+        {/* Дудл-фон на всю страницу — от самого верха окна, шапка лежит на нём */}
+        <CanvasBackdrop />
         <HubHeader value="projects" onTab={onHubTab} auth={auth!} onLogout={onLogout} />
         <div style={{ flex: 1, minHeight: 0 }}>
           <IslandScaffold

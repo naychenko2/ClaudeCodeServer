@@ -21,6 +21,7 @@ import { ToolbarOverflowMenu, type OverflowItem } from '../components/ToolbarOve
 import type { HubTabValue } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
 import { BackButton, Button, IconButton, Splitter, SidebarSplitter } from '../components/ui';
+import { CanvasBackdrop } from '../components/ui/CanvasBackdrop';
 import { ICON_SIZE } from '../components/ui/icons';
 import { showToast } from '../lib/toast';
 import { navPush, navReplace, parseHash, type NavSnapshot } from '../lib/nav';
@@ -1366,7 +1367,9 @@ const windowWidth = useWindowWidth();
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, overflow: 'hidden' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, overflow: 'hidden', position: 'relative', isolation: 'isolate' }}>
+      {/* Дудл-фон на всю страницу — начинается от самого верха окна, шапка лежит на нём */}
+      <CanvasBackdrop />
       {/* Единый верхний хаб-хедер на всю ширину (симметрия с разделом «Чаты») */}
       <HubHeader value="projects" onTab={onSwitchHub} auth={auth} onLogout={onLogout} />
 

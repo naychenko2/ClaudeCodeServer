@@ -9,6 +9,7 @@ import { C, FONT } from '../lib/design';
 import { useSidebarDrag } from '../lib/sidebarWidth';
 import { useIsMobile } from '../lib/breakpoints';
 import { Button, IconButton, IslandScaffold } from '../components/ui';
+import { CanvasBackdrop } from '../components/ui/CanvasBackdrop';
 import { ICON_SIZE } from '../components/ui/icons';
 import type { HubTabValue } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
@@ -234,7 +235,9 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
   }
 
   return (
-    <div style={{ height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+    <div style={{ height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative', isolation: 'isolate' }}>
+      {/* Дудл-фон на всю страницу — от самого верха окна, шапка лежит на нём */}
+      <CanvasBackdrop />
       <HubHeader value="chats" onTab={onHubTab} auth={auth} onLogout={onLogout} />
 
       {/* Тело: остров-сайдбар + центральный остров (+ остров артефактов) на холсте */}

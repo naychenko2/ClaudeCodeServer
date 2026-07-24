@@ -8,6 +8,7 @@ import { useKnowledge, useKnowledgeConfigured, ensureKnowledgeLoaded, bumpKnowle
 import { api } from '../../lib/api';
 import { parseHash, navPush, navReplace, getNav, type NavSnapshot } from '../../lib/nav';
 import { IslandScaffold, IconButton, ConfirmDialog } from '../../components/ui';
+import { CanvasBackdrop } from '../../components/ui/CanvasBackdrop';
 import { ICON_SIZE } from '../../components/ui/icons';
 import { useSidebarDrag } from '../../lib/sidebarWidth';
 import { useIsMobile } from '../../lib/breakpoints';
@@ -189,7 +190,9 @@ export function KnowledgePage({ auth, onLogout, onHubTab }: {
   );
 
   return (
-    <div style={{ height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+    <div style={{ height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative', isolation: 'isolate' }}>
+      {/* Дудл-фон на всю страницу — от самого верха окна, шапка лежит на нём */}
+      <CanvasBackdrop />
       <HubHeader value="knowledge" onTab={onHubTab} auth={auth} onLogout={onLogout} />
       <div style={{ flex: 1, minHeight: 0 }}>
         {body}

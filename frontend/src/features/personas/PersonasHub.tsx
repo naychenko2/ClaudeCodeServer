@@ -33,7 +33,8 @@ export function PersonasHub({ personas, talking, onTalk, onOpenSession, onNew, o
   };
 
   return (
-    <div ref={scrollRef} style={{ height: '100%', overflowY: 'auto', background: C.bgMain }}>
+    // Фон прозрачный: под центром виден дудл-фон страницы (CanvasBackdrop)
+    <div ref={scrollRef} style={{ height: '100%', overflowY: 'auto' }}>
       <div style={{ maxWidth: 1180, margin: '0 auto', padding: '28px 32px 60px' }}>
 
         {/* Шапка: текст слева, компактная карточка «что умеет персона» справа */}

@@ -780,7 +780,7 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
   );
 
   return (
-    <div style={{ height: '100%', overflowY: 'auto', background: C.bgMain }}>
+    <div style={{ height: '100%', overflowY: 'auto' }}>
       <div style={{
         maxWidth: isMobile ? 680 : 1020, margin: '0 auto', boxSizing: 'border-box',
         padding: isMobile ? '20px 16px 32px' : '26px 32px 40px',

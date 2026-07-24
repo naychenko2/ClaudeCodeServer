@@ -1106,7 +1106,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   ) : null;
 
   return (
-    <div style={{ height: '100%', overflowY: 'auto', background: C.bgMain }}>
+    <div style={{ height: '100%', overflowY: 'auto' }}>
       <div style={{
         maxWidth: 680, margin: '0 auto', boxSizing: 'border-box',
         padding: isMobile ? '18px 16px 32px' : '22px 32px 40px',

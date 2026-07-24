@@ -37,7 +37,8 @@ export function ProjectPersonasPanel({ project, selectedId, onSelect, onNew, onS
   const projectPersonas = personas.filter(p => p.scope === 'project' && p.projectId === project.id);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: C.bgPanel }}>
+    // Фон прозрачный: подложку даёт контентная зона карточки панели (белая)
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <PersonaList
         personas={projectPersonas}
         selectedId={selectedId}

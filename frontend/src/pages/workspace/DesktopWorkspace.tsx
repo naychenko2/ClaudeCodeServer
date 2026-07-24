@@ -165,18 +165,18 @@ export function DesktopWorkspace(p: Props) {
 
   const personaOpen = !!p.selectedPersonaId || p.personaCreating;
 
-  // Панель чатов: шапка проекта (без вкладок) + SessionList. Фон прозрачный —
-  // подложку (bgPanel) даёт карточка-остров
+  // Панель чатов: шапка проекта (без вкладок) + SessionList. Шапка остаётся на тоне
+  // острова (bgMain), список чатов — на белом, как контентная зона панелей рельсы
   const sidebar = (
     <div style={{ width: '100%', display: 'flex', flexDirection: 'column', background: 'transparent', flexShrink: 0, height: '100%' }}>
-      <div style={{ padding: '8px 10px 6px', flexShrink: 0 }}>
+      <div style={{ padding: '8px 10px 6px', flexShrink: 0, borderBottom: `1px solid ${C.border}` }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, minHeight: 28 }}>
           {/* Плашка проекта = переключатель проектов; настройки открываются
               кликом по иконке активного проекта */}
           <SidebarProjectSwitcher project={p.projectForEdit} onOpenSettings={p.onOpenProjectSettings} />
         </div>
       </div>
-      <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+      <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', background: C.bgWhite }}>
         <SessionList project={p.project} activeSession={p.activeSession} onSelect={handleSelectSession} onSessionUpdated={p.onSessionUpdated} onCleared={p.onClearSession} isMobile={false} workflowRunningFor={p.workflowRunningFor} />
       </div>
     </div>

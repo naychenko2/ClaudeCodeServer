@@ -5,6 +5,7 @@ using System.Threading.RateLimiting;
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.TriggerSources;
 using ClaudeHomeServer.Services.Modules;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -28,6 +29,11 @@ var builder = WebApplication.CreateBuilder(args);
 // appsettings.json и appsettings.{Environment}.json. Необязателен: нет файла — берутся
 // дефолты из git (важно, чтобы у брата ничего не отъехало).
 builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: true);
+
+// Зачистка процессов-сирот от предыдущего запуска сервера (краш/форс-килл):
+// на Windows дочерние node-процессы MCP-серверов не умирают при смерти родителя —
+// без этого они копятся и съедают гигабайты памяти. Должно быть ДО первого Process.Start.
+ProcessRegistry.Initialize();
 
 // Токен подписки claude CLI (`claude setup-token`) можно держать в appsettings.Local.json —
 // удобнее, чем переменная окружения: IDE наследует окружение от родителя (explorer/Toolbox),
@@ -627,7 +633,8 @@ app.Lifetime.ApplicationStopping.Register(() =>
 {
     app.Services.GetRequiredService<SessionManager>().KillAllProcesses();
     app.Services.GetRequiredService<TerminalService>().Dispose();
-    app.Services.GetRequiredService<DevServerService>().ShutdownAll();
+    app.Services.GetRequiredService<DevServerService>().Dispose();
+    ProcessRegistry.KillAll();
 });
 
 app.Run();

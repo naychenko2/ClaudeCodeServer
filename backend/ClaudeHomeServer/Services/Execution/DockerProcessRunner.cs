@@ -87,6 +87,7 @@ public sealed class DockerProcessRunner : IProcessLauncher
         var process = new Process { StartInfo = psi, EnableRaisingEvents = spec.EnableRaisingEvents };
         if (!process.Start())
             throw new InvalidOperationException($"Не удалось запустить docker exec для {spec.FileName}");
+        ProcessRegistry.Register(process);
         return process;
     }
 

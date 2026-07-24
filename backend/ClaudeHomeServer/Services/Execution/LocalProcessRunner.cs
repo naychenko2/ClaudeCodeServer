@@ -40,6 +40,7 @@ public sealed class LocalProcessRunner : IProcessLauncher
         var process = new Process { StartInfo = psi, EnableRaisingEvents = spec.EnableRaisingEvents };
         if (!process.Start())
             throw new InvalidOperationException($"Не удалось запустить {spec.FileName}");
+        ProcessRegistry.Register(process);
         return process;
     }
 

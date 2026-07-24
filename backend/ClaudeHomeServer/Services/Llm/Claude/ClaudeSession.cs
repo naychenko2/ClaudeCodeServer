@@ -1833,9 +1833,13 @@ public class ClaudeSession : ILlmSessionAdapter
     private async Task FinalizeRunAsync(CliRun run)
     {
         CloseStdin(run);
+        // Всегда убиваем процесс. На Windows дочерние node-процессы MCP-серверов
+        // НЕ завершаются автоматически при выходе родителя — без явного Kill с
+        // entireProcessTree они остаются сиротами и копятся сутками, съедая память.
+        // На POSIX Kill уже мёртвого процесса — no-op (ловим внутри метода).
+        _launcher.Kill(run.Process, run.LaunchTurnId);
         if (!run.Process.HasExited)
         {
-            _launcher.Kill(run.Process, run.LaunchTurnId);
             // Ограниченное ожидание завершения — Kill() асинхронен на некоторых ОС
             using var exitCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             try { await run.Process.WaitForExitAsync(exitCts.Token); }

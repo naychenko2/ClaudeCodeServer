@@ -74,7 +74,7 @@ public record RunningServiceInfo(string ServiceId, string Name, int? Port, strin
 /// Менеджер сервисов Preview: несколько процессов на проект (ключ = projectId:serviceId).
 /// Держит «активный для превью» сервис на проект — на его порт указывает iframe-прокси.
 /// </summary>
-public sealed class DevServerService
+public sealed class DevServerService : IDisposable
 {
     private readonly ConcurrentDictionary<string, DevServerInstance> _servers = new();
     // projectId → serviceId активного для превью сервиса
@@ -84,6 +84,8 @@ public sealed class DevServerService
     private readonly ILogger<DevServerService> _log;
     private readonly Execution.ILauncherFactory _launchers;
     private readonly Execution.SandboxManager _sandbox;
+    private readonly CancellationTokenSource _shutdownCts = new();
+    private readonly Timer _cleanupTimer;
 
     private static readonly Regex PortRegex = new(
         @"https?://(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]):(\d+)",
@@ -97,6 +99,7 @@ public sealed class DevServerService
         _log = log;
         _launchers = launchers;
         _sandbox = sandbox;
+        _cleanupTimer = new Timer(_ => CleanupStale(), null, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1));
     }
 
     // Порт из опубликованного пула песочницы, не занятый другим сервисом
@@ -319,6 +322,50 @@ public sealed class DevServerService
         }
         _servers.Clear();
         _activePreview.Clear();
+    }
+
+    // Фоновая очистка зависших сервисов: процесс умер, но статус не обновился;
+    // сервис в error висит бессрочно; старт не завершился за 5 мин.
+    private void CleanupStale()
+    {
+        var now = DateTime.UtcNow;
+        foreach (var (key, instance) in _servers)
+        {
+            var idle = now - instance.LastActivity;
+            var shouldClean = false;
+
+            if (instance.Process.HasExited && instance.Status != "stopped")
+            {
+                shouldClean = true;
+                _log.LogInformation("DevServer {Key}: процесс завершился, а статус {Status} — очистка", key, instance.Status);
+            }
+            else if (instance.Status == "error" && idle.TotalMinutes >= 5)
+            {
+                shouldClean = true;
+                _log.LogInformation("DevServer {Key}: в статусе error {Idle:0} мин — очистка", key, idle.TotalMinutes);
+            }
+            else if (instance.Status == "starting" && idle.TotalMinutes >= 5)
+            {
+                shouldClean = true;
+                _log.LogInformation("DevServer {Key}: не запустился за {Idle:0} мин — очистка", key, idle.TotalMinutes);
+            }
+
+            if (shouldClean && _servers.TryRemove(key, out var removed))
+            {
+                removed.Dispose();
+                if (_activePreview.TryGetValue(removed.ProjectId, out var active) && active == removed.ServiceId)
+                    _activePreview.TryRemove(removed.ProjectId, out _);
+                _ = BroadcastStatus(removed.ProjectId, removed.ServiceId, "stopped", null);
+            }
+        }
+    }
+
+    public void Dispose()
+    {
+        _shutdownCts.Cancel();
+        _cleanupTimer.Dispose();
+        foreach (var (_, instance) in _servers) instance.Dispose();
+        _servers.Clear();
     }
 
     private void OnExited(string key)

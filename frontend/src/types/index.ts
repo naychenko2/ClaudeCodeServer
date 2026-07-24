@@ -1210,7 +1210,10 @@ export interface AutomationRuleDto {
   actionExpiresAfterMinutes?: number | null;
 }
 
-export type PersonaBindingType = 'project' | 'projectPath' | 'knowledge' | 'notes' | 'tool' | 'skill';
+// projectPersonas/projectTasks — кросс-проектные привязки: доступ к персонам/задачам
+// ДРУГОГО проекта того же владельца (target — projectId; path — сужение: personaId для
+// projectPersonas, "readonly" для projectTasks; пусто — вся команда / полный доступ)
+export type PersonaBindingType = 'project' | 'projectPath' | 'knowledge' | 'notes' | 'tool' | 'skill' | 'projectPersonas' | 'projectTasks';
 
 // Режим привязки: auto — персона обращается по условию; always — выжимка в каждый ход; off — выключена
 export type PersonaBindingMode = 'auto' | 'always' | 'off';

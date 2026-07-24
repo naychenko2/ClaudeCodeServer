@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import { File, Layers, Pencil, Wrench, Zap } from 'lucide-react';
+import { CheckSquare, File, Layers, Pencil, Users, Wrench, Zap } from 'lucide-react';
 import type { BindingTarget, PersonaBinding, PersonaBindingMode, PersonaBindingType } from '../../types';
 import { api } from '../../lib/api';
 import { C, R } from '../../lib/design';
@@ -34,6 +34,10 @@ export const BINDING_ICONS: Record<PersonaBindingType, (size: number) => ReactNo
   tool: size => <Wrench size={size} strokeWidth={ICON_STROKE} />,
   // Навык — молния
   skill: size => <Zap size={size} strokeWidth={ICON_STROKE} />,
+  // Команда чужого проекта — люди
+  projectPersonas: size => <Users size={size} strokeWidth={ICON_STROKE} />,
+  // Задачи чужого проекта — чек-лист
+  projectTasks: size => <CheckSquare size={size} strokeWidth={ICON_STROKE} />,
 };
 
 // Тона круглой иконки типа + название и подсказка для сетки выбора типа
@@ -44,9 +48,12 @@ export const BINDING_TYPE_META: Record<PersonaBindingType, { name: string; hint:
   notes:       { name: 'Заметки',        hint: 'Vault заметок или его папка',     bg: C.successBg,   fg: C.successText },
   tool:        { name: 'Инструмент',     hint: 'Задачи, веб, чаты, проекты…',     bg: C.planLight,   fg: C.plan },
   skill:       { name: 'Навык',          hint: 'Готовый приём работы',            bg: C.warningBg,   fg: C.warning },
+  // Кросс-проектные привязки (доступ за пределы своего проекта) — одна тональность на двоих
+  projectPersonas: { name: 'Команда проекта', hint: 'Персоны другого вашего проекта',       bg: C.dangerBg, fg: C.dangerText },
+  projectTasks:    { name: 'Задачи проекта',  hint: 'Ставить и вести задачи в другом проекте', bg: C.dangerBg, fg: C.dangerText },
 };
 
-export const BINDING_TYPE_ORDER: PersonaBindingType[] = ['project', 'projectPath', 'knowledge', 'notes', 'tool', 'skill'];
+export const BINDING_TYPE_ORDER: PersonaBindingType[] = ['project', 'projectPath', 'knowledge', 'notes', 'tool', 'skill', 'projectPersonas', 'projectTasks'];
 
 export const MODE_LABEL: Record<PersonaBindingMode, string> = { auto: 'авто', always: 'всегда', off: 'выкл' };
 
@@ -122,9 +129,10 @@ export function fetchBindingTargets(type: string, source?: string): Promise<Bind
   return p;
 }
 
-// Какой каталог нужен типу привязки для подписи цели
+// Какой каталог нужен типу привязки для подписи цели — projectPersonas/projectTasks
+// адресуют чужой ПРОЕКТ как первый уровень, как и projectPath
 function catalogTypeFor(t: PersonaBindingType): string {
-  return t === 'projectPath' ? 'project' : t;
+  return t === 'projectPath' || t === 'projectPersonas' || t === 'projectTasks' ? 'project' : t;
 }
 
 // Человекочитаемая подпись привязки по образцу прототипа:
@@ -139,6 +147,12 @@ export function bindingLabel(b: PersonaBinding, targets: Map<string, BindingTarg
     case 'notes':       return b.path ? `Заметки · папка «${b.path}»` : `Заметки · ${label}`;
     case 'tool':        return label;
     case 'skill':       return `Навык «${label}»`;
+    // path — id конкретной персоны (не человекочитаемый); точное имя резолвится только
+    // в пикере выбора цели, здесь — общая подпись без обращения к каталогу персон проекта
+    case 'projectPersonas': return b.path ? `Персона проекта «${label}»` : `Команда проекта «${label}»`;
+    case 'projectTasks':    return b.path?.toLowerCase() === 'readonly'
+      ? `Задачи «${label}» · только чтение`
+      : `Задачи «${label}» · полный доступ`;
   }
 }
 

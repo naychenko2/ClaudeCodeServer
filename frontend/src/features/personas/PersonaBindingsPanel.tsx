@@ -43,12 +43,28 @@ interface AddPanelState {
   type?: PersonaBindingType;
   targetId?: string;
   targetLabel?: string;
-  // projectPath: проект выбран, вводим путь; notes: источник выбран, выбираем папку
+  // projectPath: проект выбран, вводим путь; notes: источник выбран, выбираем папку;
+  // projectTasks: "readonly" | undefined (полный доступ); projectPersonas: id персоны
   path?: string;
+  // Человекочитаемая подпись path (только для projectPersonas — path хранит id персоны,
+  // не текст); нужна для крошки шага ③, на бэк не отправляется
+  pathLabel?: string;
   // notes: выбранный источник (второй уровень — папки внутри него)
   notesSource?: { id: string; label: string } | null;
   condition: string;
   mode: PersonaBindingMode;
+}
+
+// Типы привязок «Сотрудничество с другими проектами» — показываются отдельной секцией
+const CROSS_PROJECT_TYPES: PersonaBindingType[] = ['projectPersonas', 'projectTasks'];
+
+// Текстовая подпись пути для крошки шага ③ (см. AddPanelState.path/pathLabel)
+function panelPathSuffix(panel: AddPanelState): string {
+  if (panel.type === 'projectTasks')
+    return ` · ${panel.path?.toLowerCase() === 'readonly' ? 'только чтение' : 'полный доступ'}`;
+  if (panel.type === 'projectPersonas')
+    return panel.path ? ` · ${panel.pathLabel ?? 'персона'}` : ' · вся команда';
+  return panel.path ? ` · ${panel.path}` : '';
 }
 
 // Кандидаты AI-подбора с чекбоксами: привязки к существующим источникам +
@@ -154,6 +170,10 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
   const labelOf = useBindingLabels(labelSource);
 
   const list = bindings ?? [];
+  // Кросс-проектные привязки живут в своей секции «Сотрудничество с другими проектами»
+  // (см. CROSS_PROJECT_TYPES) — остальные типы остаются в общем списке «Умения и правила»
+  const localBindings = list.filter(b => !CROSS_PROJECT_TYPES.includes(b.type));
+  const crossBindings = list.filter(b => CROSS_PROJECT_TYPES.includes(b.type));
 
   // === Мутации (мгновенное сохранение) ===
 
@@ -382,6 +402,125 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
     setPanel({ step: type ? 2 : 1, type, condition: '', mode: 'auto' });
   };
 
+  // Карточка одной привязки — общая для секции «Умения и правила» и секции
+  // «Сотрудничество с другими проектами» (обе используют один и тот же список бindings)
+  const renderBindingCard = (b: PersonaBinding) => {
+    const open = expandedId === b.id;
+    const dim = b.mode === 'off' && !open;
+    const flashing = flashIds.has(b.id);
+    return (
+      <div
+        key={b.id}
+        onMouseEnter={() => setHoveredId(b.id)}
+        onMouseLeave={() => setHoveredId(h => h === b.id ? null : h)}
+        style={{
+          background: flashing ? C.accentLight : C.bgWhite,
+          border: `1px solid ${open || hoveredId === b.id ? accent : C.border}`,
+          borderRadius: R.xl, padding: '10px 14px',
+          transition: 'border-color 0.15s, background 0.6s',
+        }}
+      >
+        {/* Свёрнутая строка */}
+        <div
+          onClick={() => toggleCard(b)}
+          style={{ display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer' }}
+        >
+          <BindingTypeIcon type={b.type} dim={dim} />
+          <div style={{ flex: 1, minWidth: 0, opacity: dim ? 0.55 : 1 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 600, color: C.textHeading }}>{labelOf(b)}</div>
+            {b.condition ? (
+              <div style={{ fontSize: 12, color: C.textSecondary, marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {b.condition}
+              </div>
+            ) : (
+              <div style={{ fontSize: 12, color: C.textMuted, fontStyle: 'italic', marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                Всегда под рукой — условие не задано
+              </div>
+            )}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+            <BindingModeBadge mode={b.mode} />
+            {!open && (
+              <div style={{ position: 'relative' }} onClick={e => e.stopPropagation()}>
+                <button
+                  onClick={() => setMenuId(m => m === b.id ? null : b.id)}
+                  aria-label="Действия"
+                  style={{
+                    width: isMobile ? 36 : 28, height: isMobile ? 36 : 28, border: 'none',
+                    background: 'transparent', borderRadius: R.md, cursor: 'pointer',
+                    color: C.textMuted, fontSize: 16, lineHeight: 1,
+                    visibility: isMobile || hoveredId === b.id || menuId === b.id ? 'visible' : 'hidden',
+                  }}
+                >⋯</button>
+                {menuId === b.id && (
+                  <Menu onClose={() => setMenuId(null)} align="right" top={30} minWidth={180}>
+                    <MenuItem
+                      icon={<SquarePen size={15} strokeWidth={ICON_STROKE} />}
+                      label="Редактировать"
+                      onClick={() => { setMenuId(null); toggleCard(b); }}
+                    />
+                    <MenuItem
+                      icon={b.mode === 'off'
+                        ? <CheckCircle2 size={15} strokeWidth={ICON_STROKE} />
+                        : <Power size={15} strokeWidth={ICON_STROKE} />}
+                      label={b.mode === 'off' ? 'Включить' : 'Выключить'}
+                      onClick={() => { setMenuId(null); setMode(b, b.mode === 'off' ? 'auto' : 'off'); }}
+                    />
+                    <div style={{ height: 1, background: C.borderLight, margin: '4px 6px' }} />
+                    <MenuItem
+                      danger
+                      icon={<Trash2 size={15} strokeWidth={ICON_STROKE} />}
+                      label="Удалить"
+                      onClick={() => {
+                        setMenuId(null);
+                        setExpandedId(b.id);
+                        setCondDraft(b.condition);
+                        askDelete(b);
+                      }}
+                    />
+                  </Menu>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Развёрнутое тело — редактирование по месту */}
+        {open && (
+          <div style={{ borderTop: `1px solid ${C.borderLight}`, marginTop: 10, paddingTop: 12 }}>
+            <div style={fLabel}>Когда пользоваться</div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+              <CondTextArea
+                value={condDraft}
+                onChange={setCondDraft}
+                onBlur={() => void commitDraft(b)}
+              />
+              <AiConditionButton busy={aiBusy} onClick={runAiCondition} />
+            </div>
+            <div style={{ ...fLabel, marginTop: 14 }}>Режим</div>
+            <PillSwitch<PersonaBindingMode>
+              fill
+              value={b.mode}
+              onChange={m => setMode(b, m)}
+              options={MODE_OPTIONS}
+            />
+            <div style={{ fontSize: 11.5, color: C.textMuted, marginTop: 6 }}>{MODE_HINT[b.mode]}</div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 14 }}>
+              <button onClick={() => askDelete(b)} style={delLink}>
+                {confirmDelId === b.id ? 'Точно удалить?' : 'Удалить привязку'}
+              </button>
+              <Button variant="ghost" size="sm" onClick={() => {
+                void commitDraft(b);
+                setExpandedId(null);
+                setConfirmDelId(null);
+              }}>Готово</Button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div style={{ height: '100%', overflowY: 'auto', background: C.bgMain }}>
       <div style={{
@@ -393,7 +532,7 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
         <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 }}>
           <SectionLabel>Умения и правила</SectionLabel>
           <span style={{ fontSize: 11.5, color: C.textMuted, flexShrink: 0 }}>
-            {bindings === null ? 'загрузка…' : bindingsCounter(list)}
+            {bindings === null ? 'загрузка…' : bindingsCounter(localBindings)}
           </span>
         </div>
         <div style={{ fontSize: 12.5, color: C.textMuted, lineHeight: 1.5, marginTop: 4 }}>
@@ -438,7 +577,7 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
         )}
 
         {/* Пустое состояние — приглашение с чипами-примерами */}
-        {bindings !== null && !error && list.length === 0 && !panel && suggestJob.status === 'idle' && (
+        {bindings !== null && !error && localBindings.length === 0 && !panel && suggestJob.status === 'idle' && (
           <div style={{
             marginTop: 14, border: `1.5px dashed ${C.dashed}`, borderRadius: R.xl,
             padding: '24px 22px', textAlign: 'center',
@@ -465,129 +604,14 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
         )}
 
         {/* Карточки привязок */}
-        {list.length > 0 && (
+        {localBindings.length > 0 && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 14 }}>
-            {list.map(b => {
-              const open = expandedId === b.id;
-              const dim = b.mode === 'off' && !open;
-              const flashing = flashIds.has(b.id);
-              return (
-                <div
-                  key={b.id}
-                  onMouseEnter={() => setHoveredId(b.id)}
-                  onMouseLeave={() => setHoveredId(h => h === b.id ? null : h)}
-                  style={{
-                    background: flashing ? C.accentLight : C.bgWhite,
-                    border: `1px solid ${open || hoveredId === b.id ? accent : C.border}`,
-                    borderRadius: R.xl, padding: '10px 14px',
-                    transition: 'border-color 0.15s, background 0.6s',
-                  }}
-                >
-                  {/* Свёрнутая строка */}
-                  <div
-                    onClick={() => toggleCard(b)}
-                    style={{ display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer' }}
-                  >
-                    <BindingTypeIcon type={b.type} dim={dim} />
-                    <div style={{ flex: 1, minWidth: 0, opacity: dim ? 0.55 : 1 }}>
-                      <div style={{ fontSize: 13.5, fontWeight: 600, color: C.textHeading }}>{labelOf(b)}</div>
-                      {b.condition ? (
-                        <div style={{ fontSize: 12, color: C.textSecondary, marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {b.condition}
-                        </div>
-                      ) : (
-                        <div style={{ fontSize: 12, color: C.textMuted, fontStyle: 'italic', marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          Всегда под рукой — условие не задано
-                        </div>
-                      )}
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-                      <BindingModeBadge mode={b.mode} />
-                      {!open && (
-                        <div style={{ position: 'relative' }} onClick={e => e.stopPropagation()}>
-                          <button
-                            onClick={() => setMenuId(m => m === b.id ? null : b.id)}
-                            aria-label="Действия"
-                            style={{
-                              width: isMobile ? 36 : 28, height: isMobile ? 36 : 28, border: 'none',
-                              background: 'transparent', borderRadius: R.md, cursor: 'pointer',
-                              color: C.textMuted, fontSize: 16, lineHeight: 1,
-                              visibility: isMobile || hoveredId === b.id || menuId === b.id ? 'visible' : 'hidden',
-                            }}
-                          >⋯</button>
-                          {menuId === b.id && (
-                            <Menu onClose={() => setMenuId(null)} align="right" top={30} minWidth={180}>
-                              <MenuItem
-                                icon={<SquarePen size={15} strokeWidth={ICON_STROKE} />}
-                                label="Редактировать"
-                                onClick={() => { setMenuId(null); toggleCard(b); }}
-                              />
-                              <MenuItem
-                                icon={b.mode === 'off'
-                                  ? <CheckCircle2 size={15} strokeWidth={ICON_STROKE} />
-                                  : <Power size={15} strokeWidth={ICON_STROKE} />}
-                                label={b.mode === 'off' ? 'Включить' : 'Выключить'}
-                                onClick={() => { setMenuId(null); setMode(b, b.mode === 'off' ? 'auto' : 'off'); }}
-                              />
-                              <div style={{ height: 1, background: C.borderLight, margin: '4px 6px' }} />
-                              <MenuItem
-                                danger
-                                icon={<Trash2 size={15} strokeWidth={ICON_STROKE} />}
-                                label="Удалить"
-                                onClick={() => {
-                                  setMenuId(null);
-                                  setExpandedId(b.id);
-                                  setCondDraft(b.condition);
-                                  askDelete(b);
-                                }}
-                              />
-                            </Menu>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Развёрнутое тело — редактирование по месту */}
-                  {open && (
-                    <div style={{ borderTop: `1px solid ${C.borderLight}`, marginTop: 10, paddingTop: 12 }}>
-                      <div style={fLabel}>Когда пользоваться</div>
-                      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
-                        <CondTextArea
-                          value={condDraft}
-                          onChange={setCondDraft}
-                          onBlur={() => void commitDraft(b)}
-                        />
-                        <AiConditionButton busy={aiBusy} onClick={runAiCondition} />
-                      </div>
-                      <div style={{ ...fLabel, marginTop: 14 }}>Режим</div>
-                      <PillSwitch<PersonaBindingMode>
-                        fill
-                        value={b.mode}
-                        onChange={m => setMode(b, m)}
-                        options={MODE_OPTIONS}
-                      />
-                      <div style={{ fontSize: 11.5, color: C.textMuted, marginTop: 6 }}>{MODE_HINT[b.mode]}</div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 14 }}>
-                        <button onClick={() => askDelete(b)} style={delLink}>
-                          {confirmDelId === b.id ? 'Точно удалить?' : 'Удалить привязку'}
-                        </button>
-                        <Button variant="ghost" size="sm" onClick={() => {
-                          void commitDraft(b);
-                          setExpandedId(null);
-                          setConfirmDelId(null);
-                        }}>Готово</Button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+            {localBindings.map(renderBindingCard)}
           </div>
         )}
 
         {/* Кнопки под списком (скрыты, пока открыта панель добавления/подбор/ввод описания) */}
-        {bindings !== null && !error && list.length > 0 && !panel && suggestJob.status === 'idle' && genPrompt === null && (
+        {bindings !== null && !error && localBindings.length > 0 && !panel && suggestJob.status === 'idle' && genPrompt === null && (
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 12 }}>
             <AddBindingButton onClick={() => openAdd()} />
             <Button variant="ghostAccent" size="sm" onClick={runSuggest}>
@@ -601,7 +625,7 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
             </Button>
           </div>
         )}
-        {bindings !== null && !error && list.length === 0 && !panel && suggestJob.status === 'idle' && genPrompt === null && (
+        {bindings !== null && !error && localBindings.length === 0 && !panel && suggestJob.status === 'idle' && genPrompt === null && (
           <div style={{ display: 'flex', justifyContent: 'center', gap: 10, flexWrap: 'wrap', marginTop: 12 }}>
             <Button variant="ghostAccent" size="sm" onClick={runSuggest}>
               ✨ Подобрать автоматически
@@ -612,6 +636,36 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
             <Button variant="ghost" size="sm" onClick={() => setShowSkillSearch(true)}>
               ⚡ Найти навык
             </Button>
+          </div>
+        )}
+
+        {/* Сотрудничество с другими проектами — привязки ProjectPersonas/ProjectTasks
+            (кросс-проектные, см. CROSS_PROJECT_TYPES) отдельной секцией */}
+        {bindings !== null && !error && (
+          <div style={{ marginTop: 26, paddingTop: 18, borderTop: `1px solid ${C.borderLight}` }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 }}>
+              <SectionLabel>Сотрудничество с другими проектами</SectionLabel>
+              <span style={{ fontSize: 11.5, color: C.textMuted, flexShrink: 0 }}>{bindingsCounter(crossBindings)}</span>
+            </div>
+            {crossBindings.length === 0 ? (
+              <div style={{
+                marginTop: 12, border: `1.5px dashed ${C.dashed}`, borderRadius: R.xl,
+                padding: '18px 20px', textAlign: 'center',
+              }}>
+                <div style={{ fontSize: 12.5, color: C.textSecondary, lineHeight: 1.5 }}>
+                  Пока эта персона общается только со своей командой и её задачами.
+                  Разреши ей звать на помощь другой проект
+                </div>
+                <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap', marginTop: 12 }}>
+                  <ExampleChip label="🤝 команда другого проекта" onClick={() => openAdd('projectPersonas')} />
+                  <ExampleChip label="📋 задачи другого проекта" onClick={() => openAdd('projectTasks')} />
+                </div>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
+                {crossBindings.map(renderBindingCard)}
+              </div>
+            )}
           </div>
         )}
 
@@ -804,6 +858,7 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
             accent={accent}
             isMobile={isMobile}
             aiBusy={panelAiBusy}
+            ownProjectId={persona.scope === 'project' ? persona.projectId : undefined}
             onChange={setPanel}
             onClose={() => { resetAiJob(panelCondKey); setPanel(null); }}
             onCommit={() => void commitPanel()}
@@ -816,11 +871,14 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
 }
 
 // === Инлайн-панель «Добавить привязку»: ① Тип → ② Цель → ③ Правило ===
-function AddPanel({ panel, accent, isMobile, aiBusy, onChange, onClose, onCommit, onAiCondition }: {
+function AddPanel({ panel, accent, isMobile, aiBusy, ownProjectId, onChange, onClose, onCommit, onAiCondition }: {
   panel: AddPanelState;
   accent: string;
   isMobile: boolean;
   aiBusy: boolean;
+  // Проект самой персоны (scope=project) — исключаем его из пикера projectPersonas/
+  // projectTasks: обращаться к своей же команде/задачам через кросс-проектную привязку бессмысленно
+  ownProjectId?: string;
   onChange: (p: AddPanelState) => void;
   onClose: () => void;
   onCommit: () => void;
@@ -840,8 +898,8 @@ function AddPanel({ panel, accent, isMobile, aiBusy, onChange, onClose, onCommit
         onStep={s => {
           if (s >= panel.step) return;
           // Возврат назад: на шаг «Тип» — сброс цели; на «Цель» — сброс правила
-          if (s === 1) onChange({ ...panel, step: 1, type: undefined, targetId: undefined, targetLabel: undefined, path: undefined, notesSource: null });
-          else onChange({ ...panel, step: 2, targetId: undefined, targetLabel: undefined, path: undefined, notesSource: null });
+          if (s === 1) onChange({ ...panel, step: 1, type: undefined, targetId: undefined, targetLabel: undefined, path: undefined, pathLabel: undefined, notesSource: null });
+          else onChange({ ...panel, step: 2, targetId: undefined, targetLabel: undefined, path: undefined, pathLabel: undefined, notesSource: null });
         }} />
 
       {panel.step === 1 && (
@@ -870,13 +928,13 @@ function AddPanel({ panel, accent, isMobile, aiBusy, onChange, onClose, onCommit
       )}
 
       {panel.step === 2 && panel.type && (
-        <TargetPicker panel={panel} onChange={onChange} />
+        <TargetPicker panel={panel} onChange={onChange} ownProjectId={ownProjectId} />
       )}
 
       {panel.step === 3 && panel.type && (
         <>
-          <Crumb onClick={() => onChange({ ...panel, step: 2, targetId: undefined, targetLabel: undefined, notesSource: null })}>
-            {BINDING_ICONS[panel.type](13)} {BINDING_TYPE_META[panel.type].name} · {panel.targetLabel}{panel.path ? ` · ${panel.path}` : ''}
+          <Crumb onClick={() => onChange({ ...panel, step: 2, targetId: undefined, targetLabel: undefined, path: undefined, pathLabel: undefined, notesSource: null })}>
+            {BINDING_ICONS[panel.type](13)} {BINDING_TYPE_META[panel.type].name} · {panel.targetLabel}{panelPathSuffix(panel)}
           </Crumb>
           <div style={{ ...fLabel, marginTop: 16 }}>Когда пользоваться</div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
@@ -913,9 +971,13 @@ function AddPanel({ panel, accent, isMobile, aiBusy, onChange, onClose, onCommit
 
 // Шаг ② «Цель»: пикер по типу. project/knowledge/tool/skill — один список;
 // notes — источник, затем «весь источник» или папка; projectPath — проект,
-// затем ручной ввод пути (mono, дерево в v1 не строим).
-function TargetPicker({ panel, onChange }: {
+// затем ручной ввод пути (mono, дерево в v1 не строим); projectPersonas — проект,
+// затем «вся команда» или конкретная персона; projectTasks — проект, затем
+// переключатель «Полный доступ / Только чтение».
+function TargetPicker({ panel, ownProjectId, onChange }: {
   panel: AddPanelState;
+  // Проект самой персоны — исключается из списка (нет смысла в кросс-привязке на себя)
+  ownProjectId?: string;
   onChange: (p: AddPanelState) => void;
 }) {
   const type = panel.type!;
@@ -925,8 +987,9 @@ function TargetPicker({ panel, onChange }: {
   // projectPath: выбранный проект (дальше — ввод пути); notes: источник (дальше — папки)
   const [pathInput, setPathInput] = useState('');
 
-  // Каталог: для projectPath цели — проекты; для notes с выбранным источником — папки
-  const catalogType = type === 'projectPath' ? 'project' : type;
+  // Каталог: для projectPath/projectPersonas/projectTasks цели — проекты; для notes
+  // с выбранным источником — папки
+  const catalogType = type === 'projectPath' || type === 'projectPersonas' || type === 'projectTasks' ? 'project' : type;
   const notesSource = panel.notesSource ?? null;
 
   useEffect(() => {
@@ -940,20 +1003,29 @@ function TargetPicker({ panel, onChange }: {
   }, [catalogType, type, notesSource]);
 
   const q = query.trim().toLowerCase();
-  const filtered = (items ?? []).filter(t =>
-    !q || t.label.toLowerCase().includes(q) || (t.hint ?? '').toLowerCase().includes(q));
+  const filtered = (items ?? [])
+    .filter(t => (type !== 'projectPersonas' && type !== 'projectTasks') || t.id !== ownProjectId)
+    .filter(t => !q || t.label.toLowerCase().includes(q) || (t.hint ?? '').toLowerCase().includes(q));
 
   // projectPath, проект выбран → ручной ввод пути
   const pathStage = type === 'projectPath' && !!panel.targetId;
+  // projectPersonas, проект выбран → «вся команда» или конкретная персона
+  const personasSubStage = type === 'projectPersonas' && !!panel.targetId;
+  // projectTasks, проект выбран → «полный доступ» или «только чтение»
+  const tasksSubStage = type === 'projectTasks' && !!panel.targetId;
 
   return (
     <>
-      <Crumb onClick={() => onChange({ ...panel, step: 1, type: undefined, targetId: undefined, targetLabel: undefined, path: undefined, notesSource: null })}>
+      <Crumb onClick={() => onChange({ ...panel, step: 1, type: undefined, targetId: undefined, targetLabel: undefined, path: undefined, pathLabel: undefined, notesSource: null })}>
         {BINDING_ICONS[type](13)} {BINDING_TYPE_META[type].name}
-        {pathStage ? ` · ${panel.targetLabel}` : notesSource ? ` · ${notesSource.label}` : ''}
+        {(pathStage || personasSubStage || tasksSubStage) ? ` · ${panel.targetLabel}` : notesSource ? ` · ${notesSource.label}` : ''}
       </Crumb>
 
-      {pathStage ? (
+      {personasSubStage ? (
+        <PersonasSubPicker panel={panel} onChange={onChange} />
+      ) : tasksSubStage ? (
+        <TasksAccessChooser panel={panel} onChange={onChange} />
+      ) : pathStage ? (
         <div style={{ marginTop: 12 }}>
           <div style={fLabel}>Путь внутри проекта</div>
           <IconField
@@ -1025,8 +1097,8 @@ function TargetPicker({ panel, onChange }: {
                   } else if (type === 'notes' && notesSource) {
                     // Папка источника: target — источник, path — папка
                     onChange({ ...panel, step: 3, targetId: notesSource.id, targetLabel: notesSource.label, path: t.id });
-                  } else if (type === 'projectPath') {
-                    // Проект выбран — переходим к ручному вводу пути
+                  } else if (type === 'projectPath' || type === 'projectPersonas' || type === 'projectTasks') {
+                    // Проект выбран — переходим к следующей подстадии (путь / состав команды / доступ к задачам)
                     onChange({ ...panel, targetId: t.id, targetLabel: t.label });
                   } else {
                     onChange({ ...panel, step: 3, targetId: t.id, targetLabel: t.label, path: undefined });
@@ -1038,6 +1110,112 @@ function TargetPicker({ panel, onChange }: {
         </>
       )}
     </>
+  );
+}
+
+// Подстадия projectPersonas: проект уже выбран (panel.targetId) — «вся команда» первой
+// строкой либо конкретная персона из каталога personasInProject?source={projectId}.
+// Каталог может быть ещё не готов на бэке (Денис добавляет отдельно) — при ошибке/пустом
+// списке «вся команда» остаётся рабочим путём, флоу не блокируется.
+function PersonasSubPicker({ panel, onChange }: {
+  panel: AddPanelState;
+  onChange: (p: AddPanelState) => void;
+}) {
+  const projectId = panel.targetId!;
+  const projectLabel = panel.targetLabel ?? '';
+  const [query, setQuery] = useState('');
+  const [items, setItems] = useState<BindingTarget[] | null>(null);
+  const [loadError, setLoadError] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    setItems(null);
+    setLoadError(false);
+    fetchBindingTargets('personasInProject', projectId)
+      .then(list => { if (alive) setItems(list); })
+      .catch(() => { if (alive) { setItems([]); setLoadError(true); } });
+    return () => { alive = false; };
+  }, [projectId]);
+
+  const q = query.trim().toLowerCase();
+  const filtered = (items ?? []).filter(t => !q || t.label.toLowerCase().includes(q));
+
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div style={{ background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl, overflow: 'hidden' }}>
+        <PickRow
+          label={`Вся команда «${projectLabel}»`}
+          hint="текущие и будущие персоны проекта"
+          onClick={() => onChange({ ...panel, step: 3, path: undefined, pathLabel: undefined })}
+        />
+      </div>
+      <div style={{ marginTop: 10 }}>
+        <IconField
+          value={query}
+          onChange={setQuery}
+          placeholder="Или найти персону…"
+          height={38}
+          radius={R.lg}
+          fontSize={13}
+          icon={<Search size={15} strokeWidth={ICON_STROKE} />}
+        />
+      </div>
+      <div style={{ background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl, marginTop: 10, overflow: 'hidden' }}>
+        {items === null && (
+          <div style={{ padding: '14px 14px', fontSize: 12.5, color: C.textMuted }}>Загрузка…</div>
+        )}
+        {items !== null && loadError && (
+          <div style={{ padding: '14px 14px', fontSize: 12.5, color: C.textMuted }}>
+            Список персон проекта пока недоступен — можно выбрать «Вся команда» выше.
+          </div>
+        )}
+        {items !== null && !loadError && filtered.length === 0 && (
+          <div style={{ padding: '14px 14px', fontSize: 12.5, color: C.textMuted }}>
+            {q ? 'Ничего не найдено' : 'В этом проекте пока нет персон'}
+          </div>
+        )}
+        {filtered.map(t => (
+          <PickRow
+            key={t.id}
+            label={t.label}
+            hint={t.hint ?? undefined}
+            onClick={() => onChange({ ...panel, step: 3, path: t.id, pathLabel: t.label })}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Подстадия projectTasks: проект уже выбран — переключатель «Полный доступ / Только
+// чтение» (дефолт — полный доступ), под капотом path = undefined | "readonly"
+function TasksAccessChooser({ panel, onChange }: {
+  panel: AddPanelState;
+  onChange: (p: AddPanelState) => void;
+}) {
+  const [access, setAccess] = useState<'full' | 'readonly'>(
+    panel.path?.toLowerCase() === 'readonly' ? 'readonly' : 'full');
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div style={fLabel}>Доступ к задачам «{panel.targetLabel}»</div>
+      <PillSwitch<'full' | 'readonly'>
+        fill
+        value={access}
+        onChange={setAccess}
+        options={[{ value: 'full', label: 'Полный доступ' }, { value: 'readonly', label: 'Только чтение' }]}
+      />
+      <div style={{ fontSize: 11.5, color: C.textMuted, marginTop: 6 }}>
+        {access === 'full'
+          ? 'Персона сможет создавать, вести и завершать задачи в этом проекте.'
+          : 'Персона будет только видеть задачи проекта, без права их менять.'}
+      </div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
+        <Button variant="primary" size="sm"
+          onClick={() => onChange({ ...panel, step: 3, path: access === 'readonly' ? 'readonly' : undefined })}>
+          Далее
+        </Button>
+      </div>
+    </div>
   );
 }
 

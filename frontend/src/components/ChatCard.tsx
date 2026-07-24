@@ -86,6 +86,8 @@ interface Props {
   onDelete: () => void;
   // Не задан — чат без закрепления (списки проекта)
   onTogglePin?: () => void;
+  // Стоимость сессии (для контекстного индикатора аналитики)
+  totalCost?: number;
 }
 
 /**
@@ -96,7 +98,7 @@ interface Props {
  */
 export function ChatCard({
   session: s, isActive, isMobile, fallbackName, online, hovered, workflowRunning,
-  onSelect, onHover, onEdit, onDelete, onTogglePin,
+  onSelect, onHover, onEdit, onDelete, onTogglePin, totalCost,
 }: Props) {
   // Чат от лица персоны: мини-аватар в строке названия и акцент её цвета
   const persona = s.personaId ? getPersonaById(s.personaId) : undefined;
@@ -193,6 +195,11 @@ export function ChatCard({
             {displayName}
           </span>
           <ExpiryBadge session={s} />
+          {totalCost != null && totalCost > 0 && (
+            <span style={{ fontFamily: FONT.mono, fontSize: 10, color: totalCost > 1 ? C.accent : C.textMuted, flexShrink: 0 }}>
+              {totalCost < 0.01 ? totalCost.toFixed(4) : totalCost < 1 ? totalCost.toFixed(3) : totalCost.toFixed(2)}$
+            </span>
+          )}
           {/* Закрепление: иконка-признак, сама кнопка живёт в блоке действий */}
           {s.isPinned && (
             <Pin size={11} strokeWidth={2} fill="currentColor" style={{ color: C.textMuted, flexShrink: 0 }} />

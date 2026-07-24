@@ -118,7 +118,11 @@ function Dashboard({ period, onDrillProject, onSwitch }: {
   const { data: projects } = useByProject(period);
   const { data: models } = useByModel(period);
   const { data: admins, loading: adminLoad } = useAdminAggregate(period);
-  const [tab, setTab] = useState<'daily' | 'projects' | 'models' | 'users'>('daily');
+  const { data: aggFree, loading: freeLoad } = useAggregate(period, undefined, undefined, undefined, 'ollama');
+  const { data: aggFreeDirect, loading: freeDirectLoad } = useAggregate(period, undefined, undefined, undefined, 'openrouter-direct');
+  const { data: aggFal, loading: falLoad } = useAggregate(period, undefined, undefined, undefined, 'fal');
+  const { data: aggOneshot, loading: oneshotLoad } = useAggregate(period, undefined, undefined, undefined, 'oneshot');
+  const [tab, setTab] = useState<'daily' | 'projects' | 'models' | 'sources' | 'users'>('daily');
 
   const maxDaily = Math.max(...daily.map(d => d.totalTokens), 1);
 
@@ -138,6 +142,7 @@ function Dashboard({ period, onDrillProject, onSwitch }: {
           <button style={STYLES.tab(tab === 'daily')} onClick={() => setTab('daily')}>По дням</button>
           <button style={STYLES.tab(tab === 'projects')} onClick={() => setTab('projects')}>По проектам</button>
           <button style={STYLES.tab(tab === 'models')} onClick={() => setTab('models')}>По моделям</button>
+          <button style={STYLES.tab(tab === 'sources')} onClick={() => setTab('sources')}>По источникам</button>
           {admins.length > 1 && (
             <button style={STYLES.tab(tab === 'users')} onClick={() => setTab('users')}>Пользователи</button>
           )}
@@ -146,6 +151,7 @@ function Dashboard({ period, onDrillProject, onSwitch }: {
         {tab === 'daily' && <DailyChart data={daily} maxY={maxDaily} />}
         {tab === 'projects' && <ProjectTable data={projects} onDrill={p => { if (p) { onDrillProject(p); onSwitch(); }}} />}
         {tab === 'models' && <ModelTable data={models} />}
+        {tab === 'sources' && <SourceTable agg={agg} freeAgg={aggFree} freeDirectAgg={aggFreeDirect} falAgg={aggFal} oneshotAgg={aggOneshot} />}
         {tab === 'users' && <UserTable data={admins} />}
       </div>
     </div>
@@ -217,6 +223,40 @@ function ModelTable({ data }: { data: { provider: string; model: string; totalTo
           <div style={{ fontFamily: FONT.mono, fontSize: 12, color: C.textMuted, width: 70, textAlign: 'right' }}>{fmtTokens(m.totalTokens)}</div>
           <div style={{ fontFamily: FONT.mono, fontSize: 12, color: MONEY, width: 70, textAlign: 'right' }}>{fmtMoney(m.costUsd)}</div>
           <div style={{ fontSize: 11, color: C.textMuted, width: 50, textAlign: 'right' }}>{m.turnCount} х.</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Таблица источников (чат, фон, бесплатно, fal)
+function SourceTable({ agg, freeAgg, freeDirectAgg, falAgg, oneshotAgg }: {
+  agg: SpendAggregate | null;
+  freeAgg: SpendAggregate | null;
+  freeDirectAgg: SpendAggregate | null;
+  falAgg: SpendAggregate | null;
+  oneshotAgg: SpendAggregate | null;
+}) {
+  // Для чатов — из общего агрегата минус oneshot (через CLI, платно)
+  const chatTokens = (agg?.totalTokens ?? 0) - (oneshotAgg?.totalTokens ?? 0);
+  const chatCost = (agg?.costUsd ?? 0) - (oneshotAgg?.costUsd ?? 0);
+  const chatCount = (agg?.turnCount ?? 0) - (oneshotAgg?.turnCount ?? 0);
+  const freeTotal = (freeAgg?.totalTokens ?? 0) + (freeDirectAgg?.totalTokens ?? 0);
+
+  const sources = [
+    { key: 'chat', label: '💬 Чаты', tokens: Math.max(0, chatTokens), cost: Math.max(0, chatCost), count: Math.max(0, chatCount) },
+    { key: 'oneshot', label: '⚙️ Фоновые вызовы', tokens: oneshotAgg?.totalTokens ?? 0, cost: oneshotAgg?.costUsd, count: oneshotAgg?.turnCount },
+    { key: 'free', label: '🖥 Бесплатные (Ollama/OpenRouter)', tokens: freeTotal, cost: 0, count: (freeAgg?.turnCount ?? 0) + (freeDirectAgg?.turnCount ?? 0) },
+    { key: 'fal', label: '🖼 Изображения (fal.ai)', tokens: falAgg?.totalTokens ?? 0, cost: falAgg?.costUsd, count: falAgg?.turnCount },
+  ];
+  return (
+    <div>
+      {sources.map(s => (
+        <div key={s.key} style={{ ...STYLES.row, cursor: 'default' }}>
+          <div style={{ flex: 1, fontSize: 13 }}>{s.label}</div>
+          <div style={{ fontFamily: FONT.mono, fontSize: 12, color: C.textMuted, width: 80, textAlign: 'right' }}>{fmtTokens(s.tokens)}</div>
+          <div style={{ fontFamily: FONT.mono, fontSize: 12, color: s.key === 'free' ? '#7B9E6D' : MONEY, width: 80, textAlign: 'right' }}>{s.key === 'free' ? 'бесплатно' : fmtMoney(s.cost)}</div>
+          <div style={{ fontSize: 11, color: C.textMuted, width: 50, textAlign: 'right' }}>{s.count ?? 0} х.</div>
         </div>
       ))}
     </div>

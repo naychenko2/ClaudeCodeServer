@@ -323,7 +323,7 @@ public class PersonasController : ControllerBase
             : $"Photorealistic portrait photo. {req.Prompt.Trim()}";
         var count = req.Count is >= 1 and <= 4 ? req.Count.Value : 4;
 
-        var images = await _falImage.GenerateManyAsync(prompt, count);
+        var images = await _falImage.GenerateManyAsync(prompt, count, ownerId: UserId);
         if (images.Count == 0) return StatusCode(502, new { error = "Не удалось сгенерировать изображение" });
 
         // Свежая папка кандидатов (перезатираем прошлую генерацию)
@@ -484,7 +484,7 @@ public class PersonasController : ControllerBase
             var prompt = string.IsNullOrWhiteSpace(avatarPrompt)
                 ? BuildAvatarPrompt(persona)
                 : $"Photorealistic portrait photo. {avatarPrompt.Trim()}";
-            var images = await _falImage.GenerateManyAsync(prompt, 1);
+            var images = await _falImage.GenerateManyAsync(prompt, 1, ownerId: persona.OwnerId);
             if (images.Count == 0) return persona;
             var dir = Path.Combine(_personas.AssetsDir, persona.Id);
             Directory.CreateDirectory(dir);

@@ -209,7 +209,7 @@ public sealed class SpendLogService : IDisposable
     }
 
     public SpendAggregate? QueryAggregate(string ownerId, DateTime from, DateTime to,
-        string? projectId = null, string? provider = null, string? model = null)
+        string? projectId = null, string? provider = null, string? model = null, string? source = null)
     {
         var sql = @"SELECT COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0),
             COALESCE(SUM(cache_read_tokens),0), COALESCE(SUM(cache_creation_tokens),0),
@@ -219,6 +219,7 @@ public sealed class SpendLogService : IDisposable
         if (projectId != null) { sql += " AND project_id=@pid"; filterParams.Add(("@pid", projectId)); }
         if (provider != null) { sql += " AND provider=@prov"; filterParams.Add(("@prov", provider)); }
         if (model != null) { sql += " AND model=@model"; filterParams.Add(("@model", model)); }
+        if (source != null) { sql += " AND source=@src"; filterParams.Add(("@src", source)); }
 
         return QueryOne<SpendAggregate>(sql, cmd =>
         {
@@ -392,6 +393,55 @@ public sealed class SpendLogService : IDisposable
             cmd.Parameters.AddWithValue("@oid", ownerId);
         }, r => r.IsDBNull(0) ? null : DateTime.Parse(r.GetString(0), null,
             System.Globalization.DateTimeStyles.RoundtripKind));
+    }
+
+    // Стоимость сессии (сумма всех ходов) — для контекстных индикаторов в шапке чата.
+    public double? QuerySessionCost(string sessionId)
+    {
+        try
+        {
+            using var c = OpenConnection();
+            using var cmd = c.CreateCommand();
+            cmd.CommandText = "SELECT SUM(cost_usd) FROM spend_log WHERE session_id=@sid;";
+            cmd.Parameters.AddWithValue("@sid", sessionId);
+            var result = cmd.ExecuteScalar();
+            return result is DBNull or null ? null : (double?)Convert.ToDouble(result);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    // Стоимость пачки сессий — для списка чатов (ключ = sessionId).
+    public IReadOnlyDictionary<string, double> QuerySessionsCost(IEnumerable<string> sessionIds)
+    {
+        try
+        {
+            var ids = sessionIds.Where(s => !string.IsNullOrEmpty(s)).ToList();
+            if (ids.Count == 0) return new Dictionary<string, double>();
+
+            using var c = OpenConnection();
+            using var cmd = c.CreateCommand();
+            var placeholders = ids.Select((_, i) => $"@s{i}").ToList();
+            cmd.CommandText = $"SELECT session_id, SUM(cost_usd) FROM spend_log WHERE session_id IN ({string.Join(",", placeholders)}) GROUP BY session_id;";
+            for (var i = 0; i < ids.Count; i++)
+                cmd.Parameters.AddWithValue($"@s{i}", ids[i]);
+
+            var result = new Dictionary<string, double>();
+            using var r = cmd.ExecuteReader();
+            while (r.Read())
+            {
+                var sid = r.GetString(0);
+                var cost = r.IsDBNull(1) ? 0.0 : r.GetDouble(1);
+                result[sid] = Math.Round(cost, 4);
+            }
+            return result;
+        }
+        catch
+        {
+            return new Dictionary<string, double>();
+        }
     }
 
     // --- Хелперы чтения ---

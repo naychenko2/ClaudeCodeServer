@@ -1216,9 +1216,9 @@ export const api = {
   },
 
   spend: {
-    aggregate: (from: string, to: string, projectId?: string, provider?: string, model?: string) =>
+    aggregate: (from: string, to: string, projectId?: string, provider?: string, model?: string, source?: string) =>
       request<import("../types").SpendAggregate>(
-        `/spend/aggregate?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}${projectId ? `&projectId=${encodeURIComponent(projectId)}` : ""}${provider ? `&provider=${encodeURIComponent(provider)}` : ""}${model ? `&model=${encodeURIComponent(model)}` : ""}`),
+        `/spend/aggregate?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}${projectId ? `&projectId=${encodeURIComponent(projectId)}` : ""}${provider ? `&provider=${encodeURIComponent(provider)}` : ""}${model ? `&model=${encodeURIComponent(model)}` : ""}${source ? `&source=${encodeURIComponent(source)}` : ""}`),
     daily: (from: string, to: string, projectId?: string, provider?: string) =>
       request<import("../types").DailySpendPoint[]>(
         `/spend/daily?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}${projectId ? `&projectId=${encodeURIComponent(projectId)}` : ""}${provider ? `&provider=${encodeURIComponent(provider)}` : ""}`),
@@ -1235,6 +1235,10 @@ export const api = {
       request<import("../types").UserSpendSummary[]>(
         `/spend/admin/aggregate?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
     boundary: () => request<import("../types").SpendBoundary>("/spend/boundary"),
+    sessionCost: (sessionId: string) =>
+      request<{ sessionId: string; costUsd: number | null }>(`/spend/session/${encodeURIComponent(sessionId)}`),
+    sessionsCost: (ids: string[]) =>
+      request<Record<string, number>>(`/spend/sessions-cost?ids=${ids.map(encodeURIComponent).join(',')}`),
   },
   sync: {
     list: (projectId: string) => request<SyncMark[]>(`/projects/${projectId}/sync`),

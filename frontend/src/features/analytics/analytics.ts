@@ -31,14 +31,14 @@ export function usePeriod(defaultPreset: PeriodPreset = '30d'): [Period, (p: Per
 
 function iso(d: Date) { return d.toISOString(); }
 
-export function useAggregate(period: Period, projectId?: string, provider?: string, model?: string) {
+export function useAggregate(period: Period, projectId?: string, provider?: string, model?: string, source?: string) {
   const [data, setData] = useState<SpendAggregate | null>(null);
   const [loading, setLoading] = useState(true);
   useEffect(() => {
     setLoading(true);
-    api.spend.aggregate(iso(period.from), iso(period.to), projectId, provider, model)
+    api.spend.aggregate(iso(period.from), iso(period.to), projectId, provider, model, source)
       .then(setData).finally(() => setLoading(false));
-  }, [period.from.getTime(), period.to.getTime(), projectId, provider, model]);
+  }, [period.from.getTime(), period.to.getTime(), projectId, provider, model, source]);
   return { data, loading };
 }
 

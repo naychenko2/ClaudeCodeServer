@@ -38,6 +38,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   useLastMechanicVersion();
   const personas = usePersonas();
   const [sessions, setSessions] = useState<Session[]>([]);
+  const [sessionCosts, setSessionCosts] = useState<Record<string, number>>({});
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
   const [editTarget, setEditTarget] = useState<Session | null>(null);
   // Карточка под курсором — на ней показываем действия (на тач-устройствах hover нет, там действия видны всегда)
@@ -87,6 +88,14 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     }, 5000);
     return () => clearInterval(interval);
   }, [project.id]);
+
+  // Загрузка стоимости сессий (для контекстного индикатора)
+  useEffect(() => {
+    const ids = sessions.filter(s => s.messageCount > 0).map(s => s.id);
+    if (ids.length === 0) { setSessionCosts({}); return; }
+    // Берём первые 50 сессий (ограничение длины query)
+    api.spend.sessionsCost(ids.slice(0, 50)).then(setSessionCosts).catch(() => {});
+  }, [sessions]);
 
   // Подписка на статусы в реальном времени. Членство в project-группе держит WorkspacePage.
   useEffect(() => {
@@ -226,6 +235,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     <ChatCard
       key={s.id}
       session={s}
+      totalCost={sessionCosts[s.id]}
       isActive={activeSession?.id === s.id}
       isMobile={isMobile}
       fallbackName={`Чат #${numberById.get(s.id) ?? 1}`}

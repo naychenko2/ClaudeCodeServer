@@ -20,7 +20,8 @@ public class SpendController(
     [HttpGet("/api/spend/aggregate")]
     public ActionResult<object> GetAggregate(
         [FromQuery] string from, [FromQuery] string to,
-        [FromQuery] string? projectId, [FromQuery] string? provider, [FromQuery] string? model)
+        [FromQuery] string? projectId, [FromQuery] string? provider,
+        [FromQuery] string? model, [FromQuery] string? source)
     {
         var ownerId = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
         if (string.IsNullOrEmpty(ownerId)) return Unauthorized();
@@ -28,7 +29,7 @@ public class SpendController(
         if (!DateTime.TryParse(from, out var fromDt) || !DateTime.TryParse(to, out var toDt))
             return BadRequest("Неверный формат даты. Используйте ISO 8601.");
 
-        var agg = spend.QueryAggregate(ownerId, fromDt, toDt, projectId, provider, model);
+        var agg = spend.QueryAggregate(ownerId, fromDt, toDt, projectId, provider, model, source);
         if (agg is null) return Ok(new {
             totalTokens = 0, inputTokens = 0, outputTokens = 0,
             cacheReadTokens = 0, cacheCreationTokens = 0,
@@ -189,5 +190,26 @@ public class SpendController(
 
         var boundary = spend.QueryBoundary(ownerId);
         return Ok(new { since = boundary?.ToString("O") });
+    }
+
+    /// <summary>
+    /// Стоимость одной сессии (для контекстного индикатора в шапке чата).
+    /// </summary>
+    [HttpGet("/api/spend/session/{sessionId}")]
+    public ActionResult GetSessionCost(string sessionId)
+    {
+        var cost = spend.QuerySessionCost(sessionId);
+        return Ok(new { sessionId, costUsd = cost != null ? Math.Round(cost.Value, 4) : (double?)null });
+    }
+
+    /// <summary>
+    /// Стоимость пачки сессий (для списка чатов).
+    /// </summary>
+    [HttpGet("/api/spend/sessions-cost")]
+    public ActionResult GetSessionsCost([FromQuery] string ids)
+    {
+        var sessionIds = (ids ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var costs = spend.QuerySessionsCost(sessionIds);
+        return Ok(costs);
     }
 }

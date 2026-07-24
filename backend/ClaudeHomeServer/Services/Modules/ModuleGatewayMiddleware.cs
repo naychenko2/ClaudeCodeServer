@@ -67,22 +67,39 @@ public static class ModuleGatewayMiddleware
             return;
         }
 
-        // Data-plane: только с валидным cc_token ядра
-        var ccToken = ExtractCcToken(ctx.Request);
+        // Data-plane (§5.2): два валидных предъявителя на Authorization —
+        //  (а) cc_token ядра (HMAC) — браузерный путь: срезаем и наминтим chan=gateway;
+        //  (б) модульный токен этого модуля (RS256, chan=mcp) — обратный вызов модуля через
+        //      gateway (MODULE_API_TOKEN): passthrough как есть, без re-mint (токен уже валиден
+        //      и у модуля, и у ядра). Иначе → 401 на границе ядра.
+        var rawToken = ExtractCcToken(ctx.Request);
         var jwt = ctx.RequestServices.GetRequiredService<JwtService>();
-        var userId = jwt.ValidateUserToken(ccToken);
+        var tokens = ctx.RequestServices.GetRequiredService<ModuleTokenService>();
+        var flags = ctx.RequestServices.GetRequiredService<FeatureFlagService>();
+
+        // (а) cc_token ядра (HMAC): браузерный путь → свежий модульный токен chan=gateway
+        var userId = jwt.ValidateUserToken(rawToken);
         var user = userId is null
             ? null
             : ctx.RequestServices.GetRequiredService<UserStore>().GetById(userId);
         if (user is null)
         {
+            // (б) модульный токен chan=mcp этого модуля (RS256) — passthrough (§5.2б).
+            // Authorization не трогаем: модуль увидит свой исходный chan=mcp/sub/aud.
+            // Гейт видимости (R8) тот же — выключенный модуль недоступен и через mcp-токен.
+            if (tokens.TryValidate(rawToken, module, out var tokenSub)
+                && flags.IsEnabled(tokenSub!, module.FeatureFlagKey))
+            {
+                await next(ctx);
+                return;
+            }
+
             ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
             await ctx.Response.WriteAsJsonAsync(new { error = "unauthorized" });
             return;
         }
 
         // Гейт видимости (R8): выключенный модуль недоступен и через gateway
-        var flags = ctx.RequestServices.GetRequiredService<FeatureFlagService>();
         if (!flags.IsEnabled(user.Id, module.FeatureFlagKey))
         {
             ctx.Response.StatusCode = StatusCodes.Status404NotFound;
@@ -90,9 +107,8 @@ public static class ModuleGatewayMiddleware
             return;
         }
 
-        // Инъекция: свежий модульный токен вместо клиентского Authorization (§5.2).
+        // §5.2(а): свежий модульный токен вместо клиентского Authorization.
         // Браузер модульный токен никогда не видит — он рождается и живёт только здесь.
-        var tokens = ctx.RequestServices.GetRequiredService<ModuleTokenService>();
         var moduleToken = tokens.Issue(module, user.Id, user.DisplayName ?? user.Username, "gateway");
         ctx.Request.Headers.Authorization = $"Bearer {moduleToken}";
 

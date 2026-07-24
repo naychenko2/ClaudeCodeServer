@@ -152,6 +152,92 @@ public sealed class ModuleTokenService
         return new JwtSecurityTokenHandler().WriteToken(jwt);
     }
 
+    /// <summary>Допустимая временная неточность при валидации модульного токена (§5.1: 60 с).</summary>
+    private static readonly TimeSpan ValidationClockSkew = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// Валидация модульного токена RS256 (контракт §5.1) своими ключами — БЕЗ JWKS
+    /// (JWKS — публичный эндпоинт для модулей; ядро проверяет по своим приватным ключам
+    /// напрямую, потому что оно же их и эмитит). Используется gateway-веткой passthrough
+    /// (§5.2б): модуль шлёт свой MODULE_API_TOKEN (chan=mcp) как Authorization при обратных
+    /// вызовах через gateway.
+    /// Проверяет alg=RS256 (явно, до валидации — защита от alg-confusion), iss, aud (точное
+    /// сравнение с module.Audience), chan=mcp, подпись и lifetime (skew 60 с). Возвращает
+    /// sub (userId) при успехе; любая негодность → false и null.
+    /// </summary>
+    public bool TryValidate(string? token, LoadedModule module, out string? userId)
+    {
+        userId = null;
+        if (string.IsNullOrWhiteSpace(token)) return false;
+
+        JwtSecurityTokenHandler handler = new() { MapInboundClaims = false };
+        JwtSecurityToken parsed;
+        try { parsed = handler.ReadJwtToken(token); }
+        catch { return false; }
+
+        // alg жёстко RS256 (§5.1): HS256 сюда не относится (это cc_token из отдельной ветки).
+        // Проверяем ДО валидации подписи — классический alg-confusion (HS256 с публичной
+        // RSA-компонентой как HMAC-секретом) здесь невозможен.
+        if (parsed.Header.Alg != SecurityAlgorithms.RsaSha256) return false;
+
+        List<RsaSecurityKey> publicKeys;
+        lock (_sync)
+        {
+            var cutoff = DateTime.UtcNow - RetiredKeyGrace;
+            publicKeys = _keys
+                .Where(k => k.RetiredAt is null || k.RetiredAt >= cutoff)
+                .Select(ToPublicKey)
+                .ToList();
+        }
+        if (publicKeys.Count == 0) return false;
+
+        // Перебираем ключи (активный + отставленные в grace 24 ч): при ротации (§5.3) токены,
+        // подписанные только что отставленным ключом, должны ещё приниматься.
+        foreach (var key in publicKeys)
+        {
+            ClaimsPrincipal principal;
+            try
+            {
+                principal = handler.ValidateToken(token, new TokenValidationParameters
+                {
+                    ValidateIssuer = true,
+                    ValidIssuer = "ClaudeHomeServer",
+                    ValidateAudience = true,
+                    ValidAudience = module.Audience,
+                    ValidateLifetime = true,
+                    ValidateIssuerSigningKey = true,
+                    IssuerSigningKey = key,
+                    ClockSkew = ValidationClockSkew,
+                    NameClaimType = ClaimTypes.Name,
+                    RoleClaimType = ClaimTypes.Role,
+                }, out _);
+            }
+            catch
+            {
+                // Ключ не подошёл (другая подпись/ротация) — пробуем следующий
+                continue;
+            }
+
+            // Passthrough (§5.2б) — только модульные токены канала mcp: chan=gateway живёт
+            // лишь в этом middleware на пути браузер↔ядро и извне прийти не может.
+            if (principal.FindFirstValue("chan") != "mcp") return false;
+            userId = principal.FindFirstValue(JwtRegisteredClaimNames.Sub);
+            return !string.IsNullOrEmpty(userId);
+        }
+        return false;
+    }
+
+    // Публичный RSA-ключ (только Modulus/Exponent) из хранимого приватного — для проверки
+    // подписи токенов. Приватная компонента намеренно отбрасывается: валидация её не требует.
+    private static RsaSecurityKey ToPublicKey(StoredKey stored)
+    {
+        using var rsa = RSA.Create();
+        rsa.ImportPkcs8PrivateKey(Convert.FromBase64String(stored.PrivateKeyPkcs8), out _);
+        var pub = rsa.ExportParameters(false);
+        return new RsaSecurityKey(new RSAParameters { Modulus = pub.Modulus, Exponent = pub.Exponent })
+        { KeyId = stored.Kid };
+    }
+
     /// <summary>
     /// JWKS-документ (§5.3): активный ключ + отставленные, чей grace 24 ч ещё не вышел.
     /// Только публичные компоненты.

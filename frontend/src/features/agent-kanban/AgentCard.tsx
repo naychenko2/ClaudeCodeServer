@@ -25,7 +25,7 @@ export function AgentCard({ item }: {
 
   const personaLabel = persona
     ? (persona.role ? `${persona.role} (${persona.name})` : persona.name)
-    : 'Claude';
+    : 'AI';
 
   // Цвет колонки — для полосы слева (как в TaskCard)
   const accent = item.column === 'working' ? C.accent

@@ -179,7 +179,7 @@ const FILTERS = [
   { key: 'all', label: 'Все' },
   { key: 'unread', label: 'Непрочитанные' },
   { key: 'reminder', label: '⏰ Напоминания' },
-  { key: 'claude', label: '● Claude' },
+  { key: 'claude', label: '● AI' },
   { key: 'info', label: 'ℹ Системные' },
   { key: 'success', label: '✓ Выполнено' },
 ];

@@ -13,7 +13,7 @@ export const KIND_META: Record<NotificationKind, { icon: string; color: string; 
 
 export const KIND_LABELS: Record<string, string> = {
   reminder: 'Напоминание',
-  claude: 'Claude',
+  claude: 'AI',
   info: 'Системное',
   success: 'Выполнено',
   meeting: 'Совещание',

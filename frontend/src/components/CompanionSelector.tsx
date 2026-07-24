@@ -431,7 +431,7 @@ export function CompanionSelector({ personas, agents, selectedPersona, selectedA
                 {projectPersonas.map(personaItem)}
                 {showHeaders && regularGlobals.length > 0 && groupHeader('Глобальные')}
                 {regularGlobals.map(personaItem)}
-                {plainAgents.length > 0 && groupHeader('Агенты Claude')}
+                {plainAgents.length > 0 && groupHeader('Агенты AI')}
                 {plainAgents.map(agentItem)}
               </>
             );

@@ -543,7 +543,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
                 <WaitingIndicator />
               )}
               {tagsJob.status === 'error' && (
-                <span style={{ fontSize: 11, color: C.dangerText }}>ИИ недоступен (claude не залогинен на сервере)</span>
+                <span style={{ fontSize: 11, color: C.dangerText }}>ИИ недоступен (AI не залогинен на сервере)</span>
               )}
               {tagsJob.status === 'done' && (tagsJob.result ?? []).length === 0 && (
                 <span style={{ fontSize: 11, color: C.textMuted }}>нечего предложить</span>
@@ -567,7 +567,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
               <>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 600, color: linksJob.status === 'error' ? C.dangerText : C.textSecondary, marginBottom: (linksJob.result?.length ?? 0) > 0 ? 8 : 0 }}>
                   <IconSparkle />
-                  {linksJob.status === 'error' ? 'ИИ недоступен (claude не залогинен на сервере)'
+                  {linksJob.status === 'error' ? 'ИИ недоступен (AI не залогинен на сервере)'
                     : (linksJob.result?.length ?? 0) === 0 ? 'Подходящих связей не нашлось' : 'Предложенные связи'}
                   <button onClick={() => resetAiJob(linksKey)} style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', color: C.textMuted, padding: 0, display: 'flex' }}><X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /></button>
                 </div>

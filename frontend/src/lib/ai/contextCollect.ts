@@ -52,7 +52,7 @@ export async function collectContext(ctx: AiActionCtx, actions: ActionOption[]):
         `исполнитель: ${t.assignee ?? 'я'}`,
         `подзадач: ${t.subtasks.length}`,
         t.description?.trim() ? 'есть описание' : 'без описания',
-        running ? 'исполнитель Claude сейчас работает' : '',
+        running ? 'исполнитель AI сейчас работает' : '',
       ].filter(Boolean).join('; ');
       return { type: 'task', text: `${t.title}\n${meta}\n\n${truncate(t.description || '')}`, actions };
     }

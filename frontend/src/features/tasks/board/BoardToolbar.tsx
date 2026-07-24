@@ -94,7 +94,7 @@ export function BoardToolbar({ layout, groupOptions, onEditColumns }: {
             fontFamily: FONT.sans, fontSize: 12, fontWeight: assignee === a ? 700 : 500,
           }}
         >
-          {a === 'all' ? 'Все' : a === 'me' ? 'Я' : 'Claude'}
+          {a === 'all' ? 'Все' : a === 'me' ? 'Я' : 'AI'}
         </button>
       ))}
     </div>
@@ -184,7 +184,7 @@ export function BoardToolbar({ layout, groupOptions, onEditColumns }: {
                       fontFamily: FONT.sans, fontSize: 13, fontWeight: assignee === a ? 700 : 500,
                     }}
                   >
-                    {a === 'all' ? 'Все' : a === 'me' ? 'Я' : 'Claude'}
+                    {a === 'all' ? 'Все' : a === 'me' ? 'Я' : 'AI'}
                   </button>
                 ))}
               </div>

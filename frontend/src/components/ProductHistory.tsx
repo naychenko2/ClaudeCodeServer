@@ -214,7 +214,7 @@ export function ProductHistory({ isMobile, onClose, auth, onLogout, onHubTab }: 
   const askRegenerate = useCallback((date: string) => {
     setConfirm({
       title: 'Обновить сводку дня?',
-      body: 'Claude пересоберет сводку этого дня заново. Это может занять до пары минут.',
+      body: 'AI пересоберет сводку этого дня заново. Это может занять до пары минут.',
       confirmLabel: 'Обновить',
       variant: 'primary',
       run: () => regenerateDay(date),
@@ -364,7 +364,7 @@ export function ProductHistory({ isMobile, onClose, auth, onLogout, onHubTab }: 
                 display: 'flex', alignItems: 'center', gap: 10,
               }}>
                 <Spinner />
-                {selLoading ? 'Claude готовит сводку дня…' : 'В очереди на сводку…'}
+                {selLoading ? 'AI готовит сводку дня…' : 'В очереди на сводку…'}
               </div>
             )}
             {/* Сводка не собралась — честно говорим об этом и как чинить, вместо того

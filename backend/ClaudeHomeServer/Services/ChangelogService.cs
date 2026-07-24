@@ -248,16 +248,16 @@ public class ChangelogService(FileService files, IConfiguration config, ILogger<
     internal static string DescribeFailure(string? error)
     {
         if (string.IsNullOrWhiteSpace(error))
-            return "Не удалось собрать сводку: claude не ответил.";
+            return "Не удалось собрать сводку: AI не ответил.";
 
         if (error.Contains("Not logged in", StringComparison.OrdinalIgnoreCase)
             || error.Contains("/login", StringComparison.OrdinalIgnoreCase))
-            return "Claude CLI не залогинен, поэтому сводка не собрана — показаны сырые коммиты. "
+            return "AI CLI не залогинен, поэтому сводка не собрана — показаны сырые коммиты. "
                  + "Выполните «claude auth login» либо задайте переменную CLAUDE_CODE_OAUTH_TOKEN "
                  + "(claude setup-token) в окружении сервера.";
 
         if (error.Contains("не ответил за отведённое время", StringComparison.OrdinalIgnoreCase))
-            return "Claude не уложился в отведённое время — показаны сырые коммиты. "
+            return "AI не уложился в отведённое время — показаны сырые коммиты. "
                  + "Попробуйте обновить сводку или увеличьте Changelog:TimeoutMs.";
 
         return $"Не удалось собрать сводку — показаны сырые коммиты. Причина: {error}";

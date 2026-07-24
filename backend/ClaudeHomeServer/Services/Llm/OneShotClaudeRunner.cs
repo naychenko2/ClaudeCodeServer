@@ -160,7 +160,7 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
         catch (OperationCanceledException)
         {
             launcher.Kill(process, turnId);
-            throw new InvalidOperationException("Claude не ответил за отведённое время");
+            throw new InvalidOperationException("AI не ответил за отведённое время");
         }
     }
 

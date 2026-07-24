@@ -191,7 +191,7 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
     <button
       onClick={handleExecute}
       disabled={executing}
-      title="Создать чат и поручить задачу Claude"
+      title="Создать чат и поручить задачу AI"
       style={{
         display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
         padding: '0 14px', height: 32, cursor: executing ? 'default' : 'pointer',
@@ -208,7 +208,7 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
             <polygon points="6 3 20 12 6 21" />
           </svg>
         )}
-      {executing ? 'Запуск…' : 'Выполнить с Claude'}
+      {executing ? 'Запуск…' : 'Выполнить с AI'}
     </button>
   );
 
@@ -324,7 +324,7 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
         </div>
       )}
 
-      {/* Claude сейчас работает над задачей */}
+      {/* AI сейчас работает над задачей */}
       {claudeRunning && (
         <div style={{
           display: 'inline-flex', alignItems: 'center', gap: 8, marginBottom: 12,
@@ -333,7 +333,7 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
           fontFamily: FONT.sans, fontSize: 12.5, fontWeight: 600, color: C.accent,
         }}>
           <span className="tool-spinner" style={{ width: 11, height: 11, flexShrink: 0 }} />
-          Claude работает над задачей
+          AI работает над задачей
         </div>
       )}
 
@@ -363,7 +363,7 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
         {task.assignee && (
           <HeaderChip>
             {task.assignee === 'claude' ? <ClaudeBadge size={17} /> : <MeBadge size={17} />}
-            {task.assignee === 'claude' ? 'Claude' : 'Я'}
+            {task.assignee === 'claude' ? 'AI' : 'Я'}
           </HeaderChip>
         )}
         {/* Персона-исполнитель: от чьего лица работает Claude */}

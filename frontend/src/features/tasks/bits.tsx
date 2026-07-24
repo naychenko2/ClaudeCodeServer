@@ -26,7 +26,7 @@ export function ClaudeBadge({ size = 20 }: { size?: number }) {
     <img
       src="/favicon.svg"
       alt=""
-      title="Claude"
+      title="AI"
       width={size}
       height={size}
       style={{ display: 'block', flexShrink: 0 }}

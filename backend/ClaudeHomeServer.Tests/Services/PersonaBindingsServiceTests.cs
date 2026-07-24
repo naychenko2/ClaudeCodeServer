@@ -410,4 +410,84 @@ public class PersonaBindingsServiceTests : IDisposable
         scopes[0].ProjectId.Should().Be("projB");
         scopes[0].ReadOnly.Should().BeTrue();
     }
+
+    // --- HasFileBindingToProject / HasTaskBindingToProject / HasAnyBindingToProject (automation validation) ---
+
+    [Fact]
+    public void HasFileBindingToProject_ProjectПривязка_True()
+    {
+        var project = MakeProject("Файлы");
+        var persona = MakePersona(bindings:
+        [
+            new PersonaBinding { Type = PersonaBindingType.Project, Target = project.Id },
+        ]);
+        _sut.HasFileBindingToProject(persona, project.Id).Should().BeTrue();
+        _sut.HasFileBindingToProject(persona, "other-id").Should().BeFalse();
+    }
+
+    [Fact]
+    public void HasFileBindingToProject_ProjectPathПривязка_True()
+    {
+        var project = MakeProject("Папка");
+        var persona = MakePersona(bindings:
+        [
+            new PersonaBinding { Type = PersonaBindingType.ProjectPath, Target = project.Id, Path = "docs" },
+        ]);
+        _sut.HasFileBindingToProject(persona, project.Id).Should().BeTrue();
+    }
+
+    [Fact]
+    public void HasFileBindingToProject_ProjectTasksПривязка_False()
+    {
+        var project = MakeProject("Задачи");
+        var persona = MakePersona(bindings:
+        [
+            new PersonaBinding { Type = PersonaBindingType.ProjectTasks, Target = project.Id },
+        ]);
+        // ProjectTasks не даёт доступа к файлам
+        _sut.HasFileBindingToProject(persona, project.Id).Should().BeFalse();
+    }
+
+    [Fact]
+    public void HasFileBindingToProject_OffПривязка_False()
+    {
+        var project = MakeProject("Выкл");
+        var persona = MakePersona(bindings:
+        [
+            new PersonaBinding { Type = PersonaBindingType.Project, Target = project.Id, Mode = PersonaBindingMode.Off },
+        ]);
+        _sut.HasFileBindingToProject(persona, project.Id).Should().BeFalse();
+    }
+
+    [Fact]
+    public void HasTaskBindingToProject_ProjectTasks_True()
+    {
+        var project = MakeProject("Только задачи");
+        var persona = MakePersona(bindings:
+        [
+            new PersonaBinding { Type = PersonaBindingType.ProjectTasks, Target = project.Id },
+        ]);
+        _sut.HasTaskBindingToProject(persona, project.Id).Should().BeTrue();
+        _sut.HasTaskBindingToProject(persona, "other").Should().BeFalse();
+    }
+
+    [Fact]
+    public void HasAnyBindingToProject_ЛюбаяПривязка_True()
+    {
+        var project = MakeProject("Любой");
+        var tasksOnly = MakePersona(bindings:
+        [
+            new PersonaBinding { Type = PersonaBindingType.ProjectTasks, Target = project.Id },
+        ]);
+        _sut.HasAnyBindingToProject(tasksOnly, project.Id).Should().BeTrue();
+
+        var fileOnly = MakePersona(bindings:
+        [
+            new PersonaBinding { Type = PersonaBindingType.Project, Target = project.Id },
+        ]);
+        _sut.HasAnyBindingToProject(fileOnly, project.Id).Should().BeTrue();
+
+        var noBindings = MakePersona();
+        _sut.HasAnyBindingToProject(noBindings, project.Id).Should().BeFalse();
+    }
 }

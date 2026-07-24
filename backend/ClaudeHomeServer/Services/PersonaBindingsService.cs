@@ -627,6 +627,26 @@ public class PersonaBindingsService
         }
     }
 
+    // --- Проверка привязок для automation rules ---
+
+    // Есть ли у персоны активная привязка доступа к файлам (Project или ProjectPath).
+    public bool HasFileBindingToProject(Persona persona, string projectId) =>
+        persona.Bindings?.Any(b => b.Mode != PersonaBindingMode.Off
+            && (b.Type == PersonaBindingType.Project || b.Type == PersonaBindingType.ProjectPath)
+            && string.Equals(b.Target, projectId, StringComparison.OrdinalIgnoreCase))
+        ?? false;
+
+    // Есть ли у персоны активная привязка ProjectTasks.
+    public bool HasTaskBindingToProject(Persona persona, string projectId) =>
+        persona.Bindings?.Any(b => b.Mode != PersonaBindingMode.Off
+            && b.Type == PersonaBindingType.ProjectTasks
+            && string.Equals(b.Target, projectId, StringComparison.OrdinalIgnoreCase))
+        ?? false;
+
+    // Любая привязка (Project|ProjectPath|ProjectTasks) к проекту.
+    public bool HasAnyBindingToProject(Persona persona, string projectId) =>
+        HasFileBindingToProject(persona, projectId) || HasTaskBindingToProject(persona, projectId);
+
     // --- Валидация ---
 
     // Нормализация Path привязки: forward slashes, без обрамляющих слэшей. null — пусто.

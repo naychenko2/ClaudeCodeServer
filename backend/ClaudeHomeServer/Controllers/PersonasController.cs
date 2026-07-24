@@ -896,6 +896,9 @@ public class PersonasController : ControllerBase
     {
         var persona = _personas.Get(id, UserId);
         if (persona is null) return NotFound();
+        // Валидация projectId в triggerArgs
+        var error = ValidateTriggerProjectId(persona, req);
+        if (error is not null) return BadRequest(new { error });
         var rule = ParseRule(req);
         // Идемпотентность: повторный вызов с теми же параметрами (ретрай MCP-инструмента,
         // автопродолжение цикла, повтор хода после сбоя) не плодит дубль — если правило с той
@@ -917,6 +920,32 @@ public class PersonasController : ControllerBase
             r.Action.Weight,
             r.Action.Instruction?.Trim() ?? "",
             r.Name.Trim());
+
+    // Валидация projectId в triggerArgs: для File/GitCommit-триггера нужна
+    // Project/ProjectPath-привязка, для остальных — любая.
+    // Возвращает null при успехе или текст ошибки для 400.
+    private string? ValidateTriggerProjectId(Persona persona, AutomationRuleRequest req, PersonaAutomationRule? current = null)
+    {
+        var triggerArgs = req.TriggerArgs ?? current?.Trigger.Args;
+        if (triggerArgs is null) return null;
+        var projectId = triggerArgs.TryGetValue("projectId", out var el) ? el.GetString() : null;
+        if (string.IsNullOrWhiteSpace(projectId)) return null;
+
+        var triggerType = req.TriggerType ?? current?.Trigger.Type;
+        var isFileTrigger = triggerType is AutomationTriggerType.File or AutomationTriggerType.GitCommit;
+
+        if (isFileTrigger)
+        {
+            if (!_bindings.HasFileBindingToProject(persona, projectId))
+                return $"Для триггера {triggerType} с projectId нужна привязка Project или ProjectPath к проекту «{_projects.GetById(projectId)?.Name ?? projectId}»";
+        }
+        else
+        {
+            if (!_bindings.HasAnyBindingToProject(persona, projectId))
+                return $"Для правила с projectId нужна привязка Project, ProjectPath или ProjectTasks к проекту «{_projects.GetById(projectId)?.Name ?? projectId}»";
+        }
+        return null;
+    }
 
     // Полная замена набора правил (PUT-семантика)
     [HttpPut("{id}/automation")]
@@ -940,6 +969,10 @@ public class PersonasController : ControllerBase
         if (persona is null) return NotFound();
         var current = persona.AutomationRules?.FirstOrDefault(r => r.Id == ruleId);
         if (current is null) return NotFound(new { error = "Правило не найдено" });
+
+        // Валидация projectId — учитываем как новые, так и текущие параметры
+        var error = ValidateTriggerProjectId(persona, req, current);
+        if (error is not null) return BadRequest(new { error });
 
         var merged = ParseRule(req, current);
         var list = (persona.AutomationRules ?? []).Select(r => r.Id == ruleId ? merged : r).ToList();

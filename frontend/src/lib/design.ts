@@ -60,6 +60,9 @@ export const C = {
   overlay:     'var(--c-overlay)',
   // Полупрозрачная подложка под текст поверх картинки
   glass:       'var(--c-glass)',
+  // Подложка ответа ассистента в чате: лента лежит на фоне с дудл-паттерном,
+  // без неё текст читался бы прямо поверх рисунка
+  msgBg:       'var(--c-msg-bg)',
 
   // Статусы
   success:     'var(--c-success)',
@@ -158,6 +161,12 @@ export const ISLAND = {
   shadow:   SHADOW.island,
   headerH:  40,            // высота шапки острова
   headerBg: C.bgInset,     // шапка утоплена относительно тела карточки
+
+  // === Фон-холст (CanvasBackdrop) ===
+  ink:  'var(--canvas-ink)',   // rgb-триплет «туши» дудл-паттерна
+  glow: 'var(--canvas-glow)',  // accent-нимб холста
+  patternAlpha: 'var(--canvas-alpha)', // непрозрачность линий паттерна
+  patternSize:  'var(--canvas-tile)',  // размер тайла паттерна
 } as const
 
 // === Слои (z-index) ===

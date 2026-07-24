@@ -170,7 +170,7 @@ function ClaudeCostPopoverBody({ stats, billing, onBillingChange, windows }: {
   const sub = billing === 'subscription';
   return (
     <>
-      <div style={badgeTitleStyle}>{sub ? 'AI · ≈ по API-тарифу' : 'Стоимость AI'}</div>
+      <div style={badgeTitleStyle}>{sub ? 'Claude · ≈ по API-тарифу' : 'Стоимость Claude'}</div>
       {sub && (
         <div style={{ fontFamily: FONT.sans, fontSize: 11, color: C.textMuted, marginBottom: 8, lineHeight: 1.45 }}>
           Эквивалент на pay-as-you-go API. По подписке покрыто абонплатой — отдельно не списывается.
@@ -234,13 +234,13 @@ function CostBadge({ stats, isMobile, billing, onBillingChange, windows }: {
   );
   return (
     <BadgeShell
-      label="AI"
+      label="Claude"
       amount={amountNode}
       isMobile={isMobile}
       tone={tone}
       title={sub
-        ? 'AI ≈ по API-тарифу · по подписке отдельно не списывается'
-        : 'Стоимость AI — нажмите для разбивки'}
+        ? 'Claude ≈ по API-тарифу · по подписке отдельно не списывается'
+        : 'Стоимость Claude — нажмите для разбивки'}
     >
       <ClaudeCostPopoverBody stats={stats} billing={billing} onBillingChange={onBillingChange} windows={windows} />
     </BadgeShell>

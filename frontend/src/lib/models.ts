@@ -32,7 +32,7 @@ export interface ProviderCapabilities {
 // У Claude доступно всё — это и дефолт до загрузки списка с бэка
 const CLAUDE_CAPS: ProviderCapabilities = {
   provider: 'claude',
-  displayName: 'AI',
+  displayName: 'Claude',
   supportsPlanMode: true,
   supportsCompact: true,
   supportsMcp: true,
@@ -122,9 +122,12 @@ export function modelCaps(value?: string | null): ProviderCapabilities {
   return _providers[modelProvider(value)] ?? CLAUDE_CAPS;
 }
 
-// Отображаемое имя ассистента по модели сессии — для строк в UI («… закончил», «Спросите …»)
+// Отображаемое имя ассистента по модели сессии — для строк в UI («… закончил», «Спросите …»).
+// У Claude ассистент брендируется нейтральным «AI» (имя провайдера «Claude» остаётся для
+// баланса/usage и групп моделей); у сторонних провайдеров — их собственное имя.
 export function assistantName(value?: string | null): string {
-  return modelCaps(value).displayName || 'AI';
+  const caps = modelCaps(value);
+  return caps.provider === 'claude' ? 'AI' : (caps.displayName || 'AI');
 }
 
 // Метки виртуальных «провайдеров» — групп, которых нет в реестре LlmProviders, но которые
@@ -137,7 +140,7 @@ const VIRTUAL_PROVIDER_LABELS: Record<string, string> = {
 export function providerLabel(key: string): string {
   return VIRTUAL_PROVIDER_LABELS[key]
     ?? _providers[key]?.displayName
-    ?? (key === 'claude' ? 'AI' : key.charAt(0).toUpperCase() + key.slice(1));
+    ?? (key === 'claude' ? 'Claude' : key.charAt(0).toUpperCase() + key.slice(1));
 }
 
 // Возможности провайдера по ключу (для вкладок «Использования» и т.п.)

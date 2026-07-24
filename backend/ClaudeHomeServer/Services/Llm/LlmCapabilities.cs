@@ -19,7 +19,7 @@ public static class LlmCapabilitiesCatalog
 {
     public static readonly LlmCapabilities Claude = new(
         Provider: "claude",
-        DisplayName: "AI",
+        DisplayName: "Claude",
         SupportsPlanMode: true,
         SupportsCompact: true,
         SupportsMcp: true,

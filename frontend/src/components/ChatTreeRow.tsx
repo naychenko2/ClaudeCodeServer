@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { ChevronRight } from 'lucide-react';
 import { useDraggable, useDroppable } from '@dnd-kit/core';
 import { C, R, FONT, FS } from '../lib/design';
-import type { ChatTreeRowData } from '../lib/chatTree';
+import { formatGroupCount, type ChatTreeRowData } from '../lib/chatTree';
 import { useChatDrag } from './ChatGroupingDnd';
 
 // === Строка дерева чатов: отступ + connector-линии + chevron вокруг ChatCard ===
@@ -51,7 +51,10 @@ export function ChatTreeRow({ row, isMobile, onToggleCollapse, children }: Props
   const spineX = (d: number) => offset(d) + GUTTER / 2;
   const cardLeftX = (d: number) => offset(d) + GUTTER;
 
-  const { depth, isLast, hasChildren, collapsed, childCount } = row;
+  const { depth, isLast, hasChildren, collapsed, groupCount, groupRunningCount } = row;
+  const collapsedHint = groupRunningCount > 0
+    ? `Развернуть: вложенных чатов ${groupCount}, из них в работе ${groupRunningCount}`
+    : `Развернуть: вложенных чатов ${groupCount}`;
   const lineColor = (accent: boolean) => (accent ? C.accent : C.divider);
 
   return (
@@ -135,8 +138,10 @@ export function ChatTreeRow({ row, isMobile, onToggleCollapse, children }: Props
           onTouchStart={e => e.stopPropagation()}
           onMouseEnter={() => setChevronHover(true)}
           onMouseLeave={() => setChevronHover(false)}
-          title={collapsed ? 'Развернуть вложенные чаты' : 'Свернуть вложенные чаты'}
-          aria-label={collapsed ? 'Развернуть вложенные чаты' : 'Свернуть вложенные чаты'}
+          // Счётчики озвучиваются здесь, а не на бейдже: бейдж лежит поверх кнопки
+          // с pointerEvents:none, его собственный title мышью не поймать
+          title={collapsed ? collapsedHint : 'Свернуть вложенные чаты'}
+          aria-label={collapsed ? collapsedHint : 'Свернуть вложенные чаты'}
           style={{
             position: 'absolute', left: offset(depth), top: elbowY - 16,
             width: GUTTER, height: 32, zIndex: 2,
@@ -152,17 +157,33 @@ export function ChatTreeRow({ row, isMobile, onToggleCollapse, children }: Props
         </button>
       )}
 
-      {/* Счётчик прямых детей у свёрнутого узла — микро-бейдж у верхне-правого угла chevron */}
+      {/* Счётчик спрятанной ветки у свёрнутого узла — микро-бейдж у верхне-правого угла
+          chevron. Второе число через «/» — сколько из них сейчас в работе; при нуле не
+          показывается, чтобы у спокойной ветки бейдж оставался прежним одиночным.
+          Цвета сверены с легендой точки статуса (StatusIndicator): accent = «работает»,
+          поэтому акцент несёт именно число работающих, а общее — нейтральное. Зелёный
+          сюда не годится: в этом же списке C.success означает статус active, то есть
+          «ход завершён» — ровно НЕ работу.
+          Числа клампятся: бейдж выходит за свою gutter-колонку поверх карточки, и
+          длинная строка накрыла бы точку статуса и начало названия чата. */}
       {hasChildren && collapsed && (
-        <div aria-hidden style={{
-          position: 'absolute', left: spineX(depth) - 1, top: elbowY - 19, zIndex: 2,
-          pointerEvents: 'none',
-          minWidth: 14, height: 14, padding: '0 2px', boxSizing: 'border-box',
-          borderRadius: R.max, background: C.accentLight, color: C.accent,
-          fontFamily: FONT.mono, fontSize: FS.xs, fontWeight: 600,
-          lineHeight: '14px', textAlign: 'center',
-        }}>
-          {childCount}
+        <div
+          aria-hidden
+          style={{
+            position: 'absolute', left: spineX(depth) - 1, top: elbowY - 19, zIndex: 2,
+            pointerEvents: 'none',
+            minWidth: 14, height: 14, padding: '0 3px', boxSizing: 'border-box',
+            borderRadius: R.max, background: C.accentLight, color: C.textSecondary,
+            fontFamily: FONT.mono, fontSize: FS.xs, fontWeight: 600,
+            lineHeight: '14px', textAlign: 'center', whiteSpace: 'nowrap',
+          }}
+        >
+          {formatGroupCount(groupCount)}
+          {groupRunningCount > 0 && (
+            <>
+              /<span style={{ color: C.accent }}>{formatGroupCount(groupRunningCount)}</span>
+            </>
+          )}
         </div>
       )}
     </div>

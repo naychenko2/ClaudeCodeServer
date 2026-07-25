@@ -2638,8 +2638,27 @@ public class ClaudeSession : ILlmSessionAdapter
         if (tokens > 0) _lastContextTokens = tokens;
     }
 
-    private static UsageInfo? ParseUsage(JsonElement root)
+    // Токены хода из result. Основной источник — modelUsage: агрегат по ВСЕМ итерациям хода
+    // (ключи — модели, поля camelCase), тогда как usage описывает только последнюю итерацию —
+    // на многоитерационных ходах расходятся в разы, и стоимость у сторонних провайдеров
+    // занижалась. Фолбэк на usage — если modelUsage отсутствует или пуст.
+    internal static UsageInfo? ParseUsage(JsonElement root)
     {
+        if (root.TryGetProperty("modelUsage", out var mu) && mu.ValueKind == JsonValueKind.Object)
+        {
+            int input = 0, output = 0, cacheRead = 0, cacheCreate = 0;
+            var any = false;
+            foreach (var m in mu.EnumerateObject())
+            {
+                if (m.Value.ValueKind != JsonValueKind.Object) continue;
+                any = true;
+                input += IntProp(m.Value, "inputTokens");
+                output += IntProp(m.Value, "outputTokens");
+                cacheRead += IntProp(m.Value, "cacheReadInputTokens");
+                cacheCreate += IntProp(m.Value, "cacheCreationInputTokens");
+            }
+            if (any) return new UsageInfo(input, output, cacheRead, cacheCreate);
+        }
         if (!root.TryGetProperty("usage", out var u)) return null;
         return new UsageInfo(
             IntProp(u, "input_tokens"),

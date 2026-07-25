@@ -31,4 +31,60 @@ public class ClaudeSessionNumberParsingTests
         Assert.Null(ClaudeSession.DoubleProp(e, "dz"));
         Assert.Null(ClaudeSession.DoubleProp(e, "missing"));
     }
+
+    // ParseUsage обязан брать агрегат modelUsage (сумма по всем итерациям хода), а не usage
+    // последней итерации — иначе стоимость ходов у сторонних провайдеров занижена в разы
+    [Fact]
+    public void ParseUsage_ModelUsage_АгрегатПоВсемМоделям()
+    {
+        var e = El("""
+            {
+              "usage": {"input_tokens": 10, "output_tokens": 5, "cache_read_input_tokens": 1, "cache_creation_input_tokens": 2},
+              "modelUsage": {
+                "deepseek-v4-pro": {"inputTokens": 1000, "outputTokens": 500, "cacheReadInputTokens": 300, "cacheCreationInputTokens": 200},
+                "deepseek-v4-flash": {"inputTokens": 100, "outputTokens": 50, "cacheReadInputTokens": 30, "cacheCreationInputTokens": 20}
+              }
+            }
+            """);
+        var u = ClaudeSession.ParseUsage(e);
+        Assert.NotNull(u);
+        Assert.Equal(1100, u!.InputTokens);
+        Assert.Equal(550, u.OutputTokens);
+        Assert.Equal(330, u.CacheReadTokens);
+        Assert.Equal(220, u.CacheCreationTokens);
+    }
+
+    [Fact]
+    public void ParseUsage_ПустойModelUsage_ФолбэкНаUsage()
+    {
+        var e = El("""
+            {
+              "modelUsage": {},
+              "usage": {"input_tokens": 10, "output_tokens": 5, "cache_read_input_tokens": 1, "cache_creation_input_tokens": 2}
+            }
+            """);
+        var u = ClaudeSession.ParseUsage(e);
+        Assert.NotNull(u);
+        Assert.Equal(10, u!.InputTokens);
+        Assert.Equal(5, u.OutputTokens);
+    }
+
+    [Fact]
+    public void ParseUsage_NullПоля_НеКидает()
+    {
+        // openrouter-совместимый поток шлёт числовые поля как JSON null
+        var e = El("""
+            {"modelUsage": {"m": {"inputTokens": null, "outputTokens": 7}}}
+            """);
+        var u = ClaudeSession.ParseUsage(e);
+        Assert.NotNull(u);
+        Assert.Equal(0, u!.InputTokens);
+        Assert.Equal(7, u.OutputTokens);
+    }
+
+    [Fact]
+    public void ParseUsage_БезВсего_Null()
+    {
+        Assert.Null(ClaudeSession.ParseUsage(El("""{"type": "result"}""")));
+    }
 }

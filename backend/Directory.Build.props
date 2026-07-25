@@ -1,0 +1,28 @@
+<Project>
+
+  <!--
+    Общие настройки MSBuild для всех проектов backend.
+    Применяется автоматически ко всем .csproj ниже по дереву.
+  -->
+
+  <ItemGroup>
+    <!--
+      Точечное подавление NuGet-audit по конкретному advisory (не глушим весь NU1903,
+      чтобы новые уязвимости продолжали светиться в сборке).
+
+      GHSA-2m69-gcr7-jv3q — memory corruption в движке SQLite < 3.50.2, приходит
+      транзитивно как SQLitePCLRaw.lib.e_sqlite3 2.1.11 через Microsoft.Data.Sqlite.
+      Ветка 2.1.x официально НЕ патчится ("Patched: None"); фикс только через major-bump
+      на SQLitePCLRaw 3.0.x (новый поставщик нативки), с которым Microsoft.Data.Sqlite 10.0.x
+      официально не завязан (просит core 2.1.11) — риск несовместимости.
+
+      Обоснование подавления: sqlite в проекте — это ЛОКАЛЬНЫЙ append-only лог событий
+      (ProjectEventLogService, project-events.db). Весь SQL свой и параметризованный,
+      произвольный SQL извне не исполняется — вектор эксплуатации этой уязвимости
+      (aggregate terms > columns в подконтрольном атакующему запросе) отсутствует.
+      Снять подавление, когда Microsoft.Data.Sqlite подтянет SQLitePCLRaw 3.x с SQLite >= 3.50.2.
+    -->
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-2m69-gcr7-jv3q" />
+  </ItemGroup>
+
+</Project>

@@ -18,6 +18,7 @@ import { NotesWidget } from '../features/home/NotesWidget';
 import { TeamWidget } from '../features/home/TeamWidget';
 import { WhatsNewWidget } from '../features/home/WhatsNewWidget';
 import { NotificationsWidget } from '../features/home/NotificationsWidget';
+import { BackupWidget } from '../features/home/BackupWidget';
 
 interface Props {
   auth: AuthState;
@@ -40,6 +41,7 @@ function greeting(): string {
 export function HomePage({ auth, onLogout, onHubTab, onOpenProject }: Props) {
   const isMobile = useIsMobile();
   const { data } = useHomeSummary();
+  const isAdmin = auth.role === 'admin';
   // Персоны — для подписей «Роль (Имя)» в строках сессий
   useEffect(() => { void ensurePersonasLoaded(); }, []);
 
@@ -88,6 +90,7 @@ export function HomePage({ auth, onLogout, onHubTab, onOpenProject }: Props) {
               <ActivityWidget active={data?.active ?? []} />
               <SpendWidget />
               <UsageWidget />
+              {isAdmin && <BackupWidget />}
             </div>
           ) : (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12, alignItems: 'start' }}>
@@ -98,6 +101,8 @@ export function HomePage({ auth, onLogout, onHubTab, onOpenProject }: Props) {
                 <ActivityWidget active={data?.active ?? []} />
                 <SpendWidget />
                 <UsageWidget />
+                {/* Бэкап — только админу: настройка инстансная, общая для всех */}
+                {isAdmin && <BackupWidget />}
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0 }}>
                 <TasksWidget onHubTab={onHubTab} />

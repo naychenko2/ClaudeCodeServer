@@ -1536,3 +1536,35 @@ export interface SpendBadgeResponse {
   turns: number;
   lastTurn: SpendTurnDto | null;
 }
+
+// --- Бэкапы (админский раздел) ---
+
+export interface BackupSummary {
+  chats: number;
+  personas: number;
+  tasks: number;
+  notes: number;
+  projects: number;
+  users: number;
+  totalBytes: number;
+}
+
+export interface BackupEntry {
+  fileName: string;
+  createdAt: string;
+  size: number;
+  summary: BackupSummary;
+}
+
+export interface BackupStatus {
+  // Всё из секции Backup конфига — UI их не меняет, только показывает
+  enabled: boolean;
+  // Куда архивы ложатся фактически (при пустом Backup:Path — папка по умолчанию)
+  effectivePath: string;
+  secretsPath: string;
+  intervalHours: number;
+  lastSuccessAt: string | null;
+  lastError: string | null;
+  lastAttemptAt: string | null;
+  recent: BackupEntry[];
+}

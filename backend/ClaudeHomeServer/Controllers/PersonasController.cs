@@ -2,6 +2,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text.Json;
 using ClaudeHomeServer.Hubs;
+using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
@@ -1885,6 +1886,9 @@ public class PersonasController : ControllerBase
     // резолв по handle); без него handle резолвится в контексте + кросс-проектных extra-скоупах
     // (ProjectPersonas) — коллизия (тёзки в разных проектах) → 409 со списком кандидатов.
     [HttpPost("ask")]
+    // Анти-рекурсия: с делегированного хода персону не переспрашивают (раньше — снятием
+    // persona_ask из состава инструментов, что перезапускало процесс CLI со всеми MCP)
+    [DenyOnDelegatedTurn("Вопрос другой персоне")]
     public async Task<ActionResult> Ask([FromBody] PersonaAskRequest req)
     {
         if (string.IsNullOrWhiteSpace(req.Question)) return BadRequest(new { error = "Пустой вопрос" });

@@ -1392,6 +1392,16 @@ public class SessionManager : IDisposable
     private async Task StartNewSessionAsync(Session session, string rootPath, string? rawSystemPrompt,
         Func<IReadOnlyList<PermissionRule>>? permissionRules)
     {
+        // ClaudeSessionId приходит не только от CLI: параметр resumeSessionId тела запроса
+        // (POST /sessions, /chats, /personas/{id}/chats) садится в него как есть. А дальше он
+        // становится ИМЕНЕМ ПАПКИ в data/sessions и именем файла транскрипта, которые при
+        // удалении чата удаляются рекурсивно — «..» в значении увел бы удаление на всю папку
+        // data (projects.json, users.json, история, сторы персон и задач). Единая точка старта
+        // любой сессии, поэтому гейт стоит здесь; сообщение уходит клиенту как 400.
+        if (session.ClaudeSessionId is { } resumeId && !Llm.TranscriptMigrator.IsSafeSessionId(resumeId))
+            throw new InvalidOperationException(
+                "Недопустимый resumeSessionId: разрешены только буквы, цифры, дефис и подчеркивание");
+
         var existingHistory = session.ClaudeSessionId != null
             ? await _history.LoadAsync(session.ClaudeSessionId)
             : [];
@@ -2184,7 +2194,23 @@ public class SessionManager : IDisposable
             await entry.Process.DisposeAsync();
         // Дочищаем историю на диске — иначе data/sessions/{id} копится мусором
         if (entry.Info.ClaudeSessionId is string csid)
-            _history.Delete(csid);
+        {
+            // И история, и транскрипт CLI могут быть ОБЩИМИ у двух чатов: сессия, созданная с
+            // resumeSessionId (POST /sessions, /chats, /personas/{id}/chats), несет тот же
+            // ClaudeSessionId. Пока на него ссылается другой чат, не трогаем ни то, ни другое:
+            // иначе у него пропадет лента в UI (история) и вся память разговора (транскрипт —
+            // его читает --resume). Свою запись из реестра мы вынули выше, поэтому Any видит
+            // только чужие ссылки.
+            if (_sessions.Values.Any(e => e.Info.ClaudeSessionId == csid))
+                _log.LogInformation(
+                    "История и транскрипт чата {SessionId} оставлены: на сессию {ClaudeSessionId} ссылается другой чат",
+                    entry.Info.Id, csid);
+            else
+            {
+                _history.Delete(csid);
+                DeleteTranscript(entry.Info, csid);
+            }
+        }
         // Отдельное worktree чата сносим вместе с чатом (best-effort; ветка остаётся в репе)
         if (entry.Info.WorktreePath is string wt && entry.Info.ProjectId is string wpid && _git is not null)
         {
@@ -2201,6 +2227,51 @@ public class SessionManager : IDisposable
         SaveSessions();
         try { OnSessionDeleted?.Invoke(entry.Info); } catch { /* наблюдатель не должен ронять удаление */ }
         await BroadcastChatDeletedAsync(sessionId, entry.Info);
+    }
+
+    // Транскрипт claude CLI удаленного чата ({профиль}/projects/{уплощенный cwd}/{csid}.jsonl).
+    // Своя история (data/sessions/{csid}) уходит через ChatHistoryService, а этот файл раньше
+    // не убирал никто — переписка удаленного чата лежала на диске до плановой уборки CLI
+    // (~30 дней), хотя воспользоваться ей уже нельзя: --resume делать некому.
+    //
+    // Ищем во ВСЕХ профилях, а не только в текущем: переезды между профилями (TryMigrate при
+    // смене провайдера) и между рабочими папками (TryRelocateCwd при worktree) намеренно
+    // оставляют копии. Точность обеспечивает сам ключ — файл называется uuid'ом сессии, так
+    // что чужие чаты, другие инстансы сервера и интерактивные сессии пользователя, живущие в
+    // том же ~/.claude, задеть невозможно.
+    //
+    // Best-effort: удаление чата важнее уборки, поэтому любой сбой остается в логе.
+    private void DeleteTranscript(Session info, string claudeSessionId)
+    {
+        try
+        {
+            var roots = new List<string>(_llmProviders.GetAllConfigRoots());
+            // Профили песочницы владельца: {ProfilesHostDir}/{ownerId}/{key}
+            // (раскладку задает DockerProcessRunner.RewriteProfileEnv)
+            if (ResolveOwnerId(info) is string ownerId)
+            {
+                var ownerProfiles = Path.Combine(_sandbox.ProfilesHostDir, ownerId);
+                if (Directory.Exists(ownerProfiles))
+                    roots.AddRange(Directory.GetDirectories(ownerProfiles));
+            }
+
+            var removed = Llm.TranscriptMigrator.DeleteEverywhere(
+                roots, TryResolveCwd(info), claudeSessionId);
+            if (removed > 0)
+                _log.LogInformation("Транскрипт чата {SessionId} удален ({Count} файлов)", info.Id, removed);
+            else
+                // Штатных причин две: транскрипт уже вычистил сам CLI (плановая уборка ~30 дней)
+                // либо ходов в чате не было. Но сюда же попадает «файл нашелся, а удалить не
+                // дали» — поэтому не утверждаем, что убирать было нечего, и отправляем за
+                // подробностями в лог TranscriptMigrator
+                _log.LogInformation(
+                    "Транскрипт чата {SessionId} не убран: не найден либо не удалился (подробности выше)",
+                    info.Id);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Не удалось убрать транскрипт чата {SessionId}", info.Id);
+        }
     }
 
     // Уведомить клиентов об удалении чата (в т.ч. авто-удалении временного) —

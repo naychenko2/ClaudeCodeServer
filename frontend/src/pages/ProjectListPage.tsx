@@ -266,7 +266,7 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
             centerBare
             center={
           // Центр без острова, шириной как контент чата (CHAT_MAX_W по центру)
-          <main style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', background: C.bgMain, width: '100%', maxWidth: CHAT_MAX_W, margin: '0 auto' }}>
+          <main style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', width: '100%', maxWidth: CHAT_MAX_W, margin: '0 auto' }}>
             {/* Шапка панели: заголовок + сортировка + Проект */}
             <div style={{ flexShrink: 0, padding: '20px 26px 14px', display: 'flex', alignItems: 'center', gap: 12 }}>
               {sidebarMode === 'collapsed' && (

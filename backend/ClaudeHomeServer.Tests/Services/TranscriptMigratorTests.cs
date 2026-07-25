@@ -123,4 +123,126 @@ public class TranscriptMigratorTests : IDisposable
 
         File.Exists(Path.Combine(_dst, "projects", "legacy-layout", SessionId + ".jsonl")).Should().BeTrue();
     }
+
+    // --- Уборка транскрипта при удалении чата ---
+
+    [Fact]
+    public void FindAllTranscripts_НеДублируетНайденноеПоСоглашению()
+    {
+        // Файл лежит там, где его ждет соглашение, и попадает же под фолбэк-скан —
+        // в результате он должен быть один раз, иначе счетчик удаленных врал бы
+        var seeded = SeedTranscript(_src);
+
+        TranscriptMigrator.FindAllTranscripts([_src], Cwd, SessionId)
+            .Should().BeEquivalentTo([seeded]);
+    }
+
+    [Fact]
+    public void DeleteEverywhere_УдаляетТранскриптПоСоглашению()
+    {
+        var seeded = SeedTranscript(_src);
+
+        TranscriptMigrator.DeleteEverywhere([_src], Cwd, SessionId).Should().Be(1);
+
+        File.Exists(seeded).Should().BeFalse();
+    }
+
+    [Fact]
+    public void DeleteEverywhere_УдаляетКопииВоВсехКорнях()
+    {
+        // Копии остаются после смены провайдера (TryMigrate исходник не удаляет) —
+        // уборка обязана пройти по всем профилям, а не только по текущему
+        var inSrc = SeedTranscript(_src);
+        var inDst = SeedTranscript(_dst);
+
+        TranscriptMigrator.DeleteEverywhere([_src, _dst], Cwd, SessionId).Should().Be(2);
+
+        File.Exists(inSrc).Should().BeFalse();
+        File.Exists(inDst).Should().BeFalse();
+    }
+
+    [Fact]
+    public void DeleteEverywhere_БезCwd_НаходитСканом()
+    {
+        // Рабочую папку сессии определить не удалось (проект удален) — остается скан
+        var seeded = SeedTranscript(_src);
+
+        TranscriptMigrator.DeleteEverywhere([_src], cwd: null, SessionId).Should().Be(1);
+
+        File.Exists(seeded).Should().BeFalse();
+    }
+
+    [Fact]
+    public void DeleteEverywhere_УноситПапкуСабагентов()
+    {
+        var seeded = SeedTranscript(_src);
+        var sessionDir = Path.Combine(Path.GetDirectoryName(seeded)!, SessionId);
+        Directory.CreateDirectory(Path.Combine(sessionDir, "subagents"));
+        File.WriteAllText(Path.Combine(sessionDir, "subagents", "agent-1.jsonl"), "{}");
+
+        TranscriptMigrator.DeleteEverywhere([_src], Cwd, SessionId).Should().Be(1);
+
+        Directory.Exists(sessionDir).Should().BeFalse();
+    }
+
+    [Fact]
+    public void DeleteEverywhere_ЧужиеТранскриптыВТойЖеПапкеНеТрогает()
+    {
+        // Ключевой инвариант: один ~/.claude делят несколько инстансов сервера и
+        // интерактивные сессии пользователя. Бьем строго по {csid}.jsonl, а папку —
+        // никогда, иначе уборка снесла бы чужую историю
+        var mine = SeedTranscript(_src);
+        var dir = Path.GetDirectoryName(mine)!;
+        var foreign = Path.Combine(dir, "e4d1f0aa-0000-4000-8000-000000000001.jsonl");
+        File.WriteAllText(foreign, "{\"type\":\"user\"}");
+
+        TranscriptMigrator.DeleteEverywhere([_src], Cwd, SessionId).Should().Be(1);
+
+        File.Exists(mine).Should().BeFalse();
+        File.Exists(foreign).Should().BeTrue();
+        Directory.Exists(dir).Should().BeTrue();
+    }
+
+    [Fact]
+    public void DeleteEverywhere_БезТранскрипта_НольБезИсключения()
+    {
+        TranscriptMigrator.DeleteEverywhere([_src, _dst], Cwd, SessionId).Should().Be(0);
+    }
+
+    [Fact]
+    public void DeleteEverywhere_НесуществующийКорень_НольБезИсключения()
+    {
+        // Профиль провайдера создается лениво: корня может не быть вовсе
+        var missing = Path.Combine(_tempDir, "no-such-profile");
+
+        TranscriptMigrator.DeleteEverywhere([missing], Cwd, SessionId).Should().Be(0);
+    }
+
+    [Fact]
+    public void DeleteEverywhere_ПовторКорня_НеЗавышаетСчетчик()
+    {
+        // Корни в списке способны повторяться (профиль подписки и ~/.claude указывают на
+        // одну папку). File.Delete на уже удаленном файле молчит, и счетчик врал бы в логе
+        SeedTranscript(_src);
+
+        TranscriptMigrator.DeleteEverywhere([_src, _src], Cwd, SessionId).Should().Be(1);
+    }
+
+    [Theory]
+    [InlineData(@"..\..\evil")]
+    [InlineData("../../evil")]
+    [InlineData(@"sub\dir\id")]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void DeleteEverywhere_КлючНеИмяФайла_НичегоНеДелает(string badId)
+    {
+        // sessions.json правится и руками — путь в ключе увел бы удаление за пределы профиля
+        var victim = Path.Combine(_tempDir, "evil.jsonl");
+        File.WriteAllText(victim, "не трогать");
+
+        TranscriptMigrator.DeleteEverywhere([_src], Cwd, badId).Should().Be(0);
+        TranscriptMigrator.FindAllTranscripts([_src], Cwd, badId).Should().BeEmpty();
+
+        File.Exists(victim).Should().BeTrue();
+    }
 }

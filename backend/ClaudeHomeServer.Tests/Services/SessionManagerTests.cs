@@ -29,7 +29,10 @@ public class SessionManagerTests : IDisposable
         var config = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["DataPath"] = Path.Combine(_tempDir, "projects.json")
+                ["DataPath"] = Path.Combine(_tempDir, "projects.json"),
+                // Профиль CLI внутри temp — иначе уборка транскриптов при удалении чата
+                // (DeleteAsync) полезла бы в настоящий ~/.claude пользователя
+                ["ClaudeUserProfileDir"] = Path.Combine(_tempDir, "claude-profile")
             })
             .Build();
 
@@ -323,6 +326,102 @@ public class SessionManagerTests : IDisposable
 
         await _sut.DeleteAsync(session.Id);
 
+        Directory.Exists(historyDir).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task DeleteAsync_УдаляетТранскриптCliИНеТрогаетЧужой()
+    {
+        var dir = MkProjectDir("tr");
+        var project = _projectManager.Create("TR", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+
+        var claudeSessionId = "cli-session-" + Guid.NewGuid().ToString("N");
+        session.ClaudeSessionId = claudeSessionId;
+
+        // Раскладка CLI: {профиль}/projects/{уплощенный cwd}/{csid}.jsonl. Рядом кладем
+        // транскрипт другой сессии — в реальном ~/.claude в одной папке лежат чаты всех
+        // инстансов сервера и интерактивные сессии пользователя, задеть их нельзя
+        var transcriptDir = Path.Combine(_tempDir, "claude-profile", "projects",
+            ClaudeHomeServer.Services.Llm.TranscriptMigrator.FlattenCwd(dir));
+        Directory.CreateDirectory(transcriptDir);
+        var mine = Path.Combine(transcriptDir, claudeSessionId + ".jsonl");
+        var foreign = Path.Combine(transcriptDir, "someone-else.jsonl");
+        File.WriteAllText(mine, "{\"type\":\"user\"}");
+        File.WriteAllText(foreign, "{\"type\":\"user\"}");
+
+        await _sut.DeleteAsync(session.Id);
+
+        File.Exists(mine).Should().BeFalse();
+        File.Exists(foreign).Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("..")]
+    [InlineData(".")]
+    [InlineData(@"..\..\evil")]
+    [InlineData("../../evil")]
+    [InlineData(@"sub\dir")]
+    [InlineData("with space")]
+    public async Task CreateAsync_ПутьВResumeSessionId_Отклоняется(string badId)
+    {
+        // ClaudeSessionId становится именем папки в data/sessions и именем файла транскрипта,
+        // а при удалении чата они удаляются рекурсивно. «..» здесь означал бы
+        // Directory.Delete(data) — снос projects.json, users.json, историй и всех сторов
+        var dir = MkProjectDir("bad");
+        var project = _projectManager.Create("BAD", dir, TestUserId, TestUsername);
+
+        var act = () => _sut.CreateAsync(project.Id, ClaudeMode.Auto, resumeSessionId: badId);
+
+        (await act.Should().ThrowAsync<InvalidOperationException>()).And.Message.Should().Contain("resumeSessionId");
+        _sut.GetByProject(project.Id).Should().BeEmpty("негодная сессия не должна оседать в реестре");
+        Directory.Exists(Path.Combine(_tempDir, "sessions")).Should().BeFalse("папка данных не тронута");
+    }
+
+    [Fact]
+    public async Task CreateAsync_UuidВResumeSessionId_Принимается()
+    {
+        var dir = MkProjectDir("ok");
+        var project = _projectManager.Create("OK", dir, TestUserId, TestUsername);
+        var uuid = Guid.NewGuid().ToString();
+
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, resumeSessionId: uuid);
+
+        session.ClaudeSessionId.Should().Be(uuid);
+    }
+
+    [Fact]
+    public async Task DeleteAsync_ОбщийТранскриптДругогоЧата_НеУдаляет()
+    {
+        // Сессия, созданная с resumeSessionId, несет тот же ClaudeSessionId — транскрипт у
+        // двух чатов общий. Удаление одного не должно лишать второй памяти разговора
+        var dir = MkProjectDir("shared");
+        var project = _projectManager.Create("SHARED", dir, TestUserId, TestUsername);
+        var claudeSessionId = "cli-session-" + Guid.NewGuid().ToString("N");
+
+        var first = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        first.ClaudeSessionId = claudeSessionId;
+        var resumed = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, resumeSessionId: claudeSessionId);
+        resumed.ClaudeSessionId.Should().Be(claudeSessionId);
+
+        var transcriptDir = Path.Combine(_tempDir, "claude-profile", "projects",
+            ClaudeHomeServer.Services.Llm.TranscriptMigrator.FlattenCwd(dir));
+        Directory.CreateDirectory(transcriptDir);
+        var transcript = Path.Combine(transcriptDir, claudeSessionId + ".jsonl");
+        File.WriteAllText(transcript, "{\"type\":\"user\"}");
+
+        // История тоже общая — ее удаление обнулило бы ленту первого чата в UI
+        await _historyService.SaveAsync(claudeSessionId,
+            [new ClaudeHomeServer.Protocol.StoredTextMessage("общая история")]);
+        var historyDir = Path.Combine(_tempDir, "sessions", claudeSessionId);
+
+        await _sut.DeleteAsync(resumed.Id);
+        File.Exists(transcript).Should().BeTrue("на транскрипт еще ссылается первый чат");
+        Directory.Exists(historyDir).Should().BeTrue("история тоже общая");
+
+        // Последний ссылающийся чат ушел — теперь убирать можно
+        await _sut.DeleteAsync(first.Id);
+        File.Exists(transcript).Should().BeFalse();
         Directory.Exists(historyDir).Should().BeFalse();
     }
 

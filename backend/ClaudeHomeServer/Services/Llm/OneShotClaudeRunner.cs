@@ -45,9 +45,31 @@ public interface IOneShotRunner
 // доступ к файлам). Используется сводками «Что нового» (ChangelogService),
 // генерациями задач и заметок, персонами (ask/характер).
 public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILauncherFactory launchers,
-    Spend.ISpendCollector? spend = null) : IOneShotRunner
+    IConfiguration config, Spend.ISpendCollector? spend = null) : IOneShotRunner
 {
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(120);
+
+    // Рубильник на случай CLI старее флага --no-session-persistence (см. BuildArgs): CLI
+    // валидирует аргументы и падает с кодом 1 на незнакомом, а образ песочницы может нести
+    // версию старее хостовой. true — вернуть прежнее поведение с записью транскриптов.
+    private readonly bool _persistSessions = config.GetValue("Claude:PersistOneShotSessions", false);
+
+    // Авто-деградация: CLI не игнорирует незнакомый аргумент, а падает с кодом 1. Образ
+    // песочницы собирается отдельно от хоста и может нести версию без флага — тогда КАЖДЫЙ
+    // фоновый вызов container-пользователя обрывался бы, а наружу это выглядит как «сводки не
+    // генерятся» при живом сервере (так уже было с мертвым MultiEdit в deny-правилах). Первый
+    // такой отказ переводит раннер в режим без флага до конца жизни процесса: работающие
+    // фоновые задачи важнее экономии файлов. Рубильник в конфиге остается ручным дублером.
+    private static volatile bool _flagUnsupported;
+
+    // Отказ именно из-за нашего флага, а не по другой причине (не логин, не таймаут).
+    // internal — покрыто тестом: строку ошибки CLI руками в тесте не воспроизвести иначе.
+    internal static bool LooksLikeUnknownSessionFlag(string detail) =>
+        detail.Contains("no-session-persistence", StringComparison.OrdinalIgnoreCase)
+        && (detail.Contains("unknown", StringComparison.OrdinalIgnoreCase)
+            || detail.Contains("unrecognized", StringComparison.OrdinalIgnoreCase)
+            || detail.Contains("unexpected", StringComparison.OrdinalIgnoreCase)
+            || detail.Contains("не поддерж", StringComparison.OrdinalIgnoreCase));
 
     // Модель ненастроенного провайдера тихо заменяется дефолтом claude —
     // генерация не должна падать из-за отсутствующего ключа
@@ -74,41 +96,9 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
         var workDir = Path.Combine(launcher.HostTempDir, "claude-oneshot");
         Directory.CreateDirectory(workDir);
 
-        var args = new List<string> { "--print", "--output-format", "json" };
-        // Хуки плагинов не нужны и плодят окна консоли на хосте — отключаем (скиллы one-shot не зовёт).
-        // Нужно и при --safe-mode: в песочнице флага нет, а хуки отключить всё равно надо.
-        args.AddRange(Claude.ClaudeRuntimeSettings.HooksOffArgs(launcher));
-        // --safe-mode: CLI не тянет пользовательские кастомизации (~/.claude/CLAUDE.md
-        // с правилами, скиллы, плагины, хуки, MCP) в системный промпт. One-shot — чистая
-        // генерация текста, юзерский контекст ей не нужен, а стоил он ~половину входа
-        // (замер на 2.1.207: 31.6 тыс. → 15.3 тыс. токенов обвязки), и личные правила
-        // пользователя протекали в тон продуктовых текстов. CLAUDE_CONFIG_DIR так не
-        // умеет (память CLI грузит мимо него), --bare ломает OAuth-авторизацию
-        // (пропускает чтение кредов). Только локально: флаг появился в CLI 2.1.169,
-        // песочница может нести версию старее — там не рискуем.
-        if (!launcher.IsSandboxed) args.Add("--safe-mode");
-        // Инструменты жёстко выключены. Это контракт (пустая temp-cwd и раньше
-        // подразумевала «без файлов», но не мешала Read по абсолютному пути) и защита
-        // от инъекции в промпт — в т.ч. когда вызов сделан от имени изолированного
-        // пользователя, а процесс работает на хосте. Skill дополнительно отключает
-        // инжекцию каталога скиллов в системный промпт (~3 тыс. токенов), когда
-        // safe-mode недоступен (песочница).
-        args.Add("--disallowedTools");
-        // MultiEdit тут был до CLI 2.1.x: инструмент убрали без прямой замены (он батчил
-        // несколько правок одного файла в одно одобрение; теперь это просто отдельные вызовы
-        // Edit), а новый CLI ВАЛИДИРУЕТ имена и падает с кодом 1 на неизвестном правиле, роняя
-        // весь one-shot. Не возвращать несуществующие имена — список сверять с набором CLI.
-        args.Add("Bash,Read,Write,Edit,NotebookEdit,Glob,Grep,WebFetch,WebSearch,Task,Agent,KillShell,BashOutput,Skill");
-        if (!string.IsNullOrWhiteSpace(model))
-        {
-            args.Add("--model");
-            args.Add(LlmProviderRegistry.StripClaudeWindowAlias(model)!);
-        }
-        if (!string.IsNullOrWhiteSpace(effort))
-        {
-            args.Add("--effort");
-            args.Add(effort);
-        }
+        var withFlag = !_persistSessions && !_flagUnsupported;
+        var args = BuildArgs(Claude.ClaudeRuntimeSettings.HooksOffArgs(launcher),
+            safeMode: !launcher.IsSandboxed, persistSessions: !withFlag, model, effort);
 
         var env = llmProviders.BuildCliEnv(model);
 
@@ -151,6 +141,17 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
                 // сервисов оставалось «завершился с кодом 1:» без объяснения.
                 var detail = stderr.Trim();
                 if (detail.Length == 0) detail = ErrorDetail(stdout.Trim());
+                // Единственный аргумент, которого может не знать более старый CLI (образ
+                // песочницы живет своей жизнью) — снимаем его и повторяем вызов один раз,
+                // вместо того чтобы уронить фоновую задачу
+                if (withFlag && LooksLikeUnknownSessionFlag(detail))
+                {
+                    _flagUnsupported = true;
+                    Console.Error.WriteLine(
+                        "[OneShotClaudeRunner] CLI не знает --no-session-persistence — повторяю без него. " +
+                        "Транскрипты one-shot снова будут копиться; лечится обновлением claude в образе песочницы");
+                    return await RunCliAsync(prompt, model, timeout, ct, ownerId, effort, label);
+                }
                 if (detail.Length > 500) detail = detail[..500] + "…";
                 throw new InvalidOperationException(
                     $"claude завершился с кодом {process.ExitCode}: {detail}");
@@ -167,6 +168,58 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
             launcher.Kill(process, turnId);
             throw new InvalidOperationException("AI не ответил за отведённое время");
         }
+    }
+
+    // Аргументы запуска claude для one-shot. Вынесены из RunCliAsync отдельным методом,
+    // чтобы состав флагов проверялся тестом без запуска процесса.
+    // hooksOffArgs — готовые --settings (хуки плагинов не нужны и плодят окна консоли на
+    // хосте; скиллы one-shot не зовет). Нужны и при safeMode: в песочнице флага нет, а
+    // хуки отключить все равно надо.
+    internal static List<string> BuildArgs(IEnumerable<string> hooksOffArgs,
+        bool safeMode, bool persistSessions, string? model, string? effort)
+    {
+        // Формат всегда json: usage нужен аналитике расхода на КАЖДОМ вызове
+        var args = new List<string> { "--print", "--output-format", "json" };
+        args.AddRange(hooksOffArgs);
+        // Транскрипт one-shot мертв с рождения: --resume по нему никто не делает, а CLI
+        // писал по файлу на вызов (замер: ~287 файлов за сутки на одном инстансе) и держал
+        // их до своей плановой уборки (~30 дней). Флаг работает только вместе с --print —
+        // ровно наш режим. Ходов чата это НЕ касается: там транскрипт и есть память
+        // разговора, которую читает --resume. Рубильник Claude:PersistOneShotSessions
+        // возвращает прежнее поведение, если CLI окажется старее флага.
+        if (!persistSessions) args.Add("--no-session-persistence");
+        // --safe-mode: CLI не тянет пользовательские кастомизации (~/.claude/CLAUDE.md
+        // с правилами, скиллы, плагины, хуки, MCP) в системный промпт. One-shot — чистая
+        // генерация текста, юзерский контекст ей не нужен, а стоил он ~половину входа
+        // (замер на 2.1.207: 31.6 тыс. → 15.3 тыс. токенов обвязки), и личные правила
+        // пользователя протекали в тон продуктовых текстов. CLAUDE_CONFIG_DIR так не
+        // умеет (память CLI грузит мимо него), --bare ломает OAuth-авторизацию
+        // (пропускает чтение кредов). Только локально: флаг появился в CLI 2.1.169,
+        // песочница может нести версию старее — там не рискуем.
+        if (safeMode) args.Add("--safe-mode");
+        // Инструменты жестко выключены. Это контракт (пустая temp-cwd и раньше
+        // подразумевала «без файлов», но не мешала Read по абсолютному пути) и защита
+        // от инъекции в промпт — в т.ч. когда вызов сделан от имени изолированного
+        // пользователя, а процесс работает на хосте. Skill дополнительно отключает
+        // инжекцию каталога скиллов в системный промпт (~3 тыс. токенов), когда
+        // safe-mode недоступен (песочница).
+        args.Add("--disallowedTools");
+        // MultiEdit тут был до CLI 2.1.x: инструмент убрали без прямой замены (он батчил
+        // несколько правок одного файла в одно одобрение; теперь это просто отдельные вызовы
+        // Edit), а новый CLI ВАЛИДИРУЕТ имена и падает с кодом 1 на неизвестном правиле, роняя
+        // весь one-shot. Не возвращать несуществующие имена — список сверять с набором CLI.
+        args.Add("Bash,Read,Write,Edit,NotebookEdit,Glob,Grep,WebFetch,WebSearch,Task,Agent,KillShell,BashOutput,Skill");
+        if (!string.IsNullOrWhiteSpace(model))
+        {
+            args.Add("--model");
+            args.Add(LlmProviderRegistry.StripClaudeWindowAlias(model)!);
+        }
+        if (!string.IsNullOrWhiteSpace(effort))
+        {
+            args.Add("--effort");
+            args.Add(effort);
+        }
+        return args;
     }
 
     // Запись расхода one-shot вызова в аналитику. Источник — one-shot; модель ":free"

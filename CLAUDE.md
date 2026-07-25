@@ -265,6 +265,15 @@ override в `data/users.json`; фронт — стор [lib/featureFlags.ts](fro
 
 ## Соглашения
 
+- **CI гоняет тесты на Linux** (`ubuntu-latest`, [.github/workflows/ci.yml](.github/workflows/ci.yml)),
+  а разработка идёт на Windows — тесты обязаны быть платформонезависимыми, иначе зелёные
+  локально они падают в CI. Главная ловушка — пути: `Path.IsPathRooted("C:\\…")` на Linux
+  даёт `false`, поэтому Windows-литералы там считаются относительными и проверки путей
+  срабатывают не по тому правилу. Пути в тестах строить от `Path.GetTempPath()` +
+  `Path.Combine`, разделители не хардкодить. Помнить и про остальное: регистрозависимость
+  ФС, отсутствие `.exe`, недоступность WinAPI. Сомневаешься — прогони набор в контейнере:
+  `docker run --rm -v "<репа>:/src" -w /src/backend mcr.microsoft.com/dotnet/sdk:10.0 dotnet test ClaudeHomeServer.Tests/ClaudeHomeServer.Tests.csproj`
+  (после этого пересобери локально: контейнер оставляет в `bin`/`obj` Linux-артефакты)
 - Хранилище проектов: `data/projects.json` рядом с executable
 - **Одна папка — один проект на владельца**: `RootPath` нормализуется при создании и смене папки
   (`Path.GetFullPath` — схлопывает двойные разделители), а `ProjectManager.EnsureRootFree`

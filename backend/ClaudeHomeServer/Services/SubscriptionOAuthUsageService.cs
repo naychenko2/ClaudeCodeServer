@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using ClaudeHomeServer.Services.Llm.Claude;
 
@@ -15,8 +17,13 @@ namespace ClaudeHomeServer.Services;
 // в момент активности он свежее.
 //
 // Best-effort: основной аккаунт опрашивается токеном из ~/.claude/.credentials.json
-// (CLI сам его обновляет; перечитываем перед каждым тиком — рефреш токена не наша забота),
-// дополнительные — их OAuthToken из конфига. Не-2xx по аккаунту — пропуск тика с фиксацией
+// (его CLI обновляет сам — интерактивные сессии пользователя ходят этим профилем),
+// дополнительные — access-токеном их изолированного профиля sub-{key}. Профильные креды
+// CLI НЕ рефрешит (ходы пула идут setup-токеном из env, файл профиля не трогается),
+// поэтому их обновляем МЫ: протухший access-токен меняется по refresh-токену через
+// OAuth-эндпоинт — тем же путём, что сам CLI (см. TryRefreshProfileAsync). Иначе через
+// 8 часов после `claude login` файл мёртв и опрос ловил вечный 401 («плашка про
+// setup-токен» при живом логине). Не-2xx по аккаунту — пропуск тика с фиксацией
 // статуса (401/403 = «токен не подходит», см. StatusOf) и логом при смене статуса:
 // для такого аккаунта остаются данные warmup-хода и живых rate_limit_event.
 public sealed partial class SubscriptionOAuthUsageService(
@@ -27,6 +34,10 @@ public sealed partial class SubscriptionOAuthUsageService(
     IConfiguration config) : BackgroundService
 {
     private const string Endpoint = "https://api.anthropic.com/api/oauth/usage";
+    // OAuth-эндпоинт обмена refresh-токена и публичный client_id Claude Code —
+    // те же значения, какими CLI сам продлевает свой логин
+    private const string TokenEndpoint = "https://console.anthropic.com/v1/oauth/token";
+    private const string OAuthClientId = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
     private const int DefaultPollMinutes = 10;
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan StartupDelay = TimeSpan.FromSeconds(5);
@@ -83,12 +94,12 @@ public sealed partial class SubscriptionOAuthUsageService(
 
     private async Task PollAllAsync(CancellationToken ct)
     {
-        foreach (var (key, token) in EnumerateAccounts())
+        foreach (var (key, token, profileDir) in EnumerateAccounts())
         {
             if (ct.IsCancellationRequested) return;
             try
             {
-                await PollAsync(key, token, ct);
+                await PollAsync(key, token, profileDir, ct);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -102,8 +113,9 @@ public sealed partial class SubscriptionOAuthUsageService(
     }
 
     // Основной аккаунт + дополнительные подписки пула с OAuth-токеном
-    // (аккаунты на чистом ApiKey опросить нечем).
-    internal IEnumerable<(string Key, string Token)> EnumerateAccounts()
+    // (аккаунты на чистом ApiKey опросить нечем). ProfileDir не-null у аккаунтов,
+    // чей токен взят из .credentials.json профиля — таким доступен рефреш.
+    internal IEnumerable<(string Key, string Token, string? ProfileDir)> EnumerateAccounts()
     {
         // Запись "claude" в пуле уже покрывает primary-ключ профильным токеном — отдельный
         // опрос primary-веткой шёл бы ДРУГИМ токеном (env/конфиг/~/.claude, возможно другой
@@ -114,7 +126,7 @@ public sealed partial class SubscriptionOAuthUsageService(
         {
             var primary = ResolvePrimaryToken();
             if (!string.IsNullOrWhiteSpace(primary))
-                yield return (ClaudeSubscriptionPool.PrimaryKey, primary!);
+                yield return (ClaudeSubscriptionPool.PrimaryKey, primary!, null);
         }
 
         foreach (var sub in pool.All)
@@ -122,10 +134,11 @@ public sealed partial class SubscriptionOAuthUsageService(
             // Полноценный access-токен из изолированного профиля подписки (если в нём
             // делали `claude login`) предпочтительнее setup-токена: его эндпоинт
             // отдаёт без часового лимита
-            var profileToken = ReadCredentialsAccessToken(Path.Combine(providers.ProfilesDir, "sub-" + sub.Key));
+            var profileDir = Path.Combine(providers.ProfilesDir, "sub-" + sub.Key);
+            var profileToken = ReadProfileCreds(profileDir)?.AccessToken;
             var token = !string.IsNullOrWhiteSpace(profileToken) ? profileToken : sub.OAuthToken;
             if (!string.IsNullOrWhiteSpace(token))
-                yield return (sub.Key, token!);
+                yield return (sub.Key, token!, string.IsNullOrWhiteSpace(profileToken) ? null : profileDir);
         }
     }
 
@@ -148,28 +161,92 @@ public sealed partial class SubscriptionOAuthUsageService(
     {
         var profileDir = config["ClaudeUserProfileDir"]
             ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude");
-        return ReadCredentialsAccessToken(profileDir);
+        return ReadProfileCreds(profileDir)?.AccessToken;
     }
 
-    private static string? ReadCredentialsAccessToken(string profileDir)
+    // Креды профиля из .credentials.json: access-токен и средства его продления.
+    internal sealed record ProfileCreds(string? AccessToken, string? RefreshToken, long? ExpiresAtMs)
+    {
+        // Запас 5 минут — не отправлять запрос токеном, который умрёт по дороге
+        public bool Expired => ExpiresAtMs is { } ms
+            && DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() >= ms - 5 * 60_000;
+    }
+
+    private static ProfileCreds? ReadProfileCreds(string profileDir)
     {
         try
         {
             var credsPath = Path.Combine(profileDir, ".credentials.json");
             if (!File.Exists(credsPath)) return null;
             using var doc = JsonDocument.Parse(File.ReadAllText(credsPath));
-            return doc.RootElement.TryGetProperty("claudeAiOauth", out var oauth)
-                && oauth.TryGetProperty("accessToken", out var at)
-                ? at.GetString() : null;
+            if (!doc.RootElement.TryGetProperty("claudeAiOauth", out var oauth)) return null;
+            return new ProfileCreds(
+                oauth.TryGetProperty("accessToken", out var at) ? at.GetString() : null,
+                oauth.TryGetProperty("refreshToken", out var rt) ? rt.GetString() : null,
+                oauth.TryGetProperty("expiresAt", out var ea) && ea.ValueKind == JsonValueKind.Number
+                    ? ea.GetInt64() : null);
         }
         catch { return null; }
     }
 
-    internal async Task PollAsync(string key, string token, CancellationToken ct)
+    internal Task PollAsync(string key, string token, CancellationToken ct)
+        => PollAsync(key, token, profileDir: null, ct);
+
+    internal async Task PollAsync(string key, string token, string? profileDir, CancellationToken ct)
     {
         if (_backoff.TryGetValue(key, out var b) && DateTime.UtcNow < b.AllowedAt)
             return;
 
+        // Заведомо протухший access-токен профиля продлеваем ДО запроса — не жечь
+        // тик на гарантированный 401
+        var refreshed = false;
+        if (profileDir is not null && ReadProfileCreds(profileDir) is { Expired: true, RefreshToken.Length: > 0 })
+        {
+            var fresh = await TryRefreshProfileAsync(key, profileDir, ct);
+            if (fresh is not null) { token = fresh; refreshed = true; }
+        }
+
+        var r = await SendUsageRequestAsync(token, ct);
+
+        // Токен отвергнут при непротухшем expiresAt (отзыв, рассинхрон часов) — одна
+        // попытка продлиться по refresh-токену и повторить; дальше честный unauthorized
+        if (r.Code is 401 or 403 && profileDir is not null && !refreshed)
+        {
+            var fresh = await TryRefreshProfileAsync(key, profileDir, ct);
+            if (fresh is not null)
+                r = await SendUsageRequestAsync(fresh, ct);
+        }
+
+        if (r.Code == 429)
+        {
+            // Экспоненциальный backoff: интервал ×2 с каждым 429 подряд, потолок час;
+            // Retry-After сервера (если пришёл) уважаем как есть
+            var strikes = b.Strikes + 1;
+            var backoff = TimeSpan.FromMinutes(Math.Min(
+                _pollMinutes * Math.Pow(2, strikes), MaxBackoff.TotalMinutes));
+            var delay = r.RetryAfter ?? backoff;
+            _backoff[key] = (DateTime.UtcNow + delay, strikes);
+            return;
+        }
+        if (r.Code is < 200 or >= 300)
+        {
+            // 401/403 — токен не подходит (setup-токен вместо полноценного логина;
+            // живой 403 «Request not allowed» именно от sk-ant-oat01) и рефреш не помог.
+            // Прочие коды — временная ошибка эндпоинта. У аккаунта остаются прежние снимки.
+            SetStatus(key, r.Code is 401 or 403 ? StatusUnauthorized : StatusError, r.Code);
+            return;
+        }
+        _backoff.Remove(key); // успех — вернуться к обычному интервалу опроса
+        SetStatus(key, StatusOk);
+
+        using var doc = JsonDocument.Parse(r.Body!);
+        RecordWindows(key, doc.RootElement);
+    }
+
+    private sealed record UsageResponse(int Code, TimeSpan? RetryAfter, string? Body);
+
+    private async Task<UsageResponse> SendUsageRequestAsync(string token, CancellationToken ct)
+    {
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(RequestTimeout);
 
@@ -180,31 +257,76 @@ public sealed partial class SubscriptionOAuthUsageService(
         req.Headers.TryAddWithoutValidation("User-Agent", await ResolveUserAgentAsync(cts.Token));
 
         using var resp = await client.SendAsync(req, cts.Token);
-        if (resp.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
-        {
-            // Экспоненциальный backoff: интервал ×2 с каждым 429 подряд, потолок час;
-            // Retry-After сервера (если пришёл) уважаем как есть
-            var strikes = b.Strikes + 1;
-            var backoff = TimeSpan.FromMinutes(Math.Min(
-                _pollMinutes * Math.Pow(2, strikes), MaxBackoff.TotalMinutes));
-            var delay = resp.Headers.RetryAfter?.Delta ?? backoff;
-            _backoff[key] = (DateTime.UtcNow + delay, strikes);
-            return;
-        }
-        if (!resp.IsSuccessStatusCode)
-        {
-            // 401/403 — токен не подходит (setup-токен вместо полноценного логина;
-            // живой 403 «Request not allowed» именно от sk-ant-oat01). Прочие коды —
-            // временная ошибка эндпоинта. У аккаунта остаются прежние снимки.
-            var code = (int)resp.StatusCode;
-            SetStatus(key, code is 401 or 403 ? StatusUnauthorized : StatusError, code);
-            return;
-        }
-        _backoff.Remove(key); // успех — вернуться к обычному интервалу опроса
-        SetStatus(key, StatusOk);
+        var body = resp.IsSuccessStatusCode ? await resp.Content.ReadAsStringAsync(cts.Token) : null;
+        return new UsageResponse((int)resp.StatusCode, resp.Headers.RetryAfter?.Delta, body);
+    }
 
-        using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(cts.Token));
-        RecordWindows(key, doc.RootElement);
+    // Продление access-токена профиля по refresh-токену — тем же путём, что сам CLI:
+    // POST console.anthropic.com/v1/oauth/token с client_id Claude Code. Свежая пара
+    // пишется обратно в .credentials.json (остальные поля файла сохраняются как есть).
+    // null — продлить не вышло: нет refresh-токена, эндпоинт отверг, файл не читается.
+    private async Task<string?> TryRefreshProfileAsync(string key, string profileDir, CancellationToken ct)
+    {
+        try
+        {
+            var credsPath = Path.Combine(profileDir, ".credentials.json");
+            if (!File.Exists(credsPath)) return null;
+            var root = JsonNode.Parse(await File.ReadAllTextAsync(credsPath, ct)) as JsonObject;
+            var oauth = root?["claudeAiOauth"] as JsonObject;
+            var refreshToken = oauth?["refreshToken"]?.GetValue<string>();
+            if (string.IsNullOrWhiteSpace(refreshToken)) return null;
+
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(RequestTimeout);
+
+            var client = httpFactory.CreateClient("anthropic-oauth");
+            using var req = new HttpRequestMessage(HttpMethod.Post, TokenEndpoint)
+            {
+                Content = new StringContent(JsonSerializer.Serialize(new
+                {
+                    grant_type = "refresh_token",
+                    refresh_token = refreshToken,
+                    client_id = OAuthClientId,
+                }), Encoding.UTF8, "application/json"),
+            };
+            req.Headers.TryAddWithoutValidation("User-Agent", await ResolveUserAgentAsync(cts.Token));
+
+            using var resp = await client.SendAsync(req, cts.Token);
+            if (!resp.IsSuccessStatusCode)
+            {
+                // Не чаще раза: дальше тик всё равно кончится 401 и SetStatus залогирует
+                // unauthorized однократно — повторять отказ рефреша каждые 10 минут незачем
+                if (StatusOf(key) != StatusUnauthorized)
+                    Console.Error.WriteLine($"[OAuthUsage] аккаунт '{key}': рефреш токена отвергнут (HTTP {(int)resp.StatusCode}) — " +
+                        "нужен `claude login` в профиле подписки");
+                return null;
+            }
+
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(cts.Token));
+            var access = doc.RootElement.TryGetProperty("access_token", out var at) ? at.GetString() : null;
+            if (string.IsNullOrWhiteSpace(access)) return null;
+            var newRefresh = doc.RootElement.TryGetProperty("refresh_token", out var rt) ? rt.GetString() : null;
+            var expiresIn = doc.RootElement.TryGetProperty("expires_in", out var ei)
+                && ei.ValueKind == JsonValueKind.Number ? ei.GetInt64() : 0;
+
+            oauth!["accessToken"] = access;
+            if (!string.IsNullOrWhiteSpace(newRefresh)) oauth["refreshToken"] = newRefresh;
+            if (expiresIn > 0)
+                oauth["expiresAt"] = DateTimeOffset.UtcNow.AddSeconds(expiresIn).ToUnixTimeMilliseconds();
+
+            // Атомарная запись: недописанный файл не должен убить логин профиля
+            var tmp = credsPath + ".tmp";
+            await File.WriteAllTextAsync(tmp, root!.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), ct);
+            File.Move(tmp, credsPath, overwrite: true);
+            Console.Error.WriteLine($"[OAuthUsage] аккаунт '{key}': access-токен профиля продлён по refresh-токену");
+            return access;
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[OAuthUsage] аккаунт '{key}': рефреш токена не удался: {ex.Message}");
+            return null;
+        }
     }
 
     // Лог не чаще раза на аккаунт: только при смене статуса (иначе 401 каждые 10 минут

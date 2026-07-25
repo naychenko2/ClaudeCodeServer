@@ -192,6 +192,103 @@ public class SubscriptionOAuthUsageServiceTests : IDisposable
         accounts.Single(a => a.Key == "second").Token.Should().Be("token-second");
     }
 
+    // --- Рефреш протухшего access-токена профиля (sub-профили CLI не обновляет) ---
+
+    private const string UsageEndpoint = "https://api.anthropic.com/api/oauth/usage";
+    private const string TokenEndpoint = "https://console.anthropic.com/v1/oauth/token";
+
+    private string WriteProfileCreds(string name, string access, string refresh, long expiresAtMs)
+    {
+        var dir = Path.Combine(_tempDir, name);
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, ".credentials.json"), $$"""
+        {
+          "claudeAiOauth": {
+            "accessToken": "{{access}}",
+            "refreshToken": "{{refresh}}",
+            "expiresAt": {{expiresAtMs}},
+            "subscriptionType": "max"
+          },
+          "mcpOAuth": { "keep": "me" }
+        }
+        """);
+        return dir;
+    }
+
+    // Хендлер обоих эндпоинтов: usage пускает только свежий токен, token-эндпоинт
+    // выдаёт новую пару (или отказывает, если refreshOk=false)
+    private static StubHandler RefreshAwareHandler(string freshToken, bool refreshOk, Action? onRefresh = null)
+        => new(req =>
+        {
+            if (req.RequestUri!.ToString().StartsWith(TokenEndpoint))
+            {
+                onRefresh?.Invoke();
+                if (!refreshOk) return new HttpResponseMessage(HttpStatusCode.BadRequest);
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(
+                        $$"""{ "access_token": "{{freshToken}}", "refresh_token": "refresh-2", "expires_in": 28800 }""",
+                        Encoding.UTF8, "application/json"),
+                };
+            }
+            var auth = req.Headers.Authorization?.Parameter;
+            return auth == freshToken
+                ? new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("""{ "five_hour": { "utilization": 42.0 } }""", Encoding.UTF8, "application/json"),
+                }
+                : new HttpResponseMessage(HttpStatusCode.Unauthorized);
+        });
+
+    [Fact]
+    public async Task ПротухшиеКреды_ПродленыДоЗапроса_ФайлПереписан_ОпросOk()
+    {
+        var dir = WriteProfileCreds("sub-exp", "stale-token", "refresh-1",
+            DateTimeOffset.UtcNow.AddHours(-2).ToUnixTimeMilliseconds());
+        var handler = RefreshAwareHandler("fresh-token", refreshOk: true);
+        var (svc, usage) = CreateService(handler);
+
+        await CaptureErrAsync(() => svc.PollAsync("claude-2", "stale-token", dir, CancellationToken.None));
+
+        svc.StatusOf("claude-2").Should().Be(SubscriptionOAuthUsageService.StatusOk);
+        usage.GetAll().Should().ContainSingle(s => s.LimitType == "five_hour");
+        var creds = File.ReadAllText(Path.Combine(dir, ".credentials.json"));
+        creds.Should().Contain("fresh-token").And.Contain("refresh-2", "пара должна ротироваться");
+        creds.Should().Contain("keep", "прочие поля файла (mcpOAuth) обязаны сохраниться");
+        creds.Should().NotContain("stale-token");
+    }
+
+    [Fact]
+    public async Task Отказ401ПриЖивомExpiresAt_ОднаПопыткаРефреша_ПовторУспешен()
+    {
+        // expiresAt в будущем (отзыв токена, рассинхрон часов) — рефреш по факту 401
+        var dir = WriteProfileCreds("sub-revoked", "revoked-token", "refresh-1",
+            DateTimeOffset.UtcNow.AddHours(4).ToUnixTimeMilliseconds());
+        var refreshCalls = 0;
+        var handler = RefreshAwareHandler("fresh-token", refreshOk: true, () => refreshCalls++);
+        var (svc, _) = CreateService(handler);
+
+        await CaptureErrAsync(() => svc.PollAsync("claude-2", "revoked-token", dir, CancellationToken.None));
+
+        svc.StatusOf("claude-2").Should().Be(SubscriptionOAuthUsageService.StatusOk);
+        refreshCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task РефрешОтвергнут_СтатусUnauthorized_ФайлНеТронут()
+    {
+        var dir = WriteProfileCreds("sub-dead", "stale-token", "refresh-dead",
+            DateTimeOffset.UtcNow.AddHours(-2).ToUnixTimeMilliseconds());
+        var handler = RefreshAwareHandler("fresh-token", refreshOk: false);
+        var (svc, _) = CreateService(handler);
+
+        var log = await CaptureErrAsync(() => svc.PollAsync("claude-2", "stale-token", dir, CancellationToken.None));
+
+        svc.StatusOf("claude-2").Should().Be(SubscriptionOAuthUsageService.StatusUnauthorized);
+        File.ReadAllText(Path.Combine(dir, ".credentials.json")).Should().Contain("stale-token");
+        log.Should().NotContain("refresh-dead", "refresh-токен не должен утекать в журнал");
+    }
+
     [Fact]
     public async Task ВосстановлениеПосле403_СтатусСноваOk()
     {

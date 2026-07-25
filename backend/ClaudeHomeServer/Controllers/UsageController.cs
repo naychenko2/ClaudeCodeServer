@@ -11,7 +11,7 @@ namespace ClaudeHomeServer.Controllers;
 [Route("api/usage")]
 public class UsageController(UsageService usage, ClaudeSubscriptionPool? subscriptionPool,
     LlmProviderRegistry providers, LocalActionRouter localRouter, OllamaClient ollama,
-    IConfiguration config) : ControllerBase
+    SubscriptionOAuthUsageService oauthUsage, IConfiguration config) : ControllerBase
 {
     // История снимков использования лимитов подписки + тариф + per-subscription (для экрана usage)
     [HttpGet]
@@ -35,30 +35,32 @@ public class UsageController(UsageService usage, ClaudeSubscriptionPool? subscri
             providerSnaps[key] = snaps;
         }
 
-        // Для подписок из пула — проставляем DisplayName + статус роутинга (в ротации / выведен)
-        if (bySub.Count > 1 && subscriptionPool?.HasExtra == true)
-        {
-            // Показываем только ключи настроенных подписок пула (включая "claude", если она —
-            // подписка с токеном). Отсекаем чужие снапшоты в per-subscription сторе: ключи
-            // сторонних провайдеров (уходят в блок Providers) и сирот после переименования аккаунта.
-            var poolKeys = new HashSet<string>(subscriptionPool.All.Select(s => s.Key), StringComparer.Ordinal);
+        // Статусы опроса api/oauth/usage per-аккаунт: по "unauthorized" вкладка честно
+        // показывает «нужен claude login», а не гадает по свежести снимков
+        var pollStatuses = oauthUsage.Statuses.Count > 0 ? oauthUsage.Statuses : null;
 
+        // Для подписок из пула — проставляем DisplayName + статус роутинга (в ротации / выведен)
+        if (subscriptionPool?.HasExtra == true)
+        {
+            // Показываем ВСЕ настроенные подписки пула (включая "claude", если она — подписка
+            // с токеном), даже если снимков у аккаунта ещё нет: вкладке нужен статус опроса.
+            // Чужие снапшоты per-subscription стора не попадают: ключи сторонних провайдеров
+            // (уходят в блок Providers) и сироты после переименования аккаунта отсекаются.
             var named = new Dictionary<string, SubscriptionUsage>();
-            foreach (var (key, snaps) in bySub)
+            foreach (var sub in subscriptionPool.All)
             {
-                if (!poolKeys.Contains(key)) continue;
-                var displayName = subscriptionPool.All.FirstOrDefault(s => s.Key == key)?.DisplayName;
-                var tier = subscriptionPool.TierLabel(key);
-                named[key] = new SubscriptionUsage(snaps, displayName,
+                var key = sub.Key;
+                var snaps = bySub.TryGetValue(key, out var s) ? s : new List<UsageSnapshot>();
+                named[key] = new SubscriptionUsage(snaps, sub.DisplayName,
                     InRotation: subscriptionPool.IsInRotation(key),
                     Utilization: subscriptionPool.EffectiveUtilization(key),
                     Exhausted: subscriptionPool.IsExhausted(key),
-                    Tier: tier);
+                    Tier: subscriptionPool.TierLabel(key));
             }
-            return Ok(new UsageResponse(all, plan, named, subscriptionPool.SoftThreshold, providerSnaps, ollamaInfo));
+            return Ok(new UsageResponse(all, plan, named, subscriptionPool.SoftThreshold, providerSnaps, ollamaInfo, pollStatuses));
         }
 
-        return Ok(new UsageResponse(all, plan, null, null, providerSnaps, ollamaInfo));
+        return Ok(new UsageResponse(all, plan, null, null, providerSnaps, ollamaInfo, pollStatuses));
     }
 
     // Блок локальной модели: настройки Ollama + маршрут каждого фонового действия (локаль/claude)

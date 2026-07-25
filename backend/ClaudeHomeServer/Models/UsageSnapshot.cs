@@ -22,10 +22,13 @@ public record PlanInfo(string? SubscriptionType, string? RateLimitTier, string L
 // новых чатов (заполняется только при наличии дополнительных подписок).
 // Providers — снимки окон лимитов сторонних CLI-провайдеров (glm/deepseek): их
 // Anthropic-совместимые эндпоинты тоже шлют rate_limit_event, снимок пишется под ключ провайдера.
+// PollStatuses — статус опроса api/oauth/usage по ключам аккаунтов ("ok" | "unauthorized" |
+// "error"): по "unauthorized" вкладка показывает плашку «нужен claude login», не гадая по свежести.
 public record UsageResponse(IReadOnlyList<UsageSnapshot> Snapshots, PlanInfo? Plan,
     Dictionary<string, SubscriptionUsage>? Subscriptions = null, double? RotationThreshold = null,
     Dictionary<string, IReadOnlyList<UsageSnapshot>>? Providers = null,
-    OllamaUsageInfo? Ollama = null);
+    OllamaUsageInfo? Ollama = null,
+    IReadOnlyDictionary<string, string>? PollStatuses = null);
 
 // Блок «Локальная модель (Ollama)» для экрана использования. У Ollama нет лимитов/баланса
 // (локальная, бесплатная) — показываем только модель и на какие действия она заведена.

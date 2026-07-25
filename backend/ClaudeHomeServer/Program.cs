@@ -93,8 +93,10 @@ builder.Services.AddSingleton(sp => new ClaudeSubscriptionPool(
     sp.GetRequiredService<IConfiguration>(), sp.GetRequiredService<UsageService>()));
 // Стартовый прогрев утилизации подписок (один пробный ход на аккаунт) — при HasExtra и флаге
 builder.Services.AddHostedService<SubscriptionUsageWarmupService>();
-// Точная утилизация обоих окон (5ч + неделя) каждого аккаунта через api/oauth/usage
-builder.Services.AddHostedService<SubscriptionOAuthUsageService>();
+// Точная утилизация обоих окон (5ч + неделя) каждого аккаунта через api/oauth/usage;
+// singleton — статусы опроса per-аккаунт (токен не подходит / ошибка) читает /api/usage
+builder.Services.AddSingleton<SubscriptionOAuthUsageService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<SubscriptionOAuthUsageService>());
 builder.Services.AddSingleton<PersonaAgentFileGenerator>();
 builder.Services.AddSingleton<PersonaAgentFileSync>();
 builder.Services.AddSingleton<FalImageService>();

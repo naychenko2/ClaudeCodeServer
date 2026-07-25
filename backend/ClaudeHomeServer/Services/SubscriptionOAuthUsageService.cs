@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -15,7 +16,8 @@ namespace ClaudeHomeServer.Services;
 //
 // Best-effort: основной аккаунт опрашивается токеном из ~/.claude/.credentials.json
 // (CLI сам его обновляет; перечитываем перед каждым тиком — рефреш токена не наша забота),
-// дополнительные — их OAuthToken из конфига. Ошибка/401 по аккаунту — просто пропуск тика:
+// дополнительные — их OAuthToken из конфига. Не-2xx по аккаунту — пропуск тика с фиксацией
+// статуса (401/403 = «токен не подходит», см. StatusOf) и логом при смене статуса:
 // для такого аккаунта остаются данные warmup-хода и живых rate_limit_event.
 public sealed partial class SubscriptionOAuthUsageService(
     ClaudeSubscriptionPool pool,
@@ -36,11 +38,26 @@ public sealed partial class SubscriptionOAuthUsageService(
     // (вечные 429 — issues #31021/#31637 в repo claude-code)
     private const string FallbackCliVersion = "2.1.169";
 
+    // Статусы последнего опроса per-аккаунт: ok — эндпоинт отвечает; unauthorized —
+    // токен не принят (401/403: setup-токен sk-ant-oat01 вместо полноценного логина
+    // эндпоинт не пускает); error — прочий не-2xx. Читает /api/usage (плашка на вкладке).
+    public const string StatusOk = "ok";
+    public const string StatusUnauthorized = "unauthorized";
+    public const string StatusError = "error";
+
+    private readonly ConcurrentDictionary<string, string> _status = new();
+
     // Состояние backoff по ключу подписки: до какого момента не опрашивать
     // и сколько 429 подряд уже словили (для удвоения интервала)
     private readonly Dictionary<string, (DateTime AllowedAt, int Strikes)> _backoff = new();
     private string? _userAgent;
     private int _pollMinutes = DefaultPollMinutes;
+
+    /// <summary>Статус последнего опроса аккаунта (null — поллер до него ещё не доходил).</summary>
+    public string? StatusOf(string key) => _status.TryGetValue(key, out var s) ? s : null;
+
+    /// <summary>Все известные статусы опроса — блок pollStatuses в /api/usage.</summary>
+    public IReadOnlyDictionary<string, string> Statuses => _status;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -140,7 +157,7 @@ public sealed partial class SubscriptionOAuthUsageService(
         catch { return null; }
     }
 
-    private async Task PollAsync(string key, string token, CancellationToken ct)
+    internal async Task PollAsync(string key, string token, CancellationToken ct)
     {
         if (_backoff.TryGetValue(key, out var b) && DateTime.UtcNow < b.AllowedAt)
             return;
@@ -168,19 +185,38 @@ public sealed partial class SubscriptionOAuthUsageService(
         }
         if (!resp.IsSuccessStatusCode)
         {
-            // 401 — токен протух: молча пропускаем тик, CLI обновит токен при
-            // ближайшем ходе; у аккаунта остаются прежние снимки
+            // 401/403 — токен не подходит (setup-токен вместо полноценного логина;
+            // живой 403 «Request not allowed» именно от sk-ant-oat01). Прочие коды —
+            // временная ошибка эндпоинта. У аккаунта остаются прежние снимки.
+            var code = (int)resp.StatusCode;
+            SetStatus(key, code is 401 or 403 ? StatusUnauthorized : StatusError, code);
             return;
         }
         _backoff.Remove(key); // успех — вернуться к обычному интервалу опроса
+        SetStatus(key, StatusOk);
 
         using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(cts.Token));
-        RecordWindow(key, doc.RootElement, "five_hour");
-        RecordWindow(key, doc.RootElement, "seven_day");
-        RecordWindow(key, doc.RootElement, "seven_day_opus");
-        RecordWindow(key, doc.RootElement, "seven_day_sonnet");
-        RecordExtraUsage(key, doc.RootElement);
+        RecordWindows(key, doc.RootElement);
     }
+
+    // Лог не чаще раза на аккаунт: только при смене статуса (иначе 401 каждые 10 минут
+    // засорял бы журнал). Токен в лог не пишем никогда.
+    private void SetStatus(string key, string status, int httpCode = 0)
+    {
+        var prev = _status.TryGetValue(key, out var p) ? p : null;
+        _status[key] = status;
+        if (prev == status) return;
+        if (status == StatusUnauthorized)
+            Console.Error.WriteLine($"[OAuthUsage] аккаунт '{key}': HTTP {httpCode} — токен не принят эндпоинтом usage " +
+                "(setup-токен вместо полноценного входа?); нужен `claude login` в профиле подписки");
+        else if (status == StatusError)
+            Console.Error.WriteLine($"[OAuthUsage] аккаунт '{key}': HTTP {httpCode}");
+        else if (prev is not null)
+            Console.Error.WriteLine($"[OAuthUsage] аккаунт '{key}': опрос восстановился");
+    }
+
+    // Для тестов: не дёргать `claude --version` при опросе
+    internal void OverrideUserAgent(string ua) => _userAgent = ua;
 
     // User-Agent claude-code/<версия установленного CLI> — обязателен (см. FallbackCliVersion).
     // Версию узнаём один раз за жизнь процесса через `claude --version`.
@@ -216,11 +252,22 @@ public sealed partial class SubscriptionOAuthUsageService(
     [GeneratedRegex(@"\d+\.\d+\.\d+")]
     private static partial Regex CliVersionRegex();
 
-    // Окно из ответа: { "utilization": 51.0 (проценты), "resets_at": ISO }.
-    private void RecordWindow(string key, JsonElement root, string window)
+    // Динамический перебор окон ответа: любое свойство-объект с utilization/resets_at —
+    // окно лимита (five_hour, seven_day, per-model seven_day_opus/sonnet/fable и любые
+    // будущие подхватываются без правок кода); extra_usage устроен иначе — разбирается отдельно.
+    private void RecordWindows(string key, JsonElement root)
     {
-        if (!root.TryGetProperty(window, out var w) || w.ValueKind != JsonValueKind.Object) return;
+        foreach (var prop in root.EnumerateObject())
+        {
+            if (prop.Value.ValueKind != JsonValueKind.Object) continue;
+            if (prop.Name == "extra_usage") RecordExtraUsage(key, root);
+            else RecordWindow(key, prop.Name, prop.Value);
+        }
+    }
 
+    // Окно из ответа: { "utilization": 51.0 (проценты), "resets_at": ISO }.
+    private void RecordWindow(string key, string window, JsonElement w)
+    {
         var utilization = w.TryGetProperty("utilization", out var u) && u.ValueKind == JsonValueKind.Number
             ? u.GetDouble() / 100.0 : (double?)null;
         var resetsAt = w.TryGetProperty("resets_at", out var r) && r.ValueKind == JsonValueKind.String

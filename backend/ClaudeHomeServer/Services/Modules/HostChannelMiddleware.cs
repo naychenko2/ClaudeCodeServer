@@ -30,10 +30,7 @@ public static class HostChannelMiddleware
 
     private static async Task Invoke(HttpContext ctx, RequestDelegate next)
     {
-        var auth = ctx.Request.Headers.Authorization.ToString();
-        var token = auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
-            ? auth["Bearer ".Length..].Trim()
-            : null;
+        var token = ExtractBearerToken(ctx.Request);
 
         var registry = ctx.RequestServices.GetRequiredService<ModuleRegistry>();
         var module = ResolveModuleByAudience(token, registry);
@@ -71,21 +68,47 @@ public static class HostChannelMiddleware
         await next(ctx);
     }
 
-    // Модуль по aud токена БЕЗ проверки подписи: aud нужен раньше валидации, чтобы знать,
-    // против какого Audience валидировать. Подпись/lifetime/chan проверяются следом в Validate.
-    private static LoadedModule? ResolveModuleByAudience(string? token, ModuleRegistry registry)
+    /// <summary>Bearer-токен из заголовка Authorization, либо null.</summary>
+    public static string? ExtractBearerToken(HttpRequest request)
     {
-        if (string.IsNullOrWhiteSpace(token)) return null;
+        var auth = request.Headers.Authorization.ToString();
+        return auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
+            ? auth["Bearer ".Length..].Trim()
+            : null;
+    }
+
+    // Модуль и sub по aud/sub токена БЕЗ проверки подписи: aud нужен раньше валидации, чтобы
+    // знать, против какого Audience валидировать. Подпись/lifetime/chan проверяются следом
+    // в Validate — подделка aud/sub здесь ничем не грозит.
+    private static (LoadedModule? Module, string? Sub) ParseUnverified(string? token, ModuleRegistry registry)
+    {
+        if (string.IsNullOrWhiteSpace(token)) return (null, null);
         try
         {
             var parsed = new JwtSecurityTokenHandler { MapInboundClaims = false }.ReadJwtToken(token);
-            return registry.All.FirstOrDefault(m =>
+            var module = registry.All.FirstOrDefault(m =>
                 parsed.Audiences.Contains(m.Audience, StringComparer.Ordinal));
+            return (module, parsed.Subject);
         }
         catch
         {
-            return null;
+            return (null, null);
         }
+    }
+
+    private static LoadedModule? ResolveModuleByAudience(string? token, ModuleRegistry registry) =>
+        ParseUnverified(token, registry).Module;
+
+    /// <summary>
+    /// Ключ партиции rate-limit host-токена (§10.2 v1.5): "{moduleId}:{sub}" — читается из
+    /// aud/sub токена БЕЗ проверки подписи (партиционер выполняется до UseHostChannel, где
+    /// провалидированных данных ещё нет). Null — токен не распознан, вызывающий (партиционер
+    /// в Program.cs) откатывается на IP, чтобы мусорные запросы не делили общую партицию.
+    /// </summary>
+    public static string? TryReadPartitionKey(string? token, ModuleRegistry registry)
+    {
+        var (module, sub) = ParseUnverified(token, registry);
+        return module is not null && !string.IsNullOrEmpty(sub) ? $"{module.Id}:{sub}" : null;
     }
 
     private static async Task WriteUnauthorized(HttpContext ctx)

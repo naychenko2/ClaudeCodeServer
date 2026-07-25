@@ -87,7 +87,8 @@ public class HostLlmController(
         if ((module.Manifest.Llm?.Actions ?? []).Count == 0)
             return StatusCode(StatusCodes.Status403Forbidden, new { error = "action_not_declared" });
 
-        var fullKey = module.LlmActionKey(req.Action.Trim());
+        var action = req.Action.Trim();
+        var fullKey = module.LlmActionKey(action);
         if (LocalActionCatalog.Find(fullKey) is null)
             return NotFound(new { error = "action_unknown" });
 
@@ -130,7 +131,7 @@ public class HostLlmController(
                 // R13: учёт в разрезе (moduleId, action, sub); токены/деньги — только когда
                 // их отдал провайдер (локаль и прямой адаптер метрик не дают)
                 usage.Record(new ModuleLlmUsageStore.Entry(
-                    DateTime.UtcNow, module.Id, req.Action, userId, routeStr,
+                    DateTime.UtcNow, module.Id, action, userId, routeStr,
                     Ok: true, started.ElapsedMilliseconds, result.Usage?.Model,
                     result.Usage?.TotalInputTokens, result.Usage?.OutputTokens, result.Usage?.CostUsd));
 
@@ -149,7 +150,7 @@ public class HostLlmController(
                 // Watchdog сработал раньше внутренних шагов (запас TimeoutMarginMs) — честный 504.
                 // Клиентский обрыв (ct) сюда не попадает — ему ответ уже не нужен.
                 usage.Record(new ModuleLlmUsageStore.Entry(
-                    DateTime.UtcNow, module.Id, req.Action, userId, routeStr,
+                    DateTime.UtcNow, module.Id, action, userId, routeStr,
                     Ok: false, started.ElapsedMilliseconds));
                 return StatusCode(StatusCodes.Status504GatewayTimeout, new { error = "llm_timeout" });
             }
@@ -159,7 +160,7 @@ public class HostLlmController(
                 // границей канала оно оформляется в 503, модуль деградирует, а не падает
                 log.LogWarning(ex, "LLM-канал: вызов {Action} модуля {Module} не удался", fullKey, module.Id);
                 usage.Record(new ModuleLlmUsageStore.Entry(
-                    DateTime.UtcNow, module.Id, req.Action, userId, routeStr,
+                    DateTime.UtcNow, module.Id, action, userId, routeStr,
                     Ok: false, started.ElapsedMilliseconds));
                 return StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = "llm_unavailable" });
             }

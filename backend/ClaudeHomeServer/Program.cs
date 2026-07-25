@@ -295,6 +295,16 @@ builder.Services.Configure<ForwardedHeadersOptions>(o =>
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    // §10.2 v1.5: превышение лимита → 429 + Retry-After. FixedWindowRateLimiter кладёт
+    // остаток окна в метаданные лизы при отказе, но заголовок сам не проставляет — читаем
+    // и выставляем явно, для всех политик разом (тело ответа не трогаем).
+    options.OnRejected = (ctx, _) =>
+    {
+        if (ctx.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter))
+            ctx.HttpContext.Response.Headers.RetryAfter =
+                ((int)retryAfter.TotalSeconds).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        return ValueTask.CompletedTask;
+    };
     options.AddPolicy("auth-login", ctx =>
     {
         var limit = ctx.RequestServices.GetRequiredService<IConfiguration>()
@@ -309,14 +319,21 @@ builder.Services.AddRateLimiter(options =>
             });
     });
     // Выпуск host-токенов модулей (§10.2 v1.5): RSA-подпись на каждый выпуск — защищаем от
-    // молотьбы. Модуль кэширует токен на 60 мин, так что лимит просторный даже на всех
-    // пользователей модуля разом.
+    // молотьбы. Партиция — {moduleId}:{sub} из aud/sub токена (без проверки подписи, она и
+    // не нужна: подделка aud/sub лишь уводит запрос в другую партицию, сам запрос всё равно
+    // упрётся в Validate следом). Иначе все модули идут с внутренних адресов (127.0.0.1,
+    // host.docker.internal) и делят один общий счётчик — зациклившийся модуль бьёт по
+    // всем соседям. Нераспознанный токен — фолбэк на IP, чтобы не образовать общую корзину.
     options.AddPolicy("host-token", ctx =>
     {
         var limit = ctx.RequestServices.GetRequiredService<IConfiguration>()
             .GetValue("Modules:HostTokenRateLimit", 30);
+        var registry = ctx.RequestServices.GetRequiredService<ModuleRegistry>();
+        var token = HostChannelMiddleware.ExtractBearerToken(ctx.Request);
+        var partitionKey = HostChannelMiddleware.TryReadPartitionKey(token, registry)
+            ?? ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown";
         return RateLimitPartition.GetFixedWindowLimiter(
-            ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            partitionKey,
             _ => new FixedWindowRateLimiterOptions
             {
                 PermitLimit = limit,

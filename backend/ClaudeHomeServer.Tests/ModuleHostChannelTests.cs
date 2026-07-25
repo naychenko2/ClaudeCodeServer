@@ -390,6 +390,24 @@ public class ModuleHostChannelTests
     }
 
     [Fact]
+    public async Task Complete_обрезает_пробелы_ключа_действия_в_учёте()
+    {
+        // Ревью: в usage.Record должен идти тот же нормализованный ключ, что пошёл в резолв —
+        // иначе " echo-echo " и "echo-echo" расходятся отдельными ключами в агрегации
+        var (_, module) = BuildEcho(TempDir(), "llmtrim");
+        var cheap = new FakeCheap();
+        var (controller, _, dataDir) = BuildController(module, "user-1", cheap);
+
+        var result = await controller.Complete(
+            new HostLlmController.CompleteRequest(" echo-echo ", "привет", null, null), default);
+
+        Assert.Equal(200, StatusOf(result));
+        var entry = JsonDocument.Parse(
+            Assert.Single(File.ReadAllLines(Path.Combine(dataDir, "module-llm-usage.jsonl")))).RootElement;
+        Assert.Equal("echo-echo", entry.GetProperty("action").GetString());
+    }
+
+    [Fact]
     public async Task Complete_отдаёт_usage_когда_провайдер_его_вернул()
     {
         var (_, module) = BuildEcho(TempDir(), "llmusage");
@@ -599,5 +617,68 @@ public class ModuleHostChannelTests
         Assert.NotNull(validated);
         Assert.Equal("user-1", validated!.UserId);
         Assert.Equal("host", validated.Chan);
+    }
+
+    // ---------- Партиция rate-limit host-токена (§10.2 v1.5, ревью тимлида) ----------
+
+    [Fact]
+    public void Партиция_разная_для_разных_модулей_одного_пользователя()
+    {
+        // Сценарий шумного соседа: два модуля с одного IP (внутренний адрес ядра) не должны
+        // делить счётчик — исчерпание лимита одним не мешает другому
+        var dataDir = TempDir();
+        BuildEcho(dataDir, "part1");
+        var (sp, module2) = BuildEcho(dataDir, "part2");
+        var registry = sp.GetRequiredService<ModuleRegistry>();
+        var module1 = registry.Get("part1")!;
+        var tokens = sp.GetRequiredService<ModuleTokenService>();
+        var token1 = tokens.Issue(module1, "user-1", "Tester", "host");
+        var token2 = tokens.Issue(module2, "user-1", "Tester", "host");
+
+        var key1 = HostChannelMiddleware.TryReadPartitionKey(token1, registry);
+        var key2 = HostChannelMiddleware.TryReadPartitionKey(token2, registry);
+
+        Assert.Equal("part1:user-1", key1);
+        Assert.Equal("part2:user-1", key2);
+        Assert.NotEqual(key1, key2);
+    }
+
+    [Fact]
+    public void Партиция_разная_для_разных_пользователей_одного_модуля()
+    {
+        var (sp, module) = BuildEcho(TempDir(), "part3");
+        var registry = sp.GetRequiredService<ModuleRegistry>();
+        var tokens = sp.GetRequiredService<ModuleTokenService>();
+        var tokenA = tokens.Issue(module, "user-1", "Tester A", "host");
+        var tokenB = tokens.Issue(module, "user-2", "Tester B", "host");
+
+        Assert.NotEqual(
+            HostChannelMiddleware.TryReadPartitionKey(tokenA, registry),
+            HostChannelMiddleware.TryReadPartitionKey(tokenB, registry));
+    }
+
+    [Fact]
+    public void Партиция_одинакова_для_повторных_токенов_той_же_пары()
+    {
+        var (sp, module) = BuildEcho(TempDir(), "part4");
+        var registry = sp.GetRequiredService<ModuleRegistry>();
+        var tokens = sp.GetRequiredService<ModuleTokenService>();
+        var tokenA = tokens.Issue(module, "user-1", "Tester", "host");
+        var tokenB = tokens.Issue(module, "user-1", "Tester", "host");
+
+        Assert.Equal(
+            HostChannelMiddleware.TryReadPartitionKey(tokenA, registry),
+            HostChannelMiddleware.TryReadPartitionKey(tokenB, registry));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("not.a.jwt")]
+    public void Партиция_null_для_нераспознанного_токена_вызывающий_откатится_на_IP(string? token)
+    {
+        var (sp, _) = BuildEcho(TempDir());
+        var registry = sp.GetRequiredService<ModuleRegistry>();
+
+        Assert.Null(HostChannelMiddleware.TryReadPartitionKey(token, registry));
     }
 }

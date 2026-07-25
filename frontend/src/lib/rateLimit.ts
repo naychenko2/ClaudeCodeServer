@@ -15,11 +15,16 @@ const WINDOW_LABELS: Record<string, string> = {
   weekly: 'Неделя',
   seven_day_opus: 'Неделя · Opus',
   seven_day_sonnet: 'Неделя · Sonnet',
+  seven_day_fable: 'Неделя · Fable',
   extra_usage: 'Перерасход · месяц',
 };
 
 export function windowLabel(type: string): string {
   if (WINDOW_LABELS[type]) return WINDOW_LABELS[type];
+  // Незнакомое per-model окно (seven_day_<модель>) — читаемая подпись из ключа:
+  // новые недельные окна Anthropic подхватываются без правок словаря
+  const m = /^seven_day_(.+)$/i.exec(type);
+  if (m) return `Неделя · ${m[1].charAt(0).toUpperCase()}${m[1].slice(1).replace(/_/g, ' ')}`;
   if (/5|five|hour/i.test(type)) return '5 часов';
   if (/week|seven|day/i.test(type)) return 'Неделя';
   return type || 'Лимит';

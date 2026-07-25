@@ -112,11 +112,29 @@ function TierPill({ tier }: { tier: string }) {
   );
 }
 
-function ClaudeTab({ snapshots, rotation, tier }: { snapshots: UsageSnapshot[] | null | undefined; rotation?: RotationInfo; tier?: string }) {
+// Плашка «точные проценты недоступны»: поллер получает 401/403 (setup-токен) либо
+// свежих (< 30 мин) снимков с процентом просто нет — устаревшие цифры не выдаём за точные
+function NeedLoginBanner() {
+  return (
+    <div style={{ fontSize: 11.5, color: C.warningText, background: C.warningBg, border: `1px solid ${C.warning}`, borderRadius: 8, padding: '6px 10px', marginBottom: 12, lineHeight: 1.5 }}>
+      Точные проценты недоступны: аккаунт работает на setup-токене, а API лимитов принимает
+      только полноценный вход. Выполните <code style={{ fontFamily: FONT.mono, fontSize: 11 }}>claude login</code> в профиле подписки.
+    </div>
+  );
+}
+
+function ClaudeTab({ snapshots, rotation, tier, pollStatus }: { snapshots: UsageSnapshot[] | null | undefined; rotation?: RotationInfo; tier?: string; pollStatus?: string }) {
   const windows = snapshots ? latestPerWindow(snapshots) : [];
   const series = snapshots ? seriesByWindow(snapshots) : {};
-  const latestTs = windows.reduce<number>((a, w) => { const t = w.timestamp ? new Date(w.timestamp).getTime() : 0; return t > a ? t : a; }, 0);
-  const stale = latestTs > 0 && Date.now() - latestTs > STALE_MS;
+  // Свежесть — только по снимкам С ПРОЦЕНТОМ: rate_limit_event ходов шлёт одни resets,
+  // и такой снимок не должен выдавать устаревшие проценты за свежие
+  const utilTs = (snapshots ?? []).reduce<number>((a, s) => {
+    if (typeof s.utilization !== 'number') return a;
+    const t = new Date(s.timestamp).getTime();
+    return t > a ? t : a;
+  }, 0);
+  const staleUtil = utilTs === 0 || Date.now() - utilTs > STALE_MS;
+  const needLogin = pollStatus === 'unauthorized' || (windows.length > 0 && staleUtil);
   const worst = worstWindow(windows);
   const trend = worst ? (series[worst.limitType] ?? []) : [];
   const badge = (rotation || tier)
@@ -129,6 +147,7 @@ function ClaudeTab({ snapshots, rotation, tier }: { snapshots: UsageSnapshot[] |
     return (
       <div>
         {badge}
+        {pollStatus === 'unauthorized' && <NeedLoginBanner />}
         <div style={{ padding: '36px 12px', textAlign: 'center', color: C.textMuted, fontSize: 12.5, lineHeight: 1.5 }}>
           <div style={{ fontSize: 24, marginBottom: 6, opacity: 0.5 }}>◌</div>
           Данные о лимитах появятся в течение нескольких минут — они обновляются автоматически.
@@ -136,15 +155,11 @@ function ClaudeTab({ snapshots, rotation, tier }: { snapshots: UsageSnapshot[] |
       </div>
     );
   return (
-    <div style={{ opacity: stale ? 0.6 : 1 }}>
+    <div style={{ opacity: staleUtil ? 0.6 : 1 }}>
       {badge}
-      {stale && (
-        <div style={{ fontSize: 11.5, color: C.warningText, background: C.warningBg, border: `1px solid ${C.warning}`, borderRadius: 8, padding: '6px 10px', marginBottom: 12 }}>
-          Снимок старше 30 минут — опрос лимитов сейчас недоступен. Обновится с ближайшим опросом или ответом Claude.
-        </div>
-      )}
-      {latestTs > 0 && (
-        <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 8 }}>{fmtAgo(new Date(latestTs).toISOString())}</div>
+      {needLogin && <NeedLoginBanner />}
+      {utilTs > 0 && (
+        <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 8 }}>{fmtAgo(new Date(utilTs).toISOString())}</div>
       )}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
         {windows.map(w => <WindowCard key={w.limitType} w={w} />)}
@@ -510,8 +525,8 @@ export function UsageScreen({ onClose }: { onClose: () => void }) {
           ))}
         </div>
         <div style={{ flex: 1, overflow: 'auto', padding: '16px 20px 18px' }}>
-          {tab === 'claude' ? <ClaudeTab snapshots={usage?.subscriptions?.['claude']?.snapshots ?? (usage ? claudeSnaps : usage)} rotation={rotationOf('claude')} tier={usage?.subscriptions?.['claude']?.tier} />
-            : subKeys.includes(tab) ? <ClaudeTab snapshots={usage?.subscriptions?.[tab]?.snapshots} rotation={rotationOf(tab)} tier={usage?.subscriptions?.[tab]?.tier} />
+          {tab === 'claude' ? <ClaudeTab snapshots={usage?.subscriptions?.['claude']?.snapshots ?? (usage ? claudeSnaps : usage)} rotation={rotationOf('claude')} tier={usage?.subscriptions?.['claude']?.tier} pollStatus={usage?.pollStatuses?.['claude']} />
+            : subKeys.includes(tab) ? <ClaudeTab snapshots={usage?.subscriptions?.[tab]?.snapshots} rotation={rotationOf(tab)} tier={usage?.subscriptions?.[tab]?.tier} pollStatus={usage?.pollStatuses?.[tab]} />
             : tab === 'fal' ? <FalTab days={days} setDays={setDays} />
             : tab === 'ollama' ? <OllamaTab info={usage?.ollama} />
             : <ProviderTab providerKey={tab} data={provData[tab]} />}

@@ -170,6 +170,12 @@ describe('windowLabel', () => {
   it('окна опроса /api/oauth/usage: per-model и перерасход', () => {
     expect(windowLabel('seven_day_opus')).toBe('Неделя · Opus');
     expect(windowLabel('seven_day_sonnet')).toBe('Неделя · Sonnet');
+    expect(windowLabel('seven_day_fable')).toBe('Неделя · Fable');
     expect(windowLabel('extra_usage')).toBe('Перерасход · месяц');
+  });
+
+  it('незнакомое per-model окно получает читаемую подпись из ключа', () => {
+    expect(windowLabel('seven_day_haiku')).toBe('Неделя · Haiku');
+    expect(windowLabel('seven_day_new_model')).toBe('Неделя · New model');
   });
 });

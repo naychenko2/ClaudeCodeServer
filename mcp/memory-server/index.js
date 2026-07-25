@@ -24,21 +24,85 @@ const API_TOKEN = process.env.MEMORY_API_TOKEN ?? '';
 const PERSONA_ID = process.env.MEMORY_PERSONA_ID ?? '';
 const PROJECT_ID = process.env.MEMORY_PROJECT_ID ?? '';
 
-async function api(path, options = {}) {
-  const res = await fetch(`${API_URL}${path}`, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json; charset=utf-8',
-      Authorization: `Bearer ${API_TOKEN}`,
-      ...(options.headers ?? {}),
-    },
-  });
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`HTTP ${res.status}: ${body}`);
+// Секундная недоступность бэкенда (рестарт, деплой, перезапуск прокси) превращалась в серию
+// красных карточек: ретраев не было ни одного. Паузы короткие — вызов инструмента не должен
+// висеть минутами, а бэкенд поднимается быстро.
+const RETRY_DELAYS_MS = [300, 900];
+const RETRIABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// Ошибка соединения: запрос ТОЧНО не дошёл до бэкенда — повторять безопасно даже для мутаций
+const isConnectionError = err =>
+  ['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN'].includes(err?.cause?.code);
+
+// Сеть или таймаут: запрос мог и дойти — повторяем только идемпотентные чтения
+const isNetworkError = err =>
+  err?.name === 'TimeoutError' || err?.name === 'AbortError'
+  || err?.cause?.code !== undefined || /fetch failed/i.test(err?.message ?? '');
+
+function shouldRetry(err, method, attempt) {
+  if (attempt >= RETRY_DELAYS_MS.length) return false;
+  if (isConnectionError(err)) return true;
+  // Повтор POST/PUT/DELETE мог бы задвоить задачу или запустить второго исполнителя —
+  // мутации повторяем только когда точно известно, что запрос не дошёл (выше)
+  if ((method ?? 'GET').toUpperCase() !== 'GET') return false;
+  return err?.status ? RETRIABLE_STATUS.has(err.status) : isNetworkError(err);
+}
+
+// Текст ошибки для модели с ЯВНЫМ классом. Без него «HTTP 503», «HTTP 403» и «задача
+// принадлежит другому проекту» выглядят одинаково — в истории прода видно, как после первой
+// красной карточки модель бросала попытки, даже когда сбой был временный.
+function describeError(err) {
+  if (isNetworkError(err))
+    return 'Временный сбой связи с сервером'
+      + (err?.name === 'TimeoutError' ? ' (таймаут)' : '')
+      + '. Это не запрет — повтори вызов через несколько секунд.';
+  const status = err?.status;
+  if (!status) return String(err?.message ?? err);
+  const body = err.bodyText ? ` ${err.bodyText}` : '';
+  if (RETRIABLE_STATUS.has(status))
+    return `Временный сбой на сервере (HTTP ${status}).${body} Это не запрет — повтори вызов через несколько секунд.`;
+  if (status === 409)
+    return `Сейчас занято (HTTP 409).${body} Повтори позже, не чаще раза в 30 секунд.`;
+  return `Отказ (HTTP ${status}).${body} Повторять тот же вызов бессмысленно — само условие не изменится.`;
+}
+
+async function api(path, { timeoutMs = 60_000, ...options } = {}, attempt = 0) {
+  try {
+    const res = await fetch(`${API_URL}${path}`, {
+      ...options,
+      // Таймаут: без него подвисший бэкенд вешает вызов инструмента до дефолта undici (~300с)
+      signal: AbortSignal.timeout(timeoutMs),
+      headers: {
+        'Content-Type': 'application/json; charset=utf-8',
+        Authorization: `Bearer ${API_TOKEN}`,
+        ...(options.headers ?? {}),
+      },
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      const err = new Error(`HTTP ${res.status}: ${body}`);
+      err.status = res.status;
+      err.bodyText = body;
+      throw err;
+    }
+    return parseBody(res);
+  } catch (err) {
+    if (!shouldRetry(err, options.method, attempt)) throw err;
+    await sleep(RETRY_DELAYS_MS[attempt]);
+    return api(path, { timeoutMs, ...options }, attempt + 1);
   }
+}
+
+// Тело успешного ответа. Пустое тело — НЕ ошибка: ASP.NET на части операций отвечает
+// `Ok()` без объекта, а `res.json()` кидал на нём «Unexpected end of JSON input» —
+// удавшееся действие выглядело для модели провалом, и она повторяла его второй раз.
+async function parseBody(res) {
   if (res.status === 204) return null;
-  return res.json();
+  const text = await res.text();
+  if (!text) return null;
+  try { return JSON.parse(text); }
+  catch { return text; }
 }
 
 const base = `/api/personas/${encodeURIComponent(PERSONA_ID)}/memory`;
@@ -373,7 +437,7 @@ rl.on('line', async line => {
           reply(id, await callTool(params.name, params.arguments ?? {}));
         } catch (err) {
           reply(id, {
-            content: [{ type: 'text', text: `Ошибка: ${err?.message ?? err}` }],
+            content: [{ type: 'text', text: `Ошибка: ${describeError(err)}` }],
             isError: true,
           });
         }

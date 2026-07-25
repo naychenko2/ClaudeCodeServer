@@ -1,5 +1,6 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -320,6 +321,9 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
     }
 
     [HttpDelete]
+    // Секция destructive: на делегированном ходу агент не удаляет данные (раньше — срезанием
+    // секции из состава инструментов wsp, что перезапускало процесс CLI со всеми MCP)
+    [DenyOnDelegatedTurn("Удаление файлов")]
     public IActionResult Delete(string projectId, [FromQuery] string path)
     {
         try { files.Delete(GetRoot(projectId), path); return NoContent(); }

@@ -228,6 +228,30 @@ public class SessionManagerTests : IDisposable
         updated.Effort.Should().Be("high");
     }
 
+    // Владение проектной сессией — на нём держится гейт делегированных ходов
+    [Fact]
+    public async Task ПроектнаяСессия_ВладелецРезолвитсяЧерезПроект()
+    {
+        // У проектной сессии Session.OwnerId остаётся null — владелец живёт у проекта.
+        // Кто сравнивает OwnerId напрямую, молча получает «чужую» сессию: так
+        // GetActiveTurnDelegation сперва отключил запрет запуска исполнителя на
+        // делегированном ходу (поймано live-тестом). Владение — только через GetOwned.
+        var dir = MkProjectDir("owner");
+        var project = _projectManager.Create("Owner", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+
+        session.OwnerId.Should().BeNull("владелец проектной сессии хранится у проекта");
+        _sut.GetOwned(session.Id, TestUserId).Should().NotBeNull();
+        _sut.GetOwned(session.Id, "another-user").Should().BeNull();
+
+        // Гейт спрашивает состояние хода через тот же резолв владельца: сессия без живого
+        // процесса — обычный ход; к чужой сессии запрет не применяется
+        _sut.GetActiveTurnDelegation(session.Id, TestUserId)
+            .Should().Be(new ClaudeHomeServer.Services.Llm.TurnDelegationState(0, false));
+        _sut.GetActiveTurnDelegation(session.Id, "another-user")
+            .Should().Be(new ClaudeHomeServer.Services.Llm.TurnDelegationState(0, false));
+    }
+
     [Fact]
     public async Task Update_ExplicitValues_AreApplied()
     {

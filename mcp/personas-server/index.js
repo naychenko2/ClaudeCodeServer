@@ -14,11 +14,10 @@
 //                         bindings/autoBindings в personas_create/personas_update
 //   PERSONAS_WRITE      — "0" = скрыть write-инструменты управления персонами (create/update/
 //                         delete, bindings_set, automation_create/update/delete/test,
-//                         generate_avatar). ClaudeSession выключает их на ходах, не связанных
-//                         с управлением командой, чтобы тяжёлые схемы (PERSONA_FIELDS/
-//                         AUTOMATION_FIELDS ~основная масса контекста сервера) не грузились
-//                         каждый ход. Read/ask-инструменты остаются всегда. Дефолт — включено
-//                         (обратная совместимость прямых запусков); выключается только явным "0".
+//                         generate_avatar). Аварийный рубильник прямых запусков: ClaudeSession
+//                         шлёт "1" ВСЕГДА — состав инструментов не имеет права зависеть от хода
+//                         (иначе процесс CLI перезапускается со всеми MCP, а personas_create
+//                         «пропадает»). Права персоны режут Persona.Tools/ExtraDisallowedTools.
 //   PERSONAS_EXTRA_PROJECT_IDS  — CSV id проектов из кросс-проектных привязок ProjectPersonas
 //                         текущей персоны: вся их команда видна в personas_list(scope=context)
 //                         и резолвится по handle в persona_ask (в дополнение к своему контексту)
@@ -40,6 +39,9 @@ const API_URL = (process.env.PERSONAS_API_URL ?? 'http://localhost:5000').replac
 const API_TOKEN = process.env.PERSONAS_API_TOKEN ?? '';
 const PROJECT_ID = process.env.PERSONAS_PROJECT_ID || null;
 const SELF_ID = process.env.PERSONAS_SELF_ID || null;
+// Сессия, в которой работает модель — заголовок X-Caller-Session-Id: по нему бэкенд
+// определяет глубину делегирования идущего хода и гейтит persona_ask (анти-рекурсия)
+const SESSION_ID = process.env.PERSONAS_SESSION_ID || null;
 const MENTIONS = process.env.PERSONAS_MENTIONS === '1';
 const BINDINGS = process.env.PERSONAS_BINDINGS === '1';
 // Write-инструменты управления персонами. Выключаются только явным "0" (ClaudeSession
@@ -51,23 +53,88 @@ const EXTRA_PERSONA_IDS = (process.env.PERSONAS_EXTRA_PERSONA_IDS || '').split('
 
 // --- HTTP к бэкенду ---
 
-async function api(path, options = {}) {
-  const res = await fetch(`${API_URL}${path}`, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json; charset=utf-8',
-      Authorization: `Bearer ${API_TOKEN}`,
-      ...(options.headers ?? {}),
-    },
-  });
-  if (!res.ok) {
-    const body = await res.text();
-    const err = new Error(`HTTP ${res.status}: ${body}`);
-    err.status = res.status;
-    throw err;
+// Секундная недоступность бэкенда (рестарт, деплой, перезапуск прокси) превращалась в серию
+// красных карточек: ретраев не было ни одного. Паузы короткие — вызов инструмента не должен
+// висеть минутами, а бэкенд поднимается быстро.
+const RETRY_DELAYS_MS = [300, 900];
+const RETRIABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// Ошибка соединения: запрос ТОЧНО не дошёл до бэкенда — повторять безопасно даже для мутаций
+const isConnectionError = err =>
+  ['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN'].includes(err?.cause?.code);
+
+// Сеть или таймаут: запрос мог и дойти — повторяем только идемпотентные чтения
+const isNetworkError = err =>
+  err?.name === 'TimeoutError' || err?.name === 'AbortError'
+  || err?.cause?.code !== undefined || /fetch failed/i.test(err?.message ?? '');
+
+function shouldRetry(err, method, attempt) {
+  if (attempt >= RETRY_DELAYS_MS.length) return false;
+  if (isConnectionError(err)) return true;
+  // Повтор POST/PUT/DELETE мог бы задвоить задачу или запустить второго исполнителя —
+  // мутации повторяем только когда точно известно, что запрос не дошёл (выше)
+  if ((method ?? 'GET').toUpperCase() !== 'GET') return false;
+  return err?.status ? RETRIABLE_STATUS.has(err.status) : isNetworkError(err);
+}
+
+// Текст ошибки для модели с ЯВНЫМ классом. Без него «HTTP 503», «HTTP 403» и «задача
+// принадлежит другому проекту» выглядят одинаково — в истории прода видно, как после первой
+// красной карточки модель бросала попытки, даже когда сбой был временный.
+function describeError(err) {
+  if (isNetworkError(err))
+    return 'Временный сбой связи с сервером'
+      + (err?.name === 'TimeoutError' ? ' (таймаут)' : '')
+      + '. Это не запрет — повтори вызов через несколько секунд.';
+  const status = err?.status;
+  if (!status) return String(err?.message ?? err);
+  const body = err.bodyText ? ` ${err.bodyText}` : '';
+  if (RETRIABLE_STATUS.has(status))
+    return `Временный сбой на сервере (HTTP ${status}).${body} Это не запрет — повтори вызов через несколько секунд.`;
+  if (status === 409)
+    return `Сейчас занято (HTTP 409).${body} Повтори позже, не чаще раза в 30 секунд.`;
+  return `Отказ (HTTP ${status}).${body} Повторять тот же вызов бессмысленно — само условие не изменится.`;
+}
+
+async function api(path, { timeoutMs = 60_000, ...options } = {}, attempt = 0) {
+  try {
+    const res = await fetch(`${API_URL}${path}`, {
+      ...options,
+      // Таймаут: без него подвисший бэкенд вешает вызов инструмента до дефолта undici (~300с)
+      signal: AbortSignal.timeout(timeoutMs),
+      headers: {
+        'Content-Type': 'application/json; charset=utf-8',
+        Authorization: `Bearer ${API_TOKEN}`,
+        // Сессия, в которой работает модель: по ней бэкенд гейтит persona_ask на
+        // делегированном ходу (состав инструментов при этом неизменен)
+        ...(SESSION_ID ? { 'X-Caller-Session-Id': SESSION_ID } : {}),
+        ...(options.headers ?? {}),
+      },
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      const err = new Error(`HTTP ${res.status}: ${body}`);
+      err.status = res.status;
+      err.bodyText = body;
+      throw err;
+    }
+    return parseBody(res);
+  } catch (err) {
+    if (!shouldRetry(err, options.method, attempt)) throw err;
+    await sleep(RETRY_DELAYS_MS[attempt]);
+    return api(path, { timeoutMs, ...options }, attempt + 1);
   }
+}
+
+// Тело успешного ответа. Пустое тело — НЕ ошибка: ASP.NET на части операций отвечает
+// `Ok()` без объекта, а `res.json()` кидал на нём «Unexpected end of JSON input» —
+// удавшееся действие выглядело для модели провалом, и она повторяла его второй раз.
+async function parseBody(res) {
   if (res.status === 204) return null;
-  return res.json();
+  const text = await res.text();
+  if (!text) return null;
+  try { return JSON.parse(text); }
+  catch { return text; }
 }
 
 // Себя ли спрашивают по handle (без запроса — если SELF_ID не задан, вопрос не может быть о себе)
@@ -494,7 +561,7 @@ function contractFrom(args) {
   return Object.keys(c).length ? c : null;
 }
 
-// Write-инструменты управления персонами — скрыты при PERSONAS_WRITE="0" (гейт по интенту хода)
+// Write-инструменты управления персонами — скрыты только при явном PERSONAS_WRITE="0"
 const WRITE_TOOLS = new Set([
   'personas_create', 'personas_update', 'personas_delete', 'personas_bindings_set',
   'personas_automation_create', 'personas_automation_update', 'personas_automation_delete',
@@ -693,7 +760,10 @@ async function callTool(name, args) {
       if (EXTRA_PROJECT_IDS.length) body.extraProjectIds = EXTRA_PROJECT_IDS;
       if (EXTRA_PERSONA_IDS.length) body.extraPersonaIds = EXTRA_PERSONA_IDS;
       try {
-        const res = await api('/api/personas/ask', { method: 'POST', body: JSON.stringify(body) });
+        // Ответ персоны — это целый ход Claude в её контексте: 60-секундного дефолта мало,
+        // бэкенд сам ограничивает ожидание и отвечает 502 «Claude не ответил за отведённое время»
+        const res = await api('/api/personas/ask',
+          { method: 'POST', body: JSON.stringify(body), timeoutMs: 300_000 });
         return { content: [{ type: 'text', text: res?.answer ?? '' }] };
       } catch (err) {
         if (err?.status === 409) {
@@ -753,7 +823,7 @@ rl.on('line', async line => {
           reply(id, await callTool(params.name, params.arguments ?? {}));
         } catch (err) {
           reply(id, {
-            content: [{ type: 'text', text: `Ошибка: ${err?.message ?? err}` }],
+            content: [{ type: 'text', text: `Ошибка: ${describeError(err)}` }],
             isError: true,
           });
         }

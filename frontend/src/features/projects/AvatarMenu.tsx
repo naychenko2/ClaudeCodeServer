@@ -182,7 +182,7 @@ export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout
               style={dropdownItem}
             >
               <Palette size={ICON_SIZE.xs} strokeWidth={2} />
-              Витрина дизайн-системы
+              Витрина дизайн-системы (dev)
             </button>
           )}
           {onShowHistory && (

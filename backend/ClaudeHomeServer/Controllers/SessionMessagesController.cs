@@ -163,6 +163,10 @@ public class SessionMessagesController(SessionManager sessions, ProjectManager p
     // ему НЕ запускается — он увидит отчёт на своём следующем ходу. Финальный доклад по
     // завершении задачи отправляет сам сервер (TaskExecutionService), и он уже с ходом.
     [HttpPost("report")]
+    // Как и chats_send: делегированный ход не пишет в чужие чаты. Главный сценарий это не
+    // задевает — ход чата-исполнителя запускает сервер (глубина 0), а не chats_send; гейт
+    // закрывает лишь эскалацию с уже делегированного хода, поверх лимита цепочки.
+    [DenyOnDelegatedTurn("Отчёт в вышестоящий чат")]
     public async Task<IActionResult> ReportUp(string sessionId, [FromBody] ReportUpRequest req)
     {
         var text = req.Text?.Trim();

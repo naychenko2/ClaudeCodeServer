@@ -1024,17 +1024,21 @@ async function callTool(name, args) {
       const text = String(args.text ?? '').trim();
       if (!text) throw new Error('Пустой текст отчёта');
       if (!SELF_SESSION_ID) throw new Error('Отчёт наверх недоступен: сессия не определена');
-      // Адресат — родительский чат, его вычисляет сервер по текущей сессии
-      const res = await fetch(`${API_URL}/api/sessions/${encodeURIComponent(SELF_SESSION_ID)}/report`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json; charset=utf-8', Authorization: `Bearer ${API_TOKEN}` },
-        body: JSON.stringify({ text }),
-      });
-      const body = await res.json().catch(() => null);
-      // 400 отдаём модели как результат: в теле status/hint («некуда» либо «слишком глубоко»),
-      // это не ошибка вызова, а ответ по существу — ретраить не нужно
-      if (res.ok || res.status === 400) return json(body ?? { status: res.status });
-      throw new Error(`HTTP ${res.status}: ${body ? JSON.stringify(body) : ''}`);
+      // Адресат — родительский чат, его вычисляет сервер по текущей сессии.
+      // Идём через общий api(): ретраи по сети, таймаут и X-Caller-Session-Id как у всех.
+      try {
+        return json(await api(`/api/sessions/${encodeURIComponent(SELF_SESSION_ID)}/report`, {
+          method: 'POST',
+          body: JSON.stringify({ text }),
+        }));
+      } catch (err) {
+        // 400 — не сбой вызова, а ответ по существу: «отчитываться некуда» либо «цепочка
+        // слишком длинная». Отдаём модели телом со status/hint, чтобы она не ретраила.
+        if (err?.status === 400 && err.bodyText) {
+          try { return json(JSON.parse(err.bodyText)); } catch { /* не JSON — падаем ниже */ }
+        }
+        throw err;
+      }
     }
 
     case 'git_status': {

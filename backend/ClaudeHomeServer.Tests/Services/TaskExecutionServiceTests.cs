@@ -302,6 +302,39 @@ public class TaskExecutionServiceTests
         TaskExecutionService.ShouldReportToDelegator(task, executor).Should().BeFalse();
     }
 
+    // ─── Адресат доклада: ручная группировка чатов побеждает связь по задаче ────
+
+    [Fact]
+    public void ResolveReportTarget_БезЧатаИсполнителя_ПадаетНаSourceSessionId()
+    {
+        // Задача закрыта без запуска исполнителя — эффективного родителя взять неоткуда
+        var source = Guid.NewGuid().ToString();
+
+        TaskExecutionService.ResolveReportTarget(null, source).Should().Be(source);
+    }
+
+    [Fact]
+    public void ResolveReportTarget_РучнойРодитель_ПеребиваетSourceSessionId()
+    {
+        // Пользователь перетащил чат-исполнитель к другому родителю — доклад идёт туда,
+        // а не в чат, из которого задача была создана
+        var source = Guid.NewGuid().ToString();
+        var manual = Guid.NewGuid().ToString();
+        var executorSession = new Session { TaskId = "t-1", ParentOverrideId = manual };
+
+        TaskExecutionService.ResolveReportTarget(executorSession, source).Should().Be(manual);
+    }
+
+    [Fact]
+    public void ResolveReportTarget_ЧатВынесенВКорень_ДокладыватьНекуда()
+    {
+        // «Вынес из группы» значит «не докладывай туда» — доклад гасится целиком
+        var executorSession = new Session { TaskId = "t-1", ParentDetached = true };
+
+        TaskExecutionService.ResolveReportTarget(executorSession, Guid.NewGuid().ToString())
+            .Should().BeNull();
+    }
+
     // ─── MINOR 2: групповой чат — реакция только от лица постановщика ───────────
 
     [Fact]

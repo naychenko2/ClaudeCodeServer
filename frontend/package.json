@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "build:quiet": "tsc -b && vite build --logLevel warn",
     "lint": "eslint .",
+    "lint:design": "eslint --config eslint.design.config.js .",
     "test": "vitest run",
     "test:e2e": "playwright test",
     "preview": "vite preview"

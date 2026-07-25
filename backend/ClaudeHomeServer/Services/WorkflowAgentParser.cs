@@ -32,9 +32,16 @@ public static class WorkflowAgentParser
     }
 
     public static bool IsPathAllowed(string path) =>
+        IsPathAllowed(path, ProfilesRoot);
+
+    // Перегрузка для тестов: profilesRoot — параметром, а не из статического поля.
+    // Параллельные интеграционные тесты (WebApplicationFactory) при старте хоста
+    // перезаписывают ProfilesRoot (Program.cs) — если тест тоже ставит статическое
+    // поле и тут же читает его, возникает гонка и flaky-провал на CI.
+    internal static bool IsPathAllowed(string path, string? profilesRoot) =>
         IsUnderRoot(path, DefaultRoot) ||
         _extraRoots.Any(r => IsUnderRoot(path, r)) ||
-        IsUnderProfilesProjects(path);
+        IsUnderProfilesProjects(path, profilesRoot);
 
     // Префикс строго по границе сегмента: ~/.claude/projectsEvil не должен проходить
     // как ~/.claude/projects (как в ветке ProfilesRoot ниже)
@@ -43,13 +50,13 @@ public static class WorkflowAgentParser
         path.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
         path.StartsWith(root + Path.AltDirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
 
-    // Путь вида {ProfilesRoot}/{key}/projects/… — ровно один сегмент профиля,
+    // Путь вида {profilesRoot}/{key}/projects/… — ровно один сегмент профиля,
     // затем обязательный projects (не даём читать credentials и прочее из профиля)
-    private static bool IsUnderProfilesProjects(string path)
+    private static bool IsUnderProfilesProjects(string path, string? profilesRoot)
     {
-        if (string.IsNullOrEmpty(ProfilesRoot)) return false;
+        if (string.IsNullOrEmpty(profilesRoot)) return false;
         string full, root;
-        try { full = Path.GetFullPath(path); root = Path.GetFullPath(ProfilesRoot); }
+        try { full = Path.GetFullPath(path); root = Path.GetFullPath(profilesRoot); }
         catch { return false; }
         if (!full.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) &&
             !full.StartsWith(root + Path.AltDirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))

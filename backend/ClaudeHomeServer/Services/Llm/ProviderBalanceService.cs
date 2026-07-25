@@ -3,7 +3,11 @@ using ClaudeHomeServer.Models;
 
 namespace ClaudeHomeServer.Services.Llm;
 
-public sealed record ProviderBalance(bool Available, string Currency, string TotalBalance);
+// AsOf — UTC-время последнего УСПЕШНОГО обновления (при отдаче протухшего кэша остаётся
+// временем того успешного обновления — фронт показывает свежесть данных).
+// ResetsAt — момент сброса окна квоты (UTC; сейчас только у GLM), null — не применимо.
+public sealed record ProviderBalance(bool Available, string Currency, string TotalBalance,
+    DateTime AsOf = default, DateTime? ResetsAt = null);
 
 // Точка истории баланса — для графика на экране «Использование»
 public sealed record ProviderBalanceSnapshot(DateTime Timestamp, double Balance, string Currency);
@@ -61,12 +65,14 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
                 "glm" => await FetchGlmAsync(p, ct),
                 _ => null,
             };
-            if (balance is null) return cache.Cached; // протухший лучше, чем ничего
+            // Протухший лучше, чем ничего: AsOf в нём остаётся временем прошлого
+            // успешного обновления — фронт по нему покажет, что данные не свежие
+            if (balance is null) return cache.Cached;
 
-            cache.Cached = balance;
+            cache.Cached = balance with { AsOf = DateTime.UtcNow };
             cache.CachedAt = DateTime.UtcNow;
             RecordSnapshot(p.Key, cache, balance);
-            return balance;
+            return cache.Cached;
         }
         finally { cache.Lock.Release(); }
     }
@@ -228,8 +234,14 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
             if (double.IsNaN(bestUsed)) return null; // окна TOKENS_LIMIT нет — квоту показать нечем
 
             var remaining = Math.Clamp(100 - bestUsed, 0, 100);
+            // nextResetTime — unix-время; порог отличает миллисекунды от секунд
+            DateTime? resetsAt = bestReset == long.MaxValue ? null
+                : (bestReset > 100_000_000_000
+                    ? DateTimeOffset.FromUnixTimeMilliseconds(bestReset)
+                    : DateTimeOffset.FromUnixTimeSeconds(bestReset)).UtcDateTime;
             return new ProviderBalance(true, "%",
-                remaining.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture));
+                remaining.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture),
+                ResetsAt: resetsAt);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)

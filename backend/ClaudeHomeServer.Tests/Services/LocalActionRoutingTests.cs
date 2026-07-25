@@ -62,7 +62,7 @@ public class LocalActionRoutingTests
 
         public string? NormalizeModel(string? model) => model;
         public Task<string> RunAsync(string prompt, string? model = null, TimeSpan? timeout = null,
-            CancellationToken ct = default, string? ownerId = null, string? effort = null)
+            CancellationToken ct = default, string? ownerId = null, string? effort = null, string? label = null)
         {
             Calls.Add(model);
             if (model is not null && model == failModel)
@@ -71,7 +71,7 @@ public class LocalActionRoutingTests
             return Task.FromResult($"CLAUDE[{model}]:{prompt}");
         }
         public Task<OneShotResult> RunDetailedAsync(string prompt, string? model = null, TimeSpan? timeout = null,
-            CancellationToken ct = default, string? ownerId = null, string? effort = null) =>
+            CancellationToken ct = default, string? ownerId = null, string? effort = null, string? label = null) =>
             throw new NotImplementedException();
     }
 

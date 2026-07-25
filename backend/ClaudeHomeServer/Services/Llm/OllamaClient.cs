@@ -11,6 +11,8 @@ public sealed class OllamaClient
 {
     private readonly IHttpClientFactory _http;
     private readonly ILogger<OllamaClient> _logger;
+    // Сбор расхода бесплатных вызовов (null — в тестах: аналитика выключена)
+    private readonly Spend.ISpendCollector? _spend;
 
     public string BaseUrl { get; }
     public string Model { get; }
@@ -24,10 +26,12 @@ public sealed class OllamaClient
 
     public bool Enabled => !string.IsNullOrWhiteSpace(BaseUrl) && !string.IsNullOrWhiteSpace(Model);
 
-    public OllamaClient(IHttpClientFactory http, IConfiguration config, ILogger<OllamaClient> logger)
+    public OllamaClient(IHttpClientFactory http, IConfiguration config, ILogger<OllamaClient> logger,
+        Spend.ISpendCollector? spend = null)
     {
         _http = http;
         _logger = logger;
+        _spend = spend;
         BaseUrl = (config["Ollama:BaseUrl"] ?? "http://localhost:11434").TrimEnd('/');
         Model = config["Ollama:Model"] ?? "";
         TextModel = config["Ollama:TextModel"] is { Length: > 0 } tm ? tm : Model;
@@ -80,9 +84,11 @@ public sealed class OllamaClient
             }
 
             var json = await resp.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct);
-            return json.TryGetProperty("message", out var msg) && msg.TryGetProperty("content", out var content)
+            var answer = json.TryGetProperty("message", out var msg) && msg.TryGetProperty("content", out var content)
                 ? content.GetString()
                 : null;
+            if (!string.IsNullOrEmpty(answer)) RecordSpend(used, json);
+            return answer;
         }
         catch (Exception ex)
         {
@@ -90,6 +96,29 @@ public sealed class OllamaClient
             _logger.LogDebug(ex, "Ollama недоступен ({BaseUrl}), фолбэк на правила", BaseUrl);
             return null;
         }
+    }
+
+    // Расход локального вызова в аналитику: токены из счётчиков ответа Ollama
+    // (prompt_eval_count/eval_count), стоимость 0 — источник free. Владелец не прокидывается
+    // (фоновые действия системные), ошибка записи вызов не роняет.
+    private void RecordSpend(string model, JsonElement json)
+    {
+        if (_spend is null) return;
+        try
+        {
+            _spend.Record(new Models.SpendRecord
+            {
+                Provider = "ollama",
+                Model = model,
+                Source = Models.SpendSources.Free,
+                InputTokens = json.TryGetProperty("prompt_eval_count", out var p)
+                    && p.ValueKind == JsonValueKind.Number ? p.GetInt64() : 0,
+                OutputTokens = json.TryGetProperty("eval_count", out var e)
+                    && e.ValueKind == JsonValueKind.Number ? e.GetInt64() : 0,
+                CostUsd = 0,
+            });
+        }
+        catch { /* аналитика не должна ронять вызов */ }
     }
 
     // Свободнотекстовая генерация (без format-schema): единый prompt → текст ответа.
@@ -128,7 +157,9 @@ public sealed class OllamaClient
             var content = json.TryGetProperty("message", out var msg) && msg.TryGetProperty("content", out var c)
                 ? c.GetString()
                 : null;
-            return string.IsNullOrWhiteSpace(content) ? null : content;
+            if (string.IsNullOrWhiteSpace(content)) return null;
+            RecordSpend(used, json);
+            return content;
         }
         catch (Exception ex)
         {

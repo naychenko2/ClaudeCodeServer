@@ -128,6 +128,13 @@ builder.Services.AddSingleton<NotesKnowledgeService>();
 builder.Services.AddSingleton<NotesAiService>();
 builder.Services.AddSingleton<NoteTaskSyncService>();
 builder.Services.AddSingleton<UnifiedSearchService>();
+// Аналитика расхода токенов (Spend Analytics v2): хранилище записей (детали + дневные
+// агрегаты), запросы дашборда и обслуживание (backfill истории + rollup за окном)
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Spend.SpendStore>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Spend.ISpendCollector>(
+    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Spend.SpendStore>());
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Spend.SpendAnalyticsService>();
+builder.Services.AddHostedService<ClaudeHomeServer.Services.Spend.SpendMaintenanceService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.OneShotClaudeRunner>();
 // AI-хаб: локальное ранжирование действий через Ollama (бесплатно, мимо claude CLI)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.OllamaClient>();

@@ -10,6 +10,7 @@ import { useHomeSummary } from '../features/home/useHomeSummary';
 import { ActivityWidget } from '../features/home/ActivityWidget';
 import { TasksWidget } from '../features/home/TasksWidget';
 import { UsageWidget } from '../features/home/UsageWidget';
+import { SpendWidget } from '../features/home/SpendWidget';
 import { RecentSessionsWidget } from '../features/home/RecentSessionsWidget';
 import { QuickActions } from '../features/home/QuickActions';
 import { ProjectsWidget } from '../features/home/ProjectsWidget';
@@ -85,6 +86,7 @@ export function HomePage({ auth, onLogout, onHubTab, onOpenProject }: Props) {
               {/* Справочные сводки — хвостом */}
               <WhatsNewWidget userId={auth.id} />
               <ActivityWidget active={data?.active ?? []} />
+              <SpendWidget />
               <UsageWidget />
             </div>
           ) : (
@@ -94,6 +96,7 @@ export function HomePage({ auth, onLogout, onHubTab, onOpenProject }: Props) {
                 <NotificationsWidget onHubTab={onHubTab} />
                 <WhatsNewWidget userId={auth.id} />
                 <ActivityWidget active={data?.active ?? []} />
+                <SpendWidget />
                 <UsageWidget />
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0 }}>

@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Аналитика трат v2 — Вариант A «Проводник»</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=PT+Serif:wght@400;700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   Токены темы — копия frontend/src/lib/theme.css (light/dark).
+   Шкалы design.ts: FS 11/12/13/14/16/18/22/28, SP 4/8/12/16/24/32,
+   R 6/8/10/12/14/20, ISLAND gap 8 / pad 16 / radius 14.
+   ============================================================ */
+:root{
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5; --c-accent-soft:#E8A990;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-divider:#DDD4C4; --c-dashed:#D0C6B4; --c-track:#D8CFBE;
+  --c-overlay:rgba(23,19,15,.42);
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F; --c-danger-border:#F5C6BF;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --c-plan:#6C5CB0; --c-plan-light:#EEEBF8; --c-plan-text:#4E4196; --c-plan-border:#D6CFEF;
+  --c-nav-ink:#2A251F; --c-on-nav-ink:#F4ECE1;
+  --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+  --shadow-card:0 2px 8px rgba(60,50,35,.05);
+  --shadow-island:0 1px 2px rgba(60,50,35,.06),0 6px 20px rgba(60,50,35,.10);
+  --shadow-dropdown:0 8px 28px rgba(60,50,35,.16);
+  --shadow-modal:0 24px 60px rgba(23,19,15,.40);
+}
+:root[data-theme="dark"]{
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C; --c-accent-soft:#9A5E48;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-divider:#454037; --c-dashed:#4A443B; --c-track:#453F37;
+  --c-overlay:rgba(0,0,0,.62);
+  --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72; --c-danger-border:#5A302A;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --c-plan:#9385D8; --c-plan-light:#2A2540; --c-plan-text:#B0A4E6; --c-plan-border:#45406A;
+  --c-nav-ink:#EDE6DB; --c-on-nav-ink:#201C18;
+  --shadow-focus:0 0 0 3px rgba(227,138,106,.24);
+  --shadow-card:0 2px 10px rgba(0,0,0,.35);
+  --shadow-island:0 1px 2px rgba(0,0,0,.30),0 8px 24px rgba(0,0,0,.45);
+  --shadow-dropdown:0 10px 32px rgba(0,0,0,.55);
+  --shadow-modal:0 28px 70px rgba(0,0,0,.65);
+}
+/* Цвета серий «источник траты» — только из палитры системы:
+   ходы=accent, one-shot=info, fal.ai=plan, бесплатные=success */
+:root{ --src-turns:var(--c-accent); --src-oneshot:var(--c-info); --src-fal:var(--c-plan); --src-free:var(--c-success); }
+
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--c-bg-main);color:var(--c-text-primary);font-family:'Hanken Grotesk',-apple-system,'Segoe UI',sans-serif;font-size:13px}
+.serif{font-family:'PT Serif',Georgia,serif}
+.mono{font-family:'JetBrains Mono','Courier New',monospace}
+
+/* ---- Каркас страницы-прототипа ---- */
+.proto-bar{position:sticky;top:0;z-index:100;display:flex;align-items:center;gap:12px;padding:10px 16px;background:var(--c-nav-ink);color:var(--c-on-nav-ink)}
+.proto-bar h1{font-size:14px;font-weight:600}
+.proto-bar .tag{font-size:11px;opacity:.7}
+.proto-bar button{margin-left:auto;background:none;border:1px solid var(--c-on-nav-ink);color:var(--c-on-nav-ink);border-radius:999px;padding:4px 14px;font-size:12px;cursor:pointer;font-family:inherit}
+.section{max-width:1120px;margin:0 auto;padding:32px 16px 8px}
+.section>h2{font-family:'PT Serif',serif;font-size:22px;color:var(--c-text-heading);margin-bottom:4px}
+.section>p.note{font-size:12px;color:var(--c-text-secondary);margin-bottom:16px;max-width:720px}
+
+/* ---- Остров ---- */
+.island{background:var(--c-bg-panel);border:1px solid var(--c-border-light);border-radius:14px;box-shadow:var(--shadow-island);overflow:hidden}
+.island-head{display:flex;align-items:center;gap:8px;height:44px;padding:0 16px;background:var(--c-bg-inset);border-bottom:1px solid var(--c-border-light)}
+.island-head .ttl{font-family:'PT Serif',serif;font-size:16px;font-weight:700;color:var(--c-text-heading)}
+
+/* ---- Общие мелкие ---- */
+.chip{display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:3px 10px;border-radius:999px;border:1px solid var(--c-border);color:var(--c-text-secondary);background:var(--c-bg-card);cursor:pointer;white-space:nowrap}
+.chip.on{background:var(--c-accent);border-color:var(--c-accent);color:var(--c-on-accent)}
+.chip .x{opacity:.7;font-weight:600}
+.pill-tabs{display:inline-flex;background:var(--c-bg-selected);border-radius:9px;padding:2px}
+.pill-tabs .pt{font-size:12px;padding:4px 12px;border-radius:7px;cursor:pointer;color:var(--c-text-secondary);border:none;background:none;font-family:inherit}
+.pill-tabs .pt.on{background:var(--c-bg-white);color:var(--c-text-heading);font-weight:600;box-shadow:0 1px 3px rgba(42,37,31,.12)}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none}
+.badge-window{display:inline-flex;align-items:center;gap:6px;font-size:11px;padding:3px 10px;border-radius:999px;background:var(--c-info-bg);color:var(--c-info);border:1px solid transparent}
+.badge-agg{display:inline-flex;align-items:center;gap:6px;font-size:11px;padding:3px 10px;border-radius:999px;background:var(--c-warning-bg);color:var(--c-warning-text)}
+
+/* ---- KPI-полоса ---- */
+.kpi-row{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:16px}
+.kpi{background:var(--c-bg-card);border:1px solid var(--c-border-light);border-radius:12px;padding:12px 14px}
+.kpi .lbl{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--c-text-muted);margin-bottom:4px}
+.kpi .val{font-family:'JetBrains Mono',monospace;font-size:22px;font-weight:600;color:var(--c-text-heading);line-height:1.1}
+.kpi .val.money{color:var(--c-accent)}
+.kpi .sub{font-size:11px;color:var(--c-text-muted);margin-top:4px}
+
+/* ---- График по дням ---- */
+.chart-wrap{padding:0 16px 12px}
+.chart-card{background:var(--c-bg-card);border:1px solid var(--c-border-light);border-radius:12px;padding:14px}
+.chart-head{display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap}
+.chart-head .t{font-size:13px;font-weight:600;color:var(--c-text-heading)}
+.legend{display:flex;gap:12px;margin-left:auto;flex-wrap:wrap}
+.legend span{display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--c-text-secondary)}
+.bars{display:flex;align-items:flex-end;gap:4px;height:120px}
+.bar{flex:1;display:flex;flex-direction:column-reverse;border-radius:3px 3px 0 0;overflow:hidden;cursor:pointer;min-width:8px;position:relative}
+.bar>i{display:block}
+.bar:hover{outline:2px solid var(--c-accent);outline-offset:1px}
+.bar.agg>i{opacity:.38}
+.bar.sel{outline:2px solid var(--c-accent);outline-offset:1px}
+.axis{display:flex;gap:4px;margin-top:6px}
+.axis span{flex:1;font-size:9px;color:var(--c-text-muted);text-align:center;font-family:'JetBrains Mono',monospace;min-width:8px}
+.window-divider{position:relative;margin:4px 0 0}
+.window-note{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:11px;color:var(--c-text-secondary)}
+.window-note .seg{flex:none;display:inline-flex;align-items:center;gap:5px}
+.window-note .line-agg{width:26px;height:0;border-top:2px dashed var(--c-track)}
+.window-note .line-det{width:26px;height:3px;border-radius:2px;background:var(--c-accent)}
+
+/* ---- Проводник (drill-down список) ---- */
+.crumbs{display:flex;align-items:center;gap:4px;padding:12px 16px 0;font-size:12px;flex-wrap:wrap}
+.crumbs a{color:var(--c-info);cursor:pointer;text-decoration:none}
+.crumbs .sep{color:var(--c-text-muted)}
+.crumbs .cur{color:var(--c-text-heading);font-weight:600}
+.crumbs .lvl{font-size:10px;color:var(--c-text-muted);background:var(--c-bg-selected);border-radius:6px;padding:1px 7px;margin-left:2px}
+.rows{padding:8px 16px 16px}
+.row-h,.rowx{display:grid;grid-template-columns:minmax(0,1fr) 88px 74px 74px 74px 84px;gap:8px;align-items:center}
+.row-h{padding:6px 10px;font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--c-text-muted)}
+.row-h .num,.rowx .num{text-align:right;font-family:'JetBrains Mono',monospace}
+.rowx{padding:9px 10px;border-radius:10px;cursor:pointer;background:var(--c-bg-card);border:1px solid var(--c-border-light);margin-bottom:6px;position:relative}
+.rowx:hover{background:var(--c-bg-selected)}
+.rowx .name{display:flex;align-items:center;gap:8px;min-width:0}
+.rowx .name .nm{font-weight:600;color:var(--c-text-heading);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rowx .name .meta{font-size:11px;color:var(--c-text-muted);white-space:nowrap}
+.rowx .num{font-size:12px;color:var(--c-text-secondary)}
+.rowx .num.money{color:var(--c-accent);font-weight:600}
+.rowx .share{grid-column:1/-1;height:4px;border-radius:2px;background:var(--c-bg-selected);overflow:hidden;margin-top:6px}
+.rowx .share i{display:block;height:100%;border-radius:2px;background:var(--c-accent)}
+.rowx .arr{position:absolute;right:-2px;top:50%;transform:translateY(-50%);color:var(--c-text-muted);font-size:14px;display:none}
+.avatar{width:24px;height:24px;border-radius:50%;flex:none;display:inline-flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#fff}
+.src-tag{font-size:10px;padding:2px 8px;border-radius:6px;white-space:nowrap}
+.rowx.locked{cursor:default;opacity:.75}
+.rowx.locked:hover{background:var(--c-bg-card)}
+.lock-hint{grid-column:1/-1;display:flex;align-items:center;gap:6px;font-size:11px;color:var(--c-warning-text);background:var(--c-warning-bg);border-radius:8px;padding:5px 10px;margin-top:6px}
+
+/* ходы */
+.turn-row{grid-template-columns:64px minmax(0,1fr) 120px 64px 64px 74px 76px}
+.turn-h{grid-template-columns:64px minmax(0,1fr) 120px 64px 64px 74px 76px}
+
+/* ---- Тулбар дашборда ---- */
+.dash-toolbar{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--c-border-light);flex-wrap:wrap}
+.filters{display:flex;gap:6px;flex-wrap:wrap}
+
+/* ---- Виджет «Домой» ---- */
+.home-grid{display:grid;grid-template-columns:340px 1fr;gap:8px;align-items:start}
+.widget{background:var(--c-bg-panel);border:1px solid var(--c-border-light);border-radius:14px;box-shadow:var(--shadow-island);padding:16px;cursor:pointer;transition:box-shadow .15s}
+.widget:hover{box-shadow:var(--shadow-dropdown)}
+.widget .w-head{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.widget .w-head .t{font-family:'PT Serif',serif;font-size:16px;font-weight:700;color:var(--c-text-heading)}
+.widget .w-head .arrow{margin-left:auto;color:var(--c-text-muted);font-size:14px}
+.widget .big{font-family:'JetBrains Mono',monospace;font-size:28px;font-weight:600;color:var(--c-accent);line-height:1.1}
+.widget .cmp{font-size:11px;color:var(--c-text-secondary);margin-top:2px}
+.spark{display:flex;align-items:flex-end;gap:2px;height:34px;margin-top:12px}
+.spark i{flex:1;background:var(--c-accent-muted);border-radius:2px 2px 0 0}
+.spark i.today{background:var(--c-accent)}
+.w-split{display:flex;gap:0;margin-top:12px;border-radius:6px;overflow:hidden;height:6px}
+.w-legend{display:flex;gap:10px;flex-wrap:wrap;margin-top:8px}
+.w-legend span{display:inline-flex;align-items:center;gap:4px;font-size:10px;color:var(--c-text-secondary)}
+
+/* ---- Бейдж чата ---- */
+.chat-head-demo{display:flex;align-items:center;gap:10px;background:var(--c-bg-panel);border:1px solid var(--c-border-light);border-radius:14px;box-shadow:var(--shadow-island);padding:10px 16px}
+.cost-badge{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-family:'JetBrains Mono',monospace;padding:3px 10px;border-radius:999px;background:var(--c-accent-light);color:var(--c-accent);cursor:pointer;border:1px solid transparent}
+.cost-badge:hover{border-color:var(--c-accent)}
+.cost-badge .delta{font-size:10px;color:var(--c-success-text);font-family:'Hanken Grotesk',sans-serif}
+.cost-pop{background:var(--c-bg-card);border:1px solid var(--c-border);border-radius:12px;box-shadow:var(--shadow-dropdown);padding:14px;width:280px}
+.cost-pop .r{display:flex;justify-content:space-between;font-size:12px;padding:4px 0}
+.cost-pop .r b{font-family:'JetBrains Mono',monospace;font-weight:600;color:var(--c-text-heading)}
+.cost-pop .r.total{border-top:1px solid var(--c-border-light);margin-top:6px;padding-top:8px}
+.cost-pop .r.total b{color:var(--c-accent)}
+.cost-pop .cap{font-size:10px;color:var(--c-text-muted);margin-top:8px}
+
+/* ---- Мобила ---- */
+.phones{display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start}
+.phone{width:390px;border:1px solid var(--c-divider);border-radius:24px;overflow:hidden;background:var(--c-bg-main);box-shadow:var(--shadow-island);flex:none}
+.phone .p-status{height:24px;display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--c-text-muted)}
+.phone .p-cap{padding:10px 14px;font-size:11px;color:var(--c-text-muted);text-align:center;background:var(--c-bg-inset)}
+.m-toolbar{display:flex;align-items:center;gap:8px;padding:10px 14px;flex-wrap:wrap}
+.m-kpi{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:0 14px 10px}
+.m-rows{padding:0 14px 16px}
+.m-rows .rowx{grid-template-columns:minmax(0,1fr) 84px}
+.m-rows .rowx .num.hide-m{display:none}
+.tapbar{display:flex;border-top:1px solid var(--c-border-light);background:var(--c-bg-panel)}
+.tapbar span{flex:1;text-align:center;padding:10px 0 14px;font-size:10px;color:var(--c-text-muted)}
+.tapbar span.on{color:var(--c-accent);font-weight:600}
+
+/* ---- Состояния ---- */
+.states{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:8px}
+.state-card{background:var(--c-bg-panel);border:1px solid var(--c-border-light);border-radius:14px;box-shadow:var(--shadow-island);padding:0;overflow:hidden}
+.state-card .cap{padding:8px 14px;background:var(--c-bg-inset);font-size:11px;color:var(--c-text-muted);border-bottom:1px solid var(--c-border-light)}
+.empty-body{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px 24px;text-align:center}
+.empty-body .pic{font-size:34px;margin-bottom:12px}
+.empty-body .h{font-family:'PT Serif',serif;font-size:18px;color:var(--c-text-heading);margin-bottom:6px}
+.empty-body .d{font-size:12px;color:var(--c-text-secondary);max-width:300px;line-height:1.5}
+.skel{border-radius:8px;background:linear-gradient(90deg,var(--c-bg-selected) 25%,var(--c-bg-card) 50%,var(--c-bg-selected) 75%);background-size:200% 100%;animation:sh 1.4s infinite}
+@keyframes sh{0%{background-position:200% 0}100%{background-position:-200% 0}}
+.err-body{display:flex;flex-direction:column;align-items:center;padding:32px 24px;text-align:center}
+.err-body .h{font-size:14px;font-weight:600;color:var(--c-danger-text);margin:10px 0 4px}
+.err-body .d{font-size:12px;color:var(--c-text-secondary);margin-bottom:14px}
+.btn{display:inline-flex;align-items:center;gap:6px;background:var(--c-accent);color:var(--c-on-accent);border:none;border-radius:12px;padding:8px 18px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit}
+.btn.ghost{background:none;border:1px solid var(--c-border);color:var(--c-text-primary)}
+
+@media (max-width:760px){
+  .kpi-row{grid-template-columns:1fr 1fr}
+  .home-grid{grid-template-columns:1fr}
+  .row-h{display:none}
+  .rowx{grid-template-columns:minmax(0,1fr) 84px}
+  .rowx .num:not(.money){display:none}
+}
+</style>
+</head>
+<body>
+
+<div class="proto-bar">
+  <h1>Вариант A — «Проводник»</h1>
+  <span class="tag">drill-down одним списком · хлебные крошки · доля в родителе</span>
+  <button onclick="document.documentElement.dataset.theme=document.documentElement.dataset.theme==='dark'?'':'dark'">Тема: светлая/тёмная</button>
+</div>
+
+<!-- ================= 1. Дашборд, персональный режим ================= -->
+<div class="section">
+  <h2>1 · Дашборд — персональный режим</h2>
+  <p class="note">Сценарий: «сколько я потратил и на что». Один остров: KPI → график по дням → проводник трат.
+  Каждая строка — полоса «доля в текущем уровне»: видно, что съедает бюджет, без чтения цифр.</p>
+
+  <div class="island">
+    <div class="island-head">
+      <span class="ttl">Аналитика трат</span>
+      <span class="badge-window">● Детально: последние 30 дней</span>
+      <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
+        <div class="pill-tabs">
+          <button class="pt">Неделя</button><button class="pt on">Месяц</button><button class="pt">90 дней</button><button class="pt">Всё время</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="dash-toolbar">
+      <div class="filters">
+        <span class="chip on">Все источники</span>
+        <span class="chip"><span class="dot" style="background:var(--src-turns)"></span>Ходы</span>
+        <span class="chip"><span class="dot" style="background:var(--src-oneshot)"></span>Фоновые</span>
+        <span class="chip"><span class="dot" style="background:var(--src-fal)"></span>fal.ai</span>
+        <span class="chip"><span class="dot" style="background:var(--src-free)"></span>Бесплатные</span>
+      </div>
+      <div class="filters" style="margin-left:auto">
+        <span class="chip">Провайдер: все ▾</span>
+        <span class="chip">Модель: все ▾</span>
+        <span class="chip">Персона: все ▾</span>
+      </div>
+    </div>
+
+    <div class="kpi-row">
+      <div class="kpi"><div class="lbl">Стоимость</div><div class="val money">$24.87</div><div class="sub">июль · +18% к июню</div></div>
+      <div class="kpi"><div class="lbl">Токены in / out</div><div class="val">18.2M<span style="font-size:13px;color:var(--c-text-muted)"> / </span>1.4M</div><div class="sub">cache read 84.1M · creation 2.9M</div></div>
+      <div class="kpi"><div class="lbl">Ходы</div><div class="val">1 214</div><div class="sub">чаты 980 · задачи 152 · фон 82</div></div>
+      <div class="kpi"><div class="lbl">Средний ход</div><div class="val money">$0.020</div><div class="sub">медиана $0.008</div></div>
+    </div>
+
+    <div class="chart-wrap">
+      <div class="chart-card">
+        <div class="chart-head">
+          <span class="t">Стоимость по дням</span>
+          <span class="badge-agg">до 25 июня — только дневные агрегаты</span>
+          <div class="legend">
+            <span><span class="dot" style="background:var(--src-turns)"></span>Ходы</span>
+            <span><span class="dot" style="background:var(--src-oneshot)"></span>Фоновые</span>
+            <span><span class="dot" style="background:var(--src-fal)"></span>fal.ai</span>
+            <span><span class="dot" style="background:var(--src-free)"></span>Бесплатные</span>
+          </div>
+        </div>
+        <div class="bars">
+          <!-- зона агрегатов (приглушена) -->
+          <div class="bar agg" style="height:38%"><i style="height:80%;background:var(--src-turns)"></i><i style="height:20%;background:var(--src-oneshot)"></i></div>
+          <div class="bar agg" style="height:52%"><i style="height:75%;background:var(--src-turns)"></i><i style="height:25%;background:var(--src-oneshot)"></i></div>
+          <div class="bar agg" style="height:30%"><i style="height:90%;background:var(--src-turns)"></i><i style="height:10%;background:var(--src-fal)"></i></div>
+          <div class="bar agg" style="height:44%"><i style="height:70%;background:var(--src-turns)"></i><i style="height:30%;background:var(--src-oneshot)"></i></div>
+          <!-- детальная зона -->
+          <div class="bar" style="height:56%"><i style="height:72%;background:var(--src-turns)"></i><i style="height:18%;background:var(--src-oneshot)"></i><i style="height:10%;background:var(--src-fal)"></i></div>
+          <div class="bar" style="height:34%"><i style="height:85%;background:var(--src-turns)"></i><i style="height:15%;background:var(--src-oneshot)"></i></div>
+          <div class="bar" style="height:72%"><i style="height:60%;background:var(--src-turns)"></i><i style="height:28%;background:var(--src-oneshot)"></i><i style="height:12%;background:var(--src-fal)"></i></div>
+          <div class="bar sel" style="height:100%"><i style="height:78%;background:var(--src-turns)"></i><i style="height:12%;background:var(--src-oneshot)"></i><i style="height:10%;background:var(--src-fal)"></i></div>
+          <div class="bar" style="height:48%"><i style="height:88%;background:var(--src-turns)"></i><i style="height:12%;background:var(--src-oneshot)"></i></div>
+          <div class="bar" style="height:26%"><i style="height:95%;background:var(--src-turns)"></i><i style="height:5%;background:var(--src-free)"></i></div>
+          <div class="bar" style="height:62%"><i style="height:70%;background:var(--src-turns)"></i><i style="height:22%;background:var(--src-oneshot)"></i><i style="height:8%;background:var(--src-fal)"></i></div>
+          <div class="bar" style="height:40%"><i style="height:82%;background:var(--src-turns)"></i><i style="height:18%;background:var(--src-oneshot)"></i></div>
+        </div>
+        <div class="axis"><span>21.06</span><span>22</span><span>23</span><span>24</span><span>25</span><span>26</span><span>27</span><span>18.07</span><span>19</span><span>20</span><span>21</span><span>22.07</span></div>
+        <div class="window-note">
+          <span class="seg"><span class="line-agg"></span>дневные агрегаты (drill-down недоступен)</span>
+          <span class="seg"><span class="line-det"></span>детально до хода</span>
+          <span style="margin-left:auto">Клик по дню — фильтр проводника ↓</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="crumbs">
+      <a>Мои траты</a><span class="sep">›</span>
+      <a>AI Home</a><span class="sep">›</span>
+      <span class="cur">Чат «Макеты аналитики»</span>
+      <span class="lvl">уровень: ходы · 18 июля</span>
+    </div>
+
+    <div class="rows">
+      <div class="row-h turn-h"><span>Время</span><span>Ход</span><span>Модель</span><span class="num">In</span><span class="num">Out</span><span class="num">Cache</span><span class="num">$</span></div>
+
+      <div class="rowx turn-row">
+        <span class="num mono" style="font-size:11px">14:32</span>
+        <div class="name"><span class="nm">Ход #41 — генерация трёх макетов</span></div>
+        <span style="font-size:11px;color:var(--c-text-secondary)">claude-opus-5</span>
+        <span class="num">12.4k</span><span class="num">8.2k</span><span class="num">89k</span>
+        <span class="num money">$1.85</span>
+        <div class="share"><i style="width:64%"></i></div>
+      </div>
+
+      <div class="rowx turn-row">
+        <span class="num mono" style="font-size:11px">14:05</span>
+        <div class="name"><span class="nm">Ход #40 — правки токенов темы</span></div>
+        <span style="font-size:11px;color:var(--c-text-secondary)">claude-opus-5</span>
+        <span class="num">6.1k</span><span class="num">2.9k</span><span class="num">41k</span>
+        <span class="num money">$0.62</span>
+        <div class="share"><i style="width:22%"></i></div>
+      </div>
+
+      <div class="rowx turn-row">
+        <span class="num mono" style="font-size:11px">13:47</span>
+        <div class="name"><span class="nm">Ход #39 — чтение спеки</span><span class="src-tag" style="background:var(--c-success-bg);color:var(--c-success-text)">бесплатная</span></div>
+        <span style="font-size:11px;color:var(--c-text-secondary)">nemotron-3-ultra</span>
+        <span class="num">9.8k</span><span class="num">1.1k</span><span class="num">—</span>
+        <span class="num money" style="color:var(--c-success-text)">$0.00</span>
+        <div class="share"><i style="width:0%"></i></div>
+      </div>
+
+      <div class="rowx turn-row">
+        <span class="num mono" style="font-size:11px">13:20</span>
+        <div class="name"><span class="nm">Ход #38 — аватар персоны</span><span class="src-tag" style="background:var(--c-plan-light);color:var(--c-plan-text)">fal.ai</span></div>
+        <span style="font-size:11px;color:var(--c-text-secondary)">flux/dev</span>
+        <span class="num">—</span><span class="num">—</span><span class="num">—</span>
+        <span class="num money">$0.11</span>
+        <div class="share"><i style="width:4%"></i></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= 2. Админский режим: путь до хода ================= -->
+<div class="section">
+  <h2>2 · Админский режим — путь «каждый доллар до хода»</h2>
+  <p class="note">Тумблер «Мои / Все» виден только админу. Уровни: пользователи → проекты → чаты и задачи → ходы.
+  Названия чужих чатов и задач видны, содержимое сообщений — недоступно нигде (клик по ходу ведёт максимум на карточку хода-метрики, не в чат).</p>
+
+  <div class="island">
+    <div class="island-head">
+      <span class="ttl">Аналитика трат</span>
+      <span class="badge-window">● Детально: последние 30 дней</span>
+      <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
+        <div class="pill-tabs"><button class="pt">Мои</button><button class="pt on">Все пользователи</button></div>
+        <div class="pill-tabs"><button class="pt on">Месяц</button><button class="pt">90 дней</button></div>
+      </div>
+    </div>
+
+    <div class="crumbs">
+      <a>Все пользователи</a><span class="sep">›</span>
+      <span class="cur">andrey</span>
+      <span class="lvl">уровень: проекты</span>
+    </div>
+
+    <div class="rows">
+      <div class="row-h"><span>Проект</span><span class="num">$</span><span class="num">Ходы</span><span class="num">In</span><span class="num">Out</span><span class="num">Ср. ход</span></div>
+
+      <div class="rowx">
+        <div class="name"><span class="avatar" style="background:#3E7CA6">AH</span><span class="nm">AI Home</span><span class="meta">14 чатов · 6 задач</span></div>
+        <span class="num money">$14.20</span><span class="num">720</span><span class="num">11.1M</span><span class="num">0.9M</span><span class="num">$0.020</span>
+        <div class="share"><i style="width:57%"></i></div>
+      </div>
+
+      <div class="rowx">
+        <div class="name"><span class="avatar" style="background:#8E4A82">RW</span><span class="nm">RailWay</span><span class="meta">5 чатов</span></div>
+        <span class="num money">$6.31</span><span class="num">214</span><span class="num">4.0M</span><span class="num">0.3M</span><span class="num">$0.029</span>
+        <div class="share"><i style="width:25%"></i></div>
+      </div>
+
+      <div class="rowx">
+        <div class="name"><span class="avatar" style="background:#7A7250">·</span><span class="nm">Вне проектов</span><span class="meta">чаты с персонами, личные</span></div>
+        <span class="num money">$3.12</span><span class="num">198</span><span class="num">2.4M</span><span class="num">0.2M</span><span class="num">$0.016</span>
+        <div class="share"><i style="width:13%"></i></div>
+      </div>
+
+      <div class="rowx">
+        <div class="name"><span class="avatar" style="background:#4B6BB0">Ф</span><span class="nm">Фоновые операции</span><span class="meta">changelog · заметки · память персон</span></div>
+        <span class="num money">$1.24</span><span class="num">82</span><span class="num">0.7M</span><span class="num">0.05M</span><span class="num">$0.015</span>
+        <div class="share"><i style="width:5%"></i></div>
+      </div>
+    </div>
+  </div>
+
+  <p class="note" style="margin-top:16px">Тот же список на уровне «чаты и задачи» + строка за границей окна:</p>
+
+  <div class="island">
+    <div class="crumbs">
+      <a>Все пользователи</a><span class="sep">›</span>
+      <a>andrey</a><span class="sep">›</span>
+      <span class="cur">AI Home</span>
+      <span class="lvl">уровень: чаты и задачи</span>
+    </div>
+    <div class="rows">
+      <div class="rowx">
+        <div class="name"><span class="src-tag" style="background:var(--c-accent-light);color:var(--c-accent)">чат</span><span class="nm">Макеты аналитики</span><span class="meta">персона: Майя</span></div>
+        <span class="num money">$8.90</span><span class="num">96</span><span class="num">2.1M</span><span class="num">0.4M</span><span class="num">$0.093</span>
+        <div class="share"><i style="width:63%"></i></div>
+      </div>
+      <div class="rowx">
+        <div class="name"><span class="src-tag" style="background:var(--c-info-bg);color:var(--c-info)">задача</span><span class="nm">Фикс ParseUsage</span><span class="meta">персона: Денис</span></div>
+        <span class="num money">$3.14</span><span class="num">31</span><span class="num">0.9M</span><span class="num">0.1M</span><span class="num">$0.101</span>
+        <div class="share"><i style="width:22%"></i></div>
+      </div>
+      <div class="rowx locked">
+        <div class="name"><span class="src-tag" style="background:var(--c-accent-light);color:var(--c-accent)">чат</span><span class="nm">Ревью провайдеров (июнь)</span><span class="meta">последняя активность 12 июня</span></div>
+        <span class="num money">$2.16</span><span class="num">44</span><span class="num">0.8M</span><span class="num">0.07M</span><span class="num">$0.049</span>
+        <div class="lock-hint">⚠ Старше окна детализации — доступны только дневные агрегаты, список ходов не сохранился</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= 3. Виджет «Домой» ================= -->
+<div class="section">
+  <h2>3 · Виджет на «Домой»</h2>
+  <p class="note">Компактная карточка в сетке дашборда «Домой»: сегодня + спарклайн недели + разбивка по источникам.
+  Клик по всей карточке ведёт в дашборд аналитики.</p>
+  <div class="home-grid">
+    <div class="widget">
+      <div class="w-head"><span class="t">Траты</span><span class="arrow">→</span></div>
+      <div class="big">$1.85</div>
+      <div class="cmp">сегодня · вчера $2.40 · июль $24.87</div>
+      <div class="spark">
+        <i style="height:40%"></i><i style="height:65%"></i><i style="height:30%"></i><i style="height:80%"></i><i style="height:55%"></i><i style="height:20%"></i><i class="today" style="height:48%"></i>
+      </div>
+      <div class="w-split">
+        <i style="flex:78;background:var(--src-turns)"></i><i style="flex:12;background:var(--src-oneshot)"></i><i style="flex:6;background:var(--src-fal)"></i><i style="flex:4;background:var(--src-free)"></i>
+      </div>
+      <div class="w-legend">
+        <span><span class="dot" style="background:var(--src-turns)"></span>Ходы $1.44</span>
+        <span><span class="dot" style="background:var(--src-oneshot)"></span>Фон $0.22</span>
+        <span><span class="dot" style="background:var(--src-fal)"></span>fal $0.11</span>
+        <span><span class="dot" style="background:var(--src-free)"></span>0 $ ×34</span>
+      </div>
+    </div>
+    <div class="widget" style="cursor:default">
+      <div class="w-head"><span class="t">Траты — пустое состояние</span></div>
+      <div class="empty-body" style="padding:16px">
+        <div class="pic">🌱</div>
+        <div class="d">Трат ещё нет — стоимость появится после первого хода в любом чате.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= 4. Бейдж стоимости чата ================= -->
+<div class="section">
+  <h2>4 · Бейдж стоимости в чате</h2>
+  <p class="note">Живёт в шапке чата рядом с бейджем контекста; обновляется по окончании хода — рядом мягко всплывает
+  дельта «+$0.12». Клик — попап с разбивкой чата. У бесплатной модели бейдж зелёный «0 $».</p>
+  <div style="display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start">
+    <div style="flex:1;min-width:320px">
+      <div class="chat-head-demo">
+        <span class="avatar" style="background:#C2693B">М</span>
+        <div style="min-width:0">
+          <div style="font-weight:600;color:var(--c-text-heading);font-size:13px">Дизайнер (Майя)</div>
+          <div style="font-size:11px;color:var(--c-text-muted)">AI Home · claude-opus-5</div>
+        </div>
+        <div style="margin-left:auto;display:flex;gap:6px;align-items:center">
+          <span class="chip" style="cursor:default">32% контекста</span>
+          <span class="cost-badge">$4.87 <span class="delta">+$0.12</span></span>
+        </div>
+      </div>
+      <div style="margin-top:10px" class="chat-head-demo">
+        <span class="avatar" style="background:#3F7A4F">N</span>
+        <div style="min-width:0">
+          <div style="font-weight:600;color:var(--c-text-heading);font-size:13px">Быстрый чат</div>
+          <div style="font-size:11px;color:var(--c-text-muted)">nemotron-3-ultra · бесплатная</div>
+        </div>
+        <div style="margin-left:auto">
+          <span class="cost-badge" style="background:var(--c-success-bg);color:var(--c-success-text)">0 $</span>
+        </div>
+      </div>
+    </div>
+    <div class="cost-pop">
+      <div style="font-weight:600;color:var(--c-text-heading);font-size:12px;margin-bottom:8px">Стоимость чата</div>
+      <div class="r"><span>Ходов</span><b>96</b></div>
+      <div class="r"><span>Токены in / out</span><b>2.1M / 0.4M</b></div>
+      <div class="r"><span>Cache read</span><b>18.4M</b></div>
+      <div class="r"><span>Последний ход</span><b>$0.12</b></div>
+      <div class="r total"><span>Всего</span><b>$4.87</b></div>
+      <div class="cap">Обновляется по окончании хода · Открыть в аналитике →</div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= 5. Мобильная раскладка ================= -->
+<div class="section">
+  <h2>5 · Мобильная раскладка (390px)</h2>
+  <p class="note">Один столбец: KPI 2×2, график скроллится по горизонтали, проводник теряет числовые колонки —
+  остаются название + сумма + полоса-доля. Tap по строке — проваливание, «‹ Назад» в крошках. Hover нет —
+  вся детализация только по tap.</p>
+  <div class="phones">
+
+    <div class="phone">
+      <div class="p-status">12:30 · AI Home</div>
+      <div class="p-cap">Дашборд · персональный</div>
+      <div class="m-toolbar">
+        <div class="pill-tabs"><button class="pt">Неделя</button><button class="pt on">Месяц</button><button class="pt">90 д</button></div>
+        <span class="badge-window" style="margin-left:auto">30 дней</span>
+      </div>
+      <div class="m-kpi">
+        <div class="kpi"><div class="lbl">Стоимость</div><div class="val money" style="font-size:18px">$24.87</div></div>
+        <div class="kpi"><div class="lbl">Ходы</div><div class="val" style="font-size:18px">1 214</div></div>
+      </div>
+      <div style="padding:0 14px 10px">
+        <div class="chart-card" style="padding:10px">
+          <div class="bars" style="height:64px">
+            <div class="bar agg" style="height:40%"><i style="height:100%;background:var(--src-turns)"></i></div>
+            <div class="bar agg" style="height:55%"><i style="height:100%;background:var(--src-turns)"></i></div>
+            <div class="bar" style="height:70%"><i style="height:80%;background:var(--src-turns)"></i><i style="height:20%;background:var(--src-oneshot)"></i></div>
+            <div class="bar sel" style="height:100%"><i style="height:75%;background:var(--src-turns)"></i><i style="height:25%;background:var(--src-oneshot)"></i></div>
+            <div class="bar" style="height:45%"><i style="height:90%;background:var(--src-turns)"></i><i style="height:10%;background:var(--src-fal)"></i></div>
+            <div class="bar" style="height:30%"><i style="height:100%;background:var(--src-turns)"></i></div>
+          </div>
+        </div>
+      </div>
+      <div class="crumbs" style="padding:0 14px"><a>‹ AI Home</a><span class="lvl">чаты и задачи</span></div>
+      <div class="m-rows" style="margin-top:8px">
+        <div class="rowx"><div class="name"><span class="nm">Макеты аналитики</span></div><span class="num money">$8.90</span><div class="share"><i style="width:63%"></i></div></div>
+        <div class="rowx"><div class="name"><span class="nm">Фикс ParseUsage</span></div><span class="num money">$3.14</span><div class="share"><i style="width:22%"></i></div></div>
+        <div class="rowx"><div class="name"><span class="nm">Ревью провайдеров</span></div><span class="num money">$2.16</span><div class="share"><i style="width:15%"></i></div></div>
+      </div>
+      <div class="tapbar"><span>Домой</span><span>Чаты</span><span class="on">Аналитика</span><span>Задачи</span></div>
+    </div>
+
+    <div class="phone">
+      <div class="p-status">12:31 · AI Home</div>
+      <div class="p-cap">Уровень «ходы» + виджет «Домой»</div>
+      <div class="crumbs" style="padding:12px 14px 0"><a>‹ Макеты аналитики</a><span class="lvl">ходы · 18 июля</span></div>
+      <div class="m-rows" style="margin-top:8px">
+        <div class="rowx"><div class="name"><span class="nm">14:32 · Ход #41</span><span class="meta">opus-5</span></div><span class="num money">$1.85</span><div class="share"><i style="width:64%"></i></div></div>
+        <div class="rowx"><div class="name"><span class="nm">14:05 · Ход #40</span><span class="meta">opus-5</span></div><span class="num money">$0.62</span><div class="share"><i style="width:22%"></i></div></div>
+        <div class="rowx"><div class="name"><span class="nm">13:47 · Ход #39</span><span class="meta">nemotron · бесплатная</span></div><span class="num money" style="color:var(--c-success-text)">$0.00</span><div class="share"><i style="width:0"></i></div></div>
+      </div>
+      <div style="padding:6px 14px 16px">
+        <div class="widget">
+          <div class="w-head"><span class="t">Траты</span><span class="arrow">→</span></div>
+          <div class="big" style="font-size:22px">$1.85</div>
+          <div class="cmp">сегодня · июль $24.87</div>
+          <div class="w-split"><i style="flex:78;background:var(--src-turns)"></i><i style="flex:12;background:var(--src-oneshot)"></i><i style="flex:10;background:var(--src-fal)"></i></div>
+        </div>
+      </div>
+      <div class="tapbar"><span class="on">Домой</span><span>Чаты</span><span>Аналитика</span><span>Задачи</span></div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ================= 6. Состояния ================= -->
+<div class="section" style="padding-bottom:48px">
+  <h2>6 · Состояния</h2>
+  <p class="note">Пустое — «трат ещё нет», загрузка — скелетоны формы контента, ошибка — с повтором.
+  Отдельный случай: данные есть, но фильтры отсекли всё.</p>
+  <div class="states">
+
+    <div class="state-card">
+      <div class="cap">Пустое — трат ещё нет</div>
+      <div class="empty-body">
+        <div class="pic">🪙</div>
+        <div class="h">Трат ещё нет</div>
+        <div class="d">Стоимость появится после первого хода в любом чате. Бесплатные модели тоже попадут сюда — со стоимостью 0 $.</div>
+      </div>
+    </div>
+
+    <div class="state-card">
+      <div class="cap">Загрузка — скелетон</div>
+      <div style="padding:16px">
+        <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:12px">
+          <div class="skel" style="height:64px"></div><div class="skel" style="height:64px"></div>
+        </div>
+        <div class="skel" style="height:96px;margin-bottom:12px"></div>
+        <div class="skel" style="height:38px;margin-bottom:6px"></div>
+        <div class="skel" style="height:38px;margin-bottom:6px"></div>
+        <div class="skel" style="height:38px"></div>
+      </div>
+    </div>
+
+    <div class="state-card">
+      <div class="cap">Ошибка загрузки</div>
+      <div class="err-body">
+        <div style="font-size:30px">⚠️</div>
+        <div class="h">Не удалось загрузить аналитику</div>
+        <div class="d">Сервер не ответил. Данные не потеряны — попробуйте ещё раз.</div>
+        <button class="btn">Повторить</button>
+      </div>
+    </div>
+
+    <div class="state-card">
+      <div class="cap">Фильтры отсекли всё</div>
+      <div class="empty-body">
+        <div class="pic">🔍</div>
+        <div class="h">Ничего не найдено</div>
+        <div class="d">По фильтру «fal.ai · DeepSeek» трат нет. Попробуйте снять часть фильтров.</div>
+        <button class="btn ghost" style="margin-top:12px">Сбросить фильтры</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+</body>
+</html>

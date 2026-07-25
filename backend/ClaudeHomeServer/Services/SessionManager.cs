@@ -154,6 +154,8 @@ public class SessionManager : IDisposable
     private readonly PersonaAgentFileSync? _agentSync;
     // Git-операции worktree чата (null — в тестах: worktree-фича выключена)
     private readonly Git.GitService? _git;
+    // Аналитика расхода токенов (null — в тестах: сбор выключен)
+    private readonly Spend.ISpendCollector? _spend;
 
     public SessionManager(ProjectManager projects, IHubContext<Hubs.SessionHub> hub,
         ChatHistoryService history, IConfiguration config, ILlmSessionAdapterFactory adapters,
@@ -178,8 +180,11 @@ public class SessionManager : IDisposable
         Modules.ModuleRegistry? modules = null,
         Modules.ModuleTokenService? moduleTokens = null,
         // Опционально (в тестах не передаётся): git-операции worktree чата
-        Git.GitService? git = null)
+        Git.GitService? git = null,
+        // Опционально (в тестах не передаётся): сбор расхода токенов (Spend Analytics)
+        Spend.ISpendCollector? spend = null)
     {
+        _spend = spend;
         _agentSync = agentSync;
         _cheap = cheap;
         _modules = modules;
@@ -2326,6 +2331,7 @@ public class SessionManager : IDisposable
                 case ResultMessage m:
                     await acc.OnResultAsync(m.Subtype, m.DurationMs, m.NumTurns, m.Usage, m.TotalCostUsd, m.ApiErrorStatus, m.PermissionDenials, _history, m.ContextTokens);
                     if (entry is not null) entry.LoopTurnFailed = m.Subtype == "error";
+                    RecordTurnSpend(entry, m);
                     break;
                 case RateLimitMessage m:
                     _usage.Record(m.LimitType, m.Utilization, m.Status, m.IsUsingOverage, m.ResetsAt, m.OverageStatus, m.OverageResetsAt, subscriptionKey: entry?.Info.Provider);
@@ -2545,7 +2551,63 @@ public class SessionManager : IDisposable
         finally { _falPersistLock.Release(); }
 
         if (duplicate) return; // дубликат — не ретранслируем
+
+        // Аналитика расхода: генерация fal.ai — счётчик операций (токенов у fal нет),
+        // фактическая стоимость про запас. Дедуп выше гарантирует одну запись на request_id.
+        if (_spend is not null)
+            try
+            {
+                var s = entry.Info;
+                _spend.Record(new SpendRecord
+                {
+                    OwnerId = ResolveOwnerId(s) ?? "",
+                    ProjectId = s.ProjectId,
+                    SessionId = s.Id,
+                    TaskId = s.TaskId,
+                    PersonaId = s.PersonaId,
+                    Provider = "fal",
+                    Model = msg.EndpointId,
+                    Source = SpendSources.Fal,
+                    CostUsd = msg.CostUsd,
+                    Generations = 1,
+                    Label = msg.EndpointId,
+                });
+            }
+            catch (Exception ex) { _log.LogWarning(ex, "spend: запись генерации fal не удалась"); }
+
         await BroadcastAsync(sessionId, msg);
+    }
+
+    // Запись расхода штатного хода в аналитику (Spend Analytics): все разрезы из Session,
+    // модель — фактическая из modelUsage result'а (субагенты могли считать другой моделью),
+    // фолбэк — модель сессии. Ошибка записи ход не роняет.
+    private void RecordTurnSpend(SessionEntry? entry, ResultMessage m)
+    {
+        if (_spend is null || entry is null || m.Usage is null) return;
+        try
+        {
+            var s = entry.Info;
+            var provider = SpendSources.NormalizeProvider(s.Provider);
+            var model = m.UsageModel ?? s.Model;
+            _spend.Record(new SpendRecord
+            {
+                OwnerId = ResolveOwnerId(s) ?? "",
+                ProjectId = s.ProjectId,
+                SessionId = s.Id,
+                TaskId = s.TaskId,
+                PersonaId = s.PersonaId,
+                Provider = provider,
+                Model = model,
+                Source = SpendSources.IsFree(provider, model) ? SpendSources.Free : SpendSources.ChatTurn,
+                InputTokens = m.Usage.InputTokens,
+                OutputTokens = m.Usage.OutputTokens,
+                CacheReadTokens = m.Usage.CacheReadTokens,
+                CacheCreationTokens = m.Usage.CacheCreationTokens,
+                CostUsd = m.TotalCostUsd,
+                DurationMs = m.DurationMs,
+            });
+        }
+        catch (Exception ex) { _log.LogWarning(ex, "spend: запись хода не удалась"); }
     }
 
     // Запись StoredMessage в историю сессии ВНЕ хода + broadcast (обобщение паттерна

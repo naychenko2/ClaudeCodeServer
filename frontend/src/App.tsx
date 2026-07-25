@@ -37,6 +37,8 @@ import { ensureNotificationsSubscribed } from './lib/notifications'
 import { KnowledgePage } from './features/knowledge/KnowledgePage'
 import { NotificationsPage } from './features/notifications/NotificationsPage'
 import { HomePage } from './pages/HomePage'
+import { SpendScreen } from './features/spend/SpendScreen'
+import { OPEN_SPEND_EVENT, type SpendOpenContext } from './lib/spend'
 
 const OPEN_PROJECT_KEY = 'cc_open_project'
 const HUB_TAB_KEY = 'cc_hub_tab'
@@ -139,6 +141,15 @@ export default function App() {
       setHistoryOpen(!!(e.state as { historyOverlay?: boolean } | null)?.historyOverlay)
     window.addEventListener('popstate', onPop)
     return () => window.removeEventListener('popstate', onPop)
+  }, [])
+
+  // Раздел «Аналитика токенов» — оверлей на верхнем уровне, открывается событием
+  // cc-open-spend из любой точки (виджет «Домой», бейдж чата) с контекстом перехода
+  const [spendCtx, setSpendCtx] = useState<SpendOpenContext | null>(null)
+  useEffect(() => {
+    const open = (e: Event) => setSpendCtx((e as CustomEvent<SpendOpenContext>).detail ?? {})
+    window.addEventListener(OPEN_SPEND_EVENT, open)
+    return () => window.removeEventListener(OPEN_SPEND_EVENT, open)
   }, [])
 
   // Единый поиск, открытый из AI-палитры (App-уровневый оверлей, независимый от шапки)
@@ -723,6 +734,9 @@ export default function App() {
             else setHistoryOpen(false)
           }}
         />
+      )}
+      {auth && spendCtx && (
+        <SpendScreen ctx={spendCtx} isAdmin={auth.role === 'admin'} onClose={() => setSpendCtx(null)} />
       )}
       {auth && !authChecking && <AiLauncher />}
       {auth && aiSearchOpen && <GlobalSearch onClose={() => setAiSearchOpen(false)} />}

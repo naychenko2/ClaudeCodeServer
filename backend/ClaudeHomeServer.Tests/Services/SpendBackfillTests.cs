@@ -11,10 +11,11 @@ using Moq;
 
 namespace ClaudeHomeServer.Tests.Services;
 
-// Доработка по ревью Глеба (major-1, major-2):
+// Доработка по ревью Глеба (major-1, major-2, minor-3):
 // 1) backfill идемпотентен при сбое — рестарт посреди импорта (маркер backfill.done не стоит)
 //    не задваивает уже записанную часть: детерминированные Id + дедуп SpendStore.Record;
-// 2) own в topTurns обзора считается от ТЕКУЩЕГО пользователя, а не от фильтра среза.
+// 2) own в topTurns обзора считается от ТЕКУЩЕГО пользователя, а не от фильтра среза;
+// 3) WindowClamped в Turns учитывает фильтр среза, а не любые daily-строки периода.
 public class SpendBackfillTests : IDisposable
 {
     private readonly string _dir;
@@ -154,5 +155,30 @@ public class SpendBackfillTests : IDisposable
         var narrowed = analytics.Overview(today, today, new SpendFilter(Owner: "user-2"),
             allUsers: true, currentUserId: "admin-1");
         narrowed.TopTurns.Single().Own.Should().BeFalse();
+    }
+
+    // --- minor-3: WindowClamped учитывает фильтр среза ---
+
+    [Fact]
+    public void Turns_WindowClamped_УчитываетФильтрСреза()
+    {
+        var store = new SpendStore(Path.Combine(_dir, "spend_clamp"), detailDays: 30);
+        var now = DateTime.UtcNow;
+        var old = now.AddDays(-40);
+        store.Record(new SpendRecord { OwnerId = "u1", Timestamp = old, InputTokens = 100 });
+        store.Record(new SpendRecord { OwnerId = "u1", Timestamp = now, InputTokens = 10 });
+        store.Record(new SpendRecord { OwnerId = "u2", Timestamp = now, InputTokens = 20 });
+        store.RollupOlderThan(store.WindowStart);
+        var analytics = new SpendAnalyticsService(store, _sessions, _projectManager, _tasks, _personas, _userStore);
+        var from = DateOnly.FromDateTime(old);
+        var to = DateOnly.FromDateTime(now);
+
+        // У u1 за окном есть свёрнутые строки — плашка «часть ходов старше окна» честная
+        analytics.Turns(from, to, new SpendFilter(Owner: "u1"), 50, 0, null, "u1")
+            .WindowClamped.Should().BeTrue();
+
+        // У u2 за окном пусто — до фикса плашка показывалась и ему (любые daily без фильтра)
+        analytics.Turns(from, to, new SpendFilter(Owner: "u2"), 50, 0, null, "u2")
+            .WindowClamped.Should().BeFalse();
     }
 }

@@ -236,9 +236,11 @@ public sealed class SpendAnalyticsService(SpendStore store, SessionManager sessi
     public SpendTurnsPageDto Turns(DateOnly from, DateOnly to, SpendFilter f,
         int limit, int offset, string? sort, string? currentUserId)
     {
-        // Ходы существуют только в несвёрнутых днях; запрос за более ранний период
-        // честно помечается WindowClamped
-        var clamped = store.DailyBetween(from, to).Count > 0;
+        // Ходы существуют только в несвёрнутых днях; запрос за более ранний период честно
+        // помечается WindowClamped — но только если за окном есть строки именно этого среза,
+        // иначе плашка «часть ходов старше окна» показалась бы срезу, у которого за окном
+        // пусто (ревью Глеба, minor-3)
+        var clamped = store.DailyBetween(from, to).Any(d => Match(d, f));
         var items = store.DetailsBetween(from, to).Where(r => Match(r, f));
         items = sort == "time"
             ? items.OrderByDescending(r => r.Timestamp)

@@ -49,7 +49,8 @@ public sealed class OllamaClient
     // дефолт Ollama (~4k) МОЛЧА срезает хвост входа, и модель отвечает по обрубку.
     public async Task<string?> ChatJsonAsync(
         string systemPrompt, string userPrompt, object formatSchema, CancellationToken ct = default,
-        string? model = null, int? timeoutMs = null, int? numPredict = null, int? numCtx = null)
+        string? model = null, int? timeoutMs = null, int? numPredict = null, int? numCtx = null,
+        string? ownerId = null, string? label = null)
     {
         var used = string.IsNullOrWhiteSpace(model) ? Model : model!;
         if (string.IsNullOrWhiteSpace(BaseUrl) || string.IsNullOrWhiteSpace(used)) return null;
@@ -87,7 +88,7 @@ public sealed class OllamaClient
             var answer = json.TryGetProperty("message", out var msg) && msg.TryGetProperty("content", out var content)
                 ? content.GetString()
                 : null;
-            if (!string.IsNullOrEmpty(answer)) RecordSpend(used, json);
+            if (!string.IsNullOrEmpty(answer)) RecordSpend(used, json, ownerId, label);
             return answer;
         }
         catch (Exception ex)
@@ -99,18 +100,21 @@ public sealed class OllamaClient
     }
 
     // Расход локального вызова в аналитику: токены из счётчиков ответа Ollama
-    // (prompt_eval_count/eval_count), стоимость 0 — источник free. Владелец не прокидывается
-    // (фоновые действия системные), ошибка записи вызов не роняет.
-    private void RecordSpend(string model, JsonElement json)
+    // (prompt_eval_count/eval_count), стоимость 0 — источник free. Владелец и подпись
+    // действия приходят от вызывающего (CheapTextRunner); без них запись системная.
+    // Ошибка записи вызов не роняет.
+    private void RecordSpend(string model, JsonElement json, string? ownerId, string? label)
     {
         if (_spend is null) return;
         try
         {
             _spend.Record(new Models.SpendRecord
             {
+                OwnerId = ownerId ?? "",
                 Provider = "ollama",
                 Model = model,
                 Source = Models.SpendSources.Free,
+                Label = label,
                 InputTokens = json.TryGetProperty("prompt_eval_count", out var p)
                     && p.ValueKind == JsonValueKind.Number ? p.GetInt64() : 0,
                 OutputTokens = json.TryGetProperty("eval_count", out var e)
@@ -128,7 +132,7 @@ public sealed class OllamaClient
     // Возвращает null при любой ошибке/таймауте/пустом ответе — вызывающий откатывается на claude.
     public async Task<string?> GenerateTextAsync(
         string prompt, string? model, TimeSpan timeout, int numPredict, int numCtx,
-        CancellationToken ct = default)
+        string? ownerId = null, string? label = null, CancellationToken ct = default)
     {
         var used = string.IsNullOrWhiteSpace(model) ? TextModel : model!;
         if (string.IsNullOrWhiteSpace(BaseUrl) || string.IsNullOrWhiteSpace(used)) return null;
@@ -158,7 +162,7 @@ public sealed class OllamaClient
                 ? c.GetString()
                 : null;
             if (string.IsNullOrWhiteSpace(content)) return null;
-            RecordSpend(used, json);
+            RecordSpend(used, json, ownerId, label);
             return content;
         }
         catch (Exception ex)

@@ -65,7 +65,7 @@ public sealed class CheapTextRunner(
         if (route.Kind == RouteKind.Model && !string.IsNullOrWhiteSpace(route.Model))
         {
             var picked = CloudCheapClient.IsDirectRoute(route.Model)
-                ? await TryDirectAsync(actionKey, route.Model!, prompt, ct)
+                ? await TryDirectAsync(actionKey, route.Model!, prompt, ownerId, ct)
                 : await TryModelAsync(actionKey, route.Model!, prompt, ownerId, ct);
             if (picked is not null) return picked;
         }
@@ -77,7 +77,7 @@ public sealed class CheapTextRunner(
         // и «сойдёт» за успех и оборвёт цепочку до качественного claude.
         if (LocalStepApplies(actionKey, route.Kind) && ollama.Enabled)
         {
-            var local = await RunLocalAsync(actionKey, prompt, jsonFormat, ct);
+            var local = await RunLocalAsync(actionKey, prompt, jsonFormat, ownerId, ct);
             if (!string.IsNullOrWhiteSpace(local)) return local;
             log.LogDebug("cheap-runner: действие {Action} — фолбэк с Ollama на claude", actionKey);
         }
@@ -109,14 +109,16 @@ public sealed class CheapTextRunner(
 
     // Прямой HTTP-адаптер (CloudCheapClient) на бесплатной модели агрегатора. maxTokens и
     // timeout — из профиля действия. null — 429/ошибка/пусто/адаптер не настроен → дальше по цепочке.
-    private async Task<string?> TryDirectAsync(string actionKey, string route, string prompt, CancellationToken ct)
+    private async Task<string?> TryDirectAsync(string actionKey, string route, string prompt,
+        string? ownerId, CancellationToken ct)
     {
         var model = CloudCheapClient.StripPrefix(route);
         var spec = router.ProfileFor(actionKey);
         try
         {
             var text = await cloud.GenerateTextAsync(
-                model, prompt, TimeSpan.FromMilliseconds(spec.TimeoutMs), spec.NumPredict, ct);
+                model, prompt, TimeSpan.FromMilliseconds(spec.TimeoutMs), spec.NumPredict,
+                ownerId, label: actionKey, ct);
             if (!string.IsNullOrWhiteSpace(text)) return text;
             log.LogDebug("cheap-runner: действие {Action} — прямой вызов {Model} пуст/недоступен", actionKey, model);
         }
@@ -136,17 +138,18 @@ public sealed class CheapTextRunner(
         kind == RouteKind.Local
         || (kind == RouteKind.Model && LocalActionCatalog.Find(actionKey)?.DefaultLocal == true);
 
-    private Task<string?> RunLocalAsync(string actionKey, string prompt, object? jsonFormat, CancellationToken ct)
+    private Task<string?> RunLocalAsync(string actionKey, string prompt, object? jsonFormat,
+        string? ownerId, CancellationToken ct)
     {
         var spec = router.ProfileFor(actionKey);
         return jsonFormat is null
             ? ollama.GenerateTextAsync(
                 prompt, model: null, timeout: TimeSpan.FromMilliseconds(spec.TimeoutMs),
-                numPredict: spec.NumPredict, numCtx: spec.NumCtx, ct)
+                numPredict: spec.NumPredict, numCtx: spec.NumCtx, ownerId, label: actionKey, ct)
             : ollama.ChatJsonAsync(
                 systemPrompt: "", userPrompt: prompt, formatSchema: jsonFormat, ct,
                 model: ollama.TextModel, timeoutMs: spec.TimeoutMs,
-                numPredict: spec.NumPredict, numCtx: spec.NumCtx);
+                numPredict: spec.NumPredict, numCtx: spec.NumCtx, ownerId, label: actionKey);
     }
 
     // Бесплатная цепочка: direct-модель агрегатора → локаль. Провайдерские модели через CLI
@@ -159,13 +162,13 @@ public sealed class CheapTextRunner(
 
         if (route.Kind == RouteKind.Model && CloudCheapClient.IsDirectRoute(route.Model))
         {
-            var picked = await TryDirectAsync(actionKey, route.Model!, prompt, ct);
+            var picked = await TryDirectAsync(actionKey, route.Model!, prompt, ownerId: null, ct);
             if (!string.IsNullOrWhiteSpace(picked)) return picked;
         }
 
         if (LocalStepApplies(actionKey, route.Kind) && ollama.Enabled)
         {
-            var local = await RunLocalAsync(actionKey, prompt, jsonFormat, ct);
+            var local = await RunLocalAsync(actionKey, prompt, jsonFormat, ownerId: null, ct);
             if (!string.IsNullOrWhiteSpace(local)) return local;
         }
 
@@ -178,7 +181,7 @@ public sealed class CheapTextRunner(
         var spec = router.ProfileFor(actionKey);
         var local = await ollama.GenerateTextAsync(
             prompt, model: null, timeout: TimeSpan.FromMilliseconds(spec.TimeoutMs),
-            numPredict: spec.NumPredict, numCtx: spec.NumCtx, ct);
+            numPredict: spec.NumPredict, numCtx: spec.NumCtx, ownerId: null, label: actionKey, ct);
         return string.IsNullOrWhiteSpace(local) ? null : local;
     }
 
@@ -203,7 +206,8 @@ public sealed class CheapTextRunner(
                 var model = CloudCheapClient.StripPrefix(route.Model!);
                 try
                 {
-                    var text = await cloud.GenerateTextAsync(model, prompt, effTimeout, effMaxTokens, ct);
+                    var text = await cloud.GenerateTextAsync(model, prompt, effTimeout, effMaxTokens,
+                        ownerId, label: actionKey, ct);
                     if (!string.IsNullOrWhiteSpace(text)) return new OneShotResult(text, null, 0);
                 }
                 catch (Exception ex) when (!ct.IsCancellationRequested)
@@ -221,7 +225,7 @@ public sealed class CheapTextRunner(
         // Шаг 2 — локальная модель (usage нет). Для «сильных» действий локаль-страховка пропускается — см. RunAsync.
         if (LocalStepApplies(actionKey, route.Kind) && ollama.Enabled)
         {
-            var local = await RunLocalAsync(actionKey, prompt, jsonFormat: null, ct);
+            var local = await RunLocalAsync(actionKey, prompt, jsonFormat: null, ownerId, ct);
             if (!string.IsNullOrWhiteSpace(local)) return new OneShotResult(local, null, 0);
         }
 

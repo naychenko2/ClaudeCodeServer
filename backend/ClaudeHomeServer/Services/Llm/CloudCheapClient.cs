@@ -64,7 +64,8 @@ public sealed class CloudCheapClient
     // OllamaClient.GenerateTextAsync). maxTokens — лимит вывода профиля. Возвращает null при
     // любой ошибке/таймауте/пустом ответе — вызывающий откатывается на следующий маршрут.
     public async Task<string?> GenerateTextAsync(
-        string model, string prompt, TimeSpan timeout, int maxTokens, CancellationToken ct = default)
+        string model, string prompt, TimeSpan timeout, int maxTokens,
+        string? ownerId = null, string? label = null, CancellationToken ct = default)
     {
         if (!_provider.Configured || string.IsNullOrWhiteSpace(model)) return null;
         try
@@ -106,7 +107,7 @@ public sealed class CloudCheapClient
                     ? c.GetString()
                     : null;
             if (string.IsNullOrWhiteSpace(content)) return null;
-            RecordSpend(model, json);
+            RecordSpend(model, json, ownerId, label);
             return content;
         }
         catch (Exception ex)
@@ -117,8 +118,9 @@ public sealed class CloudCheapClient
     }
 
     // Расход прямого вызова в аналитику: токены из usage OpenAI-совместимого ответа,
-    // стоимость 0 (модели ":free") — источник free. Ошибка записи вызов не роняет.
-    private void RecordSpend(string model, JsonElement json)
+    // стоимость 0 (модели ":free") — источник free. Владелец и подпись действия приходят
+    // от вызывающего (CheapTextRunner); без них запись системная. Ошибка записи вызов не роняет.
+    private void RecordSpend(string model, JsonElement json, string? ownerId, string? label)
     {
         if (_spend is null) return;
         try
@@ -133,9 +135,11 @@ public sealed class CloudCheapClient
             }
             _spend.Record(new Models.SpendRecord
             {
+                OwnerId = ownerId ?? "",
                 Provider = DirectProviderKey,
                 Model = model,
                 Source = Models.SpendSources.Free,
+                Label = label,
                 InputTokens = inTok,
                 OutputTokens = outTok,
                 CostUsd = 0,

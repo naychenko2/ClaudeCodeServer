@@ -48,6 +48,8 @@ POST                /api/chats/group                   { personaIds[], mode?, na
 PUT                 /api/chats/{id}/participants       { personaIds[] } → Session  (состав группы; спикер сохраняется, иначе ведущая)
 PUT                 /api/chats/{id}/loop               { enabled } → Session  (цикл «до готово», флаг work-loop; работает и для проектных сессий)
 PUT/DELETE          /api/admin/local-actions/{key}     { enabled } → { key, enabled, source }  (маршрут фонового действия локаль/claude; только admin; DELETE — сброс к конфигу/дефолту)
+GET                 /api/admin/backup                  → { enabled, effectivePath, secretsPath, intervalHours, lastSuccessAt, lastError, recent[3] }  (только admin; настройки правятся в конфиге, не отсюда)
+POST                /api/admin/backup/run              → { file, createdAt, summary }  (ручной снимок; только admin. Восстановление — не через API: exe --restore или меню трея)
 GET/POST/DELETE     /api/knowledge                     (базы знаний Dify: список релевантных + CRUD; раздел «Знания»)
 GET                 /api/knowledge/{id}                → база знаний + документы
 POST                /api/knowledge                     { title, description?, visibility: personal|public } → { id, title, visibility }

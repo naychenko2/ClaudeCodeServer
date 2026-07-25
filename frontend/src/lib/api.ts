@@ -126,10 +126,10 @@ export const api = {
 
   providers: {
     balance: (key: string) =>
-      request<{ available: boolean; currency: string; totalBalance: string }>(`/providers/${key}/balance`),
+      request<{ available: boolean; currency: string; totalBalance: string; asOf?: string; resetsAt?: string | null }>(`/providers/${key}/balance`),
     usage: (key: string) =>
       request<{
-        balance: { available: boolean; currency: string; totalBalance: string } | null;
+        balance: { available: boolean; currency: string; totalBalance: string; asOf?: string; resetsAt?: string | null } | null;
         snapshots: { timestamp: string; balance: number; currency: string }[];
       }>(`/providers/${key}/usage`),
   },

@@ -160,8 +160,24 @@ function ClaudeTab({ snapshots, rotation, tier }: { snapshots: UsageSnapshot[] |
 }
 
 type ProviderUsage = {
-  balance: { available: boolean; currency: string; totalBalance: string } | null;
+  balance: { available: boolean; currency: string; totalBalance: string; asOf?: string; resetsAt?: string | null } | null;
   snapshots: { timestamp: string; balance: number; currency: string }[];
+};
+
+const fmtClock = (iso: string) => {
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? '' : d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+};
+
+// «обновлено только что / N мин назад» — свежесть баланса по asOf
+const fmtAgo = (iso: string) => {
+  const t = new Date(iso).getTime();
+  if (isNaN(t)) return null;
+  const mins = Math.floor((Date.now() - t) / 60000);
+  if (mins < 1) return 'обновлено только что';
+  if (mins < 60) return `обновлено ${mins} мин назад`;
+  const h = Math.floor(mins / 60);
+  return h < 24 ? `обновлено ${h} ч назад` : `обновлено ${Math.floor(h / 24)} дн назад`;
 };
 
 const TOPUP_URL: Record<string, string> = {
@@ -202,6 +218,8 @@ function ProviderTab({ providerKey, data }: { providerKey: string; data: Provide
   const snaps = data.snapshots ?? [];
   const cur = data.balance ? parseFloat(data.balance.totalBalance) : NaN;
   const currency = data.balance?.currency ?? snaps[snaps.length - 1]?.currency ?? 'USD';
+  // '%' — не деньги, а остаток квоты подписки (GLM: 5-часовое окно Coding Plan)
+  const isQuota = currency === '%';
   const low = !isNaN(cur) && cur < 1;
   let spent = 0;
   for (let i = 1; i < snaps.length; i++) {
@@ -210,31 +228,49 @@ function ProviderTab({ providerKey, data }: { providerKey: string; data: Provide
   }
   const maxBal = Math.max(...snaps.map(s => s.balance), isNaN(cur) ? 0 : cur, 0.0001);
   const points = snaps.map(s => ({ t: new Date(s.timestamp).getTime(), u: s.balance / maxBal }));
+  const asOf = data.balance?.asOf;
+  const asOfTs = asOf ? new Date(asOf).getTime() : NaN;
+  const asOfStale = !isNaN(asOfTs) && Date.now() - asOfTs > STALE_MS;
+  const resetsAt = data.balance?.resetsAt;
 
   return (
     <div>
+      {asOfStale && asOf && (
+        <div style={{ fontSize: 11.5, color: C.warningText, background: C.warningBg, border: `1px solid ${C.warning}`, borderRadius: 8, padding: '6px 10px', marginBottom: 12 }}>
+          Данные могли устареть — провайдер не ответил, показан баланс на {fmtClock(asOf)}.
+        </div>
+      )}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
         <MetricCard
-          value={isNaN(cur) ? '—' : `${cur.toFixed(2)} ${currency}`}
-          label={`баланс ${name}`}
+          value={isNaN(cur) ? '—' : `${cur.toFixed(isQuota ? 1 : 2)} ${currency}`}
+          label={isQuota ? 'остаток квоты · окно 5 ч' : `баланс ${name}`}
           valueColor={low ? C.dangerText : MONEY}
           tone={low ? 'danger' : undefined}
         >
+          {isQuota && resetsAt && (
+            <div style={{ fontSize: 11, color: C.textMuted, marginTop: 6 }}>сброс в {fmtClock(resetsAt)}</div>
+          )}
+          {asOf && fmtAgo(asOf) && (
+            <div style={{ fontSize: 11, color: asOfStale ? C.warningText : C.textMuted, marginTop: isQuota && resetsAt ? 2 : 6 }}>{fmtAgo(asOf)}</div>
+          )}
           {TOPUP_URL[providerKey] && (
             <a href={TOPUP_URL[providerKey]} target="_blank" rel="noopener noreferrer"
               style={{ display: 'inline-block', marginTop: 8, color: C.accent, fontSize: 11, fontWeight: 600, textDecoration: 'none' }}>пополнить ↗</a>
           )}
         </MetricCard>
-        <MetricCard value={spent > 0 ? `≈ ${spent.toFixed(2)} ${currency}` : '—'} label="расход за период наблюдения" valueColor={MONEY} />
+        {isQuota
+          ? <MetricCard value={isNaN(cur) ? '—' : `${(100 - cur).toFixed(1)} %`} label="израсходовано окна" valueColor={MONEY} />
+          : <MetricCard value={spent > 0 ? `${spent.toFixed(2)} ${currency}` : '—'} label="≈ расход за последние дни" valueColor={MONEY} />}
       </div>
       {points.length >= 2 && (
         <>
-          <div style={blockLabel}>Баланс во времени</div>
+          <div style={blockLabel}>{isQuota ? 'Остаток окна во времени' : 'Баланс во времени'}</div>
           <Sparkline points={points} color={MONEY} />
         </>
       )}
       <div style={{ fontSize: 11, color: C.textMuted, marginTop: 14, lineHeight: 1.5 }}>
         Снимки баланса пишутся при каждом обновлении (примерно раз в 5 минут при активной работе), хранятся 8 дней.
+        {!isQuota && ' Пополнения баланса в расход не входят.'}
       </div>
     </div>
   );

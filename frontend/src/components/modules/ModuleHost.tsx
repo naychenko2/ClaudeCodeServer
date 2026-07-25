@@ -3,6 +3,7 @@ import type { ModuleInfo } from '../../lib/api';
 import { loadModuleTab, type ModuleTabComponent, type AIHomeModuleContext } from '../../lib/modules';
 import { ErrorBoundary } from '../ErrorBoundary';
 import { C, FONT } from '../../lib/design';
+import { DESIGN_KIT_VERSION } from '../../lib/design-kit';
 
 // Плашка деградации (R9) — общая для ошибки загрузки remote и ошибки его рендера.
 function ModuleFallback({ name, detail }: { name: string; detail: string }) {
@@ -54,6 +55,8 @@ export function ModuleHost({ module, theme, user, onTitleChange }: {
     navigate: (hash: string) => { window.location.hash = hash; },
     onTitleChange,
     schemaVersion: module.schemaVersion,
+    kitEntry: `${window.location.origin}/remoteEntry.js`,
+    kitVersion: DESIGN_KIT_VERSION,
   };
   return (
     <ErrorBoundary

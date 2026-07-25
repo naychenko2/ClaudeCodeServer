@@ -8,8 +8,14 @@
 // Инвариант чистоты: entry реэкспортирует ТОЛЬКО leaf-файлы (design.ts, breakpoints.ts,
 // components/ui/*) — без тяги к приложению, роутеру и сторам, иначе expose-чанк
 // утащит половину оболочки. Новый примитив добавлять сюда только если он leaf.
+//
+// Публичная поверхность кита — не только экспорты ниже (R17): глобальные классы и
+// keyframes из index.css оболочки (cc-overlay, cc-modal-card, cc-sheet-card, cc-spin,
+// cc-fade-in, cc-shimmer-text, cc-smoke, cc-scroll-x, cc-hide-scrollbar, cc-no-scrollbar)
+// доступны модулю через DOM-контекст, а cc-iconbtn инжектирует сам IconButton.
+// Их переименование или удаление = мажор кита, как и смена API экспортов.
 
-export const DESIGN_KIT_VERSION = '1.0.0';
+export const DESIGN_KIT_VERSION = '1.1.0';
 
 // === Токены (R14) ===
 export {
@@ -32,3 +38,12 @@ export { PillSwitch } from '../../components/ui/PillSwitch';
 export { SegmentedControl } from '../../components/ui/Segmented';
 export { EmptyState } from '../../components/ui/EmptyState';
 export { CanvasBackdrop } from '../../components/ui/CanvasBackdrop';
+
+// === Досдача примитивов (v1.5, кит 1.1.0) ===
+export { Menu, MenuItem } from '../../components/ui/Menu';
+export { BackButton } from '../../components/ui/BackButton';
+export { ModalActions, useIsMobileModal } from '../../components/ui/ModalActions';
+export { ConfirmDialog } from '../../components/ui/ConfirmDialog';
+export { IslandSplitter } from '../../components/ui/IslandSplitter';
+export { IslandSidebarSplitter } from '../../components/ui/IslandSidebarSplitter';
+export { ICON_SIZE, ICON_STROKE, ICON_PROPS } from '../../components/ui/icons';

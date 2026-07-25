@@ -16,6 +16,11 @@ export interface AIHomeModuleContext {
   navigate: (hash: string) => void;
   onTitleChange?: (t: string) => void;
   schemaVersion: string;
+  // Резолв design-кита (контракт v1.6): модуль сам регистрирует оболочку как remote
+  // (registerRemotes с type:'module' по kitEntry) и сверяет мажор kitVersion.
+  // Оболочка себя в чужих инстансах рантайма НЕ регистрирует.
+  kitEntry: string;                 // абсолютный URL {origin}/remoteEntry.js
+  kitVersion: string;               // = DESIGN_KIT_VERSION
 }
 
 export type ModuleTabComponent = ComponentType<AIHomeModuleContext>;

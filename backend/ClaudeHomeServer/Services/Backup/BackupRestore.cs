@@ -68,7 +68,7 @@ public static class BackupRestore
             // Гейт 3. Распаковываем рядом и проверяем ДО подмены: сюда же попадает
             // сверка контрольных сумм и строгое чтение сторов
             Say("Распаковка и проверка архива…");
-            if (Directory.Exists(unpacked)) Directory.Delete(unpacked, recursive: true);
+            BackupCore.DeleteDirectoryForce(unpacked);
             ZipFile.ExtractToDirectory(archivePath, unpacked);
 
             var checksumProblem = VerifyChecksums(unpacked, manifest);
@@ -145,7 +145,7 @@ public static class BackupRestore
         }
         finally
         {
-            try { if (Directory.Exists(unpacked)) Directory.Delete(unpacked, recursive: true); }
+            try { BackupCore.DeleteDirectoryForce(unpacked); }
             catch { /* остатки распаковки не важнее результата */ }
         }
 

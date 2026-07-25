@@ -44,7 +44,7 @@ public static class BackupCore
         BackupResult result;
         try
         {
-            if (Directory.Exists(staging)) Directory.Delete(staging, recursive: true);
+            DeleteDirectoryForce(staging);
             Directory.CreateDirectory(staging);
             Directory.CreateDirectory(ctx.BackupDir);
 
@@ -85,7 +85,7 @@ public static class BackupCore
         }
         finally
         {
-            try { if (Directory.Exists(staging)) Directory.Delete(staging, recursive: true); }
+            try { DeleteDirectoryForce(staging); }
             catch { /* мусорный staging не важнее результата */ }
         }
 
@@ -137,6 +137,22 @@ public static class BackupCore
         return result;
     }
 
+    // Рекурсивное удаление со сбросом read-only. Git-объекты Forgejo помечены read-only,
+    // File.Copy переносит атрибут в staging — и обычный Directory.Delete падает на них
+    // «Access denied» (прод 25.07: зачистка молча не удалась, следующий бэкап валился
+    // на своём же мусоре и стопорил деплой).
+    internal static void DeleteDirectoryForce(string dir)
+    {
+        if (!Directory.Exists(dir)) return;
+        foreach (var file in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
+        {
+            var attrs = File.GetAttributes(file);
+            if ((attrs & FileAttributes.ReadOnly) != 0)
+                File.SetAttributes(file, attrs & ~FileAttributes.ReadOnly);
+        }
+        Directory.Delete(dir, recursive: true);
+    }
+
     // На Windows свежесозданный файл на доли секунды держит антивирус/индексатор, а
     // history.json и заметки пишутся постоянно. Тот же приём, что в JsonFileStore.MoveWithRetry.
     private static void CopyWithRetry(string source, string target)
@@ -147,10 +163,22 @@ public static class BackupCore
             try
             {
                 File.Copy(source, target, overwrite: true);
+                // Копия наследует read-only источника (git-объекты) — снимаем сразу,
+                // чтобы staging всегда удалялся и перезаписывался без плясок с атрибутами
+                var attrs = File.GetAttributes(target);
+                if ((attrs & FileAttributes.ReadOnly) != 0)
+                    File.SetAttributes(target, attrs & ~FileAttributes.ReadOnly);
                 return;
             }
             catch (Exception ex) when (i < attempts && ex is IOException or UnauthorizedAccessException)
             {
+                // Перезапись поверх read-only цели — тоже «Access denied»: снять атрибут и повторить
+                try
+                {
+                    if (File.Exists(target))
+                        File.SetAttributes(target, File.GetAttributes(target) & ~FileAttributes.ReadOnly);
+                }
+                catch { /* не мешаем основному ретраю */ }
                 Thread.Sleep(100 * i);
             }
         }

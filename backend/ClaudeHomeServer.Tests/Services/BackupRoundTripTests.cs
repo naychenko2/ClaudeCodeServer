@@ -74,6 +74,34 @@ public class BackupRoundTripTests : IDisposable
     // --- Снимок ---
 
     [Fact]
+    public void Снимок_ДваждыПодряд_СReadOnlyФайлом_ОбаУспешны_StagingЗачищен()
+    {
+        // Прод 25.07: git-объекты Forgejo помечены read-only, копия наследовала атрибут —
+        // зачистка staging молча падала, а следующий бэкап валился «Access denied»
+        // на собственном мусоре и стопорил деплой
+        var objects = Path.Combine(DataDir, "forgejo", "git", "repositories", "u", "r.git", "objects", "00");
+        Directory.CreateDirectory(objects);
+        var obj = Path.Combine(objects, "abc123");
+        File.WriteAllText(obj, "объект");
+        File.SetAttributes(obj, FileAttributes.ReadOnly);
+
+        try
+        {
+            var first = BackupCore.Snapshot(Context());
+            first.Ok.Should().BeTrue(first.Error);
+            Directory.Exists(Path.Combine(DataDir, BackupPaths.StagingDirName))
+                .Should().BeFalse("staging обязан зачищаться и с read-only копиями");
+
+            var second = BackupCore.Snapshot(Context());
+            second.Ok.Should().BeTrue(second.Error);
+        }
+        finally
+        {
+            File.SetAttributes(obj, FileAttributes.Normal); // иначе Dispose не удалит папку
+        }
+    }
+
+    [Fact]
     public void Снимок_СобираетАрхивСМанифестомИСекретамиОтдельно()
     {
         var result = BackupCore.Snapshot(Context());

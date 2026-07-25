@@ -28,6 +28,11 @@ export default defineConfig({
         './design-kit': './src/lib/design-kit/index.ts',
       },
       remotes: {},
+      // dts (#TYPE-001): дефолтный tsConfigPath плагина — корневой tsconfig.json,
+      // это solution-файл (только references, без compilerOptions) без `jsx` —
+      // генератор типов валился на TS6142 на каждом реэкспорте компонента кита
+      // (.tsx). tsconfig.app.json — тот же конфиг, что реально собирает src/.
+      dts: { tsConfigPath: './tsconfig.app.json' },
       shared: {
         // eager: react/react-dom бандлятся в основной синхронный chunk, а не в
         // async loadShare-обёртку. Без eager MF выносит shared react в отдельный

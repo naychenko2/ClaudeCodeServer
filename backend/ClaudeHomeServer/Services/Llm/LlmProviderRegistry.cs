@@ -61,6 +61,26 @@ public class LlmProviderRegistry
     public IEnumerable<string> GetProviderProjectsDirs() =>
         _providers.Keys.Select(k => Path.Combine(_profilesDir, k, "projects"));
 
+    // Все корни профилей CLI, где может лежать транскрипт: пользовательский ~/.claude плюс
+    // РЕАЛЬНО существующие подпапки claude-profiles. Именно с диска, а не по ключам конфига:
+    // профили подписок пула зовутся sub-{key} и в _providers их нет, а профиль провайдера
+    // создается лениво. Нужен уборке транскриптов при удалении чата (TranscriptMigrator.
+    // DeleteEverywhere) — там важно обойти ВСЕ профили, потому что переезды между ними
+    // (TryMigrate) оставляют копии. Не путать с GetProviderProjectsDirs: та отдает готовые
+    // …/projects для белого списка WorkflowAgentParser и sub-* не покрывает.
+    public IEnumerable<string> GetAllConfigRoots()
+    {
+        yield return _userProfileDir;
+        string[] profiles;
+        try { profiles = Directory.Exists(_profilesDir) ? Directory.GetDirectories(_profilesDir) : []; }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[LlmProviderRegistry] Не удалось перечислить профили CLI: {ex.Message}");
+            yield break;
+        }
+        foreach (var dir in profiles) yield return dir;
+    }
+
     public IEnumerable<LlmProviderConfig> Enabled => _providers.Values.Where(p => p.Enabled);
 
     public LlmProviderConfig? GetByKey(string? key) =>

@@ -1,12 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ChevronDown, RotateCcw, Sparkles, Gift, Cpu, Zap, Scale } from 'lucide-react';
-import { Modal, IconButton } from './ui';
+import { Modal, IconButton, Toggle } from './ui';
 import { ModelPicker } from './ModelPicker';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { api } from '../lib/api';
 import { C, FONT, FS, R, SHADOW, Z, MODAL_W } from '../lib/design';
 import { useModels, modelLabel, type ModelOption } from '../lib/models';
-import type { OllamaUsageInfo, OllamaActionInfo } from '../types';
+import type { OllamaUsageInfo, OllamaActionInfo, AppSettings } from '../types';
 
 interface Props {
   onClose: () => void;
@@ -26,6 +26,10 @@ const groupHeaderStyle: React.CSSProperties = {
   fontFamily: FONT.sans, fontSize: FS.xs, fontWeight: 700, color: C.textMuted,
   textTransform: 'uppercase', letterSpacing: '0.06em', margin: '18px 2px 6px',
 };
+
+// Ключ действия утреннего брифа (LocalActionCatalog.DailyBriefing) — у него, помимо выбора
+// исполнителя, есть тумблер «присылать ли по расписанию» (AppSettings.DailyBriefingEnabled).
+const BRIEFING_KEY = 'daily-briefing';
 
 // Пресеты автоподбора: сервер проставляет исполнителя всем действиям по единому правилу.
 type PresetKey = 'recommended' | 'balanced' | 'free' | 'local';
@@ -50,12 +54,38 @@ export function BackgroundTasksModal({ onClose }: Props) {
   const [preset, setPreset] = useState<PresetKey | null>(null);
   const [error, setError] = useState<string | null>(null);
   const models = useModels();
+  // Настройки инстанса (AppSettings): отсюда берётся тумблер «присылать утренний бриф».
+  // Настройка общая, как и маршруты действий, и правится тем же админом.
+  const [settings, setSettings] = useState<AppSettings | null>(null);
+  const [briefingBusy, setBriefingBusy] = useState(false);
+  const briefingOn = settings?.dailyBriefingEnabled ?? true;
+
+  // Оптимистично: применяем сразу, при ошибке возвращаем прежнее значение. Шлём ТОЛЬКО своё
+  // поле — PUT /api/settings патчит присланное, поэтому наш (возможно устаревший) снимок
+  // не откатывает соседние настройки, изменённые тем временем с другого экрана.
+  function toggleBriefing(v: boolean) {
+    const prev = settings;
+    setBriefingBusy(true);
+    setError(null);
+    setSettings(s => s ? { ...s, dailyBriefingEnabled: v } : s);
+    api.settings.save({ dailyBriefingEnabled: v })
+      .then(saved => setSettings(saved))
+      .catch(e => {
+        setSettings(prev);
+        setError(e instanceof Error ? e.message : 'Не удалось сохранить');
+      })
+      .finally(() => setBriefingBusy(false));
+  }
 
   useEffect(() => {
     let cancelled = false;
     api.usage.get()
       .then(d => { if (!cancelled) setInfo(d.ollama ?? { enabled: false, actions: [] }); })
       .catch(() => { if (!cancelled) setInfo({ enabled: false, actions: [] }); });
+    // Настройки инстанса грузим отдельно: их отсутствие не должно прятать список действий
+    api.settings.get()
+      .then(s => { if (!cancelled) setSettings(s); })
+      .catch(() => { /* тумблер останется во включённом положении по умолчанию */ });
     return () => { cancelled = true; };
   }, []);
 
@@ -199,6 +229,10 @@ export function BackgroundTasksModal({ onClose }: Props) {
                     models={models}
                     onPick={route => pick(a, route)}
                     onReset={() => reset(a)}
+                    enabled={a.key === BRIEFING_KEY ? briefingOn : undefined}
+                    onToggleEnabled={a.key === BRIEFING_KEY ? toggleBriefing : undefined}
+                    toggleBusy={a.key === BRIEFING_KEY && briefingBusy}
+                    toggleTitle="Присылать утренний бриф по расписанию. Собрать вручную можно и при выключенном"
                   />
                 ))}
               </div>
@@ -251,7 +285,10 @@ const PANEL_MAX_H = 340;
 // Одна строка действия: название (+ кнопка сброса, если переопределено админом) слева,
 // кастомный дропдаун-исполнитель справа — триггер-кнопка + всплывающая панель с карточками
 // «Локальная»/«Claude» и полным ModelPicker (карточки моделей с описаниями, как в чате).
-function ActionRow({ action: a, first, busy, ollamaModel, models, onPick, onReset }: {
+// У отдельных действий (утренний бриф) перед дропдауном есть тумблер «выполнять ли вообще» —
+// он приходит пропсами enabled/onToggleEnabled; остальные строки его не показывают.
+function ActionRow({ action: a, first, busy, ollamaModel, models, onPick, onReset,
+  enabled, onToggleEnabled, toggleBusy, toggleTitle }: {
   action: OllamaActionInfo;
   first: boolean;
   busy: boolean;
@@ -259,6 +296,10 @@ function ActionRow({ action: a, first, busy, ollamaModel, models, onPick, onRese
   models: ModelOption[];
   onPick: (route: string) => void;
   onReset: () => void;
+  enabled?: boolean;
+  onToggleEnabled?: (v: boolean) => void;
+  toggleBusy?: boolean;
+  toggleTitle?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ top: number; left: number; maxHeight: number } | null>(null);
@@ -345,7 +386,19 @@ function ActionRow({ action: a, first, busy, ollamaModel, models, onPick, onRese
         )}
       </div>
 
-      <div ref={rootRef} style={{ position: 'relative', flexShrink: 0, display: 'flex', alignItems: 'center' }}>
+      <div ref={rootRef} style={{ position: 'relative', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+        {onToggleEnabled && (
+          <span style={{ display: 'inline-flex' }} title={toggleTitle}>
+            <Toggle
+              checked={enabled ?? true}
+              onChange={onToggleEnabled}
+              disabled={toggleBusy}
+              ariaLabel={`${a.title} — выполнять по расписанию`}
+              width={34}
+              height={20}
+            />
+          </span>
+        )}
         <button
           ref={triggerRef}
           type="button"

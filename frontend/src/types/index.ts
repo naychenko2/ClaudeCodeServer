@@ -226,6 +226,8 @@ export type ClaudeBilling = 'subscription' | 'api';
 export interface AppSettings {
   defaultProjectsPath: string;
   claudeBilling?: ClaudeBilling;
+  // Присылать ли утренний бриф по расписанию (настройка инстанса, тумблер в «Фоновых задачах»)
+  dailyBriefingEnabled?: boolean;
 }
 
 // Определение фич-флага из реестра (приходит с бэка для рендера тумблеров)

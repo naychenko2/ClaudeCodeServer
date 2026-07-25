@@ -72,6 +72,39 @@ if ($runnerActive) {
     Write-Host '[0/9] Runner запущен, но -IgnoreRunner задан: свой трей и автозапуск пропускаем' -ForegroundColor DarkYellow
 }
 
+# --- 0.5 Бэкап данных перед выкаткой ---
+# Самая дешёвая страховка: снимок делается секунды и весит пару мегабайт, а откатываться
+# после неудачного деплоя больше нечем. Снимаем ДО остановки сервера — при живом сервере
+# это безопасно (json-сторы атомарны, SQLite снимается online-backup API).
+# Best-effort: упавший бэкап не должен блокировать деплой, но молчать о нём тоже нельзя.
+$serverExe = Join-Path $PublishDir 'ClaudeHomeServer.exe'
+if (Test-Path $serverExe) {
+    Write-Host '[0.5/9] Бэкап данных перед деплоем...' -ForegroundColor Yellow
+    try {
+        # Окружение процесс унаследует от скрипта: $env:ASPNETCORE_ENVIRONMENT выставлен
+        # выше (строка 45). Это важно — от него зависит, какой appsettings.{Environment}.json
+        # прочитается (DataPath и пути бэкапа) и какой боевой конфиг попадёт в архив
+        # секретов. Параметр -Environment у Start-Process тут неприменим: он появился
+        # только в PowerShell 7, а скрипт заявлен как #Requires -Version 5.1.
+        $backup = Start-Process -FilePath $serverExe -ArgumentList '--backup' `
+            -WorkingDirectory $PublishDir -NoNewWindow -PassThru
+        if ($backup.WaitForExit(120000)) {
+            if ($backup.ExitCode -eq 0) { Write-Host '  готово' -ForegroundColor DarkGray }
+            else { Write-Host "  бэкап вернул код $($backup.ExitCode) — продолжаем деплой" -ForegroundColor DarkYellow }
+        } else {
+            # Kill() без параметров: перегрузка Kill($true) — это .NET Core / PowerShell 7,
+            # а скрипт живёт на Windows PowerShell 5.1 (.NET Framework), где её нет.
+            # Дочерних процессов у --backup всё равно не бывает.
+            try { $backup.Kill() } catch { }
+            Write-Host '  бэкап не уложился в 2 минуты — прерван, продолжаем деплой' -ForegroundColor DarkYellow
+        }
+    } catch {
+        Write-Host "  бэкап не выполнен: $($_.Exception.Message)" -ForegroundColor DarkYellow
+    }
+} else {
+    Write-Host '[0.5/9] Бэкап пропущен: первый деплой (сервер ещё не опубликован)' -ForegroundColor DarkGray
+}
+
 # --- 1. Остановка запущенных процессов (снять локи файлов ДО публикации) ---
 # Трей глушим ПЕРВЫМ, чтобы его супервизор не перезапустил сервер, пока мы его убиваем.
 Write-Host '[1/9] Остановка запущенных процессов...' -ForegroundColor Yellow

@@ -331,12 +331,16 @@ public class ClaudeSubscriptionPoolTests : IDisposable
             pool.Pick("opus").Should().Be("full");
     }
 
-    [Fact]
-    public void Pick_ПолныйIdOpus_ТожеФильтрует()
+    // Фильтр по Opus-тиру идёт по подстроке "opus", поэтому не зависит от схемы версии
+    // в id (claude-opus-4-8 против claude-opus-5) — проверяем обе.
+    [Theory]
+    [InlineData("claude-opus-4-8[1m]")]
+    [InlineData("claude-opus-5")]
+    public void Pick_ПолныйIdOpus_ТожеФильтрует(string model)
     {
         var pool = new ClaudeSubscriptionPool(ConfigWithProPlan("pro", "full"));
         for (var i = 0; i < 20; i++)
-            pool.Pick("claude-opus-4-8[1m]").Should().Be("full");
+            pool.Pick(model).Should().Be("full");
     }
 
     [Fact]

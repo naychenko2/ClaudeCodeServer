@@ -1,16 +1,25 @@
 import { useState } from 'react';
 import { ChevronRight } from 'lucide-react';
+import { useDraggable, useDroppable } from '@dnd-kit/core';
 import { C, R, FONT, FS } from '../lib/design';
 import type { ChatTreeRowData } from '../lib/chatTree';
+import { useChatDrag } from './ChatGroupingDnd';
 
 // === Строка дерева чатов: отступ + connector-линии + chevron вокруг ChatCard ===
 // Линии и контрол рисуются здесь, а НЕ в карточке: у ChatCard overflow:hidden,
 // он обрезал бы вертикали. Сама карточка передаётся как children без изменений.
 // Геометрия — docs/mockups/chat-list-tree-spec.md: одна формула оси spineX на всех
 // уровнях, глубина отступа клампится на 6.
+//
+// Строка одновременно источник и цель перетаскивания (ручная группировка —
+// ChatGroupingDnd). Вне DnD-провайдера useChatDrag отдаёт нейтральное состояние,
+// поэтому строка рендерится и без него (flat-режим).
 
 const STEP = 14;
 const MAX_DEPTH = 6;
+// Зазор между карточками — marginBottom у ChatCard. Держим синхронно: по нему
+// обрезается рамка подсветки drop-цели, иначе она вылезает на соседнюю строку.
+const CARD_GAP = 5;
 
 interface Props {
   row: ChatTreeRowData;
@@ -22,6 +31,20 @@ interface Props {
 export function ChatTreeRow({ row, isMobile, onToggleCollapse, children }: Props) {
   const [chevronHover, setChevronHover] = useState(false);
 
+  const { draggingId, isValidTarget } = useChatDrag();
+  const chatId = row.chat.id;
+  // attributes от dnd-kit намеренно не применяем: они вешают на обёртку role="button"
+  // и второй таб-стоп поверх кнопок карточки. Клавиатурный сенсор не подключён.
+  const { setNodeRef: setDragRef, listeners, transform, isDragging } = useDraggable({ id: chatId });
+  // Потомок перетаскиваемого чата целью быть не может — вложение замкнуло бы кольцо
+  const { setNodeRef: setDropRef, isOver } = useDroppable({
+    id: chatId,
+    disabled: draggingId !== null && !isValidTarget(chatId),
+  });
+  const setRefs = (node: HTMLElement | null) => { setDragRef(node); setDropRef(node); };
+  // Наведение на самого себя означает «вынести из группы» — рамкой «вложить сюда» не мигаем
+  const highlight = isOver && !isDragging;
+
   const GUTTER = isMobile ? 28 : 20;
   const elbowY = isMobile ? 23 : 20;
   const offset = (d: number) => Math.min(d, MAX_DEPTH) * STEP;
@@ -32,14 +55,37 @@ export function ChatTreeRow({ row, isMobile, onToggleCollapse, children }: Props
   const lineColor = (accent: boolean) => (accent ? C.accent : C.divider);
 
   return (
-    <div style={{
-      position: 'relative',
-      // flex-колонка, чтобы marginBottom карточки не схлопывался наружу —
-      // иначе вертикали рвались бы в зазорах между строками
-      display: 'flex',
-      flexDirection: 'column',
-      paddingLeft: cardLeftX(depth),
-    }}>
+    <div
+      ref={setRefs}
+      {...listeners}
+      style={{
+        position: 'relative',
+        // flex-колонка, чтобы marginBottom карточки не схлопывался наружу —
+        // иначе вертикали рвались бы в зазорах между строками
+        display: 'flex',
+        flexDirection: 'column',
+        paddingLeft: cardLeftX(depth),
+        // Карточка едет за курсором сама, без DragOverlay: строка уже позиционирована
+        // относительно списка, дублировать её в портале незачем
+        transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : undefined,
+        opacity: isDragging ? 0.5 : 1,
+        zIndex: isDragging ? 1 : undefined,
+        // Палец на строке = long-press-перетаскивание (TouchSensor), но вертикальный
+        // скролл списка должен оставаться за браузером
+        touchAction: 'pan-y',
+      }}
+    >
+      {/* Подсветка цели: рамка ровно по карточке, а не по всей строке с gutter.
+          Радиус и нижний отступ повторяют ChatCard (радиус на мобиле шире, зазор
+          между карточками — её marginBottom), иначе виден двойной контур. */}
+      {highlight && (
+        <div aria-hidden style={{
+          position: 'absolute', left: cardLeftX(depth), right: 0, top: 0, bottom: CARD_GAP,
+          border: `2px solid ${C.accent}`, borderRadius: isMobile ? 16 : R.xl,
+          pointerEvents: 'none', zIndex: 3,
+        }} />
+      )}
+
       {/* Сквозные вертикали предковых уровней (у предка есть следующие сиблинги) */}
       {row.ancestors.map((a, lvl) => a.show && (
         <div key={lvl} aria-hidden style={{
@@ -83,6 +129,10 @@ export function ChatTreeRow({ row, isMobile, onToggleCollapse, children }: Props
       {hasChildren && (
         <button
           onClick={e => { e.stopPropagation(); onToggleCollapse(row.chat.id); }}
+          // Сворачивание — не перетаскивание: гасим нажатие до сенсоров dnd-kit,
+          // иначе тяга за chevron уносила бы всю ветку
+          onMouseDown={e => e.stopPropagation()}
+          onTouchStart={e => e.stopPropagation()}
           onMouseEnter={() => setChevronHover(true)}
           onMouseLeave={() => setChevronHover(false)}
           title={collapsed ? 'Развернуть вложенные чаты' : 'Свернуть вложенные чаты'}

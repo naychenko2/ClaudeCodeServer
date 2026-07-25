@@ -123,11 +123,25 @@ public class Session
     // в TaskItem.SourceSessionId, здесь только вычисление.
     public static Func<string, string?>? TaskSourceSessionResolver { get; set; }
 
-    // Родительский чат сессии-исполнителя: чат, в котором была создана её задача
-    // (TaskId → Task.SourceSessionId). Вычисляется, не хранится — как Origin.
+    // Ручная группировка (drag-and-drop в списке чатов): родитель, назначенный пользователем.
+    // Побеждает авто-связь по задаче. Пара с ParentDetached описывает три состояния, поэтому
+    // менять их обоих можно ТОЛЬКО через SessionManager.SetParent — он держит инвариант
+    // (взаимоисключающие поля, проверка цикла и скоупа).
+    public string? ParentOverrideId { get; set; }
+    // Чат явно вынесен в корень пользователем: гасит авто-связь по задаче. Отдельный флаг,
+    // а не пустая строка в ParentOverrideId — «не задано» и «задано как корень» это разные
+    // состояния, и sentinel-строка их бы склеила.
+    public bool ParentDetached { get; set; }
+
+    // Родительский чат: ручная группировка, иначе — чат, в котором была создана задача
+    // сессии-исполнителя (TaskId → Task.SourceSessionId). Вычисляется, не хранится — как Origin.
     // null — корневой чат либо задача удалена (чат всплывает в корень — принято осознанно).
+    // TaskId ручная группировка не трогает: связь чата с задачей (плашка, артефакты,
+    // TaskDelegationDepth) живёт своей жизнью и перетаскиванием не рвётся.
     public string? ParentSessionId =>
-        TaskId != null ? TaskSourceSessionResolver?.Invoke(TaskId) : null;
+        ParentOverrideId is not null ? ParentOverrideId
+        : ParentDetached ? null
+        : TaskId != null ? TaskSourceSessionResolver?.Invoke(TaskId) : null;
 
     // Резолвер «задача → глубина делегирования»: назначает TaskManager при старте (как
     // TaskSourceSessionResolver). Истина живёт в TaskItem.DelegationDepth.

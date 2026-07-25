@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildChatTreeRows } from '../chatTree';
+import { buildChatTreeRows, collectDescendants } from '../chatTree';
 import type { Session } from '../../types';
 
 // Фабрика минимальной сессии: важны только id/parentSessionId/updatedAt/origin/isPinned
@@ -160,5 +160,38 @@ describe('buildChatTreeRows', () => {
     // и ось a (x — единственный ребёнок a, продолжения нет)
     expect(by.get('y')!.depth).toBe(3);
     expect(by.get('y')!.ancestors.map(l => l.show)).toEqual([true, false]);
+  });
+});
+
+// Запретные цели перетаскивания: вложить чат в собственного потомка = замкнуть кольцо
+describe('collectDescendants', () => {
+  it('собирает всё поддерево рекурсивно, себя не включает', () => {
+    const chats = [
+      mk('root'),
+      mk('a', { parentSessionId: 'root' }),
+      mk('b', { parentSessionId: 'a' }),
+      mk('c', { parentSessionId: 'b' }),
+      mk('other'),
+    ];
+
+    expect(collectDescendants(chats, 'root')).toEqual(new Set(['a', 'b', 'c']));
+    expect(collectDescendants(chats, 'b')).toEqual(new Set(['c']));
+    expect(collectDescendants(chats, 'c')).toEqual(new Set());
+    expect(collectDescendants(chats, 'other')).toEqual(new Set());
+  });
+
+  it('не зацикливается на кольце, уже лежащем в данных', () => {
+    const chats = [
+      mk('a', { parentSessionId: 'b' }),
+      mk('b', { parentSessionId: 'a' }),
+    ];
+
+    expect(collectDescendants(chats, 'a')).toEqual(new Set(['b']));
+  });
+
+  it('игнорирует ссылку чата на самого себя', () => {
+    const chats = [mk('a', { parentSessionId: 'a' }), mk('b', { parentSessionId: 'a' })];
+
+    expect(collectDescendants(chats, 'a')).toEqual(new Set(['b']));
   });
 });

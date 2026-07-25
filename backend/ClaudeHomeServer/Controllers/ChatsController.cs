@@ -95,6 +95,20 @@ public class ChatsController(SessionManager sessions, FileService files) : Contr
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
     }
 
+    // Ручная группировка чатов (drag-and-drop в списке): вложить чат в родительский либо
+    // вынести в корень (parentId == null). Один эндпоинт на оба списка — GetOwned внутри
+    // SetParent резолвит и проектную сессию (как /loop), поэтому дубля в SessionsController нет.
+    [HttpPut("{id}/parent")]
+    public IActionResult SetParent(string id, [FromBody] SetParentRequest req)
+    {
+        try
+        {
+            var updated = sessions.SetParent(id, req.ParentId, UserId);
+            return updated is null ? NotFound() : Ok(updated);
+        }
+        catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
+    }
+
     // Назначить/снять собеседника у чата ДО первого хода (селектор в пустом чате):
     // персону (personaId) или .md-агента (agentName) — взаимоисключающе; оба пустые = снять.
     // Начатую сессию менять нельзя (клиент делает форк).
@@ -229,6 +243,9 @@ public record CreateChatRequest(string Mode = "auto", string? ResumeSessionId = 
 // ExpiresAfterMinutes: -1 (поле не прислано) — не менять; null — сделать чат постоянным;
 // N > 0 — временный, авто-удаление через N минут после последней активности
 public record UpdateChatRequest(string? Name = null, string? Model = null, string? Effort = null, bool? Pinned = null, int? ExpiresAfterMinutes = -1);
+
+// ParentId: null — вынести чат в корень списка; иначе id чата-родителя
+public record SetParentRequest(string? ParentId = null);
 
 public record SetPersonaRequest(string? PersonaId = null, string? AgentName = null);
 

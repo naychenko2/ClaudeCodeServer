@@ -824,6 +824,14 @@ export const api = {
         method: 'PUT',
         body: JSON.stringify(data),
       }),
+    // Ручная группировка чатов (drag-and-drop в списке): вложить в родительский чат
+    // либо вынести в корень (parentId: null). Один эндпоинт на оба списка —
+    // работает и для проектных сессий, и для чатов вне проектов
+    setParent: (id: string, parentId: string | null) =>
+      request<Session>(`/chats/${encodeURIComponent(id)}/parent`, {
+        method: 'PUT',
+        body: JSON.stringify({ parentId }),
+      }),
     // Обновить название чата по текущей переписке (AI-хаб, действие chat.retitle)
     retitle: (id: string) =>
       request<Session>(`/chats/${encodeURIComponent(id)}/retitle`, { method: 'POST' }),

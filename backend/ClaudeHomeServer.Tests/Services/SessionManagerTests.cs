@@ -503,6 +503,167 @@ public class SessionManagerTests : IDisposable
         _sut.SetExpiry("nonexistent", 60).Should().BeNull();
     }
 
+    // --- SetParent: ручная группировка чатов (drag-and-drop) ---
+
+    [Fact]
+    public async Task SetParent_НазначаетРодителя()
+    {
+        var dir = MkProjectDir("par");
+        var project = _projectManager.Create("PAR", dir, TestUserId, TestUsername);
+        var parent = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        var child = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+
+        var updated = _sut.SetParent(child.Id, parent.Id, TestUserId);
+
+        updated!.ParentSessionId.Should().Be(parent.Id);
+        _sut.GetById(child.Id)!.ParentSessionId.Should().Be(parent.Id, "связь персистится");
+    }
+
+    [Fact]
+    public async Task SetParent_НеМеняетUpdatedAt()
+    {
+        // Корни сортируются по активности поддерева — перетаскивание не должно
+        // выкидывать чат наверх списка, будто в нём был ход
+        var dir = MkProjectDir("par-upd");
+        var project = _projectManager.Create("PARU", dir, TestUserId, TestUsername);
+        var parent = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        var child = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        var before = child.UpdatedAt;
+
+        _sut.SetParent(child.Id, parent.Id, TestUserId);
+
+        _sut.GetById(child.Id)!.UpdatedAt.Should().Be(before);
+    }
+
+    [Fact]
+    public async Task SetParent_Null_ВыноситВКорень()
+    {
+        var dir = MkProjectDir("par-root");
+        var project = _projectManager.Create("PARR", dir, TestUserId, TestUsername);
+        var parent = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        var child = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        _sut.SetParent(child.Id, parent.Id, TestUserId);
+
+        var updated = _sut.SetParent(child.Id, null, TestUserId);
+
+        updated!.ParentSessionId.Should().BeNull();
+        updated.ParentOverrideId.Should().BeNull();
+        updated.ParentDetached.Should().BeFalse("у обычного чата гасить нечего — флаг не оседает");
+    }
+
+    [Fact]
+    public async Task SetParent_ПеребиваетАвтоСвязьПоЗадаче()
+    {
+        var dir = MkProjectDir("par-task");
+        var project = _projectManager.Create("PART", dir, TestUserId, TestUsername);
+        var autoParent = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        var manualParent = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        var child = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, taskExecution: true, taskId: "t-1");
+
+        var prev = Session.TaskSourceSessionResolver;
+        try
+        {
+            Session.TaskSourceSessionResolver = _ => autoParent.Id;
+            _sut.GetById(child.Id)!.ParentSessionId.Should().Be(autoParent.Id, "исходно — авто-связь");
+
+            var updated = _sut.SetParent(child.Id, manualParent.Id, TestUserId);
+
+            updated!.ParentSessionId.Should().Be(manualParent.Id, "ручной родитель побеждает");
+            updated.TaskId.Should().Be("t-1", "связь с задачей перетаскиванием не рвётся");
+            updated.Origin.Should().Be(ChatOrigin.Task);
+        }
+        finally { Session.TaskSourceSessionResolver = prev; }
+    }
+
+    [Fact]
+    public async Task SetParent_Null_ГаситАвтоСвязьУЧатаЗадачи()
+    {
+        var dir = MkProjectDir("par-detach");
+        var project = _projectManager.Create("PARD", dir, TestUserId, TestUsername);
+        var autoParent = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        var child = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, taskExecution: true, taskId: "t-2");
+
+        var prev = Session.TaskSourceSessionResolver;
+        try
+        {
+            Session.TaskSourceSessionResolver = _ => autoParent.Id;
+
+            var updated = _sut.SetParent(child.Id, null, TestUserId);
+
+            updated!.ParentDetached.Should().BeTrue();
+            updated.ParentSessionId.Should().BeNull("явный корень перебивает авто-связь");
+        }
+        finally { Session.TaskSourceSessionResolver = prev; }
+    }
+
+    [Fact]
+    public async Task SetParent_СамВСебя_Отклоняется()
+    {
+        var dir = MkProjectDir("par-self");
+        var project = _projectManager.Create("PARS", dir, TestUserId, TestUsername);
+        var chat = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+
+        var act = () => _sut.SetParent(chat.Id, chat.Id, TestUserId);
+
+        act.Should().Throw<InvalidOperationException>();
+    }
+
+    [Fact]
+    public async Task SetParent_ВСвоегоПотомка_Отклоняется()
+    {
+        // A → B → C; попытка сделать A ребёнком C замкнула бы кольцо
+        var dir = MkProjectDir("par-cycle");
+        var project = _projectManager.Create("PARC", dir, TestUserId, TestUsername);
+        var a = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        var b = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        var c = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        _sut.SetParent(b.Id, a.Id, TestUserId);
+        _sut.SetParent(c.Id, b.Id, TestUserId);
+
+        var act = () => _sut.SetParent(a.Id, c.Id, TestUserId);
+
+        act.Should().Throw<InvalidOperationException>();
+        _sut.GetById(a.Id)!.ParentSessionId.Should().BeNull("отклонённая операция ничего не записала");
+    }
+
+    [Fact]
+    public async Task SetParent_ЧатИзДругогоПроекта_Отклоняется()
+    {
+        // Списки рендерятся на разных экранах: ребёнок не нашёл бы родителя в своей
+        // выборке и молча всплыл бы в корень
+        var d1 = MkProjectDir("par-x1"); var p1 = _projectManager.Create("PX1", d1, TestUserId, TestUsername);
+        var d2 = MkProjectDir("par-x2"); var p2 = _projectManager.Create("PX2", d2, TestUserId, TestUsername);
+        var child = await _sut.CreateAsync(p1.Id, ClaudeMode.Auto);
+        var parent = await _sut.CreateAsync(p2.Id, ClaudeMode.Auto);
+
+        var act = () => _sut.SetParent(child.Id, parent.Id, TestUserId);
+
+        act.Should().Throw<InvalidOperationException>();
+    }
+
+    [Fact]
+    public async Task SetParent_ЧужойЧат_НеНайден()
+    {
+        var stranger = _userStore.Add("stranger-parent", "pw-123456", "user");
+        var mineDir = MkProjectDir("par-mine");
+        var mine = _projectManager.Create("PMINE", mineDir, TestUserId, TestUsername);
+        var theirsDir = MkProjectDir("par-theirs");
+        var theirs = _projectManager.Create("PTHEIRS", theirsDir, stranger.Id, stranger.Username);
+        var child = await _sut.CreateAsync(mine.Id, ClaudeMode.Auto);
+        var foreign = await _sut.CreateAsync(theirs.Id, ClaudeMode.Auto);
+
+        // Чужой родитель — 400, чужой ребёнок — 404 (сессии не видно вовсе)
+        var setForeignParent = () => _sut.SetParent(child.Id, foreign.Id, TestUserId);
+        setForeignParent.Should().Throw<InvalidOperationException>();
+        _sut.SetParent(foreign.Id, child.Id, TestUserId).Should().BeNull();
+    }
+
+    [Fact]
+    public void SetParent_НесуществующийЧат_ReturnsNull()
+    {
+        _sut.SetParent("nonexistent", null, TestUserId).Should().BeNull();
+    }
+
     // --- Групповые чаты ---
 
     // Пользователь + проект + N проектных персон. Ведущая — проектная, чтобы

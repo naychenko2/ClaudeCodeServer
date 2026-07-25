@@ -110,6 +110,32 @@ export interface ChatTreeResult {
 const activity = (c: Session) => new Date(c.updatedAt).getTime();
 
 /**
+ * Все потомки чата (без него самого) — запретные цели при перетаскивании: вложить
+ * чат в собственного потомка значило бы замкнуть кольцо. Бэкенд это тоже отклоняет
+ * (SessionManager.SetParent), здесь — чтобы drop-зона просто не подсвечивалась.
+ * out-набор защищает от цикла, уже лежащего в данных.
+ */
+export function collectDescendants(chats: Session[], rootId: string): Set<string> {
+  const childrenOf = new Map<string, string[]>();
+  for (const c of chats) {
+    const pid = c.parentSessionId;
+    if (!pid || pid === c.id) continue;
+    const bucket = childrenOf.get(pid);
+    if (bucket) bucket.push(c.id); else childrenOf.set(pid, [c.id]);
+  }
+  const out = new Set<string>();
+  const walk = (id: string) => {
+    for (const kid of childrenOf.get(id) ?? []) {
+      if (out.has(kid) || kid === rootId) continue;
+      out.add(kid);
+      walk(kid);
+    }
+  };
+  walk(rootId);
+  return out;
+}
+
+/**
  * Дерево чатов из плоского массива по parentSessionId, рекурсивно на любую глубину.
  * Фильтры применяются только к КОРНЯМ (isRootVisible): видимый родитель всегда тянет
  * всех своих детей; у скрытого корня дети всплывают кандидатами в корни (сирота —

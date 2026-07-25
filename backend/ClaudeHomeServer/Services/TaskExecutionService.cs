@@ -424,6 +424,18 @@ public class TaskExecutionService
     // (конкретная сессия начинается заново каждый раз) — без него уходили бы в fallback
     // НОВЫЙ чат + платный ход на каждый повтор (30/месяц у ежедневной); ограничиваемся уже
     // отправленным L0-тостом (NotifyDelegatorAsync).
+    //
+    // Сам АДРЕСАТ доклада берётся не отсюда, а из эффективного родителя чата-исполнителя
+    // (ReportToDelegatorAsync) — ручная группировка чатов может увести доклад в другой чат
+    // либо погасить его вовсе. Здесь SourceSessionId работает только как признак «задача
+    // вообще делегирована из чата».
+    // Куда докладывать: эффективный родитель чата-исполнителя — он учитывает ручную группировку
+    // (ParentOverrideId побеждает связь по задаче, ParentDetached гасит её вовсе). Чата-исполнителя
+    // нет (задача закрыта без запуска) — остаётся сырой SourceSessionId. null — докладывать некуда.
+    // internal — для юнит-тестов.
+    internal static string? ResolveReportTarget(Session? executorSession, string? sourceSessionId) =>
+        executorSession is not null ? executorSession.ParentSessionId : sourceSessionId;
+
     internal static bool ShouldReportToDelegator(TaskItem task, Persona? executor) =>
         executor is not null && task.CreatedByPersonaId is not null &&
         task.CreatedByPersonaId != executor.Id && task.SourceSessionId is not null;
@@ -454,11 +466,23 @@ public class TaskExecutionService
             return;
         }
 
+        // Цель доклада — ЭФФЕКТИВНЫЙ родитель чата-исполнителя, а не сырой SourceSessionId:
+        // ручная группировка (перетаскивание в списке чатов) побеждает связь по задаче, а явный
+        // вынос в корень её гасит — «вынес из группы» значит «не докладывай туда». Чата-исполнителя
+        // нет (задача закрыта без запуска) — остаётся SourceSessionId, как было.
+        var executorSession = task.LinkedSessionId is not null ? _sessions.GetById(task.LinkedSessionId) : null;
+        var targetId = ResolveReportTarget(executorSession, task.SourceSessionId);
+        if (targetId is null)
+        {
+            _log.LogInformation("Доклад Z задачи {TaskId}: пропуск — у чата-исполнителя нет родителя (вынесен в корень)", task.Id);
+            return;
+        }
+
         // Владелец S — как в NotifyDelegatorAsync: чужая/неизвестная сессия не годится
-        var sourceSession = _sessions.GetById(task.SourceSessionId!);
+        var sourceSession = _sessions.GetById(targetId);
         if (sourceSession is not null && _sessions.ResolveOwnerId(sourceSession) != task.OwnerId)
         {
-            _log.LogInformation("Доклад Z задачи {TaskId}: исходный чат {SessionId} чужой — fallback в новый чат", task.Id, task.SourceSessionId);
+            _log.LogInformation("Доклад Z задачи {TaskId}: родительский чат {SessionId} чужой — fallback в новый чат", task.Id, targetId);
             sourceSession = null;
         }
 

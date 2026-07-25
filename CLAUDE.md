@@ -94,7 +94,11 @@ Claude Design проект: `52adb1f7-312b-4f25-8c47-2bccfca9df94`
 
 - Цвета — только токены `C.*` из [design.ts](frontend/src/lib/design.ts) (CSS-переменные,
   тёмная тема бесплатно). Сырой hex в `.tsx` — дефект; значения тем живут в
-  [theme.css](frontend/src/lib/theme.css) (новый цвет — в ОБЕ темы).
+  [theme.css](frontend/src/lib/theme.css) (новый цвет — в ОБЕ темы). Текст на заливке
+  токеном — `C.onAccent`, на подложке вне темы (палитра, фото, лайтбокс) — `C.onDark`.
+- **Проверяется линтом:** `cd frontend; npm run lint:design` обязан быть зелёным (правило
+  `design/no-raw-color`; исключения — список `RAW_COLOR_ALLOWED` в eslint.config.js либо
+  построчный `eslint-disable-next-line` с причиной).
 - Размеры — из шкал: `FS` (шрифты), `SP` (отступы), `R` (радиусы), `SHADOW`, `Z`, `MODAL_W`.
 - Контролы — только из `frontend/src/components/ui/` (Button, Modal, Field, Menu, Toggle,
   Island/IslandScaffold…) плюс общие Toolbar/EmptyState. Самодельные кнопки/модалки из

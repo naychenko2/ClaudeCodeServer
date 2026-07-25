@@ -95,10 +95,12 @@ function describeError(err) {
   const status = err?.status;
   if (!status) return String(err?.message ?? err);
   const body = err.bodyText ? ` ${err.bodyText}` : '';
+  // 409/429 — «занято» (в т.ч. переполненная очередь сообщений занятого чата). Проверяем ДО
+  // общего 5xx: совет «повтори через несколько секунд» гнал бы модель спамить в эту очередь.
+  if (status === 409 || status === 429)
+    return `Сейчас занято (HTTP ${status}).${body} Повтори позже, не чаще раза в 30 секунд.`;
   if (RETRIABLE_STATUS.has(status))
     return `Временный сбой на сервере (HTTP ${status}).${body} Это не запрет — повтори вызов через несколько секунд.`;
-  if (status === 409)
-    return `Сейчас занято (HTTP 409).${body} Повтори позже, не чаще раза в 30 секунд.`;
   return `Отказ (HTTP ${status}).${body} Повторять тот же вызов бессмысленно — само условие не изменится.`;
 }
 

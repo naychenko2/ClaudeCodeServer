@@ -17,6 +17,7 @@
       powershell -ExecutionPolicy Bypass -File deploy80.ps1 -Console        # старый режим: сервер прямым процессом (с консолью)
       powershell -ExecutionPolicy Bypass -File deploy80.ps1 -NoAutostart    # не трогать ярлык автозапуска
       powershell -ExecutionPolicy Bypass -File deploy80.ps1 -IgnoreRunner   # деплоить при живом Runner (свой трей не поднимать)
+      powershell -ExecutionPolicy Bypass -File deploy80.ps1 -SkipBackup     # выкатиться без предделойного снимка данных
       ... -PublishDir 'D:\deploy\claude' -AppUrl 'https://naychenko.me' -Port 80
 #>
 param(
@@ -27,6 +28,7 @@ param(
     [switch]$Console,          # запускать сервер прямым процессом (старый режим), без трея
     [switch]$NoAutostart,      # не создавать/обновлять ярлык автозапуска трея
     [switch]$IgnoreRunner,     # не прерываться из-за запущенного ClaudeCodeServerRunner
+    [switch]$SkipBackup,       # выкатываться без предделойного снимка данных (осознанно)
     [string]$PublishDir  = 'C:\deploy\claude',
     [string]$Environment = 'Production80',
     [string]$AppUrl      = 'https://naychenko.me',
@@ -76,10 +78,18 @@ if ($runnerActive) {
 # Самая дешёвая страховка: снимок делается секунды и весит пару мегабайт, а откатываться
 # после неудачного деплоя больше нечем. Снимаем ДО остановки сервера — при живом сервере
 # это безопасно (json-сторы атомарны, SQLite снимается online-backup API).
-# Best-effort: упавший бэкап не должен блокировать деплой, но молчать о нём тоже нельзя.
+# Провал снимка ОСТАНАВЛИВАЕТ деплой. Раньше он печатал жёлтую строчку и выкатка ехала
+# дальше — то есть страховка отказывала молча, а узнать об этом можно было только в тот
+# момент, когда она понадобится. 25.07.2026 так и вышло: боевой exe был старее самого
+# флага --backup, принял его за аргумент веб-хоста, вместо снимка поднял сервер на две
+# минуты (до Kill по таймауту) — и деплой спокойно продолжился без единого архива.
+# Нужна выкатка любой ценой — это осознанный -SkipBackup, а не молчаливый обход.
 $serverExe = Join-Path $PublishDir 'ClaudeHomeServer.exe'
-if (Test-Path $serverExe) {
+if ($SkipBackup) {
+    Write-Host '[0.5/9] Бэкап пропущен (-SkipBackup)' -ForegroundColor DarkYellow
+} elseif (Test-Path $serverExe) {
     Write-Host '[0.5/9] Бэкап данных перед деплоем...' -ForegroundColor Yellow
+    $backupError = $null
     try {
         # Окружение процесс унаследует от скрипта: $env:ASPNETCORE_ENVIRONMENT выставлен
         # выше (строка 45). Это важно — от него зависит, какой appsettings.{Environment}.json
@@ -89,17 +99,28 @@ if (Test-Path $serverExe) {
         $backup = Start-Process -FilePath $serverExe -ArgumentList '--backup' `
             -WorkingDirectory $PublishDir -NoNewWindow -PassThru
         if ($backup.WaitForExit(120000)) {
+            # Код возврата тут честен: BackupCli ставит ExitCode=1, когда снимок не удался,
+            # и 0 только после реально записанного архива — сверять файлы на диске не нужно.
             if ($backup.ExitCode -eq 0) { Write-Host '  готово' -ForegroundColor DarkGray }
-            else { Write-Host "  бэкап вернул код $($backup.ExitCode) — продолжаем деплой" -ForegroundColor DarkYellow }
+            else { $backupError = "бэкап вернул код $($backup.ExitCode)" }
         } else {
             # Kill() без параметров: перегрузка Kill($true) — это .NET Core / PowerShell 7,
             # а скрипт живёт на Windows PowerShell 5.1 (.NET Framework), где её нет.
             # Дочерних процессов у --backup всё равно не бывает.
             try { $backup.Kill() } catch { }
-            Write-Host '  бэкап не уложился в 2 минуты — прерван, продолжаем деплой' -ForegroundColor DarkYellow
+            $backupError = 'бэкап не уложился в 2 минуты и был прерван ' +
+                           '(похоже, опубликованная сборка ещё не знает флага --backup)'
         }
     } catch {
-        Write-Host "  бэкап не выполнен: $($_.Exception.Message)" -ForegroundColor DarkYellow
+        $backupError = "бэкап не выполнен: $($_.Exception.Message)"
+    }
+    if ($backupError) {
+        Write-Host ''
+        Write-Host "ОСТАНОВЛЕНО: $backupError" -ForegroundColor Red
+        Write-Host '  Снимка перед выкаткой нет — откатываться после неудачного деплоя будет нечем.' -ForegroundColor Yellow
+        Write-Host '  Разберись с бэкапом либо запусти с -SkipBackup, если выкатка нужна прямо сейчас.' -ForegroundColor Yellow
+        Write-Host ''
+        exit 1
     }
 } else {
     Write-Host '[0.5/9] Бэкап пропущен: первый деплой (сервер ещё не опубликован)' -ForegroundColor DarkGray

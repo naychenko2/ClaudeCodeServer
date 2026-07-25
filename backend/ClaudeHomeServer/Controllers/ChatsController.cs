@@ -1,5 +1,6 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using Microsoft.AspNetCore.Authorization;
@@ -203,6 +204,8 @@ public class ChatsController(SessionManager sessions, FileService files) : Contr
     }
 
     [HttpDelete("{id}")]
+    // Секция destructive: на делегированном ходу агент не удаляет чаты (см. FilesController.Delete)
+    [DenyOnDelegatedTurn("Удаление чата")]
     public async Task<IActionResult> Delete(string id)
     {
         if (OwnedChat(id) is null) return NotFound();

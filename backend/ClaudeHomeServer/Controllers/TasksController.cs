@@ -1,6 +1,7 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Hubs;
+using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
@@ -291,6 +292,9 @@ public class TasksController(
 
     // Запустить выполнение задачи Claude-ом (кнопка «Выполнить с Claude»)
     [HttpPost("{taskId}/execute")]
+    // Анти-рекурсия: раньше жила в составе инструментов (env TASKS_EXECUTE), из-за чего
+    // чередование обычного и делегированного хода перезапускало процесс CLI со всеми MCP
+    [DenyOnDelegatedTurn("Запуск задачи на исполнение", AlsoWhenExecutorSuppressed = true)]
     public async Task<IActionResult> Execute(string taskId)
     {
         var task = tasks.GetById(taskId);

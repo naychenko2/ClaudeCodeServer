@@ -2,6 +2,10 @@ using ClaudeHomeServer.Models;
 
 namespace ClaudeHomeServer.Services.Llm;
 
+// Состояние делегирования идущего хода сессии — то, что бэкенду нужно знать, чтобы гейтить
+// действия MCP-серверов, не трогая состав их инструментов (SessionManager.GetActiveTurnDelegation)
+public readonly record struct TurnDelegationState(int AgentDepth, bool ExecutorSuppressed);
+
 // Адаптер LLM-провайдера для одной сессии. Контракт — калька публичного API ClaudeSession:
 // SessionManager владеет жизненным циклом и статусами, адаптер — только общением с моделью.
 // Все события наружу адаптер шлёт через callback Func<ServerMessage, Task> (LlmSessionContext.OnMessage).
@@ -11,6 +15,15 @@ public interface ILlmSessionAdapter : IAsyncDisposable
 
     // Возможности провайдера — по ним SessionManager и фронт скрывают недоступное
     LlmCapabilities Capabilities { get; }
+
+    // Глубина делегирования идущего хода (0 — обычный ход, >= 1 — ход пришёл через chats_send).
+    // Между ходами — 0. По ней бэкенд гейтит действия MCP-серверов (DenyOnDelegatedTurnAttribute):
+    // состав инструментов от хода зависеть не должен, иначе процесс CLI перезапускается.
+    int CurrentTurnAgentDepth { get; }
+
+    // Идущий ход — реакционный авто-ход постановщика на доклад делегированной задачи:
+    // запуск исполнителя на нём запрещён даже при agentDepth = 0 (см. suppressTasksExecute).
+    bool CurrentTurnSuppressTasksExecute { get; }
 
     Task StartAsync();
     // agentDepth > 0 — ход инициирован агентом из другой сессии (chats_send):

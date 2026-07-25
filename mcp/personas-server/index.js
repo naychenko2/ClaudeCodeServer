@@ -40,6 +40,9 @@ const API_URL = (process.env.PERSONAS_API_URL ?? 'http://localhost:5000').replac
 const API_TOKEN = process.env.PERSONAS_API_TOKEN ?? '';
 const PROJECT_ID = process.env.PERSONAS_PROJECT_ID || null;
 const SELF_ID = process.env.PERSONAS_SELF_ID || null;
+// Сессия, в которой работает модель — заголовок X-Caller-Session-Id: по нему бэкенд
+// определяет глубину делегирования идущего хода и гейтит persona_ask (анти-рекурсия)
+const SESSION_ID = process.env.PERSONAS_SESSION_ID || null;
 const MENTIONS = process.env.PERSONAS_MENTIONS === '1';
 const BINDINGS = process.env.PERSONAS_BINDINGS === '1';
 // Write-инструменты управления персонами. Выключаются только явным "0" (ClaudeSession
@@ -57,6 +60,7 @@ async function api(path, options = {}) {
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
       Authorization: `Bearer ${API_TOKEN}`,
+      ...(SESSION_ID ? { 'X-Caller-Session-Id': SESSION_ID } : {}),
       ...(options.headers ?? {}),
     },
   });

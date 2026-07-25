@@ -1,6 +1,8 @@
+using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Llm;
 using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.Services;
@@ -237,16 +239,23 @@ public class TaskExecutionServiceTests
         prompt.Should().NotContain("Готово, собрал и прогнал тесты.");
     }
 
-    // ─── MAJOR 1: гейт TASKS_EXECUTE (теперь только по agentDepth — стабильный per-сессию) ──
+    // ─── MAJOR 1: гейт запуска исполнителя — на бэкенде, а не в составе инструментов ──
+    // Раньше он жил в env TASKS_EXECUTE, то есть в СОСТАВЕ tools/list, а состав входит в
+    // сигнатуру запуска CLI: чередование обычного и делегированного хода убивало процесс со
+    // всеми MCP-серверами. Теперь состав постоянен, а решение принимает DenyOnDelegatedTurn.
 
     [Theory]
-    [InlineData(0, true)]   // обычный пользовательский ход — доступен
-    [InlineData(1, false)]  // агентный ход (chats_send) — не доступен
-    public void ResolveTasksExecuteEnabled_Гейт(int currentTurnAgentDepth, bool expected)
+    // (глубина, подавление, учитывать подавление) → запретить?
+    [InlineData(0, false, true, false)]   // обычный ход пользователя — можно
+    [InlineData(1, false, true, true)]    // делегированный ход (chats_send) — нельзя
+    [InlineData(2, false, true, true)]    // глубже по цепочке — тем более нельзя
+    [InlineData(0, true, true, true)]     // реакция на доклад исполнителя — нельзя (цикл A↔B)
+    [InlineData(0, true, false, false)]   // подавление учитывают только запуск исполнителя
+    public void ЗапретДействияНаХоду(int depth, bool suppressed, bool alsoWhenSuppressed, bool expected)
     {
-        ClaudeHomeServer.Services.Llm.Claude.ClaudeSession
-            .ResolveTasksExecuteEnabled(currentTurnAgentDepth)
-            .Should().Be(expected);
+        var turn = new TurnDelegationState(depth, suppressed);
+
+        DenyOnDelegatedTurnAttribute.ShouldDeny(turn, alsoWhenSuppressed).Should().Be(expected);
     }
 
     // ─── MAJOR 2: регулярная задача без SourceSessionId — доклад не заводит чат ─

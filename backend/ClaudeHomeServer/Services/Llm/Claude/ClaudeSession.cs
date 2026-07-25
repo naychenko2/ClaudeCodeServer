@@ -14,6 +14,11 @@ public class ClaudeSession : ILlmSessionAdapter
     public LlmCapabilities Capabilities =>
         _providers?.CapabilitiesFor(Info.Model) ?? LlmCapabilitiesCatalog.Claude;
 
+    // Состояние делегирования идущего хода — по нему бэкенд гейтит действия MCP-серверов
+    // (DenyOnDelegatedTurnAttribute), не трогая СОСТАВ их инструментов
+    public int CurrentTurnAgentDepth => _currentTurnAgentDepth;
+    public bool CurrentTurnSuppressTasksExecute => _currentTurnSuppressTasksExecute;
+
     private readonly string _rootPath;
     private readonly Func<ServerMessage, Task> _onMessage;
     // Словари ниже — Concurrent: их мутируют и памп stdout, и SignalR-вызовы
@@ -282,20 +287,15 @@ public class ClaudeSession : ILlmSessionAdapter
         _fileWatcher = new TurnFileWatcher(_rootPath, _onMessage, fileWatcherOptions);
     }
 
-    // Гейт TASKS_EXECUTE: доступен только на пользовательском ходу (не агентном — chats_send).
-    // Был привязан к глубине делегирования и тексту хода, но эти проверки меняли env между
-    // ходами → MCP-сервер перезапускался → «Stream closed» на незавершённых вызовах.
-    // Теперь — стабильный пер-сессионный флаг: agentDepth не меняется между ходами чата.
-    internal static bool ResolveTasksExecuteEnabled(int currentTurnAgentDepth) =>
-        currentTurnAgentDepth < 1;
-
     // Объединённый MCP-конфиг хода: серверы из базового конфига (Dify с инжекцией
     // dataset id) + tasks-server с контекстом сессии; для сессий сторонних провайдеров —
     // ещё и user-scope серверы из ~/.claude.json (fal-ai и др.: изолированный
     // CLAUDE_CONFIG_DIR их не видит). null → базовый конфиг как есть.
     // Возвращает путь temp-конфига и отсортированный набор ключей серверов — ключи входят
     // в сигнатуру прогона (сам путь и содержимое меняются каждый ход: новый файл, свежий JWT)
-    private (string? Path, string ServerKeys) BuildTurnMcpConfig(string? datasetId, PersonaAgentsContext? personaAgents = null, string turnText = "")
+    // turnText в параметрах больше нет: текст хода не имеет права влиять на состав инструментов
+    // (гейт WriteIntentGate менял его между ходами → перезапуск процесса со всеми MCP)
+    private (string? Path, string ServerKeys) BuildTurnMcpConfig(string? datasetId, PersonaAgentsContext? personaAgents = null)
     {
         var tasksServerPath = _tasksMcp is not null ? MapMcpPath(TasksServerLocator.FindTasksServerPath()) : null;
         var hasTasks = tasksServerPath is not null;
@@ -379,11 +379,14 @@ public class ClaudeSession : ILlmSessionAdapter
 
             if (hasTasks)
             {
-                // tasks_run_executor порождает новую сессию Claude — на агентном ходу
-                // (chats_send из другой сессии) не даём, та же анти-рекурсия, что у chats.
-                // Гарды глубины делегирования и подавления убраны: они менялись между ходами
-                // чата → env TASKS_EXECUTE менялся → MCP-сервер перезапускался («Stream closed»).
-                var tasksExecute = ResolveTasksExecuteEnabled(_currentTurnAgentDepth) ? "1" : "0";
+                // ИНВАРИАНТ: состав инструментов сервера не зависит от хода. tasks_run_executor
+                // подключён ВСЕГДА; анти-рекурсия (запуск исполнителя с делегированного хода и
+                // с реакционного авто-хода постановщика) проверяется бэкендом по актуальному
+                // состоянию сессии — [DenyOnDelegatedTurn] на TasksController.Execute.
+                // Было наоборот: env TASKS_EXECUTE входил в сигнатуру запуска, поэтому
+                // чередование обычного и делегированного хода убивало процесс CLI со всеми
+                // MCP-серверами («Stream closed»), а инструмент то появлялся, то исчезал.
+                const string tasksExecute = "1";
                 // Кросс-проектные ProjectTasks-привязки текущей персоны: доступ к задачам
                 // ДРУГИХ проектов владельца (extraProjectIdsCsv), подмножество только для
                 // чтения — extraReadOnlyCsv (create/update/delete там запрещены)
@@ -395,6 +398,13 @@ public class ClaudeSession : ILlmSessionAdapter
                 {
                     ["command"] = "node",
                     ["args"] = new System.Text.Json.Nodes.JsonArray { tasksServerPath! },
+                    // alwaysLoad как у memory/personas/wsp: при ленивом подключении первый вызов
+                    // в ходе падает «No such tool available» (claude-code#19282), а аккаунт-
+                    // коннекторы claude.ai переводят CLI в режим deferred-tools, где ленивый
+                    // сервер и вовсе прячет инструменты от модели. В истории прода этим
+                    // объясняются карточки «No such tool available: mcp__tasks__*» при живом
+                    // сервере. Цена — node-процесс на каждый ход, стартует параллельно.
+                    ["alwaysLoad"] = true,
                     ["env"] = new System.Text.Json.Nodes.JsonObject
                     {
                         ["TASKS_API_URL"] = _tasksMcp!.ApiUrl,
@@ -411,8 +421,9 @@ public class ClaudeSession : ILlmSessionAdapter
                     },
                 };
                 // Кросс-проектные скоупы влияют на видимость/доступность задач других проектов —
-                // смена привязок должна пробить доживание живого процесса (как e{tasksExecute})
-                shapes["tasks"] = $"e{tasksExecute}:{extraProjectIdsCsv}:{extraReadOnlyCsv}";
+                // смена привязок должна пробить доживание живого процесса. Меняются они при смене
+                // персоны/привязок, а не от хода к ходу, поэтому процесс от них не «мерцает».
+                shapes["tasks"] = $"{extraProjectIdsCsv}:{extraReadOnlyCsv}";
             }
 
             if (hasNotes)
@@ -421,6 +432,9 @@ public class ClaudeSession : ILlmSessionAdapter
                 {
                     ["command"] = "node",
                     ["args"] = new System.Text.Json.Nodes.JsonArray { notesServerPath! },
+                    // alwaysLoad — по той же причине, что у tasks (см. выше): ленивый сервер
+                    // прячет инструменты в режиме deferred-tools
+                    ["alwaysLoad"] = true,
                     ["env"] = new System.Text.Json.Nodes.JsonObject
                     {
                         ["NOTES_API_URL"] = _notesMcp!.ApiUrl,
@@ -470,19 +484,21 @@ public class ClaudeSession : ILlmSessionAdapter
             // промежуточную bool и требует ! на каждом обращении внутри блока.
             if (hasPersonas && _personasMcp is not null)
             {
-                // persona_ask выключен когда есть файловые сабагенты-персоны:
-                // модель должна использовать Task(agentType=...) в Workflow, а не путаться.
-                // Без agentDepth < 1 — на агентном ходу тоже выключаем (анти-рекурсия).
-                // Гейт по text убран: он менялся между ходами → env PERSONAS_WRITE менялся →
-                // MCP-сервер персон перезапускался («Stream closed»).
+                // persona_ask выключен когда есть файловые сабагенты-персоны: модель должна
+                // использовать Task(agentType=...) в Workflow, а не путаться. Состав персон
+                // владельца в рамках сессии не меняется, так что от хода это не зависит.
+                // Гейт по agentDepth убран (был анти-рекурсией): он менял состав между ходами →
+                // процесс CLI перезапускался. Анти-рекурсия persona_ask — на бэкенде,
+                // [DenyOnDelegatedTurn] на PersonasController.Ask.
                 var personaMentions = _personasMcp.MentionsHint is not null
                     && personaAgents is not { AgentHandles.Count: > 0 }
-                    && _currentTurnAgentDepth < 1
                     ? "1" : "0";
                 // Write-инструменты управления персонами (create/update/delete, automation_*,
-                // bindings_set, generate_avatar) — всегда загружены (кроме агентных ходов).
-                // Read/ask-инструменты остаются всегда (надёжные @упоминания без «No such tool»).
-                var personaWrite = _currentTurnAgentDepth < 1 ? "1" : "0";
+                // bindings_set, generate_avatar) — ВСЕГДА загружены. Гейт по agentDepth снят:
+                // он давал самый частый «No such tool available» прода (personas_create), а
+                // реального ограничения не нёс — права персоны и так режутся Persona.Tools /
+                // ExtraDisallowedTools, а у файловых сабагентов — их allow-list.
+                const string personaWrite = "1";
                 // Кросс-проектные ProjectPersonas-привязки: доступ к команде/точечным персонам
                 // ДРУГОГО проекта — расширяют personas_list(scope=context) и резолв handle в persona_ask
                 var extraProjectIdsCsv = _personasMcp.ExtraProjectIds is { Count: > 0 } extraProjects
@@ -500,6 +516,9 @@ public class ClaudeSession : ILlmSessionAdapter
                         ["PERSONAS_API_TOKEN"] = _personasMcp.Token,
                         ["PERSONAS_PROJECT_ID"] = _personasMcp.ProjectId ?? "",
                         ["PERSONAS_SELF_ID"] = _personasMcp.SelfPersonaId ?? "",
+                        // Сессия-вызыватель: по ней бэкенд гейтит persona_ask на делегированном
+                        // ходу (заголовок X-Caller-Session-Id → DenyOnDelegatedTurn)
+                        ["PERSONAS_SESSION_ID"] = Info.Id,
                         ["PERSONAS_MENTIONS"] = personaMentions,
                         ["PERSONAS_BINDINGS"] = _personasMcp.BindingsEnabled ? "1" : "0",
                         ["PERSONAS_WRITE"] = personaWrite,
@@ -507,20 +526,21 @@ public class ClaudeSession : ILlmSessionAdapter
                         ["PERSONAS_EXTRA_PERSONA_IDS"] = extraPersonaIdsCsv,
                     },
                 };
-                // Состав/область персон зависит от write/mentions/bindings/extra-скоупов — в сигнатуру,
-                // иначе поднятие write-канала (personas_create/…) не пробьёт доживание процесса
-                shapes["personas"] = $"w{personaWrite}m{personaMentions}b{(_personasMcp.BindingsEnabled ? "1" : "0")}:{extraProjectIdsCsv}:{extraPersonaIdsCsv}";
+                // Область персон зависит от mentions/bindings/extra-скоупов — в сигнатуру.
+                // Все они постоянны в рамках сессии (состав персон, привязки), поэтому процесс
+                // от них не «мерцает»; write в сигнатуре больше нет — он всегда включён.
+                shapes["personas"] = $"m{personaMentions}b{(_personasMcp.BindingsEnabled ? "1" : "0")}:{extraProjectIdsCsv}:{extraPersonaIdsCsv}";
             }
 
             if (hasWorkspace)
             {
-                // Анти-рекурсия делегирования: на агентном ходу (chats_send из другой сессии)
-                // секции chats и destructive не подключаются — агент не может писать в третьи
-                // чаты и удалять данные (удаление — только по явной просьбе пользователя)
-                var sections = _currentTurnAgentDepth >= 1
-                    ? _workspaceMcp!.Sections.Where(s => s != "chats" && s != "destructive")
-                    : _workspaceMcp!.Sections;
-                var sectionsJoined = string.Join(",", sections);
+                // Секции — только от привязок персоны, НЕ от хода. Анти-рекурсия делегирования
+                // (chats_send и удаление на агентном ходу) переехала на бэкенд —
+                // [DenyOnDelegatedTurn] на SessionMessagesController.PostMessage, FilesController.Delete,
+                // ChatsController/SessionsController.Delete. Пока срез секций жил здесь, состав
+                // wsp менялся между обычным и делегированным ходом → процесс CLI перезапускался
+                // со всеми MCP-серверами, и chats_send «пропадал» посреди работы.
+                var sectionsJoined = string.Join(",", _workspaceMcp!.Sections);
                 // WORKSPACE_WRITE всегда "1": гейт по тексту хода (WriteIntentGate) менял env
                 // между ходами → MCP-сервер перезапускался («Stream closed»). Write-инструменты
                 // (files_write, projects_create, git_commit, knowledge_index) доступны всегда,
@@ -543,15 +563,16 @@ public class ClaudeSession : ILlmSessionAdapter
                         ["WORKSPACE_PROJECT_IDS"] = _workspaceMcp.AllowedProjectIds is { Count: > 0 } allowed
                             ? string.Join(",", allowed) : "",
                         ["WORKSPACE_SELF_SESSION_ID"] = _workspaceMcp.SelfSessionId ?? "",
-                        ["WORKSPACE_AGENT_DEPTH"] = Math.Max(_workspaceMcp.AgentDepth, _currentTurnAgentDepth).ToString(),
+                        // WORKSPACE_AGENT_DEPTH убран: глубину для целевого чата бэкенд считает
+                        // сам по сессии-отправителю (заголовок X-Caller-Session-Id). Из env она
+                        // протухала при переиспользовании живого прогона — делегированный ход
+                        // мог отправить сообщение с глубиной прошлого хода.
                         // Тяжёлые write-схемы (files_write с content, projects_create/update,
                         // knowledge_index) грузим в контекст только когда ход про запись в рабочее
                         // пространство. Read (list/tree/read/search/status/history) — всегда.
                         // chats_create/send/update под гейт НЕ попадают (см. WRITE_TOOLS в
                         // workspace-server): их состав должен быть одинаков на всех ходах, иначе
                         // инструменты «мерцают» между ходами вместе с сигнатурой MCP.
-                        // Depth-гейта нет: делегированный ход тоже может нести интент записи; chats
-                        // и destructive и так режутся секциями на агентном ходу выше.
                         ["WORKSPACE_WRITE"] = workspaceWrite,
                     },
                     // alwaysLoad как у memory/personas: аккаунт-коннекторы claude.ai переводят
@@ -569,6 +590,8 @@ public class ClaudeSession : ILlmSessionAdapter
                 {
                     ["command"] = "node",
                     ["args"] = new System.Text.Json.Nodes.JsonArray { notificationsServerPath! },
+                    // alwaysLoad — по той же причине, что у tasks (см. выше)
+                    ["alwaysLoad"] = true,
                     ["env"] = new System.Text.Json.Nodes.JsonObject
                     {
                         ["NOTIFICATIONS_API_URL"] = _notificationsMcp!.ApiUrl,
@@ -1214,7 +1237,7 @@ public class ClaudeSession : ILlmSessionAdapter
         // MCP-конфиг: создаём каждый ход с актуальным dataset id (мог появиться после создания сессии)
         var currentWk = _wkStore?.GetByPath(_rootPath);
         var currentDatasetId = currentWk?.DifyDatasetId;
-        var (turnMcpPath, mcpServerKeys) = BuildTurnMcpConfig(currentDatasetId, personaAgents, text);
+        var (turnMcpPath, mcpServerKeys) = BuildTurnMcpConfig(currentDatasetId, personaAgents);
         var effectiveMcpConfig = turnMcpPath ?? _mcpConfigPath;
         if (!string.IsNullOrWhiteSpace(effectiveMcpConfig) && File.Exists(effectiveMcpConfig))
         {
@@ -1274,10 +1297,13 @@ public class ClaudeSession : ILlmSessionAdapter
                 var columnsHint = _tasksMcp.ProjectId is not null
                     ? " У проекта может быть Kanban-доска с кастомными колонками: получи их через tasks_board_columns и клади задачу в нужную колонку, передавая columnId в tasks_create/tasks_update (статус выставится по категории колонки)."
                     : "";
-                // tasks_run_executor доступен на всех пользовательских ходах (стабильно, без перезапуска MCP)
+                // tasks_run_executor подключён ВСЕГДА (состав инструментов не зависит от хода);
+                // на делегированном ходу бэкенд ответит отказом — предупреждаем заранее,
+                // чтобы модель не тратила ход на заведомо запрещённый вызов
                 var executeHint = _currentTurnAgentDepth < 1
                     ? " tasks_run_executor запускает Claude-исполнителя задачи (отдельная сессия, работает в фоне)."
-                    : "";
+                    : " tasks_run_executor на этом ходу вернёт отказ: ход инициирован другим чатом, "
+                      + "и цепочка делегирования дальше не идёт — верни результат тому, кто тебя позвал.";
                 // Поручение задачи персоне — только когда доступен и personas-server (есть personas_list)
                 var personaExecHint = _personasMcp is not null
                     ? " Чтобы поручить задачу персоне-исполнителю, передай её personaId в tasks_create/tasks_update — " +
@@ -1371,31 +1397,26 @@ public class ClaudeSession : ILlmSessionAdapter
                 var scope = _personasMcp.ProjectId is not null
                     ? "Текущий контекст — проект: создавая проектную персону (scope \"project\"), projectId можно не указывать."
                     : "Текущий чат вне проекта: по умолчанию создаются глобальные персоны, для проектной укажи projectId.";
-                // Write-инструменты стабильно загружены (PERSONAS_WRITE не гейтится по тексту хода)
-                var personaWrite = _currentTurnAgentDepth < 1;
+                // Write-инструменты персон подключены ВСЕГДА: гейт по глубине делегирования снят
+                // (давал самый частый «No such tool available» прода, а ограничения не нёс —
+                // права режут Persona.Tools/ExtraDisallowedTools и allow-list файловых агентов)
                 var personasHint =
                     "У пользователя есть раздел «Персоны» — AI-собеседники с именем, ролью, характером и аватаром, " +
                     "глобальные или привязанные к проекту. Смотри их через mcp__personas__* (personas_list, personas_get). " +
-                    scope;
-                if (personaWrite)
-                    personasHint +=
-                        " Управляй ими: personas_create, personas_update, personas_delete, personas_generate_avatar — " +
-                        "когда пользователь просит создать/изменить/удалить персону или сгенерировать ей аватар. " +
-                        "Создавая персону, заполняй ВСЕ слоты характера: character (на «ты», «Ты — …»), tone, mustDo, " +
-                        "mustNot, outputFormat, speechExamples; приветствие — в greeting от её лица.";
-                else
-                    personasHint +=
-                        " Инструменты управления персонами не доступны на агентном ходу.";
+                    scope +
+                    " Управляй ими: personas_create, personas_update, personas_delete, personas_generate_avatar — " +
+                    "когда пользователь просит создать/изменить/удалить персону или сгенерировать ей аватар. " +
+                    "Создавая персону, заполняй ВСЕ слоты характера: character (на «ты», «Ты — …»), tone, mustDo, " +
+                    "mustNot, outputFormat, speechExamples; приветствие — в greeting от её лица.";
                 // Привязки персон (флаг persona-bindings) — кратко про инструменты работы с ними
                 if (_personasMcp.BindingsEnabled)
                 {
                     personasHint +=
                         " У персон есть «привязки» — источники знаний и правила с условиями применения: " +
                         "personas_bindings_list — посмотреть, personas_suggest_bindings — предложить (не сохраняет)";
-                    personasHint += personaWrite
-                        ? ", personas_bindings_set — заменить набор; в personas_create — параметры bindings/autoBindings. " +
-                          "Свои собственные привязки персона менять не может."
-                        : ". Свои собственные привязки персона менять не может.";
+                    personasHint +=
+                        ", personas_bindings_set — заменить набор; в personas_create — параметры bindings/autoBindings. " +
+                        "Свои собственные привязки персона менять не может.";
                 }
                 basePrompt = string.IsNullOrWhiteSpace(basePrompt)
                     ? personasHint
@@ -1411,16 +1432,23 @@ public class ClaudeSession : ILlmSessionAdapter
                 // WORKSPACE_WRITE теперь всегда "1" (стабильный набор инструментов, без гейта по тексту хода)
                 // Подсказка про чаты — только когда секция chats реально подключена этим ходом.
                 // chats-инструменты вне write-гейта (детерминированный состав с 920defd1)
-                var chatsHint = _workspaceMcp.Sections.Contains("chats") && _currentTurnAgentDepth < 1
-                    ? " Плюс чаты пользователя: chats_list, chats_history, chats_create, " +
-                      "chats_update (переименование) и chats_send — полноценный ход в другом чате " +
-                      "от имени пользователя (результат виден ему в ленте)."
-                    : "";
+                // На делегированном ходу chats_send и удаление отклонит бэкенд — предупреждаем,
+                // чтобы модель не тратила ход на заведомо запрещённый вызов (сами инструменты
+                // на месте: состав от хода не зависит)
+                var delegatedTurn = _currentTurnAgentDepth >= 1;
+                var chatsHint = !_workspaceMcp.Sections.Contains("chats") ? ""
+                    : delegatedTurn
+                        ? " chats_send на этом ходу вернёт отказ: ход инициирован другим чатом, " +
+                          "и цепочка делегирования дальше не идёт."
+                        : " Плюс чаты пользователя: chats_list, chats_history, chats_create, " +
+                          "chats_update (переименование) и chats_send — полноценный ход в другом чате " +
+                          "от имени пользователя (результат виден ему в ленте).";
                 // Предупреждение про разрушающие операции — только когда секция destructive смонтирована
-                var destructiveHint = _workspaceMcp.Sections.Contains("destructive") && _currentTurnAgentDepth < 1
-                    ? " Разрушающие операции files_delete и chats_delete НЕВОССТАНОВИМЫ: применяй их ТОЛЬКО " +
-                      "по явной просьбе пользователя удалить конкретный файл или чат, никогда по своей инициативе."
-                    : "";
+                var destructiveHint = !_workspaceMcp.Sections.Contains("destructive") ? ""
+                    : delegatedTurn
+                        ? " Удаление (files_delete, chats_delete) на делегированном ходу запрещено."
+                        : " Разрушающие операции files_delete и chats_delete НЕВОССТАНОВИМЫ: применяй их ТОЛЬКО " +
+                          "по явной просьбе пользователя удалить конкретный файл или чат, никогда по своей инициативе.";
                 // Git — только когда секция git смонтирована (идёт с files). Read и write всегда доступны.
                 var gitHint = _workspaceMcp.Sections.Contains("git")
                     ? " Git любого проекта: git_status, git_diff, git_log, git_blame, git_file_log, " +

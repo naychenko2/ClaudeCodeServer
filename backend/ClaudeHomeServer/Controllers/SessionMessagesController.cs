@@ -1,5 +1,6 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using Microsoft.AspNetCore.Authorization;
@@ -53,6 +54,9 @@ public class SessionMessagesController(SessionManager sessions) : ControllerBase
     // chats_send). wait="turn" — ждать завершения хода до timeoutSec (clamp 5..240, дефолт 90);
     // wait="none" — не ждать. Истёкший таймаут НЕ отменяет ход целевой сессии.
     [HttpPost("messages")]
+    // Анти-рекурсия: делегированный ход не пишет в третьи чаты (раньше — срезанием секции
+    // chats из состава инструментов wsp, что перезапускало процесс CLI со всеми MCP)
+    [DenyOnDelegatedTurn("Отправка сообщения в другой чат")]
     public async Task<IActionResult> PostMessage(string sessionId, [FromBody] SendSessionMessageRequest req)
     {
         var session = OwnedSession(sessionId);
@@ -62,10 +66,16 @@ public class SessionMessagesController(SessionManager sessions) : ControllerBase
         if (string.IsNullOrEmpty(text))
             return BadRequest(new { error = "Текст сообщения пуст" });
 
-        // Глубина делегирования: заголовок ставит MCP-сервер (chats_send = depth вызывающего + 1);
-        // отсутствует = 0 (обычный клиент). Урезание инструментов по глубине — в адаптере.
+        // Глубина делегирования целевого хода = глубина хода отправителя + 1. Считаем её ЗДЕСЬ,
+        // по живой сессии отправителя (X-Caller-Session-Id от chats_send): в env MCP-сервера она
+        // протухала при переиспользовании прогона, и делегированный ход мог отправить сообщение
+        // с глубиной прошлого хода. Заголовок X-Agent-Depth остаётся фолбэком для прямых вызовов
+        // REST-канала; своей глубине отправителя он уступает.
         var agentDepth = Request.Headers.TryGetValue("X-Agent-Depth", out var dh)
             && int.TryParse(dh.FirstOrDefault(), out var d) ? Math.Max(0, d) : 0;
+        if (Request.Headers.TryGetValue(DenyOnDelegatedTurnAttribute.CallerHeader, out var ch)
+            && ch.FirstOrDefault() is { Length: > 0 } callerSessionId)
+            agentDepth = sessions.GetActiveTurnDelegation(callerSessionId, UserId).AgentDepth + 1;
 
         // Персона-отправитель: chats_send передаёт id своей сессии — берём её PersonaId, чтобы
         // получатель отрисовал входящую реплику лицом персоны. Только сессия того же владельца.

@@ -72,6 +72,10 @@ async function api(path, options = {}) {
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
       Authorization: `Bearer ${API_TOKEN}`,
+      // Сессия, в которой работает модель: по ней бэкенд определяет, идёт ли делегированный
+      // ход, и сам решает, что на нём запрещено (запуск исполнителя). Состав инструментов
+      // сервера при этом остаётся неизменным — иначе процесс CLI перезапускается.
+      ...(SESSION_ID ? { 'X-Caller-Session-Id': SESSION_ID } : {}),
       ...(options.headers ?? {}),
     },
   });

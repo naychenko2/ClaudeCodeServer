@@ -8,8 +8,9 @@
 //   WORKSPACE_PROJECT_ID      — id проекта текущей сессии; пусто = чат вне проекта
 //   WORKSPACE_SECTIONS        — csv включённых секций (projects,files,knowledge,search[,chats,git,knowledge_bases,destructive])
 //   WORKSPACE_PROJECT_IDS     — csv разрешённых projectId; пусто = все проекты владельца
-//   WORKSPACE_SELF_SESSION_ID — id самой сессии (запрет chats_send самому себе)
-//   WORKSPACE_AGENT_DEPTH     — глубина делегирования; chats_send шлёт X-Agent-Depth = depth + 1
+//   WORKSPACE_SELF_SESSION_ID — id самой сессии: запрет chats_send самому себе + заголовок
+//                               X-Caller-Session-Id (по нему бэкенд сам определяет глубину
+//                               делегирования идущего хода и гейтит chats_send/удаление)
 //   WORKSPACE_WRITE           — "0" = скрыть write-инструменты (projects_create/update,
 //                               files_write/mkdir/rename, knowledge_index, git_commit/stage,
 //                               kb_add_document). ClaudeSession выключает их на ходах без интента
@@ -30,9 +31,8 @@ const SECTIONS = new Set(
 );
 const ALLOWED_PROJECT_IDS = (process.env.WORKSPACE_PROJECT_IDS || '')
   .split(',').map(s => s.trim()).filter(Boolean);
-// Секция chats: id собственной сессии (self-send запрещён) и глубина делегирования
+// Секция chats: id собственной сессии (self-send запрещён; он же — X-Caller-Session-Id)
 const SELF_SESSION_ID = process.env.WORKSPACE_SELF_SESSION_ID || null;
-const AGENT_DEPTH = parseInt(process.env.WORKSPACE_AGENT_DEPTH || '0', 10) || 0;
 // Write-инструменты рабочего пространства — скрыты при WORKSPACE_WRITE="0" (гейт по интенту хода).
 // Выключается только явным "0" (обратная совместимость прямых запусков). Тяжёлые схемы записи
 // (files_write с content, projects_create/update) не грузятся в контекст на ходах чтения.
@@ -66,6 +66,10 @@ async function api(path, options = {}) {
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
       Authorization: `Bearer ${API_TOKEN}`,
+      // Сессия, в которой работает модель: по ней бэкенд определяет, идёт ли делегированный
+      // ход, и сам решает, что на нём запрещено (запись в третьи чаты, удаление). Состав
+      // инструментов сервера при этом остаётся неизменным — иначе процесс CLI перезапускается.
+      ...(SELF_SESSION_ID ? { 'X-Caller-Session-Id': SELF_SESSION_ID } : {}),
       ...(options.headers ?? {}),
     },
   });
@@ -921,10 +925,13 @@ async function callTool(name, args) {
         headers: {
           'Content-Type': 'application/json; charset=utf-8',
           Authorization: `Bearer ${API_TOKEN}`,
-          // Глубина делегирования растёт на каждый хоп — сервер урезает инструменты по ней
-          'X-Agent-Depth': String(AGENT_DEPTH + 1),
+          // Глубину делегирования для целевого чата считает бэкенд — по НАШЕЙ сессии
+          // (заголовок ниже): из env она протухала при переиспользовании живого прогона.
           // Своя сессия — получатель по её PersonaId отрисует входящую реплику лицом персоны
-          ...(SELF_SESSION_ID ? { 'X-Sender-Session-Id': SELF_SESSION_ID } : {}),
+          ...(SELF_SESSION_ID ? {
+            'X-Sender-Session-Id': SELF_SESSION_ID,
+            'X-Caller-Session-Id': SELF_SESSION_ID,
+          } : {}),
         },
         body: JSON.stringify({
           text,

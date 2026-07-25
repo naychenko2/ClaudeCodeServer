@@ -748,6 +748,16 @@ public class SessionManager : IDisposable
     public Session? GetById(string id) =>
         _sessions.TryGetValue(id, out var entry) ? entry.Info : null;
 
+    // Состояние делегирования ИДУЩЕГО хода сессии. Спрашивает DenyOnDelegatedTurnAttribute по
+    // заголовку MCP-сервера: единственный достоверный источник — живой адаптер, тогда как
+    // заголовок/env запекаются при старте процесса и протухают при переиспользовании прогона.
+    // Чужая сессия или отсутствие процесса — «обычный ход» (запрет не применяется).
+    public TurnDelegationState GetActiveTurnDelegation(string sessionId, string ownerId) =>
+        _sessions.TryGetValue(sessionId, out var entry) && entry.Info.OwnerId == ownerId
+            && entry.Process is { } adapter
+            ? new TurnDelegationState(adapter.CurrentTurnAgentDepth, adapter.CurrentTurnSuppressTasksExecute)
+            : new TurnDelegationState(0, false);
+
     // Запомнить заметку-итог сессии (SessionSummaryService) — для обновления при повторной генерации
     public void SetSummaryNoteId(string sessionId, string noteId)
     {

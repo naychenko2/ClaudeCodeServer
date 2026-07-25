@@ -26,6 +26,7 @@ public class SpendBackfillTests : IDisposable
     private readonly TaskManager _tasks;
     private readonly ChatHistoryService _history;
     private readonly SessionManager _sessions;
+    private readonly ClaudeHomeServer.Services.Llm.LlmProviderRegistry _llmProviders;
 
     public SpendBackfillTests()
     {
@@ -57,6 +58,7 @@ public class SpendBackfillTests : IDisposable
         hub.Setup(h => h.Clients).Returns(clients.Object);
 
         var llmProviders = new ClaudeHomeServer.Services.Llm.LlmProviderRegistry(config);
+        _llmProviders = llmProviders;
         var subPool = new ClaudeSubscriptionPool(config);
         var adapters = new ClaudeHomeServer.Services.Llm.LlmSessionAdapterFactory(
             config, new SkillsService(), new WorkspaceKnowledgeStore(config), llmProviders, subPool);
@@ -89,7 +91,7 @@ public class SpendBackfillTests : IDisposable
     }
 
     private SpendMaintenanceService NewMaintenance(SpendStore store) =>
-        new(store, _sessions, _history, NullLogger<SpendMaintenanceService>.Instance);
+        new(store, _sessions, _history, _llmProviders, NullLogger<SpendMaintenanceService>.Instance);
 
     private static List<StoredMessage> Turns(int count) =>
         [.. Enumerable.Range(0, count).Select(StoredMessage (i) =>
@@ -142,7 +144,7 @@ public class SpendBackfillTests : IDisposable
         var now = DateTime.UtcNow;
         store.Record(new SpendRecord { OwnerId = "admin-1", Timestamp = now, InputTokens = 100 });
         store.Record(new SpendRecord { OwnerId = "user-2", Timestamp = now, InputTokens = 50 });
-        var analytics = new SpendAnalyticsService(store, _sessions, _projectManager, _tasks, _personas, _userStore);
+        var analytics = new SpendAnalyticsService(store, _sessions, _projectManager, _tasks, _personas, _userStore, _llmProviders);
         var today = DateOnly.FromDateTime(now);
 
         // Админ в scope=all: фильтр без владельца — его собственные ходы обязаны быть own
@@ -169,7 +171,7 @@ public class SpendBackfillTests : IDisposable
         store.Record(new SpendRecord { OwnerId = "u1", Timestamp = now, InputTokens = 10 });
         store.Record(new SpendRecord { OwnerId = "u2", Timestamp = now, InputTokens = 20 });
         store.RollupOlderThan(store.WindowStart);
-        var analytics = new SpendAnalyticsService(store, _sessions, _projectManager, _tasks, _personas, _userStore);
+        var analytics = new SpendAnalyticsService(store, _sessions, _projectManager, _tasks, _personas, _userStore, _llmProviders);
         var from = DateOnly.FromDateTime(old);
         var to = DateOnly.FromDateTime(now);
 

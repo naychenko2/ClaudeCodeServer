@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Llm;
 
 namespace ClaudeHomeServer.Services.Spend;
 
@@ -57,7 +58,8 @@ public sealed record SpendBadgeDto(string SessionId, SpendTokensDto Total, int T
 // персона/пользователь); удалённые сущности остаются строками с Name=null. Содержимое
 // сообщений здесь не существует в принципе — храним и отдаём только метрики и названия.
 public sealed class SpendAnalyticsService(SpendStore store, SessionManager sessions,
-    ProjectManager projects, TaskManager tasks, PersonaManager personas, UserStore users)
+    ProjectManager projects, TaskManager tasks, PersonaManager personas, UserStore users,
+    LlmProviderRegistry llmProviders)
 {
     private const int CardLimit = 8;
     private const int TopTurnsLimit = 10;
@@ -72,36 +74,42 @@ public sealed class SpendAnalyticsService(SpendStore store, SessionManager sessi
         foreach (var r in store.DetailsBetween(from, to))
             if (Match(r, f))
                 result.Add(new SpendSlice(r.Date, r.OwnerId, r.ProjectId, r.SessionId, r.TaskId,
-                    r.PersonaId, r.Provider, r.Model, r.Source,
+                    r.PersonaId, r.Provider, ResolveModel(r.Model, r.Provider), r.Source,
                     r.InputTokens, r.OutputTokens, r.CacheReadTokens, r.CacheCreationTokens,
                     r.CostUsd ?? 0, r.Generations, 1, Detailed: true));
         foreach (var d in store.DailyBetween(from, to))
             if (Match(d, f) && DateOnly.TryParse(d.Date, out var date))
                 result.Add(new SpendSlice(date, d.OwnerId, d.ProjectId, d.SessionId, d.TaskId,
-                    d.PersonaId, d.Provider, d.Model, d.Source,
+                    d.PersonaId, d.Provider, ResolveModel(d.Model, d.Provider), d.Source,
                     d.InputTokens, d.OutputTokens, d.CacheReadTokens, d.CacheCreationTokens,
                     d.CostUsd, d.Generations, d.Turns, Detailed: false));
         return result;
     }
 
-    private static bool Match(SpendRecord r, SpendFilter f) =>
+    // Резолв модели для отображения/группировки: старые записи с пустой Model (собранные до
+    // резолва в точке записи) на лету приводятся к дефолту подписки — иначе в pivot всплывёт
+    // пустая группа, а фильтр по модели такие записи потеряет.
+    private string ResolveModel(string? model, string provider) =>
+        llmProviders.ResolveModelOrDefault(model, provider);
+
+    private bool Match(SpendRecord r, SpendFilter f) =>
         (f.Owner is null || r.OwnerId == f.Owner)
         && (f.Project is null || (r.ProjectId ?? "") == f.Project)
         && (f.Chat is null || (r.SessionId ?? "") == f.Chat)
         && (f.Task is null || (r.TaskId ?? "") == f.Task)
         && (f.Persona is null || (r.PersonaId ?? "") == f.Persona)
         && (f.Provider is null || r.Provider == f.Provider)
-        && (f.Model is null || (r.Model ?? "") == f.Model)
+        && (f.Model is null || ResolveModel(r.Model, r.Provider) == f.Model)
         && (f.Source is null || r.Source == f.Source);
 
-    private static bool Match(DailySpendRow r, SpendFilter f) =>
+    private bool Match(DailySpendRow r, SpendFilter f) =>
         (f.Owner is null || r.OwnerId == f.Owner)
         && (f.Project is null || (r.ProjectId ?? "") == f.Project)
         && (f.Chat is null || (r.SessionId ?? "") == f.Chat)
         && (f.Task is null || (r.TaskId ?? "") == f.Task)
         && (f.Persona is null || (r.PersonaId ?? "") == f.Persona)
         && (f.Provider is null || r.Provider == f.Provider)
-        && (f.Model is null || (r.Model ?? "") == f.Model)
+        && (f.Model is null || ResolveModel(r.Model, r.Provider) == f.Model)
         && (f.Source is null || r.Source == f.Source);
 
     // --- обзор ---
@@ -209,7 +217,9 @@ public sealed class SpendAnalyticsService(SpendStore store, SessionManager sessi
         "project" => (key.Length == 0 ? "Вне проектов" : projects.GetById(key)?.Name, null),
         "chat" => ChatName(key),
         "persona" => key.Length == 0 ? ("Без персоны", null) : PersonaName(key),
-        "model" => (key.Length == 0 ? "Модель по умолчанию" : key, null),
+        // Пустого ключа модели больше не бывает (Slices резолвит дефолт), но на случай
+        // стороннего вызова GroupRaw с сырым null — честный технический fallback.
+        "model" => (key.Length == 0 ? "Неизвестная модель" : key, null),
         _ => (key, null),
     };
 

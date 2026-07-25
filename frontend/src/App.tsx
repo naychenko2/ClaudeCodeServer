@@ -37,7 +37,7 @@ import { ensureNotificationsSubscribed } from './lib/notifications'
 import { KnowledgePage } from './features/knowledge/KnowledgePage'
 import { NotificationsPage } from './features/notifications/NotificationsPage'
 import { HomePage } from './pages/HomePage'
-import { SpendScreen } from './features/spend/SpendScreen'
+import { SpendPage } from './features/spend/SpendPage'
 import { OPEN_SPEND_EVENT, type SpendOpenContext } from './lib/spend'
 
 const OPEN_PROJECT_KEY = 'cc_open_project'
@@ -102,6 +102,7 @@ export default function App() {
     if (initialHash?.screen === 'notes') return 'notes'
     if (initialHash?.screen === 'personas') return 'personas'
     if (initialHash?.screen === 'knowledge') return 'knowledge'
+    if (initialHash?.screen === 'spend') return 'spend'
     if (initialHash?.screen === 'notifications') return 'notifications'
     if (initialHash?.screen === 'module' && initialHash.moduleId) return `module:${initialHash.moduleId}` as HubTabValue
     if (initialHash?.screen === 'projects' || initialHash?.screen === 'project') return 'projects'
@@ -143,11 +144,18 @@ export default function App() {
     return () => window.removeEventListener('popstate', onPop)
   }, [])
 
-  // Раздел «Аналитика токенов» — оверлей на верхнем уровне, открывается событием
-  // cc-open-spend из любой точки (виджет «Домой», бейдж чата) с контекстом перехода
+  // Раздел «Аналитика токенов» — полноценная вкладка хаба (вход через меню аватара,
+  // как «Знания»), поэтому главная шапка остаётся сверху. Контекст открытия
+  // (фильтр/день/паспорт хода) несем в spendCtx и пробрасываем в экран.
   const [spendCtx, setSpendCtx] = useState<SpendOpenContext | null>(null)
   useEffect(() => {
-    const open = (e: Event) => setSpendCtx((e as CustomEvent<SpendOpenContext>).detail ?? {})
+    const open = (e: Event) => {
+      const detail = (e as CustomEvent<SpendOpenContext>).detail ?? {}
+      setSpendCtx(detail)
+      localStorage.setItem(HUB_TAB_KEY, 'spend')
+      setHubTab('spend')
+      navToSection({ screen: 'spend' })
+    }
     window.addEventListener(OPEN_SPEND_EVENT, open)
     return () => window.removeEventListener(OPEN_SPEND_EVENT, open)
   }, [])
@@ -294,7 +302,7 @@ export default function App() {
   // Сидируем стек истории под восстановленное состояние, чтобы кнопки «назад/вперёд»
   // работали и после перезагрузки/диплинка (а не выкидывали из приложения сразу).
   useEffect(() => {
-    const seed: NavSnapshot = { screen: hubTab === 'home' ? 'home' : hubTab === 'chats' ? 'chats' : hubTab === 'calendar' ? 'calendar' : hubTab === 'notes' ? 'notes' : hubTab === 'personas' ? 'personas' : hubTab === 'knowledge' ? 'knowledge' : hubTab === 'notifications' ? 'notifications' : 'projects' }
+    const seed: NavSnapshot = { screen: hubTab === 'home' ? 'home' : hubTab === 'chats' ? 'chats' : hubTab === 'calendar' ? 'calendar' : hubTab === 'notes' ? 'notes' : hubTab === 'personas' ? 'personas' : hubTab === 'knowledge' ? 'knowledge' : hubTab === 'spend' ? 'spend' : hubTab === 'notifications' ? 'notifications' : 'projects' }
     // Диплинк #/notes/{id}: сохраняем заметку в снимок, иначе сид затрёт id в URL
     if (seed.screen === 'notes' && initialHash?.screen === 'notes') seed.note = initialHash.noteId ?? null
     // Диплинк #/personas/{id}: сохраняем персону в снимок, иначе сид затрёт id в URL
@@ -354,6 +362,9 @@ export default function App() {
       } else if (s?.screen === 'knowledge') {
         // Раздел «Знания» — проект «спит»
         if (hubTab !== 'knowledge') { localStorage.setItem(HUB_TAB_KEY, 'knowledge'); setHubTab('knowledge') }
+      } else if (s?.screen === 'spend') {
+        // Раздел «Аналитика токенов» — проект «спит»
+        if (hubTab !== 'spend') { localStorage.setItem(HUB_TAB_KEY, 'spend'); setHubTab('spend') }
       } else if (s?.screen === 'notifications') {
         // Раздел «Уведомления» — проект «спит»
         if (hubTab !== 'notifications') { localStorage.setItem(HUB_TAB_KEY, 'notifications'); setHubTab('notifications') }
@@ -454,6 +465,9 @@ export default function App() {
   // Переключатель раздела «Чаты | Проекты». НЕ сбрасывает открытый проект — он «спит»
   // при уходе в «Чаты» и восстанавливается при возврате в «Проекты» (навигационная память).
   const switchHubTab = (t: HubTabValue) => {
+    // Покидаем «Аналитику токенов» — чистим контекст открытия, чтобы следующий
+    // вход через меню/таб открыл чистый обзор (виджет/бейдж выставят свежий ctx)
+    if (hubTab === 'spend' && t !== 'spend') setSpendCtx({})
     // Уход в раздел закрывает overlay «Что нового» ЗАМЕНОЙ записи #/history, а не Back'ом:
     // history.back() асинхронен, и его popstate прилетел бы уже ПОСЛЕ смены раздела, вернув
     // hubTab на снимок, из которого overlay открывали (клик по «Персонам» кидал в «Проекты»).
@@ -481,7 +495,7 @@ export default function App() {
     const moduleId = moduleIdOf(t)
     const dest: NavSnapshot = moduleId
       ? { screen: 'module', moduleId }
-      : { screen: t === 'home' ? 'home' : t === 'chats' ? 'chats' : t === 'calendar' ? 'calendar' : t === 'notes' ? 'notes' : t === 'personas' ? 'personas' : t === 'knowledge' ? 'knowledge' : t === 'notifications' ? 'notifications' : 'projects' }
+      : { screen: t === 'home' ? 'home' : t === 'chats' ? 'chats' : t === 'calendar' ? 'calendar' : t === 'notes' ? 'notes' : t === 'personas' ? 'personas' : t === 'knowledge' ? 'knowledge' : t === 'spend' ? 'spend' : t === 'notifications' ? 'notifications' : 'projects' }
     // Если на текущем табе открыто «глубокое» состояние (заметка/файл/задача/персона/база) — уходя,
     // сохраняем его в истории (navPush), чтобы Back вернул именно к нему. Уход С дашборда
     // «Домой» — тоже push: дашборд — хаб-центр, Back с любого раздела возвращает на него.
@@ -709,6 +723,8 @@ export default function App() {
               ? <PersonasPage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
             : effectiveHubTab === 'knowledge'
               ? <KnowledgePage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
+            : effectiveHubTab === 'spend'
+              ? <SpendPage auth={auth} onLogout={logout} onHubTab={switchHubTab} ctx={spendCtx ?? {}} onClose={() => switchHubTab('home')} />
               : effectiveHubTab === 'notifications'
                 ? <NotificationsPage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
               : moduleIdOf(effectiveHubTab)
@@ -734,9 +750,6 @@ export default function App() {
             else setHistoryOpen(false)
           }}
         />
-      )}
-      {auth && spendCtx && (
-        <SpendScreen ctx={spendCtx} isAdmin={auth.role === 'admin'} onClose={() => setSpendCtx(null)} />
       )}
       {auth && !authChecking && <AiLauncher />}
       {auth && aiSearchOpen && <GlobalSearch onClose={() => setAiSearchOpen(false)} />}

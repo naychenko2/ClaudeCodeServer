@@ -96,6 +96,28 @@ public class LlmProviderRegistry
     // Wire-токен провайдера модели ("claude" | key) — для guard смены провайдера и фронта
     public string ProviderKey(string? model) => ResolveByModel(model)?.Key ?? "claude";
 
+    // Канонический дефолт родного Claude (подписка) для spend-аналитики: совпадает с алиасом
+    // "default" из ClaudeCatalog (ModelCatalogService.Fallback) — стабилен и узнаваем фронтом.
+    public const string DefaultClaudeModel = "default";
+
+    // Резолв модели для spend-аналитики: гарантирует непустой SpendRecord.Model. Если модель
+    // известна (явный выбор сессии или фактическая из modelUsage) — отдаём как есть. Иначе
+    // подтягиваем дефолт: null-модель по построению системы — всегда родной Claude по подписке
+    // (сторонние провайдеры требуют модель при создании сессии, см. BuildCliEnv; без env CLI
+    // идёт на дефолт подписки). Теоретический сторонний провайдер без модели (невозможно на
+    // практике) резолвится в первую модель его каталога — аналог строки 172. Конкретный тир
+    // Claude (opus/sonnet/haiku) намеренно НЕ фиксируется: дефолт подписки зависит от контекста
+    // CLI (sonnet в основном ходе, haiku на compact/малых операциях) — подстановка sonnet
+    // систематически врала бы. Маркер "default" — честное «дефолт подписки, тир неизвестен».
+    public string ResolveModelOrDefault(string? model, string? providerKey)
+    {
+        if (!string.IsNullOrWhiteSpace(model)) return model.Trim();
+        if (!string.IsNullOrEmpty(providerKey)
+            && GetByKey(providerKey) is { Models: { Count: > 0 } } p)
+            return p.Models[0].Id;
+        return DefaultClaudeModel;
+    }
+
     // Claude-каталог CLI отдаёт Opus только базовым алиасом с суффиксом окна ("opus[1m]").
     // Базовый алиас ("opus") резолвится надёжно в любом окружении/аккаунте, а "opus[1m]"
     // требует доступа к 1M-окну И прогретого каталога — иначе CLI отбивает «model may not

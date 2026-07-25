@@ -221,9 +221,10 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive }: Props
           onShowBackgroundTasks={isAdmin ? () => setShowBackgroundTasks(true) : undefined}
           onShowUserManagement={() => setShowUserMgmt(true)}
           hideStatus={isMobile}
-          // «Знания» и «Что нового» живут здесь на обеих платформах: в таббар они не
-          // входят, а отдельного меню разделов больше нет
+          // «Знания», «Аналитика токенов» и «Что нового» живут здесь на обеих платформах:
+          // в таббар они не входят, а отдельного меню разделов больше нет
           onOpenKnowledge={() => onTab('knowledge')}
+          onOpenSpend={() => onTab('spend')}
           onShowHistory={openHistory}
           historyBadge={historyBadge}
           historyNeverSeen={neverSeen}

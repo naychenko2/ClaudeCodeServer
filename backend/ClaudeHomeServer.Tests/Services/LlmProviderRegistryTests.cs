@@ -226,4 +226,33 @@ public class LlmProviderRegistryTests
         caps.SupportsPlanMode.Should().BeTrue();
         caps.SupportsCompact.Should().BeTrue();
     }
+
+    // Резолв дефолтной модели для spend-аналитики: SpendRecord.Model никогда не должен
+    // оставаться пустым — иначе в группировке копилась «Модель по умолчанию».
+    [Theory]
+    [InlineData(null, "claude", "default")]      // подписка, CLI не отдал modelUsage
+    [InlineData("", "claude", "default")]        // то же для пустой строки
+    [InlineData("   ", "claude", "default")]     // и пробельных
+    [InlineData(null, null, "default")]          // провайдер неизвестен — тоже дефолт Claude
+    [InlineData(null, "", "default")]
+    [InlineData(null, "deepseek", "deepseek-v4-pro")] // сторонний → первая модель каталога
+    [InlineData("opus", "claude", "opus")]        // явная модель не пересчитывается
+    [InlineData("glm-5.2", "glm", "glm-5.2")]
+    public void ResolveModelOrDefault_ПустаяРезолвитсяВДефолт(string? model, string? provider, string expected)
+    {
+        Create().ResolveModelOrDefault(model, provider).Should().Be(expected);
+    }
+
+    [Fact]
+    public void ResolveModelOrDefault_ОбрезаетПробелы()
+    {
+        Create().ResolveModelOrDefault("  opus  ", "claude").Should().Be("opus");
+    }
+
+    [Fact]
+    public void ResolveModelOrDefault_ДефолтClaude_СовпадаетСАлиасомКаталога()
+    {
+        // Маркер дефолта стабилен и совпадает с алиасом "default" из ClaudeCatalog
+        LlmProviderRegistry.DefaultClaudeModel.Should().Be("default");
+    }
 }

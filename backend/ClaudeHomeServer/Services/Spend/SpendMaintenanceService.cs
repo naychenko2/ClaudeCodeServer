@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Llm;
 
 namespace ClaudeHomeServer.Services.Spend;
 
@@ -11,7 +12,8 @@ namespace ClaudeHomeServer.Services.Spend;
 // правдоподобную картину, а точная минута для аналитики не важна. Ходы с расчётным временем
 // после T0 (момент включения live-сбора) пропускаются — они уже записаны штатной точкой.
 public sealed class SpendMaintenanceService(SpendStore store, SessionManager sessions,
-    ChatHistoryService history, ILogger<SpendMaintenanceService> log) : BackgroundService
+    ChatHistoryService history, LlmProviderRegistry llm, ILogger<SpendMaintenanceService> log)
+    : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
@@ -83,7 +85,7 @@ public sealed class SpendMaintenanceService(SpendStore store, SessionManager ses
                     TaskId = session.TaskId,
                     PersonaId = session.PersonaId,
                     Provider = provider,
-                    Model = session.Model,
+                    Model = llm.ResolveModelOrDefault(session.Model, provider),
                     Source = SpendSources.IsFree(provider, session.Model)
                         ? SpendSources.Free : SpendSources.ChatTurn,
                     InputTokens = u.InputTokens,

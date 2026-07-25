@@ -53,8 +53,35 @@ public sealed partial class ModuleRegistry
         foreach (var path in manifestPaths.Distinct(StringComparer.OrdinalIgnoreCase))
             TryLoad(path);
 
+        RegisterLlmActions();
+
         _log.LogInformation("Реестр модулей: загружено {Count} (каталог {Dir})", _modules.Count, modulesDir);
     }
+
+    // LLM-действия модулей → динамический слой каталога фоновых действий (§10.1, ТЗ R10).
+    // Ключ — module:{id}:{key} (неймспейс строит ядро), группа в UI — displayName модуля,
+    // профиль и дефолт маршрута — из манифеста. Дальше действия живут наравне со встроенными:
+    // роутер/стор/пресеты/настройки моделей видят их через LocalActionCatalog.
+    private void RegisterLlmActions()
+    {
+        var actions = _modules
+            .SelectMany(m => (m.Manifest.Llm?.Actions ?? []).Select(a => new Llm.LocalAction(
+                m.LlmActionKey(a.Key), a.Title, m.Manifest.DisplayName,
+                ParseProfile(a.Profile), a.DefaultLocal)))
+            .ToList();
+        if (actions.Count == 0) return;
+
+        Llm.LocalActionCatalog.RegisterDynamic(actions);
+        _log.LogInformation("LLM-действия модулей зарегистрированы в каталоге: {Count}", actions.Count);
+    }
+
+    // Профиль уже прошёл валидацию манифеста — неизвестных значений тут не бывает
+    private static Llm.CheapProfile ParseProfile(string profile) => profile switch
+    {
+        "small" => Llm.CheapProfile.Small,
+        "large" => Llm.CheapProfile.Large,
+        _ => Llm.CheapProfile.Text,
+    };
 
     /// <summary>Все успешно загруженные модули (без учёта фич-флагов — это R8, слой выше).</summary>
     public IReadOnlyList<LoadedModule> All => _modules;
@@ -139,6 +166,20 @@ public sealed partial class ModuleRegistry
         foreach (var scope in m.Scopes ?? [])
             if (!Regex.IsMatch(scope, "^[a-z][a-z0-9._-]{1,63}$"))
                 return $"scope «{scope}» не соответствует формату §5.1";
+
+        // LLM-действия (§10.1): ключ-slug, уникальность в модуле, известный профиль нагрузки
+        var llmKeys = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var action in m.Llm?.Actions ?? [])
+        {
+            if (string.IsNullOrWhiteSpace(action.Key) || !SlugRegex().IsMatch(action.Key))
+                return $"llm.action «{action.Key}» не slug (^[a-z][a-z0-9-]+$)";
+            if (!llmKeys.Add(action.Key))
+                return $"llm.action «{action.Key}» объявлен дважды";
+            if (string.IsNullOrWhiteSpace(action.Title))
+                return $"llm.action «{action.Key}»: отсутствует title";
+            if (action.Profile is not ("small" or "text" or "large"))
+                return $"llm.action «{action.Key}»: profile «{action.Profile}» не из small|text|large";
+        }
 
         return null;
     }

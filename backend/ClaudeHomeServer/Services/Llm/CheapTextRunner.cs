@@ -40,9 +40,11 @@ public interface ICheapTextRunner
     // локали и прямом адаптере usage=null (бесплатно — стоимости нет, что для них корректно).
     // timeout/maxTokens перекрывают профиль действия — для тяжёлых задач с собственными лимитами
     // (changelog: свой большой таймаут, длинный JSON-ответ). null → значения из профиля.
+    // jsonFormat — как в RunAsync: structured output локального шага (LLM-канал модулей
+    // передаёт сюда responseFormat из §10.3 — просьбу, а не гарантию).
     Task<OneShotResult> RunDetailedAsync(string actionKey, string prompt, string? fallbackModel = null,
         string? ownerId = null, TimeSpan? timeout = null, int? maxTokens = null,
-        CancellationToken ct = default);
+        object? jsonFormat = null, CancellationToken ct = default);
 }
 
 public sealed class CheapTextRunner(
@@ -197,7 +199,7 @@ public sealed class CheapTextRunner(
     // usage приходит из RunDetailedAsync. Последний шаг без страховки — как в RunAsync.
     public async Task<OneShotResult> RunDetailedAsync(string actionKey, string prompt,
         string? fallbackModel = null, string? ownerId = null, TimeSpan? timeout = null,
-        int? maxTokens = null, CancellationToken ct = default)
+        int? maxTokens = null, object? jsonFormat = null, CancellationToken ct = default)
     {
         var route = router.Resolve(actionKey);
         var spec = router.ProfileFor(actionKey);
@@ -232,7 +234,7 @@ public sealed class CheapTextRunner(
         // Шаг 2 — локальная модель (usage нет). Для «сильных» действий локаль-страховка пропускается — см. RunAsync.
         if (LocalStepApplies(actionKey, route.Kind) && ollama.Enabled)
         {
-            var local = await RunLocalAsync(actionKey, prompt, jsonFormat: null, ownerId, ct);
+            var local = await RunLocalAsync(actionKey, prompt, jsonFormat, ownerId, ct);
             if (!string.IsNullOrWhiteSpace(local)) return new OneShotResult(local, null, 0);
         }
 

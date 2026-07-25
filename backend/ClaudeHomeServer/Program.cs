@@ -254,6 +254,9 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Modules.ModuleRegistry>(
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Modules.ModuleTokenService>();
 builder.Services.AddSingleton<Yarp.ReverseProxy.Configuration.IProxyConfigProvider,
     ClaudeHomeServer.Services.Modules.ModuleProxyConfigProvider>();
+// LLM-канал модулей (контракт §10): лимит конкурентности per-модуль + учёт вызовов R13
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Modules.HostLlmConcurrencyLimiter>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Modules.ModuleLlmUsageStore>();
 builder.Services.Configure<DifyOptions>(builder.Configuration.GetSection(DifyOptions.Section));
 builder.Services.AddSingleton<KnowledgeService>();
 // Синк «файл проекта ↔ документ БЗ»: singleton + hosted-мост событий хода Claude
@@ -296,6 +299,22 @@ builder.Services.AddRateLimiter(options =>
     {
         var limit = ctx.RequestServices.GetRequiredService<IConfiguration>()
             .GetValue("Auth:LoginRateLimit", 10);
+        return RateLimitPartition.GetFixedWindowLimiter(
+            ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = limit,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+            });
+    });
+    // Выпуск host-токенов модулей (§10.2 v1.5): RSA-подпись на каждый выпуск — защищаем от
+    // молотьбы. Модуль кэширует токен на 60 мин, так что лимит просторный даже на всех
+    // пользователей модуля разом.
+    options.AddPolicy("host-token", ctx =>
+    {
+        var limit = ctx.RequestServices.GetRequiredService<IConfiguration>()
+            .GetValue("Modules:HostTokenRateLimit", 30);
         return RateLimitPartition.GetFixedWindowLimiter(
             ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
             _ => new FixedWindowRateLimiterOptions
@@ -376,6 +395,11 @@ if (!inspectionMode)
 
 // Прогрев сервисов на старте — UserStore печатает предупреждение если создал admin/admin
 app.Services.GetRequiredService<UserStore>();
+// Реестр модулей — строго ДО первого обращения к слою Llm: его конструктор регистрирует
+// LLM-действия модулей (§10.1) в динамическом слое LocalActionCatalog, а
+// LocalActionOverridesStore при загрузке отбрасывает оверрайды неизвестных ключей —
+// поздняя регистрация теряла бы сохранённые маршруты модульных действий
+app.Services.GetRequiredService<ModuleRegistry>();
 if (!inspectionMode)
 {
     // Фоновый прогрев каталога моделей (опрос claude CLI ~5 с — не задерживаем старт).
@@ -504,6 +528,11 @@ app.UseAuthorization();
 // Gateway внешних модулей (контракт §5.2): срезка клиентских identity-заголовков,
 // валидация cc_token и инъекция модульного токена — ДО YARP-прокси
 app.UseModuleGateway();
+
+// Host-канал модулей (контракт §10.2): аутентификация /api/host/** модульным токеном RS256.
+// Поверхность вне HMAC-схемы ядра — контроллеры под префиксом БЕЗ [Authorize], вход
+// охраняется только здесь. Rate-limit обмена токена отрабатывает раньше (UseRateLimiter выше).
+app.UseHostChannel();
 
 // WebDAV — middleware перехватывает /projects/* до роутинга.
 // Собственный Basic Auth внутри хендлера, вне JWT pipeline.

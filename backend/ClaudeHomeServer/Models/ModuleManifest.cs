@@ -19,6 +19,22 @@ public sealed class ModuleManifest
     [JsonPropertyName("mcp")] public List<ModuleMcp>? Mcp { get; set; }
     [JsonPropertyName("scopes")] public List<string>? Scopes { get; set; }
     [JsonPropertyName("auth")] public ModuleAuth? Auth { get; set; }
+    [JsonPropertyName("llm")] public ModuleLlm? Llm { get; set; }
+}
+
+/// <summary>LLM-действия модуля (контракт §10.1): объявляются манифестом, регистрируются
+/// в каталоге фоновых действий ядра под неймспейсом module:{id}:{key}.</summary>
+public sealed class ModuleLlm
+{
+    [JsonPropertyName("actions")] public List<ModuleLlmAction>? Actions { get; set; }
+}
+
+public sealed class ModuleLlmAction
+{
+    [JsonPropertyName("key")] public string Key { get; set; } = "";
+    [JsonPropertyName("title")] public string Title { get; set; } = "";
+    [JsonPropertyName("profile")] public string Profile { get; set; } = "";
+    [JsonPropertyName("defaultLocal")] public bool DefaultLocal { get; set; }
 }
 
 public sealed class ModuleBackend
@@ -67,4 +83,7 @@ public sealed record LoadedModule(ModuleManifest Manifest, string ModuleDir)
     public string ScopeString => string.Join(' ', Manifest.Scopes ?? []);
     /// <summary>Ключ фич-флага видимости модуля (R8).</summary>
     public string FeatureFlagKey => $"module-{Manifest.Id}";
+    /// <summary>Полный ключ LLM-действия модуля в каталоге ядра (§10.1): module:{id}:{key}.
+    /// Неймспейс — граница безопасности: строится ядром из id модуля, а не из запроса.</summary>
+    public string LlmActionKey(string key) => $"module:{Manifest.Id}:{key}";
 }

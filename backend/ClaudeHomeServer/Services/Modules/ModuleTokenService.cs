@@ -17,9 +17,10 @@ namespace ClaudeHomeServer.Services.Modules;
 /// </summary>
 public sealed class ModuleTokenService
 {
-    /// <summary>TTL по каналу выпуска (§5.1): gateway — 5 мин, mcp — 60 мин.</summary>
+    /// <summary>TTL по каналу выпуска (§5.1, §10.2): gateway — 5 мин, mcp и host — 60 мин.</summary>
     public static readonly TimeSpan GatewayTokenLifetime = TimeSpan.FromMinutes(5);
     public static readonly TimeSpan McpTokenLifetime = TimeSpan.FromMinutes(60);
+    public static readonly TimeSpan HostTokenLifetime = TimeSpan.FromMinutes(60);
     private static readonly TimeSpan RetiredKeyGrace = TimeSpan.FromHours(24);
 
     private sealed class StoredKey
@@ -117,13 +118,18 @@ public sealed class ModuleTokenService
 
     /// <summary>
     /// Выпуск модульного токена по замороженной схеме §5.1.
-    /// chan: "gateway" (TTL 5 мин) | "mcp" (TTL 60 мин).
+    /// chan: "gateway" (TTL 5 мин) | "mcp" (TTL 60 мин) | "host" (TTL 60 мин, §10.2).
     /// </summary>
     public string Issue(LoadedModule module, string userId, string userName, string chan)
     {
-        if (chan is not ("gateway" or "mcp"))
+        if (chan is not ("gateway" or "mcp" or "host"))
             throw new ArgumentException($"Неизвестный канал выпуска «{chan}»", nameof(chan));
-        var ttl = chan == "gateway" ? GatewayTokenLifetime : McpTokenLifetime;
+        var ttl = chan switch
+        {
+            "gateway" => GatewayTokenLifetime,
+            "mcp" => McpTokenLifetime,
+            _ => HostTokenLifetime,
+        };
         var now = DateTime.UtcNow;
 
         RsaSecurityKey key;
@@ -167,18 +173,35 @@ public sealed class ModuleTokenService
     /// </summary>
     public bool TryValidate(string? token, LoadedModule module, out string? userId)
     {
-        userId = null;
-        if (string.IsNullOrWhiteSpace(token)) return false;
+        // Passthrough (§5.2б) — только модульные токены канала mcp: chan=gateway живёт
+        // лишь в gateway-middleware на пути браузер↔ядро и извне прийти не может.
+        var validated = Validate(token, module, "mcp");
+        userId = validated?.UserId;
+        return validated is not null;
+    }
+
+    /// <summary>Провалидированный модульный токен: кто (sub), имя и канал выпуска.</summary>
+    public sealed record ValidatedModuleToken(string UserId, string UserName, string Chan);
+
+    /// <summary>
+    /// Общая валидация модульного токена RS256 с перечнем допустимых каналов (chan).
+    /// Тот же контракт §5.1, что и TryValidate; host-канал (§10.2) требует и обмен токена
+    /// (принимает gateway|mcp), и вызовы /api/host/** (принимают только host).
+    /// null — токен негоден (подпись/aud/lifetime/chan вне списка).
+    /// </summary>
+    public ValidatedModuleToken? Validate(string? token, LoadedModule module, params string[] allowedChans)
+    {
+        if (string.IsNullOrWhiteSpace(token)) return null;
 
         JwtSecurityTokenHandler handler = new() { MapInboundClaims = false };
         JwtSecurityToken parsed;
         try { parsed = handler.ReadJwtToken(token); }
-        catch { return false; }
+        catch { return null; }
 
         // alg жёстко RS256 (§5.1): HS256 сюда не относится (это cc_token из отдельной ветки).
         // Проверяем ДО валидации подписи — классический alg-confusion (HS256 с публичной
         // RSA-компонентой как HMAC-секретом) здесь невозможен.
-        if (parsed.Header.Alg != SecurityAlgorithms.RsaSha256) return false;
+        if (parsed.Header.Alg != SecurityAlgorithms.RsaSha256) return null;
 
         List<RsaSecurityKey> publicKeys;
         lock (_sync)
@@ -189,7 +212,7 @@ public sealed class ModuleTokenService
                 .Select(ToPublicKey)
                 .ToList();
         }
-        if (publicKeys.Count == 0) return false;
+        if (publicKeys.Count == 0) return null;
 
         // Перебираем ключи (активный + отставленные в grace 24 ч): при ротации (§5.3) токены,
         // подписанные только что отставленным ключом, должны ещё приниматься.
@@ -218,13 +241,14 @@ public sealed class ModuleTokenService
                 continue;
             }
 
-            // Passthrough (§5.2б) — только модульные токены канала mcp: chan=gateway живёт
-            // лишь в этом middleware на пути браузер↔ядро и извне прийти не может.
-            if (principal.FindFirstValue("chan") != "mcp") return false;
-            userId = principal.FindFirstValue(JwtRegisteredClaimNames.Sub);
-            return !string.IsNullOrEmpty(userId);
+            var chan = principal.FindFirstValue("chan");
+            if (chan is null || !allowedChans.Contains(chan, StringComparer.Ordinal)) return null;
+            var userId = principal.FindFirstValue(JwtRegisteredClaimNames.Sub);
+            if (string.IsNullOrEmpty(userId)) return null;
+            return new ValidatedModuleToken(
+                userId, principal.FindFirstValue(JwtRegisteredClaimNames.Name) ?? "", chan);
         }
-        return false;
+        return null;
     }
 
     // Публичный RSA-ключ (только Modulus/Exponent) из хранимого приватного — для проверки

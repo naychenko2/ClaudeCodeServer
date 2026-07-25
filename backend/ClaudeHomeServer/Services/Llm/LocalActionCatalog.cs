@@ -19,6 +19,9 @@ public sealed record LocalAction(
 // Каталог всех фоновых one-shot действий — единый источник правды для роутинга и UI.
 // Сюда НЕ входят технически неприменимые: задача-исполнитель (агентная сессия с
 // инструментами, не one-shot) и генерация картинок fal.ai.
+// Два слоя: статический массив встроенных действий + динамический слой LLM-действий
+// внешних модулей (контракт §10.1, ключи module:{id}:{key}) — его наполняет ModuleRegistry
+// на старте, по паттерну динамических флагов module-{id} в FeatureFlagService.
 public static class LocalActionCatalog
 {
     // Ключи действий — ссылаются потребители (типобезопасно вместо строк-литералов).
@@ -73,7 +76,7 @@ public static class LocalActionCatalog
             [CheapProfile.Large] = new(NumCtx: 16384, NumPredict: 1024, TimeoutMs: 90_000),
         };
 
-    public static readonly IReadOnlyList<LocalAction> All =
+    private static readonly IReadOnlyList<LocalAction> Builtin =
     [
         new(ActionRank, "Ранжир действий AI-хаба", "AI-хаб", CheapProfile.Small, DefaultLocal: true),
         new(NotesTags, "Теги заметок", "Заметки", CheapProfile.Small, DefaultLocal: true),
@@ -124,10 +127,47 @@ public static class LocalActionCatalog
     ];
 
     private static readonly Dictionary<string, LocalAction> ByKey =
-        All.ToDictionary(a => a.Key, StringComparer.OrdinalIgnoreCase);
+        Builtin.ToDictionary(a => a.Key, StringComparer.OrdinalIgnoreCase);
+
+    // Динамический слой: действия внешних модулей. Снимок заменяется целиком при регистрации
+    // (мержем поверх прежнего — читатели никогда не видят полумутированного состояния).
+    private static volatile Dictionary<string, LocalAction> _dynamic =
+        new(StringComparer.OrdinalIgnoreCase);
+    private static readonly Lock DynamicSync = new();
+
+    /// <summary>
+    /// Регистрация LLM-действий модулей (§10.1). Ключи ОБЯЗАНЫ нести неймспейс
+    /// module:{id}:{key} — коллизии со встроенными и попытки без неймспейса отбрасываются
+    /// (встроенный каталог модулю не перехватить). Вызывается ModuleRegistry на старте.
+    /// </summary>
+    public static void RegisterDynamic(IEnumerable<LocalAction> actions)
+    {
+        lock (DynamicSync)
+        {
+            var next = new Dictionary<string, LocalAction>(_dynamic, StringComparer.OrdinalIgnoreCase);
+            foreach (var a in actions)
+            {
+                if (!a.Key.StartsWith("module:", StringComparison.Ordinal) || ByKey.ContainsKey(a.Key))
+                    continue;
+                next[a.Key] = a;
+            }
+            _dynamic = next;
+        }
+    }
+
+    // Встроенные + модульные. Свойство, а не поле: динамический слой наполняется после
+    // инициализации типа; порядок стабильный — встроенные первыми, модульные следом.
+    public static IReadOnlyList<LocalAction> All
+    {
+        get
+        {
+            var dynamic = _dynamic;
+            return dynamic.Count == 0 ? Builtin : [.. Builtin, .. dynamic.Values];
+        }
+    }
 
     public static LocalAction? Find(string key) =>
-        ByKey.TryGetValue(key, out var a) ? a : null;
+        ByKey.TryGetValue(key, out var a) ? a : (_dynamic.TryGetValue(key, out var d) ? d : null);
 
-    public static bool IsKnown(string key) => ByKey.ContainsKey(key);
+    public static bool IsKnown(string key) => Find(key) is not null;
 }

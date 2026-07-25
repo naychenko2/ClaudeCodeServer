@@ -64,6 +64,9 @@ public sealed class GitService(ILauncherFactory launchers)
             // и кириллица в сообщениях коммитов превращается в кракозябры.
             StdioEncoding = new UTF8Encoding(false),
             TurnId = Guid.NewGuid().ToString("N"),
+            // git короткоживущий и убивается по своему таймауту — реестру процессов
+            // он не нужен (см. ProcessSpec.Track)
+            Track = false,
         };
 
         var launcher = launchers.ForOwner(ownerId);

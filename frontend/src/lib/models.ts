@@ -190,9 +190,9 @@ export function modelLabel(value?: string | null): string {
 }
 
 // Размер контекстного окна модели (токены) для индикатора заполнения.
-// Матч по подстроке: фактический id из session_started (claude-opus-4-8-...)
+// Матч по подстроке: фактический id из session_started (claude-opus-5-...)
 // не совпадает с алиасом из MODELS.
-//   Opus 4.6+/Sonnet 4.6+/Fable 5 — 1M; Haiku 4.5 — 200k; старые модели — 200k.
+//   Opus 4.6+/Opus 5/Sonnet 4.6+/Sonnet 5/Fable 5 — 1M; Haiku 4.5 — 200k; старые модели — 200k.
 // Порядок важен: конкретные (haiku) раньше общих. ВАЖНО: это спека модели;
 // эффективное окно, от которого claude CLI считает авто-компакт, может быть
 // меньше (200k) — если проценты разойдутся с реальным компактом, свериться.
@@ -201,7 +201,7 @@ const CONTEXT_1M = 1_000_000;
 
 const CONTEXT_WINDOWS: Array<{ match: RegExp; window: number }> = [
   { match: /haiku/i, window: 200_000 },
-  { match: /opus-4-(6|7|8)|opus-4\.[678]/i, window: CONTEXT_1M },
+  { match: /opus-(4-[678]|5)|opus-4\.[678]/i, window: CONTEXT_1M },
   { match: /sonnet-(4-6|5)|sonnet-4\.6/i, window: CONTEXT_1M },
   { match: /fable|mythos/i, window: CONTEXT_1M },
   { match: /deepseek/i, window: CONTEXT_1M }, // V4-модели — 1M (точное окно приходит с бэка)

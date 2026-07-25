@@ -157,6 +157,17 @@ Claude Design проект: `52adb1f7-312b-4f25-8c47-2bccfca9df94`
   докладываются общие настройки пользователя по белому списку (CLAUDE.md,
   settings.json, rules/skills/agents/commands; креденшалы — никогда), источник —
   `ClaudeUserProfileDir` (дефолт ~/.claude), троттлинг 5 мин.
+- **Иммунитет к системному окружению** — маршрут CLI задаёт только сервер. На КАЖДОМ запуске
+  claude (ход чата, one-shot, каталог моделей) из унаследованного окружения выбрасываются
+  `ANTHROPIC_BASE_URL/AUTH_TOKEN/API_KEY/MODEL/DEFAULT_*`, `CLAUDE_CONFIG_DIR`,
+  `CLAUDE_CODE_SUBAGENT_MODEL`, `CLAUDE_CODE_AUTO_COMPACT_WINDOW`
+  (`LlmProviderRegistry.ProviderEnvKeys` → `ProcessSpec.ClearEnv` → `Remove` в
+  `LocalProcessRunner` ДО применения `Env`, так что оверрайд провайдера всегда сильнее).
+  Иначе глобально заданная переменная (мастер-рубильник «весь Claude Code на GLM», забытый
+  `setx`) молча увела бы чат «на Claude» к чужому эндпоинту с токеном подписки. Выброс
+  пишется в лог по разу на ключ; `CLAUDE_CODE_OAUTH_TOKEN` не трогается (на нём вход по
+  подписке); вернуть наследование — `Claude:InheritSystemEnv=true`. В docker-среде
+  вычищать нечего: окружение контейнера собирается с нуля и уезжает через `-e`.
 - **Баланс** — `ProviderBalanceService`, `GET /api/providers/{key}/balance|usage`
   (кэш 5 мин; снапшоты 8 дней в data/provider-usage-{key}.json, legacy
   deepseek-usage.json читается) — попап контекст-бейджа шапки чата + вкладка

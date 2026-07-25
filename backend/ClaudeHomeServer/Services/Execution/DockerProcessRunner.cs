@@ -42,6 +42,9 @@ public sealed class DockerProcessRunner : IProcessLauncher
         // Дешёвый (троттлёный) гарант, что контейнер поднят и актуален
         _sandbox.EnsureRunningAsync().GetAwaiter().GetResult();
 
+        // spec.ClearEnv здесь намеренно не применяется: окружение хода собирается с нуля
+        // и уезжает в контейнер через -e, хостовые переменные в него не наследуются —
+        // вычищать нечего. Изоляция от системных ANTHROPIC_* получается сама собой.
         var env = spec.Env is null
             ? new Dictionary<string, string>()
             : new Dictionary<string, string>(spec.Env);
@@ -87,7 +90,7 @@ public sealed class DockerProcessRunner : IProcessLauncher
         var process = new Process { StartInfo = psi, EnableRaisingEvents = spec.EnableRaisingEvents };
         if (!process.Start())
             throw new InvalidOperationException($"Не удалось запустить docker exec для {spec.FileName}");
-        ProcessRegistry.Register(process);
+        if (spec.Track) ProcessRegistry.Register(process);
         return process;
     }
 

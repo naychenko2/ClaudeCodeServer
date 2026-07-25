@@ -70,7 +70,7 @@ public class ModelCatalogService(LlmProviderRegistry providers, IHttpClientFacto
                     List<ModelInfo>? fresh = null;
                     if (_queryCli)
                     {
-                        try { fresh = await QueryCliAsync(ct); }
+                        try { fresh = await QueryCliAsync(providers.EnvKeysToClear, ct); }
                         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
                         catch (Exception ex)
                         {
@@ -186,7 +186,9 @@ public class ModelCatalogService(LlmProviderRegistry providers, IHttpClientFacto
 
     // Короткоживущий процесс claude: шлём initialize в stdin, ждём control_response с models.
     // Системный вызов бэкенда — всегда локальная среда.
-    private static async Task<List<ModelInfo>?> QueryCliAsync(CancellationToken ct)
+    // clearEnv — ключи провайдерского режима из реестра (см. LlmProviderRegistry.EnvKeysToClear):
+    // каталог РОДНЫХ моделей надо спрашивать у Anthropic, а не у эндпоинта из системной переменной
+    private static async Task<List<ModelInfo>?> QueryCliAsync(IReadOnlyList<string> clearEnv, CancellationToken ct)
     {
         var launcher = Execution.LocalProcessRunner.Instance;
         const string requestId = "model-catalog";
@@ -201,6 +203,9 @@ public class ModelCatalogService(LlmProviderRegistry providers, IHttpClientFacto
                 .. Llm.Claude.ClaudeRuntimeSettings.HooksOffArgs(launcher)
             ],
             WorkingDirectory = Path.GetTempPath(),
+            // Каталог родных моделей спрашиваем у Anthropic, а не у того эндпоинта,
+            // на который случайно указывает системная ANTHROPIC_BASE_URL машины
+            ClearEnv = clearEnv,
             StdioEncoding = new System.Text.UTF8Encoding(false),
         });
         try

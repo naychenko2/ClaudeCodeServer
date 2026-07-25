@@ -6,10 +6,11 @@ public enum RouteSource { Default, Config, Admin }
 
 // Исполнитель ПЕРВОГО шага действия. Дальше цепочка одинакова для всех:
 // выбранное → локальная модель (если настроена) → claude.
-// Local  — локальная модель Ollama;
-// Claude — модель Claude по умолчанию для действия (та, что оно берёт из своего конфига);
-// Model  — конкретная модель конкретного провайдера (Model заполнено её id).
-public enum RouteKind { Local, Claude, Model }
+// Local   — локальная модель Ollama;
+// Claude  — модель действия по умолчанию (та, что оно берёт из своего конфига);
+// Default — модель по умолчанию для чатов (глобальная DefaultChatModel);
+// Model   — конкретная модель конкретного провайдера (Model заполнено её id).
+public enum RouteKind { Local, Claude, Default, Model }
 
 // Действующий маршрут действия: чем начинаем, какой моделью (для Kind=Model) и откуда взято.
 public sealed record ActionRoute(RouteKind Kind, string? Model, RouteSource Source);
@@ -83,6 +84,7 @@ public sealed class LocalActionRouter
     {
         LocalActionOverridesStore.LocalRoute => new ActionRoute(RouteKind.Local, null, source),
         LocalActionOverridesStore.ClaudeRoute => new ActionRoute(RouteKind.Claude, null, source),
+        LocalActionOverridesStore.DefaultRoute => new ActionRoute(RouteKind.Default, null, source),
         _ => new ActionRoute(RouteKind.Model, route, source),
     };
 

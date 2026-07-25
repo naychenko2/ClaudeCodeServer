@@ -19,6 +19,7 @@ public class SessionManagerTests : IDisposable
     private readonly ChatHistoryService _historyService;
     private readonly UserStore _userStore;
     private readonly PersonaManager _personaManager;
+    private readonly AppSettingsService _appSettings;
     private readonly SessionManager _sut;
 
     public SessionManagerTests()
@@ -39,6 +40,7 @@ public class SessionManagerTests : IDisposable
         var userStore = new UserStore(config, new ClaudeHomeServer.Tests.Helpers.FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         _userStore = userStore;
         var appSettings = new AppSettingsService(config);
+        _appSettings = appSettings;
         _projectManager = new ProjectManager(config, userStore, appSettings);
         _historyService = new ChatHistoryService(config);
 
@@ -388,6 +390,47 @@ public class SessionManagerTests : IDisposable
         var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, resumeSessionId: uuid);
 
         session.ClaudeSessionId.Should().Be(uuid);
+    }
+
+    // --- DefaultChatModel (модель по умолчанию для новых чатов) ---
+
+    [Fact]
+    public async Task CreateAsync_БезModel_ПрименяетDefaultChatModel()
+    {
+        _appSettings.Save(new AppSettings { DefaultChatModel = "glm-5.2" });
+        var dir = MkProjectDir("dcm");
+        var project = _projectManager.Create("DCM", dir, TestUserId, TestUsername);
+
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+
+        session.Model.Should().Be("glm-5.2");
+    }
+
+    [Fact]
+    public async Task CreateAsync_ЯвныйModel_ПеребиваетDefaultChatModel()
+    {
+        _appSettings.Save(new AppSettings { DefaultChatModel = "glm-5.2" });
+        var dir = MkProjectDir("dcm-explicit");
+        var project = _projectManager.Create("DCME", dir, TestUserId, TestUsername);
+
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, model: "opus");
+
+        session.Model.Should().Be("opus");
+    }
+
+    [Fact]
+    public async Task CreateAsync_Resume_НеПрименяетDefaultChatModel()
+    {
+        // У resumed-сессии в транскрипте уже зафиксированы своя модель и провайдер —
+        // подмена DefaultChatModel сменила бы провайдер и упёрлась в guard (400)
+        _appSettings.Save(new AppSettings { DefaultChatModel = "glm-5.2" });
+        var dir = MkProjectDir("dcm-resume");
+        var project = _projectManager.Create("DCMR", dir, TestUserId, TestUsername);
+
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto,
+            resumeSessionId: Guid.NewGuid().ToString());
+
+        session.Model.Should().BeNull();
     }
 
     [Fact]

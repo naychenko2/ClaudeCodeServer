@@ -47,9 +47,15 @@ public interface ICheapTextRunner
 
 public sealed class CheapTextRunner(
     LocalActionRouter router, OllamaClient ollama, CloudCheapClient cloud, IOneShotRunner claude,
-    ILogger<CheapTextRunner> log) : ICheapTextRunner
+    ILogger<CheapTextRunner> log, AppSettingsService? appSettings = null) : ICheapTextRunner
 {
     public bool UsesLocal(string actionKey) => router.UsesLocal(actionKey);
+
+    // При route "default" исполнитель — глобальная модель по умолчанию для чатов
+    // (DefaultChatModel), а не модель действия из его конфига. null/пусто → claude без --model,
+    // т.е. дефолт CLI (корректно: «по умолчанию» без явно заданной модели и есть он).
+    private string? EffectiveFallback(RouteKind kind, string? fallbackModel) =>
+        kind == RouteKind.Default ? appSettings?.Get().DefaultChatModel : fallbackModel;
 
     // Цепочка одинакова для всех действий: выбранный исполнитель → локальная модель →
     // claude. Последний шаг умышленно без страховки: если упал и он, исключение уходит
@@ -82,8 +88,9 @@ public sealed class CheapTextRunner(
             log.LogDebug("cheap-runner: действие {Action} — фолбэк с Ollama на claude", actionKey);
         }
 
-        // Шаг 3 — claude с моделью действия по умолчанию.
-        return await claude.RunAsync(prompt, claude.NormalizeModel(fallbackModel), ct: ct, ownerId: ownerId,
+        // Шаг 3 — claude с моделью действия по умолчанию (route "default" берёт DefaultChatModel).
+        var effFallback = EffectiveFallback(route.Kind, fallbackModel);
+        return await claude.RunAsync(prompt, claude.NormalizeModel(effFallback), ct: ct, ownerId: ownerId,
             label: actionKey);
     }
 
@@ -225,8 +232,9 @@ public sealed class CheapTextRunner(
             if (!string.IsNullOrWhiteSpace(local)) return new OneShotResult(local, null, 0);
         }
 
-        // Шаг 3 — claude с моделью действия по умолчанию (usage есть).
-        return await claude.RunDetailedAsync(prompt, claude.NormalizeModel(fallbackModel), effTimeout, ct, ownerId,
+        // Шаг 3 — claude с моделью действия по умолчанию (route "default" берёт DefaultChatModel).
+        var effFallback = EffectiveFallback(route.Kind, fallbackModel);
+        return await claude.RunDetailedAsync(prompt, claude.NormalizeModel(effFallback), effTimeout, ct, ownerId,
             label: actionKey);
     }
 

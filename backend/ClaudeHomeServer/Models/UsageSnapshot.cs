@@ -41,9 +41,9 @@ public record UsageResponse(IReadOnlyList<UsageSnapshot> Snapshots, PlanInfo? Pl
 public record OllamaUsageInfo(bool Enabled, string? Model, string? BaseUrl,
     IReadOnlyList<OllamaActionInfo> Actions);
 
-// Route — исполнитель первого шага: "local", "claude" или id конкретной модели провайдера
-// (дальше действие идёт по цепочке «выбранное → локаль → claude»). RoutedToOllama — начинается
-// ли действие с локальной модели прямо сейчас (с учётом доступности Ollama).
+// Route — исполнитель первого шага: "local", "claude", "default" (модель по умолчанию для чатов)
+// или id конкретной модели провайдера (дальше действие идёт по цепочке «выбранное → локаль → claude»).
+// RoutedToOllama — начинается ли действие с локальной модели прямо сейчас (с учётом доступности Ollama).
 // Source — откуда взято значение: "default" (каталог), "config" (Ollama:Actions) или "admin"
 // (выбор в UI); по нему видно, что переопределено и что можно сбросить.
 // RequiresStrong — действию нужна сильная модель (лицо продукта, генерация артефактов):

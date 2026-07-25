@@ -148,6 +148,35 @@ public class SessionMessagesController(SessionManager sessions, ProjectManager p
         return projects.GetById(sender.ProjectId)?.Name ?? "Другой проект";
     }
 
+    // POST /api/sessions/{sid}/report — отчёт «наверх», в родительский чат (chats_report_up).
+    // Промежуточный отчёт по ходу работы: карточка ложится в ленту родителя бесплатно, ход
+    // ему НЕ запускается — он увидит отчёт на своём следующем ходу. Финальный доклад по
+    // завершении задачи отправляет сам сервер (TaskExecutionService), и он уже с ходом.
+    [HttpPost("report")]
+    public async Task<IActionResult> ReportUp(string sessionId, [FromBody] ReportUpRequest req)
+    {
+        var text = req.Text?.Trim();
+        if (string.IsNullOrEmpty(text))
+            return BadRequest(new { error = "Текст отчёта пуст" });
+
+        var result = await sessions.ReportUpAsync(sessionId, text, UserId, withTurn: false);
+        return result switch
+        {
+            SessionManager.ReportUpResult.NotFound => NotFound(),
+            SessionManager.ReportUpResult.NoParent => BadRequest(new
+            {
+                status = "no_parent",
+                hint = "у этого чата нет родительского — отчитываться некуда",
+            }),
+            SessionManager.ReportUpResult.TooDeep => BadRequest(new
+            {
+                status = "too_deep",
+                hint = "цепочка автоматических отчётов слишком длинная — доложи человеку в своём чате",
+            }),
+            _ => Ok(new { status = "delivered", hint = "отчёт лёг в ленту родительского чата" }),
+        };
+    }
+
     // GET /api/sessions/{sid}/pending — сообщения, ждущие конца текущего хода
     [HttpGet("pending")]
     public IActionResult GetPending(string sessionId)
@@ -190,3 +219,6 @@ public class SessionMessagesController(SessionManager sessions, ProjectManager p
 // Wait: "turn" (дефолт) — ждать завершения хода, "none" — вернуть 202 сразу.
 // TimeoutSec клампится в 5..240 секунд.
 public record SendSessionMessageRequest(string? Text, string? Wait = "turn", int? TimeoutSec = 90);
+
+// Отчёт в родительский чат: текст ложится карточкой, ход родителя не запускается
+public record ReportUpRequest(string? Text);

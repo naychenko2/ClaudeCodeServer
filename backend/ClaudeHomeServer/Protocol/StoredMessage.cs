@@ -20,12 +20,15 @@ public abstract class StoredMessage { }
 
 public class StoredUserMessage(string text, string[]? attachedPaths = null, bool? viaAgent = null,
     string? senderPersonaId = null, bool? systemDirective = null, bool? auto = null,
-    string? senderOrigin = null) : StoredMessage
+    string? senderOrigin = null, string? senderChatName = null) : StoredMessage
 {
     // Источник входящего сообщения, когда оно пришло ИЗ ДРУГОГО места: имя чужого проекта
     // либо «Вне проектов». Заполняет сервер, сравнив проекты отправителя и получателя;
     // null — источник тот же, чип в UI не нужен
     public string? SenderOrigin { get; init; } = senderOrigin;
+    // Имя чата-отправителя — подпись карточки, когда персоны у него нет: «Задача: починить
+    // билд» отвечает на вопрос «кто пишет» лучше, чем безликое «Агент»
+    public string? SenderChatName { get; init; } = senderChatName;
 
     public string Text { get; init; } = text;
     public string[]? AttachedPaths { get; init; } = attachedPaths;

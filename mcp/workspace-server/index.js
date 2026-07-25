@@ -520,6 +520,21 @@ const SECTION_TOOLS = {
       },
     },
     {
+      name: 'chats_report_up',
+      description: 'Отчитаться в ВЫШЕСТОЯЩИЙ чат — тот, из которого пришла твоя задача (или в который ' +
+        'тебя сгруппировали). Адресата вычисляет сервер, sessionId указывать не нужно. Отчёт ложится ' +
+        'карточкой в его ленту и НЕ запускает там ход — человек и агент увидят его, когда дойдут. ' +
+        'Для промежуточных докладов: «нашёл блокер», «нужен доступ», «сделал половину». Итоговый отчёт ' +
+        'по завершении задачи слать не нужно — сервер отправит его сам при tasks_complete.',
+      inputSchema: {
+        type: 'object',
+        required: ['text'],
+        properties: {
+          text: { type: 'string', description: 'Текст отчёта: что сделано, что мешает, что нужно' },
+        },
+      },
+    },
+    {
       name: 'chats_update',
       description: 'Переименовать чат/сессию по id (работает и для чатов вне проектов, и для проектных сессий).',
       inputSchema: {
@@ -927,6 +942,23 @@ async function callTool(name, args) {
       if (res.ok || res.status === 202 || res.status === 409 || res.status === 429)
         return json(body ?? { status: res.status });
       if (res.status === 404) throw new Error(`Сессия ${sessionId} не найдена`);
+      throw new Error(`HTTP ${res.status}: ${body ? JSON.stringify(body) : ''}`);
+    }
+
+    case 'chats_report_up': {
+      const text = String(args.text ?? '').trim();
+      if (!text) throw new Error('Пустой текст отчёта');
+      if (!SELF_SESSION_ID) throw new Error('Отчёт наверх недоступен: сессия не определена');
+      // Адресат — родительский чат, его вычисляет сервер по текущей сессии
+      const res = await fetch(`${API_URL}/api/sessions/${encodeURIComponent(SELF_SESSION_ID)}/report`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json; charset=utf-8', Authorization: `Bearer ${API_TOKEN}` },
+        body: JSON.stringify({ text }),
+      });
+      const body = await res.json().catch(() => null);
+      // 400 отдаём модели как результат: в теле status/hint («некуда» либо «слишком глубоко»),
+      // это не ошибка вызова, а ответ по существу — ретраить не нужно
+      if (res.ok || res.status === 400) return json(body ?? { status: res.status });
       throw new Error(`HTTP ${res.status}: ${body ? JSON.stringify(body) : ''}`);
     }
 

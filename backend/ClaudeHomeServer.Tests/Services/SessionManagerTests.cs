@@ -646,6 +646,99 @@ public class SessionManagerTests : IDisposable
         visible.SenderOrigin.Should().Be("Проект Бета");
     }
 
+    // --- ReportUpAsync: отчёт в родительский чат ---
+
+    // Пара «родитель → ребёнок» в одном проекте (связь ставится ручной группировкой)
+    private async Task<(Session Parent, Session Child)> MkParentChildAsync(string suffix)
+    {
+        var dir = MkProjectDir("rep_" + suffix);
+        var project = _projectManager.Create("REP-" + suffix, dir, TestUserId, TestUsername);
+        var parent = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, name: "Родитель");
+        var child = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, name: "Задача: починить билд");
+        _sut.SetParent(child.Id, parent.Id, TestUserId);
+        return (parent, child);
+    }
+
+    [Fact]
+    public async Task ReportUp_БезРодителя_ДокладыватьНекуда()
+    {
+        var dir = MkProjectDir("rep_solo");
+        var project = _projectManager.Create("REP-SOLO", dir, TestUserId, TestUsername);
+        var lonely = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+
+        var r = await _sut.ReportUpAsync(lonely.Id, "нашёл блокер", TestUserId, withTurn: false);
+
+        r.Should().Be(SessionManager.ReportUpResult.NoParent);
+    }
+
+    [Fact]
+    public async Task ReportUp_КладётКарточкуВРодителяБезХода()
+    {
+        var (parent, child) = await MkParentChildAsync("card");
+        parent.ClaudeSessionId = "cli-" + Guid.NewGuid().ToString("N");
+
+        var r = await _sut.ReportUpAsync(child.Id, "нашёл блокер: нет доступа к БД", TestUserId, withTurn: false);
+
+        r.Should().Be(SessionManager.ReportUpResult.Delivered);
+        var history = await _sut.GetHistoryAsync(parent.Id);
+        history.Should().ContainSingle(m => m is Protocol.StoredUserMessage)
+            .Which.Should().BeOfType<Protocol.StoredUserMessage>()
+            .Which.Text.Should().Contain("нет доступа к БД");
+        // Ход не запускался — чат остался в исходном статусе
+        _sut.GetById(parent.Id)!.Status.Should().NotBe(SessionStatus.Working);
+    }
+
+    [Fact]
+    public async Task ReportUp_БезПерсоны_ПодписываетИменемЧата()
+    {
+        // Исполнитель — обычный Claude: лица нет, поэтому карточка идёт с именем его чата
+        var (parent, child) = await MkParentChildAsync("name");
+        parent.ClaudeSessionId = "cli-" + Guid.NewGuid().ToString("N");
+
+        await _sut.ReportUpAsync(child.Id, "готово наполовину", TestUserId, withTurn: false);
+
+        var stored = (await _sut.GetHistoryAsync(parent.Id)).OfType<Protocol.StoredUserMessage>().Single();
+        stored.SenderChatName.Should().Be("Задача: починить билд");
+        stored.ViaAgent.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ReportUp_ЦепочкаГлубже3_Отклоняется()
+    {
+        // a → b → c → d: отчёты идут вверх по цепочке, четвёртый по счёту упирается в потолок
+        var dir = MkProjectDir("rep_deep");
+        var project = _projectManager.Create("REP-DEEP", dir, TestUserId, TestUsername);
+        var chats = new List<Session>();
+        for (var i = 0; i < 5; i++)
+        {
+            var s = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, name: $"чат {i}");
+            s.ClaudeSessionId = "cli-" + Guid.NewGuid().ToString("N");
+            chats.Add(s);
+            if (i > 0) _sut.SetParent(chats[i].Id, chats[i - 1].Id, TestUserId);
+        }
+
+        // chats[4] → chats[3] → … каждый следующий отчёт наращивает глубину цепочки
+        (await _sut.ReportUpAsync(chats[4].Id, "уровень 1", TestUserId, false))
+            .Should().Be(SessionManager.ReportUpResult.Delivered);
+        (await _sut.ReportUpAsync(chats[3].Id, "уровень 2", TestUserId, false))
+            .Should().Be(SessionManager.ReportUpResult.Delivered);
+        (await _sut.ReportUpAsync(chats[2].Id, "уровень 3", TestUserId, false))
+            .Should().Be(SessionManager.ReportUpResult.Delivered);
+
+        (await _sut.ReportUpAsync(chats[1].Id, "уровень 4", TestUserId, false))
+            .Should().Be(SessionManager.ReportUpResult.TooDeep, "цепочка автоотчётов ограничена тремя звеньями");
+    }
+
+    [Fact]
+    public async Task ReportUp_ЧужойЧат_НеНайден()
+    {
+        var (_, child) = await MkParentChildAsync("foreign");
+
+        var r = await _sut.ReportUpAsync(child.Id, "текст", "another-user", withTurn: false);
+
+        r.Should().Be(SessionManager.ReportUpResult.NotFound);
+    }
+
     // --- SetParent: ручная группировка чатов (drag-and-drop) ---
 
     [Fact]

@@ -286,20 +286,50 @@ public class TaskExecutionServiceTests
         TaskExecutionService.ShouldReportToDelegator(task, executor).Should().BeTrue();
     }
 
-    [Theory]
-    [InlineData(null)]       // постановщик не задан
-    [InlineData("self")]     // исполнитель делегировал сам себе — дубль «Завершил работу»
-    public void ShouldReportToDelegator_НетПостановщикаИлиОнЖеИсполнитель_Неприменимо(string? createdByPersonaId)
+    [Fact]
+    public void ShouldReportToDelegator_ИсполнительСамСебеПостановщик_Неприменимо()
     {
+        // Дубль тоста «Завершил работу» — докладывать самому себе незачем
         var executor = new Persona { Name = "Вера" };
         var task = new TaskItem
         {
             Title = "t",
-            CreatedByPersonaId = createdByPersonaId == "self" ? executor.Id : createdByPersonaId,
+            CreatedByPersonaId = executor.Id,
             SourceSessionId = Guid.NewGuid().ToString(),
         };
 
         TaskExecutionService.ShouldReportToDelegator(task, executor).Should().BeFalse();
+    }
+
+    [Fact]
+    public void ShouldReportToDelegator_ЗадачуПоставилЧеловек_ТеперьПрименимо()
+    {
+        // Раньше без постановщика-персоны доклад не отправлялся вовсе, и задача, поставленная
+        // человеком, тихо завершалась без следа в родительском чате. Лицо для карточки есть
+        // всегда: персона исполнителя либо нейтральная карточка с именем его чата.
+        var executor = new Persona { Name = "Вера" };
+        var task = new TaskItem
+        {
+            Title = "t",
+            CreatedByPersonaId = null,
+            SourceSessionId = Guid.NewGuid().ToString(),
+        };
+
+        TaskExecutionService.ShouldReportToDelegator(task, executor).Should().BeTrue();
+    }
+
+    [Fact]
+    public void ShouldReportToDelegator_ИсполнительНеПерсона_Применимо()
+    {
+        // Обычный Claude-исполнитель: карточка пойдёт с именем его чата
+        var task = new TaskItem
+        {
+            Title = "t",
+            CreatedByPersonaId = Guid.NewGuid().ToString(),
+            SourceSessionId = Guid.NewGuid().ToString(),
+        };
+
+        TaskExecutionService.ShouldReportToDelegator(task, executor: null).Should().BeTrue();
     }
 
     // ─── Адресат доклада: ручная группировка чатов побеждает связь по задаче ────

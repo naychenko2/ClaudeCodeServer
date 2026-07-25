@@ -77,15 +77,22 @@ public class BackupPathsTests
 
     // --- Валидация папки назначения ---
 
-    private const string DataDir = @"C:\deploy\claude\data";
-    private const string BaseDir = @"C:\deploy\claude";
+    // Пути строим от временной папки, а не литералами «C:\…»: Path.IsPathRooted
+    // платформозависим, и на Linux (там гоняется CI) Windows-путь абсолютным
+    // не считается — валидация отвергала бы его раньше проверяемого правила,
+    // а тесты «путь годен» падали бы по постороннему поводу.
+    private static readonly string Root = Path.GetTempPath();
+    private static readonly string BaseDir = Path.Combine(Root, "ccs-app");
+    private static readonly string DataDir = Path.Combine(BaseDir, "data");
+    private static readonly string ProjectRoot = Path.Combine(Root, "ccs-repo");
+    private static readonly string SandboxRoot = Path.Combine(Root, "ccs-sandbox");
 
     [Fact]
     public void ПапкаВнутриПроекта_Отклоняется()
     {
         // Файловый ватчер проиндексировал бы архивы документами в базу знаний Dify
         var error = BackupPaths.ValidateBackupPath(
-            @"C:\GIT\repo\backups", DataDir, BaseDir, [@"C:\GIT\repo"], null);
+            Path.Combine(ProjectRoot, "backups"), DataDir, BaseDir, [ProjectRoot], null);
 
         error.Should().NotBeNull();
     }
@@ -96,7 +103,7 @@ public class BackupPathsTests
         // Корень песочницы монтируется в контейнер целиком — архив со всеми данными
         // всех пользователей стал бы читаемым изнутри
         var error = BackupPaths.ValidateBackupPath(
-            @"C:\ClaudeSandbox\backups", DataDir, BaseDir, [], @"C:\ClaudeSandbox");
+            Path.Combine(SandboxRoot, "backups"), DataDir, BaseDir, [], SandboxRoot);
 
         error.Should().NotBeNull();
     }
@@ -124,17 +131,17 @@ public class BackupPathsTests
     [Fact]
     public void СоседняяПапкаСПохожимИменем_НеСчитаетсяВложенной()
     {
-        // Сравнение по сегментам, а не по префиксу строки: «...\dataBackup» лежит
-        // рядом с «...\data», а не внутри
+        // Сравнение по сегментам, а не по префиксу строки: «…/dataBackup» лежит
+        // рядом с «…/data», а не внутри
         BackupPaths.ValidateBackupPath(
-            @"C:\deploy\claude\dataBackup", DataDir, BaseDir, [], null)
+            Path.Combine(BaseDir, "dataBackup"), DataDir, BaseDir, [], null)
             .Should().BeNull();
     }
 
     [Fact]
     public void ОтносительныйПуть_Отклоняется()
     {
-        BackupPaths.ValidateBackupPath(@"backups", DataDir, BaseDir, [], null)
+        BackupPaths.ValidateBackupPath("backups", DataDir, BaseDir, [], null)
             .Should().NotBeNull();
     }
 

@@ -111,6 +111,13 @@ describe('estimateContext: окно модели', () => {
     expect(est.pct).toBe(20);
   });
 
+  it('модель из последнего session_started определяет окно (opus 5 → 1M)', () => {
+    const est = estimateContext([started('claude-opus-5-20260701'), result(200_000)]);
+    expect(est.model).toBe('claude-opus-5-20260701');
+    expect(est.window).toBe(1_000_000);
+    expect(est.pct).toBe(20);
+  });
+
   it('fallbackModel используется когда session_started нет', () => {
     const est = estimateContext([result(100_000)], 'haiku');
     expect(est.window).toBe(200_000);

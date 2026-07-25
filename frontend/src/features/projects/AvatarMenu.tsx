@@ -49,7 +49,7 @@ interface Props {
   onOpenKnowledge?: () => void;
   // «Использование» (лимиты подписок Claude, баланс провайдеров) — вызов из меню аватара
   onShowUsage?: () => void;
-  // «Фоновые задачи» (исполнитель фоновых ИИ-действий) — только админ, undefined = не показывать
+  // «Поставщики моделей» (исполнитель фоновых ИИ-действий + модель по умолчанию) — только админ
   onShowBackgroundTasks?: () => void;
 }
 
@@ -158,7 +158,7 @@ export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout
               style={dropdownItem}
             >
               <Cpu size={ICON_SIZE.xs} strokeWidth={2} />
-              Фоновые задачи
+              Поставщики моделей
             </button>
           )}
           <button

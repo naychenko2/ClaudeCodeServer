@@ -10,7 +10,7 @@ import { UserManagementModal } from './UserManagementModal';
 import { ChangePasswordDialog } from './ChangePasswordDialog';
 import { FeatureFlagsModal } from './FeatureFlagsModal';
 import { UsageScreen } from './UsageScreen';
-import { BackgroundTasksModal } from './BackgroundTasksModal';
+import { ModelProvidersModal } from './ModelProvidersModal';
 import { api } from '../lib/api';
 import { getUnreadCount, subscribeToNotifications, ensureNotificationsSubscribed, ensureUnreadCountLoaded } from '../lib/notifications';
 
@@ -235,7 +235,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive }: Props
       {showChangePassword && <ChangePasswordDialog onClose={() => setShowChangePassword(false)} />}
       {showFeatureFlags && <FeatureFlagsModal onClose={() => setShowFeatureFlags(false)} />}
       {showUsage && <UsageScreen onClose={() => setShowUsage(false)} />}
-      {showBackgroundTasks && <BackgroundTasksModal onClose={() => setShowBackgroundTasks(false)} />}
+      {showBackgroundTasks && <ModelProvidersModal onClose={() => setShowBackgroundTasks(false)} />}
     </div>
   );
 }

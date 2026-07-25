@@ -228,6 +228,10 @@ export interface AppSettings {
   claudeBilling?: ClaudeBilling;
   // Присылать ли утренний бриф по расписанию (настройка инстанса, тумблер в «Фоновых задачах»)
   dailyBriefingEnabled?: boolean;
+  // Модель по умолчанию для новых чатов (id модели любого провайдера, напр. «claude-sonnet-5»).
+  // PATCH /api/settings: поле отсутствует = не трогать, "" = сознательный сброс к дефолту CLI.
+  // Также backing-поле route "default" в фоновых задачах (исполнитель «По умолчанию»).
+  defaultChatModel?: string | null;
 }
 
 // Определение фич-флага из реестра (приходит с бэка для рендера тумблеров)

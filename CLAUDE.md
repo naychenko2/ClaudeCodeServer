@@ -237,15 +237,13 @@ override в `data/users.json`; фронт — стор [lib/featureFlags.ts](fro
 
 ## Агенты (.claude/agents/)
 
+Содержимое папки в .gitignore: туда `PersonaAgentFileSync` синкает персон-консультантов
+владельца (у каждого пользователя свои, между машинами конфликтуют). Версионируются только
+общие проектные агенты — точечные `!`-исключения в .gitignore:
+
 | Агент | Роль |
 |---|---|
-| `project-manager` | PM, принимает решения вместо пользователя |
-| `frontend-dev` | React/TypeScript (frontend/src/) |
-| `backend-dev` | C#/.NET (backend/) |
-| `architect` | кросс-слойный дизайн |
-| `analyst` | анализ макетов Claude Design `52adb1f7-312b-4f25-8c47-2bccfca9df94` |
-| `designer` | дизайн-система и стили |
-| `dotnet-builder` | сборка и починка .NET |
+| `designer` | ревью UI-изменений по [docs/design-guidelines.md](docs/design-guidelines.md); прогонять перед коммитом заметного UI |
 
 ## Конфигурация
 

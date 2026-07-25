@@ -11,6 +11,12 @@ public sealed record ProcessSpec
     public IReadOnlyList<string> Args { get; init; } = [];
     public string? WorkingDirectory { get; init; }
     public IReadOnlyDictionary<string, string>? Env { get; init; }
+    // Ключи, которые надо УБРАТЬ из унаследованного окружения (не выставить пустыми:
+    // пустая строка для CLI неотличима от заданного значения). Нужно, чтобы системные
+    // переменные машины не протекали в ход: глобальная ANTHROPIC_BASE_URL увела бы чат
+    // «на Claude» к чужому эндпоинту вместе с токеном подписки. Применяется ДО Env,
+    // так что осознанный оверрайд провайдера всегда побеждает.
+    public IReadOnlyList<string>? ClearEnv { get; init; }
     public bool RedirectStdin { get; init; } = true;
     // Кодировка всех перенаправленных потоков (claude/skills — UTF-8 без BOM);
     // null — дефолт платформы (dev-серверы, терминал)

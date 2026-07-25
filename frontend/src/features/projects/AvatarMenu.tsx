@@ -3,7 +3,7 @@ import { C, R, SHADOW, Z } from '../../lib/design';
 import { ConnectionStatus } from '../../components/ConnectionStatus';
 import { SegmentedControl } from '../../components/ui';
 import { useThemeMode, setThemeMode, type ThemeMode } from '../../lib/themeMode';
-import { History, Book, Gauge, Users, Lock, FlaskConical, LogOut, Mic, Cpu } from 'lucide-react';
+import { History, Book, Gauge, Users, Lock, FlaskConical, LogOut, Mic, Cpu, Palette } from 'lucide-react';
 import { ICON_SIZE } from '../../components/ui/icons';
 import { isMicKeyboardFallback, clearMicKeyboardFallback } from '../../lib/voiceInput';
 import { showToast } from '../../lib/toast';
@@ -176,6 +176,15 @@ export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout
             <FlaskConical size={ICON_SIZE.xs} strokeWidth={2} />
             Эксперименты
           </button>
+          {import.meta.env.DEV && (
+            <button
+              onClick={() => { setOpen(false); window.location.hash = 'ui-kit'; }}
+              style={dropdownItem}
+            >
+              <Palette size={ICON_SIZE.xs} strokeWidth={2} />
+              Витрина дизайн-системы
+            </button>
+          )}
           {onShowHistory && (
             <button
               onClick={() => { setOpen(false); onShowHistory(); }}

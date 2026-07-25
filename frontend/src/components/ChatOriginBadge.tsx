@@ -10,7 +10,9 @@ const ICONS = { task: Wrench, automation: Zap };
 // Переиспользуется в плашках списка чатов, шапке чата и панели артефактов.
 // iconOnly — компактный вариант (только иконка), для узких мест вроде подзаголовка
 // шапки чата на мобиле; полный текст доступен через title/tooltip.
-export function ChatOriginBadge({ origin, style, iconOnly }: { origin: ChatOriginInfo; style?: CSSProperties; iconOnly?: boolean }) {
+// compact — короткая метка без префикса «Задача:»/«Автоматизация:» (тип кодирует иконка),
+// для шапки чата, где длинное название задачи иначе выдавливает остальные чипы.
+export function ChatOriginBadge({ origin, style, iconOnly, compact }: { origin: ChatOriginInfo; style?: CSSProperties; iconOnly?: boolean; compact?: boolean }) {
   const Icon = ICONS[origin.kind];
   const color = origin.tone === 'info' ? C.info : C.warningText;
   const background = origin.tone === 'info' ? C.infoBg : C.warningBg;
@@ -23,7 +25,7 @@ export function ChatOriginBadge({ origin, style, iconOnly }: { origin: ChatOrigi
   return (
     <span style={shared} title={origin.label} aria-label={origin.label}>
       <Icon size={11} strokeWidth={2.2} style={{ flexShrink: 0 }} />
-      {!iconOnly && <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{origin.label}</span>}
+      {!iconOnly && <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{compact ? origin.shortLabel : origin.label}</span>}
     </span>
   );
 }

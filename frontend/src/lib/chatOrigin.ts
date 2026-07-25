@@ -9,6 +9,9 @@ import { getPersonaById } from './personas';
 export interface ChatOriginInfo {
   kind: 'task' | 'automation';
   label: string;
+  // Короткая метка без префикса «Задача:»/«Автоматизация:» — для компактного чипа
+  // в шапке чата, где тип уже кодирует иконка; полный label остаётся в tooltip
+  shortLabel: string;
   tone: 'info' | 'warning';
 }
 
@@ -18,15 +21,15 @@ export interface ChatOriginInfo {
 export function resolveChatOrigin(session: Session): ChatOriginInfo | null {
   if (session.origin === 'task') {
     const task = session.taskId ? getTaskById(session.taskId) : undefined;
-    if (!task) return { kind: 'task', label: 'Задача (удалена)', tone: 'info' };
-    return { kind: 'task', label: `Задача: ${task.title}`, tone: 'info' };
+    if (!task) return { kind: 'task', label: 'Задача (удалена)', shortLabel: 'Задача (удалена)', tone: 'info' };
+    return { kind: 'task', label: `Задача: ${task.title}`, shortLabel: task.title, tone: 'info' };
   }
 
   if (session.origin === 'automation') {
     const persona = session.personaId ? getPersonaById(session.personaId) : undefined;
     const rule = persona?.automationRules?.find(r => r.id === session.automationRuleId);
-    if (!persona || !rule) return { kind: 'automation', label: 'Автоматизация (правило удалено)', tone: 'warning' };
-    return { kind: 'automation', label: `Автоматизация: ${rule.name}`, tone: 'warning' };
+    if (!persona || !rule) return { kind: 'automation', label: 'Автоматизация (правило удалено)', shortLabel: 'Автоматизация (правило удалено)', tone: 'warning' };
+    return { kind: 'automation', label: `Автоматизация: ${rule.name}`, shortLabel: rule.name, tone: 'warning' };
   }
 
   return null;

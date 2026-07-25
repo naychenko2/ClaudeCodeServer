@@ -912,11 +912,14 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     </div>
   ) : null;
 
+  // На десктопе заголовок держит минимум ~20 символов (не ужимается в «З…»);
+  // при нехватке места правый кластер бейджей уходит второй строкой (flexWrap ряда)
+  const titleMinW = isMobile ? 0 : 180;
   const titleBlock = participants && participants.length > 1 ? (
     // Групповой чат: стек аватаров участников вместо одиночного блока персоны;
     // вторая строка — «Отвечает: Роль (Имя)».
     <div
-      style={{ minWidth: 0, flex: 1, display: 'flex', alignItems: 'center', gap: 10 }}
+      style={{ minWidth: titleMinW, flex: 1, display: 'flex', alignItems: 'center', gap: 10 }}
     >
       {participantsStack(isMobile ? 24 : 26)}
       <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column' }}>
@@ -937,7 +940,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       </div>
     </div>
   ) : persona && personaAccent ? (
-    <div title={session.name ?? undefined} style={{ minWidth: 0, flex: 1, display: 'flex', alignItems: 'center', gap: 9 }}>
+    <div title={session.name ?? undefined} style={{ minWidth: titleMinW, flex: 1, display: 'flex', alignItems: 'center', gap: 9 }}>
       <PersonaAvatar persona={persona} size={28} />
       <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column' }}>
         {/* Роль — заголовок (serif, цвет персоны) */}
@@ -968,7 +971,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       </div>
     </div>
   ) : (
-    <div style={{ minWidth: 0, flex: 1 }}>
+    <div style={{ minWidth: titleMinW, flex: 1 }}>
       <div style={{ fontSize: 17, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {session.name ?? 'Новый чат'}
       </div>
@@ -999,7 +1002,11 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     : titleBlock;
   // На десктопе происхождение — полный бейдж в ряду; на мобиле оно уже встроено
   // в подзаголовок titleBlock (originInline), поэтому в ряду его не дублируем.
-  const originBadge = origin && !isMobile ? <ChatOriginBadge origin={origin} /> : null;
+  // compact + потолок ширины: длинное название задачи иначе выдавливает из ряда
+  // остальные чипы; при тесноте чип уступает место первым (flexShrink)
+  const originBadge = origin && !isMobile
+    ? <ChatOriginBadge origin={origin} compact style={{ maxWidth: 220, minWidth: 0, flexShrink: 1 }} />
+    : null;
   // Бейдж последней запущенной механики команды (как origin — только на десктопе)
   const mechanicBadge = lastMechanic && !isMobile ? <TeamMechanicBadge id={lastMechanic} size="sm" /> : null;
 
@@ -1092,7 +1099,22 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   const retitleBtn = <RetitleButton session={session} hasMessages={hasMessages} online={online} />;
   const actionBtns = isMobile
     ? <div style={{ display: 'flex', alignItems: 'center', gap: 0, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{artifactsBtn}{settingsBtn}</div>
-    : <>{retitleBtn}{extractBtn}{summaryBtn}{artifactsBtn}{settingsBtn}</>;
+    // На десктопе кнопки — неразрывная группа: при переносе кластера уходят вниз целиком,
+    // оставаясь последними у правого края (мышечная память на позицию)
+    : <div style={{ display: 'flex', alignItems: 'center', gap: TB.gap, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{artifactsBtn}{settingsBtn}</div>;
+
+  // Правый кластер шапки (бейджи + кнопки) единым flex-элементом: при тесноте узкого
+  // десктопа переносится под заголовок ЦЕЛИКОМ (два чистых состояния вместо рваных
+  // промежуточных), прижат вправо; внутри себя тоже умеет переноситься. На мобиле —
+  // прежний однорядный хвост без переноса.
+  const rightCluster = (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: TB.gap, marginLeft: 'auto', minWidth: 0,
+      ...(isMobile ? null : { flexWrap: 'wrap' as const, justifyContent: 'flex-end' as const }),
+    }}>
+      {originBadge}{mechanicBadge}{expiryBadge}{workflowBadge}{costBadges}{actionBtns}
+    </div>
+  );
 
   // Hero-шапка (Islands, десктоп): не тулбар в коробке, а заголовок раздела прямо
   // на холсте — как шапка «Календаря». У персоны слева фото скруглённым квадратом
@@ -1121,8 +1143,8 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     ) : null;
     const heroTitle = participants && participants.length > 1 ? (
       // Группа — тот же hero-стиль: крупный стек участников + имя чата serif,
-      // второй строкой «Отвечает: …» и модель
-      <div style={{ minWidth: 0, flex: 1, display: 'flex', alignItems: 'center', gap: 12 }}>
+      // второй строкой «Отвечает: …» и модель. minWidth 240 — serif-28 при меньшем ломается
+      <div style={{ minWidth: 240, flex: 1, display: 'flex', alignItems: 'center', gap: 12 }}>
         {participantsStack(34)}
         <div style={{ minWidth: 0, flex: 1 }}>
           <div style={{ fontFamily: FONT.serif, fontSize: 28, fontWeight: 500, color: personaAccent ?? C.textHeading, letterSpacing: '-0.01em', lineHeight: 1.25, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -1137,7 +1159,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
         </div>
       </div>
     ) : persona && personaAccent ? (
-      <div style={{ minWidth: 0, flex: 1, display: 'flex', alignItems: 'center', gap: 12 }} title={session.name ?? undefined}>
+      <div style={{ minWidth: 240, flex: 1, display: 'flex', alignItems: 'center', gap: 12 }} title={session.name ?? undefined}>
         {/* Фото персоны: скруглённый квадрат с чётким краем (вариант A) */}
         <PersonaFace
           persona={persona} align="center" fontSize={24}
@@ -1163,7 +1185,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
         </div>
       </div>
     ) : (
-      <div style={{ minWidth: 0, flex: 1 }}>
+      <div style={{ minWidth: 240, flex: 1 }}>
         <div style={{ fontFamily: FONT.serif, fontSize: 28, fontWeight: 500, color: C.textHeading, letterSpacing: '-0.01em', lineHeight: 1.25, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {session.name ?? 'Новый чат'}
         </div>
@@ -1192,10 +1214,11 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       // выпадают ниже шапки и не должны обрезаться её границей.
       // openBtn обязателен: без него свёрнутый сайдбар не вернуть при открытом чате
       <div style={{ position: 'relative', flexShrink: 0, width: '100%', maxWidth: CHAT_MAX_W, margin: '0 auto', boxSizing: 'border-box', borderBottom: `1px solid ${C.border}` }}>
-        <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: TB.gap, padding: '12px 18px 10px' }}>
+        {/* flexWrap: при узком окне правый кластер уходит второй строкой — остров подрастает */}
+        <div style={{ position: 'relative', display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: TB.gap, padding: '12px 18px 10px' }}>
           {openBtn}
           {heroTitle}
-          {originBadge}{mechanicBadge}{expiryBadge}{workflowBadge}{costBadges}{actionBtns}
+          {rightCluster}
         </div>
       </div>
     );
@@ -1203,8 +1226,12 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
 
   return (
     <Toolbar isMobile={isMobile} noBorder={island} bg={island ? 'transparent' : undefined}
-      style={personaAccent ? { borderLeft: `3px solid ${personaAccent}` } : undefined}>
-      {openBtn}{titleEl}{originBadge}{mechanicBadge}{expiryBadge}{workflowBadge}{costBadges}{actionBtns}
+      style={{
+        ...(personaAccent ? { borderLeft: `3px solid ${personaAccent}` } : null),
+        // Узкий десктоп: фиксированную высоту отпускаем, кластер переносится второй строкой
+        ...(isMobile ? null : { flexWrap: 'wrap' as const, height: 'auto', minHeight: TB.heightDesktop, padding: `6px ${TB.padX}px` }),
+      }}>
+      {openBtn}{titleEl}{rightCluster}
     </Toolbar>
   );
 }

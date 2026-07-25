@@ -98,6 +98,12 @@ if ($SkipBackup) {
         # только в PowerShell 7, а скрипт заявлен как #Requires -Version 5.1.
         $backup = Start-Process -FilePath $serverExe -ArgumentList '--backup' `
             -WorkingDirectory $PublishDir -NoNewWindow -PassThru
+        # Обращение к Handle кеширует дескриптор процесса, и без него ExitCode приходит
+        # ПУСТЫМ даже после успешного завершения: PowerShell закрывает свой хэндл, а .NET
+        # без него код возврата у мёртвого процесса уже не достанет. Замер на этой машине:
+        # `cmd /c exit 0` через Start-Process -PassThru даёт ExitCode='' без этой строки
+        # и 0 с ней. Пустота != 0, поэтому проверка ниже принимала удачный снимок за провал.
+        $null = $backup.Handle
         if ($backup.WaitForExit(120000)) {
             # Код возврата тут честен: BackupCli ставит ExitCode=1, когда снимок не удался,
             # и 0 только после реально записанного архива — сверять файлы на диске не нужно.

@@ -83,7 +83,7 @@ public record FileChangedMessage(string Path, int Added, int Removed)
 // cache_creation из usage последнего assistant-сообщения основного агента). Именно он, а не
 // Usage: тот суммирует ВСЕ запросы хода (каждый шаг tool-лупа плюс сабагенты), поэтому годится
 // для стоимости, но как оценка заполнения окна завышает её кратно числу тул-вызовов.
-public record ResultMessage(string Subtype, long DurationMs, int NumTurns, UsageInfo? Usage, double? TotalCostUsd, string? ApiErrorStatus = null, IReadOnlyList<string>? PermissionDenials = null, int? ContextTokens = null)
+public record ResultMessage(string Subtype, long DurationMs, int NumTurns, UsageInfo? Usage, double? TotalCostUsd, string? ApiErrorStatus = null, IReadOnlyList<string>? PermissionDenials = null, int? ContextTokens = null, string? UsageModel = null)
     : ServerMessage("result");
 
 // Фактически списанная стоимость генерации fal.ai. Приходит асинхронно после tool_result:

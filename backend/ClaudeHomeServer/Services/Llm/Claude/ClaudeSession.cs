@@ -2131,7 +2131,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     await _onMessage(new ErrorMessage(resText.GetString()!));
                 // Статус Error/Active выставит SessionManager по ResultMessage
                 var ctxTokens = _lastContextTokens > 0 ? _lastContextTokens : (int?)null;
-                await _onMessage(new ResultMessage(subtype, durationMs, numTurns, usage, totalCost, apiErr, denials, ctxTokens));
+                await _onMessage(new ResultMessage(subtype, durationMs, numTurns, usage, totalCost, apiErr, denials, ctxTokens, ParseUsageModel(root)));
                 // Ход завершён. Без живых фоновых задач закрываем stdin — CLI выйдет сам,
                 // дальше ждём его не дольше ResultExitGrace. С ними stdin держим открытым:
                 // прогон доживает (агенты работают внутри процесса) и готов принять
@@ -2669,6 +2669,29 @@ public class ClaudeSession : ILlmSessionAdapter
             IntProp(u, "cache_read_input_tokens"),
             IntProp(u, "cache_creation_input_tokens")
         );
+    }
+
+    // Доминирующая модель хода — ключ modelUsage с наибольшей суммой токенов (субагенты могли
+    // считать другой моделью; аналитике расхода нужна главная). null — modelUsage отсутствует,
+    // потребитель откатывается на модель сессии.
+    internal static string? ParseUsageModel(JsonElement root)
+    {
+        if (!root.TryGetProperty("modelUsage", out var mu) || mu.ValueKind != JsonValueKind.Object)
+            return null;
+        string? best = null;
+        long bestSum = -1;
+        foreach (var m in mu.EnumerateObject())
+        {
+            if (m.Value.ValueKind != JsonValueKind.Object) continue;
+            long sum = IntProp(m.Value, "inputTokens") + IntProp(m.Value, "outputTokens")
+                + IntProp(m.Value, "cacheReadInputTokens") + IntProp(m.Value, "cacheCreationInputTokens");
+            if (sum > bestSum)
+            {
+                bestSum = sum;
+                best = m.Name;
+            }
+        }
+        return best;
     }
 
     // Безопасное чтение числовых полей stream-json. TryGetProperty возвращает true и для JSON

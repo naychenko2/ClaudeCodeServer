@@ -31,6 +31,8 @@ public sealed class CloudCheapClient
     private readonly IHttpClientFactory _http;
     private readonly ILogger<CloudCheapClient> _logger;
     private readonly LlmProviderConfigView _provider;
+    // Сбор расхода бесплатных вызовов (null — в тестах: аналитика выключена)
+    private readonly Spend.ISpendCollector? _spend;
 
     // Ключ провайдера-источника эндпоинта/ключа (дефолт openrouter)
     public string ProviderKey { get; }
@@ -41,10 +43,12 @@ public sealed class CloudCheapClient
     public string? BaseUrl => _provider.Configured ? _provider.ApiBaseUrl : null;
 
     public CloudCheapClient(IHttpClientFactory http, IConfiguration config,
-        LlmProviderRegistry providers, ILogger<CloudCheapClient> logger)
+        LlmProviderRegistry providers, ILogger<CloudCheapClient> logger,
+        Spend.ISpendCollector? spend = null)
     {
         _http = http;
         _logger = logger;
+        _spend = spend;
         ProviderKey = config["OpenRouter:Provider"] is { Length: > 0 } p ? p : "openrouter";
 
         var cfg = providers.GetByKey(ProviderKey);
@@ -101,12 +105,42 @@ public sealed class CloudCheapClient
                 && msg.TryGetProperty("content", out var c)
                     ? c.GetString()
                     : null;
-            return string.IsNullOrWhiteSpace(content) ? null : content;
+            if (string.IsNullOrWhiteSpace(content)) return null;
+            RecordSpend(model, json);
+            return content;
         }
         catch (Exception ex)
         {
             _logger.LogDebug(ex, "{Provider} недоступен, фолбэк на следующий маршрут", ProviderKey);
             return null;
         }
+    }
+
+    // Расход прямого вызова в аналитику: токены из usage OpenAI-совместимого ответа,
+    // стоимость 0 (модели ":free") — источник free. Ошибка записи вызов не роняет.
+    private void RecordSpend(string model, JsonElement json)
+    {
+        if (_spend is null) return;
+        try
+        {
+            long inTok = 0, outTok = 0;
+            if (json.TryGetProperty("usage", out var u) && u.ValueKind == JsonValueKind.Object)
+            {
+                if (u.TryGetProperty("prompt_tokens", out var p) && p.ValueKind == JsonValueKind.Number)
+                    inTok = p.GetInt64();
+                if (u.TryGetProperty("completion_tokens", out var c) && c.ValueKind == JsonValueKind.Number)
+                    outTok = c.GetInt64();
+            }
+            _spend.Record(new Models.SpendRecord
+            {
+                Provider = DirectProviderKey,
+                Model = model,
+                Source = Models.SpendSources.Free,
+                InputTokens = inTok,
+                OutputTokens = outTok,
+                CostUsd = 0,
+            });
+        }
+        catch { /* аналитика не должна ронять вызов */ }
     }
 }

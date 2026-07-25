@@ -83,7 +83,8 @@ public sealed class CheapTextRunner(
         }
 
         // Шаг 3 — claude с моделью действия по умолчанию.
-        return await claude.RunAsync(prompt, claude.NormalizeModel(fallbackModel), ct: ct, ownerId: ownerId);
+        return await claude.RunAsync(prompt, claude.NormalizeModel(fallbackModel), ct: ct, ownerId: ownerId,
+            label: actionKey);
     }
 
     // Вызов выбранной модели. null — шаг не удался (провайдер не настроен, ошибка CLI,
@@ -94,7 +95,7 @@ public sealed class CheapTextRunner(
     {
         try
         {
-            var text = await claude.RunAsync(prompt, model, ct: ct, ownerId: ownerId);
+            var text = await claude.RunAsync(prompt, model, ct: ct, ownerId: ownerId, label: actionKey);
             if (!string.IsNullOrWhiteSpace(text)) return text;
             log.LogDebug("cheap-runner: действие {Action} — модель {Model} вернула пустой ответ", actionKey, model);
         }
@@ -225,7 +226,8 @@ public sealed class CheapTextRunner(
         }
 
         // Шаг 3 — claude с моделью действия по умолчанию (usage есть).
-        return await claude.RunDetailedAsync(prompt, claude.NormalizeModel(fallbackModel), effTimeout, ct, ownerId);
+        return await claude.RunDetailedAsync(prompt, claude.NormalizeModel(fallbackModel), effTimeout, ct, ownerId,
+            label: actionKey);
     }
 
     // Выбранная провайдерская модель через claude CLI, с расходом. null — шаг не удался.
@@ -234,7 +236,7 @@ public sealed class CheapTextRunner(
     {
         try
         {
-            var run = await claude.RunDetailedAsync(prompt, model, timeout, ct, ownerId);
+            var run = await claude.RunDetailedAsync(prompt, model, timeout, ct, ownerId, label: actionKey);
             if (!string.IsNullOrWhiteSpace(run.Text)) return run;
             log.LogDebug("cheap-runner (detailed): {Action} — модель {Model} вернула пустой ответ", actionKey, model);
         }

@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Execution;
 
 namespace ClaudeHomeServer.Services.Llm;
@@ -27,15 +28,15 @@ public interface IOneShotRunner
     // ownerId — владелец вызова: его среда исполнения определяет, где запустится claude
     // (локально или в песочнице). null — системный вызов, всегда локально.
     // effort — усилие рассуждения (--effort), для моделей с его поддержкой.
+    // label — подпись операции для аналитики расхода (ключ фонового действия).
     Task<string> RunAsync(string prompt, string? model = null,
         TimeSpan? timeout = null, CancellationToken ct = default,
-        string? ownerId = null, string? effort = null);
+        string? ownerId = null, string? effort = null, string? label = null);
 
-    // То же, но с расходом вызова (просит у CLI json-формат вместо text).
-    // Для мест, которые показывают пользователю цену генерации.
+    // То же, но с расходом вызова — для мест, которые показывают пользователю цену генерации.
     Task<OneShotResult> RunDetailedAsync(string prompt, string? model = null,
         TimeSpan? timeout = null, CancellationToken ct = default,
-        string? ownerId = null, string? effort = null);
+        string? ownerId = null, string? effort = null, string? label = null);
 }
 
 // Общий раннер одноразовых вызовов claude --print (без сессии): промпт через stdin,
@@ -43,7 +44,8 @@ public interface IOneShotRunner
 // (LlmProviderRegistry.BuildCliEnv). Рабочая папка — пустая temp (claude не получает
 // доступ к файлам). Используется сводками «Что нового» (ChangelogService),
 // генерациями задач и заметок, персонами (ask/характер).
-public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILauncherFactory launchers) : IOneShotRunner
+public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILauncherFactory launchers,
+    Spend.ISpendCollector? spend = null) : IOneShotRunner
 {
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(120);
 
@@ -54,25 +56,25 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
 
     public async Task<string> RunAsync(string prompt, string? model = null,
         TimeSpan? timeout = null, CancellationToken ct = default,
-        string? ownerId = null, string? effort = null) =>
-        (await RunCliAsync(prompt, model, timeout, ct, ownerId, effort, withUsage: false)).Text;
+        string? ownerId = null, string? effort = null, string? label = null) =>
+        (await RunCliAsync(prompt, model, timeout, ct, ownerId, effort, label)).Text;
 
     public Task<OneShotResult> RunDetailedAsync(string prompt, string? model = null,
         TimeSpan? timeout = null, CancellationToken ct = default,
-        string? ownerId = null, string? effort = null) =>
-        RunCliAsync(prompt, model, timeout, ct, ownerId, effort, withUsage: true);
+        string? ownerId = null, string? effort = null, string? label = null) =>
+        RunCliAsync(prompt, model, timeout, ct, ownerId, effort, label);
 
-    // withUsage: json-формат вместо text — тот же ответ плюс расход вызова.
-    // Разделение сознательное: текстовый путь используют полтора десятка сервисов,
-    // и лишний слой разбора json им ни к чему.
+    // Формат всегда json: раньше текстовый путь шёл без него, но аналитике расхода нужен
+    // usage КАЖДОГО вызова, а его отдаёт только json-ответ. Потребители RunAsync по-прежнему
+    // получают чистый текст (result из json).
     private async Task<OneShotResult> RunCliAsync(string prompt, string? model,
-        TimeSpan? timeout, CancellationToken ct, string? ownerId, string? effort, bool withUsage)
+        TimeSpan? timeout, CancellationToken ct, string? ownerId, string? effort, string? label)
     {
         var launcher = launchers.ForOwner(ownerId);
         var workDir = Path.Combine(launcher.HostTempDir, "claude-oneshot");
         Directory.CreateDirectory(workDir);
 
-        var args = new List<string> { "--print", "--output-format", withUsage ? "json" : "text" };
+        var args = new List<string> { "--print", "--output-format", "json" };
         // Хуки плагинов не нужны и плодят окна консоли на хосте — отключаем (скиллы one-shot не зовёт).
         // Нужно и при --safe-mode: в песочнице флага нет, а хуки отключить всё равно надо.
         args.AddRange(Claude.ClaudeRuntimeSettings.HooksOffArgs(launcher));
@@ -148,7 +150,7 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
                 // уходит в stdout при пустом stderr. Раньше её тут теряли, и в логах всех
                 // сервисов оставалось «завершился с кодом 1:» без объяснения.
                 var detail = stderr.Trim();
-                if (detail.Length == 0) detail = ErrorDetail(stdout.Trim(), withUsage);
+                if (detail.Length == 0) detail = ErrorDetail(stdout.Trim());
                 if (detail.Length > 500) detail = detail[..500] + "…";
                 throw new InvalidOperationException(
                     $"claude завершился с кодом {process.ExitCode}: {detail}");
@@ -156,9 +158,9 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
 
             // Время меряем по своим часам, а не по duration_ms от CLI: пользователь ждёт
             // весь вызов вместе со стартом процесса (~5-15 с), а не только запрос к API
-            return withUsage
-                ? ParseJsonResult(stdout, model, started.ElapsedMilliseconds)
-                : new OneShotResult(stdout.Trim(), null, started.ElapsedMilliseconds);
+            var result = ParseJsonResult(stdout, model, started.ElapsedMilliseconds);
+            RecordSpend(result, model, ownerId, label);
+            return result;
         }
         catch (OperationCanceledException)
         {
@@ -167,11 +169,39 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
         }
     }
 
-    // В json-режиме причина ошибки лежит в поле result, а не голым текстом —
-    // достаём её, чтобы в логи и degraded-подпись не уезжала простыня JSON
-    private static string ErrorDetail(string stdout, bool withUsage)
+    // Запись расхода one-shot вызова в аналитику. Источник — one-shot; модель ":free"
+    // (агрегатор через CLI) выделяется источником free. Ошибка записи вызов не роняет.
+    private void RecordSpend(OneShotResult result, string? model, string? ownerId, string? label)
     {
-        if (!withUsage || stdout.Length == 0) return stdout;
+        if (spend is null || result.Usage is not { } u) return;
+        try
+        {
+            var provider = SpendSources.NormalizeProvider(llmProviders.ProviderKey(model));
+            var usedModel = u.Model ?? model;
+            spend.Record(new SpendRecord
+            {
+                OwnerId = ownerId ?? "",
+                Provider = provider,
+                Model = usedModel,
+                Source = SpendSources.IsFree(provider, usedModel)
+                    ? SpendSources.Free : SpendSources.OneShot,
+                InputTokens = u.InputTokens,
+                OutputTokens = u.OutputTokens,
+                CacheReadTokens = u.CacheReadTokens,
+                CacheCreationTokens = u.CacheCreationTokens,
+                CostUsd = u.CostUsd,
+                DurationMs = result.DurationMs,
+                Label = label,
+            });
+        }
+        catch { /* аналитика не должна ронять генерацию */ }
+    }
+
+    // Причина ошибки лежит в поле result json-ответа, а не голым текстом —
+    // достаём её, чтобы в логи и degraded-подпись не уезжала простыня JSON
+    private static string ErrorDetail(string stdout)
+    {
+        if (stdout.Length == 0) return stdout;
         try
         {
             var root = JsonDocument.Parse(stdout).RootElement;

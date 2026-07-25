@@ -35,8 +35,18 @@ async function api(path, options = {}) {
     const body = await res.text();
     throw new Error(`HTTP ${res.status}: ${body}`);
   }
+  return parseBody(res);
+}
+
+// Тело успешного ответа. Пустое тело — НЕ ошибка: ASP.NET на части операций отвечает
+// `Ok()` без объекта, а `res.json()` кидал на нём «Unexpected end of JSON input» —
+// удавшееся действие выглядело для модели провалом, и она повторяла его второй раз.
+async function parseBody(res) {
   if (res.status === 204) return null;
-  return res.json();
+  const text = await res.text();
+  if (!text) return null;
+  try { return JSON.parse(text); }
+  catch { return text; }
 }
 
 // Словарь kind → описание

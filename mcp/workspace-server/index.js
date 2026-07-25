@@ -75,8 +75,19 @@ async function api(path, options = {}) {
     err.status = res.status;
     throw err;
   }
+  return parseBody(res);
+}
+
+// Тело успешного ответа. Пустое тело — НЕ ошибка: на запись ASP.NET отвечает `Ok()`
+// без объекта (files_write, files_mkdir, files_rename, files_create), а `res.json()`
+// кидал на нём «Unexpected end of JSON input» — удавшаяся запись выглядела для модели
+// провалом, и она повторяла её второй раз.
+async function parseBody(res) {
   if (res.status === 204) return null;
-  return res.json();
+  const text = await res.text();
+  if (!text) return null;
+  try { return JSON.parse(text); }
+  catch { return text; }
 }
 
 // Валидация projectId ДО похода в REST: сужение зоны через WORKSPACE_PROJECT_IDS

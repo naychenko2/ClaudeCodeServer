@@ -7,12 +7,14 @@ using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Services;
 
-// Утренний бриф-агент (флаг daily-briefing). Собирает из уже готовых источников:
+// Утренний бриф-агент. Собирает из уже готовых источников:
 // просроченные и сегодняшние задачи, изменённые сегодня заметки, git-активность
 // проектов владельца за сутки — прогоняет через one-shot Claude и пишет
 // структурированный план дня в дневниковую заметку (секция «## Утренний бриф»),
 // затем шлёт тост + web-push. Работает on-demand (BriefingController) и по расписанию
-// (утренний хук в TaskSchedulerService, идемпотентность — по дате в briefing-state.json).
+// (утренний хук в TaskSchedulerService, идемпотентность — по дате в briefing-state.json;
+// автозапуск гасится настройкой инстанса AppSettings.DailyBriefingEnabled, ручной сбор —
+// всегда доступен).
 public sealed class DailyBriefingService
 {
     private const string Header = "## Утренний бриф";
@@ -22,6 +24,7 @@ public sealed class DailyBriefingService
     private readonly ProjectManager _projects;
     private readonly UserStore _users;
     private readonly PersonaManager _personas;
+    private readonly AppSettingsService _appSettings;
     private readonly ProjectEventLogService? _events;
     private readonly Llm.ICheapTextRunner _cheap;
     private readonly PushService _push;
@@ -38,7 +41,7 @@ public sealed class DailyBriefingService
 
     public DailyBriefingService(
         TaskManager tasks, NotesService notes, ProjectManager projects, UserStore users,
-        PersonaManager personas,
+        PersonaManager personas, AppSettingsService appSettings,
         Llm.ICheapTextRunner cheap, PushService push,
         IHubContext<SessionHub> hub, NotificationService notif,
         IConfiguration config, ILogger<DailyBriefingService> log,
@@ -49,6 +52,7 @@ public sealed class DailyBriefingService
         _projects = projects;
         _users = users;
         _personas = personas;
+        _appSettings = appSettings;
         _cheap = cheap;
         _push = push;
         _hub = hub;
@@ -77,13 +81,17 @@ public sealed class DailyBriefingService
         return saved;
     }
 
-    // Хук планировщика: если наступило утро в таймзоне юзера и сегодня бриф ещё не делали —
-    // запустить генерацию. Гейт синхронный и мгновенный; тяжёлая работа (git-сбор + LLM,
-    // десятки секунд) уходит в фон, чтобы НЕ блокировать тик планировщика
-    // (напоминания/автозапуски остальных пользователей). Идемпотентность обеспечивается
-    // меткой ДО запуска (одна попытка в день, переживает рестарт).
+    // Хук планировщика: если бриф не выключен в настройках инстанса, наступило утро в таймзоне
+    // юзера и сегодня бриф ещё не делали — запустить генерацию. Гейт синхронный и мгновенный;
+    // тяжёлая работа (git-сбор + LLM, десятки секунд) уходит в фон, чтобы НЕ блокировать тик
+    // планировщика (напоминания/автозапуски остальных пользователей). Идемпотентность
+    // обеспечивается меткой ДО запуска (одна попытка в день, переживает рестарт).
     public Task MaybeRunScheduledAsync(User user, TimeZoneInfo tz, DateTime nowUtc, CancellationToken ct = default)
     {
+        // Настройка общая для инстанса (AppSettings) и читается на каждом тике — админ
+        // выключает бриф в «Фоновых задачах», и это действует сразу, без рестарта
+        if (_appSettings.Get().DailyBriefingEnabled is false) return Task.CompletedTask;
+
         var local = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, tz);
         var hour = _config.GetValue("Briefing:Hour", 8);
         if (local.Hour < hour) return Task.CompletedTask; // ещё не утро в таймзоне пользователя

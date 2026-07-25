@@ -86,9 +86,12 @@ public class ModuleTokenServiceTests
         var module = Module();
         var token = svc.Issue(module, "user-1", "Tester", "mcp");
 
-        // Портим signature-сегмент — подпись перестаёт сходиться
+        // Портим signature-сегмент — подпись перестаёт сходиться. Подменыш выбираем ОТЛИЧНЫМ
+        // от текущего первого символа: фиксированная 'A' раз на ~64 прогона попадала на уже
+        // стоявшую там 'A', подпись оставалась валидной и тест падал на ровном месте
         var parts = token.Split('.');
-        var tampered = $"{parts[0]}.{parts[1]}.A{parts[2][1..]}";
+        var swapped = parts[2][0] == 'A' ? 'B' : 'A';
+        var tampered = $"{parts[0]}.{parts[1]}.{swapped}{parts[2][1..]}";
 
         Assert.False(svc.TryValidate(tampered, module, out var sub));
         Assert.Null(sub);

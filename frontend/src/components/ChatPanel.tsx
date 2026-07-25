@@ -335,8 +335,8 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   const canEditBilling = (localStorage.getItem('cc_role') || sessionStorage.getItem('cc_role')) === 'admin';
   const changeBilling = useCallback((b: ClaudeBilling) => {
     setClaudeBilling(b);
-    // Сохраняем, не затирая остальные настройки
-    api.settings.get().then(s => api.settings.save({ ...s, claudeBilling: b })).catch(() => {});
+    // Шлём только своё поле — остальные настройки сервер не трогает (PUT работает как патч)
+    api.settings.save({ claudeBilling: b }).catch(() => {});
   }, []);
 
   const [mode, setMode] = useState<Mode>(session.mode);

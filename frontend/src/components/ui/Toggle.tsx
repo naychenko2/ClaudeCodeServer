@@ -12,11 +12,13 @@ interface ToggleProps {
   focusable?: boolean;
   /** Вызывается при нажатии Enter, когда тумблер в фокусе (например, отправка формы). */
   onEnter?: () => void;
+  /** Доступное имя переключателя: без него скринридер читает безымянный «switch». */
+  ariaLabel?: string;
 }
 
 // === Переключатель-тумблер (on/off) ===
 export const Toggle = forwardRef<HTMLDivElement, ToggleProps>(function Toggle(
-  { checked, onChange, disabled, width = 42, height = 25, focusable, onEnter },
+  { checked, onChange, disabled, width = 42, height = 25, focusable, onEnter, ariaLabel },
   ref,
 ) {
   const pad = 3;
@@ -53,6 +55,7 @@ export const Toggle = forwardRef<HTMLDivElement, ToggleProps>(function Toggle(
       ref={ref}
       role="switch"
       aria-checked={checked}
+      aria-label={ariaLabel}
       tabIndex={focusable && !disabled ? 0 : undefined}
       onClick={() => !disabled && onChange(!checked)}
       onKeyDown={focusable ? handleKeyDown : undefined}

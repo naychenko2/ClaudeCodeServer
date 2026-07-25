@@ -597,6 +597,9 @@ export interface UsageResponse {
   subscriptions?: Record<string, SubscriptionUsage>;
   // Порог утилизации 5h-окна, выше которого аккаунт выведен из ротации новых чатов
   rotationThreshold?: number;
+  // Ключ аккаунта, куда фактически ушёл бы новый чат сейчас (детерминированный выбор):
+  // при отсутствии свободных пул спиллит на перегруженный — бейдж показывает это честно
+  routingTarget?: string;
   // Снимки окон лимитов сторонних CLI-провайдеров (glm/deepseek) — их Anthropic-совместимые
   // эндпоинты тоже шлют rate_limit_event, снимки пишутся под ключ провайдера
   providers?: Record<string, UsageSnapshot[]>;

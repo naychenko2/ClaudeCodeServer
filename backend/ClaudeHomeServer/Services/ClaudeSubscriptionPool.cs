@@ -90,7 +90,15 @@ public class ClaudeSubscriptionPool
     /// — минимальная утилизация. Свободных нет (все выше порога) — спилл на них же; все исчерпаны
     /// — минимум из способных по модели: лучше упереться в лимит на правильном аккаунте, чем
     /// гарантированно упасть на неправильном.
-    public string Pick(string? model = null)
+    public string Pick(string? model = null) => PickCore(model, deterministic: false);
+
+    /// <summary>Куда фактически ушёл бы новый чат сейчас — цель роутинга для экрана usage.</summary>
+    /// Та же логика, что Pick (модель не учитываем), но при равной утилизации берётся первый
+    /// по порядку пула вместо случайного — бейдж «цель роутинга» не должен мигать между
+    /// равными аккаунтами при каждом обновлении экрана.
+    public string PickForDisplay() => PickCore(model: null, deterministic: true);
+
+    private string PickCore(string? model, bool deterministic)
     {
         if (_subscriptions.Count == 0)
             return PrimaryKey;
@@ -101,20 +109,20 @@ public class ClaudeSubscriptionPool
             // Приоритет свободным (ниже порога) — крупный, но перегруженный тариф уступает
             // свободному мелкому; если свободных нет — выбираем среди всех кандидатов.
             var healthy = candidates.Where(k => EffectiveUtilization(k) < _softThreshold).ToList();
-            return PickTopTier(healthy.Count > 0 ? healthy : candidates);
+            return PickTopTier(healthy.Count > 0 ? healthy : candidates, deterministic);
         }
 
         var capable = AllKeys().Where(k => SupportsModel(k, model)).ToList();
-        return PickTopTier(capable.Count > 0 ? capable : AllKeys());
+        return PickTopTier(capable.Count > 0 ? capable : AllKeys(), deterministic);
     }
 
     // Из набора ключей — высший тариф, при равенстве тарифа — наименее загруженный.
-    private string PickTopTier(IReadOnlyList<string> keys)
+    private string PickTopTier(IReadOnlyList<string> keys, bool deterministic)
     {
         if (keys.Count == 0) return PrimaryKey;
         var topRank = keys.Max(TierRank);
         var top = keys.Where(k => TierRank(k) == topRank).ToList();
-        return LeastLoaded(top);
+        return LeastLoaded(top, deterministic);
     }
 
     // Ранг тарифа подписки из её конфига (Tier). Ключ вне пула — 0 (не задан).
@@ -165,8 +173,9 @@ public class ClaudeSubscriptionPool
         return last.Utilization ?? 0;
     }
 
-    // Ключ с минимальной утилизацией; при равенстве — случайный среди минимальных.
-    private string LeastLoaded(IReadOnlyList<string> keys)
+    // Ключ с минимальной утилизацией; при равенстве — случайный среди минимальных
+    // (deterministic=true — первый по порядку, для стабильного отображения).
+    private string LeastLoaded(IReadOnlyList<string> keys, bool deterministic = false)
     {
         var best = double.MaxValue;
         var winners = new List<string>();
@@ -184,7 +193,8 @@ public class ClaudeSubscriptionPool
                 winners.Add(k);
             }
         }
-        return winners.Count == 0 ? PrimaryKey : winners[Random.Shared.Next(winners.Count)];
+        if (winners.Count == 0) return PrimaryKey;
+        return deterministic ? winners[0] : winners[Random.Shared.Next(winners.Count)];
     }
 
     // Ключи всех настроенных подписок пула (пустой список = пул не настроен, локальный режим).

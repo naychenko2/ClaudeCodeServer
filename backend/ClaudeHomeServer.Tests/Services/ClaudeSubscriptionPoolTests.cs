@@ -495,6 +495,41 @@ public class ClaudeSubscriptionPoolTests : IDisposable
         pool.TierLabel("small").Should().Be("Pro");
     }
 
+    // --- PickForDisplay: детерминированная цель роутинга для бейджа на экране usage ---
+
+    [Fact]
+    public void PickForDisplay_РавнаяУтилизация_СтабильноОдинИТотЖеКлюч()
+    {
+        // У Pick при равенстве — случайный tie-break; для отображения выбор обязан быть
+        // стабильным, иначе бейдж «цель роутинга» мигал бы между аккаунтами.
+        var config = Config("a", "b");
+        var usage = new UsageService(config);
+        RecordUtil(usage, "a", 0.3);
+        RecordUtil(usage, "b", 0.3);
+
+        var pool = new ClaudeSubscriptionPool(config, usage);
+
+        var first = pool.PickForDisplay();
+        for (var i = 0; i < 20; i++)
+            pool.PickForDisplay().Should().Be(first);
+    }
+
+    [Fact]
+    public void PickForDisplay_ОсновнаяИсчерпана_ВтораяВышеПорога_ЦельВсёРавноВторая()
+    {
+        // Сценарий прода 2026-07-25: claude исчерпан (неделя 100%), claude-2 выше порога →
+        // IsInRotation(claude-2)=false, но все новые чаты фактически идут на claude-2.
+        var config = Config(softThreshold: 0.8, ClaudeSubscriptionPool.PrimaryKey, "claude-2");
+        var usage = new UsageService(config);
+        RecordUtil(usage, "claude-2", 0.91);
+
+        var pool = new ClaudeSubscriptionPool(config, usage);
+        pool.MarkExhausted(ClaudeSubscriptionPool.PrimaryKey, DateTime.UtcNow.AddHours(2));
+
+        pool.IsInRotation("claude-2").Should().BeFalse();
+        pool.PickForDisplay().Should().Be("claude-2");
+    }
+
     [Theory]
     [InlineData("max20", 4)]
     [InlineData("Max 20x", 4)]

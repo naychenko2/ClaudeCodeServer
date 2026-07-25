@@ -24,11 +24,15 @@ public record PlanInfo(string? SubscriptionType, string? RateLimitTier, string L
 // Anthropic-совместимые эндпоинты тоже шлют rate_limit_event, снимок пишется под ключ провайдера.
 // PollStatuses — статус опроса api/oauth/usage по ключам аккаунтов ("ok" | "unauthorized" |
 // "error"): по "unauthorized" вкладка показывает плашку «нужен claude login», не гадая по свежести.
+// RoutingTarget — ключ аккаунта, куда фактически ушёл бы новый чат сейчас (PickForDisplay):
+// IsInRotation абсолютный, а Pick относительный (спилл на перегруженные при отсутствии
+// свободных) — без цели роутинга бейдж «выведен из ротации» врал бы на аккаунте-спилле.
 public record UsageResponse(IReadOnlyList<UsageSnapshot> Snapshots, PlanInfo? Plan,
     Dictionary<string, SubscriptionUsage>? Subscriptions = null, double? RotationThreshold = null,
     Dictionary<string, IReadOnlyList<UsageSnapshot>>? Providers = null,
     OllamaUsageInfo? Ollama = null,
-    IReadOnlyDictionary<string, string>? PollStatuses = null);
+    IReadOnlyDictionary<string, string>? PollStatuses = null,
+    string? RoutingTarget = null);
 
 // Блок «Локальная модель (Ollama)» для экрана использования. У Ollama нет лимитов/баланса
 // (локальная, бесплатная) — показываем только модель и на какие действия она заведена.

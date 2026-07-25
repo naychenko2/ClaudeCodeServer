@@ -4,6 +4,7 @@ import { api } from '../lib/api';
 import type { UsageResponse, FalAccountResponse, UsageSnapshot, OllamaUsageInfo } from '../types';
 import { C, FONT, SHADOW } from '../lib/design';
 import { type RateWindow, RATE_COLORS, windowLabel, fmtReset, latestPerWindow, overageLabel, seriesByWindow, worstWindow } from '../lib/rateLimit';
+import { type RotationInfo, rotationBadgeState } from '../lib/rotation';
 import { cliProviderKeys, providerCapsByKey, providerLabel } from '../lib/models';
 
 const STALE_MS = 30 * 60 * 1000;
@@ -78,26 +79,19 @@ function WindowCard({ w }: { w: RateWindow }) {
   );
 }
 
-type RotationInfo = { inRotation?: boolean; utilization?: number; threshold?: number; exhausted?: boolean };
-
-// Статус роутинга аккаунта: берёт ли пул его для новых чатов (только при пуле подписок)
+// Статус роутинга аккаунта: куда фактически идут новые чаты (только при пуле подписок).
+// Четыре состояния (цель роутинга × в ротации) считает rotationBadgeState — там же и спилл:
+// аккаунт перегружен, но принимает чаты, потому что свободных нет.
 function RotationBadge({ info }: { info: RotationInfo }) {
-  const out = info.inRotation === false;
-  const pct = Math.round((info.utilization ?? 0) * 100);
-  const thr = Math.round((info.threshold ?? 0.8) * 100);
-  // Причина выведения: жёсткое исчерпание (лимит отбит) vs мягкий порог по нагрузке
-  const reason = !out ? 'новые чаты могут направляться сюда'
-    : info.exhausted ? 'лимит исчерпан — новые чаты идут на свободные аккаунты'
-    : `нагрузка 5ч ${pct}% ≥ порога ${thr}% — новые чаты идут на свободные аккаунты`;
+  const s = rotationBadgeState(info);
+  const warn = s.tone === 'warn';
   return (
     <div style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '5px 11px', borderRadius: 8,
-      background: out ? C.warningBg : C.bgWhite, border: `1px solid ${out ? C.warning : C.border}`,
+      background: warn ? C.warningBg : C.bgWhite, border: `1px solid ${warn ? C.warning : C.border}`,
       marginBottom: 12, fontFamily: FONT.sans, fontSize: 12 }}>
-      <span style={{ width: 7, height: 7, borderRadius: '50%', background: out ? C.warning : '#5FA97F', flexShrink: 0 }} />
-      <span style={{ fontWeight: 600, color: out ? C.warningText : C.textHeading }}>
-        {out ? 'Выведен из ротации' : 'В ротации'}
-      </span>
-      <span style={{ color: C.textMuted }}>{reason}</span>
+      <span style={{ width: 7, height: 7, borderRadius: '50%', background: warn ? C.warning : '#5FA97F', flexShrink: 0 }} />
+      <span style={{ fontWeight: 600, color: warn ? C.warningText : C.textHeading }}>{s.label}</span>
+      <span style={{ color: C.textMuted }}>{s.reason}</span>
     </div>
   );
 }
@@ -481,11 +475,19 @@ export function UsageScreen({ onClose }: { onClose: () => void }) {
 
   // Подписки из пула ClaudeSubscriptionPool — табы utilisation
   const subKeys = usage?.subscriptions ? Object.keys(usage.subscriptions) : [];
-  // Статус роутинга аккаунта (только когда есть пул подписок — иначе роутить нечего)
+  // Статус роутинга аккаунта (только когда есть пул подписок — иначе роутить нечего).
+  // isTarget — фактическая цель роутинга с бэка (PickForDisplay); freeAvailable — есть ли
+  // в пуле аккаунты в ротации (от этого зависит формулировка «куда идут чаты»).
   const rotationOf = (key: string): RotationInfo | undefined => {
     const s = usage?.subscriptions?.[key];
     if (!s || s.inRotation === undefined) return undefined;
-    return { inRotation: s.inRotation, utilization: s.utilization, threshold: usage?.rotationThreshold, exhausted: s.exhausted };
+    const target = usage?.routingTarget;
+    return {
+      inRotation: s.inRotation, utilization: s.utilization, threshold: usage?.rotationThreshold, exhausted: s.exhausted,
+      isTarget: target === key,
+      targetName: target ? (usage?.subscriptions?.[target]?.name ?? target) : undefined,
+      freeAvailable: Object.values(usage?.subscriptions ?? {}).some(x => x.inRotation === true),
+    };
   };
   const tabs = ([['claude', usage?.subscriptions?.['claude']?.name ?? 'Claude']] as [string, string][])
     .concat(subKeys.filter(k => k !== 'claude').map(k => [k, usage!.subscriptions![k].name ?? k] as [string, string]))

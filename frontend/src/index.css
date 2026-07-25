@@ -405,3 +405,14 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .cc-fab-hop, .cc-fab-huff { animation: none; }
 }
+
+/* Скелетон загрузки (аналитика токенов и др.): мягкое мерцание подложки */
+@keyframes cc-skeleton {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+.cc-skel {
+  background: linear-gradient(90deg, var(--c-bg-selected) 25%, var(--c-bg-card) 50%, var(--c-bg-selected) 75%);
+  background-size: 200% 100%;
+  animation: cc-skeleton 1.4s infinite;
+}

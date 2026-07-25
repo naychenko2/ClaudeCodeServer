@@ -27,6 +27,7 @@ import { ChatOriginBadge } from '../ChatOriginBadge';
 import { TeamMechanicBadge } from '../../features/team/TeamMechanicBadge';
 import type { TeamMechanicId } from '../../features/team/teamMechanics';
 import { resolveChatOrigin } from '../../lib/chatOrigin';
+import { SpendBadge } from '../../features/spend/SpendBadge';
 
 // Накопительная статистика стоимости/токенов по всем result-элементам ленты
 export interface CostStats {
@@ -1046,21 +1047,30 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   const providerCostBadge = isCliProvider
     ? <ProviderCostBadge providerName={asstName} stats={cost} balance={provBalance} isMobile={isMobile} />
     : <CostBadge stats={cost} isMobile={isMobile} billing={billing} onBillingChange={onBillingChange} windows={rateWindows} />;
+  // Бейдж расхода токенов чата (аналитика v2): обновляется по завершению хода —
+  // триггер cost.results растёт вместе с result-сообщениями ленты
+  const spendBadge = (
+    <SpendBadge sessionId={session.id} chatName={session.name} resultCount={cost.results} isMobile={isMobile} />
+  );
   const costBadges = isMobile ? (
     // Мобилка: один объединённый чип (контекст + стоимость/расход) — не распирает шапку
-    <MobileCombinedBadge
-      estimate={ctxEstimate} isWaiting={isWaiting} isCompacting={isCompacting}
-      canCompact={canCompact} compactNote={compactNote} onCompact={onCompact}
-      online={online} assistantName={asstName}
-      isCliProvider={isCliProvider} providerName={asstName} cost={cost} falCost={falCost}
-      balance={provBalance} billing={billing} onBillingChange={onBillingChange} windows={rateWindows}
-      activeWorkflow={activeWorkflow}
-    />
+    <>
+      <MobileCombinedBadge
+        estimate={ctxEstimate} isWaiting={isWaiting} isCompacting={isCompacting}
+        canCompact={canCompact} compactNote={compactNote} onCompact={onCompact}
+        online={online} assistantName={asstName}
+        isCliProvider={isCliProvider} providerName={asstName} cost={cost} falCost={falCost}
+        balance={provBalance} billing={billing} onBillingChange={onBillingChange} windows={rateWindows}
+        activeWorkflow={activeWorkflow}
+      />
+      {spendBadge}
+    </>
   ) : (
     <>
       {ctxBadge}
       {providerCostBadge}
       <FalCostBadge stats={falCost} isMobile={isMobile} />
+      {spendBadge}
     </>
   );
   const artifactsBtn = onToggleArtifacts ? (

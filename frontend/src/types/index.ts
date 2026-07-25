@@ -1424,3 +1424,113 @@ export interface CreateNotificationRequest {
   source?: string;
   tag?: string;
 }
+
+// ===== Аналитика расхода токенов (Spend Analytics v2, /api/spend/*) =====
+
+// Токены везде объектом — форма ответа бэкенда (docs/spend-analytics-v2-api.md)
+export interface SpendTokens {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheCreation: number;
+  total: number;
+}
+
+// Точка дневного ряда обзора/виджета; aggregated — день свёрнут (за детальным окном)
+export interface SpendDayPoint {
+  date: string;
+  aggregated: boolean;
+  total: number;
+  bySource: Record<string, number>;
+  falGenerations: number;
+}
+
+// Строка карточки-топа обзора и узел pivot-дерева (одна форма у бэкенда)
+export interface SpendCardRow {
+  key: string;               // id значения; "" — узел «без значения»
+  name: string | null;       // null — сущность удалена
+  meta: string | null;       // у чатов: "chat" | "task"
+  tokens: SpendTokens;
+  turns: number;
+  falGenerations: number;
+}
+
+export interface SpendOverviewResponse {
+  from: string;
+  to: string;
+  detailDays: number;
+  windowStart: string;
+  allUsers: boolean;
+  totals: SpendTokens;
+  turns: number;
+  falGenerations: number;
+  byDay: SpendDayPoint[];
+  cards: {
+    users: SpendCardRow[];
+    projects: SpendCardRow[];
+    models: SpendCardRow[];
+    chats: SpendCardRow[];
+    personas: SpendCardRow[];
+    sources: SpendCardRow[];
+    providers: SpendCardRow[];
+  };
+  topTurns: SpendTurnDto[];
+}
+
+export interface SpendPivotNode extends SpendCardRow {
+  hasDetail: boolean;        // false — узел целиком из дневных агрегатов (🔒 ходы недоступны)
+}
+
+export interface SpendPivotResponse {
+  nodes: SpendPivotNode[];
+}
+
+export interface SpendTurnDto {
+  id: string;
+  timestamp: string;
+  ownerId: string;
+  userName: string | null;
+  sessionId: string | null;
+  chatName: string | null;
+  projectId: string | null;
+  projectName: string | null;
+  taskId: string | null;
+  taskTitle: string | null;
+  personaId: string | null;
+  personaName: string | null;
+  provider: string | null;
+  model: string | null;
+  source: string;            // chat-turn | one-shot | fal | free
+  label: string | null;      // подпись one-shot действия или endpoint fal
+  tokens: SpendTokens;
+  generations: number;
+  durationMs: number | null;
+  own: boolean;              // ход текущего пользователя → можно «Открыть чат»
+}
+
+export interface SpendTurnsResponse {
+  total: number;
+  windowClamped: boolean;    // в периоде были свёрнутые дни — их ходы недоступны
+  items: SpendTurnDto[];
+}
+
+export interface SpendTurnDetailResponse {
+  turn: SpendTurnDto;
+  neighbors: { id: string; timestamp: string; total: number }[];
+}
+
+export interface SpendWidgetResponse {
+  today: SpendTokens;
+  week: SpendTokens;
+  todayTurns: number;
+  weekTurns: number;
+  weekFalGenerations: number;
+  byDay: SpendDayPoint[];
+}
+
+export interface SpendBadgeResponse {
+  sessionId: string;
+  total: SpendTokens;
+  turns: number;
+  lastTurn: SpendTurnDto | null;
+}

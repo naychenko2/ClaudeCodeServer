@@ -131,7 +131,7 @@ function ClaudeTab({ snapshots, rotation, tier }: { snapshots: UsageSnapshot[] |
         {badge}
         <div style={{ padding: '36px 12px', textAlign: 'center', color: C.textMuted, fontSize: 12.5, lineHeight: 1.5 }}>
           <div style={{ fontSize: 24, marginBottom: 6, opacity: 0.5 }}>◌</div>
-          Лимиты приходят с ответом Claude — отправьте сообщение в любом чате, и здесь появятся данные.
+          Данные о лимитах появятся в течение нескольких минут — они обновляются автоматически.
         </div>
       </div>
     );
@@ -140,8 +140,11 @@ function ClaudeTab({ snapshots, rotation, tier }: { snapshots: UsageSnapshot[] |
       {badge}
       {stale && (
         <div style={{ fontSize: 11.5, color: C.warningText, background: C.warningBg, border: `1px solid ${C.warning}`, borderRadius: 8, padding: '6px 10px', marginBottom: 12 }}>
-          Снимок старше 30 минут — возможно, неактуально. Обновится после следующего ответа Claude.
+          Снимок старше 30 минут — опрос лимитов сейчас недоступен. Обновится с ближайшим опросом или ответом Claude.
         </div>
+      )}
+      {latestTs > 0 && (
+        <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 8 }}>{fmtAgo(new Date(latestTs).toISOString())}</div>
       )}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
         {windows.map(w => <WindowCard key={w.limitType} w={w} />)}
@@ -153,7 +156,7 @@ function ClaudeTab({ snapshots, rotation, tier }: { snapshots: UsageSnapshot[] |
         </>
       )}
       <div style={{ fontSize: 11, color: C.textMuted, marginTop: 14, lineHeight: 1.5 }}>
-        Процент приходит с ответами Claude, обычно для окна у лимита; при низком расходе — «в пределах нормы».
+        Данные обновляются автоматически: регулярным опросом лимитов и с ответами Claude; при низком расходе — «в пределах нормы».
       </div>
     </div>
   );
@@ -440,6 +443,12 @@ export function UsageScreen({ onClose }: { onClose: () => void }) {
     return () => { c = true; };
   }, []);
 
+  // Пока экран открыт — подтягиваем свежие снимки поллера раз в минуту
+  // (лёгкий запрос в свой бэкенд; сам опрос Anthropic живёт на сервере по своему интервалу)
+  useEffect(() => {
+    const id = setInterval(() => { api.usage.get().then(setUsage).catch(() => {}); }, 60_000);
+    return () => clearInterval(id);
+  }, []);
 
   // Снимки сторонних провайдеров (glm/deepseek) лежат под их ключами — из сводки Claude
   // исключаем, чтобы лимит чужого эндпоинта не выглядел клодовским

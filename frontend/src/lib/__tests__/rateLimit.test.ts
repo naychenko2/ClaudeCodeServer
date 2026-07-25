@@ -166,4 +166,10 @@ describe('windowLabel', () => {
     expect(windowLabel('weekly_all_models')).toBe('Неделя');
     expect(windowLabel('')).toBe('Лимит');
   });
+
+  it('окна опроса /api/oauth/usage: per-model и перерасход', () => {
+    expect(windowLabel('seven_day_opus')).toBe('Неделя · Opus');
+    expect(windowLabel('seven_day_sonnet')).toBe('Неделя · Sonnet');
+    expect(windowLabel('extra_usage')).toBe('Перерасход · месяц');
+  });
 });

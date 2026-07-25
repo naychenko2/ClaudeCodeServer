@@ -13,6 +13,9 @@ const WINDOW_LABELS: Record<string, string> = {
   rolling_5h: '5 часов',
   seven_day: 'Неделя',
   weekly: 'Неделя',
+  seven_day_opus: 'Неделя · Opus',
+  seven_day_sonnet: 'Неделя · Sonnet',
+  extra_usage: 'Перерасход · месяц',
 };
 
 export function windowLabel(type: string): string {

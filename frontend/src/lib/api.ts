@@ -90,7 +90,8 @@ export const api = {
 
   settings: {
     get: () => request<AppSettings>('/settings'),
-    save: (s: AppSettings) => request<AppSettings>('/settings', { method: 'PUT', body: JSON.stringify(s) }),
+    // Патч: присылаем только изменённые поля, остальные сервер оставляет как есть
+    save: (s: Partial<AppSettings>) => request<AppSettings>('/settings', { method: 'PUT', body: JSON.stringify(s) }),
   },
 
   usage: {

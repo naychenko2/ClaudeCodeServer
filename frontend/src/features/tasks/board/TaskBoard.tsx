@@ -16,6 +16,7 @@ import {
   taskColumnKey, updateTask, upsertTaskLocal, type BoardGroupBy,
 } from '../../../lib/tasks';
 import { useBoardControls, setGroupBy } from '../../../lib/boardControls';
+import { DRAG_MOUSE_ACTIVATION, DRAG_TOUCH_ACTIVATION } from '../../../lib/dnd';
 import { OfflineError } from '../../../lib/offline';
 import { TaskCard } from '../TaskCard';
 import { BoardCell, ColumnHeader } from './BoardColumn';
@@ -49,8 +50,8 @@ export function TaskBoard({
   useEffect(() => { if (scope === 'project' && groupBy === 'project') setGroupBy('none'); }, [scope, groupBy]);
 
   const sensors = useSensors(
-    useSensor(MouseSensor, { activationConstraint: { distance: 6 } }),
-    useSensor(TouchSensor, { activationConstraint: { delay: 180, tolerance: 6 } }),
+    useSensor(MouseSensor, { activationConstraint: DRAG_MOUSE_ACTIVATION }),
+    useSensor(TouchSensor, { activationConstraint: DRAG_TOUCH_ACTIVATION }),
   );
 
   const projectNameOf = (t: Task) => (t.projectId ? projectsById.get(t.projectId)?.name : undefined);

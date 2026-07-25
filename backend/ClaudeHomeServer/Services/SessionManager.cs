@@ -480,6 +480,62 @@ public class SessionManager : IDisposable
         return true;
     }
 
+    // Ручная группировка чатов (drag-and-drop в списке): назначить родителя либо вынести
+    // в корень (parentId == null). Единственная точка записи ParentOverrideId/ParentDetached —
+    // поля взаимоисключающие, снаружи их не трогает никто.
+    //
+    // Чат не «переезжает»: UpdatedAt намеренно НЕ обновляется. Корни сортируются по активности
+    // поддерева (chatTree.ts), и отметка времени от перетаскивания перекидывала бы чат наверх
+    // списка, будто в нём был ход.
+    public Session? SetParent(string sessionId, string? parentId, string ownerId)
+    {
+        if (GetOwned(sessionId, ownerId) is not { } chat) return null;
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
+
+        if (parentId is null)
+        {
+            entry.Info.ParentOverrideId = null;
+            // Гасим авто-связь только у чата, у которого она есть, — иначе обычный чат
+            // навсегда унёс бы бессмысленный флаг в sessions.json.
+            entry.Info.ParentDetached = chat.TaskId is not null;
+            SaveSessions();
+            return entry.Info;
+        }
+
+        if (parentId == sessionId)
+            throw new InvalidOperationException("Чат нельзя вложить в самого себя");
+        if (GetOwned(parentId, ownerId) is not { } parent)
+            throw new InvalidOperationException("Родительский чат не найден");
+        // Разные списки рендерятся на разных экранах: ребёнок из чужого скоупа не нашёл бы
+        // родителя в своей выборке и молча всплыл бы в корень (chatTree.ts: byId.has(pid)).
+        if (parent.ProjectId != chat.ProjectId)
+            throw new InvalidOperationException(
+                "Чат можно группировать только внутри одного проекта или списка чатов вне проектов");
+        if (IsDescendantOf(parent.Id, sessionId))
+            throw new InvalidOperationException("Нельзя вложить чат в его собственный дочерний чат");
+
+        entry.Info.ParentOverrideId = parentId;
+        entry.Info.ParentDetached = false;
+        SaveSessions();
+        return entry.Info;
+    }
+
+    // Является ли candidate потомком ancestor по эффективной иерархии (ParentSessionId,
+    // т.е. с учётом ручных override). Счётчик шагов — страховка от цикла, уже лежащего
+    // в данных: инварианты SetParent новых циклов не создают, но старый sessions.json
+    // мог приехать из бэкапа, а обход вверх по кольцу здесь бы завис.
+    private bool IsDescendantOf(string candidateId, string ancestorId)
+    {
+        var cur = GetById(candidateId);
+        for (var steps = 0; cur is not null && steps < 256; steps++)
+        {
+            if (cur.ParentSessionId is not { } pid) return false;
+            if (pid == ancestorId) return true;
+            cur = GetById(pid);
+        }
+        return false;
+    }
+
     // Включить/выключить временность чата: minutes > 0 — авто-удаление через N минут
     // после последней активности, null — обычный чат. Включение перезапускает отсчёт (UpdatedAt)
     public Session? SetExpiry(string sessionId, int? minutes)

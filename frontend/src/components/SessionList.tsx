@@ -14,6 +14,7 @@ import { buildChatTreeRows, useChatView, useTreeCollapse } from '../lib/chatTree
 import { useLastMechanicVersion } from '../lib/lastMechanic';
 import { ChatCard } from './ChatCard';
 import { ChatTreeRow } from './ChatTreeRow';
+import { ChatGroupingDnd } from './ChatGroupingDnd';
 import { ListDateDivider } from './ListDateDivider';
 import { groupChats } from '../lib/chatGroups';
 
@@ -278,10 +279,11 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
           </div>
         )}
         {tree ? (
-          <>
+          <ChatGroupingDnd chats={sessions} isMobile={isMobile} onEdited={handleSessionUpdated}>
             {tree.linkCount === 0 && tree.rows.length > 0 && (
               <div style={{ padding: '10px 8px', fontSize: FS.sm, color: C.textMuted }}>
-                ⋔ Пока нет вложенных чатов — здесь появятся исполнители делегированных задач.
+                ⋔ Пока нет вложенных чатов — перетащите чат на другой, чтобы вложить.
+                Здесь же появятся исполнители делегированных задач.
               </div>
             )}
             {tree.rows.map(row => (
@@ -289,7 +291,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
                 {renderCard(row.chat)}
               </ChatTreeRow>
             ))}
-          </>
+          </ChatGroupingDnd>
         ) : groups.map(g => (
           <div key={g.title} style={{ marginBottom: 6 }}>
             <ListDateDivider title={g.title} />

@@ -2588,7 +2588,10 @@ public class SessionManager : IDisposable
         {
             var s = entry.Info;
             var provider = SpendSources.NormalizeProvider(s.Provider);
-            var model = m.UsageModel ?? s.Model;
+            // Фактическая модель хода из modelUsage (субагенты могли считать другой), фолбэк —
+            // модель сессии; пустой результат резолвится в дефолт подписки, чтобы SpendRecord
+            // никогда не оставался без модели (иначе в аналитике копилась «Модель по умолчанию»).
+            var model = _llmProviders.ResolveModelOrDefault(m.UsageModel ?? s.Model, provider);
             _spend.Record(new SpendRecord
             {
                 OwnerId = ResolveOwnerId(s) ?? "",

@@ -210,6 +210,34 @@ public class SpendAnalyticsTests : IDisposable
         Assert.Equal("s1", byChat[0].Key);
     }
 
+    // --- резолв дефолтной модели (SpendRecord.Model никогда не пустой) ---
+
+    [Fact]
+    public void Pivot_ДефолтнаяМодель_ГруппируетсяБезПустогоКлюча()
+    {
+        // После резолва null-модели в точке записи slice всегда несёт конкретный id
+        // (дефолт подписки "default" или id модели провайдера) — пустого ключа и группы
+        // «Модель по умолчанию» в pivot быть не должно.
+        var d = new DateOnly(2026, 7, 20);
+        List<SpendSlice> slices =
+        [
+            new(d, "u1", "p1", "s1", null, null, "claude", "default", SpendSources.ChatTurn,
+                100, 50, 0, 0, 0, 0, 1, Detailed: true),
+            new(d, "u1", "p1", "s2", null, null, "claude", "default", SpendSources.ChatTurn,
+                10, 5, 0, 0, 0, 0, 1, Detailed: true),
+            new(d, "u1", "p1", "s3", null, null, "claude", "opus", SpendSources.ChatTurn,
+                5, 5, 0, 0, 0, 0, 1, Detailed: true),
+        ];
+
+        var byModel = SpendAnalyticsService.GroupRaw(slices, "model");
+
+        Assert.Equal(2, byModel.Count);
+        Assert.DoesNotContain(byModel, n => n.Key.Length == 0); // нет пустой «Модели по умолчанию»
+        var def = byModel.Single(n => n.Key == "default");
+        Assert.Equal(2, def.Turns);
+        Assert.Equal(165, def.Tokens.Total);
+    }
+
     // --- классификация источников ---
 
     [Fact]

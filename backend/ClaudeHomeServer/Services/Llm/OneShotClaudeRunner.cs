@@ -177,7 +177,7 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
         try
         {
             var provider = SpendSources.NormalizeProvider(llmProviders.ProviderKey(model));
-            var usedModel = u.Model ?? model;
+            var usedModel = llmProviders.ResolveModelOrDefault(u.Model ?? model, provider);
             spend.Record(new SpendRecord
             {
                 OwnerId = ownerId ?? "",

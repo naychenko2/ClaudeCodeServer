@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--
+ВАРИАНТ A: "Компактный поток"
+
+Развилка: единый вертикальный поток трёх уровней (адаптеры → модель по умолчанию → задачи)
+с минимизированным использованием горизонтального пространства. Адаптеры показаны плиткой 2×3,
+пресеты схлопнуты в выпадающее меню "Автоподбор ▾" для экономии места.
+
+ПЛЮСЫ:
+- Компактность: влезает в стандартную ширину модалки (440px)
+- Простой скролл: один поток сверху вниз
+- Меньше визуального шума от пресетов (спрятаны в меню)
+
+МИНУСЫ:
+- Плитка 2×3 меньше читабельна, чем список-строки
+- Дополнительный клик для доступа к пресетам
+- Меньше воздуха вокруг элементов
+-->
+<title>Применение моделей — Вариант A (компактный поток)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=PT+Serif:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+<style>
+/* ==== Токены дизайн-системы (из frontend/src/lib/theme.css) ==== */
+:root {
+  --bg-main:      #F4F0E8;
+  --bg-panel:     #EDE7DC;
+  --bg-card:      #FBF8F2;
+  --bg-white:     #FFFFFF;
+  --bg-selected:  #E8E1D4;
+  --heading:      #2A251F;
+  --primary:      #39332B;
+  --secondary:    #756B5E;
+  --muted:        #9A8F7E;
+  --accent:       #D97757;
+  --accent-light: #F4ECE1;
+  --border:       #E0D7C8;
+  --border-light: #E8E1D4;
+  --divider:      #DDD4C4;
+  --success:      #5E8B4E;
+  --success-bg:   #E9F1E8;
+  --warning:      #C9923E;
+  --danger:       #B4452F;
+  --shadow-card:  0 2px 8px rgba(60, 50, 35, 0.05);
+  --shadow-modal:  0 24px 60px rgba(23, 19, 15, 0.40);
+  --shadow-btn:    0 4px 14px rgba(217, 119, 87, 0.30);
+  --sans: 'Hanken Grotesk', -apple-system, 'Segoe UI', sans-serif;
+  --serif: 'PT Serif', Georgia, serif;
+  --mono: 'JetBrains Mono', 'Courier New', monospace;
+}
+
+/* Тёмная тема */
+[data-theme="dark"] {
+  --bg-main:      #201C18;
+  --bg-panel:     #272320;
+  --bg-card:      #2E2A25;
+  --bg-white:     #2E2A25;
+  --bg-selected:  #38332D;
+  --heading:      #F2ECE1;
+  --primary:      #EDE6DB;
+  --secondary:    #B3A897;
+  --muted:        #8A8072;
+  --accent:       #E38A6A;
+  --accent-light: #3A2E27;
+  --border:       #3D3830;
+  --border-light: #34302A;
+  --divider:      #454037;
+  --shadow-modal:  0 28px 70px rgba(0, 0, 0, 0.65);
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: var(--bg-panel);
+  font-family: var(--sans);
+  color: var(--primary);
+  padding: 0;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  min-height: 100vh;
+}
+
+/* ==== Proto-bar (узкая тёмная шапка) ==== */
+.proto-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 36px;
+  background: #1a1612;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  z-index: 1000;
+  border-bottom: 1px solid #2a2520;
+}
+.proto-bar .variant {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: #bfb8ae;
+  letter-spacing: 0.05em;
+}
+.proto-bar .theme-toggle {
+  background: #2a2520;
+  border: 1px solid #3d3830;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-family: var(--sans);
+  font-size: 11px;
+  font-weight: 600;
+  color: #d8cfc0;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.proto-bar .theme-toggle:hover {
+  background: #3d3830;
+  color: #fff;
+}
+
+/* ==== Modal-карточка по центру ==== */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(23, 19, 15, 0.42);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 20px;
+  z-index: 100;
+}
+[data-theme="dark"] .modal-overlay {
+  background: rgba(0, 0, 0, 0.62);
+}
+
+.modal-card {
+  background: var(--bg-white);
+  border-radius: 20px;
+  box-shadow: var(--shadow-modal);
+  width: 100%;
+  max-width: 440px;
+  max-height: calc(100vh - 40px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.modal-header {
+  padding: 24px 24px 16px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.modal-header h1 {
+  font-family: var(--serif);
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--heading);
+  margin-bottom: 4px;
+}
+.modal-header .subtitle {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--secondary);
+}
+
+.modal-body {
+  padding: 16px 24px 24px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+/* ==== Уровни ==== */
+.level {
+  margin-bottom: 20px;
+}
+.level:last-child {
+  margin-bottom: 0;
+}
+
+.level-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ==== Адаптеры (плитка 2×3) ==== */
+.adapters-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+}
+
+.adapter-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  transition: all 0.15s;
+}
+.adapter-card:hover {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-card);
+}
+
+.adapter-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--heading);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.adapter-status {
+  font-size: 11.5px;
+  color: var(--secondary);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.status-dot.active { background: var(--success); }
+.status-dot.inactive { background: var(--muted); }
+.status-dot.offline { background: var(--warning); }
+
+.adapter-count {
+  font-size: 10.5px;
+  color: var(--muted);
+  margin-left: auto;
+}
+
+.adapter-link {
+  font-size: 11px;
+  color: var(--accent);
+  text-decoration: none;
+  align-self: flex-start;
+}
+.adapter-link:hover {
+  text-decoration: underline;
+}
+
+/* ==== Модель по умолчанию ==== */
+.default-model {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.default-model .info {
+  flex: 1;
+  min-width: 0;
+}
+.default-model .label {
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+.default-model .name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--heading);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.btn-change {
+  background: var(--bg-white);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-family: var(--sans);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.15s;
+}
+.btn-change:hover {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-btn);
+}
+
+/* ==== Автоподбор (выпадающее меню) ==== */
+.autopick {
+  margin-bottom: 20px;
+}
+.autopick-trigger {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.autopick-trigger:hover {
+  border-color: var(--accent);
+}
+.autopick-trigger .icon {
+  width: 16px;
+  height: 16px;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.autopick-trigger .label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--heading);
+}
+.autopick-trigger .chevron {
+  margin-left: auto;
+  color: var(--muted);
+  transition: transform 0.15s;
+}
+.autopick-trigger.open .chevron {
+  transform: rotate(180deg);
+}
+
+.autopick-menu {
+  display: none;
+  margin-top: 8px;
+  background: var(--bg-white);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.autopick-menu.show {
+  display: block;
+}
+
+.preset-item {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-light);
+  cursor: pointer;
+  transition: background 0.1s;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.preset-item:last-child {
+  border-bottom: none;
+}
+.preset-item:hover {
+  background: var(--bg-selected);
+}
+.preset-item .icon {
+  width: 16px;
+  height: 16px;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.preset-item .texts {
+  flex: 1;
+}
+.preset-item .title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--heading);
+}
+.preset-item .desc {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 1px;
+}
+
+/* ==== Задачи ==== */
+.task-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.task-group {
+  background: var(--bg-white);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.task-group-header {
+  padding: 8px 12px;
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.task-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-light);
+  transition: background 0.12s;
+}
+.task-row:last-child {
+  border-bottom: none;
+}
+.task-row:hover {
+  background: var(--bg-selected);
+}
+
+.task-name {
+  font-size: 12.5px;
+  color: var(--secondary);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.task-executor {
+  background: var(--bg-white);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px 8px 4px 9px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--secondary);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.15s;
+}
+.task-executor:hover {
+  border-color: var(--accent);
+}
+.task-executor .value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 120px;
+}
+.task-executor .chevron {
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.icon-zap {
+  width: 11px;
+  height: 11px;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+/* Пробел между модалкой и proto-bar */
+body {
+  padding-top: 36px;
+}
+</style>
+</head>
+<body>
+
+<!-- Proto-bar -->
+<div class="proto-bar">
+  <div class="variant">ВАРИАНТ A: Компактный поток</div>
+  <button class="theme-toggle" onclick="toggleTheme()">Тёмная тема</button>
+</div>
+
+<!-- Modal-overlay -->
+<div class="modal-overlay">
+  <div class="modal-card">
+    <!-- Header -->
+    <div class="modal-header">
+      <h1>Применение моделей</h1>
+      <div class="subtitle">Кто выполняет чаты и фоновые задачи. Настройка общая и применяется сразу.</div>
+    </div>
+
+    <!-- Body -->
+    <div class="modal-body">
+      <!-- Уровень 1: Подключённые модели -->
+      <div class="level">
+        <div class="level-title">Подключённые модели</div>
+
+        <!-- Агентские адаптеры -->
+        <div class="adapters-grid">
+          <div class="adapter-card">
+            <div class="adapter-name">Claude</div>
+            <div class="adapter-status">
+              <span class="status-dot active"></span>
+              <span>Активен</span>
+              <span class="adapter-count">4 модели</span>
+            </div>
+          </div>
+
+          <div class="adapter-card">
+            <div class="adapter-name">DeepSeek</div>
+            <div class="adapter-status">
+              <span class="status-dot active"></span>
+              <span>Активен</span>
+              <span class="adapter-count">2 модели</span>
+            </div>
+          </div>
+
+          <div class="adapter-card">
+            <div class="adapter-name">GLM</div>
+            <div class="adapter-status">
+              <span class="status-dot inactive"></span>
+              <span>Не настроен</span>
+              <a href="#" class="adapter-link">Настроить →</a>
+            </div>
+          </div>
+
+          <div class="adapter-card">
+            <div class="adapter-name">OpenRouter</div>
+            <div class="adapter-status">
+              <span class="status-dot active"></span>
+              <span>Активен</span>
+              <span class="adapter-count">6 моделей</span>
+            </div>
+          </div>
+
+          <div class="adapter-card">
+            <div class="adapter-name">Ollama</div>
+            <div class="adapter-status">
+              <span class="status-dot offline"></span>
+              <span>Офлайн</span>
+            </div>
+          </div>
+
+          <div class="adapter-card">
+            <div class="adapter-name">Бесплатные</div>
+            <div class="adapter-status">
+              <span class="status-dot active"></span>
+              <span>Доступно</span>
+              <span class="adapter-count">3 модели</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Уровень 2: Модель по умолчанию -->
+      <div class="level">
+        <div class="level-title">Модель по умолчанию</div>
+        <div class="default-model">
+          <div class="info">
+            <div class="label">Для новых чатов</div>
+            <div class="name">claude-opus-5 · Anthropic</div>
+          </div>
+          <button class="btn-change">Сменить</button>
+        </div>
+      </div>
+
+      <!-- Уровень 3: Автоподбор -->
+      <div class="level">
+        <div class="autopick">
+          <div class="autopick-trigger" onclick="toggleAutopick()">
+            <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+            </svg>
+            <span class="label">Автоподбор</span>
+            <svg class="chevron" width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+            </svg>
+          </div>
+
+          <div class="autopick-menu" id="autopickMenu">
+            <div class="preset-item">
+              <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z"/>
+              </svg>
+              <div class="texts">
+                <div class="title">Рекомендованное</div>
+                <div class="desc">Лучшее качество: локаль и AI под сложность</div>
+              </div>
+            </div>
+
+            <div class="preset-item">
+              <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 6l3 1m0 0l-3 9a5.002 5.002 0 006.001 0M6 7l3 9M6 7l6-2m6 2l3-1m-3 1l-3 9a5.002 5.002 0 006.001 0M18 7l3 9m-3-9l-6-2m0-2v2m0 16V5m0 16H9m3 0h3"/>
+              </svg>
+              <div class="texts">
+                <div class="title">Сбалансированный</div>
+                <div class="desc">Простое — локаль, среднее — бесплатные</div>
+              </div>
+            </div>
+
+            <div class="preset-item">
+              <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v13m0-13V6a2 2 0 112 2h-2zm0 0V5.5A2.5 2.5 0 109.5 8H12zm-7 4h14M5 12a2 2 0 110-4 2 2 0 010 4zm14 0a2 2 0 110-4 2 2 0 010 4z"/>
+              </svg>
+              <div class="texts">
+                <div class="title">Только бесплатные</div>
+                <div class="desc">Бесплатные облачные модели — без затрат</div>
+              </div>
+            </div>
+
+            <div class="preset-item">
+              <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/>
+              </svg>
+              <div class="texts">
+                <div class="title">Локальные</div>
+                <div class="desc">Локальная модель, где подходит</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Уровень 4: Для отдельных задач -->
+      <div class="level">
+        <div class="level-title">Для отдельных задач</div>
+
+        <div class="task-groups">
+          <!-- AI-хаб -->
+          <div class="task-group">
+            <div class="task-group-header">AI-хаб</div>
+            <div class="task-row">
+              <div class="task-name">Классификация запроса</div>
+              <div class="task-executor">
+                <span class="value">По умолчанию</span>
+                <svg class="chevron" width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                </svg>
+              </div>
+            </div>
+            <div class="task-row">
+              <div class="task-name">
+                Извлечение JSON
+                <svg class="icon-zap" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                </svg>
+              </div>
+              <div class="task-executor">
+                <span class="value">Локальная</span>
+                <svg class="chevron" width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                </svg>
+              </div>
+            </div>
+          </div>
+
+          <!-- Заметки -->
+          <div class="task-group">
+            <div class="task-group-header">Заметки</div>
+            <div class="task-row">
+              <div class="task-name">Авто-теги</div>
+              <div class="task-executor">
+                <span class="value">Локальная</span>
+                <svg class="chevron" width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                </svg>
+              </div>
+            </div>
+            <div class="task-row">
+              <div class="task-name">Предложение связей</div>
+              <div class="task-executor">
+                <span class="value">По умолчанию</span>
+                <svg class="chevron" width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                </svg>
+              </div>
+            </div>
+          </div>
+
+          <!-- Задачи -->
+          <div class="task-group">
+            <div class="task-group-header">Задачи</div>
+            <div class="task-row">
+              <div class="task-name">Генерация описания</div>
+              <div class="task-executor">
+                <span class="value">По умолчанию</span>
+                <svg class="chevron" width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                </svg>
+              </div>
+            </div>
+          </div>
+
+          <!-- Память -->
+          <div class="task-group">
+            <div class="task-group-header">Память</div>
+            <div class="task-row">
+              <div class="task-name">Запоминание факта</div>
+              <div class="task-executor">
+                <span class="value">Локальная</span>
+                <svg class="chevron" width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                </svg>
+              </div>
+            </div>
+            <div class="task-row">
+              <div class="task-name">Поиск по памяти</div>
+              <div class="task-executor">
+                <span class="value">Локальная</span>
+                <svg class="chevron" width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                </svg>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function toggleTheme() {
+  const html = document.documentElement;
+  const current = html.getAttribute('data-theme');
+  const next = current === 'light' ? 'dark' : 'light';
+  html.setAttribute('data-theme', next);
+
+  const btn = document.querySelector('.theme-toggle');
+  btn.textContent = next === 'light' ? 'Тёмная тема' : 'Светлая тема';
+}
+
+function toggleAutopick() {
+  const menu = document.getElementById('autopickMenu');
+  const trigger = document.querySelector('.autopick-trigger');
+  menu.classList.toggle('show');
+  trigger.classList.toggle('open');
+}
+
+// Закрытие меню по клику вне
+document.addEventListener('click', (e) => {
+  const menu = document.getElementById('autopickMenu');
+  const trigger = document.querySelector('.autopick-trigger');
+  if (!trigger.contains(e.target) && !menu.contains(e.target)) {
+    menu.classList.remove('show');
+    trigger.classList.remove('open');
+  }
+});
+</script>
+
+</body>
+</html>

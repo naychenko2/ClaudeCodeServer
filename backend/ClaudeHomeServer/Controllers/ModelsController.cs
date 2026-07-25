@@ -11,8 +11,10 @@ namespace ClaudeHomeServer.Controllers;
 public class ModelsController(ModelCatalogService catalog, LlmProviderRegistry providers) : ControllerBase
 {
     // Актуальный список моделей (Claude — из CLI с кэшем; CLI-провайдеры — из конфига
-    // LlmProviders, только при ApiKey) + возможности провайдеров, чтобы UI скрывал
-    // недоступное. Ненастроенные провайдеры не попадают в ответ — UI их не предлагает.
+    // LlmProviders, только при ApiKey) + возможности провайдеров, чтобы UI скрывал недоступное.
+    // Провайдеры отдаются ВСЕ (включая ненастроенные): у каждого флаг Configured (ключ задан ≠ пустой)
+    // — для плитки «Подключённые модели» («Активны: … · N не настроены»). Модели ненастроенного
+    // провайдера в каталог не попадают, так что ModelPicker его группу не покажет.
     [HttpGet]
     public async Task<IActionResult> Get(CancellationToken ct)
     {
@@ -20,7 +22,7 @@ public class ModelsController(ModelCatalogService catalog, LlmProviderRegistry p
         {
             [LlmCapabilitiesCatalog.Claude.Provider] = LlmCapabilitiesCatalog.Claude,
         };
-        foreach (var p in providers.Enabled)
+        foreach (var p in providers.All)
             caps[p.Key] = LlmProviderRegistry.CapabilitiesOf(p);
 
         return Ok(new { models = await catalog.GetModelsAsync(ct), providers = caps });

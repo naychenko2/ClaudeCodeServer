@@ -147,6 +147,7 @@ public class LlmProviderRegistry
         DisplayName = string.IsNullOrWhiteSpace(p.DisplayName) ? p.Key : p.DisplayName,
         SupportsImages = p.SupportsImages,
         HasBalance = !string.IsNullOrWhiteSpace(p.Balance) && !string.IsNullOrWhiteSpace(p.ApiBaseUrl),
+        Configured = p.Enabled,
     };
 
     // Переменные «провайдерского режима» — те, которыми мы САМИ рулим маршрутом CLI

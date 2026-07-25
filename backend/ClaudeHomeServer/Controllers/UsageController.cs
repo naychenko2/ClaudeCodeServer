@@ -80,6 +80,7 @@ public class UsageController(UsageService usage, ClaudeSubscriptionPool? subscri
                     {
                         RouteKind.Local => LocalActionOverridesStore.LocalRoute,
                         RouteKind.Claude => LocalActionOverridesStore.ClaudeRoute,
+                        RouteKind.Default => LocalActionOverridesStore.DefaultRoute,
                         _ => route.Model ?? LocalActionOverridesStore.ClaudeRoute,
                     },
                     RequiresStrong: !a.DefaultLocal);

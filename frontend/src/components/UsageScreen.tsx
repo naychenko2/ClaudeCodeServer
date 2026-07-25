@@ -397,7 +397,7 @@ function FalTab({ days, setDays }: { days: number; setDays: (d: number) => void 
 
 // «Локально» — Ollama: какая локальная модель настроена и сколько фоновых действий сейчас
 // начинается с неё. Лимитов/баланса нет (бесплатно). Сам выбор исполнителя каждого действия
-// вынесен в отдельный диалог «Фоновые задачи» (меню профиля, только админ).
+// вынесен в отдельный диалог «Поставщики моделей» (меню профиля, только админ).
 function OllamaTab({ info }: { info: OllamaUsageInfo | undefined }) {
   if (info === undefined)
     return <div style={{ padding: '40px 0', textAlign: 'center', color: C.textMuted, fontSize: 13 }}>Загрузка…</div>;
@@ -424,7 +424,7 @@ function OllamaTab({ info }: { info: OllamaUsageInfo | undefined }) {
 
       <div style={{ fontSize: 11.5, color: C.textMuted, marginTop: 14, lineHeight: 1.5 }}>
         Здесь — только сама локальная модель. Кто выполняет каждое фоновое действие (локаль,
-        бесплатная модель OpenRouter или Claude) настраивается в разделе <b>«Фоновые задачи»</b>{' '}
+        бесплатная модель OpenRouter или Claude) настраивается в разделе <b>«Поставщики моделей»</b>{' '}
         меню профиля.
       </div>
     </div>

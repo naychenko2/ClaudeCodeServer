@@ -57,29 +57,80 @@ const TREE_MAX_ENTRIES = 500;
 
 // --- HTTP к бэкенду ---
 
-async function api(path, options = {}) {
-  const res = await fetch(`${API_URL}${path}`, {
-    ...options,
-    // Таймаут: без него подвисший бэкенд вешает вызов инструмента навсегда.
-    // chats_send сюда не ходит (у него свой fetch без таймаута — сервер сам отвечает 202).
-    signal: AbortSignal.timeout(60_000),
-    headers: {
-      'Content-Type': 'application/json; charset=utf-8',
-      Authorization: `Bearer ${API_TOKEN}`,
-      // Сессия, в которой работает модель: по ней бэкенд определяет, идёт ли делегированный
-      // ход, и сам решает, что на нём запрещено (запись в третьи чаты, удаление). Состав
-      // инструментов сервера при этом остаётся неизменным — иначе процесс CLI перезапускается.
-      ...(SELF_SESSION_ID ? { 'X-Caller-Session-Id': SELF_SESSION_ID } : {}),
-      ...(options.headers ?? {}),
-    },
-  });
-  if (!res.ok) {
-    const body = await res.text();
-    const err = new Error(`HTTP ${res.status}: ${body}`);
-    err.status = res.status;
-    throw err;
+// Секундная недоступность бэкенда (рестарт, деплой, перезапуск прокси) превращалась в серию
+// красных карточек: ретраев не было ни одного. Паузы короткие — вызов инструмента не должен
+// висеть минутами, а бэкенд поднимается быстро.
+const RETRY_DELAYS_MS = [300, 900];
+// За частью эндпоинтов стоит вызов модели (локальная Ollama или Claude) — им дефолта мало
+const LLM_TIMEOUT_MS = 180_000;
+const RETRIABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// Ошибка соединения: запрос ТОЧНО не дошёл до бэкенда — повторять безопасно даже для мутаций
+const isConnectionError = err =>
+  ['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN'].includes(err?.cause?.code);
+
+// Сеть или таймаут: запрос мог и дойти — повторяем только идемпотентные чтения
+const isNetworkError = err =>
+  err?.name === 'TimeoutError' || err?.name === 'AbortError'
+  || err?.cause?.code !== undefined || /fetch failed/i.test(err?.message ?? '');
+
+function shouldRetry(err, method, attempt) {
+  if (attempt >= RETRY_DELAYS_MS.length) return false;
+  if (isConnectionError(err)) return true;
+  // Повтор POST/PUT/DELETE мог бы задвоить задачу или запустить второго исполнителя —
+  // мутации повторяем только когда точно известно, что запрос не дошёл (выше)
+  if ((method ?? 'GET').toUpperCase() !== 'GET') return false;
+  return err?.status ? RETRIABLE_STATUS.has(err.status) : isNetworkError(err);
+}
+
+// Текст ошибки для модели с ЯВНЫМ классом. Без него «HTTP 503», «HTTP 403» и «задача
+// принадлежит другому проекту» выглядят одинаково — в истории прода видно, как после первой
+// красной карточки модель бросала попытки, даже когда сбой был временный.
+function describeError(err) {
+  if (isNetworkError(err))
+    return 'Временный сбой связи с сервером'
+      + (err?.name === 'TimeoutError' ? ' (таймаут)' : '')
+      + '. Это не запрет — повтори вызов через несколько секунд.';
+  const status = err?.status;
+  if (!status) return String(err?.message ?? err);
+  const body = err.bodyText ? ` ${err.bodyText}` : '';
+  if (RETRIABLE_STATUS.has(status))
+    return `Временный сбой на сервере (HTTP ${status}).${body} Это не запрет — повтори вызов через несколько секунд.`;
+  if (status === 409)
+    return `Сейчас занято (HTTP 409).${body} Повтори позже, не чаще раза в 30 секунд.`;
+  return `Отказ (HTTP ${status}).${body} Повторять тот же вызов бессмысленно — само условие не изменится.`;
+}
+
+async function api(path, { timeoutMs = 60_000, ...options } = {}, attempt = 0) {
+  try {
+    const res = await fetch(`${API_URL}${path}`, {
+      ...options,
+      // Таймаут: без него подвисший бэкенд вешает вызов инструмента до дефолта undici (~300с)
+      signal: AbortSignal.timeout(timeoutMs),
+      headers: {
+        'Content-Type': 'application/json; charset=utf-8',
+        Authorization: `Bearer ${API_TOKEN}`,
+        // Сессия, в которой работает модель: по ней бэкенд определяет, идёт ли делегированный
+        // ход, и сам решает, что на нём запрещено (запись в третьи чаты, удаление). Состав
+        // инструментов сервера при этом остаётся неизменным — иначе процесс CLI перезапускается.
+        ...(SELF_SESSION_ID ? { 'X-Caller-Session-Id': SELF_SESSION_ID } : {}),
+        ...(options.headers ?? {}),
+      },
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      const err = new Error(`HTTP ${res.status}: ${body}`);
+      err.status = res.status;
+      err.bodyText = body;
+      throw err;
+    }
+    return parseBody(res);
+  } catch (err) {
+    if (!shouldRetry(err, options.method, attempt)) throw err;
+    await sleep(RETRY_DELAYS_MS[attempt]);
+    return api(path, { timeoutMs, ...options }, attempt + 1);
   }
-  return parseBody(res);
 }
 
 // Тело успешного ответа. Пустое тело — НЕ ошибка: на запись ASP.NET отвечает `Ok()`
@@ -715,14 +766,16 @@ async function callTool(name, args) {
     case 'files_document_summary': {
       checkProjectAllowed(args.projectId);
       const params = new URLSearchParams({ path: String(args.path ?? '') });
-      const r = await api(`/api/projects/${args.projectId}/files/document/summary?${params}`, { method: 'POST' });
+      const r = await api(`/api/projects/${args.projectId}/files/document/summary?${params}`,
+        { method: 'POST', timeoutMs: LLM_TIMEOUT_MS });
       return json({ path: args.path, summary: r.summary });
     }
 
     case 'files_document_extract': {
       checkProjectAllowed(args.projectId);
       const params = new URLSearchParams({ path: String(args.path ?? '') });
-      const r = await api(`/api/projects/${args.projectId}/files/document/extract?${params}`, { method: 'POST' });
+      const r = await api(`/api/projects/${args.projectId}/files/document/extract?${params}`,
+        { method: 'POST', timeoutMs: LLM_TIMEOUT_MS });
       return json(r);
     }
 
@@ -730,7 +783,7 @@ async function callTool(name, args) {
       checkProjectAllowed(args.projectId);
       const body = { path: String(args.path ?? ''), targetDir: args.targetDir ?? null, enhance: Boolean(args.enhance) };
       const r = await api(`/api/projects/${args.projectId}/files/document/to-markdown`, {
-        method: 'POST', body: JSON.stringify(body),
+        method: 'POST', body: JSON.stringify(body), timeoutMs: LLM_TIMEOUT_MS,
       });
       return json({ savedPath: r.savedPath, note: `Файл трансформирован в Markdown → ${r.savedPath}` });
     }
@@ -804,8 +857,10 @@ async function callTool(name, args) {
 
     case 'knowledge_index': {
       checkProjectAllowed(args.projectId);
+      // Загрузка документа в Dify — сетевой поход к внешнему сервису, дефолта может не хватить
       const data = await api(`/api/projects/${args.projectId}/knowledge/index`, {
         method: 'POST', body: JSON.stringify({ relativePath: String(args.path ?? '') }),
+        timeoutMs: LLM_TIMEOUT_MS,
       });
       // Загрузка синхронная, дальше Dify индексирует в фоне — честно отдаём статус
       return json({
@@ -1094,7 +1149,7 @@ rl.on('line', async line => {
         } catch (err) {
           // Ошибка инструмента — валидный результат с isError, не protocol error
           reply(id, {
-            content: [{ type: 'text', text: `Ошибка: ${err?.message ?? err}` }],
+            content: [{ type: 'text', text: `Ошибка: ${describeError(err)}` }],
             isError: true,
           });
         }

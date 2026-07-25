@@ -27,7 +27,7 @@ public class SessionSummaryServiceTests
         var t = SessionSummaryService.BuildTranscript(messages, 10_000);
 
         t.Should().Contain("Пользователь:").And.Contain("Сделай фичу");
-        t.Should().Contain("Claude:").And.Contain("Готово, фича сделана");
+        t.Should().Contain("AI:").And.Contain("Готово, фича сделана");
         t.Should().Contain("[инструмент Read]");
         t.Should().Contain("[изменён файл src/a.ts +10/-2]");
         // thinking и метаданные result в транскрипт не попадают

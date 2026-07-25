@@ -132,7 +132,7 @@ export function BoardColumnsDialog({ projectId, columns, taskCounts, onSaved, on
                     {count} {count === 1 ? 'задача переедет' : 'задач переедут'} в колонку «{target?.name ?? 'первую'}»
                   </span>
                   <button onClick={() => setConfirmIdx(null)} style={{ padding: '5px 10px', cursor: 'pointer', border: `1px solid ${C.border}`, borderRadius: R.sm, background: C.bgWhite, color: C.textPrimary, fontFamily: FONT.sans, fontSize: 12, fontWeight: 600 }}>Отмена</button>
-                  <button onClick={() => remove(i)} style={{ padding: '5px 10px', cursor: 'pointer', border: 'none', borderRadius: R.sm, background: C.danger, color: '#fff', fontFamily: FONT.sans, fontSize: 12, fontWeight: 700 }}>Удалить</button>
+                  <button onClick={() => remove(i)} style={{ padding: '5px 10px', cursor: 'pointer', border: 'none', borderRadius: R.sm, background: C.danger, color: C.onAccent, fontFamily: FONT.sans, fontSize: 12, fontWeight: 700 }}>Удалить</button>
                 </div>
               )}
             </div>

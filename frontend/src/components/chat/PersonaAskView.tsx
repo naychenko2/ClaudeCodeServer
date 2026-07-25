@@ -15,6 +15,7 @@ export function isPersonaAsk(name: string): boolean {
 
 // Нейтральный акцент для удалённой/неизвестной персоны — hex, чтобы работала
 // альфа-подложка `${accent}17` (CSS-переменные с суффиксом альфы не работают)
+// eslint-disable-next-line design/no-raw-color -- см. выше: значение клеится с альфой
 const NEUTRAL_ACCENT = '#8A8070';
 
 // Ответ длиннее порога сворачиваем, чтобы карточка не раздувала ленту
@@ -27,7 +28,7 @@ function FallbackAvatar({ handle, size }: { handle: string; size: number }) {
       aria-hidden
       style={{
         width: size, height: size, borderRadius: '50%', flexShrink: 0, userSelect: 'none',
-        background: NEUTRAL_ACCENT, color: '#fff',
+        background: NEUTRAL_ACCENT, color: C.onDark,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         fontFamily: FONT.sans, fontWeight: 700, fontSize: Math.round(size * 0.4), lineHeight: 1,
       }}

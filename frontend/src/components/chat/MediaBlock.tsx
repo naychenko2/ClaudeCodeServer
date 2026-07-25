@@ -197,8 +197,8 @@ export function MediaBlock({
         onMouseEnter={() => { if (online) setDlHov(true); }}
         onMouseLeave={() => setDlHov(false)}
         style={dark
-          ? { ...btnBase, background: 'rgba(255,255,255,0.15)', color: '#fff', borderColor: 'rgba(255,255,255,0.25)', opacity: online ? 1 : 0.4, cursor: online ? 'pointer' : 'not-allowed' }
-          : { ...btnBase, background: online && dlHov ? C.accent : 'rgba(237,231,218,0.92)', color: online && dlHov ? '#fff' : C.textPrimary, borderColor: online && dlHov ? C.accent : C.border, opacity: online ? 1 : 0.4, cursor: online ? 'pointer' : 'not-allowed' }
+          ? { ...btnBase, background: 'rgba(255,255,255,0.15)', color: C.onDark, borderColor: 'rgba(255,255,255,0.25)', opacity: online ? 1 : 0.4, cursor: online ? 'pointer' : 'not-allowed' }
+          : { ...btnBase, background: online && dlHov ? C.accent : 'rgba(237,231,218,0.92)', color: online && dlHov ? C.onAccent : C.textPrimary, borderColor: online && dlHov ? C.accent : C.border, opacity: online ? 1 : 0.4, cursor: online ? 'pointer' : 'not-allowed' }
         }
       >
         ↓ Скачать
@@ -210,8 +210,8 @@ export function MediaBlock({
           onMouseEnter={() => { if (online) setSaveHov(true); }}
           onMouseLeave={() => setSaveHov(false)}
           style={dark
-            ? { ...btnBase, background: saveState === 'saved' ? '#4CAF50' : saveState === 'error' ? '#e05252' : 'rgba(255,255,255,0.15)', color: '#fff', borderColor: 'rgba(255,255,255,0.25)', opacity: (!online || saveState === 'saving') ? 0.4 : 1, cursor: online ? 'pointer' : 'not-allowed' }
-            : { ...btnBase, background: saveState === 'saved' ? '#4CAF50' : saveState === 'error' ? '#e05252' : (online && saveHov ? C.accent : 'rgba(237,231,218,0.92)'), color: (saveState === 'saved' || saveState === 'error' || (online && saveHov)) ? '#fff' : C.textPrimary, borderColor: saveState === 'saved' ? '#4CAF50' : saveState === 'error' ? '#e05252' : (online && saveHov ? C.accent : C.border), opacity: (!online || saveState === 'saving') ? 0.4 : 1, cursor: online ? 'pointer' : 'not-allowed' }
+            ? { ...btnBase, background: saveState === 'saved' ? C.success : saveState === 'error' ? C.danger : 'rgba(255,255,255,0.15)', color: C.onDark, borderColor: 'rgba(255,255,255,0.25)', opacity: (!online || saveState === 'saving') ? 0.4 : 1, cursor: online ? 'pointer' : 'not-allowed' }
+            : { ...btnBase, background: saveState === 'saved' ? C.success : saveState === 'error' ? C.danger : (online && saveHov ? C.accent : 'rgba(237,231,218,0.92)'), color: (saveState === 'saved' || saveState === 'error' || (online && saveHov)) ? C.onAccent : C.textPrimary, borderColor: saveState === 'saved' ? C.success : saveState === 'error' ? C.danger : (online && saveHov ? C.accent : C.border), opacity: (!online || saveState === 'saving') ? 0.4 : 1, cursor: online ? 'pointer' : 'not-allowed' }
           }
         >
           {saveState === 'saving'
@@ -298,7 +298,7 @@ export function MediaBlock({
               position: 'absolute', top: 16, right: 16,
               background: 'rgba(255,255,255,0.15)',
               border: '1px solid rgba(255,255,255,0.3)',
-              borderRadius: 10, color: '#fff', fontSize: 18,
+              borderRadius: 10, color: C.onDark, fontSize: 18,
               width: 44, height: 44, cursor: 'pointer',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               lineHeight: 1, fontWeight: 300,

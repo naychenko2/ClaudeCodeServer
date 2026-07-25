@@ -5,6 +5,7 @@ import { MarkdownContent } from './MarkdownContent';
 // Нейтральный акцент «безликого» агента (не-персоны): тёплый серый под палитру.
 // Обязательно hex — акцент используется с alpha-суффиксами (`${accent}17`),
 // с CSS-переменными (C.accent = var(--c-accent)) это не работает.
+// eslint-disable-next-line design/no-raw-color -- см. выше: значение клеится с альфой
 export const NEUTRAL_AGENT_ACCENT = '#8A8578';
 
 // Блоки контента сабагента внутри секции «Активность» (PersonaTaskView, AgentActionsBlock,

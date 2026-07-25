@@ -17,7 +17,7 @@ export function NodeAvatar({ name }: { name: string }) {
     <span style={{
       width: 20, height: 20, borderRadius: R.full, flexShrink: 0, background: hashColor(name),
       display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-      fontSize: 9, fontWeight: 700, color: '#fff', fontFamily: FONT.sans,
+      fontSize: 9, fontWeight: 700, color: C.onDark, fontFamily: FONT.sans,
     }}>
       {(name[0] ?? '·').toUpperCase()}
     </span>

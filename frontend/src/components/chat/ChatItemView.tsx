@@ -60,7 +60,7 @@ function TodoPlanView({ todos }: { todos: TodoItem[] }) {
                 {isDone ? (
                   <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
                     <circle cx="8" cy="8" r="8" fill={C.success} />
-                    <path d="M4.5 8.2l2.2 2.2 4.8-4.8" stroke="#FFF" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M4.5 8.2l2.2 2.2 4.8-4.8" stroke={C.onAccent} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
                   </svg>
                 ) : isActive ? (
                   <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
@@ -353,6 +353,7 @@ function DelegationReportBadge({ title }: { title: string }) {
 }
 
 // Нейтральный акцент для агента без персоны (как в PersonaAskView)
+// eslint-disable-next-line design/no-raw-color -- значение клеится с альфой (`${accent}17`)
 const AGENT_NEUTRAL = '#8A8070';
 
 // Сообщение с источником (не от человека): входящее от персоны через chats_send, либо
@@ -381,7 +382,7 @@ function AgentMessageView({ text, persona, neutralTitle = 'Агент', note }: 
         ) : (
           <div aria-hidden style={{
             width: 28, height: 28, borderRadius: '50%', flexShrink: 0,
-            background: AGENT_NEUTRAL, color: '#fff',
+            background: AGENT_NEUTRAL, color: C.onDark,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
           }}>
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

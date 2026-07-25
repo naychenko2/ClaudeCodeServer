@@ -747,7 +747,7 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
                             }}>
                             <img src={api.personas.avatarCandidateUrl(persona.id, file)} alt="Вариант аватара" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
                             {itemBusy && (
-                              <span style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.35)', color: '#fff', fontSize: 11 }}>
+                              <span style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.35)', color: C.onDark, fontSize: 11 }}>
                                 Применяю…
                               </span>
                             )}
@@ -891,7 +891,7 @@ function TemplateCard({ template: t, active, onSelect }: { template: PersonaTemp
     >
       <span style={{
         width: 36, height: 36, borderRadius: R.full, flexShrink: 0, background: agentDotColor(t.avatarColor),
-        color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, fontWeight: 600,
+        color: C.onDark, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, fontWeight: 600,
       }}>
         {t.role.slice(0, 1)}
       </span>

@@ -272,7 +272,7 @@ export function PreviewServiceList({
             style={{
               width: '100%', marginTop: 6, padding: '7px 10px', borderRadius: R.sm,
               border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600,
-              background: C.accent, color: '#fff', opacity: saving || !form.command.trim() ? 0.6 : 1,
+              background: C.accent, color: C.onAccent, opacity: saving || !form.command.trim() ? 0.6 : 1,
             }}
           >
             {saving ? 'Сохранение…' : 'Сохранить в launch.json'}

@@ -89,7 +89,7 @@ function RotationBadge({ info }: { info: RotationInfo }) {
     <div style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '5px 11px', borderRadius: 8,
       background: warn ? C.warningBg : C.bgWhite, border: `1px solid ${warn ? C.warning : C.border}`,
       marginBottom: 12, fontFamily: FONT.sans, fontSize: 12 }}>
-      <span style={{ width: 7, height: 7, borderRadius: '50%', background: warn ? C.warning : '#5FA97F', flexShrink: 0 }} />
+      <span style={{ width: 7, height: 7, borderRadius: '50%', background: warn ? C.warning : C.success, flexShrink: 0 }} />
       <span style={{ fontWeight: 600, color: warn ? C.warningText : C.textHeading }}>{s.label}</span>
       <span style={{ color: C.textMuted }}>{s.reason}</span>
     </div>

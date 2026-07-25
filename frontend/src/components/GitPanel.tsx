@@ -788,7 +788,7 @@ export function GitHistoryPanel({ project, onOpenCommit, docMode = false }: { pr
             >
               <span title={entry.author} style={{
                 width: 24, height: 24, borderRadius: '50%', flexShrink: 0, marginTop: 1,
-                background: color, color: '#FFF',
+                background: color, color: C.onDark,
                 fontSize: 11, fontWeight: 700, fontFamily: FONT.sans,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
               }}>{(entry.author.trim()[0] ?? '?').toUpperCase()}</span>

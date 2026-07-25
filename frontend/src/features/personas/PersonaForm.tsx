@@ -480,7 +480,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
             style={{
               position: 'absolute', right: -2, bottom: -2, width: 28, height: 28, borderRadius: R.full,
               border: `2px solid ${C.bgMain}`, background: avatarMenu || showAppearance ? accentColor : C.bgWhite,
-              color: avatarMenu || showAppearance ? '#fff' : C.textSecondary, cursor: 'pointer',
+              color: avatarMenu || showAppearance ? C.onDark : C.textSecondary, cursor: 'pointer',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               opacity: avatarMenu || showAppearance || avatarHover || isMobile ? 1 : 0, transition: 'opacity 0.15s, background 0.15s',
               boxShadow: SHADOW.thumb,
@@ -640,7 +640,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
                           {itemBusy && (
                             <span style={{
                               position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                              background: 'rgba(0,0,0,0.35)', color: '#fff', fontSize: 11, fontFamily: FONT.sans,
+                              background: 'rgba(0,0,0,0.35)', color: C.onDark, fontSize: 11, fontFamily: FONT.sans,
                             }}>Применяю…</span>
                           )}
                         </button>

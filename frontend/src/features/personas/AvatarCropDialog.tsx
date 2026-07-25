@@ -136,7 +136,11 @@ export function AvatarCropDialog({ src, initial, title, onApply, onClose }: Prop
           onWheel={onWheel}
           style={{
             position: 'relative', width: WINDOW_SIZE, height: WINDOW_SIZE,
-            overflow: 'hidden', borderRadius: 12, background: '#111',
+            overflow: 'hidden', borderRadius: 12,
+            // Нейтральный тёмный подклад под кадрируемое фото: от темы не зависит,
+            // иначе один и тот же кадр читался бы в светлой и тёмной теме по-разному
+            // eslint-disable-next-line design/no-raw-color
+            background: '#111',
             cursor: 'grab', touchAction: 'none',
           }}
         >

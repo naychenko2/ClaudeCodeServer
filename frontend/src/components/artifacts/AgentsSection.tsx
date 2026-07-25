@@ -13,13 +13,13 @@ function AgentStatusIcon({ status }: { status: AgentArtifact['status'] }) {
   if (status === 'done') return (
     <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
       <circle cx="8" cy="8" r="8" fill={C.success} />
-      <path d="M4.5 8.2l2.2 2.2 4.8-4.8" stroke="#FFF" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M4.5 8.2l2.2 2.2 4.8-4.8" stroke={C.onAccent} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
   if (status === 'error') return (
     <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
       <circle cx="8" cy="8" r="8" fill={C.danger} />
-      <path d="M5.5 5.5l5 5M10.5 5.5l-5 5" stroke="#FFF" strokeWidth="1.6" strokeLinecap="round" />
+      <path d="M5.5 5.5l5 5M10.5 5.5l-5 5" stroke={C.onAccent} strokeWidth="1.6" strokeLinecap="round" />
     </svg>
   );
   return (
@@ -251,7 +251,7 @@ function WorkflowGroupView({ group }: { group: WorkflowGroup }) {
           {group.settled ? (
             <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
               <circle cx="8" cy="8" r="8" fill={C.success} />
-              <path d="M4.5 8.2l2.2 2.2 4.8-4.8" stroke="#FFF" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M4.5 8.2l2.2 2.2 4.8-4.8" stroke={C.onAccent} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
           ) : (
             <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
@@ -300,14 +300,14 @@ function AgentsSummary({ running, done, errors }: { running: number; done: numbe
       {done > 0 && item(
         <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
           <circle cx="8" cy="8" r="8" fill={C.success} />
-          <path d="M4.5 8.2l2.2 2.2 4.8-4.8" stroke="#FFF" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M4.5 8.2l2.2 2.2 4.8-4.8" stroke={C.onAccent} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
         </svg>,
         `${done} завершено`, C.textSecondary,
       )}
       {errors > 0 && item(
         <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
           <circle cx="8" cy="8" r="8" fill={C.danger} />
-          <path d="M5.5 5.5l5 5M10.5 5.5l-5 5" stroke="#FFF" strokeWidth="1.6" strokeLinecap="round" />
+          <path d="M5.5 5.5l5 5M10.5 5.5l-5 5" stroke={C.onAccent} strokeWidth="1.6" strokeLinecap="round" />
         </svg>,
         `${errors} с ошибкой`, C.dangerText,
       )}

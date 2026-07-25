@@ -53,8 +53,9 @@ public class AppSettingsService
                 ClaudeBilling = settings.ClaudeBilling ?? _settings.ClaudeBilling,
                 DailyBriefingEnabled = settings.DailyBriefingEnabled ?? _settings.DailyBriefingEnabled,
             };
-            Directory.CreateDirectory(Path.GetDirectoryName(_storePath)!);
-            File.WriteAllText(_storePath, JsonSerializer.Serialize(_settings));
+            // Запись через JsonFileStore: атомарна (tmp + move), крэш посреди сохранения
+            // не оставляет обрезанный app-settings.json — раньше был голый WriteAllText
+            JsonFileStore.Save(_storePath, _settings);
         }
         return Get();
     }

@@ -754,7 +754,7 @@ function SuggestCheck({ on }: { on: boolean }) {
       width: 18, height: 18, borderRadius: 5, flexShrink: 0,
       border: `1.5px solid ${on ? C.accent : C.border}`,
       background: on ? C.accent : C.bgWhite,
-      display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff',
+      display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.onAccent,
     }}>
       {on && <CheckIcon size={12} strokeWidth={ICON_STROKE} />}
     </span>

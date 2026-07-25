@@ -22,6 +22,11 @@ JwtSecurityTokenHandler.DefaultMapInboundClaims = false;
 try { Console.OutputEncoding = System.Text.Encoding.UTF8; }
 catch { /* нет консоли/права — не критично, останется дефолт */ }
 
+// Режимы обслуживания (--backup / --restore / --inspect) отрабатывают и завершаются,
+// не поднимая веб-приложение. Обязательно ДО ProcessRegistry.Initialize ниже: тот бьёт
+// «сирот» по pid-файлу, а он общий с работающим сервером.
+if (ClaudeHomeServer.Services.Backup.BackupCli.TryHandle(args)) return;
+
 var builder = WebApplication.CreateBuilder(args);
 
 // Локальные машинно-специфичные переопределения (пути, URL, секреты).
@@ -30,10 +35,25 @@ var builder = WebApplication.CreateBuilder(args);
 // дефолты из git (важно, чтобы у брата ничего не отъехало).
 builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: true);
 
+// Инспекционная копия: её параметры обязаны победить Local.json, который только что лёг
+// поверх командной строки. Иначе копия открыла бы боевой DataPath и боевой Dify.
+var inspectionOverrides = ClaudeHomeServer.Services.Backup.BackupCli.InspectionOverrides(args);
+if (inspectionOverrides is not null) builder.Configuration.AddInMemoryCollection(inspectionOverrides);
+var inspectionMode = builder.Configuration.GetValue<bool>("InspectionMode");
+
 // Зачистка процессов-сирот от предыдущего запуска сервера (краш/форс-килл):
 // на Windows дочерние node-процессы MCP-серверов не умирают при смерти родителя —
 // без этого они копятся и съедают гигабайты памяти. Должно быть ДО первого Process.Start.
-ProcessRegistry.Initialize();
+// В инспекционной копии пропускаем: pid-файл лежит рядом с exe (а не в DataPath), то есть
+// принадлежит БОЕВОМУ серверу — чистка убила бы его MCP-серверы и идущие ходы.
+if (!inspectionMode) ProcessRegistry.Initialize();
+
+// Признак «сервер работает на этом каталоге data»: держится весь uptime и проверяется
+// восстановлением. Живой сервер во время restore продолжил бы писать в перемещённый
+// каталог и пересоздал бы data под собой.
+var instanceLock = ClaudeHomeServer.Services.Backup.InstanceLock.TryAcquireInstance(
+    Path.GetDirectoryName(Path.GetFullPath(builder.Configuration["DataPath"]
+        ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json")))!);
 
 // Токен подписки claude CLI (`claude setup-token`) можно держать в appsettings.Local.json —
 // удобнее, чем переменная окружения: IDE наследует окружение от родителя (explorer/Toolbox),
@@ -198,6 +218,10 @@ builder.Services.AddSingleton<ITriggerSource, NoteTriggerSource>();
 builder.Services.AddSingleton<ITriggerSource, GitCommitTriggerSource>();
 builder.Services.AddSingleton<ITriggerSource, TaskStatusTriggerSource>();
 builder.Services.AddSingleton<PersonaAutomationService>();
+// Бэкапы: singleton + hosted-обёртка — снапшот дёргают и таймер, и админский API
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Backup.BackupService>();
+builder.Services.AddHostedService(sp =>
+    sp.GetRequiredService<ClaudeHomeServer.Services.Backup.BackupService>());
 builder.Services.AddHostedService<TaskSchedulerService>();
 builder.Services.AddHostedService<ChatExpiryService>();
 builder.Services.AddHostedService<ChatTurnLoggerService>();
@@ -292,6 +316,24 @@ builder.Services.AddCors(o => o.AddDefaultPolicy(p =>
      .AllowAnyMethod()
      .AllowCredentials()));
 
+// Инспекционная копия не запускает НИ ОДИН свой фоновый сервис: планировщик задач взялся
+// бы выполнять просроченные задачи Claude-исполнителем (реальные деньги и правки файлов),
+// синхронизация знаний — «поправлять» боевые датасеты Dify под отставшее состояние,
+// автоочистки — удалять чаты и заметки. Снимаем регистрации разом, а не по списку:
+// перечень пришлось бы дописывать при каждом новом сервисе, и однажды его забудут.
+// Хостинговые сервисы самого ASP.NET Core (Kestrel и прочие) не трогаем — только свои.
+if (inspectionMode)
+{
+    var appAssembly = typeof(ClaudeHomeServer.Services.Backup.BackupService).Assembly;
+    var background = builder.Services
+        .Where(d => d.ServiceType == typeof(IHostedService))
+        .Where(d => d.ImplementationType?.Assembly == appAssembly
+                    || d.ImplementationFactory?.Method.DeclaringType?.Assembly == appAssembly)
+        .ToList();
+    foreach (var descriptor in background) builder.Services.Remove(descriptor);
+    Console.WriteLine($"[Inspection] фоновые сервисы отключены ({background.Count})");
+}
+
 var app = builder.Build();
 
 // Логгер статического парсера workflow-транскриптов (DI туда не дотягивается)
@@ -321,21 +363,42 @@ catch (Exception ex)
     Console.Error.WriteLine($"[WorkflowAgentParser] не удалось зарегистрировать корни провайдеров: {ex.Message}");
 }
 
+// Доводка после восстановления из бэкапа: сбросить карты документов баз знаний, чтобы
+// Dify-слой пересобрался с натуры. Строго ДО первого обращения к WorkspaceKnowledgeStore
+// (тот читает файл в конструкторе) — то есть до MigrateFromProjects ниже.
+if (!inspectionMode)
+{
+    ClaudeHomeServer.Services.Backup.PostRestoreHook.RunIfNeeded(
+        Path.GetDirectoryName(Path.GetFullPath(app.Configuration["DataPath"]
+            ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json")))!,
+        app.Services.GetService<ILogger<Program>>());
+}
+
 // Прогрев сервисов на старте — UserStore печатает предупреждение если создал admin/admin
 app.Services.GetRequiredService<UserStore>();
-// Фоновый прогрев каталога моделей (опрос claude CLI ~5 с — не задерживаем старт)
-_ = Task.Run(() => app.Services.GetRequiredService<ModelCatalogService>().GetModelsAsync());
-// Фоновый прогрев локальной модели Ollama (грузим веса в память заранее; best-effort)
-_ = Task.Run(() => app.Services.GetRequiredService<ClaudeHomeServer.Services.Llm.OllamaClient>().WarmUpAsync());
+if (!inspectionMode)
+{
+    // Фоновый прогрев каталога моделей (опрос claude CLI ~5 с — не задерживаем старт).
+    // В копии пропускаем: запуск claude зарегистрировал бы процесс в pid-файле БОЕВОГО
+    // сервера (реестр живёт рядом с exe, а не в DataPath).
+    _ = Task.Run(() => app.Services.GetRequiredService<ModelCatalogService>().GetModelsAsync());
+    // Фоновый прогрев локальной модели Ollama (грузим веса в память заранее; best-effort)
+    _ = Task.Run(() => app.Services.GetRequiredService<ClaudeHomeServer.Services.Llm.OllamaClient>().WarmUpAsync());
+}
 app.Services.GetRequiredService<JwtService>();
 // Синк файловых сабагентов-персон: подписки на события PersonaManager должны встать
-// до первых запросов (иначе ранние правки персон не долетят до .md-файлов)
-app.Services.GetRequiredService<PersonaAgentFileSync>();
+// до первых запросов (иначе ранние правки персон не долетят до .md-файлов).
+// В копии НЕ поднимаем: синк пишет .claude/agents/*.md в реальные папки проектов
+// из восстановленного projects.json — то есть в рабочие каталоги на диске.
+if (!inspectionMode) app.Services.GetRequiredService<PersonaAgentFileSync>();
 
 // Однократная миграция @handle персон под контекстное правило: схлопывает лишние суффиксы
 // (masha-2 → masha там, где контексты не пересекаются) и чистит старые .md-файлы сабагентов
 // по прежнему handle. Маркер-файл — чтобы не гонять на каждом старте. Best-effort: сбой
 // миграции не мешает старту.
+// В инспекционной копии не запускаем: маркер в архиве может быть старым, и миграция
+// переименовала бы персон, удаляя и перегенерируя .md в РЕАЛЬНЫХ папках проектов.
+if (!inspectionMode)
 try
 {
     var dataDir = Path.GetDirectoryName(
@@ -365,7 +428,9 @@ catch (Exception ex)
 }
 
 // Чистка осиротевших temp-конфигов MCP: содержат сервисный токен и могли
-// остаться после крэша (штатно удаляются в finally каждого хода)
+// остаться после крэша (штатно удаляются в finally каждого хода).
+// Temp общий с боевым сервером — копия чужие конфиги не трогает.
+if (!inspectionMode)
 _ = Task.Run(() =>
 {
     try
@@ -402,6 +467,37 @@ app.UseRouting();
 app.UseCors();
 // UseRateLimiter — после UseRouting, иначе эндпоинт-политика [EnableRateLimiting] не видна
 app.UseRateLimiter();
+// Инспекционная копия — только чтение. Гейт один на весь пайплайн, а не перечень
+// контроллеров: перечень устаревает с каждым новым эндпоинтом. Стоит ДО аутентификации
+// (иначе запись отбивал бы 401 раньше нас, и гейт работал бы только для залогиненных),
+// ДО WebDAV и YARP-прокси (их PUT/MKCOL/MOVE/DELETE пишут в реальные папки проектов).
+//
+// Следствие: POST /hubs/*/negotiate тоже отбивается, поэтому SignalR в копии не
+// поднимается и UI показывает ошибку подключения. Это защита, а не дефект: живой хаб
+// означал бы ходы чатов и терминалы в боевых рабочих папках.
+if (inspectionMode)
+{
+    app.Use(async (ctx, next) =>
+    {
+        var method = ctx.Request.Method;
+        var readOnly = HttpMethods.IsGet(method) || HttpMethods.IsHead(method)
+            || HttpMethods.IsOptions(method);
+        var isAuth = ctx.Request.Path.StartsWithSegments("/api/auth");
+
+        if (!readOnly && !isAuth)
+        {
+            ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
+            await ctx.Response.WriteAsJsonAsync(new
+            {
+                error = "inspection_read_only",
+                message = "Инспекционная копия работает только на чтение",
+            });
+            return;
+        }
+        await next();
+    });
+}
+
 app.UseAuthentication();
 app.UseAuthorization();
 
@@ -643,9 +739,17 @@ app.Lifetime.ApplicationStopping.Register(() =>
     app.Services.GetRequiredService<SessionManager>().KillAllProcesses();
     app.Services.GetRequiredService<TerminalService>().Dispose();
     app.Services.GetRequiredService<DevServerService>().Dispose();
-    ProcessRegistry.KillAll();
+    // Тот же pid-файл принадлежит боевому серверу — копия его не трогает
+    if (!inspectionMode) ProcessRegistry.KillAll();
 });
 
 app.Run();
+
+// Отпустить признак «сервер работает» — после этого восстановление разрешено
+if (instanceLock is not null)
+{
+    try { instanceLock.ReleaseMutex(); } catch { /* мьютекс мог быть заброшен */ }
+    instanceLock.Dispose();
+}
 
 public partial class Program { }

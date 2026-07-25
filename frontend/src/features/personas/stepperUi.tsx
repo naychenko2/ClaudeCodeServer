@@ -29,7 +29,7 @@ export function Stepper({ step, steps, accent, onStep }: {
                 width: 18, height: 18, borderRadius: R.full, display: 'flex', alignItems: 'center',
                 justifyContent: 'center', fontSize: 10.5, fontWeight: 700,
                 background: state === 'act' ? accent : state === 'done' ? C.accentLight : C.bgSelected,
-                color: state === 'act' ? '#fff' : state === 'done' ? C.accent : C.textMuted,
+                color: state === 'act' ? C.onDark : state === 'done' ? C.accent : C.textMuted,
               }}>{it.n}</span>
               {it.label}
             </button>

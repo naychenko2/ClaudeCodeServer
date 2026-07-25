@@ -1,4 +1,4 @@
-import { R, FONT } from '../../lib/design';
+import { C, R, FONT } from '../../lib/design';
 import { agentDotColor } from '../../components/AgentSelector';
 import { PersonaAvatar } from '../personas/PersonaAvatar';
 import { getPersonaById, usePersonasVersion } from '../../lib/personas';
@@ -36,7 +36,7 @@ export function NotificationAvatar({ personaId, personaName, personaColor, kind,
         aria-hidden
         style={{
           width: size, height: size, borderRadius: R.full, flexShrink: 0, userSelect: 'none',
-          background: agentDotColor(personaColor), color: '#fff',
+          background: agentDotColor(personaColor), color: C.onDark,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           fontFamily: FONT.sans, fontWeight: 700, fontSize: Math.round(size * 0.4), lineHeight: 1,
         }}

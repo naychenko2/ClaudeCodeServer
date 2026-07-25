@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { Project } from '../../types';
-import { FONT } from '../../lib/design';
+import { C, FONT } from '../../lib/design';
 import { agentDotColor } from '../../components/AgentSelector';
 import { api } from '../../lib/api';
 import { projectColor } from '../../lib/tasks';
@@ -43,7 +43,7 @@ export function ProjectIcon({ project, size = 40, radius, imageUrl: imageUrlOver
       aria-hidden
       style={{
         ...base,
-        background: bg, color: '#fff',
+        background: bg, color: C.onDark,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         fontFamily: FONT.sans, fontWeight: 700, fontSize: Math.round(size * 0.38),
         lineHeight: 1,

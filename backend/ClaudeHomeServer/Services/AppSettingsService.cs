@@ -36,6 +36,7 @@ public class AppSettingsService
                 DefaultProjectsPath = _configDefault,
                 ClaudeBilling = string.IsNullOrWhiteSpace(_settings.ClaudeBilling) ? "subscription" : _settings.ClaudeBilling,
                 DailyBriefingEnabled = _settings.DailyBriefingEnabled ?? true,
+                DefaultChatModel = _settings.DefaultChatModel,
             };
         }
     }
@@ -52,9 +53,12 @@ public class AppSettingsService
             {
                 ClaudeBilling = settings.ClaudeBilling ?? _settings.ClaudeBilling,
                 DailyBriefingEnabled = settings.DailyBriefingEnabled ?? _settings.DailyBriefingEnabled,
+                // null = не прислали (оставить прежним), "" = сознательный сброс к дефолту CLI
+                DefaultChatModel = settings.DefaultChatModel ?? _settings.DefaultChatModel,
             };
-            Directory.CreateDirectory(Path.GetDirectoryName(_storePath)!);
-            File.WriteAllText(_storePath, JsonSerializer.Serialize(_settings));
+            // Запись через JsonFileStore: атомарна (tmp + move), крэш посреди сохранения
+            // не оставляет обрезанный app-settings.json — раньше был голый WriteAllText
+            JsonFileStore.Save(_storePath, _settings);
         }
         return Get();
     }

@@ -228,6 +228,10 @@ export interface AppSettings {
   claudeBilling?: ClaudeBilling;
   // Присылать ли утренний бриф по расписанию (настройка инстанса, тумблер в «Фоновых задачах»)
   dailyBriefingEnabled?: boolean;
+  // Модель по умолчанию для новых чатов (id модели любого провайдера, напр. «claude-sonnet-5»).
+  // PATCH /api/settings: поле отсутствует = не трогать, "" = сознательный сброс к дефолту CLI.
+  // Также backing-поле route "default" в фоновых задачах (исполнитель «По умолчанию»).
+  defaultChatModel?: string | null;
 }
 
 // Определение фич-флага из реестра (приходит с бэка для рендера тумблеров)
@@ -1535,4 +1539,36 @@ export interface SpendBadgeResponse {
   total: SpendTokens;
   turns: number;
   lastTurn: SpendTurnDto | null;
+}
+
+// --- Бэкапы (админский раздел) ---
+
+export interface BackupSummary {
+  chats: number;
+  personas: number;
+  tasks: number;
+  notes: number;
+  projects: number;
+  users: number;
+  totalBytes: number;
+}
+
+export interface BackupEntry {
+  fileName: string;
+  createdAt: string;
+  size: number;
+  summary: BackupSummary;
+}
+
+export interface BackupStatus {
+  // Всё из секции Backup конфига — UI их не меняет, только показывает
+  enabled: boolean;
+  // Куда архивы ложатся фактически (при пустом Backup:Path — папка по умолчанию)
+  effectivePath: string;
+  secretsPath: string;
+  intervalHours: number;
+  lastSuccessAt: string | null;
+  lastError: string | null;
+  lastAttemptAt: string | null;
+  recent: BackupEntry[];
 }

@@ -195,7 +195,7 @@ export function AgentCard({ item }: {
               }}
               onMouseEnter={e => {
                 e.currentTarget.style.background = C.danger;
-                e.currentTarget.style.color = '#fff';
+                e.currentTarget.style.color = C.onAccent;
               }}
               onMouseLeave={e => {
                 e.currentTarget.style.background = C.dangerBg;

@@ -13,7 +13,8 @@ public sealed record LlmCapabilities(
     bool SupportsPermissionModes,  // весь набор ClaudeMode; false → только базовые режимы
     bool SupportsImages,           // image-блоки во вложениях
     bool SupportsAgents,           // инжекция промпта .claude/agents/<name>.md
-    bool HasBalance = false);      // провайдер отдаёт баланс аккаунта (/api/providers/{key}/balance)
+    bool HasBalance = false,       // провайдер отдаёт баланс аккаунта (/api/providers/{key}/balance)
+    bool Configured = true);       // настроен ли (ключ задан ≠ пустой); для плитки «Подключённые модели»
 
 public static class LlmCapabilitiesCatalog
 {

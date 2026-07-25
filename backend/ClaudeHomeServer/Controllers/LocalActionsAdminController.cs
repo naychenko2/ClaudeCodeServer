@@ -20,7 +20,7 @@ public class LocalActionsAdminController(
     LlmProviderRegistry providers, ModelCatalogService models,
     LocalActionPresetService presets) : ControllerBase
 {
-    // route: "local" | "claude" | id модели любого настроенного провайдера
+    // route: "local" | "claude" | "default" (модель по умолчанию для чатов) | id модели провайдера
     public record RouteRequest(string Route);
 
     // preset: "recommended" | "free" | "local" | "balanced"
@@ -61,7 +61,9 @@ public class LocalActionsAdminController(
         if (route.Length == 0)
             return BadRequest(new { error = "Не указан исполнитель действия" });
 
-        if (route is not (LocalActionOverridesStore.LocalRoute or LocalActionOverridesStore.ClaudeRoute)
+        if (route is not (LocalActionOverridesStore.LocalRoute
+                or LocalActionOverridesStore.ClaudeRoute
+                or LocalActionOverridesStore.DefaultRoute)
             && await ValidateModelAsync(route, ct) is { } error)
             return BadRequest(new { error });
 
@@ -104,6 +106,7 @@ public class LocalActionsAdminController(
             {
                 RouteKind.Local => LocalActionOverridesStore.LocalRoute,
                 RouteKind.Claude => LocalActionOverridesStore.ClaudeRoute,
+                RouteKind.Default => LocalActionOverridesStore.DefaultRoute,
                 _ => route.Model,
             },
             source = route.Source.ToString().ToLowerInvariant(),

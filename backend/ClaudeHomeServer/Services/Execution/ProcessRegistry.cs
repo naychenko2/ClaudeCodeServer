@@ -34,12 +34,16 @@ public static class ProcessRegistry
     private static DateTime _lastPersist = DateTime.MinValue;
     private static Timer? _persistTimer;
 
+    // Имя файла знает и бэкап: восстановленный реестр PID заставил бы следующий старт
+    // убить по протухшим номерам всё, что зовётся claude/node (BackupPaths.ShouldInclude)
+    public const string PidFileName = "server-pids.txt";
+
     static ProcessRegistry()
     {
         var dir = Path.Combine(
             Path.GetDirectoryName(typeof(ProcessRegistry).Assembly.Location) ?? ".",
             "data");
-        _pidFile = Path.Combine(dir, "server-pids.txt");
+        _pidFile = Path.Combine(dir, PidFileName);
     }
 
     /// <summary>

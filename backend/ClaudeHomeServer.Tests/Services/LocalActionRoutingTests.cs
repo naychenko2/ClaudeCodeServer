@@ -1,3 +1,5 @@
+using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Llm;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -416,5 +418,57 @@ public class LocalActionRoutingTests
         var keys = LocalActionCatalog.All.Select(a => a.Key).ToList();
         Assert.Equal(keys.Count, keys.Distinct().Count());
         Assert.All(LocalActionCatalog.All, a => Assert.True(LocalActionCatalog.IsKnown(a.Key)));
+    }
+
+    // --- Маршрут «default» (модель по умолчанию для чатов, DefaultChatModel) ---
+
+    [Fact]
+    public void Route_Default_РезолвитсяИзСтора()
+    {
+        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });
+        var store = Store(config);
+        store.Set(LocalActionCatalog.NotesTags, LocalActionOverridesStore.DefaultRoute);
+        var router = new LocalActionRouter(Ollama(config), store, config, NullLogger<LocalActionRouter>.Instance);
+
+        var route = router.Resolve(LocalActionCatalog.NotesTags);
+        Assert.Equal(RouteKind.Default, route.Kind);
+        Assert.False(router.UsesLocal(LocalActionCatalog.NotesTags));
+    }
+
+    [Fact]
+    public async Task CheapRunner_RouteDefault_БерётDefaultChatModel()
+    {
+        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });
+        var store = Store(config);
+        store.Set(LocalActionCatalog.NotesTags, LocalActionOverridesStore.DefaultRoute);
+        var router = new LocalActionRouter(Ollama(config), store, config, NullLogger<LocalActionRouter>.Instance);
+        var claude = new FakeOneShot();
+        var appSettings = new AppSettingsService(config);
+        appSettings.Save(new AppSettings { DefaultChatModel = "glm-5.2" });
+        var runner = new CheapTextRunner(router, Ollama(config), Cloud(config), claude,
+            NullLogger<CheapTextRunner>.Instance, appSettings);
+
+        var result = await runner.RunAsync(LocalActionCatalog.NotesTags, "prompt-text", "haiku");
+
+        // Route "default" берёт DefaultChatModel, а НЕ fallbackModel действия ("haiku")
+        Assert.Equal("CLAUDE[glm-5.2]:prompt-text", result);
+        Assert.Equal(["glm-5.2"], claude.Calls);
+    }
+
+    [Fact]
+    public async Task CheapRunner_RouteDefault_БезНастройки_ДеградируетВДефолтCLI()
+    {
+        // DefaultChatModel не задана → route "default" эквивалентен «claude без --model» (дефолт CLI)
+        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });
+        var store = Store(config);
+        store.Set(LocalActionCatalog.NotesTags, LocalActionOverridesStore.DefaultRoute);
+        var router = new LocalActionRouter(Ollama(config), store, config, NullLogger<LocalActionRouter>.Instance);
+        var claude = new FakeOneShot();
+        var runner = new CheapTextRunner(router, Ollama(config), Cloud(config), claude,
+            NullLogger<CheapTextRunner>.Instance, new AppSettingsService(config));
+
+        var result = await runner.RunAsync(LocalActionCatalog.NotesTags, "prompt-text", "haiku");
+
+        Assert.Equal("CLAUDE[]:prompt-text", result);
     }
 }

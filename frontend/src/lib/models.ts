@@ -27,6 +27,9 @@ export interface ProviderCapabilities {
   supportsImages: boolean;
   supportsAgents: boolean;
   hasBalance?: boolean; // провайдер отдаёт баланс аккаунта (/api/providers/{key}/balance)
+  // Настроен ли (ключ задан ≠ пустой). /api/models отдаёт ВСЕ провайдеры, включая
+  // ненастроенные, — флаг нужен плитке «Подключённые модели» диалога поставщиков.
+  configured?: boolean;
 }
 
 // У Claude доступно всё — это и дефолт до загрузки списка с бэка
@@ -153,10 +156,24 @@ export function cliProviderKeys(): string[] {
   return Object.keys(_providers).filter(k => k !== 'claude');
 }
 
+// Все провайдеры из блока /api/models (включая ненастроенные, у тех configured=false) —
+// для плитки «Подключённые модели». Claude всегда первая и configured=true.
+export interface ProviderInfo { key: string; caps: ProviderCapabilities; }
+export function getProviders(): ProviderInfo[] {
+  return Object.entries(_providers).map(([key, caps]) => ({ key, caps }));
+}
+
 // Реактивные возможности: ре-рендер после догрузки списка моделей/провайдеров
 export function useModelCaps(value?: string | null): ProviderCapabilities {
   useModels();
   return modelCaps(value);
+}
+
+// Реактивный список всех провайдеров (для плитки «Подключённые модели»): ре-рендер
+// после догрузки каталога моделей. Claude всегда первая.
+export function useProviders(): ProviderInfo[] {
+  useModels();
+  return getProviders();
 }
 
 export function getModels(): ModelOption[] {

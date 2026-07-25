@@ -20,6 +20,7 @@ public sealed class LocalActionOverridesStore
     // (Notes:AiModel, Tasks:AiModel и т.п.).
     public const string LocalRoute = "local";
     public const string ClaudeRoute = "claude";
+    public const string DefaultRoute = "default";
 
     private readonly string _storePath;
     private readonly ILogger<LocalActionOverridesStore>? _log;

@@ -113,6 +113,9 @@ sealed class ServerSupervisor : IDisposable
         menu.Items.Add("Статистика…", null, (_, _) => ShowStats());
         menu.Items.Add("Открыть логи", null, (_, _) => OpenLogs());
         menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("Сделать бэкап", null, (_, _) => RunBackup());
+        menu.Items.Add("Восстановить из бэкапа…", null, (_, _) => RestoreFromBackup());
+        menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Выход (остановить сервер)", null, (_, _) => ExitApp());
         return menu;
     }
@@ -204,6 +207,170 @@ sealed class ServerSupervisor : IDisposable
             catch (Exception ex) { WriteLog($"[tray] ошибка остановки: {ex.Message}"); }
             finally { _server.Dispose(); _server = null; }
         }
+    }
+
+    // Снапшот при живом сервере безопасен: json-сторы пишутся атомарно, а лог событий
+    // снимается online-backup API SQLite. Гасить сервер незачем.
+    private void RunBackup()
+    {
+        _icon.ShowBalloonTip(2000, "AI Home", "Снимаю бэкап…", ToolTipIcon.Info);
+        Task.Run(() =>
+        {
+            var (code, output) = RunServerExe(["--backup"], TimeSpan.FromMinutes(5));
+            WriteLog($"[tray] бэкап: код={code}");
+            _icon.ShowBalloonTip(4000, "AI Home",
+                code == 0 ? "Бэкап готов" : $"Бэкап не удался: {LastLine(output)}",
+                code == 0 ? ToolTipIcon.Info : ToolTipIcon.Error);
+        });
+    }
+
+    private void RestoreFromBackup()
+    {
+        // Runner держит продукт своим супервизором: он поднимет сервер посреди
+        // восстановления и подменяемый каталог окажется занят (та же защита, что в deploy80)
+        if (Process.GetProcessesByName("ClaudeServerTray").Length > 0)
+        {
+            MessageBox.Show(
+                "Запущен ClaudeCodeServerRunner — он поднимет сервер посреди восстановления.\n" +
+                "Выйди из него и повтори.",
+                "AI Home", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        using var dialog = new OpenFileDialog
+        {
+            Title = "Выбери архив бэкапа",
+            Filter = "Архивы бэкапа (ccs-*.zip)|ccs-*.zip|Все файлы|*.*",
+            InitialDirectory = ResolveBackupDir(),
+        };
+        if (dialog.ShowDialog() != DialogResult.OK) return;
+
+        var summary = DescribeArchive(dialog.FileName);
+        var confirm = MessageBox.Show(
+            $"Восстановить данные из архива?\n\n{summary}\n\n" +
+            "Сервер будет остановлен, текущие данные сохранятся рядом в папке data.old-…\n" +
+            "Секреты и настройки доступа останутся текущими.",
+            "Восстановление из бэкапа", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+        if (confirm != DialogResult.Yes) return;
+
+        StopServer();
+        // Kill не graceful: файловые хендлы и признак «сервер работает» отпускаются
+        // не мгновенно, а восстановление на живом каталоге запрещено гейтом
+        WaitForServerLockRelease(TimeSpan.FromSeconds(15));
+
+        var (code, output) = RunServerExe(["--restore", dialog.FileName], TimeSpan.FromMinutes(10));
+        WriteLog($"[tray] восстановление: код={code}");
+
+        StartServer();
+
+        MessageBox.Show(
+            code == 0
+                ? "Данные восстановлены, сервер запущен.\n\nБазы знаний пересоберутся автоматически."
+                : $"Восстановление не выполнено:\n\n{LastLine(output)}\n\nСервер запущен на прежних данных.",
+            "AI Home", MessageBoxButtons.OK,
+            code == 0 ? MessageBoxIcon.Information : MessageBoxIcon.Error);
+    }
+
+    private (int Code, string Output) RunServerExe(string[] args, TimeSpan timeout)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo(Path.Combine(_baseDir, _cfg.ServerExe))
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                StandardOutputEncoding = new UTF8Encoding(false),
+                StandardErrorEncoding = new UTF8Encoding(false),
+                WorkingDirectory = _baseDir,
+            };
+            foreach (var a in args) psi.ArgumentList.Add(a);
+            psi.Environment["ASPNETCORE_ENVIRONMENT"] = _cfg.Environment;
+
+            using var process = Process.Start(psi);
+            if (process is null) return (-1, "не удалось запустить процесс");
+
+            var stdout = process.StandardOutput.ReadToEnd();
+            var stderr = process.StandardError.ReadToEnd();
+            if (!process.WaitForExit((int)timeout.TotalMilliseconds))
+            {
+                try { process.Kill(entireProcessTree: true); } catch { /* уже мёртв */ }
+                return (-1, "превышено время ожидания");
+            }
+
+            var combined = (stdout + "\n" + stderr).Trim();
+            WriteLog(combined);
+            return (process.ExitCode, combined);
+        }
+        catch (Exception ex)
+        {
+            return (-1, ex.Message);
+        }
+    }
+
+    // Мьютекс инстанса держится сервером всё время работы (см. InstanceLock в бэкенде)
+    private void WaitForServerLockRelease(TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            if (!IsPortListening(_cfg.Port)) return;
+            Thread.Sleep(500);
+        }
+    }
+
+    // Папка архивов задаётся секцией Backup в appsettings.Local.json (настроек бэкапа
+    // в data/app-settings.json нет — они намеренно живут только в конфиге).
+    private string ResolveBackupDir()
+    {
+        try
+        {
+            var configPath = Path.Combine(_baseDir, "appsettings.Local.json");
+            if (File.Exists(configPath))
+            {
+                using var doc = JsonDocument.Parse(File.ReadAllText(configPath));
+                if (doc.RootElement.TryGetProperty("Backup", out var backup)
+                    && backup.TryGetProperty("Path", out var p)
+                    && p.GetString() is { Length: > 0 } configured
+                    && Directory.Exists(configured))
+                    return configured;
+            }
+        }
+        catch { /* дефолт ниже */ }
+
+        var fallback = Path.Combine(_baseDir, "data", "backups");
+        return Directory.Exists(fallback) ? fallback : _baseDir;
+    }
+
+    // Состав архива берём из sidecar-манифеста рядом: вскрывать zip ради трёх чисел незачем
+    private static string DescribeArchive(string archivePath)
+    {
+        try
+        {
+            var sidecar = Path.Combine(
+                Path.GetDirectoryName(archivePath) ?? "",
+                Path.GetFileNameWithoutExtension(archivePath) + ".manifest.json");
+            if (!File.Exists(sidecar)) return Path.GetFileName(archivePath);
+
+            using var doc = JsonDocument.Parse(File.ReadAllText(sidecar));
+            var root = doc.RootElement;
+            var created = root.TryGetProperty("CreatedAt", out var c) ? c.GetDateTime() : default;
+            var s = root.GetProperty("Summary");
+
+            int Get(string name) => s.TryGetProperty(name, out var v) ? v.GetInt32() : 0;
+
+            return $"Снят: {created:dd.MM.yyyy HH:mm}\n" +
+                   $"{Get("Chats")} чатов · {Get("Personas")} персон · " +
+                   $"{Get("Tasks")} задач · {Get("Notes")} заметок";
+        }
+        catch { return Path.GetFileName(archivePath); }
+    }
+
+    private static string LastLine(string output)
+    {
+        var lines = output.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        return lines.Length > 0 ? lines[^1].Trim() : "неизвестная ошибка";
     }
 
     private void ShowStats()

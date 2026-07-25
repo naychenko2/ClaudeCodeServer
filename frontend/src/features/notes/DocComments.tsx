@@ -586,7 +586,7 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
           top: Math.max(8, selection.y - 44),
           display: 'flex', alignItems: 'center', gap: 7, padding: '7px 13px',
           background: repinFor ? C.accent : C.textHeading,
-          color: repinFor ? '#fff' : C.bgMain, border: 'none', borderRadius: 10,
+          color: repinFor ? C.onAccent : C.bgMain, border: 'none', borderRadius: 10,
           fontSize: 13, fontWeight: 600, cursor: 'pointer', boxShadow: SHADOW.dropdown,
           fontFamily: FONT.sans,
         }}>
@@ -667,7 +667,7 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
           </div>
           <div style={{ display: 'flex', gap: 8, padding: '10px 14px', borderTop: `1px solid ${C.border}` }}>
             <button onClick={() => void create()} disabled={saving} style={{
-              padding: '5px 14px', background: C.accent, color: '#fff', border: 'none',
+              padding: '5px 14px', background: C.accent, color: C.onAccent, border: 'none',
               borderRadius: 8, fontSize: 12.5, fontWeight: 600, cursor: 'pointer',
               opacity: saving ? 0.6 : 1, fontFamily: FONT.sans,
             }}>{saving ? 'Создаю…' : 'Создать'}</button>

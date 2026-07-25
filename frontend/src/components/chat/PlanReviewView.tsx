@@ -112,7 +112,7 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
         borderRadius: R.xl, padding: '11px 14px', background: C.successBg,
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 600, color: C.successText }}>
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="8" fill={C.success} /><path d="M4.5 8.2l2.2 2.2 4.8-4.8" stroke="#fff" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="8" fill={C.success} /><path d="M4.5 8.2l2.2 2.2 4.8-4.8" stroke={C.onAccent} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
           План одобрен — выполняется
           <SavePlanButton plan={plan} online={online} />
         </div>
@@ -170,7 +170,7 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
           width: 28, height: 28, borderRadius: R.md, background: C.plan, flexShrink: 0,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
         }}>
-          <PlanIcon size={15} color="#FFF" />
+          <PlanIcon size={15} color={C.onAccent} />
         </span>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontFamily: FONT.serif, fontSize: 15, fontWeight: 700, color: C.textHeading, lineHeight: 1.2 }}>
@@ -226,7 +226,7 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
           />
           <div style={{ display: 'flex', gap: 8 }}>
             <button onClick={() => onRespond(item.requestId, false, feedback.trim() || undefined)}
-              style={{ flex: 1, minHeight: 40, background: C.plan, color: '#FFF', borderRadius: R.lg, padding: 9, border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
+              style={{ flex: 1, minHeight: 40, background: C.plan, color: C.onAccent, borderRadius: R.lg, padding: 9, border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
               Переработать план
             </button>
             <button onClick={() => { setRejecting(false); setFeedback(''); }}
@@ -239,12 +239,12 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
         <div style={{ display: 'flex', gap: 8 }}>
           <button onClick={() => onRespond(item.requestId, true)}
             style={{
-              flex: 1, minHeight: 42, background: C.plan, color: '#FFF', borderRadius: R.lg,
+              flex: 1, minHeight: 42, background: C.plan, color: C.onAccent, borderRadius: R.lg,
               padding: 9, border: 'none', cursor: 'pointer', fontSize: 13.5, fontWeight: 700,
               boxShadow: '0 4px 14px rgba(108,92,176,0.30)',
               display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
             }}>
-            <Check size={16} color="#FFF" strokeWidth={2.6} style={{ flexShrink: 0 }} />
+            <Check size={16} color={C.onAccent} strokeWidth={2.6} style={{ flexShrink: 0 }} />
             Одобрить и выполнить
           </button>
           <button onClick={() => setRejecting(true)}

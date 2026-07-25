@@ -516,6 +516,15 @@ public class SessionManager : IDisposable
             return provider.Key;
         return _subscriptionPool.Pick(model);
     }
+
+    // Модель по умолчанию для новых чатов (глобальная настройка админа DefaultChatModel).
+    // Подставляется, только когда модель НЕ задана явно и это НЕ resume: у транскрипта
+    // resumed-сессии уже зафиксированы своя модель и провайдер, и подмена здесь сменила бы
+    // провайдер и упёрлась в guard смены провайдера (400).
+    private string? ResolveDefaultModel(string? model, string? resumeSessionId) =>
+        !string.IsNullOrWhiteSpace(model) || !string.IsNullOrEmpty(resumeSessionId)
+            ? model
+            : _appSettings.Get().DefaultChatModel;
     private string ResolveChatRoot(string ownerId)
     {
         var user = _users.GetById(ownerId)
@@ -698,15 +707,16 @@ public class SessionManager : IDisposable
         var project = _projects.GetById(projectId)
             ?? throw new KeyNotFoundException($"Проект не найден: {projectId}");
 
+        var defaultModel = ResolveDefaultModel(model, resumeSessionId);
         var session = new Session
         {
             ProjectId = projectId,
             Mode = mode,
             ClaudeSessionId = resumeSessionId,
             Name = name,
-            Model = string.IsNullOrWhiteSpace(model) ? null : model.Trim(),
+            Model = string.IsNullOrWhiteSpace(defaultModel) ? null : defaultModel.Trim(),
             AgentName = string.IsNullOrWhiteSpace(agentName) ? null : agentName.Trim(),
-            Provider = ResolveSubscriptionProvider(model),
+            Provider = ResolveSubscriptionProvider(defaultModel),
             Effort = string.IsNullOrWhiteSpace(effort) ? null : effort.Trim(),
             // Персона-слой подхватится общим механизмом (BuildPersonaLayer).
             // Маршрутизация остаётся по вызывающему коду (задача), не по зоне персоны.
@@ -728,6 +738,7 @@ public class SessionManager : IDisposable
     {
         var rootPath = ResolveChatRoot(ownerId);
 
+        var defaultModel = ResolveDefaultModel(model, resumeSessionId);
         var session = new Session
         {
             ProjectId = null,
@@ -735,10 +746,10 @@ public class SessionManager : IDisposable
             Mode = mode,
             ClaudeSessionId = resumeSessionId,
             Name = name,
-            Model = string.IsNullOrWhiteSpace(model) ? null : model.Trim(),
+            Model = string.IsNullOrWhiteSpace(defaultModel) ? null : defaultModel.Trim(),
             Effort = string.IsNullOrWhiteSpace(effort) ? null : effort.Trim(),
             // Персона-слой подхватится общим механизмом (BuildPersonaLayer)
-            Provider = ResolveSubscriptionProvider(model),
+            Provider = ResolveSubscriptionProvider(defaultModel),
             PersonaId = string.IsNullOrWhiteSpace(personaId) ? null : personaId,
             TaskExecution = taskExecution,
             TaskId = taskId,

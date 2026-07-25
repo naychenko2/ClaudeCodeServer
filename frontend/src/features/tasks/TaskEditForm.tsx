@@ -1,7 +1,7 @@
 // Редактирование задачи — инлайн-экран вместо деталей (как в макете):
 // шапка «Редактирование задачи» с Отмена / ✓ Готово / корзина, ниже поля формы.
 
-import { useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { Check, FilePlus2, Plus, SquarePen, Trash2, X } from 'lucide-react';
 import type { Project, Task, TaskAssignee, TaskPriority, TaskRecurrence, TaskRecurrenceType, TaskSubtask, UpdateTaskDto } from '../../types';
 import { C, FONT, R } from '../../lib/design';
@@ -14,7 +14,10 @@ import { NO_PROJECT_COLOR, NO_PROJECT_LABEL, PRIORITY_LABEL, PRIORITY_ORDER, REC
 import { ExtBadge, PriorityFlag, SubtaskCheck } from './bits';
 import { DueDatePicker } from './DueDatePicker';
 import { ExecutorPicker } from './ExecutorPicker';
-import { NoteEditor } from '../notes/NoteEditor';
+// CodeMirror тяжёлый — редактор грузим лениво, только при входе в правку. Статический
+// импорт здесь обнулял бы ленивую загрузку и в NoteView, и в FileViewer: сборщик тянет
+// модуль в основной чанк, если хоть один потребитель просит его статически.
+const NoteEditor = lazy(() => import('../notes/NoteEditor').then(m => ({ default: m.NoteEditor })));
 import { AttachPicker } from '../../components/chat/AttachPicker';
 import { Toggle, SegmentedControl, WaitingIndicator } from '../../components/ui';
 import { EXPIRY_PRESETS, DEFAULT_EXPIRY } from '../../lib/expiry';
@@ -29,6 +32,11 @@ interface Props {
   // AI-хаб: авто-запуск генерации при входе в правку из палитры/подсказки
   pendingAi?: 'task.description' | 'task.subtasks' | null;
   onPendingConsumed?: () => void;
+}
+
+// Плейсхолдер на время подгрузки ленивого редактора — тот же текст, что в NoteView
+function EditorFallback() {
+  return <div style={{ padding: 24, color: C.textMuted, fontSize: 13 }}>Загрузка редактора…</div>;
 }
 
 function fieldLabelStyle(): React.CSSProperties {
@@ -588,12 +596,14 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
                 <WaitingIndicator hint="Генерирую описание по названию задачи" />
               </div>
             ) : descEditing ? (
-              <NoteEditor
-                value={description}
-                onChange={setDescription}
-                placeholder="Описание задачи (markdown)…"
-                minHeight={150}
-              />
+              <Suspense fallback={<EditorFallback />}>
+                <NoteEditor
+                  value={description}
+                  onChange={setDescription}
+                  placeholder="Описание задачи (markdown)…"
+                  minHeight={150}
+                />
+              </Suspense>
             ) : (
               <div style={{
                 background: C.bgWhite, border: `1px solid ${C.borderLight}`,
@@ -633,12 +643,14 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
           </div>
           <div style={{ marginBottom: 22 }}>
             {resultEditing ? (
-              <NoteEditor
-                value={result}
-                onChange={setResult}
-                placeholder="Итог выполнения (markdown)…"
-                minHeight={160}
-              />
+              <Suspense fallback={<EditorFallback />}>
+                <NoteEditor
+                  value={result}
+                  onChange={setResult}
+                  placeholder="Итог выполнения (markdown)…"
+                  minHeight={160}
+                />
+              </Suspense>
             ) : (
               <div style={{
                 background: C.bgWhite, border: `1px solid ${C.borderLight}`,

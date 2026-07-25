@@ -46,26 +46,59 @@ public class ProjectEventLogService : IDisposable
         }
     }
 
+    // Текущая версия схемы БД. Поднимать вместе с новой ступенькой в Migrate.
+    private const int SchemaVersion = 1;
+
     private void Init()
     {
         using var c = OpenConnection();
         Exec(c, "PRAGMA journal_mode=WAL;");
         Exec(c, "PRAGMA busy_timeout=5000;");
-        Exec(c, """
-            CREATE TABLE IF NOT EXISTS project_events (
-              id INTEGER PRIMARY KEY AUTOINCREMENT,
-              project_id TEXT NOT NULL,
-              owner_id TEXT NOT NULL,
-              ts TEXT NOT NULL,
-              type TEXT NOT NULL,
-              actor TEXT NOT NULL,
-              summary TEXT NOT NULL,
-              entity_ref TEXT
-            );
-        """);
-        // Составной индекс покрывает главный кейс «лента проекта по владельцу, свежие сверху»
-        Exec(c, "CREATE INDEX IF NOT EXISTS ix_events_owner_project_ts ON project_events(owner_id, project_id, ts DESC);");
-        Exec(c, "CREATE INDEX IF NOT EXISTS ix_events_owner_project_type ON project_events(owner_id, project_id, type, ts DESC);");
+        Migrate(c);
+    }
+
+    // Лесенка миграций по PRAGMA user_version.
+    //
+    // Одного «CREATE TABLE IF NOT EXISTS» мало, как только схема начнёт меняться: на
+    // существующей БД (в т.ч. восстановленной из бэкапа) таблица уже есть, IF NOT EXISTS
+    // промолчит, и запрос с новой колонкой упадёт в рантайме — причём не при обновлении,
+    // а когда кто-нибудь откроет ленту активности. Версия в самой БД снимает вопрос:
+    // каждая ступенька выполняется ровно один раз и доводит файл до актуальной схемы.
+    private static void Migrate(SqliteConnection c)
+    {
+        var version = QueryUserVersion(c);
+        if (version >= SchemaVersion) return;
+
+        if (version < 1)
+        {
+            Exec(c, """
+                CREATE TABLE IF NOT EXISTS project_events (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  project_id TEXT NOT NULL,
+                  owner_id TEXT NOT NULL,
+                  ts TEXT NOT NULL,
+                  type TEXT NOT NULL,
+                  actor TEXT NOT NULL,
+                  summary TEXT NOT NULL,
+                  entity_ref TEXT
+                );
+            """);
+            // Составной индекс покрывает главный кейс «лента проекта по владельцу, свежие сверху»
+            Exec(c, "CREATE INDEX IF NOT EXISTS ix_events_owner_project_ts ON project_events(owner_id, project_id, ts DESC);");
+            Exec(c, "CREATE INDEX IF NOT EXISTS ix_events_owner_project_type ON project_events(owner_id, project_id, type, ts DESC);");
+        }
+
+        // Следующие ступеньки — сюда: if (version < 2) { ALTER TABLE …; }
+
+        // user_version не принимает параметр — только литерал в тексте запроса
+        Exec(c, $"PRAGMA user_version={SchemaVersion};");
+    }
+
+    private static int QueryUserVersion(SqliteConnection c)
+    {
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "PRAGMA user_version;";
+        return Convert.ToInt32(cmd.ExecuteScalar() ?? 0);
     }
 
     private SqliteConnection OpenConnection()

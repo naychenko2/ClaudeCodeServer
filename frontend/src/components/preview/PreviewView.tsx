@@ -63,7 +63,13 @@ export function PreviewView({ service, projectId, onStop }: Props) {
       {/* Контент */}
       {previewUrl ? (
         <iframe ref={iframeRef} src={previewUrl}
-          style={{ flex: 1, border: 'none', background: '#fff' }}
+          style={{
+            flex: 1, border: 'none',
+            // Подложка чужой страницы в iframe: она рендерится как в браузере
+            // и нашей темой не управляется
+            // eslint-disable-next-line design/no-raw-color
+            background: '#fff',
+          }}
           sandbox="allow-scripts allow-same-origin allow-forms allow-popups" title="Live preview" />
       ) : service.status === 'error' ? (
         <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 10, padding: 20, overflow: 'auto' }}>

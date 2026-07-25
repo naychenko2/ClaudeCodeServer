@@ -226,7 +226,7 @@ export function SubtaskCheck({ done, size = 20 }: { done: boolean; size?: number
       transition: 'background 0.12s',
     }}>
       {done && (
-        <svg width={size * 0.6} height={size * 0.6} viewBox="0 0 24 24" fill="none" stroke="#fff"
+        <svg width={size * 0.6} height={size * 0.6} viewBox="0 0 24 24" fill="none" stroke={C.onAccent}
           strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
           <polyline points="20 6 9 17 4 12" />
         </svg>
@@ -236,10 +236,13 @@ export function SubtaskCheck({ done, size = 20 }: { done: boolean; size?: number
 }
 
 // Бейдж расширения файла (для секции «Файлы»)
+/* eslint-disable design/no-raw-color -- палитра-данные: узнаваемые цвета языков, а не
+   оформление интерфейса (одинаковы в обеих темах, как GROUP_COLORS) */
 const EXT_COLORS: Record<string, string> = {
   ts: '#3178C6', tsx: '#3178C6', js: '#F0A500', jsx: '#F0A500',
   cs: '#512BD4', md: '#4A9A5C', css: '#2965F1', json: '#8B6D4E', py: '#3776AB',
 };
+/* eslint-enable design/no-raw-color */
 
 export function ExtBadge({ filename, size = 24 }: { filename: string; size?: number }) {
   const ext = filename.split('.').pop()?.toLowerCase() ?? '';

@@ -71,6 +71,9 @@ onlyoffice/local.json
 # state-����� ������� oh-my-claudecode (������� � cwd �������)
 .omc/
 
+# oh-my-opencode / oh-my-openagent state (Boulder, run-continuation, plans)
+.omo/
+
 # Определения агентов — машинно-специфичные, не версионируем (конфликтуют между сессиями):
 # сюда PersonaAgentFileSync синкает персон владельца. Игнорим содержимое (не папку!),
 # чтобы работали точечные исключения для общих проектных агентов ниже.

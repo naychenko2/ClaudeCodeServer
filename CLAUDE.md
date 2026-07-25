@@ -782,3 +782,13 @@ GET                 /api/knowledge/{id}/search?q=&topK=&method=semantic|fulltext
 - Path traversal защита: `FileService.SafeJoin` — все пути через неё
 - git diff/revert через `git` CLI; если не git-репо — возвращает null
 - Комментарии в коде по-русски
+
+## Коммиты
+
+- **Conventional Commits**: `type(scope): описание` (feat/fix/perf/docs/refactor/build/chore/ci/test/style).
+- **Язык сообщений — русский** (в отличие от общего дефолта на английском).
+- Трейлер `Co-Authored-By: Claude <модель> <noreply@anthropic.com>` — где `<модель>` это
+  та, что реально делала коммит (напр. «Claude Opus 4.8», «Claude Sonnet 5»), а не
+  фиксированная версия. Email всегда `noreply@anthropic.com`.
+- Атомарность: одно логическое изменение — один коммит.
+- `commit`/`push` — только по явной просьбе.

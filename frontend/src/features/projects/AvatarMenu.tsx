@@ -178,7 +178,7 @@ export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout
           </button>
           {import.meta.env.DEV && (
             <button
-              onClick={() => { setOpen(false); window.location.hash = 'ui-kit'; }}
+              onClick={() => { setOpen(false); window.open(`${window.location.pathname}#/ui-kit`, '_blank'); }}
               style={dropdownItem}
             >
               <Palette size={ICON_SIZE.xs} strokeWidth={2} />

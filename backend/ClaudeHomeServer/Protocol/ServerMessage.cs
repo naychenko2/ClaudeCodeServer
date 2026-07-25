@@ -26,8 +26,21 @@ public record TextDeltaMessage(string Text)
 // клиент не добавлял его оптимистично — бродкастим, чтобы промпт появился в чате сразу,
 // а не по перезагрузке истории. Только для auto && !systemDirective (ввод пользователя уже
 // виден на клиенте, внутренние директивы цикла «до готово» показывать не нужно).
-public record UserMessageMessage(string Text, IReadOnlyList<string>? AttachedPaths, string? SenderPersonaId, bool Auto)
+public record UserMessageMessage(string Text, IReadOnlyList<string>? AttachedPaths, string? SenderPersonaId, bool Auto,
+    string? SenderOrigin = null)
     : ServerMessage("user_message");
+
+// Очередь сообщений занятой сессии — полный снимок при каждом изменении (постановка,
+// отмена, доставка). Список, а не дельта: клиент может подключиться в любой момент,
+// а очередь короткая (потолок 10).
+public record PendingMessagesMessage(IReadOnlyList<PendingMessageDto> Items)
+    : ServerMessage("pending_messages");
+
+// Ожидающее доставки сообщение для клиента. SenderOrigin — чип «откуда пришло»,
+// заполнен только когда источник в другом проекте либо вне проектов.
+// SenderChatName — подпись, когда у отправителя нет персоны: имя его чата.
+public record PendingMessageDto(string Id, string Text, string? SenderPersonaId,
+    string? SenderOrigin, DateTime EnqueuedAt, string? SenderChatName = null);
 
 // Гостевая реплика персоны, вставленная в историю без агентского хода (0 токенов) — доклад
 // о завершении делегированной задачи (модель Z, TaskExecutionService.ReportToDelegatorAsync).

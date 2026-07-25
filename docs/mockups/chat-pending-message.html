@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Карточка сообщения в очереди — варианты (ClaudeCodeServer)</title>
+<style>
+/* Значения тем скопированы из frontend/src/lib/theme.css (обе темы).
+   Объявлены на классах .theme-light/.theme-dark, чтобы показать их рядом. */
+.theme-light, :root {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E;
+  --c-text-muted:#9A8F7E; --c-on-accent:#FBF8F2; --c-on-dark:#FFFFFF;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-divider:#DDD4C4; --c-dashed:#D0C6B4;
+  --c-smoke:#B4A899; --c-msg-bg:rgba(251,248,242,0.42);
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F;
+  --shadow-focus:0 0 0 3px rgba(217,119,87,0.14);
+  --shadow-card:0 2px 8px rgba(60,50,35,0.05);
+  --shadow-button:0 4px 14px rgba(217,119,87,0.30);
+  --canvas-ink:42,37,31;
+  --canvas-glow:radial-gradient(140% 70% at 50% 0%,rgba(217,119,87,.13),transparent 55%),
+                radial-gradient(120% 60% at 50% 110%,rgba(110,140,120,.10),transparent 60%);
+  --canvas-alpha:0.05;
+}
+.theme-dark {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897;
+  --c-text-muted:#8A8072; --c-on-accent:#201C18; --c-on-dark:#FFFFFF;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-divider:#454037; --c-dashed:#4A443B;
+  --c-smoke:#7E7566; --c-msg-bg:rgba(46,42,37,0.38);
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72;
+  --shadow-focus:0 0 0 3px rgba(227,138,106,0.24);
+  --shadow-card:0 2px 10px rgba(0,0,0,0.35);
+  --shadow-button:0 4px 16px rgba(227,138,106,0.34);
+  --canvas-ink:237,230,219;
+  --canvas-glow:radial-gradient(140% 70% at 50% 0%,rgba(227,138,106,.11),transparent 55%),
+                radial-gradient(120% 60% at 50% 110%,rgba(110,140,120,.08),transparent 60%);
+  --canvas-alpha:0.05;
+}
+:root{
+  --font-sans:'Hanken Grotesk',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  --font-serif:'PT Serif',Georgia,serif;
+  --font-mono:'JetBrains Mono','Courier New',monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;padding:32px 24px 64px;background:var(--c-bg-main);color:var(--c-text-primary);
+     font-family:var(--font-sans);font-size:14px;line-height:1.5}
+h1{font-family:var(--font-serif);font-size:28px;color:var(--c-text-heading);margin:0 0 8px}
+h2{font-family:var(--font-serif);font-size:22px;color:var(--c-text-heading);margin:0 0 4px}
+.lead{color:var(--c-text-secondary);max-width:900px;margin:0 0 24px}
+.variant{margin:0 0 48px;padding:24px;background:var(--c-bg-card);border:1px solid var(--c-border);
+         border-radius:14px;box-shadow:var(--shadow-card)}
+.idea{color:var(--c-text-secondary);max-width:880px;margin:0 0 4px}
+.idea b{color:var(--c-text-heading)}
+.when{color:var(--c-text-muted);font-size:12px;max-width:880px;margin:0 0 20px}
+.grid{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start}
+.pane{border-radius:14px;border:1px solid var(--c-border);padding:16px;overflow:hidden;
+      font-family:var(--font-sans);color:var(--c-text-primary);
+      background-color:var(--c-bg-main);
+      background-image:
+        var(--canvas-glow),
+        repeating-linear-gradient(45deg,rgba(var(--canvas-ink),var(--canvas-alpha)) 0 1px,transparent 1px 26px),
+        repeating-linear-gradient(-45deg,rgba(var(--canvas-ink),var(--canvas-alpha)) 0 1px,transparent 1px 26px);}
+.pane.desk{width:700px}
+.pane.mob{width:380px}
+.pane-tag{display:block;font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;
+          color:var(--c-text-muted);margin-bottom:12px}
+.feed{display:flex;flex-direction:column;gap:12px}
+.cap{font-size:10px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--c-text-muted);
+     padding-left:8px;border-left:2px solid var(--c-dashed);margin-top:10px}
+.cap:first-child{margin-top:0}
+.bubble-user{align-self:flex-end;max-width:80%;background:var(--c-bg-white);
+  border:1px solid var(--c-border-light);box-shadow:var(--shadow-card);
+  border-radius:18px 18px 4px 18px;padding:12px 17px;font-size:14px;color:var(--c-text-primary)}
+.bubble-asst{background:var(--c-msg-bg);border-radius:12px;padding:9px 12px;font-size:14px;
+  color:var(--c-text-heading)}
+.working{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--c-text-muted)}
+.dots{display:inline-flex;gap:3px}
+.dots i{width:4px;height:4px;border-radius:50%;background:var(--c-smoke);animation:bl 1.2s infinite}
+.dots i:nth-child(2){animation-delay:.2s}.dots i:nth-child(3){animation-delay:.4s}
+@keyframes bl{0%,100%{opacity:.25}50%{opacity:1}}
+.av{border-radius:50%;flex:0 0 auto;display:flex;align-items:center;justify-content:center;
+    color:var(--c-on-dark);font-weight:700;line-height:1;font-family:var(--font-sans)}
+.av28{width:28px;height:28px;font-size:11px}
+.av24{width:24px;height:24px;font-size:10px}
+.av20{width:20px;height:20px;font-size:9px}
+.handle{font-family:var(--font-mono);font-size:11px;color:var(--c-text-muted)}
+.chip{display:inline-flex;align-items:center;gap:4px;min-width:0;max-width:100%;padding:1px 6px;
+      border-radius:999px;background:var(--c-bg-selected);border:1px solid var(--c-border);
+      font-size:11px;line-height:1.5;color:var(--c-text-secondary)}
+.chip svg{flex:0 0 auto}
+.ibtn{width:24px;height:24px;flex:0 0 auto;padding:0;border:none;border-radius:6px;background:transparent;
+      color:var(--c-text-muted);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;
+      transition:background .12s,color .12s}
+.ibtn:hover{background:var(--c-danger-bg);color:var(--c-danger)}
+.mob .ibtn{width:40px;height:40px;border-radius:10px}
+.ghostbtn{border:none;background:transparent;font-family:var(--font-sans);font-size:11px;font-weight:600;
+      color:var(--c-text-secondary);padding:4px 8px;border-radius:8px;cursor:pointer}
+.ghostbtn:hover{background:var(--c-bg-selected);color:var(--c-text-heading)}
+.wait{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--c-text-muted);white-space:nowrap;flex:0 0 auto}
+.pulse{width:6px;height:6px;border-radius:50%;background:var(--c-smoke);animation:pl 1.8s ease-in-out infinite}
+@keyframes pl{0%,100%{opacity:.35;transform:scale(.85)}50%{opacity:1;transform:scale(1)}}
+.mob .desk-only{display:none!important}
+.clamp3{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.clamp2{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+/* A — приглушённый двойник */
+.a{position:relative;border:1px dashed var(--c-dashed);border-radius:12px;background:var(--c-bg-inset);overflow:hidden}
+.a::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;opacity:.8;
+  background-image:repeating-linear-gradient(to bottom,var(--acc) 0 5px,transparent 5px 10px)}
+.a-head{display:flex;align-items:center;gap:9px;padding:8px 8px 8px 15px;background:var(--accS)}
+.a-id{flex:1;min-width:0;display:flex;align-items:baseline;gap:7px;flex-wrap:wrap}
+.a-name{font-size:13px;font-weight:600;color:var(--c-text-secondary);overflow:hidden;
+        text-overflow:ellipsis;white-space:nowrap;max-width:100%}
+.a-body{padding:8px 12px 0 15px;font-size:13px;color:var(--c-text-secondary);
+        white-space:pre-wrap;word-break:break-word}
+.a-foot{display:flex;align-items:center;gap:6px;padding:8px 12px 9px 15px;font-size:11px;color:var(--c-text-muted)}
+.a-more{margin-left:auto}
+/* B — строка-конверт */
+.b{display:flex;align-items:center;gap:8px;padding:4px 4px 4px 10px;border:1px dashed var(--c-dashed);
+   border-radius:10px;background:var(--c-bg-inset);cursor:pointer}
+.b:hover{background:var(--c-bg-selected)}
+.b-name{font-size:12px;font-weight:600;color:var(--c-text-secondary);white-space:nowrap;
+        overflow:hidden;text-overflow:ellipsis;max-width:38%;flex:0 1 auto}
+.b-prev{flex:1;min-width:0;font-size:12px;color:var(--c-text-muted);overflow:hidden;
+        text-overflow:ellipsis;white-space:nowrap}
+.b-open{border:1px dashed var(--c-dashed);border-radius:10px;background:var(--c-bg-inset)}
+.b-open .b{border:none;background:transparent;border-radius:10px 10px 0 0}
+.b-openbody{padding:0 12px 10px 38px;font-size:13px;color:var(--c-text-secondary);
+            white-space:pre-wrap;word-break:break-word}
+.mob .b-openbody{padding-left:12px}
+.b-stack{display:flex;flex-direction:column;gap:4px}
+/* C — стопка-очередь */
+.c-wrap{border:1px dashed var(--c-dashed);border-radius:12px;background:var(--c-bg-inset);overflow:hidden}
+.c-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:5px 6px 5px 12px;
+        border-bottom:1px dashed var(--c-dashed)}
+.c-title{font-size:11px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;
+         color:var(--c-text-muted);display:inline-flex;align-items:center;gap:6px}
+.c-hint{font-size:11px;color:var(--c-text-muted);flex:1;min-width:0;overflow:hidden;
+        text-overflow:ellipsis;white-space:nowrap}
+.c-row{display:flex;gap:9px;padding:9px 6px 9px 12px;border-top:1px solid var(--c-border-light);align-items:flex-start}
+.c-row:first-of-type{border-top:none}
+.c-row .av{margin-top:1px}
+.c-col{flex:1;min-width:0}
+.c-line{display:flex;align-items:baseline;gap:7px;flex-wrap:wrap;margin-bottom:2px}
+.c-name{font-size:12px;font-weight:600;color:var(--c-text-secondary);overflow:hidden;
+        text-overflow:ellipsis;white-space:nowrap;max-width:100%}
+.c-text{font-size:13px;color:var(--c-text-secondary);white-space:pre-wrap;word-break:break-word}
+.c-mark{width:3px;align-self:stretch;border-radius:2px;flex:0 0 auto;
+        background-image:repeating-linear-gradient(to bottom,var(--acc) 0 5px,transparent 5px 10px);opacity:.8}
+/* D — полка над композером */
+.d-shell{border:1px solid var(--c-border);border-radius:14px;background:var(--c-bg-panel);
+         overflow:hidden;box-shadow:var(--shadow-card)}
+.d-tray{display:flex;align-items:center;gap:8px;padding:6px 6px 6px 12px;background:var(--c-bg-inset);
+        border-bottom:1px solid var(--c-border)}
+.d-tray-t{font-size:11px;font-weight:600;color:var(--c-text-secondary);white-space:nowrap}
+.d-prev{flex:1;min-width:0;font-size:11px;color:var(--c-text-muted);overflow:hidden;
+        text-overflow:ellipsis;white-space:nowrap}
+.d-avs{display:flex;flex:0 0 auto}
+.d-avs .av{margin-left:-7px;box-shadow:0 0 0 2px var(--c-bg-inset)}
+.d-avs .av:first-child{margin-left:0}
+.d-list{background:var(--c-bg-inset);border-bottom:1px solid var(--c-border)}
+.d-item{display:flex;gap:9px;align-items:flex-start;padding:8px 6px 8px 12px;border-top:1px solid var(--c-border-light)}
+.d-item:first-child{border-top:none}
+.d-composer{display:flex;align-items:center;gap:10px;padding:10px 10px 10px 16px;background:var(--c-bg-white)}
+.d-input{flex:1;min-width:0;font-size:14px;color:var(--c-text-muted)}
+.d-send{width:32px;height:32px;flex:0 0 auto;border:none;border-radius:50%;background:var(--c-accent);
+        color:var(--c-on-accent);display:flex;align-items:center;justify-content:center;
+        box-shadow:var(--shadow-button);cursor:pointer}
+.rec{border-left:3px solid var(--c-accent);background:var(--c-accent-light);padding:12px 16px;
+     border-radius:0 12px 12px 0;color:var(--c-text-primary);max-width:900px}
+.rec b{color:var(--c-text-heading)}
+ul.tight{margin:8px 0 0;padding-left:20px}
+ul.tight li{margin-bottom:4px}
+</style>
+</head>
+<body>
+
+<h1>Сообщение, ждущее конца хода — 4 варианта карточки</h1>
+<p class="lead">
+Персона из другого чата шлёт сообщение в чат, где идёт ход. Оно встанет в очередь и придёт, когда ход
+закончится. Пока ждёт — пользователь должен за полсекунды понять: <b>кто</b> пишет, <b>что</b> написал
+и <b>что это ещё не доставлено</b>; и уметь передумать. Только токены design.ts/theme.css, светлая и
+тёмная тема, 700px (колонка чата) и 380px (мобильный).
+</p>
+
+<section class="variant">
+  <h2>A. Приглушённый двойник</h2>
+  <p class="idea">Та же анатомия, что у доставленного сообщения (<b>AgentMessageView</b>: полоса цвета персоны,
+     шапка идентичности, тело), но «недопроявленная»: полоса — пунктирная строчка, рамка пунктиром, фон утоплён,
+     внизу строка-обещание «доставим после хода».</p>
+  <p class="when">Когда лучше: одиночное сообщение и когда важен текст — решение «отменять или нет» принимается по содержанию.</p>
+  <div class="grid">
+    <div class="pane theme-light desk" data-tpl="a"><span class="pane-tag">Светлая · десктоп 700px</span><div class="feed"></div></div>
+    <div class="pane theme-dark desk" data-tpl="a"><span class="pane-tag">Тёмная · десктоп 700px</span><div class="feed"></div></div>
+    <div class="pane theme-light mob" data-tpl="a"><span class="pane-tag">Светлая · мобайл 380px</span><div class="feed"></div></div>
+    <div class="pane theme-dark mob" data-tpl="a"><span class="pane-tag">Тёмная · мобайл 380px</span><div class="feed"></div></div>
+  </div>
+</section>
+
+<section class="variant">
+  <h2>B. Строка-конверт (сворачиваемая)</h2>
+  <p class="idea">Одна строка ~34px: лицо, имя, первая фраза в многоточие, крестик. Клик раскрывает полный текст.
+     Три сообщения занимают меньше, чем один абзац ответа.</p>
+  <p class="when">Когда лучше: очередь регулярно длинная и текст обычно читать не нужно — важен факт «придёт от Киры».</p>
+  <div class="grid">
+    <div class="pane theme-light desk" data-tpl="b"><span class="pane-tag">Светлая · десктоп 700px</span><div class="feed"></div></div>
+    <div class="pane theme-dark desk" data-tpl="b"><span class="pane-tag">Тёмная · десктоп 700px</span><div class="feed"></div></div>
+    <div class="pane theme-light mob" data-tpl="b"><span class="pane-tag">Светлая · мобайл 380px</span><div class="feed"></div></div>
+    <div class="pane theme-dark mob" data-tpl="b"><span class="pane-tag">Тёмная · мобайл 380px</span><div class="feed"></div></div>
+  </div>
+</section>
+
+<section class="variant">
+  <h2>C. Стопка-очередь с общим заголовком</h2>
+  <p class="idea">Механику объясняем один раз — в шапке контейнера («В очереди: 3 · доставим после хода» +
+     «Отменить все»), сообщения внутри — плотные строки без своих рамок. Пунктир только у контейнера,
+     шум не растёт с каждым сообщением.</p>
+  <p class="when">Когда лучше: 2+ сообщений — обычная ситуация; нужно одно место для «отменить все».</p>
+  <div class="grid">
+    <div class="pane theme-light desk" data-tpl="c"><span class="pane-tag">Светлая · десктоп 700px</span><div class="feed"></div></div>
+    <div class="pane theme-dark desk" data-tpl="c"><span class="pane-tag">Тёмная · десктоп 700px</span><div class="feed"></div></div>
+    <div class="pane theme-light mob" data-tpl="c"><span class="pane-tag">Светлая · мобайл 380px</span><div class="feed"></div></div>
+    <div class="pane theme-dark mob" data-tpl="c"><span class="pane-tag">Тёмная · мобайл 380px</span><div class="feed"></div></div>
+  </div>
+</section>
+
+<section class="variant">
+  <h2>D. Полка над композером</h2>
+  <p class="idea">Ждущее сообщение — состояние ввода, а не запись ленты: оно ещё не случилось. Живёт прилипшей
+     полкой на композере. Свёрнуто — «2 сообщения ждут доставки» со стопкой лиц.</p>
+  <p class="when">Когда лучше: чат длинный и пользователь часто скроллит — полка не теряется. Минус: оторвано
+     от хронологии, на мобиле ест высоту над клавиатурой.</p>
+  <div class="grid">
+    <div class="pane theme-light desk" data-tpl="d"><span class="pane-tag">Светлая · десктоп 700px</span><div class="feed"></div></div>
+    <div class="pane theme-dark desk" data-tpl="d"><span class="pane-tag">Тёмная · десктоп 700px</span><div class="feed"></div></div>
+    <div class="pane theme-light mob" data-tpl="d"><span class="pane-tag">Светлая · мобайл 380px</span><div class="feed"></div></div>
+    <div class="pane theme-dark mob" data-tpl="d"><span class="pane-tag">Тёмная · мобайл 380px</span><div class="feed"></div></div>
+  </div>
+</section>
+
+<section class="variant">
+  <h2>Рекомендация дизайнера</h2>
+  <div class="rec">
+    <p style="margin:0 0 8px"><b>A как база, C как обёртка при 2+ сообщениях.</b></p>
+    <ul class="tight">
+      <li><b>Почему A.</b> Главный вопрос — «что мне прилетит и надо ли отменять» — решается текстом и лицом.
+          A даёт ту же анатомию, что и доставленное сообщение, поэтому после доставки ничего не «прыгает».
+          Безликий случай получает нейтральный бот-аватар и заголовок «Агент» вместо часов.</li>
+      <li><b>Почему C сверху.</b> Три пунктирные карточки подряд выглядят как поломка. Обёртка «В очереди: 3»
+          убирает повтор объяснения и даёт одну кнопку «Отменить все». Правило: 1 → A, 2+ → C.</li>
+      <li><b>Почему не B.</b> Экономит место ценой текста — нельзя решить, отменять ли, без лишнего тапа.</li>
+      <li><b>Почему не D.</b> Рвёт хронологию («пришло во время хода» — важный факт) и ест 44–90px над
+          клавиатурой на мобиле.</li>
+    </ul>
+    <p style="margin:12px 0 0"><b>Дополнительно заложить:</b></p>
+    <ul class="tight">
+      <li>Отмена в процессе: крестик disabled, карточка opacity .6; при ошибке — строка «Не удалось отменить».</li>
+      <li>Офлайн: подпись «Отмена недоступна: нет связи» вместо исчезающего крестика.</li>
+      <li>Доставка: переход 150ms вместо мгновенной подмены.</li>
+      <li>Длинный текст: клэмп 3 строки (не 4) + «Показать целиком».</li>
+      <li>Мобайл: крестик 40px, метка «в очереди» уезжает в подвал.</li>
+    </ul>
+  </div>
+</section>
+
+<template id="tpl-a">
+  <div class="cap">Хвост ленты: идёт ход</div>
+  <div class="bubble-user">Проверь, пожалуйста, очередь сообщений и собери ветку.</div>
+  <div class="bubble-asst">Смотрю очередь. Начну с редьюсера, дальше пройдусь по карточке в ленте…</div>
+  <div class="working"><span class="dots"><i></i><i></i><i></i></span> Клод работает…</div>
+
+  <div class="cap">1 · от персоны</div>
+  <div class="a" style="--acc:#3E7CA6;--accS:#3E7CA617">
+    <div class="a-head">
+      <div class="av av28" style="background:#3E7CA6">КР</div>
+      <div class="a-id"><span class="a-name">Кира</span><span class="handle">@kira</span></div>
+      <span class="wait desk-only"><span class="pulse"></span>ждёт 2 мин</span>
+      <button class="ibtn" title="Не доставлять это сообщение"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+    </div>
+    <div class="a-body">Карточку ждущего сообщения взяла в работу. Начну с безликого случая — там сейчас просто часы.</div>
+    <div class="a-foot"><span class="pulse"></span> доставим, как только закончится ход</div>
+  </div>
+
+  <div class="cap">2 · без персоны (имя чата) + чип источника</div>
+  <div class="a" style="--acc:#8A8070;--accS:#8A807017">
+    <div class="a-head">
+      <div class="av av28" style="background:#8A8070">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/><path d="M8 16h.01M16 16h.01"/></svg>
+      </div>
+      <div class="a-id">
+        <span class="a-name">Рефакторинг API</span>
+        <span class="chip"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 9V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-1"/><path d="M2 13h10"/><path d="m9 16 3-3-3-3"/></svg><span>Alpha</span></span>
+      </div>
+      <span class="wait desk-only"><span class="pulse"></span>ждёт 12 сек</span>
+      <button class="ibtn" title="Не доставлять это сообщение"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+    </div>
+    <div class="a-body">Сборка ветки feature/chat-queue прошла: 1056 тестов зелёные, линт дизайна чистый.</div>
+    <div class="a-foot"><span class="pulse"></span> доставим, как только закончится ход</div>
+  </div>
+
+  <div class="cap">3 · длинный текст (клэмп 3 строки)</div>
+  <div class="a" style="--acc:#6C5CB0;--accS:#6C5CB017">
+    <div class="a-head">
+      <div class="av av28" style="background:#6C5CB0">ТМ</div>
+      <div class="a-id">
+        <span class="a-name">Тимур Долгоимённый-Тестовый</span>
+        <span class="handle">@timur</span>
+        <span class="chip"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 9V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-1"/><path d="M2 13h10"/><path d="m9 16 3-3-3-3"/></svg><span>Вне проектов</span></span>
+      </div>
+      <span class="wait desk-only"><span class="pulse"></span>ждёт 5 мин</span>
+      <button class="ibtn" title="Не доставлять это сообщение"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+    </div>
+    <div class="a-body clamp3">Прогнал ревью очереди сообщений. Нашёл три места, где карточка ждущего сообщения ведёт себя не так, как ожидается: (1) при отмене крестик не блокируется до ответа сервера, поэтому можно нажать дважды; (2) при обрыве соединения призрак остаётся в ленте навсегда и его нечем убрать; (3) на мобиле крестик 24px — это меньше 44px, палец мажет и попадает по карточке. Предлагаю чинить по порядку, начиная с третьего.</div>
+    <div class="a-foot">
+      <span class="pulse"></span> доставим, как только закончится ход
+      <button class="ghostbtn a-more">Показать целиком</button>
+    </div>
+  </div>
+
+  <div class="cap">4 · три в очереди (виден шум от повторяющегося пунктира)</div>
+  <div style="display:flex;flex-direction:column;gap:8px">
+    <div class="a" style="--acc:#3E7CA6;--accS:#3E7CA617">
+      <div class="a-head">
+        <div class="av av28" style="background:#3E7CA6">КР</div>
+        <div class="a-id"><span class="a-name">Кира</span><span class="handle">@kira</span></div>
+        <span class="wait desk-only"><span class="pulse"></span>ждёт 3 мин</span>
+        <button class="ibtn" title="Не доставлять это сообщение"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+      </div>
+      <div class="a-body clamp2">Ветку отвела, начинаю с безликого случая.</div>
+      <div class="a-foot"><span class="pulse"></span> доставим, как только закончится ход</div>
+    </div>
+    <div class="a" style="--acc:#8A8070;--accS:#8A807017">
+      <div class="a-head">
+        <div class="av av28" style="background:#8A8070"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/></svg></div>
+        <div class="a-id"><span class="a-name">Ночной прогон</span><span class="chip"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 9V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-1"/><path d="M2 13h10"/><path d="m9 16 3-3-3-3"/></svg><span>Alpha</span></span></div>
+        <span class="wait desk-only"><span class="pulse"></span>ждёт 1 мин</span>
+        <button class="ibtn" title="Не доставлять это сообщение"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+      </div>
+      <div class="a-body clamp2">Сборка прошла: 1056 тестов зелёные.</div>
+      <div class="a-foot"><span class="pulse"></span> доставим, как только закончится ход</div>
+    </div>
+    <div class="a" style="--acc:#D97757;--accS:#D9775717">
+      <div class="a-head">
+        <div class="av av28" style="background:#D97757">МЯ</div>
+        <div class="a-id"><span class="a-name">Майя</span><span class="handle">@maya</span></div>
+        <span class="wait desk-only"><span class="pulse"></span>ждёт 20 сек</span>
+        <button class="ibtn" title="Не доставлять это сообщение"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+      </div>
+      <div class="a-body clamp2">Макет карточки готов, лежит в docs/mockups — глянь стопку из трёх, там шумно.</div>
+      <div class="a-foot"><span class="pulse"></span> доставим, как только закончится ход</div>
+    </div>
+  </div>
+
+  <div class="cap">5 · отмена в процессе / офлайн</div>
+  <div style="display:flex;flex-direction:column;gap:8px">
+    <div class="a" style="--acc:#3E7CA6;--accS:#3E7CA617;opacity:.6">
+      <div class="a-head">
+        <div class="av av28" style="background:#3E7CA6">КР</div>
+        <div class="a-id"><span class="a-name">Кира</span><span class="handle">@kira</span></div>
+        <span class="wait">отменяем…</span>
+        <button class="ibtn" style="cursor:default;color:var(--c-border)" disabled><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+      </div>
+      <div class="a-body clamp2">Ветку отвела, начинаю с безликого случая.</div>
+      <div class="a-foot"><span class="pulse"></span> доставим, как только закончится ход</div>
+    </div>
+    <div class="a" style="--acc:#8A8070;--accS:#8A807017">
+      <div class="a-head">
+        <div class="av av28" style="background:#8A8070"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/></svg></div>
+        <div class="a-id"><span class="a-name">Ночной прогон</span></div>
+      </div>
+      <div class="a-body clamp2">Отчёт по ночному прогону готов.</div>
+      <div class="a-foot" style="color:var(--c-text-muted)">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        отмена недоступна: нет связи
+      </div>
+    </div>
+  </div>
+</template>
+
+<template id="tpl-b">
+  <div class="cap">Хвост ленты: идёт ход</div>
+  <div class="bubble-asst">Смотрю очередь. Начну с редьюсера, дальше пройдусь по карточке в ленте…</div>
+  <div class="working"><span class="dots"><i></i><i></i><i></i></span> Клод работает…</div>
+
+  <div class="cap">1 · от персоны (свёрнуто)</div>
+  <div class="b">
+    <div class="av av20" style="background:#3E7CA6">КР</div>
+    <span class="b-name">Кира</span>
+    <span class="b-prev">Карточку ждущего сообщения взяла в работу. Начну с безликого…</span>
+    <span class="wait desk-only"><span class="pulse"></span>ждёт 2 мин</span>
+    <svg class="desk-only" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--c-text-muted)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+    <button class="ibtn" title="Не доставлять это сообщение"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+  </div>
+
+  <div class="cap">2 · без персоны (имя чата) + чип источника</div>
+  <div class="b">
+    <div class="av av20" style="background:#8A8070"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/></svg></div>
+    <span class="b-name">Рефакторинг API</span>
+    <span class="chip" style="flex:0 0 auto"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 9V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-1"/><path d="M2 13h10"/><path d="m9 16 3-3-3-3"/></svg><span>Alpha</span></span>
+    <span class="b-prev">Сборка ветки прошла: 1056 тестов зелёные…</span>
+    <button class="ibtn" title="Не доставлять это сообщение"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+  </div>
+
+  <div class="cap">3 · длинный текст, раскрыто</div>
+  <div class="b-open">
+    <div class="b">
+      <div class="av av20" style="background:#6C5CB0">ТМ</div>
+      <span class="b-name">Тимур Долгоимённый</span>
+      <span class="b-prev">развёрнуто</span>
+      <span class="wait desk-only"><span class="pulse"></span>ждёт 5 мин</span>
+      <svg class="desk-only" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--c-text-muted)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="transform:rotate(180deg)"><path d="m6 9 6 6 6-6"/></svg>
+      <button class="ibtn" title="Не доставлять это сообщение"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+    </div>
+    <div class="b-openbody">Прогнал ревью очереди сообщений. Нашёл три места, где карточка ведёт себя не так: при отмене крестик не блокируется до ответа сервера; при обрыве соединения призрак остаётся в ленте навсегда; на мобиле крестик 24px — палец мажет.</div>
+  </div>
+
+  <div class="cap">4 · три в очереди (главный выигрыш варианта)</div>
+  <div class="b-stack">
+    <div class="b">
+      <div class="av av20" style="background:#3E7CA6">КР</div>
+      <span class="b-name">Кира</span>
+      <span class="b-prev">Ветку отвела, начинаю с безликого случая…</span>
+      <button class="ibtn" title="Не доставлять это сообщение"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+    </div>
+    <div class="b">
+      <div class="av av20" style="background:#8A8070"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/></svg></div>
+      <span class="b-name">Ночной прогон</span>
+      <span class="chip" style="flex:0 0 auto"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 9V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-1"/><path d="M2 13h10"/><path d="m9 16 3-3-3-3"/></svg><span>Вне проектов</span></span>
+      <span class="b-prev">Сборка прошла, тесты зелёные…</span>
+      <button class="ibtn" title="Не доставлять это сообщение"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+    </div>
+    <div class="b">
+      <div class="av av20" style="background:#D97757">МЯ</div>
+      <span class="b-name">Майя</span>
+      <span class="b-prev">Макет карточки готов, лежит в docs/mockups…</span>
+      <button class="ibtn" title="Не доставлять это сообщение"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+    </div>
+  </div>
+</template>
+
+<template id="tpl-c">
+  <div class="cap">Хвост ленты: идёт ход</div>
+  <div class="bubble-asst">Смотрю очередь. Начну с редьюсера, дальше пройдусь по карточке в ленте…</div>
+  <div class="working"><span class="dots"><i></i><i></i><i></i></span> Клод работает…</div>
+
+  <div class="cap">1 · одно сообщение от персоны</div>
+  <div class="c-wrap">
+    <div class="c-head">
+      <span class="c-title"><span class="pulse"></span>В очереди</span>
+      <span class="c-hint">доставим, как только завершится ход</span>
+    </div>
+    <div class="c-row" style="--acc:#3E7CA6">
+      <div class="c-mark"></div>
+      <div class="av av24" style="background:#3E7CA6">КР</div>
+      <div class="c-col">
+        <div class="c-line"><span class="c-name">Кира</span><span class="handle">@kira</span><span class="wait">ждёт 2 мин</span></div>
+        <div class="c-text">Карточку ждущего сообщения взяла в работу. Начну с безликого случая — там сейчас просто часы.</div>
+      </div>
+      <button class="ibtn" title="Не доставлять это сообщение"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+    </div>
+  </div>
+
+  <div class="cap">2 · без персоны (имя чата) + чип источника</div>
+  <div class="c-wrap">
+    <div class="c-head">
+      <span class="c-title"><span class="pulse"></span>В очереди</span>
+      <span class="c-hint">доставим, как только завершится ход</span>
+    </div>
+    <div class="c-row" style="--acc:#8A8070">
+      <div class="c-mark"></div>
+      <div class="av av24" style="background:#8A8070"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/></svg></div>
+      <div class="c-col">
+        <div class="c-line">
+          <span class="c-name">Рефакторинг API</span>
+          <span class="chip"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 9V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-1"/><path d="M2 13h10"/><path d="m9 16 3-3-3-3"/></svg><span>Alpha</span></span>
+        </div>
+        <div class="c-text">Сборка ветки feature/chat-queue прошла: 1056 тестов зелёные, линт дизайна чистый.</div>
+      </div>
+      <button class="ibtn" title="Не доставлять это сообщение"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+    </div>
+  </div>
+
+  <div class="cap">3 · три в очереди, третье длинное</div>
+  <div class="c-wrap">
+    <div class="c-head">
+      <span class="c-title"><span class="pulse"></span>В очереди: 3</span>
+      <span class="c-hint">доставим, как только завершится ход</span>
+      <button class="ghostbtn">Отменить все</button>
+    </div>
+    <div class="c-row" style="--acc:#3E7CA6">
+      <div class="c-mark"></div>
+      <div class="av av24" style="background:#3E7CA6">КР</div>
+      <div class="c-col">
+        <div class="c-line"><span class="c-name">Кира</span><span class="handle">@kira</span><span class="wait">3 мин</span></div>
+        <div class="c-text clamp2">Ветку отвела, начинаю с безликого случая.</div>
+      </div>
+      <button class="ibtn" title="Не доставлять это сообщение"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+    </div>
+    <div class="c-row" style="--acc:#8A8070">
+      <div class="c-mark"></div>
+      <div class="av av24" style="background:#8A8070"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/></svg></div>
+      <div class="c-col">
+        <div class="c-line"><span class="c-name">Ночной прогон</span><span class="chip"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 9V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-1"/><path d="M2 13h10"/><path d="m9 16 3-3-3-3"/></svg><span>Вне проектов</span></span><span class="wait">1 мин</span></div>
+        <div class="c-text clamp2">Сборка прошла: 1056 тестов зелёные.</div>
+      </div>
+      <button class="ibtn" title="Не доставлять это сообщение"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+    </div>
+    <div class="c-row" style="--acc:#6C5CB0">
+      <div class="c-mark"></div>
+      <div class="av av24" style="background:#6C5CB0">ТМ</div>
+      <div class="c-col">
+        <div class="c-line"><span class="c-name">Тимур Долгоимённый-Тестовый</span><span class="handle">@timur</span></div>
+        <div class="c-text clamp2">Прогнал ревью очереди сообщений. Нашёл три места, где карточка ведёт себя не так: при отмене крестик не блокируется до ответа сервера; при обрыве связи призрак остаётся навсегда; на мобиле крестик 24px — палец мажет.</div>
+        <button class="ghostbtn" style="padding-left:0">Показать целиком</button>
+      </div>
+      <button class="ibtn" title="Не доставлять это сообщение"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+    </div>
+  </div>
+</template>
+
+<template id="tpl-d">
+  <div class="cap">Лента + прилипшая полка на композере</div>
+  <div class="bubble-asst">Смотрю очередь. Начну с редьюсера, дальше пройдусь по карточке в ленте…</div>
+  <div class="working"><span class="dots"><i></i><i></i><i></i></span> Клод работает…</div>
+
+  <div class="cap">1 · одно сообщение от персоны</div>
+  <div class="d-shell">
+    <div class="d-tray">
+      <div class="av av20" style="background:#3E7CA6">КР</div>
+      <span class="d-tray-t">Кира</span>
+      <span class="d-prev">Карточку ждущего сообщения взяла в работу…</span>
+      <span class="wait desk-only"><span class="pulse"></span>придёт после хода</span>
+      <button class="ibtn" title="Не доставлять это сообщение"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+    </div>
+    <div class="d-composer">
+      <span class="d-input">Написать сообщение…</span>
+      <button class="d-send"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 14-7-7 14-2-5z"/></svg></button>
+    </div>
+  </div>
+
+  <div class="cap">2 · два сообщения, свёрнуто (стопка лиц)</div>
+  <div class="d-shell">
+    <div class="d-tray">
+      <span class="d-avs">
+        <span class="av av20" style="background:#3E7CA6">КР</span>
+        <span class="av av20" style="background:#8A8070">Н</span>
+      </span>
+      <span class="d-tray-t">2 сообщения ждут доставки</span>
+      <span class="d-prev desk-only">придут, как только завершится ход</span>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--c-text-muted)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex:0 0 auto"><path d="m6 9 6 6 6-6"/></svg>
+      <button class="ibtn" title="Отменить все"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+    </div>
+    <div class="d-composer">
+      <span class="d-input">Написать сообщение…</span>
+      <button class="d-send"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 14-7-7 14-2-5z"/></svg></button>
+    </div>
+  </div>
+
+  <div class="cap">3 · три сообщения, раскрыто</div>
+  <div class="d-shell">
+    <div class="d-tray">
+      <span class="d-tray-t"><span class="pulse" style="display:inline-block;margin-right:6px"></span>В очереди: 3</span>
+      <span class="d-prev desk-only">придут, как только завершится ход</span>
+      <button class="ghostbtn">Отменить все</button>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--c-text-muted)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex:0 0 auto;transform:rotate(180deg)"><path d="m6 9 6 6 6-6"/></svg>
+    </div>
+    <div class="d-list">
+      <div class="d-item">
+        <div class="av av24" style="background:#3E7CA6">КР</div>
+        <div class="c-col">
+          <div class="c-line"><span class="c-name">Кира</span><span class="handle">@kira</span></div>
+          <div class="c-text clamp2">Ветку отвела, начинаю с безликого случая.</div>
+        </div>
+        <button class="ibtn" title="Не доставлять это сообщение"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+      </div>
+      <div class="d-item">
+        <div class="av av24" style="background:#8A8070"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/></svg></div>
+        <div class="c-col">
+          <div class="c-line"><span class="c-name">Ночной прогон</span><span class="chip"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 9V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-1"/><path d="M2 13h10"/><path d="m9 16 3-3-3-3"/></svg><span>Alpha</span></span></div>
+          <div class="c-text clamp2">Сборка прошла: 1056 тестов зелёные.</div>
+        </div>
+        <button class="ibtn" title="Не доставлять это сообщение"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+      </div>
+      <div class="d-item">
+        <div class="av av24" style="background:#6C5CB0">ТМ</div>
+        <div class="c-col">
+          <div class="c-line"><span class="c-name">Тимур Долгоимённый-Тестовый</span><span class="handle">@timur</span></div>
+          <div class="c-text clamp2">Прогнал ревью очереди сообщений. Нашёл три места, где карточка ведёт себя не так, как ожидается.</div>
+        </div>
+        <button class="ibtn" title="Не доставлять это сообщение"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+      </div>
+    </div>
+    <div class="d-composer">
+      <span class="d-input">Написать сообщение…</span>
+      <button class="d-send"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 14-7-7 14-2-5z"/></svg></button>
+    </div>
+  </div>
+</template>
+
+<script>
+// Раскладывает один и тот же набор состояний в четыре панели
+// (светлая/тёмная x десктоп/мобайл), чтобы темы показывали одно и то же.
+document.querySelectorAll('.pane[data-tpl]').forEach(function (pane) {
+  var tpl = document.getElementById('tpl-' + pane.dataset.tpl);
+  pane.querySelector('.feed').appendChild(tpl.content.cloneNode(true));
+});
+</script>
+</body>
+</html>

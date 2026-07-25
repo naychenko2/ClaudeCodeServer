@@ -528,9 +528,15 @@ public class TaskExecutionService
         // промпту «продолжи работу» мог бы tasks_create+tasks_run_executor → новая задача
         // глубины 0 → новый доклад → новая реакция → бесконечный платный цикл A↔B
         // (гард DelegationDepth<3 цепочку исполнителей ловит, а не переделегирование A).
-        await _sessions.SendMessageAsync(targetSessionId, BuildDelegatorReactionPrompt(task, executor),
-            [], auto: true, senderPersonaId: delegator.Id, suppressTasksExecute: true);
-        _log.LogInformation("Доклад Z задачи {TaskId}: отправлен (гостевая реплика + реакция) в чат {SessionId}", task.Id, targetSessionId);
+        // Чат постановщика может быть занят своим ходом — тогда реакция встаёт в очередь
+        // сессии и уйдёт после него. Раньше ход полагался на неявную очередь семафора
+        // в адаптере: она невидима и молча теряет ходы при Interrupt. Гостевая реплика
+        // (ШАГ 1) при этом уже в ленте, поэтому призраком реакцию не показываем (silent).
+        var deferred = await _sessions.SendOrEnqueueAsync(targetSessionId,
+            BuildDelegatorReactionPrompt(task, executor),
+            senderPersonaId: delegator.Id, silent: true, suppressTasksExecute: true);
+        _log.LogInformation("Доклад Z задачи {TaskId}: отправлен (гостевая реплика + реакция{Deferred}) в чат {SessionId}",
+            task.Id, deferred ? " отложена — чат занят" : "", targetSessionId);
     }
 
     // Маркер гостевой реплики-доклада: контракт для фронта — по нему отличают доклад

@@ -12,7 +12,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/sessions/{sessionId}")]
-public class SessionMessagesController(SessionManager sessions) : ControllerBase
+public class SessionMessagesController(SessionManager sessions, ProjectManager projects) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -70,11 +70,17 @@ public class SessionMessagesController(SessionManager sessions) : ControllerBase
         // Персона-отправитель: chats_send передаёт id своей сессии — берём её PersonaId, чтобы
         // получатель отрисовал входящую реплику лицом персоны. Только сессия того же владельца.
         string? senderPersonaId = null;
+        string? senderOrigin = null;
+        string? senderChatName = null;
         if (Request.Headers.TryGetValue("X-Sender-Session-Id", out var sh)
             && sh.FirstOrDefault() is { Length: > 0 } senderId)
         {
             var sender = OwnedSession(senderId);
             senderPersonaId = sender?.PersonaId;
+            senderOrigin = ResolveSenderOrigin(sender, session);
+            // Подпись карточки, когда персоны у отправителя нет: имя его чата отвечает
+            // на вопрос «кто пишет» лучше, чем безликое «Входящее сообщение»
+            senderChatName = sender?.Name;
         }
 
         var waitTurn = !string.Equals(req.Wait, "none", StringComparison.OrdinalIgnoreCase);
@@ -85,7 +91,7 @@ public class SessionMessagesController(SessionManager sessions) : ControllerBase
         SendAndWaitResult result;
         try
         {
-            result = await sessions.SendMessageAndWaitAsync(sessionId, text, timeout, agentDepth, senderPersonaId);
+            result = await sessions.SendMessageAndWaitAsync(sessionId, text, timeout, agentDepth, senderPersonaId, senderOrigin, senderChatName);
         }
         catch (InvalidOperationException) { return NotFound(); }
 
@@ -98,6 +104,23 @@ public class SessionMessagesController(SessionManager sessions) : ControllerBase
                 hint = b.CurrentStatus == Models.SessionStatus.Waiting
                     ? "сессия ждёт подтверждения человека — не вклинивайся; не ретраить чаще раза в 30 секунд и не более 2 раз"
                     : "сессия сейчас выполняет ход — попробуй позже; не ретраить чаще раза в 30 секунд и не более 2 раз",
+            }),
+            // Сессия была занята — сообщение принято и уйдёт после текущего хода. Ответа
+            // ждать не на чем: ход чужой, поэтому даже при wait=turn возвращаем 202.
+            SendAndWaitResult.Queued q => Accepted(new
+            {
+                status = "queued",
+                position = q.Position,
+                duplicate = q.Duplicate,
+                hint = q.Duplicate
+                    ? "такое же сообщение уже стоит в очереди — повторно не отправляй"
+                    : "чат занят: сообщение доставлено в очередь и уйдёт после текущего хода. Не ретрай — ответ смотри через chats_history",
+            }),
+            SendAndWaitResult.QueueFull f => StatusCode(429, new
+            {
+                status = "queue_full",
+                limit = f.Limit,
+                hint = $"в очереди чата уже {f.Limit} сообщений — дождись, пока он их разберёт",
             }),
             SendAndWaitResult.Completed c => Ok(new
             {
@@ -113,6 +136,38 @@ public class SessionMessagesController(SessionManager sessions) : ControllerBase
                 hint = "ход продолжается — результат позже через chats_history",
             }),
         };
+    }
+
+    // Откуда прилетело сообщение — чип-источник у карточки получателя. null, когда
+    // отправитель в том же месте: чип показывал бы очевидное и только шумел.
+    private string? ResolveSenderOrigin(Models.Session? sender, Models.Session receiver)
+    {
+        if (sender is null || sender.ProjectId == receiver.ProjectId) return null;
+        if (sender.ProjectId is null) return "Вне проектов";
+        // Проект мог быть удалён, а сессия ещё жива — источник всё равно чужой
+        return projects.GetById(sender.ProjectId)?.Name ?? "Другой проект";
+    }
+
+    // GET /api/sessions/{sid}/pending — сообщения, ждущие конца текущего хода
+    [HttpGet("pending")]
+    public IActionResult GetPending(string sessionId)
+    {
+        if (OwnedSession(sessionId) is null) return NotFound();
+        return Ok(sessions.GetPending(sessionId).Select(p => new
+        {
+            id = p.Id, text = p.Text, senderPersonaId = p.SenderPersonaId,
+            senderOrigin = p.SenderOrigin, enqueuedAt = p.EnqueuedAt,
+            senderChatName = p.SenderChatName,
+        }));
+    }
+
+    // DELETE /api/sessions/{sid}/pending/{messageId} — снять сообщение из очереди
+    // (крестик на карточке-призраке). 404 — уже доставлено или отменено.
+    [HttpDelete("pending/{messageId}")]
+    public async Task<IActionResult> CancelPending(string sessionId, string messageId)
+    {
+        if (OwnedSession(sessionId) is null) return NotFound();
+        return await sessions.CancelPendingAsync(sessionId, messageId) ? NoContent() : NotFound();
     }
 
     // Компактное представление сообщения истории; служебные записи (thinking, file_changed,

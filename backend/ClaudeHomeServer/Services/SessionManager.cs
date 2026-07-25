@@ -52,7 +52,31 @@ public class SessionManager : IDisposable
         // (хаб + REST-агент/work-loop/compact) проходили бы check-then-act на Process/
         // AdapterStale и создавали два адаптера → два claude --resume на один транскрипт.
         public readonly SemaphoreSlim EnsureLock = new(1, 1);
+        // Сообщения агентов (chats_send), пришедшие в занятую сессию: доставляются по
+        // одному после конца текущего хода. Только в памяти — при рестарте сессия и так
+        // становится Orphaned, доставлять накопленное в умерший контекст незачем.
+        public readonly List<QueuedMessage> Pending = [];
+        public readonly Lock PendingLock = new();
     }
+
+    // Ожидающее доставки сообщение из чужого чата. SenderOrigin заполняется, только если
+    // отправитель из ДРУГОГО места (иной проект / вне проектов) — получателю показываем
+    // чип-источник, чтобы было видно, откуда прилетело.
+    //
+    // Silent — ход-реакция, чей текст уже виден в ленте отдельной репликой (доклад
+    // исполнителя): призрак дублировал бы её служебным промптом.
+    // SuppressTasksExecute — обязателен для доклада: без него постановщик мог бы
+    // самозапустить новую задачу и закольцевать A↔B.
+    // SenderChatName — имя чата-отправителя: подпись карточки, когда персоны у него нет
+    // («Входящее сообщение» ни о чём не говорит, а имя чата отвечает на вопрос «кто пишет»).
+    public record QueuedMessage(
+        string Id, string Text, string? SenderPersonaId, string? SenderOrigin,
+        int AgentDepth, DateTime EnqueuedAt, bool Silent = false, bool SuppressTasksExecute = false,
+        string? SenderChatName = null);
+
+    // Потолок очереди на сессию: агент может ретраить, а занятый чат — стоять долго.
+    // Переполнение — честный отказ вызывающему, а не молчаливая потеря.
+    private const int MaxPendingPerSession = 10;
 
     private readonly ConcurrentDictionary<string, SessionEntry> _sessions = new();
     private readonly ProjectManager _projects;
@@ -1512,7 +1536,7 @@ public class SessionManager : IDisposable
         SaveSessions();
     }
 
-    public async Task SendMessageAsync(string sessionId, string text, IReadOnlyList<string> attachedPaths, string? mode = null, bool systemDirective = false, bool auto = false, string? senderPersonaId = null, bool suppressTasksExecute = false)
+    public async Task SendMessageAsync(string sessionId, string text, IReadOnlyList<string> attachedPaths, string? mode = null, bool systemDirective = false, bool auto = false, string? senderPersonaId = null, bool suppressTasksExecute = false, string? senderOrigin = null)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry))
             throw new InvalidOperationException("Сессия не найдена");
@@ -1550,7 +1574,7 @@ public class SessionManager : IDisposable
         // рассылка дублировала сообщение в ленте (см. комментарий у внутриходовых событий).
         if (auto && !systemDirective)
             await BroadcastAsync(sessionId,
-                new UserMessageMessage(text, attachedPaths.Count > 0 ? attachedPaths : null, senderPersonaId, auto));
+                new UserMessageMessage(text, attachedPaths.Count > 0 ? attachedPaths : null, senderPersonaId, auto, senderOrigin));
 
         await EnsureProcessAsync(sessionId, entry);
 
@@ -1577,7 +1601,7 @@ public class SessionManager : IDisposable
 
         await ApplyStatusAsync(sessionId, entry, SessionStatus.Working);
 
-        entry.Accumulator?.OnUserMessage(text, attachedPaths, systemDirective: systemDirective, auto: auto, senderPersonaId: senderPersonaId);
+        entry.Accumulator?.OnUserMessage(text, attachedPaths, systemDirective: systemDirective, auto: auto, senderPersonaId: senderPersonaId, senderOrigin: senderOrigin);
 
         // Push-источники автоматизаций: @упоминание персоны в тексте пользователя.
         // Fire-and-forget — обработчик не должен тормозить ход (он лишь детектит и ставит в очередь).
@@ -1639,10 +1663,12 @@ public class SessionManager : IDisposable
 
 
     // Отправка сообщения с ожиданием завершения хода — REST-канал агентов (chats_send).
-    // Занятую или ждущую человека сессию не трогаем (Busy). Таймаут НЕ отменяет ход:
-    // вызывающий получает Running и позже читает результат через историю (chats_history).
+    // Занятая или ждущая человека сессия НЕ отвергает сообщение: оно встаёт в очередь и
+    // доставляется после текущего хода (Queued). Таймаут НЕ отменяет ход: вызывающий
+    // получает Running и позже читает результат через историю (chats_history).
     public async Task<SendAndWaitResult> SendMessageAndWaitAsync(string sessionId, string text,
-        TimeSpan timeout, int agentDepth = 0, string? senderPersonaId = null)
+        TimeSpan timeout, int agentDepth = 0, string? senderPersonaId = null,
+        string? senderOrigin = null, string? senderChatName = null)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry))
             throw new InvalidOperationException("Сессия не найдена");
@@ -1655,7 +1681,8 @@ public class SessionManager : IDisposable
         // и стартуем первый ход. Гонку двух одновременных ходов ловит TurnWaiter ниже.
         var status = entry.Info.Status;
         if (status is SessionStatus.Working or SessionStatus.Waiting)
-            return new SendAndWaitResult.Busy(status);
+            return await EnqueuePendingAsync(sessionId, entry, text, senderPersonaId, senderOrigin, agentDepth,
+                senderChatName: senderChatName);
 
         await EnsureProcessAsync(sessionId, entry);
         entry.Accumulator?.SetPersona(entry.Info.PersonaId);
@@ -1673,14 +1700,16 @@ public class SessionManager : IDisposable
             }
         }
 
-        // Один ожидатель на ход: параллельная отправка проиграла гонку за ход — busy
+        // Один ожидатель на ход: параллельная отправка проиграла гонку — в очередь, как и
+        // при явной занятости (статус мог не успеть переключиться в Working)
         var tcs = new TaskCompletionSource<TurnResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         if (Interlocked.CompareExchange(ref entry.TurnWaiter, tcs, null) is not null)
-            return new SendAndWaitResult.Busy(entry.Info.Status);
+            return await EnqueuePendingAsync(sessionId, entry, text, senderPersonaId, senderOrigin, agentDepth,
+                senderChatName: senderChatName);
         entry.TurnWaiterBaseline = entry.Accumulator?.GetAll().Count ?? 0;
 
         await ApplyStatusAsync(sessionId, entry, SessionStatus.Working);
-        entry.Accumulator?.OnUserMessage(text, [], viaAgent: agentDepth >= 1, senderPersonaId: senderPersonaId);
+        entry.Accumulator?.OnUserMessage(text, [], viaAgent: agentDepth >= 1, senderPersonaId: senderPersonaId, senderOrigin: senderOrigin);
         await entry.Process!.SendMessageAsync(text, null, agentDepth);
 
         if (timeout <= TimeSpan.Zero) return new SendAndWaitResult.Running();
@@ -1689,6 +1718,130 @@ public class SessionManager : IDisposable
             ? new SendAndWaitResult.Completed(await tcs.Task)
             : new SendAndWaitResult.Running(); // ход продолжается, ожидатель очистит OnMessageAsync
     }
+
+    // === Очередь сообщений занятой сессии ===
+
+    // Поставить сообщение агента в очередь занятой сессии. Дедуп по (текст, отправитель):
+    // прежний контракт chats_send советовал ретраить при отказе, и наивный агент насыпал бы
+    // дублей одного и того же текста.
+    private async Task<SendAndWaitResult> EnqueuePendingAsync(string sessionId, SessionEntry entry,
+        string text, string? senderPersonaId, string? senderOrigin, int agentDepth,
+        bool silent = false, bool suppressTasksExecute = false, string? senderChatName = null)
+    {
+        int position;
+        lock (entry.PendingLock)
+        {
+            if (entry.Pending.Any(p => p.Text == text && p.SenderPersonaId == senderPersonaId))
+                return new SendAndWaitResult.Queued(entry.Pending.Count, Duplicate: true);
+            if (entry.Pending.Count >= MaxPendingPerSession)
+                return new SendAndWaitResult.QueueFull(MaxPendingPerSession);
+
+            entry.Pending.Add(new QueuedMessage(Guid.NewGuid().ToString("N"), text, senderPersonaId,
+                senderOrigin, agentDepth, DateTime.UtcNow, silent, suppressTasksExecute, senderChatName));
+            position = entry.Pending.Count;
+        }
+        await BroadcastPendingAsync(sessionId, entry);
+        return new SendAndWaitResult.Queued(position, Duplicate: false);
+    }
+
+    // Отправить сообщение сразу либо, если чат занят, поставить в очередь — единая точка
+    // для серверных отправок (доклад исполнителя). Раньше такие ходы полагались на неявную
+    // очередь семафора в адаптере: она невидима, безразмерна и молча теряет ходы при
+    // Interrupt. Возвращает true, если сообщение отложено.
+    public async Task<bool> SendOrEnqueueAsync(string sessionId, string text,
+        string? senderPersonaId = null, string? senderOrigin = null,
+        bool silent = false, bool suppressTasksExecute = false)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry))
+            throw new InvalidOperationException("Сессия не найдена");
+
+        if (entry.Info.Status is SessionStatus.Working or SessionStatus.Waiting)
+        {
+            await EnqueuePendingAsync(sessionId, entry, text, senderPersonaId, senderOrigin,
+                agentDepth: 0, silent, suppressTasksExecute);
+            return true;
+        }
+
+        await SendMessageAsync(sessionId, text, [], auto: true, senderPersonaId: senderPersonaId,
+            suppressTasksExecute: suppressTasksExecute, senderOrigin: senderOrigin);
+        return false;
+    }
+
+    // Снимок очереди для клиента и REST
+    public IReadOnlyList<QueuedMessage> GetPending(string sessionId)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return [];
+        lock (entry.PendingLock) return entry.Pending.ToList();
+    }
+
+    // Отменить ожидающее сообщение (крестик на карточке-призраке). false — уже доставлено.
+    public async Task<bool> CancelPendingAsync(string sessionId, string messageId)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return false;
+        bool removed;
+        lock (entry.PendingLock) removed = entry.Pending.RemoveAll(p => p.Id == messageId) > 0;
+        if (removed) await BroadcastPendingAsync(sessionId, entry);
+        return removed;
+    }
+
+    // Прерывание хода гасит и очередь: «стоп» означает остановить всё, а не выпустить
+    // следом накопленное — иначе Interrupt тут же сменялся бы новым ходом.
+    private async Task ClearPendingAsync(string sessionId, SessionEntry entry)
+    {
+        bool had;
+        lock (entry.PendingLock)
+        {
+            had = entry.Pending.Count > 0;
+            entry.Pending.Clear();
+        }
+        if (had) await BroadcastPendingAsync(sessionId, entry);
+    }
+
+    // Достать следующее сообщение и отправить его обычным ходом. Вызывается по концу хода
+    // (OnMessageAsync). Ошибка отправки не должна ронять разбор — сообщение уже снято с
+    // очереди, иначе оно застряло бы навсегда и блокировало остальные.
+    private async Task DrainNextPendingAsync(string sessionId)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return;
+
+        QueuedMessage? next;
+        lock (entry.PendingLock)
+        {
+            next = entry.Pending.FirstOrDefault();
+            if (next is not null) entry.Pending.RemoveAt(0);
+        }
+        if (next is null) return;
+
+        await BroadcastPendingAsync(sessionId, entry);
+        try
+        {
+            // auto: true — сообщение опубликовано не человеком; ход встанет в очередь
+            // адаптера, если предыдущий ещё доживает
+            await SendMessageAsync(sessionId, next.Text, [], auto: true,
+                senderPersonaId: next.SenderPersonaId, senderOrigin: next.SenderOrigin,
+                suppressTasksExecute: next.SuppressTasksExecute);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[SessionManager] Доставка отложенного сообщения ({sessionId}): {ex.Message}");
+        }
+    }
+
+    // Клиенту уходят только видимые элементы: silent — ход-реакция на доклад, чей текст
+    // уже лежит в ленте отдельной репликой, призрак дублировал бы её служебным промптом
+    private Task BroadcastPendingAsync(string sessionId, SessionEntry entry) =>
+        BroadcastSessionMessageAsync(sessionId, new PendingMessagesMessage(VisiblePending(entry)));
+
+    private static IReadOnlyList<PendingMessageDto> VisiblePending(SessionEntry entry)
+    {
+        lock (entry.PendingLock)
+            return [.. entry.Pending.Where(p => !p.Silent).Select(p => new PendingMessageDto(
+                p.Id, p.Text, p.SenderPersonaId, p.SenderOrigin, p.EnqueuedAt, p.SenderChatName))];
+    }
+
+    // Снимок для replay при JoinSession (без служебных)
+    public IReadOnlyList<PendingMessageDto> GetVisiblePending(string sessionId) =>
+        _sessions.TryGetValue(sessionId, out var entry) ? VisiblePending(entry) : [];
 
     // Ручное сворачивание контекста: /compact в CLI, минуя счётчики и историю user-сообщений
     public async Task CompactAsync(string sessionId)
@@ -1989,6 +2142,9 @@ public class SessionManager : IDisposable
                 SaveSessions();
                 _ = BroadcastWorkLoopAsync(sessionId, entry);
             }
+            // «Стоп» останавливает всё: накопленные сообщения агентов не должны хлынуть
+            // следующим ходом сразу после прерывания
+            _ = ClearPendingAsync(sessionId, entry);
             entry.Process?.Interrupt();
         }
     }
@@ -2580,6 +2736,24 @@ public class SessionManager : IDisposable
                         }
                     });
             }
+
+            // Ход закончился — выпускаем следующее сообщение из очереди (chats_send в занятый
+            // чат). По одному за раз: следующее уйдёт по result уже этого хода. Цикл «до
+            // готово» приоритетнее — он продолжает работу, начатую человеком, и его директива
+            // уже поставлена выше; отложенное подождёт ещё ход. В фоне — как и work-loop,
+            // чтобы не держать read-loop адаптера.
+            if (msg is ResultMessage or ErrorMessage && !entry.LoopTurnInFlight
+                && entry.Info.WorkLoop is null)
+            {
+                _ = Task.Run(async () =>
+                {
+                    try { await DrainNextPendingAsync(sessionId); }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine($"[SessionManager] Разбор очереди сообщений ({sessionId}): {ex.Message}");
+                    }
+                });
+            }
         }
 
         await BroadcastAsync(sessionId, msg);
@@ -2889,11 +3063,15 @@ public class SessionManager : IDisposable
 // текст последней реплики ассистента, длительность и стоимость (если провайдер её отдал)
 public record TurnResult(string Reply, long DurationMs, double? CostUsd);
 
-// Результат отправки с ожиданием: Busy — сессия занята или ждёт человека (ход НЕ отправлен);
-// Completed — ход завершился в срок; Running — ход продолжается (wait=none или истёк таймаут)
+// Результат отправки с ожиданием: Queued — сессия была занята, сообщение встало в очередь
+// и уйдёт после текущего хода; QueueFull — очередь переполнена, сообщение отброшено;
+// Completed — ход завершился в срок; Running — ход продолжается (wait=none или истёк таймаут).
+// Busy остаётся для совместимости сигнатуры, но занятость сама по себе больше не отказ.
 public abstract record SendAndWaitResult
 {
     public sealed record Busy(SessionStatus CurrentStatus) : SendAndWaitResult;
+    public sealed record Queued(int Position, bool Duplicate) : SendAndWaitResult;
+    public sealed record QueueFull(int Limit) : SendAndWaitResult;
     public sealed record Completed(TurnResult Result) : SendAndWaitResult;
     public sealed record Running : SendAndWaitResult;
 

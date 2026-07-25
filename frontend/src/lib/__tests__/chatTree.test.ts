@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildChatTreeRows, collectDescendants } from '../chatTree';
+import { buildChatTreeRows, collectDescendants, formatGroupCount } from '../chatTree';
 import type { Session } from '../../types';
 
 // Фабрика минимальной сессии: важны только id/parentSessionId/updatedAt/origin/isPinned
@@ -103,7 +103,7 @@ describe('buildChatTreeRows', () => {
     expect(r.renderedCount).toBe(1);
   });
 
-  it('свёрнутое поддерево не рендерится, счётчик прямых детей сохраняется', () => {
+  it('свёрнутое поддерево не рендерится, счётчик считает всю спрятанную ветку', () => {
     const chats = [
       mk('p'),
       mk('c1', { parentSessionId: 'p' }),
@@ -113,9 +113,35 @@ describe('buildChatTreeRows', () => {
     const r = build(chats, { collapsedIds: new Set(['p']) });
     expect(r.rows.map(x => x.chat.id)).toEqual(['p']);
     expect(r.rows[0].collapsed).toBe(true);
-    expect(r.rows[0].childCount).toBe(2);
+    // Внук g тоже спрятан — счётчик обязан его учесть (не 2 прямых ребёнка)
+    expect(r.rows[0].groupCount).toBe(3);
+    expect(r.rows[0].groupRunningCount).toBe(0);
     // renderedCount — весь лес, collapse не считается «скрыто фильтрами»
     expect(r.renderedCount).toBe(4);
+  });
+
+  it('счётчик работающих считает всю ветку и только живые статусы', () => {
+    const chats = [
+      mk('p'),
+      mk('c1', { parentSessionId: 'p', status: 'working' }),
+      mk('c2', { parentSessionId: 'p', status: 'active' }),
+      mk('g1', { parentSessionId: 'c1', status: 'waiting' }),
+      mk('g2', { parentSessionId: 'c1', status: 'starting' }),
+      mk('g3', { parentSessionId: 'c2', status: 'finished' }),
+    ];
+    const r = build(chats, { collapsedIds: new Set(['p']) });
+
+    expect(r.rows[0].groupCount).toBe(5);
+    // working + waiting + starting; active и finished — не «в работе»
+    expect(r.rows[0].groupRunningCount).toBe(3);
+  });
+
+  it('сам узел в свой счётчик не входит', () => {
+    const chats = [mk('p', { status: 'working' }), mk('c', { parentSessionId: 'p', status: 'working' })];
+    const r = build(chats, { collapsedIds: new Set(['p']) });
+
+    expect(r.rows[0].groupCount).toBe(1);
+    expect(r.rows[0].groupRunningCount).toBe(1);
   });
 
   it('закреплённый корень поднимается выше более активного', () => {
@@ -160,6 +186,18 @@ describe('buildChatTreeRows', () => {
     // и ось a (x — единственный ребёнок a, продолжения нет)
     expect(by.get('y')!.depth).toBe(3);
     expect(by.get('y')!.ancestors.map(l => l.show)).toEqual([true, false]);
+  });
+});
+
+// Бейдж вылезает из своей колонки поверх карточки — длинное число накрыло бы
+// точку статуса и начало названия чата
+describe('formatGroupCount', () => {
+  it('клампит числа больше 99', () => {
+    expect(formatGroupCount(0)).toBe('0');
+    expect(formatGroupCount(7)).toBe('7');
+    expect(formatGroupCount(99)).toBe('99');
+    expect(formatGroupCount(100)).toBe('99+');
+    expect(formatGroupCount(1284)).toBe('99+');
   });
 });
 

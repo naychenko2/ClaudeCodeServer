@@ -76,6 +76,11 @@ interface TreeNode {
   children: TreeNode[];
   // Максимум updatedAt по всему поддереву — по нему сортируются корни
   maxActivity: number;
+  // Чатов во ВСЁМ поддереве (без самого узла) и сколько из них в работе — бейдж
+  // свёрнутой ветки. Именно всё поддерево, а не прямые дети: у свёрнутого узла
+  // спрятаны и внуки, счётчик обязан их учитывать.
+  groupCount: number;
+  groupRunningCount: number;
 }
 
 // Готовая строка для рендера ChatTreeRow: глубина, геометрия связей, accent-путь
@@ -86,8 +91,11 @@ export interface ChatTreeRowData {
   isLast: boolean;
   hasChildren: boolean;
   collapsed: boolean;
-  // Число ПРЯМЫХ детей — бейдж у свёрнутого chevron
-  childCount: number;
+  // Бейдж свёрнутой ветки: сколько чатов спрятано во ВСЁМ поддереве и сколько из них
+  // сейчас в работе (starting/working/waiting). Считается по поддереву, а не по прямым
+  // детям — свёрнутый узел прячет и внуков.
+  groupCount: number;
+  groupRunningCount: number;
   // Строка лежит на пути корень→активный чат (сам активный или его предок)
   onActivePath: boolean;
   // Вертикаль-связь к родителю подсвечена accent (путь к активному чату проходит здесь)
@@ -108,6 +116,19 @@ export interface ChatTreeResult {
 }
 
 const activity = (c: Session) => new Date(c.updatedAt).getTime();
+
+// Чат «в работе» прямо сейчас: агент думает/выполняет (starting, working) либо ждёт ответа
+// пользователя на разрешение или вопрос (waiting). Набор совпадает с PULSE_STATUSES из
+// StatusIndicator (там по нему мигает точка) — при правке держать синхронно.
+// Статус active сюда НЕ входит: ход уже завершён, процесс просто жив, и точка статуса
+// красит его зелёным именно как «не работу».
+const RUNNING_STATUSES = new Set<Session['status']>(['starting', 'working', 'waiting']);
+
+export const isChatRunning = (c: Session) => RUNNING_STATUSES.has(c.status);
+
+// Потолок числа в бейдже свёрнутой ветки: бейдж вылезает из своей gutter-колонки поверх
+// карточки, и «128/12» накрыл бы точку статуса вместе с началом названия чата
+export const formatGroupCount = (n: number) => (n > 99 ? '99+' : String(n));
 
 /**
  * Все потомки чата (без него самого) — запретные цели при перетаскивании: вложить
@@ -174,6 +195,9 @@ export function buildChatTreeRows(
       chat,
       children: kids,
       maxActivity: Math.max(activity(chat), ...kids.map(k => k.maxActivity)),
+      groupCount: kids.reduce((n, k) => n + 1 + k.groupCount, 0),
+      groupRunningCount: kids.reduce(
+        (n, k) => n + (isChatRunning(k.chat) ? 1 : 0) + k.groupRunningCount, 0),
     };
   };
   const topNodes = topCandidates.map(buildNode);
@@ -236,7 +260,8 @@ export function buildChatTreeRows(
       isLast,
       hasChildren: node.children.length > 0,
       collapsed,
-      childCount: node.children.length,
+      groupCount: node.groupCount,
+      groupRunningCount: node.groupRunningCount,
       onActivePath: onPath(node.chat.id),
       segAccent,
       elbowAccent: onPath(node.chat.id),

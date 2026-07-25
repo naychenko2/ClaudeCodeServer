@@ -808,6 +808,11 @@ export const api = {
     // «Задачи из чата» (флаг chat-extract-tasks): извлечь кандидатов (не создаёт)
     extractTasks: (sessionId: string) =>
       request<ExtractTasksResponse>(`/sessions/${sessionId}/extract-tasks`, { method: 'POST' }),
+    // Снять сообщение из очереди занятого чата (крестик на карточке-призраке).
+    // Очередь живёт в памяти сервера — актуальный состав приходит событием pending_messages
+    cancelPending: (sessionId: string, messageId: string) =>
+      request<void>(`/sessions/${encodeURIComponent(sessionId)}/pending/${encodeURIComponent(messageId)}`,
+        { method: 'DELETE' }),
   },
 
   // Чаты вне проекта (project-less)

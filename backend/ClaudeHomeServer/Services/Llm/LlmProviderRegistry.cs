@@ -34,6 +34,7 @@ public class LlmProviderRegistry
         _profilesDir = Path.Combine(dataDir, "claude-profiles");
         _userProfileDir = config["ClaudeUserProfileDir"]
             ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude");
+        _inheritSystemEnv = config.GetValue("Claude:InheritSystemEnv", false);
     }
 
     public IReadOnlyCollection<LlmProviderConfig> All => _providers.Values;
@@ -127,6 +128,36 @@ public class LlmProviderRegistry
         SupportsImages = p.SupportsImages,
         HasBalance = !string.IsNullOrWhiteSpace(p.Balance) && !string.IsNullOrWhiteSpace(p.ApiBaseUrl),
     };
+
+    // Переменные «провайдерского режима» — те, которыми мы САМИ рулим маршрутом CLI
+    // (см. BuildCliEnv). Их надо вычищать из унаследованного окружения на КАЖДОМ запуске
+    // claude, а не только под сторонним провайдером: если такая переменная задана глобально
+    // на машине (мастер-рубильник «весь Claude Code на GLM», чужой эксперимент, забытый setx),
+    // то ход «на Claude» унаследует чужой эндпоинт и уедет туда с токеном подписки — молча,
+    // без единой ошибки в логах. Продукт обязан сам определять свой маршрут целиком.
+    //
+    // CLAUDE_CODE_OAUTH_TOKEN сюда НЕ входит осознанно: на нём держится вход по подписке,
+    // его пробрасывают снаружи (Runner берёт из реестра, docker — из окружения хоста).
+    public static readonly string[] ProviderEnvKeys =
+    [
+        "CLAUDE_CONFIG_DIR",
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_API_KEY",              // перебивает подписку и включает pay-per-token
+        "ANTHROPIC_MODEL",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+        "CLAUDE_CODE_SUBAGENT_MODEL",
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW", // окно автокомпакта задают вместе с моделью 1M
+    ];
+
+    // Что реально вычищаем на запуске. Аварийный выключатель Claude:InheritSystemEnv=true
+    // возвращает прежнее поведение (наследовать системные переменные) без пересборки —
+    // на случай машины, где ANTHROPIC_* заданы намеренно: свой шлюз к Anthropic или работа
+    // по ANTHROPIC_API_KEY вместо подписки. По умолчанию выключено: маршрут определяем мы.
+    public IReadOnlyList<string> EnvKeysToClear => _inheritSystemEnv ? [] : ProviderEnvKeys;
+    private readonly bool _inheritSystemEnv;
 
     // Env процесса claude CLI для стороннего провайдера (per-turn: модель может меняться).
     // null → модель родная Claude, env не нужны.

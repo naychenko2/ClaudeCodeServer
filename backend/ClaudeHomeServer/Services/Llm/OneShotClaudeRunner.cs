@@ -117,6 +117,9 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
             Args = args,
             WorkingDirectory = workDir,
             Env = env,
+            // Как и в ходе чата: системные ANTHROPIC_* машины не должны переопределять
+            // маршрут фоновых задач (сводки, теги, память) — см. ProviderEnvKeys
+            ClearEnv = llmProviders.EnvKeysToClear,
             StdioEncoding = new UTF8Encoding(false),
             TurnId = turnId,
         });

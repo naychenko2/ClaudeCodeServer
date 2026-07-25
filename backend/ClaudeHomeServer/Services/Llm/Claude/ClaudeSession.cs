@@ -1676,6 +1676,9 @@ public class ClaudeSession : ILlmSessionAdapter
             Args = args,
             WorkingDirectory = _rootPath,
             Env = envOverrides,
+            // Маршрут хода определяем только мы: системные ANTHROPIC_*/CLAUDE_CONFIG_DIR
+            // машины в ход не пускаем, иначе чат «на Claude» молча уедет на чужой эндпоинт
+            ClearEnv = _providers?.EnvKeysToClear ?? LlmProviderRegistry.ProviderEnvKeys,
             StdioEncoding = utf8NoBom,
             TurnId = _currentTurnId,
         });

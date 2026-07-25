@@ -165,7 +165,7 @@ public class SpendReviewMinorTests : IDisposable
         var providers = new LlmProviderRegistry(config);
         var cloud = new CloudCheapClient(new FakeHttpFactory(new FakeHandler(OpenRouterJson)),
             config, providers, NullLogger<CloudCheapClient>.Instance, spend);
-        var claude = new OneShotClaudeRunner(providers, TestLauncherFactory.Instance);
+        var claude = new OneShotClaudeRunner(providers, TestLauncherFactory.Instance, config);
         var runner = new CheapTextRunner(router, ollama, cloud, claude, NullLogger<CheapTextRunner>.Instance);
 
         var text = await runner.RunAsync(LocalActionCatalog.NotesTags, "prompt", ownerId: "u3");

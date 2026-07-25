@@ -42,6 +42,10 @@ export const C = {
   textSecondary: 'var(--c-text-secondary)',
   textMuted:     'var(--c-text-muted)',
   onAccent:      'var(--c-on-accent)',   // текст/иконки поверх accent-фона
+  // Текст/иконки поверх подложки, не зависящей от темы: лайтбокс медиа, надписи
+  // поверх фото, инициалы на цветных кружках из палитр (AGENT_COLORS и т.п.).
+  // Отличается от onAccent тем, что в тёмной теме НЕ темнеет — фон-то прежний
+  onDark:        'var(--c-on-dark)',
 
   // Акцентный (ОСНОВНОЙ — оранжевый)
   accent:        'var(--c-accent)',

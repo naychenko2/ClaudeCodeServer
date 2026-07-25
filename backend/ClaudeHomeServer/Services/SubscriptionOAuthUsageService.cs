@@ -103,11 +103,19 @@ public sealed partial class SubscriptionOAuthUsageService(
 
     // Основной аккаунт + дополнительные подписки пула с OAuth-токеном
     // (аккаунты на чистом ApiKey опросить нечем).
-    private IEnumerable<(string Key, string Token)> EnumerateAccounts()
+    internal IEnumerable<(string Key, string Token)> EnumerateAccounts()
     {
-        var primary = ResolvePrimaryToken();
-        if (!string.IsNullOrWhiteSpace(primary))
-            yield return (ClaudeSubscriptionPool.PrimaryKey, primary!);
+        // Запись "claude" в пуле уже покрывает primary-ключ профильным токеном — отдельный
+        // опрос primary-веткой шёл бы ДРУГИМ токеном (env/конфиг/~/.claude, возможно другой
+        // аккаунт) под тем же ключом: два источника перезаписывали бы снимки друг друга.
+        // Одно окно — один источник.
+        var primaryPooled = pool.All.Any(s => s.Key == ClaudeSubscriptionPool.PrimaryKey);
+        if (!primaryPooled)
+        {
+            var primary = ResolvePrimaryToken();
+            if (!string.IsNullOrWhiteSpace(primary))
+                yield return (ClaudeSubscriptionPool.PrimaryKey, primary!);
+        }
 
         foreach (var sub in pool.All)
         {

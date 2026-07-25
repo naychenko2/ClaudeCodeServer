@@ -140,6 +140,58 @@ public class SubscriptionOAuthUsageServiceTests : IDisposable
         byType["extra_usage"].Utilization.Should().BeApproximately(0.05, 0.001);
     }
 
+    // Сервис на произвольном конфиге — для тестов EnumerateAccounts (состав пула важен)
+    private SubscriptionOAuthUsageService CreateServiceWith(Dictionary<string, string?> extraConfig)
+    {
+        var dict = new Dictionary<string, string?>
+        {
+            ["DataPath"] = Path.Combine(_tempDir, "projects.json"),
+        };
+        foreach (var (k, v) in extraConfig) dict[k] = v;
+        var config = new ConfigurationBuilder().AddInMemoryCollection(dict).Build();
+        var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.OK));
+        var svc = new SubscriptionOAuthUsageService(
+            new ClaudeSubscriptionPool(config), new UsageService(config), new LlmProviderRegistry(config),
+            new StubHttpFactory(handler), config);
+        svc.OverrideUserAgent("claude-code/test");
+        return svc;
+    }
+
+    [Fact]
+    public void EnumerateAccounts_ПулСодержитClaude_PrimaryВеткаНеОпрашивается()
+    {
+        // Прод-баг 2026-07-25: primary-ветка (env/конфиг/~/.claude) и запись пула "claude"
+        // (профиль sub-claude) опрашивались ОБЕ под ключом PrimaryKey — два разных токена,
+        // два аккаунта, противоречивые снимки в одну секунду. Одно окно — один источник.
+        var svc = CreateServiceWith(new Dictionary<string, string?>
+        {
+            ["Claude:OAuthToken"] = "primary-token",
+            [$"{ClaudeSubscriptionPool.Section}:claude:OAuthToken"] = "token-claude",
+            [$"{ClaudeSubscriptionPool.Section}:second:OAuthToken"] = "token-second",
+        });
+
+        var accounts = svc.EnumerateAccounts().ToList();
+
+        accounts.Select(a => a.Key).Should().BeEquivalentTo("claude", "second");
+        accounts.Single(a => a.Key == "claude").Token.Should().Be("token-claude",
+            "ключ claude должен опрашиваться токеном пула, а не primary-веткой");
+    }
+
+    [Fact]
+    public void EnumerateAccounts_ПулБезClaude_PrimaryОпрашиваетсяКакРаньше()
+    {
+        var svc = CreateServiceWith(new Dictionary<string, string?>
+        {
+            ["Claude:OAuthToken"] = "primary-token",
+            [$"{ClaudeSubscriptionPool.Section}:second:OAuthToken"] = "token-second",
+        });
+
+        var accounts = svc.EnumerateAccounts().ToList();
+
+        accounts.Select(a => a.Key).Should().BeEquivalentTo("claude", "second");
+        accounts.Single(a => a.Key == "second").Token.Should().Be("token-second");
+    }
+
     [Fact]
     public async Task ВосстановлениеПосле403_СтатусСноваOk()
     {

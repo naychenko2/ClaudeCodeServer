@@ -42,10 +42,13 @@ function initialState(ctx: SpendOpenContext, isAdmin: boolean): SpendState {
   };
 }
 
-export function SpendScreen({ ctx, isAdmin, onClose }: {
+export function SpendScreen({ ctx, isAdmin, onClose, embedded }: {
   ctx: SpendOpenContext;
   isAdmin: boolean;
   onClose: () => void;
+  // true — рендер как содержимое страницы-вкладки (без полноэкранного fixed-overlay):
+  // шапка хаба остаётся сверху, раздел занимает оставшееся место
+  embedded?: boolean;
 }) {
   const isMobile = useIsMobile();
   const [st, setSt] = useState<SpendState>(() => {
@@ -182,10 +185,13 @@ export function SpendScreen({ ctx, isAdmin, onClose }: {
     );
 
   return (
-    <div style={{
-      position: 'fixed', inset: 0, zIndex: Z.modal, background: C.bgMain,
-      display: 'flex', flexDirection: 'column', overflow: 'hidden',
-    }}>
+    <div style={embedded
+      // Страница-вкладка: шапка хаба над нами, занимаем остаток колонки
+      ? { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }
+      // Полноэкранный overlay (на случай вызова вне хаба)
+      : { position: 'fixed', inset: 0, zIndex: Z.modal, background: C.bgMain,
+          display: 'flex', flexDirection: 'column', overflow: 'hidden' }
+    }>
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: isMobile ? 0 : 16 }}>
         <div style={{
           maxWidth: 1220, margin: '0 auto',

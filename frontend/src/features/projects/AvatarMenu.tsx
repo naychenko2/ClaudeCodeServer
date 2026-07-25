@@ -3,7 +3,7 @@ import { C, R, SHADOW, Z } from '../../lib/design';
 import { ConnectionStatus } from '../../components/ConnectionStatus';
 import { SegmentedControl } from '../../components/ui';
 import { useThemeMode, setThemeMode, type ThemeMode } from '../../lib/themeMode';
-import { History, Book, Gauge, Users, Lock, FlaskConical, LogOut, Mic, Cpu } from 'lucide-react';
+import { History, Book, Gauge, Users, Lock, FlaskConical, LogOut, Mic, Cpu, Coins } from 'lucide-react';
 import { ICON_SIZE } from '../../components/ui/icons';
 import { isMicKeyboardFallback, clearMicKeyboardFallback } from '../../lib/voiceInput';
 import { showToast } from '../../lib/toast';
@@ -49,11 +49,14 @@ interface Props {
   onOpenKnowledge?: () => void;
   // «Использование» (лимиты подписок Claude, баланс провайдеров) — вызов из меню аватара
   onShowUsage?: () => void;
+  // «Аналитика токенов» (расход по ходам/моделям/проектам) — раздел-таб без вкладки,
+  // вызов из меню аватара рядом с «Использованием». undefined — пункт не показывать
+  onOpenSpend?: () => void;
   // «Фоновые задачи» (исполнитель фоновых ИИ-действий) — только админ, undefined = не показывать
   onShowBackgroundTasks?: () => void;
 }
 
-export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout, onShowChangePassword, onShowFeatureFlags, onShowUserManagement, hideStatus, onShowHistory, historyBadge = 0, historyNeverSeen = false, historyActive = false, onOpenKnowledge, onShowUsage, onShowBackgroundTasks }: Props) {
+export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout, onShowChangePassword, onShowFeatureFlags, onShowUserManagement, hideStatus, onShowHistory, historyBadge = 0, historyNeverSeen = false, historyActive = false, onOpenKnowledge, onShowUsage, onOpenSpend, onShowBackgroundTasks }: Props) {
   // Как обращаемся к пользователю; логин остаётся видимым отдельной строкой,
   // чтобы было понятно, под каким аккаунтом сидишь
   const name = displayName?.trim() || username;
@@ -140,6 +143,15 @@ export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout
             >
               <Gauge size={ICON_SIZE.xs} strokeWidth={2} />
               Использование
+            </button>
+          )}
+          {onOpenSpend && (
+            <button
+              onClick={() => { setOpen(false); onOpenSpend(); }}
+              style={dropdownItem}
+            >
+              <Coins size={ICON_SIZE.xs} strokeWidth={2} />
+              Аналитика токенов
             </button>
           )}
           <MenuDivider />

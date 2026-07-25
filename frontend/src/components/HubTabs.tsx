@@ -1,9 +1,9 @@
 import type { ReactNode } from 'react';
-import { Book, Calendar, Folder, House, MessageCircle, Puzzle, Share2, Users } from 'lucide-react';
+import { Book, Calendar, Coins, Folder, House, MessageCircle, Puzzle, Share2, Users } from 'lucide-react';
 import { PillSwitch } from './Toolbar';
 import { useModules } from '../lib/modules';
 
-export type HubTab = 'home' | 'chats' | 'projects' | 'calendar' | 'notes' | 'personas' | 'knowledge' | 'notifications';
+export type HubTab = 'home' | 'chats' | 'projects' | 'calendar' | 'notes' | 'personas' | 'knowledge' | 'notifications' | 'spend';
 
 // Значение таба хаба: фиксированный раздел ЛИБО внешний модуль (`module:{id}`, ТЗ R6).
 // Модульные табы приходят из реестра (GET /api/modules) и генерятся динамически.
@@ -26,20 +26,21 @@ const TAB_ICONS: Record<HubTab, ReactNode> = {
   personas: <Users size={18} strokeWidth={2} />,
   knowledge: <Book size={18} strokeWidth={2} />,
   notifications: <MessageCircle size={18} strokeWidth={2} />,
+  spend: <Coins size={18} strokeWidth={2} />,
 };
 
 // Подписи разделов (единый источник для таббара и overflow-меню «Разделы»)
 export const TAB_LABELS: Record<HubTab, string> = {
   home: 'Домой', chats: 'Чаты', projects: 'Проекты', calendar: 'Календарь', notes: 'Заметки',
-  personas: 'Персоны', knowledge: 'Знания', notifications: 'Уведомления',
+  personas: 'Персоны', knowledge: 'Знания', notifications: 'Уведомления', spend: 'Аналитика',
 };
 // Полный набор разделов таббара по умолчанию (desktop)
 const DEFAULT_TABS: HubTab[] = ['chats', 'projects', 'calendar', 'notes', 'personas'];
 // Разделы, которые НЕ получают вкладку даже когда активны: вход к ним живёт
 // не в таббаре, а в шапке — логотип «Домой», колокольчик «Уведомления», меню
-// аватара «Знания». Всплывающая только внутри раздела вкладка-призрак сбивает
-// с толку: набор таббара скачет от того, где ты находишься.
-const TABLESS: HubTab[] = ['home', 'notifications', 'knowledge'];
+// аватара «Знания» и «Аналитика токенов». Всплывающая только внутри раздела
+// вкладка-призрак сбивает с толку: набор таббара скачет от того, где ты находишься.
+const TABLESS: HubTab[] = ['home', 'notifications', 'knowledge', 'spend'];
 
 // Сегмент-переключатель хаба «Чаты | Проекты | Календарь | Заметки | Персоны» — на общем PillSwitch.
 // mobile: компакт-режим — неактивные сегменты иконками, подпись только у активного

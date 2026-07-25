@@ -20,6 +20,13 @@ export default defineConfig({
     // React-инстанс один, remote-чанки не попадают в precache (живут под /api/modules/**/ui/).
     federation({
       name: 'aihome_shell',
+      // Design-kit ядра для внешних модулей (контракт §7.1, R14–R16): модули берут
+      // токены и примитивы через loadRemote('aihome_shell/design-kit') — entry кита
+      // реэкспортирует только leaf-файлы (design.ts, breakpoints.ts, components/ui/*).
+      filename: 'remoteEntry.js',
+      exposes: {
+        './design-kit': './src/lib/design-kit/index.ts',
+      },
       remotes: {},
       shared: {
         // eager: react/react-dom бандлятся в основной синхронный chunk, а не в

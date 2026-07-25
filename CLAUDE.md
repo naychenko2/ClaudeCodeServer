@@ -321,8 +321,9 @@ override в `data/users.json`; фронт — стор [lib/featureFlags.ts](fro
 
 - **Conventional Commits**: `type(scope): описание` (feat/fix/perf/docs/refactor/build/chore/ci/test/style).
 - **Язык сообщений — русский** (в отличие от общего дефолта на английском).
-- Трейлер `Co-Authored-By: Claude <модель> <noreply@anthropic.com>` — где `<модель>` это
-  та, что реально делала коммит (напр. «Claude Opus 4.8», «Claude Sonnet 5»), а не
-  фиксированная версия. Email всегда `noreply@anthropic.com`.
+- Трейлер `Co-Authored-By: <модель> <noreply@<домен-вендора>>` — где `<модель>` это
+  та, что реально делала коммит (напр. «Claude Opus 4.8», «GLM 5.2»), а не фиксированная
+  версия. Домен noreply берётся по вендору модели: Anthropic → `noreply@anthropic.com`,
+  ZhipuAI (GLM) → `noreply@z.ai`. Без «Claude» в начале, если модель не от Anthropic.
 - Атомарность: одно логическое изменение — один коммит.
 - `commit`/`push` — только по явной просьбе.

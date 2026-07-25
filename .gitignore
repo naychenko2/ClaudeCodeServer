@@ -68,7 +68,6 @@ Thumbs.db
 *.log
 onlyoffice/local.json
 
-# state-����� ������� oh-my-claudecode (������� � cwd �������)
 .omc/
 
 # oh-my-opencode / oh-my-openagent state (Boulder, run-continuation, plans)

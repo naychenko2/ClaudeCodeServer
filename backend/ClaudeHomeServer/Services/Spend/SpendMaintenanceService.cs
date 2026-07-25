@@ -69,11 +69,13 @@ public sealed class SpendMaintenanceService(SpendStore store, SessionManager ses
 
             foreach (var m in results)
             {
-                var ts = Spread(session.CreatedAt, session.UpdatedAt, index++, total);
+                var i = index++;
+                var ts = Spread(session.CreatedAt, session.UpdatedAt, i, total);
                 if (ts >= t0) continue;
                 var u = m.Usage!;
                 store.Record(new SpendRecord
                 {
+                    Id = BackfillId(session.ClaudeSessionId, i),
                     Timestamp = ts,
                     OwnerId = ownerId,
                     ProjectId = session.ProjectId,
@@ -96,10 +98,12 @@ public sealed class SpendMaintenanceService(SpendStore store, SessionManager ses
 
             foreach (var m in falCosts)
             {
-                var ts = Spread(session.CreatedAt, session.UpdatedAt, index++, total);
+                var i = index++;
+                var ts = Spread(session.CreatedAt, session.UpdatedAt, i, total);
                 if (ts >= t0) continue;
                 store.Record(new SpendRecord
                 {
+                    Id = BackfillId(session.ClaudeSessionId, i),
                     Timestamp = ts,
                     OwnerId = ownerId,
                     ProjectId = session.ProjectId,
@@ -127,5 +131,17 @@ public sealed class SpendMaintenanceService(SpendStore store, SessionManager ses
     {
         if (to <= from || n <= 0) return from;
         return from + TimeSpan.FromTicks((to - from).Ticks * (i + 1) / (n + 1));
+    }
+
+    // Детерминированный Id backfill-записи: повторный прогон после сбоя (рестарт посреди
+    // импорта, маркер ещё не стоит) даёт те же Id, и дедуп SpendStore.Record не пропускает
+    // дубли. Порядок сообщений в history.json стабилен, поэтому пара (сессия, индекс)
+    // однозначно адресует запись между прогонами.
+    internal static string BackfillId(string claudeSessionId, int index)
+    {
+        var hash = System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes($"{claudeSessionId}:{index}"));
+        // 32 hex-символа — тот же формат, что у Guid.ToString("N") живых записей
+        return Convert.ToHexStringLower(hash)[..32];
     }
 }

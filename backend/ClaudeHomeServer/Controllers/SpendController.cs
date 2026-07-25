@@ -28,7 +28,7 @@ public class SpendController(SpendAnalyticsService analytics, SessionManager ses
             user, project, chat, task, persona, provider, model, source);
         if (res.Error is not null) return Forbidden(res.Error);
         var (f, t) = Period(from, to);
-        return Ok(analytics.Overview(f, t, res.Filter, res.AllUsers));
+        return Ok(analytics.Overview(f, t, res.Filter, res.AllUsers, CurrentUserId));
     }
 
     // Узлы pivot-дерева: агрегаты одного разреза при фильтрах. Раскрытие узла = повторный

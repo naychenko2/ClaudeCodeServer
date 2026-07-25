@@ -19,8 +19,9 @@ public class SpendAnalyticsTests : IDisposable
     private static SpendRecord Rec(DateTime ts, string owner = "u1", string? project = "p1",
         string? session = "s1", string provider = "claude", string? model = "opus",
         string source = SpendSources.ChatTurn, long input = 10, long output = 5,
-        long cacheRead = 100, long cacheCreate = 20, int generations = 0) => new()
+        long cacheRead = 100, long cacheCreate = 20, int generations = 0, string? id = null) => new()
     {
+        Id = id ?? Guid.NewGuid().ToString("N"),
         Timestamp = ts,
         OwnerId = owner,
         ProjectId = project,
@@ -223,6 +224,38 @@ public class SpendAnalyticsTests : IDisposable
     }
 
     // --- дедуп backfill ---
+
+    [Fact]
+    public void Record_ПовторныйIdОтбрасывается_ИПослеПерезапускаСтора()
+    {
+        var ts = new DateTime(2026, 7, 20, 12, 0, 0, DateTimeKind.Utc);
+        var day = new DateOnly(2026, 7, 20);
+        var id = SpendMaintenanceService.BackfillId("cs1", 0);
+
+        var store = NewStore();
+        store.Record(Rec(ts, id: id));
+        store.Record(Rec(ts, id: id));
+        Assert.Single(store.DetailsBetween(day, day));
+
+        // Перезапуск: индекс Id восстанавливается из jsonl — дубль не проходит и после него
+        var reloaded = NewStore();
+        reloaded.Record(Rec(ts, id: id));
+        Assert.Single(reloaded.DetailsBetween(day, day));
+
+        // Запись с другим Id — не дубль
+        reloaded.Record(Rec(ts, id: SpendMaintenanceService.BackfillId("cs1", 1)));
+        Assert.Equal(2, reloaded.DetailsBetween(day, day).Count);
+    }
+
+    [Fact]
+    public void BackfillId_ДетерминированПоСессииИИндексу()
+    {
+        Assert.Equal(SpendMaintenanceService.BackfillId("cs1", 0), SpendMaintenanceService.BackfillId("cs1", 0));
+        Assert.NotEqual(SpendMaintenanceService.BackfillId("cs1", 0), SpendMaintenanceService.BackfillId("cs1", 1));
+        Assert.NotEqual(SpendMaintenanceService.BackfillId("cs1", 0), SpendMaintenanceService.BackfillId("cs2", 0));
+        // Формат совпадает с Guid.ToString("N") живых записей
+        Assert.Equal(32, SpendMaintenanceService.BackfillId("cs1", 0).Length);
+    }
 
     [Fact]
     public void Spread_РаспределяетВнутриИнтервалаИНеПересекаетT0()

@@ -29,6 +29,9 @@ public sealed class SpendStore : ISpendCollector
     private readonly object _ioLock = new();
     // date(yyyy-MM-dd) → детальные записи дня; лок — на списке дня
     private readonly ConcurrentDictionary<string, List<SpendRecord>> _details = new();
+    // Id всех детальных записей (живёт синхронно с _details): дедуп повторного Record —
+    // прерванный backfill при рестарте пишет те же детерминированные Id, дубли не проходят
+    private readonly ConcurrentDictionary<string, byte> _ids = new();
     // Снапшот дневных агрегатов; при записи заменяется целиком (читатели без блокировок)
     private volatile Dictionary<string, List<DailySpendRow>> _daily = new();
 
@@ -68,6 +71,9 @@ public sealed class SpendStore : ISpendCollector
     {
         // Пустые записи не копим: ни токенов, ни генераций — аналитике нечего показать
         if (record.TotalTokens == 0 && record.Generations == 0) return;
+
+        // Дедуп по Id: повторный импорт той же записи (оборванный backfill) — тихий no-op
+        if (!_ids.TryAdd(record.Id, 0)) return;
 
         var date = record.Date.ToString("yyyy-MM-dd");
         var list = _details.GetOrAdd(date, _ => []);
@@ -153,7 +159,9 @@ public sealed class SpendStore : ISpendCollector
 
             foreach (var date in victims)
             {
-                _details.TryRemove(date, out _);
+                if (_details.TryRemove(date, out var removed))
+                    lock (removed)
+                        foreach (var r in removed) _ids.TryRemove(r.Id, out _);
                 try { File.Delete(TurnsPath(date)); }
                 catch (Exception ex) { _log?.LogWarning(ex, "spend: не удалить {Date} после rollup", date); }
             }
@@ -242,7 +250,8 @@ public sealed class SpendStore : ISpendCollector
                     if (string.IsNullOrWhiteSpace(line)) continue;
                     try
                     {
-                        if (JsonSerializer.Deserialize<SpendRecord>(line, JsonOpts) is { } r)
+                        // Дедуп по Id и при загрузке: дубли, записанные до появления дедупа, схлопываются
+                        if (JsonSerializer.Deserialize<SpendRecord>(line, JsonOpts) is { } r && _ids.TryAdd(r.Id, 0))
                             list.Add(r);
                     }
                     catch (JsonException) { /* битая строка (оборванный append) — пропускаем */ }

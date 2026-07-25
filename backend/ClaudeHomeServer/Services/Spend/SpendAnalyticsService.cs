@@ -106,7 +106,8 @@ public sealed class SpendAnalyticsService(SpendStore store, SessionManager sessi
 
     // --- обзор ---
 
-    public SpendOverviewDto Overview(DateOnly from, DateOnly to, SpendFilter f, bool allUsers)
+    public SpendOverviewDto Overview(DateOnly from, DateOnly to, SpendFilter f, bool allUsers,
+        string? currentUserId)
     {
         var slices = Slices(from, to, f);
         var acc = new Acc();
@@ -133,11 +134,13 @@ public sealed class SpendAnalyticsService(SpendStore store, SessionManager sessi
         cards["sources"] = Card(slices, "source");
         cards["providers"] = Card(slices, "provider");
 
+        // own — от текущего пользователя, а не от фильтра среза: у админа в scope=all
+        // f.Owner пуст, а при сужении user=X равен чужому владельцу (ревью Глеба, major-2)
         var topTurns = store.DetailsBetween(from, to)
             .Where(r => Match(r, f) && r.Source != SpendSources.Fal)
             .OrderByDescending(r => r.TotalTokens)
             .Take(TopTurnsLimit)
-            .Select(r => ToTurnDto(r, currentUserId: f.Owner))
+            .Select(r => ToTurnDto(r, currentUserId))
             .ToList();
 
         return new SpendOverviewDto(

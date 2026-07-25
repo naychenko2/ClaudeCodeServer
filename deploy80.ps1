@@ -16,6 +16,7 @@
       powershell -ExecutionPolicy Bypass -File deploy80.ps1 -SandboxNoCache # пересобрать песочницу начисто
       powershell -ExecutionPolicy Bypass -File deploy80.ps1 -Console        # старый режим: сервер прямым процессом (с консолью)
       powershell -ExecutionPolicy Bypass -File deploy80.ps1 -NoAutostart    # не трогать ярлык автозапуска
+      powershell -ExecutionPolicy Bypass -File deploy80.ps1 -IgnoreRunner   # деплоить при живом Runner (свой трей не поднимать)
       ... -PublishDir 'D:\deploy\claude' -AppUrl 'https://naychenko.me' -Port 80
 #>
 param(
@@ -25,6 +26,7 @@ param(
     [switch]$SandboxNoCache,   # пересобрать образ песочницы начисто (свежий claude CLI из npm)
     [switch]$Console,          # запускать сервер прямым процессом (старый режим), без трея
     [switch]$NoAutostart,      # не создавать/обновлять ярлык автозапуска трея
+    [switch]$IgnoreRunner,     # не прерываться из-за запущенного ClaudeCodeServerRunner
     [string]$PublishDir  = 'C:\deploy\claude',
     [string]$Environment = 'Production80',
     [string]$AppUrl      = 'https://naychenko.me',
@@ -43,6 +45,32 @@ $trayproj    = Join-Path $repo 'backend\ClaudeHomeServer.Tray\ClaudeHomeServer.T
 $env:ASPNETCORE_ENVIRONMENT = $Environment
 
 Write-Host "=== Деплой ClaudeCodeServer -> $PublishDir (env $Environment) ===" -ForegroundColor Cyan
+
+# --- 0. Оркестратор ClaudeCodeServerRunner (соседняя репа) ---
+# Runner — внешний трей-оркестратор стека (Proxifier -> продукт -> База знаний). Продукт он
+# держит СВОИМ супервизором, с авто-рестартом. Деплой поверх живого Runner ломается дважды:
+# на шаге 1 мы гасим ClaudeHomeServer.exe, Runner тут же поднимает его обратно и лочит файлы
+# публикации; а если дойти до конца — в трее окажутся два супервизора на одном порту 80.
+# Симптомы у обоих отвратительные, поэтому останавливаемся заранее и говорим прямо.
+# Сам Runner своё обновление от нашего трея уже страхует (у него он исключён из деплоя),
+# но обратной защиты не было: прямой запуск этого скрипта мимо Runner её и добавляет.
+$runner = @(Get-Process ClaudeServerTray -ErrorAction SilentlyContinue)
+$runnerActive = $runner.Count -gt 0
+if ($runnerActive -and -not $IgnoreRunner) {
+    Write-Host ''
+    Write-Host 'ОСТАНОВЛЕНО: запущен ClaudeCodeServerRunner (ClaudeServerTray.exe)' -ForegroundColor Red
+    Write-Host "  PID: $($runner.Id -join ', ')" -ForegroundColor DarkGray
+    Write-Host '  Он супервизит продукт и поднимет сервер обратно посреди публикации.' -ForegroundColor Yellow
+    Write-Host ''
+    Write-Host '  Выйди из Runner через меню трея и повтори деплой,' -ForegroundColor Yellow
+    Write-Host '  либо запусти с -IgnoreRunner: тогда свой трей-супервизор и ярлык' -ForegroundColor Yellow
+    Write-Host '  автозапуска ставиться не будут, а сервер поднимет сам Runner.' -ForegroundColor Yellow
+    Write-Host ''
+    exit 1
+}
+if ($runnerActive) {
+    Write-Host '[0/9] Runner запущен, но -IgnoreRunner задан: свой трей и автозапуск пропускаем' -ForegroundColor DarkYellow
+}
 
 # --- 1. Остановка запущенных процессов (снять локи файлов ДО публикации) ---
 # Трей глушим ПЕРВЫМ, чтобы его супервизор не перезапустил сервер, пока мы его убиваем.
@@ -160,7 +188,8 @@ if ($SkipSandbox) {
 }
 
 # --- 8. Автозапуск (ярлык трея в «Автозагрузке» текущего пользователя) + старт ---
-if (-not $Console -and -not $NoAutostart) {
+# При живом Runner ярлык не трогаем: два супервизора в «Автозагрузке» подняли бы сервер дважды.
+if (-not $Console -and -not $NoAutostart -and -not $runnerActive) {
     try {
         $startup = [Environment]::GetFolderPath('Startup')
         # Снести старый ярлык (переименование на «AI Home»)
@@ -182,6 +211,10 @@ if (-not $Console -and -not $NoAutostart) {
 
 if ($NoRestart) {
     Write-Host '[9/9] Запуск пропущен (-NoRestart)' -ForegroundColor DarkGray
+} elseif ($runnerActive) {
+    # Свой трей не поднимаем: продуктом управляет Runner, он же вернёт сервер после нашего стопа
+    Write-Host '[9/9] Свой трей не запускаем — продуктом управляет Runner' -ForegroundColor DarkYellow
+    Write-Host '      Подними сервер из его меню, если он не сделал этого сам.' -ForegroundColor DarkGray
 } elseif ($Console) {
     Write-Host '[9/9] Запуск сервера (консольный режим)...' -ForegroundColor Yellow
     Start-Process (Join-Path $PublishDir 'ClaudeHomeServer.exe') -WorkingDirectory $PublishDir
@@ -191,4 +224,8 @@ if ($NoRestart) {
 }
 
 Write-Host ''
-Write-Host 'Готово. Сервер запущен на порту 80.' -ForegroundColor Green
+if ($NoRestart -or $runnerActive) {
+    Write-Host 'Готово. Сборка опубликована, запуск сервера — за тобой.' -ForegroundColor Green
+} else {
+    Write-Host "Готово. Сервер запущен на порту $Port." -ForegroundColor Green
+}

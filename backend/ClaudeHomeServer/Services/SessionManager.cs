@@ -752,8 +752,13 @@ public class SessionManager : IDisposable
     // заголовку MCP-сервера: единственный достоверный источник — живой адаптер, тогда как
     // заголовок/env запекаются при старте процесса и протухают при переиспользовании прогона.
     // Чужая сессия или отсутствие процесса — «обычный ход» (запрет не применяется).
+    // Владение проверяем ТОЛЬКО через GetOwned (внутри — ResolveOwnerId): у проектной сессии
+    // Session.OwnerId равен null, владелец живёт у проекта. Прямое сравнение с этим полем молча
+    // отключало запрет, и делегированный ход спокойно запускал исполнителя — поймано live-тестом,
+    // юнит-тесты такое не видят. Один способ резолва владельца на весь класс.
     public TurnDelegationState GetActiveTurnDelegation(string sessionId, string ownerId) =>
-        _sessions.TryGetValue(sessionId, out var entry) && entry.Info.OwnerId == ownerId
+        GetOwned(sessionId, ownerId) is not null
+            && _sessions.TryGetValue(sessionId, out var entry)
             && entry.Process is { } adapter
             ? new TurnDelegationState(adapter.CurrentTurnAgentDepth, adapter.CurrentTurnSuppressTasksExecute)
             : new TurnDelegationState(0, false);

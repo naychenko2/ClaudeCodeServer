@@ -58,7 +58,6 @@ interface Props {
   agents?: AgentInfo[];
   attachedFiles: string[];
   onAttachedFilesChange: (files: string[]) => void;
-  onResume?: (message?: string) => void;
   // Тумблер панели «Артефакты сессии» в шапке (приходит только при включённом фич-флаге)
   artifactsOpen?: boolean;
   onToggleArtifacts?: () => void;
@@ -109,7 +108,7 @@ function derivePlanPhase(items: ChatItem[], mode: Mode, isWaiting: boolean): Pla
   return null;
 }
 
-export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, attachedFiles, onAttachedFilesChange, onResume, artifactsOpen, onToggleArtifacts, greetingBubble, headerIsland }: Props) {
+export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, attachedFiles, onAttachedFilesChange, artifactsOpen, onToggleArtifacts, greetingBubble, headerIsland }: Props) {
   const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, workLoop: liveWorkLoop, promptSuggestion, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, compact, toggleThinking, noteCompanionSwitch } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
   // Цикл «до готово» (флаг work-loop): live-состояние из событий work_loop,
   // до первого события — из Session.workLoop; null — цикл выключен
@@ -1140,8 +1139,11 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
           </div>
         )}
 
-        {/* Баннер прерванной сессии — в конце ленты, после истории */}
-        {session.status === 'orphaned' && !isHistoryLoading && (() => {
+        {/* Баннер прерванной сессии — в конце ленты, после истории. Возобновление — НА МЕСТЕ:
+            обычный ход «Продолжи» в эту же сессию (бэкенд резюмирует транскрипт через --resume),
+            чат сохраняет имя, историю и связь с родительским. Пока ход идёт (isWaiting), баннер
+            скрыт — статус orphaned снимет status_changed от сервера. */}
+        {session.status === 'orphaned' && !isHistoryLoading && !isWaiting && (() => {
           const hasPending = items.some(it =>
             (it.kind === 'ask_question' || it.kind === 'permission_request' || it.kind === 'plan_review')
             && !it.resolved
@@ -1169,26 +1171,24 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
                 </span>
                 <span style={{ fontSize: 13, lineHeight: 1.5, color: C.textSecondary, textAlign: 'center', maxWidth: 340 }}>
                   {hasPending
-                    ? 'Сервер перезапустился во время диалога. После возобновления ответьте на незакрытый запрос.'
+                    ? `Сервер перезапустился, не дождавшись вашего ответа — запрос устарел. Продолжите диалог, и ${asstName} при необходимости спросит снова.`
                     : `Диалог прервался при перезапуске сервера. ${asstName} продолжит с того же места.`}
                 </span>
               </div>
-              {onResume && (
-                <button
-                  onClick={() => onResume(hasPending ? undefined : 'Продолжи')}
-                  style={{
-                    display: 'inline-flex', alignItems: 'center', gap: 7,
-                    padding: '9px 22px', borderRadius: R.lg, fontSize: 13, fontWeight: 600,
-                    background: C.accent, border: 'none', cursor: 'pointer', color: C.onAccent,
-                    boxShadow: SHADOW.button, transition: 'opacity 0.12s',
-                  }}
-                  onMouseEnter={e => { e.currentTarget.style.opacity = '0.88'; }}
-                  onMouseLeave={e => { e.currentTarget.style.opacity = '1'; }}
-                >
-                  <RotateCw size={15} strokeWidth={2.2} />
-                  Возобновить
-                </button>
-              )}
+              <button
+                onClick={() => { atBottomRef.current = true; void send('Продолжи', [], mode); }}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 7,
+                  padding: '9px 22px', borderRadius: R.lg, fontSize: 13, fontWeight: 600,
+                  background: C.accent, border: 'none', cursor: 'pointer', color: C.onAccent,
+                  boxShadow: SHADOW.button, transition: 'opacity 0.12s',
+                }}
+                onMouseEnter={e => { e.currentTarget.style.opacity = '0.88'; }}
+                onMouseLeave={e => { e.currentTarget.style.opacity = '1'; }}
+              >
+                <RotateCw size={15} strokeWidth={2.2} />
+                Возобновить
+              </button>
             </div>
           );
         })()}

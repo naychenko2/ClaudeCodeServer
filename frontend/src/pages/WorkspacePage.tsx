@@ -905,14 +905,10 @@ const windowWidth = useWindowWidth();
     setPendingMessage(undefined);
   }, []);
 
-  const handleResume = useCallback(async (message?: string) => {
-    if (!activeSession || activeSession.status !== 'orphaned') return;
-    try {
-      const s = await api.sessions.create(project.id, activeSession.mode, activeSession.claudeSessionId ?? undefined, undefined, activeSession.model ?? undefined, activeSession.agentName ?? undefined);
-      await api.sessions.delete(project.id, activeSession.id);
-      handleSelectSession(s, message);
-    } catch { /* офлайн или сбой — ничего не меняем */ }
-  }, [activeSession, project.id]);
+  // Возобновление прерванного (orphaned) чата живёт внутри ChatPanel: обычный ход
+  // «Продолжи» в ту же сессию (--resume на бэкенде). Прежний путь «создать новый чат
+  // с resumeSessionId + удалить старый» терял имя, связь с задачей-родителем и стирал
+  // history.json общего ClaudeSessionId — чат выглядел только что созданным.
 
   // Запоминаем состояние окна (активный чат/файл, панели) для проекта
   useEffect(() => {
@@ -1339,7 +1335,7 @@ const windowWidth = useWindowWidth();
               // Чат + сессионная рельса в одной строке (пейн колоночный — нужна row-обёртка)
               <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden' }}>
                 <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-                  <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onBack={backFromChat} onWorkflowRunning={handleWorkflowRunning} skills={composerSkills} agents={skillsData?.agents} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} onResume={handleResume} />
+                  <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onBack={backFromChat} onWorkflowRunning={handleWorkflowRunning} skills={composerSkills} agents={skillsData?.agents} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} />
                 </div>
                 <RightPanelStack sessionOnly isMobile session={activeSession} projectId={project.id} rootPath={project.rootPath} />
               </div>
@@ -1408,7 +1404,6 @@ const windowWidth = useWindowWidth();
           agents={skillsData?.agents}
           attachedFiles={attachedFiles}
           onAttachedFilesChange={setAttachedFiles}
-          onResume={handleResume}
           openFile={openFile}
           openFileDiffMode={openFileDiffMode}
           gitStagePath={gitStagePath}
@@ -1577,7 +1572,7 @@ const windowWidth = useWindowWidth();
                 {showProjectBoard
                   ? ProjectBoardArea
                   : activeSession
-                  ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onWorkflowRunning={handleWorkflowRunning} onOpenSidebar={openSidebar} skills={composerSkills} agents={skillsData?.agents} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} onResume={handleResume} />
+                  ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onWorkflowRunning={handleWorkflowRunning} onOpenSidebar={openSidebar} skills={composerSkills} agents={skillsData?.agents} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} />
                   : NoSessionWithBar}
               </div>
             )}
@@ -1587,7 +1582,7 @@ const windowWidth = useWindowWidth();
               <div ref={splitContainerRef} style={{ flex: 1, display: 'flex', overflow: 'hidden', minWidth: 0 }}>
                 <div style={{ flex: chatFlex, overflow: 'hidden', minWidth: 200 }}>
                   {activeSession
-                    ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onWorkflowRunning={handleWorkflowRunning} onOpenSidebar={openSidebar} skills={composerSkills} agents={skillsData?.agents} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} onResume={handleResume} />
+                    ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onWorkflowRunning={handleWorkflowRunning} onOpenSidebar={openSidebar} skills={composerSkills} agents={skillsData?.agents} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} />
                     : NoSessionWithBar}
                 </div>
                 <Splitter orientation="v" active={draggingSplitter === 'split'}

@@ -52,7 +52,6 @@ interface Props {
   agents?: AgentInfo[];
   attachedFiles: string[];
   onAttachedFilesChange: (files: string[]) => void;
-  onResume: (message?: string) => void;
   // Центр: файл/коммит/задача, открытые из чата или диплинка
   openFile: string | null;
   openFileDiffMode: boolean;
@@ -190,7 +189,7 @@ export function DesktopWorkspace(p: Props) {
       pendingMessage={p.pendingMessage} onPendingMessageSent={p.onPendingMessageSent}
       onSessionUpdated={p.onSessionUpdated} isMobile={false} onWorkflowRunning={p.onWorkflowRunning}
       onOpenSidebar={openSidebar} skills={p.skills} agents={p.agents}
-      attachedFiles={p.attachedFiles} onAttachedFilesChange={p.onAttachedFilesChange} onResume={p.onResume}
+      attachedFiles={p.attachedFiles} onAttachedFilesChange={p.onAttachedFilesChange}
       headerIsland={headerIsland}
     />
   ) : (

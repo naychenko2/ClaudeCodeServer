@@ -3,7 +3,7 @@ import { X, AlertTriangle } from 'lucide-react';
 import { api } from '../lib/api';
 import type { UsageResponse, FalAccountResponse, UsageSnapshot, OllamaUsageInfo } from '../types';
 import { C, FONT, SHADOW } from '../lib/design';
-import { type RateWindow, RATE_COLORS, windowLabel, fmtReset, latestPerWindow, seriesByWindow, worstWindow } from '../lib/rateLimit';
+import { type RateWindow, RATE_COLORS, windowLabel, fmtReset, latestPerWindow, overageLabel, seriesByWindow, worstWindow } from '../lib/rateLimit';
 import { cliProviderKeys, providerCapsByKey, providerLabel } from '../lib/models';
 
 const STALE_MS = 30 * 60 * 1000;
@@ -70,7 +70,7 @@ function WindowCard({ w }: { w: RateWindow }) {
       <div style={{ fontSize: 11, color: C.textMuted, marginTop: w.hasUtil ? 0 : 12 }}>{sub}</div>
       {overage && (
         <div style={{ fontSize: 11, color: C.dangerText, marginTop: 4 }}>
-          {w.isUsingOverage ? <><AlertTriangle size={11} strokeWidth={2} style={{ verticalAlign: '-1px', marginRight: 3 }} />перерасход</> : `перерасход: ${w.overageStatus}`}
+          {w.isUsingOverage ? <><AlertTriangle size={11} strokeWidth={2} style={{ verticalAlign: '-1px', marginRight: 3 }} />идёт перерасход</> : overageLabel(w.overageStatus)}
           {w.overageResetsAt && ` · сброс ${fmtReset(w.overageResetsAt)}`}
         </div>
       )}

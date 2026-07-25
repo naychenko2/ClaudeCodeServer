@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { RateLimitInfo, UsageSnapshot } from '../../types';
-import { toRateWindows, worstWindow, fmtReset, windowLabel, latestPerWindow } from '../rateLimit';
+import { toRateWindows, worstWindow, fmtReset, windowLabel, latestPerWindow, overageLabel } from '../rateLimit';
 
 const win = (limitType: string, over: Partial<RateLimitInfo> = {}): RateLimitInfo =>
   ({ limitType, ...over });
@@ -177,5 +177,20 @@ describe('windowLabel', () => {
   it('незнакомое per-model окно получает читаемую подпись из ключа', () => {
     expect(windowLabel('seven_day_haiku')).toBe('Неделя · Haiku');
     expect(windowLabel('seven_day_new_model')).toBe('Неделя · New model');
+  });
+});
+
+describe('overageLabel', () => {
+  it('rejected → «перерасход недоступен»', () => {
+    expect(overageLabel('rejected')).toBe('перерасход недоступен');
+  });
+
+  it('allowed_warning → «перерасход почти исчерпан»', () => {
+    expect(overageLabel('allowed_warning')).toBe('перерасход почти исчерпан');
+  });
+
+  it('неизвестный статус или его отсутствие → «перерасход ограничен», сырой статус не утекает', () => {
+    expect(overageLabel('some_new_status')).toBe('перерасход ограничен');
+    expect(overageLabel(undefined)).toBe('перерасход ограничен');
   });
 });

@@ -30,6 +30,16 @@ export function windowLabel(type: string): string {
   return type || 'Лимит';
 }
 
+// Русские подписи статуса перерасхода — сырой статус API в UI не показываем
+const OVERAGE_LABELS: Record<string, string> = {
+  rejected: 'перерасход недоступен',
+  allowed_warning: 'перерасход почти исчерпан',
+};
+
+export function overageLabel(status?: string): string {
+  return OVERAGE_LABELS[status ?? ''] ?? 'перерасход ограничен';
+}
+
 // Цвета по уровню (из палитры design.ts): норма — нейтральный, внимание — янтарь, лимит — красный
 export const RATE_COLORS: Record<RateWindow['level'], { fill: string; text: string; bg: string; border: string }> = {
   normal: { fill: C.textMuted, text: C.textSecondary, bg: C.bgWhite, border: C.border },

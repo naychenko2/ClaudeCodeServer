@@ -2,6 +2,7 @@
 // чипы, иконки узлов. Только токены design.ts, инлайн-стили.
 import type { ReactNode, CSSProperties } from 'react';
 import { C, FONT, GROUP_COLORS, R } from '../../lib/design';
+import { Dot } from '../../components/ui';
 import type { SpendDim } from '../../lib/spend';
 
 // Детерминированный цвет аватара-инициала по строке (как у групп проектов)
@@ -37,10 +38,9 @@ export function KindTag({ meta }: { meta: string | null }) {
   );
 }
 
-// Цветная точка серии (источники)
-export function Dot({ color, size = 8 }: { color: string; size?: number }) {
-  return <span style={{ width: size, height: size, borderRadius: R.full, background: color, display: 'inline-block', flexShrink: 0 }} />;
-}
+// Цветная точка серии (источники) переехала в общие примитивы — здесь реэкспорт,
+// чтобы не переписывать импорты во всех потребителях spend
+export { Dot };
 
 // Иконка узла по разрезу
 export function nodeIcon(dim: SpendDim, name: string, meta: string | null, srcColor?: string): ReactNode {

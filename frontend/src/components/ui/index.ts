@@ -15,5 +15,6 @@ export { ConfirmDialog } from './ConfirmDialog';
 export { Field, FieldLabel, TextField, TextArea, IconField } from './Field';
 export { SegmentedControl } from './Segmented';
 export { Toggle } from './Toggle';
+export { Dot } from './Dot';
 export { BackButton } from './BackButton';
 export { WaitingIndicator } from './WaitingIndicator';

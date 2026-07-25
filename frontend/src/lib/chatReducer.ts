@@ -21,10 +21,26 @@ export interface ChatState {
   // Подсказка следующего сообщения — чип в композере.
   // Эфемерная: в историю не пишется, сбрасывается при отправке хода (в хуке).
   promptSuggestion: string | null;
+  // Сообщения агентов, ждущие конца текущего хода. Держим отдельно от items: сервер шлёт
+  // очередь полным снимком, и подмешивать её в ленту пришлось бы вставками-удалениями.
+  // Рендерятся «призраками» после ленты; в историю не попадают.
+  pending: PendingChatMessage[];
+}
+
+// Ожидающее доставки сообщение (снимок очереди сессии)
+export interface PendingChatMessage {
+  id: string;
+  text: string;
+  senderPersonaId?: string;
+  // Источник, если сообщение пришло из другого проекта / вне проектов — чип в карточке
+  senderOrigin?: string;
+  // Имя чата-отправителя — подпись, когда персоны у него нет
+  senderChatName?: string;
+  enqueuedAt: string;
 }
 
 export function initialChatState(): ChatState {
-  return { items: [], isWaiting: false, rateLimits: {}, isCompacting: false, promptSuggestion: null };
+  return { items: [], isWaiting: false, rateLimits: {}, isCompacting: false, promptSuggestion: null, pending: [] };
 }
 
 // Сообщение истории с сервера: сериализованный ChatItem без клиентских UI-полей
@@ -163,8 +179,14 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
         kind: 'user_message', text: msg.text,
         ...(msg.attachedPaths ? { attachedPaths: msg.attachedPaths } : {}),
         ...(msg.senderPersonaId ? { senderPersonaId: msg.senderPersonaId } : {}),
+        ...(msg.senderOrigin ? { senderOrigin: msg.senderOrigin } : {}),
         ...(msg.auto ? { auto: true } : {}),
       }]);
+
+    case 'pending_messages':
+      // Полный снимок очереди — заменяем целиком. Доставленное сообщение исчезает отсюда
+      // и приходит обратной стороной как обычный user_message.
+      return { ...prev, pending: msg.items };
 
     case 'guest_text':
       // Модель Z: гостевая реплика исполнителя-персоны, вставленная без агентского хода.

@@ -3,7 +3,7 @@ import type { ChatItem, ServerMessage, RateLimitInfo, WorkLoopState } from '../t
 import { joinSession, joinProject, leaveSession, onMessage, onReconnected, sendMessage, respondPermission, interruptSession, compactSession, answerQuestion as sendAnswer, respondPlan as sendPlanDecision, setMode as sendSetMode } from '../lib/signalr';
 import { setRecallManifest } from '../lib/recallManifest';
 import { api } from '../lib/api';
-import { applyServerMessage, normalizeHistory, serverHistoryNewer, initialChatState, type ChatState } from '../lib/chatReducer';
+import { applyServerMessage, normalizeHistory, serverHistoryNewer, initialChatState, type ChatState, type PendingChatMessage } from '../lib/chatReducer';
 
 // --- Модульный персистентный стор ---
 // Состояние живёт на уровне модуля и переживает переключение между сессиями.
@@ -245,7 +245,15 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
     };
   }, [sessionId, projectId, isGroup]);
 
-  const state = sessionId ? getState(sessionId) : { items: [] as ChatItem[], isWaiting: false, isJoined: false, isHistoryLoading: false, rateLimits: {} as Record<string, RateLimitInfo>, isCompacting: false, compactNote: undefined as string | undefined, workLoop: undefined as WorkLoopState | undefined, promptSuggestion: null as string | null };
+  const state = sessionId ? getState(sessionId) : { items: [] as ChatItem[], isWaiting: false, isJoined: false, isHistoryLoading: false, rateLimits: {} as Record<string, RateLimitInfo>, isCompacting: false, compactNote: undefined as string | undefined, workLoop: undefined as WorkLoopState | undefined, promptSuggestion: null as string | null, pending: [] as PendingChatMessage[] };
+
+  // Снять сообщение из очереди (крестик на карточке-призраке). Ответ сервера придёт
+  // событием pending_messages — локально состояние не правим, чтобы не разъехалось.
+  const cancelPending = useCallback(async (messageId: string) => {
+    if (!sessionId) return;
+    try { await api.sessions.cancelPending(sessionId, messageId); }
+    catch { /* уже доставлено или сеть — снимок от сервера всё поправит */ }
+  }, [sessionId]);
 
   const send = useCallback(async (text: string, attachedPaths: string[] = [], mode?: string, opts?: { auto?: boolean }) => {
     if (!sessionId) return;
@@ -420,5 +428,5 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
     sendSetMode(sessionId, mode).catch(() => {});
   }, [sessionId]);
 
-  return { items: state.items, isWaiting: state.isWaiting, isJoined: state.isJoined, isHistoryLoading: state.isHistoryLoading, rateLimits: state.rateLimits, isCompacting: state.isCompacting, compactNote: state.compactNote, workLoop: state.workLoop, promptSuggestion: state.promptSuggestion, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, compact, toggleThinking, noteCompanionSwitch, changeMode };
+  return { items: state.items, isWaiting: state.isWaiting, isJoined: state.isJoined, isHistoryLoading: state.isHistoryLoading, rateLimits: state.rateLimits, isCompacting: state.isCompacting, compactNote: state.compactNote, workLoop: state.workLoop, promptSuggestion: state.promptSuggestion, pending: state.pending, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, compact, toggleThinking, noteCompanionSwitch, changeMode, cancelPending };
 }

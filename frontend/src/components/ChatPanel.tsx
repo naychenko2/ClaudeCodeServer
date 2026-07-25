@@ -35,6 +35,7 @@ import { AttachPicker } from './chat/AttachPicker';
 import { ToolGroupBlock, AgentActionsBlock, itemKey, type ActivityEntry } from './chat/timeline';
 import { splitAgentResultTail } from '../lib/agentTail';
 import { ChatItemView, FileChangedRow } from './chat/ChatItemView';
+import { PendingMessageList } from './chat/PendingMessageView';
 import { type ToolUseItem } from './chat/ToolUseView';
 import { extractMediaFromResult } from './chat/MediaBlock';
 import { isTasksCreate } from './chat/TaskCreatedView';
@@ -109,7 +110,7 @@ function derivePlanPhase(items: ChatItem[], mode: Mode, isWaiting: boolean): Pla
 }
 
 export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, attachedFiles, onAttachedFilesChange, artifactsOpen, onToggleArtifacts, greetingBubble, headerIsland }: Props) {
-  const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, workLoop: liveWorkLoop, promptSuggestion, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, compact, toggleThinking, noteCompanionSwitch } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
+  const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, workLoop: liveWorkLoop, promptSuggestion, pending, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, compact, toggleThinking, noteCompanionSwitch, cancelPending } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
   // Цикл «до готово» (флаг work-loop): live-состояние из событий work_loop,
   // до первого события — из Session.workLoop; null — цикл выключен
   const workLoopState = useMemo<WorkLoopState | null>(() => {
@@ -1138,6 +1139,11 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
             <WaitingIndicator planning={planningKind} awaitingResponse={awaitingResponse} />
           </div>
         )}
+
+        {/* Сообщения агентов, ждущие конца хода: в самом низу ленты — они придут следующими.
+            Живут только в памяти сервера, в истории их нет; крестик снимает доставку. */}
+        <PendingMessageList items={pending} isMobile={isMobile}
+          onCancel={online ? cancelPending : undefined} />
 
         {/* Баннер прерванной сессии — в конце ленты, после истории. Возобновление — НА МЕСТЕ:
             обычный ход «Продолжи» в эту же сессию (бэкенд резюмирует транскрипт через --resume),

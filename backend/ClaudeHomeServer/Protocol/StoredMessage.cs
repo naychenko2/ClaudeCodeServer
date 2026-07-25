@@ -19,8 +19,14 @@ namespace ClaudeHomeServer.Protocol;
 public abstract class StoredMessage { }
 
 public class StoredUserMessage(string text, string[]? attachedPaths = null, bool? viaAgent = null,
-    string? senderPersonaId = null, bool? systemDirective = null, bool? auto = null) : StoredMessage
+    string? senderPersonaId = null, bool? systemDirective = null, bool? auto = null,
+    string? senderOrigin = null) : StoredMessage
 {
+    // Источник входящего сообщения, когда оно пришло ИЗ ДРУГОГО места: имя чужого проекта
+    // либо «Вне проектов». Заполняет сервер, сравнив проекты отправителя и получателя;
+    // null — источник тот же, чип в UI не нужен
+    public string? SenderOrigin { get; init; } = senderOrigin;
+
     public string Text { get; init; } = text;
     public string[]? AttachedPaths { get; init; } = attachedPaths;
     // Сообщение прислано не человеком, а агентом из другой сессии (chats_send) — для пометки в UI

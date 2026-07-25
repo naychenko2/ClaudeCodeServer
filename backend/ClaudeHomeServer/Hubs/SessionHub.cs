@@ -81,6 +81,12 @@ public class SessionHub : Hub
         // без replay клиент после F5 видел бы лишь «Claude печатает…» без возможности ответить
         if (_sessions.GetPendingInteraction(sessionId) is { } pending)
             await Clients.Caller.SendAsync("message", pending with { SessionId = sessionId });
+
+        // Очередь сообщений от агентов, ждущих конца хода: живёт только в памяти сервера,
+        // в историю не пишется — без replay подключившийся клиент не увидел бы их вовсе
+        if (_sessions.GetVisiblePending(sessionId) is { Count: > 0 } queued)
+            await Clients.Caller.SendAsync("message",
+                new PendingMessagesMessage(queued) with { SessionId = sessionId });
     }
 
     public async Task LeaveSession(string sessionId)

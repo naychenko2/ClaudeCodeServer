@@ -503,6 +503,149 @@ public class SessionManagerTests : IDisposable
         _sut.SetExpiry("nonexistent", 60).Should().BeNull();
     }
 
+    // --- Очередь сообщений занятой сессии (chats_send в идущий ход) ---
+
+    // Сессия «занята»: статус выставляем напрямую — поднимать реальный ход claude.exe
+    // в юнит-тесте нечем, а проверка занятости смотрит именно на Info.Status
+    private async Task<Session> MkBusySessionAsync(string suffix, SessionStatus status = SessionStatus.Working)
+    {
+        var dir = MkProjectDir("q_" + suffix);
+        var project = _projectManager.Create("Q-" + suffix, dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        session.Status = status;
+        return session;
+    }
+
+    [Theory]
+    [InlineData(SessionStatus.Working)]
+    [InlineData(SessionStatus.Waiting)]
+    public async Task SendMessageAndWait_ЗанятаяСессия_СообщениеВОчередьАНеОтказ(SessionStatus status)
+    {
+        // Раньше сюда прилетал Busy → 409, и сообщение агента терялось
+        var session = await MkBusySessionAsync("busy" + status, status);
+
+        var result = await _sut.SendMessageAndWaitAsync(session.Id, "привет из другого чата",
+            TimeSpan.FromSeconds(5));
+
+        result.Should().BeOfType<SendAndWaitResult.Queued>()
+            .Which.Position.Should().Be(1);
+        _sut.GetPending(session.Id).Should().ContainSingle()
+            .Which.Text.Should().Be("привет из другого чата");
+    }
+
+    [Fact]
+    public async Task SendMessageAndWait_ОдинаковыйТекстОтТогоЖеОтправителя_НеДублируется()
+    {
+        // Прежний контракт chats_send советовал ретраить при отказе — наивный агент
+        // насыпал бы очередь копиями одного сообщения
+        var session = await MkBusySessionAsync("dup");
+        await _sut.SendMessageAndWaitAsync(session.Id, "повтор", TimeSpan.Zero, senderPersonaId: "p-1");
+
+        var again = await _sut.SendMessageAndWaitAsync(session.Id, "повтор", TimeSpan.Zero, senderPersonaId: "p-1");
+
+        again.Should().BeOfType<SendAndWaitResult.Queued>().Which.Duplicate.Should().BeTrue();
+        _sut.GetPending(session.Id).Should().HaveCount(1);
+    }
+
+    [Fact]
+    public async Task SendMessageAndWait_ТотЖеТекстОтДругогоОтправителя_ЭтоРазныеСообщения()
+    {
+        var session = await MkBusySessionAsync("dup2");
+        await _sut.SendMessageAndWaitAsync(session.Id, "готово?", TimeSpan.Zero, senderPersonaId: "p-1");
+
+        await _sut.SendMessageAndWaitAsync(session.Id, "готово?", TimeSpan.Zero, senderPersonaId: "p-2");
+
+        _sut.GetPending(session.Id).Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task SendMessageAndWait_ПереполненнаяОчередь_Отклоняет()
+    {
+        var session = await MkBusySessionAsync("full");
+        for (var i = 0; i < 10; i++)
+            await _sut.SendMessageAndWaitAsync(session.Id, $"сообщение {i}", TimeSpan.Zero);
+
+        var overflow = await _sut.SendMessageAndWaitAsync(session.Id, "лишнее", TimeSpan.Zero);
+
+        overflow.Should().BeOfType<SendAndWaitResult.QueueFull>().Which.Limit.Should().Be(10);
+        _sut.GetPending(session.Id).Should().HaveCount(10, "лишнее не должно вытеснять принятое");
+    }
+
+    [Fact]
+    public async Task SendMessageAndWait_ОчередьХранитИсточникИОтправителя()
+    {
+        var session = await MkBusySessionAsync("meta");
+
+        await _sut.SendMessageAndWaitAsync(session.Id, "из соседнего проекта", TimeSpan.Zero,
+            senderPersonaId: "p-9", senderOrigin: "Проект Альфа");
+
+        var queued = _sut.GetPending(session.Id).Should().ContainSingle().Subject;
+        queued.SenderPersonaId.Should().Be("p-9");
+        queued.SenderOrigin.Should().Be("Проект Альфа");
+        queued.Id.Should().NotBeNullOrEmpty();
+    }
+
+    [Fact]
+    public async Task CancelPending_СнимаетСообщениеИзОчереди()
+    {
+        var session = await MkBusySessionAsync("cancel");
+        await _sut.SendMessageAndWaitAsync(session.Id, "первое", TimeSpan.Zero);
+        await _sut.SendMessageAndWaitAsync(session.Id, "второе", TimeSpan.Zero);
+        var first = _sut.GetPending(session.Id)[0];
+
+        (await _sut.CancelPendingAsync(session.Id, first.Id)).Should().BeTrue();
+
+        _sut.GetPending(session.Id).Should().ContainSingle().Which.Text.Should().Be("второе");
+        (await _sut.CancelPendingAsync(session.Id, first.Id)).Should().BeFalse("повторная отмена — уже нечего снимать");
+    }
+
+    [Fact]
+    public async Task Interrupt_ГаситОчередь()
+    {
+        // «Стоп» останавливает всё: иначе сразу после прерывания хлынул бы следующий ход
+        var session = await MkBusySessionAsync("interrupt");
+        await _sut.SendMessageAndWaitAsync(session.Id, "не доставлять", TimeSpan.Zero);
+
+        _sut.Interrupt(session.Id);
+
+        _sut.GetPending(session.Id).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void GetPending_НесуществующаяСессия_Пусто()
+    {
+        _sut.GetPending("nonexistent").Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task SendOrEnqueue_ЗанятыйЧат_ОткладываетСлужебныйХодИНеПоказываетПризрак()
+    {
+        // Доклад исполнителя (модель Z): его текст уже лежит в ленте гостевой репликой,
+        // поэтому ход-реакция откладывается молча — призрак дублировал бы служебный промпт
+        var session = await MkBusySessionAsync("silent");
+
+        var deferred = await _sut.SendOrEnqueueAsync(session.Id, "отреагируй на отчёт",
+            senderPersonaId: "delegator-1", silent: true, suppressTasksExecute: true);
+
+        deferred.Should().BeTrue();
+        var queued = _sut.GetPending(session.Id).Should().ContainSingle().Subject;
+        queued.Silent.Should().BeTrue();
+        queued.SuppressTasksExecute.Should().BeTrue("иначе постановщик самозапустит задачу и закольцует A↔B");
+        _sut.GetVisiblePending(session.Id).Should().BeEmpty("служебный ход призраком не показываем");
+    }
+
+    [Fact]
+    public async Task GetVisiblePending_ОбычноеСообщение_Видно()
+    {
+        var session = await MkBusySessionAsync("visible");
+
+        await _sut.SendMessageAndWaitAsync(session.Id, "привет", TimeSpan.Zero, senderOrigin: "Проект Бета");
+
+        var visible = _sut.GetVisiblePending(session.Id).Should().ContainSingle().Subject;
+        visible.Text.Should().Be("привет");
+        visible.SenderOrigin.Should().Be("Проект Бета");
+    }
+
     // --- SetParent: ручная группировка чатов (drag-and-drop) ---
 
     [Fact]

@@ -506,8 +506,8 @@ const SECTION_TOOLS = {
       name: 'chats_send',
       description: 'Отправить сообщение в СУЩЕСТВУЮЩИЙ чат — полный ход, результат виден пользователю в ленте. ' +
         'Для быстрого вопроса персоне без чата используй persona_ask. wait="turn" (дефолт) ждёт ответ до timeoutSec; ' +
-        'wait="none" — не ждать (результат позже через chats_history). Ответ busy — сессия занята: ' +
-        'не ретраить чаще раза в 30 секунд и не более 2 раз.',
+        'wait="none" — не ждать (результат позже через chats_history). Ответ queued — чат был занят, ' +
+        'сообщение ПРИНЯТО и уйдёт само после текущего хода: не отправляй повторно, ответ смотри через chats_history.',
       inputSchema: {
         type: 'object',
         required: ['sessionId', 'text'],
@@ -922,9 +922,9 @@ async function callTool(name, args) {
         }),
       });
       const body = await res.json().catch(() => null);
-      // 200 completed / 202 running / 409 busy — все три отдаём модели как результат
-      // (busy содержит hint про ретраи, модель решает сама)
-      if (res.ok || res.status === 202 || res.status === 409)
+      // 200 completed / 202 running|queued / 409 busy / 429 queue_full — отдаём модели как
+      // результат: в теле есть status и hint, решение (ждать/не ретраить) принимает она
+      if (res.ok || res.status === 202 || res.status === 409 || res.status === 429)
         return json(body ?? { status: res.status });
       if (res.status === 404) throw new Error(`Сессия ${sessionId} не найдена`);
       throw new Error(`HTTP ${res.status}: ${body ? JSON.stringify(body) : ''}`);

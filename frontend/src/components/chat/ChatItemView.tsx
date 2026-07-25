@@ -11,6 +11,7 @@ import { TeamTurnRequest } from '../../features/team/TeamTurnCard';
 import { ChatProjectContext, PersonaContext, useAssistantName } from './contexts';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { AGENT_COLORS } from '../AgentSelector';
+import { MessageOriginChip } from '../MessageOriginChip';
 import { getPersonaById, usePersonasVersion, personaLabel, ensurePersonasLoaded } from '../../lib/personas';
 import { IconNotes } from '../../features/notes/shared';
 import { saveChatNote, openNoteById } from '../../features/notes/saveToNote';
@@ -359,8 +360,11 @@ const AGENT_NEUTRAL = '#8A8070';
 // Сообщение с источником (не от человека): входящее от персоны через chats_send, либо
 // авто-публикация — совещание/конвейер/задача. Карточка с лицом автора (персона или
 // стандартный значок) и телом в Markdown — вместо безликого пузыря пользователя.
-function AgentMessageView({ text, persona, neutralTitle = 'Агент', note }: {
+function AgentMessageView({ text, persona, neutralTitle = 'Агент', note, origin }: {
   text: string; persona: Persona | null; neutralTitle?: string; note?: string;
+  // Откуда прилетело, если из другого места (чужой проект / вне проектов) — чип в шапке.
+  // Считает сервер: у сообщения из того же контекста поля нет и чип не рисуется.
+  origin?: string;
 }) {
   // В не-персон-чате стор мог быть не загружен — подтягиваем, чтобы резолвить лицо автора
   useEffect(() => { void ensurePersonasLoaded(); }, []);
@@ -397,6 +401,8 @@ function AgentMessageView({ text, persona, neutralTitle = 'Агент', note }: 
           {persona?.handle && (
             <span style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textMuted }}>@{persona.handle}</span>
           )}
+          {/* Чип-источник: сообщение пришло из другого проекта либо вне проектов */}
+          {origin && <MessageOriginChip origin={origin} />}
         </div>
         {note && <span style={{ fontSize: 11, color: C.textMuted, flexShrink: 0 }}>{note}</span>}
       </div>
@@ -567,8 +573,8 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       if (item.viaAgent || (item.auto && !teamMech)) {
         const sender = item.senderPersonaId ? (getPersonaById(item.senderPersonaId) ?? null) : null;
         return item.viaAgent
-          ? <AgentMessageView text={item.text} persona={sender} note="прислал(а) в чат" />
-          : <AgentMessageView text={item.text} persona={sender} neutralTitle="Автоматически" />;
+          ? <AgentMessageView text={item.text} persona={sender} note="прислал(а) в чат" origin={item.senderOrigin} />
+          : <AgentMessageView text={item.text} persona={sender} neutralTitle="Автоматически" origin={item.senderOrigin} />;
       }
       return (
         <div style={{ alignSelf: 'flex-end', maxWidth: '80%', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>

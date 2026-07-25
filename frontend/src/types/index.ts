@@ -464,7 +464,7 @@ export interface StoredWorkflowProgress {
 export type ServerMessage = { sessionId: string } & (
   | { type: 'session_started'; claudeSessionId: string; isResume: boolean; model: string; mode: string; cwd?: string; toolCount?: number; mcpServers?: { name: string; status: string }[] }
   | { type: 'text_delta'; text: string }
-  | { type: 'user_message'; text: string; attachedPaths?: string[]; senderPersonaId?: string; auto?: boolean }
+  | { type: 'user_message'; text: string; attachedPaths?: string[]; senderPersonaId?: string; auto?: boolean; senderOrigin?: string }
   // Гостевая реплика персоны без агентского хода (0 токенов) — доклад о завершении
   // делегированной задачи (модель Z); маркер доклада распознаётся на рендере (см.
   // lib/delegationReport.ts). Живой аналог StoredTextMessage.PersonaId из истории.
@@ -518,6 +518,8 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'preview_status'; status: string; port?: number; error?: string; serviceId?: string }
   | { type: 'notification'; title: string; body: string; url?: string; kind: 'reminder' | 'claude' | 'info' | 'success' | 'meeting'; notificationId?: string; notifType?: string; projectId?: string; sessionId?: string; taskId?: string; source?: string; tag?: string; personaId?: string; personaName?: string; personaRole?: string; personaColor?: string; personaHasAvatar?: boolean; projectName?: string }
   | { type: 'recall_manifest'; items: RecallItem[] }
+  // Полный снимок очереди сообщений занятой сессии (постановка/отмена/доставка)
+  | { type: 'pending_messages'; items: { id: string; text: string; senderPersonaId?: string; senderOrigin?: string; enqueuedAt: string; senderChatName?: string }[] }
   // Подсказка следующего сообщения — чип в композере
   | { type: 'prompt_suggestion'; text: string }
 );
@@ -684,7 +686,9 @@ export type ChatItem =
   // senderPersonaId — персона-автор (рендерим сообщение её лицом);
   // systemDirective — служебная директива цикла «до готово» (компактная плашка вместо пузыря);
   // auto — опубликовано автоматически (не человеком): командная механика/задача — показываем источник
-  | { kind: 'user_message'; text: string; attachedPaths?: string[]; viaAgent?: boolean; senderPersonaId?: string; systemDirective?: boolean; auto?: boolean }
+  // senderOrigin — источник входящего сообщения, если он в ДРУГОМ месте (имя чужого проекта
+  // либо «Вне проектов»): рисуем чипом, чтобы было видно, откуда прилетело. Считает сервер.
+  | { kind: 'user_message'; text: string; attachedPaths?: string[]; viaAgent?: boolean; senderPersonaId?: string; systemDirective?: boolean; auto?: boolean; senderOrigin?: string }
   | { kind: 'session_started'; model: string; mode: string; cwd?: string; toolCount?: number; mcpServers?: { name: string; status: string }[] }
   // personaId — авторство реплики (персона на момент хода); после смены собеседника
   // старые реплики сохраняют прежний аватар. Отсутствует у обычного ассистента.

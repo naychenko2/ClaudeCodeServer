@@ -18,7 +18,12 @@ import { createInterface } from 'node:readline';
 const API_URL = (process.env.TASKS_API_URL ?? 'http://localhost:5000').replace(/\/$/, '');
 const API_TOKEN = process.env.TASKS_API_TOKEN ?? '';
 const PROJECT_ID = process.env.TASKS_PROJECT_ID || null;
-const EXECUTE_ENABLED = process.env.TASKS_EXECUTE === '1';
+// tasks_run_executor подключён ВСЕГДА (состав инструментов не зависит от хода): можно ли
+// запускать исполнителя ИМЕННО СЕЙЧАС, решает бэкенд по идущему ходу вызывающей сессии
+// ([DenyOnDelegatedTurn] на /api/tasks/{id}/execute). Переменная осталась аварийным
+// рубильником для прямых запусков сервера и выключается только явным "0" — при пустом env
+// инструмент обязан быть на месте, иначе состав «мерцает» и процесс CLI перезапускается.
+const EXECUTE_ENABLED = process.env.TASKS_EXECUTE !== '0';
 const SESSION_ID = process.env.TASKS_SESSION_ID || null;
 const SELF_PERSONA_ID = process.env.TASKS_SELF_PERSONA_ID || null;
 const EXTRA_PROJECT_IDS = new Set((process.env.TASKS_EXTRA_PROJECT_IDS || '').split(',').map(s => s.trim()).filter(Boolean));
@@ -518,7 +523,9 @@ async function callTool(name, args) {
     }
 
     case 'tasks_run_executor': {
-      if (!EXECUTE_ENABLED) throw new Error('tasks_run_executor недоступен на этом ходу');
+      // Аварийный рубильник прямого запуска (TASKS_EXECUTE="0"); в продукте запрет по ходу
+      // приходит от бэкенда — 403 с объяснением, почему запуск сейчас невозможен
+      if (!EXECUTE_ENABLED) throw new Error('tasks_run_executor выключен на этом сервере (TASKS_EXECUTE=0)');
       const t = await api(`/api/tasks/${args.taskId}/execute`, { method: 'POST' });
       return json({
         id: t.id,

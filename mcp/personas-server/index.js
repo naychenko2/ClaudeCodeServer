@@ -14,11 +14,10 @@
 //                         bindings/autoBindings в personas_create/personas_update
 //   PERSONAS_WRITE      — "0" = скрыть write-инструменты управления персонами (create/update/
 //                         delete, bindings_set, automation_create/update/delete/test,
-//                         generate_avatar). ClaudeSession выключает их на ходах, не связанных
-//                         с управлением командой, чтобы тяжёлые схемы (PERSONA_FIELDS/
-//                         AUTOMATION_FIELDS ~основная масса контекста сервера) не грузились
-//                         каждый ход. Read/ask-инструменты остаются всегда. Дефолт — включено
-//                         (обратная совместимость прямых запусков); выключается только явным "0".
+//                         generate_avatar). Аварийный рубильник прямых запусков: ClaudeSession
+//                         шлёт "1" ВСЕГДА — состав инструментов не имеет права зависеть от хода
+//                         (иначе процесс CLI перезапускается со всеми MCP, а personas_create
+//                         «пропадает»). Права персоны режут Persona.Tools/ExtraDisallowedTools.
 //   PERSONAS_EXTRA_PROJECT_IDS  — CSV id проектов из кросс-проектных привязок ProjectPersonas
 //                         текущей персоны: вся их команда видна в personas_list(scope=context)
 //                         и резолвится по handle в persona_ask (в дополнение к своему контексту)
@@ -508,7 +507,7 @@ function contractFrom(args) {
   return Object.keys(c).length ? c : null;
 }
 
-// Write-инструменты управления персонами — скрыты при PERSONAS_WRITE="0" (гейт по интенту хода)
+// Write-инструменты управления персонами — скрыты только при явном PERSONAS_WRITE="0"
 const WRITE_TOOLS = new Set([
   'personas_create', 'personas_update', 'personas_delete', 'personas_bindings_set',
   'personas_automation_create', 'personas_automation_update', 'personas_automation_delete',

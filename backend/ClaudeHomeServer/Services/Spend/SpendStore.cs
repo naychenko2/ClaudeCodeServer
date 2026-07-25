@@ -67,6 +67,21 @@ public sealed class SpendStore : ISpendCollector
     // Первый день детального окна (включительно): сегодня и (DetailDays-1) дней назад
     public DateOnly WindowStart => DateOnly.FromDateTime(DateTime.UtcNow).AddDays(-(DetailDays - 1));
 
+    // Самая ранняя дата с данными (детали и агрегаты); null — стор пуст.
+    // Для клампа периода API: раньше первой записи ходить незачем.
+    public DateOnly? EarliestDate
+    {
+        get
+        {
+            DateOnly? min = null;
+            foreach (var key in _details.Keys)
+                if (DateOnly.TryParse(key, out var d) && (min is null || d < min)) min = d;
+            foreach (var key in _daily.Keys)
+                if (DateOnly.TryParse(key, out var d) && (min is null || d < min)) min = d;
+            return min;
+        }
+    }
+
     public void Record(SpendRecord record)
     {
         // Пустые записи не копим: ни токенов, ни генераций — аналитике нечего показать

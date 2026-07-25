@@ -35,6 +35,7 @@ public class AppSettingsService
             {
                 DefaultProjectsPath = _configDefault,
                 ClaudeBilling = string.IsNullOrWhiteSpace(_settings.ClaudeBilling) ? "subscription" : _settings.ClaudeBilling,
+                DailyBriefingEnabled = _settings.DailyBriefingEnabled ?? true,
             };
         }
     }
@@ -45,7 +46,13 @@ public class AppSettingsService
         {
             // Персистим только редактируемые поля; DefaultProjectsPath намеренно НЕ сохраняем
             // (иначе резолвнутое значение осело бы в файле и затенило конфиг после смены среды).
-            _settings = new AppSettings { ClaudeBilling = settings.ClaudeBilling };
+            // Патч-семантика: null = «поле не прислали, оставить прежним» (см. комментарий
+            // к AppSettings) — экран правит свою настройку, не зная про остальные.
+            _settings = new AppSettings
+            {
+                ClaudeBilling = settings.ClaudeBilling ?? _settings.ClaudeBilling,
+                DailyBriefingEnabled = settings.DailyBriefingEnabled ?? _settings.DailyBriefingEnabled,
+            };
             Directory.CreateDirectory(Path.GetDirectoryName(_storePath)!);
             File.WriteAllText(_storePath, JsonSerializer.Serialize(_settings));
         }

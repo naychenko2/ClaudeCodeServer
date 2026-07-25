@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Аналитика трат v2 — Вариант B «Инспектор»</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=PT+Serif:wght@400;700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+/* Токены темы — копия frontend/src/lib/theme.css. Шкалы design.ts (FS/SP/R/ISLAND). */
+:root{
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5; --c-accent-soft:#E8A990;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-divider:#DDD4C4; --c-track:#D8CFBE;
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --c-plan:#6C5CB0; --c-plan-light:#EEEBF8; --c-plan-text:#4E4196;
+  --c-nav-ink:#2A251F; --c-on-nav-ink:#F4ECE1;
+  --shadow-card:0 2px 8px rgba(60,50,35,.05);
+  --shadow-island:0 1px 2px rgba(60,50,35,.06),0 6px 20px rgba(60,50,35,.10);
+  --shadow-dropdown:0 8px 28px rgba(60,50,35,.16);
+  --shadow-sheet:0 -8px 40px rgba(23,19,15,.22);
+}
+:root[data-theme="dark"]{
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C; --c-accent-soft:#9A5E48;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-divider:#454037; --c-track:#453F37;
+  --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --c-plan:#9385D8; --c-plan-light:#2A2540; --c-plan-text:#B0A4E6;
+  --c-nav-ink:#EDE6DB; --c-on-nav-ink:#201C18;
+  --shadow-card:0 2px 10px rgba(0,0,0,.35);
+  --shadow-island:0 1px 2px rgba(0,0,0,.30),0 8px 24px rgba(0,0,0,.45);
+  --shadow-dropdown:0 10px 32px rgba(0,0,0,.55);
+  --shadow-sheet:0 -10px 46px rgba(0,0,0,.55);
+}
+:root{ --src-turns:var(--c-accent); --src-oneshot:var(--c-info); --src-fal:var(--c-plan); --src-free:var(--c-success); }
+
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--c-bg-main);color:var(--c-text-primary);font-family:'Hanken Grotesk',-apple-system,'Segoe UI',sans-serif;font-size:13px}
+.mono{font-family:'JetBrains Mono',monospace}
+
+.proto-bar{position:sticky;top:0;z-index:100;display:flex;align-items:center;gap:12px;padding:10px 16px;background:var(--c-nav-ink);color:var(--c-on-nav-ink)}
+.proto-bar h1{font-size:14px;font-weight:600}
+.proto-bar .tag{font-size:11px;opacity:.7}
+.proto-bar button{margin-left:auto;background:none;border:1px solid var(--c-on-nav-ink);color:var(--c-on-nav-ink);border-radius:999px;padding:4px 14px;font-size:12px;cursor:pointer;font-family:inherit}
+.section{max-width:1180px;margin:0 auto;padding:32px 16px 8px}
+.section>h2{font-family:'PT Serif',serif;font-size:22px;color:var(--c-text-heading);margin-bottom:4px}
+.section>p.note{font-size:12px;color:var(--c-text-secondary);margin-bottom:16px;max-width:760px}
+
+.island{background:var(--c-bg-panel);border:1px solid var(--c-border-light);border-radius:14px;box-shadow:var(--shadow-island);overflow:hidden}
+.island-head{display:flex;align-items:center;gap:8px;height:44px;padding:0 16px;background:var(--c-bg-inset);border-bottom:1px solid var(--c-border-light);flex-wrap:wrap}
+.island-head .ttl{font-family:'PT Serif',serif;font-size:16px;font-weight:700;color:var(--c-text-heading)}
+.badge-window{display:inline-flex;align-items:center;gap:6px;font-size:11px;padding:3px 10px;border-radius:999px;background:var(--c-info-bg);color:var(--c-info)}
+.pill-tabs{display:inline-flex;background:var(--c-bg-selected);border-radius:9px;padding:2px}
+.pill-tabs .pt{font-size:12px;padding:4px 12px;border-radius:7px;cursor:pointer;color:var(--c-text-secondary);border:none;background:none;font-family:inherit}
+.pill-tabs .pt.on{background:var(--c-bg-white);color:var(--c-text-heading);font-weight:600;box-shadow:0 1px 3px rgba(42,37,31,.12)}
+.chip{display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:3px 10px;border-radius:999px;border:1px solid var(--c-border);color:var(--c-text-secondary);background:var(--c-bg-card);cursor:pointer;white-space:nowrap}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none}
+
+/* ---- Двухпанельная раскладка ---- */
+.split{display:grid;grid-template-columns:minmax(380px,7fr) minmax(320px,5fr);min-height:520px}
+.tree-pane{border-right:1px solid var(--c-border-light);display:flex;flex-direction:column}
+.detail-pane{background:var(--c-bg-card)}
+
+/* ---- Дерево ---- */
+.tree{padding:10px 8px 16px;overflow:auto}
+.tnode{border-radius:10px;margin-bottom:2px}
+.trow{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:10px;cursor:pointer;position:relative}
+.trow:hover{background:var(--c-bg-selected)}
+.trow.sel{background:var(--c-accent-light);outline:1px solid var(--c-accent-muted)}
+.trow .tw{width:14px;text-align:center;color:var(--c-text-muted);font-size:10px;flex:none}
+.trow .nm{font-weight:600;color:var(--c-text-heading);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13px}
+.trow .meta{font-size:11px;color:var(--c-text-muted);white-space:nowrap}
+.trow .cost{margin-left:auto;font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:600;color:var(--c-accent);flex:none}
+.trow .cost.zero{color:var(--c-success-text)}
+.trow .bar-share{position:absolute;left:10px;right:10px;bottom:2px;height:3px;border-radius:2px;background:transparent;overflow:hidden}
+.trow .bar-share i{display:block;height:100%;border-radius:2px;background:var(--c-accent);opacity:.45}
+.tkids{margin-left:22px;border-left:1px dashed var(--c-track);padding-left:6px}
+.avatar{width:22px;height:22px;border-radius:50%;flex:none;display:inline-flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;color:#fff}
+.src-tag{font-size:10px;padding:1px 7px;border-radius:6px;white-space:nowrap;flex:none}
+.tnode.locked>.trow{opacity:.6;cursor:default}
+.tnode.locked>.trow:hover{background:none}
+.tlock{display:flex;align-items:center;gap:6px;font-size:10px;color:var(--c-warning-text);background:var(--c-warning-bg);border-radius:7px;padding:4px 9px;margin:2px 10px 8px 32px}
+
+/* ---- Панель деталей ---- */
+.dhead{padding:16px 18px 12px;border-bottom:1px solid var(--c-border-light)}
+.dhead .path{font-size:11px;color:var(--c-text-muted);margin-bottom:4px}
+.dhead .t{font-family:'PT Serif',serif;font-size:18px;font-weight:700;color:var(--c-text-heading)}
+.dhead .sub{font-size:11px;color:var(--c-text-secondary);margin-top:2px}
+.dbody{padding:14px 18px 18px;display:flex;flex-direction:column;gap:14px;overflow:auto}
+.dmetrics{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.dm{background:var(--c-bg-panel);border:1px solid var(--c-border-light);border-radius:10px;padding:10px 12px}
+.dm .l{font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--c-text-muted)}
+.dm .v{font-family:'JetBrains Mono',monospace;font-size:17px;font-weight:600;color:var(--c-text-heading);margin-top:3px}
+.dm .v.money{color:var(--c-accent)}
+.dm .s{font-size:10px;color:var(--c-text-muted);margin-top:2px}
+.dsec{border:1px solid var(--c-border-light);border-radius:10px;background:var(--c-bg-panel);padding:12px}
+.dsec .st{font-size:12px;font-weight:600;color:var(--c-text-heading);margin-bottom:10px;display:flex;align-items:center;gap:6px}
+.hbar{display:flex;align-items:center;gap:8px;margin-bottom:7px}
+.hbar .l{width:110px;font-size:11px;color:var(--c-text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:none}
+.hbar .track{flex:1;height:8px;border-radius:4px;background:var(--c-bg-selected);overflow:hidden}
+.hbar .track i{display:block;height:100%;border-radius:4px}
+.hbar .v{width:52px;text-align:right;font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--c-text-secondary);flex:none}
+.stack{display:flex;height:10px;border-radius:5px;overflow:hidden;margin-bottom:8px}
+.sleg{display:flex;gap:10px;flex-wrap:wrap}
+.sleg span{display:inline-flex;align-items:center;gap:4px;font-size:10px;color:var(--c-text-secondary)}
+.spark2{display:flex;align-items:flex-end;gap:2px;height:44px}
+.spark2 i{flex:1;background:var(--c-accent-muted);border-radius:2px 2px 0 0}
+.spark2 i.hi{background:var(--c-accent)}
+.spark2 i.agg{opacity:.4}
+
+/* карточка хода в деталях */
+.turn-card{border:1px solid var(--c-border-light);border-radius:10px;background:var(--c-bg-panel);padding:12px}
+.turn-card .tt{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.turn-card .tt .nm{font-weight:600;color:var(--c-text-heading);font-size:13px}
+.turn-card .tt .cost{margin-left:auto;font-family:'JetBrains Mono',monospace;font-weight:600;color:var(--c-accent)}
+.tgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.tg{background:var(--c-bg-inset);border-radius:8px;padding:7px 9px}
+.tg .l{font-size:9px;text-transform:uppercase;letter-spacing:.4px;color:var(--c-text-muted)}
+.tg .v{font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:600;color:var(--c-text-heading);margin-top:2px}
+.privacy{display:flex;align-items:center;gap:6px;font-size:10px;color:var(--c-text-muted);margin-top:10px}
+
+/* ---- Виджет и бейдж ---- */
+.home-grid{display:grid;grid-template-columns:340px 340px;gap:8px;align-items:stretch}
+.widget{background:var(--c-bg-panel);border:1px solid var(--c-border-light);border-radius:14px;box-shadow:var(--shadow-island);padding:16px;cursor:pointer}
+.widget:hover{box-shadow:var(--shadow-dropdown)}
+.widget .w-head{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.widget .w-head .t{font-family:'PT Serif',serif;font-size:16px;font-weight:700;color:var(--c-text-heading)}
+.widget .w-head .arrow{margin-left:auto;color:var(--c-text-muted)}
+.w2{display:flex;gap:14px;align-items:center}
+.w2 .big{font-family:'JetBrains Mono',monospace;font-size:26px;font-weight:600;color:var(--c-accent)}
+.w2 .cmp{font-size:11px;color:var(--c-text-secondary)}
+.ring{--p:62;width:64px;height:64px;border-radius:50%;background:conic-gradient(var(--c-accent) calc(var(--p)*1%),var(--c-bg-selected) 0);display:flex;align-items:center;justify-content:center;flex:none}
+.ring::after{content:"62%";width:48px;height:48px;border-radius:50%;background:var(--c-bg-panel);display:flex;align-items:center;justify-content:center;font-size:11px;font-family:'JetBrains Mono',monospace;color:var(--c-text-secondary)}
+.chat-head-demo{display:flex;align-items:center;gap:10px;background:var(--c-bg-panel);border:1px solid var(--c-border-light);border-radius:14px;box-shadow:var(--shadow-island);padding:10px 16px}
+.cost-badge{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-family:'JetBrains Mono',monospace;padding:3px 10px;border-radius:999px;background:var(--c-accent-light);color:var(--c-accent);cursor:pointer}
+
+/* ---- Мобила ---- */
+.phones{display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start}
+.phone{width:390px;border:1px solid var(--c-divider);border-radius:24px;overflow:hidden;background:var(--c-bg-main);box-shadow:var(--shadow-island);flex:none;position:relative}
+.phone .p-status{height:24px;display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--c-text-muted)}
+.phone .p-cap{padding:10px 14px;font-size:11px;color:var(--c-text-muted);text-align:center;background:var(--c-bg-inset)}
+.sheet{border-radius:22px 22px 0 0;background:var(--c-bg-card);box-shadow:var(--shadow-sheet);padding:8px 16px 20px;border-top:1px solid var(--c-border-light)}
+.sheet .grip{width:36px;height:4px;border-radius:2px;background:var(--c-track);margin:4px auto 12px}
+
+/* ---- Состояния ---- */
+.states{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:8px}
+.state-card{background:var(--c-bg-panel);border:1px solid var(--c-border-light);border-radius:14px;box-shadow:var(--shadow-island);overflow:hidden}
+.state-card .cap{padding:8px 14px;background:var(--c-bg-inset);font-size:11px;color:var(--c-text-muted);border-bottom:1px solid var(--c-border-light)}
+.empty-body{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:36px 24px;text-align:center}
+.empty-body .pic{font-size:34px;margin-bottom:12px}
+.empty-body .h{font-family:'PT Serif',serif;font-size:18px;color:var(--c-text-heading);margin-bottom:6px}
+.empty-body .d{font-size:12px;color:var(--c-text-secondary);max-width:300px;line-height:1.5}
+.skel{border-radius:8px;background:linear-gradient(90deg,var(--c-bg-selected) 25%,var(--c-bg-card) 50%,var(--c-bg-selected) 75%);background-size:200% 100%;animation:sh 1.4s infinite}
+@keyframes sh{0%{background-position:200% 0}100%{background-position:-200% 0}}
+.btn{display:inline-flex;align-items:center;gap:6px;background:var(--c-accent);color:var(--c-on-accent);border:none;border-radius:12px;padding:8px 18px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit}
+
+@media (max-width:900px){ .split{grid-template-columns:1fr} .tree-pane{border-right:none} .detail-pane{display:none} .home-grid{grid-template-columns:1fr} }
+</style>
+</head>
+<body>
+
+<div class="proto-bar">
+  <h1>Вариант B — «Инспектор»</h1>
+  <span class="tag">дерево слева · панель деталей справа · контекст не теряется</span>
+  <button onclick="document.documentElement.dataset.theme=document.documentElement.dataset.theme==='dark'?'':'dark'">Тема: светлая/тёмная</button>
+</div>
+
+<!-- ================= 1. Основной экран (админ) ================= -->
+<div class="section">
+  <h2>1 · Дашборд-инспектор (админский режим)</h2>
+  <p class="note">Сценарий: «почему июль дорогой?» — раскрываешь дерево слева, не теряя общую картину: панель справа
+  всегда показывает выбранный узел (метрики, разбивку по моделям и источникам, динамику). Выбран ход —
+  справа его паспорт. Персональный режим — то же дерево, корень «Мои траты» без уровня пользователей.</p>
+
+  <div class="island">
+    <div class="island-head">
+      <span class="ttl">Аналитика трат</span>
+      <span class="badge-window">● Детально: последние 30 дней</span>
+      <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
+        <div class="pill-tabs"><button class="pt">Мои</button><button class="pt on">Все пользователи</button></div>
+        <div class="pill-tabs"><button class="pt">Неделя</button><button class="pt on">Месяц</button><button class="pt">90 дней</button></div>
+      </div>
+    </div>
+
+    <div class="split">
+      <!-- Дерево -->
+      <div class="tree-pane">
+        <div style="display:flex;gap:6px;padding:10px 14px;border-bottom:1px solid var(--c-border-light);flex-wrap:wrap">
+          <span class="chip">Источник: все ▾</span><span class="chip">Провайдер: все ▾</span><span class="chip">Модель: все ▾</span><span class="chip">Персона: все ▾</span>
+        </div>
+        <div class="tree">
+
+          <div class="tnode">
+            <div class="trow"><span class="tw">▾</span><span class="avatar" style="background:#C2693B">А</span><span class="nm">andrey</span><span class="meta">admin · 3 проекта</span><span class="cost">$24.87</span><div class="bar-share"><i style="width:74%"></i></div></div>
+            <div class="tkids">
+              <div class="tnode">
+                <div class="trow"><span class="tw">▾</span><span class="avatar" style="background:#3E7CA6">AH</span><span class="nm">AI Home</span><span class="meta">14 чатов · 6 задач</span><span class="cost">$14.20</span><div class="bar-share"><i style="width:57%"></i></div></div>
+                <div class="tkids">
+                  <div class="tnode">
+                    <div class="trow"><span class="tw">▾</span><span class="src-tag" style="background:var(--c-accent-light);color:var(--c-accent)">чат</span><span class="nm">Макеты аналитики</span><span class="meta">Майя</span><span class="cost">$8.90</span><div class="bar-share"><i style="width:63%"></i></div></div>
+                    <div class="tkids">
+                      <div class="tnode"><div class="trow sel"><span class="tw">·</span><span class="nm mono" style="font-size:11px">14:32</span><span class="meta">Ход #41 · opus-5</span><span class="cost">$1.85</span></div></div>
+                      <div class="tnode"><div class="trow"><span class="tw">·</span><span class="nm mono" style="font-size:11px">14:05</span><span class="meta">Ход #40 · opus-5</span><span class="cost">$0.62</span></div></div>
+                      <div class="tnode"><div class="trow"><span class="tw">·</span><span class="nm mono" style="font-size:11px">13:47</span><span class="meta">Ход #39 · nemotron · бесплатная</span><span class="cost zero">$0.00</span></div></div>
+                      <div class="tnode"><div class="trow"><span class="tw">·</span><span class="nm mono" style="font-size:11px">13:20</span><span class="meta">fal.ai · flux/dev</span><span class="cost">$0.11</span></div></div>
+                    </div>
+                  </div>
+                  <div class="tnode">
+                    <div class="trow"><span class="tw">▸</span><span class="src-tag" style="background:var(--c-info-bg);color:var(--c-info)">задача</span><span class="nm">Фикс ParseUsage</span><span class="meta">Денис</span><span class="cost">$3.14</span><div class="bar-share"><i style="width:22%"></i></div></div>
+                  </div>
+                  <div class="tnode locked">
+                    <div class="trow"><span class="tw">🔒</span><span class="src-tag" style="background:var(--c-accent-light);color:var(--c-accent)">чат</span><span class="nm">Ревью провайдеров</span><span class="meta">июнь</span><span class="cost">$2.16</span></div>
+                    <div class="tlock">Старше окна — только дневные агрегаты, ходы недоступны</div>
+                  </div>
+                </div>
+              </div>
+              <div class="tnode"><div class="trow"><span class="tw">▸</span><span class="avatar" style="background:#8E4A82">RW</span><span class="nm">RailWay</span><span class="meta">5 чатов</span><span class="cost">$6.31</span><div class="bar-share"><i style="width:25%"></i></div></div></div>
+              <div class="tnode"><div class="trow"><span class="tw">▸</span><span class="avatar" style="background:#7A7250">·</span><span class="nm">Вне проектов</span><span class="cost">$3.12</span><div class="bar-share"><i style="width:13%"></i></div></div></div>
+              <div class="tnode"><div class="trow"><span class="tw">▸</span><span class="avatar" style="background:#4B6BB0">Ф</span><span class="nm">Фоновые операции</span><span class="meta">changelog · заметки · память</span><span class="cost">$1.24</span><div class="bar-share"><i style="width:5%"></i></div></div></div>
+            </div>
+          </div>
+
+          <div class="tnode"><div class="trow"><span class="tw">▸</span><span class="avatar" style="background:#3F7A4F">Г</span><span class="nm">grigory</span><span class="meta">2 проекта</span><span class="cost">$8.44</span><div class="bar-share"><i style="width:26%"></i></div></div></div>
+          <div class="tnode"><div class="trow"><span class="tw">▸</span><span class="avatar" style="background:#4B6BB0">М</span><span class="nm">maria</span><span class="meta">1 проект</span><span class="cost">$0.92</span><div class="bar-share"><i style="width:3%"></i></div></div></div>
+
+        </div>
+      </div>
+
+      <!-- Панель деталей: выбран ход -->
+      <div class="detail-pane">
+        <div class="dhead">
+          <div class="path">andrey › AI Home › Макеты аналитики</div>
+          <div class="t">Ход #41 · 18 июля, 14:32</div>
+          <div class="sub">claude-opus-5 · Anthropic · персона Майя · источник: ход чата</div>
+        </div>
+        <div class="dbody">
+          <div class="turn-card">
+            <div class="tt"><span class="nm">Паспорт хода</span><span class="cost">$1.85</span></div>
+            <div class="tgrid">
+              <div class="tg"><div class="l">In</div><div class="v">12.4k</div></div>
+              <div class="tg"><div class="l">Out</div><div class="v">8.2k</div></div>
+              <div class="tg"><div class="l">Cache read</div><div class="v">89.0k</div></div>
+              <div class="tg"><div class="l">Cache create</div><div class="v">4.1k</div></div>
+            </div>
+            <div class="privacy">🔒 Содержимое сообщений недоступно — только метрики хода</div>
+          </div>
+
+          <div class="dsec">
+            <div class="st">Из чего сложилась цена</div>
+            <div class="hbar"><span class="l">Input</span><div class="track"><i style="width:18%;background:var(--src-turns)"></i></div><span class="v">$0.33</span></div>
+            <div class="hbar"><span class="l">Output</span><div class="track"><i style="width:60%;background:var(--src-turns)"></i></div><span class="v">$1.11</span></div>
+            <div class="hbar"><span class="l">Cache read</span><div class="track"><i style="width:16%;background:var(--src-oneshot)"></i></div><span class="v">$0.30</span></div>
+            <div class="hbar"><span class="l">Cache create</span><div class="track"><i style="width:6%;background:var(--src-fal)"></i></div><span class="v">$0.11</span></div>
+          </div>
+
+          <div class="dsec">
+            <div class="st">Чат «Макеты аналитики» рядом с этим ходом</div>
+            <div class="spark2">
+              <i style="height:20%"></i><i style="height:35%"></i><i style="height:15%"></i><i style="height:55%"></i><i class="hi" style="height:100%"></i><i style="height:40%"></i><i style="height:10%"></i>
+            </div>
+            <div style="font-size:10px;color:var(--c-text-muted);margin-top:6px">7 последних ходов · этот — самый дорогой (33% стоимости чата)</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= 2. Панель деталей для агрегата ================= -->
+<div class="section">
+  <h2>2 · Панель деталей для узла-агрегата</h2>
+  <p class="note">Выбран проект (или пользователь, или узел за границей окна) — справа сводка узла:
+  метрики, стек источников, топ моделей, динамика с приглушённой зоной агрегатов. Один шаблон панели на все уровни.</p>
+
+  <div class="island" style="max-width:480px">
+    <div class="dhead">
+      <div class="path">andrey</div>
+      <div class="t">AI Home</div>
+      <div class="sub">14 чатов · 6 задач · 720 ходов за месяц</div>
+    </div>
+    <div class="dbody">
+      <div class="dmetrics">
+        <div class="dm"><div class="l">Стоимость</div><div class="v money">$14.20</div><div class="s">57% трат пользователя</div></div>
+        <div class="dm"><div class="l">Средний ход</div><div class="v money">$0.020</div><div class="s">медиана $0.008</div></div>
+        <div class="dm"><div class="l">Токены in / out</div><div class="v" style="font-size:14px">11.1M / 0.9M</div><div class="s">cache 61.2M</div></div>
+        <div class="dm"><div class="l">Бесплатных ходов</div><div class="v" style="color:var(--c-success-text)">214</div><div class="s">экономия ≈ $1.9</div></div>
+      </div>
+
+      <div class="dsec">
+        <div class="st">Источники траты</div>
+        <div class="stack">
+          <i style="flex:78;background:var(--src-turns)"></i><i style="flex:12;background:var(--src-oneshot)"></i><i style="flex:6;background:var(--src-fal)"></i><i style="flex:4;background:var(--src-free)"></i>
+        </div>
+        <div class="sleg">
+          <span><span class="dot" style="background:var(--src-turns)"></span>Ходы $11.08</span>
+          <span><span class="dot" style="background:var(--src-oneshot)"></span>Фоновые $1.70</span>
+          <span><span class="dot" style="background:var(--src-fal)"></span>fal.ai $0.85</span>
+          <span><span class="dot" style="background:var(--src-free)"></span>Бесплатные $0.00</span>
+        </div>
+      </div>
+
+      <div class="dsec">
+        <div class="st">Топ моделей</div>
+        <div class="hbar"><span class="l">claude-opus-5</span><div class="track"><i style="width:72%;background:var(--src-turns)"></i></div><span class="v">$10.2</span></div>
+        <div class="hbar"><span class="l">claude-sonnet-5</span><div class="track"><i style="width:18%;background:var(--src-turns)"></i></div><span class="v">$2.6</span></div>
+        <div class="hbar"><span class="l">deepseek-pro</span><div class="track"><i style="width:7%;background:var(--src-oneshot)"></i></div><span class="v">$0.9</span></div>
+        <div class="hbar"><span class="l">glm-5.2</span><div class="track"><i style="width:3%;background:var(--src-fal)"></i></div><span class="v">$0.4</span></div>
+      </div>
+
+      <div class="dsec">
+        <div class="st">Динамика · месяц <span class="chip" style="margin-left:auto;cursor:default;font-size:10px">до 25.06 — агрегаты</span></div>
+        <div class="spark2">
+          <i class="agg" style="height:30%"></i><i class="agg" style="height:45%"></i><i class="agg" style="height:25%"></i><i class="agg" style="height:38%"></i>
+          <i style="height:50%"></i><i style="height:30%"></i><i style="height:65%"></i><i class="hi" style="height:100%"></i><i style="height:45%"></i><i style="height:22%"></i><i style="height:58%"></i><i style="height:36%"></i>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= 3. Виджет «Домой» и бейдж ================= -->
+<div class="section">
+  <h2>3 · Виджет «Домой» и бейдж стоимости чата</h2>
+  <p class="note">Виджет варианта B — с кольцом «доля месяца к этому дню»: не просто число, а темп расхода.
+  Бейдж чата единый для всех вариантов; здесь — состояние «обновился после хода» (подсветка дельты).</p>
+  <div class="home-grid">
+    <div class="widget">
+      <div class="w-head"><span class="t">Траты</span><span class="arrow">→</span></div>
+      <div class="w2">
+        <div class="ring"></div>
+        <div>
+          <div class="big">$1.85</div>
+          <div class="cmp">сегодня · июль $24.87</div>
+          <div class="cmp" style="margin-top:4px;color:var(--c-text-muted)">темп: 62% обычного дня недели</div>
+        </div>
+      </div>
+    </div>
+    <div class="chat-head-demo" style="align-self:center">
+      <span class="avatar" style="background:#C2693B">М</span>
+      <div style="min-width:0">
+        <div style="font-weight:600;color:var(--c-text-heading);font-size:13px">Дизайнер (Майя)</div>
+        <div style="font-size:11px;color:var(--c-text-muted)">AI Home · claude-opus-5</div>
+      </div>
+      <div style="margin-left:auto;display:flex;gap:6px;align-items:center">
+        <span class="chip" style="cursor:default">32% контекста</span>
+        <span class="cost-badge" style="outline:2px solid var(--c-accent-muted)">$4.87 <span style="color:var(--c-success-text);font-family:'Hanken Grotesk',sans-serif;font-size:10px">+$0.12</span></span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= 4. Мобильная раскладка ================= -->
+<div class="section">
+  <h2>4 · Мобильная раскладка (390px)</h2>
+  <p class="note">Двухпанельность на мобиле превращается в «дерево + шторка»: tap по узлу раскрывает детей,
+  долгий tap (или ⓘ) открывает панель деталей bottom-sheet'ом. Hover-состояний нет — доля показана постоянной полосой.</p>
+  <div class="phones">
+
+    <div class="phone">
+      <div class="p-status">12:30</div>
+      <div class="p-cap">Дерево (персональный режим)</div>
+      <div style="display:flex;gap:8px;align-items:center;padding:10px 14px">
+        <div class="pill-tabs"><button class="pt on">Месяц</button><button class="pt">90 д</button></div>
+        <span class="badge-window" style="margin-left:auto">30 дней</span>
+      </div>
+      <div class="tree" style="padding:0 10px 16px">
+        <div class="tnode">
+          <div class="trow"><span class="tw">▾</span><span class="avatar" style="background:#3E7CA6">AH</span><span class="nm">AI Home</span><span class="cost">$14.20</span><div class="bar-share"><i style="width:57%"></i></div></div>
+          <div class="tkids">
+            <div class="tnode"><div class="trow sel"><span class="tw">▸</span><span class="src-tag" style="background:var(--c-accent-light);color:var(--c-accent)">чат</span><span class="nm">Макеты аналитики</span><span class="cost">$8.90</span></div></div>
+            <div class="tnode"><div class="trow"><span class="tw">▸</span><span class="src-tag" style="background:var(--c-info-bg);color:var(--c-info)">задача</span><span class="nm">Фикс ParseUsage</span><span class="cost">$3.14</span></div></div>
+          </div>
+        </div>
+        <div class="tnode"><div class="trow"><span class="tw">▸</span><span class="avatar" style="background:#8E4A82">RW</span><span class="nm">RailWay</span><span class="cost">$6.31</span><div class="bar-share"><i style="width:25%"></i></div></div></div>
+        <div class="tnode"><div class="trow"><span class="tw">▸</span><span class="avatar" style="background:#7A7250">·</span><span class="nm">Вне проектов</span><span class="cost">$3.12</span></div></div>
+      </div>
+      <div class="sheet">
+        <div class="grip"></div>
+        <div style="font-size:11px;color:var(--c-text-muted)">AI Home › чат</div>
+        <div style="font-family:'PT Serif',serif;font-size:17px;font-weight:700;color:var(--c-text-heading);margin:2px 0 10px">Макеты аналитики</div>
+        <div class="dmetrics">
+          <div class="dm"><div class="l">Стоимость</div><div class="v money">$8.90</div></div>
+          <div class="dm"><div class="l">Ходы</div><div class="v">96</div></div>
+        </div>
+        <div class="stack" style="margin-top:10px"><i style="flex:82;background:var(--src-turns)"></i><i style="flex:10;background:var(--src-oneshot)"></i><i style="flex:8;background:var(--src-fal)"></i></div>
+        <button class="btn" style="width:100%;margin-top:12px;justify-content:center">Показать 96 ходов</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ================= 5. Состояния ================= -->
+<div class="section" style="padding-bottom:48px">
+  <h2>5 · Состояния</h2>
+  <div class="states">
+    <div class="state-card">
+      <div class="cap">Пустое — трат ещё нет</div>
+      <div class="empty-body">
+        <div class="pic">🪙</div>
+        <div class="h">Трат ещё нет</div>
+        <div class="d">Дерево наполнится после первого хода. Бесплатные модели тоже видны — со стоимостью 0 $.</div>
+      </div>
+    </div>
+    <div class="state-card">
+      <div class="cap">Загрузка — скелетон дерева и панели</div>
+      <div style="display:grid;grid-template-columns:3fr 2fr;gap:12px;padding:16px">
+        <div>
+          <div class="skel" style="height:34px;margin-bottom:6px"></div>
+          <div class="skel" style="height:34px;margin-bottom:6px;margin-left:20px"></div>
+          <div class="skel" style="height:34px;margin-bottom:6px;margin-left:20px"></div>
+          <div class="skel" style="height:34px"></div>
+        </div>
+        <div>
+          <div class="skel" style="height:56px;margin-bottom:8px"></div>
+          <div class="skel" style="height:110px"></div>
+        </div>
+      </div>
+    </div>
+    <div class="state-card">
+      <div class="cap">Ошибка</div>
+      <div class="empty-body">
+        <div class="pic">⚠️</div>
+        <div class="h" style="font-family:'Hanken Grotesk',sans-serif;font-size:14px;color:var(--c-danger-text)">Не удалось загрузить аналитику</div>
+        <div class="d" style="margin-bottom:14px">Сервер не ответил. Попробуйте ещё раз.</div>
+        <button class="btn">Повторить</button>
+      </div>
+    </div>
+    <div class="state-card">
+      <div class="cap">Узел без детализации (за окном)</div>
+      <div class="empty-body">
+        <div class="pic">🔒</div>
+        <div class="h" style="font-size:16px">Только агрегаты</div>
+        <div class="d">Этот период старше окна детализации (30 дней). Суммы по дням сохранены, список ходов — нет.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

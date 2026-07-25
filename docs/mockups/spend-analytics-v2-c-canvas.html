@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Аналитика трат v2 — Вариант C «Полотно»</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=PT+Serif:wght@400;700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+/* Токены темы — копия frontend/src/lib/theme.css. Шкалы design.ts (FS/SP/R/ISLAND). */
+:root{
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-divider:#DDD4C4; --c-track:#D8CFBE;
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --c-plan:#6C5CB0; --c-plan-light:#EEEBF8; --c-plan-text:#4E4196;
+  --c-nav-ink:#2A251F; --c-on-nav-ink:#F4ECE1;
+  --shadow-card:0 2px 8px rgba(60,50,35,.05);
+  --shadow-island:0 1px 2px rgba(60,50,35,.06),0 6px 20px rgba(60,50,35,.10);
+  --shadow-dropdown:0 8px 28px rgba(60,50,35,.16);
+}
+:root[data-theme="dark"]{
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-divider:#454037; --c-track:#453F37;
+  --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --c-plan:#9385D8; --c-plan-light:#2A2540; --c-plan-text:#B0A4E6;
+  --c-nav-ink:#EDE6DB; --c-on-nav-ink:#201C18;
+  --shadow-card:0 2px 10px rgba(0,0,0,.35);
+  --shadow-island:0 1px 2px rgba(0,0,0,.30),0 8px 24px rgba(0,0,0,.45);
+  --shadow-dropdown:0 10px 32px rgba(0,0,0,.55);
+}
+:root{ --src-turns:var(--c-accent); --src-oneshot:var(--c-info); --src-fal:var(--c-plan); --src-free:var(--c-success); }
+
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--c-bg-main);color:var(--c-text-primary);font-family:'Hanken Grotesk',-apple-system,'Segoe UI',sans-serif;font-size:13px}
+.mono{font-family:'JetBrains Mono',monospace}
+
+.proto-bar{position:sticky;top:0;z-index:100;display:flex;align-items:center;gap:12px;padding:10px 16px;background:var(--c-nav-ink);color:var(--c-on-nav-ink)}
+.proto-bar h1{font-size:14px;font-weight:600}
+.proto-bar .tag{font-size:11px;opacity:.7}
+.proto-bar button{margin-left:auto;background:none;border:1px solid var(--c-on-nav-ink);color:var(--c-on-nav-ink);border-radius:999px;padding:4px 14px;font-size:12px;cursor:pointer;font-family:inherit}
+.section{max-width:1120px;margin:0 auto;padding:32px 16px 8px}
+.section>h2{font-family:'PT Serif',serif;font-size:22px;color:var(--c-text-heading);margin-bottom:4px}
+.section>p.note{font-size:12px;color:var(--c-text-secondary);margin-bottom:16px;max-width:760px}
+
+/* острова-карточки на общем холсте (ISLAND.gap=8) */
+.canvas{display:grid;grid-template-columns:repeat(12,1fr);gap:8px}
+.card{background:var(--c-bg-panel);border:1px solid var(--c-border-light);border-radius:14px;box-shadow:var(--shadow-island);overflow:hidden}
+.card .c-head{display:flex;align-items:center;gap:8px;padding:10px 14px;background:var(--c-bg-inset);border-bottom:1px solid var(--c-border-light)}
+.card .c-head .t{font-family:'PT Serif',serif;font-size:14px;font-weight:700;color:var(--c-text-heading)}
+.card .c-head .more{margin-left:auto;font-size:11px;color:var(--c-info);cursor:pointer;white-space:nowrap}
+.card .c-body{padding:12px 14px}
+.col-12{grid-column:span 12}.col-8{grid-column:span 8}.col-6{grid-column:span 6}.col-4{grid-column:span 4}.col-3{grid-column:span 3}
+
+/* верхняя строка управления */
+.topbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px}
+.topbar .h{font-family:'PT Serif',serif;font-size:28px;font-weight:700;color:var(--c-text-heading);margin-right:6px}
+.pill-tabs{display:inline-flex;background:var(--c-bg-selected);border-radius:9px;padding:2px}
+.pill-tabs .pt{font-size:12px;padding:4px 12px;border-radius:7px;cursor:pointer;color:var(--c-text-secondary);border:none;background:none;font-family:inherit}
+.pill-tabs .pt.on{background:var(--c-bg-white);color:var(--c-text-heading);font-weight:600;box-shadow:0 1px 3px rgba(42,37,31,.12)}
+.badge-window{display:inline-flex;align-items:center;gap:6px;font-size:11px;padding:3px 10px;border-radius:999px;background:var(--c-info-bg);color:var(--c-info)}
+.chip{display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:3px 10px;border-radius:999px;border:1px solid var(--c-border);color:var(--c-text-secondary);background:var(--c-bg-card);cursor:pointer;white-space:nowrap}
+.chip.filter{background:var(--c-accent-light);border-color:var(--c-accent-muted);color:var(--c-accent);font-weight:600}
+.chip .x{font-weight:700;opacity:.8;cursor:pointer}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none}
+
+/* герой-метрика + область-график */
+.hero{display:flex;gap:24px;align-items:flex-start;flex-wrap:wrap}
+.hero .num .v{font-family:'JetBrains Mono',monospace;font-size:34px;font-weight:600;color:var(--c-accent);line-height:1}
+.hero .num .l{font-size:11px;color:var(--c-text-secondary);margin-top:4px}
+.hero .mini{display:flex;gap:18px;margin-top:14px;flex-wrap:wrap}
+.hero .mini div .v{font-family:'JetBrains Mono',monospace;font-size:15px;font-weight:600;color:var(--c-text-heading)}
+.hero .mini div .l{font-size:10px;color:var(--c-text-muted);margin-top:1px}
+.area-wrap{flex:1;min-width:420px}
+.area{position:relative;height:150px}
+.area svg{width:100%;height:100%;display:block}
+.agg-zone{position:absolute;left:0;top:0;bottom:18px;width:33%;border-right:2px dashed var(--c-track);display:flex;align-items:flex-start;justify-content:center;pointer-events:none}
+.agg-zone span{font-size:9px;color:var(--c-text-muted);background:var(--c-bg-panel);padding:2px 8px;border-radius:6px;margin-top:4px}
+.axis{display:flex;justify-content:space-between;font-size:9px;color:var(--c-text-muted);font-family:'JetBrains Mono',monospace;margin-top:4px}
+.legend{display:flex;gap:12px;flex-wrap:wrap;margin-top:8px}
+.legend span{display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--c-text-secondary)}
+
+/* строки топов внутри карточек-разрезов */
+.top-row{display:flex;align-items:center;gap:8px;padding:6px 2px;border-radius:8px;cursor:pointer}
+.top-row:hover{background:var(--c-bg-selected)}
+.top-row .rank{width:16px;font-size:10px;color:var(--c-text-muted);font-family:'JetBrains Mono',monospace;text-align:right;flex:none}
+.top-row .nm{font-size:12px;font-weight:600;color:var(--c-text-heading);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.top-row .meta{font-size:10px;color:var(--c-text-muted);white-space:nowrap}
+.top-row .track{flex:1;height:6px;border-radius:3px;background:var(--c-bg-selected);overflow:hidden;min-width:40px}
+.top-row .track i{display:block;height:100%;border-radius:3px}
+.top-row .v{font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:600;color:var(--c-accent);width:52px;text-align:right;flex:none}
+.top-row .v.zero{color:var(--c-success-text)}
+.avatar{width:20px;height:20px;border-radius:50%;flex:none;display:inline-flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;color:#fff}
+.src-tag{font-size:10px;padding:1px 7px;border-radius:6px;white-space:nowrap;flex:none}
+
+/* таблица дорогих ходов */
+.tbl{width:100%;border-collapse:collapse}
+.tbl th{font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--c-text-muted);text-align:left;padding:6px 8px;border-bottom:1px solid var(--c-border-light);font-weight:600}
+.tbl td{font-size:12px;padding:8px;border-bottom:1px solid var(--c-border-light);white-space:nowrap}
+.tbl td.num{font-family:'JetBrains Mono',monospace;text-align:right;color:var(--c-text-secondary)}
+.tbl td.money{font-family:'JetBrains Mono',monospace;text-align:right;color:var(--c-accent);font-weight:600}
+.tbl tr:hover td{background:var(--c-bg-selected)}
+.tbl .ctx{color:var(--c-text-muted);font-size:11px}
+.tbl tr.locked td{opacity:.55}
+
+/* виджет и бейдж */
+.widget{background:var(--c-bg-panel);border:1px solid var(--c-border-light);border-radius:14px;box-shadow:var(--shadow-island);padding:16px;cursor:pointer;width:340px}
+.widget:hover{box-shadow:var(--shadow-dropdown)}
+.widget .w-head{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.widget .w-head .t{font-family:'PT Serif',serif;font-size:16px;font-weight:700;color:var(--c-text-heading)}
+.widget .w-head .arrow{margin-left:auto;color:var(--c-text-muted)}
+.widget .big{font-family:'JetBrains Mono',monospace;font-size:28px;font-weight:600;color:var(--c-accent);line-height:1.1}
+.widget .cmp{font-size:11px;color:var(--c-text-secondary);margin-top:2px}
+.warea{height:44px;margin-top:10px}
+.warea svg{width:100%;height:100%;display:block}
+.chat-head-demo{display:flex;align-items:center;gap:10px;background:var(--c-bg-panel);border:1px solid var(--c-border-light);border-radius:14px;box-shadow:var(--shadow-island);padding:10px 16px}
+.cost-badge{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-family:'JetBrains Mono',monospace;padding:3px 10px;border-radius:999px;background:var(--c-accent-light);color:var(--c-accent);cursor:pointer}
+
+/* мобила */
+.phones{display:flex;gap:24px;flex-wrap:wrap}
+.phone{width:390px;border:1px solid var(--c-divider);border-radius:24px;overflow:hidden;background:var(--c-bg-main);box-shadow:var(--shadow-island);flex:none}
+.phone .p-status{height:24px;display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--c-text-muted)}
+.phone .p-cap{padding:10px 14px;font-size:11px;color:var(--c-text-muted);text-align:center;background:var(--c-bg-inset)}
+.m-pad{padding:12px 14px}
+.hscroll{display:flex;gap:6px;overflow-x:auto;padding:2px 14px 10px;scrollbar-width:none}
+.hscroll::-webkit-scrollbar{display:none}
+
+/* состояния */
+.states{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:8px}
+.state-card{background:var(--c-bg-panel);border:1px solid var(--c-border-light);border-radius:14px;box-shadow:var(--shadow-island);overflow:hidden}
+.state-card .cap{padding:8px 14px;background:var(--c-bg-inset);font-size:11px;color:var(--c-text-muted);border-bottom:1px solid var(--c-border-light)}
+.empty-body{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:36px 24px;text-align:center}
+.empty-body .pic{font-size:34px;margin-bottom:12px}
+.empty-body .h{font-family:'PT Serif',serif;font-size:18px;color:var(--c-text-heading);margin-bottom:6px}
+.empty-body .d{font-size:12px;color:var(--c-text-secondary);max-width:300px;line-height:1.5}
+.skel{border-radius:8px;background:linear-gradient(90deg,var(--c-bg-selected) 25%,var(--c-bg-card) 50%,var(--c-bg-selected) 75%);background-size:200% 100%;animation:sh 1.4s infinite}
+@keyframes sh{0%{background-position:200% 0}100%{background-position:-200% 0}}
+.btn{display:inline-flex;align-items:center;gap:6px;background:var(--c-accent);color:var(--c-on-accent);border:none;border-radius:12px;padding:8px 18px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit}
+.btn.ghost{background:none;border:1px solid var(--c-border);color:var(--c-text-primary)}
+
+@media (max-width:900px){ .col-8,.col-6,.col-4,.col-3{grid-column:span 12} .area-wrap{min-width:0} }
+</style>
+</head>
+<body>
+
+<div class="proto-bar">
+  <h1>Вариант C — «Полотно»</h1>
+  <span class="tag">карточки разрезов · глобальные фильтры-чипы · drill-down = сужение всего экрана</span>
+  <button onclick="document.documentElement.dataset.theme=document.documentElement.dataset.theme==='dark'?'':'dark'">Тема: светлая/тёмная</button>
+</div>
+
+<!-- ================= 1. Полотно (админ, активные фильтры) ================= -->
+<div class="section">
+  <h2>1 · Полотно дашборда (админ, применён фильтр)</h2>
+  <p class="note">Сценарий: «покрути траты как хочешь». Нет фиксированной иерархии — клик по любому элементу любой
+  карточки (пользователь, проект, модель, источник, день) добавляет фильтр-чип в шапку, и ВСЁ полотно пересчитывается
+  в этом срезе. «Куда ушёл доллар» собирается любым путём: хоть от модели, хоть от персоны. Таблица ходов внизу —
+  конечный уровень. Активный срез всегда виден в строке фильтров.</p>
+
+  <div class="topbar">
+    <span class="h">Траты</span>
+    <div class="pill-tabs"><button class="pt">Мои</button><button class="pt on">Все пользователи</button></div>
+    <div class="pill-tabs"><button class="pt">Неделя</button><button class="pt on">Месяц</button><button class="pt">90 дней</button></div>
+    <span class="badge-window">● Детально: 30 дней</span>
+  </div>
+  <div class="topbar" style="margin-bottom:8px">
+    <span style="font-size:11px;color:var(--c-text-muted)">Срез:</span>
+    <span class="chip filter">andrey <span class="x">×</span></span>
+    <span class="chip filter">AI Home <span class="x">×</span></span>
+    <span class="chip">+ пользователь</span><span class="chip">+ модель</span><span class="chip">+ источник</span><span class="chip">+ персона</span>
+    <span class="chip" style="margin-left:auto;border-style:dashed">Сбросить срез</span>
+  </div>
+
+  <div class="canvas">
+
+    <div class="card col-12">
+      <div class="c-body">
+        <div class="hero">
+          <div class="num">
+            <div class="v">$14.20</div>
+            <div class="l">andrey · AI Home · июль</div>
+            <div class="mini">
+              <div><div class="v">720</div><div class="l">ходов</div></div>
+              <div><div class="v">$0.020</div><div class="l">средний ход</div></div>
+              <div><div class="v">11.1M / 0.9M</div><div class="l">in / out</div></div>
+              <div><div class="v">61.2M</div><div class="l">cache read</div></div>
+            </div>
+          </div>
+          <div class="area-wrap">
+            <div class="area">
+              <svg viewBox="0 0 600 132" preserveAspectRatio="none">
+                <!-- стек областей: turns/oneshot/fal (снизу вверх) -->
+                <path d="M0,132 L0,92 C60,86 90,98 150,88 C210,78 240,96 300,60 C340,38 380,70 430,50 C480,32 540,58 600,44 L600,132 Z" fill="var(--src-turns)" opacity=".85"/>
+                <path d="M0,92 L0,78 C60,74 90,86 150,74 C210,64 240,84 300,44 C340,24 380,58 430,38 C480,22 540,46 600,32 L600,44 C540,58 480,32 430,50 C380,70 340,38 300,60 C240,96 210,78 150,88 C90,98 60,86 0,92 Z" fill="var(--src-oneshot)" opacity=".7"/>
+                <path d="M0,78 L0,70 C60,66 90,78 150,66 C210,58 240,76 300,38 C340,20 380,52 430,32 C480,17 540,40 600,26 L600,32 C540,46 480,22 430,38 C380,58 340,24 300,44 C240,84 210,64 150,74 C90,86 60,74 0,78 Z" fill="var(--src-fal)" opacity=".6"/>
+              </svg>
+              <div class="agg-zone"><span>только дневные агрегаты</span></div>
+            </div>
+            <div class="axis"><span>21.06</span><span>28.06</span><span>05.07</span><span>12.07</span><span>18.07</span></div>
+            <div class="legend">
+              <span><span class="dot" style="background:var(--src-turns)"></span>Ходы</span>
+              <span><span class="dot" style="background:var(--src-oneshot)"></span>Фоновые</span>
+              <span><span class="dot" style="background:var(--src-fal)"></span>fal.ai</span>
+              <span><span class="dot" style="background:var(--src-free)"></span>Бесплатные (0 $)</span>
+              <span style="margin-left:auto;color:var(--c-text-muted)">клик по дню → фильтр-чип даты</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card col-4">
+      <div class="c-head"><span class="t">Чаты и задачи</span><span class="more">все 20 →</span></div>
+      <div class="c-body">
+        <div class="top-row"><span class="rank">1</span><span class="src-tag" style="background:var(--c-accent-light);color:var(--c-accent)">чат</span><span class="nm">Макеты аналитики</span><div class="track"><i style="width:63%;background:var(--src-turns)"></i></div><span class="v">$8.90</span></div>
+        <div class="top-row"><span class="rank">2</span><span class="src-tag" style="background:var(--c-info-bg);color:var(--c-info)">задача</span><span class="nm">Фикс ParseUsage</span><div class="track"><i style="width:22%;background:var(--src-turns)"></i></div><span class="v">$3.14</span></div>
+        <div class="top-row"><span class="rank">3</span><span class="src-tag" style="background:var(--c-accent-light);color:var(--c-accent)">чат</span><span class="nm">Ревью провайдеров</span><div class="track"><i style="width:15%;background:var(--src-turns)"></i></div><span class="v">$2.16</span></div>
+        <div class="top-row"><span class="rank">4</span><span class="src-tag" style="background:var(--c-accent-light);color:var(--c-accent)">чат</span><span class="nm">Дока по песочнице</span><div class="track"><i style="width:8%;background:var(--src-turns)"></i></div><span class="v">$1.10</span></div>
+      </div>
+    </div>
+
+    <div class="card col-4">
+      <div class="c-head"><span class="t">Модели</span><span class="more">все 7 →</span></div>
+      <div class="c-body">
+        <div class="top-row"><span class="rank">1</span><span class="nm">claude-opus-5</span><span class="meta">Anthropic</span><div class="track"><i style="width:72%;background:var(--src-turns)"></i></div><span class="v">$10.2</span></div>
+        <div class="top-row"><span class="rank">2</span><span class="nm">claude-sonnet-5</span><span class="meta">Anthropic</span><div class="track"><i style="width:18%;background:var(--src-turns)"></i></div><span class="v">$2.6</span></div>
+        <div class="top-row"><span class="rank">3</span><span class="nm">deepseek-pro</span><span class="meta">DeepSeek</span><div class="track"><i style="width:7%;background:var(--src-oneshot)"></i></div><span class="v">$0.9</span></div>
+        <div class="top-row"><span class="rank">4</span><span class="nm">nemotron-3-ultra</span><span class="meta">OpenRouter · беспл.</span><div class="track"><i style="width:0%"></i></div><span class="v zero">$0.00</span></div>
+      </div>
+    </div>
+
+    <div class="card col-4">
+      <div class="c-head"><span class="t">Источники</span></div>
+      <div class="c-body">
+        <div class="top-row"><span class="dot" style="background:var(--src-turns)"></span><span class="nm">Ходы чатов и задач</span><div class="track"><i style="width:78%;background:var(--src-turns)"></i></div><span class="v">$11.08</span></div>
+        <div class="top-row"><span class="dot" style="background:var(--src-oneshot)"></span><span class="nm">Фоновые one-shot</span><div class="track"><i style="width:12%;background:var(--src-oneshot)"></i></div><span class="v">$1.70</span></div>
+        <div class="top-row"><span class="dot" style="background:var(--src-fal)"></span><span class="nm">fal.ai — изображения</span><div class="track"><i style="width:6%;background:var(--src-fal)"></i></div><span class="v">$0.85</span></div>
+        <div class="top-row"><span class="dot" style="background:var(--src-free)"></span><span class="nm">Бесплатные модели</span><span class="meta">214 ходов</span><div class="track"><i style="width:0%"></i></div><span class="v zero">$0.00</span></div>
+        <div style="font-size:10px;color:var(--c-text-muted);margin-top:8px">Экономия на бесплатных ≈ $1.90 к ценам claude</div>
+      </div>
+    </div>
+
+    <div class="card col-6">
+      <div class="c-head"><span class="t">Пользователи</span><span class="more">в срезе: andrey ×</span></div>
+      <div class="c-body">
+        <div class="top-row"><span class="rank">1</span><span class="avatar" style="background:#C2693B">А</span><span class="nm">andrey</span><div class="track"><i style="width:74%;background:var(--src-turns)"></i></div><span class="v">$24.87</span></div>
+        <div class="top-row" style="opacity:.5"><span class="rank">2</span><span class="avatar" style="background:#3F7A4F">Г</span><span class="nm">grigory</span><div class="track"><i style="width:26%;background:var(--src-turns)"></i></div><span class="v">$8.44</span></div>
+        <div class="top-row" style="opacity:.5"><span class="rank">3</span><span class="avatar" style="background:#4B6BB0">М</span><span class="nm">maria</span><div class="track"><i style="width:3%;background:var(--src-turns)"></i></div><span class="v">$0.92</span></div>
+        <div style="font-size:10px;color:var(--c-text-muted);margin-top:8px">Карточка видна только админу; в персональном режиме её нет</div>
+      </div>
+    </div>
+
+    <div class="card col-6">
+      <div class="c-head"><span class="t">Персоны</span></div>
+      <div class="c-body">
+        <div class="top-row"><span class="rank">1</span><span class="avatar" style="background:#C2693B">М</span><span class="nm">Дизайнер (Майя)</span><div class="track"><i style="width:58%;background:var(--src-turns)"></i></div><span class="v">$6.20</span></div>
+        <div class="top-row"><span class="rank">2</span><span class="avatar" style="background:#3E7CA6">Д</span><span class="nm">Backend (Денис)</span><div class="track"><i style="width:29%;background:var(--src-turns)"></i></div><span class="v">$3.14</span></div>
+        <div class="top-row"><span class="rank">3</span><span class="avatar" style="background:#8E4A82">Г</span><span class="nm">Ревьюер (Глеб)</span><div class="track"><i style="width:13%;background:var(--src-turns)"></i></div><span class="v">$1.40</span></div>
+      </div>
+    </div>
+
+    <div class="card col-12">
+      <div class="c-head"><span class="t">Ходы среза</span><span class="more">показаны дорогие · всего 720 →</span></div>
+      <div class="c-body" style="overflow-x:auto">
+        <table class="tbl">
+          <tr><th>Когда</th><th>Где</th><th>Модель</th><th style="text-align:right">In</th><th style="text-align:right">Out</th><th style="text-align:right">Cache</th><th style="text-align:right">$</th></tr>
+          <tr>
+            <td>18.07 14:32</td>
+            <td>Макеты аналитики <span class="ctx">· чат · Майя</span></td>
+            <td>claude-opus-5</td>
+            <td class="num">12.4k</td><td class="num">8.2k</td><td class="num">89k</td><td class="money">$1.85</td>
+          </tr>
+          <tr>
+            <td>17.07 09:12</td>
+            <td>Фикс ParseUsage <span class="ctx">· задача · Денис</span></td>
+            <td>claude-opus-5</td>
+            <td class="num">9.9k</td><td class="num">6.0k</td><td class="num">64k</td><td class="money">$1.31</td>
+          </tr>
+          <tr>
+            <td>16.07 22:40</td>
+            <td>Аватар персоны <span class="ctx">· fal.ai</span></td>
+            <td>flux/dev</td>
+            <td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="money">$0.11</td>
+          </tr>
+          <tr>
+            <td>16.07 03:00</td>
+            <td>Что нового <span class="ctx">· фоновый one-shot</span></td>
+            <td>claude-haiku-4.5</td>
+            <td class="num">48k</td><td class="num">2.1k</td><td class="num">—</td><td class="money">$0.09</td>
+          </tr>
+          <tr class="locked">
+            <td>12.06 —</td>
+            <td>Ревью провайдеров <span class="ctx">· день целиком</span></td>
+            <td colspan="3" style="font-size:11px;color:var(--c-warning-text)">🔒 старше окна — дневной агрегат, 44 хода без детализации</td>
+            <td class="num"></td><td class="money">$2.16</td>
+          </tr>
+        </table>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ================= 2. Персональный режим ================= -->
+<div class="section">
+  <h2>2 · Персональный режим (без фильтров)</h2>
+  <p class="note">У обычного пользователя то же полотно, но без карточки «Пользователи» и без тумблера «Все»:
+  герой-метрика — «мои траты за период». Ничего не настроено — полотно уже полезно с первого взгляда.</p>
+  <div class="topbar">
+    <span class="h">Траты</span>
+    <div class="pill-tabs"><button class="pt">Неделя</button><button class="pt on">Месяц</button><button class="pt">90 дней</button></div>
+    <span class="badge-window">● Детально: 30 дней</span>
+    <span class="chip" style="margin-left:auto">Срез не задан — вся картина</span>
+  </div>
+  <div class="canvas">
+    <div class="card col-8">
+      <div class="c-body">
+        <div class="hero">
+          <div class="num">
+            <div class="v">$24.87</div>
+            <div class="l">июль · +18% к июню</div>
+            <div class="mini">
+              <div><div class="v">1 214</div><div class="l">ходов</div></div>
+              <div><div class="v">$0.020</div><div class="l">средний ход</div></div>
+            </div>
+          </div>
+          <div class="area-wrap" style="min-width:280px">
+            <div class="area" style="height:110px">
+              <svg viewBox="0 0 600 110" preserveAspectRatio="none">
+                <path d="M0,110 L0,74 C60,70 90,80 150,72 C210,64 240,78 300,48 C340,30 380,56 430,40 C480,26 540,46 600,36 L600,110 Z" fill="var(--src-turns)" opacity=".85"/>
+              </svg>
+              <div class="agg-zone" style="bottom:0"><span>агрегаты</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card col-4">
+      <div class="c-head"><span class="t">Проекты</span></div>
+      <div class="c-body">
+        <div class="top-row"><span class="rank">1</span><span class="nm">AI Home</span><div class="track"><i style="width:57%;background:var(--src-turns)"></i></div><span class="v">$14.20</span></div>
+        <div class="top-row"><span class="rank">2</span><span class="nm">RailWay</span><div class="track"><i style="width:25%;background:var(--src-turns)"></i></div><span class="v">$6.31</span></div>
+        <div class="top-row"><span class="rank">3</span><span class="nm">Вне проектов</span><div class="track"><i style="width:13%;background:var(--src-turns)"></i></div><span class="v">$3.12</span></div>
+        <div class="top-row"><span class="rank">4</span><span class="nm">Фоновые</span><div class="track"><i style="width:5%;background:var(--src-oneshot)"></i></div><span class="v">$1.24</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= 3. Виджет «Домой» и бейдж ================= -->
+<div class="section">
+  <h2>3 · Виджет «Домой» и бейдж стоимости чата</h2>
+  <p class="note">Виджет варианта C — мини-область месяца с той же честной границей окна. Бейдж чата: клик ведёт в
+  дашборд с уже применённым срезом «этот чат».</p>
+  <div style="display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start">
+    <div class="widget">
+      <div class="w-head"><span class="t">Траты</span><span class="arrow">→</span></div>
+      <div class="big">$1.85</div>
+      <div class="cmp">сегодня · июль $24.87 · +18% к июню</div>
+      <div class="warea">
+        <svg viewBox="0 0 300 44" preserveAspectRatio="none">
+          <path d="M0,44 L0,30 C30,28 45,32 75,28 C105,24 120,30 150,18 C170,10 190,22 215,15 C240,9 270,17 300,13 L300,44 Z" fill="var(--src-turns)" opacity=".8"/>
+        </svg>
+      </div>
+      <div class="cmp" style="margin-top:6px;color:var(--c-text-muted)">Дорогой день: 18 июля — $3.10</div>
+    </div>
+    <div style="flex:1;min-width:320px;display:flex;flex-direction:column;gap:10px">
+      <div class="chat-head-demo">
+        <span class="avatar" style="background:#C2693B;width:26px;height:26px;font-size:10px">М</span>
+        <div style="min-width:0">
+          <div style="font-weight:600;color:var(--c-text-heading);font-size:13px">Дизайнер (Майя)</div>
+          <div style="font-size:11px;color:var(--c-text-muted)">AI Home · claude-opus-5</div>
+        </div>
+        <div style="margin-left:auto;display:flex;gap:6px;align-items:center">
+          <span class="chip" style="cursor:default">32% контекста</span>
+          <span class="cost-badge">$4.87</span>
+        </div>
+      </div>
+      <div class="chat-head-demo">
+        <span class="avatar" style="background:#3F7A4F;width:26px;height:26px;font-size:10px">N</span>
+        <div style="min-width:0">
+          <div style="font-weight:600;color:var(--c-text-heading);font-size:13px">Быстрый чат</div>
+          <div style="font-size:11px;color:var(--c-text-muted)">nemotron-3-ultra · бесплатная</div>
+        </div>
+        <div style="margin-left:auto"><span class="cost-badge" style="background:var(--c-success-bg);color:var(--c-success-text)">0 $</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= 4. Мобильная раскладка ================= -->
+<div class="section">
+  <h2>4 · Мобильная раскладка (390px)</h2>
+  <p class="note">Карточки складываются в один столбец, строка фильтров-чипов скроллится горизонтально и
+  прилипает под шапкой — срез всегда на виду. Tap по элементу карточки = добавить чип (hover нет).</p>
+  <div class="phones">
+    <div class="phone">
+      <div class="p-status">12:30</div>
+      <div class="p-cap">Полотно · срез «AI Home»</div>
+      <div class="m-pad" style="display:flex;gap:8px;align-items:center;padding-bottom:6px">
+        <span style="font-family:'PT Serif',serif;font-size:20px;font-weight:700;color:var(--c-text-heading)">Траты</span>
+        <div class="pill-tabs" style="margin-left:auto"><button class="pt on">Месяц</button><button class="pt">90 д</button></div>
+      </div>
+      <div class="hscroll">
+        <span class="chip filter">AI Home <span class="x">×</span></span>
+        <span class="chip">+ модель</span><span class="chip">+ источник</span><span class="chip">+ персона</span>
+      </div>
+      <div class="m-pad" style="padding-top:0">
+        <div class="card">
+          <div class="c-body">
+            <div class="num"><div style="font-family:'JetBrains Mono',monospace;font-size:26px;font-weight:600;color:var(--c-accent)">$14.20</div>
+            <div style="font-size:11px;color:var(--c-text-secondary);margin-top:2px">AI Home · июль · 720 ходов</div></div>
+            <div class="warea" style="margin-top:8px">
+              <svg viewBox="0 0 300 44" preserveAspectRatio="none">
+                <path d="M0,44 L0,30 C30,28 45,32 75,28 C105,24 120,30 150,18 C170,10 190,22 215,15 C240,9 270,17 300,13 L300,44 Z" fill="var(--src-turns)" opacity=".8"/>
+              </svg>
+            </div>
+          </div>
+        </div>
+        <div class="card" style="margin-top:8px">
+          <div class="c-head"><span class="t">Чаты и задачи</span></div>
+          <div class="c-body">
+            <div class="top-row"><span class="nm">Макеты аналитики</span><div class="track"><i style="width:63%;background:var(--src-turns)"></i></div><span class="v">$8.90</span></div>
+            <div class="top-row"><span class="nm">Фикс ParseUsage</span><div class="track"><i style="width:22%;background:var(--src-turns)"></i></div><span class="v">$3.14</span></div>
+            <div class="top-row"><span class="nm">Ревью провайдеров</span><div class="track"><i style="width:15%;background:var(--src-turns)"></i></div><span class="v">$2.16</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= 5. Состояния ================= -->
+<div class="section" style="padding-bottom:48px">
+  <h2>5 · Состояния</h2>
+  <div class="states">
+    <div class="state-card">
+      <div class="cap">Пустое — трат ещё нет</div>
+      <div class="empty-body">
+        <div class="pic">🪙</div>
+        <div class="h">Трат ещё нет</div>
+        <div class="d">Полотно оживёт после первого хода. Бесплатные модели тоже попадут сюда — со стоимостью 0 $.</div>
+      </div>
+    </div>
+    <div class="state-card">
+      <div class="cap">Загрузка — скелетон полотна</div>
+      <div style="padding:16px">
+        <div class="skel" style="height:90px;margin-bottom:8px"></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <div class="skel" style="height:110px"></div><div class="skel" style="height:110px"></div>
+        </div>
+      </div>
+    </div>
+    <div class="state-card">
+      <div class="cap">Ошибка</div>
+      <div class="empty-body">
+        <div class="pic">⚠️</div>
+        <div class="h" style="font-family:'Hanken Grotesk',sans-serif;font-size:14px;color:var(--c-danger-text)">Не удалось загрузить аналитику</div>
+        <div class="d" style="margin-bottom:14px">Сервер не ответил. Попробуйте ещё раз.</div>
+        <button class="btn">Повторить</button>
+      </div>
+    </div>
+    <div class="state-card">
+      <div class="cap">Срез отсёк всё</div>
+      <div class="empty-body">
+        <div class="pic">🔍</div>
+        <div class="h">В этом срезе пусто</div>
+        <div class="d">По срезу «maria · fal.ai» трат нет. Уберите часть чипов — полотно вернётся.</div>
+        <button class="btn ghost" style="margin-top:12px">Сбросить срез</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

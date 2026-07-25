@@ -198,34 +198,40 @@ public sealed partial class SubscriptionOAuthUsageService(
             return;
 
         // Заведомо протухший access-токен профиля продлеваем ДО запроса — не жечь
-        // тик на гарантированный 401
-        var refreshed = false;
+        // тик на гарантированный 401. Не больше ОДНОЙ попытки рефреша за тик: token-эндпоинт
+        // живёт в том же скользящем 429-бакете UA claude-code, что и usage (наблюдалось
+        // на проде 25.07) — повторный залп только продлевает окно отказов.
+        var refreshAttempted = false;
+        RefreshResult? refresh = null;
         if (profileDir is not null && ReadProfileCreds(profileDir) is { Expired: true, RefreshToken.Length: > 0 })
         {
-            var fresh = await TryRefreshProfileAsync(key, profileDir, ct);
-            if (fresh is not null) { token = fresh; refreshed = true; }
+            refresh = await TryRefreshProfileAsync(key, profileDir, ct);
+            refreshAttempted = true;
+            if (refresh.Token is not null) token = refresh.Token;
+        }
+
+        // Рефреш упёрся в 429 — уводим аккаунт в общий backoff, не трогая usage-эндпоинт:
+        // запрос протухшим токеном дал бы гарантированный 401 и лишний трафик в тот же бакет
+        if (refresh is { RateLimited: true })
+        {
+            ApplyBackoff(key, b.Strikes, retryAfter: null);
+            return;
         }
 
         var r = await SendUsageRequestAsync(token, ct);
 
         // Токен отвергнут при непротухшем expiresAt (отзыв, рассинхрон часов) — одна
         // попытка продлиться по refresh-токену и повторить; дальше честный unauthorized
-        if (r.Code is 401 or 403 && profileDir is not null && !refreshed)
+        if (r.Code is 401 or 403 && profileDir is not null && !refreshAttempted)
         {
-            var fresh = await TryRefreshProfileAsync(key, profileDir, ct);
-            if (fresh is not null)
-                r = await SendUsageRequestAsync(fresh, ct);
+            refresh = await TryRefreshProfileAsync(key, profileDir, ct);
+            if (refresh.Token is not null)
+                r = await SendUsageRequestAsync(refresh.Token, ct);
         }
 
         if (r.Code == 429)
         {
-            // Экспоненциальный backoff: интервал ×2 с каждым 429 подряд, потолок час;
-            // Retry-After сервера (если пришёл) уважаем как есть
-            var strikes = b.Strikes + 1;
-            var backoff = TimeSpan.FromMinutes(Math.Min(
-                _pollMinutes * Math.Pow(2, strikes), MaxBackoff.TotalMinutes));
-            var delay = r.RetryAfter ?? backoff;
-            _backoff[key] = (DateTime.UtcNow + delay, strikes);
+            ApplyBackoff(key, b.Strikes, r.RetryAfter);
             return;
         }
         if (r.Code is < 200 or >= 300)
@@ -243,7 +249,21 @@ public sealed partial class SubscriptionOAuthUsageService(
         RecordWindows(key, doc.RootElement);
     }
 
+    // Экспоненциальный backoff по 429: интервал ×2 с каждым отказом подряд, потолок час;
+    // Retry-After сервера (если пришёл) уважаем как есть
+    private void ApplyBackoff(string key, int prevStrikes, TimeSpan? retryAfter)
+    {
+        var strikes = prevStrikes + 1;
+        var backoff = TimeSpan.FromMinutes(Math.Min(
+            _pollMinutes * Math.Pow(2, strikes), MaxBackoff.TotalMinutes));
+        _backoff[key] = (DateTime.UtcNow + (retryAfter ?? backoff), strikes);
+    }
+
     private sealed record UsageResponse(int Code, TimeSpan? RetryAfter, string? Body);
+
+    // Итог попытки рефреша: Token — свежий access-токен (null — не продлилось),
+    // RateLimited — эндпоинт ответил 429 (окно бакета, повторять в этом тике нельзя)
+    private sealed record RefreshResult(string? Token, bool RateLimited = false);
 
     private async Task<UsageResponse> SendUsageRequestAsync(string token, CancellationToken ct)
     {
@@ -264,17 +284,17 @@ public sealed partial class SubscriptionOAuthUsageService(
     // Продление access-токена профиля по refresh-токену — тем же путём, что сам CLI:
     // POST console.anthropic.com/v1/oauth/token с client_id Claude Code. Свежая пара
     // пишется обратно в .credentials.json (остальные поля файла сохраняются как есть).
-    // null — продлить не вышло: нет refresh-токена, эндпоинт отверг, файл не читается.
-    private async Task<string?> TryRefreshProfileAsync(string key, string profileDir, CancellationToken ct)
+    // Token=null — продлить не вышло: нет refresh-токена, эндпоинт отверг, файл не читается.
+    private async Task<RefreshResult> TryRefreshProfileAsync(string key, string profileDir, CancellationToken ct)
     {
         try
         {
             var credsPath = Path.Combine(profileDir, ".credentials.json");
-            if (!File.Exists(credsPath)) return null;
+            if (!File.Exists(credsPath)) return new RefreshResult(null);
             var root = JsonNode.Parse(await File.ReadAllTextAsync(credsPath, ct)) as JsonObject;
             var oauth = root?["claudeAiOauth"] as JsonObject;
             var refreshToken = oauth?["refreshToken"]?.GetValue<string>();
-            if (string.IsNullOrWhiteSpace(refreshToken)) return null;
+            if (string.IsNullOrWhiteSpace(refreshToken)) return new RefreshResult(null);
 
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(RequestTimeout);
@@ -292,6 +312,8 @@ public sealed partial class SubscriptionOAuthUsageService(
             req.Headers.TryAddWithoutValidation("User-Agent", await ResolveUserAgentAsync(cts.Token));
 
             using var resp = await client.SendAsync(req, cts.Token);
+            if (resp.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+                return new RefreshResult(null, RateLimited: true); // окно бакета — молча ждать backoff
             if (!resp.IsSuccessStatusCode)
             {
                 // Не чаще раза: дальше тик всё равно кончится 401 и SetStatus залогирует
@@ -299,12 +321,12 @@ public sealed partial class SubscriptionOAuthUsageService(
                 if (StatusOf(key) != StatusUnauthorized)
                     Console.Error.WriteLine($"[OAuthUsage] аккаунт '{key}': рефреш токена отвергнут (HTTP {(int)resp.StatusCode}) — " +
                         "нужен `claude login` в профиле подписки");
-                return null;
+                return new RefreshResult(null);
             }
 
             using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(cts.Token));
             var access = doc.RootElement.TryGetProperty("access_token", out var at) ? at.GetString() : null;
-            if (string.IsNullOrWhiteSpace(access)) return null;
+            if (string.IsNullOrWhiteSpace(access)) return new RefreshResult(null);
             var newRefresh = doc.RootElement.TryGetProperty("refresh_token", out var rt) ? rt.GetString() : null;
             var expiresIn = doc.RootElement.TryGetProperty("expires_in", out var ei)
                 && ei.ValueKind == JsonValueKind.Number ? ei.GetInt64() : 0;
@@ -319,13 +341,13 @@ public sealed partial class SubscriptionOAuthUsageService(
             await File.WriteAllTextAsync(tmp, root!.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), ct);
             File.Move(tmp, credsPath, overwrite: true);
             Console.Error.WriteLine($"[OAuthUsage] аккаунт '{key}': access-токен профиля продлён по refresh-токену");
-            return access;
+            return new RefreshResult(access);
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
             Console.Error.WriteLine($"[OAuthUsage] аккаунт '{key}': рефреш токена не удался: {ex.Message}");
-            return null;
+            return new RefreshResult(null);
         }
     }
 

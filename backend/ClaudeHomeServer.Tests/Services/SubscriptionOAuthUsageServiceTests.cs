@@ -275,6 +275,31 @@ public class SubscriptionOAuthUsageServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Рефреш429_ОднаПопытка_БезЗапросаUsage_АккаунтВBackoff()
+    {
+        // Прод 25.07: token-эндпоинт живёт в том же скользящем 429-бакете UA claude-code,
+        // что и usage — при 429 нельзя ни повторять рефреш, ни жечь usage-запрос протухшим
+        // токеном (гарантированный 401 + трафик в тот же бакет)
+        var dir = WriteProfileCreds("sub-limited", "stale-token", "refresh-1",
+            DateTimeOffset.UtcNow.AddHours(-2).ToUnixTimeMilliseconds());
+        var handler = new StubHandler(req => req.RequestUri!.ToString().StartsWith(TokenEndpoint)
+            ? new HttpResponseMessage(HttpStatusCode.TooManyRequests)
+            : throw new InvalidOperationException("usage-эндпоинт не должен дёргаться при 429 рефреша"));
+        var (svc, _) = CreateService(handler);
+
+        var log = await CaptureErrAsync(async () =>
+        {
+            await svc.PollAsync("claude-2", "stale-token", dir, CancellationToken.None);
+            // Второй тик сразу же: аккаунт в backoff — ни одного нового запроса
+            await svc.PollAsync("claude-2", "stale-token", dir, CancellationToken.None);
+        });
+
+        handler.Calls.Should().Be(1, "одна попытка рефреша, без повтора и без usage-запроса");
+        svc.StatusOf("claude-2").Should().BeNull("429 бакета — не приговор токену, статус не трогаем");
+        log.Should().NotContain("рефреш токена отвергнут", "429 — молча ждать, это не отказ токена");
+    }
+
+    [Fact]
     public async Task РефрешОтвергнут_СтатусUnauthorized_ФайлНеТронут()
     {
         var dir = WriteProfileCreds("sub-dead", "stale-token", "refresh-dead",

@@ -13,6 +13,32 @@
 //   notifications_delete   — удалить уведомление
 
 import { createInterface } from 'node:readline';
+import { AsyncLocalStorage } from 'node:async_hooks';
+
+// Процесс сервера не имеет права умирать от одной необработанной ошибки: вместе с ним из хода
+// исчезают ВСЕ его инструменты, а незавершённые вызовы падают «Stream closed» — ровно та
+// картина, на которую жаловались. Логируем и продолжаем жить: обработчики вызовов независимы,
+// поэтому уцелевший процесс отработает следующий вызов, а причина останется в stderr.
+process.on('unhandledRejection', err => {
+  console.error(`[mcp] необработанное отклонение промиса: ${err?.stack ?? err}`);
+});
+process.on('uncaughtException', err => {
+  console.error(`[mcp] необработанное исключение: ${err?.stack ?? err}`);
+});
+// CLI закрыл pipe (убил сервер, завершился ход) — писать больше некуда. Это штатное
+// завершение, а не авария: без обработчика EPIPE всплыл бы как uncaughtException.
+process.stdout.on('error', err => {
+  if (err?.code === 'EPIPE') process.exit(0);
+  console.error(`[mcp] ошибка записи в stdout: ${err?.message ?? err}`);
+});
+
+
+// Имя инструмента текущего вызова — уезжает в заголовке X-Mcp-Tool: без него на бэкенде
+// не видно, ЧТО именно отказало (диагностика MCP шла только разбором истории чатов вручную).
+// AsyncLocalStorage, а не переменная модуля: вызовы инструментов идут параллельно и
+// перетирали бы её друг у друга.
+const callCtx = new AsyncLocalStorage();
+
 
 const API_URL = (process.env.NOTIFICATIONS_API_URL ?? 'http://localhost:5000').replace(/\/$/, '');
 const API_TOKEN = process.env.NOTIFICATIONS_API_TOKEN ?? '';
@@ -74,6 +100,7 @@ async function api(path, { timeoutMs = 30_000, ...options } = {}, attempt = 0) {
       headers: {
         'Content-Type': 'application/json; charset=utf-8',
         Authorization: `Bearer ${API_TOKEN}`,
+        ...(callCtx.getStore()?.tool ? { 'X-Mcp-Tool': callCtx.getStore().tool } : {}),
         ...(options.headers ?? {}),
       },
     });
@@ -224,6 +251,8 @@ rl.on('line', async (line) => {
   if (msg.method === 'tools/call') {
     const { name, arguments: args } = msg.params ?? {};
 
+    // Контекст вызова — чтобы api() проставил X-Mcp-Tool (наблюдаемость на бэкенде)
+    return callCtx.run({ tool: name }, async () => {
     try {
       switch (name) {
         case 'notifications_create': {
@@ -281,7 +310,7 @@ rl.on('line', async (line) => {
     } catch (err) {
       respondError(msg.id, -32603, err.message || 'Internal error');
     }
-    return;
+    });
   }
 
   // Ping / health

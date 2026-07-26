@@ -16,6 +16,32 @@
 //                                      (create/update/delete там запрещены)
 
 import { createInterface } from 'node:readline';
+import { AsyncLocalStorage } from 'node:async_hooks';
+
+// Процесс сервера не имеет права умирать от одной необработанной ошибки: вместе с ним из хода
+// исчезают ВСЕ его инструменты, а незавершённые вызовы падают «Stream closed» — ровно та
+// картина, на которую жаловались. Логируем и продолжаем жить: обработчики вызовов независимы,
+// поэтому уцелевший процесс отработает следующий вызов, а причина останется в stderr.
+process.on('unhandledRejection', err => {
+  console.error(`[mcp] необработанное отклонение промиса: ${err?.stack ?? err}`);
+});
+process.on('uncaughtException', err => {
+  console.error(`[mcp] необработанное исключение: ${err?.stack ?? err}`);
+});
+// CLI закрыл pipe (убил сервер, завершился ход) — писать больше некуда. Это штатное
+// завершение, а не авария: без обработчика EPIPE всплыл бы как uncaughtException.
+process.stdout.on('error', err => {
+  if (err?.code === 'EPIPE') process.exit(0);
+  console.error(`[mcp] ошибка записи в stdout: ${err?.message ?? err}`);
+});
+
+
+// Имя инструмента текущего вызова — уезжает в заголовке X-Mcp-Tool: без него на бэкенде
+// не видно, ЧТО именно отказало (диагностика MCP шла только разбором истории чатов вручную).
+// AsyncLocalStorage, а не переменная модуля: вызовы инструментов идут параллельно и
+// перетирали бы её друг у друга.
+const callCtx = new AsyncLocalStorage();
+
 
 const API_URL = (process.env.TASKS_API_URL ?? 'http://localhost:5000').replace(/\/$/, '');
 const API_TOKEN = process.env.TASKS_API_TOKEN ?? '';
@@ -60,7 +86,13 @@ function assertProjectWritable(projectId) {
 // возвращали задачу любого проекта владельца безотносительно контекста чата)
 function assertTaskAccessible(task) {
   if (!PROJECT_ID) return; // чат вне проекта / глобальная персона — весь воркспейс, как и раньше
-  if (!task.projectId || !allowedProjectIds().has(task.projectId))
+  // ЛИЧНАЯ задача владельца (без проекта) доступна из любого его чата. Контекст проекта нужен,
+  // чтобы не лезть в ЧУЖИЕ проекты, а личные дела пользователя чужими не являются — владение
+  // уже проверил бэкенд по токену. Раньше запрет бил и по ним: задача читалась, а tasks_update
+  // по ней падал «недоступна в этом контексте» — со стороны это выглядело как отвалившийся
+  // инструмент («минуту назад работало»).
+  if (!task.projectId) return;
+  if (!allowedProjectIds().has(task.projectId))
     throw new Error(`Задача ${task.id} недоступна в этом контексте — она принадлежит другому проекту.`);
 }
 
@@ -68,7 +100,11 @@ function assertTaskAccessible(task) {
 // не бросающая — используется на списках, где недоступные записи просто отфильтровываются)
 function isTaskInScope(task) {
   if (!PROJECT_ID) return true;
-  return !!task.projectId && allowedProjectIds().has(task.projectId);
+  // Личные задачи владельца видны и из проектного чата — иначе scope=all обещал «все задачи
+  // пользователя по всем проектам и личные», а отдавал один текущий проект (и tasks_search
+  // молча терял личные находки). Дефолтный scope=context остаётся строго проектным.
+  if (!task.projectId) return true;
+  return allowedProjectIds().has(task.projectId);
 }
 
 // --- HTTP к бэкенду ---
@@ -129,6 +165,7 @@ async function api(path, { timeoutMs = 60_000, ...options } = {}, attempt = 0) {
       headers: {
         'Content-Type': 'application/json; charset=utf-8',
         Authorization: `Bearer ${API_TOKEN}`,
+        ...(callCtx.getStore()?.tool ? { 'X-Mcp-Tool': callCtx.getStore().tool } : {}),
         // Сессия, в которой работает модель: по ней бэкенд определяет, идёт ли делегированный
         // ход, и сам решает, что на нём запрещено (запуск исполнителя). Состав инструментов
         // сервера при этом остаётся неизменным — иначе процесс CLI перезапускается.
@@ -662,11 +699,13 @@ function replyError(id, code, message) {
 
 const rl = createInterface({ input: process.stdin, terminal: false });
 
-rl.on('line', async line => {
-  line = line.trim();
-  if (!line) return;
-  let msg;
-  try { msg = JSON.parse(line); } catch { return; }
+// Обработка ОДНОГО JSON-RPC сообщения. Вынесена из обработчика строки, чтобы поддержать
+// batch (массив сообщений): раньше массив уходил в деструктуризацию, id оказывался undefined,
+// и запрос молча терялся — ответа клиент не получал вовсе и ждал до своего таймаута.
+async function handleMessage(msg) {
+  // null — валидный JSON: деструктуризация его роняла процесс (unhandled rejection),
+  // а вместе с процессом исчезали ВСЕ инструменты сервера («Stream closed»)
+  if (msg === null || typeof msg !== 'object') return;
 
   const { id, method, params } = msg;
   // Нотификации (без id) не требуют ответа
@@ -686,7 +725,8 @@ rl.on('line', async line => {
         break;
       case 'tools/call': {
         try {
-          reply(id, await callTool(params.name, params.arguments ?? {}));
+          reply(id, await callCtx.run({ tool: params.name },
+            () => callTool(params.name, params.arguments ?? {})));
         } catch (err) {
           // Ошибка инструмента — валидный результат с isError, не protocol error
           reply(id, {
@@ -705,4 +745,20 @@ rl.on('line', async line => {
   } catch (err) {
     replyError(id, -32603, String(err?.message ?? err));
   }
+}
+
+rl.on('line', async line => {
+  line = line.trim();
+  if (!line) return;
+  let msg;
+  try { msg = JSON.parse(line); }
+  catch (err) {
+    // Раньше битая строка проглатывалась молча — сбой было невозможно связать с причиной
+    console.error(`[mcp] пропущена нечитаемая строка stdin: ${err?.message ?? err}`);
+    return;
+  }
+  // Batch: по спецификации это массив сообщений (мы эхом подтверждаем protocolVersion
+  // клиента, включая версии, где batch разрешён) — обрабатываем каждое.
+  if (Array.isArray(msg)) { for (const one of msg) await handleMessage(one); return; }
+  await handleMessage(msg);
 });

@@ -162,9 +162,11 @@ MCP-конфиг и передаёт env (`*_API_URL`, сервисный JWT в
 и любая его зависимость от свойств хода (глубина делегирования, текст, флаги) перезапускает
 процесс со всеми MCP-серверами: «Stream closed» на незавершённых вызовах и «No such tool
 available». Ограничения по ходу — на бэкенде: серверы шлют `X-Caller-Session-Id`, экшены
-помечены `[DenyOnDelegatedTurn]`; сторож — `McpToolsetStabilityTests`. Состав
-инструментов и грабли HTTPS-деплоя («fetch failed» у всех инструментов при живом бэкенде →
-явный `McpTasksApiUrl`) — [docs/mcp-servers.md](docs/mcp-servers.md).
+помечены `[DenyOnDelegatedTurn]`; сторож — `McpToolsetStabilityTests`. **Диагностика:**
+`GET /api/mcp/calls` (админ) — счётчики вызовов, доля отказов и последние сбои по каждому
+инструменту (заголовки `X-Caller-Session-Id` + `X-Mcp-Tool` → `McpCallLogMiddleware`). Состав
+инструментов, живучесть stdio-цикла и грабли HTTPS-деплоя («fetch failed» у всех инструментов
+при живом бэкенде → явный `McpTasksApiUrl`) — [docs/mcp-servers.md](docs/mcp-servers.md).
 
 ## Заметки и Знания (Dify RAG)
 

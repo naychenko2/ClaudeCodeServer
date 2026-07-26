@@ -8,6 +8,7 @@ namespace ClaudeHomeServer.Tests.Services;
 
 // Интеграционные тесты GitService на настоящем git CLI: временный репозиторий на диске,
 // запуск через LocalProcessRunner (среда local; container-путь проверяется смоуком).
+[Trait("Category", "Slow")]
 public class GitServiceTests : IAsyncLifetime, IDisposable
 {
     private sealed class LocalOnlyFactory : ILauncherFactory

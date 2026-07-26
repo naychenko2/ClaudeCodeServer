@@ -9,6 +9,7 @@ namespace ClaudeHomeServer.Tests.Services;
 // папке. Именно здесь живёт весь риск потери данных, и никакая проверка строковой логики
 // его не ловит: важно, что именно попало в zip, что осталось после подмены каталога и что
 // происходит, когда операция обрывается на середине.
+[Trait("Category", "Slow")]
 public class BackupRoundTripTests : IDisposable
 {
     private readonly string _root = Path.Combine(

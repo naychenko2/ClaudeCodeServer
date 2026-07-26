@@ -39,7 +39,9 @@ public class LocalActionsAdminControllerTests : IClassFixture<TestWebApplication
         put.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = await put.Content.ReadFromJsonAsync<JsonElement>();
         body.GetProperty("source").GetString().Should().Be("admin");
-        body.GetProperty("route").GetString().Should().Be("claude");
+        // Легаси-значение одиночной «модели по умолчанию» нормализуется в средний слот:
+        // в ответ уходит слот, а не эхо ввода — селектор в UI знает только слоты и модели
+        body.GetProperty("route").GetString().Should().Be("tier:medium");
 
         // Экран «Использование» отдаёт тот же источник — тумблер в UI будет отмечен как переопределённый
         var usage = await _admin.GetFromJsonAsync<JsonElement>("/api/usage");
@@ -52,6 +54,19 @@ public class LocalActionsAdminControllerTests : IClassFixture<TestWebApplication
         del.StatusCode.Should().Be(HttpStatusCode.OK);
         var after = await del.Content.ReadFromJsonAsync<JsonElement>();
         after.GetProperty("source").GetString().Should().Be("default");
+    }
+
+    [Fact]
+    public async Task АдминНазначаетМестуСлотТира()
+    {
+        var put = await _admin.PutAsJsonAsync(
+            $"/api/admin/local-actions/{LocalActionCatalog.NotesTags}", new { route = "tier:strong" });
+        put.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await put.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("route").GetString().Should().Be("tier:strong");
+        body.GetProperty("source").GetString().Should().Be("admin");
+
+        await _admin.DeleteAsync($"/api/admin/local-actions/{LocalActionCatalog.NotesTags}");
     }
 
     [Fact]

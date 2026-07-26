@@ -12,7 +12,19 @@ public class ClaudeSession : ILlmSessionAdapter
 
     // По модели: сторонний CLI-провайдер отдаёт свои возможности (SupportsImages и т.п.)
     public LlmCapabilities Capabilities =>
-        _providers?.CapabilitiesFor(Info.Model) ?? LlmCapabilitiesCatalog.Claude;
+        _providers?.CapabilitiesFor(EffectiveModel) ?? LlmCapabilitiesCatalog.Claude;
+
+    // Модель, которой реально пойдёт ход. Пустая Info.Model означает «по назначению места»
+    // (слоты тиров + таблица назначений, ModelAssignmentResolver), а не дефолт claude CLI.
+    // Резолвим на каждом обращении, а не при создании адаптера: смена настройки применяется
+    // со следующего хода, чат её не «замораживает». Итоговый null = слот пуст, решает CLI.
+    private string? EffectiveModel => _assignments?.Resolve(UsageKey, Info.Model) ?? Info.Model;
+
+    // Место применения сессии — порядок как в SessionManager.UsageKeyFor
+    private string UsageKey =>
+        Info.TaskExecution || Info.TaskId is not null ? LocalActionCatalog.TasksExecutor
+        : !string.IsNullOrWhiteSpace(Info.PersonaId) ? LocalActionCatalog.ChatPersona
+        : LocalActionCatalog.ChatNew;
 
     // Состояние делегирования идущего хода — по нему бэкенд гейтит действия MCP-серверов
     // (DenyOnDelegatedTurnAttribute), не трогая СОСТАВ их инструментов
@@ -233,6 +245,9 @@ public class ClaudeSession : ILlmSessionAdapter
     // Реестр CLI-провайдеров: env-оверрайды процесса (ANTHROPIC_BASE_URL и др.)
     // для сторонних моделей; null — всегда родной Claude
     private readonly LlmProviderRegistry? _providers;
+    // Резолвер назначений моделей — нужен ради «модели по назначению места» (см. EffectiveModel);
+    // null — адаптер собран без него (тесты), тогда пустая модель означает дефолт CLI, как раньше
+    private readonly ModelAssignmentResolver? _assignments;
     private readonly ClaudeSubscriptionPool? _subscriptionPool;
     // Драйвер среды исполнения владельца (local / docker-песочница)
     private readonly Execution.IProcessLauncher _launcher;
@@ -246,9 +261,11 @@ public class ClaudeSession : ILlmSessionAdapter
         ClaudeSubscriptionPool? subscriptionPool = null,
         FileWatcherOptions? fileWatcherOptions = null,
         TimeSpan? bgLingerTimeout = null,
-        string? falMcpApiKey = null)
+        string? falMcpApiKey = null,
+        ModelAssignmentResolver? assignments = null)
     {
         _providers = providers;
+        _assignments = assignments;
         _subscriptionPool = subscriptionPool;
         _bgLingerTimeout = bgLingerTimeout ?? TimeSpan.FromMinutes(30);
         Info = info;
@@ -767,7 +784,7 @@ public class ClaudeSession : ILlmSessionAdapter
     private System.Text.Json.Nodes.JsonObject? LoadUserScopeMcpServers()
     {
         if (_providers is null) return null;
-        var isThirdParty = _providers.ResolveByModel(Info.Model) is not null;
+        var isThirdParty = _providers.ResolveByModel(EffectiveModel) is not null;
         // Подписка пула = провайдер сессии не "claude", не сторонний ключ, а активная доп.
         // подписка (условие 1:1 с применением BuildOAuthCliEnv при выборе env хода)
         var isPoolSubscription = _subscriptionPool?.HasExtra == true
@@ -1213,8 +1230,10 @@ public class ClaudeSession : ILlmSessionAdapter
         else
             args.AddRange(["--permission-mode", Info.Mode.ToCliFlag()]);
 
-        if (!string.IsNullOrWhiteSpace(Info.Model))
-            args.AddRange(["--model", LlmProviderRegistry.StripClaudeWindowAlias(Info.Model)!]);
+        // Пустая модель сессии = «по умолчанию»: подставляем глобальную настройку, а не
+        // отдаём выбор CLI (иначе «по умолчанию» значило бы в разных местах разные модели)
+        if (EffectiveModel is { } turnModel && !string.IsNullOrWhiteSpace(turnModel))
+            args.AddRange(["--model", LlmProviderRegistry.StripClaudeWindowAlias(turnModel)!]);
 
         if (!string.IsNullOrWhiteSpace(Info.Effort))
             args.AddRange(["--effort", Info.Effort]);
@@ -1223,7 +1242,7 @@ public class ClaudeSession : ILlmSessionAdapter
         // (генерация фоном с переиспользованием prompt cache хода; при холодном кэше CLI
         // сам пропускает). Только родной Claude — сторонним провайдерам фоновые запросы
         // не включаем (кэш-экономика чужая).
-        var promptSuggestionsActive = _providers is null || _providers.ResolveByModel(Info.Model) is null;
+        var promptSuggestionsActive = _providers is null || _providers.ResolveByModel(EffectiveModel) is null;
         if (promptSuggestionsActive)
             args.AddRange(["--prompt-suggestions", "true"]);
 
@@ -1626,7 +1645,7 @@ public class ClaudeSession : ILlmSessionAdapter
 
         // Сторонний провайдер (DeepSeek/GLM): перенаправляем CLI на его Anthropic-совместимый
         // эндпоинт. Env считаются каждый ход — модель сессии могла смениться между ходами.
-        var cliEnv = _providers?.BuildCliEnv(Info.Model);
+        var cliEnv = _providers?.BuildCliEnv(EffectiveModel);
         if (cliEnv is not null)
         {
             foreach (var (k, v) in cliEnv)
@@ -1641,7 +1660,7 @@ public class ClaudeSession : ILlmSessionAdapter
             var sub = _subscriptionPool.All.FirstOrDefault(s => s.Key == Info.Provider);
             if (sub?.Enabled == true)
             {
-                var oauthEnv = _providers?.BuildOAuthCliEnv(sub.Key, sub.OAuthToken, sub.ApiKey, Info.Model);
+                var oauthEnv = _providers?.BuildOAuthCliEnv(sub.Key, sub.OAuthToken, sub.ApiKey, EffectiveModel);
                 if (oauthEnv is not null)
                     foreach (var (k, v) in oauthEnv)
                         envOverrides[k] = v;
@@ -2160,8 +2179,8 @@ public class ClaudeSession : ILlmSessionAdapter
                 var usage = ParseUsage(root);
                 // На стороннем эндпоинте CLI считает total_cost_usd по ценам Anthropic —
                 // пересчитываем по ценам конфига модели (нет цен → стоимость не показываем)
-                if (_providers is not null && _providers.ResolveByModel(Info.Model) is not null)
-                    totalCost = _providers.ComputeCost(Info.Model, usage);
+                if (_providers is not null && _providers.ResolveByModel(EffectiveModel) is not null)
+                    totalCost = _providers.ComputeCost(EffectiveModel, usage);
                 // API-ошибка (напр. 429 у провайдера): CLI отдаёт subtype=success, но is_error=true
                 // и текст в result; синтетический assistant-текст не стримится дельтами —
                 // без этого пользователь увидел бы пустой «успешный» ход

@@ -114,6 +114,8 @@ public class SessionManager : IDisposable
     private readonly FalCostService _falCost;
     private readonly UsageService _usage;
     private readonly AppSettingsService _appSettings;
+    // Резолвер моделей агентных мест: пустая модель → назначение места → слот тира
+    private readonly Llm.ModelAssignmentResolver _assignments;
     private readonly UserStore _users;
     private readonly JwtService _jwt;
     private readonly Microsoft.AspNetCore.Hosting.Server.IServer _server;
@@ -214,7 +216,10 @@ public class SessionManager : IDisposable
         // Опционально (в тестах не передаётся): git-операции worktree чата
         Git.GitService? git = null,
         // Опционально (в тестах не передаётся): сбор расхода токенов (Spend Analytics)
-        Spend.ISpendCollector? spend = null)
+        Spend.ISpendCollector? spend = null,
+        // Опционально: резолвер моделей агентных мест (назначения + слоты тиров);
+        // без него собирается локально от appSettings — слоты работают и в тестах
+        Llm.ModelAssignmentResolver? assignments = null)
     {
         _spend = spend;
         _agentSync = agentSync;
@@ -233,6 +238,7 @@ public class SessionManager : IDisposable
         _falCost = falCost;
         _usage = usage;
         _appSettings = appSettings;
+        _assignments = assignments ?? new Llm.ModelAssignmentResolver(appSettings);
         _users = users;
         _jwt = jwt;
         _server = server;
@@ -605,14 +611,20 @@ public class SessionManager : IDisposable
         return _subscriptionPool.Pick(model);
     }
 
-    // Модель по умолчанию для новых чатов (глобальная настройка админа DefaultChatModel).
+    // Модель места по назначению (слоты «сильная/средняя/слабая» + таблица назначений).
     // Подставляется, только когда модель НЕ задана явно и это НЕ resume: у транскрипта
     // resumed-сессии уже зафиксированы своя модель и провайдер, и подмена здесь сменила бы
     // провайдер и упёрлась в guard смены провайдера (400).
-    private string? ResolveDefaultModel(string? model, string? resumeSessionId) =>
-        !string.IsNullOrWhiteSpace(model) || !string.IsNullOrEmpty(resumeSessionId)
-            ? model
-            : _appSettings.Get().DefaultChatModel;
+    private string? ResolveDefaultModel(string usageKey, string? model, string? resumeSessionId) =>
+        !string.IsNullOrEmpty(resumeSessionId) ? model : _assignments.Resolve(usageKey, model);
+
+    // Место применения по признакам сессии — тот же порядок, что у ClaudeSession.UsageKey:
+    // исполнитель задач специфичнее персоны, персона специфичнее обычного чата.
+    private static string UsageKeyFor(bool taskExecution, string? taskId, string? personaId) =>
+        taskExecution || taskId is not null ? Llm.LocalActionCatalog.TasksExecutor
+        : !string.IsNullOrWhiteSpace(personaId) ? Llm.LocalActionCatalog.ChatPersona
+        : Llm.LocalActionCatalog.ChatNew;
+
     private string ResolveChatRoot(string ownerId)
     {
         var user = _users.GetById(ownerId)
@@ -810,7 +822,8 @@ public class SessionManager : IDisposable
         var project = _projects.GetById(projectId)
             ?? throw new KeyNotFoundException($"Проект не найден: {projectId}");
 
-        var defaultModel = ResolveDefaultModel(model, resumeSessionId);
+        var defaultModel = ResolveDefaultModel(UsageKeyFor(taskExecution, taskId, personaId),
+            model, resumeSessionId);
         var session = new Session
         {
             ProjectId = projectId,
@@ -841,7 +854,8 @@ public class SessionManager : IDisposable
     {
         var rootPath = ResolveChatRoot(ownerId);
 
-        var defaultModel = ResolveDefaultModel(model, resumeSessionId);
+        var defaultModel = ResolveDefaultModel(UsageKeyFor(taskExecution, taskId, personaId),
+            model, resumeSessionId);
         var session = new Session
         {
             ProjectId = null,
@@ -879,6 +893,10 @@ public class SessionManager : IDisposable
             ? persona.ProjectId
             : contextProjectId;
 
+        // Персона без своей модели наследует назначение места «чат с персоной»
+        var personaModel = ResolveDefaultModel(Llm.LocalActionCatalog.ChatPersona,
+            persona.Model, resumeSessionId);
+
         if (!string.IsNullOrEmpty(targetProjectId)
             && _projects.GetById(targetProjectId) is { } project && project.OwnerId == ownerId)
         {
@@ -890,8 +908,8 @@ public class SessionManager : IDisposable
                 Mode = mode,
                 ClaudeSessionId = resumeSessionId,
                 Name = name,
-                Model = persona.Model,
-                Provider = ResolveSubscriptionProvider(persona.Model),
+                Model = personaModel,
+                Provider = ResolveSubscriptionProvider(personaModel),
                 Effort = persona.Effort,
                 AutomationRuleId = automationRuleId,
             };
@@ -910,8 +928,8 @@ public class SessionManager : IDisposable
             Mode = mode,
             ClaudeSessionId = resumeSessionId,
             Name = name,
-            Model = persona.Model,
-            Provider = ResolveSubscriptionProvider(persona.Model),
+            Model = personaModel,
+            Provider = ResolveSubscriptionProvider(personaModel),
             Effort = persona.Effort,
             AutomationRuleId = automationRuleId,
         };
@@ -928,6 +946,9 @@ public class SessionManager : IDisposable
         var participants = ValidateParticipants(ownerId, personaIds);
         var leader = participants[0];
         var participantIds = participants.Select(p => p.Id).ToList();
+        // Ведущая без своей модели наследует назначение места «чат с персоной»
+        var leaderModel = ResolveDefaultModel(Llm.LocalActionCatalog.ChatPersona,
+            leader.Model, resumeSessionId: null);
 
         if (leader.Scope == PersonaScope.Project && !string.IsNullOrEmpty(leader.ProjectId)
             && _projects.GetById(leader.ProjectId) is { } project && project.OwnerId == ownerId)
@@ -940,8 +961,8 @@ public class SessionManager : IDisposable
                 Participants = participantIds,
                 Mode = mode,
                 Name = name,
-                Model = leader.Model,
-                Provider = ResolveSubscriptionProvider(leader.Model),
+                Model = leaderModel,
+                Provider = ResolveSubscriptionProvider(leaderModel),
                 Effort = leader.Effort,
             };
             await StartNewSessionAsync(projectSession, project.RootPath, project.SystemPrompt,
@@ -959,9 +980,9 @@ public class SessionManager : IDisposable
             Participants = participantIds,
             Mode = mode,
             Name = name,
-            Model = leader.Model,
+            Model = leaderModel,
             Effort = leader.Effort,
-            Provider = ResolveSubscriptionProvider(leader.Model),
+            Provider = ResolveSubscriptionProvider(leaderModel),
         };
         await StartNewSessionAsync(session, rootPath, rawSystemPrompt: null, permissionRules: null);
         return session;
@@ -1450,8 +1471,12 @@ public class SessionManager : IDisposable
         {
             if (!started)
             {
-                entry.Info.Model = persona.Model;
-                entry.Info.Effort = persona.Effort;
+                // ?? — а не присваивание в лоб: у персоны без своей модели чат остаётся на той,
+                // что уже подставлена при создании (глобальная «модель по умолчанию»).
+                // Раньше здесь её затирало в null, и назначение персоны в свежий чат молча
+                // возвращало ход к дефолту CLI (заметнее всего в MCP chats_create + personaId)
+                entry.Info.Model = persona.Model ?? entry.Info.Model;
+                entry.Info.Effort = persona.Effort ?? entry.Info.Effort;
             }
             else if (_llmProviders.ProviderKey(persona.Model) == _llmProviders.ProviderKey(entry.Info.Model)
                 && _subscriptionPool.SupportsModel(entry.Info.Provider ?? ClaudeSubscriptionPool.PrimaryKey, persona.Model))
@@ -2144,12 +2169,20 @@ public class SessionManager : IDisposable
         if (model is not null)
         {
             var newModel = string.IsNullOrWhiteSpace(model) ? null : model.Trim();
+            // Провайдера резолвим по ЭФФЕКТИВНЫМ моделям: пустая означает «по назначению места»,
+            // а назначение может указывать на модель стороннего провайдера. По сырому null
+            // возврат glm-чата к «По умолчанию» (при назначении на glm) выглядел бы как переезд
+            // на claude и упирался бы в guard, а переход claude-чата на «По умолчанию» с чужой
+            // моделью, наоборот, проскакивал бы мимо guard и ломал транскрипт.
+            var usageKey = UsageKeyFor(entry.Info.TaskExecution, entry.Info.TaskId, entry.Info.PersonaId);
+            var effectiveNew = _assignments.Resolve(usageKey, newModel);
+            var effectiveCur = _assignments.Resolve(usageKey, entry.Info.Model);
 
             // Смена провайдера: контекст сессии живёт у провайдера (транскрипт эндпоинта),
             // «переехавшая» сессия молча потеряла бы его — для начатых сессий запрещаем.
             // В рамках одного провайдера/пула модель менять можно.
-            var newProvKey = _llmProviders.ResolveByModel(newModel)?.Key;
-            var curProvKey = _llmProviders.ResolveByModel(entry.Info.Model)?.Key;
+            var newProvKey = _llmProviders.ResolveByModel(effectiveNew)?.Key;
+            var curProvKey = _llmProviders.ResolveByModel(effectiveCur)?.Key;
             if (newProvKey != curProvKey)
             {
                 if (entry.Info.ClaudeSessionId is not null)
@@ -2164,15 +2197,17 @@ public class SessionManager : IDisposable
                 }
             }
 
+            // В Info.Model кладём именно то, что выбрали: null = «следовать настройке»
+            // (резолвится на каждом ходу, смена настройки подхватывается сама)
             entry.Info.Model = newModel;
             // При смене модели на стороннего провайдера — обновляем Provider
-            if (newModel is not null && _llmProviders.ResolveByModel(newModel) is { } newProv)
+            if (effectiveNew is not null && _llmProviders.ResolveByModel(effectiveNew) is { } newProv)
                 entry.Info.Provider = newProv.Key;
             // Родной Claude (ResolveByModel == null, в т.ч. пул подписок): модель меняем на
             // лету у живого хода — применится к его последующим round-trip'ам. У сторонних
             // провайдеров модель зашита в env процесса, там смена только со следующего хода.
-            else if (newModel is not null)
-                entry.Process?.TrySetModelLive(newModel);
+            else if (effectiveNew is not null)
+                entry.Process?.TrySetModelLive(effectiveNew);
         }
 
         if (name is not null)

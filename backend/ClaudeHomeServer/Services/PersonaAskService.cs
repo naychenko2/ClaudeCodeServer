@@ -15,7 +15,8 @@ public sealed class PersonaAskService(
     PersonaMemoryAutolearnService autolearn,
     IOneShotRunner oneShot,
     IConfiguration config,
-    ILogger<PersonaAskService> log)
+    ILogger<PersonaAskService> log,
+    ModelAssignmentResolver? assignments = null)
 {
     public async Task<string> AskAsync(string ownerId, Persona persona, string question,
         string? context, CancellationToken ct = default)
@@ -55,7 +56,11 @@ public sealed class PersonaAskService(
 
         var timeout = TimeSpan.FromMilliseconds(
             int.TryParse(config["Persona:AskTimeoutMs"], out var t) ? t : 120_000);
-        var answer = await oneShot.RunAsync(sb.ToString(), oneShot.NormalizeModel(persona.Model),
+        // Персона без своей модели отвечает моделью места «чат с персоной» (слоты тиров) —
+        // как и её обычный чат; прежде такой one-shot уходил на дефолт CLI мимо настроек
+        var askModel = assignments?.Resolve(LocalActionCatalog.ChatPersona, persona.Model)
+            ?? persona.Model;
+        var answer = await oneShot.RunAsync(sb.ToString(), oneShot.NormalizeModel(askModel),
             timeout, ct, persona.Effort);
         if (string.IsNullOrWhiteSpace(answer))
             throw new InvalidOperationException("Персона не ответила (пустой ответ модели)");

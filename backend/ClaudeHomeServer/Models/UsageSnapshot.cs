@@ -41,15 +41,18 @@ public record UsageResponse(IReadOnlyList<UsageSnapshot> Snapshots, PlanInfo? Pl
 public record OllamaUsageInfo(bool Enabled, string? Model, string? BaseUrl,
     IReadOnlyList<OllamaActionInfo> Actions);
 
-// Route — исполнитель первого шага: "local", "claude", "default" (модель по умолчанию для чатов)
-// или id конкретной модели провайдера (дальше действие идёт по цепочке «выбранное → локаль → claude»).
+// Route — исполнитель первого шага: "local", "tier:strong|medium|weak" (слот тира),
+// легаси "claude"/"default" (≙ tier:medium) или id конкретной модели провайдера (дальше
+// действие идёт по цепочке «выбранное → локаль → claude»).
 // RoutedToOllama — начинается ли действие с локальной модели прямо сейчас (с учётом доступности Ollama).
 // Source — откуда взято значение: "default" (каталог), "config" (Ollama:Actions) или "admin"
 // (выбор в UI); по нему видно, что переопределено и что можно сбросить.
 // RequiresStrong — действию нужна сильная модель (лицо продукта, генерация артефактов):
 // локаль ему не годится, поэтому пресеты подбирают Claude/облачную модель, а не Ollama.
+// Agentic — агентное место (группа «Чаты и персоны»): локаль и direct:-модели недоступны.
 public record OllamaActionInfo(string Key, string Title, string Group, bool RoutedToOllama,
-    string Source = "default", string Route = "claude", bool RequiresStrong = false);
+    string Source = "default", string Route = "claude", bool RequiresStrong = false,
+    bool Agentic = false);
 
 // Utilisation одной подписки: снимки + опциональное имя + статус роутинга.
 // InRotation — берёт ли пул этот аккаунт для новых чатов; Utilization — эффективная

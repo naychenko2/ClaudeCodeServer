@@ -1,5 +1,6 @@
 import { Sparkles, Gem, Brain, Feather, Zap, Cpu } from 'lucide-react';
-import { useModels, modelProvider, providerLabel, modelLabel } from '../lib/models';
+import { useModels, modelProvider, providerLabel, modelLabel, useDefaultModelOption,
+  USAGE, type UsageKey } from '../lib/models';
 import { WindowBadge } from './ModelPicker';
 import { ComposerMenu, type ComposerMenuGroup } from './ComposerMenu';
 
@@ -22,6 +23,9 @@ interface Props {
   isMobile?: boolean;
   // Схлопнуть плашку до иконки (узкая полоса контролов)
   compact?: boolean;
+  // Место применения: подпись пункта «По умолчанию» — от назначения ЭТОГО места
+  // (чат персоны и обычный чат могут быть назначены на разные модели)
+  usage?: UsageKey;
 }
 
 // Иконка модели по «классу» (мощная/универсальная/экономичная/быстрая). Тир угадываем
@@ -38,8 +42,10 @@ export function ModelIcon({ value, size = 14 }: { value?: string | null; size?: 
   return <Cpu {...props} />;                                              // нейтральная
 }
 
-export function ComposerModelPicker({ value, onChange, started, isMobile, compact }: Props) {
+export function ComposerModelPicker({ value, onChange, started, isMobile, compact,
+  usage = USAGE.chatNew }: Props) {
   const models = useModels();
+  const defaultOption = useDefaultModelOption(usage);
 
   // Прямой HTTP-адаптер в чате не годится (нужны агентские вызовы) — прячем
   const selectable = models.filter(m => !(m.provider ?? 'claude').endsWith('-direct'));
@@ -50,9 +56,13 @@ export function ComposerModelPicker({ value, onChange, started, isMobile, compac
   const current = value ?? '';
   const currentProvider = modelProvider(current);
 
-  // Группировка по провайдеру, Claude первой, остальные по алфавиту подписи
+  // Группировка по провайдеру, Claude первой, остальные по алфавиту подписи.
+  // Пункт «По умолчанию» (value '') из групп исключён — он стоит НАД ними отдельной
+  // строкой: настройка может указывать на модель любого провайдера, и место внутри
+  // Claude — артефакт того, что этот пункт приходит из каталога CLI.
   const byProvider = new Map<string, typeof selectable>();
   for (const m of selectable) {
+    if (!m.value) continue;
     const key = m.provider ?? 'claude';
     if (!byProvider.has(key)) byProvider.set(key, []);
     byProvider.get(key)!.push(m);
@@ -61,6 +71,24 @@ export function ComposerModelPicker({ value, onChange, started, isMobile, compac
     a === 'claude' ? -1 : b === 'claude' ? 1 : providerLabel(a).localeCompare(providerLabel(b)));
   // Заголовки групп нужны, только когда провайдеров больше одного
   const showHeaders = providerKeys.length > 1;
+
+  // Отдельная группа-шапка с единственным пунктом «По умолчанию (<модель>)»
+  const defaultGroup: ComposerMenuGroup[] = selectable.some(m => !m.value) ? [{
+    key: '__default',
+    label: undefined,
+    // Отчерк: при одном провайдере заголовков групп нет, и пункт сливался бы со списком
+    divider: true,
+    note: started && modelProvider('', usage) !== currentProvider
+      ? `Перенесёт чат к ${providerLabel(modelProvider('', usage))} — контекст сохранится`
+      : undefined,
+    items: [{
+      value: '',
+      label: defaultOption.label,
+      description: defaultOption.description,
+      icon: <ModelIcon value="" />,
+      badge: <WindowBadge tokens={defaultOption.contextWindow} />,
+    }],
+  }] : [];
 
   const groups: ComposerMenuGroup[] = providerKeys.map(pk => ({
     key: pk,
@@ -81,13 +109,13 @@ export function ComposerModelPicker({ value, onChange, started, isMobile, compac
   return (
     <ComposerMenu
       value={current}
-      groups={groups}
+      groups={[...defaultGroup, ...groups]}
       onChange={onChange}
       triggerIcon={<ModelIcon value={current} />}
       // На дефолте пишем «Модель», а не «По умолчанию»: так плашка называет, чем
       // управляет, и не сливается с соседней плашкой усилия. Точное значение — в тултипе.
       triggerLabel={current ? modelLabel(current) : 'Модель'}
-      title={`Модель: ${modelLabel(current)}`}
+      title={`Модель: ${current ? modelLabel(current) : defaultOption.label}`}
       isMobile={isMobile}
       compact={compact}
     />

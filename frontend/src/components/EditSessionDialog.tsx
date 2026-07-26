@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { Session } from '../types';
 import { api } from '../lib/api';
-import { useModels, useModelCaps, modelProvider, providerLabel } from '../lib/models';
+import { useModels, useModelCaps, modelProvider, providerLabel, USAGE } from '../lib/models';
 import { effortsForProvider } from '../lib/effort';
 import { C, FONT, MODAL_W } from '../lib/design';
 import { Modal, ModalActions, Field, TextField, SegmentedControl, Toggle } from './ui';
@@ -124,7 +124,8 @@ export function EditSessionDialog({ session, onSaved, onClose }: Props) {
               ? `Чат переедет на «${providerLabel(newProvider)}» — контекст сохранится (перенос транскрипта).`
               : 'Применится со следующего сообщения.'}
           >
-            <ModelPicker value={model} options={models} onChange={setModel} columns={2} />
+            <ModelPicker value={model} options={models} onChange={setModel} columns={2}
+              usage={session.personaId ? USAGE.chatPersona : USAGE.chatNew} />
           </Field>
 
           {caps.supportsEffort && (

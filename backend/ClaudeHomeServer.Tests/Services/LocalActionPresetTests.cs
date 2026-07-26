@@ -63,10 +63,10 @@ public class LocalActionPresetTests
 
         // Лёгкое (DefaultLocal=true) → локаль
         Assert.Equal(LocalActionOverridesStore.LocalRoute, store.TryGet(LocalActionCatalog.NotesTags));
-        // Сильное Small (skill-translate) → тир small = haiku
-        Assert.Equal("haiku", store.TryGet(LocalActionCatalog.SkillTranslate));
-        // Сильное Large (changelog) → тир large = sonnet
-        Assert.Equal("sonnet", store.TryGet(LocalActionCatalog.Changelog));
+        // Сильное Small (skill-translate) → слот «слабая»
+        Assert.Equal("tier:weak", store.TryGet(LocalActionCatalog.SkillTranslate));
+        // Сильное Large (changelog) → слот «средняя»
+        Assert.Equal("tier:medium", store.TryGet(LocalActionCatalog.Changelog));
     }
 
     [Fact]
@@ -75,8 +75,8 @@ public class LocalActionPresetTests
         var (service, store) = Build(new() { ["Ollama:Model"] = "" });
         await service.ApplyAsync(ActionPreset.Recommended);
 
-        // Без локали лёгкое действие получает тир Claude по профилю (Small → haiku), а не local
-        Assert.Equal("haiku", store.TryGet(LocalActionCatalog.NotesTags));
+        // Без локали лёгкое действие получает слот по профилю (Small → слабая), а не local
+        Assert.Equal("tier:weak", store.TryGet(LocalActionCatalog.NotesTags));
     }
 
     [Fact]
@@ -131,19 +131,19 @@ public class LocalActionPresetTests
         Assert.Equal(LocalActionOverridesStore.LocalRoute, store.TryGet(LocalActionCatalog.NotesTags));
         // Text + лёгкое (связи) → бесплатная облачная
         Assert.Equal(direct, store.TryGet(LocalActionCatalog.NotesLinks));
-        // Large + лёгкое (конспект дня) → тир Claude (large = sonnet)
-        Assert.Equal("sonnet", store.TryGet(LocalActionCatalog.NotesDailySummary));
-        // Сильное (DefaultLocal=false, changelog) → тир Claude, никакой локали/бесплатной
-        Assert.Equal("sonnet", store.TryGet(LocalActionCatalog.Changelog));
+        // Large + лёгкое (конспект дня) → слот «средняя»
+        Assert.Equal("tier:medium", store.TryGet(LocalActionCatalog.NotesDailySummary));
+        // Сильное (DefaultLocal=false, changelog) → слот, никакой локали/бесплатной
+        Assert.Equal("tier:medium", store.TryGet(LocalActionCatalog.Changelog));
     }
 
     [Fact]
     public async Task Balanced_OllamaOff_SmallGetsClaudeTier()
     {
-        // Без локали Small честно уходит на дешёвый Claude (haiku), а не local
+        // Без локали Small честно уходит на слот «слабая», а не local
         var (service, store) = Build(WithFreeModel(new() { ["Ollama:Model"] = "" }));
         await service.ApplyAsync(ActionPreset.Balanced);
-        Assert.Equal("haiku", store.TryGet(LocalActionCatalog.NotesTags));
+        Assert.Equal("tier:weak", store.TryGet(LocalActionCatalog.NotesTags));
     }
 
     [Fact]
@@ -158,7 +158,8 @@ public class LocalActionPresetTests
         });
         await service.ApplyAsync(ActionPreset.Balanced);
         Assert.Equal(LocalActionOverridesStore.LocalRoute, store.TryGet(LocalActionCatalog.NotesTags));
-        Assert.Equal("sonnet", store.TryGet(LocalActionCatalog.NotesLinks));
+        // Text без free падает на слот по профилю (Text → слабая)
+        Assert.Equal("tier:weak", store.TryGet(LocalActionCatalog.NotesLinks));
     }
 
     [Fact]

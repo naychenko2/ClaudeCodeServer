@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { ChevronDown, ChevronUp } from 'lucide-react';
 import type { ModelOption } from '../lib/models';
-import { modelProvider, providerLabel } from '../lib/models';
-import { C, R, FONT } from '../lib/design';
+import { modelProvider, providerLabel, useDefaultModelOption, USAGE, type UsageKey } from '../lib/models';
+import { C, R, FONT, SP } from '../lib/design';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 
 // Выбор модели строками-карточками (как карточки режимов): название + бейдж окна
@@ -23,6 +23,12 @@ interface Props {
   // Показывать ли модели прямого HTTP-адаптера (openrouter-direct/"direct:"). По умолчанию нет —
   // в чате идут агентские вызовы, где они не годятся; включается в настройке фоновых задач.
   includeDirect?: boolean;
+  // Скрыть пункт «По умолчанию» (value ''). Нужен ровно одному месту — диалогу, где эта
+  // самая модель и выбирается: там пункт ссылался бы сам на себя и означал бы сброс к CLI.
+  hideDefault?: boolean;
+  // Место применения: подпись пункта «По умолчанию» берётся у назначения ЭТОГО места.
+  // Пикер модели персоны обязан передать chatPersona — иначе покажет модель нового чата.
+  usage?: UsageKey;
 }
 
 const groupHeaderStyle: React.CSSProperties = {
@@ -93,7 +99,10 @@ function ModelRow({
   );
 }
 
-export function ModelPicker({ value, options: allOptions, onChange, collapsible = true, includeDirect = false }: Props) {
+export function ModelPicker({ value, options: allOptions, onChange, collapsible = true,
+  includeDirect = false, hideDefault = false, usage = USAGE.chatNew }: Props) {
+  // Опция «По умолчанию» — реактивна к смене назначений в диалоге поставщиков
+  const defaultRow = useDefaultModelOption(usage);
   // Развёрнутость блоков легаси, по ключу провайдера
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   // Показ полного списка при сворачивании (collapsible)
@@ -104,8 +113,15 @@ export function ModelPicker({ value, options: allOptions, onChange, collapsible 
   // Бесплатные модели прямого HTTP-адаптера (openrouter-direct, id с префиксом "direct:")
   // предназначены только для фоновых one-shot задач — в чате идут агентские вызовы, где
   // они не годятся. По умолчанию скрываем; в настройке фоновых задач — includeDirect.
-  const options = includeDirect ? allOptions : allOptions.filter(o =>
+  const visible = includeDirect ? allOptions : allOptions.filter(o =>
     providerOf(o) !== 'openrouter-direct' && !o.value.startsWith('direct:'));
+
+  // Пункт «По умолчанию» (value '') живёт ОТДЕЛЬНО от групп провайдеров и над ними:
+  // за ним стоит глобальная настройка, а она может указывать на модель любого провайдера.
+  // Подпись — с расшифровкой, что именно за ним стоит.
+  const defaultOption: ModelOption | undefined =
+    !hideDefault && visible.some(o => !o.value) ? defaultRow : undefined;
+  const options = visible.filter(o => o.value);
 
   // Группы в порядке первого появления, Claude всегда первой
   const keys: string[] = [];
@@ -128,7 +144,7 @@ export function ModelPicker({ value, options: allOptions, onChange, collapsible 
 
   // Свёрнутый вид: выбранная модель одной строкой + «Сменить». Работает, только
   // когда выбранная опция есть в списке (иначе показываем полный список).
-  const selected = options.find(o => o.value === value);
+  const selected = value === '' ? defaultOption : options.find(o => o.value === value);
   if (collapsible && !listOpen && selected) {
     return (
       <div style={{ display: 'flex', alignItems: 'stretch', gap: 8 }}>
@@ -173,6 +189,14 @@ export function ModelPicker({ value, options: allOptions, onChange, collapsible 
           фоновых задач). Свой скролл ModelPicker НЕ держит: иначе во вложенном скролл-контейнере
           получались два скроллбара. Курируемый список моделей короткий и обычно влезает целиком. */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: keys.length > 1 ? 12 : 5 }}>
+      {/* Отделяем чертой: пункт стоит НАД группами провайдеров и к ним не относится.
+          Заголовков групп при одном провайдере нет, и без разделителя строка сливалась бы
+          с моделями Claude. */}
+      {defaultOption && (
+        <div style={{ paddingBottom: SP.xs, borderBottom: `1px solid ${C.borderLight}`, marginBottom: SP.xs }}>
+          <ModelRow option={defaultOption} active={value === ''} onClick={() => handlePick('')} />
+        </div>
+      )}
       {keys.map(key => {
         const inGroup = options.filter(o => providerOf(o) === key);
         // Курируемые (с карточкой) отдельно от легаси (без описания)

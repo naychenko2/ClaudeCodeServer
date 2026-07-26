@@ -53,11 +53,14 @@ public sealed class CheapTextRunner(
 {
     public bool UsesLocal(string actionKey) => router.UsesLocal(actionKey);
 
-    // При route "default" исполнитель — глобальная модель по умолчанию для чатов
-    // (DefaultChatModel), а не модель действия из его конфига. null/пусто → claude без --model,
-    // т.е. дефолт CLI (корректно: «по умолчанию» без явно заданной модели и есть он).
-    private string? EffectiveFallback(RouteKind kind, string? fallbackModel) =>
-        kind == RouteKind.Default ? appSettings?.Get().DefaultChatModel : fallbackModel;
+    // При маршруте-слоте исполнитель — модель слота (сильная/средняя/слабая из AppSettings),
+    // а не модель действия из его конфига. Пустой слот откатывается к модели действия
+    // (обычно haiku): маршрут-слот теперь дефолтный для всех действий, и без такого отката
+    // ненастроенный инстанс гонял бы теги и заголовки на дорогом дефолте CLI.
+    private string? EffectiveFallback(ActionRoute route, string? fallbackModel) =>
+        route.Kind == RouteKind.Tier
+            ? appSettings?.TierModel(route.Tier ?? ModelTier.Medium) ?? fallbackModel
+            : fallbackModel;
 
     // Цепочка одинакова для всех действий: выбранный исполнитель → локальная модель →
     // claude. Последний шаг умышленно без страховки: если упал и он, исключение уходит
@@ -90,8 +93,8 @@ public sealed class CheapTextRunner(
             log.LogDebug("cheap-runner: действие {Action} — фолбэк с Ollama на claude", actionKey);
         }
 
-        // Шаг 3 — claude с моделью действия по умолчанию (route "default" берёт DefaultChatModel).
-        var effFallback = EffectiveFallback(route.Kind, fallbackModel);
+        // Шаг 3 — claude: маршрут-слот берёт модель слота, иначе модель действия из его конфига.
+        var effFallback = EffectiveFallback(route, fallbackModel);
         return await claude.RunAsync(prompt, claude.NormalizeModel(effFallback), ct: ct, ownerId: ownerId,
             label: actionKey);
     }
@@ -238,8 +241,8 @@ public sealed class CheapTextRunner(
             if (!string.IsNullOrWhiteSpace(local)) return new OneShotResult(local, null, 0);
         }
 
-        // Шаг 3 — claude с моделью действия по умолчанию (route "default" берёт DefaultChatModel).
-        var effFallback = EffectiveFallback(route.Kind, fallbackModel);
+        // Шаг 3 — claude: маршрут-слот берёт модель слота, иначе модель действия из его конфига.
+        var effFallback = EffectiveFallback(route, fallbackModel);
         return await claude.RunDetailedAsync(prompt, claude.NormalizeModel(effFallback), effTimeout, ct, ownerId,
             label: actionKey);
     }

@@ -34,8 +34,9 @@ public sealed class LocalActionPresetService(
     ModelCatalogService models, IConfiguration config,
     ILogger<LocalActionPresetService> log)
 {
-    // Тир Claude на каждый профиль сложности (Recommended). Дефолт: мелочь — haiku,
-    // всё серьёзнее — sonnet (потолок; Opus в фоне дорог и медленен).
+    // Исполнитель на каждый профиль сложности (Recommended). Дефолт — слоты тиров инстанса
+    // (мелочь и середина — слабая, тяжёлое — средняя; сами модели слотов задаются в
+    // «Поставщиках моделей»). Конфиг Recommended:ClaudeTiers перебивает (id модели или tier:*).
     private string TierFor(CheapProfile profile)
     {
         var key = profile switch
@@ -44,9 +45,10 @@ public sealed class LocalActionPresetService(
             CheapProfile.Text => "text",
             _ => "large",
         };
-        var def = profile == CheapProfile.Small ? "haiku" : "sonnet";
         var v = config[$"Recommended:ClaudeTiers:{key}"];
-        return string.IsNullOrWhiteSpace(v) ? def : v.Trim();
+        if (!string.IsNullOrWhiteSpace(v)) return v.Trim();
+        return LocalActionOverridesStore.TierRoute(
+            profile == CheapProfile.Large ? ModelTier.Medium : ModelTier.Weak);
     }
 
     // Прямые (бесплатные) модели OpenRouter из каталога — provider=openrouter-direct, Value уже
@@ -75,6 +77,9 @@ public sealed class LocalActionPresetService(
         var routes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var a in LocalActionCatalog.All)
         {
+            // Агентные места (чаты, персоны, исполнитель задач) пресеты не трогают:
+            // им локаль/free непригодны, а их назначения — отдельное решение админа
+            if (a.Agentic) continue;
             var route = preset switch
             {
                 ActionPreset.Recommended => a.DefaultLocal && ollama.Enabled
@@ -104,7 +109,9 @@ public sealed class LocalActionPresetService(
             routes[a.Key] = route;
         }
 
-        store.SetMany(routes);
+        // keepUnlisted: пресет — цельная картина ФОНОВЫХ действий (они в routes все),
+        // а назначения агентных мест не входят в пресет и не должны сноситься
+        store.SetMany(routes, keepUnlisted: true);
         log.LogInformation("Применён пресет автоподбора {Preset} для {Count} действий", preset, routes.Count);
         return routes.Count;
     }

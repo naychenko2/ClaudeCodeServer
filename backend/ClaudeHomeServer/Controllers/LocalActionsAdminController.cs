@@ -20,7 +20,8 @@ public class LocalActionsAdminController(
     LlmProviderRegistry providers, ModelCatalogService models,
     LocalActionPresetService presets) : ControllerBase
 {
-    // route: "local" | "claude" | "default" (модель по умолчанию для чатов) | id модели провайдера
+    // route: "local" | "tier:strong|medium|weak" (слоты тиров) | id модели провайдера;
+    // легаси "claude"/"default" принимаются и трактуются как tier:medium (LocalActionRouter.Parse)
     public record RouteRequest(string Route);
 
     // preset: "recommended" | "free" | "local" | "balanced"
@@ -61,9 +62,17 @@ public class LocalActionsAdminController(
         if (route.Length == 0)
             return BadRequest(new { error = "Не указан исполнитель действия" });
 
+        // Агентным местам (группа «Чаты и персоны») локаль и direct:-модели непригодны —
+        // отклоняем на входе, а не молча игнорируем при резолве
+        var action = LocalActionCatalog.Find(key)!;
+        if (action.Agentic && (route == LocalActionOverridesStore.LocalRoute
+                || CloudCheapClient.IsDirectRoute(route)))
+            return BadRequest(new { error = "Этому месту нужна агентная модель — локальная и direct-модели не подходят" });
+
         if (route is not (LocalActionOverridesStore.LocalRoute
                 or LocalActionOverridesStore.ClaudeRoute
                 or LocalActionOverridesStore.DefaultRoute)
+            && LocalActionOverridesStore.ParseTierRoute(route) is null
             && await ValidateModelAsync(route, ct) is { } error)
             return BadRequest(new { error });
 
@@ -106,7 +115,7 @@ public class LocalActionsAdminController(
             {
                 RouteKind.Local => LocalActionOverridesStore.LocalRoute,
                 RouteKind.Claude => LocalActionOverridesStore.ClaudeRoute,
-                RouteKind.Default => LocalActionOverridesStore.DefaultRoute,
+                RouteKind.Tier => LocalActionOverridesStore.TierRoute(route.Tier ?? ModelTier.Medium),
                 _ => route.Model,
             },
             source = route.Source.ToString().ToLowerInvariant(),

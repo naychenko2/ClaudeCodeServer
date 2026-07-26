@@ -21,6 +21,22 @@ public sealed class LocalActionOverridesStore
     public const string LocalRoute = "local";
     public const string ClaudeRoute = "claude";
     public const string DefaultRoute = "default";
+    // Слоты тиров (v2): "tier:strong|medium|weak" — ссылка на именованную модель инстанса
+    // (AppSettings.ModelTier*). Легаси-значения ClaudeRoute/DefaultRoute при чтении маршрута
+    // трактуются как tier:medium (LocalActionRouter.Parse) — сам стор их не переписывает.
+    public const string TierPrefix = "tier:";
+
+    public static string TierRoute(ModelTier tier) =>
+        TierPrefix + tier.ToString().ToLowerInvariant();
+
+    public static ModelTier? ParseTierRoute(string route) =>
+        route.ToLowerInvariant() switch
+        {
+            "tier:strong" => ModelTier.Strong,
+            "tier:medium" => ModelTier.Medium,
+            "tier:weak" => ModelTier.Weak,
+            _ => null,
+        };
 
     private readonly string _storePath;
     private readonly ILogger<LocalActionOverridesStore>? _log;

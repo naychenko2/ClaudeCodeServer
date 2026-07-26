@@ -7,7 +7,7 @@ import { Field, FieldLabel, TextField, TextArea, Toggle, Button, SegmentedContro
 import { useAiJob, runAiJob, resetAiJob } from '../../lib/aiJobStore';
 import { PillSwitch } from '../../components/Toolbar';
 import { ModelPicker } from '../../components/ModelPicker';
-import { useModels, useModelCaps, modelProvider } from '../../lib/models';
+import { useModels, useModelCaps, modelProvider, USAGE } from '../../lib/models';
 import { effortsForProvider } from '../../lib/effort';
 import { AGENT_COLORS, agentDotColor } from '../../components/AgentSelector';
 import { bumpPersonas } from '../../lib/personas';
@@ -887,7 +887,9 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       <SectionLabel style={{ marginBottom: 14 }}>Поведение и контекст</SectionLabel>
       <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 18 }}>
         <Field label="Модель">
-          <ModelPicker value={model} options={models} onChange={setModel} />
+          {/* usage: у чатов персон своё назначение модели — пункт «По умолчанию»
+              обязан показывать его, а не модель обычного нового чата */}
+          <ModelPicker value={model} options={models} onChange={setModel} usage={USAGE.chatPersona} />
         </Field>
 
         {caps.supportsEffort && (

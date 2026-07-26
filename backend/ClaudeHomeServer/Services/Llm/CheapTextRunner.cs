@@ -49,17 +49,22 @@ public interface ICheapTextRunner
 
 public sealed class CheapTextRunner(
     LocalActionRouter router, OllamaClient ollama, CloudCheapClient cloud, IOneShotRunner claude,
-    ILogger<CheapTextRunner> log, AppSettingsService? appSettings = null) : ICheapTextRunner
+    ILogger<CheapTextRunner> log, AppSettingsService? appSettings = null,
+    UserModelTierResolver? userTiers = null) : ICheapTextRunner
 {
     public bool UsesLocal(string actionKey) => router.UsesLocal(actionKey);
 
-    // При маршруте-слоте исполнитель — модель слота (сильная/средняя/слабая из AppSettings),
-    // а не модель действия из его конфига. Пустой слот откатывается к модели действия
+    // При маршруте-слоте исполнитель — модель слота ВЛАДЕЛЬЦА действия (сильная/средняя/слабая
+    // из личного per-user слота, с откатом на глобальный AppSettings), а не модель действия из
+    // его конфига. Пустой слот (и у пользователя, и в AppSettings) откатывается к модели действия
     // (обычно haiku): маршрут-слот теперь дефолтный для всех действий, и без такого отката
-    // ненастроенный инстанс гонял бы теги и заголовки на дорогом дефолте CLI.
-    private string? EffectiveFallback(ActionRoute route, string? fallbackModel) =>
+    // ненастроенный инстанс гонял бы теги и заголовки на дорогом дефолте CLI. Склейка личного и
+    // глобального слота — через UserModelTierResolver, единая точка как в ModelAssignmentResolver
+    // (агентная ветка); ownerId == null/неизвестный → поведение прежнее (общий слот).
+    private string? EffectiveFallback(ActionRoute route, string? fallbackModel, string? ownerId) =>
         route.Kind == RouteKind.Tier
-            ? appSettings?.TierModel(route.Tier ?? ModelTier.Medium) ?? fallbackModel
+            ? userTiers?.ModelFor(route.Tier ?? ModelTier.Medium, ownerId)
+                ?? appSettings?.TierModel(route.Tier ?? ModelTier.Medium) ?? fallbackModel
             : fallbackModel;
 
     // Цепочка одинакова для всех действий: выбранный исполнитель → локальная модель →
@@ -94,7 +99,7 @@ public sealed class CheapTextRunner(
         }
 
         // Шаг 3 — claude: маршрут-слот берёт модель слота, иначе модель действия из его конфига.
-        var effFallback = EffectiveFallback(route, fallbackModel);
+        var effFallback = EffectiveFallback(route, fallbackModel, ownerId);
         return await claude.RunAsync(prompt, claude.NormalizeModel(effFallback), ct: ct, ownerId: ownerId,
             label: actionKey);
     }
@@ -242,7 +247,7 @@ public sealed class CheapTextRunner(
         }
 
         // Шаг 3 — claude: маршрут-слот берёт модель слота, иначе модель действия из его конфига.
-        var effFallback = EffectiveFallback(route, fallbackModel);
+        var effFallback = EffectiveFallback(route, fallbackModel, ownerId);
         return await claude.RunDetailedAsync(prompt, claude.NormalizeModel(effFallback), effTimeout, ct, ownerId,
             label: actionKey);
     }

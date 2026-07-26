@@ -73,9 +73,14 @@ public class LocalActionRoutingTests
             if (model is not null && model == emptyModel) return Task.FromResult("");
             return Task.FromResult($"CLAUDE[{model}]:{prompt}");
         }
-        public Task<OneShotResult> RunDetailedAsync(string prompt, string? model = null, TimeSpan? timeout = null,
-            CancellationToken ct = default, string? ownerId = null, string? effort = null, string? label = null) =>
-            throw new NotImplementedException();
+        public async Task<OneShotResult> RunDetailedAsync(string prompt, string? model = null, TimeSpan? timeout = null,
+            CancellationToken ct = default, string? ownerId = null, string? effort = null, string? label = null)
+        {
+            // Та же семантика, что у RunAsync (вкл. failModel/emptyModel), но в OneShotResult —
+            // для тестов второй точки EffectiveFallback (RunDetailedAsync).
+            var text = await RunAsync(prompt, model, timeout, ct, ownerId, effort, label);
+            return new OneShotResult(text, null, 0);
+        }
     }
 
     [Fact]
@@ -699,5 +704,115 @@ public class LocalActionRoutingTests
 
         // Явная модель в назначении админа всё ещё сильнее per-user слота
         Assert.Equal("admin-opus", resolver.Resolve(LocalActionCatalog.ChatNew, "admin-opus", user.Id));
+    }
+
+    // --- Per-user слоты в фоновой ветке (CheapTextRunner) ---
+    // Зеркало тестов ModelAssignmentResolver выше, но для дешёвого раннера: личный слот
+    // владельца должен пробиваться в фон, а не только в агентные места.
+
+    // Дешёвый раннер с per-user слотами: config нужен, чтобы строить Ollama/Cloud для раннера.
+    private static (IConfiguration Config, AppSettingsService Settings, UserStore Users,
+        UserModelTierResolver UserTiers, LocalActionOverridesStore Store, LocalActionRouter Router)
+        BuildRunnerWithUserTiers(Dictionary<string, string?>? extraCfg = null)
+    {
+        var cfg = new Dictionary<string, string?> { ["Ollama:Model"] = "" };
+        if (extraCfg is not null)
+            foreach (var kv in extraCfg) cfg[kv.Key] = kv.Value;
+        var config = ConfigWithTempData(cfg);
+        var appSettings = new AppSettingsService(config);
+        var users = new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
+        var userTiers = new UserModelTierResolver(users, appSettings);
+        var store = Store(config);
+        var router = new LocalActionRouter(Ollama(config), store, config, NullLogger<LocalActionRouter>.Instance);
+        return (config, appSettings, users, userTiers, store, router);
+    }
+
+    private static CheapTextRunner Runner(IConfiguration config, LocalActionRouter router, IOneShotRunner claude,
+        AppSettingsService appSettings, UserModelTierResolver userTiers) =>
+        new(router, Ollama(config), Cloud(config), claude, NullLogger<CheapTextRunner>.Instance,
+            appSettings, userTiers);
+
+    [Fact]
+    public async Task CheapRunner_МаршрутСлот_БерётЛичныйСлотВладельца()
+    {
+        var (config, settings, users, userTiers, store, router) = BuildRunnerWithUserTiers();
+        store.Set(LocalActionCatalog.NotesTags, "tier:medium");
+        settings.Save(new AppSettings { ModelTierMedium = "global-glm" });
+        var user = users.Add("u1", "password123", "user");
+        users.SetModelTiers(user.Id, null, "user-sonnet", null);
+        var claude = new FakeOneShot();
+        var runner = Runner(config, router, claude, settings, userTiers);
+
+        var result = await runner.RunAsync(LocalActionCatalog.NotesTags, "prompt-text", "haiku", ownerId: user.Id);
+
+        Assert.Equal("CLAUDE[user-sonnet]:prompt-text", result);
+        Assert.Equal(["user-sonnet"], claude.Calls);
+    }
+
+    [Fact]
+    public async Task CheapRunner_БезOwnerId_БерётГлобальныйСлот()
+    {
+        // Личный слот есть, но ownerId не передан — поведение прежнее: общий слот.
+        // Регресс-страховка для действий категории C (системные, без владельца).
+        var (config, settings, users, userTiers, store, router) = BuildRunnerWithUserTiers();
+        store.Set(LocalActionCatalog.NotesTags, "tier:medium");
+        settings.Save(new AppSettings { ModelTierMedium = "global-glm" });
+        var user = users.Add("u1", "password123", "user");
+        users.SetModelTiers(user.Id, null, "user-sonnet", null);
+        var claude = new FakeOneShot();
+        var runner = Runner(config, router, claude, settings, userTiers);
+
+        var result = await runner.RunAsync(LocalActionCatalog.NotesTags, "prompt-text", "haiku");
+
+        Assert.Equal("CLAUDE[global-glm]:prompt-text", result);
+    }
+
+    [Fact]
+    public async Task CheapRunner_ПустойЛичныйСлот_ПадаетНаГлобальный()
+    {
+        var (config, settings, users, userTiers, store, router) = BuildRunnerWithUserTiers();
+        store.Set(LocalActionCatalog.NotesTags, "tier:medium");
+        settings.Save(new AppSettings { ModelTierMedium = "global-glm" });
+        var user = users.Add("u1", "password123", "user");
+        users.SetModelTiers(user.Id, null, "", null); // пустой личный medium → откат на глобальный
+        var claude = new FakeOneShot();
+        var runner = Runner(config, router, claude, settings, userTiers);
+
+        var result = await runner.RunAsync(LocalActionCatalog.NotesTags, "prompt-text", "haiku", ownerId: user.Id);
+
+        Assert.Equal("CLAUDE[global-glm]:prompt-text", result);
+    }
+
+    [Fact]
+    public async Task CheapRunner_НеизвестныйOwnerId_НеПадает()
+    {
+        // Удалённый пользователь — ownerId в системе не найден → тихо на общий слот.
+        var (config, settings, _, userTiers, store, router) = BuildRunnerWithUserTiers();
+        store.Set(LocalActionCatalog.NotesTags, "tier:medium");
+        settings.Save(new AppSettings { ModelTierMedium = "global-glm" });
+        var claude = new FakeOneShot();
+        var runner = Runner(config, router, claude, settings, userTiers);
+
+        var result = await runner.RunAsync(LocalActionCatalog.NotesTags, "prompt-text", "haiku", ownerId: "ghost-user");
+
+        Assert.Equal("CLAUDE[global-glm]:prompt-text", result);
+    }
+
+    [Fact]
+    public async Task CheapRunnerDetailed_МаршрутСлот_БерётЛичныйСлот()
+    {
+        // Вторая точка EffectiveFallback — RunDetailedAsync (действия с расходом).
+        var (config, settings, users, userTiers, store, router) = BuildRunnerWithUserTiers();
+        store.Set(LocalActionCatalog.NotesTags, "tier:medium");
+        settings.Save(new AppSettings { ModelTierMedium = "global-glm" });
+        var user = users.Add("u1", "password123", "user");
+        users.SetModelTiers(user.Id, null, "user-sonnet", null);
+        var claude = new FakeOneShot();
+        var runner = Runner(config, router, claude, settings, userTiers);
+
+        var result = await runner.RunDetailedAsync(LocalActionCatalog.NotesTags, "prompt-text", "haiku", ownerId: user.Id);
+
+        Assert.Equal("CLAUDE[user-sonnet]:prompt-text", result.Text);
+        Assert.Equal(["user-sonnet"], claude.Calls);
     }
 }

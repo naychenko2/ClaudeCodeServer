@@ -2,11 +2,13 @@
 // Подвкладки «Список» (группировка по статусу) и «По дате» (готовые скрыты).
 
 import { useEffect, useMemo, useState } from 'react';
-import { ChevronRight, Plus } from 'lucide-react';
+import { ChevronRight, Plus, SearchX } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { Project, Task, TaskStatus } from '../../types';
 import { C, FONT, R } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
+import { EmptyState } from '../../components/EmptyState';
+import { Button } from '../../components/ui/Button';
 import {
   STATUS_DOT, STATUS_LABEL, daysFromToday, ensureTasksLoaded, useTasks,
 } from '../../lib/tasks';
@@ -15,6 +17,9 @@ import { TaskCard } from './TaskCard';
 import { NewTaskDialog } from './NewTaskDialog';
 import { BoardToolbar } from './board/BoardToolbar';
 import { BoardIcon, ByDateIcon, ListIcon, PillViewSwitcher } from './bits';
+import {
+  TasksListFilterButton, applyTaskFilters, EMPTY_TASK_FILTERS, type TaskListFilters,
+} from './TasksListFilter';
 
 // Группировки доски внутри проекта (без «по проекту»)
 const PROJECT_GROUP_OPTIONS: BoardGroupBy[] = ['none', 'priority', 'assignee', 'due'];
@@ -35,6 +40,11 @@ interface Props {
   onGroupTab?: (t: GroupTab) => void;
   // Спрятать внутренний переключатель видов — он вынесен в шапку карточки (cc-panels)
   hideViewSwitcher?: boolean;
+  // Фильтры списка (Статус/Исполнитель/Приоритет/Срок). Поднимаются в WorkspacePage,
+  // чтобы шариться между cc-panels (кнопка в шапке) и старым сайдбаром. Без пропа —
+  // панель держит состояние сама.
+  filters?: TaskListFilters;
+  onFilters?: (f: TaskListFilters) => void;
 }
 
 type GroupTab = 'status' | 'date';
@@ -87,7 +97,7 @@ function groupByDate(tasks: Task[]): Group[] {
     .filter(g => g.tasks.length > 0);
 }
 
-export function TasksPanel({ project, selectedTaskId, onSelect, isMobile, boardMode, onBoardMode, onEditColumns, groupTab: groupTabProp, onGroupTab, hideViewSwitcher }: Props) {
+export function TasksPanel({ project, selectedTaskId, onSelect, isMobile, boardMode, onBoardMode, onEditColumns, groupTab: groupTabProp, onGroupTab, hideViewSwitcher, filters: filtersProp, onFilters: onFiltersProp }: Props) {
   const allTasks = useTasks();
   const [loading, setLoading] = useState(true);
   // Группировка списка: управляемая сверху (cc-panels) или локальная (старый сайдбар)
@@ -95,6 +105,20 @@ export function TasksPanel({ project, selectedTaskId, onSelect, isMobile, boardM
   const groupTab = groupTabProp ?? localGroupTab;
   const setGroupTab = onGroupTab ?? setLocalGroupTab;
   const [showCreate, setShowCreate] = useState(false);
+  // Фильтры списка: управляемые сверху (WorkspacePage) или локальные
+  const [localFilters, setLocalFilters] = useState<TaskListFilters>(EMPTY_TASK_FILTERS);
+  const filters = filtersProp ?? localFilters;
+  const onFilters = onFiltersProp ?? setLocalFilters;
+
+  // Кнопка «Новая задача» в шапке cc-panels (panelHeaderExtras) живёт вне TasksPanel —
+  // она открывает этот диалог через window-событие (как cc-panel-flash). Других
+  // слушателей нет: одновременно смонтирован только один TasksPanel (раскладки
+  // cc-panels / pinned / mobile взаимоисключающие).
+  useEffect(() => {
+    const onNew = () => setShowCreate(true);
+    window.addEventListener('cc-tasks-new', onNew);
+    return () => window.removeEventListener('cc-tasks-new', onNew);
+  }, []);
 
   // Значение переключателя: доска или одна из группировок списка
   const panelTab: PanelTab = boardMode ? 'board' : groupTab;
@@ -115,8 +139,14 @@ export function TasksPanel({ project, selectedTaskId, onSelect, isMobile, boardM
     () => allTasks.filter(t => t.projectId === project.id),
     [allTasks, project.id],
   );
+  // Фильтры применяются ДО группировки (работают в обеих — «Список» и «По дате»).
+  // В режиме доски не применяются: там свой BoardToolbar.
+  const filteredTasks = useMemo(
+    () => boardMode ? tasks : applyTaskFilters(tasks, filters),
+    [tasks, filters, boardMode],
+  );
 
-  const groups = groupTab === 'status' ? groupByStatus(tasks) : groupByDate(tasks);
+  const groups = groupTab === 'status' ? groupByStatus(filteredTasks) : groupByDate(filteredTasks);
 
   return (
     // flex:1 + minHeight:0 — шапка (переключатель и кнопка) закреплена, скроллится только список:
@@ -126,36 +156,50 @@ export function TasksPanel({ project, selectedTaskId, onSelect, isMobile, boardM
           панели «Файлы» (дорожка + плашка-ползунок), иконка и подпись в ряд.
           В cc-panels переключатель вынесен в шапку карточки (hideViewSwitcher). */}
       {!hideViewSwitcher && (
-        <div style={{ padding: isMobile ? '10px 14px 4px' : '0 16px 4px', flexShrink: 0 }}>
-          <PillViewSwitcher<PanelTab>
-            value={panelTab}
-            options={tabOptions([
-              { value: 'status', label: 'Список', icon: <ListIcon size={16} /> },
-              { value: 'date', label: 'По дате', icon: <ByDateIcon size={16} /> },
-              { value: 'board', label: 'Доска', icon: <BoardIcon size={16} /> },
-            ])}
-            onChange={onPanelTab}
-          />
-        </div>
-      )}
+        <>
+          {/* Строка действий: «Новая задача» (flex:1) + «Фильтр» (Funnel) — НАД
+              переключателем видов (правка пользователя к макету А). Funnel скрыт
+              в режиме доски (там свой BoardToolbar); Plus виден во всех режимах.
+              В cc-panels эта строка и переключатель вынесены в шапку острова. */}
+          <div style={{ padding: isMobile ? '8px 12px 4px' : '8px 12px 4px', display: 'flex', gap: 7, alignItems: 'stretch', flexShrink: 0 }}>
+            <button
+              onClick={() => setShowCreate(true)}
+              style={{
+                flex: 1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                padding: isMobile ? '9px 12px' : '8px 12px',
+                border: `1px solid ${C.border}`, borderRadius: R.lg,
+                background: C.bgWhite, color: C.accent,
+                fontFamily: FONT.sans, fontSize: 12.5, fontWeight: 600, cursor: 'pointer',
+              }}
+            >
+              <Plus size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+              Новая задача
+            </button>
+            {!boardMode && (
+              <TasksListFilterButton
+                variant="sidebar"
+                filters={filters}
+                onFilters={onFilters}
+                total={tasks.length}
+                found={filteredTasks.length}
+                isMobile={isMobile}
+              />
+            )}
+          </div>
 
-      {/* Кнопка создания — закреплена сверху, не уползает при длинном списке */}
-      <div style={{ padding: isMobile ? '8px 14px 4px' : '8px 12px 4px', flexShrink: 0 }}>
-        <button
-          onClick={() => setShowCreate(true)}
-          style={{
-            width: '100%', boxSizing: 'border-box',
-            padding: '11px 14px',
-            border: `1.5px dashed ${C.dashed}`, borderRadius: R.xl,
-            background: 'transparent', color: C.accent,
-            fontFamily: FONT.sans, fontSize: 13.5, fontWeight: 600, cursor: 'pointer',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7,
-          }}
-        >
-          <Plus size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-          Новая задача
-        </button>
-      </div>
+          <div style={{ padding: isMobile ? '4px 14px 4px' : '0 16px 4px', flexShrink: 0 }}>
+            <PillViewSwitcher<PanelTab>
+              value={panelTab}
+              options={tabOptions([
+                { value: 'status', label: 'Список', icon: <ListIcon size={16} /> },
+                { value: 'date', label: 'По дате', icon: <ByDateIcon size={16} /> },
+                { value: 'board', label: 'Доска', icon: <BoardIcon size={16} /> },
+              ])}
+              onChange={onPanelTab}
+            />
+          </div>
+        </>
+      )}
 
       {/* Список (в режиме доски скрыт — доска рендерится в основной области) */}
       <div style={{ flex: 1, overflowY: 'auto', padding: isMobile ? '4px 14px 16px' : '4px 12px 16px' }}>
@@ -191,6 +235,13 @@ export function TasksPanel({ project, selectedTaskId, onSelect, isMobile, boardM
               В проекте пока нет задач
             </div>
           </div>
+        ) : filteredTasks.length === 0 ? (
+          // Фильтры отсеяли всё — предлагаем сбросить (стандартный EmptyState)
+          <EmptyState
+            icon={<SearchX size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} />}
+            title="По фильтрам ничего не найдено"
+            action={<Button variant="secondary" size="sm" onClick={() => onFilters(EMPTY_TASK_FILTERS)}>Сбросить фильтры</Button>}
+          />
         ) : (
           <>
             {groups.map(group => (

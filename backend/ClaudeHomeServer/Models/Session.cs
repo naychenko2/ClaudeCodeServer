@@ -152,4 +152,14 @@ public class Session
     // (ClaudeSession.BuildTurnMcpConfig): чат-исполнитель глубины >= 3 не запускает нового.
     public int TaskDelegationDepth =>
         TaskId != null ? TaskDelegationDepthResolver?.Invoke(TaskId) ?? 0 : 0;
+
+    // Резолвер «задача → выполнена?»: назначает TaskManager при старте (как
+    // TaskSourceSessionResolver). Истина живёт в TaskItem.Status == Done.
+    public static Func<string, bool>? TaskDoneResolver { get; set; }
+
+    // Связанная задача чата-исполнителя выполнена (TaskId != null и задача в статусе Done).
+    // true только для чатов выполненных задач (бывший «архив»); false — обычные чаты и живые
+    // задачи. Вычисляется, не хранится — как Origin/ParentSessionId. Фронт объединяет его с
+    // статусом Finished в чип «Готово» фильтра чатов (маппинг статусов, макет A).
+    public bool TaskDone => TaskId is not null && (TaskDoneResolver?.Invoke(TaskId) ?? false);
 }

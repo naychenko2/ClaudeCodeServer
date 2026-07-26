@@ -102,7 +102,7 @@ public sealed class PersonaMemoryConsolidationService : BackgroundService
 
         // Шаг 1: LLM-merge (невалидный/пустой ответ = no-op)
         var raw = await _cheap.RunAsync(Llm.LocalActionCatalog.PersonaMemoryConsolidate,
-            BuildPrompt(entries), _config["Notes:AiModel"] ?? "haiku", ct: ct);
+            BuildPrompt(entries), _config["Notes:AiModel"] ?? "haiku", persona.OwnerId, ct: ct);
         var ops = FilterOps(ParseOps(raw), entries);
         var merged = ops.Count > 0 ? _memory.ApplyConsolidation(persona.OwnerId, persona.Id, ops) : 0;
 

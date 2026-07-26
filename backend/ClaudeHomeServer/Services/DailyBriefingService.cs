@@ -208,7 +208,7 @@ public sealed class DailyBriefingService
         else foreach (var e in teamEvents.Take(30)) sb.AppendLine($"- [{e.Type}] {e.Summary}");
 
         return await _cheap.RunAsync(Llm.LocalActionCatalog.DailyBriefing,
-            sb.ToString(), _config["Briefing:Model"] ?? "haiku", ct: ct);
+            sb.ToString(), _config["Briefing:Model"] ?? "haiku", userId, ct: ct);
     }
 
     private static string FormatTask(TaskItem t)

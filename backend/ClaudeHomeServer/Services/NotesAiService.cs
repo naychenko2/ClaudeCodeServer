@@ -37,7 +37,7 @@ public class NotesAiService(NotesService notes, IConfiguration config, Llm.IChea
         sb.AppendLine("Заголовки остальных заметок:");
         foreach (var t in candidates) sb.AppendLine($"- {t}");
 
-        var raw = await RunAsync(Llm.LocalActionCatalog.NotesLinks, sb.ToString(), ct);
+        var raw = await RunAsync(Llm.LocalActionCatalog.NotesLinks, sb.ToString(), userId, ct);
         var parsed = ParseArray<SuggestedLink>(raw);
         // Отсекаем галлюцинации: только реально существующие заголовки
         var valid = new HashSet<string>(candidates, StringComparer.OrdinalIgnoreCase);
@@ -65,7 +65,7 @@ public class NotesAiService(NotesService notes, IConfiguration config, Llm.IChea
             sb.AppendLine("Существующие теги базы: " + string.Join(", ", existingTags));
         }
 
-        var raw = await RunAsync(Llm.LocalActionCatalog.NotesTags, sb.ToString(), ct);
+        var raw = await RunAsync(Llm.LocalActionCatalog.NotesTags, sb.ToString(), userId, ct);
         return ParseArray<string>(raw)
             .Select(t => t.Trim().TrimStart('#'))
             .Where(t => t.Length is > 1 and <= 30 && !note.Tags.Contains(t, StringComparer.OrdinalIgnoreCase))
@@ -81,7 +81,7 @@ public class NotesAiService(NotesService notes, IConfiguration config, Llm.IChea
             "Придумай короткий заголовок (3-6 слов, по-русски, без кавычек и точки в конце) " +
             "для заметки по её содержимому. " + Llm.TitleExtraction.JsonHint + "\n\n" +
             Truncate(note.Content, 2000);
-        var raw = await RunAsync(Llm.LocalActionCatalog.NoteTitle, prompt, ct, Llm.TitleExtraction.Schema);
+        var raw = await RunAsync(Llm.LocalActionCatalog.NoteTitle, prompt, userId, ct, Llm.TitleExtraction.Schema);
         // Заголовок из строгого JSON (или первой строки — фолбэк), снимаем обрамление/маркеры
         var line = Llm.TitleExtraction.Extract(raw) ?? "";
         if (line.Length > 80) line = line[..80].TrimEnd() + "…";
@@ -119,7 +119,7 @@ public class NotesAiService(NotesService notes, IConfiguration config, Llm.IChea
                 sb.AppendLine(Truncate(d.Content, 1500));
                 sb.AppendLine();
             }
-            summary = await RunAsync(Llm.LocalActionCatalog.NotesDailySummary, sb.ToString(), ct);
+            summary = await RunAsync(Llm.LocalActionCatalog.NotesDailySummary, sb.ToString(), userId, ct);
         }
 
         // Секцию «Итоги дня» заменяем при повторном вызове, иначе дописываем
@@ -143,7 +143,7 @@ public class NotesAiService(NotesService notes, IConfiguration config, Llm.IChea
             "по одному пункту на смысловой раздел, с отступами по уровню вложенности. " +
             "Пункты — короткие названия разделов, без нумерации и ссылок, по-русски. Без вступлений и обёртки.\n\n" +
             Truncate(note.Content, 6000);
-        var toc = (await RunAsync(Llm.LocalActionCatalog.NoteToc, prompt, ct)).Trim();
+        var toc = (await RunAsync(Llm.LocalActionCatalog.NoteToc, prompt, userId, ct)).Trim();
         if (toc.Length == 0) throw new InvalidOperationException("Не удалось собрать оглавление");
 
         const string header = "## Оглавление";
@@ -164,7 +164,7 @@ public class NotesAiService(NotesService notes, IConfiguration config, Llm.IChea
             "Сохрани markdown-разметку и структуру. Первой строкой ответа выведи ровно «LANG: English» или «LANG: Русский» " +
             "(язык перевода), затем с новой строки — сам перевод. Без пояснений и обёртки.\n\n" +
             Truncate(note.Content, 6000);
-        var raw = (await RunAsync(Llm.LocalActionCatalog.NoteTranslate, prompt, ct)).Trim();
+        var raw = (await RunAsync(Llm.LocalActionCatalog.NoteTranslate, prompt, userId, ct)).Trim();
         if (raw.Length == 0) throw new InvalidOperationException("Не удалось перевести заметку");
 
         var (lang, translated) = SplitLang(raw);
@@ -219,8 +219,8 @@ public class NotesAiService(NotesService notes, IConfiguration config, Llm.IChea
         return block + (content.Length > 0 ? "\n" + content : "");
     }
 
-    private Task<string> RunAsync(string actionKey, string prompt, CancellationToken ct, object? jsonFormat = null) =>
-        cheap.RunAsync(actionKey, prompt, config["Notes:AiModel"] ?? "haiku", jsonFormat: jsonFormat, ct: ct);
+    private Task<string> RunAsync(string actionKey, string prompt, string? ownerId, CancellationToken ct, object? jsonFormat = null) =>
+        cheap.RunAsync(actionKey, prompt, config["Notes:AiModel"] ?? "haiku", ownerId, jsonFormat: jsonFormat, ct: ct);
 
     private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max] + "\n…";
 

@@ -92,7 +92,7 @@ public sealed class TeamMemoryConsolidationService : BackgroundService
 
         // Шаг 1: LLM-merge (невалидный/пустой ответ = no-op)
         var raw = await _cheap.RunAsync(Llm.LocalActionCatalog.TeamMemoryConsolidate,
-            BuildPrompt(entries), _config["Notes:AiModel"] ?? "haiku", ct: ct);
+            BuildPrompt(entries), _config["Notes:AiModel"] ?? "haiku", ownerId, ct: ct);
         var ops = FilterOps(ParseOps(raw), entries);
         var merged = ops.Count > 0 ? _memory.ApplyConsolidation(ownerId, projectId, ops) : 0;
 

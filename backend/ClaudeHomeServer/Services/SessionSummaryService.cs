@@ -55,7 +55,7 @@ public class SessionSummaryService(
                 summary = await cheap.RunAsync(
                     Llm.LocalActionCatalog.SessionSummary,
                     BuildPrompt(session.Name, transcript),
-                    config["Notes:SummaryModel"] ?? config["Notes:AiModel"] ?? "haiku", ct: ct);
+                    config["Notes:SummaryModel"] ?? config["Notes:AiModel"] ?? "haiku", ownerId, ct: ct);
             }
             catch (InvalidOperationException ex)
             {

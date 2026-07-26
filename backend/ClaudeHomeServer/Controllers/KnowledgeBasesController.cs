@@ -86,7 +86,7 @@ public class KnowledgeBasesController(KnowledgeService knowledge, IHubContext<Se
                 string.Join("\n", names.Select(n => "- " + n)) +
                 "\n\nСоставь короткое описание (1-2 предложения, по-русски), о чём эта база знаний и что в ней искать. " +
                 "Ответь ТОЛЬКО описанием, без вступлений.";
-            var desc = (await cheap.RunAsync(Services.Llm.LocalActionCatalog.KbDescribe, prompt, ct: ct)).Trim();
+            var desc = (await cheap.RunAsync(Services.Llm.LocalActionCatalog.KbDescribe, prompt, ownerId: UserId, ct: ct)).Trim();
             if (desc.Length == 0) return StatusCode(502, new { error = "Не удалось сгенерировать описание" });
             if (desc.Length > 400) desc = desc[..400].TrimEnd();
             await knowledge.UpdateDatasetDescriptionAsync(id, desc);

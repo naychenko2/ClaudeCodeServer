@@ -102,7 +102,7 @@ public sealed class TeamMemoryAutolearnService : IHostedService
 
             var raw = await _cheap.RunAsync(Llm.LocalActionCatalog.TeamMemoryAutolearn,
                 BuildTeamPrompt(transcript),
-                _config["Notes:AiModel"] ?? _config["Tasks:AiModel"] ?? "haiku");
+                _config["Notes:AiModel"] ?? _config["Tasks:AiModel"] ?? "haiku", ownerId);
 
             var items = Parse(raw);
             if (items.Count == 0) return;

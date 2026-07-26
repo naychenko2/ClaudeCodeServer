@@ -157,7 +157,7 @@ public sealed class PersonaAutomationService : IDisposable
         // сомнение/ошибка/недоступность → реагируем как обычно.
         if (!bypassThrottle && rule.Condition?.OnlyIf is { } onlyIf && !string.IsNullOrWhiteSpace(onlyIf)
             && _cheap.UsesLocal(Llm.LocalActionCatalog.AutomationGate)
-            && await EventFailsGateAsync(rule, ev, onlyIf))
+            && await EventFailsGateAsync(rule, ev, onlyIf, persona.OwnerId))
         {
             MarkResult(state, "gated");
             return;
@@ -221,7 +221,7 @@ public sealed class PersonaAutomationService : IDisposable
 
     // true = событие УВЕРЕННО не удовлетворяет условию OnlyIf (гейт отсекает платный ход).
     // Любая неопределённость/ошибка → false (реагируем как раньше). Локальная модель.
-    private async Task<bool> EventFailsGateAsync(PersonaAutomationRule rule, TriggerEvent ev, string onlyIf)
+    private async Task<bool> EventFailsGateAsync(PersonaAutomationRule rule, TriggerEvent ev, string onlyIf, string? ownerId)
     {
         try
         {
@@ -229,7 +229,7 @@ public sealed class PersonaAutomationService : IDisposable
                 "Правило проактивности срабатывает только при выполнении условия. Реши, удовлетворяет ли " +
                 "СОБЫТИЕ этому условию. Ответь СТРОГО одним словом: yes или no.\n\n" +
                 $"Условие: {onlyIf}\n\nСобытие: {ev.Summary}";
-            var raw = await _cheap.RunAsync(Llm.LocalActionCatalog.AutomationGate, prompt);
+            var raw = await _cheap.RunAsync(Llm.LocalActionCatalog.AutomationGate, prompt, ownerId: ownerId);
             var ans = raw.Trim().ToLowerInvariant();
             var no = ans.StartsWith("no") || ans.Contains("нет");
             var yes = ans.StartsWith("yes") || ans.Contains("да");

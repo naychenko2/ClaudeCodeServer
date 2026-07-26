@@ -49,7 +49,7 @@ public sealed class GitAiService(ICheapTextRunner cheap, GitService git, IConfig
         // «Фоновые задачи». Кастомные правила требовательнее к модели: нужно точное следование —
         // админ ставит действию Claude или сильную модель; дефолтный Conventional-стиль локаль
         // держит и на рекомендованной настройке.
-        var raw = await cheap.RunAsync(LocalActionCatalog.GitCommitMsg, prompt, Model, ct: ct);
+        var raw = await cheap.RunAsync(LocalActionCatalog.GitCommitMsg, prompt, Model, ownerId, ct: ct);
         return ParseSuggestion(raw);
     }
 
@@ -76,7 +76,7 @@ public sealed class GitAiService(ICheapTextRunner cheap, GitService git, IConfig
             Образцы коммитов:
             {samples}
             """;
-        var raw = (await cheap.RunAsync(LocalActionCatalog.GitCommitMsg, prompt, Model, ct: ct)).Trim();
+        var raw = (await cheap.RunAsync(LocalActionCatalog.GitCommitMsg, prompt, Model, ownerId, ct: ct)).Trim();
         return string.IsNullOrWhiteSpace(raw) ? null : raw;
     }
 
@@ -100,7 +100,7 @@ public sealed class GitAiService(ICheapTextRunner cheap, GitService git, IConfig
             Дифф:
             {diff}
             """;
-        var raw = (await cheap.RunAsync(LocalActionCatalog.GitStashName, prompt, Model, ct: ct)).Trim().Trim('"', '«', '»');
+        var raw = (await cheap.RunAsync(LocalActionCatalog.GitStashName, prompt, Model, ownerId, ct: ct)).Trim().Trim('"', '«', '»');
         var line = raw.Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim();
         return string.IsNullOrWhiteSpace(line) ? null : (line.Length > 80 ? line[..80] : line);
     }

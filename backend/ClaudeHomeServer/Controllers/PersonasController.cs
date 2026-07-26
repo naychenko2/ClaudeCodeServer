@@ -134,7 +134,7 @@ public class PersonasController : ControllerBase
         try
         {
             var raw = await _cheap.RunAsync(Services.Llm.LocalActionCatalog.PersonaMatch, sb.ToString(),
-                _config["Notes:AiModel"] ?? _config["Tasks:AiModel"] ?? "haiku", ct: HttpContext.RequestAborted);
+                _config["Notes:AiModel"] ?? _config["Tasks:AiModel"] ?? "haiku", UserId, ct: HttpContext.RequestAborted);
             var first = raw.Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim() ?? "";
             // Устойчиво к обрамлению: ищем id из списка внутри ответа модели
             var id = personas.FirstOrDefault(p => first.Contains(p.Id, StringComparison.Ordinal))?.Id;
@@ -509,7 +509,7 @@ public class PersonasController : ControllerBase
         try
         {
             var raw = await _cheap.RunAsync(Services.Llm.LocalActionCatalog.PersonaAiCharacter,
-                prompt, model, jsonFormat: "json", ct: HttpContext.RequestAborted);
+                prompt, model, UserId, jsonFormat: "json", ct: HttpContext.RequestAborted);
             var contract = PersonaManager.NormalizeContract(ParseJsonObject<PersonaContract>(raw));
             if (contract is null)
             {
@@ -574,7 +574,7 @@ public class PersonasController : ControllerBase
             try
             {
                 raw = await _cheap.RunAsync(Services.Llm.LocalActionCatalog.PersonaQuickCreate,
-                    BuildDraftPrompt(req.Prompt), model, jsonFormat: "json",
+                    BuildDraftPrompt(req.Prompt), model, UserId, jsonFormat: "json",
                     ct: HttpContext.RequestAborted);
             }
             catch (Exception ex)
@@ -641,7 +641,7 @@ public class PersonasController : ControllerBase
         try
         {
             var raw = await _cheap.RunAsync(Services.Llm.LocalActionCatalog.PersonaAiTeam,
-                BuildTeamPrompt(project, req.Prompt), model, jsonFormat: "json",
+                BuildTeamPrompt(project, req.Prompt), model, UserId, jsonFormat: "json",
                 ct: HttpContext.RequestAborted);
             var drafts = ParseTeamDrafts(raw);
             if (drafts is null || drafts.Count == 0)
@@ -1059,7 +1059,7 @@ public class PersonasController : ControllerBase
         for (var attempt = 1; attempt <= 2 && raws is null; attempt++)
         {
             var raw = await _cheap.RunAsync(Services.Llm.LocalActionCatalog.PersonaAutomationSuggest,
-                prompt, model, jsonFormat: "json", ct: HttpContext.RequestAborted);
+                prompt, model, UserId, jsonFormat: "json", ct: HttpContext.RequestAborted);
             raws = ParseSuggestRuleArray(raw);
             if (raws is null)
                 _log.LogWarning("suggest automation: ответ не распознан (попытка {Attempt}); сырой ответ: {Raw}",
@@ -1434,7 +1434,7 @@ public class PersonasController : ControllerBase
         {
             // Свободный текст (1-2 предложения) — JSON-режим здесь не нужен
             var text = await _cheap.RunAsync(Services.Llm.LocalActionCatalog.PersonaAiCondition,
-                sb.ToString(), model, ct: HttpContext.RequestAborted);
+                sb.ToString(), model, UserId, ct: HttpContext.RequestAborted);
             var condition = text.Trim().Trim('"');
             if (string.IsNullOrWhiteSpace(condition))
                 return StatusCode(502, new { error = "Пустой ответ модели" });
@@ -1536,7 +1536,7 @@ public class PersonasController : ControllerBase
         for (var attempt = 1; attempt <= 2 && raws is null; attempt++)
         {
             var raw = await _cheap.RunAsync(Services.Llm.LocalActionCatalog.PersonaBindingsSuggest,
-                prompt, model, jsonFormat: "json", ct: HttpContext.RequestAborted);
+                prompt, model, UserId, jsonFormat: "json", ct: HttpContext.RequestAborted);
             raws = ParseSuggestArray(raw);
             if (raws is null)
                 _log.LogWarning("suggest bindings: ответ не распознан (попытка {Attempt}); сырой ответ: {Raw}",

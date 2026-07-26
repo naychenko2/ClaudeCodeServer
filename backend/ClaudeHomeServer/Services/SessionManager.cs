@@ -1726,7 +1726,7 @@ public class SessionManager : IDisposable
                 entry.Info.Name = title;
                 SaveSessions();
                 // Фоново уточняем заголовок локальной моделью (best-effort, не блокирует ход)
-                _ = RefineChatTitleAsync(sessionId, text, title);
+                _ = RefineChatTitleAsync(sessionId, text, title, ResolveOwnerId(entry.Info));
             }
         }
 
@@ -1832,7 +1832,7 @@ public class SessionManager : IDisposable
                 entry.Info.Name = title;
                 SaveSessions();
                 // Фоново уточняем заголовок локальной моделью (best-effort, не блокирует ход)
-                _ = RefineChatTitleAsync(sessionId, text, title);
+                _ = RefineChatTitleAsync(sessionId, text, title, ResolveOwnerId(entry.Info));
             }
         }
 
@@ -2246,7 +2246,7 @@ public class SessionManager : IDisposable
     // сообщению строим осмысленный короткий заголовок и заменяем обрезку. Гейт по UsesLocal —
     // уточняем только когда действие реально идёт на бесплатную локаль (не платим claude за
     // каждый чат). Best-effort: молчим при любой проблеме, не трогаем имя, переименованное вручную.
-    private async Task RefineChatTitleAsync(string sessionId, string firstMessage, string expectedTitle)
+    private async Task RefineChatTitleAsync(string sessionId, string firstMessage, string expectedTitle, string? ownerId)
     {
         if (_cheap is null || !_cheap.UsesLocal(Llm.LocalActionCatalog.ChatTitle)) return;
         try
@@ -2256,7 +2256,7 @@ public class SessionManager : IDisposable
                 "по первому сообщению пользователя. " + Llm.TitleExtraction.JsonHint + "\n\n" +
                 (firstMessage.Length > 1500 ? firstMessage[..1500] : firstMessage);
             var raw = await _cheap.RunAsync(Llm.LocalActionCatalog.ChatTitle, prompt,
-                jsonFormat: Llm.TitleExtraction.Schema);
+                ownerId: ownerId, jsonFormat: Llm.TitleExtraction.Schema);
             var line = Llm.TitleExtraction.Extract(raw);
             if (line is null || line.Length > 80) return;
 
@@ -2289,7 +2289,7 @@ public class SessionManager : IDisposable
             "Ниже — переписка чата. Придумай короткое название (3-6 слов, по-русски, без кавычек и точки в конце), " +
             "отражающее суть текущего разговора. " + Llm.TitleExtraction.JsonHint + "\n\n" + transcript;
         var raw = await _cheap.RunAsync(Llm.LocalActionCatalog.ChatRetitle, prompt,
-            _config["Notes:AiModel"] ?? "haiku", jsonFormat: Llm.TitleExtraction.Schema, ct: ct);
+            _config["Notes:AiModel"] ?? "haiku", userId, jsonFormat: Llm.TitleExtraction.Schema, ct: ct);
         var line = Llm.TitleExtraction.Extract(raw);
         if (line is null || line.Length > 80)
             throw new InvalidOperationException("Модель вернула пустое название");

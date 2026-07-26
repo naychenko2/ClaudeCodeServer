@@ -35,7 +35,7 @@ public sealed class ChatTaskExtractionService(
             Llm.LocalActionCatalog.ChatExtractTasks,
             BuildPrompt(transcript),
             config["Tasks:AiModel"] ?? config["Notes:AiModel"] ?? "haiku",
-            ct: ct);
+            ownerId, ct: ct);
 
         var result = ParseTasks(raw);
         log.LogInformation(

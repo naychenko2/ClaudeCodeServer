@@ -75,7 +75,7 @@ public sealed class PersonaMemoryAutolearnService : IHostedService
 
             var raw = await _cheap.RunAsync(Llm.LocalActionCatalog.PersonaMemoryAutolearn,
                 BuildPrompt(persona, transcript),
-                _config["Notes:AiModel"] ?? _config["Tasks:AiModel"] ?? "haiku");
+                _config["Notes:AiModel"] ?? _config["Tasks:AiModel"] ?? "haiku", persona.OwnerId);
 
             var result = Parse(raw);
             var saved = 0;
@@ -149,7 +149,7 @@ public sealed class PersonaMemoryAutolearnService : IHostedService
 
             var raw = await _cheap.RunAsync(Llm.LocalActionCatalog.PersonaMemoryAutolearn,
                 BuildPrompt(persona, transcript),
-                _config["Notes:AiModel"] ?? _config["Tasks:AiModel"] ?? "haiku");
+                _config["Notes:AiModel"] ?? _config["Tasks:AiModel"] ?? "haiku", persona.OwnerId);
 
             var saved = 0;
             foreach (var item in Parse(raw).Items)

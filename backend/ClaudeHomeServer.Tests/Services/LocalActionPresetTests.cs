@@ -170,18 +170,49 @@ public class LocalActionPresetTests
     }
 
     [Fact]
-    public async Task PreferredFree_PicksListedModel()
+    public async Task Tiers_SetsTierSlotsForAll_IncludingAgentic()
     {
-        var cfg = WithFreeModel(new() { ["Ollama:Model"] = "" });
-        // Вторая модель — предпочитаемая; окно достаточно для любого профиля
-        cfg["OpenRouter:DirectModels:1:Id"] = "poolside/laguna:free";
-        cfg["OpenRouter:DirectModels:1:DisplayName"] = "Laguna";
-        cfg["OpenRouter:DirectModels:1:ContextWindow"] = "262144";
-        cfg["OpenRouter:PreferredFree:0"] = "poolside/laguna:free";
-        var (service, store) = Build(cfg);
+        var (service, store) = Build(new() { ["Ollama:Model"] = "" });
+        await service.ApplyAsync(ActionPreset.Tiers);
 
-        await service.ApplyAsync(ActionPreset.FreeOnly);
-        Assert.Equal(CloudCheapClient.RoutePrefix + "poolside/laguna:free",
-            store.TryGet(LocalActionCatalog.NotesTags));
+        // Агентное место с явным Tier=Strong
+        Assert.Equal("tier:strong", store.TryGet(LocalActionCatalog.ChatNew));
+        // Агентное место с явным Tier=Medium
+        Assert.Equal("tier:medium", store.TryGet(LocalActionCatalog.SubagentConsultant));
+        // Фоновое Small (DefaultLocal) → weak
+        Assert.Equal("tier:weak", store.TryGet(LocalActionCatalog.NotesTags));
+        // Фоновое Large (DefaultLocal=false) → medium
+        Assert.Equal("tier:medium", store.TryGet(LocalActionCatalog.Changelog));
+    }
+
+    [Fact]
+    public async Task TiersLocal_DefaultLocalBackgroundGetsLocal_AgenticGetsTier()
+    {
+        var (service, store) = Build(new()
+        {
+            ["Ollama:Model"] = "qwen3:14b",
+            ["Ollama:BaseUrl"] = "http://localhost:11434",
+        });
+        await service.ApplyAsync(ActionPreset.TiersLocal);
+
+        // Лёгкое фоновое (DefaultLocal) → локаль
+        Assert.Equal(LocalActionOverridesStore.LocalRoute, store.TryGet(LocalActionCatalog.NotesTags));
+        // Сильное фоновое (DefaultLocal=false) → tier medium
+        Assert.Equal("tier:medium", store.TryGet(LocalActionCatalog.Changelog));
+        // Агентное — всегда tier, never local
+        Assert.Equal("tier:strong", store.TryGet(LocalActionCatalog.ChatNew));
+        Assert.Equal("tier:medium", store.TryGet(LocalActionCatalog.SubagentConsultant));
+    }
+
+    [Fact]
+    public async Task TiersLocal_OllamaOff_FallsBackToTiers()
+    {
+        var (service, store) = Build(new() { ["Ollama:Model"] = "" });
+        await service.ApplyAsync(ActionPreset.TiersLocal);
+
+        // Без Ollama поведение совпадает с Tiers
+        Assert.Equal("tier:weak", store.TryGet(LocalActionCatalog.NotesTags));
+        Assert.Equal("tier:medium", store.TryGet(LocalActionCatalog.Changelog));
+        Assert.Equal("tier:strong", store.TryGet(LocalActionCatalog.ChatNew));
     }
 }

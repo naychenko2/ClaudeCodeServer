@@ -62,6 +62,20 @@ public class LocalActionsAdminControllerTests : IClassFixture<TestWebApplication
     }
 
     [Fact]
+    public async Task АдминПрименяетTiersПресеты()
+    {
+        var tiers = await _admin.PostAsJsonAsync("/api/admin/local-actions/preset", new { preset = "tiers" });
+        tiers.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await tiers.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("preset").GetString().Should().Be("tiers");
+
+        var tiersLocal = await _admin.PostAsJsonAsync("/api/admin/local-actions/preset", new { preset = "tiers-local" });
+        tiersLocal.StatusCode.Should().Be(HttpStatusCode.OK);
+        body = await tiersLocal.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("preset").GetString().Should().Be("tiers-local");
+    }
+
+    [Fact]
     public async Task НесуществующаяМодель400()
     {
         // Опечатка в id модели должна отлавливаться при сохранении, а не всплывать

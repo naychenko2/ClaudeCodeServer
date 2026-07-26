@@ -24,7 +24,7 @@ public class LocalActionsAdminController(
     // легаси "claude"/"default" принимаются и трактуются как tier:medium (LocalActionRouter.Parse)
     public record RouteRequest(string Route);
 
-    // preset: "recommended" | "free" | "local" | "balanced"
+    // preset: "recommended" | "free" | "local" | "balanced" | "tiers" | "tiers-local"
     public record PresetRequest(string Preset);
 
     // Массово подобрать исполнителя всем действиям по пресету. Возвращает применённый пресет и
@@ -38,6 +38,8 @@ public class LocalActionsAdminController(
             "free" => ActionPreset.FreeOnly,
             "local" => ActionPreset.LocalFirst,
             "balanced" => ActionPreset.Balanced,
+            "tiers" => ActionPreset.Tiers,
+            "tiers-local" => ActionPreset.TiersLocal,
             _ => (ActionPreset?)null,
         };
         if (preset is null)

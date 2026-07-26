@@ -29,9 +29,8 @@ import { EditDialog } from '../features/projects/dialogs/EditDialog';
 import { SidebarProjectSwitcher } from '../features/projects/SidebarProjectSwitcher';
 import { TasksPanel } from '../features/tasks/TasksPanel';
 import { PillViewSwitcher, ListIcon, ByDateIcon, BoardIcon } from '../features/tasks/bits';
-import {
-  TasksListFilterButton, applyTaskFilters, EMPTY_TASK_FILTERS, type TaskListFilters,
-} from '../features/tasks/TasksListFilter';
+import { TasksListFilterButton, applyTaskFilters } from '../features/tasks/TasksListFilter';
+import { useTaskFilters, useTaskGroupTab } from '../lib/taskFilters';
 import { TaskDetailsPane } from '../features/tasks/TaskDetailsPane';
 import { TaskBoard } from '../features/tasks/board/TaskBoard';
 import { BoardColumnsDialog } from '../features/tasks/board/BoardColumnsDialog';
@@ -535,11 +534,11 @@ const windowWidth = useWindowWidth();
   // Группировка списка задач («Список»/«По дате») — поднята сюда, чтобы переключатель
   // видов можно было вынести в шапку карточки «Задачи» в cc-panels (общее состояние
   // с содержимым панели). В старом сайдбаре переключатель остаётся внутри TasksPanel.
-  const [projectGroupTab, setProjectGroupTab] = useState<'status' | 'date'>('status');
+  const { tab: projectGroupTab, setTab: setProjectGroupTab } = useTaskGroupTab(project.id);
   // Фильтры списка задач (Статус/Исполнитель/Приоритет/Срок) — подняты сюда, чтобы
   // шариться между cc-panels (кнопка Funnel в шапке острова) и старым сайдбаром/
   // мобилой (кнопка внутри TasksPanel). Как projectGroupTab выше.
-  const [taskListFilters, setTaskListFilters] = useState<TaskListFilters>(EMPTY_TASK_FILTERS);
+  const { filters: taskListFilters, setFilters: setTaskListFilters } = useTaskFilters(project.id);
   // Значение и обработчик единого переключателя «Список | По дате | Доска»
   const ccTasksView: 'status' | 'date' | 'board' = projectBoard ? 'board' : projectGroupTab;
   const onCcTasksView = (v: 'status' | 'date' | 'board') => {

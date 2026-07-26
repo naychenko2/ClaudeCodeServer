@@ -85,6 +85,9 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
     if (auth.id) joinUser(auth.id).catch(() => {});
     const off = onMessage(msg => {
       if (msg.type === 'status_changed') refresh();
+      // Смена статуса задачи меняет признак «Готово» её чата (taskDone в HomeSessionDto).
+      // Перечитываем список — иначе фильтр «Готово» обновится только на следующем тике поллинга.
+      if (msg.type === 'task_changed') refresh();
       // Чат удалён на сервере (в т.ч. авто-удаление временного) — убираем из списка,
       // открытый чат закрываем. Side-эффекты в апдейтере идемпотентны.
       if (msg.type === 'chat_deleted') {

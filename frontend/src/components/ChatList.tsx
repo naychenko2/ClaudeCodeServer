@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Plus } from 'lucide-react';
+import { Plus, FilterX } from 'lucide-react';
 import type { Session } from '../types';
 import { api } from '../lib/api';
 import { useOnline } from '../hooks/useOnline';
@@ -8,8 +8,9 @@ import { C, FS, MODAL_W } from '../lib/design';
 import { Modal, ModalActions, Button } from './ui';
 import { groupChats } from '../lib/chatGroups';
 import { usePersonas, usePersonasVersion } from '../lib/personas';
-import { FilterBar } from './FilterBar';
-import { useChatFilters, useSanitizePersonaFilter } from '../lib/chatFilters';
+import { FilterBar, ChatFilterResetActions } from './FilterBar';
+import { EmptyState } from './ui';
+import { useChatFilters, useSanitizePersonaFilter, matchChatFilter, isDefaultFilters, defaultChatFilters, buildHiddenReason } from '../lib/chatFilters';
 import { buildChatTreeRows, useChatView, useTreeCollapse } from '../lib/chatTree';
 import { useLastMechanicVersion } from '../lib/lastMechanic';
 import { ChatCard } from './ChatCard';
@@ -46,7 +47,6 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
   // === Фильтры списка чатов ===
   // Персистятся в localStorage отдельно от проектных списков (scope 'global')
   const { filters, patch } = useChatFilters('global');
-  const visibleOrigins = new Set(filters.origins);
   // Режим вида «Плоский/Иерархия» и память свёрнутых веток дерева
   const { view, setView } = useChatView('global');
   const { collapsedIds, toggleCollapse } = useTreeCollapse('global');
@@ -57,13 +57,8 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
   const personaIdsInList = [...new Set(chats.filter(c => c.personaId).map(c => c.personaId!))];
   useSanitizePersonaFilter(filters, patch, personaIdsInList, chats.length > 0);
 
-  // Применение фильтров
-  const isVisible = (c: Session) => {
-    if (!visibleOrigins.has(c.origin)) return false;
-    if (filters.activeOnly && Date.now() - new Date(c.updatedAt).getTime() > 5 * 60 * 1000) return false;
-    if (filters.personaId && c.personaId !== filters.personaId) return false;
-    return true;
-  };
+  // Применение фильтров (единый предикат — общий с проектным списком чатов)
+  const isVisible = matchChatFilter(filters);
   const filteredChats = chats.filter(isVisible);
   // В иерархии фильтры применяются только к корням: видимый родитель тянет всех детей.
   // Сборка леса мемоизирована — hover по карточке (hoveredId) не пересобирает дерево;
@@ -134,13 +129,9 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
 
       {/* Строка фильтров */}
       <FilterBar
-        visibleOrigins={visibleOrigins}
-        onChangeVisibleOrigins={v => patch({ origins: [...v] })}
-        activeOnly={filters.activeOnly}
-        onChangeActiveOnly={v => patch({ activeOnly: v })}
-        filterPersonaId={filters.personaId}
-        onChangeFilterPersona={id => patch({ personaId: id })}
-        personaIdsInList={personaIdsInList}
+        sessions={chats}
+        filters={filters}
+        patch={patch}
         allPersonas={personas}
         hiddenCount={hiddenCount}
         isMobile={isMobile}
@@ -155,9 +146,20 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
           </div>
         )}
         {(tree ? tree.rows.length === 0 : groups.length === 0) && chats.length > 0 && (
-          <div style={{ padding: '24px 8px', textAlign: 'center', color: C.textMuted, fontSize: 13 }}>
-            Все чаты скрыты фильтрами
-          </div>
+          <EmptyState
+            compact
+            icon={<FilterX size={20} strokeWidth={2} />}
+            title="Ничего не нашлось"
+            subtitle={buildHiddenReason(chats.length, filters.search)}
+            action={
+              <ChatFilterResetActions
+                search={filters.search}
+                hasNonSearchFilters={!isDefaultFilters({ ...filters, search: '' })}
+                onResetSearch={() => patch({ search: '' })}
+                onResetAll={() => patch(defaultChatFilters())}
+              />
+            }
+          />
         )}
         {tree ? (
           <ChatGroupingDnd chats={chats} isMobile={isMobile} onEdited={onEdited}>

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, useRef } from 'react';
-import { Plus } from 'lucide-react';
+import { Plus, FilterX } from 'lucide-react';
 import type { Project, Session } from '../types';
 import { api } from '../lib/api';
 import { onMessage, onReconnected } from '../lib/signalr';
@@ -8,8 +8,9 @@ import { EditSessionDialog } from './EditSessionDialog';
 import { C, FS, MODAL_W } from '../lib/design';
 import { Modal, ModalActions, Button } from './ui';
 import { usePersonas, usePersonasVersion } from '../lib/personas';
-import { FilterBar } from './FilterBar';
-import { useChatFilters, useSanitizePersonaFilter } from '../lib/chatFilters';
+import { FilterBar, ChatFilterResetActions } from './FilterBar';
+import { EmptyState } from './ui';
+import { useChatFilters, useSanitizePersonaFilter, matchChatFilter, isDefaultFilters, defaultChatFilters, buildHiddenReason } from '../lib/chatFilters';
 import { buildChatTreeRows, useChatView, useTreeCollapse } from '../lib/chatTree';
 import { useLastMechanicVersion } from '../lib/lastMechanic';
 import { ChatCard } from './ChatCard';
@@ -117,6 +118,22 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         });
         return;
       }
+      // Смена статуса задачи (task_changed) меняет признак «Готово» у её чата-исполнителя:
+      // taskDone не приходит в status_changed — обновляем по полному Task из события.
+      if (msg.type === 'task_changed') {
+        const t = msg.task;
+        const done = msg.action !== 'deleted' && t.status === 'done';
+        setSessions(prev => {
+          let changed = false;
+          const next = prev.map(s => {
+            if (s.taskId !== t.id || s.taskDone === done) return s;
+            changed = true;
+            return { ...s, taskDone: done };
+          });
+          return changed ? next : prev;
+        });
+        return;
+      }
       if (msg.type !== 'status_changed') return;
       setSessions(prev => prev.map(s =>
         s.id === msg.sessionId
@@ -185,7 +202,6 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   // === Фильтры списка чатов ===
   // Персистятся в localStorage отдельно для каждого проекта (scope = project.id)
   const { filters, patch } = useChatFilters(project.id);
-  const visibleOrigins = new Set(filters.origins);
   // Режим вида «Плоский/Иерархия» и память свёрнутых веток дерева
   const { view, setView } = useChatView(project.id);
   const { collapsedIds, toggleCollapse } = useTreeCollapse(project.id);
@@ -194,13 +210,8 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   const personaIdsInList = [...new Set(sessions.filter(s => s.personaId).map(s => s.personaId!))];
   useSanitizePersonaFilter(filters, patch, personaIdsInList, sessions.length > 0);
 
-  // Применение фильтров
-  const isVisible = (s: Session) => {
-    if (!visibleOrigins.has(s.origin)) return false;
-    if (filters.activeOnly && Date.now() - new Date(s.updatedAt).getTime() > 5 * 60 * 1000) return false;
-    if (filters.personaId && s.personaId !== filters.personaId) return false;
-    return true;
-  };
+  // Применение фильтров (единый предикат — общий с глобальным списком чатов)
+  const isVisible = matchChatFilter(filters);
   const filteredSessions = sessions.filter(isVisible);
   // В иерархии фильтры применяются только к корням: видимый родитель тянет всех детей.
   // Сборка леса мемоизирована — hover по карточке (hoveredId) не пересобирает дерево;
@@ -258,13 +269,9 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
 
       {/* Строка фильтров — всегда видна (для консистентности) */}
       <FilterBar
-        visibleOrigins={visibleOrigins}
-        onChangeVisibleOrigins={v => patch({ origins: [...v] })}
-        activeOnly={filters.activeOnly}
-        onChangeActiveOnly={v => patch({ activeOnly: v })}
-        filterPersonaId={filters.personaId}
-        onChangeFilterPersona={id => patch({ personaId: id })}
-        personaIdsInList={personaIdsInList}
+        sessions={sessions}
+        filters={filters}
+        patch={patch}
         allPersonas={personas}
         hiddenCount={hiddenCount}
         isMobile={isMobile}
@@ -274,9 +281,20 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
 
       <div style={{ flex: 1, overflowY: 'auto', padding: '8px 8px' }}>
         {(tree ? tree.rows.length === 0 : filteredSessions.length === 0) && sessions.length > 0 && (
-          <div style={{ padding: '24px 8px', textAlign: 'center', color: C.textMuted, fontSize: 13 }}>
-            Все чаты скрыты фильтрами
-          </div>
+          <EmptyState
+            compact
+            icon={<FilterX size={20} strokeWidth={2} />}
+            title="Ничего не нашлось"
+            subtitle={buildHiddenReason(sessions.length, filters.search)}
+            action={
+              <ChatFilterResetActions
+                search={filters.search}
+                hasNonSearchFilters={!isDefaultFilters({ ...filters, search: '' })}
+                onResetSearch={() => patch({ search: '' })}
+                onResetAll={() => patch(defaultChatFilters())}
+              />
+            }
+          />
         )}
         {tree ? (
           <ChatGroupingDnd chats={sessions} isMobile={isMobile} onEdited={handleSessionUpdated}>

@@ -9,6 +9,10 @@ namespace ClaudeHomeServer.Services;
 //  • запрос поиска RU→EN (иначе fuzzy/semantic-поиск по английским именам мимо);
 //  • описания навыков EN→RU для показа в LLM-подборе.
 // Модель — Skills:AiModel (дефолт haiku), one-shot через OneShotClaudeRunner. Всё кэшируется.
+// Перевод — системное действие инстанса (общий публичный каталог, без конкретного владельца):
+// ownerId в cheap-вызовы НЕ передаём. Кеши (_queryCache, _descCache) процесс-глобальные, и
+// перевод переиспользуется чатами всех пользователей — привязка к per-user слоту модели
+// владельца записала бы в кеш значение, верное только для одного слота, но отдаваемое всем.
 public class SkillTranslationService(
     ICheapTextRunner cheap,
     IConfiguration config,

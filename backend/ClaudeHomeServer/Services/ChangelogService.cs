@@ -426,6 +426,8 @@ public class ChangelogService(FileService files, IConfiguration config, ILogger<
             // пользователю внизу дня, чтобы цена сводки не была невидимой. Идёт через маршрут
             // действия (локаль/бесплатное облако/claude — выбор админа); _model — модель
             // claude-пути по умолчанию. На бесплатной модели usage=null → стоимость не рисуется.
+            // ownerId намеренно не передаётся: сводка «Что нового» — системное действие инстанса
+            // (без владельца), идёт на глобальный слот, а не на per-user слот пользователя.
             var run = await cheap.RunDetailedAsync(Llm.LocalActionCatalog.Changelog, prompt,
                 fallbackModel: _model, timeout: TimeSpan.FromMilliseconds(_claudeTimeoutMs),
                 maxTokens: ChangelogMaxTokens, ct: ct);

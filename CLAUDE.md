@@ -132,16 +132,20 @@ Claude Design проект: `52adb1f7-312b-4f25-8c47-2bccfca9df94`
   маршрут CLI задаёт только сервер; `CLAUDE_CODE_OAUTH_TOKEN` не трогается.
 - One-shot вызовы — всегда `--safe-mode` + `--no-session-persistence` (авто-деградация,
   если CLI флага не знает); состав флагов — `OneShotClaudeRunner.BuildArgs` (под тестом).
-- **Три слота моделей + таблица назначений.** Инстанс держит три именованные модели —
-  сильная/средняя/слабая (`AppSettings.ModelTierStrong|Medium|Weak`, уровень 2 диалога
-  «Поставщики моделей»). Каждое МЕСТО применения модели — строка каталога
-  `LocalActionCatalog` со значением «слот | конкретная модель | локальная (только фон)»
-  в `LocalActionOverridesStore` (`tier:strong|medium|weak`; легаси `claude`/`default` ≙
-  средняя). Агентные места (`Agentic: true`, группа «Чаты и персоны»): `chat-new`,
-  `chat-persona`, `tasks-executor`, `subagent-consultant`, `modules-llm` — им локаль и
-  `direct:`-модели недоступны, резолвит `ModelAssignmentResolver`; фоновым — `CheapTextRunner`
-  по маршруту. Пустая модель сущности (`Session.Model`, `Persona.Model`) = «по назначению
-  места»; явная модель и пины пантеона сильнее. Шлюз на границе запуска —
+- **Три слота моделей + таблица назначений.** Слоты **двухуровневые**: личный per-user слот
+  (`User.ModelTierStrong|Medium|Weak`) поверх глобального инстанса
+  (`AppSettings.ModelTierStrong|Medium|Weak`, уровень 2 диалога «Поставщики моделей»).
+  Каждое МЕСТО применения модели — строка каталога `LocalActionCatalog` со значением
+  «слот | конкретная модель | локальная (только фон)» в `LocalActionOverridesStore`
+  (`tier:strong|medium|weak`; легаси `claude`/`default` ≙ средняя). Таблица назначений
+  **глобальная** (админ решает, каким слотом идёт место), но слот в ней разрешается в модель
+  **по владельцу действия** через `UserModelTierResolver.ModelFor(tier, ownerId)` —
+  единственную точку склейки (ею пользуются и `ModelAssignmentResolver`, и `CheapTextRunner`;
+  дублировать её логику нельзя). Агентные места (`Agentic: true`, группа «Чаты и персоны»):
+  `chat-new`, `chat-persona`, `tasks-executor`, `subagent-consultant`, `modules-llm` — им
+  локаль и `direct:`-модели недоступны, резолвит `ModelAssignmentResolver`; фоновым —
+  `CheapTextRunner` по маршруту. Пустая модель сущности (`Session.Model`, `Persona.Model`) =
+  «по назначению места»; явная модель и пины пантеона сильнее. Шлюз на границе запуска —
   `ClaudeSession.EffectiveModel` (ключ места по сессии) и `OneShotClaudeRunner.ResolveModel`
   (резолв ДО `BuildCliEnv`, `NormalizeModel` — ПОСЛЕ). Значение в сессии не фиксируется:
   `Model = null` резолвится каждый ход, смена настройки подхватывается сама.

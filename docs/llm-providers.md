@@ -24,17 +24,22 @@
   `BuildCliEnv`, `ComputeCost` (на стороннем эндпоинте total_cost_usd от CLI
   считается по ценам Anthropic — пересчитываем по ценам конфига; без цен — null).
 - **Guard**: смена провайдера у начатой сессии — 400 (транскрипт живёт у эндпоинта).
-- **Слоты моделей и таблица назначений** (уровень 2 и 3 диалога «Поставщики моделей»,
-  админские и глобальные). Инстанс держит три именованные модели —
-  `AppSettings.ModelTierStrong|Medium|Weak` (`AppSettingsService.TierModel(tier)`; пустой слот
-  → null, решает CLI). Каждое место применения — запись `LocalActionCatalog`; выбор админа
+- **Слоты моделей и таблица назначений** (уровень 2 и 3 диалога «Поставщики моделей»).
+  Слоты **двухуровневые**: личный per-user слот (`User.ModelTierStrong|Medium|Weak`) поверх
+  глобального инстанса (`AppSettings.ModelTierStrong|Medium|Weak`,
+  `AppSettingsService.TierModel(tier)`; пустой слот → null, решает CLI). Таблица назначений
+  мест — **глобальная** (админ решает, каким слотом идёт каждое место), но слот в ней
+  разрешается в модель **по владельцу действия** через
+  `UserModelTierResolver.ModelFor(tier, ownerId)` — единственную точку склейки личного и
+  глобального слота (её вызывают и `ModelAssignmentResolver`, и `CheapTextRunner`; дублировать
+  её логику нельзя). Каждое место применения — запись `LocalActionCatalog`; выбор админа
   живёт в `LocalActionOverridesStore` значением `tier:strong|medium|weak` | id модели |
   `local` (легаси `claude`/`default` читаются как средняя). Дефолт записи — `Tier` или
   профиль сложности (`LocalActionCatalog.EffectiveDefaultTier`: Small/Text → слабая,
   Large → средняя).
   - **Агентные места** (`Agentic: true`, группа «Чаты и персоны»): `chat-new`, `chat-persona`,
     `tasks-executor`, `subagent-consultant`, `modules-llm`. Резолвит
-    `ModelAssignmentResolver.Resolve(usageKey, explicitModel)`: явная модель → назначение
+    `ModelAssignmentResolver.Resolve(usageKey, explicitModel, ownerId)`: явная модель → назначение
     админа → слот каталога → null. Локаль и `direct:`-модели им непригодны (нужны
     инструменты CLI) — отклоняются в админском API и игнорируются при резолве. Пресеты
     автоподбора агентные места не трогают.
@@ -159,7 +164,8 @@ UI скрывает недоступное (`useModelCaps` в `lib/models.ts`), 
   снимок в неизменяемом словаре заменяется целиком при записи. Старый формат (`bool`: true=локаль,
   false=claude) мигрируется при чтении. Роутер — singleton, но читает стор на каждом вызове,
   поэтому выбор действует **сразу, без рестарта**. API — `PUT|DELETE /api/admin/local-actions/{key}`
-  (`[Authorize(Roles = "admin")]`); настройка глобальная, поэтому не per-user. PUT валидирует
+  (`[Authorize(Roles = "admin")]`); таблица назначений глобальная (не per-user) — но слот в
+  ней разрешается в модель по владельцу действия (см. выше). PUT валидирует
   модель по `ModelCatalogService` и настроенности провайдера — опечатка в id иначе всплыла бы
   только при первом фоновом вызове.
 - **Раннер** — [CheapTextRunner.cs](../backend/ClaudeHomeServer/Services/Llm/CheapTextRunner.cs)

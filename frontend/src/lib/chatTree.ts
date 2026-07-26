@@ -158,14 +158,15 @@ export function collectDescendants(chats: Session[], rootId: string): Set<string
 
 /**
  * Дерево чатов из плоского массива по parentSessionId, рекурсивно на любую глубину.
- * Фильтры применяются только к КОРНЯМ (isRootVisible): видимый родитель всегда тянет
- * всех своих детей; у скрытого корня дети всплывают кандидатами в корни (сирота —
- * обычный корень без пометок). Защита от циклов — visited-набор.
+ * Фильтр применяется к КАЖДОМУ узлу (isVisible): видимый родитель тянет только видимых
+ * детей; скрытый узел «прокалывается» — его видимые потомки поднимаются к ближайшему
+ * видимому предку (или в корни). Так множество видимых чатов совпадает с плоским
+ * списком и не зависит от вида. Защита от циклов — visited-набор.
  */
 export function buildChatTreeRows(
   chats: Session[],
   opts: {
-    isRootVisible: (c: Session) => boolean;
+    isVisible: (c: Session) => boolean;
     collapsedIds: Set<string>;
     activeId: string | null;
   },
@@ -206,13 +207,34 @@ export function buildChatTreeRows(
     if (!visited.has(c.id)) topNodes.push(buildNode(c));
   }
 
-  // Фильтр корней: скрытый корень исчезает, его дети — кандидаты в корни (рекурсивно)
-  const roots: TreeNode[] = [];
-  const promote = (node: TreeNode) => {
-    if (opts.isRootVisible(node.chat)) roots.push(node);
-    else node.children.forEach(promote);
+  // Фильтр по всему дереву: скрытый узел «прокалывается» — его видимые дети
+  // поднимаются к ближайшему видимому предку (или в корни). Метрики поддерева
+  // пересчитываются по отфильтрованному составу, чтобы бейджи свёрнутых веток
+  // считали только видимых потомков. Множество видимых чатов совпадает с плоским
+  // списком — hiddenCount не зависит от вида.
+  const filterForest = (nodes: TreeNode[]): TreeNode[] => {
+    const visit = (node: TreeNode, sink: TreeNode[]) => {
+      const kids: TreeNode[] = [];
+      for (const k of node.children) visit(k, kids);
+      if (opts.isVisible(node.chat)) {
+        sink.push({
+          chat: node.chat,
+          children: kids,
+          maxActivity: Math.max(activity(node.chat), ...kids.map(k => k.maxActivity)),
+          groupCount: kids.reduce((n, k) => n + 1 + k.groupCount, 0),
+          groupRunningCount: kids.reduce(
+            (n, k) => n + (isChatRunning(k.chat) ? 1 : 0) + k.groupRunningCount, 0),
+        });
+      } else {
+        // узел скрыт фильтром — прокол: его видимые дети уходят уровнем выше
+        for (const k of kids) sink.push(k);
+      }
+    };
+    const roots: TreeNode[] = [];
+    nodes.forEach(n => visit(n, roots));
+    return roots;
   };
-  topNodes.forEach(promote);
+  const roots = filterForest(topNodes);
 
   // Закреплённые корни сверху (без группового заголовка), дальше — по активности поддерева
   roots.sort((a, b) => {

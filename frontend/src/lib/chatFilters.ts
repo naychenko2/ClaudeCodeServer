@@ -143,7 +143,7 @@ export function chatStatusOf(s: Session): ChatStatusChip {
 }
 
 // Предикат видимости чата по фильтрам. Возвращается функцией, чтобы один и тот же
-// предикат прошёл и по плоскому списку, и в buildChatTreeRows (isRootVisible).
+// предикат прошёл и по плоскому списку, и в buildChatTreeRows (isVisible — ко всем узлам).
 export function matchChatFilter(filters: ChatFilters): (s: Session) => boolean {
   const q = filters.search.trim().toLowerCase();
   const onlySet = filters.only;

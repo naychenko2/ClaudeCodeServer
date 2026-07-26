@@ -60,19 +60,19 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
   // Применение фильтров (единый предикат — общий с проектным списком чатов)
   const isVisible = matchChatFilter(filters);
   const filteredChats = chats.filter(isVisible);
-  // В иерархии фильтры применяются только к корням: видимый родитель тянет всех детей.
-  // Сборка леса мемоизирована — hover по карточке (hoveredId) не пересобирает дерево;
-  // isVisible пересоздаётся каждый рендер, его исходные данные покрывает зависимость filters
+  // Фильтр применяется ко всем узлам дерева (не только к корням) — множество видимых
+  // чатов совпадает с плоским списком. Сборка леса мемоизирована — hover по карточке
+  // (hoveredId) не пересобирает дерево; isVisible пересоздаётся каждый рендер, его
+  // исходные данные покрывает зависимость filters
   const tree = useMemo(
     () => view === 'tree'
-      ? buildChatTreeRows(chats, { isRootVisible: isVisible, collapsedIds, activeId })
+      ? buildChatTreeRows(chats, { isVisible, collapsedIds, activeId })
       : null,
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [chats, view, collapsedIds, activeId, filters],
   );
-  const hiddenCount = tree
-    ? chats.length - tree.renderedCount
-    : chats.length - filteredChats.length;
+  // Скрыто фильтрами — одинаково для плоского и дерева: множество видимых чатов одно
+  const hiddenCount = chats.length - filteredChats.length;
 
   const togglePin = async (chat: Session) => {
     try {

@@ -20,12 +20,12 @@ const all = () => true;
 const none = new Set<string>();
 
 function build(chats: Session[], opts: {
-  isRootVisible?: (c: Session) => boolean;
+  isVisible?: (c: Session) => boolean;
   collapsedIds?: Set<string>;
   activeId?: string | null;
 } = {}) {
   return buildChatTreeRows(chats, {
-    isRootVisible: opts.isRootVisible ?? all,
+    isVisible: opts.isVisible ?? all,
     collapsedIds: opts.collapsedIds ?? none,
     activeId: opts.activeId ?? null,
   });
@@ -80,15 +80,15 @@ describe('buildChatTreeRows', () => {
     expect(r.rows).toHaveLength(2);
   });
 
-  it('фильтр применяется к корням, но не к детям видимого родителя', () => {
+  it('фильтр отсекает и детей видимого родителя (множество как в плоском)', () => {
     const chats = [
       mk('p'),
       mk('c', { parentSessionId: 'p', origin: 'task' }),
     ];
-    const r = build(chats, { isRootVisible: c => c.origin === 'manual' });
-    // Ребёнок с origin=task показан, хотя фильтр task-чаты прячет
-    expect(r.rows.map(x => x.chat.id)).toEqual(['p', 'c']);
-    expect(r.renderedCount).toBe(2);
+    const r = build(chats, { isVisible: c => c.origin === 'manual' });
+    // Ребёнок с origin=task скрыт, хотя его родитель видим — как в плоском списке
+    expect(r.rows.map(x => x.chat.id)).toEqual(['p']);
+    expect(r.renderedCount).toBe(1);
   });
 
   it('дети скрытого корня всплывают кандидатами в корни и фильтруются сами', () => {
@@ -97,10 +97,24 @@ describe('buildChatTreeRows', () => {
       mk('c1', { parentSessionId: 'hiddenParent', origin: 'manual' }),
       mk('c2', { parentSessionId: 'hiddenParent', origin: 'automation' }),
     ];
-    const r = build(chats, { isRootVisible: c => c.origin === 'manual' });
+    const r = build(chats, { isVisible: c => c.origin === 'manual' });
     expect(r.rows.map(x => x.chat.id)).toEqual(['c1']);
     expect(r.rows[0].depth).toBe(0);
     expect(r.renderedCount).toBe(1);
+  });
+
+  it('скрытый потомок видимого родителя прокалывается: видимый внук поднимается', () => {
+    // Регрессия бага: готовый дочерний чат под видимым родителем не должен торчать,
+    // а его видимые потомки поднимаются к деду. Множество видимых = как в плоском.
+    const chats = [
+      mk('p'),
+      mk('hidden', { parentSessionId: 'p', origin: 'automation' }),
+      mk('grand', { parentSessionId: 'hidden', origin: 'manual' }),
+    ];
+    const r = build(chats, { isVisible: c => c.origin === 'manual' });
+    expect(r.rows.map(x => x.chat.id)).toEqual(['p', 'grand']);
+    expect(r.rows[1].depth).toBe(1);
+    expect(r.renderedCount).toBe(2);
   });
 
   it('свёрнутое поддерево не рендерится, счётчик считает всю спрятанную ветку', () => {

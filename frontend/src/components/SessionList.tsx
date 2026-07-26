@@ -213,20 +213,20 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   // Применение фильтров (единый предикат — общий с глобальным списком чатов)
   const isVisible = matchChatFilter(filters);
   const filteredSessions = sessions.filter(isVisible);
-  // В иерархии фильтры применяются только к корням: видимый родитель тянет всех детей.
-  // Сборка леса мемоизирована — hover по карточке (hoveredId) не пересобирает дерево;
-  // isVisible пересоздаётся каждый рендер, его исходные данные покрывает зависимость filters
+  // Фильтр применяется ко всем узлам дерева (не только к корням) — множество видимых
+  // чатов совпадает с плоским списком. Сборка леса мемоизирована — hover по карточке
+  // (hoveredId) не пересобирает дерево; isVisible пересоздаётся каждый рендер, его
+  // исходные данные покрывает зависимость filters
   const activeSessionId = activeSession?.id ?? null;
   const tree = useMemo(
     () => view === 'tree'
-      ? buildChatTreeRows(sessions, { isRootVisible: isVisible, collapsedIds, activeId: activeSessionId })
+      ? buildChatTreeRows(sessions, { isVisible, collapsedIds, activeId: activeSessionId })
       : null,
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [sessions, view, collapsedIds, activeSessionId, filters],
   );
-  const hiddenCount = tree
-    ? sessions.length - tree.renderedCount
-    : sessions.length - filteredSessions.length;
+  // Скрыто фильтрами — одинаково для плоского и дерева: множество видимых чатов одно
+  const hiddenCount = sessions.length - filteredSessions.length;
 
   // Номер в подписи безымянного чата берём из исходного порядка списка:
   // группировка тасует карточки по дням, и позиция в группе давала бы скачущие номера

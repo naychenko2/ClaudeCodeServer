@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useMemo, type ReactNode } from 'react';
 import { Filter, List, ListTree, Search, X, Pin, Clock, Users } from 'lucide-react';
 import type { Persona, Session } from '../types';
 import { C, R, FONT, FS, SHADOW, TB, Z, SP } from '../lib/design';
+import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { Modal } from './ui';
 import { personaLabel } from '../lib/personas';
 import { PersonaAvatar } from '../features/personas/PersonaAvatar';
@@ -72,7 +73,7 @@ function ViewToggle({ view, onChange, isMobile }: {
 }) {
   return (
     <div style={{
-      display: 'flex', flexShrink: 0, padding: 2,
+      display: 'flex', flexShrink: 0, padding: SP.xxs, gap: SP.xxs,
       background: TB.pillTrack, borderRadius: TB.pillRadius,
     }}>
       {VIEW_OPTIONS.map(o => {
@@ -84,7 +85,7 @@ function ViewToggle({ view, onChange, isMobile }: {
             title={o.label}
             aria-label={o.label}
             style={{
-              display: 'inline-flex', alignItems: 'center', gap: 5,
+              display: 'inline-flex', alignItems: 'center', gap: SP.xs,
               padding: '4px 10px',
               fontSize: FS.sm, fontWeight: 600, fontFamily: FONT.sans,
               border: 'none', cursor: 'pointer',
@@ -95,7 +96,7 @@ function ViewToggle({ view, onChange, isMobile }: {
               transition: 'background 0.12s, color 0.12s',
             }}
           >
-            <o.Icon size={14} strokeWidth={2.2} style={{ flexShrink: 0 }} />
+            <o.Icon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
             {!isMobile && <span>{o.label}</span>}
           </button>
         );
@@ -423,23 +424,23 @@ export function FilterBar({
       tabIndex={0}
       style={{
         display: 'flex', alignItems: 'center', gap: SP.xs, minWidth: 0,
-        cursor: 'pointer', userSelect: 'none', padding: '2px 0',
+        cursor: 'pointer', userSelect: 'none', padding: '4px 0',
         color: hasFilters ? C.accent : C.textMuted,
         fontSize: FS.sm, fontWeight: 600, fontFamily: FONT.sans,
         transition: 'color 0.15s', opacity: hasFilters ? 1 : 0.5,
       }}
       title={hasFilters ? summary : 'Фильтры'}
     >
-      <Filter size={12} strokeWidth={2.2} style={{ flexShrink: 0 }} />
-      <span style={{ marginLeft: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+      <Filter size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {hasFilters ? summary : 'Фильтр'}
       </span>
       {hiddenCount > 0 && (
         <span style={{
           fontSize: 10, fontWeight: 700, fontFamily: FONT.mono,
           color: C.onAccent, background: C.accent,
-          padding: '0 5px', borderRadius: R.pill, lineHeight: '16px',
-          minWidth: 16, textAlign: 'center', flexShrink: 0,
+          padding: '0 6px', borderRadius: R.pill, lineHeight: '18px',
+          minWidth: 18, textAlign: 'center', flexShrink: 0,
         }}>
           {hiddenCount}
         </span>
@@ -469,7 +470,7 @@ export function FilterBar({
   );
 
   return (
-    <div ref={rootRef} style={{ position: 'relative', flexShrink: 0 }}>
+    <div ref={rootRef} style={{ position: 'relative', flexShrink: 0, padding: isMobile ? '8px 16px' : '6px 12px' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: SP.sm }}>
         {trigger}
         {view !== undefined && onChangeView && (
@@ -480,7 +481,7 @@ export function FilterBar({
       {/* Десктоп: компактный поповер под триггером */}
       {open && !isMobile && (
         <div style={{
-          position: 'absolute', top: 'calc(100% + 4px)', left: 0,
+          position: 'absolute', top: 'calc(100% + 4px)', left: SP.md,
           width: 320, maxHeight: 478, overflowY: 'auto',
           background: C.bgWhite, border: `1px solid ${C.border}`,
           borderRadius: R.xl, boxShadow: SHADOW.dropdown,

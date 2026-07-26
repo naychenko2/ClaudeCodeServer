@@ -116,16 +116,22 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
-      {/* Новый чат — пунктирная «создать в сайдбаре» (единый стиль с SessionList/FileExplorer) */}
-      <Button
-        variant="dashed" size="md" fullWidth loading={creating}
-        onClick={onNew} style={{ marginBottom: 8 }}
-        leftIcon={
-          <Plus size={15} strokeWidth={2.2} />
-        }
-      >
-        Новый чат
-      </Button>
+      {/* Новый чат — пунктирная «создать в сайдбаре» (единый стиль с SessionList/FileExplorer).
+          Обёртка с теми же отступами/границей, что у SessionList, чтобы встать вровень
+          со строкой фильтров FilterBar (боковой padding 12) без ступеньки. */}
+      <div style={{ padding: isMobile ? '10px 16px' : '10px 12px', borderBottom: `1px solid ${C.divider}`, display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <Button
+            variant="dashed" size="md" fullWidth loading={creating}
+            onClick={onNew}
+            leftIcon={
+              <Plus size={15} strokeWidth={2.2} />
+            }
+          >
+            Новый чат
+          </Button>
+        </div>
+      </div>
 
       {/* Строка фильтров */}
       <FilterBar

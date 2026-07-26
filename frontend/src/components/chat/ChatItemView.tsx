@@ -572,9 +572,13 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       // Персона резолвится по senderPersonaId; иначе — стандартный значок.
       if (item.viaAgent || (item.auto && !teamMech)) {
         const sender = item.senderPersonaId ? (getPersonaById(item.senderPersonaId) ?? null) : null;
+        // Без персоны заголовком идёт имя чата-отправителя («Задача: починить билд») —
+        // безликие «Агент»/«Автоматически» не отвечали на вопрос «кто пишет»
         return item.viaAgent
-          ? <AgentMessageView text={item.text} persona={sender} note="прислал(а) в чат" origin={item.senderOrigin} />
-          : <AgentMessageView text={item.text} persona={sender} neutralTitle="Автоматически" origin={item.senderOrigin} />;
+          ? <AgentMessageView text={item.text} persona={sender} note="прислал(а) в чат"
+              origin={item.senderOrigin} neutralTitle={item.senderChatName ?? 'Агент'} />
+          : <AgentMessageView text={item.text} persona={sender}
+              origin={item.senderOrigin} neutralTitle={item.senderChatName ?? 'Автоматически'} />;
       }
       return (
         <div style={{ alignSelf: 'flex-end', maxWidth: '80%', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>

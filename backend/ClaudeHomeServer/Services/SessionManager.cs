@@ -57,7 +57,15 @@ public class SessionManager : IDisposable
         // становится Orphaned, доставлять накопленное в умерший контекст незачем.
         public readonly List<QueuedMessage> Pending = [];
         public readonly Lock PendingLock = new();
+        // Длина цепочки автоматических отчётов, приведшей в этот чат: доклад исполнителя
+        // ставит сюда «своя глубина + 1». Гасит лавину «отчёт → реакция → отчёт выше»:
+        // человек в переписке её не создаёт, поэтому его ход счётчик обнуляет.
+        public volatile int ReportChainDepth;
     }
+
+    // Дальше какой глубины цепочка автоотчётов не идёт. 3 — как у делегирования задач:
+    // исполнитель → постановщик → его постановщик, дальше эскалация теряет смысл.
+    private const int MaxReportChainDepth = 3;
 
     // Ожидающее доставки сообщение из чужого чата. SenderOrigin заполняется, только если
     // отправитель из ДРУГОГО места (иной проект / вне проектов) — получателю показываем
@@ -1563,6 +1571,10 @@ public class SessionManager : IDisposable
         if (!auto && !systemDirective && entry.TurnWaiter is not null)
             throw new InvalidOperationException("Сессия занята другим ходом");
 
+        // Человек написал в чат — цепочка автоотчётов оборвана: дальше это уже новый разговор,
+        // и накопленная глубина не должна запрещать отчёты по нему
+        if (!auto && !systemDirective) entry.ReportChainDepth = 0;
+
         // Режим, выбранный в Composer, применяется со следующего хода: процесс claude
         // пересоздаётся в RunTurnAsync и читает --permission-mode из Info.Mode.
         // Режим «План» у провайдера без поддержки тихо игнорируем (защита от рассинхрона UI).
@@ -1780,6 +1792,49 @@ public class SessionManager : IDisposable
         await SendMessageAsync(sessionId, text, [], auto: true, senderPersonaId: senderPersonaId,
             suppressTasksExecute: suppressTasksExecute, senderOrigin: senderOrigin);
         return false;
+    }
+
+    // === Отчёт «наверх»: в родительский чат ===
+
+    // Результат попытки отчитаться. TooDeep — цепочка автоотчётов упёрлась в потолок;
+    // NoParent — у чата нет эффективного родителя (обычный чат либо вынесен в корень).
+    public enum ReportUpResult { Delivered, Queued, NoParent, TooDeep, NotFound }
+
+    // Положить отчёт в родительский чат. Карточка ложится всегда (0 токенов); ход родителя
+    // запускается только для withTurn — финального доклада по задаче. Промежуточный отчёт
+    // («застрял на блокере») ходом не платим: родитель увидит его на своём следующем ходу.
+    //
+    // Глубину цепочки считаем на сервере, а не гейтим инструмент через env: значение,
+    // меняющееся между ходами, пересобирает MCP-конфиг и рвёт незавершённые вызовы
+    // («Stream closed» — на этих граблях уже стояли, см. ClaudeSession.ResolveTasksExecuteEnabled).
+    public async Task<ReportUpResult> ReportUpAsync(string sessionId, string text, string ownerId,
+        bool withTurn, string? reactionPrompt = null)
+    {
+        if (GetOwned(sessionId, ownerId) is not { } chat) return ReportUpResult.NotFound;
+        if (!_sessions.TryGetValue(sessionId, out var from)) return ReportUpResult.NotFound;
+        if (chat.ParentSessionId is not { } parentId) return ReportUpResult.NoParent;
+        if (GetOwned(parentId, ownerId) is null) return ReportUpResult.NoParent;
+        if (!_sessions.TryGetValue(parentId, out var to)) return ReportUpResult.NoParent;
+
+        var depth = from.ReportChainDepth + 1;
+        if (depth > MaxReportChainDepth) return ReportUpResult.TooDeep;
+        to.ReportChainDepth = depth;
+
+        // Лицо отчёта: персона чата-отправителя, иначе — нейтральная карточка с его именем
+        var persona = chat.PersonaId;
+        await AppendStoredAsync(parentId,
+            persona is not null
+                ? new StoredTextMessage(text, personaId: persona)
+                : new Protocol.StoredUserMessage(text, viaAgent: true, senderChatName: chat.Name),
+            persona is not null
+                ? new GuestTextMessage(text, persona)
+                : new UserMessageMessage(text, null, null, true, null, chat.Name));
+
+        if (!withTurn) return ReportUpResult.Delivered;
+
+        var queued = await SendOrEnqueueAsync(parentId, reactionPrompt ?? text,
+            senderPersonaId: null, silent: true, suppressTasksExecute: true);
+        return queued ? ReportUpResult.Queued : ReportUpResult.Delivered;
     }
 
     // Снимок очереди для клиента и REST

@@ -180,6 +180,7 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
         ...(msg.attachedPaths ? { attachedPaths: msg.attachedPaths } : {}),
         ...(msg.senderPersonaId ? { senderPersonaId: msg.senderPersonaId } : {}),
         ...(msg.senderOrigin ? { senderOrigin: msg.senderOrigin } : {}),
+        ...(msg.senderChatName ? { senderChatName: msg.senderChatName } : {}),
         ...(msg.auto ? { auto: true } : {}),
       }]);
 

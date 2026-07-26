@@ -27,7 +27,7 @@ public record TextDeltaMessage(string Text)
 // а не по перезагрузке истории. Только для auto && !systemDirective (ввод пользователя уже
 // виден на клиенте, внутренние директивы цикла «до готово» показывать не нужно).
 public record UserMessageMessage(string Text, IReadOnlyList<string>? AttachedPaths, string? SenderPersonaId, bool Auto,
-    string? SenderOrigin = null)
+    string? SenderOrigin = null, string? SenderChatName = null)
     : ServerMessage("user_message");
 
 // Очередь сообщений занятой сессии — полный снимок при каждом изменении (постановка,

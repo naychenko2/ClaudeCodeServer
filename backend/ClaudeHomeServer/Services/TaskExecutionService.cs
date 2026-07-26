@@ -436,9 +436,14 @@ public class TaskExecutionService
     internal static string? ResolveReportTarget(Session? executorSession, string? sourceSessionId) =>
         executorSession is not null ? executorSession.ParentSessionId : sourceSessionId;
 
+    // Доклад применим, когда задача вообще делегирована из чата (есть SourceSessionId) и
+    // исполнитель не докладывает сам себе. Персоны с обеих сторон больше НЕ обязательны:
+    // раньше без них отчёт не отправлялся вовсе, и задача, поставленная человеком, тихо
+    // завершалась без следа в родительском чате. Лицо для карточки есть всегда: персона
+    // исполнителя либо нейтральная карточка с именем его чата.
     internal static bool ShouldReportToDelegator(TaskItem task, Persona? executor) =>
-        executor is not null && task.CreatedByPersonaId is not null &&
-        task.CreatedByPersonaId != executor.Id && task.SourceSessionId is not null;
+        task.SourceSessionId is not null &&
+        (task.CreatedByPersonaId is null || executor is null || task.CreatedByPersonaId != executor.Id);
 
     // MINOR 2: реакцию постановщика A можно слать, только если S — не групповой чат, либо A
     // входит в его участников (иначе переключить спикера не на кого — реагировать некому,
@@ -454,17 +459,16 @@ public class TaskExecutionService
     // (без неё нет «лица» для гостевой реплики; L0-тост выше это уже покрывает).
     private async Task ReportToDelegatorAsync(TaskItem task, Persona? executor)
     {
-        if (executor is null || !ShouldReportToDelegator(task, executor))
+        if (!ShouldReportToDelegator(task, executor))
         {
-            _log.LogInformation("Доклад Z задачи {TaskId}: пропуск — не делегирование персоне (нет исполнителя-персоны, постановщика или SourceSessionId)", task.Id);
+            _log.LogInformation("Доклад Z задачи {TaskId}: пропуск — задача не делегирована из чата либо исполнитель сам себе постановщик", task.Id);
             return;
         }
-        var delegator = _personas.Get(task.CreatedByPersonaId!, task.OwnerId!);
-        if (delegator is null)
-        {
-            _log.LogInformation("Доклад Z задачи {TaskId}: пропуск — постановщик {PersonaId} не найден", task.Id, task.CreatedByPersonaId);
-            return;
-        }
+        // Постановщик-персона нужен только чтобы реакция шла от её лица и чтобы был fallback
+        // в новый чат. Его отсутствие (задачу поставил человек) доклад больше не отменяет.
+        var delegator = task.CreatedByPersonaId is not null
+            ? _personas.Get(task.CreatedByPersonaId, task.OwnerId!)
+            : null;
 
         // Цель доклада — ЭФФЕКТИВНЫЙ родитель чата-исполнителя, а не сырой SourceSessionId:
         // ручная группировка (перетаскивание в списке чатов) побеждает связь по задаче, а явный
@@ -493,7 +497,7 @@ public class TaskExecutionService
             targetSessionId = sourceSession.Id;
             targetSession = sourceSession;
         }
-        else
+        else if (delegator is not null)
         {
             var title = task.Title.Length > 60 ? task.Title[..60] + "…" : task.Title;
             var fresh = await _sessions.CreatePersonaChatAsync(task.OwnerId!, delegator.Id,
@@ -501,25 +505,39 @@ public class TaskExecutionService
             targetSessionId = fresh.Id;
             targetSession = fresh;
         }
+        else
+        {
+            // Родительский чат мёртв/чужой, а персоны-постановщика нет — заводить новый чат
+            // не от чьего лица; ограничиваемся L0-тостом, отправленным выше
+            _log.LogInformation("Доклад Z задачи {TaskId}: родительский чат недоступен, постановщика-персоны нет — только тост", task.Id);
+            return;
+        }
 
         // ШАГ 1: гостевая реплика исполнителя — StoredTextMessage.PersonaId=B рендерит её его
         // лицом; текст с маркера «↩ Отчёт по делегированной задаче: …» первой строкой —
         // контракт для фронта (формат карточки/маркера — фронт)
+        // Лицо доклада: персона-исполнитель, иначе — нейтральная карточка с именем её чата
+        // («Задача: починить билд»), тот же вид, что у входящих сообщений без персоны
         var reportText = BuildDelegationReportText(task);
+        var executorChatName = executorSession?.Name;
         await _sessions.AppendStoredAsync(targetSessionId,
-            new StoredTextMessage(reportText, personaId: executor.Id),
-            new GuestTextMessage(reportText, executor.Id));
+            executor is not null
+                ? new StoredTextMessage(reportText, personaId: executor.Id)
+                : new StoredUserMessage(reportText, viaAgent: true, senderChatName: executorChatName),
+            executor is not null
+                ? new GuestTextMessage(reportText, executor.Id)
+                : new UserMessageMessage(reportText, null, null, true, null, executorChatName));
 
         // MINOR 2: S — групповой чат. Без @упоминания реакция построилась бы по текущему/
         // ведущему спикеру, а не по постановщику A (senderPersonaId — только атрибуция
         // реплики, не смена спикера). A ∈ участников — переключаем спикера на него перед
         // ходом; иначе реагировать некому — ограничиваемся гостевой репликой B + L0-тостом.
-        if (!CanSendDelegatorReaction(targetSession?.Participants, delegator.Id))
+        if (delegator is not null && !CanSendDelegatorReaction(targetSession?.Participants, delegator.Id))
         {
             _log.LogInformation("Доклад Z задачи {TaskId}: групповой чат {SessionId} без постановщика среди участников — реакция не отправлена", task.Id, targetSessionId);
             return;
         }
-        if (targetSession?.Participants is { Count: > 1 })
+        if (delegator is not null && targetSession?.Participants is { Count: > 1 })
             _sessions.SetPersona(targetSessionId, task.OwnerId!, delegator.Id);
 
         // ШАГ 2: постановщик реагирует ВСЕГДА — платный авто-ход с контекстом отчёта.
@@ -534,7 +552,7 @@ public class TaskExecutionService
         // (ШАГ 1) при этом уже в ленте, поэтому призраком реакцию не показываем (silent).
         var deferred = await _sessions.SendOrEnqueueAsync(targetSessionId,
             BuildDelegatorReactionPrompt(task, executor),
-            senderPersonaId: delegator.Id, silent: true, suppressTasksExecute: true);
+            senderPersonaId: delegator?.Id, silent: true, suppressTasksExecute: true);
         _log.LogInformation("Доклад Z задачи {TaskId}: отправлен (гостевая реплика + реакция{Deferred}) в чат {SessionId}",
             task.Id, deferred ? " отложена — чат занят" : "", targetSessionId);
     }

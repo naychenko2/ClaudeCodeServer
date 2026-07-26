@@ -1,6 +1,7 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Llm;
+using ClaudeHomeServer.Tests.Helpers;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -620,5 +621,83 @@ public class LocalActionRoutingTests
         // Фоновое действие получило маршрут пресета (слот по профилю: Small → слабая)
         Assert.Equal(LocalActionOverridesStore.TierRoute(ModelTier.Weak),
             store.TryGet(LocalActionCatalog.NotesTags));
+    }
+
+    // --- Per-user слоты тиров ---
+
+    private static (AppSettingsService AppSettings, UserStore Users, UserModelTierResolver UserTiers, ModelAssignmentResolver Resolver)
+        BuildResolverWithUserTiers(Dictionary<string, string?>? extraCfg = null)
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "cc-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var cfg = new Dictionary<string, string?> { ["Ollama:Model"] = "" };
+        if (extraCfg is not null)
+            foreach (var kv in extraCfg) cfg[kv.Key] = kv.Value;
+        var config = ConfigWithTempData(cfg);
+        var appSettings = new AppSettingsService(config);
+        var users = new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
+        var userTiers = new UserModelTierResolver(users, appSettings);
+        var store = Store(config);
+        var resolver = new ModelAssignmentResolver(appSettings, store, userTiers);
+        return (appSettings, users, userTiers, resolver);
+    }
+
+    [Fact]
+    public void Resolver_UserTierOverride_WinsOverGlobal()
+    {
+        var (settings, users, _, resolver) = BuildResolverWithUserTiers();
+        settings.Save(new AppSettings { ModelTierStrong = "global-opus" });
+        var user = users.Add("u1", "password123", "user");
+        users.SetModelTiers(user.Id, strong: "user-sonnet", null, null);
+
+        Assert.Equal("user-sonnet", resolver.Resolve(LocalActionCatalog.ChatNew, ownerId: user.Id));
+    }
+
+    [Fact]
+    public void Resolver_WithoutOwnerId_IgnoresUserTiers()
+    {
+        var (settings, users, _, resolver) = BuildResolverWithUserTiers();
+        settings.Save(new AppSettings { ModelTierStrong = "global-opus" });
+        var user = users.Add("u1", "password123", "user");
+        users.SetModelTiers(user.Id, strong: "user-sonnet", null, null);
+
+        // Без ownerId — старое поведение: общий слот
+        Assert.Equal("global-opus", resolver.Resolve(LocalActionCatalog.ChatNew));
+    }
+
+    [Fact]
+    public void Resolver_TierRoute_UsesUserSlot()
+    {
+        var (settings, users, _, resolver) = BuildResolverWithUserTiers();
+        settings.Save(new AppSettings { ModelTierStrong = "global-opus", ModelTierWeak = "global-haiku" });
+        var user = users.Add("u1", "password123", "user");
+        // chat-new по каталогу — Strong tier
+        users.SetModelTiers(user.Id, "user-sonnet", null, null);
+
+        Assert.Equal("user-sonnet", resolver.Resolve(LocalActionCatalog.ChatNew, ownerId: user.Id));
+    }
+
+    [Fact]
+    public void Resolver_EmptyUserTier_FallsBackToGlobal()
+    {
+        var (settings, users, _, resolver) = BuildResolverWithUserTiers();
+        settings.Save(new AppSettings { ModelTierMedium = "global-sonnet" });
+        var user = users.Add("u1", "password123", "user");
+        users.SetModelTiers(user.Id, null, "user-sonnet", null);
+        users.SetModelTiers(user.Id, null, "", null);
+
+        Assert.Equal("global-sonnet", resolver.Resolve(LocalActionCatalog.SubagentConsultant, ownerId: user.Id));
+    }
+
+    [Fact]
+    public void Resolver_ExplicitAssignment_AdminStillWinsOverUserTier()
+    {
+        var (settings, users, _, resolver) = BuildResolverWithUserTiers();
+        settings.Save(new AppSettings { ModelTierStrong = "global-opus" });
+        var user = users.Add("u1", "password123", "user");
+        users.SetModelTiers(user.Id, strong: "user-sonnet", null, null);
+
+        // Явная модель в назначении админа всё ещё сильнее per-user слота
+        Assert.Equal("admin-opus", resolver.Resolve(LocalActionCatalog.ChatNew, "admin-opus", user.Id));
     }
 }

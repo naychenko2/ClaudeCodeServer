@@ -801,6 +801,8 @@ export function displayNameOf(auth: { displayName?: string; username: string }):
 export interface UserProfile {
   id: string;
   username: string;
+  // Отображаемое имя из профиля; может отсутствовать — тогда показываем username
+  displayName?: string;
   role: 'admin' | 'user';
   createdAt: string;
   // Среда исполнения процессов пользователя: сервер (полный доступ) или Docker-песочница

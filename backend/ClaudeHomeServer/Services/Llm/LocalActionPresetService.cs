@@ -27,7 +27,7 @@ namespace ClaudeHomeServer.Services.Llm;
 // Тир Claude по профилю — из конфига Recommended:ClaudeTiers; бесплатная модель — из каталога
 // прямых моделей OpenRouter (provider=openrouter-direct, курируемый список OpenRouter:DirectModels),
 // ранжирование — по OpenRouter:PreferredFree с фолбэком на эвристику «наибольшее окно».
-public enum ActionPreset { Recommended, FreeOnly, LocalFirst, Balanced }
+public enum ActionPreset { Recommended, FreeOnly, LocalFirst, Balanced, Tiers, TiersLocal }
 
 public sealed class LocalActionPresetService(
     LocalActionOverridesStore store, LocalActionRouter router, OllamaClient ollama,
@@ -77,9 +77,10 @@ public sealed class LocalActionPresetService(
         var routes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var a in LocalActionCatalog.All)
         {
-            // Агентные места (чаты, персоны, исполнитель задач) пресеты не трогают:
-            // им локаль/free непригодны, а их назначения — отдельное решение админа
-            if (a.Agentic) continue;
+            // Старые пресеты (Recommended/FreeOnly/LocalFirst/Balanced) затрагивали только
+            // фоновые one-shot действия. Новые v2-пресеты «Tiers»/«TiersLocal» управляют
+            // всем списком «Применение моделей», включая агентные места «Чаты и персоны».
+            if (a.Agentic && preset is not (ActionPreset.Tiers or ActionPreset.TiersLocal)) continue;
             var route = preset switch
             {
                 ActionPreset.Recommended => a.DefaultLocal && ollama.Enabled
@@ -104,14 +105,25 @@ public sealed class LocalActionPresetService(
                         // Тяжёлое — на Claude ради качества на больших входах.
                         _ => TierFor(a.Profile),
                     },
+                // v2: каждому месту — слот по его дефолтному тиру (включая агентные).
+                ActionPreset.Tiers => LocalActionOverridesStore.TierRoute(LocalActionCatalog.EffectiveDefaultTier(a)),
+                // v2: фоновые лёгкие (DefaultLocal) → локаль, всё остальное → tier. Агентным
+                // локаль всегда недоступна, поэтому они всегда получают tier.
+                ActionPreset.TiersLocal => a.Agentic
+                    ? LocalActionOverridesStore.TierRoute(LocalActionCatalog.EffectiveDefaultTier(a))
+                    : a.DefaultLocal && ollama.Enabled
+                        ? LocalActionOverridesStore.LocalRoute
+                        : LocalActionOverridesStore.TierRoute(LocalActionCatalog.EffectiveDefaultTier(a)),
                 _ => LocalActionOverridesStore.ClaudeRoute,
             };
             routes[a.Key] = route;
         }
 
-        // keepUnlisted: пресет — цельная картина ФОНОВЫХ действий (они в routes все),
-        // а назначения агентных мест не входят в пресет и не должны сноситься
-        store.SetMany(routes, keepUnlisted: true);
+        // keepUnlisted: старые пресеты — частичная настройка фоновых действий, оставляем
+        // агентные и любые другие оверрайды без изменений. v2-пресеты — цельная картина
+        // «Применение моделей», поэтому сбрасываем всё, что не вошло в routes.
+        var keepUnlisted = preset is not (ActionPreset.Tiers or ActionPreset.TiersLocal);
+        store.SetMany(routes, keepUnlisted);
         log.LogInformation("Применён пресет автоподбора {Preset} для {Count} действий", preset, routes.Count);
         return routes.Count;
     }

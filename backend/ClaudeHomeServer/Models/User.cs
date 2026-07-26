@@ -14,6 +14,10 @@ public class User
     public byte[]? NtHash { get; set; }
     // Per-user override фич-флагов поверх дефолтов из FeatureFlagCatalog; null/отсутствует — все по дефолту
     public Dictionary<string, bool>? FeatureFlags { get; set; }
+    // Per-user слоты тиров моделей. null/пусто — наследовать глобальный слот инстанса.
+    public string? ModelTierStrong { get; set; }
+    public string? ModelTierMedium { get; set; }
+    public string? ModelTierWeak { get; set; }
     // Per-user пороги индикатора заполнения контекста (проценты); null — дефолты фронта
     public ContextThresholds? ContextThresholds { get; set; }
     // Глобальный (per-user) промпт AI-генерации сообщения коммита; null/пусто — дефолт.

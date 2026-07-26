@@ -52,7 +52,8 @@ interface Props {
   // «Аналитика токенов» (расход по ходам/моделям/проектам) — раздел-таб без вкладки,
   // вызов из меню аватара рядом с «Использованием». undefined — пункт не показывать
   onOpenSpend?: () => void;
-  // «Поставщики моделей» (исполнитель фоновых ИИ-действий + модель по умолчанию) — только админ
+  // «Поставщики моделей» (настройка слотов и фоновых ИИ-действий) — доступно всем,
+  // но режим диалога зависит от роли (admin видит уровни 1 и 3 + чужие профили).
   onShowBackgroundTasks?: () => void;
 }
 
@@ -164,7 +165,7 @@ export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout
               Пользователи
             </button>
           )}
-          {isAdmin && onShowBackgroundTasks && (
+          {onShowBackgroundTasks && (
             <button
               onClick={() => { setOpen(false); onShowBackgroundTasks(); }}
               style={dropdownItem}

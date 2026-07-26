@@ -41,6 +41,12 @@ public class LlmProviderConfig
     public Dictionary<string, string> ExtraEnv { get; set; } = [];
     public List<LlmModelConfig> Models { get; set; } = [];
 
+    // Тройки моделей провайдера для слотов сильная/средняя/слабая ("Поставщики моделей v2").
+    // Заполняются из конфига; null — слот не назначен, UI прячет чипсу.
+    public string? TierStrong { get; set; }
+    public string? TierMedium { get; set; }
+    public string? TierWeak { get; set; }
+
     public bool Enabled =>
         !string.IsNullOrWhiteSpace(ApiKey) && !string.IsNullOrWhiteSpace(AnthropicBaseUrl);
 

@@ -162,7 +162,8 @@ public class LlmProviderRegistry
         ResolveByModel(model) is { } p ? CapabilitiesOf(p) : LlmCapabilitiesCatalog.Claude;
 
     // CLI-провайдер наследует весь функционал claude CLI; провайдеро-специфичны
-    // только изображения (ограничение API), имя для UI и наличие балансового API
+    // только изображения (ограничение API), имя для UI и наличие балансового API.
+    // Тройки тиров — из конфига (чипсы быстрого заполнения слотов на фронте).
     public static LlmCapabilities CapabilitiesOf(LlmProviderConfig p) => LlmCapabilitiesCatalog.Claude with
     {
         Provider = p.Key,
@@ -170,6 +171,9 @@ public class LlmProviderRegistry
         SupportsImages = p.SupportsImages,
         HasBalance = !string.IsNullOrWhiteSpace(p.Balance) && !string.IsNullOrWhiteSpace(p.ApiBaseUrl),
         Configured = p.Enabled,
+        TierStrong = p.TierStrong,
+        TierMedium = p.TierMedium,
+        TierWeak = p.TierWeak,
     };
 
     // Переменные «провайдерского режима» — те, которыми мы САМИ рулим маршрутом CLI

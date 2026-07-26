@@ -14,7 +14,10 @@ public sealed record LlmCapabilities(
     bool SupportsImages,           // image-блоки во вложениях
     bool SupportsAgents,           // инжекция промпта .claude/agents/<name>.md
     bool HasBalance = false,       // провайдер отдаёт баланс аккаунта (/api/providers/{key}/balance)
-    bool Configured = true);       // настроен ли (ключ задан ≠ пустой); для плитки «Подключённые модели»
+    bool Configured = true,          // настроен ли (ключ задан ≠ пустой); для плитки «Подключённые модели»
+    string? TierStrong = null,     // id модели для слота «сильная» (чипсы быстрого заполнения)
+    string? TierMedium = null,     // id модели для слота «средняя»
+    string? TierWeak = null);        // id модели для слота «слабая»
 
 public static class LlmCapabilitiesCatalog
 {
@@ -27,5 +30,8 @@ public static class LlmCapabilitiesCatalog
         SupportsEffort: true,
         SupportsPermissionModes: true,
         SupportsImages: true,
-        SupportsAgents: true);     // HasBalance=false: у Claude подписка и rate-limit окна
+        SupportsAgents: true,
+        TierStrong: "opus",
+        TierMedium: "sonnet",
+        TierWeak: "haiku");     // алиасы, а не версии: CLI резолвит их в актуальную модель аккаунта
 }

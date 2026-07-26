@@ -1,3 +1,5 @@
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Llm;
 using Microsoft.AspNetCore.Authorization;
@@ -11,6 +13,8 @@ namespace ClaudeHomeServer.Controllers;
 public class ModelsController(ModelCatalogService catalog, LlmProviderRegistry providers,
     ModelAssignmentResolver assignments) : ControllerBase
 {
+    private string? UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub);
+
     // Актуальный список моделей (Claude — из CLI с кэшем; CLI-провайдеры — из конфига
     // LlmProviders, только при ApiKey) + возможности провайдеров, чтобы UI скрывал недоступное.
     // Провайдеры отдаются ВСЕ (включая ненастроенные): у каждого флаг Configured (ключ задан ≠ пустой)
@@ -30,9 +34,9 @@ public class ModelsController(ModelCatalogService catalog, LlmProviderRegistry p
 
         var resolved = new Dictionary<string, string?>
         {
-            [LocalActionCatalog.ChatNew] = assignments.Resolve(LocalActionCatalog.ChatNew),
-            [LocalActionCatalog.ChatPersona] = assignments.Resolve(LocalActionCatalog.ChatPersona),
-            [LocalActionCatalog.TasksExecutor] = assignments.Resolve(LocalActionCatalog.TasksExecutor),
+            [LocalActionCatalog.ChatNew] = assignments.Resolve(LocalActionCatalog.ChatNew, ownerId: UserId),
+            [LocalActionCatalog.ChatPersona] = assignments.Resolve(LocalActionCatalog.ChatPersona, ownerId: UserId),
+            [LocalActionCatalog.TasksExecutor] = assignments.Resolve(LocalActionCatalog.TasksExecutor, ownerId: UserId),
         };
 
         return Ok(new { models = await catalog.GetModelsAsync(ct), providers = caps, assignments = resolved });

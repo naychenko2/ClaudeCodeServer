@@ -1,0 +1,688 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--
+ВАРИАНТ C: "Карточки пресетов с полосой слотов"
+
+Идея: каждый провайдер — широкая горизонтальная карточка, внутри которой сразу видна
+тройка моделей (Сильная/Средняя/Слабая) как бейджи. Выбранная тройка дублируется
+в компактную полосу-сводку над списком мест, чтобы админ видел итог до скролла.
+
+Плюсы:
+- Самый заметный выбор пресета: провайдер и тройка читаются за один взгляд.
+- Полоса слотов экономит место и устраняет «прыжок» между чипсами и списком мест.
+- Хорошо масштабируется, если появятся новые провайдеры.
+
+Минусы:
+- Больше горизонтального пространства внутри карточки; на мобильной шторке бейджи могут переноситься.
+- Полоса слотов — новый паттерн, требует одобрения в дизайн-системе.
+-->
+<title>Поставщики моделей — Вариант C</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=PT+Serif:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+<style>
+:root {
+  --c-bg-main:      #F4F0E8;
+  --c-bg-panel:     #EDE7DC;
+  --c-bg-card:      #FBF8F2;
+  --c-bg-white:     #FFFFFF;
+  --c-bg-selected:  #E8E1D4;
+  --c-bg-inset:     #E7E0D2;
+  --c-text-heading:   #2A251F;
+  --c-text-primary:   #39332B;
+  --c-text-secondary: #756B5E;
+  --c-text-muted:     #9A8F7E;
+  --c-on-accent:      #FBF8F2;
+  --c-on-dark:        #FFFFFF;
+  --c-accent:       #D97757;
+  --c-accent-light: #F4ECE1;
+  --c-accent-muted: #EAD3C5;
+  --c-accent-soft:  #E8A990;
+  --c-border:       #E0D7C8;
+  --c-border-light: #E8E1D4;
+  --c-divider:      #DDD4C4;
+  --c-dashed:       #D0C6B4;
+  --c-track:        #D8CFBE;
+  --c-success:      #5E8B4E;
+  --c-success-bg:   #E9F1E8;
+  --c-success-text: #3F7A4F;
+  --c-warning:      #C9923E;
+  --c-warning-bg:   #FBEFE0;
+  --c-warning-text: #8A6A28;
+  --c-danger:        #B4452F;
+  --c-danger-bg:     #FBF1EC;
+  --c-danger-text:   #B4452F;
+  --c-danger-border: #F5C6BF;
+  --c-info:    #3E7CA6;
+  --c-info-bg: #E7EFF5;
+  --c-overlay: rgba(23, 19, 15, 0.42);
+  --shadow-card:  0 2px 8px rgba(60, 50, 35, 0.05);
+  --shadow-modal: 0 24px 60px rgba(23, 19, 15, 0.40);
+  --shadow-dropdown: 0 8px 28px rgba(60, 50, 35, 0.16);
+  --shadow-button: 0 4px 14px rgba(217, 119, 87, 0.30);
+  --shadow-focus: 0 0 0 3px rgba(217, 119, 87, 0.14);
+  --sans: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --serif: 'PT Serif', Georgia, serif;
+  --mono: 'JetBrains Mono', 'Courier New', monospace;
+}
+
+[data-theme="dark"] {
+  --c-bg-main:      #201C18;
+  --c-bg-panel:     #272320;
+  --c-bg-card:      #2E2A25;
+  --c-bg-white:     #2E2A25;
+  --c-bg-selected:  #38332D;
+  --c-bg-inset:     #1B1815;
+  --c-text-heading:   #F2ECE1;
+  --c-text-primary:   #EDE6DB;
+  --c-text-secondary: #B3A897;
+  --c-text-muted:     #8A8072;
+  --c-on-accent:      #201C18;
+  --c-on-dark:        #FFFFFF;
+  --c-accent:       #E38A6A;
+  --c-accent-light: #3A2E27;
+  --c-accent-muted: #4A362C;
+  --c-accent-soft:  #9A5E48;
+  --c-border:       #3D3830;
+  --c-border-light: #34302A;
+  --c-divider:      #454037;
+  --c-dashed:       #4A443B;
+  --c-track:        #453F37;
+  --c-success:      #7CB86A;
+  --c-success-bg:   #232E20;
+  --c-success-text: #8FCB79;
+  --c-warning:      #E0AC5A;
+  --c-warning-bg:   #322717;
+  --c-warning-text: #E7B96E;
+  --c-danger:        #E8785E;
+  --c-danger-bg:     #331F1B;
+  --c-danger-text:   #EE8A72;
+  --c-danger-border: #5A302A;
+  --c-info:    #5FA0CC;
+  --c-info-bg: #1E2A33;
+  --c-overlay: rgba(0, 0, 0, 0.62);
+  --shadow-modal: 0 28px 70px rgba(0, 0, 0, 0.65);
+  --shadow-button: 0 4px 16px rgba(227, 138, 106, 0.34);
+  --shadow-focus: 0 0 0 3px rgba(227, 138, 106, 0.24);
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: var(--c-bg-panel);
+  font-family: var(--sans);
+  color: var(--c-text-primary);
+  padding: 0;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  min-height: 100vh;
+  padding-top: 36px;
+}
+
+.proto-bar {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: 36px;
+  background: #1a1612;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  z-index: 1000;
+  border-bottom: 1px solid #2a2520;
+}
+.proto-bar .variant {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: #bfb8ae;
+  letter-spacing: 0.05em;
+}
+.proto-bar .controls { display: flex; align-items: center; gap: 8px; }
+.proto-bar button {
+  background: #2a2520;
+  border: 1px solid #3d3830;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-family: var(--sans);
+  font-size: 11px;
+  font-weight: 600;
+  color: #d8cfc0;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.proto-bar button:hover { background: #3d3830; color: #fff; }
+
+.modal-overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: var(--c-overlay);
+  display: flex; justify-content: center; align-items: center;
+  padding: 20px; z-index: 100;
+}
+.modal-card {
+  background: var(--c-bg-main);
+  border-radius: 20px;
+  box-shadow: var(--shadow-modal);
+  width: 100%; max-width: 440px; max-height: calc(100vh - 40px);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.modal-header {
+  padding: 26px 28px 20px;
+  border-bottom: 1px solid var(--c-border);
+  flex-shrink: 0;
+}
+.modal-header h1 {
+  font-family: var(--serif);
+  font-size: 22px; font-weight: 700; color: var(--c-text-heading);
+  margin-bottom: 4px;
+}
+.modal-header .subtitle {
+  font-size: 13px; line-height: 1.5; color: var(--c-text-secondary);
+}
+.modal-body {
+  padding: 18px 28px 28px;
+  overflow-y: auto; flex: 1;
+  display: flex; flex-direction: column; gap: 22px;
+}
+
+.level { display: flex; flex-direction: column; gap: 10px; }
+.level-title {
+  font-size: 11px; font-weight: 700; letter-spacing: 0.07em;
+  text-transform: uppercase; color: var(--c-text-muted);
+  display: flex; align-items: center; gap: 6px;
+}
+
+/* Уровень 1: провайдеры */
+.providers-summary {
+  background: var(--c-bg-card);
+  border: 1px solid var(--c-border); border-radius: 10px;
+  padding: 10px 12px;
+  display: flex; align-items: center; gap: 9px;
+  cursor: pointer; transition: border-color 0.15s;
+}
+.providers-summary:hover { border-color: var(--c-accent); }
+.providers-summary .icon-box {
+  width: 28px; height: 28px; border-radius: 8px;
+  background: var(--c-bg-inset); color: var(--c-accent);
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.providers-summary .text {
+  flex: 1; min-width: 0;
+  font-size: 13px; font-weight: 500; color: var(--c-text-heading);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.providers-summary .chevron {
+  color: var(--c-text-muted); flex-shrink: 0;
+  transition: transform 0.15s;
+}
+.providers-summary.open .chevron { transform: rotate(180deg); }
+
+.providers-grid {
+  display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px;
+}
+.provider-card {
+  background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: 10px;
+  padding: 10px 12px; display: flex; flex-direction: column; gap: 4px;
+  transition: all 0.15s;
+}
+.provider-card:hover { border-color: var(--c-accent); box-shadow: var(--shadow-card); }
+.provider-name { font-size: 13px; font-weight: 600; color: var(--c-text-heading); }
+.provider-status {
+  font-size: 11.5px; color: var(--c-text-secondary);
+  display: flex; align-items: center; gap: 5px;
+}
+.status-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.status-dot.active { background: var(--c-success); }
+.status-dot.inactive { background: var(--c-text-muted); }
+.status-dot.local { background: var(--c-warning); }
+.provider-count { font-size: 10.5px; color: var(--c-text-muted); margin-left: auto; }
+.provider-link {
+  font-size: 11px; color: var(--c-accent); text-decoration: none; align-self: flex-start;
+}
+.provider-link:hover { text-decoration: underline; }
+
+/* Уровень 2: полоса слотов + карточки пресетов */
+.slots-strip {
+  display: flex; gap: 8px; flex-wrap: wrap;
+}
+.slot-pill {
+  flex: 1; min-width: 120px;
+  background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: 12px;
+  padding: 10px 12px; display: flex; flex-direction: column; gap: 2px;
+}
+.slot-pill.selected { border-color: var(--c-accent); box-shadow: var(--shadow-focus); }
+.slot-pill .label {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--c-text-muted);
+}
+.slot-pill .value {
+  font-size: 13px; font-weight: 600; color: var(--c-text-heading);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.slot-pill .value .provider { font-weight: 500; color: var(--c-text-secondary); }
+.slot-pill .hint { font-size: 10.5px; color: var(--c-text-muted); margin-top: 1px; }
+
+.preset-cards { display: flex; flex-direction: column; gap: 8px; }
+.preset-card {
+  background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: 14px;
+  padding: 14px; cursor: pointer; transition: all 0.15s;
+  display: flex; align-items: center; gap: 12px;
+}
+.preset-card:hover { border-color: var(--c-accent); box-shadow: var(--shadow-card); }
+.preset-card.active {
+  background: var(--c-accent-light); border-color: var(--c-accent);
+  box-shadow: var(--shadow-focus);
+}
+.preset-card .logo {
+  width: 36px; height: 36px; border-radius: 10px;
+  background: var(--c-bg-inset); color: var(--c-accent);
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0; font-weight: 700; font-size: 13px;
+}
+.preset-card .body { flex: 1; min-width: 0; }
+.preset-card .name {
+  font-size: 15px; font-weight: 700; color: var(--c-text-heading); margin-bottom: 6px;
+}
+.preset-card .triples {
+  display: flex; flex-wrap: wrap; gap: 6px;
+}
+.triple-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 4px 8px; border-radius: 8px; border: 1px solid var(--c-border);
+  background: var(--c-bg-white); font-size: 11px; color: var(--c-text-secondary);
+}
+.triple-badge .tier-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--c-accent); }
+.triple-badge strong { color: var(--c-text-heading); font-weight: 600; }
+.preset-card.active .triple-badge { background: var(--c-bg-card); border-color: var(--c-accent-muted); }
+.preset-card .check {
+  width: 22px; height: 22px; border-radius: 50%;
+  background: var(--c-bg-inset); color: var(--c-text-muted);
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+.preset-card.active .check { background: var(--c-accent); color: var(--c-on-accent); }
+
+.slot-warning {
+  padding: 9px 11px; border-radius: 8px; font-size: 12px; line-height: 1.5;
+  color: var(--c-text-secondary); background: var(--c-bg-inset); border: 1px solid var(--c-border);
+}
+
+/* Уровень 3: быстрые кнопки и список мест */
+.actions-panel {
+  display: flex; flex-direction: column; gap: 8px;
+  background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: 12px;
+  padding: 10px 12px;
+}
+.actions-panel-row { display: flex; gap: 8px; }
+.actions-panel-row .btn { flex: 1; }
+.btn-primary {
+  background: var(--c-accent); border: none; border-radius: 10px;
+  padding: 7px 10px; font-family: var(--sans); font-size: 11px; font-weight: 600;
+  color: var(--c-on-accent); cursor: pointer; transition: all 0.15s;
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  white-space: nowrap; min-width: 160px;
+}
+.btn-primary:hover { box-shadow: var(--shadow-button); }
+.btn-secondary {
+  background: var(--c-bg-white); border: 1px solid var(--c-border); border-radius: 10px;
+  padding: 7px 10px; font-family: var(--sans); font-size: 11px; font-weight: 600;
+  color: var(--c-text-primary); cursor: pointer; transition: all 0.15s;
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  white-space: nowrap; min-width: 160px;
+}
+.btn-secondary:hover { border-color: var(--c-accent); color: var(--c-accent); }
+.btn-secondary.hidden { display: none; }
+.actions-panel-note {
+  font-size: 11px; line-height: 1.4; color: var(--c-text-muted);
+}
+
+.task-groups { display: flex; flex-direction: column; gap: 16px; }
+.task-group {
+  background: var(--c-bg-white); border: 1px solid var(--c-border); border-radius: 12px;
+  overflow: hidden;
+}
+.task-group-header {
+  padding: 8px 12px; background: var(--c-bg-card); border-bottom: 1px solid var(--c-border);
+  font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--c-text-muted);
+}
+.task-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 8px 12px; border-bottom: 1px solid var(--c-border-light); transition: background 0.12s;
+}
+.task-row:last-child { border-bottom: none; }
+.task-row:hover { background: var(--c-bg-selected); }
+.task-name {
+  font-size: 12.5px; color: var(--c-text-secondary);
+  display: flex; align-items: center; gap: 4px; min-width: 0;
+}
+.task-name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-executor {
+  background: var(--c-bg-white); border: 1px solid var(--c-border); border-radius: 8px;
+  padding: 4px 8px 4px 9px; display: flex; align-items: center; gap: 6px;
+  font-size: 11px; color: var(--c-text-secondary); cursor: pointer; flex-shrink: 0; transition: all 0.15s;
+  max-width: 210px;
+}
+.task-executor:hover { border-color: var(--c-accent); }
+.task-executor.local { border-color: var(--c-accent); color: var(--c-accent); }
+.task-executor .value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.task-executor .chevron { color: var(--c-text-muted); flex-shrink: 0; }
+.icon-zap { width: 11px; height: 11px; color: var(--c-accent); flex-shrink: 0; }
+</style>
+</head>
+<body>
+
+<div class="proto-bar">
+  <div class="variant">ВАРИАНТ C: Карточки пресетов с полосой слотов</div>
+  <div class="controls">
+    <button onclick="toggleLocal()" id="localBtn">Локальная: вкл</button>
+    <button onclick="toggleTheme()" id="themeBtn">Тёмная тема</button>
+  </div>
+</div>
+
+<div class="modal-overlay">
+  <div class="modal-card">
+    <div class="modal-header">
+      <h1>Поставщики моделей</h1>
+      <div class="subtitle">Модели для чатов и фоновых задач. Настройка общая, применяется сразу.</div>
+    </div>
+    <div class="modal-body">
+
+      <!-- Уровень 1: Провайдеры -->
+      <div class="level">
+        <div class="level-title">Провайдеры</div>
+        <div class="providers-summary" id="providersSummary" onclick="toggleProviders()">
+          <div class="icon-box">
+            <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"/>
+            </svg>
+          </div>
+          <span class="text">Активны: Claude, DeepSeek, Ollama · 1 не настроен</span>
+          <svg class="chevron" width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+          </svg>
+        </div>
+        <div class="providers-grid" id="providersGrid" style="display:none">
+          <div class="provider-card">
+            <div class="provider-name">Claude</div>
+            <div class="provider-status">
+              <span class="status-dot active"></span>
+              <span>Активен</span>
+              <span class="provider-count">4 модели</span>
+            </div>
+          </div>
+          <div class="provider-card">
+            <div class="provider-name">DeepSeek</div>
+            <div class="provider-status">
+              <span class="status-dot active"></span>
+              <span>Активен</span>
+              <span class="provider-count">2 модели</span>
+            </div>
+          </div>
+          <div class="provider-card">
+            <div class="provider-name">GLM</div>
+            <div class="provider-status">
+              <span class="status-dot inactive"></span>
+              <span>Не настроен</span>
+            </div>
+            <a href="#" class="provider-link">Настроить →</a>
+          </div>
+          <div class="provider-card">
+            <div class="provider-name">Ollama</div>
+            <div class="provider-status">
+              <span class="status-dot local"></span>
+              <span>Локальная · qwen3:8b</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Уровень 2: Модели по умолчанию -->
+      <div class="level">
+        <div class="level-title">Модели по умолчанию</div>
+
+        <div class="slots-strip" id="slotsStrip">
+          <div class="slot-pill selected" data-tier="strong">
+            <div class="label">Сильная</div>
+            <div class="value">Opus 4.8 <span class="provider">· Anthropic</span></div>
+            <div class="hint">Чаты, сложные задачи</div>
+          </div>
+          <div class="slot-pill" data-tier="medium">
+            <div class="label">Средняя</div>
+            <div class="value">Sonnet 5 <span class="provider">· Anthropic</span></div>
+            <div class="hint">Сабагенты, тяжёлый фон</div>
+          </div>
+          <div class="slot-pill" data-tier="weak">
+            <div class="label">Слабая</div>
+            <div class="value">Haiku 4.5 <span class="provider">· Anthropic</span></div>
+            <div class="hint">Теги, заголовки, сводки</div>
+          </div>
+        </div>
+
+        <div class="preset-cards" id="presetCards">
+          <div class="preset-card active" data-provider="claude" onclick="selectProvider('claude')">
+            <div class="logo">C</div>
+            <div class="body">
+              <div class="name">Claude</div>
+              <div class="triples">
+                <span class="triple-badge"><span class="tier-dot"></span><strong>Сильная:</strong> Opus 4.8</span>
+                <span class="triple-badge"><span class="tier-dot"></span><strong>Средняя:</strong> Sonnet 5</span>
+                <span class="triple-badge"><span class="tier-dot"></span><strong>Слабая:</strong> Haiku 4.5</span>
+              </div>
+            </div>
+            <div class="check">
+              <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/>
+              </svg>
+            </div>
+          </div>
+
+          <div class="preset-card" data-provider="deepseek" onclick="selectProvider('deepseek')">
+            <div class="logo">D</div>
+            <div class="body">
+              <div class="name">DeepSeek</div>
+              <div class="triples">
+                <span class="triple-badge"><span class="tier-dot"></span><strong>Сильная:</strong> V3</span>
+                <span class="triple-badge"><span class="tier-dot"></span><strong>Средняя:</strong> Chat</span>
+                <span class="triple-badge"><span class="tier-dot"></span><strong>Слабая:</strong> Coder</span>
+              </div>
+            </div>
+            <div class="check">
+              <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/>
+              </svg>
+            </div>
+          </div>
+        </div>
+
+        <div class="slot-warning" id="slotWarning" style="display:none">
+          В слабый слот выбрана тяжёлая модель — на неё пойдут теги, заголовки чатов и сводки, а это десятки вызовов в день. Дешевле поставить сюда лёгкую модель или локальную.
+        </div>
+      </div>
+
+      <!-- Уровень 3: назначения -->
+      <div class="level">
+        <div class="actions-panel">
+          <div class="actions-panel-row">
+            <button class="btn btn-primary" onclick="applyDefault()">
+              <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+              </svg>
+              Установить по умолчанию
+            </button>
+            <button class="btn btn-secondary" id="localDefaultBtn" onclick="applyLocalDefault()">
+              <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/>
+              </svg>
+              По умолчанию с локальной
+            </button>
+          </div>
+          <div class="actions-panel-note">Проставляет всем местам ниже слот по сложности функции. Вторая кнопка видна только когда настроена локальная модель.</div>
+        </div>
+
+        <div class="task-groups">
+          <div class="task-group">
+            <div class="task-group-header">Чаты и персоны</div>
+            <div class="task-row">
+              <div class="task-name"><span>Новый чат</span></div>
+              <div class="task-executor">
+                <span class="value">Сильная · Opus 4.8</span>
+                <svg class="chevron" width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                </svg>
+              </div>
+            </div>
+            <div class="task-row">
+              <div class="task-name"><span>Чат персоны</span></div>
+              <div class="task-executor">
+                <span class="value">Сильная · Opus 4.8</span>
+                <svg class="chevron" width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                </svg>
+              </div>
+            </div>
+            <div class="task-row">
+              <div class="task-name">
+                <span>Исполнитель задач</span>
+                <svg class="icon-zap" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                </svg>
+              </div>
+              <div class="task-executor">
+                <span class="value">Сильная · Opus 4.8</span>
+                <svg class="chevron" width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                </svg>
+              </div>
+            </div>
+            <div class="task-row">
+              <div class="task-name">
+                <span>Сабагент-консультант</span>
+                <svg class="icon-zap" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                </svg>
+              </div>
+              <div class="task-executor">
+                <span class="value">Средняя · Sonnet 5</span>
+                <svg class="chevron" width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                </svg>
+              </div>
+            </div>
+          </div>
+
+          <div class="task-group">
+            <div class="task-group-header">Заметки</div>
+            <div class="task-row">
+              <div class="task-name"><span>Теги заметок</span></div>
+              <div class="task-executor local">
+                <span class="value">Локальная · qwen3:8b</span>
+                <svg class="chevron" width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                </svg>
+              </div>
+            </div>
+            <div class="task-row">
+              <div class="task-name"><span>Заголовок чата</span></div>
+              <div class="task-executor">
+                <span class="value">Слабая · Haiku 4.5</span>
+                <svg class="chevron" width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                </svg>
+              </div>
+            </div>
+          </div>
+
+          <div class="task-group">
+            <div class="task-group-header">Сводки</div>
+            <div class="task-row">
+              <div class="task-name"><span>Сводка дня</span></div>
+              <div class="task-executor">
+                <span class="value">Слабая · Haiku 4.5</span>
+                <svg class="chevron" width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                </svg>
+              </div>
+            </div>
+            <div class="task-row">
+              <div class="task-name"><span>Утренний бриф</span></div>
+              <div class="task-executor">
+                <span class="value">Слабая · Haiku 4.5</span>
+                <svg class="chevron" width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                </svg>
+              </div>
+            </div>
+          </div>
+
+          <div class="task-group">
+            <div class="task-group-header">Память</div>
+            <div class="task-row">
+              <div class="task-name"><span>Память персон</span></div>
+              <div class="task-executor local">
+                <span class="value">Локальная · qwen3:8b</span>
+                <svg class="chevron" width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                </svg>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script>
+const PRESETS = {
+  claude: { strong: 'Opus 4.8 · Anthropic', medium: 'Sonnet 5 · Anthropic', weak: 'Haiku 4.5 · Anthropic' },
+  deepseek: { strong: 'DeepSeek-V3 · DeepSeek', medium: 'DeepSeek-Chat · DeepSeek', weak: 'DeepSeek-Coder · DeepSeek' },
+};
+
+let localOn = true;
+function toggleTheme() {
+  const html = document.documentElement;
+  const next = html.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+  html.setAttribute('data-theme', next);
+  document.getElementById('themeBtn').textContent = next === 'light' ? 'Тёмная тема' : 'Светлая тема';
+}
+function toggleLocal() {
+  localOn = !localOn;
+  document.getElementById('localBtn').textContent = localOn ? 'Локальная: вкл' : 'Локальная: выкл';
+  const btn = document.getElementById('localDefaultBtn');
+  if (localOn) btn.classList.remove('hidden');
+  else btn.classList.add('hidden');
+}
+function toggleProviders() {
+  const grid = document.getElementById('providersGrid');
+  const summary = document.getElementById('providersSummary');
+  const open = grid.style.display === 'none';
+  grid.style.display = open ? 'grid' : 'none';
+  summary.classList.toggle('open', open);
+}
+function selectProvider(key) {
+  document.querySelectorAll('.preset-card').forEach(c => c.classList.remove('active'));
+  const card = document.querySelector('.preset-card[data-provider="' + key + '"]');
+  card.classList.add('active');
+  const p = PRESETS[key];
+  updateSlot('strong', 'Чаты, сложные задачи', p.strong);
+  updateSlot('medium', 'Сабагенты, тяжёлый фон', p.medium);
+  updateSlot('weak', 'Теги, заголовки, сводки', p.weak);
+  document.getElementById('slotWarning').style.display = 'none';
+}
+function updateSlot(tier, hint, value) {
+  const pill = document.querySelector('.slot-pill[data-tier="' + tier + '"]');
+  pill.querySelector('.hint').textContent = hint;
+  const valParts = value.split(' · ');
+  pill.querySelector('.value').innerHTML = valParts[0] + ' <span class="provider">· ' + valParts[1] + '</span>';
+}
+function applyDefault() { alert('Всем местам проставлены слоты по сложности'); }
+function applyLocalDefault() { alert('Слабые места переключены на локальную модель'); }
+</script>
+
+</body>
+</html>

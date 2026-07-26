@@ -79,11 +79,11 @@ public class SkillSuggestService(
             .Where(b => b.Type == PersonaBindingType.Skill)
             .Select(b => b.Target)
             .ToHashSet(StringComparer.OrdinalIgnoreCase) ?? [];
-        return await SuggestAsync(BuildPersonaContext(persona), already, ct);
+        return await SuggestAsync(ownerId, BuildPersonaContext(persona), already, ct);
     }
 
     // Подбор под проект: имя + системный промпт проекта.
-    public async Task<IReadOnlyList<SkillSuggestion>> SuggestForProjectAsync(string projectId,
+    public async Task<IReadOnlyList<SkillSuggestion>> SuggestForProjectAsync(string? ownerId, string projectId,
         CancellationToken ct = default)
     {
         var project = projects.GetById(projectId)
@@ -92,13 +92,13 @@ public class SkillSuggestService(
         sb.AppendLine($"Проект: {project.Name}");
         if (!string.IsNullOrWhiteSpace(project.SystemPrompt))
             sb.AppendLine($"Описание/правила проекта: {project.SystemPrompt}");
-        return await SuggestAsync(sb.ToString(), null, ct);
+        return await SuggestAsync(ownerId, sb.ToString(), null, ct);
     }
 
     // Подбор по свободному запросу пользователя («нужен навык для работы с PDF и таблицами»).
-    public async Task<IReadOnlyList<SkillSuggestion>> SuggestForQueryAsync(string query,
+    public async Task<IReadOnlyList<SkillSuggestion>> SuggestForQueryAsync(string? ownerId, string query,
         CancellationToken ct = default) =>
-        await SuggestAsync($"Задача/запрос пользователя: {query}", null, ct);
+        await SuggestAsync(ownerId, $"Задача/запрос пользователя: {query}", null, ct);
 
     private static string BuildPersonaContext(Persona p)
     {
@@ -114,7 +114,7 @@ public class SkillSuggestService(
 
     // Ядро: каталог + контекст → промпт → JSON-массив выбранных → матч с каталогом.
     // exclude — источники@навыки (по имени навыка), которые уже привязаны и не предлагаются.
-    private async Task<IReadOnlyList<SkillSuggestion>> SuggestAsync(string context,
+    private async Task<IReadOnlyList<SkillSuggestion>> SuggestAsync(string? ownerId, string context,
         ISet<string>? excludeBySkillName, CancellationToken ct)
     {
         var catalog = (await GetCatalogAsync(ct))
@@ -126,7 +126,7 @@ public class SkillSuggestService(
         string answer;
         try
         {
-            answer = await cheap.RunAsync(LocalActionCatalog.SkillSuggest, prompt, AiModel, ct: ct);
+            answer = await cheap.RunAsync(LocalActionCatalog.SkillSuggest, prompt, AiModel, ownerId, ct: ct);
         }
         catch (Exception ex)
         {

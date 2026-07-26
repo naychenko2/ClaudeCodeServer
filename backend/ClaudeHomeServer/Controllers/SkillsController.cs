@@ -121,9 +121,9 @@ public class SkillsController(
             if (!string.IsNullOrWhiteSpace(req.PersonaId))
                 result = await suggest.SuggestForPersonaAsync(UserId, req.PersonaId, ct);
             else if (!string.IsNullOrWhiteSpace(req.ProjectId))
-                result = await suggest.SuggestForProjectAsync(req.ProjectId, ct);
+                result = await suggest.SuggestForProjectAsync(UserId, req.ProjectId, ct);
             else if (!string.IsNullOrWhiteSpace(req.Query))
-                result = await suggest.SuggestForQueryAsync(req.Query.Trim(), ct);
+                result = await suggest.SuggestForQueryAsync(UserId, req.Query.Trim(), ct);
             else
                 return BadRequest(new { error = "Нужен один из: personaId, projectId, query" });
             return Ok(new { candidates = result });
@@ -141,7 +141,7 @@ public class SkillsController(
         if (string.IsNullOrWhiteSpace(req.Prompt))
             return BadRequest(new { error = "Опишите, что должен делать навык" });
 
-        var g = await generation.GenerateAsync(req.Prompt.Trim(), ct);
+        var g = await generation.GenerateAsync(UserId, req.Prompt.Trim(), ct);
         if (g is null)
             return StatusCode(502, new { error = "Модель не вернула корректный навык — попробуйте ещё раз" });
         return Ok(new { name = g.Name, description = g.Description, body = g.Body });

@@ -19,13 +19,13 @@ public class SkillGenerationService(
 {
     private string? AiModel => config["Skills:AiModel"] is { Length: > 0 } m ? m : "haiku";
 
-    public async Task<GeneratedSkill?> GenerateAsync(string prompt, CancellationToken ct = default)
+    public async Task<GeneratedSkill?> GenerateAsync(string? ownerId, string prompt, CancellationToken ct = default)
     {
         var full = BuildPrompt(prompt);
         string answer;
         try
         {
-            answer = await cheap.RunAsync(LocalActionCatalog.SkillGenerate, full, AiModel, ct: ct);
+            answer = await cheap.RunAsync(LocalActionCatalog.SkillGenerate, full, AiModel, ownerId, ct: ct);
         }
         catch (Exception ex)
         {

@@ -103,9 +103,13 @@ export async function leaveSession(sessionId: string): Promise<void> {
   }
 }
 
-export async function sendMessage(sessionId: string, text: string, attachedPaths: string[] = [], mode?: string, auto = false): Promise<void> {
+// Возвращает исход постановки пользовательского сообщения: 'started' — ход запущен
+// (оптимистичный баллон уместен); 'queued' — чат занят, сообщение встало в серверную
+// очередь (баллон НЕ рисуем: карточку даст снимок pending_messages, доставленное —
+// событием user_message). Контракт «честной очереди».
+export async function sendMessage(sessionId: string, text: string, attachedPaths: string[] = [], mode?: string, auto = false): Promise<'started' | 'queued'> {
   const conn = await ensureConnected();
-  await conn.invoke('SendMessage', sessionId, text, attachedPaths, mode ?? null, auto);
+  return conn.invoke<'started' | 'queued'>('SendMessage', sessionId, text, attachedPaths, mode ?? null, auto);
 }
 
 export async function respondPermission(

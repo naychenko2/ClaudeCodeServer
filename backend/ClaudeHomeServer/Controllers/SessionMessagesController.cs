@@ -201,6 +201,9 @@ public class SessionMessagesController(SessionManager sessions, ProjectManager p
             id = p.Id, text = p.Text, senderPersonaId = p.SenderPersonaId,
             senderOrigin = p.SenderOrigin, enqueuedAt = p.EnqueuedAt,
             senderChatName = p.SenderChatName,
+            kind = p.Kind == ClaudeHomeServer.Services.SessionManager.PendingKind.User ? "user" : "agent",
+            attachedPaths = p.AttachedPaths,
+            mode = p.Kind == ClaudeHomeServer.Services.SessionManager.PendingKind.User ? p.Mode : null,
         }));
     }
 

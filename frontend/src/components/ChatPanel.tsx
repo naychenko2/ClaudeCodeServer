@@ -110,7 +110,7 @@ function derivePlanPhase(items: ChatItem[], mode: Mode, isWaiting: boolean): Pla
 }
 
 export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, attachedFiles, onAttachedFilesChange, artifactsOpen, onToggleArtifacts, greetingBubble, headerIsland }: Props) {
-  const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, workLoop: liveWorkLoop, promptSuggestion, pending, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, compact, toggleThinking, noteCompanionSwitch, cancelPending } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
+  const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, workLoop: liveWorkLoop, promptSuggestion, pending, composerRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, compact, toggleThinking, noteCompanionSwitch, cancelPending } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
   // Цикл «до готово» (флаг work-loop): live-состояние из событий work_loop,
   // до первого события — из Session.workLoop; null — цикл выключен
   const workLoopState = useMemo<WorkLoopState | null>(() => {
@@ -1290,6 +1290,8 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
             chatContext={chatContext}
             promptSuggestion={promptSuggestion}
             rateWindow={worstRate}
+            restore={composerRestore}
+            onReplaceAttachments={onAttachedFilesChange}
           />
           </div>
         </div>

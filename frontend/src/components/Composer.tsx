@@ -85,6 +85,11 @@ export interface ComposerProps {
   // Худшее окно лимита подписки (worstWindow) — для полоски-индикатора по кромке
   // композера. Полоска видна при level !== 'normal' (warn/danger).
   rateWindow?: RateWindow;
+  // «Стоп» вернул прерванное сообщение в композер (фича «честная очередь»). Подставляется
+  // только в ПУСТОЕ поле — набранный черновик важнее. seq меняется на каждое событие.
+  restore?: { text: string | null; attachedPaths: string[] | null; mode: string | null; seq: number } | null;
+  // Замена всего списка вложений при restore (родитель владеет attachedFiles).
+  onReplaceAttachments?: (paths: string[]) => void;
 }
 
 // Получить имя файла из пути
@@ -243,10 +248,17 @@ export function Composer({
   chatContext,
   promptSuggestion = null,
   rateWindow,
+  restore = null,
+  onReplaceAttachments,
 }: ComposerProps) {
   const asstName = useAssistantName();
   // Черновик per-session: инициализируем из стора и синхронизируем при переключении чата
   const [text, setText] = useState(() => getDraft(sessionId));
+  // Актуальные значения для эффекта restore (зависит только от seq, замыкание иначе устареет)
+  const lastTextRef = useRef(text);
+  lastTextRef.current = text;
+  const lastModeRef = useRef(mode);
+  lastModeRef.current = mode;
   const draftSessionRef = useRef(sessionId);
   useEffect(() => {
     if (draftSessionRef.current !== sessionId) {
@@ -271,6 +283,27 @@ export function Composer({
     window.addEventListener('cc-compose-prefill', consume);
     return () => window.removeEventListener('cc-compose-prefill', consume);
   }, []);
+  // Возврат прерванного сообщения по «Стоп» (фича «честная очередь», событие composer_restore).
+  // Только в ПУСТОЕ поле: набранный черновик пользователя важнее серверного restore.
+  // text=null — прерван авто/агентский ход, восстанавливать нечего: композер не трогаем.
+  useEffect(() => {
+    const r = restore;
+    if (!r || r.seq === 0) return;
+    if (lastTextRef.current.trim()) return;          // черновик важнее
+    if (r.text == null) return;                      // нечего восстанавливать
+    setText(r.text);
+    if (r.attachedPaths && r.attachedPaths.length > 0 && onReplaceAttachments) {
+      onReplaceAttachments(r.attachedPaths);
+    }
+    // Режим возвращаем, только если он валиден и не опасен: bypass требует подтверждения
+    // в модалке, включать его молча при restore небезопасно
+    if (r.mode && r.mode !== lastModeRef.current) {
+      const m = MODES.find(v => v === r.mode);
+      if (m && !isDangerMode(m)) onModeChange(m);
+    }
+    textareaRef.current?.focus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [restore?.seq]);
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   // Опасный режим (bypass) ждёт подтверждения в модалке перед применением

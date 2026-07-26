@@ -128,12 +128,16 @@ public class SessionHub : Hub
         return base.OnDisconnectedAsync(exception);
     }
 
-    public async Task SendMessage(string sessionId, string text, List<string>? attachedPaths = null, string? mode = null, bool auto = false)
+    // Возвращает исход постановки: "started" — ход запущен (рисуем оптимистичный баллон);
+    // "queued" — чат занят, сообщение встало в серверную очередь (баллон НЕ рисуем: карточка
+    // придёт снимком pending_messages, а доставленное — событием user_message).
+    public async Task<string> SendMessage(string sessionId, string text, List<string>? attachedPaths = null, string? mode = null, bool auto = false)
     {
         if (!OwnsSession(sessionId)) throw Denied();
         // auto — сообщение опубликовано автоматически (например, «Обсудить с командой»):
         // UI покажет источник вместо пузыря пользователя
-        await _sessions.SendMessageAsync(sessionId, text, attachedPaths ?? [], mode, auto: auto);
+        var outcome = await _sessions.SendMessageAsync(sessionId, text, attachedPaths ?? [], mode, auto: auto);
+        return outcome == Services.SessionManager.SendUserOutcome.Started ? "started" : "queued";
     }
 
     public void RespondPermission(string sessionId, string requestId, string behavior)

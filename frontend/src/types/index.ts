@@ -521,8 +521,15 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'preview_status'; status: string; port?: number; error?: string; serviceId?: string }
   | { type: 'notification'; title: string; body: string; url?: string; kind: 'reminder' | 'claude' | 'info' | 'success' | 'meeting'; notificationId?: string; notifType?: string; projectId?: string; sessionId?: string; taskId?: string; source?: string; tag?: string; personaId?: string; personaName?: string; personaRole?: string; personaColor?: string; personaHasAvatar?: boolean; projectName?: string }
   | { type: 'recall_manifest'; items: RecallItem[] }
-  // Полный снимок очереди сообщений занятой сессии (постановка/отмена/доставка)
-  | { type: 'pending_messages'; items: { id: string; text: string; senderPersonaId?: string; senderOrigin?: string; enqueuedAt: string; senderChatName?: string }[] }
+  // Полный снимок очереди сообщений занятой сессии (постановка/отмена/доставка).
+  // kind: 'user' — сообщение человека из «честной очереди» (рисуется карточкой «Вы» с
+  // вложениями и режимом, который вернётся в композер по «Стоп»); 'agent' — chats_send.
+  | { type: 'pending_messages'; items: { id: string; text: string; senderPersonaId?: string; senderOrigin?: string; enqueuedAt: string; senderChatName?: string; kind?: 'user' | 'agent'; attachedPaths?: string[]; mode?: string | null }[] }
+  // «Стоп» вернул прерванное пользовательское сообщение в композер (фича «честная
+  // очередь»). text=null — восстанавливать нечего (прерван авто/агентский ход, очередь
+  // пуста): композер не трогаем. Иначе — текст, вложения и режим, которые подставятся
+  // в пустое поле (черновик пользователя важнее — непустой композер игнорируется).
+  | { type: 'composer_restore'; text?: string | null; attachedPaths?: string[] | null; mode?: string | null }
   // Подсказка следующего сообщения — чип в композере
   | { type: 'prompt_suggestion'; text: string }
 );

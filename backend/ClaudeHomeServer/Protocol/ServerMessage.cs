@@ -39,8 +39,19 @@ public record PendingMessagesMessage(IReadOnlyList<PendingMessageDto> Items)
 // Ожидающее доставки сообщение для клиента. SenderOrigin — чип «откуда пришло»,
 // заполнен только когда источник в другом проекте либо вне проектов.
 // SenderChatName — подпись, когда у отправителя нет персоны: имя его чата.
+// Kind — "user" (сообщение человека, ждёт в серверной очереди) или "agent" (chats_send);
+// AttachedPaths/Mode заполнены только у пользовательских — клиент рисует их на карточке
+// и (Mode) применяет при возврате в композер.
 public record PendingMessageDto(string Id, string Text, string? SenderPersonaId,
-    string? SenderOrigin, DateTime EnqueuedAt, string? SenderChatName = null);
+    string? SenderOrigin, DateTime EnqueuedAt, string? SenderChatName = null,
+    string Kind = "agent", IReadOnlyList<string>? AttachedPaths = null, string? Mode = null);
+
+// «Стоп» вернул текст в композер (фича «честная очередь»). Payload null — восстанавливать
+// нечего (прерван авто/агентский ход, пользовательских в очереди не было): клиент просто
+// отмечает, что очередь заморожена. Иначе — последнее пользовательское сообщение:
+// изъятое из очереди либо копия прерванного хода (из ленты оно НЕ убирается).
+public record ComposerRestoreMessage(string? Text, IReadOnlyList<string>? AttachedPaths, string? Mode)
+    : ServerMessage("composer_restore");
 
 // Гостевая реплика персоны, вставленная в историю без агентского хода (0 токенов) — доклад
 // о завершении делегированной задачи (модель Z, TaskExecutionService.ReportToDelegatorAsync).

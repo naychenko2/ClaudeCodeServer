@@ -184,7 +184,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
         {
             var text = await GetAiTextAsync(projectId, path, ct);
             if (text is null) return BadRequest(new { error = "Файл не поддерживается (нужен документ или текст)" });
-            var summary = await docAi.SummaryAsync(text, ct);
+            var summary = await docAi.SummaryAsync(UserId, text, ct);
             return summary is null ? StatusCode(502, new { error = "Не удалось обработать файл" }) : Ok(new { summary });
         }
         catch (KeyNotFoundException) { return NotFound(); }
@@ -198,7 +198,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
         {
             var text = await GetAiTextAsync(projectId, path, ct);
             if (text is null) return BadRequest(new { error = "Файл не поддерживается (нужен документ или текст)" });
-            var r = await docAi.ExtractAsync(text, ct);
+            var r = await docAi.ExtractAsync(UserId, text, ct);
             return r is null
                 ? StatusCode(502, new { error = "Не удалось обработать файл" })
                 : Ok(new { decisions = r.Decisions, dates = r.Dates, people = r.People, actionItems = r.ActionItems });
@@ -226,7 +226,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
                 return StatusCode(502, new { error = "Не удалось конвертировать файл (markitdown недоступен или формат не поддержан)" });
 
             // Опционально: восстановить Markdown-разметку локальной моделью (для pdf без структуры)
-            if (req.Enhance) md = await docAi.EnhanceMarkdownAsync(md, ct);
+            if (req.Enhance) md = await docAi.EnhanceMarkdownAsync(UserId, md, ct);
 
             // Имя целевого .md — по исходному имени; каталог — targetDir или рядом с исходником
             var baseName = System.IO.Path.GetFileNameWithoutExtension(req.Path) + ".md";
@@ -252,7 +252,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
         {
             var text = await GetAiTextAsync(projectId, path, ct);
             if (text is null) return BadRequest(new { error = "Файл не поддерживается (нужен документ или текст)" });
-            var tags = await docAi.TagsAsync(text, ct);
+            var tags = await docAi.TagsAsync(UserId, text, ct);
             return tags is null ? StatusCode(502, new { error = "Не удалось обработать файл" }) : Ok(new { tags });
         }
         catch (KeyNotFoundException) { return NotFound(); }

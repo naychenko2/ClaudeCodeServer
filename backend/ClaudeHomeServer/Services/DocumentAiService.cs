@@ -25,7 +25,7 @@ public sealed class DocumentAiService(
     // Восстановление Markdown-разметки локальной моделью: markitdown из pdf даёт плоский текст
     // без заголовков/списков. Модель расставляет #/##, списки, выделения — НЕ меняя и не сокращая
     // текст. Пустой ввод / ошибка → исходный текст (безопасная деградация).
-    public async Task<string> EnhanceMarkdownAsync(string markdown, CancellationToken ct)
+    public async Task<string> EnhanceMarkdownAsync(string? ownerId, string markdown, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(markdown)) return markdown;
         var prompt =
@@ -34,7 +34,7 @@ public sealed class DocumentAiService(
             "оформи таблицы если они есть. СТРОГО сохрани весь текст дословно — ничего не добавляй, не сокращай " +
             "и не перефразируй, только разметка и структура. Ответь ТОЛЬКО готовым Markdown, без пояснений.\n\n" +
             Truncate(markdown, MdBudget);
-        var enhanced = (await cheap.RunAsync(Llm.LocalActionCatalog.DocFormat, prompt, Model, ct: ct)).Trim();
+        var enhanced = (await cheap.RunAsync(Llm.LocalActionCatalog.DocFormat, prompt, Model, ownerId, ct: ct)).Trim();
         // Снимаем возможную ```markdown-обёртку
         if (enhanced.StartsWith("```"))
         {
@@ -47,17 +47,17 @@ public sealed class DocumentAiService(
 
     // Краткое содержание: 5-8 пунктов сути. text — готовое содержимое (markdown документа или
     // текст .md/.txt): добывание текста (markitdown для бинарных / чтение для текстовых) — на вызывающем.
-    public async Task<string?> SummaryAsync(string text, CancellationToken ct)
+    public async Task<string?> SummaryAsync(string? ownerId, string text, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(text)) return null;
         var prompt =
             "Ниже — содержимое документа. Составь краткое содержание: 5-8 пунктов маркированного списка " +
             "по сути, по-русски. Ответь ТОЛЬКО markdown-списком, без вступлений.\n\n" + Truncate(text, MdBudget);
-        return await cheap.RunAsync(Llm.LocalActionCatalog.DocSummary, prompt, Model, ct: ct);
+        return await cheap.RunAsync(Llm.LocalActionCatalog.DocSummary, prompt, Model, ownerId, ct: ct);
     }
 
     // Структурная выжимка: решения, даты/сроки, участники, action items.
-    public async Task<DocExtractResult?> ExtractAsync(string text, CancellationToken ct)
+    public async Task<DocExtractResult?> ExtractAsync(string? ownerId, string text, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(text)) return null;
         var prompt =
@@ -67,18 +67,18 @@ public sealed class DocumentAiService(
             "даты/сроки строкой вида «дата — контекст»; people — упомянутые участники/ответственные; " +
             "actionItems — задачи/следующие шаги. Пусто → []. По-русски.\n\n" +
             Truncate(text, MdBudget);
-        var raw = await cheap.RunAsync(Llm.LocalActionCatalog.DocExtract, prompt, Model, ct: ct);
+        var raw = await cheap.RunAsync(Llm.LocalActionCatalog.DocExtract, prompt, Model, ownerId, ct: ct);
         return ParseExtract(raw);
     }
 
     // До 6 тегов по содержимому.
-    public async Task<IReadOnlyList<string>?> TagsAsync(string text, CancellationToken ct)
+    public async Task<IReadOnlyList<string>?> TagsAsync(string? ownerId, string text, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(text)) return null;
         var prompt =
             "Ниже — содержимое документа. Предложи до 6 коротких тегов (одно-два слова, по-русски, без #) " +
             "по теме. Ответь ТОЛЬКО JSON-массивом строк.\n\n" + Truncate(text, MdBudget);
-        var raw = await cheap.RunAsync(Llm.LocalActionCatalog.DocTags, prompt, Model, ct: ct);
+        var raw = await cheap.RunAsync(Llm.LocalActionCatalog.DocTags, prompt, Model, ownerId, ct: ct);
         return ParseStringArray(raw).Select(t => t.Trim().TrimStart('#').Trim())
             .Where(t => t.Length is > 1 and <= 30).Distinct(StringComparer.OrdinalIgnoreCase).Take(6).ToList();
     }

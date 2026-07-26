@@ -61,6 +61,7 @@ public class HomeController(SessionManager sessions, ProjectManager projects) : 
         s.LastMessage,
         s.PersonaId,
         s.TaskId,
+        s.TaskDone,
         s.MessageCount,
         s.UpdatedAt);
 }
@@ -75,5 +76,6 @@ public record HomeSessionDto(
     string? LastMessage,
     string? PersonaId,
     string? TaskId,
+    bool TaskDone,
     int MessageCount,
     DateTime UpdatedAt);

@@ -1,37 +1,55 @@
-import { useState, useEffect, useRef } from 'react';
-import { Filter, List, ListTree } from 'lucide-react';
+import { useState, useEffect, useRef, useMemo, type ReactNode } from 'react';
+import { Filter, List, ListTree, Search, X, Pin, Clock, Users } from 'lucide-react';
 import type { Persona, Session } from '../types';
-import { C, R, FONT, FS, SHADOW, TB, Z } from '../lib/design';
+import { C, R, FONT, FS, SHADOW, TB, Z, SP } from '../lib/design';
+import { Modal } from './ui';
 import { personaLabel } from '../lib/personas';
 import { PersonaAvatar } from '../features/personas/PersonaAvatar';
-import { ALL_ORIGINS } from '../lib/chatFilters';
+import {
+  ALL_ORIGINS, ALL_STATUS_CHIPS,
+  chatStatusOf, isDefaultFilters, defaultChatFilters,
+  type ChatFilters, type ChatStatusChip, type ChatOnlyFilter,
+} from '../lib/chatFilters';
 import type { ChatViewMode } from '../lib/chatTree';
 
-// === Компактный триггер фильтрации списка чатов ===
-// Одна едва заметная ссылка/иконка — при нажатии открывается поповер с настройками.
-// Когда фильтры активны — рядом показывается краткая сводка.
+// === Фильтр списка чатов (макет варианта А — «поповер 2.0») ===
+// Компактный триггер со сводкой + бейджем скрытых; по клику — поповер (десктоп)
+// или мобильная шторка (через ui/Modal). Секции: поиск → статус → тип → персона → показать только.
+// Архив (чаты выполненных задач) прячется чипом «Готово» в секции «Статус» —
+// отдельного тумблера нет (одно из решений пользователя по макету).
 
-type ChatOriginFilter = Session['origin'];
-
-const ORIGIN_OPTIONS: { value: ChatOriginFilter; label: string }[] = [
+const STATUS_LABEL: Record<ChatStatusChip, string> = {
+  active: 'В работе', waiting: 'Ждёт меня', done: 'Готово', error: 'С ошибкой',
+};
+// Строчные имена для сводки на триггере
+const STATUS_SUMMARY: Record<ChatStatusChip, string> = {
+  active: 'в работе', waiting: 'ждут меня', done: 'готово', error: 'с ошибкой',
+};
+const STATUS_DOT: Record<ChatStatusChip, string> = {
+  active: C.accent, waiting: C.warning, done: C.textMuted, error: C.danger,
+};
+const ONLY_LABEL: Record<ChatOnlyFilter, string> = {
+  pinned: 'Закреплённые', temp: 'Временные', group: 'Групповые',
+};
+const ONLY_SUMMARY: Record<ChatOnlyFilter, string> = {
+  pinned: 'закреплённые', temp: 'временные', group: 'групповые',
+};
+const ONLY_ICON: Record<ChatOnlyFilter, typeof Pin> = {
+  pinned: Pin, temp: Clock, group: Users,
+};
+const ORIGIN_OPTIONS: { value: Session['origin']; label: string }[] = [
   { value: 'manual', label: 'Обычные' },
   { value: 'task', label: 'Задачи' },
   { value: 'automation', label: 'Автоматизация' },
 ];
-const ORIGIN_HIDDEN_LABEL: Record<ChatOriginFilter, string> = {
-  manual: 'обычных', task: 'задач', automation: 'автоматизации',
-};
-const ALL_ORIGINS_SET = new Set<ChatOriginFilter>(ALL_ORIGINS);
 
 interface FilterBarProps {
-  visibleOrigins: Set<ChatOriginFilter>;
-  onChangeVisibleOrigins: (v: Set<ChatOriginFilter>) => void;
-  activeOnly: boolean;
-  onChangeActiveOnly: (v: boolean) => void;
-  filterPersonaId: string | null;
-  onChangeFilterPersona: (id: string | null) => void;
-  personaIdsInList: string[];
+  // Полный список чатов области — для счётчиков на чипах
+  sessions: Session[];
+  filters: ChatFilters;
+  patch: (p: Partial<ChatFilters>) => void;
   allPersonas: Persona[];
+  // Сколько чатов скрыто текущими фильтрами (бейдж на триггере и футер)
   hiddenCount: number;
   isMobile?: boolean;
   // Режим вида списка «Плоский/Иерархия» — тумблер справа (не задан — без тумблера)
@@ -86,347 +104,402 @@ function ViewToggle({ view, onChange, isMobile }: {
   );
 }
 
-// === Pill-кнопка внутри сегмента ===
-function PillBtn({ active, label, onClick, isFirst, isLast }: {
+// === Чип мультивыбора ===
+function Chip({ active, children, onClick, large }: {
   active: boolean;
-  label: string;
+  children: ReactNode;
   onClick: () => void;
-  isFirst: boolean;
-  isLast: boolean;
+  large?: boolean;
 }) {
   return (
     <button
       onClick={onClick}
       style={{
-        padding: '4px 11px',
-        fontSize: 12.5,
-        fontWeight: 600,
-        fontFamily: FONT.sans,
-        border: 'none',
+        padding: large ? '7px 13px' : '4px 10px',
+        borderRadius: R.pill,
+        border: `1px solid ${active ? C.accent : C.borderLight}`,
         background: active ? C.accent : 'transparent',
         color: active ? C.onAccent : C.textSecondary,
-        cursor: 'pointer',
-        lineHeight: '24px',
-        borderTopLeftRadius: isFirst ? R.pill : 0,
-        borderBottomLeftRadius: isFirst ? R.pill : 0,
-        borderTopRightRadius: isLast ? R.pill : 0,
-        borderBottomRightRadius: isLast ? R.pill : 0,
-        borderRight: isLast ? 'none' : `1px solid ${C.borderLight}`,
-        transition: 'background 0.12s',
+        fontSize: large ? FS.base : FS.sm,
+        fontWeight: 600, fontFamily: FONT.sans, cursor: 'pointer',
+        display: 'inline-flex', alignItems: 'center', gap: SP.xs,
+        transition: 'background 0.12s, border-color 0.12s',
       }}
     >
-      {label}
+      {children}
     </button>
   );
 }
 
-// === Группа pill-переключателей (сегмент) ===
-function PillGroup<T extends string>({ options, value, onChange, label }: {
-  options: { value: T; label: string }[];
-  value: T;
-  onChange: (v: T) => void;
-  label: string;
-}) {
+// Маркер-точка статуса: на активном чипе — onAccent, иначе — цвет статуса
+function StatusDot({ chip, active }: { chip: ChatStatusChip; active: boolean }) {
   return (
-    <div style={{ marginBottom: 4 }}>
-      <div style={{
-        fontSize: 10.5, fontWeight: 700, color: C.textMuted,
-        textTransform: 'uppercase', letterSpacing: '0.06em',
-        marginBottom: 6, fontFamily: FONT.sans,
+    <span style={{
+      width: 6, height: 6, borderRadius: R.max, flexShrink: 0,
+      background: active ? C.onAccent : STATUS_DOT[chip],
+    }} />
+  );
+}
+
+function Count({ n }: { n: number }) {
+  return <span style={{ fontFamily: FONT.mono, fontSize: 10, opacity: 0.8 }}>{n}</span>;
+}
+
+function SectionTitle({ children, action }: { children: ReactNode; action?: ReactNode }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+      <span style={{
+        fontSize: FS.xs, fontWeight: 700, color: C.textMuted,
+        textTransform: 'uppercase', letterSpacing: '0.06em', fontFamily: FONT.sans,
       }}>
-        {label}
-      </div>
+        {children}
+      </span>
+      {action}
+    </div>
+  );
+}
+
+const linkBtnStyle: React.CSSProperties = {
+  border: 'none', background: 'none', padding: 0, cursor: 'pointer',
+  fontFamily: FONT.sans, fontSize: FS.xs, color: C.accent, fontWeight: 600,
+};
+
+const sectionStyle: React.CSSProperties = { marginBottom: SP.md };
+
+// === Содержимое фильтра (общее для поповера и мобильной шторки) ===
+function FilterContent({
+  sessions, filters, patch, allPersonas, large,
+}: {
+  sessions: Session[];
+  filters: ChatFilters;
+  patch: (p: Partial<ChatFilters>) => void;
+  allPersonas: Persona[];
+  large?: boolean;
+}) {
+  // Счётчики по чипам — из полного списка области
+  const counts = useMemo(() => {
+    const status: Record<ChatStatusChip, number> = { active: 0, waiting: 0, done: 0, error: 0 };
+    const origin: Record<Session['origin'], number> = { manual: 0, task: 0, automation: 0 };
+    const only: Record<ChatOnlyFilter, number> = { pinned: 0, temp: 0, group: 0 };
+    for (const s of sessions) {
+      status[chatStatusOf(s)]++;
+      origin[s.origin]++;
+      if (s.isPinned) only.pinned++;
+      if (s.expiresAfterMinutes != null) only.temp++;
+      if ((s.participants?.length ?? 0) > 1) only.group++;
+    }
+    return { status, origin, only };
+  }, [sessions]);
+
+  const personaIdsInList = useMemo(
+    () => [...new Set(sessions.filter(s => s.personaId).map(s => s.personaId!))],
+    [sessions],
+  );
+  const personasInChats = personaIdsInList
+    .map(id => allPersonas.find(p => p.id === id))
+    .filter((p): p is Persona => p !== undefined);
+
+  const toggle = <T extends string>(arr: T[], v: T): T[] =>
+    arr.includes(v) ? arr.filter(x => x !== v) : [...arr, v];
+
+  const q = filters.search;
+  const hiddenOrigins = ORIGIN_OPTIONS.filter(o => !filters.origins.includes(o.value));
+  const showPersona = personaIdsInList.length > 0;
+
+  return (
+    <>
+      {/* Поиск по названию */}
       <div style={{
-        display: 'flex',
-        borderRadius: R.pill,
-        border: `1px solid ${C.borderLight}`,
-        overflow: 'hidden',
+        display: 'flex', alignItems: 'center', gap: 7,
+        background: C.bgWhite, border: `1px solid ${C.border}`,
+        borderRadius: R.xl, padding: `0 ${SP.sm}`, marginBottom: SP.md,
       }}>
-        {options.map((o, i) => (
-          <PillBtn
-            key={o.value}
-            active={o.value === value}
-            label={o.label}
-            onClick={() => onChange(o.value)}
-            isFirst={i === 0}
-            isLast={i === options.length - 1}
-          />
-        ))}
+        <Search size={15} strokeWidth={2} style={{ color: C.textMuted, flexShrink: 0 }} />
+        <input
+          value={q}
+          onChange={e => patch({ search: e.target.value })}
+          placeholder="Поиск по названию…"
+          style={{
+            flex: 1, height: large ? 40 : 34, minWidth: 0,
+            border: 'none', outline: 'none', background: 'transparent',
+            fontFamily: FONT.sans, fontSize: FS.md, color: C.textHeading,
+          }}
+        />
+        {q && (
+          <button
+            onClick={() => patch({ search: '' })}
+            aria-label="Очистить поиск"
+            style={{
+              border: 'none', background: 'transparent', cursor: 'pointer',
+              color: C.textMuted, display: 'flex', padding: 2, flexShrink: 0,
+            }}
+          >
+            <X size={15} strokeWidth={2} />
+          </button>
+        )}
       </div>
+
+      {/* Статус */}
+      <div style={sectionStyle}>
+        <SectionTitle>Статус</SectionTitle>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs }}>
+          {ALL_STATUS_CHIPS.map(chip => {
+            const active = filters.statuses.includes(chip);
+            return (
+              <Chip key={chip} active={active} large={large}
+                onClick={() => {
+                  const next = toggle(filters.statuses, chip);
+                  // пустой набор статусов = «всё скрыто» — не даём, возвращаем дефолт
+                  patch({ statuses: next.length ? next : ['active', 'waiting', 'error'] });
+                }}
+              >
+                <StatusDot chip={chip} active={active} />
+                {STATUS_LABEL[chip]}
+                <Count n={counts.status[chip]} />
+              </Chip>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Тип */}
+      <div style={sectionStyle}>
+        <SectionTitle action={
+          hiddenOrigins.length > 0 && (
+            <button onClick={() => patch({ origins: [...ALL_ORIGINS] })} style={linkBtnStyle}>
+              Показать все
+            </button>
+          )
+        }>
+          Тип
+        </SectionTitle>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs }}>
+          {ORIGIN_OPTIONS.map(o => {
+            const active = filters.origins.includes(o.value);
+            return (
+              <Chip key={o.value} active={active} large={large}
+                onClick={() => {
+                  const next = toggle(filters.origins, o.value);
+                  patch({ origins: next.length ? next : [...ALL_ORIGINS] });
+                }}
+              >
+                {o.label}
+                <Count n={counts.origin[o.value]} />
+              </Chip>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Персона */}
+      {showPersona && (
+        <div style={sectionStyle}>
+          <SectionTitle>Персона</SectionTitle>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs }}>
+            <Chip active={!filters.personaId} large={large}
+              onClick={() => patch({ personaId: null })}
+            >
+              Все
+            </Chip>
+            {personasInChats.map(p => (
+              <Chip key={p.id} active={filters.personaId === p.id} large={large}
+                onClick={() => patch({ personaId: filters.personaId === p.id ? null : p.id })}
+              >
+                <PersonaAvatar persona={p} size={14} />
+                <span>{personaLabel(p)}</span>
+              </Chip>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Показать только */}
+      <div style={{ marginBottom: 0 }}>
+        <SectionTitle>Показать только</SectionTitle>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs }}>
+          {(Object.keys(ONLY_LABEL) as ChatOnlyFilter[]).map(o => {
+            const active = filters.only.includes(o);
+            const Icon = ONLY_ICON[o];
+            return (
+              <Chip key={o} active={active} large={large}
+                onClick={() => patch({ only: toggle(filters.only, o) })}
+              >
+                <Icon size={large ? 13 : 11} strokeWidth={2} style={{ flexShrink: 0 }} />
+                {ONLY_LABEL[o]}
+                <Count n={counts.only[o]} />
+              </Chip>
+            );
+          })}
+        </div>
+      </div>
+    </>
+  );
+}
+
+// Сводка активных фильтров человеческим языком (для триггера)
+function buildSummary(filters: ChatFilters, personaName: string | null): string {
+  const parts: string[] = [];
+  const q = filters.search.trim();
+  if (q) parts.push(`«${q}»`);
+  const liveSel = (['active', 'waiting', 'error'] as ChatStatusChip[]).filter(s => filters.statuses.includes(s));
+  if (liveSel.length < 3 && liveSel.length > 0) parts.push(liveSel.map(s => STATUS_SUMMARY[s]).join(', '));
+  if (!filters.statuses.includes('done')) parts.push('без готовых');
+  if (filters.only.length) parts.push(filters.only.map(o => ONLY_SUMMARY[o]).join(', '));
+  if (filters.personaId && personaName) parts.push(personaName);
+  return parts.join(' · ');
+}
+
+// Кнопки сброса для empty-state списка чатов (макет А, сцена 3): точечный сброс поиска
+// и полный сброс фильтров. Единое место, чтобы оба списка (проектный и глобальный)
+// рисовали их одинаково.
+export function ChatFilterResetActions({ search, hasNonSearchFilters, onResetSearch, onResetAll }: {
+  search: string;
+  hasNonSearchFilters: boolean;
+  onResetSearch: () => void;
+  onResetAll: () => void;
+}) {
+  const q = search.trim();
+  if (!q && !hasNonSearchFilters) return null;
+  return (
+    <div style={{ display: 'flex', gap: SP.sm, justifyContent: 'center' }}>
+      {q && (
+        <button onClick={onResetSearch} style={{
+          padding: '6px 14px', borderRadius: R.md, border: `1px solid ${C.border}`,
+          background: 'transparent', color: C.textSecondary,
+          fontSize: FS.sm, fontWeight: 600, fontFamily: FONT.sans, cursor: 'pointer',
+        }}>
+          Сбросить поиск
+        </button>
+      )}
+      {hasNonSearchFilters && (
+        <button onClick={onResetAll} style={{
+          padding: '6px 16px', borderRadius: R.md, border: 'none',
+          background: C.accent, color: C.onAccent,
+          fontSize: FS.sm, fontWeight: 600, fontFamily: FONT.sans, cursor: 'pointer',
+        }}>
+          Сбросить фильтры
+        </button>
+      )}
     </div>
   );
 }
 
 export function FilterBar({
-  visibleOrigins, onChangeVisibleOrigins,
-  activeOnly, onChangeActiveOnly,
-  filterPersonaId, onChangeFilterPersona,
-  personaIdsInList, allPersonas,
-  hiddenCount, isMobile,
+  sessions, filters, patch, allPersonas, hiddenCount, isMobile,
   view, onChangeView,
 }: FilterBarProps) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
-  // Закрытие по клику вне попапа
+  const selectedPersona = filters.personaId
+    ? allPersonas.find(p => p.id === filters.personaId) ?? null
+    : null;
+  const summary = buildSummary(filters, selectedPersona ? personaLabel(selectedPersona) : null);
+  const hasFilters = !isDefaultFilters(filters);
+  const resetAll = () => patch(defaultChatFilters());
+
+  // Закрытие десктоп-поповера по клику вне и по Esc (оба режима). Мобильная шторка
+  // закрывается сама через ui/Modal (overlay/Esc).
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node))
-        setOpen(false);
+      if (isMobile) return;
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
     };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
     document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
-  }, [open]);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open, isMobile]);
 
-  const toggleOrigin = (o: ChatOriginFilter) => {
-    const next = new Set(visibleOrigins);
-    if (next.has(o)) next.delete(o); else next.add(o);
-    onChangeVisibleOrigins(next);
-  };
+  const trigger = (
+    <div
+      onClick={() => setOpen(o => !o)}
+      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(o => !o); } }}
+      role="button"
+      tabIndex={0}
+      style={{
+        display: 'flex', alignItems: 'center', gap: SP.xs, minWidth: 0,
+        cursor: 'pointer', userSelect: 'none', padding: '2px 0',
+        color: hasFilters ? C.accent : C.textMuted,
+        fontSize: FS.sm, fontWeight: 600, fontFamily: FONT.sans,
+        transition: 'color 0.15s', opacity: hasFilters ? 1 : 0.5,
+      }}
+      title={hasFilters ? summary : 'Фильтры'}
+    >
+      <Filter size={12} strokeWidth={2.2} style={{ flexShrink: 0 }} />
+      <span style={{ marginLeft: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {hasFilters ? summary : 'Фильтр'}
+      </span>
+      {hiddenCount > 0 && (
+        <span style={{
+          fontSize: 10, fontWeight: 700, fontFamily: FONT.mono,
+          color: C.onAccent, background: C.accent,
+          padding: '0 5px', borderRadius: R.pill, lineHeight: '16px',
+          minWidth: 16, textAlign: 'center', flexShrink: 0,
+        }}>
+          {hiddenCount}
+        </span>
+      )}
+    </div>
+  );
 
-  // Скрытые типы — та часть, что реально отфильтровывает список
-  const hiddenOrigins = ORIGIN_OPTIONS.filter(o => !visibleOrigins.has(o.value));
-  const hasFilters = hiddenOrigins.length > 0 || activeOnly || filterPersonaId !== null;
-
-  // Сводка активных фильтров
-  const summaryParts: string[] = [];
-  if (hiddenOrigins.length) summaryParts.push('без ' + hiddenOrigins.map(o => ORIGIN_HIDDEN_LABEL[o.value]).join(', '));
-  if (activeOnly) summaryParts.push('активные');
-  const selectedPersona = filterPersonaId
-    ? allPersonas.find(p => p.id === filterPersonaId) ?? null
-    : null;
-  if (selectedPersona) summaryParts.push(personaLabel(selectedPersona));
-
-  const personasInChats = personaIdsInList
-    .map(id => allPersonas.find(p => p.id === id))
-    .filter((p): p is Persona => p !== undefined);
-
-  const showPersonaFilter = personaIdsInList.length > 0;
-
-  const popoverStyle: React.CSSProperties = isMobile
-    ? {
-        position: 'fixed',
-        top: 60, left: 12, right: 12,
-        maxHeight: 'calc(100vh - 80px)',
-        overflowY: 'auto',
-        background: C.bgWhite,
-        border: `1px solid ${C.border}`,
-        borderRadius: R.xl,
-        boxShadow: SHADOW.dropdown,
-        padding: 12,
-        zIndex: Z.dropdown,
-      }
-    : {
-        position: 'absolute',
-        top: 'calc(100% + 4px)',
-        left: 0,
-        minWidth: 280,
-        background: C.bgWhite,
-        border: `1px solid ${C.border}`,
-        borderRadius: R.xl,
-        boxShadow: SHADOW.dropdown,
-        padding: 12,
-        zIndex: Z.dropdown,
-      };
+  // Футер: счётчик скрытых + сброс + готово (общий вид для поповера и шторки)
+  const footerRow = (
+    <div style={{
+      display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: SP.sm,
+    }}>
+      <span style={{ fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.sans, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {hiddenCount > 0 ? `Скрыто ${hiddenCount}` : 'Все чаты показаны'}
+        {hasFilters && (
+          <button onClick={resetAll} style={{ ...linkBtnStyle, marginLeft: 6 }}>Сбросить всё</button>
+        )}
+      </span>
+      <button onClick={() => setOpen(false)} style={{
+        padding: '5px 14px', borderRadius: R.md, border: 'none',
+        background: C.accent, color: C.onAccent,
+        fontSize: FS.sm, fontWeight: 600, fontFamily: FONT.sans, cursor: 'pointer', flexShrink: 0,
+      }}>
+        Готово
+      </button>
+    </div>
+  );
 
   return (
     <div ref={rootRef} style={{ position: 'relative', flexShrink: 0 }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-        {/* Триггер — компактный, почти незаметный когда фильтры по умолчанию */}
-        <div
-          onClick={() => setOpen(o => !o)}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 4,
-            minWidth: 0,
-            cursor: 'pointer',
-            userSelect: 'none',
-            padding: '2px 0',
-            color: hasFilters ? C.accent : C.textMuted,
-            fontSize: 12,
-            fontWeight: 600,
-            fontFamily: FONT.sans,
-            transition: 'color 0.15s',
-            opacity: hasFilters ? 1 : 0.5,
-          }}
-          title={hasFilters ? summaryParts.join(', ') : 'Фильтры'}
-        >
-          <Filter size={12} strokeWidth={2.2} style={{ flexShrink: 0 }} />
-          <span style={{ marginLeft: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {hasFilters ? summaryParts.join(', ') : 'Фильтр'}
-          </span>
-          {hiddenCount > 0 && (
-            <span style={{
-              fontSize: 10, fontWeight: 700, fontFamily: FONT.mono,
-              color: C.onAccent, background: C.accent,
-              padding: '0 5px', borderRadius: R.pill, lineHeight: '16px',
-              minWidth: 16, textAlign: 'center', flexShrink: 0,
-            }}>
-              {hiddenCount}
-            </span>
-          )}
-        </div>
-
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: SP.sm }}>
+        {trigger}
         {view !== undefined && onChangeView && (
           <ViewToggle view={view} onChange={onChangeView} isMobile={isMobile} />
         )}
       </div>
 
-      {/* Поповер */}
-      {open && (
-        <div style={popoverStyle}>
-          <div style={{ marginBottom: 4 }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-              <div style={{
-                fontSize: 10.5, fontWeight: 700, color: C.textMuted,
-                textTransform: 'uppercase', letterSpacing: '0.06em', fontFamily: FONT.sans,
-              }}>
-                Тип
-              </div>
-              {hiddenOrigins.length > 0 && (
-                <button
-                  onClick={() => onChangeVisibleOrigins(new Set(ALL_ORIGINS_SET))}
-                  style={{
-                    border: 'none', background: 'none', padding: 0, cursor: 'pointer',
-                    fontFamily: FONT.sans, fontSize: 11, color: C.accent, fontWeight: 600,
-                  }}
-                >
-                  Показать все
-                </button>
-              )}
-            </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-              {ORIGIN_OPTIONS.map(o => {
-                const active = visibleOrigins.has(o.value);
-                return (
-                  <button
-                    key={o.value}
-                    onClick={() => toggleOrigin(o.value)}
-                    style={{
-                      padding: '4px 10px',
-                      borderRadius: R.pill,
-                      border: `1px solid ${C.borderLight}`,
-                      background: active ? C.accent : 'transparent',
-                      color: active ? C.onAccent : C.textSecondary,
-                      fontSize: 12,
-                      fontWeight: 600,
-                      fontFamily: FONT.sans,
-                      cursor: 'pointer',
-                      transition: 'background 0.12s',
-                    }}
-                  >
-                    {o.label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          <div style={{ height: 1, background: C.divider, margin: '10px 0' }} />
-
-          <PillGroup
-            label="Время"
-            options={[
-              { value: 'all' as const, label: 'Все' },
-              { value: 'active' as const, label: 'Последние 5 мин' },
-            ]}
-            value={activeOnly ? 'active' : 'all'}
-            onChange={v => onChangeActiveOnly(v === 'active')}
-          />
-
-          {showPersonaFilter && (
-            <>
-              <div style={{ height: 1, background: C.divider, margin: '10px 0' }} />
-              <div style={{ marginBottom: 4 }}>
-                <div style={{
-                  fontSize: 10.5, fontWeight: 700, color: C.textMuted,
-                  textTransform: 'uppercase', letterSpacing: '0.06em',
-                  marginBottom: 6, fontFamily: FONT.sans,
-                }}>
-                  Персона
-                </div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                  <button
-                    onClick={() => onChangeFilterPersona(null)}
-                    style={{
-                      padding: '4px 10px',
-                      borderRadius: R.pill,
-                      border: `1px solid ${C.borderLight}`,
-                      background: !filterPersonaId ? C.accent : 'transparent',
-                      color: !filterPersonaId ? C.onAccent : C.textSecondary,
-                      fontSize: 12,
-                      fontWeight: 600,
-                      fontFamily: FONT.sans,
-                      cursor: 'pointer',
-                      transition: 'background 0.12s',
-                    }}
-                  >
-                    Все
-                  </button>
-                  {personasInChats.map(p => (
-                    <button
-                      key={p.id}
-                      onClick={() => onChangeFilterPersona(
-                        filterPersonaId === p.id ? null : p.id
-                      )}
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 4,
-                        padding: '4px 10px',
-                        borderRadius: R.pill,
-                        border: `1px solid ${C.borderLight}`,
-                        background: filterPersonaId === p.id ? C.accent : 'transparent',
-                        color: filterPersonaId === p.id ? C.onAccent : C.textSecondary,
-                        fontSize: 12,
-                        fontWeight: 600,
-                        fontFamily: FONT.sans,
-                        cursor: 'pointer',
-                        transition: 'background 0.12s',
-                      }}
-                    >
-                      <PersonaAvatar persona={p} size={14} />
-                      <span>{personaLabel(p)}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </>
-          )}
-
+      {/* Десктоп: компактный поповер под триггером */}
+      {open && !isMobile && (
+        <div style={{
+          position: 'absolute', top: 'calc(100% + 4px)', left: 0,
+          width: 320, maxHeight: 478, overflowY: 'auto',
+          background: C.bgWhite, border: `1px solid ${C.border}`,
+          borderRadius: R.xl, boxShadow: SHADOW.dropdown,
+          padding: SP.md, zIndex: Z.dropdown,
+        }}>
+          <FilterContent sessions={sessions} filters={filters} patch={patch} allPersonas={allPersonas} />
           <div style={{
-            marginTop: 12,
-            paddingTop: 10,
-            borderTop: `1px solid ${C.divider}`,
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
+            marginTop: SP.xs, paddingTop: SP.sm, borderTop: `1px solid ${C.borderLight}`,
           }}>
-            <span style={{ fontSize: 11.5, color: C.textMuted, fontFamily: FONT.sans }}>
-              {hiddenCount > 0
-                ? `Скрыто ${hiddenCount} ${hiddenCount === 1 ? 'чат' : 'чатов'}`
-                : 'Все чаты показаны'}
-            </span>
-            <button
-              onClick={() => setOpen(false)}
-              style={{
-                padding: '5px 14px',
-                borderRadius: R.md,
-                border: 'none',
-                background: C.accent,
-                color: C.onAccent,
-                fontSize: 12.5,
-                fontWeight: 600,
-                fontFamily: FONT.sans,
-                cursor: 'pointer',
-              }}
-            >
-              Готово
-            </button>
+            {footerRow}
           </div>
         </div>
+      )}
+
+      {/* Мобайл: шторка через ui/Modal (единый bottom-sheet с overlay/Esc/safe-area) */}
+      {open && isMobile && (
+        <Modal title="Фильтры" onClose={() => setOpen(false)} footer={footerRow}>
+          <FilterContent sessions={sessions} filters={filters} patch={patch} allPersonas={allPersonas} large />
+        </Modal>
       )}
     </div>
   );

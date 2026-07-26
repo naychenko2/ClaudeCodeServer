@@ -1,0 +1,673 @@
+<!-- @dsCard group="Чаты" -->
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--
+ВАРИАНТ A: «Поповер 2.0» — эволюция текущего фильтра
+
+Что изменилось относительно текущего FilterBar:
+1. Поиск по названию — первое поле поповера.
+2. Вместо странного среза «Последние 5 мин» — срезы по статусу жизни чата:
+   «В работе» / «Ждут меня» / «С ошибкой» (мультивыбор).
+3. НОВОЕ: тумблер «Скрывать чаты выполненных задач» (архив задач) — включён
+   по умолчанию: список не зарастает отработавшими чатами-исполнителями.
+4. Секция «Показать только»: закреплённые / временные / групповые.
+5. Сводка на триггере человеческим языком + счётчик скрытых.
+6. Поповер разбит на короткие секции с предсказуемым порядком:
+   поиск → статус → тип → архив задач → персона → только…
+
+Состояние в макете: 9 чатов, из них 2 — чаты выполненных задач (архив).
+В сцене 2 выбраны статусы «В работе» и «Ждут меня» — видно активные чипы.
+-->
+<title>Фильтр чатов — Вариант A (поповер 2.0)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=PT+Serif:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+<style>
+/* === Токены = lib/theme.css (обе темы) === */
+:root {
+  --bg-main:      #F4F0E8;
+  --bg-panel:     #EDE7DC;
+  --bg-card:      #FBF8F2;
+  --bg-white:     #FFFFFF;
+  --bg-selected:  #E8E1D4;
+  --bg-inset:     #E7E0D2;
+  --heading:      #2A251F;
+  --primary:      #39332B;
+  --secondary:    #756B5E;
+  --muted:        #9A8F7E;
+  --on-accent:    #FBF8F2;
+  --accent:       #D97757;
+  --accent-light: #F4ECE1;
+  --accent-muted: #EAD3C5;
+  --border:       #E0D7C8;
+  --border-light: #E8E1D4;
+  --divider:      #DDD4C4;
+  --track:        #D8CFBE;
+  --overlay:      rgba(23, 19, 15, 0.42);
+  --success:      #5E8B4E;
+  --success-bg:   #E9F1E8;
+  --success-text: #3F7A4F;
+  --warning:      #C9923E;
+  --warning-bg:   #FBEFE0;
+  --warning-text: #8A6A28;
+  --danger:       #B4452F;
+  --danger-bg:    #FBF1EC;
+  --danger-text:  #B4452F;
+  --info:         #3E7CA6;
+  --info-bg:      #E7EFF5;
+  --shadow-card:     0 2px 8px rgba(60, 50, 35, 0.05);
+  --shadow-dropdown: 0 8px 28px rgba(60, 50, 35, 0.16);
+  --shadow-modal:    0 24px 60px rgba(23, 19, 15, 0.40);
+  --shadow-sheet:    0 -8px 40px rgba(23, 19, 15, 0.22);
+  --shadow-thumb:    0 1px 3px rgba(42, 37, 31, 0.12);
+  --shadow-focus:    0 0 0 3px rgba(217, 119, 87, 0.14);
+  --sans: 'Hanken Grotesk', -apple-system, 'Segoe UI', sans-serif;
+  --serif: 'PT Serif', Georgia, serif;
+  --mono: 'JetBrains Mono', 'Courier New', monospace;
+}
+[data-theme="dark"] {
+  --bg-main:      #201C18;
+  --bg-panel:     #272320;
+  --bg-card:      #2E2A25;
+  --bg-white:     #2E2A25;
+  --bg-selected:  #38332D;
+  --bg-inset:     #1B1815;
+  --heading:      #F2ECE1;
+  --primary:      #EDE6DB;
+  --secondary:    #B3A897;
+  --muted:        #8A8072;
+  --on-accent:    #201C18;
+  --accent:       #E38A6A;
+  --accent-light: #3A2E27;
+  --accent-muted: #4A362C;
+  --border:       #3D3830;
+  --border-light: #34302A;
+  --divider:      #454037;
+  --track:        #453F37;
+  --overlay:      rgba(0, 0, 0, 0.62);
+  --success:      #7CB86A;
+  --success-bg:   #232E20;
+  --success-text: #8FCB79;
+  --warning:      #E0AC5A;
+  --warning-bg:   #322717;
+  --warning-text: #E7B96E;
+  --danger:       #E8785E;
+  --danger-bg:    #331F1B;
+  --danger-text:  #EE8A72;
+  --info:         #5FA0CC;
+  --info-bg:      #1E2A33;
+  --shadow-card:     0 2px 10px rgba(0, 0, 0, 0.35);
+  --shadow-dropdown: 0 10px 32px rgba(0, 0, 0, 0.55);
+  --shadow-modal:    0 28px 70px rgba(0, 0, 0, 0.65);
+  --shadow-sheet:    0 -10px 46px rgba(0, 0, 0, 0.55);
+  --shadow-thumb:    0 1px 3px rgba(0, 0, 0, 0.45);
+  --shadow-focus:    0 0 0 3px rgba(227, 138, 106, 0.24);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: var(--bg-main);
+  font-family: var(--sans);
+  color: var(--primary);
+  min-height: 100vh;
+  padding: 56px 24px 48px;
+}
+
+/* === Прото-панель === */
+.proto-bar {
+  position: fixed; top: 0; left: 0; right: 0; height: 36px;
+  background: #1a1612; display: flex; align-items: center;
+  justify-content: space-between; padding: 0 16px; z-index: 1000;
+  border-bottom: 1px solid #2a2520;
+}
+.proto-bar .variant { font-family: var(--mono); font-size: 11px; font-weight: 600; color: #bfb8ae; letter-spacing: 0.05em; }
+.proto-bar .theme-toggle {
+  background: #2a2520; border: 1px solid #3d3830; border-radius: 6px;
+  padding: 4px 10px; font-family: var(--sans); font-size: 11px; font-weight: 600;
+  color: #d8cfc0; cursor: pointer;
+}
+.proto-bar .theme-toggle:hover { background: #3d3830; color: #fff; }
+
+/* === Сцены === */
+.intro { max-width: 1180px; margin: 0 auto 20px; }
+.intro h1 { font-family: var(--serif); font-size: 22px; color: var(--heading); margin-bottom: 6px; }
+.intro p { font-size: 13px; color: var(--secondary); line-height: 1.55; max-width: 760px; }
+.intro b { color: var(--heading); }
+.scenes { display: flex; flex-wrap: wrap; gap: 28px; align-items: flex-start; max-width: 1180px; margin: 0 auto; }
+.scene { display: flex; flex-direction: column; gap: 8px; }
+.scene-label { font-family: var(--mono); font-size: 11px; font-weight: 600; color: var(--muted); letter-spacing: 0.04em; text-transform: uppercase; }
+.scene-note { font-size: 11.5px; color: var(--muted); line-height: 1.5; max-width: 340px; }
+
+/* === Панель списка чатов (колонка сайдбара) === */
+.panel {
+  width: 340px; height: 560px; background: var(--bg-panel);
+  border: 1px solid var(--border-light); border-radius: 14px;
+  box-shadow: var(--shadow-card);
+  display: flex; flex-direction: column; overflow: hidden;
+  position: relative;
+}
+.panel-head {
+  padding: 12px 14px 8px; display: flex; align-items: center;
+  justify-content: space-between; flex-shrink: 0;
+}
+.panel-head .title { font-family: var(--serif); font-size: 18px; font-weight: 700; color: var(--heading); }
+.panel-head .icons { display: flex; gap: 4px; }
+.icon-btn {
+  width: 32px; height: 32px; border: none; background: transparent; border-radius: 8px;
+  display: flex; align-items: center; justify-content: center; cursor: pointer;
+  color: var(--muted);
+}
+.icon-btn:hover { background: var(--bg-selected); color: var(--primary); }
+
+/* --- Триггер фильтра (как сейчас: ссылка-иконка со сводкой) --- */
+.filter-strip {
+  padding: 2px 14px 10px; display: flex; align-items: center;
+  justify-content: space-between; gap: 8px; flex-shrink: 0;
+}
+.filter-trigger {
+  display: flex; align-items: center; gap: 5px; min-width: 0;
+  cursor: pointer; user-select: none; font-size: 12px; font-weight: 600;
+  color: var(--accent);
+}
+.filter-trigger.neutral { color: var(--muted); opacity: .65; }
+.filter-trigger .sum { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.filter-count {
+  font-size: 10px; font-weight: 700; font-family: var(--mono);
+  color: var(--on-accent); background: var(--accent);
+  padding: 0 5px; border-radius: 999px; line-height: 16px;
+  min-width: 16px; text-align: center; flex-shrink: 0;
+}
+.view-toggle {
+  display: flex; flex-shrink: 0; padding: 2px;
+  background: var(--bg-selected); border-radius: 9px;
+}
+.view-toggle button {
+  display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px;
+  font-size: 12px; font-weight: 600; font-family: var(--sans);
+  border: none; cursor: pointer; border-radius: 7px;
+  background: transparent; color: var(--muted);
+}
+.view-toggle button.on {
+  background: var(--bg-white); box-shadow: var(--shadow-thumb); color: var(--heading);
+}
+
+/* --- Список чатов --- */
+.chat-list { flex: 1; overflow: hidden; padding: 0 8px 10px; display: flex; flex-direction: column; gap: 1px; }
+.chat-row {
+  display: flex; align-items: center; gap: 10px; padding: 8px 8px;
+  border-radius: 10px; cursor: pointer;
+}
+.chat-row:hover { background: var(--bg-selected); }
+.chat-row .ava {
+  width: 34px; height: 34px; border-radius: 50%; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 700; color: #FFFFFF; position: relative;
+}
+.chat-row .ava.neutral { background: var(--bg-selected); color: var(--secondary); }
+.chat-row .ava.stack { background: var(--accent-muted); color: var(--heading); font-size: 11px; }
+.chat-row .body { flex: 1; min-width: 0; }
+.chat-row .name {
+  font-size: 13px; font-weight: 600; color: var(--heading);
+  display: flex; align-items: center; gap: 5px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.chat-row .name svg { flex-shrink: 0; color: var(--muted); }
+.chat-row .preview {
+  font-size: 12px; color: var(--secondary); margin-top: 1px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.chat-row .meta { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; flex-shrink: 0; }
+.chat-row .time { font-size: 11px; color: var(--muted); }
+.st { font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: 999px; line-height: 15px; }
+.st.working  { background: var(--accent-light); color: var(--accent); }
+.st.waiting  { background: var(--warning-bg); color: var(--warning-text); }
+.st.error    { background: var(--danger-bg); color: var(--danger-text); }
+.st.done     { background: var(--bg-selected); color: var(--muted); }
+.kind { font-size: 10px; font-weight: 600; color: var(--muted); display: inline-flex; align-items: center; gap: 3px; }
+
+/* --- Поповер фильтра (десктоп) --- */
+.popover {
+  position: absolute; top: 74px; left: 10px; width: 320px;
+  background: var(--bg-white); border: 1px solid var(--border);
+  border-radius: 12px; box-shadow: var(--shadow-dropdown);
+  padding: 12px; z-index: 50;
+  max-height: 478px; overflow-y: auto;
+}
+.search-box {
+  display: flex; align-items: center; gap: 7px;
+  background: var(--bg-white); border: 1px solid var(--border);
+  border-radius: 12px; padding: 0 10px; margin-bottom: 12px;
+}
+.search-box:focus-within { border-color: var(--accent); box-shadow: var(--shadow-focus); }
+.search-box svg { color: var(--muted); flex-shrink: 0; }
+.search-box input {
+  border: none; outline: none; background: transparent; flex: 1;
+  font-family: var(--sans); font-size: 14px; color: var(--heading);
+  height: 34px;
+}
+.search-box input::placeholder { color: var(--muted); }
+.sec { margin-bottom: 12px; }
+.sec-head {
+  display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;
+}
+.sec-title {
+  font-size: 10.5px; font-weight: 700; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.06em;
+}
+.sec-action { border: none; background: none; padding: 0; cursor: pointer; font-family: var(--sans); font-size: 11px; color: var(--accent); font-weight: 600; }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.chip {
+  padding: 4px 10px; border-radius: 9px; border: 1px solid var(--border-light);
+  background: transparent; color: var(--secondary);
+  font-size: 12px; font-weight: 600; font-family: var(--sans);
+  cursor: pointer; display: inline-flex; align-items: center; gap: 4px;
+}
+.chip:hover { border-color: var(--border); }
+.chip.on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.chip .dot { width: 6px; height: 6px; border-radius: 50%; }
+.chip .cnt { font-family: var(--mono); font-size: 10px; opacity: .75; }
+.hr { height: 1px; background: var(--border-light); margin: 12px -12px; }
+
+/* Тумблер-строка (архив задач) */
+.toggle-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 8px 10px; border-radius: 10px;
+  background: var(--accent-light); border: 1px solid var(--accent-muted);
+}
+.toggle-row .txt { min-width: 0; }
+.toggle-row .t { font-size: 12.5px; font-weight: 600; color: var(--heading); }
+.toggle-row .d { font-size: 11px; color: var(--secondary); margin-top: 1px; }
+.switch {
+  width: 36px; height: 22px; border-radius: 999px; border: none; cursor: pointer;
+  background: var(--accent); position: relative; flex-shrink: 0;
+  transition: background .15s;
+}
+.switch::after {
+  content: ''; position: absolute; top: 3px; left: 17px;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: var(--bg-white); box-shadow: var(--shadow-thumb);
+  transition: left .15s;
+}
+.switch.off { background: var(--track); }
+.switch.off::after { left: 3px; }
+
+/* Футер поповера/шторки */
+.pop-foot {
+  margin-top: 4px; padding-top: 10px; border-top: 1px solid var(--border-light);
+  display: flex; justify-content: space-between; align-items: center; gap: 8px;
+}
+.pop-foot .hidden-n { font-size: 11.5px; color: var(--muted); }
+.pop-foot .hidden-n b { color: var(--secondary); }
+.btn-reset { border: none; background: none; padding: 0; cursor: pointer; font-family: var(--sans); font-size: 11.5px; color: var(--accent); font-weight: 600; }
+.btn-primary {
+  padding: 6px 16px; border-radius: 8px; border: none;
+  background: var(--accent); color: var(--on-accent);
+  font-size: 12.5px; font-weight: 600; font-family: var(--sans); cursor: pointer;
+}
+
+/* --- Empty state --- */
+.empty {
+  flex: 1; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; padding: 24px; text-align: center; gap: 4px;
+}
+.empty .eicon {
+  width: 44px; height: 44px; border-radius: 50%;
+  background: var(--bg-selected); color: var(--muted);
+  display: flex; align-items: center; justify-content: center; margin-bottom: 8px;
+}
+.empty .et { font-family: var(--serif); font-size: 16px; font-weight: 700; color: var(--heading); }
+.empty .ed { font-size: 12.5px; color: var(--secondary); line-height: 1.5; max-width: 240px; }
+.empty .ebtns { display: flex; gap: 8px; margin-top: 14px; }
+.btn-ghost {
+  padding: 6px 14px; border-radius: 8px; border: 1px solid var(--border);
+  background: transparent; color: var(--secondary);
+  font-size: 12.5px; font-weight: 600; font-family: var(--sans); cursor: pointer;
+}
+
+/* --- Мобильный фрейм + шторка --- */
+.phone {
+  width: 375px; height: 640px; border-radius: 28px; overflow: hidden;
+  border: 1px solid var(--border); box-shadow: var(--shadow-modal);
+  background: var(--bg-panel); position: relative;
+  display: flex; flex-direction: column;
+}
+.phone .panel { width: 100%; height: 100%; border: none; border-radius: 0; box-shadow: none; }
+.sheet-overlay {
+  position: absolute; inset: 0; background: var(--overlay); z-index: 60;
+}
+.sheet {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 70;
+  background: var(--bg-white);
+  border-radius: 22px 22px 0 0; box-shadow: var(--shadow-sheet);
+  padding: 8px 16px 16px; max-height: 78%;
+  display: flex; flex-direction: column;
+}
+.sheet .grab { width: 36px; height: 4px; border-radius: 999px; background: var(--border); margin: 2px auto 10px; flex-shrink: 0; }
+.sheet-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 10px; flex-shrink: 0;
+}
+.sheet-head .st-title { font-family: var(--serif); font-size: 18px; font-weight: 700; color: var(--heading); }
+.sheet-body { overflow-y: auto; }
+.sheet .chip { padding: 7px 13px; font-size: 13px; } /* tap-зоны крупнее */
+.sheet .search-box input { height: 40px; }
+.sheet-foot {
+  padding-top: 12px; margin-top: 8px; border-top: 1px solid var(--border-light);
+  display: flex; align-items: center; gap: 10px; flex-shrink: 0;
+}
+.sheet-foot .btn-primary { flex: 1; height: 42px; font-size: 14px; border-radius: 12px; }
+.sheet-foot .hidden-n { font-size: 11.5px; color: var(--muted); text-align: left; line-height: 1.35; }
+.sheet-foot .btn-reset { display: block; margin-top: 2px; }
+</style>
+</head>
+<body>
+
+<div class="proto-bar">
+  <span class="variant">ФИЛЬТР ЧАТОВ · ВАРИАНТ A · поповер 2.0</span>
+  <button class="theme-toggle" onclick="const h=document.documentElement;h.dataset.theme=h.dataset.theme==='light'?'dark':'light'">Тема: светлая/тёмная</button>
+</div>
+
+<div class="intro">
+  <h1>Вариант A — эволюция текущего поповера</h1>
+  <p>Тот же компактный триггер «Фильтр» над списком, но поповер пересобран: <b>поиск</b>, срезы по статусу (<b>В работе / Ждут меня / С ошибкой</b>) вместо «последних 5 минут», новый тумблер <b>«Скрывать чаты выполненных задач»</b> (включён по умолчанию — это и есть «архив задач»), секция «Показать только» и честный футер со счётчиком скрытых. Минимальный дифф от текущей реализации — меняется только содержимое поповера.</p>
+</div>
+
+<div class="scenes">
+
+  <!-- Сцена 1: закрытый фильтр, дефолт (архив скрыт) -->
+  <div class="scene">
+    <span class="scene-label">1 · Закрыто — дефолт: архив задач скрыт</span>
+    <div class="panel">
+      <div class="panel-head">
+        <span class="title">Чаты</span>
+        <div class="icons">
+          <button class="icon-btn" title="Новый чат"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
+        </div>
+      </div>
+      <div class="filter-strip">
+        <div class="filter-trigger">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+          <span class="sum">без архива задач</span>
+          <span class="filter-count">2</span>
+        </div>
+        <div class="view-toggle">
+          <button class="on"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01"/></svg>Плоский</button>
+          <button><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M21 12h-8M21 6H8M21 18h-8M3 6v12l4-6z"/></svg>Иерархия</button>
+        </div>
+      </div>
+      <div class="chat-list">
+        <div class="chat-row">
+          <div class="ava neutral"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></div>
+          <div class="body">
+            <div class="name"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M12 17v5M9 10V4h6v6l3.5 7h-13z"/></svg>AI Home — общие вопросы</div>
+            <div class="preview">Посмотри, как резолвится модель по умолчанию…</div>
+          </div>
+          <div class="meta"><span class="time">14:02</span></div>
+        </div>
+        <div class="chat-row">
+          <div class="ava" style="background:#C2693B">М</div>
+          <div class="body">
+            <div class="name">Переработать фильтр чатов</div>
+            <div class="preview">Три варианта макетов, поповер перегружен…</div>
+          </div>
+          <div class="meta"><span class="time">13:47</span><span class="st working">В работе</span></div>
+        </div>
+        <div class="chat-row">
+          <div class="ava neutral"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></div>
+          <div class="body">
+            <div class="name">Моки экрана «Поставщики моделей»</div>
+            <div class="preview">Смотри макет: три слота и таблица назначений…</div>
+          </div>
+          <div class="meta"><span class="time">12:20</span><span class="st waiting">Ждёт меня</span></div>
+        </div>
+        <div class="chat-row">
+          <div class="ava neutral"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></div>
+          <div class="body">
+            <div class="name">Следить за релизами</div>
+            <div class="preview">Правило: каждый понедельник в 10:00…</div>
+          </div>
+          <div class="meta"><span class="time">10:00</span><span class="kind"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>авто</span></div>
+        </div>
+        <div class="chat-row">
+          <div class="ava stack">3×</div>
+          <div class="body">
+            <div class="name">Совет: Майя, Кира, Денис</div>
+            <div class="preview">Кира: возьму токены из theme.css…</div>
+          </div>
+          <div class="meta"><span class="time">09:31</span><span class="st waiting">Ждёт меня</span></div>
+        </div>
+        <div class="chat-row">
+          <div class="ava neutral"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div>
+          <div class="body">
+            <div class="name"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Быстрый вопрос про git</div>
+            <div class="preview">Временный чат · удалится через 20 ч…</div>
+          </div>
+          <div class="meta"><span class="time">вчера</span></div>
+        </div>
+        <div class="chat-row">
+          <div class="ava neutral"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></div>
+          <div class="body">
+            <div class="name">Ночной дайджест проекта</div>
+            <div class="preview">За сутки: 4 коммита, 2 задачи закрыты…</div>
+          </div>
+          <div class="meta"><span class="time">вчера</span><span class="kind"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>авто</span></div>
+        </div>
+      </div>
+    </div>
+    <span class="scene-note">Тумблер «скрывать архив» включён по умолчанию — 2 чата выполненных задач не мешают. Сводка говорит об этом честно: «без архива задач · 2».</span>
+  </div>
+
+  <!-- Сцена 2: открытый поповер -->
+  <div class="scene">
+    <span class="scene-label">2 · Открытый поповер — весь набор фильтров</span>
+    <div class="panel">
+      <div class="panel-head">
+        <span class="title">Чаты</span>
+        <div class="icons">
+          <button class="icon-btn"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
+        </div>
+      </div>
+      <div class="filter-strip">
+        <div class="filter-trigger">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+          <span class="sum">в работе, ждут меня · без архива задач</span>
+          <span class="filter-count">6</span>
+        </div>
+      </div>
+      <div class="popover">
+        <div class="search-box">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          <input placeholder="Поиск по названию…">
+        </div>
+
+        <div class="sec">
+          <div class="sec-head"><span class="sec-title">Статус</span></div>
+          <div class="chips">
+            <button class="chip on"><span class="dot" style="background:currentColor"></span>В работе <span class="cnt">1</span></button>
+            <button class="chip on"><span class="dot" style="background:currentColor"></span>Ждут меня <span class="cnt">2</span></button>
+            <button class="chip"><span class="dot" style="background:var(--danger)"></span>С ошибкой</button>
+          </div>
+        </div>
+
+        <div class="hr"></div>
+
+        <div class="sec">
+          <div class="sec-head"><span class="sec-title">Тип</span><button class="sec-action">Все</button></div>
+          <div class="chips">
+            <button class="chip on">Обычные</button>
+            <button class="chip on">Задачи</button>
+            <button class="chip on">Автоматизация</button>
+          </div>
+        </div>
+
+        <div class="hr"></div>
+
+        <div class="sec">
+          <div class="toggle-row">
+            <div class="txt">
+              <div class="t">Скрывать чаты выполненных задач</div>
+              <div class="d">Сейчас скрыто: 2 чата · найдёте их в архиве</div>
+            </div>
+            <button class="switch" aria-label="Скрывать чаты выполненных задач" aria-checked="true"></button>
+          </div>
+        </div>
+
+        <div class="sec">
+          <div class="sec-head"><span class="sec-title">Персона</span></div>
+          <div class="chips">
+            <button class="chip on">Все</button>
+            <button class="chip"><span style="width:14px;height:14px;border-radius:50%;background:#C2693B;color:#fff;font-size:9px;display:inline-flex;align-items:center;justify-content:center;font-weight:700">М</span>Майя</button>
+            <button class="chip"><span style="width:14px;height:14px;border-radius:50%;background:#3E7CA6;color:#fff;font-size:9px;display:inline-flex;align-items:center;justify-content:center;font-weight:700">К</span>Кира</button>
+            <button class="chip"><span style="width:14px;height:14px;border-radius:50%;background:#3F7A4F;color:#fff;font-size:9px;display:inline-flex;align-items:center;justify-content:center;font-weight:700">Д</span>Денис</button>
+          </div>
+        </div>
+
+        <div class="hr"></div>
+
+        <div class="sec" style="margin-bottom:0">
+          <div class="sec-head"><span class="sec-title">Показать только</span></div>
+          <div class="chips">
+            <button class="chip"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 17v5M9 10V4h6v6l3.5 7h-13z"/></svg>Закреплённые</button>
+            <button class="chip"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Временные</button>
+            <button class="chip"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M17 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2"/><circle cx="10" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>Групповые</button>
+          </div>
+        </div>
+
+        <div class="pop-foot">
+          <span class="hidden-n">Скрыто <b>6</b> чатов · <button class="btn-reset">Сбросить всё</button></span>
+          <button class="btn-primary">Готово</button>
+        </div>
+      </div>
+      <div class="chat-list" style="opacity:.45">
+        <div class="chat-row"><div class="ava" style="background:#C2693B">М</div><div class="body"><div class="name">Переработать фильтр чатов</div><div class="preview">Три варианта макетов…</div></div><div class="meta"><span class="time">13:47</span></div></div>
+        <div class="chat-row"><div class="ava neutral"></div><div class="body"><div class="name">Моки экрана «Поставщики моделей»</div><div class="preview">Смотри макет…</div></div><div class="meta"><span class="time">12:20</span></div></div>
+        <div class="chat-row"><div class="ava stack">3×</div><div class="body"><div class="name">Совет: Майя, Кира, Денис</div><div class="preview">Кира: возьму токены…</div></div><div class="meta"><span class="time">09:31</span></div></div>
+      </div>
+    </div>
+    <span class="scene-note">Выбраны «В работе» + «Ждут меня» — активные чипы accent. Тумблер архива подсвечен: видно, что он включён и что именно скрыто. Счётчики на чипах подсказывают, сколько чатов за срезом.</span>
+  </div>
+
+  <!-- Сцена 3: empty state -->
+  <div class="scene">
+    <span class="scene-label">3 · Все чаты скрыты фильтрами</span>
+    <div class="panel">
+      <div class="panel-head">
+        <span class="title">Чаты</span>
+        <div class="icons"><button class="icon-btn"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button></div>
+      </div>
+      <div class="filter-strip">
+        <div class="filter-trigger">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+          <span class="sum">«некрон» · без архива задач</span>
+          <span class="filter-count">9</span>
+        </div>
+      </div>
+      <div class="empty">
+        <div class="eicon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/><path d="m16 8-8 8M8 8l8 8"/></svg></div>
+        <div class="et">Ничего не нашлось</div>
+        <div class="ed">Все 9 чатов скрыты фильтрами и поиском «некрон». Ослабьте условия или сбросьте их целиком.</div>
+        <div class="ebtns">
+          <button class="btn-ghost">Сбросить поиск</button>
+          <button class="btn-primary">Сбросить фильтры</button>
+        </div>
+      </div>
+    </div>
+    <span class="scene-note">Empty state объясняет причину (фильтры + поиск) и даёт два выхода: точечный и полный сброс.</span>
+  </div>
+
+  <!-- Сцена 4: мобильная шторка -->
+  <div class="scene">
+    <span class="scene-label">4 · Мобильная — фильтр шторкой</span>
+    <div class="phone">
+      <div class="panel">
+        <div class="panel-head">
+          <span class="title">Чаты</span>
+          <div class="icons"><button class="icon-btn"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button></div>
+        </div>
+        <div class="filter-strip">
+          <div class="filter-trigger">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+            <span class="sum">без архива задач</span>
+            <span class="filter-count">2</span>
+          </div>
+          <div class="view-toggle">
+            <button class="on" title="Плоский"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01"/></svg></button>
+            <button title="Иерархия"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M21 12h-8M21 6H8M21 18h-8M3 6v12l4-6z"/></svg></button>
+          </div>
+        </div>
+        <div class="chat-list" style="opacity:.4">
+          <div class="chat-row"><div class="ava neutral"></div><div class="body"><div class="name">AI Home — общие вопросы</div><div class="preview">Посмотри, как резолвится…</div></div><div class="meta"><span class="time">14:02</span></div></div>
+          <div class="chat-row"><div class="ava" style="background:#C2693B">М</div><div class="body"><div class="name">Переработать фильтр чатов</div><div class="preview">Три варианта макетов…</div></div><div class="meta"><span class="time">13:47</span></div></div>
+          <div class="chat-row"><div class="ava neutral"></div><div class="body"><div class="name">Моки экрана «Поставщики моделей»</div><div class="preview">Смотри макет…</div></div><div class="meta"><span class="time">12:20</span></div></div>
+        </div>
+      </div>
+      <div class="sheet-overlay"></div>
+      <div class="sheet">
+        <div class="grab"></div>
+        <div class="sheet-head">
+          <span class="st-title">Фильтры</span>
+          <button class="btn-reset">Сбросить всё</button>
+        </div>
+        <div class="sheet-body">
+          <div class="search-box">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+            <input placeholder="Поиск по названию…">
+          </div>
+          <div class="sec">
+            <div class="sec-head"><span class="sec-title">Статус</span></div>
+            <div class="chips">
+              <button class="chip">В работе</button>
+              <button class="chip">Ждут меня</button>
+              <button class="chip">С ошибкой</button>
+            </div>
+          </div>
+          <div class="sec">
+            <div class="sec-head"><span class="sec-title">Тип</span></div>
+            <div class="chips">
+              <button class="chip on">Обычные</button>
+              <button class="chip on">Задачи</button>
+              <button class="chip on">Автоматизация</button>
+            </div>
+          </div>
+          <div class="sec">
+            <div class="toggle-row">
+              <div class="txt">
+                <div class="t">Скрывать чаты выполненных задач</div>
+                <div class="d">Скрыто: 2 чата</div>
+              </div>
+              <button class="switch"></button>
+            </div>
+          </div>
+          <div class="sec">
+            <div class="sec-head"><span class="sec-title">Персона</span></div>
+            <div class="chips">
+              <button class="chip on">Все</button>
+              <button class="chip">Майя</button>
+              <button class="chip">Кира</button>
+              <button class="chip">Денис</button>
+            </div>
+          </div>
+          <div class="sec" style="margin-bottom:0">
+            <div class="sec-head"><span class="sec-title">Показать только</span></div>
+            <div class="chips">
+              <button class="chip">Закреплённые</button>
+              <button class="chip">Временные</button>
+              <button class="chip">Групповые</button>
+            </div>
+          </div>
+        </div>
+        <div class="sheet-foot">
+          <div class="hidden-n">Скрыто <b>2</b> чата<br>фильтрами</div>
+          <button class="btn-primary">Готово</button>
+        </div>
+      </div>
+    </div>
+    <span class="scene-note">На мобиле — не поповер, а шторка: крупные tap-зоны (чипы 34px, поле 40px), «Готово» на всю ширину футера.</span>
+  </div>
+
+</div>
+
+</body>
+</html>

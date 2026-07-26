@@ -293,6 +293,10 @@ export interface Session {
   parentSessionId?: string | null;
   // Тип происхождения чата — производный от taskId/automationRuleId на бэке
   origin: 'manual' | 'task' | 'automation';
+  // Признак «Готово» для фильтра чатов: у чата есть taskId и связанная задача в статусе Done.
+  // Пробрасывается бэком в Session/HomeSessionDto; в потоковые session_started/status_changed
+  // НЕ кладётся — обновляй по событию task_changed (приходит полный Task со status)
+  taskDone?: boolean;
 }
 
 // Строка сводки дашборда «Домой» (GET /api/home/summary): сессия + имя проекта

@@ -80,10 +80,11 @@ public class UsageController(UsageService usage, ClaudeSubscriptionPool? subscri
                     {
                         RouteKind.Local => LocalActionOverridesStore.LocalRoute,
                         RouteKind.Claude => LocalActionOverridesStore.ClaudeRoute,
-                        RouteKind.Default => LocalActionOverridesStore.DefaultRoute,
+                        RouteKind.Tier => LocalActionOverridesStore.TierRoute(route.Tier ?? ModelTier.Medium),
                         _ => route.Model ?? LocalActionOverridesStore.ClaudeRoute,
                     },
-                    RequiresStrong: !a.DefaultLocal);
+                    RequiresStrong: !a.DefaultLocal,
+                    Agentic: a.Agentic);
             })
             .ToList();
         return new OllamaUsageInfo(ollama.Enabled, ollama.Enabled ? ollama.TextModel : null,

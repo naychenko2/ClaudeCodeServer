@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, type ReactNode } from 'react';
 import { ChevronDown, Check, ArrowRightLeft } from 'lucide-react';
-import { C, R, FONT, SHADOW, Z } from '../lib/design';
+import { C, R, FONT, SHADOW, SP, Z } from '../lib/design';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 
 // Общая механика выпадающих меню полосы контролов композера (модель, усилие) —
@@ -23,6 +23,9 @@ export interface ComposerMenuGroup {
   key: string;
   label?: string;      // заголовок группы; не задан — группа без шапки
   note?: string;       // пояснение под шапкой (напр. предупреждение о переносе чата)
+  // Отчеркнуть группу снизу: нужно группе-одиночке вне остальных (пункт «По умолчанию»
+  // над провайдерами) — при скрытых заголовках она иначе сливается со следующим списком
+  divider?: boolean;
   items: ComposerMenuItem[];
 }
 
@@ -112,7 +115,10 @@ export function ComposerMenu({
           boxShadow: SHADOW.dropdown, padding: 5, zIndex: Z.dropdown,
         }}>
           {children ? children(() => setOpen(false)) : groups.map(g => (
-            <div key={g.key}>
+            <div key={g.key} style={g.divider ? {
+              paddingBottom: SP.xs, marginBottom: SP.xs,
+              borderBottom: `1px solid ${C.borderLight}`,
+            } : undefined}>
               {g.label && (
                 <div style={{
                   fontFamily: FONT.sans, fontSize: 11, fontWeight: 700, color: C.textMuted,

@@ -228,10 +228,13 @@ export interface AppSettings {
   claudeBilling?: ClaudeBilling;
   // Присылать ли утренний бриф по расписанию (настройка инстанса, тумблер в «Фоновых задачах»)
   dailyBriefingEnabled?: boolean;
-  // Модель по умолчанию для новых чатов (id модели любого провайдера, напр. «claude-sonnet-5»).
-  // PATCH /api/settings: поле отсутствует = не трогать, "" = сознательный сброс к дефолту CLI.
-  // Также backing-поле route "default" в фоновых задачах (исполнитель «По умолчанию»).
-  defaultChatModel?: string | null;
+  // Слоты «сильная/средняя/слабая» — три именованные модели инстанса (id модели любого
+  // провайдера, напр. «claude-opus-5» / «glm-5.2» / «haiku»). На них ссылаются назначения
+  // мест (новый чат, чат персоны, фоновые действия…) значением "tier:strong|medium|weak".
+  // PATCH /api/settings: поле отсутствует = не трогать, "" = очистка слота (решает CLI).
+  modelTierStrong?: string | null;
+  modelTierMedium?: string | null;
+  modelTierWeak?: string | null;
 }
 
 // Определение фич-флага из реестра (приходит с бэка для рендера тумблеров)
@@ -636,12 +639,16 @@ export interface OllamaActionInfo {
   routedToOllama: boolean;
   // Откуда взято действующее значение: дефолт каталога, конфиг Ollama:Actions или выбор админа
   source?: 'default' | 'config' | 'admin';
-  // Исполнитель первого шага: 'local' | 'claude' | id модели провайдера.
-  // Дальше действие идёт по цепочке «выбранное → локаль → claude»
+  // Исполнитель первого шага: 'local' | 'tier:strong|medium|weak' (слот) | id модели
+  // провайдера; легаси 'claude'/'default' ≙ tier:medium. Дальше действие идёт по цепочке
+  // «выбранное → локаль → claude»
   route?: string;
   // Действию нужна сильная модель (лицо продукта, генерация артефактов) — локаль ему не
   // годится; пресеты подбирают Claude/облачную модель. В UI помечается бейджем.
   requiresStrong?: boolean;
+  // Агентное место (группа «Чаты и персоны»): запускает сессию claude CLI, поэтому
+  // локальная модель и direct:-модели ему недоступны
+  agentic?: boolean;
 }
 
 export interface SubscriptionUsage {

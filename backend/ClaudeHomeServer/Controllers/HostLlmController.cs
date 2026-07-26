@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Modules;
 using Microsoft.AspNetCore.Mvc;
@@ -124,7 +125,7 @@ public class HostLlmController(
             {
                 RouteKind.Local => LocalActionOverridesStore.LocalRoute,
                 RouteKind.Claude => LocalActionOverridesStore.ClaudeRoute,
-                RouteKind.Default => LocalActionOverridesStore.DefaultRoute,
+                RouteKind.Tier => LocalActionOverridesStore.TierRoute(route.Tier ?? ModelTier.Medium),
                 _ => route.Model ?? LocalActionOverridesStore.ClaudeRoute,
             };
 

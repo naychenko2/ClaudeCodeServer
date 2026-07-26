@@ -160,6 +160,9 @@ export const api = {
       request<{
         models: { value: string; displayName: string; description?: string | null; provider?: string | null; contextWindow?: number | null; isCurated?: boolean }[];
         providers?: Record<string, import('./models').ProviderCapabilities>;
+        // Резолвнутые модели агентных мест (ключ каталога → модель или null): по ним
+        // пикеры подписывают пункт «По умолчанию (<модель>)»
+        assignments?: Record<string, string | null>;
       }>('/models'),
   },
 

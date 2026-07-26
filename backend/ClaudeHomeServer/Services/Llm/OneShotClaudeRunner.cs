@@ -45,7 +45,8 @@ public interface IOneShotRunner
 // доступ к файлам). Используется сводками «Что нового» (ChangelogService),
 // генерациями задач и заметок, персонами (ask/характер).
 public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILauncherFactory launchers,
-    IConfiguration config, Spend.ISpendCollector? spend = null) : IOneShotRunner
+    IConfiguration config, Spend.ISpendCollector? spend = null,
+    AppSettingsService? appSettings = null) : IOneShotRunner
 {
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(120);
 
@@ -76,6 +77,17 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
     public string? NormalizeModel(string? model) =>
         llmProviders.ResolveByModel(model) is { Enabled: false } ? null : model;
 
+    // Итоговая модель вызова: не задана вызывающим = слот «средняя» (генеричный one-shot
+    // без контекста места; вызовы С контекстом резолвят модель у себя — CheapTextRunner по
+    // маршруту действия, PersonaAskService по месту «чат с персоной»). NormalizeModel — ПОСЛЕ
+    // подстановки: слот тоже может указывать на модель провайдера без ключа, и такой вызов
+    // обязан деградировать в дефолт CLI, а не падать.
+    // internal — точка подстановки покрыта тестом без запуска процесса.
+    internal string? ResolveModel(string? model) =>
+        NormalizeModel(string.IsNullOrWhiteSpace(model)
+            ? appSettings?.TierModel(ModelTier.Medium)
+            : model);
+
     public async Task<string> RunAsync(string prompt, string? model = null,
         TimeSpan? timeout = null, CancellationToken ct = default,
         string? ownerId = null, string? effort = null, string? label = null) =>
@@ -95,6 +107,11 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
         var launcher = launchers.ForOwner(ownerId);
         var workDir = Path.Combine(launcher.HostTempDir, "claude-oneshot");
         Directory.CreateDirectory(workDir);
+
+        // Модель не задана вызывающим = «по умолчанию»: подставляем глобальную настройку.
+        // ДО BuildArgs и BuildCliEnv — env маршрутизации обязан считаться от итоговой модели,
+        // иначе glm/kimi из настройки уехали бы на эндпоинт Anthropic
+        model = ResolveModel(model);
 
         var withFlag = !_persistSessions && !_flagUnsupported;
         var args = BuildArgs(Claude.ClaudeRuntimeSettings.HooksOffArgs(launcher),

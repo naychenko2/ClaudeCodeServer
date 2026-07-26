@@ -274,7 +274,9 @@ export default function App() {
         setAuth(prev => (prev && prev.displayName !== fresh ? { ...prev, displayName: fresh } : prev))
         if (fresh) localStorage.setItem('cc_display_name', fresh)
         else localStorage.removeItem('cc_display_name')
-        loadModels() // актуальный список моделей Claude (fire-and-forget, есть fallback)
+        // Каталог моделей + резолвнутые назначения агентных мест (за ними стоит пункт
+        // «По умолчанию» в пикерах) — одним запросом, fire-and-forget, есть fallback
+        loadModels()
         void loadModules() // список внешних модулей платформы для вкладок оболочки (R6)
         // Таймзона устройства — серверу для напоминаний (fire-and-forget)
         const tz = Intl.DateTimeFormat().resolvedOptions().timeZone

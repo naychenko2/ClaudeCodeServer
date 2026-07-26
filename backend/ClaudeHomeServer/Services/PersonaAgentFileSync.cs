@@ -38,6 +38,8 @@ public sealed class PersonaAgentFileSync
     // Домашняя папка владельца ({база по среде}/{username} либо override из конфига)
     private readonly UserHomeResolver _homes;
     private readonly ILogger<PersonaAgentFileSync> _log;
+    // Назначения моделей: персона без своей модели пинит тир места «сабагенты-консультанты»
+    private readonly Llm.ModelAssignmentResolver? _assignments;
     private readonly string _baseDir;
     private readonly ConcurrentDictionary<string, DateTime> _lastSync = new();
 
@@ -45,8 +47,10 @@ public sealed class PersonaAgentFileSync
         ProjectManager projects, LlmProviderRegistry providers, PersonaBindingsService bindings,
         PersonaAgentFileGenerator generator, UserStore users, AppSettingsService appSettings,
         ILogger<PersonaAgentFileSync> log, Execution.SandboxManager? sandbox = null,
-        UserHomeResolver? homes = null)
+        UserHomeResolver? homes = null,
+        Llm.ModelAssignmentResolver? assignments = null)
     {
+        _assignments = assignments;
         _homes = homes ?? UserHomeResolver.WithoutOverrides(appSettings, sandbox);
         _personas = personas;
         _projects = projects;
@@ -228,7 +232,12 @@ public sealed class PersonaAgentFileSync
             _bindings.EffectiveToolEnabled(ownerId, persona, "tasks"),
             _bindings.EffectiveToolEnabled(ownerId, persona, "notes"),
             _bindings.BuildSubagentIndex(ownerId, persona),
-            ModelAliasFor(_providers, persona.Model)));
+            // Персона без своей модели пинит тир назначения «сабагенты-консультанты»;
+            // резолвер может вернуть и модель стороннего провайдера — ModelAliasFor
+            // отсеет её в null (пин только Claude-тиров), как и раньше
+            ModelAliasFor(_providers,
+                _assignments?.Resolve(Llm.LocalActionCatalog.SubagentConsultant, persona.Model)
+                ?? persona.Model)));
     }
 
     // Алиас-тир модели персоны для пина в frontmatter сабагента. Пинится только тир

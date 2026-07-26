@@ -20,9 +20,6 @@ public class TaskExecutionService
     private readonly NotificationService _notif;
     private readonly NotesKnowledgeService _kb;
     private readonly ILogger<TaskExecutionService> _log;
-    // Модель сессии-исполнителя (Tasks:ExecutorModel): null → дефолт Claude;
-    // deepseek-модель тоже валидна — задачи доступны ей через MCP tasks-server
-    private readonly string? _executorModel;
 
     public TaskExecutionService(
         TaskManager tasks, SessionManager sessions, PersonaManager personas,
@@ -39,7 +36,6 @@ public class TaskExecutionService
         _kb = kb;
         _log = log;
         _notif = notif;
-        _executorModel = config["Tasks:ExecutorModel"];
         _sessions.OnSessionMessage += OnSessionMessageAsync;
         // Точка B join-а (CT-8): D-сигнал (Status=Done из tasks_complete/PUT/UI) может прийти
         // раньше или позже R-сигнала (ResultMessage хода, точка A ниже) — TaskManager.Update
@@ -76,7 +72,10 @@ public class TaskExecutionService
         }
 
         var name = "Задача: " + (task.Title.Length > 60 ? task.Title[..60] + "…" : task.Title);
-        var model = persona?.Model ?? _executorModel;
+        // Модель исполнителя — только от персоны; пусто → сессия подставит глобальную
+        // «модель по умолчанию» (прежний конфиг Tasks:ExecutorModel убран: он молча
+        // перебивал бы её и был мёртвым — в appsettings его никто не задавал)
+        var model = persona?.Model;
         // taskExecution: true — форсирует tasks-MCP даже у персоны с ограничением Persona.Tools
         // (без «tasks»): исполнитель обязан управлять задачей через mcp__tasks__*.
         var session = task.ProjectId is not null

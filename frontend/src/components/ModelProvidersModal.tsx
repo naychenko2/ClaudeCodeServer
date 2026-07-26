@@ -1,11 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ChevronDown, RotateCcw, Sparkles, Gift, Cpu, Zap, Scale, Boxes } from 'lucide-react';
-import { Modal, IconButton, Toggle } from './ui';
+import { Modal, IconButton, Toggle, Button } from './ui';
 import { ModelPicker } from './ModelPicker';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { api } from '../lib/api';
-import { C, FONT, FS, R, SHADOW, Z, MODAL_W } from '../lib/design';
-import { useModels, useProviders, modelLabel, providerLabel, modelProvider, type ModelOption } from '../lib/models';
+import { C, FONT, FS, R, SP, SHADOW, Z, MODAL_W } from '../lib/design';
+import { useModels, useProviders, modelLabel, providerLabel, modelProvider,
+  loadModels, type ModelOption } from '../lib/models';
 import type { OllamaUsageInfo, OllamaActionInfo, AppSettings } from '../types';
 
 interface Props {
@@ -53,6 +54,25 @@ const PRESETS: { key: PresetKey; icon: typeof Sparkles; title: string; desc: str
     desc: 'Локальная модель, где подходит; для сложных задач — бесплатная облачная' },
 ];
 
+// Слоты моделей инстанса: три именованные модели, на которые ссылаются назначения мест.
+// field — имя поля AppSettings (патчится по одному), route — значение назначения.
+type TierKey = 'strong' | 'medium' | 'weak';
+const TIERS: Record<TierKey, { title: string; hint: string; field: keyof AppSettings; route: string }> = {
+  strong: { title: 'Сильная', hint: 'Чаты, сложные задачи', field: 'modelTierStrong', route: 'tier:strong' },
+  medium: { title: 'Средняя', hint: 'Сабагенты, тяжёлый фон', field: 'modelTierMedium', route: 'tier:medium' },
+  weak: { title: 'Слабая', hint: 'Теги, заголовки, мелочь', field: 'modelTierWeak', route: 'tier:weak' },
+};
+const TIER_ORDER: TierKey[] = ['strong', 'medium', 'weak'];
+
+// Единая подпись состояния слота: «Opus · Claude» либо «не задана — решает CLI».
+// Одна на все три места, где слот показывается (строка уровня 2, карточка дропдауна,
+// подпись триггера) — иначе одно и то же состояние выглядит разными сообщениями.
+function tierSubtitle(model: string): string {
+  if (!model) return 'не задана — решает CLI';
+  const provider = providerLabel(modelProvider(model));
+  return provider ? `${modelLabel(model)} · ${provider}` : modelLabel(model);
+}
+
 // Статус адаптера → цвет точки (только дизайн-токены)
 const DOT_COLOR: Record<'active' | 'inactive' | 'offline', string> = {
   active: C.success,
@@ -62,9 +82,11 @@ const DOT_COLOR: Record<'active' | 'inactive' | 'offline', string> = {
 
 // Диалог «Поставщики моделей»: три уровня сверху вниз.
 //  1. Подключённые модели — сворачиваемая плитка адаптеров со статусами (read-only, из /api/models).
-//  2. Модель по умолчанию — глобальная модель для новых чатов (GET/PUT /api/settings, DefaultChatModel).
-//  3. Для отдельных задач — исполнитель каждого фонового ИИ-действия (как бывшие «Фоновые задачи»):
-//     локальная модель / модель по умолчанию / конкретная модель любого провайдера.
+//  2. Три модели — слоты «сильная/средняя/слабая» (GET/PUT /api/settings, ModelTier*).
+//     На них ссылаются назначения уровня 3 значением "tier:strong|medium|weak".
+//  3. Кто что выполняет — назначение каждому месту: сначала агентные (новый чат, чат
+//     персоны, исполнитель задач…), затем фоновые ИИ-действия. Варианты: слот, конкретная
+//     модель любого провайдера, локальная модель (только фоновым).
 // Настройка серверная и общая для всех — только админ.
 export function ModelProvidersModal({ onClose }: Props) {
   const [info, setInfo] = useState<OllamaUsageInfo | undefined>(undefined);
@@ -75,16 +97,17 @@ export function ModelProvidersModal({ onClose }: Props) {
   const models = useModels();
   const providers = useProviders();
 
-  // Настройки инстанса (AppSettings): DefaultChatModel (уровень 2) + тумблер утреннего брифа.
+  // Настройки инстанса (AppSettings): слоты тиров (уровень 2) + тумблер утреннего брифа.
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [briefingBusy, setBriefingBusy] = useState(false);
-  const [defaultBusy, setDefaultBusy] = useState(false);
-  const [editingDefault, setEditingDefault] = useState(false);
+  const [defaultBusy, setDefaultBusy] = useState<TierKey | null>(null);
+  const [editingTier, setEditingTier] = useState<TierKey | null>(null);
   const briefingOn = settings?.dailyBriefingEnabled ?? true;
-  const defaultModel = settings?.defaultChatModel ?? '';
 
-  // Уровень 1 по умолчанию свёрнут (краткий однострочник), разворачивается по клику
+  // Уровни 1 и 2 по умолчанию свёрнуты (краткий однострочник), разворачиваются по клику:
+  // в окне и без того длинный уровень 3, три раскрытых слота его перегружали
   const [providersExpanded, setProvidersExpanded] = useState(false);
+  const [tiersExpanded, setTiersExpanded] = useState(false);
 
   // Оптимистично: применяем сразу, при ошибке возвращаем прежнее значение. Шлём ТОЛЬКО своё
   // поле — PUT /api/settings патчит присланное, поэтому наш (возможно устаревший) снимок
@@ -103,19 +126,21 @@ export function ModelProvidersModal({ onClose }: Props) {
       .finally(() => setBriefingBusy(false));
   }
 
-  // Сохранение модели по умолчанию: model='' → сознательный сброс к дефолту CLI (бэкенд: "" = сброс).
-  function saveDefault(model: string) {
+  // Сохранение слота. После записи перечитываем каталог моделей: /api/models отдаёт и
+  // резолвнутые назначения мест, по которым пикеры подписывают пункт «По умолчанию» —
+  // иначе подписи врали бы до перезагрузки страницы.
+  function saveTier(tier: TierKey, model: string) {
     const prev = settings;
-    setDefaultBusy(true);
+    setDefaultBusy(tier);
     setError(null);
-    setSettings(s => s ? { ...s, defaultChatModel: model } : s);
-    api.settings.save({ defaultChatModel: model })
-      .then(saved => { setSettings(saved); setEditingDefault(false); })
+    setSettings(s => s ? { ...s, [TIERS[tier].field]: model } : s);
+    api.settings.save({ [TIERS[tier].field]: model })
+      .then(saved => { setSettings(saved); setEditingTier(null); void loadModels(); })
       .catch(e => {
         setSettings(prev);
         setError(e instanceof Error ? e.message : 'Не удалось сохранить');
       })
-      .finally(() => setDefaultBusy(false));
+      .finally(() => setDefaultBusy(null));
   }
 
   useEffect(() => {
@@ -126,7 +151,7 @@ export function ModelProvidersModal({ onClose }: Props) {
     // Настройки инстанса грузим отдельно: их отсутствие не должно прятать список действий
     api.settings.get()
       .then(s => { if (!cancelled) setSettings(s); })
-      .catch(() => { /* модель по умолчанию останется пустой, тумблер — включённым */ });
+      .catch(() => { /* слоты останутся пустыми, тумблер — включённым */ });
     return () => { cancelled = true; };
   }, []);
 
@@ -208,8 +233,10 @@ export function ModelProvidersModal({ onClose }: Props) {
     ? `Активны: ${activeNames.join(', ')}${inactiveCount ? ` · ${inactiveCount} не настроены` : ''}`
     : (inactiveCount ? `${inactiveCount} не настроены` : 'Нет данных');
 
-  const defaultLabel = defaultModel ? modelLabel(defaultModel) : 'По умолчанию (CLI)';
-  const defaultProvider = defaultModel ? providerLabel(modelProvider(defaultModel)) : null;
+  const tierModel = (t: TierKey) => (settings?.[TIERS[t].field] as string | null | undefined) ?? '';
+  // Предохранитель: тяжёлая модель в слабом слоте правит фоновой мелочью (теги, заголовки,
+  // сводки) — это десятки вызовов в день. Тир угадываем по id, как в ModelIcon.
+  const heavyWeak = /opus|fable|ultra|\bmax\b|\bpro\b|reasoner/i.test(tierModel('weak'));
 
   return (
     <Modal
@@ -274,62 +301,102 @@ export function ModelProvidersModal({ onClose }: Props) {
         )}
       </div>
 
-      {/* === Уровень 2: Модель по умолчанию === */}
-      <div style={{ display: 'flex', flexDirection: 'column' }}>
-        <div style={levelTitleStyle()}>Модель по умолчанию</div>
-        {!editingDefault ? (
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: 10, padding: '11px 14px',
-            background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: R.xl,
-          }}>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: FS.xs, color: C.textMuted, marginBottom: 2 }}>Для новых чатов</div>
-              <div style={{ fontSize: FS.md, fontWeight: 600, color: C.textHeading,
-                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {defaultLabel}{defaultProvider ? ` · ${defaultProvider}` : ''}
-              </div>
+      {/* === Уровень 2: три модели (слоты) — свёрнут в сводку, как уровень 1 === */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
+        <div style={levelTitleStyle()}>Три модели</div>
+        <button
+          type="button"
+          onClick={() => setTiersExpanded(o => !o)}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 9, width: '100%', textAlign: 'left',
+            padding: '10px 12px', borderRadius: R.lg, background: C.bgWhite,
+            border: `1px solid ${C.border}`, cursor: 'pointer', transition: 'border-color 0.15s',
+          }}
+        >
+          <Scale size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ color: C.textMuted, flexShrink: 0 }} />
+          <span style={{ flex: 1, minWidth: 0, fontSize: FS.base, fontWeight: 500, color: C.textHeading,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {TIER_ORDER.map(t => `${TIERS[t].title}: ${tierModel(t) ? modelLabel(tierModel(t)) : '—'}`).join(' · ')}
+          </span>
+          <ChevronDown size={ICON_SIZE.xs} strokeWidth={ICON_STROKE}
+            style={{ flexShrink: 0, color: C.textMuted, transform: tiersExpanded ? 'rotate(180deg)' : 'none',
+              transition: 'transform 0.15s' }} />
+        </button>
+
+        {tiersExpanded && (
+          <>
+            <div style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.4, padding: '0 2px' }}>
+              На эти три модели ссылаются назначения ниже — меняешь модель слота, меняются
+              все места, назначенные на него.
             </div>
-            <button
-              type="button"
-              onClick={() => setEditingDefault(true)}
-              disabled={defaultBusy}
-              style={{
-                flexShrink: 0, padding: '6px 12px', borderRadius: R.md, cursor: defaultBusy ? 'default' : 'pointer',
-                border: `1px solid ${C.border}`, background: C.bgWhite,
-                fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: 600, color: C.accent,
-                opacity: defaultBusy ? 0.5 : 1,
-              }}>
-              Сменить
-            </button>
-          </div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <ModelPicker
-              value={defaultModel}
-              options={models}
-              onChange={saveDefault}
-              collapsible={false}
-            />
-            <button
-              type="button"
-              onClick={() => setEditingDefault(false)}
-              style={{
-                alignSelf: 'flex-start', border: 'none', background: 'none', padding: '2px 2px',
-                cursor: 'pointer', fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: 600, color: C.textMuted,
-              }}>
-              Отмена
-            </button>
+            {TIER_ORDER.map(t => {
+              const model = tierModel(t);
+              const editing = editingTier === t;
+              const rowBusy = defaultBusy === t;
+              return (
+                <div key={t} style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
+                  <div style={{
+                    display: 'flex', alignItems: 'center', gap: 10, padding: '11px 14px',
+                    background: C.bgCard, border: `1px solid ${editing ? C.accent : C.border}`,
+                    borderRadius: R.xl,
+                  }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: FS.md, fontWeight: 600, color: C.textHeading,
+                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {TIERS[t].title}
+                      </div>
+                      <div style={{ fontSize: FS.xs, color: C.textMuted, marginTop: 2,
+                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {tierSubtitle(model)} · {TIERS[t].hint}
+                      </div>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setEditingTier(editing ? null : t)}
+                      disabled={rowBusy}
+                    >
+                      {editing ? 'Отмена' : 'Сменить'}
+                    </Button>
+                  </div>
+                  {editing && (
+                    <ModelPicker
+                      value={model}
+                      options={models}
+                      onChange={m => saveTier(t, m)}
+                      collapsible={false}
+                      // Здесь модели слотов и выбираются: пункт «По умолчанию» ссылался бы
+                      // сам на себя — сброса слота из UI сознательно нет
+                      hideDefault
+                    />
+                  )}
+                </div>
+              );
+            })}
+          </>
+        )}
+        {/* Оформление — как у соседней подсказки про выключенную локаль (уровень 3):
+            два блока одной роли в одном окне обязаны выглядеть одинаково */}
+        {heavyWeak && (
+          <div style={{
+            padding: '9px 11px', borderRadius: R.md, fontSize: FS.sm,
+            lineHeight: 1.5, color: C.textSecondary, background: C.bgInset,
+            border: `1px solid ${C.border}`,
+          }}>
+            В слабый слот выбрана тяжёлая модель — на неё пойдут теги, заголовки чатов
+            и сводки, а это десятки вызовов в день. Дешевле поставить сюда лёгкую модель
+            или локальную.
           </div>
         )}
       </div>
 
-      {/* === Уровень 3: Для отдельных задач === */}
+      {/* === Уровень 3: Кто что выполняет === */}
       {info === undefined ? (
         <div style={{ color: C.textMuted, fontSize: FS.md, padding: '8px 0' }}>Загрузка…</div>
       ) : (
         <>
           <div style={{ display: 'flex', flexDirection: 'column' }}>
-            <div style={levelTitleStyle()}>Для отдельных задач</div>
+            <div style={levelTitleStyle()}>Кто что выполняет</div>
 
             {/* Автоподбор — пресеты схлопнуты в выпадающее меню (вместо 4 больших кнопок) */}
             <div>
@@ -425,7 +492,7 @@ export function ModelProvidersModal({ onClose }: Props) {
                       first={i === 0}
                       busy={busy === a.key}
                       ollamaModel={info.model ?? undefined}
-                      defaultModel={defaultModel}
+                      tierModels={{ strong: tierModel('strong'), medium: tierModel('medium'), weak: tierModel('weak') }}
                       models={models}
                       onPick={route => pick(a, route)}
                       onReset={() => reset(a)}
@@ -465,20 +532,33 @@ function QuickOptionCard({ title, subtitle, active, onClick }: {
       <span style={{ fontSize: FS.md, fontWeight: 600, color: active ? C.textHeading : C.textPrimary, fontFamily: FONT.sans }}>
         {title}
       </span>
-      <span style={{ fontSize: 11.5, color: C.textMuted, lineHeight: 1.35 }}>
+      <span style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.35 }}>
         {subtitle}
       </span>
     </button>
   );
 }
 
-// Человекочитаемая подпись текущего выбора триггера.
-// 'default' и legacy 'claude' — оба «По умолчанию» (модель по умолчанию для чатов).
-function routeLabel(route: string | null | undefined, ollamaModel?: string, defaultModel?: string): string {
-  const r = route ?? 'default';
+// Слот назначения ("tier:*", легаси "default"/"claude" ≙ средняя) или null для прочих маршрутов
+function routeTier(route: string | null | undefined): TierKey | null {
+  const r = route ?? '';
+  if (r === 'default' || r === 'claude' || r === 'tier:medium') return 'medium';
+  if (r === 'tier:strong') return 'strong';
+  if (r === 'tier:weak') return 'weak';
+  return null;
+}
+
+// Человекочитаемая подпись текущего выбора триггера. У слота показываем и его имя, и модель
+// за ним — иначе «Сильная» ничего не говорит о том, что реально поедет. Модель берётся той
+// же функцией, что и в строке уровня 2 (tierSubtitle) — формулировка одна.
+function routeLabel(route: string | null | undefined, ollamaModel?: string,
+  tierModels?: Record<TierKey, string>): string {
+  const r = route ?? '';
   if (r === 'local') return `Локальная${ollamaModel ? ` · ${ollamaModel}` : ''}`;
-  if (r === 'default' || r === 'claude') {
-    return defaultModel ? `По умолчанию · ${modelLabel(defaultModel)}` : 'По умолчанию';
+  const tier = routeTier(r);
+  if (tier) {
+    const m = tierModels?.[tier] ?? '';
+    return m ? `${TIERS[tier].title} · ${modelLabel(m)}` : `${TIERS[tier].title} · не задана`;
   }
   return modelLabel(r);
 }
@@ -486,18 +566,19 @@ function routeLabel(route: string | null | undefined, ollamaModel?: string, defa
 const PANEL_W = 320;
 const PANEL_MAX_H = 340;
 
-// Одна строка действия: название (+ кнопка сброса, если переопределено админом) слева,
+// Одна строка места: название (+ кнопка сброса, если переопределено админом) слева,
 // кастомный дропдаун-исполнитель справа — триггер-кнопка + всплывающая панель с карточками
-// «Локальная»/«По умолчанию» и полным ModelPicker (карточки моделей с описаниями, как в чате).
+// трёх слотов и «Локальная», плюс полный ModelPicker (карточки моделей с описаниями).
+// У агентных мест (чаты, персоны) «Локальная» скрыта — им нужны инструменты CLI.
 // У отдельных действий (утренний бриф) перед дропдауном есть тумблер «выполнять ли вообще» —
 // он приходит пропсами enabled/onToggleEnabled; остальные строки его не показывают.
-function ActionRow({ action: a, first, busy, ollamaModel, defaultModel, models, onPick, onReset,
+function ActionRow({ action: a, first, busy, ollamaModel, tierModels, models, onPick, onReset,
   enabled, onToggleEnabled, toggleBusy, toggleTitle }: {
   action: OllamaActionInfo;
   first: boolean;
   busy: boolean;
   ollamaModel?: string;
-  defaultModel?: string;
+  tierModels: Record<TierKey, string>;
   models: ModelOption[];
   onPick: (route: string) => void;
   onReset: () => void;
@@ -511,9 +592,8 @@ function ActionRow({ action: a, first, busy, ollamaModel, defaultModel, models, 
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const overridden = a.source === 'admin';
-  const route = a.route ?? 'default';
-  // «По умолчанию» и legacy 'claude' — одинаковый выбор
-  const isDefault = route === 'default' || route === 'claude';
+  const route = a.route ?? '';
+  const activeTier = routeTier(route);
   const selectColor = a.routedToOllama ? C.accent : C.textSecondary;
   // «Сильному» действию выбрана локаль — по факту пойдёт фолбэк (локаль пропускается)
   const localOnStrong = a.requiresStrong && route === 'local';
@@ -554,10 +634,10 @@ function ActionRow({ action: a, first, busy, ollamaModel, defaultModel, models, 
     setPos({ top, left, maxHeight });
   }, [open]);
 
-  // ModelPicker value='' означает «По умолчанию» → маппим в route 'default'
-  const pick = (v: string) => { onPick(v === '' ? 'default' : v); setOpen(false); };
-  // Для подсветки в ModelPicker: конкретная модель — её id, иначе '' (карточка «По умолчанию»)
-  const pickerValue = isDefault || route === 'local' ? '' : route;
+  // Выбор из панели: '' из ModelPicker невозможен (пункт скрыт), приходит слот или модель
+  const pick = (v: string) => { onPick(v); setOpen(false); };
+  // Для подсветки в ModelPicker: конкретная модель — её id, слот/локаль — ничего
+  const pickerValue = activeTier || route === 'local' ? '' : route;
 
   return (
     <div
@@ -627,7 +707,7 @@ function ActionRow({ action: a, first, busy, ollamaModel, defaultModel, models, 
           }}
         >
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
-            {routeLabel(a.route, ollamaModel, defaultModel)}
+            {routeLabel(a.route, ollamaModel, tierModels)}
           </span>
           <ChevronDown
             size={ICON_SIZE.xs} strokeWidth={ICON_STROKE}
@@ -645,25 +725,34 @@ function ActionRow({ action: a, first, busy, ollamaModel, defaultModel, models, 
               boxShadow: SHADOW.dropdown, padding: 8, zIndex: Z.dropdown,
             }}
           >
-            <QuickOptionCard
-              title="Локальная модель"
-              subtitle={ollamaModel ? `Ollama · ${ollamaModel}` : 'не настроена'}
-              active={route === 'local'}
-              onClick={() => pick('local')}
-            />
-            <QuickOptionCard
-              title="По умолчанию"
-              subtitle={defaultModel ? modelLabel(defaultModel) : 'модель по умолчанию для чатов'}
-              active={isDefault}
-              onClick={() => pick('default')}
-            />
+            {/* Три слота сверху — обычный выбор; локаль ниже и только фоновым местам */}
+            {TIER_ORDER.map(t => (
+              <QuickOptionCard
+                key={t}
+                title={TIERS[t].title}
+                subtitle={tierSubtitle(tierModels[t])}
+                active={activeTier === t}
+                onClick={() => pick(TIERS[t].route)}
+              />
+            ))}
+            {!a.agentic && (
+              <QuickOptionCard
+                title="Локальная модель"
+                subtitle={ollamaModel ? `Ollama · ${ollamaModel}` : 'не настроена'}
+                active={route === 'local'}
+                onClick={() => pick('local')}
+              />
+            )}
             <div style={{ borderTop: `1px solid ${C.borderLight}`, margin: '2px 0' }} />
             <ModelPicker
               value={pickerValue}
               options={models}
               onChange={pick}
               collapsible={false}
-              includeDirect
+              // Агентному месту нужны инструменты CLI — direct:-модели ему не годятся
+              includeDirect={!a.agentic}
+              // Слоты — отдельные карточки выше; в списке был бы дубль
+              hideDefault
             />
           </div>
         )}

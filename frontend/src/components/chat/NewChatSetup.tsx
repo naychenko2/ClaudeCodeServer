@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Cpu, Zap, Hourglass, ChevronDown } from 'lucide-react';
 import type { Session } from '../../types';
 import { api } from '../../lib/api';
-import { useModels, useModelCaps, modelCaps, modelProvider, useModelLabel } from '../../lib/models';
+import { useModels, useModelCaps, modelCaps, modelProvider, useModelLabel, USAGE } from '../../lib/models';
 import { effortsForProvider, effortLabel } from '../../lib/effort';
 import { EXPIRY_PRESETS, expiryOptionLabel } from '../../lib/expiry';
 import { ModelPicker } from '../ModelPicker';
@@ -132,7 +132,8 @@ export function NewChatSetup({ session, onSessionUpdated, isMobile }: {
           maxHeight: 320, overflowY: 'auto',
         }}>
           {panel === 'model' ? (
-            <ModelPicker value={session.model ?? ''} options={models} onChange={pickModel} collapsible={false} />
+            <ModelPicker value={session.model ?? ''} options={models} onChange={pickModel} collapsible={false}
+              usage={session.personaId ? USAGE.chatPersona : USAGE.chatNew} />
           ) : panel === 'effort' ? (
             <>
               <div style={{ fontSize: 11.5, color: C.textMuted, marginBottom: 8, lineHeight: 1.4 }}>

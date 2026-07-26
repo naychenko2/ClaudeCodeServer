@@ -3,6 +3,10 @@ using ClaudeHomeServer.Models;
 
 namespace ClaudeHomeServer.Services;
 
+// Слот тира модели: три именованные модели инстанса, на которые ссылаются
+// назначения мест («новый чат», «теги заметок»…) значением "tier:<slot>".
+public enum ModelTier { Strong, Medium, Weak }
+
 public class AppSettingsService
 {
     private readonly string _storePath;
@@ -36,8 +40,25 @@ public class AppSettingsService
                 DefaultProjectsPath = _configDefault,
                 ClaudeBilling = string.IsNullOrWhiteSpace(_settings.ClaudeBilling) ? "subscription" : _settings.ClaudeBilling,
                 DailyBriefingEnabled = _settings.DailyBriefingEnabled ?? true,
-                DefaultChatModel = _settings.DefaultChatModel,
+                ModelTierStrong = _settings.ModelTierStrong,
+                ModelTierMedium = _settings.ModelTierMedium,
+                ModelTierWeak = _settings.ModelTierWeak,
             };
+        }
+    }
+
+    // Модель слота. Пустой слот → null: место, ссылающееся на него, уходит на дефолт CLI.
+    public string? TierModel(ModelTier tier)
+    {
+        lock (_lock)
+        {
+            var v = tier switch
+            {
+                ModelTier.Strong => _settings.ModelTierStrong,
+                ModelTier.Weak => _settings.ModelTierWeak,
+                _ => _settings.ModelTierMedium,
+            };
+            return string.IsNullOrWhiteSpace(v) ? null : v;
         }
     }
 
@@ -53,8 +74,10 @@ public class AppSettingsService
             {
                 ClaudeBilling = settings.ClaudeBilling ?? _settings.ClaudeBilling,
                 DailyBriefingEnabled = settings.DailyBriefingEnabled ?? _settings.DailyBriefingEnabled,
-                // null = не прислали (оставить прежним), "" = сознательный сброс к дефолту CLI
-                DefaultChatModel = settings.DefaultChatModel ?? _settings.DefaultChatModel,
+                // null = не прислали (оставить прежним), "" = сознательная очистка слота
+                ModelTierStrong = settings.ModelTierStrong ?? _settings.ModelTierStrong,
+                ModelTierMedium = settings.ModelTierMedium ?? _settings.ModelTierMedium,
+                ModelTierWeak = settings.ModelTierWeak ?? _settings.ModelTierWeak,
             };
             // Запись через JsonFileStore: атомарна (tmp + move), крэш посреди сохранения
             // не оставляет обрезанный app-settings.json — раньше был голый WriteAllText
@@ -73,6 +96,16 @@ public class AppSettingsService
             // Гигиена: устаревший DefaultProjectsPath мог осесть здесь раньше — обнуляем, чтобы
             // он не читался и не сериализовался обратно (Get всё равно берёт путь из конфига).
             _settings.DefaultProjectsPath = "";
+            // Миграция v1→v2: одиночная DefaultChatModel переезжает в слот «средняя»
+            // (не перетирая уже заданный) и очищается; персистим сразу, чтобы миграция
+            // была одноразовой, а не повторялась на каждом старте.
+            if (!string.IsNullOrWhiteSpace(_settings.DefaultChatModel))
+            {
+                if (string.IsNullOrWhiteSpace(_settings.ModelTierMedium))
+                    _settings.ModelTierMedium = _settings.DefaultChatModel;
+                _settings.DefaultChatModel = null;
+                JsonFileStore.Save(_storePath, _settings);
+            }
         }
         catch { /* первый запуск или повреждённый файл */ }
     }

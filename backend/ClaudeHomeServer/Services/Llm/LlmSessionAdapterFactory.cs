@@ -24,11 +24,15 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
     private readonly ClaudeSubscriptionPool _subscriptionPool;
     private readonly FileWatcherOptions _fileWatcherOptions;
     private readonly TimeSpan? _bgLingerTimeout;
+    // Резолвер назначений: сессия без своей модели идёт на модель своего места (слоты
+    // тиров), поэтому и провайдер резолвится по эффективной модели, а не по пустой Model
+    private readonly ModelAssignmentResolver? _assignments;
 
     public LlmSessionAdapterFactory(IConfiguration config, SkillsService skills,
         WorkspaceKnowledgeStore workspaceStore, LlmProviderRegistry providers,
-        ClaudeSubscriptionPool subscriptionPool)
+        ClaudeSubscriptionPool subscriptionPool, ModelAssignmentResolver? assignments = null)
     {
+        _assignments = assignments;
         _mcpConfigPath = config["McpConfigPath"];
         _falMcpApiKey = config["Fal:McpApiKey"];
         _disallowedTools = config.GetSection("Claude:DisallowedTools").Get<string[]>() ?? [];
@@ -52,17 +56,24 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
 
     public ILlmSessionAdapter Create(Session session, LlmSessionContext context)
     {
-        // Провайдер по явному полю Provider (приоритет), затем по Model
+        // Провайдер по явному полю Provider (приоритет), затем по Model — по ЭФФЕКТИВНОЙ:
+        // пустая session.Model означает «по назначению места», и если назначение указывает
+        // на стороннего провайдера, проверку настроенности надо проходить по нему.
+        // Ключ места — как в ClaudeSession.UsageKey (исполнитель задач → персона → чат).
         LlmProviderConfig? provider = null;
         if (!string.IsNullOrEmpty(session.Provider) && session.Provider != "claude")
             provider = _providers.GetByKey(session.Provider);
-        provider ??= _providers.ResolveByModel(session.Model);
+        var usageKey = session.TaskExecution || session.TaskId is not null ? LocalActionCatalog.TasksExecutor
+            : !string.IsNullOrWhiteSpace(session.PersonaId) ? LocalActionCatalog.ChatPersona
+            : LocalActionCatalog.ChatNew;
+        provider ??= _providers.ResolveByModel(
+            _assignments?.Resolve(usageKey, session.Model) ?? session.Model);
 
         if (provider is { Enabled: false })
             throw new InvalidOperationException(
                 $"Провайдер «{provider.DisplayName}» не настроен: задай LlmProviders:{provider.Key}:ApiKey в appsettings.Local.json");
         return new Claude.ClaudeSession(session, context, _mcpConfigPath, _skills,
             _workspaceStore, _disallowedTools, _providers, _subscriptionPool, _fileWatcherOptions,
-            _bgLingerTimeout, _falMcpApiKey);
+            _bgLingerTimeout, _falMcpApiKey, _assignments);
     }
 }

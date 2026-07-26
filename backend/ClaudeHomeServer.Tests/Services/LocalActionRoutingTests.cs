@@ -188,7 +188,11 @@ public class LocalActionRoutingTests
 
         var router = new LocalActionRouter(Ollama(config), Store(config), config,
             NullLogger<LocalActionRouter>.Instance);
-        Assert.Equal(RouteKind.Claude, router.Resolve(LocalActionCatalog.NotesTags).Kind);
+        // false («не локаль») в v2 читается как слот «средняя»: при пустом слоте поведение
+        // прежнее (модель действия), при заданном — управляется настройкой тиров
+        var notesRoute = router.Resolve(LocalActionCatalog.NotesTags);
+        Assert.Equal(RouteKind.Tier, notesRoute.Kind);
+        Assert.Equal(ModelTier.Medium, notesRoute.Tier);
         Assert.Equal(RouteKind.Local, router.Resolve(LocalActionCatalog.DailyBriefing).Kind);
     }
 
@@ -420,48 +424,67 @@ public class LocalActionRoutingTests
         Assert.All(LocalActionCatalog.All, a => Assert.True(LocalActionCatalog.IsKnown(a.Key)));
     }
 
-    // --- Маршрут «default» (модель по умолчанию для чатов, DefaultChatModel) ---
+    // --- Маршруты-слоты (tier:strong|medium|weak) ---
 
     [Fact]
-    public void Route_Default_РезолвитсяИзСтора()
+    public void Route_TierИзСтора_Резолвится()
     {
         var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });
         var store = Store(config);
-        store.Set(LocalActionCatalog.NotesTags, LocalActionOverridesStore.DefaultRoute);
+        store.Set(LocalActionCatalog.NotesTags, "tier:strong");
         var router = new LocalActionRouter(Ollama(config), store, config, NullLogger<LocalActionRouter>.Instance);
 
         var route = router.Resolve(LocalActionCatalog.NotesTags);
-        Assert.Equal(RouteKind.Default, route.Kind);
+        Assert.Equal(RouteKind.Tier, route.Kind);
+        Assert.Equal(ModelTier.Strong, route.Tier);
         Assert.False(router.UsesLocal(LocalActionCatalog.NotesTags));
     }
 
     [Fact]
-    public async Task CheapRunner_RouteDefault_БерётDefaultChatModel()
+    public void ЛегасиЗначения_ЧитаютсяКакСредняя()
     {
+        // "default" и "claude" из v1 оба означали «обычная модель, не локаль» → tier:medium
         var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });
         var store = Store(config);
         store.Set(LocalActionCatalog.NotesTags, LocalActionOverridesStore.DefaultRoute);
+        store.Set(LocalActionCatalog.NoteTitle, LocalActionOverridesStore.ClaudeRoute);
+        var router = new LocalActionRouter(Ollama(config), store, config, NullLogger<LocalActionRouter>.Instance);
+
+        Assert.Equal((RouteKind.Tier, (ModelTier?)ModelTier.Medium),
+            (router.Resolve(LocalActionCatalog.NotesTags).Kind, router.Resolve(LocalActionCatalog.NotesTags).Tier));
+        Assert.Equal((RouteKind.Tier, (ModelTier?)ModelTier.Medium),
+            (router.Resolve(LocalActionCatalog.NoteTitle).Kind, router.Resolve(LocalActionCatalog.NoteTitle).Tier));
+    }
+
+    [Fact]
+    public async Task CheapRunner_МаршрутСлот_БерётМодельСлота()
+    {
+        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });
+        var store = Store(config);
+        store.Set(LocalActionCatalog.NotesTags, "tier:medium");
         var router = new LocalActionRouter(Ollama(config), store, config, NullLogger<LocalActionRouter>.Instance);
         var claude = new FakeOneShot();
         var appSettings = new AppSettingsService(config);
-        appSettings.Save(new AppSettings { DefaultChatModel = "glm-5.2" });
+        appSettings.Save(new AppSettings { ModelTierMedium = "glm-5.2" });
         var runner = new CheapTextRunner(router, Ollama(config), Cloud(config), claude,
             NullLogger<CheapTextRunner>.Instance, appSettings);
 
         var result = await runner.RunAsync(LocalActionCatalog.NotesTags, "prompt-text", "haiku");
 
-        // Route "default" берёт DefaultChatModel, а НЕ fallbackModel действия ("haiku")
+        // Маршрут-слот берёт модель слота, а НЕ fallbackModel действия ("haiku")
         Assert.Equal("CLAUDE[glm-5.2]:prompt-text", result);
         Assert.Equal(["glm-5.2"], claude.Calls);
     }
 
     [Fact]
-    public async Task CheapRunner_RouteDefault_БезНастройки_ДеградируетВДефолтCLI()
+    public async Task CheapRunner_ПустойСлот_ОткатываетсяКМоделиДействия()
     {
-        // DefaultChatModel не задана → route "default" эквивалентен «claude без --model» (дефолт CLI)
+        // Слот не задан → маршрут-слот откатывается к модели действия (haiku), а НЕ к дефолту
+        // CLI: слот — дефолтный маршрут всех действий, и без отката ненастроенный инстанс
+        // гонял бы теги и заголовки на дорогой модели
         var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });
         var store = Store(config);
-        store.Set(LocalActionCatalog.NotesTags, LocalActionOverridesStore.DefaultRoute);
+        store.Set(LocalActionCatalog.NotesTags, "tier:medium");
         var router = new LocalActionRouter(Ollama(config), store, config, NullLogger<LocalActionRouter>.Instance);
         var claude = new FakeOneShot();
         var runner = new CheapTextRunner(router, Ollama(config), Cloud(config), claude,
@@ -469,6 +492,133 @@ public class LocalActionRoutingTests
 
         var result = await runner.RunAsync(LocalActionCatalog.NotesTags, "prompt-text", "haiku");
 
-        Assert.Equal("CLAUDE[]:prompt-text", result);
+        Assert.Equal("CLAUDE[haiku]:prompt-text", result);
+    }
+
+    [Fact]
+    public void Дефолт_БезНастроек_СлотПоПрофилю()
+    {
+        // Ни оверрайда админа, ни конфига, действие НЕ рекомендовано локали → RouteKind.Tier
+        // со слотом из профиля сложности (Large → средняя)
+        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });
+        var router = new LocalActionRouter(Ollama(config), Store(config), config,
+            NullLogger<LocalActionRouter>.Instance);
+
+        var route = router.Resolve(LocalActionCatalog.Changelog);
+
+        Assert.Equal(RouteKind.Tier, route.Kind);
+        Assert.Equal(ModelTier.Medium, route.Tier);
+        Assert.Equal(RouteSource.Default, route.Source);
+    }
+
+    [Fact]
+    public async Task Дефолт_БезНастроек_ИдётНаМодельСлота()
+    {
+        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });
+        var router = new LocalActionRouter(Ollama(config), Store(config), config,
+            NullLogger<LocalActionRouter>.Instance);
+        var claude = new FakeOneShot();
+        var appSettings = new AppSettingsService(config);
+        appSettings.Save(new AppSettings { ModelTierMedium = "glm-5.2" });
+        var runner = new CheapTextRunner(router, Ollama(config), Cloud(config), claude,
+            NullLogger<CheapTextRunner>.Instance, appSettings);
+
+        var result = await runner.RunAsync(LocalActionCatalog.Changelog, "prompt-text", "haiku");
+
+        Assert.Equal("CLAUDE[glm-5.2]:prompt-text", result);
+    }
+
+    // --- Агентные места (группа «Чаты и персоны») и ModelAssignmentResolver ---
+
+    [Fact]
+    public void Resolver_ЯвнаяМодель_СильнееВсего()
+    {
+        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });
+        var appSettings = new AppSettingsService(config);
+        appSettings.Save(new AppSettings { ModelTierStrong = "glm-5.2" });
+        var resolver = new ModelAssignmentResolver(appSettings, Store(config));
+
+        Assert.Equal("opus", resolver.Resolve(LocalActionCatalog.ChatNew, "opus"));
+    }
+
+    [Fact]
+    public void Resolver_БезНазначения_СлотКаталога()
+    {
+        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });
+        var appSettings = new AppSettingsService(config);
+        appSettings.Save(new AppSettings { ModelTierStrong = "opus", ModelTierMedium = "sonnet" });
+        var resolver = new ModelAssignmentResolver(appSettings, Store(config));
+
+        // chat-new/chat-persona — сильная; сабагенты и LLM-канал модулей — средняя
+        Assert.Equal("opus", resolver.Resolve(LocalActionCatalog.ChatNew));
+        Assert.Equal("opus", resolver.Resolve(LocalActionCatalog.ChatPersona));
+        Assert.Equal("sonnet", resolver.Resolve(LocalActionCatalog.SubagentConsultant));
+        Assert.Equal("sonnet", resolver.Resolve(LocalActionCatalog.ModulesLlm));
+    }
+
+    [Fact]
+    public void Resolver_НазначениеАдмина_ПеребиваетСлотКаталога()
+    {
+        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });
+        var appSettings = new AppSettingsService(config);
+        appSettings.Save(new AppSettings { ModelTierStrong = "opus", ModelTierWeak = "haiku" });
+        var store = Store(config);
+        store.Set(LocalActionCatalog.ChatNew, "tier:weak");
+        store.Set(LocalActionCatalog.ChatPersona, "glm-5.2");
+        var resolver = new ModelAssignmentResolver(appSettings, store);
+
+        Assert.Equal("haiku", resolver.Resolve(LocalActionCatalog.ChatNew));
+        Assert.Equal("glm-5.2", resolver.Resolve(LocalActionCatalog.ChatPersona));
+    }
+
+    [Fact]
+    public void Resolver_ПустыеСлоты_ОтдаютРешениеCLI()
+    {
+        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });
+        var resolver = new ModelAssignmentResolver(new AppSettingsService(config), Store(config));
+
+        Assert.Null(resolver.Resolve(LocalActionCatalog.ChatNew));
+    }
+
+    [Fact]
+    public void Resolver_ЛокальИDirect_АгентномуМестуНепригодны()
+    {
+        // «local» и direct:-модель в назначении агентного места игнорируются — место уходит
+        // на свой слот каталога (агентной сессии нужны инструменты CLI)
+        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });
+        var appSettings = new AppSettingsService(config);
+        appSettings.Save(new AppSettings { ModelTierStrong = "opus" });
+        var store = Store(config);
+        store.Set(LocalActionCatalog.ChatNew, LocalActionOverridesStore.LocalRoute);
+        store.Set(LocalActionCatalog.ChatPersona, "direct:free/model");
+        var resolver = new ModelAssignmentResolver(appSettings, store);
+
+        Assert.Equal("opus", resolver.Resolve(LocalActionCatalog.ChatNew));
+        Assert.Equal("opus", resolver.Resolve(LocalActionCatalog.ChatPersona));
+    }
+
+    [Fact]
+    public void Пресеты_НеТрогаютАгентныеМеста()
+    {
+        // Применение пресета не должно сносить назначения агентных мест
+        var config = ConfigWithTempData(new()
+        {
+            ["Ollama:Model"] = "",
+            ["ModelCatalog:QueryCli"] = "false", // каталог не спавнит настоящий claude
+        });
+        var store = Store(config);
+        store.Set(LocalActionCatalog.ChatNew, "tier:weak");
+        var router = new LocalActionRouter(Ollama(config), store, config, NullLogger<LocalActionRouter>.Instance);
+        var presets = new LocalActionPresetService(store, router, Ollama(config),
+            new ModelCatalogService(new LlmProviderRegistry(config),
+                new NullHttpFactory(), config),
+            config, NullLogger<LocalActionPresetService>.Instance);
+
+        presets.ApplyAsync(ActionPreset.Recommended).GetAwaiter().GetResult();
+
+        Assert.Equal("tier:weak", store.TryGet(LocalActionCatalog.ChatNew));
+        // Фоновое действие получило маршрут пресета (слот по профилю: Small → слабая)
+        Assert.Equal(LocalActionOverridesStore.TierRoute(ModelTier.Weak),
+            store.TryGet(LocalActionCatalog.NotesTags));
     }
 }

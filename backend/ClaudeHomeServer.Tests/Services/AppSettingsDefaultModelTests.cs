@@ -5,9 +5,10 @@ using Microsoft.Extensions.Configuration;
 
 namespace ClaudeHomeServer.Tests.Services;
 
-// Глобальная «модель по умолчанию для новых чатов» (AppSettings.DefaultChatModel):
-// хранится в app-settings.json, патчится через PUT /api/settings (null = не трогать,
-// "" = сознательный сброс к дефолту CLI). Применяется в SessionManager и как route "default".
+// Слоты тиров моделей (AppSettings.ModelTierStrong/Medium/Weak): хранятся в app-settings.json,
+// патчатся через PUT /api/settings (null = не трогать, "" = сознательная очистка слота).
+// На слоты ссылаются назначения мест ("tier:strong|medium|weak") и дефолты каталога.
+// Легаси-поле DefaultChatModel мигрирует в слот «средняя» при загрузке.
 public class AppSettingsDefaultModelTests : IDisposable
 {
     private readonly string _tempDir;
@@ -33,47 +34,88 @@ public class AppSettingsDefaultModelTests : IDisposable
     }
 
     [Fact]
-    public void DefaultChatModel_Пуста_ПоУмолчанию()
+    public void Слоты_Пусты_ПоУмолчанию()
     {
-        BuildService().Get().DefaultChatModel.Should().BeNull();
+        var s = BuildService().Get();
+        s.ModelTierStrong.Should().BeNull();
+        s.ModelTierMedium.Should().BeNull();
+        s.ModelTierWeak.Should().BeNull();
     }
 
     [Fact]
-    public void DefaultChatModel_СохраняетсяИЧитается()
+    public void Слоты_СохраняютсяИПереживаютПерезапуск()
+    {
+        BuildService().Save(new AppSettings
+        {
+            ModelTierStrong = "opus",
+            ModelTierMedium = "glm-5.2",
+            ModelTierWeak = "haiku",
+        });
+
+        var s = BuildService().Get();
+        s.ModelTierStrong.Should().Be("opus");
+        s.ModelTierMedium.Should().Be("glm-5.2");
+        s.ModelTierWeak.Should().Be("haiku");
+    }
+
+    [Fact]
+    public void Патч_ОдногоСлота_НеТрогаетСоседние()
     {
         var svc = BuildService();
-        svc.Save(new AppSettings { DefaultChatModel = "glm-5.2" });
+        svc.Save(new AppSettings { ModelTierStrong = "opus", ModelTierWeak = "haiku" });
 
-        svc.Get().DefaultChatModel.Should().Be("glm-5.2");
+        svc.Save(new AppSettings { ModelTierMedium = "glm-5.2" });
+
+        var s = svc.Get();
+        s.ModelTierStrong.Should().Be("opus");
+        s.ModelTierMedium.Should().Be("glm-5.2");
+        s.ModelTierWeak.Should().Be("haiku");
     }
 
     [Fact]
-    public void DefaultChatModel_ПереживаетПерезапуск()
-    {
-        BuildService().Save(new AppSettings { DefaultChatModel = "glm-5.2" });
-
-        BuildService().Get().DefaultChatModel.Should().Be("glm-5.2");
-    }
-
-    [Fact]
-    public void Патч_СоседнегоПоля_НеТрогаетDefaultChatModel()
+    public void ПустаяСтрока_ОчищаетСлот()
     {
         var svc = BuildService();
-        svc.Save(new AppSettings { DefaultChatModel = "glm-5.2" });
+        svc.Save(new AppSettings { ModelTierMedium = "glm-5.2" });
 
-        svc.Save(new AppSettings { ClaudeBilling = "api" });
+        svc.Save(new AppSettings { ModelTierMedium = "" });
 
-        svc.Get().DefaultChatModel.Should().Be("glm-5.2");
+        svc.Get().ModelTierMedium.Should().Be("");
+        svc.TierModel(ModelTier.Medium).Should().BeNull("очищенный слот — не модель с именем \"\"");
     }
 
     [Fact]
-    public void ПустаяСтрока_СбрасываетDefaultChatModel()
+    public void TierModel_ОтдаётМодельСлота()
     {
         var svc = BuildService();
-        svc.Save(new AppSettings { DefaultChatModel = "glm-5.2" });
+        svc.Save(new AppSettings { ModelTierStrong = "opus", ModelTierWeak = "haiku" });
 
-        svc.Save(new AppSettings { DefaultChatModel = "" });
+        svc.TierModel(ModelTier.Strong).Should().Be("opus");
+        svc.TierModel(ModelTier.Weak).Should().Be("haiku");
+        svc.TierModel(ModelTier.Medium).Should().BeNull("слот не задан — решает CLI");
+    }
 
-        svc.Get().DefaultChatModel.Should().Be("");
+    // --- Миграция v1 → v2: одиночная DefaultChatModel переезжает в слот «средняя» ---
+
+    [Fact]
+    public void Миграция_DefaultChatModel_ПереезжаетВСреднийСлот()
+    {
+        File.WriteAllText(Path.Combine(_tempDir, "app-settings.json"),
+            """{"DefaultChatModel":"glm-5.2"}""");
+
+        var svc = BuildService();
+
+        svc.TierModel(ModelTier.Medium).Should().Be("glm-5.2");
+        // Миграция одноразовая: легаси-поле очищено и в файл больше не пишется
+        BuildService().TierModel(ModelTier.Medium).Should().Be("glm-5.2");
+    }
+
+    [Fact]
+    public void Миграция_НеПеретираетУжеЗаданныйСреднийСлот()
+    {
+        File.WriteAllText(Path.Combine(_tempDir, "app-settings.json"),
+            """{"DefaultChatModel":"glm-5.2","ModelTierMedium":"sonnet"}""");
+
+        BuildService().TierModel(ModelTier.Medium).Should().Be("sonnet");
     }
 }

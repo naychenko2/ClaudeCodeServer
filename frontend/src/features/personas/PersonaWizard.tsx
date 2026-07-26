@@ -27,7 +27,7 @@ import { Toolbar, PillSwitch } from '../../components/Toolbar';
 import { Field, FieldLabel, TextField, TextArea, Toggle, Button, SegmentedControl, IconButton, ConfirmDialog } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { ModelPicker } from '../../components/ModelPicker';
-import { useModels, useModelCaps, modelProvider } from '../../lib/models';
+import { useModels, useModelCaps, modelProvider, USAGE } from '../../lib/models';
 import { effortsForProvider } from '../../lib/effort';
 import { AGENT_COLORS, agentDotColor } from '../../components/AgentSelector';
 import { PersonaAvatar } from './PersonaAvatar';
@@ -617,7 +617,7 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
             <>
               <StepHead title="Поведение" subtitle="Модель, приветствие и роль персоны в командных сценариях." />
               <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 18 }}>
-                <Field label="Модель"><ModelPicker value={model} options={models} onChange={setModel} /></Field>
+                <Field label="Модель"><ModelPicker value={model} options={models} onChange={setModel} usage={USAGE.chatPersona} /></Field>
                 {caps.supportsEffort && (
                   <Field label="Усилие рассуждения" hint="Выше — глубже размышляет, но дольше и дороже.">
                     <SegmentedControl value={effort} options={effortsForProvider(modelProvider(model))} onChange={setEffort} columns={3} />

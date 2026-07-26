@@ -9,12 +9,19 @@ public enum CheapProfile { Small, Text, Large }
 // Базовые параметры профиля (переопределяются секцией Ollama:Profiles в конфиге).
 public sealed record CheapProfileSpec(int NumCtx, int NumPredict, int TimeoutMs);
 
-// Одно фоновое one-shot действие, которое МОЖЕТ выполняться локальной моделью.
-// Key — стабильный идентификатор (ключ в конфиге Ollama:Actions и в UI использования).
+// Одно место применения модели. Исторически — фоновое one-shot действие, с v2 каталог
+// накрывает и агентные места (группа «Чаты и персоны»): им тоже назначается исполнитель.
+// Key — стабильный идентификатор (ключ в конфиге Ollama:Actions, сторе назначений и UI).
 // DefaultLocal — рекомендация по умолчанию (политика A): при настроенном Ollama действие
 // уходит на локаль, если в конфиге явно не сказано иначе.
+// Agentic — место запускает агентную сессию claude CLI (не one-shot): локаль и
+// direct:-модели ему недоступны, маршрут резолвится ModelAssignmentResolver'ом,
+// а не CheapTextRunner'ом.
+// Tier — слот по умолчанию, когда админ ничего не выбирал; null = вычислить из Profile
+// (Small/Text → слабая, Large → средняя): см. EffectiveDefaultTier.
 public sealed record LocalAction(
-    string Key, string Title, string Group, CheapProfile Profile, bool DefaultLocal);
+    string Key, string Title, string Group, CheapProfile Profile, bool DefaultLocal,
+    bool Agentic = false, ModelTier? Tier = null);
 
 // Каталог всех фоновых one-shot действий — единый источник правды для роутинга и UI.
 // Сюда НЕ входят технически неприменимые: задача-исполнитель (агентная сессия с
@@ -25,6 +32,13 @@ public sealed record LocalAction(
 public static class LocalActionCatalog
 {
     // Ключи действий — ссылаются потребители (типобезопасно вместо строк-литералов).
+    // Группа «Чаты и персоны» (Agentic): места, где раньше модель выбиралась неявно.
+    public const string ChatNew = "chat-new";
+    public const string ChatPersona = "chat-persona";
+    public const string TasksExecutor = "tasks-executor";
+    public const string SubagentConsultant = "subagent-consultant";
+    public const string ModulesLlm = "modules-llm";
+
     public const string ActionRank = "action-rank";
     public const string NotesTags = "notes-tags";
     public const string NotesLinks = "notes-links";
@@ -78,6 +92,19 @@ public static class LocalActionCatalog
 
     private static readonly IReadOnlyList<LocalAction> Builtin =
     [
+        // Агентные места (группа первая — в UI это самые важные назначения). Профиль у них
+        // номинальный (для этих мест он не используется — цепочка локали не применяется).
+        new(ChatNew, "Новый чат", "Чаты и персоны", CheapProfile.Large, DefaultLocal: false,
+            Agentic: true, Tier: ModelTier.Strong),
+        new(ChatPersona, "Чат с персоной (без своей модели)", "Чаты и персоны", CheapProfile.Large,
+            DefaultLocal: false, Agentic: true, Tier: ModelTier.Strong),
+        new(TasksExecutor, "Исполнитель задач", "Чаты и персоны", CheapProfile.Large,
+            DefaultLocal: false, Agentic: true, Tier: ModelTier.Strong),
+        new(SubagentConsultant, "Сабагенты-консультанты", "Чаты и персоны", CheapProfile.Large,
+            DefaultLocal: false, Agentic: true, Tier: ModelTier.Medium),
+        new(ModulesLlm, "LLM-канал внешних модулей", "Чаты и персоны", CheapProfile.Large,
+            DefaultLocal: false, Agentic: true, Tier: ModelTier.Medium),
+
         new(ActionRank, "Ранжир действий AI-хаба", "AI-хаб", CheapProfile.Small, DefaultLocal: true),
         new(NotesTags, "Теги заметок", "Заметки", CheapProfile.Small, DefaultLocal: true),
         new(NotesLinks, "Связи заметок", "Заметки", CheapProfile.Text, DefaultLocal: true),
@@ -170,4 +197,10 @@ public static class LocalActionCatalog
         ByKey.TryGetValue(key, out var a) ? a : (_dynamic.TryGetValue(key, out var d) ? d : null);
 
     public static bool IsKnown(string key) => Find(key) is not null;
+
+    // Слот по умолчанию для места: явный Tier записи, иначе из профиля сложности —
+    // мелочь и середина на слабой, тяжёлое на средней. Сильная по умолчанию только
+    // у агентных мест (задаётся явно в записи).
+    public static ModelTier EffectiveDefaultTier(LocalAction action) =>
+        action.Tier ?? (action.Profile == CheapProfile.Large ? ModelTier.Medium : ModelTier.Weak);
 }

@@ -8,6 +8,7 @@ import { CompanionSelector, type CompanionSelection } from './CompanionSelector'
 import { ToolbarOverflowMenu, type OverflowItem } from './ToolbarOverflowMenu';
 import { useToolbarOverflow } from '../hooks/useToolbarOverflow';
 import { ComposerModelPicker } from './ComposerModelPicker';
+import { USAGE } from '../lib/models';
 import { ComposerEffortPicker } from './ComposerEffortPicker';
 import { TeamDrawer } from '../features/team/TeamDrawer';
 import {
@@ -1143,6 +1144,8 @@ export function Composer({
               started={chatStarted}
               isMobile={isMobile}
               compact={isMobile}
+              // У чата с персоной своё назначение модели — пункт «По умолчанию» подписывается им
+              usage={selectedPersona ? USAGE.chatPersona : USAGE.chatNew}
             />
           )}
           {onEffortChange && (

@@ -6,14 +6,17 @@ public enum RouteSource { Default, Config, Admin }
 
 // Исполнитель ПЕРВОГО шага действия. Дальше цепочка одинакова для всех:
 // выбранное → локальная модель (если настроена) → claude.
-// Local   — локальная модель Ollama;
-// Claude  — модель действия по умолчанию (та, что оно берёт из своего конфига);
-// Default — модель по умолчанию для чатов (глобальная DefaultChatModel);
-// Model   — конкретная модель конкретного провайдера (Model заполнено её id).
-public enum RouteKind { Local, Claude, Default, Model }
+// Local  — локальная модель Ollama;
+// Claude — модель действия по умолчанию (та, что оно берёт из своего конфига);
+// Tier   — слот тира инстанса (сильная/средняя/слабая, AppSettings.ModelTier*);
+//          пустой слот откатывается на модель действия, как Claude;
+// Model  — конкретная модель конкретного провайдера (Model заполнено её id).
+public enum RouteKind { Local, Claude, Tier, Model }
 
-// Действующий маршрут действия: чем начинаем, какой моделью (для Kind=Model) и откуда взято.
-public sealed record ActionRoute(RouteKind Kind, string? Model, RouteSource Source);
+// Действующий маршрут действия: чем начинаем, какой моделью (для Kind=Model),
+// каким слотом (для Kind=Tier) и откуда взято.
+public sealed record ActionRoute(RouteKind Kind, string? Model, RouteSource Source,
+    ModelTier? Tier = null);
 
 // Решает, идёт ли конкретное фоновое действие на локальную модель (Ollama) или на
 // существующий механизм (claude one-shot). Приоритет источников: оверрайд админа из UI
@@ -75,16 +78,26 @@ public sealed class LocalActionRouter
         if (_store.TryGet(actionKey) is { } admin) return Parse(admin, RouteSource.Admin);
         if (_overrides.TryGetValue(actionKey, out var cfg))
             return new ActionRoute(cfg ? RouteKind.Local : RouteKind.Claude, null, RouteSource.Config);
-        return new ActionRoute(
-            LocalActionCatalog.Find(actionKey)?.DefaultLocal == true ? RouteKind.Local : RouteKind.Claude,
-            null, RouteSource.Default);
+        // Без настройки админа и конфига место идёт на свой слот тира из каталога
+        // (сильная/средняя/слабая): слово «по умолчанию» означает одно и то же во всём
+        // продукте. Модель действия (обычно haiku) остаётся фолбэком — её берёт
+        // CheapTextRunner.EffectiveFallback, когда слот пуст.
+        var action = LocalActionCatalog.Find(actionKey);
+        return action?.DefaultLocal == true
+            ? new ActionRoute(RouteKind.Local, null, RouteSource.Default)
+            : new ActionRoute(RouteKind.Tier, null, RouteSource.Default,
+                action is null ? ModelTier.Medium : LocalActionCatalog.EffectiveDefaultTier(action));
     }
 
     private static ActionRoute Parse(string route, RouteSource source) => route switch
     {
         LocalActionOverridesStore.LocalRoute => new ActionRoute(RouteKind.Local, null, source),
-        LocalActionOverridesStore.ClaudeRoute => new ActionRoute(RouteKind.Claude, null, source),
-        LocalActionOverridesStore.DefaultRoute => new ActionRoute(RouteKind.Default, null, source),
+        // Легаси-значения одиночной «модели по умолчанию» (v1): оба означали «обычная модель,
+        // не локаль» — с появлением слотов это средняя
+        LocalActionOverridesStore.ClaudeRoute or LocalActionOverridesStore.DefaultRoute =>
+            new ActionRoute(RouteKind.Tier, null, source, ModelTier.Medium),
+        _ when LocalActionOverridesStore.ParseTierRoute(route) is { } tier =>
+            new ActionRoute(RouteKind.Tier, null, source, tier),
         _ => new ActionRoute(RouteKind.Model, route, source),
     };
 

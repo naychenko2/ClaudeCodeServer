@@ -20,6 +20,7 @@ public class SessionManagerTests : IDisposable
     private readonly UserStore _userStore;
     private readonly PersonaManager _personaManager;
     private readonly AppSettingsService _appSettings;
+    private readonly ClaudeHomeServer.Services.Llm.LocalActionOverridesStore _actionOverrides;
     private readonly SessionManager _sut;
 
     public SessionManagerTests()
@@ -78,7 +79,9 @@ public class SessionManagerTests : IDisposable
         var promptBuilder = new PersonaPromptBuilder(llmProviders);
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
-        _sut = new SessionManager(_projectManager, hub.Object, _historyService, config, adapters, falCost, usage, appSettings, userStore, jwt, server.Object, llmProviders, notesKb, flags, personas, personaMemory, bindings, promptBuilder, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox);
+        _actionOverrides = new ClaudeHomeServer.Services.Llm.LocalActionOverridesStore(config);
+        var assignments = new ClaudeHomeServer.Services.Llm.ModelAssignmentResolver(appSettings, _actionOverrides);
+        _sut = new SessionManager(_projectManager, hub.Object, _historyService, config, adapters, falCost, usage, appSettings, userStore, jwt, server.Object, llmProviders, notesKb, flags, personas, personaMemory, bindings, promptBuilder, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox, assignments: assignments);
     }
 
     public void Dispose()
@@ -416,12 +419,12 @@ public class SessionManagerTests : IDisposable
         session.ClaudeSessionId.Should().Be(uuid);
     }
 
-    // --- DefaultChatModel (модель по умолчанию для новых чатов) ---
+    // --- Слоты тиров: новый чат идёт на слот «сильная» (назначение chat-new) ---
 
     [Fact]
-    public async Task CreateAsync_БезModel_ПрименяетDefaultChatModel()
+    public async Task CreateAsync_БезModel_ПрименяетСлотСильной()
     {
-        _appSettings.Save(new AppSettings { DefaultChatModel = "glm-5.2" });
+        _appSettings.Save(new AppSettings { ModelTierStrong = "glm-5.2" });
         var dir = MkProjectDir("dcm");
         var project = _projectManager.Create("DCM", dir, TestUserId, TestUsername);
 
@@ -431,9 +434,9 @@ public class SessionManagerTests : IDisposable
     }
 
     [Fact]
-    public async Task CreateAsync_ЯвныйModel_ПеребиваетDefaultChatModel()
+    public async Task CreateAsync_ЯвныйModel_ПеребиваетСлот()
     {
-        _appSettings.Save(new AppSettings { DefaultChatModel = "glm-5.2" });
+        _appSettings.Save(new AppSettings { ModelTierStrong = "glm-5.2" });
         var dir = MkProjectDir("dcm-explicit");
         var project = _projectManager.Create("DCME", dir, TestUserId, TestUsername);
 
@@ -443,11 +446,11 @@ public class SessionManagerTests : IDisposable
     }
 
     [Fact]
-    public async Task CreateAsync_Resume_НеПрименяетDefaultChatModel()
+    public async Task CreateAsync_Resume_НеПрименяетСлот()
     {
         // У resumed-сессии в транскрипте уже зафиксированы своя модель и провайдер —
-        // подмена DefaultChatModel сменила бы провайдер и упёрлась в guard (400)
-        _appSettings.Save(new AppSettings { DefaultChatModel = "glm-5.2" });
+        // подмена моделью слота сменила бы провайдер и упёрлась в guard (400)
+        _appSettings.Save(new AppSettings { ModelTierStrong = "glm-5.2" });
         var dir = MkProjectDir("dcm-resume");
         var project = _projectManager.Create("DCMR", dir, TestUserId, TestUsername);
 
@@ -455,6 +458,89 @@ public class SessionManagerTests : IDisposable
             resumeSessionId: Guid.NewGuid().ToString());
 
         session.Model.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task CreateAsync_ИсполнительЗадачи_ИдётПоНазначениюTasksExecutor()
+    {
+        // Назначение места «исполнитель задач» (оверрайд в сторе) сильнее слота chat-new
+        _appSettings.Save(new AppSettings
+        {
+            ModelTierStrong = "glm-5.2",
+            ModelTierMedium = "sonnet",
+        });
+        _actionOverrides.Set(ClaudeHomeServer.Services.Llm.LocalActionCatalog.TasksExecutor, "tier:medium");
+        var dir = MkProjectDir("dcm-task");
+        var project = _projectManager.Create("DCMT", dir, TestUserId, TestUsername);
+
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto,
+            taskExecution: true, taskId: "task-1");
+
+        session.Model.Should().Be("sonnet");
+    }
+
+    // --- Слоты тиров в чатах персон ---
+
+    private Persona MkPersona(string name, string? model, string projectId) =>
+        _personaManager.Create(TestUserId, name, role: null, description: null, systemPrompt: null,
+            model: model, effort: null, scope: PersonaScope.Project, projectId: projectId,
+            color: null, greeting: null, memoryEnabled: false);
+
+    [Fact]
+    public async Task ЧатПерсоны_БезМоделиУПерсоны_ПрименяетСлот()
+    {
+        _appSettings.Save(new AppSettings { ModelTierStrong = "glm-5.2" });
+        var dir = MkProjectDir("persona-default");
+        var project = _projectManager.Create("PD", dir, TestUserId, TestUsername);
+        var persona = MkPersona("Без модели", null, project.Id);
+
+        var session = await _sut.CreatePersonaChatAsync(TestUserId, persona.Id, ClaudeMode.Auto);
+
+        session.Model.Should().Be("glm-5.2");
+    }
+
+    [Fact]
+    public async Task ЧатПерсоны_МодельПерсоны_ПеребиваетСлот()
+    {
+        _appSettings.Save(new AppSettings { ModelTierStrong = "glm-5.2" });
+        var dir = MkProjectDir("persona-explicit");
+        var project = _projectManager.Create("PE", dir, TestUserId, TestUsername);
+        var persona = MkPersona("С моделью", "opus", project.Id);
+
+        var session = await _sut.CreatePersonaChatAsync(TestUserId, persona.Id, ClaudeMode.Auto);
+
+        session.Model.Should().Be("opus");
+    }
+
+    [Fact]
+    public async Task ГрупповойЧат_ВедущаяБезМодели_ПрименяетСлот()
+    {
+        _appSettings.Save(new AppSettings { ModelTierStrong = "glm-5.2" });
+        var dir = MkProjectDir("group-default");
+        var project = _projectManager.Create("GD", dir, TestUserId, TestUsername);
+        var leader = MkPersona("Ведущая", null, project.Id);
+        var second = MkPersona("Вторая", null, project.Id);
+
+        var session = await _sut.CreateGroupChatAsync(TestUserId, [leader.Id, second.Id], ClaudeMode.Auto);
+
+        session.Model.Should().Be("glm-5.2");
+    }
+
+    [Fact]
+    public async Task SetPersona_ПерсонаБезМодели_НеЗатираетМодельСлота()
+    {
+        // Раньше назначение персоны в неначатый чат безусловно писало persona.Model = null,
+        // и подставленная при создании модель слота молча терялась
+        _appSettings.Save(new AppSettings { ModelTierStrong = "glm-5.2" });
+        var dir = MkProjectDir("switch-speaker");
+        var project = _projectManager.Create("SS", dir, TestUserId, TestUsername);
+        var persona = MkPersona("Без модели", null, project.Id);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        session.Model.Should().Be("glm-5.2");
+
+        var updated = _sut.SetPersona(session.Id, TestUserId, persona.Id);
+
+        updated!.Model.Should().Be("glm-5.2");
     }
 
     [Fact]

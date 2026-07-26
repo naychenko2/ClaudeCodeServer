@@ -62,7 +62,19 @@ const LEGACY_LABELS: Record<string, string> = {
 
 let _models: ModelOption[] = FALLBACK_MODELS;
 let _providers: Record<string, ProviderCapabilities> = { claude: CLAUDE_CAPS };
+// Резолвнутые модели агентных мест из /api/models (ключ каталога → модель или null).
+// Пункт «По умолчанию» в пикере означает модель СВОЕГО места, поэтому значение нужно всем
+// экранам. Бэкенд уже применил цепочку «назначение → слот тира», фронт слоты не знает.
+let _assignments: Record<string, string | null> = {};
 const _listeners = new Set<() => void>();
+
+// Ключи агентных мест (LocalActionCatalog): по ним подписывается пункт «По умолчанию»
+export const USAGE = {
+  chatNew: 'chat-new',
+  chatPersona: 'chat-persona',
+  tasksExecutor: 'tasks-executor',
+} as const;
+export type UsageKey = typeof USAGE[keyof typeof USAGE];
 
 function emit() {
   _listeners.forEach(fn => fn());
@@ -103,6 +115,7 @@ export async function loadModels(): Promise<void> {
     if (opts.length > 0) {
       _models = opts;
       if (res.providers) _providers = { claude: CLAUDE_CAPS, ...res.providers };
+      if (res.assignments) _assignments = res.assignments;
       emit();
     }
   } catch {
@@ -110,10 +123,42 @@ export async function loadModels(): Promise<void> {
   }
 }
 
+// Модель, которая стоит за пунктом «По умолчанию» для места. Пусто — назначение ведёт
+// на незаданный слот, решение остаётся за CLI.
+export function assignedModel(usage: UsageKey = USAGE.chatNew): string {
+  return _assignments[usage] ?? '';
+}
+
+// Подпись пункта «По умолчанию» с расшифровкой, какая модель за ним стоит для этого места.
+// Назначение ведёт на незаданный слот → без уточнения (за модель отвечает CLI).
+export function defaultModelLabel(usage: UsageKey = USAGE.chatNew): string {
+  const m = assignedModel(usage);
+  return m ? `По умолчанию (${modelLabel(m)})` : 'По умолчанию';
+}
+
+// Готовая строка-опция «По умолчанию» для пикеров — одна на весь продукт: подпись, описание
+// и окно контекста собираются здесь, чтобы формулировка не разъезжалась по экранам.
+export function defaultModelOption(usage: UsageKey = USAGE.chatNew): ModelOption {
+  const m = assignedModel(usage);
+  return {
+    value: '',
+    label: defaultModelLabel(usage),
+    description: m
+      ? 'Модель из настроек — назначена этому виду чатов'
+      : 'Не задана — модель выбирает CLI',
+    contextWindow: m ? contextWindowFor(m) : undefined,
+  };
+}
+
 // Провайдер модели: из динамического списка, иначе по префиксу id
-// (ключи известных провайдеров: deepseek-* → deepseek, glm-* → glm)
-export function modelProvider(value?: string | null): string {
-  if (!value) return 'claude';
+// (ключи известных провайдеров: deepseek-* → deepseek, glm-* → glm).
+// Пустая модель = «по умолчанию» → провайдер берётся у назначения места: иначе смена модели
+// чата на этот пункт выглядела бы как «остаёмся у claude» и упиралась в guard смены провайдера.
+export function modelProvider(value?: string | null, usage: UsageKey = USAGE.chatNew): string {
+  if (!value) {
+    const assigned = assignedModel(usage);
+    return assigned ? modelProvider(assigned) : 'claude';
+  }
   const fromCatalog = _models.find(m => m.value === value)?.provider;
   if (fromCatalog) return fromCatalog;
   const v = value.toLowerCase();
@@ -194,6 +239,13 @@ export function useModels(): ModelOption[] {
 export function useModelLabel(value?: string | null): string {
   useModels();
   return modelLabel(value);
+}
+
+// Реактивная опция «По умолчанию»: ре-рендер и при догрузке каталога,
+// и при смене назначений из диалога поставщиков (оба зовут emit)
+export function useDefaultModelOption(usage: UsageKey = USAGE.chatNew): ModelOption {
+  useModels();
+  return defaultModelOption(usage);
 }
 
 // Короткая подпись модели для отображения (id → label).

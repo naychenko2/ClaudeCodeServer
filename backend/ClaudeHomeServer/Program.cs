@@ -171,6 +171,9 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.IOneShotRunner>(
 // Стор оверрайдов — админские тумблеры маршрута из UI, слой поверх конфига Ollama:Actions.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.LocalActionOverridesStore>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.LocalActionRouter>();
+// Резолвер моделей агентных мест (новый чат, чат персоны, исполнитель задач…):
+// явная модель → назначение админа → слот тира (сильная/средняя/слабая)
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ModelAssignmentResolver>();
 // Пресеты автоподбора исполнителя фоновых действий (рекомендованное/бесплатные/локальные)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.LocalActionPresetService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ICheapTextRunner,

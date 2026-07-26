@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Services.Llm;
 using FluentAssertions;
+using Microsoft.Extensions.Configuration;
 
 namespace ClaudeHomeServer.Tests.Services;
 
@@ -103,5 +104,49 @@ public class OneShotClaudeRunnerArgsTests
 
         args.Should().Contain("--disallowedTools");
         args[args.IndexOf("--disallowedTools") + 1].Should().Contain("Bash").And.Contain("Write");
+    }
+
+    // --- Подстановка «модели по умолчанию» (этап шлюза на границе запуска CLI) ---
+
+    private static (OneShotClaudeRunner Runner, ClaudeHomeServer.Services.AppSettingsService Settings) MkRunner()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "oneshot_dm_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(tempDir, "projects.json"),
+            }).Build();
+        var settings = new ClaudeHomeServer.Services.AppSettingsService(config);
+        var runner = new OneShotClaudeRunner(new LlmProviderRegistry(config),
+            TestLauncherFactory.Instance, config, spend: null, appSettings: settings);
+        return (runner, settings);
+    }
+
+    [Fact]
+    public void БезМодели_ПодставляетсяСреднийСлот()
+    {
+        // Генеричный one-shot без контекста места идёт на слот «средняя»
+        var (runner, settings) = MkRunner();
+        settings.Save(new ClaudeHomeServer.Models.AppSettings { ModelTierMedium = "glm-5.2" });
+
+        runner.ResolveModel(null).Should().Be("glm-5.2");
+    }
+
+    [Fact]
+    public void ЯвнаяМодель_СлотИгнорирует()
+    {
+        var (runner, settings) = MkRunner();
+        settings.Save(new ClaudeHomeServer.Models.AppSettings { ModelTierMedium = "glm-5.2" });
+
+        runner.ResolveModel("haiku").Should().Be("haiku");
+    }
+
+    [Fact]
+    public void СлотПуст_ВызовИдётБезМодели()
+    {
+        var (runner, _) = MkRunner();
+
+        runner.ResolveModel(null).Should().BeNull();
     }
 }

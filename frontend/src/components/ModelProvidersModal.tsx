@@ -1,12 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ChevronDown, RotateCcw, Sparkles, Gift, Cpu, Zap, Scale, Boxes } from 'lucide-react';
+import { ChevronDown, RotateCcw, Zap, Boxes } from 'lucide-react';
 import { Modal, IconButton, Toggle, Button } from './ui';
 import { ModelPicker } from './ModelPicker';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { api } from '../lib/api';
 import { C, FONT, FS, R, SP, SHADOW, Z, MODAL_W } from '../lib/design';
 import { useModels, useProviders, modelLabel, providerLabel, modelProvider,
-  loadModels, type ModelOption } from '../lib/models';
+  loadModels, type ProviderCapabilities, type ModelOption } from '../lib/models';
 import type { OllamaUsageInfo, OllamaActionInfo, AppSettings } from '../types';
 
 interface Props {
@@ -41,18 +41,9 @@ function levelTitleStyle(): React.CSSProperties {
 // исполнителя, есть тумблер «присылать ли по расписанию» (AppSettings.DailyBriefingEnabled).
 const BRIEFING_KEY = 'daily-briefing';
 
-// Пресеты автоподбора: сервер проставляет исполнителя всем действиям по единому правилу.
-type PresetKey = 'recommended' | 'balanced' | 'free' | 'local';
-const PRESETS: { key: PresetKey; icon: typeof Sparkles; title: string; desc: string }[] = [
-  { key: 'recommended', icon: Sparkles, title: 'Рекомендованное',
-    desc: 'Лучшее качество: локаль и AI под сложность задачи (могут быть платные)' },
-  { key: 'balanced', icon: Scale, title: 'Сбалансированный',
-    desc: 'По сложности: простое — на локальной модели, среднее — бесплатные облачные, тяжёлое — AI' },
-  { key: 'free', icon: Gift, title: 'Только бесплатные',
-    desc: 'Бесплатные облачные модели OpenRouter — без затрат' },
-  { key: 'local', icon: Cpu, title: 'Локальные',
-    desc: 'Локальная модель, где подходит; для сложных задач — бесплатная облачная' },
-];
+// Прессеты быстрой настройки мест применения моделей. Старые пресеты (recommended/balanced/free/local)
+// убраны из UI — бэк их оставляет, но фронт больше не шлёт.
+type PresetKey = 'tiers' | 'tiers-local';
 
 // Слоты моделей инстанса: три именованные модели, на которые ссылаются назначения мест.
 // field — имя поля AppSettings (патчится по одному), route — значение назначения.
@@ -80,20 +71,24 @@ const DOT_COLOR: Record<'active' | 'inactive' | 'offline', string> = {
   offline: C.warning,
 };
 
+// Провайдер годится для чипса-быстрого выбора: настроен и несёт полную тройку слотов.
+function hasTierTriple(caps: ProviderCapabilities): boolean {
+  return caps.tierStrong != null && caps.tierMedium != null && caps.tierWeak != null;
+}
+
 // Диалог «Поставщики моделей»: три уровня сверху вниз.
-//  1. Подключённые модели — сворачиваемая плитка адаптеров со статусами (read-only, из /api/models).
-//  2. Три модели — слоты «сильная/средняя/слабая» (GET/PUT /api/settings, ModelTier*).
-//     На них ссылаются назначения уровня 3 значением "tier:strong|medium|weak".
-//  3. Кто что выполняет — назначение каждому месту: сначала агентные (новый чат, чат
-//     персоны, исполнитель задач…), затем фоновые ИИ-действия. Варианты: слот, конкретная
-//     модель любого провайдера, локальная модель (только фоновым).
+//  1. Провайдеры — сворачиваемая плитка адаптеров со статусами (read-only, из /api/models).
+//  2. Модели по умолчанию — три слота «сильная/средняя/слабая» и чипсы провайдеров для их
+//     быстрого заполнения. На них ссылаются назначения уровня 3.
+//  3. Применение моделей — панель быстрой настройки и назначение каждому месту:
+//     слот, конкретная модель любого провайдера, локальная модель (только фоновым).
 // Настройка серверная и общая для всех — только админ.
 export function ModelProvidersModal({ onClose }: Props) {
   const [info, setInfo] = useState<OllamaUsageInfo | undefined>(undefined);
   const [busy, setBusy] = useState<string | null>(null);
-  const [preset, setPreset] = useState<PresetKey | null>(null);
+  const [presetBusy, setPresetBusy] = useState<PresetKey | null>(null);
+  const [chipBusy, setChipBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [autopickOpen, setAutopickOpen] = useState(false);
   const models = useModels();
   const providers = useProviders();
 
@@ -104,10 +99,8 @@ export function ModelProvidersModal({ onClose }: Props) {
   const [editingTier, setEditingTier] = useState<TierKey | null>(null);
   const briefingOn = settings?.dailyBriefingEnabled ?? true;
 
-  // Уровни 1 и 2 по умолчанию свёрнуты (краткий однострочник), разворачиваются по клику:
-  // в окне и без того длинный уровень 3, три раскрытых слота его перегружали
+  // Уровень 1 свёрнут по умолчанию (однострочная сводка), уровень 2 развёрнут.
   const [providersExpanded, setProvidersExpanded] = useState(false);
-  const [tiersExpanded, setTiersExpanded] = useState(false);
 
   // Оптимистично: применяем сразу, при ошибке возвращаем прежнее значение. Шлём ТОЛЬКО своё
   // поле — PUT /api/settings патчит присланное, поэтому наш (возможно устаревший) снимок
@@ -143,6 +136,41 @@ export function ModelProvidersModal({ onClose }: Props) {
       .finally(() => setDefaultBusy(null));
   }
 
+  // Оптимистично проставляем все три слота тройкой провайдера одним PATCH.
+  function isChipActive(caps: ProviderCapabilities): boolean {
+    return settings != null &&
+      caps.tierStrong === settings.modelTierStrong &&
+      caps.tierMedium === settings.modelTierMedium &&
+      caps.tierWeak === settings.modelTierWeak;
+  }
+
+  async function applyProviderChip(caps: ProviderCapabilities) {
+    if (!settings || chipBusy === caps.provider || isChipActive(caps)) return;
+    const prev = settings;
+    setChipBusy(caps.provider);
+    setError(null);
+    setSettings(s => s ? {
+      ...s,
+      modelTierStrong: caps.tierStrong!,
+      modelTierMedium: caps.tierMedium!,
+      modelTierWeak: caps.tierWeak!,
+    } : s);
+    try {
+      const saved = await api.settings.save({
+        modelTierStrong: caps.tierStrong!,
+        modelTierMedium: caps.tierMedium!,
+        modelTierWeak: caps.tierWeak!,
+      });
+      setSettings(saved);
+      await loadModels();
+    } catch (e) {
+      setSettings(prev);
+      setError(e instanceof Error ? e.message : 'Не удалось применить');
+    } finally {
+      setChipBusy(null);
+    }
+  }
+
   useEffect(() => {
     let cancelled = false;
     api.usage.get()
@@ -155,12 +183,10 @@ export function ModelProvidersModal({ onClose }: Props) {
     return () => { cancelled = true; };
   }, []);
 
-  // Доступность пресетов: бесплатные облачные модели есть в каталоге? локаль настроена?
-  const hasFree = models.some(m => m.provider === 'openrouter-direct');
   const ollamaOn = info?.enabled ?? false;
 
   async function applyPreset(key: PresetKey) {
-    setPreset(key);
+    setPresetBusy(key);
     setError(null);
     try {
       await api.localActions.applyPreset(key);
@@ -169,7 +195,7 @@ export function ModelProvidersModal({ onClose }: Props) {
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Не удалось применить пресет');
     } finally {
-      setPreset(null);
+      setPresetBusy(null);
     }
   }
 
@@ -238,15 +264,21 @@ export function ModelProvidersModal({ onClose }: Props) {
   // сводки) — это десятки вызовов в день. Тир угадываем по id, как в ModelIcon.
   const heavyWeak = /opus|fable|ultra|\bmax\b|\bpro\b|reasoner/i.test(tierModel('weak'));
 
+  // Провайдеры, для которых можно нарисовать чипс быстрого выбора тройки.
+  const chipProviders = providers
+    .map(p => p.caps)
+    .filter(c => c.configured !== false && hasTierTriple(c));
+
   return (
     <Modal
       title="Поставщики моделей"
-      subtitle="Кто выполняет чаты и фоновые задачи. Настройка общая и применяется сразу."
+      subtitle="Модели для чатов и фоновых задач. Настройка общая и применяется сразу."
       width={MODAL_W.form}
       onClose={onClose}
     >
-      {/* === Уровень 1: Подключённые модели (свёрнут по умолчанию) === */}
+      {/* === Уровень 1: Провайдеры (свёрнут по умолчанию) === */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div style={levelTitleStyle()}>Провайдеры</div>
         <button
           type="button"
           onClick={() => setProvidersExpanded(o => !o)}
@@ -256,7 +288,7 @@ export function ModelProvidersModal({ onClose }: Props) {
             border: `1px solid ${C.border}`, cursor: 'pointer', transition: 'border-color 0.15s',
           }}
         >
-          <Boxes size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ color: C.accent, flexShrink: 0 }} />
+          <Boxes size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ color: C.textMuted, flexShrink: 0 }} />
           <span style={{ flex: 1, minWidth: 0, fontSize: FS.base, fontWeight: 500, color: C.textHeading,
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {summaryText}
@@ -277,7 +309,7 @@ export function ModelProvidersModal({ onClose }: Props) {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 5,
                   fontSize: FS.sm, color: C.textSecondary }}>
                   <span style={{
-                    width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
+                    width: 6, height: 6, borderRadius: R.full, flexShrink: 0,
                     background: DOT_COLOR[t.status],
                   }} />
                   <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -291,7 +323,7 @@ export function ModelProvidersModal({ onClose }: Props) {
                 </div>
                 {t.status === 'inactive' && (
                   <span title="Ключ провайдера настраивается в appsettings.Local.json на сервере"
-                    style={{ fontSize: FS.xs, color: C.accent, alignSelf: 'flex-start', marginTop: 1 }}>
+                    style={{ fontSize: FS.xs, color: C.textMuted, alignSelf: 'flex-start', marginTop: 1 }}>
                     Настроить →
                   </span>
                 )}
@@ -301,80 +333,91 @@ export function ModelProvidersModal({ onClose }: Props) {
         )}
       </div>
 
-      {/* === Уровень 2: три модели (слоты) — свёрнут в сводку, как уровень 1 === */}
+      {/* === Уровень 2: Модели по умолчанию (развёрнуты) === */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
-        <div style={levelTitleStyle()}>Три модели</div>
-        <button
-          type="button"
-          onClick={() => setTiersExpanded(o => !o)}
-          style={{
-            display: 'flex', alignItems: 'center', gap: 9, width: '100%', textAlign: 'left',
-            padding: '10px 12px', borderRadius: R.lg, background: C.bgWhite,
-            border: `1px solid ${C.border}`, cursor: 'pointer', transition: 'border-color 0.15s',
-          }}
-        >
-          <Scale size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ color: C.textMuted, flexShrink: 0 }} />
-          <span style={{ flex: 1, minWidth: 0, fontSize: FS.base, fontWeight: 500, color: C.textHeading,
-            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {TIER_ORDER.map(t => `${TIERS[t].title}: ${tierModel(t) ? modelLabel(tierModel(t)) : '—'}`).join(' · ')}
-          </span>
-          <ChevronDown size={ICON_SIZE.xs} strokeWidth={ICON_STROKE}
-            style={{ flexShrink: 0, color: C.textMuted, transform: tiersExpanded ? 'rotate(180deg)' : 'none',
-              transition: 'transform 0.15s' }} />
-        </button>
+        <div style={levelTitleStyle()}>Модели по умолчанию</div>
 
-        {tiersExpanded && (
-          <>
-            <div style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.4, padding: '0 2px' }}>
-              На эти три модели ссылаются назначения ниже — меняешь модель слота, меняются
-              все места, назначенные на него.
-            </div>
-            {TIER_ORDER.map(t => {
-              const model = tierModel(t);
-              const editing = editingTier === t;
-              const rowBusy = defaultBusy === t;
+        {chipProviders.length > 0 && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            {chipProviders.map(caps => {
+              const active = isChipActive(caps);
+              const busy = chipBusy === caps.provider;
+              const triple = [caps.tierStrong, caps.tierMedium, caps.tierWeak]
+                .filter((x): x is string => x != null)
+                .map(modelLabel)
+                .join(' / ');
               return (
-                <div key={t} style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
-                  <div style={{
-                    display: 'flex', alignItems: 'center', gap: 10, padding: '11px 14px',
-                    background: C.bgCard, border: `1px solid ${editing ? C.accent : C.border}`,
-                    borderRadius: R.xl,
-                  }}>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: FS.md, fontWeight: 600, color: C.textHeading,
-                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {TIERS[t].title}
-                      </div>
-                      <div style={{ fontSize: FS.xs, color: C.textMuted, marginTop: 2,
-                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {tierSubtitle(model)} · {TIERS[t].hint}
-                      </div>
-                    </div>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setEditingTier(editing ? null : t)}
-                      disabled={rowBusy}
-                    >
-                      {editing ? 'Отмена' : 'Сменить'}
-                    </Button>
-                  </div>
-                  {editing && (
-                    <ModelPicker
-                      value={model}
-                      options={models}
-                      onChange={m => saveTier(t, m)}
-                      collapsible={false}
-                      // Здесь модели слотов и выбираются: пункт «По умолчанию» ссылался бы
-                      // сам на себя — сброса слота из UI сознательно нет
-                      hideDefault
-                    />
-                  )}
-                </div>
+                <Button
+                  key={caps.provider}
+                  variant={active ? 'primary' : 'ghost'}
+                  size="sm"
+                  pill
+                  disabled={busy || !settings}
+                  loading={busy}
+                  onClick={() => applyProviderChip(caps)}
+                  title={active
+                    ? 'Текущая тройка слотов совпадает с этим провайдером'
+                    : 'Проставить все три слота моделями этого провайдера'}
+                  style={{ whiteSpace: 'nowrap' }}
+                >
+                  <span>{caps.displayName || providerLabel(caps.provider)}</span>
+                  <span style={{ fontSize: FS.xs, fontWeight: 500, opacity: 0.85 }}>{triple}</span>
+                </Button>
               );
             })}
-          </>
+          </div>
         )}
+
+        <div style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.4, padding: '0 2px' }}>
+          На эти три модели ссылаются назначения ниже — меняешь модель слота, меняются
+          все места, назначенные на него.
+        </div>
+
+        {TIER_ORDER.map(t => {
+          const model = tierModel(t);
+          const editing = editingTier === t;
+          const rowBusy = defaultBusy === t;
+          return (
+            <div key={t} style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 10, padding: '11px 14px',
+                background: C.bgCard, border: `1px solid ${editing ? C.accent : C.border}`,
+                borderRadius: R.xl,
+              }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: FS.md, fontWeight: 600, color: C.textHeading,
+                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {TIERS[t].title}
+                  </div>
+                  <div style={{ fontSize: FS.xs, color: C.textMuted, marginTop: 2,
+                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {tierSubtitle(model)} · {TIERS[t].hint}
+                  </div>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setEditingTier(editing ? null : t)}
+                  disabled={rowBusy}
+                >
+                  {editing ? 'Отмена' : 'Сменить'}
+                </Button>
+              </div>
+              {editing && (
+                <ModelPicker
+                  value={model}
+                  options={models}
+                  onChange={m => saveTier(t, m)}
+                  collapsible={false}
+                  // Здесь модели слотов и выбираются: пункт «По умолчанию» ссылался бы
+                  // сам на себя — сброса слота из UI сознательно нет
+                  hideDefault
+                />
+              )}
+            </div>
+          );
+        })}
+
         {/* Оформление — как у соседней подсказки про выключенную локаль (уровень 3):
             два блока одной роли в одном окне обязаны выглядеть одинаково */}
         {heavyWeak && (
@@ -390,78 +433,54 @@ export function ModelProvidersModal({ onClose }: Props) {
         )}
       </div>
 
-      {/* === Уровень 3: Кто что выполняет === */}
+      {/* === Уровень 3: Применение моделей === */}
       {info === undefined ? (
         <div style={{ color: C.textMuted, fontSize: FS.md, padding: '8px 0' }}>Загрузка…</div>
       ) : (
         <>
           <div style={{ display: 'flex', flexDirection: 'column' }}>
-            <div style={levelTitleStyle()}>Кто что выполняет</div>
+            <div style={levelTitleStyle()}>Применение моделей</div>
 
-            {/* Автоподбор — пресеты схлопнуты в выпадающее меню (вместо 4 больших кнопок) */}
-            <div>
-              <button
-                type="button"
-                onClick={() => setAutopickOpen(o => !o)}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 8, width: '100%', textAlign: 'left',
-                  padding: '10px 12px', borderRadius: R.lg, background: C.bgCard,
-                  border: `1px solid ${autopickOpen ? C.accent : C.border}`, cursor: 'pointer',
-                  transition: 'border-color 0.15s',
-                }}>
-                <Sparkles size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ color: C.accent, flexShrink: 0 }} />
-                <span style={{ flex: 1, fontSize: FS.base, fontWeight: 500, color: C.textHeading }}>
-                  Автоподбор
-                </span>
-                <ChevronDown size={ICON_SIZE.xs} strokeWidth={ICON_STROKE}
-                  style={{ flexShrink: 0, color: C.textMuted, transform: autopickOpen ? 'rotate(180deg)' : 'none',
-                    transition: 'transform 0.15s' }} />
-              </button>
-
-              {autopickOpen && (
-                <div style={{
-                  marginTop: 6, background: C.bgWhite, border: `1px solid ${C.border}`,
-                  borderRadius: R.lg, overflow: 'hidden',
-                }}>
-                  {PRESETS.map((p, i) => {
-                    const disabled = (p.key === 'free' && !hasFree) || (p.key === 'local' && !ollamaOn);
-                    const hint = p.key === 'free' && !hasFree ? 'Бесплатные облачные модели не настроены'
-                      : p.key === 'local' && !ollamaOn ? 'Локальная модель (Ollama) не настроена'
-                      : undefined;
-                    const Icon = p.icon;
-                    return (
-                      <button
-                        key={p.key}
-                        type="button"
-                        onClick={() => applyPreset(p.key)}
-                        disabled={disabled || preset !== null}
-                        title={hint}
-                        style={{
-                          display: 'flex', alignItems: 'flex-start', gap: 10, width: '100%', textAlign: 'left',
-                          padding: '9px 12px', cursor: disabled || preset ? 'default' : 'pointer',
-                          background: 'none', border: 'none',
-                          borderTop: i === 0 ? 'none' : `1px solid ${C.borderLight}`,
-                          opacity: disabled ? 0.5 : 1,
-                        }}>
-                        <Icon size={16} strokeWidth={ICON_STROKE} style={{ color: C.accent, flexShrink: 0, marginTop: 1 }} />
-                        <div style={{ minWidth: 0, flex: 1 }}>
-                          <div style={{ fontSize: FS.base, fontWeight: 600, color: C.textPrimary }}>{p.title}</div>
-                          <div style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.4, marginTop: 1 }}>
-                            {hint ?? p.desc}
-                          </div>
-                        </div>
-                        {preset === p.key && (
-                          <span style={{ fontSize: FS.xs, color: C.textMuted, flexShrink: 0 }}>Применяю…</span>
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
+            {/* Панель быстрой настройки: автоматически или с локальной моделью */}
+            <div style={{
+              display: 'flex', flexDirection: 'column', gap: 8,
+              background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: R.xl,
+              padding: '10px 12px',
+            }}>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  fullWidth
+                  loading={presetBusy === 'tiers'}
+                  disabled={presetBusy !== null}
+                  onClick={() => applyPreset('tiers')}
+                  title="Проставить всем местам ниже слот по сложности функции"
+                >
+                  {presetBusy === 'tiers' ? 'Применяю…' : 'Назначить модели автоматически'}
+                </Button>
+                {ollamaOn && (
+                  <Button
+                    variant="ghostFilled"
+                    size="sm"
+                    fullWidth
+                    loading={presetBusy === 'tiers-local'}
+                    disabled={presetBusy !== null}
+                    onClick={() => applyPreset('tiers-local')}
+                    title="Мелкие задачи — на локальной модели"
+                  >
+                    {presetBusy === 'tiers-local' ? 'Применяю…' : 'С локальной моделью'}
+                  </Button>
+                )}
+              </div>
+              <div style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.4 }}>
+                Проставляет всем местам ниже слот по сложности функции. Вторая кнопка видна только
+                когда настроена локальная модель.
+              </div>
             </div>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, margin: '10px 2px 2px' }}>
-              <Zap size={12} strokeWidth={ICON_STROKE} style={{ color: C.accent, flexShrink: 0 }} />
+              <Zap size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ color: C.warning, flexShrink: 0 }} />
               <span style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.4 }}>
                 — задаче нужна сильная модель, локальная не подойдёт: для неё подбирается AI или облачная.
               </span>

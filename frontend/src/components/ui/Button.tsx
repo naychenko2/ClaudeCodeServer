@@ -1,7 +1,7 @@
 import type { CSSProperties, ReactNode, MouseEvent } from 'react';
 import { C, R, SHADOW, FONT } from '../../lib/design';
 
-export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'ghostAccent' | 'danger' | 'dashed';
+export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'ghostAccent' | 'ghostFilled' | 'danger' | 'dashed';
 export type ButtonSize = 'sm' | 'md' | 'lg';
 
 const SIZE: Record<ButtonSize, CSSProperties> = {
@@ -20,6 +20,8 @@ function variantStyle(variant: ButtonVariant, loading: boolean): CSSProperties {
       return { background: 'transparent', color: C.textSecondary, border: `1px solid ${C.border}` };
     case 'ghostAccent':
       return { background: 'transparent', color: C.accent, border: `1.5px solid ${C.accent}` };
+    case 'ghostFilled':
+      return { background: C.bgWhite, color: C.textSecondary, border: `1px solid ${C.border}` };
     case 'danger':
       return { background: C.danger, color: C.onAccent, border: 'none' };
     case 'dashed':
@@ -44,6 +46,7 @@ interface ButtonProps {
   loading?: boolean;
   disabled?: boolean;
   glow?: boolean;            // свечение под основной кнопкой (логин)
+  pill?: boolean;            // pill-форма (полное скругление), независимо от size
   leftIcon?: ReactNode;
   onClick?: (e: MouseEvent) => void;
   type?: 'button' | 'submit';
@@ -54,7 +57,7 @@ interface ButtonProps {
 
 export function Button({
   variant = 'primary', size = 'md', fullWidth, loading = false,
-  disabled, glow, leftIcon, onClick, type = 'button', title, style, children,
+  disabled, glow, pill, leftIcon, onClick, type = 'button', title, style, children,
 }: ButtonProps) {
   const isDisabled = disabled || loading;
   return (
@@ -66,6 +69,7 @@ export function Button({
       style={{
         ...SIZE[size],
         ...variantStyle(variant, loading),
+        ...(pill ? { borderRadius: R.max } : {}),
         width: fullWidth ? '100%' : undefined,
         fontWeight: 600,
         fontFamily: FONT.sans,

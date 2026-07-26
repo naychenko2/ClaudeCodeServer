@@ -120,8 +120,8 @@ export const api = {
       request<{ key: string; route: string; source: string }>(`/admin/local-actions/${key}`,
         { method: 'DELETE' }),
     // Массовый автоподбор исполнителя всем действиям по пресету; актуальные маршруты фронт
-    // затем перечитывает из /usage. preset: 'recommended' | 'free' | 'local'.
-    applyPreset: (preset: string) =>
+    // затем перечитывает из /usage. preset: 'tiers' | 'tiers-local'.
+    applyPreset: (preset: 'tiers' | 'tiers-local') =>
       request<{ preset: string; count: number }>(`/admin/local-actions/preset`,
         { method: 'POST', body: JSON.stringify({ preset }) }),
   },

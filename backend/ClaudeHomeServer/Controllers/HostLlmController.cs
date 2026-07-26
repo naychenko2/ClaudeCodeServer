@@ -83,14 +83,24 @@ public class HostLlmController(
             else return BadRequest(new { error = "invalid_request", message = "responseFormat: \"json\" либо JSON-схема" });
         }
 
-        // Модуль без блока llm каналом не пользуется (§10.1) — вызовы отклоняются
-        if ((module.Manifest.Llm?.Actions ?? []).Count == 0)
+        // §10.4 v1.6: разводим 403/404 по признаку «есть ли ключ в манифесте вызывающего»,
+        // а не «пуст ли блок llm». Ключ чужого модуля сюда не попадает — неймспейс module:{id}:{key}
+        // ядро строит из aud, поэтому для вызывающего чужих действий не существует (CT-14).
+        var action = req.Action.Trim();
+        var declared = module.Manifest.Llm?.Actions ?? [];
+        if (!declared.Any(a => string.Equals(a.Key, action, StringComparison.OrdinalIgnoreCase)))
             return StatusCode(StatusCodes.Status403Forbidden, new { error = "action_not_declared" });
 
-        var action = req.Action.Trim();
         var fullKey = module.LlmActionKey(action);
         if (LocalActionCatalog.Find(fullKey) is null)
+        {
+            // Рассинхрон ядра (§10.4): манифест валиден и действие объявлено, но в каталоге его нет —
+            // отбраковано валидацией либо каталог не прогрет. Это наша проблема, не модуля → логируем.
+            log.LogWarning(
+                "LLM-канал: действие {Action} модуля {Module} объявлено, но отсутствует в каталоге",
+                fullKey, module.Id);
             return NotFound(new { error = "action_unknown" });
+        }
 
         if (Encoding.UTF8.GetByteCount(req.Prompt) > MaxPromptBytes)
             return StatusCode(StatusCodes.Status413PayloadTooLarge,
@@ -133,7 +143,8 @@ public class HostLlmController(
                 usage.Record(new ModuleLlmUsageStore.Entry(
                     DateTime.UtcNow, module.Id, action, userId, routeStr,
                     Ok: true, started.ElapsedMilliseconds, result.Usage?.Model,
-                    result.Usage?.TotalInputTokens, result.Usage?.OutputTokens, result.Usage?.CostUsd));
+                    result.Usage?.TotalInputTokens, result.Usage?.OutputTokens, result.Usage?.CostUsd,
+                    Outcome: ModuleLlmOutcome.Ok));
 
                 return Ok(new
                 {
@@ -151,7 +162,7 @@ public class HostLlmController(
                 // Клиентский обрыв (ct) сюда не попадает — ему ответ уже не нужен.
                 usage.Record(new ModuleLlmUsageStore.Entry(
                     DateTime.UtcNow, module.Id, action, userId, routeStr,
-                    Ok: false, started.ElapsedMilliseconds));
+                    Ok: false, started.ElapsedMilliseconds, Outcome: ModuleLlmOutcome.Timeout));
                 return StatusCode(StatusCodes.Status504GatewayTimeout, new { error = "llm_timeout" });
             }
             catch (Exception ex) when (!ct.IsCancellationRequested)
@@ -161,7 +172,7 @@ public class HostLlmController(
                 log.LogWarning(ex, "LLM-канал: вызов {Action} модуля {Module} не удался", fullKey, module.Id);
                 usage.Record(new ModuleLlmUsageStore.Entry(
                     DateTime.UtcNow, module.Id, action, userId, routeStr,
-                    Ok: false, started.ElapsedMilliseconds));
+                    Ok: false, started.ElapsedMilliseconds, Outcome: ModuleLlmOutcome.Unavailable));
                 return StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = "llm_unavailable" });
             }
         }

@@ -23,7 +23,10 @@ public sealed class ModuleLlmUsageStore
         [property: JsonPropertyName("model")] string? Model = null,
         [property: JsonPropertyName("inputTokens")] long? InputTokens = null,
         [property: JsonPropertyName("outputTokens")] long? OutputTokens = null,
-        [property: JsonPropertyName("costUsd")] double? CostUsd = null);
+        [property: JsonPropertyName("costUsd")] double? CostUsd = null,
+        // Причина исхода (CT-15): различает отказы при ok=false — иначе по журналу не отличить
+        // 503 от 504 и 429. Значения — константы ModuleLlmOutcome.
+        [property: JsonPropertyName("outcome")] string Outcome = ModuleLlmOutcome.Ok);
 
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -59,4 +62,15 @@ public sealed class ModuleLlmUsageStore
             _log.LogError(ex, "Не удалось записать учёт LLM-вызова модуля в {Path}", _storePath);
         }
     }
+}
+
+/// <summary>Исход вызова LLM-канала для поля Entry.Outcome (§10.4). ok=true ⇒ Ok.</summary>
+public static class ModuleLlmOutcome
+{
+    public const string Ok = "ok";
+    public const string Unavailable = "unavailable";       // 503 llm_unavailable
+    public const string Timeout = "timeout";               // 504 llm_timeout
+    public const string TooManyRequests = "too_many";      // 429 too_many_requests
+    public const string ActionNotDeclared = "declared";    // 403 action_not_declared
+    public const string ActionUnknown = "unknown";         // 404 action_unknown
 }

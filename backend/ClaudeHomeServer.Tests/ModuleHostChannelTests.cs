@@ -386,6 +386,7 @@ public class ModuleHostChannelTests
         Assert.Equal("user-1", entry.GetProperty("sub").GetString());
         Assert.Equal("local", entry.GetProperty("route").GetString());
         Assert.True(entry.GetProperty("ok").GetBoolean());
+        Assert.Equal("ok", entry.GetProperty("outcome").GetString());
         Assert.False(entry.TryGetProperty("costUsd", out _));   // провайдер метрик не отдал — полей нет
     }
 
@@ -432,13 +433,50 @@ public class ModuleHostChannelTests
     }
 
     [Fact]
-    public async Task Complete_необъявленный_ключ_404_action_unknown()
+    public async Task Complete_необъявленный_ключ_403_action_not_declared()
     {
-        var (_, module) = BuildEcho(TempDir(), "llm404");
+        // §10.4 v1.6: модуль объявил [echo-echo], но зовёт foo — ключа нет в манифесте
+        // вызывающего ⇒ 403 action_not_declared (а не 404, как было до разводки кодов)
+        var (_, module) = BuildEcho(TempDir(), "llm403");
         var (controller, _, _) = BuildController(module, "user-1", new FakeCheap());
 
         var result = await controller.Complete(
             new HostLlmController.CompleteRequest("no-such-action", "привет", null, null), default);
+
+        Assert.Equal(403, StatusOf(result));
+        Assert.Equal("action_not_declared", Payload(result).GetProperty("error").GetString());
+    }
+
+    [Fact]
+    public async Task Complete_объявленный_но_незарегистрированный_ключ_404_action_unknown()
+    {
+        // §10.4 v1.6: ключ есть в манифесте вызывающего, но отсутствует в каталоге ядра
+        // (рассинхрон — действие отбраковано валидацией либо реестр не прогрет). Это не ошибка
+        // модуля, а ядра ⇒ 404 action_unknown. Логируется warning.
+        var manifest = new ModuleManifest
+        {
+            SchemaVersion = "1.0",
+            Id = "unreg",
+            Version = "1.0.0",
+            DisplayName = "Unreg",
+            Backend = new ModuleBackend
+            {
+                BaseUrl = "http://localhost:9/unreg",
+                HealthPath = "/health",
+                RoutePrefix = "/api/modules/unreg",
+            },
+            Llm = new ModuleLlm
+            {
+                Actions = [new ModuleLlmAction { Key = "ghost", Title = "Призрак", Profile = "small", DefaultLocal = true }],
+            },
+        };
+        var module = new LoadedModule(manifest, "/unused");
+        // Намеренно НЕ регистрируем module:unreg:ghost в LocalActionCatalog
+        Assert.Null(LocalActionCatalog.Find(module.LlmActionKey("ghost")));
+        var (controller, _, _) = BuildController(module, "user-1", new FakeCheap());
+
+        var result = await controller.Complete(
+            new HostLlmController.CompleteRequest("ghost", "привет", null, null), default);
 
         Assert.Equal(404, StatusOf(result));
         Assert.Equal("action_unknown", Payload(result).GetProperty("error").GetString());
@@ -447,8 +485,9 @@ public class ModuleHostChannelTests
     [Fact]
     public async Task Complete_чужой_неймспейс_не_пробивается()
     {
-        // CT-14: попытка назвать полный ключ чужого модуля даёт 404 — ядро достраивает
-        // неймспейс из aud, и «module:другой:ключ» превращается в несуществующий ключ
+        // CT-14: попытка назвать полный ключ чужого модуля даёт 403 action_not_declared —
+        // ядро достраивает неймспейс из aud, и «module:другой:ключ» не совпадает ни с одним
+        // ключом манифеста вызывающего. Неймспейс не пробивается по построению.
         var (_, module) = BuildEcho(TempDir(), "llmown");
         BuildEcho(TempDir(), "llmalien");   // чужое действие module:llmalien:echo-echo существует
         var (controller, _, _) = BuildController(module, "user-1", new FakeCheap());
@@ -456,7 +495,8 @@ public class ModuleHostChannelTests
         var result = await controller.Complete(
             new HostLlmController.CompleteRequest("module:llmalien:echo-echo", "привет", null, null), default);
 
-        Assert.Equal(404, StatusOf(result));
+        Assert.Equal(403, StatusOf(result));
+        Assert.Equal("action_not_declared", Payload(result).GetProperty("error").GetString());
     }
 
     [Fact]
@@ -547,6 +587,7 @@ public class ModuleHostChannelTests
         var entry = JsonDocument.Parse(
             Assert.Single(File.ReadAllLines(Path.Combine(dataDir, "module-llm-usage.jsonl")))).RootElement;
         Assert.False(entry.GetProperty("ok").GetBoolean());
+        Assert.Equal("unavailable", entry.GetProperty("outcome").GetString());
         Assert.Equal("llm503", entry.GetProperty("moduleId").GetString());
     }
 
@@ -557,13 +598,18 @@ public class ModuleHostChannelTests
         // профиля) → 504 llm_timeout
         var (_, module) = BuildEcho(TempDir(), "llm504");
         var cheap = new FakeCheap(() => new OneShotResult("__wait__", null, 0));
-        var (controller, _, _) = BuildController(module, "user-1", cheap);
+        var (controller, _, dataDir) = BuildController(module, "user-1", cheap);
 
         var result = await controller.Complete(
             new HostLlmController.CompleteRequest("echo-echo", "привет", null, TimeoutMs: 200), default);
 
         Assert.Equal(504, StatusOf(result));
         Assert.Equal("llm_timeout", Payload(result).GetProperty("error").GetString());
+
+        var entry = JsonDocument.Parse(
+            Assert.Single(File.ReadAllLines(Path.Combine(dataDir, "module-llm-usage.jsonl")))).RootElement;
+        Assert.False(entry.GetProperty("ok").GetBoolean());
+        Assert.Equal("timeout", entry.GetProperty("outcome").GetString());
     }
 
     [Fact]

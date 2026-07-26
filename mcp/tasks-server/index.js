@@ -585,12 +585,14 @@ async function callTool(name, args) {
       const body = { title: args.title };
       for (const k of ['description', 'priority', 'dueDate', 'dueTime', 'reminderMinutes', 'recurrence', 'assignee', 'personaId', 'labels', 'columnId', 'executionExpiresAfterMinutes'])
         if (args[k] !== undefined) body[k] = args[k];
-      // Происхождение задачи из окружения хода: персона-постановщик и её чат-источник.
-      // Без персоны оба поля не шлём (обратная совместимость: поведение как раньше)
-      if (SELF_PERSONA_ID) {
-        body.createdByPersonaId = SELF_PERSONA_ID;
-        if (SESSION_ID) body.sourceSessionId = SESSION_ID;
-      }
+      // Происхождение задачи из окружения хода: персона-постановщик (если ход шёл от её лица)
+      // и чат-источник. Чат-источник — факт «задача рождена в этом чате», он не зависит от того,
+      // кто говорил, поэтому шлём его всегда, когда известен id чата. Раньше оба поля гейтевались
+      // персоной — рудимент механики докладов (требование персон с обеих сторон уже снято, см.
+      // TaskExecutionService.ShouldReportToDelegator), и задача из обычного чата без персоны
+      // оставалась без SourceSessionId → её чат-исполнитель всплывал в корень вместо дочерней связи.
+      if (SELF_PERSONA_ID) body.createdByPersonaId = SELF_PERSONA_ID;
+      if (SESSION_ID) body.sourceSessionId = SESSION_ID;
       if (Array.isArray(args.subtasks) && args.subtasks.length)
         body.subtasks = args.subtasks.map(t => ({ title: String(t) }));
       // Целевой проект: по умолчанию текущий; явный projectId, отличный от текущего,

@@ -48,10 +48,11 @@ public class McpTasksPersonalScopeTests
 
     /// <summary>
     /// Один tools/call в чате проекта <see cref="ProjectId"/>. Заглушка отвечает по пути запроса.
-    /// Возвращает (текст модели, isError, пути запросов, дошедших до бэкенда).
+    /// Возвращает (текст модели, isError, пути запросов, тела запросов).
+    /// Тела нужны, чтобы проверять, ЧТО tasks_create отправил в POST (sourceSessionId и др.).
     /// </summary>
-    private static (string Text, bool IsError, List<string> Paths)? CallTool(
-        string toolCallJson, Func<string, string> respondByPath)
+    private static (string Text, bool IsError, List<string> Paths, List<string> Bodies)? CallTool(
+        string toolCallJson, Func<string, string> respondByPath, Action<ProcessStartInfo>? configureEnv = null)
     {
         var serverPath = FindServerPath();
         Skip.If(serverPath is null, "mcp/tasks-server/index.js не найден");
@@ -63,6 +64,7 @@ public class McpTasksPersonalScopeTests
         catch (HttpListenerException ex) { Skip.If(true, $"HttpListener недоступен: {ex.Message}"); }
 
         var paths = new List<string>();
+        var bodies = new List<string>();
         using var stop = new CancellationTokenSource();
         _ = Task.Run(async () =>
         {
@@ -73,7 +75,12 @@ public class McpTasksPersonalScopeTests
                 catch (Exception) { return; }   // listener закрыт по выходу из теста
 
                 var path = ctx.Request.Url?.PathAndQuery ?? "";
+                // Тело нужно для проверки, что tasks_create отправил в POST (sourceSessionId и т.д.)
+                string bodyText = "";
+                try { using var reader = new StreamReader(ctx.Request.InputStream); bodyText = await reader.ReadToEndAsync(); }
+                catch { /* запрос без тела — пустая строка */ }
                 lock (paths) paths.Add($"{ctx.Request.HttpMethod} {path}");
+                lock (bodies) bodies.Add(bodyText);
                 var bytes = Encoding.UTF8.GetBytes(respondByPath(path));
                 ctx.Response.StatusCode = 200;
                 ctx.Response.ContentType = "application/json";
@@ -99,6 +106,7 @@ public class McpTasksPersonalScopeTests
         psi.Environment["TASKS_SESSION_ID"] = "session-1";
         // Ключевое: чат ПРИВЯЗАН к проекту — именно тут раньше срабатывал запрет
         psi.Environment["TASKS_PROJECT_ID"] = ProjectId;
+        configureEnv?.Invoke(psi);
 
         Process? proc;
         try { proc = Process.Start(psi); }
@@ -122,7 +130,8 @@ public class McpTasksPersonalScopeTests
                 return (
                     result.GetProperty("content")[0].GetProperty("text").GetString() ?? "",
                     result.TryGetProperty("isError", out var e) && e.GetBoolean(),
-                    [.. paths]);
+                    [.. paths],
+                    [.. bodies]);
         }
     }
 
@@ -173,5 +182,46 @@ public class McpTasksPersonalScopeTests
         r.Text.Should().Contain("t1", "scope=all обещает в описании и личные задачи тоже");
         r.Text.Should().Contain("t2");
         r.Text.Should().NotContain("t3", "чужой проект в выдачу не попадает");
+    }
+
+    // ─── Происхождение задачи: sourceSessionId не зависит от наличия персоны ────
+    // Баг: задачи из чата БЕЗ персоны уходили без SourceSessionId → чат-исполнитель не
+    // подвязывался дочерним. Чат-источник — факт «задача рождена в этом чате», он не
+    // привязан к тому, кто вёл ход.
+
+    private static string CreatedTask() =>
+        """{"id":"t-new","title":"новая задача","projectId":"проект-чата","status":"todo"}""";
+
+    [SkippableFact]
+    public void tasks_create_БезПерсоны_ШлётSourceSessionId()
+    {
+        // Env не задаёт TASKS_SELF_PERSONA_ID (ход без персоны), но TASKS_SESSION_ID известен.
+        // Раньше sourceSessionId не отправлялся — чат-исполнитель всплывал в корень.
+        var call = CallTool(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"tasks_create","arguments":{"title":"новая задача"}}}""",
+            _ => CreatedTask());
+        if (call is not { } r) return;
+
+        r.IsError.Should().BeFalse($"задача должна создаться: {r.Text}");
+        r.Paths.Should().Contain(p => p.StartsWith("POST "), "создание обязано дойти до бэкенда");
+        r.Bodies.Should().Contain(b => b.Contains("\"sourceSessionId\":\"session-1\""),
+            "чат-источник шлём всегда, когда известен TASKS_SESSION_ID, — даже без персоны");
+        r.Bodies.Should().NotContain(b => b.Contains("createdByPersonaId"),
+            "без персоны-постановщика поле не отправляем");
+    }
+
+    [SkippableFact]
+    public void tasks_create_СПерсоной_ШлётИПостановщикаИИсточник()
+    {
+        // Регресс: поведение задач от персон не изменилось — createdByPersonaId + sourceSessionId.
+        var call = CallTool(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"tasks_create","arguments":{"title":"новая задача"}}}""",
+            _ => CreatedTask(),
+            configureEnv: psi => psi.Environment["TASKS_SELF_PERSONA_ID"] = "prs-1");
+        if (call is not { } r) return;
+
+        r.IsError.Should().BeFalse();
+        r.Bodies.Should().Contain(b => b.Contains("\"createdByPersonaId\":\"prs-1\""));
+        r.Bodies.Should().Contain(b => b.Contains("\"sourceSessionId\":\"session-1\""));
     }
 }

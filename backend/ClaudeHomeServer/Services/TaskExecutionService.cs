@@ -450,6 +450,12 @@ public class TaskExecutionService
     internal static bool CanSendDelegatorReaction(IReadOnlyList<string>? participants, string delegatorPersonaId) =>
         participants is not { Count: > 1 } || participants.Contains(delegatorPersonaId);
 
+    // Платный авто-ход постановщика (ШАГ 2 модели Z) пускаем только при живой персоне-постановщике.
+    // Задачу мог поставить человек из обычного чата (CreatedByPersonaId=null): ШАГ 1 (гостевая
+    // реплика исполнителя) идёт и без персоны, а вот авто-ход не от чьего лица — его запуск
+    // оживлял бы рабочий чат пользователя скрытым платным расходом на каждое завершение задачи.
+    internal static bool ShouldSendDelegatorReaction(Persona? delegator) => delegator is not null;
+
     // Модель Z: активный доклад о завершении делегированной задачи — в отличие от L0-тоста
     // (NotifyDelegatorAsync) кладёт репорт прямо в чат постановщика. ШАГ 1 — гостевая реплика
     // исполнителя B с готовым resultMarkdown (0 токенов, без агентского хода); ШАГ 2 — сразу
@@ -527,6 +533,17 @@ public class TaskExecutionService
                 ? new GuestTextMessage(reportText, executor.Id)
                 : new UserMessageMessage(reportText, null, null, true, null, executorChatName));
 
+        // ШАГ 2 (платный авто-ход постановщика) — только при живом постановщике-персоне.
+        // Задачу мог поставить человек из обычного чата (без персоны): тогда ход не от чьего
+        // лица, и скрытый платный авто-ход в рабочий чат пользователя на каждое завершение
+        // задачи запускать нельзя. Гостевая реплика ШАГ 1 уже в ленте (она и есть польза от
+        // связи), плюс L0-тост отправлен выше в NotifyDelegatorAsync.
+        if (!ShouldSendDelegatorReaction(delegator))
+        {
+            _log.LogInformation("Доклад Z задачи {TaskId}: нет постановщика-персоны — гостевая реплика без авто-хода", task.Id);
+            return;
+        }
+
         // MINOR 2: S — групповой чат. Без @упоминания реакция построилась бы по текущему/
         // ведущему спикеру, а не по постановщику A (senderPersonaId — только атрибуция
         // реплики, не смена спикера). A ∈ участников — переключаем спикера на него перед
@@ -572,10 +589,20 @@ public class TaskExecutionService
     // Промпт авто-хода постановщика A: выжимка (id/название) + просьба отреагировать.
     // MINOR 1: полное тело resultMarkdown сюда НЕ дублируем — оно уже перед этим ходом
     // легло в ленту гостевой репликой B (ШАГ 1), A видит его при resume без пересказа
-    internal static string BuildDelegatorReactionPrompt(TaskItem task, Persona executor) =>
-        $"Персона-исполнитель {PersonaLabel(executor)} завершила делегированную тобой задачу " +
-        $"«{task.Title}» (id: {task.Id}) — её отчёт только что появился выше в ленте.\n\n" +
-        "Отреагируй и продолжи работу при необходимости.";
+    internal static string BuildDelegatorReactionPrompt(TaskItem task, Persona? executor)
+    {
+        // Исполнитель может быть Claude без персоны (assignee=Claude, PersonaId=null) — тогда
+        // PersonaLabel падал бы на null. Подпись nullable: персона → «Роль (Имя)», без персоны —
+        // нейтральная (ход идёт от постановщика, так что безличный исполнитель в промпте —
+        // только субъект события, а не спикер).
+        var who = executor is not null
+            ? $"Персона-исполнитель {PersonaLabel(executor)} завершила"
+            : "Исполнитель-Claude (без персоны) завершил";
+        return
+            $"{who} делегированную тобой задачу «{task.Title}» (id: {task.Id}). " +
+            "Отчёт исполнителя только что появился выше в ленте.\n\n" +
+            "Отреагируй и продолжи работу при необходимости.";
+    }
 
     // Уведомление «ждёт ответа» (permission_request / AskUserQuestion)
     internal static NotificationMessage BuildWaitingNotification(TaskItem task, Persona? persona = null) => new(

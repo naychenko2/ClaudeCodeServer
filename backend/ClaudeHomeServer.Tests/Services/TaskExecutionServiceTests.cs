@@ -239,6 +239,22 @@ public class TaskExecutionServiceTests
         prompt.Should().NotContain("Готово, собрал и прогнал тесты.");
     }
 
+    [Fact]
+    public void BuildDelegatorReactionPrompt_БезПерсоныИсполнителя_НеПадаетИНейтральнаяПодпись()
+    {
+        // Исполнитель — Claude без персоны (assignee=Claude, PersonaId=null), постановщик есть:
+        // ШАГ 2 идёт, в промпте раньше PersonaLabel(null) ронял бы NRE. Теперь — нейтральная
+        // подпись; задача/реакция присутствуют, падения нет.
+        var task = new TaskItem { Title = "Починить сборку" };
+
+        var prompt = TaskExecutionService.BuildDelegatorReactionPrompt(task, executor: null);
+
+        prompt.Should().Contain("Исполнитель-Claude (без персоны)");
+        prompt.Should().Contain("Починить сборку");
+        prompt.Should().Contain(task.Id);
+        prompt.Should().Contain("Отреагируй");
+    }
+
     // ─── MAJOR 1: гейт запуска исполнителя — на бэкенде, а не в составе инструментов ──
     // Раньше он жил в env TASKS_EXECUTE, то есть в СОСТАВЕ tools/list, а состав входит в
     // сигнатуру запуска CLI: чередование обычного и делегированного хода убивало процесс со
@@ -395,5 +411,24 @@ public class TaskExecutionServiceTests
         // Переключить спикера не на кого — реагировать в группе некому,
         // ограничиваемся гостевой репликой B + L0-тостом
         TaskExecutionService.CanSendDelegatorReaction(["b", "c"], "a").Should().BeFalse();
+    }
+
+    // ─── ШАГ 2 без постановщика-персоны: авто-ход не запускаем ──────────────────
+    // Задачу мог поставить человек из обычного чата (без персоны). ШАГ 1 (гостевая реплика)
+    // при этом идёт — но платный авто-ход постановщика запускать не от чьего лица нельзя:
+    // иначе рабочий чат оживал бы сам на каждое завершение задачи.
+
+    [Fact]
+    public void ShouldSendDelegatorReaction_БезПостановщика_False()
+    {
+        // CreatedByPersonaId=null → delegator null → ШАГ 2 не пускаем
+        TaskExecutionService.ShouldSendDelegatorReaction(delegator: null).Should().BeFalse();
+    }
+
+    [Fact]
+    public void ShouldSendDelegatorReaction_СПостановщиком_True()
+    {
+        var delegator = new Persona { Name = "Артём" };
+        TaskExecutionService.ShouldSendDelegatorReaction(delegator).Should().BeTrue();
     }
 }

@@ -129,10 +129,12 @@ export function useSanitizePersonaFilter(
 
 // Чип статуса жизни чата по Session (с учётом taskDone). Единое место маппинга —
 // используется и фильтром, и счётчиками на чипах, и сводкой.
+// Приоритет: ошибка важнее готовности — чат с Done-задачей, упавший в Error/Orphaned,
+// остаётся в «С ошибкой» (иначе он уедет в «Готово», скрытое по умолчанию, и ошибку не видно).
 export function chatStatusOf(s: Session): ChatStatusChip {
+  if (s.status === 'error' || s.status === 'orphaned') return 'error';
   if (s.taskDone === true || s.status === 'finished') return 'done';
   if (s.status === 'waiting') return 'waiting';
-  if (s.status === 'error' || s.status === 'orphaned') return 'error';
   return 'active'; // starting | working | active
 }
 

@@ -11,7 +11,7 @@ public class TaskAiService(ProjectManager projects, IConfiguration config,
     Llm.ICheapTextRunner cheap)
 {
 
-    public async Task<string> GenerateDescriptionAsync(string title, string? projectId, CancellationToken ct)
+    public async Task<string> GenerateDescriptionAsync(string? ownerId, string title, string? projectId, CancellationToken ct)
     {
         var sb = new StringBuilder();
         sb.AppendLine("Составь краткое описание задачи в Markdown: заголовок «### Цель», 1-2 предложения сути, " +
@@ -20,11 +20,11 @@ public class TaskAiService(ProjectManager projects, IConfiguration config,
         sb.AppendLine();
         sb.AppendLine($"Задача: «{title}»");
         AppendProjectContext(sb, projectId);
-        return CleanupText(await RunAsync(sb.ToString(), ct));
+        return CleanupText(await RunAsync(ownerId, sb.ToString(), ct));
     }
 
     public async Task<IReadOnlyList<string>> GenerateSubtasksAsync(
-        string title, string description, string? projectId, CancellationToken ct)
+        string? ownerId, string title, string description, string? projectId, CancellationToken ct)
     {
         var sb = new StringBuilder();
         sb.AppendLine("Разбей задачу на 3-7 конкретных выполнимых подзадач (коротких, в повелительном наклонении). " +
@@ -39,7 +39,7 @@ public class TaskAiService(ProjectManager projects, IConfiguration config,
         }
         AppendProjectContext(sb, projectId);
 
-        var raw = await RunAsync(sb.ToString(), ct);
+        var raw = await RunAsync(ownerId, sb.ToString(), ct);
         return ParseSubtasks(raw);
     }
 
@@ -49,7 +49,7 @@ public class TaskAiService(ProjectManager projects, IConfiguration config,
 
     // Предложить приоритет (low|medium|high|urgent) и до 3 меток по названию+описанию.
     // existingLabels — метки владельца (приоритетны, чтобы не плодить синонимы).
-    public async Task<TaskClassification> ClassifyAsync(string title, string? description,
+    public async Task<TaskClassification> ClassifyAsync(string? ownerId, string title, string? description,
         IReadOnlyList<string> existingLabels, string? projectId, CancellationToken ct)
     {
         var sb = new StringBuilder();
@@ -65,7 +65,7 @@ public class TaskAiService(ProjectManager projects, IConfiguration config,
         AppendProjectContext(sb, projectId);
 
         var raw = await cheap.RunAsync(Llm.LocalActionCatalog.TaskClassify, sb.ToString(),
-            config["Tasks:AiModel"] ?? "haiku", ct: ct);
+            config["Tasks:AiModel"] ?? "haiku", ownerId, ct: ct);
         return ParseClassification(raw, existingLabels);
     }
 
@@ -104,7 +104,7 @@ public class TaskAiService(ProjectManager projects, IConfiguration config,
 
     // «сделаю отчёт завтра» → {title:"Сделать отчёт", dueHint:"завтра"}. Повелительное наклонение,
     // без мусора транскрибатора; упомянутый срок выносится в dueHint (парсинг даты — на вызывающем).
-    public async Task<TaskTitleNormalization> NormalizeTitleAsync(string rawTitle, CancellationToken ct)
+    public async Task<TaskTitleNormalization> NormalizeTitleAsync(string? ownerId, string rawTitle, CancellationToken ct)
     {
         var prompt =
             "Приведи заголовок задачи к аккуратному виду: повелительное наклонение («Сделать», «Позвонить»), " +
@@ -113,7 +113,7 @@ public class TaskAiService(ProjectManager projects, IConfiguration config,
             "Ответь ТОЛЬКО JSON: {\"title\":\"…\",\"dueHint\":\"…|null\"}. Смысл не меняй.\n\n" +
             $"Заголовок: {rawTitle.Trim()}";
         var raw = await cheap.RunAsync(Llm.LocalActionCatalog.TaskNormalizeTitle, prompt,
-            config["Tasks:AiModel"] ?? "haiku", ct: ct);
+            config["Tasks:AiModel"] ?? "haiku", ownerId, ct: ct);
         var json = ExtractJsonObject(raw);
         if (json is null) return new TaskTitleNormalization(rawTitle.Trim(), null);
         try
@@ -135,7 +135,7 @@ public class TaskAiService(ProjectManager projects, IConfiguration config,
 
     // candidates — предотобранные (по ключевым словам) существующие задачи владельца.
     // Модель решает, дублирует ли новая одну из них. Пустой список / нет дубля → Id=null.
-    public async Task<TaskDuplicate> FindDuplicateAsync(string title, string? description,
+    public async Task<TaskDuplicate> FindDuplicateAsync(string? ownerId, string title, string? description,
         IReadOnlyList<(string Id, string Title)> candidates, CancellationToken ct)
     {
         if (candidates.Count == 0) return new TaskDuplicate(null, null);
@@ -150,7 +150,7 @@ public class TaskAiService(ProjectManager projects, IConfiguration config,
                       "Если явного дубля нет — duplicateId: null. Не выдумывай id.");
 
         var raw = await cheap.RunAsync(Llm.LocalActionCatalog.TaskDedup, sb.ToString(),
-            config["Tasks:AiModel"] ?? "haiku", ct: ct);
+            config["Tasks:AiModel"] ?? "haiku", ownerId, ct: ct);
         var json = ExtractJsonObject(raw);
         if (json is null) return new TaskDuplicate(null, null);
         try
@@ -208,8 +208,8 @@ public class TaskAiService(ProjectManager projects, IConfiguration config,
         catch { /* контекст опционален */ }
     }
 
-    private Task<string> RunAsync(string prompt, CancellationToken ct) =>
-        cheap.RunAsync(Llm.LocalActionCatalog.TaskAi, prompt, config["Tasks:AiModel"], ct: ct);
+    private Task<string> RunAsync(string? ownerId, string prompt, CancellationToken ct) =>
+        cheap.RunAsync(Llm.LocalActionCatalog.TaskAi, prompt, config["Tasks:AiModel"], ownerId, ct: ct);
 
     // Снимаем возможную ```-обёртку вокруг ответа
     private static string CleanupText(string raw)

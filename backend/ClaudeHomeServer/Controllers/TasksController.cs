@@ -93,7 +93,7 @@ public class TasksController(
             return BadRequest(new { error = "Нужно название задачи" });
         try
         {
-            var description = await ai.GenerateDescriptionAsync(req.Title.Trim(), OwnProjectId(req.ProjectId), ct);
+            var description = await ai.GenerateDescriptionAsync(UserId, req.Title.Trim(), OwnProjectId(req.ProjectId), ct);
             return Ok(new { description });
         }
         catch (InvalidOperationException ex) { return StatusCode(502, new { error = ex.Message }); }
@@ -108,7 +108,7 @@ public class TasksController(
         try
         {
             var subtasks = await ai.GenerateSubtasksAsync(
-                req.Title.Trim(), req.Description ?? "", OwnProjectId(req.ProjectId), ct);
+                UserId, req.Title.Trim(), req.Description ?? "", OwnProjectId(req.ProjectId), ct);
             return Ok(new { subtasks });
         }
         catch (InvalidOperationException ex) { return StatusCode(502, new { error = ex.Message }); }
@@ -124,7 +124,7 @@ public class TasksController(
             .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         try
         {
-            var r = await ai.ClassifyAsync(req.Title.Trim(), req.Description, existing, OwnProjectId(req.ProjectId), ct);
+            var r = await ai.ClassifyAsync(UserId, req.Title.Trim(), req.Description, existing, OwnProjectId(req.ProjectId), ct);
             return Ok(new { priority = r.Priority, labels = r.Labels });
         }
         catch (InvalidOperationException ex) { return StatusCode(502, new { error = ex.Message }); }
@@ -138,7 +138,7 @@ public class TasksController(
             return BadRequest(new { error = "Нужен текст заголовка" });
         try
         {
-            var r = await ai.NormalizeTitleAsync(req.Title, ct);
+            var r = await ai.NormalizeTitleAsync(UserId, req.Title, ct);
             return Ok(new { title = r.Title, dueHint = r.DueHint });
         }
         catch (InvalidOperationException ex) { return StatusCode(502, new { error = ex.Message }); }
@@ -160,7 +160,7 @@ public class TasksController(
             .Take(20).Select(t => (t.Id, t.Title)).ToList();
         try
         {
-            var r = await ai.FindDuplicateAsync(req.Title.Trim(), req.Description, candidates, ct);
+            var r = await ai.FindDuplicateAsync(UserId, req.Title.Trim(), req.Description, candidates, ct);
             return Ok(new { duplicateId = r.Id, reason = r.Reason });
         }
         catch (InvalidOperationException ex) { return StatusCode(502, new { error = ex.Message }); }

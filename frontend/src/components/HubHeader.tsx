@@ -218,7 +218,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive }: Props
           onShowChangePassword={() => setShowChangePassword(true)}
           onShowFeatureFlags={() => setShowFeatureFlags(true)}
           onShowUsage={() => setShowUsage(true)}
-          onShowBackgroundTasks={isAdmin ? () => setShowBackgroundTasks(true) : undefined}
+          onShowBackgroundTasks={() => setShowBackgroundTasks(true)}
           onShowUserManagement={() => setShowUserMgmt(true)}
           hideStatus={isMobile}
           // «Знания», «Аналитика токенов» и «Что нового» живут здесь на обеих платформах:
@@ -236,7 +236,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive }: Props
       {showChangePassword && <ChangePasswordDialog onClose={() => setShowChangePassword(false)} />}
       {showFeatureFlags && <FeatureFlagsModal onClose={() => setShowFeatureFlags(false)} />}
       {showUsage && <UsageScreen onClose={() => setShowUsage(false)} />}
-      {showBackgroundTasks && <ModelProvidersModal onClose={() => setShowBackgroundTasks(false)} />}
+      {showBackgroundTasks && <ModelProvidersModal isAdmin={isAdmin} onClose={() => setShowBackgroundTasks(false)} />}
     </div>
   );
 }

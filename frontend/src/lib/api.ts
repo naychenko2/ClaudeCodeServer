@@ -1,6 +1,15 @@
 import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, BackupStatus, BackupSummary } from '../types';
 import { request } from './offline';
 
+// Личные/админские слоты моделей: сильная/средняя/слабая.
+// null = наследовать глобальный слот, string = override, "" = сброс к наследованию.
+export interface ModelTiers {
+  strong: string | null;
+  medium: string | null;
+  weak: string | null;
+}
+
+
 export type { WorkflowAgentInfo, WorkflowAgentBlock };
 
 // Метаданные внешнего модуля из GET /api/modules (контракт §2/§7)
@@ -92,6 +101,19 @@ export const api = {
     get: () => request<AppSettings>('/settings'),
     // Патч: присылаем только изменённые поля, остальные сервер оставляет как есть
     save: (s: Partial<AppSettings>) => request<AppSettings>('/settings', { method: 'PUT', body: JSON.stringify(s) }),
+  },
+
+  // Личные слоты моделей текущего пользователя (GET /api/me/model-tiers).
+  // PATCH: null = не трогать, "" = очистить к наследованию, string = override.
+  meModelTiers: {
+    get: () => request<ModelTiers>('/me/model-tiers'),
+    save: (patch: Partial<ModelTiers>) => request<ModelTiers>('/me/model-tiers', { method: 'PUT', body: JSON.stringify(patch) }),
+  },
+
+  // Админские слоты моделей любого пользователя (GET /api/admin/users/{id}/model-tiers).
+  adminUserModelTiers: {
+    get: (userId: string) => request<ModelTiers>(`/admin/users/${encodeURIComponent(userId)}/model-tiers`),
+    save: (userId: string, patch: Partial<ModelTiers>) => request<ModelTiers>(`/admin/users/${encodeURIComponent(userId)}/model-tiers`, { method: 'PUT', body: JSON.stringify(patch) }),
   },
 
   usage: {

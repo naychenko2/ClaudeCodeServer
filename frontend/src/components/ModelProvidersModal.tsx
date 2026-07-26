@@ -1,17 +1,25 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ChevronDown, RotateCcw, Zap, Boxes } from 'lucide-react';
-import { Modal, IconButton, Toggle, Button } from './ui';
+import { Modal, IconButton, Toggle, Button, Menu, MenuItem } from './ui';
 import { ModelPicker } from './ModelPicker';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
-import { api } from '../lib/api';
+import { api, type ModelTiers } from '../lib/api';
 import { C, FONT, FS, R, SP, SHADOW, Z, MODAL_W } from '../lib/design';
 import { useModels, useProviders, modelLabel, providerLabel, modelProvider,
   loadModels, type ProviderCapabilities, type ModelOption } from '../lib/models';
-import type { OllamaUsageInfo, OllamaActionInfo, AppSettings } from '../types';
+import type { OllamaUsageInfo, OllamaActionInfo, AppSettings, UserProfile } from '../types';
 
 interface Props {
   onClose: () => void;
+  isAdmin: boolean;
 }
+
+// Диалог «Поставщики моделей»: два режима.
+//   Обычный пользователь — только уровень 2 «Модели по умолчанию»: личные слоты
+//   strong/medium/weak с наследованием глобальных значений. Пустой слот = «как у всех».
+//   Администратор — полный диалог (провайдеры, слоты, применение) + у уровня 2
+//   компактный селектор контекста: общие настройки или любой пользователь. Уровни 1 и 3
+//   всегда глобальные, при выборе конкретного пользователя уровень 3 подписан об этом.
 
 // Ненавязчивая hover-подсветка строки действия — через инжектиый класс (как в IconButton),
 // без per-row состояния (строк в списке много, группами по разделам).
@@ -55,13 +63,21 @@ const TIERS: Record<TierKey, { title: string; hint: string; field: keyof AppSett
 };
 const TIER_ORDER: TierKey[] = ['strong', 'medium', 'weak'];
 
-// Единая подпись состояния слота: «Opus · Claude» либо «не задана — решает CLI».
-// Одна на все три места, где слот показывается (строка уровня 2, карточка дропдауна,
-// подпись триггера) — иначе одно и то же состояние выглядит разными сообщениями.
-function tierSubtitle(model: string): string {
-  if (!model) return 'не задана — решает CLI';
-  const provider = providerLabel(modelProvider(model));
-  return provider ? `${modelLabel(model)} · ${provider}` : modelLabel(model);
+// Единая подпись состояния слота. Для личных/пользовательских слотов пустое значение
+// показывает наследование от глобального слота: «Как у всех · {modelLabel}». Для глобального
+// контекста пустой слот — «не задана — решает CLI».
+function tierSubtitle(model: string, inheritedModel?: string | null): string {
+  if (model) {
+    const provider = providerLabel(modelProvider(model));
+    return provider ? `${modelLabel(model)} · ${provider}` : modelLabel(model);
+  }
+  if (inheritedModel) {
+    return `Как у всех · ${modelLabel(inheritedModel)}`;
+  }
+  if (inheritedModel === undefined) {
+    return 'не задана — решает CLI';
+  }
+  return 'Как у всех · не задана — решает CLI';
 }
 
 // Статус адаптера → цвет точки (только дизайн-токены)
@@ -76,14 +92,7 @@ function hasTierTriple(caps: ProviderCapabilities): boolean {
   return caps.tierStrong != null && caps.tierMedium != null && caps.tierWeak != null;
 }
 
-// Диалог «Поставщики моделей»: три уровня сверху вниз.
-//  1. Провайдеры — сворачиваемая плитка адаптеров со статусами (read-only, из /api/models).
-//  2. Модели по умолчанию — три слота «сильная/средняя/слабая» и чипсы провайдеров для их
-//     быстрого заполнения. На них ссылаются назначения уровня 3.
-//  3. Применение моделей — панель быстрой настройки и назначение каждому месту:
-//     слот, конкретная модель любого провайдера, локальная модель (только фоновым).
-// Настройка серверная и общая для всех — только админ.
-export function ModelProvidersModal({ onClose }: Props) {
+export function ModelProvidersModal({ onClose, isAdmin }: Props) {
   const [info, setInfo] = useState<OllamaUsageInfo | undefined>(undefined);
   const [busy, setBusy] = useState<string | null>(null);
   const [presetBusy, setPresetBusy] = useState<PresetKey | null>(null);
@@ -92,79 +101,163 @@ export function ModelProvidersModal({ onClose }: Props) {
   const models = useModels();
   const providers = useProviders();
 
-  // Настройки инстанса (AppSettings): слоты тиров (уровень 2) + тумблер утреннего брифа.
-  const [settings, setSettings] = useState<AppSettings | null>(null);
+  // Глобальные настройки инстанса: слоты тиров (уровень 2 в режиме «Общие») +
+  // тумблер утреннего брифа (уровень 3). Для обычного пользователя — только источник
+  // подписей «как у всех» и для расчёта эффективного слабого слота.
+  const [globalSettings, setGlobalSettings] = useState<AppSettings | null>(null);
+
+  // Личные слоты обычного пользователя.
+  const [ownTiers, setOwnTiers] = useState<ModelTiers | null>(null);
+
+  // Для админа: список пользователей и выбранный контекст уровня 2.
+  const [users, setUsers] = useState<UserProfile[]>([]);
+  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
+  const [userTiers, setUserTiers] = useState<ModelTiers | null>(null);
+  const [contextMenuOpen, setContextMenuOpen] = useState(false);
+
   const [briefingBusy, setBriefingBusy] = useState(false);
   const [defaultBusy, setDefaultBusy] = useState<TierKey | null>(null);
   const [editingTier, setEditingTier] = useState<TierKey | null>(null);
-  const briefingOn = settings?.dailyBriefingEnabled ?? true;
+  const briefingOn = globalSettings?.dailyBriefingEnabled ?? true;
 
   // Уровень 1 свёрнут по умолчанию (однострочная сводка), уровень 2 развёрнут.
   const [providersExpanded, setProvidersExpanded] = useState(false);
+
+  // Активные значения слотов для текущего контекста уровня 2.
+  function selectedTiers(): ModelTiers | null {
+    if (!isAdmin) return ownTiers;
+    if (selectedUserId) return userTiers;
+    if (!globalSettings) return null;
+    return {
+      strong: globalSettings.modelTierStrong ?? null,
+      medium: globalSettings.modelTierMedium ?? null,
+      weak: globalSettings.modelTierWeak ?? null,
+    };
+  }
+
+  // Глобальные слоты — для подписей наследования и для уровня 3 (он всегда глобальный).
+  function globalTiers(): ModelTiers | null {
+    if (!globalSettings) return null;
+    return {
+      strong: globalSettings.modelTierStrong ?? null,
+      medium: globalSettings.modelTierMedium ?? null,
+      weak: globalSettings.modelTierWeak ?? null,
+    };
+  }
+
+  function tierModel(t: TierKey): string {
+    return selectedTiers()?.[t] ?? '';
+  }
+
+  function globalTierModel(t: TierKey): string {
+    return globalTiers()?.[t] ?? '';
+  }
 
   // Оптимистично: применяем сразу, при ошибке возвращаем прежнее значение. Шлём ТОЛЬКО своё
   // поле — PUT /api/settings патчит присланное, поэтому наш (возможно устаревший) снимок
   // не откатывает соседние настройки, изменённые тем временем с другого экрана.
   function toggleBriefing(v: boolean) {
-    const prev = settings;
+    const prev = globalSettings;
     setBriefingBusy(true);
     setError(null);
-    setSettings(s => s ? { ...s, dailyBriefingEnabled: v } : s);
+    setGlobalSettings(s => s ? { ...s, dailyBriefingEnabled: v } : s);
     api.settings.save({ dailyBriefingEnabled: v })
-      .then(saved => setSettings(saved))
+      .then(saved => setGlobalSettings(saved))
       .catch(e => {
-        setSettings(prev);
+        setGlobalSettings(prev);
         setError(e instanceof Error ? e.message : 'Не удалось сохранить');
       })
       .finally(() => setBriefingBusy(false));
   }
 
-  // Сохранение слота. После записи перечитываем каталог моделей: /api/models отдаёт и
-  // резолвнутые назначения мест, по которым пикеры подписывают пункт «По умолчанию» —
-  // иначе подписи врали бы до перезагрузки страницы.
-  function saveTier(tier: TierKey, model: string) {
-    const prev = settings;
-    setDefaultBusy(tier);
+  // Сохранение слота. Для личных/пользовательских слотов — через свои эндпоинты,
+  // для общих — через /api/settings. После записи перечитываем каталог моделей: /api/models
+  // отдаёт резолвнутые назначения мест, по которым пикеры подписывают пункт «По умолчанию».
+  function saveTier(t: TierKey, model: string) {
+    const prev = selectedTiers();
+    const globalPrev = globalSettings;
+    setDefaultBusy(t);
     setError(null);
-    setSettings(s => s ? { ...s, [TIERS[tier].field]: model } : s);
-    api.settings.save({ [TIERS[tier].field]: model })
-      .then(saved => { setSettings(saved); setEditingTier(null); void loadModels(); })
-      .catch(e => {
-        setSettings(prev);
-        setError(e instanceof Error ? e.message : 'Не удалось сохранить');
-      })
-      .finally(() => setDefaultBusy(null));
+    setEditingTier(null);
+
+    // Оптимистично применяем.
+    if (!isAdmin) setOwnTiers(s => s ? { ...s, [t]: model } : s);
+    else if (selectedUserId) setUserTiers(s => s ? { ...s, [t]: model } : s);
+    else setGlobalSettings(s => s ? { ...s, [TIERS[t].field]: model } : s);
+
+    const rollback = () => {
+      if (!isAdmin) setOwnTiers(prev);
+      else if (selectedUserId) setUserTiers(prev);
+      else setGlobalSettings(globalPrev);
+    };
+
+    const patch: Partial<ModelTiers> = { [t]: model };
+    if (!isAdmin) {
+      api.meModelTiers.save(patch)
+        .then(saved => { setOwnTiers(saved); void loadModels(); })
+        .catch(e => { rollback(); setError(e instanceof Error ? e.message : 'Не удалось сохранить'); })
+        .finally(() => setDefaultBusy(null));
+    } else if (selectedUserId) {
+      api.adminUserModelTiers.save(selectedUserId, patch)
+        .then(saved => { setUserTiers(saved); void loadModels(); })
+        .catch(e => { rollback(); setError(e instanceof Error ? e.message : 'Не удалось сохранить'); })
+        .finally(() => setDefaultBusy(null));
+    } else {
+      api.settings.save({ [TIERS[t].field]: model })
+        .then(saved => { setGlobalSettings(saved); void loadModels(); })
+        .catch(e => { rollback(); setError(e instanceof Error ? e.message : 'Не удалось сохранить'); })
+        .finally(() => setDefaultBusy(null));
+    }
   }
 
   // Оптимистично проставляем все три слота тройкой провайдера одним PATCH.
   function isChipActive(caps: ProviderCapabilities): boolean {
-    return settings != null &&
-      caps.tierStrong === settings.modelTierStrong &&
-      caps.tierMedium === settings.modelTierMedium &&
-      caps.tierWeak === settings.modelTierWeak;
+    const tiers = selectedTiers();
+    return tiers != null &&
+      caps.tierStrong === tiers.strong &&
+      caps.tierMedium === tiers.medium &&
+      caps.tierWeak === tiers.weak;
   }
 
   async function applyProviderChip(caps: ProviderCapabilities) {
-    if (!settings || chipBusy === caps.provider || isChipActive(caps)) return;
-    const prev = settings;
+    const tiers = selectedTiers();
+    if (!tiers || chipBusy === caps.provider || isChipActive(caps)) return;
+    const prev = tiers;
+    const globalPrev = globalSettings;
     setChipBusy(caps.provider);
     setError(null);
-    setSettings(s => s ? {
+    const patch: ModelTiers = {
+      strong: caps.tierStrong!,
+      medium: caps.tierMedium!,
+      weak: caps.tierWeak!,
+    };
+
+    if (!isAdmin) setOwnTiers(patch);
+    else if (selectedUserId) setUserTiers(patch);
+    else setGlobalSettings(s => s ? {
       ...s,
-      modelTierStrong: caps.tierStrong!,
-      modelTierMedium: caps.tierMedium!,
-      modelTierWeak: caps.tierWeak!,
+      modelTierStrong: patch.strong,
+      modelTierMedium: patch.medium,
+      modelTierWeak: patch.weak,
     } : s);
+
     try {
-      const saved = await api.settings.save({
-        modelTierStrong: caps.tierStrong!,
-        modelTierMedium: caps.tierMedium!,
-        modelTierWeak: caps.tierWeak!,
+      let saved: ModelTiers | AppSettings;
+      if (!isAdmin) saved = await api.meModelTiers.save(patch);
+      else if (selectedUserId) saved = await api.adminUserModelTiers.save(selectedUserId, patch);
+      else saved = await api.settings.save({
+        modelTierStrong: patch.strong,
+        modelTierMedium: patch.medium,
+        modelTierWeak: patch.weak,
       });
-      setSettings(saved);
+      if (!isAdmin) setOwnTiers(saved as ModelTiers);
+      else if (selectedUserId) setUserTiers(saved as ModelTiers);
+      else setGlobalSettings(saved as AppSettings);
       await loadModels();
     } catch (e) {
-      setSettings(prev);
+      if (!isAdmin) setOwnTiers(prev);
+      else if (selectedUserId) setUserTiers(prev);
+      else setGlobalSettings(globalPrev);
       setError(e instanceof Error ? e.message : 'Не удалось применить');
     } finally {
       setChipBusy(null);
@@ -173,15 +266,36 @@ export function ModelProvidersModal({ onClose }: Props) {
 
   useEffect(() => {
     let cancelled = false;
-    api.usage.get()
-      .then(d => { if (!cancelled) setInfo(d.ollama ?? { enabled: false, actions: [] }); })
-      .catch(() => { if (!cancelled) setInfo({ enabled: false, actions: [] }); });
-    // Настройки инстанса грузим отдельно: их отсутствие не должно прятать список действий
+    if (isAdmin) {
+      api.usage.get()
+        .then(d => { if (!cancelled) setInfo(d.ollama ?? { enabled: false, actions: [] }); })
+        .catch(() => { if (!cancelled) setInfo({ enabled: false, actions: [] }); });
+      api.users.list()
+        .then(list => { if (!cancelled) setUsers(list); })
+        .catch(() => { /* список пользователей не критичен для диалога */ });
+    }
     api.settings.get()
-      .then(s => { if (!cancelled) setSettings(s); })
+      .then(s => { if (!cancelled) setGlobalSettings(s); })
       .catch(() => { /* слоты останутся пустыми, тумблер — включённым */ });
+    if (!isAdmin) {
+      api.meModelTiers.get()
+        .then(t => { if (!cancelled) setOwnTiers(t); })
+        .catch(() => { /* остаёмся на пустых слотах */ });
+    }
     return () => { cancelled = true; };
-  }, []);
+  }, [isAdmin]);
+
+  // Загрузка слотов выбранного пользователя для админа. Сброс слотов и режима
+  // редактирования делает обработчик выбора в селекторе (не setState в теле
+  // effect — иначе каскад ре-рендеров, на что ругается react-hooks/set-state-in-effect).
+  useEffect(() => {
+    if (!isAdmin || !selectedUserId) return;
+    let cancelled = false;
+    api.adminUserModelTiers.get(selectedUserId)
+      .then(t => { if (!cancelled) setUserTiers(t); })
+      .catch(() => { if (!cancelled) setUserTiers(null); });
+    return () => { cancelled = true; };
+  }, [isAdmin, selectedUserId]);
 
   const ollamaOn = info?.enabled ?? false;
 
@@ -237,9 +351,7 @@ export function ModelProvidersModal({ onClose }: Props) {
   const groups: string[] = [];
   for (const a of actions) if (!groups.includes(a.group)) groups.push(a.group);
 
-  // === Уровень 1: плитка адаптеров ===
-  // CLI-провайдеры (включая ненастроенные) + Ollama из блока usage. OpenRouter-direct — это
-  // виртуальный провайдер каталога моделей (не отдельный адаптер), отдельной плитки не имеет.
+  // === Уровень 1: плитка адаптеров (только admin) ===
   const ollamaTile = info ? {
     name: 'Ollama',
     status: (info.enabled ? 'active' : 'offline') as 'active' | 'inactive' | 'offline',
@@ -259,83 +371,133 @@ export function ModelProvidersModal({ onClose }: Props) {
     ? `Активны: ${activeNames.join(', ')}${inactiveCount ? ` · ${inactiveCount} не настроены` : ''}`
     : (inactiveCount ? `${inactiveCount} не настроены` : 'Нет данных');
 
-  const tierModel = (t: TierKey) => (settings?.[TIERS[t].field] as string | null | undefined) ?? '';
   // Предохранитель: тяжёлая модель в слабом слоте правит фоновой мелочью (теги, заголовки,
   // сводки) — это десятки вызовов в день. Тир угадываем по id, как в ModelIcon.
-  const heavyWeak = /opus|fable|ultra|\bmax\b|\bpro\b|reasoner/i.test(tierModel('weak'));
+  const effectiveWeak = selectedTiers()?.weak ?? globalTiers()?.weak ?? '';
+  const heavyWeak = /opus|fable|ultra|\bmax\b|\bpro\b|reasoner/i.test(effectiveWeak);
 
   // Провайдеры, для которых можно нарисовать чипс быстрого выбора тройки.
   const chipProviders = providers
     .map(p => p.caps)
     .filter(c => c.configured !== false && hasTierTriple(c));
 
+  const selectedUser = users.find(u => u.id === selectedUserId);
+  const contextLabel = selectedUserId
+    ? (selectedUser?.displayName?.trim() || selectedUser?.username || 'Пользователь')
+    : 'Общие (все пользователи)';
+
   return (
     <Modal
       title="Поставщики моделей"
-      subtitle="Модели для чатов и фоновых задач. Настройка общая и применяется сразу."
+      subtitle={isAdmin
+        ? 'Модели для чатов и фоновых задач. Настройка общая и личная.'
+        : 'Ваши модели для чатов. Пустой слот — используется общая модель.'}
       width={MODAL_W.form}
       onClose={onClose}
     >
-      {/* === Уровень 1: Провайдеры (свёрнут по умолчанию) === */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        <div style={levelTitleStyle()}>Провайдеры</div>
-        <button
-          type="button"
-          onClick={() => setProvidersExpanded(o => !o)}
-          style={{
-            display: 'flex', alignItems: 'center', gap: 9, width: '100%', textAlign: 'left',
-            padding: '10px 12px', borderRadius: R.lg, background: C.bgWhite,
-            border: `1px solid ${C.border}`, cursor: 'pointer', transition: 'border-color 0.15s',
-          }}
-        >
-          <Boxes size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ color: C.textMuted, flexShrink: 0 }} />
-          <span style={{ flex: 1, minWidth: 0, fontSize: FS.base, fontWeight: 500, color: C.textHeading,
-            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {summaryText}
-          </span>
-          <ChevronDown size={ICON_SIZE.xs} strokeWidth={ICON_STROKE}
-            style={{ flexShrink: 0, color: C.textMuted, transform: providersExpanded ? 'rotate(180deg)' : 'none',
-              transition: 'transform 0.15s' }} />
-        </button>
+      {isAdmin && (
+        <>
+          {/* === Уровень 1: Провайдеры (свёрнут по умолчанию) === */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={levelTitleStyle()}>Провайдеры</div>
+            <button
+              type="button"
+              onClick={() => setProvidersExpanded(o => !o)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 9, width: '100%', textAlign: 'left',
+                padding: '10px 12px', borderRadius: R.lg, background: C.bgWhite,
+                border: `1px solid ${C.border}`, cursor: 'pointer', transition: 'border-color 0.15s',
+              }}
+            >
+              <Boxes size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ color: C.textMuted, flexShrink: 0 }} />
+              <span style={{ flex: 1, minWidth: 0, fontSize: FS.base, fontWeight: 500, color: C.textHeading,
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {summaryText}
+              </span>
+              <ChevronDown size={ICON_SIZE.xs} strokeWidth={ICON_STROKE}
+                style={{ flexShrink: 0, color: C.textMuted, transform: providersExpanded ? 'rotate(180deg)' : 'none',
+                  transition: 'transform 0.15s' }} />
+            </button>
 
-        {providersExpanded && (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8 }}>
-            {tiles.map((t, i) => (
-              <div key={i} style={{
-                background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: R.lg,
-                padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 4,
-              }}>
-                <div style={{ fontSize: FS.base, fontWeight: 600, color: C.textHeading }}>{t.name}</div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 5,
-                  fontSize: FS.sm, color: C.textSecondary }}>
-                  <span style={{
-                    width: 6, height: 6, borderRadius: R.full, flexShrink: 0,
-                    background: DOT_COLOR[t.status],
-                  }} />
-                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {t.statusLabel}
-                  </span>
-                  {t.count != null && t.count > 0 && (
-                    <span style={{ marginLeft: 'auto', fontSize: FS.xs, color: C.textMuted }}>
-                      {t.count} мод.
-                    </span>
-                  )}
-                </div>
-                {t.status === 'inactive' && (
-                  <span title="Ключ провайдера настраивается в appsettings.Local.json на сервере"
-                    style={{ fontSize: FS.xs, color: C.textMuted, alignSelf: 'flex-start', marginTop: 1 }}>
-                    Настроить →
-                  </span>
-                )}
+            {providersExpanded && (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8 }}>
+                {tiles.map((t, i) => (
+                  <div key={i} style={{
+                    background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: R.lg,
+                    padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 4,
+                  }}>
+                    <div style={{ fontSize: FS.base, fontWeight: 600, color: C.textHeading }}>{t.name}</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 5,
+                      fontSize: FS.sm, color: C.textSecondary }}>
+                      <span style={{
+                        width: 6, height: 6, borderRadius: R.full, flexShrink: 0,
+                        background: DOT_COLOR[t.status],
+                      }} />
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {t.statusLabel}
+                      </span>
+                      {t.count != null && t.count > 0 && (
+                        <span style={{ marginLeft: 'auto', fontSize: FS.xs, color: C.textMuted }}>
+                          {t.count} мод.
+                        </span>
+                      )}
+                    </div>
+                    {t.status === 'inactive' && (
+                      <span title="Ключ провайдера настраивается в appsettings.Local.json на сервере"
+                        style={{ fontSize: FS.xs, color: C.textMuted, alignSelf: 'flex-start', marginTop: 1 }}>
+                        Настроить →
+                      </span>
+                    )}
+                  </div>
+                ))}
               </div>
-            ))}
+            )}
           </div>
-        )}
-      </div>
+        </>
+      )}
 
       {/* === Уровень 2: Модели по умолчанию (развёрнуты) === */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
-        <div style={levelTitleStyle()}>Модели по умолчанию</div>
+        {isAdmin ? (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+            <div style={levelTitleStyle()}>Модели по умолчанию</div>
+            <div style={{ position: 'relative' }}>
+              <Button
+                variant="ghost"
+                size="sm"
+                leftIcon={
+                  <ChevronDown size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ color: C.textMuted, flexShrink: 0 }} />
+                }
+                onClick={() => setContextMenuOpen(true)}
+              >
+                {contextLabel}
+              </Button>
+              {contextMenuOpen && (
+                <Menu onClose={() => setContextMenuOpen(false)} align="right" top={34} minWidth={200}>
+                  <MenuItem
+                    label="Общие (все пользователи)"
+                    onClick={() => { setUserTiers(null); setSelectedUserId(null); setContextMenuOpen(false); setEditingTier(null); }}
+                  />
+                  {users.map(u => (
+                    <MenuItem
+                      key={u.id}
+                      label={u.displayName?.trim() || u.username}
+                      onClick={() => { setUserTiers(null); setSelectedUserId(u.id); setContextMenuOpen(false); setEditingTier(null); }}
+                    />
+                  ))}
+                </Menu>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div style={levelTitleStyle()}>Модели по умолчанию</div>
+        )}
+
+        {isAdmin && selectedUserId && (
+          <div style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.4, padding: '0 2px' }}>
+            Назначения мест общие для всех пользователей
+          </div>
+        )}
 
         {chipProviders.length > 0 && (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
@@ -352,7 +514,7 @@ export function ModelProvidersModal({ onClose }: Props) {
                   variant={active ? 'primary' : 'ghost'}
                   size="sm"
                   pill
-                  disabled={busy || !settings}
+                  disabled={busy || !selectedTiers()}
                   loading={busy}
                   onClick={() => applyProviderChip(caps)}
                   title={active
@@ -369,7 +531,7 @@ export function ModelProvidersModal({ onClose }: Props) {
         )}
 
         <div style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.4, padding: '0 2px' }}>
-          На эти три модели ссылаются назначения ниже — меняешь модель слота, меняются
+          На эти три модели ссылаются назначения мест — меняешь модель слота, меняются
           все места, назначенные на него.
         </div>
 
@@ -377,6 +539,7 @@ export function ModelProvidersModal({ onClose }: Props) {
           const model = tierModel(t);
           const editing = editingTier === t;
           const rowBusy = defaultBusy === t;
+          const inheritedModel = isAdmin && !selectedUserId ? undefined : globalTierModel(t);
           return (
             <div key={t} style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
               <div style={{
@@ -391,9 +554,20 @@ export function ModelProvidersModal({ onClose }: Props) {
                   </div>
                   <div style={{ fontSize: FS.xs, color: C.textMuted, marginTop: 2,
                     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {tierSubtitle(model)} · {TIERS[t].hint}
+                    {tierSubtitle(model, inheritedModel)} · {TIERS[t].hint}
                   </div>
                 </div>
+                {model && (
+                  <IconButton
+                    size="xs"
+                    tone="muted"
+                    title={selectedUserId || !isAdmin ? 'Вернуть общую модель' : 'Очистить слот (решит CLI)'}
+                    disabled={rowBusy}
+                    onClick={() => saveTier(t, '')}
+                  >
+                    <RotateCcw size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+                  </IconButton>
+                )}
                 <Button
                   variant="ghost"
                   size="sm"
@@ -433,8 +607,8 @@ export function ModelProvidersModal({ onClose }: Props) {
         )}
       </div>
 
-      {/* === Уровень 3: Применение моделей === */}
-      {info === undefined ? (
+      {/* === Уровень 3: Применение моделей (только admin) === */}
+      {isAdmin && (info === undefined ? (
         <div style={{ color: C.textMuted, fontSize: FS.md, padding: '8px 0' }}>Загрузка…</div>
       ) : (
         <>
@@ -511,7 +685,7 @@ export function ModelProvidersModal({ onClose }: Props) {
                       first={i === 0}
                       busy={busy === a.key}
                       ollamaModel={info.model ?? undefined}
-                      tierModels={{ strong: tierModel('strong'), medium: tierModel('medium'), weak: tierModel('weak') }}
+                      tierModels={{ strong: globalTierModel('strong'), medium: globalTierModel('medium'), weak: globalTierModel('weak') }}
                       models={models}
                       onPick={route => pick(a, route)}
                       onReset={() => reset(a)}
@@ -526,7 +700,7 @@ export function ModelProvidersModal({ onClose }: Props) {
             ))}
           </div>
         </>
-      )}
+      ))}
     </Modal>
   );
 }

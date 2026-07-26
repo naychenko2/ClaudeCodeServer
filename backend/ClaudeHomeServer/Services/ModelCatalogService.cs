@@ -17,6 +17,10 @@ public class ModelCatalogService(LlmProviderRegistry providers, IHttpClientFacto
     // тесты поднимают приложение десятки раз, и каждый прогрев каталога спавнил бы настоящий
     // claude.exe (мелькающие консольные окна его дочерних bash/cmd). Без опроса — Fallback.
     private readonly bool _queryCli = config.GetValue("ModelCatalog:QueryCli", true);
+    // Опрос API провайдеров (GET /models) тоже можно выключить — в тестах он даёт лишние
+    // задержки (каждый провайдер × таймаут 10 с при недоступности). Без опроса — только
+    // модели из конфига LlmProviders.
+    private readonly bool _queryProviderApis = config.GetValue("ModelCatalog:QueryProviderApis", true);
 
     // IsCurated=false — модель обнаружена опросом API провайдера, без ручной карточки
     // (нет описания/цен); UI может свернуть такие в «другие модели»
@@ -122,7 +126,7 @@ public class ModelCatalogService(LlmProviderRegistry providers, IHttpClientFacto
         result.AddRange(p.Models.Select(m =>
             new ModelInfo(m.Id, m.DisplayName, m.Description, p.Key, m.ContextWindow)));
 
-        if (!p.QueryModelsApi || string.IsNullOrWhiteSpace(p.ApiBaseUrl)) return;
+        if (!p.QueryModelsApi || string.IsNullOrWhiteSpace(p.ApiBaseUrl) || !_queryProviderApis) return;
 
         // API-обнаруженные модели без ручной карточки: описания нет (UI решает, как показывать —
         // напр. свернуть в «другие модели»); IsCurated=false отличает их от курируемых

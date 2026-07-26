@@ -19,6 +19,7 @@ namespace ClaudeHomeServer.Tests.Integration;
 ///
 /// Гоняем живой node против заглушки бэкенда: из C# этот гейт не виден.
 /// </summary>
+[Trait("Category", "Integration")]
 public class McpTasksPersonalScopeTests
 {
     private const string ProjectId = "проект-чата";

@@ -19,6 +19,7 @@ namespace ClaudeHomeServer.Tests.Integration;
 /// 2. мутация (POST) НЕ повторяется автоматически — повтор задвоил бы задачу;
 /// 3. текст ошибки несёт класс: «временный сбой» ≠ «отказ» ≠ «занято».
 /// </summary>
+[Trait("Category", "Integration")]
 public class McpServerRetryTests
 {
     private static string? FindServerPath(string serverDir)

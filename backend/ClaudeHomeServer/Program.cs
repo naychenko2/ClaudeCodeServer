@@ -248,7 +248,14 @@ builder.Services.AddHttpClient("llm-provider");
 builder.Services.AddHttpClient("anthropic-oauth");
 builder.Services.AddHttpForwarder();
 builder.Services.AddReverseProxy()
-    .LoadFromConfig(builder.Configuration.GetSection("ReverseProxy"));
+    .LoadFromConfig(builder.Configuration.GetSection("ReverseProxy"))
+    .ConfigureHttpClient((_, handler) =>
+    {
+        // Таймаут установки TCP-соединения с модулем. Без него при мёртвом модуле
+        // connect() висит до HttpClient.Timeout (100 с). 2 с — достаточно для любого
+        // живого бэкенда и не блокирует шлюз надолго при недоступности.
+        handler.ConnectTimeout = TimeSpan.FromSeconds(2);
+    });
 // Платформа внешних модулей (docs/module-platform-integration-contract.md): реестр манифестов,
 // RS256-токены с JWKS и ДОБАВОЧНЫЙ провайдер YARP-конфига из реестра (LoadFromConfig выше
 // не заменяется — YARP объединяет несколько IProxyConfigProvider, существующие маршруты

@@ -13,13 +13,19 @@ namespace ClaudeHomeServer.Services.Modules;
 /// health-check на healthPath и activity-таймаутом 300 с (§3, §3.1). Стриминг/SSE YARP
 /// не буферизует по умолчанию — отдельной настройки не требуется.
 /// Состав модулей фиксирован до рестарта (hot-plug вне scope v1) — конфиг статичен.
+/// Параметры health-check читаются из конфига (секция Modules:HealthCheck) — чтобы тесты
+/// могли задать минимальные задержки и не ждать 15 с до первой пробы.
 /// </summary>
-public sealed class ModuleProxyConfigProvider(ModuleRegistry registry) : IProxyConfigProvider
+public sealed class ModuleProxyConfigProvider(ModuleRegistry registry, IConfiguration config) : IProxyConfigProvider
 {
-    // Health-check: период/таймаут опроса healthPath; destination выключается после
-    // двух подряд неудач и возвращается после успешной пробы (политика YARP ConsecutiveFailures)
-    private static readonly TimeSpan HealthInterval = TimeSpan.FromSeconds(15);
-    private static readonly TimeSpan HealthTimeout = TimeSpan.FromSeconds(5);
+    // Дефолты health-check: период/таймаут опроса healthPath; после первой же
+    // неудачи destination выключается (политика YARP ConsecutiveFailures).
+    private readonly TimeSpan _healthInterval =
+        TimeSpan.FromSeconds(config.GetValue("Modules:HealthCheck:IntervalSeconds", 15));
+    private readonly TimeSpan _healthTimeout =
+        TimeSpan.FromSeconds(config.GetValue("Modules:HealthCheck:TimeoutSeconds", 2));
+    private readonly string _healthThreshold =
+        config.GetValue("Modules:HealthCheck:Threshold", "1");
     // §3.1: proxy activity timeout — 300 с бездействия, не суммарный
     public static readonly TimeSpan ActivityTimeout = TimeSpan.FromSeconds(300);
 
@@ -58,15 +64,15 @@ public sealed class ModuleProxyConfigProvider(ModuleRegistry registry) : IProxyC
                     Active = new ActiveHealthCheckConfig
                     {
                         Enabled = true,
-                        Interval = HealthInterval,
-                        Timeout = HealthTimeout,
+                        Interval = _healthInterval,
+                        Timeout = _healthTimeout,
                         Policy = "ConsecutiveFailures",
                         Path = backend.HealthPath,
                     },
                 },
                 Metadata = new Dictionary<string, string>
                 {
-                    ["ConsecutiveFailuresHealthPolicy.Threshold"] = "2",
+                    ["ConsecutiveFailuresHealthPolicy.Threshold"] = _healthThreshold,
                 },
             });
         }

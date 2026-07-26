@@ -15,6 +15,7 @@ namespace ClaudeHomeServer.Tests.Integration;
 /// то нет» с переподключением сервера. Набор chats-инструментов обязан зависеть ТОЛЬКО от
 /// смонтированной секции chats.
 /// </summary>
+[Trait("Category", "Integration")]
 public class WorkspaceMcpServerToolsTests
 {
     // Путь к серверу: поднимаемся от bin тестов до корня репозитория

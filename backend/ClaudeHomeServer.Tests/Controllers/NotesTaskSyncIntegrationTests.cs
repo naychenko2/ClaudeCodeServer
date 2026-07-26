@@ -10,6 +10,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // синхронизация. Проверяет связку NotesController + NoteTaskParser + NoteTaskSyncService
 // + TaskManager целиком (юниты покрывают только парсер). Номера строк и контент
 // читаем обратно через API — тест устойчив к трансформациям контента при создании.
+[Trait("Category", "Integration")]
 public class NotesTaskSyncIntegrationTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly HttpClient _client;

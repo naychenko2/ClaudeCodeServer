@@ -264,7 +264,8 @@ public class ModulePlatformTests : IDisposable
     public void ProxyConfig_BuildsRouteAndClusterPerModule()
     {
         WriteModule("echo", ManifestJson("module-echo"));
-        var provider = new ModuleProxyConfigProvider(CreateRegistry());
+        var provider = new ModuleProxyConfigProvider(CreateRegistry(),
+            new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>()).Build());
 
         var config = provider.GetConfig();
 
@@ -286,7 +287,8 @@ public class ModulePlatformTests : IDisposable
     [Fact]
     public void ProxyConfig_EmptyRegistry_NoRoutes()
     {
-        var provider = new ModuleProxyConfigProvider(CreateRegistry());
+        var provider = new ModuleProxyConfigProvider(CreateRegistry(),
+            new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>()).Build());
         var config = provider.GetConfig();
         config.Routes.Should().BeEmpty();
         config.Clusters.Should().BeEmpty();

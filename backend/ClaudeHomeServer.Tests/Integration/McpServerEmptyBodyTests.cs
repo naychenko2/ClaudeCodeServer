@@ -16,6 +16,7 @@ namespace ClaudeHomeServer.Tests.Integration;
 ///
 /// Гоняем настоящий node-процесс против заглушки бэкенда: из C# этот путь не виден.
 /// </summary>
+[Trait("Category", "Integration")]
 public class McpServerEmptyBodyTests
 {
     // Путь к серверу: поднимаемся от bin тестов до корня репозитория

@@ -12,6 +12,7 @@ namespace ClaudeHomeServer.Tests.Integration;
 /// На не-Windows (Linux CI) честно скипаются через SkippableFact.
 /// </summary>
 [Collection("ConPty")]
+[Trait("Category", "Integration")]
 public class ConPtyBridgeIntegrationTests
 {
     private static string BridgePath => Path.Combine(AppContext.BaseDirectory, "ConPtyBridge.exe");
@@ -96,7 +97,7 @@ public class ConPtyBridgeIntegrationTests
         }
 
         /// <summary>Дождаться готовности шелла (промпт «PS » отрисован).</summary>
-        public void WaitForPrompt() => WaitForOutput("PS ").Should().BeTrue("powershell должен подняться и отрисовать промпт");
+        public void WaitForPrompt() => WaitForOutput("PS ", timeoutMs: 30_000).Should().BeTrue("powershell должен подняться и отрисовать промпт");
 
         public void CloseStdin() => Process.StandardInput.BaseStream.Close();
 

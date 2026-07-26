@@ -55,6 +55,10 @@ public class TestWebApplicationFactory : WebApplicationFactory<Program>, IDispos
                 // не опрашивать claude CLI при прогреве каталога моделей: каждый подъём
                 // приложения спавнил настоящий claude.exe с мелькающими окнами bash/cmd
                 ["ModelCatalog:QueryCli"] = "false",
+                // не опрашивать API провайдеров в тестах: каждый провайдер × таймаут 10 с
+                // при недоступности — кратно замедляет старт каждого тестового хоста
+                ["ModelCatalog:QueryProviderApis"] = "false",
+                ["Ollama:Model"] = "", // отключить прогрев и локальные фоновые задачи в тестах
                 // не опрашивать api/oauth/usage: тест не должен ходить в сеть с реальным
                 // токеном ~/.claude машины
                 ["ClaudeSubscriptions:UsagePollMinutes"] = "0"

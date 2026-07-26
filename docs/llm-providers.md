@@ -71,8 +71,13 @@
   вычищать нечего: окружение контейнера собирается с нуля и уезжает через `-e`.
 - **Баланс** — `ProviderBalanceService`, `GET /api/providers/{key}/balance|usage`
   (кэш 5 мин; снапшоты 8 дней в data/provider-usage-{key}.json, legacy
-  deepseek-usage.json читается) — попап контекст-бейджа шапки чата + вкладка
-  провайдера на экране «Использование».
+  deepseek-usage.json читается; точки чужой валюты отбрасываются — смена ряда
+  USD→% у Kimi) — попап контекст-бейджа шапки чата + вкладка
+  провайдера на экране «Использование». Источники по ключу `Balance`:
+  `deepseek`/`moonshot`/`openrouter` — деньги; `glm` — квота Coding Plan
+  (%, 5-ч окно); `kimi` — квота Kimi for Coding, `GET {ApiBaseUrl}/usages`
+  (недокументир.: основное — самое короткое окно из `limits[]` = 5-ч, недельное
+  `usage` уезжает в `Secondary*`-поля `ProviderBalance`; числа приходят строками).
 - **Каталог моделей** — `ModelCatalogService`: записи `Models` конфига + при
   `QueryModelsApi` опрос `GET {ApiBaseUrl}/models` (новые модели с дефолтами).
 

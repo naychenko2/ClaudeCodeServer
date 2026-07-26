@@ -172,7 +172,8 @@ function ClaudeTab({ snapshots, rotation, tier, pollStatus }: { snapshots: Usage
 }
 
 type ProviderUsage = {
-  balance: { available: boolean; currency: string; totalBalance: string; asOf?: string; resetsAt?: string | null } | null;
+  balance: { available: boolean; currency: string; totalBalance: string; asOf?: string; resetsAt?: string | null;
+    secondaryLabel?: string | null; secondaryValue?: string | null; secondaryResetsAt?: string | null } | null;
   snapshots: { timestamp: string; balance: number; currency: string }[];
 };
 
@@ -273,6 +274,13 @@ function ProviderTab({ providerKey, data }: { providerKey: string; data: Provide
         {isQuota
           ? <MetricCard value={isNaN(cur) ? '—' : `${(100 - cur).toFixed(1)} %`} label="израсходовано окна" valueColor={MONEY} />
           : <MetricCard value={spent > 0 ? `${spent.toFixed(2)} ${currency}` : '—'} label="≈ расход за последние дни" valueColor={MONEY} />}
+        {isQuota && data.balance?.secondaryValue && (
+          <MetricCard value={`${data.balance.secondaryValue} ${currency}`} label={data.balance.secondaryLabel ?? 'остаток квоты · второй период'} valueColor={MONEY}>
+            {data.balance.secondaryResetsAt && (
+              <div style={{ fontSize: 11, color: C.textMuted, marginTop: 6 }}>сброс {fmtReset(data.balance.secondaryResetsAt)}</div>
+            )}
+          </MetricCard>
+        )}
       </div>
       {points.length >= 2 && (
         <>

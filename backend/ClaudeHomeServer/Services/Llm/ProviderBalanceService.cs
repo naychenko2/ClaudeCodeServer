@@ -5,9 +5,12 @@ namespace ClaudeHomeServer.Services.Llm;
 
 // AsOf — UTC-время последнего УСПЕШНОГО обновления (при отдаче протухшего кэша остаётся
 // временем того успешного обновления — фронт показывает свежесть данных).
-// ResetsAt — момент сброса окна квоты (UTC; сейчас только у GLM), null — не применимо.
+// ResetsAt — момент сброса окна квоты (UTC; у GLM и Kimi), null — не применимо.
+// SecondaryLabel/SecondaryValue/SecondaryResetsAt — второе окно квоты, когда у подписки
+// их два (у Kimi основное — 5-часовое, второе — недельное); у прочих провайдеров null.
 public sealed record ProviderBalance(bool Available, string Currency, string TotalBalance,
-    DateTime AsOf = default, DateTime? ResetsAt = null);
+    DateTime AsOf = default, DateTime? ResetsAt = null,
+    string? SecondaryLabel = null, string? SecondaryValue = null, DateTime? SecondaryResetsAt = null);
 
 // Точка истории баланса — для графика на экране «Использование»
 public sealed record ProviderBalanceSnapshot(DateTime Timestamp, double Balance, string Currency);
@@ -15,9 +18,10 @@ public sealed record ProviderBalanceSnapshot(DateTime Timestamp, double Balance,
 // Состояние аккаунта CLI-провайдера. Источник задаётся конфигом провайдера (Balance):
 // "deepseek" — GET {ApiBaseUrl}/user/balance; "moonshot" — GET {ApiBaseUrl}/users/me/balance;
 // "openrouter" — GET {ApiBaseUrl}/credits (деньги); "glm" — GET {BalanceUrl} (квота подписки
-// Coding Plan, остаток в % 5-часового окна). Провайдер без источника —
-// баланс недоступен (UI скрывает блок). Кэш 5 мин; каждое успешное обновление пишет
-// снапшот в data/provider-usage-{key}.json (история для графика).
+// Coding Plan, остаток в % 5-часового окна); "kimi" — GET {ApiBaseUrl}/usages (квота подписки
+// Kimi for Coding: 5-часовое окно — основное, недельное — в Secondary*). Провайдер без
+// источника — баланс недоступен (UI скрывает блок). Кэш 5 мин; каждое успешное обновление
+// пишет снапшот в data/provider-usage-{key}.json (история для графика).
 public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderRegistry providers,
     IConfiguration config)
 {
@@ -63,6 +67,7 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
                 "moonshot" => await FetchMoonshotAsync(p, ct),
                 "openrouter" => await FetchOpenRouterAsync(p, ct),
                 "glm" => await FetchGlmAsync(p, ct),
+                "kimi" => await FetchKimiAsync(p, ct),
                 _ => null,
             };
             // Протухший лучше, чем ничего: AsOf в нём остаётся временем прошлого
@@ -251,6 +256,106 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
         }
     }
 
+    // Формат Kimi for Coding (подписка kimi.com, недокументированный эндпоинт):
+    // GET {ApiBaseUrl}/usages →
+    // { usage: {limit, used, remaining, resetTime},              // недельное окно
+    //   limits: [{ window: {duration, timeUnit}, detail: {limit, used, remaining, resetTime} }] }
+    // Числа приходят СТРОКАМИ; limit=100 — шкала уже процентная. Основным считаем самое
+    // короткое окно из limits[] (5-часовое, 300 мин) — как у GLM; недельное кладём в Secondary*.
+    private async Task<ProviderBalance?> FetchKimiAsync(LlmProviderConfig p, CancellationToken ct)
+    {
+        try
+        {
+            var client = httpFactory.CreateClient("llm-provider");
+            using var req = new HttpRequestMessage(HttpMethod.Get, $"{p.ApiBaseUrl.TrimEnd('/')}/usages");
+            req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", p.ApiKey);
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(10));
+            using var resp = await client.SendAsync(req, timeoutCts.Token);
+            resp.EnsureSuccessStatusCode();
+
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(timeoutCts.Token));
+            return ParseKimiUsages(doc.RootElement);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[ProviderBalance] Не удалось получить баланс {p.Key}: {ex.Message}");
+            return null;
+        }
+    }
+
+    // Разбор ответа /usages Kimi (internal — под тестами). null — ни одного окна не разобрали.
+    internal static ProviderBalance? ParseKimiUsages(JsonElement root)
+    {
+        // Недельное окно — корневое "usage"
+        var weekly = root.TryGetProperty("usage", out var usageEl) && usageEl.ValueKind == JsonValueKind.Object
+            ? ParseKimiWindow(usageEl) : null;
+
+        // Основное — самое короткое окно из limits[] (окно 300 мин = 5-часовое)
+        KimiWindow? primary = null;
+        if (root.TryGetProperty("limits", out var limitsEl) && limitsEl.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in limitsEl.EnumerateArray())
+            {
+                if (!item.TryGetProperty("detail", out var detail) || detail.ValueKind != JsonValueKind.Object)
+                    continue;
+                var w = ParseKimiWindow(detail);
+                if (w is null) continue;
+                var minutes = WindowMinutes(item);
+                if (primary is null || minutes < primary.Value.Minutes)
+                    primary = w.Value with { Minutes = minutes };
+            }
+        }
+        // Без limits[] живём на одном недельном окне
+        primary ??= weekly is { } w0 ? w0 with { Minutes = double.MaxValue } : null;
+        if (primary is null) return null;
+
+        var fmt = (double v) => v.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture);
+        var p = primary.Value;
+        // Вторым окном отдаём неделю, только когда она не совпала с основным
+        var hasSecondary = weekly is { } wk && wk != p;
+        return new ProviderBalance(true, "%", fmt(p.RemainingPct), ResetsAt: p.ResetsAt,
+            SecondaryLabel: hasSecondary ? "остаток квоты · неделя" : null,
+            SecondaryValue: hasSecondary ? fmt(weekly!.Value.RemainingPct) : null,
+            SecondaryResetsAt: hasSecondary ? weekly!.Value.ResetsAt : null);
+    }
+
+    // Одно окно квоты Kimi: остаток в процентах (нормализуем к 0..100, даже если limit ≠ 100) + сброс
+    private readonly record struct KimiWindow(double RemainingPct, DateTime? ResetsAt, double Minutes);
+
+    private static KimiWindow? ParseKimiWindow(JsonElement el)
+    {
+        var limit = ReadNumber(el, "limit");
+        var remaining = ReadNumber(el, "remaining");
+        // remaining может отсутствовать — выводим из limit − used
+        if (double.IsNaN(remaining) && !double.IsNaN(limit))
+        {
+            var used = ReadNumber(el, "used");
+            if (!double.IsNaN(used)) remaining = limit - used;
+        }
+        if (double.IsNaN(remaining) || double.IsNaN(limit) || limit <= 0) return null;
+
+        DateTime? resetsAt = el.TryGetProperty("resetTime", out var rt) && rt.ValueKind == JsonValueKind.String
+            && DateTime.TryParse(rt.GetString(), null, System.Globalization.DateTimeStyles.RoundtripKind, out var parsed)
+                ? parsed.ToUniversalTime() : null;
+        return new KimiWindow(Math.Clamp(remaining / limit * 100, 0, 100), resetsAt, double.MaxValue);
+    }
+
+    // Длительность окна limits[] в минутах (для выбора самого короткого); неизвестная — бесконечность
+    private static double WindowMinutes(JsonElement limitItem)
+    {
+        if (!limitItem.TryGetProperty("window", out var w) || w.ValueKind != JsonValueKind.Object)
+            return double.MaxValue;
+        var duration = ReadNumber(w, "duration");
+        if (double.IsNaN(duration) || duration <= 0) return double.MaxValue;
+        var unit = w.TryGetProperty("timeUnit", out var u) ? u.GetString() ?? "" : "";
+        return unit.Contains("SECOND", StringComparison.OrdinalIgnoreCase) ? duration / 60
+            : unit.Contains("HOUR", StringComparison.OrdinalIgnoreCase) ? duration * 60
+            : unit.Contains("DAY", StringComparison.OrdinalIgnoreCase) ? duration * 24 * 60
+            : duration; // TIME_UNIT_MINUTE и неизвестные считаем минутами
+    }
+
     // История баланса за последние дни — для графика на экране «Использование»
     public IReadOnlyList<ProviderBalanceSnapshot> GetSnapshots(string key)
     {
@@ -274,7 +379,9 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
             {
                 var list = LoadSnapshots(key);
                 var cutoff = DateTime.UtcNow - SnapshotRetention;
-                list = list.Where(s => s.Timestamp >= cutoff).ToList();
+                // Точки чужой валюты отбрасываем: смена ряда (у Kimi pay-per-token USD → квота
+                // подписки в %) делает старую историю несопоставимой — график бы смешал шкалы
+                list = list.Where(s => s.Timestamp >= cutoff && s.Currency == balance.Currency).ToList();
                 // Кэш баланса живёт 5 мин — каждое обновление и есть естественный троттлинг
                 list.Add(new ProviderBalanceSnapshot(DateTime.UtcNow, value, balance.Currency));
                 File.WriteAllText(UsagePath(key), JsonSerializer.Serialize(list));

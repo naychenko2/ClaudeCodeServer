@@ -284,32 +284,24 @@ public class WorkflowAgentParserTests : IDisposable
     [Fact]
     public void IsPathAllowed_ПрофильПодProfilesRoot_РазрешёнТолькоProjects()
     {
-        var prev = WorkflowAgentParser.ProfilesRoot;
-        try
-        {
-            WorkflowAgentParser.ProfilesRoot = _dir;
-            // Транскрипты любого профиля (в т.ч. подписки sub-*, созданной после старта)
-            var wf = Path.Combine(_dir, "sub-my-second", "projects", "-p-x-", "sid", "subagents", "workflows", "wf_1");
-            WorkflowAgentParser.IsPathAllowed(wf).Should().BeTrue();
-            // Но не остальное содержимое профиля (креденшалы и т.п.)
-            WorkflowAgentParser.IsPathAllowed(Path.Combine(_dir, "sub-my-second", ".credentials.json"))
-                .Should().BeFalse();
-            // И не сам корень с одним сегментом
-            WorkflowAgentParser.IsPathAllowed(Path.Combine(_dir, "projects")).Should().BeFalse();
-        }
-        finally { WorkflowAgentParser.ProfilesRoot = prev; }
+        // profilesRoot передаём параметром в перегрузку, а не через статическое поле:
+        // параллельный старт WebApplicationFactory в интеграционных тестах перезаписывает
+        // WorkflowAgentParser.ProfilesRoot (Program.cs), и гонка делает проверку flaky.
+        // Транскрипты любого профиля (в т.ч. подписки sub-*, созданной после старта)
+        var wf = Path.Combine(_dir, "sub-my-second", "projects", "-p-x-", "sid", "subagents", "workflows", "wf_1");
+        WorkflowAgentParser.IsPathAllowed(wf, _dir).Should().BeTrue();
+        // Но не остальное содержимое профиля (креденшалы и т.п.)
+        WorkflowAgentParser.IsPathAllowed(Path.Combine(_dir, "sub-my-second", ".credentials.json"), _dir)
+            .Should().BeFalse();
+        // И не сам корень с одним сегментом
+        WorkflowAgentParser.IsPathAllowed(Path.Combine(_dir, "projects"), _dir).Should().BeFalse();
     }
 
     [Fact]
     public void IsPathAllowed_ProfilesRoot_TraversalНеПроходит()
     {
-        var prev = WorkflowAgentParser.ProfilesRoot;
-        try
-        {
-            WorkflowAgentParser.ProfilesRoot = Path.Combine(_dir, "profiles");
-            var sneaky = Path.Combine(_dir, "profiles", "key", "..", "..", "secret", "projects", "x");
-            WorkflowAgentParser.IsPathAllowed(sneaky).Should().BeFalse();
-        }
-        finally { WorkflowAgentParser.ProfilesRoot = prev; }
+        var profilesRoot = Path.Combine(_dir, "profiles");
+        var sneaky = Path.Combine(_dir, "profiles", "key", "..", "..", "secret", "projects", "x");
+        WorkflowAgentParser.IsPathAllowed(sneaky, profilesRoot).Should().BeFalse();
     }
 }

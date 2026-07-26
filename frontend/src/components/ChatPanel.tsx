@@ -1266,7 +1266,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
             planAvailable={caps.supportsPlanMode}
             attachments={attachedFiles}
             onRemoveAttachment={path => onAttachedFilesChange(attachedFiles.filter(p => p !== path))}
-            onAttachImages={project ? handleAttachImages : handleChatUpload}
+            onAttachImages={!caps.supportsImages ? undefined : (project ? handleAttachImages : handleChatUpload)}
             isMobile={isMobile}
             skills={skills}
             personas={ctxPersonas}

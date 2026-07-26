@@ -92,6 +92,11 @@ Claude Design проект: `52adb1f7-312b-4f25-8c47-2bccfca9df94`
 для ЛЮБЫХ изменений UI** — гайд и есть общая канва, по которой идут все дальнейшие
 доработки. Выжимка железных правил:
 
+**Живой эталон UI-кита** — витрина: в dev открывается по `#/ui-kit` (без авторизации),
+исходник [UiKitPage.tsx](frontend/src/dev/UiKitPage.tsx). Показывает все токены и
+примитивы в одном месте — при UI-задачах читай его как референс правильного применения
+дизайн-системы (токены, паттерны, состав примитивов). В production-бандл не попадает.
+
 - Цвета — только токены `C.*` из [design.ts](frontend/src/lib/design.ts) (CSS-переменные,
   тёмная тема бесплатно). Сырой hex в `.tsx` — дефект; значения тем живут в
   [theme.css](frontend/src/lib/theme.css) (новый цвет — в ОБЕ темы). Текст на заливке
@@ -328,8 +333,9 @@ override в `data/users.json`; фронт — стор [lib/featureFlags.ts](fro
 
 - **Conventional Commits**: `type(scope): описание` (feat/fix/perf/docs/refactor/build/chore/ci/test/style).
 - **Язык сообщений — русский** (в отличие от общего дефолта на английском).
-- Трейлер `Co-Authored-By: Claude <модель> <noreply@anthropic.com>` — где `<модель>` это
-  та, что реально делала коммит (напр. «Claude Opus 4.8», «Claude Sonnet 5»), а не
-  фиксированная версия. Email всегда `noreply@anthropic.com`.
+- Трейлер `Co-Authored-By: <модель> <noreply@<домен-вендора>>` — где `<модель>` это
+  та, что реально делала коммит (напр. «Claude Opus 4.8», «GLM 5.2»), а не фиксированная
+  версия. Домен noreply берётся по вендору модели: Anthropic → `noreply@anthropic.com`,
+  ZhipuAI (GLM) → `noreply@z.ai`. Без «Claude» в начале, если модель не от Anthropic.
 - Атомарность: одно логическое изменение — один коммит.
 - `commit`/`push` — только по явной просьбе.

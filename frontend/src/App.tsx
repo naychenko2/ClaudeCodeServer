@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, lazy, Suspense } from 'react'
 import type { Project, AuthState } from './types'
 import { LoginPage } from './pages/LoginPage'
 import { ProjectListPage } from './pages/ProjectListPage'
@@ -42,6 +42,17 @@ import { OPEN_SPEND_EVENT, type SpendOpenContext } from './lib/spend'
 
 const OPEN_PROJECT_KEY = 'cc_open_project'
 const HUB_TAB_KEY = 'cc_hub_tab'
+
+// Витрина дизайн-системы — dev-only. Открывается по #/ui-kit, в обход авторизации
+// и обычной навигации. import.meta.env.DEV → Vite DCE вычищает и компонент, и роут
+// из production-бандла (в prod здесь просто null).
+const UiKitPage = import.meta.env.DEV
+  ? lazy(() => import('./dev/UiKitPage').then(m => ({ default: m.UiKitPage })))
+  : null;
+
+function isDevUiKitHash(): boolean {
+  return window.location.hash === '#/ui-kit';
+}
 
 // Диплинк из hash-URL (#/calendar, #/project/{id}/task/{tid}…) — читаем один раз
 // при загрузке страницы, до первого рендера (WorkspacePage заберёт pending-значения)
@@ -109,6 +120,11 @@ export default function App() {
     return 'home'
   })
   const effectiveHubTab: HubTabValue = hubTab
+
+  // Витрина дизайн-системы #/ui-kit — переключается по hash без перезагрузки,
+  // работает без авторизации (на экране входа тоже). В prod UiKitPage === null,
+  // условие всегда ложно и режим не активируется.
+  const [uiKitMode, setUiKitMode] = useState(() => isDevUiKitHash())
 
   // «Что нового» — продуктовая история по всем проектам. Overlay на верхнем уровне,
   // открывается из HubHeader (событие) из любого раздела.
@@ -441,6 +457,13 @@ export default function App() {
   // Подписка на уведомления через SignalR (даже если раздел ещё не открыт)
   useEffect(() => { ensureNotificationsSubscribed(); }, []);
 
+  // Dev-витрина #/ui-kit — переключение hash (вход/выход из режима) без перезагрузки.
+  useEffect(() => {
+    const onHash = () => setUiKitMode(isDevUiKitHash());
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
+
   const openProject = (p: Project) => {
     recordRecentProject(p.id)
     localStorage.setItem(OPEN_PROJECT_KEY, JSON.stringify(p))
@@ -701,6 +724,16 @@ export default function App() {
     navReplace({ screen: 'projects' })
     setProject(null)
     setAuth(null)
+  }
+
+  // Early-return в режиме #/ui-kit: показываем витрину раньше UpdatePrompt/authChecking.
+  // В prod UiKitPage === null → ветка недостижима и вырезается компилятором.
+  if (uiKitMode && UiKitPage) {
+    return (
+      <Suspense fallback={<div style={{ minHeight: '100vh', background: C.bgMain }} />}>
+        <UiKitPage />
+      </Suspense>
+    );
   }
 
   return (

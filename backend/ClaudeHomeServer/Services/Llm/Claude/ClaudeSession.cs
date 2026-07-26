@@ -806,6 +806,18 @@ public class ClaudeSession : ILlmSessionAdapter
         var (imagePaths, otherPaths) = AttachmentInliner.SplitImagePaths(attachedPaths);
         var fullText = AttachmentInliner.BuildMessageText(_rootPath, effectiveText, otherPaths);
 
+        // Модель без зрения (напр. GLM): base64-блок эндпоинт принимает молча, но модель
+        // домысливает содержимое (проверено — на красный PNG отвечает «Colorful»). Картинку
+        // не шлём, а честно помечаем в тексте — иначе тихая галлюцинация вместо явного отказа.
+        // Защита в глубину: фронт при !supportsImages вложения и не даёт прикрепить.
+        if (imagePaths.Count > 0 && !Capabilities.SupportsImages)
+        {
+            var names = string.Join(", ", imagePaths.Select(Path.GetFileName));
+            fullText += $"\n\n[Вложены изображения ({names}), но выбранная модель не поддерживает "
+                      + "зрение и не может их рассмотреть — их содержимое недоступно.]";
+            imagePaths = [];
+        }
+
         return QueueTurnAsync(fullText, imagePaths, agentDepth, suppressTasksExecute);
     }
 

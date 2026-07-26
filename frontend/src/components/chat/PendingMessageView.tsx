@@ -13,14 +13,31 @@ import { C, FONT, R, SP, FS } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { IconButton } from '../ui/IconButton';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
+import { MarkdownContent } from './MarkdownContent';
 import { MessageOriginChip } from '../MessageOriginChip';
 import { getPersonaById, ensurePersonasLoaded, personaLabel } from '../../lib/personas';
 import type { PendingChatMessage } from '../../lib/chatReducer';
 
 // Длительность ухода строки после доставки/отмены — столько же держим её в DOM
 const LEAVE_MS = 150;
-// Сколько строк текста показываем в раскрытом виде до кнопки «Показать целиком»
-const CLAMP_LINES = 3;
+// Высота раскрытого тела до кнопки «Показать целиком». Ограничиваем по пикселям, а не
+// по строкам: в тексте бывают блоки кода и списки, и line-clamp резал бы их посередине
+const BODY_MAX_H = 220;
+
+// Превью в свёрнутой строке — plain: разметка в одну строку читается как мусор
+// («## Итог», «**готово**», ```` ```ts ````). Снимаем самый частый синтаксис, текст оставляем.
+function previewOf(text: string): string {
+  return text
+    .replace(/```[\s\S]*?```/g, '⟨код⟩')      // блоки кода — одним словом
+    .replace(/`([^`]+)`/g, '$1')               // инлайн-код
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1') // ссылки и картинки — только текст
+    .replace(/^\s{0,3}#{1,6}\s+/gm, '')        // заголовки
+    .replace(/^\s{0,3}>\s?/gm, '')             // цитаты
+    .replace(/^\s*[-*+]\s+/gm, '')             // маркеры списка
+    .replace(/(\*\*|__|\*|_|~~)/g, '')         // выделения
+    .replace(/\s+/g, ' ')
+    .trim();
+}
 
 // Компактное «ждёт N» — не «N минут назад»: речь о длительности ожидания, а не о
 // моменте в прошлом, и место в строке ограничено
@@ -56,7 +73,7 @@ function PendingMessageRow({ item, onCancel, isMobile, leaving }: RowProps) {
   const sender = item.senderPersonaId ? getPersonaById(item.senderPersonaId) : null;
   // Персона → её имя; иначе имя чата-отправителя; иначе нейтральная подпись
   const title = sender ? personaLabel(sender) : (item.senderChatName || 'Входящее сообщение');
-  const preview = item.text.replace(/\s+/g, ' ').trim();
+  const preview = previewOf(item.text);
 
   const cancel = () => {
     if (!onCancel || cancelling) return;
@@ -144,17 +161,19 @@ function PendingMessageRow({ item, onCancel, isMobile, leaving }: RowProps) {
         )}
       </div>
 
+      {/* Тело — тот же Markdown, что и у доставленного сообщения: агенты шлют сюда код,
+          списки и заголовки, а сырым текстом это читалось как мусор из звёздочек. Заодно
+          при доставке карточка не «прыгает» — разметка уже отрисована так же. */}
       {open && (
-        <div style={{
-          padding: `0 ${SP.md}px ${SP.sm}px ${isMobile ? SP.md : 38}px`,
-          fontSize: FS.base, color: C.textSecondary,
-          whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-          ...(full ? {} : {
-            display: '-webkit-box', WebkitLineClamp: CLAMP_LINES,
-            WebkitBoxOrient: 'vertical' as const, overflow: 'hidden',
-          }),
-        }}>
-          {item.text}
+        <div
+          onClick={e => e.stopPropagation()}
+          style={{
+            padding: `0 ${SP.md}px ${SP.sm}px ${isMobile ? SP.md : 38}px`,
+            fontSize: FS.base, color: C.textSecondary, wordBreak: 'break-word',
+            ...(full ? {} : { maxHeight: BODY_MAX_H, overflow: 'hidden' }),
+          }}
+        >
+          <MarkdownContent text={item.text} />
         </div>
       )}
       {open && !full && item.text.length > 220 && (

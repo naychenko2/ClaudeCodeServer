@@ -236,7 +236,7 @@ public sealed class PersonaAgentFileSync
             // резолвер может вернуть и модель стороннего провайдера — ModelAliasFor
             // отсеет её в null (пин только Claude-тиров), как и раньше
             ModelAliasFor(_providers,
-                _assignments?.Resolve(Llm.LocalActionCatalog.SubagentConsultant, persona.Model)
+                _assignments?.Resolve(Llm.LocalActionCatalog.SubagentConsultant, persona.Model, ownerId)
                 ?? persona.Model)));
     }
 

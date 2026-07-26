@@ -186,4 +186,55 @@ public class PersonaAgentFileSyncTests : IDisposable
 
         dirs.Should().BeEmpty();
     }
+
+    [Fact]
+    public void ПерсонаБезМодели_ПинитЛичныйСлотВладельца()
+    {
+        // Изолированная инфра: свой PersonaManager + sut с ModelAssignmentResolver и per-user
+        // слотами (общий _sut построен без assignments — его обработчик тут мешал бы).
+        var dir = Path.Combine(_tempDir, "tier-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(dir, "projects.json"),
+            })
+            .Build();
+        var users = new UserStore(config, new ClaudeHomeServer.Tests.Helpers.FakeHostEnvironment(), NullLogger<UserStore>.Instance);
+        var appSettings = new AppSettingsService(config);
+        appSettings.Save(new AppSettings { ModelTierMedium = "opus" });   // глобальный medium
+        var user = users.Add("owner-1", "password123", "user");
+        users.SetModelTiers(user.Id, null, "haiku", null);   // личный medium = haiku
+        var userTiers = new UserModelTierResolver(users, appSettings);
+        var store = new LocalActionOverridesStore(config, NullLogger<LocalActionOverridesStore>.Instance);
+        store.Set(LocalActionCatalog.SubagentConsultant, "tier:medium");
+        var assignments = new ModelAssignmentResolver(appSettings, store, userTiers);
+
+        var providers = new LlmProviderRegistry(config);
+        var personas = new PersonaManager(config);
+        var projects = new ProjectManager(config, users, appSettings);
+        var wkStore = new WorkspaceKnowledgeStore(config);
+        var knowledge = new KnowledgeService(new Mock<IHttpClientFactory>().Object,
+            Microsoft.Extensions.Options.Options.Create(new DifyOptions()), wkStore);
+        var notes = new NotesService(projects, config, NullLogger<NotesService>.Instance);
+        var notesKb = new NotesKnowledgeService(knowledge, notes, users, config,
+            NullLogger<NotesKnowledgeService>.Instance);
+        var bindings = new PersonaBindingsService(personas, projects, wkStore, notes, notesKb,
+            knowledge, new SkillsService(), users, config, NullLogger<PersonaBindingsService>.Instance);
+        var generator = new PersonaAgentFileGenerator(new PersonaPromptBuilder(providers));
+        var sut = new PersonaAgentFileSync(config, personas, projects, providers, bindings, generator,
+            users, appSettings, NullLogger<PersonaAgentFileSync>.Instance, assignments: assignments);
+
+        // Персона без своей модели: пин должен прийти из ЛИЧНОГО слота владельца (haiku),
+        // а не глобального (opus) — доказывает, что ownerId доезжает до Resolve.
+        var p = personas.Create(user.Id, "Консультант", "Роль", null, null, null, null,
+            PersonaScope.Global, null, null, null, true);
+
+        var path = Path.Combine(dir, "persona-agents", user.Id, "shared",
+            ".claude", "agents", p.Handle + ".md");
+        File.Exists(path).Should().BeTrue("персона без модели → shared");
+        var content = File.ReadAllText(path);
+        content.Should().Contain("model: haiku", "пинится личный слот владельца, а не глобальный opus");
+        content.Should().NotContain("model: opus");
+    }
 }

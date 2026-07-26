@@ -40,7 +40,7 @@ public sealed class MemoryWriteResolver(
 
     // Резолвит операцию записи нового факта относительно близких кандидатов того же скоупа.
     // Пустой список кандидатов → ADD без вызова LLM. Ошибка/таймаут/мусор → ADD (фолбэк).
-    public async Task<MemoryWriteDecision> ResolveAsync(string newText, string typeLabel,
+    public async Task<MemoryWriteDecision> ResolveAsync(string? ownerId, string newText, string typeLabel,
         IReadOnlyList<MemoryWriteCandidate> candidates, TimeSpan? timeout = null, CancellationToken ct = default)
     {
         if (candidates.Count == 0 || string.IsNullOrWhiteSpace(newText)) return MemoryWriteDecision.Add;
@@ -50,7 +50,7 @@ public sealed class MemoryWriteResolver(
             var raw = await cheap.RunAsync(
                 LocalActionCatalog.MemoryWriteResolve,
                 BuildPrompt(newText, typeLabel, candidates),
-                config["Notes:AiModel"] ?? config["Tasks:AiModel"] ?? "haiku", ct: ct);
+                config["Notes:AiModel"] ?? config["Tasks:AiModel"] ?? "haiku", ownerId, ct: ct);
             return ParseDecision(raw);
         }
         catch (Exception ex)

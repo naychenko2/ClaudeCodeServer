@@ -238,7 +238,7 @@ public sealed class PersonaMemoryService
             if (candidates.Count == 0)   // нет соседей в зоне конфликта — обычное добавление
                 return Remember(ownerId, personaId, type, text, tags, sourceSessionId, salience, pending);
 
-            var decision = await _resolver.ResolveAsync(trimmed, TypeLabel(type), candidates);
+            var decision = await _resolver.ResolveAsync(ownerId, trimmed, TypeLabel(type), candidates);
             switch (decision.Op)
             {
                 case Memory.MemoryWriteOp.Noop:

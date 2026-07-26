@@ -259,7 +259,7 @@ public class TeamMemoryService
             if (candidates.Count == 0)   // нет соседей в зоне конфликта — обычное добавление
                 return Add(ownerId, projectId, text, type, source, sourceSessionId, salience);
 
-            var decision = await _resolver.ResolveAsync(trimmed, TypeLabel(type), candidates);
+            var decision = await _resolver.ResolveAsync(ownerId, trimmed, TypeLabel(type), candidates);
             switch (decision.Op)
             {
                 case Memory.MemoryWriteOp.Noop:

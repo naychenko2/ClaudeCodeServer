@@ -8,7 +8,7 @@
 // «создать», зона дропа). Глухой прозрачности нет: приглушение несут рамка и фон,
 // а opacity поверх C.textMuted роняла бы контраст подписей.
 import { useEffect, useRef, useState } from 'react';
-import { ChevronDown, CloudOff, Inbox } from 'lucide-react';
+import { ChevronDown, CloudOff, Inbox, User } from 'lucide-react';
 import { C, FONT, R, SP, FS } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { IconButton } from '../ui/IconButton';
@@ -71,8 +71,11 @@ function PendingMessageRow({ item, onCancel, isMobile, leaving }: RowProps) {
   }, []);
 
   const sender = item.senderPersonaId ? getPersonaById(item.senderPersonaId) : null;
+  // kind=user — своё сообщение, ждущее в «честной очереди»: подпись «Вы», без персоны и
+  // чипа-источника (это не чужое входящее). Агентские строки (chats_send) — прежняя логика.
+  const isUser = item.kind === 'user';
   // Персона → её имя; иначе имя чата-отправителя; иначе нейтральная подпись
-  const title = sender ? personaLabel(sender) : (item.senderChatName || 'Входящее сообщение');
+  const title = isUser ? 'Вы' : (sender ? personaLabel(sender) : (item.senderChatName || 'Входящее сообщение'));
   const preview = previewOf(item.text);
 
   const cancel = () => {
@@ -97,10 +100,13 @@ function PendingMessageRow({ item, onCancel, isMobile, leaving }: RowProps) {
           cursor: 'pointer', minHeight: isMobile ? 44 : undefined,
         }}
       >
-        {sender
-          ? <PersonaAvatar persona={sender} size={isMobile ? 24 : 20} />
-          : <Inbox size={ICON_SIZE.xs} strokeWidth={ICON_STROKE}
-              style={{ color: C.textMuted, flexShrink: 0 }} />}
+        {isUser
+          ? <User size={ICON_SIZE.xs} strokeWidth={ICON_STROKE}
+              style={{ color: C.textMuted, flexShrink: 0 }} />
+          : sender
+            ? <PersonaAvatar persona={sender} size={isMobile ? 24 : 20} />
+            : <Inbox size={ICON_SIZE.xs} strokeWidth={ICON_STROKE}
+                style={{ color: C.textMuted, flexShrink: 0 }} />}
 
         <span style={{
           fontSize: FS.sm, fontWeight: 600, color: C.textSecondary, flex: '0 1 auto',
@@ -109,7 +115,7 @@ function PendingMessageRow({ item, onCancel, isMobile, leaving }: RowProps) {
           {title}
         </span>
 
-        {item.senderOrigin && <MessageOriginChip origin={item.senderOrigin} style={{ flex: '0 0 auto' }} />}
+        {!isUser && item.senderOrigin && <MessageOriginChip origin={item.senderOrigin} style={{ flex: '0 0 auto' }} />}
 
         {/* Превью в одну строку — при раскрытии уступает место полному тексту */}
         {!open && (
@@ -174,6 +180,15 @@ function PendingMessageRow({ item, onCancel, isMobile, leaving }: RowProps) {
           }}
         >
           <MarkdownContent text={item.text} />
+        </div>
+      )}
+      {open && isUser && (
+        // Свой ход в очереди: объясняем, почему карточка стоит, а не ушла в работу
+        <div style={{
+          padding: `0 ${SP.md}px ${SP.sm}px ${isMobile ? SP.md : 38}px`,
+          fontSize: FS.xs, color: C.textMuted,
+        }}>
+          Уйдёт в работу, когда Claude закончит текущий шаг
         </div>
       )}
       {open && !full && item.text.length > 220 && (

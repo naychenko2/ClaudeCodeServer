@@ -1,6 +1,8 @@
-﻿using ClaudeHomeServer.Hubs;
+﻿using System.Reflection;
+using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Llm;
 using FluentAssertions;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Configuration;
@@ -710,15 +712,17 @@ public class SessionManagerTests : IDisposable
     }
 
     [Fact]
-    public async Task Interrupt_ГаситОчередь()
+    public async Task Interrupt_ЗамораживаетОчередьНеЧистит()
     {
-        // «Стоп» останавливает всё: иначе сразу после прерывания хлынул бы следующий ход
+        // «Стоп» замораживает очередь: агентское сообщение остаётся ждать возобновления,
+        // а не вычищается (как было раньше) — иначе сразу после прерывания хлынул бы ход
         var session = await MkBusySessionAsync("interrupt");
         await _sut.SendMessageAndWaitAsync(session.Id, "не доставлять", TimeSpan.Zero);
 
         _sut.Interrupt(session.Id);
 
-        _sut.GetPending(session.Id).Should().BeEmpty();
+        _sut.GetPending(session.Id).Should().ContainSingle()
+            .Which.Text.Should().Be("не доставлять");
     }
 
     [Fact]
@@ -754,6 +758,215 @@ public class SessionManagerTests : IDisposable
         var visible = _sut.GetVisiblePending(session.Id).Should().ContainSingle().Subject;
         visible.Text.Should().Be("привет");
         visible.SenderOrigin.Should().Be("Проект Бета");
+    }
+
+    // --- «Честная очередь»: пользовательские сообщения в занятый чат ---
+
+    [Theory]
+    [InlineData(SessionStatus.Working)]
+    [InlineData(SessionStatus.Waiting)]
+    public async Task SendMessage_User_ЗанятыйЧат_СтавитВВидимуюОчередь(SessionStatus status)
+    {
+        // Раньше сообщение пользователя молча писалось в stdin занятого CLI — теперь
+        // встаёт в видимую серверную очередь с вложениями и режимом (FIFO)
+        var session = await MkBusySessionAsync("uq" + status, status);
+
+        var outcome = await _sut.SendMessageAsync(session.Id, "подожди меня", ["a.txt", "b.txt"], mode: "plan");
+
+        outcome.Should().Be(SessionManager.SendUserOutcome.Queued);
+        var queued = _sut.GetPending(session.Id).Should().ContainSingle().Subject;
+        queued.Text.Should().Be("подожди меня");
+        queued.Kind.Should().Be(SessionManager.PendingKind.User);
+        queued.AttachedPaths.Should().BeEquivalentTo(["a.txt", "b.txt"]);
+        queued.Mode.Should().Be("plan");
+        // В видимом снимке пользовательское тоже отражается (карточка-призрак)
+        _sut.GetVisiblePending(session.Id).Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task SendMessage_User_ДубликатыДопускаются()
+    {
+        // Человек может осознанно слать повторы («продолжи», «ещё раз») — дедуп только
+        // для агентских, пользовательские не дедупятся
+        var session = await MkBusySessionAsync("uqdup");
+
+        await _sut.SendMessageAsync(session.Id, "ещё раз", []);
+        await _sut.SendMessageAsync(session.Id, "ещё раз", []);
+
+        _sut.GetPending(session.Id).Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task CancelPending_СнимаетПользовательскоеСообщение()
+    {
+        var session = await MkBusySessionAsync("uqcancel");
+        await _sut.SendMessageAsync(session.Id, "первое", []);
+        await _sut.SendMessageAsync(session.Id, "второе", []);
+        var first = _sut.GetPending(session.Id)[0];
+
+        (await _sut.CancelPendingAsync(session.Id, first.Id)).Should().BeTrue();
+
+        _sut.GetPending(session.Id).Should().ContainSingle().Which.Text.Should().Be("второе");
+    }
+
+    [Fact]
+    public async Task Interrupt_ИзымаетПоследнееПользовательское_АгентскиеОстаются()
+    {
+        // «Стоп» замораживает очередь и возвращает в композер ПОСЛЕДНЕЕ пользовательское:
+        // оно изымается, агентские и более ранние пользовательские остаются ждать возобновления
+        var session = await MkBusySessionAsync("uqfreeze");
+        await _sut.SendMessageAndWaitAsync(session.Id, "от агента", TimeSpan.Zero);       // agent
+        await _sut.SendMessageAsync(session.Id, "user-1", []);                              // user
+        await _sut.SendMessageAsync(session.Id, "user-последнее", []);                      // user (последнее)
+
+        _sut.Interrupt(session.Id);
+
+        var pending = _sut.GetPending(session.Id);
+        pending.Should().HaveCount(2); // agent + user-1 (последнее user изъято)
+        pending.Select(p => p.Text).Should().BeEquivalentTo(["от агента", "user-1"]);
+        pending.Should().NotContain(p => p.Text == "user-последнее");
+    }
+
+    [Fact]
+    public async Task SendMessage_User_ВЦиклеДоГотово_СтавитсяВОчередьБезЗапускаХода()
+    {
+        // Пользовательская очередь ждёт конца ВСЕГО цикла, не итерации: между итерациями
+        // work-loop чат на мгновение свободен, но пользовательское не должно вклиниваться
+        var dir = MkProjectDir("uqloop");
+        var project = _projectManager.Create("UQLOOP", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
+        var messageCountBefore = session.MessageCount;
+
+        var outcome = await _sut.SendMessageAsync(session.Id, "вмешаться в цикл", []);
+
+        outcome.Should().Be(SessionManager.SendUserOutcome.Queued);
+        _sut.GetPending(session.Id).Should().ContainSingle()
+            .Which.Kind.Should().Be(SessionManager.PendingKind.User);
+        _sut.GetById(session.Id)!.MessageCount.Should().Be(messageCountBefore,
+            "ход не пошёл в процесс — сообщение ждёт конца цикла в очереди");
+    }
+
+    // --- Гонка TOCTOU очереди: автодоставка при постановке в момент завершения хода ---
+    //
+    // SendMessageAsync/SendMessageAndWaitAsync читают Info.Status БЕЗ лока, а EnqueuePendingAsync
+    // делает Add ПОД PendingLock. Между ними окно: ход завершился (ResultMessage → OnMessageAsync →
+    // DrainNextPendingAsync отработал по ЕЩЁ ПУСТОЙ очереди, статус упал в Active), и новое сообщение
+    // встаёт в очередь при СВОБОДНОМ чате — триггер автодоступы (по result) уже стрелял. Фикс: в
+    // EnqueuePendingAsync после Add, под локом, проверить переход очереди 0→1 при свободном статусе
+    // и форсировать DrainNextPendingAsync (идемпотентен). Проверяем сам инвариант white-box'ом:
+    // приватный EnqueuePendingAsync + заглушка адаптера (чтобы доставка не запускала claude.exe).
+
+    [Fact]
+    public async Task EnqueuePending_СвободныйЧат_ФорсируетДоставкуИОчищаетОчередь()
+    {
+        // Симуляция окна result: ход «только что» завершился, статус Active, очередь пуста.
+        // Без фикса сообщение зависло бы в очереди до следующего действия пользователя.
+        var session = await MkBusySessionAsync("race", SessionStatus.Active);
+        session.Name = "есть имя"; // иначе фоновый уточнятор заголовка полезет в локальную модель
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+
+        var result = await InvokeEnqueuePendingAsync(session.Id, entry, "зависшее сообщение");
+
+        result.Should().BeOfType<SendAndWaitResult.Queued>().Which.Position.Should().Be(1);
+        await WaitForQueueAsync(_sut, session.Id, TimeSpan.FromSeconds(2));
+
+        _sut.GetPending(session.Id).Should().BeEmpty(
+            "при свободном чате форсированный drain разбирает очередь сам, без зависания");
+        adapter.Verify(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()), Times.AtLeastOnce());
+    }
+
+    [Fact]
+    public async Task EnqueuePending_ЗанятыйЧат_НеФорсируетДоставку()
+    {
+        // Регрессия: при Working/Waiting доставка не форсируется — сообщение ждёт конца хода
+        // (result разберёт очередь). Иначе нормальная очередь дёргала бы процесс на каждом Add.
+        var session = await MkBusySessionAsync("race-busy", SessionStatus.Working);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+
+        var result = await InvokeEnqueuePendingAsync(session.Id, entry, "ждёт хода");
+
+        result.Should().BeOfType<SendAndWaitResult.Queued>();
+        await Task.Delay(150); // drain не запущен — за это время ничего не должно поменяться
+        _sut.GetPending(session.Id).Should().ContainSingle().Which.Text.Should().Be("ждёт хода");
+        adapter.Verify(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()), Times.Never());
+    }
+
+    [Fact]
+    public async Task EnqueuePending_ЗамороженнаяОчередь_НеФорсируетДоставку()
+    {
+        // Регрессия: «Стоп» заморозил очередь (QueueFrozen). Даже при свободном чате
+        // авто-доставка запрещена — возобновляет только новое пользовательское сообщение.
+        var session = await MkBusySessionAsync("race-frozen", SessionStatus.Active);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+        SetQueueFrozen(entry, true);
+
+        var result = await InvokeEnqueuePendingAsync(session.Id, entry, "в заморозке");
+
+        result.Should().BeOfType<SendAndWaitResult.Queued>();
+        await Task.Delay(150);
+        _sut.GetPending(session.Id).Should().ContainSingle().Which.Text.Should().Be("в заморозке");
+        adapter.Verify(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()), Times.Never());
+    }
+
+    // Доступ к приватному SessionEntry реестра _sessions (white-box: без него публичный API
+    // не воспроизводит окно TOCTOU — все точки входа гейтят по статусу ДО EnqueuePendingAsync).
+    private object GetEntry(string sessionId)
+    {
+        var field = typeof(SessionManager).GetField("_sessions",
+            BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var sessions = (System.Collections.IDictionary)field.GetValue(_sut)!;
+        return sessions[sessionId]!;
+    }
+
+    private static Mock<ILlmSessionAdapter> StubAdapter(object entry)
+    {
+        var adapter = new Mock<ILlmSessionAdapter>();
+        var info = (Session)entry.GetType().GetField("Info")!.GetValue(entry)!;
+        adapter.SetupGet(a => a.Info).Returns(info);
+        adapter.Setup(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>())).Returns(Task.CompletedTask);
+        return adapter;
+    }
+
+    private static void SetProcess(object entry, ILlmSessionAdapter adapter) =>
+        entry.GetType().GetField("Process")!.SetValue(entry, adapter);
+
+    private static void SetQueueFrozen(object entry, bool value) =>
+        entry.GetType().GetField("QueueFrozen")!.SetValue(entry, value);
+
+    private async Task<SendAndWaitResult> InvokeEnqueuePendingAsync(string sessionId, object entry, string text)
+    {
+        var method = typeof(SessionManager).GetMethod("EnqueuePendingAsync",
+            BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var task = (Task)method.Invoke(_sut,
+        [
+            sessionId, entry, text,
+            /*senderPersonaId*/ null, /*senderOrigin*/ null, /*agentDepth*/ 0,
+            /*silent*/ false, /*suppressTasksExecute*/ false, /*senderChatName*/ null,
+            SessionManager.PendingKind.Agent, /*attachedPaths*/ null, /*mode*/ null
+        ])!;
+        await task;
+        return (SendAndWaitResult)task.GetType().GetProperty("Result")!.GetValue(task)!;
+    }
+
+    private static async Task WaitForQueueAsync(SessionManager sut, string sessionId, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            if (sut.GetPending(sessionId).Count == 0) return;
+            await Task.Delay(20);
+        }
     }
 
     // --- ReportUpAsync: отчёт в родительский чат ---

@@ -3,7 +3,7 @@ import type { ChatItem, ServerMessage, RateLimitInfo, WorkLoopState } from '../t
 import { joinSession, joinProject, leaveSession, onMessage, onReconnected, sendMessage, respondPermission, interruptSession, compactSession, answerQuestion as sendAnswer, respondPlan as sendPlanDecision, setMode as sendSetMode } from '../lib/signalr';
 import { setRecallManifest } from '../lib/recallManifest';
 import { api } from '../lib/api';
-import { applyServerMessage, normalizeHistory, serverHistoryNewer, initialChatState, type ChatState, type PendingChatMessage } from '../lib/chatReducer';
+import { applyServerMessage, normalizeHistory, serverHistoryNewer, initialChatState, type ChatState, type PendingChatMessage, type ComposerRestore } from '../lib/chatReducer';
 
 // --- Модульный персистентный стор ---
 // Состояние живёт на уровне модуля и переживает переключение между сессиями.
@@ -245,7 +245,7 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
     };
   }, [sessionId, projectId, isGroup]);
 
-  const state = sessionId ? getState(sessionId) : { items: [] as ChatItem[], isWaiting: false, isJoined: false, isHistoryLoading: false, rateLimits: {} as Record<string, RateLimitInfo>, isCompacting: false, compactNote: undefined as string | undefined, workLoop: undefined as WorkLoopState | undefined, promptSuggestion: null as string | null, pending: [] as PendingChatMessage[] };
+  const state = sessionId ? getState(sessionId) : { items: [] as ChatItem[], isWaiting: false, isJoined: false, isHistoryLoading: false, rateLimits: {} as Record<string, RateLimitInfo>, isCompacting: false, compactNote: undefined as string | undefined, workLoop: undefined as WorkLoopState | undefined, promptSuggestion: null as string | null, pending: [] as PendingChatMessage[], composerRestore: null as ComposerRestore | null };
 
   // Снять сообщение из очереди (крестик на карточке-призраке). Ответ сервера придёт
   // событием pending_messages — локально состояние не правим, чтобы не разъехалось.
@@ -258,22 +258,24 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
   const send = useCallback(async (text: string, attachedPaths: string[] = [], mode?: string, opts?: { auto?: boolean }) => {
     if (!sessionId) return;
     const auto = opts?.auto ?? false;
-    // Авто-ходы (командные механики, «продолжить обсуждение») НЕ добавляем оптимистично:
-    // сервер рассылает их событием user_message в session-группу — иначе дубль в ленте.
-    // promptSuggestion сбрасываем здесь: обычный ход идёт в обход редьюсера, а stale-подсказка
-    // не должна всплывать, если новый ход её не породил (холодный кэш)
-    setState(sessionId, prev => ({
-      ...prev,
-      isWaiting: true,
-      promptSuggestion: null,
-      items: auto ? prev.items : [...prev.items, { kind: 'user_message', text, attachedPaths }],
-    }));
+    // Блокируем композер сразу (пошёл обмен с хабом), но баллон НЕ добавляем до исхода —
+    // «честная очередь»: если чат занят, сервер вернёт 'queued', сообщение встанет в видимую
+    // очередь (карточку даст снимок pending_messages), а доставленное вернётся user_message.
+    // Опережающий баллон при queued дал бы зависший дубль — гонка «отправил в момент
+    // завершения хода». promptSuggestion сбрасываем: обычный ход идёт в обход редьюсера.
+    setState(sessionId, prev => ({ ...prev, isWaiting: true, promptSuggestion: null }));
     try {
       // Всегда подтверждаем членство в группе перед отправкой:
       // защита от потери группы при переподключении или переключении проекта
       await joinSession(sessionId);
       setState(sessionId, prev => ({ ...prev, isJoined: true }));
-      await sendMessage(sessionId, text, attachedPaths, mode, auto);
+      const outcome = await sendMessage(sessionId, text, attachedPaths, mode, auto);
+      // 'started' — ход запущен: рисуем оптимистичный баллон (как раньше). Авто-ходы сервер
+      // рассылает user_message в session-группу, поэтому их не дублируем.
+      // 'queued' — баллон не нужен: карточку даст pending_messages, isWaiting удержит ход.
+      if (outcome === 'started' && !auto) {
+        setState(sessionId, prev => ({ ...prev, items: [...prev.items, { kind: 'user_message', text, attachedPaths }] }));
+      }
     } catch (err) {
       setState(sessionId, prev => ({
         ...prev,
@@ -428,5 +430,5 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
     sendSetMode(sessionId, mode).catch(() => {});
   }, [sessionId]);
 
-  return { items: state.items, isWaiting: state.isWaiting, isJoined: state.isJoined, isHistoryLoading: state.isHistoryLoading, rateLimits: state.rateLimits, isCompacting: state.isCompacting, compactNote: state.compactNote, workLoop: state.workLoop, promptSuggestion: state.promptSuggestion, pending: state.pending, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, compact, toggleThinking, noteCompanionSwitch, changeMode, cancelPending };
+  return { items: state.items, isWaiting: state.isWaiting, isJoined: state.isJoined, isHistoryLoading: state.isHistoryLoading, rateLimits: state.rateLimits, isCompacting: state.isCompacting, compactNote: state.compactNote, workLoop: state.workLoop, promptSuggestion: state.promptSuggestion, pending: state.pending, composerRestore: state.composerRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, compact, toggleThinking, noteCompanionSwitch, changeMode, cancelPending };
 }

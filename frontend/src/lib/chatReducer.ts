@@ -25,6 +25,9 @@ export interface ChatState {
   // очередь полным снимком, и подмешивать её в ленту пришлось бы вставками-удалениями.
   // Рендерятся «призраками» после ленты; в историю не попадают.
   pending: PendingChatMessage[];
+  // Разовая команда композеру вернуть прерванное сообщение (composer_restore). null —
+  // команды не было; хранится в состоянии, чтобы Composer отработал его эффектом по seq.
+  composerRestore: ComposerRestore | null;
 }
 
 // Ожидающее доставки сообщение (снимок очереди сессии)
@@ -37,10 +40,25 @@ export interface PendingChatMessage {
   // Имя чата-отправителя — подпись, когда персоны у него нет
   senderChatName?: string;
   enqueuedAt: string;
+  // 'user' — сообщение человека из «честной очереди» (карточка «Вы», без персоны);
+  // 'agent' (дефолт) — chats_send. Необязательное поле — совместимость со старым снимком
+  kind?: 'user' | 'agent';
+  // Только у пользовательских: превратить в чипы при отрисовке и вернуть в композер по «Стоп»
+  attachedPaths?: string[];
+  mode?: string | null;
+}
+
+// Команда композеру подставить прерванное сообщение (событие composer_restore).
+// seq монотонно растёт — два подряд одинаковых payload тоже должны срабатывать в эффекте.
+export interface ComposerRestore {
+  text: string | null;
+  attachedPaths: string[] | null;
+  mode: string | null;
+  seq: number;
 }
 
 export function initialChatState(): ChatState {
-  return { items: [], isWaiting: false, rateLimits: {}, isCompacting: false, promptSuggestion: null, pending: [] };
+  return { items: [], isWaiting: false, rateLimits: {}, isCompacting: false, promptSuggestion: null, pending: [], composerRestore: null };
 }
 
 // Сообщение истории с сервера: сериализованный ChatItem без клиентских UI-полей
@@ -188,6 +206,20 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
       // Полный снимок очереди — заменяем целиком. Доставленное сообщение исчезает отсюда
       // и приходит обратной стороной как обычный user_message.
       return { ...prev, pending: msg.items };
+
+    case 'composer_restore':
+      // «Стоп» вернул прерванное пользовательское сообщение в композер. seq растёт всегда —
+      // даже при пустом payload (чтобы эффект в Composer сработал и отметил заморозку),
+      // и даже если два restore подряд несут одинаковый текст (повторный «Стоп»).
+      return {
+        ...prev,
+        composerRestore: {
+          text: msg.text ?? null,
+          attachedPaths: msg.attachedPaths ?? null,
+          mode: msg.mode ?? null,
+          seq: (prev.composerRestore?.seq ?? 0) + 1,
+        },
+      };
 
     case 'guest_text':
       // Модель Z: гостевая реплика исполнителя-персоны, вставленная без агентского хода.

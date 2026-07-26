@@ -99,6 +99,7 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.ILauncherFacto
 builder.Services.AddSingleton<JwtService>();
 builder.Services.AddSingleton<FeatureFlagService>();
 builder.Services.AddSingleton<AppSettingsService>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.UserModelTierResolver>();
 builder.Services.AddSingleton<UserHomeResolver>();
 builder.Services.AddSingleton<ProjectManager>();
 builder.Services.AddSingleton<ProjectGroupManager>();

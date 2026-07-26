@@ -46,7 +46,8 @@ public interface IOneShotRunner
 // генерациями задач и заметок, персонами (ask/характер).
 public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILauncherFactory launchers,
     IConfiguration config, Spend.ISpendCollector? spend = null,
-    AppSettingsService? appSettings = null) : IOneShotRunner
+    AppSettingsService? appSettings = null,
+    UserModelTierResolver? userTiers = null) : IOneShotRunner
 {
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(120);
 
@@ -83,9 +84,9 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
     // подстановки: слот тоже может указывать на модель провайдера без ключа, и такой вызов
     // обязан деградировать в дефолт CLI, а не падать.
     // internal — точка подстановки покрыта тестом без запуска процесса.
-    internal string? ResolveModel(string? model) =>
+    internal string? ResolveModel(string? model, string? ownerId = null) =>
         NormalizeModel(string.IsNullOrWhiteSpace(model)
-            ? appSettings?.TierModel(ModelTier.Medium)
+            ? userTiers?.ModelFor(ModelTier.Medium, ownerId) ?? appSettings?.TierModel(ModelTier.Medium)
             : model);
 
     public async Task<string> RunAsync(string prompt, string? model = null,
@@ -111,7 +112,7 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
         // Модель не задана вызывающим = «по умолчанию»: подставляем глобальную настройку.
         // ДО BuildArgs и BuildCliEnv — env маршрутизации обязан считаться от итоговой модели,
         // иначе glm/kimi из настройки уехали бы на эндпоинт Anthropic
-        model = ResolveModel(model);
+        model = ResolveModel(model, ownerId);
 
         var withFlag = !_persistSessions && !_flagUnsupported;
         var args = BuildArgs(Claude.ClaudeRuntimeSettings.HooksOffArgs(launcher),

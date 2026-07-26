@@ -67,7 +67,7 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
             : !string.IsNullOrWhiteSpace(session.PersonaId) ? LocalActionCatalog.ChatPersona
             : LocalActionCatalog.ChatNew;
         provider ??= _providers.ResolveByModel(
-            _assignments?.Resolve(usageKey, session.Model) ?? session.Model);
+            _assignments?.Resolve(usageKey, session.Model, session.OwnerId) ?? session.Model);
 
         if (provider is { Enabled: false })
             throw new InvalidOperationException(

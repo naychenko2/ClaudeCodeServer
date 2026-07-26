@@ -300,6 +300,40 @@ public class UserStore
         }
     }
 
+    // Per-user слоты тиров моделей: чтение и патч. null/пусто — наследовать глобальный слот инстанса.
+    public (string? Strong, string? Medium, string? Weak) GetModelTiers(string id)
+    {
+        lock (_lock)
+        {
+            var user = _users.FirstOrDefault(u => u.Id == id);
+            return user is null
+                ? (null, null, null)
+                : (NormalizeTier(user.ModelTierStrong), NormalizeTier(user.ModelTierMedium), NormalizeTier(user.ModelTierWeak));
+        }
+    }
+
+    /// <summary>
+    /// Устанавливает per-user слоты тиров моделей. null = не трогать, "" = очистить к наследованию.
+    /// Возвращает false если пользователь не найден.
+    /// </summary>
+    public bool SetModelTiers(string id, string? strong, string? medium, string? weak)
+    {
+        lock (_lock)
+        {
+            var user = _users.FirstOrDefault(u => u.Id == id);
+            if (user is null) return false;
+
+            if (strong is not null) user.ModelTierStrong = NormalizeTier(strong);
+            if (medium is not null) user.ModelTierMedium = NormalizeTier(medium);
+            if (weak is not null) user.ModelTierWeak = NormalizeTier(weak);
+            Save();
+            return true;
+        }
+    }
+
+    private static string? NormalizeTier(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
     /// <summary>
     /// Устанавливает per-user пороги индикатора контекста (null — сброс к дефолтам).
     /// Возвращает false если пользователь не найден.

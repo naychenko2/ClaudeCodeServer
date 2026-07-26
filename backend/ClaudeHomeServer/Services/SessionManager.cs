@@ -611,12 +611,12 @@ public class SessionManager : IDisposable
         return _subscriptionPool.Pick(model);
     }
 
-    // Модель места по назначению (слоты «сильная/средняя/слабая» + таблица назначений).
+    // Модель места по назначению (слоты «сильная/средняя/слабая» + таблица назначений + per-user слоты).
     // Подставляется, только когда модель НЕ задана явно и это НЕ resume: у транскрипта
     // resumed-сессии уже зафиксированы своя модель и провайдер, и подмена здесь сменила бы
     // провайдер и упёрлась в guard смены провайдера (400).
-    private string? ResolveDefaultModel(string usageKey, string? model, string? resumeSessionId) =>
-        !string.IsNullOrEmpty(resumeSessionId) ? model : _assignments.Resolve(usageKey, model);
+    private string? ResolveDefaultModel(string usageKey, string? model, string? resumeSessionId, string? ownerId) =>
+        !string.IsNullOrEmpty(resumeSessionId) ? model : _assignments.Resolve(usageKey, model, ownerId);
 
     // Место применения по признакам сессии — тот же порядок, что у ClaudeSession.UsageKey:
     // исполнитель задач специфичнее персоны, персона специфичнее обычного чата.
@@ -823,7 +823,7 @@ public class SessionManager : IDisposable
             ?? throw new KeyNotFoundException($"Проект не найден: {projectId}");
 
         var defaultModel = ResolveDefaultModel(UsageKeyFor(taskExecution, taskId, personaId),
-            model, resumeSessionId);
+            model, resumeSessionId, project.OwnerId);
         var session = new Session
         {
             ProjectId = projectId,
@@ -855,7 +855,7 @@ public class SessionManager : IDisposable
         var rootPath = ResolveChatRoot(ownerId);
 
         var defaultModel = ResolveDefaultModel(UsageKeyFor(taskExecution, taskId, personaId),
-            model, resumeSessionId);
+            model, resumeSessionId, ownerId);
         var session = new Session
         {
             ProjectId = null,
@@ -895,7 +895,7 @@ public class SessionManager : IDisposable
 
         // Персона без своей модели наследует назначение места «чат с персоной»
         var personaModel = ResolveDefaultModel(Llm.LocalActionCatalog.ChatPersona,
-            persona.Model, resumeSessionId);
+            persona.Model, resumeSessionId, ownerId);
 
         if (!string.IsNullOrEmpty(targetProjectId)
             && _projects.GetById(targetProjectId) is { } project && project.OwnerId == ownerId)
@@ -948,7 +948,7 @@ public class SessionManager : IDisposable
         var participantIds = participants.Select(p => p.Id).ToList();
         // Ведущая без своей модели наследует назначение места «чат с персоной»
         var leaderModel = ResolveDefaultModel(Llm.LocalActionCatalog.ChatPersona,
-            leader.Model, resumeSessionId: null);
+            leader.Model, resumeSessionId: null, ownerId);
 
         if (leader.Scope == PersonaScope.Project && !string.IsNullOrEmpty(leader.ProjectId)
             && _projects.GetById(leader.ProjectId) is { } project && project.OwnerId == ownerId)
@@ -2175,8 +2175,8 @@ public class SessionManager : IDisposable
             // на claude и упирался бы в guard, а переход claude-чата на «По умолчанию» с чужой
             // моделью, наоборот, проскакивал бы мимо guard и ломал транскрипт.
             var usageKey = UsageKeyFor(entry.Info.TaskExecution, entry.Info.TaskId, entry.Info.PersonaId);
-            var effectiveNew = _assignments.Resolve(usageKey, newModel);
-            var effectiveCur = _assignments.Resolve(usageKey, entry.Info.Model);
+            var effectiveNew = _assignments.Resolve(usageKey, newModel, entry.Info.OwnerId);
+            var effectiveCur = _assignments.Resolve(usageKey, entry.Info.Model, entry.Info.OwnerId);
 
             // Смена провайдера: контекст сессии живёт у провайдера (транскрипт эндпоинта),
             // «переехавшая» сессия молча потеряла бы его — для начатых сессий запрещаем.

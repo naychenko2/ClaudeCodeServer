@@ -18,7 +18,7 @@ public class ClaudeSession : ILlmSessionAdapter
     // (слоты тиров + таблица назначений, ModelAssignmentResolver), а не дефолт claude CLI.
     // Резолвим на каждом обращении, а не при создании адаптера: смена настройки применяется
     // со следующего хода, чат её не «замораживает». Итоговый null = слот пуст, решает CLI.
-    private string? EffectiveModel => _assignments?.Resolve(UsageKey, Info.Model) ?? Info.Model;
+    private string? EffectiveModel => _assignments?.Resolve(UsageKey, Info.Model, Info.OwnerId) ?? Info.Model;
 
     // Место применения сессии — порядок как в SessionManager.UsageKeyFor
     private string UsageKey =>

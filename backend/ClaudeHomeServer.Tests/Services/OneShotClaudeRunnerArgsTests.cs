@@ -1,6 +1,10 @@
+using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Llm;
+using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClaudeHomeServer.Tests.Services;
 
@@ -108,7 +112,7 @@ public class OneShotClaudeRunnerArgsTests
 
     // --- Подстановка «модели по умолчанию» (этап шлюза на границе запуска CLI) ---
 
-    private static (OneShotClaudeRunner Runner, ClaudeHomeServer.Services.AppSettingsService Settings) MkRunner()
+    private static (OneShotClaudeRunner Runner, ClaudeHomeServer.Services.AppSettingsService Settings, UserStore Users, string TempDir) MkRunner()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), "oneshot_dm_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempDir);
@@ -118,16 +122,18 @@ public class OneShotClaudeRunnerArgsTests
                 ["DataPath"] = Path.Combine(tempDir, "projects.json"),
             }).Build();
         var settings = new ClaudeHomeServer.Services.AppSettingsService(config);
+        var users = new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
+        var userTiers = new UserModelTierResolver(users, settings);
         var runner = new OneShotClaudeRunner(new LlmProviderRegistry(config),
-            TestLauncherFactory.Instance, config, spend: null, appSettings: settings);
-        return (runner, settings);
+            TestLauncherFactory.Instance, config, spend: null, appSettings: settings, userTiers: userTiers);
+        return (runner, settings, users, tempDir);
     }
 
     [Fact]
     public void БезМодели_ПодставляетсяСреднийСлот()
     {
         // Генеричный one-shot без контекста места идёт на слот «средняя»
-        var (runner, settings) = MkRunner();
+        var (runner, settings, _, _) = MkRunner();
         settings.Save(new ClaudeHomeServer.Models.AppSettings { ModelTierMedium = "glm-5.2" });
 
         runner.ResolveModel(null).Should().Be("glm-5.2");
@@ -136,7 +142,7 @@ public class OneShotClaudeRunnerArgsTests
     [Fact]
     public void ЯвнаяМодель_СлотИгнорирует()
     {
-        var (runner, settings) = MkRunner();
+        var (runner, settings, _, _) = MkRunner();
         settings.Save(new ClaudeHomeServer.Models.AppSettings { ModelTierMedium = "glm-5.2" });
 
         runner.ResolveModel("haiku").Should().Be("haiku");
@@ -145,8 +151,30 @@ public class OneShotClaudeRunnerArgsTests
     [Fact]
     public void СлотПуст_ВызовИдётБезМодели()
     {
-        var (runner, _) = MkRunner();
+        var (runner, _, _, _) = MkRunner();
 
         runner.ResolveModel(null).Should().BeNull();
+    }
+
+    [Fact]
+    public void БезМодели_СOwnerId_ПодставляетсяЛичныйСреднийСлот()
+    {
+        var (runner, settings, users, _) = MkRunner();
+        settings.Save(new ClaudeHomeServer.Models.AppSettings { ModelTierMedium = "glm-5.2" });
+        var user = users.Add("u1", "password123", "user");
+        users.SetModelTiers(user.Id, null, "user-haiku", null);
+
+        runner.ResolveModel(null, user.Id).Should().Be("user-haiku");
+    }
+
+    [Fact]
+    public void ЯвнаяМодель_СOwnerId_ИгнорируетЛичныйСлот()
+    {
+        var (runner, settings, users, _) = MkRunner();
+        settings.Save(new ClaudeHomeServer.Models.AppSettings { ModelTierMedium = "glm-5.2" });
+        var user = users.Add("u1", "password123", "user");
+        users.SetModelTiers(user.Id, null, "user-haiku", null);
+
+        runner.ResolveModel("sonnet", user.Id).Should().Be("sonnet");
     }
 }

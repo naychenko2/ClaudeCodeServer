@@ -58,7 +58,7 @@ public sealed class PersonaAskService(
             int.TryParse(config["Persona:AskTimeoutMs"], out var t) ? t : 120_000);
         // Персона без своей модели отвечает моделью места «чат с персоной» (слоты тиров) —
         // как и её обычный чат; прежде такой one-shot уходил на дефолт CLI мимо настроек
-        var askModel = assignments?.Resolve(LocalActionCatalog.ChatPersona, persona.Model)
+        var askModel = assignments?.Resolve(LocalActionCatalog.ChatPersona, persona.Model, ownerId)
             ?? persona.Model;
         var answer = await oneShot.RunAsync(sb.ToString(), oneShot.NormalizeModel(askModel),
             timeout, ct, persona.Effort);

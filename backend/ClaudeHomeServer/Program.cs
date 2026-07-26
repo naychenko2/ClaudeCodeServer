@@ -6,6 +6,7 @@ using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Execution;
+using ClaudeHomeServer.Services.Mcp;
 using ClaudeHomeServer.Services.TriggerSources;
 using ClaudeHomeServer.Services.Modules;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -197,6 +198,8 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.LlmProviderRegistry>
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ProviderBalanceService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ILlmSessionAdapterFactory,
     ClaudeHomeServer.Services.Llm.LlmSessionAdapterFactory>();
+// Наблюдаемость вызовов продуктовых MCP-серверов (счётчики + последние сбои, только в памяти)
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpCallLog>();
 builder.Services.AddSingleton<BoardService>();
 builder.Services.AddSingleton<SessionManager>();
 builder.Services.AddSingleton<ModelCatalogService>();
@@ -541,6 +544,11 @@ if (inspectionMode)
 
 app.UseAuthentication();
 app.UseAuthorization();
+
+// Наблюдаемость продуктовых MCP-серверов: их вызовы к бэкенду видно по заголовку
+// X-Caller-Session-Id. Ставим ПОСЛЕ авторизации: иначе 401 попадал бы в статистику как
+// отказ инструмента, хотя до контроллера запрос и не дошёл
+app.UseMcpCallLog();
 
 // Gateway внешних модулей (контракт §5.2): срезка клиентских identity-заголовков,
 // валидация cc_token и инъекция модульного токена — ДО YARP-прокси

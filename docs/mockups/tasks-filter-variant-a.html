@@ -1,0 +1,1039 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--
+ВАРИАНТ A: «Поповер из кнопки Фильтр»
+
+Механика: кнопка Funnel в шапке панели открывает дропдаун поверх списка задач.
+Полный состав фильтров (Статус / Исполнитель / Приоритет / Срок) живёт внутри
+поповера; снаружи о активных фильтрах говорит только бейдж-число на кнопке.
+На мобиле поповер превращается в боттом-шит.
+
+Состояние в макете: применены фильтры «Статус: В работе + К выполнению» и
+«Исполнитель: Я» — бейдж «2» (счёт по группам, как indicator в BoardToolbar).
+-->
+<title>Фильтр задач — Вариант A (поповер)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=PT+Serif:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg-main:      #F4F0E8;
+  --bg-panel:     #EDE7DC;
+  --bg-card:      #FBF8F2;
+  --bg-white:     #FFFFFF;
+  --bg-selected:  #E8E1D4;
+  --bg-inset:     #E7E0D2;
+  --heading:      #2A251F;
+  --primary:      #39332B;
+  --secondary:    #756B5E;
+  --muted:        #9A8F7E;
+  --accent:       #D97757;
+  --accent-light: #F4ECE1;
+  --accent-muted: #EAD3C5;
+  --on-accent:    #FBF8F2;
+  --border:       #E0D7C8;
+  --border-light: #E8E1D4;
+  --divider:      #DDD4C4;
+  --dashed:       #D0C6B4;
+  --track:        #D8CFBE;
+  --danger:       #B4452F;
+  --danger-bg:    #FBF1EC;
+  --danger-border:#F5C6BF;
+  --success:      #5E8B4E;
+  --warning:      #C9923E;
+  --overlay:      rgba(23, 19, 15, 0.42);
+  --shadow-island:   0 1px 2px rgba(60, 50, 35, 0.06), 0 6px 20px rgba(60, 50, 35, 0.10);
+  --shadow-dropdown: 0 8px 28px rgba(60, 50, 35, 0.16);
+  --shadow-thumb:    0 1px 3px rgba(42, 37, 31, 0.12);
+  --shadow-sheet:    0 -8px 40px rgba(23, 19, 15, 0.22);
+  --sans: 'Hanken Grotesk', -apple-system, 'Segoe UI', sans-serif;
+  --serif: 'PT Serif', Georgia, serif;
+  --mono: 'JetBrains Mono', 'Courier New', monospace;
+}
+[data-theme="dark"] {
+  --bg-main:      #201C18;
+  --bg-panel:     #272320;
+  --bg-card:      #2E2A25;
+  --bg-white:     #2E2A25;
+  --bg-selected:  #38332D;
+  --bg-inset:     #1B1815;
+  --heading:      #F2ECE1;
+  --primary:      #EDE6DB;
+  --secondary:    #B3A897;
+  --muted:        #8A8072;
+  --accent:       #E38A6A;
+  --accent-light: #3A2E27;
+  --accent-muted: #4A362C;
+  --on-accent:    #201C18;
+  --border:       #3D3830;
+  --border-light: #34302A;
+  --divider:      #454037;
+  --dashed:       #4A443B;
+  --track:        #453F37;
+  --danger:       #E8785E;
+  --danger-bg:    #331F1B;
+  --danger-border:#5A302A;
+  --success:      #7CB86A;
+  --warning:      #E0AC5A;
+  --overlay:      rgba(0, 0, 0, 0.62);
+  --shadow-island:   0 1px 2px rgba(0, 0, 0, 0.30), 0 8px 24px rgba(0, 0, 0, 0.45);
+  --shadow-dropdown: 0 10px 32px rgba(0, 0, 0, 0.55);
+  --shadow-thumb:    0 1px 3px rgba(0, 0, 0, 0.45);
+  --shadow-sheet:    0 -10px 46px rgba(0, 0, 0, 0.55);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: var(--bg-panel);
+  font-family: var(--sans);
+  color: var(--primary);
+  min-height: 100vh;
+}
+.proto-bar {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: 36px;
+  background: #1a1612;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  z-index: 1000;
+  border-bottom: 1px solid #2a2520;
+}
+.proto-bar .variant {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: #bfb8ae;
+  letter-spacing: 0.05em;
+}
+.proto-bar .theme-toggle {
+  background: #2a2520;
+  border: 1px solid #3d3830;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-family: var(--sans);
+  font-size: 11px;
+  font-weight: 600;
+  color: #d8cfc0;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.proto-bar .theme-toggle:hover { background: #3d3830; color: #fff; }
+
+.page {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 64px 24px 72px;
+}
+.page-head h1 {
+  font-family: var(--serif);
+  font-size: 26px;
+  font-weight: 700;
+  color: var(--heading);
+  margin-bottom: 6px;
+}
+.page-head .sub {
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--secondary);
+  max-width: 760px;
+  margin-bottom: 28px;
+}
+.page-head .sub b { color: var(--heading); }
+
+.scene-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 36px 28px;
+  align-items: flex-start;
+}
+.scene { display: flex; flex-direction: column; gap: 8px; }
+.scene-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.scene-note {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--secondary);
+  max-width: 340px;
+}
+.scene-note code {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  background: var(--bg-selected);
+  padding: 1px 5px;
+  border-radius: 4px;
+  color: var(--primary);
+}
+
+/* === Холст cc-panels: фон страницы + карточка-остров === */
+.canvas {
+  background: var(--bg-main);
+  border-radius: 18px;
+  padding: 12px;
+}
+/* Карточка-остров (Island): радиус 14, тень island, фон bgPanel, контент белый */
+.island {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-light);
+  border-radius: 14px;
+  box-shadow: var(--shadow-island);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.island-body {
+  background: var(--bg-white);
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+/* Шапка острова: 40px, bgMain, drag-хендл перестановки панелей */
+.island-header {
+  flex-shrink: 0;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 6px 0 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-main);
+  cursor: grab;
+  user-select: none;
+}
+.island-header .h-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--heading);
+  white-space: nowrap;
+}
+.h-badge {
+  flex-shrink: 0;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 6px;
+  color: var(--secondary);
+  background: var(--bg-inset);
+}
+.h-spacer { flex: 1; min-width: 0; }
+/* Компактный переключатель видов (только иконки), дорожка C.track */
+.view-switch {
+  display: inline-flex;
+  gap: 2px;
+  background: var(--track);
+  border-radius: 8px;
+  padding: 2px;
+  flex-shrink: 0;
+}
+.view-switch button {
+  width: 28px; height: 28px;
+  display: flex; align-items: center; justify-content: center;
+  border: none; border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.view-switch button.on {
+  background: var(--bg-main);
+  color: var(--accent);
+  box-shadow: var(--shadow-thumb);
+  cursor: default;
+}
+/* Кнопки-иконки шапки 26x26 (стиль iconBtn PanelShell) */
+.icon-btn {
+  position: relative;
+  width: 26px; height: 26px;
+  border: none; border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s;
+}
+.icon-btn:hover { background: var(--bg-selected); color: var(--primary); }
+/* Plus — главное действие панели: тонкий accent (дисциплина «accent = главное действие») */
+.icon-btn.primary { color: var(--accent); }
+.icon-btn.primary:hover { background: var(--accent-light); }
+/* Активный фильтр: accentLight + accent + бейдж-число */
+.icon-btn.active { background: var(--accent-light); color: var(--accent); }
+.icon-btn .count {
+  position: absolute;
+  top: -4px; right: -5px;
+  min-width: 14px; height: 14px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 14px;
+  text-align: center;
+  border: 1.5px solid var(--bg-main);
+  pointer-events: none;
+}
+.drag-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+/* Список задач */
+.task-scroll { padding: 6px 10px 14px; display: flex; flex-direction: column; gap: 10px; }
+.task-group-head {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 4px 6px;
+}
+.task-group-head .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.task-group-head .g-label {
+  font-size: 11px; font-weight: 700; color: var(--secondary);
+  text-transform: uppercase; letter-spacing: 0.06em;
+}
+.task-group-head .g-count { font-size: 11px; color: var(--muted); }
+.task-stack { display: flex; flex-direction: column; gap: 6px; }
+.task-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  cursor: pointer;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+.task-card:hover { border-color: var(--accent-muted); box-shadow: 0 2px 8px rgba(60,50,35,0.05); }
+.task-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--heading);
+  line-height: 1.35;
+}
+.task-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.chip-due {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; font-weight: 600;
+  color: var(--secondary);
+  background: var(--bg-selected);
+  border: 1px solid transparent;
+  padding: 2px 7px;
+  border-radius: 7px;
+  white-space: nowrap;
+}
+.chip-due.overdue { color: var(--danger); background: var(--danger-bg); border-color: var(--danger-border); }
+.prio-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.assignee-tag { font-size: 11px; color: var(--muted); font-weight: 500; }
+
+/* === Поповер фильтра (вариант A) === */
+.filter-popover {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 252px;
+  background: var(--bg-white);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-dropdown);
+  padding: 12px 12px 10px;
+  z-index: 50;
+}
+.f-section { margin-bottom: 12px; }
+.f-section:last-of-type { margin-bottom: 0; }
+.f-label {
+  display: block;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+.f-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.f-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-white);
+  font-family: var(--sans);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--primary);
+  cursor: pointer;
+  transition: all 0.12s;
+}
+.f-chip .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.f-chip:hover { border-color: var(--accent-muted); }
+.f-chip.on { background: var(--accent-light); border-color: var(--accent); color: var(--heading); font-weight: 700; }
+.f-chip.on-prio { font-weight: 700; background: var(--bg-selected); }
+.f-segment {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.f-segment button {
+  flex: 1;
+  padding: 6px 11px;
+  border: none;
+  background: var(--bg-white);
+  color: var(--secondary);
+  font-family: var(--sans);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.12s;
+}
+.f-segment button.on { background: var(--accent-light); color: var(--accent); font-weight: 700; }
+.f-footer {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-light);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.f-reset {
+  border: none; background: none; cursor: pointer;
+  font-family: var(--sans);
+  font-size: 12px; font-weight: 600;
+  color: var(--muted);
+  padding: 2px 0;
+}
+.f-reset:hover { color: var(--danger); }
+.f-found { font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
+
+/* Старый сайдбар */
+.sidebar {
+  width: 300px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-light);
+  border-radius: 14px;
+  overflow: hidden;
+  position: relative;
+  box-shadow: var(--shadow-island);
+}
+.sidebar-inner { padding: 10px 12px 14px; display: flex; flex-direction: column; gap: 8px; position: relative; }
+.sidebar-switch {
+  display: flex; gap: 2px;
+  background: var(--bg-selected);
+  border-radius: 8px;
+  padding: 2px;
+}
+.sidebar-switch button {
+  flex: 1;
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 7px 0;
+  border: none; border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--sans);
+  font-size: 12.5px; font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.sidebar-switch button.on {
+  background: var(--bg-main);
+  color: var(--accent);
+  box-shadow: var(--shadow-thumb);
+}
+.sidebar-actions { display: flex; gap: 7px; align-items: stretch; }
+.btn-new {
+  flex: 1;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-white);
+  color: var(--accent);
+  font-family: var(--sans);
+  font-size: 12.5px; font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.btn-new:hover { border-color: var(--accent); box-shadow: 0 4px 14px rgba(217,119,87,0.30); }
+.btn-filter {
+  position: relative;
+  width: 34px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-white);
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.btn-filter:hover { border-color: var(--accent-muted); color: var(--primary); }
+.btn-filter.active { background: var(--accent-light); border-color: var(--accent); color: var(--accent); }
+.btn-filter .count {
+  position: absolute;
+  top: -5px; right: -5px;
+  min-width: 15px; height: 15px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 15px;
+  text-align: center;
+  border: 1.5px solid var(--bg-panel);
+}
+/* Поповер в сайдбаре — прибивается к строке кнопок, поверх списка */
+.sidebar .filter-popover { top: 88px; right: 10px; }
+
+/* Телефон-фрейм */
+.phone {
+  width: 210px;
+  border: 5px solid #241f19;
+  border-radius: 26px;
+  overflow: hidden;
+  background: var(--bg-main);
+  position: relative;
+  box-shadow: var(--shadow-island);
+}
+.phone-screen { position: relative; height: 400px; display: flex; flex-direction: column; }
+.phone-body { flex: 1; position: relative; background: var(--bg-white); }
+.phone-veil {
+  position: absolute; inset: 0;
+  background: var(--overlay);
+  z-index: 60;
+}
+.sheet {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  background: var(--bg-white);
+  border-radius: 22px 22px 0 0;
+  box-shadow: var(--shadow-sheet);
+  padding: 8px 14px 14px;
+  z-index: 70;
+}
+.sheet-grip {
+  width: 36px; height: 4px;
+  border-radius: 2px;
+  background: var(--track);
+  margin: 0 auto 10px;
+}
+.sheet-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 12px;
+}
+.sheet-title { font-size: 15px; font-weight: 700; color: var(--heading); }
+.sheet .f-chip { padding: 7px 12px; font-size: 12.5px; }
+.sheet .f-segment button { padding: 9px 11px; font-size: 12.5px; }
+.sheet-cta {
+  margin-top: 14px;
+  width: 100%;
+  padding: 11px 12px;
+  border: none;
+  border-radius: 12px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-family: var(--sans);
+  font-size: 13.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+/* Плюсы/минусы */
+.verdict {
+  margin-top: 40px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 14px;
+}
+.verdict-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: 12px;
+  padding: 14px 16px;
+}
+.verdict-card h3 {
+  font-size: 11px; font-weight: 700;
+  letter-spacing: 0.07em; text-transform: uppercase;
+  margin-bottom: 8px;
+}
+.verdict-card.plus h3 { color: var(--success); }
+.verdict-card.minus h3 { color: var(--danger); }
+.verdict-card.when h3 { color: var(--accent); }
+.verdict-card ul { list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.verdict-card li {
+  font-size: 12.5px; line-height: 1.5; color: var(--primary);
+  padding-left: 14px; position: relative;
+}
+.verdict-card li::before {
+  content: '';
+  position: absolute; left: 0; top: 7px;
+  width: 5px; height: 5px; border-radius: 50%;
+  background: var(--muted);
+}
+.verdict-card p { font-size: 12.5px; line-height: 1.55; color: var(--primary); }
+</style>
+</head>
+<body>
+
+<div class="proto-bar">
+  <div class="variant">ВАРИАНТ A: Поповер из кнопки «Фильтр»</div>
+  <button class="theme-toggle" onclick="toggleTheme()">Тёмная тема</button>
+</div>
+
+<div class="page">
+  <div class="page-head">
+    <h1>Фильтр задач — поповер из шапки</h1>
+    <div class="sub">
+      Кнопки <b>Plus</b> (новая задача) и <b>Funnel</b> (фильтр) переезжают в шапку панели, dashed-кнопка
+      во всю ширину уходит. По клику на Funnel — дропдаун поверх списка с полным составом фильтров.
+      Активный фильтр виден по бейджу-числу на кнопке (счёт по группам: Статус + Исполнитель = «2»).
+      Шапка остаётся drag-хендлом: контролы компактные (26–28px) и помечены <code>draggable=false</code>.
+    </div>
+  </div>
+
+  <div class="scene-grid">
+
+    <!-- Сцена 1: cc-panels, поповер открыт -->
+    <div class="scene">
+      <div class="scene-label">cc-panels · фильтр открыт</div>
+      <div class="canvas">
+        <div class="island" style="width: 340px;">
+          <div class="island-header" title="Перетащите, чтобы поменять панели местами">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--secondary)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/></svg>
+            <span class="h-title">Задачи</span>
+            <span class="h-badge">12</span>
+            <span class="h-spacer"></span>
+            <span class="view-switch">
+              <button class="on" title="Список"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="3.5" cy="6" r="0.6" fill="currentColor"/><circle cx="3.5" cy="12" r="0.6" fill="currentColor"/><circle cx="3.5" cy="18" r="0.6" fill="currentColor"/></svg></button>
+              <button title="По дате"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M16 2v4"/><path d="M8 2v4"/><path d="M3 10h18"/></svg></button>
+              <button title="Доска"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/></svg></button>
+            </span>
+            <button class="icon-btn primary" title="Новая задача">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+            </button>
+            <button class="icon-btn active" title="Фильтр">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h18l-7 8v6l-4 2v-8L3 4z"/></svg>
+              <span class="count">2</span>
+            </button>
+            <button class="icon-btn" title="Скрыть панель">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+            </button>
+          </div>
+          <div class="island-body" style="min-height: 420px;">
+            <div class="task-scroll">
+              <div>
+                <div class="task-group-head">
+                  <span class="dot" style="background: var(--accent);"></span>
+                  <span class="g-label">В работе</span>
+                  <span class="g-count">2</span>
+                </div>
+                <div class="task-stack">
+                  <div class="task-card">
+                    <div class="task-title">Макеты фильтра задач: 3 варианта</div>
+                    <div class="task-meta">
+                      <span class="prio-dot" style="background: var(--accent);" title="Высокий"></span>
+                      <span class="chip-due"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>Сегодня</span>
+                      <span class="assignee-tag">Я</span>
+                    </div>
+                  </div>
+                  <div class="task-card">
+                    <div class="task-title">Спека IslandHeader для правой стопки</div>
+                    <div class="task-meta">
+                      <span class="prio-dot" style="background: var(--warning);" title="Средний"></span>
+                      <span class="chip-due"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>Завтра</span>
+                      <span class="assignee-tag">AI</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div>
+                <div class="task-group-head">
+                  <span class="dot" style="background: var(--muted);"></span>
+                  <span class="g-label">К выполнению</span>
+                  <span class="g-count">3</span>
+                </div>
+                <div class="task-stack">
+                  <div class="task-card">
+                    <div class="task-title">Починить диплинк #/spend после F5</div>
+                    <div class="task-meta">
+                      <span class="prio-dot" style="background: var(--danger);" title="Срочно"></span>
+                      <span class="chip-due overdue"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>Вчера</span>
+                      <span class="assignee-tag">Я</span>
+                    </div>
+                  </div>
+                  <div class="task-card">
+                    <div class="task-title">Обновить снапшоты UiKitPage</div>
+                    <div class="task-meta">
+                      <span class="prio-dot" style="background: var(--muted);" title="Низкий"></span>
+                      <span class="assignee-tag">Я · без срока</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <!-- Поповер фильтра поверх списка -->
+            <div class="filter-popover">
+              <div class="f-section">
+                <span class="f-label">Статус</span>
+                <div class="f-chips">
+                  <button class="f-chip on"><span class="dot" style="background: var(--accent);"></span>В работе</button>
+                  <button class="f-chip on"><span class="dot" style="background: var(--muted);"></span>К выполнению</button>
+                  <button class="f-chip"><span class="dot" style="background: var(--success);"></span>Готово</button>
+                </div>
+              </div>
+              <div class="f-section">
+                <span class="f-label">Исполнитель</span>
+                <div class="f-segment">
+                  <button>Все</button>
+                  <button class="on">Я</button>
+                  <button>AI</button>
+                </div>
+              </div>
+              <div class="f-section">
+                <span class="f-label">Приоритет</span>
+                <div class="f-chips">
+                  <button class="f-chip"><span class="dot" style="background: var(--danger);"></span>Срочно</button>
+                  <button class="f-chip"><span class="dot" style="background: var(--accent);"></span>Высокий</button>
+                  <button class="f-chip"><span class="dot" style="background: var(--warning);"></span>Средний</button>
+                  <button class="f-chip"><span class="dot" style="background: var(--muted);"></span>Низкий</button>
+                </div>
+              </div>
+              <div class="f-section">
+                <span class="f-label">Срок</span>
+                <div class="f-chips">
+                  <button class="f-chip"><span class="dot" style="background: var(--danger);"></span>Просрочено</button>
+                  <button class="f-chip"><span class="dot" style="background: var(--accent);"></span>Сегодня</button>
+                  <button class="f-chip"><span class="dot" style="background: var(--warning);"></span>Неделя</button>
+                  <button class="f-chip"><span class="dot" style="background: var(--muted);"></span>Без срока</button>
+                </div>
+              </div>
+              <div class="f-footer">
+                <button class="f-reset">Сбросить</button>
+                <span class="f-found">4 из 12 задач</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="scene-note">
+        Поповер прибит к правому краю шапки (<code>right: 6px</code>), ширина 252px, тень
+        <code>SHADOW.dropdown</code>. Клик вне или повторный клик по Funnel закрывает.
+      </div>
+    </div>
+
+    <!-- Сцена 2: cc-panels, фильтр применён и закрыт -->
+    <div class="scene">
+      <div class="scene-label">cc-panels · фильтр применён</div>
+      <div class="canvas">
+        <div class="island" style="width: 300px;">
+          <div class="island-header">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--secondary)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/></svg>
+            <span class="h-title">Задачи</span>
+            <span class="h-badge">4</span>
+            <span class="h-spacer"></span>
+            <span class="view-switch">
+              <button class="on" title="Список"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="3.5" cy="6" r="0.6" fill="currentColor"/><circle cx="3.5" cy="12" r="0.6" fill="currentColor"/><circle cx="3.5" cy="18" r="0.6" fill="currentColor"/></svg></button>
+              <button title="По дате"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M16 2v4"/><path d="M8 2v4"/><path d="M3 10h18"/></svg></button>
+              <button title="Доска"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/></svg></button>
+            </span>
+            <button class="icon-btn primary" title="Новая задача">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+            </button>
+            <button class="icon-btn active" title="Фильтр">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h18l-7 8v6l-4 2v-8L3 4z"/></svg>
+              <span class="count">2</span>
+            </button>
+            <button class="icon-btn" title="Скрыть панель">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+            </button>
+          </div>
+          <div class="island-body" style="min-height: 300px;">
+            <div class="task-scroll">
+              <div>
+                <div class="task-group-head">
+                  <span class="dot" style="background: var(--accent);"></span>
+                  <span class="g-label">В работе</span>
+                  <span class="g-count">1</span>
+                </div>
+                <div class="task-stack">
+                  <div class="task-card">
+                    <div class="task-title">Макеты фильтра задач: 3 варианта</div>
+                    <div class="task-meta">
+                      <span class="prio-dot" style="background: var(--accent);"></span>
+                      <span class="chip-due"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>Сегодня</span>
+                      <span class="assignee-tag">Я</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div>
+                <div class="task-group-head">
+                  <span class="dot" style="background: var(--muted);"></span>
+                  <span class="g-label">К выполнению</span>
+                  <span class="g-count">3</span>
+                </div>
+                <div class="task-stack">
+                  <div class="task-card">
+                    <div class="task-title">Починить диплинк #/spend после F5</div>
+                    <div class="task-meta">
+                      <span class="prio-dot" style="background: var(--danger);"></span>
+                      <span class="chip-due overdue"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>Вчера</span>
+                      <span class="assignee-tag">Я</span>
+                    </div>
+                  </div>
+                  <div class="task-card">
+                    <div class="task-title">Обновить снапшоты UiKitPage</div>
+                    <div class="task-meta">
+                      <span class="prio-dot" style="background: var(--muted);"></span>
+                      <span class="assignee-tag">Я · без срока</span>
+                    </div>
+                  </div>
+                  <div class="task-card">
+                    <div class="task-title">Перевести BoardToolbar на шкалу SP</div>
+                    <div class="task-meta">
+                      <span class="prio-dot" style="background: var(--warning);"></span>
+                      <span class="chip-due"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>Чт</span>
+                      <span class="assignee-tag">Я</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="scene-note">
+        Закрытое состояние: о фильтре напоминают только бейдж «2» и счётчик в шапке
+        (4 вместо 12). Узнать, ЧТО именно отфильтровано, — только открыв поповер снова.
+      </div>
+    </div>
+
+    <!-- Сцена 3: старый сайдбар -->
+    <div class="scene">
+      <div class="scene-label">Старый сайдбар · поповер открыт</div>
+      <div class="sidebar">
+        <div class="sidebar-inner">
+          <div class="sidebar-switch">
+            <button class="on"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="3.5" cy="6" r="0.6" fill="currentColor"/><circle cx="3.5" cy="12" r="0.6" fill="currentColor"/><circle cx="3.5" cy="18" r="0.6" fill="currentColor"/></svg>Список</button>
+            <button><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M16 2v4"/><path d="M8 2v4"/><path d="M3 10h18"/></svg>По дате</button>
+            <button><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/></svg>Доска</button>
+          </div>
+          <div class="sidebar-actions">
+            <button class="btn-new">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+              Новая задача
+            </button>
+            <button class="btn-filter active" title="Фильтр">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h18l-7 8v6l-4 2v-8L3 4z"/></svg>
+              <span class="count">2</span>
+            </button>
+          </div>
+          <div class="task-scroll" style="padding: 2px 0 4px;">
+            <div>
+              <div class="task-group-head">
+                <span class="dot" style="background: var(--accent);"></span>
+                <span class="g-label">В работе</span>
+                <span class="g-count">2</span>
+              </div>
+              <div class="task-stack">
+                <div class="task-card">
+                  <div class="task-title">Макеты фильтра задач: 3 варианта</div>
+                  <div class="task-meta">
+                    <span class="prio-dot" style="background: var(--accent);"></span>
+                    <span class="chip-due"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>Сегодня</span>
+                    <span class="assignee-tag">Я</span>
+                  </div>
+                </div>
+                <div class="task-card">
+                  <div class="task-title">Спека IslandHeader для правой стопки</div>
+                  <div class="task-meta">
+                    <span class="prio-dot" style="background: var(--warning);"></span>
+                    <span class="chip-due"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>Завтра</span>
+                    <span class="assignee-tag">AI</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="filter-popover">
+            <div class="f-section">
+              <span class="f-label">Статус</span>
+              <div class="f-chips">
+                <button class="f-chip on"><span class="dot" style="background: var(--accent);"></span>В работе</button>
+                <button class="f-chip on"><span class="dot" style="background: var(--muted);"></span>К выполнению</button>
+                <button class="f-chip"><span class="dot" style="background: var(--success);"></span>Готово</button>
+              </div>
+            </div>
+            <div class="f-section">
+              <span class="f-label">Исполнитель</span>
+              <div class="f-segment">
+                <button>Все</button>
+                <button class="on">Я</button>
+                <button>AI</button>
+              </div>
+            </div>
+            <div class="f-section">
+              <span class="f-label">Приоритет</span>
+              <div class="f-chips">
+                <button class="f-chip"><span class="dot" style="background: var(--danger);"></span>Срочно</button>
+                <button class="f-chip"><span class="dot" style="background: var(--accent);"></span>Высокий</button>
+                <button class="f-chip"><span class="dot" style="background: var(--warning);"></span>Средний</button>
+                <button class="f-chip"><span class="dot" style="background: var(--muted);"></span>Низкий</button>
+              </div>
+            </div>
+            <div class="f-section">
+              <span class="f-label">Срок</span>
+              <div class="f-chips">
+                <button class="f-chip"><span class="dot" style="background: var(--danger);"></span>Просрочено</button>
+                <button class="f-chip"><span class="dot" style="background: var(--accent);"></span>Сегодня</button>
+                <button class="f-chip"><span class="dot" style="background: var(--warning);"></span>Неделя</button>
+                <button class="f-chip"><span class="dot" style="background: var(--muted);"></span>Без срока</button>
+              </div>
+            </div>
+            <div class="f-footer">
+              <button class="f-reset">Сбросить</button>
+              <span class="f-found">4 из 12 задач</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="scene-note">
+        В сайдбаре нет шапки острова, поэтому под переключателем видов — компактная строка:
+        текстовая «Новая задача» (flex:1) + иконка-фильтр с бейджем. Поповер тот же,
+        прибит к правому краю строки.
+      </div>
+    </div>
+
+    <!-- Сцена 4: мобила — боттом-шит -->
+    <div class="scene">
+      <div class="scene-label">Мобила · боттом-шит</div>
+      <div class="phone">
+        <div class="phone-screen">
+          <div class="island-header" style="cursor: default;">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--secondary)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/></svg>
+            <span class="h-title">Задачи</span>
+            <span class="h-badge">4</span>
+            <span class="h-spacer"></span>
+            <button class="icon-btn primary" title="Новая задача">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+            </button>
+            <button class="icon-btn active" title="Фильтр">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h18l-7 8v6l-4 2v-8L3 4z"/></svg>
+              <span class="count">2</span>
+            </button>
+          </div>
+          <div class="phone-body">
+            <div class="task-scroll" style="padding: 6px 8px;">
+              <div class="task-card">
+                <div class="task-title">Макеты фильтра задач: 3 варианта</div>
+                <div class="task-meta">
+                  <span class="prio-dot" style="background: var(--accent);"></span>
+                  <span class="chip-due"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>Сегодня</span>
+                  <span class="assignee-tag">Я</span>
+                </div>
+              </div>
+            </div>
+            <div class="phone-veil"></div>
+            <div class="sheet">
+              <div class="sheet-grip"></div>
+              <div class="sheet-head">
+                <span class="sheet-title">Фильтры</span>
+                <button class="f-reset">Сбросить</button>
+              </div>
+              <div class="f-section">
+                <span class="f-label">Статус</span>
+                <div class="f-chips">
+                  <button class="f-chip on"><span class="dot" style="background: var(--accent);"></span>В работе</button>
+                  <button class="f-chip on"><span class="dot" style="background: var(--muted);"></span>К выполнению</button>
+                  <button class="f-chip"><span class="dot" style="background: var(--success);"></span>Готово</button>
+                </div>
+              </div>
+              <div class="f-section">
+                <span class="f-label">Исполнитель</span>
+                <div class="f-segment">
+                  <button>Все</button>
+                  <button class="on">Я</button>
+                  <button>AI</button>
+                </div>
+              </div>
+              <div class="f-section">
+                <span class="f-label">Приоритет</span>
+                <div class="f-chips">
+                  <button class="f-chip"><span class="dot" style="background: var(--danger);"></span>Срочно</button>
+                  <button class="f-chip"><span class="dot" style="background: var(--accent);"></span>Высокий</button>
+                  <button class="f-chip"><span class="dot" style="background: var(--warning);"></span>Средний</button>
+                  <button class="f-chip"><span class="dot" style="background: var(--muted);"></span>Низкий</button>
+                </div>
+              </div>
+              <div class="f-section">
+                <span class="f-label">Срок</span>
+                <div class="f-chips">
+                  <button class="f-chip"><span class="dot" style="background: var(--danger);"></span>Просрочено</button>
+                  <button class="f-chip"><span class="dot" style="background: var(--accent);"></span>Сегодня</button>
+                  <button class="f-chip"><span class="dot" style="background: var(--warning);"></span>Неделя</button>
+                  <button class="f-chip"><span class="dot" style="background: var(--muted);"></span>Без срока</button>
+                </div>
+              </div>
+              <button class="sheet-cta">Показать 4 задачи</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="scene-note">
+        На мобиле поповер не работает (нет места справа) — фильтр уезжает в боттом-шит
+        с крупными tap-целями и кнопкой «Показать N задач».
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Плюсы / минусы / когда -->
+  <div class="verdict">
+    <div class="verdict-card plus">
+      <h3>Плюсы</h3>
+      <ul>
+        <li>Привычный паттерн дропдауна, повторяет ToolbarOverflowMenu доски — переиспользуем поведение.</li>
+        <li>Не ест высоту списка: закрытый фильтр не занимает ни пикселя.</li>
+        <li>Весь состав фильтров в одном месте, легко расширить (метки добавятся секцией).</li>
+      </ul>
+    </div>
+    <div class="verdict-card minus">
+      <h3>Минусы</h3>
+      <ul>
+        <li>Слабая обратная связь: при закрытом поповере видно только число, а не ЧТО отфильтровано.</li>
+        <li>Снять один фильтр — два клика (открыть, ткнуть чип).</li>
+        <li>Перекрывает верх списка — на короткой панели закрывает первую группу задач.</li>
+      </ul>
+    </div>
+    <div class="verdict-card when">
+      <h3>Когда выбрать</h3>
+      <p>Фильтрация — эпизодическое действие («нашёл и закрыл»), панель узкая, важно сохранить максимум высоты под задачи. Самый дешёвый в реализации вариант.</p>
+    </div>
+  </div>
+</div>
+
+<script>
+function toggleTheme() {
+  const html = document.documentElement;
+  const next = html.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+  html.setAttribute('data-theme', next);
+  document.querySelector('.theme-toggle').textContent = next === 'light' ? 'Тёмная тема' : 'Светлая тема';
+}
+</script>
+
+</body>
+</html>

@@ -6,9 +6,9 @@ import type { Session } from '../types';
 
 // Чип статуса жизни чата (макет варианта А): маппинг фиксированный, покрывает все
 // 7 значений Session.status + признак готовности задачи.
-//   active  — Starting/Working/Active
+//   active  — Starting/Working/Active/Finished (обычный покоящийся чат, ждёт сообщения)
 //   waiting — Waiting
-//   done    — Finished ИЛИ taskDone (архив: чаты выполненных задач)
+//   done    — taskDone (архив: чаты выполненных задач-исполнителей)
 //   error   — Error/Orphaned
 export type ChatStatusChip = 'active' | 'waiting' | 'done' | 'error';
 
@@ -129,13 +129,17 @@ export function useSanitizePersonaFilter(
 
 // Чип статуса жизни чата по Session (с учётом taskDone). Единое место маппинга —
 // используется и фильтром, и счётчиками на чипах, и сводкой.
+// «Готово» = ТОЛЬКО taskDone (чат выполненной задачи-исполнителя). Обычный статус
+// 'finished' сюда НЕ относится: это состояние покоя любого чата после хода/рестарта
+// сервера, он «свободен», в него можно писать → идёт в «В работе». Иначе снятие чипа
+// «Готово» прятало бы вообще все обычные чаты.
 // Приоритет: ошибка важнее готовности — чат с Done-задачей, упавший в Error/Orphaned,
 // остаётся в «С ошибкой» (иначе он уедет в «Готово», скрытое по умолчанию, и ошибку не видно).
 export function chatStatusOf(s: Session): ChatStatusChip {
   if (s.status === 'error' || s.status === 'orphaned') return 'error';
-  if (s.taskDone === true || s.status === 'finished') return 'done';
+  if (s.taskDone === true) return 'done';
   if (s.status === 'waiting') return 'waiting';
-  return 'active'; // starting | working | active
+  return 'active'; // starting | working | active | finished
 }
 
 // Предикат видимости чата по фильтрам. Возвращается функцией, чтобы один и тот же

@@ -153,6 +153,16 @@ export function ModelProvidersModal({ onClose, isAdmin }: Props) {
     return globalTiers()?.[t] ?? '';
   }
 
+  // Эффективная модель слота для текущего контекста: личный слот выбранного
+  // пользователя, если задан, иначе глобальный. Ей подписываются места уровня 3 —
+  // сами назначения общие для всех, а модель за слотом зависит от контекста.
+  // `||`, а не `??`: saveTier(t,'') оптимистично кладёт пустую строку (null придёт
+  // лишь с ответом сервера), и `??` пропустил бы её как валидную — подпись мигнула
+  // бы на «не задана» вместо глобальной. Так же трактует пустую строку tierSubtitle.
+  function effectiveTierModel(t: TierKey): string {
+    return selectedTiers()?.[t] || globalTiers()?.[t] || '';
+  }
+
   // Оптимистично: применяем сразу, при ошибке возвращаем прежнее значение. Шлём ТОЛЬКО своё
   // поле — PUT /api/settings патчит присланное, поэтому наш (возможно устаревший) снимок
   // не откатывает соседние настройки, изменённые тем временем с другого экрана.
@@ -373,8 +383,7 @@ export function ModelProvidersModal({ onClose, isAdmin }: Props) {
 
   // Предохранитель: тяжёлая модель в слабом слоте правит фоновой мелочью (теги, заголовки,
   // сводки) — это десятки вызовов в день. Тир угадываем по id, как в ModelIcon.
-  const effectiveWeak = selectedTiers()?.weak ?? globalTiers()?.weak ?? '';
-  const heavyWeak = /opus|fable|ultra|\bmax\b|\bpro\b|reasoner/i.test(effectiveWeak);
+  const heavyWeak = /opus|fable|ultra|\bmax\b|\bpro\b|reasoner/i.test(effectiveTierModel('weak'));
 
   // Провайдеры, для которых можно нарисовать чипс быстрого выбора тройки.
   const chipProviders = providers
@@ -495,7 +504,7 @@ export function ModelProvidersModal({ onClose, isAdmin }: Props) {
 
         {isAdmin && selectedUserId && (
           <div style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.4, padding: '0 2px' }}>
-            Назначения мест общие для всех пользователей
+            Назначения мест общие для всех; модели за слотами показаны для выбранного пользователя
           </div>
         )}
 
@@ -685,7 +694,7 @@ export function ModelProvidersModal({ onClose, isAdmin }: Props) {
                       first={i === 0}
                       busy={busy === a.key}
                       ollamaModel={info.model ?? undefined}
-                      tierModels={{ strong: globalTierModel('strong'), medium: globalTierModel('medium'), weak: globalTierModel('weak') }}
+                      tierModels={{ strong: effectiveTierModel('strong'), medium: effectiveTierModel('medium'), weak: effectiveTierModel('weak') }}
                       models={models}
                       onPick={route => pick(a, route)}
                       onReset={() => reset(a)}

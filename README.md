@@ -88,7 +88,7 @@ Claude. Сервер поднимается у вас (локально или �
 Браузер (React 18 + TypeScript)
     │ SignalR (WebSocket)
     ▼
-ASP.NET Core 9 (:5000)
+ASP.NET Core 10 (:5000)
  ├── Controllers/     Auth, Projects, Sessions, Files, FeatureFlags, Chats
  ├── Hubs/SessionHub  SignalR /hubs/session
  ├── Services/
@@ -112,7 +112,7 @@ claude CLI  (--print --output-format stream-json --input-format stream-json …)
 | Слой | Технологии |
 |---|---|
 | Frontend | React 18, TypeScript, Vite, SignalR-client, react-markdown, mermaid |
-| Backend | ASP.NET Core 9, SignalR, Kestrel (TLS) |
+| Backend | ASP.NET Core 10, SignalR, Kestrel (TLS) |
 | CLI | Claude Code (`@anthropic-ai/claude-code`) |
 | Интеграции | Dify (RAG), fal.ai (медиа), OnlyOffice Document Server |
 | Деплой | Docker (multi-stage), Tailscale + HTTPS |

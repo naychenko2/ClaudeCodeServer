@@ -53,7 +53,7 @@ cd frontend; npm run build     # production-сборка (tsc -b + vite)
 Browser (React 18 + TypeScript)
     │ SignalR WebSocket
     ▼
-ASP.NET Core 9 (:5000)
+ASP.NET Core 10 (:5000)
  ├── Controllers/
  │    ├── AuthController      POST /api/auth/ping
  │    ├── ProjectsController  CRUD /api/projects

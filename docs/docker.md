@@ -17,7 +17,7 @@
 
 ## Что внутри образа
 
-- ASP.NET Core 9 (`ClaudeHomeServer.dll`)
+- ASP.NET Core 10 (`ClaudeHomeServer.dll`)
 - Node.js 22 + `@anthropic-ai/claude-code` (CLI `claude` в PATH)
 - `git`, `bash`
 - Собранный фронтенд в `wwwroot`

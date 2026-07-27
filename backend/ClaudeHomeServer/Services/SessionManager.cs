@@ -2048,6 +2048,9 @@ public class SessionManager : IDisposable
                     snap.AttachedPaths is { Count: > 0 } ? snap.AttachedPaths : null, snap.Mode)
                 : new ComposerRestoreMessage(null, null, null);
         await BroadcastSessionMessageAsync(sessionId, restore);
+        // Snapshot гасим после доставки restore — разовый, повторный FreezePending не должен
+        // формировать restore из того же snapshot
+        entry.CurrentTurnSnapshot = null;
     }
 
     // Достать следующее сообщение и отправить его обычным ходом. Вызывается по концу хода

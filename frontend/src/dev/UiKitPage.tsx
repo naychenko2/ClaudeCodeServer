@@ -7,7 +7,7 @@
 // ВСЕ визуальные значения — из токенов design.ts (C, FS, SP, ISLAND) и
 // компонентов ui/. Ни одного hex-литерала: lint:design проходит зелёным.
 
-import { useState, type CSSProperties, Fragment } from 'react';
+import { useState, useEffect, type CSSProperties, Fragment } from 'react';
 import {
   type LucideIcon,
   Palette, Layers, Type, ToggleRight,
@@ -23,6 +23,8 @@ import {
 import { Rows3, Bell, Pin, FolderOpen } from 'lucide-react';
 import { C, FONT, FS, SP, R, SHADOW, ISLAND, MODAL_W, GROUP_COLORS } from '../lib/design';
 import { AGENT_COLORS } from '../components/AgentSelector';
+import { ChatCard } from '../components/ChatCard';
+import type { Session } from '../types';
 import { useThemeMode, setThemeMode, type ThemeMode } from '../lib/themeMode';
 import { useIsMobile } from '../lib/breakpoints';
 import { CanvasBackdrop } from '../components/ui/CanvasBackdrop';
@@ -68,6 +70,27 @@ const DOT_SAMPLES: { color: string; label: string }[] = [
   { color: C.textMuted,    label: 'textMuted'    },
 ];
 
+// Оглавление витрины: id секции (для якоря) + короткий лейбл в кнопке.
+// Порядок соответствует основному flow ниже. При добавлении новой секции —
+// добавь её сюда и повесь rootProps={{ id }} на её Island.
+const TOC_SECTIONS: { id: string; label: string }[] = [
+  { id: 'sec-toggles',    label: 'Переключатели'     },
+  { id: 'sec-overlays',   label: 'Оверлеи'           },
+  { id: 'sec-toolbar',    label: 'Тулбар'            },
+  { id: 'sec-buttons',    label: 'Кнопки'            },
+  { id: 'sec-fields',     label: 'Поля'              },
+  { id: 'sec-typography', label: 'Типографика'       },
+  { id: 'sec-scales',     label: 'Шкалы'             },
+  { id: 'sec-palettes',   label: 'Палитры-данные'    },
+  { id: 'sec-islands',    label: 'Острова и холст'   },
+  { id: 'sec-colors',     label: 'Цвета'             },
+  { id: 'sec-composite',  label: 'Составные'         },
+];
+
+// Высота sticky-элементов над контентом: шапка темы + TOC-бар. Секция
+// скроллится под них — scrollMarginTop = этой высоте + небольшой зазор.
+const STICKY_OFFSET = 140;
+
 export function UiKitPage() {
   const mode = useThemeMode();
   const isMobile = useIsMobile();
@@ -91,7 +114,7 @@ export function UiKitPage() {
 
       <div style={{
         position: 'relative',
-        maxWidth: 1100,
+        maxWidth: isMobile ? 1100 : 1280,
         margin: '0 auto',
         padding: pad,
         display: 'flex',
@@ -122,37 +145,91 @@ export function UiKitPage() {
           />
         </Island>
 
-        {/* Примитивы — переключатели */}
-        <TogglesSection />
+        {/* TOC на мобиле — горизонтальный sticky-бар под шапкой темы.
+            На десктопе вместо него — sidebar справа от секций (см. ниже). */}
+        {isMobile && <Toc variant="bar" />}
 
-        {/* Примитивы — оверлеи и меню */}
-        <OverlaysSection />
+        {/* Основная зона: на десктопе — flex-row {секции | TOC sidebar},
+            на мобиле — просто колонка секций (TOC bar уже отрисован выше). */}
+        <div style={{ display: 'flex', gap: ISLAND.gap, alignItems: 'flex-start' }}>
+          <div style={{
+            flex: 1,
+            minWidth: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: ISLAND.gap,
+          }}>
+            {/* Примитивы — переключатели */}
+            <div id="sec-toggles" style={{ scrollMarginTop: STICKY_OFFSET }}>
+              <TogglesSection />
+            </div>
 
-        {/* Toolbar + ToolbarIconButton + ToolbarOverflowMenu + EmptyState */}
-        <ToolbarAndEmptySection />
+            {/* Примитивы — оверлеи и меню */}
+            <div id="sec-overlays" style={{ scrollMarginTop: STICKY_OFFSET }}>
+              <OverlaysSection />
+            </div>
 
-        {/* Примитивы — кнопки */}
-        <ButtonsSection />
+            {/* Toolbar + ToolbarIconButton + ToolbarOverflowMenu + EmptyState */}
+            <div id="sec-toolbar" style={{ scrollMarginTop: STICKY_OFFSET }}>
+              <ToolbarAndEmptySection />
+            </div>
 
-        {/* Примитивы — поля (TextField / TextArea / IconField / Field) */}
-        <FieldsSection />
+            {/* Примитивы — кнопки */}
+            <div id="sec-buttons" style={{ scrollMarginTop: STICKY_OFFSET }}>
+              <ButtonsSection />
+            </div>
 
-        {/* Секция «Типографика» — FS × FONT */}
-        <TypographySection />
+            {/* Примитивы — поля (TextField / TextArea / IconField / Field) */}
+            <div id="sec-fields" style={{ scrollMarginTop: STICKY_OFFSET }}>
+              <FieldsSection />
+            </div>
 
-        {/* Секция «Шкалы» — SP (отступы), R (радиусы), SHADOW (тени) */}
-        <ScalesSection />
+            {/* Секция «Типографика» — FS × FONT */}
+            <div id="sec-typography" style={{ scrollMarginTop: STICKY_OFFSET }}>
+              <TypographySection />
+            </div>
 
-        {/* Секция «Палитры-данные» — GROUP_COLORS × AGENT_COLORS */}
-        <DataPalettesSection />
+            {/* Секция «Шкалы» — SP (отступы), R (радиусы), SHADOW (тени) */}
+            <div id="sec-scales" style={{ scrollMarginTop: STICKY_OFFSET }}>
+              <ScalesSection />
+            </div>
 
-        {/* Секция «Примитивы — острова и холст» — Island/IslandHeader,
-            IslandScaffold (на холсте CanvasBackdrop), статичные сплиттеры */}
-        <IslandsSection />
+            {/* Секция «Палитры-данные» — GROUP_COLORS × AGENT_COLORS */}
+            <div id="sec-palettes" style={{ scrollMarginTop: STICKY_OFFSET }}>
+              <DataPalettesSection />
+            </div>
 
-        {/* Секция «Цвета» — программный обход C с группировкой и
-            resolved-значениями из getComputedStyle (обновляется при смене темы) */}
-        <ColorsSection />
+            {/* Секция «Примитивы — острова и холст» — Island/IslandHeader,
+                IslandScaffold (на холсте CanvasBackdrop), статичные сплиттеры */}
+            <div id="sec-islands" style={{ scrollMarginTop: STICKY_OFFSET }}>
+              <IslandsSection />
+            </div>
+
+            {/* Секция «Цвета» — программный обход C с группировкой и
+                resolved-значениями из getComputedStyle (обновляется при смене темы) */}
+            <div id="sec-colors" style={{ scrollMarginTop: STICKY_OFFSET }}>
+              <ColorsSection />
+            </div>
+
+            {/* Секция «Составные компоненты» — ChatCard и каркас панели */}
+            <div id="sec-composite" style={{ scrollMarginTop: STICKY_OFFSET }}>
+              <CompositeSection />
+            </div>
+          </div>
+
+          {/* TOC на десктопе — sticky sidebar справа от секций */}
+          {!isMobile && (
+            <aside style={{
+              width: 200,
+              flexShrink: 0,
+              position: 'sticky',
+              top: SP.md,
+              alignSelf: 'flex-start',
+            }}>
+              <Toc variant="sidebar" />
+            </aside>
+          )}
+        </div>
 
         {/* Placeholder «Секции» — сюда добавятся палитра/типографика/кнопки/... */}
         <Island>
@@ -1246,6 +1323,347 @@ function DataPalettesSection() {
                 </span>
               </div>
             ))}
+          </div>
+        </SubBlock>
+      </div>
+    </Island>
+  );
+}
+
+// === TOC — оглавление витрины =====================================
+// Два варианта одного компонента:
+//  - sidebar: вертикальный список справа от контента (десктоп), sticky-top
+//  - bar: горизонтальный pill-row сверху (мобила), sticky-top с горизонтальным скроллом
+// Активная секция подсвечивается через IntersectionObserver; клик — плавный
+// скролл к Island секции (block:'start' + scrollMarginTop на обёртке секции).
+// Persist scroll-позиции между перезагрузками живёт в sidebar-варианте (он
+// монтируется на десктопе), но логика одинакова — переноси в любой вариант.
+function Toc({ variant }: { variant: 'sidebar' | 'bar' }) {
+  const isSidebar = variant === 'sidebar';
+  const [activeId, setActiveId] = useState<string>(TOC_SECTIONS[0].id);
+
+  // Persist scroll-позиции между перезагрузками (только в одном из вариантов,
+  // чтобы не дублировать слушатель): на mount восстанавливаем сохранённый
+  // window.scrollY, при скролле — debounce-сейв в sessionStorage.
+  // Браузерное авто-восстановление отключаем (history.scrollRestoration),
+  // потому что оно не всегда отрабатывает на lazy-загружаемой странице.
+  useEffect(() => {
+    if (!isSidebar) return;
+    const SS_KEY = 'cc_uikit_scroll';
+    history.scrollRestoration = 'manual';
+    const saved = sessionStorage.getItem(SS_KEY);
+    if (saved) {
+      const y = Number(saved);
+      if (Number.isFinite(y) && y > 0) window.scrollTo(0, y);
+    }
+    let timer: number | undefined;
+    const onScroll = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        sessionStorage.setItem(SS_KEY, String(window.scrollY));
+      }, 200);
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      window.removeEventListener('scroll', onScroll);
+      window.clearTimeout(timer);
+      history.scrollRestoration = 'auto';
+    };
+  }, [isSidebar]);
+
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries
+          .filter(e => e.isIntersecting)
+          .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
+        if (visible[0]) setActiveId(visible[0].target.id);
+      },
+      { rootMargin: `-${STICKY_OFFSET}px 0px -55% 0px` },
+    );
+    TOC_SECTIONS.forEach(s => {
+      const el = document.getElementById(s.id);
+      if (el) observer.observe(el);
+    });
+    return () => observer.disconnect();
+  }, []);
+
+  const scrollTo = (id: string) => {
+    document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  // Контейнер-Island: на десктопе — без sticky (sidebar-обёртка сама sticky),
+  // на мобиле — sticky-top чтобы оставался на виду при скролле секций
+  return (
+    <Island
+      style={
+        isSidebar
+          ? { padding: `${SP.sm}px 0` }
+          : { position: 'sticky', top: SP.md, zIndex: 10, padding: `${SP.sm}px ${SP.md}px` }
+      }
+    >
+      <div
+        style={
+          isSidebar
+            ? { display: 'flex', flexDirection: 'column', gap: SP.xxs }
+            : { display: 'flex', gap: SP.xs, overflowX: 'auto', scrollbarWidth: 'thin' }
+        }
+      >
+        {TOC_SECTIONS.map(s => {
+          const active = s.id === activeId;
+          return (
+            <button
+              key={s.id}
+              onClick={() => scrollTo(s.id)}
+              title={s.label}
+              style={{
+                flexShrink: 0,
+                textAlign: isSidebar ? 'left' : 'center',
+                padding: isSidebar ? `${SP.sm}px ${SP.md}px` : `${SP.xs}px ${SP.md}px`,
+                borderRadius: R.md,
+                border: `1px solid ${active ? C.accent : isSidebar ? 'transparent' : C.borderLight}`,
+                background: active ? C.accentLight : 'transparent',
+                color: active ? C.accent : C.textSecondary,
+                fontFamily: FONT.sans,
+                fontSize: FS.sm,
+                fontWeight: active ? 600 : 500,
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+                transition: 'background 0.12s ease, color 0.12s ease, border-color 0.12s ease',
+              }}
+            >
+              {s.label}
+            </button>
+          );
+        })}
+      </div>
+    </Island>
+  );
+}
+
+
+// Реальные контейнеры экранов: ChatCard (карточка чата в списках) и каркас
+// правой панели (Island + IslandHeader + белая контентная зона). Это уровень
+// КОМПОЗИЦИИ над примитивами — показывает, как из Button/IconButton/Island
+// собираются реальные блоки. В отличие от примитивов, эти компоненты тянут
+// стор (personas/tasks/lastMechanic) — в витрине он пуст, поэтому состояния
+// «чат персоны» и «чат-задача» здесь не видны; показаны базовые раскладки.
+
+// Минимальные валидные Session для демо: обязательные поля заполнены,
+// опциональные — только те, что меняют визуал ChatCard.
+const DEMO_SESSIONS: Session[] = [
+  {
+    id: 'demo-1',
+    mode: 'plan',
+    status: 'active',
+    messageCount: 4,
+    createdAt: '2025-01-01T10:00:00Z',
+    updatedAt: '2025-01-01T10:30:00Z',
+    name: 'Рефакторинг модуля авторизации',
+    lastMessage: 'Готово, накатил миграцию и прогнал тесты',
+    origin: 'manual',
+  },
+  {
+    id: 'demo-2',
+    mode: 'default',
+    status: 'working',
+    messageCount: 12,
+    createdAt: '2025-01-01T09:00:00Z',
+    updatedAt: '2025-01-01T10:45:00Z',
+    name: 'Разбор архитектуры бэкапов',
+    lastMessage: 'Сейчас ищу, где лежит BackupSchema…',
+    origin: 'manual',
+    isPinned: true,
+  },
+  {
+    id: 'demo-3',
+    mode: 'default',
+    status: 'waiting',
+    messageCount: 1,
+    createdAt: '2025-01-01T10:50:00Z',
+    updatedAt: '2025-01-01T10:50:00Z',
+    name: 'Новый чат',
+    origin: 'manual',
+  },
+];
+
+function CompositeSection() {
+  // Hover активной карточки — чтобы видеть кнопки действий (onHover у ChatCard).
+  const [hoveredId, setHoveredId] = useState<string | null>('demo-2');
+
+  return (
+    <Island>
+      <IslandHeader
+        icon={
+          <LayoutTemplate
+            size={ICON_SIZE.md}
+            strokeWidth={ICON_STROKE}
+            style={{ color: C.accent, flexShrink: 0 }}
+          />
+        }
+        title="Составные компоненты"
+        badge="ChatCard · каркас панели"
+      />
+      <div style={{
+        padding: ISLAND.pad,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: ISLAND.gap,
+      }}>
+        {/* ChatCard: карточка чата в боковых списках (глобальный ChatList и
+            проектный SessionList — один компонент). Три состояния: обычная /
+            активная+закреплённая / ожидающая. Полоса действий (правка/удаление)
+            показывается по hover — наведите на любую карточку. */}
+        <SubBlock label="ChatCard — карточка чата (обычная / активная / ожидающая)">
+          {/* Белая подложка повторяет реальный фон списка в воркспейсе (C.bgWhite):
+              так виден контраст активной полосы и теней, как в проде. */}
+          <div style={{
+            background: C.bgWhite,
+            borderRadius: R.xl,
+            padding: SP.md,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: SP.xs,
+          }}>
+            {DEMO_SESSIONS.map((s, i) => (
+              <ChatCard
+                key={s.id}
+                session={s}
+                isActive={i === 1}
+                isMobile={false}
+                fallbackName={`Чат #${i + 1}`}
+                online={true}
+                hovered={hoveredId === s.id}
+                workflowRunning={false}
+                onSelect={() => {}}
+                onHover={h => setHoveredId(h ? s.id : null)}
+                onEdit={() => {}}
+                onDelete={() => {}}
+                onTogglePin={() => {}}
+              />
+            ))}
+          </div>
+          {/* Подсказка: полные состояния (персона/задача/механика) требуют стора.
+              В витрине стор пуст — поэтому плашки персоны и статуса задачи не видны. */}
+          <p style={{
+            margin: 0,
+            fontSize: FS.xs,
+            color: C.textMuted,
+            fontFamily: FONT.mono,
+            lineHeight: 1.5,
+          }}>
+            Стороны персоны/задачи/механики тянутся из store (personas/tasks/
+            lastMechanic); в витрине он пуст — плашки не видны.
+          </p>
+        </SubBlock>
+
+        {/* Каркас правой панели: Island + IslandHeader + белая контентная зона.
+           PanelShell в RightPanelStack собран из тех же примитивов — это и есть
+            «рецепт панели». Шапка на тоне острова (C.bgMain), контент — на белом,
+            как у Файлов/Изменений/Задач/Терминала. */}
+        <SubBlock label="Каркас панели — Island + IslandHeader + контент на C.bgWhite">
+          <Island
+            bg={C.bgMain}
+            borderColor={ISLAND.border}
+            style={{ overflow: 'hidden' }}
+          >
+            <IslandHeader
+              icon={<Columns2 size={15} strokeWidth={ICON_STROKE} color={C.textSecondary} style={{ flexShrink: 0 }} />}
+              title="Панель"
+              badge="3"
+              actions={
+                <button
+                  title="Скрыть панель"
+                  style={{
+                    width: 26, height: 26, border: 'none', borderRadius: R.sm,
+                    background: 'transparent', cursor: 'pointer',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    color: C.textMuted, flexShrink: 0,
+                  }}
+                >
+                  <X size={14} strokeWidth={ICON_STROKE} />
+                </button>
+              }
+            />
+            {/* Контентная зона: C.bgWhite — отделяет рабочую область от кремовой
+                шапки и фона страницы с дудл-паттерном. Здесь живут реальные
+                дочерние компоненты (FileViewer, TaskBoard, GitPanel…). */}
+            <div style={{
+              flex: 1,
+              minHeight: 120,
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden',
+              background: C.bgWhite,
+              padding: SP.md,
+              gap: SP.sm,
+            }}>
+              {/* Заглушка контента — повторяет визуальные токи реальной панели */}
+              <div style={{
+                height: 10, borderRadius: R.sm,
+                background: C.borderLight, width: '60%',
+              }} />
+              <div style={{
+                height: 10, borderRadius: R.sm,
+                background: C.borderLight, width: '85%',
+              }} />
+              <div style={{
+                height: 10, borderRadius: R.sm,
+                background: C.borderLight, width: '40%',
+              }} />
+              {/* Скелтон «активной строки» — акцентный штрих */}
+              <div style={{
+                marginTop: SP.xs,
+                display: 'flex', alignItems: 'center', gap: SP.sm,
+                padding: `${SP.sm}px ${SP.md}px`,
+                borderRadius: R.md,
+                background: C.accentLight,
+                border: `1px solid ${C.accentMuted}`,
+              }}>
+                <div style={{ width: 6, height: 6, borderRadius: '50%', background: C.accent }} />
+                <span style={{ fontSize: FS.sm, color: C.accent, fontWeight: 600 }}>
+                  Строка состояния / индикатор
+                </span>
+              </div>
+            </div>
+          </Island>
+          <p style={{
+            margin: 0,
+            fontSize: FS.xs,
+            color: C.textMuted,
+            fontFamily: FONT.mono,
+            lineHeight: 1.5,
+          }}>
+            Один рецепт для всех панелей рельсы: План / Агенты / Персона / Файлы /
+            Изменения / Задачи / Команда / Терминал / Preview. Меняется только
+            Icon в шапке и дочерний контент.
+          </p>
+        </SubBlock>
+
+        {/* Шпаргалка: чем отличаются два уровня композиции. */}
+        <SubBlock label="Различие — карточка vs панель">
+          <div style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: SP.xs,
+            fontSize: FS.sm,
+            color: C.textSecondary,
+            lineHeight: 1.55,
+          }}>
+            <div>
+              <strong style={{ color: C.textHeading }}>ChatCard</strong> — компактная
+              карточка-строка в боковом списке: статус точкой, название, превью
+              последнего сообщения, действия по hover. Padding ~11px, ширина = колонка.
+            </div>
+            <div>
+              <strong style={{ color: C.textHeading }}>Каркас панели</strong> — крупный
+              остров-контейнер в правой рельсе: шапка с тулбаром, зона контента во
+              всю высоту, DnD/ресайз. Padding ~ISLAND.pad, занимает всю высоту колонки.
+            </div>
+            <div>
+            Оба собираются из одних примитивов (Island, IconButton, токены C), но
+            на разных уровнях: ChatCard — атом списка, панель — молекула рельсы.
+            </div>
           </div>
         </SubBlock>
       </div>

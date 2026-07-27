@@ -1,6 +1,7 @@
 ﻿using System.Reflection;
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Llm;
 using FluentAssertions;
@@ -24,6 +25,8 @@ public class SessionManagerTests : IDisposable
     private readonly AppSettingsService _appSettings;
     private readonly ClaudeHomeServer.Services.Llm.LocalActionOverridesStore _actionOverrides;
     private readonly SessionManager _sut;
+    private readonly Mock<IClientProxy> _clientProxy;
+    private readonly List<ServerMessage> _sentMessages = new();
 
     public SessionManagerTests()
     {
@@ -48,11 +51,20 @@ public class SessionManagerTests : IDisposable
         _historyService = new ChatHistoryService(config);
 
         var clients = new Mock<IHubClients>();
-        var clientProxy = new Mock<IClientProxy>();
-        clientProxy
+        _clientProxy = new Mock<IClientProxy>();
+        _clientProxy
             .Setup(c => c.SendCoreAsync(It.IsAny<string>(), It.IsAny<object[]>(), It.IsAny<CancellationToken>()))
+            .Callback<string, object[], CancellationToken>((method, args, _) =>
+            {
+                if (args.Length > 0 && args[0] is ServerMessage msg)
+                    _sentMessages.Add(msg);
+            })
             .Returns(Task.CompletedTask);
-        clients.Setup(c => c.Group(It.IsAny<string>())).Returns(clientProxy.Object);
+        // Захватываем только session-группу; project_/user_-группы дублировали бы сообщения
+        clients.Setup(c => c.Group(It.Is<string>(g => !g.StartsWith("project_") && !g.StartsWith("user_"))))
+            .Returns(_clientProxy.Object);
+        clients.Setup(c => c.Group(It.Is<string>(g => g.StartsWith("project_") || g.StartsWith("user_"))))
+            .Returns(new Mock<IClientProxy>().Object);
 
         var hub = new Mock<IHubContext<SessionHub>>();
         hub.Setup(h => h.Clients).Returns(clients.Object);
@@ -1405,5 +1417,85 @@ public class SessionManagerTests : IDisposable
         var history = await _sut.GetHistoryAsync(session.Id);
         // Новая сессия → accumulator пустой → возвращает пустой список
         history.Should().BeEmpty();
+    }
+
+    // --- FreezePending и CurrentTurnSnapshot (фикс бага композера) ---
+
+    [Fact]
+    public async Task FreezePending_AfterDelivery_ГаситCurrentTurnSnapshot()
+    {
+        // Симулируем прерванный пользовательский ход: задаём CurrentTurnSnapshot напрямую
+        var session = await MkBusySessionAsync("freeze", SessionStatus.Working);
+        var entry = GetEntry(session.Id);
+
+        SetCurrentTurnSnapshot(entry, "текст прерванного хода", ["file.txt"], "plan");
+
+        _sut.Interrupt(session.Id);
+        var restores = await WaitForComposerRestoresAsync(1);
+
+        restores.Should().ContainSingle()
+            .Which.Text.Should().Be("текст прерванного хода");
+
+        // Повторный Interrupt не должен resurrect старый текст
+        _sut.Interrupt(session.Id);
+        restores = await WaitForComposerRestoresAsync(2);
+
+        restores.Last().Text.Should().BeNull("snapshot должен быть погашен после доставки restore");
+    }
+
+    [Fact]
+    public async Task FreezePending_ПовторныйВызовПриПогашенномSnapshot_НеResurrectТекст()
+    {
+        var session = await MkBusySessionAsync("freeze2", SessionStatus.Working);
+        var entry = GetEntry(session.Id);
+
+        SetCurrentTurnSnapshot(entry, "старый текст", ["old.txt"], "auto");
+
+        _sut.Interrupt(session.Id);
+        var restores = await WaitForComposerRestoresAsync(1);
+        restores.Should().ContainSingle().Which.Text.Should().Be("старый текст");
+
+        _sut.Interrupt(session.Id);
+        restores = await WaitForComposerRestoresAsync(2);
+
+        restores.Last().Text.Should().BeNull("повторный FreezePending не должен resurrect текст");
+    }
+
+    [Fact]
+    public async Task FreezePending_БезSnapshot_ВозвращаетRestoreСNullТекстом()
+    {
+        var session = await MkBusySessionAsync("freeze3", SessionStatus.Working);
+
+        _sut.Interrupt(session.Id);
+        var restores = await WaitForComposerRestoresAsync(1);
+
+        restores.Should().ContainSingle()
+            .Which.Text.Should().BeNull("прерван авто/агентский ход — восстанавливать нечего");
+    }
+
+    private static void SetCurrentTurnSnapshot(object entry, string text, IReadOnlyList<string> attachedPaths, string? mode)
+    {
+        var field = entry.GetType().GetField("CurrentTurnSnapshot", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!;
+        var snapshotType = Nullable.GetUnderlyingType(field.FieldType) ?? field.FieldType;
+        var snapshot = Activator.CreateInstance(snapshotType, text, attachedPaths, mode);
+        field.SetValue(entry, snapshot);
+    }
+
+    private async Task<IReadOnlyList<ComposerRestoreMessage>> WaitForComposerRestoresAsync(int count, TimeSpan? timeout = null)
+    {
+        var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(5));
+        while (DateTime.UtcNow < deadline)
+        {
+            var current = _sentMessages.OfType<ComposerRestoreMessage>().ToList();
+            if (current.Count >= count)
+            {
+                await Task.Delay(50);
+                var after = _sentMessages.OfType<ComposerRestoreMessage>().ToList();
+                if (after.Count == current.Count)
+                    return after;
+            }
+            await Task.Delay(50);
+        }
+        return _sentMessages.OfType<ComposerRestoreMessage>().ToList();
     }
 }

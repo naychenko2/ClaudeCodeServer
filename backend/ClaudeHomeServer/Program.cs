@@ -9,6 +9,7 @@ using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Mcp;
 using ClaudeHomeServer.Services.TriggerSources;
 using ClaudeHomeServer.Services.Modules;
+using ClaudeHomeServer.Telemetry;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authentication.Negotiate;
 using Microsoft.AspNetCore.HttpOverrides;
@@ -90,6 +91,10 @@ builder.Services.AddSignalR(o =>
     .AddJsonProtocol(o =>
         o.PayloadSerializerOptions.Converters.Add(
             new JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase)));
+
+// Observability: OTel SDK (traces + metrics) с two-mode конфигурацией.
+// Конфиг через секцию Telemetry в appsettings*.json. См. docs/observability.md.
+builder.Services.AddObservability(builder.Configuration);
 
 builder.Services.AddSingleton<UserStore>();
 // Драйверы среды исполнения процессов пользователей (local / docker-песочница)

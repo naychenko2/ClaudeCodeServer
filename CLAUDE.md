@@ -261,6 +261,29 @@ Use cases (с резолюциями) и архитектура интеграц
 Клиент вызывает: `JoinSession`, `LeaveSession`, `SendMessage`, `RespondPermission`, `Interrupt`
 Сервер шлёт событие `message` с объектом `ServerMessage` (поле `type`).
 
+## Observability (OpenTelemetry)
+
+Двухрежимная observability через OTel SDK: **dev** → Aspire Dashboard (in-memory, для
+живого дебага), **production** → SigNoz (ClickHouse, persistent 30d traces / 90d metrics).
+Алерты (email/Telegram) — отдельный будущий epic, пока выключены.
+
+- **Central doc**: [docs/observability.md](docs/observability.md) — scope, архитектура,
+  дублирование с существующими сторами, privacy (PII sanitizer), cardinality guardrails,
+  sampling strategy, future epics.
+- **Audit**: [docs/observability-audit.md](docs/observability-audit.md) — карта
+  существующих observability-поверхностей (SpendStore JSONL, ModuleLlmUsageStore,
+  McpCallLog in-memory, ProjectEventLogService SQLite). **SpendStore = source of truth
+  для billing (токены/стоимость), OTel метрики НЕ дублируют его.**
+- **SigNoz setup**: [docs/observability-signoz-setup.md](docs/observability-signoz-setup.md) —
+  развёртывание vendored SigNoz v0.71.0 (`docker/observability/`), retention, backup,
+  troubleshooting.
+
+Включение per-instance через `appsettings.Local.json` секция `Telemetry`. Все порты
+(SigNoz UI :3301, OTLP :4317/4318) bind'ятся к `127.0.0.1` через overlay
+`docker-compose.observability.yml`. PII-санитайзер (`PiiSanitizingProcessor`) сидит первым
+в pipeline — оба backend'а получают очищенные данные. **Перед правками в `Telemetry/`
+или новыми метриками — прочитай [docs/observability.md](docs/observability.md).**
+
 ## Реализовано
 
 Ядро: auth по API-ключу, проекты, сессии, чат (вложения/голос/режимы ⚡📋❓), файловый

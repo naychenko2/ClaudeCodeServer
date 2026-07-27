@@ -521,6 +521,9 @@ public class SessionManager : IDisposable
     public int CountByProject(string projectId) =>
         _sessions.Values.Count(e => e.Info.ProjectId == projectId);
 
+    /// <summary>Всего зарегистрированных сессий (для OTel gauge). ConcurrentDictionary.Count — thread-safe, sub-ms.</summary>
+    public int ActiveCount => _sessions.Count;
+
     // Чаты вне проекта, принадлежащие пользователю (для вкладки «Чаты»)
     public IReadOnlyCollection<Session> GetProjectlessChats(string ownerId) =>
         _sessions.Values

@@ -18,6 +18,9 @@ public class ConnectionDiagnostics
     private readonly ConcurrentDictionary<string, DateTime> _connectedAt = new();
     private int _active;
 
+    /// <summary>Текущее количество активных SignalR-соединений (для OTel gauge).</summary>
+    public int ActiveCount => Interlocked.CompareExchange(ref _active, 0, 0);
+
     public ConnectionDiagnostics(IConfiguration config)
     {
         var dataDir = Path.GetDirectoryName(

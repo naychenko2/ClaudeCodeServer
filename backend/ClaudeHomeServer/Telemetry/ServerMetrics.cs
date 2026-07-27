@@ -38,6 +38,9 @@ public static class ServerMetrics
 
     private static readonly Meter _meter = new(MeterName, MeterVersion);
 
+    /// <summary>Доступ к Meter для регистрации ObservableGauges (T9).</summary>
+    public static Meter MeterInstance => _meter;
+
     // ── Histograms ──────────────────────────────────────────────────────────
 
     public static readonly Histogram<double> LlmDuration = _meter.CreateHistogram<double>(

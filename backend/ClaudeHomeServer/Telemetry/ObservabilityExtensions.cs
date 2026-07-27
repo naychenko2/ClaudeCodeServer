@@ -107,6 +107,10 @@ public static class ObservabilityExtensions
         // для отладки pipeline: если счётчик остановился, проблема в телеметрии.
         services.AddHostedService<TelemetryHeartbeatService>();
 
+        // T9: Gauges registrar — отложенная регистрация ObservableGauges после построения
+        // DI-контейнера (когда SessionManager/ConnectionDiagnostics доступны).
+        services.AddHostedService<GaugesRegistrarService>();
+
         return services;
     }
 

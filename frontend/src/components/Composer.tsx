@@ -286,9 +286,22 @@ export function Composer({
   // Возврат прерванного сообщения по «Стоп» (фича «честная очередь», событие composer_restore).
   // Только в ПУСТОЕ поле: набранный черновик пользователя важнее серверного restore.
   // text=null — прерван авто/агентский ход, восстанавливать нечего: композер не трогаем.
+  // appliedSeqRef — вторая линия защиты от resurrect-текста: один и тот же seq не применяем
+  // дважды (сервер гасит snapshot, но при гонке событие может дойти повторно).
+  const appliedSeqRef = useRef(0);
+  // Composer переиспользуется без размонтирования между сессиями, а seq в composer_restore —
+  // per-session счётчик (стартует с 1 в каждом чате). При смене sessionId счётчик надо сбросить,
+  // иначе первый «Стоп» в новом чате совпадёт по seq с последним применённым в старом и тихо
+  // отфильтруется как «уже применённый».
+  const restoreSessionRef = useRef(sessionId);
   useEffect(() => {
+    if (restoreSessionRef.current !== sessionId) {
+      restoreSessionRef.current = sessionId;
+      appliedSeqRef.current = 0;
+    }
     const r = restore;
     if (!r || r.seq === 0) return;
+    if (r.seq === appliedSeqRef.current) return;
     if (lastTextRef.current.trim()) return;          // черновик важнее
     if (r.text == null) return;                      // нечего восстанавливать
     setText(r.text);
@@ -302,8 +315,9 @@ export function Composer({
       if (m && !isDangerMode(m)) onModeChange(m);
     }
     textareaRef.current?.focus();
+    appliedSeqRef.current = r.seq;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [restore?.seq]);
+  }, [restore?.seq, sessionId]);
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   // Опасный режим (bypass) ждёт подтверждения в модалке перед применением
@@ -462,6 +476,7 @@ export function Composer({
 
   const resetInput = () => {
     setText('');
+    setDraft(sessionId, '');
     if (textareaRef.current) {
       textareaRef.current.style.height = '34px';
     }

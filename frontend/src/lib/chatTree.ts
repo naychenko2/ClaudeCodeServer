@@ -1,11 +1,13 @@
 // Иерархия списка чатов: сборка леса по Session.parentSessionId и
-// персистентность режима вида («Плоский/Иерархия») и свёрнутых веток.
+// персистентность режима вида («Плоский/Иерархия/Теги») и свёрнутых веток.
 // Раздельно по областям, как chatFilters: 'global' и каждый projectId.
 // Спецификация — docs/mockups/chat-list-tree-spec.md.
 import { useEffect, useRef, useState } from 'react';
 import type { Session } from '../types';
 
-export type ChatViewMode = 'flat' | 'tree';
+// Режим вида списка чатов. 'tags' — группировка по общим тегам проекта (groupByTags);
+// доступен только там, где есть реестр тегов (проектный список), глобальный держит два.
+export type ChatViewMode = 'flat' | 'tree' | 'tags';
 
 const VIEW_KEY_PREFIX = 'cc_chat_view:';
 const COLLAPSE_KEY_PREFIX = 'cc_chat_tree_collapsed:';
@@ -31,7 +33,8 @@ export function useChatView(scopeKey: string) {
 
 function loadView(scopeKey: string): ChatViewMode {
   try {
-    return localStorage.getItem(VIEW_KEY_PREFIX + scopeKey) === 'tree' ? 'tree' : 'flat';
+    const v = localStorage.getItem(VIEW_KEY_PREFIX + scopeKey);
+    return v === 'tree' || v === 'tags' ? v : 'flat';
   } catch {
     return 'flat';
   }

@@ -1,10 +1,11 @@
-import { AlertCircle, CheckCircle2, Clock, Pin, SquarePen, Trash2, Wrench } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Clock, Pin, SquarePen, Tags, Trash2, Wrench } from 'lucide-react';
 import type { Session } from '../types';
 import { C, R, SHADOW, FONT } from '../lib/design';
 import { IconButton } from './ui';
 import { StatusIndicator } from './StatusIndicator';
 import { ExpiryBadge } from './ExpiryBadge';
 import { ChatOriginBadge } from './ChatOriginBadge';
+import { TagChip } from './TagChip';
 import { describeTaskChat, resolveChatOrigin, type TaskChatInfo, type TaskChatStatusKind } from '../lib/chatOrigin';
 import { getPersonaById, personaLabel } from '../lib/personas';
 import { agentDotColor } from './AgentSelector';
@@ -86,6 +87,12 @@ interface Props {
   onDelete: () => void;
   // Не задан — чат без закрепления (списки проекта)
   onTogglePin?: () => void;
+  // Общие теги чата (имя + цвет из реестра) — строка чипов под названием
+  tags?: { name: string; color?: string }[];
+  // Снять тег с чата (hover-крестик на чипе; на тач удаление — через меню маркировки)
+  onRemoveTag?: (name: string) => void;
+  // Открыть меню маркировки тегами (кнопка в действиях; якорь — rect кнопки для fixed-позиции)
+  onAssignTags?: (anchor: DOMRect) => void;
 }
 
 /**
@@ -96,7 +103,7 @@ interface Props {
  */
 export function ChatCard({
   session: s, isActive, isMobile, fallbackName, online, hovered, workflowRunning,
-  onSelect, onHover, onEdit, onDelete, onTogglePin,
+  onSelect, onHover, onEdit, onDelete, onTogglePin, tags, onRemoveTag, onAssignTags,
 }: Props) {
   // Чат от лица персоны: мини-аватар в строке названия и акцент её цвета
   const persona = s.personaId ? getPersonaById(s.personaId) : undefined;
@@ -208,6 +215,17 @@ export function ChatCard({
           )}
         </div>
 
+        {/* Строка общих тегов (макет chat-tags-switch): чипы под названием. Крестик
+            снятия — только там, где есть hover; на тач снятие идёт через меню маркировки */}
+        {tags && tags.length > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap', minWidth: 0 }}>
+            {tags.map(t => (
+              <TagChip key={t.name} name={t.name} color={t.color}
+                onRemove={onRemoveTag && CAN_HOVER ? () => onRemoveTag(t.name) : undefined} />
+            ))}
+          </div>
+        )}
+
         {/* Чат-задача: одна строка статуса выполнения вместо превью-промпта и
             плашки-дубля. Обычный чат — превью + плашка происхождения как раньше */}
         {taskChat ? (
@@ -249,6 +267,16 @@ export function ChatCard({
               size="xs" active={s.isPinned}
             >
               <Pin size={14} strokeWidth={2} fill={s.isPinned ? 'currentColor' : 'none'} />
+            </IconButton>
+          )}
+          {onAssignTags && (
+            <IconButton
+              onClick={e => { e.stopPropagation(); onAssignTags(e.currentTarget.getBoundingClientRect()); }}
+              title="Метки (общие теги)"
+              size="xs"
+              active={(s.tags?.length ?? 0) > 0}
+            >
+              <Tags size={14} strokeWidth={2} />
             </IconButton>
           )}
           <IconButton onClick={e => { e.stopPropagation(); onEdit(); }} title="Настройки чата" size="xs">

@@ -1,4 +1,4 @@
-import type { Project, ProjectGroup, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, BackupStatus, BackupSummary, CodeGraph } from '../types';
+import type { Project, ProjectGroup, ProjectTag, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, BackupStatus, BackupSummary, CodeGraph } from '../types';
 import { request } from './offline';
 
 // Личные/админские слоты моделей: сильная/средняя/слабая.
@@ -224,6 +224,12 @@ export const api = {
       request<Project>('/projects', { method: 'POST', body: JSON.stringify({ name, rootPath, createDirectory, groupId, ...git, color }) }),
     update: (id: string, data: { name?: string; rootPath?: string; systemPrompt?: string; showHiddenFiles?: boolean; toolsEnabled?: boolean; permissionRules?: PermissionRule[]; groupId?: string | null; color?: string | null }) =>
       request<Project>(`/projects/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    // Реестр общих тегов проекта: перезапись целиком (бэк нормализует order по позиции
+    // массива и валидирует уникальность имён без учёта регистра)
+    updateTags: (id: string, registry: ProjectTag[]) =>
+      request<Project>(`/projects/${encodeURIComponent(id)}/tags`, {
+        method: 'PUT', body: JSON.stringify(registry),
+      }),
     delete: (id: string) => request<void>(`/projects/${id}`, { method: 'DELETE' }),
 
     // --- Иконка проекта (по образцу аватара персоны) ---
@@ -821,7 +827,7 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ mode, resumeSessionId, name, model, agentName, effort }),
       }),
-    update: (projectId: string, sessionId: string, data: { name?: string | null; model?: string | null; effort?: string | null; expiresAfterMinutes?: number | null }) =>
+    update: (projectId: string, sessionId: string, data: { name?: string | null; model?: string | null; effort?: string | null; expiresAfterMinutes?: number | null; tags?: string[] }) =>
       request<Session>(`/projects/${projectId}/sessions/${sessionId}`, {
         method: 'PUT',
         body: JSON.stringify(data),

@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef, useMemo, type ReactNode } from 'react';
-import { Filter, List, ListTree, Search, X, Pin, Clock, Users } from 'lucide-react';
+import { Filter, List, ListTree, Search, Tags, X, Pin, Clock, Users } from 'lucide-react';
 import type { Persona, Session } from '../types';
-import { C, R, FONT, FS, SHADOW, TB, Z, SP } from '../lib/design';
+import { C, R, FONT, FS, SHADOW, Z, SP } from '../lib/design';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
-import { Modal } from './ui';
+import { Modal, PillSwitch } from './ui';
 import { personaLabel } from '../lib/personas';
 import { PersonaAvatar } from '../features/personas/PersonaAvatar';
 import {
@@ -56,54 +56,19 @@ interface FilterBarProps {
   // Режим вида списка «Плоский/Иерархия» — тумблер справа (не задан — без тумблера)
   view?: ChatViewMode;
   onChangeView?: (v: ChatViewMode) => void;
+  // Доступные режимы тумблера (дефолт — Плоский/Иерархия). «Теги» добавляет проектный
+  // список: у чатов вне проекта реестра тегов нет, третий режим им бессмыслен
+  views?: ChatViewMode[];
 }
 
-// === Тумблер вида «Плоский / Иерархия» ===
-// Нейтральный TB.pill*-сегмент (не accent: accent занят фильтрами, а режим — не фильтр).
-// На мобиле — только иконки, подпись уходит в title/aria-label.
+// === Тумблер вида «Плоский / Иерархия (/ Теги)» ===
+// Единый ui/PillSwitch (макет chat-tags-switch выбрал его): нейтральный TB.pill*-трек,
+// на мобиле — compact (активный сегмент текстом, остальные иконками).
 const VIEW_OPTIONS: { value: ChatViewMode; label: string; Icon: typeof List }[] = [
   { value: 'flat', label: 'Плоский', Icon: List },
   { value: 'tree', label: 'Иерархия', Icon: ListTree },
+  { value: 'tags', label: 'Теги', Icon: Tags },
 ];
-
-function ViewToggle({ view, onChange, isMobile }: {
-  view: ChatViewMode;
-  onChange: (v: ChatViewMode) => void;
-  isMobile?: boolean;
-}) {
-  return (
-    <div style={{
-      display: 'flex', flexShrink: 0, padding: SP.xxs, gap: SP.xxs,
-      background: TB.pillTrack, borderRadius: TB.pillRadius,
-    }}>
-      {VIEW_OPTIONS.map(o => {
-        const active = view === o.value;
-        return (
-          <button
-            key={o.value}
-            onClick={() => onChange(o.value)}
-            title={o.label}
-            aria-label={o.label}
-            style={{
-              display: 'inline-flex', alignItems: 'center', gap: SP.xs,
-              padding: '4px 10px',
-              fontSize: FS.sm, fontWeight: 600, fontFamily: FONT.sans,
-              border: 'none', cursor: 'pointer',
-              borderRadius: TB.pillRadius - 2,
-              background: active ? TB.pillThumbBg : 'transparent',
-              boxShadow: active ? TB.pillThumbShadow : 'none',
-              color: active ? C.textHeading : C.textMuted,
-              transition: 'background 0.12s, color 0.12s',
-            }}
-          >
-            <o.Icon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
-            {!isMobile && <span>{o.label}</span>}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
 
 // === Чип мультивыбора ===
 function Chip({ active, children, onClick, large }: {
@@ -387,7 +352,7 @@ export function ChatFilterResetActions({ search, hasNonSearchFilters, onResetSea
 
 export function FilterBar({
   sessions, filters, patch, allPersonas, hiddenCount, isMobile,
-  view, onChangeView,
+  view, onChangeView, views,
 }: FilterBarProps) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -474,7 +439,18 @@ export function FilterBar({
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: SP.sm }}>
         {trigger}
         {view !== undefined && onChangeView && (
-          <ViewToggle view={view} onChange={onChangeView} isMobile={isMobile} />
+          <PillSwitch
+            value={view}
+            options={VIEW_OPTIONS
+              .filter(o => (views ?? ['flat', 'tree']).includes(o.value))
+              .map(o => ({
+                value: o.value,
+                label: o.label,
+                icon: <o.Icon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
+              }))}
+            onChange={onChangeView}
+            compact={isMobile}
+          />
         )}
       </div>
 

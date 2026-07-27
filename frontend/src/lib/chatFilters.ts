@@ -21,6 +21,9 @@ export interface ChatFilters {
   personaId: string | null;
   only: ChatOnlyFilter[];
   search: string;
+  // Выбранные общие теги: чат виден, если у него есть ХОТЯ БЫ ОДИН из них (OR-пересечение).
+  // Пусто/отсутствует — без фильтра по тегам (дефолт)
+  tags?: string[];
 }
 
 const KEY_PREFIX = 'cc_chat_filters:';
@@ -68,6 +71,7 @@ function normalize(p: Partial<ChatFilters>): ChatFilters {
     personaId: typeof p.personaId === 'string' ? p.personaId : null,
     only: Array.isArray(p.only) ? p.only.filter(o => o === 'pinned' || o === 'temp' || o === 'group') : [],
     search: typeof p.search === 'string' ? p.search : '',
+    tags: Array.isArray(p.tags) ? p.tags.filter((t): t is string => typeof t === 'string' && t.length > 0) : [],
   };
 }
 
@@ -163,6 +167,8 @@ export function matchChatFilter(filters: ChatFilters): (s: Session) => boolean {
       if (!ok) return false;
     }
     if (q && !(s.name ?? '').toLowerCase().includes(q)) return false;
+    // Теги: выбран непустой набор — чат обязан иметь хотя бы один из него (пересечение)
+    if (filters.tags?.length && !(s.tags ?? []).some(t => filters.tags!.includes(t))) return false;
     return true;
   };
 }
@@ -173,7 +179,8 @@ export function isDefaultFilters(f: ChatFilters): boolean {
     && f.statuses.length === DEFAULT_STATUSES.length && DEFAULT_STATUSES.every(s => f.statuses.includes(s))
     && !f.personaId
     && f.only.length === 0
-    && f.search.trim() === '';
+    && f.search.trim() === ''
+    && (f.tags?.length ?? 0) === 0;
 }
 
 export function defaultChatFilters(): ChatFilters {

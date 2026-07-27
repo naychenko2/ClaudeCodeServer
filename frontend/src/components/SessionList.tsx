@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState, useRef } from 'react';
-import { Plus, FilterX } from 'lucide-react';
-import type { Project, Session } from '../types';
+import { Plus, FilterX, ChevronUp, ChevronDown } from 'lucide-react';
+import type { Project, ProjectTag, Session } from '../types';
 import { api } from '../lib/api';
 import { onMessage, onReconnected } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
 import { EditSessionDialog } from './EditSessionDialog';
-import { C, FS, MODAL_W } from '../lib/design';
+import { C, FS, GROUP_COLORS, MODAL_W, R } from '../lib/design';
 import { Modal, ModalActions, Button } from './ui';
 import { usePersonas, usePersonasVersion } from '../lib/personas';
 import { FilterBar, ChatFilterResetActions } from './FilterBar';
@@ -17,7 +17,9 @@ import { ChatCard } from './ChatCard';
 import { ChatTreeRow } from './ChatTreeRow';
 import { ChatGroupingDnd } from './ChatGroupingDnd';
 import { ListDateDivider } from './ListDateDivider';
-import { groupChats } from '../lib/chatGroups';
+import { groupChats, groupByTags, chatTagsSorted, type TagChatGroup } from '../lib/chatGroups';
+import { tagColor } from '../lib/tagRegistry';
+import { TagAssignMenu } from './TagChip';
 
 interface Props {
   project: Project;
@@ -30,9 +32,21 @@ interface Props {
   onCleared?: () => void;
   isMobile?: boolean;
   workflowRunningFor?: string;
+  // Реестр общих тегов изменён (reorder ▲▼, создание тега из меню маркировки) —
+  // владельцу (WorkspacePage) обновить project.tagRegistry. Не задан — SessionList
+  // держит реестр сам (optimistic state поверх props)
+  onTagsReorder?: (registry: ProjectTag[]) => void;
 }
 
-export function SessionList({ project, activeSession, onSelect, onSessionUpdated, onSessionsChanged, onCleared, isMobile = false, workflowRunningFor }: Props) {
+// Кнопка порядка ▲▼ у заголовка секции тегов
+const orderBtnStyle = (disabled: boolean): React.CSSProperties => ({
+  display: 'flex', alignItems: 'center', justifyContent: 'center',
+  width: 20, height: 20, padding: 0,
+  border: 'none', borderRadius: R.sm, cursor: disabled ? 'default' : 'pointer',
+  background: 'transparent', color: disabled ? C.border : C.textMuted,
+});
+
+export function SessionList({ project, activeSession, onSelect, onSessionUpdated, onSessionsChanged, onCleared, isMobile = false, workflowRunningFor, onTagsReorder }: Props) {
   const online = useOnline();
   // Подписка на стор персон — перерисоваться, когда список подгрузится (аватары сессий персон)
   usePersonasVersion();
@@ -52,6 +66,68 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   onSelectRef.current = onSelect;
   const onClearedRef = useRef(onCleared);
   onClearedRef.current = onCleared;
+
+  // === Реестр общих тегов проекта ===
+  // Optimistic state поверх project.tagRegistry: reorder/создание видны сразу, ответ
+  // PUT (с нормализованным order) заменяет state; владелец может подхватить через
+  // onTagsReorder и обновить project — тогда sync-эффект применит ту же правку.
+  const [registry, setRegistry] = useState<ProjectTag[]>(() => project.tagRegistry ?? []);
+  useEffect(() => { setRegistry(project.tagRegistry ?? []); }, [project.id, project.tagRegistry]);
+  // Открытое меню маркировки: чат + якорь кнопки (fixed-позиция, скролл списка закрывает)
+  const [tagMenu, setTagMenu] = useState<{ sessionId: string; anchor: DOMRect } | null>(null);
+
+  const persistRegistry = (next: ProjectTag[]) => {
+    const prev = registry;
+    setRegistry(next);
+    api.projects.updateTags(project.id, next)
+      .then(p => {
+        const fresh = p.tagRegistry ?? next;
+        setRegistry(fresh);
+        onTagsReorder?.(fresh);
+      })
+      .catch(() => setRegistry(prev));
+  };
+
+  // Перестановка тега в реестре кнопками ▲▼ у заголовка секции (бэк нормализует order
+  // по позиции массива — достаточно переставить элементы)
+  // TODO: HTML5 drag-and-drop секций (по макету — drag-handle слева от заголовка)
+  const moveTag = (tag: ProjectTag, dir: -1 | 1) => {
+    const i = registry.findIndex(t => t.name.toLowerCase() === tag.name.toLowerCase());
+    const j = i + dir;
+    if (i < 0 || j < 0 || j >= registry.length) return;
+    const next = [...registry];
+    [next[i], next[j]] = [next[j], next[i]];
+    persistRegistry(next.map((t, idx) => ({ ...t, order: idx })));
+  };
+
+  // Записать теги чата: optimistic в список (и активную сессию владельца), PUT, откат при сбое
+  const setSessionTags = (s: Session, tags: string[]) => {
+    const prevTags = s.tags ?? [];
+    const optimistic = { ...s, tags };
+    setSessions(prev => prev.map(x => (x.id === s.id ? optimistic : x)));
+    if (activeSession?.id === s.id) onSessionUpdated?.(optimistic);
+    api.sessions.update(project.id, s.id, { tags })
+      .then(updated => handleSessionUpdated(updated))
+      .catch(() => {
+        setSessions(prev => prev.map(x => (x.id === s.id ? { ...x, tags: prevTags } : x)));
+      });
+  };
+
+  const toggleTag = (s: Session, name: string) => {
+    const tags = s.tags ?? [];
+    const has = tags.some(t => t.toLowerCase() === name.toLowerCase());
+    setSessionTags(s, has ? tags.filter(t => t.toLowerCase() !== name.toLowerCase()) : [...tags, name]);
+  };
+
+  // Новый тег из меню маркировки: в реестр (цвет — следующий из палитры по кругу)
+  // и сразу на чат. Пустой реестр — нормальный старт, первый тег создаётся здесь.
+  const createTag = (s: Session, name: string) => {
+    const color = GROUP_COLORS[registry.length % GROUP_COLORS.length];
+    persistRegistry([...registry, { name, order: registry.length, color }]);
+    if (!(s.tags ?? []).some(t => t.toLowerCase() === name.toLowerCase())) {
+      setSessionTags(s, [...(s.tags ?? []), name]);
+    }
+  };
 
   useEffect(() => { onSessionsChanged?.(sessions.length); }, [sessions.length, onSessionsChanged]);
 
@@ -231,8 +307,10 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   // Номер в подписи безымянного чата берём из исходного порядка списка:
   // группировка тасует карточки по дням, и позиция в группе давала бы скачущие номера
   const numberById = new Map(sessions.map((s, i) => [s.id, i + 1]));
-  // В режиме «Иерархия» группировка по датам не используется
-  const groups = tree ? [] : groupChats(filteredSessions);
+  // В режимах «Иерархия» и «Теги» группировка по датам не используется
+  const groups = tree || view === 'tags' ? [] : groupChats(filteredSessions);
+  // Режим «Теги»: секции по реестру (+ сироты, + хвост «Без тегов»)
+  const tagGroups = !tree && view === 'tags' ? groupByTags(filteredSessions, registry) : null;
 
   const renderCard = (s: Session) => (
     <ChatCard
@@ -248,8 +326,62 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
       onHover={h => setHoveredId(h ? s.id : null)}
       onEdit={() => setEditTarget(s)}
       onDelete={() => setDeleteTarget(s)}
+      tags={chatTagsSorted(s, registry).map(name => ({ name, color: tagColor(registry, name) }))}
+      onRemoveTag={online ? name => toggleTag(s, name) : undefined}
+      onAssignTags={online ? anchor => setTagMenu(prev => prev?.sessionId === s.id ? null : { sessionId: s.id, anchor }) : undefined}
     />
   );
+
+  // Заголовок секции режима «Теги»: цветовая точка, имя, счётчик чатов, кнопки
+  // порядка ▲▼ (только у реестровых тегов; сироты и «Без тегов» неупорядочены)
+  const renderTagSectionHeader = (g: TagChatGroup) => {
+    const rt = g.registryTag;
+    const idx = rt ? registry.findIndex(t => t.name.toLowerCase() === rt.name.toLowerCase()) : -1;
+    const dot = tagColor(registry, g.title);
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '10px 4px 7px' }}>
+        <span style={{
+          width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
+          background: g.tag ? (dot ?? C.accent) : C.textMuted,
+        }} />
+        <span style={{
+          fontSize: 11, fontWeight: 700, color: C.textSecondary,
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }}>
+          {g.title}
+        </span>
+        <span style={{
+          fontSize: 10, fontFamily: 'inherit', color: C.textMuted,
+          background: C.bgSelected, padding: '1px 6px', borderRadius: R.sm, flexShrink: 0,
+        }}>
+          {g.items.length}
+        </span>
+        <span style={{ flex: 1 }} />
+        {rt && online && (
+          <span style={{ display: 'flex', gap: 2, flexShrink: 0 }}>
+            <button
+              onClick={() => moveTag(rt, -1)}
+              disabled={idx <= 0}
+              title="Переместить тег выше"
+              aria-label={`Тег «${rt.name}» выше`}
+              style={orderBtnStyle(idx <= 0)}
+            >
+              <ChevronUp size={13} strokeWidth={2.2} />
+            </button>
+            <button
+              onClick={() => moveTag(rt, 1)}
+              disabled={idx < 0 || idx >= registry.length - 1}
+              title="Переместить тег ниже"
+              aria-label={`Тег «${rt.name}» ниже`}
+              style={orderBtnStyle(idx < 0 || idx >= registry.length - 1)}
+            >
+              <ChevronDown size={13} strokeWidth={2.2} />
+            </button>
+          </span>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -277,6 +409,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         isMobile={isMobile}
         view={view}
         onChangeView={setView}
+        views={['flat', 'tree', 'tags']}
       />
 
       <div style={{ flex: 1, overflowY: 'auto', padding: '8px 8px' }}>
@@ -310,6 +443,13 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
               </ChatTreeRow>
             ))}
           </ChatGroupingDnd>
+        ) : tagGroups ? (
+          tagGroups.map(g => (
+            <div key={g.tag ?? '__untagged__'} style={{ marginBottom: 6 }}>
+              {renderTagSectionHeader(g)}
+              {g.items.map(renderCard)}
+            </div>
+          ))
         ) : groups.map(g => (
           <div key={g.title} style={{ marginBottom: 6 }}>
             <ListDateDivider title={g.title} />
@@ -317,6 +457,22 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
           </div>
         ))}
       </div>
+
+      {/* Меню маркировки чата общими тегами (fixed по якорю кнопки на карточке) */}
+      {tagMenu && (() => {
+        const target = sessions.find(x => x.id === tagMenu.sessionId);
+        if (!target) return null;
+        return (
+          <TagAssignMenu
+            anchor={tagMenu.anchor}
+            registry={registry}
+            selected={target.tags ?? []}
+            onToggle={name => toggleTag(target, name)}
+            onCreate={name => createTag(target, name)}
+            onClose={() => setTagMenu(null)}
+          />
+        );
+      })()}
 
       {editTarget && (
         <EditSessionDialog

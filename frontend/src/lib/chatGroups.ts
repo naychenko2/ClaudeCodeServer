@@ -1,8 +1,16 @@
-import type { Session } from '../types';
+import type { ProjectTag, Session } from '../types';
+import { sortTagsByRegistry } from './tagRegistry';
 
 export interface ChatGroup {
   title: string;
   items: Session[];
+}
+
+// Секция режима «Теги»: tag — имя тега из реестра/сирота, null — хвост «Без тегов».
+// registryTag — запись реестра (для цвета точки и кнопок порядка ▲▼); у сирот и хвоста её нет.
+export interface TagChatGroup extends ChatGroup {
+  tag: string | null;
+  registryTag?: ProjectTag;
 }
 
 const weekday = (d: Date) => d.toLocaleDateString('ru-RU', { weekday: 'short' });
@@ -66,4 +74,52 @@ export function groupChats(chats: Session[]): ChatGroup[] {
     groups.push({ title: dayGroupTitle(new Date(today - day)), items: yesterdayItems });
   for (const [d, items] of earlierDays) groups.push({ title: dayGroupTitle(new Date(d)), items });
   return groups;
+}
+
+// Группировка чатов для режима «Теги»: секция на каждый тег реестра (в его порядке),
+// затем секции тегов-сирот (тег есть у чата, записи в реестре нет — по алфавиту),
+// в конце — хвост «Без тегов». Чат с НЕСКОЛЬКИМИ тегами дублируется в каждой своей
+// секции — иначе из-под остальных его тегов он был бы не найти. Пустые секции
+// (тег реестра без единого чата) не рисуются.
+// Внутри секции — по свежести (updatedAt), как и в дневных группах.
+export function groupByTags(chats: Session[], registry: ProjectTag[]): TagChatGroup[] {
+  const sorted = [...chats].sort(
+    (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+  );
+
+  // tag → чаты (ключ — имя как у чата; каноничный регистр берём из реестра при сборке)
+  const byTag = new Map<string, Session[]>();
+  const untagged: Session[] = [];
+  for (const c of sorted) {
+    const tags = c.tags ?? [];
+    if (tags.length === 0) { untagged.push(c); continue; }
+    for (const t of new Set(tags)) {
+      const bucket = byTag.get(t);
+      if (bucket) bucket.push(c); else byTag.set(t, [c]);
+    }
+  }
+
+  const groups: TagChatGroup[] = [];
+  const seen = new Set<string>(); // имена в нижнем регистре — реестровый дубль сироты
+  // Реестровые секции — в порядке реестра (массив уже упорядочен бэком)
+  for (const rt of registry) {
+    // Имя у чата может отличаться регистром — ищем фактический ключ без учёта регистра
+    const key = [...byTag.keys()].find(k => k.toLowerCase() === rt.name.toLowerCase());
+    seen.add(rt.name.toLowerCase());
+    if (!key) continue; // тег без чатов — секцию не рисуем
+    groups.push({ title: rt.name, tag: rt.name, registryTag: rt, items: byTag.get(key)! });
+  }
+  // Сироты — после реестровых, по алфавиту
+  const orphans = [...byTag.keys()]
+    .filter(k => !seen.has(k.toLowerCase()))
+    .sort((a, b) => a.localeCompare(b));
+  for (const k of orphans) groups.push({ title: k, tag: k, items: byTag.get(k)! });
+  // Хвост
+  if (untagged.length) groups.push({ title: 'Без тегов', tag: null, items: untagged });
+  return groups;
+}
+
+// Чипы тегов чата в порядке реестра (для карточки): реестровые по order, сироты в конец.
+export function chatTagsSorted(chat: Session, registry: ProjectTag[]): string[] {
+  return sortTagsByRegistry(chat.tags ?? [], registry);
 }

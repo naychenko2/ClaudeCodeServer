@@ -6,6 +6,15 @@ export interface PermissionRule {
   action: 'allow' | 'deny';
 }
 
+// Тег из реестра общих тегов проекта (PUT /api/projects/{id}/tags перезаписывает целиком;
+// order нормализуется бэком по позиции массива). color — hex из палитры-данных (GROUP_COLORS),
+// отсутствует = чип красится accent'ом.
+export interface ProjectTag {
+  name: string;
+  order: number;
+  color?: string;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -23,6 +32,7 @@ export interface Project {
   boardColumns?: BoardColumn[];   // кастомные колонки Kanban-доски; отсутствует = дефолтные 3
   builtInSystemPrompt?: string;
   icon?: ProjectIcon;             // иконка проекта: инициалы+цвет или картинка
+  tagRegistry?: ProjectTag[];     // реестр общих тегов проекта (имя, порядок, цвет)
 }
 
 // Иконка проекта (по образцу PersonaAvatar): инициалы на цветном фоне или картинка
@@ -335,6 +345,9 @@ export interface Session {
   // Пробрасывается бэком в Session/HomeSessionDto; в потоковые session_started/status_changed
   // НЕ кладётся — обновляй по событию task_changed (приходит полный Task со status)
   taskDone?: boolean;
+  // Общие теги чата (имена из Project.tagRegistry; тег без записи в реестре возможен —
+  // показывается секцией-сиротой). Меняется через PUT sessions/{sid} (поле tags)
+  tags?: string[];
 }
 
 // Строка сводки дашборда «Домой» (GET /api/home/summary): сессия + имя проекта

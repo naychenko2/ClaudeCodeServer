@@ -1,0 +1,231 @@
+# Vendored SigNoz docker-compose (v0.71.0)
+#
+# Источник: https://github.com/SigNoz/signoz/blob/v0.71.0/deploy/docker/docker-compose.yaml
+# Все конфиги (ClickHouse, otel-collector, nginx) вендорены рядом — нет внешних
+# относительных путей вида ../common/. Оригинальный !!merge (PyYAML-специфичный)
+# заменён на стандартный YAML (YAML anchors + <<).
+#
+# ПРИМЕЧАНИЕ: SigNoz v0.130.0+ перешёл на Foundry для деплоя (docker-compose
+# в репе deprecated). Данный файл — последняя стабильная версия с классическим
+# compose. Обновление — см. docs/observability-signoz-setup.md.
+#
+# НЕ ЗАПУСКАТЬ НАПРЯМУЮ — использовать overlay: docker-compose.observability.yml
+
+version: "3.8"
+
+x-common: &common
+  networks:
+    - signoz-net
+  restart: on-failure
+  logging:
+    options:
+      max-size: 50m
+      max-file: "3"
+
+services:
+  init-clickhouse:
+    <<: *common
+    image: clickhouse/clickhouse-server:24.1.2-alpine
+    container_name: signoz-init-clickhouse
+    command:
+      - bash
+      - -c
+      - |
+        version="v0.0.1"
+        node_os=$$(uname -s | tr '[:upper:]' '[:lower:]')
+        node_arch=$$(uname -m | sed s/aarch64/arm64/ | sed s/x86_64/amd64/)
+        echo "Fetching histogram-binary for $${node_os}/$${node_arch}"
+        cd /tmp
+        wget -O histogram-quantile.tar.gz "https://github.com/SigNoz/signoz/releases/download/histogram-quantile%2F$${version}/histogram-quantile_$${node_os}_$${node_arch}.tar.gz"
+        tar -xvzf histogram-quantile.tar.gz
+        mv histogram-quantile /var/lib/clickhouse/user_scripts/histogramQuantile
+    volumes:
+      - clickhouse-user-scripts:/var/lib/clickhouse/user_scripts/
+
+  zookeeper:
+    <<: *common
+    image: bitnami/zookeeper:3.7.1
+    container_name: signoz-zookeeper
+    user: root
+    labels:
+      signoz.io/scrape: "true"
+      signoz.io/port: "9141"
+      signoz.io/path: "/metrics"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - curl -s -m 2 http://localhost:8080/commands/ruok | grep error | grep null
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    volumes:
+      - zookeeper-data:/bitnami/zookeeper
+    environment:
+      - ZOO_SERVER_ID=1
+      - ALLOW_ANONYMOUS_LOGIN=yes
+      - ZOO_AUTOPURGE_INTERVAL=1
+      - ZOO_ENABLE_PROMETHEUS_METRICS=yes
+      - ZOO_PROMETHEUS_METRICS_PORT_NUMBER=9141
+
+  clickhouse:
+    <<: *common
+    image: clickhouse/clickhouse-server:24.1.2-alpine
+    container_name: signoz-clickhouse
+    tty: true
+    labels:
+      signoz.io/scrape: "true"
+      signoz.io/port: "9363"
+      signoz.io/path: "/metrics"
+    depends_on:
+      init-clickhouse:
+        condition: service_completed_successfully
+      zookeeper:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - --spider
+        - -q
+        - 0.0.0.0:8123/ping
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    ulimits:
+      nproc: 65535
+      nofile:
+        soft: 262144
+        hard: 262144
+    volumes:
+      - ./clickhouse/config.xml:/etc/clickhouse-server/config.xml
+      - ./clickhouse/users.xml:/etc/clickhouse-server/users.xml
+      - ./clickhouse/custom-function.xml:/etc/clickhouse-server/custom-function.xml
+      - clickhouse-user-scripts:/var/lib/clickhouse/user_scripts/
+      - ./clickhouse/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml
+      - signoz-clickhouse:/var/lib/clickhouse/
+
+  alertmanager:
+    <<: *common
+    image: signoz/alertmanager:${ALERTMANAGER_TAG:-0.23.7}
+    container_name: signoz-alertmanager
+    command:
+      - --queryService.url=http://query-service:8085
+      - --storage.path=/data
+    volumes:
+      - signoz-alertmanager:/data
+    depends_on:
+      query-service:
+        condition: service_healthy
+
+  query-service:
+    <<: *common
+    image: signoz/query-service:${DOCKER_TAG:-0.71.0}
+    container_name: signoz-query-service
+    command:
+      - --config=/root/config/prometheus.yml
+      - --use-logs-new-schema=true
+      - --use-trace-new-schema=true
+    volumes:
+      - ./signoz/prometheus.yml:/root/config/prometheus.yml
+      - ./signoz/dashboards:/root/config/dashboards
+      - signoz-sqlite:/var/lib/signoz/
+    environment:
+      - ClickHouseUrl=tcp://clickhouse:9000
+      - ALERTMANAGER_API_PREFIX=http://alertmanager:9093/api/
+      - SIGNOZ_SQLSTORE_SQLITE_PATH=/var/lib/signoz/signoz.db
+      - DASHBOARDS_PATH=/root/config/dashboards
+      - STORAGE=clickhouse
+      - GODEBUG=netdns=go
+      - TELEMETRY_ENABLED=true
+      - DEPLOYMENT_TYPE=docker-standalone-amd
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - --spider
+        - -q
+        - localhost:8080/api/v1/health
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      schema-migrator-sync:
+        condition: service_completed_successfully
+
+  frontend:
+    <<: *common
+    image: signoz/frontend:${DOCKER_TAG:-0.71.0}
+    container_name: signoz-frontend
+    depends_on:
+      - alertmanager
+      - query-service
+    ports:
+      - "3301:3301"
+    volumes:
+      - ./signoz/nginx-config.conf:/etc/nginx/conf.d/default.conf
+
+  otel-collector:
+    <<: *common
+    image: signoz/signoz-otel-collector:${OTELCOL_TAG:-0.111.26}
+    container_name: signoz-otel-collector
+    command:
+      - --config=/etc/otel-collector-config.yaml
+      - --manager-config=/etc/manager-config.yaml
+      - --copy-path=/var/tmp/collector-config.yaml
+      - --feature-gates=-pkg.translator.prometheus.NormalizeName
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml
+      - ./signoz/otel-collector-opamp-config.yaml:/etc/manager-config.yaml
+    environment:
+      - OTEL_RESOURCE_ATTRIBUTES=host.name=signoz-host,os.type=linux
+      - LOW_CARDINAL_EXCEPTION_GROUPING=false
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+    depends_on:
+      query-service:
+        condition: service_healthy
+
+  schema-migrator-sync:
+    <<: *common
+    image: signoz/signoz-schema-migrator:${OTELCOL_TAG:-0.111.24}
+    container_name: signoz-schema-migrator-sync
+    command:
+      - sync
+      - --dsn=tcp://clickhouse:9000
+      - --up=
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+
+  schema-migrator-async:
+    <<: *common
+    image: signoz/signoz-schema-migrator:${OTELCOL_TAG:-0.111.24}
+    container_name: signoz-schema-migrator-async
+    command:
+      - async
+      - --dsn=tcp://clickhouse:9000
+      - --up=
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      schema-migrator-sync:
+        condition: service_completed_successfully
+
+networks:
+  signoz-net:
+    name: signoz-net
+
+volumes:
+  signoz-alertmanager:
+    name: signoz-alertmanager
+  signoz-clickhouse:
+    name: signoz-clickhouse
+  signoz-sqlite:
+    name: signoz-sqlite
+  zookeeper-data:
+    name: signoz-zookeeper
+  clickhouse-user-scripts:
+    name: signoz-clickhouse-user-scripts

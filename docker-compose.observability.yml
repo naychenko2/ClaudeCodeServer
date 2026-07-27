@@ -1,0 +1,41 @@
+﻿# Run: docker compose -f docker-compose.observability.yml up -d
+# Stop: docker compose -f docker-compose.observability.yml down
+#
+# SigNoz observability stack
+# UI:   http://localhost:3301
+# OTLP: localhost:4317 (gRPC), localhost:4318 (HTTP)
+#
+# Vendored compose: docker/observability/docker-compose.yaml
+# Docs: docs/observability-signoz-setup.md
+
+# Overlay для SigNoz observability stack
+#
+# Запуск (через include — Docker Compose v2.20+):
+#   docker compose -f docker-compose.observability.yml up -d
+#
+# Альтернатива (старые версии Compose):
+#   docker compose \
+#     -f docker/observability/docker-compose.yaml \
+#     -f docker-compose.observability.yml \
+#     up -d
+#
+# Переопределения:
+# 1. Bind UI (3301) и OTLP (4317/4318) к localhost — безопасность (нет внешнего доступа)
+# 2. Network остаётся из vendored compose (signoz-net)
+
+include:
+  - path: docker/observability/docker-compose.yaml
+
+services:
+  # UI SigNoz — только localhost. Для внешнего доступа — reverse-proxy с auth
+  # (можно использовать существующий Yarp + API-key auth ClaudeHomeServer).
+  frontend:
+    ports:
+      - "127.0.0.1:3301:3301"
+
+  # OTLP receivers — только localhost. Предотвращает подключение внешних
+  # телеметрийных источников без явного проброса портов.
+  otel-collector:
+    ports:
+      - "127.0.0.1:4317:4317"  # OTLP gRPC
+      - "127.0.0.1:4318:4318"  # OTLP HTTP

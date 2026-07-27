@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Telemetry;
 
 namespace ClaudeHomeServer.Services.Llm.Claude;
 
@@ -1204,6 +1205,16 @@ public class ClaudeSession : ILlmSessionAdapter
         _currentTurnAgentDepth = agentDepth;
         _currentTurnSuppressTasksExecute = suppressTasksExecute;
 
+        // OTel: корневой спан хода. using гарантирует Dispose в конце метода
+        // (все return-пути и исключения). turn_id генерируем здесь — он нужен
+        // спану для всех путей (включая same-process, где _launcher.Start не идёт).
+        _currentTurnId = Guid.NewGuid().ToString("N")[..12];
+        using var turnActivity = TurnTelemetry.StartTurnSpan(
+            sessionId: Info.ClaudeSessionId ?? Info.Id.ToString(),
+            turnId: _currentTurnId,
+            model: EffectiveModel,
+            provider: Info.Provider);
+
         // --print обязателен: без него --output-format/--input-format/--include-partial-messages/--permission-prompt-tool не работают
         // --input-format stream-json нужен: мы посылаем JSON-объекты в stdin, а не plain text
         var args = new List<string>
@@ -1726,21 +1737,29 @@ public class ClaudeSession : ILlmSessionAdapter
         // Задаём UTF-8 без BOM (BOM сломал бы первое сообщение в stdin).
         var utf8NoBom = new System.Text.UTF8Encoding(false);
 
-        _currentTurnId = Guid.NewGuid().ToString("N")[..12];
         // ArgumentList/Args экранирует каждый аргумент корректно (важно для многострочного
-        // системного промпта); env-оверрайды собраны выше — они входят в сигнатуру прогона
-        var process = _launcher.Start(new Execution.ProcessSpec
+        // системного промпта); env-оверрайды собраны выше — они входят в сигнатуру прогона.
+        // OTel: дочерний спан запуска процесса (родитель — активный chat.turn).
+        Process process;
+        using (var procActivity = TurnTelemetry.StartProcessSpan(
+                   kind: _launcher.IsSandboxed ? "docker" : "local",
+                   command: _launcher.ClaudeCliCommand,
+                   sessionId: Info.ClaudeSessionId ?? Info.Id.ToString(),
+                   mcpConfigHash: TurnTelemetry.McpConfigHash(effectiveMcpConfig)))
         {
-            FileName = _launcher.ClaudeCliCommand,
-            Args = args,
-            WorkingDirectory = _rootPath,
-            Env = envOverrides,
-            // Маршрут хода определяем только мы: системные ANTHROPIC_*/CLAUDE_CONFIG_DIR
-            // машины в ход не пускаем, иначе чат «на Claude» молча уедет на чужой эндпоинт
-            ClearEnv = _providers?.EnvKeysToClear ?? LlmProviderRegistry.ProviderEnvKeys,
-            StdioEncoding = utf8NoBom,
-            TurnId = _currentTurnId,
-        });
+            process = _launcher.Start(new Execution.ProcessSpec
+            {
+                FileName = _launcher.ClaudeCliCommand,
+                Args = args,
+                WorkingDirectory = _rootPath,
+                Env = envOverrides,
+                // Маршрут хода определяем только мы: системные ANTHROPIC_*/CLAUDE_CONFIG_DIR
+                // машины в ход не пускаем, иначе чат «на Claude» молча уедет на чужой эндпоинт
+                ClearEnv = _providers?.EnvKeysToClear ?? LlmProviderRegistry.ProviderEnvKeys,
+                StdioEncoding = utf8NoBom,
+                TurnId = _currentTurnId,
+            });
+        }
         _currentProcess = process;
 
         CliRun run;
@@ -1863,8 +1882,11 @@ public class ClaudeSession : ILlmSessionAdapter
             // UI навсегда завис бы на «Размышление…» (ExitedMessage из finally не гасит плашку
             // размышления). Шлём ошибку, чтобы ход честно завершился.
             if (!run.TurnDone)
+            {
+                TurnTelemetry.RecordError(Info.Provider, "process_exit");
                 try { await _onMessage(new ErrorMessage("Ход прерван из-за ошибки обработки ответа модели")); }
                 catch { /* сообщение клиенту best-effort */ }
+            }
         }
         finally { await FinalizeRunAsync(run); }
     }
@@ -2191,6 +2213,10 @@ public class ClaudeSession : ILlmSessionAdapter
                 // Статус Error/Active выставит SessionManager по ResultMessage
                 var ctxTokens = _lastContextTokens > 0 ? _lastContextTokens : (int?)null;
                 await _onMessage(new ResultMessage(subtype, durationMs, numTurns, usage, totalCost, apiErr, denials, ctxTokens, ParseUsageModel(root)));
+                // OTel: метрика длительности хода (duration_ms из самого CLI — не пересчитываем)
+                // и счётчик ошибок при subtype=error
+                TurnTelemetry.RecordTurnResult(durationMs, Info.Provider, EffectiveModel,
+                    isError: subtype == "error", apiErrorStatus: apiErr);
                 // Ход завершён. Без живых фоновых задач закрываем stdin — CLI выйдет сам,
                 // дальше ждём его не дольше ResultExitGrace. С ними stdin держим открытым:
                 // прогон доживает (агенты работают внутри процесса) и готов принять
@@ -2292,6 +2318,7 @@ public class ClaudeSession : ILlmSessionAdapter
     // Разбор вынесен в ClaudeRateLimitParser (общий со стартовым прогревом подписок).
     private async Task HandleRateLimitAsync(JsonElement root)
     {
+        TurnTelemetry.RecordRateLimit(Info.Provider);
         if (ClaudeRateLimitParser.TryParse(root, out var msg))
             await _onMessage(msg);
     }

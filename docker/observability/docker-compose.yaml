@@ -44,7 +44,7 @@ services:
 
   zookeeper:
     <<: *common
-    image: bitnami/zookeeper:3.7.1
+    image: zookeeper:3.8
     container_name: signoz-zookeeper
     user: root
     labels:
@@ -59,13 +59,11 @@ services:
       timeout: 5s
       retries: 3
     volumes:
-      - zookeeper-data:/bitnami/zookeeper
+      - zookeeper-data:/data
+      - zookeeper-datalog:/datalog
     environment:
-      - ZOO_SERVER_ID=1
-      - ALLOW_ANONYMOUS_LOGIN=yes
-      - ZOO_AUTOPURGE_INTERVAL=1
-      - ZOO_ENABLE_PROMETHEUS_METRICS=yes
-      - ZOO_PROMETHEUS_METRICS_PORT_NUMBER=9141
+      - ZOO_MY_ID=1
+      - ZOO_AUTOPURGE_PURGEINTERVAL=1
 
   clickhouse:
     <<: *common
@@ -227,5 +225,7 @@ volumes:
     name: signoz-sqlite
   zookeeper-data:
     name: signoz-zookeeper
+  zookeeper-datalog:
+    name: signoz-zookeeper-datalog
   clickhouse-user-scripts:
     name: signoz-clickhouse-user-scripts

@@ -76,7 +76,7 @@ exporters:
     use_new_schema: true
 
 service:
- telemetry:
+  telemetry:
     logs:
       encoding: json
     metrics:

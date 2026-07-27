@@ -2,6 +2,14 @@
 
 public enum ProjectIconKind { Initials, Image }
 
+// Тег проекта — элемент реестра общих тегов (имя, порядок, цвет)
+public sealed class ProjectTag
+{
+    public string Name { get; set; } = "";
+    public int Order { get; set; }
+    public string? Color { get; set; }
+}
+
 // Иконка проекта (по образцу PersonaAvatar). Кроп переиспользуем — AvatarCropState нейтрален.
 public class ProjectIcon
 {
@@ -31,6 +39,8 @@ public class Project
     public bool ShowHiddenFiles { get; set; } = false;
     public bool ToolsEnabled { get; set; } = false;
     public Dictionary<string, List<string>>? DocumentTags { get; set; }
+    // Реестр общих тегов проекта (имя, порядок, цвет) — per-owner изоляция
+    public List<ProjectTag> TagRegistry { get; set; } = [];
     // Правила авто-разрешений/запретов для permission-запросов (см. PermissionRule)
     public List<PermissionRule>? PermissionRules { get; set; }
     // Кастомные колонки Kanban-доски проекта; null = дефолтные 3 (по категориям статусов)

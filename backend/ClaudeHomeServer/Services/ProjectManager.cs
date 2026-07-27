@@ -262,6 +262,16 @@ public class ProjectManager
         return project;
     }
 
+    public Project UpdateTags(string id, List<ProjectTag> registry)
+    {
+        var project = _projects.GetValueOrDefault(id)
+            ?? throw new KeyNotFoundException($"Проект не найден: {id}");
+        project.TagRegistry = registry ?? [];
+        project.UpdatedAt = DateTime.UtcNow;
+        Save();
+        return project;
+    }
+
     // Все проекты, чей RootPath указывает на ту же папку (датасет знаний общий per-RootPath):
     // каскад удаления и события синка знаний должны учитывать соседей по папке
     public IReadOnlyList<Project> GetByRootPath(string rootPath)

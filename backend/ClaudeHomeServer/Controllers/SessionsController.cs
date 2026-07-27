@@ -53,7 +53,7 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
         }
         try
         {
-            var updated = sessions.Update(sessionId, req.Name, req.Model, req.Effort);
+            var updated = sessions.Update(sessionId, req.Name, req.Model, req.Effort, req.Tags);
             return updated == null ? NotFound() : Ok(updated);
         }
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
@@ -103,4 +103,4 @@ public record CreateSessionRequest(string Mode = "acceptEdits", string? ResumeSe
 
 // ExpiresAfterMinutes: -1 (поле не прислано) — не менять; null — сделать сессию постоянной;
 // N > 0 — временная, авто-удаление через N минут после последней активности
-public record UpdateSessionRequest(string? Name = null, string? Model = null, string? Effort = null, int? ExpiresAfterMinutes = -1);
+public record UpdateSessionRequest(string? Name = null, string? Model = null, string? Effort = null, int? ExpiresAfterMinutes = -1, List<string>? Tags = null);

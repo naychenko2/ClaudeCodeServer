@@ -112,6 +112,8 @@ public class Session
     public string? WorktreeBranch { get; set; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+    // Теги сессии (из реестра проекта) — per-owner изоляция
+    public List<string> Tags { get; set; } = [];
 
     // Тип происхождения чата — производный от TaskId/AutomationRuleId, единая точка истины.
     public ChatOrigin Origin => TaskId != null ? ChatOrigin.Task

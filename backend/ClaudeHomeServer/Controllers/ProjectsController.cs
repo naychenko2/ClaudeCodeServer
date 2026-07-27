@@ -27,7 +27,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         // не совпадать с DefaultProjectsPath (иначе получилось бы «..\..\GIT\myproj»)
         var basePath = homes.Resolve(users.GetById(UserId)) ?? appSettings.Get().DefaultProjectsPath;
         var relativePath = string.IsNullOrEmpty(basePath) ? p.RootPath : Path.GetRelativePath(basePath, p.RootPath);
-        return new { p.Id, p.Name, p.RootPath, RelativePath = relativePath, p.CreatedAt, p.UpdatedAt, p.GroupId, p.SystemPrompt, p.ShowHiddenFiles, p.ToolsEnabled, p.PermissionRules, p.BoardColumns, p.Icon, BuiltInSystemPrompt = ProjectManager.BuiltInSystemPrompt, SessionCount = sessions.CountByProject(p.Id) };
+        return new { p.Id, p.Name, p.RootPath, RelativePath = relativePath, p.CreatedAt, p.UpdatedAt, p.GroupId, p.SystemPrompt, p.ShowHiddenFiles, p.ToolsEnabled, p.PermissionRules, p.BoardColumns, p.TagRegistry, p.Icon, BuiltInSystemPrompt = ProjectManager.BuiltInSystemPrompt, SessionCount = sessions.CountByProject(p.Id) };
     }
 
     [HttpGet("builtin-prompt")]
@@ -203,6 +203,36 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         var p = projects.GetById(id);
         if (p is null || p.OwnerId != UserId) return NotFound();
         var updated = projects.UpdateBoardColumns(id, req.Columns);
+        return Ok(WithCount(updated));
+    }
+
+    // Реестр общих тегов проекта (имя, порядок, цвет) — перезапись целиком
+    [HttpPut("{id}/tags")]
+    public IActionResult UpdateTags(string id, [FromBody] List<ProjectTag> registry)
+    {
+        var p = projects.GetById(id);
+        if (p is null || p.OwnerId != UserId) return NotFound();
+
+        // Валидация состава: имена непустые, уникальные (без учёта регистра)
+        if (registry is not null)
+        {
+            for (var i = 0; i < registry.Count; i++)
+            {
+                if (string.IsNullOrWhiteSpace(registry[i].Name))
+                    return BadRequest(new { error = $"Тег #{i + 1} имеет пустое имя" });
+            }
+
+            var names = registry.Select(t => t.Name.Trim()).ToList();
+            var distinct = new HashSet<string>(names, StringComparer.OrdinalIgnoreCase);
+            if (distinct.Count != names.Count)
+                return BadRequest(new { error = "Имена тегов должны быть уникальными (без учёта регистра)" });
+
+            // Нормализация Order по позиции массива
+            for (var i = 0; i < registry.Count; i++)
+                registry[i].Order = i;
+        }
+
+        var updated = projects.UpdateTags(id, registry ?? []);
         return Ok(WithCount(updated));
     }
 

@@ -2347,7 +2347,7 @@ public class SessionManager : IDisposable
     // PATCH-семантика: null = «поле не передано, не трогать». Иначе частичные апдейты
     // (MCP chats_update только с name; PUT {pinned} из togglePin) затирали бы модель/имя,
     // а для начатой сессии стороннего провайдера ещё и падали с «нельзя сменить провайдера».
-    public Session? Update(string sessionId, string? name, string? model, string? effort)
+    public Session? Update(string sessionId, string? name, string? model, string? effort, List<string>? tags = null)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
 
@@ -2405,6 +2405,8 @@ public class SessionManager : IDisposable
         }
         if (effort is not null)
             entry.Info.Effort = string.IsNullOrWhiteSpace(effort) ? null : effort.Trim();
+        if (tags is not null)
+            entry.Info.Tags = tags;
 
         entry.Info.UpdatedAt = DateTime.UtcNow;
         SaveSessions();

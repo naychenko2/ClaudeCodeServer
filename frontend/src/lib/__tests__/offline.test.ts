@@ -73,7 +73,7 @@ describe('request: network-first', () => {
     expect(offline.isOnline()).toBe(true);
   });
 
-  it('GET при сетевой ошибке отдаёт данные из кэша и переводит в офлайн', async () => {
+  it('GET при сетевой ошибке отдаёт данные из кэша; первая ошибка → degraded, вторая → offline', async () => {
     fetchMock.mockRejectedValue(new TypeError('failed to fetch'));
     idbGet.mockResolvedValue({ data: { cached: true }, savedAt: 1 });
 
@@ -81,6 +81,13 @@ describe('request: network-first', () => {
 
     expect(data).toEqual({ cached: true });
     expect(idbGet).toHaveBeenCalledWith('/projects');
+    // Уступчивый переход: первая сетевая ошибка — degraded (ещё не offline)
+    expect(offline.getConnectionState()).toBe('degraded');
+    expect(offline.isOnline()).toBe(true);
+
+    // Повторная ошибка из degraded — уже offline
+    await offline.request('/projects');
+    expect(offline.getConnectionState()).toBe('offline');
     expect(offline.isOnline()).toBe(false);
   });
 
@@ -113,7 +120,11 @@ describe('request: мутации офлайн', () => {
     await expect(offline.request('/projects', { method: 'PUT', body: '{}' }))
       .rejects.toThrowError(offline.OfflineError);
     expect(idbGet).not.toHaveBeenCalled();
-    expect(offline.isOnline()).toBe(false);
+    // Первая ошибка — degraded; вторая — offline
+    expect(offline.getConnectionState()).toBe('degraded');
+    await expect(offline.request('/projects', { method: 'PUT', body: '{}' }))
+      .rejects.toThrowError(offline.OfflineError);
+    expect(offline.getConnectionState()).toBe('offline');
   });
 });
 
@@ -174,17 +185,36 @@ describe('heartbeat: детекция пропажи сервера в онла�
     offline.initConnectivity();
   }
 
-  it('два промаха подряд уводят в офлайн (одного мало)', async () => {
+  it('первый промах — degraded, второй подряд — offline', async () => {
     bootOnline();
     fetchMock.mockRejectedValue(new TypeError('failed to fetch'));
 
-    // Первый heartbeat (~15с): промах №1 — ещё онлайн
+    // Первый heartbeat (~15с): промах №1 — degraded, ещё не offline
     await vi.advanceTimersByTimeAsync(15_000);
+    expect(offline.getConnectionState()).toBe('degraded');
     expect(offline.isOnline()).toBe(true);
 
     // Добор через FAST_RETRY (~3с): промах №2 — порог достигнут, уходим в офлайн
     await vi.advanceTimersByTimeAsync(3_000);
+    expect(offline.getConnectionState()).toBe('offline');
     expect(offline.isOnline()).toBe(false);
+  });
+
+  it('успешный пинг из degraded возвращает online и обнуляет серию промахов', async () => {
+    bootOnline();
+    fetchMock.mockRejectedValueOnce(new TypeError('failed to fetch'));
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(offline.getConnectionState()).toBe('degraded');
+
+    fetchMock.mockResolvedValue(jsonResponse({}, 204));
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(offline.getConnectionState()).toBe('online');
+
+    // Серия обнулена: следующий промах — снова лишь degraded, не offline
+    fetchMock.mockRejectedValue(new TypeError('failed to fetch'));
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(offline.getConnectionState()).toBe('degraded');
   });
 
   it('успешный heartbeat держит онлайн и сбрасывает серию промахов', async () => {
@@ -211,5 +241,116 @@ describe('subscribeOnline', () => {
     unsub();
     offline.notifyOnline();
     expect(fn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('тройное состояние связи', () => {
+  it('переходы online → degraded → offline → online', () => {
+    expect(offline.getConnectionState()).toBe('online');
+
+    offline.setDegraded('тест');
+    expect(offline.getConnectionState()).toBe('degraded');
+    // degraded — «ещё онлайн»: запросы и мутации не блокируются
+    expect(offline.isOnline()).toBe(true);
+
+    offline.setConnectionState('offline');
+    expect(offline.getConnectionState()).toBe('offline');
+    expect(offline.isOnline()).toBe(false);
+
+    offline.setConnectionState('online');
+    expect(offline.getConnectionState()).toBe('online');
+    expect(offline.isOnline()).toBe(true);
+  });
+
+  it('setConnectionState идемпотентен — подписчики не дёргаются без смены значения', () => {
+    const fn = vi.fn();
+    offline.subscribeConnectionState(fn);
+
+    offline.setConnectionState('online'); // уже online
+    expect(fn).not.toHaveBeenCalled();
+
+    offline.setConnectionState('degraded');
+    expect(fn).toHaveBeenCalledTimes(1);
+    offline.setConnectionState('degraded');
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  it('setDegraded из offline не выходит — возврат только по явному успеху', () => {
+    offline.setConnectionState('offline');
+    offline.setDegraded('тест');
+    expect(offline.getConnectionState()).toBe('offline');
+  });
+
+  it('setDegraded из degraded — без изменений (не понижает и не дёргает)', () => {
+    const fn = vi.fn();
+    offline.setDegraded('первый');
+    offline.subscribeConnectionState(fn);
+
+    offline.setDegraded('второй');
+    expect(offline.getConnectionState()).toBe('degraded');
+    expect(fn).not.toHaveBeenCalled();
+  });
+
+  it('notifyOnline/notifyOffline маппятся на крайние состояния', () => {
+    offline.notifyOffline();
+    expect(offline.getConnectionState()).toBe('offline');
+    offline.notifyOnline();
+    expect(offline.getConnectionState()).toBe('online');
+  });
+
+  it('мутации в degraded не блокируются (запрос уходит в сеть)', async () => {
+    offline.setDegraded('тест');
+    fetchMock.mockResolvedValue(jsonResponse({ ok: 1 }));
+
+    await expect(offline.request('/projects', { method: 'POST', body: '{}' })).resolves.toEqual({ ok: 1 });
+    expect(fetchMock).toHaveBeenCalled();
+  });
+});
+
+describe('ранний degraded-таймер в request()', () => {
+  // «Призрачная сеть»: fetch отвечает, но медленно
+  function delayed(ms: number, resp: unknown) {
+    return new Promise(resolve => setTimeout(() => resolve(resp), ms));
+  }
+
+  it('зависший запрос (>2с) поднимает degraded и форсит проверку связи', async () => {
+    fetchMock.mockImplementation(() => delayed(3_000, jsonResponse({ ok: 1 })));
+
+    const p = offline.request('/projects');
+    await vi.advanceTimersByTimeAsync(2_100);
+
+    expect(offline.getConnectionState()).toBe('degraded');
+    expect(offline.isOnline()).toBe(true);
+    // форс-проверка ушла пингом на /health
+    expect(fetchMock).toHaveBeenCalledWith('/api/health', expect.objectContaining({ method: 'GET' }));
+
+    // Ответ пришёл — связь подтверждена, состояние возвращается в online
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(p).resolves.toEqual({ ok: 1 });
+    await vi.advanceTimersByTimeAsync(2_500); // доотвечал health-пинг форс-проверки
+    expect(offline.getConnectionState()).toBe('online');
+  });
+
+  it('запрос с явным timeoutMs (заведомо долгий) ранним таймером не гейтится', async () => {
+    fetchMock.mockImplementation(() => delayed(5_000, jsonResponse({ ok: 1 })));
+
+    const p = offline.request('/ai/generate', { timeoutMs: 10_000 });
+    await vi.advanceTimersByTimeAsync(2_500);
+
+    // 2с прошло, а degraded нет — запрос заведомо долгий
+    expect(offline.getConnectionState()).toBe('online');
+
+    await vi.advanceTimersByTimeAsync(3_000);
+    await expect(p).resolves.toEqual({ ok: 1 });
+    expect(offline.getConnectionState()).toBe('online');
+  });
+
+  it('быстрый ответ (<2с) не поднимает degraded', async () => {
+    fetchMock.mockImplementation(() => delayed(500, jsonResponse({ ok: 1 })));
+
+    const p = offline.request('/projects');
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(p).resolves.toEqual({ ok: 1 });
+    expect(offline.getConnectionState()).toBe('online');
   });
 });

@@ -10,30 +10,61 @@ const BASE = '/api';
 
 // --- Состояние связи ---
 
+// Тройное состояние: online — стабильно; degraded — подозрение на нестабильность
+// (зависший запрос, первый промах пинга, SignalR reconnecting), данные тянутся,
+// мутации НЕ блокируются; offline — устойчивая пропажа, мутации → OfflineError.
+export type ConnectionState = 'online' | 'degraded' | 'offline';
+
 let _online = typeof navigator !== 'undefined' ? navigator.onLine : true;
+let _connectionState: ConnectionState = _online ? 'online' : 'offline';
 const _listeners = new Set<() => void>();
 
 export function isOnline(): boolean {
   return _online;
 }
 
+export function getConnectionState(): ConnectionState {
+  return _connectionState;
+}
+
+// Оба сабскрайба делят один набор слушателей: любой переход дёргает всех, а
+// useSyncExternalStore сам отсеивает неизменившийся снимок (isOnline/getConnectionState).
 export function subscribeOnline(fn: () => void): () => void {
   _listeners.add(fn);
   return () => _listeners.delete(fn);
 }
 
-function setOnline(value: boolean) {
+export function subscribeConnectionState(fn: () => void): () => void {
+  _listeners.add(fn);
+  return () => _listeners.delete(fn);
+}
+
+export function setConnectionState(value: ConnectionState) {
   // Успех (обычный запрос ответил, зонд достучался) сбрасывает счётчик промахов —
   // иначе накопленные фейлы могли бы тут же снова увести в офлайн.
-  if (value) _consecutiveFailures = 0;
-  if (_online === value) {
+  if (value === 'online') _consecutiveFailures = 0;
+  if (_connectionState === value) {
     return;
   }
-  _online = value;
+  _connectionState = value;
+  // Бинарный флаг — производный: degraded считается «ещё онлайн» (запросы и мутации идут).
+  _online = value !== 'offline';
   // Состояние сменилось — пересчитаем каденс монитора немедленно
-  // (offline → частый зонд возврата; online → спокойный heartbeat).
+  // (offline → частый зонд возврата; degraded → быстрый добор; online → спокойный heartbeat).
   rescheduleMonitor();
   _listeners.forEach(fn => fn());
+}
+
+// Старые вызовы (ОС-события, тесты) маппятся на крайние состояния
+function setOnline(value: boolean) {
+  setConnectionState(value ? 'online' : 'offline');
+}
+
+// Подозрение на нестабильность. Переход только из online: из offline в degraded
+// не выходим — возврат требует явного успеха (ответ сервера / пинг).
+export function setDegraded(_reason: string) {
+  if (_connectionState !== 'online') return;
+  setConnectionState('degraded');
 }
 
 // --- Монитор связи (health-ping) ---
@@ -51,7 +82,7 @@ let _consecutiveFailures = 0;
 const HEARTBEAT_INTERVAL_MS = 15_000; // спокойный опрос, когда связь есть
 const FAST_RETRY_MS = 3_000;          // добор до порога после первого промаха
 const PROBE_INTERVAL_MS = 4_000;      // частый зонд возврата из офлайна
-const PING_TIMEOUT_MS = 6_000;        // короткий таймаут пинга — не ждём 30с
+const PING_TIMEOUT_MS = 4_000;        // короткий таймаут пинга — не ждём 30с
 const OFFLINE_FAIL_THRESHOLD = 2;     // столько промахов подряд уводят в офлайн
 
 // Один пинг сервера. true = сервер достижим (200/401/404 и т.п.),
@@ -85,7 +116,9 @@ async function pingServer(): Promise<boolean> {
 
 // Задержка до следующего тика — по текущему состоянию связи и серии промахов.
 function nextMonitorDelay(): number {
-  if (!_online) return PROBE_INTERVAL_MS;
+  if (_connectionState === 'offline') return PROBE_INTERVAL_MS;
+  // degraded — быстрая проверка стабилизации (подтвердить онлайн или добрать до офлайна)
+  if (_connectionState === 'degraded') return FAST_RETRY_MS;
   return _consecutiveFailures > 0 ? FAST_RETRY_MS : HEARTBEAT_INTERVAL_MS;
 }
 
@@ -110,10 +143,15 @@ async function runMonitorTick() {
   const reachable = await pingServer();
   if (reachable) {
     _consecutiveFailures = 0;
-    if (!_online) setOnline(true);
+    if (_connectionState !== 'online') setConnectionState('online');
   } else {
     _consecutiveFailures++;
-    if (_online && _consecutiveFailures >= OFFLINE_FAIL_THRESHOLD) setOnline(false);
+    // Быстрый пессимизм: первый промах сразу поднимает degraded (UI объясняет, что
+    // происходит), второй подряд уводит в офлайн — суммарный порог как раньше (2).
+    if (_connectionState === 'online') setDegraded('промах health-ping');
+    else if (_connectionState === 'degraded' && _consecutiveFailures >= OFFLINE_FAIL_THRESHOLD) {
+      setConnectionState('offline');
+    }
   }
   scheduleNextTick();
 }
@@ -144,6 +182,8 @@ function isNetworkError(e: unknown): boolean {
 
 // Таймаут fetch: на зависшей сети без него запрос может ждать минутами
 const FETCH_TIMEOUT_MS = 30_000;
+// Ранняя обратная связь: запрос без ответа дольше этого порога — подозрение на degraded
+const DEGRADED_THRESHOLD_MS = 2_000;
 
 // --- Запрос ---
 
@@ -166,6 +206,21 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
   const { timeoutMs, ...fetchOptions } = options ?? {};
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs ?? FETCH_TIMEOUT_MS);
+  // Ранний таймер degraded: запрос «завис» >2с — сразу показываем нестабильность и
+  // форсим проверку связи, не дожидаясь 30-секундного таймаута. На заведомо долгие
+  // запросы (явный timeoutMs) не вешается — их длительность ожидаема.
+  const degradedId = timeoutMs === undefined
+    ? setTimeout(() => {
+        if (getConnectionState() === 'online') {
+          setDegraded('зависший запрос');
+          forceConnectivityCheck();
+        }
+      }, DEGRADED_THRESHOLD_MS)
+    : null;
+  const clearReqTimers = () => {
+    clearTimeout(timeoutId);
+    if (degradedId !== null) clearTimeout(degradedId);
+  };
 
   // FormData (multipart-загрузки) — Content-Type ставит сам браузер (с boundary)
   const isFormData = typeof FormData !== 'undefined' && fetchOptions.body instanceof FormData;
@@ -180,7 +235,7 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
         ...(options?.headers as Record<string, string> | undefined),
       },
     });
-    clearTimeout(timeoutId);
+    clearReqTimers();
     // Сервер ответил (даже ошибкой) → мы онлайн
     setOnline(true);
 
@@ -210,10 +265,13 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
     }
     return data;
   } catch (e) {
-    clearTimeout(timeoutId);
+    clearReqTimers();
     // AbortError от нашего таймаута трактуем как сетевую проблему
     if (isNetworkError(e) || (e instanceof DOMException && e.name === 'AbortError')) {
-      setOnline(false);
+      // Уступчивый переход вместо резкого офлайна: первая ошибка — degraded,
+      // повтор из degraded — offline
+      if (_connectionState === 'online') setDegraded('сетевая ошибка запроса');
+      else if (_connectionState === 'degraded') setConnectionState('offline');
       if (isGet) {
         const cached = await idbGet<T>(url).catch(() => undefined);
         if (cached) return cached.data;
@@ -236,7 +294,7 @@ export function initConnectivity() {
   // ОС однозначно потеряла сеть — сразу офлайн, без ожидания пинга
   window.addEventListener('offline', () => setOnline(false));
   // ОС сообщает о сети, но до НАШЕГО сервера она может не дойти — не верим слепо,
-  // а тут же проверяем пингом (за ≤6с подтвердит или оставит офлайн).
+  // а тут же проверяем пингом (за ≤4с подтвердит или оставит офлайн).
   window.addEventListener('online', () => forceConnectivityCheck());
   // Возврат на вкладку/фокус окна — момент, когда точность статуса важнее всего
   window.addEventListener('focus', () => forceConnectivityCheck());

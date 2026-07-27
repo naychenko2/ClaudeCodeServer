@@ -1,6 +1,6 @@
 import * as signalR from '@microsoft/signalr';
 import type { ServerMessage } from '../types';
-import { notifyOnline, notifyOffline } from './offline';
+import { getConnectionState, setConnectionState, setDegraded } from './offline';
 
 let connection: signalR.HubConnection | null = null;
 
@@ -15,8 +15,11 @@ let _offlineDebounce: ReturnType<typeof setTimeout> | null = null;
 const OFFLINE_DEBOUNCE_MS = 2_500;
 
 function scheduleOffline() {
+  // Начало реконнекта — сразу degraded: индикатор объясняет, что происходит, а данные
+  // продолжают тянуться. В offline уходим только если реконнект не удался за дебаунс.
+  if (getConnectionState() === 'online') setDegraded('SignalR reconnecting');
   if (_offlineDebounce !== null) return; // уже запланировано
-  _offlineDebounce = setTimeout(() => { _offlineDebounce = null; notifyOffline(); }, OFFLINE_DEBOUNCE_MS);
+  _offlineDebounce = setTimeout(() => { _offlineDebounce = null; setConnectionState('offline'); }, OFFLINE_DEBOUNCE_MS);
 }
 
 function cancelOffline() {
@@ -49,11 +52,11 @@ export function getConnection(): signalR.HubConnection {
     connection.onreconnecting(() => scheduleOffline());
     // onclose — соединение закрыто окончательно (реконнекты исчерпаны или явный
     // stop); тут офлайн без дебаунса.
-    connection.onclose(() => { cancelOffline(); notifyOffline(); });
+    connection.onclose(() => { cancelOffline(); setConnectionState('offline'); });
     // Единственный onreconnected-обработчик: отменяем отложенный офлайн + online + диспатч
     connection.onreconnected(() => {
       cancelOffline();
-      notifyOnline();
+      setConnectionState('online');
       _reconnectedCallbacks.forEach(cb => { try { cb(); } catch { /* не даём одному упавшему обработчику блокировать остальных */ } });
     });
   }

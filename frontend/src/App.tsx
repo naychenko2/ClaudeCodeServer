@@ -20,6 +20,7 @@ import { installSelectionScopes } from './lib/selectionScope'
 import { C } from './lib/design'
 import { recordRecentProject } from './lib/pinnedProjects'
 import { useOnline } from './hooks/useOnline'
+import { showToast } from './lib/toast'
 import { runOfflineSnapshot, syncProjectFiles, drainOfflineQueues } from './lib/sync'
 import { onFilesChanged } from './lib/signalr'
 import { loadWorkspaceState } from './lib/workspaceState'
@@ -252,6 +253,17 @@ export default function App() {
   // Текущий проект — приоритет для снапшота при выходе из офлайна (без ре-триггера при смене проекта)
   const projectIdRef = useRef<string | undefined>(undefined)
   projectIdRef.current = project?.id
+
+  // Toast «Связь восстановлена» — только на переходе offline → online (старт офлайн
+  // и первый онлайн не озвучиваем; прогрев кэша и drain очередей делается эффектом ниже)
+  const wasOfflineRef = useRef(false)
+  useEffect(() => {
+    if (!online) { wasOfflineRef.current = true; return }
+    if (wasOfflineRef.current) {
+      wasOfflineRef.current = false
+      showToast('Связь восстановлена', 'Обновляем…')
+    }
+  }, [online])
 
   useEffect(() => { initConnectivity() }, [])
 

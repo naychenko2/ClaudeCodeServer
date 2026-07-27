@@ -29,8 +29,10 @@ const h = vi.hoisted(() => {
   return {
     HubConnectionState,
     fake,
-    notifyOnline: vi.fn(),
-    notifyOffline: vi.fn(),
+    // Управляемое тестом тройное состояние связи (имитация поведения offline.ts)
+    connState: 'online' as string,
+    setConnectionState: vi.fn((v: string) => { h.connState = v; }),
+    setDegraded: vi.fn((_reason: string) => { if (h.connState === 'online') h.connState = 'degraded'; }),
   };
 });
 
@@ -46,8 +48,9 @@ vi.mock('@microsoft/signalr', () => ({
 }));
 
 vi.mock('../offline', () => ({
-  notifyOnline: h.notifyOnline,
-  notifyOffline: h.notifyOffline,
+  getConnectionState: () => h.connState,
+  setConnectionState: h.setConnectionState,
+  setDegraded: h.setDegraded,
 }));
 
 let signalr: typeof import('../signalr');
@@ -67,8 +70,9 @@ beforeEach(async () => {
   h.fake.closeCbs.length = 0;
   h.fake.start.mockClear();
   h.fake.invoke.mockClear();
-  h.notifyOnline.mockClear();
-  h.notifyOffline.mockClear();
+  h.connState = 'online';
+  h.setConnectionState.mockClear();
+  h.setDegraded.mockClear();
 
   signalr = await import('../signalr');
   // Создаёт connection и регистрирует onreconnecting/onreconnected/onclose
@@ -80,23 +84,37 @@ afterEach(() => {
 });
 
 describe('дебаунс офлайн-индикатора', () => {
-  it('офлайн объявляется только через 2.5с после начала реконнекта', () => {
+  it('реконнект из online — сразу degraded, offline только через 2.5с', () => {
     fireReconnecting();
+    expect(h.setDegraded).toHaveBeenCalledTimes(1);
+    expect(h.connState).toBe('degraded');
+
     vi.advanceTimersByTime(2499);
-    expect(h.notifyOffline).not.toHaveBeenCalled();
+    expect(h.setConnectionState).not.toHaveBeenCalledWith('offline');
 
     vi.advanceTimersByTime(1);
-    expect(h.notifyOffline).toHaveBeenCalledTimes(1);
+    expect(h.setConnectionState).toHaveBeenCalledWith('offline');
+    expect(h.connState).toBe('offline');
   });
 
-  it('быстрый реконнект отменяет офлайн — индикатор не мигает', () => {
+  it('реконнект из degraded не дёргает setDegraded повторно', () => {
+    h.connState = 'degraded';
+    fireReconnecting();
+    expect(h.setDegraded).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(2500);
+    expect(h.connState).toBe('offline');
+  });
+
+  it('быстрый реконнект отменяет офлайн — в offline не уходим, состояние online', () => {
     fireReconnecting();
     vi.advanceTimersByTime(1000);
     fireReconnected();
     vi.advanceTimersByTime(10_000);
 
-    expect(h.notifyOffline).not.toHaveBeenCalled();
-    expect(h.notifyOnline).toHaveBeenCalledTimes(1);
+    expect(h.setConnectionState).not.toHaveBeenCalledWith('offline');
+    expect(h.setConnectionState).toHaveBeenCalledWith('online');
+    expect(h.connState).toBe('online');
   });
 
   it('повторный onreconnecting не создаёт второй таймер', () => {
@@ -104,14 +122,16 @@ describe('дебаунс офлайн-индикатора', () => {
     vi.advanceTimersByTime(1000);
     fireReconnecting();
     vi.advanceTimersByTime(1500); // 2.5с от ПЕРВОГО события
-    expect(h.notifyOffline).toHaveBeenCalledTimes(1);
+    expect(h.setConnectionState).toHaveBeenCalledTimes(1);
+    expect(h.setConnectionState).toHaveBeenCalledWith('offline');
     vi.advanceTimersByTime(10_000);
-    expect(h.notifyOffline).toHaveBeenCalledTimes(1);
+    expect(h.setConnectionState).toHaveBeenCalledTimes(1);
   });
 
   it('onclose — офлайн сразу, без дебаунса', () => {
     fireClose();
-    expect(h.notifyOffline).toHaveBeenCalledTimes(1);
+    expect(h.setConnectionState).toHaveBeenCalledWith('offline');
+    expect(h.connState).toBe('offline');
   });
 });
 

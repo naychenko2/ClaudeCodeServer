@@ -1,0 +1,1018 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Макет 2: Переключатель режима просмотра файла</title>
+
+  <!-- Шрифты дизайн-системы -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=PT+Serif:wght@400;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+  <style>
+    /* === CSS-переменные из дизайн-системы (design.ts + theme.css) === */
+    :root {
+      /* Шрифты */
+      --font-sans: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      --font-serif: 'PT Serif', Georgia, serif;
+      --font-mono: 'JetBrains Mono', 'Courier New', monospace;
+
+      /* Размерная шкала шрифтов */
+      --fs-xs: 11px;
+      --fs-sm: 12px;
+      --fs-base: 13px;
+      --fs-md: 14px;
+      --fs-lg: 16px;
+      --fs-h1: 28px;
+      --fs-h2: 22px;
+
+      /* Размерная шкала отступов */
+      --sp-xxs: 2px;
+      --sp-xs: 4px;
+      --sp-sm: 8px;
+      --sp-md: 12px;
+      --sp-lg: 16px;
+      --sp-xl: 24px;
+      --sp-xxl: 32px;
+
+      /* Радиусы */
+      --r-sm: 6px;
+      --r-md: 8px;
+      --r-lg: 10px;
+      --r-xl: 12px;
+      --r-xxl: 14px;
+      --r-pill: 9px;
+      --r-modal: 20px;
+
+      /* Фоны - светлая тема */
+      --c-bg-main: #F4F0E8;
+      --c-bg-panel: #EDE7DC;
+      --c-bg-card: #FBF8F2;
+      --c-bg-white: #FFFFFF;
+      --c-bg-selected: #E8E1D4;
+      --c-bg-inset: #E7E0D2;
+
+      /* Текст */
+      --c-text-heading: #2A251F;
+      --c-text-primary: #39332B;
+      --c-text-secondary: #756B5E;
+      --c-text-muted: #9A8F7E;
+      --c-on-accent: #FBF8F2;
+      --c-on-dark: #FFFFFF;
+
+      /* Акцент */
+      --c-accent: #D97757;
+      --c-accent-light: #F4ECE1;
+      --c-accent-muted: #EAD3C5;
+
+      /* Границы */
+      --c-border: #E0D7C8;
+      --c-border-light: #E8E1D4;
+      --c-divider: #DDD4C4;
+      --c-dashed: #D0C6B4;
+
+      /* Статусы */
+      --c-success: #5E8B4E;
+      --c-warning: #C9923E;
+      --c-danger: #B4452F;
+      --c-info: #3E7CA6;
+
+      /* Тени */
+      --shadow-card: 0 2px 8px rgba(60, 50, 35, 0.05);
+      --shadow-island: 0 1px 2px rgba(60, 50, 35, 0.06), 0 6px 20px rgba(60, 50, 35, 0.10);
+      --shadow-button: 0 4px 14px rgba(217, 119, 87, 0.30);
+      --shadow-thumb: 0 1px 3px rgba(42, 37, 31, 0.12);
+
+      /* Тулбар */
+      --tb-height-desktop: 52px;
+      --tb-pad-x: 16px;
+      --tb-icon-hit: 32px;
+      --tb-pill-track: #E8E1D4;
+      --tb-pill-thumb-bg: #FFFFFF;
+      --tb-pill-radius: 9px;
+
+      /* Остров */
+      --island-pad: 16px;
+      --island-gap: 8px;
+      --island-radius: var(--r-xxl);
+      --island-border: var(--c-border-light);
+    }
+
+    /* Тёмная тема */
+    [data-theme="dark"] {
+      --c-bg-main: #201C18;
+      --c-bg-panel: #272320;
+      --c-bg-card: #2E2A25;
+      --c-bg-white: #2E2A25;
+      --c-bg-selected: #38332D;
+      --c-bg-inset: #1B1815;
+
+      --c-text-heading: #F2ECE1;
+      --c-text-primary: #EDE6DB;
+      --c-text-secondary: #B3A897;
+      --c-text-muted: #8A8072;
+      --c-on-accent: #201C18;
+
+      --c-accent: #E38A6A;
+      --c-accent-light: #3A2E27;
+      --c-accent-muted: #4A362C;
+
+      --c-border: #3D3830;
+      --c-border-light: #34302A;
+      --c-divider: #454037;
+      --c-dashed: #4A443B;
+
+      --tb-pill-track: #38332D;
+      --tb-pill-thumb-bg: #2E2A25;
+
+      --shadow-island: 0 1px 2px rgba(0, 0, 0, 0.30), 0 8px 24px rgba(0, 0, 0, 0.45);
+      --shadow-button: 0 4px 16px rgba(227, 138, 106, 0.34);
+      --shadow-thumb: 0 1px 3px rgba(0, 0, 0, 0.45);
+    }
+
+    /* === Базовые стили === */
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: var(--font-sans);
+      font-size: var(--fs-base);
+      color: var(--c-text-primary);
+      background: var(--c-bg-main);
+      line-height: 1.5;
+      padding: var(--sp-lg);
+      min-height: 100vh;
+    }
+
+    /* Переключатель темы */
+    .theme-toggle {
+      position: fixed;
+      top: var(--sp-lg);
+      right: var(--sp-lg);
+      z-index: 1000;
+    }
+
+    .theme-toggle button {
+      padding: var(--sp-sm) var(--sp-md);
+      font-family: var(--font-sans);
+      font-size: var(--fs-sm);
+      font-weight: 600;
+      color: var(--c-text-heading);
+      background: var(--c-bg-white);
+      border: 1px solid var(--c-border);
+      border-radius: var(--r-md);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .theme-toggle button:hover {
+      background: var(--c-bg-selected);
+      border-color: var(--c-accent);
+    }
+
+    /* === Макет-контейнер === */
+    .mockup-container {
+      max-width: 1400px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp-xl);
+    }
+
+    .mockup-section {
+      background: var(--c-bg-card);
+      border-radius: var(--island-radius);
+      border: 1px solid var(--island-border);
+      overflow: hidden;
+    }
+
+    .mockup-header {
+      padding: var(--sp-md) var(--sp-lg);
+      background: var(--c-bg-inset);
+      border-bottom: 1px solid var(--c-border);
+      display: flex;
+      align-items: center;
+      gap: var(--sp-md);
+    }
+
+    .mockup-title {
+      font-family: var(--font-serif);
+      font-size: var(--fs-h2);
+      font-weight: 600;
+      color: var(--c-text-heading);
+    }
+
+    .mockup-subtitle {
+      font-size: var(--fs-sm);
+      color: var(--c-text-secondary);
+      margin-left: auto;
+    }
+
+    .mockup-body {
+      padding: var(--sp-lg);
+    }
+
+    /* === Вариант 1: PillSwitch с двумя сегментами === */
+    .pillswitch-demo {
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp-md);
+    }
+
+    .pillswitch-row {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-md);
+    }
+
+    .pillswitch-label {
+      font-size: var(--fs-sm);
+      color: var(--c-text-secondary);
+      min-width: 80px;
+    }
+
+    /* PillSwitch для 2 опций */
+    .pill-switch {
+      position: relative;
+      display: flex;
+      gap: 3px;
+      background: var(--tb-pill-track);
+      border-radius: var(--tb-pill-radius);
+      padding: 3px;
+    }
+
+    .pill-switch button {
+      position: relative;
+      z-index: 1;
+      padding: 6px 12px;
+      min-height: 32px;
+      border-radius: var(--r-pill);
+      border: none;
+      cursor: pointer;
+      font-family: var(--font-sans);
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--c-text-secondary);
+      background: transparent;
+      transition: color 0.15s;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .pill-switch button:hover {
+      color: var(--c-text-heading);
+    }
+
+    .pill-switch button.active {
+      color: var(--c-text-heading);
+    }
+
+    /* Скользящая пилюля */
+    .pill-thumb {
+      position: absolute;
+      top: 3px;
+      bottom: 3px;
+      background: var(--tb-pill-thumb-bg);
+      border-radius: var(--r-pill);
+      box-shadow: var(--shadow-thumb);
+      transition: left 0.32s cubic-bezier(0.32, 0.72, 0, 1), width 0.32s cubic-bezier(0.32, 0.72, 0, 1);
+      pointer-events: none;
+    }
+
+    /* === Вариант 2: Пара иконок-кнопок === */
+    .icon-buttons-demo {
+      display: flex;
+      gap: var(--sp-sm);
+    }
+
+    .icon-btn {
+      width: var(--tb-icon-hit);
+      height: var(--tb-icon-hit);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: var(--r-md);
+      border: none;
+      background: transparent;
+      cursor: pointer;
+      color: var(--c-text-muted);
+      transition: all 0.15s;
+    }
+
+    .icon-btn:hover {
+      background: var(--c-bg-selected);
+      color: var(--c-text-primary);
+    }
+
+    .icon-btn.active {
+      background: var(--c-accent-light);
+      color: var(--c-accent);
+    }
+
+    .icon-btn svg {
+      width: 18px;
+      height: 18px;
+      stroke-width: 2;
+    }
+
+    /* === Workspace layout demo === */
+    .workspace-demo {
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp-lg);
+    }
+
+    .workspace-layout {
+      display: flex;
+      height: 500px;
+      border-radius: var(--r-lg);
+      overflow: hidden;
+      border: 1px solid var(--c-border);
+      background: var(--c-bg-main);
+    }
+
+    /* Сайдбар: список чатов */
+    .sidebar {
+      width: 280px;
+      background: var(--c-bg-panel);
+      border-right: 1px solid var(--c-border);
+      display: flex;
+      flex-direction: column;
+    }
+
+    .sidebar-header {
+      height: var(--tb-height-desktop);
+      padding: 0 var(--tb-pad-x);
+      display: flex;
+      align-items: center;
+      gap: var(--sp-sm);
+      border-bottom: 1px solid var(--c-border);
+    }
+
+    .sidebar-title {
+      font-family: var(--font-serif);
+      font-size: var(--fs-lg);
+      font-weight: 600;
+      color: var(--c-text-heading);
+    }
+
+    .chat-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: var(--sp-sm);
+    }
+
+    .chat-item {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-sm);
+      padding: var(--sp-sm);
+      border-radius: var(--r-md);
+      cursor: pointer;
+      transition: background 0.15s;
+      margin-bottom: var(--sp-xs);
+    }
+
+    .chat-item:hover {
+      background: var(--c-bg-selected);
+    }
+
+    .chat-item.active {
+      background: var(--c-accent-light);
+    }
+
+    .chat-avatar {
+      width: 32px;
+      height: 32px;
+      border-radius: var(--r-full);
+      background: var(--c-accent);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--c-on-accent);
+      font-size: var(--fs-sm);
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+
+    .chat-info {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .chat-title {
+      font-size: var(--fs-base);
+      font-weight: 500;
+      color: var(--c-text-heading);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .chat-preview {
+      font-size: var(--fs-sm);
+      color: var(--c-text-secondary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* Центральная зона: чат */
+    .center {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      background: var(--c-bg-card);
+      border-right: 1px solid var(--c-border);
+    }
+
+    .center-header {
+      height: var(--tb-height-desktop);
+      padding: 0 var(--tb-pad-x);
+      display: flex;
+      align-items: center;
+      gap: var(--sp-sm);
+      border-bottom: 1px solid var(--c-border);
+    }
+
+    .center-title {
+      font-size: var(--fs-lg);
+      font-weight: 600;
+      color: var(--c-text-heading);
+    }
+
+    .center-content {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: var(--sp-xl);
+    }
+
+    .empty-state {
+      text-align: center;
+      color: var(--c-text-muted);
+    }
+
+    /* Правая зона: файл (Сплит режим) */
+    .file-panel-split {
+      width: 480px;
+      background: var(--c-bg-panel);
+      display: flex;
+      flex-direction: column;
+    }
+
+    .file-header {
+      height: var(--tb-height-desktop);
+      padding: 0 var(--tb-pad-x);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--c-border);
+    }
+
+    .file-title {
+      font-size: var(--fs-base);
+      font-weight: 500;
+      color: var(--c-text-heading);
+    }
+
+    .file-controls {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-sm);
+    }
+
+    .file-content {
+      flex: 1;
+      padding: var(--sp-lg);
+      font-family: var(--font-mono);
+      font-size: var(--fs-sm);
+      color: var(--c-text-secondary);
+      overflow-y: auto;
+      line-height: 1.6;
+    }
+
+    /* Splitter между центром и файлом */
+    .splitter {
+      width: 1px;
+      background: var(--c-border);
+      cursor: col-resize;
+      transition: background 0.15s;
+    }
+
+    .splitter:hover {
+      background: var(--c-accent);
+    }
+
+    /* === Полный режим: файл на всю контентную зону === */
+    .file-panel-full {
+      flex: 1;
+      background: var(--c-bg-panel);
+      display: flex;
+      flex-direction: column;
+    }
+
+    .file-panel-full .center {
+      display: none;
+    }
+
+    .file-panel-full .splitter {
+      display: none;
+    }
+
+    /* === Тулбар FileViewer === */
+    .file-viewer-toolbar {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-sm);
+    }
+
+    .toolbar-divider {
+      width: 1px;
+      height: 20px;
+      background: var(--c-divider);
+      margin: 0 var(--sp-sm);
+    }
+
+    /* === Мобильная раскладка === */
+    .mobile-demo {
+      border: 1px dashed var(--c-dashed);
+      border-radius: var(--r-lg);
+      padding: var(--sp-lg);
+    }
+
+    .mobile-layout {
+      max-width: 600px;
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp-md);
+    }
+
+    .mobile-file-viewer {
+      background: var(--c-bg-panel);
+      border-radius: var(--r-lg);
+      overflow: hidden;
+      border: 1px solid var(--c-border);
+    }
+
+    .mobile-file-header {
+      height: 56px;
+      padding: 0 var(--sp-md);
+      display: flex;
+      align-items: center;
+      gap: var(--sp-sm);
+      border-bottom: 1px solid var(--c-border);
+    }
+
+    .mobile-file-title {
+      flex: 1;
+      font-size: var(--fs-base);
+      font-weight: 500;
+      color: var(--c-text-heading);
+    }
+
+    .mobile-file-content {
+      padding: var(--sp-md);
+      font-family: var(--font-mono);
+      font-size: var(--fs-sm);
+      color: var(--c-text-secondary);
+      line-height: 1.6;
+    }
+
+    /* === Адаптив === */
+    @media (max-width: 600px) {
+      body {
+        padding: var(--sp-md);
+      }
+
+      .workspace-layout {
+        flex-direction: column;
+        height: auto;
+      }
+
+      .sidebar {
+        width: 100%;
+        border-right: none;
+        border-bottom: 1px solid var(--c-border);
+        max-height: 300px;
+      }
+
+      .file-panel-split {
+        width: 100%;
+        border-left: none;
+      }
+
+      .splitter {
+        width: 100%;
+        height: 1px;
+        cursor: row-resize;
+      }
+
+      .center {
+        border-right: none;
+        border-bottom: 1px solid var(--c-border);
+        min-height: 300px;
+      }
+
+      /* На мобиле переключатель скрыт, только полный режим */
+      .desktop-only-controls {
+        display: none !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <!-- Переключатель темы -->
+  <div class="theme-toggle">
+    <button onclick="toggleTheme()" id="themeBtn">Светлая тема</button>
+  </div>
+
+  <div class="mockup-container">
+    <!-- Заголовок макета -->
+    <div style="text-align: center; margin-bottom: var(--sp-xl);">
+      <h1 style="font-family: var(--font-serif); font-size: var(--fs-h1); font-weight: 600; color: var(--c-text-heading); margin-bottom: var(--sp-sm);">
+        Макет 2: Переключатель режима просмотра файла
+      </h1>
+      <p style="font-size: var(--fs-base); color: var(--c-text-secondary);">
+        Сплит (рядом с чатом) / Полный (на всю контентную зону)
+      </p>
+    </div>
+
+    <!-- Вариант 1: PillSwitch (сегментный контрол) -->
+    <div class="mockup-section">
+      <div class="mockup-header">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--c-accent);">
+          <circle cx="12" cy="12" r="10"/>
+          <path d="M12 6v6l4 2"/>
+        </svg>
+        <span class="mockup-title">Вариант 1: PillSwitch с двумя сегментами</span>
+        <span class="mockup-subtitle">Выбран: компактный сегментный контрол</span>
+      </div>
+      <div class="mockup-body">
+        <div class="pillswitch-demo">
+          <div style="margin-bottom: var(--sp-md);">
+            <p style="font-size: var(--fs-sm); color: var(--c-text-secondary); margin-bottom: var(--sp-sm);">
+              <strong>Обоснование выбора:</strong> PillSwitch следует существующей конвенции проекта (уже используется в тулбарах), компактно помещается в заголовок FileViewer, и обеспечивает понятное переключение двух состояний.
+            </p>
+          </div>
+
+          <!-- Пример: Сплит / Полный -->
+          <div class="pillswitch-row">
+            <span class="pillswitch-label">Тулбар:</span>
+            <div class="pill-switch" style="width: 200px;">
+              <div class="pill-thumb" style="left: 3px; width: 96px;"></div>
+              <button class="active">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="9" x2="15" y2="15"/><line x1="15" y1="9" x2="9" y2="15"/></svg>
+                Сплит
+              </button>
+              <button>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+                Полный
+              </button>
+            </div>
+          </div>
+
+          <!-- Пример: Компактная версия на узкой ленте -->
+          <div class="pillswitch-row">
+            <span class="pillswitch-label">Компакт:</span>
+            <div class="pill-switch" style="width: 160px;">
+              <div class="pill-thumb" style="left: 3px; width: 76px;"></div>
+              <button class="active">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="9" x2="15" y2="15"/><line x1="15" y1="9" x2="9" y2="15"/></svg>
+              </button>
+              <button>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Вариант 2: Пара иконок-кнопок (альтернатива) -->
+    <div class="mockup-section">
+      <div class="mockup-header">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--c-text-muted);">
+          <circle cx="12" cy="12" r="1"/>
+          <circle cx="12" cy="5" r="1"/>
+          <circle cx="12" cy="19" r="1"/>
+        </svg>
+        <span class="mockup-title">Вариант 2: Пара иконок-кнопок (альтернатива)</span>
+        <span class="mockup-subtitle">Отклонено: менее понятно и занимает больше места</span>
+      </div>
+      <div class="mockup-body">
+        <div style="margin-bottom: var(--sp-md);">
+          <p style="font-size: var(--fs-sm); color: var(--c-text-secondary);">
+            <strong>Почему отклонено:</strong> Иконки-кнопки менее интуитивны для переключения двух состояний и занимают больше места в тулбаре. PillSwitch следует существующей конвенции проекта.
+          </p>
+        </div>
+        <div class="icon-buttons-demo">
+          <button class="icon-btn active" title="Сплит">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="9" x2="15" y2="15"/><line x1="15" y1="9" x2="9" y2="15"/></svg>
+          </button>
+          <button class="icon-btn" title="Полный">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Режим «Сплит»: файл рядом с чатом -->
+    <div class="mockup-section">
+      <div class="mockup-header">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--c-accent);">
+          <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="9" x2="15" y2="15"/><line x1="15" y1="9" x2="9" y2="15"/>
+        </svg>
+        <span class="mockup-title">Режим «Сплит»: файл рядом с чатом</span>
+        <span class="mockup-subtitle">Разделитель Splitter между центром и файлом</span>
+      </div>
+      <div class="mockup-body">
+        <div class="workspace-demo">
+          <!-- Workspace layout с сплитом -->
+          <div class="workspace-layout">
+            <!-- Сайдбар: список чатов -->
+            <div class="sidebar">
+              <div class="sidebar-header">
+                <span class="sidebar-title">Проект</span>
+              </div>
+              <div class="chat-list">
+                <div class="chat-item active">
+                  <div class="chat-avatar">К</div>
+                  <div class="chat-info">
+                    <div class="chat-title">Клиентский проект</div>
+                    <div class="chat-preview">Обсуждаем сроки с …</div>
+                  </div>
+                </div>
+                <div class="chat-item">
+                  <div class="chat-avatar" style="background: var(--tag-purple);">И</div>
+                  <div class="chat-info">
+                    <div class="chat-title">Идеи фич</div>
+                    <div class="chat-preview">Предложение по UI …</div>
+                  </div>
+                </div>
+                <div class="chat-item">
+                  <div class="chat-avatar" style="background: var(--tag-green);">А</div>
+                  <div class="chat-info">
+                    <div class="chat-title">Архив</div>
+                    <div class="chat-preview">Старые заметки …</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Центр: чат -->
+            <div class="center">
+              <div class="center-header">
+                <span class="center-title">Клиентский проект</span>
+                <div class="file-viewer-toolbar desktop-only-controls" style="margin-left: auto;">
+                  <button class="icon-btn" title="Предыдущий">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="15 18 9 12 15 4"/><path d="M20 6v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2z"/></svg>
+                  </button>
+                  <button class="icon-btn" title="Следующий">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="9 18 15 12 9 20"/><path d="M22 6v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"/></svg>
+                  </button>
+                </div>
+              </div>
+              <div class="center-content">
+                <div class="empty-state">
+                  <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="color: var(--c-text-muted); margin-bottom: var(--sp-sm);">
+                    <circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
+                  </svg>
+                  <p>Выберите сообщение или файл для просмотра</p>
+                </div>
+              </div>
+            </div>
+
+            <!-- Splitter -->
+            <div class="splitter"></div>
+
+            <!-- Файл: сплит режим -->
+            <div class="file-panel-split">
+              <div class="file-header">
+                <div>
+                  <div class="file-title">SessionList.tsx</div>
+                  <div style="font-size: var(--fs-xs); color: var(--c-text-muted);">frontend/src/components/SessionList.tsx</div>
+                </div>
+                <div class="file-controls desktop-only-controls">
+                  <button class="icon-btn" title="Скачать">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                  </button>
+                  <button class="icon-btn" title="Копировать">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                  </button>
+                </div>
+              </div>
+              <div class="file-content">
+<pre style="white-space: pre-wrap; margin: 0;"><code style="font-family: inherit; font-size: inherit; color: inherit;">import { useEffect, useMemo, useState } from 'react';
+import type { Project, Session } from '../types';
+import { api } from '../lib/api';
+import { useOnline } from '../hooks/useOnline';
+
+export function SessionList({ project, activeSession, onSelect }: Props) {
+  const [sessions, setSessions] = useState&lt;Session[]&gt;([]);
+
+  useEffect(() => {
+    const init = async () => {
+      const list = await api.sessions.list(project.id);
+      setSessions(list);
+    };
+    init();
+  }, [project.id]);
+
+  return (
+    &lt;div&gt;
+      {sessions.map(session => (
+        &lt;ChatCard
+          key={session.id}
+          session={session}
+          active={session.id === activeSession?.id}
+          onClick={() => onSelect(session)}
+        /&gt;
+      ))}
+    &lt;/div&gt;
+  );
+}</code></pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Режим «Полный»: файл на всю контентную зону -->
+    <div class="mockup-section">
+      <div class="mockup-header">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--c-accent);">
+          <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+        </svg>
+        <span class="mockup-title">Режим «Полный»: файл на всю контентную зону</span>
+        <span class="mockup-subtitle">Чат скрыт/схлопнут, файл занимает всё место</span>
+      </div>
+      <div class="mockup-body">
+        <div class="workspace-demo">
+          <!-- Workspace layout с полным режимом -->
+          <div class="workspace-layout">
+            <!-- Сайдбар: список чатов (виден) -->
+            <div class="sidebar">
+              <div class="sidebar-header">
+                <span class="sidebar-title">Проект</span>
+              </div>
+              <div class="chat-list">
+                <div class="chat-item">
+                  <div class="chat-avatar">К</div>
+                  <div class="chat-info">
+                    <div class="chat-title">Клиентский проект</div>
+                    <div class="chat-preview">Обсуждаем сроки с …</div>
+                  </div>
+                </div>
+                <div class="chat-item active">
+                  <div class="chat-avatar" style="background: var(--tag-purple);">И</div>
+                  <div class="chat-info">
+                    <div class="chat-title">Идеи фич</div>
+                    <div class="chat-preview">Предложение по UI …</div>
+                  </div>
+                </div>
+                <div class="chat-item">
+                  <div class="chat-avatar" style="background: var(--tag-green);">А</div>
+                  <div class="chat-info">
+                    <div class="chat-title">Архив</div>
+                    <div class="chat-preview">Старые заметки …</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Центр и файл (в полном режиме) -->
+            <div class="file-panel-full">
+              <div class="file-header">
+                <div>
+                  <div class="file-title">SessionList.tsx</div>
+                  <div style="font-size: var(--fs-xs); color: var(--c-text-muted);">frontend/src/components/SessionList.tsx</div>
+                </div>
+                <div class="file-controls">
+                  <!-- PillSwitch переключения режимов -->
+                  <div class="pill-switch" style="width: 200px;">
+                    <div class="pill-thumb" style="left: 102px; width: 94px;"></div>
+                    <button>
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="9" x2="15" y2="15"/><line x1="15" y1="9" x2="9" y2="15"/></svg>
+                      Сплит
+                    </button>
+                    <button class="active">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+                      Полный
+                    </button>
+                  </div>
+                  <div class="toolbar-divider"></div>
+                  <button class="icon-btn" title="Скачать">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                  </button>
+                  <button class="icon-btn" title="Копировать">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                  </button>
+                  <button class="icon-btn" title="Закрыть">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                  </button>
+                </div>
+              </div>
+              <div class="file-content">
+<pre style="white-space: pre-wrap; margin: 0;"><code style="font-family: inherit; font-size: inherit; color: inherit;">import { useEffect, useMemo, useState } from 'react';
+import type { Project, Session } from '../types';
+import { api } from '../lib/api';
+import { useOnline } from '../hooks/useOnline';
+
+export function SessionList({ project, activeSession, onSelect }: Props) {
+  const [sessions, setSessions] = useState&lt;Session[]&gt;([]);
+
+  useEffect(() => {
+    const init = async () => {
+      const list = await api.sessions.list(project.id);
+      setSessions(list);
+    };
+    init();
+  }, [project.id]);
+
+  return (
+    &lt;div&gt;
+      {sessions.map(session => (
+        &lt;ChatCard
+          key={session.id}
+          session={session}
+          active={session.id === activeSession?.id}
+          onClick={() => onSelect(session)}
+        /&gt;
+      ))}
+    &lt;/div&gt;
+  );
+}
+
+// === Полный режим: файл занимает всё место ===
+// Чат скрыт/схлопнут, пользователь видит только файл.
+// Переключатель в заголовке файла позволяет вернуться к сплиту.</code></pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Мобильная раскладка -->
+    <div class="mockup-section">
+      <div class="mockup-header">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--c-accent);">
+          <rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/>
+        </svg>
+        <span class="mockup-title">Мобильная раскладка (≤600px)</span>
+        <span class="mockup-subtitle">Только полный режим, переключатель скрыт</span>
+      </div>
+      <div class="mockup-body">
+        <div class="mobile-demo">
+          <p style="font-size: var(--fs-sm); color: var(--c-text-secondary); margin-bottom: var(--sp-md);">
+            <strong>useIsMobile (MOBILE_MAX=600):</strong> На мобильных устройствах экран слишком узкий для сплита, поэтому показываем только полный режим. Переключатель скрыт через CSS (desktop-only-controls).
+          </p>
+
+          <div class="mobile-layout">
+            <div class="mobile-file-viewer">
+              <div class="mobile-file-header">
+                <button class="icon-btn" style="margin-right: var(--sp-sm);">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M15 18l-6-6 6-6"/><path d="M20 6v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2z"/></svg>
+                </button>
+                <span class="mobile-file-title">SessionList.tsx</span>
+                <button class="icon-btn" style="margin-left: auto;">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                </button>
+              </div>
+              <div class="mobile-file-content">
+                <p style="margin-bottom: var(--sp-sm); color: var(--c-text-secondary);">На мобильных устройствах:</p>
+                <ul style="padding-left: var(--sp-lg); color: var(--c-text-secondary); line-height: 1.6;">
+                  <li>Переключатель режимов скрыт (display: none для desktop-only-controls)</li>
+                  <li>Файл занимает всю ширину экрана</li>
+                  <li>Кнопка «Назад» возвращает к списку чатов</li>
+                  <li>Отступы компактнее (padding: var(--sp-md))</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function toggleTheme() {
+      const html = document.documentElement;
+      const current = html.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      html.setAttribute('data-theme', next);
+
+      const btn = document.getElementById('themeBtn');
+      btn.textContent = next === 'dark' ? 'Тёмная тема' : 'Светлая тема';
+    }
+  </script>
+</body>
+</html>

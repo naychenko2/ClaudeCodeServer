@@ -1,0 +1,1094 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Макет 1: Тумблер режимов списка чатов + режим «Теги»</title>
+
+  <!-- Шрифты дизайн-системы -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=PT+Serif:wght@400;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+  <style>
+    /* === CSS-переменные из дизайн-системы (design.ts + theme.css) === */
+    :root {
+      /* Шрифты */
+      --font-sans: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      --font-serif: 'PT Serif', Georgia, serif;
+      --font-mono: 'JetBrains Mono', 'Courier New', monospace;
+
+      /* Размерная шкала шрифтов */
+      --fs-xs: 11px;
+      --fs-sm: 12px;
+      --fs-base: 13px;
+      --fs-md: 14px;
+      --fs-lg: 16px;
+      --fs-h1: 28px;
+      --fs-h2: 22px;
+
+      /* Размерная шкала отступов */
+      --sp-xxs: 2px;
+      --sp-xs: 4px;
+      --sp-sm: 8px;
+      --sp-md: 12px;
+      --sp-lg: 16px;
+      --sp-xl: 24px;
+      --sp-xxl: 32px;
+
+      /* Радиусы */
+      --r-sm: 6px;
+      --r-md: 8px;
+      --r-lg: 10px;
+      --r-xl: 12px;
+      --r-xxl: 14px;
+      --r-pill: 9px;
+      --r-modal: 20px;
+
+      /* Фоны - светлая тема */
+      --c-bg-main: #F4F0E8;
+      --c-bg-panel: #EDE7DC;
+      --c-bg-card: #FBF8F2;
+      --c-bg-white: #FFFFFF;
+      --c-bg-selected: #E8E1D4;
+      --c-bg-inset: #E7E0D2;
+
+      /* Текст */
+      --c-text-heading: #2A251F;
+      --c-text-primary: #39332B;
+      --c-text-secondary: #756B5E;
+      --c-text-muted: #9A8F7E;
+      --c-on-accent: #FBF8F2;
+      --c-on-dark: #FFFFFF;
+
+      /* Акцент */
+      --c-accent: #D97757;
+      --c-accent-light: #F4ECE1;
+      --c-accent-muted: #EAD3C5;
+
+      /* Границы */
+      --c-border: #E0D7C8;
+      --c-border-light: #E8E1D4;
+      --c-divider: #DDD4C4;
+      --c-dashed: #D0C6B4;
+
+      /* Статусы */
+      --c-success: #5E8B4E;
+      --c-warning: #C9923E;
+      --c-danger: #B4452F;
+      --c-info: #3E7CA6;
+
+      /* Тени */
+      --shadow-card: 0 2px 8px rgba(60, 50, 35, 0.05);
+      --shadow-island: 0 1px 2px rgba(60, 50, 35, 0.06), 0 6px 20px rgba(60, 50, 35, 0.10);
+      --shadow-button: 0 4px 14px rgba(217, 119, 87, 0.30);
+      --shadow-thumb: 0 1px 3px rgba(42, 37, 31, 0.12);
+
+      /* Тулбар */
+      --tb-pill-track: #E8E1D4;
+      --tb-pill-thumb-bg: #FFFFFF;
+      --tb-pill-radius: 9px;
+
+      /* Палитра тегов (GROUP_COLORS) */
+      --tag-blue: #3E7CA6;
+      --tag-purple: #8E4A82;
+      --tag-green: #3F7A4F;
+      --tag-orange: #C2693B;
+      --tag-red: #B4452F;
+      --tag-indigo: #4B6BB0;
+      --tag-khaki: #7A7250;
+    }
+
+    /* Тёмная тема */
+    [data-theme="dark"] {
+      --c-bg-main: #201C18;
+      --c-bg-panel: #272320;
+      --c-bg-card: #2E2A25;
+      --c-bg-white: #2E2A25;
+      --c-bg-selected: #38332D;
+      --c-bg-inset: #1B1815;
+
+      --c-text-heading: #F2ECE1;
+      --c-text-primary: #EDE6DB;
+      --c-text-secondary: #B3A897;
+      --c-text-muted: #8A8072;
+      --c-on-accent: #201C18;
+
+      --c-accent: #E38A6A;
+      --c-accent-light: #3A2E27;
+      --c-accent-muted: #4A362C;
+
+      --c-border: #3D3830;
+      --c-border-light: #34302A;
+      --c-divider: #454037;
+      --c-dashed: #4A443B;
+
+      --tb-pill-track: #38332D;
+      --tb-pill-thumb-bg: #2E2A25;
+
+      --shadow-island: 0 1px 2px rgba(0, 0, 0, 0.30), 0 8px 24px rgba(0, 0, 0, 0.45);
+      --shadow-button: 0 4px 16px rgba(227, 138, 106, 0.34);
+      --shadow-thumb: 0 1px 3px rgba(0, 0, 0, 0.45);
+    }
+
+    /* === Базовые стили === */
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: var(--font-sans);
+      font-size: var(--fs-base);
+      color: var(--c-text-primary);
+      background: var(--c-bg-main);
+      line-height: 1.5;
+      padding: var(--sp-lg);
+      min-height: 100vh;
+    }
+
+    /* Переключатель темы */
+    .theme-toggle {
+      position: fixed;
+      top: var(--sp-lg);
+      right: var(--sp-lg);
+      z-index: 1000;
+    }
+
+    .theme-toggle button {
+      padding: var(--sp-sm) var(--sp-md);
+      font-family: var(--font-sans);
+      font-size: var(--fs-sm);
+      font-weight: 600;
+      color: var(--c-text-heading);
+      background: var(--c-bg-white);
+      border: 1px solid var(--c-border);
+      border-radius: var(--r-md);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .theme-toggle button:hover {
+      background: var(--c-bg-selected);
+      border-color: var(--c-accent);
+    }
+
+    /* === Макет-контейнер === */
+    .mockup-container {
+      max-width: 1200px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp-xl);
+    }
+
+    .mockup-section {
+      background: var(--c-bg-card);
+      border-radius: var(--r-xxl);
+      border: 1px solid var(--c-border-light);
+      overflow: hidden;
+    }
+
+    .mockup-header {
+      padding: var(--sp-md) var(--sp-lg);
+      background: var(--c-bg-inset);
+      border-bottom: 1px solid var(--c-border);
+      display: flex;
+      align-items: center;
+      gap: var(--sp-md);
+    }
+
+    .mockup-title {
+      font-family: var(--font-serif);
+      font-size: var(--fs-h2);
+      font-weight: 600;
+      color: var(--c-text-heading);
+    }
+
+    .mockup-subtitle {
+      font-size: var(--fs-sm);
+      color: var(--c-text-secondary);
+      margin-left: auto;
+    }
+
+    .mockup-body {
+      padding: var(--sp-lg);
+    }
+
+    /* === Вариант 1: PillSwitch (сегментный контрол) === */
+    .pillswitch-demo {
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp-md);
+    }
+
+    .pillswitch-row {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-md);
+    }
+
+    .pillswitch-label {
+      font-size: var(--fs-sm);
+      color: var(--c-text-secondary);
+      min-width: 100px;
+    }
+
+    /* PillSwitch для 3 опций */
+    .pill-switch {
+      position: relative;
+      display: flex;
+      gap: 3px;
+      background: var(--tb-pill-track);
+      border-radius: var(--tb-pill-radius);
+      padding: 3px;
+    }
+
+    .pill-switch button {
+      position: relative;
+      z-index: 1;
+      padding: 6px 12px;
+      min-height: 32px;
+      border-radius: var(--r-pill);
+      border: none;
+      cursor: pointer;
+      font-family: var(--font-sans);
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--c-text-secondary);
+      background: transparent;
+      transition: color 0.15s;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .pill-switch button:hover {
+      color: var(--c-text-heading);
+    }
+
+    .pill-switch button.active {
+      color: var(--c-text-heading);
+    }
+
+    /* Скользящая пилюля */
+    .pill-thumb {
+      position: absolute;
+      top: 3px;
+      bottom: 3px;
+      background: var(--tb-pill-thumb-bg);
+      border-radius: var(--r-pill);
+      box-shadow: var(--shadow-thumb);
+      transition: left 0.32s cubic-bezier(0.32, 0.72, 0, 1), width 0.32s cubic-bezier(0.32, 0.72, 0, 1);
+      pointer-events: none;
+    }
+
+    /* === Вариант 2: Иконки-кнопки === */
+    .icon-buttons-demo {
+      display: flex;
+      gap: var(--sp-sm);
+    }
+
+    .icon-btn {
+      width: 40px;
+      height: 40px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: var(--r-md);
+      border: none;
+      background: transparent;
+      cursor: pointer;
+      color: var(--c-text-muted);
+      transition: all 0.15s;
+    }
+
+    .icon-btn:hover {
+      background: var(--c-bg-selected);
+      color: var(--c-text-primary);
+    }
+
+    .icon-btn.active {
+      background: var(--c-accent-light);
+      color: var(--c-accent);
+    }
+
+    .icon-btn svg {
+      width: 18px;
+      height: 18px;
+      stroke-width: 2;
+    }
+
+    /* === Режим «Теги»: список чатов сгруппирован === */
+    .tags-mode-demo {
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp-lg);
+    }
+
+    /* Фильтр-чипы вместе с другими фильтрами */
+    .filter-bar {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-sm);
+      flex-wrap: wrap;
+      padding: var(--sp-sm) 0;
+    }
+
+    .search-field {
+      flex: 1;
+      min-width: 200px;
+      max-width: 400px;
+    }
+
+    .search-field input {
+      width: 100%;
+      padding: 6px 12px;
+      font-family: var(--font-sans);
+      font-size: 13px;
+      color: var(--c-text-heading);
+      background: var(--c-bg-white);
+      border: 1px solid var(--c-border);
+      border-radius: var(--r-xl);
+      outline: none;
+    }
+
+    .search-field input:focus {
+      border-color: var(--c-accent);
+      box-shadow: 0 0 0 3px rgba(217, 119, 87, 0.14);
+    }
+
+    .filter-chip {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-xs);
+      padding: 4px 8px;
+      font-size: var(--fs-xs);
+      font-weight: 600;
+      border-radius: var(--r-pill);
+      background: var(--c-bg-selected);
+      color: var(--c-text-secondary);
+      border: none;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .filter-chip.active {
+      background: var(--c-accent-light);
+      color: var(--c-accent);
+    }
+
+    .filter-chip:hover {
+      background: var(--c-bg-selected);
+    }
+
+    .filter-chip.active:hover {
+      background: var(--c-accent-muted);
+    }
+
+    .filter-chip .remove {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 16px;
+      height: 16px;
+      border-radius: var(--r-sm);
+      cursor: pointer;
+      opacity: 0.6;
+      transition: opacity 0.15s;
+    }
+
+    .filter-chip .remove:hover {
+      opacity: 1;
+    }
+
+    /* Группы тегов */
+    .tag-group {
+      margin-bottom: var(--sp-md);
+    }
+
+    .tag-group-header {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-sm);
+      padding: var(--sp-xs) var(--sp-sm);
+      margin-bottom: var(--sp-xs);
+    }
+
+    .drag-handle {
+      cursor: grab;
+      color: var(--c-text-muted);
+      display: flex;
+      align-items: center;
+    }
+
+    .drag-handle:hover {
+      color: var(--c-text-secondary);
+    }
+
+    .drag-handle svg {
+      width: 14px;
+      height: 14px;
+      stroke-width: 2;
+    }
+
+    .tag-group-title {
+      font-size: var(--fs-sm);
+      font-weight: 600;
+      color: var(--c-text-heading);
+      flex: 1;
+    }
+
+    .tag-group-count {
+      font-size: var(--fs-xs);
+      font-family: var(--font-mono);
+      color: var(--c-text-muted);
+      background: var(--c-bg-selected);
+      padding: 2px 6px;
+      border-radius: var(--r-sm);
+    }
+
+    /* Drop-индикатор */
+    .drop-indicator {
+      height: 2px;
+      background: var(--c-accent);
+      margin: var(--sp-xs) 0;
+      border-radius: 1px;
+    }
+
+    /* Строка чата с тегами */
+    .chat-row {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-sm);
+      padding: var(--sp-sm) var(--sp-md);
+      border-radius: var(--r-md);
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+
+    .chat-row:hover {
+      background: var(--c-bg-selected);
+    }
+
+    .chat-row.active {
+      background: var(--c-accent-light);
+    }
+
+    .chat-avatar {
+      width: 32px;
+      height: 32px;
+      border-radius: var(--r-full);
+      background: var(--c-accent);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--c-on-accent);
+      font-size: var(--fs-sm);
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+
+    .chat-info {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .chat-title {
+      font-size: var(--fs-base);
+      font-weight: 500;
+      color: var(--c-text-heading);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .chat-preview {
+      font-size: var(--fs-sm);
+      color: var(--c-text-secondary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* TagChip - чип тега на строке чата */
+    .tag-chips {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-xs);
+    }
+
+    .tag-chip {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 6px;
+      font-size: var(--fs-xs);
+      font-weight: 600;
+      border-radius: var(--r-pill);
+      background: var(--c-bg-selected);
+      color: var(--c-text-secondary);
+      transition: all 0.15s;
+    }
+
+    .tag-chip .tag-color {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+
+    .tag-chip:hover .remove {
+      opacity: 1;
+    }
+
+    .tag-chip .remove {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 14px;
+      height: 14px;
+      border-radius: var(--r-sm);
+      cursor: pointer;
+      opacity: 0;
+      transition: opacity 0.15s;
+    }
+
+    .tag-chip .remove svg {
+      width: 10px;
+      height: 10px;
+      stroke-width: 2;
+    }
+
+    /* Цвета тегов */
+    .tag-chip.color-blue { background: rgba(62, 124, 166, 0.15); color: #3E7CA6; }
+    .tag-chip.color-blue .tag-color { background: #3E7CA6; }
+
+    .tag-chip.color-purple { background: rgba(142, 74, 130, 0.15); color: #8E4A82; }
+    .tag-chip.color-purple .tag-color { background: #8E4A82; }
+
+    .tag-chip.color-green { background: rgba(63, 122, 79, 0.15); color: #3F7A4F; }
+    .tag-chip.color-green .tag-color { background: #3F7A4F; }
+
+    .tag-chip.color-orange { background: rgba(194, 105, 59, 0.15); color: #C2693B; }
+    .tag-chip.color-orange .tag-color { background: #C2693B; }
+
+    .tag-chip.color-accent { background: var(--c-accent-light); color: var(--c-accent); }
+    .tag-chip.color-accent .tag-color { background: var(--c-accent); }
+
+    /* === Мульти-выбор тегов === */
+    .tag-selector-demo {
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp-md);
+    }
+
+    .tag-selector {
+      position: relative;
+      display: inline-block;
+    }
+
+    .tag-selector-trigger {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-sm);
+      padding: 6px 12px;
+      font-size: 13px;
+      color: var(--c-text-heading);
+      background: var(--c-bg-white);
+      border: 1px solid var(--c-border);
+      border-radius: var(--r-xl);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .tag-selector-trigger:hover {
+      border-color: var(--c-accent);
+    }
+
+    .tag-selector-trigger:focus {
+      border-color: var(--c-accent);
+      box-shadow: 0 0 0 3px rgba(217, 119, 87, 0.14);
+    }
+
+    /* Выпадающее меню */
+    .dropdown-menu {
+      position: absolute;
+      top: calc(100% + 4px);
+      left: 0;
+      min-width: 200px;
+      background: var(--c-bg-card);
+      border: 1px solid var(--c-border);
+      border-radius: var(--r-lg);
+      box-shadow: var(--shadow-island);
+      z-index: 100;
+      max-height: 300px;
+      overflow-y: auto;
+    }
+
+    .dropdown-item {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-sm);
+      padding: 8px 12px;
+      font-size: var(--fs-sm);
+      color: var(--c-text-primary);
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+
+    .dropdown-item:hover {
+      background: var(--c-bg-selected);
+    }
+
+    .dropdown-item.selected {
+      background: var(--c-accent-light);
+      color: var(--c-accent);
+    }
+
+    .dropdown-item .checkbox {
+      width: 16px;
+      height: 16px;
+      border: 2px solid var(--c-border);
+      border-radius: var(--r-sm);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.15s;
+    }
+
+    .dropdown-item.selected .checkbox {
+      background: var(--c-accent);
+      border-color: var(--c-accent);
+    }
+
+    .dropdown-item .checkbox svg {
+      width: 10px;
+      height: 10px;
+      stroke: var(--c-on-accent);
+      stroke-width: 3;
+    }
+
+    .dropdown-item .tag-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+
+    /* === Демонстрация адаптивности === */
+    .responsive-demo {
+      border: 1px dashed var(--c-dashed);
+      border-radius: var(--r-lg);
+      padding: var(--sp-lg);
+      margin-top: var(--sp-lg);
+    }
+
+    .responsive-label {
+      font-size: var(--fs-sm);
+      color: var(--c-text-muted);
+      margin-bottom: var(--sp-sm);
+    }
+
+    .narrow-demo {
+      width: 320px;
+      margin: 0 auto;
+    }
+
+    @media (max-width: 600px) {
+      body {
+        padding: var(--sp-md);
+      }
+
+      .mockup-container {
+        gap: var(--sp-lg);
+      }
+
+      .narrow-demo {
+        width: 100%;
+      }
+
+      .filter-bar {
+        flex-direction: column;
+        align-items: stretch;
+      }
+
+      .search-field {
+        max-width: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <!-- Переключатель темы -->
+  <div class="theme-toggle">
+    <button onclick="toggleTheme()" id="themeBtn">Светлая тема</button>
+  </div>
+
+  <div class="mockup-container">
+    <!-- Заголовок макета -->
+    <div style="text-align: center; margin-bottom: var(--sp-xl);">
+      <h1 style="font-family: var(--font-serif); font-size: var(--fs-h1); font-weight: 600; color: var(--c-text-heading); margin-bottom: var(--sp-sm);">
+        Макет 1: Тумблер режимов списка чатов + режим «Теги»
+      </h1>
+      <p style="font-size: var(--fs-base); color: var(--c-text-secondary);">
+        Расширение тумблера «Плоский / Иерархия» до трёх режимов с группировкой по тегам
+      </p>
+    </div>
+
+    <!-- Вариант 1: PillSwitch (сегментный контрол) -->
+    <div class="mockup-section">
+      <div class="mockup-header">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--c-accent);">
+          <circle cx="12" cy="12" r="10"/>
+          <path d="M12 6v6l4 2"/>
+        </svg>
+        <span class="mockup-title">Вариант 1: PillSwitch (сегментный контрол)</span>
+        <span class="mockup-subtitle">Выбран: сегментный контрол с 3 опциями</span>
+      </div>
+      <div class="mockup-body">
+        <div class="pillswitch-demo">
+          <div style="margin-bottom: var(--sp-md);">
+            <p style="font-size: var(--fs-sm); color: var(--c-text-secondary); margin-bottom: var(--sp-sm);">
+              <strong>Обоснование выбора:</strong> PillSwitch обеспечивает единый визуальный ритм с тулбаром (уже используется в проекте для других переключателей), занимает меньше места при 3 опциях, и понятен на мобильных.
+            </p>
+          </div>
+
+          <!-- Пример 1: Три сегмента с текстом -->
+          <div class="pillswitch-row">
+            <span class="pillswitch-label">Текстовые:</span>
+            <div class="pill-switch" style="width: 280px;">
+              <div class="pill-thumb" style="left: 3px; width: 89px;"></div>
+              <button class="active">Плоский</button>
+              <button>Иерархия</button>
+              <button>Теги</button>
+            </div>
+          </div>
+
+          <!-- Пример 2: Три сегмента с иконками -->
+          <div class="pillswitch-row">
+            <span class="pillswitch-label">Иконки:</span>
+            <div class="pill-switch" style="width: 150px;">
+              <div class="pill-thumb" style="left: 3px; width: 47px;"></div>
+              <button class="active">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+                <span style="display: none;">Плоский</span>
+              </button>
+              <button>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M7 12h10"/><path d="M10 18h4"/></svg>
+                <span style="display: none;">Иерархия</span>
+              </button>
+              <button>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><path d="M7 7h.01"/></svg>
+                <span style="display: none;">Теги</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Вариант 2: Иконки-кнопки (альтернатива) -->
+    <div class="mockup-section">
+      <div class="mockup-header">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--c-text-muted);">
+          <circle cx="12" cy="12" r="1"/>
+          <circle cx="12" cy="5" r="1"/>
+          <circle cx="12" cy="19" r="1"/>
+        </svg>
+        <span class="mockup-title">Вариант 2: Три иконки-кнопки (альтернатива)</span>
+        <span class="mockup-subtitle">Отклонено: менее компактно и требует больше места</span>
+      </div>
+      <div class="mockup-body">
+        <div style="margin-bottom: var(--sp-md);">
+          <p style="font-size: var(--fs-sm); color: var(--c-text-secondary);">
+            <strong>Почему отклонено:</strong> Иконки-кнопки занимают больше места при 3 опциях и менее понятны на мобильных. PillSwitch компактнее и следует существующей конвенции проекта.
+          </p>
+        </div>
+        <div class="icon-buttons-demo">
+          <button class="icon-btn active" title="Плоский">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+          </button>
+          <button class="icon-btn" title="Иерархия">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 6h18"/><path d="M7 12h10"/><path d="M10 18h4"/></svg>
+          </button>
+          <button class="icon-btn" title="Теги">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><path d="M7 7h.01"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Режим «Теги»: группы с drag-handle и счётчиком -->
+    <div class="mockup-section">
+      <div class="mockup-header">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--c-accent);">
+          <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><path d="M7 7h.01"/>
+        </svg>
+        <span class="mockup-title">Режим «Теги»: группы с drag-handle</span>
+        <span class="mockup-subtitle">Группы в порядке реестра + хвост «Без тегов»</span>
+      </div>
+      <div class="mockup-body">
+        <div class="tags-mode-demo">
+          <!-- Фильтр-чипы с другими фильтрами -->
+          <div style="margin-bottom: var(--sp-lg);">
+            <p style="font-size: var(--fs-sm); color: var(--c-text-secondary); margin-bottom: var(--sp-sm);">
+              <strong>Фильтр-чипы по тегам</strong> — работают вместе с остальными фильтрами:
+            </p>
+            <div class="filter-bar">
+              <div class="search-field">
+                <input type="text" placeholder="Поиск по чатам..." />
+              </div>
+              <button class="filter-chip">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                Статус
+                <span class="remove">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </span>
+              </button>
+              <button class="filter-chip active">
+                Работа
+                <span class="remove">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </span>
+              </button>
+              <button class="filter-chip">
+                Идеи
+                <span class="remove">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Группа 1: Работа -->
+          <div class="tag-group">
+            <div class="tag-group-header">
+              <div class="drag-handle">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="9" cy="12" r="1"/><circle cx="9" cy="5" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="15" cy="19" r="1"/></svg>
+              </div>
+              <span class="tag-group-title">Работа</span>
+              <span class="tag-group-count">5</span>
+            </div>
+
+            <div class="chat-row">
+              <div class="chat-avatar">К</div>
+              <div class="chat-info">
+                <div class="chat-title">Клиентский проект</div>
+                <div class="chat-preview">Обсуждаем сроки с …</div>
+              </div>
+              <div class="tag-chips">
+                <div class="tag-chip color-accent">
+                  <div class="tag-color"></div>
+                  Работа
+                  <span class="remove">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div class="chat-row">
+              <div class="chat-avatar">Р</div>
+              <div class="chat-info">
+                <div class="chat-title">Рефакторинг бэкенда</div>
+                <div class="chat-preview">План рефакторинга …</div>
+              </div>
+              <div class="tag-chips">
+                <div class="tag-chip color-accent">
+                  <div class="tag-color"></div>
+                  Работа
+                  <span class="remove">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Drop-индикатор -->
+          <div class="drop-indicator"></div>
+
+          <!-- Группа 2: Идеи -->
+          <div class="tag-group">
+            <div class="tag-group-header">
+              <div class="drag-handle">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="9" cy="12" r="1"/><circle cx="9" cy="5" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="15" cy="19" r="1"/></svg>
+              </div>
+              <span class="tag-group-title">Идеи</span>
+              <span class="tag-group-count">3</span>
+            </div>
+
+            <div class="chat-row">
+              <div class="chat-avatar" style="background: var(--tag-purple);">И</div>
+              <div class="chat-info">
+                <div class="chat-title">Новый фич</div>
+                <div class="chat-preview">Предложение по UI …</div>
+              </div>
+              <div class="tag-chips">
+                <div class="tag-chip color-purple">
+                  <div class="tag-color"></div>
+                  Идеи
+                  <span class="remove">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Drop-индикатор -->
+          <div class="drop-indicator"></div>
+
+          <!-- Группа 3: Без тегов -->
+          <div class="tag-group">
+            <div class="tag-group-header">
+              <div class="drag-handle" style="opacity: 0.3; cursor: default;">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="9" cy="12" r="1"/><circle cx="9" cy="5" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="15" cy="19" r="1"/></svg>
+              </div>
+              <span class="tag-group-title">Без тегов</span>
+              <span class="tag-group-count">2</span>
+            </div>
+
+            <div class="chat-row">
+              <div class="chat-avatar" style="background: var(--tag-green);">А</div>
+              <div class="chat-info">
+                <div class="chat-title">Архив</div>
+                <div class="chat-preview">Старые заметки …</div>
+              </div>
+              <div class="tag-chips">
+                <!-- Нет тегов -->
+              </div>
+            </div>
+
+            <div class="chat-row">
+              <div class="chat-avatar" style="background: var(--tag-blue);">Т</div>
+              <div class="chat-info">
+                <div class="chat-title">Тестовый чат</div>
+                <div class="chat-preview">Проверка механик …</div>
+              </div>
+              <div class="tag-chips">
+                <!-- Нет тегов -->
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Мульти-выбор тегов -->
+    <div class="mockup-section">
+      <div class="mockup-header">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--c-accent);">
+          <path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
+        </svg>
+        <span class="mockup-title">Мульти-выбор тегов при маркировке</span>
+        <span class="mockup-subtitle">Меню/комбобокс с чекбоксами</span>
+      </div>
+      <div class="mockup-body">
+        <div class="tag-selector-demo">
+          <p style="font-size: var(--fs-sm); color: var(--c-text-secondary); margin-bottom: var(--sp-sm);">
+            <strong>Меню выбора тегов</strong> — выпадающий список с чекбоксами и цветовыми индикаторами:
+          </p>
+
+          <div class="tag-selector">
+            <button class="tag-selector-trigger">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--c-text-muted);"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><path d="M7 7h.01"/></svg>
+              Выберите теги…
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-left: auto; color: var(--c-text-muted);"><path d="M6 9l6 6 6-6"/></svg>
+            </button>
+
+            <!-- Выпадающее меню (показано для демо) -->
+            <div class="dropdown-menu" style="display: block; position: relative; top: 0; margin-top: var(--sp-sm);">
+              <div class="dropdown-item selected">
+                <div class="checkbox">
+                  <svg viewBox="0 0 24 24" fill="none"><polyline points="20 6 9 17 4 12"/></svg>
+                </div>
+                <div class="tag-dot" style="background: var(--c-accent);"></div>
+                <span>Работа</span>
+              </div>
+              <div class="dropdown-item selected">
+                <div class="checkbox">
+                  <svg viewBox="0 0 24 24" fill="none"><polyline points="20 6 9 17 4 12"/></svg>
+                </div>
+                <div class="tag-dot" style="background: var(--tag-purple);"></div>
+                <span>Идеи</span>
+              </div>
+              <div class="dropdown-item">
+                <div class="checkbox"></div>
+                <div class="tag-dot" style="background: var(--tag-green);"></div>
+                <span>Личное</span>
+              </div>
+              <div class="dropdown-item">
+                <div class="checkbox"></div>
+                <div class="tag-dot" style="background: var(--tag-blue);"></div>
+                <span>Архив</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Адаптивность -->
+    <div class="mockup-section">
+      <div class="mockup-header">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--c-accent);">
+          <rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/>
+        </svg>
+        <span class="mockup-title">Адаптивность: узкая лента 320px</span>
+        <span class="mockup-subtitle">PillSwitch и TagChip сжимаются до иконок на мобильных</span>
+      </div>
+      <div class="mockup-body">
+        <div class="responsive-demo">
+          <div class="responsive-label">Узкая лента (320px) — компактный режим:</div>
+          <div class="narrow-demo">
+            <!-- Компактный PillSwitch -->
+            <div style="display: flex; justify-content: center; margin-bottom: var(--sp-md);">
+              <div class="pill-switch" style="width: 100%;">
+                <div class="pill-thumb" style="left: 3px; width: 47px;"></div>
+                <button class="active">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+                </button>
+                <button>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M7 12h10"/><path d="M10 18h4"/></svg>
+                </button>
+                <button>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><path d="M7 7h.01"/></svg>
+                </button>
+              </div>
+            </div>
+
+            <!-- Компактные TagChip на строке чата -->
+            <div class="chat-row">
+              <div class="chat-avatar" style="width: 28px; height: 28px;">К</div>
+              <div class="chat-info">
+                <div class="chat-title" style="font-size: 12px;">Проект</div>
+              </div>
+              <div class="tag-chips">
+                <div class="tag-chip color-accent">
+                  <div class="tag-color"></div>
+                </div>
+                <div class="tag-chip color-blue">
+                  <div class="tag-color"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function toggleTheme() {
+      const html = document.documentElement;
+      const current = html.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      html.setAttribute('data-theme', next);
+
+      const btn = document.getElementById('themeBtn');
+      btn.textContent = next === 'dark' ? 'Тёмная тема' : 'Светлая тема';
+    }
+  </script>
+</body>
+</html>

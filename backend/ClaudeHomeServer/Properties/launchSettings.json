@@ -18,6 +18,30 @@
       "environmentVariables": {
         "ASPNETCORE_ENVIRONMENT": "Development"
       }
+    },
+    "http-telemetry-dev": {
+      "commandName": "Project",
+      "dotnetRunMessages": true,
+      "launchBrowser": false,
+      "applicationUrl": "http://0.0.0.0:5000",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "Telemetry__Mode": "dev",
+        "Telemetry__Backends__Dev__Enabled": "true",
+        "Telemetry__Backends__Dev__OtlpEndpoint": "http://localhost:4317"
+      }
+    },
+    "http-telemetry-prod": {
+      "commandName": "Project",
+      "dotnetRunMessages": true,
+      "launchBrowser": false,
+      "applicationUrl": "http://0.0.0.0:5000",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "Telemetry__Mode": "production",
+        "Telemetry__Backends__Production__Enabled": "true",
+        "Telemetry__Backends__Production__OtlpEndpoint": "http://localhost:4318"
+      }
     }
   }
 }

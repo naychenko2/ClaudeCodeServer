@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, X, File, Trash2, Maximize2, RotateCcw, Save, Download, Music, Menu, SquarePen, Eye, Copy, Check, FileDiff, History, Users, MessageCircle } from 'lucide-react';
+import { AlertTriangle, X, File, Trash2, Maximize2, Columns2, RotateCcw, Save, Download, Music, Menu, SquarePen, Eye, Copy, Check, FileDiff, History, Users, MessageCircle } from 'lucide-react';
 import SyntaxHighlighter from 'react-syntax-highlighter/dist/esm/prism-light';
 import { oneLight, oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import tsx from 'react-syntax-highlighter/dist/esm/languages/prism/tsx';
@@ -82,6 +82,8 @@ interface Props {
   filePath: string;
   onClose: () => void;
   onToggleFullscreen?: () => void;
+  // Текущий режим просмотра: true — файл на весь экран, false/не задано — сплит с чатом
+  fullscreen?: boolean;
   isMobile?: boolean;
   onOpenSidebar?: () => void;
   // Стартовая вкладка: 'diff' — открытие из git-панели «Изменения»
@@ -263,7 +265,7 @@ function AudioFilePlayer({ src, mimeType, fileName, fileSizeMb }: {
   );
 }
 
-export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isMobile, onOpenSidebar, initialTab, gitStagePath }: Props) {
+export function FileViewer({ project, filePath, onClose, onToggleFullscreen, fullscreen, isMobile, onOpenSidebar, initialTab, gitStagePath }: Props) {
   const online = useOnline();
   // Заметки vault (notes/*.md): рендерим [[wikilinks]] и уводим по клику в раздел «Заметки»
   const allNotes = useNotes();
@@ -1074,11 +1076,22 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, isM
             </ToolbarIconButton>
           )}
 
-          {/* Развернуть на весь экран — только в split-режиме */}
+          {/* Режим просмотра: сплит с чатом / на весь экран */}
           {!isMobile && onToggleFullscreen && !editing && (
-            <ToolbarIconButton isMobile={isMobile} onClick={onToggleFullscreen} title="На весь экран">
-              <Maximize2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-            </ToolbarIconButton>
+            <PillSwitch
+              value={fullscreen ? 'full' : 'split'}
+              options={[
+                { value: 'split' as const, label: 'Сплит', icon: <Columns2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} /> },
+                { value: 'full' as const, label: 'Полный', icon: <Maximize2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} /> },
+              ]}
+              onChange={(v) => {
+                // onToggleFullscreen — toggle без аргумента, поэтому клик по уже активному
+                // сегменту (напр. «Сплит», когда уже сплит) должен быть no-op, иначе toggle
+                // уведёт в противоположный режим
+                if (v === 'full' && !fullscreen) onToggleFullscreen();
+                if (v === 'split' && fullscreen) onToggleFullscreen();
+              }}
+            />
           )}
 
           {/* Закрыть — десктоп */}

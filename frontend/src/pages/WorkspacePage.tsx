@@ -1141,6 +1141,7 @@ const windowWidth = useWindowWidth();
   };
 
   const handleEnterFullscreen = () => setFileFullscreen(true);
+  const handleExitFullscreen = () => setFileFullscreen(false);
 
   const handleSplitterMouseDown = (e: React.PointerEvent) => {
     e.preventDefault();
@@ -1673,7 +1674,7 @@ const windowWidth = useWindowWidth();
                 <Splitter orientation="v" active={draggingSplitter === 'split'}
                   onMouseDown={e => { setDraggingSplitter('split'); handleSplitterMouseDown(e); }} />
                 <div style={{ flex: 1, overflow: 'hidden', minWidth: 200 }}>
-                  <FileViewer project={project} filePath={openFile} onClose={backFromFile} onToggleFullscreen={handleEnterFullscreen} onOpenSidebar={openSidebar} initialTab={openFileDiffMode ? 'diff' : undefined} gitStagePath={gitStagePath ?? undefined} />
+                  <FileViewer project={project} filePath={openFile} onClose={backFromFile} onToggleFullscreen={handleEnterFullscreen} fullscreen={fileFullscreen} onOpenSidebar={openSidebar} initialTab={openFileDiffMode ? 'diff' : undefined} gitStagePath={gitStagePath ?? undefined} />
                 </div>
               </div>
             )}
@@ -1681,7 +1682,8 @@ const windowWidth = useWindowWidth();
             {/* Fullscreen: файл из дерева или планшет */}
             {openFile && (fileFullscreen || isTablet) && (
               <div style={{ flex: 1, overflow: 'hidden' }}>
-                <FileViewer project={project} filePath={openFile} onClose={backFromFile} onOpenSidebar={openSidebar} initialTab={openFileDiffMode ? 'diff' : undefined} gitStagePath={gitStagePath ?? undefined} />
+                {/* На планшете split недоступен (isTablet форсирует full) — переключатель не показываем */}
+                <FileViewer project={project} filePath={openFile} onClose={backFromFile} onToggleFullscreen={isTablet ? undefined : handleExitFullscreen} fullscreen={fileFullscreen || isTablet} onOpenSidebar={openSidebar} initialTab={openFileDiffMode ? 'diff' : undefined} gitStagePath={gitStagePath ?? undefined} />
               </div>
             )}
           </>

@@ -973,7 +973,6 @@ public class SessionManagerTests : IDisposable
         return (SendAndWaitResult)task.GetType().GetProperty("Result")!.GetValue(task)!;
     }
 
-<<<<<<< HEAD
     private static async Task WaitForQueueAsync(SessionManager sut, string sessionId, TimeSpan timeout)
     {
         var deadline = DateTime.UtcNow + timeout;

@@ -213,9 +213,11 @@ MCP notes-server; семантика — Dify-датасет `{username}:notes` 
 Полноценный чат с Claude через мессенджер делать **не надо** — мессенджер не отрендерит
 diff/артефакты/виджеты, это убивает UX CCS.
 
-Use cases (с резолюциями) и архитектура интеграции (куда встраивать: webhook-контроллер
+Use cases (с резолюциями), архитектура интеграции (куда встраивать: webhook-контроллер
 по образцу `PersonaAutomationService`, `IMessengerClient` для нескольких адаптеров, mapping
-`external_chat_id ↔ session_id`) — [docs/messenger-integration.md](docs/messenger-integration.md).
+`external_chat_id ↔ session_id`) и расширенные варианты использования (личка с глобальной
+персоной, проект-специфичные чаты, уведомления от имени персон — через `Session.PersonaId`
+и `Session.ProjectId` как оси routing'а) — [docs/messenger-integration.md](docs/messenger-integration.md).
 **Решение по ботам:** один бот с routing по чатам для solo (CCS-уведомления + телеметрия,
 см. [observability.md](docs/observability.md) «Future Epics — Alerting»); переход на двух
 ботов при появлении второго юзера или шумной телеметрии. Общая .NET-библиотека Max API

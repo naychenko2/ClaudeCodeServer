@@ -45,6 +45,44 @@ export interface BoardColumn {
   color?: string;
 }
 
+// Code Graph — логическая карта типов проекта и рёбер между ними
+// (GET /api/projects/{id}/code-graph). Узлы — типы, рёбра — связи типов,
+// godNodes — точки перегруза (кандидаты на разбиение).
+export type CodeGraphNodeKind = 'Class' | 'Interface' | 'Struct' | 'Enum';
+export type CodeGraphRelation = 'Calls' | 'Implements' | 'References';
+export type CodeGraphConfidence = 'Extracted' | 'Inferred';
+
+export interface CodeGraphNode {
+  id: string;
+  label: string;
+  fullyQualifiedName: string;
+  sourceFile: string;
+  sourceLocation: string;   // "line:col"
+  kind: CodeGraphNodeKind;
+}
+
+export interface CodeGraphEdge {
+  source: string;           // id узла-источника
+  target: string;           // id узла-приёмника
+  relation: CodeGraphRelation;
+  confidence: CodeGraphConfidence;
+}
+
+export interface CodeGraphMetadata {
+  builtAt?: string | null;  // ISO времени сборки
+  nodeCount: number;
+  edgeCount: number;
+  fileCount: number;
+  isStale: boolean;         // код изменился после сборки — граф может отставать
+}
+
+export interface CodeGraph {
+  nodes: CodeGraphNode[];
+  edges: CodeGraphEdge[];
+  godNodes: string[];
+  metadata: CodeGraphMetadata;
+}
+
 // Элемент доски агентов (диспетчерская: GET /api/board/agents)
 export interface BoardItem {
   taskId: string;

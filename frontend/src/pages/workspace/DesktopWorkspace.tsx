@@ -85,6 +85,9 @@ interface Props {
   previewOpen: boolean;
   previewArea: ReactNode;
   onClosePreview: () => void;
+  // Документ «Граф зависимостей»: открывается из панельки «Граф», живёт в центре
+  graphOpen: boolean;
+  graphArea: ReactNode;
   // Правая рельса: доступность инструментов + готовый контент панелек
   toolsEnabled: boolean;
   panels: Partial<Record<Exclude<PanelKey, 'plan'>, ReactNode>>;
@@ -299,8 +302,15 @@ export function DesktopWorkspace(p: Props) {
         </div>
       )}
 
+      {/* Документ «Граф зависимостей» (открыт из панельки «Граф») */}
+      {!p.openFile && !p.openCommitSha && !p.selectedTask && !personaOpen && !p.teamCenterOpen && !p.boardOpen && !p.previewOpen && p.graphOpen && centerIsland(
+        <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+          {p.graphArea}
+        </div>
+      )}
+
       {/* Одиночный чат — без рамки на холсте, в остров выделена только его шапка */}
-      {!p.openFile && !p.openCommitSha && !p.selectedTask && !personaOpen && !p.teamCenterOpen && !p.boardOpen && !p.previewOpen && (
+      {!p.openFile && !p.openCommitSha && !p.selectedTask && !personaOpen && !p.teamCenterOpen && !p.boardOpen && !p.previewOpen && !p.graphOpen && (
         <div style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
           {chatPanel(true)}
         </div>

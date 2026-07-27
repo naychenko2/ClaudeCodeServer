@@ -45,6 +45,10 @@ public class SessionHubTests : IClassFixture<TestWebApplicationFactory>, IAsyncL
                 options.AccessTokenProvider = () => Task.FromResult<string?>(token);
             })
             .Build();
+        // Под параллельной нагрузкой всего набора тестов TestServer обслуживает negotiate
+        // с очередью — дефолтных 15с HandshakeTimeout не хватало, тесты flakали на StartAsync.
+        connection.HandshakeTimeout = TimeSpan.FromSeconds(60);
+        connection.ServerTimeout = TimeSpan.FromSeconds(60);
         await connection.StartAsync();
         _connections.Add(connection);
         return connection;

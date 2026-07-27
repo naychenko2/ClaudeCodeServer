@@ -61,7 +61,13 @@ public class TestWebApplicationFactory : WebApplicationFactory<Program>, IDispos
                 ["Ollama:Model"] = "", // отключить прогрев и локальные фоновые задачи в тестах
                 // не опрашивать api/oauth/usage: тест не должен ходить в сеть с реальным
                 // токеном ~/.claude машины
-                ["ClaudeSubscriptions:UsagePollMinutes"] = "0"
+                ["ClaudeSubscriptions:UsagePollMinutes"] = "0",
+                // FileWatcher→CodeGraph integration: polling-режим детерминированнее
+                // FileSystemWatcher в TestServer/CI; короткий интервал + короткий дебаунс
+                // rebuild, чтобы тесты завершались за ~1с, а не ждали 15с.
+                ["FileWatcher:UsePolling"] = "true",
+                ["FileWatcher:PollIntervalMs"] = "150",
+                ["CodeGraph:RebuildDebounceMs"] = "50"
             });
         });
 

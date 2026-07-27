@@ -56,6 +56,15 @@ public static class BackupPaths
         // Конфиги MCP на один ход и cwd one-shot вызовов — живут минуты
         if (root.Equals("sandbox-tmp", StringComparison.OrdinalIgnoreCase)) return false;
         if (root.Equals(StagingDirName, StringComparison.OrdinalIgnoreCase)) return false;
+
+        // Кеш CodeGraph: code-graphs/{hash}/cache/ — не едет в облако (пересобирается).
+        // «cache» — третий сегмент: code-graphs / {hash} / cache / …
+        if (root.Equals("code-graphs", StringComparison.OrdinalIgnoreCase))
+        {
+            // Основной граф (graph.json) — в архив, кеш — нет
+            if (segments.Length >= 3 && segments[2].Equals("cache", StringComparison.OrdinalIgnoreCase))
+                return false;
+        }
         // Дефолтные папки архивов внутри data (нестандартные пути отсекаются по абсолютному
         // пути в BackupCore — имя папки там может быть любым)
         if (root.Equals(DefaultBackupDirName, StringComparison.OrdinalIgnoreCase)) return false;

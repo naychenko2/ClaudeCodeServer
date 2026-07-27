@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo, useLayoutEffect, type ReactNode } from 'react';
-import { Plus, MessageCircle } from 'lucide-react';
+import { Plus, MessageCircle, Network } from 'lucide-react';
 import type { Project, Session, SkillsData, AuthState, Task, ProjectService } from '../types';
 import { SessionList } from '../components/SessionList';
 import { FileExplorer } from '../components/FileExplorer';
@@ -48,6 +48,9 @@ import { PreviewView } from '../components/preview/PreviewView';
 import * as terminalApi from '../lib/terminalSignalr';
 import { DesktopWorkspace } from './workspace/DesktopWorkspace';
 import { TerminalPanelContent, PreviewPanelContent } from './workspace/panels';
+import { CodeGraphPanel } from '../features/codegraph/CodeGraphPanel';
+import { CodeGraphDocument } from '../features/codegraph/CodeGraphDocument';
+import { loadCodeGraph } from '../lib/codeGraph';
 
 interface Props {
   project: Project;
@@ -242,6 +245,10 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
   const [openCommitSha, setOpenCommitSha] = useState<string | null>(null);
   // Файл коммита, на котором сразу открыть diff (клик по файлу в стеке «Изменения»); null — первый
   const [openCommitFile, setOpenCommitFile] = useState<string | null>(null);
+  // Документ «Граф зависимостей» открыт в центре — та же модель «документ поверх чата»,
+  // что и openFile: крестик возвращает центр к чату, открытие любого другого документа
+  // (файл/задача/чат) закрывает граф. Открывается из панели «Граф» в рельсе.
+  const [graphOpen, setGraphOpen] = useState(false);
   const [fileFullscreen, setFileFullscreen] = useState(() => loadWorkspaceState(project.id)?.fileFullscreen ?? false);
   const [chatFlex, setChatFlex] = useState(1); // 1:1 = 50/50 по умолчанию
   const [workflowRunningFor, setWorkflowRunningFor] = useState<string | null>(null);
@@ -617,8 +624,9 @@ const windowWidth = useWindowWidth();
   const handleSelectTask = (task: Task, autoEdit?: boolean) => {
     setSelectedTaskId(task.id);
     setAutoEditTaskId(autoEdit ? task.id : null);
-    // Открытый файл уступает место карточке задачи
+    // Открытый файл и граф уступают место карточке задачи
     setOpenFile(null);
+    setGraphOpen(false);
     if (isMobile) {
       setMobileView('chat');
       navPush({ screen: 'project', project, view: 'chat', file: null, task: task.id });
@@ -694,6 +702,11 @@ const windowWidth = useWindowWidth();
     ...leftTabOptions
       .filter(o => !mobileVisibleValues.has(o.value))
       .map(o => ({ key: o.value, icon: o.icon, label: o.label, onClick: () => handleTabSwitch(o.value) })),
+    {
+      key: 'graph', label: 'Граф',
+      icon: <Network size={ICON_SIZE.md} strokeWidth={ICON_STROKE} />,
+      onClick: () => ensureGraphOpen(),
+    },
     {
       key: 'usage', label: 'Использование',
       icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></svg>,
@@ -852,16 +865,45 @@ const windowWidth = useWindowWidth();
     document.addEventListener('pointerup', onUp);
   };
 
+  // Документ «Граф»: крестик → центр к чату
+  const handleGraphClose = useCallback(() => {
+    setGraphOpen(false);
+    if (isMobile) setMobileView('sidebar');
+  }, [isMobile]);
+
+  // Открыть документ «Граф» в центре (из панели «Граф»: смена режима при закрытом
+  // документе открывает его снова). Как и при открытии файла/задачи — закрываем
+  // остальные документы центра, граф остаётся единственным поверх чата.
+  const ensureGraphOpen = useCallback(() => {
+    setGraphOpen(true);
+    setOpenFile(null);
+    setOpenFileDiffMode(false);
+    setGitStagePath(null);
+    setOpenCommitSha(null);
+    setOpenCommitFile(null);
+    setSelectedTaskId(null);
+    setActivePreviewId(null);
+    if (isMobile) setMobileView('chat');
+  }, [isMobile]);
+
+  // «Построить граф» (empty-state): backend v1 — read-only снапшот (POST build
+  // эндпоинта нет), поэтому кнопка — повторная загрузка: подхватывает граф, когда
+  // бэкенд построит его фоново.
+  const handleGraphBuild = useCallback(() => {
+    void loadCodeGraph(project.id, true);
+  }, [project.id]);
+
   const handleSelectSession = (session: Session, firstMessage?: string, autoSelect?: boolean) => {
     setActiveSession(session);
     setPendingMessage(firstMessage);
     if (!autoSelect) {
-      // явный выбор — закрываем файл, просмотр коммита и открытую задачу, показываем чат во весь экран
+      // явный выбор — закрываем файл, просмотр коммита, открытую задачу и граф, показываем чат во весь экран
       setOpenFile(null);
       setOpenFileDiffMode(false);
       setOpenCommitSha(null);
       setOpenCommitFile(null);
       setSelectedTaskId(null);
+      setGraphOpen(false);
       // Пишем запись истории с chatId — для URL #/project/{id}/chat/{chatId}
       // и кнопки «назад/вперёд» браузера.
       if (isMobile) {
@@ -1009,6 +1051,7 @@ const windowWidth = useWindowWidth();
     setOpenFileDiffMode(false);
     setGitStagePath(null);
     setFileFullscreen(true);
+    setGraphOpen(false);
     navPush({ screen: 'project', project, view: mobileView, file: filePath });
   };
 
@@ -1019,6 +1062,7 @@ const windowWidth = useWindowWidth();
     setOpenFileDiffMode(false);
     setGitStagePath(null);
     setFileFullscreen(isMobile || isTablet);
+    setGraphOpen(false);
     navPush({ screen: 'project', project, view: mobileView, file: filePath });
   };
 
@@ -1030,6 +1074,7 @@ const windowWidth = useWindowWidth();
     setOpenFileDiffMode(true);
     setGitStagePath(staged ? null : filePath);
     setFileFullscreen(true);
+    setGraphOpen(false);
     navPush({ screen: 'project', project, view: mobileView, file: filePath });
   };
 
@@ -1042,6 +1087,7 @@ const windowWidth = useWindowWidth();
     setFileFullscreen(false);
     setOpenCommitFile(filePath ?? null);
     setOpenCommitSha(sha);
+    setGraphOpen(false);
     if (isMobile) setMobileView('chat');
   };
   const closeCommitView = () => {
@@ -1366,6 +1412,12 @@ const windowWidth = useWindowWidth();
             <GitCommitView project={project} sha={openCommitSha} initialPath={openCommitFile} onClose={closeCommitView} isMobile />
           </div>
         )}
+        {/* Документ «Граф зависимостей» — на весь экран, как открытый файл/коммит */}
+        {!openFile && graphOpen && (
+          <div style={{ position: 'absolute', inset: 0, zIndex: 800, display: 'flex', background: C.bgMain }}>
+            <CodeGraphDocument projectId={project.id} isMobile onClose={handleGraphClose} onOpenFile={handleOpenFileFromTree} onBuild={handleGraphBuild} />
+          </div>
+        )}
         {columnsDialogEl}
         {showUsage && <UsageScreen onClose={() => setShowUsage(false)} />}
         {editProjectOpen && (
@@ -1443,6 +1495,8 @@ const windowWidth = useWindowWidth();
           previewOpen={!!ccActivePreview}
           previewArea={ccActivePreview ? <PreviewView service={ccActivePreview} projectId={project.id} onStop={stopService} /> : null}
           onClosePreview={() => setActivePreviewId(null)}
+          graphOpen={graphOpen}
+          graphArea={<CodeGraphDocument projectId={project.id} isMobile={false} onClose={handleGraphClose} onOpenFile={handleOpenFileFromTree} onBuild={handleGraphBuild} />}
           toolsEnabled={!!project.toolsEnabled}
           panels={{
             files: fileSubTab === 'files'
@@ -1451,6 +1505,7 @@ const windowWidth = useWindowWidth();
             changes: <GitChangesRail project={project} onOpenDiff={handleOpenGitDiff} onOpenFile={handleOpenFileFromTree} onOpenCommit={handleOpenCommit} activeFilePath={openFile ?? openCommitFile} activeCommitSha={openCommitSha} onCommit={handleCommitVia} onScopeChange={clearCenterToChat} onToolbar={handleChangesToolbar} />,
             tasks: <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={false} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} groupTab={projectGroupTab} onGroupTab={setProjectGroupTab} filters={taskListFilters} onFilters={setTaskListFilters} hideViewSwitcher />,
             team: <ProjectPersonasPanel project={project} selectedId={personaCreating ? null : selectedPersonaId} onSelect={handlePersonaSelect} onNew={handlePersonaNew} onShowTeam={() => { handlePersonaCleared(); setTeamCenterOpen(true); }} teamActive={teamCenterOpen && !selectedPersonaId && !personaCreating} />,
+            graph: <CodeGraphPanel projectId={project.id} onEnsureGraphOpen={ensureGraphOpen} onOpenFile={handleOpenFileFromTree} onBuild={handleGraphBuild} />,
             terminal: <TerminalPanelContent terminals={terminals} activeTerminalId={activeTerminalId} onSelect={handleSelectTerminal} onCreate={handleCreateTerminal} onStop={handleStopTerminal} onActivity={setTerminalBusy} />,
             preview: <PreviewPanelContent projectId={project.id} services={previewServices} activePreviewId={activePreviewId} onSelect={setActivePreviewId} onStart={startService} onStop={stopService} onRefresh={refreshServices} />,
           }}

@@ -868,6 +868,17 @@ public class SessionManagerTests : IDisposable
         var adapter = StubAdapter(entry);
         SetProcess(entry, adapter.Object);
 
+        // Детерминированный сигнал доставки: адаптер зажигает TCS в момент вызова. Poll по
+        // очереди (как и по invocations) здесь не годится — DrainNextPendingAsync изымает
+        // сообщение (RemoveAt → очередь пуста) ДО вызова adapter.SendMessageAsync, а под
+        // нагрузкой между RemoveAt и вызовом адаптера проходит значимое время. TCS ловит
+        // сам факт доставки без гонок и таймаутных окон.
+        var delivered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        adapter.Setup(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()))
+            .Callback(() => delivered.TrySetResult(true))
+            .Returns(Task.CompletedTask);
+
         var result = await InvokeEnqueuePendingAsync(session.Id, entry, "зависшее сообщение");
 
         result.Should().BeOfType<SendAndWaitResult.Queued>().Which.Position.Should().Be(1);
@@ -962,6 +973,7 @@ public class SessionManagerTests : IDisposable
         return (SendAndWaitResult)task.GetType().GetProperty("Result")!.GetValue(task)!;
     }
 
+<<<<<<< HEAD
     private static async Task WaitForQueueAsync(SessionManager sut, string sessionId, TimeSpan timeout)
     {
         var deadline = DateTime.UtcNow + timeout;

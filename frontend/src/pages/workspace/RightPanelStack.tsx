@@ -8,7 +8,7 @@
 // Панели — «воздушные» скруглённые карточки с зазорами; границы высот тянутся
 // невидимыми хендлами в зазорах, ширина колонок — сплиттером слева от зоны.
 import { useEffect, useRef, useState, type ReactNode, type DragEvent, type PointerEvent as ReactPointerEvent } from 'react';
-import { X, Columns2, Square, ChevronsRight, ChevronsLeft, ClipboardList, FolderTree, GitCompare, ListTodo, Bot, User, Users, SquareTerminal, MonitorPlay, type LucideIcon } from 'lucide-react';
+import { X, Columns2, Square, ChevronsRight, ChevronsLeft, ClipboardList, FolderTree, GitCompare, ListTodo, Bot, User, Users, SquareTerminal, MonitorPlay, Network, type LucideIcon } from 'lucide-react';
 import type { Session } from '../../types';
 import { C, FONT, ISLAND, R, SHADOW } from '../../lib/design';
 import { ICON_STROKE } from '../../components/ui/icons';
@@ -35,6 +35,7 @@ const PANEL_META: Record<PanelKey, { title: string; Icon: LucideIcon }> = {
   files: { title: 'Файлы', Icon: FolderTree },
   changes: { title: 'Изменения', Icon: GitCompare },
   tasks: { title: 'Задачи', Icon: ListTodo },
+  graph: { title: 'Граф', Icon: Network },
   team: { title: 'Команда', Icon: Users },
   terminal: { title: 'Терминал', Icon: SquareTerminal },
   preview: { title: 'Preview', Icon: MonitorPlay },
@@ -43,7 +44,7 @@ const PANEL_META: Record<PanelKey, { title: string; Icon: LucideIcon }> = {
 // Рельса разбита на две группы, разделённые сепаратором. Сверху — инструменты
 // ПРОЕКТА (файлы, изменения, задачи, команда, терминал, preview), снизу — панели
 // ТЕКУЩЕЙ СЕССИИ (План, Агенты, Персона). Порядок: проектные раньше сессионных.
-const PROJECT_RAIL_KEYS: PanelKey[] = ['files', 'changes', 'tasks', 'team', 'terminal', 'preview'];
+const PROJECT_RAIL_KEYS: PanelKey[] = ['files', 'changes', 'tasks', 'graph', 'team', 'terminal', 'preview'];
 const SESSION_RAIL_KEYS: PanelKey[] = ['plan', 'agents', 'context'];
 
 const GAP = ISLAND.gap; // зазор между карточками — та самая «воздушность»

@@ -79,6 +79,14 @@ public static class BackupRestore
             if (problems.Count > 0)
                 return Fail("Данные в архиве не проходят проверку:\n  - " + string.Join("\n  - ", problems));
 
+            // graph.json — regenerable (перестраивается из кода проекта), поэтому его порча
+            // не блокирует восстановление: сообщаем предупреждением, граф пересоберётся при
+            // первом обращении. Не должно попадать в fatal-гейт Validate.
+            var graphWarnings = BackupValidation.ValidateGraphWarnings(unpacked);
+            if (graphWarnings.Count > 0)
+                Say("ВНИМАНИЕ: graph.json требует пересборки (не блокирует восстановление):\n  - "
+                    + string.Join("\n  - ", graphWarnings));
+
             if (!HasFreeSpace(ctx.DataDir, out var needed))
                 Say($"ВНИМАНИЕ: мало места на диске (нужно ~{needed / 1024 / 1024} МБ)");
 

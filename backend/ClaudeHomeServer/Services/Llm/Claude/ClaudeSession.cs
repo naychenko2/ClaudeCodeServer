@@ -230,6 +230,8 @@ public class ClaudeSession : ILlmSessionAdapter
     private readonly Func<string, Task<RecallBlock?>>? _personaRecallProvider;
     // Блок «Привязанные знания и правила» персоны (флаг persona-bindings)
     private readonly Func<string, Task<string?>>? _bindingsProvider;
+    // Per-ход slice top-10 god-nodes Code Graph (ADR вариант A): null — без rootPath/фичи
+    private readonly Func<string?, Task<string?>>? _codeGraphProvider;
     // MCP-сервер персон: CRUD из любого чата + @упоминания/persona_ask
     private readonly PersonasMcpContext? _personasMcp;
     // MCP-сервер рабочего пространства: проекты/файлы/знания/поиск владельца
@@ -285,6 +287,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _memoryMcp = context.MemoryMcp;
         _personaRecallProvider = context.PersonaRecallProvider;
         _bindingsProvider = context.BindingsProvider;
+        _codeGraphProvider = context.CodeGraphProvider;
         _personasMcp = context.PersonasMcp;
         _workspaceMcp = context.WorkspaceMcp;
         _notificationsMcp = context.NotificationsMcp;
@@ -1613,6 +1616,20 @@ public class ClaudeSession : ILlmSessionAdapter
                     basePrompt = string.IsNullOrWhiteSpace(basePrompt)
                         ? bindingsBlock
                         : basePrompt + "\n\n" + bindingsBlock;
+            }
+
+            // Slice top-10 god-nodes Code Graph: хабы по связности для холодного старта
+            // понимания кода (граф иначе невидим Claude CLI). Текст хода игнорируется —
+            // god-узлы структурны; провайдер кэширует slice по builtAt, ошибки → null.
+            if (_codeGraphProvider is not null)
+            {
+                string? codeGraphBlock = null;
+                try { codeGraphBlock = await _codeGraphProvider(text); }
+                catch { /* блок графа не должен ронять ход */ }
+                if (!string.IsNullOrWhiteSpace(codeGraphBlock))
+                    basePrompt = string.IsNullOrWhiteSpace(basePrompt)
+                        ? codeGraphBlock
+                        : basePrompt + "\n\n" + codeGraphBlock;
             }
 
             // Персональный слой: промпт персоны имеет приоритет

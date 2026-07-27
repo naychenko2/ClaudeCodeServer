@@ -1,0 +1,967 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Code Graph — макет (Майя, итерация 3)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=PT+Serif:wght@400;700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+/* Токены темы — копия frontend/src/lib/theme.css. Числовые шкалы — design.ts (FS/SP/R/ISLAND). */
+:root{
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2; --c-on-dark:#FFFFFF;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5; --c-accent-soft:#E8A990;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-divider:#DDD4C4; --c-dashed:#D0C6B4; --c-track:#D8CFBE;
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --c-plan:#6C5CB0; --c-plan-light:#EEEBF8; --c-plan-text:#4E4196;
+  --c-nav-ink:#2A251F; --c-on-nav-ink:#F4ECE1;
+  --shadow-card:0 2px 8px rgba(60,50,35,.05);
+  --shadow-island:0 1px 2px rgba(60,50,35,.06),0 6px 20px rgba(60,50,35,.10);
+  --shadow-dropdown:0 8px 28px rgba(60,50,35,.16);
+  --shadow-sheet:0 -8px 40px rgba(23,19,15,.22);
+  --shadow-button:0 4px 14px rgba(217,119,87,.30);
+  /* Семантика графа — производные от токенов темы */
+  --edge-calls:var(--c-info);     --edge-calls-bg:var(--c-info-bg);
+  --edge-impl:var(--c-success);   --edge-impl-bg:var(--c-success-bg);
+  --edge-ref:var(--c-plan);       --edge-ref-bg:var(--c-plan-light);
+  --kind-class:var(--c-text-secondary);
+  --kind-iface:var(--c-info);
+  --kind-struct:var(--c-success);
+  --kind-enum:var(--c-plan);
+}
+:root[data-theme="dark"]{
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18; --c-on-dark:#FFFFFF;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C; --c-accent-soft:#9A5E48;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-divider:#454037; --c-dashed:#4A443B; --c-track:#453F37;
+  --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --c-plan:#9385D8; --c-plan-light:#2A2540; --c-plan-text:#B0A4E6;
+  --c-nav-ink:#EDE6DB; --c-on-nav-ink:#201C18;
+  --shadow-card:0 2px 10px rgba(0,0,0,.35);
+  --shadow-island:0 1px 2px rgba(0,0,0,.30),0 8px 24px rgba(0,0,0,.45);
+  --shadow-dropdown:0 10px 32px rgba(0,0,0,.55);
+  --shadow-sheet:0 -10px 46px rgba(0,0,0,.55);
+  --shadow-button:0 4px 16px rgba(227,138,106,.34);
+}
+
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--c-bg-main);color:var(--c-text-primary);font-family:'Hanken Grotesk',-apple-system,'Segoe UI',sans-serif;font-size:13px;line-height:1.45}
+.mono{font-family:'JetBrains Mono',monospace}
+
+/* === Верхняя панель прототипа === */
+.proto-bar{position:sticky;top:0;z-index:100;display:flex;align-items:center;gap:12px;padding:10px 16px;background:var(--c-nav-ink);color:var(--c-on-nav-ink)}
+.proto-bar h1{font-size:14px;font-weight:600}
+.proto-bar .tag{font-size:11px;opacity:.7}
+.proto-bar button{margin-left:auto;background:none;border:1px solid var(--c-on-nav-ink);color:var(--c-on-nav-ink);border-radius:999px;padding:5px 16px;font-size:12px;cursor:pointer;font-family:inherit}
+.proto-bar button:hover{background:rgba(255,255,255,.08)}
+
+/* === Секция сценария === */
+.section{max-width:1280px;margin:0 auto;padding:32px 16px 12px}
+.section>h2{font-family:'PT Serif',serif;font-size:22px;color:var(--c-text-heading);margin-bottom:4px}
+.section>p.note{font-size:12px;color:var(--c-text-secondary);margin-bottom:16px;max-width:860px}
+.scenario-tag{display:inline-block;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.6px;color:var(--c-accent);margin-bottom:6px}
+
+/* === Каркас workspace: сайдбар | центр | рельса+панель === */
+.ws{display:grid;grid-template-columns:230px minmax(0,1fr) auto;gap:8px;height:560px}
+.ws.no-panel{grid-template-columns:230px minmax(0,1fr) 44px}
+
+/* --- Левый сайдбар (чаты) --- */
+.sidebar{background:var(--c-bg-panel);border:1px solid var(--c-border-light);border-radius:14px;box-shadow:var(--shadow-island);overflow:hidden;display:flex;flex-direction:column}
+.sb-head{display:flex;align-items:center;gap:6px;min-height:40px;padding:6px 12px;background:var(--c-bg-inset);border-bottom:1px solid var(--c-border-light)}
+.sb-head .ttl{font-family:'PT Serif',serif;font-size:14px;font-weight:700;color:var(--c-text-heading)}
+.sb-tabs{display:flex;gap:2px;padding:6px 8px;border-bottom:1px solid var(--c-border-light)}
+.sb-tab{flex:1;text-align:center;font-size:11px;padding:5px 4px;border-radius:8px;color:var(--c-text-secondary);cursor:pointer}
+.sb-tab.on{background:var(--c-bg-selected);color:var(--c-text-heading);font-weight:600}
+.chat-list{padding:8px 6px;overflow:auto;flex:1}
+.chat-item{display:flex;gap:8px;padding:7px 9px;border-radius:9px;cursor:pointer;align-items:center}
+.chat-item:hover{background:var(--c-bg-selected)}
+.chat-item.on{background:var(--c-accent-light);outline:1px solid var(--c-accent-muted)}
+.chat-item .av{width:22px;height:22px;border-radius:50%;background:var(--c-bg-selected);flex:none;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;color:var(--c-text-secondary)}
+.chat-item .nm{font-size:12px;font-weight:600;color:var(--c-text-heading);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chat-item .pv{font-size:10px;color:var(--c-text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* --- Центр: документ (граф) или чат --- */
+.center{background:var(--c-bg-panel);border:1px solid var(--c-border-light);border-radius:14px;box-shadow:var(--shadow-island);overflow:hidden;display:flex;flex-direction:column;min-width:0}
+.doc-head{display:flex;align-items:center;gap:8px;min-height:40px;padding:6px 12px;background:var(--c-bg-inset);border-bottom:1px solid var(--c-border-light)}
+.doc-head .dt{font-family:'PT Serif',serif;font-size:14px;font-weight:700;color:var(--c-text-heading);display:flex;align-items:center;gap:8px}
+.doc-head .dt .close{width:24px;height:24px;border-radius:7px;border:none;background:none;color:var(--c-text-muted);cursor:pointer;font-size:14px;display:inline-flex;align-items:center;justify-content:center}
+.doc-head .dt .close:hover{background:var(--c-bg-selected);color:var(--c-text-heading)}
+.doc-head .spacer{flex:1}
+.doc-body{flex:1;position:relative;background:var(--c-bg-card);overflow:hidden;min-height:0}
+
+/* чат-плейсхолдер в центре (когда граф закрыт) */
+.chat-ph{padding:18px 16px;display:flex;flex-direction:column;gap:12px;overflow:auto;height:100%}
+.msg{max-width:78%;padding:9px 13px;border-radius:14px;font-size:12px;line-height:1.5}
+.msg.user{align-self:flex-end;background:var(--c-accent);color:var(--c-on-accent);border-bottom-right-radius:4px}
+.msg.bot{align-self:flex-start;background:var(--c-msg-bg,rgba(251,248,242,.42));background:var(--c-bg-panel);border:1px solid var(--c-border-light);border-bottom-left-radius:4px}
+.composer{margin-top:auto;display:flex;gap:8px;background:var(--c-bg-white);border:1px solid var(--c-border);border-radius:14px;padding:8px 10px;color:var(--c-text-muted);font-size:12px;align-items:center}
+
+/* --- Рельса инструментов + панель --- */
+.rail-wrap{display:flex;gap:8px;align-items:stretch}
+.rail{width:44px;background:var(--c-bg-panel);border:1px solid var(--c-border-light);border-radius:14px;box-shadow:var(--shadow-island);display:flex;flex-direction:column;align-items:center;padding:8px 0;gap:4px}
+.rail-btn{width:32px;height:32px;border-radius:9px;border:none;background:none;color:var(--c-text-muted);cursor:pointer;display:flex;align-items:center;justify-content:center;position:relative}
+.rail-btn:hover{background:var(--c-bg-selected);color:var(--c-text-primary)}
+.rail-btn.on{background:var(--c-accent-light);color:var(--c-accent);box-shadow:inset 0 0 0 1px var(--c-accent-muted)}
+.rail-sep{width:20px;height:1px;background:var(--c-divider);margin:6px 0}
+.panel-card{width:280px;background:var(--c-bg-panel);border:1px solid var(--c-border-light);border-radius:14px;box-shadow:var(--shadow-island);display:flex;flex-direction:column;overflow:hidden}
+.panel-head{display:flex;align-items:center;gap:8px;min-height:40px;padding:6px 12px;background:var(--c-bg-inset);border-bottom:1px solid var(--c-border-light);flex:none}
+.panel-head .pt{font-family:'PT Serif',serif;font-size:14px;font-weight:700;color:var(--c-text-heading)}
+.panel-head .x{margin-left:auto;width:24px;height:24px;border-radius:7px;border:none;background:none;color:var(--c-text-muted);cursor:pointer}
+.panel-head .x:hover{background:var(--c-bg-selected);color:var(--c-text-heading)}
+.panel-body{overflow:auto;flex:1;display:flex;flex-direction:column}
+
+/* --- Секции панели «Граф» --- */
+.psec{padding:10px 12px;border-bottom:1px solid var(--c-border-light)}
+.psec h4{font-size:10px;text-transform:uppercase;letter-spacing:.6px;color:var(--c-text-muted);margin-bottom:8px;font-weight:600;display:flex;align-items:center;gap:6px}
+.psec h4 .r{margin-left:auto;font-weight:400;text-transform:none;letter-spacing:0;font-size:10px;color:var(--c-text-muted);cursor:pointer}
+.psec h4 .r:hover{color:var(--c-accent)}
+
+/* чекбокс-фильтр — компактный чип-тоггл (одна строка на все relation) */
+.rel-chips{display:flex;gap:6px;flex-wrap:wrap}
+.relchip{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;padding:4px 9px;border-radius:999px;border:1px solid var(--c-border);background:var(--c-bg-card);color:var(--c-text-primary);cursor:pointer;user-select:none}
+.relchip .dot{width:8px;height:8px;border-radius:50%;flex:none}
+.relchip .cnt{font-size:10px;color:var(--c-text-muted);font-family:'JetBrains Mono',monospace;font-weight:400}
+.relchip.off{opacity:.5}
+.relchip.off .dot{background:var(--c-text-muted)!important}
+
+/* сворачиваемая секция панели */
+.collapse-h{display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none;padding:2px 0}
+.collapse-h h4{margin-bottom:0!important}
+.collapse-h .chev{margin-left:auto;color:var(--c-text-muted);font-size:11px;transition:transform .15s}
+.collapse-h .chev::before{content:'▸'}
+.collapse.open .collapse-h .chev{transform:rotate(90deg)}
+.collapse .collapse-b{display:none;padding-top:6px}
+.collapse.open .collapse-b{display:block}
+
+/* легенда kinds */
+.legend-row{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--c-text-secondary);padding:3px 0}
+.legend-row .kring{width:13px;height:13px;border-radius:50%;border:2px solid;flex:none;background:var(--c-bg-card)}
+
+/* god-list */
+.god-item{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:9px;cursor:pointer;font-size:12px}
+.god-item:hover{background:var(--c-bg-selected)}
+.god-item .gw{width:8px;height:8px;border-radius:50%;background:var(--c-accent);flex:none;box-shadow:0 0 0 3px var(--c-accent-light)}
+.god-item .gn{font-weight:600;color:var(--c-text-heading);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:'JetBrains Mono',monospace;font-size:11px}
+.god-item .ge{font-size:10px;color:var(--c-text-muted)}
+
+/* кнопки (мимикрия ui/Button) */
+.btn{display:inline-flex;align-items:center;gap:6px;font-family:inherit;font-size:12px;font-weight:600;padding:6px 12px;border-radius:12px;cursor:pointer;border:1px solid transparent;white-space:nowrap}
+.btn-primary{background:var(--c-accent);color:var(--c-on-accent);box-shadow:var(--shadow-button)}
+.btn-primary:hover{filter:brightness(1.05)}
+.btn-secondary{background:var(--c-bg-card);color:var(--c-text-primary);border-color:var(--c-border)}
+.btn-secondary:hover{background:var(--c-bg-selected)}
+.btn-block{width:100%;justify-content:center}
+.btn:disabled{opacity:.5;cursor:default}
+.icon-btn{width:28px;height:28px;display:inline-flex;align-items:center;justify-content:center;border-radius:8px;border:none;background:none;color:var(--c-text-muted);cursor:pointer}
+.icon-btn:hover{background:var(--c-bg-selected);color:var(--c-text-primary)}
+
+/* поиск */
+.search{display:flex;align-items:center;gap:6px;background:var(--c-bg-white);border:1px solid var(--c-border);border-radius:12px;padding:6px 10px}
+.search:focus-within{border-color:var(--c-accent);box-shadow:0 0 0 3px rgba(217,119,87,.14)}
+.search input{border:none;background:none;outline:none;color:var(--c-text-heading);font-family:inherit;font-size:12px;width:100%}
+.search input::placeholder{color:var(--c-text-muted)}
+
+/* metadata-чипы */
+.mchip{font-size:11px;color:var(--c-text-secondary);background:var(--c-bg-card);border:1px solid var(--c-border-light);border-radius:999px;padding:3px 10px;white-space:nowrap;display:inline-flex;gap:4px;align-items:center}
+.mchip b{color:var(--c-text-heading);font-weight:600;font-family:'JetBrains Mono',monospace}
+.stale-badge{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;padding:3px 10px;border-radius:999px;background:var(--c-warning-bg);color:var(--c-warning-text);cursor:help}
+.stale-badge:hover{outline:1px solid var(--c-warning)}
+
+/* === SVG: узлы и рёбра === */
+.edge{fill:none;stroke-width:1.6;transition:opacity .15s,stroke-width .15s}
+.edge.calls{stroke:var(--edge-calls)}
+.edge.impl{stroke:var(--edge-impl)}
+.edge.ref{stroke:var(--edge-ref);stroke-dasharray:5 4}
+.edge.dim{opacity:.08}
+.edge.hi{stroke-width:2.6}
+.node{cursor:pointer}
+.node-ring{fill:var(--c-bg-card);stroke-width:2.5;transition:stroke-width .15s,filter .15s}
+.node-ring.class{stroke:var(--kind-class)}
+.node-ring.iface{stroke:var(--kind-iface)}
+.node-ring.struct{stroke:var(--kind-struct)}
+.node-ring.enum{stroke:var(--kind-enum)}
+.node-glyph{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:600;text-anchor:middle;dominant-baseline:central;pointer-events:none}
+.node-glyph.class{fill:var(--c-text-heading)}
+.node-glyph.iface{fill:var(--kind-iface)}
+.node-glyph.struct{fill:var(--kind-struct)}
+.node-glyph.enum{fill:var(--kind-enum)}
+.node-label{font-family:'JetBrains Mono',monospace;font-size:10px;fill:var(--c-text-secondary);text-anchor:middle;pointer-events:none;transition:fill .15s}
+.god-halo{fill:none;stroke:var(--c-accent);stroke-width:2;stroke-dasharray:3 3;opacity:.55}
+.node.dim{opacity:.22}
+.node.sel .node-ring{stroke:var(--c-accent);stroke-width:3.5;filter:drop-shadow(0 0 6px rgba(217,119,87,.5))}
+.node.sel .node-label{fill:var(--c-accent);font-weight:600}
+.node.match .node-label{fill:var(--c-accent);font-weight:600}
+.node.match .node-ring{stroke:var(--c-accent)}
+
+/* === Паспорт узла (в панели «Граф») === */
+.pp-head2{padding:2px 0 8px}
+.kind-badge{display:inline-flex;align-items:center;gap:6px;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;padding:2px 8px;border-radius:6px}
+.kind-badge .d{width:7px;height:7px;border-radius:50%}
+.kind-badge.Class{background:var(--c-bg-selected);color:var(--c-text-secondary)}
+.kind-badge.Interface{background:var(--edge-calls-bg);color:var(--kind-iface)}
+.kind-badge.Struct{background:var(--edge-impl-bg);color:var(--kind-struct)}
+.kind-badge.Enum{background:var(--edge-ref-bg);color:var(--kind-enum)}
+.god-mark{display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:600;color:var(--c-accent);background:var(--c-accent-light);padding:2px 8px;border-radius:6px;margin-left:6px}
+.pp-label{font-family:'PT Serif',serif;font-size:16px;font-weight:700;color:var(--c-text-heading);margin-top:6px}
+.pp-fqn{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--c-text-secondary);margin-top:3px;word-break:break-all}
+.pp-loc{display:flex;align-items:flex-start;gap:7px;font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--c-info);background:var(--c-info-bg);border-radius:9px;padding:7px 9px;cursor:pointer;margin:8px 0;word-break:break-all}
+.pp-loc:hover{text-decoration:underline}
+.rel-link{display:flex;align-items:center;gap:7px;padding:4px 7px;border-radius:8px;font-size:11px;cursor:pointer}
+.rel-link:hover{background:var(--c-bg-selected)}
+.rel-link .arr{color:var(--c-text-muted);font-size:10px;flex:none}
+.rel-link .rdot{width:8px;height:8px;border-radius:50%;flex:none}
+.rel-link .nm{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--c-text-heading);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rel-link .conf{font-size:9px;color:var(--c-text-muted);text-transform:uppercase;letter-spacing:.3px}
+.rel-link .conf.Inf{font-style:italic}
+.rel-empty{font-size:11px;color:var(--c-text-muted);padding:2px 7px}
+.pp-hint{font-size:11px;color:var(--c-text-muted);text-align:center;padding:14px 6px;line-height:1.5}
+
+/* === Состояния центра: empty/loading === */
+.state-pane{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:13px;padding:24px;text-align:center;background:var(--c-bg-card)}
+.state-pane .ico{width:56px;height:56px;border-radius:50%;background:var(--c-bg-panel);border:1px dashed var(--c-dashed);display:flex;align-items:center;justify-content:center;color:var(--c-text-muted)}
+.state-pane h3{font-family:'PT Serif',serif;font-size:18px;color:var(--c-text-heading)}
+.state-pane p{font-size:12px;color:var(--c-text-secondary);max-width:400px;line-height:1.55}
+.state-pane .hint{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--c-text-muted);background:var(--c-bg-panel);border:1px solid var(--c-border-light);border-radius:8px;padding:5px 10px}
+.spinner{width:30px;height:30px;border:3px solid var(--c-accent-muted);border-top-color:var(--c-accent);border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.load-prog{width:240px;height:6px;background:var(--c-accent-muted);border-radius:999px;overflow:hidden}
+.load-prog i{display:block;height:100%;width:38%;background:var(--c-accent);border-radius:999px;animation:pulse 1.4s ease-in-out infinite}
+@keyframes pulse{0%,100%{width:30%}50%{width:62%}}
+
+/* === Мобильный фрейм === */
+.mobile-frame{width:390px;margin:8px auto 0;border:1px solid var(--c-border);border-radius:26px;overflow:hidden;background:var(--c-bg-panel);box-shadow:var(--shadow-island)}
+.mobile-frame .mf-doc-head{display:flex;align-items:center;gap:8px;padding:9px 12px;background:var(--c-bg-inset);border-bottom:1px solid var(--c-border-light)}
+.mobile-frame .mf-doc-head .ttl{font-family:'PT Serif',serif;font-size:14px;font-weight:700;color:var(--c-text-heading)}
+.mobile-frame .mf-canvas{height:400px;position:relative;background:var(--c-bg-card)}
+.mf-fab{position:absolute;right:12px;bottom:12px;width:44px;height:44px;border-radius:50%;background:var(--c-accent);color:var(--c-on-accent);box-shadow:var(--shadow-button);display:flex;align-items:center;justify-content:center;cursor:pointer;border:none}
+.mf-fab .b{position:absolute;top:-4px;right:-4px;background:var(--c-bg-card);color:var(--c-accent);border:1px solid var(--c-accent-muted);font-size:9px;font-weight:700;border-radius:999px;min-width:16px;height:16px;display:flex;align-items:center;justify-content:center;padding:0 3px}
+.bottom-sheet{position:absolute;left:0;right:0;bottom:0;max-height:70%;background:var(--c-bg-card);border-radius:22px 22px 0 0;box-shadow:var(--shadow-sheet);border-top:1px solid var(--c-border-light);display:flex;flex-direction:column;overflow:hidden}
+.bottom-sheet .grip{width:36px;height:4px;border-radius:2px;background:var(--c-track);margin:8px auto 4px;flex:none}
+.bottom-sheet .bs-head{display:flex;align-items:center;gap:8px;padding:4px 14px 10px;border-bottom:1px solid var(--c-border-light);flex:none}
+.bottom-sheet .bs-head .t{font-family:'PT Serif',serif;font-size:14px;font-weight:700;color:var(--c-text-heading)}
+.bottom-sheet .bs-body{overflow:auto;padding:4px 14px 16px}
+
+.note-list{font-size:11px;color:var(--c-text-secondary);max-width:860px;margin:14px auto 0;line-height:1.6}
+.note-list li{margin:3px 0}
+.note-list code{font-family:'JetBrains Mono',monospace;font-size:10px;background:var(--c-bg-panel);padding:1px 5px;border-radius:5px;color:var(--c-text-heading)}
+hr.sep{border:none;border-top:1px solid var(--c-border);margin:40px 0 0}
+.mini-svg{width:100%;height:100%;display:block}
+</style>
+</head>
+<body>
+
+<div class="proto-bar">
+  <h1>Code Graph</h1>
+  <span class="tag">итерация 3 · граф — документ в центре workspace; панель «Граф»: чипы связей + сворачиваемая легенда, паспорт главный</span>
+  <button id="themeBtn">☾ Тёмная тема</button>
+</div>
+
+<!-- ===================== СЦЕНАРИЙ 1: Граф открыт (построен) ===================== -->
+<div class="section">
+  <span class="scenario-tag">Сценарий 1 · граф построен и открыт</span>
+  <h2>Граф — документ в центре, «Граф» — панель в рельсе справа</h2>
+  <p class="note">Раскладка повторяет workspace: слева чаты, в центре открытый документ «Граф зависимостей»
+    (закрывается крестиком — как файл), справа рельса инструментов с открытой панелью «Граф»:
+    режимы отображения (связи), поиск, легенда, god-узлы и паспорт выбранного типа.
+    Кликни узел в графе — паспорт заполнится в панели справа.</p>
+
+  <div class="ws">
+    <!-- Левый сайдбар -->
+    <div class="sidebar">
+      <div class="sb-head"><span class="ttl">ClaudeCodeServer</span></div>
+      <div class="sb-tabs"><span class="sb-tab on">Чаты</span><span class="sb-tab">Файлы</span><span class="sb-tab">Задачи</span></div>
+      <div class="chat-list">
+        <div class="chat-item on"><span class="av">КГ</span><div><div class="nm">Code Graph — макет</div><div class="pv">переделать раскладку…</div></div></div>
+        <div class="chat-item"><span class="av">ЛЛ</span><div><div class="nm">LLM-слоты: ревью</div><div class="pv">UserModelTierResolver…</div></div></div>
+        <div class="chat-item"><span class="av">МП</span><div><div class="nm">MCP-серверы: вызовы</div><div class="pv">счётчики и отказы…</div></div></div>
+        <div class="chat-item"><span class="av">БЭ</span><div><div class="nm">Бэкапы: расписание</div><div class="pv">виджет на главной…</div></div></div>
+      </div>
+    </div>
+
+    <!-- Центр: документ «Граф» -->
+    <div class="center">
+      <div class="doc-head">
+        <span class="dt">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" style="color:var(--c-accent)"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8 7l3 9M16 7l-3 9"/></svg>
+          Граф зависимостей
+          <button class="close" id="docClose" title="Закрыть граф (центр вернётся к чату)">×</button>
+        </span>
+        <div class="spacer"></div>
+        <span class="mchip"><b>13</b> типов</span>
+        <span class="mchip"><b>14</b> рёбер</span>
+        <span class="mchip"><b>38</b> файлов</span>
+        <span class="mchip">собрано <b>27.07 14:02</b></span>
+        <button class="icon-btn" title="Перестроить">↻</button>
+      </div>
+      <div class="doc-body" id="docBody1">
+        <svg id="graph" viewBox="0 0 780 480" preserveAspectRatio="xMidYMid meet" style="width:100%;height:100%;display:block;cursor:grab">
+          <defs>
+            <marker id="ar-calls" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--edge-calls)"/></marker>
+            <marker id="ar-impl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--edge-impl)"/></marker>
+            <marker id="ar-ref" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--edge-ref)"/></marker>
+          </defs>
+          <g id="edges"></g>
+          <g id="nodes"></g>
+        </svg>
+      </div>
+    </div>
+
+    <!-- Рельса + панель «Граф» -->
+    <div class="rail-wrap" id="railWrap1">
+      <div class="panel-card" id="graphPanel1">
+        <div class="panel-head">
+          <span class="pt">Граф</span>
+          <button class="x" title="Скрыть панель">×</button>
+        </div>
+        <div class="panel-body">
+          <div class="psec">
+            <div class="search">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--c-text-muted)"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+              <input id="searchInput" placeholder="Поиск типа…">
+            </div>
+          </div>
+          <div class="psec">
+            <h4>Связи <span class="r" id="resetRels">сбросить</span></h4>
+            <div class="rel-chips">
+              <span class="relchip" data-rel="calls"><span class="dot" style="background:var(--edge-calls)"></span>Calls <span class="cnt">8</span></span>
+              <span class="relchip" data-rel="impl"><span class="dot" style="background:var(--edge-impl)"></span>Implements <span class="cnt">3</span></span>
+              <span class="relchip" data-rel="ref"><span class="dot" style="background:var(--edge-ref)"></span>References <span class="cnt">3</span></span>
+            </div>
+          </div>
+          <div class="psec collapse" id="legendCollapse">
+            <div class="collapse-h"><h4>Легенда и god-узлы</h4><span class="chev"></span></div>
+            <div class="collapse-b">
+              <div class="legend-row"><span class="kring" style="border-color:var(--kind-class)"></span>Class</div>
+              <div class="legend-row"><span class="kring" style="border-color:var(--kind-iface)"></span>Interface</div>
+              <div class="legend-row"><span class="kring" style="border-color:var(--kind-struct)"></span>Struct</div>
+              <div class="legend-row"><span class="kring" style="border-color:var(--kind-enum)"></span>Enum</div>
+              <h4 style="margin-top:10px">God-узлы <span style="color:var(--c-accent)">●</span></h4>
+              <div class="god-item" data-god="n1"><span class="gw"></span><span class="gn">LlmProviderRegistry</span><span class="ge">7</span></div>
+              <div class="god-item" data-god="n2"><span class="gw"></span><span class="gn">ClaudeSession</span><span class="ge">5</span></div>
+              <p style="font-size:10px;color:var(--c-text-muted);margin-top:6px;line-height:1.5">Точки перегруза — кандидаты на разбиение.</p>
+            </div>
+          </div>
+          <div class="psec" id="passportSec" style="border-bottom:none;flex:1">
+            <h4>Паспорт типа</h4>
+            <div class="pp-hint" id="ppHint">Выбери узел на графе —<br>здесь появится его паспорт</div>
+            <div id="ppBody" style="display:none"></div>
+          </div>
+        </div>
+      </div>
+      <div class="rail">
+        <button class="rail-btn" title="Файлы"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></button>
+        <button class="rail-btn" title="Изменения"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M6 8.5v7M18 9.5c-4 0-5 3-8 3"/></svg></button>
+        <button class="rail-btn" title="Задачи"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></button>
+        <button class="rail-btn on" title="Граф"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8 7l3 9M16 7l-3 9"/></svg></button>
+        <div class="rail-sep"></div>
+        <button class="rail-btn" title="Команда"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-6 8-6s8 2 8 6"/></svg></button>
+      </div>
+    </div>
+  </div>
+  <ul class="note-list">
+    <li><b>Закрыть граф</b> — крестик в шапке документа: центр возвращается к чату (сценарий 1б ниже).</li>
+    <li><b>Фильтр компактный и убираемый.</b> Связи — одна строка чипов-тогглов; «Легенда и god-узлы» — сворачиваемая секция (по умолчанию свёрнута). При выборе узла она сворачивается сама: паспорт — главный житель панели, фильтрация опциональна, но в один клик.</li>
+    <li>Смена режима при закрытом документе <b>открывает граф снова</b> — попробуй в сценарии 1б: кликни чип связи.</li>
+  </ul>
+</div>
+
+<hr class="sep">
+
+<!-- ===================== СЦЕНАРИЙ 1б: Граф закрыт → чат ===================== -->
+<div class="section">
+  <span class="scenario-tag">Сценарий 1б · граф закрыт</span>
+  <h2>Граф закрыт — центр показывает чат</h2>
+  <p class="note">Документ закрыт крестиком — центр вернулся к чату. Панель «Граф» справа осталась открытой:
+    режимы на месте. <b>Кликни любой чип связи</b> (или god-узел) — документ откроется снова.
+    Это и есть «если он скрыт, то он показывается в этот момент».</p>
+
+  <div class="ws">
+    <div class="sidebar">
+      <div class="sb-head"><span class="ttl">ClaudeCodeServer</span></div>
+      <div class="sb-tabs"><span class="sb-tab on">Чаты</span><span class="sb-tab">Файлы</span><span class="sb-tab">Задачи</span></div>
+      <div class="chat-list">
+        <div class="chat-item on"><span class="av">КГ</span><div><div class="nm">Code Graph — макет</div><div class="pv">переделать раскладку…</div></div></div>
+        <div class="chat-item"><span class="av">ЛЛ</span><div><div class="nm">LLM-слоты: ревью</div><div class="pv">UserModelTierResolver…</div></div></div>
+      </div>
+    </div>
+
+    <div class="center" id="centerClosed">
+      <div class="doc-head" id="chatHead">
+        <span class="dt">💬 Code Graph — макет</span>
+        <div class="spacer"></div>
+        <span class="mchip">сессия</span>
+      </div>
+      <div class="doc-head" id="graphHeadClosed" style="display:none">
+        <span class="dt">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" style="color:var(--c-accent)"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8 7l3 9M16 7l-3 9"/></svg>
+          Граф зависимостей
+          <button class="close" id="docClose2" title="Закрыть граф">×</button>
+        </span>
+        <div class="spacer"></div>
+        <span class="mchip"><b>13</b> типов</span>
+        <span class="mchip"><b>14</b> рёбер</span>
+      </div>
+      <div class="doc-body" id="closedBody">
+        <div class="chat-ph" id="chatPh">
+          <div class="msg user">Покажи, где у нас god-объекты в LLM-слое</div>
+          <div class="msg bot">Открой панель «Граф» справа — god-узлы отмечены оранжевым. Клик по любому центрирует документ графа на нём.</div>
+          <div class="msg user">А почему ClaudeSession тянет 5 связей?</div>
+          <div class="composer">Сообщение… <span style="margin-left:auto">➤</span></div>
+        </div>
+        <svg id="graph2" viewBox="0 0 780 480" preserveAspectRatio="xMidYMid meet" style="width:100%;height:100%;display:none;cursor:grab">
+          <g id="edges2"></g><g id="nodes2"></g>
+        </svg>
+      </div>
+    </div>
+
+    <div class="rail-wrap">
+      <div class="panel-card">
+        <div class="panel-head"><span class="pt">Граф</span><button class="x">×</button></div>
+        <div class="panel-body">
+          <div class="psec">
+            <h4>Связи</h4>
+            <div class="rel-chips">
+              <span class="relchip" data-rel2="calls"><span class="dot" style="background:var(--edge-calls)"></span>Calls <span class="cnt">8</span></span>
+              <span class="relchip" data-rel2="impl"><span class="dot" style="background:var(--edge-impl)"></span>Implements <span class="cnt">3</span></span>
+              <span class="relchip" data-rel2="ref"><span class="dot" style="background:var(--edge-ref)"></span>References <span class="cnt">3</span></span>
+            </div>
+          </div>
+          <div class="psec">
+            <h4>God-узлы <span style="color:var(--c-accent)">●</span></h4>
+            <div class="god-item" data-god2="n1"><span class="gw"></span><span class="gn">LlmProviderRegistry</span><span class="ge">7</span></div>
+            <div class="god-item" data-god2="n2"><span class="gw"></span><span class="gn">ClaudeSession</span><span class="ge">5</span></div>
+          </div>
+          <div class="psec" style="border-bottom:none">
+            <h4>Документ</h4>
+            <button class="btn btn-secondary btn-block" id="showGraphBtn">Показать граф в центре</button>
+          </div>
+        </div>
+      </div>
+      <div class="rail">
+        <button class="rail-btn" title="Файлы"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></button>
+        <button class="rail-btn" title="Изменения"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M6 8.5v7M18 9.5c-4 0-5 3-8 3"/></svg></button>
+        <button class="rail-btn" title="Задачи"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></button>
+        <button class="rail-btn on" title="Граф"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8 7l3 9M16 7l-3 9"/></svg></button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<hr class="sep">
+
+<!-- ===================== СЦЕНАРИЙ 2: Empty ===================== -->
+<div class="section">
+  <span class="scenario-tag">Сценарий 2 · empty</span>
+  <h2>Граф не построен</h2>
+  <p class="note">В проекте нет <code>.cs</code> или граф ни разу не собирали. Документ открыт, но вместо холста —
+    empty-state с главным действием. Панель «Граф» справа деградирует до кнопки сборки: фильтры бессмысленны без данных.</p>
+
+  <div class="ws">
+    <div class="sidebar">
+      <div class="sb-head"><span class="ttl">ClaudeCodeServer</span></div>
+      <div class="sb-tabs"><span class="sb-tab on">Чаты</span><span class="sb-tab">Файлы</span><span class="sb-tab">Задачи</span></div>
+      <div class="chat-list">
+        <div class="chat-item on"><span class="av">КГ</span><div><div class="nm">Code Graph — макет</div><div class="pv">переделать раскладку…</div></div></div>
+      </div>
+    </div>
+
+    <div class="center">
+      <div class="doc-head">
+        <span class="dt">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" style="color:var(--c-text-muted)"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8 7l3 9M16 7l-3 9"/></svg>
+          Граф зависимостей
+          <button class="close">×</button>
+        </span>
+        <div class="spacer"></div>
+        <span class="mchip" style="opacity:.6">не собран</span>
+      </div>
+      <div class="doc-body">
+        <div class="state-pane">
+          <div class="ico"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8 7l3 9M16 7l-3 9"/></svg></div>
+          <h3>Граф ещё не построен</h3>
+          <p>Code Graph анализирует типы и связи между ними. Первичная сборка <b>ClaudeHomeServer</b> займёт около минуты, затем граф обновляется при каждом изменении кода.</p>
+          <button class="btn btn-primary">▶ Построить граф</button>
+          <span class="hint">POST /api/projects/{id}/code-graph/build</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="rail-wrap">
+      <div class="panel-card">
+        <div class="panel-head"><span class="pt">Граф</span><button class="x">×</button></div>
+        <div class="panel-body">
+          <div class="psec" style="border-bottom:none">
+            <h4>Документ</h4>
+            <p style="font-size:11px;color:var(--c-text-secondary);line-height:1.5;margin-bottom:10px">Граф ещё не собран для этого проекта. Собери его, чтобы увидеть типы и связи.</p>
+            <button class="btn btn-primary btn-block">▶ Построить граф</button>
+          </div>
+        </div>
+      </div>
+      <div class="rail">
+        <button class="rail-btn" title="Файлы"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></button>
+        <button class="rail-btn" title="Изменения"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M6 8.5v7M18 9.5c-4 0-5 3-8 3"/></svg></button>
+        <button class="rail-btn" title="Задачи"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></button>
+        <button class="rail-btn on" title="Граф"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8 7l3 9M16 7l-3 9"/></svg></button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<hr class="sep">
+
+<!-- ===================== СЦЕНАРИЙ 3: Loading ===================== -->
+<div class="section">
+  <span class="scenario-tag">Сценарий 3 · loading</span>
+  <h2>Граф строится</h2>
+  <p class="note">Сборка идёт: в документе — прогресс по файлам. В панели справа контролы заблокированы
+    (disabled), чтобы не менять режимы «в пустоту».</p>
+
+  <div class="ws">
+    <div class="sidebar">
+      <div class="sb-head"><span class="ttl">ClaudeCodeServer</span></div>
+      <div class="sb-tabs"><span class="sb-tab on">Чаты</span><span class="sb-tab">Файлы</span><span class="sb-tab">Задачи</span></div>
+      <div class="chat-list">
+        <div class="chat-item on"><span class="av">КГ</span><div><div class="nm">Code Graph — макет</div><div class="pv">переделать раскладку…</div></div></div>
+      </div>
+    </div>
+
+    <div class="center">
+      <div class="doc-head">
+        <span class="dt">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" style="color:var(--c-accent)"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8 7l3 9M16 7l-3 9"/></svg>
+          Граф зависимостей
+        </span>
+        <div class="spacer"></div>
+        <span class="mchip" style="color:var(--c-accent)">строится…</span>
+      </div>
+      <div class="doc-body">
+        <div class="state-pane">
+          <div class="spinner"></div>
+          <h3>Анализирую зависимости</h3>
+          <p>Roslyn разбирает исходники, извлекает типы и рёбра между ними.</p>
+          <div class="load-prog"><i></i></div>
+          <p class="mono" style="font-size:11px;color:var(--c-text-muted)">Обработано 142 из ~380 файлов · 37%</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="rail-wrap">
+      <div class="panel-card">
+        <div class="panel-head"><span class="pt">Граф</span><button class="x">×</button></div>
+        <div class="panel-body" style="opacity:.45;pointer-events:none">
+          <div class="psec">
+            <h4>Связи</h4>
+            <div class="rel-chips">
+              <span class="relchip off"><span class="dot" style="background:var(--edge-calls)"></span>Calls <span class="cnt">—</span></span>
+              <span class="relchip off"><span class="dot" style="background:var(--edge-impl)"></span>Implements <span class="cnt">—</span></span>
+              <span class="relchip off"><span class="dot" style="background:var(--edge-ref)"></span>References <span class="cnt">—</span></span>
+            </div>
+          </div>
+          <div class="psec" style="border-bottom:none">
+            <h4>Типы узлов</h4>
+            <div class="legend-row"><span class="kring" style="border-color:var(--kind-class)"></span>Class</div>
+            <div class="legend-row"><span class="kring" style="border-color:var(--kind-iface)"></span>Interface</div>
+            <div class="legend-row"><span class="kring" style="border-color:var(--kind-struct)"></span>Struct</div>
+            <div class="legend-row"><span class="kring" style="border-color:var(--kind-enum)"></span>Enum</div>
+          </div>
+        </div>
+      </div>
+      <div class="rail">
+        <button class="rail-btn" title="Файлы"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></button>
+        <button class="rail-btn" title="Изменения"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M6 8.5v7M18 9.5c-4 0-5 3-8 3"/></svg></button>
+        <button class="rail-btn" title="Задачи"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></button>
+        <button class="rail-btn on" title="Граф"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8 7l3 9M16 7l-3 9"/></svg></button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<hr class="sep">
+
+<!-- ===================== СЦЕНАРИЙ 4: Stale ===================== -->
+<div class="section">
+  <span class="scenario-tag">Сценарий 4 · stale</span>
+  <h2>Граф устарел (isStale=true)</h2>
+  <p class="note">Код изменился после сборки. Бейдж в шапке документа — мягкий warning, граф остаётся рабочим.
+    «Перестроить» подсвечена как главное действие и продублирована в панели справа.</p>
+
+  <div class="ws">
+    <div class="sidebar">
+      <div class="sb-head"><span class="ttl">ClaudeCodeServer</span></div>
+      <div class="sb-tabs"><span class="sb-tab on">Чаты</span><span class="sb-tab">Файлы</span><span class="sb-tab">Задачи</span></div>
+      <div class="chat-list">
+        <div class="chat-item on"><span class="av">КГ</span><div><div class="nm">Code Graph — макет</div><div class="pv">переделать раскладку…</div></div></div>
+      </div>
+    </div>
+
+    <div class="center">
+      <div class="doc-head">
+        <span class="dt">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" style="color:var(--c-accent)"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8 7l3 9M16 7l-3 9"/></svg>
+          Граф зависимостей
+          <button class="close">×</button>
+        </span>
+        <span class="stale-badge" title="metadata.isStale=true: с момента сборки код изменился (7 файлов). Рёбра могут отставать от реальности.">⚠ может быть устаревшим</span>
+        <div class="spacer"></div>
+        <span class="mchip">собрано <b>27.07 11:40</b></span>
+        <button class="btn btn-primary" style="padding:4px 10px;font-size:11px">↻ Перестроить</button>
+      </div>
+      <div class="doc-body">
+        <svg viewBox="0 0 780 480" class="mini-svg" style="opacity:.85">
+          <line x1="360" y1="150" x2="120" y2="300" class="edge calls" stroke="var(--edge-calls)" stroke-width="1.6"/>
+          <line x1="360" y1="150" x2="560" y2="210" class="edge calls" stroke="var(--edge-calls)" stroke-width="1.6"/>
+          <line x1="120" y1="300" x2="120" y2="170" class="edge impl" stroke="var(--edge-impl)" stroke-width="1.6"/>
+          <line x1="360" y1="150" x2="690" y2="300" class="edge ref" stroke="var(--edge-ref)" stroke-width="1.6" stroke-dasharray="5 4"/>
+          <line x1="560" y1="210" x2="640" y2="120" class="edge calls" stroke="var(--edge-calls)" stroke-width="1.6"/>
+          <g transform="translate(360,150)"><circle r="33" class="god-halo" fill="none"/><circle r="26" class="node-ring class" stroke="var(--kind-class)" stroke-width="2.5" fill="var(--c-bg-card)"/><text class="node-glyph class" fill="var(--c-text-heading)">C</text><text class="node-label" y="39">LlmProviderRegistry</text></g>
+          <g transform="translate(120,300)"><circle r="27" class="god-halo" fill="none"/><circle r="20" class="node-ring class" stroke="var(--kind-class)" stroke-width="2.5" fill="var(--c-bg-card)"/><text class="node-glyph class" fill="var(--c-text-heading)">C</text><text class="node-label" y="33">ClaudeSession</text></g>
+          <g transform="translate(120,170)"><circle r="16" class="node-ring iface" stroke="var(--kind-iface)" stroke-width="2.5" fill="var(--c-bg-card)"/><text class="node-glyph iface" fill="var(--kind-iface)">I</text><text class="node-label" y="29">IClaudeRunner</text></g>
+          <g transform="translate(560,210)"><circle r="16" class="node-ring class" stroke="var(--kind-class)" stroke-width="2.5" fill="var(--c-bg-card)"/><text class="node-glyph class" fill="var(--c-text-heading)">C</text><text class="node-label" y="29">CheapTextRunner</text></g>
+          <g transform="translate(640,120)"><circle r="16" class="node-ring class" stroke="var(--kind-class)" stroke-width="2.5" fill="var(--c-bg-card)"/><text class="node-glyph class" fill="var(--c-text-heading)">C</text><text class="node-label" y="29">LocalActionRouter</text></g>
+          <g transform="translate(690,300)"><circle r="16" class="node-ring enum" stroke="var(--kind-enum)" stroke-width="2.5" fill="var(--c-bg-card)"/><text class="node-glyph enum" fill="var(--kind-enum)">E</text><text class="node-label" y="29">ModelTier</text></g>
+        </svg>
+      </div>
+    </div>
+
+    <div class="rail-wrap">
+      <div class="panel-card">
+        <div class="panel-head"><span class="pt">Граф</span><button class="x">×</button></div>
+        <div class="panel-body">
+          <div class="psec" style="background:var(--c-warning-bg);border-bottom:1px solid var(--c-border-light)">
+            <p style="font-size:11px;color:var(--c-warning-text);line-height:1.5;margin-bottom:8px">⚠ Код изменился после сборки — 7 файлов. Граф может отставать.</p>
+            <button class="btn btn-primary btn-block">↻ Перестроить</button>
+          </div>
+          <div class="psec">
+            <h4>Связи</h4>
+            <div class="rel-chips">
+              <span class="relchip"><span class="dot" style="background:var(--edge-calls)"></span>Calls <span class="cnt">8</span></span>
+              <span class="relchip"><span class="dot" style="background:var(--edge-impl)"></span>Implements <span class="cnt">3</span></span>
+              <span class="relchip"><span class="dot" style="background:var(--edge-ref)"></span>References <span class="cnt">3</span></span>
+            </div>
+          </div>
+          <div class="psec" style="border-bottom:none">
+            <h4>Типы узлов</h4>
+            <div class="legend-row"><span class="kring" style="border-color:var(--kind-class)"></span>Class</div>
+            <div class="legend-row"><span class="kring" style="border-color:var(--kind-iface)"></span>Interface</div>
+            <div class="legend-row"><span class="kring" style="border-color:var(--kind-struct)"></span>Struct</div>
+            <div class="legend-row"><span class="kring" style="border-color:var(--kind-enum)"></span>Enum</div>
+          </div>
+        </div>
+      </div>
+      <div class="rail">
+        <button class="rail-btn" title="Файлы"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></button>
+        <button class="rail-btn" title="Изменения"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M6 8.5v7M18 9.5c-4 0-5 3-8 3"/></svg></button>
+        <button class="rail-btn" title="Задачи"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></button>
+        <button class="rail-btn on" title="Граф"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8 7l3 9M16 7l-3 9"/></svg></button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<hr class="sep">
+
+<!-- ===================== МОБИЛА ===================== -->
+<div class="section">
+  <span class="scenario-tag">Мобила · 390px</span>
+  <h2>Мобильная раскладка</h2>
+  <p class="note">Документ «Граф» — на весь экран (с крестиком закрытия → назад к чату). Панель «Граф» —
+    нижняя шторка по FAB-кнопке (бейдж показывает число активных фильтров).</p>
+
+  <div class="mobile-frame">
+    <div class="mf-doc-head">
+      <span class="icon-btn">‹</span>
+      <span class="ttl">Граф зависимостей</span>
+      <button class="close" style="width:24px;height:24px;border-radius:7px;border:none;background:none;color:var(--c-text-muted);cursor:pointer;margin-left:auto">×</button>
+    </div>
+    <div class="mf-canvas">
+      <svg viewBox="0 0 360 400" style="width:100%;height:100%">
+        <line x1="60" y1="90" x2="180" y2="190" class="edge calls" stroke="var(--edge-calls)" stroke-width="1.6"/>
+        <line x1="180" y1="190" x2="300" y2="100" class="edge impl" stroke="var(--edge-impl)" stroke-width="1.6"/>
+        <line x1="180" y1="190" x2="290" y2="280" class="edge ref" stroke="var(--edge-ref)" stroke-width="1.6" stroke-dasharray="5 4"/>
+        <line x1="180" y1="190" x2="90" y2="290" class="edge calls" stroke="var(--edge-calls)" stroke-width="1.6"/>
+        <g transform="translate(180,190)"><circle r="26" class="god-halo" fill="none"/><circle r="20" class="node-ring class" stroke="var(--kind-class)" stroke-width="2.5" fill="var(--c-bg-card)"/><text class="node-glyph class" fill="var(--c-text-heading)">C</text><text class="node-label" y="38" fill="var(--c-accent)" font-weight="600">ClaudeSession</text></g>
+        <g transform="translate(60,90)"><circle r="16" class="node-ring iface" stroke="var(--kind-iface)" stroke-width="2.5" fill="var(--c-bg-card)"/><text class="node-glyph iface" fill="var(--kind-iface)">I</text><text class="node-label" y="28">IClaudeRunner</text></g>
+        <g transform="translate(300,100)"><circle r="16" class="node-ring class" stroke="var(--kind-class)" stroke-width="2.5" fill="var(--c-bg-card)"/><text class="node-glyph class" fill="var(--c-text-heading)">C</text><text class="node-label" y="28">Registry</text></g>
+        <g transform="translate(290,280)"><circle r="16" class="node-ring enum" stroke="var(--kind-enum)" stroke-width="2.5" fill="var(--c-bg-card)"/><text class="node-glyph enum" fill="var(--kind-enum)">E</text><text class="node-label" y="28">ModelTier</text></g>
+        <g transform="translate(90,290)"><circle r="16" class="node-ring struct" stroke="var(--kind-struct)" stroke-width="2.5" fill="var(--c-bg-card)"/><text class="node-glyph struct" fill="var(--kind-struct)">S</text><text class="node-label" y="28">Config</text></g>
+      </svg>
+      <button class="mf-fab" title="Режимы графа"><span class="b">2</span><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M7 12h10M10 18h4"/></svg></button>
+    </div>
+  </div>
+
+  <p class="note" style="margin-top:16px;margin-bottom:4px">Шторка открыта (тап по FAB): режимы + паспорт выбранного узла.</p>
+  <div class="mobile-frame">
+    <div class="mf-canvas" style="height:440px">
+      <svg viewBox="0 0 360 220" style="width:100%;height:220px;opacity:.35">
+        <line x1="60" y1="50" x2="180" y2="120" class="edge calls" stroke="var(--edge-calls)" stroke-width="1.6"/>
+        <g transform="translate(180,120)"><circle r="20" class="node-ring class" stroke="var(--kind-class)" stroke-width="2.5" fill="var(--c-bg-card)"/><text class="node-glyph class" fill="var(--c-text-heading)">C</text></g>
+      </svg>
+      <div class="bottom-sheet">
+        <div class="grip"></div>
+        <div class="bs-head">
+          <span class="t">Граф</span>
+          <span class="mchip" style="margin-left:auto"><b>13</b> типов</span>
+          <button class="icon-btn">×</button>
+        </div>
+        <div class="bs-body">
+          <div class="psec" style="padding:10px 0">
+            <h4>Связи</h4>
+            <div class="rel-chips">
+              <span class="relchip"><span class="dot" style="background:var(--edge-calls)"></span>Calls <span class="cnt">8</span></span>
+              <span class="relchip"><span class="dot" style="background:var(--edge-impl)"></span>Implements <span class="cnt">3</span></span>
+              <span class="relchip off"><span class="dot" style="background:var(--edge-ref)"></span>References <span class="cnt">3</span></span>
+            </div>
+          </div>
+          <div class="psec" style="padding:10px 0;border-bottom:none">
+            <h4>Паспорт типа</h4>
+            <span class="kind-badge Class"><span class="d" style="background:var(--kind-class)"></span>Class</span>
+            <span class="god-mark">● god-node</span>
+            <div class="pp-label">ClaudeSession</div>
+            <div class="pp-fqn">Services.Llm.Claude.ClaudeSession</div>
+            <div style="display:flex;gap:14px;margin-top:8px">
+              <span class="mono" style="font-size:10px;color:var(--c-text-muted)">входящих: 2</span>
+              <span class="mono" style="font-size:10px;color:var(--c-text-muted)">исходящих: 3</span>
+              <span class="mono" style="font-size:10px;color:var(--c-info)">↗ Файлы</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ===== Демо-данные графа (контракт GET /api/projects/{id}/code-graph) =====
+const NODES = [
+  {id:'n1', label:'LlmProviderRegistry', kind:'Class', god:true,  x:360, y:150, fqn:'Services.Llm.LlmProviderRegistry', file:'Services/Llm/LlmProviderRegistry.cs', loc:'12:1'},
+  {id:'n2', label:'ClaudeSession',       kind:'Class', god:true,  x:120, y:300, fqn:'Services.Llm.Claude.ClaudeSession', file:'Services/Llm/Claude/ClaudeSession.cs', loc:'34:1'},
+  {id:'n3', label:'OneShotClaudeRunner', kind:'Class', god:false, x:255, y:400, fqn:'Services.Llm.Claude.OneShotClaudeRunner', file:'Services/Llm/Claude/OneShotClaudeRunner.cs', loc:'18:1'},
+  {id:'n4', label:'IClaudeRunner',       kind:'Interface', god:false, x:120, y:170, fqn:'Services.Llm.Claude.IClaudeRunner', file:'Services/Llm/Claude/IClaudeRunner.cs', loc:'5:1'},
+  {id:'n5', label:'ILlmProvider',        kind:'Interface', god:false, x:360, y:40,  fqn:'Services.Llm.ILlmProvider', file:'Services/Llm/ILlmProvider.cs', loc:'6:1'},
+  {id:'n6', label:'LlmProviderConfig',   kind:'Struct',   god:false, x:560, y:400, fqn:'Services.Llm.LlmProviderConfig', file:'Services/Llm/LlmProviderConfig.cs', loc:'9:1'},
+  {id:'n7', label:'ModelTier',           kind:'Enum',     god:false, x:690, y:300, fqn:'Services.Llm.ModelTier', file:'Services/Llm/ModelTier.cs', loc:'3:1'},
+  {id:'n8', label:'ProviderEnvKeys',     kind:'Class',    god:false, x:470, y:320, fqn:'Services.Llm.ProviderEnvKeys', file:'Services/Llm/ProviderEnvKeys.cs', loc:'7:1'},
+  {id:'n9', label:'CheapTextRunner',     kind:'Class',    god:false, x:560, y:210, fqn:'Services.Llm.CheapTextRunner', file:'Services/Llm/CheapTextRunner.cs', loc:'14:1'},
+  {id:'n10',label:'LocalActionRouter',   kind:'Class',    god:false, x:640, y:120, fqn:'Services.Llm.LocalActionRouter', file:'Services/Llm/LocalActionRouter.cs', loc:'11:1'},
+  {id:'n11',label:'ModelAssignmentResolver',kind:'Class', god:false, x:120, y:60,  fqn:'Services.Llm.ModelAssignmentResolver', file:'Services/Llm/ModelAssignmentResolver.cs', loc:'15:1'},
+  {id:'n12',label:'UserModelTierResolver',kind:'Class',   god:false, x:255, y:110, fqn:'Services.Llm.UserModelTierResolver', file:'Services/Llm/UserModelTierResolver.cs', loc:'10:1'},
+  {id:'n13',label:'AppSettings',         kind:'Class',    god:false, x:360, y:300, fqn:'Models.AppSettings', file:'Models/AppSettings.cs', loc:'20:1'},
+];
+const EDGES = [
+  {s:'n2',t:'n4', rel:'impl', conf:'Extracted'},
+  {s:'n3',t:'n4', rel:'impl', conf:'Extracted'},
+  {s:'n1',t:'n5', rel:'impl', conf:'Extracted'},
+  {s:'n2',t:'n1', rel:'calls',conf:'Extracted'},
+  {s:'n1',t:'n8', rel:'calls',conf:'Extracted'},
+  {s:'n1',t:'n13',rel:'calls',conf:'Extracted'},
+  {s:'n9',t:'n10',rel:'calls',conf:'Extracted'},
+  {s:'n10',t:'n1',rel:'calls',conf:'Extracted'},
+  {s:'n11',t:'n12',rel:'calls',conf:'Extracted'},
+  {s:'n11',t:'n1',rel:'calls',conf:'Inferred'},
+  {s:'n1',t:'n6', rel:'ref',  conf:'Extracted'},
+  {s:'n9',t:'n7', rel:'ref',  conf:'Inferred'},
+  {s:'n2',t:'n7', rel:'ref',  conf:'Inferred'},
+  {s:'n3',t:'n6', rel:'ref',  conf:'Extracted'},
+];
+const KIND_GLYPH = {Class:'C', Interface:'I', Struct:'S', Enum:'E'};
+const REL_RU = {calls:'Calls', impl:'Implements', ref:'References'};
+const SVGNS='http://www.w3.org/2000/svg';
+function relClass(r){ return r==='calls'?'calls':r==='impl'?'impl':'ref'; }
+function nodeById(id){ return NODES.find(n=>n.id===id); }
+
+function renderGraph(edgesId, nodesId, onSelect){
+  const edgesG=document.getElementById(edgesId), nodesG=document.getElementById(nodesId);
+  if(!edgesG||!nodesG) return;
+  edgesG.innerHTML=''; nodesG.innerHTML='';
+  EDGES.forEach((e,i)=>{
+    const a=nodeById(e.s), b=nodeById(e.t);
+    const el=document.createElementNS(SVGNS,'line');
+    el.setAttribute('x1',a.x); el.setAttribute('y1',a.y);
+    el.setAttribute('x2',b.x); el.setAttribute('y2',b.y);
+    const rc=relClass(e.rel);
+    el.setAttribute('class','edge '+rc);
+    el.setAttribute('data-rel',e.rel); el.setAttribute('data-i',i);
+    if(e.rel!=='ref') el.setAttribute('marker-end','url(#ar-'+rc+')');
+    if(e.conf==='Inferred') el.setAttribute('stroke-dasharray','5 4');
+    edgesG.appendChild(el);
+  });
+  NODES.forEach(n=>{
+    const g=document.createElementNS(SVGNS,'g');
+    g.setAttribute('class','node');
+    g.setAttribute('transform',`translate(${n.x},${n.y})`);
+    g.dataset.id=n.id;
+    const r=n.god?26:20;
+    if(n.god){ const h=document.createElementNS(SVGNS,'circle'); h.setAttribute('r',r+7); h.setAttribute('class','god-halo'); g.appendChild(h); }
+    const c=document.createElementNS(SVGNS,'circle');
+    c.setAttribute('r',r); c.setAttribute('class','node-ring '+n.kind.toLowerCase()); g.appendChild(c);
+    const gl=document.createElementNS(SVGNS,'text');
+    gl.setAttribute('class','node-glyph '+n.kind.toLowerCase()); gl.textContent=KIND_GLYPH[n.kind]; g.appendChild(gl);
+    const lb=document.createElementNS(SVGNS,'text');
+    lb.setAttribute('class','node-label'); lb.setAttribute('y', r+13); lb.textContent=n.label; g.appendChild(lb);
+    g.addEventListener('click',ev=>{ ev.stopPropagation(); onSelect(n.id); });
+    nodesG.appendChild(g);
+  });
+}
+
+// ============ Сценарий 1: полный интерактив ============
+let selectedId=null;
+let activeRels={calls:true,impl:true,ref:true};
+
+function applyFilters(){
+  document.querySelectorAll('#edges .edge').forEach(el=>{
+    el.style.display = activeRels[el.dataset.rel] ? '' : 'none';
+  });
+}
+function selectNode(id){
+  selectedId=id;
+  const n=nodeById(id);
+  document.querySelectorAll('#nodes .node').forEach(el=>{
+    el.classList.remove('sel','dim');
+    if(el.dataset.id===id) el.classList.add('sel');
+  });
+  const incident=new Set([id]);
+  EDGES.forEach(e=>{ if(activeRels[e.rel] && (e.s===id||e.t===id)){ incident.add(e.s); incident.add(e.t); } });
+  document.querySelectorAll('#edges .edge').forEach(el=>{
+    const e=EDGES[+el.dataset.i];
+    el.classList.remove('hi','dim');
+    if(!activeRels[e.rel]) return;
+    if(e.s===id||e.t===id) el.classList.add('hi'); else el.classList.add('dim');
+  });
+  document.querySelectorAll('#nodes .node').forEach(el=>{
+    if(!incident.has(el.dataset.id)) el.classList.add('dim');
+  });
+  // паспорт — главный в панели: легенду сворачиваем, чтобы не вытесняла контент
+  document.getElementById('legendCollapse').classList.remove('open');
+  renderPassport(n);
+}
+function clearSelection(){
+  selectedId=null;
+  document.querySelectorAll('#nodes .node').forEach(el=>el.classList.remove('sel','dim','match'));
+  document.querySelectorAll('#edges .edge').forEach(el=>el.classList.remove('hi','dim'));
+  document.getElementById('ppHint').style.display='';
+  document.getElementById('ppBody').style.display='none';
+}
+function renderPassport(n){
+  const incoming=EDGES.filter(e=>e.t===n.id);
+  const outgoing=EDGES.filter(e=>e.s===n.id);
+  const relLink=(e,out)=>{
+    const other=nodeById(out?e.t:e.s);
+    const rc=relClass(e.rel);
+    const color = rc==='calls'?'var(--edge-calls)':rc==='impl'?'var(--edge-impl)':'var(--edge-ref)';
+    return `<div class="rel-link" data-jump="${other.id}">
+      <span class="arr">${out?'→':'←'}</span>
+      <span class="rdot" style="background:${color}"></span>
+      <span class="nm">${other.label}</span>
+      <span class="conf ${e.conf==='Inferred'?'Inf':''}">${REL_RU[e.rel]}${e.conf==='Inferred'?' · inferred':''}</span>
+    </div>`;
+  };
+  document.getElementById('ppHint').style.display='none';
+  const body=document.getElementById('ppBody');
+  body.style.display='';
+  body.innerHTML=`
+    <div class="pp-head2">
+      <span class="kind-badge ${n.kind}"><span class="d" style="background:var(--kind-${n.kind.toLowerCase()})"></span>${n.kind}</span>
+      ${n.god?'<span class="god-mark">● god-node</span>':''}
+      <div class="pp-label">${n.label}</div>
+      <div class="pp-fqn">${n.fqn}</div>
+    </div>
+    <div class="pp-loc" title="Открыть во вкладке «Файлы»">📁 ${n.file}:${n.loc}</div>
+    <h4 style="margin-top:4px">Исходящие · ${outgoing.length}</h4>
+    ${outgoing.length?outgoing.map(e=>relLink(e,true)).join(''):'<div class="rel-empty">нет</div>'}
+    <h4 style="margin-top:8px">Входящие · ${incoming.length}</h4>
+    ${incoming.length?incoming.map(e=>relLink(e,false)).join(''):'<div class="rel-empty">нет</div>'}`;
+  body.querySelectorAll('.rel-link').forEach(el=>el.addEventListener('click',()=>selectNode(el.dataset.jump)));
+}
+
+document.querySelectorAll('.relchip[data-rel]').forEach(ch=>{
+  ch.addEventListener('click',()=>{
+    const rel=ch.dataset.rel;
+    activeRels[rel]=!activeRels[rel];
+    ch.classList.toggle('off',!activeRels[rel]);
+    applyFilters();
+    if(selectedId) selectNode(selectedId); else applyDimBySearch();
+  });
+});
+document.getElementById('resetRels').addEventListener('click',()=>{
+  activeRels={calls:true,impl:true,ref:true};
+  document.querySelectorAll('.relchip[data-rel]').forEach(ch=>ch.classList.remove('off'));
+  applyFilters();
+  if(selectedId) selectNode(selectedId);
+});
+// сворачиваемая секция «Легенда и god-узлы»
+document.querySelector('#legendCollapse .collapse-h').addEventListener('click',()=>{
+  document.getElementById('legendCollapse').classList.toggle('open');
+});
+document.querySelectorAll('.god-item[data-god]').forEach(it=>{
+  it.addEventListener('click',()=>selectNode(it.dataset.god));
+});
+const search=document.getElementById('searchInput');
+function applyDimBySearch(){
+  const q=(search.value||'').trim().toLowerCase();
+  if(!q){ document.querySelectorAll('#nodes .node').forEach(el=>el.classList.remove('match','dim')); document.querySelectorAll('#edges .edge').forEach(el=>el.classList.remove('dim')); return; }
+  document.querySelectorAll('#nodes .node').forEach(el=>{
+    const n=nodeById(el.dataset.id);
+    const hit=n.label.toLowerCase().includes(q)||n.fqn.toLowerCase().includes(q);
+    el.classList.toggle('match',hit);
+    el.classList.toggle('dim',!hit);
+  });
+  document.querySelectorAll('#edges .edge').forEach(el=>el.classList.add('dim'));
+}
+search.addEventListener('input',()=>{ if(search.value) clearSelection(); applyDimBySearch(); });
+document.getElementById('graph').addEventListener('click',e=>{
+  if(e.target.tagName==='svg'){ if(!search.value) clearSelection(); }
+});
+// Крестик документа → центр = чат (демо: сворачиваем холст)
+document.getElementById('docClose').addEventListener('click',()=>{
+  document.getElementById('docBody1').innerHTML='<div class="chat-ph"><div class="msg user">Покажи god-объекты в LLM-слое</div><div class="msg bot">Граф закрыт. Открой его снова из панели «Граф» справа — кнопкой или любой сменой режима.</div><div class="composer">Сообщение… <span style="margin-left:auto">➤</span></div></div>';
+});
+
+// ============ Сценарий 1б: закрыт → смена режима открывает ============
+function reopenGraph(){
+  document.getElementById('chatPh').style.display='none';
+  document.getElementById('chatHead').style.display='none';
+  document.getElementById('graphHeadClosed').style.display='';
+  const g2=document.getElementById('graph2');
+  g2.style.display='block';
+  renderGraph('edges2','nodes2',()=>{});
+}
+document.querySelectorAll('.relchip[data-rel2]').forEach(ch=>{
+  ch.addEventListener('click',reopenGraph);
+});
+document.querySelectorAll('.god-item[data-god2]').forEach(it=>{
+  it.addEventListener('click',reopenGraph);
+});
+document.getElementById('showGraphBtn').addEventListener('click',reopenGraph);
+document.getElementById('docClose2').addEventListener('click',()=>{
+  document.getElementById('graph2').style.display='none';
+  document.getElementById('graphHeadClosed').style.display='none';
+  document.getElementById('chatHead').style.display='';
+  document.getElementById('chatPh').style.display='';
+});
+
+// Тема
+const themeBtn=document.getElementById('themeBtn');
+themeBtn.addEventListener('click',()=>{
+  const cur=document.documentElement.getAttribute('data-theme');
+  const next=cur==='dark'?'light':'dark';
+  if(next==='dark') document.documentElement.setAttribute('data-theme','dark');
+  else document.documentElement.removeAttribute('data-theme');
+  themeBtn.textContent = next==='dark'?'☀ Светлая тема':'☾ Тёмная тема';
+});
+
+renderGraph('edges','nodes',selectNode);
+applyFilters();
+</script>
+</body>
+</html>

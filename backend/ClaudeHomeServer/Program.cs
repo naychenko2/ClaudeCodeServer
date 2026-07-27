@@ -107,6 +107,17 @@ builder.Services.AddSingleton<AppSettingsService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.UserModelTierResolver>();
 builder.Services.AddSingleton<UserHomeResolver>();
 builder.Services.AddSingleton<ProjectManager>();
+// CodeGraph: граф зависимостей кода (узлы — типы, рёбра — Calls/Implements/References)
+// GraphPersistence требует dataDir из IConfiguration — ленивый factory, чтобы test-in-memory
+// (DataPath из TestWebApplicationFactory) тоже применялся, как у ProjectManager.
+builder.Services.AddSingleton(sp => new ClaudeHomeServer.Services.CodeGraph.GraphPersistence(
+    Path.GetDirectoryName(Path.GetFullPath(
+        sp.GetRequiredService<IConfiguration>()["DataPath"]
+            ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json")))!,
+    sp.GetRequiredService<ILogger<ClaudeHomeServer.Services.CodeGraph.GraphPersistence>>()));
+builder.Services.AddSingleton<ClaudeHomeServer.Services.CodeGraph.CodeGraphService>();
+// Per-ход slice top-10 god-nodes Code Graph в системный промпт (ADR вариант A)
+builder.Services.AddSingleton<ClaudeHomeServer.Services.CodeGraph.CodeGraphPromptProvider>();
 builder.Services.AddSingleton<ProjectGroupManager>();
 builder.Services.AddSingleton<ProjectEventLogService>();
 builder.Services.AddSingleton<PersonaManager>();
@@ -444,6 +455,19 @@ if (!inspectionMode)
     _ = Task.Run(() => app.Services.GetRequiredService<ModelCatalogService>().GetModelsAsync());
     // Фоновый прогрев локальной модели Ollama (грузим веса в память заранее; best-effort)
     _ = Task.Run(() => app.Services.GetRequiredService<ClaudeHomeServer.Services.Llm.OllamaClient>().WarmUpAsync());
+    // Регистрация языковых провайдеров CodeGraph (C# для .cs файлов)
+    try
+    {
+        var codeGraphService = app.Services.GetRequiredService<ClaudeHomeServer.Services.CodeGraph.CodeGraphService>();
+        var csProvider = new ClaudeHomeServer.Services.CodeGraph.CSharpGraphProvider(
+            app.Services.GetRequiredService<ILogger<ClaudeHomeServer.Services.CodeGraph.CSharpGraphProvider>>());
+        codeGraphService.RegisterProvider(".cs", csProvider);
+        Console.WriteLine("[CodeGraph] зарегистрирован провайдер для .cs");
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"[CodeGraph] не удалось зарегистрировать провайдер: {ex.Message}");
+    }
 }
 app.Services.GetRequiredService<JwtService>();
 // Синк файловых сабагентов-персон: подписки на события PersonaManager должны встать

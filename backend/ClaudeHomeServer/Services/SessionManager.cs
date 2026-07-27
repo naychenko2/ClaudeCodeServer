@@ -211,6 +211,9 @@ public class SessionManager : IDisposable
     private readonly Git.GitService? _git;
     // Аналитика расхода токенов (null — в тестах: сбор выключен)
     private readonly Spend.ISpendCollector? _spend;
+    // Per-ход slice top-10 god-nodes Code Graph в системный промпт (ADR вариант A);
+    // null — в тестах, тогда блок графа в промпт не попадает
+    private readonly CodeGraph.CodeGraphPromptProvider? _codeGraphPrompt;
 
     public SessionManager(ProjectManager projects, IHubContext<Hubs.SessionHub> hub,
         ChatHistoryService history, IConfiguration config, ILlmSessionAdapterFactory adapters,
@@ -240,9 +243,12 @@ public class SessionManager : IDisposable
         Spend.ISpendCollector? spend = null,
         // Опционально: резолвер моделей агентных мест (назначения + слоты тиров);
         // без него собирается локально от appSettings — слоты работают и в тестах
-        Llm.ModelAssignmentResolver? assignments = null)
+        Llm.ModelAssignmentResolver? assignments = null,
+        // Опционально (в тестах не передаётся): провайдер slice Code Graph в системный промпт
+        CodeGraph.CodeGraphPromptProvider? codeGraphPrompt = null)
     {
         _spend = spend;
+        _codeGraphPrompt = codeGraphPrompt;
         _agentSync = agentSync;
         _cheap = cheap;
         _modules = modules;
@@ -1119,6 +1125,16 @@ public class SessionManager : IDisposable
         };
     }
 
+    // Per-ход slice top-10 god-nodes Code Graph в системный промпт (ADR вариант A). Per-owner
+    // автоматически: rootPath проекта однозначно принадлежит владельцу сессии. Текст хода
+    // god-узлам не нужен (они структурны) — замыкаем rootPath и игнорируем аргумент. null —
+    // провайдер не injecting (тесты) или сессия без rootPath (чат вне проекта).
+    private Func<string?, Task<string?>>? BuildCodeGraphProvider(string? rootPath)
+    {
+        if (_codeGraphPrompt is null || string.IsNullOrWhiteSpace(rootPath)) return null;
+        return _ => _codeGraphPrompt.GetSliceAsync(rootPath);
+    }
+
     // Сброс адаптеров живых сессий персоны (изменился профиль/возможности/привязки):
     // процесс пересоздаётся при следующем сообщении с актуальным контекстом,
     // транскрипт продолжается через --resume (паттерн SetPersona)
@@ -1598,6 +1614,7 @@ public class SessionManager : IDisposable
             NotificationsMcp: BuildNotificationsContext(ownerId, session.PersonaId),
             WorkspaceMcp: workspace,
             BindingsProvider: BuildBindingsProvider(ownerId, session.PersonaId, workspace?.Sections),
+            CodeGraphProvider: BuildCodeGraphProvider(rootPath),
             PersonaAgentsProvider: BuildPersonaAgentsProvider(ownerId, session),
             Launcher: _launchers.ForOwner(ownerId),
             ModulesMcp: BuildModulesContext(ownerId),
@@ -2198,6 +2215,7 @@ public class SessionManager : IDisposable
                 NotificationsMcp: BuildNotificationsContext(entry.Info.OwnerId, entry.Info.PersonaId),
                 WorkspaceMcp: workspace,
                 BindingsProvider: BuildBindingsProvider(entry.Info.OwnerId, entry.Info.PersonaId, workspace?.Sections),
+                CodeGraphProvider: BuildCodeGraphProvider(rootPath),
                 PersonaAgentsProvider: BuildPersonaAgentsProvider(entry.Info.OwnerId, entry.Info),
                 Launcher: _launchers.ForOwner(entry.Info.OwnerId),
                 ModulesMcp: BuildModulesContext(entry.Info.OwnerId),
@@ -2209,7 +2227,8 @@ public class SessionManager : IDisposable
                 ?? throw new InvalidOperationException("Проект не найден");
             var persona = BuildPersonaLayer(entry.Info, project.OwnerId);
             var workspace = BuildWorkspaceContext(project.OwnerId, project.Id, entry.Info.Id, persona.Persona);
-            context = new LlmSessionContext(EffectiveRoot(entry.Info, project.RootPath),
+            var rootPath = EffectiveRoot(entry.Info, project.RootPath);
+            context = new LlmSessionContext(rootPath,
                 msg => OnMessageAsync(sessionId, accumulator, msg),
                 project.SystemPrompt,
                 () => _projects.GetById(entry.Info.ProjectId!)?.PermissionRules ?? (IReadOnlyList<PermissionRule>)Array.Empty<PermissionRule>(),
@@ -2224,6 +2243,7 @@ public class SessionManager : IDisposable
                 NotificationsMcp: BuildNotificationsContext(project.OwnerId, entry.Info.PersonaId),
                 WorkspaceMcp: workspace,
                 BindingsProvider: BuildBindingsProvider(project.OwnerId, entry.Info.PersonaId, workspace?.Sections),
+                CodeGraphProvider: BuildCodeGraphProvider(rootPath),
                 PersonaAgentsProvider: BuildPersonaAgentsProvider(project.OwnerId, entry.Info),
                 Launcher: _launchers.ForOwner(project.OwnerId),
                 ModulesMcp: BuildModulesContext(project.OwnerId),

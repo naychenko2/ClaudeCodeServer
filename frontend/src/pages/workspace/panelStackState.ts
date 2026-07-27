@@ -12,7 +12,7 @@ import { useCallback, useSyncExternalStore } from 'react';
 // сессионная группа (plan/agents/context — План, Агенты, Персона) собирается из
 // артефактов сессии; остальное — инструменты проекта, как в десктопном Claude Code.
 // Ключи agents/context совпадают с meta.tsx ради panelBadge.
-export const PANEL_KEYS = ['plan', 'agents', 'context', 'files', 'changes', 'tasks', 'team', 'terminal', 'preview'] as const;
+export const PANEL_KEYS = ['plan', 'agents', 'context', 'files', 'changes', 'tasks', 'graph', 'team', 'terminal', 'preview'] as const;
 export type PanelKey = typeof PANEL_KEYS[number];
 
 export const PANEL_MIN_H = 120;  // минимальная высота панельки, px (шапка 40 + контент)

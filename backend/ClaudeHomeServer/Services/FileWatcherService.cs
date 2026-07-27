@@ -1,5 +1,6 @@
 ﻿using System.Collections.Concurrent;
 using ClaudeHomeServer.Hubs;
+using ClaudeHomeServer.Services.CodeGraph;
 using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Services;
@@ -30,17 +31,19 @@ public class FileWatcherService : IDisposable
     private readonly ProjectManager _projects;
     private readonly IHubContext<SessionHub> _hub;
     private readonly ProjectKnowledgeSyncService _knowledgeSync;
+    private readonly CodeGraphService _codeGraphs;
     private readonly Lock _lock = new();
     // Polling вместо FileSystemWatcher — для bind-mount ФС без inotify (9p/virtiofs в Docker Desktop).
     private readonly bool _usePolling;
     private readonly int _pollIntervalMs;
 
     public FileWatcherService(ProjectManager projects, IHubContext<SessionHub> hub,
-        ProjectKnowledgeSyncService knowledgeSync, IConfiguration config)
+        ProjectKnowledgeSyncService knowledgeSync, CodeGraphService codeGraphs, IConfiguration config)
     {
         _projects = projects;
         _hub = hub;
         _knowledgeSync = knowledgeSync;
+        _codeGraphs = codeGraphs;
         _usePolling = config.GetValue("FileWatcher:UsePolling", false);
         _pollIntervalMs = config.GetValue("FileWatcher:PollIntervalMs", 2000);
     }
@@ -226,6 +229,24 @@ public class FileWatcherService : IDisposable
             .SendAsync("filesChanged", new { projectId, paths });
         // Правки Claude/внешние идут мимо файлового API — синк знаний узнаёт о них отсюда
         _knowledgeSync.QueueSync(entry.Root, paths);
+        // Реактивный триггер CodeGraph: .cs-правки планируют инкрементальное перестроение графа
+        // (дебаунс 15с живёт в CodeGraphService — серия правок схлопывается в один rebuild).
+        NotifyCodeGraph(entry.Root, paths);
+    }
+
+    // Фильтрует .cs из накопленных путей и передаёт в CodeGraphService для инкрементального
+    // перестроения. abs-пути: провайдер нормализует их к rel через CompilationBuilder.Rel.
+    private void NotifyCodeGraph(string rootPath, string[] paths)
+    {
+        List<string>? csFiles = null;
+        foreach (var rel in paths)
+        {
+            if (!rel.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)) continue;
+            try { (csFiles ??= new List<string>()).Add(Path.GetFullPath(Path.Combine(rootPath, rel))); }
+            catch { /* пропускаем некорректный путь */ }
+        }
+        if (csFiles is { Count: > 0 })
+            _codeGraphs.InvalidateIncremental(rootPath, csFiles);
     }
 
     private void RecreateWatcher(string projectId, Entry entry)

@@ -68,7 +68,59 @@ public static class BackupValidation
         CheckList<TaskItem>(problems, dataDir, "tasks.json", CaseInsensitiveOpts);
         CheckList<ProjectGroup>(problems, dataDir, "groups.json", CaseInsensitiveOpts);
 
+        // graph.json не входит в fatal-список намеренно: он регенерируется из кода
+        // проекта, и один битый файл не должен блокировать восстановление всей data.
+        // Его состояние проверяем отдельным soft-методом ValidateGraphWarnings.
+
         return problems;
+    }
+
+    /// <summary>
+    /// Soft-проверка CodeGraph: предупреждения по graph.json, которые НЕ блокируют
+    /// восстановление. graph.json перестраивается из кода проекта, поэтому его порча
+    /// (пустой файл, битый JSON, нет Nodes/Edges) — recoverable, а не fatal.
+    /// Возвращает список предупреждений; пустой список = всё хорошо (или графов нет).
+    /// </summary>
+    public static List<string> ValidateGraphWarnings(string dataDir)
+    {
+        var warnings = new List<string>();
+        var codeGraphsDir = Path.Combine(dataDir, "code-graphs");
+        if (!Directory.Exists(codeGraphsDir)) return warnings;
+
+        try
+        {
+            foreach (var hashDir in Directory.GetDirectories(codeGraphsDir))
+            {
+                var graphFile = Path.Combine(hashDir, "graph.json");
+                if (!File.Exists(graphFile)) continue;
+
+                var where = Path.GetFileName(hashDir);
+                try
+                {
+                    var json = File.ReadAllText(graphFile);
+                    if (string.IsNullOrWhiteSpace(json))
+                    {
+                        warnings.Add($"graph.json пуст в {where} — будет перестроен из кода");
+                        continue;
+                    }
+
+                    using var doc = JsonDocument.Parse(json);
+                    var root = doc.RootElement;
+                    if (!root.TryGetProperty("Nodes", out _) || !root.TryGetProperty("Edges", out _))
+                        warnings.Add($"graph.json в {where} имеет неверную структуру — будет перестроен из кода");
+                }
+                catch (Exception ex)
+                {
+                    warnings.Add($"graph.json не читается в {where}: {ex.Message} — будет перестроен из кода");
+                }
+            }
+        }
+        catch
+        {
+            // Не критично: отсутствие CodeGraph не ломает restore — тихо пропускаем.
+        }
+
+        return warnings;
     }
 
     // Отсутствующий файл — не ошибка (стор мог не создаваться: нет задач, нет персон).

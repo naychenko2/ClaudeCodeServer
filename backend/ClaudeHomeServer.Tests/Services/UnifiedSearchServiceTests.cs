@@ -12,8 +12,11 @@ public class UnifiedSearchServiceTests
         List<string>? labels = null, DateTime? updated = null) =>
         new()
         {
-            Title = title, Description = desc, Status = status,
-            Labels = labels ?? [], UpdatedAt = updated ?? DateTime.UtcNow,
+            Title = title,
+            Description = desc,
+            Status = status,
+            Labels = labels ?? [],
+            UpdatedAt = updated ?? DateTime.UtcNow,
         };
 
     // ─── MatchTasks ──────────────────────────────────────────────────────────

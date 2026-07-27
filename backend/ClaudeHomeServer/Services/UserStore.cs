@@ -119,7 +119,7 @@ public class UserStore
     private void SetPasswordInternal(User user, string password)
     {
         user.PasswordHash = _hasher.HashPassword(user, password);
-        user.NtHash       = WebDav.NtlmHelper.ComputeNtHash(password);
+        user.NtHash = WebDav.NtlmHelper.ComputeNtHash(password);
     }
 
     public User? GetById(string id)

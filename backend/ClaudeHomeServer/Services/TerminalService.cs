@@ -81,7 +81,7 @@ internal sealed class TerminalInstance : IDisposable
         _turnId = turnId;
     }
 
-    public void AddViewer(string connId)   { lock (ConnectionIds) ConnectionIds.Add(connId); LastActivity = DateTime.UtcNow; }
+    public void AddViewer(string connId) { lock (ConnectionIds) ConnectionIds.Add(connId); LastActivity = DateTime.UtcNow; }
     public void RemoveViewer(string connId) { lock (ConnectionIds) ConnectionIds.Remove(connId); }
     public int ViewerCount { get { lock (ConnectionIds) return ConnectionIds.Count; } }
 

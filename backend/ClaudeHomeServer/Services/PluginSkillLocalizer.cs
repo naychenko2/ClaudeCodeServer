@@ -62,8 +62,10 @@ public class PluginSkillLocalizer
             if (_cache.TryGetValue(s.Name, out var c) && c.Hash == hash)
                 result.Add(new SkillInfo
                 {
-                    Name = s.Name, Description = c.Ru,
-                    ArgumentHint = s.ArgumentHint, FilePath = s.FilePath,
+                    Name = s.Name,
+                    Description = c.Ru,
+                    ArgumentHint = s.ArgumentHint,
+                    FilePath = s.FilePath,
                 });
             else
             {

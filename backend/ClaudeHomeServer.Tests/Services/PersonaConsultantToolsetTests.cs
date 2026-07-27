@@ -12,15 +12,15 @@ public class PersonaConsultantToolsetTests
     private static Persona Make(bool memory = true, PersonaScope scope = PersonaScope.Global,
         string? projectId = null, PersonaAccess access = PersonaAccess.Full,
         List<string>? disallowed = null) => new()
-    {
-        Name = "Тест",
-        Handle = "test",
-        MemoryEnabled = memory,
-        Scope = scope,
-        ProjectId = projectId,
-        Access = access,
-        DisallowedTools = disallowed,
-    };
+        {
+            Name = "Тест",
+            Handle = "test",
+            MemoryEnabled = memory,
+            Scope = scope,
+            ProjectId = projectId,
+            Access = access,
+            DisallowedTools = disallowed,
+        };
 
     // Полный негативный список: ничего из этого не должно попасть консультанту НИКОГДА
     private static readonly string[] ForbiddenAlways =

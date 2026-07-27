@@ -14,14 +14,14 @@ public class TeamMemoryScorerTests
 
     private static TeamMemoryEntry Entry(TeamMemoryType type = TeamMemoryType.Fact,
         double salience = 1.0, double ageDays = 0) => new()
-    {
-        OwnerId = "o1",
-        ProjectId = "p1",
-        Type = type,
-        Text = "запись",
-        Salience = salience,
-        CreatedAt = Now.AddDays(-ageDays),
-    };
+        {
+            OwnerId = "o1",
+            ProjectId = "p1",
+            Type = type,
+            Text = "запись",
+            Salience = salience,
+            CreatedAt = Now.AddDays(-ageDays),
+        };
 
     [Fact]
     public void Сумма_СовпадаетСЭталоном()

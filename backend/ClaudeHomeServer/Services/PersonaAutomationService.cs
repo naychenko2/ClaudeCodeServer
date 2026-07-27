@@ -309,9 +309,9 @@ public sealed class PersonaAutomationService : IDisposable
                 body = "Предложен план — согласуйте его, чтобы продолжить";
             }
 
-	            var chatUrl = string.IsNullOrEmpty(session.ProjectId)
-                ? $"/chats/{session.Id}"
-                : $"/project/{session.ProjectId}/chat/{session.Id}";
+            var chatUrl = string.IsNullOrEmpty(session.ProjectId)
+            ? $"/chats/{session.Id}"
+            : $"/project/{session.ProjectId}/chat/{session.Id}";
 
             await _notif.SendNotificationMessageAsync(ownerId, new NotificationMessage(
                 Title: title, Body: body,

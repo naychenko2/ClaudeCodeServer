@@ -9,12 +9,12 @@ public class PersonaAccessPolicyTests
 {
     private static Persona Make(PersonaAccess access = PersonaAccess.Full,
         List<string>? tools = null, List<string>? disallowed = null) => new()
-    {
-        Name = "Тест",
-        Access = access,
-        Tools = tools,
-        DisallowedTools = disallowed,
-    };
+        {
+            Name = "Тест",
+            Access = access,
+            Tools = tools,
+            DisallowedTools = disallowed,
+        };
 
     [Fact]
     public void ReadOnly_ЗапрещаетФайловыеМутацииИBash()

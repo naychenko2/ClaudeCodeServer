@@ -269,34 +269,34 @@ public class TaskExecutionService
         switch (msg)
         {
             case ResultMessage result:
-            {
-                var ok = IsSuccess(result);
-                var updated = _tasks.MarkClaudeResult(task.Id, ok ? "success" : "error");
-                if (updated is null) return;
-                await _hub.BroadcastTaskChangedAsync(updated.OwnerId!, "updated", updated);
-                if (!ok)
                 {
-                    // Провал хода — L0 «не выполнена» требует только сигнал R (этот ход),
-                    // join с сигналом D не нужен — задача обычно даже не Done
-                    var persona = updated.PersonaId is not null ? _personas.Get(updated.PersonaId, updated.OwnerId!) : null;
-                    await NotifyAsync(updated, BuildResultNotification(updated, ok, persona));
-                    await NotifyDelegatorAsync(updated, ok);
+                    var ok = IsSuccess(result);
+                    var updated = _tasks.MarkClaudeResult(task.Id, ok ? "success" : "error");
+                    if (updated is null) return;
+                    await _hub.BroadcastTaskChangedAsync(updated.OwnerId!, "updated", updated);
+                    if (!ok)
+                    {
+                        // Провал хода — L0 «не выполнена» требует только сигнал R (этот ход),
+                        // join с сигналом D не нужен — задача обычно даже не Done
+                        var persona = updated.PersonaId is not null ? _personas.Get(updated.PersonaId, updated.OwnerId!) : null;
+                        await NotifyAsync(updated, BuildResultNotification(updated, ok, persona));
+                        await NotifyDelegatorAsync(updated, ok);
+                    }
+                    else
+                    {
+                        // Успех хода — точка A join-а: сигнал R есть, доставка (L0 + Z) зависит
+                        // от сигнала D (Status=Done). Промежуточные успешные ходы многошаговой
+                        // задачи (Status ещё не Done) молча пропускаются гейтом внутри — не спамят.
+                        await TryDeliverCompletionAsync(updated);
+                    }
+                    break;
                 }
-                else
-                {
-                    // Успех хода — точка A join-а: сигнал R есть, доставка (L0 + Z) зависит
-                    // от сигнала D (Status=Done). Промежуточные успешные ходы многошаговой
-                    // задачи (Status ещё не Done) молча пропускаются гейтом внутри — не спамят.
-                    await TryDeliverCompletionAsync(updated);
-                }
-                break;
-            }
             case PermissionRequestMessage or AskQuestionMessage:
-            {
-                var persona = task.PersonaId is not null ? _personas.Get(task.PersonaId, task.OwnerId!) : null;
-                await NotifyAsync(task, BuildWaitingNotification(task, persona));
-                break;
-            }
+                {
+                    var persona = task.PersonaId is not null ? _personas.Get(task.PersonaId, task.OwnerId!) : null;
+                    await NotifyAsync(task, BuildWaitingNotification(task, persona));
+                    break;
+                }
         }
     }
 

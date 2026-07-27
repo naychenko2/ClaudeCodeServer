@@ -60,10 +60,15 @@ public class PersonaHandleTests : IDisposable
 
     private static Persona Stored(string name, string handle, PersonaScope scope, string? projectId,
         DateTime createdAt, bool handleCustom = false, string owner = Owner) => new()
-    {
-        OwnerId = owner, Name = name, Handle = handle, Scope = scope, ProjectId = projectId,
-        CreatedAt = createdAt, HandleCustom = handleCustom,
-    };
+        {
+            OwnerId = owner,
+            Name = name,
+            Handle = handle,
+            Scope = scope,
+            ProjectId = projectId,
+            CreatedAt = createdAt,
+            HandleCustom = handleCustom,
+        };
 
     [Fact]
     public void Create_ОдинаковыеИмена_РазныеHandle()
@@ -110,12 +115,16 @@ public class PersonaHandleTests : IDisposable
     {
         var older = new Persona
         {
-            OwnerId = Owner, Name = "Анна", Handle = "anna",
+            OwnerId = Owner,
+            Name = "Анна",
+            Handle = "anna",
             CreatedAt = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
         };
         var newer = new Persona
         {
-            OwnerId = Owner, Name = "Анна", Handle = "anna",
+            OwnerId = Owner,
+            Name = "Анна",
+            Handle = "anna",
             CreatedAt = new DateTime(2026, 6, 1, 0, 0, 0, DateTimeKind.Utc),
         };
         WriteStore([newer, older]); // порядок в файле не должен влиять

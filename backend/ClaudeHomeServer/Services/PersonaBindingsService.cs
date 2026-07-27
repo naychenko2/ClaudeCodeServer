@@ -408,71 +408,71 @@ public class PersonaBindingsService
         {
             case PersonaBindingType.Project:
             case PersonaBindingType.ProjectPath:
-            {
-                if (!mountedSections.Contains("files")) return null;
-                var project = _projects.GetById(binding.Target);
-                if (project is null || project.OwnerId != ownerId) return null;
-                var path = string.IsNullOrWhiteSpace(binding.Path) ? "" : $", путь \"{binding.Path}\"";
-                return $"mcp__wsp__files_tree/files_read (projectId \"{project.Id}\"{path}, проект «{project.Name}»)";
-            }
+                {
+                    if (!mountedSections.Contains("files")) return null;
+                    var project = _projects.GetById(binding.Target);
+                    if (project is null || project.OwnerId != ownerId) return null;
+                    var path = string.IsNullOrWhiteSpace(binding.Path) ? "" : $", путь \"{binding.Path}\"";
+                    return $"mcp__wsp__files_tree/files_read (projectId \"{project.Id}\"{path}, проект «{project.Name}»)";
+                }
             case PersonaBindingType.Knowledge:
-            {
-                var ds = KnownDatasets(ownerId).FirstOrDefault(d => d.Id == binding.Target);
-                if (ds.Id is not null)
                 {
-                    // Датасет проекта ищется workspace-инструментом (нужна секция knowledge);
-                    // датасет заметок — семантическим поиском notes-сервера
-                    if (ds.ProjectId is not null)
-                        return mountedSections.Contains("knowledge")
-                            ? $"mcp__wsp__knowledge_search (projectId \"{ds.ProjectId}\", база «{ds.Label}»)"
-                            : null;
-                    return "mcp__notes__notes_semantic_search (база знаний заметок)";
+                    var ds = KnownDatasets(ownerId).FirstOrDefault(d => d.Id == binding.Target);
+                    if (ds.Id is not null)
+                    {
+                        // Датасет проекта ищется workspace-инструментом (нужна секция knowledge);
+                        // датасет заметок — семантическим поиском notes-сервера
+                        if (ds.ProjectId is not null)
+                            return mountedSections.Contains("knowledge")
+                                ? $"mcp__wsp__knowledge_search (projectId \"{ds.ProjectId}\", база «{ds.Label}»)"
+                                : null;
+                        return "mcp__notes__notes_semantic_search (база знаний заметок)";
+                    }
+                    // Произвольный Dify-датасет (не проект и не заметки): ищется универсальным
+                    // инструментом personas-server по id датасета (семантический поиск).
+                    var label = _datasetLabelCache.TryGetValue(binding.Target, out var l) ? l : "привязанная база знаний";
+                    return $"mcp__personas__knowledge_search (datasetId \"{binding.Target}\", база «{label}»)";
                 }
-                // Произвольный Dify-датасет (не проект и не заметки): ищется универсальным
-                // инструментом personas-server по id датасета (семантический поиск).
-                var label = _datasetLabelCache.TryGetValue(binding.Target, out var l) ? l : "привязанная база знаний";
-                return $"mcp__personas__knowledge_search (datasetId \"{binding.Target}\", база «{label}»)";
-            }
             case PersonaBindingType.Notes:
-            {
-                var source = _notes.GetSources(ownerId).FirstOrDefault(s => s.Key == binding.Target);
-                if (source is null) return null;
-                var folder = string.IsNullOrWhiteSpace(binding.Path) ? "" : $", папка \"{binding.Path}\"";
-                return $"mcp__notes__notes_search/notes_semantic_search (source \"{source.Key}\"{folder}, «{source.Label}»)";
-            }
-            case PersonaBindingType.Skill:
-            {
-                var skill = _skills.GetGlobalSkills()
-                    .FirstOrDefault(s => string.Equals(s.Name, binding.Target, StringComparison.OrdinalIgnoreCase));
-                if (skill is null) return null;
-                return $"прочитай файл навыка {skill.FilePath} инструментом Read и следуй ему";
-            }
-            case PersonaBindingType.Tool:
-            {
-                var label = ToolCatalog.TryGetValue(binding.Target, out var t) ? t.Label : binding.Target;
-                return $"применяй инструменты «{label}» ({binding.Target})";
-            }
-            case PersonaBindingType.ProjectPersonas:
-            {
-                var project = _projects.GetById(binding.Target);
-                if (project is null || project.OwnerId != ownerId) return null;
-                if (!string.IsNullOrWhiteSpace(binding.Path))
                 {
-                    var target = _personas.Get(binding.Path, ownerId);
-                    var who = target is null ? binding.Path : PersonaManager.PersonaLabel(target);
-                    return $"@{(target?.Handle ?? binding.Path)} — {who} из проекта «{project.Name}», доступна через persona_ask/@упоминание";
+                    var source = _notes.GetSources(ownerId).FirstOrDefault(s => s.Key == binding.Target);
+                    if (source is null) return null;
+                    var folder = string.IsNullOrWhiteSpace(binding.Path) ? "" : $", папка \"{binding.Path}\"";
+                    return $"mcp__notes__notes_search/notes_semantic_search (source \"{source.Key}\"{folder}, «{source.Label}»)";
                 }
-                return $"вся команда проекта «{project.Name}» — доступна через persona_ask/@упоминание";
-            }
+            case PersonaBindingType.Skill:
+                {
+                    var skill = _skills.GetGlobalSkills()
+                        .FirstOrDefault(s => string.Equals(s.Name, binding.Target, StringComparison.OrdinalIgnoreCase));
+                    if (skill is null) return null;
+                    return $"прочитай файл навыка {skill.FilePath} инструментом Read и следуй ему";
+                }
+            case PersonaBindingType.Tool:
+                {
+                    var label = ToolCatalog.TryGetValue(binding.Target, out var t) ? t.Label : binding.Target;
+                    return $"применяй инструменты «{label}» ({binding.Target})";
+                }
+            case PersonaBindingType.ProjectPersonas:
+                {
+                    var project = _projects.GetById(binding.Target);
+                    if (project is null || project.OwnerId != ownerId) return null;
+                    if (!string.IsNullOrWhiteSpace(binding.Path))
+                    {
+                        var target = _personas.Get(binding.Path, ownerId);
+                        var who = target is null ? binding.Path : PersonaManager.PersonaLabel(target);
+                        return $"@{(target?.Handle ?? binding.Path)} — {who} из проекта «{project.Name}», доступна через persona_ask/@упоминание";
+                    }
+                    return $"вся команда проекта «{project.Name}» — доступна через persona_ask/@упоминание";
+                }
             case PersonaBindingType.ProjectTasks:
-            {
-                var project = _projects.GetById(binding.Target);
-                if (project is null || project.OwnerId != ownerId) return null;
-                var readOnly = string.Equals(binding.Path, "readonly", StringComparison.OrdinalIgnoreCase);
-                return readOnly
-                    ? $"tasks_list/tasks_get с projectId \"{project.Id}\" (проект «{project.Name}», только просмотр)"
-                    : $"tasks_create/tasks_update/tasks_list с projectId \"{project.Id}\" (проект «{project.Name}»)";
-            }
+                {
+                    var project = _projects.GetById(binding.Target);
+                    if (project is null || project.OwnerId != ownerId) return null;
+                    var readOnly = string.Equals(binding.Path, "readonly", StringComparison.OrdinalIgnoreCase);
+                    return readOnly
+                        ? $"tasks_list/tasks_get с projectId \"{project.Id}\" (проект «{project.Name}», только просмотр)"
+                        : $"tasks_create/tasks_update/tasks_list с projectId \"{project.Id}\" (проект «{project.Name}»)";
+                }
             default:
                 return null;
         }
@@ -601,36 +601,36 @@ public class PersonaBindingsService
         {
             case PersonaBindingType.Project:
             case PersonaBindingType.ProjectPath:
-            {
-                var name = _projects.GetById(binding.Target)?.Name ?? binding.Target;
-                return string.IsNullOrWhiteSpace(binding.Path) ? name : $"{name}/{binding.Path}";
-            }
+                {
+                    var name = _projects.GetById(binding.Target)?.Name ?? binding.Target;
+                    return string.IsNullOrWhiteSpace(binding.Path) ? name : $"{name}/{binding.Path}";
+                }
             case PersonaBindingType.Knowledge:
                 // Проектные/заметки — понятный лейбл; прочие Dify-датасеты — из кэша имён
                 // (наполняется при листинге целей), иначе фолбэк на id
                 return KnownDatasets(ownerId).FirstOrDefault(d => d.Id == binding.Target).Label
                     ?? (_datasetLabelCache.TryGetValue(binding.Target, out var cached) ? cached : binding.Target);
             case PersonaBindingType.Notes:
-            {
-                var label = _notes.GetSources(ownerId)
-                    .FirstOrDefault(s => s.Key == binding.Target)?.Label ?? binding.Target;
-                return string.IsNullOrWhiteSpace(binding.Path) ? label : $"{label}/{binding.Path}";
-            }
+                {
+                    var label = _notes.GetSources(ownerId)
+                        .FirstOrDefault(s => s.Key == binding.Target)?.Label ?? binding.Target;
+                    return string.IsNullOrWhiteSpace(binding.Path) ? label : $"{label}/{binding.Path}";
+                }
             case PersonaBindingType.Tool:
                 return ToolCatalog.TryGetValue(binding.Target, out var t) ? t.Label : binding.Target;
             case PersonaBindingType.ProjectPersonas:
-            {
-                var name = _projects.GetById(binding.Target)?.Name ?? binding.Target;
-                if (string.IsNullOrWhiteSpace(binding.Path)) return name;
-                var target = _personas.Get(binding.Path, ownerId);
-                return target is null ? $"{name}/{binding.Path}" : $"{name}/{PersonaManager.PersonaLabel(target)}";
-            }
+                {
+                    var name = _projects.GetById(binding.Target)?.Name ?? binding.Target;
+                    if (string.IsNullOrWhiteSpace(binding.Path)) return name;
+                    var target = _personas.Get(binding.Path, ownerId);
+                    return target is null ? $"{name}/{binding.Path}" : $"{name}/{PersonaManager.PersonaLabel(target)}";
+                }
             case PersonaBindingType.ProjectTasks:
-            {
-                var name = _projects.GetById(binding.Target)?.Name ?? binding.Target;
-                return string.Equals(binding.Path, "readonly", StringComparison.OrdinalIgnoreCase)
-                    ? $"{name} (только чтение)" : name;
-            }
+                {
+                    var name = _projects.GetById(binding.Target)?.Name ?? binding.Target;
+                    return string.Equals(binding.Path, "readonly", StringComparison.OrdinalIgnoreCase)
+                        ? $"{name} (только чтение)" : name;
+                }
             default:
                 return binding.Target;
         }
@@ -693,14 +693,14 @@ public class PersonaBindingsService
         {
             case PersonaBindingType.Project:
             case PersonaBindingType.ProjectPath:
-            {
-                var project = _projects.GetById(binding.Target);
-                if (project is null || project.OwnerId != ownerId)
-                    return "Проект не найден или недоступен";
-                if (binding.Type == PersonaBindingType.ProjectPath && string.IsNullOrEmpty(binding.Path))
-                    return "Для привязки к папке проекта нужен path";
-                break;
-            }
+                {
+                    var project = _projects.GetById(binding.Target);
+                    if (project is null || project.OwnerId != ownerId)
+                        return "Проект не найден или недоступен";
+                    if (binding.Type == PersonaBindingType.ProjectPath && string.IsNullOrEmpty(binding.Path))
+                        return "Для привязки к папке проекта нужен path";
+                    break;
+                }
             case PersonaBindingType.Knowledge:
                 if ((await KnowledgeTargetsAsync(ownerId)).All(d => d.Id != binding.Target))
                     return "База знаний не найдена или недоступна";
@@ -720,32 +720,32 @@ public class PersonaBindingsService
                            $"(допустимы: {string.Join(", ", ToolCatalog.Keys)})";
                 break;
             case PersonaBindingType.ProjectPersonas:
-            {
-                var project = _projects.GetById(binding.Target);
-                if (project is null || project.OwnerId != ownerId)
-                    return "Проект не найден или недоступен";
-                if (owningPersona is { Scope: PersonaScope.Project } && owningPersona.ProjectId == binding.Target)
-                    return "Персона уже в команде этого проекта — привязка к своему же проекту не нужна";
-                if (!string.IsNullOrEmpty(binding.Path))
                 {
-                    var target = _personas.Get(binding.Path, ownerId);
-                    if (target is null || target.Scope != PersonaScope.Project || target.ProjectId != binding.Target)
-                        return "Персона не найдена в этом проекте";
+                    var project = _projects.GetById(binding.Target);
+                    if (project is null || project.OwnerId != ownerId)
+                        return "Проект не найден или недоступен";
+                    if (owningPersona is { Scope: PersonaScope.Project } && owningPersona.ProjectId == binding.Target)
+                        return "Персона уже в команде этого проекта — привязка к своему же проекту не нужна";
+                    if (!string.IsNullOrEmpty(binding.Path))
+                    {
+                        var target = _personas.Get(binding.Path, ownerId);
+                        if (target is null || target.Scope != PersonaScope.Project || target.ProjectId != binding.Target)
+                            return "Персона не найдена в этом проекте";
+                    }
+                    break;
                 }
-                break;
-            }
             case PersonaBindingType.ProjectTasks:
-            {
-                var project = _projects.GetById(binding.Target);
-                if (project is null || project.OwnerId != ownerId)
-                    return "Проект не найден или недоступен";
-                if (owningPersona is { Scope: PersonaScope.Project } && owningPersona.ProjectId == binding.Target)
-                    return "Персона уже в этом проекте — привязка к своему же проекту не нужна";
-                if (!string.IsNullOrEmpty(binding.Path)
-                    && !string.Equals(binding.Path, "readonly", StringComparison.OrdinalIgnoreCase))
-                    return "Путь привязки ProjectTasks может быть только \"readonly\" или пустым";
-                break;
-            }
+                {
+                    var project = _projects.GetById(binding.Target);
+                    if (project is null || project.OwnerId != ownerId)
+                        return "Проект не найден или недоступен";
+                    if (owningPersona is { Scope: PersonaScope.Project } && owningPersona.ProjectId == binding.Target)
+                        return "Персона уже в этом проекте — привязка к своему же проекту не нужна";
+                    if (!string.IsNullOrEmpty(binding.Path)
+                        && !string.Equals(binding.Path, "readonly", StringComparison.OrdinalIgnoreCase))
+                        return "Путь привязки ProjectTasks может быть только \"readonly\" или пустым";
+                    break;
+                }
             default:
                 return "Неизвестный тип привязки";
         }

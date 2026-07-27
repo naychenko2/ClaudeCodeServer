@@ -22,8 +22,11 @@ public enum PersonaAvatarKind { Initials, Image }
 // ProjectPersonas — команда ЧУЖОГО проекта (persona_ask/@упоминание, Target=projectId,
 // Path=personaId сужает до одной персоны — пусто = вся команда); ProjectTasks — задачи
 // ЧУЖОГО проекта (Target=projectId, Path="readonly" — только просмотр, пусто — полный доступ).
-public enum PersonaBindingType { Project, ProjectPath, Knowledge, Notes, Tool, Skill,
-    ProjectPersonas, ProjectTasks }
+public enum PersonaBindingType
+{
+    Project, ProjectPath, Knowledge, Notes, Tool, Skill,
+    ProjectPersonas, ProjectTasks
+}
 
 // Режим привязки: Auto — источник в индексе, персона подгружает по условию;
 // Always — вдобавок выжимка из источника подмешивается в каждый ход; Off — выключена.

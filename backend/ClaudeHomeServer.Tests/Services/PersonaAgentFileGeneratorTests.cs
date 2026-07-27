@@ -22,17 +22,17 @@ public class PersonaAgentFileGeneratorTests
 
     private static Persona MakePersona(string? model = null, bool memory = true,
         string? color = "purple", string? effort = null) => new()
-    {
-        Name = "Гефест",
-        Role = "Мастер",
-        Handle = "gefest",
-        Description = "Кузнец и реализатор",
-        Contract = new PersonaContract { Character = "Ты — мастер-кузнец.", Tone = "сухо и по делу" },
-        Model = model,
-        Effort = effort,
-        MemoryEnabled = memory,
-        Avatar = new PersonaAvatar { Color = color },
-    };
+        {
+            Name = "Гефест",
+            Role = "Мастер",
+            Handle = "gefest",
+            Description = "Кузнец и реализатор",
+            Contract = new PersonaContract { Character = "Ты — мастер-кузнец.", Tone = "сухо и по делу" },
+            Model = model,
+            Effort = effort,
+            MemoryEnabled = memory,
+            Avatar = new PersonaAvatar { Color = color },
+        };
 
     [Fact]
     public void Frontmatter_СодержитОбязательныеПоля()

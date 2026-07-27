@@ -351,12 +351,12 @@ public class KnowledgeService
         {
             ".docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             ".xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            ".xls"  => "application/vnd.ms-excel",
+            ".xls" => "application/vnd.ms-excel",
             ".pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-            ".pdf"  => "application/pdf",
-            ".csv"  => "text/csv",
+            ".pdf" => "application/pdf",
+            ".csv" => "text/csv",
             ".epub" => "application/epub+zip",
-            _       => "application/octet-stream",
+            _ => "application/octet-stream",
         };
     }
 

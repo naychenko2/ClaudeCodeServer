@@ -25,9 +25,9 @@ internal static class NtlmHelper
         {
             uint a = 0x67452301u, b = 0xEFCDAB89u, c = 0x98BADCFEu, d = 0x10325476u;
 
-            int   rawLen = data.Length;
-            int   padLen = ((rawLen + 8) / 64 + 1) * 64;
-            var   m      = new byte[padLen];
+            int rawLen = data.Length;
+            int padLen = ((rawLen + 8) / 64 + 1) * 64;
+            var m = new byte[padLen];
             Buffer.BlockCopy(data, 0, m, 0, rawLen);
             m[rawLen] = 0x80;
             ulong bits = (ulong)rawLen * 8;
@@ -53,7 +53,7 @@ internal static class NtlmHelper
                     (a, b, c, d) = (d, a, b, c);
                 }
 
-                int[] s2   = [3, 5, 9, 13];
+                int[] s2 = [3, 5, 9, 13];
                 int[] idx2 = [0, 4, 8, 12, 1, 5, 9, 13, 2, 6, 10, 14, 3, 7, 11, 15];
                 for (int j = 0; j < 16; j++)
                 {
@@ -61,7 +61,7 @@ internal static class NtlmHelper
                     (a, b, c, d) = (d, a, b, c);
                 }
 
-                int[] s3   = [3, 9, 11, 15];
+                int[] s3 = [3, 9, 11, 15];
                 int[] idx3 = [0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 11, 7, 15];
                 for (int j = 0; j < 16; j++)
                 {
@@ -75,7 +75,7 @@ internal static class NtlmHelper
             var result = new byte[16];
             void WriteLE(int off, uint v)
             {
-                result[off]     = (byte)v;
+                result[off] = (byte)v;
                 result[off + 1] = (byte)(v >> 8);
                 result[off + 2] = (byte)(v >> 16);
                 result[off + 3] = (byte)(v >> 24);

@@ -483,47 +483,47 @@ if (!inspectionMode) app.Services.GetRequiredService<PersonaAgentFileSync>();
 // В инспекционной копии не запускаем: маркер в архиве может быть старым, и миграция
 // переименовала бы персон, удаляя и перегенерируя .md в РЕАЛЬНЫХ папках проектов.
 if (!inspectionMode)
-try
-{
-    var dataDir = Path.GetDirectoryName(
-        app.Configuration["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))
-        ?? Path.Combine(AppContext.BaseDirectory, "data");
-    var marker = Path.Combine(dataDir, "handle-migration-v1.done");
-    if (!File.Exists(marker))
+    try
     {
-        var personaManager = app.Services.GetRequiredService<PersonaManager>();
-        var agentSync = app.Services.GetRequiredService<PersonaAgentFileSync>();
-        var renamed = personaManager.MigrateContextualHandles();
-        // Сначала удалить старые .md по прежнему handle (клон с oldHandle даёт старые пути)
-        foreach (var (persona, oldHandle) in renamed)
-            try { agentSync.RemovePersona(PersonaManager.WithHandle(persona, oldHandle)); } catch { /* не критично */ }
-        // Затем перегенерировать файлы затронутых владельцев под новые handle
-        foreach (var owner in renamed.Select(r => r.Persona.OwnerId).Distinct())
-            try { agentSync.SyncOwner(owner, force: true); } catch { /* не критично */ }
-        Directory.CreateDirectory(dataDir);
-        File.WriteAllText(marker, $"{DateTime.UtcNow:O} renamed={renamed.Count}");
-        if (renamed.Count > 0)
-            Console.WriteLine($"[HandleMigration] контекстные @handle: переименовано персон — {renamed.Count}");
+        var dataDir = Path.GetDirectoryName(
+            app.Configuration["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))
+            ?? Path.Combine(AppContext.BaseDirectory, "data");
+        var marker = Path.Combine(dataDir, "handle-migration-v1.done");
+        if (!File.Exists(marker))
+        {
+            var personaManager = app.Services.GetRequiredService<PersonaManager>();
+            var agentSync = app.Services.GetRequiredService<PersonaAgentFileSync>();
+            var renamed = personaManager.MigrateContextualHandles();
+            // Сначала удалить старые .md по прежнему handle (клон с oldHandle даёт старые пути)
+            foreach (var (persona, oldHandle) in renamed)
+                try { agentSync.RemovePersona(PersonaManager.WithHandle(persona, oldHandle)); } catch { /* не критично */ }
+            // Затем перегенерировать файлы затронутых владельцев под новые handle
+            foreach (var owner in renamed.Select(r => r.Persona.OwnerId).Distinct())
+                try { agentSync.SyncOwner(owner, force: true); } catch { /* не критично */ }
+            Directory.CreateDirectory(dataDir);
+            File.WriteAllText(marker, $"{DateTime.UtcNow:O} renamed={renamed.Count}");
+            if (renamed.Count > 0)
+                Console.WriteLine($"[HandleMigration] контекстные @handle: переименовано персон — {renamed.Count}");
+        }
     }
-}
-catch (Exception ex)
-{
-    Console.Error.WriteLine($"[HandleMigration] миграция пропущена: {ex.Message}");
-}
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"[HandleMigration] миграция пропущена: {ex.Message}");
+    }
 
 // Чистка осиротевших temp-конфигов MCP: содержат сервисный токен и могли
 // остаться после крэша (штатно удаляются в finally каждого хода).
 // Temp общий с боевым сервером — копия чужие конфиги не трогает.
 if (!inspectionMode)
-_ = Task.Run(() =>
-{
-    try
+    _ = Task.Run(() =>
     {
-        foreach (var f in Directory.EnumerateFiles(Path.GetTempPath(), "claude-mcp-*.json"))
-            try { if (File.GetLastWriteTimeUtc(f) < DateTime.UtcNow.AddHours(-6)) File.Delete(f); } catch { }
-    }
-    catch { /* нет доступа к temp — не критично */ }
-});
+        try
+        {
+            foreach (var f in Directory.EnumerateFiles(Path.GetTempPath(), "claude-mcp-*.json"))
+                try { if (File.GetLastWriteTimeUtc(f) < DateTime.UtcNow.AddHours(-6)) File.Delete(f); } catch { }
+        }
+        catch { /* нет доступа к temp — не критично */ }
+    });
 
 // Однократная миграция: переносим DifyDatasetId/DocumentTags из старых Project-записей в WorkspaceKnowledge
 app.Services.GetRequiredService<WorkspaceKnowledgeStore>()
@@ -607,11 +607,11 @@ app.Use(async (ctx, next) =>
     var path = ctx.Request.Path.Value ?? "";
     if (ctx.Request.Method.Equals("OPTIONS", StringComparison.OrdinalIgnoreCase) && path == "/")
     {
-        ctx.Response.StatusCode    = 200;
+        ctx.Response.StatusCode = 200;
         ctx.Response.ContentLength = 0;
-        ctx.Response.Headers["DAV"]           = "1, 2";
+        ctx.Response.Headers["DAV"] = "1, 2";
         ctx.Response.Headers["MS-Author-Via"] = "DAV";
-        ctx.Response.Headers["Allow"]         = "OPTIONS, GET, HEAD, PUT, DELETE, PROPFIND, PROPPATCH, MKCOL, COPY, MOVE, LOCK, UNLOCK";
+        ctx.Response.Headers["Allow"] = "OPTIONS, GET, HEAD, PUT, DELETE, PROPFIND, PROPPATCH, MKCOL, COPY, MOVE, LOCK, UNLOCK";
         return;
     }
     if (path == "/projects" || path.StartsWith("/projects/", StringComparison.OrdinalIgnoreCase))

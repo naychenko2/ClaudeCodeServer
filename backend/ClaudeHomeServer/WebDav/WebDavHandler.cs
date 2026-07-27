@@ -44,7 +44,7 @@ public static class WebDavHandler
             var users2 = ctx.RequestServices.GetRequiredService<UserStore>();
             if (!await TryAuthenticateAsync(ctx, users2))
             {
-                ctx.Response.StatusCode    = 401;
+                ctx.Response.StatusCode = 401;
                 ctx.Response.ContentLength = 0;
                 if (!ctx.Response.Headers.ContainsKey("WWW-Authenticate"))
                     ctx.Response.Headers["WWW-Authenticate"] = "Negotiate, Basic realm=\"ClaudeHomeServer\"";
@@ -58,7 +58,7 @@ public static class WebDavHandler
         var users = ctx.RequestServices.GetRequiredService<UserStore>();
         if (!await TryAuthenticateAsync(ctx, users))
         {
-            ctx.Response.StatusCode    = 401;
+            ctx.Response.StatusCode = 401;
             ctx.Response.ContentLength = 0;
             if (!ctx.Response.Headers.ContainsKey("WWW-Authenticate"))
                 ctx.Response.Headers["WWW-Authenticate"] = "Negotiate, Basic realm=\"ClaudeHomeServer\"";
@@ -109,7 +109,7 @@ public static class WebDavHandler
         }
 
         var files = ctx.RequestServices.GetRequiredService<FileService>();
-        var root  = project.RootPath;
+        var root = project.RootPath;
         // relPath — нормализованный относительный путь внутри проекта
         var relPath = rawPath.Trim('/').Replace('\\', '/');
 
@@ -119,17 +119,17 @@ public static class WebDavHandler
         {
             switch (method)
             {
-                case "PROPFIND":    await HandlePropfindAsync(ctx, files, root, relPath, projectName); break;
-                case "PROPPATCH":   await HandleProppatchAsync(ctx, relPath, projectName); break;
+                case "PROPFIND": await HandlePropfindAsync(ctx, files, root, relPath, projectName); break;
+                case "PROPPATCH": await HandleProppatchAsync(ctx, relPath, projectName); break;
                 case "GET":
-                case "HEAD":        await HandleGetAsync(ctx, files, root, relPath, method == "HEAD"); break;
-                case "PUT":         await HandlePutAsync(ctx, files, root, relPath); break;
-                case "DELETE":      HandleDelete(ctx, files, root, relPath); break;
-                case "MKCOL":       HandleMkcol(ctx, files, root, relPath); break;
-                case "COPY":        await HandleCopyAsync(ctx, files, root, relPath, projectName); break;
-                case "MOVE":        HandleMove(ctx, files, root, relPath, projectName); break;
-                case "LOCK":        await HandleLockAsync(ctx, files, root, relPath, projectName); break;
-                case "UNLOCK":      HandleUnlock(ctx, relPath, projectName); break;
+                case "HEAD": await HandleGetAsync(ctx, files, root, relPath, method == "HEAD"); break;
+                case "PUT": await HandlePutAsync(ctx, files, root, relPath); break;
+                case "DELETE": HandleDelete(ctx, files, root, relPath); break;
+                case "MKCOL": HandleMkcol(ctx, files, root, relPath); break;
+                case "COPY": await HandleCopyAsync(ctx, files, root, relPath, projectName); break;
+                case "MOVE": HandleMove(ctx, files, root, relPath, projectName); break;
+                case "LOCK": await HandleLockAsync(ctx, files, root, relPath, projectName); break;
+                case "UNLOCK": HandleUnlock(ctx, relPath, projectName); break;
                 default:
                     ctx.Response.StatusCode = 405;
                     break;
@@ -255,10 +255,10 @@ public static class WebDavHandler
 
     private static void HandleOptions(HttpContext ctx)
     {
-        ctx.Response.StatusCode    = 200;
+        ctx.Response.StatusCode = 200;
         ctx.Response.ContentLength = 0;
-        ctx.Response.Headers["Allow"]         = "OPTIONS, GET, HEAD, PUT, DELETE, PROPFIND, PROPPATCH, MKCOL, COPY, MOVE, LOCK, UNLOCK";
-        ctx.Response.Headers["DAV"]           = "1, 2";
+        ctx.Response.Headers["Allow"] = "OPTIONS, GET, HEAD, PUT, DELETE, PROPFIND, PROPPATCH, MKCOL, COPY, MOVE, LOCK, UNLOCK";
+        ctx.Response.Headers["DAV"] = "1, 2";
         ctx.Response.Headers["MS-Author-Via"] = "DAV";
     }
 
@@ -268,7 +268,7 @@ public static class WebDavHandler
 
     private static async Task HandlePropfindRootAsync(HttpContext ctx, ProjectManager projects, string davUserId)
     {
-        var pb   = ctx.Request.PathBase.ToString().TrimEnd('/');
+        var pb = ctx.Request.PathBase.ToString().TrimEnd('/');
         // href — абсолютный URI с trailing slash для коллекции (IIS-поведение)
         var href = $"{ctx.Request.Scheme}://{ctx.Request.Host}{ctx.Request.Path.Value?.TrimEnd('/')}/";
 
@@ -305,7 +305,7 @@ public static class WebDavHandler
                 {
                     var di = new DirectoryInfo(p.RootPath);
                     pModified = di.LastWriteTimeUtc;
-                    pCreated  = di.CreationTimeUtc;
+                    pCreated = di.CreationTimeUtc;
                 }
                 sb.AppendLine("  <D:response>");
                 sb.AppendLine($"    <D:href>{pHref}</D:href>");
@@ -345,7 +345,7 @@ public static class WebDavHandler
             ? root
             : FileService.SafeJoinPublic(root, relPath);
 
-        var isDir  = Directory.Exists(absPath);
+        var isDir = Directory.Exists(absPath);
         var isFile = !isDir && File.Exists(absPath);
 
         if (!isDir && !isFile)
@@ -399,21 +399,21 @@ public static class WebDavHandler
         if (isDir)
         {
             var info = new DirectoryInfo(absPath);
-            lastModified   = info.LastWriteTimeUtc.ToString("R");
-            createdDate    = info.CreationTimeUtc.ToString("yyyy-MM-ddTHH:mm:ssZ");
+            lastModified = info.LastWriteTimeUtc.ToString("R");
+            createdDate = info.CreationTimeUtc.ToString("yyyy-MM-ddTHH:mm:ssZ");
             createdDateRfc = info.CreationTimeUtc.ToString("R");
-            win32Attrs     = "00000010"; // FILE_ATTRIBUTE_DIRECTORY — фиксированное значение для коллекций
+            win32Attrs = "00000010"; // FILE_ATTRIBUTE_DIRECTORY — фиксированное значение для коллекций
         }
         else
         {
             var info = new FileInfo(absPath);
-            lastModified   = info.LastWriteTimeUtc.ToString("R");
-            createdDate    = info.CreationTimeUtc.ToString("yyyy-MM-ddTHH:mm:ssZ");
+            lastModified = info.LastWriteTimeUtc.ToString("R");
+            createdDate = info.CreationTimeUtc.ToString("yyyy-MM-ddTHH:mm:ssZ");
             createdDateRfc = info.CreationTimeUtc.ToString("R");
-            win32Attrs     = ((uint)info.Attributes).ToString("X8");
-            contentLength  = info.Length.ToString();
-            contentType    = XmlEscape(GetMimeType(info.Name));
-            etag           = $"\"{info.LastWriteTimeUtc.Ticks:x}-{info.Length:x}\"";
+            win32Attrs = ((uint)info.Attributes).ToString("X8");
+            contentLength = info.Length.ToString();
+            contentType = XmlEscape(GetMimeType(info.Name));
+            etag = $"\"{info.LastWriteTimeUtc.Ticks:x}-{info.Length:x}\"";
         }
 
         sb.AppendLine("  <D:response>");
@@ -523,7 +523,7 @@ public static class WebDavHandler
             }
             sb.Append("</ul></body></html>");
             var html = sb.ToString();
-            ctx.Response.StatusCode  = 200;
+            ctx.Response.StatusCode = 200;
             ctx.Response.ContentType = "text/html; charset=utf-8";
             ctx.Response.ContentLength = Encoding.UTF8.GetByteCount(html);
             if (!headOnly) await ctx.Response.WriteAsync(html, Encoding.UTF8);
@@ -536,15 +536,15 @@ public static class WebDavHandler
             return;
         }
 
-        var fi       = new FileInfo(absPath);
-        var mime     = GetMimeType(fi.Name);
-        var etag     = $"\"{fi.LastWriteTimeUtc.Ticks:x}-{fi.Length:x}\"";
+        var fi = new FileInfo(absPath);
+        var mime = GetMimeType(fi.Name);
+        var etag = $"\"{fi.LastWriteTimeUtc.Ticks:x}-{fi.Length:x}\"";
 
-        ctx.Response.StatusCode  = 200;
+        ctx.Response.StatusCode = 200;
         ctx.Response.ContentType = mime;
         ctx.Response.ContentLength = fi.Length;
         ctx.Response.Headers["Last-Modified"] = fi.LastWriteTimeUtc.ToString("R");
-        ctx.Response.Headers["ETag"]          = etag;
+        ctx.Response.Headers["ETag"] = etag;
 
         if (!headOnly)
             await ctx.Response.SendFileAsync(absPath);
@@ -633,8 +633,8 @@ public static class WebDavHandler
         }
 
         var overwrite = !string.Equals(ctx.Request.Headers["Overwrite"].ToString(), "F", StringComparison.OrdinalIgnoreCase);
-        var srcAbs    = FileService.SafeJoinPublic(root, relPath);
-        var dstAbs    = FileService.SafeJoinPublic(root, destRel);
+        var srcAbs = FileService.SafeJoinPublic(root, relPath);
+        var dstAbs = FileService.SafeJoinPublic(root, destRel);
 
         if (!overwrite && (File.Exists(dstAbs) || Directory.Exists(dstAbs)))
         {
@@ -886,9 +886,9 @@ public static class WebDavHandler
     private static async Task WriteXmlAsync(HttpContext ctx, string xml)
     {
         var bytes = Encoding.UTF8.GetBytes(xml);
-        ctx.Response.ContentType   = "text/xml; charset=\"utf-8\"";
+        ctx.Response.ContentType = "text/xml; charset=\"utf-8\"";
         ctx.Response.ContentLength = bytes.Length;
-        ctx.Response.Headers["DAV"]           = "1, 2";
+        ctx.Response.Headers["DAV"] = "1, 2";
         ctx.Response.Headers["MS-Author-Via"] = "DAV";
         await ctx.Response.Body.WriteAsync(bytes);
     }
@@ -902,30 +902,30 @@ public static class WebDavHandler
         return ext switch
         {
             ".html" or ".htm" => "text/html",
-            ".css"            => "text/css",
-            ".js" or ".mjs"  => "text/javascript",
-            ".ts"             => "text/typescript",
-            ".tsx"            => "text/tsx",
-            ".jsx"            => "text/jsx",
-            ".json"           => "application/json",
-            ".xml"            => "application/xml",
-            ".txt"            => "text/plain",
-            ".md"             => "text/markdown",
-            ".png"            => "image/png",
+            ".css" => "text/css",
+            ".js" or ".mjs" => "text/javascript",
+            ".ts" => "text/typescript",
+            ".tsx" => "text/tsx",
+            ".jsx" => "text/jsx",
+            ".json" => "application/json",
+            ".xml" => "application/xml",
+            ".txt" => "text/plain",
+            ".md" => "text/markdown",
+            ".png" => "image/png",
             ".jpg" or ".jpeg" => "image/jpeg",
-            ".gif"            => "image/gif",
-            ".svg"            => "image/svg+xml",
-            ".webp"           => "image/webp",
-            ".ico"            => "image/x-icon",
-            ".pdf"            => "application/pdf",
-            ".zip"            => "application/zip",
-            ".wasm"           => "application/wasm",
-            ".cs"             => "text/x-csharp",
-            ".go"             => "text/x-go",
-            ".py"             => "text/x-python",
-            ".rs"             => "text/x-rust",
-            ".sh"             => "text/x-sh",
-            _                 => "application/octet-stream",
+            ".gif" => "image/gif",
+            ".svg" => "image/svg+xml",
+            ".webp" => "image/webp",
+            ".ico" => "image/x-icon",
+            ".pdf" => "application/pdf",
+            ".zip" => "application/zip",
+            ".wasm" => "application/wasm",
+            ".cs" => "text/x-csharp",
+            ".go" => "text/x-go",
+            ".py" => "text/x-python",
+            ".rs" => "text/x-rust",
+            ".sh" => "text/x-sh",
+            _ => "application/octet-stream",
         };
     }
 }

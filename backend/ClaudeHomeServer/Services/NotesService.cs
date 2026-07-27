@@ -364,8 +364,13 @@ public sealed partial class NotesService
 
         return new Model
         {
-            Notes = notes, ById = byId, OutLinks = outLinks,
-            Backlinks = backlinks, Ghosts = ghosts, Edges = edges, Unlinked = unlinked,
+            Notes = notes,
+            ById = byId,
+            OutLinks = outLinks,
+            Backlinks = backlinks,
+            Ghosts = ghosts,
+            Edges = edges,
+            Unlinked = unlinked,
             ByName = byName,
         };
     }

@@ -16,16 +16,16 @@ public class TaskSchedulerServiceTests
         int? reminderMinutes = null, DateTime? reminderSentAt = null,
         TaskItemAssignee? assignee = null, TaskItemStatus status = TaskItemStatus.Todo,
         DateTime? claudeStartedAt = null) => new()
-    {
-        Title = "t",
-        DueDate = dueDate,
-        DueTime = dueTime,
-        ReminderMinutes = reminderMinutes,
-        ReminderSentAt = reminderSentAt,
-        Assignee = assignee,
-        Status = status,
-        ClaudeStartedAt = claudeStartedAt,
-    };
+        {
+            Title = "t",
+            DueDate = dueDate,
+            DueTime = dueTime,
+            ReminderMinutes = reminderMinutes,
+            ReminderSentAt = reminderSentAt,
+            Assignee = assignee,
+            Status = status,
+            ClaudeStartedAt = claudeStartedAt,
+        };
 
     // ─── ShouldRemind ────────────────────────────────────────────────────────
 

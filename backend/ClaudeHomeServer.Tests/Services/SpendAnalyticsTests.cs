@@ -20,21 +20,21 @@ public class SpendAnalyticsTests : IDisposable
         string? session = "s1", string provider = "claude", string? model = "opus",
         string source = SpendSources.ChatTurn, long input = 10, long output = 5,
         long cacheRead = 100, long cacheCreate = 20, int generations = 0, string? id = null) => new()
-    {
-        Id = id ?? Guid.NewGuid().ToString("N"),
-        Timestamp = ts,
-        OwnerId = owner,
-        ProjectId = project,
-        SessionId = session,
-        Provider = provider,
-        Model = model,
-        Source = source,
-        InputTokens = input,
-        OutputTokens = output,
-        CacheReadTokens = cacheRead,
-        CacheCreationTokens = cacheCreate,
-        Generations = generations,
-    };
+        {
+            Id = id ?? Guid.NewGuid().ToString("N"),
+            Timestamp = ts,
+            OwnerId = owner,
+            ProjectId = project,
+            SessionId = session,
+            Provider = provider,
+            Model = model,
+            Source = source,
+            InputTokens = input,
+            OutputTokens = output,
+            CacheReadTokens = cacheRead,
+            CacheCreationTokens = cacheCreate,
+            Generations = generations,
+        };
 
     // --- rollup и границы окна ---
 

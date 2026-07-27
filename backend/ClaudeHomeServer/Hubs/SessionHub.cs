@@ -64,7 +64,8 @@ public class SessionHub : Hub
         if (info is { Status: SessionStatus.Working or SessionStatus.Waiting or SessionStatus.Starting })
         {
             var statusMsg = new StatusChangedMessage(info.Status.ToString().ToLower(), info.LastMessage, info.MessageCount)
-                with { SessionId = sessionId };
+                with
+            { SessionId = sessionId };
             await Clients.Caller.SendAsync("message", statusMsg);
         }
 

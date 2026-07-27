@@ -14,11 +14,11 @@ public class ChatExpiryServiceTests
         int? expiresAfterMinutes = null,
         SessionStatus status = SessionStatus.Finished,
         DateTime? updatedAt = null) => new()
-    {
-        ExpiresAfterMinutes = expiresAfterMinutes,
-        Status = status,
-        UpdatedAt = updatedAt ?? Now.AddHours(-2),
-    };
+        {
+            ExpiresAfterMinutes = expiresAfterMinutes,
+            Status = status,
+            UpdatedAt = updatedAt ?? Now.AddHours(-2),
+        };
 
     [Fact]
     public void ShouldExpire_СрокПрошёл_True()

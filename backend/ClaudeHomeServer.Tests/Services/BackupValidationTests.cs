@@ -83,4 +83,48 @@ public class BackupValidationTests : IDisposable
 
         BackupValidation.Validate(_dir).Should().BeEmpty();
     }
+
+    // graph.json — regenerable (перестраивается из кода проекта), поэтому его порча не должна
+    // блокировать восстановление всей data. Проверяем, что он не входит в fatal Validate,
+    // а попадает в отдельный soft-список ValidateGraphWarnings.
+
+    private void WriteGraphJson(string hash, string content)
+    {
+        var hashDir = Path.Combine(_dir, "code-graphs", hash);
+        Directory.CreateDirectory(hashDir);
+        File.WriteAllText(Path.Combine(hashDir, "graph.json"), content);
+    }
+
+    [Fact]
+    public void БитыйGraphJson_НеБлокируетВосстановление()
+    {
+        Write("users.json", ValidUsers);
+        WriteGraphJson("abc123", "{ НЕ JSON");
+
+        // fatal-сторы валидны → восстановление разрешено
+        BackupValidation.Validate(_dir).Should().BeEmpty();
+        // но soft-предупреждение есть — граф пересоберётся из кода
+        BackupValidation.ValidateGraphWarnings(_dir)
+            .Should().ContainSingle().Which.Should().Contain("graph.json");
+    }
+
+    [Fact]
+    public void GraphJson_БезNodesEdges_ЭтоСoftWarning()
+    {
+        Write("users.json", ValidUsers);
+        WriteGraphJson("xyz", """{ "Foo": 1 }""");
+
+        BackupValidation.Validate(_dir).Should().BeEmpty();
+        BackupValidation.ValidateGraphWarnings(_dir).Should().NotBeEmpty();
+    }
+
+    [Fact]
+    public void ВалидныйGraphJson_БезПредупреждений()
+    {
+        Write("users.json", ValidUsers);
+        WriteGraphJson("good", """{ "Nodes": {}, "Edges": [] }""");
+
+        BackupValidation.Validate(_dir).Should().BeEmpty();
+        BackupValidation.ValidateGraphWarnings(_dir).Should().BeEmpty();
+    }
 }

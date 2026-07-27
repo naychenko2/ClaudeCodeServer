@@ -209,7 +209,7 @@ public class FileService(
     // Документы: PDF рендерится на клиенте (pdf.js), Office-форматы — через OnlyOffice DS.
     private static readonly Dictionary<string, (string Kind, string Mime)> ViewableDocuments = new(StringComparer.OrdinalIgnoreCase)
     {
-        [".pdf"]  = ("pdf",  "application/pdf"),
+        [".pdf"] = ("pdf", "application/pdf"),
         [".docx"] = ("docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
         [".xlsx"] = ("xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
         [".pptx"] = ("pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation"),

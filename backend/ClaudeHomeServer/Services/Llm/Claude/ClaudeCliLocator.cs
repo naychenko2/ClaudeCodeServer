@@ -19,7 +19,7 @@ public static class ClaudeCliLocator
         try
         {
             using var where = Process.Start(new ProcessStartInfo("where.exe", "claude.exe")
-                { UseShellExecute = false, RedirectStandardOutput = true, CreateNoWindow = true });
+            { UseShellExecute = false, RedirectStandardOutput = true, CreateNoWindow = true });
             if (where is not null)
             {
                 var line = where.StandardOutput.ReadLine();

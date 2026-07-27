@@ -1216,31 +1216,31 @@ public class PersonasController : ControllerBase
         switch (type)
         {
             case AutomationTriggerType.Timer:
-            {
-                var sched = TimerTriggerSource.ParseSchedule(dict);
-                if (sched is null || sched.Type is not ("daily" or "weekdays" or "weekly" or "interval"))
-                    return false;
-                return sched.Type == "interval" ? sched.IntervalMinutes is > 0 : sched.Time is not null;
-            }
+                {
+                    var sched = TimerTriggerSource.ParseSchedule(dict);
+                    if (sched is null || sched.Type is not ("daily" or "weekdays" or "weekly" or "interval"))
+                        return false;
+                    return sched.Type == "interval" ? sched.IntervalMinutes is > 0 : sched.Time is not null;
+                }
             case AutomationTriggerType.File:
             case AutomationTriggerType.GitCommit:
             case AutomationTriggerType.TaskStatus:
-            {
-                // Пустой projectId допустим: File/GitCommit — режим «папка без проекта»
-                // (args.folder, глобальный агент; traversal-guard на рантайме в AutomationRootResolver),
-                // TaskStatus — «любой проект». Заданный projectId обязан принадлежать владельцу.
-                var projectId = dict.GetString("projectId");
-                if (string.IsNullOrWhiteSpace(projectId)) return true;
-                var project = _projects.GetById(projectId);
-                return project is not null && project.OwnerId == UserId;
-            }
+                {
+                    // Пустой projectId допустим: File/GitCommit — режим «папка без проекта»
+                    // (args.folder, глобальный агент; traversal-guard на рантайме в AutomationRootResolver),
+                    // TaskStatus — «любой проект». Заданный projectId обязан принадлежать владельцу.
+                    var projectId = dict.GetString("projectId");
+                    if (string.IsNullOrWhiteSpace(projectId)) return true;
+                    var project = _projects.GetById(projectId);
+                    return project is not null && project.OwnerId == UserId;
+                }
             case AutomationTriggerType.Note:
-            {
-                var source = dict.GetString("source");
-                if (string.IsNullOrWhiteSpace(source)) return false;
-                if (source == "personal") return true;
-                return _notes.GetSources(UserId).Any(s => s.Key == source);
-            }
+                {
+                    var source = dict.GetString("source");
+                    if (string.IsNullOrWhiteSpace(source)) return false;
+                    if (source == "personal") return true;
+                    return _notes.GetSources(UserId).Any(s => s.Key == source);
+                }
             case AutomationTriggerType.Mention:
                 return true;
             default:
@@ -1318,20 +1318,20 @@ public class PersonasController : ControllerBase
                     }));
 
             case "notes" when !string.IsNullOrWhiteSpace(source):
-            {
-                // Папки источника — из путей его заметок (все промежуточные уровни)
-                var folders = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
-                foreach (var s in _notes.GetSummaries(UserId, source, null))
                 {
-                    var dir = System.IO.Path.GetDirectoryName(s.Path)?.Replace('\\', '/');
-                    while (!string.IsNullOrEmpty(dir))
+                    // Папки источника — из путей его заметок (все промежуточные уровни)
+                    var folders = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var s in _notes.GetSummaries(UserId, source, null))
                     {
-                        folders.Add(dir);
-                        dir = System.IO.Path.GetDirectoryName(dir)?.Replace('\\', '/');
+                        var dir = System.IO.Path.GetDirectoryName(s.Path)?.Replace('\\', '/');
+                        while (!string.IsNullOrEmpty(dir))
+                        {
+                            folders.Add(dir);
+                            dir = System.IO.Path.GetDirectoryName(dir)?.Replace('\\', '/');
+                        }
                     }
+                    return Ok(folders.Select(f => new { id = f, label = f, hint = (string?)null, meta = source }));
                 }
-                return Ok(folders.Select(f => new { id = f, label = f, hint = (string?)null, meta = source }));
-            }
 
             case "notes":
                 return Ok(_notes.GetSources(UserId)
@@ -1673,55 +1673,55 @@ public class PersonasController : ControllerBase
             {
                 case "project":
                 case "projectpath":
-                {
-                    var project = _projects.GetById(target);
-                    if (project is null || project.OwnerId != UserId || !Directory.Exists(project.RootPath))
-                        return null;
-                    var dir = string.IsNullOrWhiteSpace(path)
-                        ? project.RootPath
-                        : FileService.SafeJoinPublic(project.RootPath, path);
-                    if (!Directory.Exists(dir)) return null;
-                    var names = Directory.EnumerateFileSystemEntries(dir)
-                        .Select(System.IO.Path.GetFileName)
-                        .Where(n => n is not null && !n.StartsWith('.'))
-                        .Take(40);
-                    var preview = $"Проект «{project.Name}». Содержимое папки: {string.Join(", ", names)}";
-                    // README — лучший источник сути проекта
-                    var readme = System.IO.Path.Combine(dir, "README.md");
-                    if (System.IO.File.Exists(readme))
                     {
-                        var head = (await System.IO.File.ReadAllTextAsync(readme)).Trim();
-                        if (head.Length > 2000) head = head[..2000] + "…";
-                        preview += $"\nREADME.md:\n{head}";
+                        var project = _projects.GetById(target);
+                        if (project is null || project.OwnerId != UserId || !Directory.Exists(project.RootPath))
+                            return null;
+                        var dir = string.IsNullOrWhiteSpace(path)
+                            ? project.RootPath
+                            : FileService.SafeJoinPublic(project.RootPath, path);
+                        if (!Directory.Exists(dir)) return null;
+                        var names = Directory.EnumerateFileSystemEntries(dir)
+                            .Select(System.IO.Path.GetFileName)
+                            .Where(n => n is not null && !n.StartsWith('.'))
+                            .Take(40);
+                        var preview = $"Проект «{project.Name}». Содержимое папки: {string.Join(", ", names)}";
+                        // README — лучший источник сути проекта
+                        var readme = System.IO.Path.Combine(dir, "README.md");
+                        if (System.IO.File.Exists(readme))
+                        {
+                            var head = (await System.IO.File.ReadAllTextAsync(readme)).Trim();
+                            if (head.Length > 2000) head = head[..2000] + "…";
+                            preview += $"\nREADME.md:\n{head}";
+                        }
+                        return preview.Length > cap ? preview[..cap] + "…" : preview;
                     }
-                    return preview.Length > cap ? preview[..cap] + "…" : preview;
-                }
                 case "knowledge":
-                {
-                    var ds = _bindings.KnownDatasets(UserId).FirstOrDefault(d => d.Id == target);
-                    if (ds.Id is null || !_knowledge.IsConfigured) return null;
-                    var docs = await _knowledge.ListAllDocumentsAsync(target);
-                    var names = docs.Data.Select(d => d.Name).Take(40);
-                    return $"База знаний «{ds.Label}». Документы: {string.Join(", ", names)}";
-                }
-                case "notes":
-                {
-                    var summaries = _notes.GetSummaries(UserId, target, null).AsEnumerable();
-                    if (!string.IsNullOrWhiteSpace(path))
                     {
-                        var prefix = path.Trim().Replace('\\', '/').Trim('/') + "/";
-                        summaries = summaries.Where(s =>
-                            s.Path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
+                        var ds = _bindings.KnownDatasets(UserId).FirstOrDefault(d => d.Id == target);
+                        if (ds.Id is null || !_knowledge.IsConfigured) return null;
+                        var docs = await _knowledge.ListAllDocumentsAsync(target);
+                        var names = docs.Data.Select(d => d.Name).Take(40);
+                        return $"База знаний «{ds.Label}». Документы: {string.Join(", ", names)}";
                     }
-                    var titles = summaries.Select(s => s.Title).Take(40).ToList();
-                    return titles.Count == 0 ? null : $"Заголовки заметок: {string.Join(", ", titles)}";
-                }
+                case "notes":
+                    {
+                        var summaries = _notes.GetSummaries(UserId, target, null).AsEnumerable();
+                        if (!string.IsNullOrWhiteSpace(path))
+                        {
+                            var prefix = path.Trim().Replace('\\', '/').Trim('/') + "/";
+                            summaries = summaries.Where(s =>
+                                s.Path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
+                        }
+                        var titles = summaries.Select(s => s.Title).Take(40).ToList();
+                        return titles.Count == 0 ? null : $"Заголовки заметок: {string.Join(", ", titles)}";
+                    }
                 case "skill":
-                {
-                    var skill = _skills.GetGlobalSkills()
-                        .FirstOrDefault(s => string.Equals(s.Name, target, StringComparison.OrdinalIgnoreCase));
-                    return skill is null ? null : $"Скилл «{skill.Name}»: {skill.Description}";
-                }
+                    {
+                        var skill = _skills.GetGlobalSkills()
+                            .FirstOrDefault(s => string.Equals(s.Name, target, StringComparison.OrdinalIgnoreCase));
+                        return skill is null ? null : $"Скилл «{skill.Name}»: {skill.Description}";
+                    }
                 case "tool":
                     return PersonaBindingsService.ToolCatalog.TryGetValue(target, out var t)
                         ? $"Инструмент «{t.Label}»: {t.Hint}"
@@ -1915,7 +1915,9 @@ public class PersonasController : ControllerBase
                     error = $"Персона @{handle} есть в нескольких проектах — уточни personaId",
                     candidates = candidates.Select(p => new
                     {
-                        id = p.Id, name = p.Name, role = p.Role,
+                        id = p.Id,
+                        name = p.Name,
+                        role = p.Role,
                         projectId = p.ProjectId,
                         projectName = p.ProjectId is null ? null : _projects.GetById(p.ProjectId)?.Name,
                     }),

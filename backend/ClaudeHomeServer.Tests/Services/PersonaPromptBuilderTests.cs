@@ -9,14 +9,14 @@ public class PersonaPromptBuilderTests
 {
     private static Persona MakePersona(PersonaContract? contract = null, string? systemPrompt = null,
         string? greeting = null) => new()
-    {
-        Name = "Марк",
-        Role = "Ревьюер",
-        Description = "строгая проверка кода",
-        SystemPrompt = systemPrompt,
-        Contract = contract,
-        Greeting = greeting,
-    };
+        {
+            Name = "Марк",
+            Role = "Ревьюер",
+            Description = "строгая проверка кода",
+            SystemPrompt = systemPrompt,
+            Contract = contract,
+            Greeting = greeting,
+        };
 
     private static string Build(Persona p, string providerKey = "claude",
         bool switched = false, bool greeted = false) =>

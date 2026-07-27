@@ -13,14 +13,14 @@ public class PersonaMemoryConsolidationTests
 
     private static PersonaMemoryEntry Entry(string id, PersonaMemoryType type = PersonaMemoryType.Semantic,
         double salience = 1.0, double ageDays = 0) => new()
-    {
-        PersonaId = "p1",
-        Type = type,
-        Text = $"запись {id}",
-        Salience = salience,
-        CreatedAt = Now.AddDays(-ageDays),
-        LastAccessedAt = Now.AddDays(-ageDays),
-    };
+        {
+            PersonaId = "p1",
+            Type = type,
+            Text = $"запись {id}",
+            Salience = salience,
+            CreatedAt = Now.AddDays(-ageDays),
+            LastAccessedAt = Now.AddDays(-ageDays),
+        };
 
     private static List<PersonaMemoryEntry> Entries(int count, PersonaMemoryType type = PersonaMemoryType.Semantic) =>
         Enumerable.Range(1, count).Select(i => Entry($"e{i}", type)).ToList();

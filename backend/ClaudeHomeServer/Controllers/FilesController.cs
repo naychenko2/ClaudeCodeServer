@@ -87,8 +87,17 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
                 var size = files.GetFileSize(root, path);
                 // Слишком большой документ — только метаданные + скачивание, без base64
                 var docBase64 = size > FileService.MaxDocumentBytes ? null : files.GetFileBase64(root, path);
-                return Ok(new { content = (string?)null, isBinary = true, isImage = false,
-                    isDocument = true, docKind = d.Kind, mimeType = d.Mime, base64 = docBase64, fileSize = size });
+                return Ok(new
+                {
+                    content = (string?)null,
+                    isBinary = true,
+                    isImage = false,
+                    isDocument = true,
+                    docKind = d.Kind,
+                    mimeType = d.Mime,
+                    base64 = docBase64,
+                    fileSize = size
+                });
             }
 
             if (files.IsBinaryFile(root, path))
@@ -97,38 +106,73 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
                 {
                     var ext = System.IO.Path.GetExtension(path).TrimStart('.').ToLower();
                     var mime = ext == "svg" ? "image/svg+xml" : $"image/{ext}";
-                    return Ok(new { content = (string?)null, isBinary = true, isImage = true,
-                        mimeType = mime, base64 = files.GetFileBase64(root, path) });
+                    return Ok(new
+                    {
+                        content = (string?)null,
+                        isBinary = true,
+                        isImage = true,
+                        mimeType = mime,
+                        base64 = files.GetFileBase64(root, path)
+                    });
                 }
                 if (FileService.IsVideoFile(path))
                 {
                     var ext = System.IO.Path.GetExtension(path).TrimStart('.').ToLower();
-                    var mime = ext switch {
-                        "mp4" => "video/mp4", "webm" => "video/webm",
-                        "mov" => "video/quicktime", "avi" => "video/x-msvideo",
-                        "mkv" => "video/x-matroska", _ => "video/mp4"
+                    var mime = ext switch
+                    {
+                        "mp4" => "video/mp4",
+                        "webm" => "video/webm",
+                        "mov" => "video/quicktime",
+                        "avi" => "video/x-msvideo",
+                        "mkv" => "video/x-matroska",
+                        _ => "video/mp4"
                     };
                     var info = new System.IO.FileInfo(System.IO.Path.Combine(root, path));
-                    return Ok(new { content = (string?)null, isBinary = true, isImage = false,
-                        isVideo = true, mimeType = mime, fileSize = info.Length });
+                    return Ok(new
+                    {
+                        content = (string?)null,
+                        isBinary = true,
+                        isImage = false,
+                        isVideo = true,
+                        mimeType = mime,
+                        fileSize = info.Length
+                    });
                 }
                 if (FileService.IsAudioFile(path))
                 {
                     var ext = System.IO.Path.GetExtension(path).TrimStart('.').ToLower();
-                    var mime = ext switch {
-                        "mp3" => "audio/mpeg", "wav" => "audio/wav",
-                        "ogg" => "audio/ogg", "flac" => "audio/flac",
-                        "aac" => "audio/aac", "m4a" => "audio/mp4",
-                        "opus" => "audio/opus", "weba" => "audio/webm",
+                    var mime = ext switch
+                    {
+                        "mp3" => "audio/mpeg",
+                        "wav" => "audio/wav",
+                        "ogg" => "audio/ogg",
+                        "flac" => "audio/flac",
+                        "aac" => "audio/aac",
+                        "m4a" => "audio/mp4",
+                        "opus" => "audio/opus",
+                        "weba" => "audio/webm",
                         _ => "audio/mpeg"
                     };
                     var info = new System.IO.FileInfo(System.IO.Path.Combine(root, path));
-                    return Ok(new { content = (string?)null, isBinary = true, isImage = false,
-                        isAudio = true, mimeType = mime, fileSize = info.Length });
+                    return Ok(new
+                    {
+                        content = (string?)null,
+                        isBinary = true,
+                        isImage = false,
+                        isAudio = true,
+                        mimeType = mime,
+                        fileSize = info.Length
+                    });
                 }
                 var fileInfo = new System.IO.FileInfo(System.IO.Path.Combine(root, path));
-                return Ok(new { content = (string?)null, isBinary = true, isImage = false,
-                    mimeType = "application/octet-stream", fileSize = fileInfo.Length });
+                return Ok(new
+                {
+                    content = (string?)null,
+                    isBinary = true,
+                    isImage = false,
+                    mimeType = "application/octet-stream",
+                    fileSize = fileInfo.Length
+                });
             }
             return Ok(new { content = files.ReadFile(root, path), isBinary = false, isImage = false });
         }
@@ -371,10 +415,14 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
             var safePath = FileService.SafeJoinPublic(root, path);
             if (!System.IO.File.Exists(safePath)) return NotFound();
             var ext = System.IO.Path.GetExtension(path).TrimStart('.').ToLower();
-            var mime = ext switch {
-                "mp4" => "video/mp4", "webm" => "video/webm",
-                "mov" => "video/quicktime", "avi" => "video/x-msvideo",
-                "mkv" => "video/x-matroska", _ => "application/octet-stream"
+            var mime = ext switch
+            {
+                "mp4" => "video/mp4",
+                "webm" => "video/webm",
+                "mov" => "video/quicktime",
+                "avi" => "video/x-msvideo",
+                "mkv" => "video/x-matroska",
+                _ => "application/octet-stream"
             };
             return PhysicalFile(safePath, mime, enableRangeProcessing: true);
         }
@@ -449,19 +497,23 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
                   $"?path={Uri.EscapeDataString(path)}&token={Uri.EscapeDataString(token)}"
                 : (string?)null;
 
-            return Ok(new {
+            return Ok(new
+            {
                 serverUrl,
-                document = new {
+                document = new
+                {
                     fileType = ext,
                     key = docKey,
                     title = fileName,
                     url = downloadUrl,
                 },
-                editorConfig = new {
+                editorConfig = new
+                {
                     mode,
                     lang = "ru",
                     callbackUrl,
-                    customization = new {
+                    customization = new
+                    {
                         uiTheme = "theme-claude-home",
                         anonymous = new { request = false },
                         compactToolbar = true,

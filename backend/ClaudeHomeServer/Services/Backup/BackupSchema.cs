@@ -13,5 +13,5 @@ public static class BackupSchema
     /// JsonFileStore.Load на этом переименовывает файл в .corrupt-*.bak и отдаёт пустой
     /// стор — сервер бодро стартует без персон, и узнаёшь об этом через день.
     /// </summary>
-    public const int Version = 1;
+    public const int Version = 2;
 }

@@ -14,13 +14,13 @@ public class PersonaMemoryScorerTests
 
     private static PersonaMemoryEntry Entry(PersonaMemoryType type = PersonaMemoryType.Semantic,
         double salience = 1.0, double ageDaysCreated = 0, double ageDaysAccessed = 0) => new()
-    {
-        Type = type,
-        Text = "запись",
-        Salience = salience,
-        CreatedAt = Now.AddDays(-ageDaysCreated),
-        LastAccessedAt = Now.AddDays(-ageDaysAccessed),
-    };
+        {
+            Type = type,
+            Text = "запись",
+            Salience = salience,
+            CreatedAt = Now.AddDays(-ageDaysCreated),
+            LastAccessedAt = Now.AddDays(-ageDaysAccessed),
+        };
 
     [Fact]
     public void Сумма_СовпадаетСЭталоном()

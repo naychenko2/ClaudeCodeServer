@@ -67,6 +67,22 @@ public class BackupPathsTests
     }
 
     [Theory]
+    [InlineData("code-graphs/ab12cd/cache/compilation.bin")]
+    [InlineData("code-graphs/ab12cd/cache/sub/tree.bin")]
+    public void КешCodeGraph_Исключён(string path)
+    {
+        // Кеш графа пересобирается из исходников — в облачный архив не едет
+        BackupPaths.ShouldInclude(path).Should().BeFalse();
+    }
+
+    [Fact]
+    public void ГрафCodeGraph_ПопадаетВАрхив()
+    {
+        // А вот сам graph.json невосстановим без перестроения Roslyn — его бэкапим
+        BackupPaths.ShouldInclude("code-graphs/ab12cd/graph.json").Should().BeTrue();
+    }
+
+    [Theory]
     [InlineData("jwt-secret.txt")]
     [InlineData("vapid-keys.json")]
     [InlineData("module-keys.json")]

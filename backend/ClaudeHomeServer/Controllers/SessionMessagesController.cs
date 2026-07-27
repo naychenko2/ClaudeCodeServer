@@ -198,8 +198,11 @@ public class SessionMessagesController(SessionManager sessions, ProjectManager p
         if (OwnedSession(sessionId) is null) return NotFound();
         return Ok(sessions.GetPending(sessionId).Select(p => new
         {
-            id = p.Id, text = p.Text, senderPersonaId = p.SenderPersonaId,
-            senderOrigin = p.SenderOrigin, enqueuedAt = p.EnqueuedAt,
+            id = p.Id,
+            text = p.Text,
+            senderPersonaId = p.SenderPersonaId,
+            senderOrigin = p.SenderOrigin,
+            enqueuedAt = p.EnqueuedAt,
             senderChatName = p.SenderChatName,
             kind = p.Kind == ClaudeHomeServer.Services.SessionManager.PendingKind.User ? "user" : "agent",
             attachedPaths = p.AttachedPaths,

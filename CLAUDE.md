@@ -305,6 +305,14 @@ override в `data/users.json`; фронт — стор [lib/featureFlags.ts](fro
   ФС, отсутствие `.exe`, недоступность WinAPI. Сомневаешься — прогони набор в контейнере:
   `docker run --rm -v "<репа>:/src" -w /src/backend mcr.microsoft.com/dotnet/sdk:10.0 dotnet test ClaudeHomeServer.Tests/ClaudeHomeServer.Tests.csproj`
   (после этого пересобери локально: контейнер оставляет в `bin`/`obj` Linux-артефакты)
+- **Тесты и их категории.** Большинство — чистые юнит-тесты (Services, моки, in-memory),
+  1–50ms. Медленные — две группы: **Controllers** (поднимают `WebApplicationFactory` —
+  полный HTTP-pipeline ASP.NET, 400–970ms) и **GitServiceTests** (гоняют настоящий `git`
+  CLI во временных репо, помечены `[Trait("Category", "Slow")]`, 500–720ms). Интеграционные MCP
+  — HTTP-вызовы к MCP-серверам, 400–800ms. На итеративную правку гоняй только релевантный
+  набор: `dotnet test --filter "FullyQualifiedName~SessionManagerTests"`; медленные категории
+  (Controllers, GitServiceTests, интеграционные MCP) запускай только при правках в коде, который
+  они покрывают, либо при действительной необходимости — полный прогон перед коммитом/PR.
 - Хранилище проектов: `data/projects.json` рядом с executable
 - **Одна папка — один проект на владельца**: `RootPath` нормализуется при создании и смене папки
   (`Path.GetFullPath` — схлопывает двойные разделители), а `ProjectManager.EnsureRootFree`

@@ -871,7 +871,10 @@ public class SessionManagerTests : IDisposable
         var result = await InvokeEnqueuePendingAsync(session.Id, entry, "зависшее сообщение");
 
         result.Should().BeOfType<SendAndWaitResult.Queued>().Which.Position.Should().Be(1);
-        await WaitForQueueAsync(_sut, session.Id, TimeSpan.FromSeconds(2));
+        // DrainNextPendingAsync работает в fire-and-forget Task.Run: очередь пустеет
+        // (RemoveAt) ДО фактической доставки (Process.SendMessageAsync). Ждём не пустоту
+        // очереди, а сам вызов адаптера — иначе Verify ловит гонку.
+        await WaitForAdapterCallAsync(adapter, TimeSpan.FromSeconds(2));
 
         _sut.GetPending(session.Id).Should().BeEmpty(
             "при свободном чате форсированный drain разбирает очередь сам, без зависания");
@@ -966,6 +969,19 @@ public class SessionManagerTests : IDisposable
         {
             if (sut.GetPending(sessionId).Count == 0) return;
             await Task.Delay(20);
+        }
+    }
+
+    // DrainNextPendingAsync — fire-and-forget Task.Run: сообщение покидает очередь
+    // (RemoveAt) ДО доставки (Process.SendMessageAsync). Поллим сам факт вызова мока,
+    // а не пустоту очереди — иначе Verify ловит гонку «очередь пуста, мок ещё не позвали».
+    private static async Task WaitForAdapterCallAsync(Mock<ILlmSessionAdapter> adapter, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            if (adapter.Invocations.Count > 0) return;
+            await Task.Delay(10);
         }
     }
 

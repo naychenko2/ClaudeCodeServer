@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using OpenTelemetry;
 using OpenTelemetry.Exporter;
+using OpenTelemetry.Logs;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 
@@ -85,6 +86,20 @@ public static class ObservabilityExtensions
             // ASP.NET Core / HttpClient metric instrumentation имеют другой API в OTel 1.17.0
             // (через experimental packages). Для MVP оставляем только наш custom Meter —
             // operational метрики (latency, errors) уже покрывают основные сценарии.
+        });
+
+        // Logging — IncludeFormattedMessage для читаемости в SigNoz ListView.
+        // Без этого SigNoz показывает голый template с {placeholder} вместо значений.
+        otelBuilder.WithLogging(l =>
+        {
+            l.ConfigureServices(s =>
+            {
+                s.Configure<OpenTelemetryLoggerOptions>(o =>
+                {
+                    o.IncludeFormattedMessage = true;
+                    o.ParseStateValues = true;
+                });
+            });
         });
 
         // OTLP exporter — один активный backend (AD3, AD4).

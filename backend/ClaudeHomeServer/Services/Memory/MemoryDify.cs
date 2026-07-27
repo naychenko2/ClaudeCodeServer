@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
+using ClaudeHomeServer.Telemetry;
 
 namespace ClaudeHomeServer.Services.Memory;
 
@@ -48,7 +49,10 @@ public static class MemoryDify
 
             if (doc is not null)
                 try { await knowledge.DeleteDocumentAsync(datasetId, doc.DocId); }
-                catch (Exception ex) { log?.LogDebug(ex, "memory-dify: удаление старого документа записи {Entry}", it.Id); }
+                catch (Exception ex) {
+                    log?.LogWarning(ex, "memory-dify: удаление старого документа записи {Entry}", it.Id);
+                    ServerMetrics.RecordDifySyncError(DifyErrorCategorizer.Categorize(ex));
+                }
 
             var info = await knowledge.IndexFileByTextAsync(datasetId, it.DocName, it.Text, it.Tags);
             setDoc(it.Id, new MemoryDocRef { DocId = info.Id, Hash = hash });
@@ -58,7 +62,10 @@ public static class MemoryDify
         foreach (var stale in docsSnapshot.Keys.Where(k => !alive.Contains(k)).ToList())
         {
             try { await knowledge.DeleteDocumentAsync(datasetId, docsSnapshot[stale].DocId); }
-            catch (Exception ex) { log?.LogDebug(ex, "memory-dify: удаление документа исчезнувшей записи {Entry}", stale); }
+            catch (Exception ex) {
+                log?.LogWarning(ex, "memory-dify: удаление документа исчезнувшей записи {Entry}", stale);
+                ServerMetrics.RecordDifySyncError(DifyErrorCategorizer.Categorize(ex));
+            }
             removeDoc(stale);
             changed++;
         }

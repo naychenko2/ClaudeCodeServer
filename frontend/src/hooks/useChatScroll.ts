@@ -1,10 +1,24 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import type { ChatItem } from '../types';
 
-// Скролл-механика ленты чата: прилипание к низу, восстановление сохранённой
-// позиции чтения после refresh (если пользователь отлистал вверх), автоскролл
-// в конец при открытии чата без сохранённой позиции, измерение высоты
-// плавающего composer и кнопка «вниз».
+// Позиция чтения живёт ровно один reload: пишется только при выгрузке страницы
+// (pagehide), в sessionStorage (умирает вместе с вкладкой) и потребляется первым же
+// открытием чата. Поэтому переключение чатов и возврат в него позже всегда дают конец
+// ленты, а случайный F5 возвращает туда, где читали.
+const SCROLL_TTL_MS = 5 * 60 * 1000;
+
+// Разовая уборка бессрочных записей прежнего формата (localStorage) — иначе они
+// остались бы у пользователей навсегда.
+try {
+  for (let i = localStorage.length - 1; i >= 0; i--) {
+    const k = localStorage.key(i);
+    if (k?.startsWith('cc-scroll-')) localStorage.removeItem(k);
+  }
+} catch { /* localStorage недоступен */ }
+
+// Скролл-механика ленты чата: прилипание к низу, восстановление позиции чтения
+// после перезагрузки страницы, автоскролл в конец при открытии чата, измерение
+// высоты плавающего composer и кнопка «вниз».
 export function useChatScroll(sessionId: string, items: ChatItem[], isHistoryLoading: boolean, online: boolean) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -16,7 +30,7 @@ export function useChatScroll(sessionId: string, items: ChatItem[], isHistoryLoa
   const [composerH, setComposerH] = useState(96);
   // Прилипание к низу: автоскролл при новых сообщениях только если пользователь уже внизу
   const atBottomRef = useRef(true);
-  // Восстановление позиции чтения после refresh: храним позицию + высоту ленты per-session.
+  // Восстановление позиции чтения после reload: храним позицию + высоту ленты per-session.
   const scrollKey = `cc-scroll-${sessionId}`;
   const pendingRestoreRef = useRef<{ top: number; h: number } | null>(null);
   const restoredRef = useRef(false);
@@ -28,17 +42,45 @@ export function useChatScroll(sessionId: string, items: ChatItem[], isHistoryLoa
     atBottomRef.current = true;
     restoredRef.current = false;
     setShowScrollDown(false);
-    // Загружаем сохранённую позицию
+    // Загружаем позицию, оставленную выгрузкой страницы (свежую — протухшую игнорируем:
+    // sessionStorage переживает bfcache, а через полчаса возврата лента уже неактуальна)
     let saved: { top: number; h: number } | null = null;
     try {
-      const raw = localStorage.getItem(scrollKey);
+      const raw = sessionStorage.getItem(scrollKey);
       if (raw) {
         const o = JSON.parse(raw);
-        if (o && Number.isFinite(o.top) && Number.isFinite(o.h)) saved = { top: o.top, h: o.h };
+        if (o && Number.isFinite(o.top) && Number.isFinite(o.h) && Number.isFinite(o.t)
+          && Date.now() - o.t < SCROLL_TTL_MS) saved = { top: o.top, h: o.h };
       }
-    } catch { /* недоступен localStorage / старый формат */ }
+    } catch { /* недоступен sessionStorage / старый формат */ }
     pendingRestoreRef.current = saved;
-    if (saved != null) atBottomRef.current = false;
+    if (saved == null) return;
+    atBottomRef.current = false;
+    // Запись одноразовая: она валидна ровно для первого открытия чата после reload,
+    // дальше чат должен открываться в конце ленты. Стираем макротаском, а не сразу —
+    // StrictMode в dev перемонтирует эффект синхронно, и второй проход обязан
+    // прочитать ту же запись, иначе восстановление не сработает.
+    window.setTimeout(() => {
+      try { sessionStorage.removeItem(scrollKey); } catch { /* недоступен sessionStorage */ }
+    }, 0);
+  }, [scrollKey]);
+
+  // Позиция чтения сохраняется только при выгрузке страницы (reload/закрытие вкладки).
+  // Уход в другой чат её не пишет — так «вернулся в чат» всегда означает конец ленты.
+  useEffect(() => {
+    const save = () => {
+      const el = scrollRef.current;
+      if (!el) return;
+      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+      try {
+        if (atBottom) sessionStorage.removeItem(scrollKey);
+        else sessionStorage.setItem(scrollKey, JSON.stringify({
+          top: Math.round(el.scrollTop), h: Math.round(el.scrollHeight), t: Date.now(),
+        }));
+      } catch { /* недоступен sessionStorage */ }
+    };
+    window.addEventListener('pagehide', save);
+    return () => window.removeEventListener('pagehide', save);
   }, [scrollKey]);
 
   // Измеряем высоту плавающего composer → задаём нижний отступ ленты (упор ровно под него)
@@ -59,14 +101,7 @@ export function useChatScroll(sessionId: string, items: ChatItem[], isHistoryLoa
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
     atBottomRef.current = atBottom;
     setShowScrollDown(!atBottom);
-    // Сохраняем позицию (кроме случая «внизу»)
-    if (restoredRef.current) {
-      try {
-        if (atBottom) localStorage.removeItem(scrollKey);
-        else localStorage.setItem(scrollKey, JSON.stringify({ top: Math.round(el.scrollTop), h: Math.round(el.scrollHeight) }));
-      } catch { /* localStorage недоступен */ }
-    }
-  }, [scrollKey]);
+  }, []);
 
   // Следим за изменением высоты scroll-контейнера (resize окна, dock expand)
   useEffect(() => {

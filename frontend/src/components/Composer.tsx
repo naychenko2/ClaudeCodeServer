@@ -15,6 +15,7 @@ import {
   DEFAULT_TEAM_SETTINGS, buildTeamTurnText, teamMechanic,
   type TeamMechanicId, type TeamMechanicSettings,
 } from '../features/team/teamMechanics';
+import { TeamImplementBadge } from '../features/team/TeamImplementBadge';
 import { setLastMechanic } from '../lib/lastMechanic';
 import { type Mode, MODE_META, MODES, ModeIcon, isDangerMode } from '../lib/modes';
 import { DangerModeConfirm } from './DangerModeConfirm';
@@ -22,7 +23,7 @@ import { useAssistantName } from './chat/contexts';
 import { getDraft, setDraft } from '../lib/drafts';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { useVoiceInput } from '../hooks/useVoiceInput';
-import type { SkillInfo, AgentInfo, Persona, WorkLoopState } from '../types';
+import type { SkillInfo, AgentInfo, Persona, WorkLoopState, SessionTeamImplement } from '../types';
 
 export interface ComposerProps {
   // Ключ чата — под него хранится черновик недовведённого текста
@@ -72,6 +73,11 @@ export interface ComposerProps {
   // Promise — чтобы автопилот с «до готово» мог дождаться включения цикла до отправки
   workLoop?: WorkLoopState | null;
   onToggleWorkLoop?: () => void | Promise<void>;
+  // Режим «Командная реализация» (флаг team-implement-mode): состояние (live с фолбэком
+  // на Session.teamImplement); null — режим выключен. Бейдж виден при заданных обработчиках
+  teamImplement?: SessionTeamImplement | null;
+  onToggleTeamImplementAuto?: () => void | Promise<void>;
+  onDisableTeamImplement?: () => void | Promise<void>;
   // Отдельное git worktree чата: имя ветки (null — чат в основном дереве проекта).
   // Тумблер виден при заданном onToggleWorktree (только проектный чат с git)
   worktreeBranch?: string | null;
@@ -243,6 +249,9 @@ export function Composer({
   onCreateGroup,
   workLoop = null,
   onToggleWorkLoop,
+  teamImplement = null,
+  onToggleTeamImplementAuto,
+  onDisableTeamImplement,
   worktreeBranch = null,
   onToggleWorktree,
   chatContext,
@@ -696,6 +705,16 @@ export function Composer({
         ? 'Цикл: верификация'
         : `Цикл: итерация ${workLoop.iteration}/${workLoop.maxIterations}`}
     </span>
+  ) : null;
+
+  // Режим «Командная реализация» (флаг team-implement-mode): бейдж стадии + чип «Авто»
+  const teamImplementBadge = teamImplement && onToggleTeamImplementAuto && onDisableTeamImplement ? (
+    <TeamImplementBadge
+      state={teamImplement}
+      isMobile={isMobile}
+      onToggleAuto={onToggleTeamImplementAuto}
+      onDisable={onDisableTeamImplement}
+    />
   ) : null;
 
   // Отдельное git worktree: тумблер + бейдж ветки (как loopButton/loopBadge)
@@ -1173,6 +1192,7 @@ export function Composer({
       )}
       <div ref={badgesRef} style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 6 : 4, minWidth: 0, overflow: 'hidden' }}>
         {loopBadge}
+        {teamImplementBadge}
         {worktreeBadge}
         {teamChip}
       </div>

@@ -3,7 +3,7 @@
 // тестировать без рендера React. Побочные эффекты (загрузка истории, SignalR)
 // остаются в хуке; редьюсер только считает следующее состояние.
 
-import type { ChatItem, ServerMessage, RateLimitInfo, WorkLoopState } from '../types';
+import type { ChatItem, ServerMessage, RateLimitInfo, WorkLoopState, TeamImplementState } from '../types';
 
 // Часть состояния сессии, которой управляет редьюсер
 export interface ChatState {
@@ -18,6 +18,9 @@ export interface ChatState {
   // Live-состояние цикла «до готово» (событие work_loop, флаг work-loop).
   // undefined — событий ещё не было (UI берёт значение из Session.workLoop)
   workLoop?: WorkLoopState;
+  // Live-состояние режима «Командная реализация» (событие team_implement).
+  // undefined — событий ещё не было (UI берёт значение из Session.teamImplement)
+  teamImplement?: TeamImplementState;
   // Подсказка следующего сообщения — чип в композере.
   // Эфемерная: в историю не пишется, сбрасывается при отправке хода (в хуке).
   promptSuggestion: string | null;
@@ -476,6 +479,25 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
       return {
         ...prev,
         workLoop: { active: msg.active, iteration: msg.iteration, maxIterations: msg.maxIterations, phase: msg.phase },
+      };
+
+    case 'team_implement':
+      // Режим «Командная реализация»: приходит при каждом изменении (вкл/стадия/волна/авто/стоп).
+      // При выключении (active=false) поля состояния приходят пустыми — нормализуем в дефолты,
+      // чтобы UI, держащийся за live-объект, не развалился на null
+      return {
+        ...prev,
+        teamImplement: {
+          active: msg.active,
+          stage: msg.stage ?? 'idle',
+          waveNumber: msg.waveNumber,
+          autoWaves: msg.autoWaves,
+          coordinatorPersonaId: msg.coordinatorPersonaId,
+          plannerPersonaId: msg.plannerPersonaId,
+          executorPersonaIds: msg.executorPersonaIds ?? [],
+          budget: msg.budget ?? { tasksUsed: 0, wavesUsed: 0, runsUsed: 0, retriesUsed: 0, maxTasks: 0, maxWaves: 0, maxRuns: 0, maxRetries: 0 },
+          planCardId: msg.planCardId,
+        },
       };
 
     case 'prompt_suggestion':

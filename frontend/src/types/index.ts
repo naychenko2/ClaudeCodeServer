@@ -327,6 +327,8 @@ export interface Session {
   expiresAfterMinutes?: number | null;
   // Цикл «до готово» (флаг work-loop); null/отсутствует — цикл выключен
   workLoop?: { promise: string; iteration: number; maxIterations: number; phase: 'working' | 'verifying' } | null;
+  // Режим «Командная реализация» (флаг team-implement-mode); null/отсутствует — режим выключен
+  teamImplement?: SessionTeamImplement | null;
   // Отдельное git worktree чата: рабочая папка сессии вместо корня проекта.
   // null/отсутствует — чат в основном дереве. Только у проектных чатов.
   worktreePath?: string | null;
@@ -573,6 +575,8 @@ export type ServerMessage = { sessionId: string } & (
   // чат на стороннем провайдере (карточка с кнопками)
   | { type: 'provider_limit'; resetsAt?: string; providers: ProviderFallbackOption[] }
   | { type: 'work_loop'; active: boolean; iteration: number; maxIterations: number; phase: string | null }
+  // Режим «Командная реализация»: приходит при каждом изменении (вкл/стадия/волна/авто/стоп)
+  | { type: 'team_implement'; active: boolean; stage: TeamImplementStage | null; waveNumber: number; autoWaves: boolean; coordinatorPersonaId: string | null; plannerPersonaId: string | null; executorPersonaIds: string[] | null; budget: TeamImplementBudget | null; planCardId: string | null }
   | { type: 'preview_status'; status: string; port?: number; error?: string; serviceId?: string }
   | { type: 'notification'; title: string; body: string; url?: string; kind: 'reminder' | 'claude' | 'info' | 'success' | 'meeting'; notificationId?: string; notifType?: string; projectId?: string; sessionId?: string; taskId?: string; source?: string; tag?: string; personaId?: string; personaName?: string; personaRole?: string; personaColor?: string; personaHasAvatar?: boolean; projectName?: string }
   | { type: 'recall_manifest'; items: RecallItem[] }
@@ -747,6 +751,46 @@ export interface WorkLoopState {
   iteration: number;
   maxIterations: number;
   phase: string | null;
+}
+
+// === Режим «Командная реализация» (флаг team-implement-mode) ===
+// Стадии непрерывного контура — совпадают с wire-токенами TeamImplementStage на бэке
+export type TeamImplementStage =
+  | 'planning'          // координатор готовит карточку плана
+  | 'confirming'        // план ждёт единственного согласования
+  | 'wave'              // волна исполнителей в работе
+  | 'awaitingDecision'  // эскалация: ждёт решения человека
+  | 'checking'          // финальная проверка (сборка/тесты)
+  | 'idle';             // итерация закрыта, режим ждёт новой вводной
+
+// Бюджет итерации: счётчики «израсходовано» + потолки (сбрасывается по новой вводной)
+export interface TeamImplementBudget {
+  tasksUsed: number;
+  wavesUsed: number;
+  runsUsed: number;
+  retriesUsed: number;
+  maxTasks: number;
+  maxWaves: number;
+  maxRuns: number;
+  maxRetries: number;
+}
+
+// Состояние режима на сессии (Session.teamImplement); null — режим выключен.
+// Состав исполнителей: пустой список = вся команда проекта.
+export interface SessionTeamImplement {
+  stage: TeamImplementStage;
+  waveNumber: number;
+  autoWaves: boolean;
+  coordinatorPersonaId?: string | null;
+  plannerPersonaId?: string | null;
+  executorPersonaIds: string[];
+  budget: TeamImplementBudget;
+  planCardId?: string | null;
+}
+
+// Live-состояние режима (из события team_implement; флаг team-implement-mode)
+export interface TeamImplementState extends SessionTeamImplement {
+  active: boolean;
 }
 
 // Элементы чата

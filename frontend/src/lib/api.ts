@@ -902,6 +902,19 @@ export const api = {
         method: 'PUT',
         body: JSON.stringify({ enabled }),
       }),
+    // Режим «Командная реализация» (флаг team-implement-mode): вкл/выкл режима чата-штаба.
+    // При включении можно сразу задать авто-волны и состав (пустой список = вся команда)
+    setTeamImplement: (id: string, enabled: boolean, opts?: { autoWaves?: boolean; coordinatorPersonaId?: string; plannerPersonaId?: string; executorPersonaIds?: string[] }) =>
+      request<Session>(`/chats/${id}/team-implement`, {
+        method: 'PUT',
+        body: JSON.stringify({ enabled, ...opts }),
+      }),
+    // Переключение авто-волн на ходу (из бейджа режима): трогает только флаг, не режим
+    setTeamImplementAuto: (id: string, autoWaves: boolean) =>
+      request<Session>(`/chats/${id}/team-implement/auto`, {
+        method: 'PUT',
+        body: JSON.stringify({ autoWaves }),
+      }),
     // Отдельное git worktree чата: вкл — сессия переезжает в изолированное дерево на новой
     // ветке (начатый чат — с переносом контекста), выкл — возврат в корень проекта.
     // force подтверждает потерю несохранённых правок дерева. Только проектные чаты.

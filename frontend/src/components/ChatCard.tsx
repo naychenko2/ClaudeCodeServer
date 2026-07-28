@@ -1,7 +1,8 @@
-import { AlertCircle, CheckCircle2, Clock, Pin, SquarePen, Tags, Trash2, Wrench } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Clock, Pin, SquarePen, Tags, Trash2, Users, Wrench } from 'lucide-react';
 import type { Session } from '../types';
 import { C, R, SHADOW, FONT } from '../lib/design';
 import { IconButton } from './ui';
+import { ICON_STROKE } from './ui/icons';
 import { StatusIndicator } from './StatusIndicator';
 import { ExpiryBadge } from './ExpiryBadge';
 import { ChatOriginBadge } from './ChatOriginBadge';
@@ -13,6 +14,8 @@ import { PersonaBackdrop } from '../features/personas/PersonaFace';
 import { TeamMechanicBadge } from '../features/team/TeamMechanicBadge';
 import { teamTurnPreview } from '../features/team/teamMechanics';
 import { getLastMechanic } from '../lib/lastMechanic';
+import { useFeature, FLAGS } from '../lib/featureFlags';
+import { teamImplementTone, teamImplementStageShort, teamImplementBadgeText } from '../lib/teamImplement';
 
 // Ширина правой зоны: под ней ровно помещаются три кнопки действий (по 24) с их
 // отступом. Лицо собеседника занимает эту же полосу, кнопки всплывают поверх него
@@ -71,6 +74,33 @@ function TaskStatusLine({ info }: { info: TaskChatInfo }) {
   );
 }
 
+// Маркер режима «Командная реализация» в строке названия (макет team-implement-mode,
+// секция 2): плашка 17px по образцу WF-бейджа, иконка Users + короткая форма стадии,
+// тон — по тому, кто должен действовать; тултип — полная строка бейджа
+function TeamImplementMarker({ session }: { session: Session }) {
+  const ti = session.teamImplement;
+  if (!ti) return null;
+  const tone = teamImplementTone(ti.stage);
+  const toneStyle = tone === 'work'
+    ? { background: C.accentLight, color: C.accent, border: `1px solid ${C.accentMuted}` }
+    : tone === 'wait'
+      ? { background: C.warningBg, color: C.warningText, border: `1px solid ${C.warning}` }
+      : { background: C.bgSelected, color: C.textMuted, border: '1px solid transparent' };
+  return (
+    <span
+      title={teamImplementBadgeText(ti.stage, ti.waveNumber, ti.budget?.maxWaves)}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 4, height: 17, padding: '0 6px',
+        borderRadius: R.max, fontSize: 10, fontWeight: 600, lineHeight: 1,
+        flexShrink: 0, whiteSpace: 'nowrap', ...toneStyle,
+      }}
+    >
+      <Users size={10} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+      {teamImplementStageShort(ti.stage, ti.waveNumber, ti.budget?.maxWaves)}
+    </span>
+  );
+}
+
 interface Props {
   session: Session;
   isActive: boolean;
@@ -120,6 +150,8 @@ export function ChatCard({
   const displayName = (taskChat ? taskChat.title : s.name) || fallbackName;
   // Последняя запущенная в чате механика команды — компактный бейдж
   const mechanic = getLastMechanic(s.id);
+  // Режим «Командная реализация» — маркер стадии в строке названия (за фич-флагом)
+  const teamImplementOn = useFeature(FLAGS.teamImplementMode);
   // Действия: с мышью — по наведению, на тач-устройствах — у выбранного чата.
   // Показывать их на тач всегда нельзя: они висели бы поверх лица собеседника на
   // каждой карточке. Тап по чату и открывает его, и раскрывает кнопки.
@@ -199,6 +231,7 @@ export function ChatCard({
           }}>
             {displayName}
           </span>
+          {teamImplementOn && <TeamImplementMarker session={s} />}
           <ExpiryBadge session={s} />
           {/* Закрепление: иконка-признак, сама кнопка живёт в блоке действий */}
           {s.isPinned && (

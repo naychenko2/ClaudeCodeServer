@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect, useMemo, useCallback, Fragment } from 'react';
 import { ArrowDown, RotateCw, CircleHelp } from 'lucide-react';
-import type { Project, Session, ChatItem, SkillInfo, AgentInfo, ClaudeBilling, Persona, WorkLoopState } from '../types';
+import type { Project, Session, ChatItem, SkillInfo, AgentInfo, ClaudeBilling, Persona, WorkLoopState, SessionTeamImplement } from '../types';
 import { useSession } from '../hooks/useSession';
+import { useFeature, FLAGS } from '../lib/featureFlags';
 import { usePersonasVersion, getPersonaById, getPersonasSnapshot, ensurePersonasLoaded, personaLabel } from '../lib/personas';
 import { findConsultedPersona } from './chat/PersonaTaskView';
 import { showToast } from '../lib/toast';
@@ -111,7 +112,7 @@ function derivePlanPhase(items: ChatItem[], mode: Mode, isWaiting: boolean): Pla
 }
 
 export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, attachedFiles, onAttachedFilesChange, artifactsOpen, onToggleArtifacts, greetingBubble, headerIsland }: Props) {
-  const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, workLoop: liveWorkLoop, promptSuggestion, pending, composerRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, compact, toggleThinking, noteCompanionSwitch, cancelPending } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
+  const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, workLoop: liveWorkLoop, teamImplement: liveTeamImplement, promptSuggestion, pending, composerRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, compact, toggleThinking, noteCompanionSwitch, cancelPending } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
   // Цикл «до готово» (флаг work-loop): live-состояние из событий work_loop,
   // до первого события — из Session.workLoop; null — цикл выключен
   const workLoopState = useMemo<WorkLoopState | null>(() => {
@@ -128,6 +129,37 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       showToast('Цикл «до готово»', err instanceof Error ? err.message : 'Не удалось переключить цикл');
     }
   }, [session.id, workLoopState, onSessionUpdated]);
+
+  // Режим «Командная реализация» (флаг team-implement-mode): live-состояние из событий
+  // team_implement, до первого события — из Session.teamImplement; null — режим выключен
+  const teamImplementOn = useFeature(FLAGS.teamImplementMode);
+  const teamImplementState = useMemo<SessionTeamImplement | null>(() => {
+    if (!teamImplementOn) return null;
+    if (liveTeamImplement !== undefined) {
+      if (!liveTeamImplement.active) return null;
+      const { active: _active, ...rest } = liveTeamImplement;
+      return rest;
+    }
+    return session.teamImplement ?? null;
+  }, [teamImplementOn, liveTeamImplement, session.teamImplement]);
+  const handleToggleTeamImplementAuto = useCallback(async () => {
+    if (!teamImplementState) return;
+    try {
+      const updated = await api.chats.setTeamImplementAuto(session.id, !teamImplementState.autoWaves);
+      onSessionUpdated?.(updated);
+    } catch (err) {
+      showToast('Командная реализация', err instanceof Error ? err.message : 'Не удалось переключить авто-волны');
+    }
+  }, [session.id, teamImplementState, onSessionUpdated]);
+  const handleDisableTeamImplement = useCallback(async () => {
+    try {
+      const updated = await api.chats.setTeamImplement(session.id, false);
+      onSessionUpdated?.(updated);
+      showToast('Командная реализация', 'Режим выключен — чат стал обычным разговором');
+    } catch (err) {
+      showToast('Командная реализация', err instanceof Error ? err.message : 'Не удалось выключить режим');
+    }
+  }, [session.id, onSessionUpdated]);
 
   // === Отдельное git worktree чата ===
   // Пока активен чат в worktree, все git-запросы проекта несут его sessionId —
@@ -1315,6 +1347,9 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
             onCreateGroup={handleCreateGroup}
             workLoop={workLoopState}
             onToggleWorkLoop={handleToggleWorkLoop}
+            teamImplement={teamImplementState}
+            onToggleTeamImplementAuto={teamImplementState ? handleToggleTeamImplementAuto : undefined}
+            onDisableTeamImplement={teamImplementState ? handleDisableTeamImplement : undefined}
             worktreeBranch={session.worktreeBranch}
             onToggleWorktree={project ? openWorktreeConfirm : undefined}
             chatContext={chatContext}

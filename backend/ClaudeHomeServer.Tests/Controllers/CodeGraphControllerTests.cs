@@ -136,18 +136,39 @@ public class CodeGraphControllerTests : IClassFixture<TestWebApplicationFactory>
     }
 
     [Fact]
-    public async Task Get_ГрафНеПостроен_Возвращает404()
+    public async Task Get_ГрафНеПостроен_Возвращает404ИЗапускаетФоновуюПостройку()
     {
         var dir = MkProjectDir("nograph");
         WriteCs(dir);
         var project = await CreateProjectAsync("nograph", dir);
         var id = project.GetProperty("id").GetString()!;
 
-        // Граф не строили — эндпоинт отдаёт 404 с понятным сообщением.
+        // Граф не строили — эндпоинт отдаёт 404, но запускает фоновый initial-build
+        // (HOTFIX прода) и маркирует ответ заголовком/флагом building — UI перезапросит.
         var resp = await _client.GetAsync($"/api/projects/{id}/code-graph");
         resp.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        resp.Headers.Contains("X-CodeGraph-Building").Should().BeTrue();
+        resp.Headers.GetValues("X-CodeGraph-Building").First().Should().Be("true");
         var body = JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync());
         body.GetProperty("message").GetString().Should().NotBeNullOrEmpty();
+        body.GetProperty("building").GetBoolean().Should().BeTrue(
+            "GET при отсутствии графа запускает фоновую постройку");
+
+        // Фоновый rebuild действительно отработал — стор появился (graph.json создан).
+        var persistence = _factory.Services.GetRequiredService<GraphPersistence>();
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        bool appeared;
+        do
+        {
+            appeared = await persistence.LoadSnapshotAsync(dir, CancellationToken.None) is not null;
+            if (appeared) break;
+            await Task.Delay(150);
+        } while (DateTime.UtcNow < deadline);
+        appeared.Should().BeTrue("build-on-first-GET: фоновый rebuild сохраняет граф в стор");
+
+        // Повторный GET после постройки — граф доступен (200), повторный rebuild не нужен.
+        var after = await _client.GetAsync($"/api/projects/{id}/code-graph");
+        after.StatusCode.Should().Be(HttpStatusCode.OK);
     }
 
     [Fact]

@@ -23,7 +23,9 @@ public class CodeGraphController(
     private string? UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub);
 
     /// <summary>
-    /// Граф кода проекта (v1): 200 — граф; 404 — не построен/проект не найден; 403 — чужой проект.
+    /// Граф кода проекта (v1): 200 — граф (возможно isStale); 404 — не построен/проект не найден
+    /// (при отсутствии графа запускается фоновый initial-build, ответ несёт X-CodeGraph-Building);
+    /// 403 — чужой проект.
     /// </summary>
     [HttpGet]
     public async Task<IActionResult> Get(string projectId, CancellationToken ct)
@@ -44,7 +46,23 @@ public class CodeGraphController(
         {
             var snapshot = await graphs.GetSnapshotAsync(project.RootPath, ct);
             if (snapshot is null)
-                return NotFound(new { message = "Граф кода ещё не построен для этого проекта" });
+            {
+                // Граф ещё не построен — запускаем фоновый initial-build (не блокируя запрос):
+                // HOTFIX прода — без этого граф строился только реактивно на .cs-сохранения,
+                // и на свежем старте (без правок) панель «Граф» оставалась пустой.
+                graphs.StartRebuildIfIdle(project.RootPath);
+                Response.Headers["X-CodeGraph-Building"] = "true";
+                return NotFound(new
+                {
+                    message = "Граф кода строится, обновите через несколько секунд",
+                    building = true,
+                });
+            }
+
+            // Граф есть, но несвежий (.cs новее BuiltAt) — фоновое обновление, не блокируя ответ:
+            // UI показывает граф с пометкой устаревания, а следующий GET получит уже свежий снимок.
+            if (snapshot.Metadata.IsStale)
+                graphs.StartRebuildIfIdle(project.RootPath);
 
             return Ok(snapshot);
         }

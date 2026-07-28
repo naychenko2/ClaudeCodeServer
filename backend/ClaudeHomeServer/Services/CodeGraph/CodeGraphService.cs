@@ -26,6 +26,11 @@ public sealed class CodeGraphService : IDisposable
     // по таймеру) отменяет предыдущий — orphan-задачи не копятся. Dispose отменяет все.
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _activeRebuilds = new();
 
+    // Фоновые перестроения по запросу GET (build-on-first-GET): normalizedRootPath → CTS.
+    // Guard «не плодить»: пока одно построение бежит, повторные GET его не дублируют.
+    // Отдельно от _activeRebuilds — тем владеет дебаунс-таймер; Dispose отменяет все.
+    private readonly ConcurrentDictionary<string, CancellationTokenSource> _onDemandRebuilds = new();
+
     // Токен остановки сервиса: отменяет все фоновые перестроения разом.
     private readonly CancellationTokenSource _stopping = new();
 
@@ -155,6 +160,12 @@ public sealed class CodeGraphService : IDisposable
         }
         _activeRebuilds.Clear();
 
+        foreach (var cts in _onDemandRebuilds.Values)
+        {
+            try { cts.Cancel(); } catch (ObjectDisposedException) { }
+        }
+        _onDemandRebuilds.Clear();
+
         _stopping.Dispose();
     }
 
@@ -180,6 +191,58 @@ public sealed class CodeGraphService : IDisposable
 
         _logger.LogInformation("Граф перестроен для {Path}: {Nodes} узлов, {Edges} рёбер",
             rootPath, graph.Nodes.Count, graph.Edges.Count);
+    }
+
+    /// <summary>
+    /// Запустить фоновое построение графа, не блокируя вызывающего (build-on-first-GET).
+    /// Переиспользует RebuildAsync (BuildInternalAsync+SaveAsync, минуя дебаунс) — НЕ дублирует.
+    /// Guard «один фоновый rebuild per project»: пока построение проекта бежит, повторные
+    /// запросы (частые GET UI) его не плодят — _onDemandRebuilds. true — построение только что
+    /// запущено; false — уже бежит, новый не нужен (UI всё равно получит граф следующим GET).
+    /// </summary>
+    public bool StartRebuildIfIdle(string rootPath)
+    {
+        var normalized = WorkspaceKnowledgeStore.NormalizePath(rootPath);
+
+        // Связанный CTS: отменяется при остановке сервиса — orphan-задача не переживёт Dispose.
+        var cts = CancellationTokenSource.CreateLinkedTokenSource(_stopping.Token);
+        if (!_onDemandRebuilds.TryAdd(normalized, cts))
+        {
+            // Для этого проекта уже бежит фоновое построение — не плодим конкурирующие rebuild.
+            cts.Dispose();
+            return false;
+        }
+
+        _ = RebuildOnDemandAsync(rootPath, normalized, cts);
+        return true;
+    }
+
+    /// <summary>
+    /// Фоновое построение (fire-and-forget) поверх RebuildAsync. По завершении
+    /// (успех/ошибка/отмена) снимает guard, чтобы следующий запрос мог запустить новое.
+    /// </summary>
+    private async Task RebuildOnDemandAsync(string rootPath, string normalized, CancellationTokenSource cts)
+    {
+        try
+        {
+            _logger.LogInformation("Фоновое построение графа (on-demand) для {Path}", rootPath);
+            await RebuildAsync(rootPath, cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            // Остановка сервиса — штатно, не ошибка.
+            _logger.LogDebug("Фоновое построение графа для {Path} отменено", rootPath);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Ошибка фонового построения графа для {Path}", rootPath);
+        }
+        finally
+        {
+            // Снимаем из реестра только СЕБЯ: на нашем месте мог оказаться CTS следующего запроса.
+            if (_onDemandRebuilds.TryRemove(new KeyValuePair<string, CancellationTokenSource>(normalized, cts)))
+                cts.Dispose();
+        }
     }
 
     /// <summary>

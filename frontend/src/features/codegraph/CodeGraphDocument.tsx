@@ -2,9 +2,10 @@
 // открытый файл: та же модель «документ поверх чата», что у FileViewer (корневой
 // flex-контейнер + Toolbar-шапка), крестик закрытия возвращает центр к чату.
 // Оборачивается в centerIsland в DesktopWorkspace — как прочие документы центра.
-// Четыре состояния: построен (SVG-холст) / empty (404) / loading / error.
-// isStale — мягкий warning-бейдж в шапке + «Перестроить» как главное действие.
-// На мобиле документ на весь экран, режимы и паспорт — в нижней шторке по FAB.
+// Состояния: построен (SVG-холст) / empty (404) / loading / building (сборка идёт,
+// авто-polling стора) / error. isStale — мягкий warning-бейдж в шапке + «Перестроить»
+// как главное действие. На мобиле документ на весь экран, режимы и паспорт — в нижней
+// шторке по FAB.
 import { useMemo, useState, useEffect } from 'react';
 import { Network, RefreshCw, X, SlidersHorizontal, AlertTriangle } from 'lucide-react';
 import { C, FONT, FS, R, SP, SHADOW } from '../../lib/design';
@@ -90,8 +91,8 @@ export function CodeGraphDocument({ projectId, isMobile, onClose, onOpenFile, on
         )}
         <Button variant={isStale ? 'primary' : 'secondary'} size="sm" pill
           style={{ flexShrink: 0 }}
-          loading={s.status === 'loading'}
-          onClick={() => a.load(projectId, true)}
+          loading={s.status === 'loading' || s.status === 'building'}
+          onClick={() => a.build(projectId)}
           leftIcon={<RefreshCw size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
           title="Перестроить граф">
           {!isMobile && 'Перестроить'}
@@ -111,6 +112,14 @@ export function CodeGraphDocument({ projectId, isMobile, onClose, onOpenFile, on
             <WaitingIndicator />
             <div style={{ ...serifTitle, marginTop: SP.md }}>Анализирую зависимости</div>
             <p style={centerNote}>Roslyn разбирает исходники, извлекает типы и рёбра между ними.</p>
+          </Center>
+        )}
+
+        {s.status === 'building' && (
+          <Center>
+            <WaitingIndicator hint="Сборка займёт около минуты — граф появится сам" />
+            <div style={{ ...serifTitle, marginTop: SP.md }}>Строю граф зависимостей</div>
+            <p style={centerNote}>Сборка запущена — документ обновится автоматически, закрывать его не нужно.</p>
           </Center>
         )}
 

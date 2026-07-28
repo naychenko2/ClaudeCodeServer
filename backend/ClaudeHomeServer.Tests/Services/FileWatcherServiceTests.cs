@@ -50,16 +50,19 @@ public class FileWatcherServiceTests : IClassFixture<TestWebApplicationFactory>
             // Поднимаем watch — polling начнёт сканировать RootPath (базовый снапшот).
             watcher.Watch(projectId, conn);
 
-            // До изменения графа нет — GET отдаёт 404 (панель empty).
+            // До изменения граф не построен — GET отдаёт 404 и запускает фоновый initial-build
+            // (HOTFIX прода); граф материализуется асинхронно, поэтому статус — ещё 404.
             var before = await _client.GetAsync($"/api/projects/{projectId}/code-graph");
             before.StatusCode.Should().Be(HttpStatusCode.NotFound,
-                "до .cs-изменения граф не должен быть построен");
+                "в момент запроса граф ещё не построен");
 
             // Изменение: добавляем новый .cs с новым типом — именно то, что ловит FileWatcher.
             File.WriteAllText(Path.Combine(dir, "Baz.cs"), "namespace Demo { public class Baz {} }");
 
-            // Ждём полного цикла: poll(150) → flush(400) → CodeGraph debounce(50) → rebuild → save.
-            // Поллинг на GET /code-graph, пока граф не materialизуется (или таймаут).
+            // Ждём полного цикла: poll → flush → CodeGraph debounce → rebuild → save.
+            // НЕ выходим по первому 200: build-on-first-GET мог построить граф (Foo+Bar) до того,
+            // как FileWatcher донёс добавление Baz. Ждём именно новый класс — это и есть суть
+            // реактивного обновления, и она устойчива к опережающему initial-build.
             var deadline = DateTime.UtcNow.AddSeconds(15);
             JsonElement body = default;
             var built = false;
@@ -69,8 +72,14 @@ public class FileWatcherServiceTests : IClassFixture<TestWebApplicationFactory>
                 if (get.StatusCode == HttpStatusCode.OK)
                 {
                     body = JsonSerializer.Deserialize<JsonElement>(await get.Content.ReadAsStringAsync());
-                    built = true;
-                    break;
+                    var files = body.GetProperty("nodes").EnumerateArray()
+                        .Select(n => n.GetProperty("sourceFile").GetString()!)
+                        .ToArray();
+                    if (files.Any(f => f.Contains("Baz.cs")))
+                    {
+                        built = true;
+                        break;
+                    }
                 }
                 await Task.Delay(200);
             }

@@ -10,7 +10,7 @@ import { useMemo, useSyncExternalStore } from 'react';
 import type { CodeGraph, CodeGraphRelation } from '../types';
 import { api } from './api';
 
-export type CodeGraphStatus = 'idle' | 'loading' | 'ready' | 'empty' | 'error';
+export type CodeGraphStatus = 'idle' | 'loading' | 'building' | 'ready' | 'empty' | 'error';
 
 export interface CodeGraphFilters {
   Calls: boolean;
@@ -50,11 +50,15 @@ function subscribe(l: () => void) { listeners.add(l); return () => { listeners.d
 function set(patch: Partial<State>) { _state = { ..._state, ...patch }; emit(); }
 
 // Загрузка графа проекта. Идемпотентна: повторный вызов для того же projectId при
-// готовых/загружаемых данных без force — no-op (не дёргаем сеть на каждый рендер).
-// force=true — принудительное обновление (кнопка «Перестроить/Обновить»).
-// 404 → статус 'empty' (граф не построен), 403/прочее → 'error'.
+// готовых/загружаемых/строящихся данных без force — no-op (не дёргаем сеть на каждый
+// рендер и не сбиваем идущий polling сборки).
+// force=true — принудительное обновление (кнопка «Обновить»).
+// 404 → статус 'empty' (граф не построен); 404 + заголовок X-CodeGraph-Building —
+// бэкенд уже строит в фоне (build-on-first-GET): статус 'building' + авто-polling.
+// 403/прочее → 'error'.
 export async function loadCodeGraph(projectId: string, force = false): Promise<void> {
-  if (!force && _state.projectId === projectId && (_state.status === 'ready' || _state.status === 'loading')) {
+  if (!force && _state.projectId === projectId
+    && (_state.status === 'ready' || _state.status === 'loading' || _state.status === 'building')) {
     return;
   }
   // Смена проекта — сбрасываем режимы к дефолтам, чтобы не тащить выбор/фильтры из старого
@@ -74,13 +78,86 @@ export async function loadCodeGraph(projectId: string, force = false): Promise<v
     const data = await api.projects.codeGraph(projectId);
     set({ data, status: 'ready', error: null });
   } catch (e) {
-    const err = e as Error & { status?: number };
+    const err = e as Error & { status?: number; responseHeaders?: Headers };
     if (err.status === 404) {
-      set({ data: null, status: 'empty', error: null });
+      if (err.responseHeaders?.get('X-CodeGraph-Building') === 'true') {
+        // Бэкенд сам запустил сборку — показываем «строится…» и ждём готовности
+        set({ data: null, status: 'building', error: null });
+        startGraphPolling(projectId);
+      } else {
+        set({ data: null, status: 'empty', error: null });
+      }
     } else {
       set({ data: null, status: 'error', error: err.message ?? 'Не удалось загрузить граф' });
     }
   }
+}
+
+// Явное построение графа (кнопка «Построить граф» в empty-state, «Перестроить» в
+// stale-бейдже). POST /code-graph/build — синхронный rebuild на бэке (202 = построен),
+// затем догружаем снапшот polling'ом (страховка на случай гонки «202 пришёл, а GET
+// ещё 404»). Повторный вызов во время сборки — no-op (двойной клик по кнопке).
+export async function buildCodeGraph(projectId: string): Promise<void> {
+  if (_state.projectId === projectId && _state.status === 'building') return;
+  set({ status: 'building', error: null });
+  try {
+    await api.projects.codeGraphBuild(projectId);
+  } catch (e) {
+    // Сборка могла завершиться, пока юзер уходил на другой проект, — не затираем его стор
+    if (_state.projectId !== projectId) return;
+    const err = e as Error & { status?: number };
+    set({ status: 'error', error: err.message ?? 'Не удалось построить граф' });
+    return;
+  }
+  if (_state.projectId !== projectId || _state.status !== 'building') return;
+  startGraphPolling(projectId);
+}
+
+// Polling готовности графа после запуска сборки (явной или фоновой на бэке):
+// GET раз в 2с до появления снапшота. Дедуплицируется — параллельных циклов нет.
+// GET опрашивает напрямую api (не loadCodeGraph — тот no-op при 'building').
+const POLL_INTERVAL_MS = 2_000;
+// 45 попыток × 2с ≈ 90с ожидания — перекрывает типичную первичную сборку «около минуты»
+const POLL_MAX_ATTEMPTS = 45;
+let _pollingProjectId: string | null = null;
+
+function startGraphPolling(projectId: string): void {
+  if (_pollingProjectId === projectId) return;
+  _pollingProjectId = projectId;
+  void (async () => {
+    // Допуск на сетевые глитчи: три подряд не-404 ошибки — сдаёмся в error
+    let failures = 0;
+    try {
+      for (let attempt = 0; attempt < POLL_MAX_ATTEMPTS; attempt++) {
+        await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
+        // Юзер сменил проект или статус уже сменился (повтор/ошибка) — цикл не нужен
+        if (_state.projectId !== projectId || _state.status !== 'building') return;
+        try {
+          const data = await api.projects.codeGraph(projectId);
+          if (_state.projectId !== projectId || _state.status !== 'building') return;
+          set({ data, status: 'ready', error: null });
+          return;
+        } catch (e) {
+          const err = e as Error & { status?: number };
+          if (err.status === 404) {
+            failures = 0; // сборка ещё идёт — штатное ожидание
+            continue;
+          }
+          if (++failures >= 3) {
+            if (_state.projectId !== projectId || _state.status !== 'building') return;
+            set({ status: 'error', error: err.message ?? 'Не удалось загрузить граф' });
+            return;
+          }
+        }
+      }
+      // Таймаут ожидания: сборка затянулась — отдаём ошибку с возможностью повторить
+      if (_state.projectId === projectId && _state.status === 'building') {
+        set({ status: 'error', error: 'Сборка графа заняла слишком много времени — попробуйте ещё раз.' });
+      }
+    } finally {
+      if (_pollingProjectId === projectId) _pollingProjectId = null;
+    }
+  })();
 }
 
 export function setGraphFilter(rel: CodeGraphRelation, on: boolean) {
@@ -124,6 +201,7 @@ export function useCodeGraphActions() {
   // бесконечный цикл loading→404→empty→эффект→loading… (десятки запросов/сек).
   return useMemo(() => ({
     load: (projectId: string, force?: boolean) => { void loadCodeGraph(projectId, force); },
+    build: (projectId: string) => { void buildCodeGraph(projectId); },
     toggleFilter: toggleGraphFilter,
     resetFilters: resetGraphFilters,
     setQuery: setGraphQuery,

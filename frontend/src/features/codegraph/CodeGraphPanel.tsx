@@ -4,9 +4,9 @@
 // контролы блокируются при loading. Сама панель живёт в PanelShell рельсы
 // (RightPanelStack), который даёт шапку острова и кнопку закрытия — здесь только тело.
 import { useEffect, useMemo } from 'react';
-import { Search, ChevronRight, FileCode, RefreshCw, AlertTriangle } from 'lucide-react';
+import { Search, ChevronRight, FileCode, RefreshCw, AlertTriangle, Loader } from 'lucide-react';
 import { C, FONT, FS, R, SP } from '../../lib/design';
-import { Button, Dot, IconField, EmptyState } from '../../components/ui';
+import { Button, Dot, IconField, EmptyState, WaitingIndicator } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { useCodeGraph, useCodeGraphActions, GRAPH_RELATIONS } from '../../lib/codeGraph';
 import { layoutGraph } from './graphLayout';
@@ -46,11 +46,24 @@ export function CodeGraphPanel({ projectId, onEnsureGraphOpen, onOpenFile, onBui
     return s.data.nodes.find(n => n.id === s.selectedId) ?? null;
   }, [s.selectedId, s.data]);
 
-  const disabled = s.status === 'loading';
+  const disabled = s.status === 'loading' || s.status === 'building';
   const empty = s.status === 'empty';
 
   // Режимное действие (меняет вид графа) → помимо эффекта, открывает документ в центре
   const withEnsureOpen = (fn: () => void) => () => { fn(); onEnsureGraphOpen(); };
+
+  if (s.status === 'building') {
+    // Сборка запущена (кнопкой или бэкендом) — ждём: polling сам переведёт в ready.
+    // Иконка Loader, не RefreshCw как у empty: состояния должны различаться с первого взгляда
+    return (
+      <EmptyState compact
+        icon={<Loader size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} />}
+        title="Граф строится…"
+        subtitle="Сборка займёт около минуты — панель обновится сама."
+        action={<WaitingIndicator />}
+      />
+    );
+  }
 
   if (empty) {
     // Empty: фильтры бессмысленны без данных — только сборка
@@ -88,7 +101,7 @@ export function CodeGraphPanel({ projectId, onEnsureGraphOpen, onOpenFile, onBui
             <span>Код изменился после сборки — граф может отставать.</span>
           </div>
           <Button variant="primary" size="sm" fullWidth style={{ marginTop: SP.sm }}
-            onClick={() => a.load(projectId, true)}
+            onClick={() => a.build(projectId)}
             leftIcon={<RefreshCw size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}>
             Перестроить
           </Button>

@@ -37,6 +37,28 @@ public class CodeGraphServiceTests : IClassFixture<TestWebApplicationFactory>
         }
     }
 
+    /// <summary>
+    /// Провайдер с задержкой: держит rebuild достаточно долго, чтобы второй конкурентный
+    /// StartRebuildIfIdle гарантированно застал guard «уже бежит» (детерминированность теста).
+    /// </summary>
+    private sealed class SlowGraphProvider : ICodeGraphProvider
+    {
+        private readonly int _delayMs;
+        public int BuildCalls;
+
+        public SlowGraphProvider(int delayMs) => _delayMs = delayMs;
+
+        public async Task<CodeGraph> BuildAsync(string rootPath, CancellationToken ct)
+        {
+            Interlocked.Increment(ref BuildCalls);
+            await Task.Delay(_delayMs, ct);
+            return CodeGraph.Empty;
+        }
+
+        public Task<CodeGraph> UpdateAsync(string rootPath, IEnumerable<string> changedFiles, CancellationToken ct)
+            => BuildAsync(rootPath, ct);
+    }
+
     [Fact]
     public async Task RebuildAsync_ОтменяетPendingДебаунс()
     {
@@ -82,5 +104,34 @@ public class CodeGraphServiceTests : IClassFixture<TestWebApplicationFactory>
         Thread.Sleep(300);
         tracking.BuildCalls.Should().Be(0);
         tracking.UpdateCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task StartRebuildIfIdle_НеПлодитКонкурентныеПостроения()
+    {
+        var service = _factory.Services.GetRequiredService<CodeGraphService>();
+        var slow = new SlowGraphProvider(delayMs: 400);
+        service.RegisterProvider(".cs", slow);
+
+        var dir = Path.Combine(_factory.TempDir, "cgraph_ondemand_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        await File.WriteAllTextAsync(Path.Combine(dir, "Foo.cs"), "public class Foo { }");
+
+        // Два запроса почти одновременно: первый занимает guard, второй обязан застать
+        // бегущее построение и НЕ запускать второй rebuild (иначе частые GET UI плодят их).
+        var first = service.StartRebuildIfIdle(dir);
+        var second = service.StartRebuildIfIdle(dir);
+
+        first.Should().BeTrue("первый запрос запускает фоновое построение");
+        second.Should().BeFalse("второй запрос застал бегущее построение — guard сработал");
+
+        // Даём фоновому построению завершиться и проверяем: провайдер вызван ровно один раз.
+        await Task.Delay(800);
+        slow.BuildCalls.Should().Be(1, "конкурентные запросы не плодят rebuild");
+
+        // Guard снят по завершении — следующий запрос снова может запустить построение.
+        var again = service.StartRebuildIfIdle(dir);
+        again.Should().BeTrue("после завершения guard свободен для нового запроса");
+        await Task.Delay(800);
     }
 }

@@ -251,9 +251,11 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: res.statusText }));
       // Статус прикрепляем к ошибке — потребители (offline-очередь) отличают 404/4xx
-      // (перманентно) от 5xx/сетевых (стоит повторить)
-      const httpErr = new Error(err.error ?? res.statusText) as Error & { status?: number };
+      // (перманентно) от 5xx/сетевых (стоит повторить). Заголовки тоже отдаём наружу:
+      // на них живут служебные маркеры вроде X-CodeGraph-Building («граф строится»).
+      const httpErr = new Error(err.error ?? res.statusText) as Error & { status?: number; responseHeaders?: Headers };
       httpErr.status = res.status;
+      httpErr.responseHeaders = res.headers;
       throw httpErr;
     }
 

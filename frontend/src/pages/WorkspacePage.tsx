@@ -50,7 +50,7 @@ import { DesktopWorkspace } from './workspace/DesktopWorkspace';
 import { TerminalPanelContent, PreviewPanelContent } from './workspace/panels';
 import { CodeGraphPanel } from '../features/codegraph/CodeGraphPanel';
 import { CodeGraphDocument } from '../features/codegraph/CodeGraphDocument';
-import { loadCodeGraph } from '../lib/codeGraph';
+import { buildCodeGraph } from '../lib/codeGraph';
 
 interface Props {
   project: Project;
@@ -886,11 +886,10 @@ const windowWidth = useWindowWidth();
     if (isMobile) setMobileView('chat');
   }, [isMobile]);
 
-  // «Построить граф» (empty-state): backend v1 — read-only снапшот (POST build
-  // эндпоинта нет), поэтому кнопка — повторная загрузка: подхватывает граф, когда
-  // бэкенд построит его фоново.
+  // «Построить граф» (empty-state документа и панели): явный POST-build на бэке,
+  // стор сам переходит в 'building' и дожидается готовности polling'ом.
   const handleGraphBuild = useCallback(() => {
-    void loadCodeGraph(project.id, true);
+    void buildCodeGraph(project.id);
   }, [project.id]);
 
   const handleSelectSession = (session: Session, firstMessage?: string, autoSelect?: boolean) => {

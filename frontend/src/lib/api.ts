@@ -327,7 +327,14 @@ export const api = {
     // Code Graph: карта типов и связей проекта. 404 (граф не построен) и 403
     // (чужой проект) уходят в статус-коде ошибки — потребитель (lib/codeGraph.ts)
     // отличает их от сетевого сбоя по err.status (см. request в offline.ts).
+    // При 404 бэкенд может прислать заголовок X-CodeGraph-Building: true — значит,
+    // сборка уже идёт в фоне (build-on-first-GET), клиенту остаётся ждать.
     codeGraph: (id: string) => request<CodeGraph>(`/projects/${encodeURIComponent(id)}/code-graph`),
+    // Явное построение графа (кнопка «Построить граф»/«Перестроить»): 202 — построен.
+    // Rebuild на бэке синхронный и на большом проекте идёт десятки секунд —
+    // поэтому таймаут запроса поднят до 3 минут (дефолтный 30с перехватил бы сборку).
+    codeGraphBuild: (id: string) =>
+      request<void>(`/projects/${encodeURIComponent(id)}/code-graph/build`, { method: 'POST', timeoutMs: 180_000 }),
     // Preview: сервисы проекта (инференс из манифестов + сохранённые в .claude/launch.json)
     services: (id: string) =>
       request<{ services: ProjectService[]; activeServiceId: string | null }>(`/projects/${id}/services`),

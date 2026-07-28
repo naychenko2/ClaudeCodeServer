@@ -14,15 +14,17 @@ import type { ChatFilters, ChatGroupBy, ChatSortOrder } from '../lib/chatFilters
 // [+] главное действие → группировка (PillSwitch) → фильтры с бейджем → сортировка →
 // иерархия. Поиска здесь нет — он первой секцией поповера фильтров.
 // Ступени по ширине панели (ResizeObserver):
-//   comfort ≥400: «+ Новый чат» текстом, PillSwitch с иконками+текстом, IconButton md
-//   cozy 260–399: «+» квадрат 32, PillSwitch compact (активный текстом), IconButton sm
+//   comfort ≥400: «+ Новый» текстом, IconButton md
+//   cozy 260–399: «+» квадрат 32, IconButton sm
 //   compact <260: PillSwitch → IconButton с иконкой текущего режима + ui/Menu
 //   mobile: «+ Новый чат» flex, IconButton lg; оси — шторкой «Вид» (ui/Modal)
+// Группировка на десктопе — всегда PillSwitch iconsOnly (иконки + title-подсказки):
+// строка узкая, текст сегментов не влезает даже на comfort.
 
-const GROUP_BY_META: Record<ChatGroupBy, { label: string; Icon: typeof CalendarDays }> = {
-  days: { label: 'Дни', Icon: CalendarDays },
-  tags: { label: 'Теги', Icon: Tags },
-  none: { label: 'Без', Icon: List },
+const GROUP_BY_META: Record<ChatGroupBy, { label: string; title: string; Icon: typeof CalendarDays }> = {
+  days: { label: 'Дни', title: 'Группировка по дням', Icon: CalendarDays },
+  tags: { label: 'Теги', title: 'Группировка по тегам', Icon: Tags },
+  none: { label: 'Без', title: 'Без группировки', Icon: List },
 };
 
 const SORT_META: Record<ChatSortOrder, { title: string; Icon: typeof ArrowDownWideNarrow }> = {
@@ -85,10 +87,12 @@ export function ChatListToolbar({
   // глобального списка после переезда чата) — PillSwitch без активного сегмента
   // не рисует пилюлю, это валидное состояние; первый же выбор всё чинит.
   const pillOptions = groupByOptions.map(v => {
-    const Icon = GROUP_BY_META[v].Icon;
+    const m = GROUP_BY_META[v];
+    const Icon = m.Icon;
     return {
       value: v,
-      label: GROUP_BY_META[v].label,
+      label: m.label,
+      title: m.title,
       icon: <Icon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
     };
   });
@@ -184,7 +188,7 @@ export function ChatListToolbar({
       {/* Главное действие — единственный залитый элемент строки */}
       {!hideNew && (tier === 'comfort' ? (
         <Button variant="primary" size="sm" glow loading={creating} onClick={onNew} leftIcon={newIcon}>
-          Новый чат
+          Новый
         </Button>
       ) : (
         <Button variant="primary" size="sm" glow loading={creating} onClick={onNew}
@@ -193,7 +197,7 @@ export function ChatListToolbar({
         </Button>
       ))}
 
-      {/* Группировка: PillSwitch (compact-схлопнутый на cozy) или кнопка-меню на compact */}
+      {/* Группировка: PillSwitch только иконками (comfort/cozy) или кнопка-меню на compact */}
       {tier === 'compact' ? (
         <>
           <IconButton size="sm" title={`Группировка: ${groupByMeta.label} (сменить)`}
@@ -236,7 +240,7 @@ export function ChatListToolbar({
           value={groupBy}
           options={pillOptions}
           onChange={v => patch({ groupBy: v })}
-          compact={tier === 'cozy'}
+          iconsOnly
         />
       )}
 

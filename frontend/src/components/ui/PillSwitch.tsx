@@ -1,6 +1,6 @@
 import type { ReactNode, PointerEvent as ReactPointerEvent } from 'react';
 import { useRef, useState, useCallback, useLayoutEffect, useEffect } from 'react';
-import { C, TB, SHADOW } from '../../lib/design';
+import { C, TB, SHADOW, SP, FS } from '../../lib/design';
 
 // === Pill / сегмент-переключатель: единый стиль дорожки и активного сегмента ===
 // icon (опционально) рисуется слева от подписи — stroke-иконки в общем стиле (currentColor).
@@ -22,9 +22,9 @@ type PillGeom = { left: number; width: number };
 // так тап между вкладками анимируется, а не перескакивает.
 const pillMemory = new Map<string, PillGeom>();
 
-export function PillSwitch<T extends string>({ value, options, onChange, fill, isMobile, draggable, persistKey, compact, autoCompact, variant = 'default', renderOption }: {
+export function PillSwitch<T extends string>({ value, options, onChange, fill, isMobile, draggable, persistKey, compact, autoCompact, iconsOnly, variant = 'default', renderOption }: {
   value: T;
-  options: { value: T; label: string; icon?: ReactNode }[];
+  options: { value: T; label: string; icon?: ReactNode; title?: string }[];
   onChange: (v: T) => void;
   fill?: boolean;
   isMobile?: boolean;
@@ -33,6 +33,8 @@ export function PillSwitch<T extends string>({ value, options, onChange, fill, i
   compact?: boolean;
   /** Авто-компакт: включает compact при переполнении трека */
   autoCompact?: boolean;
+  /** Только иконки у всех сегментов (узкие тулбары); подпись уезжает в title/aria-label */
+  iconsOnly?: boolean;
   variant?: 'default' | 'hub';
   /** Кастомный рендер конкретного сегмента (вернуть null — обычная кнопка). Активный
    *  кастомный сегмент рисует свой фон и подавляет скользящую пилюлю под собой. */
@@ -252,20 +254,25 @@ export function PillSwitch<T extends string>({ value, options, onChange, fill, i
         }
         // В compact подпись привязана к value (не к highlight): при drag ширины
         // сегментов не меняются под пальцем — снапшот rects остаётся валидным
-        const showLabel = !effectiveCompact || opt.value === value;
+        const showLabel = iconsOnly ? false : (!effectiveCompact || opt.value === value);
         // В компакте активный сегмент показываем ТЕКСТОМ без иконки, остальные — иконкой
-        const showIcon = !effectiveCompact || opt.value !== value;
+        const showIcon = iconsOnly ? true : (!effectiveCompact || opt.value !== value);
         return (
           <button key={opt.value} ref={el => { btnRefs.current[i] = el; }}
             onClick={() => { if (suppressClick.current) return; onChange(opt.value); }}
             aria-label={opt.label}
+            title={iconsOnly ? (opt.title ?? opt.label) : undefined}
             style={{
               position: 'relative', zIndex: 1,
               flex: fill ? 1 : undefined,
-              padding: effectiveCompact ? (showLabel ? '0 12px' : '0 11px') : isMobile ? '8px 12px' : '6px 12px',
-              minHeight: effectiveCompact ? 40 : isMobile ? 40 : 32,
+              padding: iconsOnly ? (isMobile ? `${SP.sm}px ${SP.md}px` : `${SP.xs}px ${SP.sm}px`)
+                : effectiveCompact ? (showLabel ? '0 12px' : '0 11px')
+                : isMobile ? '8px 12px' : '6px 12px',
+              minHeight: iconsOnly ? (isMobile ? TB.iconHitMobile : TB.iconHitDesktop)
+                : effectiveCompact ? TB.iconHitMobile
+                : isMobile ? TB.iconHitMobile : TB.iconHitDesktop,
               borderRadius: TB.pillRadius - 2, border: 'none', cursor: 'pointer',
-              fontSize: effectiveCompact ? 12 : 13, fontWeight: 600, fontFamily: 'inherit', whiteSpace: 'nowrap',
+              fontSize: effectiveCompact ? FS.sm : FS.base, fontWeight: 600, fontFamily: 'inherit', whiteSpace: 'nowrap',
               transition: 'color 0.15s',
               background: 'transparent',
               color: active ? (hub ? C.onNavInk : C.textHeading) : C.textSecondary,

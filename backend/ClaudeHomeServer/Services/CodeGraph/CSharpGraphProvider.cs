@@ -248,7 +248,9 @@ public sealed partial class CSharpGraphProvider : ICodeGraphProvider
         var edges = new List<CodeGraphEdge>();
         var regex = TypeDeclRegex();
 
-        foreach (var file in Directory.EnumerateFiles(rootPath, "*.cs", SearchOption.AllDirectories))
+        // Тот же обход, что и в Roslyn-пути: мусорные каталоги (IgnoredDirectories) уже отсечены,
+        // иначе regex-fallback индексировал бы .claude/bin/obj… (баг прода).
+        foreach (var file in CompilationBuilder.EnumerateCsFiles(rootPath))
         {
             if (ct.IsCancellationRequested) break;
             try

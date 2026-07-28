@@ -41,6 +41,27 @@ public static class CompilationBuilder
     public const string ProjectAssemblyName = "CodeGraph.AnalyzedProject";
 
     /// <summary>
+    /// Каталоги, исключаемые из обхода .cs: кеш/зависимости/артефакты сборки/IDE-мусор.
+    /// Сравнение по имени каталога (case-insensitive), на любой глубине. Идея та же, что у
+    /// FileService.TreeExcludes, но шире: убираем .claude (плагины oh-my-claudecode и их кеш),
+    /// packages (NuGet), TestResults — иначе этот мусор раздувает detect и валит граф в
+    /// regex-fallback (баг прода: 7372 .cs в .claude/ → 7878 &gt; порога 5000 → Roslyn не звался).
+    /// </summary>
+    public static readonly HashSet<string> IgnoredDirectories = new(StringComparer.OrdinalIgnoreCase)
+    {
+        // VCS / IDE / кеш
+        ".git", ".claude", ".vs", ".idea", ".cache",
+        // Зависимости
+        "node_modules", "packages",
+        // Артефакты сборки .NET
+        "bin", "obj",
+        // Результаты тестов (coverage/temp)
+        "TestResults",
+        // Фронтенд/прочие build-артефакты (совпадает с FileService.TreeExcludes)
+        "dist", "dev-dist", "publish", ".next", "target",
+    };
+
+    /// <summary>
     /// Построить Compilation из всех .cs папки rootPath.
     /// </summary>
     /// <param name="maxFiles">Порог числа файлов; при превышении IsComplete=false.</param>
@@ -174,9 +195,14 @@ public static class CompilationBuilder
         return rel.Replace('\\', '/');
     }
 
-    private static IEnumerable<string> EnumerateCsFiles(string rootPath)
+    /// <summary>
+    /// Перечисляет .cs-файлы в rootPath, обходя каталоги в глубину, но минуя
+    /// мусорные (<see cref="IgnoredDirectories"/>: .claude, bin, obj, node_modules, packages…).
+    /// Стек вместо рекурсии AllDirectories — устойчивее к lock'ам каталога и даёт точку
+    /// для отсечения мусорных подкаталогов до чтения из них.
+    /// </summary>
+    public static IEnumerable<string> EnumerateCsFiles(string rootPath)
     {
-        // Перечисление через стек — устойчивее к lock-ам каталога, чем рекурсия AllDirectories.
         var stack = new Stack<string>();
         stack.Push(rootPath);
 
@@ -194,7 +220,13 @@ public static class CompilationBuilder
             catch (DirectoryNotFoundException) { continue; }
 
             foreach (var f in files) yield return f;
-            foreach (var sd in subdirs) stack.Push(sd);
+            foreach (var sd in subdirs)
+            {
+                // Мусорные каталоги (кеш/зависимости/артефакты) не обходим: их .cs не относятся
+                // к коду проекта и только раздували detect (баг прода — regex-fallback на ClaudeCodeServer).
+                if (IgnoredDirectories.Contains(Path.GetFileName(sd))) continue;
+                stack.Push(sd);
+            }
         }
     }
 

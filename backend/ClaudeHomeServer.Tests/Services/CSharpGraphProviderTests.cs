@@ -442,4 +442,61 @@ public class CSharpGraphProviderTests : IDisposable
             final.Nodes.Should().ContainKey(edge.Target, "висящий Target после rebuild");
         }
     }
+
+    // HOTFIX прода: мусорные каталоги (.claude/bin/obj/node_modules/packages…) не должны
+    // раздувать detect и валить граф в regex-fallback. Баг: на ClaudeCodeServer 7372 .cs
+    // в .claude/ → 7878 > порога 5000 → Roslyn не звался, UI «Граф» висел на regex-сборке.
+
+    [Fact]
+    public void EnumerateCsFiles_ПропускаетМусорныеКаталоги()
+    {
+        // Мусорные подкаталоги с .cs на разной глубине + единственный реальный файл.
+        foreach (var junk in new[]
+        {
+            ".claude/plugins/junk", "bin/Debug/net9.0", "obj/Debug/net9.0",
+            "node_modules/pkg", "packages/Lib.1.0/lib", ".vs", "TestResults",
+        })
+        {
+            var path = Path.Combine(_tempDir, junk.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(path);
+            File.WriteAllText(Path.Combine(path, "Junk.cs"), "public class Junk { }");
+        }
+        File.WriteAllText(Path.Combine(_tempDir, "Real.cs"), "public class Real { }");
+
+        var cs = CompilationBuilder.EnumerateCsFiles(_tempDir)
+            .Select(p => p.Replace('\\', '/'))
+            .ToList();
+
+        // Обнаружен только реальный файл — ни одного .cs из мусорных каталогов.
+        cs.Should().ContainSingle("мусорные каталоги отсечены на обходе")
+          .Which.Should().EndWith("Real.cs");
+    }
+
+    [Fact]
+    public async Task Build_ИсключаетМусорныеКаталоги_ИДержитRoslynПорог()
+    {
+        // Мусор не считается в detect → проект не падает в regex-fallback, граф строится через Roslyn.
+        await BuildAsync(
+            // Кеш oh-my-claudecode в .claude — главный виновник бага прода.
+            (".claude/plugins/junk/Cache.cs", "public class PluginJunk { }"),
+            ("bin/Debug/net9.0/Artifact.cs", "public class BuildArtifact { }"),
+            ("obj/Debug/net9.0/Generated.cs", "public class ObjGen { }"),
+            ("node_modules/pkg/sample.cs", "public class NpmSample { }"),
+            ("packages/Lib.1.0/lib/Foo.cs", "public class NugetLib { }"),
+            // Реальный код проекта — survives
+            ("Client.cs", "public class Client { public Service Svc = new Service(); }"),
+            ("Service.cs", "public class Service { }"));
+
+        var graph = await _provider.BuildAsync(_tempDir, CancellationToken.None);
+
+        // Мусорные типы не попали в граф.
+        graph.Nodes.Values.Select(n => n.Label)
+            .Should().NotContain(new[] { "PluginJunk", "BuildArtifact", "ObjGen", "NpmSample", "NugetLib" });
+        // Реальный код на месте.
+        graph.Nodes.Values.Select(n => n.Label)
+            .Should().Contain(new[] { "Client", "Service" });
+        // Ребро построено — значит Roslyn-путь (regex-fallback рёбер не строит).
+        HasEdge(graph, "Client", "Service", EdgeRelation.Calls).Should().BeTrue(
+            "мусор не свалил detect в regex-fallback — граф построен через Roslyn с рёбрами");
+    }
 }

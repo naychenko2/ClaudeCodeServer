@@ -17,6 +17,9 @@ import type { CodeGraphRelation, CodeGraphNode, CodeGraph, CodeGraphEdge } from 
 
 interface Props {
   projectId: string;
+  // Открыт ли сейчас документ графа в центре — кнопка «Показать граф в центре»
+  // нужна, только когда он закрыт (по макету сценария «граф закрыт»)
+  graphOpen?: boolean;
   // Открыть документ графа в центре (если закрыт). Любое режимное действие панели
   // (фильтр, god-узел, поиск, переход в паспорте) открывает документ — правило макета.
   onEnsureGraphOpen: () => void;
@@ -24,7 +27,7 @@ interface Props {
   onBuild: () => void;
 }
 
-export function CodeGraphPanel({ projectId, onEnsureGraphOpen, onOpenFile, onBuild }: Props) {
+export function CodeGraphPanel({ projectId, graphOpen, onEnsureGraphOpen, onOpenFile, onBuild }: Props) {
   const s = useCodeGraph();
   const a = useCodeGraphActions();
 
@@ -60,6 +63,19 @@ export function CodeGraphPanel({ projectId, onEnsureGraphOpen, onOpenFile, onBui
         icon={<Loader size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} />}
         title="Граф строится…"
         subtitle="Сборка займёт около минуты — панель обновится сама."
+        action={<WaitingIndicator />}
+      />
+    );
+  }
+
+  if (s.status === 'loading' && !s.data) {
+    // Первичная загрузка: данных ещё нет — вместо «задизейбленной формы с нулями»
+    // честное состояние ожидания (обновление поверх готового графа — приглушение ниже)
+    return (
+      <EmptyState compact
+        icon={<Loader size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} />}
+        title="Загружаю граф…"
+        subtitle="Снапшот графа подгружается — обычно это секунды."
         action={<WaitingIndicator />}
       />
     );
@@ -196,6 +212,18 @@ export function CodeGraphPanel({ projectId, onEnsureGraphOpen, onOpenFile, onBui
           </p>
         )}
       </div>
+
+      {/* Явное открытие документа — только когда граф в центре закрыт
+          (по макету сценария «граф закрыт»: секция «Документ», кнопка во всю ширину
+          с заливкой и рамкой — ghostFilled, системный аналог макетной .btn-secondary) */}
+      {!graphOpen && (
+        <div style={{ padding: SP.md, borderTop: `1px solid ${C.borderLight}` }}>
+          <div style={{ ...sectionTitleStyle, marginBottom: SP.sm }}>Документ</div>
+          <Button variant="ghostFilled" size="sm" fullWidth onClick={onEnsureGraphOpen}>
+            Показать граф в центре
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

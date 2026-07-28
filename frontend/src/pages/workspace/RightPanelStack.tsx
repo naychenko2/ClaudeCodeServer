@@ -77,6 +77,10 @@ interface Props {
   // WorkspacePage (там живут данные git/задач/терминалов/сервисов). Сессионные кнопки
   // свои числа берут из артефактов сессии (railBadgeCount), не отсюда.
   railCounts?: Partial<Record<PanelKey, number>>;
+  // Хук на ЯВНУЮ активацию панели кликом по иконке рельсы (панель в результате
+  // открылась). Только клик: восстановление раскладки из localStorage его не дёргает.
+  // Сейчас используется графом — открыть свой документ в центре вместе с панелью.
+  onPanelOpen?: (k: PanelKey) => void;
 }
 
 // Ширина/высота дроп-зоны сепаратора при перетаскивании (только оверлей, в потоке
@@ -273,7 +277,7 @@ function PanelShell({ k, badge, headerExtras, canDrag, onClose, dragged, dropTar
   );
 }
 
-export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobile, sessionOnly, panelStack, toolsEnabled, panels = {}, panelHeaderExtras, railCounts }: Props) {
+export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobile, sessionOnly, panelStack, toolsEnabled, panels = {}, panelHeaderExtras, railCounts, onPanelOpen }: Props) {
   // Инстанс стора раскладки: оба объявлены на уровне модуля, поэтому вызов хука
   // безусловный и стабильный между рендерами (проп не меняется по ходу жизни экрана)
   const usePanels = (panelStack ?? wsPanelStack).use;
@@ -518,6 +522,9 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobi
               // До двух панелей: третья вытесняет самую старую (FIFO)
               setTabletPanels(cur => cur.includes(k) ? cur.filter(x => x !== k) : [...cur, k].slice(-2));
             } else toggle(k);
+            // Панель в результате клика ОТКРЫЛАСЬ (была скрыта; в solo toggle — радио,
+            // закрытой считается и вытесняемая) — сообщаем подписчику (граф и т.п.)
+            if (!isOpen) onPanelOpen?.(k);
           }}
           title={title} active={isOpen}>
           <div style={{ position: 'relative', display: 'flex' }}>

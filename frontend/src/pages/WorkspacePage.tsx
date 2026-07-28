@@ -47,6 +47,7 @@ import { TerminalView } from '../components/terminal/TerminalView';
 import { PreviewView } from '../components/preview/PreviewView';
 import * as terminalApi from '../lib/terminalSignalr';
 import { DesktopWorkspace } from './workspace/DesktopWorkspace';
+import type { PanelKey } from './workspace/panelStackState';
 import { TerminalPanelContent, PreviewPanelContent } from './workspace/panels';
 import { CodeGraphPanel } from '../features/codegraph/CodeGraphPanel';
 import { CodeGraphDocument } from '../features/codegraph/CodeGraphDocument';
@@ -892,6 +893,15 @@ const windowWidth = useWindowWidth();
     void buildCodeGraph(project.id);
   }, [project.id]);
 
+  // Явная активация панели из рельсы (клик открыл её). У графа, в отличие от
+  // «Файлов»/«Задач», нет списка элементов — панель инспектирует единственный
+  // документ, поэтому открываем его в центре вместе с панелью. Вешать на mount
+  // панели нельзя: она монтируется и при восстановлении раскладки из localStorage,
+  // и граф выпрыгивал бы поверх чата при каждом входе в проект.
+  const handlePanelOpen = useCallback((k: PanelKey) => {
+    if (k === 'graph') ensureGraphOpen();
+  }, [ensureGraphOpen]);
+
   const handleSelectSession = (session: Session, firstMessage?: string, autoSelect?: boolean) => {
     setActiveSession(session);
     setPendingMessage(firstMessage);
@@ -1497,6 +1507,7 @@ const windowWidth = useWindowWidth();
           onClosePreview={() => setActivePreviewId(null)}
           graphOpen={graphOpen}
           graphArea={<CodeGraphDocument projectId={project.id} isMobile={false} onClose={handleGraphClose} onOpenFile={handleOpenFileFromTree} onBuild={handleGraphBuild} />}
+          onPanelOpen={handlePanelOpen}
           toolsEnabled={!!project.toolsEnabled}
           panels={{
             files: fileSubTab === 'files'
@@ -1505,7 +1516,7 @@ const windowWidth = useWindowWidth();
             changes: <GitChangesRail project={project} onOpenDiff={handleOpenGitDiff} onOpenFile={handleOpenFileFromTree} onOpenCommit={handleOpenCommit} activeFilePath={openFile ?? openCommitFile} activeCommitSha={openCommitSha} onCommit={handleCommitVia} onScopeChange={clearCenterToChat} onToolbar={handleChangesToolbar} />,
             tasks: <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={false} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} groupTab={projectGroupTab} onGroupTab={setProjectGroupTab} filters={taskListFilters} onFilters={setTaskListFilters} hideViewSwitcher />,
             team: <ProjectPersonasPanel project={project} selectedId={personaCreating ? null : selectedPersonaId} onSelect={handlePersonaSelect} onNew={handlePersonaNew} onShowTeam={() => { handlePersonaCleared(); setTeamCenterOpen(true); }} teamActive={teamCenterOpen && !selectedPersonaId && !personaCreating} />,
-            graph: <CodeGraphPanel projectId={project.id} onEnsureGraphOpen={ensureGraphOpen} onOpenFile={handleOpenFileFromTree} onBuild={handleGraphBuild} />,
+            graph: <CodeGraphPanel projectId={project.id} graphOpen={graphOpen} onEnsureGraphOpen={ensureGraphOpen} onOpenFile={handleOpenFileFromTree} onBuild={handleGraphBuild} />,
             terminal: <TerminalPanelContent terminals={terminals} activeTerminalId={activeTerminalId} onSelect={handleSelectTerminal} onCreate={handleCreateTerminal} onStop={handleStopTerminal} onActivity={setTerminalBusy} />,
             preview: <PreviewPanelContent projectId={project.id} services={previewServices} activePreviewId={activePreviewId} onSelect={setActivePreviewId} onStart={startService} onStop={stopService} onRefresh={refreshServices} />,
           }}

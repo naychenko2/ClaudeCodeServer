@@ -95,6 +95,8 @@ interface Props {
   panelHeaderExtras?: Partial<Record<PanelKey, ReactNode>>;
   // Числа-кружки на кнопках проекта в рельсе (changes/tasks/terminal/preview)
   railCounts?: Partial<Record<PanelKey, number>>;
+  // Хук на явную активацию панели из рельсы (клик открыл панель) — проброс в RightPanelStack
+  onPanelOpen?: (k: PanelKey) => void;
 }
 
 export function DesktopWorkspace(p: Props) {
@@ -349,6 +351,7 @@ export function DesktopWorkspace(p: Props) {
         panels={p.panels}
         panelHeaderExtras={p.panelHeaderExtras}
         railCounts={p.railCounts}
+        onPanelOpen={p.onPanelOpen}
       />
     </div>
   );

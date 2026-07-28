@@ -176,7 +176,7 @@ export function CodeGraphDocument({ projectId, isMobile, onClose, onOpenFile, on
       {/* Мобила: нижняя шторка с режимами и паспортом (панель рельсы не видна на мобиле) */}
       {isMobile && sheetOpen && (
         <Modal onClose={() => setSheetOpen(false)} title="Граф">
-          <CodeGraphPanel projectId={projectId} onEnsureGraphOpen={() => {}} onOpenFile={onOpenFile} onBuild={onBuild} />
+          <CodeGraphPanel projectId={projectId} graphOpen onEnsureGraphOpen={() => {}} onOpenFile={onOpenFile} onBuild={onBuild} />
         </Modal>
       )}
     </div>

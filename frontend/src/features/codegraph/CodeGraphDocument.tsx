@@ -15,6 +15,7 @@ import { Modal } from '../../components/ui/Modal';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { useCodeGraph, useCodeGraphActions } from '../../lib/codeGraph';
 import { layoutGraph } from './graphLayout';
+import { buildFocusModel } from './graphFocus';
 import { CodeGraphCanvas } from './CodeGraphCanvas';
 import { CodeGraphPanel } from './CodeGraphPanel';
 
@@ -40,6 +41,27 @@ export function CodeGraphDocument({ projectId, isMobile, onClose, onOpenFile, on
   const a = useCodeGraphActions();
   const [sheetOpen, setSheetOpen] = useState(false);
   const layout = useMemo(() => (s.data ? layoutGraph(s.data) : null), [s.data]);
+
+  // Режим «Фокус» холста: считаем окрестность выбранного типа здесь — крошки,
+  // счётчик и сам холст рисуют одну и ту же модель, второй раз её считать незачем
+  const focus = useMemo(() => {
+    if (!s.data || !layout || !s.selectedId) return null;
+    return buildFocusModel(s.data, s.selectedId, {
+      filters: s.filters,
+      hideTests: s.hideTestNodes,
+      depth2: s.focusDepth2,
+      mobile: isMobile,
+      degree: layout.degree,
+    });
+  }, [s.data, layout, s.selectedId, s.filters, s.hideTestNodes, s.focusDepth2, isMobile]);
+
+  // Крошки: последние шаги истории + текущий центр (весь путь в шапку не влезает)
+  const crumbs = useMemo(() => {
+    if (!focus || !s.data) return [];
+    const byId = new Map(s.data.nodes.map(n => [n.id, n]));
+    return [...s.focusHistory.slice(-4), s.selectedId!]
+      .map(id => ({ id, label: byId.get(id)?.label ?? id }));
+  }, [focus, s.data, s.focusHistory, s.selectedId]);
 
   // Документ сам запускает загрузку при монтировании (мобила: граф открывается
   // из меню «⋯» без панели рельсы, которая обычно триггерит load). Идемпотентно.
@@ -142,7 +164,47 @@ export function CodeGraphDocument({ projectId, isMobile, onClose, onOpenFile, on
         )}
 
         {s.status === 'ready' && layout && s.data && (
-          <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
+          <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+            {/* Фокус: путь переходов от узла к узлу + возврат на шаг назад */}
+            {focus && (
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: SP.sm, padding: `${SP.sm} ${SP.md}`,
+                borderBottom: `1px solid ${C.borderLight}`, background: C.bgPanel, flexShrink: 0,
+                overflowX: 'auto', whiteSpace: 'nowrap',
+              }}>
+                <BackButton onClick={() => a.focusBack()} title="Назад к предыдущему типу"
+                  iconSize={ICON_SIZE.xs}
+                  style={{ opacity: s.focusHistory.length ? 1 : 0.4, pointerEvents: s.focusHistory.length ? 'auto' : 'none' }}>
+                  <span style={{ fontSize: FS.xs, color: C.textSecondary }}>Назад</span>
+                </BackButton>
+                <span style={{ width: 1, height: 14, background: C.borderLight, flexShrink: 0 }} />
+                {crumbs.map((c, i) => {
+                  const last = i === crumbs.length - 1;
+                  return (
+                    <span key={`${c.id}-${i}`} style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs, flexShrink: 0 }}>
+                      {i > 0 && <span style={{ color: C.textMuted, fontSize: FS.xs }}>›</span>}
+                      <span
+                        onClick={last ? undefined : () => a.focusCrumb(c.id)}
+                        title={last ? undefined : `Вернуться к ${c.label}`}
+                        style={{
+                          fontFamily: FONT.mono, fontSize: FS.xs,
+                          color: last ? C.textHeading : C.info,
+                          fontWeight: last ? 600 : 400,
+                          cursor: last ? 'default' : 'pointer',
+                          padding: '2px 6px', borderRadius: R.sm,
+                        }}>{c.label}</span>
+                    </span>
+                  );
+                })}
+                {!isMobile && (
+                  <span style={{ marginLeft: 'auto', fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, paddingLeft: SP.sm }}>
+                    {focus.center.fullyQualifiedName}
+                  </span>
+                )}
+              </div>
+            )}
+
+            <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
             <CodeGraphCanvas
               graph={s.data}
               layout={layout}
@@ -152,6 +214,8 @@ export function CodeGraphDocument({ projectId, isMobile, onClose, onOpenFile, on
               onSelect={a.select}
               hideTestNodes={s.hideTestNodes}
               hideOrphanNodes={s.hideOrphanNodes}
+              focus={focus}
+              onExpandTail={side => { a.setFocusTail(side); if (isMobile) setSheetOpen(true); }}
             />
             {/* Мобила: FAB режимов/паспорта с бейджем числа активных фильтров */}
             {isMobile && (
@@ -170,6 +234,22 @@ export function CodeGraphDocument({ projectId, isMobile, onClose, onOpenFile, on
                   }}>{modesBadge}</span>
                 )}
               </button>
+            )}
+            </div>
+
+            {/* Счётчик фокуса: честно проговаривает, сколько показано и сколько скрыто */}
+            {focus && (
+              <div style={{
+                flexShrink: 0, padding: `${SP.xs} ${SP.md}`, borderTop: `1px solid ${C.borderLight}`,
+                background: C.bgInset, fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted,
+                overflowX: 'auto', whiteSpace: 'nowrap',
+              }}>
+                {`показано ${focus.shownCount} из ${s.data.nodes.length} узлов · глубина ${s.focusDepth2 ? 2 : 1}`}
+                {s.focusDepth2 && ` (второе кольцо: ${focus.secondShown} из ${focus.secondTotal}, остальные скрыты)`}
+                {` · связей у центра: ${focus.centerDegree}`}
+                {(focus.incoming.length > focus.limit || focus.outgoing.length > focus.limit)
+                  && ` · в заглушках: ${Math.max(0, focus.incoming.length - focus.limit) + Math.max(0, focus.outgoing.length - focus.limit)}`}
+              </div>
             )}
           </div>
         )}

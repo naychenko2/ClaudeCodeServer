@@ -6,10 +6,11 @@
 import { useEffect, useMemo } from 'react';
 import { Search, ChevronRight, FileCode, RefreshCw, AlertTriangle, Loader } from 'lucide-react';
 import { C, FONT, FS, R, SP } from '../../lib/design';
-import { Button, Dot, IconField, EmptyState, WaitingIndicator } from '../../components/ui';
+import { Button, Dot, IconField, EmptyState, WaitingIndicator, Toggle } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { useCodeGraph, useCodeGraphActions, GRAPH_RELATIONS } from '../../lib/codeGraph';
 import { layoutGraph } from './graphLayout';
+import { focusNeighbours } from './graphFocus';
 import {
   EDGE_COLOR, EDGE_BG, KIND_COLOR, KIND_RING, KIND_GLYPH, RELATION_LABEL,
 } from './graphTokens';
@@ -228,6 +229,28 @@ export function CodeGraphPanel({ projectId, graphOpen, onEnsureGraphOpen, onOpen
         </div>
       </Section>
 
+      {/* Фокус холста — появляется, когда узел выбран (холст показывает его окрестность) */}
+      {s.selectedId && s.data && (
+        <Section title="Фокус">
+          <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm }}>
+            <span style={{ fontSize: FS.sm, color: C.textPrimary, flex: 1 }}>Глубина 2</span>
+            <Toggle checked={s.focusDepth2} onChange={() => a.toggleFocusDepth2()} width={36} height={21}
+              ariaLabel="Показывать второе кольцо соседей" />
+          </div>
+          <p style={{ fontSize: FS.xs, color: C.textMuted, marginTop: SP.xs, marginBottom: 0, lineHeight: 1.45 }}>
+            Второе кольцо строится только для 6 самых связанных соседей — полная окрестность
+            глубины 2 у крупного типа это сотни узлов.
+          </p>
+          {/* Раскрытый хвост: то, что не поместилось на холст и ушло в заглушку «+N» */}
+          {s.focusTail && (
+            <FocusTail graph={s.data} centerId={s.selectedId} side={s.focusTail}
+              filters={s.filters} hideTests={s.hideTestNodes} degree={layout?.degree}
+              onSelect={id => { a.select(id); onEnsureGraphOpen(); }}
+              onClose={() => a.setFocusTail(null)} />
+          )}
+        </Section>
+      )}
+
       {/* Легенда и god-узлы — сворачиваемая секция (по умолчанию свёрнута) */}
       <div style={{ borderBottom: `1px solid ${C.borderLight}` }}>
         <button onClick={() => a.setLegendOpen(!s.legendOpen)} disabled={disabled}
@@ -293,6 +316,48 @@ export function CodeGraphPanel({ projectId, graphOpen, onEnsureGraphOpen, onOpen
           </Button>
         </div>
       )}
+    </div>
+  );
+}
+
+// === Хвост соседей фокуса ===
+// Холст показывает 16 соседей на сторону, остальные — в заглушке «+N».
+// Клик по заглушке раскрывает здесь ПОЛНЫЙ список стороны с переходом по клику.
+function FocusTail({ graph, centerId, side, filters, hideTests, degree, onSelect, onClose }: {
+  graph: CodeGraph;
+  centerId: string;
+  side: 'in' | 'out';
+  filters: Record<CodeGraphRelation, boolean>;
+  hideTests: boolean;
+  degree?: Map<string, number>;
+  onSelect: (id: string) => void;
+  onClose: () => void;
+}) {
+  const list = useMemo(
+    () => focusNeighbours(graph, centerId, side, { filters, hideTests, degree }),
+    [graph, centerId, side, filters, hideTests, degree],
+  );
+
+  return (
+    <div style={{ marginTop: SP.sm }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: SP.xs }}>
+        <span style={sectionTitleStyle}>
+          {side === 'in' ? 'Зависят от него' : 'От кого зависит он'} · {list.length}
+        </span>
+        <LinkAction onClick={onClose}>свернуть</LinkAction>
+      </div>
+      {list.length ? (
+        <div style={{ maxHeight: 220, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
+          {list.map(o => (
+            <div key={o.node.id} onClick={() => onSelect(o.node.id)} style={searchHitStyle}>
+              <span style={{ color: C.textMuted, fontSize: FS.xs, flexShrink: 0 }}>{side === 'in' ? '←' : '→'}</span>
+              <Dot color={EDGE_COLOR[o.relations[0] ?? 'Calls']} />
+              <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textHeading, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.node.label}</span>
+              <span style={{ fontFamily: FONT.mono, fontSize: 10, color: C.textMuted, flexShrink: 0 }}>{o.degree}</span>
+            </div>
+          ))}
+        </div>
+      ) : <RelEmpty />}
     </div>
   );
 }

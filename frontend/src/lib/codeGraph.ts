@@ -33,7 +33,17 @@ interface State {
   legendOpen: boolean;
   hideTestNodes: boolean;
   hideOrphanNodes: boolean;
+  // Режим «Фокус» холста: выбранный узел (selectedId) — центр окрестности.
+  // История переходов от узла к узлу — крошки в шапке документа и «Назад».
+  focusHistory: string[];
+  focusDepth2: boolean;
+  // Раскрытый хвост соседей («+N ещё» на холсте → полный список в панели)
+  focusTail: 'in' | 'out' | null;
 }
+
+// Глубина истории фокуса: блуждание по графу может быть долгим, но крошки
+// показывают последние несколько шагов — хранить всё незачем
+const FOCUS_HISTORY_MAX = 24;
 
 let _state: State = {
   projectId: null,
@@ -46,6 +56,9 @@ let _state: State = {
   legendOpen: false,
   hideTestNodes: false,
   hideOrphanNodes: false,
+  focusHistory: [],
+  focusDepth2: false,
+  focusTail: null,
 };
 
 const listeners = new Set<() => void>();
@@ -78,6 +91,9 @@ export async function loadCodeGraph(projectId: string, force = false): Promise<v
     legendOpen: reset ? false : _state.legendOpen,
     hideTestNodes: reset ? false : _state.hideTestNodes,
     hideOrphanNodes: reset ? false : _state.hideOrphanNodes,
+    focusHistory: reset ? [] : _state.focusHistory,
+    focusDepth2: reset ? false : _state.focusDepth2,
+    focusTail: reset ? null : _state.focusTail,
   };
   emit();
   try {
@@ -182,10 +198,49 @@ export function setGraphQuery(q: string) {
   set({ query: q, selectedId: q ? null : _state.selectedId });
 }
 
-// Выбор узла на холсте/в god-списке: подсветка инцидентных рёбер + паспорт.
+// Выбор узла на холсте/в god-списке/в поиске/в паспорте: холст переходит в режим
+// «Фокус» — окрестность этого типа. История переходов копится здесь, а не в точках
+// вызова, поэтому крошки работают одинаково для всех входов в фокус.
 // При выборе легенда сворачивается сама — паспорт получает всю высоту панели.
 export function selectGraphNode(id: string | null) {
-  set({ selectedId: id, legendOpen: id ? false : _state.legendOpen });
+  if (id === _state.selectedId) return;
+  const prev = _state.selectedId;
+  const history = id && prev
+    ? [..._state.focusHistory, prev].slice(-FOCUS_HISTORY_MAX)
+    : [];
+  set({
+    selectedId: id,
+    legendOpen: id ? false : _state.legendOpen,
+    focusHistory: history,
+    focusTail: null,   // новый центр — старый раскрытый хвост уже не про него
+  });
+}
+
+// «← Назад»: возврат к предыдущему центру фокуса
+export function focusGraphBack() {
+  const history = _state.focusHistory;
+  if (!history.length) return;
+  set({
+    selectedId: history[history.length - 1],
+    focusHistory: history.slice(0, -1),
+    focusTail: null,
+  });
+}
+
+// Клик по крошке: возврат к узлу пути, всё, что было после него, отбрасывается
+export function focusGraphCrumb(id: string) {
+  const i = _state.focusHistory.indexOf(id);
+  if (i < 0) return;
+  set({ selectedId: id, focusHistory: _state.focusHistory.slice(0, i), focusTail: null });
+}
+
+export function toggleGraphFocusDepth2() {
+  set({ focusDepth2: !_state.focusDepth2 });
+}
+
+// Раскрытие хвоста соседей: заглушка «+N» на холсте → полный список в панели
+export function setGraphFocusTail(side: 'in' | 'out' | null) {
+  set({ focusTail: _state.focusTail === side ? null : side });
 }
 
 export function setGraphLegendOpen(open: boolean) {
@@ -198,6 +253,11 @@ export function toggleHideTestNodes() {
 }
 export function toggleHideOrphanNodes() {
   set({ hideOrphanNodes: !_state.hideOrphanNodes });
+}
+
+// Снимок состояния вне React — для тестов и не-компонентных потребителей
+export function getCodeGraphState(): Readonly<State> {
+  return _state;
 }
 
 // Подписка на снимок стора. Actions возвращаются стабильным useCallback —
@@ -223,5 +283,9 @@ export function useCodeGraphActions() {
     setLegendOpen: setGraphLegendOpen,
     toggleHideTestNodes,
     toggleHideOrphanNodes,
+    focusBack: focusGraphBack,
+    focusCrumb: focusGraphCrumb,
+    toggleFocusDepth2: toggleGraphFocusDepth2,
+    setFocusTail: setGraphFocusTail,
   }), []);
 }

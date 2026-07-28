@@ -80,3 +80,7 @@ onlyoffice/local.json
 # чтобы работали точечные исключения для общих проектных агентов ниже.
 .claude/agents/*
 !.claude/agents/designer.md
+
+# Справочник профилей категорий делегирования — его кладёт PersonaAgentFileSync
+# из константы OmoPrompts.DelegationCategoryProfiles (источник — docs/omo/translations)
+.claude/delegation-categories.md

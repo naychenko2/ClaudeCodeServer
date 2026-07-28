@@ -1,5 +1,5 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, X, File, Trash2, Maximize2, Columns2, RotateCcw, Save, Download, Music, Menu, SquarePen, Eye, Copy, Check, FileDiff, History, Users, MessageCircle } from 'lucide-react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { AlertTriangle, X, File, Trash2, Maximize2, Columns2, RotateCcw, Save, Download, Music, Menu, SquarePen, Eye, Code, Copy, Check, FileDiff, History, Users, MessageCircle } from 'lucide-react';
 import SyntaxHighlighter from 'react-syntax-highlighter/dist/esm/prism-light';
 import { oneLight, oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import tsx from 'react-syntax-highlighter/dist/esm/languages/prism/tsx';
@@ -43,9 +43,11 @@ import { DocumentViewer } from './DocumentViewer';
 import { OfficeViewer } from './OfficeViewer';
 import { DrawioViewer, type DrawioHandle } from './DrawioViewer';
 import { base64ToBytes } from '../lib/binary';
-import { C, FONT, MODAL_W, SHADOW } from '../lib/design';
-import { Toolbar, ToolbarIconButton, PillSwitch, tbBtnPrimary, tbBtnGhost } from './Toolbar';
-import { BackButton, Modal, ModalActions, Button, ConfirmDialog, useIsMobileModal } from './ui';
+import { C, FONT, FS, MODAL_W, SHADOW, SP, TB } from '../lib/design';
+import { Toolbar, ToolbarIconButton, PillSwitch } from './Toolbar';
+import { ToolbarOverflowMenu, type OverflowItem } from './ToolbarOverflowMenu';
+import { useToolbarOverflow } from '../hooks/useToolbarOverflow';
+import { BackButton, Modal, ModalActions, Button, ConfirmDialog, useIsMobileModal, Menu as UiMenu, MenuItem } from './ui';
 import { DiffView } from './DiffView';
 import { registerCopyDoc, copyMarkdown, copyRenderedHtml } from '../lib/selectionScope';
 import { useThemeMode, getEffectiveTheme } from '../lib/themeMode';
@@ -116,6 +118,34 @@ function streamUrl(projectId: string, filePath: string): string {
 }
 
 type ViewTab = 'file' | 'diff' | 'blame' | 'history';
+// Вкладка «Код» — HTML-файл в исходнике: отдельный сегмент того же трека, что и остальные
+// вкладки (раньше рядом стоял второй, одинаковый по форме, переключатель «Просмотр | Код»)
+type TabKey = ViewTab | 'code';
+
+// Ступени шапки по ширине ПАНЕЛИ (не окна — в сплите панель живёт своей жизнью).
+// comfort — подписи, cozy/narrow — иконки, tight — вкладки уезжают в меню.
+type Tier = 'comfort' | 'cozy' | 'narrow' | 'tight';
+
+// Описание единственного «главного действия режима»: Править | Сохранить | Редактировать…
+interface ToolbarAction {
+  key: string;
+  label: string;
+  title?: string;
+  icon: ReactNode;
+  onClick: () => void;
+  primary?: boolean;
+  disabled?: boolean;
+  loading?: boolean;
+}
+
+// Спиннер 14px в габарите icon-кнопки тулбара
+const InlineSpinner = ({ color }: { color?: string }) => (
+  <span style={{
+    width: 14, height: 14, borderRadius: '50%', flexShrink: 0,
+    border: `2.5px solid ${C.border}`, borderTopColor: color ?? C.accent,
+    animation: 'spin 0.6s linear infinite',
+  }} />
+);
 
 const DiscardIcon = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
@@ -344,8 +374,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   const [htmlTab, setHtmlTab] = useState<'preview' | 'code'>('preview');
   const [officeMode, setOfficeMode] = useState<'view' | 'edit'>('view');
   const [officeSwitching, setOfficeSwitching] = useState(false);
-  const [officeDiscardConfirm, setOfficeDiscardConfirm] = useState(false);
-  // Мобильный вариант подтверждения отката office-правок — диалог (на десктопе — инлайн-плашка)
+  // Подтверждение отката office-правок — диалог (на мобиле сам станет шторкой)
   const [officeDiscardDialog, setOfficeDiscardDialog] = useState(false);
   const [officeCacheKey, setOfficeCacheKey] = useState<string | undefined>();
   // Режим draw.io: по умолчанию просмотр (read-only), кнопка «Редактировать» → edit
@@ -353,6 +382,8 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   const [editContent, setEditContent] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [unsavedConfirm, setUnsavedConfirm] = useState(false);
+  // Что делаем после диалога несохранённых правок: закрыть файл или сменить режим просмотра
+  const [unsavedIntent, setUnsavedIntent] = useState<'close' | 'mode'>('close');
   // Ошибка мутации (сохранение/откат/удаление) офлайн или при сбое — inline-фидбек
   const [actionError, setActionError] = useState<string | null>(null);
   const [imgDims, setImgDims] = useState<{ w: number; h: number } | null>(null);
@@ -366,6 +397,20 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   const [copied, setCopied] = useState(false);
   // Контент-зона просмотра: корень «форматированного» копирования + источник Ctrl+C без выделения
   const contentAreaRef = useRef<HTMLDivElement>(null);
+
+  // Ширина самой панели (не окна): в сплите она сжимается до 200px, и на такой
+  // ширине двухсегментный трек «Сплит | Полный» (~195px) неуместен — вместо него
+  // рисуем икону-тумблер. 0 — ещё не померили (первый рендер).
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [panelWidth, setPanelWidth] = useState(0);
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => setPanelWidth(el.clientWidth));
+    ro.observe(el);
+    setPanelWidth(el.clientWidth);
+    return () => ro.disconnect();
+  }, []);
 
   const content = fileContent?.content ?? '';
   const hasUnsavedChanges = editing && editContent !== content;
@@ -385,7 +430,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
     setHtmlTab('preview');
     setOfficeMode('view');
     setOfficeSwitching(false);
-    setOfficeDiscardConfirm(false);
+    setOfficeDiscardDialog(false);
     setOfficeCacheKey(undefined);
     setDrawioMode('view');
     setLoading(true);
@@ -676,22 +721,41 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
     // draw.io в режиме edit — сохраняем текущие правки перед закрытием
     if (isDrawio && drawioMode === 'edit') await drawioRef.current?.flush();
     if (hasUnsavedChanges) {
+      setUnsavedIntent('close');
       setUnsavedConfirm(true);
     } else {
       onClose();
     }
   };
 
+  // Смена режима «сплит ↔ на весь экран»: FileViewer при этом пересоздаётся
+  // (в WorkspacePage это две разные ветки дерева), поэтому несохранённые правки
+  // пропали бы молча — спрашиваем тем же диалогом, что и при закрытии.
+  const handleToggleMode = () => {
+    if (!onToggleFullscreen) return;
+    if (hasUnsavedChanges) {
+      setUnsavedIntent('mode');
+      setUnsavedConfirm(true);
+    } else {
+      onToggleFullscreen();
+    }
+  };
+
+  const finishUnsavedIntent = () => {
+    if (unsavedIntent === 'mode') onToggleFullscreen?.();
+    else onClose();
+  };
+
   const handleCloseWithoutSave = () => {
     setUnsavedConfirm(false);
-    onClose();
+    finishUnsavedIntent();
   };
 
   const handleSaveAndClose = async () => {
     setUnsavedConfirm(false);
-    // Закрываем только при успешном сохранении — иначе правки потеряются (офлайн/сбой)
+    // Продолжаем только при успешном сохранении — иначе правки потеряются (офлайн/сбой)
     const ok = await handleSave();
-    if (ok) onClose();
+    if (ok) finishUnsavedIntent();
   };
 
   const handleDownload = () => {
@@ -721,13 +785,17 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   }, []);
 
   // Клик — скопировать исходник (raw markdown/код); Shift+клик по .md — с форматированием
-  const handleCopyContent = async (e: React.MouseEvent) => {
+  // (из «···» приходим без события — только исходник)
+  const copyContent = async (withFormat: boolean) => {
     const raw = editing ? editContent : content;
-    const rendered = e.shiftKey && isMarkdown && !editing
+    const rendered = withFormat
       ? contentAreaRef.current?.querySelector<HTMLElement>('[data-selection-scope]')
       : null;
     const ok = rendered ? await copyRenderedHtml(rendered) : await copyMarkdown(raw);
     if (ok) { setCopied(true); setTimeout(() => setCopied(false), 1500); }
+  };
+  const handleCopyContent = (e: React.MouseEvent) => {
+    void copyContent(e.shiftKey && isMarkdown && !editing);
   };
   const isMermaid = /\.mmd$/i.test(fileName);
   const isHtml = /\.html?$/i.test(fileName);
@@ -769,6 +837,280 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
     }
   };
 
+  // ===== Модель шапки: ступени по ширине панели =====
+  // Строка собирается из блоков: [☰ + имя] [бейджи + вкладки + главное действие]
+  // [полоса вторичных иконок] [«···»] [якорь-выход]. Гибкое только имя — остальное
+  // либо влезает целиком, либо уезжает в «···» (useToolbarOverflow).
+  const tier: Tier = panelWidth === 0 || panelWidth >= 840 ? 'comfort'
+    : panelWidth >= 600 ? 'cozy'
+    : panelWidth >= 400 ? 'narrow'
+    : 'tight';
+  // Узкая ступень десктопа: главное действие — иконкой, ☰ уезжает в «···»
+  const iconTier = !isMobile && (tier === 'narrow' || tier === 'tight');
+  const rowGap = !isMobile && tier === 'tight' ? SP.xs : TB.gap;
+  // Сколько места держим под имя файла при подсчёте влезающих кнопок
+  const nameReserve = isMobile ? 90 : tier === 'tight' ? 40 : tier === 'narrow' ? 90 : 120;
+  const iconBox = isMobile ? TB.iconHitMobile : TB.iconHitDesktop;
+  // Бейджи-чипы (комментарии, diff) на самой узкой ступени не рисуем
+  const showChips = isMobile || tier !== 'tight';
+
+  // Имя файла: расширение отдельным span'ом — ellipsis режет хвост, а по нему как раз
+  // и узнают файл (SomeVeryLong….tsx вместо SomeVeryLongComponen…)
+  const dotAt = fileName.lastIndexOf('.');
+  const nameBase = dotAt > 0 ? fileName.slice(0, dotAt) : fileName;
+  const nameExt = dotAt > 0 ? fileName.slice(dotAt) : '';
+
+  // --- Вкладки (включая «Просмотр | Код» для HTML) ---
+  const htmlSplit = isHtml && !editing && !isOfficeFile && !fileContent?.isBinary;
+  const tabValue: TabKey = htmlSplit && tab === 'file' && htmlTab === 'code' ? 'code' : tab;
+  const tabOptions: { value: TabKey; label: string; title?: string; icon: ReactNode }[] = [
+    htmlSplit
+      ? { value: 'file', label: 'Просмотр', icon: <Eye size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> }
+      : { value: 'file', label: 'Файл', icon: <File size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> },
+    ...(htmlSplit ? [{ value: 'code' as TabKey, label: 'Код', icon: <Code size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> }] : []),
+    ...(diff ? [{ value: 'diff' as TabKey, label: 'Diff', icon: <FileDiff size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> }] : []),
+    ...(showBlameTab ? [
+      { value: 'history' as TabKey, label: 'История', icon: <History size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> },
+      { value: 'blame' as TabKey, label: 'Кто менял', icon: <Users size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> },
+    ] : []),
+  ];
+  const showTabs = !loading && !loadError && !isOfficeFile && tabOptions.length > 1;
+  const activeTabOption = tabOptions.find(o => o.value === tabValue) ?? tabOptions[0];
+  const selectTab = (v: TabKey) => {
+    if (v === 'code') { setTab('file'); setHtmlTab('code'); return; }
+    if (v === 'file') { setTab('file'); setHtmlTab('preview'); return; }
+    setTab(v as ViewTab);
+  };
+
+  // --- Слот «главное действие режима»: ровно одна кнопка (+ необязательная «Отмена») ---
+  // IIFE вместо let+условных присвоений в скоупе компонента: так и читаемее (один return
+  // на ветку), и не путает react-compiler-lint (мутируемый let он то принимает за ref).
+  const cancelEdit = () => { setEditing(false); setEditContent(content); setActionError(null); };
+  const { mainAction, cancelAction } = (() => {
+  let mainAction: ToolbarAction | null = null;
+  let cancelAction: ToolbarAction | null = null;
+  if (!loading && !loadError) {
+    if (editing) {
+      mainAction = {
+        key: 'save', label: 'Сохранить', primary: true, disabled: !online,
+        title: online ? 'Сохранить' : 'Сохранение недоступно офлайн',
+        icon: <Save size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
+        onClick: () => { void handleSave(); },
+      };
+      cancelAction = {
+        key: 'cancel-edit', label: 'Отмена', title: 'Отменить правки',
+        icon: <DiscardIcon />, onClick: cancelEdit,
+      };
+    } else if (isOfficeFile && !isVisioFile) {
+      if (officeSwitching) {
+        mainAction = { key: 'office-wait', label: 'Открываю…', icon: null, disabled: true, loading: true, onClick: () => {} };
+      } else if (officeMode === 'view') {
+        mainAction = {
+          key: 'office-edit', label: 'Редактировать',
+          icon: <SquarePen size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
+          onClick: () => { setOfficeCacheKey(undefined); setOfficeSwitching(true); setOfficeMode('edit'); },
+        };
+      } else {
+        mainAction = {
+          key: 'office-save', label: 'Сохранить', primary: true,
+          icon: <Save size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
+          onClick: () => { void (async () => {
+            setOfficeSwitching(true);
+            await api.files.officeForceSave(project.id, filePath).catch(() => {});
+            setOfficeCacheKey(String(Date.now()));
+            setOfficeMode('view');
+          })(); },
+        };
+        cancelAction = {
+          key: 'office-cancel', label: 'Отмена', title: 'Отменить изменения',
+          icon: <DiscardIcon />, onClick: () => setOfficeDiscardDialog(true),
+        };
+      }
+    } else if (isDrawioViewing) {
+      mainAction = drawioMode === 'view'
+        ? {
+            key: 'drawio-edit', label: 'Редактировать',
+            icon: <SquarePen size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
+            onClick: () => setDrawioMode('edit'),
+          }
+        : {
+            key: 'drawio-view', label: 'Просмотр', primary: true, title: 'Просмотр (правки сохраняются)',
+            icon: <Eye size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
+            onClick: () => { void (async () => { await drawioRef.current?.flush(); setDrawioMode('view'); })(); },
+          };
+    } else if (online && !isMobile && !fileContent?.isBinary) {
+      // На мобиле правку открывает плавающая кнопка (FAB) внизу слева
+      mainAction = {
+        key: 'edit', label: 'Править', primary: true,
+        icon: <SquarePen size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
+        onClick: isHtml && htmlTab === 'preview'
+          ? () => setHtmlTab('code')
+          : () => { setEditing(true); setTab('file'); },
+      };
+    }
+  }
+  return { mainAction, cancelAction };
+  })();
+  const actionAsIcon = isMobile || iconTier;
+  const actionButton = (a: ToolbarAction) => (
+    <Button
+      size="sm" variant={a.primary ? 'primary' : 'ghost'}
+      loading={a.loading} disabled={a.disabled}
+      title={a.title ?? a.label} onClick={a.onClick}
+      leftIcon={a.icon} style={{ flexShrink: 0, whiteSpace: 'nowrap' }}
+    >
+      {a.label}
+    </Button>
+  );
+  const actionIcon = (a: ToolbarAction) => (
+    <ToolbarIconButton
+      isMobile={isMobile} onClick={a.onClick} disabled={a.disabled}
+      title={a.title ?? a.label} color={a.primary && !a.disabled ? C.accent : undefined}
+    >
+      {a.loading ? <InlineSpinner /> : a.icon}
+    </ToolbarIconButton>
+  );
+
+  // --- Вторичные действия: одинаковые кнопки, лишние уезжают в «···» справа налево ---
+  const secondary: { key: string; node: ReactNode; item: OverflowItem }[] = [];
+  if (!loading) {
+    if (!loadError && tab === 'file' && isCopyableText && !isDrawio && !(isHtml && htmlTab === 'preview')) {
+      const copyTitle = copied ? 'Скопировано'
+        : isMarkdown ? 'Скопировать Markdown (Shift — с форматированием)' : 'Скопировать содержимое';
+      secondary.push({
+        key: 'copy',
+        node: (
+          <ToolbarIconButton isMobile={isMobile} onClick={handleCopyContent} title={copyTitle} color={copied ? C.success : undefined}>
+            {copied
+              ? <Check size={ICON_SIZE.sm} strokeWidth={2.5} />
+              : <Copy size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
+          </ToolbarIconButton>
+        ),
+        item: {
+          key: 'copy', icon: <Copy size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
+          label: 'Скопировать содержимое', onClick: () => { void copyContent(false); },
+        },
+      });
+    }
+    if (!loadError && online && !editing && !fileContent?.isBinary && diff) {
+      secondary.push({
+        key: 'revert',
+        node: (
+          <ToolbarIconButton isMobile={isMobile} onClick={handleRevert} title="Откатить изменения">
+            <RotateCcw size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+          </ToolbarIconButton>
+        ),
+        item: {
+          key: 'revert', icon: <RotateCcw size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
+          label: 'Откатить изменения', onClick: () => { void handleRevert(); },
+        },
+      });
+    }
+    if (!loadError && online && !editing) {
+      const cloud = <CloudGlyph filled={syncState === 'direct'} />;
+      if (pending) {
+        secondary.push(syncState === 'direct'
+          ? {
+              key: 'sync',
+              node: (
+                <ToolbarIconButton isMobile={isMobile} onClick={handleToggleSync} title="Отменить синхронизацию">
+                  <InlineSpinner />
+                </ToolbarIconButton>
+              ),
+              item: { key: 'sync', icon: cloud, label: 'Отменить синхронизацию', onClick: handleToggleSync },
+            }
+          : {
+              key: 'sync',
+              node: (
+                <span title="Загружается…" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: iconBox, height: iconBox, flexShrink: 0 }}>
+                  <InlineSpinner />
+                </span>
+              ),
+              item: { key: 'sync', icon: cloud, label: 'Загружается…', disabled: true },
+            });
+      } else if (syncState === 'inherited') {
+        secondary.push({
+          key: 'sync',
+          node: (
+            <span title="Синхронизируется через папку/проект" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: iconBox, height: iconBox, flexShrink: 0, color: C.accentMuted }}>
+              <CloudGlyph filled />
+            </span>
+          ),
+          item: { key: 'sync', icon: <CloudGlyph filled />, label: 'Синхронизируется через папку', disabled: true },
+        });
+      } else {
+        const syncTitle = syncState === 'direct' ? 'Отключить синхронизацию' : 'Синхронизировать для офлайна';
+        secondary.push({
+          key: 'sync',
+          node: (
+            <ToolbarIconButton isMobile={isMobile} onClick={handleToggleSync} title={syncTitle} color={syncState === 'direct' ? C.accent : undefined}>
+              {cloud}
+            </ToolbarIconButton>
+          ),
+          item: { key: 'sync', icon: cloud, label: syncTitle, onClick: handleToggleSync },
+        });
+      }
+    }
+    if (!editing && fileContent?.base64) {
+      secondary.push({
+        key: 'download',
+        node: (
+          <ToolbarIconButton isMobile={isMobile} onClick={handleDownload} title="Скачать">
+            <Download size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+          </ToolbarIconButton>
+        ),
+        item: { key: 'download', icon: <Download size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />, label: 'Скачать', onClick: handleDownload },
+      });
+    }
+    if (online && !editing) {
+      secondary.push({
+        key: 'delete',
+        node: (
+          <ToolbarIconButton isMobile={isMobile} onClick={() => setDeleteConfirm(true)} title="Удалить">
+            <Trash2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+          </ToolbarIconButton>
+        ),
+        item: { key: 'delete', icon: <Trash2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />, label: 'Удалить', danger: true, onClick: () => setDeleteConfirm(true) },
+      });
+    }
+  }
+
+  // Главное действие и «Отмена» — неприкосновенный слот (часть 1, п.4): всегда видны
+  // целиком на любой ширине, меняют только форму (текст → иконка). В overflow не уезжают —
+  // сворачиваются только вторичные действия (Copy/Revert/Sync/Download/Delete).
+  const collapsible = secondary;
+
+  const stripRef = useRef<HTMLDivElement>(null);
+  const fixedLeftRef = useRef<HTMLDivElement>(null);
+  const badgesRef = useRef<HTMLDivElement>(null);
+  const rightRef = useRef<HTMLDivElement>(null);
+  const visibleCount = useToolbarOverflow({
+    stripRef, fixedLeftRef, badgesRef, rightRef,
+    count: collapsible.length,
+    enabled: true,
+    itemWidth: iconBox,
+    gap: rowGap,
+    menuWidth: iconBox,
+    reserve: nameReserve,
+  });
+  // «···»: свёрнутый ☰ и всё, что не влезло из вторичных действий.
+  // Пустое меню не рисуем — это дефект, а не состояние.
+  const menuItems: OverflowItem[] = [
+    ...(onOpenSidebar && !isMobile && iconTier
+      ? [{ key: 'sidebar', icon: <Menu size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />, label: 'Открыть панель', onClick: onOpenSidebar }]
+      : []),
+    ...collapsible.slice(visibleCount).map(c => c.item),
+  ];
+
+  // Вкладка текущего файла в «···»-стиле: на самой узкой ступени трек не помещается
+  const [tabMenu, setTabMenu] = useState<DOMRect | null>(null);
+
+  // Блок «бейджи + вкладки + действие» пуст (загрузка, бинарник без вкладок) — не рисуем
+  // его вовсе, иначе строка получает лишний зазор в пустом месте
+  const commentsChipVisible = showChips && !!commentCounts && commentCounts.total > 0 && !editing && tab === 'file';
+  const diffChipVisible = showChips && !!diffStats && tab === 'diff';
+  const badgesVisible = commentsChipVisible || diffChipVisible || showTabs || !!(mainAction || cancelAction);
+
   // Заметка vault — полноценный NoteView (теги, ✨-связи, перенос, правка через
   // notes-API с переименованием): тот же функционал, что в разделе «Заметки».
   // Fallback на обычный рендер ниже — пока заметка не зарезолвилась (или файл не .md).
@@ -786,9 +1128,17 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
           onBack={isMobile ? onClose : undefined}
           extraToolbar={
             <>
+              {/* Тумблер режима: иконка ЦЕЛЕВОГО состояния — из полноэкранного
+                  режима заметки должен быть обратный путь в сплит */}
               {!isMobile && onToggleFullscreen && (
-                <ToolbarIconButton isMobile={isMobile} onClick={onToggleFullscreen} title="На весь экран">
-                  <Maximize2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+                <ToolbarIconButton
+                  isMobile={isMobile}
+                  onClick={onToggleFullscreen}
+                  title={fullscreen ? 'Свернуть: сплит с чатом' : 'На весь экран'}
+                >
+                  {fullscreen
+                    ? <Columns2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+                    : <Maximize2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
                 </ToolbarIconButton>
               )}
               {!isMobile && (
@@ -804,29 +1154,44 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: C.bgCard, position: 'relative' }}>
-      {/* Шапка */}
+    <div ref={rootRef} style={{ display: 'flex', flexDirection: 'column', height: '100%', background: C.bgCard, position: 'relative' }}>
+      {/* Шапка-«ступени»: [☰ + имя] [бейджи · вкладки · главное действие]
+          [вторичные иконки] [«···»] [якорь-выход]. Гибкое только имя; чем уже панель,
+          тем больше контролов схлопывается в иконки и уезжает в «···». Якорь
+          [режим][закрыть] не сжимается и доступен при любой ширине. */}
       <Toolbar isMobile={isMobile}>
-        {/* Кнопка открытия сайдбара — только когда он свёрнут (не на мобиле) */}
-        {onOpenSidebar && !isMobile && (
-          <ToolbarIconButton onClick={onOpenSidebar} title="Открыть панель" isMobile={isMobile}>
-            <Menu size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-          </ToolbarIconButton>
-        )}
-        {/* Кнопка назад — только на мобиле */}
-        {isMobile && (
-          <BackButton onClick={handleClose} title="К списку файлов" style={{ height: 32 }}>
-            <span style={{ fontSize: 13, fontWeight: 600, color: C.textSecondary }}>Файлы</span>
-          </BackButton>
+        <div ref={stripRef} style={{ display: 'flex', alignItems: 'center', gap: rowGap, flex: 1, minWidth: 0 }}>
+        {/* Левый фиксированный блок: «назад» на мобиле, ☰ на широких ступенях десктопа
+            (на узких ☰ уезжает в «···») */}
+        {(isMobile || (onOpenSidebar && !iconTier)) && (
+          <div ref={fixedLeftRef} style={{ display: 'flex', alignItems: 'center', gap: rowGap, flexShrink: 0 }}>
+            {isMobile ? (
+              <BackButton onClick={handleClose} title="К списку файлов" style={{ height: 32 }}>
+                <span style={{ fontSize: FS.base, fontWeight: 600, color: C.textSecondary }}>Файлы</span>
+              </BackButton>
+            ) : (
+              <ToolbarIconButton onClick={onOpenSidebar} title="Открыть панель" isMobile={isMobile}>
+                <Menu size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+              </ToolbarIconButton>
+            )}
+          </div>
         )}
 
-        {/* Имя файла */}
-        <span style={{ fontFamily: FONT.mono, fontWeight: 700, fontSize: 13, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: C.textHeading }}>
-          {fileName}
+        {/* Имя файла — единственный гибкий элемент строки. Расширение отдельным span'ом:
+            ellipsis режет хвост, а по нему и узнают файл. title — полный путь. */}
+        <span title={filePath} style={{
+          display: 'flex', alignItems: 'baseline', flex: '1 1 auto', minWidth: 0,
+          fontFamily: FONT.mono, fontWeight: 700, fontSize: FS.base, color: C.textHeading,
+        }}>
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{nameBase}</span>
+          {nameExt && <span style={{ flexShrink: 0 }}>{nameExt}</span>}
         </span>
 
+        {/* Бейджи + вкладки + главное действие — несжимаемый блок */}
+        {badgesVisible && (
+        <div ref={badgesRef} style={{ display: 'flex', alignItems: 'center', gap: rowGap, flexShrink: 0 }}>
         {/* Комментарии к документу (флаг doc-annotations): счётчик в тулбаре */}
-        {commentCounts && commentCounts.total > 0 && !editing && tab === 'file' && (
+        {commentsChipVisible && commentCounts && (
           <span
             title={`Комментариев: ${commentCounts.total}, открытых: ${commentCounts.open}`}
             style={{
@@ -842,265 +1207,124 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
           </span>
         )}
 
-        {/* Статистика diff */}
-        {diffStats && (
-          <span style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
-            <span style={{ fontSize: 12, fontFamily: FONT.mono, color: C.success, fontWeight: 600 }}>+{diffStats.added}</span>
-            <span style={{ fontSize: 12, fontFamily: FONT.mono, color: C.danger, fontWeight: 600 }}>-{diffStats.removed}</span>
+        {/* Статистика diff — рядом со своей вкладкой, а не постоянным блоком в строке */}
+        {diffChipVisible && diffStats && (
+          <span style={{ display: 'flex', gap: SP.xs, flexShrink: 0 }}>
+            <span style={{ fontSize: FS.sm, fontFamily: FONT.mono, color: C.success, fontWeight: 600 }}>+{diffStats.added}</span>
+            <span style={{ fontSize: FS.sm, fontFamily: FONT.mono, color: C.danger, fontWeight: 600 }}>-{diffStats.removed}</span>
           </span>
         )}
 
-        {/* Pill-переключатель Файл / Diff / История / Кто менял — скрыт для Office-файлов;
-            Diff — когда файл изменён, «История» и «Кто менял» — когда проект в git-репо.
-            На мобиле — компакт (только иконки) */}
-        {!isOfficeFile && (!!diff || showBlameTab) && (
-          <PillSwitch<ViewTab>
-            value={tab}
-            options={[
-              { value: 'file', label: 'Файл', icon: <File size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> },
-              ...(diff ? [{ value: 'diff' as ViewTab, label: 'Diff', icon: <FileDiff size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> }] : []),
-              ...(showBlameTab ? [{ value: 'history' as ViewTab, label: 'История', icon: <History size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> }] : []),
-              ...(showBlameTab ? [{ value: 'blame' as ViewTab, label: 'Кто менял', icon: <Users size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> }] : []),
-            ]}
-            onChange={setTab}
-            isMobile={isMobile}
-            compact={isMobile}
-          />
-        )}
-
-        {/* Переключатель Просмотр / Код для HTML-файлов */}
-        {isHtml && !editing && tab === 'file' && !fileContent?.isBinary && (
-          <PillSwitch<'preview' | 'code'>
-            value={htmlTab}
-            options={[{ value: 'preview', label: 'Просмотр' }, { value: 'code', label: 'Код' }]}
-            onChange={v => { setHtmlTab(v); if (v === 'code') setEditing(false); }}
-            isMobile={isMobile}
-          />
-        )}
-
-        {/* Переключатель просмотр/редактирование для draw.io */}
-        {isDrawioViewing && (
-          drawioMode === 'view' ? (
-            <button
-              title="Редактировать"
-              onClick={() => setDrawioMode('edit')}
-              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: isMobile ? '5px 8px' : '5px 12px', borderRadius: 8, border: `1px solid ${C.border}`, background: C.bgPanel, color: C.textHeading, fontSize: 13, fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap' }}
-            >
-              <SquarePen size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0, opacity: 0.7 }} />
-              {!isMobile && <span>Редактировать</span>}
-            </button>
-          ) : (
-            <button
-              title="Просмотр (правки сохраняются)"
-              onClick={async () => { await drawioRef.current?.flush(); setDrawioMode('view'); }}
-              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: isMobile ? '5px 8px' : '5px 12px', borderRadius: 8, border: `1px solid ${C.accent}`, background: C.accent, color: C.onAccent, fontSize: 13, fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap' }}
-            >
-              <Eye size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
-              {!isMobile && <span>Просмотр</span>}
-            </button>
-          )
-        )}
-
-        {/* Переключатель режима просмотра/редактирования для Office-файлов (Visio — только просмотр) */}
-        {isOfficeFile && !isVisioFile && (
-          officeSwitching ? (
-            // Загрузка
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: isMobile ? '5px 8px' : '5px 12px', borderRadius: 8, border: `1px solid ${C.border}`, background: C.border, color: C.textMuted, fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap', pointerEvents: 'none' }}>
-              <span style={{ width: 13, height: 13, borderRadius: '50%', border: `2px solid ${C.dashed}`, borderTopColor: C.textMuted, animation: 'spin 0.7s linear infinite', flexShrink: 0 }} />
-              {!isMobile && <span>Открываю…</span>}
-            </div>
-          ) : officeMode === 'view' ? (
-            // Кнопка «Редактировать»
-            <button
-              title="Редактировать"
-              onClick={() => { setOfficeCacheKey(undefined); setOfficeSwitching(true); setOfficeMode('edit'); }}
-              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: isMobile ? '5px 8px' : '5px 12px', borderRadius: 8, border: `1px solid ${C.border}`, background: C.bgPanel, color: C.textHeading, fontSize: 13, fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap' }}
-            >
-              <SquarePen size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0, opacity: 0.7 }} />
-              {!isMobile && <span>Редактировать</span>}
-            </button>
-          ) : officeDiscardConfirm ? (
-            // Подтверждение отмены изменений
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              {!isMobile && <span style={{ fontSize: 12, color: C.textSecondary, whiteSpace: 'nowrap', padding: '0 4px' }}>Отменить изменения?</span>}
-              <button
-                title="Откатить изменения"
-                onClick={async () => {
-                  setOfficeDiscardConfirm(false);
-                  setOfficeSwitching(true);
-                  try { await api.files.officeDiscard(project.id, filePath); } catch {}
-                  setOfficeMode('view');
-                }}
-                style={{ display: 'flex', alignItems: 'center', gap: 5, padding: isMobile ? '5px 8px' : '5px 12px', borderRadius: 8, border: `1px solid ${C.dangerBorder}`, background: C.dangerBg, color: C.dangerText, fontSize: 13, fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap' }}
-              >
-                <DiscardIcon />
-                {!isMobile && <span>Откатить</span>}
-              </button>
-              <button
-                title="Нет, продолжить редактирование"
-                onClick={() => setOfficeDiscardConfirm(false)}
-                style={{ display: 'flex', alignItems: 'center', padding: isMobile ? '5px 8px' : '5px 12px', borderRadius: 8, border: `1px solid ${C.border}`, background: C.bgPanel, color: C.textHeading, fontSize: 13, fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap' }}
-              >
-                {!isMobile ? 'Нет' : <X size={13} strokeWidth={2} />}
-              </button>
-            </div>
-          ) : (
-            // Кнопки редактирования: [Отмена] [Сохранить]
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              <button
-                title="Отменить изменения"
-                onClick={isMobile
-                  ? () => setOfficeDiscardDialog(true)
-                  : () => setOfficeDiscardConfirm(true)
-                }
-                style={{ display: 'flex', alignItems: 'center', gap: 5, padding: isMobile ? '5px 8px' : '5px 12px', borderRadius: 8, border: `1px solid ${C.border}`, background: C.bgPanel, color: C.textHeading, fontSize: 13, fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap' }}
-              >
-                <DiscardIcon />
-                {!isMobile && <span>Отмена</span>}
-              </button>
-              <button
-                title="Сохранить"
-                onClick={async () => {
-                  setOfficeSwitching(true);
-                  await api.files.officeForceSave(project.id, filePath).catch(() => {});
-                  setOfficeCacheKey(String(Date.now()));
-                  setOfficeMode('view');
-                }}
-                style={{ display: 'flex', alignItems: 'center', gap: 5, padding: isMobile ? '5px 8px' : '5px 12px', borderRadius: 8, border: `1px solid ${C.accent}`, background: C.accent, color: C.onAccent, fontSize: 13, fontWeight: 500, cursor: 'pointer', whiteSpace: 'nowrap' }}
-              >
-                <Save size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-                {!isMobile && <span>Сохранить</span>}
-              </button>
-            </div>
-          )
-        )}
-
-        {/* Кнопки действий */}
-        <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexShrink: 0 }}>
-          {/* Скопировать содержимое текстового файла (для .md — Shift = с форматированием) */}
-          {tab === 'file' && isCopyableText && !isDrawio && !(isHtml && htmlTab === 'preview') && (
-            <ToolbarIconButton
-              isMobile={isMobile}
-              onClick={handleCopyContent}
-              title={copied ? 'Скопировано' : isMarkdown ? 'Скопировать Markdown (Shift — с форматированием)' : 'Скопировать содержимое'}
-              color={copied ? C.success : undefined}
-            >
-              {copied
-                ? <Check size={ICON_SIZE.sm} strokeWidth={2.5} />
-                : <Copy size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
-            </ToolbarIconButton>
-          )}
-          {online && !editing && !fileContent?.isBinary && (
+        {/* Вкладки: Просмотр · Код (HTML) · Diff · История · Кто менял — один трек.
+            Скрыты для Office-файлов и на время загрузки. comfort — с подписями,
+            cozy/narrow — только иконки, tight — кнопка текущей вкладки + меню. */}
+        {showTabs && (
+          !isMobile && tier === 'tight' ? (
             <>
-              {diff && (
-                isMobile
-                  ? <ToolbarIconButton isMobile={isMobile} onClick={handleRevert} title="Откатить"><RotateCcw size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} /></ToolbarIconButton>
-                  : <button onClick={handleRevert} style={tbBtnGhost}>Откатить</button>
-              )}
-              {!isMobile && !isDrawio && (
-                isHtml && htmlTab === 'preview'
-                  ? <button onClick={() => setHtmlTab('code')} style={tbBtnPrimary}>Править</button>
-                  : <button onClick={() => { setEditing(true); setTab('file'); }} style={tbBtnPrimary}>Править</button>
-              )}
-            </>
-          )}
-          {!editing && fileContent?.isBinary && null}
-          {editing && (
-            isMobile ? (
-              <>
-                <ToolbarIconButton isMobile onClick={() => { setEditing(false); setEditContent(content); setActionError(null); }} title="Отмена">
-                  <DiscardIcon />
-                </ToolbarIconButton>
-                <ToolbarIconButton
-                  isMobile
-                  onClick={handleSave}
-                  title={!online ? 'Сохранение недоступно офлайн' : 'Сохранить'}
-                  color={online ? C.accent : undefined}
-                  disabled={!online}
-                >
-                  <Save size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-                </ToolbarIconButton>
-              </>
-            ) : (
-              <>
-                <button onClick={() => { setEditing(false); setEditContent(content); setActionError(null); }} style={tbBtnGhost}>Отмена</button>
-                <button
-                  onClick={handleSave}
-                  disabled={!online}
-                  title={!online ? 'Сохранение недоступно офлайн' : undefined}
-                  style={{ ...tbBtnPrimary, ...(!online ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
-                >Сохранить</button>
-              </>
-            )
-          )}
-
-          {/* Синхронизация для офлайна */}
-          {online && !editing && (
-            pending ? (
-              syncState === 'direct' ? (
-                <ToolbarIconButton isMobile={isMobile} onClick={handleToggleSync} title="Отменить синхронизацию">
-                  <span style={{ width: 14, height: 14, borderRadius: '50%', border: `2.5px solid ${C.border}`, borderTopColor: C.accent, animation: 'spin 0.6s linear infinite' }} />
-                </ToolbarIconButton>
-              ) : (
-                <span title="Загружается…" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: isMobile ? 40 : 32, height: isMobile ? 40 : 32 }}>
-                  <span style={{ width: 14, height: 14, borderRadius: '50%', border: `2.5px solid ${C.border}`, borderTopColor: C.accent, animation: 'spin 0.6s linear infinite' }} />
-                </span>
-              )
-            ) : syncState === 'inherited' ? (
-              <span title="Синхронизируется через папку/проект" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: isMobile ? 40 : 32, height: isMobile ? 40 : 32, color: C.accentMuted }}>
-                <CloudGlyph filled />
-              </span>
-            ) : (
               <ToolbarIconButton
                 isMobile={isMobile}
-                onClick={handleToggleSync}
-                title={syncState === 'direct' ? 'Отключить синхронизацию' : 'Синхронизировать для офлайна'}
-                color={syncState === 'direct' ? C.accent : undefined}
+                active={!!tabMenu}
+                title={`Вкладка: ${activeTabOption.label}`}
+                onClick={e => setTabMenu(e.currentTarget.getBoundingClientRect())}
               >
-                <CloudGlyph filled={syncState === 'direct'} />
+                {activeTabOption.icon}
               </ToolbarIconButton>
-            )
-          )}
-
-          {/* Скачать — для документов и картинок (когда есть данные) */}
-          {!editing && fileContent?.base64 && (
-            <ToolbarIconButton isMobile={isMobile} onClick={handleDownload} title="Скачать">
-              <Download size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-            </ToolbarIconButton>
-          )}
-
-          {/* Корзина */}
-          {online && !editing && (
-            <ToolbarIconButton isMobile={isMobile} onClick={() => setDeleteConfirm(true)} title="Удалить">
-              <Trash2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-            </ToolbarIconButton>
-          )}
-
-          {/* Режим просмотра: сплит с чатом / на весь экран */}
-          {!isMobile && onToggleFullscreen && !editing && (
-            <PillSwitch
-              value={fullscreen ? 'full' : 'split'}
-              options={[
-                { value: 'split' as const, label: 'Сплит', icon: <Columns2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} /> },
-                { value: 'full' as const, label: 'Полный', icon: <Maximize2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} /> },
-              ]}
-              onChange={(v) => {
-                // onToggleFullscreen — toggle без аргумента, поэтому клик по уже активному
-                // сегменту (напр. «Сплит», когда уже сплит) должен быть no-op, иначе toggle
-                // уведёт в противоположный режим
-                if (v === 'full' && !fullscreen) onToggleFullscreen();
-                if (v === 'split' && fullscreen) onToggleFullscreen();
-              }}
+              {tabMenu && (
+                <UiMenu anchor={tabMenu} minWidth={210} maxHeight={240} onClose={() => setTabMenu(null)}>
+                  {tabOptions.map(o => (
+                    <MenuItem
+                      key={o.value}
+                      icon={o.icon}
+                      onClick={() => { selectTab(o.value); setTabMenu(null); }}
+                      label={
+                        <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flex: 1, gap: SP.sm }}>
+                          {o.label}
+                          {o.value === tabValue && <Check size={ICON_SIZE.xs} strokeWidth={2.4} style={{ color: C.accent, flexShrink: 0 }} />}
+                        </span>
+                      }
+                    />
+                  ))}
+                </UiMenu>
+              )}
+            </>
+          ) : (
+            <PillSwitch<TabKey>
+              value={tabValue}
+              options={tabOptions}
+              onChange={selectTab}
+              isMobile={isMobile}
+              compact={isMobile}
+              iconsOnly={!isMobile && tier !== 'comfort'}
             />
-          )}
+          )
+        )}
 
-          {/* Закрыть — десктоп */}
-          {!isMobile && (
+        {/* Слот главного действия режима — ровно одна кнопка (+ необязательная «Отмена»).
+            Неприкосновенен: на узких ступенях меняет форму на иконку, но не сворачивается. */}
+        {actionAsIcon
+          ? <>
+              {cancelAction && actionIcon(cancelAction)}
+              {mainAction && actionIcon(mainAction)}
+            </>
+          : <>
+              {cancelAction && actionButton(cancelAction)}
+              {mainAction && actionButton(mainAction)}
+            </>}
+        </div>
+        )}
+
+        {/* Вторичные действия: полоса одинаковых кнопок; что не влезло — в «···» */}
+        {collapsible.slice(0, visibleCount).map(c => (
+          <span key={c.key} style={{ display: 'flex', flexShrink: 0 }}>{c.node}</span>
+        ))}
+        {menuItems.length > 0 && (
+          <ToolbarOverflowMenu isMobile={isMobile} items={menuItems} title="Ещё" />
+        )}
+
+        {/* Правый якорь-выход: режим просмотра + «Закрыть». Несжимаемая группа последним
+            ребёнком строки — эти две кнопки доступны всегда, даже когда панель ужата
+            до минимума и всё остальное уехало в «···». */}
+        {!isMobile && (
+          <div ref={rightRef} style={{ display: 'flex', gap: SP.xs, alignItems: 'center', flexShrink: 0 }}>
+            {/* Режим просмотра: сплит с чатом / на весь экран. Ступени: подписи →
+                только иконки → тумблер с иконкой ЦЕЛЕВОГО состояния. Показываем и в
+                правке: иначе из полноэкранного режима не выйти, пока не закончишь. */}
+            {onToggleFullscreen && (
+              tier === 'tight' ? (
+                <ToolbarIconButton
+                  isMobile={isMobile}
+                  onClick={handleToggleMode}
+                  title={fullscreen ? 'Свернуть: сплит с чатом' : 'Развернуть на весь экран'}
+                >
+                  {fullscreen
+                    ? <Columns2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+                    : <Maximize2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
+                </ToolbarIconButton>
+              ) : (
+                <PillSwitch
+                  value={fullscreen ? 'full' : 'split'}
+                  iconsOnly={tier !== 'comfort'}
+                  options={[
+                    { value: 'split' as const, label: 'Сплит', title: 'Сплит с чатом', icon: <Columns2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} /> },
+                    { value: 'full' as const, label: 'Полный', title: 'На весь экран', icon: <Maximize2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} /> },
+                  ]}
+                  onChange={(v) => {
+                    // handleToggleMode — toggle без аргумента, поэтому клик по уже активному
+                    // сегменту (напр. «Сплит», когда уже сплит) должен быть no-op, иначе toggle
+                    // уведёт в противоположный режим
+                    if (v === 'full' && !fullscreen) handleToggleMode();
+                    if (v === 'split' && fullscreen) handleToggleMode();
+                  }}
+                />
+              )
+            )}
+
             <ToolbarIconButton isMobile={isMobile} onClick={handleClose} title="Закрыть">
               <X size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
             </ToolbarIconButton>
-          )}
-        </div>
+          </div>
+        )}
+        </div>{/* конец строки шапки */}
       </Toolbar>
 
       {/* Баннер ошибки мутации (офлайн/сбой) */}
@@ -1533,7 +1757,8 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
         />
       )}
 
-      {/* Подтверждение отката office-правок (мобилка; на десктопе — инлайн-плашка в тулбаре) */}
+      {/* Подтверждение отката office-правок — раньше на десктопе была inline-плашка
+          в тулбаре, теперь единый ConfirmDialog (на мобиле сам становится шторкой) */}
       {officeDiscardDialog && (
         <ConfirmDialog
           title="Отменить изменения?"

@@ -18,11 +18,15 @@ interface Options {
   itemWidth: number;
   gap: number;
   menuWidth: number;    // ширина кнопки «⋯»
+  // Место под ГИБКОЕ содержимое строки, которое в замеряемые блоки не входит
+  // (имя файла и т.п.): его ширина зависит от числа показанных кнопок, поэтому мерить
+  // его нельзя — пересчёт зациклился бы. Резервируем константу и считаем от неё.
+  reserve?: number;
 }
 
 export function useToolbarOverflow({
   stripRef, fixedLeftRef, badgesRef, rightRef,
-  count, enabled, itemWidth, gap, menuWidth,
+  count, enabled, itemWidth, gap, menuWidth, reserve = 0,
 }: Options): number {
   const [visible, setVisible] = useState(count);
 
@@ -42,13 +46,13 @@ export function useToolbarOverflow({
     // Каждая кнопка добавляет свою ширину + зазор перед собой. Плюс два зазора на
     // несжимаемые блоки справа (чипы-бейджи и группа пикеров) — они остаются
     // отдельными flex-детьми и съедают зазор, даже когда пусты.
-    const avail = total - fixed - gap * 2;
+    const avail = total - fixed - gap * 2 - reserve;
     const step = itemWidth + gap;
     if (avail >= count * step) { setVisible(count); return; }
     // Место под «⋯» резервируем, только если что-то реально прячем
     const fit = Math.floor((avail - (menuWidth + gap)) / step);
     setVisible(Math.max(0, Math.min(count, fit)));
-  }, [enabled, count, itemWidth, gap, menuWidth, stripRef, fixedLeftRef, badgesRef, rightRef]);
+  }, [enabled, count, itemWidth, gap, menuWidth, reserve, stripRef, fixedLeftRef, badgesRef, rightRef]);
 
   // Пересчёт на КАЖДЫЙ рендер: первый layout может застать полосу недомеренной (панели
   // ещё раскладываются, аватар собеседника не загрузился), а разовый замер так и остался

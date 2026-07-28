@@ -1692,7 +1692,8 @@ const windowWidth = useWindowWidth();
             {/* Fullscreen: файл из дерева или планшет */}
             {openFile && (fileFullscreen || isTablet) && (
               <div style={{ flex: 1, overflow: 'hidden' }}>
-                {/* На планшете split недоступен (isTablet форсирует full) — переключатель не показываем */}
+                {/* На планшете split недоступен (isTablet форсирует full, ветка сплита выше
+                    не рендерится) — входа в режим нет, поэтому и переключателя не показываем */}
                 <FileViewer project={project} filePath={openFile} onClose={backFromFile} onToggleFullscreen={isTablet ? undefined : handleExitFullscreen} fullscreen={fileFullscreen || isTablet} onOpenSidebar={openSidebar} initialTab={openFileDiffMode ? 'diff' : undefined} gitStagePath={gitStagePath ?? undefined} />
               </div>
             )}

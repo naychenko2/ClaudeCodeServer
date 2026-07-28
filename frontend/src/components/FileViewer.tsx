@@ -93,6 +93,8 @@ interface Props {
   // Путь файла, открытого из git-«Изменений» как unstaged: включает зернистый stage
   // хунков/строк на diff-вкладке (diff при этом — worktree против индекса)
   gitStagePath?: string;
+  // Номер строки для скролла после открытия (из графа / ссылок на строку)
+  scrollToLine?: number;
 }
 
 interface FileContent {
@@ -295,7 +297,7 @@ function AudioFilePlayer({ src, mimeType, fileName, fileSizeMb }: {
   );
 }
 
-export function FileViewer({ project, filePath, onClose, onToggleFullscreen, fullscreen, isMobile, onOpenSidebar, initialTab, gitStagePath }: Props) {
+export function FileViewer({ project, filePath, onClose, onToggleFullscreen, fullscreen, isMobile, onOpenSidebar, initialTab, gitStagePath, scrollToLine }: Props) {
   const online = useOnline();
   // Заметки vault (notes/*.md): рендерим [[wikilinks]] и уводим по клику в раздел «Заметки»
   const allNotes = useNotes();
@@ -527,6 +529,24 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   useEffect(() => {
     if (initialTab) setTab(initialTab);
   }, [initialTab, filePath]);
+
+  // Скролл к строке при открытии файла (из графа / ссылок на строку)
+  useEffect(() => {
+    if (!scrollToLine || tab !== 'file' || !content || loading) return;
+    // Даём рендеру SyntaxHighlighter осесть
+    const id = setTimeout(() => {
+      const container = contentAreaRef.current;
+      if (!container) return;
+      // react-syntax-highlighter с showLineNumbers рендерит строки как строчные
+      // элементы; ищем N-й line-number по классу
+      const lines = container.querySelectorAll('[class*="line-number"], [class*="linenumber"]');
+      const target = lines[scrollToLine - 1];
+      if (target) {
+        target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      }
+    }, 100);
+    return () => clearTimeout(id);
+  }, [scrollToLine, tab, content, loading]);
 
   // Метки синхронизации + набор скачанных файлов — в общий стор (синхронно с деревом)
   useEffect(() => {

@@ -16,16 +16,75 @@ interface Props {
   selectedId: string | null;
   query: string;
   onSelect: (id: string | null) => void;
+  hideTestNodes?: boolean;
+  hideOrphanNodes?: boolean;
 }
 
 const GLYPH_FS = FS.base;   // моноширинная буква типа в кружке
 const LABEL_FS = FS.xs;     // моноширинная подпись узла под кружком
 
-export function CodeGraphCanvas({ graph, layout, filters, selectedId, query, onSelect }: Props) {
-  // Рёбра, чей тип связи включён фильтром (остальные не рисуются — как в макете)
+export function CodeGraphCanvas({ graph, layout, filters, selectedId, query, onSelect, hideTestNodes, hideOrphanNodes }: Props) {
+  // Фильтр «скрыть тесты»: sourceFile содержит Tests/test/__tests__/.Tests.
+  const hiddenByTest = useMemo(() => {
+    if (!hideTestNodes) return new Set<string>();
+    const s = new Set<string>();
+    for (const n of graph.nodes) {
+      if (/[\\/]Tests[\\/]|[\\/]test[\\/]|[\\/]__tests__[\\/]|\.Tests\./i.test(n.sourceFile)) {
+        s.add(n.id);
+      }
+    }
+    return s;
+  }, [hideTestNodes, graph.nodes]);
+
+  // Фильтр «скрыть сироты»: узлы без входящих/исходящих рёбер (degree = 0)
+  const hiddenOrphan = useMemo(() => {
+    if (!hideOrphanNodes) return new Set<string>();
+    const deg = new Map<string, number>();
+    for (const e of graph.edges) {
+      deg.set(e.source, (deg.get(e.source) ?? 0) + 1);
+      deg.set(e.target, (deg.get(e.target) ?? 0) + 1);
+    }
+    const s = new Set<string>();
+    for (const n of graph.nodes) {
+      if ((deg.get(n.id) ?? 0) === 0) s.add(n.id);
+    }
+    return s;
+  }, [hideOrphanNodes, graph.nodes]);
+
+  // Поиск: при активном запросе показываем только совпавшие узлы + их соседей первого уровня
+  const searchVisible = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return null; // null = неактивен, не фильтруем
+    const matching = new Set<string>();
+    for (const n of graph.nodes) {
+      if (n.label.toLowerCase().includes(q) || n.fullyQualifiedName.toLowerCase().includes(q)) {
+        matching.add(n.id);
+      }
+    }
+    // Добавляем соседей первого уровня
+    const result = new Set(matching);
+    for (const e of graph.edges) {
+      if (matching.has(e.source)) result.add(e.target);
+      if (matching.has(e.target)) result.add(e.source);
+    }
+    return result;
+  }, [query, graph.nodes, graph.edges]);
+
+  const hidden = useMemo(() => {
+    const s = new Set([...hiddenByTest, ...hiddenOrphan]);
+    // При активном поиске скрываем всё, что не входит в searchVisible
+    if (searchVisible) {
+      for (const n of graph.nodes) {
+        if (!searchVisible.has(n.id)) s.add(n.id);
+      }
+    }
+    return s;
+  }, [hiddenByTest, hiddenOrphan, searchVisible, graph.nodes]);
+
+  // Рёбра, чей тип связи включён фильтром + оба конца видимы
   const visibleEdges = useMemo(
-    () => graph.edges.filter(e => filters[e.relation]),
-    [graph.edges, filters],
+    () => graph.edges.filter(e => filters[e.relation] && !hidden.has(e.source) && !hidden.has(e.target)),
+    [graph.edges, filters, hidden],
   );
 
   // Множество узлов, инцидентных выделенному (для подсветки/приглушения)
@@ -55,13 +114,14 @@ export function CodeGraphCanvas({ graph, layout, filters, selectedId, query, onS
 
   const edgeState = (e: CodeGraphEdge): 'hi' | 'dim' | 'normal' => {
     if (hasFocus) return (e.source === selectedId || e.target === selectedId) ? 'hi' : 'dim';
-    if (hasQuery) return 'dim';   // поиск гасит все рёбра — фокус на узлах
+    if (hasQuery) return 'normal'; // поиск не гасит рёбра — узлы уже отфильтрованы
     return 'normal';
   };
 
   const nodeState = (id: string): 'sel' | 'match' | 'dim' | 'normal' => {
     if (hasFocus) return id === selectedId ? 'sel' : (incident.has(id) ? 'normal' : 'dim');
-    if (hasQuery) return matches(id) ? 'match' : 'dim';
+    // При поиске несовпадающие узлы уже скрыты через hidden; оставшиеся — normal либо match (для accent-подсветки)
+    if (hasQuery) return matches(id) ? 'match' : 'normal';
     return 'normal';
   };
 
@@ -110,9 +170,9 @@ export function CodeGraphCanvas({ graph, layout, filters, selectedId, query, onS
         })}
       </g>
 
-      {/* Узлы */}
+      {/* Узлы — скрытые удаляются из DOM (display: none), а не меркнут */}
       <g>
-        {layout.nodes.map(ln => {
+        {layout.nodes.filter(ln => !hidden.has(ln.node.id)).map(ln => {
           const id = ln.node.id;
           const st = nodeState(id);
           const ring = ln.isGod || st === 'sel' ? C.accent : KIND_RING[ln.node.kind];

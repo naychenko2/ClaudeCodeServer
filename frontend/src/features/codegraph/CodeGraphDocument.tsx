@@ -150,6 +150,8 @@ export function CodeGraphDocument({ projectId, isMobile, onClose, onOpenFile, on
               selectedId={s.selectedId}
               query={s.query}
               onSelect={a.select}
+              hideTestNodes={s.hideTestNodes}
+              hideOrphanNodes={s.hideOrphanNodes}
             />
             {/* Мобила: FAB режимов/паспорта с бейджем числа активных фильтров */}
             {isMobile && (

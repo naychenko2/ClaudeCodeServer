@@ -31,6 +31,8 @@ interface State {
   query: string;
   selectedId: string | null;
   legendOpen: boolean;
+  hideTestNodes: boolean;
+  hideOrphanNodes: boolean;
 }
 
 let _state: State = {
@@ -42,6 +44,8 @@ let _state: State = {
   query: '',
   selectedId: null,
   legendOpen: false,
+  hideTestNodes: false,
+  hideOrphanNodes: false,
 };
 
 const listeners = new Set<() => void>();
@@ -72,6 +76,8 @@ export async function loadCodeGraph(projectId: string, force = false): Promise<v
     query: reset ? '' : _state.query,
     selectedId: reset ? null : _state.selectedId,
     legendOpen: reset ? false : _state.legendOpen,
+    hideTestNodes: reset ? false : _state.hideTestNodes,
+    hideOrphanNodes: reset ? false : _state.hideOrphanNodes,
   };
   emit();
   try {
@@ -186,6 +192,14 @@ export function setGraphLegendOpen(open: boolean) {
   set({ legendOpen: open });
 }
 
+// Фильтры «скрыть тесты» и «скрыть сироты» — на стороне фронта
+export function toggleHideTestNodes() {
+  set({ hideTestNodes: !_state.hideTestNodes });
+}
+export function toggleHideOrphanNodes() {
+  set({ hideOrphanNodes: !_state.hideOrphanNodes });
+}
+
 // Подписка на снимок стора. Actions возвращаются стабильным useCallback —
 // можно передавать в дочерние компоненты как пропсы без лишних ререндеров.
 export function useCodeGraph(): State {
@@ -207,5 +221,7 @@ export function useCodeGraphActions() {
     setQuery: setGraphQuery,
     select: selectGraphNode,
     setLegendOpen: setGraphLegendOpen,
+    toggleHideTestNodes,
+    toggleHideOrphanNodes,
   }), []);
 }

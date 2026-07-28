@@ -19,7 +19,8 @@ import { toRateWindows, worstWindow } from '../lib/rateLimit';
 import { estimateContext } from '../lib/context';
 import { useCtxThresholds } from '../lib/contextPrefs';
 import { notify } from '../lib/notify';
-import { type Mode, ModeIcon } from '../lib/modes';
+import { type Mode, ModeIcon, MODES, isDangerMode } from '../lib/modes';
+import { getDraft } from '../lib/drafts';
 import { useModelCaps, assistantName, modelProvider } from '../lib/models';
 import { Composer } from './Composer';
 import { ProjectGitBar } from './ProjectGitBar';
@@ -341,6 +342,24 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   }, []);
 
   const [mode, setMode] = useState<Mode>(session.mode);
+  // Сброс режима при смене чата: ChatPanel переиспользуется между сессиями (стоит без key),
+  // а useState читает session.mode только при первом монтировании — иначе в новый чат
+  // «утекает» режим предыдущей вкладки (например, «План»). Зависимость — session.id,
+  // не session.mode: иначе серверный апдейт в той же вкладке перебил бы локальный выбор.
+  // Приоритет — режиму из composerRestore, но строго в тех же условиях, в которых его
+  // применит Composer (seq≠0, text≠null, пустой черновик у уходящего чата, режим валиден
+  // и не danger): тогда в одном коммите оба источника ставят одно значение и не спорят
+  // за mode; если Composer restore не применит (есть черновик) — ставим session.mode.
+  const prevSessionIdRef = useRef(session.id);
+  useEffect(() => {
+    const prevId = prevSessionIdRef.current;
+    prevSessionIdRef.current = session.id;
+    const r = composerRestore;
+    const restored = r && r.seq !== 0 && r.text != null && !getDraft(prevId).trim()
+      ? MODES.find(v => v === r.mode) : undefined;
+    setMode(restored && !isDangerMode(restored) ? restored : session.mode);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.id]);
   // Выбор режима сразу уезжает в сессию: иначе он жил бы только в состоянии этой вкладки
   // и терялся при уходе со страницы (при возврате ChatPanel перечитывает session.mode).
   // Локальный setMode делаем сразу — переключатель не должен ждать сеть; ход всё равно

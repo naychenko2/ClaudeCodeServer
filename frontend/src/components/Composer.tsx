@@ -254,11 +254,6 @@ export function Composer({
   const asstName = useAssistantName();
   // Черновик per-session: инициализируем из стора и синхронизируем при переключении чата
   const [text, setText] = useState(() => getDraft(sessionId));
-  // Актуальные значения для эффекта restore (зависит только от seq, замыкание иначе устареет)
-  const lastTextRef = useRef(text);
-  lastTextRef.current = text;
-  const lastModeRef = useRef(mode);
-  lastModeRef.current = mode;
   const draftSessionRef = useRef(sessionId);
   useEffect(() => {
     if (draftSessionRef.current !== sessionId) {
@@ -285,6 +280,11 @@ export function Composer({
   }, []);
   // Возврат прерванного сообщения по «Стоп» (фича «честная очередь», событие composer_restore).
   // Только в ПУСТОЕ поле: набранный черновик пользователя важнее серверного restore.
+  // Гейт читает сохранённый черновик ЭТОГО чата — тот же источник, что и гейт режима
+  // в ChatPanel: живое значение инпута равно ему здесь всегда (эффект синхронизации
+  // черновика выше объявлен раньше и пишет его в том же коммите до этого эффекта),
+  // поэтому режим и текст не могут разойтись. Режим здесь НЕ восстанавливаем —
+  // restore-mode целиком ставит ChatPanel (единый владелец, спора за setMode нет).
   // text=null — прерван авто/агентский ход, восстанавливать нечего: композер не трогаем.
   // appliedSeqRef — вторая линия защиты от resurrect-текста: один и тот же seq не применяем
   // дважды (сервер гасит snapshot, но при гонке событие может дойти повторно).
@@ -302,17 +302,11 @@ export function Composer({
     const r = restore;
     if (!r || r.seq === 0) return;
     if (r.seq === appliedSeqRef.current) return;
-    if (lastTextRef.current.trim()) return;          // черновик важнее
+    if (getDraft(sessionId).trim()) return;          // черновик важнее
     if (r.text == null) return;                      // нечего восстанавливать
     setText(r.text);
     if (r.attachedPaths && r.attachedPaths.length > 0 && onReplaceAttachments) {
       onReplaceAttachments(r.attachedPaths);
-    }
-    // Режим возвращаем, только если он валиден и не опасен: bypass требует подтверждения
-    // в модалке, включать его молча при restore небезопасно
-    if (r.mode && r.mode !== lastModeRef.current) {
-      const m = MODES.find(v => v === r.mode);
-      if (m && !isDangerMode(m)) onModeChange(m);
     }
     textareaRef.current?.focus();
     appliedSeqRef.current = r.seq;

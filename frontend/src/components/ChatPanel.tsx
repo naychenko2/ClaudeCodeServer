@@ -342,24 +342,6 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   }, []);
 
   const [mode, setMode] = useState<Mode>(session.mode);
-  // Сброс режима при смене чата: ChatPanel переиспользуется между сессиями (стоит без key),
-  // а useState читает session.mode только при первом монтировании — иначе в новый чат
-  // «утекает» режим предыдущей вкладки (например, «План»). Зависимость — session.id,
-  // не session.mode: иначе серверный апдейт в той же вкладке перебил бы локальный выбор.
-  // Приоритет — режиму из composerRestore, но строго в тех же условиях, в которых его
-  // применит Composer (seq≠0, text≠null, пустой черновик у уходящего чата, режим валиден
-  // и не danger): тогда в одном коммите оба источника ставят одно значение и не спорят
-  // за mode; если Composer restore не применит (есть черновик) — ставим session.mode.
-  const prevSessionIdRef = useRef(session.id);
-  useEffect(() => {
-    const prevId = prevSessionIdRef.current;
-    prevSessionIdRef.current = session.id;
-    const r = composerRestore;
-    const restored = r && r.seq !== 0 && r.text != null && !getDraft(prevId).trim()
-      ? MODES.find(v => v === r.mode) : undefined;
-    setMode(restored && !isDangerMode(restored) ? restored : session.mode);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session.id]);
   // Выбор режима сразу уезжает в сессию: иначе он жил бы только в состоянии этой вкладки
   // и терялся при уходе со страницы (при возврате ChatPanel перечитывает session.mode).
   // Локальный setMode делаем сразу — переключатель не должен ждать сеть; ход всё равно
@@ -435,6 +417,35 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     itemsRef.current = items;
     modeRef.current = mode;
   });
+
+  // Режим при смене чата и при composer_restore — ЕДИНАЯ точка (вариант B из ревью
+  // 7f6c5eaf): Composer восстанавливает только текст/вложения, режим ставим здесь,
+  // чтобы два эффекта не спорили за setMode. Гейт «черновик важнее restore» читает тот
+  // же источник, что и гейт текста в Composer — getDraft текущего чата: mode и текст
+  // всегда согласованы (оба из restore либо оба от текущего чата); раньше здесь читали
+  // черновик уходящего чата, а Composer — живой lastTextRef, и в окне между вводом и
+  // автосохранением условия расходились (режим восстановлен, текст — нет).
+  // Сброс при смене чата: ChatPanel переиспользуется между сессиями (стоит без key), а
+  // useState читает session.mode только при первом монтировании — без сброса в новый чат
+  // «утекает» режим предыдущей вкладки. Зависимость — session.id, не session.mode: иначе
+  // серверный апдейт в той же вкладке перебил бы локальный выбор.
+  const modeSessionRef = useRef(session.id);
+  useEffect(() => {
+    const switched = modeSessionRef.current !== session.id;
+    modeSessionRef.current = session.id;
+    const r = composerRestore;
+    const restored = r && r.seq !== 0 && r.text != null && !getDraft(session.id).trim()
+      ? MODES.find(v => v === r.mode) : undefined;
+    const target = restored && !isDangerMode(restored) ? restored : null;
+    if (target) {
+      // Через changeMode (с пушем на сервер) — как раньше делал Composer через
+      // onModeChange; гард от повторного PUT, если режим уже совпадает
+      if (modeRef.current !== target) changeMode(target);
+    } else if (switched) {
+      setMode(session.mode);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.id, composerRestore?.seq]);
 
   // Для монотонного счётчика фаз workflow — не прыгать назад когда total растёт
   const workflowPhaseRef = useRef<{ wfId: string; phasesDone: number }>({ wfId: '', phasesDone: 0 });

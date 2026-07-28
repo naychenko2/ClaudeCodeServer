@@ -242,6 +242,8 @@ public class ClaudeSession : ILlmSessionAdapter
     private readonly ModulesMcpContext? _modulesMcp;
     // MCP-сервер виджетов чата (widget_show): null — сессия без владельца
     private readonly WidgetsMcpContext? _widgetsMcp;
+    // MCP-сервер графа кода (codegraph_find/neighbors/hubs): null — чат вне проекта
+    private readonly CodeGraphMcpContext? _codeGraphMcp;
     // Файловые сабагенты-персоны: план хода — папки --add-dir
     // + pmem-серверы памяти консультантов; вычисляется на каждый ход
     private readonly Func<PersonaAgentsContext?>? _personaAgentsProvider;
@@ -293,6 +295,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _notificationsMcp = context.NotificationsMcp;
         _modulesMcp = context.ModulesMcp;
         _widgetsMcp = context.WidgetsMcp;
+        _codeGraphMcp = context.CodeGraphMcp;
         _personaAgentsProvider = context.PersonaAgentsProvider;
         _launcher = context.Launcher ?? Execution.LocalProcessRunner.Instance;
         // Запреты конфига + ограничения возможностей персоны (ExtraDisallowedTools)
@@ -334,12 +337,14 @@ public class ClaudeSession : ILlmSessionAdapter
         var hasNotifications = notificationsServerPath is not null;
         var widgetsServerPath = _widgetsMcp is not null ? MapMcpPath(WidgetsServerLocator.FindWidgetsServerPath()) : null;
         var hasWidgets = widgetsServerPath is not null;
+        var codeGraphServerPath = _codeGraphMcp is not null ? MapMcpPath(CodeGraphServerLocator.FindCodeGraphServerPath()) : null;
+        var hasCodeGraph = codeGraphServerPath is not null;
         var hasDataset = !string.IsNullOrEmpty(datasetId);
         var hasModules = _modulesMcp is { Servers.Count: > 0 };
         var hasFalAi = !string.IsNullOrEmpty(_falMcpApiKey);
         var userServers = LoadUserScopeMcpServers();
         if (!hasTasks && !hasNotes && !hasMemory && !hasPersonas && !hasWorkspace && !hasNotifications
-            && !hasWidgets && !hasDataset && !hasModules && !hasFalAi && userServers is null
+            && !hasWidgets && !hasCodeGraph && !hasDataset && !hasModules && !hasFalAi && userServers is null
             && !(hasConsultants && memoryServerPath is not null)) return (null, "");
 
         try
@@ -618,6 +623,27 @@ public class ClaudeSession : ILlmSessionAdapter
                         ["NOTIFICATIONS_API_URL"] = _notificationsMcp!.ApiUrl,
                         ["NOTIFICATIONS_API_TOKEN"] = _notificationsMcp.Token,
                         ["NOTIFICATIONS_SELF_PERSONA_ID"] = _notificationsMcp.SelfPersonaId ?? "",
+                    },
+                };
+            }
+
+            if (hasCodeGraph && _codeGraphMcp is not null)
+            {
+                // Граф кода проекта: поиск типа, связи узла, хабы по связности. Состав
+                // инструментов постоянный (три чтения), per-owner изоляция — токеном
+                // владельца и проверкой владельца проекта в CodeGraphController.
+                servers["codegraph"] = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["command"] = "node",
+                    ["args"] = new System.Text.Json.Nodes.JsonArray { codeGraphServerPath! },
+                    // alwaysLoad — по той же причине, что у tasks (см. выше)
+                    ["alwaysLoad"] = true,
+                    ["env"] = new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["CODEGRAPH_API_URL"] = _codeGraphMcp.ApiUrl,
+                        ["CODEGRAPH_API_TOKEN"] = _codeGraphMcp.Token,
+                        ["CODEGRAPH_PROJECT_ID"] = _codeGraphMcp.ProjectId,
+                        ["CODEGRAPH_SESSION_ID"] = _codeGraphMcp.SessionId ?? "",
                     },
                 };
             }

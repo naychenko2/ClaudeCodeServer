@@ -114,7 +114,11 @@ public sealed class CodeGraphPromptProvider
                 : node.FullyQualifiedName;
             sb.AppendLine($"• {name} ({node.SourceFile}) — {deg} связей");
         }
-        sb.Append("Полный граф и поиск: панель «Граф» или GET /api/projects/{id}/code-graph.");
+        // Куда идти за остальным графом. Раньше здесь стояли панель «Граф» и REST-эндпоинт —
+        // обе двери для агента закрыты (панель для человека, ключа к REST у него нет).
+        sb.Append("Остальной граф — инструменты codegraph_find (найти тип по имени), "
+                  + "codegraph_neighbors (связи типа: кто зависит и от чего), "
+                  + "codegraph_hubs (хабы по связности).");
         return sb.ToString();
     }
 

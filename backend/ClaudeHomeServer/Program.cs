@@ -118,6 +118,8 @@ builder.Services.AddSingleton(sp => new ClaudeHomeServer.Services.CodeGraph.Grap
 builder.Services.AddSingleton<ClaudeHomeServer.Services.CodeGraph.CodeGraphService>();
 // Per-ход slice top-10 god-nodes Code Graph в системный промпт (ADR вариант A)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.CodeGraph.CodeGraphPromptProvider>();
+// Тонкие запросы к графу (find/neighbors/hubs) — за ними MCP-сервер codegraph
+builder.Services.AddSingleton<ClaudeHomeServer.Services.CodeGraph.CodeGraphQueryService>();
 builder.Services.AddSingleton<ProjectGroupManager>();
 builder.Services.AddSingleton<ProjectEventLogService>();
 builder.Services.AddSingleton<PersonaManager>();

@@ -66,6 +66,12 @@ public record NotificationsMcpContext(string ApiUrl, string Token, string? SelfP
 // серверу не нужны ни API, ни токен, он только валидирует input; HTML рендерит фронт.
 public sealed record WidgetsMcpContext;
 
+// Контекст MCP-сервера графа кода (codegraph_find/neighbors/hubs): адрес API, сервисный
+// токен владельца и проект, чей граф доступен инструментами. ProjectId обязателен —
+// граф ключуется проектом, в чате вне проекта сервер не подключается.
+// SessionId уезжает в X-Caller-Session-Id (наблюдаемость GET /api/mcp/calls).
+public sealed record CodeGraphMcpContext(string ApiUrl, string Token, string ProjectId, string? SessionId = null);
+
 // Один MCP-сервер внешнего модуля (контракт docs/module-platform-integration-contract.md §6):
 // Key — ключ сервера в mcp-конфиге хода, Command/Args — запуск из манифеста (args уже
 // резолвнуты от каталога модуля), ModuleId — id модуля, ApiUrl — адрес модуля ЧЕРЕЗ gateway
@@ -147,4 +153,7 @@ public sealed record LlmSessionContext(
     // или скрыты фич-флагами. Аддитивно к встроенным серверам, коллизии ключей — пропуск.
     ModulesMcpContext? ModulesMcp = null,
     // MCP-сервер виджетов чата (widget_show): null — нет владельца сессии.
-    WidgetsMcpContext? WidgetsMcp = null);
+    WidgetsMcpContext? WidgetsMcp = null,
+    // MCP-сервер графа кода (codegraph_find/neighbors/hubs): навигация агента по структуре
+    // проекта. null — чат вне проекта или нет владельца.
+    CodeGraphMcpContext? CodeGraphMcp = null);

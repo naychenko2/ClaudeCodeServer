@@ -86,7 +86,10 @@ public class CodeGraphPromptProviderTests
         slice.Should().Contain("Demo.Hub");
         slice.Should().Contain("(Hub.cs)");
         slice.Should().Contain("12 связей");
-        slice.Should().Contain("GET /api/projects/{id}/code-graph");
+        // Дверь к остальному графу — MCP-инструменты: REST и панель для агента недоступны
+        slice.Should().Contain("codegraph_find");
+        slice.Should().Contain("codegraph_neighbors");
+        slice.Should().Contain("codegraph_hubs");
         slice.Should().NotContain("устаревшим", "исходники не менялись после построения");
     }
 

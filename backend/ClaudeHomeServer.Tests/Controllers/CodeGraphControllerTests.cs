@@ -260,5 +260,149 @@ public class CodeGraphControllerTests : IClassFixture<TestWebApplicationFactory>
         var resp = await other.PostAsync($"/api/projects/{id}/code-graph/build", content: null);
         resp.StatusCode.Should().Be(HttpStatusCode.Forbidden);
     }
+
+    // ===== Тонкие запросы для MCP-сервера codegraph (find / neighbors / hubs) =====
+
+    // Проект с сохранённым SampleGraph — общая подготовка тонких запросов.
+    private async Task<string> ProjectWithGraphAsync(string name)
+    {
+        var dir = MkProjectDir(name);
+        WriteCs(dir);
+        var project = await CreateProjectAsync(name, dir);
+        await SaveGraphAsync(dir, SampleGraph());
+        return project.GetProperty("id").GetString()!;
+    }
+
+    [Fact]
+    public async Task Find_ПоИмениТипа_ВозвращаетУзелСМестомИСтепенью()
+    {
+        var id = await ProjectWithGraphAsync("find");
+
+        var resp = await _client.GetAsync($"/api/projects/{id}/code-graph/find?q=Foo");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var body = JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync());
+        // «Foo» — подстрока и в Demo.IFoo, но точное совпадение имени ранжируется выше
+        body.GetProperty("total").GetInt32().Should().Be(2);
+        var node = body.GetProperty("results").EnumerateArray().First();
+        node.GetProperty("fqn").GetString().Should().Be("Demo.Foo");
+        node.GetProperty("kind").GetString().Should().Be("Class");
+        node.GetProperty("location").GetString().Should().Be("Foo.cs:1", "«L1» → строка 1");
+        node.GetProperty("degree").GetInt32().Should().Be(2, "Foo реализует IFoo и ссылается на Bar");
+    }
+
+    [Fact]
+    public async Task Find_Лимит_ОбрезаетВыдачуНоTotalПолный()
+    {
+        var id = await ProjectWithGraphAsync("find-limit");
+
+        // «Demo» входит в FQN всех трёх узлов — лимит режет выдачу, total остаётся честным.
+        var resp = await _client.GetAsync($"/api/projects/{id}/code-graph/find?q=Demo&limit=1");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var body = JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync());
+        body.GetProperty("total").GetInt32().Should().Be(3);
+        body.GetProperty("results").GetArrayLength().Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Neighbors_ВходящиеИИсходящие_СТипомСвязи()
+    {
+        var id = await ProjectWithGraphAsync("neighbors");
+
+        // Узел задан коротким именем — резолвится по Label.
+        var resp = await _client.GetAsync($"/api/projects/{id}/code-graph/neighbors?node=Foo");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var body = JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync());
+        body.GetProperty("node").GetProperty("fqn").GetString().Should().Be("Demo.Foo");
+        body.GetProperty("totalOut").GetInt32().Should().Be(2);
+        body.GetProperty("totalIn").GetInt32().Should().Be(0);
+        body.GetProperty("byRelation").GetProperty("Implements").GetInt32().Should().Be(1);
+        body.GetProperty("byRelation").GetProperty("References").GetInt32().Should().Be(1);
+
+        var neighbors = body.GetProperty("neighbors").EnumerateArray().ToList();
+        neighbors.Should().HaveCount(2);
+        neighbors.Should().OnlyContain(n => n.GetProperty("direction").GetString() == "out");
+        neighbors.Select(n => n.GetProperty("fqn").GetString())
+            .Should().BeEquivalentTo(["Demo.IFoo", "Demo.Bar"]);
+    }
+
+    [Fact]
+    public async Task Neighbors_ФильтрПоНаправлениюИСвязи_СужаетВыдачу()
+    {
+        var id = await ProjectWithGraphAsync("neighbors-filter");
+
+        // Кто реализует IFoo — входящие связи с relation=Implements.
+        var resp = await _client.GetAsync(
+            $"/api/projects/{id}/code-graph/neighbors?node=Demo.IFoo&direction=in&relation=Implements");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var body = JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync());
+        body.GetProperty("total").GetInt32().Should().Be(1);
+        var neighbor = body.GetProperty("neighbors").EnumerateArray().Single();
+        neighbor.GetProperty("fqn").GetString().Should().Be("Demo.Foo");
+        neighbor.GetProperty("direction").GetString().Should().Be("in");
+        neighbor.GetProperty("relation").GetString().Should().Be("Implements");
+        neighbor.GetProperty("confidence").GetString().Should().Be("Extracted");
+    }
+
+    [Fact]
+    public async Task Neighbors_НеизвестныйУзел_Возвращает404()
+    {
+        var id = await ProjectWithGraphAsync("neighbors-miss");
+
+        var resp = await _client.GetAsync($"/api/projects/{id}/code-graph/neighbors?node=НетТакого");
+        resp.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        var body = JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync());
+        body.GetProperty("message").GetString().Should().Contain("codegraph_find",
+            "модели нужно сказать, чем уточнить имя");
+    }
+
+    [Fact]
+    public async Task Hubs_ВозвращаетТопПоСвязностиИРазмерГрафа()
+    {
+        var id = await ProjectWithGraphAsync("hubs");
+
+        var resp = await _client.GetAsync($"/api/projects/{id}/code-graph/hubs?limit=2");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var body = JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync());
+        body.GetProperty("nodeCount").GetInt32().Should().Be(3);
+        body.GetProperty("edgeCount").GetInt32().Should().Be(2);
+        var hubs = body.GetProperty("hubs").EnumerateArray().ToList();
+        hubs.Should().HaveCount(2);
+        hubs[0].GetProperty("fqn").GetString().Should().Be("Demo.Foo", "у Foo degree 2 — больше всех");
+        hubs[0].GetProperty("degree").GetInt32().Should().Be(2);
+    }
+
+    [Fact]
+    public async Task ТонкиеЗапросы_ГрафНеПостроен_Возвращают404()
+    {
+        var dir = MkProjectDir("thin-nograph");
+        WriteCs(dir);
+        var project = await CreateProjectAsync("thin-nograph", dir);
+        var id = project.GetProperty("id").GetString()!;
+
+        var find = await _client.GetAsync($"/api/projects/{id}/code-graph/find?q=Foo");
+        find.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        find.Headers.Contains("X-CodeGraph-Building").Should().BeTrue(
+            "как и GET снимка, тонкий запрос запускает фоновую постройку");
+    }
+
+    [Fact]
+    public async Task ТонкиеЗапросы_ЧужойПроект_Возвращают403()
+    {
+        var id = await ProjectWithGraphAsync("thin-owned");
+        var other = _factory.CreateAuthenticatedClient(
+            TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
+
+        (await other.GetAsync($"/api/projects/{id}/code-graph/find?q=Foo"))
+            .StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await other.GetAsync($"/api/projects/{id}/code-graph/neighbors?node=Foo"))
+            .StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await other.GetAsync($"/api/projects/{id}/code-graph/hubs"))
+            .StatusCode.Should().Be(HttpStatusCode.Forbidden);
+    }
 }
 

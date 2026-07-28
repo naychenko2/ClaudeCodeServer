@@ -37,6 +37,8 @@ public class SessionManagerTests : IDisposable
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["DataPath"] = Path.Combine(_tempDir, "projects.json"),
+                // Домашние папки владельцев (чаты вне проекта живут в {home}/Chats) — в temp
+                ["DefaultProjectsPath"] = Path.Combine(_tempDir, "homes"),
                 // Профиль CLI внутри temp — иначе уборка транскриптов при удалении чата
                 // (DeleteAsync) полезла бы в настоящий ~/.claude пользователя
                 ["ClaudeUserProfileDir"] = Path.Combine(_tempDir, "claude-profile")
@@ -94,7 +96,9 @@ public class SessionManagerTests : IDisposable
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
         _actionOverrides = new ClaudeHomeServer.Services.Llm.LocalActionOverridesStore(config);
-        var assignments = new ClaudeHomeServer.Services.Llm.ModelAssignmentResolver(appSettings, _actionOverrides);
+        // С резолвером личных слотов — как в DI: слот в модель разворачивается по владельцу
+        var assignments = new ClaudeHomeServer.Services.Llm.ModelAssignmentResolver(appSettings, _actionOverrides,
+            new ClaudeHomeServer.Services.Llm.UserModelTierResolver(userStore, appSettings));
         _sut = new SessionManager(_projectManager, hub.Object, _historyService, config, adapters, falCost, usage, appSettings, userStore, jwt, server.Object, llmProviders, notesKb, flags, personas, personaMemory, bindings, promptBuilder, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox, assignments: assignments);
     }
 
@@ -460,6 +464,34 @@ public class SessionManagerTests : IDisposable
     }
 
     [Fact]
+    public async Task CreateAsync_МаркерУровня_РазворачиваетсяВМодельСлота()
+    {
+        // Уровень задачи/персоны приходит маркером «tier:*» — в сессии обязана осесть
+        // конкретная модель: маркер не должен уйти ни в --model, ни на wire (шапка чата)
+        _appSettings.Save(new AppSettings { ModelTierStrong = "glm-5.2", ModelTierMedium = "sonnet" });
+        var dir = MkProjectDir("dcm-tier");
+        var project = _projectManager.Create("DCMT", dir, TestUserId, TestUsername);
+
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, model: "tier:medium");
+
+        session.Model.Should().Be("sonnet");
+    }
+
+    [Fact]
+    public async Task CreateAsync_МаркерУровня_ПустойСлот_НеОседаетВСессии()
+    {
+        // Слот не настроен: место идёт своим назначением (chat-new → слот «сильная»),
+        // а маркер не сохраняется
+        _appSettings.Save(new AppSettings { ModelTierStrong = "glm-5.2" });
+        var dir = MkProjectDir("dcm-tier-empty");
+        var project = _projectManager.Create("DCMTE", dir, TestUserId, TestUsername);
+
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, model: "tier:weak");
+
+        session.Model.Should().Be("glm-5.2");
+    }
+
+    [Fact]
     public async Task CreateAsync_Resume_НеПрименяетСлот()
     {
         // У resumed-сессии в транскрипте уже зафиксированы своя модель и провайдер —
@@ -555,6 +587,48 @@ public class SessionManagerTests : IDisposable
         var updated = _sut.SetPersona(session.Id, TestUserId, persona.Id);
 
         updated!.Model.Should().Be("glm-5.2");
+    }
+
+    [Fact]
+    public async Task SetPersona_ПроектнаяСессия_УровеньПерсоныИдётПоЛичномуСлотуВладельца()
+    {
+        // У проектной сессии Session.OwnerId всегда null — владелец живёт у проекта.
+        // Если брать поле напрямую, личный слот молча подменяется глобальным: персона
+        // с уровнем «сильная» уезжала бы в проектном чате на чужую модель
+        _appSettings.Save(new AppSettings { ModelTierStrong = "global-sonnet" });
+        var user = _userStore.Add("tier-owner", "password123", "user");
+        _userStore.SetModelTiers(user.Id, strong: "personal-opus", medium: null, weak: null);
+        var dir = MkProjectDir("tier-owner");
+        var project = _projectManager.Create("TO", dir, user.Id, "tier-owner");
+        var persona = _personaManager.Create(user.Id, "С уровнем", role: null, description: null,
+            systemPrompt: null, model: null, effort: null, scope: PersonaScope.Project,
+            projectId: project.Id, color: null, greeting: null, memoryEnabled: false,
+            modelTier: "strong");
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, model: "sonnet");
+        session.OwnerId.Should().BeNull("владелец проектной сессии живёт у проекта");
+
+        var updated = _sut.SetPersona(session.Id, user.Id, persona.Id);
+
+        updated!.Model.Should().Be("personal-opus");
+    }
+
+    [Fact]
+    public async Task SetPersona_ЧатВнеПроекта_УровеньПерсоныИдётПоТомуЖеЛичномуСлоту()
+    {
+        // Парная проверка: вне проекта владелец берётся из самой сессии — результат
+        // обязан совпасть с проектным случаем, иначе слот «плавает» от места чата
+        _appSettings.Save(new AppSettings { ModelTierStrong = "global-sonnet" });
+        var user = _userStore.Add("tier-owner-chat", "password123", "user");
+        _userStore.SetModelTiers(user.Id, strong: "personal-opus", medium: null, weak: null);
+        var persona = _personaManager.Create(user.Id, "С уровнем", role: null, description: null,
+            systemPrompt: null, model: null, effort: null, scope: PersonaScope.Global,
+            projectId: null, color: null, greeting: null, memoryEnabled: false,
+            modelTier: "strong");
+        var session = await _sut.CreateChatAsync(user.Id, ClaudeMode.Auto, model: "sonnet");
+
+        var updated = _sut.SetPersona(session.Id, user.Id, persona.Id);
+
+        updated!.Model.Should().Be("personal-opus");
     }
 
     [Fact]

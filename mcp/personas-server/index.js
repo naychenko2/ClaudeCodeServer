@@ -208,6 +208,16 @@ const PERSONA_FIELDS = {
   speechExamples: { type: 'array', items: { type: 'string' }, description: '1-2 характерные реплики от лица персоны (образцы стиля)' },
   systemPrompt: { type: 'string', description: 'УСТАРЕЛО: единый текст характера — используй character и остальные слоты' },
   model: { type: 'string', description: 'Модель LLM (пусто = дефолт сервера)' },
+  // Уровень модели вместо конкретной: резолвится в модель на бэке (слоты владельца).
+  // Явная model сильнее уровня; уровень самой задачи сильнее обоих.
+  modelTier: {
+    type: 'string',
+    enum: ['strong', 'medium', 'weak'],
+    description: 'Уровень модели для исполнения: strong — проектирование, архитектура, ревью, ' +
+      'запутанный баг, многофайловый код; medium — реализация по готовому плану, тесты, документация; ' +
+      'weak — механическая правка, переименование, коммит, обновление текста. ' +
+      'Не указывай, если сомневаешься — уровень возьмётся от настроек системы.',
+  },
   effort: { type: 'string', description: 'Усилие рассуждения модели' },
   color: { type: 'string', enum: COLORS, description: 'Цвет аватара из палитры' },
   greeting: { type: 'string', description: 'Приветствие — первое сообщение от лица персоны' },
@@ -568,7 +578,7 @@ function personaBody(args, keys) {
   return body;
 }
 
-const FIELD_KEYS = ['name', 'role', 'specialty', 'description', 'systemPrompt', 'model', 'effort', 'color', 'greeting', 'memoryEnabled', 'scope', 'projectId', 'handle'];
+const FIELD_KEYS = ['name', 'role', 'specialty', 'description', 'systemPrompt', 'model', 'modelTier', 'effort', 'color', 'greeting', 'memoryEnabled', 'scope', 'projectId', 'handle'];
 
 // Запрет самоэскалации: персона не может менять СОБСТВЕННЫЕ привязки
 // (проверка до любого fetch — изменение прав себе блокируется по построению)

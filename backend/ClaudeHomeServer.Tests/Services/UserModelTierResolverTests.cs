@@ -84,4 +84,44 @@ public class UserModelTierResolverTests : IDisposable
 
         resolver.ModelFor(ModelTier.Medium, user.Id).Should().Be("global-sonnet");
     }
+
+    [Theory]
+    [InlineData("strong", ModelTier.Strong)]
+    [InlineData("STRONG", ModelTier.Strong)]
+    [InlineData(" medium ", ModelTier.Medium)]
+    [InlineData("Weak", ModelTier.Weak)]
+    public void TryParse_ИмяСлота_Принимается(string wire, ModelTier expected)
+    {
+        ModelTiers.TryParse(wire, out var tier).Should().BeTrue();
+        tier.Should().Be(expected);
+    }
+
+    // Дыра белого списка: Enum.TryParse принимал индексы enum (в т.ч. со знаком, мимо
+    // digit-guard) и списки флагов — мусор от LLM молча уезжал на самую дорогую модель
+    [Theory]
+    [InlineData("0")]
+    [InlineData("+0")]
+    [InlineData("+1")]
+    [InlineData("-1")]
+    [InlineData("2")]
+    [InlineData("strong,weak")]
+    [InlineData("Strong, Medium")]
+    [InlineData("strongest")]
+    [InlineData("сильная")]
+    [InlineData("tier:strong")]
+    public void TryParse_НеИмяСлота_Отвергается(string wire)
+    {
+        ModelTiers.TryParse(wire, out _).Should().BeFalse();
+        ModelTiers.IsValidWireValue(wire).Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData(null)]     // поле не прислали
+    [InlineData("")]       // сброс уровня
+    [InlineData("   ")]
+    public void IsValidWireValue_ОтсутствиеИСброс_Валидны(string? wire)
+    {
+        ModelTiers.IsValidWireValue(wire).Should().BeTrue();
+        ModelTiers.TryParse(wire, out _).Should().BeFalse();
+    }
 }

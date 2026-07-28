@@ -54,7 +54,14 @@ export function useChatScroll(sessionId: string, items: ChatItem[], isHistoryLoa
       }
     } catch { /* недоступен sessionStorage / старый формат */ }
     pendingRestoreRef.current = saved;
-    if (saved == null) return;
+    if (saved == null) {
+      // Открытие чата без сохранённой позиции — сразу конец ленты. Полагаться на эффект
+      // автоскролла по items нельзя: вернулись в уже загруженный чат — массив тот же по
+      // ссылке, эффект не перезапустится, и лента осталась бы там, где её отлистали.
+      const el = scrollRef.current;
+      if (el) el.scrollTop = el.scrollHeight;
+      return;
+    }
     atBottomRef.current = false;
     // Запись одноразовая: она валидна ровно для первого открытия чата после reload,
     // дальше чат должен открываться в конце ленты. Стираем макротаском, а не сразу —

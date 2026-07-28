@@ -4,6 +4,11 @@ import type { Persona } from '../../types';
 // Контекст текущего проекта — для резолва локальных путей картинок в сообщениях
 export const ChatProjectContext = createContext<{ id: string; rootPath: string } | null>(null);
 
+// Открыть файл проекта на просмотр — тем же путём, что дерево и карточки инструментов.
+// Контекстом, а не пропом: MarkdownContent сидит глубоко в ленте, а ссылки на файлы
+// в тексте ассистента нужны в каждом её отпрыске.
+export const ChatOpenFileContext = createContext<((path: string) => void) | null>(null);
+
 // Персона текущего чата, если он ведётся от её лица.
 // Провайдится в ChatPanel — лента показывает её аватар у реплик ассистента,
 // не таща persona-проп через все вложенные компоненты.

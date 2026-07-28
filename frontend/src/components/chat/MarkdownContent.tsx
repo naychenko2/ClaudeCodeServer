@@ -1,12 +1,16 @@
-import { useState, useEffect, useContext } from 'react';
+import { useState, useEffect, useContext, type CSSProperties, type ReactNode } from 'react';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { FileText } from 'lucide-react';
 import { MermaidDiagram } from '../MermaidDiagram';
 import { api } from '../../lib/api';
-import { C, FONT } from '../../lib/design';
-import { ChatProjectContext } from './contexts';
+import { C, FONT, SP } from '../../lib/design';
+import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
+import { toRelative } from '../../lib/paths';
+import { useProjectFileIndex, lookupProjectFile } from '../../lib/projectFileIndex';
+import { ChatProjectContext, ChatOpenFileContext } from './contexts';
 
 // Картинка из markdown: внешние URL (http/https/data) — напрямую; локальный путь файла
 // проекта (например, картинка, скачанная Claude) — грузим через API и показываем как data-URL.
@@ -48,6 +52,41 @@ function ChatImage({ src, alt }: { src?: string; alt?: string }) {
   );
 }
 
+// Однострочный код в тексте (`путь` / `флаг`) — общий стиль для обычного кода и ссылки на файл
+const INLINE_CODE: CSSProperties = {
+  fontFamily: FONT.mono, background: C.bgInset, padding: '1px 5px',
+  borderRadius: 4, fontSize: '0.88em', color: C.accent,
+};
+
+// Ссылка на файл проекта в тексте ассистента: открывает файл на просмотр там же, где
+// дерево и карточки инструментов. Рендерится только для файлов, которые реально есть
+// в проекте — битых ссылок и «открыл, а там 404» не бывает.
+function FileLink({ path, onOpen, mono, children }: {
+  path: string;
+  onOpen: (path: string) => void;
+  mono?: boolean;
+  children: ReactNode;
+}) {
+  const [hover, setHover] = useState(false);
+  return (
+    <span
+      onClick={() => onOpen(path)}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      title={`Открыть ${path}`}
+      style={{
+        ...(mono ? INLINE_CODE : null),
+        display: 'inline-flex', alignItems: 'center', gap: SP.xxs,
+        color: C.accent, cursor: 'pointer',
+        textDecoration: hover ? 'underline' : 'none',
+      }}
+    >
+      <FileText size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+      {children}
+    </span>
+  );
+}
+
 // Служебный маркер завершения цикла «до готово» (<promise>ГОТОВО</promise>) — протокол
 // детектора, не для глаз. Режем по тегу (слово-обещание конфигурируемо на бэкенде).
 const PROMISE_MARKER = /<promise>[\s\S]*?<\/promise>/gi;
@@ -57,12 +96,23 @@ export function stripPromiseMarker(text: string): string {
 
 // Рендер текста Claude с поддержкой Markdown
 export function MarkdownContent({ text }: { text: string }) {
+  const project = useContext(ChatProjectContext);
+  const onOpenFile = useContext(ChatOpenFileContext);
+  const fileIndex = useProjectFileIndex(project?.id ?? null);
+  // Упоминание пути → файл проекта, если он там реально есть (иначе ссылки не будет).
+  // Вне проекта и без обработчика открытия фича молчит — текст как раньше.
+  const resolveFile = (raw?: string | null): string | null =>
+    project && onOpenFile && raw ? lookupProjectFile(fileIndex, raw, project.rootPath) : null;
+
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
       urlTransform={(url, key) => {
         // fal.media src — блокируем: картинки уже показаны в MediaBlock из tool_result
         if (key === 'src' && matchesHosts(url, FAL_HOSTS)) return null;
+        // Абсолютный путь внутри проекта (Claude часто пишет полный путь) — оставляем как
+        // есть: defaultUrlTransform режет его, приняв «C:» за неизвестный протокол
+        if (project && /^[a-zA-Z]:[\\/]/.test(url) && toRelative(url, project.rootPath)) return url;
         // остальные внешние URL (src и href) — через прокси если домен разрешён
         return isProxiable(url) ? proxyUrl(url) : defaultUrlTransform(url);
       }}
@@ -105,8 +155,11 @@ export function MarkdownContent({ text }: { text: string }) {
               </pre>
             );
           }
+          // Путь к существующему файлу проекта в бэктиках — кликабельная ссылка на просмотр
+          const filePath = resolveFile(text);
+          if (filePath) return <FileLink path={filePath} onOpen={onOpenFile!} mono>{children}</FileLink>;
           return (
-            <code style={{ fontFamily: FONT.mono, background: C.bgInset, padding: '1px 5px', borderRadius: 4, fontSize: '0.88em', color: C.accent }} {...props}>
+            <code style={INLINE_CODE} {...props}>
               {children}
             </code>
           );
@@ -119,11 +172,16 @@ export function MarkdownContent({ text }: { text: string }) {
             {children}
           </blockquote>
         ),
-        a: ({ children, href }) => (
-          <a href={href} style={{ color: C.accent, textDecoration: 'underline' }} target="_blank" rel="noopener noreferrer">
-            {children}
-          </a>
-        ),
+        a: ({ children, href }) => {
+          // Ссылка на файл проекта ([гайд](docs/…)) открывает его на просмотр, а не наружу
+          const filePath = resolveFile(href);
+          if (filePath) return <FileLink path={filePath} onOpen={onOpenFile!}>{children}</FileLink>;
+          return (
+            <a href={href} style={{ color: C.accent, textDecoration: 'underline' }} target="_blank" rel="noopener noreferrer">
+              {children}
+            </a>
+          );
+        },
         // Картинки из markdown: внешние URL — напрямую, локальные пути файлов проекта — через API
         img: ({ src, alt }) => {
           if (!src) return null;

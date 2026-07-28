@@ -189,6 +189,47 @@ async function resolveSessionProject(sessionId) {
   return info?.projectId ?? null;
 }
 
+// Объединение списков строк с дедупом по регистру: сохраняем первое вхождение имени,
+// «Bug» и «bug» не плодят дубль. Реестр тегов и теги/метки сущности — списки строк,
+// регистр в них не должен создавать визуальных и логических дубликатов.
+function unionStrings(existing, incoming) {
+  const seen = new Set();
+  const result = [];
+  for (const raw of [...(existing ?? []), ...(incoming ?? [])]) {
+    const name = String(raw ?? '').trim();
+    if (!name) continue;
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(name);
+  }
+  return result;
+}
+
+// Автосоздание тегов в реестре проекта: недостающие (case-insensitive) имена добавляются
+// с order = max+1 и color = null, реестр сохраняется целиком (PUT .../tags). Бэкенд сам
+// перенормирует order по позиции массива и требует уникальность имён без учёта регистра —
+// поэтому additions проверяем и против существующих, и между собой до отправки.
+async function ensureRegistryTags(projectId, tags) {
+  const project = await api(`/api/projects/${projectId}`);
+  const registry = Array.isArray(project?.tagRegistry) ? project.tagRegistry : [];
+  const known = new Set(registry.map(t => String(t.name ?? '').toLowerCase()));
+  const maxOrder = registry.reduce((m, t) => Math.max(m, Number(t.order ?? -1)), -1);
+  let nextOrder = maxOrder + 1;
+  const additions = [];
+  for (const name of tags) {
+    const key = String(name).toLowerCase();
+    if (known.has(key)) continue;
+    known.add(key);
+    additions.push({ name, order: nextOrder++, color: null });
+  }
+  if (!additions.length) return [];
+  await api(`/api/projects/${projectId}/tags`, {
+    method: 'PUT', body: JSON.stringify([...registry, ...additions]),
+  });
+  return additions.map(a => a.name);
+}
+
 // --- Инструменты (по секциям) ---
 
 const CONTEXT_NOTE = PROJECT_ID
@@ -242,6 +283,31 @@ const SECTION_TOOLS = {
           name: { type: 'string', description: 'Новое название' },
           systemPrompt: { type: 'string', description: 'Системный промпт проекта (заменяется целиком)' },
           groupId: { type: 'string', description: 'ID группы ("" — убрать из группы)' },
+        },
+      },
+    },
+    {
+      name: 'tags_apply',
+      description: 'Присвоить теги сущности (сессии или задаче): новые теги объединяются с уже ' +
+        'висящими, дубликаты без учёта регистра не плодятся. Недостающие теги автоматически ' +
+        'попадают в реестр тегов проекта. entityType="session" — projectId обязателен; ' +
+        'entityType="task" — projectId опционален (нужен только для автосоздания в реестре, ' +
+        'личные задачи работают без него).',
+      inputSchema: {
+        type: 'object',
+        required: ['entityType', 'entityId', 'tags'],
+        properties: {
+          entityType: { type: 'string', enum: ['session', 'task'], description: 'Тип сущности' },
+          entityId: { type: 'string', description: 'ID сессии или задачи' },
+          projectId: {
+            type: 'string',
+            description: 'ID проекта (для session обязательно; для task опционально — для автосоздания тегов в реестре)',
+          },
+          tags: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Теги для присвоения (добавляются к существующим, без удаления)',
+          },
         },
       },
     },
@@ -1163,6 +1229,61 @@ async function callTool(name, args) {
           throw new Error('Единый поиск выключен у пользователя (флаг «Расширенный AI»)');
         throw err;
       }
+    }
+
+    case 'tags_apply': {
+      const entityType = String(args.entityType ?? '').trim();
+      if (entityType !== 'session' && entityType !== 'task')
+        throw new Error('entityType должен быть "session" или "task"');
+      const entityId = String(args.entityId ?? '').trim();
+      if (!entityId) throw new Error('Не указан entityId');
+      const incoming = Array.isArray(args.tags)
+        ? args.tags.map(t => String(t ?? '').trim()).filter(Boolean)
+        : [];
+      if (!incoming.length) throw new Error('Список tags пуст');
+      const projectId = args.projectId ? String(args.projectId).trim() : null;
+
+      // session: теги живут на проектной сессии — projectId нужен и для маршрута, и для реестра
+      if (entityType === 'session') {
+        if (!projectId) throw new Error('Для session обязателен projectId');
+        checkProjectAllowed(projectId);
+        const registryAdded = await ensureRegistryTags(projectId, incoming);
+        const sessions = await api(`/api/projects/${projectId}/sessions`);
+        const found = (sessions ?? []).find(s => s.id === entityId);
+        if (!found) throw new Error(`Сессия ${entityId} не найдена в проекте ${projectId}`);
+        const merged = unionStrings(found.tags, incoming);
+        const updated = await api(
+          `/api/projects/${projectId}/sessions/${encodeURIComponent(entityId)}`,
+          { method: 'PUT', body: JSON.stringify({ tags: merged }) },
+        );
+        return json({
+          entityType: 'session',
+          id: updated?.id ?? entityId,
+          projectId,
+          tags: updated?.tags ?? merged,
+          ...(registryAdded.length ? { registryAdded } : {}),
+        });
+      }
+
+      // task: projectId опционален — только для автосоздания в реестре. Сама задача
+      // принадлежит владельцу по токену (бэкенд проверит), личные задачи (без проекта) валидны.
+      let registryAdded = [];
+      if (projectId) {
+        checkProjectAllowed(projectId);
+        registryAdded = await ensureRegistryTags(projectId, incoming);
+      }
+      const task = await api(`/api/tasks/${encodeURIComponent(entityId)}`);
+      const mergedLabels = unionStrings(task?.labels, incoming);
+      await api(`/api/tasks/${encodeURIComponent(entityId)}`, {
+        method: 'PUT', body: JSON.stringify({ labels: mergedLabels }),
+      });
+      return json({
+        entityType: 'task',
+        id: entityId,
+        projectId: projectId ?? task?.projectId ?? null,
+        labels: mergedLabels,
+        ...(registryAdded.length ? { registryAdded } : {}),
+      });
     }
 
     default:

@@ -6,9 +6,8 @@ import { usePersonas, ensurePersonasLoaded, personaLabel } from '../../lib/perso
 import { splitAgentResultTail, formatTailTokens, formatTailDuration, isAsyncLaunchAck } from '../../lib/agentTail';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { AGENT_COLORS } from '../AgentSelector';
-import { MarkdownContent } from './MarkdownContent';
 import { ToolUseView, toolWord } from './ToolUseView';
-import { AgentTextBlock, AgentThinkingBlock, NEUTRAL_AGENT_ACCENT } from './AgentContentBlocks';
+import { AgentTextBlock, AgentThinkingBlock, CollapsibleMarkdownBody, NEUTRAL_AGENT_ACCENT } from './AgentContentBlocks';
 import { itemKey, type ActivityEntry } from './timeline';
 import { ChatProjectContext } from './contexts';
 
@@ -45,9 +44,6 @@ export function findConsultedPersona(item: ToolUseItem, personas: Persona[], pro
   return findPersonaByAgentType(handle, personas, projectId);
 }
 
-// Ответ длиннее порога сворачиваем, чтобы карточка не раздувала ленту (как PersonaAskView)
-const LONG_ANSWER_CHARS = 1200;
-
 // Презентационная карточка «консультация персоны»: идентичность (аватар + «Роль (Имя)» +
 // @handle + цвет), вопрос, слот активности (children) и ответ. Используется и для
 // Task-вызовов чата (PersonaTaskView), и для агентов Workflow (WorkflowBlockView).
@@ -76,9 +72,6 @@ export function PersonaConsultCard({ persona, agentRole, question, summary, runn
   // Длинный вопрос — свёрнут до двух строк, клик раскрывает
   const questionLong = question.length > 140;
   const [questionOpen, setQuestionOpen] = useState(false);
-  const answerLong = !isError && answerBody.length > LONG_ANSWER_CHARS;
-  const [answerOpen, setAnswerOpen] = useState(false);
-  const answerCollapsed = answerLong && !answerOpen;
 
   const accent = persona
     ? (AGENT_COLORS[persona.avatar?.color ?? ''] ?? NEUTRAL_AGENT_ACCENT)
@@ -177,34 +170,11 @@ export function PersonaConsultCard({ persona, agentRole, question, summary, runn
         </div>
       ) : (
         <>
-          <div style={{
-            position: 'relative', padding: '10px 12px 4px',
-            fontSize: 14, color: C.textHeading, wordBreak: 'break-word',
-            ...(answerCollapsed ? { maxHeight: 260, overflow: 'hidden' } : {}),
-          }}>
-            {answerBody.trim()
-              ? <MarkdownContent text={answerBody} />
-              : <span style={{ fontSize: 12.5, color: C.textMuted, fontStyle: 'italic' }}>{emptyAnswerNote ?? 'Ответ передан без текста'}</span>}
-            {answerCollapsed && (
-              <div style={{
-                position: 'absolute', left: 0, right: 0, bottom: 0, height: 56,
-                background: `linear-gradient(transparent, ${C.bgWhite})`, pointerEvents: 'none',
-              }} />
-            )}
-          </div>
-          {answerLong && (
-            <button
-              onClick={() => setAnswerOpen(o => !o)}
-              style={{
-                display: 'block', width: '100%', padding: '7px 12px',
-                border: 'none', borderTop: `1px solid ${C.divider}`,
-                background: 'none', cursor: 'pointer', textAlign: 'center',
-                fontFamily: FONT.sans, fontSize: 12, fontWeight: 600, color: accent,
-              }}
-            >
-              {answerOpen ? 'Свернуть ▴' : 'Показать полностью ▾'}
-            </button>
-          )}
+          <CollapsibleMarkdownBody
+            text={answerBody}
+            accent={accent}
+            empty={<span style={{ fontSize: 12.5, color: C.textMuted, fontStyle: 'italic' }}>{emptyAnswerNote ?? 'Ответ передан без текста'}</span>}
+          />
           {/* Метрики консультации из системного хвоста — вместо сырого текста CLI */}
           {hasTailMetrics && (
             <div style={{

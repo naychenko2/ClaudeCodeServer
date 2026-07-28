@@ -7,7 +7,9 @@ import { Field, FieldLabel, TextField, TextArea, Toggle, Button, SegmentedContro
 import { useAiJob, runAiJob, resetAiJob } from '../../lib/aiJobStore';
 import { PillSwitch } from '../../components/Toolbar';
 import { ModelPicker } from '../../components/ModelPicker';
+import { ModelTierPicker } from '../../components/ModelTierPicker';
 import { useModels, useModelCaps, modelProvider, USAGE } from '../../lib/models';
+import { parseTier, type ModelTierKey } from '../../lib/modelTiers';
 import { effortsForProvider } from '../../lib/effort';
 import { AGENT_COLORS, agentDotColor } from '../../components/AgentSelector';
 import { bumpPersonas } from '../../lib/personas';
@@ -115,6 +117,8 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   // Пустая инструкция свёрнута в кнопку «+ инструкция» — раскрытие по клику
   const [instructionsOpen, setInstructionsOpen] = useState(false);
   const [model, setModel] = useState(persona?.model ?? initial?.model ?? '');
+  // Уровень модели ('' — не задан): слот, которым персона работает, когда явной модели нет
+  const [modelTier, setModelTier] = useState<ModelTierKey | ''>(parseTier(persona?.modelTier));
   const [effort, setEffort] = useState(persona?.effort ?? initial?.effort ?? '');
   // Специальность (функциональная роль) для оркестрации — конвейер/брифинг/статус/память
   const [specialty, setSpecialty] = useState<PersonaSpecialty>(
@@ -351,7 +355,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       speechExamples: speechExamples.map(s => s.trim()).filter(Boolean),
       instructions: instructions.trim(),
     },
-    model, effort, scope,
+    model, modelTier, effort, scope,
     projectId: scope === 'project' ? projectId : '',
     color, greeting: greeting.trim(), memoryEnabled,
     tools: [...tools].sort(),
@@ -379,6 +383,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
         instructions: (persona?.contract?.instructions ?? '').trim(),
       },
       model: persona?.model ?? '',
+      modelTier: parseTier(persona?.modelTier),
       effort: persona?.effort ?? '',
       scope: s,
       projectId: s === 'project' ? (persona?.projectId ?? defaultProjectId ?? '') : '',
@@ -412,6 +417,8 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       // Правка: шлём значение как есть — "" сбрасывает модель/усилие к дефолту (бэкенд: ""→null).
       // Создание: пусто → не пишем (иначе сохранилась бы пустая строка вместо null).
       model: isEdit ? model : (model || undefined),
+      // Уровень модели по той же схеме: правка шлёт "" (сброс), создание — только заданный
+      modelTier: isEdit ? modelTier : (modelTier || undefined),
       effort: isEdit ? effort : (effort || undefined),
       scope,
       projectId: scope === 'project' ? projectId : undefined,
@@ -890,6 +897,15 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
           {/* usage: у чатов персон своё назначение модели — пункт «По умолчанию»
               обязан показывать его, а не модель обычного нового чата */}
           <ModelPicker value={model} options={models} onChange={setModel} usage={USAGE.chatPersona} />
+        </Field>
+
+        {/* Уровень слабее явной модели выше: задал модель — она и пойдёт в ход */}
+        <Field label="Уровень модели" hint="Каким уровнем персона работает по умолчанию; задача может поднять или опустить.">
+          <ModelTierPicker
+            value={modelTier}
+            onChange={setModelTier}
+            defaultHint={model ? 'работает выбранной моделью' : 'как настроено для чатов персон'}
+          />
         </Field>
 
         {caps.supportsEffort && (

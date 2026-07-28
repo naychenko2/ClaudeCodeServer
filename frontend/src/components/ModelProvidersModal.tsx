@@ -7,6 +7,7 @@ import { api, type ModelTiers } from '../lib/api';
 import { C, FONT, FS, R, SP, SHADOW, Z, MODAL_W } from '../lib/design';
 import { useModels, useProviders, modelLabel, providerLabel, modelProvider,
   loadModels, type ProviderCapabilities, type ModelOption } from '../lib/models';
+import { effectiveTierModel as tierModelOf } from '../lib/modelTiers';
 import type { OllamaUsageInfo, OllamaActionInfo, AppSettings, UserProfile } from '../types';
 
 interface Props {
@@ -156,11 +157,9 @@ export function ModelProvidersModal({ onClose, isAdmin }: Props) {
   // Эффективная модель слота для текущего контекста: личный слот выбранного
   // пользователя, если задан, иначе глобальный. Ей подписываются места уровня 3 —
   // сами назначения общие для всех, а модель за слотом зависит от контекста.
-  // `||`, а не `??`: saveTier(t,'') оптимистично кладёт пустую строку (null придёт
-  // лишь с ответом сервера), и `??` пропустил бы её как валидную — подпись мигнула
-  // бы на «не задана» вместо глобальной. Так же трактует пустую строку tierSubtitle.
+  // Склейка одна на весь фронт (ею же подписан выбор уровня у задач и персон).
   function effectiveTierModel(t: TierKey): string {
-    return selectedTiers()?.[t] || globalTiers()?.[t] || '';
+    return tierModelOf(t, selectedTiers(), globalTiers());
   }
 
   // Оптимистично: применяем сразу, при ошибке возвращаем прежнее значение. Шлём ТОЛЬКО своё

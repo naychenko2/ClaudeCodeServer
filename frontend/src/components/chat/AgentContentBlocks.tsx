@@ -14,8 +14,55 @@ export const NEUTRAL_AGENT_ACCENT = '#8A8578';
 // «Размышление» как в основной ленте, но с локальным состоянием (блоки приходят целиком,
 // глобальный toggle по индексу не нужен).
 
-// Порог сворачивания длинного текста — как LONG_ANSWER_CHARS у ответа в PersonaConsultCard
-const LONG_TEXT_CHARS = 1200;
+// Порог сворачивания длинного текста — общий для всех карточек агентов
+export const LONG_TEXT_CHARS = 1200;
+
+// Тело карточки агента: markdown с сворачиванием длинного текста — обрезка по высоте
+// с градиент-затуханием и кнопкой «Показать полностью». Один механизм на все карточки
+// (ответ консультации, постановка задачи), чтобы порог и вид не разъезжались.
+export function CollapsibleMarkdownBody({ text, accent, collapsedHeight = 260, padding = '10px 12px 4px', empty }: {
+  text: string;
+  accent: string;              // цвет кнопки раскрытия (акцент персоны/агента)
+  collapsedHeight?: number;
+  padding?: string;
+  empty?: React.ReactNode;     // что показать вместо пустого текста
+}) {
+  const body = text.trim();
+  const long = body.length > LONG_TEXT_CHARS;
+  const [open, setOpen] = useState(false);
+  const collapsed = long && !open;
+
+  return (
+    <>
+      <div style={{
+        position: 'relative', padding,
+        fontSize: 14, color: C.textHeading, wordBreak: 'break-word',
+        ...(collapsed ? { maxHeight: collapsedHeight, overflow: 'hidden' } : {}),
+      }}>
+        {body ? <MarkdownContent text={body} /> : empty}
+        {collapsed && (
+          <div style={{
+            position: 'absolute', left: 0, right: 0, bottom: 0, height: 56,
+            background: `linear-gradient(transparent, ${C.bgWhite})`, pointerEvents: 'none',
+          }} />
+        )}
+      </div>
+      {long && (
+        <button
+          onClick={() => setOpen(o => !o)}
+          style={{
+            display: 'block', width: '100%', padding: '7px 12px',
+            border: 'none', borderTop: `1px solid ${C.divider}`,
+            background: 'none', cursor: 'pointer', textAlign: 'center',
+            fontFamily: FONT.sans, fontSize: 12, fontWeight: 600, color: accent,
+          }}
+        >
+          {open ? 'Свернуть ▴' : 'Показать полностью ▾'}
+        </button>
+      )}
+    </>
+  );
+}
 
 export function AgentTextBlock({ text, accent }: { text: string; accent: string }) {
   const long = text.length > LONG_TEXT_CHARS;

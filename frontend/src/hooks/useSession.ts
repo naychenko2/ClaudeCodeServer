@@ -3,7 +3,7 @@ import type { ChatItem, ServerMessage, RateLimitInfo, WorkLoopState } from '../t
 import { joinSession, joinProject, leaveSession, onMessage, onReconnected, sendMessage, respondPermission, interruptSession, compactSession, answerQuestion as sendAnswer, respondPlan as sendPlanDecision, setMode as sendSetMode } from '../lib/signalr';
 import { setRecallManifest } from '../lib/recallManifest';
 import { api } from '../lib/api';
-import { applyServerMessage, normalizeHistory, serverHistoryNewer, initialChatState, type ChatState, type PendingChatMessage, type ComposerRestore } from '../lib/chatReducer';
+import { applyServerMessage, normalizeHistory, serverHistoryNewer, initialChatState, consumeComposerRestore, type ChatState, type PendingChatMessage, type ComposerRestore } from '../lib/chatReducer';
 
 // --- Модульный персистентный стор ---
 // Состояние живёт на уровне модуля и переживает переключение между сессиями.
@@ -255,6 +255,14 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
     catch { /* уже доставлено или сеть — снимок от сервера всё поправит */ }
   }, [sessionId]);
 
+  // Команда composer_restore отработана (текст и вложения поставил Composer, режим — ChatPanel):
+  // гасим её, чтобы возврат в чат не подставил в поле ввода уже отправленное сообщение.
+  const consumeRestore = useCallback(() => {
+    if (!sessionId) return;
+    if (getState(sessionId).composerRestore === null) return; // гасить нечего — не будим подписчиков
+    setState(sessionId, consumeComposerRestore);
+  }, [sessionId]);
+
   const send = useCallback(async (text: string, attachedPaths: string[] = [], mode?: string, opts?: { auto?: boolean }) => {
     if (!sessionId) return;
     const auto = opts?.auto ?? false;
@@ -430,5 +438,5 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
     sendSetMode(sessionId, mode).catch(() => {});
   }, [sessionId]);
 
-  return { items: state.items, isWaiting: state.isWaiting, isJoined: state.isJoined, isHistoryLoading: state.isHistoryLoading, rateLimits: state.rateLimits, isCompacting: state.isCompacting, compactNote: state.compactNote, workLoop: state.workLoop, promptSuggestion: state.promptSuggestion, pending: state.pending, composerRestore: state.composerRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, compact, toggleThinking, noteCompanionSwitch, changeMode, cancelPending };
+  return { items: state.items, isWaiting: state.isWaiting, isJoined: state.isJoined, isHistoryLoading: state.isHistoryLoading, rateLimits: state.rateLimits, isCompacting: state.isCompacting, compactNote: state.compactNote, workLoop: state.workLoop, promptSuggestion: state.promptSuggestion, pending: state.pending, composerRestore: state.composerRestore, consumeRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, compact, toggleThinking, noteCompanionSwitch, changeMode, cancelPending };
 }

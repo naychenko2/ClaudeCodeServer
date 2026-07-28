@@ -26,7 +26,8 @@ export interface ChatState {
   // Рендерятся «призраками» после ленты; в историю не попадают.
   pending: PendingChatMessage[];
   // Разовая команда композеру вернуть прерванное сообщение (composer_restore). null —
-  // команды не было; хранится в состоянии, чтобы Composer отработал его эффектом по seq.
+  // команды не было (или она уже отработана); хранится в состоянии, чтобы Composer отработал
+  // его эффектом по seq, и гасится сразу после применения — см. consumeComposerRestore.
   composerRestore: ComposerRestore | null;
 }
 
@@ -59,6 +60,14 @@ export interface ComposerRestore {
 
 export function initialChatState(): ChatState {
   return { items: [], isWaiting: false, rateLimits: {}, isCompacting: false, promptSuggestion: null, pending: [], composerRestore: null };
+}
+
+// Гасит разовую команду composer_restore после того, как её отработали Composer (текст,
+// вложения) и ChatPanel (режим). Без гашения команда живёт в per-session состоянии стора
+// сколько угодно долго и применяется заново при каждом возврате в чат — уже отправленный
+// текст «воскресал» в поле ввода. Возвращает prev той же ссылкой, если гасить нечего.
+export function consumeComposerRestore<S extends ChatState>(prev: S): S {
+  return prev.composerRestore === null ? prev : { ...prev, composerRestore: null };
 }
 
 // Сообщение истории с сервера: сериализованный ChatItem без клиентских UI-полей

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { ChatItem, ServerMessage } from '../../types';
-import { applyServerMessage, normalizeHistory, serverHistoryNewer, initialChatState, type ChatState } from '../chatReducer';
+import { applyServerMessage, normalizeHistory, serverHistoryNewer, initialChatState, consumeComposerRestore, type ChatState } from '../chatReducer';
 
 // --- Хелперы ---
 
@@ -436,6 +436,27 @@ describe('applyServerMessage: статусы и no-op', () => {
     const initial = state({ items: [{ kind: 'text', text: 'x' }] });
     const next = applyServerMessage(initial, msg({ type: 'notification', title: 't', body: 'b', kind: 'info' }));
     expect(next).toBe(initial);
+  });
+});
+
+// --- composer_restore (возврат прерванного сообщения в композер) ---
+
+describe('composer_restore', () => {
+  it('событие кладёт снимок с монотонным seq', () => {
+    const first = run([{ type: 'composer_restore', text: 'привет', attachedPaths: ['a.ts'], mode: 'plan' }]);
+    expect(first.composerRestore).toEqual({ text: 'привет', attachedPaths: ['a.ts'], mode: 'plan', seq: 1 });
+    const second = applyServerMessage(first, msg({ type: 'composer_restore', text: 'привет' }));
+    expect(second.composerRestore).toEqual({ text: 'привет', attachedPaths: null, mode: null, seq: 2 });
+  });
+
+  it('consumeComposerRestore гасит применённую команду — воскресить нечего', () => {
+    const withRestore = run([{ type: 'composer_restore', text: 'привет' }]);
+    expect(consumeComposerRestore(withRestore).composerRestore).toBeNull();
+  });
+
+  it('consumeComposerRestore на пустой команде возвращает то же состояние', () => {
+    const initial = state();
+    expect(consumeComposerRestore(initial)).toBe(initial);
   });
 });
 

@@ -15,6 +15,12 @@ export type ChatStatusChip = 'active' | 'waiting' | 'done' | 'error';
 // Секция «Показать только»: мультивыбор тегов-особенностей чата.
 export type ChatOnlyFilter = 'pinned' | 'temp' | 'group';
 
+// Оси вида списка (группировка, порядок, иерархия) — живут в filters, персистятся
+// вместе с ним. От фильтрующих полей отличаются тем, что не скрывают чаты, а лишь
+// перестраивают список: isDefaultFilters их не учитывает.
+export type ChatGroupBy = 'days' | 'tags' | 'none';
+export type ChatSortOrder = 'newest' | 'oldest';
+
 export interface ChatFilters {
   origins: Session['origin'][];
   statuses: ChatStatusChip[];
@@ -24,11 +30,19 @@ export interface ChatFilters {
   // Выбранные общие теги: чат виден, если у него есть ХОТЯ БЫ ОДИН из них (OR-пересечение).
   // Пусто/отсутствует — без фильтра по тегам (дефолт)
   tags?: string[];
+  // Группировка секций: по дням (с pinned-секцией) / по общим тегам / единый список
+  groupBy: ChatGroupBy;
+  // Порядок внутри секций и (для days/none) порядок самих секций
+  sortOrder: ChatSortOrder;
+  // Дерево по parentSessionId: группировка применяется к корням, дети — под корнём
+  hierarchy: boolean;
 }
 
 const KEY_PREFIX = 'cc_chat_filters:';
 // Ключ старого формата (только тип чата) — читаем один раз для миграции
 const LEGACY_ORIGINS_PREFIX = 'cc_chat_visible_origins:';
+// Ключ удалённого режима вида ('flat'|'tree'|'tags') — мигрируем в оси groupBy/hierarchy
+const LEGACY_VIEW_PREFIX = 'cc_chat_view:';
 
 export const ALL_ORIGINS: Session['origin'][] = ['manual', 'task', 'automation'];
 export const ALL_STATUS_CHIPS: ChatStatusChip[] = ['active', 'waiting', 'done', 'error'];
@@ -42,6 +56,9 @@ function defaults(): ChatFilters {
     personaId: null,
     only: [],
     search: '',
+    groupBy: 'days',
+    sortOrder: 'newest',
+    hierarchy: false,
   };
 }
 
@@ -56,14 +73,41 @@ function readLegacyOrigins(scopeKey: string): Session['origin'][] | null {
   }
 }
 
+// Миграция удалённого useChatView: 'tree' ⇒ hierarchy, 'tags' ⇒ groupBy='tags',
+// 'flat' ⇒ дефолт. Ключ при чтении НЕ удаляем: до первой записи нового формата
+// (persistChatFilters) это единственная копия выбора — удали мы её здесь, повторный
+// load («открыли проект → ушли → вернулись») потерял бы мигрированные оси.
+// Повторная миграция идемпотентна, а удаляет ключ persistChatFilters после успешной
+// записи — тогда выбор уже сохранён в cc_chat_filters:.
+function readLegacyView(scopeKey: string): Partial<ChatFilters> {
+  try {
+    const v = localStorage.getItem(LEGACY_VIEW_PREFIX + scopeKey);
+    if (v === 'tree') return { hierarchy: true };
+    if (v === 'tags') return { groupBy: 'tags' };
+    return {};
+  } catch {
+    return {};
+  }
+}
+
 // Мирная миграция: читаем новый формат; старый объект с activeOnly (до переработки)
 // просто игнорируется — этот фильтр заменён секцией статусов. origins/personaId
 // наследуются, statuses/only/search берутся из хранилища или дефолтятся.
-function normalize(p: Partial<ChatFilters>): ChatFilters {
+// Оси (groupBy/sortOrder/hierarchy) у записи старого формата отсутствуют —
+// подставляем из legacy-ключа cc_chat_view: (или дефолт).
+function normalize(p: Partial<ChatFilters>, scopeKey?: string): ChatFilters {
   const origins = Array.isArray(p.origins) ? p.origins.filter(o => ALL_ORIGINS.includes(o)) : [...ALL_ORIGINS];
   const statuses = Array.isArray(p.statuses)
     ? p.statuses.filter(s => ALL_STATUS_CHIPS.includes(s))
     : [...DEFAULT_STATUSES];
+  // Оси отсутствуют в записи (формат до их появления) — пробуем legacy-ключ вида
+  const legacyAxes = p.groupBy === undefined && p.sortOrder === undefined && p.hierarchy === undefined && scopeKey
+    ? readLegacyView(scopeKey)
+    : {};
+  const groupBy: ChatGroupBy =
+    p.groupBy === 'tags' || p.groupBy === 'none' || p.groupBy === 'days'
+      ? p.groupBy
+      : legacyAxes.groupBy ?? 'days';
   return {
     origins: origins.length ? origins : [...ALL_ORIGINS],
     // пустой набор статусов = «всё скрыто» — не имеет смысла, возвращаем дефолт
@@ -72,21 +116,32 @@ function normalize(p: Partial<ChatFilters>): ChatFilters {
     only: Array.isArray(p.only) ? p.only.filter(o => o === 'pinned' || o === 'temp' || o === 'group') : [],
     search: typeof p.search === 'string' ? p.search : '',
     tags: Array.isArray(p.tags) ? p.tags.filter((t): t is string => typeof t === 'string' && t.length > 0) : [],
+    groupBy,
+    sortOrder: p.sortOrder === 'oldest' || p.sortOrder === 'newest' ? p.sortOrder : 'newest',
+    hierarchy: typeof p.hierarchy === 'boolean' ? p.hierarchy : legacyAxes.hierarchy ?? false,
   };
 }
 
 export function loadChatFilters(scopeKey: string): ChatFilters {
   try {
     const raw = localStorage.getItem(KEY_PREFIX + scopeKey);
-    if (raw) return normalize(JSON.parse(raw) as Partial<ChatFilters>);
+    if (raw) return normalize(JSON.parse(raw) as Partial<ChatFilters>, scopeKey);
+    // Записи фильтров ещё нет: могли остаться ключи старых форматов — мигрируем их
     const legacy = readLegacyOrigins(scopeKey);
-    if (legacy) return { ...defaults(), origins: legacy };
+    if (legacy) return normalize({ ...readLegacyView(scopeKey), origins: legacy }, scopeKey);
+    return normalize(readLegacyView(scopeKey), scopeKey);
   } catch { /* повреждённое значение — дефолт */ }
   return defaults();
 }
 
 export function persistChatFilters(scopeKey: string, v: ChatFilters): void {
-  try { localStorage.setItem(KEY_PREFIX + scopeKey, JSON.stringify(v)); } catch { /* квота/приватный режим */ }
+  try {
+    localStorage.setItem(KEY_PREFIX + scopeKey, JSON.stringify(v));
+    // Новый формат сохранён — legacy-ключи миграции больше не нужны (до этого
+    // момента readLegacyView их намеренно не удалял, чтобы не потерять выбор).
+    localStorage.removeItem(LEGACY_VIEW_PREFIX + scopeKey);
+    localStorage.removeItem(LEGACY_ORIGINS_PREFIX + scopeKey);
+  } catch { /* квота/приватный режим */ }
 }
 
 // Состояние фильтров для одной области. Перечитывает хранилище при смене scopeKey,
@@ -174,6 +229,8 @@ export function matchChatFilter(filters: ChatFilters): (s: Session) => boolean {
 }
 
 // Фильтр в дефолтном состоянии — сводка на триггере нейтральна.
+// Оси вида (groupBy/sortOrder/hierarchy) намерено НЕ учитываются: они не скрывают
+// чаты, а перестраивают список — активная ось не должна красить триггер фильтров.
 export function isDefaultFilters(f: ChatFilters): boolean {
   return f.origins.length === ALL_ORIGINS.length && ALL_ORIGINS.every(o => f.origins.includes(o))
     && f.statuses.length === DEFAULT_STATUSES.length && DEFAULT_STATUSES.every(s => f.statuses.includes(s))
@@ -185,6 +242,12 @@ export function isDefaultFilters(f: ChatFilters): boolean {
 
 export function defaultChatFilters(): ChatFilters {
   return defaults();
+}
+
+// Сброс только фильтрующих полей, оси вида сохраняются — «Сбросить всё» в поповере
+// фильтров не должен неожиданно перестраивать список (группировка/порядок/иерархия).
+export function defaultChatFiltersKeepingView(f: ChatFilters): ChatFilters {
+  return { ...defaults(), groupBy: f.groupBy, sortOrder: f.sortOrder, hierarchy: f.hierarchy };
 }
 
 // === Empty state списка чатов (макет варианта А, сцена 3) ===

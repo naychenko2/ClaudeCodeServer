@@ -1,28 +1,27 @@
-import { useState, useEffect, useRef, useMemo, type ReactNode } from 'react';
-import { Filter, List, ListTree, Search, Tags, X, Pin, Clock, Users } from 'lucide-react';
+import { useState, useEffect, useRef, useMemo, useLayoutEffect, type ReactNode } from 'react';
+import { Filter, Search, X, Pin, Clock, Users } from 'lucide-react';
 import type { Persona, Session } from '../types';
 import { C, R, FONT, FS, SHADOW, Z, SP } from '../lib/design';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
-import { Modal, PillSwitch } from './ui';
+import { Modal, IconButton } from './ui';
 import { personaLabel } from '../lib/personas';
 import { PersonaAvatar } from '../features/personas/PersonaAvatar';
 import {
   ALL_ORIGINS, ALL_STATUS_CHIPS,
-  chatStatusOf, isDefaultFilters, defaultChatFilters,
+  chatStatusOf, isDefaultFilters, defaultChatFiltersKeepingView,
   type ChatFilters, type ChatStatusChip, type ChatOnlyFilter,
 } from '../lib/chatFilters';
-import type { ChatViewMode } from '../lib/chatTree';
 
-// === Фильтр списка чатов (макет варианта А — «поповер 2.0») ===
-// Компактный триггер со сводкой + бейджем скрытых; по клику — поповер (десктоп)
-// или мобильная шторка (через ui/Modal). Секции: поиск → статус → тип → персона → показать только.
-// Архив (чаты выполненных задач) прячется чипом «Готово» в секции «Статус» —
-// отдельного тумблера нет (одно из решений пользователя по макету).
+// === Фильтр списка чатов: IconButton-триггер с бейджем скрытых + поповер (десктоп)
+// или мобильная шторка (ui/Modal). Секции: поиск → статус → тип → персона → показать
+// только. Поиск намертво живёт первой секцией поповера (макет chat-unified-view):
+// редкий жест не занимает тулбар, активный поиск виден бейджем скрытых.
+// Архив (чаты выполненных задач) прячется чипом «Готово» в секции «Статус».
 
 const STATUS_LABEL: Record<ChatStatusChip, string> = {
   active: 'В работе', waiting: 'Ждёт меня', done: 'Готово', error: 'С ошибкой',
 };
-// Строчные имена для сводки на триггере
+// Строчные имена для сводки в title триггера
 const STATUS_SUMMARY: Record<ChatStatusChip, string> = {
   active: 'в работе', waiting: 'ждут меня', done: 'готово', error: 'с ошибкой',
 };
@@ -44,6 +43,8 @@ const ORIGIN_OPTIONS: { value: Session['origin']; label: string }[] = [
   { value: 'automation', label: 'Автоматизация' },
 ];
 
+const POPOVER_W = 320;
+
 interface FilterBarProps {
   // Полный список чатов области — для счётчиков на чипах
   sessions: Session[];
@@ -53,22 +54,9 @@ interface FilterBarProps {
   // Сколько чатов скрыто текущими фильтрами (бейдж на триггере и футер)
   hiddenCount: number;
   isMobile?: boolean;
-  // Режим вида списка «Плоский/Иерархия» — тумблер справа (не задан — без тумблера)
-  view?: ChatViewMode;
-  onChangeView?: (v: ChatViewMode) => void;
-  // Доступные режимы тумблера (дефолт — Плоский/Иерархия). «Теги» добавляет проектный
-  // список: у чатов вне проекта реестра тегов нет, третий режим им бессмыслен
-  views?: ChatViewMode[];
+  // Размер триггера — ступень тулбара (sm на узких, md на широких, lg на мобиле)
+  triggerSize?: 'sm' | 'md' | 'lg';
 }
-
-// === Тумблер вида «Плоский / Иерархия (/ Теги)» ===
-// Единый ui/PillSwitch (макет chat-tags-switch выбрал его): нейтральный TB.pill*-трек,
-// на мобиле — compact (активный сегмент текстом, остальные иконками).
-const VIEW_OPTIONS: { value: ChatViewMode; label: string; Icon: typeof List }[] = [
-  { value: 'flat', label: 'Плоский', Icon: List },
-  { value: 'tree', label: 'Иерархия', Icon: ListTree },
-  { value: 'tags', label: 'Теги', Icon: Tags },
-];
 
 // === Чип мультивыбора ===
 function Chip({ active, children, onClick, large }: {
@@ -171,10 +159,14 @@ function FilterContent({
   const q = filters.search;
   const hiddenOrigins = ORIGIN_OPTIONS.filter(o => !filters.origins.includes(o.value));
   const showPersona = personaIdsInList.length > 0;
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  // Открыл поповер/шторку — фокус сразу в поле поиска (макет: «открыл → фокус уже в поле»)
+  useEffect(() => { searchRef.current?.focus(); }, []);
 
   return (
     <>
-      {/* Поиск по названию */}
+      {/* Поиск по названию — первая секция, в тулбар НЕ выносится */}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 7,
         background: C.bgWhite, border: `1px solid ${C.border}`,
@@ -182,6 +174,7 @@ function FilterContent({
       }}>
         <Search size={15} strokeWidth={2} style={{ color: C.textMuted, flexShrink: 0 }} />
         <input
+          ref={searchRef}
           value={q}
           onChange={e => patch({ search: e.target.value })}
           placeholder="Поиск по названию…"
@@ -302,7 +295,7 @@ function FilterContent({
   );
 }
 
-// Сводка активных фильтров человеческим языком (для триггера)
+// Сводка активных фильтров человеческим языком (для title триггера)
 function buildSummary(filters: ChatFilters, personaName: string | null): string {
   const parts: string[] = [];
   const q = filters.search.trim();
@@ -351,18 +344,21 @@ export function ChatFilterResetActions({ search, hasNonSearchFilters, onResetSea
 }
 
 export function FilterBar({
-  sessions, filters, patch, allPersonas, hiddenCount, isMobile,
-  view, onChangeView, views,
+  sessions, filters, patch, allPersonas, hiddenCount, isMobile, triggerSize = 'sm',
 }: FilterBarProps) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
+  // Позиция поповера — fixed по rect триггера, кламп к окну (не вылезает ни за
+  // край панели, ни за край экрана на узких ширинах)
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
 
   const selectedPersona = filters.personaId
     ? allPersonas.find(p => p.id === filters.personaId) ?? null
     : null;
   const summary = buildSummary(filters, selectedPersona ? personaLabel(selectedPersona) : null);
   const hasFilters = !isDefaultFilters(filters);
-  const resetAll = () => patch(defaultChatFilters());
+  // Оси вида (groupBy/sortOrder/hierarchy) сбросом не трогаем — это не фильтры
+  const resetAll = () => patch(defaultChatFiltersKeepingView(filters));
 
   // Закрытие десктоп-поповера по клику вне и по Esc (оба режима). Мобильная шторка
   // закрывается сама через ui/Modal (overlay/Esc).
@@ -381,36 +377,43 @@ export function FilterBar({
     };
   }, [open, isMobile]);
 
+  // Позиция поповера — от кнопки, при открытии и ресайзе окна
+  useLayoutEffect(() => {
+    if (!open || isMobile) { setPos(null); return; }
+    const place = () => {
+      const btn = rootRef.current?.querySelector('button');
+      if (!btn) return;
+      const rect = btn.getBoundingClientRect();
+      const left = Math.max(8, Math.min(rect.left, window.innerWidth - POPOVER_W - 8));
+      setPos({ top: rect.bottom + 4, left });
+    };
+    place();
+    window.addEventListener('resize', place);
+    return () => window.removeEventListener('resize', place);
+  }, [open, isMobile]);
+
   const trigger = (
-    <div
-      onClick={() => setOpen(o => !o)}
-      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(o => !o); } }}
-      role="button"
-      tabIndex={0}
-      style={{
-        display: 'flex', alignItems: 'center', gap: SP.xs, minWidth: 0,
-        cursor: 'pointer', userSelect: 'none', padding: '4px 0',
-        color: hasFilters ? C.accent : C.textMuted,
-        fontSize: FS.sm, fontWeight: 600, fontFamily: FONT.sans,
-        transition: 'color 0.15s', opacity: hasFilters ? 1 : 0.5,
-      }}
-      title={hasFilters ? summary : 'Фильтры'}
-    >
-      <Filter size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
-      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        {hasFilters ? summary : 'Фильтр'}
-      </span>
+    <span style={{ position: 'relative', display: 'inline-flex', flexShrink: 0 }}>
+      <IconButton
+        size={triggerSize}
+        active={hasFilters}
+        title={hasFilters ? `Фильтры: ${summary}` : 'Фильтры и поиск'}
+        onClick={() => setOpen(o => !o)}
+      >
+        <Filter size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+      </IconButton>
       {hiddenCount > 0 && (
         <span style={{
-          fontSize: 10, fontWeight: 700, fontFamily: FONT.mono,
-          color: C.onAccent, background: C.accent,
-          padding: '0 6px', borderRadius: R.pill, lineHeight: '18px',
-          minWidth: 18, textAlign: 'center', flexShrink: 0,
+          position: 'absolute', top: -5, right: -5, pointerEvents: 'none',
+          minWidth: 16, height: 16, padding: '0 4px', boxSizing: 'border-box',
+          borderRadius: R.max, background: C.accent, color: C.onAccent,
+          fontFamily: FONT.mono, fontSize: 10, fontWeight: 700, lineHeight: '14px',
+          textAlign: 'center', border: `2px solid ${C.bgMain}`,
         }}>
           {hiddenCount}
         </span>
       )}
-    </div>
+    </span>
   );
 
   // Футер: счётчик скрытых + сброс + готово (общий вид для поповера и шторки)
@@ -435,30 +438,14 @@ export function FilterBar({
   );
 
   return (
-    <div ref={rootRef} style={{ position: 'relative', flexShrink: 0, padding: isMobile ? '8px 16px' : '6px 12px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: SP.sm }}>
-        {trigger}
-        {view !== undefined && onChangeView && (
-          <PillSwitch
-            value={view}
-            options={VIEW_OPTIONS
-              .filter(o => (views ?? ['flat', 'tree']).includes(o.value))
-              .map(o => ({
-                value: o.value,
-                label: o.label,
-                icon: <o.Icon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
-              }))}
-            onChange={onChangeView}
-            compact={isMobile}
-          />
-        )}
-      </div>
+    <div ref={rootRef} style={{ position: 'relative', flexShrink: 0, display: 'inline-flex' }}>
+      {trigger}
 
-      {/* Десктоп: компактный поповер под триггером */}
-      {open && !isMobile && (
+      {/* Десктоп: компактный поповер под кнопкой (fixed по rect триггера) */}
+      {open && !isMobile && pos && (
         <div style={{
-          position: 'absolute', top: 'calc(100% + 4px)', left: SP.md,
-          width: 320, maxHeight: 478, overflowY: 'auto',
+          position: 'fixed', top: pos.top, left: pos.left,
+          width: POPOVER_W, maxHeight: 478, overflowY: 'auto',
           background: C.bgWhite, border: `1px solid ${C.border}`,
           borderRadius: R.xl, boxShadow: SHADOW.dropdown,
           padding: SP.md, zIndex: Z.dropdown,

@@ -1,23 +1,24 @@
 import { useEffect, useMemo, useState, useRef } from 'react';
-import { Plus, FilterX, ChevronUp, ChevronDown } from 'lucide-react';
+import { FilterX, ChevronUp, ChevronDown } from 'lucide-react';
 import type { Project, ProjectTag, Session } from '../types';
 import { api } from '../lib/api';
 import { onMessage, onReconnected } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
 import { EditSessionDialog } from './EditSessionDialog';
 import { C, FS, GROUP_COLORS, MODAL_W, R } from '../lib/design';
-import { Modal, ModalActions, Button } from './ui';
+import { Modal, ModalActions } from './ui';
 import { usePersonas, usePersonasVersion } from '../lib/personas';
-import { FilterBar, ChatFilterResetActions } from './FilterBar';
+import { ChatFilterResetActions } from './FilterBar';
+import { ChatListToolbar } from './ChatListToolbar';
 import { EmptyState } from './ui';
-import { useChatFilters, useSanitizePersonaFilter, matchChatFilter, isDefaultFilters, defaultChatFilters, buildHiddenReason } from '../lib/chatFilters';
-import { buildChatTreeRows, useChatView, useTreeCollapse } from '../lib/chatTree';
+import { useChatFilters, useSanitizePersonaFilter, matchChatFilter, isDefaultFilters, defaultChatFiltersKeepingView, buildHiddenReason } from '../lib/chatFilters';
+import { buildChatTreeRows, splitChatTreeByRoots, useTreeCollapse } from '../lib/chatTree';
 import { useLastMechanicVersion } from '../lib/lastMechanic';
 import { ChatCard } from './ChatCard';
 import { ChatTreeRow } from './ChatTreeRow';
 import { ChatGroupingDnd } from './ChatGroupingDnd';
 import { ListDateDivider } from './ListDateDivider';
-import { groupChats, groupByTags, chatTagsSorted, type TagChatGroup } from '../lib/chatGroups';
+import { groupChats, groupByTags, sortChatsFlat, chatTagsSorted, type TagChatGroup } from '../lib/chatGroups';
 import { tagColor } from '../lib/tagRegistry';
 import { TagAssignMenu } from './TagChip';
 
@@ -230,7 +231,10 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   }, [project.id]);
 
   // Если активную сессию отредактировали из шапки чата — подхватываем название/модель,
-  // не затирая статус, который приходит по realtime. Если активной сессии ещё нет в списке
+  // не затирая статус, который приходит по realtime. Режим — тоже: changeMode обновляет
+  // activeSession напрямую, а список иначе узнал бы о нём только поллингом (5с), и быстрый
+  // уход-возврат в чат откатывал бы режим в UI к прежнему (объект из списка устарел).
+  // Если активной сессии ещё нет в списке
   // (создана из пустого состояния в центре, мимо SessionList) — добавляем её сразу,
   // не дожидаясь 5-секундного поллинга.
   useEffect(() => {
@@ -238,13 +242,13 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     setSessions(prev => {
       if (prev.some(s => s.id === activeSession.id)) {
         return prev.map(s =>
-          s.id === activeSession.id ? { ...s, name: activeSession.name, model: activeSession.model } : s
+          s.id === activeSession.id ? { ...s, name: activeSession.name, model: activeSession.model, mode: activeSession.mode } : s
         );
       }
       // Чужую (глобальную) сессию в список этого проекта не добавляем
       return activeSession.projectId === project.id ? [activeSession, ...prev] : prev;
     });
-  }, [activeSession?.id, activeSession?.name, activeSession?.model, project.id]);
+  }, [activeSession?.id, activeSession?.name, activeSession?.model, activeSession?.mode, project.id]);
 
   const handleSessionUpdated = (updated: Session) => {
     setSessions(prev => prev.map(s => s.id === updated.id ? { ...s, ...updated } : s));
@@ -275,11 +279,12 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     }
   };
 
-  // === Фильтры списка чатов ===
-  // Персистятся в localStorage отдельно для каждого проекта (scope = project.id)
+  // === Фильтры и оси списка чатов ===
+  // Фильтры + оси вида (groupBy/sortOrder/hierarchy) — единый state, персистится
+  // в localStorage отдельно для каждого проекта (scope = project.id)
   const { filters, patch } = useChatFilters(project.id);
-  // Режим вида «Плоский/Иерархия» и память свёрнутых веток дерева
-  const { view, setView } = useChatView(project.id);
+  const { groupBy, sortOrder, hierarchy } = filters;
+  // Память свёрнутых веток дерева
   const { collapsedIds, toggleCollapse } = useTreeCollapse(project.id);
 
   // Персоны в списке (для селектора фильтра)
@@ -295,11 +300,11 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   // исходные данные покрывает зависимость filters
   const activeSessionId = activeSession?.id ?? null;
   const tree = useMemo(
-    () => view === 'tree'
-      ? buildChatTreeRows(sessions, { isVisible, collapsedIds, activeId: activeSessionId })
+    () => hierarchy
+      ? buildChatTreeRows(sessions, { isVisible, collapsedIds, activeId: activeSessionId, sortOrder })
       : null,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sessions, view, collapsedIds, activeSessionId, filters],
+    [sessions, hierarchy, sortOrder, collapsedIds, activeSessionId, filters],
   );
   // Скрыто фильтрами — одинаково для плоского и дерева: множество видимых чатов одно
   const hiddenCount = sessions.length - filteredSessions.length;
@@ -307,10 +312,37 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   // Номер в подписи безымянного чата берём из исходного порядка списка:
   // группировка тасует карточки по дням, и позиция в группе давала бы скачущие номера
   const numberById = new Map(sessions.map((s, i) => [s.id, i + 1]));
-  // В режимах «Иерархия» и «Теги» группировка по датам не используется
-  const groups = tree || view === 'tags' ? [] : groupChats(filteredSessions);
-  // Режим «Теги»: секции по реестру (+ сироты, + хвост «Без тегов»)
-  const tagGroups = !tree && view === 'tags' ? groupByTags(filteredSessions, registry) : null;
+
+  // === Композиция списка по осям (groupBy × sortOrder × hierarchy) ===
+  // Сегменты дерева по корням (корень + его видимые строки-потомки). Ключ секции
+  // корня — maxActivity поддерева: корень с живым ребёнком не тонет в старых днях.
+  const treeSegments = useMemo(() => {
+    if (!tree) return null;
+    return splitChatTreeByRoots(tree.rows).map(seg => ({
+      seg,
+      // Синтетическая сессия корня для секционеров (groupChats/groupByTags работают
+      // по Session): дату подменяем активностью поддерева, остальное — как у чата
+      rootChat: { ...seg[0].chat, updatedAt: new Date(seg[0].maxActivity).toISOString() } as Session,
+    }));
+  }, [tree]);
+  const segByRootId = useMemo(
+    () => treeSegments ? new Map(treeSegments.map(x => [x.seg[0].chat.id, x.seg])) : null,
+    [treeSegments],
+  );
+
+  // Секции: плоский список — из отфильтрованных чатов; дерево — из корней
+  const dayGroups = treeSegments
+    ? (groupBy === 'days' ? groupChats(treeSegments.map(x => x.rootChat), sortOrder) : [])
+    : (groupBy === 'days' ? groupChats(filteredSessions, sortOrder) : []);
+  // Режим «Теги»: секции по реестру (+ сироты, + хвост «Без тегов»); корень дерева
+  // с несколькими тегами дублируется в каждой своей секции
+  const tagGroups = groupBy === 'tags'
+    ? groupByTags(treeSegments ? treeSegments.map(x => x.rootChat) : filteredSessions, registry, sortOrder)
+    : null;
+  // Без группировки: единый список (порядок дерева — pin+maxActivity, плоского — pin+дата)
+  const flatList = groupBy === 'none' && !treeSegments
+    ? sortChatsFlat(filteredSessions, sortOrder)
+    : null;
 
   const renderCard = (s: Session) => (
     <ChatCard
@@ -385,31 +417,15 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      {online && (
-        <div style={{ padding: '10px 12px', borderBottom: `1px solid ${C.divider}`, display: 'flex', alignItems: 'center', gap: 8 }}>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <Button variant="dashed" size="md" fullWidth onClick={createNew}
-              leftIcon={
-                <Plus size={15} strokeWidth={2.2} />
-              }
-            >
-              Новый чат
-            </Button>
-          </div>
-        </div>
-      )}
-
-      {/* Строка фильтров — всегда видна (для консистентности) */}
-      <FilterBar
+      <ChatListToolbar
+        onNew={() => { void createNew(); }}
+        hideNew={!online}
         sessions={sessions}
         filters={filters}
         patch={patch}
         allPersonas={personas}
         hiddenCount={hiddenCount}
         isMobile={isMobile}
-        view={view}
-        onChangeView={setView}
-        views={['flat', 'tree', 'tags']}
       />
 
       <div style={{ flex: 1, overflowY: 'auto', padding: '8px 8px' }}>
@@ -424,24 +440,48 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
                 search={filters.search}
                 hasNonSearchFilters={!isDefaultFilters({ ...filters, search: '' })}
                 onResetSearch={() => patch({ search: '' })}
-                onResetAll={() => patch(defaultChatFilters())}
+                onResetAll={() => patch(defaultChatFiltersKeepingView(filters))}
               />
             }
           />
         )}
-        {tree ? (
+        {treeSegments ? (
           <ChatGroupingDnd chats={sessions} isMobile={isMobile} onEdited={handleSessionUpdated}>
-            {tree.linkCount === 0 && tree.rows.length > 0 && (
+            {tree!.linkCount === 0 && tree!.rows.length > 0 && (
               <div style={{ padding: '10px 8px', fontSize: FS.sm, color: C.textMuted }}>
                 ⋔ Пока нет вложенных чатов — перетащите чат на другой, чтобы вложить.
                 Здесь же появятся исполнители делегированных задач.
               </div>
             )}
-            {tree.rows.map(row => (
-              <ChatTreeRow key={row.chat.id} row={row} isMobile={isMobile} onToggleCollapse={toggleCollapse}>
-                {renderCard(row.chat)}
-              </ChatTreeRow>
-            ))}
+            {tagGroups ? (
+              tagGroups.map(g => (
+                <div key={g.tag ?? '__untagged__'} style={{ marginBottom: 6 }}>
+                  {renderTagSectionHeader(g)}
+                  {g.items.map(root => segByRootId!.get(root.id)?.map(row => (
+                    <ChatTreeRow key={`${g.tag ?? '__untagged__'}:${row.chat.id}`} row={row} isMobile={isMobile} onToggleCollapse={toggleCollapse}>
+                      {renderCard(row.chat)}
+                    </ChatTreeRow>
+                  )))}
+                </div>
+              ))
+            ) : groupBy === 'none' ? (
+              treeSegments.map(({ seg }) => seg.map(row => (
+                <ChatTreeRow key={row.chat.id} row={row} isMobile={isMobile} onToggleCollapse={toggleCollapse}>
+                  {renderCard(row.chat)}
+                </ChatTreeRow>
+              )))
+            ) : (
+              dayGroups.map(g => (
+                <div key={g.title} style={{ marginBottom: 6 }}>
+                  <ListDateDivider title={g.title} />
+                  {g.items.map(root => segByRootId!.get(root.id)?.map(row => (
+                    <ChatTreeRow key={row.chat.id} row={row} isMobile={isMobile} onToggleCollapse={toggleCollapse}>
+                      {renderCard(row.chat)}
+                    </ChatTreeRow>
+                  )))}
+                </div>
+              ))
+            )}
           </ChatGroupingDnd>
         ) : tagGroups ? (
           tagGroups.map(g => (
@@ -450,7 +490,9 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
               {g.items.map(renderCard)}
             </div>
           ))
-        ) : groups.map(g => (
+        ) : flatList ? (
+          flatList.map(renderCard)
+        ) : dayGroups.map(g => (
           <div key={g.title} style={{ marginBottom: 6 }}>
             <ListDateDivider title={g.title} />
             {g.items.map(renderCard)}

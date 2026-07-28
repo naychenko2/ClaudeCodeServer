@@ -1,44 +1,11 @@
 // Иерархия списка чатов: сборка леса по Session.parentSessionId и
-// персистентность режима вида («Плоский/Иерархия/Теги») и свёрнутых веток.
-// Раздельно по областям, как chatFilters: 'global' и каждый projectId.
-// Спецификация — docs/mockups/chat-list-tree-spec.md.
+// персистентность свёрнутых веток. Раздельно по областям, как chatFilters:
+// 'global' и каждый projectId. Спецификация — docs/mockups/chat-list-tree-spec.md.
 import { useEffect, useRef, useState } from 'react';
 import type { Session } from '../types';
+import type { ChatSortOrder } from './chatFilters';
 
-// Режим вида списка чатов. 'tags' — группировка по общим тегам проекта (groupByTags);
-// доступен только там, где есть реестр тегов (проектный список), глобальный держит два.
-export type ChatViewMode = 'flat' | 'tree' | 'tags';
-
-const VIEW_KEY_PREFIX = 'cc_chat_view:';
 const COLLAPSE_KEY_PREFIX = 'cc_chat_tree_collapsed:';
-
-// === Режим вида списка (настройка вида, не фильтр) ===
-export function useChatView(scopeKey: string) {
-  const [view, setViewState] = useState<ChatViewMode>(() => loadView(scopeKey));
-  const scopeRef = useRef(scopeKey);
-
-  useEffect(() => {
-    if (scopeRef.current === scopeKey) return;
-    scopeRef.current = scopeKey;
-    setViewState(loadView(scopeKey));
-  }, [scopeKey]);
-
-  const setView = (v: ChatViewMode) => {
-    try { localStorage.setItem(VIEW_KEY_PREFIX + scopeKey, v); } catch { /* квота/приватный режим */ }
-    setViewState(v);
-  };
-
-  return { view, setView };
-}
-
-function loadView(scopeKey: string): ChatViewMode {
-  try {
-    const v = localStorage.getItem(VIEW_KEY_PREFIX + scopeKey);
-    return v === 'tree' || v === 'tags' ? v : 'flat';
-  } catch {
-    return 'flat';
-  }
-}
 
 // === Память свёрнутых веток (Set id чатов) ===
 export function useTreeCollapse(scopeKey: string) {
@@ -90,6 +57,9 @@ interface TreeNode {
 export interface ChatTreeRowData {
   chat: Session;
   depth: number;
+  // Максимум updatedAt по всему поддереву узла — ключ секционирования корней
+  // (корень попадает в дневную группу по активности поддерева, а не по своей дате)
+  maxActivity: number;
   // Последний ребёнок у своего родителя — вертикаль-связь обрывается на elbow
   isLast: boolean;
   hasChildren: boolean;
@@ -172,8 +142,11 @@ export function buildChatTreeRows(
     isVisible: (c: Session) => boolean;
     collapsedIds: Set<string>;
     activeId: string | null;
+    // Направление сортировки детей и корней (дефолт — свежие сверху)
+    sortOrder?: ChatSortOrder;
   },
 ): ChatTreeResult {
+  const dir = opts.sortOrder === 'oldest' ? 1 : -1;
   const byId = new Map(chats.map(c => [c.id, c]));
   const childrenOf = new Map<string, Session[]>();
   const topCandidates: Session[] = [];
@@ -193,7 +166,7 @@ export function buildChatTreeRows(
     visited.add(chat.id);
     const kids = (childrenOf.get(chat.id) ?? [])
       .filter(k => !visited.has(k.id))
-      .sort((a, b) => activity(b) - activity(a))
+      .sort((a, b) => dir * (activity(a) - activity(b)))
       .map(buildNode);
     return {
       chat,
@@ -239,10 +212,11 @@ export function buildChatTreeRows(
   };
   const roots = filterForest(topNodes);
 
-  // Закреплённые корни сверху (без группового заголовка), дальше — по активности поддерева
+  // Закреплённые корни сверху (без группового заголовка), дальше — по активности
+  // поддерева в направлении sortOrder
   roots.sort((a, b) => {
     const pin = Number(b.chat.isPinned ?? false) - Number(a.chat.isPinned ?? false);
-    return pin !== 0 ? pin : b.maxActivity - a.maxActivity;
+    return pin !== 0 ? pin : dir * (a.maxActivity - b.maxActivity);
   });
 
   let linkCount = 0;
@@ -282,6 +256,7 @@ export function buildChatTreeRows(
     rows.push({
       chat: node.chat,
       depth,
+      maxActivity: node.maxActivity,
       isLast,
       hasChildren: node.children.length > 0,
       collapsed,
@@ -309,4 +284,17 @@ export function buildChatTreeRows(
   roots.forEach(r => emit(r, 0, true, false, { show: false, accent: false }, []));
 
   return { rows, linkCount, renderedCount };
+}
+
+// Нарезка плоских строк дерева на сегменты по корням: depth 0 открывает новый
+// сегмент, строки depth>0 до следующего корня — его видимое поддерево (уже после
+// collapse). Используется секционированием корней (дни/теги) — секция рендерит
+// корень с дочерними строками под собой.
+export function splitChatTreeByRoots(rows: ChatTreeRowData[]): ChatTreeRowData[][] {
+  const segments: ChatTreeRowData[][] = [];
+  for (const row of rows) {
+    if (row.depth === 0 || segments.length === 0) segments.push([row]);
+    else segments[segments.length - 1].push(row);
+  }
+  return segments;
 }

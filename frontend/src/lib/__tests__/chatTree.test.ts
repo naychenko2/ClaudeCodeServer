@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildChatTreeRows, collectDescendants, formatGroupCount } from '../chatTree';
+import { buildChatTreeRows, collectDescendants, formatGroupCount, splitChatTreeByRoots } from '../chatTree';
 import type { Session } from '../../types';
 
 // Фабрика минимальной сессии: важны только id/parentSessionId/updatedAt/origin/isPinned
@@ -166,6 +166,34 @@ describe('buildChatTreeRows', () => {
     expect(r.rows.map(x => x.chat.id)).toEqual(['pinned', 'fresh']);
   });
 
+  it('sortOrder=oldest: корни по возрастанию maxActivity, pinned всё ещё первые', () => {
+    const r = buildChatTreeRows([
+      mk('fresh', { updatedAt: '2026-07-22T10:00:00Z' }),
+      mk('old', { updatedAt: '2026-07-18T10:00:00Z' }),
+      mk('pinnedNew', { updatedAt: '2026-07-21T10:00:00Z', isPinned: true }),
+    ], { isVisible: all, collapsedIds: none, activeId: null, sortOrder: 'oldest' });
+    expect(r.rows.map(x => x.chat.id)).toEqual(['pinnedNew', 'old', 'fresh']);
+  });
+
+  it('sortOrder=oldest: дети внутри родителя по возрастанию updatedAt', () => {
+    const r = buildChatTreeRows([
+      mk('p'),
+      mk('old', { parentSessionId: 'p', updatedAt: '2026-07-20T11:00:00Z' }),
+      mk('new', { parentSessionId: 'p', updatedAt: '2026-07-21T11:00:00Z' }),
+    ], { isVisible: all, collapsedIds: none, activeId: null, sortOrder: 'oldest' });
+    expect(r.rows.map(x => x.chat.id)).toEqual(['p', 'old', 'new']);
+  });
+
+  it('maxActivity строки — максимум updatedAt по поддереву (ключ секций корня)', () => {
+    const r = build([
+      mk('parent', { updatedAt: '2026-07-20T10:00:00Z' }),
+      mk('child', { parentSessionId: 'parent', updatedAt: '2026-07-24T10:00:00Z' }),
+    ]);
+    const by = new Map(r.rows.map(x => [x.chat.id, x]));
+    expect(by.get('parent')!.maxActivity).toBe(new Date('2026-07-24T10:00:00Z').getTime());
+    expect(by.get('child')!.maxActivity).toBe(new Date('2026-07-24T10:00:00Z').getTime());
+  });
+
   it('путь корень→активный чат подсвечен: seg/elbow у активного, stub у предков', () => {
     const chats = [
       mk('p'),
@@ -200,6 +228,30 @@ describe('buildChatTreeRows', () => {
     // и ось a (x — единственный ребёнок a, продолжения нет)
     expect(by.get('y')!.depth).toBe(3);
     expect(by.get('y')!.ancestors.map(l => l.show)).toEqual([true, false]);
+  });
+});
+
+// Нарезка плоских строк на сегменты по корням — секционирование (дни/теги) в SessionList
+describe('splitChatTreeByRoots', () => {
+  it('каждый сегмент — корень с его строками-потомками', () => {
+    const r = build([
+      mk('p1'),
+      mk('c1', { parentSessionId: 'p1' }),
+      mk('g1', { parentSessionId: 'c1' }),
+      mk('p2'),
+      mk('c2', { parentSessionId: 'p2' }),
+      mk('p3'),
+    ]);
+    const segs = splitChatTreeByRoots(r.rows);
+    expect(segs.map(s => s.map(x => x.chat.id))).toEqual([
+      ['p1', 'c1', 'g1'],
+      ['p2', 'c2'],
+      ['p3'],
+    ]);
+  });
+
+  it('пустой список строк — пустая нарезка', () => {
+    expect(splitChatTreeByRoots([])).toEqual([]);
   });
 });
 

@@ -1,0 +1,1504 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Список чатов v2: однострочный тулбар — макет по текущему коду</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=PT+Serif:wght@400;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    /* Токены — один-в-один frontend/src/lib/theme.css (обе темы) + design.ts.
+       Сырых hex вне этого блока нет: стили только через var(--*).
+       Цвета тегов/персон — данные палитр (GROUP_COLORS / AGENT_COLORS), конвенция TagChip. */
+    :root {
+      --font-sans: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      --font-serif: 'PT Serif', Georgia, serif;
+      --font-mono: 'JetBrains Mono', 'Courier New', monospace;
+      --fs-xs: 11px; --fs-sm: 12px; --fs-base: 13px; --fs-md: 14px; --fs-lg: 16px; --fs-h2: 22px; --fs-h1: 28px;
+      --sp-xxs: 2px; --sp-xs: 4px; --sp-sm: 8px; --sp-md: 12px; --sp-lg: 16px; --sp-xl: 24px;
+      --r-sm: 6px; --r-md: 8px; --r-lg: 10px; --r-xl: 12px; --r-xxl: 14px; --r-pill: 9px; --r-modal: 20px; --r-sheet: 22px; --r-max: 999px;
+      --c-bg-main: #F4F0E8; --c-bg-panel: #EDE7DC; --c-bg-card: #FBF8F2; --c-bg-white: #FFFFFF;
+      --c-bg-selected: #E8E1D4; --c-bg-inset: #E7E0D2;
+      --c-text-heading: #2A251F; --c-text-primary: #39332B; --c-text-secondary: #756B5E; --c-text-muted: #9A8F7E;
+      --c-on-accent: #FBF8F2; --c-on-dark: #FFFFFF;
+      --c-accent: #D97757; --c-accent-light: #F4ECE1; --c-accent-muted: #EAD3C5;
+      --c-border: #E0D7C8; --c-border-light: #E8E1D4; --c-divider: #DDD4C4; --c-dashed: #D0C6B4; --c-track: #D8CFBE;
+      --c-overlay: rgba(23,19,15,.42); --c-glass: rgba(255,255,255,.74);
+      --c-success: #5E8B4E; --c-success-bg: #E9F1E8; --c-success-text: #3F7A4F;
+      --c-warning: #C9923E; --c-warning-bg: #FBEFE0; --c-warning-text: #8A6A28;
+      --c-danger: #B4452F; --c-danger-bg: #FBF1EC; --c-danger-text: #B4452F;
+      --c-info: #3E7CA6; --c-info-bg: #E7EFF5;
+      --c-plan: #6C5CB0;
+      --shadow-focus: 0 0 0 3px rgba(217,119,87,.14);
+      --shadow-card: 0 2px 8px rgba(60,50,35,.05);
+      --shadow-island: 0 1px 2px rgba(60,50,35,.06), 0 6px 20px rgba(60,50,35,.10);
+      --shadow-dropdown: 0 8px 28px rgba(60,50,35,.16);
+      --shadow-sheet: 0 -8px 40px rgba(23,19,15,.22);
+      --shadow-button: 0 4px 14px rgba(217,119,87,.30);
+      --shadow-thumb: 0 1px 3px rgba(42,37,31,.12);
+      --tb-pill-track: #E8E1D4; --tb-pill-thumb-bg: #FFFFFF;
+      /* Палитры-данные (не тема): теги GROUP_COLORS, персоны AGENT_COLORS */
+      --tag-blue: #3E7CA6; --tag-purple: #8E4A82; --tag-green: #3F7A4F;
+      --persona-orange: #C2693B; --persona-blue: #3E7CA6; --persona-indigo: #4B6BB0;
+    }
+    [data-theme="dark"] {
+      --c-bg-main: #201C18; --c-bg-panel: #272320; --c-bg-card: #2E2A25; --c-bg-white: #2E2A25;
+      --c-bg-selected: #38332D; --c-bg-inset: #1B1815;
+      --c-text-heading: #F2ECE1; --c-text-primary: #EDE6DB; --c-text-secondary: #B3A897; --c-text-muted: #8A8072;
+      --c-on-accent: #201C18;
+      --c-accent: #E38A6A; --c-accent-light: #3A2E27; --c-accent-muted: #4A362C;
+      --c-border: #3D3830; --c-border-light: #34302A; --c-divider: #454037; --c-dashed: #4A443B; --c-track: #453F37;
+      --c-overlay: rgba(0,0,0,.62); --c-glass: rgba(46,42,37,.74);
+      --c-success: #7CB86A; --c-success-bg: #232E20; --c-success-text: #8FCB79;
+      --c-warning: #E0AC5A; --c-warning-bg: #322717; --c-warning-text: #E7B96E;
+      --c-danger: #E8785E; --c-danger-bg: #331F1B; --c-danger-text: #EE8A72;
+      --c-info: #5FA0CC; --c-info-bg: #1E2A33;
+      --c-plan: #9385D8;
+      --shadow-focus: 0 0 0 3px rgba(227,138,106,.24);
+      --shadow-card: 0 2px 10px rgba(0,0,0,.35);
+      --shadow-island: 0 1px 2px rgba(0,0,0,.30), 0 8px 24px rgba(0,0,0,.45);
+      --shadow-dropdown: 0 10px 32px rgba(0,0,0,.55);
+      --shadow-sheet: 0 -10px 46px rgba(0,0,0,.55);
+      --shadow-button: 0 4px 16px rgba(227,138,106,.34);
+      --shadow-thumb: 0 1px 3px rgba(0,0,0,.45);
+      --tb-pill-track: #38332D; --tb-pill-thumb-bg: #2E2A25;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: var(--font-sans); font-size: var(--fs-base); color: var(--c-text-primary); background: var(--c-bg-main); line-height: 1.5; padding: var(--sp-lg); }
+    svg.ic { display: block; }
+
+    .theme-toggle { margin-left: auto; flex-shrink: 0; }
+    .theme-toggle button { padding: var(--sp-sm) var(--sp-md); font-family: var(--font-sans); font-size: var(--fs-sm); font-weight: 600; color: var(--c-text-heading); background: var(--c-bg-white); border: 1px solid var(--c-border); border-radius: var(--r-md); cursor: pointer; }
+    .theme-toggle button:hover { border-color: var(--c-accent); }
+
+    .mockup-container { max-width: 1340px; margin: 0 auto; display: flex; flex-direction: column; gap: var(--sp-xl); }
+    .mockup-header { display: flex; align-items: flex-start; gap: var(--sp-lg); flex-wrap: wrap; }
+    .mockup-header h1 { font-family: var(--font-serif); font-size: var(--fs-h1); font-weight: 600; color: var(--c-text-heading); margin-bottom: var(--sp-xs); }
+    .mockup-header p { font-size: var(--fs-md); color: var(--c-text-secondary); max-width: 780px; }
+    .mockup-section { background: var(--c-bg-card); border-radius: var(--r-xxl); border: 1px solid var(--c-border-light); overflow: hidden; }
+    .section-header { padding: var(--sp-md) var(--sp-lg); background: var(--c-bg-inset); border-bottom: 1px solid var(--c-border); display: flex; align-items: center; gap: var(--sp-md); flex-wrap: wrap; }
+    .section-title { font-family: var(--font-serif); font-size: var(--fs-h2); font-weight: 600; color: var(--c-text-heading); }
+    .section-subtitle { font-size: var(--fs-sm); color: var(--c-text-secondary); margin-left: auto; }
+    .section-body { padding: var(--sp-lg); }
+    .note { margin-top: var(--sp-md); padding: var(--sp-md); background: var(--c-bg-selected); border-radius: var(--r-lg); font-size: var(--fs-sm); color: var(--c-text-secondary); }
+    .note b, .note strong { color: var(--c-text-heading); }
+    .note code { font-family: var(--font-mono); font-size: var(--fs-xs); background: var(--c-bg-card); padding: 1px 5px; border-radius: var(--r-sm); }
+
+    /* === Фрейм сайдбара: показывает жёсткую ширину панели === */
+    .frames { display: flex; gap: var(--sp-lg); flex-wrap: wrap; align-items: flex-start; }
+    .frame { flex-shrink: 0; }
+    .frame-caption { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--c-text-muted); margin-bottom: var(--sp-xs); display: flex; justify-content: space-between; gap: 8px; }
+    .frame-caption b { color: var(--c-accent); font-weight: 600; }
+    .sidebar { background: var(--c-bg-main); border: 1px solid var(--c-border); border-radius: var(--r-lg); overflow: hidden; display: flex; flex-direction: column; }
+
+    /* === ТУЛБАР v2: одна строка на все рычаги, поиска здесь нет === */
+    .toolbar { display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--c-border-light); }
+    .toolbar.compact-pad { padding: 8px 8px; gap: 4px; } /* ступень compact: ширина < 260 */
+
+    /* «Новый чат» — ui/Button variant=primary size=sm (текстовая) или иконочный квадрат 32 */
+    .btn-new { display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: none; cursor: pointer; background: var(--c-accent); color: var(--c-on-accent); font-family: var(--font-sans); font-size: 13px; font-weight: 600; border-radius: var(--r-lg); padding: 7px 13px; min-height: 32px; box-shadow: var(--shadow-button); flex-shrink: 0; white-space: nowrap; }
+    .btn-new.iconic { width: 32px; height: 32px; padding: 0; }
+    .btn-new.mob { min-height: 40px; font-size: var(--fs-md); border-radius: var(--r-xl); }
+
+    /* ui/Field IconField — поиск (живёт в поповере фильтров и шторке, не в тулбаре) */
+    .icon-field { flex: 1; min-width: 0; display: flex; align-items: center; background: var(--c-bg-white); border: 1px solid var(--c-border); border-radius: var(--r-xl); padding: 0 10px; height: 36px; gap: 7px; }
+    .icon-field.h40 { height: 40px; }
+    .icon-field.focused { border-color: var(--c-accent); box-shadow: var(--shadow-focus); }
+    .icon-field .if-icon { color: var(--c-text-muted); display: flex; flex-shrink: 0; }
+    .icon-field.focused .if-icon { color: var(--c-accent); }
+    .icon-field input { border: none; background: none; outline: none; flex: 1; min-width: 0; font-family: var(--font-sans); font-size: var(--fs-md); color: var(--c-text-heading); }
+    .icon-field input::placeholder { color: var(--c-text-muted); }
+    .icon-field .if-clear { border: none; background: transparent; cursor: pointer; color: var(--c-text-muted); display: flex; padding: 2px; flex-shrink: 0; }
+
+    /* ui/IconButton — md=32 / sm=28 / lg=40; active = фон accentMuted + иконка accent */
+    .icon-btn { position: relative; display: flex; align-items: center; justify-content: center; flex-shrink: 0; border: none; cursor: pointer; background: transparent; color: var(--c-text-muted); border-radius: var(--r-md); transition: background .12s, color .12s; }
+    .icon-btn.md { width: 32px; height: 32px; }
+    .icon-btn.sm { width: 28px; height: 28px; border-radius: var(--r-md); }
+    .icon-btn.lg { width: 40px; height: 40px; border-radius: var(--r-lg); }
+    .icon-btn:hover { background: var(--c-bg-selected); color: var(--c-text-primary); }
+    .icon-btn.active { background: var(--c-accent-muted); color: var(--c-accent); }
+    /* Бейдж счётчика на иконке (как бейдж hiddenCount у триггера FilterBar) */
+    .icon-badge { position: absolute; top: -5px; right: -5px; min-width: 16px; height: 16px; padding: 0 4px; box-sizing: border-box; border-radius: var(--r-max); background: var(--c-accent); color: var(--c-on-accent); font-family: var(--font-mono); font-size: 10px; font-weight: 700; line-height: 14px; text-align: center; border: 2px solid var(--c-bg-main); }
+
+    /* ui/PillSwitch — track bgSelected, padding 3, gap 3; сегмент padding 6px 12px, minHeight 32, 13px/600 */
+    .pill-switch { position: relative; display: flex; gap: 3px; background: var(--tb-pill-track); border-radius: calc(var(--r-pill) + 1px); padding: 3px; flex-shrink: 0; box-sizing: border-box; }
+    .pill-switch.fill { width: 100%; }
+    .pill-switch.fill button { flex: 1; }
+    .pill-switch button { position: relative; z-index: 1; padding: 6px 12px; min-height: 32px; border-radius: calc(var(--r-pill) - 2px); border: none; cursor: pointer; font-family: var(--font-sans); font-size: 13px; font-weight: 600; color: var(--c-text-secondary); background: transparent; display: inline-flex; align-items: center; justify-content: center; gap: 6px; white-space: nowrap; }
+    .pill-switch button.active { color: var(--c-text-heading); }
+    .pill-thumb { position: absolute; top: 3px; bottom: 3px; background: var(--tb-pill-thumb-bg); border-radius: calc(var(--r-pill) - 2px); box-shadow: var(--shadow-thumb); }
+    /* autoCompact (штатный механизм PillSwitch): активный — текстом, остальные — иконками, minHeight 40 */
+    .pill-switch.compact button { min-height: 40px; font-size: 12px; padding: 0 10px; }
+    .pill-switch.compact button.active { padding: 0 12px; }
+
+    /* ui/Toggle 42×25, pad 3, thumb 19 */
+    .toggle { width: 42px; height: 25px; border-radius: 25px; padding: 3px; background: var(--c-track); display: flex; align-items: center; cursor: pointer; transition: background .2s; flex-shrink: 0; box-sizing: border-box; }
+    .toggle.on { background: var(--c-accent); }
+    .toggle-thumb { width: 19px; height: 19px; border-radius: 50%; background: var(--c-bg-white); box-shadow: var(--shadow-thumb); transition: margin .2s; }
+    .toggle.on .toggle-thumb { margin-left: 17px; }
+
+    /* === Карточка чата — ChatCard.tsx один-в-один === */
+    .chat-list { padding: 8px 8px; overflow: hidden; }
+    .chat-card { position: relative; padding: 11px 12px; border-radius: var(--r-xl); margin-bottom: 5px; cursor: pointer; overflow: hidden; background: var(--c-bg-white); border: 1px solid var(--c-border-light); box-shadow: var(--shadow-card); display: flex; flex-direction: column; gap: 3px; }
+    .chat-card.active { background: var(--c-accent-light); border-color: var(--c-accent); box-shadow: var(--shadow-button); padding-left: 18px; }
+    .chat-card.active::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--c-accent); }
+    .chat-card.mobile { padding: 14px 16px; border-radius: 16px; }
+    .chat-card.mobile.active { padding-left: 22px; }
+    .cc-row1 { display: flex; align-items: center; gap: 6px; min-width: 0; }
+    .cc-title { font-size: 13.5px; font-weight: 600; color: var(--c-text-heading); flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .chat-card.active .cc-title { font-weight: 700; }
+    .cc-preview { font-size: 12px; color: var(--c-text-muted); line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+    .cc-text { position: relative; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+    .cc-text.with-face { padding-right: 72px; } /* COMPANION_W(84) - paddingRight(12) */
+
+    /* StatusIndicator: точка 7px, пульс у starting/working/waiting */
+    .status-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+    @keyframes sb-pulse { 0%,100% { opacity: 1; } 50% { opacity: .25; } }
+    .status-dot.pulse { animation: sb-pulse 1.2s ease-in-out infinite; }
+
+    /* ExpiryBadge (временный чат) и Pin-признак */
+    .cc-exp { display: inline-flex; align-items: center; gap: 3px; font-family: var(--font-mono); font-size: 10.5px; color: var(--c-text-muted); line-height: 1; white-space: nowrap; flex-shrink: 0; }
+    .cc-pin { color: var(--c-text-muted); flex-shrink: 0; display: flex; }
+
+    /* TaskStatusLine — строка статуса чата-задачи */
+    .cc-task { display: flex; align-items: center; gap: 5px; min-width: 0; margin-top: 1px; font-size: 11.5px; }
+    .cc-task .meta { font-family: var(--font-mono); font-size: 10px; color: var(--c-text-muted); flex-shrink: 0; }
+    .cc-task .lbl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+    .tool-spinner { width: 11px; height: 11px; flex-shrink: 0; border: 2px solid currentColor; border-top-color: transparent; border-radius: 50%; animation: cc-spin .8s linear infinite; }
+    @keyframes cc-spin { to { transform: rotate(360deg); } }
+
+    /* ChatOriginBadge — info (задача) / warning (автоматизация) */
+    .cc-origin { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 600; line-height: 1.5; border-radius: var(--r-sm); padding: 1px 6px; flex-shrink: 0; max-width: 100%; }
+    .cc-origin.info { color: var(--c-info); background: var(--c-info-bg); }
+    .cc-origin.warn { color: var(--c-warning-text); background: var(--c-warning-bg); }
+    .cc-origin span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    /* TagChip — тонированный фон tint(цвет, .15), точка 8px, 11px/600, lh 14 */
+    .cc-tags { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; min-width: 0; }
+    .tag-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; border-radius: var(--r-pill); font-size: var(--fs-xs); font-weight: 600; line-height: 14px; max-width: 110px; flex-shrink: 0; }
+    .tag-chip .td { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .tag-chip .tn { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .tag-blue { background: rgba(62,124,166,.15); color: var(--tag-blue); } .tag-blue .td { background: var(--tag-blue); }
+    .tag-purple { background: rgba(142,74,130,.15); color: var(--tag-purple); } .tag-purple .td { background: var(--tag-purple); }
+    .tag-green { background: rgba(63,122,79,.15); color: var(--tag-green); } .tag-green .td { background: var(--tag-green); }
+
+    /* PersonaBackdrop — вуаль цветом персоны + инициалы у правого края (упрощённо) */
+    .cc-backdrop { position: absolute; inset: 0; pointer-events: none; }
+    .cc-backdrop .veil { position: absolute; inset: 0; opacity: .22; }
+    .cc-backdrop .face { position: absolute; top: 0; right: 0; bottom: 0; width: 84px; display: flex; align-items: center; justify-content: flex-end; padding-right: 12px; font-size: 30px; font-weight: 700; opacity: .8; -webkit-mask-image: linear-gradient(to left, #000 55%, transparent); mask-image: linear-gradient(to left, #000 55%, transparent); }
+    .veil.orange { background: linear-gradient(to left, var(--persona-orange) 0%, rgba(194,105,59,.82) 16%, rgba(194,105,59,.5) 38%, rgba(194,105,59,.22) 62%, rgba(194,105,59,.06) 82%, transparent 100%); }
+    .face.orange { color: var(--persona-orange); }
+    .veil.blue { background: linear-gradient(to left, var(--persona-blue) 0%, rgba(62,124,166,.82) 16%, rgba(62,124,166,.5) 38%, rgba(62,124,166,.22) 62%, rgba(62,124,166,.06) 82%, transparent 100%); }
+    .face.blue { color: var(--persona-blue); }
+
+    /* Действия карточки — стекло поверх (показано на одной карточке как hover-состояние) */
+    .cc-actions { position: absolute; bottom: 6px; right: 8px; z-index: 1; display: flex; align-items: center; background: var(--c-glass); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); border-radius: var(--r-md); padding: 2px 7px; }
+    .cc-actions .icon-btn { width: 24px; height: 24px; border-radius: var(--r-sm); }
+
+    /* ListDateDivider — разделитель дней */
+    .date-divider { display: flex; align-items: center; gap: 8px; padding: 10px 4px 7px; }
+    .date-divider .dd-ln { flex: 1; height: 1px; background: var(--c-divider); }
+    .date-divider .tt { font-size: 11px; font-weight: 700; color: var(--c-text-secondary); white-space: nowrap; }
+
+    /* Заголовок теговой секции — SessionList.renderTagSectionHeader */
+    .tag-sec { display: flex; align-items: center; gap: 6px; padding: 10px 4px 7px; }
+    .tag-sec .td { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .tag-sec .tt { font-size: 11px; font-weight: 700; color: var(--c-text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .tag-sec .cnt { font-size: 10px; color: var(--c-text-muted); background: var(--c-bg-selected); padding: 1px 6px; border-radius: var(--r-sm); flex-shrink: 0; }
+    .tag-sec .sp { flex: 1; }
+    .order-btn { display: flex; align-items: center; justify-content: center; width: 20px; height: 20px; padding: 0; border: none; border-radius: var(--r-sm); background: transparent; color: var(--c-text-muted); cursor: pointer; }
+    .order-btn:disabled { color: var(--c-border); cursor: default; }
+
+    /* === Дерево — геометрия ChatTreeRow: STEP=14, GUTTER=20, elbowY=20 === */
+    .tree-row { position: relative; display: flex; flex-direction: column; }
+    .ln { position: absolute; width: 1px; background: var(--c-divider); }
+    .ln.acc { background: var(--c-accent); }
+    .ln-h { position: absolute; height: 1px; background: var(--c-divider); }
+    .ln-h.acc { background: var(--c-accent); }
+    .tree-chevron { position: absolute; width: 20px; height: 32px; z-index: 2; display: flex; align-items: center; justify-content: center; border: none; background: none; padding: 0; cursor: pointer; color: var(--c-text-muted); }
+    .tree-chevron.acc { color: var(--c-accent); }
+    .tree-badge { position: absolute; z-index: 2; pointer-events: none; min-width: 14px; height: 14px; padding: 0 3px; box-sizing: border-box; border-radius: var(--r-max); background: var(--c-accent-light); color: var(--c-text-secondary); font-family: var(--font-mono); font-size: var(--fs-xs); font-weight: 600; line-height: 14px; text-align: center; white-space: nowrap; }
+    .tree-badge .run { color: var(--c-accent); }
+
+    /* === Поповер фильтра — FilterBar FilterContent (поиск вернулся первой секцией, как в проде) === */
+    .popover { width: 320px; background: var(--c-bg-white); border: 1px solid var(--c-border); border-radius: var(--r-xl); box-shadow: var(--shadow-dropdown); padding: 12px; }
+    .pop-sec { margin-bottom: 12px; }
+    .pop-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+    .pop-title span { font-size: var(--fs-xs); font-weight: 700; color: var(--c-text-muted); text-transform: uppercase; letter-spacing: .06em; }
+    .pop-title a { font-size: var(--fs-xs); color: var(--c-accent); font-weight: 600; text-decoration: none; cursor: pointer; }
+    .chips { display: flex; flex-wrap: wrap; gap: 4px; }
+    .chip { padding: 4px 10px; border-radius: var(--r-pill); border: 1px solid var(--c-border-light); background: transparent; color: var(--c-text-secondary); font-family: var(--font-sans); font-size: var(--fs-sm); font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
+    .chip.active { background: var(--c-accent); border-color: var(--c-accent); color: var(--c-on-accent); }
+    .chip .sd { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+    .chip .n { font-family: var(--font-mono); font-size: 10px; opacity: .8; }
+    .chip .pa { width: 14px; height: 14px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 8px; font-weight: 700; color: var(--c-on-dark); flex-shrink: 0; }
+    .pop-footer { margin-top: 4px; padding-top: 8px; border-top: 1px solid var(--c-border-light); display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+    .pop-footer .stat { font-size: var(--fs-xs); color: var(--c-text-muted); }
+    .pop-footer .stat a { color: var(--c-accent); font-weight: 600; cursor: pointer; margin-left: 6px; }
+    .pop-footer .done { padding: 5px 14px; border-radius: var(--r-md); border: none; background: var(--c-accent); color: var(--c-on-accent); font-family: var(--font-sans); font-size: var(--fs-sm); font-weight: 600; cursor: pointer; flex-shrink: 0; }
+
+    /* === ui/Menu — выпадающее меню (группировка в варианте В / меню «Вид») === */
+    .menu { background: var(--c-bg-white); border: 1px solid var(--c-border); border-radius: var(--r-xl); box-shadow: var(--shadow-dropdown); padding: 5px; min-width: 220px; display: flex; flex-direction: column; }
+    .menu-item { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; background: none; border: none; border-radius: var(--r-md); padding: 9px 10px; cursor: pointer; color: var(--c-text-primary); font-family: var(--font-sans); font-size: 13.5px; box-sizing: border-box; }
+    .menu-item:hover { background: var(--c-bg-selected); }
+    .menu-item .mi-ic { display: inline-flex; align-items: center; width: 15px; height: 15px; flex-shrink: 0; color: inherit; }
+    .menu-item .mi-check { margin-left: auto; color: var(--c-accent); display: flex; }
+    .menu-item .mi-toggle { margin-left: auto; }
+    .menu-label { padding: 7px 10px 3px; font-size: var(--fs-xs); font-weight: 700; color: var(--c-text-muted); text-transform: uppercase; letter-spacing: .06em; }
+    .menu-divider { height: 1px; background: var(--c-border-light); margin: 5px 4px; }
+
+    /* === Мобильная шторка — ui/Modal в bottom-sheet режиме === */
+    .sheet { background: var(--c-bg-white); border-radius: var(--r-sheet) var(--r-sheet) 0 0; box-shadow: var(--shadow-sheet); padding: 8px 16px 20px; }
+    .sheet-grip { width: 36px; height: 4px; border-radius: 4px; background: var(--c-border); margin: 4px auto 12px; }
+    .sheet-title { font-family: var(--font-serif); font-size: var(--fs-lg); font-weight: 600; color: var(--c-text-heading); text-align: center; margin-bottom: 12px; }
+    .sheet-row { display: flex; align-items: center; justify-content: space-between; min-height: 48px; gap: 8px; }
+    .sheet-row .sr-label { font-size: var(--fs-md); color: var(--c-text-primary); }
+    .sheet-sec { font-size: var(--fs-xs); font-weight: 700; color: var(--c-text-muted); text-transform: uppercase; letter-spacing: .06em; margin: 10px 0 6px; }
+    .btn-done { width: 100%; margin-top: 14px; padding: 11px 16px; min-height: 44px; border: none; border-radius: var(--r-xl); background: var(--c-accent); color: var(--c-on-accent); font-family: var(--font-sans); font-size: var(--fs-md); font-weight: 600; cursor: pointer; }
+
+    /* Таблица спецификации */
+    .spec-table { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); }
+    .spec-table th { text-align: left; font-size: var(--fs-xs); font-weight: 700; color: var(--c-text-muted); text-transform: uppercase; letter-spacing: .06em; padding: 6px 10px; border-bottom: 1px solid var(--c-border); }
+    .spec-table td { padding: 8px 10px; border-bottom: 1px solid var(--c-border-light); color: var(--c-text-primary); vertical-align: top; }
+    .spec-table tr:last-child td { border-bottom: none; }
+    .spec-table code { font-family: var(--font-mono); font-size: var(--fs-xs); background: var(--c-bg-selected); padding: 1px 5px; border-radius: var(--r-sm); }
+    .spec-table .rec { background: var(--c-accent-light); }
+
+    .mobile-frame { width: 360px; flex-shrink: 0; }
+    @media (max-width: 600px) {
+      body { padding: var(--sp-sm); }
+      .mobile-frame { width: 100%; }
+      .section-body { padding: var(--sp-md); }
+    }
+  </style>
+</head>
+<body>
+
+<div class="mockup-container">
+    <div class="mockup-header">
+      <div>
+        <h1>Список чатов v2 — однострочный тулбар</h1>
+        <p>Переработка по обратной связи: поиск <b>скрыт</b> (вернулся в поповер фильтров, как в проде), «Новый чат» <b>внутри тулбара</b> рядом с рычагами, все рычаги собраны в <b>одну строку</b>: создание, группировка (PillSwitch Дни/Теги/Без компакт), фильтры с бейджем, сортировка, иерархия. Сайдбар — жёстко 220…520px (дефолт 288, <code>sidebarWidth.ts</code>).</p>
+      </div>
+      <div class="theme-toggle"><button onclick="toggleTheme()" id="themeBtn">Тёмная тема</button></div>
+    </div>
+
+    <!-- ===================== ЧТО ИЗМЕНИЛОСЬ В V2 ===================== -->
+    <div class="mockup-section">
+      <div class="section-header">
+        <span class="section-title">v1 → v2: три правки по обратной связи</span>
+        <span class="section-subtitle">модель осей (группировка × сортировка × иерархия) не меняется</span>
+      </div>
+      <div class="section-body">
+        <table class="spec-table">
+          <tr><th style="width:170px">Правка</th><th>Было в v1</th><th>Стало в v2</th></tr>
+          <tr><td><b>1. Поиск скрыт</b></td><td>Строка поиска (IconField h=36) вынесена на панель — занимала пол-ряда всегда</td><td>Поиск возвращается в поповер фильтров первой секцией — <b>точно как в проде сейчас</b> (<code>FilterBar FilterContent</code>). На панели его нет вообще; активный поиск виден по бейджу скрытых на кнопке фильтров (счётчик общий)</td></tr>
+          <tr><td><b>2. «Новый чат» в тулбаре</b></td><td>Отдельная кнопка dashed на всю ширину над контролами</td><td>Компактная кнопка <code>ui/Button primary sm</code> (или иконочный квадрат 32 на узких ширинах) — первый элемент тулбара</td></tr>
+          <tr><td><b>3. Одна строка</b></td><td>Два ряда: [поиск + фильтры] / [PillSwitch + сортировка + иерархия]</td><td>Один ряд: [+] [PillSwitch] [Ф] [С] [И]. Освобождённая высота (~46px) отдана списку — на 288px это +1 карточка без скролла</td></tr>
+        </table>
+        <div class="note">
+          <b>Почему поиску не место в строке.</b> Сценарий «найти чат по названию» случается в разы реже сценария «открыть свежий/рабочий чат» — а платил за него каждый пиксель панели постоянно. Редкое действие живёт за одним кликом (кнопка фильтров → фокус уже в поле), частое — в строке. Это же поведение в проде сегодня, значит и привычку пользователя не ломаем.
+        </div>
+      </div>
+    </div>
+    <!-- ===================== ВАРИАНТ А ===================== -->
+    <div class="mockup-section">
+      <div class="section-header">
+        <span class="section-title">Вариант А (рекомендуемый): действие слева, оси в строке</span>
+        <span class="section-subtitle">[+] [PillSwitch] … [Ф] [С] [И]; на 220px деградирует в вариант В</span>
+      </div>
+      <div class="section-body">
+        <div class="frames">
+
+          <!-- ===== А · 220px: деградация — Pill ушёл в меню «Вид» (иконка = текущая группировка) ===== -->
+          <div class="frame">
+            <div class="frame-caption"><span>минимум <b>220px</b></span><span>контент 204 · занято ~160</span></div>
+            <div class="sidebar" style="width: 220px;">
+              <div class="toolbar compact-pad">
+                <button class="btn-new iconic" title="Новый чат" aria-label="Новый чат">
+                  <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+                </button>
+                <button class="icon-btn sm" title="Группировка: Дни (сменить)">
+                  <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/><path d="M8 14h.01"/><path d="M12 14h.01"/><path d="M16 14h.01"/><path d="M8 18h.01"/><path d="M12 18h.01"/><path d="M16 18h.01"/></svg>
+                </button>
+                <span style="flex:1"></span>
+                <button class="icon-btn sm" title="Фильтры и поиск">
+                  <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 20a1 1 0 0 0 .553.895l2 1A1 1 0 0 0 14 21v-7a2 2 0 0 1 .517-1.341L21.74 4.67A1 1 0 0 0 21 3H3a1 1 0 0 0-.742 1.67l7.225 7.989A2 2 0 0 1 10 14z"/></svg>
+                  <span class="icon-badge">2</span>
+                </button>
+                <button class="icon-btn sm" title="Сортировка: новые сверху">
+                  <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 16 4 4 4-4"/><path d="M7 20V4"/><path d="M11 4h10"/><path d="M11 8h7"/><path d="M11 12h4"/></svg>
+                </button>
+                <button class="icon-btn sm" title="Иерархия: выкл">
+                  <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 5h13"/><path d="M13 12h8"/><path d="M13 19h8"/><path d="M3 10a2 2 0 0 0 2 2h3"/><path d="M3 5v12a2 2 0 0 0 2 2h3"/></svg>
+                </button>
+              </div>
+              <div style="padding: 6px 8px 8px; font-size: var(--fs-xs); color: var(--c-text-muted);">PillSwitch не влез (нужно ~130px) → группировка за иконкой; иконка повторяет текущий режим — режим читается без открытия меню</div>
+            </div>
+          </div>
+
+          <!-- ===== А · 288px: всё в строке (дефолт) ===== -->
+          <div class="frame">
+            <div class="frame-caption"><span>дефолт <b>288px</b></span><span>контент 264 · занято ~258</span></div>
+            <div class="sidebar" style="width: 288px;">
+              <div class="toolbar">
+                <button class="btn-new iconic" title="Новый чат" aria-label="Новый чат">
+                  <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+                </button>
+                <!-- autoCompact: активный сегмент текстом, остальные иконками -->
+                <div class="pill-switch compact">
+                  <div class="pill-thumb" style="left: 3px; width: 46px;"></div>
+                  <button class="active">Дни</button>
+                  <button title="Теги"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13.172 2a2 2 0 0 1 1.414.586l6.71 6.71a2.4 2.4 0 0 1 0 3.408l-4.592 4.592a2.4 2.4 0 0 1-3.408 0l-6.71-6.71A2 2 0 0 1 6 9.172V3a1 1 0 0 1 1-1z"/><path d="M2 7v6.172a2 2 0 0 0 .586 1.414l6.71 6.71a2.4 2.4 0 0 0 3.191.193"/><circle cx="10.5" cy="6.5" r=".5" fill="currentColor"/></svg></button>
+                  <button title="Без группировки"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 5h.01"/><path d="M3 12h.01"/><path d="M3 19h.01"/><path d="M8 5h13"/><path d="M8 12h13"/><path d="M8 19h13"/></svg></button>
+                </div>
+                <span style="flex:1"></span>
+                <button class="icon-btn sm" title="Фильтры и поиск">
+                  <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 20a1 1 0 0 0 .553.895l2 1A1 1 0 0 0 14 21v-7a2 2 0 0 1 .517-1.341L21.74 4.67A1 1 0 0 0 21 3H3a1 1 0 0 0-.742 1.67l7.225 7.989A2 2 0 0 1 10 14z"/></svg>
+                  <span class="icon-badge">2</span>
+                </button>
+                <button class="icon-btn sm" title="Сортировка: новые сверху">
+                  <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 16 4 4 4-4"/><path d="M7 20V4"/><path d="M11 4h10"/><path d="M11 8h7"/><path d="M11 12h4"/></svg>
+                </button>
+                <button class="icon-btn sm" title="Иерархия: выкл">
+                  <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 5h13"/><path d="M13 12h8"/><path d="M13 19h8"/><path d="M3 10a2 2 0 0 0 2 2h3"/><path d="M3 5v12a2 2 0 0 0 2 2h3"/></svg>
+                </button>
+              </div>
+              <div style="padding: 6px 12px 8px; font-size: var(--fs-xs); color: var(--c-text-muted);">Все 5 рычагов в одной строке: впритык (зазор ~6px), IconButton sm — десктопная мышь, тач-цель 40 не требуется</div>
+            </div>
+          </div>
+
+          <!-- ===== А · 520px: текстовая кнопка + Pill с иконками ===== -->
+          <div class="frame">
+            <div class="frame-caption"><span>максимум <b>520px</b></span><span>контент 496 · занято ~430</span></div>
+            <div class="sidebar" style="width: 520px;">
+              <div class="toolbar">
+                <button class="btn-new">
+                  <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+                  Новый чат
+                </button>
+                <div class="pill-switch">
+                  <div class="pill-thumb" style="left: 3px; width: 70px;"></div>
+                  <button class="active"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/><path d="M8 14h.01"/><path d="M12 14h.01"/><path d="M16 14h.01"/><path d="M8 18h.01"/><path d="M12 18h.01"/><path d="M16 18h.01"/></svg>Дни</button>
+                  <button><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13.172 2a2 2 0 0 1 1.414.586l6.71 6.71a2.4 2.4 0 0 1 0 3.408l-4.592 4.592a2.4 2.4 0 0 1-3.408 0l-6.71-6.71A2 2 0 0 1 6 9.172V3a1 1 0 0 1 1-1z"/><path d="M2 7v6.172a2 2 0 0 0 .586 1.414l6.71 6.71a2.4 2.4 0 0 0 3.191.193"/><circle cx="10.5" cy="6.5" r=".5" fill="currentColor"/></svg>Теги</button>
+                  <button><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 5h.01"/><path d="M3 12h.01"/><path d="M3 19h.01"/><path d="M8 5h13"/><path d="M8 12h13"/><path d="M8 19h13"/></svg>Без</button>
+                </div>
+                <span style="flex:1"></span>
+                <button class="icon-btn md" title="Фильтры и поиск">
+                  <svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 20a1 1 0 0 0 .553.895l2 1A1 1 0 0 0 14 21v-7a2 2 0 0 1 .517-1.341L21.74 4.67A1 1 0 0 0 21 3H3a1 1 0 0 0-.742 1.67l7.225 7.989A2 2 0 0 1 10 14z"/></svg>
+                  <span class="icon-badge">2</span>
+                </button>
+                <button class="icon-btn md" title="Сортировка: новые сверху">
+                  <svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 16 4 4 4-4"/><path d="M7 20V4"/><path d="M11 4h10"/><path d="M11 8h7"/><path d="M11 12h4"/></svg>
+                </button>
+                <button class="icon-btn md active" title="Иерархия: вкл">
+                  <svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 5h13"/><path d="M13 12h8"/><path d="M13 19h8"/><path d="M3 10a2 2 0 0 0 2 2h3"/><path d="M3 5v12a2 2 0 0 0 2 2h3"/></svg>
+                </button>
+              </div>
+              <div style="padding: 6px 12px 8px; font-size: var(--fs-xs); color: var(--c-text-muted);">«Новый чат» получает текст, PillSwitch — иконки у всех сегментов, IconButton md (32)</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="note">
+          <b>Логика компоновки.</b> Слева направо по частоте жеста: «+» (главное действие, solid accent — единственный залитый элемент, глаз находит мгновенно) → группировка (перестройка всего списка, 1 клик, значение видно текстом) → фильтры с бейджем → сортировка → иерархия. Правый край — «как смотреть», левый — «что сделать».<br>
+          <b>Арифметика 288 (контент 264):</b> [+] 32 + Pill-compact ~126 (активный «Дни» 46 + 2 иконки по ~34 + трек) + 3×IconButton sm 84 + gaps ~16 = <b>~258</b> — впритык, но без переполнения. <b>220 (контент 204):</b> даже без Pill «[+] + Ф + С + И» = 32+84+12 = 128 ✓, но с Pill (130) сумма 258 &gt; 204 — PillSwitch честно схлопывается в кнопку группировки, чья иконка = текущий режим (CalendarDays/Tags/List), клик → меню из варианта В. Рычаг не исчезает — уходит за один клик, а его значение читается по иконке.
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== ВАРИАНТ Б ===================== -->
+    <div class="mockup-section">
+      <div class="section-header">
+        <span class="section-title">Вариант Б: оси слева, действие справа-край</span>
+        <span class="section-subtitle">[PillSwitch] … [Ф] [С] [И] [+]; «плюс» как в табах браузера</span>
+      </div>
+      <div class="section-body">
+        <div class="frames">
+          <div class="frame">
+            <div class="frame-caption"><span>дефолт <b>288px</b></span><span>те же ~258</span></div>
+            <div class="sidebar" style="width: 288px;">
+              <div class="toolbar">
+                <div class="pill-switch compact">
+                  <div class="pill-thumb" style="left: 3px; width: 46px;"></div>
+                  <button class="active">Дни</button>
+                  <button title="Теги"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13.172 2a2 2 0 0 1 1.414.586l6.71 6.71a2.4 2.4 0 0 1 0 3.408l-4.592 4.592a2.4 2.4 0 0 1-3.408 0l-6.71-6.71A2 2 0 0 1 6 9.172V3a1 1 0 0 1 1-1z"/><path d="M2 7v6.172a2 2 0 0 0 .586 1.414l6.71 6.71a2.4 2.4 0 0 0 3.191.193"/><circle cx="10.5" cy="6.5" r=".5" fill="currentColor"/></svg></button>
+                  <button title="Без группировки"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 5h.01"/><path d="M3 12h.01"/><path d="M3 19h.01"/><path d="M8 5h13"/><path d="M8 12h13"/><path d="M8 19h13"/></svg></button>
+                </div>
+                <span style="flex:1"></span>
+                <button class="icon-btn sm" title="Фильтры и поиск">
+                  <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 20a1 1 0 0 0 .553.895l2 1A1 1 0 0 0 14 21v-7a2 2 0 0 1 .517-1.341L21.74 4.67A1 1 0 0 0 21 3H3a1 1 0 0 0-.742 1.67l7.225 7.989A2 2 0 0 1 10 14z"/></svg>
+                  <span class="icon-badge">2</span>
+                </button>
+                <button class="icon-btn sm" title="Сортировка: новые сверху">
+                  <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 16 4 4 4-4"/><path d="M7 20V4"/><path d="M11 4h10"/><path d="M11 8h7"/><path d="M11 12h4"/></svg>
+                </button>
+                <button class="icon-btn sm" title="Иерархия: выкл">
+                  <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 5h13"/><path d="M13 12h8"/><path d="M13 19h8"/><path d="M3 10a2 2 0 0 0 2 2h3"/><path d="M3 5v12a2 2 0 0 0 2 2h3"/></svg>
+                </button>
+                <button class="btn-new iconic" title="Новый чат" aria-label="Новый чат">
+                  <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+                </button>
+              </div>
+              <div style="padding: 6px 12px 8px; font-size: var(--fs-xs); color: var(--c-text-muted);">«+» после рычагов — паттерн «новая вкладка»; но справа уже 3 иконки — кнопка сливается с ними в один блок</div>
+            </div>
+          </div>
+          <div class="frame">
+            <div class="frame-caption"><span>максимум <b>520px</b></span></div>
+            <div class="sidebar" style="width: 520px;">
+              <div class="toolbar">
+                <div class="pill-switch">
+                  <div class="pill-thumb" style="left: 3px; width: 70px;"></div>
+                  <button class="active"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/><path d="M8 14h.01"/><path d="M12 14h.01"/><path d="M16 14h.01"/><path d="M8 18h.01"/><path d="M12 18h.01"/><path d="M16 18h.01"/></svg>Дни</button>
+                  <button><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13.172 2a2 2 0 0 1 1.414.586l6.71 6.71a2.4 2.4 0 0 1 0 3.408l-4.592 4.592a2.4 2.4 0 0 1-3.408 0l-6.71-6.71A2 2 0 0 1 6 9.172V3a1 1 0 0 1 1-1z"/><path d="M2 7v6.172a2 2 0 0 0 .586 1.414l6.71 6.71a2.4 2.4 0 0 0 3.191.193"/><circle cx="10.5" cy="6.5" r=".5" fill="currentColor"/></svg>Теги</button>
+                  <button><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 5h.01"/><path d="M3 12h.01"/><path d="M3 19h.01"/><path d="M8 5h13"/><path d="M8 12h13"/><path d="M8 19h13"/></svg>Без</button>
+                </div>
+                <span style="flex:1"></span>
+                <button class="icon-btn md" title="Фильтры и поиск">
+                  <svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 20a1 1 0 0 0 .553.895l2 1A1 1 0 0 0 14 21v-7a2 2 0 0 1 .517-1.341L21.74 4.67A1 1 0 0 0 21 3H3a1 1 0 0 0-.742 1.67l7.225 7.989A2 2 0 0 1 10 14z"/></svg>
+                  <span class="icon-badge">2</span>
+                </button>
+                <button class="icon-btn md" title="Сортировка: новые сверху">
+                  <svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 16 4 4 4-4"/><path d="M7 20V4"/><path d="M11 4h10"/><path d="M11 8h7"/><path d="M11 12h4"/></svg>
+                </button>
+                <button class="icon-btn md active" title="Иерархия: вкл">
+                  <svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 5h13"/><path d="M13 12h8"/><path d="M13 19h8"/><path d="M3 10a2 2 0 0 0 2 2h3"/><path d="M3 5v12a2 2 0 0 0 2 2h3"/></svg>
+                </button>
+                <button class="btn-new">
+                  <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+                  Новый чат
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="note">
+          <b>Чем Б отличается от А и чем проигрывает.</b> Смысловое деление чище: слева «как смотреть» (оси), справа «что делать» (фильтры + создать). Но главное действие уезжает в конец скан-линии, а на 288 «+» стоит вплотную к трём однотипным IconButton — визуально читается как четвёртая иконка-тумблер, хотя по весу это действие. Акцентная заливка спасает, но в А порядок «действие → оси» честнее по F-паттерну: пользователь сначала видит, что можно создать, потом — как настроено. По ширинам ведёт себя один-в-один как А (те же ступени и та же деградация на 220).
+        </div>
+      </div>
+    </div>
+    <!-- ===================== ВАРИАНТ В ===================== -->
+    <div class="mockup-section">
+      <div class="section-header">
+        <span class="section-title">Вариант В: всё иконками, группировка за кликом</span>
+        <span class="section-subtitle">[+] [Группировка] [Ф] [С] [И]; одна компоновка на всех ширинах</span>
+      </div>
+      <div class="section-body">
+        <div class="frames">
+          <div class="frame">
+            <div class="frame-caption"><span>минимум <b>220px</b></span><span>занято ~156 из 204</span></div>
+            <div class="sidebar" style="width: 220px;">
+              <div class="toolbar compact-pad">
+                <button class="btn-new iconic" title="Новый чат" aria-label="Новый чат">
+                  <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+                </button>
+                <button class="icon-btn sm" title="Группировка: Дни (сменить)">
+                  <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/><path d="M8 14h.01"/><path d="M12 14h.01"/><path d="M16 14h.01"/><path d="M8 18h.01"/><path d="M12 18h.01"/><path d="M16 18h.01"/></svg>
+                </button>
+                <span style="flex:1"></span>
+                <button class="icon-btn sm" title="Фильтры и поиск">
+                  <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 20a1 1 0 0 0 .553.895l2 1A1 1 0 0 0 14 21v-7a2 2 0 0 1 .517-1.341L21.74 4.67A1 1 0 0 0 21 3H3a1 1 0 0 0-.742 1.67l7.225 7.989A2 2 0 0 1 10 14z"/></svg>
+                  <span class="icon-badge">2</span>
+                </button>
+                <button class="icon-btn sm" title="Сортировка: новые сверху">
+                  <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 16 4 4 4-4"/><path d="M7 20V4"/><path d="M11 4h10"/><path d="M11 8h7"/><path d="M11 12h4"/></svg>
+                </button>
+                <button class="icon-btn sm" title="Иерархия: выкл">
+                  <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 5h13"/><path d="M13 12h8"/><path d="M13 19h8"/><path d="M3 10a2 2 0 0 0 2 2h3"/><path d="M3 5v12a2 2 0 0 0 2 2h3"/></svg>
+                </button>
+              </div>
+              <div style="padding: 6px 8px 8px; font-size: var(--fs-xs); color: var(--c-text-muted);">Та же строка, что и деградация варианта А на 220 — но здесь она единственная на всех ширинах</div>
+            </div>
+          </div>
+
+          <div class="frame">
+            <div class="frame-caption"><span>дефолт <b>288px</b> — воздух</span></div>
+            <div class="sidebar" style="width: 288px;">
+              <div class="toolbar">
+                <button class="btn-new iconic" title="Новый чат" aria-label="Новый чат">
+                  <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+                </button>
+                <button class="icon-btn md" title="Группировка: Теги (сменить)">
+                  <svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13.172 2a2 2 0 0 1 1.414.586l6.71 6.71a2.4 2.4 0 0 1 0 3.408l-4.592 4.592a2.4 2.4 0 0 1-3.408 0l-6.71-6.71A2 2 0 0 1 6 9.172V3a1 1 0 0 1 1-1z"/><path d="M2 7v6.172a2 2 0 0 0 .586 1.414l6.71 6.71a2.4 2.4 0 0 0 3.191.193"/><circle cx="10.5" cy="6.5" r=".5" fill="currentColor"/></svg>
+                </button>
+                <span style="flex:1"></span>
+                <button class="icon-btn md" title="Фильтры и поиск">
+                  <svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 20a1 1 0 0 0 .553.895l2 1A1 1 0 0 0 14 21v-7a2 2 0 0 1 .517-1.341L21.74 4.67A1 1 0 0 0 21 3H3a1 1 0 0 0-.742 1.67l7.225 7.989A2 2 0 0 1 10 14z"/></svg>
+                  <span class="icon-badge">2</span>
+                </button>
+                <button class="icon-btn md" title="Сортировка: новые сверху">
+                  <svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 16 4 4 4-4"/><path d="M7 20V4"/><path d="M11 4h10"/><path d="M11 8h7"/><path d="M11 12h4"/></svg>
+                </button>
+                <button class="icon-btn md active" title="Иерархия: вкл">
+                  <svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 5h13"/><path d="M13 12h8"/><path d="M13 19h8"/><path d="M3 10a2 2 0 0 0 2 2h3"/><path d="M3 5v12a2 2 0 0 0 2 2h3"/></svg>
+                </button>
+              </div>
+              <div style="padding: 6px 12px 8px; font-size: var(--fs-xs); color: var(--c-text-muted);">IconButton md (32) даже на дефолте — крупные цели; иконка группировки сейчас = «Теги»</div>
+            </div>
+          </div>
+
+          <div class="frame">
+            <div class="frame-caption"><span>меню группировки — <b>ui/Menu</b> под кнопкой</span></div>
+            <div class="menu" style="min-width: 230px;">
+              <div class="menu-label">Группировка</div>
+              <button class="menu-item">
+                <span class="mi-ic"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/><path d="M8 14h.01"/><path d="M12 14h.01"/><path d="M16 14h.01"/><path d="M8 18h.01"/><path d="M12 18h.01"/><path d="M16 18h.01"/></svg></span>
+                Дни
+              </button>
+              <button class="menu-item">
+                <span class="mi-ic"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13.172 2a2 2 0 0 1 1.414.586l6.71 6.71a2.4 2.4 0 0 1 0 3.408l-4.592 4.592a2.4 2.4 0 0 1-3.408 0l-6.71-6.71A2 2 0 0 1 6 9.172V3a1 1 0 0 1 1-1z"/><path d="M2 7v6.172a2 2 0 0 0 .586 1.414l6.71 6.71a2.4 2.4 0 0 0 3.191.193"/><circle cx="10.5" cy="6.5" r=".5" fill="currentColor"/></svg></span>
+                Теги
+                <span class="mi-check"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>
+              </button>
+              <button class="menu-item">
+                <span class="mi-ic"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 5h.01"/><path d="M3 12h.01"/><path d="M3 19h.01"/><path d="M8 5h13"/><path d="M8 12h13"/><path d="M8 19h13"/></svg></span>
+                Без группировки
+              </button>
+            </div>
+          </div>
+        </div>
+        <div class="note">
+          <b>Сильные стороны В:</b> одна компоновка без ступеней — минимум кода и ни одного «впритык»; на 220px влезает даже с IconButton md. Иконка кнопки группировки всегда повторяет текущий режим (CalendarDays/Tags/List), поэтому режим виден без открытия меню. <b>Плата:</b> смена группировки — два клика вместо одного, а значение читается только иконкой (текста «Дни/Теги/Без» нет). <b>Где В — правильный ответ:</b> это ступень деградации варианта А на &lt;260px и базовый паттерн тулбара на мобиле. Как самостоятельный вариант на десктопе — если «впритык» варианта А на 288 вживую покажется тесным.
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== СРАВНЕНИЕ ВАРИАНТОВ ===================== -->
+    <div class="mockup-section">
+      <div class="section-header">
+        <span class="section-title">Сравнение и рекомендация</span>
+        <span class="section-subtitle">вердикт: А на десктопе, В — его compact-ступень и база для мобилы</span>
+      </div>
+      <div class="section-body">
+        <table class="spec-table">
+          <tr><th style="width:180px">Критерий</th><th class="rec" style="width:27%"><b>А — действие слева, оси в строке</b></th><th style="width:27%">Б — «+» справа-край</th><th style="width:27%">В — всё иконками</th></tr>
+          <tr><td>Строка</td><td class="rec"><code>[+] [Pill] [Ф] [С] [И]</code></td><td><code>[Pill] [Ф] [С] [И] [+]</code></td><td><code>[+] [Гр] [Ф] [С] [И]</code></td></tr>
+          <tr><td>Группировка: смена</td><td class="rec">1 клик, PillSwitch</td><td>1 клик, PillSwitch</td><td>2 клика (меню ui/Menu)</td></tr>
+          <tr><td>Группировка: видно значение</td><td class="rec">Текстом («Дни»)</td><td>Текстом («Дни»)</td><td>Только иконкой режима</td></tr>
+          <tr><td><b>220px</b> (контент 204)</td><td class="rec">Деградация в В: Pill → кнопка-иконка режима (~160/204 ✓)</td><td>Как А</td><td>Без изменений (~156/204 ✓)</td></tr>
+          <tr><td><b>288px</b> (контент 264)</td><td class="rec">Всё в строке, впритык (~258) — IconButton sm</td><td>То же ~258; «+» сливается с иконками</td><td>Воздух, IconButton md</td></tr>
+          <tr><td><b>520px</b> (контент 496)</td><td class="rec">«Новый чат» текстом, Pill с иконками (~430)</td><td>Как А</td><td>Те же 5 иконок md; группировка всё равно за кликом</td></tr>
+          <tr><td>Главное действие</td><td class="rec">Первым по скан-линии (F-паттерн)</td><td>В конце строки, сливается с тумблерами</td><td>Первым по скан-линии</td></tr>
+          <tr><td>Сложность реализации</td><td class="rec">3 ступени + autoCompact PillSwitch</td><td>Как А</td><td>Одна компоновка, без ступеней</td></tr>
+          <tr><td>Мобила ≤600</td><td class="rec" colspan="3">Одинаково: [+ Новый чат (текст, flex)] [Ф lg] [Вид lg]; оси и поиск — шторками ui/Modal (тач-цели 40)</td></tr>
+        </table>
+        <div class="note">
+          <b>Рекомендация — А.</b> Группировка — главный рычаг перестройки списка, и её текущее значение должно читаться без клика (сравни с поиском: он редкий и потому скрыт, а группировка частая и потому в строке). «+» слева находится не глядя. Теснота на 288 — честная цена за текст; если вживую покажется тесной, включаем В: переход — это удаление PillSwitch из строки, ступени уже заложены. Б проигрывает А расположением «+» и ничего не выигрывает взамен.
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== ПОПОВЕР ФИЛЬТРА ===================== -->
+    <div class="mockup-section">
+      <div class="section-header">
+        <span class="section-title">Поповер фильтров — поиск вернулся</span>
+        <span class="section-subtitle">FilterBar FilterContent как в проде + секция «Теги» из v1</span>
+      </div>
+      <div class="section-body">
+        <div class="frames">
+          <div class="frame">
+            <div class="frame-caption"><span>десктоп-поповер <b>320px</b> под кнопкой фильтров</span></div>
+            <div class="popover">
+              <div class="pop-sec" style="outline: 2px dashed var(--c-accent-muted); outline-offset: 4px; border-radius: var(--r-sm);">
+                <div class="icon-field focused">
+                  <span class="if-icon"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.34-4.34"/></svg></span>
+                  <input value="ревью" placeholder="Поиск по названию…">
+                  <button class="if-clear" title="Очистить поиск"><svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+                </div>
+              </div>
+              <div class="pop-sec">
+                <div class="pop-title"><span>Статус</span></div>
+                <div class="chips">
+                  <button class="chip active"><span class="sd" style="background: var(--c-on-accent);"></span>В работе<span class="n">4</span></button>
+                  <button class="chip active"><span class="sd" style="background: var(--c-on-accent);"></span>Ждёт меня<span class="n">2</span></button>
+                  <button class="chip"><span class="sd" style="background: var(--c-text-muted);"></span>Готово<span class="n">7</span></button>
+                  <button class="chip active"><span class="sd" style="background: var(--c-on-accent);"></span>С ошибкой<span class="n">1</span></button>
+                </div>
+              </div>
+              <div class="pop-sec">
+                <div class="pop-title"><span>Тип</span><a>Показать все</a></div>
+                <div class="chips">
+                  <button class="chip active">Обычные<span class="n">5</span></button>
+                  <button class="chip">Задачи<span class="n">3</span></button>
+                  <button class="chip active">Автоматизация<span class="n">1</span></button>
+                </div>
+              </div>
+              <div class="pop-sec">
+                <div class="pop-title"><span>Персона</span></div>
+                <div class="chips">
+                  <button class="chip active">Все</button>
+                  <button class="chip"><span class="pa" style="background: var(--persona-orange);">М</span>Майя</button>
+                  <button class="chip"><span class="pa" style="background: var(--persona-blue);">К</span>Кира</button>
+                </div>
+              </div>
+              <div class="pop-sec">
+                <div class="pop-title"><span>Теги</span></div>
+                <div class="chips">
+                  <button class="chip active"><span class="sd" style="background: var(--c-on-accent);"></span>Работа<span class="n">3</span></button>
+                  <button class="chip"><span class="sd" style="background: var(--tag-purple);"></span>Идеи<span class="n">1</span></button>
+                  <button class="chip"><span class="sd" style="background: var(--tag-green);"></span>Клиенты<span class="n">1</span></button>
+                </div>
+              </div>
+              <div class="pop-sec" style="margin-bottom: 0;">
+                <div class="pop-title"><span>Показать только</span></div>
+                <div class="chips">
+                  <button class="chip"><svg class="ic" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>Закреплённые<span class="n">1</span></button>
+                  <button class="chip"><svg class="ic" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>Временные<span class="n">1</span></button>
+                  <button class="chip">Групповые<span class="n">0</span></button>
+                </div>
+              </div>
+              <div class="pop-footer">
+                <span class="stat">Скрыто 2<a>Сбросить всё</a></span>
+                <button class="done">Готово</button>
+              </div>
+            </div>
+          </div>
+          <div class="frame" style="flex: 1; min-width: 260px;">
+            <div class="frame-caption"><span>логика v2</span></div>
+            <div class="note" style="margin-top: 0;">
+              1. <b>Поиск — первая секция (обведена)</b>, точно как в проде сейчас: IconField h=36 с крестиком очистки, фокус в поле сразу при открытии поповера. В тулбаре поиска нет — строка отдана частым рычагам.<br>
+              2. <b>Активный поиск не теряется вне поповера:</b> он входит в счётчик скрытых на кнопке фильтров (бейдж «2») и в текст EmptyState («Ничего не найдено по запросу…» + кнопка сброса) — обратная связь есть, даже когда поповер закрыт.<br>
+              3. <b>Секция «Теги»</b> сохранена из v1: чипы реестра проекта с цветными точками, OR-пересечение (<code>matchChatFilter</code> уже умеет).<br>
+              4. Секции «Статус», «Тип», «Персона», «Показать только» и футер («Скрыто N · Сбросить всё · Готово») — без изменений.<br>
+              5. На мобиле — та же шторка <code>ui/Modal</code>, что в проде: поиск наверху, далее крупные чипы (large).
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- ===================== СОСТОЯНИЯ СПИСКА ===================== -->
+    <div class="mockup-section">
+      <div class="section-header">
+        <span class="section-title">Состояния списка</span>
+        <span class="section-subtitle">6 комбинаций осей; фреймы — дефолт 288px, тулбар — вариант А в состоянии сценария (в Б/В меняется только тулбар, список идентичен)</span>
+      </div>
+      <div class="section-body">
+        <div class="frames">
+
+          <!-- ===== СОСТОЯНИЕ 1: Дни + иерархия выкл ===== -->
+          <div class="frame">
+            <div class="frame-caption"><span><b>1.</b> Группировка Дни · Иерархия выкл · Новые сверху</span></div>
+            <div class="sidebar" style="width: 288px;">
+              <div class="toolbar">
+                <button class="btn-new iconic" title="Новый чат" aria-label="Новый чат"><svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg></button>
+                <div class="pill-switch compact">
+                  <div class="pill-thumb" style="left: 3px; width: 46px;"></div>
+                  <button class="active">Дни</button>
+                  <button title="Теги"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13.172 2a2 2 0 0 1 1.414.586l6.71 6.71a2.4 2.4 0 0 1 0 3.408l-4.592 4.592a2.4 2.4 0 0 1-3.408 0l-6.71-6.71A2 2 0 0 1 6 9.172V3a1 1 0 0 1 1-1z"/><path d="M2 7v6.172a2 2 0 0 0 .586 1.414l6.71 6.71a2.4 2.4 0 0 0 3.191.193"/><circle cx="10.5" cy="6.5" r=".5" fill="currentColor"/></svg></button>
+                  <button title="Без группировки"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 5h.01"/><path d="M3 12h.01"/><path d="M3 19h.01"/><path d="M8 5h13"/><path d="M8 12h13"/><path d="M8 19h13"/></svg></button>
+                </div>
+                <span style="flex:1"></span>
+                <button class="icon-btn sm" title="Фильтры и поиск"><svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 20a1 1 0 0 0 .553.895l2 1A1 1 0 0 0 14 21v-7a2 2 0 0 1 .517-1.341L21.74 4.67A1 1 0 0 0 21 3H3a1 1 0 0 0-.742 1.67l7.225 7.989A2 2 0 0 1 10 14z"/></svg></button>
+                <button class="icon-btn sm" title="Сортировка: новые сверху"><svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 16 4 4 4-4"/><path d="M7 20V4"/><path d="M11 4h10"/><path d="M11 8h7"/><path d="M11 12h4"/></svg></button>
+                <button class="icon-btn sm" title="Иерархия: выкл"><svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 5h13"/><path d="M13 12h8"/><path d="M13 19h8"/><path d="M3 10a2 2 0 0 0 2 2h3"/><path d="M3 5v12a2 2 0 0 0 2 2h3"/></svg></button>
+              </div>
+              <div class="chat-list">
+                <div class="date-divider"><div class="dd-ln"></div><span class="tt">Закреплённые</span><div class="dd-ln"></div></div>
+                <div class="chat-card">
+                  <div class="cc-text">
+                    <div class="cc-row1">
+                      <span class="status-dot" style="background: var(--c-success);"></span>
+                      <span class="cc-title">Спросить про счёт</span>
+                      <span class="cc-pin"><svg class="ic" width="11" height="11" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg></span>
+                    </div>
+                    <div class="cc-preview">Подскажи реквизиты для…</div>
+                  </div>
+                </div>
+                <div class="date-divider"><div class="dd-ln"></div><span class="tt">Сегодня</span><div class="dd-ln"></div></div>
+                <div class="chat-card active">
+                  <div class="cc-backdrop"><div class="veil orange"></div><div class="face orange">М</div></div>
+                  <div class="cc-text with-face">
+                    <div class="cc-row1">
+                      <span class="status-dot" style="background: var(--c-success);"></span>
+                      <span class="cc-title">Макет единого списка</span>
+                    </div>
+                    <div class="cc-tags"><span class="tag-chip tag-blue"><span class="td"></span><span class="tn">Работа</span></span></div>
+                    <div class="cc-preview">Покажу панель при трёх ширинах…</div>
+                  </div>
+                  <div class="cc-actions">
+                    <button class="icon-btn" title="Метки (общие теги)"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13.172 2a2 2 0 0 1 1.414.586l6.71 6.71a2.4 2.4 0 0 1 0 3.408l-4.592 4.592a2.4 2.4 0 0 1-3.408 0l-6.71-6.71A2 2 0 0 1 6 9.172V3a1 1 0 0 1 1-1z"/><path d="M2 7v6.172a2 2 0 0 0 .586 1.414l6.71 6.71a2.4 2.4 0 0 0 3.191.193"/><circle cx="10.5" cy="6.5" r=".5" fill="currentColor"/></svg></button>
+                    <button class="icon-btn" title="Настройки чата"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></button>
+                    <button class="icon-btn" title="Удалить чат"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
+                  </div>
+                </div>
+                <div class="chat-card">
+                  <div class="cc-text">
+                    <div class="cc-row1">
+                      <span class="status-dot pulse" style="background: var(--c-accent);"></span>
+                      <span style="display: flex; flex-shrink: 0; color: var(--c-text-muted);"><svg class="ic" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.106-3.105c.32-.322.863-.22.983.218a6 6 0 0 1-8.259 7.057l-7.91 7.91a1 1 0 0 1-2.999-3l7.91-7.91a6 6 0 0 1 7.057-8.259c.438.12.54.662.219.984z"/></svg></span>
+                      <span class="cc-title">Сводка по клиентам Q3</span>
+                    </div>
+                    <div class="cc-tags">
+                      <span class="tag-chip tag-blue"><span class="td"></span><span class="tn">Работа</span></span>
+                      <span class="tag-chip tag-green"><span class="td"></span><span class="tn">Клиенты</span></span>
+                    </div>
+                    <div class="cc-task" style="color: var(--c-accent);">
+                      <span class="tool-spinner"></span><span class="lbl">Выполняется</span><span class="meta">2/5</span><span class="meta">сегодня</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="chat-card">
+                  <div class="cc-text">
+                    <div class="cc-row1">
+                      <span class="status-dot pulse" style="background: var(--c-plan);"></span>
+                      <span class="cc-title">Идеи для мобильной шторки</span>
+                    </div>
+                    <div class="cc-tags"><span class="tag-chip tag-purple"><span class="td"></span><span class="tn">Идеи</span></span></div>
+                    <div class="cc-preview">А что если фильтры внизу…</div>
+                  </div>
+                </div>
+                <div class="date-divider"><div class="dd-ln"></div><span class="tt">Вчера (пн)</span><div class="dd-ln"></div></div>
+                <div class="chat-card">
+                  <div class="cc-text">
+                    <div class="cc-row1">
+                      <span class="status-dot" style="background: var(--c-danger);"></span>
+                      <span class="cc-title">Ночное ревью PR</span>
+                    </div>
+                    <div class="cc-preview">Упало на шаге 3: lint…</div>
+                    <div style="display: flex; align-items: center; gap: 5px; min-width: 0; margin-top: 1px;">
+                      <span class="cc-origin warn"><svg class="ic" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/></svg><span>Автоматизация: ночное ревью</span></span>
+                    </div>
+                  </div>
+                </div>
+                <div class="chat-card">
+                  <div class="cc-text">
+                    <div class="cc-row1">
+                      <span class="status-dot" style="background: var(--c-success);"></span>
+                      <span class="cc-title">Черновик ответа заказчику</span>
+                      <span class="cc-exp"><svg class="ic" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 22h14"/><path d="M5 2h14"/><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"/><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"/></svg>3 ч</span>
+                    </div>
+                    <div class="cc-preview">Сформулируй вежливо, что сроки…</div>
+                  </div>
+                </div>
+                <div class="date-divider"><div class="dd-ln"></div><span class="tt">26 июля (вс)</span><div class="dd-ln"></div></div>
+                <div class="chat-card">
+                  <div class="cc-text">
+                    <div class="cc-row1">
+                      <span class="status-dot" style="background: var(--c-text-muted);"></span>
+                      <span class="cc-title">Спека иерархии чатов</span>
+                    </div>
+                    <div class="cc-tags"><span class="tag-chip tag-blue"><span class="td"></span><span class="tn">Работа</span></span></div>
+                    <div class="cc-preview">Геометрия линий и отступов…</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ===== СОСТОЯНИЕ 2: Теги + иерархия выкл ===== -->
+          <div class="frame">
+            <div class="frame-caption"><span><b>2.</b> Группировка Теги · Иерархия выкл · Новые сверху</span></div>
+            <div class="sidebar" style="width: 288px;">
+              <div class="toolbar">
+                <button class="btn-new iconic" title="Новый чат" aria-label="Новый чат"><svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg></button>
+                <div class="pill-switch compact">
+                  <div class="pill-thumb" style="left: 40px; width: 34px;"></div>
+                  <button title="Дни"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/><path d="M8 14h.01"/><path d="M12 14h.01"/><path d="M16 14h.01"/><path d="M8 18h.01"/><path d="M12 18h.01"/><path d="M16 18h.01"/></svg></button>
+                  <button class="active">Теги</button>
+                  <button title="Без группировки"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 5h.01"/><path d="M3 12h.01"/><path d="M3 19h.01"/><path d="M8 5h13"/><path d="M8 12h13"/><path d="M8 19h13"/></svg></button>
+                </div>
+                <span style="flex:1"></span>
+                <button class="icon-btn sm" title="Фильтры и поиск"><svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 20a1 1 0 0 0 .553.895l2 1A1 1 0 0 0 14 21v-7a2 2 0 0 1 .517-1.341L21.74 4.67A1 1 0 0 0 21 3H3a1 1 0 0 0-.742 1.67l7.225 7.989A2 2 0 0 1 10 14z"/></svg></button>
+                <button class="icon-btn sm" title="Сортировка: новые сверху"><svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 16 4 4 4-4"/><path d="M7 20V4"/><path d="M11 4h10"/><path d="M11 8h7"/><path d="M11 12h4"/></svg></button>
+                <button class="icon-btn sm" title="Иерархия: выкл"><svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 5h13"/><path d="M13 12h8"/><path d="M13 19h8"/><path d="M3 10a2 2 0 0 0 2 2h3"/><path d="M3 5v12a2 2 0 0 0 2 2h3"/></svg></button>
+              </div>
+              <div class="chat-list">
+                <div class="tag-sec">
+                  <span class="td" style="background: var(--tag-blue);"></span><span class="tt">Работа</span><span class="cnt">3</span><span class="sp"></span>
+                  <button class="order-btn" disabled title="Переместить тег выше"><svg class="ic" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="m18 15-6-6-6 6"/></svg></button>
+                  <button class="order-btn" title="Переместить тег ниже"><svg class="ic" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="m6 9 6 6 6-6"/></svg></button>
+                </div>
+                <div class="chat-card active">
+                  <div class="cc-backdrop"><div class="veil orange"></div><div class="face orange">М</div></div>
+                  <div class="cc-text with-face">
+                    <div class="cc-row1"><span class="status-dot" style="background: var(--c-success);"></span><span class="cc-title">Макет единого списка</span></div>
+                    <div class="cc-tags"><span class="tag-chip tag-blue"><span class="td"></span><span class="tn">Работа</span></span></div>
+                    <div class="cc-preview">Покажу панель при трёх ширинах…</div>
+                  </div>
+                </div>
+                <div class="chat-card">
+                  <div class="cc-text">
+                    <div class="cc-row1">
+                      <span class="status-dot pulse" style="background: var(--c-accent);"></span>
+                      <span style="display: flex; flex-shrink: 0; color: var(--c-text-muted);"><svg class="ic" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.106-3.105c.32-.322.863-.22.983.218a6 6 0 0 1-8.259 7.057l-7.91 7.91a1 1 0 0 1-2.999-3l7.91-7.91a6 6 0 0 1 7.057-8.259c.438.12.54.662.219.984z"/></svg></span>
+                      <span class="cc-title">Сводка по клиентам Q3</span>
+                    </div>
+                    <div class="cc-tags">
+                      <span class="tag-chip tag-blue"><span class="td"></span><span class="tn">Работа</span></span>
+                      <span class="tag-chip tag-green"><span class="td"></span><span class="tn">Клиенты</span></span>
+                    </div>
+                    <div class="cc-task" style="color: var(--c-accent);"><span class="tool-spinner"></span><span class="lbl">Выполняется</span><span class="meta">2/5</span><span class="meta">сегодня</span></div>
+                  </div>
+                </div>
+                <div class="chat-card">
+                  <div class="cc-text">
+                    <div class="cc-row1"><span class="status-dot" style="background: var(--c-text-muted);"></span><span class="cc-title">Спека иерархии чатов</span></div>
+                    <div class="cc-tags"><span class="tag-chip tag-blue"><span class="td"></span><span class="tn">Работа</span></span></div>
+                    <div class="cc-preview">Геометрия линий и отступов…</div>
+                  </div>
+                </div>
+                <div class="tag-sec">
+                  <span class="td" style="background: var(--tag-purple);"></span><span class="tt">Идеи</span><span class="cnt">1</span><span class="sp"></span>
+                  <button class="order-btn" title="Переместить тег выше"><svg class="ic" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="m18 15-6-6-6 6"/></svg></button>
+                  <button class="order-btn" title="Переместить тег ниже"><svg class="ic" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="m6 9 6 6 6-6"/></svg></button>
+                </div>
+                <div class="chat-card">
+                  <div class="cc-text">
+                    <div class="cc-row1"><span class="status-dot pulse" style="background: var(--c-plan);"></span><span class="cc-title">Идеи для мобильной шторки</span></div>
+                    <div class="cc-tags"><span class="tag-chip tag-purple"><span class="td"></span><span class="tn">Идеи</span></span></div>
+                    <div class="cc-preview">А что если фильтры внизу…</div>
+                  </div>
+                </div>
+                <div class="tag-sec">
+                  <span class="td" style="background: var(--tag-green);"></span><span class="tt">Клиенты</span><span class="cnt">1</span><span class="sp"></span>
+                  <button class="order-btn" title="Переместить тег выше"><svg class="ic" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="m18 15-6-6-6 6"/></svg></button>
+                  <button class="order-btn" disabled title="Переместить тег ниже"><svg class="ic" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="m6 9 6 6 6-6"/></svg></button>
+                </div>
+                <div class="chat-card">
+                  <div class="cc-text">
+                    <div class="cc-row1">
+                      <span class="status-dot pulse" style="background: var(--c-accent);"></span>
+                      <span style="display: flex; flex-shrink: 0; color: var(--c-text-muted);"><svg class="ic" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.106-3.105c.32-.322.863-.22.983.218a6 6 0 0 1-8.259 7.057l-7.91 7.91a1 1 0 0 1-2.999-3l7.91-7.91a6 6 0 0 1 7.057-8.259c.438.12.54.662.219.984z"/></svg></span>
+                      <span class="cc-title">Сводка по клиентам Q3</span>
+                    </div>
+                    <div class="cc-tags">
+                      <span class="tag-chip tag-blue"><span class="td"></span><span class="tn">Работа</span></span>
+                      <span class="tag-chip tag-green"><span class="td"></span><span class="tn">Клиенты</span></span>
+                    </div>
+                    <div class="cc-task" style="color: var(--c-accent);"><span class="tool-spinner"></span><span class="lbl">Выполняется</span><span class="meta">2/5</span><span class="meta">сегодня</span></div>
+                  </div>
+                </div>
+                <div class="tag-sec">
+                  <span class="td" style="background: var(--c-text-muted);"></span><span class="tt">Без тегов</span><span class="cnt">3</span>
+                </div>
+                <div class="chat-card">
+                  <div class="cc-text">
+                    <div class="cc-row1"><span class="status-dot" style="background: var(--c-success);"></span><span class="cc-title">Спросить про счёт</span>
+                      <span class="cc-pin"><svg class="ic" width="11" height="11" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg></span>
+                    </div>
+                    <div class="cc-preview">Подскажи реквизиты для…</div>
+                  </div>
+                </div>
+                <div class="chat-card">
+                  <div class="cc-text">
+                    <div class="cc-row1"><span class="status-dot" style="background: var(--c-danger);"></span><span class="cc-title">Ночное ревью PR</span></div>
+                    <div class="cc-preview">Упало на шаге 3: lint…</div>
+                  </div>
+                </div>
+                <div class="chat-card">
+                  <div class="cc-text">
+                    <div class="cc-row1"><span class="status-dot" style="background: var(--c-success);"></span><span class="cc-title">Черновик ответа заказчику</span>
+                      <span class="cc-exp"><svg class="ic" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 22h14"/><path d="M5 2h14"/><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"/><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"/></svg>3 ч</span>
+                    </div>
+                    <div class="cc-preview">Сформулируй вежливо, что сроки…</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ===== СОСТОЯНИЕ 3: Без группировки + иерархия выкл ===== -->
+          <div class="frame">
+            <div class="frame-caption"><span><b>3.</b> Группировка Без · Иерархия выкл · Новые сверху</span></div>
+            <div class="sidebar" style="width: 288px;">
+              <div class="toolbar">
+                <button class="btn-new iconic" title="Новый чат" aria-label="Новый чат"><svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg></button>
+                <div class="pill-switch compact">
+                  <div class="pill-thumb" style="left: 77px; width: 40px;"></div>
+                  <button title="Дни"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/><path d="M8 14h.01"/><path d="M12 14h.01"/><path d="M16 14h.01"/><path d="M8 18h.01"/><path d="M12 18h.01"/><path d="M16 18h.01"/></svg></button>
+                  <button title="Теги"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13.172 2a2 2 0 0 1 1.414.586l6.71 6.71a2.4 2.4 0 0 1 0 3.408l-4.592 4.592a2.4 2.4 0 0 1-3.408 0l-6.71-6.71A2 2 0 0 1 6 9.172V3a1 1 0 0 1 1-1z"/><path d="M2 7v6.172a2 2 0 0 0 .586 1.414l6.71 6.71a2.4 2.4 0 0 0 3.191.193"/><circle cx="10.5" cy="6.5" r=".5" fill="currentColor"/></svg></button>
+                  <button class="active">Без</button>
+                </div>
+                <span style="flex:1"></span>
+                <button class="icon-btn sm" title="Фильтры и поиск"><svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 20a1 1 0 0 0 .553.895l2 1A1 1 0 0 0 14 21v-7a2 2 0 0 1 .517-1.341L21.74 4.67A1 1 0 0 0 21 3H3a1 1 0 0 0-.742 1.67l7.225 7.989A2 2 0 0 1 10 14z"/></svg></button>
+                <button class="icon-btn sm" title="Сортировка: новые сверху"><svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 16 4 4 4-4"/><path d="M7 20V4"/><path d="M11 4h10"/><path d="M11 8h7"/><path d="M11 12h4"/></svg></button>
+                <button class="icon-btn sm" title="Иерархия: выкл"><svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 5h13"/><path d="M13 12h8"/><path d="M13 19h8"/><path d="M3 10a2 2 0 0 0 2 2h3"/><path d="M3 5v12a2 2 0 0 0 2 2h3"/></svg></button>
+              </div>
+              <div class="chat-list">
+                <div class="chat-card">
+                  <div class="cc-text">
+                    <div class="cc-row1"><span class="status-dot" style="background: var(--c-success);"></span><span class="cc-title">Спросить про счёт</span>
+                      <span class="cc-pin"><svg class="ic" width="11" height="11" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg></span>
+                    </div>
+                    <div class="cc-preview">Подскажи реквизиты для…</div>
+                  </div>
+                </div>
+                <div class="chat-card active">
+                  <div class="cc-backdrop"><div class="veil orange"></div><div class="face orange">М</div></div>
+                  <div class="cc-text with-face">
+                    <div class="cc-row1"><span class="status-dot" style="background: var(--c-success);"></span><span class="cc-title">Макет единого списка</span></div>
+                    <div class="cc-tags"><span class="tag-chip tag-blue"><span class="td"></span><span class="tn">Работа</span></span></div>
+                    <div class="cc-preview">Покажу панель при трёх ширинах…</div>
+                  </div>
+                </div>
+                <div class="chat-card">
+                  <div class="cc-text">
+                    <div class="cc-row1">
+                      <span class="status-dot pulse" style="background: var(--c-accent);"></span>
+                      <span style="display: flex; flex-shrink: 0; color: var(--c-text-muted);"><svg class="ic" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.106-3.105c.32-.322.863-.22.983.218a6 6 0 0 1-8.259 7.057l-7.91 7.91a1 1 0 0 1-2.999-3l7.91-7.91a6 6 0 0 1 7.057-8.259c.438.12.54.662.219.984z"/></svg></span>
+                      <span class="cc-title">Сводка по клиентам Q3</span>
+                    </div>
+                    <div class="cc-tags">
+                      <span class="tag-chip tag-blue"><span class="td"></span><span class="tn">Работа</span></span>
+                      <span class="tag-chip tag-green"><span class="td"></span><span class="tn">Клиенты</span></span>
+                    </div>
+                    <div class="cc-task" style="color: var(--c-accent);"><span class="tool-spinner"></span><span class="lbl">Выполняется</span><span class="meta">2/5</span><span class="meta">сегодня</span></div>
+                  </div>
+                </div>
+                <div class="chat-card">
+                  <div class="cc-text">
+                    <div class="cc-row1"><span class="status-dot pulse" style="background: var(--c-plan);"></span><span class="cc-title">Идеи для мобильной шторки</span></div>
+                    <div class="cc-tags"><span class="tag-chip tag-purple"><span class="td"></span><span class="tn">Идеи</span></span></div>
+                    <div class="cc-preview">А что если фильтры внизу…</div>
+                  </div>
+                </div>
+                <div class="chat-card">
+                  <div class="cc-text">
+                    <div class="cc-row1"><span class="status-dot" style="background: var(--c-danger);"></span><span class="cc-title">Ночное ревью PR</span></div>
+                    <div class="cc-preview">Упало на шаге 3: lint…</div>
+                  </div>
+                </div>
+                <div class="chat-card">
+                  <div class="cc-text">
+                    <div class="cc-row1"><span class="status-dot" style="background: var(--c-success);"></span><span class="cc-title">Черновик ответа заказчику</span>
+                      <span class="cc-exp"><svg class="ic" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 22h14"/><path d="M5 2h14"/><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"/><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"/></svg>3 ч</span>
+                    </div>
+                    <div class="cc-preview">Сформулируй вежливо, что сроки…</div>
+                  </div>
+                </div>
+                <div class="chat-card">
+                  <div class="cc-text">
+                    <div class="cc-row1"><span class="status-dot" style="background: var(--c-text-muted);"></span><span class="cc-title">Спека иерархии чатов</span></div>
+                    <div class="cc-tags"><span class="tag-chip tag-blue"><span class="td"></span><span class="tn">Работа</span></span></div>
+                    <div class="cc-preview">Геометрия линий и отступов…</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <!-- ===== СОСТОЯНИЕ 4: Дни + иерархия вкл ===== -->
+          <div class="frame">
+            <div class="frame-caption"><span><b>4.</b> Группировка Дни · Иерархия вкл · Новые сверху</span></div>
+            <div class="sidebar" style="width: 288px;">
+              <div class="toolbar">
+                <button class="btn-new iconic" title="Новый чат" aria-label="Новый чат"><svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg></button>
+                <div class="pill-switch compact">
+                  <div class="pill-thumb" style="left: 3px; width: 46px;"></div>
+                  <button class="active">Дни</button>
+                  <button title="Теги"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13.172 2a2 2 0 0 1 1.414.586l6.71 6.71a2.4 2.4 0 0 1 0 3.408l-4.592 4.592a2.4 2.4 0 0 1-3.408 0l-6.71-6.71A2 2 0 0 1 6 9.172V3a1 1 0 0 1 1-1z"/><path d="M2 7v6.172a2 2 0 0 0 .586 1.414l6.71 6.71a2.4 2.4 0 0 0 3.191.193"/><circle cx="10.5" cy="6.5" r=".5" fill="currentColor"/></svg></button>
+                  <button title="Без группировки"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 5h.01"/><path d="M3 12h.01"/><path d="M3 19h.01"/><path d="M8 5h13"/><path d="M8 12h13"/><path d="M8 19h13"/></svg></button>
+                </div>
+                <span style="flex:1"></span>
+                <button class="icon-btn sm" title="Фильтры и поиск"><svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 20a1 1 0 0 0 .553.895l2 1A1 1 0 0 0 14 21v-7a2 2 0 0 1 .517-1.341L21.74 4.67A1 1 0 0 0 21 3H3a1 1 0 0 0-.742 1.67l7.225 7.989A2 2 0 0 1 10 14z"/></svg></button>
+                <button class="icon-btn sm" title="Сортировка: новые сверху"><svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 16 4 4 4-4"/><path d="M7 20V4"/><path d="M11 4h10"/><path d="M11 8h7"/><path d="M11 12h4"/></svg></button>
+                <button class="icon-btn sm active" title="Иерархия: вкл"><svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 5h13"/><path d="M13 12h8"/><path d="M13 19h8"/><path d="M3 10a2 2 0 0 0 2 2h3"/><path d="M3 5v12a2 2 0 0 0 2 2h3"/></svg></button>
+              </div>
+              <div class="chat-list">
+                <div class="date-divider"><div class="dd-ln"></div><span class="tt">Сегодня</span><div class="dd-ln"></div></div>
+                <!-- Корень A с ребёнком A1 -->
+                <div class="tree-row">
+                  <div class="ln" style="left: 10px; top: 27px; bottom: 0;"></div>
+                  <div class="chat-card">
+                    <div class="cc-backdrop"><div class="veil orange"></div><div class="face orange">М</div></div>
+                    <div class="cc-text with-face">
+                      <div class="cc-row1"><span class="status-dot" style="background: var(--c-success);"></span><span class="cc-title">Макет единого списка</span></div>
+                      <div class="cc-tags"><span class="tag-chip tag-blue"><span class="td"></span><span class="tn">Работа</span></span></div>
+                      <div class="cc-preview">Покажу панель при трёх ширинах…</div>
+                    </div>
+                  </div>
+                  <button class="tree-chevron" style="left: 0; top: 4px;" title="Свернуть вложенные чаты"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" style="transform: rotate(90deg);"><path d="m9 18 6-6-6-6"/></svg></button>
+                </div>
+                <div class="tree-row" style="padding-left: 34px;">
+                  <div class="ln" style="left: 10px; top: 0; height: 20px;"></div>
+                  <div class="ln-h" style="left: 10px; top: 20px; width: 24px;"></div>
+                  <div class="chat-card">
+                    <div class="cc-text">
+                      <div class="cc-row1"><span class="status-dot" style="background: var(--c-success);"></span><span class="cc-title">Правки после ревью</span></div>
+                      <div class="cc-preview">Узкая панель: паддинги 8px…</div>
+                    </div>
+                  </div>
+                </div>
+                <!-- Корень B с детьми B1 (активный) и B2: путь к активному — accent -->
+                <div class="tree-row">
+                  <div class="ln acc" style="left: 10px; top: 27px; bottom: 0;"></div>
+                  <div class="chat-card">
+                    <div class="cc-text">
+                      <div class="cc-row1">
+                        <span class="status-dot pulse" style="background: var(--c-accent);"></span>
+                        <span style="display: flex; flex-shrink: 0; color: var(--c-text-muted);"><svg class="ic" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.106-3.105c.32-.322.863-.22.983.218a6 6 0 0 1-8.259 7.057l-7.91 7.91a1 1 0 0 1-2.999-3l7.91-7.91a6 6 0 0 1 7.057-8.259c.438.12.54.662.219.984z"/></svg></span>
+                        <span class="cc-title">Сводка по клиентам Q3</span>
+                      </div>
+                      <div class="cc-tags">
+                        <span class="tag-chip tag-blue"><span class="td"></span><span class="tn">Работа</span></span>
+                        <span class="tag-chip tag-green"><span class="td"></span><span class="tn">Клиенты</span></span>
+                      </div>
+                      <div class="cc-task" style="color: var(--c-accent);"><span class="tool-spinner"></span><span class="lbl">Выполняется</span><span class="meta">2/5</span><span class="meta">сегодня</span></div>
+                    </div>
+                  </div>
+                  <button class="tree-chevron acc" style="left: 0; top: 4px;" title="Свернуть вложенные чаты"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" style="transform: rotate(90deg);"><path d="m9 18 6-6-6-6"/></svg></button>
+                </div>
+                <div class="tree-row" style="padding-left: 34px;">
+                  <div class="ln acc" style="left: 10px; top: 0; bottom: 0;"></div>
+                  <div class="ln-h acc" style="left: 10px; top: 20px; width: 24px;"></div>
+                  <div class="chat-card active">
+                    <div class="cc-text">
+                      <div class="cc-row1">
+                        <span class="status-dot pulse" style="background: var(--c-accent);"></span>
+                        <span style="display: flex; flex-shrink: 0; color: var(--c-text-muted);"><svg class="ic" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.106-3.105c.32-.322.863-.22.983.218a6 6 0 0 1-8.259 7.057l-7.91 7.91a1 1 0 0 1-2.999-3l7.91-7.91a6 6 0 0 1 7.057-8.259c.438.12.54.662.219.984z"/></svg></span>
+                        <span class="cc-title">Сбор данных по счетам</span>
+                      </div>
+                      <div class="cc-task" style="color: var(--c-accent);"><span class="tool-spinner"></span><span class="lbl">Выполняется</span><span class="meta">1/3</span></div>
+                    </div>
+                  </div>
+                </div>
+                <div class="tree-row" style="padding-left: 34px;">
+                  <div class="ln" style="left: 10px; top: 0; height: 20px;"></div>
+                  <div class="ln-h" style="left: 10px; top: 20px; width: 24px;"></div>
+                  <div class="chat-card">
+                    <div class="cc-text">
+                      <div class="cc-row1">
+                        <span class="status-dot pulse" style="background: var(--c-plan);"></span>
+                        <span style="display: flex; flex-shrink: 0; color: var(--c-text-muted);"><svg class="ic" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.106-3.105c.32-.322.863-.22.983.218a6 6 0 0 1-8.259 7.057l-7.91 7.91a1 1 0 0 1-2.999-3l7.91-7.91a6 6 0 0 1 7.057-8.259c.438.12.54.662.219.984z"/></svg></span>
+                        <span class="cc-title">Черновик письма клиенту</span>
+                      </div>
+                      <div class="cc-task" style="color: var(--c-warning-text);"><svg class="ic" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" style="flex-shrink: 0;"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg><span class="lbl">Ждёт ответа</span></div>
+                    </div>
+                  </div>
+                </div>
+                <!-- Корень C одиночный -->
+                <div class="tree-row">
+                  <div class="chat-card">
+                    <div class="cc-text">
+                      <div class="cc-row1"><span class="status-dot pulse" style="background: var(--c-plan);"></span><span class="cc-title">Идеи для мобильной шторки</span></div>
+                      <div class="cc-tags"><span class="tag-chip tag-purple"><span class="td"></span><span class="tn">Идеи</span></span></div>
+                      <div class="cc-preview">А что если фильтры внизу…</div>
+                    </div>
+                  </div>
+                </div>
+                <!-- Корень H свёрнут: chevron + бейдж «2/1» -->
+                <div class="tree-row">
+                  <div class="chat-card">
+                    <div class="cc-text">
+                      <div class="cc-row1"><span class="status-dot pulse" style="background: var(--c-accent);"></span><span class="cc-title">Миграция базы</span></div>
+                      <div class="cc-preview">План переноса данных…</div>
+                    </div>
+                  </div>
+                  <button class="tree-chevron" style="left: 0; top: 4px;" title="Развернуть: вложенных чатов 2, из них в работе 1"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="m9 18 6-6-6-6"/></svg></button>
+                  <div class="tree-badge" style="left: 9px; top: 1px;">2/<span class="run">1</span></div>
+                </div>
+                <div class="date-divider"><div class="dd-ln"></div><span class="tt">Вчера (пн)</span><div class="dd-ln"></div></div>
+                <div class="tree-row">
+                  <div class="chat-card">
+                    <div class="cc-text">
+                      <div class="cc-row1"><span class="status-dot" style="background: var(--c-danger);"></span><span class="cc-title">Ночное ревью PR</span></div>
+                      <div class="cc-preview">Упало на шаге 3: lint…</div>
+                    </div>
+                  </div>
+                </div>
+                <div class="tree-row">
+                  <div class="chat-card">
+                    <div class="cc-text">
+                      <div class="cc-row1"><span class="status-dot" style="background: var(--c-success);"></span><span class="cc-title">Черновик ответа заказчику</span>
+                        <span class="cc-exp"><svg class="ic" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 22h14"/><path d="M5 2h14"/><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"/><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"/></svg>3 ч</span>
+                      </div>
+                      <div class="cc-preview">Сформулируй вежливо, что сроки…</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ===== СОСТОЯНИЕ 5: Теги + иерархия вкл ===== -->
+          <div class="frame">
+            <div class="frame-caption"><span><b>5.</b> Группировка Теги · Иерархия вкл · Новые сверху</span></div>
+            <div class="sidebar" style="width: 288px;">
+              <div class="toolbar">
+                <button class="btn-new iconic" title="Новый чат" aria-label="Новый чат"><svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg></button>
+                <div class="pill-switch compact">
+                  <div class="pill-thumb" style="left: 40px; width: 34px;"></div>
+                  <button title="Дни"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/><path d="M8 14h.01"/><path d="M12 14h.01"/><path d="M16 14h.01"/><path d="M8 18h.01"/><path d="M12 18h.01"/><path d="M16 18h.01"/></svg></button>
+                  <button class="active">Теги</button>
+                  <button title="Без группировки"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 5h.01"/><path d="M3 12h.01"/><path d="M3 19h.01"/><path d="M8 5h13"/><path d="M8 12h13"/><path d="M8 19h13"/></svg></button>
+                </div>
+                <span style="flex:1"></span>
+                <button class="icon-btn sm" title="Фильтры и поиск"><svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 20a1 1 0 0 0 .553.895l2 1A1 1 0 0 0 14 21v-7a2 2 0 0 1 .517-1.341L21.74 4.67A1 1 0 0 0 21 3H3a1 1 0 0 0-.742 1.67l7.225 7.989A2 2 0 0 1 10 14z"/></svg></button>
+                <button class="icon-btn sm" title="Сортировка: новые сверху"><svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 16 4 4 4-4"/><path d="M7 20V4"/><path d="M11 4h10"/><path d="M11 8h7"/><path d="M11 12h4"/></svg></button>
+                <button class="icon-btn sm active" title="Иерархия: вкл"><svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 5h13"/><path d="M13 12h8"/><path d="M13 19h8"/><path d="M3 10a2 2 0 0 0 2 2h3"/><path d="M3 5v12a2 2 0 0 0 2 2h3"/></svg></button>
+              </div>
+              <div class="chat-list">
+                <div class="tag-sec">
+                  <span class="td" style="background: var(--tag-blue);"></span><span class="tt">Работа</span><span class="cnt">3</span><span class="sp"></span>
+                  <button class="order-btn" disabled><svg class="ic" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="m18 15-6-6-6 6"/></svg></button>
+                  <button class="order-btn"><svg class="ic" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="m6 9 6 6 6-6"/></svg></button>
+                </div>
+                <div class="tree-row">
+                  <div class="ln" style="left: 10px; top: 27px; bottom: 0;"></div>
+                  <div class="chat-card active">
+                    <div class="cc-backdrop"><div class="veil orange"></div><div class="face orange">М</div></div>
+                    <div class="cc-text with-face">
+                      <div class="cc-row1"><span class="status-dot" style="background: var(--c-success);"></span><span class="cc-title">Макет единого списка</span></div>
+                      <div class="cc-tags"><span class="tag-chip tag-blue"><span class="td"></span><span class="tn">Работа</span></span></div>
+                      <div class="cc-preview">Покажу панель при трёх ширинах…</div>
+                    </div>
+                  </div>
+                  <button class="tree-chevron acc" style="left: 0; top: 4px;"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" style="transform: rotate(90deg);"><path d="m9 18 6-6-6-6"/></svg></button>
+                </div>
+                <div class="tree-row" style="padding-left: 34px;">
+                  <div class="ln acc" style="left: 10px; top: 0; height: 20px;"></div>
+                  <div class="ln-h acc" style="left: 10px; top: 20px; width: 24px;"></div>
+                  <div class="chat-card">
+                    <div class="cc-text">
+                      <div class="cc-row1"><span class="status-dot" style="background: var(--c-success);"></span><span class="cc-title">Правки после ревью</span></div>
+                      <div class="cc-preview">Узкая панель: паддинги 8px…</div>
+                    </div>
+                  </div>
+                </div>
+                <div class="tree-row">
+                  <div class="chat-card">
+                    <div class="cc-text">
+                      <div class="cc-row1">
+                        <span class="status-dot pulse" style="background: var(--c-accent);"></span>
+                        <span style="display: flex; flex-shrink: 0; color: var(--c-text-muted);"><svg class="ic" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.106-3.105c.32-.322.863-.22.983.218a6 6 0 0 1-8.259 7.057l-7.91 7.91a1 1 0 0 1-2.999-3l7.91-7.91a6 6 0 0 1 7.057-8.259c.438.12.54.662.219.984z"/></svg></span>
+                        <span class="cc-title">Сводка по клиентам Q3</span>
+                      </div>
+                      <div class="cc-tags">
+                        <span class="tag-chip tag-blue"><span class="td"></span><span class="tn">Работа</span></span>
+                        <span class="tag-chip tag-green"><span class="td"></span><span class="tn">Клиенты</span></span>
+                      </div>
+                      <div class="cc-task" style="color: var(--c-accent);"><span class="tool-spinner"></span><span class="lbl">Выполняется</span><span class="meta">2/5</span><span class="meta">сегодня</span></div>
+                    </div>
+                  </div>
+                  <button class="tree-chevron" style="left: 0; top: 4px;" title="Развернуть: вложенных чатов 2, из них в работе 1"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="m9 18 6-6-6-6"/></svg></button>
+                  <div class="tree-badge" style="left: 9px; top: 1px;">2/<span class="run">1</span></div>
+                </div>
+                <div class="tree-row">
+                  <div class="chat-card">
+                    <div class="cc-text">
+                      <div class="cc-row1"><span class="status-dot" style="background: var(--c-text-muted);"></span><span class="cc-title">Спека иерархии чатов</span></div>
+                      <div class="cc-tags"><span class="tag-chip tag-blue"><span class="td"></span><span class="tn">Работа</span></span></div>
+                      <div class="cc-preview">Геометрия линий и отступов…</div>
+                    </div>
+                  </div>
+                </div>
+                <div class="tag-sec">
+                  <span class="td" style="background: var(--tag-purple);"></span><span class="tt">Идеи</span><span class="cnt">1</span><span class="sp"></span>
+                  <button class="order-btn"><svg class="ic" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="m18 15-6-6-6 6"/></svg></button>
+                  <button class="order-btn"><svg class="ic" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="m6 9 6 6 6-6"/></svg></button>
+                </div>
+                <div class="tree-row">
+                  <div class="chat-card">
+                    <div class="cc-text">
+                      <div class="cc-row1"><span class="status-dot pulse" style="background: var(--c-plan);"></span><span class="cc-title">Идеи для мобильной шторки</span></div>
+                      <div class="cc-tags"><span class="tag-chip tag-purple"><span class="td"></span><span class="tn">Идеи</span></span></div>
+                      <div class="cc-preview">А что если фильтры внизу…</div>
+                    </div>
+                  </div>
+                </div>
+                <div class="tag-sec">
+                  <span class="td" style="background: var(--tag-green);"></span><span class="tt">Клиенты</span><span class="cnt">1</span><span class="sp"></span>
+                  <button class="order-btn"><svg class="ic" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="m18 15-6-6-6 6"/></svg></button>
+                  <button class="order-btn" disabled><svg class="ic" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="m6 9 6 6 6-6"/></svg></button>
+                </div>
+                <div class="tree-row">
+                  <div class="chat-card">
+                    <div class="cc-text">
+                      <div class="cc-row1">
+                        <span class="status-dot pulse" style="background: var(--c-accent);"></span>
+                        <span style="display: flex; flex-shrink: 0; color: var(--c-text-muted);"><svg class="ic" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.106-3.105c.32-.322.863-.22.983.218a6 6 0 0 1-8.259 7.057l-7.91 7.91a1 1 0 0 1-2.999-3l7.91-7.91a6 6 0 0 1 7.057-8.259c.438.12.54.662.219.984z"/></svg></span>
+                        <span class="cc-title">Сводка по клиентам Q3</span>
+                      </div>
+                      <div class="cc-tags">
+                        <span class="tag-chip tag-blue"><span class="td"></span><span class="tn">Работа</span></span>
+                        <span class="tag-chip tag-green"><span class="td"></span><span class="tn">Клиенты</span></span>
+                      </div>
+                      <div class="cc-task" style="color: var(--c-accent);"><span class="tool-spinner"></span><span class="lbl">Выполняется</span><span class="meta">2/5</span><span class="meta">сегодня</span></div>
+                    </div>
+                  </div>
+                  <button class="tree-chevron" style="left: 0; top: 4px;" title="Развернуть: вложенных чатов 2, из них в работе 1"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="m9 18 6-6-6-6"/></svg></button>
+                  <div class="tree-badge" style="left: 9px; top: 1px;">2/<span class="run">1</span></div>
+                </div>
+                <div class="tag-sec"><span class="td" style="background: var(--c-text-muted);"></span><span class="tt">Без тегов</span><span class="cnt">3</span></div>
+                <div class="tree-row">
+                  <div class="chat-card">
+                    <div class="cc-text">
+                      <div class="cc-row1"><span class="status-dot" style="background: var(--c-success);"></span><span class="cc-title">Спросить про счёт</span>
+                        <span class="cc-pin"><svg class="ic" width="11" height="11" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg></span>
+                      </div>
+                      <div class="cc-preview">Подскажи реквизиты для…</div>
+                    </div>
+                  </div>
+                </div>
+                <div class="tree-row">
+                  <div class="chat-card">
+                    <div class="cc-text">
+                      <div class="cc-row1"><span class="status-dot" style="background: var(--c-danger);"></span><span class="cc-title">Ночное ревью PR</span></div>
+                      <div class="cc-preview">Упало на шаге 3: lint…</div>
+                    </div>
+                  </div>
+                </div>
+                <div class="tree-row">
+                  <div class="chat-card">
+                    <div class="cc-text">
+                      <div class="cc-row1"><span class="status-dot" style="background: var(--c-success);"></span><span class="cc-title">Черновик ответа заказчику</span>
+                        <span class="cc-exp"><svg class="ic" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 22h14"/><path d="M5 2h14"/><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"/><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"/></svg>3 ч</span>
+                      </div>
+                      <div class="cc-preview">Сформулируй вежливо, что сроки…</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ===== СОСТОЯНИЕ 6: Старые сверху ===== -->
+          <div class="frame">
+            <div class="frame-caption"><span><b>6.</b> Группировка Дни · Иерархия выкл · <b>Старые сверху</b></span></div>
+            <div class="sidebar" style="width: 288px;">
+              <div class="toolbar">
+                <button class="btn-new iconic" title="Новый чат" aria-label="Новый чат"><svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg></button>
+                <div class="pill-switch compact">
+                  <div class="pill-thumb" style="left: 3px; width: 46px;"></div>
+                  <button class="active">Дни</button>
+                  <button title="Теги"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13.172 2a2 2 0 0 1 1.414.586l6.71 6.71a2.4 2.4 0 0 1 0 3.408l-4.592 4.592a2.4 2.4 0 0 1-3.408 0l-6.71-6.71A2 2 0 0 1 6 9.172V3a1 1 0 0 1 1-1z"/><path d="M2 7v6.172a2 2 0 0 0 .586 1.414l6.71 6.71a2.4 2.4 0 0 0 3.191.193"/><circle cx="10.5" cy="6.5" r=".5" fill="currentColor"/></svg></button>
+                  <button title="Без группировки"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 5h.01"/><path d="M3 12h.01"/><path d="M3 19h.01"/><path d="M8 5h13"/><path d="M8 12h13"/><path d="M8 19h13"/></svg></button>
+                </div>
+                <span style="flex:1"></span>
+                <button class="icon-btn sm" title="Фильтры и поиск"><svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 20a1 1 0 0 0 .553.895l2 1A1 1 0 0 0 14 21v-7a2 2 0 0 1 .517-1.341L21.74 4.67A1 1 0 0 0 21 3H3a1 1 0 0 0-.742 1.67l7.225 7.989A2 2 0 0 1 10 14z"/></svg></button>
+                <button class="icon-btn sm active" title="Сортировка: старые сверху"><svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 8 4-4 4 4"/><path d="M7 4v16"/><path d="M11 12h4"/><path d="M11 16h7"/><path d="M11 20h10"/></svg></button>
+                <button class="icon-btn sm" title="Иерархия: выкл"><svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 5h13"/><path d="M13 12h8"/><path d="M13 19h8"/><path d="M3 10a2 2 0 0 0 2 2h3"/><path d="M3 5v12a2 2 0 0 0 2 2h3"/></svg></button>
+              </div>
+              <div class="chat-list">
+                <div class="date-divider"><div class="dd-ln"></div><span class="tt">Закреплённые</span><div class="dd-ln"></div></div>
+                <div class="chat-card">
+                  <div class="cc-text">
+                    <div class="cc-row1"><span class="status-dot" style="background: var(--c-success);"></span><span class="cc-title">Спросить про счёт</span>
+                      <span class="cc-pin"><svg class="ic" width="11" height="11" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg></span>
+                    </div>
+                    <div class="cc-preview">Подскажи реквизиты для…</div>
+                  </div>
+                </div>
+                <div class="date-divider"><div class="dd-ln"></div><span class="tt">26 июля (вс)</span><div class="dd-ln"></div></div>
+                <div class="chat-card">
+                  <div class="cc-text">
+                    <div class="cc-row1"><span class="status-dot" style="background: var(--c-text-muted);"></span><span class="cc-title">Спека иерархии чатов</span></div>
+                    <div class="cc-tags"><span class="tag-chip tag-blue"><span class="td"></span><span class="tn">Работа</span></span></div>
+                    <div class="cc-preview">Геометрия линий и отступов…</div>
+                  </div>
+                </div>
+                <div class="date-divider"><div class="dd-ln"></div><span class="tt">Вчера (пн)</span><div class="dd-ln"></div></div>
+                <div class="chat-card">
+                  <div class="cc-text">
+                    <div class="cc-row1"><span class="status-dot" style="background: var(--c-success);"></span><span class="cc-title">Черновик ответа заказчику</span>
+                      <span class="cc-exp"><svg class="ic" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 22h14"/><path d="M5 2h14"/><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"/><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"/></svg>3 ч</span>
+                    </div>
+                    <div class="cc-preview">Сформулируй вежливо, что сроки…</div>
+                  </div>
+                </div>
+                <div class="chat-card">
+                  <div class="cc-text">
+                    <div class="cc-row1"><span class="status-dot" style="background: var(--c-danger);"></span><span class="cc-title">Ночное ревью PR</span></div>
+                    <div class="cc-preview">Упало на шаге 3: lint…</div>
+                  </div>
+                </div>
+                <div class="date-divider"><div class="dd-ln"></div><span class="tt">Сегодня</span><div class="dd-ln"></div></div>
+                <div class="chat-card">
+                  <div class="cc-text">
+                    <div class="cc-row1"><span class="status-dot pulse" style="background: var(--c-plan);"></span><span class="cc-title">Идеи для мобильной шторки</span></div>
+                    <div class="cc-tags"><span class="tag-chip tag-purple"><span class="td"></span><span class="tn">Идеи</span></span></div>
+                    <div class="cc-preview">А что если фильтры внизу…</div>
+                  </div>
+                </div>
+                <div class="chat-card">
+                  <div class="cc-text">
+                    <div class="cc-row1">
+                      <span class="status-dot pulse" style="background: var(--c-accent);"></span>
+                      <span style="display: flex; flex-shrink: 0; color: var(--c-text-muted);"><svg class="ic" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.106-3.105c.32-.322.863-.22.983.218a6 6 0 0 1-8.259 7.057l-7.91 7.91a1 1 0 0 1-2.999-3l7.91-7.91a6 6 0 0 1 7.057-8.259c.438.12.54.662.219.984z"/></svg></span>
+                      <span class="cc-title">Сводка по клиентам Q3</span>
+                    </div>
+                    <div class="cc-tags">
+                      <span class="tag-chip tag-blue"><span class="td"></span><span class="tn">Работа</span></span>
+                      <span class="tag-chip tag-green"><span class="td"></span><span class="tn">Клиенты</span></span>
+                    </div>
+                    <div class="cc-task" style="color: var(--c-accent);"><span class="tool-spinner"></span><span class="lbl">Выполняется</span><span class="meta">2/5</span><span class="meta">сегодня</span></div>
+                  </div>
+                </div>
+                <div class="chat-card active">
+                  <div class="cc-backdrop"><div class="veil orange"></div><div class="face orange">М</div></div>
+                  <div class="cc-text with-face">
+                    <div class="cc-row1"><span class="status-dot" style="background: var(--c-success);"></span><span class="cc-title">Макет единого списка</span></div>
+                    <div class="cc-tags"><span class="tag-chip tag-blue"><span class="td"></span><span class="tn">Работа</span></span></div>
+                    <div class="cc-preview">Покажу панель при трёх ширинах…</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="note">
+          <b>Правила комбинаций.</b> Корни дерева попадают в секции по дню <b>максимальной активности поддерева</b> (логика <code>maxActivity</code> из chatTree.ts) — корень с живым ребёнком не тонет в старых днях. При Группировка=Теги чат с несколькими тегами дублируется в каждой своей секции (<code>groupByTags</code>), дочерние висят под ним в обеих; свёрнутость — по id чата, поэтому дубль свёрнут синхронно (состояние 5). Секция «Закреплённые» существует только при Группировка=Дни (как сейчас в <code>groupChats</code>); при «старые сверху» обращается и порядок секций, и порядок внутри них, а закреплённые остаются сверху. При Группировка=Теги порядок секций — реестровый (ручной, ▲▼), обращается только порядок внутри секций.
+        </div>
+      </div>
+    </div>
+    <!-- ===================== МОБИЛЬНАЯ ВЕРСИЯ ===================== -->
+    <div class="mockup-section">
+      <div class="section-header">
+        <span class="section-title">Мобильная версия (≤600px)</span>
+        <span class="section-subtitle">строка: [+ Новый чат] [Ф] [Вид]; оси и поиск — шторками ui/Modal; тач-цели ≥40px</span>
+      </div>
+      <div class="section-body">
+        <div class="frames">
+          <div class="frame mobile-frame">
+            <div class="frame-caption"><span>панель <b>360px</b> — тач-ступень</span></div>
+            <div class="sidebar" style="width: 100%;">
+              <div class="toolbar" style="padding: 8px 16px; gap: 8px;">
+                <button class="btn-new mob" style="flex: 1; min-width: 0;">
+                  <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+                  Новый чат
+                </button>
+                <button class="icon-btn lg" title="Фильтры и поиск">
+                  <svg class="ic" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 20a1 1 0 0 0 .553.895l2 1A1 1 0 0 0 14 21v-7a2 2 0 0 1 .517-1.341L21.74 4.67A1 1 0 0 0 21 3H3a1 1 0 0 0-.742 1.67l7.225 7.989A2 2 0 0 1 10 14z"/></svg>
+                  <span class="icon-badge">2</span>
+                </button>
+                <button class="icon-btn lg" title="Вид: группировка, сортировка, иерархия">
+                  <svg class="ic" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M10 5H3"/><path d="M12 19H3"/><path d="M14 3v4"/><path d="M16 17v4"/><path d="M21 12h-9"/><path d="M21 19h-5"/><path d="M21 5h-7"/><path d="M8 10v4"/><path d="M8 12H3"/></svg>
+                </button>
+              </div>
+              <div class="chat-list" style="padding: 8px 16px;">
+                <div class="date-divider"><div class="dd-ln"></div><span class="tt">Сегодня</span><div class="dd-ln"></div></div>
+                <div class="chat-card mobile active">
+                  <div class="cc-backdrop"><div class="veil orange"></div><div class="face orange">М</div></div>
+                  <div class="cc-text with-face">
+                    <div class="cc-row1"><span class="status-dot" style="background: var(--c-success);"></span><span class="cc-title">Макет единого списка</span></div>
+                    <div class="cc-tags"><span class="tag-chip tag-blue"><span class="td"></span><span class="tn">Работа</span></span></div>
+                    <div class="cc-preview">Покажу панель при трёх ширинах…</div>
+                  </div>
+                </div>
+                <div class="chat-card mobile">
+                  <div class="cc-text">
+                    <div class="cc-row1">
+                      <span class="status-dot pulse" style="background: var(--c-accent);"></span>
+                      <span style="display: flex; flex-shrink: 0; color: var(--c-text-muted);"><svg class="ic" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.106-3.105c.32-.322.863-.22.983.218a6 6 0 0 1-8.259 7.057l-7.91 7.91a1 1 0 0 1-2.999-3l7.91-7.91a6 6 0 0 1 7.057-8.259c.438.12.54.662.219.984z"/></svg></span>
+                      <span class="cc-title">Сводка по клиентам Q3</span>
+                    </div>
+                    <div class="cc-tags">
+                      <span class="tag-chip tag-blue"><span class="td"></span><span class="tn">Работа</span></span>
+                      <span class="tag-chip tag-green"><span class="td"></span><span class="tn">Клиенты</span></span>
+                    </div>
+                    <div class="cc-task" style="color: var(--c-accent);"><span class="tool-spinner"></span><span class="lbl">Выполняется</span><span class="meta">2/5</span><span class="meta">сегодня</span></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="frame mobile-frame">
+            <div class="frame-caption"><span>шторка «Вид» — <b>ui/Modal</b> bottom-sheet</span></div>
+            <div class="sidebar" style="width: 100%; background: var(--c-overlay); padding-top: 60px; border: none;">
+              <div class="sheet">
+                <div class="sheet-grip"></div>
+                <div class="sheet-title">Вид списка</div>
+                <div class="sheet-sec">Группировка</div>
+                <div class="pill-switch fill">
+                  <div class="pill-thumb" style="left: 3px; width: calc(33.3% - 3px);"></div>
+                  <button class="active" style="min-height: 40px;"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/><path d="M8 14h.01"/><path d="M12 14h.01"/><path d="M16 14h.01"/><path d="M8 18h.01"/><path d="M12 18h.01"/><path d="M16 18h.01"/></svg>Дни</button>
+                  <button style="min-height: 40px;"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13.172 2a2 2 0 0 1 1.414.586l6.71 6.71a2.4 2.4 0 0 1 0 3.408l-4.592 4.592a2.4 2.4 0 0 1-3.408 0l-6.71-6.71A2 2 0 0 1 6 9.172V3a1 1 0 0 1 1-1z"/><path d="M2 7v6.172a2 2 0 0 0 .586 1.414l6.71 6.71a2.4 2.4 0 0 0 3.191.193"/><circle cx="10.5" cy="6.5" r=".5" fill="currentColor"/></svg>Теги</button>
+                  <button style="min-height: 40px;"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 5h.01"/><path d="M3 12h.01"/><path d="M3 19h.01"/><path d="M8 5h13"/><path d="M8 12h13"/><path d="M8 19h13"/></svg>Без</button>
+                </div>
+                <div class="sheet-sec">Сортировка</div>
+                <div class="pill-switch fill">
+                  <div class="pill-thumb" style="left: 3px; width: calc(50% - 3px);"></div>
+                  <button class="active" style="min-height: 40px;"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 16 4 4 4-4"/><path d="M7 20V4"/><path d="M11 4h10"/><path d="M11 8h7"/><path d="M11 12h4"/></svg>Новые сверху</button>
+                  <button style="min-height: 40px;"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 8 4-4 4 4"/><path d="M7 4v16"/><path d="M11 12h4"/><path d="M11 16h7"/><path d="M11 20h10"/></svg>Старые сверху</button>
+                </div>
+                <div class="sheet-sec">Структура</div>
+                <div class="sheet-row">
+                  <span class="sr-label">Иерархия (вложенные чаты)</span>
+                  <span class="toggle on"><span class="toggle-thumb"></span></span>
+                </div>
+                <button class="btn-done">Готово</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="note">
+          <b>Тач-ступень.</b> В строке остаются три жеста: создать (кнопка-текст flex, min-height 40), фильтры и «Вид» — <code>ui/IconButton lg</code> (40×40, радиус R.lg). Поиск — первой секцией шторки фильтров (как в проде): открыл → фокус уже в поле. Оси группировки/сортировки/иерархии — шторкой «Вид» <code>ui/Modal</code>: внутри <code>ui/PillSwitch fill</code> с isMobile-ступенью (min-height 40) и <code>ui/Toggle</code> в строке 48px. Карточки — мобильная ступень ChatCard: padding 14/16, радиус 16; действия — только у выбранной карточки (hover на тач недоступен).
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== СПЕЦИФИКАЦИЯ ===================== -->
+    <div class="mockup-section">
+      <div class="section-header">
+        <span class="section-title">Спецификация для реализации</span>
+        <span class="section-subtitle">ступени плотности, примитивы ui/, точки изменений в коде</span>
+      </div>
+      <div class="section-body">
+        <table class="spec-table">
+          <tr><th style="width: 150px;">Ступень панели</th><th style="width: 210px;">Ширина сайдбара (контент)</th><th>Тулбар (вариант А)</th></tr>
+          <tr><td><b>comfort</b></td><td>≥ ~400px (≥376px)</td><td>«+ Новый чат» текстом (Button primary sm), PillSwitch иконки+текст, IconButton md (32)</td></tr>
+          <tr><td><b>cozy</b> (дефолт 288)</td><td>260–399px (236–375)</td><td>«+» — иконочный квадрат 32 (Button primary sm, только Plus), PillSwitch <code>autoCompact</code> (активный текстом), IconButton sm (28). Занято ~258 из 264</td></tr>
+          <tr><td><b>compact</b> (минимум 220)</td><td>&lt;260px (&lt;236)</td><td>Деградация в В: PillSwitch → IconButton группировки (иконка = текущий режим), клик → ui/Menu; остальные 4 иконки sm. Занято ~160 из 204</td></tr>
+          <tr><td><b>мобила</b></td><td>≤600px (полная ширина)</td><td>«+ Новый чат» текстом flex (min-height 40), IconButton lg (40) фильтров и «Вид»; оси — шторкой ui/Modal</td></tr>
+        </table>
+
+        <table class="spec-table" style="margin-top: 16px;">
+          <tr><th style="width: 150px;">Рычаг</th><th style="width: 250px;">Примитив</th><th>Примечания</th></tr>
+          <tr><td>Новый чат</td><td><code>ui/Button</code> variant=primary / size=sm</td><td>Текстовая на comfort/мобиле; иконочный квадрат 32 (только Plus) на cozy/compact. Solid accent + shadow-button — единственный залитый элемент, акцент-дисциплина соблюдена (главное действие)</td></tr>
+          <tr><td>Поиск</td><td><code>ui/Field IconField</code> в поповере FilterBar</td><td><b>Не выносить из поповера</b> — остаётся как в проде; фокус в поле при открытии; бейдж скрытых учитывает поиск</td></tr>
+          <tr><td>Фильтры</td><td><code>ui/IconButton</code> + поповер FilterBar</td><td>Бейдж скрытых на кнопке (mono 10/700, onAccent на accent) — существующий стиль бейджа триггера</td></tr>
+          <tr><td>Группировка</td><td><code>ui/PillSwitch</code> (autoCompact)</td><td>Опции: Дни (CalendarDays) / Теги (Tags) / Без (List); иконки у всех сегментов — на comfort; на compact — IconButton с иконкой текущего режима + ui/Menu</td></tr>
+          <tr><td>Сортировка</td><td><code>ui/IconButton</code></td><td>ArrowDownWideNarrow ⇄ ArrowUpNarrowWide; title подсказывает текущий порядок; active-подсветка при не-дефолте («старые сверху»)</td></tr>
+          <tr><td>Иерархия</td><td><code>ui/IconButton</code> (active) / <code>ui/Toggle</code> в шторке</td><td>ListTree; active = accentMuted + accent (паттерн Pin на карточке)</td></tr>
+          <tr><td>Меню группировки (compact)</td><td><code>ui/Menu</code> + <code>ui/MenuItem</code> с галочкой</td><td>3 пункта Дни/Теги/Без; триггер — IconButton, чья иконка = активный режим</td></tr>
+          <tr><td>Карточка чата</td><td><code>ChatCard</code></td><td>Без изменений: теги, TaskStatusLine, PersonaBackdrop, hover-действия</td></tr>
+          <tr><td>Секции дней</td><td><code>ListDateDivider</code></td><td>+ секция «Закреплённые» (только при Группировка=Дни)</td></tr>
+          <tr><td>Секции тегов</td><td>заголовок из <code>SessionList.renderTagSectionHeader</code></td><td>Точка цвета, счётчик, ▲▼ порядок реестра</td></tr>
+          <tr><td>Дерево</td><td><code>ChatTreeRow</code></td><td>Геометрия без изменений: STEP 14 / GUTTER 20 (28 мобила) / elbowY 20 (23), кламп глубины 6</td></tr>
+        </table>
+
+        <table class="spec-table" style="margin-top: 16px;">
+          <tr><th style="width: 250px;">Точка в коде</th><th>Изменение против v1</th></tr>
+          <tr><td><code>components/SessionList.tsx</code></td><td>Блок «Новый чат» (dashed fullWidth) и FilterBar сливаются в один ряд-тулбар: Button primary sm + PillSwitch группировки + 3 IconButton; ветвление списка по осям — как в v1</td></tr>
+          <tr><td><code>components/FilterBar.tsx</code></td><td>Убрать <code>VIEW_OPTIONS</code> и текстовый триггер → IconButton-триггер; <b>поиск НЕ выносить</b> — остаётся первой секцией FilterContent (откат правки v1); +секция «Теги» (чипы реестра) — из v1 без изменений</td></tr>
+          <tr><td><code>lib/chatTree.ts</code>, <code>lib/chatGroups.ts</code></td><td>Без изменений против v1: объект вида <code>{ grouping, sortDir, hierarchy }</code>, миграция ключа <code>cc_chat_view:</code>, корни в секции по maxActivity, параметр sortDir</td></tr>
+        </table>
+
+        <div class="note">
+          <b>Инварианты, которые держим:</b> фильтр применяется ко всем узлам дерева («прокол» скрытых узлов — множество видимых чатов не зависит от вида, как в <code>buildChatTreeRows</code>); persistence осей — localStorage с префиксом <code>cc_</code> раздельно по областям ('global' и projectId); тёмная тема — только через токены; акцент <code>C.accent</code> — главное действие («+») и активные состояния (тумблеры, бейдж), не декор. <b>Анти-паттерн, от которого отказались:</b> поиск в тулбаре — редкий жест не должен облагать налогом каждый пиксель; «Новый чат» на всю ширину — главное действие не должно солировать целой строкой, если рядом есть место.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function toggleTheme() {
+      const html = document.documentElement;
+      const next = html.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+      html.setAttribute('data-theme', next);
+      document.getElementById('themeBtn').textContent = next === 'dark' ? 'Светлая тема' : 'Тёмная тема';
+    }
+    // Демо-переключение PillSwitch: пилюля едет к нажатому сегменту
+    document.querySelectorAll('.pill-switch').forEach(ps => {
+      const thumb = ps.querySelector('.pill-thumb');
+      const btns = [...ps.querySelectorAll('button')];
+      btns.forEach(b => b.addEventListener('click', () => {
+        btns.forEach(x => x.classList.remove('active'));
+        b.classList.add('active');
+        if (thumb) { thumb.style.left = b.offsetLeft + 'px'; thumb.style.width = b.offsetWidth + 'px'; }
+      }));
+    });
+    // Демо-тумблеры
+    document.querySelectorAll('.toggle').forEach(t => t.addEventListener('click', () => t.classList.toggle('on')));
+    // Демо иконок-тумблеров (иерархия/сортировка)
+    document.querySelectorAll('.icon-btn').forEach(b => b.addEventListener('click', () => {
+      if (b.closest('.toolbar')) b.classList.toggle('active');
+    }));
+  </script>
+</body>
+</html>
+</div>
+</body>
+</html>

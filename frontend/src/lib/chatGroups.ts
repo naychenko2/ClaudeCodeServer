@@ -1,5 +1,6 @@
 import type { ProjectTag, Session } from '../types';
 import { sortTagsByRegistry } from './tagRegistry';
+import type { ChatSortOrder } from './chatFilters';
 
 export interface ChatGroup {
   title: string;
@@ -39,9 +40,12 @@ export function dayGroupTitle(d: Date): string {
 // Группировка чатов для сайдбара: Закреплённые → Сегодня → Вчера → по дням.
 // Дни идут отдельными группами (а не общим «Ранее») — по разделителю видно,
 // какие чаты относятся к одной дате. Внутри группы — свежие сверху.
-export function groupChats(chats: Session[]): ChatGroup[] {
+// sortOrder='oldest': порядок секций и порядок внутри них обращается,
+// а секция «Закреплённые» всё равно остаётся первой (макет chat-unified-view).
+export function groupChats(chats: Session[], sortOrder: ChatSortOrder = 'newest'): ChatGroup[] {
+  const dir = sortOrder === 'oldest' ? 1 : -1;
   const byDate = [...chats].sort(
-    (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+    (a, b) => dir * (new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime())
   );
 
   const pinned = byDate.filter(c => c.isPinned);
@@ -53,7 +57,7 @@ export function groupChats(chats: Session[]): ChatGroup[] {
 
   const todayItems: Session[] = [];
   const yesterdayItems: Session[] = [];
-  // Дни старше вчерашнего — своей группой каждый; порядок вставки уже от свежих к старым
+  // Дни старше вчерашнего — своей группой каждый; порядок вставки уже в направлении sortOrder
   const earlierDays = new Map<number, Session[]>();
   for (const c of rest) {
     const d = startOfDay(new Date(c.updatedAt));
@@ -68,11 +72,20 @@ export function groupChats(chats: Session[]): ChatGroup[] {
 
   // Заголовки — общим dayGroupTitle (тот же текст, что у разделителей коммитов)
   const groups: ChatGroup[] = [];
+  const earlier = [...earlierDays].map(([d, items]) => ({ title: dayGroupTitle(new Date(d)), items }));
+  const todayGroup = { title: 'Сегодня', items: todayItems };
+  const yesterdayGroup = { title: dayGroupTitle(new Date(today - day)), items: yesterdayItems };
   if (pinned.length) groups.push({ title: 'Закреплённые', items: pinned });
-  if (todayItems.length) groups.push({ title: 'Сегодня', items: todayItems });
-  if (yesterdayItems.length)
-    groups.push({ title: dayGroupTitle(new Date(today - day)), items: yesterdayItems });
-  for (const [d, items] of earlierDays) groups.push({ title: dayGroupTitle(new Date(d)), items });
+  if (sortOrder === 'oldest') {
+    // Старые дни сверху → вчера → сегодня в самом низу
+    groups.push(...earlier);
+    if (yesterdayItems.length) groups.push(yesterdayGroup);
+    if (todayItems.length) groups.push(todayGroup);
+  } else {
+    if (todayItems.length) groups.push(todayGroup);
+    if (yesterdayItems.length) groups.push(yesterdayGroup);
+    groups.push(...earlier);
+  }
   return groups;
 }
 
@@ -81,10 +94,12 @@ export function groupChats(chats: Session[]): ChatGroup[] {
 // в конце — хвост «Без тегов». Чат с НЕСКОЛЬКИМИ тегами дублируется в каждой своей
 // секции — иначе из-под остальных его тегов он был бы не найти. Пустые секции
 // (тег реестра без единого чата) не рисуются.
-// Внутри секции — по свежести (updatedAt), как и в дневных группах.
-export function groupByTags(chats: Session[], registry: ProjectTag[]): TagChatGroup[] {
+// Внутри секции — по свежести (updatedAt) в направлении sortOrder; порядок секций
+// от sortOrder не зависит — он реестровый (ручной, ▲▼).
+export function groupByTags(chats: Session[], registry: ProjectTag[], sortOrder: ChatSortOrder = 'newest'): TagChatGroup[] {
+  const dir = sortOrder === 'oldest' ? 1 : -1;
   const sorted = [...chats].sort(
-    (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+    (a, b) => dir * (new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime())
   );
 
   // tag → чаты (ключ — имя как у чата; каноничный регистр берём из реестра при сборке)
@@ -122,4 +137,15 @@ export function groupByTags(chats: Session[], registry: ProjectTag[]): TagChatGr
 // Чипы тегов чата в порядке реестра (для карточки): реестровые по order, сироты в конец.
 export function chatTagsSorted(chat: Session, registry: ProjectTag[]): string[] {
   return sortTagsByRegistry(chat.tags ?? [], registry);
+}
+
+// Плоский список без группировки (groupBy='none'): закреплённые всегда первыми,
+// дальше — по свежести в направлении sortOrder.
+export function sortChatsFlat(chats: Session[], sortOrder: ChatSortOrder = 'newest'): Session[] {
+  const dir = sortOrder === 'oldest' ? 1 : -1;
+  return [...chats].sort((a, b) => {
+    const pin = Number(b.isPinned ?? false) - Number(a.isPinned ?? false);
+    if (pin !== 0) return pin;
+    return dir * (new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime());
+  });
 }

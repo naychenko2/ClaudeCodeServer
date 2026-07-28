@@ -106,6 +106,67 @@ public class CodeGraphServiceTests : IClassFixture<TestWebApplicationFactory>
         tracking.UpdateCalls.Should().Be(0);
     }
 
+    /// <summary>
+    /// Провайдер, заводящий узел на каждый полученный changedFile: показывает, какие файлы
+    /// инкремент реально донёс до графа.
+    /// </summary>
+    private sealed class FilesToNodesProvider : ICodeGraphProvider
+    {
+        public Task<CodeGraph> BuildAsync(string rootPath, CancellationToken ct)
+            => Task.FromResult(CodeGraph.Empty);
+
+        public Task<CodeGraph> UpdateAsync(string rootPath, IEnumerable<string> changedFiles, CancellationToken ct)
+        {
+            var nodes = new Dictionary<string, CodeGraphNode>();
+            foreach (var f in changedFiles)
+            {
+                var rel = Path.GetRelativePath(rootPath, f).Replace('\\', '/');
+                nodes[rel] = new CodeGraphNode
+                {
+                    Id = rel,
+                    Label = Path.GetFileNameWithoutExtension(f),
+                    FullyQualifiedName = rel,
+                    SourceFile = rel,
+                    SourceLocation = "L1",
+                    Kind = NodeKind.Class,
+                };
+            }
+            return Task.FromResult(new CodeGraph { Nodes = nodes, Edges = new List<CodeGraphEdge>() });
+        }
+    }
+
+    [Fact]
+    public async Task InvalidateIncremental_ОтсекаетМусорныеКаталоги()
+    {
+        var service = _factory.Services.GetRequiredService<CodeGraphService>();
+        service.RegisterProvider(".cs", new FilesToNodesProvider());
+
+        var dir = Path.Combine(_factory.TempDir, "cgraph_ignored_" + Guid.NewGuid().ToString("N")[..8]);
+        var worktree = Path.Combine(dir, ".claude", "worktrees", "x");
+        var src = Path.Combine(dir, "src");
+        Directory.CreateDirectory(worktree);
+        Directory.CreateDirectory(src);
+
+        var ignored = Path.Combine(worktree, "Foo.cs");
+        var normal = Path.Combine(src, "Bar.cs");
+        await File.WriteAllTextAsync(ignored, "public class Foo { }");
+        await File.WriteAllTextAsync(normal, "public class Bar { }");
+
+        // Watcher фильтрует по FileService.TreeExcludes (там нет .claude), поэтому файл из
+        // чужого worktree доходит сюда — отсечь его обязан сам сервис графа.
+        service.InvalidateIncremental(dir, new[] { ignored, normal });
+
+        // Ждём заметно дольше окна дебаунса (50мс в тестовой фабрике).
+        await Task.Delay(500);
+
+        var snapshot = await service.GetSnapshotAsync(dir, CancellationToken.None);
+        snapshot.Should().NotBeNull("инкремент по обычному файлу перестроил граф");
+        snapshot!.Nodes.Select(n => n.SourceFile).Should()
+            .Contain("src/Bar.cs", "файл вне мусорных каталогов идёт в граф")
+            .And.NotContain(p => p.Contains(".claude"),
+                "файлы из .claude/worktrees в граф не попадают — полная сборка их тоже не берёт");
+    }
+
     [Fact]
     public async Task StartRebuildIfIdle_НеПлодитКонкурентныеПостроения()
     {

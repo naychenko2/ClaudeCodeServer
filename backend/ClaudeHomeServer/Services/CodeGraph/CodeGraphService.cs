@@ -255,9 +255,17 @@ public sealed class CodeGraphService : IDisposable
     public void InvalidateIncremental(string rootPath, IEnumerable<string> changedFiles)
     {
         // Escape-гард (SafeJoin-аналог): файлы вне rootPath отсекаем на границе сервиса —
-        // ниже по цепочке провайдеры читают их с диска.
+        // ниже по цепочке провайдеры читают их с диска. Плюс отсекаем мусорные каталоги
+        // ТЕМ ЖЕ списком, которым идёт полное построение (CompilationBuilder.IgnoredDirectories):
+        // watcher фильтрует по FileService.TreeExcludes, где нет .claude/packages/TestResults,
+        // и инкремент заносил в граф то, что полная сборка только что вычистила (баг прода —
+        // узлы из .claude/worktrees/<ветка>/** с путями в файлы чужих веток).
         var files = changedFiles
-            .Where(f => IsInsideRoot(rootPath, f))
+            .Where(f => IsInsideRoot(rootPath, f)
+                && !CompilationBuilder.Rel(rootPath, f)
+                    .Split('/')
+                    .SkipLast(1)
+                    .Any(CompilationBuilder.IgnoredDirectories.Contains))
             .ToList();
         if (files.Count == 0) return;
 

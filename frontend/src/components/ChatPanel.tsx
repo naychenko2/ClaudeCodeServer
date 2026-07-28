@@ -28,7 +28,7 @@ import { EditSessionDialog } from './EditSessionDialog';
 import { C, R, SHADOW, CHAT_MAX_W } from '../lib/design';
 import { setChatContext, AI_RECOMPUTE_EVENT } from '../lib/ai/chatContext';
 import { ChatHeaderBar, type CostStats, type FalCostStats } from './chat/ChatHeaderBar';
-import { ChatProjectContext, FalCostContext, AssistantNameContext, PersonaContext } from './chat/contexts';
+import { ChatProjectContext, ChatOpenFileContext, FalCostContext, AssistantNameContext, PersonaContext } from './chat/contexts';
 import { WaitingIndicator } from './ui/WaitingIndicator';
 import { Modal, ModalActions } from './ui';
 import { ChatEmptyState } from './chat/EmptyState';
@@ -71,6 +71,11 @@ interface Props {
   headerIsland?: boolean;
 }
 
+// Предел одной загрузки — совпадает с RequestSizeLimit эндпоинта загрузки вложений
+const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
+const TOO_BIG_MSG = 'Файл больше 100 МБ — такой пока не загрузим';
+const UPLOAD_FAIL_MSG = 'Не удалось загрузить файл. Попробуйте ещё раз';
+
 // Фаза работы режима «План» — выводится из ленты, mode и isWaiting (сервер фазу не присылает)
 type PlanPhase = 'review' | 'executing' | 'done' | 'replanning' | 'planning' | 'idle' | null;
 
@@ -111,7 +116,7 @@ function derivePlanPhase(items: ChatItem[], mode: Mode, isWaiting: boolean): Pla
 }
 
 export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, attachedFiles, onAttachedFilesChange, artifactsOpen, onToggleArtifacts, greetingBubble, headerIsland }: Props) {
-  const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, workLoop: liveWorkLoop, promptSuggestion, pending, composerRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, compact, toggleThinking, noteCompanionSwitch, cancelPending } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
+  const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, workLoop: liveWorkLoop, promptSuggestion, pending, composerRestore, consumeRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, compact, toggleThinking, noteCompanionSwitch, cancelPending } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
   // Цикл «до готово» (флаг work-loop): live-состояние из событий work_loop,
   // до первого события — из Session.workLoop; null — цикл выключен
   const workLoopState = useMemo<WorkLoopState | null>(() => {
@@ -444,6 +449,14 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     } else if (switched) {
       setMode(session.mode);
     }
+    // Гасим разовую команду: к этому моменту её отработали оба владельца — Composer
+    // (текст/вложения) и этот эффект (режим). Порядок гарантирован React: passive-эффекты
+    // идут снизу вверх, поэтому эффект Composer как ребёнка выполняется раньше, а оба
+    // читают ЗАХВАЧЕННОЕ в своём рендере значение — гашение их не обкрадывает. Без него
+    // composerRestore жил бы в per-session сторе и подставлял уже отправленный текст
+    // при каждом возврате в чат. Перезапуск этого эффекта после гашения безвреден:
+    // r === null, switched === false → ветки не срабатывают.
+    if (r) consumeRestore();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.id, composerRestore?.seq]);
 
@@ -504,40 +517,34 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project, items, send, mode]);
 
-  // Загрузка вставленных/перетащенных картинок в проект → относительные пути в attachedFiles.
-  // Бэкенд по расширению отправит их claude как image-блоки base64.
-  const handleAttachImages = useCallback(async (files: File[]) => {
-    // Вне проекта файлы никуда не грузим — вложения недоступны
-    if (!project) return;
-    const dir = '.cc-attachments';
-    try { await api.files.mkdir(project.id, dir); } catch { /* папка уже есть */ }
-    const added: string[] = [];
-    for (const file of files) {
-      const extFromType = file.type === 'image/jpeg' ? '.jpg' : file.type === 'image/gif' ? '.gif'
-        : file.type === 'image/webp' ? '.webp' : '.png';
-      const ext = file.name.match(/\.[a-z0-9]+$/i)?.[0] ?? extFromType;
-      const unique = `paste-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`;
-      try {
-        await api.files.upload(project.id, new File([file], unique, { type: file.type }), dir);
-        added.push(`${dir}/${unique}`);
-      } catch { /* пропускаем неудачную загрузку */ }
-    }
-    if (added.length) onAttachedFilesChange([...attachedFiles, ...added]);
-  }, [project, attachedFiles, onAttachedFilesChange]);
-
-  // Загрузка файла с устройства для чата вне проекта — грузим в рабочую папку чата,
-  // относительный путь добавляем во вложения. Используется и кнопкой «прикрепить», и paste/drop.
+  // Загрузка файлов с устройства — один эндпоинт для обоих типов чата: сервер кладёт файл
+  // в рабочую папку сессии (для worktree-чата — в неё же, а не в корень проекта) и сам
+  // сохраняет оригинальное имя, уникальность даёт подпапка. Путь из ответа — во вложения.
   const chatFileInputRef = useRef<HTMLInputElement>(null);
   const handleChatUpload = useCallback(async (files: File[]) => {
     const added: string[] = [];
     for (const file of files) {
+      if (file.size > MAX_UPLOAD_BYTES) { showToast('Вложение', TOO_BIG_MSG); continue; }
       try {
         const { path } = await api.chats.uploadFile(session.id, file);
         added.push(path);
-      } catch { /* пропускаем неудачную загрузку */ }
+      } catch { showToast('Вложение', UPLOAD_FAIL_MSG); }
     }
     if (added.length) onAttachedFilesChange([...attachedFiles, ...added]);
   }, [session.id, attachedFiles, onAttachedFilesChange]);
+
+  // Единая точка загрузки с устройства (вставка, перетаскивание, кнопка пикера):
+  // гейт по зрению модели сужен до картинок — pdf и документы claude читает с диска
+  // и без поддержки image-блоков. Промис нужен пикеру: по нему живёт его индикатор загрузки
+  const handleComposerFiles = useCallback(async (files: File[]) => {
+    let list = files;
+    if (!caps.supportsImages) {
+      list = list.filter(f => !f.type.startsWith('image/'));
+      if (list.length < files.length) showToast('Вложение', 'Эта модель не понимает картинки — вложение пропущено');
+      if (!list.length) return;
+    }
+    await handleChatUpload(list);
+  }, [caps.supportsImages, handleChatUpload]);
 
   const handleHint = (hint: string) => {
     atBottomRef.current = true;
@@ -1158,7 +1165,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
           )
         )}
 
-        <FalCostContext.Provider value={falCostByRequest}><ChatProjectContext.Provider value={projectCtx}>{renderedItems}</ChatProjectContext.Provider></FalCostContext.Provider>
+        <FalCostContext.Provider value={falCostByRequest}><ChatProjectContext.Provider value={projectCtx}><ChatOpenFileContext.Provider value={onOpenFile ?? null}>{renderedItems}</ChatOpenFileContext.Provider></ChatProjectContext.Provider></FalCostContext.Provider>
 
         {online && showWaiting && (
           // Текст индикатора ставим по левому краю чата (как пузыри), а домик уезжает
@@ -1296,7 +1303,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
             planAvailable={caps.supportsPlanMode}
             attachments={attachedFiles}
             onRemoveAttachment={path => onAttachedFilesChange(attachedFiles.filter(p => p !== path))}
-            onAttachImages={!caps.supportsImages ? undefined : (project ? handleAttachImages : handleChatUpload)}
+            onAttachFiles={files => void handleComposerFiles(files)}
             isMobile={isMobile}
             skills={skills}
             personas={ctxPersonas}
@@ -1336,6 +1343,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
             attachedFiles.includes(path) ? attachedFiles.filter(p => p !== path) : [...attachedFiles, path]
           )}
           onClose={() => setShowAttachPicker(false)}
+          onUpload={handleComposerFiles}
         />
       )}
 

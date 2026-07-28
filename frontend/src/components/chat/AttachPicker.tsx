@@ -1,9 +1,11 @@
-import { useState, useEffect } from 'react';
-import { Check } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Check, Upload } from 'lucide-react';
 import type { FileEntry } from '../../types';
 import { api } from '../../lib/api';
-import { C, FONT, R, MODAL_W } from '../../lib/design';
-import { Modal } from '../ui';
+import { C, FONT, FS, R, SP, MODAL_W } from '../../lib/design';
+import { useIsMobile } from '../../lib/breakpoints';
+import { Button, Modal } from '../ui';
+import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 
 // Модальный пикер вложений
 interface AttachPickerProps {
@@ -11,12 +13,21 @@ interface AttachPickerProps {
   selected: string[];
   onToggle: (path: string) => void;
   onClose: () => void;
+  // Загрузка файлов с устройства (кнопка в шапке). Не задан — кнопки нет:
+  // пикер работает только по файлам проекта (так он открывается из карточки задачи)
+  onUpload?: (files: File[]) => Promise<void>;
 }
 
-export function AttachPicker({ projectId, selected, onToggle, onClose }: AttachPickerProps) {
+export function AttachPicker({ projectId, selected, onToggle, onClose, onUpload }: AttachPickerProps) {
   const [query, setQuery] = useState('');
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const isMobile = useIsMobile();
+  // Загрузка с устройства: пикер после неё НЕ закрываем — можно добавить ещё файлов,
+  // прикреплённое видно по счётчику «Выбрано» внизу
+  const uploadInputRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploaded, setUploaded] = useState(0);
 
   useEffect(() => {
     setLoading(true);
@@ -35,7 +46,44 @@ export function AttachPicker({ projectId, selected, onToggle, onClose }: AttachP
       onClose={onClose}
       cardStyle={{ maxHeight: '70vh' }}
     >
-      <div style={{ marginBottom: 8 }}>
+      {/* Загрузка с устройства — отдельной строкой над поиском: в одной строке с полем
+          кнопка с полной подписью съедала бы поиск (диалог всего MODAL_W.form шириной) */}
+      {onUpload && (
+        <div style={{ marginBottom: SP.sm, display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap' }}>
+          <input
+            ref={uploadInputRef}
+            type="file"
+            multiple
+            style={{ display: 'none' }}
+            onChange={async e => {
+              const picked = Array.from(e.target.files ?? []);
+              e.target.value = '';
+              if (!picked.length) return;
+              setUploading(true);
+              try { await onUpload(picked); setUploaded(picked.length); } finally { setUploading(false); }
+            }}
+          />
+          <Button
+            variant="ghost"
+            size={isMobile ? 'md' : 'sm'}
+            loading={uploading}
+            fullWidth={isMobile}
+            leftIcon={<Upload size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+            onClick={() => uploadInputRef.current?.click()}
+            style={{ flexShrink: 0, whiteSpace: 'nowrap' }}
+          >
+            {uploading ? 'Загружаем…' : 'Загрузить с устройства'}
+          </Button>
+          {/* Загруженное уходит в служебную папку вложений — в списке файлов проекта его нет,
+              поэтому подтверждаем словами, а не галочкой в списке */}
+          {uploaded > 0 && !uploading && (
+            <span style={{ fontSize: FS.sm, color: C.textMuted }}>
+              Прикреплено: {uploaded}
+            </span>
+          )}
+        </div>
+      )}
+      <div style={{ marginBottom: SP.sm }}>
         <input
           autoFocus
           value={query}
@@ -73,7 +121,7 @@ export function AttachPicker({ projectId, selected, onToggle, onClose }: AttachP
                 width: 14, height: 14, flexShrink: 0, borderRadius: 3, border: `1.5px solid ${isSelected ? C.accent : C.border}`,
                 background: isSelected ? C.accent : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center',
               }}>
-                {isSelected && <Check size={9} color="white" strokeWidth={3} style={{ flexShrink: 0 }} />}
+                {isSelected && <Check size={9} color={C.onAccent} strokeWidth={3} style={{ flexShrink: 0 }} />}
               </span>
               <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: FONT.mono }}>
                 {f.path}

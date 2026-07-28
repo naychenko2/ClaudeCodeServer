@@ -166,6 +166,20 @@ public class FileServiceTests : IDisposable
     }
 
     [Fact]
+    public void List_ПапкаВложенийЧата_СкрытаДажеСПоказомСкрытых()
+    {
+        // Вложения сообщений живут в рабочей папке, но это не файлы проекта:
+        // ни в списке, ни в дереве их быть не должно даже при showHidden
+        var att = Path.Combine(_root, FileService.AttachmentsDir, "abc123");
+        Directory.CreateDirectory(att);
+        File.WriteAllText(Path.Combine(att, "ТЗ.pdf"), "x");
+
+        _svc.List(_root, showHidden: true).Should().NotContain(e => e.Name == FileService.AttachmentsDir);
+        _svc.Tree(_root, showHidden: true).Should()
+            .NotContain(e => e.Path.StartsWith(FileService.AttachmentsDir, StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void List_NotesVirtual_ExpandsToEmptyAndNotDuplicated()
     {
         // Раскрытие несозданной notes/ — пустой список, не исключение

@@ -204,6 +204,77 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
         await act.Should().ThrowAsync<GitCommandException>();
     }
 
+    // ---------- Игнор вложений чата ----------
+
+    // Реальный кодовый проект приходит со своим .gitignore — дефолтный (с .cc-attachments/) ему
+    // не пишется, поэтому в тестах заменяем сгенерированный InitAsync на пользовательский
+    private async Task WithOwnGitignoreAsync()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_repo, ".gitignore"), "node_modules/\nbin/\n");
+        await _git.StageAllAsync(null, _repo);
+        await _git.CommitAsync(null, _repo, "свой .gitignore");
+    }
+
+    private async Task AddAttachmentAsync(string root)
+    {
+        var dir = Path.Combine(root, ".cc-attachments", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        await File.WriteAllTextAsync(Path.Combine(dir, "скриншот.png"), "фейковые байты");
+    }
+
+    [Fact]
+    public async Task Вложения_Игнорируются_В_Проекте_Со_Своим_Gitignore()
+    {
+        await WithOwnGitignoreAsync();
+        var ownGitignore = await File.ReadAllTextAsync(Path.Combine(_repo, ".gitignore"));
+
+        GitService.EnsureAttachmentsExcluded(_repo);
+        await AddAttachmentAsync(_repo);
+
+        // Рабочее дерево чистое: вложения не видно в статусе
+        var st = await _git.StatusAsync(null, _repo);
+        st.Untracked.Should().BeEmpty();
+        st.Unstaged.Should().BeEmpty();
+
+        // `git add -A` вложение не берёт
+        await _git.StageAllAsync(null, _repo);
+        (await _git.StatusAsync(null, _repo)).Staged.Should().BeEmpty();
+
+        // .gitignore пользователя не тронут
+        (await File.ReadAllTextAsync(Path.Combine(_repo, ".gitignore"))).Should().Be(ownGitignore);
+    }
+
+    [Fact]
+    public async Task Игнор_Вложений_Идемпотентен()
+    {
+        await WithOwnGitignoreAsync();
+
+        GitService.EnsureAttachmentsExcluded(_repo);
+        GitService.EnsureAttachmentsExcluded(_repo);
+        GitService.EnsureAttachmentsExcluded(_repo);
+
+        var exclude = await File.ReadAllTextAsync(Path.Combine(_repo, ".git", "info", "exclude"));
+        exclude.Split('\n').Count(l => l.Trim() == ".cc-attachments/").Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Игнор_Вложений_Действует_В_Worktree()
+    {
+        await WithOwnGitignoreAsync();
+        var wt = WtPath("attach");
+        await _git.WorktreeAddAsync(null, _repo, wt, "wt/вложения");
+
+        // Вложения кладутся в рабочую папку сессии — у worktree-чата это сам worktree
+        GitService.EnsureAttachmentsExcluded(wt);
+        await AddAttachmentAsync(wt);
+
+        var st = await _git.StatusAsync(null, wt);
+        st.IsWorktree.Should().BeTrue();
+        st.Untracked.Should().BeEmpty();
+
+        await _git.WorktreeRemoveAsync(null, _repo, wt);
+    }
+
     // ---------- Worktree ----------
 
     private string WtPath(string name) => Path.Combine(Path.GetTempPath(), "gitsvc_wt_" + name + "_" + Guid.NewGuid().ToString("N"));

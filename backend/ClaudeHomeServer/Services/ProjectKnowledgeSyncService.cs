@@ -73,7 +73,7 @@ public sealed class ProjectKnowledgeSyncService
             if (changedPaths is not null)
                 foreach (var p in changedPaths)
                 {
-                    var norm = Normalize(p);
+                    var norm = NormalizeHint(p);
                     if (norm.Length > 0) pending.Hints.Add(norm);
                 }
             if (pending.Timer is null)
@@ -112,7 +112,7 @@ public sealed class ProjectKnowledgeSyncService
         {
             var changed = await BootstrapDocsAsync(wk);
             var datasetId = wk.DifyDatasetId!;
-            var hints = (changedPaths ?? []).Select(Normalize).Where(p => p.Length > 0).ToList();
+            var hints = (changedPaths ?? []).Select(NormalizeHint).Where(p => p.Length > 0).ToList();
 
             foreach (var path in wk.Docs!.Keys.ToList())
             {
@@ -337,6 +337,15 @@ public sealed class ProjectKnowledgeSyncService
 
     private static string Normalize(string path) =>
         (path ?? "").Replace('\\', '/').Trim().TrimStart('/');
+
+    // Путь-хинт «что менялось» для детекта переноса: вложения чата (FileService.AttachmentsDir)
+    // отбрасываем — иначе документ базы знаний мог бы «переехать» на файл сообщения
+    private static string NormalizeHint(string path)
+    {
+        var norm = Normalize(path);
+        return norm.StartsWith(FileService.AttachmentsDir + "/", StringComparison.OrdinalIgnoreCase)
+            ? "" : norm;
+    }
 
     private static string Hash(string s) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(s)));

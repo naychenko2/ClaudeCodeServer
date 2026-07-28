@@ -30,12 +30,17 @@ public class FileService(
         catch { /* синк знаний best-effort */ }
     }
 
+    // Папка вложений чата в рабочей папке (файлы, загруженные в сообщение с компьютера).
+    // Служебная: исключена из дерева, ватчеров, дефолтного .gitignore и синка базы знаний.
+    public const string AttachmentsDir = ".cc-attachments";
+
     // Папки, которые не обходим при рекурсивном Tree (тяжёлые/нерелевантные для офлайна).
     // internal — переиспользуется FileWatcherService для фильтрации событий ФС.
     internal static readonly HashSet<string> TreeExcludes = new(StringComparer.OrdinalIgnoreCase)
     {
         ".git", "node_modules", "bin", "obj", "dist", "dev-dist",
         ".vs", ".idea", "publish", ".next", "target", ".cache",
+        AttachmentsDir,
     };
 
     // Предохранитель от патологически больших деревьев

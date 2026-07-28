@@ -6,15 +6,16 @@ using ClaudeHomeServer.Protocol;
 namespace ClaudeHomeServer.Services.Llm;
 
 // Настройки шумоподавления ватчера (из секции конфига FileWatcher). Дефолты покрывают
-// служебные каталоги инструментов (.omc, .claude), артефакты сборки и временные файлы,
-// чтобы командные ходы (OmO, workflow) не спамили ленту чата чужими изменениями.
+// служебные каталоги инструментов (.omc, .claude), вложения чата (FileService.AttachmentsDir),
+// артефакты сборки и временные файлы, чтобы командные ходы (OmO, workflow) не спамили ленту
+// чата чужими изменениями, а загрузка вложения не выглядела правкой файла проекта.
 public sealed record FileWatcherOptions(
     IReadOnlyList<string> IgnoreDirs,
     IReadOnlyList<string> IgnoreFilePatterns,
     bool RespectGitignore)
 {
     public static readonly FileWatcherOptions Default = new(
-        IgnoreDirs: [".git", ".omc", ".claude", "node_modules", "obj", "bin", "dist", ".vs", ".idea", ".playwright"],
+        IgnoreDirs: [".git", ".omc", ".claude", ".cc-attachments", "node_modules", "obj", "bin", "dist", ".vs", ".idea", ".playwright"],
         IgnoreFilePatterns: ["*~", "*.tmp", "*.tmp.*"],
         RespectGitignore: true);
 }

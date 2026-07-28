@@ -3,6 +3,7 @@ using System.Security.Claims;
 using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Git;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -12,7 +13,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/chats")]
-public class ChatsController(SessionManager sessions, FileService files) : ControllerBase
+public class ChatsController(SessionManager sessions, FileService files, ILogger<ChatsController> logger) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -213,12 +214,14 @@ public class ChatsController(SessionManager sessions, FileService files) : Contr
         return NoContent();
     }
 
-    // Загрузка вложения в рабочую папку чата (в подпапку .cc-attachments) → относительный путь
+    // Загрузка вложения в рабочую папку чата (в подпапку .cc-attachments) → относительный путь.
+    // Единый путь для обоих типов чата: у чата вне проекта папка — {дом}/Chats, у проектного —
+    // рабочая папка сессии (GetChatRoot), поэтому здесь GetOwned, а не OwnedChat.
     [HttpPost("{id}/files/upload")]
     [RequestSizeLimit(100 * 1024 * 1024)] // 100 МБ
     public async Task<IActionResult> Upload(string id, IFormFile? file = null)
     {
-        if (OwnedChat(id) is null) return NotFound();
+        if (sessions.GetOwned(id, UserId) is null) return NotFound();
         if (file == null || file.Length == 0)
             return BadRequest(new { error = "Файл не выбран или пустой" });
 
@@ -232,7 +235,12 @@ public class ChatsController(SessionManager sessions, FileService files) : Contr
 
         // Уникальность — через подпапку с GUID, чтобы сохранить оригинальное имя файла
         // (на плашке в чате показывается basename = оригинальное имя, и Claude видит его же)
-        var rel = $".cc-attachments/{Guid.NewGuid():N}/{safeName}";
+        var rel = $"{FileService.AttachmentsDir}/{Guid.NewGuid():N}/{safeName}";
+
+        // Вложения не должны светиться в git-статусе проекта и уезжать в историю по `git add -A`.
+        // Лениво, до записи файла: у проекта со своим .gitignore дефолтный игнор не создавался.
+        try { GitService.EnsureAttachmentsExcluded(root); }
+        catch (Exception ex) { logger.LogWarning(ex, "Не удалось записать игнор вложений для {Root}", root); }
 
         using var ms = new MemoryStream();
         await file.CopyToAsync(ms);

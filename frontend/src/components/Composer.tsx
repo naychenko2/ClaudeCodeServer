@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback, type CSSProperties } from 'react';
-import { AlertTriangle, Ban, ArrowUp, Check, ChevronDown, FolderGit2, Mic, Plus, RefreshCw, Users, WifiOff, X } from 'lucide-react';
-import { C, R, FONT, SHADOW, Z } from '../lib/design';
+import { AlertTriangle, Ban, ArrowUp, Check, ChevronDown, FolderGit2, Mic, Paperclip, Plus, RefreshCw, Users, WifiOff, X } from 'lucide-react';
+import { C, R, FS, FONT, SHADOW, Z } from '../lib/design';
 import { type RateWindow, RATE_COLORS, windowLabel, fmtReset } from '../lib/rateLimit';
 import { SkillsDropdown } from './SkillsDropdown';
 import { MentionsDropdown } from './MentionsDropdown';
@@ -37,8 +37,9 @@ export interface ComposerProps {
   planAvailable?: boolean;
   attachments: string[];
   onRemoveAttachment: (path: string) => void;
-  // Вставка/перетаскивание картинок (скриншоты) — File-объекты для загрузки и отправки
-  onAttachImages?: (files: File[]) => void;
+  // Вставка/перетаскивание любых файлов (скриншот, pdf, документ) — File-объекты
+  // для загрузки и отправки. Что делать с картинками у модели без зрения — решает родитель
+  onAttachFiles?: (files: File[]) => void;
   isMobile?: boolean;
   // Офлайн: показываем заглушку вместо полей, но НЕ размонтируем компонент —
   // иначе теряется набранный черновик при кратком пропадании сети
@@ -95,6 +96,14 @@ export interface ComposerProps {
 // Получить имя файла из пути
 function basename(filePath: string): string {
   return filePath.replace(/\\/g, '/').split('/').pop() ?? filePath;
+}
+
+// Длинное имя режем по середине, а не с конца: расширение должно остаться видно
+function middleEllipsis(name: string, max = 30): string {
+  if (name.length <= max) return name;
+  const head = Math.ceil((max - 1) / 2);
+  const tail = max - 1 - head;
+  return `${name.slice(0, head)}…${name.slice(name.length - tail)}`;
 }
 
 // Иконка файла по расширению
@@ -224,7 +233,7 @@ export function Composer({
   planAvailable = true,
   attachments,
   onRemoveAttachment,
-  onAttachImages,
+  onAttachFiles,
   isMobile,
   offline,
   skills = [],
@@ -286,22 +295,14 @@ export function Composer({
   // поэтому режим и текст не могут разойтись. Режим здесь НЕ восстанавливаем —
   // restore-mode целиком ставит ChatPanel (единый владелец, спора за setMode нет).
   // text=null — прерван авто/агентский ход, восстанавливать нечего: композер не трогаем.
-  // appliedSeqRef — вторая линия защиты от resurrect-текста: один и тот же seq не применяем
-  // дважды (сервер гасит snapshot, но при гонке событие может дойти повторно).
-  const appliedSeqRef = useRef(0);
-  // Composer переиспользуется без размонтирования между сессиями, а seq в composer_restore —
-  // per-session счётчик (стартует с 1 в каждом чате). При смене sessionId счётчик надо сбросить,
-  // иначе первый «Стоп» в новом чате совпадёт по seq с последним применённым в старом и тихо
-  // отфильтруется как «уже применённый».
-  const restoreSessionRef = useRef(sessionId);
+  // Защиты от повторного применения здесь нет и не нужно: команда разовая — ChatPanel гасит
+  // её в сторе сразу после того, как её отработали оба владельца (см. consumeComposerRestore),
+  // поэтому второй раз тот же restore до этого эффекта просто не доходит. Прежние ref-гарды
+  // (applied-seq со сбросом при смене чата) как раз и воскрешали текст: seq — per-session
+  // счётчик, сброс на переключении чата снимал фильтр с уже применённой команды.
   useEffect(() => {
-    if (restoreSessionRef.current !== sessionId) {
-      restoreSessionRef.current = sessionId;
-      appliedSeqRef.current = 0;
-    }
     const r = restore;
     if (!r || r.seq === 0) return;
-    if (r.seq === appliedSeqRef.current) return;
     if (getDraft(sessionId).trim()) return;          // черновик важнее
     if (r.text == null) return;                      // нечего восстанавливать
     setText(r.text);
@@ -309,7 +310,6 @@ export function Composer({
       onReplaceAttachments(r.attachedPaths);
     }
     textareaRef.current?.focus();
-    appliedSeqRef.current = r.seq;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [restore?.seq, sessionId]);
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
@@ -510,28 +510,30 @@ export function Composer({
     resetInput();
   };
 
-  // Вставка картинки из буфера (скриншот) → отдаём File-объекты родителю на загрузку
+  // Вставка файла из буфера (скриншот, документ) → отдаём File-объекты родителю на загрузку.
+  // Копирование обычного текста тоже кладёт записи в items, поэтому берём только kind==='file'
+  // и не гасим событие, если файлов нет — иначе сломалась бы вставка текста
   const handlePaste = (e: React.ClipboardEvent) => {
-    if (!onAttachImages) return;
+    if (!onAttachFiles) return;
     const files: File[] = [];
     for (const item of Array.from(e.clipboardData.items)) {
-      if (item.kind === 'file' && item.type.startsWith('image/')) {
+      if (item.kind === 'file') {
         const f = item.getAsFile();
         if (f) files.push(f);
       }
     }
-    if (files.length) { e.preventDefault(); onAttachImages(files); }
+    if (files.length) { e.preventDefault(); onAttachFiles(files); }
   };
 
   const handleDrop = (e: React.DragEvent) => {
-    if (!onAttachImages) return;
-    const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/'));
+    if (!onAttachFiles) return;
+    const files = Array.from(e.dataTransfer.files);
     setDragOver(false);
-    if (files.length) { e.preventDefault(); onAttachImages(files); }
+    if (files.length) { e.preventDefault(); onAttachFiles(files); }
   };
 
   const handleDragOver = (e: React.DragEvent) => {
-    if (!onAttachImages) return;
+    if (!onAttachFiles) return;
     if (Array.from(e.dataTransfer.types).includes('Files')) { e.preventDefault(); setDragOver(true); }
   };
 
@@ -1028,7 +1030,15 @@ export function Composer({
   }
 
   return (
-    <div>
+    // Приём файла ловит вся обёртка, а не только белая карточка: полоса контролов под
+    // ней визуально часть композера, и промах по ней иначе открывал бы файл в браузере
+    // (SPA перезагрузилась бы вместе с черновиком). Оверлей-подсказку рисует карточка.
+    // dragleave от детей игнорируем по relatedTarget — иначе подсказка мигает при движении
+    <div
+      onDrop={handleDrop}
+      onDragOver={handleDragOver}
+      onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragOver(false); }}
+    >
       {/* Раскрывашка «Обсудить с командой» — над полем композера */}
       {canDiscuss && (
         <TeamDrawer
@@ -1050,7 +1060,20 @@ export function Composer({
             : undefined}
         />
       )}
-    <div style={containerStyle} onDrop={handleDrop} onDragOver={handleDragOver} onDragLeave={() => setDragOver(false)}>
+    <div style={containerStyle}>
+      {/* Перетаскивание файла над композером: подсказка поверх карточки.
+          pointerEvents:none — иначе слой перехватил бы drop у самой карточки */}
+      {dragOver && (
+        <div style={{
+          position: 'absolute', inset: 0, zIndex: 4, pointerEvents: 'none',
+          borderRadius: R.xxl, background: C.accentLight,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+          color: C.textHeading, fontSize: FS.base, fontWeight: 600, textAlign: 'center', padding: '0 12px',
+        }}>
+          <Paperclip size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0, color: C.accent }} />
+          Отпустите — прикрепим к сообщению
+        </div>
+      )}
       {/* Полоска-индикатор лимита подписки по кромке карточки (warn/danger) */}
       {rateWindow && rateWindow.level !== 'normal' && <RateStripe w={rateWindow} isMobile={isMobile} />}
       {/* Dropdown скиллов (показывается над полем ввода при /query) */}
@@ -1103,8 +1126,8 @@ export function Composer({
                 }}
               >
                 <FileIcon name={name} />
-                <span style={{ maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {name}
+                <span title={name} style={{ maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {middleEllipsis(name, isMobile ? 22 : 30)}
                 </span>
                 <button
                   onClick={() => onRemoveAttachment(filePath)}

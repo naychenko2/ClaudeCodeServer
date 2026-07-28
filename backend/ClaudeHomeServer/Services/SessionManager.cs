@@ -367,6 +367,16 @@ public class SessionManager : IDisposable
     private WidgetsMcpContext? BuildWidgetsContext(string? ownerId) =>
         ownerId is not null ? new WidgetsMcpContext() : null;
 
+    // Контекст MCP-сервера графа кода: инструменты codegraph_* доступны только в чате проекта —
+    // граф ключуется проектом (в чате вне проекта искать нечего). Тот же сервисный токен
+    // владельца, что у tasks/notes; владение проектом дополнительно проверяет CodeGraphController.
+    private CodeGraphMcpContext? BuildCodeGraphContext(string? ownerId, string? projectId, string sessionId)
+    {
+        if (ownerId is null || string.IsNullOrEmpty(projectId)) return null;
+        var token = GetServiceToken(ownerId);
+        return new CodeGraphMcpContext(ResolveTasksApiUrl(ownerId), token, projectId, sessionId);
+    }
+
     // Контекст MCP-сервера памяти персоны (тот же сервисный токен владельца, что и tasks/notes).
     // projectId — только у проектных персон (③-3.4: даёт доступ к team_memory_* команды).
     private MemoryMcpContext BuildMemoryContext(string ownerId, string personaId, string? projectId)
@@ -619,13 +629,17 @@ public class SessionManager : IDisposable
     public IReadOnlyCollection<Session> GetAll() =>
         _sessions.Values.Select(e => e.Info).ToList();
 
-    // Рабочая папка чата, принадлежащего пользователю (для загрузки вложений).
-    // null — если это не project-less чат данного владельца.
+    // Рабочая папка чата, принадлежащего пользователю (для загрузки вложений): у чата вне
+    // проекта — {дом}/Chats, у проектного — рабочая папка сессии (worktree, иначе корень
+    // проекта), чтобы Claude нашёл вложение по относительному пути из своего cwd.
+    // null — чужая/несуществующая сессия либо папку определить не удалось.
     public string? GetChatRoot(string sessionId, string ownerId)
     {
         var s = GetById(sessionId);
-        if (s is null || s.ProjectId is not null || s.OwnerId != ownerId) return null;
-        return ResolveChatRoot(ownerId);
+        if (s is null || ResolveOwnerId(s) != ownerId) return null;
+        if (s.ProjectId is null) return ResolveChatRoot(ownerId);
+        var root = _projects.GetById(s.ProjectId)?.RootPath;
+        return root is null ? null : EffectiveRoot(s, root);
     }
 
     // Рабочая папка чата вне проекта: {домашняя папка владельца}/Chats (создаётся при отсутствии)
@@ -1618,7 +1632,8 @@ public class SessionManager : IDisposable
             PersonaAgentsProvider: BuildPersonaAgentsProvider(ownerId, session),
             Launcher: _launchers.ForOwner(ownerId),
             ModulesMcp: BuildModulesContext(ownerId),
-            WidgetsMcp: BuildWidgetsContext(ownerId)));
+            WidgetsMcp: BuildWidgetsContext(ownerId),
+            CodeGraphMcp: BuildCodeGraphContext(ownerId, session.ProjectId, session.Id)));
         entry.Process = adapter;
 
         await adapter.StartAsync();
@@ -2222,7 +2237,9 @@ public class SessionManager : IDisposable
                 PersonaAgentsProvider: BuildPersonaAgentsProvider(entry.Info.OwnerId, entry.Info),
                 Launcher: _launchers.ForOwner(entry.Info.OwnerId),
                 ModulesMcp: BuildModulesContext(entry.Info.OwnerId),
-                WidgetsMcp: BuildWidgetsContext(entry.Info.OwnerId));
+                WidgetsMcp: BuildWidgetsContext(entry.Info.OwnerId),
+                // Чат вне проекта — графа кода нет (он ключуется проектом)
+                CodeGraphMcp: null);
         }
         else
         {
@@ -2250,7 +2267,8 @@ public class SessionManager : IDisposable
                 PersonaAgentsProvider: BuildPersonaAgentsProvider(project.OwnerId, entry.Info),
                 Launcher: _launchers.ForOwner(project.OwnerId),
                 ModulesMcp: BuildModulesContext(project.OwnerId),
-                WidgetsMcp: BuildWidgetsContext(project.OwnerId));
+                WidgetsMcp: BuildWidgetsContext(project.OwnerId),
+                CodeGraphMcp: BuildCodeGraphContext(project.OwnerId, project.Id, entry.Info.Id));
         }
         var adapter = _adapters.Create(entry.Info, context);
         entry.Process = adapter;

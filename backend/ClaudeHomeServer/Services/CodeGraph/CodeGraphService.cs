@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using ClaudeHomeServer.Services.CodeGraph.Core;
+using ClaudeHomeServer.Services.CodeGraph.Roslyn;
 using Microsoft.Extensions.Configuration;
 
 namespace ClaudeHomeServer.Services.CodeGraph;
@@ -111,6 +112,8 @@ public sealed class CodeGraphService : IDisposable
     /// <summary>
     /// Граф устарел: хотя бы один .cs-файл проекта изменён позже BuiltAt.
     /// Дёшево по mtime; при отсутствии BuiltAt (старый снимок) считаем устаревшим.
+    /// Обход — тот же, что у построения (EnumerateCsFiles минует .claude/bin/obj/node_modules…):
+    /// иначе stat шёл бы по мусорным .cs (на ClaudeCodeServer это 7878 файлов и ~40с на GET).
     /// </summary>
     private static bool IsStale(string rootPath, DateTimeOffset builtAt)
     {
@@ -119,7 +122,7 @@ public sealed class CodeGraphService : IDisposable
             if (!Directory.Exists(rootPath)) return false;
             if (builtAt == DateTimeOffset.MinValue) return true;
 
-            var newest = Directory.EnumerateFiles(rootPath, "*.cs", SearchOption.AllDirectories)
+            var newest = CompilationBuilder.EnumerateCsFiles(rootPath)
                 .Select(f => { try { return new FileInfo(f).LastWriteTimeUtc; } catch { return DateTime.MinValue; } })
                 .DefaultIfEmpty(DateTime.MinValue)
                 .Max();

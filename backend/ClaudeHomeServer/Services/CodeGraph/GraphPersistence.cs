@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using ClaudeHomeServer.Services.CodeGraph.Core;
+using ClaudeHomeServer.Services.CodeGraph.Roslyn;
 
 namespace ClaudeHomeServer.Services.CodeGraph;
 
@@ -168,13 +169,15 @@ public sealed class GraphPersistence
     /// <summary>
     /// Посчитать исходные файлы (.cs и прочие поддержанные расширения) в проекте.
     /// Дёшево, для metadata REST; ошибки подсчёта не роняют сохранение.
+    /// Обход — тот же, что у построения (EnumerateCsFiles минует .claude/bin/obj/node_modules…):
+    /// считаем код проекта, а не мусор, и не платим полным обходом дерева на каждом SaveAsync.
     /// </summary>
     private static int CountSourceFiles(string rootPath)
     {
         try
         {
             if (!Directory.Exists(rootPath)) return 0;
-            return Directory.EnumerateFiles(rootPath, "*.cs", SearchOption.AllDirectories).Count();
+            return CompilationBuilder.EnumerateCsFiles(rootPath).Count();
         }
         catch
         {

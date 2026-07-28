@@ -1,16 +1,17 @@
 import { useMemo, useState } from 'react';
-import { FilterX } from 'lucide-react';
+import { FilterX, MessageCircle, Plus } from 'lucide-react';
 import type { Session } from '../types';
 import { api } from '../lib/api';
 import { useOnline } from '../hooks/useOnline';
 import { EditSessionDialog } from './EditSessionDialog';
 import { C, FS, MODAL_W } from '../lib/design';
-import { Modal, ModalActions } from './ui';
+import { Modal, ModalActions, Button } from './ui';
 import { groupChats, sortChatsFlat } from '../lib/chatGroups';
 import { usePersonas, usePersonasVersion } from '../lib/personas';
 import { ChatFilterResetActions } from './FilterBar';
 import { ChatListToolbar } from './ChatListToolbar';
 import { EmptyState } from './ui';
+import { ICON_SIZE } from './ui/icons';
 import { useChatFilters, useSanitizePersonaFilter, matchChatFilter, isDefaultFilters, defaultChatFiltersKeepingView, buildHiddenReason, type ChatGroupBy } from '../lib/chatFilters';
 import { buildChatTreeRows, splitChatTreeByRoots, useTreeCollapse } from '../lib/chatTree';
 import { useLastMechanicVersion } from '../lib/lastMechanic';
@@ -159,9 +160,21 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
 
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', margin: '0 -4px', padding: '0 4px' }}>
         {chats.length === 0 && (
-          <div style={{ padding: '24px 8px', textAlign: 'center', color: C.textMuted, fontSize: 13 }}>
-            Пока нет чатов. Начните новый.
-          </div>
+          <EmptyState
+            compact={!isMobile}
+            icon={<MessageCircle size={isMobile ? ICON_SIZE.xl : ICON_SIZE.lg} strokeWidth={2} />}
+            title="Здесь будут ваши чаты"
+            subtitle="Создавайте чаты с AI и персонами для личных тем, идей и задач."
+            action={
+              <Button
+                variant="primary" size="md" loading={creating}
+                onClick={onNew}
+                leftIcon={<Plus size={ICON_SIZE.sm} strokeWidth={2} />}
+              >
+                Создать первый чат
+              </Button>
+            }
+          />
         )}
         {(tree ? tree.rows.length === 0 : filteredChats.length === 0) && chats.length > 0 && (
           <EmptyState

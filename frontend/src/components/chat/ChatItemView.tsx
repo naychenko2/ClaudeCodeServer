@@ -645,7 +645,7 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       if (!turnBoundaryKind) return null;
       const entered = turnBoundaryKind === 'entered';
       // Нейтральное время: разделитель — отметка о прошедшем событии истории, а не
-      // индикатор текущего состояния (тем занят бейдж композера, см. Composer.turnTree)
+      // индикатор текущего состояния (тем занят git-бар, см. ProjectGitBar.turnTree)
       const title = entered
         ? `Дерево агента: ${item.turnWorktree!.path}`
         : (project ? `Корень проекта: ${project.rootPath}` : 'Ход вернулся в корень проекта');

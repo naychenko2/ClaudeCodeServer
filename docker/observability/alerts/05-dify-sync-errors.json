@@ -1,0 +1,46 @@
+{
+  "alert": "Сбой синхронизации знаний",
+  "alertType": "METRIC_BASED_ALERT",
+  "ruleType": "threshold_rule",
+  "description": "Файлы проектов перестают доезжать до датасетов Dify. Незаметно до тех пор, пока поиск по знаниям не начнёт отвечать по устаревшим документам.",
+  "evalWindow": "15m",
+  "frequency": "10m",
+  "labels": { "severity": "warning" },
+  "annotations": {
+    "description": "За 15 минут больше трёх сбоев синхронизации с Dify. Разрез reason: 401 — протух ключ, 429 — лимиты, timeout — Dify не отвечает.",
+    "summary": "Знания не синхронизируются"
+  },
+  "preferredChannels": ["ccs-alerts-email"],
+  "condition": {
+    "selectedQueryName": "A",
+    "op": "above",
+    "matchType": "at_least_once",
+    "target": 3,
+    "compositeQuery": {
+      "queryType": "builder",
+      "panelType": "graph",
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "metrics",
+            "disabled": false,
+            "aggregations": [
+              {
+                "metricName": "ccs.dify.sync.errors",
+                "temporality": "Cumulative",
+                "timeAggregation": "increase",
+                "spaceAggregation": "sum"
+              }
+            ],
+            "groupBy": [
+              { "name": "deployment.environment", "fieldDataType": "string" },
+              { "name": "reason", "fieldDataType": "string" }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "alert": "Пульс телеметрии пропал",
+  "alertType": "METRIC_BASED_ALERT",
+  "ruleType": "threshold_rule",
+  "description": "Инстанс перестал слать телеметрию: упал, завис или не стартовал. Единственный алерт, который дублируется на почту — push отправлять было бы некому.",
+  "evalWindow": "15m",
+  "frequency": "5m",
+  "labels": { "severity": "critical" },
+  "annotations": {
+    "description": "От инстанса нет ни одной точки телеметрии больше 15 минут. Проверь, запущен ли процесс и открывается ли интерфейс.",
+    "summary": "Инстанс молчит"
+  },
+  "preferredChannels": ["ccs-alerts-email"],
+  "condition": {
+    "selectedQueryName": "A",
+    "op": "below",
+    "matchType": "at_least_once",
+    "target": 1,
+    "alertOnAbsent": true,
+    "absentFor": 15,
+    "compositeQuery": {
+      "queryType": "builder",
+      "panelType": "graph",
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "metrics",
+            "disabled": false,
+            "aggregations": [
+              {
+                "metricName": "ccs.telemetry.heartbeat",
+                "temporality": "Cumulative",
+                "timeAggregation": "increase",
+                "spaceAggregation": "sum"
+              }
+            ],
+            "groupBy": [ { "name": "deployment.environment", "fieldDataType": "string" } ]
+          }
+        }
+      ]
+    }
+  }
+}

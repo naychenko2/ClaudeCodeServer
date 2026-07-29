@@ -206,8 +206,10 @@ export function CodeGraphOverviewCanvas({ scene, layout, animKey, onItemClick, o
         </g>
 
         {/* Рёбра-пучки: агрегированы между элементами, толщина — по логарифму веса.
-            Обратные (нарушение слоистости — источник ниже приёмника) — пунктир C.warning */}
-        <g>
+            Обратные (нарушение слоистости — источник ниже приёмника) — пунктир C.warning.
+            pointerEvents="none": иначе пучок, проходящий через центр узла, перехватывает
+            клик — путь имеет собственную геометрию, а прозрачный hit-target узла под ним */}
+        <g pointerEvents="none">
           {scene.bundles.map((b, i) => {
             const a = layout.positions.get(b.fromKey);
             const c = layout.positions.get(b.toKey);
@@ -236,9 +238,16 @@ export function CodeGraphOverviewCanvas({ scene, layout, animKey, onItemClick, o
             const ring = it.kind === 'node' ? KIND_RING[it.node!.kind] : soft ? C.dashed : C.textSecondary;
             return (
               <g key={it.key} transform={`translate(${p.x.toFixed(1)},${p.y.toFixed(1)})`}
-                style={{ cursor: it.kind === 'rest' || it.kind === 'small' ? 'default' : 'pointer' }}
-                onClick={ev => { ev.stopPropagation(); onItemClick(it); }}
-                onDoubleClick={ev => { ev.stopPropagation(); onItemDblClick(it); }}>
+                style={{ cursor: soft ? 'default' : 'pointer' }}>
+                {/* Прозрачный hit-target (как в «Фокусе»): у <g> нет своей геометрии, а у
+                    видимых потомков pointerEvents="none" — без этого круга клик по узлу
+                    уходил насквозь до пучка связи позади. Заглушкам rest/small hit-target
+                    не нужен: кликом они не управляются намеренно */}
+                {!soft && (
+                  <circle r={Math.max(p.r + 10, 20)} fill="transparent"
+                    onClick={ev => { ev.stopPropagation(); onItemClick(it); }}
+                    onDoubleClick={ev => { ev.stopPropagation(); onItemDblClick(it); }} />
+                )}
                 {it.godCount > 0 && (
                   <circle r={p.r + 6} fill="none" stroke={C.accent} strokeWidth={2}
                     strokeDasharray="3 3" opacity={0.5} pointerEvents="none" />

@@ -120,6 +120,7 @@ export interface DocEntry {
   modified: string;         // ISO
   size: number;
   headings: DocHeading[];
+  binary?: boolean;         // файл без текста — открывается только в центре
 }
 
 export interface DocBacklink {
@@ -131,9 +132,10 @@ export interface DocBacklink {
 export interface DocDetail {
   path: string;
   title: string;
-  content: string;          // исходный markdown
+  content: string;          // исходный markdown; у бинарного пусто
   links: DocLink[];
   backlinks: DocBacklink[];
+  binary?: boolean;         // pdf/visio/картинка/звук — превью не покажет, только центр
 }
 
 export interface DocSearchHit {
@@ -162,7 +164,16 @@ export interface DocRootFileCandidate {
 export interface DocsScope {
   folders: string[];
   rootFiles: string[];       // имена файлов в корне проекта, без путей
-  extensions: string[];      // с точкой и в нижнем регистре: ".md"
+  types: string[];           // ключи групп типов: "markdown", "pdf", "visio"…
+}
+
+// Группа типов файлов. text=false — файл без текста (pdf, visio, картинка, звук):
+// он числится в списке, но открывается только в центральной области
+export interface DocTypeGroup {
+  key: string;
+  title: string;
+  extensions: string[];
+  text: boolean;
 }
 
 // Настройка области: что выбрано, что можно выбрать и что было бы по умолчанию
@@ -170,7 +181,7 @@ export interface DocsScopeInfo {
   selected: DocsScope;
   folderCandidates: DocFolderCandidate[];
   rootFileCandidates: DocRootFileCandidate[];
-  supportedExtensions: string[];   // всё, что панель умеет показывать
+  typeGroups: DocTypeGroup[];      // всё, что продукт умеет открыть
   defaults: DocsScope;
 }
 

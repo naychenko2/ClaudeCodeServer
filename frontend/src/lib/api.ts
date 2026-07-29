@@ -985,7 +985,7 @@ export const api = {
         body: JSON.stringify({
           folders: scope.folders ?? null,
           rootFiles: scope.rootFiles ?? null,
-          extensions: scope.extensions ?? null,
+          types: scope.types ?? null,
         }),
       }),
   },

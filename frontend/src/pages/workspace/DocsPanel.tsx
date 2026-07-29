@@ -9,8 +9,8 @@
 // «развернуть» в центральной области (тот же FileViewer, что и для остальных файлов).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronDown, ChevronRight, CornerUpRight, Link2, List, Maximize2, MessageSquarePlus, PanelBottom, Pin, ScrollText, Search, SlidersHorizontal, X } from 'lucide-react';
-import type { Project, DocEntry, DocDetail, DocSearchHit, DocsScope } from '../../types';
+import { ChevronDown, ChevronRight, CornerUpRight, FileQuestion, Link2, List, Maximize2, MessageSquarePlus, PanelBottom, Pin, ScrollText, Search, SlidersHorizontal, X } from 'lucide-react';
+import type { Project, DocEntry, DocDetail, DocSearchHit } from '../../types';
 import { api } from '../../lib/api';
 import { onFilesChanged } from '../../lib/signalr';
 import { C, FONT, FS, R, SHADOW, SP } from '../../lib/design';
@@ -57,10 +57,10 @@ const FOLDERS_H_DEFAULT = 110;
 const FOLDERS_H_MIN = ROW_H * 2;
 const FOLDERS_H_MAX = 400;
 
-// Расширения, по которым панель узнаёт документ, пока не спросила настройку области
-// у сервера. Список там же и живёт (DocsIndexService.SupportedExtensions) — здесь он
-// нужен только до первого открытия диалога, чтобы решить, перечитывать ли индекс
-const DEFAULT_DOC_EXTS = ['.md', '.markdown', '.mdx', '.txt', '.rst'];
+// Расширения дефолтной области (группа «Markdown»), по которым панель узнаёт документ,
+// пока не спросила настройку у сервера. Полный каталог живёт там (DocsIndexService.
+// TypeGroups) — здесь нужно лишь решить, перечитывать ли индекс после правок на диске
+const DEFAULT_DOC_EXTS = ['.md'];
 
 // Папка пути («docs/adr/x.md» → «docs/adr»); файл в корне — пустая строка
 function folderOf(path: string): string {
@@ -108,7 +108,9 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
   // Область документации (папки, файлы корня, типы). null — панель её не спрашивала:
   // диалог грузит настройку сам, а до его открытия хватает эвристики по индексу
   // (см. isDocPath ниже)
-  const [scope, setScope] = useState<DocsScope | null>(null);
+  // Хранится с уже раскрытыми расширениями: настройка ходит группами, а решение
+  // «наш ли это файл» принимается по расширению
+  const [scope, setScope] = useState<{ folders: string[]; rootFiles: string[]; exts: string[] } | null>(null);
   const [scopeOpen, setScopeOpen] = useState(false);
   // Список папок — то же, что оглавление для документа, только для самого списка:
   // групп до десятка, а документов десятки, и мотать до нужной надоедает
@@ -181,7 +183,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
     if (scope) {
       // Файл корня — только поимённо: там же лежит код, и расширение ни о чём не говорит
       if (!p.includes('/')) return scope.rootFiles.some(f => f.toLowerCase() === lower);
-      return scope.extensions.some(e => lower.endsWith(e))
+      return scope.exts.some(e => lower.endsWith(e))
         && scope.folders.some(f => lower.startsWith(`${f.toLowerCase()}/`));
     }
     // Настройки ещё не спрашивали: судим по текущему корпусу — тот же тип файла
@@ -384,7 +386,14 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
     <DocsScopeDialog
       projectId={project.id}
       onClose={() => setScopeOpen(false)}
-      onSaved={info => { setScope(info.selected); loadIndex(); }}
+      onSaved={info => {
+        setScope({
+          folders: info.selected.folders,
+          rootFiles: info.selected.rootFiles,
+          exts: info.typeGroups.filter(g => info.selected.types.includes(g.key)).flatMap(g => g.extensions),
+        });
+        loadIndex();
+      }}
     />
   );
 
@@ -687,7 +696,18 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
             <div ref={contentRef} style={{ flex: 1, overflowY: 'auto', padding: `${SP.md}px ${SP.md}px ${SP.xl}px` }}>
               {error && <div style={emptyStyle}>{error}</div>}
               {!doc && !error && <div style={emptyStyle}>Выберите документ в списке</div>}
-              {doc && <MarkdownViewer content={doc.content} onDocLink={handleDocLink} />}
+              {/* Файл без текста рендерить нечем — зато в центре его ждёт готовый
+                  просмотрщик (pdf.js, OnlyOffice, картинки, плеер) */}
+              {doc?.binary && (
+                <div style={emptyStyle}>
+                  <FileQuestion size={20} strokeWidth={ICON_STROKE} style={{ opacity: 0.5, marginBottom: SP.sm }} />
+                  <div style={{ marginBottom: SP.md }}>Этот файл показывается только целиком</div>
+                  <Button variant="ghost" size="sm" onClick={() => onOpenFile(doc.path)}>
+                    Открыть в центре
+                  </Button>
+                </div>
+              )}
+              {doc && !doc.binary && <MarkdownViewer content={doc.content} onDocLink={handleDocLink} />}
             </div>
 
             {/* Обратные ссылки: кто в документации ведёт на этот документ */}

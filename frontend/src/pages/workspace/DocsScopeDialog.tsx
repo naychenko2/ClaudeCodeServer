@@ -84,7 +84,7 @@ export function DocsScopeDialog({ projectId, onClose, onSaved }: Props) {
   const [info, setInfo] = useState<DocsScopeInfo | null>(null);
   const [folders, setFolders] = useState<string[]>([]);
   const [rootFiles, setRootFiles] = useState<string[]>([]);
-  const [extensions, setExtensions] = useState<string[]>([]);
+  const [types, setTypes] = useState<string[]>([]);
   // Папки, добавленные вручную в этом заходе: их нет среди кандидатов, но показать надо
   const [extra, setExtra] = useState<string[]>([]);
   const [manual, setManual] = useState('');
@@ -99,7 +99,7 @@ export function DocsScopeDialog({ projectId, onClose, onSaved }: Props) {
         setInfo(s);
         setFolders(s.selected.folders);
         setRootFiles(s.selected.rootFiles);
-        setExtensions(s.selected.extensions);
+        setTypes(s.selected.types);
       })
       .catch(() => { if (alive) setError('Не удалось загрузить настройку'); });
     return () => { alive = false; };
@@ -133,7 +133,7 @@ export function DocsScopeDialog({ projectId, onClose, onSaved }: Props) {
 
   const save = () => {
     setSaving(true);
-    api.docs.setScope(projectId, { folders, rootFiles, extensions })
+    api.docs.setScope(projectId, { folders, rootFiles, types })
       .then(saved => { onSaved(saved); onClose(); })
       .catch(() => { setSaving(false); setError('Не удалось сохранить'); });
   };
@@ -142,7 +142,7 @@ export function DocsScopeDialog({ projectId, onClose, onSaved }: Props) {
     if (!info) return;
     setFolders(info.defaults.folders);
     setRootFiles(info.defaults.rootFiles);
-    setExtensions(info.defaults.extensions);
+    setTypes(info.defaults.types);
   };
 
   const folderRows = [
@@ -171,29 +171,39 @@ export function DocsScopeDialog({ projectId, onClose, onSaved }: Props) {
 
       {info && (
         <>
-          {/* Типы файлов — первой секцией: они решают, что вообще попадёт в списки ниже */}
+          {/* Типы файлов — первой секцией: они решают, что вообще попадёт в списки ниже.
+              Группами, а не расширениями: расширений три десятка, и списком они не читаются */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>
-            <SectionTitle note="что панель умеет показывать">Типы файлов</SectionTitle>
+            <SectionTitle note="что продукт умеет открыть">Типы файлов</SectionTitle>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs, padding: `0 ${SP.sm}px` }}>
-              {info.supportedExtensions.map(ext => {
-                const on = extensions.includes(ext);
+              {info.typeGroups.map(g => {
+                const on = types.includes(g.key);
                 return (
                   <button
-                    key={ext}
-                    onClick={() => toggleIn(setExtensions, ext)}
+                    key={g.key}
+                    onClick={() => toggleIn(setTypes, g.key)}
+                    // Расширения — в подсказке: в чипе они не помещаются, а знать их надо
+                    title={`${g.extensions.join(' ')}${g.text ? '' : ' — откроется в центре, без превью и поиска по тексту'}`}
                     style={{
                       padding: `4px ${SP.sm}px`, borderRadius: R.max, cursor: 'pointer',
                       border: `1px solid ${on ? C.accent : C.border}`,
                       background: on ? C.accentMuted : 'transparent',
                       color: on ? C.accent : C.textSecondary,
-                      fontFamily: FONT.mono, fontSize: FS.xs, fontWeight: on ? 600 : 400,
+                      fontFamily: FONT.sans, fontSize: FS.xs, fontWeight: on ? 600 : 400,
                     }}
                   >
-                    {ext}
+                    {g.title}
                   </button>
                 );
               })}
             </div>
+            {/* Честно про цену выбора: у файлов без текста корпуса не будет */}
+            {types.some(k => info.typeGroups.find(g => g.key === k)?.text === false) && (
+              <div style={{ fontSize: FS.xs, color: C.textMuted, padding: `0 ${SP.sm}px` }}>
+                Файлы без текста попадут в список, но откроются только в центре — заголовков,
+                ссылок и поиска по содержимому у них нет.
+              </div>
+            )}
           </div>
 
           {/* Файлы корня — поимённо: папкой корень не выбирается, там же лежит код */}

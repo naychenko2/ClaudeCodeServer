@@ -31,6 +31,13 @@ interface Props {
 // Высота зоны дерева документов: тянется хендлом, переживает перезагрузку.
 // Приём тот же, что у зоны скоупов в «Изменениях» (GitChangesRail) — одинаковое
 // поведение ресайза в панелях рельсы.
+// Высота строки списка = высота кнопок действий: место под них зарезервировано всегда,
+// иначе появление иконок при наведении дёргало бы разметку
+const ROW_H = 28;
+
+// Порог, в пределах которого второй клик считается двойным (и отменяет одиночный)
+const DOUBLE_CLICK_MS = 220;
+
 const TREE_H_KEY = 'cc_docs_tree_h';
 const TREE_H_DEFAULT = 220;
 const TREE_H_MIN = 80;
@@ -65,11 +72,16 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
   });
   const [backlinksOpen, setBacklinksOpen] = useState(false);
   const [tocOpen, setTocOpen] = useState(false);
+  // Строка дерева под курсором — на ней показываются действия документа
+  const [hoveredPath, setHoveredPath] = useState<string | null>(null);
   // Якорь, к которому нужно проскроллить после перехода по ссылке или из поиска.
   // Хранится ВМЕСТЕ с путём документа: между сменой документа и пересбором оглавления
   // есть кадр, где doc уже новый, а headings ещё от прежнего — без привязки к пути
   // якорь искался в чужом оглавлении, не находился и терялся.
-  const [pendingAnchor, setPendingAnchor] = useState<{ path: string; anchor: string } | null>(null);
+  // В ref, а не в состоянии: значение нужно эффекту скролла, а не рендеру.
+  const pendingAnchorRef = useRef<{ path: string; anchor: string } | null>(null);
+  // Поиск активен от двух символов — результаты замещают список, пока запрос набран
+  const searching = query.trim().length >= 2;
 
   const contentRef = useRef<HTMLDivElement>(null);
   const headings = useHeadings(contentRef, doc?.content);
@@ -79,6 +91,21 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
   const knownDocs = useMemo(
     () => new Set((index ?? []).map(d => d.path.toLowerCase())),
     [index]);
+
+  // Документы по папкам: README и прочий корень — в безымянной группе сверху,
+  // дальше подписанные группы («docs», «docs/adr», …) в алфавитном порядке
+  const groups = useMemo<[string, DocEntry[]][]>(() => {
+    const byFolder = new Map<string, DocEntry[]>();
+    for (const d of index ?? []) {
+      const slash = d.path.lastIndexOf('/');
+      const folder = slash < 0 ? '' : d.path.slice(0, slash);
+      const list = byFolder.get(folder);
+      if (list) list.push(d); else byFolder.set(folder, [d]);
+    }
+    return [...byFolder.entries()].sort(([a], [b]) =>
+      a === '' ? -1 : b === '' ? 1 : a.localeCompare(b));
+  }, [index]);
+
 
   const loadIndex = useCallback(() => {
     api.docs.index(project.id)
@@ -97,15 +124,13 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
     loadIndex();
   }), [project.id, loadIndex]);
 
-  // Первый показ — README, иначе первый документ списка
-  useEffect(() => {
-    if (!index || index.length === 0 || selected) return;
-    setSelected(index.find(d => d.path === 'README.md')?.path ?? index[0].path);
-  }, [index, selected]);
+  // Документ сам не открывается: панель начинается со списка на всю высоту, превью
+  // появляется по клику и закрывается крестиком — так список виден целиком, пока он и нужен
 
-  // Содержимое выбранного документа
+  // Содержимое выбранного документа. Сброс doc делает closeDoc — здесь только загрузка,
+  // чтобы не дёргать setState синхронно в эффекте
   useEffect(() => {
-    if (!selected) { setDoc(null); return; }
+    if (!selected) return;
     let alive = true;
     api.docs.doc(project.id, selected)
       .then(d => { if (alive) { setDoc(d); setError(null); } })
@@ -117,28 +142,53 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
   // Пока цель не найдена — ждём следующего прохода (оглавление ещё пересобирается);
   // «висящий» якорь безопасен: следующий переход перезапишет его своим.
   useEffect(() => {
-    if (!pendingAnchor || !doc || doc.path !== pendingAnchor.path) return;
-    const target = headings.find(h => slugify(h.text) === pendingAnchor.anchor);
+    const pending = pendingAnchorRef.current;
+    if (!pending || !doc || doc.path !== pending.path) return;
+    const target = headings.find(h => slugify(h.text) === pending.anchor);
     if (!target) return;
     scrollToHeading(target);
-    setPendingAnchor(null);
-  }, [pendingAnchor, doc, headings]);
+    pendingAnchorRef.current = null;
+  }, [doc, headings]);
 
   // Поиск с задержкой: панель узкая, дёргать сервер на каждый символ незачем
   useEffect(() => {
-    const q = query.trim();
-    if (q.length < 2) { setHits(null); return; }
+    if (!searching) return;
     const timer = window.setTimeout(() => {
-      api.docs.search(project.id, q).then(setHits).catch(() => setHits([]));
+      api.docs.search(project.id, query.trim()).then(setHits).catch(() => setHits([]));
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [project.id, query]);
+  }, [project.id, query, searching]);
 
   const openDoc = (path: string, anchor: string | null = null) => {
     setSelected(path);
-    setPendingAnchor(anchor ? { path, anchor } : null);
-    setHits(null);
-    setQuery('');
+    pendingAnchorRef.current = anchor ? { path, anchor } : null;
+    setQuery('');   // выход из поиска: список возвращается на место результатов
+  };
+
+  // Клик по строке списка откладывается на порог двойного: иначе двойной клик успевал
+  // открыть превью до того, как документ уходил в центр, и панель дёргалась зря
+  const clickTimer = useRef<number | null>(null);
+  useEffect(() => () => { if (clickTimer.current) window.clearTimeout(clickTimer.current); }, []);
+
+  const handleRowClick = (path: string) => {
+    if (clickTimer.current) window.clearTimeout(clickTimer.current);
+    clickTimer.current = window.setTimeout(() => {
+      clickTimer.current = null;
+      openDoc(path);
+    }, DOUBLE_CLICK_MS);
+  };
+
+  const handleRowDoubleClick = (path: string) => {
+    if (clickTimer.current) { window.clearTimeout(clickTimer.current); clickTimer.current = null; }
+    onOpenFile(path);
+  };
+
+  // Крестик в шапке превью: возвращаемся к списку на всю панель
+  const closeDoc = () => {
+    setSelected(null);
+    setDoc(null);
+    pendingAnchorRef.current = null;
+    setTocOpen(false);
   };
 
   // Клик по ссылке внутри превью: документ области — переход в панели,
@@ -149,7 +199,6 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
     if (!link) return;
     if (link.kind === 'doc') openDoc(link.target, link.anchor);
     else if (link.kind === 'repo') onOpenFile(link.target);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc, knownDocs, onOpenFile]);
 
   // Ресайз границы «дерево / превью»: тянем хендл вниз — дерево выше, превью ниже
@@ -207,10 +256,12 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
       </div>
 
       {/* Результаты поиска замещают дерево, пока запрос активен */}
-      {hits !== null ? (
+      {searching ? (
         <div style={{ flex: 1, overflowY: 'auto', padding: `${SP.xs}px 0` }}>
-          {hits.length === 0 && <div style={emptyStyle}>Ничего не найдено</div>}
-          {hits.map((h, i) => (
+          {/* null — ответ ещё не пришёл (запрос уходит через 250 мс после ввода) */}
+          {hits === null && <div style={emptyStyle}>Ищем…</div>}
+          {hits?.length === 0 && <div style={emptyStyle}>Ничего не найдено</div>}
+          {(hits ?? []).map((h, i) => (
             <button key={`${h.path}-${i}`} onClick={() => openDoc(h.path, h.slug)} style={hitStyle}>
               <div style={{ fontSize: FS.sm, fontWeight: 600, color: C.textHeading }}>{h.title}</div>
               <div style={{ fontSize: FS.xs, color: C.textMuted, marginTop: 2 }}>{h.path}</div>
@@ -220,10 +271,14 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
         </div>
       ) : (
         <>
-          {/* Дерево документов: высота тянется хендлом ниже, свёрнутое — по содержимому */}
-          <div style={{
+          {/* Дерево документов. Без открытого превью занимает всю панель; с превью —
+              высоту, заданную хендлом ресайза */}
+          <div style={doc ? {
             flexShrink: 0, display: 'flex', flexDirection: 'column', minHeight: 0,
             height: treeOpen ? treeH : 'auto',
+          } : {
+            flex: treeOpen ? 1 : undefined, flexShrink: treeOpen ? 1 : 0,
+            display: 'flex', flexDirection: 'column', minHeight: 0,
           }}>
             <button onClick={() => setTreeOpen(v => !v)} style={sectionHeadStyle}>
               {treeOpen
@@ -234,32 +289,72 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
             </button>
             {treeOpen && (
               <div style={{ overflowY: 'auto', padding: `0 ${SP.xs}px ${SP.xs}px` }}>
-                {(index ?? []).map(d => (
-                  <button key={d.path} onClick={() => openDoc(d.path)}
-                    title={d.path}
-                    style={{
-                      ...rowStyle,
-                      paddingLeft: SP.sm + depthOf(d.path) * SP.md,
-                      background: d.path === selected ? C.bgSelected : 'transparent',
-                      color: d.path === selected ? C.textHeading : C.textSecondary,
-                      fontWeight: d.path === selected ? 600 : 400,
-                    }}>
-                    {/* Без иконки: у всех строк она была бы одинаковой и не различала бы
-                        документы — отступ по вложенности несёт больше смысла */}
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.title}</span>
-                  </button>
+                {groups.map(([folder, docs]) => (
+                  <div key={folder}>
+                    {/* Подпись папки: без неё отступ вложенности читался как сдвиг без причины */}
+                    {folder && (
+                      <div style={folderHeadStyle} title={folder}>{folder}</div>
+                    )}
+                    {docs.map(d => (
+                      <div
+                        key={d.path}
+                        onMouseEnter={() => setHoveredPath(d.path)}
+                        onMouseLeave={() => setHoveredPath(cur => (cur === d.path ? null : cur))}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: SP.xxs, borderRadius: R.md,
+                          background: d.path === selected ? C.bgSelected : 'transparent',
+                          // Высота фиксирована под кнопки действий: они всегда в потоке
+                          // (скрыты прозрачностью), иначе строки прыгали бы при наведении
+                          minHeight: ROW_H,
+                        }}
+                      >
+                        <button
+                          onClick={() => handleRowClick(d.path)}
+                          onDoubleClick={() => handleRowDoubleClick(d.path)}
+                          title={`${d.path}\nДвойной клик — открыть в центре`}
+                          style={{
+                            ...rowStyle,
+                            flex: 1, minWidth: 0,
+                            paddingLeft: folder ? SP.md : SP.sm,
+                            color: d.path === selected ? C.textHeading : C.textSecondary,
+                            fontWeight: d.path === selected ? 600 : 400,
+                          }}>
+                          {/* Без иконки: у всех строк она была бы одинаковой и не различала бы
+                              документы — папка и подпись группы несут больше смысла */}
+                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.title}</span>
+                        </button>
+                        {/* Действия документа. Всегда в разметке — появление меняет только
+                            прозрачность, поэтому при наведении ничего не смещается */}
+                        <div style={{
+                          display: 'flex', alignItems: 'center', gap: SP.xxs, paddingRight: SP.xs, flexShrink: 0,
+                          opacity: hoveredPath === d.path ? 1 : 0,
+                          pointerEvents: hoveredPath === d.path ? 'auto' : 'none',
+                          transition: 'opacity 0.12s',
+                        }}>
+                          <IconButton title="Развернуть в центре" size="sm" onClick={() => onOpenFile(d.path)}>
+                            <Maximize2 size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+                          </IconButton>
+                          <IconButton title="Документ в чат — вложением" size="sm" onClick={() => onAttachToChat(d.path)}>
+                            <MessageSquarePlus size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+                          </IconButton>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 ))}
               </div>
             )}
           </div>
 
-          {/* Хендл ресайза границы «дерево / превью» */}
-          {treeOpen && (
+          {/* Хендл ресайза границы «список / превью» — только когда превью открыто.
+              Фон как у шапки панели: полоса читается частью её оформления, а не швом */}
+          {treeOpen && doc && (
             <div
               onPointerDown={handleTreeResize}
               title="Потяните, чтобы изменить высоту списка"
               style={{
-                flexShrink: 0, height: 7, cursor: 'row-resize',
+                flexShrink: 0, height: 9, cursor: 'row-resize', background: C.bgMain,
+                borderTop: `1px solid ${C.border}`, borderBottom: `1px solid ${C.border}`,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
               }}
             >
@@ -267,8 +362,9 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
             </div>
           )}
 
-          {/* Превью документа */}
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, borderTop: `1px solid ${C.border}` }}>
+          {/* Превью документа — появляется только когда документ выбран */}
+          {doc && (
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
             {doc && (
               <div style={{
                 flexShrink: 0, position: 'relative', display: 'flex', alignItems: 'center', gap: SP.xs,
@@ -289,6 +385,9 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
                 </IconButton>
                 <IconButton title="Развернуть в центре" onClick={() => onOpenFile(doc.path)} size="sm">
                   <Maximize2 size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+                </IconButton>
+                <IconButton title="Закрыть документ" onClick={closeDoc} size="sm">
+                  <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
                 </IconButton>
 
                 {/* Оглавление: у каждого пункта — переход и отправка раздела в чат цитатой */}
@@ -350,15 +449,11 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
               </div>
             )}
           </div>
+          )}
         </>
       )}
     </div>
   );
-}
-
-// Уровень вложенности документа в дереве: docs/adr/0001.md — второй уровень
-function depthOf(path: string): number {
-  return Math.max(0, path.split('/').length - 1);
 }
 
 const emptyStyle = {
@@ -371,6 +466,13 @@ const sectionHeadStyle = {
   padding: `${SP.sm}px ${SP.md}px`, border: 'none', background: 'transparent', cursor: 'pointer',
   fontFamily: FONT.sans, fontSize: FS.xs, fontWeight: 700, color: C.textSecondary,
   textTransform: 'uppercase' as const, letterSpacing: '0.03em',
+};
+
+// Подпись папки над её документами: тише строк списка — это ориентир, а не элемент выбора
+const folderHeadStyle = {
+  padding: `${SP.sm}px ${SP.sm}px ${SP.xxs}px`,
+  fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted,
+  overflow: 'hidden' as const, textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const,
 };
 
 const rowStyle = {

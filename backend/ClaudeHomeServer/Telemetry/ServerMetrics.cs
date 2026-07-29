@@ -48,30 +48,53 @@ public static class ServerMetrics
         unit: "ms",
         description: "Длительность хода LLM (ms)");
 
+    /// <summary>
+    /// Явные границы бакетов для <see cref="LlmDuration"/> (мс). Регистрируются как View
+    /// в ObservabilityExtensions.
+    ///
+    /// Зачем: дефолтные границы OTel заканчиваются на 10 000 мс, а ход LLM идёт от единиц
+    /// до сотен секунд — практически ВСЕ замеры падали в последний бакет (10000, +Inf].
+    /// Квантили считаются интерполяцией по бакетам, поэтому p95/p99 упирались в 10 000
+    /// и не различали ход на 30 секунд и ход на 10 минут: метрика формально была,
+    /// а ответить «какие ходы самые долгие» ею было нельзя (на живых данных p99 = 9975).
+    ///
+    /// Шкала до 20 минут с сгущением на 5–60 с — там основная масса ходов.
+    /// </summary>
+    public static readonly double[] LlmDurationBoundaries =
+        [1_000, 2_500, 5_000, 10_000, 20_000, 30_000, 60_000, 120_000, 300_000, 600_000, 1_200_000];
+
     // ── Counters ─────────────────────────────────────────────────────────────
+    // unit по конвенции OTel: для счётчиков событий — фигурные скобки с сущностью,
+    // которую считаем ({error}, {call}); это не единица измерения, а пометка смысла.
 
     public static readonly Counter<long> LlmErrors = _meter.CreateCounter<long>(
         "ccs.llm.errors",
+        unit: "{error}",
         description: "Ошибки LLM-провайдеров");
 
     public static readonly Counter<long> LlmRateLimitHits = _meter.CreateCounter<long>(
         "ccs.llm.rate_limit_hits",
+        unit: "{hit}",
         description: "Срабатывания rate-limit");
 
     public static readonly Counter<long> McpCalls = _meter.CreateCounter<long>(
         "ccs.mcp.calls",
+        unit: "{call}",
         description: "Вызовы MCP-инструментов");
 
     public static readonly Counter<long> McpErrors = _meter.CreateCounter<long>(
         "ccs.mcp.errors",
+        unit: "{error}",
         description: "Ошибки MCP-инструментов");
 
     public static readonly Counter<long> DifySyncErrors = _meter.CreateCounter<long>(
         "ccs.dify.sync.errors",
+        unit: "{error}",
         description: "Ошибки синхронизации с Dify (DiffSync)");
 
     public static readonly Counter<long> TelemetryHeartbeat = _meter.CreateCounter<long>(
         "ccs.telemetry.heartbeat",
+        unit: "{tick}",
         description: "Heartbeat телеметрии — если остановился, pipeline сломан");
 
     // ── Recording API ────────────────────────────────────────────────────────

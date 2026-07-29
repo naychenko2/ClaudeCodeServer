@@ -19,6 +19,7 @@ import { Button, IconButton, TextField } from '../../components/ui';
 import { DocsScopeDialog } from './DocsScopeDialog';
 import { MarkdownViewer } from '../../components/MarkdownViewer';
 import { ListDateDivider, LIST_FLASH_CLASS, LIST_FLASH_MS } from '../../components/ListDateDivider';
+import { getExtMeta as extMeta } from '../../components/FileExplorer';
 import { useHeadings, scrollToHeading } from '../../hooks/useHeadings';
 import { resolveDocLink, sliceSection, slugify } from '../../lib/docsLinks';
 
@@ -408,14 +409,23 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
         flexShrink: 0, position: 'relative', display: 'flex', alignItems: 'center', gap: SP.xs,
         padding: `${SP.sm}px ${SP.md}px`, borderBottom: `1px solid ${C.border}`,
       }}>
-        <IconButton
+        {/* С подписью, а не голой лупой: соседние кнопки — режимы панели, и поиск среди
+            них терялся; место в ряду освободилось, когда поле ушло под кнопку */}
+        <button
           title={searchOpen ? 'Закрыть поиск' : 'Поиск по документам'}
-          active={searchOpen || query.length > 0}
           onClick={() => searchOpen ? closeSearch() : setSearchOpen(true)}
-          size="sm"
+          style={{
+            display: 'flex', alignItems: 'center', gap: SP.xxs,
+            height: 28, padding: `0 ${SP.sm}px`, borderRadius: R.md, cursor: 'pointer',
+            border: `1px solid ${searchOpen || query ? C.accent : C.border}`,
+            background: searchOpen || query ? C.accentMuted : 'transparent',
+            color: searchOpen || query ? C.accent : C.textSecondary,
+            fontFamily: FONT.sans, fontSize: FS.xs, fontWeight: 600,
+          }}
         >
           <Search size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-        </IconButton>
+          Поиск
+        </button>
         <div style={{ flex: 1 }} />
         {/* Папки списка — оглавление для самого списка. Появляется, только когда групп
             больше одной: с единственной папкой кнопка вела бы в никуда.
@@ -598,12 +608,23 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
                           style={{
                             ...rowStyle,
                             flex: 1, minWidth: 0,
-                            paddingLeft: folder ? SP.md : SP.sm,
+                            // Без отступа под вложенность: группу уже обозначает разделитель
+                            // сверху, а сдвиг ломал общую левую линию списка
+                            paddingLeft: SP.sm,
                             color: d.path === selected ? C.textHeading : C.textSecondary,
                             fontWeight: d.path === selected ? 600 : 400,
                           }}>
-                          {/* Без иконки: у всех строк она была бы одинаковой и не различала бы
-                              документы — папка и подпись группы несут больше смысла */}
+                          {/* Бейдж расширения — тот же, что в «Файлах» и «Изменениях».
+                              Раньше иконки не было: пока область состояла из одного markdown,
+                              она у всех строк совпадала. С типами (pdf, схемы, картинки, звук)
+                              она различает документы, а строку не удлиняет — 16 px против 22 */}
+                          <span style={{
+                            width: 16, height: 16, borderRadius: 4, flexShrink: 0,
+                            background: extMeta(d.path).bg, color: extMeta(d.path).fg,
+                            fontFamily: FONT.mono, fontSize: 7.5, fontWeight: 700,
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            letterSpacing: '-0.02em',
+                          }}>{extMeta(d.path).label}</span>
                           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.title}</span>
                         </button>
                       </div>

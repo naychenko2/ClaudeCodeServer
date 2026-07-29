@@ -1,351 +1,175 @@
-// SVG-холст Code Graph: узлы-типы и рёбра-связи между ними. Без внешних графовых
-// библиотек — позиционирование детерминированное даёт layoutGraph (см. graphLayout.ts).
-// Два режима: пока узел не выбран — полный граф (кольцо); как только выбран —
-// режим «Фокус» (окрестность одного типа, раскладка из graphFocus.ts), потому что
-// весь граф на 1020 узлах нечитаем. Клик по пустому месту возвращает полный граф.
-import { useMemo, type MouseEvent } from 'react';
+// SVG-холсты Code Graph: «Фокус» (окрестность одного типа) и «Обзор» (группы
+// неймспейсов по слоям). Полного графа больше нет — на 1020 узлах он был нечитаем
+// (шаг между соседями кольца 1.3 px) и как точка входа ничего не давал выбрать; теперь
+// «Фокус» — не отдельный режим, а место, куда приводит навигация из «Обзора» (см.
+// CodeGraphDocument/lib/codeGraph.ts — единая цепочка крошек вместо тумблера режимов).
+// Раскладки — из graphFocus.ts/graphOverview.ts, без внешних графовых библиотек.
+import { useEffect, useState, type MouseEvent, type ReactNode } from 'react';
 import { C, FONT, FS } from '../../lib/design';
-import type { CodeGraph, CodeGraphEdge, CodeGraphRelation } from '../../types';
-import type { GraphLayout } from './graphLayout';
-import { VIEW_W, VIEW_H } from './graphLayout';
-import { isTestSourceFile, type FocusModel, type FocusSide } from './graphFocus';
-import { EDGE_COLOR, KIND_RING, KIND_COLOR, KIND_GLYPH, isDashed } from './graphTokens';
+import type { CodeGraphRelation } from '../../types';
+import type { FocusModel, FocusSide } from './graphFocus';
+import { EDGE_COLOR, KIND_RING, KIND_COLOR, KIND_GLYPH } from './graphTokens';
 import type { OverviewScene, OverviewLayout, OverviewItem } from './graphOverview';
 import { bundleWidth } from './graphOverview';
 
-interface Props {
-  graph: CodeGraph;
-  layout: GraphLayout;
-  filters: { Calls: boolean; Implements: boolean; References: boolean };
-  selectedId: string | null;
-  query: string;
-  onSelect: (id: string | null) => void;
-  hideTestNodes?: boolean;
-  hideOrphanNodes?: boolean;
-  // Модель режима «Фокус» — считает документ (ему же нужны крошки и счётчик).
-  // null/undefined = узел не выбран, рисуем полный граф.
-  focus?: FocusModel | null;
-  onExpandTail?: (side: FocusSide) => void;
+// Переход между сценами (Обзор ↔ Фокус, перефокус на соседа): узел «уезжает в центр,
+// вокруг разворачивается окрестность» — масштаб + прозрачность за ~200мс. key меняется
+// на каждый содержательный шаг навигации → React перемонтирует группу → анимация
+// начинается заново из исходного (0.94/0) состояния без ручного управления rAF/таймерами.
+// prefers-reduced-motion — переход мгновенный (entered сразу true, transition снят).
+function SceneTransition({ animKey, children }: { animKey: string; children: ReactNode }) {
+  return <SceneTransitionInner key={animKey}>{children}</SceneTransitionInner>;
 }
 
-const GLYPH_FS = FS.base;   // моноширинная буква типа в кружке
-const LABEL_FS = FS.xs;     // моноширинная подпись узла под кружком
-
-export function CodeGraphCanvas({ graph, layout, filters, selectedId, query, onSelect, hideTestNodes, hideOrphanNodes, focus, onExpandTail }: Props) {
-  // Фильтр «скрыть тесты»: sourceFile содержит Tests/test/__tests__/.Tests.
-  const hiddenByTest = useMemo(() => {
-    if (!hideTestNodes) return new Set<string>();
-    const s = new Set<string>();
-    for (const n of graph.nodes) {
-      if (isTestSourceFile(n.sourceFile)) s.add(n.id);
-    }
-    return s;
-  }, [hideTestNodes, graph.nodes]);
-
-  // Фильтр «скрыть сироты»: узлы без входящих/исходящих рёбер (degree = 0)
-  const hiddenOrphan = useMemo(() => {
-    if (!hideOrphanNodes) return new Set<string>();
-    const deg = new Map<string, number>();
-    for (const e of graph.edges) {
-      deg.set(e.source, (deg.get(e.source) ?? 0) + 1);
-      deg.set(e.target, (deg.get(e.target) ?? 0) + 1);
-    }
-    const s = new Set<string>();
-    for (const n of graph.nodes) {
-      if ((deg.get(n.id) ?? 0) === 0) s.add(n.id);
-    }
-    return s;
-  }, [hideOrphanNodes, graph.nodes]);
-
-  // Поиск: при активном запросе показываем только совпавшие узлы + их соседей первого уровня
-  const searchVisible = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return null; // null = неактивен, не фильтруем
-    const matching = new Set<string>();
-    for (const n of graph.nodes) {
-      if (n.label.toLowerCase().includes(q) || n.fullyQualifiedName.toLowerCase().includes(q)) {
-        matching.add(n.id);
-      }
-    }
-    // Добавляем соседей первого уровня
-    const result = new Set(matching);
-    for (const e of graph.edges) {
-      if (matching.has(e.source)) result.add(e.target);
-      if (matching.has(e.target)) result.add(e.source);
-    }
-    return result;
-  }, [query, graph.nodes, graph.edges]);
-
-  const hidden = useMemo(() => {
-    const s = new Set([...hiddenByTest, ...hiddenOrphan]);
-    // При активном поиске скрываем всё, что не входит в searchVisible
-    if (searchVisible) {
-      for (const n of graph.nodes) {
-        if (!searchVisible.has(n.id)) s.add(n.id);
-      }
-    }
-    return s;
-  }, [hiddenByTest, hiddenOrphan, searchVisible, graph.nodes]);
-
-  // Рёбра, чей тип связи включён фильтром + оба конца видимы
-  const visibleEdges = useMemo(
-    () => graph.edges.filter(e => filters[e.relation] && !hidden.has(e.source) && !hidden.has(e.target)),
-    [graph.edges, filters, hidden],
-  );
-
-  // Множество узлов, инцидентных выделенному (для подсветки/приглушения)
-  const incident = useMemo(() => {
-    const s = new Set<string>();
-    if (selectedId) {
-      s.add(selectedId);
-      for (const e of visibleEdges) {
-        if (e.source === selectedId) s.add(e.target);
-        if (e.target === selectedId) s.add(e.source);
-      }
-    }
-    return s;
-  }, [selectedId, visibleEdges]);
-
-  const q = query.trim().toLowerCase();
-  const hasFocus = !!selectedId;
-  const hasQuery = q.length > 0;
-
-  // Подпись узла «попадает в поиск»: по label или FQN
-  const matches = (id: string): boolean => {
-    if (!hasQuery) return false;
-    const ln = layout.byId.get(id);
-    if (!ln) return false;
-    return ln.node.label.toLowerCase().includes(q) || ln.node.fullyQualifiedName.toLowerCase().includes(q);
-  };
-
-  const edgeState = (e: CodeGraphEdge): 'hi' | 'dim' | 'normal' => {
-    if (hasFocus) return (e.source === selectedId || e.target === selectedId) ? 'hi' : 'dim';
-    if (hasQuery) return 'normal'; // поиск не гасит рёбра — узлы уже отфильтрованы
-    return 'normal';
-  };
-
-  const nodeState = (id: string): 'sel' | 'match' | 'dim' | 'normal' => {
-    if (hasFocus) return id === selectedId ? 'sel' : (incident.has(id) ? 'normal' : 'dim');
-    // При поиске несовпадающие узлы уже скрыты через hidden; оставшиеся — normal либо match (для accent-подсветки)
-    if (hasQuery) return matches(id) ? 'match' : 'normal';
-    return 'normal';
-  };
-
-  const handleSvgClick = (e: MouseEvent<SVGSVGElement>) => {
-    // Клик по пустому холсту (не по узлу) снимает выделение — если не активен поиск.
-    // В фокусе снимает всегда: это единственный способ вернуться к полному графу.
-    if (e.target === e.currentTarget && (focus || !hasQuery)) onSelect(null);
-  };
-
-  // Режим «Фокус»: окрестность выбранного типа вместо всего графа
-  if (focus) {
-    return (
-      <FocusView focus={focus} onSelect={onSelect} onExpandTail={onExpandTail} onBackdropClick={handleSvgClick} />
-    );
-  }
-
+function SceneTransitionInner({ children }: { children: ReactNode }) {
+  const reduceMotion = typeof window !== 'undefined'
+    && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  const [entered, setEntered] = useState(reduceMotion);
+  useEffect(() => {
+    if (reduceMotion) return;
+    const raf = requestAnimationFrame(() => setEntered(true));
+    return () => cancelAnimationFrame(raf);
+  }, [reduceMotion]);
   return (
-    <svg
-      viewBox={`0 0 ${VIEW_W} ${VIEW_H}`}
-      preserveAspectRatio="xMidYMid meet"
-      onClick={handleSvgClick}
-      style={{ width: '100%', height: '100%', display: 'block' }}
-    >
-      <defs>
-        {/* Стрелки направления связи — цветом ребра. References идёт без стрелки (см. ниже) */}
-        {(['Calls', 'Implements'] as const).map(rel => (
-          <marker key={rel} id={`cg-arrow-${rel}`} viewBox="0 0 10 10" refX="9" refY="5"
-            markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-            <path d="M0,0 L10,5 L0,10 z" fill={EDGE_COLOR[rel]} />
-          </marker>
-        ))}
-      </defs>
-
-      {/* Рёбра рисуем под узлами */}
-      <g>
-        {visibleEdges.map((e, i) => {
-          const a = layout.byId.get(e.source);
-          const b = layout.byId.get(e.target);
-          if (!a || !b) return null;
-          const st = edgeState(e);
-          const color = EDGE_COLOR[e.relation];
-          const dashed = isDashed(e.confidence);
-          return (
-            <line key={i}
-              x1={a.x} y1={a.y} x2={b.x} y2={b.y}
-              stroke={color}
-              strokeWidth={st === 'hi' ? 2.6 : 1.6}
-              strokeDasharray={dashed ? '5 4' : undefined}
-              markerEnd={e.relation === 'References' ? undefined : `url(#cg-arrow-${e.relation})`}
-              opacity={st === 'dim' ? 0.1 : st === 'hi' ? 1 : 0.85}
-              style={{ transition: 'opacity 0.15s, stroke-width 0.15s' }}
-            />
-          );
-        })}
-      </g>
-
-      {/* Узлы полного графа — скрытые удаляются из DOM, а не меркнут */}
-      <g>
-        {layout.nodes.filter(ln => !hidden.has(ln.node.id)).map(ln => {
-          const id = ln.node.id;
-          const st = nodeState(id);
-          const ring = ln.isGod || st === 'sel' ? C.accent : KIND_RING[ln.node.kind];
-          const glyphFill = ln.node.kind === 'Class' ? C.textHeading : KIND_COLOR[ln.node.kind];
-          const labelFill = st === 'sel' || st === 'match' ? C.accent : C.textSecondary;
-          const dimmed = st === 'dim';
-          return (
-            <g key={id} transform={`translate(${ln.x},${ln.y})`}
-              opacity={dimmed ? 0.25 : 1}
-              style={{ cursor: 'pointer', transition: 'opacity 0.15s' }}>
-              {/* Невидимый круг-расширитель тач-цели (≥40px на мобиле) */}
-              <circle r={Math.max(ln.r + 10, 20)} fill="transparent"
-                onClick={ev => { ev.stopPropagation(); onSelect(id); }} />
-              {/* god-node: пунктирный accent-нимб */}
-              {ln.isGod && (
-                <circle r={ln.r + 7} fill="none" stroke={C.accent}
-                  strokeWidth={2} strokeDasharray="3 3" opacity={0.55} pointerEvents="none" />
-              )}
-              <circle r={ln.r} fill={C.bgCard} stroke={ring}
-                strokeWidth={st === 'sel' ? 3.5 : 2.5}
-                style={{ transition: 'stroke-width 0.15s' }}
-                pointerEvents="none" />
-              <text textAnchor="middle" dominantBaseline="central"
-                fontFamily={FONT.mono} fontSize={GLYPH_FS} fontWeight={600}
-                fill={glyphFill} pointerEvents="none">{KIND_GLYPH[ln.node.kind]}</text>
-              <text textAnchor="middle" y={ln.r + 13}
-                fontFamily={FONT.mono} fontSize={LABEL_FS}
-                fill={labelFill} fontWeight={st === 'sel' || st === 'match' ? 600 : 400}
-                style={{ transition: 'fill 0.15s' }} pointerEvents="none">
-                {ln.node.label}
-              </text>
-            </g>
-          );
-        })}
-      </g>
-    </svg>
+    <g style={{
+      opacity: entered ? 1 : 0,
+      transform: entered ? 'scale(1)' : 'scale(0.94)',
+      transformOrigin: '50% 50%',
+      transition: reduceMotion ? undefined : 'opacity 200ms ease-out, transform 200ms ease-out',
+    }}>
+      {children}
+    </g>
   );
 }
 
-// === Режим «Фокус»: центр + соседи по сторонам ===
+// === «Фокус»: центр + соседи по сторонам ===
 // Координаты приходят готовыми из buildFocusModel — здесь только отрисовка и клики.
-function FocusView({ focus, onSelect, onExpandTail, onBackdropClick }: {
+// onRefocus — клик по соседу/центру (перефокус, дописывает шаг в конец цепочки крошек).
+// onClear — клик по пустому холсту (полный сброс к корню «Обзора»).
+export function CodeGraphFocusCanvas({ focus, onRefocus, onClear, onExpandTail }: {
   focus: FocusModel;
-  onSelect: (id: string | null) => void;
+  onRefocus: (id: string) => void;
+  onClear: () => void;
   onExpandTail?: (side: FocusSide) => void;
-  onBackdropClick: (e: MouseEvent<SVGSVGElement>) => void;
 }) {
   const { viewW, viewH, mobile } = focus;
+
+  const handleBackdropClick = (e: MouseEvent<SVGSVGElement>) => {
+    if (e.target === e.currentTarget) onClear();
+  };
 
   return (
     <svg
       viewBox={`0 0 ${viewW} ${viewH}`}
       preserveAspectRatio="xMidYMid meet"
-      onClick={onBackdropClick}
+      onClick={handleBackdropClick}
       style={{ width: '100%', height: '100%', display: 'block' }}
     >
-      {/* Рёбра центра и второго кольца */}
-      <g>
-        {focus.edges.map((e, i) => (
-          <path key={i}
-            d={`M${e.x1},${e.y1} Q${e.cx},${e.cy} ${e.x2},${e.y2}`}
-            fill="none"
-            stroke={e.relation ? EDGE_COLOR[e.relation] : C.dashed}
-            strokeWidth={e.width}
-            strokeDasharray={e.relation ? undefined : '4 3'}
-            opacity={e.relation ? 0.75 : 0.9}
-            pointerEvents="none"
-          />
-        ))}
-      </g>
+      <SceneTransition animKey={focus.center.id}>
+        {/* Рёбра центра и второго кольца */}
+        <g>
+          {focus.edges.map((e, i) => (
+            <path key={i}
+              d={`M${e.x1},${e.y1} Q${e.cx},${e.cy} ${e.x2},${e.y2}`}
+              fill="none"
+              stroke={e.relation ? EDGE_COLOR[e.relation] : C.dashed}
+              strokeWidth={e.width}
+              strokeDasharray={e.relation ? undefined : '4 3'}
+              opacity={e.relation ? 0.75 : 0.9}
+              pointerEvents="none"
+            />
+          ))}
+        </g>
 
-      {/* Узлы: центр крупнее и с полной подписью, соседи — с подписью наружу */}
-      <g>
-        {focus.nodes.map(p => {
-          const main = p.side === 'center';
-          const ring = main || p.isGod ? C.accent : KIND_RING[p.node.kind];
-          const glyphFill = p.node.kind === 'Class' ? C.textHeading : KIND_COLOR[p.node.kind];
-          // Подпись соседа уходит наружу по горизонтали — так они не наезжают
-          // друг на друга и на линии; на мобиле раскладка вертикальная, подпись снизу.
-          // У второго кольца подпись всегда под кружком: он стоит у края холста
-          const outward = !main && !mobile && !p.second;
-          return (
-            <g key={p.node.id} transform={`translate(${p.x.toFixed(1)},${p.y.toFixed(1)})`}
-              opacity={p.second ? 0.85 : 1}
-              style={{ cursor: 'pointer' }}>
-              <circle r={Math.max(p.r + 10, 20)} fill="transparent"
-                onClick={ev => { ev.stopPropagation(); onSelect(p.node.id); }} />
-              {p.isGod && !main && (
-                <circle r={p.r + 6} fill="none" stroke={C.accent} strokeWidth={2}
-                  strokeDasharray="3 3" opacity={0.5} pointerEvents="none" />
-              )}
-              <circle r={p.r} fill={C.bgCard} stroke={ring}
-                strokeWidth={main ? 3.5 : 2.4} pointerEvents="none" />
-              <text textAnchor="middle" dominantBaseline="central"
-                fontFamily={FONT.mono} fontSize={main ? FS.md : FS.xs} fontWeight={600}
-                fill={glyphFill} pointerEvents="none">{KIND_GLYPH[p.node.kind]}</text>
-              <text
-                textAnchor={outward ? (p.side === 'in' ? 'end' : 'start') : 'middle'}
-                x={outward ? (p.side === 'in' ? -(p.r + 8) : p.r + 8) : 0}
-                y={outward ? 4 : p.r + 14}
-                fontFamily={FONT.mono}
-                fontSize={main ? FS.base : FS.xs}
-                fontWeight={main ? 600 : 400}
-                fill={main ? C.accent : C.textSecondary}
-                stroke={C.bgCard} strokeWidth={3} paintOrder="stroke"
-                pointerEvents="none">
-                {p.label}
-              </text>
-              {main && (
-                <text textAnchor="middle" y={p.r + 29} fontFamily={FONT.mono} fontSize={FS.xs}
-                  fill={C.textMuted} stroke={C.bgCard} strokeWidth={3} paintOrder="stroke"
+        {/* Узлы: центр крупнее и с полной подписью, соседи — с подписью наружу */}
+        <g>
+          {focus.nodes.map(p => {
+            const main = p.side === 'center';
+            const ring = main || p.isGod ? C.accent : KIND_RING[p.node.kind];
+            const glyphFill = p.node.kind === 'Class' ? C.textHeading : KIND_COLOR[p.node.kind];
+            // Подпись соседа уходит наружу по горизонтали — так они не наезжают
+            // друг на друга и на линии; на мобиле раскладка вертикальная, подпись снизу.
+            // У второго кольца подпись всегда под кружком: он стоит у края холста
+            const outward = !main && !mobile && !p.second;
+            return (
+              <g key={p.node.id} transform={`translate(${p.x.toFixed(1)},${p.y.toFixed(1)})`}
+                opacity={p.second ? 0.85 : 1}
+                style={{ cursor: 'pointer' }}>
+                <circle r={Math.max(p.r + 10, 20)} fill="transparent"
+                  onClick={ev => { ev.stopPropagation(); onRefocus(p.node.id); }} />
+                {p.isGod && !main && (
+                  <circle r={p.r + 6} fill="none" stroke={C.accent} strokeWidth={2}
+                    strokeDasharray="3 3" opacity={0.5} pointerEvents="none" />
+                )}
+                <circle r={p.r} fill={C.bgCard} stroke={ring}
+                  strokeWidth={main ? 3.5 : 2.4} pointerEvents="none" />
+                <text textAnchor="middle" dominantBaseline="central"
+                  fontFamily={FONT.mono} fontSize={main ? FS.md : FS.xs} fontWeight={600}
+                  fill={glyphFill} pointerEvents="none">{KIND_GLYPH[p.node.kind]}</text>
+                <text
+                  textAnchor={outward ? (p.side === 'in' ? 'end' : 'start') : 'middle'}
+                  x={outward ? (p.side === 'in' ? -(p.r + 8) : p.r + 8) : 0}
+                  y={outward ? 4 : p.r + 14}
+                  fontFamily={FONT.mono}
+                  fontSize={main ? FS.base : FS.xs}
+                  fontWeight={main ? 600 : 400}
+                  fill={main ? C.accent : C.textSecondary}
+                  stroke={C.bgCard} strokeWidth={3} paintOrder="stroke"
                   pointerEvents="none">
-                  {focus.centerDegree} связей
+                  {p.label}
                 </text>
-              )}
+                {main && (
+                  <text textAnchor="middle" y={p.r + 29} fontFamily={FONT.mono} fontSize={FS.xs}
+                    fill={C.textMuted} stroke={C.bgCard} strokeWidth={3} paintOrder="stroke"
+                    pointerEvents="none">
+                    {focus.centerDegree} связей
+                  </text>
+                )}
+              </g>
+            );
+          })}
+        </g>
+
+        {/* Заглушки хвоста: остаток соседей раскрывается списком в панели */}
+        <g>
+          {focus.stubs.map(stub => (
+            <g key={stub.side} transform={`translate(${stub.x.toFixed(1)},${stub.y.toFixed(1)})`}
+              style={{ cursor: 'pointer' }}
+              onClick={ev => { ev.stopPropagation(); onExpandTail?.(stub.side); }}>
+              <circle r={22} fill={C.bgCard} stroke={C.dashed} strokeWidth={2} strokeDasharray="4 3" />
+              <text textAnchor="middle" dominantBaseline="central" fontFamily={FONT.mono}
+                fontSize={FS.xs} fill={C.textMuted} pointerEvents="none">+{stub.hidden}</text>
+              <text textAnchor="middle" y={38} fontFamily={FONT.mono} fontSize={FS.xs}
+                fill={C.textMuted} stroke={C.bgCard} strokeWidth={3} paintOrder="stroke"
+                pointerEvents="none">{mobile ? 'список' : 'ещё в списке'}</text>
             </g>
-          );
-        })}
-      </g>
+          ))}
+        </g>
 
-      {/* Заглушки хвоста: остаток соседей раскрывается списком в панели */}
-      <g>
-        {focus.stubs.map(stub => (
-          <g key={stub.side} transform={`translate(${stub.x.toFixed(1)},${stub.y.toFixed(1)})`}
-            style={{ cursor: 'pointer' }}
-            onClick={ev => { ev.stopPropagation(); onExpandTail?.(stub.side); }}>
-            <circle r={22} fill={C.bgCard} stroke={C.dashed} strokeWidth={2} strokeDasharray="4 3" />
-            <text textAnchor="middle" dominantBaseline="central" fontFamily={FONT.mono}
-              fontSize={FS.xs} fill={C.textMuted} pointerEvents="none">+{stub.hidden}</text>
-            <text textAnchor="middle" y={38} fontFamily={FONT.mono} fontSize={FS.xs}
-              fill={C.textMuted} stroke={C.bgCard} strokeWidth={3} paintOrder="stroke"
-              pointerEvents="none">{mobile ? 'список' : 'ещё в списке'}</text>
-          </g>
-        ))}
-      </g>
-
-      {/* Подписи сторон — что слева, что справа (без них раскладку нужно угадывать) */}
-      <g pointerEvents="none">
-        {mobile ? (
-          <>
-            <text x={viewW / 2} y={20} textAnchor="middle" fontFamily={FONT.sans} fontSize={FS.xs}
-              fill={C.textMuted} letterSpacing="0.6px">ЗАВИСЯТ ОТ НЕГО · {focus.incoming.length}</text>
-            <text x={viewW / 2} y={viewH - 6} textAnchor="middle" fontFamily={FONT.sans} fontSize={FS.xs}
-              fill={C.textMuted} letterSpacing="0.6px">ОТ КОГО ЗАВИСИТ ОН · {focus.outgoing.length}</text>
-          </>
-        ) : (
-          <>
-            <text x={24} y={26} fontFamily={FONT.sans} fontSize={FS.xs} fill={C.textMuted}
-              letterSpacing="0.6px">← ЗАВИСЯТ ОТ НЕГО · {focus.incoming.length}</text>
-            <text x={viewW - 24} y={26} textAnchor="end" fontFamily={FONT.sans} fontSize={FS.xs}
-              fill={C.textMuted} letterSpacing="0.6px">ОТ КОГО ЗАВИСИТ ОН · {focus.outgoing.length} →</text>
-          </>
-        )}
-      </g>
+        {/* Подписи сторон — что слева, что справа (без них раскладку нужно угадывать) */}
+        <g pointerEvents="none">
+          {mobile ? (
+            <>
+              <text x={viewW / 2} y={20} textAnchor="middle" fontFamily={FONT.sans} fontSize={FS.xs}
+                fill={C.textMuted} letterSpacing="0.6px">ЗАВИСЯТ ОТ НЕГО · {focus.incoming.length}</text>
+              <text x={viewW / 2} y={viewH - 6} textAnchor="middle" fontFamily={FONT.sans} fontSize={FS.xs}
+                fill={C.textMuted} letterSpacing="0.6px">ОТ КОГО ЗАВИСИТ ОН · {focus.outgoing.length}</text>
+            </>
+          ) : (
+            <>
+              <text x={24} y={26} fontFamily={FONT.sans} fontSize={FS.xs} fill={C.textMuted}
+                letterSpacing="0.6px">← ЗАВИСЯТ ОТ НЕГО · {focus.incoming.length}</text>
+              <text x={viewW - 24} y={26} textAnchor="end" fontFamily={FONT.sans} fontSize={FS.xs}
+                fill={C.textMuted} letterSpacing="0.6px">ОТ КОГО ЗАВИСИТ ОН · {focus.outgoing.length} →</text>
+            </>
+          )}
+        </g>
+      </SceneTransition>
     </svg>
   );
 }
 
-// === Режим «Обзор»: граф групп неймспейсов по слоям зависимостей ===
+// === «Обзор»: граф групп неймспейсов по слоям зависимостей ===
 // Координаты и слои приходят готовыми из buildOverviewScene/layoutOverview —
 // здесь только отрисовка и клики. Обратные пучки (нарушение слоистости) —
 // пунктир в C.warning, толщина пучка — по логарифму веса (bundleWidth).
@@ -353,9 +177,10 @@ function clipOverviewLabel(label: string, max: number): string {
   return label.length > max ? `${label.slice(0, max - 1)}…` : label;
 }
 
-export function CodeGraphOverviewCanvas({ scene, layout, onItemClick, onItemDblClick }: {
+export function CodeGraphOverviewCanvas({ scene, layout, animKey, onItemClick, onItemDblClick }: {
   scene: OverviewScene;
   layout: OverviewLayout;
+  animKey: string;
   onItemClick: (item: OverviewItem) => void;
   onItemDblClick: (item: OverviewItem) => void;
 }) {
@@ -365,79 +190,81 @@ export function CodeGraphOverviewCanvas({ scene, layout, onItemClick, onItemDblC
   return (
     <svg viewBox={`0 0 ${viewW} ${viewH}`} preserveAspectRatio="xMidYMid meet"
       style={{ width: '100%', height: '100%', display: 'block' }}>
-      {/* Подложки слоёв — чередующийся фон + подпись слоя слева */}
-      <g pointerEvents="none">
-        {layout.rows.map((row, i) => (
-          <g key={row.layer}>
-            {i % 2 === 1 && (
-              <rect x={8} y={row.y0} width={viewW - 16} height={row.y1 - row.y0} rx={12}
-                fill={C.bgPanel} opacity={0.5} />
-            )}
-            <text x={18} y={row.y0 + 14} fontFamily={FONT.sans} fontSize={FS.xs}
-              fill={C.textMuted} letterSpacing="0.6px">{row.title.toUpperCase()}</text>
-          </g>
-        ))}
-      </g>
-
-      {/* Рёбра-пучки: агрегированы между элементами, толщина — по логарифму веса.
-          Обратные (нарушение слоистости — источник ниже приёмника) — пунктир C.warning */}
-      <g>
-        {scene.bundles.map((b, i) => {
-          const a = layout.positions.get(b.fromKey);
-          const c = layout.positions.get(b.toKey);
-          if (!a || !c) return null;
-          const dominant = (['Calls', 'Implements', 'References'] as CodeGraphRelation[])
-            .reduce((best, rel) => (b.byRelation[rel] > b.byRelation[best] ? rel : best), 'Calls' as CodeGraphRelation);
-          const mx = (a.x + c.x) / 2 + (b.isBack ? 46 : 0);
-          const my = (a.y + c.y) / 2;
-          return (
-            <path key={i} d={`M${a.x},${a.y} Q${mx},${my} ${c.x},${c.y}`} fill="none"
-              stroke={b.isBack ? C.warning : EDGE_COLOR[dominant]}
-              strokeWidth={bundleWidth(b.weight)}
-              strokeDasharray={b.isBack ? '6 4' : undefined}
-              opacity={0.6} />
-          );
-        })}
-      </g>
-
-      {/* Узлы: группы (кружок с числом типов) и типы (глиф вида) — раскрытая до
-          типов группа показывает узлы вместо себя */}
-      <g>
-        {scene.items.map(it => {
-          const p = layout.positions.get(it.key);
-          if (!p) return null;
-          const soft = it.kind === 'rest' || it.kind === 'small';
-          const ring = it.kind === 'node' ? KIND_RING[it.node!.kind] : soft ? C.dashed : C.textSecondary;
-          return (
-            <g key={it.key} transform={`translate(${p.x.toFixed(1)},${p.y.toFixed(1)})`}
-              style={{ cursor: it.kind === 'rest' || it.kind === 'small' ? 'default' : 'pointer' }}
-              onClick={ev => { ev.stopPropagation(); onItemClick(it); }}
-              onDoubleClick={ev => { ev.stopPropagation(); onItemDblClick(it); }}>
-              {it.godCount > 0 && (
-                <circle r={p.r + 6} fill="none" stroke={C.accent} strokeWidth={2}
-                  strokeDasharray="3 3" opacity={0.5} pointerEvents="none" />
+      <SceneTransition animKey={animKey}>
+        {/* Подложки слоёв — чередующийся фон + подпись слоя слева */}
+        <g pointerEvents="none">
+          {layout.rows.map((row, i) => (
+            <g key={row.layer}>
+              {i % 2 === 1 && (
+                <rect x={8} y={row.y0} width={viewW - 16} height={row.y1 - row.y0} rx={12}
+                  fill={C.bgPanel} opacity={0.5} />
               )}
-              <circle r={p.r} fill={C.bgCard} stroke={ring}
-                strokeWidth={2.2} strokeDasharray={soft ? '4 3' : undefined} pointerEvents="none" />
-              {it.kind === 'node' ? (
-                <text textAnchor="middle" dominantBaseline="central" fontFamily={FONT.mono}
-                  fontSize={FS.base} fontWeight={600} fill={KIND_COLOR[it.node!.kind]} pointerEvents="none">
-                  {KIND_GLYPH[it.node!.kind]}
-                </text>
-              ) : (
-                <text textAnchor="middle" dominantBaseline="central" fontFamily={FONT.mono}
-                  fontSize={FS.sm} fontWeight={600} fill={soft ? C.textMuted : C.textHeading} pointerEvents="none">
-                  {soft ? '…' : it.count}
-                </text>
-              )}
-              <text textAnchor="middle" y={p.r + 14} fontFamily={FONT.mono} fontSize={FS.xs}
-                fill={C.textSecondary} pointerEvents="none">
-                {clipOverviewLabel(it.label, maxLabel)}
-              </text>
+              <text x={18} y={row.y0 + 14} fontFamily={FONT.sans} fontSize={FS.xs}
+                fill={C.textMuted} letterSpacing="0.6px">{row.title.toUpperCase()}</text>
             </g>
-          );
-        })}
-      </g>
+          ))}
+        </g>
+
+        {/* Рёбра-пучки: агрегированы между элементами, толщина — по логарифму веса.
+            Обратные (нарушение слоистости — источник ниже приёмника) — пунктир C.warning */}
+        <g>
+          {scene.bundles.map((b, i) => {
+            const a = layout.positions.get(b.fromKey);
+            const c = layout.positions.get(b.toKey);
+            if (!a || !c) return null;
+            const dominant = (['Calls', 'Implements', 'References'] as CodeGraphRelation[])
+              .reduce((best, rel) => (b.byRelation[rel] > b.byRelation[best] ? rel : best), 'Calls' as CodeGraphRelation);
+            const mx = (a.x + c.x) / 2 + (b.isBack ? 46 : 0);
+            const my = (a.y + c.y) / 2;
+            return (
+              <path key={i} d={`M${a.x},${a.y} Q${mx},${my} ${c.x},${c.y}`} fill="none"
+                stroke={b.isBack ? C.warning : EDGE_COLOR[dominant]}
+                strokeWidth={bundleWidth(b.weight)}
+                strokeDasharray={b.isBack ? '6 4' : undefined}
+                opacity={0.6} />
+            );
+          })}
+        </g>
+
+        {/* Узлы: группы (кружок с числом типов) и типы (глиф вида) — раскрытая до
+            типов группа показывает узлы вместо себя */}
+        <g>
+          {scene.items.map(it => {
+            const p = layout.positions.get(it.key);
+            if (!p) return null;
+            const soft = it.kind === 'rest' || it.kind === 'small';
+            const ring = it.kind === 'node' ? KIND_RING[it.node!.kind] : soft ? C.dashed : C.textSecondary;
+            return (
+              <g key={it.key} transform={`translate(${p.x.toFixed(1)},${p.y.toFixed(1)})`}
+                style={{ cursor: it.kind === 'rest' || it.kind === 'small' ? 'default' : 'pointer' }}
+                onClick={ev => { ev.stopPropagation(); onItemClick(it); }}
+                onDoubleClick={ev => { ev.stopPropagation(); onItemDblClick(it); }}>
+                {it.godCount > 0 && (
+                  <circle r={p.r + 6} fill="none" stroke={C.accent} strokeWidth={2}
+                    strokeDasharray="3 3" opacity={0.5} pointerEvents="none" />
+                )}
+                <circle r={p.r} fill={C.bgCard} stroke={ring}
+                  strokeWidth={2.2} strokeDasharray={soft ? '4 3' : undefined} pointerEvents="none" />
+                {it.kind === 'node' ? (
+                  <text textAnchor="middle" dominantBaseline="central" fontFamily={FONT.mono}
+                    fontSize={FS.base} fontWeight={600} fill={KIND_COLOR[it.node!.kind]} pointerEvents="none">
+                    {KIND_GLYPH[it.node!.kind]}
+                  </text>
+                ) : (
+                  <text textAnchor="middle" dominantBaseline="central" fontFamily={FONT.mono}
+                    fontSize={FS.sm} fontWeight={600} fill={soft ? C.textMuted : C.textHeading} pointerEvents="none">
+                    {soft ? '…' : it.count}
+                  </text>
+                )}
+                <text textAnchor="middle" y={p.r + 14} fontFamily={FONT.mono} fontSize={FS.xs}
+                  fill={C.textSecondary} pointerEvents="none">
+                  {clipOverviewLabel(it.label, maxLabel)}
+                </text>
+              </g>
+            );
+          })}
+        </g>
+      </SceneTransition>
     </svg>
   );
 }

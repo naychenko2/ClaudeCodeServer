@@ -138,6 +138,7 @@ public class SubscriptionOAuthUsageServiceTests : IDisposable
         byType["seven_day_fable"].ResetsAt.Should().Be("2026-07-30T00:00:00Z");
         byType["seven_day_fable"].SubscriptionKey.Should().Be("claude-2");
         byType["extra_usage"].Utilization.Should().BeApproximately(0.05, 0.001);
+        byType.Values.Select(s => s.Source).Should().AllBeEquivalentTo("oauth");
     }
 
     // Сервис на произвольном конфиге — для тестов EnumerateAccounts (состав пула важен)

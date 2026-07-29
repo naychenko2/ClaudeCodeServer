@@ -30,6 +30,42 @@ function planSummaryLine(plan: TeamPlan): string {
   return parts.join(' · ');
 }
 
+// Версия плана (Э8): «План v1» — всегда; «· обновлён после уточнений» — только у v2+
+function planVersionLabel(plan: TeamPlan): string {
+  const version = plan.version > 0 ? plan.version : 1;
+  return version > 1 ? `План v${version} · обновлён после уточнений` : `План v${version}`;
+}
+
+// Полный подзаголовок: версия плана + счётчики под-задач/волн/исполнителей
+function planSubtitle(plan: TeamPlan): string {
+  return [planVersionLabel(plan), planSummaryLine(plan)].join(' · ');
+}
+
+// Блок «Что изменилось» / «Допущения» (Э8): пунктирная рамка, метка заглавными,
+// строки с точкой-маркером. Скрывается целиком, когда список пуст
+function AnnotationBlock({ label, items }: { label: string; items: string[] }) {
+  if (items.length === 0) return null;
+  return (
+    <div style={{ border: `1px dashed ${C.dashed}`, borderRadius: R.lg, padding: '8px 10px 6px', margin: '10px 0' }}>
+      <div style={{
+        fontSize: 10, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase',
+        color: C.textMuted, padding: '0 2px 4px',
+      }}>
+        {label}
+      </div>
+      {items.map((text, i) => (
+        <div key={i} style={{
+          display: 'flex', alignItems: 'flex-start', gap: 8, padding: '3px 2px',
+          fontSize: 12.5, color: C.textSecondary, lineHeight: 1.45,
+        }}>
+          <span style={{ width: 4, height: 4, borderRadius: '50%', background: C.textMuted, flexShrink: 0, marginTop: 7 }} />
+          <span style={{ minWidth: 0, wordBreak: 'break-word' }}>{text}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // Подпись группы волны: первая идёт параллельно, следующие ждут предыдущую
 function waveHint(wave: number): string {
   if (wave <= 1) return 'параллельно';
@@ -373,7 +409,7 @@ export function TeamPlanView({ item, online }: {
             План командной реализации
           </div>
           <div style={{ fontSize: 12, color: C.textSecondary, marginTop: 2 }}>
-            {planSummaryLine(plan)}
+            {planSubtitle(plan)}
           </div>
         </div>
         <span style={{
@@ -388,8 +424,16 @@ export function TeamPlanView({ item, online }: {
         <div style={{ fontSize: 12.5, color: C.textSecondary, lineHeight: 1.45 }}>{plan.summary}</div>
       )}
 
+      {/* «Что изменилось» (Э8, только у v2+) — над телом плана: человек уже читал v1,
+          подтверждает именно дельту */}
+      <AnnotationBlock label={`Что изменилось в v${plan.version > 0 ? plan.version : 1} — по вашим ответам`} items={plan.changes} />
+
       <PlanBody plan={plan} candidates={candidates} onReassign={reassign}
         readOnly={!canAct} isMobile={isMobile} rootPath={rootPath} />
+
+      {/* «Допущения» (Э8) — под телом, над кнопками: путь «вопросов нет» — главный
+          носитель, декларируются вместе с планом */}
+      <AnnotationBlock label="Допущения" items={plan.assumptions} />
 
       {!online ? (
         <div style={{ fontSize: 12, color: C.textMuted }}>Недоступно офлайн</div>

@@ -513,6 +513,7 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
           stopped: msg.stopped ?? false,
           planCardId: msg.planCardId,
           modeLocked: msg.modeLocked ?? false,
+          planVersion: msg.planVersion ?? 0,
         },
       };
 

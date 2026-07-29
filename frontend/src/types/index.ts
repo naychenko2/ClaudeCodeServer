@@ -591,8 +591,9 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'provider_limit'; resetsAt?: string; providers: ProviderFallbackOption[] }
   | { type: 'work_loop'; active: boolean; iteration: number; maxIterations: number; phase: string | null }
   // Режим «Командная реализация»: приходит при каждом изменении (вкл/стадия/волна/авто/стоп)
-  // modeLocked — Э8: план-режим навязан чату (интервью/планирование)
-  | { type: 'team_implement'; active: boolean; stage: TeamImplementStage | null; waveNumber: number; autoWaves: boolean; coordinatorPersonaId: string | null; plannerPersonaId: string | null; executorPersonaIds: string[] | null; budget: TeamImplementBudget | null; planCardId: string | null; plannedWaves?: number; coordinatorNoCode?: boolean; stopped?: boolean; modeLocked?: boolean }
+  // modeLocked/planVersion — Э8: план-режим навязан чату (интервью/планирование),
+  // версия текущего плана итерации
+  | { type: 'team_implement'; active: boolean; stage: TeamImplementStage | null; waveNumber: number; autoWaves: boolean; coordinatorPersonaId: string | null; plannerPersonaId: string | null; executorPersonaIds: string[] | null; budget: TeamImplementBudget | null; planCardId: string | null; plannedWaves?: number; coordinatorNoCode?: boolean; stopped?: boolean; modeLocked?: boolean; planVersion?: number }
   // Карточка плана командной реализации. Переиздаётся при каждой правке (смена исполнителя,
   // решение человека) с тем же planId — клиент обновляет карточку, а не плодит дубли
   | { type: 'team_plan'; planId: string; plan: TeamPlan; resolved: boolean; approved: boolean | null }
@@ -842,6 +843,9 @@ export interface SessionTeamImplement {
   // SessionTeamImplement.SavedMode с бэка) — вернётся после согласования плана. У live-события
   // его нет, там сразу приходит посчитанный modeLocked
   savedMode?: Mode | null;
+  // Э8: версия текущего плана итерации (0 — планов ещё не было). Имя совпадает и на REST,
+  // и в live-событии — маппится напрямую
+  planVersion: number;
 }
 
 // Live-состояние режима (из события team_implement; флаг team-implement-mode)
@@ -875,6 +879,13 @@ export interface TeamPlan {
   waveCount: number;
   executorCount: number;
   subtasks: TeamPlanSubtask[];
+  // Э8: версия плана в итерации — 1 у первого, растёт с каждым перепланированием после
+  // интервью. Карточка показывает «План v2 · обновлён после уточнений»
+  version: number;
+  // Э8: допущения планировщика — путь «вопросов нет» (утверждаются вместе с планом)
+  assumptions: string[];
+  // Э8: «что изменилось» у плана vN относительно предыдущей версии; пусто у v1
+  changes: string[];
 }
 
 // Решение человека по карточке плана (метод хаба RespondTeamPlan)

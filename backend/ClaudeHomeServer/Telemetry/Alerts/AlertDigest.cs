@@ -71,11 +71,25 @@ public static class AlertDigest
     /// Алерты, о которых имеет смысл уведомлять: активные и не заглушенные.
     /// Заглушённые (silence в SigNoz) пропускаем сознательно — их выключил человек.
     /// </summary>
-    public static IReadOnlyList<SignozAlert> Actionable(IEnumerable<SignozAlert> alerts)
+    /// <param name="environments">
+    /// Ограничение по контурам (<c>deployment.environment</c>). Пусто — берём все.
+    /// Алерт без метки контура проходит всегда: правило без разреза по среде касается
+    /// инсталляции целиком, и отфильтровать его — значит промолчать о том, что важно.
+    /// </param>
+    public static IReadOnlyList<SignozAlert> Actionable(
+        IEnumerable<SignozAlert> alerts, IReadOnlyCollection<string>? environments = null)
         => alerts.Where(a => !a.IsSilenced
                           && (a.State is null
-                              || a.State.Equals("active", StringComparison.OrdinalIgnoreCase)))
+                              || a.State.Equals("active", StringComparison.OrdinalIgnoreCase))
+                          && MatchesEnvironment(a, environments))
                  .ToList();
+
+    private static bool MatchesEnvironment(SignozAlert alert, IReadOnlyCollection<string>? environments)
+    {
+        if (environments is null || environments.Count == 0) return true;
+        if (alert.Environment is not { } env) return true;
+        return environments.Contains(env, StringComparer.OrdinalIgnoreCase);
+    }
 
     /// <summary>
     /// Сравнивает текущую выдачу с уже известными отпечатками.

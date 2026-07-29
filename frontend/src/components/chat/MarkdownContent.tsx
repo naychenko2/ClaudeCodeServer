@@ -87,11 +87,31 @@ function FileLink({ path, onOpen, mono, children }: {
   );
 }
 
-// Служебный маркер завершения цикла «до готово» (<promise>ГОТОВО</promise>) — протокол
-// детектора, не для глаз. Режем по тегу (слово-обещание конфигурируемо на бэкенде).
-const PROMISE_MARKER = /<promise>[\s\S]*?<\/promise>/gi;
-export function stripPromiseMarker(text: string): string {
-  return text.replace(PROMISE_MARKER, '').replace(/\n{3,}/g, '\n\n').trim();
+// Служебные маркеры протоколов — не для глаз: завершение цикла «до готово»
+// (<promise>ГОТОВО</promise>, слово-обещание конфигурируемо на бэкенде) и протокол
+// «Командной реализации» — <team:work>постановка</team>, <escalate:вид>…</escalate>.
+const SERVICE_MARKERS = /<promise>[\s\S]*?<\/promise>|<team:work>[\s\S]*?<\/team>|<escalate:[a-z]+>[\s\S]*?<\/escalate>/gi;
+// Незакрытый маркер в хвосте — ход ещё стримится, закрывающий тег придёт позже;
+// без этого пользователь успевает прочитать «<team:work>Создать …» целиком
+const OPEN_MARKER = /<(?:promise|team:work|escalate:[a-z]+)>[\s\S]*$/i;
+// Код-фрагменты (```блок``` и `инлайн`) — зона, где маркер остаётся как есть: там его
+// цитируют, объясняя протокол. Так же его игнорируют и детекторы бэкенда
+// (SessionManager.ParseWorkMarker / ParseEscalationMarker / проверка promise)
+const CODE_SPANS = /```[\s\S]*?(?:```|$)|`[^`\n]*`/g;
+
+function stripOutsideCode(chunk: string): string {
+  return chunk.replace(SERVICE_MARKERS, '').replace(OPEN_MARKER, '');
+}
+
+export function stripServiceMarkers(text: string): string {
+  let out = '';
+  let last = 0;
+  for (const m of text.matchAll(CODE_SPANS)) {
+    out += stripOutsideCode(text.slice(last, m.index)) + m[0];
+    last = m.index + m[0].length;
+  }
+  out += stripOutsideCode(text.slice(last));
+  return out.replace(/\n{3,}/g, '\n\n').trim();
 }
 
 // Рендер текста Claude с поддержкой Markdown
@@ -202,7 +222,7 @@ export function MarkdownContent({ text }: { text: string }) {
         ),
       }}
     >
-      {stripPromiseMarker(text)}
+      {stripServiceMarkers(text)}
     </ReactMarkdown>
   );
 }

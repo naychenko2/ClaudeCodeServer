@@ -10,6 +10,7 @@ interface ConfirmDialogProps {
   subtitle?: ReactNode;
   confirmLabel?: string;
   confirmVariant?: ButtonVariant;   // primary | danger
+  cancelLabel?: string;             // по умолчанию «Отмена» (дефолт ModalActions)
   onConfirm: () => void | Promise<void>;
   onCancel: () => void;
 }
@@ -19,7 +20,7 @@ interface ConfirmDialogProps {
 // Асинхронный onConfirm показывает спиннер на кнопке до завершения.
 export function ConfirmDialog({
   title, subtitle, confirmLabel = 'Подтвердить', confirmVariant = 'primary',
-  onConfirm, onCancel,
+  cancelLabel, onConfirm, onCancel,
 }: ConfirmDialogProps) {
   const [busy, setBusy] = useState(false);
 
@@ -42,6 +43,7 @@ export function ConfirmDialog({
         <ModalActions
           confirmLabel={confirmLabel}
           confirmVariant={confirmVariant}
+          cancelLabel={cancelLabel}
           loading={busy}
           onConfirm={handleConfirm}
           onCancel={onCancel}

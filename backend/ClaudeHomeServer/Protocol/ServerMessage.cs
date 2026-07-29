@@ -239,6 +239,53 @@ public record SpeakerChangedMessage(string PersonaId, string Label)
 public record WorkLoopMessage(bool Active, int Iteration, int MaxIterations, string? Phase)
     : ServerMessage("work_loop");
 
+// Карточка плана режима «Командная реализация» (Э2): структурный план в ленту штаба.
+// Аналог plan_review, но план — объект (под-задачи, исполнители, обоснование, волны),
+// а не текст. Ответ — SessionHub.RespondTeamPlan. Событие переиздаётся при смене
+// исполнителя (Reassign), поэтому клиент сверяет карточку по PlanId.
+public record TeamPlanMessage(
+        string PlanId,
+        Models.TeamImplementPlan Plan,
+        bool Resolved,
+        bool? Approved)
+    : ServerMessage("team_plan");
+
+// Карточка остановки режима «Командная реализация» (Э4): блокер исполнителя, провал задачи,
+// исчерпанный бюджет, зависшая волна… Kind — wire-токен триггера, Actions — кнопки решения.
+// Событие переиздаётся при ответе человека (Resolved=true), клиент сверяет по EscalationId.
+public record TeamEscalationMessage(
+        string EscalationId,
+        string Kind,
+        string Title,
+        string Details,
+        IReadOnlyList<Models.TeamEscalationAction> Actions,
+        string? TaskId,
+        int Wave,
+        bool Resolved,
+        string? ChosenActionId)
+    : ServerMessage("team_escalation");
+
+// Состояние режима «Командная реализация» (флаг team-implement-mode): для бейджа в композере
+// и маркера в списке чатов. Stage — wire-токен стадии (planning/confirming/wave/…).
+// PlannedWaves — плановое число волн текущей итерации (Э3): бейдж «волна N из M» берёт
+// M отсюда; 0 — план ещё не запускался (тогда M показывать нечем).
+public record TeamImplementMessage(
+        bool Active,
+        string? Stage,
+        int WaveNumber,
+        bool AutoWaves,
+        string? CoordinatorPersonaId,
+        string? PlannerPersonaId,
+        IReadOnlyList<string>? ExecutorPersonaIds,
+        Models.TeamImplementBudget? Budget,
+        string? PlanCardId,
+        int PlannedWaves = 0,
+        bool CoordinatorNoCode = true,
+        // Человек нажал «Остановить» (Э4): новые волны не стартуют, пока он не продолжит.
+        // Отдельно от стадии: практика может ждать решения и без остановки (блокер, провал).
+        bool Stopped = false)
+    : ServerMessage("team_implement");
+
 // Чат переключён на другой аккаунт/провайдер. Auto=true — тихий фейловер внутри пула
 // подписок Claude (та же модель и эндпоинт, в ленту не попадает); иначе — явная миграция
 // на стороннего провайдера, Label — подпись разделителя «Продолжено на …».

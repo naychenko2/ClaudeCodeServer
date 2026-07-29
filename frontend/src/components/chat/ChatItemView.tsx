@@ -26,6 +26,8 @@ import { TaskCreatedView, isTasksCreate } from './TaskCreatedView';
 import type { ActivityEntry } from './timeline';
 import { AskQuestionView } from './AskQuestionView';
 import { PlanReviewView } from './PlanReviewView';
+import { TeamPlanView } from './TeamPlanView';
+import { TeamEscalationView } from './TeamEscalationView';
 
 // Разбор input инструмента TodoWrite → пункты чек-листа (каждый вызов несет полный список)
 function parseTodoWriteInput(input: unknown): TodoItem[] {
@@ -768,6 +770,14 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
 
     case 'plan_review':
       return <PlanReviewView item={item} online={online} onRespond={onRespondPlan} version={planVersion} showBadge={planShowBadge} showSwitch={planShowSwitch} onSwitchMode={onSwitchMode} />;
+
+    case 'team_plan':
+      // Действия и состояние режима карточка берёт из TeamPlanContext (провайдит ChatPanel)
+      return <TeamPlanView item={item} online={online} />;
+
+    case 'team_escalation':
+      // Карточка остановки: решение уходит через TeamEscalationContext (провайдит ChatPanel)
+      return <TeamEscalationView item={item} online={online} />;
 
     case 'permission_request':
       return <PermissionRequestView item={item} online={online}

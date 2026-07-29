@@ -5,12 +5,17 @@
 import type { LucideIcon } from 'lucide-react';
 import {
   BadgeCheck, Boxes, FlaskConical, GraduationCap, HelpCircle, MessagesSquare,
-  Rocket, Route, Scale, ScanSearch, Swords,
+  Rocket, Route, Scale, ScanSearch, Swords, Users,
 } from 'lucide-react';
+import { FLAGS } from '../../lib/featureFlags';
 
+// `implement` — быстрый workflow-ход «Командный спринт» (субагенты внутри одного хода);
+// id менять нельзя: по нему детектятся старые ходы `/team-implement` в лентах.
+// `implementMode` — режим чата «Командная реализация» (чат-штаб): включается REST-вызовом,
+// а не текстом хода, поэтому в детекторе его нет.
 export type TeamMechanicId =
   | 'discuss' | 'panel' | 'consensus' | 'interview'
-  | 'autopilot' | 'implement' | 'qa' | 'review' | 'redteam' | 'trace' | 'sci';
+  | 'autopilot' | 'implement' | 'implementMode' | 'qa' | 'review' | 'redteam' | 'trace' | 'sci';
 
 export type TeamMechanicGroup = 'Обсудить' | 'Спланировать' | 'Сделать' | 'Проверить' | 'Исследовать';
 
@@ -51,6 +56,7 @@ export interface TeamMechanicSettings {
   attackAngles: AttackAngle[];      // redteam: углы атаки
   implWorktree: boolean;            // implement: параллельно в worktree (иначе последовательно)
   implVerify: boolean;              // implement: финальная проверка тестами/сборкой
+  modeAutoWaves: boolean;           // implementMode: авто-волны при включении режима
 }
 
 export const DEFAULT_TEAM_SETTINGS: TeamMechanicSettings = {
@@ -68,6 +74,7 @@ export const DEFAULT_TEAM_SETTINGS: TeamMechanicSettings = {
   attackAngles: ['edge-cases', 'wrong-assumptions', 'failure-modes'],
   implWorktree: false,
   implVerify: true,
+  modeAutoWaves: true,
 };
 
 export interface TeamMechanic {
@@ -81,6 +88,8 @@ export interface TeamMechanic {
   placeholder: string;
   /** Имя скилла, который должен быть в окружении (см. api.skills); null — работает всегда */
   requiredSkill: string | null;
+  /** Фич-флаг механики (см. lib/featureFlags); без него карточка не показывается вовсе */
+  featureFlag?: string;
   /** Карточка следующей итерации — показывается задизейбленной */
   soon?: boolean;
 }
@@ -112,8 +121,13 @@ export const TEAM_MECHANICS: TeamMechanic[] = [
     requiredSkill: 'oh-my-claudecode:autopilot',
   },
   {
-    id: 'implement', group: 'Сделать', name: 'Командная реализация', icon: Boxes, cost: 3,
-    desc: 'Разбить и раздать исполнителям', placeholder: 'Что реализовать командой?…',
+    id: 'implementMode', group: 'Сделать', name: 'Командная реализация', icon: Users, cost: 3,
+    desc: 'Штаб фичи: план, задачи, исполнители', placeholder: 'Что реализовать командой?…',
+    requiredSkill: null, featureFlag: FLAGS.teamImplementMode,
+  },
+  {
+    id: 'implement', group: 'Сделать', name: 'Командный спринт', icon: Boxes, cost: 3,
+    desc: 'Быстро разбить и раздать субагентам', placeholder: 'Что сделать спринтом?…',
     requiredSkill: 'team-implement',
   },
   {
@@ -238,6 +252,10 @@ export function buildTeamTurnText(
       if (s.participants.length > 0) args.executors = s.participants.map(p => p.handle);
       return `/team-implement ${JSON.stringify(args)}`;
     }
+    case 'implementMode':
+      // Режим чата: обвязки нет — тема уходит обычным сообщением, а сам режим включается
+      // REST-вызовом PUT /chats/{id}/team-implement до отправки (см. Composer.handleSend)
+      return t;
   }
 }
 
@@ -281,6 +299,7 @@ export function costEstimate(id: TeamMechanicId, s: TeamMechanicSettings): strin
     }
     case 'redteam': return `${s.attackAngles.length || 1} углов атаки + синтез`;
     case 'implement': return s.implWorktree ? 'параллельно в worktree + merge' : 'последовательная раздача';
+    case 'implementMode': return s.modeAutoWaves ? 'волны идут сами, пока хватает бюджета' : 'подтверждение после каждой волны';
   }
 }
 
@@ -387,6 +406,9 @@ export function describeTeamTurn(text: string | null | undefined): TeamTurnInfo 
     case 'trace':
     case 'sci':
       topic = quotedTopic(t);
+      break;
+    case 'implementMode':
+      // Не детектится (обычное сообщение) — ветка недостижима, нужна для полноты switch
       break;
   }
 

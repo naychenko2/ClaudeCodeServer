@@ -2,7 +2,12 @@
 // и зона настроек выбранной механики (по макету team-discuss-panel). Контролируемый
 // компонент: выбранная механика и настройки живут у родителя (Composer), сюда приходят
 // пропсами. Тему пользователь пишет в самом поле композера.
+import { ShieldAlert } from 'lucide-react';
 import { C, FONT, R, SHADOW } from '../../lib/design';
+import { ICON_STROKE } from '../../components/ui/icons';
+import { FLAGS, useFeature } from '../../lib/featureFlags';
+import { teamImplementModeWarning, teamImplementSwitchesMode } from '../../lib/teamImplement';
+import type { Mode } from '../../lib/modes';
 import type { Persona } from '../../types';
 import { PersonaAvatar } from '../personas/PersonaAvatar';
 import {
@@ -21,6 +26,12 @@ export interface TeamDrawerProps {
   // Имена установленных скиллов (из пропа skills композера): механики
   // с requiredSkill вне этого списка показываются задизейбленными
   availableSkills: string[];
+  // Чат внутри проекта: у режима «Командная реализация» состав исполнителей опционален
+  // (по умолчанию вся команда проекта), а вне проекта команды нет — выбор обязателен
+  isProjectChat?: boolean;
+  // Текущий режим прав чата: «Командная реализация» с правилом «координатор не пишет код»
+  // переключает его на «Авто» — предупреждаем, пока переключать есть что
+  chatMode?: Mode;
   isMobile?: boolean;
   onPick: (id: TeamMechanicId) => void;
   onSettings: (s: TeamMechanicSettings) => void;
@@ -126,16 +137,22 @@ function SLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
-export function TeamDrawer({ open, mech, settings, candidates, availableSkills, isMobile, onPick, onSettings, onClose, onResetModes }: TeamDrawerProps) {
+export function TeamDrawer({ open, mech, settings, candidates, availableSkills, isProjectChat, chatMode, isMobile, onPick, onSettings, onClose, onResetModes }: TeamDrawerProps) {
   // Кандидаты — только реальные персоны; виртуальные роли пантеона из селекторов
   // убраны (подключение — через раздел «Персоны»)
   const allCandidates = candidates;
+  // Механики за фич-флагом: без включённого флага карточки в списке нет вовсе
+  const flagValues: Record<string, boolean> = {
+    [FLAGS.teamImplementMode]: useFeature(FLAGS.teamImplementMode),
+  };
+  const mechanics = TEAM_MECHANICS.filter(mc => !mc.featureFlag || flagValues[mc.featureFlag]);
 
   const m = mech ? teamMechanic(mech) : null;
-  // Лимит участников: ревью-консилиум — 5 (по осям), панель/красная команда/реализация — 4,
-  // дискуссия — 2
+  // Лимит участников: командная реализация — вся команда (до 8), ревью-консилиум — 5
+  // (по осям), панель/красная команда/спринт — 4, дискуссия — 2
   const maxParticipants =
-    mech === 'review' ? 5
+    mech === 'implementMode' ? 8
+    : mech === 'review' ? 5
     : (mech === 'panel' || mech === 'redteam' || mech === 'implement') ? 4
     : 2;
   const selectedIds = settings.participants.map(p => p.id);
@@ -321,7 +338,47 @@ export function TeamDrawer({ open, mech, settings, candidates, availableSkills, 
         if (settings.participants.length === 0) {
           parts.push(
             <span key="hint" style={{ fontSize: 11, color: C.warningText, fontFamily: FONT.sans }}>
-              Отметь хотя бы одного исполнителя — без этого реализацию не запустить.
+              Отметь хотя бы одного исполнителя — без этого спринт не запустить.
+            </span>,
+          );
+        }
+        break;
+      case 'implementMode':
+        parts.push(
+          <span key="p" style={{ display: 'inline-flex', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+            <SLabel>Исполнители (по умолчанию — вся команда проекта):</SLabel>
+            {personaChips}
+          </span>,
+          <Chk key="a" checked={settings.modeAutoWaves} label="Авто-волны — не спрашивать после каждой волны"
+            onChange={v => onSettings({ ...settings, modeAutoWaves: v })} />,
+          <span key="auto-hint" style={{ fontSize: 11, color: C.textMuted, fontFamily: FONT.sans }}>
+            План согласуете один раз. Дальше команда работает сама, пока хватает бюджета.
+          </span>,
+        );
+        if (!isProjectChat && settings.participants.length === 0) {
+          parts.push(
+            <span key="hint" style={{ fontSize: 11, color: C.warningText, fontFamily: FONT.sans }}>
+              Выберите исполнителей — вне проекта команды нет, и подбирать не из кого.
+            </span>,
+          );
+        } else if (settings.participants.length === 0) {
+          parts.push(
+            <span key="hint" style={{ fontSize: 11, color: C.textMuted, fontFamily: FONT.sans }}>
+              Оставьте пустым, и планировщик подберёт людей под каждую часть работы сам.
+            </span>,
+          );
+        }
+        // Включение режима меняет чужую настройку — режим прав чата. Говорим об этом
+        // заранее и только когда менять реально есть что: в «спрашивающих» режимах
+        // переключения не будет, и строка бы зря мозолила глаза
+        if (chatMode && teamImplementSwitchesMode(chatMode)) {
+          parts.push(
+            <span key="mode" style={{
+              display: 'inline-flex', alignItems: 'flex-start', gap: 5,
+              fontSize: 11, color: C.textSecondary, fontFamily: FONT.sans, lineHeight: 1.4,
+            }}>
+              <ShieldAlert size={12} strokeWidth={ICON_STROKE} style={{ flexShrink: 0, marginTop: 1 }} />
+              {teamImplementModeWarning(chatMode)}
             </span>,
           );
         }
@@ -407,7 +464,7 @@ export function TeamDrawer({ open, mech, settings, candidates, availableSkills, 
 
   // Группы в порядке первого появления в реестре
   const groups: string[] = [];
-  for (const mc of TEAM_MECHANICS) if (!groups.includes(mc.group)) groups.push(mc.group);
+  for (const mc of mechanics) if (!groups.includes(mc.group)) groups.push(mc.group);
 
   return (
     <div style={{
@@ -474,7 +531,7 @@ export function TeamDrawer({ open, mech, settings, candidates, availableSkills, 
                 color: C.textMuted, paddingLeft: 2, fontFamily: FONT.sans,
               }}>{g}</span>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {TEAM_MECHANICS.filter(mc => mc.group === g).map(card)}
+                {mechanics.filter(mc => mc.group === g).map(card)}
               </div>
             </div>
           ))}

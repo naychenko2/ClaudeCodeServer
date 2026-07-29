@@ -1,5 +1,5 @@
 import * as signalR from '@microsoft/signalr';
-import type { ServerMessage } from '../types';
+import type { ServerMessage, TeamPlanDecision } from '../types';
 import { getConnectionState, setConnectionState, setDegraded } from './offline';
 
 let connection: signalR.HubConnection | null = null;
@@ -149,6 +149,22 @@ export async function answerQuestion(sessionId: string, toolUseId: string, answe
 export async function respondPlan(sessionId: string, requestId: string, approve: boolean, feedback?: string): Promise<void> {
   const conn = await ensureConnected();
   await conn.invoke('RespondPlan', sessionId, requestId, approve, feedback ?? null);
+}
+
+// Решение по карточке плана командной реализации. reassign требует subtaskId +
+// executorPersonaId (карточка остаётся открытой), run/cancel закрывают карточку.
+export async function respondTeamPlan(sessionId: string, planId: string, decision: TeamPlanDecision,
+  subtaskId?: string, executorPersonaId?: string): Promise<void> {
+  const conn = await ensureConnected();
+  await conn.invoke('RespondTeamPlan', sessionId, planId, decision, subtaskId ?? null, executorPersonaId ?? null);
+}
+
+// Решение по карточке остановки: кнопка (actionId) и/или комментарий человека.
+// Карточка гаснет, решение уходит координатору отдельным ходом
+export async function respondTeamEscalation(sessionId: string, escalationId: string,
+  actionId?: string, comment?: string): Promise<void> {
+  const conn = await ensureConnected();
+  await conn.invoke('RespondTeamEscalation', sessionId, escalationId, actionId ?? null, comment ?? null);
 }
 
 export function onMessage(handler: (msg: ServerMessage) => void): () => void {

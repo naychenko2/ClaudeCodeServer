@@ -15,6 +15,7 @@ import {
   DEFAULT_TEAM_SETTINGS, buildTeamTurnText, teamMechanic,
   type TeamMechanicId, type TeamMechanicSettings,
 } from '../features/team/teamMechanics';
+import { TeamImplementBadge } from '../features/team/TeamImplementBadge';
 import { setLastMechanic } from '../lib/lastMechanic';
 import { type Mode, MODE_META, MODES, ModeIcon, isDangerMode } from '../lib/modes';
 import { DangerModeConfirm } from './DangerModeConfirm';
@@ -22,7 +23,7 @@ import { useAssistantName } from './chat/contexts';
 import { getDraft, setDraft } from '../lib/drafts';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { useVoiceInput } from '../hooks/useVoiceInput';
-import type { SkillInfo, AgentInfo, Persona, WorkLoopState } from '../types';
+import type { SkillInfo, AgentInfo, Persona, WorkLoopState, SessionTeamImplement } from '../types';
 
 export interface ComposerProps {
   // Ключ чата — под него хранится черновик недовведённого текста
@@ -73,6 +74,18 @@ export interface ComposerProps {
   // Promise — чтобы автопилот с «до готово» мог дождаться включения цикла до отправки
   workLoop?: WorkLoopState | null;
   onToggleWorkLoop?: () => void | Promise<void>;
+  // Режим «Командная реализация» (флаг team-implement-mode): состояние (live с фолбэком
+  // на Session.teamImplement); null — режим выключен. Бейдж виден при заданных обработчиках
+  teamImplement?: SessionTeamImplement | null;
+  onToggleTeamImplementAuto?: () => void | Promise<void>;
+  onDisableTeamImplement?: () => void | Promise<void>;
+  // «Остановить» прогон: режим остаётся включённым, новые волны не стартуют
+  onStopTeamImplement?: () => void | Promise<void>;
+  // Включение режима из карточки механики «Командная реализация»: состав (пустой =
+  // вся команда проекта) и авто-волны. Без обработчика карточка ничего не делает
+  onEnableTeamImplement?: (opts: { autoWaves: boolean; executorPersonaIds: string[] }) => void | Promise<void>;
+  // Чат внутри проекта: вне проекта у режима нет команды по умолчанию
+  isProjectChat?: boolean;
   // Отдельное git worktree чата: имя ветки (null — чат в основном дереве проекта).
   // Тумблер виден при заданном onToggleWorktree (только проектный чат с git)
   worktreeBranch?: string | null;
@@ -252,6 +265,12 @@ export function Composer({
   onCreateGroup,
   workLoop = null,
   onToggleWorkLoop,
+  teamImplement = null,
+  onToggleTeamImplementAuto,
+  onDisableTeamImplement,
+  onStopTeamImplement,
+  onEnableTeamImplement,
+  isProjectChat = false,
   worktreeBranch = null,
   onToggleWorktree,
   chatContext,
@@ -479,6 +498,27 @@ export function Composer({
   const handleSend = async () => {
     const t = text.trim();
 
+    // Режим «Командная реализация»: обвязки нет — включаем режим на сессии и отправляем
+    // тему обычным сообщением, дальше чат работает штабом (планирование → волны → проверка)
+    if (teamMech === 'implementMode') {
+      if (!t) { setTeamOpen(true); return; }
+      // Вне проекта команды нет — состав обязателен (подсказка в зоне настроек)
+      if (!isProjectChat && teamSettings.participants.length === 0) { setTeamOpen(true); return; }
+      // Режим уже включён — сообщение уходит как новая вводная, не пересобирая состояние
+      if (!teamImplement && onEnableTeamImplement) {
+        await onEnableTeamImplement({
+          autoWaves: teamSettings.modeAutoWaves,
+          executorPersonaIds: teamSettings.participants.map(p => p.id),
+        });
+      }
+      setLastMechanic(sessionId, 'implementMode');
+      onSend(t, attachments);
+      setTeamMech(null);
+      setTeamOpen(false);
+      resetInput();
+      return;
+    }
+
     // Командный ход: текст поля — тема, обвязка собирается buildTeamTurnText
     if (teamMech) {
       // Валидация: тема обязательна везде, кроме QA-цикла и ревью/красной команды
@@ -698,6 +738,18 @@ export function Composer({
         ? 'Цикл: верификация'
         : `Цикл: итерация ${workLoop.iteration}/${workLoop.maxIterations}`}
     </span>
+  ) : null;
+
+  // Режим «Командная реализация» (флаг team-implement-mode): бейдж стадии + чип «Авто»
+  const teamImplementBadge = teamImplement && onToggleTeamImplementAuto && onDisableTeamImplement ? (
+    <TeamImplementBadge
+      state={teamImplement}
+      chatMode={mode}
+      isMobile={isMobile}
+      onToggleAuto={onToggleTeamImplementAuto}
+      onDisable={onDisableTeamImplement}
+      onStop={onStopTeamImplement}
+    />
   ) : null;
 
   // Отдельное git worktree: тумблер + бейдж ветки (как loopButton/loopBadge)
@@ -1047,6 +1099,8 @@ export function Composer({
           settings={teamSettings}
           candidates={mentionable}
           availableSkills={skills.map(s => s.name)}
+          isProjectChat={isProjectChat}
+          chatMode={mode}
           isMobile={isMobile}
           onPick={id => { setTeamMech(id); textareaRef.current?.focus(); }}
           onSettings={setTeamSettings}
@@ -1196,6 +1250,7 @@ export function Composer({
       )}
       <div ref={badgesRef} style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 6 : 4, minWidth: 0, overflow: 'hidden' }}>
         {loopBadge}
+        {teamImplementBadge}
         {worktreeBadge}
         {teamChip}
       </div>

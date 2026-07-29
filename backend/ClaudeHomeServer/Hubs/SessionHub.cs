@@ -179,4 +179,34 @@ public class SessionHub : Hub
         if (!OwnsSession(sessionId)) throw Denied();
         _sessions.RespondPlan(sessionId, requestId, approve, feedback);
     }
+
+    // Ответ по карточке плана «Командной реализации» (Э2). decision: run — запустить
+    // (единственное согласование итерации), reassign — сменить исполнителя под-задачи
+    // (нужны subtaskId + executorPersonaId, карточка остаётся открытой), cancel — отменить.
+    public async Task RespondTeamPlan(string sessionId, string planId, string decision,
+        string? subtaskId = null, string? executorPersonaId = null)
+    {
+        if (!OwnsSession(sessionId)) throw Denied();
+        var parsed = decision?.ToLowerInvariant() switch
+        {
+            "run" => TeamPlanDecision.Run,
+            "reassign" => TeamPlanDecision.Reassign,
+            "cancel" => TeamPlanDecision.Cancel,
+            _ => (TeamPlanDecision?)null,
+        };
+        if (parsed is null) throw new HubException($"Неизвестное решение по плану: {decision}");
+        await _sessions.RespondTeamPlanAsync(sessionId, planId, parsed.Value, subtaskId, executorPersonaId);
+    }
+
+    // Решение человека по карточке остановки «Командной реализации» (Э4). actionId — id
+    // кнопки карточки (answer/reassign/addBudget/runNext/…), comment — необязательное
+    // пояснение. Кнопка равносильна обычному сообщению в чат: координатор получает ход
+    // с решением. Действие приходит ТОЛЬКО отсюда — у агента такого пути нет, поэтому
+    // расширить бюджет («Добавить бюджет») может лишь человек.
+    public async Task RespondTeamEscalation(string sessionId, string escalationId,
+        string? actionId = null, string? comment = null)
+    {
+        if (!OwnsSession(sessionId)) throw Denied();
+        await _sessions.RespondTeamEscalationAsync(sessionId, escalationId, actionId, comment);
+    }
 }

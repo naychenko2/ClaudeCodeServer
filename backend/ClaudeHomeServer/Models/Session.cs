@@ -48,6 +48,136 @@ public class SessionWorkLoop
     public string Phase { get; set; } = "working";
 }
 
+// Стадии режима «Командная реализация» (флаг team-implement-mode) — непрерывный контур.
+// Wire-токены отдаёт ToWireToken (camelCase), совпадают с метками бейджа режима на фронте.
+public enum TeamImplementStage
+{
+    // Координатор декомпозирует вводную и готовит карточку плана
+    Planning,
+    // Карточка плана ждёт единственного согласования человека («Запустить»)
+    Confirming,
+    // Волна исполнителей в работе
+    Wave,
+    // Эскалация: практика ждёт решения человека (блокер, провал, исчерпание бюджета)
+    AwaitingDecision,
+    // Финальная проверка (сборка/тесты) по итогам волн
+    Checking,
+    // Итерация завершена, режим ждёт новой вводной — жив, НЕ выключен
+    Idle
+}
+
+public static class TeamImplementStageExtensions
+{
+    // Wire-токен стадии для фронта (camelCase)
+    public static string ToWireToken(this TeamImplementStage stage) => stage switch
+    {
+        TeamImplementStage.Planning => "planning",
+        TeamImplementStage.Confirming => "confirming",
+        TeamImplementStage.Wave => "wave",
+        TeamImplementStage.AwaitingDecision => "awaitingDecision",
+        TeamImplementStage.Checking => "checking",
+        TeamImplementStage.Idle => "idle",
+        _ => "planning",
+    };
+}
+
+// Бюджет итерации режима «Командная реализация»: считается на одну вводную человека и
+// сбрасывается с каждой новой (см. docs/features/team-implement-mode.md, «Бюджет»).
+// Счётчики «израсходовано» инкрементирует бэкенд в точке запуска (Э3–Э4), НЕ модель.
+// Потолки — настраиваемые дефолты (TeamImplement:* в конфиге), выставляются при включении.
+public class TeamImplementBudget
+{
+    // Израсходовано в текущей итерации
+    public int TasksUsed { get; set; }
+    public int WavesUsed { get; set; }
+    public int RunsUsed { get; set; }     // запуски исполнителей
+    public int RetriesUsed { get; set; }  // перевыдачи провалившихся под-задач
+    // Пробуждения штаба докладом-блокером снизу: каждое — платный ход координатора,
+    // инициированный АГЕНТОМ, поэтому у него свой потолок. Без него исполнитель мог бы
+    // будить координатора в цикле, не тратя ни одной единицы прочих квот.
+    public int WakeupsUsed { get; set; }
+
+    // Потолки (дефолты из плана; override — TeamImplement:Max* в конфиге)
+    public int MaxTasks { get; set; } = 12;
+    public int MaxWaves { get; set; } = 4;
+    public int MaxRuns { get; set; } = 20;
+    public int MaxRetries { get; set; } = 3;
+    public int MaxWakeups { get; set; } = 10;
+
+    // Бюджет итерации исчерпан? Возвращает человекочитаемую причину для карточки остановки
+    // и текста отказа гейта, либо null — можно работать дальше. Чтение потолков в модели
+    // допустимо; инкремент счётчиков — только на бэкенде в точке запуска.
+    public string? ExceededReason() =>
+        TasksUsed >= MaxTasks ? $"израсходовано задач: {TasksUsed} из {MaxTasks}"
+        : RunsUsed >= MaxRuns ? $"израсходовано запусков исполнителей: {RunsUsed} из {MaxRuns}"
+        : WavesUsed >= MaxWaves ? $"израсходовано волн: {WavesUsed} из {MaxWaves}"
+        : RetriesUsed >= MaxRetries ? $"израсходовано перевыдач: {RetriesUsed} из {MaxRetries}"
+        : WakeupsUsed >= MaxWakeups ? $"израсходовано срочных вызовов координатора: {WakeupsUsed} из {MaxWakeups}"
+        : null;
+
+    // Помещается ли в остаток ЦЕЛАЯ волна из tasks под-задач (плюс сама волна). Волна либо
+    // раздаётся целиком, либо не стартует вовсе: «остаток есть?» пропускал волну из 5 задач
+    // при остатке в одну, и потолок 12 выбирался с перерасходом. Причина — для карточки.
+    public string? ExceededReasonForWave(int tasks) =>
+        TasksUsed + tasks > MaxTasks
+            ? $"задач в итерации: {TasksUsed} из {MaxTasks}, а волне нужно ещё {tasks}"
+        : RunsUsed + tasks > MaxRuns
+            ? $"запусков исполнителей: {RunsUsed} из {MaxRuns}, а волне нужно ещё {tasks}"
+        : WavesUsed + 1 > MaxWaves
+            ? $"израсходовано волн: {WavesUsed} из {MaxWaves}"
+        : ExceededReason();
+}
+
+// Состояние режима «Командная реализация» (флаг team-implement-mode): чат работает как
+// штаб фичи — план, задачи на персон-исполнителей, волны, проверка. Наличие объекта у
+// сессии = режим активен; выключение обнуляет поле (как SessionWorkLoop).
+// Здесь только состояние; планирование живёт в TeamPlanningService, волны и эскалации —
+// в TeamWaveService.
+public class SessionTeamImplement
+{
+    // Стадия непрерывного контура (см. TeamImplementStage)
+    public TeamImplementStage Stage { get; set; } = TeamImplementStage.Planning;
+    // Номер текущей волны (растёт с каждой стартованной; 0 — волн ещё не было)
+    public int WaveNumber { get; set; }
+    // Плановое число волн текущей итерации: проставляется при запуске плана (Э3) и
+    // растёт при добавочной волне. 0 — план ещё не запускался. Бейдж «волна N из M»
+    // берёт M отсюда, а НЕ из потолка бюджета (тот про расход, а не про план).
+    public int PlannedWaves { get; set; }
+    // Авто-волны: true — между волнами карточки согласования не появляются (дефолт включён).
+    // Переключается на ходу отдельным эндпоинтом (PUT {id}/team-implement/auto).
+    public bool AutoWaves { get; set; } = true;
+    // Момент старта текущей волны (Э4): по нему сторож ловит зависшую волну. null — волн
+    // ещё не было, волна закрыта либо практика уже ждёт решения человека.
+    public DateTime? WaveStartedAt { get; set; }
+    // Последняя активность волны: закрытие её задачи, перевыдача, старт. Сторож считает
+    // таймаут ОТСЮДА, а не от старта волны — иначе длинная, но живая волна (задачи
+    // закрываются одна за другой) эскалировалась бы просто за то, что идёт долго.
+    // null — активности не было с момента старта, тогда сторож смотрит на WaveStartedAt.
+    public DateTime? WaveActivityAt { get; set; }
+    // Номер последней ЗАКРЫТОЙ волны (Э4): защита от повторного закрытия — колбэки
+    // завершения задач приходят из разных потоков, а закрыть волну можно только раз.
+    // Отдельно от WaveStartedAt: тот обнуляется ещё и эскалацией, и волна после ответа
+    // человека всё равно обязана закрыться.
+    public int ClosedWave { get; set; }
+    // Человек нажал «Остановить» (Э4): текущие исполнители дорабатывают, новые волны не
+    // стартуют. Снимается решением по карточке остановки («Продолжить») либо новой вводной.
+    public bool Stopped { get; set; }
+    // Координатор — собеседник чата (Session.PersonaId). null, пока не назначен (Э2).
+    public string? CoordinatorPersonaId { get; set; }
+    // Планировщик — LLM-персона для декомпозиции по компетенциям (Э2). null — координатор сам.
+    public string? PlannerPersonaId { get; set; }
+    // Состав исполнителей: пустой список = вся команда проекта; явный — сужает круг.
+    public List<string> ExecutorPersonaIds { get; set; } = [];
+    // Бюджет текущей итерации (сбрасывается по новой вводной). Не null, пока режим активен.
+    public TeamImplementBudget Budget { get; set; } = new();
+    // «Координатор не пишет код сам» (по умолчанию включено): у чата-штаба отключены
+    // инструменты правки файлов — иначе координатор срежет углы и сделает работу вместо
+    // команды. См. «Правило „любая работа — через задачу"» продуктового плана.
+    public bool CoordinatorNoCode { get; set; } = true;
+    // id карточки плана в ленте чата (Э2 — новый тип сообщения). null — план ещё не опубликован.
+    public string? PlanCardId { get; set; }
+}
+
 public class Session
 {
     public string Id { get; init; } = Guid.NewGuid().ToString();
@@ -93,6 +223,9 @@ public class Session
     public int? ExpiresAfterMinutes { get; set; }
     // Цикл «до готово» (флаг work-loop): не null — ход автопродолжается до маркера завершения
     public SessionWorkLoop? WorkLoop { get; set; }
+    // Режим «Командная реализация» (флаг team-implement-mode): не null — чат работает как
+    // штаб фичи (план, задачи на исполнителей, волны, проверка). Каркас без логики волн — Э2–Э5.
+    public SessionTeamImplement? TeamImplement { get; set; }
     // Сессия-исполнитель задачи (создана TaskExecutionService): tasks-MCP форсируется включённым
     // независимо от Persona.Tools — исполнитель обязан управлять задачей через mcp__tasks__*.
     // Иначе персона с ограничением tools (без «tasks») теряет tasks-сервер и не может ни прочитать,

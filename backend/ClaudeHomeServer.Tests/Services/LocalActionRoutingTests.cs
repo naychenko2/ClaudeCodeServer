@@ -604,7 +604,7 @@ public class LocalActionRoutingTests
     }
 
     [Fact]
-    public void Пресеты_НеТрогаютАгентныеМеста()
+    public async Task Пресеты_НеТрогаютАгентныеМеста()
     {
         // Применение пресета не должно сносить назначения агентных мест
         var config = ConfigWithTempData(new()
@@ -620,7 +620,7 @@ public class LocalActionRoutingTests
                 new NullHttpFactory(), config),
             config, NullLogger<LocalActionPresetService>.Instance);
 
-        presets.ApplyAsync(ActionPreset.Recommended).GetAwaiter().GetResult();
+        await presets.ApplyAsync(ActionPreset.Recommended);
 
         Assert.Equal("tier:weak", store.TryGet(LocalActionCatalog.ChatNew));
         // Фоновое действие получило маршрут пресета (слот по профилю: Small → слабая)

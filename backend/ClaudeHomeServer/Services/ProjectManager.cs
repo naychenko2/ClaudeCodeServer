@@ -86,10 +86,13 @@ public class ProjectManager
 
     public Project Create(string name, string? rootPath, string userId, string username, bool createDirectory = false, string? groupId = null, string? color = null)
     {
-        // Путь не задан — «Новый проект»: папку под него придумываем сами
-        var autoPath = string.IsNullOrWhiteSpace(rootPath);
-        if (autoPath)
+        // Путь не задан — «Новый проект»: папку под него придумываем сами.
+        // Проверка стоит прямо в if (а не через заранее вычисленный флаг): так компилятор
+        // видит, что ниже rootPath уже не null, и GetFullPath обходится без подавления
+        var autoPath = false;
+        if (string.IsNullOrWhiteSpace(rootPath))
         {
+            autoPath = true;
             // Домашняя папка владельца: у изолированных — в корне песочницы, у остальных —
             // в DefaultProjectsPath; прослойка {username} может быть снята override'ом конфига
             var env = _sandbox is not null

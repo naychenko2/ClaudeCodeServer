@@ -428,9 +428,12 @@ public class ClaudeSession : ILlmSessionAdapter
                 // Кросс-проектные ProjectTasks-привязки текущей персоны: доступ к задачам
                 // ДРУГИХ проектов владельца (extraProjectIdsCsv), подмножество только для
                 // чтения — extraReadOnlyCsv (create/update/delete там запрещены)
-                var extraProjectIdsCsv = _tasksMcp.ExtraProjectIds is { Count: > 0 } extraIds
+                // hasTasks ⇒ _tasksMcp не null (путь сервера резолвится только при заданном
+                // контексте), но связь через промежуточный флаг компилятор не видит — идём
+                // через ?., чтобы инвариант не держался на подавлении nullable-анализа
+                var extraProjectIdsCsv = _tasksMcp?.ExtraProjectIds is { Count: > 0 } extraIds
                     ? string.Join(",", extraIds) : "";
-                var extraReadOnlyCsv = _tasksMcp.ExtraProjectIdsReadOnly is { Count: > 0 } extraRo
+                var extraReadOnlyCsv = _tasksMcp?.ExtraProjectIdsReadOnly is { Count: > 0 } extraRo
                     ? string.Join(",", extraRo) : "";
                 servers["tasks"] = new System.Text.Json.Nodes.JsonObject
                 {

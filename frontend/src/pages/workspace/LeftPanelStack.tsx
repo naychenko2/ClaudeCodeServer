@@ -3,9 +3,14 @@
 // Рельса иконок СЛЕВА у левого края окна + открытые панели-карточки, растущие
 // ВПРАВО от рельсы. Клик по иконке открывает/закрывает панель.
 //
+// Общее с правой зоной вынесено и НЕ дублируется: сама рельса — PanelRail
+// (side="left" разворачивает капсулу и стрелки), направляющие мест вставки —
+// PanelDropGuide, ресайз высот — хук usePanelRowResize, подписка на drag —
+// startPointerDrag.
+//
 // Пока НЕ реализовано (план Этап 1.1 — полноценное зеркало):
-//   - DnD-перестановки панелей
-//   - Multi-колонки (пока одна колонка, панели стакаются вертикально)
+//   - Multi-колонки (одна колонка, панели стакаются вертикально; инстансы стора
+//     созданы с singleColumn, поэтому раскладка не разъезжается по колонкам)
 //   - Планшетный drawer
 //
 // Базовая логика: toggle через стор (wsLeftPanelStack / chatLeftPanelStack),
@@ -14,16 +19,18 @@
 // (width), что и у правой рельсы, — зеркально handleWidthDrag в RightPanelStack.
 //
 // sessionOnly=true — только chats (для раздела «Чаты» без проекта).
-// sessionOnly=false — все 5: chats/files/tasks/personas (+ tools если toolsEnabled).
-import { useEffect, useState, type ReactNode, type PointerEvent as ReactPointerEvent } from 'react';
-import { MessageCircle, FolderTree, ListTodo, Users, SquareTerminal, Columns2, Square, ChevronsLeft, ChevronsRight, type LucideIcon } from 'lucide-react';
-import { C, FONT, ISLAND } from '../../lib/design';
+// sessionOnly=false — chats/files/tasks/personas (+ tools если toolsEnabled).
+import { Fragment, useEffect, useState, type ReactNode } from 'react';
+import { MessageCircle, FolderTree, ListTodo, Users, SquareTerminal, type LucideIcon } from 'lucide-react';
+import { C } from '../../lib/design';
 import { ICON_STROKE } from '../../components/ui/icons';
 import { PanelShell } from '../../components/ui/PanelShell';
+import { PanelRail, RAIL_W, RAIL_GAP, type RailItem } from '../../components/ui/PanelRail';
+import { PanelDropGuide } from '../../components/ui/PanelDropGuide';
 import { IslandSplitter } from '../../components/ui/IslandSplitter';
-import { ToolbarIconButton } from '../../components/Toolbar';
-import { startPointerDrag } from '../../lib/pointerDrag';
-import { wsLeftPanelStack, RAIL_W, type LeftPanelKey, type PanelStack } from './panelStackState';
+import { wsLeftPanelStack, type LeftPanelKey, type PanelStack } from './panelStackState';
+import { usePanelDnd, usePanelRowResize, usePanelWidthDrag } from './panelZone';
+import { PanelSlot } from './PanelSlot';
 
 // Мета панелей левой рельсы: иконка + заголовок для шапки PanelShell и tooltip.
 const LEFT_PANEL_META: Record<LeftPanelKey, { title: string; Icon: LucideIcon }> = {
@@ -38,10 +45,6 @@ const LEFT_PANEL_META: Record<LeftPanelKey, { title: string; Icon: LucideIcon }>
 const WORKSPACE_LEFT_KEYS: LeftPanelKey[] = ['chats', 'files', 'tasks', 'personas'];
 // Tools доступен только при toolsEnabled проекта
 const TOOLS_KEY: LeftPanelKey = 'tools';
-
-// Зазор между рельсой и панелями. То же значение, что в RightPanelStack —
-// рельсы обязаны быть зеркальны, иначе левая зона визуально «толще» правой.
-const RAIL_GAP = 4;
 
 interface Props {
   // Готовый контент панелек — caller (ChatsPage / WorkspacePage) собирает
@@ -58,21 +61,15 @@ interface Props {
 
 export function LeftPanelStack({ panels, railCounts, panelStack, sessionOnly = false, toolsEnabled = false }: Props) {
   const usePanels = (panelStack ?? wsLeftPanelStack).use;
-  const { layout, mode, toggle, close, collapsed, toggleCollapsed, setMode, width, setWidth } = usePanels();
-  const [dragging, setDragging] = useState(false);
+  const { layout, mode, toggle, close, collapsed, toggleCollapsed, setMode, width, setWidth, weights, setWeights, swapWith, moveAt } = usePanels();
+  const { panelRefs, rowDragging, handleRowDrag } = usePanelRowResize<LeftPanelKey>(weights, setWeights);
+  // Ширина зоны: тянем ВПРАВО — панели растут (зеркально правой рельсе, где рост
+  // идёт влево). Клампы COL_MIN/COL_MAX применяет сам стор.
+  const { dragging, onPointerDown: handleWidthDrag } = usePanelWidthDrag(width, setWidth, 'left');
 
-  // Drag ширины зоны: тянем ВПРАВО — панели растут (зеркально правой рельсе,
-  // где рост идёт влево). Клампы COL_MIN/COL_MAX применяет сам стор.
-  const handleWidthDrag = (e: ReactPointerEvent) => {
-    e.preventDefault();
-    const startX = e.clientX;
-    const startW = width;
-    setDragging(true);
-    startPointerDrag(
-      ev => setWidth(startW + (ev.clientX - startX)),
-      { onEnd: () => setDragging(false) },
-    );
-  };
+  // Позиция вставки: колонок слева нет, поэтому это просто индекс в стопке
+  // (у правой рельсы там пара 'колонка:строка'). Сбрасывается вместе с DnD.
+  const [dndOverRow, setDndOverRow] = useState<number | null>(null);
 
   // Какие иконки показывать в рельсе
   const visibleKeys: LeftPanelKey[] = sessionOnly
@@ -86,6 +83,14 @@ export function LeftPanelStack({ panels, railCounts, panelStack, sessionOnly = f
   // Открытые панели — только те, что available.
   const openKeys = layout.flat().filter(k => availableKeys.includes(k as LeftPanelKey)) as LeftPanelKey[];
   const soloMode = mode === 'solo';
+  // Делить высоту между слотами и переставлять панели есть смысл только когда
+  // их больше одной; в solo открыта ровно одна — переставлять нечего.
+  const multiOpen = openKeys.length > 1;
+  const dnd = usePanelDnd<LeftPanelKey>({
+    enabled: multiOpen && !soloMode,
+    onSwap: swapWith,
+    onEnd: () => setDndOverRow(null),
+  });
 
   // === ПРАВИЛО СКРЫТИЯ РЕЛЬСЫ ===
   // Если доступна только ОДНА панель (напр. sessionOnly → только chats) и она
@@ -95,8 +100,13 @@ export function LeftPanelStack({ panels, railCounts, panelStack, sessionOnly = f
   const singlePanelMode = availableKeys.length === 1;
   const showRail = !singlePanelMode || openKeys.length === 0;
 
-  // Сдвиг FAB AI-хаба: левая рельса занимает место слева — пробрасываем в CSS-переменную
-  const leftZoneW = availableKeys.length === 0 ? 0 : RAIL_W + (openKeys.length > 0 ? RAIL_GAP + width : RAIL_GAP);
+  // Сдвиг FAB AI-хаба: левая рельса занимает место слева — пробрасываем в CSS-переменную.
+  // Слагаемые считаются ПО РАЗМЕТКЕ, слева направо: рельса + зазор до панелей +
+  // сама зона + её ресайз-сплиттер. Когда панелей нет, тот же RAIL_GAP даёт
+  // gapToCenter самой рельсы, так что зазор в сумме остаётся один.
+  const leftZoneW = availableKeys.length === 0
+    ? 0
+    : RAIL_W + RAIL_GAP + (openKeys.length > 0 ? width + RAIL_GAP : 0);
   useEffect(() => {
     document.documentElement.style.setProperty('--cc-fab-left', `${leftZoneW + 20}px`);
     return () => { document.documentElement.style.removeProperty('--cc-fab-left'); };
@@ -106,125 +116,102 @@ export function LeftPanelStack({ panels, railCounts, panelStack, sessionOnly = f
   // Если ни у одной панели нет контента — не рендерим рельсу вовсе.
   if (availableKeys.length === 0) return null;
 
-  // Одна иконка рельсы
-  const renderRailIcon = (k: LeftPanelKey): ReactNode => {
-    const isOpen = openKeys.includes(k);
-    const { title, Icon } = LEFT_PANEL_META[k];
-    const count = railCounts?.[k];
-    return (
-      <ToolbarIconButton
-        key={k}
-        onClick={() => toggle(k)}
-        active={isOpen}
-        title={title}
-      >
-        <div style={{ position: 'relative', display: 'flex' }}>
-          <Icon size={17} strokeWidth={ICON_STROKE} />
-          {count && count > 0 ? (
-            <span style={{
-              position: 'absolute', top: -6, right: -7, minWidth: 14, height: 14, padding: '0 3px',
-              borderRadius: 7, background: C.accent, color: C.onAccent,
-              fontFamily: FONT.sans, fontSize: 9, fontWeight: 700, lineHeight: '14px', textAlign: 'center',
-            }}>
-              {count}
-            </span>
-          ) : null}
-        </div>
-      </ToolbarIconButton>
-    );
+  // Позиция вставки в РЕАЛЬНОЙ раскладке. openKeys отфильтрован по наличию
+  // контента (panels[k] != null), поэтому индекс в видимой стопке может не
+  // совпадать с индексом в layout — moveAt же работает с настоящим.
+  const layoutIndexFor = (ri: number): number => {
+    const col = layout[0] ?? [];
+    if (ri >= openKeys.length) return col.length;
+    const at = col.indexOf(openKeys[ri]);
+    return at >= 0 ? at : col.length;
   };
 
-  // Одна панель: PanelShell с иконкой/заголовком + контент из props
+  // Направляющая места вставки на позицию ri стопки. Колонка одна (стор левых
+  // инстансов создан с singleColumn), поэтому colIdx у moveAt всегда 0.
+  // base — место в потоке: по краям стопки 0 (в покое их нет), между панелями
+  // RAIL_GAP — там направляющая подменяет хендл ресайза той же высоты.
+  const dropGuide = (ri: number, base = 0, edge?: 'start' | 'end') => (
+    <PanelDropGuide
+      axis="y"
+      key={`guide-${ri}`}
+      dndActive={dnd.active}
+      base={base}
+      edge={edge}
+      over={dndOverRow === ri}
+      onDragOver={e => { if (dnd.from) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDndOverRow(ri); } }}
+      onDragLeave={() => setDndOverRow(cur => (cur === ri ? null : cur))}
+      onDrop={e => { e.preventDefault(); if (dnd.from) moveAt(dnd.from, 0, layoutIndexFor(ri)); dnd.end(); }}
+    />
+  );
+
+  // Иконки рельсы — одной группой: в отличие от правой, левая панели по смыслу
+  // не делит (там инструменты проекта отделены от панелей текущей сессии).
+  const railItems: RailItem[] = availableKeys.map(k => ({
+    key: k,
+    title: LEFT_PANEL_META[k].title,
+    Icon: LEFT_PANEL_META[k].Icon,
+    active: openKeys.includes(k),
+    badge: railCounts?.[k] ?? null,
+    onClick: () => toggle(k),
+  }));
+
+  // Одна панель: PanelShell с иконкой/заголовком + контент из props.
+  // При ЕДИНСТВЕННОЙ открытой панели высота — по контенту: короткий список чатов
+  // не должен растягиваться на весь экран. Как только панелей две и больше,
+  // высоту делят веса слотов — тогда между панелями и появляется хендл ресайза.
   const renderPanel = (k: LeftPanelKey): ReactNode => {
     const { title, Icon } = LEFT_PANEL_META[k];
-    return (
+    const shell = (
       <PanelShell
-        key={k}
         icon={<Icon size={15} strokeWidth={ICON_STROKE} color={C.textSecondary} style={{ flexShrink: 0 }} />}
         title={title}
         onClose={() => close(k)}
-        fill={false}
+        fill={multiOpen}
         slideDirection="left"
+        // Перетаскивать есть смысл только когда соседи есть: в solo и при
+        // единственной открытой панели шапка остаётся обычной (см. enabled выше).
+        {...dnd.panelProps(k)}
       >
         {panels[k] ?? null}
       </PanelShell>
+    );
+    if (!multiOpen) return shell;
+    return (
+      <PanelSlot
+        weight={weights[k]}
+        resizing={rowDragging != null}
+        slotRef={el => { panelRefs.current[k] = el; }}
+      >
+        {shell}
+      </PanelSlot>
     );
   };
 
   return (
     <>
-      {/* Рельса — рендерится только когда showRail=true.
-          singlePanelMode (1 доступная панель):
-          - панель открыта → showRail=false → рельса скрыта
-          - панель закрыта → showRail=true → рельса с 1 иконкой
-          Мульти-режим (>1 панель): рельса всегда видна.
-          Анимация: рельса всегда в DOM, при showRail=false плавно схлопывается
-          (width→0, opacity→0) через CSS transition — синхронно с placeholder. */}
-      <div style={{
-        width: showRail ? RAIL_W : 0,
-        opacity: showRail ? 1 : 0,
-        overflow: 'hidden',
-        pointerEvents: showRail ? 'auto' : 'none',
-        transition: 'width 0.15s ease-out, opacity 0.12s ease-out',
-        flexShrink: 0, alignSelf: 'flex-start',
-        display: 'flex', flexDirection: 'column', alignItems: 'center',
-        gap: 6, paddingTop: 7, paddingBottom: 7, background: C.bgMain,
-          borderRight: `1px solid ${C.border}`,
-          borderTop: `1px solid ${C.border}`,
-          borderBottom: `1px solid ${C.border}`,
-          borderTopRightRadius: ISLAND.radius, borderBottomRightRadius: ISLAND.radius,
-          borderTopLeftRadius: 0, borderBottomLeftRadius: 0,
-          boxSizing: 'border-box',
-          boxShadow: ISLAND.shadow,
-          marginRight: openKeys.length === 0 ? RAIL_GAP : 0,
-        }}>
-          {/* Toggle multi/solo — только в мульти-режиме. */}
-          {!singlePanelMode && (
-            <>
-              <ToolbarIconButton
-                onClick={() => setMode(soloMode ? 'multi' : 'solo')}
-                title={soloMode ? 'Одна панель — нажмите для раскладки колонками' : 'Раскладка колонками — нажмите для режима одной панели'}
+      {/* Рельса. singlePanelMode (1 доступная панель):
+          - панель открыта → visible=false → рельса схлопывается
+          - панель закрыта → visible=true → рельса с 1 иконкой
+          Мульти-режим (>1 панель): рельса всегда видна. Тумблер режима и
+          «свернуть все» в singlePanelMode не нужны — там управлять нечем. */}
+      <PanelRail
+        side="left"
+        visible={showRail}
+        groups={[railItems]}
+        gapToCenter={openKeys.length === 0 ? RAIL_GAP : 0}
+        modeToggle={singlePanelMode ? undefined : {
+          soloMode,
+          onToggle: () => setMode(soloMode ? 'multi' : 'solo'),
+        }}
+        collapse={singlePanelMode ? undefined : {
+          collapsed,
+          disabled: openKeys.length === 0 && !collapsed,
+          onToggle: toggleCollapsed,
+        }}
+      />
 
-              >
-                {soloMode
-                  ? <Square size={15} strokeWidth={ICON_STROKE} />
-                  : <Columns2 size={15} strokeWidth={ICON_STROKE} />}
-              </ToolbarIconButton>
-              <div style={{ width: 22, height: 1, background: C.border, flexShrink: 0, margin: '1px 0 2px' }} />
-            </>
-          )}
-
-          {availableKeys.map(renderRailIcon)}
-
-          {/* Collapse all — только в мульти-режиме. */}
-          {!singlePanelMode && (
-            <>
-              <div style={{ width: 22, height: 1, background: C.border, flexShrink: 0, margin: '2px 0 1px' }} />
-              {(() => {
-                const collapseDisabled = openKeys.length === 0 && !collapsed;
-                return (
-                  <div style={{ opacity: collapseDisabled ? 0.3 : 1 }}>
-                    <ToolbarIconButton
-                      onClick={toggleCollapsed}
-                      disabled={collapseDisabled}
-                      title={collapsed ? 'Открыть свёрнутые панели' : 'Свернуть все панели'}
-
-                    >
-                      <div style={{ display: 'flex', color: collapseDisabled ? C.textMuted : undefined }}>
-                        {collapsed
-                          ? <ChevronsRight size={16} strokeWidth={ICON_STROKE} />
-                          : <ChevronsLeft size={16} strokeWidth={ICON_STROKE} />}
-                      </div>
-                    </ToolbarIconButton>
-                  </div>
-                );
-              })()}
-            </>
-          )}
-        </div>
-
-      {/* Зона открытых панелей — растёт вправо от рельсы.
-          Пока одна колонка (панели стакаются вертикально), resizable и multi-col — потом. */}
+      {/* Зона открытых панелей — растёт вправо от рельсы. Колонка одна: панели
+          стакаются вертикально, порядок меняется перетаскиванием за шапку. */}
       {openKeys.length > 0 && (
         <>
           {/* Зазор между рельсой и панелями — только когда рельса видна.
@@ -232,20 +219,40 @@ export function LeftPanelStack({ panels, railCounts, panelStack, sessionOnly = f
               placeholder (RAIL_W + RAIL_GAP) чтобы панель стояла на том же месте,
               где была бы если бы рельса была видна. Визуальная консистентность:
               панель не «прыгает» при скрытии/показе рельсы. */}
-          {showRail
-            ? <div style={{ width: RAIL_GAP, flexShrink: 0, transition: 'width 0.15s ease-out' }} />
-            : <div style={{ width: RAIL_W + RAIL_GAP, flexShrink: 0, transition: 'width 0.15s ease-out' }} />
-          }
+          <div style={{
+            width: showRail ? RAIL_GAP : RAIL_W + RAIL_GAP,
+            flexShrink: 0, transition: 'width 0.15s ease-out',
+          }} />
           <div style={{
             width,
             flexShrink: 0,
             display: 'flex',
             flexDirection: 'column',
-            gap: RAIL_GAP,
             // Тени панелей-островов не должны срезаться обёрткой
             overflow: 'visible',
           }}>
-            {openKeys.map(renderPanel)}
+            {dropGuide(0, 0, 'start')}
+            {openKeys.map((k, ri) => (
+              <Fragment key={k}>
+                {/* Между соседними панелями — хендл ресайза высот (тот же grip,
+                    что у сплиттера ширины). Он же и есть зазор: отдельный gap
+                    колонке не нужен, иначе между панелями было бы вдвое.
+                    На время перетаскивания хендл подменяется направляющей той же
+                    высоты — раскладка от этого не «дышит». */}
+                {ri > 0 && (
+                  dnd.active
+                    ? dropGuide(ri, RAIL_GAP)
+                    : <IslandSplitter
+                        orientation="h"
+                        active={rowDragging === `row:${ri}`}
+                        onMouseDown={handleRowDrag(openKeys[ri - 1], k, `row:${ri}`)}
+                        gap={RAIL_GAP}
+                      />
+                )}
+                {renderPanel(k)}
+              </Fragment>
+            ))}
+            {dropGuide(openKeys.length, 0, 'end')}
           </div>
           {/* Сплиттер ширины — справа от зоны панелей (у правой рельсы он слева) */}
           <IslandSplitter orientation="v" active={dragging} onMouseDown={handleWidthDrag} gap={RAIL_GAP} />

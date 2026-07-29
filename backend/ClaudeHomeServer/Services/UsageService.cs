@@ -30,7 +30,7 @@ public class UsageService
     // (<3 мин) И значение/статус практически не изменились. Иначе — добавляем, прунем, сохраняем.
     public void Record(string limitType, double? utilization, string? status, bool isUsingOverage,
         string? resetsAt, string? overageStatus = null, string? overageResetsAt = null,
-        string? subscriptionKey = null)
+        string? subscriptionKey = null, string? source = null)
     {
         if (string.IsNullOrEmpty(limitType) && utilization is null) return;
         var subKey = subscriptionKey ?? "claude";
@@ -45,7 +45,7 @@ public class UsageService
                 && Math.Abs((last.Utilization ?? 0) - (utilization ?? 0)) < UtilEpsilon)
                 return; // дубль в окне троттлинга — не пишем
 
-            _snapshots.Add(new UsageSnapshot(now, limitType, utilization, status, isUsingOverage, resetsAt, overageStatus, overageResetsAt, subKey));
+            _snapshots.Add(new UsageSnapshot(now, limitType, utilization, status, isUsingOverage, resetsAt, overageStatus, overageResetsAt, subKey, source));
 
             var cutoff = now - Retention;
             _snapshots.RemoveAll(s => s.Timestamp < cutoff);

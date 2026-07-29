@@ -3,6 +3,9 @@ namespace ClaudeHomeServer.Models;
 // Снимок использования окна лимита подписки в момент времени (из rate_limit_event).
 // Utilization — доля 0..1; LimitType — five_hour/seven_day/weekly; ResetsAt — ISO-время сброса.
 // SubscriptionKey — какая подписка сгенерировала снимок ("claude" — основная, ключ из пула — дополнительная).
+// Source — кто записал снимок: "turn" (живой ход чата), "probe" (идл-пинг
+// SubscriptionUsageWarmupService) или "oauth" (SubscriptionOAuthUsageService); null — снимок
+// записан до появления поля (обратная совместимость со старым usage.json).
 public record UsageSnapshot(
     DateTime Timestamp,
     string LimitType,
@@ -12,7 +15,8 @@ public record UsageSnapshot(
     string? ResetsAt,
     string? OverageStatus = null,
     string? OverageResetsAt = null,
-    string SubscriptionKey = "claude");
+    string SubscriptionKey = "claude",
+    string? Source = null);
 
 // Информация о тарифе подписки (из ~/.claude/.credentials.json)
 public record PlanInfo(string? SubscriptionType, string? RateLimitTier, string Label);

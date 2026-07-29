@@ -85,6 +85,14 @@ export function resolveRelative(fromDoc: string, target: string): string | null 
   return segments.length === 0 ? null : segments.join('/');
 }
 
+// Картинка документа → путь файла в проекте. null — грузить как есть: внешние адреса,
+// data:/blob: и всё, что уводит выше корня. Общий для панели и центральной области:
+// один и тот же README рендерится в обоих, и расходиться им незачем.
+export function resolveDocImage(fromDoc: string, src: string): string | null {
+  if (!src || /^(https?:|data:|blob:|\/\/)/i.test(src)) return null;
+  return resolveRelative(fromDoc, src);
+}
+
 // Куда ведёт ссылка, кликнутая в превью документа. knownDocs — пути документов области
 // (нижним регистром): по ним отличаем переход внутри панели от открытия файла в центре.
 export function resolveDocLink(

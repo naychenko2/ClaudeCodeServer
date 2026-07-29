@@ -21,7 +21,7 @@ import { MarkdownViewer } from '../../components/MarkdownViewer';
 import { ListDateDivider, LIST_FLASH_CLASS, LIST_FLASH_MS } from '../../components/ListDateDivider';
 import { getExtMeta as extMeta } from '../../components/FileExplorer';
 import { useHeadings, scrollToHeading } from '../../hooks/useHeadings';
-import { resolveDocLink, sliceSection, slugify } from '../../lib/docsLinks';
+import { resolveDocImage, resolveDocLink, sliceSection, slugify } from '../../lib/docsLinks';
 
 interface Props {
   project: Project;
@@ -287,6 +287,13 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
     openDoc(path);
     setPreview(true);
   };
+
+  // Картинка документа: путь в src относителен самого документа (как и ссылки), а
+  // грузить её надо через файловый эндпоинт проекта. Внешние и data: оставляем как есть
+  const resolveImage = useCallback((src: string) => {
+    const target = doc ? resolveDocImage(doc.path, src) : null;
+    return target ? api.files.fileUrl(project.id, target) : undefined;
+  }, [doc, project.id]);
 
   // Клик по ссылке внутри превью: документ области — переход в панели,
   // файл проекта — открытие в центре, внешняя — ушла в новую вкладку без нас
@@ -728,7 +735,9 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
                   </Button>
                 </div>
               )}
-              {doc && !doc.binary && <MarkdownViewer content={doc.content} onDocLink={handleDocLink} />}
+              {doc && !doc.binary && (
+                <MarkdownViewer content={doc.content} onDocLink={handleDocLink} resolveImageSrc={resolveImage} />
+              )}
             </div>
 
             {/* Обратные ссылки: кто в документации ведёт на этот документ */}

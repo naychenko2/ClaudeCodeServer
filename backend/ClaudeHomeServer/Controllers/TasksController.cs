@@ -293,8 +293,11 @@ public class TasksController(
     // Запустить выполнение задачи Claude-ом (кнопка «Выполнить с Claude»)
     [HttpPost("{taskId}/execute")]
     // Анти-рекурсия: раньше жила в составе инструментов (env TASKS_EXECUTE), из-за чего
-    // чередование обычного и делегированного хода перезапускало процесс CLI со всеми MCP
-    [DenyOnDelegatedTurn("Запуск задачи на исполнение", AlsoWhenExecutorSuppressed = true)]
+    // чередование обычного и делегированного хода перезапускало процесс CLI со всеми MCP.
+    // AllowInTeamImplement: у чата-штаба «Командной реализации» запрет заменён квотой —
+    // автономный цикл волн иначе невозможен, а лавину держит бюджет итерации (Э4).
+    [DenyOnDelegatedTurn("Запуск задачи на исполнение",
+        AlsoWhenExecutorSuppressed = true, AllowInTeamImplement = true)]
     public async Task<IActionResult> Execute(string taskId)
     {
         var task = tasks.GetById(taskId);

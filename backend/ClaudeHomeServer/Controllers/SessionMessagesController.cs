@@ -93,6 +93,21 @@ public class SessionMessagesController(SessionManager sessions, ProjectManager p
             senderChatName = sender?.Name;
         }
 
+        // Режим «Командная реализация» (Э4): агент, пишущий в чат-штаб, поднимает ему платный
+        // ход — значит расходует ту же квоту пробуждения, что и доклад-блокер. Без этого
+        // бюджет обходился бы соседним инструментом: chats_send вместо chats_report_up.
+        // Ход человека и фронта сюда не попадает — только вызовы MCP (есть CallerHeader).
+        if (Request.Headers.ContainsKey(DenyOnDelegatedTurnAttribute.CallerHeader))
+        {
+            var wake = sessions.TryConsumeTeamWakeup(sessionId);
+            if (wake.TeamMode && !wake.Allowed)
+                return StatusCode(StatusCodes.Status403Forbidden, new
+                {
+                    error = $"Сообщение в чат-штаб недоступно: {wake.Reason}. Доложи результат "
+                        + "в своей задаче — координатор увидит его, когда человек разрешит продолжить.",
+                });
+        }
+
         var waitTurn = !string.Equals(req.Wait, "none", StringComparison.OrdinalIgnoreCase);
         var timeout = waitTurn
             ? TimeSpan.FromSeconds(Math.Clamp(req.TimeoutSec ?? 90, 5, 240))
@@ -173,7 +188,13 @@ public class SessionMessagesController(SessionManager sessions, ProjectManager p
         if (string.IsNullOrEmpty(text))
             return BadRequest(new { error = "Текст отчёта пуст" });
 
-        var result = await sessions.ReportUpAsync(sessionId, text, UserId, withTurn: false);
+        // Блокер будит постановщика ходом (Э4): в режиме «Командная реализация» доклад
+        // «я застрял» иначе пролежал бы в ленте штаба до конца волны, а координатор ждал
+        // бы докладов о завершении, которых не будет. Обычный промежуточный отчёт по-прежнему
+        // бесплатный — ход не запускает.
+        var result = req.Blocker
+            ? await sessions.ReportBlockerAsync(sessionId, text, UserId)
+            : await sessions.ReportUpAsync(sessionId, text, UserId, withTurn: false);
         return result switch
         {
             SessionManager.ReportUpResult.NotFound => NotFound(),
@@ -240,5 +261,7 @@ public class SessionMessagesController(SessionManager sessions, ProjectManager p
 // TimeoutSec клампится в 5..240 секунд.
 public record SendSessionMessageRequest(string? Text, string? Wait = "turn", int? TimeoutSec = 90);
 
-// Отчёт в родительский чат: текст ложится карточкой, ход родителя не запускается
-public record ReportUpRequest(string? Text);
+// Отчёт в родительский чат: текст ложится карточкой, ход родителя не запускается.
+// Blocker=true — доклад о блокере: постановщику запускается ход, а в режиме «Командная
+// реализация» человек дополнительно получает карточку остановки с кнопками (Э4).
+public record ReportUpRequest(string? Text, bool Blocker = false);

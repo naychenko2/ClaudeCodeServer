@@ -43,6 +43,11 @@ public class TaskExecutionService
         _tasks.TaskCompleted += OnTaskCompleted;
     }
 
+    // Хук провала хода исполнителя для режима «Командная реализация» (Э4): вешает
+    // TeamWaveService при старте — тем же приёмом, что SessionManager.TeamWaveStarter.
+    // null — режима нет либо сервис не поднят: провал остаётся обычным (тост владельцу).
+    public Func<TaskItem, Task>? TeamTaskFailed { get; set; }
+
     /// <summary>
     /// Запуск выполнения задачи Claude-ом: отдельная сессия в проекте задачи
     /// (личная — чат вне проекта) в режиме acceptEdits, первым сообщением — постановка.
@@ -281,6 +286,18 @@ public class TaskExecutionService
                         var persona = updated.PersonaId is not null ? _personas.Get(updated.PersonaId, updated.OwnerId!) : null;
                         await NotifyAsync(updated, BuildResultNotification(updated, ok, persona));
                         await NotifyDelegatorAsync(updated, ok);
+                        // Режим «Командная реализация» (Э4): провал под-задачи — одна перевыдача,
+                        // второй провал той же под-задачи — эскалация. Решает TeamWaveService
+                        // (он знает план и бюджет), поэтому здесь только хук — цикл зависимостей
+                        // TeamWaveService → TaskExecutionService иначе замкнулся бы.
+                        if (TeamTaskFailed is { } onFailed)
+                        {
+                            try { await onFailed(updated); }
+                            catch (Exception ex)
+                            {
+                                _log.LogError(ex, "Обработка провала под-задачи {TaskId} режимом «Командная реализация» не удалась", updated.Id);
+                            }
+                        }
                     }
                     else
                     {

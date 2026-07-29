@@ -76,6 +76,18 @@ internal static class TurnTelemetry
     }
 
     /// <summary>
+    /// Среда исполнения хода одним словом: <c>docker</c> — процесс claude идёт в песочнице,
+    /// <c>local</c> — на машине сервера. Выбирает её <c>ILauncherFactory.ForOwner</c> по полю
+    /// <c>User.ExecutionEnvironment</c> ВЛАДЕЛЬЦА процесса, поэтому в одном инстансе ходы
+    /// разных пользователей идут в разных средах.
+    ///
+    /// Общая точка для спана <c>process.start</c> (тег <c>kind</c>) и метрик хода
+    /// (тег <c>execution</c>): словарь значений один, иначе трейс и метрика перестанут
+    /// биться друг с другом при разборе «песочница тормозит или нет».
+    /// </summary>
+    public static string ExecutionKind(bool isSandboxed) => isSandboxed ? "docker" : "local";
+
+    /// <summary>
     /// Запись результата хода по result-событию CLI: длительность из duration_ms
     /// самого CLI (не пересчитывается), плюс счётчик ошибок при отказе.
     ///
@@ -84,12 +96,14 @@ internal static class TurnTelemetry
     /// признака в <paramref name="isError"/>, иначе отказ уедет в метрику как success.
     /// </summary>
     public static void RecordTurnResult(
-        long durationMs, string provider, string? model, bool isError, string? apiErrorStatus)
+        long durationMs, string provider, string? model, bool isError, string? apiErrorStatus,
+        bool isSandboxed = false)
     {
         var outcome = isError ? "error" : "success";
-        ServerMetrics.RecordLlmDuration(durationMs, provider, model ?? "unknown", outcome);
+        var execution = ExecutionKind(isSandboxed);
+        ServerMetrics.RecordLlmDuration(durationMs, provider, model ?? "unknown", outcome, execution);
         if (isError)
-            ServerMetrics.RecordLlmError(provider, ClassifyErrorType(apiErrorStatus));
+            ServerMetrics.RecordLlmError(provider, ClassifyErrorType(apiErrorStatus), execution);
     }
 
     /// <summary>

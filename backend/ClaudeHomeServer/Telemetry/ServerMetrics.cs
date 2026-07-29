@@ -34,6 +34,7 @@ public static class ServerMetrics
     {
         "provider",    // claude, deepseek, glm, ollama, ...
         "model",       // claude-sonnet-4-5, glm-4, ...
+        "execution",   // local | docker — среда исполнения хода (ровно два значения)
         "tool_name",   // идентификатор MCP-инструмента (≤80-90 значений)
         "outcome",     // success, error, timeout
         "error_type",  // rate_limit, network, auth, ...
@@ -109,24 +110,33 @@ public static class ServerMetrics
     // tool_name и model приходят снаружи (заголовок MCP-сервера, поле сессии из PUT),
     // и без ограничителя каждое новое значение заводит вечный ряд в ClickHouse.
 
-    /// <summary>Записать длительность хода LLM. Теги захардкожены в сигнатуре.</summary>
+    /// <summary>
+    /// Записать длительность хода LLM. Теги захардкожены в сигнатуре.
+    ///
+    /// <paramref name="execution"/> — среда исполнения хода (<c>local</c>/<c>docker</c>,
+    /// см. <see cref="TurnTelemetry.ExecutionKind"/>). Ограничитель значений ей не нужен:
+    /// значений ровно два и берутся они из кода, а не снаружи.
+    /// </summary>
     public static void RecordLlmDuration(
         double durationMs,
         string provider,
         string model,
-        string outcome = "success")
+        string outcome = "success",
+        string execution = "local")
     {
         LlmDuration.Record(durationMs,
             new KeyValuePair<string, object?>("provider", provider),
             new KeyValuePair<string, object?>("model", MetricTagGuard.Model(model)),
-            new KeyValuePair<string, object?>("outcome", outcome));
+            new KeyValuePair<string, object?>("outcome", outcome),
+            new KeyValuePair<string, object?>("execution", execution));
     }
 
-    public static void RecordLlmError(string provider, string errorType)
+    public static void RecordLlmError(string provider, string errorType, string execution = "local")
     {
         LlmErrors.Add(1,
             new KeyValuePair<string, object?>("provider", provider),
-            new KeyValuePair<string, object?>("error_type", errorType));
+            new KeyValuePair<string, object?>("error_type", errorType),
+            new KeyValuePair<string, object?>("execution", execution));
     }
 
     public static void RecordRateLimitHit(string provider)

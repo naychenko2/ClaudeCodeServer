@@ -799,7 +799,7 @@
     {
       "id": "f3a1c2d4-2222-4222-8222-bbbbbbbbbbbb",
       "title": "p99 — худшие ходы",
-      "description": "Худшие ходы: 1% ответов идёт дольше этой линии. Показывает, насколько плохо бывает, когда бывает плохо.",
+      "description": "Худшие ходы: 1% ответов идёт дольше этой линии. Показывает, насколько плохо бывает, когда бывает плохо. Разрез local/docker отвечает, тормозит ли песочница — но осторожно: среду выбирает ВЛАДЕЛЕЦ процесса, поэтому при нескольких пользователях это скорее «чьи ходы медленнее».",
       "panelTypes": "graph",
       "yAxisUnit": "ms",
       "timePreferance": "GLOBAL_TIME",
@@ -845,12 +845,19 @@
                   "key": "deployment.environment",
                   "isJSON": false,
                   "dataType": "string"
+                },
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "execution",
+                  "isJSON": false,
+                  "dataType": "string"
                 }
               ],
               "having": {
                 "expression": ""
               },
-              "legend": "{{provider}} · {{deployment.environment}}",
+              "legend": "{{provider}} · {{deployment.environment}} · {{execution}}",
               "limit": null,
               "orderBy": [],
               "queryName": "A",
@@ -902,7 +909,7 @@
     {
       "id": "f3a1c2d4-3333-4333-8333-cccccccccccc",
       "title": "Медиана — типичный ход",
-      "description": "Типичный ход. Сравнение с p99 рядом показывает разброс: медиана ровная, а p99 скачет — тормозят отдельные ходы, а не провайдер целиком.",
+      "description": "Типичный ход. Сравнение с p99 рядом показывает разброс: медиана ровная, а p99 скачет — тормозят отдельные ходы, а не провайдер целиком. Разрез local/docker — хост против песочницы.",
       "panelTypes": "graph",
       "yAxisUnit": "ms",
       "timePreferance": "GLOBAL_TIME",
@@ -948,12 +955,19 @@
                   "key": "deployment.environment",
                   "isJSON": false,
                   "dataType": "string"
+                },
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "execution",
+                  "isJSON": false,
+                  "dataType": "string"
                 }
               ],
               "having": {
                 "expression": ""
               },
-              "legend": "{{provider}} · {{deployment.environment}}",
+              "legend": "{{provider}} · {{deployment.environment}} · {{execution}}",
               "limit": null,
               "orderBy": [],
               "queryName": "A",
@@ -1211,7 +1225,7 @@
     {
       "id": "f3a1c2d4-4444-4444-8444-dddddddddddd",
       "title": "Кто отваливается",
-      "description": "Кто из провайдеров отваливается. Считается и жёсткий сбой CLI, и API-ошибка вроде 429. Пусто = с последнего перезапуска сервера отказов не было.",
+      "description": "Кто из провайдеров отваливается. Считается и жёсткий сбой CLI, и API-ошибка вроде 429. Разрез local/docker показывает, лезут ли отказы именно из песочницы. Пусто = с последнего перезапуска сервера отказов не было.",
       "panelTypes": "graph",
       "yAxisUnit": "",
       "timePreferance": "GLOBAL_TIME",
@@ -1257,12 +1271,19 @@
                   "key": "deployment.environment",
                   "isJSON": false,
                   "dataType": "string"
+                },
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "execution",
+                  "isJSON": false,
+                  "dataType": "string"
                 }
               ],
               "having": {
                 "expression": ""
               },
-              "legend": "{{provider}} · {{deployment.environment}}",
+              "legend": "{{provider}} · {{deployment.environment}} · {{execution}}",
               "limit": null,
               "orderBy": [],
               "queryName": "A",

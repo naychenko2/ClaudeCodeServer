@@ -1802,7 +1802,7 @@ public class ClaudeSession : ILlmSessionAdapter
         // OTel: дочерний спан запуска процесса (родитель — активный chat.turn).
         Process process;
         using (var procActivity = TurnTelemetry.StartProcessSpan(
-                   kind: _launcher.IsSandboxed ? "docker" : "local",
+                   kind: TurnTelemetry.ExecutionKind(_launcher.IsSandboxed),
                    command: _launcher.ClaudeCliCommand,
                    sessionId: Info.ClaudeSessionId ?? Info.Id.ToString(),
                    mcpConfigHash: TurnTelemetry.McpConfigHash(effectiveMcpConfig)))
@@ -2291,7 +2291,8 @@ public class ClaudeSession : ILlmSessionAdapter
                 // EffectiveModel равен null и метрика получала unknown вместо ответа на вопрос
                 // «чем считали». Намерение остаётся фолбэком, если CLI модель не назвал.
                 TurnTelemetry.RecordTurnResult(durationMs, Info.Provider, _turnCliModel ?? EffectiveModel,
-                    isError: TurnTelemetry.IsTurnFailure(subtype, isErrorFlag), apiErrorStatus: apiErr);
+                    isError: TurnTelemetry.IsTurnFailure(subtype, isErrorFlag), apiErrorStatus: apiErr,
+                    isSandboxed: _launcher.IsSandboxed);
                 // Ход завершён. Без живых фоновых задач закрываем stdin — CLI выйдет сам,
                 // дальше ждём его не дольше ResultExitGrace. С ними stdin держим открытым:
                 // прогон доживает (агенты работают внутри процесса) и готов принять

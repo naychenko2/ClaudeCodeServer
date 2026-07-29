@@ -591,7 +591,8 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'provider_limit'; resetsAt?: string; providers: ProviderFallbackOption[] }
   | { type: 'work_loop'; active: boolean; iteration: number; maxIterations: number; phase: string | null }
   // Режим «Командная реализация»: приходит при каждом изменении (вкл/стадия/волна/авто/стоп)
-  | { type: 'team_implement'; active: boolean; stage: TeamImplementStage | null; waveNumber: number; autoWaves: boolean; coordinatorPersonaId: string | null; plannerPersonaId: string | null; executorPersonaIds: string[] | null; budget: TeamImplementBudget | null; planCardId: string | null; plannedWaves?: number; coordinatorNoCode?: boolean; stopped?: boolean }
+  // modeLocked — Э8: план-режим навязан чату (интервью/планирование)
+  | { type: 'team_implement'; active: boolean; stage: TeamImplementStage | null; waveNumber: number; autoWaves: boolean; coordinatorPersonaId: string | null; plannerPersonaId: string | null; executorPersonaIds: string[] | null; budget: TeamImplementBudget | null; planCardId: string | null; plannedWaves?: number; coordinatorNoCode?: boolean; stopped?: boolean; modeLocked?: boolean }
   // Карточка плана командной реализации. Переиздаётся при каждой правке (смена исполнителя,
   // решение человека) с тем же planId — клиент обновляет карточку, а не плодит дубли
   | { type: 'team_plan'; planId: string; plan: TeamPlan; resolved: boolean; approved: boolean | null }
@@ -832,6 +833,15 @@ export interface SessionTeamImplement {
   // «Координатор не пишет код сам»: у чата-штаба отключены инструменты правки файлов
   coordinatorNoCode: boolean;
   planCardId?: string | null;
+  // Э8: план-режим навязан чату (стадии интервью/планирования) — селектор режима в
+  // композере показывает «план» и заблокирован. Присутствует у live-состояния (событие
+  // team_implement присылает готовое значение); при REST-гидратации до первого события
+  // считаем его сами из savedMode — см. teamImplementModeLocked()
+  modeLocked?: boolean;
+  // Э8: режим прав человека, сохранённый на входе в план-режим (raw-поле REST-гидратации,
+  // SessionTeamImplement.SavedMode с бэка) — вернётся после согласования плана. У live-события
+  // его нет, там сразу приходит посчитанный modeLocked
+  savedMode?: Mode | null;
 }
 
 // Live-состояние режима (из события team_implement; флаг team-implement-mode)

@@ -512,6 +512,7 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
           coordinatorNoCode: msg.coordinatorNoCode ?? true,
           stopped: msg.stopped ?? false,
           planCardId: msg.planCardId,
+          modeLocked: msg.modeLocked ?? false,
         },
       };
 

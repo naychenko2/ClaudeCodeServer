@@ -410,13 +410,19 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   // передаёт режим ещё раз, так что неудачный запрос не оставит расхождения. Бэкенд в
   // SetMode перенастраивает и живой ход на лету (control-протокол set_permission_mode).
   const changeMode = (m: Mode) => {
+    const prev = mode;
     setMode(m);
     api.chats.setMode(session.id, m)
       // Обновляем объект сессии у родителя: он держит его в своём состоянии и при
       // возврате в чат отдаёт обратно пропсом. Без этого сервер уже знает новый режим,
       // а список сессий — ещё старый, и перемонтированная панель показывает прежний.
       .then(updated => onSessionUpdated?.(updated))
-      .catch(() => { /* режим доедет со следующим сообщением */ });
+      .catch(err => {
+        // Бэкенд отклонил смену (например, штаб «Командной реализации» держит план-режим,
+        // Э8) — откатываем оптимистичный выбор и объясняем причину, а не молчим
+        setMode(prev);
+        showToast('Режим чата', err instanceof Error ? err.message : 'Не удалось сменить режим');
+      });
   };
   const [showAttachPicker, setShowAttachPicker] = useState(false);
   const [showEdit, setShowEdit] = useState(false);

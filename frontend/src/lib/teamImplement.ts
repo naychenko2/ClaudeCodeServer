@@ -2,7 +2,7 @@
 // бейджа/маркера. Тексты — дословно из docs/features/team-implement-mode.md («Тексты»)
 // и макета docs/mockups/team-implement-mode.html (короткие формы маркера).
 
-import type { TeamEscalationKind, TeamImplementBudget, TeamImplementStage } from '../types';
+import type { SessionTeamImplement, TeamEscalationKind, TeamImplementBudget, TeamImplementStage } from '../types';
 import { MODE_META, type Mode } from './modes';
 
 // Тон по тому, кто должен действовать: work — команда работает (accent),
@@ -103,6 +103,18 @@ export const TEAM_IMPLEMENT_MODE_HELD =
 export function teamImplementModeHeld(mode: Mode): boolean {
   return mode === TEAM_IMPLEMENT_MODE;
 }
+
+// === Э8: план-режим на стадиях интервью/планирования ===
+// Штаб думает — селектор режима в композере заблокирован на «План» до согласования плана.
+// Live-состояние (после первого события team_implement) уже несёт готовый modeLocked;
+// REST-гидратация до первого события считает его сама из savedMode (SessionTeamImplement.SavedMode)
+export function teamImplementModeLocked(state: SessionTeamImplement): boolean {
+  return state.modeLocked ?? state.savedMode != null;
+}
+
+// Тултип заблокированного селектора режима (текст — «Тексты Э8» продуктового плана).
+// Тот же текст возвращает бэкенд в ошибке PUT /chats/{id}/mode, если запрос всё же ушёл
+export const TEAM_IMPLEMENT_MODE_LOCKED_TOOLTIP = 'Штаб планирует. Режим вернётся после согласования плана';
 
 // Подтверждение выключения режима
 export const TEAM_IMPLEMENT_DISABLE_TITLE = 'Выключить командную реализацию?';

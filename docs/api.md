@@ -25,8 +25,8 @@ DELETE              /api/projects/{id}/files          ?path=
 GET                 /api/projects/{id}/docs                   → индекс документации (область: файлы корня + папки, дефолт README.md + docs/**)
 GET                 /api/projects/{id}/docs/doc       ?path=  → { content, links, backlinks } | 404 вне области
 GET                 /api/projects/{id}/docs/search    ?q=     → совпадения с фрагментами
-GET                 /api/projects/{id}/docs/scope             → { selected{folders,rootFiles,extensions}, folderCandidates[], rootFileCandidates[], supportedExtensions[], defaults{} }
-PUT                 /api/projects/{id}/docs/scope     { folders, rootFiles, extensions } → та же форма (у каждой оси null — дефолт, [] — «ничего отсюда»)
+GET                 /api/projects/{id}/docs/scope             → { selected{folders,rootFiles,types}, folderCandidates[], rootFileCandidates[], typeGroups[], defaults{} }
+PUT                 /api/projects/{id}/docs/scope     { folders, rootFiles, types } → та же форма (у каждой оси null — дефолт, [] — «ничего отсюда»)
 GET                 /api/home/summary                 ?recent=    → { active[], recent[] }  (дашборд «Домой»: сессии по всем проектам + чаты, с именами проектов)
 GET                 /api/history/days                 ?sinceDays= → [{ date, commitCount, cached }]  (по всем проектам, без LLM)
 GET                 /api/history/day/{date}                       → { date, items[] }  (продуктовая AI-сводка дня, кеш)

@@ -1138,8 +1138,21 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
           холсте (ChatHeaderBar, ветка island) — обёртки не нужно */}
       {headerBar}
 
-      {/* Сообщения (нижний отступ = высота плавающего composer + зазор) */}
-      <div ref={scrollRef} onScroll={handleMessagesScroll} data-selection-scope="chat" data-selection-target="[data-selection-doc]" data-selection-priority="1" style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', position: 'relative', paddingTop: isMobile ? 16 : 20, paddingLeft: isMobile ? 12 : 24, paddingRight: isMobile ? 12 : 24, paddingBottom: 8,
+      {/* Сообщения (нижний отступ = высота плавающего composer + зазор).
+          Прокручивается НЕ вся ширина области, а колонка сообщений: иначе полоса
+          прокрутки рисуется по краю широкого центра и на большом экране висит
+          в сотне пикселей от текста, рядом с кнопкой «вниз». Внешняя обёртка
+          только центрирует колонку и сама не скроллится. */}
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', justifyContent: 'center' }}>
+      <div ref={scrollRef} onScroll={handleMessagesScroll} data-selection-scope="chat" data-selection-target="[data-selection-doc]" data-selection-priority="1" style={{ flex: 1, minWidth: 0,
+        // Ширина области прокрутки = колонка сообщений плюс места под полосу с ОБЕИХ
+        // сторон (scrollbar-gutter: both-edges). Так полоса идёт вплотную к правому
+        // краю сообщений, а сама колонка остаётся ровно по центру — иначе она разошлась
+        // бы с композером, который центрируется отдельно. Боковых отступов здесь нет
+        // намеренно: любой из них отодвинул бы полосу от текста.
+        maxWidth: CHAT_MAX_W + (isMobile ? 12 * 2 : 24),
+        scrollbarGutter: isMobile ? undefined : 'stable both-edges',
+        overflowY: 'auto', overflowX: 'hidden', position: 'relative', paddingTop: isMobile ? 16 : 20, paddingLeft: isMobile ? 12 : 0, paddingRight: isMobile ? 12 : 0, paddingBottom: 8,
         // Лента заканчивается НАД композером, а не подлезает под него: раньше это был
         // paddingBottom, и контент прокручивался в прозрачных промежутках композера
         // (между карточкой ввода и полосой кнопок). marginBottom ужимает саму область
@@ -1238,6 +1251,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
 
         <div ref={bottomRef} />
       </div></div>
+      </div>
 
       {/* Плавающая кнопка «вниз» — появляется, когда лента отлистана вверх */}
       {showScrollDown && (

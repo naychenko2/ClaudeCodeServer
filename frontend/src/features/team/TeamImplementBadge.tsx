@@ -5,13 +5,14 @@ import { C, FS, FONT, R, MODAL_W } from '../../lib/design';
 import { Button, ConfirmDialog, Menu, Modal } from '../../components/ui';
 import { ICON_STROKE } from '../../components/ui/icons';
 import {
-  teamImplementTone, teamImplementBadgeText, teamBudgetLine, teamBudgetTight,
+  teamImplementTone, teamImplementBadgeText, teamImplementStageShort, teamBudgetLine, teamBudgetTight,
   teamImplementModeHeld,
   TEAM_IMPLEMENT_DESCRIPTION, TEAM_IMPLEMENT_AUTO_TITLE,
   TEAM_IMPLEMENT_DISABLE_TITLE, TEAM_IMPLEMENT_DISABLE_TEXT,
   TEAM_IMPLEMENT_NO_CODE_ON, TEAM_IMPLEMENT_NO_CODE_OFF, TEAM_IMPLEMENT_MODE_HELD,
   TEAM_IMPLEMENT_STOP_TITLE, TEAM_IMPLEMENT_STOP_TEXT, TEAM_IMPLEMENT_STOPPED_HINT,
 } from '../../lib/teamImplement';
+import { teamMechanic } from './teamMechanics';
 import type { Mode } from '../../lib/modes';
 
 // Бейдж режима «Командная реализация» в композере (флаг team-implement-mode).
@@ -45,7 +46,10 @@ export function TeamImplementBadge({ state, chatMode, isMobile, onToggleAuto, on
   const closeInfo = () => setInfoAnchor(null);
 
   const tone = teamImplementTone(state.stage);
-  const text = teamImplementBadgeText(state.stage, state.waveNumber, state.plannedWaves);
+  // Короткая форма чипа («КР · волна 1») — полная («Командная реализация · волна 1 из 2»)
+  // вываливается за границы полосы бейджей на узкой ширине; она уходит в title кнопки
+  const fullText = teamImplementBadgeText(state.stage, state.waveNumber, state.plannedWaves);
+  const text = `${teamMechanic('implementMode').shortName} · ${teamImplementStageShort(state.stage, state.waveNumber, state.plannedWaves)}`;
   const height = isMobile ? 26 : 24;
 
   const toneStyle = tone === 'work'
@@ -132,7 +136,7 @@ export function TeamImplementBadge({ state, chatMode, isMobile, onToggleAuto, on
           const rect = e.currentTarget.getBoundingClientRect();
           setInfoAnchor(prev => (prev ? null : rect));
         }}
-        title={TEAM_IMPLEMENT_DESCRIPTION}
+        title={`${fullText} — ${TEAM_IMPLEMENT_DESCRIPTION}`}
         style={{
           display: 'inline-flex', alignItems: 'center', gap: 6, height,
           padding: '0 9px', borderRadius: R.pill, border: 'none', cursor: 'pointer',

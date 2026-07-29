@@ -845,9 +845,9 @@ export function Composer({
       leadTitle={`Командная механика «${teamMechMeta.name}» — настройки`}
       onLeadClick={() => setTeamOpen(o => !o)}
       valueTitle={`Активна механика «${teamMechMeta.name}». Иконка — настройки, ✕ — снять режим`}
-      // На мобиле имя механики убрано (компакт-форма), но ✕ остаётся: TeamDrawer
-      // снятия режима не имеет, и ✕ — единственная гарантированная точка снятия
-      value={isMobile ? null : teamMechMeta.name}
+      // Короткое имя из словаря механик (teamMechanics.ts) — полное вываливалось бы за
+      // границы пилюли на узкой ширине; расшифровка — в leadTitle/valueTitle выше
+      value={teamMechMeta.shortName}
       trailing={
         <button
           onClick={() => setTeamMech(null)}

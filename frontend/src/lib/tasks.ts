@@ -134,6 +134,13 @@ export function getTaskById(id: string): Task | undefined {
   return _tasks.find(t => t.id === id);
 }
 
+// Наполнен ли стор из сети (снапшот из IndexedDB не в счёт — в нём нет задач,
+// созданных после прошлой сессии). Пока false, промах getTaskById означает «ещё не
+// знаем», а не «задача удалена» — см. chatOrigin.
+export function tasksLoaded(): boolean {
+  return _loaded;
+}
+
 // === Мутации (обновляют стор сразу из ответа; broadcast продублирует — upsert идемпотентен) ===
 // При флаге tasks-offline и отсутствии связи (или сетевом сбое) мутация уходит в
 // outbox + оптимистично применяется локально; синхронизация — при возврате связи.

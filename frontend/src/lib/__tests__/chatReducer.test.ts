@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import type { ChatItem, ServerMessage } from '../../types';
+import type { ChatItem, ServerMessage, TeamEscalationKind } from '../../types';
 import { applyServerMessage, normalizeHistory, serverHistoryNewer, initialChatState, type ChatState } from '../chatReducer';
 
 // --- Хелперы ---
@@ -281,6 +281,91 @@ describe('applyServerMessage: ожидание ответа пользовате
     expect(applyServerMessage(q, msg({ type: 'ask_question', toolUseId: 't1', input: { q: '?' } }))).toBe(q);
     const p = run([{ type: 'plan_review', requestId: 'r1', plan: '# П' }]);
     expect(applyServerMessage(p, msg({ type: 'plan_review', requestId: 'r1', plan: '# П' }))).toBe(p);
+  });
+
+  // Карточка плана командной реализации переиздаётся сервером при каждой правке
+  // (смена исполнителя, решение человека) с тем же planId — она обновляется на месте
+  it('team_plan обновляет карточку по planId, а не плодит дубли', () => {
+    const subtask = {
+      id: 'st1', title: 'Эндпоинт экспорта', goal: '', executorPersonaId: 'p1',
+      executorRationale: 'Бэкенд — его зона', files: ['Controllers/SpendController.cs'],
+      wave: 1, doneCriteria: '',
+    };
+    const plan = {
+      id: 'plan1', request: 'экспорт', summary: 'Экспорт трат', plannerPersonaId: 'p9',
+      approved: null, createdAt: '2026-07-28T10:00:00Z', waveCount: 1, executorCount: 1,
+      subtasks: [subtask],
+    };
+    const first = run([{ type: 'team_plan', planId: 'plan1', plan, resolved: false, approved: null }]);
+    expect(first.items).toEqual([{ kind: 'team_plan', planId: 'plan1', plan, resolved: false, approved: null }]);
+
+    // Переиздание после смены исполнителя (reassign): карточка одна, данные новые
+    const reassigned = { ...plan, subtasks: [{ ...subtask, executorPersonaId: 'p2' }] };
+    const second = applyServerMessage(first, msg({ type: 'team_plan', planId: 'plan1', plan: reassigned, resolved: false, approved: null }));
+    expect(second.items).toHaveLength(1);
+    expect(second.items[0]).toMatchObject({ kind: 'team_plan', planId: 'plan1', resolved: false });
+    expect((second.items[0] as Extract<ChatItem, { kind: 'team_plan' }>).plan.subtasks[0].executorPersonaId).toBe('p2');
+
+    // Решение «Запустить» закрывает ту же карточку
+    const third = applyServerMessage(second, msg({ type: 'team_plan', planId: 'plan1', plan: { ...reassigned, approved: true }, resolved: true, approved: true }));
+    expect(third.items).toHaveLength(1);
+    expect(third.items[0]).toMatchObject({ resolved: true, approved: true });
+
+    // Другой planId — отдельная карточка
+    const other = applyServerMessage(third, msg({ type: 'team_plan', planId: 'plan2', plan: { ...plan, id: 'plan2' }, resolved: false, approved: null }));
+    expect(other.items).toHaveLength(2);
+  });
+
+  // Карточка остановки переиздаётся сервером при ответе человека (resolved + выбранная
+  // кнопка) с тем же escalationId — иначе в ленте оседали бы две карточки одной остановки
+  it('team_escalation обновляет карточку по escalationId, а не плодит дубли', () => {
+    const actions = [{ id: 'answer', label: 'Ответить' }, { id: 'reassign', label: 'Отдать другому' }];
+    const first = run([{
+      type: 'team_escalation', escalationId: 'e1', kind: 'blocker',
+      title: 'Исполнитель застрял', details: 'Нет доступа к продовой базе трат',
+      actions, taskId: 't1', wave: 2, resolved: false, chosenActionId: null,
+    }]);
+    expect(first.items).toHaveLength(1);
+    expect(first.items[0]).toMatchObject({
+      kind: 'team_escalation', escalationId: 'e1',
+      escalation: { id: 'e1', kind: 'blocker', title: 'Исполнитель застрял', wave: 2, resolved: false },
+    });
+
+    // Ответ человека: та же карточка гаснет с отметкой выбранного действия
+    const second = applyServerMessage(first, msg({
+      type: 'team_escalation', escalationId: 'e1', kind: 'blocker',
+      title: 'Исполнитель застрял', details: 'Нет доступа к продовой базе трат',
+      actions, taskId: 't1', wave: 2, resolved: true, chosenActionId: 'reassign',
+    }));
+    expect(second.items).toHaveLength(1);
+    expect((second.items[0] as Extract<ChatItem, { kind: 'team_escalation' }>).escalation)
+      .toMatchObject({ resolved: true, chosenActionId: 'reassign' });
+
+    // Другой escalationId — отдельная карточка
+    const other = applyServerMessage(second, msg({
+      type: 'team_escalation', escalationId: 'e2', kind: 'waveGate',
+      title: 'Волна 2 закрыта: 3 из 3. Запустить волну 3?', details: '',
+      actions: [{ id: 'runNext', label: 'Запустить' }], taskId: null, wave: 2,
+      resolved: false, chosenActionId: null,
+    }));
+    expect(other.items).toHaveLength(2);
+  });
+
+  // Виды карточек добавляются на бэке (waveAdded в Э5), а фронт живёт своим релизом:
+  // незнакомый токен обязан осесть в ленте карточкой, а не уронить её или потеряться
+  it('team_escalation с незнакомым kind попадает в ленту как есть', () => {
+    const state = run([{
+      type: 'team_escalation', escalationId: 'e9',
+      kind: 'somethingNewFromBackend' as TeamEscalationKind,
+      title: 'Что-то новое', details: 'Подробности',
+      actions: [{ id: 'stop', label: 'Остановить' }], taskId: null, wave: 1,
+      resolved: false, chosenActionId: null,
+    }]);
+    expect(state.items).toHaveLength(1);
+    expect(state.items[0]).toMatchObject({
+      kind: 'team_escalation',
+      escalation: { kind: 'somethingNewFromBackend', title: 'Что-то новое', resolved: false },
+    });
   });
 });
 

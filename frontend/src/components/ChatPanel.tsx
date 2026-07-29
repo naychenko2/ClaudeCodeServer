@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useMemo, useCallback, Fragment } from 'react';
 import { ArrowDown, RotateCw, CircleHelp } from 'lucide-react';
-import type { Project, Session, ChatItem, SkillInfo, AgentInfo, ClaudeBilling, Persona, WorkLoopState, SessionTeamImplement } from '../types';
+import type { Project, Session, ChatItem, SkillInfo, AgentInfo, ClaudeBilling, Persona, WorkLoopState, SessionTeamImplement, TeamPlanDecision } from '../types';
 import { useSession } from '../hooks/useSession';
 import { useFeature, FLAGS } from '../lib/featureFlags';
 import { usePersonasVersion, getPersonaById, getPersonasSnapshot, ensurePersonasLoaded, personaLabel } from '../lib/personas';
@@ -29,7 +29,7 @@ import { EditSessionDialog } from './EditSessionDialog';
 import { C, R, SHADOW, CHAT_MAX_W } from '../lib/design';
 import { setChatContext, AI_RECOMPUTE_EVENT } from '../lib/ai/chatContext';
 import { ChatHeaderBar, type CostStats, type FalCostStats } from './chat/ChatHeaderBar';
-import { ChatProjectContext, FalCostContext, AssistantNameContext, PersonaContext } from './chat/contexts';
+import { ChatProjectContext, FalCostContext, AssistantNameContext, PersonaContext, TeamPlanContext, TeamEscalationContext, type TeamPlanChatContext, type TeamEscalationChatContext } from './chat/contexts';
 import { WaitingIndicator } from './ui/WaitingIndicator';
 import { Modal, ModalActions } from './ui';
 import { ChatEmptyState } from './chat/EmptyState';
@@ -112,7 +112,7 @@ function derivePlanPhase(items: ChatItem[], mode: Mode, isWaiting: boolean): Pla
 }
 
 export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, attachedFiles, onAttachedFilesChange, artifactsOpen, onToggleArtifacts, greetingBubble, headerIsland }: Props) {
-  const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, workLoop: liveWorkLoop, teamImplement: liveTeamImplement, promptSuggestion, pending, composerRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, compact, toggleThinking, noteCompanionSwitch, cancelPending } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
+  const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, workLoop: liveWorkLoop, teamImplement: liveTeamImplement, promptSuggestion, pending, composerRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, respondTeamPlan, respondTeamEscalation, interrupt, compact, toggleThinking, noteCompanionSwitch, cancelPending } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
   // Цикл «до готово» (флаг work-loop): live-состояние из событий work_loop,
   // до первого события — из Session.workLoop; null — цикл выключен
   const workLoopState = useMemo<WorkLoopState | null>(() => {
@@ -151,6 +151,19 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       showToast('Командная реализация', err instanceof Error ? err.message : 'Не удалось переключить авто-волны');
     }
   }, [session.id, teamImplementState, onSessionUpdated]);
+  // Включение режима из карточки механики «Командная реализация» (композер): состав
+  // пустой = вся команда проекта, координатора бэкенд берёт из собеседника чата
+  const handleEnableTeamImplement = useCallback(async (opts: { autoWaves: boolean; executorPersonaIds: string[] }) => {
+    try {
+      const updated = await api.chats.setTeamImplement(session.id, true, {
+        autoWaves: opts.autoWaves,
+        executorPersonaIds: opts.executorPersonaIds,
+      });
+      onSessionUpdated?.(updated);
+    } catch (err) {
+      showToast('Командная реализация', err instanceof Error ? err.message : 'Не удалось включить режим');
+    }
+  }, [session.id, onSessionUpdated]);
   const handleDisableTeamImplement = useCallback(async () => {
     try {
       const updated = await api.chats.setTeamImplement(session.id, false);
@@ -158,6 +171,17 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       showToast('Командная реализация', 'Режим выключен — чат стал обычным разговором');
     } catch (err) {
       showToast('Командная реализация', err instanceof Error ? err.message : 'Не удалось выключить режим');
+    }
+  }, [session.id, onSessionUpdated]);
+  // «Остановить»: режим остаётся включённым, но новые волны не стартуют — карточку
+  // остановки с «Продолжить» публикует бэкенд, она приезжает событием в ленту
+  const handleStopTeamImplement = useCallback(async () => {
+    try {
+      const updated = await api.chats.stopTeamImplement(session.id);
+      onSessionUpdated?.(updated);
+      showToast('Командная реализация', 'Практика остановлена — новые волны не стартуют');
+    } catch (err) {
+      showToast('Командная реализация', err instanceof Error ? err.message : 'Не удалось остановить практику');
     }
   }, [session.id, onSessionUpdated]);
 
@@ -629,6 +653,38 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   const handleRespondPlan = useCallback((requestId: string, approve: boolean, feedback?: string) => {
     respondPlan(requestId, approve, feedback);
   }, [respondPlan]);
+
+  // Обвязка карточки плана «Командной реализации»: состояние режима + действия.
+  // Решение уходит в хаб (run/reassign/cancel), правка плана — обычным сообщением
+  // координатору. Контекст, а не пропы: карточка лежит глубоко в ленте.
+  const handleRespondTeamPlan = useCallback((planId: string, decision: TeamPlanDecision,
+    subtaskId?: string, executorPersonaId?: string) => {
+    respondTeamPlan(planId, decision, subtaskId, executorPersonaId).catch(err => {
+      showToast('Командная реализация', err instanceof Error ? err.message : 'Не удалось отправить решение по плану');
+    });
+  }, [respondTeamPlan]);
+  const handleTeamPlanMessage = useCallback((text: string) => {
+    atBottomRef.current = true;
+    send(text, [], modeRef.current);
+  }, [send]);
+  const teamPlanCtx = useMemo<TeamPlanChatContext | null>(() => teamImplementState ? {
+    autoWaves: teamImplementState.autoWaves,
+    waveNumber: teamImplementState.waveNumber,
+    executorPersonaIds: teamImplementState.executorPersonaIds,
+    onRespond: handleRespondTeamPlan,
+    onSendMessage: handleTeamPlanMessage,
+  } : null, [teamImplementState, handleRespondTeamPlan, handleTeamPlanMessage]);
+
+  // Обвязка карточек остановки (Э4): решение уходит в хаб, карточка гаснет.
+  // Контекст живёт, пока включён режим — в выключенном чате карточки только читаются
+  const handleRespondTeamEscalation = useCallback((escalationId: string, actionId?: string, comment?: string) => {
+    respondTeamEscalation(escalationId, actionId, comment).catch(err => {
+      showToast('Командная реализация', err instanceof Error ? err.message : 'Не удалось отправить решение');
+    });
+  }, [respondTeamEscalation]);
+  const teamEscalationCtx = useMemo<TeamEscalationChatContext | null>(() => teamImplementState
+    ? { onRespond: handleRespondTeamEscalation }
+    : null, [teamImplementState, handleRespondTeamEscalation]);
 
   // Откат файла — стабильный колбэк для карточек file_changed в ленте
   const projectId = project?.id;
@@ -1190,7 +1246,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
           )
         )}
 
-        <FalCostContext.Provider value={falCostByRequest}><ChatProjectContext.Provider value={projectCtx}>{renderedItems}</ChatProjectContext.Provider></FalCostContext.Provider>
+        <FalCostContext.Provider value={falCostByRequest}><ChatProjectContext.Provider value={projectCtx}><TeamPlanContext.Provider value={teamPlanCtx}><TeamEscalationContext.Provider value={teamEscalationCtx}>{renderedItems}</TeamEscalationContext.Provider></TeamPlanContext.Provider></ChatProjectContext.Provider></FalCostContext.Provider>
 
         {online && showWaiting && (
           // Текст индикатора ставим по левому краю чата (как пузыри), а домик уезжает
@@ -1350,6 +1406,9 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
             teamImplement={teamImplementState}
             onToggleTeamImplementAuto={teamImplementState ? handleToggleTeamImplementAuto : undefined}
             onDisableTeamImplement={teamImplementState ? handleDisableTeamImplement : undefined}
+            onStopTeamImplement={teamImplementState ? handleStopTeamImplement : undefined}
+            onEnableTeamImplement={teamImplementOn ? handleEnableTeamImplement : undefined}
+            isProjectChat={!!project}
             worktreeBranch={session.worktreeBranch}
             onToggleWorktree={project ? openWorktreeConfirm : undefined}
             chatContext={chatContext}

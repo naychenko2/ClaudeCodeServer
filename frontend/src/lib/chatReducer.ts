@@ -491,14 +491,63 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
           active: msg.active,
           stage: msg.stage ?? 'idle',
           waveNumber: msg.waveNumber,
+          plannedWaves: msg.plannedWaves ?? 0,
           autoWaves: msg.autoWaves,
           coordinatorPersonaId: msg.coordinatorPersonaId,
           plannerPersonaId: msg.plannerPersonaId,
           executorPersonaIds: msg.executorPersonaIds ?? [],
-          budget: msg.budget ?? { tasksUsed: 0, wavesUsed: 0, runsUsed: 0, retriesUsed: 0, maxTasks: 0, maxWaves: 0, maxRuns: 0, maxRetries: 0 },
+          budget: msg.budget ?? {
+            tasksUsed: 0, wavesUsed: 0, runsUsed: 0, retriesUsed: 0, wakeupsUsed: 0,
+            maxTasks: 0, maxWaves: 0, maxRuns: 0, maxRetries: 0, maxWakeups: 0,
+          },
+          coordinatorNoCode: msg.coordinatorNoCode ?? true,
+          stopped: msg.stopped ?? false,
           planCardId: msg.planCardId,
         },
       };
+
+    case 'team_plan': {
+      // Карточка плана переиздаётся при каждой правке (смена исполнителя, решение
+      // человека) с тем же planId — обновляем существующую, а не добавляем вторую.
+      const idx = prev.items.findIndex(it => it.kind === 'team_plan' && it.planId === msg.planId);
+      const card: ChatItem = {
+        kind: 'team_plan', planId: msg.planId, plan: msg.plan,
+        resolved: msg.resolved, approved: msg.approved,
+      };
+      if (idx < 0) return withItems([...prev.items, card]);
+      const items = prev.items.slice();
+      items[idx] = card;
+      return withItems(items);
+    }
+
+    case 'team_escalation': {
+      // Карточка остановки переиздаётся при ответе человека (resolved + выбранное
+      // действие) с тем же escalationId — обновляем существующую, а не добавляем вторую.
+      // Событие плоское, история хранит вложенный escalation — приводим к форме истории
+      const idx = prev.items.findIndex(it => it.kind === 'team_escalation' && it.escalationId === msg.escalationId);
+      const prevCard = idx >= 0 ? (prev.items[idx] as Extract<ChatItem, { kind: 'team_escalation' }>) : null;
+      const card: ChatItem = {
+        kind: 'team_escalation',
+        escalationId: msg.escalationId,
+        escalation: {
+          id: msg.escalationId,
+          kind: msg.kind,
+          title: msg.title,
+          details: msg.details,
+          actions: msg.actions ?? [],
+          taskId: msg.taskId,
+          wave: msg.wave,
+          // Время живёт только в истории — при переиздании сохраняем уже известное
+          createdAt: prevCard?.escalation.createdAt,
+          resolved: msg.resolved,
+          chosenActionId: msg.chosenActionId,
+        },
+      };
+      if (idx < 0) return withItems([...prev.items, card]);
+      const items = prev.items.slice();
+      items[idx] = card;
+      return withItems(items);
+    }
 
     case 'prompt_suggestion':
       // Подсказка следующего сообщения — приходит после result хода; в ленту не попадает

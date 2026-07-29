@@ -133,8 +133,6 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   // Профиль доступа (P6) + свой список запретов (для custom, через запятую)
   const [access, setAccess] = useState<PersonaAccess>(
     persona ? (persona.access ?? 'full') : (initial?.access ?? 'full'));
-  // Исполнитель в сабагентах: write-набор (файлы + Bash) в файловом сабагенте; только при full
-  const [subagentExecutor, setSubagentExecutor] = useState(persona?.subagentExecutor ?? false);
   const [disallowedText, setDisallowedText] = useState(
     (persona?.disallowedTools ?? []).join(', '));
   const [memoryEnabled, setMemoryEnabled] = useState(persona?.memoryEnabled ?? false);
@@ -362,7 +360,6 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     access,
     specialty,
     disallowed: access === 'custom' ? parseDisallowed(disallowedText) : [],
-    subagentExecutor: access === 'full' ? subagentExecutor : false,
   });
   // Исходный снимок считается от предзаполненного состояния: у legacy-персоны
   // слот «Характер» = systemPrompt, поэтому сама миграция не делает форму dirty.
@@ -394,7 +391,6 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       access: persona ? (persona.access ?? 'full') : (initial?.access ?? 'full'),
       specialty: persona ? (persona.specialty ?? 'none') : (initial?.specialty ?? 'none'),
       disallowed: (persona?.access ?? 'full') === 'custom' ? (persona?.disallowedTools ?? []) : [],
-      subagentExecutor: (persona?.access ?? 'full') === 'full' ? (persona?.subagentExecutor ?? false) : false,
     });
   }, [persona, defaultScope, defaultProjectId, initial?.access, initial?.specialty]);
   const dirty = snapshot !== initialSnapshot;
@@ -432,8 +428,6 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       // Специальность шлём всегда (включая 'none' — сброс); update на бэке None ставит явно
       specialty,
       disallowedTools: access === 'custom' ? parseDisallowed(disallowedText) : [],
-      // Исполнитель в сабагентах: имеет смысл только при полном профиле (бэкенд тоже гасит)
-      subagentExecutor: access === 'full' ? subagentExecutor : false,
     };
     try {
       const saved = isEdit
@@ -940,7 +934,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
           <TextField value={greeting} onChange={setGreeting} placeholder="Привет! Чем помочь?" />
         </Field>
 
-        <Field label="Специальность" hint="Функциональная роль для оркестрации: конвейер ролей, голос брифинга, статус команды.">
+        <Field label="Специальность" hint="Функциональная роль для оркестрации: конвейер ролей, голос брифинга, статус команды. У «Исполнителя» с полным профилем доступа в сабагентах есть право на правки файлов и команды — остальные специальности там только консультируют.">
           <select
             value={specialty}
             onChange={e => setSpecialty(e.target.value as PersonaSpecialty)}
@@ -1001,19 +995,6 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
             <TextArea value={disallowedText} onChange={setDisallowedText} autoGrow minHeight={56}
               placeholder="Bash, Edit, Write" />
           </Field>
-        )}
-        {access === 'full' && (
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginTop: 4 }}>
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 13.5, fontWeight: 600, color: C.textHeading, fontFamily: FONT.sans }}>
-                Исполнитель в сабагентах
-              </div>
-              <div style={{ fontSize: 12, color: C.textMuted, fontFamily: FONT.sans, marginTop: 1 }}>
-                Вызванная как субагент, может править файлы и запускать команды — иначе только консультирует
-              </div>
-            </div>
-            <Toggle checked={subagentExecutor} onChange={() => setSubagentExecutor(v => !v)} />
-          </div>
         )}
       </div>
 

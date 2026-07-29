@@ -30,9 +30,8 @@ public class NotificationService(
             Url: item.Url,
             Kind: item.Kind,
             NotificationId: item.Id,
-            Type: item.Type,
+            NotifType: item.Type,
             ProjectId: item.ProjectId,
-            SessionId: item.SessionId,
             TaskId: item.TaskId,
             Source: item.Source,
             Tag: item.Tag,
@@ -41,7 +40,7 @@ public class NotificationService(
             PersonaRole: item.PersonaRole,
             PersonaColor: item.PersonaColor,
             PersonaHasAvatar: item.PersonaHasAvatar,
-            ProjectName: item.ProjectName);
+            ProjectName: item.ProjectName) { SessionId = item.SessionId ?? "" };
 
         // In-app тост (SignalR)
         await hub.Clients.Group("user_" + userId).SendAsync("message", msg);
@@ -62,12 +61,13 @@ public class NotificationService(
         await SendAsync(userId, new CreateNotificationRequest
         {
             Kind = msg.Kind,
-            Type = msg.Type ?? "",
+            Type = msg.NotifType ?? "",
             Title = msg.Title,
             Body = msg.Body,
             Url = msg.Url,
             ProjectId = msg.ProjectId,
-            SessionId = msg.SessionId,
+            // SessionId базы — непустая строка по умолчанию; в сторе поле опциональное
+            SessionId = string.IsNullOrEmpty(msg.SessionId) ? null : msg.SessionId,
             TaskId = msg.TaskId,
             Source = msg.Source,
             Tag = msg.Tag,

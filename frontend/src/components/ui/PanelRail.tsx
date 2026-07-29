@@ -157,8 +157,6 @@ export function PanelRail({ side, groups, visible = true, gapToCenter = 0, modeT
   const railBorder = dropping
     ? `1px ${drop?.over ? 'solid' : 'dashed'} ${C.accent}`
     : `1px solid ${C.border}`;
-  // Обводка мишени: та же логика, но всегда пунктиром — она и есть «пустое место»
-  const dropBorder = `1.5px dashed ${drop?.over ? C.accent : C.textMuted}`;
 
   const rail = (
     <div
@@ -168,7 +166,7 @@ export function PanelRail({ side, groups, visible = true, gapToCenter = 0, modeT
       opacity: visible ? 1 : 0,
       pointerEvents: visible ? 'auto' : 'none',
       transition: 'width 0.15s ease-out, opacity 0.12s ease-out',
-      flexShrink: 0,
+      flexShrink: 0, position: 'relative',
       display: 'flex', flexDirection: 'column', alignItems: 'center',
       // Тон шапок островов и сайдбаров — единая «оправа» интерфейса.
       // Вертикальный отступ подобран так, чтобы капсула с ОДНОЙ иконкой была
@@ -248,6 +246,21 @@ export function PanelRail({ side, groups, visible = true, gapToCenter = 0, modeT
         );
       })()}
 
+      {/* Пока панель тащат, рельса СТАНОВИТСЯ мишенью: иконки закрываются
+          непрозрачным слоем с крестиком — «отпусти здесь, и панель уберётся».
+          Именно слоем поверх, а не отдельным блоком: так мишень наследует место и
+          высоту рельсы, ничего не двигая на экране в момент, когда в неё целятся. */}
+      {dropping && (
+        <div style={{
+          position: 'absolute', inset: 0, zIndex: 2,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          background: drop?.over ? C.accentMuted : C.bgMain,
+          color: drop?.over ? C.accent : C.textMuted,
+          transition: 'background 0.12s, color 0.12s',
+        }}>
+          <X size={18} strokeWidth={ICON_STROKE} />
+        </div>
+      )}
     </div>
   );
 
@@ -289,36 +302,6 @@ export function PanelRail({ side, groups, visible = true, gapToCenter = 0, modeT
           }}
         >
           {peek.node}
-        </div>
-      )}
-      {dropping && (
-        <div
-          {...dropProps}
-          title="Отпустите — панель скроется, кнопка останется здесь"
-          style={{
-            width: RAIL_W, height: RAIL_W, flexShrink: 0, boxSizing: 'border-box',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'auto',
-            background: drop?.over ? C.accentMuted : C.bgMain,
-            color: drop?.over ? C.accent : C.textMuted,
-            transition: 'background 0.12s, border-color 0.12s, color 0.12s',
-            // Форма рельсы: полукапсула, прижатая к краю окна — скруглена и обведена
-            // только сторона, обращённая к центру. Мишень читается как продолжение
-            // рельсы, а не как случайный квадрат рядом с ней.
-            borderTop: dropBorder, borderBottom: dropBorder,
-            ...(isLeft
-              ? {
-                  borderRight: dropBorder,
-                  borderTopRightRadius: ISLAND.radius, borderBottomRightRadius: ISLAND.radius,
-                  marginRight: gapToCenter,
-                }
-              : {
-                  borderLeft: dropBorder,
-                  borderTopLeftRadius: ISLAND.radius, borderBottomLeftRadius: ISLAND.radius,
-                  marginLeft: gapToCenter,
-                }),
-          }}
-        >
-          <X size={18} strokeWidth={ICON_STROKE} />
         </div>
       )}
     </div>

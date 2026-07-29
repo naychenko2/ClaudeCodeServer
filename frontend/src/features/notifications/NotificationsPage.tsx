@@ -178,6 +178,7 @@ function NotificationCard({ item, onRead, onDelete }: {
 const FILTERS = [
   { key: 'all', label: 'Все' },
   { key: 'unread', label: 'Непрочитанные' },
+  { key: 'alert', label: '⚠ Алерты' },
   { key: 'reminder', label: '⏰ Напоминания' },
   { key: 'claude', label: '● AI' },
   { key: 'info', label: 'ℹ Системные' },

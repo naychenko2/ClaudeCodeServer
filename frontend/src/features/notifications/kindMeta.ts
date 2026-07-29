@@ -9,6 +9,7 @@ export const KIND_META: Record<NotificationKind, { icon: string; color: string; 
   info: { icon: 'ℹ', color: C.info, bg: C.infoBg },
   success: { icon: '✓', color: C.success, bg: C.successBg },
   meeting: { icon: '🏁', color: C.plan, bg: C.planLight },
+  alert: { icon: '⚠', color: C.danger, bg: C.dangerBg },
 };
 
 export const KIND_LABELS: Record<string, string> = {
@@ -17,11 +18,14 @@ export const KIND_LABELS: Record<string, string> = {
   info: 'Системное',
   success: 'Выполнено',
   meeting: 'Совещание',
+  alert: 'Алерт',
 };
 
 // Человеческий контекст события под телом уведомления — вместо сырых тегов
 // («Саммари», «Персона»). null — контекста нет, строку не показываем.
 export function eventContext(n: { kind: string; type?: string; title?: string }): string | null {
+  if (n.kind === 'alert') return 'Телеметрия';
+  if (n.type === 'telemetry_alert_resolved') return 'Телеметрия · восстановлено';
   if (n.kind === 'success') return 'Задача выполнена';
   if (n.kind === 'meeting') return 'Совещание команды';
   if (n.type === 'summary' || (n.title ?? '').startsWith('Итог сессии')) return 'Итог сессии';

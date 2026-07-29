@@ -9,7 +9,7 @@
 // «развернуть» в центральной области (тот же FileViewer, что и для остальных файлов).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronDown, ChevronRight, CornerUpRight, Link2, List, Maximize2, MessageSquarePlus, PanelBottom, ScrollText, Search, SlidersHorizontal, X } from 'lucide-react';
+import { ChevronDown, ChevronRight, CornerUpRight, Link2, List, Maximize2, MessageSquarePlus, PanelBottom, Pin, ScrollText, Search, SlidersHorizontal, X } from 'lucide-react';
 import type { Project, DocEntry, DocDetail, DocSearchHit } from '../../types';
 import { api } from '../../lib/api';
 import { onFilesChanged } from '../../lib/signalr';
@@ -48,6 +48,15 @@ const TREE_H_DEFAULT = 220;
 const TREE_H_MIN = 80;
 const TREE_H_MAX = 700;
 
+// Закреплённый список папок над документами: то же оглавление, но постоянно на виду.
+// Папок бывает много (в CCS их шесть, в монорепе будет два десятка), поэтому блок со
+// своей прокруткой и своей высотой — иначе он съедал бы список документов целиком.
+const FOLDERS_PIN_KEY = 'cc_docs_folders_pin';
+const FOLDERS_H_KEY = 'cc_docs_folders_h';
+const FOLDERS_H_DEFAULT = 110;
+const FOLDERS_H_MIN = ROW_H * 2;
+const FOLDERS_H_MAX = 400;
+
 // Папка пути («docs/adr/x.md» → «docs/adr»); файл в корне — пустая строка
 function folderOf(path: string): string {
   const i = path.lastIndexOf('/');
@@ -76,6 +85,15 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
       const n = Number(localStorage.getItem(TREE_H_KEY));
       return Number.isFinite(n) && n >= TREE_H_MIN ? n : TREE_H_DEFAULT;
     } catch { return TREE_H_DEFAULT; }
+  });
+  const [foldersPinned, setFoldersPinned] = useState<boolean>(() => {
+    try { return localStorage.getItem(FOLDERS_PIN_KEY) === '1'; } catch { return false; }
+  });
+  const [foldersH, setFoldersH] = useState<number>(() => {
+    try {
+      const n = Number(localStorage.getItem(FOLDERS_H_KEY));
+      return Number.isFinite(n) && n >= FOLDERS_H_MIN ? n : FOLDERS_H_DEFAULT;
+    } catch { return FOLDERS_H_DEFAULT; }
   });
   const [backlinksOpen, setBacklinksOpen] = useState(false);
   const [tocOpen, setTocOpen] = useState(false);
@@ -240,27 +258,63 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
     else if (link.kind === 'repo') onOpenFile(link.target);
   }, [doc, knownDocs, onOpenFile]);
 
-  // Ресайз границы «дерево / превью»: тянем хендл вниз — дерево выше, превью ниже
-  const handleTreeResize = (e: React.PointerEvent) => {
+  // Вертикальный ресайз зоны: тянем хендл вниз — зона над ним растёт. Один обработчик
+  // на обе границы («список / превью» и «папки / документы») — поведение должно совпадать
+  const startResize = (
+    e: React.PointerEvent,
+    opts: { from: number; set: (h: number) => void; key: string; min: number; max: number },
+  ) => {
     e.preventDefault();
     const startY = e.clientY;
-    const startH = treeH;
+    const startH = opts.from;
     let latest = startH;
     const onMove = (ev: PointerEvent) => {
-      latest = Math.max(TREE_H_MIN, Math.min(TREE_H_MAX, startH + (ev.clientY - startY)));
-      setTreeH(latest);
+      latest = Math.max(opts.min, Math.min(opts.max, startH + (ev.clientY - startY)));
+      opts.set(latest);
     };
     const onUp = () => {
       document.removeEventListener('pointermove', onMove);
       document.removeEventListener('pointerup', onUp);
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
-      try { localStorage.setItem(TREE_H_KEY, String(Math.round(latest))); } catch { /* квота */ }
+      try { localStorage.setItem(opts.key, String(Math.round(latest))); } catch { /* квота */ }
     };
     document.body.style.cursor = 'row-resize';
     document.body.style.userSelect = 'none';
     document.addEventListener('pointermove', onMove);
     document.addEventListener('pointerup', onUp);
+  };
+
+  // Строка папки — одна на поповер и на закреплённый блок: это один и тот же список,
+  // и расходиться в поведении они не должны
+  const folderRow = (folder: string, count: number, current: boolean) => (
+    <button
+      key={folder || '__root'}
+      onClick={() => jumpToFolder(folder)}
+      title={folder || 'корень проекта'}
+      style={{
+        ...rowStyle, minHeight: ROW_H,
+        color: current ? C.textHeading : C.textSecondary,
+        fontWeight: current ? 600 : 400,
+      }}
+    >
+      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {folder || 'корень проекта'}
+      </span>
+      <span style={{ marginLeft: 'auto', color: C.textMuted, fontSize: FS.xs }}>{count}</span>
+    </button>
+  );
+
+  // Папка выбранного документа — ориентир «где я» в закреплённом списке
+  const currentFolder = selected ? folderOf(selected) : null;
+  // Кнопка и блок нужны, только когда есть что выбирать: с единственной папкой
+  // список папок вёл бы сам в себя
+  const hasFolderNav = groups.filter(([f]) => f).length > 1;
+
+  const pinFolders = (next: boolean) => {
+    setFoldersPinned(next);
+    setFoldersOpen(false);
+    try { localStorage.setItem(FOLDERS_PIN_KEY, next ? '1' : '0'); } catch { /* квота */ }
   };
 
   const quoteSection = (slug: string, title: string) => {
@@ -299,9 +353,16 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
             style={{ height: 30, fontSize: FS.sm, paddingLeft: 28 }} />
         </div>
         {/* Папки списка — оглавление для самого списка. Появляется, только когда групп
-            больше одной: с единственной папкой кнопка вела бы в никуда */}
-        {groups.filter(([f]) => f).length > 1 && (
-          <IconButton title="Папки" onClick={() => setFoldersOpen(v => !v)} active={foldersOpen} size="sm">
+            больше одной: с единственной папкой кнопка вела бы в никуда.
+            Закреплённый список живёт над документами, и поповер тогда не нужен —
+            кнопка становится «открепить» */}
+        {hasFolderNav && (
+          <IconButton
+            title={foldersPinned ? 'Открепить список папок' : 'Папки'}
+            onClick={() => foldersPinned ? pinFolders(false) : setFoldersOpen(v => !v)}
+            active={foldersOpen || foldersPinned}
+            size="sm"
+          >
             <List size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
           </IconButton>
         )}
@@ -342,22 +403,16 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
                 Папки
               </span>
               <div style={{ flex: 1 }} />
+              {/* Закрепить — для тех, кто прыгает по папкам постоянно: список переезжает
+                  наверх панели и перестаёт требовать открытия */}
+              <IconButton title="Закрепить над списком" onClick={() => pinFolders(true)} size="sm">
+                <Pin size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+              </IconButton>
               <IconButton title="Закрыть" onClick={() => setFoldersOpen(false)} size="sm">
                 <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
               </IconButton>
             </div>
-            {groups.map(([folder, docs]) => (
-              <button
-                key={folder || '__root'}
-                onClick={() => jumpToFolder(folder)}
-                style={{ ...rowStyle, minHeight: ROW_H, color: C.textSecondary }}
-              >
-                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {folder || 'корень проекта'}
-                </span>
-                <span style={{ marginLeft: 'auto', color: C.textMuted, fontSize: FS.xs }}>{docs.length}</span>
-              </button>
-            ))}
+            {groups.map(([folder, docs]) => folderRow(folder, docs.length, folder === currentFolder))}
           </div>
         )}
       </div>
@@ -384,7 +439,42 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
             ? { flexShrink: 0, display: 'flex', flexDirection: 'column', minHeight: 0, height: treeH }
             : { flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }
           }>
-            <div style={{ overflowY: 'auto', padding: `${SP.xs}px ${SP.xs}px` }}>
+            {/* Закреплённый список папок. Своя прокрутка и своя высота: папок бывает
+                два десятка, и без ограничения блок вытеснил бы сами документы */}
+            {foldersPinned && hasFolderNav && (
+              <>
+                <div style={{
+                  flexShrink: 0, height: foldersH, overflowY: 'auto',
+                  padding: `${SP.xs}px ${SP.xs}px`, background: C.bgInset,
+                }}>
+                  <div style={{
+                    display: 'flex', alignItems: 'center',
+                    padding: `0 ${SP.sm}px ${SP.xxs}px`,
+                    fontSize: FS.xs, fontWeight: 700, color: C.textMuted,
+                    textTransform: 'uppercase', letterSpacing: '0.03em',
+                  }}>
+                    Папки
+                  </div>
+                  {groups.map(([folder, docs]) => folderRow(folder, docs.length, folder === currentFolder))}
+                </div>
+                <div
+                  onPointerDown={e => startResize(e, {
+                    from: foldersH, set: setFoldersH, key: FOLDERS_H_KEY,
+                    min: FOLDERS_H_MIN, max: FOLDERS_H_MAX,
+                  })}
+                  title="Потяните, чтобы изменить высоту списка папок"
+                  style={{
+                    flexShrink: 0, height: 7, cursor: 'row-resize', background: C.bgInset,
+                    borderBottom: `1px solid ${C.border}`,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}
+                >
+                  <div style={{ width: 28, height: 2, borderRadius: R.max, background: C.border }} />
+                </div>
+              </>
+            )}
+
+            <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: `${SP.xs}px ${SP.xs}px` }}>
                 {index?.length === 0 && (
                   <div style={emptyStyle}>
                     <ScrollText size={20} strokeWidth={ICON_STROKE} style={{ opacity: 0.5, marginBottom: SP.sm }} />
@@ -448,7 +538,10 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
               Фон как у шапки панели: полоса читается частью её оформления, а не швом */}
           {previewEnabled && (
             <div
-              onPointerDown={handleTreeResize}
+              onPointerDown={e => startResize(e, {
+                from: treeH, set: setTreeH, key: TREE_H_KEY,
+                min: TREE_H_MIN, max: TREE_H_MAX,
+              })}
               title="Потяните, чтобы изменить высоту списка"
               style={{
                 flexShrink: 0, height: 9, cursor: 'row-resize', background: C.bgMain,

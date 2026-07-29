@@ -752,6 +752,9 @@ export interface SubscriptionUsage {
   exhausted?: boolean;
   // Ярлык тарифа ("Max 20×", "Pro", …) — по нему пул приоритизирует аккаунты
   tier?: string;
+  // Готовая PowerShell-команда входа в профиль аккаунта (для плашки «нужен claude login»);
+  // null — команда неприменима (токен приходит из env, логин в файл не поможет)
+  loginCommand?: string | null;
 }
 
 // Статистика аккаунта fal.ai (баланс + расход за период)

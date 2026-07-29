@@ -1,0 +1,25 @@
+{
+  "name": "Отказавшие ходы",
+  "category": "",
+  "sourcePage": "traces",
+  "tags": [""],
+  "extraData": "",
+  "compositeQuery": {
+    "queryType": "builder",
+    "panelType": "list",
+    "queries": [
+      {
+        "type": "builder_query",
+        "spec": {
+          "name": "A",
+          "signal": "traces",
+          "disabled": false,
+          "filter": {
+            "expression": "name = 'chat.turn' AND outcome = 'error'"
+          },
+          "limit": 100
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "name": "Медленные ходы (дольше 30 с)",
+  "category": "",
+  "sourcePage": "traces",
+  "tags": [""],
+  "extraData": "",
+  "compositeQuery": {
+    "queryType": "builder",
+    "panelType": "list",
+    "queries": [
+      {
+        "type": "builder_query",
+        "spec": {
+          "name": "A",
+          "signal": "traces",
+          "disabled": false,
+          "filter": {
+            "expression": "name = 'chat.turn' AND durationNano > 30000000000"
+          },
+          "limit": 100
+        }
+      }
+    ]
+  }
+}

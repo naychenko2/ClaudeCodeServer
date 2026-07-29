@@ -1,0 +1,25 @@
+{
+  "name": "Запуски в песочнице",
+  "category": "",
+  "sourcePage": "traces",
+  "tags": [""],
+  "extraData": "",
+  "compositeQuery": {
+    "queryType": "builder",
+    "panelType": "list",
+    "queries": [
+      {
+        "type": "builder_query",
+        "spec": {
+          "name": "A",
+          "signal": "traces",
+          "disabled": false,
+          "filter": {
+            "expression": "name = 'process.start' AND kind = 'docker'"
+          },
+          "limit": 100
+        }
+      }
+    ]
+  }
+}

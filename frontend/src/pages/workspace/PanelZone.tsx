@@ -17,7 +17,7 @@
 // Панели — «воздушные» скруглённые карточки с зазорами; границы высот тянутся
 // невидимыми хендлами в зазорах, ширина колонок — сплиттером со стороны центра.
 import { Fragment, useEffect, useState, type ReactNode } from 'react';
-import { C, ISLAND, SHADOW } from '../../lib/design';
+import { C, ISLAND, SHADOW, PANEL_ANIM } from '../../lib/design';
 import { ICON_STROKE } from '../../components/ui/icons';
 import { PanelShell } from '../../components/ui/PanelShell';
 import { PanelRail, RAIL_W, RAIL_GAP, type RailItem } from '../../components/ui/PanelRail';
@@ -326,7 +326,7 @@ export function PanelZone({
   const railGapBox = (
     <div style={{
       width: showRail ? RAIL_GAP : RAIL_W + RAIL_GAP,
-      flexShrink: 0, transition: 'width 0.15s ease-out',
+      flexShrink: 0, transition: `width ${PANEL_ANIM}`,
     }} />
   );
 
@@ -343,7 +343,7 @@ export function PanelZone({
       boxSizing: 'border-box',
       // Тени панелей-островов не должны срезаться обёрткой
       overflow: 'visible',
-      transition: widthDragging ? 'none' : 'width 0.15s ease-out',
+      transition: widthDragging ? 'none' : `width ${PANEL_ANIM}`,
     }}>
       {columns.map((col, vi) => (
         <Fragment key={col.ci}>

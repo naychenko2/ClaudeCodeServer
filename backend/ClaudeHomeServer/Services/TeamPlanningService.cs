@@ -119,7 +119,7 @@ public class TeamPlanningService(
     // из списка кандидатов и одна строка обоснования — бэкендовая часть уходит бэкендеру,
     // фронтовая фронтендеру. Отсюда и жёсткий контракт ответа: только JSON.
     public static string BuildPlannerPrompt(string request, IReadOnlyList<TeamCandidateCard> cards,
-        string? projectHint = null)
+        string? projectHint = null, TeamImplementPlan? previous = null)
     {
         var sb = new StringBuilder();
         sb.AppendLine("Ты планировщик командной реализации. Разбей задачу на под-задачи и раздай их " +
@@ -131,6 +131,16 @@ public class TeamPlanningService(
         if (!string.IsNullOrWhiteSpace(projectHint))
         {
             sb.AppendLine($"ПРОЕКТ: {projectHint.Trim()}");
+            sb.AppendLine();
+        }
+        // Перепланирование (Э8): план строится не с нуля, а поверх предыдущего — иначе
+        // «что изменилось» планировщику взять неоткуда, и человек сверял бы два состава глазами.
+        if (previous is not null)
+        {
+            sb.AppendLine($"ПРЕДЫДУЩИЙ ПЛАН (версия {previous.Version}) — его надо пересобрать с учётом задачи выше:");
+            foreach (var s in previous.Subtasks)
+                sb.AppendLine($"- {s.Title} (волна {s.Wave}" +
+                              (s.TaskId is not null ? ", уже роздана исполнителю" : "") + ")");
             sb.AppendLine();
         }
         sb.AppendLine("ИСПОЛНИТЕЛИ (выбирать ТОЛЬКО из них, по personaId):");
@@ -152,10 +162,21 @@ public class TeamPlanningService(
                       "дизайн — дизайнеру, тесты — тестировщику. Не раздавай по кругу.");
         sb.AppendLine($"4. Волны: wave=1 идёт первой, зависимые части — в следующие волны. Под-задач не больше {MaxSubtasks}.");
         sb.AppendLine("5. files — файлы/папки во владении под-задачи; doneCriteria — как проверить, что готово.");
+        sb.AppendLine("6. assumptions — что ты додумал за человека: неочевидные решения, принятые без его ответа. " +
+                      "Он утверждает их вместе с планом, поэтому пиши по делу и без воды. Нечего додумывать — пустой список.");
+        if (previous is not null)
+            sb.AppendLine("7. changes — чем этот план отличается от предыдущего: по строке на изменение " +
+                          "(добавлено, убрано, переехало в другую волну, сменился исполнитель).");
         sb.AppendLine();
         sb.AppendLine("Ответь ТОЛЬКО JSON-объектом без пояснений и без markdown-обёртки:");
-        sb.AppendLine("""
-            {"summary":"одна строка что делаем",
+        sb.AppendLine(previous is null
+            ? """
+            {"summary":"одна строка что делаем","assumptions":[""],
+             "subtasks":[{"title":"","goal":"","executorPersonaId":"","executorRationale":"",
+                          "files":[""],"wave":1,"doneCriteria":""}]}
+            """
+            : """
+            {"summary":"одна строка что делаем","assumptions":[""],"changes":[""],
              "subtasks":[{"title":"","goal":"","executorPersonaId":"","executorRationale":"",
                           "files":[""],"wave":1,"doneCriteria":""}]}
             """);
@@ -167,7 +188,10 @@ public class TeamPlanningService(
     // null — нет кандидатов, не настроен раннер или модель не вернула валидный план;
     // вызывающая сторона (SessionManager) объясняет это человеку карточкой/сообщением.
     public async Task<TeamImplementPlan?> CreatePlanAsync(Session session, string ownerId,
-        string request, string? projectHint = null, CancellationToken ct = default)
+        string request, string? projectHint = null, CancellationToken ct = default,
+        // Перепланирование после интервью (Э8): предыдущая версия плана, поверх которой
+        // строится vN — из неё берётся блок «Что изменилось».
+        TeamImplementPlan? previous = null)
     {
         if (cheap is null) return null;
         if (string.IsNullOrWhiteSpace(request)) return null;
@@ -177,7 +201,7 @@ public class TeamPlanningService(
 
         var planner = ResolvePlanner(session, ownerId, candidates);
         var cards = candidates.Select(BuildCard).ToList();
-        var prompt = BuildPlannerPrompt(request, cards, projectHint);
+        var prompt = BuildPlannerPrompt(request, cards, projectHint, previous);
 
         string raw;
         try
@@ -228,6 +252,11 @@ public class TeamPlanningService(
             {
                 Request = request,
                 Summary = ReadString(root, "summary") ?? "",
+                // Блоки карточки Э8: допущения планировщика и — у версии vN — «что изменилось».
+                // Обоих может не быть: у первого плана нет изменений, а у ясной постановки
+                // с ответами человека может не быть и допущений.
+                Assumptions = ReadStringArray(root, "assumptions"),
+                Changes = ReadStringArray(root, "changes"),
             };
 
             foreach (var e in arr.EnumerateArray())

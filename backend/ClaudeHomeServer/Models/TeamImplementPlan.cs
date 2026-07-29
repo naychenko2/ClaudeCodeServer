@@ -16,6 +16,17 @@ public class TeamImplementPlan
     public List<TeamImplementSubtask> Subtasks { get; set; } = [];
     // Персона, построившая план (планировщик). Для карточки и трассировки
     public string? PlannerPersonaId { get; set; }
+    // Версия плана в итерации (Э8): 1 — первый план, дальше растёт с каждым перепланированием
+    // после интервью. Карточка показывает «План v2 · обновлён после уточнений», а волна
+    // стартует только по версии, подтверждённой человеком (SessionTeamImplement.ApprovedPlanVersion).
+    public int Version { get; set; } = 1;
+    // Допущения планировщика (Э8): путь «вопросов нет» — постановка ясна, и вместо фейковых
+    // вопросов планировщик декларирует, что он додумал. Утверждаются вместе с планом,
+    // поэтому живут в самом плане, а не в тексте хода.
+    public List<string> Assumptions { get; set; } = [];
+    // «Что изменилось» у плана vN (Э8): чем новая версия отличается от предыдущей — иначе
+    // человек сверял бы два состава глазами. Пусто у первой версии.
+    public List<string> Changes { get; set; } = [];
     // Решение человека по карточке: null — ждёт, см. TeamPlanDecision
     public bool? Approved { get; set; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;

@@ -249,11 +249,15 @@ public record WorkLoopMessage(bool Active, int Iteration, int MaxIterations, str
 // Аналог plan_review, но план — объект (под-задачи, исполнители, обоснование, волны),
 // а не текст. Ответ — SessionHub.RespondTeamPlan. Событие переиздаётся при смене
 // исполнителя (Reassign), поэтому клиент сверяет карточку по PlanId.
+// PersonaId (Э8) — автор карточки: планировщик, зафиксированный в момент публикации.
+// Карточка рисуется как речь персоны (аватар + имя в шапке); null — персоны нет, шапка
+// деградирует до обезличенной.
 public record TeamPlanMessage(
         string PlanId,
         Models.TeamImplementPlan Plan,
         bool Resolved,
-        bool? Approved)
+        bool? Approved,
+        string? PersonaId = null)
     : ServerMessage("team_plan");
 
 // Карточка остановки режима «Командная реализация» (Э4): блокер исполнителя, провал задачи,
@@ -268,7 +272,9 @@ public record TeamEscalationMessage(
         string? TaskId,
         int Wave,
         bool Resolved,
-        string? ChosenActionId)
+        string? ChosenActionId,
+        // Автор карточки (Э8): координатор на момент публикации — карточка идёт от его лица
+        string? PersonaId = null)
     : ServerMessage("team_escalation");
 
 // Состояние режима «Командная реализация» (флаг team-implement-mode): для бейджа в композере
@@ -289,7 +295,14 @@ public record TeamImplementMessage(
         bool CoordinatorNoCode = true,
         // Человек нажал «Остановить» (Э4): новые волны не стартуют, пока он не продолжит.
         // Отдельно от стадии: практика может ждать решения и без остановки (блокер, провал).
-        bool Stopped = false)
+        bool Stopped = false,
+        // Штаб держит чат в план-режиме (Э8): селектор режима в композере показывает «план»
+        // и заблокирован до согласования плана. Отдельно от стадии: у провайдера без
+        // поддержки плана режим не навязывается, и блокировать селектор не за что.
+        bool ModeLocked = false,
+        // Версия текущего плана итерации (Э8): карточка «План v2 · обновлён после уточнений».
+        // 0 — планов ещё не было.
+        int PlanVersion = 0)
     : ServerMessage("team_implement");
 
 // Чат переключён на другой аккаунт/провайдер. Auto=true — тихий фейловер внутри пула

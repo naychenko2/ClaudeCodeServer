@@ -28,6 +28,10 @@ public enum TeamEscalationKind
     // При авто-волнах она не ждёт клика — сама вводная человека и есть точка контроля,
     // поэтому карточка лишь показывает состав и даёт кнопку «Остановить».
     WaveAdded,
+    // Тупик в волне (Э8): координатор не знает, как действовать дальше — требования неясны.
+    // Волны встают на паузу, практика уходит в интервью, а после ответов человек получает
+    // план vN на подтверждение. Кнопок нет: ответы идут ASK-карточками интервью.
+    NeedsClarification,
 }
 
 public static class TeamEscalationKindExtensions
@@ -45,6 +49,7 @@ public static class TeamEscalationKindExtensions
         TeamEscalationKind.WaveGate => "waveGate",
         TeamEscalationKind.Stopped => "stopped",
         TeamEscalationKind.WaveAdded => "waveAdded",
+        TeamEscalationKind.NeedsClarification => "needsClarification",
         _ => "blocker",
     };
 
@@ -74,6 +79,11 @@ public class TeamEscalation
     // Номер волны на момент остановки — для текста «Волна 2 закрыта»
     public int Wave { get; init; }
     public IReadOnlyList<TeamEscalationAction> Actions { get; init; } = [];
+    // Персона-автор карточки (Э8): всё, что штаб говорит человеку, идёт от лица координатора —
+    // аватар и имя в шапке. Пишется В МОМЕНТ публикации, поэтому смена координатора не
+    // переписывает историю: старые карточки сохраняют исходного автора. null — персоны у
+    // штаба нет, карточка и уведомление деградируют до обезличенного текста.
+    public string? PersonaId { get; set; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     // Решение человека: карточка гаснет, id выбранной кнопки уходит координатору ходом
     public bool Resolved { get; set; }

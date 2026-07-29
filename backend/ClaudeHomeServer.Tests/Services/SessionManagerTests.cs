@@ -2312,6 +2312,196 @@ public class SessionManagerTests : IDisposable
         ti.Stage.Should().Be(TeamImplementStage.Wave, "«Остановить» не возобновляет работу и не двигает стадию");
     }
 
+    // --- Э8: интервью, план-режим и перепланирование ---
+
+    // Штаб сразу после вводной человека: стадия интервью, чат в план-режиме.
+    // Ход не запускаем (Status=Working) — вводная встаёт в очередь, но итерацию открывает уже
+    // сейчас, как и в тестах Э5.
+    private async Task<(Session Session, Persona Backend, Persona Frontend)> MakeInterviewStabAsync(
+        string suffix, string request = "сделай экспорт задач в CSV")
+    {
+        var (session, backend, frontend) = await MakeTeamStabAsync(suffix);
+        session.Status = SessionStatus.Working;
+        await _sut.SendMessageAsync(session.Id, request, []);
+        return (session, backend, frontend);
+    }
+
+    [Fact]
+    public async Task ВводнаяЧеловека_ОткрываетИнтервьюИПланРежим()
+    {
+        var (session, _, _) = await MakeInterviewStabAsync("ti-interview-open");
+
+        var after = _sut.GetById(session.Id)!;
+        after.TeamImplement!.Stage.Should().Be(TeamImplementStage.Interview,
+            "первая вводная итерации проходит интервью всегда");
+        after.Mode.Should().Be(ClaudeMode.Plan, "интервью и планирование идут в план-режиме");
+        after.TeamImplement.SavedMode.Should().Be(ClaudeMode.Auto,
+            "режим человека запомнен и вернётся после согласования плана");
+        after.TeamImplement.InterviewRounds.Should().Be(0, "вопросов ещё не задавали");
+        var ws = _sentMessages.OfType<TeamImplementMessage>().Last();
+        ws.Stage.Should().Be("interview");
+        ws.ModeLocked.Should().BeTrue("селектор режима в композере заблокирован");
+    }
+
+    [Fact]
+    public async Task ОтветНаИнтервью_НеВводная_БюджетНеСбрасывает()
+    {
+        // Иначе цикл «вопрос — ответ» обнулял бы потолки: каждый ответ человека открывал бы
+        // новую итерацию, и бюджет перестал бы что-либо ограничивать
+        var (session, _, _) = await MakeInterviewStabAsync("ti-interview-budget");
+        var team = _sut.GetById(session.Id)!.TeamImplement!;
+        team.Budget.TasksUsed = 5;
+        team.Budget.RunsUsed = 8;
+
+        await _sut.SendMessageAsync(session.Id, "давай второй вариант", []);
+
+        var after = _sut.GetById(session.Id)!.TeamImplement!;
+        after.Budget.TasksUsed.Should().Be(5);
+        after.Budget.RunsUsed.Should().Be(8);
+        after.Stage.Should().Be(TeamImplementStage.Interview, "ответ не двигает стадию");
+    }
+
+    [Fact]
+    public async Task ВопросКоординатора_ВИнтервью_СчитаетсяРаундом()
+    {
+        var (session, _, _) = await MakeInterviewStabAsync("ti-interview-round");
+
+        await _sut.OnStabAskQuestionAsync(session.Id);
+        await _sut.OnStabAskQuestionAsync(session.Id);
+
+        _sut.GetById(session.Id)!.TeamImplement!.InterviewRounds.Should().Be(2,
+            "протокол разрешает не больше двух раундов на вводную — счёт ведёт бэкенд");
+    }
+
+    [Fact]
+    public async Task МаркерРаботы_ИзИнтервью_ДаётПланПервойВерсииОтЛицаПланировщика()
+    {
+        var (session, backend, frontend) = await MakeInterviewStabAsync("ti-interview-plan");
+        SetPlannerAnswer(backend, frontend);
+
+        await _sut.HandleTeamTurnEndAsync(session.Id,
+            "Вопросов нет — постановка ясна.\n<team:work>экспорт задач в CSV</team>", failed: false);
+
+        var card = _sentMessages.OfType<TeamPlanMessage>().Last();
+        card.Plan.Version.Should().Be(1);
+        card.Resolved.Should().BeFalse("первоначальный план итерации ждёт подтверждения всегда");
+        card.PersonaId.Should().NotBeNull("карточка плана идёт от лица планировщика");
+        card.PersonaId.Should().Be(card.Plan.PlannerPersonaId);
+
+        var after = _sut.GetById(session.Id)!;
+        after.TeamImplement!.Stage.Should().Be(TeamImplementStage.Confirming);
+        after.TeamImplement.PlanVersion.Should().Be(1);
+        after.Mode.Should().Be(ClaudeMode.Plan, "план-режим держится до клика «Запустить»");
+    }
+
+    [Fact]
+    public async Task RespondTeamPlan_Запустить_ВозвращаетРежимЧеловекаИФиксируетВерсию()
+    {
+        var (session, backend, frontend) = await MakeInterviewStabAsync("ti-interview-run");
+        SetPlannerAnswer(backend, frontend);
+        _sut.TeamWaveStarter = (_, _) => Task.CompletedTask;
+        await _sut.HandleTeamTurnEndAsync(session.Id, "<team:work>экспорт</team>", failed: false);
+        var planId = _sentMessages.OfType<TeamPlanMessage>().Last().PlanId;
+
+        await _sut.RespondTeamPlanAsync(session.Id, planId, TeamPlanDecision.Run, userId: TestUserId);
+
+        var after = _sut.GetById(session.Id)!;
+        after.Mode.Should().Be(ClaudeMode.Auto, "после согласования чат работает в прежнем режиме человека");
+        after.TeamImplement!.SavedMode.Should().BeNull();
+        after.TeamImplement.ApprovedPlanVersion.Should().Be(1, "работа разрешена этой версии плана");
+        after.TeamImplement.Stage.Should().Be(TeamImplementStage.Wave);
+        _sentMessages.OfType<TeamImplementMessage>().Last().ModeLocked.Should().BeFalse(
+            "селектор режима снова разблокирован");
+    }
+
+    [Fact]
+    public async Task SetMode_ПокаШтабПланирует_Отклоняется()
+    {
+        var (session, _, _) = await MakeInterviewStabAsync("ti-interview-setmode");
+
+        var act = () => _sut.SetMode(session.Id, "acceptEdits");
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Штаб планирует*");
+        _sut.GetById(session.Id)!.Mode.Should().Be(ClaudeMode.Plan);
+    }
+
+    [Fact]
+    public async Task ExitPlanMode_ВРежимеШтаба_ЗапрещёнКоординатору()
+    {
+        // Иначе в план-режиме CLI сам предложит завершить планирование карточкой plan_review,
+        // и человек получит два согласования подряд: штатное и нашу карточку плана
+        var (session, _, _) = await MakeTeamStabAsync("ti-exitplan");
+        var build = typeof(SessionManager).GetMethod("BuildExtraDisallowed",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+
+        var inMode = (IReadOnlyList<string>?)build.Invoke(_sut, [TestUserId, null, _sut.GetById(session.Id)!]);
+        await _sut.SetTeamImplementAsync(session.Id, enabled: false, userId: TestUserId);
+        var offMode = (IReadOnlyList<string>?)build.Invoke(_sut, [TestUserId, null, _sut.GetById(session.Id)!]);
+
+        inMode.Should().Contain("ExitPlanMode");
+        (offMode ?? []).Should().NotContain("ExitPlanMode", "вне режима штатное согласование плана работает как обычно");
+    }
+
+    [Fact]
+    public async Task МаркерУточнений_ВВолне_СтавитВолныНаПаузуИВозвращаетВИнтервью()
+    {
+        var (session, plan, _) = await MakeStabWithPlanAndStarterAsync("ti-clarify");
+        await _sut.RespondTeamPlanAsync(session.Id, plan.Id, TeamPlanDecision.Run, userId: TestUserId);
+        _sut.WithTeamState(session.Id, t => { t.WaveStartedAt = DateTime.UtcNow; return true; });
+
+        await _sut.HandleTeamTurnEndAsync(session.Id,
+            "<escalate:clarify>непонятно, куда класть выгрузку</escalate>", failed: false);
+
+        var after = _sut.GetById(session.Id)!;
+        after.TeamImplement!.Stage.Should().Be(TeamImplementStage.Interview);
+        after.TeamImplement.Replanning.Should().BeTrue("следующий план — новая версия, и её надо утвердить");
+        after.TeamImplement.WaveStartedAt.Should().BeNull("в интервью таймаут волны не тикает");
+        after.Mode.Should().Be(ClaudeMode.Plan, "перепланирование тоже идёт в план-режиме");
+
+        var card = _sentMessages.OfType<TeamEscalationMessage>().Last();
+        card.Kind.Should().Be("needsClarification");
+        card.Title.Should().Be("Нужны уточнения — волны на паузе");
+        card.Actions.Should().BeEmpty("ответы придут ASK-карточками, кнопок у этой карточки нет");
+        card.Details.Should().Contain("куда класть выгрузку");
+        card.PersonaId.Should().NotBeNull("карточка идёт от лица координатора");
+    }
+
+    [Fact]
+    public async Task ПланПослеУточнений_ЖдётПодтвержденияДажеПриАвтоВолнах()
+    {
+        // Авто-волны покрывают волны по неизменному плану, но не смену самого плана
+        var (session, plan, _) = await MakeStabWithPlanAndStarterAsync("ti-replan");
+        await _sut.RespondTeamPlanAsync(session.Id, plan.Id, TeamPlanDecision.Run, userId: TestUserId);
+        await _sut.HandleTeamTurnEndAsync(session.Id,
+            "<escalate:clarify>неясен формат</escalate>", failed: false);
+        var started = false;
+        _sut.TeamWaveStarter = (_, _) => { started = true; return Task.CompletedTask; };
+        _plannerAnswer = $$"""
+            {"summary":"Экспорт в XLSX","assumptions":["формат — XLSX, как в соседнем модуле"],
+             "changes":["CSV заменён на XLSX","под-задача про кнопку убрана"],
+             "subtasks":[{"title":"Выгрузка XLSX","goal":"писать xlsx",
+              "executorPersonaId":"","executorRationale":"серверная часть",
+              "files":["backend/Export.cs"],"wave":1,"doneCriteria":"файл открывается"}]}
+            """;
+
+        await _sut.HandleTeamTurnEndAsync(session.Id,
+            "<team:work>переделать экспорт на XLSX</team>", failed: false);
+
+        var card = _sentMessages.OfType<TeamPlanMessage>().Last();
+        card.Plan.Version.Should().Be(2, "план vN после уточнений");
+        card.Resolved.Should().BeFalse("новая версия плана требует подтверждения и при авто-волнах");
+        card.Plan.Assumptions.Should().ContainSingle().Which.Should().Contain("XLSX");
+        card.Plan.Changes.Should().HaveCount(2, "блок «Что изменилось» — от планировщика");
+        started.Should().BeFalse("до «Запустить» работа не идёт");
+
+        var after = _sut.GetById(session.Id)!.TeamImplement!;
+        after.Stage.Should().Be(TeamImplementStage.Confirming);
+        after.PlanVersion.Should().Be(2);
+        after.ApprovedPlanVersion.Should().Be(1, "подтверждена пока только прежняя версия");
+        after.Replanning.Should().BeFalse("признак снят публикацией новой версии");
+    }
+
     // --- ReportUpAsync: отчёт в родительский чат ---
 
     // Пара «родитель → ребёнок» в одном проекте (связь ставится ручной группировкой)

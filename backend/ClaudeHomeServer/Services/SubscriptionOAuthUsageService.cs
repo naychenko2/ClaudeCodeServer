@@ -134,13 +134,43 @@ public sealed partial class SubscriptionOAuthUsageService(
             // Полноценный access-токен из изолированного профиля подписки (если в нём
             // делали `claude login`) предпочтительнее setup-токена: его эндпоинт
             // отдаёт без часового лимита
-            var profileDir = Path.Combine(providers.ProfilesDir, "sub-" + sub.Key);
+            var profileDir = PoolProfileDir(sub.Key);
             var profileToken = ReadProfileCreds(profileDir)?.AccessToken;
             var token = !string.IsNullOrWhiteSpace(profileToken) ? profileToken : sub.OAuthToken;
             if (!string.IsNullOrWhiteSpace(token))
                 yield return (sub.Key, token!, string.IsNullOrWhiteSpace(profileToken) ? null : profileDir);
         }
     }
+
+    // Путь к изолированному профилю CLI подписки пула — единая точка правды на конкатенацию
+    // "sub-{key}" (используется и опросом EnumerateAccounts, и LoginCommandFor).
+    private string PoolProfileDir(string key) => Path.Combine(providers.ProfilesDir, "sub-" + key);
+
+    // Готовая PowerShell-команда входа в профиль аккаунта — для плашки «нужен claude login»
+    // на экране usage (кнопка «скопировать команду», фронт Киры). Null — у аккаунта нет
+    // файлового профиля, куда логин имел бы смысл: primary НЕ в пуле и его токен реально
+    // берётся из env/конфига — они перекроют вход, записанный в файл ~/.claude.
+    public string? LoginCommandFor(string key)
+    {
+        if (key == ClaudeSubscriptionPool.PrimaryKey && !pool.All.Any(s => s.Key == ClaudeSubscriptionPool.PrimaryKey))
+        {
+            if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("CLAUDE_CODE_OAUTH_TOKEN")))
+                return null;
+            if (!string.IsNullOrWhiteSpace(config["Claude:OAuthToken"]))
+                return null;
+            return BuildLoginCommand(PrimaryProfileDir());
+        }
+        return BuildLoginCommand(PoolProfileDir(key));
+    }
+
+    private static string BuildLoginCommand(string profileDir)
+        => $"$env:CLAUDE_CONFIG_DIR = \"{EscapePowerShellDoubleQuoted(profileDir)}\"; claude login";
+
+    // Экранирование для PowerShell double-quoted строки: обратная кавычка — escape-символ
+    // (экранируется первой), доллар и двойная кавычка иначе запустили бы интерполяцию
+    // переменной или закрыли строку раньше времени.
+    private static string EscapePowerShellDoubleQuoted(string value)
+        => value.Replace("`", "``").Replace("\"", "`\"").Replace("$", "`$");
 
     // Токен основной подписки — В ТОМ ЖЕ порядке, в котором его берёт сам claude.exe
     // при запуске ходов: env CLAUDE_CODE_OAUTH_TOKEN (Program.cs кладёт туда
@@ -157,12 +187,11 @@ public sealed partial class SubscriptionOAuthUsageService(
         return ReadCredentialsAccessToken();
     }
 
-    private string? ReadCredentialsAccessToken()
-    {
-        var profileDir = config["ClaudeUserProfileDir"]
+    private string? ReadCredentialsAccessToken() => ReadProfileCreds(PrimaryProfileDir())?.AccessToken;
+
+    private string PrimaryProfileDir()
+        => config["ClaudeUserProfileDir"]
             ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude");
-        return ReadProfileCreds(profileDir)?.AccessToken;
-    }
 
     // Креды профиля из .credentials.json: access-токен и средства его продления.
     internal sealed record ProfileCreds(string? AccessToken, string? RefreshToken, long? ExpiresAtMs)

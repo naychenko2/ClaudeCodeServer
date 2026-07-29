@@ -63,5 +63,10 @@ public record OllamaActionInfo(string Key, string Title, string Group, bool Rout
 // утилизация 5h-окна (истёкшее окно/нет данных = 0); Exhausted — жёсткое исчерпание
 // (rejected/100%), при котором аккаунт выведен независимо от числа Utilization;
 // Tier — ярлык тарифа ("Max 20×", "Pro", …), по нему пул приоритизирует аккаунты.
+// LoginCommand — готовая PowerShell-команда `claude login` в профиль ЭТОГО аккаунта
+// (SubscriptionOAuthUsageService.LoginCommandFor); null — у аккаунта нет файлового
+// профиля, куда логин имел бы смысл. Отдаётся всегда, не только при unauthorized —
+// фронт сам решает, когда показать кнопку копирования.
 public record SubscriptionUsage(IReadOnlyList<UsageSnapshot> Snapshots, string? Name = null,
-    bool InRotation = true, double Utilization = 0, bool Exhausted = false, string? Tier = null);
+    bool InRotation = true, double Utilization = 0, bool Exhausted = false, string? Tier = null,
+    string? LoginCommand = null);

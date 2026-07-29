@@ -178,7 +178,28 @@ public static class ObservabilityExtensions
         // DI-контейнера (когда SessionManager/ConnectionDiagnostics доступны).
         services.AddHostedService<GaugesRegistrarService>();
 
+        AddAlerts(services, config);
+
         return services;
+    }
+
+    /// <summary>
+    /// Доставка алертов SigNoz в уведомления CCS (секция <c>Telemetry:Alerts</c>).
+    ///
+    /// Регистрируется НЕЗАВИСИМО от экспортёров: опрос читает SigNoz, а не пишет в него,
+    /// и осмыслен даже там, где экспорт выключен. Выключено или без ключа — служба
+    /// не поднимается вовсе, как и провайдер LLM с пустым ApiKey.
+    /// </summary>
+    private static void AddAlerts(IServiceCollection services, IConfiguration config)
+    {
+        var options = Alerts.AlertsOptions.FromConfig(config);
+        if (!options.IsUsable) return;
+
+        services.AddSingleton(options);
+        services.AddSingleton<Alerts.AlertStateStore>();
+        services.AddSingleton<Alerts.SignozAlertsClient>();
+        services.AddHttpClient("signoz-alerts", c => c.Timeout = TimeSpan.FromSeconds(15));
+        services.AddHostedService<Alerts.AlertPollingService>();
     }
 
     /// <summary>

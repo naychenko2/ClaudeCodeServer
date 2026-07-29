@@ -109,14 +109,17 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
   // прыжка непонятно, куда смотреть. Тот же язык, что у подсветки панелей рельсы —
   // акцентная рамка (PanelShell flash)
   const [flashFolder, setFlashFolder] = useState<string | null>(null);
-  // Куда прыгали последней — отметка в списке папок, пока документ не выбран
-  const [lastFolder, setLastFolder] = useState<string | null>(null);
+  // Отметка в списке папок: где пользователь сейчас. Одно состояние на два способа туда
+  // попасть — прыжок по папке и открытие документа. Вычислять её из выбранного документа
+  // было неверно: после прыжка в другую папку отметка оставалась на старой, потому что
+  // выбор документа никуда не делся
+  const [activeFolder, setActiveFolder] = useState<string | null>(null);
   const flashTimer = useRef<number | null>(null);
   useEffect(() => () => { if (flashTimer.current) window.clearTimeout(flashTimer.current); }, []);
 
   const jumpToFolder = (folder: string) => {
     folderRefs.current.get(folder)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    setLastFolder(folder);
+    setActiveFolder(folder);
     setFlashFolder(folder);
     if (flashTimer.current) window.clearTimeout(flashTimer.current);
     flashTimer.current = window.setTimeout(() => setFlashFolder(null), LIST_FLASH_MS);
@@ -224,6 +227,9 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
 
   const openDoc = (path: string, anchor: string | null = null) => {
     setSelected(path);
+    // Переход по ссылке, из поиска или из обратных ссылок тоже переносит «где я»:
+    // документ может лежать в другой папке, и отметка обязана уехать за ним
+    setActiveFolder(folderOf(path));
     pendingAnchorRef.current = anchor ? { path, anchor } : null;
     setQuery('');   // выход из поиска: список возвращается на место результатов
   };
@@ -237,6 +243,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
     // Выделение — сразу: откладывается загрузка документа, а не отклик на клик,
     // иначе строка подсвечивалась через порог двойного клика и это выглядело поломкой
     setSelected(path);
+    setActiveFolder(folderOf(path));
     if (clickTimer.current) window.clearTimeout(clickTimer.current);
     clickTimer.current = window.setTimeout(() => {
       clickTimer.current = null;
@@ -317,10 +324,6 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
     </button>
   );
 
-  // Ориентир «где я» в закреплённом списке: папка выбранного документа, а пока выбора нет
-  // (свежая вкладка) — та, к которой прыгали последней. Иначе список стоит без отметки
-  // вообще и выглядит неработающим
-  const currentFolder = selected ? folderOf(selected) : lastFolder;
   // Кнопка и блок нужны, только когда есть что выбирать: с единственной папкой
   // список папок вёл бы сам в себя
   const hasFolderNav = groups.filter(([f]) => f).length > 1;
@@ -428,7 +431,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
                 <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
               </IconButton>
             </div>
-            {groups.map(([folder, docs]) => folderRow(folder, docs.length, folder === currentFolder))}
+            {groups.map(([folder, docs]) => folderRow(folder, docs.length, folder === activeFolder))}
           </div>
         )}
       </div>
@@ -477,7 +480,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
                       <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
                     </IconButton>
                   </div>
-                  {groups.map(([folder, docs]) => folderRow(folder, docs.length, folder === currentFolder))}
+                  {groups.map(([folder, docs]) => folderRow(folder, docs.length, folder === activeFolder))}
                 </div>
                 <div
                   onPointerDown={e => startResize(e, {

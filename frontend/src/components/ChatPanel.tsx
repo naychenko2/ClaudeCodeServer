@@ -26,6 +26,7 @@ import { Composer } from './Composer';
 import { ProjectGitBar } from './ProjectGitBar';
 import { EditSessionDialog } from './EditSessionDialog';
 import { C, R, SHADOW, CHAT_MAX_W } from '../lib/design';
+import { CHAT_GUTTER_L, VAR_SHIFT, VAR_W, useChatGutter } from '../lib/chatGutter';
 import { setChatContext, AI_RECOMPUTE_EVENT } from '../lib/ai/chatContext';
 import { ChatHeaderBar, type CostStats, type FalCostStats } from './chat/ChatHeaderBar';
 import { ChatProjectContext, ChatOpenFileContext, FalCostContext, AssistantNameContext, PersonaContext } from './chat/contexts';
@@ -368,6 +369,9 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     bottomRef, scrollRef, contentRef, composerWrapRef, composerH,
     showScrollDown, atBottomRef, handleMessagesScroll, scrollToBottom,
   } = useChatScroll(session.id, items, isHistoryLoading, online);
+  // Жёлоб под значок ожидания слева от ленты (на мобиле его роль играет обычный
+  // боковой отступ) — см. lib/chatGutter
+  useChatGutter(scrollRef, CHAT_MAX_W, !isMobile);
   // FAB AI-хаба должен вставать НАД композером (иначе налезает на композер и кнопку
   // «вниз»): пробрасываем высоту композера в глобальную CSS-переменную, читаемую FAB.
   useEffect(() => {
@@ -1145,14 +1149,17 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
           только центрирует колонку и сама не скроллится. */}
       <div style={{ flex: 1, minHeight: 0, display: 'flex', justifyContent: 'center' }}>
       <div ref={scrollRef} onScroll={handleMessagesScroll} data-selection-scope="chat" data-selection-target="[data-selection-doc]" data-selection-priority="1" style={{ flex: 1, minWidth: 0,
-        // Ширина области прокрутки = колонка сообщений плюс места под полосу с ОБЕИХ
-        // сторон (scrollbar-gutter: both-edges). Так полоса идёт вплотную к правому
-        // краю сообщений, а сама колонка остаётся ровно по центру — иначе она разошлась
-        // бы с композером, который центрируется отдельно. Боковых отступов здесь нет
-        // намеренно: любой из них отодвинул бы полосу от текста.
-        maxWidth: CHAT_MAX_W + (isMobile ? 12 * 2 : 24),
-        scrollbarGutter: isMobile ? undefined : 'stable both-edges',
-        overflowY: 'auto', overflowX: 'hidden', position: 'relative', paddingTop: isMobile ? 16 : 20, paddingLeft: isMobile ? 12 : 0, paddingRight: isMobile ? 12 : 0, paddingBottom: 8,
+        // Область прокрутки = жёлоб под значок ожидания слева + колонка сообщений +
+        // место под полосу справа. Полоса идёт вплотную к правому краю сообщений (не
+        // по краю широкого центра), а сама колонка остаётся по центру окна — иначе она
+        // разошлась бы с композером, который центрируется отдельно. Ширину коробки и
+        // компенсацию перекоса считает useChatGutter (они зависят от ширины полосы, а
+        // её приходится мерить) и кладёт в переменные, которые читают эти два свойства.
+        maxWidth: isMobile ? CHAT_MAX_W + 12 * 2 : `var(${VAR_W}, ${CHAT_MAX_W + CHAT_GUTTER_L}px)`,
+        marginRight: isMobile ? undefined : `var(${VAR_SHIFT}, 0px)`,
+        paddingLeft: isMobile ? 12 : CHAT_GUTTER_L,
+        scrollbarGutter: isMobile ? undefined : 'stable',
+        overflowY: 'auto', overflowX: 'hidden', position: 'relative', paddingTop: isMobile ? 16 : 20, paddingRight: isMobile ? 12 : 0, paddingBottom: 8,
         // Лента заканчивается НАД композером, а не подлезает под него: раньше это был
         // paddingBottom, и контент прокручивался в прозрачных промежутках композера
         // (между карточкой ввода и полосой кнопок). marginBottom ужимает саму область

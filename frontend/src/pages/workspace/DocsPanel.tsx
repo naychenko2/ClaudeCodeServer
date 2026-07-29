@@ -38,6 +38,9 @@ const ROW_H = 22;
 // Порог, в пределах которого второй клик считается двойным (и отменяет одиночный)
 const DOUBLE_CLICK_MS = 220;
 
+// Сколько держится подсветка папки: три цикла мигания по 300 мс (см. ListDateDivider)
+const FLASH_MS = 900;
+
 // Тумблер нижней зоны. По умолчанию выключена: панель открывают ради списка, а превью —
 // осознанный режим. Решение пользователя, поэтому переживает перезагрузку
 const PREVIEW_KEY = 'cc_docs_preview';
@@ -78,6 +81,24 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
   });
   const [backlinksOpen, setBacklinksOpen] = useState(false);
   const [tocOpen, setTocOpen] = useState(false);
+  // Список папок — то же, что оглавление для документа, только для самого списка:
+  // групп до десятка, а документов десятки, и мотать до нужной надоедает
+  const [foldersOpen, setFoldersOpen] = useState(false);
+  const folderRefs = useRef(new Map<string, HTMLDivElement>());
+  // Папка, к которой только что прокрутили: подсвечиваем на секунду, иначе после
+  // прыжка непонятно, куда смотреть. Тот же язык, что у подсветки панелей рельсы —
+  // акцентная рамка (PanelShell flash)
+  const [flashFolder, setFlashFolder] = useState<string | null>(null);
+  const flashTimer = useRef<number | null>(null);
+  useEffect(() => () => { if (flashTimer.current) window.clearTimeout(flashTimer.current); }, []);
+
+  const jumpToFolder = (folder: string) => {
+    folderRefs.current.get(folder)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    setFlashFolder(folder);
+    if (flashTimer.current) window.clearTimeout(flashTimer.current);
+    flashTimer.current = window.setTimeout(() => setFlashFolder(null), FLASH_MS);
+    setFoldersOpen(false);
+  };
   // Якорь, к которому нужно проскроллить после перехода по ссылке или из поиска.
   // Хранится ВМЕСТЕ с путём документа: между сменой документа и пересбором оглавления
   // есть кадр, где doc уже новый, а headings ещё от прежнего — без привязки к пути
@@ -248,7 +269,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
       {/* Поиск по документации + тумблер нижней зоны */}
       <div style={{
-        flexShrink: 0, display: 'flex', alignItems: 'center', gap: SP.xs,
+        flexShrink: 0, position: 'relative', display: 'flex', alignItems: 'center', gap: SP.xs,
         padding: `${SP.sm}px ${SP.md}px`, borderBottom: `1px solid ${C.border}`,
       }}>
         <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
@@ -257,6 +278,13 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
           <TextField value={query} onChange={setQuery} placeholder="Поиск по документам"
             style={{ height: 30, fontSize: FS.sm, paddingLeft: 28 }} />
         </div>
+        {/* Папки списка — оглавление для самого списка. Появляется, только когда групп
+            больше одной: с единственной папкой кнопка вела бы в никуда */}
+        {groups.filter(([f]) => f).length > 1 && (
+          <IconButton title="Папки" onClick={() => setFoldersOpen(v => !v)} active={foldersOpen} size="sm">
+            <List size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+          </IconButton>
+        )}
         {/* Открытый документ в чат — вложением. Дубль кнопки из шапки превью: до неё
             нужно доводить взгляд вниз, а действие частое */}
         <IconButton
@@ -281,6 +309,33 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
         >
           <PanelBottom size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
         </IconButton>
+
+        {/* Поповер папок: клик прокручивает список к нужной группе */}
+        {foldersOpen && (
+          <div style={tocPopoverStyle}>
+            <div style={{ display: 'flex', alignItems: 'center', padding: `${SP.xs}px ${SP.sm}px`, borderBottom: `1px solid ${C.border}` }}>
+              <span style={{ fontSize: FS.xs, fontWeight: 700, color: C.textSecondary, textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+                Папки
+              </span>
+              <div style={{ flex: 1 }} />
+              <IconButton title="Закрыть" onClick={() => setFoldersOpen(false)} size="sm">
+                <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+              </IconButton>
+            </div>
+            {groups.map(([folder, docs]) => (
+              <button
+                key={folder || '__root'}
+                onClick={() => jumpToFolder(folder)}
+                style={{ ...rowStyle, minHeight: ROW_H, color: C.textSecondary }}
+              >
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {folder || 'корень проекта'}
+                </span>
+                <span style={{ marginLeft: 'auto', color: C.textMuted, fontSize: FS.xs }}>{docs.length}</span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Результаты поиска замещают дерево, пока запрос активен */}
@@ -307,11 +362,19 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
           }>
             <div style={{ overflowY: 'auto', padding: `${SP.xs}px ${SP.xs}px` }}>
                 {groups.map(([folder, docs]) => (
-                  <div key={folder}>
+                  <div
+                    key={folder}
+                    ref={el => {
+                      if (el) folderRefs.current.set(folder, el);
+                      else folderRefs.current.delete(folder);
+                    }}
+                  >
                     {/* Подпись папки тем же разделителем, что группирует чаты по дням:
                         общий приём для «границы группы» в списках — и никакой подложки,
                         которая спорила бы с выделением строки */}
-                    {folder && <ListDateDivider title={folder} align="left" dense />}
+                    {folder && (
+                      <ListDateDivider title={folder} align="left" dense flash={flashFolder === folder} />
+                    )}
                     {docs.map(d => (
                       <div
                         key={d.path}

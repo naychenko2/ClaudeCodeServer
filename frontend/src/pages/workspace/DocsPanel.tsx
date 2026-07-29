@@ -9,13 +9,13 @@
 // «развернуть» в центральной области (тот же FileViewer, что и для остальных файлов).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronDown, ChevronRight, CornerUpRight, FileQuestion, Home, Link2, List, Maximize2, MessageSquarePlus, PanelBottom, Pin, PinOff, ScrollText, Search, SlidersHorizontal, X } from 'lucide-react';
+import { BookOpenText, ChevronDown, ChevronRight, CornerUpRight, FileQuestion, Home, Link2, List, Maximize2, MessageSquarePlus, PanelBottom, Pin, PinOff, Search, SlidersHorizontal, X } from 'lucide-react';
 import type { Project, DocEntry, DocDetail, DocSearchHit } from '../../types';
 import { api } from '../../lib/api';
 import { onFilesChanged } from '../../lib/signalr';
 import { C, FONT, FS, R, SHADOW, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
-import { Button, IconButton, PillSwitch, TextField } from '../../components/ui';
+import { Button, EmptyState, IconButton, PillSwitch, TextField } from '../../components/ui';
 import { DocsScopeDialog } from './DocsScopeDialog';
 import { MarkdownViewer } from '../../components/MarkdownViewer';
 import { ListDateDivider, LIST_FLASH_CLASS, LIST_FLASH_MS } from '../../components/ListDateDivider';
@@ -393,6 +393,38 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
     return () => { alive = false; };
   }, [project.id, homeOpen, homePath, index]);
 
+  // Первый документ проекта: создаём README с заголовком-именем проекта и сразу
+  // открываем его домашним видом. Заодно чиним область — README мог быть снят из
+  // файлов корня, и созданный файл просто не попал бы в панель
+  const [creating, setCreating] = useState(false);
+  const createReadme = async () => {
+    setCreating(true);
+    try {
+      // Файл может существовать и просто не входить в область (его сняли в настройке).
+      // Тогда создавать нечего — иначе кнопка «создать» затирала бы чужой README
+      const existing = await api.files.getContent(project.id, 'README.md').catch(() => null);
+      if (existing?.content == null) {
+        await api.files.createFile(project.id, 'README.md');
+        await api.files.saveContent(project.id, 'README.md',
+          `# ${project.name}\n\nКороткое описание проекта.\n\n## С чего начать\n\n- \n`);
+      }
+      const scopeInfo = await api.docs.scope(project.id);
+      if (!scopeInfo.selected.rootFiles.some(f => f.toLowerCase() === 'readme.md')) {
+        await api.docs.setScope(project.id, {
+          folders: scopeInfo.selected.folders,
+          rootFiles: [...scopeInfo.selected.rootFiles, 'README.md'],
+          types: scopeInfo.selected.types.includes('markdown')
+            ? scopeInfo.selected.types
+            : [...scopeInfo.selected.types, 'markdown'],
+        });
+      }
+      loadIndex();
+      setHome(true);
+      onOpenFile('README.md');   // и сразу в центре — его пойдут наполнять
+    } catch { setError('Не удалось создать README.md'); }
+    finally { setCreating(false); }
+  };
+
   // Ссылка из README: документ области открывается в превью (включая зону, если она была
   // выключена — иначе переход некуда показать), файл кода уходит в центр
   const handleHomeLink = useCallback((href: string) => {
@@ -466,6 +498,13 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
   // список папок вёл бы сам в себя
   const hasFolderNav = groups.filter(([f]) => f).length > 1;
 
+  // Домашний вид показывается, только когда README реально есть. Без этой проверки
+  // сохранённый флаг прятал кнопки в проекте без README — панель оставалась с пустой
+  // полосой сверху и списком, которым нечем управлять
+  const homeView = homeOpen && homePath != null;
+  // Поиск, папки и превью управляют списком: без документов им нечего делать
+  const hasDocs = (index?.length ?? 0) > 0;
+
   const pinFolders = (next: boolean) => {
     setFoldersPinned(next);
     setFoldersOpen(false);
@@ -519,8 +558,10 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
       {/* Ряд действий панели. Поиск здесь кнопкой, а не полем: колонка узкая, а поле
-          занимало её почти целиком ради действия, которое нужно изредка */}
-      <div style={{
+          занимало её почти целиком ради действия, которое нужно изредка.
+          Пустой панели ряд не нужен вовсе — управлять нечем, а полоса под шапкой
+          выглядела бы недоделкой; всё нужное предлагает само пустое состояние */}
+      {hasDocs && <div style={{
         flexShrink: 0, position: 'relative', display: 'flex', alignItems: 'center', gap: SP.xs,
         padding: `${SP.sm}px ${SP.md}px`, borderBottom: `1px solid ${C.border}`,
       }}>
@@ -537,9 +578,9 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
           />
         )}
         <div style={{ flex: 1 }} />
-        {/* Кнопки списка — только в режиме «Документы»: в «Начале» им нечем управлять,
-            там один документ на всю панель */}
-        {!homeOpen && <>
+        {/* Кнопки списка — только в режиме «Документы» и только когда список не пуст:
+            в «Начале» ими нечем управлять, а в пустой панели нечего искать и листать */}
+        {!homeView && hasDocs && <>
         {/* Поиск открывает ряд правых кнопок: он первый по частоте, но такой же режим
             панели, как и соседи, — отдельная подпись выбивала его из ряда */}
         <IconButton
@@ -591,7 +632,8 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
           <PanelBottom size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
         </IconButton>
         {/* Область документации: дефолт docs/, но соглашение о папке в проектах разное.
-            Тоже прячется в «Начале»: там нечего настраивать — README в области всегда */}
+            В «Начале» прячется — там нечего настраивать; в пустой панели её открывает
+            кнопка прямо из пустого состояния */}
         <IconButton title="Папки документации" onClick={() => setScopeOpen(true)} size="sm">
           <SlidersHorizontal size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
         </IconButton>
@@ -606,7 +648,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
             {groups.map(([folder, docs]) => folderRow(folder, docs.length, folder === activeFolder))}
           </div>
         )}
-      </div>
+      </div>}
 
       {/* Строка поиска — отдельным рядом СВЕРХУ, сразу под кнопками: результаты
           появляются ниже, и поле стоит над тем, что оно фильтрует */}
@@ -629,7 +671,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
 
       {/* Домашний режим: README на всю панель, поверх списка. Список не размонтируется —
           закрыл домик и он на прежнем месте, с прежней прокруткой */}
-      {homeOpen && homePath ? (
+      {homeView ? (
         // Без своей шапки: заголовок и так первой строкой документа, а переключиться
         // и настроить область можно в ряду выше — вторая полоса кнопок была бы лишней
         <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
@@ -704,15 +746,24 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
 
             <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: `${SP.xs}px ${SP.xs}px` }}>
                 {index?.length === 0 && (
-                  <div style={emptyStyle}>
-                    <ScrollText size={20} strokeWidth={ICON_STROKE} style={{ opacity: 0.5, marginBottom: SP.sm }} />
-                    <div style={{ marginBottom: SP.md }}>
-                      Здесь пусто: нет README.md и документов в выбранных папках
-                    </div>
-                    <Button variant="ghost" size="sm" onClick={() => setScopeOpen(true)}>
-                      Выбрать папки
-                    </Button>
-                  </div>
+                  // Общий примитив, а не своя вёрстка: пустые состояния в продукте
+                  // выглядят одинаково, и это одно из них
+                  <EmptyState
+                    compact
+                    icon={<BookOpenText size={20} strokeWidth={ICON_STROKE} />}
+                    title="Документация пуста"
+                    subtitle="Создайте начальный файл — или проверьте, что считается документацией"
+                    action={
+                      <div style={{ display: 'flex', gap: SP.xs, justifyContent: 'center' }}>
+                        <Button variant="primary" size="sm" loading={creating} onClick={createReadme}>
+                          Создать начальный файл
+                        </Button>
+                        <Button variant="ghost" size="sm" onClick={() => setScopeOpen(true)}>
+                          Настроить область
+                        </Button>
+                      </div>
+                    }
+                  />
                 )}
                 {groups.map(([folder, docs]) => (
                   <div

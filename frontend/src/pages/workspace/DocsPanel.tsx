@@ -524,11 +524,11 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
         flexShrink: 0, position: 'relative', display: 'flex', alignItems: 'center', gap: SP.xs,
         padding: `${SP.sm}px ${SP.md}px`, borderBottom: `1px solid ${C.border}`,
       }}>
-        {/* Домик — вход в документацию: README на всю панель. Слева от поиска, потому
-            что это «вернуться к началу», а не режим отображения */}
+        {/* Домик — тумблер домашнего вида: слева и отдельно от остальных, потому что
+            переключает не отображение списка, а то, ЧТО показывает панель целиком */}
         {homePath && (
           <IconButton
-            title={homeOpen ? 'Закрыть README' : 'README проекта на всю панель'}
+            title={homeOpen ? 'README на всю панель — выключить' : 'README на всю панель — включить'}
             active={homeOpen}
             onClick={() => setHome(!homeOpen)}
             size="sm"
@@ -536,24 +536,17 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
             <Home size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
           </IconButton>
         )}
-        {/* С подписью, а не голой лупой: соседние кнопки — режимы панели, и поиск среди
-            них терялся; место в ряду освободилось, когда поле ушло под кнопку */}
-        <button
+        <div style={{ flex: 1 }} />
+        {/* Поиск открывает ряд правых кнопок: он первый по частоте, но такой же режим
+            панели, как и соседи, — отдельная подпись выбивала его из ряда */}
+        <IconButton
           title={searchOpen ? 'Закрыть поиск' : 'Поиск по документам'}
+          active={searchOpen || query.length > 0}
           onClick={() => searchOpen ? closeSearch() : setSearchOpen(true)}
-          style={{
-            display: 'flex', alignItems: 'center', gap: SP.xxs,
-            height: 28, padding: `0 ${SP.sm}px`, borderRadius: R.md, cursor: 'pointer',
-            border: `1px solid ${searchOpen || query ? C.accent : C.border}`,
-            background: searchOpen || query ? C.accentMuted : 'transparent',
-            color: searchOpen || query ? C.accent : C.textSecondary,
-            fontFamily: FONT.sans, fontSize: FS.xs, fontWeight: 600,
-          }}
+          size="sm"
         >
           <Search size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-          Поиск
-        </button>
-        <div style={{ flex: 1 }} />
+        </IconButton>
         {/* Папки списка — оглавление для самого списка. Появляется, только когда групп
             больше одной: с единственной папкой кнопка вела бы в никуда.
             Закреплённый список живёт над документами, и поповер тогда не нужен —

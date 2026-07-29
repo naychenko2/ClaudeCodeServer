@@ -5,6 +5,7 @@ using Microsoft.Extensions.Hosting;
 using OpenTelemetry;
 using OpenTelemetry.Exporter;
 using OpenTelemetry.Logs;
+using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 
@@ -107,6 +108,14 @@ public static class ObservabilityExtensions
         otelBuilder.WithMetrics(m =>
         {
             m.AddMeter(ServerMetrics.MeterName);
+
+            // Явные границы бакетов для длительности хода LLM. Без View дефолтные границы
+            // OTel заканчиваются на 10 000 мс, и все ходы падают в последний бакет —
+            // p95/p99 упираются в потолок и не различают 30 секунд и 10 минут.
+            // Обоснование шкалы — в ServerMetrics.LlmDurationBoundaries.
+            m.AddView(
+                ServerMetrics.LlmDuration.Name,
+                new ExplicitBucketHistogramConfiguration { Boundaries = ServerMetrics.LlmDurationBoundaries });
 
             // Встроенные метры .NET 10 + OTel 1.17.0 (GA, не experimental).
             // Раньше был комментарий «experimental packages, оставляем custom Meter для MVP» —

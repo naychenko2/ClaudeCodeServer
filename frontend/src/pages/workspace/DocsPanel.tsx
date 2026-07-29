@@ -240,9 +240,11 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
     if (clickTimer.current) window.clearTimeout(clickTimer.current);
     clickTimer.current = window.setTimeout(() => {
       clickTimer.current = null;
-      // Без нижней зоны показывать документ негде — открываем сразу в центре
-      if (previewEnabled) openDoc(path);
-      else onOpenFile(path);
+      // Клик всегда ведёт в превью — и включает его, если было выключено. Режим
+      // переключается самим чтением, а не отдельным действием «сначала включи зону».
+      // В центр документ уводит двойной клик и кнопка «развернуть»
+      openDoc(path);
+      if (!previewEnabled) setPreview(true);
     }, DOUBLE_CLICK_MS);
   };
 
@@ -319,6 +321,12 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
   // список папок вёл бы сам в себя
   const hasFolderNav = groups.filter(([f]) => f).length > 1;
 
+  // Режим превью: решение пользователя, поэтому переживает перезагрузку
+  const setPreview = (next: boolean) => {
+    setPreviewEnabled(next);
+    try { localStorage.setItem(PREVIEW_KEY, next ? '1' : '0'); } catch { /* квота */ }
+  };
+
   const pinFolders = (next: boolean) => {
     setFoldersPinned(next);
     setFoldersOpen(false);
@@ -389,11 +397,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
         <IconButton
           title={previewEnabled ? 'Превью снизу включено — выключить' : 'Превью снизу выключено — включить'}
           active={previewEnabled}
-          onClick={() => setPreviewEnabled(v => {
-            const next = !v;
-            try { localStorage.setItem(PREVIEW_KEY, next ? '1' : '0'); } catch { /* квота */ }
-            return next;
-          })}
+          onClick={() => setPreview(!previewEnabled)}
           size="sm"
         >
           <PanelBottom size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
@@ -592,6 +596,11 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
                 </IconButton>
                 <IconButton title="Развернуть в центре" onClick={() => onOpenFile(doc.path)} size="sm">
                   <Maximize2 size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+                </IconButton>
+                {/* Закрытие превью = выход в режим «только список»: зона не прячется на один
+                    документ, чтобы вернуться от следующего же клика — режим и есть ответ */}
+                <IconButton title="Закрыть превью — остаться со списком" onClick={() => setPreview(false)} size="sm">
+                  <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
                 </IconButton>
 
                 {/* Оглавление: у каждого пункта — переход и отправка раздела в чат цитатой */}

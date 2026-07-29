@@ -93,6 +93,56 @@ export interface CodeGraph {
   metadata: CodeGraphMetadata;
 }
 
+// ─── Документация проекта (панель «Доки»: README.md + docs/**) ───────────────
+// Класс ссылки: doc — другой документ области (навигация внутри панели),
+// repo — файл проекта вне области, обычно код (открывается в центре),
+// external — http/https/mailto.
+export type DocLinkKind = 'doc' | 'repo' | 'external';
+
+export interface DocLink {
+  target: string;           // путь от корня проекта (doc/repo) либо URL (external)
+  anchor: string | null;    // слаг якоря после «#»
+  kind: DocLinkKind;
+  text: string;             // подпись ссылки
+}
+
+// Слаг считается от текста заголовка без markdown-разметки — тем же алгоритмом,
+// что и на фронте (lib/docsLinks.ts): по нему панель находит раздел в DOM
+export interface DocHeading {
+  level: number;
+  text: string;
+  slug: string;
+}
+
+export interface DocEntry {
+  path: string;             // путь от корня проекта с прямыми слэшами
+  title: string;            // первый H1, иначе имя файла
+  modified: string;         // ISO
+  size: number;
+  headings: DocHeading[];
+}
+
+export interface DocBacklink {
+  path: string;
+  title: string;
+  anchor: string | null;
+}
+
+export interface DocDetail {
+  path: string;
+  title: string;
+  content: string;          // исходный markdown
+  links: DocLink[];
+  backlinks: DocBacklink[];
+}
+
+export interface DocSearchHit {
+  path: string;
+  title: string;
+  slug: string | null;      // якорь ближайшего заголовка над совпадением
+  snippet: string;
+}
+
 // Элемент доски агентов (диспетчерская: GET /api/board/agents)
 export interface BoardItem {
   taskId: string;

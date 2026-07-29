@@ -17,6 +17,7 @@ import { C, FONT, FS, R, SHADOW, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { IconButton, TextField } from '../../components/ui';
 import { MarkdownViewer } from '../../components/MarkdownViewer';
+import { ListDateDivider } from '../../components/ListDateDivider';
 import { useHeadings, scrollToHeading } from '../../hooks/useHeadings';
 import { resolveDocLink, sliceSection, slugify } from '../../lib/docsLinks';
 
@@ -307,10 +308,10 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
             <div style={{ overflowY: 'auto', padding: `${SP.xs}px ${SP.xs}px` }}>
                 {groups.map(([folder, docs]) => (
                   <div key={folder}>
-                    {/* Подпись папки: без неё отступ вложенности читался как сдвиг без причины */}
-                    {folder && (
-                      <div style={folderHeadStyle} title={folder}>{folder}</div>
-                    )}
+                    {/* Подпись папки тем же разделителем, что группирует чаты по дням:
+                        общий приём для «границы группы» в списках — и никакой подложки,
+                        которая спорила бы с выделением строки */}
+                    {folder && <ListDateDivider title={folder} />}
                     {docs.map(d => (
                       <div
                         key={d.path}
@@ -461,20 +462,6 @@ const sectionHeadStyle = {
   padding: `${SP.sm}px ${SP.md}px`, border: 'none', background: 'transparent', cursor: 'pointer',
   fontFamily: FONT.sans, fontSize: FS.xs, fontWeight: 700, color: C.textSecondary,
   textTransform: 'uppercase' as const, letterSpacing: '0.03em',
-};
-
-// Подпись папки над её документами. Прилипает к верху при прокрутке, чтобы не терялось,
-// в какой папке находишься.
-// Фон — bgMain, а НЕ bgInset: последний почти совпадает с bgSelected выделенной строки
-// (#E7E0D2 против #E8E1D4), и папка читалась как выбранный документ. Теперь подложки
-// разведены по разные стороны от фона панели — в обеих темах: подпись светлее (в тёмной
-// теме темнее) фона, выделение — наоборот.
-const folderHeadStyle = {
-  position: 'sticky' as const, top: 0, zIndex: 1,
-  padding: `2px ${SP.sm}px`, margin: `${SP.xs}px 0 2px`,
-  background: C.bgMain, border: `1px solid ${C.border}`, borderRadius: R.sm,
-  fontFamily: FONT.mono, fontSize: FS.xs, color: C.textSecondary,
-  overflow: 'hidden' as const, textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const,
 };
 
 const rowStyle = {

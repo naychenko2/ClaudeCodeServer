@@ -90,8 +90,6 @@ interface Props {
   // Контент общий для обеих зон — панель рисует та зона, в которой она лежит.
   toolsEnabled: boolean;
   panels: Partial<Record<PanelKey, ReactNode>>;
-  // Контролы в шапки карточек панелей (напр. переключатель видов задач)
-  panelHeaderExtras?: Partial<Record<PanelKey, ReactNode>>;
   // Числа-кружки на кнопках проекта в рельсе (changes/tasks/terminal/preview)
   railCounts?: Partial<Record<PanelKey, number>>;
   // Хук на явную активацию панели из рельсы (клик открыл панель) — проброс в RightPanelStack
@@ -233,7 +231,6 @@ export function DesktopWorkspace(p: Props) {
       <PanelZone
         side="left"
         panels={zonePanels}
-        panelHeaderExtras={p.panelHeaderExtras}
         railCounts={p.railCounts}
         toolsEnabled={p.toolsEnabled}
         sessionPanels={sessionPanels}
@@ -324,7 +321,6 @@ export function DesktopWorkspace(p: Props) {
         side="right"
         compact={p.isTablet}
         panels={zonePanels}
-        panelHeaderExtras={p.panelHeaderExtras}
         railCounts={p.railCounts}
         toolsEnabled={p.toolsEnabled}
         sessionPanels={sessionPanels}

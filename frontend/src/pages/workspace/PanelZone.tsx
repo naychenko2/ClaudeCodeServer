@@ -52,8 +52,6 @@ interface Props {
   // Готовый контент ВСЕХ панелей экрана — обе зоны получают один и тот же набор
   // и рисуют из него то, что лежит именно в них
   panels: Partial<Record<PanelKey, ReactNode>>;
-  // Контролы в шапку карточки (слева от кнопки закрытия) — напр. переключатель видов задач
-  panelHeaderExtras?: Partial<Record<PanelKey, ReactNode>>;
   // Числа-кружки на иконках рельсы (changes/tasks/terminal/preview/chats).
   // Сессионные свои числа берут из sessionPanels.
   railCounts?: Partial<Record<PanelKey, number>>;
@@ -78,7 +76,7 @@ interface Props {
 }
 
 export function PanelZone({
-  side, panels, panelHeaderExtras, railCounts, panelStack,
+  side, panels, railCounts, panelStack,
   allowedKeys = WORKSPACE_KEYS, hideWhenEmpty, toolsEnabled, compact, sessionPanels, onPanelOpen,
 }: Props) {
   const usePanels = (panelStack ?? wsPanels).use;
@@ -361,7 +359,6 @@ export function PanelZone({
         icon={<Icon size={15} strokeWidth={ICON_STROKE} color={C.textSecondary} style={{ flexShrink: 0 }} />}
         title={title}
         badge={sessionPanels?.headerBadge(k) ?? null}
-        headerExtras={panelHeaderExtras?.[k]}
         // Закрытие из шапки: на десктопе иконка панели под курсором сама
         // становится крестиком, в компактном режиме (тач, hover'а нет) остаётся
         // отдельная кнопка справа. Закрываем В СВОЮ ЗОНУ — кнопка панели остаётся

@@ -1,9 +1,11 @@
-import { useEffect, useState, type CSSProperties, type HTMLAttributes, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties, type HTMLAttributes, type ReactNode } from 'react';
 import { Children } from 'react';
 import { X, type LucideIcon } from 'lucide-react';
-import { C, ISLAND, R } from '../../lib/design';
+import { C, ISLAND } from '../../lib/design';
 import { ICON_STROKE } from './icons';
+import { IconButton } from './IconButton';
 import { Island, IslandHeader } from './Island';
+import { PanelHeaderSlotContext } from './panelHeaderSlotContext';
 
 // Универсальная оболочка панели — остров с шапкой и контентной зоной.
 // Единый "рецепт" и для правой рельсы (PlanSection/FileViewer/TaskBoard...),
@@ -24,10 +26,11 @@ interface PanelShellProps {
   icon?: ReactNode;
   title: string;
   badge?: string | null;
-  // Контролы справа в шапке — кнопки закрытия, настройки, DnD-хендлы
+  // Контролы справа в шапке — кнопки закрытия, настройки, DnD-хендлы.
+  // Это системные кнопки самой оболочки; контролы САМОЙ панели (переключатели
+  // видов, фильтры, «создать») кладутся не сюда, а изнутри панели через
+  // PanelHeaderSlot — см. PanelHeaderSlot.tsx.
   headerActions?: ReactNode;
-  // Контролы между title и actions — напр. переключатель видов задач
-  headerExtras?: ReactNode;
 
   // === Тулбар под шапкой (опционально) ===
   // FilterBar, SegmentedControl, Button "Новый чат" и т.д. — всё что раньше
@@ -95,7 +98,6 @@ export function PanelShell({
   title,
   badge,
   headerActions,
-  headerExtras,
   toolbar,
   children,
   noScroll = false,
@@ -132,6 +134,12 @@ export function PanelShell({
   // Курсор на шапке — иконка панели предлагает закрыть её (closeMode: 'icon')
   const [headerHover, setHeaderHover] = useState(false);
 
+  // Узел-слот в шапке, куда панель-содержимое телепортирует свои контролы
+  // (PanelHeaderSlot). Через состояние, а не ref: портал должен отрисоваться
+  // после того, как узел появился в DOM, а значит нужен повторный рендер.
+  const [slotEl, setSlotEl] = useState<HTMLDivElement | null>(null);
+  const slotValue = useMemo(() => ({ hasHeader: true, el: slotEl }), [slotEl]);
+
   // hideIfEmpty: Children.toArray уже отбрасывает null/undefined/false/true/""
   // (React делает это автоматически). Если после фильтрации пусто — не рендерим.
   const realChildren = Children.toArray(children);
@@ -157,38 +165,34 @@ export function PanelShell({
   // Кнопка закрытия — короткий путь: caller может передать свой headerActions
   // целиком, тогда onClose игнорируется
   const actions = headerActions ?? (onClose && !closeByIcon ? (
-    <button
-      onClick={onClose}
-      title="Скрыть панель"
-      style={{
-        width: 26, height: 26, border: 'none', borderRadius: R.sm,
-        background: 'transparent', cursor: 'pointer', flexShrink: 0,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        color: C.textMuted,
-      }}
-    >
+    <IconButton size="xs" title="Скрыть панель" onClick={onClose}>
       <X size={14} strokeWidth={ICON_STROKE} />
-    </button>
+    </IconButton>
   ) : undefined);
 
-  const headerIcon = act && headerHover ? (
-    <button
-      onClick={act.onClick}
-      // draggable=false — иначе нажатие на иконку начнёт тащить карточку за шапку
-      draggable={false}
-      onDragStart={e => e.preventDefault()}
-      title={act.title}
-      style={{
-        width: 15, height: 15, padding: 0, border: 'none', background: 'transparent',
-        cursor: 'pointer', flexShrink: 0, display: 'flex', alignItems: 'center',
-        justifyContent: 'center', color: C.accent,
-      }}
-    >
-      <act.Icon size={15} strokeWidth={ICON_STROKE} />
-    </button>
-  ) : icon;
+  // Место иконки в шапке — всегда 24×24, независимо от того, лежит там иконка
+  // панели или кнопка действия. Иначе при наведении подмена меняла бы ширину
+  // и заголовок дёргался вбок.
+  const headerIcon = (
+    <span style={{
+      width: 24, height: 24, flexShrink: 0,
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+    }}>
+      {act && headerHover ? (
+        // Под курсором иконка панели превращается в полноценную кнопку —
+        // с подложкой, чтобы читалась как нажимаемая, а не как значок.
+        // draggable=false — иначе нажатие начнёт тащить карточку за шапку.
+        <span draggable={false} onDragStart={e => e.preventDefault()} style={{ display: 'flex' }}>
+          <IconButton size="xs" variant="soft" title={act.title} onClick={act.onClick}>
+            <act.Icon size={14} strokeWidth={ICON_STROKE} />
+          </IconButton>
+        </span>
+      ) : icon}
+    </span>
+  );
 
   return (
+    <PanelHeaderSlotContext.Provider value={slotValue}>
     <Island
       bg={ISLAND.bg}
       borderColor={dropTarget || flash ? C.accent : ISLAND.border}
@@ -233,17 +237,15 @@ export function PanelShell({
           } : null),
         }}
       >
-        {/* Контролы шапки (переключатель видов и т.п.): draggable=false, чтобы
-            взаимодействие с ними не инициировало перетаскивание карточки за шапку */}
-        {headerExtras && (
-          <span
-            draggable={false}
-            onDragStart={e => e.preventDefault()}
-            style={{ flexShrink: 0, display: 'flex', alignItems: 'center' }}
-          >
-            {headerExtras}
-          </span>
-        )}
+        {/* Слот контролов панели: сюда порталом приезжает содержимое
+            PanelHeaderSlot. draggable=false — чтобы взаимодействие с кнопками
+            не инициировало перетаскивание карточки за шапку. */}
+        <div
+          ref={setSlotEl}
+          draggable={false}
+          onDragStart={e => e.preventDefault()}
+          style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 4 }}
+        />
       </IslandHeader>
 
       {/* Тулбар под шапкой — полоса с фильтрами/переключателями/кнопкой "Новый".
@@ -278,5 +280,6 @@ export function PanelShell({
         {children}
       </div>
     </Island>
+    </PanelHeaderSlotContext.Provider>
   );
 }

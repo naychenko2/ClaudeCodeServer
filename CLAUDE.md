@@ -114,7 +114,8 @@ Claude Design проект: `52adb1f7-312b-4f25-8c47-2bccfca9df94`
 - Стили: только inline-objects, без Tailwind/CSS-modules.
 - Каждый экран живёт на мобиле (`useIsMobile`, шторки вместо модалок).
 - Новый раздел строится по «Рецепту нового раздела» из гайда (эталон — KnowledgePage);
-  заметный UI — перед коммитом прогоняется через субагента `designer`.
+  для заметного UI перед коммитом **предложить** прогон через субагента `designer`
+  и дождаться ответа — сам, без спроса, он не запускается.
 
 ## LLM-провайдеры (Services/Llm)
 
@@ -332,7 +333,7 @@ override в `data/users.json`; фронт — стор [lib/featureFlags.ts](fro
 
 | Агент | Роль |
 |---|---|
-| `designer` | ревью UI-изменений по [docs/design-guidelines.md](docs/design-guidelines.md); прогонять перед коммитом заметного UI |
+| `designer` | ревью UI-изменений по [docs/design-guidelines.md](docs/design-guidelines.md); запускается только по явному согласию — перед коммитом заметного UI его предлагают, а не вызывают молча |
 
 ## Конфигурация
 

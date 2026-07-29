@@ -209,7 +209,13 @@ public sealed class DevServerService : IDisposable
         // Ждём до 30 сек: порт известен (fixed или из stdout) И реально принимает соединения.
         for (int i = 0; i < 60; i++)
         {
-            if (process.HasExited) break;
+            // Наш инстанс могли убрать из реестра, пока мы ждём: уборщик CleanupStale
+            // (тик раз в минуту), повторный запуск того же сервиса или остановка. Тогда
+            // его процесс уже освобождён, и ждать нечего — иначе дальше по циклу мы
+            // трогаем чужой/мёртвый объект и перезаписываем статус победившего запуска.
+            if (!_servers.TryGetValue(key, out var current) || !ReferenceEquals(current, instance))
+                break;
+            if (SafeHasExited(process)) break;
             if (instance.Port != 0 && await IsPortListeningAsync(instance.Port))
             {
                 instance.Status = "started";
@@ -221,13 +227,16 @@ public sealed class DevServerService : IDisposable
         }
 
         // Не поднялся: честная ошибка с хвостом вывода процесса.
-        var exited = process.HasExited;
+        var exited = SafeHasExited(process);
         var exitCode = exited ? SafeExitCode(process) : -1;
         var tail = instance.OutputTail();
         var reason = exited ? $"Процесс завершился с кодом {exitCode}." : "Таймаут: сервис не начал слушать порт.";
         instance.Status = "error";
         instance.Error = string.IsNullOrWhiteSpace(tail) ? reason : reason + "\n" + tail;
-        _servers.TryRemove(key, out _);
+        // Удаляем ТОЛЬКО свой инстанс: за время ожидания под этим ключом мог оказаться
+        // другой запуск (повторный клик, перезапуск после уборки). Простой TryRemove(key)
+        // снёс бы живой сервис соседа и оставил его процесс без присмотра.
+        _servers.TryRemove(new KeyValuePair<string, DevServerInstance>(key, instance));
         instance.Dispose();
         await BroadcastStatus(projectId, serviceId, "error", null, instance.Error);
         return new DevServerStartResult(false, null, "error", instance.Error);
@@ -236,6 +245,28 @@ public sealed class DevServerService : IDisposable
     private static int SafeExitCode(Process p)
     {
         try { return p.ExitCode; } catch { return -1; }
+    }
+
+    /// <summary>
+    /// Безопасная проверка «процесс завершился».
+    ///
+    /// Объект <see cref="Process"/> могли освободить параллельно: уборщик
+    /// <c>CleanupStale</c>, повторный запуск того же сервиса или остановка — все они
+    /// зовут <c>Dispose</c>. После этого <c>HasExited</c> бросает
+    /// «No process is associated with this object», и падал весь запрос.
+    ///
+    /// Ловилось это регулярно, потому что с проектом работают ДВА инстанса продукта:
+    /// они делят папки и порты, второй дев-сервер падает сразу («порт занят»), и
+    /// уборщик успевает освободить процесс прямо посреди ожидания в StartAsync.
+    ///
+    /// Для вызывающего освобождённый процесс неотличим от завершённого — отвечаем true.
+    /// </summary>
+    private static bool SafeHasExited(Process p)
+    {
+        // ObjectDisposedException наследует InvalidOperationException — одного catch хватает
+        // на оба случая: «процесс не запускался» и «объект уже освобождён».
+        try { return p.HasExited; }
+        catch (InvalidOperationException) { return true; }
     }
 
     /// <summary>Проверить, принимает ли кто-то соединения на 127.0.0.1:port (готовность dev-сервера).</summary>
@@ -334,7 +365,7 @@ public sealed class DevServerService : IDisposable
             var idle = now - instance.LastActivity;
             var shouldClean = false;
 
-            if (instance.Process.HasExited && instance.Status != "stopped")
+            if (SafeHasExited(instance.Process) && instance.Status != "stopped")
             {
                 shouldClean = true;
                 _log.LogInformation("DevServer {Key}: процесс завершился, а статус {Status} — очистка", key, instance.Status);

@@ -39,6 +39,15 @@ interface State {
   focusDepth2: boolean;
   // Раскрытый хвост соседей («+N ещё» на холсте → полный список в панели)
   focusTail: 'in' | 'out' | null;
+
+  // Режим документа: «Фокус» (текущее поведение — окрестность типа) или «Обзор»
+  // (граф групп неймспейсов по слоям зависимостей — «как устроен проект»)
+  viewMode: 'focus' | 'overview';
+  // Раскрытые группы «Обзора» сверх автоматически раскрытого общего корня
+  // (см. defaultExpandedGroups в graphOverview.ts) — только то, что добавил пользователь.
+  overviewExpanded: string[];
+  // Группа, раскрытая до уровня типов (двойной клик по листовой группе)
+  overviewTypesGroup: string | null;
 }
 
 // Глубина истории фокуса: блуждание по графу может быть долгим, но крошки
@@ -59,6 +68,9 @@ let _state: State = {
   focusHistory: [],
   focusDepth2: false,
   focusTail: null,
+  viewMode: 'focus',
+  overviewExpanded: [],
+  overviewTypesGroup: null,
 };
 
 const listeners = new Set<() => void>();
@@ -94,6 +106,9 @@ export async function loadCodeGraph(projectId: string, force = false): Promise<v
     focusHistory: reset ? [] : _state.focusHistory,
     focusDepth2: reset ? false : _state.focusDepth2,
     focusTail: reset ? null : _state.focusTail,
+    viewMode: reset ? 'focus' : _state.viewMode,
+    overviewExpanded: reset ? [] : _state.overviewExpanded,
+    overviewTypesGroup: reset ? null : _state.overviewTypesGroup,
   };
   emit();
   try {
@@ -198,10 +213,12 @@ export function setGraphQuery(q: string) {
   set({ query: q, selectedId: q ? null : _state.selectedId });
 }
 
-// Выбор узла на холсте/в god-списке/в поиске/в паспорте: холст переходит в режим
-// «Фокус» — окрестность этого типа. История переходов копится здесь, а не в точках
-// вызова, поэтому крошки работают одинаково для всех входов в фокус.
+// Выбор узла на холсте/в god-списке/в поиске/в паспорте/в «Обзоре»: холст переходит
+// в режим «Фокус» — окрестность этого типа. История переходов копится здесь, а не
+// в точках вызова, поэтому крошки работают одинаково для всех входов в фокус.
 // При выборе легенда сворачивается сама — паспорт получает всю высоту панели.
+// Выбор конкретного типа — всегда переход в «Фокус», независимо от того, откуда
+// он пришёл: «Обзор» отвечает на «как устроен проект», а не «что вокруг типа».
 export function selectGraphNode(id: string | null) {
   if (id === _state.selectedId) return;
   const prev = _state.selectedId;
@@ -213,7 +230,45 @@ export function selectGraphNode(id: string | null) {
     legendOpen: id ? false : _state.legendOpen,
     focusHistory: history,
     focusTail: null,   // новый центр — старый раскрытый хвост уже не про него
+    ...(id ? { viewMode: 'focus' as const } : {}),
   });
+}
+
+// Переключатель режимов документа «Фокус | Обзор»
+export function setGraphViewMode(mode: 'focus' | 'overview') {
+  if (mode === _state.viewMode) return;
+  set({ viewMode: mode });
+}
+
+// Клик по группе «Обзора»: раскрыть на подгруппы (если есть куда) или — раскрыть
+// до типов (переключатель выбирает вызывающая сторона по OverviewItem.hasChildren)
+export function toggleOverviewGroup(group: string) {
+  const cur = new Set(_state.overviewExpanded);
+  const collapsing = cur.has(group);
+  if (collapsing) cur.delete(group); else cur.add(group);
+  const typesGroup = _state.overviewTypesGroup;
+  // Схлопнули группу-предка раскрытой до типов — «типы» больше не про существующую группу
+  const clearTypes = collapsing && !!typesGroup
+    && (typesGroup === group || typesGroup.startsWith(`${group}.`));
+  set({ overviewExpanded: [...cur], overviewTypesGroup: clearTypes ? null : typesGroup });
+}
+
+export function drillOverviewTypes(group: string | null) {
+  set({ overviewTypesGroup: group });
+}
+
+// «Уровень выше»: из раскрытых до типов групп — назад к группам; иначе схлопывает
+// самый глубокий раскрытый префикс
+export function overviewBack() {
+  if (_state.overviewTypesGroup) { set({ overviewTypesGroup: null }); return; }
+  const arr = _state.overviewExpanded;
+  if (!arr.length) return;
+  const deepest = [...arr].sort((a, b) => b.length - a.length)[0];
+  set({ overviewExpanded: arr.filter(g => g !== deepest) });
+}
+
+export function collapseOverviewAll() {
+  set({ overviewExpanded: [], overviewTypesGroup: null });
 }
 
 // «← Назад»: возврат к предыдущему центру фокуса
@@ -287,5 +342,10 @@ export function useCodeGraphActions() {
     focusCrumb: focusGraphCrumb,
     toggleFocusDepth2: toggleGraphFocusDepth2,
     setFocusTail: setGraphFocusTail,
+    setViewMode: setGraphViewMode,
+    toggleOverviewGroup,
+    drillOverviewTypes,
+    overviewBack,
+    collapseOverviewAll,
   }), []);
 }

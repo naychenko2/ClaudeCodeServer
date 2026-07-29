@@ -1,0 +1,357 @@
+// Раскладка режима «Обзор»: холст показывает не типы, а ГРУППЫ неймспейсов —
+// отвечает на вопрос «как устроен проект», а не «что вокруг этого типа» (это
+// вопрос «Фокуса», см. graphFocus.ts). Группы разложены по слоям зависимостей.
+//
+// Слои — ФИКСИРОВАННЫЙ маппинг по именам неймспейсов (Tests → точки входа →
+// Services → Models/Protocol → прочее), а НЕ топологический ранг: у нас иерархия
+// уже задана явно неймспейсами, а ранг по графу неустойчив — одно новое ребро
+// переставляет группы местами и «дёргает» картинку между сборками (риск, который
+// сама Майя записала в docs/mockups/code-graph-scale.md). Внутри слоя — сортировка
+// по размеру группы, затем по имени: перестановки только локальные.
+//
+// Модуль чистый: без Math.random и force-симуляции — раскладка воспроизводима,
+// как в graphLayout.ts/graphFocus.ts.
+import type { CodeGraph, CodeGraphNode, CodeGraphRelation } from '../../types';
+import { graphDegree, isTestSourceFile } from './graphFocus';
+import { FOCUS_VIEW_W, FOCUS_VIEW_H, FOCUS_VIEW_W_MOBILE, FOCUS_VIEW_H_MOBILE } from './graphFocus';
+
+// Размеры холста «Обзора» — те же, что у «Фокуса»: обоим нужна горизонталь под
+// несколько колонок/слоёв, заводить отдельную пару констант незачем.
+export const OVERVIEW_VIEW_W = FOCUS_VIEW_W;
+export const OVERVIEW_VIEW_H = FOCUS_VIEW_H;
+export const OVERVIEW_VIEW_W_MOBILE = FOCUS_VIEW_W_MOBILE;
+export const OVERVIEW_VIEW_H_MOBILE = FOCUS_VIEW_H_MOBILE;
+
+// Фиксированный порядок слоёв сверху вниз. Индекс — «глубина»: чем больше,
+// тем ниже на холсте. Порядок проверки важен: `Tests` идёт первым, потому что
+// тестовые неймспейсы часто зеркалят структуру (ClaudeHomeServer.Tests.Controllers.*)
+// и без приоритета осели бы в слое точек входа.
+//
+// Состав слоя задаётся РОЛЬЮ неймспейса в потоке зависимостей (кто кого зовёт), а не
+// тем, «сервис это или нет». Точка входа — то, у чего нет входящих связей из своего же
+// кода: снаружи её дёргает не наш тип, а HTTP-запрос, SignalR-хаб или клик по трею.
+// Отсюда `WebDav` (HTTP-handler: 0 входящих, 8 исходящих в Services/Models), `Tray`
+// (UI трея) и `Filters` (ASP.NET-фильтры) — тот же слой, что Controllers/Hubs; иначе
+// они падают в «Прочее» (самый низ) и нормальная зависимость сверху вниз выглядит как
+// нарушение слоистости, а настоящее нарушение (Services.UserStore → WebDav.NtlmHelper)
+// теряется. `Telemetry` и `ConPtyBridge` остаются в «Прочем» намеренно: это сквозная
+// инфраструктура, её честнее держать внизу.
+const LAYER_KEYWORDS: readonly string[][] = [
+  ['Tests'],
+  ['Controllers', 'Hubs', 'WebDav', 'Tray', 'Filters'],
+  ['Services'],
+  ['Models', 'Protocol'],
+];
+export const OTHER_LAYER = LAYER_KEYWORDS.length;
+export const LAYER_COUNT = LAYER_KEYWORDS.length + 1;
+export const LAYER_TITLES = ['Тесты', 'Точки входа', 'Services', 'Models / Protocol', 'Прочее'];
+
+// Слой группы по фиксированному маппингу: первое совпадение сегмента пути с
+// набором ключевых слов слоя. Ни одно совпадение — «прочее» (последний слой).
+export function layerOf(group: string): number {
+  const segs = group.split('.');
+  for (let i = 0; i < LAYER_KEYWORDS.length; i++) {
+    if (LAYER_KEYWORDS[i].some(kw => segs.includes(kw))) return i;
+  }
+  return OTHER_LAYER;
+}
+
+export function namespaceOf(node: CodeGraphNode): string {
+  const fqn = node.fullyQualifiedName;
+  const i = fqn.lastIndexOf('.');
+  return i < 0 ? '' : fqn.slice(0, i);
+}
+
+// Доминирующий префикс всех неймспейсов раскрыт всегда: единственная группа-обёртка
+// на весь проект (например «ClaudeHomeServer») сама по себе бесполезна — раскрываем
+// её автоматически, чтобы первый экран сразу показывал содержательные группы.
+// Порог — а не строгое единогласие: горстка типов вне общей сборки (утилитный
+// неймспейс, глобальный тип без пространства имён) не должна блокировать раскрытие
+// префикса, которому принадлежит подавляющее большинство кода.
+const ROOT_DOMINANCE = 0.9;
+
+export function defaultExpandedGroups(nodes: CodeGraphNode[]): Set<string> {
+  const expanded = new Set<string>();
+  let prefix = '';
+  for (;;) {
+    const counts = new Map<string, number>();
+    let considered = 0;
+    for (const n of nodes) {
+      const ns = namespaceOf(n);
+      if (prefix && ns !== prefix && !ns.startsWith(`${prefix}.`)) continue; // вне текущего префикса
+      const rest = prefix ? ns.slice(prefix.length + 1) : ns;
+      const seg = rest.split('.')[0];
+      if (!seg) continue;   // узел лежит ровно в prefix — лист, не голосует за более глубокий сегмент
+      const next = prefix ? `${prefix}.${seg}` : seg;
+      counts.set(next, (counts.get(next) ?? 0) + 1);
+      considered++;
+    }
+    if (considered === 0) break;
+    const [topPrefix, topCount] = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
+    if (topCount / considered < ROOT_DOMINANCE) break;
+    prefix = topPrefix;
+    expanded.add(prefix);
+  }
+  return expanded;
+}
+
+// Группа узла = самый длинный раскрытый префикс неймспейса + ещё один сегмент
+function groupOf(ns: string, expanded: ReadonlySet<string>): string {
+  if (!ns) return '(без пространства имён)';
+  const parts = ns.split('.');
+  let g = parts[0];
+  let k = 1;
+  while (expanded.has(g) && k < parts.length) { g += '.' + parts[k]; k++; }
+  return g;
+}
+
+export type OverviewItemKind = 'group' | 'node' | 'rest' | 'small';
+
+export interface OverviewItem {
+  key: string;
+  kind: OverviewItemKind;
+  label: string;
+  group: string | null;    // группа-владелец (для node/rest — раскрытая до типов группа)
+  layer: number;
+  count: number;           // сколько типов внутри элемента
+  godCount: number;
+  nodeIds: string[];
+  node?: CodeGraphNode;    // только для kind === 'node'
+  degree?: number;         // только для kind === 'node' — связность конкретного типа
+  hasChildren: boolean;    // группа раскрывается ещё на уровень глубже (для kind === 'group')
+}
+
+export interface OverviewBundle {
+  fromKey: string;
+  toKey: string;
+  weight: number;
+  byRelation: Record<CodeGraphRelation, number>;
+  isBack: boolean;   // нарушение слоистости: источник лежит НИЖЕ приёмника по фиксированному порядку
+}
+
+export interface OverviewScene {
+  items: OverviewItem[];
+  byKey: Map<string, OverviewItem>;
+  bundles: OverviewBundle[];
+  hiddenTestCount: number;
+  shownEdgeCount: number;
+  totalTypeCount: number;
+}
+
+export interface OverviewOptions {
+  expanded: ReadonlySet<string>;
+  typesGroup: string | null;
+  hideTests?: boolean;
+  filters?: Record<CodeGraphRelation, boolean>;   // те же чипы связей, что у «Фокуса» — панель общая
+  maxItems?: number;     // потолок элементов на холсте (плотность не зависит от размера репо)
+  typesLimit?: number;   // топ-N типов при раскрытии листа до типов (мобила — меньше)
+}
+
+const MAX_ITEMS_DEFAULT = 26;
+const TYPES_LIMIT_DEFAULT = 30;
+
+export function buildOverviewScene(graph: CodeGraph, opts: OverviewOptions): OverviewScene {
+  const { expanded, typesGroup, hideTests, maxItems = MAX_ITEMS_DEFAULT, typesLimit = TYPES_LIMIT_DEFAULT } = opts;
+  const godSet = new Set(graph.godNodes);
+  const degree = graphDegree(graph);
+
+  let hiddenTestCount = 0;
+  const visible: CodeGraphNode[] = [];
+  for (const n of graph.nodes) {
+    if (hideTests && isTestSourceFile(n.sourceFile)) { hiddenTestCount++; continue; }
+    visible.push(n);
+  }
+
+  const items = new Map<string, OverviewItem>();
+  const nodeItem = new Map<string, string>();        // nodeId -> item key
+  const groupHasDeeper = new Map<string, boolean>();  // группа -> есть ли типы глубже текущего уровня
+
+  for (const node of visible) {
+    const ns = namespaceOf(node);
+    const g = groupOf(ns, expanded);
+    if (ns.length > g.length) groupHasDeeper.set(g, true);
+
+    let key: string; let kind: OverviewItemKind; let label: string;
+    if (typesGroup && g === typesGroup) {
+      key = `n:${node.id}`; kind = 'node'; label = node.label;
+    } else {
+      key = `g:${g}`; kind = 'group'; label = g.split('.').pop() ?? g;
+    }
+    let item = items.get(key);
+    if (!item) {
+      item = {
+        key, kind, label, group: g, layer: layerOf(g),
+        count: 0, godCount: 0, nodeIds: [],
+        node: kind === 'node' ? node : undefined,
+        degree: kind === 'node' ? (degree.get(node.id) ?? 0) : undefined,
+        hasChildren: false,
+      };
+      items.set(key, item);
+    }
+    item.count++;
+    item.nodeIds.push(node.id);
+    if (godSet.has(node.id)) item.godCount++;
+    nodeItem.set(node.id, key);
+  }
+
+  for (const item of items.values()) {
+    if (item.kind === 'group') item.hasChildren = !!groupHasDeeper.get(item.group!);
+  }
+
+  // Раскрытая до типов группа: топ-N по связности остаются узлами, остальное —
+  // одна заглушка «+N прочих» (лист графа не менее читаем, чем группы верхнего уровня)
+  if (typesGroup) {
+    const own = [...items.values()].filter(it => it.kind === 'node')
+      .sort((a, b) => (b.degree ?? 0) - (a.degree ?? 0) || a.label.localeCompare(b.label));
+    const cut = own.slice(typesLimit);
+    if (cut.length) {
+      for (const it of cut) items.delete(it.key);
+      const restKey = `r:${typesGroup}`;
+      const restIds = cut.flatMap(it => it.nodeIds);
+      items.set(restKey, {
+        key: restKey, kind: 'rest', label: `+${cut.length} прочих`, group: typesGroup,
+        layer: layerOf(typesGroup), count: cut.length,
+        godCount: cut.reduce((s, it) => s + it.godCount, 0), nodeIds: restIds, hasChildren: false,
+      });
+      for (const id of restIds) nodeItem.set(id, restKey);
+    }
+  }
+
+  // Потолок плотности холста: сколько бы уровней ни было раскрыто, элементов не
+  // больше maxItems. Мелкие группы сворачиваются в одну заглушку — читаемость
+  // холста не зависит от размера репозитория.
+  const groupsList = [...items.values()].filter(it => it.kind === 'group');
+  if (items.size > maxItems && groupsList.length > 4) {
+    const nonGroupCount = items.size - groupsList.length;
+    // -1: место самой заглушки тоже входит в потолок
+    const keepCount = Math.max(4, maxItems - nonGroupCount - 1);
+    const sorted = [...groupsList].sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+    const keep = new Set(sorted.slice(0, keepCount).map(it => it.key));
+    const drop = groupsList.filter(it => !keep.has(it.key));
+    if (drop.length > 1) {
+      for (const it of drop) items.delete(it.key);
+      const nodeIds = drop.flatMap(it => it.nodeIds);
+      // Слой заглушки — тот, что вобрал больше всего свёрнутых типов
+      const byLayer = new Map<number, number>();
+      for (const it of drop) byLayer.set(it.layer, (byLayer.get(it.layer) ?? 0) + it.count);
+      const dominant = [...byLayer.entries()].sort((a, b) => b[1] - a[1])[0][0];
+      const smallKey = 's:small';
+      items.set(smallKey, {
+        key: smallKey, kind: 'small', label: `+${drop.length} мелких групп`, group: null,
+        layer: dominant, count: nodeIds.length,
+        godCount: drop.reduce((s, it) => s + it.godCount, 0), nodeIds, hasChildren: false,
+      });
+      for (const id of nodeIds) nodeItem.set(id, smallKey);
+    }
+  }
+
+  // Агрегация рёбер между элементами сцены — пучки, а не отдельные линии.
+  // Ребро «снизу вверх» (нарушение фиксированной слоистости) помечается isBack.
+  const bundleMap = new Map<string, OverviewBundle>();
+  let shownEdgeCount = 0;
+  for (const e of graph.edges) {
+    if (opts.filters && !opts.filters[e.relation]) continue;
+    const a = nodeItem.get(e.source);
+    const b = nodeItem.get(e.target);
+    if (!a || !b) continue;
+    shownEdgeCount++;
+    if (a === b) continue;
+    const k = `${a}>${b}`;
+    let bu = bundleMap.get(k);
+    if (!bu) {
+      const fromLayer = items.get(a)!.layer;
+      const toLayer = items.get(b)!.layer;
+      bu = { fromKey: a, toKey: b, weight: 0, byRelation: { Calls: 0, Implements: 0, References: 0 }, isBack: fromLayer > toLayer };
+      bundleMap.set(k, bu);
+    }
+    bu.weight++;
+    bu.byRelation[e.relation]++;
+  }
+
+  return {
+    items: [...items.values()],
+    byKey: items,
+    bundles: [...bundleMap.values()],
+    hiddenTestCount,
+    shownEdgeCount,
+    totalTypeCount: graph.nodes.length,
+  };
+}
+
+// Толщина пучка — по логарифму веса (иначе god-связка в сотни рёбер утопит остальные)
+export function bundleWidth(weight: number): number {
+  return Math.max(1, Math.min(9, 1 + Math.log2(Math.max(1, weight)) * 1.5));
+}
+
+export interface OverviewPlacedItem {
+  key: string;
+  x: number;
+  y: number;
+  r: number;
+  row: number;   // индекс визуального ряда (среди занятых слоёв, не индекс слоя)
+}
+
+export interface OverviewLayoutRow {
+  layer: number;
+  title: string;
+  y0: number;
+  y1: number;
+}
+
+export interface OverviewLayout {
+  viewW: number;
+  viewH: number;
+  mobile: boolean;
+  positions: Map<string, OverviewPlacedItem>;
+  rows: OverviewLayoutRow[];
+}
+
+// Раскладка по слоям: детерминированная, без Math.random и force-симуляции.
+// Занятые слои сжимаются в ряды подряд (пустых слоёв не бывает — не тратим место
+// на слой, в котором сейчас ничего не раскрыто).
+export function layoutOverview(scene: OverviewScene, opts: { mobile?: boolean } = {}): OverviewLayout {
+  const mobile = !!opts.mobile;
+  const viewW = mobile ? OVERVIEW_VIEW_W_MOBILE : OVERVIEW_VIEW_W;
+  const viewH = mobile ? OVERVIEW_VIEW_H_MOBILE : OVERVIEW_VIEW_H;
+
+  const byLayer = new Map<number, OverviewItem[]>();
+  for (const it of scene.items) {
+    const list = byLayer.get(it.layer);
+    if (list) list.push(it); else byLayer.set(it.layer, [it]);
+  }
+  const occupied = [...byLayer.keys()].sort((a, b) => a - b);
+  const topMargin = 28;
+  const rowH = (viewH - topMargin) / Math.max(occupied.length, 1);
+  const maxPerLine = mobile ? 3 : 6;
+
+  const positions = new Map<string, OverviewPlacedItem>();
+  const rows: OverviewLayoutRow[] = [];
+
+  occupied.forEach((layerIdx, rowIdx) => {
+    // Внутри слоя: по размеру группы, затем по имени — перестановки только локальные
+    const row = [...byLayer.get(layerIdx)!].sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+    const lines = Math.max(1, Math.ceil(row.length / maxPerLine));
+    const perLine = Math.ceil(row.length / lines);
+    const lineH = rowH / lines;
+    const y0 = topMargin + rowIdx * rowH;
+    row.forEach((it, i) => {
+      const line = Math.floor(i / perLine);
+      const inLineCount = Math.min(perLine, row.length - line * perLine);
+      const j = i - line * perLine;
+      const step = viewW / (inLineCount + 1);
+      const r = it.kind === 'node'
+        ? Math.max(11, Math.min(mobile ? 18 : 22, 11 + (it.degree ?? 0) / 6))
+        : Math.max(13, Math.min(mobile ? 26 : 36, 11 + Math.sqrt(it.count) * (mobile ? 2.4 : 3.4)));
+      positions.set(it.key, {
+        key: it.key,
+        x: step * (j + 1),
+        y: y0 + line * lineH + lineH / 2,
+        r,
+        row: rowIdx,
+      });
+    });
+    rows.push({ layer: layerIdx, title: LAYER_TITLES[layerIdx] ?? 'Прочее', y0, y1: y0 + rowH });
+  });
+
+  return { viewW, viewH, mobile, positions, rows };
+}

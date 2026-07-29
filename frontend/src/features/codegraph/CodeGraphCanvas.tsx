@@ -5,11 +5,13 @@
 // весь граф на 1020 узлах нечитаем. Клик по пустому месту возвращает полный граф.
 import { useMemo, type MouseEvent } from 'react';
 import { C, FONT, FS } from '../../lib/design';
-import type { CodeGraph, CodeGraphEdge } from '../../types';
+import type { CodeGraph, CodeGraphEdge, CodeGraphRelation } from '../../types';
 import type { GraphLayout } from './graphLayout';
 import { VIEW_W, VIEW_H } from './graphLayout';
 import { isTestSourceFile, type FocusModel, type FocusSide } from './graphFocus';
 import { EDGE_COLOR, KIND_RING, KIND_COLOR, KIND_GLYPH, isDashed } from './graphTokens';
+import type { OverviewScene, OverviewLayout, OverviewItem } from './graphOverview';
+import { bundleWidth } from './graphOverview';
 
 interface Props {
   graph: CodeGraph;
@@ -338,6 +340,103 @@ function FocusView({ focus, onSelect, onExpandTail, onBackdropClick }: {
               fill={C.textMuted} letterSpacing="0.6px">ОТ КОГО ЗАВИСИТ ОН · {focus.outgoing.length} →</text>
           </>
         )}
+      </g>
+    </svg>
+  );
+}
+
+// === Режим «Обзор»: граф групп неймспейсов по слоям зависимостей ===
+// Координаты и слои приходят готовыми из buildOverviewScene/layoutOverview —
+// здесь только отрисовка и клики. Обратные пучки (нарушение слоистости) —
+// пунктир в C.warning, толщина пучка — по логарифму веса (bundleWidth).
+function clipOverviewLabel(label: string, max: number): string {
+  return label.length > max ? `${label.slice(0, max - 1)}…` : label;
+}
+
+export function CodeGraphOverviewCanvas({ scene, layout, onItemClick, onItemDblClick }: {
+  scene: OverviewScene;
+  layout: OverviewLayout;
+  onItemClick: (item: OverviewItem) => void;
+  onItemDblClick: (item: OverviewItem) => void;
+}) {
+  const { viewW, viewH, mobile } = layout;
+  const maxLabel = mobile ? 11 : 16;
+
+  return (
+    <svg viewBox={`0 0 ${viewW} ${viewH}`} preserveAspectRatio="xMidYMid meet"
+      style={{ width: '100%', height: '100%', display: 'block' }}>
+      {/* Подложки слоёв — чередующийся фон + подпись слоя слева */}
+      <g pointerEvents="none">
+        {layout.rows.map((row, i) => (
+          <g key={row.layer}>
+            {i % 2 === 1 && (
+              <rect x={8} y={row.y0} width={viewW - 16} height={row.y1 - row.y0} rx={12}
+                fill={C.bgPanel} opacity={0.5} />
+            )}
+            <text x={18} y={row.y0 + 14} fontFamily={FONT.sans} fontSize={FS.xs}
+              fill={C.textMuted} letterSpacing="0.6px">{row.title.toUpperCase()}</text>
+          </g>
+        ))}
+      </g>
+
+      {/* Рёбра-пучки: агрегированы между элементами, толщина — по логарифму веса.
+          Обратные (нарушение слоистости — источник ниже приёмника) — пунктир C.warning */}
+      <g>
+        {scene.bundles.map((b, i) => {
+          const a = layout.positions.get(b.fromKey);
+          const c = layout.positions.get(b.toKey);
+          if (!a || !c) return null;
+          const dominant = (['Calls', 'Implements', 'References'] as CodeGraphRelation[])
+            .reduce((best, rel) => (b.byRelation[rel] > b.byRelation[best] ? rel : best), 'Calls' as CodeGraphRelation);
+          const mx = (a.x + c.x) / 2 + (b.isBack ? 46 : 0);
+          const my = (a.y + c.y) / 2;
+          return (
+            <path key={i} d={`M${a.x},${a.y} Q${mx},${my} ${c.x},${c.y}`} fill="none"
+              stroke={b.isBack ? C.warning : EDGE_COLOR[dominant]}
+              strokeWidth={bundleWidth(b.weight)}
+              strokeDasharray={b.isBack ? '6 4' : undefined}
+              opacity={0.6} />
+          );
+        })}
+      </g>
+
+      {/* Узлы: группы (кружок с числом типов) и типы (глиф вида) — раскрытая до
+          типов группа показывает узлы вместо себя */}
+      <g>
+        {scene.items.map(it => {
+          const p = layout.positions.get(it.key);
+          if (!p) return null;
+          const soft = it.kind === 'rest' || it.kind === 'small';
+          const ring = it.kind === 'node' ? KIND_RING[it.node!.kind] : soft ? C.dashed : C.textSecondary;
+          return (
+            <g key={it.key} transform={`translate(${p.x.toFixed(1)},${p.y.toFixed(1)})`}
+              style={{ cursor: it.kind === 'rest' || it.kind === 'small' ? 'default' : 'pointer' }}
+              onClick={ev => { ev.stopPropagation(); onItemClick(it); }}
+              onDoubleClick={ev => { ev.stopPropagation(); onItemDblClick(it); }}>
+              {it.godCount > 0 && (
+                <circle r={p.r + 6} fill="none" stroke={C.accent} strokeWidth={2}
+                  strokeDasharray="3 3" opacity={0.5} pointerEvents="none" />
+              )}
+              <circle r={p.r} fill={C.bgCard} stroke={ring}
+                strokeWidth={2.2} strokeDasharray={soft ? '4 3' : undefined} pointerEvents="none" />
+              {it.kind === 'node' ? (
+                <text textAnchor="middle" dominantBaseline="central" fontFamily={FONT.mono}
+                  fontSize={FS.base} fontWeight={600} fill={KIND_COLOR[it.node!.kind]} pointerEvents="none">
+                  {KIND_GLYPH[it.node!.kind]}
+                </text>
+              ) : (
+                <text textAnchor="middle" dominantBaseline="central" fontFamily={FONT.mono}
+                  fontSize={FS.sm} fontWeight={600} fill={soft ? C.textMuted : C.textHeading} pointerEvents="none">
+                  {soft ? '…' : it.count}
+                </text>
+              )}
+              <text textAnchor="middle" y={p.r + 14} fontFamily={FONT.mono} fontSize={FS.xs}
+                fill={C.textSecondary} pointerEvents="none">
+                {clipOverviewLabel(it.label, maxLabel)}
+              </text>
+            </g>
+          );
+        })}
       </g>
     </svg>
   );

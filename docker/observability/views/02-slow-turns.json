@@ -17,6 +17,11 @@
           "filter": {
             "expression": "name = 'chat.turn' AND durationNano > 30000000000"
           },
+          "aggregations": [],
+          "groupBy": [],
+          "order": [],
+          "selectFields": [],
+          "having": { "expression": "" },
           "limit": 100
         }
       }

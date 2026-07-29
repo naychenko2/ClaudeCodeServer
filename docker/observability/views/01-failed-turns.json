@@ -17,6 +17,11 @@
           "filter": {
             "expression": "name = 'chat.turn' AND outcome = 'error'"
           },
+          "aggregations": [],
+          "groupBy": [],
+          "order": [],
+          "selectFields": [],
+          "having": { "expression": "" },
           "limit": 100
         }
       }

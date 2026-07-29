@@ -17,6 +17,11 @@
           "filter": {
             "expression": "name = 'process.start' AND kind = 'docker'"
           },
+          "aggregations": [],
+          "groupBy": [],
+          "order": [],
+          "selectFields": [],
+          "having": { "expression": "" },
           "limit": 100
         }
       }

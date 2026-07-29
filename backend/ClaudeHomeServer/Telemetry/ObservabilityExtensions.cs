@@ -32,6 +32,20 @@ public static class ObservabilityExtensions
 
     public static IServiceCollection AddObservability(this IServiceCollection services, IConfiguration config)
     {
+        // Аварийный выключатель ЭКСПОРТА поверх любой конфигурации. Глушит только отправку
+        // наружу: регистрация SDK, heartbeat (H4) и гейджи остаются на месте — иначе
+        // ломается инвариант «observability-of-observability работает без backend'ов».
+        //
+        // Нужен там, где конфигом не обойтись: appsettings.Local.json подключается
+        // в Program.cs ПОСЛЕ источников, которые подставляет WebApplicationFactory,
+        // поэтому тестовый хост не может переопределить Telemetry:Backends:*:Enabled —
+        // файл разработчика сильнее. Без этого весь прогон тестов экспортировал метрики
+        // в боевой SigNoz: Meter статический на процесс, и данные чистых юнит-тестов
+        // уезжали через экспортёр, поднятый любым из Controllers-тестов
+        // (ряды provider=test-<guid>, tool_name=tool_x). См. TestTelemetryGuard в тестах.
+        // В проде — быстрый способ вырубить отправку, не трогая конфиг.
+        var exportDisabled = Environment.GetEnvironmentVariable("CCS_TELEMETRY_DISABLED") == "1";
+
         var section = config.GetSection("Telemetry");
         var mode = section.GetValue<string>("Mode") ?? "dev";
 
@@ -66,10 +80,20 @@ public static class ObservabilityExtensions
             t.AddAspNetCoreInstrumentation();
             t.AddHttpClientInstrumentation(o =>
             {
-                // C6: редауитовать Authorization — иначе OAuth/API-key токены утечут в trace attributes
-                o.EnrichWithHttpRequestMessage = (activity, msg) =>
-                    activity.SetTag("http.request.header.authorization", "<redacted>");
-                o.RecordException = true;
+                // RecordException НЕ включаем: он создаёт ActivityEvent с exception.message
+                // и exception.stacktrace, а события — неизменяемая коллекция, до которой
+                // PiiSanitizingProcessor не дотянется (он чистит только теги). В сообщении
+                // исключения приезжает URL с query-строкой (там бывают API-ключи Dify и
+                // OpenRouter) и абсолютные пути сборки. Факт и категория ошибки остаются
+                // в статусе спана и теге error.type — для диагностики этого достаточно.
+                o.RecordException = false;
+
+                // Прежде здесь стояла «редакция» заголовка Authorization через
+                // EnrichWithHttpRequestMessage. Она не защищала ни от чего: инструментация
+                // HttpClient заголовки запроса не пишет вовсе, то есть редактировать было
+                // нечего — тег с текстом "<redacted>" ДОБАВЛЯЛСЯ на каждый исходящий спан
+                // и тут же дропался санитайзером. Реальный канал утечки токена — url.full
+                // с query-строкой, он закрыт в PiiSanitizingProcessor (не входит в KeepTags).
             });
 
             // Наш кастомный ActivitySource (T3)
@@ -83,9 +107,21 @@ public static class ObservabilityExtensions
         otelBuilder.WithMetrics(m =>
         {
             m.AddMeter(ServerMetrics.MeterName);
-            // ASP.NET Core / HttpClient metric instrumentation имеют другой API в OTel 1.17.0
-            // (через experimental packages). Для MVP оставляем только наш custom Meter —
-            // operational метрики (latency, errors) уже покрывают основные сценарии.
+
+            // Встроенные метры .NET 10 + OTel 1.17.0 (GA, не experimental).
+            // Раньше был комментарий «experimental packages, оставляем custom Meter для MVP» —
+            // он устарел: AspNetCore/Http 1.17.0 дают GA-метрики, а метры ниже нативны в .NET 10.
+            //
+            // PII: метрики идут в pipeline БЕЗ PiiSanitizingProcessor (он только в WithTracing).
+            // Все перечисленные метры вычитаны на PII-аудите (см. docs/observability-dashboards.md):
+            // ни один не несёт user_id/session_id/path/prompt — только method/route/status/host.
+            m.AddMeter("Microsoft.AspNetCore.Hosting");     // http.server.request.duration
+            m.AddMeter("Microsoft.AspNetCore.Server.Kestrel"); // kestrel.active_connections, tls handshakes
+            m.AddMeter("Microsoft.AspNetCore.Routing");     // http.route matched/unmatched
+            m.AddMeter("Microsoft.AspNetCore.RateLimiting"); // rate-limit policy hits (для Auth:PingRateLimit)
+            m.AddMeter("System.Net.Http");                  // http.client.request.duration, server_address (host LLM)
+            m.AddMeter("System.Net.NameResolution");        // dns.lookup_duration
+            m.AddMeter("System.Runtime");                   // GC, ThreadPool, process.memory (нужен Runtime pkg)
         });
 
         // Logging — IncludeFormattedMessage для читаемости в SigNoz ListView.
@@ -100,18 +136,25 @@ public static class ObservabilityExtensions
                     o.ParseStateValues = true;
                 });
             });
+
+            // PII-санитайзер логов (T15, парный к трейсовому). ОБЯЗАТЕЛЕН при включённых
+            // IncludeFormattedMessage/ParseStateValues: без него в SigNoz уезжают готовые
+            // строки со значениями — имена чатов, идентификаторы пользователей, пути
+            // к файлам секретов, имена персон. Процессор возвращает тело к шаблону
+            // и фильтрует атрибуты теми же правилами, что и спаны.
+            l.AddProcessor(new PiiSanitizingLogProcessor());
         });
 
         // OTLP exporter — один активный backend (AD3, AD4).
         // Multi-exporter fan-out (both) пока не реализован — нужен named options pattern.
         // Приоритет: production > dev. Если оба Enabled — берём production.
-        if (prodEnabled)
+        if (prodEnabled && !exportDisabled)
         {
             var endpoint = section.GetValue<string>("Backends:Production:OtlpEndpoint")
                            ?? "http://localhost:4318";
             otelBuilder.UseOtlpExporter(OtlpExportProtocol.HttpProtobuf, new Uri(endpoint));
         }
-        else if (devEnabled)
+        else if (devEnabled && !exportDisabled)
         {
             var endpoint = section.GetValue<string>("Backends:Dev:OtlpEndpoint")
                            ?? "http://localhost:4317";

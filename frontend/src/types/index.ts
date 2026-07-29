@@ -143,6 +143,22 @@ export interface DocSearchHit {
   snippet: string;
 }
 
+// Папка-кандидат в область документации: сколько .md внутри (со вложенными)
+// и есть ли она на диске (выбранная, но удалённая остаётся в списке с exists=false)
+export interface DocFolderCandidate {
+  path: string;
+  count: number;
+  exists: boolean;
+}
+
+// Настройка области документации проекта. README.md входит в неё всегда — папками
+// настраивается только остальное; defaults — то, что вернёт кнопка «по умолчанию».
+export interface DocsFoldersInfo {
+  selected: string[];
+  candidates: DocFolderCandidate[];
+  defaults: string[];
+}
+
 // Элемент доски агентов (диспетчерская: GET /api/board/agents)
 export interface BoardItem {
   taskId: string;

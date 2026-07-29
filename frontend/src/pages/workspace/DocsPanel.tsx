@@ -9,13 +9,14 @@
 // «развернуть» в центральной области (тот же FileViewer, что и для остальных файлов).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronDown, ChevronRight, CornerUpRight, Link2, List, Maximize2, MessageSquarePlus, PanelBottom, ScrollText, Search, X } from 'lucide-react';
+import { ChevronDown, ChevronRight, CornerUpRight, Link2, List, Maximize2, MessageSquarePlus, PanelBottom, ScrollText, Search, SlidersHorizontal, X } from 'lucide-react';
 import type { Project, DocEntry, DocDetail, DocSearchHit } from '../../types';
 import { api } from '../../lib/api';
 import { onFilesChanged } from '../../lib/signalr';
 import { C, FONT, FS, R, SHADOW, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
-import { IconButton, TextField } from '../../components/ui';
+import { Button, IconButton, TextField } from '../../components/ui';
+import { DocsScopeDialog } from './DocsScopeDialog';
 import { MarkdownViewer } from '../../components/MarkdownViewer';
 import { ListDateDivider, LIST_FLASH_CLASS, LIST_FLASH_MS } from '../../components/ListDateDivider';
 import { useHeadings, scrollToHeading } from '../../hooks/useHeadings';
@@ -47,10 +48,10 @@ const TREE_H_DEFAULT = 220;
 const TREE_H_MIN = 80;
 const TREE_H_MAX = 700;
 
-// Пути области, по которым решаем, надо ли перечитывать индекс после правок на диске
-function isDocPath(path: string): boolean {
-  const p = path.replace(/\\/g, '/');
-  return p === 'README.md' || p.startsWith('docs/');
+// Папка пути («docs/adr/x.md» → «docs/adr»); файл в корне — пустая строка
+function folderOf(path: string): string {
+  const i = path.lastIndexOf('/');
+  return i < 0 ? '' : path.slice(0, i);
 }
 
 // Цитата раздела в композер: тем же механизмом, что «Про файл …» в FileViewer —
@@ -78,6 +79,10 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
   });
   const [backlinksOpen, setBacklinksOpen] = useState(false);
   const [tocOpen, setTocOpen] = useState(false);
+  // Область документации (папки проекта). null — панель её не спрашивала: диалог грузит
+  // настройку сам, а до его открытия хватает эвристики по индексу (см. isDocPath ниже)
+  const [scope, setScope] = useState<string[] | null>(null);
+  const [scopeOpen, setScopeOpen] = useState(false);
   // Список папок — то же, что оглавление для документа, только для самого списка:
   // групп до десятка, а документов десятки, и мотать до нужной надоедает
   const [foldersOpen, setFoldersOpen] = useState(false);
@@ -129,6 +134,21 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
   }, [index]);
 
 
+  // «Наш ли это путь» после правок на диске. Область настраивается, поэтому судим по
+  // текущему корпусу: файл уже в индексе либо лежит в папке, где документы есть. После
+  // настройки в диалоге появляется точный список папок — тогда решает он.
+  const docFolders = useMemo(
+    () => new Set((index ?? []).map(d => folderOf(d.path))),
+    [index]);
+
+  const isDocPath = useCallback((raw: string) => {
+    const p = raw.replace(/\\/g, '/');
+    if (!p.toLowerCase().endsWith('.md')) return false;
+    if (p === 'README.md' || knownDocs.has(p.toLowerCase())) return true;
+    if (scope) return scope.some(f => p.startsWith(`${f}/`));
+    return docFolders.has(folderOf(p));
+  }, [knownDocs, docFolders, scope]);
+
   const loadIndex = useCallback(() => {
     api.docs.index(project.id)
       .then(list => { setIndex(list); setError(null); })
@@ -144,7 +164,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
     // Достаточно перечитать индекс: открытый документ висит на нём зависимостью
     // эффекта ниже и перезагрузится следом
     loadIndex();
-  }), [project.id, loadIndex]);
+  }), [project.id, loadIndex, isDocPath]);
 
   // Документ сам не открывается: панель начинается со списка на всю высоту, превью
   // появляется по клику и закрывается крестиком — так список виден целиком, пока он и нужен
@@ -251,16 +271,19 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
     setTocOpen(false);
   };
 
+  // Область настраивается, поэтому пустой список — не тупик: диалог открывается прямо
+  // отсюда. Ранний return тут был бы вреден — вместе со списком исчезала бы и шапка,
+  // а с ней единственная кнопка, которой это чинится
+  const scopeDialog = scopeOpen && (
+    <DocsScopeDialog
+      projectId={project.id}
+      onClose={() => setScopeOpen(false)}
+      onSaved={info => { setScope(info.selected); loadIndex(); }}
+    />
+  );
+
   if (error && !index)
     return <div style={emptyStyle}>{error}</div>;
-
-  if (index && index.length === 0)
-    return (
-      <div style={emptyStyle}>
-        <ScrollText size={20} strokeWidth={ICON_STROKE} style={{ opacity: 0.5, marginBottom: SP.sm }} />
-        <div>В проекте нет README.md и папки docs/</div>
-      </div>
-    );
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
@@ -305,6 +328,10 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
           size="sm"
         >
           <PanelBottom size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+        </IconButton>
+        {/* Область документации: дефолт docs/, но соглашение о папке в проектах разное */}
+        <IconButton title="Папки документации" onClick={() => setScopeOpen(true)} size="sm">
+          <SlidersHorizontal size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
         </IconButton>
 
         {/* Поповер папок: клик прокручивает список к нужной группе */}
@@ -358,6 +385,17 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
             : { flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }
           }>
             <div style={{ overflowY: 'auto', padding: `${SP.xs}px ${SP.xs}px` }}>
+                {index?.length === 0 && (
+                  <div style={emptyStyle}>
+                    <ScrollText size={20} strokeWidth={ICON_STROKE} style={{ opacity: 0.5, marginBottom: SP.sm }} />
+                    <div style={{ marginBottom: SP.md }}>
+                      Здесь пусто: нет README.md и документов в выбранных папках
+                    </div>
+                    <Button variant="ghost" size="sm" onClick={() => setScopeOpen(true)}>
+                      Выбрать папки
+                    </Button>
+                  </div>
+                )}
                 {groups.map(([folder, docs]) => (
                   <div
                     key={folder}
@@ -511,6 +549,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
           )}
         </>
       )}
+      {scopeDialog}
     </div>
   );
 }

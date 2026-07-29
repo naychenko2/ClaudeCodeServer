@@ -214,6 +214,10 @@ public class SessionManager : IDisposable
     // Per-ход slice top-10 god-nodes Code Graph в системный промпт (ADR вариант A);
     // null — в тестах, тогда блок графа в промпт не попадает
     private readonly CodeGraph.CodeGraphPromptProvider? _codeGraphPrompt;
+    // Граф кода: уборка снимка отдельного дерева чата при его удалении (ADR-003); null — в тестах
+    private readonly CodeGraph.CodeGraphService? _codeGraphs;
+    // Watcher'ы файлов: снятие watcher'а отдельного дерева чата при его удалении; null — в тестах
+    private readonly FileWatcherService? _fileWatchers;
 
     public SessionManager(ProjectManager projects, IHubContext<Hubs.SessionHub> hub,
         ChatHistoryService history, IConfiguration config, ILlmSessionAdapterFactory adapters,
@@ -245,10 +249,16 @@ public class SessionManager : IDisposable
         // без него собирается локально от appSettings — слоты работают и в тестах
         Llm.ModelAssignmentResolver? assignments = null,
         // Опционально (в тестах не передаётся): провайдер slice Code Graph в системный промпт
-        CodeGraph.CodeGraphPromptProvider? codeGraphPrompt = null)
+        CodeGraph.CodeGraphPromptProvider? codeGraphPrompt = null,
+        // Опционально (в тестах не передаётся): граф кода и watcher'ы файлов — нужны для уборки
+        // за отдельным деревом чата (снимок графа + watcher его файлов), ADR-003
+        CodeGraph.CodeGraphService? codeGraphs = null,
+        FileWatcherService? fileWatchers = null)
     {
         _spend = spend;
         _codeGraphPrompt = codeGraphPrompt;
+        _codeGraphs = codeGraphs;
+        _fileWatchers = fileWatchers;
         _agentSync = agentSync;
         _cheap = cheap;
         _modules = modules;
@@ -370,11 +380,14 @@ public class SessionManager : IDisposable
     // Контекст MCP-сервера графа кода: инструменты codegraph_* доступны только в чате проекта —
     // граф ключуется проектом (в чате вне проекта искать нечего). Тот же сервисный токен
     // владельца, что у tasks/notes; владение проектом дополнительно проверяет CodeGraphController.
-    private CodeGraphMcpContext? BuildCodeGraphContext(string? ownerId, string? projectId, string sessionId)
+    // rootPath — рабочее дерево сессии (EffectiveRoot): у чата с отдельным worktree свой граф,
+    // иначе инструменты смотрели бы в основное дерево, а правки шли в другое (ADR-003).
+    private CodeGraphMcpContext? BuildCodeGraphContext(string? ownerId, string? projectId, string sessionId,
+        string? rootPath)
     {
         if (ownerId is null || string.IsNullOrEmpty(projectId)) return null;
         var token = GetServiceToken(ownerId);
-        return new CodeGraphMcpContext(ResolveTasksApiUrl(ownerId), token, projectId, sessionId);
+        return new CodeGraphMcpContext(ResolveTasksApiUrl(ownerId), token, projectId, sessionId, rootPath);
     }
 
     // Контекст MCP-сервера памяти персоны (тот же сервисный токен владельца, что и tasks/notes).
@@ -703,6 +716,15 @@ public class SessionManager : IDisposable
     // Единая точка подмены cwd — через неё идут обе funnel-точки LlmSessionContext.
     private static string EffectiveRoot(Session session, string fallbackRoot) =>
         session.WorktreePath ?? fallbackRoot;
+
+    // Уборка за удалённым деревом чата (ADR-003): снимаем watcher его файлов и выбрасываем
+    // снимок графа из data/code-graphs — иначе он остался бы сиротой на диске, а watcher
+    // держал бы handle на исчезнувшую папку. Best-effort: уборка не должна ронять удаление.
+    private void ReleaseWorktreeGraph(string sessionId, string worktreePath)
+    {
+        try { _fileWatchers?.UnwatchPath("worktree:" + sessionId); } catch { /* уборка best-effort */ }
+        try { _codeGraphs?.Invalidate(worktreePath); } catch { /* уборка best-effort */ }
+    }
 
     // Рабочая папка сессии (для поиска транскрипта по уплощённому cwd);
     // null — папку определить не удалось (миграцию в этом случае не делаем)
@@ -1143,10 +1165,12 @@ public class SessionManager : IDisposable
     // автоматически: rootPath проекта однозначно принадлежит владельцу сессии. Текст хода
     // god-узлам не нужен (они структурны) — замыкаем rootPath и игнорируем аргумент. null —
     // провайдер не injecting (тесты) или сессия без rootPath (чат вне проекта).
-    private Func<string?, Task<string?>>? BuildCodeGraphProvider(string? rootPath)
+    // fallbackRoot — корень проекта у чата с отдельным worktree: пока свой граф дерева не
+    // построен, в промпт идёт slice главной ветки с пометкой (ADR-003), а не пустота.
+    private Func<string?, Task<string?>>? BuildCodeGraphProvider(string? rootPath, string? fallbackRoot = null)
     {
         if (_codeGraphPrompt is null || string.IsNullOrWhiteSpace(rootPath)) return null;
-        return _ => _codeGraphPrompt.GetSliceAsync(rootPath);
+        return _ => _codeGraphPrompt.GetSliceAsync(rootPath, fallbackRoot);
     }
 
     // Сброс адаптеров живых сессий персоны (изменился профиль/возможности/привязки):
@@ -1612,6 +1636,8 @@ public class SessionManager : IDisposable
         var workspace = BuildWorkspaceContext(ownerId, session.ProjectId, session.Id, persona.Persona);
 
         // Чат в отдельном worktree: рабочая папка сессии — его дерево, не корень проекта
+        // (корень запоминаем — он fallback для slice графа, пока свой граф дерева не построен)
+        var projectRoot = rootPath;
         rootPath = EffectiveRoot(session, rootPath);
 
         var adapter = _adapters.Create(session, new LlmSessionContext(rootPath,
@@ -1628,12 +1654,12 @@ public class SessionManager : IDisposable
             NotificationsMcp: BuildNotificationsContext(ownerId, session.PersonaId),
             WorkspaceMcp: workspace,
             BindingsProvider: BuildBindingsProvider(ownerId, session.PersonaId, workspace?.Sections),
-            CodeGraphProvider: BuildCodeGraphProvider(rootPath),
+            CodeGraphProvider: BuildCodeGraphProvider(rootPath, projectRoot),
             PersonaAgentsProvider: BuildPersonaAgentsProvider(ownerId, session),
             Launcher: _launchers.ForOwner(ownerId),
             ModulesMcp: BuildModulesContext(ownerId),
             WidgetsMcp: BuildWidgetsContext(ownerId),
-            CodeGraphMcp: BuildCodeGraphContext(ownerId, session.ProjectId, session.Id)));
+            CodeGraphMcp: BuildCodeGraphContext(ownerId, session.ProjectId, session.Id, rootPath)));
         entry.Process = adapter;
 
         await adapter.StartAsync();
@@ -2263,12 +2289,12 @@ public class SessionManager : IDisposable
                 NotificationsMcp: BuildNotificationsContext(project.OwnerId, entry.Info.PersonaId),
                 WorkspaceMcp: workspace,
                 BindingsProvider: BuildBindingsProvider(project.OwnerId, entry.Info.PersonaId, workspace?.Sections),
-                CodeGraphProvider: BuildCodeGraphProvider(rootPath),
+                CodeGraphProvider: BuildCodeGraphProvider(rootPath, project.RootPath),
                 PersonaAgentsProvider: BuildPersonaAgentsProvider(project.OwnerId, entry.Info),
                 Launcher: _launchers.ForOwner(project.OwnerId),
                 ModulesMcp: BuildModulesContext(project.OwnerId),
                 WidgetsMcp: BuildWidgetsContext(project.OwnerId),
-                CodeGraphMcp: BuildCodeGraphContext(project.OwnerId, project.Id, entry.Info.Id));
+                CodeGraphMcp: BuildCodeGraphContext(project.OwnerId, project.Id, entry.Info.Id, rootPath));
         }
         var adapter = _adapters.Create(entry.Info, context);
         entry.Process = adapter;
@@ -2601,6 +2627,7 @@ public class SessionManager : IDisposable
             await _git.WorktreeRemoveAsync(ownerId, project.RootPath, wtPath, force);
             entry.Info.WorktreePath = null;
             entry.Info.WorktreeBranch = null;
+            ReleaseWorktreeGraph(sessionId, wtPath);
         }
 
         // Следующий ход пересоздаст адаптер с новым cwd (между ходами процесса нет)
@@ -2756,6 +2783,7 @@ public class SessionManager : IDisposable
             {
                 Console.Error.WriteLine($"[SessionManager] Worktree чата не удалён ({sessionId}): {ex.Message}");
             }
+            ReleaseWorktreeGraph(sessionId, wt);
         }
         SaveSessions();
         try { OnSessionDeleted?.Invoke(entry.Info); } catch { /* наблюдатель не должен ронять удаление */ }

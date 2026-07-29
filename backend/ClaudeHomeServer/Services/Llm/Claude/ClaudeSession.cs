@@ -644,6 +644,8 @@ public class ClaudeSession : ILlmSessionAdapter
                         ["CODEGRAPH_API_TOKEN"] = _codeGraphMcp.Token,
                         ["CODEGRAPH_PROJECT_ID"] = _codeGraphMcp.ProjectId,
                         ["CODEGRAPH_SESSION_ID"] = _codeGraphMcp.SessionId ?? "",
+                        // Рабочее дерево хода: отдельное worktree чата имеет свой граф
+                        ["CODEGRAPH_ROOT_PATH"] = _codeGraphMcp.RootPath ?? "",
                     },
                 };
             }

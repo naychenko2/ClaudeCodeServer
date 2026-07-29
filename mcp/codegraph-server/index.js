@@ -6,6 +6,8 @@
 //   CODEGRAPH_API_TOKEN  — сервисный JWT владельца сессии
 //   CODEGRAPH_PROJECT_ID — id проекта, чей граф доступен (сервер подключается только в чате проекта)
 //   CODEGRAPH_SESSION_ID — id сессии; уезжает в X-Caller-Session-Id (наблюдаемость)
+//   CODEGRAPH_ROOT_PATH  — рабочее дерево чата: отдельное worktree имеет СВОЙ граф (ADR-003).
+//                          Пусто — граф корня проекта, как раньше.
 //
 // Инструменты:
 //   codegraph_find      — найти тип по имени или части FQN
@@ -41,6 +43,8 @@ const API_URL = (process.env.CODEGRAPH_API_URL ?? 'http://localhost:5000').repla
 const API_TOKEN = process.env.CODEGRAPH_API_TOKEN ?? '';
 const PROJECT_ID = process.env.CODEGRAPH_PROJECT_ID || '';
 const SESSION_ID = process.env.CODEGRAPH_SESSION_ID || null;
+// Рабочее дерево чата: у отдельного worktree свой граф. Пусто — граф корня проекта.
+const ROOT_PATH = process.env.CODEGRAPH_ROOT_PATH || '';
 
 // Секундная недоступность бэкенда (рестарт, деплой) не должна давать красную карточку.
 const RETRY_DELAYS_MS = [300, 900];
@@ -118,6 +122,13 @@ async function parseBody(res) {
 }
 
 const GRAPH_BASE = () => `/api/projects/${encodeURIComponent(PROJECT_ID)}/code-graph`;
+
+// Строка запроса с деревом чата: бэкенд принимает rootPath только из белого списка
+// (корень проекта либо worktree его сессий), поэтому передаём как есть.
+const withRoot = params => {
+  if (ROOT_PATH) params.set('rootPath', ROOT_PATH);
+  return params.toString();
+};
 
 const TOOLS = [
   {
@@ -300,7 +311,7 @@ rl.on('line', async (line) => {
             if (!query) { respondError(msg.id, -32602, 'Нужен параметр query'); return; }
             const limit = clampLimit(args?.limit, 20);
             const params = new URLSearchParams({ q: query, limit: String(limit) });
-            const result = await api(`${GRAPH_BASE()}/find?${params}`);
+            const result = await api(`${GRAPH_BASE()}/find?${withRoot(params)}`);
             respond(msg.id, text(renderFind(result, query, limit)));
             break;
           }
@@ -311,13 +322,14 @@ rl.on('line', async (line) => {
             const params = new URLSearchParams({ node, limit: String(limit) });
             if (args?.direction) params.set('direction', String(args.direction));
             if (args?.relation) params.set('relation', String(args.relation));
-            const result = await api(`${GRAPH_BASE()}/neighbors?${params}`);
+            const result = await api(`${GRAPH_BASE()}/neighbors?${withRoot(params)}`);
             respond(msg.id, text(renderNeighbors(result, limit)));
             break;
           }
           case 'codegraph_hubs': {
             const limit = clampLimit(args?.limit, 10);
-            const result = await api(`${GRAPH_BASE()}/hubs?limit=${limit}`);
+            const params = new URLSearchParams({ limit: String(limit) });
+            const result = await api(`${GRAPH_BASE()}/hubs?${withRoot(params)}`);
             respond(msg.id, text(renderHubs(result)));
             break;
           }

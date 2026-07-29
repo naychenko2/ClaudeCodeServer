@@ -37,10 +37,32 @@ public sealed class CodeGraphPromptProvider
     /// <summary>
     /// Сформировать compact slice top-10 god-nodes для системного промпта. null — граф не
     /// построен, god-узлов нет или rootPath пустой; в этом случае блок в промпт не попадает.
+    ///
+    /// fallbackRootPath — корень проекта для чата с отдельным worktree: пока свой граф дерева
+    /// не построен (строится при первом обращении инструментов), отдаём slice главной ветки
+    /// с явной пометкой. Пустой промпт хуже приблизительного: без блока агент не знает даже
+    /// про существование графа и инструментов к нему (ADR-003).
     /// </summary>
-    public async Task<string?> GetSliceAsync(string? rootPath, CancellationToken ct = default)
+    public async Task<string?> GetSliceAsync(string? rootPath, string? fallbackRootPath = null,
+        CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(rootPath)) return null;
+
+        var slice = await SliceForAsync(rootPath, ct);
+        if (slice is not null) return slice;
+
+        if (string.IsNullOrWhiteSpace(fallbackRootPath)
+            || WorkspaceKnowledgeStore.NormalizePath(fallbackRootPath)
+               == WorkspaceKnowledgeStore.NormalizePath(rootPath))
+            return null;
+
+        var fromMain = await SliceForAsync(fallbackRootPath, ct);
+        return fromMain is null ? null : fromMain + MainTreeNote;
+    }
+
+    // Slice конкретного дерева; null — граф для него не построен либо god-узлов нет.
+    private async Task<string?> SliceForAsync(string rootPath, CancellationToken ct)
+    {
         var key = WorkspaceKnowledgeStore.NormalizePath(rootPath);
 
         try
@@ -121,6 +143,13 @@ public sealed class CodeGraphPromptProvider
                   + "codegraph_hubs (хабы по связности).");
         return sb.ToString();
     }
+
+    // Пометка «slice не от твоего дерева»: чат в отдельном worktree правит свою ветку, а
+    // структура показана от главной — пока свой граф не построен.
+    private const string MainTreeNote =
+        "\n[этот срез — от ГЛАВНОЙ ветки проекта: в чате отдельное рабочее дерево, "
+        + "его собственный граф ещё строится — вызови codegraph_hubs/codegraph_find, "
+        + "они уже отвечают по твоему дереву]";
 
     private static string AppendStaleMarker(string sliceBase) =>
         sliceBase + "\n[может быть устаревшим — файлы изменились]";

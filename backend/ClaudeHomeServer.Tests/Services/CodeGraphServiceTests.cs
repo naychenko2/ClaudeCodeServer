@@ -168,6 +168,28 @@ public class CodeGraphServiceTests : IClassFixture<TestWebApplicationFactory>
     }
 
     [Fact]
+    public async Task InvalidateIncremental_ПоПутиОтдельногоДерева_ДоходитДоUpdateAsync()
+    {
+        var service = _factory.Services.GetRequiredService<CodeGraphService>();
+        service.RegisterProvider(".cs", new FilesToNodesProvider());
+
+        // Дерево чата лежит ВНЕ папки любого проекта (ADR-003: {home}/.worktrees/…) —
+        // граф для него ключуется собственным путём, инкремент обязан доходить как для проекта.
+        var worktree = Path.Combine(_factory.TempDir, "cgraph_wt_" + Guid.NewGuid().ToString("N")[..8]);
+        var src = Path.Combine(worktree, "src");
+        Directory.CreateDirectory(src);
+        var file = Path.Combine(src, "OnlyInWorktree.cs");
+        await File.WriteAllTextAsync(file, "public class OnlyInWorktree { }");
+
+        service.InvalidateIncremental(worktree, new[] { file });
+        await Task.Delay(500); // заметно дольше окна дебаунса (50мс в тестовой фабрике)
+
+        var snapshot = await service.GetSnapshotAsync(worktree, CancellationToken.None);
+        snapshot.Should().NotBeNull("инкремент по пути отдельного дерева перестроил его граф");
+        snapshot!.Nodes.Select(n => n.SourceFile).Should().Contain("src/OnlyInWorktree.cs");
+    }
+
+    [Fact]
     public async Task StartRebuildIfIdle_НеПлодитКонкурентныеПостроения()
     {
         var service = _factory.Services.GetRequiredService<CodeGraphService>();

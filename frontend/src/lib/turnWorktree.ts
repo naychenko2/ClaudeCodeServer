@@ -7,9 +7,13 @@
 // Особый случай — самый первый ход, где вызван EnterWorktree: сам этот ход стартовал
 // ДО переключения папки, поэтому его же session_started несёт ещё старую cwd, и
 // turnWorktree на нём пуст. Пока не пришёл СЛЕДУЮЩИЙ session_started, единственный
-// источник данных — сам tool_use EnterWorktree: его текстовый результат «Entered
-// worktree at <path> on branch <branch>» — источник истины (реальная папка может
-// отличаться от запрошенной, напр. коллизия имени уводит бэк на «{branch}-2»).
+// источник данных — сам tool_use EnterWorktree: его текстовый результат — источник
+// истины (реальная папка может отличаться от запрошенной, напр. коллизия имени
+// уводит бэк на «{branch}-2»). Формулировка зависит от режима инструмента: «Created
+// worktree at <path> on branch <branch>» при создании нового дерева (параметр name),
+// «Entered worktree at <path> on branch <branch>» при входе в уже существующее
+// (параметр path) — регэксп ниже намеренно не якорится на конкретный глагол,
+// цепляется только за инвариантную середину фразы «worktree at … on branch …».
 // Результата ещё нет (ход в процессе) — временный фолбэк на input.path, если агент
 // передал его явно; результат ЕСТЬ, но не распознан регэкспом — null: лучше пусто,
 // чем выдать запрошенный путь за фактический.
@@ -21,7 +25,10 @@ export interface TurnTree {
   name: string;
 }
 
-const ENTER_WORKTREE_RESULT_RE = /Entered worktree at (.+?) on branch \S+/i;
+// Не якоримся на глаголе (Created/Entered — см. комментарий выше) и на переносах строк
+// (флаг s): любая будущая правка формулировки CLI, не задевающая саму структуру
+// «worktree at … on branch …», индикатор не сломает.
+const ENTER_WORKTREE_RESULT_RE = /\bworktree at (.+?)\s+on branch \S+/is;
 
 function parseEnterWorktreeTool(it: Extract<ChatItem, { kind: 'tool_use' }>): TurnTree | null {
   if (typeof it.result === 'string') {

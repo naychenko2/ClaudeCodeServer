@@ -22,12 +22,27 @@ describe('computeTurnTree', () => {
     expect(computeTurnTree([started(tt)])).toEqual(tt);
   });
 
-  it('первый ход: EnterWorktree после последнего session_started даёт данные из результата', () => {
+  it('первый ход, режим «вход в существующее дерево» (path): результат «Entered worktree at …»', () => {
     const items = [
       started(null),
       enterWorktree({ result: 'Entered worktree at C:\\repo\\.claude\\worktrees\\wt-a7c1e2 on branch feature/x. The session is now working in the worktree.' }),
     ];
     expect(computeTurnTree(items)).toEqual({ path: 'C:\\repo\\.claude\\worktrees\\wt-a7c1e2', name: 'wt-a7c1e2' });
+  });
+
+  it('первый ход, режим «создание нового дерева» (name): результат «Created worktree at …» — реальный текст из живой проверки QA', () => {
+    const items = [
+      started(null),
+      enterWorktree({
+        result: 'Created worktree at C:\\Sources\\ClaudeCodeServer\\.claude\\worktrees\\probe-cwd\n'
+          + 'on branch worktree-probe-cwd. The session is now working in the worktree.\n'
+          + 'Use ExitWorktree to leave mid-session, or exit the session to be prompted.',
+      }),
+    ];
+    expect(computeTurnTree(items)).toEqual({
+      path: 'C:\\Sources\\ClaudeCodeServer\\.claude\\worktrees\\probe-cwd',
+      name: 'probe-cwd',
+    });
   });
 
   it('EnterWorktree без результата (ещё в процессе) — фолбэк на input.path', () => {

@@ -128,6 +128,30 @@ describe('buildOverviewScene — группировка', () => {
   });
 });
 
+describe('buildOverviewScene — вложенные типы', () => {
+  // FQN вложенного типа выглядит как «неймспейс + внешний класс + имя», и наивный
+  // разбор до последней точки делал из внешнего класса отдельную группу.
+  function makeNestedGraph(): CodeGraph {
+    const nodes = [
+      node('o', 'A.B.Outer', 'Outer.cs'),
+      node('i', 'A.B.Outer.Inner', 'Outer.cs'),        // вложенный
+      node('d', 'A.B.Outer.Inner.Deep', 'Outer.cs'),   // вложенный вдвойне
+      node('s', 'A.B.Sub.Real', 'Real.cs'),            // настоящий поднеймспейс
+    ];
+    return { nodes, edges: [], godNodes: [], metadata: { nodeCount: nodes.length, edgeCount: 0, fileCount: 2, isStale: false } };
+  }
+
+  it('вложенный тип относится к неймспейсу внешнего типа, а не порождает группу из класса', () => {
+    const g = makeNestedGraph();
+    const scene = buildOverviewScene(g, { expanded: new Set(['A', 'A.B']), typesGroup: null });
+    const groups = scene.items.map(it => it.group).sort();
+    expect(groups).toEqual(['A.B', 'A.B.Sub']);   // группы 'A.B.Outer' быть не должно
+    const ab = scene.items.find(it => it.group === 'A.B')!;
+    expect(ab.count).toBe(3);                     // Outer + Inner + Deep — один класс с вложенными
+    expect(ab.hasChildren).toBe(false);           // вложенность класса — не «уровень глубже»
+  });
+});
+
 describe('buildOverviewScene — обратные рёбра (нарушение слоистости)', () => {
   it('помечает isBack только на ребре снизу вверх', () => {
     const g = makeLayeredGraph();
@@ -166,6 +190,24 @@ describe('buildOverviewScene — потолок плотности (26 элем�
     const scene = buildOverviewScene(g, { expanded, typesGroup: null });
     expect(scene.items).toHaveLength(10);
     expect(scene.items.some(it => it.kind === 'small')).toBe(false);
+  });
+
+  // Раскрытые подгруппы всегда мельче групп верхнего уровня, поэтому отбор по одному
+  // размеру уносил в заглушку именно то, ради чего пользователь кликал по группе
+  it('щадит раскрытую ветку: её подгруппы остаются на холсте, схлопывается посторонняя мелочь', () => {
+    const nodes: CodeGraphNode[] = [];
+    for (let i = 0; i < 20; i++) {
+      for (let j = 0; j < 10; j++) nodes.push(node(`b${i}_${j}`, `Root.Big${i}.Type${j}`, `b${i}.cs`));
+    }
+    for (let i = 0; i < 8; i++) nodes.push(node(`s${i}`, `Root.Small.Sub${i}.Type`, `s${i}.cs`));
+    const g: CodeGraph = { nodes, edges: [], godNodes: [], metadata: { nodeCount: nodes.length, edgeCount: 0, fileCount: 28, isStale: false } };
+
+    const scene = buildOverviewScene(g, { expanded: new Set(['Root', 'Root.Small']), typesGroup: null });
+    expect(scene.items.length).toBeLessThanOrEqual(26);        // потолок соблюдён
+    for (let i = 0; i < 8; i++) {
+      expect(scene.items.some(it => it.group === `Root.Small.Sub${i}`)).toBe(true);
+    }
+    expect(scene.items.some(it => it.kind === 'small')).toBe(true);  // схлопнулись крупные, но нераскрытые
   });
 });
 
@@ -234,6 +276,23 @@ describe('buildOverviewScene — реальный снимок графа про
     const again = layoutOverview(scene);
     expect([...layout.positions.entries()].map(([k, p]) => `${k}:${p.x},${p.y}`).sort())
       .toEqual([...again.positions.entries()].map(([k, p]) => `${k}:${p.x},${p.y}`).sort());
+  });
+
+  it('раскрытие Services реально показывает её подгруппы, а не заглушку', () => {
+    const g = loadRealSnapshot();
+    const base = defaultExpandedGroups(g.nodes);
+    const scene = buildOverviewScene(g, {
+      expanded: new Set([...base, 'ClaudeHomeServer.Services']), typesGroup: null,
+    });
+    const groups = new Set(scene.items.map(it => it.group));
+    for (const sub of ['Llm', 'CodeGraph', 'Backup', 'Memory', 'Spend', 'Execution', 'TriggerSources']) {
+      expect(groups.has(`ClaudeHomeServer.Services.${sub}`)).toBe(true);
+    }
+    // Внешние классы с вложенными типами (SessionManager, NotesService) — это типы,
+    // а не подгруппы: их содержимое лежит в самой ClaudeHomeServer.Services
+    expect(groups.has('ClaudeHomeServer.Services.SessionManager')).toBe(false);
+    expect(groups.has('ClaudeHomeServer.Services.NotesService')).toBe(false);
+    expect(scene.items.length).toBeLessThanOrEqual(26);
   });
 
   it('находит те же нарушения слоистости, что Майя нашла в матрице, и в ту же сторону', () => {

@@ -56,10 +56,27 @@ export function layerOf(group: string): number {
   return OTHER_LAYER;
 }
 
-export function namespaceOf(node: CodeGraphNode): string {
-  const fqn = node.fullyQualifiedName;
-  const i = fqn.lastIndexOf('.');
-  return i < 0 ? '' : fqn.slice(0, i);
+// Множество FQN всех узлов графа — по нему `namespaceOf` отличает неймспейс от
+// внешнего типа (см. ниже). Строится один раз на сцену, а не на каждый узел.
+export function fqnIndex(nodes: readonly CodeGraphNode[]): ReadonlySet<string> {
+  return new Set(nodes.map(n => n.fullyQualifiedName));
+}
+
+// Неймспейс узла = FQN до последней точки, но у ВЛОЖЕННОГО типа так получается имя
+// внешнего класса (`…Services.SessionManager.SessionEntry` → «неймспейс»
+// `…Services.SessionManager`), и «Обзор» рисовал такой класс отдельной группой —
+// на снимке прода это 72 фиктивные группы, которые вытесняли настоящие подгруппы
+// за потолок плотности. Критерий отличия точный: если строка совпадает с FQN узла
+// графа — это тип, а не неймспейс, поднимаемся на уровень выше (вложенность бывает
+// и двойной, поэтому цикл).
+export function namespaceOf(node: CodeGraphNode, fqns: ReadonlySet<string>): string {
+  let ns = node.fullyQualifiedName;
+  for (;;) {
+    const i = ns.lastIndexOf('.');
+    if (i < 0) return '';
+    ns = ns.slice(0, i);
+    if (!fqns.has(ns)) return ns;
+  }
 }
 
 // Доминирующий префикс всех неймспейсов раскрыт всегда: единственная группа-обёртка
@@ -72,12 +89,13 @@ const ROOT_DOMINANCE = 0.9;
 
 export function defaultExpandedGroups(nodes: CodeGraphNode[]): Set<string> {
   const expanded = new Set<string>();
+  const fqns = fqnIndex(nodes);
   let prefix = '';
   for (;;) {
     const counts = new Map<string, number>();
     let considered = 0;
     for (const n of nodes) {
-      const ns = namespaceOf(n);
+      const ns = namespaceOf(n, fqns);
       if (prefix && ns !== prefix && !ns.startsWith(`${prefix}.`)) continue; // вне текущего префикса
       const rest = prefix ? ns.slice(prefix.length + 1) : ns;
       const seg = rest.split('.')[0];
@@ -103,6 +121,20 @@ function groupOf(ns: string, expanded: ReadonlySet<string>): string {
   let k = 1;
   while (expanded.has(g) && k < parts.length) { g += '.' + parts[k]; k++; }
   return g;
+}
+
+// Насколько глубоко раскрыта ветка, которой принадлежит группа: длина (в сегментах)
+// самого длинного раскрытого префикса группы. Общий корень раскрыт всегда, поэтому
+// глубина 1 — обычный верхний уровень, а всё, что больше, пользователь раскрыл сам.
+function expandDepth(group: string, expanded: ReadonlySet<string>): number {
+  const parts = group.split('.');
+  let depth = 0;
+  let p = '';
+  for (let i = 0; i < parts.length; i++) {
+    p = i === 0 ? parts[0] : `${p}.${parts[i]}`;
+    if (expanded.has(p)) depth = i + 1;
+  }
+  return depth;
 }
 
 export type OverviewItemKind = 'group' | 'node' | 'rest' | 'small';
@@ -154,6 +186,9 @@ export function buildOverviewScene(graph: CodeGraph, opts: OverviewOptions): Ove
   const { expanded, typesGroup, hideTests, maxItems = MAX_ITEMS_DEFAULT, typesLimit = TYPES_LIMIT_DEFAULT } = opts;
   const godSet = new Set(graph.godNodes);
   const degree = graphDegree(graph);
+  // Индекс по ВСЕМ узлам, а не по видимым: скрытие тестов не должно превращать
+  // внешний тип в «неймспейс» для своих же вложенных
+  const fqns = fqnIndex(graph.nodes);
 
   let hiddenTestCount = 0;
   const visible: CodeGraphNode[] = [];
@@ -167,7 +202,7 @@ export function buildOverviewScene(graph: CodeGraph, opts: OverviewOptions): Ove
   const groupHasDeeper = new Map<string, boolean>();  // группа -> есть ли типы глубже текущего уровня
 
   for (const node of visible) {
-    const ns = namespaceOf(node);
+    const ns = namespaceOf(node, fqns);
     const g = groupOf(ns, expanded);
     if (ns.length > g.length) groupHasDeeper.set(g, true);
 
@@ -225,8 +260,23 @@ export function buildOverviewScene(graph: CodeGraph, opts: OverviewOptions): Ove
     const nonGroupCount = items.size - groupsList.length;
     // -1: место самой заглушки тоже входит в потолок
     const keepCount = Math.max(4, maxItems - nonGroupCount - 1);
-    const sorted = [...groupsList].sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
-    const keep = new Set(sorted.slice(0, keepCount).map(it => it.key));
+    const bySize = (a: OverviewItem, b: OverviewItem) => b.count - a.count || a.label.localeCompare(b.label);
+
+    // Отбор только по размеру схлопывал ровно то, ради чего пользователь кликал:
+    // подгруппы раскрытой ветки мелкие рядом с группами верхнего уровня и уезжали
+    // в заглушку — раскрытие выглядело неработающим. Поэтому места сначала уходят
+    // раскрытым веткам (чем глубже раскрыта, тем раньше), а под верхний уровень
+    // остаётся резерв — без него карта слоёв исчезала бы целиком.
+    const depth = new Map(groupsList.map(it => [it.key, expandDepth(it.group!, expanded)]));
+    const byDepthThenSize = (a: OverviewItem, b: OverviewItem) =>
+      depth.get(b.key)! - depth.get(a.key)! || bySize(a, b);
+    const reserve = Math.min(groupsList.length - 1, Math.round(keepCount / 3));
+    const keep = new Set([...groupsList].sort(byDepthThenSize)
+      .slice(0, Math.max(1, keepCount - reserve)).map(it => it.key));
+    for (const it of [...groupsList].sort(bySize)) {
+      if (keep.size >= keepCount) break;
+      keep.add(it.key);
+    }
     const drop = groupsList.filter(it => !keep.has(it.key));
     if (drop.length > 1) {
       for (const it of drop) items.delete(it.key);

@@ -17,7 +17,7 @@ import { C, FONT, FS, R, SHADOW, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { IconButton, TextField } from '../../components/ui';
 import { MarkdownViewer } from '../../components/MarkdownViewer';
-import { ListDateDivider } from '../../components/ListDateDivider';
+import { ListDateDivider, LIST_FLASH_CLASS, LIST_FLASH_MS } from '../../components/ListDateDivider';
 import { useHeadings, scrollToHeading } from '../../hooks/useHeadings';
 import { resolveDocLink, sliceSection, slugify } from '../../lib/docsLinks';
 
@@ -37,9 +37,6 @@ const ROW_H = 22;
 
 // Порог, в пределах которого второй клик считается двойным (и отменяет одиночный)
 const DOUBLE_CLICK_MS = 220;
-
-// Сколько держится подсветка папки: три цикла мигания по 300 мс (см. ListDateDivider)
-const FLASH_MS = 900;
 
 // Тумблер нижней зоны. По умолчанию выключена: панель открывают ради списка, а превью —
 // осознанный режим. Решение пользователя, поэтому переживает перезагрузку
@@ -96,7 +93,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
     folderRefs.current.get(folder)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     setFlashFolder(folder);
     if (flashTimer.current) window.clearTimeout(flashTimer.current);
-    flashTimer.current = window.setTimeout(() => setFlashFolder(null), FLASH_MS);
+    flashTimer.current = window.setTimeout(() => setFlashFolder(null), LIST_FLASH_MS);
     setFoldersOpen(false);
   };
   // Якорь, к которому нужно проскроллить после перехода по ссылке или из поиска.
@@ -364,6 +361,9 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
                 {groups.map(([folder, docs]) => (
                   <div
                     key={folder}
+                    // Мигает вся секция целиком — подпись и её документы, чтобы после
+                    // прыжка было видно границы группы, а не только её заголовок
+                    className={flashFolder === folder ? LIST_FLASH_CLASS : undefined}
                     ref={el => {
                       if (el) folderRefs.current.set(folder, el);
                       else folderRefs.current.delete(folder);

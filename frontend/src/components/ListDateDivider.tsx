@@ -1,15 +1,18 @@
 import { C } from '../lib/design';
 
-// Мигание разделителя (переход к группе из списка): три коротких цикла по прозрачности —
-// без подложки, чтобы не спорить с выделением строки. Инжектим один раз, как focus-ring
-// у IconButton.
-const FLASH_CLASS = 'cc-divider-flash';
-if (typeof document !== 'undefined' && !document.getElementById('cc-divider-flash-style')) {
+// Мигание при переходе к группе списка: одно короткое затухание по прозрачности — без
+// подложки, чтобы не спорить с выделением строки. Класс экспортируется: вешать его можно и
+// на всю секцию целиком (разделитель + её строки), а не только на подпись.
+// Инжектим один раз, как focus-ring у IconButton.
+export const LIST_FLASH_CLASS = 'cc-list-flash';
+export const LIST_FLASH_MS = 320;   // один цикл 300 мс + запас на снятие класса
+
+if (typeof document !== 'undefined' && !document.getElementById('cc-list-flash-style')) {
   const el = document.createElement('style');
-  el.id = 'cc-divider-flash-style';
+  el.id = 'cc-list-flash-style';
   el.textContent =
-    `@keyframes ccDividerFlash{0%,100%{opacity:1}50%{opacity:.2}}` +
-    `.${FLASH_CLASS}{animation:ccDividerFlash .3s ease-in-out 3}`;
+    `@keyframes ccListFlash{0%,100%{opacity:1}50%{opacity:.2}}` +
+    `.${LIST_FLASH_CLASS}{animation:ccListFlash .3s ease-in-out 1}`;
   document.head.appendChild(el);
 }
 
@@ -33,7 +36,6 @@ export function ListDateDivider({ title, align = 'center', dense = false, flash 
   const stub = { width: 10, height: 1, background: lineColor, flexShrink: 0 };
   return (
     <div
-      className={flash ? FLASH_CLASS : undefined}
       style={{
         display: 'flex', alignItems: 'center', gap: 8,
         padding: dense ? '5px 4px 3px' : '10px 4px 7px',

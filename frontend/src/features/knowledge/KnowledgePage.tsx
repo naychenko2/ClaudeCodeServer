@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import { Menu as MenuIcon } from 'lucide-react';
 import type { AuthState, KnowledgeBaseSummary } from '../../types';
 import type { HubTabValue } from '../../components/HubTabs';
 import { HubHeader } from '../../components/HubHeader';
@@ -7,11 +6,12 @@ import { C, FONT, ISLAND, R } from '../../lib/design';
 import { useKnowledge, useKnowledgeConfigured, ensureKnowledgeLoaded, bumpKnowledge } from '../../lib/knowledge';
 import { api } from '../../lib/api';
 import { parseHash, navPush, navReplace, getNav, type NavSnapshot } from '../../lib/nav';
-import { IslandScaffold, IconButton, ConfirmDialog } from '../../components/ui';
+import { IslandScaffold, ConfirmDialog } from '../../components/ui';
 import { CanvasBackdrop } from '../../components/ui/CanvasBackdrop';
-import { ICON_SIZE } from '../../components/ui/icons';
-import { useSidebarDrag } from '../../lib/sidebarWidth';
 import { useIsMobile } from '../../lib/breakpoints';
+import { PanelZone } from '../../pages/workspace/PanelZone';
+import { knowledgePanels } from '../../pages/workspace/panelStackState';
+import { KNOWLEDGE_KEYS } from '../../pages/workspace/panelCatalog';
 import { KnowledgeList, KnowledgeEmptyState } from './KnowledgeList';
 import { KnowledgeView } from './KnowledgeView';
 import { NewKnowledgeBaseDialog } from './NewKnowledgeBaseDialog';
@@ -33,13 +33,8 @@ export function KnowledgePage({ auth, onLogout, onHubTab }: {
   const [addDocFor, setAddDocFor] = useState<KnowledgeBaseSummary | null>(null);
   const [deleteKb, setDeleteKb] = useState<KnowledgeBaseSummary | null>(null);
 
-  const { width: listWidth, dragging: listDragging, startDrag: startListDrag } = useSidebarDrag();
-
-  // Режим сайдбара: pinned (в потоке) | collapsed (свёрнут). Сворачивание — кнопкой
-  // на сплиттере, разворот — гамбургером обратно в поток.
-  const [sidebarMode, setSidebarMode] = useState<'pinned' | 'collapsed'>(() =>
-    localStorage.getItem('cc_knowledge_sidebar_mode') === 'collapsed' ? 'collapsed' : 'pinned');
-  useEffect(() => { localStorage.setItem('cc_knowledge_sidebar_mode', sidebarMode); }, [sidebarMode]);
+  // Раздел живёт на рельсе панелей: ширина, сворачивание и раскладка — в состоянии
+  // зон (прежние sidebarMode и общая на все разделы ширина больше не нужны)
 
   useEffect(() => { void ensureKnowledgeLoaded(); }, []);
 
@@ -143,6 +138,16 @@ export function KnowledgePage({ auth, onLogout, onHubTab }: {
     </>
   );
 
+  // Панель рельсы «Базы» — тот же контент, что и в мобильном сайдбаре; заголовок
+  // рисует PanelShell
+  const zonePanels = {
+    knowledgeList: (
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: C.bgWhite }}>
+        {sidebar}
+      </div>
+    ),
+  };
+
   const centerPane = selected
     ? <KnowledgeView key={selected.id} kb={selected} isMobile={isMobile}
         onBack={clearKb} onAddDocument={onAddDocument} onDelete={setDeleteKb} />
@@ -163,31 +168,15 @@ export function KnowledgePage({ auth, onLogout, onHubTab }: {
       ? <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: C.bgPanel }}>{sidebar}</div>
       : <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>{centerPane}</div>
   ) : (
-    // Десктоп: остров-сайдбар + ресайз-зазор | центр на холсте (как в «Заметках»:
+    // Десктоп: рельса панелей по краям | центр на холсте (как в «Заметках»:
     // контент лежит полупрозрачным листом прямо на дудл-фоне страницы)
     <IslandScaffold
-      sidebarOpen={sidebarMode === 'pinned'}
-      sidebar={sidebar}
-      sidebarWidth={listWidth}
-      sidebarDragging={listDragging}
-      onSidebarDrag={startListDrag}
-      onSidebarCollapse={() => setSidebarMode('collapsed')}
+      left={<PanelZone side="left" panelStack={knowledgePanels} allowedKeys={KNOWLEDGE_KEYS} panels={zonePanels} />}
+      right={<PanelZone side="right" panelStack={knowledgePanels} allowedKeys={KNOWLEDGE_KEYS} panels={zonePanels} />}
       centerBare
       center={
-        <>
-          {sidebarMode === 'collapsed' && (
-            <div style={{
-              flex: 'none', display: 'flex', alignItems: 'center', padding: '0 8px', height: 48,
-              borderBottom: `1px solid ${C.divider}`,
-            }}>
-              <IconButton onClick={() => setSidebarMode('pinned')} title="Открыть панель" size="md" variant="soft">
-                <MenuIcon size={ICON_SIZE.sm} strokeWidth={2} />
-              </IconButton>
-            </div>
-          )}
-          {/* Лист в тон ответу Claude в чате — фон страницы просвечивает, но не мешает */}
-          <div style={{ flex: 1, minWidth: 0, minHeight: 0, background: C.msgBg, borderRadius: ISLAND.radius, overflow: 'hidden' }}>{centerPane}</div>
-        </>
+        // Лист в тон ответу Claude в чате — фон страницы просвечивает, но не мешает
+        <div style={{ flex: 1, minWidth: 0, minHeight: 0, background: C.msgBg, borderRadius: ISLAND.radius, overflow: 'hidden' }}>{centerPane}</div>
       }
     />
   );

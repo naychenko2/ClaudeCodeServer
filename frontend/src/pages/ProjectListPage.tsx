@@ -1,13 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowDownAZ, Clock, List, Menu as MenuIcon, Plus, Search } from 'lucide-react';
+import { ArrowDownAZ, Clock, List, Plus, Search } from 'lucide-react';
 import type { Project, ProjectGroup, Session, AuthState } from '../types';
 import { api } from '../lib/api';
 import { useOnline } from '../hooks/useOnline';
 import { OfflineError } from '../lib/offline';
 import { C, R, FONT, CHAT_MAX_W } from '../lib/design';
-import { useSidebarDrag } from '../lib/sidebarWidth';
 import { MOBILE_MAX } from '../lib/breakpoints';
-import { Button, IconButton, IslandScaffold } from '../components/ui';
+import { PanelZone } from './workspace/PanelZone';
+import { projectsPanels } from './workspace/panelStackState';
+import { PROJECTS_KEYS } from './workspace/panelCatalog';
+import { Button, IslandScaffold } from '../components/ui';
 import { CanvasBackdrop } from '../components/ui/CanvasBackdrop';
 import { ICON_SIZE } from '../components/ui/icons';
 import { PillSwitch } from '../components/Toolbar';
@@ -88,12 +90,8 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
   const [loadState, setLoadState] = useState<'loading' | 'ok' | 'offline' | 'error'>('loading');
   const [retryKey, setRetryKey] = useState(0);
 
-  // Сайдбар: общая ширина + режим (закреплён / свёрнут), как в чатах и воркспейсе.
-  // Сворачивание — кнопкой на сплиттере, разворот — гамбургером обратно в поток.
-  const { width: sidebarWidth, dragging: draggingSplitter, startDrag: handleSidebarSplitterMouseDown } = useSidebarDrag();
-  const [sidebarMode, setSidebarMode] = useState<'pinned' | 'collapsed'>(() =>
-    localStorage.getItem('cc_projects_sidebar_mode') === 'collapsed' ? 'collapsed' : 'pinned');
-  useEffect(() => { localStorage.setItem('cc_projects_sidebar_mode', sidebarMode); }, [sidebarMode]);
+  // Раздел живёт на рельсе панелей: ширина, сворачивание и раскладка — в состоянии
+  // зон (прежние sidebarMode и общая на все разделы ширина больше не нужны)
 
   // Кнопка «Новый проект» в палитре проектов: переход сюда с флагом в sessionStorage —
   // открываем диалог создания сразу после монтирования
@@ -239,6 +237,22 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
     </div>
   );
 
+  // Панель рельсы «Группы» — прежний сайдбар разделов; заголовок рисует PanelShell
+  const zonePanels = {
+    projectGroups: (
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: C.bgWhite }}>
+        <ProjectSidebar
+          view={view}
+          onSelect={setView}
+          total={filtered.length}
+          groups={byGroup.map(({ group, items }) => ({ group, count: items.length }))}
+          sleepingCount={ungrouped.length}
+          onManageGroups={() => setActiveDialog({ type: 'groups' })}
+        />
+      </div>
+    ),
+  };
+
   // ===== Десктоп/планшет: две панели =====
   if (wide) {
     return (
@@ -248,32 +262,14 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
         <HubHeader value="projects" onTab={onHubTab} auth={auth!} onLogout={onLogout} />
         <div style={{ flex: 1, minHeight: 0 }}>
           <IslandScaffold
-            sidebarOpen={sidebarMode === 'pinned'}
-            sidebar={
-              <ProjectSidebar
-                view={view}
-                onSelect={setView}
-                total={filtered.length}
-                groups={byGroup.map(({ group, items }) => ({ group, count: items.length }))}
-                sleepingCount={ungrouped.length}
-                onManageGroups={() => setActiveDialog({ type: 'groups' })}
-              />
-            }
-            sidebarWidth={sidebarWidth}
-            sidebarDragging={draggingSplitter}
-            onSidebarDrag={handleSidebarSplitterMouseDown}
-            onSidebarCollapse={() => setSidebarMode('collapsed')}
+            left={<PanelZone side="left" panelStack={projectsPanels} allowedKeys={PROJECTS_KEYS} panels={zonePanels} />}
+            right={<PanelZone side="right" panelStack={projectsPanels} allowedKeys={PROJECTS_KEYS} panels={zonePanels} />}
             centerBare
             center={
           // Центр без острова, шириной как контент чата (CHAT_MAX_W по центру)
           <main style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', width: '100%', maxWidth: CHAT_MAX_W, margin: '0 auto' }}>
             {/* Шапка панели: заголовок + сортировка + Проект */}
             <div style={{ flexShrink: 0, padding: '20px 26px 14px', display: 'flex', alignItems: 'center', gap: 12 }}>
-              {sidebarMode === 'collapsed' && (
-                <IconButton onClick={() => setSidebarMode('pinned')} title="Показать панель" size="md" variant="soft" style={{ marginLeft: -4 }}>
-                  <MenuIcon size={ICON_SIZE.sm} strokeWidth={2} />
-                </IconButton>
-              )}
               {/* Заголовок раздела — единый стиль с «Календарём» (serif 28 / 500) */}
               <div style={{ flex: 1, minWidth: 0, fontFamily: FONT.serif, fontSize: 28, fontWeight: 500, color: C.textHeading, letterSpacing: '-0.01em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 {title}

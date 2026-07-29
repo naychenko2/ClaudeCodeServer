@@ -1,6 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Menu } from 'lucide-react';
-import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import type { AuthState, Persona, Project, Session } from '../../types';
 import type { HubTabValue } from '../../components/HubTabs';
 import { HubHeader } from '../../components/HubHeader';
@@ -10,10 +8,12 @@ import { api } from '../../lib/api';
 import { usePersonas, ensurePersonasLoaded, bumpPersonas, personaLabel } from '../../lib/personas';
 import { navPush, navReplace, getNav, parseHash, type NavSnapshot } from '../../lib/nav';
 import { showToast } from '../../lib/toast';
-import { ConfirmDialog, IslandScaffold, IconButton } from '../../components/ui';
+import { ConfirmDialog, IslandScaffold } from '../../components/ui';
 import { CanvasBackdrop } from '../../components/ui/CanvasBackdrop';
-import { useSidebarDrag } from '../../lib/sidebarWidth';
 import { useIsMobile } from '../../lib/breakpoints';
+import { PanelZone } from '../../pages/workspace/PanelZone';
+import { personasPanels } from '../../pages/workspace/panelStackState';
+import { PERSONAS_KEYS } from '../../pages/workspace/panelCatalog';
 import { PersonaList, type PersonaListMode } from './PersonaList';
 import { PersonaForm, type PersonaFormHandle, type PersonaFormStatus } from './PersonaForm';
 import { PersonaToolbar, type PersonaView } from './PersonaToolbar';
@@ -32,13 +32,8 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
   onHubTab: (t: HubTabValue) => void;
 }) {
   const isMobile = useIsMobile();
-  // Ширина сайдбара — общая со всеми разделами (cc_sidebar_width) + перетаскиваемый сплиттер
-  const { width: listWidth, dragging: listDragging, startDrag: startListDrag } = useSidebarDrag();
-  // Режим сайдбара: pinned (в потоке) | collapsed (свёрнут). Сворачивание — кнопкой
-  // на сплиттере, разворот — гамбургером обратно в поток.
-  const [sidebarMode, setSidebarMode] = useState<'pinned' | 'collapsed'>(() =>
-    localStorage.getItem('cc_personas_sidebar_mode') === 'collapsed' ? 'collapsed' : 'pinned');
-  useEffect(() => { localStorage.setItem('cc_personas_sidebar_mode', sidebarMode); }, [sidebarMode]);
+  // Раздел живёт на рельсе панелей: ширина, сворачивание и раскладка — в состоянии
+  // зон (прежние sidebarMode и общая на все разделы ширина больше не нужны)
   // Раздел показывает глобальных персон, а по переключателю — вообще всех, вместе с
   // проектными. Дефолт «Глобальные»: у кого много проектных персон, список иначе
   // распухает и глобальные в нём тонут. Выбор запоминается на устройстве.
@@ -200,6 +195,15 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
     </>
   );
 
+  // Панель рельсы «Персоны» — тот же список; заголовок рисует PanelShell
+  const zonePanels = {
+    personasList: (
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: C.bgWhite }}>
+        {sidebar}
+      </div>
+    ),
+  };
+
   const centerPane = creating
     ? <PersonaCreatePane
         projects={projects}
@@ -235,29 +239,13 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
       ? <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>{centerPane}</div>
       : <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: C.bgPanel }}>{sidebar}</div>
   ) : (
-    // Десктоп: остров-сайдбар + ресайз-зазор | центр на холсте (hero-стиль:
-    // студия сама рисует тулбар на холсте + контент-остров; хаб — на холсте)
+    // Десктоп: рельса панелей по краям | центр на холсте (hero-стиль: студия сама
+    // рисует тулбар на холсте + контент-остров; хаб — на холсте)
     <IslandScaffold
-      sidebarOpen={sidebarMode === 'pinned'}
-      sidebar={sidebar}
-      sidebarWidth={listWidth}
-      sidebarDragging={listDragging}
-      onSidebarDrag={startListDrag}
-      onSidebarCollapse={() => setSidebarMode('collapsed')}
+      left={<PanelZone side="left" panelStack={personasPanels} allowedKeys={PERSONAS_KEYS} panels={zonePanels} />}
+      right={<PanelZone side="right" panelStack={personasPanels} allowedKeys={PERSONAS_KEYS} panels={zonePanels} />}
       centerBare
-      center={
-        <>
-          {/* В свёрнутом режиме — тонкая шапка с гамбургером «открыть панель» */}
-          {sidebarMode === 'collapsed' && (
-            <div style={{ flex: 'none', display: 'flex', alignItems: 'center', padding: '0 8px', height: 48, borderBottom: `1px solid ${C.divider}` }}>
-              <IconButton onClick={() => setSidebarMode('pinned')} title="Открыть панель" size="md" variant="soft">
-                <Menu size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
-              </IconButton>
-            </div>
-          )}
-          <div style={{ flex: 1, minWidth: 0, minHeight: 0 }}>{centerPane}</div>
-        </>
-      }
+      center={<div style={{ flex: 1, minWidth: 0, minHeight: 0 }}>{centerPane}</div>}
     />
   );
 

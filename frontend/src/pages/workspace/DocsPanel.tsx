@@ -463,12 +463,16 @@ const sectionHeadStyle = {
   textTransform: 'uppercase' as const, letterSpacing: '0.03em',
 };
 
-// Подпись папки над её документами. С фоном и прилипанием к верху: в плотном списке
-// строчка без подложки сливалась с документами, а при прокрутке терялось, где мы находимся
+// Подпись папки над её документами. Прилипает к верху при прокрутке, чтобы не терялось,
+// в какой папке находишься.
+// Фон — bgMain, а НЕ bgInset: последний почти совпадает с bgSelected выделенной строки
+// (#E7E0D2 против #E8E1D4), и папка читалась как выбранный документ. Теперь подложки
+// разведены по разные стороны от фона панели — в обеих темах: подпись светлее (в тёмной
+// теме темнее) фона, выделение — наоборот.
 const folderHeadStyle = {
   position: 'sticky' as const, top: 0, zIndex: 1,
   padding: `2px ${SP.sm}px`, margin: `${SP.xs}px 0 2px`,
-  background: C.bgInset, borderRadius: R.sm,
+  background: C.bgMain, border: `1px solid ${C.border}`, borderRadius: R.sm,
   fontFamily: FONT.mono, fontSize: FS.xs, color: C.textSecondary,
   overflow: 'hidden' as const, textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const,
 };

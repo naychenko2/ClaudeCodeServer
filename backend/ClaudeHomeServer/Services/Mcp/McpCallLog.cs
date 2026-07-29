@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using ClaudeHomeServer.Telemetry;
 
 namespace ClaudeHomeServer.Services.Mcp;
 
@@ -34,6 +35,15 @@ public sealed class McpCallLog
         var counters = _byTool.GetOrAdd(tool, _ => new ToolCounters());
         Interlocked.Increment(ref counters.Calls);
         Interlocked.Add(ref counters.TotalMs, elapsedMs);
+
+        // OTel-метрики (ccs.mcp.calls / ccs.mcp.errors). Раньше RecordMcp* были
+        // определены в ServerMetrics, но никто их не вызывал — мёртвые счётчики.
+        // Единая точка записи — здесь, рядом с in-memory агрегацией, без дублей.
+        var outcome = statusCode < 400 ? "success" : "error";
+        ServerMetrics.RecordMcpCall(tool, outcome);
+        if (statusCode >= 400)
+            ServerMetrics.RecordMcpError(tool, "http_" + statusCode);
+
         if (statusCode < 400) return;
 
         Interlocked.Increment(ref counters.Failures);

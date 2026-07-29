@@ -389,16 +389,8 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
             <List size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
           </IconButton>
         )}
-        {/* Открытый документ в чат — вложением. Дубль кнопки из шапки превью: до неё
-            нужно доводить взгляд вниз, а действие частое */}
-        <IconButton
-          title={doc ? `«${doc.title}» в чат — вложением` : 'Откройте документ, чтобы отправить его в чат'}
-          disabled={!doc}
-          onClick={() => doc && onAttachToChat(doc.path)}
-          size="sm"
-        >
-          <MessageSquarePlus size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-        </IconButton>
+        {/* «В чат» живёт только в шапке превью — там, где открытый документ виден. Здесь
+            кнопка половину времени стояла отключённой и занимала место в узком ряду */}
         {/* Режим работы панели: со встроенным превью или только список (тогда документ
             открывается сразу в центральной области) */}
         <IconButton

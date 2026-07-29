@@ -8,6 +8,7 @@ export { Island, IslandHeader } from './Island';
 export { IslandSplitter } from './IslandSplitter';
 export { IslandSidebarSplitter } from './IslandSidebarSplitter';
 export { IslandScaffold } from './IslandScaffold';
+export { PanelShell } from './PanelShell';
 export { Menu, MenuItem } from './Menu';
 export { Modal } from './Modal';
 export { ModalActions, useIsMobileModal } from './ModalActions';

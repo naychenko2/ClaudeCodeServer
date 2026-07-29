@@ -8,7 +8,7 @@
 // Панели — «воздушные» скруглённые карточки с зазорами; границы высот тянутся
 // невидимыми хендлами в зазорах, ширина колонок — сплиттером слева от зоны.
 import { useEffect, useState, type ReactNode } from 'react';
-import { ClipboardList, FolderTree, GitCompare, ListTodo, Bot, User, Users, SquareTerminal, MonitorPlay, Network, type LucideIcon } from 'lucide-react';
+import { BookOpen, ClipboardList, FolderTree, GitCompare, ListTodo, Bot, User, Users, SquareTerminal, MonitorPlay, Network, type LucideIcon } from 'lucide-react';
 import type { Session } from '../../types';
 import { C, FONT, ISLAND, SHADOW } from '../../lib/design';
 import { ICON_STROKE } from '../../components/ui/icons';
@@ -37,6 +37,9 @@ const PANEL_META: Record<RightPanelKey, { title: string; Icon: LucideIcon }> = {
   // 'context' — досье персоны-собеседника (память/привязки/recall); отображается «Персона».
   context: { title: 'Персона', Icon: User },
   files: { title: 'Файлы', Icon: FolderTree },
+  // «Доки» рядом с «Файлами»: обе про содержимое репозитория, но Файлы — дерево для
+  // работы с кодом, а Доки — документация как связный корпус (README + docs/**)
+  docs: { title: 'Доки', Icon: BookOpen },
   changes: { title: 'Изменения', Icon: GitCompare },
   tasks: { title: 'Задачи', Icon: ListTodo },
   graph: { title: 'Граф', Icon: Network },
@@ -48,7 +51,7 @@ const PANEL_META: Record<RightPanelKey, { title: string; Icon: LucideIcon }> = {
 // Рельса разбита на две группы, разделённые сепаратором. Сверху — инструменты
 // ПРОЕКТА (файлы, изменения, задачи, команда, терминал, preview), снизу — панели
 // ТЕКУЩЕЙ СЕССИИ (План, Агенты, Персона). Порядок: проектные раньше сессионных.
-const PROJECT_RAIL_KEYS: RightPanelKey[] = ['files', 'changes', 'tasks', 'graph', 'team', 'terminal', 'preview'];
+const PROJECT_RAIL_KEYS: RightPanelKey[] = ['files', 'docs', 'changes', 'tasks', 'graph', 'team', 'terminal', 'preview'];
 const SESSION_RAIL_KEYS: RightPanelKey[] = ['plan', 'agents', 'context'];
 
 const GAP = ISLAND.gap; // зазор между карточками — та самая «воздушность»

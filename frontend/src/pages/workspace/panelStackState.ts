@@ -12,7 +12,7 @@ import { useCallback, useSyncExternalStore } from 'react';
 // (plan/agents/context — План, Агенты, Персона) собирается из артефактов сессии;
 // остальное — инструменты проекта, как в десктопном Claude Code.
 // Ключи agents/context совпадают с meta.tsx ради panelBadge.
-export const RIGHT_PANEL_KEYS = ['plan', 'agents', 'context', 'files', 'changes', 'tasks', 'graph', 'team', 'terminal', 'preview'] as const;
+export const RIGHT_PANEL_KEYS = ['plan', 'agents', 'context', 'files', 'docs', 'changes', 'tasks', 'graph', 'team', 'terminal', 'preview'] as const;
 export type RightPanelKey = typeof RIGHT_PANEL_KEYS[number];
 
 // Ключи ЛЕВОЙ рельсы — сайдбары разделов (ChatsPage sessionOnly, Workspace полный).

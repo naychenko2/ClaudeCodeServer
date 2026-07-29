@@ -1,6 +1,6 @@
 import { useEffect, useState, type CSSProperties, type HTMLAttributes, type ReactNode } from 'react';
 import { Children } from 'react';
-import { X } from 'lucide-react';
+import { X, type LucideIcon } from 'lucide-react';
 import { C, ISLAND, R } from '../../lib/design';
 import { ICON_STROKE } from './icons';
 import { Island, IslandHeader } from './Island';
@@ -58,6 +58,14 @@ interface PanelShellProps {
   bare?: boolean;
   // Показать кнопку закрытия в headerActions (короткий путь для рельсы)
   onClose?: () => void;
+  // Чем закрывать панель: 'button' — отдельный крестик справа в шапке (нужен там,
+  // где нет курсора — тач); 'icon' — иконка панели слева, которая под курсором
+  // сама превращается в крестик, не занимая в шапке лишнего места.
+  closeMode?: 'button' | 'icon';
+  // Своё действие на иконке шапки вместо закрытия: под курсором иконка панели
+  // подменяется этой (напр. булавка «закрепить» у попапа-превью). Сильнее
+  // closeMode — иконка одна, и делать ей два дела нельзя.
+  iconAction?: { Icon: LucideIcon; title: string; onClick: () => void };
   // fill=false — панель не растягивается на всю высоту родителя, занимает
   // по контенту. Применяется в сайдбарах с короткими списками (Чаты с малым
   // количеством). По умолчанию true — растягивается (нужно для рельсы и
@@ -76,6 +84,10 @@ interface PanelShellProps {
   // Направление анимации появления: 'up' (дефолт — снизу вверх, для правой рельсы)
   // или 'left' (справа налево, для левой рельсы). Влияет на transform при mount.
   slideDirection?: 'up' | 'left';
+  // false — панель появляется без анимации. Нужно там, где она не «прилетает», а
+  // остаётся на месте: закреплённый попап-превью уже стоит перед глазами, и
+  // проигрывать ему въезд — значит дёрнуть картинку на ровном месте.
+  animate?: boolean;
 }
 
 export function PanelShell({
@@ -96,10 +108,13 @@ export function PanelShell({
   headerProps,
   bare = false,
   onClose,
+  closeMode = 'button',
+  iconAction,
   fill = true,
   hideIfEmpty = false,
   style,
   slideDirection = 'up',
+  animate = true,
 }: PanelShellProps) {
   // Плавное появление карточки при открытии/переносе: fade + подъём.
   // Тот же эффект что в исходном PanelShell RightPanelStack.
@@ -114,6 +129,9 @@ export function PanelShell({
     return () => cancelAnimationFrame(id);
   }, []);
 
+  // Курсор на шапке — иконка панели предлагает закрыть её (closeMode: 'icon')
+  const [headerHover, setHeaderHover] = useState(false);
+
   // hideIfEmpty: Children.toArray уже отбрасывает null/undefined/false/true/""
   // (React делает это автоматически). Если после фильтрации пусто — не рендерим.
   const realChildren = Children.toArray(children);
@@ -127,9 +145,18 @@ export function PanelShell({
     return <>{children}</>;
   }
 
+  // Действие на иконке: пока курсор на шапке, иконка панели слева подменяется
+  // кнопкой и кликается. Так шапка не тратит место на отдельный контрол — ровно
+  // как иконка той же панели в рельсе. По умолчанию это закрытие, но попап-превью
+  // подставляет сюда булавку «закрепить».
+  const act = iconAction ?? (closeMode === 'icon' && onClose
+    ? { Icon: X, title: 'Скрыть панель', onClick: onClose }
+    : null);
+  const closeByIcon = !!act;
+
   // Кнопка закрытия — короткий путь: caller может передать свой headerActions
   // целиком, тогда onClose игнорируется
-  const actions = headerActions ?? (onClose ? (
+  const actions = headerActions ?? (onClose && !closeByIcon ? (
     <button
       onClick={onClose}
       title="Скрыть панель"
@@ -144,6 +171,23 @@ export function PanelShell({
     </button>
   ) : undefined);
 
+  const headerIcon = act && headerHover ? (
+    <button
+      onClick={act.onClick}
+      // draggable=false — иначе нажатие на иконку начнёт тащить карточку за шапку
+      draggable={false}
+      onDragStart={e => e.preventDefault()}
+      title={act.title}
+      style={{
+        width: 15, height: 15, padding: 0, border: 'none', background: 'transparent',
+        cursor: 'pointer', flexShrink: 0, display: 'flex', alignItems: 'center',
+        justifyContent: 'center', color: C.accent,
+      }}
+    >
+      <act.Icon size={15} strokeWidth={ICON_STROKE} />
+    </button>
+  ) : icon;
+
   return (
     <Island
       bg={ISLAND.bg}
@@ -156,13 +200,15 @@ export function PanelShell({
         // родителя — тогда срабатывает внутренний скролл контента.
         flex: fill ? 1 : '0 1 auto',
         maxHeight: fill ? undefined : '100%',
-        opacity: dragged ? 0.5 : mounted ? 1 : 0,
-        transform: mounted
+        opacity: dragged ? 0.5 : (mounted || !animate) ? 1 : 0,
+        transform: (mounted || !animate)
           ? 'translateY(0) scale(1)'
           : slideDirection === 'left'
             ? 'translateX(-5px) scale(0.99)'
             : 'translateY(5px) scale(0.99)',
-        transition: 'border-color 0.1s, box-shadow 0.1s, opacity 0.12s ease-out, transform 0.12s ease-out',
+        transition: animate
+          ? 'border-color 0.1s, box-shadow 0.1s, opacity 0.12s ease-out, transform 0.12s ease-out'
+          : 'border-color 0.1s, box-shadow 0.1s',
         ...style,
       }}
       rootProps={{
@@ -171,7 +217,7 @@ export function PanelShell({
       }}
     >
       <IslandHeader
-        icon={icon}
+        icon={headerIcon}
         title={title}
         badge={badge}
         actions={actions}
@@ -180,6 +226,10 @@ export function PanelShell({
           draggable,
           title: draggable ? 'Перетащите, чтобы поменять панели местами' : headerProps?.title,
           style: { ...headerProps?.style, cursor: draggable ? 'grab' : 'default' },
+          ...(closeByIcon ? {
+            onMouseEnter: () => setHeaderHover(true),
+            onMouseLeave: () => setHeaderHover(false),
+          } : null),
         }}
       >
         {/* Контролы шапки (переключатель видов и т.п.): draggable=false, чтобы

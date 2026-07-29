@@ -16,7 +16,8 @@
 //
 // Панели — «воздушные» скруглённые карточки с зазорами; границы высот тянутся
 // невидимыми хендлами в зазорах, ширина колонок — сплиттером со стороны центра.
-import { Fragment, useEffect, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useState, type DragEvent, type ReactNode } from 'react';
+import { Pin } from 'lucide-react';
 import { C, ISLAND, SHADOW, PANEL_ANIM } from '../../lib/design';
 import { ICON_STROKE } from '../../components/ui/icons';
 import { PanelShell } from '../../components/ui/PanelShell';
@@ -30,6 +31,7 @@ import {
 } from './panelCatalog';
 import { wsPanels, homeOf, isZoneCollapsed, zoneOf, type PanelZonesStore } from './panelStackState';
 import { usePanelDnd, usePanelRowResize, usePanelWidthDrag } from './zoneGestures';
+import { usePanelPeek } from './panelPeek';
 import { PanelSlot } from './PanelSlot';
 import type { SessionPanels } from './useSessionPanels';
 
@@ -146,7 +148,12 @@ export function PanelZone({
   // не прячет её. Раньше в этом случае рельса убиралась (панель, мол, сама себя
   // называет), но тогда закрыть панель было нечем, кроме крестика в шапке, и
   // край окна дёргался при каждом открытии.
-  const showRail = !railHidden;
+  //
+  // Пустая зона — исключение: она появляется на экране только чтобы принять
+  // перетаскиваемую панель, и рельса в ней состояла бы из одних служебных кнопок
+  // («режим» и «свернуть все») — управлять ими там нечем.
+  const zoneEmpty = availableKeys.length === 0 && openKeys.length === 0;
+  const showRail = !railHidden && !zoneEmpty;
   // Управлять раскладкой при единственной доступной панели нечем: тумблер режима
   // и «свернуть все» в этом случае не рисуем.
   const singlePanelMode = availableKeys.length === 1 && !compact;
@@ -185,7 +192,7 @@ export function PanelZone({
   // ширину в глобальную переменную (её читает AiLauncher). Слагаемые считаются ПО
   // РАЗМЕТКЕ: рельса + зазор до панелей + сама зона + её ресайз-сплиттер.
   // Drawer компактного режима не считаем — он overlay и живёт поверх контента сам.
-  const zoneEdgeW = railHidden ? 0 : RAIL_W + RAIL_GAP + (compact
+  const zoneEdgeW = !showRail ? 0 : RAIL_W + RAIL_GAP + (compact
     ? (tabletKeys.length > 0 && tabletInline ? width + GAP * 2 : 0)
     : (columns.length > 0 ? zoneW + RAIL_GAP : 0));
   useEffect(() => {
@@ -215,10 +222,24 @@ export function PanelZone({
     return () => clearTimeout(id);
   }, [flash]);
 
-  // Панель тащат из соседней зоны — эта обязана показаться, даже когда пуста:
-  // иначе, утащив отсюда последнюю панель, вернуть её перетаскиванием было бы
-  // некуда (осталась бы только дорога через закрытие панели).
-  const acceptsForeign = dnd.accepting && dnd.fromZone !== side && !compact;
+  // Превью панели под курсором (механика с паузой на уход — panelPeek).
+  // Панель закрепили кликом или потащили — попап уступает место: считаем это
+  // прямо на рендере, а не эффектом со сбросом состояния (лишний кадр с попапом
+  // поверх уже открытой панели виден глазом).
+  const peeked = usePanelPeek();
+  // Панель, которую только что закрепили из попапа: она уже стоит перед глазами на
+  // этом самом месте, поэтому появляется без анимации — иначе картинка дёргается,
+  // будто панель прилетела из рельсы. Сбрасывается при обычном открытии кликом.
+  const [pinned, setPinned] = useState<PanelKey | null>(null);
+  const peek = peeked.key && !openKeys.includes(peeked.key) && !dnd.active ? peeked.key : null;
+
+  // Тащат ЗАКРЫТУЮ панель (её вытянули за иконку из рельсы) — дроп её откроет
+  const dragClosed = dnd.from !== null && zoneOf(zones, dnd.from) === null;
+
+  // Панель тащат из соседней зоны или из рельсы — эта обязана показаться, даже
+  // когда пуста: иначе, утащив отсюда последнюю панель, вернуть её было бы
+  // некуда (осталась бы только дорога через клик по иконке).
+  const acceptsForeign = dnd.accepting && !compact && (dnd.fromZone !== side || dragClosed);
 
   // Ранний return — ПОСЛЕ всех хуков (useSyncExternalStore, useEffect выше).
   // Ни одной доступной панели и ничего не открыто — зоны на экране нет вовсе,
@@ -295,8 +316,29 @@ export function PanelZone({
     Icon: PANEL_META[k].Icon,
     active: openKeys.includes(k),
     badge: sessionPanels?.railBadge(k) ?? railCounts?.[k] ?? null,
+    // Иконку можно не только нажать, но и утащить в раскладку: клик открывает
+    // панель туда, куда решит зона, а перетаскивание — ровно на выбранное место.
+    // В компактном режиме раскладки нет, там только клик.
+    //
+    // Начало перетаскивания снимает превью: браузер не шлёт mouseleave при
+    // dragstart, поэтому назначенный по наведению попап доживал до конца
+    // перетаскивания и выскакивал уже ПОСЛЕ дропа, в покинутой рельсе.
+    dragProps: compact ? undefined : (() => {
+      const src = dnd.dragSourceProps(k);
+      return { ...src, onDragStart: (e: DragEvent<HTMLElement>) => { peeked.clear(); src.onDragStart?.(e); } };
+    })(),
+    // Превью по наведению — только у закрытых панелей и только на десктопе:
+    // открытая и так на экране, а на тач-экране наведения не бывает
+    ...(compact || openKeys.includes(k) ? null : {
+      onPeekStart: () => peeked.show(k),
+      onPeekEnd: () => peeked.hide(),
+    }),
     onClick: () => {
       const isOpen = openKeys.includes(k);
+      // Клик прерывает наведение: назначенный попап уже не нужен, а показанный
+      // сменится настоящей панелью. Открытие кликом — обычное, с анимацией.
+      peeked.clear();
+      setPinned(null);
       if (compact) {
         // До двух панелей: третья вытесняет самую старую (FIFO)
         setTabletPanels(cur => cur.includes(k) ? cur.filter(x => x !== k) : [...cur, k].slice(-2));
@@ -317,13 +359,16 @@ export function PanelZone({
         title={title}
         badge={sessionPanels?.headerBadge(k) ?? null}
         headerExtras={panelHeaderExtras?.[k]}
-        // Крестик в шапке остаётся только в компактном режиме: там панель —
-        // drawer поверх контента, а hover, которым десктоп подменяет иконку
-        // рельсы крестиком, на тач-экране не существует.
-        onClose={compact ? () => setTabletPanels(cur => cur.filter(x => x !== k)) : undefined}
+        // Закрытие из шапки: на десктопе иконка панели под курсором сама
+        // становится крестиком, в компактном режиме (тач, hover'а нет) остаётся
+        // отдельная кнопка справа. Закрываем В СВОЮ ЗОНУ — кнопка панели остаётся
+        // там, где её только что закрыли.
+        onClose={compact ? () => setTabletPanels(cur => cur.filter(x => x !== k)) : () => closeTo(side, k)}
+        closeMode={compact ? 'button' : 'icon'}
         fill={multiInCol}
         flash={flash?.key === k}
         slideDirection={isLeft ? 'left' : 'up'}
+        animate={pinned !== k}
         {...dnd.panelProps(k)}
       >
         {content(k)}
@@ -341,10 +386,47 @@ export function PanelZone({
     );
   };
 
+  // Карточка попапа-превью: та же панель, что открылась бы кликом, но временная.
+  // Отличается тенью модалки и акцентной рамкой, а вместо крестика в шапке —
+  // булавка: закрепить в раскладке. Ширина — как у колонки зоны.
+  //
+  // Во всю высоту тянемся, только когда в зоне УЖЕ есть открытые панели: попап
+  // должен накрыть их целиком, иначе из-под него торчали бы куски чужой раскладки.
+  // Над пустым холстом растягивать нечего — там высота по содержимому.
+  const peekFull = openKeys.length > 0;
+  const peekCard = peek && (
+    <PanelShell
+      icon={(() => { const { Icon } = PANEL_META[peek]; return <Icon size={15} strokeWidth={ICON_STROKE} color={C.textSecondary} style={{ flexShrink: 0 }} />; })()}
+      title={PANEL_META[peek].title}
+      badge={sessionPanels?.headerBadge(peek) ?? null}
+      // Закрепить — той же механикой, что закрытие у обычных панелей: иконка в
+      // шапке под курсором становится булавкой. Отдельная кнопка справа была бы
+      // единственной в продукте, кто так делает.
+      iconAction={{
+        Icon: Pin,
+        title: 'Закрепить панель',
+        onClick: () => { peeked.clear(); setPinned(peek); toggle(side, peek); onPanelOpen?.(peek); },
+      }}
+      fill={peekFull}
+      // Тень выпадающего, а не модальная: у модальной разлёт 60px при сдвиге 24,
+      // то есть вверх она бьёт на 36px — упиралась в шапку продукта и обрезалась
+      // ровной полосой. По смыслу попап и есть выпадающий слой.
+      style={{ width, borderColor: C.accent, boxShadow: SHADOW.dropdown }}
+    >
+      {content(peek)}
+    </PanelShell>
+  );
+
   const rail = (
     <PanelRail
       side={side}
       visible={showRail}
+      peek={peekCard ? {
+        node: peekCard,
+        full: peekFull,
+        onMouseEnter: () => peeked.hold(),
+        onMouseLeave: () => peeked.hide(),
+      } : undefined}
       // Две группы: инструменты ПРОЕКТА и панели ТЕКУЩЕЙ СЕССИИ. Разделитель между
       // ними PanelRail рисует сам и убирает вместе с пустой группой.
       groups={[railGroup(PROJECT_KEYS), railGroup(SESSION_KEYS)]}
@@ -362,10 +444,13 @@ export function PanelZone({
         disabled: openKeys.length === 0 && !isZoneCollapsed(zoneState),
         onToggle: () => toggleCollapsed(side),
       }}
-      // Дроп на рельсу убирает панель с экрана, оставляя её кнопку ЗДЕСЬ — в том
-      // числе когда панель тащат из соседней зоны: так «уберу и положу поближе»
-      // делается одним движением, без промежуточного переноса.
-      drop={{ active: dnd.accepting, ...dnd.guideProps('rail', from => closeTo(side, from)) }}
+      // Дроп на рельсу убирает панель с экрана, оставляя её кнопку здесь. Мишень
+      // предлагает только СВОЯ рельса и только для открытой панели: у закрытой
+      // скрывать нечего, а противоположная сторона во время перетаскивания занята
+      // приёмом — «убрать» там значило бы два разных исхода на одном пути курсора.
+      drop={dnd.accepting && !dragClosed && dnd.fromZone === side
+        ? { active: true, ...dnd.guideProps('rail', from => closeTo(side, from)) }
+        : undefined}
     />
   );
 
@@ -412,10 +497,13 @@ export function PanelZone({
                 {renderPanel(k, col.keys.length > 1)}
               </Fragment>
             ))}
-            {/* Последняя направляющая забирает весь свободный низ колонки: панели
-                с высотой по контенту не достают до края, и целиться в полоску у их
-                кромки, когда ниже пустует полколонки, — мучение */}
-            {rowGuide(col, vi, col.keys.length, 0, 'end', true)}
+            {/* Последняя направляющая забирает свободный низ колонки — но ТОЛЬКО
+                когда он там есть. Свободное место бывает у одиночной панели: её
+                высота по контенту, и целиться в полоску у кромки, когда ниже
+                пустует полколонки, — мучение. Панели в общей колонке делят высоту
+                между собой, растягиваясь до края, и растяжимая направляющая
+                отбирала бы у них долю: колонка переставала доходить до низа. */}
+            {rowGuide(col, vi, col.keys.length, 0, 'end', col.keys.length === 1)}
           </div>
         </Fragment>
       ))}

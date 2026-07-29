@@ -1334,8 +1334,11 @@ const windowWidth = useWindowWidth();
       {/* Единый верхний хаб-хедер на всю ширину (симметрия с разделом «Чаты») */}
       <HubHeader value="projects" onTab={onSwitchHub} auth={auth} onLogout={onLogout} />
 
-      {/* Тело: сайдбар + контент. position:relative — чтобы drawer/overlay легли под хедер */}
-      <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden', position: 'relative' }}>
+      {/* Тело: сайдбар + контент. position:relative — чтобы drawer/overlay легли под хедер.
+          overflow — clip с запасом, а не hidden: тени островов и попапа-превью панели
+          выходят за верхнюю кромку тела, и hidden срезал их ровной полосой под шапкой.
+          Запас берёт только тени: сам контент по-прежнему обрезается по границе. */}
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'clip', overflowClipMargin: 16, position: 'relative' }}>
 
       {/* Тело десктопа и планшета: рельсы панелей по краям, центр между ними */}
         <DesktopWorkspace

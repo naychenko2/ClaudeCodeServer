@@ -71,7 +71,15 @@ export function PanelDropGuide({ axis, dndActive, over, base = 0, edge, fill, ic
   return (
     <div style={vertical
       ? { width: base, flexShrink: 0, alignSelf: 'stretch', position: 'relative' }
-      : { height: base, flexShrink: 0, position: 'relative', ...(fill ? { flex: 1, minHeight: base } : null) }}
+      : {
+          height: base, flexShrink: 0, position: 'relative',
+          // Растяжимое место вставки: забирает свободный низ колонки. Когда его
+          // нет (панель заняла всю высоту), на время перетаскивания держим хотя бы
+          // полосу в высоту обычной дроп-зоны — иначе поставить вторую панель под
+          // первую было бы просто некуда. В покое minHeight нулевой, колонка не
+          // «дышит».
+          ...(fill ? { flex: 1, minHeight: dndActive ? SEP_HIT : base } : null),
+        }}
     >
       {dndActive && fill && !vertical ? (
         // Свободный низ колонки целиком: и мишень дропа, и рамка будущего места.

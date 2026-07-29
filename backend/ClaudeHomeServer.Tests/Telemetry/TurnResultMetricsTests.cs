@@ -123,6 +123,36 @@ public class TurnResultMetricsTests
         TurnTelemetry.IsTurnFailure(subtype, isErrorFlag).Should().Be(expected);
     }
 
+    /// <summary>
+    /// Разрез «песочница или хост». Заведён после того, как выяснилось, что среда исполнения
+    /// выбирается по владельцу процесса, а значит В ОДНОМ инстансе ходы идут и там, и там:
+    /// без этого тега на вопрос «в контейнере медленнее?» ответить было нечем.
+    /// </summary>
+    [Theory]
+    [InlineData(true, "docker")]
+    [InlineData(false, "local")]
+    public void Execution_MarksSandboxOnDurationAndErrors(bool isSandboxed, string expected)
+    {
+        var provider = NewProvider();
+        var samples = Capture(provider, () =>
+            TurnTelemetry.RecordTurnResult(1000, provider, "glm-5.2", isError: true,
+                apiErrorStatus: "429", isSandboxed: isSandboxed));
+
+        // Тег нужен на ОБЕИХ метриках: длительность отвечает «медленнее ли»,
+        // счётчик ошибок — «чаще ли отваливается»
+        samples.Single(s => s.Instrument == "ccs.llm.duration").Tags["execution"].Should().Be(expected);
+        samples.Single(s => s.Instrument == "ccs.llm.errors").Tags["execution"].Should().Be(expected);
+    }
+
+    [Fact]
+    public void ExecutionKind_SharesVocabularyWithProcessSpan()
+    {
+        // Спан process.start пишет тот же словарь в тег kind — если они разъедутся,
+        // трейс и метрику нельзя будет сопоставить при разборе «песочница тормозит»
+        TurnTelemetry.ExecutionKind(true).Should().Be("docker");
+        TurnTelemetry.ExecutionKind(false).Should().Be("local");
+    }
+
     [Fact]
     public void AllRecordedTags_AreInAllowlist()
     {

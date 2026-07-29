@@ -139,7 +139,17 @@ truth для billing/accounting — метрики токенов и стоим�
 high-cardinality тег (например, `user_id` или `file_path`) невозможно: компилятор и тесты
 не дадут.
 
-**Allowlist тегов:** `{provider, model, direction, tool_name, outcome, error_type, reason}`.
+**Allowlist тегов:** `{provider, model, execution, tool_name, outcome, error_type, reason}`.
+
+**`execution` — песочница или хост.** Значений ровно два (`local`/`docker`), берутся из кода
+(`TurnTelemetry.ExecutionKind` по `IProcessLauncher.IsSandboxed`), ограничитель значений им не
+нужен. Тот же словарь пишется в тег `kind` спана `process.start` — намеренно один, иначе трейс
+и метрику не сопоставить при разборе «песочница тормозит».
+
+Ось не инстансная, а **ходовая**: среду выбирает `ILauncherFactory.ForOwner` по полю
+`User.ExecutionEnvironment` ВЛАДЕЛЬЦА процесса, поэтому один и тот же инстанс порождает и
+хостовые, и песочные ходы. При нескольких пользователях разрез читается как «чьи ходы», а не
+«контейнер медленный» — это оговорено в описании панелей.
 
 **Имена тегов ≠ значения.** Allowlist закрывает только имена: он не даёт завести
 `user_id`, но ничего не говорит о том, сколько разных значений приедет в разрешённый тег.

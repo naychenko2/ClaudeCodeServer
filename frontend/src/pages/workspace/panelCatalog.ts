@@ -15,18 +15,23 @@
 // это разные типы: там, где импортируются оба, брать один из них под алиасом.
 import {
   ClipboardList, FolderTree, GitCompare, ListTodo, Bot, User, Users,
-  SquareTerminal, MonitorPlay, Network, MessageCircle, type LucideIcon,
+  SquareTerminal, MonitorPlay, Network, MessageCircle, NotebookPen, Library,
+  type LucideIcon,
 } from 'lucide-react';
 
 // Сторона экрана. Зон ровно две, и обе равноправны: любая панель может лежать
 // в любой из них.
 export type Zone = 'left' | 'right';
 
-// Все панели воркспейса. Порядок = порядок иконок в рельсе сверху вниз (внутри
-// своей группы, см. SESSION_KEYS).
+// Все панели продукта. Порядок = порядок иконок в рельсе сверху вниз (внутри
+// своей группы, см. SESSION_KEYS). Какие из них доступны на конкретном экране,
+// решает сам экран (проп allowedKeys у PanelZone): в воркспейсе — инструменты
+// проекта и сессии, в разделах хаба — их собственные панели.
 export const PANEL_KEYS = [
   'chats', 'files', 'changes', 'tasks', 'graph', 'team', 'terminal', 'preview',
   'plan', 'agents', 'context',
+  // Панели разделов хаба
+  'notesList', 'notesGraph', 'knowledgeList', 'personasList', 'projectGroups',
 ] as const;
 export type PanelKey = typeof PANEL_KEYS[number];
 
@@ -44,6 +49,16 @@ export const PANEL_META: Record<PanelKey, { title: string; Icon: LucideIcon }> =
   agents:   { title: 'Агенты',    Icon: Bot },
   // 'context' — досье персоны-собеседника (память/привязки/recall)
   context:  { title: 'Персона',   Icon: User },
+
+  // Разделы хаба. Ключи намеренно длиннее воркспейсных: рядом живут похожие по
+  // смыслу панели проекта, и путать их нельзя. personasList — все персоны
+  // пользователя (раздел «Персоны»), тогда как team — персоны конкретного
+  // проекта; notesGraph — граф ЗАМЕТОК, а graph — граф зависимостей кода.
+  notesList:     { title: 'Заметки',  Icon: NotebookPen },
+  notesGraph:    { title: 'Граф',     Icon: Network },
+  knowledgeList: { title: 'Базы',     Icon: Library },
+  personasList:  { title: 'Персоны',  Icon: Users },
+  projectGroups: { title: 'Группы',   Icon: FolderTree },
 };
 
 // Домашняя зона панели: где её иконка стоит, пока панель закрыта, и где она
@@ -61,7 +76,25 @@ export const PANEL_HOME: Record<PanelKey, Zone> = {
   plan: 'right',
   agents: 'right',
   context: 'right',
+  // Разделы хаба выросли из левого сайдбара — там их дом
+  notesList: 'left',
+  notesGraph: 'left',
+  knowledgeList: 'left',
+  personasList: 'left',
+  projectGroups: 'left',
 };
+
+// Наборы ключей по экранам — что вообще доступно в этой рельсе (проп allowedKeys)
+export const WORKSPACE_KEYS: readonly PanelKey[] = [
+  'chats', 'files', 'changes', 'tasks', 'graph', 'team', 'terminal', 'preview',
+  'plan', 'agents', 'context',
+];
+// Раздел «Чаты»: список чатов плюс панели активной сессии (проекта там нет)
+export const CHAT_KEYS: readonly PanelKey[] = ['chats', 'plan', 'agents', 'context'];
+export const NOTES_KEYS: readonly PanelKey[] = ['notesList', 'notesGraph'];
+export const KNOWLEDGE_KEYS: readonly PanelKey[] = ['knowledgeList'];
+export const PERSONAS_KEYS: readonly PanelKey[] = ['personasList'];
+export const PROJECTS_KEYS: readonly PanelKey[] = ['projectGroups'];
 
 // Панели ТЕКУЩЕЙ СЕССИИ: их видимость в рельсе считается не по наличию контента,
 // а по артефактам сессии (План — если был план, Агенты — если есть содержимое,
@@ -69,7 +102,8 @@ export const PANEL_HOME: Record<PanelKey, Zone> = {
 // инструментов проекта.
 export const SESSION_KEYS: readonly PanelKey[] = ['plan', 'agents', 'context'];
 
-// Инструменты проекта — всё, что не относится к сессии. Первая группа рельсы.
+// Всё, что не относится к текущей сессии: инструменты проекта и панели разделов.
+// Первая группа рельсы — от сессионной её отделяет сепаратор.
 export const PROJECT_KEYS: readonly PanelKey[] = PANEL_KEYS.filter(k => !SESSION_KEYS.includes(k));
 
 // Панели, доступные только при включённых инструментах проекта.

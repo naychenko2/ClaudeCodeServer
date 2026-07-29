@@ -25,7 +25,7 @@ import { PanelDropGuide } from '../../components/ui/PanelDropGuide';
 import { IslandSplitter } from '../../components/ui/IslandSplitter';
 import { useWindowWidth } from '../../lib/breakpoints';
 import {
-  PANEL_META, PANEL_HOME, PANEL_KEYS, PROJECT_KEYS, SESSION_KEYS, TOOLS_KEYS,
+  PANEL_META, PANEL_HOME, PANEL_KEYS, PROJECT_KEYS, SESSION_KEYS, TOOLS_KEYS, WORKSPACE_KEYS,
   type PanelKey, type Zone,
 } from './panelCatalog';
 import { wsPanels, isZoneCollapsed, zoneOf, type PanelZonesStore } from './panelStackState';
@@ -55,10 +55,15 @@ interface Props {
   // Числа-кружки на иконках рельсы (changes/tasks/terminal/preview/chats).
   // Сессионные свои числа берут из sessionPanels.
   railCounts?: Partial<Record<PanelKey, number>>;
-  // Инстанс стора зон: воркспейс и «Чаты» держат НЕЗАВИСИМЫЕ раскладки
+  // Инстанс стора зон: каждый экран держит НЕЗАВИСИМУЮ раскладку
   panelStack?: PanelZonesStore;
-  // Экран без проекта («Чаты», мобильный воркспейс): только чаты и панели сессии
-  sessionOnly?: boolean;
+  // Какие панели вообще доступны на этом экране. У воркспейса это инструменты
+  // проекта и сессии, у раздела хаба — его собственные. Раньше вместо набора был
+  // флаг sessionOnly, и добавить экран с другим составом было нечем.
+  allowedKeys?: readonly PanelKey[];
+  // Рельсу целиком прячем, когда показывать нечего (у чата без артефактов иначе
+  // торчала бы пустая полоса)
+  hideWhenEmpty?: boolean;
   // Терминал и Preview доступны только при включённых инструментах проекта
   toolsEnabled?: boolean;
   // Планшет/телефон: одна-две панели, drawer поверх на узком экране, без DnD и колонок
@@ -72,7 +77,7 @@ interface Props {
 
 export function PanelZone({
   side, panels, panelHeaderExtras, railCounts, panelStack,
-  sessionOnly, toolsEnabled, compact, sessionPanels, onPanelOpen,
+  allowedKeys = WORKSPACE_KEYS, hideWhenEmpty, toolsEnabled, compact, sessionPanels, onPanelOpen,
 }: Props) {
   const usePanels = (panelStack ?? wsPanels).use;
   const { zones, toggle, close, setMode, setWidth, setWeights, toggleCollapsed, swapWith, moveAt, moveToNewColumn } = usePanels();
@@ -91,7 +96,7 @@ export function PanelZone({
   // Панель доступна на этом экране: есть контент (у сессионных он всегда есть),
   // экран не sessionOnly либо ключ из разрешённых там, инструменты включены.
   const keyAvailable = (k: PanelKey): boolean => {
-    if (sessionOnly && k !== 'chats' && !SESSION_KEYS.includes(k)) return false;
+    if (!allowedKeys.includes(k)) return false;
     if (TOOLS_KEYS.includes(k) && !toolsEnabled) return false;
     return content(k) != null;
   };
@@ -130,10 +135,10 @@ export function PanelZone({
     return true;
   };
 
-  // Режим sessionOnly без контента: рельсу не рисуем вовсе, чтобы у чата не торчала
-  // пустая полоса. Ширина зоны при этом 0 — иначе FAB AI-хаба уедет под невидимую рельсу.
+  // Показывать нечего: рельсу не рисуем вовсе, чтобы у контента не торчала пустая
+  // полоса. Ширина зоны при этом 0 — иначе FAB AI-хаба уедет под невидимую рельсу.
   const availableKeys = PANEL_KEYS.filter(railKeyVisible);
-  const railHidden = !!sessionOnly && availableKeys.length === 0 && openKeys.length === 0;
+  const railHidden = !!hideWhenEmpty && availableKeys.length === 0 && openKeys.length === 0;
 
   // === ПРАВИЛО СКРЫТИЯ РЕЛЬСЫ ===
   // Если доступна ровно ОДНА панель и она ОТКРЫТА — рельса не нужна: панель сама

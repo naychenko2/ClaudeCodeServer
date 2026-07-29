@@ -17,6 +17,7 @@ import { ChatPanel } from '../components/ChatPanel';
 import { PanelZone } from './workspace/PanelZone';
 import { useSessionPanels } from './workspace/useSessionPanels';
 import { chatPanels } from './workspace/panelStackState';
+import { CHAT_KEYS } from './workspace/panelCatalog';
 import { ensurePersonasLoaded } from '../lib/personas';
 import { ensureTasksLoaded } from '../lib/tasks';
 import { markChatRead, useUnreadChatCount } from '../lib/chatReadState';
@@ -224,7 +225,8 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
             </div>
             <PanelZone
               side="right"
-              sessionOnly
+              allowedKeys={CHAT_KEYS}
+              hideWhenEmpty
               compact
               panelStack={chatPanels}
               panels={{}}
@@ -255,7 +257,8 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
           left={
             <PanelZone
               side="left"
-              sessionOnly
+              allowedKeys={CHAT_KEYS}
+              hideWhenEmpty
               panelStack={chatPanels}
               panels={{ chats: sidebar }}
               railCounts={{ chats: unreadCount }}
@@ -305,7 +308,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
           // рельса не нужна — это держит центральную область симметричной:
           // IslandScaffold видит right=undefined и применяет авто-компенсацию.
           right={activeChat && activeChat.messageCount > 0 ? (
-            <PanelZone side="right" sessionOnly panelStack={chatPanels} panels={{}} sessionPanels={sessionPanels} />
+            <PanelZone side="right" allowedKeys={CHAT_KEYS} hideWhenEmpty panelStack={chatPanels} panels={{}} sessionPanels={sessionPanels} />
           ) : undefined}
         />
       </div>

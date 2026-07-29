@@ -9,7 +9,7 @@
 // «развернуть» в центральной области (тот же FileViewer, что и для остальных файлов).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronDown, ChevronRight, CornerUpRight, FileQuestion, Link2, List, Maximize2, MessageSquarePlus, PanelBottom, Pin, PinOff, ScrollText, Search, SlidersHorizontal, X } from 'lucide-react';
+import { ChevronDown, ChevronRight, CornerUpRight, FileQuestion, Home, Link2, List, Maximize2, MessageSquarePlus, PanelBottom, Pin, PinOff, ScrollText, Search, SlidersHorizontal, X } from 'lucide-react';
 import type { Project, DocEntry, DocDetail, DocSearchHit } from '../../types';
 import { api } from '../../lib/api';
 import { onFilesChanged } from '../../lib/signalr';
@@ -66,10 +66,34 @@ const FOLDERS_H_MAX = 400;
 // TypeGroups) — здесь нужно лишь решить, перечитывать ли индекс после правок на диске
 const DEFAULT_DOC_EXTS = ['.md'];
 
+// Домашний документ панели: README в корне, любого поддерживаемого расширения.
+// Он вход в документацию почти любого репозитория, поэтому у него своя иконка-домик
+// и режим «на всю панель», с которого панель и открывается
+const HOME_KEY = 'cc_docs_home';
+function isHomeDoc(path: string): boolean {
+  return !path.includes('/') && /^readme\./i.test(path);
+}
+
 // Папка пути («docs/adr/x.md» → «docs/adr»); файл в корне — пустая строка
 function folderOf(path: string): string {
   const i = path.lastIndexOf('/');
   return i < 0 ? '' : path.slice(0, i);
+}
+
+// Бейдж расширения в строке документа; у README — домик вместо него
+function DocBadge({ path }: { path: string }) {
+  if (isHomeDoc(path))
+    return <Home size={13} strokeWidth={2.2} style={{ flexShrink: 0, color: C.accent }} />;
+  const m = extMeta(path);
+  return (
+    <span style={{
+      width: 16, height: 16, borderRadius: 4, flexShrink: 0,
+      background: m.bg, color: m.fg,
+      fontFamily: FONT.mono, fontSize: 7.5, fontWeight: 700,
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      letterSpacing: '-0.02em',
+    }}>{m.label}</span>
+  );
 }
 
 // Строка папки в списке переходов (поповер и закреплённый блок — один и тот же список).
@@ -142,6 +166,12 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
   });
   const [backlinksOpen, setBacklinksOpen] = useState(false);
   const [tocOpen, setTocOpen] = useState(false);
+  // Домашний режим: README на всю панель. Он же стартовый — панель чаще открывают
+  // «почитать про проект», чем искать конкретный документ в списке
+  const [homeOpen, setHomeOpen] = useState<boolean>(() => {
+    try { return localStorage.getItem(HOME_KEY) !== '0'; } catch { return true; }
+  });
+  const [homeDoc, setHomeDoc] = useState<DocDetail | null>(null);
   // Область документации (папки, файлы корня, типы). null — панель её не спрашивала:
   // диалог грузит настройку сам, а до его открытия хватает эвристики по индексу
   // (см. isDocPath ниже)
@@ -289,6 +319,13 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
   // Закрытие поиска гасит и запрос: строка исчезла бы, а список остался бы отфильтрованным
   const closeSearch = useCallback(() => { setSearchOpen(false); setQuery(''); }, []);
 
+  // Режим превью: решение пользователя, поэтому переживает перезагрузку.
+  // Объявлен до обработчиков кликов — они его вызывают
+  const setPreview = (next: boolean) => {
+    setPreviewEnabled(next);
+    try { localStorage.setItem(PREVIEW_KEY, next ? '1' : '0'); } catch { /* квота */ }
+  };
+
   const openDoc = useCallback((path: string, anchor: string | null = null) => {
     setSelected(path);
     // Переход по ссылке, из поиска или из обратных ссылок тоже переносит «где я»:
@@ -336,6 +373,37 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
     const target = doc ? resolveDocImage(doc.path, src) : null;
     return target ? api.files.fileUrl(project.id, target) : undefined;
   }, [doc, project.id]);
+
+  // README области — вход в документацию; его нет, значит и домашнего режима нет
+  const homePath = useMemo(() => (index ?? []).find(d => isHomeDoc(d.path))?.path ?? null, [index]);
+
+  const setHome = (next: boolean) => {
+    setHomeOpen(next);
+    try { localStorage.setItem(HOME_KEY, next ? '1' : '0'); } catch { /* квота */ }
+  };
+
+  // Содержимое README грузится отдельно от выбранного документа: домашний режим не
+  // должен сбивать то, что читали в превью, — закрыл домик и вернулся ровно туда же
+  useEffect(() => {
+    if (!homeOpen || !homePath) return;
+    let alive = true;
+    api.docs.doc(project.id, homePath)
+      .then(d => { if (alive) setHomeDoc(d); })
+      .catch(() => { if (alive) setHomeDoc(null); });
+    return () => { alive = false; };
+  }, [project.id, homeOpen, homePath, index]);
+
+  // Ссылка из README: документ области открывается в превью (включая зону, если она была
+  // выключена — иначе переход некуда показать), файл кода уходит в центр
+  const handleHomeLink = useCallback((href: string) => {
+    if (!homePath) return;
+    const link = resolveDocLink(homePath, href, knownDocs);
+    if (!link) return;
+    if (link.kind === 'repo') { onOpenFile(link.target); return; }
+    if (link.kind !== 'doc') return;
+    openDoc(link.target, link.anchor);
+    setPreview(true);
+  }, [homePath, knownDocs, onOpenFile, openDoc]);   // setPreview стабилен по составу
 
   // Клик по ссылке внутри превью: документ области — переход в панели,
   // файл проекта — открытие в центре, внешняя — ушла в новую вкладку без нас
@@ -398,12 +466,6 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
   // список папок вёл бы сам в себя
   const hasFolderNav = groups.filter(([f]) => f).length > 1;
 
-  // Режим превью: решение пользователя, поэтому переживает перезагрузку
-  const setPreview = (next: boolean) => {
-    setPreviewEnabled(next);
-    try { localStorage.setItem(PREVIEW_KEY, next ? '1' : '0'); } catch { /* квота */ }
-  };
-
   const pinFolders = (next: boolean) => {
     setFoldersPinned(next);
     setFoldersOpen(false);
@@ -462,6 +524,18 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
         flexShrink: 0, position: 'relative', display: 'flex', alignItems: 'center', gap: SP.xs,
         padding: `${SP.sm}px ${SP.md}px`, borderBottom: `1px solid ${C.border}`,
       }}>
+        {/* Домик — вход в документацию: README на всю панель. Слева от поиска, потому
+            что это «вернуться к началу», а не режим отображения */}
+        {homePath && (
+          <IconButton
+            title={homeOpen ? 'Закрыть README' : 'README проекта на всю панель'}
+            active={homeOpen}
+            onClick={() => setHome(!homeOpen)}
+            size="sm"
+          >
+            <Home size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+          </IconButton>
+        )}
         {/* С подписью, а не голой лупой: соседние кнопки — режимы панели, и поиск среди
             них терялся; место в ряду освободилось, когда поле ушло под кнопку */}
         <button
@@ -555,8 +629,47 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
         </div>
       )}
 
-      {/* Результаты поиска замещают дерево, пока запрос активен */}
-      {searching ? (
+      {/* Домашний режим: README на всю панель, поверх списка. Список не размонтируется —
+          закрыл домик и он на прежнем месте, с прежней прокруткой */}
+      {homeOpen && homePath ? (
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+          <div style={{
+            flexShrink: 0, display: 'flex', alignItems: 'center', gap: SP.xs,
+            padding: `${SP.xs}px ${SP.sm}px`, borderBottom: `1px solid ${C.border}`,
+          }}>
+            <Home size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0, color: C.accent }} />
+            <span style={{
+              fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: 600, color: C.textHeading,
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            }}>{homeDoc?.title ?? homePath}</span>
+            <div style={{ flex: 1 }} />
+            <IconButton title="Документ в чат — вложением" onClick={() => onAttachToChat(homePath)} size="sm">
+              <MessageSquarePlus size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+            </IconButton>
+            <IconButton title="Развернуть в центре" onClick={() => onOpenFile(homePath)} size="sm">
+              <Maximize2 size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+            </IconButton>
+            <IconButton title="Закрыть — перейти к списку документов" onClick={() => setHome(false)} size="sm">
+              <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+            </IconButton>
+          </div>
+          <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: `${SP.md}px ${SP.md}px ${SP.xl}px` }}>
+            {!homeDoc && <div style={emptyStyle}>Загружаем…</div>}
+            {homeDoc && (
+              <MarkdownViewer
+                content={homeDoc.content}
+                // Переходы по ссылкам ведут из README в остальную документацию, поэтому
+                // клик закрывает домашний режим и открывает документ обычным путём
+                onDocLink={href => { setHome(false); handleHomeLink(href); }}
+                resolveImageSrc={src => {
+                  const target = resolveDocImage(homePath, src);
+                  return target ? api.files.fileUrl(project.id, target) : undefined;
+                }}
+              />
+            )}
+          </div>
+        </div>
+      ) : searching ? (
         <div style={{ flex: 1, overflowY: 'auto', padding: `${SP.xs}px 0` }}>
           {/* null — ответ ещё не пришёл (запрос уходит через 250 мс после ввода) */}
           {hits === null && <div style={emptyStyle}>Ищем…</div>}
@@ -660,17 +773,9 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
                             color: d.path === selected ? C.textHeading : C.textSecondary,
                             fontWeight: d.path === selected ? 600 : 400,
                           }}>
-                          {/* Бейдж расширения — тот же, что в «Файлах» и «Изменениях».
-                              Раньше иконки не было: пока область состояла из одного markdown,
-                              она у всех строк совпадала. С типами (pdf, схемы, картинки, звук)
-                              она различает документы, а строку не удлиняет — 16 px против 22 */}
-                          <span style={{
-                            width: 16, height: 16, borderRadius: 4, flexShrink: 0,
-                            background: extMeta(d.path).bg, color: extMeta(d.path).fg,
-                            fontFamily: FONT.mono, fontSize: 7.5, fontWeight: 700,
-                            display: 'flex', alignItems: 'center', justifyContent: 'center',
-                            letterSpacing: '-0.02em',
-                          }}>{extMeta(d.path).label}</span>
+                          {/* Бейдж расширения — тот же, что в «Файлах» и «Изменениях»;
+                              у README вместо него домик: он не рядовой документ, а вход */}
+                          <DocBadge path={d.path} />
                           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.title}</span>
                         </button>
                       </div>

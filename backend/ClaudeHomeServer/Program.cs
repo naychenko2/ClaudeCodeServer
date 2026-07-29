@@ -125,6 +125,9 @@ builder.Services.AddSingleton<PersonaPromptBuilder>();
 builder.Services.AddSingleton<PersonaMemoryService>();
 builder.Services.AddSingleton<TeamMemoryService>();
 builder.Services.AddSingleton<PersonaBindingsService>();
+// Планирование режима «Командная реализация» (Э2): подбор координатора/планировщика,
+// карточки кандидатов и структурный план
+builder.Services.AddSingleton<TeamPlanningService>();
 // Файловые сабагенты-персоны: генерация + синк .md-агентов
 // Пул подписок с восстановлением пометок исчерпания из снапшотов usage после рестарта
 builder.Services.AddSingleton(sp => new ClaudeSubscriptionPool(
@@ -228,6 +231,13 @@ builder.Services.AddSingleton<NotificationService>();
 builder.Services.AddSingleton<PushSubscriptionStore>();
 builder.Services.AddSingleton<PushService>();
 builder.Services.AddSingleton<TaskExecutionService>();
+// Раздача под-задач и волны режима «Командная реализация» (Э3): создание задач по плану
+// и пакетный запуск исполнителей. Конструктор вешает хук в SessionManager — сервис нужно
+// прогреть на старте (ниже), иначе «Запустить» в карточке плана осталось бы без раздачи.
+builder.Services.AddSingleton<TeamWaveService>();
+// Сторож зависших волн (Э4): без него молчаливо умерший исполнитель оставлял бы штаб
+// в стадии «волна N» навсегда
+builder.Services.AddHostedService<TeamWaveWatchdog>();
 builder.Services.AddSingleton<SessionSummaryService>();
 builder.Services.AddSingleton<ChatTaskExtractionService>();
 builder.Services.AddSingleton<DailyBriefingService>();
@@ -470,6 +480,8 @@ if (!inspectionMode)
     }
 }
 app.Services.GetRequiredService<JwtService>();
+// Раздача волн «Командной реализации»: конструктор вешает хук в SessionManager
+app.Services.GetRequiredService<TeamWaveService>();
 // Синк файловых сабагентов-персон: подписки на события PersonaManager должны встать
 // до первых запросов (иначе ранние правки персон не долетят до .md-файлов).
 // В копии НЕ поднимаем: синк пишет .claude/agents/*.md в реальные папки проектов

@@ -152,7 +152,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
   // Список папок — то же, что оглавление для документа, только для самого списка:
   // групп до десятка, а документов десятки, и мотать до нужной надоедает
   const [foldersOpen, setFoldersOpen] = useState(false);
-  // Курсор на кнопке папок: иконка под ним меняется на булавку (клик закрепит/открепит)
+  // Курсор на кнопке: у закреплённого списка иконка становится «открепить»
   const [foldersHover, setFoldersHover] = useState(false);
   const folderRefs = useRef(new Map<string, HTMLDivElement>());
   // Папка, к которой только что прокрутили: подсвечиваем на секунду, иначе после
@@ -495,13 +495,14 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
               active={foldersOpen || foldersPinned}
               size="sm"
             >
-              {/* Иконка вместо подсказки: под курсором она превращается в булавку —
-                  видно, что клик закрепит, а у закреплённого — что открепит */}
-              {foldersHover
-                ? (foldersPinned
+              {/* Иконка показывает, что даст клик, и только когда он осмыслен: булавка
+                  над раскрытым поповером («закрепить»), перечёркнутая — под курсором
+                  у закреплённого («открепить»). В покое — обычный список */}
+              {foldersPinned
+                ? (foldersHover
                   ? <PinOff size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-                  : <Pin size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />)
-                : (foldersPinned
+                  : <List size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />)
+                : (foldersOpen
                   ? <Pin size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
                   : <List size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />)}
             </IconButton>

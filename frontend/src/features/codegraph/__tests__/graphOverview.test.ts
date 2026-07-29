@@ -40,14 +40,22 @@ function makeLayeredGraph(): CodeGraph {
 }
 
 describe('layerOf', () => {
-  it('фиксированный порядок: Tests раньше Controllers/Hubs раньше Services раньше Models/Protocol', () => {
+  it('фиксированный порядок: Tests раньше точек входа раньше Services раньше Models/Protocol', () => {
     expect(layerOf('A.Tests')).toBe(0);
     expect(layerOf('A.Controllers')).toBe(1);
     expect(layerOf('A.Hubs')).toBe(1);
     expect(layerOf('A.Services')).toBe(2);
     expect(layerOf('A.Models')).toBe(3);
     expect(layerOf('A.Protocol')).toBe(3);
-    expect(layerOf('A.Filters')).toBe(OTHER_LAYER);
+    expect(layerOf('A.Telemetry')).toBe(OTHER_LAYER);
+  });
+
+  it('точки входа лежат в одном слое с Controllers: WebDav, Tray, Filters', () => {
+    // Слой — роль в потоке зависимостей, а не «сервис или нет»: у всех троих нет
+    // входящих связей из нашего кода, дёргают их снаружи (HTTP, клик по трею, pipeline)
+    expect(layerOf('ClaudeHomeServer.WebDav')).toBe(1);
+    expect(layerOf('ClaudeHomeServer.Tray')).toBe(1);
+    expect(layerOf('ClaudeHomeServer.Filters')).toBe(1);
   });
 
   it('приоритет: тестовый неймспейс с сегментом Controllers остаётся слоем Tests', () => {
@@ -228,30 +236,30 @@ describe('buildOverviewScene — реальный снимок графа про
       .toEqual([...again.positions.entries()].map(([k, p]) => `${k}:${p.x},${p.y}`).sort());
   });
 
-  it('находит те же пары нарушений слоистости, что Майя нашла в матрице', () => {
+  it('находит те же нарушения слоистости, что Майя нашла в матрице, и в ту же сторону', () => {
     const g = loadRealSnapshot();
     const expanded = defaultExpandedGroups(g.nodes);
     const scene = buildOverviewScene(g, { expanded, typesGroup: null });
     const back = scene.bundles.filter(b => b.isBack);
     expect(back.length).toBeGreaterThan(0);
 
-    // Неориентированная пара групп, задействованных хоть в одном обратном пучке —
-    // сверка по паре групп, а не по точному направлению: фиксированный маппинг
-    // сознательно отличается от топологического ранга Майи, поэтому у одной и той
-    // же пары «главное» направление может отличаться (см. отчёт по задаче).
-    const pairSet = new Set(back.map(b => {
-      const a = scene.byKey.get(b.fromKey)!.label, c = scene.byKey.get(b.toKey)!.label;
-      return [a, c].sort().join('|');
-    }));
-    const known = [
-      ['Services', 'Hubs'],
-      ['Services', 'Controllers'],
-      ['Models', 'Services'],
-      ['Services', 'WebDav'],
-      ['Protocol', 'Services'],
-    ];
-    for (const [a, b2] of known) {
-      expect(pairSet.has([a, b2].sort().join('|'))).toBe(true);
+    // Сверка ОРИЕНТИРОВАННАЯ: у нарушения важно не только «эта пара групп связана»,
+    // но и кто кого зовёт снизу вверх — иначе ошибка в маппинге слоёв переворачивает
+    // стрелку молча (так WebDav, попав в «Прочее», выдавал нарушением нормальный
+    // поток WebDav → Services).
+    const dirSet = new Set(back.map(b =>
+      `${scene.byKey.get(b.fromKey)!.label}→${scene.byKey.get(b.toKey)!.label}`));
+    for (const dir of ['Services→Hubs', 'Services→Controllers', 'Models→Services',
+                       'Protocol→Services', 'Services→WebDav']) {
+      expect(dirSet.has(dir)).toBe(true);
     }
+
+    // WebDav — точка входа (0 входящих из нашего кода), поэтому нарушение ровно одно:
+    // Services.UserStore → WebDav.NtlmHelper. Обратный поток WebDav → Services идёт
+    // сверху вниз и пунктиром помечаться не должен.
+    expect(dirSet.has('WebDav→Services')).toBe(false);
+    const webDav = back.find(b => scene.byKey.get(b.fromKey)!.label === 'Services'
+      && scene.byKey.get(b.toKey)!.label === 'WebDav')!;
+    expect(webDav.weight).toBe(1);
   });
 });

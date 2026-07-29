@@ -405,8 +405,10 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
       const existing = await api.files.getContent(project.id, 'README.md').catch(() => null);
       if (existing?.content == null) {
         await api.files.createFile(project.id, 'README.md');
+        // Заготовка без «воды»: заголовок, строка под описание и список задач —
+        // пустой буллет предлагал бы писать прозу, чекбокс просит план
         await api.files.saveContent(project.id, 'README.md',
-          `# ${project.name}\n\nКороткое описание проекта.\n\n## С чего начать\n\n- \n`);
+          `# ${project.name}\n\nКороткое описание проекта\n\n## С чего начать\n\n- [ ] \n`);
       }
       const scopeInfo = await api.docs.scope(project.id);
       if (!scopeInfo.selected.rootFiles.some(f => f.toLowerCase() === 'readme.md')) {

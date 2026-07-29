@@ -311,7 +311,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
                     {/* Подпись папки тем же разделителем, что группирует чаты по дням:
                         общий приём для «границы группы» в списках — и никакой подложки,
                         которая спорила бы с выделением строки */}
-                    {folder && <ListDateDivider title={folder} />}
+                    {folder && <ListDateDivider title={folder} align="left" dense />}
                     {docs.map(d => (
                       <div
                         key={d.path}

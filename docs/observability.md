@@ -368,17 +368,37 @@ AlertPollingService  →  NotificationService  →  колокол + тост + 
 > `error_type` и статус `Error`. Представление наполнится с первого отказа после
 > обновления инстанса.
 
-### Грабли: пустые массивы, иначе UI падает
+### Грабли: без колонок List View падает при применении
 
-`spec` внутри `queries[]` **обязан** содержать `groupBy`, `order`, `selectFields`,
-`aggregations` как **пустые массивы**, а не `null`. API-формат v5 их опускает и хранит
-`null`; UI Explorer при применении такого представления падает с
-`Cannot use 'in' operator to search for 'key' in service.name` — он ждёт `groupBy` массивом
-и, не найдя, подставляет строковый дефолт `service.name`, на котором и спотыкается.
+Главная засада, и коварная: представление **сохраняется и открывается в списке**,
+сервер на запрос отвечает **200** с валидными данными — а фронт List View рушится уже
+при отрисовке результата, показывая красный блок
+`500 Cannot use 'in' operator to search for 'key' in service.name`. «500» тут врёт —
+это не серверная ошибка, а JS-исключение в браузере.
 
-Проверено прямым циклом «POST кандидат → открыть в UI → консоль»: с `groupBy:[]` список
-и применение чистые, с пропущенным (`null`) — та самая ошибка. Поэтому во всех
-`views/*.json` пустые массивы прописаны явно.
+Причина — **пустой `selectFields`**. List View строит колонки из него; когда массив
+пуст, рендерер сваливается на строковый дефолт `service.name` и делает по нему
+`'key' in ...`. Лечится тем, что в `spec` кладётся дефолтный набор колонок трейса
+(снят из `defaultTraceSelectedColumns` фронтенда SigNoz):
+
+```jsonc
+"selectFields": [
+  { "name": "service.name",          "signal": "traces", "fieldContext": "resource", "fieldDataType": "string" },
+  { "name": "name",                  "signal": "traces", "fieldContext": "span",     "fieldDataType": "string" },
+  { "name": "duration_nano",         "signal": "traces", "fieldContext": "span",     "fieldDataType": "" },
+  { "name": "http_method",           "signal": "traces", "fieldContext": "span",     "fieldDataType": "" },
+  { "name": "response_status_code",  "signal": "traces", "fieldContext": "span",     "fieldDataType": "" }
+]
+```
+
+Заодно `groupBy`, `order`, `aggregations` держим **пустыми массивами**, а не `null`
+(v5-формат их опускает — тот же класс проблемы).
+
+Проверять надо не список и не код возврата запроса, а **применение вьюхи с отрисовкой
+результата**: `POST candidate → выбрать во «Select a view» в Explorer → нет красного блока
+в результатах и нет `Cannot use 'in'` в консоли`. Первая попытка чинилась «на глаз» по
+списку и коду 200 — и пропустила падение при рендере. Проверено уже до результата на всех
+трёх.
 
 ### Грабли: PUT портит представление
 

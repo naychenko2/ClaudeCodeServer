@@ -20,7 +20,13 @@
           "aggregations": [],
           "groupBy": [],
           "order": [],
-          "selectFields": [],
+          "selectFields": [
+            { "name": "service.name", "signal": "traces", "fieldContext": "resource", "fieldDataType": "string" },
+            { "name": "name", "signal": "traces", "fieldContext": "span", "fieldDataType": "string" },
+            { "name": "duration_nano", "signal": "traces", "fieldContext": "span", "fieldDataType": "" },
+            { "name": "http_method", "signal": "traces", "fieldContext": "span", "fieldDataType": "" },
+            { "name": "response_status_code", "signal": "traces", "fieldContext": "span", "fieldDataType": "" }
+          ],
           "having": { "expression": "" },
           "limit": 100
         }

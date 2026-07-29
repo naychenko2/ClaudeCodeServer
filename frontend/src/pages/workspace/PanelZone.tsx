@@ -80,7 +80,7 @@ export function PanelZone({
   allowedKeys = WORKSPACE_KEYS, hideWhenEmpty, toolsEnabled, compact, sessionPanels, onPanelOpen,
 }: Props) {
   const usePanels = (panelStack ?? wsPanels).use;
-  const { zones, toggle, close, setMode, setWidth, setWeights, toggleCollapsed, swapWith, moveAt, moveToNewColumn } = usePanels();
+  const { zones, toggle, setMode, setWidth, setWeights, toggleCollapsed, swapWith, moveAt, moveToNewColumn } = usePanels();
   const zoneState = zones[side];
   const { layout, mode, width } = zoneState;
   const windowWidth = useWindowWidth();
@@ -140,11 +140,15 @@ export function PanelZone({
   const availableKeys = PANEL_KEYS.filter(railKeyVisible);
   const railHidden = !!hideWhenEmpty && availableKeys.length === 0 && openKeys.length === 0;
 
-  // === ПРАВИЛО СКРЫТИЯ РЕЛЬСЫ ===
-  // Если доступна ровно ОДНА панель и она ОТКРЫТА — рельса не нужна: панель сама
-  // показывает заголовок с иконкой. Закрыта — рельса с 1 иконкой (чтобы открыть).
+  // === ВИДИМОСТЬ РЕЛЬСЫ ===
+  // Рельса стоит, пока зоне есть что показать: даже единственная открытая панель
+  // не прячет её. Раньше в этом случае рельса убиралась (панель, мол, сама себя
+  // называет), но тогда закрыть панель было нечем, кроме крестика в шапке, и
+  // край окна дёргался при каждом открытии.
+  const showRail = !railHidden;
+  // Управлять раскладкой при единственной доступной панели нечем: тумблер режима
+  // и «свернуть все» в этом случае не рисуем.
   const singlePanelMode = availableKeys.length === 1 && !compact;
-  const showRail = !railHidden && (!singlePanelMode || openKeys.length === 0);
 
   const dnd = usePanelDnd({
     zone: side,
@@ -276,7 +280,10 @@ export function PanelZone({
         title={title}
         badge={sessionPanels?.headerBadge(k) ?? null}
         headerExtras={panelHeaderExtras?.[k]}
-        onClose={() => { if (compact) setTabletPanels(cur => cur.filter(x => x !== k)); else close(k); }}
+        // Крестик в шапке остаётся только в компактном режиме: там панель —
+        // drawer поверх контента, а hover, которым десктоп подменяет иконку
+        // рельсы крестиком, на тач-экране не существует.
+        onClose={compact ? () => setTabletPanels(cur => cur.filter(x => x !== k)) : undefined}
         fill={multiInCol}
         flash={flash?.key === k}
         slideDirection={isLeft ? 'left' : 'up'}
@@ -321,14 +328,8 @@ export function PanelZone({
     />
   );
 
-  // Прокладка между рельсой и зоной. Когда рельса скрыта (singlePanelMode +
-  // открытая панель) она держит её место, чтобы панель не «прыгала».
-  const railGapBox = (
-    <div style={{
-      width: showRail ? RAIL_GAP : RAIL_W + RAIL_GAP,
-      flexShrink: 0, transition: `width ${PANEL_ANIM}`,
-    }} />
-  );
+  // Прокладка между рельсой и панелями зоны
+  const railGapBox = <div style={{ width: RAIL_GAP, flexShrink: 0 }} />;
 
   const splitter = <IslandSplitter orientation="v" active={widthDragging} onMouseDown={handleWidthDrag} gap={RAIL_GAP} />;
 

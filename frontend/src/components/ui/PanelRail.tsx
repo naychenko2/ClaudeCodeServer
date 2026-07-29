@@ -1,5 +1,5 @@
-import { Fragment, type ReactNode } from 'react';
-import { ChevronsLeft, ChevronsRight, Columns2, Square, type LucideIcon } from 'lucide-react';
+import { Fragment, useState } from 'react';
+import { ChevronsLeft, ChevronsRight, Columns2, Square, X, type LucideIcon } from 'lucide-react';
 import { C, FONT, ISLAND } from '../../lib/design';
 import { ICON_STROKE } from './icons';
 import { ToolbarIconButton } from '../Toolbar';
@@ -57,29 +57,64 @@ function RailSep({ margin }: { margin: string }) {
   return <div style={{ width: 22, height: 1, background: C.border, flexShrink: 0, margin }} />;
 }
 
+// Иконка панели. У ОТКРЫТОЙ панели под курсором иконка подменяется на закрывающую:
+// это и есть кнопка «закрыть». Своего крестика в шапке у панели больше нет —
+// клик по активной иконке и раньше закрывал панель, теперь он ещё и выглядит
+// как закрытие, а шапка не тратит место на дубль.
+// hover держим здесь, а не в IconButton: тому он нужен только для собственных
+// цветов и наружу не отдаётся.
+// soleIcon — рельса из ОДНОЙ иконки: тогда открытая панель показывает не себя, а
+// сворачивание, и постоянно, а не по наведению. Выбирать в такой зоне не из чего,
+// поэтому иконка панели там ничего не сообщает, а активная подсветка врала бы про
+// выбор; кнопки «свернуть все» внизу при одной панели тоже нет — её роль забирает
+// эта же кнопка.
+function RailButton({ item, soleIcon: SoleIcon }: { item: RailItem; soleIcon?: LucideIcon }) {
+  const [hover, setHover] = useState(false);
+  const sole = !!SoleIcon && item.active;
+  const closing = !sole && item.active && hover;
+  const Icon = sole ? SoleIcon : closing ? X : item.Icon;
+  return (
+    <span
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{ display: 'flex' }}
+    >
+      <ToolbarIconButton
+        onClick={item.onClick}
+        active={item.active && !sole}
+        title={item.active ? `Скрыть «${item.title}»` : item.title}
+      >
+        <div style={{ position: 'relative', display: 'flex' }}>
+          <Icon size={17} strokeWidth={ICON_STROKE} />
+          {/* Кружок с числом при закрывающей иконке прячем: рядом с «закрыть» счётчик
+              читается как часть действия, а не как содержимое панели */}
+          {item.badge && !closing && !sole ? (
+            <span style={{
+              position: 'absolute', top: -6, right: -7, minWidth: 14, height: 14, padding: '0 3px',
+              borderRadius: 7, background: C.accent, color: C.onAccent,
+              fontFamily: FONT.sans, fontSize: 9, fontWeight: 700, lineHeight: '14px', textAlign: 'center',
+            }}>
+              {item.badge}
+            </span>
+          ) : null}
+        </div>
+      </ToolbarIconButton>
+    </span>
+  );
+}
+
 export function PanelRail({ side, groups, visible = true, gapToCenter = 0, modeToggle, collapse }: Props) {
   const isLeft = side === 'left';
-
-  const renderItem = (it: RailItem): ReactNode => (
-    <ToolbarIconButton key={it.key} onClick={it.onClick} active={it.active} title={it.title}>
-      <div style={{ position: 'relative', display: 'flex' }}>
-        <it.Icon size={17} strokeWidth={ICON_STROKE} />
-        {it.badge ? (
-          <span style={{
-            position: 'absolute', top: -6, right: -7, minWidth: 14, height: 14, padding: '0 3px',
-            borderRadius: 7, background: C.accent, color: C.onAccent,
-            fontFamily: FONT.sans, fontSize: 9, fontWeight: 700, lineHeight: '14px', textAlign: 'center',
-          }}>
-            {it.badge}
-          </span>
-        ) : null}
-      </div>
-    </ToolbarIconButton>
-  );
 
   // Пустые группы отбрасываем ДО отрисовки сепараторов — иначе между скрытой
   // группой и соседней остался бы висячий разделитель.
   const shownGroups = groups.filter(g => g.length > 0);
+
+  // Вся рельса — одна иконка: её открытая панель показывает сворачивание (стрелки
+  // к краю окна, как у кнопки «свернуть все»). Иначе иконки обычные, а крестик
+  // подставляется по наведению.
+  const soleItem = shownGroups.reduce((n, g) => n + g.length, 0) === 1;
+  const soleIcon: LucideIcon | undefined = soleItem ? (isLeft ? ChevronsLeft : ChevronsRight) : undefined;
 
   return (
     <div style={{
@@ -130,7 +165,7 @@ export function PanelRail({ side, groups, visible = true, gapToCenter = 0, modeT
       {shownGroups.map((group, gi) => (
         <Fragment key={gi}>
           {gi > 0 && <RailSep margin="2px 0" />}
-          {group.map(renderItem)}
+          {group.map(it => <RailButton key={it.key} item={it} soleIcon={soleIcon} />)}
         </Fragment>
       ))}
 

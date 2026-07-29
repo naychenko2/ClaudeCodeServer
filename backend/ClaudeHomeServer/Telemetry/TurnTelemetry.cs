@@ -39,10 +39,39 @@ internal static class TurnTelemetry
         if (activity is null) return null;
         activity
             .SetTag("kind", kind)
-            .SetTag("command", command)
+            .SetTag("command", ExecutableName(command))
             .SetTag("session_id", sessionId)
             .SetTag("mcp_config_hash", mcpConfigHash);
         return activity;
+    }
+
+    /// <summary>
+    /// Только имя исполняемого файла — без каталогов.
+    ///
+    /// Вызывающий передаёт команду запуска как есть, а на хосте это абсолютный путь вида
+    /// <c>C:\Users\{имя}\AppData\Roaming\npm\...\claude.exe</c> — то есть имя пользователя ОС
+    /// внутри значения. Санитайзер это не ловил: он классифицирует по имени тега, а тег
+    /// <c>command</c> состоит в allowlist (пути хэшируются по ключам вида *_path). Утечку
+    /// нашли на боевых данных: спан приехал в SigNoz с полным путём.
+    ///
+    /// Режем в источнике, а не правилом санитайзера: диагностическая ценность тега — «какой
+    /// бинарь запустили» (claude.exe против docker), каталог для этого не нужен, а хэш вместо
+    /// имени сделал бы тег нечитаемым. Разделители и Windows, и Unix: <c>Path.GetFileName</c>
+    /// на Windows считает <c>/</c> разделителем, поэтому путь из песочницы режется тоже.
+    /// </summary>
+    internal static string ExecutableName(string? command)
+    {
+        if (string.IsNullOrWhiteSpace(command)) return "unknown";
+        try
+        {
+            var name = Path.GetFileName(command.Trim());
+            return string.IsNullOrEmpty(name) ? "unknown" : name;
+        }
+        catch
+        {
+            // Недопустимые символы в пути — сам факт запуска важнее имени бинаря
+            return "unknown";
+        }
     }
 
     /// <summary>

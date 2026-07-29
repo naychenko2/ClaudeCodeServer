@@ -9,14 +9,14 @@ import type { Project, Session } from '../types';
 import { C, FONT, R } from '../lib/design';
 import { basename } from '../lib/paths';
 import { ensureGit, useGitState, loadUnpushedLog, gitPush, workingDiffStat } from '../lib/git';
-import { usePanelStack } from '../pages/workspace/panelStackState';
+import { wsPanels } from '../pages/workspace/panelStackState';
 import { Modal, ModalActions } from './ui';
 import { ICON_STROKE } from './ui/icons';
 
 export function ProjectGitBar({ project, session, onCommitOwn }: { project: Project; session?: Session; onCommitOwn: () => void }) {
   const st = useGitState(project.id);
   const status = st.status;
-  const { layout, toggle } = usePanelStack();
+  const { reveal } = wsPanels.use();
   const [publishConfirm, setPublishConfirm] = useState(false);
   // Чат в отдельном worktree: запросы стора уже идут в его дерево (gitSessionContext),
   // перечитываем статус при переключении дерева у активной сессии
@@ -39,15 +39,14 @@ export function ProjectGitBar({ project, session, onCommitOwn }: { project: Proj
   // Метка: ветка worktree чата > имя папки (проект сам открыт как worktree) > ветка
   const label = worktreeBranch ?? (status.isWorktree ? basename(project.rootPath) : (status.branch ?? '—'));
 
-  // Открыть правую панель «Изменения» на скоупе «Не зафиксировано» (working).
-  // toggle не закрывает уже открытую панель — гейтим по наличию в раскладке.
-  // Панель УЖЕ открыта — просим её мигнуть: иначе клик выглядит как «ничего не
+  // Открыть панель «Изменения» на скоупе «Не зафиксировано» (working). Панель
+  // живёт в любой из зон, поэтому просим стор её показать: reveal открывает
+  // закрытую в её домашней рельсе и возвращает true, если она УЖЕ открыта.
+  // В этом случае просим панель мигнуть: иначе клик выглядит как «ничего не
   // произошло», хотя скоуп в панели переключился.
   const openChanges = () => {
-    if (layout.flat().includes('changes')) {
+    if (reveal('changes')) {
       window.dispatchEvent(new CustomEvent('cc-panel-flash', { detail: { key: 'changes' } }));
-    } else {
-      toggle('changes');
     }
     window.dispatchEvent(new CustomEvent('cc-git-open-working'));
   };

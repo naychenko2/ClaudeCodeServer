@@ -21,22 +21,9 @@ import { SidebarProjectSwitcher } from '../../features/projects/SidebarProjectSw
 import { RightPanelStack } from './RightPanelStack';
 import { LeftPanelStack } from './LeftPanelStack';
 import { startPointerDrag } from '../../lib/pointerDrag';
-import type { LeftPanelKey, PanelKey } from './panelStackState';
+import type { PanelKey } from './panelCatalog';
 
 export type SidebarMode = 'pinned' | 'collapsed';
-
-// Dev-заглушки левых панелей. В рельсе реально живут только «Чаты», поэтому
-// проверить раскладку колонками (перетаскивание, solo, ресайз) в интерфейсе
-// нечем — под import.meta.env.DEV подкладываем пустышки. В production-бандле
-// ветка вырезается DCE, как и витрина дизайн-системы #/ui-kit.
-const devLeftPanel = (title: string): ReactNode => (
-  <div style={{ padding: 16, fontFamily: FONT.sans, fontSize: 13, color: C.textMuted, lineHeight: 1.5 }}>
-    Заглушка «{title}» — только в dev, для проверки раскладки левых панелей.
-  </div>
-);
-const DEV_LEFT_PANELS: Partial<Record<LeftPanelKey, ReactNode>> = import.meta.env.DEV
-  ? { files: devLeftPanel('Файлы'), tasks: devLeftPanel('Задачи'), personas: devLeftPanel('Команда') }
-  : {};
 
 interface Props {
   // Планшет (601–1199): файл всегда fullscreen, правая зона — упрощённый solo
@@ -223,7 +210,7 @@ export function DesktopWorkspace(p: Props) {
       {/* === Слева: рельса иконок + панель чатов (зеркало правой рельсы) ===
           Открытие/сворачивание — иконкой рельсы, ширина тянется её сплиттером;
           прежние sidebarMode/useSidebarWidth здесь больше не нужны. */}
-      <LeftPanelStack panels={{ chats: chatsPanel, ...DEV_LEFT_PANELS }} />
+      <LeftPanelStack panels={{ chats: chatsPanel }} />
 
       {/* === Центр: коммит → задача → персона → доска → файл (split/fullscreen) → чат === */}
       {!p.openFile && p.openCommitSha && centerIsland(

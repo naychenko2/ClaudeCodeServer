@@ -8,7 +8,6 @@
 // Панели — «воздушные» скруглённые карточки с зазорами; границы высот тянутся
 // невидимыми хендлами в зазорах, ширина колонок — сплиттером слева от зоны.
 import { useEffect, useState, type ReactNode } from 'react';
-import { ClipboardList, FolderTree, GitCompare, ListTodo, Bot, User, Users, SquareTerminal, MonitorPlay, Network, type LucideIcon } from 'lucide-react';
 import type { Session } from '../../types';
 import { C, FONT, ISLAND, SHADOW } from '../../lib/design';
 import { ICON_STROKE } from '../../components/ui/icons';
@@ -24,32 +23,20 @@ import { PanelRail, RAIL_W, RAIL_GAP, type RailItem } from '../../components/ui/
 import { PanelDropGuide } from '../../components/ui/PanelDropGuide';
 import { usePanelDnd, usePanelRowResize, usePanelWidthDrag } from './panelZone';
 import { PanelSlot } from './PanelSlot';
-import { wsPanelStack, RIGHT_PANEL_KEYS, type PanelKey, type RightPanelKey, type PanelStack } from './panelStackState';
+import { PANEL_META, TOOLS_KEYS, type PanelKey } from './panelCatalog';
+import { wsPanels, isZoneCollapsed, type PanelZonesStore } from './panelStackState';
 
 // Порог планшета: шире — панель в потоке рядом с чатом, уже — drawer поверх
 const TABLET_INLINE_MIN = 1000;
 
-// Иконки и заголовки панелей ПРАВОЙ рельсы. Мета левой рельсы — своя,
-// в LeftPanelStack.LEFT_PANEL_META.
-const PANEL_META: Record<RightPanelKey, { title: string; Icon: LucideIcon }> = {
-  plan: { title: 'План', Icon: ClipboardList },
-  agents: { title: 'Агенты', Icon: Bot },
-  // 'context' — досье персоны-собеседника (память/привязки/recall); отображается «Персона».
-  context: { title: 'Персона', Icon: User },
-  files: { title: 'Файлы', Icon: FolderTree },
-  changes: { title: 'Изменения', Icon: GitCompare },
-  tasks: { title: 'Задачи', Icon: ListTodo },
-  graph: { title: 'Граф', Icon: Network },
-  team: { title: 'Команда', Icon: Users },
-  terminal: { title: 'Терминал', Icon: SquareTerminal },
-  preview: { title: 'Preview', Icon: MonitorPlay },
-};
-
 // Рельса разбита на две группы, разделённые сепаратором. Сверху — инструменты
 // ПРОЕКТА (файлы, изменения, задачи, команда, терминал, preview), снизу — панели
 // ТЕКУЩЕЙ СЕССИИ (План, Агенты, Персона). Порядок: проектные раньше сессионных.
-const PROJECT_RAIL_KEYS: RightPanelKey[] = ['files', 'changes', 'tasks', 'graph', 'team', 'terminal', 'preview'];
-const SESSION_RAIL_KEYS: RightPanelKey[] = ['plan', 'agents', 'context'];
+// Мета панелей общая для обеих зон — panelCatalog.PANEL_META.
+const PROJECT_RAIL_KEYS: PanelKey[] = ['files', 'changes', 'tasks', 'graph', 'team', 'terminal', 'preview'];
+const SESSION_RAIL_KEYS: PanelKey[] = ['plan', 'agents', 'context'];
+// Ключи, которые показывает ПРАВАЯ рельса (чаты живут слева)
+const RIGHT_RAIL_KEYS: PanelKey[] = [...PROJECT_RAIL_KEYS, ...SESSION_RAIL_KEYS];
 
 const GAP = ISLAND.gap; // зазор между карточками — та самая «воздушность»
 
@@ -65,26 +52,26 @@ interface Props {
   // Только сессионная группа (План/Агенты/Персона) — для раздела «Чаты» и мобилки:
   // проектные инструменты не рендерятся, пустая рельса скрывается целиком
   sessionOnly?: boolean;
-  // Инстанс стора раскладки: воркспейс и «Чаты» держат НЕЗАВИСИМЫЕ раскладки
-  // (по умолчанию — воркспейсный, см. panelStackState.createPanelStack)
-  panelStack?: { use: () => PanelStack };
+  // Инстанс стора зон: воркспейс и «Чаты» держат НЕЗАВИСИМЫЕ раскладки
+  // (по умолчанию — воркспейсный, см. panelStackState.createPanelZones)
+  panelStack?: PanelZonesStore;
   // Терминал и Preview доступны только при включённых инструментах проекта
   toolsEnabled?: boolean;
   // Готовый контент панелек (кроме Плана — он собирается здесь из артефактов сессии).
   // Строится в WorkspacePage, где живут состояние и обработчики этих инструментов.
   // В sessionOnly не нужен — проектных панелей там нет.
-  panels?: Partial<Record<Exclude<RightPanelKey, 'plan'>, ReactNode>>;
+  panels?: Partial<Record<Exclude<PanelKey, 'plan'>, ReactNode>>;
   // Контролы в шапку карточки (слева от кнопки закрытия) — напр. переключатель
   // видов задач. Собираются в WorkspacePage, состояние живёт там же.
-  panelHeaderExtras?: Partial<Record<RightPanelKey, ReactNode>>;
+  panelHeaderExtras?: Partial<Record<PanelKey, ReactNode>>;
   // Числа-кружки на кнопках ПРОЕКТА (changes/tasks/terminal/preview) — считаются в
   // WorkspacePage (там живут данные git/задач/терминалов/сервисов). Сессионные кнопки
   // свои числа берут из артефактов сессии (railBadgeCount), не отсюда.
-  railCounts?: Partial<Record<RightPanelKey, number>>;
+  railCounts?: Partial<Record<PanelKey, number>>;
   // Хук на ЯВНУЮ активацию панели кликом по иконке рельсы (панель в результате
   // открылась). Только клик: восстановление раскладки из localStorage его не дёргает.
   // Сейчас используется графом — открыть свой документ в центре вместе с панелью.
-  onPanelOpen?: (k: RightPanelKey) => void;
+  onPanelOpen?: (k: PanelKey) => void;
 }
 
 // Направляющие мест вставки при DnD — общий примитив PanelDropGuide
@@ -93,14 +80,16 @@ interface Props {
 export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobile, sessionOnly, panelStack, toolsEnabled, panels = {}, panelHeaderExtras, railCounts, onPanelOpen }: Props) {
   // Инстанс стора раскладки: оба объявлены на уровне модуля, поэтому вызов хука
   // безусловный и стабильный между рендерами (проп не меняется по ходу жизни экрана)
-  const usePanels = (panelStack ?? wsPanelStack).use;
-  const { layout, weights, width, mode, toggle, close, collapsed, toggleCollapsed, setWeights, setWidth, swapWith, moveToNewColumn, moveAt, setMode } = usePanels();
+  const usePanels = (panelStack ?? wsPanels).use;
+  const { zones, toggle, close, toggleCollapsed, setWeights, setWidth, swapWith, moveToNewColumn, moveAt, setMode } = usePanels();
+  const { layout, width, mode } = zones.right;
+  const weights = zones.weights;
   const windowWidth = useWindowWidth();
   // Компактный режим (планшет и телефон): одна панель + drawer, без колонок/DnD/solo
   const compact = !!isTablet || !!isMobile;
   // Планшет: до ДВУХ панелей стеком в одной колонке; выбор локальный эфемерный —
   // десктопный layout не трогаем. Третья открытая вытесняет самую старую (FIFO).
-  const [tabletPanels, setTabletPanels] = useState<RightPanelKey[]>([]);
+  const [tabletPanels, setTabletPanels] = useState<PanelKey[]>([]);
   const tabletInline = windowWidth >= TABLET_INLINE_MIN;
   const sessionId = session?.id ?? null;
   // Артефакты сессии питают сессионную группу рельсы: План, Чек-лист (todos), Агенты
@@ -111,13 +100,11 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobi
   // executingTask=false: в рельсе artifacts считаются без заголовка задачи-исполнителя.
   const badgeOpts = { executingTask: false, personaId: session?.personaId ?? null, isChat: !projectId };
 
-  // Отбор ключей правой рельсы из общей раскладки стора: чужие (левые) ключи
-  // отбрасываются здесь же — предикат сужает тип, поэтому ниже по коду везде
-  // RightPanelKey и PANEL_META не нужны заглушки.
-  // Терминал/Preview дополнительно скрыты при выключенных инструментах проекта.
-  const keyAvailable = (k: PanelKey): k is RightPanelKey =>
-    (RIGHT_PANEL_KEYS as readonly string[]).includes(k)
-    && ((k !== 'terminal' && k !== 'preview') || !!toolsEnabled);
+  // Отбор ключей, которые показывает ПРАВАЯ рельса: чужие (пока это только чаты)
+  // отбрасываются здесь же. Терминал/Preview дополнительно скрыты при выключенных
+  // инструментах проекта.
+  const keyAvailable = (k: PanelKey): boolean =>
+    RIGHT_RAIL_KEYS.includes(k) && (!TOOLS_KEYS.includes(k) || !!toolsEnabled);
   const soloMode = mode === 'solo';
   // Состояние ЕДИНОЕ для обоих режимов: в solo layout содержит максимум одну
   // панель (toggle заменяет её), поэтому рендер одинаковый.
@@ -131,7 +118,7 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobi
   // собеседник-персона): иначе иконка скрыта целиком (а не дизейблится), вместе с ней
   // прячется и разделитель групп. Единый расчёт — panelBadge из meta.
   // Объявлено до расчёта ширины зоны: от него зависит скрытие пустой сессионной рельсы.
-  const railKeyVisible = (k: RightPanelKey): boolean => {
+  const railKeyVisible = (k: PanelKey): boolean => {
     if (!keyAvailable(k)) return false;
     if (k === 'plan') return plansCount > 0 || openKeys.includes(k);
     if (k === 'agents' || k === 'context') {
@@ -164,10 +151,10 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobi
   // Флеш «панель уже открыта»: внешние кнопки (git-бар над композером) шлют
   // cc-panel-flash, карточка на мгновение обводится акцентом. Счётчик n нужен,
   // чтобы повторный клик по той же панели перезапускал таймер.
-  const [flash, setFlash] = useState<{ key: RightPanelKey; n: number } | null>(null);
+  const [flash, setFlash] = useState<{ key: PanelKey; n: number } | null>(null);
   useEffect(() => {
     const onFlash = (e: Event) => {
-      const key = (e as CustomEvent<{ key?: RightPanelKey }>).detail?.key;
+      const key = (e as CustomEvent<{ key?: PanelKey }>).detail?.key;
       if (key) setFlash(cur => ({ key, n: (cur?.n ?? 0) + 1 }));
     };
     window.addEventListener('cc-panel-flash', onFlash);
@@ -183,14 +170,14 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobi
 
   // Ресайз: сплиттер ширины зоны и хендлы высот между панелями — общая с левой
   // рельсой механика (метка активного хендла — 'ci:ri' либо 'tablet')
-  const { panelRefs, rowDragging, handleRowDrag } = usePanelRowResize<RightPanelKey>(weights, setWeights);
+  const { panelRefs, rowDragging, handleRowDrag } = usePanelRowResize<PanelKey>(weights, setWeights);
   // Drag-and-drop перестановки: какая панель тащится, над какой висит,
   // и над каким разделителем колонок (дроп туда = вынос в новую колонку)
   // Позиции вставки под курсором: разделитель колонок (индекс) и горизонтальный
   // плейсхолдер ('ci:ri'). Сбрасываются вместе с DnD — через onEnd хука.
   const [dndOverSep, setDndOverSep] = useState<number | null>(null);
   const [dndOverRow, setDndOverRow] = useState<string | null>(null);
-  const dnd = usePanelDnd<RightPanelKey>({
+  const dnd = usePanelDnd<PanelKey>({
     enabled: !soloMode && !compact,
     onSwap: swapWith,
     onEnd: () => { setDndOverSep(null); setDndOverRow(null); },
@@ -199,7 +186,7 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobi
   // Ширина зоны: тянем влево — колонки растут; width хранится на ОДНУ колонку,
   // поэтому сдвиг курсора делится на их число
   const { dragging: widthDragging, onPointerDown: handleWidthDrag } =
-    usePanelWidthDrag(width, setWidth, 'right', columns.length);
+    usePanelWidthDrag(width, n => setWidth('right', n), 'right', columns.length);
 
   // Пустой стейт панельки (когда открыта, но контента ещё нет)
   const emptyPanel = (text: string): ReactNode => (
@@ -208,7 +195,7 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobi
     </div>
   );
 
-  const panelContent = (k: RightPanelKey): ReactNode => {
+  const panelContent = (k: PanelKey): ReactNode => {
     if (k === 'plan') {
       return plansCount > 0
         ? <PlanSection plans={artifacts.plans} projectId={projectId} />
@@ -227,7 +214,7 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobi
   };
 
   // Панелька в раскладке колонок
-  const renderPanel = (k: RightPanelKey) => {
+  const renderPanel = (k: PanelKey) => {
     return (
       <PanelSlot
         key={k}
@@ -261,7 +248,7 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobi
   // Агенты — открытые (running); Персона счётчика не имеет. Проектные (changes/tasks/
   // terminal/preview) берут готовое число из railCounts (считается в WorkspacePage).
   // 0 → кружок не рисуем.
-  const railBadgeCount = (k: RightPanelKey): number | null => {
+  const railBadgeCount = (k: PanelKey): number | null => {
     let n: number;
     if (k === 'plan') n = artifacts.plans.filter(p => p.status !== 'approved').length;
     else if (k === 'agents') n = [...artifacts.agents, ...artifacts.workflows.flatMap(w => w.agents)]
@@ -273,7 +260,7 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobi
 
   // Иконки одной группы рельсы: скрытые (railKeyVisible) отсеиваются здесь же —
   // пустая группа не рисуется вовсе, вместе со своим разделителем.
-  const railGroup = (keys: RightPanelKey[]): RailItem[] => keys.filter(railKeyVisible).map(k => ({
+  const railGroup = (keys: PanelKey[]): RailItem[] => keys.filter(railKeyVisible).map(k => ({
     key: k,
     title: PANEL_META[k].title,
     Icon: PANEL_META[k].Icon,
@@ -284,7 +271,7 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobi
       if (compact) {
         // До двух панелей: третья вытесняет самую старую (FIFO)
         setTabletPanels(cur => cur.includes(k) ? cur.filter(x => x !== k) : [...cur, k].slice(-2));
-      } else toggle(k);
+      } else toggle('right', k);
       // Панель в результате клика ОТКРЫЛАСЬ (была скрыта; в solo toggle — радио,
       // закрытой считается и вытесняемая) — сообщаем подписчику (граф и т.п.)
       if (!isOpen) onPanelOpen?.(k);
@@ -356,7 +343,7 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobi
                   over={dndOverSep === ci}
                   onDragOver={e => { if (dnd.from) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDndOverSep(ci); } }}
                   onDragLeave={() => setDndOverSep(cur => (cur === ci ? null : cur))}
-                  onDrop={e => { e.preventDefault(); if (dnd.from) moveToNewColumn(dnd.from, ci); dnd.end(); }}
+                  onDrop={e => { e.preventDefault(); if (dnd.from) moveToNewColumn(dnd.from, 'right', ci); dnd.end(); }}
                 />
                 <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
                   {(() => {
@@ -373,7 +360,7 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobi
                         over={dndOverRow === `${ci}:${ri}`}
                         onDragOver={e => { if (dnd.from) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDndOverRow(`${ci}:${ri}`); } }}
                         onDragLeave={() => setDndOverRow(cur => (cur === `${ci}:${ri}` ? null : cur))}
-                        onDrop={e => { e.preventDefault(); if (dnd.from) moveAt(dnd.from, ci, ri); dnd.end(); }}
+                        onDrop={e => { e.preventDefault(); if (dnd.from) moveAt(dnd.from, 'right', ci, ri); dnd.end(); }}
                       />
                     );
                     return (
@@ -404,7 +391,7 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobi
               over={dndOverSep === columns.length}
               onDragOver={e => { if (dnd.from) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDndOverSep(columns.length); } }}
               onDragLeave={() => setDndOverSep(cur => (cur === columns.length ? null : cur))}
-              onDrop={e => { e.preventDefault(); if (dnd.from) moveToNewColumn(dnd.from, columns.length); dnd.end(); }}
+              onDrop={e => { e.preventDefault(); if (dnd.from) moveToNewColumn(dnd.from, 'right', columns.length); dnd.end(); }}
             />
           </div>
         </>
@@ -428,12 +415,12 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobi
         ]}
         modeToggle={compact ? undefined : {
           soloMode,
-          onToggle: () => setMode(soloMode ? 'multi' : 'solo'),
+          onToggle: () => setMode('right', soloMode ? 'multi' : 'solo'),
         }}
         collapse={compact ? undefined : {
-          collapsed,
-          disabled: openKeys.length === 0 && !collapsed,
-          onToggle: toggleCollapsed,
+          collapsed: isZoneCollapsed(zones.right),
+          disabled: openKeys.length === 0 && !isZoneCollapsed(zones.right),
+          onToggle: () => toggleCollapsed('right'),
         }}
       />
     </>

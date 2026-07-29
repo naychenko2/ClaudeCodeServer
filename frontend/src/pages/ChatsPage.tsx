@@ -16,7 +16,7 @@ import { ChatList } from '../components/ChatList';
 import { ChatPanel } from '../components/ChatPanel';
 import { RightPanelStack } from './workspace/RightPanelStack';
 import { LeftPanelStack } from './workspace/LeftPanelStack';
-import { chatPanelStack, chatLeftPanelStack } from './workspace/panelStackState';
+import { chatPanels } from './workspace/panelStackState';
 import { ensurePersonasLoaded } from '../lib/personas';
 import { ensureTasksLoaded } from '../lib/tasks';
 import { markChatRead, useUnreadChatCount } from '../lib/chatReadState';
@@ -55,7 +55,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
   useEffect(() => { setAttachedFiles([]); }, [activeId]);
 
   // Видимость и ширина панели чатов целиком на LeftPanelStack (стор
-  // chatLeftPanelStack: рельса RAIL_W + панель с ресайзом). Прежние
+  // chatPanels: рельса RAIL_W + панель с ресайзом). Прежние
   // sidebarMode/useSidebarDrag удалены — они больше ничем не управляли.
 
   // Артефакты сессии живут в правой рельсе (RightPanelStack в режиме sessionOnly):
@@ -221,7 +221,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
             <RightPanelStack
               sessionOnly
               isMobile
-              panelStack={chatPanelStack}
+              panelStack={chatPanels}
               session={activeChat}
             />
           </div>
@@ -249,7 +249,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
           left={
             <LeftPanelStack
               sessionOnly
-              panelStack={chatLeftPanelStack}
+              panelStack={chatPanels}
               panels={{ chats: sidebar }}
               railCounts={{ chats: unreadCount }}
             />
@@ -297,7 +297,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
           // рельса не нужна — это держит центральную область симметричной:
           // IslandScaffold видит right=undefined и применяет авто-компенсацию.
           right={activeChat && activeChat.messageCount > 0 ? (
-            <RightPanelStack sessionOnly panelStack={chatPanelStack} session={activeChat} />
+            <RightPanelStack sessionOnly panelStack={chatPanels} session={activeChat} />
           ) : undefined}
         />
       </div>

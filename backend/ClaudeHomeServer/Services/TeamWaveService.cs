@@ -487,11 +487,12 @@ public class TeamWaveService
                 ? $"/chats/{session.Id}"
                 : $"/project/{session.ProjectId}/chat/{session.Id}",
             Kind: "claude",
-            SessionId: session.Id,
             TaskId: escalation.TaskId,
             ProjectId: session.ProjectId,
             PersonaId: session.TeamImplement?.CoordinatorPersonaId ?? session.PersonaId,
-            Tag: "Командная реализация"), sendPush: away);
+            // SessionId — унаследованное init-свойство базы ServerMessage, не параметр
+            // конструктора: задаётся инициализатором (см. NotificationService и др.)
+            Tag: "Командная реализация") { SessionId = session.Id }, sendPush: away);
     }
 
     private bool IsDone(string taskId) => _tasks.GetById(taskId)?.Status == TaskItemStatus.Done;

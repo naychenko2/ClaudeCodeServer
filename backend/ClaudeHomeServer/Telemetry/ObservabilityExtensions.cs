@@ -55,9 +55,7 @@ public static class ObservabilityExtensions
 
         // Сэмплер: ParentBased → дочерние спаны следуют за корнем (C3-UPD)
         var ratioKey = mode == "production" ? "TraceSampleRatio:Production" : "TraceSampleRatio:Dev";
-        var ratio = section.GetValue<double?>(ratioKey) ?? (mode == "production" ? 0.05 : 0.10);
-        // Защита от мусора в конфиге
-        if (ratio is <= 0 or > 1) ratio = mode == "production" ? 0.05 : 0.10;
+        var sampler = ResolveSampler(section.GetValue<double?>(ratioKey));
 
         var otelBuilder = services.AddOpenTelemetry();
 
@@ -75,7 +73,7 @@ public static class ObservabilityExtensions
         // Tracing
         otelBuilder.WithTracing(t =>
         {
-            t.SetSampler(new ParentBasedSampler(new TraceIdRatioBasedSampler(ratio)));
+            t.SetSampler(sampler);
 
             // Стандартные instrumentation'ы
             t.AddAspNetCoreInstrumentation();
@@ -159,15 +157,17 @@ public static class ObservabilityExtensions
         // Приоритет: production > dev. Если оба Enabled — берём production.
         if (prodEnabled && !exportDisabled)
         {
-            var endpoint = section.GetValue<string>("Backends:Production:OtlpEndpoint")
-                           ?? "http://localhost:4318";
-            otelBuilder.UseOtlpExporter(OtlpExportProtocol.HttpProtobuf, new Uri(endpoint));
+            var endpoint = ParseEndpoint(
+                section.GetValue<string>("Backends:Production:OtlpEndpoint"), "http://localhost:4318");
+            if (endpoint is not null)
+                otelBuilder.UseOtlpExporter(OtlpExportProtocol.HttpProtobuf, endpoint);
         }
         else if (devEnabled && !exportDisabled)
         {
-            var endpoint = section.GetValue<string>("Backends:Dev:OtlpEndpoint")
-                           ?? "http://localhost:4317";
-            otelBuilder.UseOtlpExporter(OtlpExportProtocol.Grpc, new Uri(endpoint));
+            var endpoint = ParseEndpoint(
+                section.GetValue<string>("Backends:Dev:OtlpEndpoint"), "http://localhost:4317");
+            if (endpoint is not null)
+                otelBuilder.UseOtlpExporter(OtlpExportProtocol.Grpc, endpoint);
         }
 
         // Heartbeat — ВСЕГДА регистрируется (H4). Даже без backend'ов тики полезны
@@ -179,6 +179,59 @@ public static class ObservabilityExtensions
         services.AddHostedService<GaugesRegistrarService>();
 
         return services;
+    }
+
+    /// <summary>
+    /// Сэмплер трейсов по значению <c>Telemetry:TraceSampleRatio:{Dev|Production}</c>.
+    ///
+    /// Дефолт — <b>1.0</b> (пишем все трейсы). Прежние 0.05/0.10 пришли из практики
+    /// нагруженных сервисов и здесь работали против цели: инсталляция однопользовательская,
+    /// ходов единицы в минуту, и при 5% нужного трейса в 19 случаях из 20 просто нет —
+    /// «трейсинг включён, но разобрать по нему нечего». Экономить не на чем: такой поток
+    /// 15-дневный retention переваривает не замечая, а метрики сэмплинга вообще не касаются.
+    ///
+    /// Значения: <c>0</c> — осознанное «трейсы не нужны» (раньше молча превращалось в дефолт,
+    /// то есть выключить трейсинг конфигом было НЕЛЬЗЯ); <c>(0;1]</c> — доля корневых трейсов;
+    /// вне диапазона — мусор в конфиге, откатываемся к дефолту с жалобой в stderr.
+    ///
+    /// ParentBased везде, кроме краёв: дочерние спаны обязаны следовать решению корня,
+    /// иначе трейс приезжает дырявым (C3-UPD).
+    /// </summary>
+    internal static Sampler ResolveSampler(double? configured)
+    {
+        if (configured is null) return new AlwaysOnSampler();
+
+        var ratio = configured.Value;
+        if (ratio == 0) return new AlwaysOffSampler();
+        if (ratio >= 1) return new AlwaysOnSampler();
+
+        if (ratio is < 0 or > 1)
+        {
+            Console.Error.WriteLine(
+                $"[Telemetry] TraceSampleRatio={ratio} вне диапазона [0;1] — беру 1.0 (все трейсы)");
+            return new AlwaysOnSampler();
+        }
+
+        return new ParentBasedSampler(new TraceIdRatioBasedSampler(ratio));
+    }
+
+    /// <summary>
+    /// Адрес OTLP-коллектора. Раньше строка из конфига шла в <c>new Uri(...)</c> без проверки,
+    /// и опечатка в <c>OtlpEndpoint</c> роняла приложение на старте — единственное место,
+    /// где observability убивала продукт. Теперь кривой адрес просто выключает экспорт:
+    /// сервер поднимается, в stderr — причина.
+    /// </summary>
+    internal static Uri? ParseEndpoint(string? configured, string fallback)
+    {
+        var raw = string.IsNullOrWhiteSpace(configured) ? fallback : configured;
+
+        if (Uri.TryCreate(raw, UriKind.Absolute, out var uri)
+            && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
+            return uri;
+
+        Console.Error.WriteLine(
+            $"[Telemetry] OtlpEndpoint='{raw}' — не абсолютный http(s)-адрес, экспорт телеметрии выключен");
+        return null;
     }
 
     /// <summary>Имена named OTLP exporters для fan-out (оба backend'а одновременно).</summary>

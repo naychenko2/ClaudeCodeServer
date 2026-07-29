@@ -32,10 +32,11 @@ public static class McpCallLogMiddleware
         finally
         {
             sw.Stop();
-            // Инструмент не назвался (старая версия сервера в песочнице, чужой клиент с тем же
-            // заголовком) — учитываем по пути, чтобы вызов не потерялся вовсе
-            var tool = ctx.Request.Headers[ToolHeader].FirstOrDefault() is { Length: > 0 } t
-                ? t : $"(без имени) {ctx.Request.Path}";
+            // Сырое значение заголовка; null означает «инструмент не назвался» (старая версия
+            // сервера в песочнице, чужой клиент с тем же заголовком). Подстановку пути вместо
+            // имени делает McpCallLog — и только для таблицы диагностики: в тег метрики путь
+            // с GUID пускать нельзя (кардинальность + PII), там своё схлопывание.
+            var tool = ctx.Request.Headers[ToolHeader].FirstOrDefault() is { Length: > 0 } t ? t : null;
             var sessionId = ctx.Request.Headers[DenyOnDelegatedTurnAttribute.CallerHeader].FirstOrDefault();
             var status = ctx.Response.StatusCode;
 
@@ -44,12 +45,13 @@ public static class McpCallLogMiddleware
 
             // Ранний return здесь недопустим — это тело finally
             var log = ctx.RequestServices.GetService<ILogger<McpCallLog>>();
+            var name = tool ?? "(без имени)";
             if (log is not null && status >= 400)
                 log.LogWarning("MCP {Tool} → {Status} за {Ms} мс (сессия {Session}, {Method} {Path})",
-                    tool, status, sw.ElapsedMilliseconds, sessionId, ctx.Request.Method, ctx.Request.Path);
+                    name, status, sw.ElapsedMilliseconds, sessionId, ctx.Request.Method, ctx.Request.Path);
             else
                 log?.LogDebug("MCP {Tool} → {Status} за {Ms} мс (сессия {Session})",
-                    tool, status, sw.ElapsedMilliseconds, sessionId);
+                    name, status, sw.ElapsedMilliseconds, sessionId);
         }
     }
 }

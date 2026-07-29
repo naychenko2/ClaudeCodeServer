@@ -100,6 +100,10 @@ public static class ServerMetrics
     // ── Recording API ────────────────────────────────────────────────────────
     // Строковые параметры = теги (camelCase ↔ snake_case ↔ AllowedTags).
     // Числовой параметр (где есть) = скалярное значение метрики.
+    //
+    // Имена тегов ограничены allowlist'ом выше, ЗНАЧЕНИЯ — через MetricTagGuard:
+    // tool_name и model приходят снаружи (заголовок MCP-сервера, поле сессии из PUT),
+    // и без ограничителя каждое новое значение заводит вечный ряд в ClickHouse.
 
     /// <summary>Записать длительность хода LLM. Теги захардкожены в сигнатуре.</summary>
     public static void RecordLlmDuration(
@@ -110,7 +114,7 @@ public static class ServerMetrics
     {
         LlmDuration.Record(durationMs,
             new KeyValuePair<string, object?>("provider", provider),
-            new KeyValuePair<string, object?>("model", model),
+            new KeyValuePair<string, object?>("model", MetricTagGuard.Model(model)),
             new KeyValuePair<string, object?>("outcome", outcome));
     }
 
@@ -130,14 +134,14 @@ public static class ServerMetrics
     public static void RecordMcpCall(string toolName, string outcome)
     {
         McpCalls.Add(1,
-            new KeyValuePair<string, object?>("tool_name", toolName),
+            new KeyValuePair<string, object?>("tool_name", MetricTagGuard.Tool(toolName)),
             new KeyValuePair<string, object?>("outcome", outcome));
     }
 
     public static void RecordMcpError(string toolName, string errorType)
     {
         McpErrors.Add(1,
-            new KeyValuePair<string, object?>("tool_name", toolName),
+            new KeyValuePair<string, object?>("tool_name", MetricTagGuard.Tool(toolName)),
             new KeyValuePair<string, object?>("error_type", errorType));
     }
 

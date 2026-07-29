@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react';
 import { X, AlertTriangle } from 'lucide-react';
 import { api } from '../lib/api';
 import type { UsageResponse, FalAccountResponse, UsageSnapshot, OllamaUsageInfo } from '../types';
-import { C, FONT, SHADOW } from '../lib/design';
-import { type RateWindow, RATE_COLORS, windowLabel, fmtReset, latestPerWindow, overageLabel, seriesByWindow, worstWindow } from '../lib/rateLimit';
+import { C, FONT, SHADOW, FS } from '../lib/design';
+import { type RateWindow, RATE_COLORS, windowLabel, fmtReset, latestPerWindow, latestWithUtilization, snapshotFreshnessLabel, overageLabel, seriesByWindow, worstWindow } from '../lib/rateLimit';
 import { type RotationInfo, rotationBadgeState } from '../lib/rotation';
 import { cliProviderKeys, providerCapsByKey, providerLabel } from '../lib/models';
 
@@ -122,12 +122,12 @@ function ClaudeTab({ snapshots, rotation, tier, pollStatus }: { snapshots: Usage
   const series = snapshots ? seriesByWindow(snapshots) : {};
   // Свежесть — только по снимкам С ПРОЦЕНТОМ: rate_limit_event ходов шлёт одни resets,
   // и такой снимок не должен выдавать устаревшие проценты за свежие
-  const utilTs = (snapshots ?? []).reduce<number>((a, s) => {
-    if (typeof s.utilization !== 'number') return a;
-    const t = new Date(s.timestamp).getTime();
-    return t > a ? t : a;
-  }, 0);
+  const latestUtil = snapshots ? latestWithUtilization(snapshots) : null;
+  const utilTs = latestUtil ? new Date(latestUtil.timestamp).getTime() : 0;
   const staleUtil = utilTs === 0 || Date.now() - utilTs > STALE_MS;
+  // Подпись «источник · возраст»: свежий пинг/ход говорит, что цифры актуальны, даже когда
+  // OAuth-опрос не отвечает (плашка unauthorized тогда — дополнение, а не маска данных)
+  const freshness = latestUtil ? snapshotFreshnessLabel(latestUtil.source, latestUtil.timestamp) : null;
   const needLogin = pollStatus === 'unauthorized' || (windows.length > 0 && staleUtil);
   const worst = worstWindow(windows);
   const trend = worst ? (series[worst.limitType] ?? []) : [];
@@ -152,8 +152,8 @@ function ClaudeTab({ snapshots, rotation, tier, pollStatus }: { snapshots: Usage
     <div style={{ opacity: staleUtil ? 0.6 : 1 }}>
       {badge}
       {needLogin && <NeedLoginBanner />}
-      {utilTs > 0 && (
-        <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 8 }}>{fmtAgo(new Date(utilTs).toISOString())}</div>
+      {freshness && (
+        <div style={{ fontSize: FS.xs, color: C.textMuted, marginBottom: 8 }}>{freshness}</div>
       )}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
         {windows.map(w => <WindowCard key={w.limitType} w={w} />)}

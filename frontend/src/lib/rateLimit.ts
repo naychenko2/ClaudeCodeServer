@@ -116,6 +116,38 @@ export function seriesByWindow(snapshots: UsageSnapshot[]): Record<string, { t: 
   return out;
 }
 
+// Ярлыки источника снимка (UsageSnapshot.source) для подписи свежести на вкладке аккаунта
+const SNAPSHOT_SOURCE_LABELS: Record<string, string> = {
+  turn: 'Живой ход',
+  probe: 'Пинг',
+  oauth: 'OAuth-опрос',
+};
+
+// Последний по времени снимок С ПРОЦЕНТОМ — именно он говорит, насколько свежи цифры
+// (rate_limit_event ходов шлёт одни resets, без utilization такой снимок не считается)
+export function latestWithUtilization(snapshots: UsageSnapshot[]): UsageSnapshot | null {
+  let best: UsageSnapshot | null = null;
+  let bestT = 0;
+  for (const s of snapshots) {
+    if (typeof s.utilization !== 'number') continue;
+    const t = new Date(s.timestamp).getTime();
+    if (isNaN(t)) continue;
+    if (!best || t > bestT) { best = s; bestT = t; }
+  }
+  return best;
+}
+
+// Подпись свежести данных аккаунта: «Пинг · 3 мин назад», «Живой ход · только что»;
+// снимок без источника (записи до фичи) — только возраст: «12 мин назад»
+export function snapshotFreshnessLabel(source: UsageSnapshot['source'], timestamp: string, now: number = Date.now()): string | null {
+  const t = new Date(timestamp).getTime();
+  if (isNaN(t)) return null;
+  const mins = Math.max(0, Math.floor((now - t) / 60000));
+  const age = mins < 1 ? 'только что' : mins < 60 ? `${mins} мин назад` : `${Math.floor(mins / 60)} ч назад`;
+  const src = source ? SNAPSHOT_SOURCE_LABELS[source] : undefined;
+  return src ? `${src} · ${age}` : age;
+}
+
 // Время сброса окна: относительное (<6ч) либо абсолютное
 export function fmtReset(resetsAt?: string): string {
   if (!resetsAt) return '';

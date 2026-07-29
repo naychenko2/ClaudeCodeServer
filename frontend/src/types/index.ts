@@ -681,6 +681,9 @@ export interface UsageSnapshot {
   resetsAt?: string;
   overageStatus?: string;
   overageResetsAt?: string;
+  // Кто записал снимок: живой ход чата, идл-пинг простаивающего аккаунта или OAuth-опрос
+  // лимитов; null/отсутствует — записи до фичи идл-пинга (обратная совместимость)
+  source?: 'turn' | 'probe' | 'oauth' | null;
 }
 
 // Тариф подписки (с бэка, из credentials)

@@ -11,6 +11,7 @@ export type TeamImplementTone = 'work' | 'wait' | 'idle';
 
 export function teamImplementTone(stage: TeamImplementStage): TeamImplementTone {
   switch (stage) {
+    case 'interview':
     case 'confirming':
     case 'awaitingDecision':
       return 'wait';
@@ -31,6 +32,7 @@ function waveText(waveNumber: number, plannedWaves?: number): string {
 // Полная подпись стадии для бейджа в композере (и тултипа маркера)
 export function teamImplementStageLabel(stage: TeamImplementStage, waveNumber: number, plannedWaves?: number): string {
   switch (stage) {
+    case 'interview': return 'интервью';
     case 'planning': return 'планирование';
     case 'confirming': return 'ждёт подтверждения';
     case 'wave': return waveText(waveNumber, plannedWaves);
@@ -43,6 +45,7 @@ export function teamImplementStageLabel(stage: TeamImplementStage, waveNumber: n
 // Короткая форма для маркера в узкой строке списка чатов
 export function teamImplementStageShort(stage: TeamImplementStage, waveNumber: number, plannedWaves?: number): string {
   switch (stage) {
+    case 'interview': return 'вопросы';
     case 'planning': return 'планирует';
     case 'confirming': return 'согласование';
     case 'wave': return plannedWaves && plannedWaves > 0 ? `волна ${waveNumber}/${plannedWaves}` : `волна ${waveNumber}`;

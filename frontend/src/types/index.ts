@@ -790,6 +790,7 @@ export interface WorkLoopState {
 // === Режим «Командная реализация» (флаг team-implement-mode) ===
 // Стадии непрерывного контура — совпадают с wire-токенами TeamImplementStage на бэке
 export type TeamImplementStage =
+  | 'interview'         // координатор спрашивает человека, прежде чем планировать (Э8)
   | 'planning'          // координатор готовит карточку плана
   | 'confirming'        // план ждёт единственного согласования
   | 'wave'              // волна исполнителей в работе

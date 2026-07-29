@@ -1,6 +1,6 @@
 {
   "title": "LLM Operations",
-  "description": "Здоровье LLM-провайдеров ClaudeHomeServer: latency, error rate, rate-limit hits, top моделей. Источник метрик — Meter 'ClaudeHomeServer.Core' (backend/ClaudeHomeServer/Telemetry/ServerMetrics.cs). Применяется через docker/observability/dashboards/apply.ps1. Схема виджетов — builder v0.134: структура queryData скопирована с эталона, который SigNoz генерирует сам при сохранении панели через UI (имя метрики в aggregations[].metricName, having — объект, promql/clickhouse_sql — с заглушкой). Правя вручную, сверяйся с эталоном: SigNoz принимает и сохраняет ЛЮБОЙ JSON без валидации, поэтому успешный импорт не означает, что панель отрисуется.",
+  "description": "Здоровье LLM-провайдеров ClaudeHomeServer: latency, error rate, rate-limit hits, top моделей. Источник метрик — Meter 'ClaudeHomeServer.Core' (backend/ClaudeHomeServer/Telemetry/ServerMetrics.cs). Применяется через docker/observability/dashboards/apply.ps1. В один SigNoz шлют ДВА инстанса продукта — дев и боевой на порту 80; различает их только тег deployment.environment (service.instance.id у обоих равен имени машины), поэтому он добавлен в groupBy и легенду КАЖДОЙ панели: без него p95 становился средним по больнице, а всплеск ошибок — ничьим. Схема виджетов — builder v0.134: имя метрики в aggregations[].metricName, filter/having — объекты с expression, groupBy — МАССИВ ключей (проверено запросом к /api/v5/query_range: массив из двух ключей реально разбивает ряды), promql/clickhouse_sql — заглушки. SigNoz принимает и сохраняет ЛЮБОЙ JSON без валидации, поэтому успешный импорт не означает, что панель отрисуется — проверяй глазами.",
   "tags": [
     "claude-home-server",
     "llm",
@@ -132,17 +132,26 @@
                 "expression": ""
               },
               "functions": [],
-              "groupBy": {
-                "isColumn": false,
-                "type": "tag",
-                "key": "provider",
-                "isJSON": false,
-                "dataType": "string"
-              },
+              "groupBy": [
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "provider",
+                  "isJSON": false,
+                  "dataType": "string"
+                },
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "deployment.environment",
+                  "isJSON": false,
+                  "dataType": "string"
+                }
+              ],
               "having": {
                 "expression": ""
               },
-              "legend": "{{provider}}",
+              "legend": "{{provider}} · {{deployment.environment}}",
               "limit": null,
               "orderBy": [],
               "queryName": "A",
@@ -194,7 +203,7 @@
     {
       "id": "f3a1c2d4-2222-4222-8222-bbbbbbbbbbbb",
       "title": "p99 LLM Duration by Provider",
-      "description": "99-й перцентиль длительности хода. ВНИМАНИЕ: гистограмма ccs.llm.duration идёт с дефолтными границами OTel (потолок 10000 мс), а ходы LLM длятся десятками секунд — значения около 10000 означают «упёрлось в последний бакет», а не реальную длительность. Достоверным перцентиль станет после явных Boundaries в ServerMetrics.",
+      "description": "99-й перцентиль длительности хода. Границы бакетов заданы явно (ServerMetrics.LlmDurationBoundaries, до 20 минут) — до этого гистограмма шла с дефолтным потолком OTel в 10000 мс, все ходы падали в последний бакет и p99 показывал 9975 мс независимо от реальности. Точки СТАРШЕ этой правки недостоверны.",
       "panelTypes": "graph",
       "yAxisUnit": "ms",
       "timePreferance": "GLOBAL_TIME",
@@ -226,17 +235,26 @@
                 "expression": ""
               },
               "functions": [],
-              "groupBy": {
-                "isColumn": false,
-                "type": "tag",
-                "key": "provider",
-                "isJSON": false,
-                "dataType": "string"
-              },
+              "groupBy": [
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "provider",
+                  "isJSON": false,
+                  "dataType": "string"
+                },
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "deployment.environment",
+                  "isJSON": false,
+                  "dataType": "string"
+                }
+              ],
               "having": {
                 "expression": ""
               },
-              "legend": "{{provider}}",
+              "legend": "{{provider}} · {{deployment.environment}}",
               "limit": null,
               "orderBy": [],
               "queryName": "A",
@@ -320,17 +338,26 @@
                 "expression": ""
               },
               "functions": [],
-              "groupBy": {
-                "isColumn": false,
-                "type": "tag",
-                "key": "provider",
-                "isJSON": false,
-                "dataType": "string"
-              },
+              "groupBy": [
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "provider",
+                  "isJSON": false,
+                  "dataType": "string"
+                },
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "deployment.environment",
+                  "isJSON": false,
+                  "dataType": "string"
+                }
+              ],
               "having": {
                 "expression": ""
               },
-              "legend": "{{provider}}",
+              "legend": "{{provider}} · {{deployment.environment}}",
               "limit": null,
               "orderBy": [],
               "queryName": "A",
@@ -414,17 +441,26 @@
                 "expression": ""
               },
               "functions": [],
-              "groupBy": {
-                "isColumn": false,
-                "type": "tag",
-                "key": "provider",
-                "isJSON": false,
-                "dataType": "string"
-              },
+              "groupBy": [
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "provider",
+                  "isJSON": false,
+                  "dataType": "string"
+                },
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "deployment.environment",
+                  "isJSON": false,
+                  "dataType": "string"
+                }
+              ],
               "having": {
                 "expression": ""
               },
-              "legend": "{{provider}}",
+              "legend": "{{provider}} · {{deployment.environment}}",
               "limit": null,
               "orderBy": [],
               "queryName": "A",
@@ -508,17 +544,26 @@
                 "expression": ""
               },
               "functions": [],
-              "groupBy": {
-                "isColumn": false,
-                "type": "tag",
-                "key": "provider",
-                "isJSON": false,
-                "dataType": "string"
-              },
+              "groupBy": [
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "provider",
+                  "isJSON": false,
+                  "dataType": "string"
+                },
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "deployment.environment",
+                  "isJSON": false,
+                  "dataType": "string"
+                }
+              ],
               "having": {
                 "expression": ""
               },
-              "legend": "{{provider}}",
+              "legend": "{{provider}} · {{deployment.environment}}",
               "limit": null,
               "orderBy": [],
               "queryName": "A",
@@ -602,17 +647,26 @@
                 "expression": ""
               },
               "functions": [],
-              "groupBy": {
-                "isColumn": false,
-                "type": "tag",
-                "key": "error_type",
-                "isJSON": false,
-                "dataType": "string"
-              },
+              "groupBy": [
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "error_type",
+                  "isJSON": false,
+                  "dataType": "string"
+                },
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "deployment.environment",
+                  "isJSON": false,
+                  "dataType": "string"
+                }
+              ],
               "having": {
                 "expression": ""
               },
-              "legend": "{{error_type}}",
+              "legend": "{{error_type}} · {{deployment.environment}}",
               "limit": null,
               "orderBy": [],
               "queryName": "A",
@@ -696,17 +750,26 @@
                 "expression": ""
               },
               "functions": [],
-              "groupBy": {
-                "isColumn": false,
-                "type": "tag",
-                "key": "model",
-                "isJSON": false,
-                "dataType": "string"
-              },
+              "groupBy": [
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "model",
+                  "isJSON": false,
+                  "dataType": "string"
+                },
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "deployment.environment",
+                  "isJSON": false,
+                  "dataType": "string"
+                }
+              ],
               "having": {
                 "expression": ""
               },
-              "legend": "{{model}}",
+              "legend": "{{model}} · {{deployment.environment}}",
               "limit": 5,
               "orderBy": [],
               "queryName": "A",
@@ -790,11 +853,19 @@
                 "expression": ""
               },
               "functions": [],
-              "groupBy": null,
+              "groupBy": [
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "deployment.environment",
+                  "isJSON": false,
+                  "dataType": "string"
+                }
+              ],
               "having": {
                 "expression": ""
               },
-              "legend": "heartbeat",
+              "legend": "heartbeat · {{deployment.environment}}",
               "limit": null,
               "orderBy": [],
               "queryName": "A",

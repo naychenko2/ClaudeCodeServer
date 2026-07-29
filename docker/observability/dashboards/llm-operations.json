@@ -1,0 +1,847 @@
+{
+  "title": "LLM Operations",
+  "description": "Здоровье LLM-провайдеров ClaudeHomeServer: latency, error rate, rate-limit hits, top моделей. Источник метрик — Meter 'ClaudeHomeServer.Core' (backend/ClaudeHomeServer/Telemetry/ServerMetrics.cs). Применяется через docker/observability/dashboards/apply.ps1. Схема виджетов — builder v0.134: структура queryData скопирована с эталона, который SigNoz генерирует сам при сохранении панели через UI (имя метрики в aggregations[].metricName, having — объект, promql/clickhouse_sql — с заглушкой). Правя вручную, сверяйся с эталоном: SigNoz принимает и сохраняет ЛЮБОЙ JSON без валидации, поэтому успешный импорт не означает, что панель отрисуется.",
+  "tags": [
+    "claude-home-server",
+    "llm",
+    "operations"
+  ],
+  "layout": [
+    {
+      "h": 4,
+      "w": 12,
+      "x": 0,
+      "y": 0,
+      "i": "f3a1c2d4-1111-4111-8111-aaaaaaaaaaaa",
+      "moved": false,
+      "static": false,
+      "minH": 2,
+      "minW": 6
+    },
+    {
+      "h": 4,
+      "w": 6,
+      "x": 0,
+      "y": 4,
+      "i": "f3a1c2d4-2222-4222-8222-bbbbbbbbbbbb",
+      "moved": false,
+      "static": false,
+      "minH": 2,
+      "minW": 3
+    },
+    {
+      "h": 4,
+      "w": 6,
+      "x": 6,
+      "y": 4,
+      "i": "f3a1c2d4-3333-4333-8333-cccccccccccc",
+      "moved": false,
+      "static": false,
+      "minH": 2,
+      "minW": 3
+    },
+    {
+      "h": 4,
+      "w": 12,
+      "x": 0,
+      "y": 8,
+      "i": "f3a1c2d4-4444-4444-8444-dddddddddddd",
+      "moved": false,
+      "static": false,
+      "minH": 2,
+      "minW": 6
+    },
+    {
+      "h": 4,
+      "w": 6,
+      "x": 0,
+      "y": 12,
+      "i": "f3a1c2d4-5555-4555-8555-eeeeeeeeeeee",
+      "moved": false,
+      "static": false,
+      "minH": 2,
+      "minW": 3
+    },
+    {
+      "h": 4,
+      "w": 6,
+      "x": 6,
+      "y": 12,
+      "i": "f3a1c2d4-6666-4666-8666-ffffffffffff",
+      "moved": false,
+      "static": false,
+      "minH": 2,
+      "minW": 3
+    },
+    {
+      "h": 4,
+      "w": 12,
+      "x": 0,
+      "y": 16,
+      "i": "f3a1c2d4-7777-4777-8777-999999999999",
+      "moved": false,
+      "static": false,
+      "minH": 2,
+      "minW": 6
+    },
+    {
+      "h": 4,
+      "w": 12,
+      "x": 0,
+      "y": 20,
+      "i": "f3a1c2d4-8888-4888-8888-888888888888",
+      "moved": false,
+      "static": false,
+      "minH": 2,
+      "minW": 6
+    }
+  ],
+  "widgets": [
+    {
+      "id": "f3a1c2d4-1111-4111-8111-aaaaaaaaaaaa",
+      "title": "LLM Call Rate (RPS) by Provider",
+      "description": "Ходов в секунду по провайдерам. Считается по счётчику гистограммы ccs.llm.duration.count.",
+      "panelTypes": "graph",
+      "yAxisUnit": "",
+      "timePreferance": "GLOBAL_TIME",
+      "queryType": "builder",
+      "nullZeroValues": "zero",
+      "isStacked": false,
+      "opacity": "1",
+      "fillSpans": false,
+      "softMin": 0,
+      "softMax": 0,
+      "thresholds": [],
+      "query": {
+        "builder": {
+          "queryData": [
+            {
+              "aggregations": [
+                {
+                  "temporality": "Cumulative",
+                  "reduceTo": "avg",
+                  "metricName": "ccs.llm.duration.count",
+                  "spaceAggregation": "sum",
+                  "timeAggregation": "rate"
+                }
+              ],
+              "dataSource": "metrics",
+              "disabled": false,
+              "expression": "A",
+              "filter": {
+                "expression": ""
+              },
+              "functions": [],
+              "groupBy": {
+                "isColumn": false,
+                "type": "tag",
+                "key": "provider",
+                "isJSON": false,
+                "dataType": "string"
+              },
+              "having": {
+                "expression": ""
+              },
+              "legend": "{{provider}}",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "source": "",
+              "stepInterval": null
+            }
+          ],
+          "queryFormulas": [],
+          "queryTraceOperator": []
+        },
+        "clickhouse_sql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "id": "21c0d93e-f41c-4d26-8231-8a58c1790ef6",
+        "promql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "queryType": "builder",
+        "unit": ""
+      },
+      "bucketCount": 30,
+      "bucketWidth": 0,
+      "columnUnits": {},
+      "decimalPrecision": 2,
+      "fillMode": "none",
+      "isLogScale": false,
+      "legendPosition": "bottom",
+      "lineInterpolation": "spline",
+      "lineStyle": "solid",
+      "mergeAllActiveQueries": false,
+      "showPoints": false,
+      "spanGaps": true,
+      "stackedBarChart": false,
+      "customLegendColors": {},
+      "contextLinks": {
+        "linksData": []
+      }
+    },
+    {
+      "id": "f3a1c2d4-2222-4222-8222-bbbbbbbbbbbb",
+      "title": "p99 LLM Duration by Provider",
+      "description": "99-й перцентиль длительности хода. ВНИМАНИЕ: гистограмма ccs.llm.duration идёт с дефолтными границами OTel (потолок 10000 мс), а ходы LLM длятся десятками секунд — значения около 10000 означают «упёрлось в последний бакет», а не реальную длительность. Достоверным перцентиль станет после явных Boundaries в ServerMetrics.",
+      "panelTypes": "graph",
+      "yAxisUnit": "ms",
+      "timePreferance": "GLOBAL_TIME",
+      "queryType": "builder",
+      "nullZeroValues": "zero",
+      "isStacked": false,
+      "opacity": "1",
+      "fillSpans": false,
+      "softMin": 0,
+      "softMax": 0,
+      "thresholds": [],
+      "query": {
+        "builder": {
+          "queryData": [
+            {
+              "aggregations": [
+                {
+                  "temporality": "Cumulative",
+                  "reduceTo": "avg",
+                  "metricName": "ccs.llm.duration.bucket",
+                  "spaceAggregation": "p99",
+                  "timeAggregation": "rate"
+                }
+              ],
+              "dataSource": "metrics",
+              "disabled": false,
+              "expression": "A",
+              "filter": {
+                "expression": ""
+              },
+              "functions": [],
+              "groupBy": {
+                "isColumn": false,
+                "type": "tag",
+                "key": "provider",
+                "isJSON": false,
+                "dataType": "string"
+              },
+              "having": {
+                "expression": ""
+              },
+              "legend": "{{provider}}",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "source": "",
+              "stepInterval": null
+            }
+          ],
+          "queryFormulas": [],
+          "queryTraceOperator": []
+        },
+        "clickhouse_sql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "id": "8904c6ed-8b77-42b9-9ba9-3e84f166b950",
+        "promql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "queryType": "builder",
+        "unit": "ms"
+      },
+      "bucketCount": 30,
+      "bucketWidth": 0,
+      "columnUnits": {},
+      "decimalPrecision": 2,
+      "fillMode": "none",
+      "isLogScale": false,
+      "legendPosition": "bottom",
+      "lineInterpolation": "spline",
+      "lineStyle": "solid",
+      "mergeAllActiveQueries": false,
+      "showPoints": false,
+      "spanGaps": true,
+      "stackedBarChart": false,
+      "customLegendColors": {},
+      "contextLinks": {
+        "linksData": []
+      }
+    },
+    {
+      "id": "f3a1c2d4-3333-4333-8333-cccccccccccc",
+      "title": "p50 LLM Duration by Provider",
+      "description": "Медианная длительность хода. Та же оговорка про потолок бакетов, что и у p99.",
+      "panelTypes": "graph",
+      "yAxisUnit": "ms",
+      "timePreferance": "GLOBAL_TIME",
+      "queryType": "builder",
+      "nullZeroValues": "zero",
+      "isStacked": false,
+      "opacity": "1",
+      "fillSpans": false,
+      "softMin": 0,
+      "softMax": 0,
+      "thresholds": [],
+      "query": {
+        "builder": {
+          "queryData": [
+            {
+              "aggregations": [
+                {
+                  "temporality": "Cumulative",
+                  "reduceTo": "avg",
+                  "metricName": "ccs.llm.duration.bucket",
+                  "spaceAggregation": "p50",
+                  "timeAggregation": "rate"
+                }
+              ],
+              "dataSource": "metrics",
+              "disabled": false,
+              "expression": "A",
+              "filter": {
+                "expression": ""
+              },
+              "functions": [],
+              "groupBy": {
+                "isColumn": false,
+                "type": "tag",
+                "key": "provider",
+                "isJSON": false,
+                "dataType": "string"
+              },
+              "having": {
+                "expression": ""
+              },
+              "legend": "{{provider}}",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "source": "",
+              "stepInterval": null
+            }
+          ],
+          "queryFormulas": [],
+          "queryTraceOperator": []
+        },
+        "clickhouse_sql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "id": "6cda8ed5-0fd5-4884-8629-d1b08db2f7c8",
+        "promql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "queryType": "builder",
+        "unit": "ms"
+      },
+      "bucketCount": 30,
+      "bucketWidth": 0,
+      "columnUnits": {},
+      "decimalPrecision": 2,
+      "fillMode": "none",
+      "isLogScale": false,
+      "legendPosition": "bottom",
+      "lineInterpolation": "spline",
+      "lineStyle": "solid",
+      "mergeAllActiveQueries": false,
+      "showPoints": false,
+      "spanGaps": true,
+      "stackedBarChart": false,
+      "customLegendColors": {},
+      "contextLinks": {
+        "linksData": []
+      }
+    },
+    {
+      "id": "f3a1c2d4-4444-4444-8444-dddddddddddd",
+      "title": "LLM Errors by Provider",
+      "description": "Ошибки провайдеров в секунду. Учитываются оба признака отказа: subtype=error (сбой CLI) и is_error=true при subtype=success (API-ошибка провайдера, напр. 429).",
+      "panelTypes": "graph",
+      "yAxisUnit": "",
+      "timePreferance": "GLOBAL_TIME",
+      "queryType": "builder",
+      "nullZeroValues": "zero",
+      "isStacked": false,
+      "opacity": "1",
+      "fillSpans": false,
+      "softMin": 0,
+      "softMax": 0,
+      "thresholds": [],
+      "query": {
+        "builder": {
+          "queryData": [
+            {
+              "aggregations": [
+                {
+                  "temporality": "Cumulative",
+                  "reduceTo": "avg",
+                  "metricName": "ccs.llm.errors",
+                  "spaceAggregation": "sum",
+                  "timeAggregation": "rate"
+                }
+              ],
+              "dataSource": "metrics",
+              "disabled": false,
+              "expression": "A",
+              "filter": {
+                "expression": ""
+              },
+              "functions": [],
+              "groupBy": {
+                "isColumn": false,
+                "type": "tag",
+                "key": "provider",
+                "isJSON": false,
+                "dataType": "string"
+              },
+              "having": {
+                "expression": ""
+              },
+              "legend": "{{provider}}",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "source": "",
+              "stepInterval": null
+            }
+          ],
+          "queryFormulas": [],
+          "queryTraceOperator": []
+        },
+        "clickhouse_sql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "id": "64075ba8-e2f9-4c24-9c96-5bbea3b3ceb6",
+        "promql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "queryType": "builder",
+        "unit": ""
+      },
+      "bucketCount": 30,
+      "bucketWidth": 0,
+      "columnUnits": {},
+      "decimalPrecision": 2,
+      "fillMode": "none",
+      "isLogScale": false,
+      "legendPosition": "bottom",
+      "lineInterpolation": "spline",
+      "lineStyle": "solid",
+      "mergeAllActiveQueries": false,
+      "showPoints": false,
+      "spanGaps": true,
+      "stackedBarChart": false,
+      "customLegendColors": {},
+      "contextLinks": {
+        "linksData": []
+      }
+    },
+    {
+      "id": "f3a1c2d4-5555-4555-8555-eeeeeeeeeeee",
+      "title": "Rate-limit Hits by Provider",
+      "description": "Срабатывания мягкого rate-limit (rate_limit_event от CLI). Рост = упираемся в квоту подписки.",
+      "panelTypes": "graph",
+      "yAxisUnit": "",
+      "timePreferance": "GLOBAL_TIME",
+      "queryType": "builder",
+      "nullZeroValues": "zero",
+      "isStacked": false,
+      "opacity": "1",
+      "fillSpans": false,
+      "softMin": 0,
+      "softMax": 0,
+      "thresholds": [],
+      "query": {
+        "builder": {
+          "queryData": [
+            {
+              "aggregations": [
+                {
+                  "temporality": "Cumulative",
+                  "reduceTo": "avg",
+                  "metricName": "ccs.llm.rate_limit_hits",
+                  "spaceAggregation": "sum",
+                  "timeAggregation": "rate"
+                }
+              ],
+              "dataSource": "metrics",
+              "disabled": false,
+              "expression": "A",
+              "filter": {
+                "expression": ""
+              },
+              "functions": [],
+              "groupBy": {
+                "isColumn": false,
+                "type": "tag",
+                "key": "provider",
+                "isJSON": false,
+                "dataType": "string"
+              },
+              "having": {
+                "expression": ""
+              },
+              "legend": "{{provider}}",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "source": "",
+              "stepInterval": null
+            }
+          ],
+          "queryFormulas": [],
+          "queryTraceOperator": []
+        },
+        "clickhouse_sql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "id": "53c7498c-c688-4ad3-8f3b-65fffbc4afd1",
+        "promql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "queryType": "builder",
+        "unit": ""
+      },
+      "bucketCount": 30,
+      "bucketWidth": 0,
+      "columnUnits": {},
+      "decimalPrecision": 2,
+      "fillMode": "none",
+      "isLogScale": false,
+      "legendPosition": "bottom",
+      "lineInterpolation": "spline",
+      "lineStyle": "solid",
+      "mergeAllActiveQueries": false,
+      "showPoints": false,
+      "spanGaps": true,
+      "stackedBarChart": false,
+      "customLegendColors": {},
+      "contextLinks": {
+        "linksData": []
+      }
+    },
+    {
+      "id": "f3a1c2d4-6666-4666-8666-ffffffffffff",
+      "title": "LLM Errors by Type",
+      "description": "Разбивка ошибок по категориям: rate_limit / auth / network / process_exit / unknown (TurnTelemetry.ClassifyErrorType).",
+      "panelTypes": "graph",
+      "yAxisUnit": "",
+      "timePreferance": "GLOBAL_TIME",
+      "queryType": "builder",
+      "nullZeroValues": "zero",
+      "isStacked": true,
+      "opacity": "1",
+      "fillSpans": false,
+      "softMin": 0,
+      "softMax": 0,
+      "thresholds": [],
+      "query": {
+        "builder": {
+          "queryData": [
+            {
+              "aggregations": [
+                {
+                  "temporality": "Cumulative",
+                  "reduceTo": "avg",
+                  "metricName": "ccs.llm.errors",
+                  "spaceAggregation": "sum",
+                  "timeAggregation": "rate"
+                }
+              ],
+              "dataSource": "metrics",
+              "disabled": false,
+              "expression": "A",
+              "filter": {
+                "expression": ""
+              },
+              "functions": [],
+              "groupBy": {
+                "isColumn": false,
+                "type": "tag",
+                "key": "error_type",
+                "isJSON": false,
+                "dataType": "string"
+              },
+              "having": {
+                "expression": ""
+              },
+              "legend": "{{error_type}}",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "source": "",
+              "stepInterval": null
+            }
+          ],
+          "queryFormulas": [],
+          "queryTraceOperator": []
+        },
+        "clickhouse_sql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "id": "aeeeae1c-bfbb-4a48-b6a4-60d8a6277f29",
+        "promql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "queryType": "builder",
+        "unit": ""
+      },
+      "bucketCount": 30,
+      "bucketWidth": 0,
+      "columnUnits": {},
+      "decimalPrecision": 2,
+      "fillMode": "none",
+      "isLogScale": false,
+      "legendPosition": "bottom",
+      "lineInterpolation": "spline",
+      "lineStyle": "solid",
+      "mergeAllActiveQueries": false,
+      "showPoints": false,
+      "spanGaps": true,
+      "stackedBarChart": false,
+      "customLegendColors": {},
+      "contextLinks": {
+        "linksData": []
+      }
+    },
+    {
+      "id": "f3a1c2d4-7777-4777-8777-999999999999",
+      "title": "Top Models by Call Rate",
+      "description": "Какие модели реально работают. Тег model берётся из EffectiveModel хода.",
+      "panelTypes": "graph",
+      "yAxisUnit": "",
+      "timePreferance": "GLOBAL_TIME",
+      "queryType": "builder",
+      "nullZeroValues": "zero",
+      "isStacked": false,
+      "opacity": "1",
+      "fillSpans": false,
+      "softMin": 0,
+      "softMax": 0,
+      "thresholds": [],
+      "query": {
+        "builder": {
+          "queryData": [
+            {
+              "aggregations": [
+                {
+                  "temporality": "Cumulative",
+                  "reduceTo": "avg",
+                  "metricName": "ccs.llm.duration.count",
+                  "spaceAggregation": "sum",
+                  "timeAggregation": "rate"
+                }
+              ],
+              "dataSource": "metrics",
+              "disabled": false,
+              "expression": "A",
+              "filter": {
+                "expression": ""
+              },
+              "functions": [],
+              "groupBy": {
+                "isColumn": false,
+                "type": "tag",
+                "key": "model",
+                "isJSON": false,
+                "dataType": "string"
+              },
+              "having": {
+                "expression": ""
+              },
+              "legend": "{{model}}",
+              "limit": 5,
+              "orderBy": [],
+              "queryName": "A",
+              "source": "",
+              "stepInterval": null
+            }
+          ],
+          "queryFormulas": [],
+          "queryTraceOperator": []
+        },
+        "clickhouse_sql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "id": "085da670-090d-4970-b99d-bbfd2b883b69",
+        "promql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "queryType": "builder",
+        "unit": ""
+      },
+      "bucketCount": 30,
+      "bucketWidth": 0,
+      "columnUnits": {},
+      "decimalPrecision": 2,
+      "fillMode": "none",
+      "isLogScale": false,
+      "legendPosition": "bottom",
+      "lineInterpolation": "spline",
+      "lineStyle": "solid",
+      "mergeAllActiveQueries": false,
+      "showPoints": false,
+      "spanGaps": true,
+      "stackedBarChart": false,
+      "customLegendColors": {},
+      "contextLinks": {
+        "linksData": []
+      }
+    },
+    {
+      "id": "f3a1c2d4-8888-4888-8888-888888888888",
+      "title": "Telemetry Heartbeat (жив ли pipeline)",
+      "description": "Тики TelemetryHeartbeatService. Если график упал в ноль — стоит не приложение, а сам экспорт телеметрии, и пустота на остальных панелях означает «данные не доехали», а не «нагрузки не было». Смотреть ПЕРВЫМ, когда дашборд выглядит пустым.",
+      "panelTypes": "graph",
+      "yAxisUnit": "",
+      "timePreferance": "GLOBAL_TIME",
+      "queryType": "builder",
+      "nullZeroValues": "zero",
+      "isStacked": false,
+      "opacity": "1",
+      "fillSpans": false,
+      "softMin": 0,
+      "softMax": 0,
+      "thresholds": [],
+      "query": {
+        "builder": {
+          "queryData": [
+            {
+              "aggregations": [
+                {
+                  "temporality": "Cumulative",
+                  "reduceTo": "avg",
+                  "metricName": "ccs.telemetry.heartbeat",
+                  "spaceAggregation": "sum",
+                  "timeAggregation": "rate"
+                }
+              ],
+              "dataSource": "metrics",
+              "disabled": false,
+              "expression": "A",
+              "filter": {
+                "expression": ""
+              },
+              "functions": [],
+              "groupBy": null,
+              "having": {
+                "expression": ""
+              },
+              "legend": "heartbeat",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "source": "",
+              "stepInterval": null
+            }
+          ],
+          "queryFormulas": [],
+          "queryTraceOperator": []
+        },
+        "clickhouse_sql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "id": "e36c1dc9-32fb-4627-ae74-460fd3757426",
+        "promql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "queryType": "builder",
+        "unit": ""
+      },
+      "bucketCount": 30,
+      "bucketWidth": 0,
+      "columnUnits": {},
+      "decimalPrecision": 2,
+      "fillMode": "none",
+      "isLogScale": false,
+      "legendPosition": "bottom",
+      "lineInterpolation": "spline",
+      "lineStyle": "solid",
+      "mergeAllActiveQueries": false,
+      "showPoints": false,
+      "spanGaps": true,
+      "stackedBarChart": false,
+      "customLegendColors": {},
+      "contextLinks": {
+        "linksData": []
+      }
+    }
+  ]
+}

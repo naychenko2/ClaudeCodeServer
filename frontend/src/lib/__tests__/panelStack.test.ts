@@ -256,6 +256,19 @@ describe('moveAcrossAt / moveAcrossToNewColumn — дроп в направля�
     const z = moveAcrossAt(zones([], [['files', 'tasks']]), 'tasks', 'right', 0, 0);
     expect(z.right.layout).toEqual([['tasks', 'files']]);
   });
+
+  it('зона в режиме одной панели меняет свою панель на гостя', () => {
+    const base = sanitizeZones({ left: { layout: [['chats']] }, right: { layout: [['files']], mode: 'solo' } });
+    const z = moveAcrossAt(base, 'chats', 'right', 0, 0);
+    expect(z.right.layout).toEqual([['chats']]);
+    expect(z.left.layout).toEqual([]);
+  });
+
+  it('дроп в разделитель solo-зоны тоже не плодит вторую панель', () => {
+    const base = sanitizeZones({ left: { layout: [['chats']] }, right: { layout: [['files']], mode: 'solo' } });
+    const z = moveAcrossToNewColumn(base, 'chats', 'right', 0);
+    expect(z.right.layout).toEqual([['chats']]);
+  });
 });
 
 describe('homeOf / trackHome — иконка закрытой панели', () => {

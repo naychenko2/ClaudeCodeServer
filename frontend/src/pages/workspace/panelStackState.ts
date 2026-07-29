@@ -343,6 +343,9 @@ export function moveAcrossAt(zones: PanelZones, k: PanelKey, zone: Zone, colIdx:
   if (src === zone) return withZone(zones, zone, z => ({ ...z, layout: movePanelAt(z.layout, k, colIdx, rowIdx) }));
   const base = closePanel(zones, k);
   return withZone(base, zone, z => {
+    // Зона в режиме одной панели принимает гостя вместо своей — как при клике по
+    // иконке (openPanelIn), иначе перенос втихую сломал бы её режим
+    if (z.mode === 'solo') return { ...z, layout: [[k]] };
     const cols = z.layout.map(c => [...c]);
     if (cols.length === 0) return { ...z, layout: [[k]] };
     if (colIdx < 0 || colIdx >= cols.length) return z;
@@ -359,6 +362,7 @@ export function moveAcrossToNewColumn(zones: PanelZones, k: PanelKey, zone: Zone
   if (src === zone) return withZone(zones, zone, z => ({ ...z, layout: movePanelToNewColumn(z.layout, k, insertIdx) }));
   const base = closePanel(zones, k);
   return withZone(base, zone, z => {
+    if (z.mode === 'solo') return { ...z, layout: [[k]] };
     const cols = z.layout.map(c => [...c]);
     cols.splice(Math.max(0, Math.min(cols.length, insertIdx)), 0, [k]);
     return { ...z, layout: cols };

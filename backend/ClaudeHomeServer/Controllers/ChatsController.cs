@@ -217,12 +217,15 @@ public class ChatsController(SessionManager sessions, FileService files, ILogger
     // исчерпании лимита подписки): транскрипт CLI переносится в профиль целевого
     // провайдера, разговор продолжается через --resume с сохранением контекста.
     // Как и loop, работает и для проектной сессии (владелец резолвится через проект).
+    // SubscriptionKey — явный выбор аккаунта пула подписок (кнопка карточки с
+    // Kind="subscription"); пусто — старое поведение (сторонний провайдер по Model
+    // либо автовыбор аккаунта пула).
     [HttpPost("{id}/migrate-provider")]
     public async Task<IActionResult> MigrateProvider(string id, [FromBody] MigrateProviderRequest req)
     {
         try
         {
-            return Ok(await sessions.MigrateProviderAsync(id, UserId, req.Model));
+            return Ok(await sessions.MigrateProviderAsync(id, UserId, req.Model, req.SubscriptionKey));
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
@@ -328,6 +331,6 @@ public record SetTeamImplementAutoRequest(bool AutoWaves);
 
 public record SetWorktreeRequest(bool Enabled, string? Branch = null, bool Force = false);
 
-public record MigrateProviderRequest(string Model);
+public record MigrateProviderRequest(string Model, string? SubscriptionKey = null);
 
 public record SetModeRequest(string Mode);

@@ -233,7 +233,7 @@ Get-Content "signoz-metastore-YYYYMMDD.sql" `
 
 Порядок важен — он идёт от «данных нет вообще» к «данные есть, но не видны»:
 
-1. **Панель «Telemetry Heartbeat»** на дашборде LLM Operations. Тикает — pipeline жив,
+1. **Панель «Пульс телеметрии»** на дашборде «ClaudeCodeServer — операционка». Тикает — pipeline жив,
    и проблема в запросе/диапазоне, а не в экспорте.
 2. **Долетает ли хоть что-то в ClickHouse:**
    ```powershell

@@ -63,6 +63,19 @@ public class TurnAccumulatorTests : IDisposable
         var started = acc.GetAll().OfType<StoredSessionStartedMessage>().Single();
         started.Model.Should().Be("claude-3");
         started.Mode.Should().Be("auto");
+        started.TurnWorktree.Should().BeNull();
+    }
+
+    // Признак «ход идёт в чужом дереве» переживает перезагрузку истории — попадает в
+    // снимок хода наравне с Model/Mode, а не теряется между сериализацией и десериализацией
+    [Fact]
+    public void OnSessionStarted_WithWorktree_ПерсистируетПризнак()
+    {
+        var acc = new TurnAccumulator([]);
+        var worktree = new TurnWorktreeInfo("/projects/demo/.claude/worktrees/feature-x", "feature-x");
+        acc.OnSessionStarted("claude-3", "auto", worktree);
+        var started = acc.GetAll().OfType<StoredSessionStartedMessage>().Single();
+        started.TurnWorktree.Should().Be(worktree);
     }
 
     [Fact]

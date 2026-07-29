@@ -2909,7 +2909,7 @@ public class SessionManager : IDisposable
             {
                 case SessionStartedMessage m:
                     acc.SetSaveKey(m.ClaudeSessionId);
-                    acc.OnSessionStarted(m.Model, m.Mode);
+                    acc.OnSessionStarted(m.Model, m.Mode, m.TurnWorktree);
                     SaveSessions();
                     break;
                 case TextDeltaMessage m:

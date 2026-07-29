@@ -1,20 +1,21 @@
-import { useState } from 'react';
-import { Cpu, Zap, Hourglass, ChevronDown } from 'lucide-react';
-import type { Session } from '../../types';
+import { useEffect, useState } from 'react';
+import { Cpu, Zap, Hourglass, Tag as TagIcon, ChevronDown } from 'lucide-react';
+import type { Session, Project, ProjectTag } from '../../types';
 import { api } from '../../lib/api';
 import { useModels, useModelCaps, modelCaps, modelProvider, useModelLabel, USAGE } from '../../lib/models';
 import { effortsForProvider, effortLabel } from '../../lib/effort';
 import { EXPIRY_PRESETS, expiryOptionLabel } from '../../lib/expiry';
 import { ModelPicker } from '../ModelPicker';
 import { SegmentedControl } from '../ui';
-import { C, R, FONT, SHADOW } from '../../lib/design';
+import { TagPickerBody } from '../TagChip';
+import { C, R, FONT, SHADOW, GROUP_COLORS } from '../../lib/design';
 
-// Настройка будущего чата в пустом состоянии (до первого сообщения): выбор модели и
-// усилия рассуждения двумя пилюлями с инлайн-раскрытием. Значения сразу пишутся в
-// сессию (провайдер ещё не «начат» — смена модели/провайдера разрешена). Инлайн-карточка
+// Настройка будущего чата в пустом состоянии (до первого сообщения): выбор модели,
+// усилия рассуждения, времени жизни и тегов пилюлями с инлайн-раскрытием. Значения сразу
+// пишутся в сессию (провайдер ещё не «начат» — смена модели/провайдера разрешена). Инлайн-карточка
 // вместо плавающего поповера — надёжнее на мобильном, а в пустом чате места по вертикали хватает.
 
-type Panel = 'model' | 'effort' | 'expiry' | null;
+type Panel = 'model' | 'effort' | 'expiry' | 'tags' | null;
 
 // Иконка «чип» (модель)
 const IconModel = <Cpu size={15} strokeWidth={2} style={{ flexShrink: 0 }} />;
@@ -22,6 +23,8 @@ const IconModel = <Cpu size={15} strokeWidth={2} style={{ flexShrink: 0 }} />;
 const IconEffort = <Zap size={15} strokeWidth={2} style={{ flexShrink: 0 }} />;
 // Иконка «песочные часы» (время жизни временного чата)
 const IconExpiry = <Hourglass size={15} strokeWidth={2} style={{ flexShrink: 0 }} />;
+// Иконка «тег»
+const IconTags = <TagIcon size={15} strokeWidth={2} style={{ flexShrink: 0 }} />;
 
 function Chevron({ open }: { open: boolean }) {
   return (
@@ -30,8 +33,10 @@ function Chevron({ open }: { open: boolean }) {
   );
 }
 
-export function NewChatSetup({ session, onSessionUpdated, isMobile }: {
+export function NewChatSetup({ session, project, onSessionUpdated, isMobile }: {
   session: Session;
+  // Только для проектных чатов — реестр тегов проекта (per-project, у чатов вне проекта тегов нет)
+  project?: Project;
   onSessionUpdated?: (s: Session) => void;
   isMobile?: boolean;
 }) {
@@ -41,17 +46,24 @@ export function NewChatSetup({ session, onSessionUpdated, isMobile }: {
   const [panel, setPanel] = useState<Panel>(null);
   const [saving, setSaving] = useState(false);
 
+  // Реестр тегов — optimistic state поверх project.tagRegistry (тот же паттерн, что в
+  // SessionList): создание тега здесь видно сразу, не дожидаясь обновления project сверху.
+  const [registryOverride, setRegistryOverride] = useState<ProjectTag[] | null>(null);
+  useEffect(() => { setRegistryOverride(null); }, [project?.id, project?.tagRegistry]);
+  const registry = registryOverride ?? project?.tagRegistry ?? [];
+
   // Update на бэке — полная замена (Name/Model/Effort перезаписываются целиком, отсутствующее → null),
   // поэтому шлём весь набор, подмешивая текущие значения сессии; иначе выбор усилия затёр бы модель/имя.
-  const persist = async (next: { model?: string | null; effort?: string | null; expiresAfterMinutes?: number | null }) => {
+  const persist = async (next: { model?: string | null; effort?: string | null; expiresAfterMinutes?: number | null; tags?: string[] }) => {
     setSaving(true);
     try {
       const data = {
         name: session.name ?? null,
         model: next.model !== undefined ? next.model : (session.model ?? null),
         effort: next.effort !== undefined ? next.effort : (session.effort ?? null),
-        // Время жизни — sentinel-семантика на бэке: отсутствие поля = не менять
+        // Время жизни и теги — sentinel-семантика на бэке: отсутствие поля = не менять
         ...(next.expiresAfterMinutes !== undefined && { expiresAfterMinutes: next.expiresAfterMinutes }),
+        ...(next.tags !== undefined && { tags: next.tags }),
       };
       // Проектная сессия — через /projects/{id}/sessions, чат вне проекта — через /chats (как в EditSessionDialog)
       const updated = session.projectId
@@ -81,6 +93,28 @@ export function NewChatSetup({ session, onSessionUpdated, isMobile }: {
     const minutes = v ? Number(v) : null;
     if (minutes !== (session.expiresAfterMinutes ?? null)) persist({ expiresAfterMinutes: minutes });
     setPanel(null);
+  };
+
+  // Теги — мультивыбор, панель после клика не закрывается (можно отметить несколько подряд)
+  const toggleTag = (name: string) => {
+    const tags = session.tags ?? [];
+    const has = tags.some(t => t.toLowerCase() === name.toLowerCase());
+    persist({ tags: has ? tags.filter(t => t.toLowerCase() !== name.toLowerCase()) : [...tags, name] });
+  };
+
+  // Новый тег: в реестр проекта (цвет — следующий из палитры по кругу) и сразу на чат
+  const createTag = (name: string) => {
+    if (!project) return;
+    const color = GROUP_COLORS[registry.length % GROUP_COLORS.length];
+    const nextRegistry = [...registry, { name, order: registry.length, color }];
+    setRegistryOverride(nextRegistry);
+    api.projects.updateTags(project.id, nextRegistry)
+      .then(p => setRegistryOverride(p.tagRegistry ?? nextRegistry))
+      .catch(() => setRegistryOverride(registry));
+    const tags = session.tags ?? [];
+    if (!tags.some(t => t.toLowerCase() === name.toLowerCase())) {
+      persist({ tags: [...tags, name] });
+    }
   };
 
   const toggle = (p: Exclude<Panel, null>) => setPanel(cur => (cur === p ? null : p));
@@ -122,6 +156,8 @@ export function NewChatSetup({ session, onSessionUpdated, isMobile }: {
         {pill('model', IconModel, 'Модель', modelName)}
         {caps.supportsEffort && pill('effort', IconEffort, 'Усилие', effortLabel(session.effort))}
         {pill('expiry', IconExpiry, 'Время жизни', expiryOptionLabel(session.expiresAfterMinutes))}
+        {/* Теги — только у проектных чатов (реестр тегов per-project) */}
+        {project && pill('tags', IconTags, 'Теги', session.tags?.length ? session.tags.join(', ') : 'Без тегов')}
       </div>
 
       {panel && (
@@ -146,6 +182,13 @@ export function NewChatSetup({ session, onSessionUpdated, isMobile }: {
                 columns={3}
               />
             </>
+          ) : panel === 'tags' ? (
+            <TagPickerBody
+              registry={registry}
+              selected={session.tags ?? []}
+              onToggle={toggleTag}
+              onCreate={createTag}
+            />
           ) : (
             <>
               <div style={{ fontSize: 11.5, color: C.textMuted, marginBottom: 8, lineHeight: 1.4 }}>

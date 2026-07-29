@@ -65,39 +65,21 @@ export function TagChip({ name, color, onRemove, title }: {
   );
 }
 
-// === Меню маркировки чата тегами ===
-// Чекбоксы по реестру (цветовая точка + имя) + создание нового тега внизу.
-// ui/Menu в anchor-режиме (fixed по якорю кнопки): список чатов — скролл-контейнер,
-// absolute-меню обрезалось бы его краями. Закрытие — клик вне (overlay Menu), Esc и
-// скролл списка — здесь (поведение конкретного меню, не контрола).
-const MENU_MAX_H = 300;
-const MENU_W = 220;
-
-export function TagAssignMenu({ anchor, registry, selected, onToggle, onCreate, onClose }: {
-  anchor: DOMRect;          // rect кнопки-триггера
+// === Тело выбора тегов: чекбоксы по реестру (цветовая точка + имя) + создание нового ===
+// Переиспользуется и в поповере (TagAssignMenu, карточка чата в списке), и инлайн
+// (NewChatSetup, диалог создания чата) — один способ ввода тегов на оба места.
+export function TagPickerBody({ registry, selected, onToggle, onCreate, autoFocusCreate }: {
   registry: ProjectTag[];
   selected: string[];
   onToggle: (name: string) => void;
   onCreate: (name: string) => void;
-  onClose: () => void;
+  autoFocusCreate?: boolean;
 }) {
   const [draft, setDraft] = useState('');
   const selectedLower = new Set(selected.map(t => t.toLowerCase()));
   const trimmed = draft.trim();
   const canCreate = trimmed.length > 0
     && !registry.some(t => t.name.toLowerCase() === trimmed.toLowerCase());
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    // capture: ловим скролл скролл-контейнера списка (он не всплывает до window)
-    const onScroll = () => onClose();
-    document.addEventListener('keydown', onKey);
-    document.addEventListener('scroll', onScroll, true);
-    return () => {
-      document.removeEventListener('keydown', onKey);
-      document.removeEventListener('scroll', onScroll, true);
-    };
-  }, [onClose]);
 
   const submit = () => {
     if (!canCreate) return;
@@ -106,7 +88,7 @@ export function TagAssignMenu({ anchor, registry, selected, onToggle, onCreate, 
   };
 
   return (
-    <Menu onClose={onClose} anchor={anchor} maxHeight={MENU_MAX_H} minWidth={MENU_W}>
+    <>
       <div style={{ maxHeight: 220, overflowY: 'auto' }} onClick={e => e.stopPropagation()}>
         {registry.length === 0 && (
           <div style={{ padding: '10px 12px', fontSize: FS.sm, color: C.textMuted, fontFamily: FONT.sans }}>
@@ -134,7 +116,7 @@ export function TagAssignMenu({ anchor, registry, selected, onToggle, onCreate, 
           onChange={setDraft}
           onEnter={submit}
           placeholder="Новый тег…"
-          autoFocus
+          autoFocus={autoFocusCreate}
           style={{ padding: '6px 10px', fontSize: FS.sm }}
         />
         <Button
@@ -147,6 +129,40 @@ export function TagAssignMenu({ anchor, registry, selected, onToggle, onCreate, 
           Создать
         </Button>
       </div>
+    </>
+  );
+}
+
+// === Меню маркировки чата тегами (карточка в списке) ===
+// ui/Menu в anchor-режиме (fixed по якорю кнопки): список чатов — скролл-контейнер,
+// absolute-меню обрезалось бы его краями. Закрытие — клик вне (overlay Menu), Esc и
+// скролл списка — здесь (поведение конкретного меню, не контрола).
+const MENU_MAX_H = 300;
+const MENU_W = 220;
+
+export function TagAssignMenu({ anchor, registry, selected, onToggle, onCreate, onClose }: {
+  anchor: DOMRect;          // rect кнопки-триггера
+  registry: ProjectTag[];
+  selected: string[];
+  onToggle: (name: string) => void;
+  onCreate: (name: string) => void;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    // capture: ловим скролл скролл-контейнера списка (он не всплывает до window)
+    const onScroll = () => onClose();
+    document.addEventListener('keydown', onKey);
+    document.addEventListener('scroll', onScroll, true);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('scroll', onScroll, true);
+    };
+  }, [onClose]);
+
+  return (
+    <Menu onClose={onClose} anchor={anchor} maxHeight={MENU_MAX_H} minWidth={MENU_W}>
+      <TagPickerBody registry={registry} selected={selected} onToggle={onToggle} onCreate={onCreate} autoFocusCreate />
     </Menu>
   );
 }

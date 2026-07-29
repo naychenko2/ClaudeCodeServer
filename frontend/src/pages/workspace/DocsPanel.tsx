@@ -79,8 +79,6 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
   });
   const [backlinksOpen, setBacklinksOpen] = useState(false);
   const [tocOpen, setTocOpen] = useState(false);
-  // Строка дерева под курсором — на ней показываются действия документа
-  const [hoveredPath, setHoveredPath] = useState<string | null>(null);
   // Якорь, к которому нужно проскроллить после перехода по ссылке или из поиска.
   // Хранится ВМЕСТЕ с путём документа: между сменой документа и пересбором оглавления
   // есть кадр, где doc уже новый, а headings ещё от прежнего — без привязки к пути
@@ -192,14 +190,6 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
     onOpenFile(path);
   };
 
-  // Крестик в шапке превью: возвращаемся к списку на всю панель
-  const closeDoc = () => {
-    setSelected(null);
-    setDoc(null);
-    pendingAnchorRef.current = null;
-    setTocOpen(false);
-  };
-
   // Клик по ссылке внутри превью: документ области — переход в панели,
   // файл проекта — открытие в центре, внешняя — ушла в новую вкладку без нас
   const handleDocLink = useCallback((href: string) => {
@@ -265,6 +255,16 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
           <TextField value={query} onChange={setQuery} placeholder="Поиск по документам"
             style={{ height: 30, fontSize: FS.sm, paddingLeft: 28 }} />
         </div>
+        {/* Открытый документ в чат — вложением. Дубль кнопки из шапки превью: до неё
+            нужно доводить взгляд вниз, а действие частое */}
+        <IconButton
+          title={doc ? `«${doc.title}» в чат — вложением` : 'Откройте документ, чтобы отправить его в чат'}
+          disabled={!doc}
+          onClick={() => doc && onAttachToChat(doc.path)}
+          size="sm"
+        >
+          <MessageSquarePlus size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+        </IconButton>
         {/* Режим работы панели: со встроенным превью или только список (тогда документ
             открывается сразу в центральной области) */}
         <IconButton
@@ -324,13 +324,9 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
                     {docs.map(d => (
                       <div
                         key={d.path}
-                        onMouseEnter={() => setHoveredPath(d.path)}
-                        onMouseLeave={() => setHoveredPath(cur => (cur === d.path ? null : cur))}
                         style={{
-                          display: 'flex', alignItems: 'center', gap: SP.xxs, borderRadius: R.md,
+                          display: 'flex', alignItems: 'center', borderRadius: R.md,
                           background: d.path === selected ? C.bgSelected : 'transparent',
-                          // Высота фиксирована под кнопки действий: они всегда в потоке
-                          // (скрыты прозрачностью), иначе строки прыгали бы при наведении
                           minHeight: ROW_H,
                         }}
                       >
@@ -349,21 +345,6 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
                               документы — папка и подпись группы несут больше смысла */}
                           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.title}</span>
                         </button>
-                        {/* Действия документа. Всегда в разметке — появление меняет только
-                            прозрачность, поэтому при наведении ничего не смещается */}
-                        <div style={{
-                          display: 'flex', alignItems: 'center', gap: SP.xxs, paddingRight: SP.xs, flexShrink: 0,
-                          opacity: hoveredPath === d.path ? 1 : 0,
-                          pointerEvents: hoveredPath === d.path ? 'auto' : 'none',
-                          transition: 'opacity 0.12s',
-                        }}>
-                          <IconButton title="Развернуть в центре" size="sm" onClick={() => onOpenFile(d.path)}>
-                            <Maximize2 size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-                          </IconButton>
-                          <IconButton title="Документ в чат — вложением" size="sm" onClick={() => onAttachToChat(d.path)}>
-                            <MessageSquarePlus size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-                          </IconButton>
-                        </div>
                       </div>
                     ))}
                   </div>
@@ -412,9 +393,6 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
                 </IconButton>
                 <IconButton title="Развернуть в центре" onClick={() => onOpenFile(doc.path)} size="sm">
                   <Maximize2 size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-                </IconButton>
-                <IconButton title="Закрыть документ" onClick={closeDoc} size="sm">
-                  <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
                 </IconButton>
 
                 {/* Оглавление: у каждого пункта — переход и отправка раздела в чат цитатой */}

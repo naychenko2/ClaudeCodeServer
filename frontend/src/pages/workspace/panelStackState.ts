@@ -385,6 +385,32 @@ export function migrateZones(read: (key: string) => string | null, ns: string, l
   });
 }
 
+// Разделы хаба (Заметки, Знания, Персоны, Проекты) до перехода на рельсу держали
+// обычный сайдбар: режим pinned/collapsed в своём ключе и ОБЩУЮ на все разделы
+// ширину. Переводим это в состояние зоны, чтобы свёрнутый сайдбар остался
+// свёрнутым, а привычная ширина не сбросилась на дефолтную.
+export const LEGACY_SIDEBAR_WIDTH_KEY = 'cc_sidebar_width';
+
+export function migrateSidebarSection(
+  read: (key: string) => string | null,
+  modeKey: string,
+  panelKey: PanelKey,
+): PanelZones | null {
+  const mode = read(modeKey);
+  if (mode == null) return null;
+  // collapsed — панель прячется в stash: кнопка «свернуть» вернёт её как была
+  const collapsed = mode === 'collapsed';
+  return {
+    ...emptyZones(),
+    left: {
+      layout: collapsed ? [] : [[panelKey]],
+      stash: collapsed ? [[panelKey]] : [],
+      mode: 'multi',
+      width: parseWidth(read(LEGACY_SIDEBAR_WIDTH_KEY)),
+    },
+  };
+}
+
 // ---------- API стора ----------
 
 export interface PanelZonesApi {
@@ -412,7 +438,13 @@ export type PanelZonesStore = { use: () => PanelZonesApi };
 // Фабрика независимого инстанса: своё состояние в замыкании + свой ключ
 // localStorage cc_{ns}_zones. Инстансы создаются на уровне модуля (ниже),
 // поэтому чтение localStorage происходит при импорте — как было до зон.
-function createPanelZones(ns: string, opts?: { legacyOpenKey?: string; defaultZones?: Partial<Record<Zone, PanelKey[][]>> }): PanelZonesStore {
+function createPanelZones(ns: string, opts?: {
+  legacyOpenKey?: string;
+  defaultZones?: Partial<Record<Zone, PanelKey[][]>>;
+  // Раздел переезжает со старого сайдбара: его ключ режима и панель, в которую
+  // превращается прежний сайдбар
+  legacySidebar?: { modeKey: string; panelKey: PanelKey };
+}): PanelZonesStore {
   const KEY = `cc_${ns}_zones`;
 
   // Приоритет: новое состояние → миграция со старых раздельных ключей → дефолт.
@@ -428,6 +460,9 @@ function createPanelZones(ns: string, opts?: { legacyOpenKey?: string; defaultZo
     }
     const fromLegacy = migrateZones(lsGet, ns, opts?.legacyOpenKey);
     if (fromLegacy) { migrated = true; return fromLegacy; }
+    const fromSidebar = opts?.legacySidebar
+      && migrateSidebarSection(lsGet, opts.legacySidebar.modeKey, opts.legacySidebar.panelKey);
+    if (fromSidebar) { migrated = true; return fromSidebar; }
     return sanitizeZones({
       left: { layout: opts?.defaultZones?.left ?? [] },
       right: { layout: opts?.defaultZones?.right ?? [] },
@@ -547,4 +582,23 @@ export const wsPanels = createPanelZones('ws', {
 // Инстанс раздела «Чаты» — независимая раскладка (cc_chat_zones).
 export const chatPanels = createPanelZones('chat', {
   defaultZones: { left: [['chats']] },
+});
+
+// Разделы хаба: у каждого своя раскладка и своя ширина колонки (раньше ширина
+// была общей на все разделы — один ключ cc_sidebar_width).
+export const notesPanels = createPanelZones('notes', {
+  defaultZones: { left: [['notesList']] },
+  legacySidebar: { modeKey: 'cc_notes_sidebar_mode', panelKey: 'notesList' },
+});
+export const knowledgePanels = createPanelZones('knowledge', {
+  defaultZones: { left: [['knowledgeList']] },
+  legacySidebar: { modeKey: 'cc_knowledge_sidebar_mode', panelKey: 'knowledgeList' },
+});
+export const personasPanels = createPanelZones('personas', {
+  defaultZones: { left: [['personasList']] },
+  legacySidebar: { modeKey: 'cc_personas_sidebar_mode', panelKey: 'personasList' },
+});
+export const projectsPanels = createPanelZones('projects', {
+  defaultZones: { left: [['projectGroups']] },
+  legacySidebar: { modeKey: 'cc_projects_sidebar_mode', panelKey: 'projectGroups' },
 });

@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
-import type { ChatItem, ServerMessage, RateLimitInfo, WorkLoopState } from '../types';
-import { joinSession, joinProject, leaveSession, onMessage, onReconnected, sendMessage, respondPermission, interruptSession, compactSession, answerQuestion as sendAnswer, respondPlan as sendPlanDecision, setMode as sendSetMode } from '../lib/signalr';
+import type { ChatItem, ServerMessage, RateLimitInfo, WorkLoopState, TeamImplementState, TeamPlanDecision } from '../types';
+import { joinSession, joinProject, leaveSession, onMessage, onReconnected, sendMessage, respondPermission, interruptSession, compactSession, answerQuestion as sendAnswer, respondPlan as sendPlanDecision, respondTeamPlan as sendTeamPlanDecision, respondTeamEscalation as sendTeamEscalationDecision, setMode as sendSetMode } from '../lib/signalr';
 import { setRecallManifest } from '../lib/recallManifest';
 import { api } from '../lib/api';
 import { applyServerMessage, normalizeHistory, serverHistoryNewer, initialChatState, consumeComposerRestore, type ChatState, type PendingChatMessage, type ComposerRestore } from '../lib/chatReducer';
@@ -245,7 +245,7 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
     };
   }, [sessionId, projectId, isGroup]);
 
-  const state = sessionId ? getState(sessionId) : { items: [] as ChatItem[], isWaiting: false, isJoined: false, isHistoryLoading: false, rateLimits: {} as Record<string, RateLimitInfo>, isCompacting: false, compactNote: undefined as string | undefined, workLoop: undefined as WorkLoopState | undefined, promptSuggestion: null as string | null, pending: [] as PendingChatMessage[], composerRestore: null as ComposerRestore | null };
+  const state = sessionId ? getState(sessionId) : { items: [] as ChatItem[], isWaiting: false, isJoined: false, isHistoryLoading: false, rateLimits: {} as Record<string, RateLimitInfo>, isCompacting: false, compactNote: undefined as string | undefined, workLoop: undefined as WorkLoopState | undefined, teamImplement: undefined as TeamImplementState | undefined, promptSuggestion: null as string | null, pending: [] as PendingChatMessage[], composerRestore: null as ComposerRestore | null };
 
   // Снять сообщение из очереди (крестик на карточке-призраке). Ответ сервера придёт
   // событием pending_messages — локально состояние не правим, чтобы не разъехалось.
@@ -424,6 +424,51 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
     await sendPlanDecision(sessionId, requestId, approve, feedback);
   }, [sessionId]);
 
+  // Решение по карточке плана командной реализации. Оптимистично применяем видимую
+  // часть (смена исполнителя / решённое состояние) — сервер переиздаст карточку
+  // событием team_plan с тем же planId и приведёт её к своему состоянию.
+  const respondTeamPlan = useCallback(async (planId: string, decision: TeamPlanDecision,
+    subtaskId?: string, executorPersonaId?: string) => {
+    if (!sessionId) return;
+    setState(sessionId, prev => ({
+      ...prev,
+      items: prev.items.map(item => {
+        if (item.kind !== 'team_plan' || item.planId !== planId) return item;
+        if (decision === 'reassign') {
+          if (!subtaskId || !executorPersonaId) return item;
+          return {
+            ...item,
+            plan: {
+              ...item.plan,
+              subtasks: item.plan.subtasks.map(s =>
+                s.id === subtaskId ? { ...s, executorPersonaId } : s),
+            },
+          };
+        }
+        return { ...item, resolved: true, approved: decision === 'run' };
+      }),
+    }));
+    await joinSession(sessionId); // гарантируем группу перед ответом
+    await sendTeamPlanDecision(sessionId, planId, decision, subtaskId, executorPersonaId);
+  }, [sessionId]);
+
+  // Решение по карточке остановки. Гасим карточку оптимистично — сервер переиздаст её
+  // событием team_escalation с тем же escalationId и приведёт к своему состоянию
+  const respondTeamEscalation = useCallback(async (escalationId: string,
+    actionId?: string, comment?: string) => {
+    if (!sessionId) return;
+    setState(sessionId, prev => ({
+      ...prev,
+      items: prev.items.map(item =>
+        item.kind === 'team_escalation' && item.escalationId === escalationId
+          ? { ...item, escalation: { ...item.escalation, resolved: true, chosenActionId: actionId ?? null } }
+          : item
+      ),
+    }));
+    await joinSession(sessionId); // гарантируем группу перед ответом
+    await sendTeamEscalationDecision(sessionId, escalationId, actionId, comment);
+  }, [sessionId]);
+
   const toggleThinking = useCallback((index: number) => {
     if (!sessionId) return;
     updateItems(sessionId, items => items.map((item, i) =>
@@ -438,5 +483,5 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
     sendSetMode(sessionId, mode).catch(() => {});
   }, [sessionId]);
 
-  return { items: state.items, isWaiting: state.isWaiting, isJoined: state.isJoined, isHistoryLoading: state.isHistoryLoading, rateLimits: state.rateLimits, isCompacting: state.isCompacting, compactNote: state.compactNote, workLoop: state.workLoop, promptSuggestion: state.promptSuggestion, pending: state.pending, composerRestore: state.composerRestore, consumeRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, compact, toggleThinking, noteCompanionSwitch, changeMode, cancelPending };
+  return { items: state.items, isWaiting: state.isWaiting, isJoined: state.isJoined, isHistoryLoading: state.isHistoryLoading, rateLimits: state.rateLimits, isCompacting: state.isCompacting, compactNote: state.compactNote, workLoop: state.workLoop, teamImplement: state.teamImplement, promptSuggestion: state.promptSuggestion, pending: state.pending, composerRestore: state.composerRestore, consumeRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, respondTeamPlan, respondTeamEscalation, interrupt, compact, toggleThinking, noteCompanionSwitch, changeMode, cancelPending };
 }

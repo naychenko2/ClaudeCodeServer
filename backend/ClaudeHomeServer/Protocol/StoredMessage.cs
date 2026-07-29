@@ -10,6 +10,8 @@ namespace ClaudeHomeServer.Protocol;
 [JsonDerivedType(typeof(StoredToolUseMessage), "tool_use")]
 [JsonDerivedType(typeof(StoredAskQuestionMessage), "ask_question")]
 [JsonDerivedType(typeof(StoredPlanReviewMessage), "plan_review")]
+[JsonDerivedType(typeof(StoredTeamPlanMessage), "team_plan")]
+[JsonDerivedType(typeof(StoredTeamEscalationMessage), "team_escalation")]
 [JsonDerivedType(typeof(StoredFileChangedMessage), "file_changed")]
 [JsonDerivedType(typeof(StoredResultMessage), "result")]
 [JsonDerivedType(typeof(StoredFalCostMessage), "fal_cost")]
@@ -163,4 +165,25 @@ public class StoredPlanReviewMessage : StoredMessage
     public bool Resolved { get; set; }
     public bool? Approved { get; set; }
     public string? Feedback { get; set; }
+}
+
+// Карточка плана режима «Командная реализация» (Э2). В отличие от plan_review план
+// СТРУКТУРНЫЙ: под-задачи с исполнителями, обоснованием, файлами и волнами. Смена
+// исполнителя до запуска перезаписывает Plan (карточка остаётся открытой),
+// Resolved/Approved заполняются при «Запустить»/«Отменить».
+public class StoredTeamPlanMessage : StoredMessage
+{
+    public string PlanId { get; init; } = "";
+    public Models.TeamImplementPlan Plan { get; set; } = new();
+    public bool Resolved { get; set; }
+    public bool? Approved { get; set; }
+}
+
+// Карточка остановки режима «Командная реализация» (Э4): причина и кнопки решения.
+// Живёт в истории — иначе после перезагрузки страницы человек не увидел бы, чего от него
+// ждёт вставшая практика (а молчаливых остановок в этом режиме быть не должно).
+public class StoredTeamEscalationMessage : StoredMessage
+{
+    public string EscalationId { get; init; } = "";
+    public Models.TeamEscalation Escalation { get; set; } = new();
 }

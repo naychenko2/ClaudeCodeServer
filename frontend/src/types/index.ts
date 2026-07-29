@@ -339,6 +339,8 @@ export interface Session {
   expiresAfterMinutes?: number | null;
   // Цикл «до готово» (флаг work-loop); null/отсутствует — цикл выключен
   workLoop?: { promise: string; iteration: number; maxIterations: number; phase: 'working' | 'verifying' } | null;
+  // Режим «Командная реализация» (флаг team-implement-mode); null/отсутствует — режим выключен
+  teamImplement?: SessionTeamImplement | null;
   // Отдельное git worktree чата: рабочая папка сессии вместо корня проекта.
   // null/отсутствует — чат в основном дереве. Только у проектных чатов.
   worktreePath?: string | null;
@@ -588,6 +590,15 @@ export type ServerMessage = { sessionId: string } & (
   // чат на стороннем провайдере (карточка с кнопками)
   | { type: 'provider_limit'; resetsAt?: string; providers: ProviderFallbackOption[] }
   | { type: 'work_loop'; active: boolean; iteration: number; maxIterations: number; phase: string | null }
+  // Режим «Командная реализация»: приходит при каждом изменении (вкл/стадия/волна/авто/стоп)
+  | { type: 'team_implement'; active: boolean; stage: TeamImplementStage | null; waveNumber: number; autoWaves: boolean; coordinatorPersonaId: string | null; plannerPersonaId: string | null; executorPersonaIds: string[] | null; budget: TeamImplementBudget | null; planCardId: string | null; plannedWaves?: number; coordinatorNoCode?: boolean; stopped?: boolean }
+  // Карточка плана командной реализации. Переиздаётся при каждой правке (смена исполнителя,
+  // решение человека) с тем же planId — клиент обновляет карточку, а не плодит дубли
+  | { type: 'team_plan'; planId: string; plan: TeamPlan; resolved: boolean; approved: boolean | null }
+  // Карточка остановки командной реализации: причина + кнопки решения. Переиздаётся при
+  // ответе человека (resolved=true) с тем же escalationId — клиент обновляет карточку.
+  // Поля плоские (в истории та же карточка лежит вложенным объектом escalation)
+  | { type: 'team_escalation'; escalationId: string; kind: TeamEscalationKind; title: string; details: string; actions: TeamEscalationAction[]; taskId: string | null; wave: number; resolved: boolean; chosenActionId: string | null }
   | { type: 'preview_status'; status: string; port?: number; error?: string; serviceId?: string }
   | { type: 'notification'; title: string; body: string; url?: string; kind: 'reminder' | 'claude' | 'info' | 'success' | 'meeting'; notificationId?: string; notifType?: string; projectId?: string; sessionId?: string; taskId?: string; source?: string; tag?: string; personaId?: string; personaName?: string; personaRole?: string; personaColor?: string; personaHasAvatar?: boolean; projectName?: string }
   | { type: 'recall_manifest'; items: RecallItem[] }
@@ -764,6 +775,128 @@ export interface WorkLoopState {
   phase: string | null;
 }
 
+// === Режим «Командная реализация» (флаг team-implement-mode) ===
+// Стадии непрерывного контура — совпадают с wire-токенами TeamImplementStage на бэке
+export type TeamImplementStage =
+  | 'planning'          // координатор готовит карточку плана
+  | 'confirming'        // план ждёт единственного согласования
+  | 'wave'              // волна исполнителей в работе
+  | 'awaitingDecision'  // эскалация: ждёт решения человека
+  | 'checking'          // финальная проверка (сборка/тесты)
+  | 'idle';             // итерация закрыта, режим ждёт новой вводной
+
+// Бюджет итерации: счётчики «израсходовано» + потолки (сбрасывается по новой вводной).
+// wakeups — срочные вызовы координатора докладом-блокером снизу (свой потолок)
+export interface TeamImplementBudget {
+  tasksUsed: number;
+  wavesUsed: number;
+  runsUsed: number;
+  retriesUsed: number;
+  wakeupsUsed: number;
+  maxTasks: number;
+  maxWaves: number;
+  maxRuns: number;
+  maxRetries: number;
+  maxWakeups: number;
+}
+
+// Состояние режима на сессии (Session.teamImplement); null — режим выключен.
+// Состав исполнителей: пустой список = вся команда проекта.
+export interface SessionTeamImplement {
+  stage: TeamImplementStage;
+  waveNumber: number;
+  // Плановое число волн текущей итерации (из карточки плана); 0 — план ещё не запускался.
+  // Бейдж «волна N из M» берёт M отсюда, а не из потолка бюджета — тот про расход
+  plannedWaves: number;
+  autoWaves: boolean;
+  // Человек нажал «Остановить»: текущие исполнители дорабатывают, новые волны не стартуют.
+  // Снимается решением «Продолжить» по карточке остановки либо новой вводной
+  stopped: boolean;
+  coordinatorPersonaId?: string | null;
+  plannerPersonaId?: string | null;
+  executorPersonaIds: string[];
+  budget: TeamImplementBudget;
+  // «Координатор не пишет код сам»: у чата-штаба отключены инструменты правки файлов
+  coordinatorNoCode: boolean;
+  planCardId?: string | null;
+}
+
+// Live-состояние режима (из события team_implement; флаг team-implement-mode)
+export interface TeamImplementState extends SessionTeamImplement {
+  active: boolean;
+}
+
+// Под-задача плана командной реализации: единица раздачи (в Э3 из неё создаётся задача).
+// executorRationale — одна строка «почему именно он» от планировщика; в ней же приходят
+// пометки бэка «проверьте выбор» / «не обосновал», когда подбор ненадёжен.
+export interface TeamPlanSubtask {
+  id: string;
+  title: string;
+  goal: string;
+  executorPersonaId?: string | null;
+  executorRationale: string;
+  files: string[];
+  wave: number;
+  doneCriteria: string;
+}
+
+// Структурный план командной реализации (карточка в ленте штаба).
+// waveCount/executorCount считает бэкенд — подзаголовок карточки собирается из них.
+export interface TeamPlan {
+  id: string;
+  request: string;
+  summary: string;
+  plannerPersonaId?: string | null;
+  approved?: boolean | null;
+  createdAt: string;
+  waveCount: number;
+  executorCount: number;
+  subtasks: TeamPlanSubtask[];
+}
+
+// Решение человека по карточке плана (метод хаба RespondTeamPlan)
+export type TeamPlanDecision = 'run' | 'reassign' | 'cancel';
+
+// Триггер остановки практики — wire-токены TeamEscalationKind с бэка.
+// waveGate — не проблема, а гейт «волна закрыта, запускать следующую?» при снятом авто;
+// stopped — пауза по команде человека; waveAdded — вовсе не остановка (см. ниже)
+export type TeamEscalationKind =
+  | 'blocker'
+  | 'taskFailed'
+  | 'planDeviation'
+  | 'checkFailed'
+  | 'productDecision'
+  | 'budgetExhausted'
+  | 'waveStalled'
+  | 'waveGate'
+  | 'stopped'
+  // Информация (Э5): по новой вводной развёрнута добавочная волна. Работа уже идёт,
+  // клика карточка не ждёт — только показывает состав и даёт «Остановить»
+  | 'waveAdded';
+
+// Кнопка карточки остановки: id — wire-токен решения, label — подпись для человека
+export interface TeamEscalationAction {
+  id: string;
+  label: string;
+}
+
+// Карточка остановки режима «Командная реализация» (Э4). Форма — как в истории чата
+// (StoredTeamEscalationMessage.escalation); live-событие приходит плоским и собирается
+// в этот же объект редьюсером
+export interface TeamEscalation {
+  id: string;
+  kind: TeamEscalationKind;
+  title: string;
+  details: string;
+  actions: TeamEscalationAction[];
+  taskId?: string | null;
+  wave: number;
+  // Только в истории — у live-события времени нет
+  createdAt?: string;
+  resolved: boolean;
+  chosenActionId?: string | null;
+}
+
 // Элементы чата
 export type ChatItem =
   // viaAgent — сообщение прислано не человеком, а агентом из другой сессии (chats_send);
@@ -788,6 +921,12 @@ export type ChatItem =
   | { kind: 'permission_request'; requestId: string; toolName: string; toolInput: unknown; resolved: boolean; decision?: 'allowed' | 'denied' | 'always' }
   | { kind: 'ask_question'; toolUseId: string; input: unknown; resolved: boolean; answers?: Record<string, string | string[]> }
   | { kind: 'plan_review'; requestId: string; plan: string; resolved: boolean; approved?: boolean; feedback?: string }
+  // Карточка плана командной реализации: структурный план (под-задачи, исполнители,
+  // волны) с кнопками «Запустить» / «Изменить план» / «Отменить». Сверяется по planId
+  | { kind: 'team_plan'; planId: string; plan: TeamPlan; resolved: boolean; approved?: boolean | null }
+  // Карточка остановки командной реализации: причина, суть и кнопки решения.
+  // Сверяется по escalationId — ответ человека переиздаёт ту же карточку решённой
+  | { kind: 'team_escalation'; escalationId: string; escalation: TeamEscalation }
   | { kind: 'file_changed'; path: string; added: number; removed: number }
   | { kind: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo; totalCostUsd?: number; apiErrorStatus?: string; permissionDenials?: string[]; contextTokens?: number }
   | { kind: 'fal_cost'; requestId: string; endpointId?: string; costUsd: number; outputUnits?: number; unitPrice?: number }

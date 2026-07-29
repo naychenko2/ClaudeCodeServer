@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Prompts;
 using ClaudeHomeServer.Telemetry;
 
 namespace ClaudeHomeServer.Services.Llm.Claude;
@@ -1030,6 +1031,18 @@ public class ClaudeSession : ILlmSessionAdapter
     // пользователю. Возвращает "allow" | "deny" | "cancelled" (Interrupt во время ожидания).
     private async Task<string> DecidePermissionAsync(string requestId, string toolName, JsonElement inputEl, object toolInput)
     {
+        // Гард «координатор не пишет код сам» (Э7-фикс): жёстче project-правил и «всегда
+        // разрешать» — иначе достаточно один раз кликнуть «Разрешить всегда» на Bash, и
+        // настройка перестаёт что-либо значить. См. CoordinatorWriteGuard про эвристику
+        // и про то, почему это работает не в любом --permission-mode.
+        if (Info.TeamImplement is { CoordinatorNoCode: true }
+            && CoordinatorWriteGuard.IsShellTool(toolName)
+            && inputEl.ValueKind == JsonValueKind.Object
+            && inputEl.TryGetProperty("command", out var cmdEl)
+            && cmdEl.ValueKind == JsonValueKind.String
+            && CoordinatorWriteGuard.LooksLikeFileWrite(cmdEl.GetString()))
+            return "deny";
+
         // Правила проекта: deny приоритетнее; allow — авто-разрешить; null — спросить пользователя
         var ruleDecision = PermissionRuleEvaluator.Evaluate(_permissionRules?.Invoke(), toolName, inputEl);
         if (ruleDecision == "deny") return "deny";

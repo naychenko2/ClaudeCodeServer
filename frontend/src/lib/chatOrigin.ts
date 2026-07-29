@@ -3,7 +3,7 @@
 // сторы задач/персон (ensureTasksLoaded/ensurePersonasLoaded должны быть вызваны
 // где-то выше в дереве компонентов).
 import type { Session } from '../types';
-import { getTaskById, dueLabel, isDueUrgent } from './tasks';
+import { getTaskById, dueLabel, isDueUrgent, tasksLoaded } from './tasks';
 import { getPersonaById } from './personas';
 
 export interface ChatOriginInfo {
@@ -15,13 +15,23 @@ export interface ChatOriginInfo {
   tone: 'info' | 'warning';
 }
 
+// Задачи нет в сторе. Утверждать «удалена» можно только когда стор реально наполнен
+// из сети: пока он грузится, промах — это гонка первой загрузки, а не удаление
+// (чат исполнения появляется в списке раньше, чем приезжают задачи).
+function taskMissingLabel(): string {
+  return tasksLoaded() ? 'Задача (удалена)' : 'Задача';
+}
+
 // Бейдж происхождения чата — чисто информационный контекст. Клик по нему НЕ уводит с
 // карточки чата в раздел (задачи/проактивности): переход намеренно убран, бейдж
 // показывает лишь, откуда пришёл чат (см. ChatOriginBadge — всегда некликабельный span).
 export function resolveChatOrigin(session: Session): ChatOriginInfo | null {
   if (session.origin === 'task') {
     const task = session.taskId ? getTaskById(session.taskId) : undefined;
-    if (!task) return { kind: 'task', label: 'Задача (удалена)', shortLabel: 'Задача (удалена)', tone: 'info' };
+    if (!task) {
+      const label = taskMissingLabel();
+      return { kind: 'task', label, shortLabel: label, tone: 'info' };
+    }
     return { kind: 'task', label: `Задача: ${task.title}`, shortLabel: task.title, tone: 'info' };
   }
 
@@ -66,8 +76,9 @@ function resolveTaskChatStatus(
   session: Session,
   task: ReturnType<typeof getTaskById>,
 ): TaskChatInfo['status'] {
-  if (!task) return { kind: 'deleted', label: 'Задача удалена', spinner: false };
-  // Живые состояния чата приоритетнее — говорят, что происходит прямо сейчас
+  // Живые состояния чата приоритетнее — говорят, что происходит прямо сейчас.
+  // Стоят первыми и потому, что работающий чат исполнения не должен подписываться
+  // «Задача удалена», пока стор задач догружается
   switch (session.status) {
     case 'starting':
     case 'working':  return { kind: 'run',  label: 'Выполняется', spinner: true };
@@ -76,9 +87,13 @@ function resolveTaskChatStatus(
     case 'orphaned': return { kind: 'error', label: 'Прервана',   spinner: false };
   }
   // Спокойный чат — показываем статус самой задачи
-  if (task.status === 'done')       return { kind: 'done', label: 'Готово',     spinner: false };
-  if (task.status === 'inProgress') return { kind: 'run',  label: 'В работе',   spinner: false };
-  return { kind: 'todo', label: 'В очереди', spinner: false };
+  if (task?.status === 'done')       return { kind: 'done', label: 'Готово',     spinner: false };
+  if (task?.status === 'inProgress') return { kind: 'run',  label: 'В работе',   spinner: false };
+  if (task)                          return { kind: 'todo', label: 'В очереди',  spinner: false };
+  // Задачи в сторе нет: «удалена» — только по загруженному стору (см. taskMissingLabel)
+  return tasksLoaded()
+    ? { kind: 'deleted', label: 'Задача удалена', spinner: false }
+    : { kind: 'todo', label: 'Загрузка…', spinner: false };
 }
 
 // Данные компактной карточки чата-задачи; null — чат не порождён задачей.
@@ -86,7 +101,7 @@ export function describeTaskChat(session: Session): TaskChatInfo | null {
   if (session.origin !== 'task') return null;
   const task = session.taskId ? getTaskById(session.taskId) : undefined;
   const title = task?.title ?? (session.name ? stripTaskPrefix(session.name) : '');
-  const fullLabel = task ? `Задача: ${task.title}` : 'Задача (удалена)';
+  const fullLabel = task ? `Задача: ${task.title}` : taskMissingLabel();
   const subTotal = task?.subtasks.length ?? 0;
   const subDone = task?.subtasks.filter(st => st.isDone).length ?? 0;
   const dueText = task?.dueDate

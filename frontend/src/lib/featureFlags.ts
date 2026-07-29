@@ -12,6 +12,7 @@ export const FLAGS = {
   teamMemoryAutolearn: 'team-memory-autolearn',
   docAnnotations: 'doc-annotations',
   aiLocalSuggest: 'ai-local-suggest',
+  teamImplementMode: 'team-implement-mode',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

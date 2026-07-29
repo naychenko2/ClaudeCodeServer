@@ -9,7 +9,7 @@
 // «развернуть» в центральной области (тот же FileViewer, что и для остальных файлов).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronDown, ChevronRight, CornerUpRight, Link2, List, Maximize2, MessageSquarePlus, ScrollText, Search, X } from 'lucide-react';
+import { ChevronDown, ChevronRight, CornerUpRight, Link2, List, Maximize2, MessageSquarePlus, PanelBottom, ScrollText, Search, X } from 'lucide-react';
 import type { Project, DocEntry, DocDetail, DocSearchHit } from '../../types';
 import { api } from '../../lib/api';
 import { onFilesChanged } from '../../lib/signalr';
@@ -38,6 +38,10 @@ const ROW_H = 28;
 // Порог, в пределах которого второй клик считается двойным (и отменяет одиночный)
 const DOUBLE_CLICK_MS = 220;
 
+// Тумблер нижней зоны: с превью (дефолт) или только список. Решение пользователя
+// про режим работы панели, поэтому переживает перезагрузку
+const PREVIEW_KEY = 'cc_docs_preview';
+
 const TREE_H_KEY = 'cc_docs_tree_h';
 const TREE_H_DEFAULT = 220;
 const TREE_H_MIN = 80;
@@ -64,6 +68,9 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
   const [query, setQuery] = useState('');
   const [hits, setHits] = useState<DocSearchHit[] | null>(null);
   const [treeOpen, setTreeOpen] = useState(true);
+  const [previewEnabled, setPreviewEnabled] = useState<boolean>(() => {
+    try { return localStorage.getItem(PREVIEW_KEY) !== '0'; } catch { return true; }
+  });
   const [treeH, setTreeH] = useState<number>(() => {
     try {
       const n = Number(localStorage.getItem(TREE_H_KEY));
@@ -174,7 +181,9 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
     if (clickTimer.current) window.clearTimeout(clickTimer.current);
     clickTimer.current = window.setTimeout(() => {
       clickTimer.current = null;
-      openDoc(path);
+      // Без нижней зоны показывать документ негде — открываем сразу в центре
+      if (previewEnabled) openDoc(path);
+      else onOpenFile(path);
     }, DOUBLE_CLICK_MS);
   };
 
@@ -245,14 +254,31 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
-      {/* Поиск по документации */}
-      <div style={{ flexShrink: 0, padding: `${SP.sm}px ${SP.md}px`, borderBottom: `1px solid ${C.border}` }}>
-        <div style={{ position: 'relative' }}>
+      {/* Поиск по документации + тумблер нижней зоны */}
+      <div style={{
+        flexShrink: 0, display: 'flex', alignItems: 'center', gap: SP.xs,
+        padding: `${SP.sm}px ${SP.md}px`, borderBottom: `1px solid ${C.border}`,
+      }}>
+        <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
           <Search size={ICON_SIZE.xs} strokeWidth={ICON_STROKE}
             style={{ position: 'absolute', left: SP.sm, top: '50%', transform: 'translateY(-50%)', color: C.textMuted, pointerEvents: 'none' }} />
           <TextField value={query} onChange={setQuery} placeholder="Поиск по документам"
             style={{ height: 30, fontSize: FS.sm, paddingLeft: 28 }} />
         </div>
+        {/* Режим работы панели: со встроенным превью или только список (тогда документ
+            открывается сразу в центральной области) */}
+        <IconButton
+          title={previewEnabled ? 'Превью снизу включено — выключить' : 'Превью снизу выключено — включить'}
+          active={previewEnabled}
+          onClick={() => setPreviewEnabled(v => {
+            const next = !v;
+            try { localStorage.setItem(PREVIEW_KEY, next ? '1' : '0'); } catch { /* квота */ }
+            return next;
+          })}
+          size="sm"
+        >
+          <PanelBottom size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+        </IconButton>
       </div>
 
       {/* Результаты поиска замещают дерево, пока запрос активен */}
@@ -271,9 +297,9 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
         </div>
       ) : (
         <>
-          {/* Дерево документов. Без открытого превью занимает всю панель; с превью —
-              высоту, заданную хендлом ресайза */}
-          <div style={doc ? {
+          {/* Дерево документов. С выключенной нижней зоной занимает всю панель;
+              с включённой — высоту, заданную хендлом ресайза */}
+          <div style={previewEnabled ? {
             flexShrink: 0, display: 'flex', flexDirection: 'column', minHeight: 0,
             height: treeOpen ? treeH : 'auto',
           } : {
@@ -346,9 +372,9 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
             )}
           </div>
 
-          {/* Хендл ресайза границы «список / превью» — только когда превью открыто.
+          {/* Хендл ресайза границы «список / превью».
               Фон как у шапки панели: полоса читается частью её оформления, а не швом */}
-          {treeOpen && doc && (
+          {treeOpen && previewEnabled && (
             <div
               onPointerDown={handleTreeResize}
               title="Потяните, чтобы изменить высоту списка"
@@ -362,8 +388,9 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
             </div>
           )}
 
-          {/* Превью документа — появляется только когда документ выбран */}
-          {doc && (
+          {/* Нижняя зона: живёт постоянно, пока включён тумблер. Без выбранного документа
+              показывает подсказку — так граница зон не скачет при каждом открытии */}
+          {previewEnabled && (
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
             {doc && (
               <div style={{
@@ -422,6 +449,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
 
             <div ref={contentRef} style={{ flex: 1, overflowY: 'auto', padding: `${SP.md}px ${SP.md}px ${SP.xl}px` }}>
               {error && <div style={emptyStyle}>{error}</div>}
+              {!doc && !error && <div style={emptyStyle}>Выберите документ в списке</div>}
               {doc && <MarkdownViewer content={doc.content} onDocLink={handleDocLink} />}
             </div>
 

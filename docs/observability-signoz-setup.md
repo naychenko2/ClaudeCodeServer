@@ -20,55 +20,67 @@ ClaudeHomeServer (ASP.NET Core)
 ┌─────────────────────────────────────────────────────────────────────┐
 │ SigNoz stack (docker/observability/)                                 │
 │                                                                      │
-│  otel-collector ──► query-service ──► ClickHouse                     │
-│       ▲                 │                  │                         │
-│       │                 ▼                  │                         │
-│  OTLP :4317/4318    frontend:3301     signoz-clickhouse:/var/lib/... │
-│                                          (persistent volume)          │
+│  ingester ─────────────────────────► ClickHouse ◄── Keeper           │
+│     ▲                                     ▲                          │
+│     │                                     │                          │
+│  OTLP :4317/4318                    signoz (UI+API) :3301            │
+│                                           │                          │
+│                                           ▼                          │
+│                                    Postgres (метастор:               │
+│                                    дашборды, юзеры, алерты)          │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-Вендоренный compose в `docker/observability/` содержит 9 сервисов:
-- `init-clickhouse` — загружает histogram-binary для quantile-агрегаций
-- `zookeeper` — координация ClickHouse (кластерный режим)
-- `clickhouse` — основное хранилище (WAL, persistent volume)
-- `alertmanager` — manage alerts (пока не настраиваем — отдельный epic)
-- `query-service` — SigNoz API поверх ClickHouse
-- `frontend` — UI на :3301 (nginx + React)
-- `otel-collector` — приём OTLP на :4317/:4318
-- `schema-migrator-sync` / `schema-migrator-async` — миграции схемы ClickHouse
+Вендоренный compose (`docker/observability/compose.yaml`) поднимает 7 сервисов —
+в v0.134 раскладка другая, чем в v0.71: UI и API живут в одном контейнере,
+коллектор называется ingester, метастор переехал на Postgres, ZooKeeper заменён
+на ClickHouse Keeper.
+
+| Контейнер | Роль |
+|---|---|
+| `signoz-signoz-0` | UI + API (в v0.71 это была пара frontend + query-service) |
+| `signoz-ingester-1` | приём OTLP на :4317/:4318 (бывший otel-collector) |
+| `signoz-telemetrystore-clickhouse-0-0` | ClickHouse — traces/metrics/logs |
+| `signoz-telemetrykeeper-clickhousekeeper-0` | ClickHouse Keeper (вместо ZooKeeper) |
+| `signoz-metastore-postgres-0` | Postgres — дашборды, пользователи, алерты |
+| `signoz-telemetrystore-migrator` | миграции схемы ClickHouse, отрабатывает и выходит |
+| `signoz-telemetrystore-clickhouse-user-scripts` | histogram-binary для quantile, отрабатывает и выходит |
+
+Два последних штатно в статусе `Exited (0)` — это одноразовые job'ы, а не сбой.
 
 ## Первый запуск
 
 ### 1. Запуск stack
 
+Запускать ТОЛЬКО через overlay — он подключает вендорный compose через `include`
+и биндит порты к `127.0.0.1`:
+
 ```powershell
-docker compose `
-  -f docker/observability/docker-compose.yaml `
-  -f docker-compose.observability.yml `
-  up -d
+docker compose -f docker-compose.observability.yml up -d
 ```
 
-Вендоренный compose тянет образы:
-- `clickhouse/clickhouse-server:24.1.2-alpine`
-- `bitnami/zookeeper:3.7.1`
-- `signoz/query-service:0.71.0`
-- `signoz/frontend:0.71.0`
-- `signoz/signoz-otel-collector:0.111.26`
-- `signoz/alertmanager:0.23.7`
-- `signoz/signoz-schema-migrator:0.111.24`
+> **Не запускать `docker/observability/compose.yaml` напрямую.** Без overlay UI
+> сядет на `0.0.0.0:8080` — это порт self-hosted Dify на этой машине, — а OTLP
+> встанет на все интерфейсы.
+
+Образы (версии запинены намеренно, см. комментарий в compose.yaml):
+- `signoz/signoz:v0.134.0`
+- `signoz/signoz-otel-collector:v0.144.6`
+- `clickhouse/clickhouse-server:25.12.5`
+- `clickhouse/clickhouse-keeper:25.12.5`
+- `postgres:16`
 
 ### 2. Проверка запуска
 
 ```powershell
-# Все сервисы healthy
-docker compose -f docker/observability/docker-compose.yaml ps
+docker compose -f docker-compose.observability.yml ps
 
-# Логи query-service (вместе с schema-migrator)
-docker logs -f signoz-query-service
+# Логи UI/API и приёмника
+docker logs -f signoz-signoz-0
+docker logs -f signoz-ingester-1
 
-# Должен ответить health endpoint
-curl http://localhost:3301/api/v1/health
+# Версия работающего сервера
+docker exec signoz-signoz-0 /root/signoz --version
 ```
 
 ### 3. Первый setup wizard
@@ -82,29 +94,35 @@ curl http://localhost:3301/api/v1/health
 
 ### Дефолтные TTL в ClickHouse
 
-SigNoz v0.71.0 настроен на **30 дней traces / 90 дней metrics** через TTL в
-таблицах ClickHouse (`signoz_traces.*`, `signoz_metrics.*`).
+Фактические TTL на v0.134 (сняты с работающего стека — прежняя запись про
+«30 дней traces / 90 дней metrics» относилась к v0.71 и не соответствует
+действительности):
+
+| Данные | Таблица | TTL |
+|---|---|---|
+| Traces | `signoz_traces.signoz_index_v3` | **15 дней** (1 296 000 с) |
+| Metrics | `signoz_metrics.samples_v4` | **30 дней** (2 592 000 с) |
+| Logs | `signoz_logs.logs_v2` | задаётся колонкой `_retention_days` |
 
 ### Проверка текущих TTL
 
-```sql
--- Подключиться к ClickHouse
-docker exec -it signoz-clickhouse clickhouse-client
-
--- Посмотреть TTL для таблицы traces
-SHOW CREATE TABLE signoz_traces.signoz_index_v3;
-
--- Для метрик
-SHOW CREATE TABLE signoz_metrics.samples;
+```powershell
+docker exec signoz-telemetrystore-clickhouse-0-0 clickhouse-client --query `
+  "SELECT database, name, extract(engine_full, 'TTL[^S]*') AS ttl
+   FROM system.tables
+   WHERE name IN ('signoz_index_v3','samples_v4','logs_v2') FORMAT Vertical"
 ```
 
 ### Изменение TTL
 
-Через SigNoz UI → Settings → Retention Period. Или напрямую через SQL:
+Через SigNoz UI → Settings → Retention Period — так правится и связанная
+метаинформация. Прямой SQL — только как аварийный вариант:
 
 ```sql
-ALTER TABLE signoz_traces.signoz_index_v3 MODIFY TTL toDateTime(timestamp) + INTERVAL 60 DAY;
-ALTER TABLE signoz_metrics.samples MODIFY TTL toDateTime(timestamp_ms) + INTERVAL 180 DAY;
+ALTER TABLE signoz_traces.signoz_index_v3
+  MODIFY TTL toDateTime(timestamp) + INTERVAL 30 DAY;
+ALTER TABLE signoz_metrics.samples_v4
+  MODIFY TTL toDateTime(unix_milli / 1000) + INTERVAL 90 DAY;
 ```
 
 ### Объём диска
@@ -124,31 +142,22 @@ ALTER TABLE signoz_metrics.samples MODIFY TTL toDateTime(timestamp_ms) + INTERVA
 ### Проверка занятого места
 
 ```powershell
-# Размер volume
-docker volume inspect signoz-clickhouse --format '{{.Mountpoint}}'
-# На Windows Docker Desktop: обычно в WSL2 VHDX
-
-# Через ClickHouse
-docker exec signoz-clickhouse clickhouse-client -q "
-  SELECT
-    database,
-    table,
-    formatBytes(sum(bytes_on_disk)) AS size
-  FROM system.parts
-  WHERE active
-  GROUP BY database, table
-  ORDER BY sum(bytes_on_disk) DESC
-  LIMIT 10
-"
+docker exec signoz-telemetrystore-clickhouse-0-0 clickhouse-client --query `
+  "SELECT database, table, formatReadableSize(sum(bytes_on_disk)) AS size
+   FROM system.parts WHERE active
+   GROUP BY database, table ORDER BY sum(bytes_on_disk) DESC LIMIT 10"
 ```
+
+Ориентир с этого стека: около **63 MiB** за первые сутки работы одного инстанса
+(включая служебные таблицы) — то есть таблица выше скорее завышает.
 
 ## Порты
 
 | Порт | Сервис | Назначение |
 |---|---|---|
-| **3301** | frontend | SigNoz UI (nginx + React) |
-| **4317** | otel-collector | OTLP gRPC — от ClaudeHomeServer |
-| **4318** | otel-collector | OTLP HTTP — от ClaudeHomeServer |
+| **3301** | `signoz-signoz-0` | SigNoz UI + API (проброс на :8080 контейнера) |
+| **4317** | `signoz-ingester-1` | OTLP gRPC — от ClaudeHomeServer |
+| **4318** | `signoz-ingester-1` | OTLP HTTP — от ClaudeHomeServer |
 
 Overlay (`docker-compose.observability.yml`) bind'ит все 3 порта к `127.0.0.1` —
 внешний доступ отсутствует без reverse-proxy. Это сознательное security-решение:
@@ -167,104 +176,140 @@ Overlay (`docker-compose.observability.yml`) bind'ит все 3 порта к `1
 
 ## Сеть
 
-- `signoz-net` — изолированная bridge сеть SigNoz
+- `signoz-network` — изолированная bridge-сеть SigNoz
 - НЕ шарится с `cc-sandbox` или app network
 - ClaudeHomeServer подключается к SigNoz через host network (`localhost:4317/4318`)
 
+> Внутри `signoz-network` ClickHouse доступен пользователю `default` без пароля,
+> а у Postgres дефолтные креды. Наружу портов нет, поэтому для локального стека
+> это приемлемо — но не подключать к этой сети посторонние контейнеры.
+
 ## Backup
 
-Volume `signoz-clickhouse` содержит все данные ClickHouse. Для бэкапа:
+Тома v0.134 (прежняя инструкция архивировала `signoz-clickhouse`, которого
+не существует — `docker run -v` молча создал бы пустой том, и «бэкап» получился бы
+пустым):
+
+| Том | Что внутри | Критичность |
+|---|---|---|
+| `signoz-metastore-postgres-0-data` | **дашборды, пользователи, алерты** | высокая |
+| `signoz-telemetrystore-0-0-data` | ClickHouse: traces/metrics/logs | средняя (данные и так истекают по TTL) |
+| `signoz-telemetrykeeper-0-data` | состояние Keeper | низкая |
+| `signoz-telemetrystore-user-scripts` | histogram-binary | низкая, восстановится сама |
+
+**Дашборды бэкапить не нужно** — они лежат в репе как код
+(`docker/observability/dashboards/*.json`) и накатываются `apply.ps1`. Это и есть
+основной механизм восстановления; см. [observability-dashboards.md](observability-dashboards.md).
+
+Метастор (пользователи, алерты) — через `pg_dump`, а не копированием файлов тома:
+у работающей СУБД снимок файлов даёт неконсистентный результат.
 
 ```powershell
-# Архивировать volume
-docker run --rm `
-  -v signoz-clickhouse:/data `
-  -v "${PWD}:/backup" `
-  alpine tar czf /backup/signoz-data-$(Get-Date -Format "yyyyMMdd").tar.gz /data
+# Дамп метастора
+docker exec signoz-metastore-postgres-0 pg_dump -U signoz -d signoz `
+  | Out-File -Encoding utf8 "signoz-metastore-$(Get-Date -Format 'yyyyMMdd').sql"
 
 # Восстановление
-docker run --rm `
-  -v signoz-clickhouse:/data `
-  -v "${PWD}:/backup" `
-  alpine sh -c "rm -rf /data/* && tar xzf /backup/signoz-data-YYYYMMDD.tar.gz -C /"
+Get-Content "signoz-metastore-YYYYMMDD.sql" `
+  | docker exec -i signoz-metastore-postgres-0 psql -U signoz -d signoz
 ```
 
-**Важно:** volume `signoz-clickhouse` живёт ВНЕ каталога `data/` проекта, поэтому
-он **не покрывается** стандартным бэкапом ClaudeHomeServer (`BackupCore`). Бэкапить
-отдельно, по расписанию или вручную.
+Данные телеметрии (ClickHouse) при необходимости — штатным `BACKUP` ClickHouse
+либо копированием тома при ОСТАНОВЛЕННОМ контейнере.
+
+**Важно:** тома SigNoz живут ВНЕ каталога `data/` проекта, поэтому стандартный
+бэкап ClaudeHomeServer (`BackupCore`) их **не покрывает**.
 
 ## Troubleshooting
 
 ### UI SigNoz не открывается на :3301
 
-1. Проверить что overlay применился: `docker compose ps` → frontend должен слушать `127.0.0.1:3301`
-2. Проверить health frontend: `docker logs signoz-frontend`
-3. Сценарий — образ не докачался (network/proxy): `docker compose pull`, затем `up -d` снова
+1. Overlay применился? `docker compose -f docker-compose.observability.yml ps` →
+   `signoz-signoz-0` должен слушать `127.0.0.1:3301`
+2. Логи: `docker logs signoz-signoz-0`
+3. Образ не докачался (network/proxy): `docker compose -f docker-compose.observability.yml pull`, затем `up -d`
 
 ### Данные не появляются после хода чата
 
-1. Проверить `appsettings.Local.json` → `Telemetry:Backends:Production:OtlpEndpoint` указывает на `http://localhost:4318`
-2. Проверить что ClaudeHomeServer стартовал без telemetry errors в логах:
+Порядок важен — он идёт от «данных нет вообще» к «данные есть, но не видны»:
+
+1. **Панель «Telemetry Heartbeat»** на дашборде LLM Operations. Тикает — pipeline жив,
+   и проблема в запросе/диапазоне, а не в экспорте.
+2. **Долетает ли хоть что-то в ClickHouse:**
    ```powershell
-   docker logs claude-server 2>&1 | Select-String "telemetry|otlp|OpenTelemetry"
+   docker exec signoz-telemetrystore-clickhouse-0-0 clickhouse-client --query `
+     "SELECT toDateTime(intDiv(max(unix_milli),1000)) FROM signoz_metrics.distributed_samples_v4"
    ```
-3. Проверить что otel-collector получает данные: `docker logs signoz-otel-collector`
-4. Проверить что schema-migrator завершился успешно: `docker logs signoz-schema-migrator-sync`
+3. **Включён ли экспорт у ТОГО инстанса, что реально запущен.** У боевого деплоя
+   (`C:\deploy\claude`) свой `appsettings.Local.json`, и секции `Telemetry` там может
+   не быть вовсе — тогда экспортёр не регистрируется и данные не идут ниоткуда.
+   Проверить `Telemetry:Backends:Production:Enabled` и `OtlpEndpoint`
+   (`http://localhost:4318`), а также что не выставлена `CCS_TELEMETRY_DISABLED=1`.
+4. **Приёмник получает данные:** `docker logs signoz-ingester-1`
+5. **Миграции схемы прошли:** `docker logs signoz-telemetrystore-migrator`
+   (контейнер штатно в `Exited (0)`)
+6. **Диапазон в пикере** — данные могут быть старше выбранного окна.
 
 ### ClickHouse OOM
 
-1. Проверить memory usage: `docker stats signoz-clickhouse`
-2. Раскомментировать `mem_limit: 2g` в `docker-compose.observability.yml`
-3. Поднять retention (см. выше), чтобы данные не копились бесконечно
+1. `docker stats signoz-telemetrystore-clickhouse-0-0`
+2. Ограничить память сервису в overlay (`mem_limit`)
+3. Снизить retention (см. выше), чтобы данные не копились бесконечно
 
-### schema-migrator падает
+### Мигратор схемы падает
 
-1. Проверить что ClickHouse healthy: `docker compose ps clickhouse`
-2. Логи мигратора: `docker logs signoz-schema-migrator-sync`
-3. Типичная причина — изменилась версия SigNoz, нужен полный `down` + `up`:
+1. ClickHouse healthy? `docker compose -f docker-compose.observability.yml ps`
+2. Логи: `docker logs signoz-telemetrystore-migrator`
+   (в норме контейнер отрабатывает и остаётся в `Exited (0)`)
+3. Типичная причина — сменилась версия SigNoz. Полный сброс — крайняя мера:
    ```powershell
-   docker compose -f docker/observability/docker-compose.yaml down -v
-   # WARNING: -v удаляет volumes, все данные потеряны!
-   docker compose -f docker/observability/docker-compose.yaml -f docker-compose.observability.yml up -d
+   docker compose -f docker-compose.observability.yml down -v
+   # ВНИМАНИЕ: -v удаляет тома. Пропадут и метастор (пользователи, алерты),
+   # и вся телеметрия. Дашборды переживут — они в репе, накатятся apply.ps1.
+   docker compose -f docker-compose.observability.yml up -d
    ```
+
+### Коллектор ругается на unset environment variable
+
+Сообщение вида «Configuration references unset environment variable» в логах
+`signoz-ingester-1` означает, что `ingester/ingester.yaml` ссылается на переменную,
+которой нет в `environment` сервиса. Сейчас коллектор стартует (пустая строка
+трактуется как значение по умолчанию), но поведение не задано контрактом
+и сломается на версии, ужесточившей парсинг. Добавить переменную явно в compose.
 
 ## Обновление SigNoz
 
-Вендоренная версия — **v0.71.0** (последняя стабильная с классическим compose).
-SigNoz v0.130.0+ перешёл на Foundry для деплоя (compose в репе deprecated).
+Текущая версия — **v0.134.0** (коллектор v0.144.6), теги запинены в
+`docker/observability/compose.yaml`.
 
-### Обновление в рамках 0.71.x
+Порядок обновления:
 
-1. Изменить тег в `docker/observability/docker-compose.yaml`:
-   ```yaml
-   query-service:
-     image: signoz/query-service:${DOCKER_TAG:-0.71.0}  # ← поменять
-   ```
-2. `docker compose pull && docker compose up -d`
-3. Schema-migrator применит миграции автоматически
+1. Поменять теги образов в `compose.yaml` (и `signoz`, и `signoz-otel-collector` —
+   их версии независимы).
+2. `docker compose -f docker-compose.observability.yml pull`
+3. `docker compose -f docker-compose.observability.yml up -d` — мигратор применит
+   миграции схемы сам.
 
-### Миграция на v0.130.0+ (Foundry)
-
-Отдельная задача — прочитать [migration guide](https://signoz.io/docs/migration/)
-перед обновлением. Foundry использует другой механизм деплоя.
+> **Откат невозможен.** Мигратор меняет схему ClickHouse необратимо: понизить
+> версию после запуска нельзя. Перед мажорным обновлением снять дамп метастора
+> (см. «Backup») и читать release notes SigNoz.
 
 ## Вендоренные файлы
 
-`docker/observability/` содержит:
+`docker/observability/` содержит (раскладка сгенерирована Foundry):
 
 ```
-docker-compose.yaml                    # главный compose (из signoz/signoz v0.71.0)
-clickhouse/
-  ├── config.xml                       # конфиг ClickHouse
-  ├── users.xml                        # пользователи ClickHouse
-  ├── cluster.xml                      # кластерная конфигурация
-  └── custom-function.xml              # кастомные SQL-функции
-signoz/
-  ├── prometheus.yml                   # конфиг query-service (scrape targets)
-  ├── dashboards/.gitkeep              # встроенные дашборды (пусто — добавляются через UI)
-  ├── otel-collector-opamp-config.yaml # OpAMP-конфиг для динамической настройки коллектора
-  └── nginx-config.conf                # конфиг frontend nginx
-otel-collector-config.yaml             # конфиг otel-collector (pipelines, processors)
+compose.yaml                           # главный compose (SigNoz v0.134)
+ingester/
+  ├── ingester.yaml                    # пайплайны и процессоры приёмника OTLP
+  └── opamp.yaml                       # OpAMP-конфиг
+telemetrystore/clickhouse/
+  ├── config-0-0.yaml                  # конфиг ClickHouse
+  └── functions.yaml                   # кастомные SQL-функции (histogram-quantile)
+telemetrykeeper/clickhousekeeper/
+  └── keeper-0.yaml                    # конфиг ClickHouse Keeper
+dashboards/                            # дашборды как код + apply.ps1
+.signoz-credentials.example.ps1        # шаблон для ключа API (реальный — в .gitignore)
 ```
 
-Источник: https://github.com/SigNoz/signoz/blob/v0.71.0/deploy/docker/
+Источник: https://github.com/SigNoz/signoz/tree/v0.134.0/deploy/

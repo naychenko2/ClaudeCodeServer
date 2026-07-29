@@ -2,9 +2,13 @@ import type { CSSProperties, ReactNode, MouseEvent } from 'react';
 import { C, R, SHADOW, FONT } from '../../lib/design';
 
 export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'ghostAccent' | 'ghostFilled' | 'danger' | 'dashed';
-export type ButtonSize = 'sm' | 'md' | 'lg';
+export type ButtonSize = 'xs' | 'sm' | 'md' | 'lg';
 
 const SIZE: Record<ButtonSize, CSSProperties> = {
+  // xs — для шапки панели (ISLAND.headerH = 40): кнопка с подписью в один ряд
+  // с иконками-контролами. Высота ровно 24 (как IconButton xs и IconSegmented),
+  // поэтому height, а не minHeight: ряд обязан читаться одной линией.
+  xs: { padding: '0 9px', fontSize: 12, lineHeight: 1, borderRadius: R.md, height: 24, minHeight: 24 },
   sm: { padding: '7px 13px', fontSize: 13, borderRadius: R.lg, minHeight: 32 },
   md: { padding: '11px 16px', fontSize: 14, borderRadius: R.xl, minHeight: 40 },
   lg: { padding: '0 16px', fontSize: 16, borderRadius: R.xxl, minHeight: 52 },

@@ -1,5 +1,6 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Docs;
 using Microsoft.AspNetCore.Authorization;
@@ -18,7 +19,7 @@ public class DocsController(DocsIndexService docs, ProjectManager projects) : Co
     private string? UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub);
 
     // Проект текущего пользователя; чужой/несуществующий → 404, как у соседних контроллеров
-    private ClaudeHomeServer.Models.Project GetProject(string projectId)
+    private Project GetProject(string projectId)
     {
         var p = projects.GetById(projectId);
         if (p is null || p.OwnerId != UserId)
@@ -30,7 +31,11 @@ public class DocsController(DocsIndexService docs, ProjectManager projects) : Co
     [HttpGet]
     public IActionResult Index(string projectId)
     {
-        try { return Ok(docs.GetIndex(GetProject(projectId).RootPath)); }
+        try
+        {
+            var p = GetProject(projectId);
+            return Ok(docs.GetIndex(p.RootPath, p.DocsFolders));
+        }
         catch (KeyNotFoundException) { return NotFound(); }
     }
 
@@ -42,7 +47,8 @@ public class DocsController(DocsIndexService docs, ProjectManager projects) : Co
     {
         try
         {
-            var detail = docs.GetDoc(GetProject(projectId).RootPath, path);
+            var p = GetProject(projectId);
+            var detail = docs.GetDoc(p.RootPath, path, p.DocsFolders);
             return detail is null ? NotFound() : Ok(detail);
         }
         catch (KeyNotFoundException) { return NotFound(); }
@@ -51,7 +57,44 @@ public class DocsController(DocsIndexService docs, ProjectManager projects) : Co
     [HttpGet("search")]
     public IActionResult Search(string projectId, [FromQuery] string q = "")
     {
-        try { return Ok(docs.Search(GetProject(projectId).RootPath, q)); }
+        try
+        {
+            var p = GetProject(projectId);
+            return Ok(docs.Search(p.RootPath, q, p.DocsFolders));
+        }
         catch (KeyNotFoundException) { return NotFound(); }
     }
+
+    // Настройка области: что выбрано и какие папки проекта вообще годятся в документацию
+    [HttpGet("folders")]
+    public IActionResult Folders(string projectId)
+    {
+        try
+        {
+            var p = GetProject(projectId);
+            return Ok(FoldersInfo(p));
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+    }
+
+    // Сохранить область. folders: null — вернуть к дефолту (docs/); [] — только README.md.
+    // Нормализация и отсев мусора — в сервисе, поэтому ответ отдаёт уже сохранённое значение,
+    // а не присланное: фронт должен показать галки ровно такими, какими они легли в стор.
+    [HttpPut("folders")]
+    public IActionResult SetFolders(string projectId, [FromBody] SetDocsFoldersRequest req)
+    {
+        try
+        {
+            GetProject(projectId);   // владение проверяем до записи
+            return Ok(FoldersInfo(projects.SetDocsFolders(projectId, req.Folders)));
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+    }
+
+    private DocsFoldersInfo FoldersInfo(Project p) => new(
+        DocsIndexService.NormalizeFolders(p.DocsFolders),
+        docs.SuggestFolders(p.RootPath, p.DocsFolders),
+        DocsIndexService.DefaultFolders);
 }
+
+public record SetDocsFoldersRequest(List<string>? Folders);

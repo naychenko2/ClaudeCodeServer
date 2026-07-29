@@ -20,11 +20,28 @@ public sealed partial class DocsIndexService
     // Область документации. Имена точные: на Linux файловая система регистрозависима,
     // и «Docs/» — это другая папка, а не та же самая.
     private const string ReadmeName = "README.md";
-    private const string DocsDirName = "docs";
+
+    // Папки по умолчанию, пока проект не настроил свои (Project.DocsFolders == null)
+    public static readonly IReadOnlyList<string> DefaultFolders = ["docs"];
 
     // Предохранители: область не должна превращаться в обход всего репозитория
     private const int MaxDocs = 2000;
     private const long MaxDocBytes = 2 * 1024 * 1024;
+    // Больше папок в области — это уже «весь репозиторий», а список в диалоге перестаёт читаться
+    private const int MaxFolders = 30;
+
+    // Глубина и объём поиска кандидатов в папки: диалогу нужны обозримые варианты,
+    // а не полный обход репозитория с node_modules
+    private const int SuggestMaxDepth = 3;
+    private const int SuggestMaxFolders = 200;
+
+    // Папки, которые не документация ни в одном проекте: обходить их дорого, а .md внутри
+    // (README пакетов, шаблоны генераторов) только зашумили бы и область, и список кандидатов
+    private static readonly HashSet<string> SkipDirs = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "node_modules", "bin", "obj", "dist", "build", "out", "target", "vendor",
+        "packages", "venv", "__pycache__", "coverage", "TestResults",
+    };
 
     // Сколько символов текста показываем вокруг совпадения в поиске
     private const int SnippetRadius = 60;
@@ -49,15 +66,19 @@ public sealed partial class DocsIndexService
 
     // ---------- публичное API ----------
 
-    public IReadOnlyList<DocEntry> GetIndex(string rootPath) => GetCorpus(rootPath).Docs;
+    // folders во всех методах: null — папки по умолчанию (docs/), пустой список — только
+    // README.md. Настройка приходит из Project.DocsFolders, разбирать её здесь незачем —
+    // сервис не знает про проекты и работает от корня папки.
+    public IReadOnlyList<DocEntry> GetIndex(string rootPath, IReadOnlyList<string>? folders = null) =>
+        GetCorpus(rootPath, folders).Docs;
 
     // Документ с содержимым и связями. null — путь вне области документации: это и есть
     // гейт эндпоинта. Проверяем ВХОЖДЕНИЕМ В ИНДЕКС, а не сравнением строки с «docs/»:
     // индекс построен обходом реальной файловой системы, поэтому вопрос регистра и
     // разделителей решается один раз здесь, одинаково для Windows и Linux.
-    public DocDetail? GetDoc(string rootPath, string relativePath)
+    public DocDetail? GetDoc(string rootPath, string relativePath, IReadOnlyList<string>? folders = null)
     {
-        var corpus = GetCorpus(rootPath);
+        var corpus = GetCorpus(rootPath, folders);
         var key = NormalizePath(relativePath);
         if (key is null || !corpus.ByPath.TryGetValue(key, out var entry)) return null;
         if (!corpus.Texts.TryGetValue(key, out var text)) return null;
@@ -67,10 +88,11 @@ public sealed partial class DocsIndexService
             corpus.Backlinks.TryGetValue(key, out var backs) ? backs : []);
     }
 
-    public IReadOnlyList<DocSearchHit> Search(string rootPath, string query, int limit = 50)
+    public IReadOnlyList<DocSearchHit> Search(string rootPath, string query,
+        IReadOnlyList<string>? folders = null, int limit = 50)
     {
         if (string.IsNullOrWhiteSpace(query)) return [];
-        var corpus = GetCorpus(rootPath);
+        var corpus = GetCorpus(rootPath, folders);
         var q = query.Trim();
         var hits = new List<DocSearchHit>();
 
@@ -104,38 +126,167 @@ public sealed partial class DocsIndexService
         return hits;
     }
 
+    // ---------- настройка области ----------
+
+    // Папки настройки к каноничному виду: прямые слэши, без краёв-разделителей, без дублей
+    // и без выходов за корень. Мусор молча отбрасывается — настройка приходит с фронта, и
+    // ронять из-за неё индекс всего проекта незачем.
+    // Пустой список НЕ подменяется дефолтом: «снял все галки» — это осознанное «только README».
+    public static IReadOnlyList<string> NormalizeFolders(IReadOnlyList<string>? folders)
+    {
+        if (folders is null) return DefaultFolders;
+        var result = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var raw in folders)
+        {
+            var folder = NormalizeFolder(raw);
+            if (folder is null || !seen.Add(folder)) continue;
+            result.Add(folder);
+            if (result.Count >= MaxFolders) break;
+        }
+        return result;
+    }
+
+    // Одна папка настройки. null — значение непригодно: пустое, абсолютное («C:\…», «/etc»)
+    // или уводящее выше корня. Корень проекта («.», «/») тоже отбрасываем: выбор корня
+    // означал бы обход всего репозитория, а README и так в области всегда.
+    private static string? NormalizeFolder(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        var s = raw.Trim().Replace('\\', '/');
+        if (s.Contains(':')) return null;               // «C:/…» и alternate data stream
+        var segments = new List<string>();
+        foreach (var seg in s.Split('/', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (seg == ".") continue;
+            if (seg == "..") return null;               // выход за корень проекта
+            segments.Add(seg);
+        }
+        return segments.Count == 0 ? null : string.Join('/', segments);
+    }
+
     // ---------- сборка корпуса ----------
 
-    private DocsCorpus GetCorpus(string rootPath)
+    private DocsCorpus GetCorpus(string rootPath, IReadOnlyList<string>? folders)
     {
         var root = Path.GetFullPath(rootPath);
-        var files = CollectFiles(root);
+        var scope = NormalizeFolders(folders);
+        // Ключ кеша — корень ВМЕСТЕ с областью: у соседей по папке (один RootPath, разные
+        // владельцы) настройки свои, и без области в ключе они вытесняли бы корпус друг друга
+        var key = root + "\n" + string.Join('\n', scope);
+        var files = CollectFiles(root, scope);
         var fingerprint = Fingerprint(root, files);
 
-        if (_cache.TryGetValue(root, out var cached) && cached.Fingerprint == fingerprint)
+        if (_cache.TryGetValue(key, out var cached) && cached.Fingerprint == fingerprint)
             return cached.Corpus;
 
         var corpus = BuildCorpus(root, files);
-        _cache[root] = new CachedIndex(fingerprint, corpus);
+        _cache[key] = new CachedIndex(fingerprint, corpus);
         return corpus;
     }
 
-    // Файлы области. README ищем точным именем, docs/ обходим целиком.
-    private static List<string> CollectFiles(string root)
+    // Файлы области. README ищем точным именем, выбранные папки обходим целиком.
+    private static List<string> CollectFiles(string root, IReadOnlyList<string> folders)
     {
         var files = new List<string>();
+        // Вложенные друг в друга папки настройки («docs» и «docs/adr») дают один файл дважды
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         try
         {
             var readme = Path.Combine(root, ReadmeName);
-            if (File.Exists(readme)) files.Add(readme);
+            if (File.Exists(readme) && seen.Add(readme)) files.Add(readme);
 
-            var docsDir = Path.Combine(root, DocsDirName);
-            if (Directory.Exists(docsDir))
-                files.AddRange(Directory.EnumerateFiles(docsDir, "*.md", SearchOption.AllDirectories).Take(MaxDocs));
+            foreach (var folder in folders)
+            {
+                if (files.Count >= MaxDocs) break;
+                var dir = Path.Combine(root, folder.Replace('/', Path.DirectorySeparatorChar));
+                if (!Directory.Exists(dir)) continue;
+                foreach (var file in EnumerateMarkdown(dir))
+                {
+                    if (files.Count >= MaxDocs) break;
+                    if (seen.Add(file)) files.Add(file);
+                }
+            }
         }
         catch (DirectoryNotFoundException) { /* папку удалили между проверкой и обходом */ }
         catch (UnauthorizedAccessException) { /* нет прав на часть дерева — отдаём что смогли */ }
         return files;
+    }
+
+    // Обход .md вручную, а не EnumerateFiles(AllDirectories): нужен пропуск служебных
+    // подпапок. Выбранной может оказаться папка с node_modules внутри, и рекурсия туда
+    // затянула бы тысячи чужих README.
+    private static IEnumerable<string> EnumerateMarkdown(string dir)
+    {
+        var queue = new Queue<string>();
+        queue.Enqueue(dir);
+        while (queue.Count > 0)
+        {
+            var current = queue.Dequeue();
+            string[] files, subdirs;
+            try
+            {
+                files = Directory.GetFiles(current, "*.md");
+                subdirs = Directory.GetDirectories(current);
+            }
+            catch (DirectoryNotFoundException) { continue; }
+            catch (UnauthorizedAccessException) { continue; }
+
+            foreach (var f in files) yield return f;
+            foreach (var sub in subdirs)
+            {
+                var name = Path.GetFileName(sub);
+                if (name.StartsWith('.') || SkipDirs.Contains(name)) continue;
+                queue.Enqueue(sub);
+            }
+        }
+    }
+
+    // Кандидаты в папки документации: папки с .md внутри, неглубоко и без служебных.
+    // Выбранные добавляются всегда — в том числе несуществующие, иначе галка на удалённой
+    // папке пропала бы из диалога, и пустой список документов выглядел бы поломкой.
+    public IReadOnlyList<DocFolderCandidate> SuggestFolders(string rootPath, IReadOnlyList<string>? folders = null)
+    {
+        var root = Path.GetFullPath(rootPath);
+        var found = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        Walk(root, "", 0);
+
+        foreach (var folder in NormalizeFolders(folders))
+            found.TryAdd(folder, 0);
+
+        return found
+            .Select(kv => new DocFolderCandidate(kv.Key, kv.Value,
+                Directory.Exists(Path.Combine(root, kv.Key.Replace('/', Path.DirectorySeparatorChar)))))
+            .OrderBy(c => c.Path, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        // Возвращает число .md в поддереве: родительская папка показывает суммарный счётчик,
+        // даже когда её собственные .md лежат уровнем ниже (docs/ со всем внутри adr/)
+        int Walk(string dir, string rel, int depth)
+        {
+            string[] files, subdirs;
+            try
+            {
+                files = Directory.GetFiles(dir, "*.md");
+                subdirs = Directory.GetDirectories(dir);
+            }
+            catch (DirectoryNotFoundException) { return 0; }
+            catch (UnauthorizedAccessException) { return 0; }
+
+            var count = files.Length;
+            if (depth < SuggestMaxDepth)
+            {
+                foreach (var sub in subdirs)
+                {
+                    var name = Path.GetFileName(sub);
+                    if (name.StartsWith('.') || SkipDirs.Contains(name)) continue;
+                    count += Walk(sub, rel.Length == 0 ? name : $"{rel}/{name}", depth + 1);
+                }
+            }
+            // Корень проекта папкой-кандидатом не бывает: его выбор = обход всего репозитория
+            if (rel.Length > 0 && count > 0 && found.Count < SuggestMaxFolders) found[rel] = count;
+            return count;
+        }
     }
 
     // Отпечаток области: путь + время правки + размер каждого файла. Не «максимальный

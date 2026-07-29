@@ -172,6 +172,19 @@ public class ProjectManager
         return project;
     }
 
+    // Папки документации для панели «Документы». Отдельным методом, а не параметром Update:
+    // настройка узкая и приходит из самой панели, а Update и без того на девяти параметрах.
+    // null = вернуть к дефолту (docs/); пустой список = только README.md.
+    public Project SetDocsFolders(string id, IReadOnlyList<string>? folders)
+    {
+        var project = _projects.GetValueOrDefault(id)
+            ?? throw new KeyNotFoundException($"Проект не найден: {id}");
+        project.DocsFolders = folders is null ? null : [.. Docs.DocsIndexService.NormalizeFolders(folders)];
+        project.UpdatedAt = DateTime.UtcNow;
+        Save();
+        return project;
+    }
+
     // Установить сгенерированную иконку-картинку. Оригинал/кроп загруженного файла теряют смысл.
     public Project SetIconImage(string id, string imageFile)
     {

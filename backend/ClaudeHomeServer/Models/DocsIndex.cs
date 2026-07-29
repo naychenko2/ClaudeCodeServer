@@ -33,3 +33,13 @@ public record DocDetail(string Path, string Title, string Content,
 // Совпадение поиска. Slug — якорь ближайшего заголовка над совпадением (null для
 // совпадения в заголовке документа или до первого подзаголовка).
 public record DocSearchHit(string Path, string Title, string? Slug, string Snippet);
+
+// Кандидат в папки документации: путь от корня проекта, сколько .md внутри (рекурсивно)
+// и есть ли папка на диске (выбранная, но удалённая папка остаётся в списке — иначе
+// галка молча пропала бы, и причина пустого корпуса была бы не видна).
+public record DocFolderCandidate(string Path, int Count, bool Exists);
+
+// Настройка области документации: что выбрано сейчас, что можно выбрать и что было бы
+// по умолчанию (кнопка «вернуть docs/» на фронте строится из Defaults, а не хардкодом).
+public record DocsFoldersInfo(IReadOnlyList<string> Selected, IReadOnlyList<DocFolderCandidate> Candidates,
+    IReadOnlyList<string> Defaults);

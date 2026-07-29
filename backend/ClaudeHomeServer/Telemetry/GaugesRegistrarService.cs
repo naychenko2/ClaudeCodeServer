@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using Microsoft.Extensions.Hosting;
 
@@ -20,7 +21,8 @@ public sealed class GaugesRegistrarService : IHostedService
             var sessions = _sp.GetRequiredService<SessionManager>();
             var connections = _sp.GetRequiredService<ConnectionDiagnostics>();
             GaugeRegistrar.Register(
-                sessionsProvider: () => sessions.ActiveCount,
+                liveSessionsProvider: () => CountLive(sessions.GetAll()),
+                totalSessionsProvider: () => sessions.ActiveCount,
                 connectionsProvider: () => connections.ActiveCount);
         }
         catch
@@ -29,6 +31,17 @@ public sealed class GaugesRegistrarService : IHostedService
         }
         return Task.CompletedTask;
     }
+
+    /// <summary>
+    /// Сколько сессий сейчас реально работают или ждут человека.
+    ///
+    /// Отдельная функция, а не <c>SessionManager.ActiveCount</c>: тот отдаёт размер реестра —
+    /// ВСЕ чаты, поднятые из sessions.json при старте. Гейдж <c>ccs.sessions.active</c> раньше
+    /// читал именно его и потому показывал сотни, не падал после рестарта и не реагировал на
+    /// работу. Предикат общий с сводкой главной (<c>SessionLiveness.IsLive</c>), чтобы «активные»
+    /// в UI и в метрике означали одно и то же.
+    /// </summary>
+    internal static int CountLive(IReadOnlyCollection<Session> all) => all.Count(s => s.IsLive());
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 }

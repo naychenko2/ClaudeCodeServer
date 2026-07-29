@@ -1,42 +1,81 @@
-using ClaudeHomeServer.Services;
+using System.Diagnostics.Metrics;
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Telemetry;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
 using Xunit;
 
 namespace ClaudeHomeServer.Tests.Telemetry;
 
 public class GaugeSourceSafetyTests
 {
-    [Fact]
-    public void SessionManager_ActiveCount_ReadsConcurrentDictionaryCount()
+    // ── Что считается «живой» сессией ────────────────────────────────────────
+    // Гейдж ccs.sessions.active раньше отдавал размер реестра SessionManager, то есть все
+    // чаты, поднятые из sessions.json при старте: показывал сотни, не падал после рестарта
+    // и на работу не реагировал. Теперь и он, и сводка главной считают по одному предикату.
+
+    [Theory]
+    [InlineData(SessionStatus.Working, 0, true)]
+    [InlineData(SessionStatus.Waiting, 0, true)]
+    [InlineData(SessionStatus.Starting, 3, true)]
+    [InlineData(SessionStatus.Starting, 0, false)]   // пустой новорождённый чат — не активность
+    [InlineData(SessionStatus.Finished, 5, false)]
+    [InlineData(SessionStatus.Orphaned, 5, false)]   // осиротел после рестарта — тем более не живой
+    [InlineData(SessionStatus.Error, 5, false)]
+    public void IsLive_MatchesProductDefinition(SessionStatus status, int messages, bool expected)
     {
-        // Smoke: свойство существует и не бросает
-        // Полный integration test требует поднять SessionManager с конфигом — дорого для unit-теста
-        var prop = typeof(SessionManager).GetProperty("ActiveCount");
-        prop.Should().NotBeNull();
-        prop!.PropertyType.Should().Be(typeof(int));
+        var session = new Session { Status = status, MessageCount = messages };
+
+        session.IsLive().Should().Be(expected);
+    }
+
+    // ── Регистрация гейджей ──────────────────────────────────────────────────
+
+    [Fact]
+    public void CountLive_CountsOnlyLiveSessions_NotRegistrySize()
+    {
+        // Ровно то, что питает ccs.sessions.active. Раньше на его месте стоял
+        // SessionManager.ActiveCount — размер реестра, то есть все шесть сессий ниже.
+        var all = new List<Session>
+        {
+            new() { Status = SessionStatus.Working },
+            new() { Status = SessionStatus.Waiting },
+            new() { Status = SessionStatus.Starting, MessageCount = 2 },
+            new() { Status = SessionStatus.Starting },   // пустой новорождённый — не активность
+            new() { Status = SessionStatus.Finished, MessageCount = 9 },
+            new() { Status = SessionStatus.Orphaned, MessageCount = 9 },
+        };
+
+        GaugesRegistrarService.CountLive(all).Should().Be(3);
     }
 
     [Fact]
-    public void ConnectionDiagnostics_ActiveCount_ReadsActiveCounter()
+    public void Register_PublishesSessionGauges()
     {
-        var prop = typeof(ConnectionDiagnostics).GetProperty("ActiveCount");
-        prop.Should().NotBeNull();
-        prop!.PropertyType.Should().Be(typeof(int));
-    }
+        // Регистрация идемпотентна (защита от двойного запуска hosted service) и одноразова
+        // на процесс — значения тут не утверждаем: гейджи мог зарегистрировать любой тест,
+        // поднимающий приложение через WebApplicationFactory. Проверяем состав инструментов:
+        // «активные» и «всего» — два РАЗНЫХ гейджа, их склейка и делала метрику бессмысленной.
+        var published = new List<string>();
 
-    [Fact]
-    public void GaugeRegistrar_Register_IsIdempotent()
-    {
-        // Повторная регистрация не должна бросать (защита от двойного запуска hosted service)
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (instrument, _) =>
+        {
+            if (instrument.Meter.Name == ServerMetrics.MeterName)
+                lock (published) published.Add(instrument.Name);
+        };
+        listener.Start();
+
         var act = () =>
         {
-            GaugeRegistrar.Register(() => 0, () => 0);
-            GaugeRegistrar.Register(() => 0, () => 0);
+            GaugeRegistrar.Register(() => 0, () => 0, () => 0);
+            GaugeRegistrar.Register(() => 0, () => 0, () => 0);
         };
         act.Should().NotThrow();
+
+        published.Should().Contain("ccs.sessions.active");
+        published.Should().Contain("ccs.sessions.total");
+        published.Should().Contain("ccs.websocket.connections");
     }
 
     [Fact]

@@ -19,8 +19,13 @@ import {
   Download,
   Send,
   Star, Database,
+  ClipboardList, FolderTree, GitCompare, ListTodo,
+  Bot, Users, SquareTerminal, MonitorPlay, User,
+  ChevronDown, ChevronRight, Folder, File,
+  Funnel, Check, BookOpen,
+  Calendar, Share2, MessageCircle,
 } from 'lucide-react';
-import { Rows3, Bell, Pin, FolderOpen } from 'lucide-react';
+import { Rows3, Pin, FolderOpen, Bell } from 'lucide-react';
 import { C, FONT, FS, SP, R, SHADOW, ISLAND, MODAL_W, GROUP_COLORS } from '../lib/design';
 import { AGENT_COLORS } from '../components/AgentSelector';
 import { ChatCard } from '../components/ChatCard';
@@ -84,7 +89,8 @@ const TOC_SECTIONS: { id: string; label: string }[] = [
   { id: 'sec-palettes',   label: 'Палитры-данные'    },
   { id: 'sec-islands',    label: 'Острова и холст'   },
   { id: 'sec-colors',     label: 'Цвета'             },
-  { id: 'sec-composite',  label: 'Составные'         },
+  { id: 'sec-panels',     label: 'Панели'             },
+  { id: 'sec-headers',    label: 'Шапки'              },
 ];
 
 // Высота sticky-элементов над контентом: шапка темы + TOC-бар. Секция
@@ -211,9 +217,14 @@ export function UiKitPage() {
               <ColorsSection />
             </div>
 
-            {/* Секция «Составные компоненты» — ChatCard и каркас панели */}
-            <div id="sec-composite" style={{ scrollMarginTop: STICKY_OFFSET }}>
-              <CompositeSection />
+            {/* Секция «Панели» — правая рельса + левые сайдбары + чаты + тона */}
+            <div id="sec-panels" style={{ scrollMarginTop: STICKY_OFFSET }}>
+              <PanelsSection />
+            </div>
+
+            {/* Секция «Шапки» — HubHeader, SidebarProjectSwitcher, IslandHeader */}
+            <div id="sec-headers" style={{ scrollMarginTop: STICKY_OFFSET }}>
+              <HeadersSection />
             </div>
           </div>
 
@@ -1442,15 +1453,8 @@ function Toc({ variant }: { variant: 'sidebar' | 'bar' }) {
 }
 
 
-// Реальные контейнеры экранов: ChatCard (карточка чата в списках) и каркас
-// правой панели (Island + IslandHeader + белая контентная зона). Это уровень
-// КОМПОЗИЦИИ над примитивами — показывает, как из Button/IconButton/Island
-// собираются реальные блоки. В отличие от примитивов, эти компоненты тянут
-// стор (personas/tasks/lastMechanic) — в витрине он пуст, поэтому состояния
-// «чат персоны» и «чат-задача» здесь не видны; показаны базовые раскладки.
-
-// Минимальные валидные Session для демо: обязательные поля заполнены,
-// опциональные — только те, что меняют визуал ChatCard.
+// Минимальные валидные Session для демо ChatCard: обязательные поля
+// заполнены, опциональные — только те, что меняют визуал карточки.
 const DEMO_SESSIONS: Session[] = [
   {
     id: 'demo-1',
@@ -1487,10 +1491,873 @@ const DEMO_SESSIONS: Session[] = [
   },
 ];
 
-function CompositeSection() {
-  // Hover активной карточки — чтобы видеть кнопки действий (onHover у ChatCard).
-  const [hoveredId, setHoveredId] = useState<string | null>('demo-2');
+// Мета 9 панелей правой рельсы — копия PANEL_META из RightPanelStack (там
+// не экспортируется). Меняется только Icon и title; контент у каждого свой.
+const PANELS_DEMO: { key: string; title: string; Icon: LucideIcon; accent?: boolean }[] = [
+  { key: 'plan',     title: 'План',      Icon: ClipboardList },
+  { key: 'agents',   title: 'Агенты',    Icon: Bot },
+  { key: 'context',  title: 'Персона',   Icon: User },
+  { key: 'files',    title: 'Файлы',     Icon: FolderTree },
+  { key: 'changes',  title: 'Изменения', Icon: GitCompare },
+  { key: 'tasks',    title: 'Задачи',    Icon: ListTodo },
+  { key: 'team',     title: 'Команда',   Icon: Users },
+  { key: 'terminal', title: 'Терминал',  Icon: SquareTerminal, accent: true },
+  { key: 'preview',  title: 'Preview',   Icon: MonitorPlay, accent: true },
+];
 
+// Четыре фоновых тона дизайн-системы (Rider Islands): холст → остров →
+// утопленная зона → контент. Плашки красятся РЕАЛЬНЫМИ значениями токенов C.*,
+// поэтому при смене темы видно инверсию: в светлой — остров темнее холста,
+// в тёмной — светлее. Hex-значения — в theme.css, здесь только семантика.
+const BG_TONES: { token: string; color: string; usage: string }[] = [
+  { token: 'bgMain',  color: C.bgMain,  usage: 'Фон-холст страницы (виден в зазорах)' },
+  { token: 'bgPanel', color: C.bgPanel, usage: 'Карточка-остров (дефолт Island.bg)' },
+  { token: 'bgInset', color: C.bgInset, usage: 'Шапки панелей / футеры / утопленные зоны' },
+  { token: 'bgWhite', color: C.bgWhite, usage: 'Контентные зоны: Файлы, Изменения, ввод' },
+];
+
+// Демо-данные для левых сайдбаров разделов. Имитируют реальные списки:
+// персоны (имя + роль + цвет аватара + инициалы), базы знаний (с тегом
+// Pub/Drive/Local), задачи (статус + название), файлы (дерево).
+const SIDEBAR_PERSONAS = [
+  { name: 'Алиса',   role: 'Аналитик',       initials: 'А', color: AGENT_COLORS.orange },
+  { name: 'Борис',   role: 'Разработчик',    initials: 'Б', color: AGENT_COLORS.blue },
+  { name: 'Команда', role: 'Центр памяти',   initials: 'К', color: AGENT_COLORS.purple },
+];
+
+const SIDEBAR_KNOWLEDGE_PERSONAL = [
+  { name: 'Архитектура CCS', tag: 'markdown', count: 24 },
+  { name: 'Гайды по API',    tag: 'docs',     count: 8 },
+];
+
+const SIDEBAR_KNOWLEDGE_PUB = [
+  { name: 'Документация .NET 9', tag: 'public', count: 156 },
+];
+
+const SIDEBAR_TASKS = [
+  { title: 'Поправить фильтр списка', done: false, active: true },
+  { title: 'Ревью PR-142',           done: false, active: false },
+  { title: 'Обновить README',         done: true,  active: false },
+  { title: 'Миграция на .NET 10',     done: false, active: false },
+];
+
+// Мини-бейдж ✓/✗ для таблицы «Панель vs Остров»: зелёная галка для true,
+// нейтральный минус для false (не red — false здесь не «ошибка», а факт).
+function TrueFalseBadge({ value }: { value: boolean }) {
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+      width: 18, height: 18, borderRadius: '50%',
+      background: value ? `${C.success}1F` : C.bgInset,
+      color: value ? C.success : C.textMuted,
+      fontSize: 11, fontWeight: 700, flexShrink: 0,
+    }}>
+      {value ? '✓' : '—'}
+    </span>
+  );
+}
+
+// Мини-карточка сайдбара для витрины: дескриптор сверху (название раздела +
+// где используется) + контент сайдбара снизу. Дескриптор — служебный,
+// в реальных разделах его нет; нужен чтобы в витрине было ясно, что перед нами.
+function MiniSidebarCard({ title, where, children }: { title: string; where: string; children: React.ReactNode }) {
+  return (
+    <div style={{
+      display: 'flex', flexDirection: 'column',
+      borderRadius: R.xl, overflow: 'hidden',
+      border: `1px solid ${ISLAND.border}`,
+      boxShadow: SHADOW.island,
+      minHeight: 240,
+    }}>
+      {/* Служебный дескриптор — не часть реального сайдбара */}
+      <div style={{
+        padding: `${SP.xs}px ${SP.sm}px`,
+        background: C.bgInset,
+        borderBottom: `1px solid ${C.border}`,
+        display: 'flex', alignItems: 'center', gap: SP.xs,
+        fontSize: FS.xs, fontFamily: FONT.mono, color: C.textMuted,
+      }}>
+        <span style={{ fontWeight: 700, color: C.textSecondary }}>{title}</span>
+        <span style={{ flex: 1 }} />
+        <span style={{ opacity: 0.7 }}>{where}</span>
+      </div>
+      {/* Контентная зона: здесь живёт реальный стиль сайдбара */}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// Карточка базы знаний для мини-сайдбара KnowledgeList: иконка-кружок +
+// название + цветной тег типа. Активная — на accentLight.
+function KnowledgeRow({ kb, active }: { kb: { name: string; tag: string; count: number }; active: boolean }) {
+  const tagColor = kb.tag === 'public' ? C.success : C.accent;
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: SP.sm,
+      padding: `${SP.sm}px ${SP.md}px`, borderRadius: R.md, margin: `${SP.xxs}px 0`,
+      background: active ? C.accentLight : 'transparent',
+      cursor: 'pointer',
+    }}>
+      <span style={{
+        width: 24, height: 24, borderRadius: 6,
+        background: active ? C.accent : C.bgInset,
+        color: active ? C.onAccent : C.textSecondary,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+      }}>
+        <BookOpen size={13} strokeWidth={2} />
+      </span>
+      <span style={{
+        flex: 1, fontSize: FS.sm, minWidth: 0,
+        color: active ? C.accent : C.textPrimary,
+        fontWeight: active ? 600 : 400,
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      }}>
+        {kb.name}
+      </span>
+      {/* Тег типа базы */}
+      <span style={{
+        fontSize: 9, fontWeight: 700, letterSpacing: '0.05em',
+        textTransform: 'uppercase', color: tagColor,
+        padding: '1px 5px', borderRadius: 3,
+        background: `${tagColor}1F`,
+        flexShrink: 0,
+      }}>
+        {kb.tag}
+      </span>
+      <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, flexShrink: 0 }}>
+        {kb.count}
+      </span>
+    </div>
+  );
+}
+
+// === Секция «Панели правой рельсы» =================================
+// Все 9 панелей (План/Агенты/Персона + Файлы/Изменения/Задачи/Команда/
+// Терминал/Preview) в виде мини-PanelShell — одна сетка, чтобы видеть,
+// что рецепт общий: Island + IslandHeader (icon+title) + контент на C.bgWhite.
+// accent=true у Терминал/Preview — они доступны только при toolsEnabled.
+function PanelsSection() {
+  return (
+    <Island>
+      <IslandHeader
+        icon={
+          <Columns2
+            size={ICON_SIZE.md}
+            strokeWidth={ICON_STROKE}
+            style={{ color: C.accent, flexShrink: 0 }}
+          />
+        }
+        title="Панели"
+        badge="9 рельсы + чаты"
+      />
+      <div style={{
+        padding: ISLAND.pad,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: ISLAND.gap,
+      }}>
+        {/* Концептуальная шпаргалка: панель ≠ остров. Island — это визуальная
+            обёртка (атом), панель — функциональная роль (организм). Большинство
+            наших панелей живут ВНУТРИ острова, но сами Island не используют. */}
+        <SubBlock label="Панель vs Остров — концептуальная разница">
+          <div style={{
+            display: 'flex', flexDirection: 'column', gap: SP.sm,
+            fontSize: FS.sm, color: C.textSecondary, lineHeight: 1.55,
+          }}>
+            <div>
+              <strong style={{ color: C.textHeading }}>Island</strong> — визуальный
+              примитив (атом): скруглённая карточка с тенью/фоном/бордером.
+              <code style={{ color: C.accent, fontFamily: FONT.mono, margin: '0 4px' }}>&lt;Island&gt;</code>
+              — это div с косметикой, может содержать что угодно.
+            </div>
+            <div>
+              <strong style={{ color: C.textHeading }}>Панель</strong> — функциональная
+              роль в раскладке (сайдбар / рельса / центр). Это *роль*, не *внешний вид*.
+              Может быть реализована через Island, через <code style={{ color: C.accent }}>&lt;aside&gt;</code>,
+              или просто через div.
+            </div>
+
+            {/* Таблица: какие панели у нас как реализованы */}
+            <div style={{
+              marginTop: SP.xs,
+              borderRadius: R.md,
+              border: `1px solid ${C.border}`,
+              overflow: 'hidden',
+            }}>
+              {/* Заголовок таблицы */}
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: '1.6fr 1fr 1fr',
+                background: C.bgInset,
+                borderBottom: `1px solid ${C.border}`,
+                fontSize: FS.xs, fontWeight: 700, color: C.textMuted,
+                fontFamily: FONT.mono, textTransform: 'uppercase', letterSpacing: '0.04em',
+              }}>
+                <div style={{ padding: `${SP.xs}px ${SP.sm}px` }}>Панель</div>
+                <div style={{ padding: `${SP.xs}px ${SP.sm}px` }}>Сама Island?</div>
+                <div style={{ padding: `${SP.xs}px ${SP.sm}px` }}>Внутри Island?</div>
+              </div>
+              {/* Строки таблицы */}
+              {[
+                { name: 'PanelShell (рельса)',     self: true,  wrap: false, note: 'остров-панель' },
+                { name: 'SessionList (воркспейс)', self: false, wrap: true,  note: '' },
+                { name: 'ChatList (раздел «Чаты»)', self: false, wrap: true,  note: '' },
+                { name: 'PersonaList',             self: false, wrap: true,  note: '' },
+                { name: 'KnowledgeList',           self: false, wrap: true,  note: '' },
+                { name: 'TasksPanel',              self: false, wrap: true,  note: 'через cc-panels' },
+                { name: 'ProjectSidebar',          self: false, wrap: false, note: 'свой <aside> с bgPanel' },
+                { name: 'FileExplorer',            self: false, wrap: false, note: 'без обёртки' },
+              ].map((row, i) => (
+                <div key={row.name} style={{
+                  display: 'grid',
+                  gridTemplateColumns: '1.6fr 1fr 1fr',
+                  background: i % 2 === 0 ? 'transparent' : C.bgInset,
+                  borderBottom: i < 7 ? `1px solid ${C.borderLight}` : 'none',
+                  fontSize: FS.xs,
+                }}>
+                  <div style={{
+                    padding: `${SP.xs}px ${SP.sm}px`,
+                    color: C.textPrimary,
+                    display: 'flex', flexDirection: 'column', gap: 2,
+                  }}>
+                    <span style={{ fontWeight: 500 }}>{row.name}</span>
+                    {row.note && (
+                      <span style={{ fontSize: 10, color: C.textMuted, fontFamily: FONT.mono }}>
+                        {row.note}
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ padding: `${SP.xs}px ${SP.sm}px` }}>
+                    <TrueFalseBadge value={row.self} />
+                  </div>
+                  <div style={{ padding: `${SP.xs}px ${SP.sm}px` }}>
+                    <TrueFalseBadge value={row.wrap} />
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <p style={{
+              margin: 0, fontSize: FS.xs, color: C.textMuted,
+              fontFamily: FONT.mono, lineHeight: 1.5,
+            }}>
+              Только <code style={{ color: C.accent }}>PanelShell</code> правой рельсы —
+              настоящий остров-панель. Остальные наши панели либо обёрнуты в Island
+              снаружи (IslandScaffold), либо живут сами по себе с прямым стилем.
+              Island и панель — ортогональные понятия: «Island?» про внешний вид,
+              «панель?» про роль в раскладке.
+            </p>
+          </div>
+        </SubBlock>
+
+        <SubBlock label="9 панелей — один рецепт (Island + IslandHeader + bgWhite)">
+          {/* Сетка: auto-fill с minmax — 3 колонки на широком, 2 на среднем, 1 на узком.
+              Каждая ячейка — мини-PanelShell с иконкой/заголовком и skeleton-контентом. */}
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
+            gap: SP.md,
+          }}>
+            {PANELS_DEMO.map(({ key, title, Icon, accent }) => (
+              <Island
+                key={key}
+                bg={C.bgMain}
+                borderColor={ISLAND.border}
+                style={{ overflow: 'hidden' }}
+              >
+                <IslandHeader
+                  icon={<Icon size={15} strokeWidth={ICON_STROKE} color={C.textSecondary} style={{ flexShrink: 0 }} />}
+                  title={title}
+                />
+                {/* Контентная зона: bgWhite — единая для всех панелей рельсы. */}
+                <div style={{
+                  minHeight: 90,
+                  padding: SP.md,
+                  background: C.bgWhite,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: SP.xs,
+                }}>
+                  {/* Skeleton-строки — разной ширины, чтобы намекнуть на контент */}
+                  <div style={{ height: 8, borderRadius: R.sm, background: C.borderLight, width: '70%' }} />
+                  <div style={{ height: 8, borderRadius: R.sm, background: C.borderLight, width: '90%' }} />
+                  <div style={{ height: 8, borderRadius: R.sm, background: C.borderLight, width: '45%' }} />
+                  {/* accent=true — Терминал/Preview: требуют toolsEnabled.
+                      Подпись-признак вместо живого состояния. */}
+                  {accent && (
+                    <div style={{
+                      marginTop: SP.xs,
+                      fontSize: FS.xs,
+                      fontFamily: FONT.mono,
+                      color: C.textMuted,
+                      padding: `${SP.xxs}px ${SP.sm}px`,
+                      background: C.bgInset,
+                      borderRadius: R.sm,
+                      alignSelf: 'flex-start',
+                    }}>
+                      toolsEnabled
+                    </div>
+                  )}
+                </div>
+              </Island>
+            ))}
+          </div>
+        </SubBlock>
+
+        {/* Левые сайдбары разделов — реальные стили шапок и контента.
+            Каждый сайдбар узнаваем: своя шапка (без IslandHeader — его нет
+            в левых списках) и характерные элементы контента. Шапка мини-острова
+            с дескриптором (название раздела + где используется) — служебная,
+            отделяет демо-карточки витрины от реального стиля сайдбара. */}
+        <SubBlock label="Левые сайдбары разделов — реальные стили">
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))',
+            gap: SP.md,
+          }}>
+
+            {/* 1. Чаты — SessionList/ChatList. Шапка: Button dashed «Новый чат»
+                + упрощённый FilterBar. Контент: 2 ChatCard. */}
+            <MiniSidebarCard title="Чаты" where="Chats · Workspace">
+              <div style={{
+                padding: '10px 12px', borderBottom: `1px solid ${C.divider}`,
+                display: 'flex', alignItems: 'center', gap: 8,
+              }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <Button variant="dashed" size="md" fullWidth leftIcon={<Plus size={15} strokeWidth={2.2} />}>
+                    Новый чат
+                  </Button>
+                </div>
+              </div>
+              {/* Упрощённый FilterBar: поиск + переключатель вида */}
+              <div style={{
+                padding: `${SP.xs}px ${SP.sm}px`, borderBottom: `1px solid ${C.divider}`,
+                display: 'flex', gap: SP.xs, alignItems: 'center',
+              }}>
+                <Search size={13} strokeWidth={2} color={C.textMuted} />
+                <span style={{ fontSize: FS.xs, color: C.textMuted, flex: 1 }}>Поиск…</span>
+                <LayoutGrid size={13} strokeWidth={2} color={C.textMuted} />
+              </div>
+              <div style={{ padding: SP.sm, display: 'flex', flexDirection: 'column', gap: SP.xs }}>
+                {DEMO_SESSIONS.slice(0, 2).map((s, i) => (
+                  <ChatCard
+                    key={s.id}
+                    session={s}
+                    isActive={i === 0}
+                    isMobile={false}
+                    fallbackName={`Чат #${i + 1}`}
+                    online={true}
+                    hovered={false}
+                    workflowRunning={false}
+                    onSelect={() => {}}
+                    onHover={() => {}}
+                    onEdit={() => {}}
+                    onDelete={() => {}}
+                  />
+                ))}
+              </div>
+            </MiniSidebarCard>
+
+            {/* 1b. Чаты в проекте — SessionList. Тот же компонент ChatCard,
+                но обёртка принудительно белая (C.bgWhite), чтобы визуально
+                родниться с контентными зонами правой рельсы (Файлы/Изменения).
+                Ср. с разделом «Чаты» — там обёртки нет, фон кремовый. */}
+            <MiniSidebarCard title="Чаты проекта" where="Workspace · SessionList">
+              <div style={{
+                padding: '10px 12px', borderBottom: `1px solid ${C.divider}`,
+                display: 'flex', alignItems: 'center', gap: 8,
+              }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <Button variant="dashed" size="md" fullWidth leftIcon={<Plus size={15} strokeWidth={2.2} />}>
+                    Новый чат
+                  </Button>
+                </div>
+              </div>
+              <div style={{
+                padding: `${SP.xs}px ${SP.sm}px`, borderBottom: `1px solid ${C.divider}`,
+                display: 'flex', gap: SP.xs, alignItems: 'center',
+              }}>
+                <Search size={13} strokeWidth={2} color={C.textMuted} />
+                <span style={{ fontSize: FS.xs, color: C.textMuted, flex: 1 }}>Поиск…</span>
+                <LayoutGrid size={13} strokeWidth={2} color={C.textMuted} />
+              </div>
+              {/* БЕЛАЯ обёртка — отличие от раздела «Чаты» */}
+              <div style={{
+                background: C.bgWhite,
+                padding: SP.sm, display: 'flex', flexDirection: 'column', gap: SP.xs,
+              }}>
+                {DEMO_SESSIONS.slice(0, 2).map((s, i) => (
+                  <ChatCard
+                    key={s.id}
+                    session={s}
+                    isActive={i === 0}
+                    isMobile={false}
+                    fallbackName={`Чат #${i + 1}`}
+                    online={true}
+                    hovered={false}
+                    workflowRunning={false}
+                    onSelect={() => {}}
+                    onHover={() => {}}
+                    onEdit={() => {}}
+                    onDelete={() => {}}
+                  />
+                ))}
+              </div>
+            </MiniSidebarCard>
+
+            {/* 2. Проекты — ProjectSidebar. Шапка: «Все проекты» + иконка
+                настроек групп. Контент: цветные маркеры групп с count. Фон —
+                C.bgPanel (как в реальном ProjectSidebar.tsx). */}
+            <MiniSidebarCard title="Проекты" where="ProjectListPage">
+              <div style={{
+                background: C.bgPanel, padding: '8px 10px 14px',
+                display: 'flex', flexDirection: 'column', gap: 0,
+              }}>
+                {/* Row «Все проекты» */}
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 11,
+                  padding: '9px 11px', borderRadius: R.lg, marginBottom: 3,
+                  background: 'transparent',
+                }}>
+                  <LayoutGrid size={15} strokeWidth={2} color={C.textSecondary} />
+                  <span style={{ flex: 1, fontSize: 13.5, fontWeight: 500, color: C.textPrimary }}>Все проекты</span>
+                  <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted }}>12</span>
+                </div>
+                {/* «ГРУППЫ» + IconButton */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '13px 4px 9px' }}>
+                  <span style={{
+                    flex: 1, fontFamily: FONT.mono, fontSize: 10,
+                    letterSpacing: '0.08em', color: C.textMuted,
+                  }}>
+                    ГРУППЫ
+                  </span>
+                  <Settings size={13} strokeWidth={2} color={C.textMuted} />
+                </div>
+                {/* Группы с цветными маркерами */}
+                {[
+                  { color: GROUP_COLORS[0], name: 'Фронтенд',   count: 3, active: true },
+                  { color: GROUP_COLORS[1], name: 'Бэкенд',     count: 5, active: false },
+                  { color: GROUP_COLORS[2], name: 'Личное',     count: 2, active: false },
+                ].map(g => (
+                  <div key={g.name} style={{
+                    display: 'flex', alignItems: 'center', gap: 11,
+                    padding: '9px 11px', borderRadius: R.lg, marginBottom: 3,
+                    background: g.active ? C.bgWhite : 'transparent',
+                    boxShadow: g.active ? SHADOW.card : 'none',
+                  }}>
+                    <span style={{
+                      width: 4, height: 17, borderRadius: 2,
+                      background: g.color, flexShrink: 0,
+                    }} />
+                    <span style={{
+                      flex: 1, fontSize: 13.5,
+                      fontWeight: g.active ? 700 : 500,
+                      color: g.active ? C.textHeading : C.textPrimary,
+                    }}>
+                      {g.name}
+                    </span>
+                    <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted }}>
+                      {g.count}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </MiniSidebarCard>
+
+            {/* 3. Персоны — PersonaList. Шапка: Button dashed + SegmentedControl
+                mode (Глобальные/Все). Контент: аватар 32px + имя + роль. */}
+            <MiniSidebarCard title="Персоны" where="PersonasPage">
+              <div style={{
+                padding: '10px 10px 9px', borderBottom: `1px solid ${C.border}`,
+                display: 'flex', flexDirection: 'column', gap: 8,
+              }}>
+                <Button variant="dashed" size="md" fullWidth leftIcon={<Plus size={15} strokeWidth={2.2} />}>
+                  Новая персона
+                </Button>
+                <SegmentedControl
+                  value="global"
+                  options={[
+                    { value: 'global', label: 'Глобальные' },
+                    { value: 'all',    label: 'Все' },
+                  ]}
+                  onChange={() => {}}
+                />
+              </div>
+              <div style={{ padding: 6, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                {SIDEBAR_PERSONAS.map(p => {
+                  const active = p.name === 'Алиса';
+                  return (
+                    <div key={p.name} style={{
+                      width: '100%', display: 'flex', alignItems: 'center', gap: 10,
+                      padding: '8px 10px', borderRadius: R.md, textAlign: 'left',
+                      background: active ? C.accentMuted : 'transparent',
+                    }}>
+                      <span style={{
+                        width: 32, height: 32, borderRadius: '50%',
+                        background: p.color, color: C.onDark,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontSize: 13, fontWeight: 600, flexShrink: 0,
+                      }}>
+                        {p.initials}
+                      </span>
+                      <span style={{ flex: 1, minWidth: 0 }}>
+                        <span style={{
+                          display: 'block', fontSize: 13, fontWeight: 600,
+                          color: C.textHeading,
+                          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                        }}>
+                          {p.name}
+                        </span>
+                        <span style={{
+                          display: 'block', fontSize: 11.5, color: C.textMuted, marginTop: 1,
+                          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                        }}>
+                          {p.role}
+                        </span>
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </MiniSidebarCard>
+
+            {/* 4. Знания — KnowledgeList. GroupLabel «Мои»/«Публичные»
+                (uppercase, letterSpacing). Карточки с цветным тегом типа. */}
+            <MiniSidebarCard title="База знаний" where="KnowledgePage">
+              <div style={{ padding: '8px 8px 20px' }}>
+                {/* GroupLabel «Мои» */}
+                <div style={{
+                  fontSize: 10.5, fontWeight: 700, letterSpacing: '0.06em',
+                  textTransform: 'uppercase', color: C.textMuted,
+                  fontFamily: FONT.sans, padding: '8px 10px 4px',
+                }}>
+                  Мои
+                </div>
+                {SIDEBAR_KNOWLEDGE_PERSONAL.map(kb => (
+                  <KnowledgeRow key={kb.name} kb={kb} active={kb.name === 'Архитектура CCS'} />
+                ))}
+                {/* GroupLabel «Публичные» */}
+                <div style={{
+                  fontSize: 10.5, fontWeight: 700, letterSpacing: '0.06em',
+                  textTransform: 'uppercase', color: C.textMuted,
+                  fontFamily: FONT.sans, padding: '12px 10px 4px',
+                }}>
+                  Публичные
+                </div>
+                {SIDEBAR_KNOWLEDGE_PUB.map(kb => (
+                  <KnowledgeRow key={kb.name} kb={kb} active={false} />
+                ))}
+              </div>
+            </MiniSidebarCard>
+
+            {/* 5. Файлы — FileExplorer. Дерево с раскрытием (ChevronDown для
+                раскрытой папки, ChevronRight для свёрнутой). Активный файл —
+                на C.accentLight. */}
+            <MiniSidebarCard title="Файлы" where="Workspace">
+              <div style={{ padding: SP.sm, display: 'flex', flexDirection: 'column', gap: SP.xs }}>
+                {/* Уровень 0: папка раскрыта */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs }}>
+                  <ChevronDown size={13} strokeWidth={2.2} color={C.textMuted} style={{ flexShrink: 0 }} />
+                  <Folder size={14} strokeWidth={2} color={C.textSecondary} style={{ flexShrink: 0 }} />
+                  <span style={{ fontSize: FS.sm, color: C.textHeading, fontWeight: 500 }}>src</span>
+                </div>
+                {/* Уровень 1: файл */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, paddingLeft: SP.xl + SP.xs }}>
+                  <File size={13} strokeWidth={2} color={C.textMuted} style={{ flexShrink: 0 }} />
+                  <span style={{ fontSize: FS.sm, color: C.textSecondary }}>main.ts</span>
+                </div>
+                {/* Уровень 1: свёрнутая папка */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, paddingLeft: SP.xl + SP.xs }}>
+                  <ChevronRight size={13} strokeWidth={2.2} color={C.textMuted} style={{ flexShrink: 0 }} />
+                  <Folder size={14} strokeWidth={2} color={C.textSecondary} style={{ flexShrink: 0 }} />
+                  <span style={{ fontSize: FS.sm, color: C.textHeading, fontWeight: 500 }}>components</span>
+                </div>
+                {/* Уровень 1: активный файл */}
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: SP.xs,
+                  marginLeft: SP.xl + SP.xs,
+                  padding: `${SP.xxs}px ${SP.xs}px`,
+                  background: C.accentLight, borderRadius: R.sm,
+                }}>
+                  <File size={13} strokeWidth={2} color={C.accent} style={{ flexShrink: 0 }} />
+                  <span style={{ fontSize: FS.sm, color: C.accent, fontWeight: 600 }}>App.tsx</span>
+                </div>
+                {/* Уровень 0: свёрнутая папка */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, marginTop: SP.xs }}>
+                  <ChevronRight size={13} strokeWidth={2.2} color={C.textMuted} style={{ flexShrink: 0 }} />
+                  <Folder size={14} strokeWidth={2} color={C.textSecondary} style={{ flexShrink: 0 }} />
+                  <span style={{ fontSize: FS.sm, color: C.textHeading, fontWeight: 500 }}>docs</span>
+                </div>
+              </div>
+            </MiniSidebarCard>
+
+            {/* 6. Задачи — TasksPanel. Шапка: Button dashed + IconButton Funnel.
+                SegmentedControl «Список|По дате|Доска». Контент: строки с
+                чекбоксами; выполненные — с зачёркиванием. */}
+            <MiniSidebarCard title="Задачи" where="Workspace">
+              <div style={{
+                padding: '8px 12px 4px', display: 'flex', gap: 7, alignItems: 'stretch',
+              }}>
+                <div style={{ flex: 1 }}>
+                  <Button variant="dashed" size="sm" fullWidth leftIcon={<Plus size={13} strokeWidth={2.2} />}>
+                    Новая задача
+                  </Button>
+                </div>
+                <button title="Фильтр" style={{
+                  width: 30, border: 'none', borderRadius: R.sm,
+                  background: 'transparent', cursor: 'pointer',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  color: C.textMuted,
+                }}>
+                  <Funnel size={14} strokeWidth={2} />
+                </button>
+              </div>
+              <div style={{ padding: `${SP.xs}px ${SP.md}px ${SP.sm}px` }}>
+                <SegmentedControl
+                  value="list"
+                  options={[
+                    { value: 'list',   label: 'Список' },
+                    { value: 'date',   label: 'По дате' },
+                    { value: 'board',  label: 'Доска' },
+                  ]}
+                  onChange={() => {}}
+                />
+              </div>
+              <div style={{ padding: `${SP.xs}px ${SP.sm}px ${SP.sm}px`, display: 'flex', flexDirection: 'column', gap: SP.xs }}>
+                {SIDEBAR_TASKS.map(t => (
+                  <div key={t.title} style={{
+                    display: 'flex', alignItems: 'center', gap: SP.sm,
+                    padding: `${SP.xs}px ${SP.sm}px`, borderRadius: R.md,
+                    background: t.active ? C.accentLight : 'transparent',
+                  }}>
+                    {/* Чекбокс */}
+                    <span style={{
+                      width: 14, height: 14, borderRadius: 3,
+                      border: `1.5px solid ${t.done ? C.success : C.border}`,
+                      background: t.done ? C.success : 'transparent',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      flexShrink: 0,
+                    }}>
+                      {t.done && <Check size={10} strokeWidth={3} color={C.onAccent} />}
+                    </span>
+                    <span style={{
+                      flex: 1, fontSize: FS.sm,
+                      color: t.done ? C.textMuted : (t.active ? C.accent : C.textPrimary),
+                      fontWeight: t.active ? 600 : 400,
+                      textDecoration: t.done ? 'line-through' : 'none',
+                    }}>
+                      {t.title}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </MiniSidebarCard>
+
+          </div>
+          <p style={{
+            margin: 0,
+            marginTop: SP.sm,
+            fontSize: FS.xs,
+            color: C.textMuted,
+            fontFamily: FONT.mono,
+            lineHeight: 1.5,
+          }}>
+            7 реальных левых сайдбаров продукта: ChatList (раздел «Чаты») и
+            SessionList (в проекте) — один компонент, но разные обёртки; плюс
+            ProjectSidebar, PersonaList, KnowledgeList, FileExplorer, TasksPanel.
+            Никто не использует <code style={{ color: C.accent }}>IslandHeader</code> —
+            это прерогатива правой рельсы. Шапки — кастомные div с padding/borderBottom
+            и реальными контролами (Button dashed, SegmentedControl, IconButton).
+            HomePage и CalendarPage — без сайдбаров.
+          </p>
+        </SubBlock>
+
+        {/* Панель чатов — отдельный вид панели (не из правой рельсы).
+            Та же ChatCard, но два визуальных варианта в зависимости от раздела. */}
+        <SubBlock label="Панель чатов — 2 варианта (раздел «Чаты» / воркспейс проекта)">
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+            gap: SP.md,
+          }}>
+            {/* Вариант 1: раздел «Чаты» — карточки лежат прямо на острове
+                с дефолтным фоном (C.bgMain, кремовый). ChatList. */}
+            <div>
+              <div style={{
+                marginBottom: SP.xs,
+                fontSize: FS.xs,
+                color: C.textMuted,
+                fontFamily: FONT.mono,
+              }}>
+                ChatList — раздел «Чаты» (без обёртки, на острове)
+              </div>
+              <Island bg={C.bgMain} borderColor={ISLAND.border} style={{ overflow: 'hidden' }}>
+                <div style={{
+                  padding: SP.sm,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: SP.xs,
+                }}>
+                  {DEMO_SESSIONS.slice(0, 2).map((s, i) => (
+                    <ChatCard
+                      key={s.id}
+                      session={s}
+                      isActive={i === 1}
+                      isMobile={false}
+                      fallbackName={`Чат #${i + 1}`}
+                      online={true}
+                      hovered={false}
+                      workflowRunning={false}
+                      onSelect={() => {}}
+                      onHover={() => {}}
+                      onEdit={() => {}}
+                      onDelete={() => {}}
+                    />
+                  ))}
+                </div>
+              </Island>
+            </div>
+
+            {/* Вариант 2: воркспейс проекта — карточки на белой обёртке (C.bgWhite),
+                чтобы визуально родниться с контентными зонами правой рельсы. SessionList. */}
+            <div>
+              <div style={{
+                marginBottom: SP.xs,
+                fontSize: FS.xs,
+                color: C.textMuted,
+                fontFamily: FONT.mono,
+              }}>
+                SessionList — воркспейс (обёртка bgWhite)
+              </div>
+              <Island bg={C.bgMain} borderColor={ISLAND.border} style={{ overflow: 'hidden' }}>
+                <div style={{
+                  background: C.bgWhite,
+                  padding: SP.sm,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: SP.xs,
+                }}>
+                  {DEMO_SESSIONS.slice(0, 2).map((s, i) => (
+                    <ChatCard
+                      key={s.id}
+                      session={s}
+                      isActive={i === 1}
+                      isMobile={false}
+                      fallbackName={`Чат #${i + 1}`}
+                      online={true}
+                      hovered={false}
+                      workflowRunning={false}
+                      onSelect={() => {}}
+                      onHover={() => {}}
+                      onEdit={() => {}}
+                      onDelete={() => {}}
+                    />
+                  ))}
+                </div>
+              </Island>
+            </div>
+          </div>
+          <p style={{
+            margin: 0,
+            marginTop: SP.sm,
+            fontSize: FS.xs,
+            color: C.textMuted,
+            fontFamily: FONT.mono,
+            lineHeight: 1.5,
+          }}>
+            Один компонент ChatCard; различие — в обёртке списка. В разделе
+            «Чаты» правой рельсы проектных инструментов нет, поэтому белый
+            «проектный» тон там выглядел бы лишним — оставили кремовый. В
+            воркспейсе SessionList стоит рядом с Файлами/Изменениями/Задачами,
+            все на C.bgWhite — поэтому обёртка принудительно белая.
+          </p>
+        </SubBlock>
+
+        {/* Шпаргалка по 4 фоновым тонам дизайн-системы. Плашки красятся
+            РЕАЛЬНЫМИ значениями C.*, поэтому при смене темы (SegmentedControl
+            в шапке) видна инверсия: в светлой остров темнее холста, в тёмной
+            светлее. Hex-значения обеих тем — в lib/theme.css. */}
+        <SubBlock label="Фоновые тона — иерархия холст → остров → контент">
+          <div style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: SP.md,
+          }}>
+            {BG_TONES.map(t => (
+              <div key={t.token} style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: SP.xs,
+                maxWidth: 150,
+              }}>
+                {/* Плашка красится РЕАЛЬНЫМ токеном — меняется с темой */}
+                <div style={{
+                  width: SP.xxxl,
+                  height: SP.xxxl,
+                  background: t.color,
+                  borderRadius: R.md,
+                  border: `1px solid ${C.border}`,
+                }} />
+                <span style={{
+                  fontFamily: FONT.mono,
+                  fontSize: FS.xs,
+                  color: C.textSecondary,
+                }}>
+                  C.{t.token}
+                </span>
+                <span style={{
+                  fontSize: FS.xs,
+                  color: C.textMuted,
+                  textAlign: 'center',
+                  lineHeight: 1.4,
+                }}>
+                  {t.usage}
+                </span>
+              </div>
+            ))}
+          </div>
+          <p style={{
+            margin: 0,
+            marginTop: SP.sm,
+            fontSize: FS.xs,
+            color: C.textMuted,
+            fontFamily: FONT.mono,
+            lineHeight: 1.5,
+          }}>
+            Плашки красятся реальными значениями токенов — переключайте тему в
+            шапке витрины, чтобы увидеть инверсию. В светлой: bgMain (#F4F0E8)
+            → bgPanel (#EDE7DC) → bgInset (#E7E0D2) → bgWhite (#FFFFFF). В тёмной
+            всё перевернуто: bgMain (#201C18) → bgPanel (#272320) → bgInset
+            (#1B1815) → bgWhite (#2E2A25).
+          </p>
+        </SubBlock>
+
+        <p style={{
+          margin: 0,
+          fontSize: FS.xs,
+          color: C.textMuted,
+          fontFamily: FONT.mono,
+          lineHeight: 1.5,
+        }}>
+          Сессийная группа (План/Агенты/Персона) — данные тянет из артефактов
+          сессии и store персон; в витрине он пуст, поэтому плашки не видны.
+          Проектные (Файлы/Изменения/Задачи/Команда/Терминал/Preview) берут
+          данные из своих сервисов. Терминал/Preview показываются только при
+          toolsEnabled проекта.
+        </p>
+      </div>
+    </Island>
+  );
+}
+
+// === Секция «Шапки» ===============================================
+// Верхние панели уровня экрана: HubHeader (главная шапка хаба),
+// SidebarProjectSwitcher (переключатель проектов в сайдбаре воркспейса) и
+// IslandHeader как атомарный паттерн шапки острова/панели рельсы.
+function HeadersSection() {
   return (
     <Island>
       <IslandHeader
@@ -1501,8 +2368,8 @@ function CompositeSection() {
             style={{ color: C.accent, flexShrink: 0 }}
           />
         }
-        title="Составные компоненты"
-        badge="ChatCard · каркас панели"
+        title="Шапки"
+        badge="HubHeader · ProjectSwitcher · IslandHeader"
       />
       <div style={{
         padding: ISLAND.pad,
@@ -1510,161 +2377,257 @@ function CompositeSection() {
         flexDirection: 'column',
         gap: ISLAND.gap,
       }}>
-        {/* ChatCard: карточка чата в боковых списках (глобальный ChatList и
-            проектный SessionList — один компонент). Три состояния: обычная /
-            активная+закреплённая / ожидающая. Полоса действий (правка/удаление)
-            показывается по hover — наведите на любую карточку. */}
-        <SubBlock label="ChatCard — карточка чата (обычная / активная / ожидающая)">
-          {/* Белая подложка повторяет реальный фон списка в воркспейсе (C.bgWhite):
-              так виден контраст активной полосы и теней, как в проде. */}
+
+        {/* 1. HubHeader — верхняя шапка хаба на всех главных экранах
+            (кроме воркспейса проекта и страницы входа). Слева — логотип,
+            центр — HubTabs (Чаты/Проекты/Календарь/Заметки/Персоны + модули),
+            справа — AvatarMenu и бейджи уведомлений/истории. */}
+        <SubBlock label="HubHeader — верхняя шапка хаба">
           <div style={{
-            background: C.bgWhite,
-            borderRadius: R.xl,
-            padding: SP.md,
-            display: 'flex',
-            flexDirection: 'column',
-            gap: SP.xs,
+            display: 'flex', alignItems: 'center', gap: SP.md,
+            padding: `${SP.sm}px ${SP.md}px`,
+            background: C.bgPanel,
+            borderRadius: R.lg,
+            border: `1px solid ${C.border}`,
           }}>
-            {DEMO_SESSIONS.map((s, i) => (
-              <ChatCard
-                key={s.id}
-                session={s}
-                isActive={i === 1}
-                isMobile={false}
-                fallbackName={`Чат #${i + 1}`}
-                online={true}
-                hovered={hoveredId === s.id}
-                workflowRunning={false}
-                onSelect={() => {}}
-                onHover={h => setHoveredId(h ? s.id : null)}
-                onEdit={() => {}}
-                onDelete={() => {}}
-                onTogglePin={() => {}}
-              />
-            ))}
+            {/* Логотип слева */}
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: SP.xs,
+              flexShrink: 0,
+            }}>
+              <div style={{
+                width: 28, height: 28, borderRadius: R.sm,
+                background: C.accent, color: C.onAccent,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontWeight: 700, fontFamily: FONT.serif, fontSize: 15,
+              }}>
+                C
+              </div>
+              <span style={{
+                fontFamily: FONT.serif, fontWeight: 500,
+                fontSize: FS.md, color: C.textHeading,
+              }}>
+                Claude Home
+              </span>
+            </div>
+
+            {/* HubTabs по центру — 5 постоянных вкладок DEFAULT_TABS.
+                Реальный активный фон — C.navInk (тёмный, «чернильный»), текст C.onNavInk.
+                Вне HubHeader (variant="default") активная — на белом, но HubHeader
+                использует variant="hub" → navInk. */}
+            <div style={{
+              flex: 1, display: 'flex', justifyContent: 'center',
+              background: 'transparent',
+              borderRadius: R.md,
+              padding: `${SP.xxs}px ${SP.xs}px`,
+              gap: SP.xxs,
+            }}>
+              {[
+                { key: 'chats',       label: 'Чаты',     Icon: MessageCircle, active: true },
+                { key: 'projects',    label: 'Проекты',  Icon: Folder },
+                { key: 'calendar',    label: 'Календарь', Icon: Calendar },
+                { key: 'notes',       label: 'Заметки',  Icon: Share2 },
+                { key: 'personas',    label: 'Персоны',  Icon: Users },
+              ].map(t => {
+                const ActiveIcon = t.Icon;
+                return (
+                  <div key={t.key} style={{
+                    display: 'flex', alignItems: 'center', gap: SP.xs,
+                    padding: `${SP.xs}px ${SP.sm}px`,
+                    borderRadius: R.sm,
+                    background: t.active ? C.navInk : 'transparent',
+                    boxShadow: t.active ? SHADOW.card : 'none',
+                    fontSize: FS.sm,
+                    color: t.active ? C.onNavInk : C.textSecondary,
+                    fontWeight: t.active ? 600 : 400,
+                    cursor: 'pointer',
+                  }}>
+                    <ActiveIcon size={14} strokeWidth={2} />
+                    <span>{t.label}</span>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Справа: Bell с бейджем + аватар */}
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: SP.sm,
+              flexShrink: 0,
+            }}>
+              {/* Bell с бейджем непрочитанных */}
+              <div style={{ position: 'relative' }}>
+                <Bell size={16} strokeWidth={2} color={C.textSecondary} />
+                <span style={{
+                  position: 'absolute', top: -3, right: -5,
+                  background: C.danger, color: C.onAccent,
+                  fontSize: 9, fontWeight: 700,
+                  minWidth: 14, height: 14, borderRadius: 7,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  padding: '0 3px',
+                }}>3</span>
+              </div>
+              {/* Аватар пользователя */}
+              <div style={{
+                width: 28, height: 28, borderRadius: '50%',
+                background: AGENT_COLORS.purple, color: C.onDark,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontWeight: 600, fontSize: 12,
+                cursor: 'pointer',
+              }}>
+                Г
+              </div>
+            </div>
           </div>
-          {/* Подсказка: полные состояния (персона/задача/механика) требуют стора.
-              В витрине стор пуст — поэтому плашки персоны и статуса задачи не видны. */}
           <p style={{
-            margin: 0,
-            fontSize: FS.xs,
-            color: C.textMuted,
-            fontFamily: FONT.mono,
-            lineHeight: 1.5,
+            margin: 0, marginTop: SP.sm,
+            fontSize: FS.xs, color: C.textMuted,
+            fontFamily: FONT.mono, lineHeight: 1.5,
           }}>
-            Стороны персоны/задачи/механики тянутся из store (personas/tasks/
-            lastMechanic); в витрине он пуст — плашки не видны.
+            Постоянные вкладки (DEFAULT_TABS): Чаты · Проекты · Календарь ·
+            Заметки · Персоны. Через AvatarMenu открываются: Знания · Уведомления ·
+            Аналитика · Использование · Фоновые задачи · Эксперименты · Витрина
+            (dev) · «Что нового» · Сменить пароль · Внешние модули (Puzzle).
+            Логотип и URL-бейдж скрыты на мобиле.
           </p>
         </SubBlock>
 
-        {/* Каркас правой панели: Island + IslandHeader + белая контентная зона.
-           PanelShell в RightPanelStack собран из тех же примитивов — это и есть
-            «рецепт панели». Шапка на тоне острова (C.bgMain), контент — на белом,
-            как у Файлов/Изменений/Задач/Терминала. */}
-        <SubBlock label="Каркас панели — Island + IslandHeader + контент на C.bgWhite">
-          <Island
-            bg={C.bgMain}
-            borderColor={ISLAND.border}
-            style={{ overflow: 'hidden' }}
-          >
+        {/* 2. SidebarProjectSwitcher — переключатель проектов в плашке
+            сайдбара воркспейса. Активный проект — чип [иконка + имя + Settings],
+            остальные — компактные иконки; порядок стабильный (закреплённые
+            сверху), есть статус-точки и drag-and-drop. */}
+        <SubBlock label="SidebarProjectSwitcher — переключатель проектов (воркспейс)">
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: SP.xs,
+            padding: `${SP.sm}px ${SP.md}px`,
+            background: C.bgPanel,
+            borderRadius: R.lg,
+            border: `1px solid ${C.border}`,
+          }}>
+            {/* Чип активного проекта: иконка + имя + Settings */}
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: SP.sm,
+              padding: `${SP.xs}px ${SP.sm}px`,
+              borderRadius: R.md,
+              background: C.bgWhite,
+              boxShadow: SHADOW.card,
+              flexShrink: 0,
+            }}>
+              {/* ProjectIcon-плашка */}
+              <div style={{
+                width: 22, height: 22, borderRadius: R.sm,
+                background: AGENT_COLORS.blue, color: C.onDark,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 11, fontWeight: 700,
+              }}>
+                CC
+              </div>
+              <span style={{
+                fontSize: FS.sm, fontWeight: 600, color: C.textHeading,
+                whiteSpace: 'nowrap',
+              }}>
+                ClaudeCodeServer
+              </span>
+              {/* Шестерёнка настроек проекта */}
+              <Settings size={13} strokeWidth={2} color={C.textMuted} style={{ cursor: 'pointer' }} />
+            </div>
+
+            {/* Разделитель групп */}
+            <div style={{ width: 1, alignSelf: 'stretch', background: C.border }} />
+
+            {/* Compact иконки других проектов с статус-точками */}
+            {[
+              { initials: 'B',  color: AGENT_COLORS.green,   status: 'working' },
+              { initials: 'Д',  color: AGENT_COLORS.orange,  status: 'waiting' },
+              { initials: 'P',  color: AGENT_COLORS.pink,    status: undefined },
+              { initials: 'M',  color: AGENT_COLORS.cyan,    status: undefined },
+            ].map(p => (
+              <div key={p.initials} style={{ position: 'relative', flexShrink: 0 }}>
+                <div style={{
+                  width: 30, height: 30, borderRadius: R.sm,
+                  background: p.color, color: C.onDark,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontWeight: 700, fontSize: 12,
+                  cursor: 'pointer',
+                }}>
+                  {p.initials}
+                </div>
+                {/* Статус-точка: working=success / waiting=accent */}
+                {p.status && (
+                  <span style={{
+                    position: 'absolute', bottom: -1, right: -1,
+                    width: 9, height: 9, borderRadius: '50%',
+                    background: p.status === 'working' ? C.success : C.accent,
+                    border: `2px solid ${C.bgPanel}`,
+                  }} />
+                )}
+              </div>
+            ))}
+
+            {/* Хвост: лупа «+N» → палитра всех проектов */}
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: SP.xxs,
+              padding: `${SP.xs}px ${SP.sm}px`,
+              borderRadius: R.sm,
+              background: 'transparent',
+              color: C.textMuted,
+              fontSize: FS.xs, cursor: 'pointer',
+              flexShrink: 0,
+            }}>
+              <Search size={13} strokeWidth={2} />
+              <span style={{ fontFamily: FONT.mono }}>+7</span>
+            </div>
+          </div>
+          <p style={{
+            margin: 0, marginTop: SP.sm,
+            fontSize: FS.xs, color: C.textMuted,
+            fontFamily: FONT.mono, lineHeight: 1.5,
+          }}>
+            Чип активного проекта разворачивается на всю ширину сайдбара, остальные
+            — компактные иконки. Порядок СТАБИЛЬНЫЙ: закреплённые (Pin) сверху,
+            недавние — append-only, активный остаётся на своей позиции при выборе.
+            Статус-точки: working (зелёная) / waiting (оранжевая). Drag-and-drop
+            для пина; правый клик — контекст-меню; «+N» открывает палитру всех.
+          </p>
+        </SubBlock>
+
+        {/* 3. IslandHeader — атомарный паттерн шапки острова. Используется
+            в PanelShell правой рельсы и в IslandsSection витрины. */}
+        <SubBlock label="IslandHeader — атомарный паттерн (правая рельса · секции витрины)">
+          <Island bg={C.bgMain} borderColor={ISLAND.border} style={{ overflow: 'hidden' }}>
             <IslandHeader
-              icon={<Columns2 size={15} strokeWidth={ICON_STROKE} color={C.textSecondary} style={{ flexShrink: 0 }} />}
-              title="Панель"
+              icon={<LayoutTemplate size={15} strokeWidth={ICON_STROKE} color={C.textSecondary} style={{ flexShrink: 0 }} />}
+              title="Заголовок острова"
               badge="3"
               actions={
-                <button
-                  title="Скрыть панель"
-                  style={{
-                    width: 26, height: 26, border: 'none', borderRadius: R.sm,
-                    background: 'transparent', cursor: 'pointer',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    color: C.textMuted, flexShrink: 0,
-                  }}
-                >
+                <button title="Закрыть" style={{
+                  width: 26, height: 26, border: 'none', borderRadius: R.sm,
+                  background: 'transparent', cursor: 'pointer',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  color: C.textMuted,
+                }}>
                   <X size={14} strokeWidth={ICON_STROKE} />
                 </button>
               }
             />
-            {/* Контентная зона: C.bgWhite — отделяет рабочую область от кремовой
-                шапки и фона страницы с дудл-паттерном. Здесь живут реальные
-                дочерние компоненты (FileViewer, TaskBoard, GitPanel…). */}
             <div style={{
-              flex: 1,
-              minHeight: 120,
-              display: 'flex',
-              flexDirection: 'column',
-              overflow: 'hidden',
               background: C.bgWhite,
               padding: SP.md,
-              gap: SP.sm,
+              fontSize: FS.xs, color: C.textMuted,
+              fontFamily: FONT.mono, lineHeight: 1.5,
             }}>
-              {/* Заглушка контента — повторяет визуальные токи реальной панели */}
-              <div style={{
-                height: 10, borderRadius: R.sm,
-                background: C.borderLight, width: '60%',
-              }} />
-              <div style={{
-                height: 10, borderRadius: R.sm,
-                background: C.borderLight, width: '85%',
-              }} />
-              <div style={{
-                height: 10, borderRadius: R.sm,
-                background: C.borderLight, width: '40%',
-              }} />
-              {/* Скелтон «активной строки» — акцентный штрих */}
-              <div style={{
-                marginTop: SP.xs,
-                display: 'flex', alignItems: 'center', gap: SP.sm,
-                padding: `${SP.sm}px ${SP.md}px`,
-                borderRadius: R.md,
-                background: C.accentLight,
-                border: `1px solid ${C.accentMuted}`,
-              }}>
-                <div style={{ width: 6, height: 6, borderRadius: '50%', background: C.accent }} />
-                <span style={{ fontSize: FS.sm, color: C.accent, fontWeight: 600 }}>
-                  Строка состояния / индикатор
-                </span>
-              </div>
+              Контент острова — белая зона (C.bgWhite). Шапка — на тоне острова
+              (C.bgMain / bgPanel), высота 40px (ISLAND.headerH).
             </div>
           </Island>
           <p style={{
-            margin: 0,
-            fontSize: FS.xs,
-            color: C.textMuted,
-            fontFamily: FONT.mono,
-            lineHeight: 1.5,
+            margin: 0, marginTop: SP.sm,
+            fontSize: FS.xs, color: C.textMuted,
+            fontFamily: FONT.mono, lineHeight: 1.5,
           }}>
-            Один рецепт для всех панелей рельсы: План / Агенты / Персона / Файлы /
-            Изменения / Задачи / Команда / Терминал / Preview. Меняется только
-            Icon в шапке и дочерний контент.
+            Единственный «островной» паттерн шапки в системе. Используется в
+            PanelShell правой рельсы (9 панелей) и в IslandsSection этой витрины.
+            Левые сайдбары его НЕ используют — у них кастомные div-шапки.
           </p>
-        </SubBlock>
-
-        {/* Шпаргалка: чем отличаются два уровня композиции. */}
-        <SubBlock label="Различие — карточка vs панель">
-          <div style={{
-            display: 'flex',
-            flexDirection: 'column',
-            gap: SP.xs,
-            fontSize: FS.sm,
-            color: C.textSecondary,
-            lineHeight: 1.55,
-          }}>
-            <div>
-              <strong style={{ color: C.textHeading }}>ChatCard</strong> — компактная
-              карточка-строка в боковом списке: статус точкой, название, превью
-              последнего сообщения, действия по hover. Padding ~11px, ширина = колонка.
-            </div>
-            <div>
-              <strong style={{ color: C.textHeading }}>Каркас панели</strong> — крупный
-              остров-контейнер в правой рельсе: шапка с тулбаром, зона контента во
-              всю высоту, DnD/ресайз. Padding ~ISLAND.pad, занимает всю высоту колонки.
-            </div>
-            <div>
-            Оба собираются из одних примитивов (Island, IconButton, токены C), но
-            на разных уровнях: ChatCard — атом списка, панель — молекула рельсы.
-            </div>
-          </div>
         </SubBlock>
       </div>
     </Island>

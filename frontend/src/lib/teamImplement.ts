@@ -159,7 +159,11 @@ export type TeamEscalationTone = 'warning' | 'success' | 'muted' | 'work';
 export function teamEscalationTone(kind: TeamEscalationKind): TeamEscalationTone {
   switch (kind) {
     case 'waveGate': return 'success';
-    case 'stopped': return 'muted';
+    // Пауза, а не проблема (Э8): планировщику нужны уточнения, а не что-то сломалось —
+    // тот же спокойный тон, что у паузы по команде человека
+    case 'stopped':
+    case 'needsClarification':
+      return 'muted';
     case 'waveAdded': return 'work';
     default: return 'warning';
   }

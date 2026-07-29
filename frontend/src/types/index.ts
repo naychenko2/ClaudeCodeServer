@@ -600,7 +600,8 @@ export type ServerMessage = { sessionId: string } & (
   // Карточка остановки командной реализации: причина + кнопки решения. Переиздаётся при
   // ответе человека (resolved=true) с тем же escalationId — клиент обновляет карточку.
   // Поля плоские (в истории та же карточка лежит вложенным объектом escalation)
-  | { type: 'team_escalation'; escalationId: string; kind: TeamEscalationKind; title: string; details: string; actions: TeamEscalationAction[]; taskId: string | null; wave: number; resolved: boolean; chosenActionId: string | null }
+  // personaId — автор карточки (Э8, координатор на момент публикации)
+  | { type: 'team_escalation'; escalationId: string; kind: TeamEscalationKind; title: string; details: string; actions: TeamEscalationAction[]; taskId: string | null; wave: number; resolved: boolean; chosenActionId: string | null; personaId?: string | null }
   | { type: 'preview_status'; status: string; port?: number; error?: string; serviceId?: string }
   | { type: 'notification'; title: string; body: string; url?: string; kind: 'reminder' | 'claude' | 'info' | 'success' | 'meeting'; notificationId?: string; notifType?: string; projectId?: string; sessionId?: string; taskId?: string; source?: string; tag?: string; personaId?: string; personaName?: string; personaRole?: string; personaColor?: string; personaHasAvatar?: boolean; projectName?: string }
   | { type: 'recall_manifest'; items: RecallItem[] }
@@ -906,7 +907,10 @@ export type TeamEscalationKind =
   | 'stopped'
   // Информация (Э5): по новой вводной развёрнута добавочная волна. Работа уже идёт,
   // клика карточка не ждёт — только показывает состав и даёт «Остановить»
-  | 'waveAdded';
+  | 'waveAdded'
+  // Тупик в волне (Э8): координатор не знает, как действовать дальше — требования неясны.
+  // Волны на паузе, дальше — интервью (ASK-карточки); без кнопок, тон не тревожный
+  | 'needsClarification';
 
 // Кнопка карточки остановки: id — wire-токен решения, label — подпись для человека
 export interface TeamEscalationAction {
@@ -929,6 +933,9 @@ export interface TeamEscalation {
   createdAt?: string;
   resolved: boolean;
   chosenActionId?: string | null;
+  // Автор карточки (Э8): координатор на момент публикации — карточка идёт от его лица.
+  // null — персоны у штаба нет, шапка деградирует до обезличенного варианта
+  personaId?: string | null;
 }
 
 // Элементы чата

@@ -257,6 +257,24 @@ describe('moveAcrossAt / moveAcrossToNewColumn — дроп в направля�
     expect(z.right.layout).toEqual([['tasks', 'files']]);
   });
 
+  it('закрытая панель открывается ровно там, куда её бросили', () => {
+    // Иконку тащат из рельсы: панель не лежит ни в одной зоне, и дроп в
+    // направляющую — это её открытие в выбранном месте, а не перенос
+    const z = moveAcrossAt(zones([['chats']], [['files', 'tasks']]), 'changes', 'right', 0, 1);
+    expect(z.right.layout).toEqual([['files', 'changes', 'tasks']]);
+    expect(z.left.layout).toEqual([['chats']]);
+  });
+
+  it('дроп закрытой панели в разделитель открывает её новой колонкой', () => {
+    const z = moveAcrossToNewColumn(zones([], [['files']]), 'tasks', 'right', 0);
+    expect(z.right.layout).toEqual([['tasks'], ['files']]);
+  });
+
+  it('пустая зона принимает закрытую панель первой колонкой', () => {
+    const z = moveAcrossAt(zones([['chats']], []), 'files', 'right', 0, 0);
+    expect(z.right.layout).toEqual([['files']]);
+  });
+
   it('зона в режиме одной панели меняет свою панель на гостя', () => {
     const base = sanitizeZones({ left: { layout: [['chats']] }, right: { layout: [['files']], mode: 'solo' } });
     const z = moveAcrossAt(base, 'chats', 'right', 0, 0);

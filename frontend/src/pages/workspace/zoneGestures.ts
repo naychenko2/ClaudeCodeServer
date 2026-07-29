@@ -61,6 +61,15 @@ export function usePanelDnd({ zone, enabled, accepts, onSwap }: {
     },
   });
 
+  // Что делает элемент «ручкой» панели: шапка карточки и иконка в рельсе. Из
+  // рельсы тащат ЗАКРЫТУЮ панель — так её можно сразу поставить в нужное место,
+  // а не открывать кликом туда, куда решит раскладка.
+  const dragSourceProps = (k: PanelKey): HTMLAttributes<HTMLElement> & { draggable?: boolean } => ({
+    draggable: true,
+    onDragStart: e => { startPanelDrag(k, zone); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', k); },
+    onDragEnd: endPanelDrag,
+  });
+
   // Пропсы одной панели: подсветка источника/цели + обработчики дропа НА неё.
   // Перетаскивание начинается с шапки (headerProps), а принимает дроп вся
   // карточка (rootProps) — попасть в неё проще, чем в 40px шапки.
@@ -82,10 +91,7 @@ export function usePanelDnd({ zone, enabled, accepts, onSwap }: {
         onDragLeave: () => clearPanelDragOver(zone, tag),
         onDrop: e => { e.preventDefault(); if (incoming && incoming !== k) onSwap(incoming, k); endPanelDrag(); },
       },
-      headerProps: {
-        onDragStart: e => { startPanelDrag(k, zone); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', k); },
-        onDragEnd: endPanelDrag,
-      },
+      headerProps: dragSourceProps(k),
     };
   };
 
@@ -94,7 +100,7 @@ export function usePanelDnd({ zone, enabled, accepts, onSwap }: {
   // ЭТА зона готова принять: по ней решается, показывать ли места вставки.
   return {
     from, fromZone, active: from !== null, accepting: incoming !== null,
-    end: endPanelDrag, isOver, guideProps, panelProps,
+    end: endPanelDrag, isOver, guideProps, panelProps, dragSourceProps,
   };
 }
 

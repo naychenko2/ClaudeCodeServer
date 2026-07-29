@@ -346,8 +346,10 @@ export function swapAcross(zones: PanelZones, a: PanelKey, b: PanelKey): PanelZo
 // перестановка; из другой зоны панель сначала уходит из неё, а затем встаёт в
 // указанную колонку. Пустая целевая зона принимает панель первой колонкой.
 export function moveAcrossAt(zones: PanelZones, k: PanelKey, zone: Zone, colIdx: number, rowIdx: number): PanelZones {
+  // src === null — панель закрыта: её тащат из рельсы, и дроп её ОТКРЫВАЕТ ровно
+  // в указанном месте (ветка ниже так и работает: убрать из прежней зоны нечего,
+  // остаётся вставка)
   const src = zoneOf(zones, k);
-  if (!src) return zones;
   if (src === zone) return withZone(zones, zone, z => ({ ...z, layout: movePanelAt(z.layout, k, colIdx, rowIdx) }));
   const base = closePanel(zones, k);
   return withZone(base, zone, z => {
@@ -365,8 +367,8 @@ export function moveAcrossAt(zones: PanelZones, k: PanelKey, zone: Zone, colIdx:
 // Дроп в разделитель колонок зоны: панель выносится в НОВУЮ колонку, в том
 // числе перелетая из соседней зоны.
 export function moveAcrossToNewColumn(zones: PanelZones, k: PanelKey, zone: Zone, insertIdx: number): PanelZones {
+  // Закрытую панель (src === null) дроп открывает новой колонкой на этом месте
   const src = zoneOf(zones, k);
-  if (!src) return zones;
   if (src === zone) return withZone(zones, zone, z => ({ ...z, layout: movePanelToNewColumn(z.layout, k, insertIdx) }));
   const base = closePanel(zones, k);
   return withZone(base, zone, z => {
@@ -570,15 +572,20 @@ function createPanelZones(ns: string, opts?: {
     emit();
   }
 
+  // Вес новой панели заводим ДО раскладки, иначе normalizeWeights даст ей 1 уже
+  // после деления и соседи дрогнут. Нужно и клику по иконке, и дропу из рельсы:
+  // оба открывают панель, которой в раскладке ещё не было.
+  function ensureWeight(k: PanelKey) {
+    if (_zones.weights[k] == null) {
+      _zones = { ..._zones, weights: { ..._zones.weights, [k]: 1 } };
+    }
+  }
+
   function usePanelZones(): PanelZonesApi {
     const zones = useSyncExternalStore(subscribe, () => _zones);
 
     const toggle = useCallback((zone: Zone, k: PanelKey) => {
-      // Вес новой панели заводим до раскладки, иначе normalizeWeights даст ей 1
-      // уже после деления и соседи дрогнут
-      if (_zones.weights[k] == null) {
-        _zones = { ..._zones, weights: { ..._zones.weights, [k]: 1 } };
-      }
+      ensureWeight(k);
       commit(togglePanelIn(_zones, zone, k));
     }, []);
 
@@ -601,11 +608,15 @@ function createPanelZones(ns: string, opts?: {
       commit({ ...swapped, weights: { ...swapped.weights, [a]: wb, [b]: wa } });
     }, []);
 
+    // Дроп в направляющую: перенос открытой панели либо открытие закрытой —
+    // её тащат из рельсы, и место дропа и есть выбранное для неё место
     const moveAt = useCallback((k: PanelKey, zone: Zone, colIdx: number, rowIdx: number) => {
+      ensureWeight(k);
       commit(moveAcrossAt(_zones, k, zone, colIdx, rowIdx));
     }, []);
 
     const moveToNewColumn = useCallback((k: PanelKey, zone: Zone, insertIdx: number) => {
+      ensureWeight(k);
       commit(moveAcrossToNewColumn(_zones, k, zone, insertIdx));
     }, []);
 

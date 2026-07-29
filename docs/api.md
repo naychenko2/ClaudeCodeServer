@@ -22,6 +22,9 @@ POST                /api/projects/{id}/files/create   { path }
 POST                /api/projects/{id}/files/mkdir    { path }
 POST                /api/projects/{id}/files/rename   { oldPath, newPath }
 DELETE              /api/projects/{id}/files          ?path=
+GET                 /api/projects/{id}/docs                   → индекс документации (README.md + docs/**)
+GET                 /api/projects/{id}/docs/doc       ?path=  → { content, links, backlinks } | 404 вне области
+GET                 /api/projects/{id}/docs/search    ?q=     → совпадения с фрагментами
 GET                 /api/home/summary                 ?recent=    → { active[], recent[] }  (дашборд «Домой»: сессии по всем проектам + чаты, с именами проектов)
 GET                 /api/history/days                 ?sinceDays= → [{ date, commitCount, cached }]  (по всем проектам, без LLM)
 GET                 /api/history/day/{date}                       → { date, items[] }  (продуктовая AI-сводка дня, кеш)

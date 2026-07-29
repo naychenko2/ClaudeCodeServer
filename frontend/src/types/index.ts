@@ -1463,7 +1463,9 @@ export interface TeamMemberDraft {
 
 // ===== Уведомления (центр уведомлений) =====
 
-export type NotificationKind = 'reminder' | 'claude' | 'info' | 'success' | 'meeting';
+// alert — тревоги телеметрии (SigNoz). Отдельный вид, а не 'info': иначе срочное
+// тонет среди саммари и дайджестов, и отфильтровать его нечем.
+export type NotificationKind = 'reminder' | 'claude' | 'info' | 'success' | 'meeting' | 'alert';
 
 export interface NotificationItem {
   id: string;

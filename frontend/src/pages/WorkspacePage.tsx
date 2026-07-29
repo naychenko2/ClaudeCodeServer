@@ -1461,8 +1461,6 @@ const windowWidth = useWindowWidth();
           projectForEdit={projectForEdit}
           railCounts={railCounts}
           onOpenProjectSettings={() => setEditProjectOpen(true)}
-          sidebarMode={sidebarMode}
-          setSidebarMode={setSidebarMode}
           activeSession={activeSession}
           onSelectSession={handleSelectSession}
           onSessionUpdated={handleSessionUpdated}

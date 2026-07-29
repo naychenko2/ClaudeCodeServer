@@ -8,11 +8,9 @@ import { useState, useRef, type ReactNode, type PointerEvent as ReactPointerEven
 import { Plus, MessageCircle } from 'lucide-react';
 import type { Project, Session, Task, SkillInfo, AgentInfo } from '../../types';
 import { C, FONT, ISLAND } from '../../lib/design';
-import { useSidebarWidth, SIDEBAR_MIN, SIDEBAR_MAX } from '../../lib/sidebarWidth';
-import { Button, IconButton, Island } from '../../components/ui';
+import { Button, Island } from '../../components/ui';
 import { ICON_SIZE } from '../../components/ui/icons';
 import { IslandSplitter } from '../../components/ui/IslandSplitter';
-import { IslandSidebarSplitter } from '../../components/ui/IslandSidebarSplitter';
 import { SessionList } from '../../components/SessionList';
 import { ChatPanel } from '../../components/ChatPanel';
 import { FileViewer } from '../../components/FileViewer';
@@ -21,6 +19,8 @@ import { TaskDetailsPane } from '../../features/tasks/TaskDetailsPane';
 import { ProjectPersonaPane } from '../../features/personas/ProjectPersonasPanel';
 import { SidebarProjectSwitcher } from '../../features/projects/SidebarProjectSwitcher';
 import { RightPanelStack } from './RightPanelStack';
+import { LeftPanelStack } from './LeftPanelStack';
+import { startPointerDrag } from '../../lib/pointerDrag';
 import type { PanelKey } from './panelStackState';
 
 export type SidebarMode = 'pinned' | 'collapsed';
@@ -29,12 +29,9 @@ interface Props {
   // Планшет (601–1199): файл всегда fullscreen, правая зона — упрощённый solo
   isTablet?: boolean;
   project: Project;
-  // Имя проекта в шапке сайдбара — из projectForEdit (обновляется после настроек)
+  // Имя проекта в шапке панели чатов — из projectForEdit (обновляется после настроек)
   projectForEdit: Project;
   onOpenProjectSettings: () => void;
-  // Сайдбар: общий стейт WorkspacePage (persist cc_sidebar_mode)
-  sidebarMode: SidebarMode;
-  setSidebarMode: (m: SidebarMode) => void;
   // Сессии
   activeSession: Session | null;
   onSelectSession: (s: Session, firstMessage?: string, autoSelect?: boolean) => void;
@@ -100,7 +97,6 @@ interface Props {
 }
 
 export function DesktopWorkspace(p: Props) {
-  const [sidebarWidth, setSidebarWidth] = useSidebarWidth();
   // Подсветка активного сплиттера: сайдбар или split чат|файл
   const [dragging, setDragging] = useState<'sidebar' | 'split' | null>(null);
 
@@ -108,53 +104,21 @@ export function DesktopWorkspace(p: Props) {
   const [chatFlex, setChatFlex] = useState(1);
   const splitContainerRef = useRef<HTMLDivElement>(null);
 
-  const handleSidebarDrag = (e: ReactPointerEvent) => {
-    e.preventDefault();
-    const startX = e.clientX;
-    const startW = sidebarWidth;
-    const onMove = (ev: PointerEvent) => {
-      setSidebarWidth(Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, startW + (ev.clientX - startX))));
-    };
-    const onUp = () => {
-      document.removeEventListener('pointermove', onMove);
-      document.removeEventListener('pointerup', onUp);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-      setDragging(null);
-    };
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-    document.addEventListener('pointermove', onMove);
-    document.addEventListener('pointerup', onUp);
-    setDragging('sidebar');
-  };
-
   // Split чат|файл: пересчёт пропорции из пиксельных ширин (копия handleSplitterMouseDown)
   const handleSplitDrag = (e: ReactPointerEvent) => {
     e.preventDefault();
     const container = splitContainerRef.current;
     if (!container) return;
     const rect = container.getBoundingClientRect();
-    const onMove = (ev: PointerEvent) => {
-      const chatW = Math.max(200, Math.min(rect.width - 200, ev.clientX - rect.left));
-      const fileW = rect.width - chatW;
-      setChatFlex(chatW / fileW);
-    };
-    const onUp = () => {
-      document.removeEventListener('pointermove', onMove);
-      document.removeEventListener('pointerup', onUp);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-      setDragging(null);
-    };
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-    document.addEventListener('pointermove', onMove);
-    document.addEventListener('pointerup', onUp);
     setDragging('split');
+    startPointerDrag(
+      ev => {
+        const chatW = Math.max(200, Math.min(rect.width - 200, ev.clientX - rect.left));
+        setChatFlex(chatW / (rect.width - chatW));
+      },
+      { onEnd: () => setDragging(null) },
+    );
   };
-
-  const openSidebar = p.sidebarMode !== 'pinned' ? () => p.setSidebarMode('pinned') : undefined;
 
   // Явный выбор чата в списке закрывает открытые в центре студию персоны,
   // командный центр и превью сервиса
@@ -169,18 +133,19 @@ export function DesktopWorkspace(p: Props) {
 
   const personaOpen = !!p.selectedPersonaId || p.personaCreating;
 
-  // Панель чатов: шапка проекта (без вкладок) + SessionList. Шапка остаётся на тоне
-  // острова (bgMain), список чатов — на белом, как контентная зона панелей рельсы
-  const sidebar = (
-    <div style={{ width: '100%', display: 'flex', flexDirection: 'column', background: 'transparent', flexShrink: 0, height: '100%' }}>
-      <div style={{ padding: '8px 10px 6px', flexShrink: 0, borderBottom: `1px solid ${C.border}` }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, minHeight: 28 }}>
-          {/* Плашка проекта = переключатель проектов; настройки открываются
-              кликом по иконке активного проекта */}
-          <SidebarProjectSwitcher project={p.projectForEdit} onOpenSettings={p.onOpenProjectSettings} />
-        </div>
+  // Контент панели «Чаты» левой рельсы. Заголовок панели рисует PanelShell, поэтому
+  // здесь только содержимое: переключатель проектов и список чатов на белом фоне
+  // контентной зоны — как у панелей правой рельсы.
+  // Переключатель проектов пока живёт в контенте панели; в планах — вынести его
+  // в собственную панель рельсы.
+  const chatsPanel = (
+    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: C.bgWhite }}>
+      <div style={{ padding: '8px 10px', flexShrink: 0, borderBottom: `1px solid ${C.border}` }}>
+        {/* Плашка проекта = переключатель проектов; настройки открываются
+            кликом по иконке активного проекта */}
+        <SidebarProjectSwitcher project={p.projectForEdit} onOpenSettings={p.onOpenProjectSettings} />
       </div>
-      <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', background: C.bgWhite }}>
+      <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         <SessionList project={p.project} activeSession={p.activeSession} onSelect={handleSelectSession} onSessionUpdated={p.onSessionUpdated} onCleared={p.onClearSession} isMobile={false} workflowRunningFor={p.workflowRunningFor} />
       </div>
     </div>
@@ -193,21 +158,12 @@ export function DesktopWorkspace(p: Props) {
       session={p.activeSession} project={p.project} onOpenFile={p.onOpenFileFromChat}
       pendingMessage={p.pendingMessage} onPendingMessageSent={p.onPendingMessageSent}
       onSessionUpdated={p.onSessionUpdated} isMobile={false} onWorkflowRunning={p.onWorkflowRunning}
-      onOpenSidebar={openSidebar} skills={p.skills} agents={p.agents}
+      skills={p.skills} agents={p.agents}
       attachedFiles={p.attachedFiles} onAttachedFilesChange={p.onAttachedFilesChange}
       headerIsland={headerIsland}
     />
   ) : (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      {p.sidebarMode === 'collapsed' && (
-        <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', padding: '0 8px', height: 52 }}>
-          <IconButton size="md" variant="soft" onClick={() => p.setSidebarMode('pinned')} title="Открыть панель">
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-              <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
-            </svg>
-          </IconButton>
-        </div>
-      )}
       <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', maxWidth: 400, gap: 10 }}>
           <div style={{ width: 56, height: 56, borderRadius: 16, background: C.bgPanel, color: C.accent, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 4 }}>
@@ -246,21 +202,15 @@ export function DesktopWorkspace(p: Props) {
     // рельса инструментов прижата к краю окна.
     <div style={{
       flex: 1, minWidth: 0, display: 'flex', position: 'relative',
-      // Слева/снизу — просторный pad, сверху — узкий gap под шапкой,
-      // справа 0 — рельса инструментов остаётся прижатой к краю окна.
+      // Снизу — просторный pad, сверху — узкий gap под шапкой; по бокам 0 —
+      // обе рельсы прижаты к краям окна.
       // Фон прозрачный: дудл-холст (CanvasBackdrop) рисует корень WorkspacePage
-      padding: `${ISLAND.gap}px 0 ${ISLAND.pad}px ${ISLAND.pad}px`,
+      padding: `${ISLAND.gap}px 0 ${ISLAND.pad}px 0`,
     }}>
-      {/* === Сайдбар чатов: остров + ресайз-зазор с кнопкой «свернуть» === */}
-      {p.sidebarMode === 'pinned' && (
-        <>
-          {/* Фон — bgMain, в тон шапкам панелей рельсы и «губе» под композером */}
-          <Island bg={C.bgMain} style={{ width: sidebarWidth, flexShrink: 0 }}>
-            {sidebar}
-          </Island>
-          <IslandSidebarSplitter active={dragging === 'sidebar'} onMouseDown={handleSidebarDrag} onCollapse={() => p.setSidebarMode('collapsed')} />
-        </>
-      )}
+      {/* === Слева: рельса иконок + панель чатов (зеркало правой рельсы) ===
+          Открытие/сворачивание — иконкой рельсы, ширина тянется её сплиттером;
+          прежние sidebarMode/useSidebarWidth здесь больше не нужны. */}
+      <LeftPanelStack panels={{ chats: chatsPanel }} />
 
       {/* === Центр: коммит → задача → персона → доска → файл (split/fullscreen) → чат === */}
       {!p.openFile && p.openCommitSha && centerIsland(
@@ -329,7 +279,7 @@ export function DesktopWorkspace(p: Props) {
           <IslandSplitter orientation="v" active={dragging === 'split'} onMouseDown={handleSplitDrag} />
           <Island bg={C.bgMain} style={{ flex: 1, minWidth: 200 }}>
             <div style={{ flex: 1, overflow: 'hidden' }}>
-              <FileViewer project={p.project} filePath={p.openFile} onClose={p.onCloseFile} onToggleFullscreen={p.onEnterFullscreen} onOpenSidebar={openSidebar} initialTab={p.openFileDiffMode ? 'diff' : undefined} gitStagePath={p.gitStagePath ?? undefined} />
+              <FileViewer project={p.project} filePath={p.openFile} onClose={p.onCloseFile} onToggleFullscreen={p.onEnterFullscreen} initialTab={p.openFileDiffMode ? 'diff' : undefined} gitStagePath={p.gitStagePath ?? undefined} />
             </div>
           </Island>
         </div>
@@ -337,7 +287,7 @@ export function DesktopWorkspace(p: Props) {
 
       {p.openFile && (p.fileFullscreen || p.isTablet) && centerIsland(
         <div style={{ flex: 1, overflow: 'hidden' }}>
-          <FileViewer project={p.project} filePath={p.openFile} onClose={p.onCloseFile} onOpenSidebar={openSidebar} initialTab={p.openFileDiffMode ? 'diff' : undefined} gitStagePath={p.gitStagePath ?? undefined} />
+          <FileViewer project={p.project} filePath={p.openFile} onClose={p.onCloseFile} initialTab={p.openFileDiffMode ? 'diff' : undefined} gitStagePath={p.gitStagePath ?? undefined} />
         </div>
       )}
 

@@ -298,10 +298,20 @@ public record TeamImplementMessage(
 public record ProviderSwitchedMessage(string Provider, string? Model = null, string? Label = null, bool Auto = false)
     : ServerMessage("provider_switched");
 
-// Лимит подписки исчерпан и внутри пула переключиться некуда: предложение продолжить
-// чат на стороннем провайдере (карточка с кнопками в ленте). Providers — доступные
-// варианты: ключ, имя для кнопки и модель, с которой пойдёт продолжение.
-public record ProviderFallbackOption(string Key, string DisplayName, string Model);
+// Лимит подписки исчерпан: предложение продолжить чат карточкой с кнопками в ленте —
+// либо на другом здоровом аккаунте того же пула подписок (Kind="subscription", та же
+// модель и эндпоинт, но своя предоплата), либо на стороннем провайдере (Kind="provider",
+// дефолт — старое поведение, TierLabel/Utilization не заполняются). Providers — доступные
+// варианты: Key — ключ подписки пула ИЛИ ключ стороннего провайдера (различается Kind),
+// DisplayName — имя для кнопки, Model — модель, с которой пойдёт продолжение (у аккаунтов
+// пула это модель текущего чата — она не меняется, меняется только аккаунт).
+public record ProviderFallbackOption(
+    string Key,
+    string DisplayName,
+    string Model,
+    string Kind = "provider",
+    string? TierLabel = null,
+    double? Utilization = null);
 public record ProviderLimitMessage(string? ResetsAt, IReadOnlyList<ProviderFallbackOption> Providers)
     : ServerMessage("provider_limit");
 

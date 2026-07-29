@@ -180,6 +180,27 @@ public class ClaudeSubscriptionPoolTests : IDisposable
     }
 
     [Fact]
+    public void Restore_БолееПоздныйOAuthСнимок_НеМаскируетРанееЗафиксированноеИсчерпание()
+    {
+        // Дыра ротации: SubscriptionOAuthUsageService.RecordWindow пишет status="allowed"
+        // ВСЕГДА (эндпоинт отдаёт только проценты, не вердикт accept/reject). Если такой
+        // снимок хронологически последний в группе LimitType, наивная RestoreFromSnapshots
+        // маскировала бы реальное исчерпание недельного окна (source="turn"/"probe",
+        // status="rejected") после рестарта сервера — Pick() снова выбрал бы мёртвый аккаунт
+        // с виду свежим (по 5h-окну) состоянием.
+        var config = Config("second");
+        var usage = new UsageService(config);
+        usage.Record("seven_day", 1.0, "rejected", isUsingOverage: false,
+            resetsAt: DateTime.UtcNow.AddDays(3).ToString("o"), subscriptionKey: "second", source: "turn");
+        usage.Record("seven_day", 0.97, "allowed", isUsingOverage: false,
+            resetsAt: DateTime.UtcNow.AddDays(3).ToString("o"), subscriptionKey: "second", source: "oauth");
+
+        var pool = new ClaudeSubscriptionPool(config, usage);
+
+        pool.IsExhausted("second").Should().BeTrue();
+    }
+
+    [Fact]
     public void Pick_ВыбираетНаименееЗагруженную()
     {
         var config = Config("second");

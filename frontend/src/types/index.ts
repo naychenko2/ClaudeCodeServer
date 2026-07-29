@@ -651,11 +651,17 @@ export interface LaunchConfigEntry {
   env?: Record<string, string>;
 }
 
-// Вариант продолжения чата на стороннем провайдере (из события provider_limit)
+// Вариант продолжения чата при исчерпании лимита (из события provider_limit):
+// kind='subscription' — другой аккаунт того же пула подписок Claude (та же модель,
+// tierLabel — тариф «Max 5×», utilization 0..1); kind='provider' (дефолт) — сторонний
+// провайдер (tierLabel/utilization не заполняются)
 export interface ProviderFallbackOption {
   key: string;
   displayName: string;
   model: string;
+  kind?: 'subscription' | 'provider';
+  tierLabel?: string | null;
+  utilization?: number | null;
 }
 
 // Состояние одного окна лимита подписки (из rate_limit_event). utilization: 0..1.
@@ -681,6 +687,9 @@ export interface UsageSnapshot {
   resetsAt?: string;
   overageStatus?: string;
   overageResetsAt?: string;
+  // Кто записал снимок: живой ход чата, идл-пинг простаивающего аккаунта или OAuth-опрос
+  // лимитов; null/отсутствует — записи до фичи идл-пинга (обратная совместимость)
+  source?: 'turn' | 'probe' | 'oauth' | null;
 }
 
 // Тариф подписки (с бэка, из credentials)
@@ -749,6 +758,9 @@ export interface SubscriptionUsage {
   exhausted?: boolean;
   // Ярлык тарифа ("Max 20×", "Pro", …) — по нему пул приоритизирует аккаунты
   tier?: string;
+  // Готовая PowerShell-команда входа в профиль аккаунта (для плашки «нужен claude login»);
+  // null — команда неприменима (токен приходит из env, логин в файл не поможет)
+  loginCommand?: string | null;
 }
 
 // Статистика аккаунта fal.ai (баланс + расход за период)

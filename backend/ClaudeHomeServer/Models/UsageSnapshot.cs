@@ -3,6 +3,9 @@ namespace ClaudeHomeServer.Models;
 // Снимок использования окна лимита подписки в момент времени (из rate_limit_event).
 // Utilization — доля 0..1; LimitType — five_hour/seven_day/weekly; ResetsAt — ISO-время сброса.
 // SubscriptionKey — какая подписка сгенерировала снимок ("claude" — основная, ключ из пула — дополнительная).
+// Source — кто записал снимок: "turn" (живой ход чата), "probe" (идл-пинг
+// SubscriptionUsageWarmupService) или "oauth" (SubscriptionOAuthUsageService); null — снимок
+// записан до появления поля (обратная совместимость со старым usage.json).
 public record UsageSnapshot(
     DateTime Timestamp,
     string LimitType,
@@ -12,7 +15,8 @@ public record UsageSnapshot(
     string? ResetsAt,
     string? OverageStatus = null,
     string? OverageResetsAt = null,
-    string SubscriptionKey = "claude");
+    string SubscriptionKey = "claude",
+    string? Source = null);
 
 // Информация о тарифе подписки (из ~/.claude/.credentials.json)
 public record PlanInfo(string? SubscriptionType, string? RateLimitTier, string Label);
@@ -59,5 +63,10 @@ public record OllamaActionInfo(string Key, string Title, string Group, bool Rout
 // утилизация 5h-окна (истёкшее окно/нет данных = 0); Exhausted — жёсткое исчерпание
 // (rejected/100%), при котором аккаунт выведен независимо от числа Utilization;
 // Tier — ярлык тарифа ("Max 20×", "Pro", …), по нему пул приоритизирует аккаунты.
+// LoginCommand — готовая PowerShell-команда `claude login` в профиль ЭТОГО аккаунта
+// (SubscriptionOAuthUsageService.LoginCommandFor); null — у аккаунта нет файлового
+// профиля, куда логин имел бы смысл. Отдаётся всегда, не только при unauthorized —
+// фронт сам решает, когда показать кнопку копирования.
 public record SubscriptionUsage(IReadOnlyList<UsageSnapshot> Snapshots, string? Name = null,
-    bool InRotation = true, double Utilization = 0, bool Exhausted = false, string? Tier = null);
+    bool InRotation = true, double Utilization = 0, bool Exhausted = false, string? Tier = null,
+    string? LoginCommand = null);

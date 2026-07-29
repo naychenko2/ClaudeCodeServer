@@ -931,11 +931,12 @@ export const api = {
       }),
     // Миграция чата на другого провайдера («Продолжить на …» при исчерпании лимита):
     // транскрипт переезжает в профиль провайдера, контекст сохраняется. Работает и для
-    // проектных сессий
-    migrateProvider: (id: string, model: string) =>
+    // проектных сессий. subscriptionKey — явный выбор аккаунта того же пула подписок
+    // (кнопка kind='subscription' карточки лимита); для сторонних провайдеров не передаётся
+    migrateProvider: (id: string, model: string, subscriptionKey?: string) =>
       request<Session>(`/chats/${id}/migrate-provider`, {
         method: 'POST',
-        body: JSON.stringify({ model }),
+        body: JSON.stringify(subscriptionKey ? { model, subscriptionKey } : { model }),
       }),
     // Режим прав: сохраняем сразу при выборе в Composer, иначе он доехал бы до сессии
     // только вместе со следующим сообщением и терялся при уходе со страницы

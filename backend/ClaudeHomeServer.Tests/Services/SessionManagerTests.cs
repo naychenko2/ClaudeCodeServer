@@ -29,6 +29,8 @@ public class SessionManagerTests : IDisposable
     private readonly PersonaManager _personaManager;
     private readonly AppSettingsService _appSettings;
     private readonly ClaudeHomeServer.Services.Llm.LocalActionOverridesStore _actionOverrides;
+    private readonly UsageService _usage;
+    private readonly SubscriptionActivityTracker _activity;
     private readonly SessionManager _sut;
     private readonly Mock<IClientProxy> _clientProxy;
     private readonly List<ServerMessage> _sentMessages = new();
@@ -81,7 +83,8 @@ public class SessionManagerTests : IDisposable
         var adapters = new ClaudeHomeServer.Services.Llm.LlmSessionAdapterFactory(
             config, new SkillsService(), new WorkspaceKnowledgeStore(config), llmProviders, subPool);
         var falCost = new FalCostService(new Mock<IHttpClientFactory>().Object, config);
-        var usage = new UsageService(config);
+        _usage = new UsageService(config);
+        _activity = new SubscriptionActivityTracker();
         var jwt = new JwtService(config, NullLogger<JwtService>.Instance);
         var server = new Mock<Microsoft.AspNetCore.Hosting.Server.IServer>();
         server.Setup(s => s.Features).Returns(new Microsoft.AspNetCore.Http.Features.FeatureCollection());
@@ -107,7 +110,7 @@ public class SessionManagerTests : IDisposable
         // Планирование «Командной реализации» (Э2): раннер планировщика подставной —
         // ответ задаётся тестом через _plannerAnswer
         _teamPlanning = new TeamPlanningService(personas, new StubCheapRunner(() => _plannerAnswer));
-        _sut = new SessionManager(_projectManager, hub.Object, _historyService, config, adapters, falCost, usage, appSettings, userStore, jwt, server.Object, llmProviders, notesKb, flags, personas, personaMemory, bindings, promptBuilder, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox, assignments: assignments, teamPlanning: _teamPlanning);
+        _sut = new SessionManager(_projectManager, hub.Object, _historyService, config, adapters, falCost, _usage, appSettings, userStore, jwt, server.Object, llmProviders, notesKb, flags, personas, personaMemory, bindings, promptBuilder, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox, assignments: assignments, teamPlanning: _teamPlanning, activity: _activity);
     }
 
     public void Dispose()
@@ -2974,5 +2977,32 @@ public class SessionManagerTests : IDisposable
             await Task.Delay(50);
         }
         return _sentMessages.OfType<ComposerRestoreMessage>().ToList();
+    }
+
+    // --- Живой ход: rate_limit_event пишет usage с source=turn и трогает activity tracker ---
+
+    private async Task InvokeOnMessageAsync(string sessionId, TurnAccumulator acc, ServerMessage msg)
+    {
+        var method = typeof(SessionManager).GetMethod("OnMessageAsync", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var task = (Task)method.Invoke(_sut, [sessionId, acc, msg])!;
+        await task;
+    }
+
+    [Fact]
+    public async Task RateLimitMessage_ЖивойХод_ЗаписываетSourceTurn_ИТрогаетActivityTracker()
+    {
+        var dir = MkProjectDir("ratelimit");
+        var project = _projectManager.Create("RL", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        var acc = new TurnAccumulator(new List<StoredMessage>());
+        var msg = new RateLimitMessage("five_hour", DateTime.UtcNow.AddHours(2).ToString("o"),
+            "allowed", 0.4, false);
+
+        await InvokeOnMessageAsync(session.Id, acc, msg);
+
+        var snap = _usage.GetAll().Should().ContainSingle(s => s.LimitType == "five_hour").Subject;
+        snap.Source.Should().Be("turn");
+        snap.SubscriptionKey.Should().Be(ClaudeSubscriptionPool.PrimaryKey);
+        _activity.IsIdle(ClaudeSubscriptionPool.PrimaryKey, TimeSpan.FromMinutes(10)).Should().BeFalse();
     }
 }

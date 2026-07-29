@@ -208,6 +208,9 @@ public class SessionManager : IDisposable
     private readonly PersonaBindingsService _bindings;
     private readonly PersonaPromptBuilder _promptBuilder;
     private readonly ClaudeSubscriptionPool _subscriptionPool;
+    // Время последней фактической активности аккаунта пула (живой ход/пинг) для идл-пинга
+    // подписок (SubscriptionUsageWarmupService); null — в тестах, тогда просто не трогаем.
+    private readonly SubscriptionActivityTracker? _activity;
     private readonly ILogger<SessionManager> _log;
     // Драйверы среды исполнения владельцев (local / docker-песочница)
     private readonly Execution.ILauncherFactory _launchers;
@@ -265,9 +268,12 @@ public class SessionManager : IDisposable
         FileWatcherService? fileWatchers = null,
         // Опционально: планирование режима «Командная реализация» (Э2). Без него режим
         // включается, но план не строится — CreateTeamPlanAsync отдаёт причину отказа.
-        TeamPlanningService? teamPlanning = null)
+        TeamPlanningService? teamPlanning = null,
+        // Опционально (в тестах не передаётся): трекер активности аккаунтов пула подписок
+        SubscriptionActivityTracker? activity = null)
     {
         _teamPlanning = teamPlanning;
+        _activity = activity;
         _spend = spend;
         _codeGraphPrompt = codeGraphPrompt;
         _codeGraphs = codeGraphs;
@@ -800,18 +806,38 @@ public class SessionManager : IDisposable
     }
 
     // Карточка «Продолжить на …»: чат родного Claude упёрся в лимит, внутри пула
-    // переключиться не вышло, но настроены сторонние провайдеры. Эфемерно (в history
-    // не пишется): после сброса окна предложение неактуально.
-    private async Task OfferProviderFallbackAsync(string sessionId, SessionEntry entry, string? resetsAt)
+    // автофейловер (TryPoolFailover) не переключил. Предлагаем варианты: здоровые
+    // аккаунты ТОГО ЖЕ пула (пользователь выбирает сам — TryPoolFailover либо уже
+    // проверил их все на исчерпание, либо переключаться было некуда) и настроенные
+    // сторонние провайдеры. Эфемерно (в history не пишется): после сброса окна
+    // предложение неактуально. internal — тестируется без розыгрыша целого хода
+    // (см. OfferProviderFallbackAsync_*Tests).
+    internal async Task OfferProviderFallbackAsync(string sessionId, string? resetsAt)
     {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return;
         if (_llmProviders.ResolveByModel(entry.Info.Model) is not null) return; // уже сторонний
-        if (!_subscriptionPool.IsExhausted(entry.Info.Provider ?? ClaudeSubscriptionPool.PrimaryKey)) return;
-        var options = _llmProviders.Enabled
+        var current = entry.Info.Provider ?? ClaudeSubscriptionPool.PrimaryKey;
+        if (!_subscriptionPool.IsExhausted(current)) return;
+
+        var subscriptionOptions = _subscriptionPool.All
+            .Where(s => s.Key != current && !_subscriptionPool.IsExhausted(s.Key)
+                && _subscriptionPool.SupportsModel(s.Key, entry.Info.Model))
+            .Select(s => new ProviderFallbackOption(
+                s.Key,
+                string.IsNullOrWhiteSpace(s.DisplayName) ? s.Key : s.DisplayName,
+                entry.Info.Model ?? "",
+                Kind: "subscription",
+                TierLabel: _subscriptionPool.TierLabel(s.Key),
+                Utilization: _subscriptionPool.EffectiveUtilization(s.Key)))
+            .Where(o => !string.IsNullOrEmpty(o.Model));
+
+        var providerOptions = _llmProviders.Enabled
             .Select(p => new ProviderFallbackOption(p.Key,
                 string.IsNullOrWhiteSpace(p.DisplayName) ? p.Key : p.DisplayName,
                 p.Models.FirstOrDefault()?.Id ?? ""))
-            .Where(o => !string.IsNullOrEmpty(o.Model))
-            .ToList();
+            .Where(o => !string.IsNullOrEmpty(o.Model));
+
+        var options = subscriptionOptions.Concat(providerOptions).ToList();
         if (options.Count > 0)
             await BroadcastAsync(sessionId, new ProviderLimitMessage(resetsAt, options));
     }
@@ -820,7 +846,10 @@ public class SessionManager : IDisposable
     // исчерпании лимитов). Guard «смена провайдера у начатой сессии — 400» в Update
     // остаётся: здесь обход осознанный — транскрипт CLI локальный, переносим его в
     // профиль целевого провайдера и продолжаем разговор через --resume без потери контекста.
-    public async Task<Session> MigrateProviderAsync(string sessionId, string ownerId, string model)
+    // subscriptionKey — явный выбор аккаунта ТОГО ЖЕ пула подписок (кнопка карточки с
+    // Kind="subscription"): вместо автовыбора Pick пользователь указывает конкретный ключ.
+    public async Task<Session> MigrateProviderAsync(string sessionId, string ownerId, string model,
+        string? subscriptionKey = null)
     {
         if (GetOwned(sessionId, ownerId) is null || !_sessions.TryGetValue(sessionId, out var entry))
             throw new KeyNotFoundException("Чат не найден");
@@ -836,8 +865,27 @@ public class SessionManager : IDisposable
 
         var currentKey = _llmProviders.ResolveByModel(entry.Info.Model)?.Key
             ?? entry.Info.Provider ?? ClaudeSubscriptionPool.PrimaryKey;
-        // Цель: сторонний провайдер — его ключ; родной Claude — доступный аккаунт пула
-        var targetKey = target?.Key ?? _subscriptionPool.Pick(newModel);
+
+        ClaudeSubscriptionConfig? pickedSub = null;
+        string targetKey;
+        if (!string.IsNullOrWhiteSpace(subscriptionKey))
+        {
+            if (target is not null)
+                throw new InvalidOperationException("Ключ подписки задан вместе со сторонним провайдером");
+            var sub = _subscriptionPool.All.FirstOrDefault(s => s.Key == subscriptionKey);
+            if (sub is null)
+                throw new InvalidOperationException($"Подписка «{subscriptionKey}» не настроена");
+            if (!_subscriptionPool.SupportsModel(sub.Key, newModel))
+                throw new InvalidOperationException($"Подписка «{sub.Key}» не поддерживает модель «{newModel}»");
+            pickedSub = sub;
+            targetKey = sub.Key;
+        }
+        else
+        {
+            // Цель: сторонний провайдер — его ключ; родной Claude — доступный аккаунт пула
+            targetKey = target?.Key ?? _subscriptionPool.Pick(newModel);
+        }
+
         if (string.Equals(targetKey, currentKey, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("Чат уже на этом провайдере");
 
@@ -861,9 +909,11 @@ public class SessionManager : IDisposable
         if (entry.Process is not null) entry.AdapterStale = true;
         SaveSessions();
 
-        var label = target is null ? "AI"
-            : string.IsNullOrWhiteSpace(target.DisplayName) ? target.Key : target.DisplayName;
-        await BroadcastAsync(sessionId, new ProviderSwitchedMessage(targetKey, newModel, $"Продолжено на {label}"));
+        // Явно выбранный аккаунт пула — подпись «на подписке», а не безликое «на AI»
+        var switchLabel = pickedSub is not null
+            ? $"Продолжено на подписке «{(string.IsNullOrWhiteSpace(pickedSub.DisplayName) ? pickedSub.Key : pickedSub.DisplayName)}»"
+            : $"Продолжено на {(target is null ? "AI" : string.IsNullOrWhiteSpace(target.DisplayName) ? target.Key : target.DisplayName)}";
+        await BroadcastAsync(sessionId, new ProviderSwitchedMessage(targetKey, newModel, switchLabel));
         Console.WriteLine($"[SessionManager] Чат {sessionId} мигрирован: {currentKey} → {targetKey} ({newModel})");
         return entry.Info;
     }
@@ -4020,7 +4070,8 @@ public class SessionManager : IDisposable
                     RecordTurnSpend(entry, m);
                     break;
                 case RateLimitMessage m:
-                    _usage.Record(m.LimitType, m.Utilization, m.Status, m.IsUsingOverage, m.ResetsAt, m.OverageStatus, m.OverageResetsAt, subscriptionKey: entry?.Info.Provider);
+                    _usage.Record(m.LimitType, m.Utilization, m.Status, m.IsUsingOverage, m.ResetsAt, m.OverageStatus, m.OverageResetsAt, subscriptionKey: entry?.Info.Provider, source: "turn");
+                    _activity?.Touch(entry?.Info.Provider);
                     // Исчерпание лимита подписки → помечаем exhausted в пуле, чтобы новые чаты
                     // пошли на другую подписку. "rejected" — CLI отклонил ход; utilization >= 1.0
                     // без overage — окно выбрано (с overage ходы ещё проходят).
@@ -4034,7 +4085,7 @@ public class SessionManager : IDisposable
                         // а ход реально отбит — предлагаем сторонний провайдер карточкой.
                         TryPoolFailover(sessionId, entry);
                         if (m.Status == "rejected")
-                            await OfferProviderFallbackAsync(sessionId, entry, m.ResetsAt);
+                            await OfferProviderFallbackAsync(sessionId, m.ResetsAt);
                     }
                     break;
                 case ErrorMessage m:

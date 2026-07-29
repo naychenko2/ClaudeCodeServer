@@ -7,7 +7,7 @@ import { useEffect, useState, type RefObject } from 'react';
 // заголовки внутри blockquote, разметка внутри текста заголовка).
 //
 // Логика перенесена из components/artifacts/PlanSection и используется обеими панелями —
-// «План» и «Доки», чтобы оглавление вело себя одинаково.
+// «План» и «Документы», чтобы оглавление вело себя одинаково.
 
 export interface Heading { level: number; text: string; el: HTMLElement }
 

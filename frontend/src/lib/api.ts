@@ -965,7 +965,7 @@ export const api = {
       request<void>('/history', { method: 'DELETE' }),
   },
 
-  // Документация проекта (README.md + docs/**) для панели «Доки»: корпус со связями,
+  // Документация проекта (README.md + docs/**) для панели «Документы»: корпус со связями,
   // а не файлы — отсюда отдельная секция рядом с files
   docs: {
     index: (projectId: string) =>

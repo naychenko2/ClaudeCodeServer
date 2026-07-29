@@ -36,7 +36,7 @@ interface Props {
   // потребитель (hero-шапка заметки), дубль не нужен. Контент НЕ режется —
   // оффсеты остальных блоков не меняются, якоря комментариев продолжают жить.
   hideLeadingH1?: boolean;
-  // Режим документации проекта (панель «Доки»): клик по НЕвнешней ссылке уходит сюда
+  // Режим документации проекта (панель «Документы»): клик по НЕвнешней ссылке уходит сюда
   // вместо перехода браузера — так работают переходы между README/docs/** и открытие
   // файлов кода в центре. Внешние ссылки при этом уходят в новую вкладку.
   // Взаимоисключим с режимом заметок: onWikilink сильнее (см. notesMode ниже).
@@ -432,7 +432,7 @@ export function MarkdownViewer({ content, blockPos, onWikilink, existingTitles, 
   const finalComponents = useMemo(
     () => (blockPos ? withBlockPos(withHidden, toRaw) : withHidden),
     // merged пересобирается каждый рендер — зависимость от стабильных первопричин.
-    // onDocLink в списке обязателен: панель «Доки» пересоздаёт колбэк при смене
+    // onDocLink в списке обязателен: панель «Документы» пересоздаёт колбэк при смене
     // открытого документа, и без него в components остался бы устаревший переход.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [blockPos, toRaw, notesMode, docsMode, onDocLink, existingTitles, resolveNote, embedSource, hideLeadingH1]);

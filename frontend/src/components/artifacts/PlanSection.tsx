@@ -20,7 +20,7 @@ const navChip: CSSProperties = {
 };
 
 // Заголовок оглавления = реальный <h*> узел из отрендеренного плана; сбор — общий хук
-// useHeadings (им же пользуется панель «Доки»).
+// useHeadings (им же пользуется панель «Документы»).
 
 // Чип «в заметку» в навигаторе плана — сохраняет текущий план в базу заметок
 function SavePlanChip({ plan, projectId }: { plan: string; projectId?: string }) {

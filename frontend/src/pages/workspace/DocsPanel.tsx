@@ -76,6 +76,9 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
   const [doc, setDoc] = useState<DocDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
+  // Строка поиска разворачивается по кнопке и закрывается крестиком, Esc либо выбором
+  // найденного документа — держать её открытой после перехода незачем
+  const [searchOpen, setSearchOpen] = useState(false);
   const [hits, setHits] = useState<DocSearchHit[] | null>(null);
   const [previewEnabled, setPreviewEnabled] = useState<boolean>(() => {
     try { return localStorage.getItem(PREVIEW_KEY) === '1'; } catch { return false; }
@@ -225,14 +228,19 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
     return () => window.clearTimeout(timer);
   }, [project.id, query, searching]);
 
-  const openDoc = (path: string, anchor: string | null = null) => {
+  // Закрытие поиска гасит и запрос: строка исчезла бы, а список остался бы отфильтрованным
+  const closeSearch = useCallback(() => { setSearchOpen(false); setQuery(''); }, []);
+
+  const openDoc = useCallback((path: string, anchor: string | null = null) => {
     setSelected(path);
     // Переход по ссылке, из поиска или из обратных ссылок тоже переносит «где я»:
     // документ может лежать в другой папке, и отметка обязана уехать за ним
     setActiveFolder(folderOf(path));
     pendingAnchorRef.current = anchor ? { path, anchor } : null;
-    setQuery('');   // выход из поиска: список возвращается на место результатов
-  };
+    // Документ выбран — поиск своё отработал: строка закрывается вместе с запросом,
+    // и на месте результатов снова список
+    closeSearch();
+  }, [closeSearch]);
 
   // Клик по строке списка откладывается на порог двойного: иначе двойной клик успевал
   // открыть превью до того, как документ уходил в центр, и панель дёргалась зря
@@ -272,7 +280,15 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
     if (!link) return;
     if (link.kind === 'doc') openDoc(link.target, link.anchor);
     else if (link.kind === 'repo') onOpenFile(link.target);
-  }, [doc, knownDocs, onOpenFile]);
+  }, [doc, knownDocs, onOpenFile, openDoc]);
+
+  // Esc — из поля, а не только крестиком: поиск открыт с фокусом в нём
+  useEffect(() => {
+    if (!searchOpen) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeSearch(); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [searchOpen, closeSearch]);
 
   // Вертикальный ресайз зоны: тянем хендл вниз — зона над ним растёт. Один обработчик
   // на обе границы («список / превью» и «папки / документы») — поведение должно совпадать
@@ -364,17 +380,21 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
-      {/* Поиск по документации + тумблер нижней зоны */}
+      {/* Ряд действий панели. Поиск здесь кнопкой, а не полем: колонка узкая, а поле
+          занимало её почти целиком ради действия, которое нужно изредка */}
       <div style={{
         flexShrink: 0, position: 'relative', display: 'flex', alignItems: 'center', gap: SP.xs,
         padding: `${SP.sm}px ${SP.md}px`, borderBottom: `1px solid ${C.border}`,
       }}>
-        <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
-          <Search size={ICON_SIZE.xs} strokeWidth={ICON_STROKE}
-            style={{ position: 'absolute', left: SP.sm, top: '50%', transform: 'translateY(-50%)', color: C.textMuted, pointerEvents: 'none' }} />
-          <TextField value={query} onChange={setQuery} placeholder="Поиск по документам"
-            style={{ height: 30, fontSize: FS.sm, paddingLeft: 28 }} />
-        </div>
+        <IconButton
+          title={searchOpen ? 'Закрыть поиск' : 'Поиск по документам'}
+          active={searchOpen || query.length > 0}
+          onClick={() => searchOpen ? closeSearch() : setSearchOpen(true)}
+          size="sm"
+        >
+          <Search size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+        </IconButton>
+        <div style={{ flex: 1 }} />
         {/* Папки списка — оглавление для самого списка. Появляется, только когда групп
             больше одной: с единственной папкой кнопка вела бы в никуда.
             Закреплённый список живёт над документами, и поповер тогда не нужен —
@@ -427,6 +447,25 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
           </div>
         )}
       </div>
+
+      {/* Строка поиска — отдельным рядом СВЕРХУ, сразу под кнопками: результаты
+          появляются ниже, и поле стоит над тем, что оно фильтрует */}
+      {searchOpen && (
+        <div style={{
+          flexShrink: 0, display: 'flex', alignItems: 'center', gap: SP.xs,
+          padding: `${SP.xs}px ${SP.md}px ${SP.sm}px`, borderBottom: `1px solid ${C.border}`,
+        }}>
+          <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
+            <Search size={ICON_SIZE.xs} strokeWidth={ICON_STROKE}
+              style={{ position: 'absolute', left: SP.sm, top: '50%', transform: 'translateY(-50%)', color: C.textMuted, pointerEvents: 'none' }} />
+            <TextField value={query} onChange={setQuery} placeholder="Поиск по документам" autoFocus
+              style={{ height: 30, fontSize: FS.sm, paddingLeft: 28 }} />
+          </div>
+          <IconButton title="Закрыть поиск (Esc)" onClick={closeSearch} size="sm">
+            <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+          </IconButton>
+        </div>
+      )}
 
       {/* Результаты поиска замещают дерево, пока запрос активен */}
       {searching ? (

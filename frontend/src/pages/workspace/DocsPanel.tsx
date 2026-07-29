@@ -9,7 +9,7 @@
 // «развернуть» в центральной области (тот же FileViewer, что и для остальных файлов).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronDown, ChevronRight, CornerUpRight, FileQuestion, Link2, List, Maximize2, MessageSquarePlus, PanelBottom, Pin, ScrollText, Search, SlidersHorizontal, X } from 'lucide-react';
+import { ChevronDown, ChevronRight, CornerUpRight, FileQuestion, Link2, List, Maximize2, MessageSquarePlus, PanelBottom, Pin, PinOff, ScrollText, Search, SlidersHorizontal, X } from 'lucide-react';
 import type { Project, DocEntry, DocDetail, DocSearchHit } from '../../types';
 import { api } from '../../lib/api';
 import { onFilesChanged } from '../../lib/signalr';
@@ -40,6 +40,9 @@ const ROW_H = 22;
 // Порог, в пределах которого второй клик считается двойным (и отменяет одиночный)
 const DOUBLE_CLICK_MS = 220;
 
+// Задержка закрытия поповера папок после ухода мыши — на путь от кнопки до списка
+const HOVER_CLOSE_MS = 220;
+
 // Тумблер нижней зоны. По умолчанию выключена: панель открывают ради списка, а превью —
 // осознанный режим. Решение пользователя, поэтому переживает перезагрузку
 const PREVIEW_KEY = 'cc_docs_preview';
@@ -67,6 +70,39 @@ const DEFAULT_DOC_EXTS = ['.md'];
 function folderOf(path: string): string {
   const i = path.lastIndexOf('/');
   return i < 0 ? '' : path.slice(0, i);
+}
+
+// Строка папки в списке переходов (поповер и закреплённый блок — один и тот же список).
+// Отдельным компонентом ради собственного состояния наведения: в списке из десятка папок
+// без подсветки не видно, куда попадёт клик.
+function FolderRow({ folder, count, current, onJump }: {
+  folder: string;
+  count: number;
+  current: boolean;
+  onJump: () => void;
+}) {
+  const [hover, setHover] = useState(false);
+  const label = folder || 'корень проекта';
+  return (
+    <button
+      onClick={onJump}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      title={label}
+      style={{
+        ...rowStyle, minHeight: ROW_H,
+        // Текущая папка — тем же выделением, что выбранный документ (список постоянно
+        // на виду, одной жирности мало); наведение мягче, чтобы эти два состояния
+        // не спорили между собой
+        background: current ? C.bgSelected : hover ? C.bgInset : 'transparent',
+        color: current || hover ? C.textHeading : C.textSecondary,
+        fontWeight: current ? 600 : 400,
+      }}
+    >
+      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
+      <span style={{ marginLeft: 'auto', color: C.textMuted, fontSize: FS.xs }}>{count}</span>
+    </button>
+  );
 }
 
 // Цитата раздела в композер: тем же механизмом, что «Про файл …» в FileViewer —
@@ -116,6 +152,8 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
   // Список папок — то же, что оглавление для документа, только для самого списка:
   // групп до десятка, а документов десятки, и мотать до нужной надоедает
   const [foldersOpen, setFoldersOpen] = useState(false);
+  // Курсор на кнопке папок: иконка под ним меняется на булавку (клик закрепит/открепит)
+  const [foldersHover, setFoldersHover] = useState(false);
   const folderRefs = useRef(new Map<string, HTMLDivElement>());
   // Папка, к которой только что прокрутили: подсвечиваем на секунду, иначе после
   // прыжка непонятно, куда смотреть. Тот же язык, что у подсветки панелей рельсы —
@@ -127,7 +165,11 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
   // выбор документа никуда не делся
   const [activeFolder, setActiveFolder] = useState<string | null>(null);
   const flashTimer = useRef<number | null>(null);
-  useEffect(() => () => { if (flashTimer.current) window.clearTimeout(flashTimer.current); }, []);
+  const hoverTimer = useRef<number | null>(null);
+  useEffect(() => () => {
+    if (flashTimer.current) window.clearTimeout(flashTimer.current);
+    if (hoverTimer.current) window.clearTimeout(hoverTimer.current);
+  }, []);
 
   const jumpToFolder = (folder: string) => {
     folderRefs.current.get(folder)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -343,24 +385,13 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
   // Строка папки — одна на поповер и на закреплённый блок: это один и тот же список,
   // и расходиться в поведении они не должны
   const folderRow = (folder: string, count: number, current: boolean) => (
-    <button
+    <FolderRow
       key={folder || '__root'}
-      onClick={() => jumpToFolder(folder)}
-      title={folder || 'корень проекта'}
-      style={{
-        ...rowStyle, minHeight: ROW_H,
-        // Текущая папка — тем же выделением, что выбранный документ: список постоянно
-        // на виду, и одной жирности мало, чтобы поймать её взглядом
-        background: current ? C.bgSelected : 'transparent',
-        color: current ? C.textHeading : C.textSecondary,
-        fontWeight: current ? 600 : 400,
-      }}
-    >
-      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        {folder || 'корень проекта'}
-      </span>
-      <span style={{ marginLeft: 'auto', color: C.textMuted, fontSize: FS.xs }}>{count}</span>
-    </button>
+      folder={folder}
+      count={count}
+      current={current}
+      onJump={() => jumpToFolder(folder)}
+    />
   );
 
   // Кнопка и блок нужны, только когда есть что выбирать: с единственной папкой
@@ -377,6 +408,21 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
     setFoldersPinned(next);
     setFoldersOpen(false);
     try { localStorage.setItem(FOLDERS_PIN_KEY, next ? '1' : '0'); } catch { /* квота */ }
+  };
+
+  // Поповер по наведению закрывается с задержкой: между кнопкой и списком мышь проходит
+  // через зазор, и мгновенное закрытие делало бы его недосягаемым
+  const hoverFolders = () => {
+    if (hoverTimer.current) window.clearTimeout(hoverTimer.current);
+    setFoldersHover(true);
+    if (!foldersPinned) setFoldersOpen(true);
+  };
+  const unhoverFolders = () => {
+    if (hoverTimer.current) window.clearTimeout(hoverTimer.current);
+    hoverTimer.current = window.setTimeout(() => {
+      setFoldersHover(false);
+      setFoldersOpen(false);
+    }, HOVER_CLOSE_MS);
   };
 
   const quoteSection = (slug: string, title: string) => {
@@ -439,14 +485,27 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
             Закреплённый список живёт над документами, и поповер тогда не нужен —
             кнопка становится «открепить» */}
         {hasFolderNav && (
-          <IconButton
-            title={foldersPinned ? 'Открепить список папок' : 'Папки'}
-            onClick={() => foldersPinned ? pinFolders(false) : setFoldersOpen(v => !v)}
-            active={foldersOpen || foldersPinned}
-            size="sm"
-          >
-            <List size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-          </IconButton>
+          // Наведение показывает список, клик — закрепляет его над документами.
+          // Разные жесты для «посмотреть» и «оставить»: беглый взгляд на папки нужен
+          // куда чаще, чем постоянный блок, и ради него не стоит ничего нажимать
+          <span onMouseEnter={hoverFolders} onMouseLeave={unhoverFolders}>
+            <IconButton
+              title={foldersPinned ? 'Открепить список папок' : 'Папки — клик закрепит список'}
+              onClick={() => pinFolders(!foldersPinned)}
+              active={foldersOpen || foldersPinned}
+              size="sm"
+            >
+              {/* Иконка вместо подсказки: под курсором она превращается в булавку —
+                  видно, что клик закрепит, а у закреплённого — что открепит */}
+              {foldersHover
+                ? (foldersPinned
+                  ? <PinOff size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+                  : <Pin size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />)
+                : (foldersPinned
+                  ? <Pin size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+                  : <List size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />)}
+            </IconButton>
+          </span>
         )}
         {/* «В чат» живёт только в шапке превью — там, где открытый документ виден. Здесь
             кнопка половину времени стояла отключённой и занимала место в узком ряду */}
@@ -467,21 +526,10 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
 
         {/* Поповер папок: клик прокручивает список к нужной группе */}
         {foldersOpen && (
-          <div style={tocPopoverStyle}>
-            <div style={{ display: 'flex', alignItems: 'center', padding: `${SP.xs}px ${SP.sm}px`, borderBottom: `1px solid ${C.border}` }}>
-              <span style={{ fontSize: FS.xs, fontWeight: 700, color: C.textSecondary, textTransform: 'uppercase', letterSpacing: '0.03em' }}>
-                Папки
-              </span>
-              <div style={{ flex: 1 }} />
-              {/* Закрепить — для тех, кто прыгает по папкам постоянно: список переезжает
-                  наверх панели и перестаёт требовать открытия */}
-              <IconButton title="Закрепить над списком" onClick={() => pinFolders(true)} size="sm">
-                <Pin size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-              </IconButton>
-              <IconButton title="Закрыть" onClick={() => setFoldersOpen(false)} size="sm">
-                <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-              </IconButton>
-            </div>
+          // Мышь внутри поповера держит его открытым: уход отсюда — тот же таймер,
+          // что и с кнопки
+          <div style={{ ...tocPopoverStyle, padding: `${SP.xs}px 0` }}
+            onMouseEnter={hoverFolders} onMouseLeave={unhoverFolders}>
             {groups.map(([folder, docs]) => folderRow(folder, docs.length, folder === activeFolder))}
           </div>
         )}
@@ -534,22 +582,12 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
               <>
                 {/* Без подложки: блок — часть того же списка, а заливка спорила бы с
                     выделением строк. Отбивку даёт заголовок и полоса хендла снизу */}
+                {/* Без заголовка и крестика: строки говорят сами за себя, а открепляет
+                    та же кнопка в шапке, которой список закрепили */}
                 <div style={{
                   flexShrink: 0, height: foldersH, overflowY: 'auto',
                   padding: `${SP.xs}px ${SP.xs}px`,
                 }}>
-                  <div style={{
-                    display: 'flex', alignItems: 'center', gap: SP.xs,
-                    padding: `0 ${SP.xxs}px ${SP.xxs}px ${SP.sm}px`,
-                    fontSize: FS.xs, fontWeight: 700, color: C.textMuted,
-                    textTransform: 'uppercase', letterSpacing: '0.03em',
-                  }}>
-                    Папки
-                    <div style={{ flex: 1 }} />
-                    <IconButton title="Открепить список папок" onClick={() => pinFolders(false)} size="xs">
-                      <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-                    </IconButton>
-                  </div>
                   {groups.map(([folder, docs]) => folderRow(folder, docs.length, folder === activeFolder))}
                 </div>
                 <div

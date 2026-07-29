@@ -163,7 +163,22 @@ if ($LASTEXITCODE -ne 0) { throw "Публикация бэка упала (exit
 
 # --- 3.1 Обеспечить appsettings.Production80.json (gitignored, машинно-специфичный) ---
 # При Environment=Production80 ASP.NET Core грузит именно его; без него Kestrel поднимается
-# на дефолтном порту 5000. При первом деплое создаём из Production.json; правки сохраняются.
+# на дефолтном порту 5000. Если файла в папке публикации нет — создаём из Production.json.
+#
+# ВАЖНО, где его править. Файл в .gitignore, но у Web SDK любой appsettings*.json из папки
+# проекта — это Content, и publish кладёт его в $PublishDir, ПЕРЕЗАПИСЫВАЯ тамошний
+# (исключён из publish только appsettings.Local.json, см. ClaudeHomeServer.csproj).
+# Поэтому:
+#   • есть копия в backend\ClaudeHomeServer\ — источник правды ОНА, правки прямо в
+#     C:\deploy\claude\appsettings.Production80.json молча теряются на следующем деплое;
+#   • нет копии в проекте (чистый клон) — тогда боевой файл живёт своей жизнью и
+#     сохраняется, как и написано ниже про первый деплой.
+# Прежний комментарий утверждал «правки сохраняются» безусловно — верно только для второго
+# случая. На машине с копией в проекте это неправда, и расхождение обнаружилось так:
+# боевой файл 23.07 был без секции Telemetry, а проектный — с ней.
+#
+# Боевые секреты и пути (ключи LLM, DataPath, UserHomeOverrides) живут в
+# appsettings.Local.json — его publish не трогает (CopyToPublishDirectory=Never).
 $prod80 = Join-Path $PublishDir 'appsettings.Production80.json'
 if (-not (Test-Path $prod80)) {
     Copy-Item (Join-Path $repo 'backend\ClaudeHomeServer\appsettings.Production.json') $prod80

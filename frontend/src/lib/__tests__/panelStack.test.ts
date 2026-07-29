@@ -7,7 +7,7 @@ import {
   parseWeights, parseWidth, normalizeWeights,
   sanitizeZones, emptyZones, zoneOf, openPanelIn, togglePanelIn, closePanel,
   swapAcross, moveAcrossAt, moveAcrossToNewColumn, isZoneCollapsed, migrateZones, revealPanel,
-  enforceZoneInvariant,
+  enforceZoneInvariant, homeOf, trackHome, parseHome,
   COL_DEFAULT, COL_MIN, COL_MAX,
   type PanelZones,
 } from '../../pages/workspace/panelStackState';
@@ -255,6 +255,47 @@ describe('moveAcrossAt / moveAcrossToNewColumn — дроп в направля�
   it('внутри своей зоны остаётся обычной перестановкой', () => {
     const z = moveAcrossAt(zones([], [['files', 'tasks']]), 'tasks', 'right', 0, 0);
     expect(z.right.layout).toEqual([['tasks', 'files']]);
+  });
+});
+
+describe('homeOf / trackHome — иконка закрытой панели', () => {
+  it('до первого открытия берётся домашняя зона из реестра', () => {
+    expect(homeOf(emptyZones(), 'tasks')).toBe('right');
+    expect(homeOf(emptyZones(), 'chats')).toBe('left');
+  });
+
+  it('панель, переехавшая в другую зону, остаётся её иконкой после закрытия', () => {
+    const moved = trackHome(moveAcrossAt(zones([['chats']], [['tasks']]), 'tasks', 'left', 0, 1));
+    expect(homeOf(moved, 'tasks')).toBe('left');
+    // закрытие привязку не сбрасывает — иконка ждёт там, где панель лежала
+    const closed = trackHome(closePanel(moved, 'tasks'));
+    expect(zoneOf(closed, 'tasks')).toBeNull();
+    expect(homeOf(closed, 'tasks')).toBe('left');
+  });
+
+  it('спрятанные «свернуть все» панели тоже держат свою зону', () => {
+    const z = trackHome(sanitizeZones({ left: { layout: [], stash: [['tasks']] }, right: { layout: [] } }));
+    expect(homeOf(z, 'tasks')).toBe('left');
+  });
+
+  it('внешний запрос открывает панель там, где её закрыли', () => {
+    const moved = trackHome(moveAcrossAt(zones([['chats']], [['changes']]), 'changes', 'left', 0, 1));
+    const r = revealPanel(trackHome(closePanel(moved, 'changes')), 'changes');
+    expect(r.wasOpen).toBe(false);
+    expect(zoneOf(r.zones, 'changes')).toBe('left');
+  });
+
+  it('parseHome отбрасывает мусор и переводит упразднённые ключи', () => {
+    expect(parseHome({ tasks: 'left', personas: 'right', files: 'up', junk: 'left' }))
+      .toEqual({ tasks: 'left', team: 'right' });
+    expect(parseHome(null)).toEqual({});
+    expect(parseHome(['tasks'])).toEqual({});
+  });
+
+  it('переживает сериализацию состояния', () => {
+    const saved = trackHome(moveAcrossAt(zones([['chats']], [['tasks']]), 'tasks', 'left', 0, 1));
+    const restored = sanitizeZones(JSON.parse(JSON.stringify(saved)));
+    expect(homeOf(restored, 'tasks')).toBe('left');
   });
 });
 

@@ -25,10 +25,10 @@ import { PanelDropGuide } from '../../components/ui/PanelDropGuide';
 import { IslandSplitter } from '../../components/ui/IslandSplitter';
 import { useWindowWidth } from '../../lib/breakpoints';
 import {
-  PANEL_META, PANEL_HOME, PANEL_KEYS, PROJECT_KEYS, SESSION_KEYS, TOOLS_KEYS, WORKSPACE_KEYS,
+  PANEL_META, PANEL_KEYS, PROJECT_KEYS, SESSION_KEYS, TOOLS_KEYS, WORKSPACE_KEYS,
   type PanelKey, type Zone,
 } from './panelCatalog';
-import { wsPanels, isZoneCollapsed, zoneOf, type PanelZonesStore } from './panelStackState';
+import { wsPanels, homeOf, isZoneCollapsed, zoneOf, type PanelZonesStore } from './panelStackState';
 import { usePanelDnd, usePanelRowResize, usePanelWidthDrag } from './zoneGestures';
 import { PanelSlot } from './PanelSlot';
 import type { SessionPanels } from './useSessionPanels';
@@ -128,8 +128,9 @@ export function PanelZone({
     const at = compact ? (tabletKeys.includes(k) ? side : null) : zoneOf(zones, k);
     // Открыта в соседней зоне — её иконка сейчас там
     if (at !== null && at !== side) return false;
-    // Закрыта — иконка ждёт в домашней зоне
-    if (at === null && PANEL_HOME[k] !== side) return false;
+    // Закрыта — иконка ждёт там, где панель лежала в последний раз (а до первого
+    // открытия — в домашней зоне из реестра)
+    if (at === null && homeOf(zones, k) !== side) return false;
     // Сессионные показываются только когда есть что открывать
     if (SESSION_KEYS.includes(k) && sessionPanels) return sessionPanels.visible(k, openKeys.includes(k));
     return true;

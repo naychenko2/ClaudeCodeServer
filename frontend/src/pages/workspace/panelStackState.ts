@@ -185,6 +185,11 @@ export interface PanelZones {
   right: ZoneState;
   // Вес = высота СЛОТА панели. Общий для зон: панель уносит свой вес с собой.
   weights: Partial<Record<PanelKey, number>>;
+  // Где панель лежала в последний раз. Закрытая панель показывает иконку именно
+  // здесь, а не в зашитой домашней зоне: перетащив «Задачи» налево и закрыв их,
+  // человек ждёт кнопку слева — там, где панель была, а не там, где родилась.
+  // Пусто (панель ещё нигде не открывали) — берётся PANEL_HOME.
+  home: Partial<Record<PanelKey, Zone>>;
 }
 
 export function emptyZone(): ZoneState {
@@ -192,7 +197,22 @@ export function emptyZone(): ZoneState {
 }
 
 export function emptyZones(): PanelZones {
-  return { left: emptyZone(), right: emptyZone(), weights: {} };
+  return { left: emptyZone(), right: emptyZone(), weights: {}, home: {} };
+}
+
+// Зона, в которой панель показывает свою иконку, когда закрыта
+export function homeOf(zones: PanelZones, k: PanelKey): Zone {
+  return zones.home[k] ?? PANEL_HOME[k];
+}
+
+// Запомнить, где сейчас лежит каждая панель — включая спрятанные «свернуть все»:
+// разворачивание вернёт их в ту же зону, значит и иконка ждёт там же.
+export function trackHome(zones: PanelZones): PanelZones {
+  const home = { ...zones.home };
+  for (const zone of ZONES) {
+    for (const k of [...zones[zone].layout.flat(), ...zones[zone].stash.flat()]) home[k] = zone;
+  }
+  return { ...zones, home };
 }
 
 // В какой зоне лежит панель (null — закрыта)
@@ -254,7 +274,20 @@ export function sanitizeZones(raw: unknown): PanelZones {
     left: readZone(src.left),
     right: readZone(src.right),
     weights: parseWeights(JSON.stringify(src.weights ?? {})),
+    home: parseHome((src as { home?: unknown }).home),
   });
+}
+
+// Сохранённая привязка «панель → зона»: чужие ключи и значения отбрасываем,
+// упразднённые имена переводим (personas → team), как и у весов.
+export function parseHome(raw: unknown): Partial<Record<PanelKey, Zone>> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const out: Partial<Record<PanelKey, Zone>> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    const key = migrateLegacyKey(k);
+    if (key && (v === 'left' || v === 'right')) out[key] = v;
+  }
+  return out;
 }
 
 function withZone(zones: PanelZones, zone: Zone, next: (z: ZoneState) => ZoneState): PanelZones {
@@ -342,7 +375,7 @@ export function isZoneCollapsed(z: ZoneState): boolean {
 // просит её мигнуть. Закрытая открывается в своей домашней зоне.
 export function revealPanel(zones: PanelZones, k: PanelKey): { zones: PanelZones; wasOpen: boolean } {
   if (zoneOf(zones, k)) return { zones, wasOpen: true };
-  return { zones: openPanelIn(zones, PANEL_HOME[k], k), wasOpen: false };
+  return { zones: openPanelIn(zones, homeOf(zones, k), k), wasOpen: false };
 }
 
 // ---------- миграция со старых раздельных ключей ----------
@@ -382,6 +415,9 @@ export function migrateZones(read: (key: string) => string | null, ns: string, l
       ...parseWeights(read(`cc_${ns}_left_panels_weights`)),
       ...parseWeights(read(`cc_${ns}_panels_weights`)),
     },
+    // Привязки к зонам старое состояние не знало — их проставит trackHome по
+    // фактическому расположению панелей при первой же записи
+    home: {},
   });
 }
 
@@ -453,7 +489,9 @@ function createPanelZones(ns: string, opts?: {
   // сохранится, и при следующем визите панель останется закрытой.
   // migrated — состояние переехало со старых ключей и ещё не записано под новым
   let migrated = false;
-  let _zones: PanelZones = (() => {
+  // trackHome на входе: у сохранённого состояния привязок может не быть (старый
+  // формат, миграция, дефолт) — тогда они выводятся из того, где панели лежат
+  let _zones: PanelZones = trackHome((() => {
     const raw = lsGet(KEY);
     if (raw) {
       try { return sanitizeZones(JSON.parse(raw)); } catch { /* мусор → миграция/дефолт */ }
@@ -467,7 +505,7 @@ function createPanelZones(ns: string, opts?: {
       left: { layout: opts?.defaultZones?.left ?? [] },
       right: { layout: opts?.defaultZones?.right ?? [] },
     });
-  })();
+  })());
 
   const listeners = new Set<() => void>();
   function emit() { listeners.forEach(l => l()); }
@@ -488,7 +526,7 @@ function createPanelZones(ns: string, opts?: {
   // того, как её запомнила кнопка «Свернуть все», и разворачивание вернуло бы
   // вторую копию.
   function commit(next: PanelZones) {
-    const clean = enforceZoneInvariant(next);
+    const clean = trackHome(enforceZoneInvariant(next));
     _zones = { ...clean, weights: normalizeWeights(openKeysOf(clean), clean.weights) };
     persist();
     emit();

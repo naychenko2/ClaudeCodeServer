@@ -4,7 +4,7 @@
 // сверка с матрицей нарушений слоистости, которую нашла Майя в макете.
 import { describe, it, expect } from 'vitest';
 import {
-  buildOverviewScene, layoutOverview, defaultExpandedGroups, layerOf,
+  buildOverviewScene, layoutOverview, defaultExpandedGroups, layerOf, fqnIndex, pathToType,
   LAYER_TITLES, OTHER_LAYER, OVERVIEW_VIEW_W, OVERVIEW_VIEW_H,
 } from '../graphOverview';
 import type { CodeGraph, CodeGraphNode } from '../../../types';
@@ -125,6 +125,27 @@ describe('buildOverviewScene — группировка', () => {
     expect(nodeItems.map(it => it.node!.id).sort()).toEqual(['c1', 'c2']);
     // остальные группы (не раскрытая до типов) остаются группами
     expect(scene.items.some(it => it.label === 'Services' && it.kind === 'group')).toBe(true);
+  });
+});
+
+describe('pathToType — путь от корня к группе типа (сквозной вход в «Фокус»)', () => {
+  // Сквозной вход (поиск, god-список) обходит ручное раскрытие «Обзора»: цепочка
+  // группа-шагов строится из namespaceOf узла заново, чтобы «назад» из «Фокуса»
+  // приводил в «Обзор», раскрытый ровно до этой группы (см. lib/codeGraph.ts).
+  it('строит цепочку префиксов после автоматически раскрытого корня', () => {
+    const g = makeLayeredGraph();
+    const fqns = fqnIndex(g.nodes);
+    const auto = defaultExpandedGroups(g.nodes);   // {'A'}
+    const s2 = g.nodes.find(n => n.id === 's2')!;  // A.Services.Sub.Bar
+    expect(pathToType(s2, fqns, auto)).toEqual(['A.Services', 'A.Services.Sub']);
+  });
+
+  it('лист без более глубокого раскрытия — один элемент цепочки', () => {
+    const g = makeLayeredGraph();
+    const fqns = fqnIndex(g.nodes);
+    const auto = defaultExpandedGroups(g.nodes);
+    const c1 = g.nodes.find(n => n.id === 'c1')!;  // A.Controllers.FooController
+    expect(pathToType(c1, fqns, auto)).toEqual(['A.Controllers']);
   });
 });
 

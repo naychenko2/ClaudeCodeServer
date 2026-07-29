@@ -9,8 +9,7 @@ import { C, FONT, FS, R, SP } from '../../lib/design';
 import { Button, Dot, IconField, EmptyState, WaitingIndicator, Toggle } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { useCodeGraph, useCodeGraphActions, GRAPH_RELATIONS } from '../../lib/codeGraph';
-import { layoutGraph } from './graphLayout';
-import { focusNeighbours, isTestSourceFile } from './graphFocus';
+import { focusNeighbours, graphDegree, isTestSourceFile } from './graphFocus';
 import {
   EDGE_COLOR, EDGE_BG, KIND_COLOR, KIND_RING, KIND_GLYPH, RELATION_LABEL,
 } from './graphTokens';
@@ -36,7 +35,7 @@ export function CodeGraphPanel({ projectId, graphOpen, onEnsureGraphOpen, onOpen
   // безопасно вызывать на каждом рендере, сетевых дублей не будет
   useEffect(() => { a.load(projectId); }, [a, projectId]);
 
-  const layout = useMemo(() => (s.data ? layoutGraph(s.data) : null), [s.data]);
+  const degree = useMemo(() => (s.data ? graphDegree(s.data) : undefined), [s.data]);
 
   // Счётчики рёбер по типу связи — для подписи чипов
   const relCounts = useMemo(() => {
@@ -52,12 +51,12 @@ export function CodeGraphPanel({ projectId, graphOpen, onEnsureGraphOpen, onOpen
 
   // Поиск: узлы, чей label или FQN содержит запрос
   const searchResults = useMemo(() => {
-    if (!s.query.trim() || !s.data || !layout) return [];
+    if (!s.query.trim() || !s.data) return [];
     const q = s.query.trim().toLowerCase();
     return s.data.nodes.filter(n =>
       n.label.toLowerCase().includes(q) || n.fullyQualifiedName.toLowerCase().includes(q)
     );
-  }, [s.query, s.data, layout]);
+  }, [s.query, s.data]);
 
   // Счётчики скрытых узлов для подписи под фильтрами
   const hiddenTestCount = useMemo(() => {
@@ -167,7 +166,7 @@ export function CodeGraphPanel({ projectId, graphOpen, onEnsureGraphOpen, onOpen
                 <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, fontWeight: 600, color: C.textHeading, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{n.label}</span>
                 <span style={{ fontSize: 10, color: C.textMuted, fontFamily: FONT.mono, flexShrink: 0 }}>{KIND_GLYPH[n.kind]}</span>
                 <span style={{ fontSize: 10, color: C.textMuted, flexShrink: 0, maxWidth: 100, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{n.sourceFile}:{n.sourceLocation}</span>
-                <span style={{ fontSize: 10, color: C.textMuted, fontFamily: FONT.mono, flexShrink: 0 }}>{layout?.degree.get(n.id) ?? '?'}</span>
+                <span style={{ fontSize: 10, color: C.textMuted, fontFamily: FONT.mono, flexShrink: 0 }}>{degree?.get(n.id) ?? '?'}</span>
               </div>
             ))}
             {searchResults.length > SEARCH_LIMIT && (
@@ -244,8 +243,8 @@ export function CodeGraphPanel({ projectId, graphOpen, onEnsureGraphOpen, onOpen
           {/* Раскрытый хвост: то, что не поместилось на холст и ушло в заглушку «+N» */}
           {s.focusTail && (
             <FocusTail graph={s.data} centerId={s.selectedId} side={s.focusTail}
-              filters={s.filters} hideTests={s.hideTestNodes} degree={layout?.degree}
-              onSelect={id => { a.select(id); onEnsureGraphOpen(); }}
+              filters={s.filters} hideTests={s.hideTestNodes} degree={degree}
+              onSelect={id => { a.refocus(id); onEnsureGraphOpen(); }}
               onClose={() => a.setFocusTail(null)} />
           )}
         </Section>
@@ -272,10 +271,9 @@ export function CodeGraphPanel({ projectId, graphOpen, onEnsureGraphOpen, onOpen
                   God-узлы <Dot color={C.accent} size={7} />
                 </div>
                 {s.data.godNodes.slice(0, 15).map(id => {
-                  const ln = layout?.byId.get(id);
-                  const node = ln?.node ?? s.data!.nodes.find(n => n.id === id);
+                  const node = s.data!.nodes.find(n => n.id === id);
                   if (!node) return null;
-                  const deg = layout?.degree.get(id) ?? 0;
+                  const deg = degree?.get(id) ?? 0;
                   return (
                     <div key={id} onClick={withEnsureOpen(() => a.select(id))} style={godItemStyle}>
                       <span style={{ width: 8, height: 8, borderRadius: R.full, background: C.accent, flexShrink: 0, boxShadow: `0 0 0 3px ${C.accentLight}` }} />
@@ -297,7 +295,7 @@ export function CodeGraphPanel({ projectId, graphOpen, onEnsureGraphOpen, onOpen
       <div style={{ padding: SP.md, flex: 1, minHeight: 0, overflowY: 'auto' }}>
         <div style={sectionTitleStyle}>Паспорт типа</div>
         {selected ? (
-          <Passport node={selected} graph={s.data!} onSelect={id => { a.select(id); onEnsureGraphOpen(); }} onOpenFile={onOpenFile} />
+          <Passport node={selected} graph={s.data!} onSelect={id => { a.refocus(id); onEnsureGraphOpen(); }} onOpenFile={onOpenFile} />
         ) : (
           <p style={{ fontSize: FS.sm, color: C.textMuted, textAlign: 'center', padding: `${SP.md} ${SP.xs}`, lineHeight: 1.5 }}>
             Выберите узел на графе —<br />здесь появится его паспорт

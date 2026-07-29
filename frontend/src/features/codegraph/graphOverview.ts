@@ -10,7 +10,7 @@
 // по размеру группы, затем по имени: перестановки только локальные.
 //
 // Модуль чистый: без Math.random и force-симуляции — раскладка воспроизводима,
-// как в graphLayout.ts/graphFocus.ts.
+// как в graphFocus.ts.
 import type { CodeGraph, CodeGraphNode, CodeGraphRelation } from '../../types';
 import { graphDegree, isTestSourceFile } from './graphFocus';
 import { FOCUS_VIEW_W, FOCUS_VIEW_H, FOCUS_VIEW_W_MOBILE, FOCUS_VIEW_H_MOBILE } from './graphFocus';
@@ -77,6 +77,23 @@ export function namespaceOf(node: CodeGraphNode, fqns: ReadonlySet<string>): str
     ns = ns.slice(0, i);
     if (!fqns.has(ns)) return ns;
   }
+}
+
+// Цепочка префиксов неймспейса узла ПОСЛЕ автоматически раскрытого корня — группы,
+// которые нужно раскрыть, чтобы «Обзор» показал этот узел индивидуальным типом (сквозной
+// вход в «Фокус» минуя ручное раскрытие: поиск, god-список). Последний элемент — лист:
+// группа, которую нужно раскрыть до уровня типов (typesGroup), остальные — уровни expand.
+export function pathToType(node: CodeGraphNode, fqns: ReadonlySet<string>, autoExpanded: ReadonlySet<string>): string[] {
+  const ns = namespaceOf(node, fqns);
+  if (!ns) return [];
+  const parts = ns.split('.');
+  const groups: string[] = [];
+  let g = '';
+  for (const seg of parts) {
+    g = g ? `${g}.${seg}` : seg;
+    if (!autoExpanded.has(g)) groups.push(g);
+  }
+  return groups;
 }
 
 // Доминирующий префикс всех неймспейсов раскрыт всегда: единственная группа-обёртка

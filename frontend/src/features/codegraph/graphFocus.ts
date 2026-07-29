@@ -93,9 +93,12 @@ const SECOND_R = 10;
 // длинную она бы вылезла за границу
 const SECOND_MAX_LABEL = 11;
 
-// Тестовые типы: тот же признак пути, что у фильтра «скрыть тесты» на холсте
+// Тестовые типы: единственная точка признака «скрыть тесты» — им пользуются и холст,
+// и счётчик скрытого в панели. Альтернатива `\.Tests[\\/]` обязательна: в .NET тестовый
+// проект — это СЕГМЕНТ пути вида `ClaudeHomeServer.Tests/`, где точка слева, а слэш
+// справа, поэтому ни `[\\/]Tests[\\/]`, ни `\.Tests\.` его не ловят.
 export function isTestSourceFile(file: string): boolean {
-  return /[\\/]Tests[\\/]|[\\/]test[\\/]|[\\/]__tests__[\\/]|\.Tests\./i.test(file);
+  return /[\\/]Tests[\\/]|\.Tests[\\/]|[\\/]test[\\/]|[\\/]__tests__[\\/]|\.Tests\./i.test(file);
 }
 
 export function graphDegree(graph: CodeGraph): Map<string, number> {

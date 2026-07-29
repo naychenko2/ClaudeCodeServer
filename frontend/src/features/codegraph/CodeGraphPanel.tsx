@@ -10,7 +10,7 @@ import { Button, Dot, IconField, EmptyState, WaitingIndicator, Toggle } from '..
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { useCodeGraph, useCodeGraphActions, GRAPH_RELATIONS } from '../../lib/codeGraph';
 import { layoutGraph } from './graphLayout';
-import { focusNeighbours } from './graphFocus';
+import { focusNeighbours, isTestSourceFile } from './graphFocus';
 import {
   EDGE_COLOR, EDGE_BG, KIND_COLOR, KIND_RING, KIND_GLYPH, RELATION_LABEL,
 } from './graphTokens';
@@ -62,7 +62,7 @@ export function CodeGraphPanel({ projectId, graphOpen, onEnsureGraphOpen, onOpen
   // Счётчики скрытых узлов для подписи под фильтрами
   const hiddenTestCount = useMemo(() => {
     if (!s.hideTestNodes || !s.data) return 0;
-    return s.data.nodes.filter(n => /[\\/]Tests[\\/]|[\\/]test[\\/]|[\\/]__tests__[\\/]|\.Tests\./i.test(n.sourceFile)).length;
+    return s.data.nodes.filter(n => isTestSourceFile(n.sourceFile)).length;
   }, [s.hideTestNodes, s.data]);
 
   const hiddenOrphanCount = useMemo(() => {

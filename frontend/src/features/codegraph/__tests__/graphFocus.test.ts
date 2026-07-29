@@ -1,7 +1,7 @@
 // Проверка раскладки режима «Фокус»: центр в середине холста, входящие слева,
 // исходящие справа, лимит соседей на сторону с заглушкой хвоста, фильтр связей.
 import { describe, it, expect } from 'vitest';
-import { buildFocusModel, focusNeighbours, FOCUS_LIMIT, FOCUS_VIEW_W, FOCUS_VIEW_H } from '../graphFocus';
+import { buildFocusModel, focusNeighbours, isTestSourceFile, FOCUS_LIMIT, FOCUS_VIEW_W, FOCUS_VIEW_H } from '../graphFocus';
 import type { CodeGraph, CodeGraphNode, CodeGraphEdge } from '../../../types';
 
 function node(id: string, file = `${id}.cs`): CodeGraphNode {
@@ -24,6 +24,25 @@ function makeGraph(): CodeGraph {
 }
 
 const ALL = { Calls: true, Implements: true, References: true };
+
+describe('isTestSourceFile', () => {
+  it('ловит .NET-проект вида ClaudeHomeServer.Tests/ (точка слева, слэш справа)', () => {
+    expect(isTestSourceFile('backend/ClaudeHomeServer.Tests/Services/Foo.cs')).toBe(true);
+    expect(isTestSourceFile('backend\\ClaudeHomeServer.Tests\\Services\\Foo.cs')).toBe(true);
+  });
+
+  it('не считает тестом обычный код продукта', () => {
+    expect(isTestSourceFile('backend/ClaudeHomeServer/Services/Foo.cs')).toBe(false);
+    expect(isTestSourceFile('frontend/src/features/codegraph/graphFocus.ts')).toBe(false);
+  });
+
+  it('держит остальные раскладки тестов', () => {
+    expect(isTestSourceFile('backend/Tests/InTest.cs')).toBe(true);
+    expect(isTestSourceFile('src/__tests__/foo.test.ts')).toBe(true);
+    expect(isTestSourceFile('src/test/foo.ts')).toBe(true);
+    expect(isTestSourceFile('src/Some.Tests.Helpers/foo.cs')).toBe(true);
+  });
+});
 
 describe('buildFocusModel', () => {
   it('центр в середине холста и крупнее соседей', () => {

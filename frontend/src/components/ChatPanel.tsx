@@ -743,7 +743,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   const planningKind = planPhase === 'planning' ? 'planning' : planPhase === 'replanning' ? 'replanning' : undefined;
 
   // Дерево ХОДА (turnWorktree с бэка + EnterWorktree первого хода, см. lib/turnWorktree) —
-  // бейдж композера и разделитель в ленте считают его отсюда, а не из Session.worktreePath
+  // git-бар и разделитель в ленте считают его отсюда, а не из Session.worktreePath
   const turnTree = useMemo(() => computeTurnTree(items), [items]);
   // Индексы session_started, видимые в ленте разделителем «ход в дереве агента»/«ход
   // вернулся в проект» (остальные session_started прозрачны для группировки, см. isInvisible)
@@ -1377,10 +1377,11 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
               Режим «Без ограничений» — {asstName} действует без подтверждений
             </div>
           )}
-          {/* Git-бар над композером (только проектный чат на десктопе): ветка/worktree,
-              суммарный diff и кнопки «Зафиксировать»/«Опубликовать». Правой панели
-              «Изменения» на мобиле нет — отсюда гейт !isMobile. */}
-          {project && !isMobile && <ProjectGitBar project={project} session={session} onCommitOwn={handleCommitOwn} />}
+          {/* Git-бар над композером (только проектный чат на десктопе): ветка/worktree
+              чата, дерево текущего хода, суммарный diff и кнопки «Зафиксировать»/
+              «Опубликовать». Правой панели «Изменения» на мобиле нет — отсюда гейт
+              !isMobile; на мобиле о дереве хода сообщает только отметка в ленте. */}
+          {project && !isMobile && <ProjectGitBar project={project} session={session} turnTree={turnTree} turnTreeLive={isWaiting} onCommitOwn={handleCommitOwn} />}
           {/* Подъём композера над лентой даёт сама белая карточка (Composer), а не эта
               обёртка: полоса контролов вынесена из карточки, и тень на обёртке рисовала
               серый ореол вокруг пустой области под ней и полоску над полем ввода. */}
@@ -1432,8 +1433,6 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
             isProjectChat={!!project}
             worktreeBranch={session.worktreeBranch}
             onToggleWorktree={project ? openWorktreeConfirm : undefined}
-            turnTree={turnTree}
-            turnTreeLive={isWaiting}
             chatContext={chatContext}
             promptSuggestion={promptSuggestion}
             rateWindow={worstRate}

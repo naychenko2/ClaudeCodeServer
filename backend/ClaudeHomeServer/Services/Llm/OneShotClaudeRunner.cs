@@ -47,7 +47,9 @@ public interface IOneShotRunner
 public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILauncherFactory launchers,
     IConfiguration config, Spend.ISpendCollector? spend = null,
     AppSettingsService? appSettings = null,
-    UserModelTierResolver? userTiers = null) : IOneShotRunner
+    UserModelTierResolver? userTiers = null,
+    ClaudeSubscriptionPool? subscriptionPool = null,
+    SubscriptionActivityTracker? activity = null) : IOneShotRunner
 {
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(120);
 
@@ -89,6 +91,26 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
             ? userTiers?.ModelFor(ModelTier.Medium, ownerId) ?? appSettings?.TierModel(ModelTier.Medium)
             : model);
 
+    // Env процесса + ключ аккаунта пула, которым реально пойдёт вызов (null — сторонний
+    // провайдер ИЛИ пул пуст/недоступен, тогда возвращённый Env тоже null — CLI наследует
+    // окружение сервера, как раньше). Родная модель Claude (BuildCliEnv не нашёл стороннего
+    // провайдера) при непустом пуле подписок выбирает аккаунт так же, как это делает живой
+    // чат (ClaudeSession) — иначе фон всегда бил бы в основной аккаунт мимо пула (диагноз
+    // задачи). internal — тестируется без запуска процесса (подменить его в тестах нечем).
+    internal (IReadOnlyDictionary<string, string>? Env, string? PoolSubKey) ResolveEnv(string? model)
+    {
+        var env = llmProviders.BuildCliEnv(model);
+        if (env is not null || subscriptionPool?.HasExtra != true)
+            return (env, null);
+
+        var subKey = subscriptionPool.Pick(model);
+        var sub = subscriptionPool.All.FirstOrDefault(s => s.Key == subKey);
+        var oauthEnv = sub is not null
+            ? llmProviders.BuildOAuthCliEnv(sub.Key, sub.OAuthToken, sub.ApiKey, model)
+            : null;
+        return oauthEnv is not null ? (oauthEnv, sub!.Key) : (null, null);
+    }
+
     public async Task<string> RunAsync(string prompt, string? model = null,
         TimeSpan? timeout = null, CancellationToken ct = default,
         string? ownerId = null, string? effort = null, string? label = null) =>
@@ -118,7 +140,12 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
         var args = BuildArgs(Claude.ClaudeRuntimeSettings.HooksOffArgs(launcher),
             safeMode: !launcher.IsSandboxed, persistSessions: !withFlag, model, effort);
 
-        var env = llmProviders.BuildCliEnv(model);
+        var (env, poolSubKey) = ResolveEnv(model);
+
+        // Отсчёт простоя — от ПОПЫТКИ хода, а не от успеха (как идл-пинг): это фактическая
+        // активность аккаунта, идл-пинг по нему до следующего порога не нужен.
+        if (poolSubKey is not null)
+            activity?.Touch(poolSubKey);
 
         var turnId = Guid.NewGuid().ToString("N")[..12];
         using var process = launcher.Start(new ProcessSpec
@@ -178,7 +205,7 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
             // Время меряем по своим часам, а не по duration_ms от CLI: пользователь ждёт
             // весь вызов вместе со стартом процесса (~5-15 с), а не только запрос к API
             var result = ParseJsonResult(stdout, model, started.ElapsedMilliseconds);
-            RecordSpend(result, model, ownerId, label);
+            RecordSpend(result, model, ownerId, label, poolSubKey);
             return result;
         }
         catch (OperationCanceledException)
@@ -242,12 +269,17 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
 
     // Запись расхода one-shot вызова в аналитику. Источник — one-shot; модель ":free"
     // (агрегатор через CLI) выделяется источником free. Ошибка записи вызов не роняет.
-    private void RecordSpend(OneShotResult result, string? model, string? ownerId, string? label)
+    // poolSubKey — ключ аккаунта пула подписок, которым реально ходили (см. RunCliAsync);
+    // null — сторонний провайдер ИЛИ пул пуст/недоступен, тогда провайдер — как раньше.
+    // internal — тестируется напрямую с готовым OneShotResult, без запуска процесса.
+    internal void RecordSpend(OneShotResult result, string? model, string? ownerId, string? label, string? poolSubKey)
     {
         if (spend is null || result.Usage is not { } u) return;
         try
         {
-            var provider = SpendSources.NormalizeProvider(llmProviders.ProviderKey(model));
+            // Как и у живого чата (SessionManager.RecordTurnSpend по Session.Provider):
+            // аналитика должна знать, КАКОЙ аккаунт подписки потратил токены, а не всегда "claude".
+            var provider = SpendSources.NormalizeProvider(poolSubKey ?? llmProviders.ProviderKey(model));
             var usedModel = llmProviders.ResolveModelOrDefault(u.Model ?? model, provider);
             spend.Record(new SpendRecord
             {

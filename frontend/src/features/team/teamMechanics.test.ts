@@ -5,7 +5,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   detectTeamMechanic, describeTeamTurn, teamTurnPreview, teamMechanic, buildTeamTurnText,
-  DEFAULT_TEAM_SETTINGS,
+  DEFAULT_TEAM_SETTINGS, TEAM_MECHANICS,
 } from './teamMechanics';
 
 const OLD_TURN = '/team-implement {"task":"Добавить экспорт в CSV","worktree":false,"verify":true,"executors":["denis","kira"]}';
@@ -38,5 +38,25 @@ describe('детектор командных ходов', () => {
     expect(text).toBe('Реализовать фичу');
     expect(detectTeamMechanic(text)).toBeNull();
     expect(teamMechanic('implementMode').name).toBe('Командная реализация');
+  });
+});
+
+// Словарь коротких имён (TeamMechanicBadge, TeamImplementBadge, teamPill в Composer) —
+// единая точка сокращений для чипов, чтобы длинные названия не переполняли пилюлю
+// на узкой ширине (320px). Полное имя остаётся в title/aria-label этих же чипов.
+describe('короткие имена механик для чипов', () => {
+  it('у каждой механики есть непустое короткое имя короче полного или равное ему', () => {
+    for (const m of TEAM_MECHANICS) {
+      expect(m.shortName.length).toBeGreaterThan(0);
+      expect(m.shortName.length).toBeLessThanOrEqual(m.name.length);
+    }
+  });
+
+  it('самые длинные полные названия сокращены заметно', () => {
+    expect(teamMechanic('implementMode').shortName).toBe('КР');
+    expect(teamMechanic('implement').shortName).toBe('КС');
+    expect(teamMechanic('panel').shortName).toBe('Панель');
+    expect(teamMechanic('review').shortName).toBe('Консилиум');
+    expect(teamMechanic('redteam').shortName).toBe('Ред-тим');
   });
 });

@@ -455,6 +455,92 @@ docker exec signoz-metastore-postgres-0 psql -U signoz -d signoz `
 возвращает пустой список, а не все представления. Легко решить, что ничего
 не создалось, и наплодить дублей.
 
+## Раздел «Телеметрия» в UI (встроенный SigNoz)
+
+SigNoz живёт на `127.0.0.1:3301` (bind к localhost), поэтому «в лоб» его видно только с
+хост-машины. Чтобы телеметрия открывалась и удалённо (с телефона через PWA), UI встроен
+в CCS отдельным разделом (меню аватара → «Телеметрия», **только у админов**) через
+`<iframe>` с **same-origin пробросом**: браузер грузит `/telemetry-proxy/` с нашего
+origin, а бэкенд форвардит на локальный SigNoz.
+
+**Как это собрано:**
+
+- **Проброс** — middleware `/telemetry-proxy/**` в [Program.cs](../backend/ClaudeHomeServer/Program.cs)
+  (по образцу preview-прокси, `IHttpForwarder`, WebSocket-upgrade нативно). Аутентификация
+  под iframe — cookie `cc_telemetry` (iframe не носит `Authorization`); роль сверяется по
+  `UserStore` (не админ → 403, даже с валидной cookie). Выключено в конфиге → 503.
+- **base-path** — префикс `/telemetry-proxy` **не срезается**: SigNoz поднят с env
+  `SIGNOZ_GLOBAL_EXTERNAL__URL=…/telemetry-proxy` (overlay `docker-compose.observability.yml`,
+  через переменную `SIGNOZ_EXTERNAL_URL`) и сам релоцирует SPA под префикс — вставляет
+  `<base href="/telemetry-proxy/">`, ассеты и внутренний API резолвятся под ним. Спайк
+  подтвердил: корень `/` при этом отдаёт 404 (с SPA-fallback CCS не конфликтует), а
+  `/api/v1/health` продолжает отвечать и на корне — поэтому vendored healthcheck трогать
+  не пришлось.
+- **Статус** — `GET /api/telemetry/status` (`{configured, reachable, proxyPath}`,
+  admin-only). Фронт по нему решает: iframe или заглушка «настрой, администратор». На
+  ненадёжный iframe `onerror` не полагаемся — статус приходит server-side.
+- **Логин** — внутри iframe обычная форма входа SigNoz (свои креды, не CCS). Public
+  Sharing / anonymous в Community-редакции нет, автологин не делаем — вход разовый, JWT
+  живёт в localStorage нашего origin.
+
+**Включение:**
+
+```jsonc
+"Telemetry": {
+  "Ui": {
+    "Enabled": true,                    // раздел показывает SigNoz; false — заглушка
+    "InternalUrl": "http://localhost:3301"  // куда форвардить (порт из overlay)
+  }
+}
+```
+
+Плюс SigNoz должен быть поднят с `SIGNOZ_EXTERNAL_URL` (см. overlay). Забыть env → SPA
+не встанет под префикс, iframe будет пустым при живом бэкенде.
+
+### Настройка на новом инстансе (свой отдельный CCS)
+
+Раздел работает per-инстанс: у каждого CCS свой SigNoz (наш bind'ится к `127.0.0.1` и
+извне недоступен — общий использовать нельзя). Ниже — как поднять телеметрию на чистом
+инстансе. Команды даны напрямую: подразумевается, что у инстанса **нет оркестратора
+`ClaudeCodeServerRunner`** — запуск и рестарт CCS выполняются вручную (`dotnet run`,
+опубликованный exe или `docker-compose.claude.yml` — как этот инстанс обычно и запускают).
+
+1. **Код с фичей.** Обновить репозиторий до версии, где раздел «Телеметрия» есть
+   (`git pull`), пересобрать бэк и фронт.
+2. **Поднять свой SigNoz:**
+   ```
+   docker compose -f docker-compose.observability.yml up -d
+   ```
+   base-path env (`SIGNOZ_EXTERNAL_URL`) уже в overlay с рабочим дефолтом `localhost` —
+   менять не нужно (важен только PATH `/telemetry-proxy`, он фиксирован; ХОСТ в base не
+   идёт). При первом заходе на `http://localhost:3301/telemetry-proxy/` SigNoz предложит
+   создать первый аккаунт — это **отдельный логин SigNoz** (не аккаунт CCS), у каждого
+   инстанса свой.
+3. **Включить в своём `appsettings.Local.json`** (машинно-специфичный, не в гите; образец —
+   `appsettings.Local.example.json`):
+   ```jsonc
+   "Telemetry": {
+     // чтобы в SigNoz были данные — CCS слал телеметрию в свой локальный SigNoz
+     "Backends": { "Production": { "Enabled": true, "OtlpEndpoint": "http://localhost:4318" } },
+     // сам раздел (iframe → локальный SigNoz)
+     "Ui": { "Enabled": true, "InternalUrl": "http://localhost:3301" }
+   }
+   ```
+   Без `Backends.Production` раздел откроется, но SigNoz будет пустым.
+4. **Роль admin.** Раздел admin-only — пользователь инстанса должен быть `admin` (на своём
+   инстансе обычно так и есть).
+5. **Рестарт CCS вручную.** `appsettings.Local.json` читается на старте — перезапустить
+   процесс (нет трея-оркестратора, поднять тем же способом, что и обычно).
+6. **За реверс-прокси/на своём домене** — ничего дополнительного: проброс `/telemetry-proxy`
+   относительный, работает на любом origin (в dev — тот же проброс уже прописан в
+   `vite.config.ts`).
+
+Опционально, если нужен тот же набор, что на основном инстансе:
+- дашборды/представления/правила алертов — накатить на свой SigNoz из репы: `apply.ps1`,
+  `apply-views.ps1`, `apply-alerts.ps1` (см. соответствующие доки);
+- push-алерты на свой телефон — `Telemetry:Alerts:Enabled=true` + свой SigNoz ApiKey
+  (это про доставку алертов, а не про UI-раздел; подписки живут в `data/` этого инстанса).
+
 ## Cross-links
 
 - [Аудит существующих поверхностей](observability-audit.md) — что уже есть в проекте, чтобы

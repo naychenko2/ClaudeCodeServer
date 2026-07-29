@@ -288,6 +288,11 @@ Use cases (с резолюциями), архитектура интеграци
 per-инстанс). Страховка на случай мёртвого CCS — email-канал самого SigNoz для правила
 «Пульс телеметрии пропал». **Max для ботов закрыт** (только верифицированные юрлица РФ) —
 см. [docs/messenger-integration.md](docs/messenger-integration.md).
+**Раздел «Телеметрия» в UI** (меню аватара, admin-only): SigNoz встроен `<iframe>` через
+same-origin проброс `/telemetry-proxy/**` (middleware в Program.cs, cookie `cc_telemetry`,
+роль по `UserStore`). SigNoz релоцирует SPA под префикс через env `SIGNOZ_GLOBAL_EXTERNAL__URL`
+(overlay, переменная `SIGNOZ_EXTERNAL_URL`); фронт решает iframe/заглушку по
+`GET /api/telemetry/status`. Включение — `Telemetry:Ui:Enabled`.
 
 - **Central doc**: [docs/observability.md](docs/observability.md) — scope, архитектура,
   дублирование с существующими сторами, privacy (PII sanitizer), cardinality guardrails,
@@ -297,7 +302,7 @@ per-инстанс). Страховка на случай мёртвого CCS �
   McpCallLog in-memory, ProjectEventLogService SQLite). **SpendStore = source of truth
   для billing (токены/стоимость), OTel метрики НЕ дублируют его.**
 - **SigNoz setup**: [docs/observability-signoz-setup.md](docs/observability-signoz-setup.md) —
-  развёртывание vendored SigNoz v0.71.0 (`docker/observability/`), retention, backup,
+  развёртывание vendored SigNoz v0.134.0 (`docker/observability/`), retention, backup,
   troubleshooting.
 
 Включение per-instance через `appsettings.Local.json` секция `Telemetry`. Все порты

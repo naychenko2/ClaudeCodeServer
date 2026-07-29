@@ -36,6 +36,11 @@ interface Props {
   // потребитель (hero-шапка заметки), дубль не нужен. Контент НЕ режется —
   // оффсеты остальных блоков не меняются, якоря комментариев продолжают жить.
   hideLeadingH1?: boolean;
+  // Режим документации проекта (панель «Доки»): клик по НЕвнешней ссылке уходит сюда
+  // вместо перехода браузера — так работают переходы между README/docs/** и открытие
+  // файлов кода в центре. Внешние ссылки при этом уходят в новую вкладку.
+  // Взаимоисключим с режимом заметок: onWikilink сильнее (см. notesMode ниже).
+  onDocLink?: (href: string) => void;
 }
 
 const mono = FONT.mono;
@@ -311,10 +316,14 @@ const CUSTOM_SCHEMES = ['wikilink:', 'noteembed:', 'noteatt:'];
 
 interface HoverState { x: number; y: number; data: ResolvedNote }
 
-export function MarkdownViewer({ content, blockPos, onWikilink, existingTitles, resolveNote, embedSource, embedDepth = 0, hideLeadingH1 }: Props) {
+export function MarkdownViewer({ content, blockPos, onWikilink, existingTitles, resolveNote, embedSource, embedDepth = 0, hideLeadingH1, onDocLink }: Props) {
   // Режим заметок: включаем рендер [[wikilinks]]/![[embeds]] и внешние ссылки синим
   // (info), чтобы три класса ссылок различались (живая accent / призрак / внешняя).
   const notesMode = onWikilink != null;
+  // Режим документации проекта — только когда режим заметок НЕ включён: у notes/*.md
+  // внутри проекта могли бы сойтись оба, и приоритет отдан заметкам (их ссылочная
+  // модель богаче: hover-preview, embeds, призрачные ссылки).
+  const docsMode = !notesMode && onDocLink != null;
   const pre = useMemo(
     () => (notesMode ? preprocessNotes(content, embedDepth) : null),
     [notesMode, content, embedDepth]);
@@ -388,6 +397,23 @@ export function MarkdownViewer({ content, blockPos, onWikilink, existingTitles, 
           return <img src={url} alt={alt ?? ''} style={{ maxWidth: '100%', borderRadius: 8, margin: '8px 0' }} />;
         },
       }
+    : docsMode
+    ? {
+        ...components,
+        a: ({ href, children }) => {
+          // Внешняя ссылка — в новую вкладку: дефолтный рендер увёл бы из приложения
+          // в текущей, а в репозиторных доках http-ссылок много
+          if (!href || /^(https?:\/\/|mailto:|\/\/)/i.test(href))
+            return <a href={href} target="_blank" rel="noopener noreferrer" style={{ color: C.info, textDecoration: 'underline' }}>{children}</a>;
+          return (
+            <a
+              href={href}
+              onClick={e => { e.preventDefault(); onDocLink!(href); }}
+              style={{ color: C.accent, textDecoration: 'underline', cursor: 'pointer' }}
+            >{children}</a>
+          );
+        },
+      }
     : components;
 
   // hideLeadingH1: глушим ТОЛЬКО H1-узел с позицией 0 (самое начало документа) —
@@ -405,9 +431,11 @@ export function MarkdownViewer({ content, blockPos, onWikilink, existingTitles, 
 
   const finalComponents = useMemo(
     () => (blockPos ? withBlockPos(withHidden, toRaw) : withHidden),
-    // merged пересобирается каждый рендер — зависимость от стабильных первопричин
+    // merged пересобирается каждый рендер — зависимость от стабильных первопричин.
+    // onDocLink в списке обязателен: панель «Доки» пересоздаёт колбэк при смене
+    // открытого документа, и без него в components остался бы устаревший переход.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [blockPos, toRaw, notesMode, existingTitles, resolveNote, embedSource, hideLeadingH1]);
+    [blockPos, toRaw, notesMode, docsMode, onDocLink, existingTitles, resolveNote, embedSource, hideLeadingH1]);
 
   return (
     <div style={{ fontFamily: FONT.sans, fontSize: 14, lineHeight: 1.7, color: C.textHeading, width: '100%' }}>

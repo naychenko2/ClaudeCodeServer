@@ -92,22 +92,45 @@ truth для billing/accounting — метрики токенов и стоим�
 
 ## Privacy (PII)
 
-**Архитектурное решение AD6:** все span-атрибуты проходят через `PiiSanitizingProcessor`
-перед экспортом. Оба бэкенда (Aspire и SigNoz) получают уже очищенные данные — санация
-на стороне приложения, не на коллекторе.
+**Архитектурное решение AD6:** атрибуты и спанов, и логов проходят через санитайзер перед
+экспортом. Оба бэкенда (Aspire и SigNoz) получают уже очищенные данные — санация на стороне
+приложения, не на коллекторе.
+
+Правила общие для обоих сигналов и живут в одном месте — `PiiRules`. Имена сравниваются
+нормализованно (без разделителей, регистронезависимо), поэтому тег спана `session_id`
+и параметр лога `{SessionId}` подчиняются одному правилу. Иначе стиль записи решал бы,
+утечёт PII или нет.
 
 | Attribute | Action | Почему |
 |---|---|---|
-| `file_path`, `*.path` | Hash → `sha256(value)[..8]` | Путь может содержать имя проекта/пользователя |
+| `file_path`, `*.path`, `url.path` | Hash → `sha256(value)[..8]` | Путь может содержать имя проекта/пользователя/файла |
 | `persona_name`, `persona.id` | DROP | Идентификатор персоны = PII |
 | `user_id`, `owner_id` | DROP | Идентификатор пользователя = PII |
-| `prompt`, `text`, `content`, `body` | DROP | Тело запроса/ответа = PII, **C6** (предотвращение утечки токенов) |
+| `prompt`, `text`, `content`, `body`, `message` | DROP | Тело запроса/ответа = PII |
+| `url.full`, `url.query` | DROP | В query-строке уезжают API-ключи (Dify, OpenRouter) — **C6** |
 | `session_id`, `turn_id` (GUIDs) | KEEP | Неидентифицирующие, нужны для корреляции трейсов |
 | `provider`, `model`, `direction` | KEEP | Операционные, не PII |
 | `tool_name`, `outcome`, `error_type`, `reason` | KEEP | Операционные, не PII |
+| `http.request.method`, `http.response.status_code`, `http.route`, `server.address` | KEEP | Стабильные semconv-имена, без пользовательских данных |
 | Unknown tags | DROP (default deny) | Белый список — всё незнакомое отбрасывается |
 
-**Implementation:** `backend/ClaudeHomeServer/Telemetry/PiiSanitizingProcessor.cs`
+**Спаны** (`PiiSanitizingProcessor`): дополнительно очищается `StatusDescription` —
+инструментация кладёт туда текст исключения с URL и путями сборки. По той же причине
+выключен `RecordException`: он пишет `exception.message`/`exception.stacktrace`
+в `activity.Events`, а события — неизменяемая коллекция, санитайзер до них не дотянется.
+
+**Логи** (`PiiSanitizingLogProcessor`): тело сообщения возвращается к ШАБЛОНУ. Вместо
+«Временный чат abc «Отчёт по клиенту» удалён» уезжает «Временный чат {SessionId} «{Name}»
+удалён» — событие остаётся понятным, значения не уезжают. Это необходимо, потому что
+экспорт идёт с `IncludeFormattedMessage` и `ParseStateValues` (нужны для читаемости
+в SigNoz ListView).
+
+> **Остаточный риск:** сообщение, записанное интерполяцией (`$"...{value}"`), шаблона
+> не имеет — подставленная строка и есть шаблон, вычистить из неё нечего. Логировать
+> следует структурно: `logger.LogInformation("Чат {SessionId} удалён", id)`.
+
+**Implementation:** `Telemetry/PiiRules.cs` (правила), `PiiSanitizingProcessor.cs` (спаны),
+`PiiSanitizingLogProcessor.cs` (логи). Тесты — `PiiSanitizerTests`, `PiiLogSanitizerTests`.
 
 ## Cardinality Guardrails
 
@@ -159,6 +182,8 @@ Standard OTel resource attributes на каждый экспортируемый
   не дублировать. Сводная таблица 4 сторов + cross-reference планируемых OTel-метрик.
 - [SigNoz setup runbook](observability-signoz-setup.md) — развёртывание stack, retention,
   порты, troubleshooting, объём диска.
+- [SigNoz-дашборды](observability-dashboards.md) — дашборды как IaC: JSON в репе,
+  идемпотентный импорт через `apply.ps1`, backup-стратегия.
 - [MCP-servers docs](mcp-servers.md) — диагностика MCP-вызовов через `GET /api/mcp/calls`
   (in-memory счётчики, дополняют OTel).
 - [CLAUDE.md](../CLAUDE.md) — общая архитектура проекта, REST API, соглашения.

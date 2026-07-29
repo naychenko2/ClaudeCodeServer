@@ -216,7 +216,10 @@ public record GitStatusChangedMessage(string ProjectId)
 
 // Авто-коммит хода Claude (документный режим) — в группу сессии: чат показывает плашку
 // «Изменения сохранены» со ссылкой на просмотр коммита.
-public record GitTurnCommitMessage(string SessionId, string ProjectId, string Sha, string Subject)
+// SessionId — унаследованное свойство ServerMessage, задаётся отправителем через init:
+// позиционным параметром его объявлять нельзя (одноимённое свойство базы не перекрывается,
+// и значение молча терялось бы — CS8907).
+public record GitTurnCommitMessage(string ProjectId, string Sha, string Subject)
     : ServerMessage("git_turn_commit");
 
 // Изменение персон — created/updated/deleted — в группу user_{userId},
@@ -256,10 +259,13 @@ public record ProviderLimitMessage(string? ResetsAt, IReadOnlyList<ProviderFallb
 // в группу user_{userId}: открытое приложение показывает тост + сохраняет в центр уведомлений.
 // Kind — семантика для иконки/цвета: reminder | claude | info | success
 // NotificationId — id в NotificationStore (для mark-read/delete через тост).
-// Type — подтип: task_reminder | execution_started | execution_completed | briefing | summary | ...
+// NotifType — подтип: task_reminder | execution_started | execution_completed | briefing | summary | ...
+// Именно NotifType, а не Type: одноимённый с базовым ServerMessage.Type позиционный параметр
+// свойство не создаёт, значение молча терялось (CS8907) — фронт читает поле notifType.
+// SessionId — унаследованное свойство базы, задаётся отправителем через init (та же причина).
 public record NotificationMessage(string Title, string Body, string? Url = null,
-    string Kind = "info", string? NotificationId = null, string? Type = null,
-    string? ProjectId = null, string? SessionId = null, string? TaskId = null,
+    string Kind = "info", string? NotificationId = null, string? NotifType = null,
+    string? ProjectId = null, string? TaskId = null,
     string? Source = null, string? Tag = null,
     // Атрибуция персоны (для аватара/лица в тосте, центре и web-push) и имя проекта.
     // Денормализуются в NotificationService по PersonaId/ProjectId — отправители шлют id.

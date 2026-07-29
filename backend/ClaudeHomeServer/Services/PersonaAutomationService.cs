@@ -318,8 +318,7 @@ public sealed class PersonaAutomationService : IDisposable
                 Url: chatUrl,
                 Kind: "claude", Tag: "Автоматизация",
                 PersonaId: persona?.Id,
-                ProjectId: session.ProjectId,
-                SessionId: session.Id), sendPush: true);
+                ProjectId: session.ProjectId) { SessionId = session.Id }, sendPush: true);
         }
         catch { /* уведомление — best-effort */ }
     }

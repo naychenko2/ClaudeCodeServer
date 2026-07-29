@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Diagnostics.Metrics;
 using ClaudeHomeServer.Telemetry;
 using FluentAssertions;
@@ -151,6 +152,42 @@ public class TurnResultMetricsTests
         // трейс и метрику нельзя будет сопоставить при разборе «песочница тормозит»
         TurnTelemetry.ExecutionKind(true).Should().Be("docker");
         TurnTelemetry.ExecutionKind(false).Should().Be("local");
+    }
+
+    /// <summary>
+    /// Исход хода должен попадать и на спан. Без этого дашборд показывает, что отказы
+    /// есть, а открыть в Traces Explorer именно их нечем — отбирать не по чему.
+    /// </summary>
+    [Theory]
+    [InlineData(false, null, "success", ActivityStatusCode.Unset)]
+    [InlineData(true, "429", "error", ActivityStatusCode.Error)]
+    [InlineData(true, null, "error", ActivityStatusCode.Error)]
+    public void MarkTurnOutcome_SetsTagAndStatus(
+        bool isError, string? apiStatus, string expectedOutcome, ActivityStatusCode expectedStatus)
+    {
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = s => s.Name == ServerActivitySource.Name,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
+        };
+        ActivitySource.AddActivityListener(listener);
+
+        using var activity = ServerActivitySource.Instance.StartActivity("test.turn");
+        TurnTelemetry.MarkTurnOutcome(activity, isError, apiStatus);
+
+        activity.Should().NotBeNull();
+        activity!.GetTagItem("outcome").Should().Be(expectedOutcome);
+        activity.Status.Should().Be(expectedStatus);
+        if (isError)
+            activity.GetTagItem("error_type").Should().Be(TurnTelemetry.ClassifyErrorType(apiStatus));
+    }
+
+    [Fact]
+    public void MarkTurnOutcome_NullActivity_DoesNotThrow()
+    {
+        // Спана нет, когда не подключён ни один listener — обычный режим без экспорта
+        var act = () => TurnTelemetry.MarkTurnOutcome(null, isError: true, apiErrorStatus: "500");
+        act.Should().NotThrow();
     }
 
     [Fact]

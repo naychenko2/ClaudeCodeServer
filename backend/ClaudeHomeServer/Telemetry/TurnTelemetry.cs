@@ -30,6 +30,32 @@ internal static class TurnTelemetry
     }
 
     /// <summary>
+    /// Помечает спан хода исходом: тег <c>outcome</c>, а для отказа — <c>error_type</c>
+    /// и статус <see cref="ActivityStatusCode.Error"/>.
+    ///
+    /// Без этого упавший ход в трейсах НИЧЕМ не отличался от успешного: outcome и
+    /// error_type жили только в метриках, а статус спана оставался Unset. То есть
+    /// на дашборде было видно, что отказы есть, а открыть в Traces Explorer именно
+    /// их — нечем: отобрать не по чему.
+    ///
+    /// Кардинальность здесь не проблема (в отличие от метрик): оба значения берутся
+    /// из замкнутых наборов, а спаны не образуют временных рядов.
+    /// </summary>
+    public static void MarkTurnOutcome(Activity? activity, bool isError, string? apiErrorStatus)
+    {
+        if (activity is null) return;
+
+        activity.SetTag("outcome", isError ? "error" : "success");
+        if (!isError) return;
+
+        var errorType = ClassifyErrorType(apiErrorStatus);
+        activity.SetTag("error_type", errorType);
+        // Description не заполняем: PiiSanitizingProcessor всё равно его обнуляет,
+        // а в текст ошибки провайдера легко попадают данные пользователя.
+        activity.SetStatus(ActivityStatusCode.Error);
+    }
+
+    /// <summary>
     /// Дочерний спан запуска процесса claude CLI. Родитель — активный chat.turn
     /// (Activity.Current на момент вызова). kind: "local" | "docker".
     /// </summary>

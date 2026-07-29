@@ -2309,9 +2309,12 @@ public class ClaudeSession : ILlmSessionAdapter
                 // Модель — фактическая (её назвал CLI), а не та, что просили: при пустом слоте
                 // EffectiveModel равен null и метрика получала unknown вместо ответа на вопрос
                 // «чем считали». Намерение остаётся фолбэком, если CLI модель не назвал.
+                var turnFailed = TurnTelemetry.IsTurnFailure(subtype, isErrorFlag);
                 TurnTelemetry.RecordTurnResult(durationMs, Info.Provider, _turnCliModel ?? EffectiveModel,
-                    isError: TurnTelemetry.IsTurnFailure(subtype, isErrorFlag), apiErrorStatus: apiErr,
+                    isError: turnFailed, apiErrorStatus: apiErr,
                     isSandboxed: _launcher.IsSandboxed);
+                // Тот же исход — на спан: иначе в трейсах отказной ход неотличим от успешного
+                TurnTelemetry.MarkTurnOutcome(_turnActivity, turnFailed, apiErr);
                 // Ход завершён. Без живых фоновых задач закрываем stdin — CLI выйдет сам,
                 // дальше ждём его не дольше ResultExitGrace. С ними stdin держим открытым:
                 // прогон доживает (агенты работают внутри процесса) и готов принять

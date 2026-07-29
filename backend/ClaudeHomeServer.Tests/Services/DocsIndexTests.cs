@@ -592,6 +592,68 @@ public class DocsIndexTests : IDisposable
         wiki.Count.Should().Be(0);
     }
 
+    // ─── Начальный документ ─────────────────────────────────────────────────
+
+    [Fact]
+    public void Начало_БезВыбора_ЭтоReadmeКорня()
+    {
+        Write("# Проект", "README.md");
+        Write("# Док", "docs", "a.md");
+
+        _svc.ResolveHome(_root).Should().Be("README.md");
+    }
+
+    [Fact]
+    public void Начало_ВыбранныйДокумент_ПеребиваетReadme()
+    {
+        Write("# Проект", "README.md");
+        Write("# Обзор", "docs", "overview.md");
+
+        var scope = new DocsScope(["docs"], ["README.md"], ["markdown"], "docs/overview.md");
+
+        _svc.ResolveHome(_root, scope).Should().Be("docs/overview.md");
+    }
+
+    [Fact]
+    public void Начало_ВыбранныйВнеОбласти_ОткатываетсяКReadme()
+    {
+        Write("# Проект", "README.md");
+        Write("# Чужой", "backend", "NOTES.md");
+
+        // Гейт области всё равно не отдал бы такой документ — «Начало» не должно
+        // упираться в пустой экран из-за настройки, сделанной когда-то раньше
+        var scope = new DocsScope(["docs"], ["README.md"], ["markdown"], "backend/NOTES.md");
+
+        _svc.ResolveHome(_root, scope).Should().Be("README.md");
+    }
+
+    [Fact]
+    public void Начало_БезReadme_ЕгоНет()
+    {
+        Write("# Док", "docs", "a.md");
+
+        _svc.ResolveHome(_root, new DocsScope(["docs"], [], ["markdown"])).Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData("docs\\a.md", "docs/a.md")]
+    [InlineData("/docs/a.md", "docs/a.md")]
+    [InlineData(" docs/a.md ", "docs/a.md")]
+    public void Начало_ПутьНормализуется(string raw, string expected)
+    {
+        DocsIndexService.NormalizeHome(raw).Should().Be(expected);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("../secret.md")]
+    [InlineData("C:/Windows/win.md")]
+    public void Начало_НепригодноеЗначение_ЭтоАвтовыбор(string raw)
+    {
+        DocsIndexService.NormalizeHome(raw).Should().BeNull();
+    }
+
     // ─── Кандидаты в файлы корня ────────────────────────────────────────────
 
     [Fact]

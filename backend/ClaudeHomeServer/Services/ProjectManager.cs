@@ -176,13 +176,15 @@ public class ProjectManager
     // Update: настройка узкая и приходит из самой панели, а Update и без того на девяти
     // параметрах. null у оси = вернуть её к дефолту; пустой список = «ничего отсюда».
     public Project SetDocsScope(string id, IReadOnlyList<string>? folders,
-        IReadOnlyList<string>? rootFiles, IReadOnlyList<string>? types)
+        IReadOnlyList<string>? rootFiles, IReadOnlyList<string>? types, string? home)
     {
         var project = _projects.GetValueOrDefault(id)
             ?? throw new KeyNotFoundException($"Проект не найден: {id}");
         project.DocsFolders = folders is null ? null : [.. Docs.DocsIndexService.NormalizeFolders(folders)];
         project.DocsRootFiles = rootFiles is null ? null : [.. Docs.DocsIndexService.NormalizeRootFiles(rootFiles)];
         project.DocsTypes = types is null ? null : [.. Docs.DocsIndexService.NormalizeTypes(types)];
+        // Пустая строка — «вернуть авто-выбор README», как у color/groupId выше
+        project.DocsHome = home is null ? project.DocsHome : Docs.DocsIndexService.NormalizeHome(home);
         project.UpdatedAt = DateTime.UtcNow;
         Save();
         return project;

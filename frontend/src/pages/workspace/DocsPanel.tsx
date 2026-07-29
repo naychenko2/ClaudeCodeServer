@@ -10,7 +10,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BookOpenText, ChevronDown, ChevronRight, CornerUpRight, FileQuestion, Home, Link2, List, Maximize2, MessageSquarePlus, PanelBottom, Pin, PinOff, Search, SlidersHorizontal, X } from 'lucide-react';
-import type { Project, DocEntry, DocDetail, DocSearchHit } from '../../types';
+import type { Project, DocEntry, DocDetail, DocSearchHit, DocsScopeInfo } from '../../types';
 import { api } from '../../lib/api';
 import { onFilesChanged } from '../../lib/signalr';
 import { C, FONT, FS, R, SHADOW, SP } from '../../lib/design';
@@ -66,13 +66,9 @@ const FOLDERS_H_MAX = 400;
 // TypeGroups) — здесь нужно лишь решить, перечитывать ли индекс после правок на диске
 const DEFAULT_DOC_EXTS = ['.md'];
 
-// Домашний документ панели: README в корне, любого поддерживаемого расширения.
-// Он вход в документацию почти любого репозитория, поэтому у него своя иконка-домик
-// и режим «на всю панель», с которого панель и открывается
+// Начальный документ панели («Начало»): назначенный в настройке либо README корня.
+// Кто именно — решает бэкенд; панель только помечает его домиком и открывает на всю высоту
 const HOME_KEY = 'cc_docs_home';
-function isHomeDoc(path: string): boolean {
-  return !path.includes('/') && /^readme\./i.test(path);
-}
 
 // Папка пути («docs/adr/x.md» → «docs/adr»); файл в корне — пустая строка
 function folderOf(path: string): string {
@@ -80,9 +76,9 @@ function folderOf(path: string): string {
   return i < 0 ? '' : path.slice(0, i);
 }
 
-// Бейдж расширения в строке документа; у README — домик вместо него
-function DocBadge({ path }: { path: string }) {
-  if (isHomeDoc(path))
+// Бейдж расширения в строке документа; у начального — домик вместо него
+function DocBadge({ path, home }: { path: string; home?: boolean }) {
+  if (home)
     return <Home size={13} strokeWidth={2.2} style={{ flexShrink: 0, color: C.accent }} />;
   const m = extMeta(path);
   return (
@@ -93,6 +89,29 @@ function DocBadge({ path }: { path: string }) {
       display: 'flex', alignItems: 'center', justifyContent: 'center',
       letterSpacing: '-0.02em',
     }}>{m.label}</span>
+  );
+}
+
+// Подпись папки в списке документов: липкая, чтобы при прокрутке было видно, в какой
+// папке находишься. Подложка постоянная и всего на тон теплее полотна — в потоке её
+// почти не видно, а прилипнув она перекрывает уезжающие строки.
+// Отличать «прилипла / не прилипла» пробовали наблюдателем, но в панели несколько
+// вложенных скроллеров (список, превью, закреплённые папки), и корень наблюдения
+// приходилось угадывать — постоянный фон делает то же самое без единого условия.
+function FolderSticky({ folder, flash }: { folder: string; flash: boolean }) {
+  return (
+    // Фон — ровно полотно панели: в потоке подпись выглядит как раньше, а прилипнув
+    // перекрывает уезжающие строки. Отрицательные поля тянут подложку на всю ширину
+    // списка (у него свой боковой отступ), иначе строки просвечивали бы по краям
+    <div style={{
+      // top отрицательный: плашка прилипает вплотную к краю списка, а не ниже него.
+      // Компенсируем и верхний отступ списка, и собственный отступ разделителя —
+      // иначе между краем и подписью остаётся полоска, сквозь которую видно строки
+      position: 'sticky', top: -(SP.xs + 5), zIndex: 1,
+      background: C.bgWhite, margin: `0 -${SP.xs}px`, padding: `${SP.xs}px ${SP.xs}px 0`,
+    }}>
+      <ListDateDivider title={folder} align="left" dense flash={flash} />
+    </div>
   );
 }
 
@@ -175,9 +194,9 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
   // Область документации (папки, файлы корня, типы). null — панель её не спрашивала:
   // диалог грузит настройку сам, а до его открытия хватает эвристики по индексу
   // (см. isDocPath ниже)
-  // Хранится с уже раскрытыми расширениями: настройка ходит группами, а решение
-  // «наш ли это файл» принимается по расширению
-  const [scope, setScope] = useState<{ folders: string[]; rootFiles: string[]; exts: string[] } | null>(null);
+  // Настройка области целиком: из неё панель узнаёт начальный документ, а после правок
+  // на диске — надо ли перечитывать индекс (isDocPath ниже)
+  const [scopeInfo, setScopeInfo] = useState<DocsScopeInfo | null>(null);
   const [scopeOpen, setScopeOpen] = useState(false);
   // Список папок — то же, что оглавление для документа, только для самого списка:
   // групп до десятка, а документов десятки, и мотать до нужной надоедает
@@ -253,21 +272,26 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
     const p = raw.replace(/\\/g, '/');
     const lower = p.toLowerCase();
     if (knownDocs.has(lower)) return true;
-    if (scope) {
+    if (scopeInfo) {
+      const { folders, rootFiles, types } = scopeInfo.selected;
       // Файл корня — только поимённо: там же лежит код, и расширение ни о чём не говорит
-      if (!p.includes('/')) return scope.rootFiles.some(f => f.toLowerCase() === lower);
-      return scope.exts.some(e => lower.endsWith(e))
-        && scope.folders.some(f => lower.startsWith(`${f.toLowerCase()}/`));
+      if (!p.includes('/')) return rootFiles.some(f => f.toLowerCase() === lower);
+      const exts = scopeInfo.typeGroups.filter(g => types.includes(g.key)).flatMap(g => g.extensions);
+      return exts.some(e => lower.endsWith(e))
+        && folders.some(f => lower.startsWith(`${f.toLowerCase()}/`));
     }
-    // Настройки ещё не спрашивали: судим по текущему корпусу — тот же тип файла
+    // Настройка ещё не приехала: судим по текущему корпусу — тот же тип файла
     // в папке, где документы уже есть
     return DEFAULT_DOC_EXTS.some(e => lower.endsWith(e)) && docFolders.has(folderOf(p));
-  }, [knownDocs, docFolders, scope]);
+  }, [knownDocs, docFolders, scopeInfo]);
 
   const loadIndex = useCallback(() => {
     api.docs.index(project.id)
       .then(list => { setIndex(list); setError(null); })
       .catch(() => setError('Не удалось загрузить документацию'));
+    // Настройка приезжает вместе с индексом: из неё берётся начальный документ, а без
+    // неё панель не знает, показывать ли «Начало» вообще
+    api.docs.scope(project.id).then(setScopeInfo).catch(() => { /* останется эвристика */ });
   }, [project.id]);
 
   useEffect(() => { loadIndex(); }, [loadIndex]);
@@ -374,8 +398,9 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
     return target ? api.files.fileUrl(project.id, target) : undefined;
   }, [doc, project.id]);
 
-  // README области — вход в документацию; его нет, значит и домашнего режима нет
-  const homePath = useMemo(() => (index ?? []).find(d => isHomeDoc(d.path))?.path ?? null, [index]);
+  // Начальный документ выбирает бэкенд: явно назначенный либо README корня. Панели
+  // незачем знать это правило — она лишь показывает то, что ей назвали
+  const homePath = scopeInfo?.home ?? null;
 
   const setHome = (next: boolean) => {
     setHomeOpen(next);
@@ -405,10 +430,9 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
       const existing = await api.files.getContent(project.id, 'README.md').catch(() => null);
       if (existing?.content == null) {
         await api.files.createFile(project.id, 'README.md');
-        // Заготовка без «воды»: заголовок, строка под описание и список задач —
-        // пустой буллет предлагал бы писать прозу, чекбокс просит план
+        // Заготовка без «воды»: заголовок, строка под описание и место под план
         await api.files.saveContent(project.id, 'README.md',
-          `# ${project.name}\n\nКороткое описание проекта\n\n## С чего начать\n\n- [ ] \n`);
+          `# ${project.name}\n\nКороткое описание проекта\n\n## С чего начать\n\nTo Do\n`);
       }
       const scopeInfo = await api.docs.scope(project.id);
       if (!scopeInfo.selected.rootFiles.some(f => f.toLowerCase() === 'readme.md')) {
@@ -506,6 +530,9 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
   const homeView = homeOpen && homePath != null;
   // Поиск, папки и превью управляют списком: без документов им нечего делать
   const hasDocs = (index?.length ?? 0) > 0;
+  // README лежит в проекте, но выпал из области (сняли в настройке). Кандидаты корня
+  // считаются по всем поддерживаемым типам, поэтому знают о нём, даже когда он не выбран
+  const readmeOnDisk = !!scopeInfo?.rootFileCandidates.some(c => c.exists && /^readme\./i.test(c.name));
 
   const pinFolders = (next: boolean) => {
     setFoldersPinned(next);
@@ -543,14 +570,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
     <DocsScopeDialog
       projectId={project.id}
       onClose={() => setScopeOpen(false)}
-      onSaved={info => {
-        setScope({
-          folders: info.selected.folders,
-          rootFiles: info.selected.rootFiles,
-          exts: info.typeGroups.filter(g => info.selected.types.includes(g.key)).flatMap(g => g.extensions),
-        });
-        loadIndex();
-      }}
+      onSaved={info => { setScopeInfo(info); loadIndex(); }}
     />
   );
 
@@ -754,11 +774,14 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
                     compact
                     icon={<BookOpenText size={20} strokeWidth={ICON_STROKE} />}
                     title="Документация пуста"
-                    subtitle="Создайте начальный файл — или проверьте, что считается документацией"
+                    subtitle={readmeOnDisk
+                      // Файл на месте, просто снят в настройке — «создать» было бы ложью
+                      ? 'README есть в проекте, но не входит в область документации'
+                      : 'Создайте начальный файл — или проверьте, что считается документацией'}
                     action={
                       <div style={{ display: 'flex', gap: SP.xs, justifyContent: 'center' }}>
                         <Button variant="primary" size="sm" loading={creating} onClick={createReadme}>
-                          Создать начальный файл
+                          {readmeOnDisk ? 'Вернуть README в область' : 'Создать начальный файл'}
                         </Button>
                         <Button variant="ghost" size="sm" onClick={() => setScopeOpen(true)}>
                           Настроить область
@@ -782,7 +805,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
                         общий приём для «границы группы» в списках — и никакой подложки,
                         которая спорила бы с выделением строки */}
                     {folder && (
-                      <ListDateDivider title={folder} align="left" dense flash={flashFolder === folder} />
+                      <FolderSticky folder={folder} flash={flashFolder === folder} />
                     )}
                     {docs.map(d => (
                       <div
@@ -808,7 +831,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
                           }}>
                           {/* Бейдж расширения — тот же, что в «Файлах» и «Изменениях»;
                               у README вместо него домик: он не рядовой документ, а вход */}
-                          <DocBadge path={d.path} />
+                          <DocBadge path={d.path} home={d.path === homePath} />
                           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.title}</span>
                         </button>
                       </div>

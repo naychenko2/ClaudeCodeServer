@@ -133,6 +133,8 @@ export function DocsScopeDialog({ projectId, onClose, onSaved }: Props) {
 
   const save = () => {
     setSaving(true);
+    // home не шлём: выбор начального документа временно снят из UI, а null в запросе
+    // означает «не трогать» — сохранённое значение переживает правку области
     api.docs.setScope(projectId, { folders, rootFiles, types })
       .then(saved => { onSaved(saved); onClose(); })
       .catch(() => { setSaving(false); setError('Не удалось сохранить'); });

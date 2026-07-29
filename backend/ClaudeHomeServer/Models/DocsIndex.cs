@@ -52,16 +52,21 @@ public record DocRootFileCandidate(string Name, bool Exists);
 // Область документации: три независимые оси. Пустой список любой из них — «ничего отсюда».
 // Types — ключи групп типов («markdown», «pdf», «visio»…), а не расширения: расширений
 // три десятка, выбирают их всё равно группами, и хранить россыпь незачем.
+// Home — документ, который панель показывает «Началом»; null — авто (README в корне).
 public record DocsScope(
     IReadOnlyList<string> Folders,
     IReadOnlyList<string> RootFiles,
-    IReadOnlyList<string> Types);
+    IReadOnlyList<string> Types,
+    string? Home = null);
 
 // Группа типов файлов для настройки. Расширений три десятка, и списком они не читаются —
 // выбирают группами: «Markdown», «PDF», «Visio», «Аудио»…
 // Text — содержимое разбирается в корпус (заголовки, ссылки, поиск); иначе файл только
 // числится в списке и открывается в центре.
 public record DocTypeGroup(string Key, string Title, IReadOnlyList<string> Extensions, bool Text);
+
+// Документ области как вариант выбора (для «Начала»): путь и заголовок
+public record DocOption(string Path, string Title);
 
 // Настройка области: что выбрано, что можно выбрать и что было бы по умолчанию (кнопка
 // «вернуть как было» на фронте строится из Defaults, а не хардкодом).
@@ -71,4 +76,9 @@ public record DocsScopeInfo(
     IReadOnlyList<DocRootFileCandidate> RootFileCandidates,
     // Всё, что продукт умеет показывать, — из этих групп и выбирают
     IReadOnlyList<DocTypeGroup> TypeGroups,
-    DocsScope Defaults);
+    DocsScope Defaults,
+    // Документы области — варианты для «Начала»
+    IReadOnlyList<DocOption> Documents,
+    // Что сейчас работает «Началом»: выбранный документ либо README по умолчанию.
+    // null — начального документа нет вовсе (пустая область или README удалён)
+    string? Home);

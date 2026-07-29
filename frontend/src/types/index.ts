@@ -165,6 +165,13 @@ export interface DocsScope {
   folders: string[];
   rootFiles: string[];       // имена файлов в корне проекта, без путей
   types: string[];           // ключи групп типов: "markdown", "pdf", "visio"…
+  home?: string | null;      // документ «Начала»; null — авто (README корня)
+}
+
+// Документ области как вариант выбора начального
+export interface DocOption {
+  path: string;
+  title: string;
 }
 
 // Группа типов файлов. text=false — файл без текста (pdf, visio, картинка, звук):
@@ -183,6 +190,8 @@ export interface DocsScopeInfo {
   rootFileCandidates: DocRootFileCandidate[];
   typeGroups: DocTypeGroup[];      // всё, что продукт умеет открыть
   defaults: DocsScope;
+  documents: DocOption[];          // документы области — варианты для «Начала»
+  home: string | null;             // что сейчас работает «Началом» (выбор или README)
 }
 
 // Элемент доски агентов (диспетчерская: GET /api/board/agents)

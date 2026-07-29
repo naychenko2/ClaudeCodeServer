@@ -986,6 +986,8 @@ export const api = {
           folders: scope.folders ?? null,
           rootFiles: scope.rootFiles ?? null,
           types: scope.types ?? null,
+          // undefined — не трогать выбор «Начала»; '' — вернуть авто-README
+          home: scope.home === undefined ? null : scope.home,
         }),
       }),
   },

@@ -173,13 +173,45 @@ public sealed partial class DocsIndexService
         : new DocsScope(
             NormalizeFolders(scope.Folders),
             NormalizeRootFiles(scope.RootFiles),
-            NormalizeTypes(scope.Types));
+            NormalizeTypes(scope.Types),
+            NormalizeHome(scope.Home));
+
+    // Домашний документ — путь от корня проекта (в отличие от файлов корня, он может
+    // лежать в папке). Значение вне корня отбрасывается: гейт области дальше всё равно
+    // не отдаст такой документ, и молчаливо пустое «Начало» было бы непонятным
+    public static string? NormalizeHome(string? home)
+    {
+        if (string.IsNullOrWhiteSpace(home)) return null;
+        var s = home.Trim().Replace('\\', '/').TrimStart('/');
+        if (s.Contains(':')) return null;
+        var segments = new List<string>();
+        foreach (var seg in s.Split('/', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (seg == ".") continue;
+            if (seg == "..") return null;
+            segments.Add(seg);
+        }
+        return segments.Count == 0 ? null : string.Join('/', segments);
+    }
+
+    // Что панель показывает «Началом»: явно выбранный документ, если он есть в корпусе,
+    // иначе README из корня. Решает бэкенд, а не фронт: правило одно и то же для индекса,
+    // и панели незачем знать про «readme.*» и порядок предпочтений
+    public string? ResolveHome(string rootPath, DocsScope? rawScope = null)
+    {
+        var scope = NormalizeScope(rawScope);
+        var corpus = GetCorpus(rootPath, scope);
+        if (scope.Home is not null && corpus.ByPath.TryGetValue(scope.Home, out var chosen))
+            return chosen.Path;
+        return corpus.Docs.FirstOrDefault(d => IsReadme(d.Path))?.Path;
+    }
 
     // Собрать область из полей проекта: у каждой оси свой null со своим дефолтом
     public static DocsScope ScopeOf(Project project) => NormalizeScope(new DocsScope(
         project.DocsFolders ?? DefaultScope.Folders,
         project.DocsRootFiles ?? DefaultScope.RootFiles,
-        project.DocsTypes ?? DefaultScope.Types));
+        project.DocsTypes ?? DefaultScope.Types,
+        project.DocsHome));
 
     // Папки: прямые слэши, без краёв-разделителей, без дублей и без выходов за корень
     public static IReadOnlyList<string> NormalizeFolders(IReadOnlyList<string>? folders)
@@ -345,7 +377,11 @@ public sealed partial class DocsIndexService
             SuggestFolders(rootPath, scope),
             SuggestRootFiles(rootPath, scope),
             TypeGroups,
-            DefaultScope);
+            DefaultScope,
+            // Документы области — из них выбирают «Начало»; заодно панель узнаёт,
+            // какой документ им сейчас работает
+            GetIndex(rootPath, scope).Select(d => new DocOption(d.Path, d.Title)).ToList(),
+            ResolveHome(rootPath, scope));
     }
 
     // Кандидаты в корневые файлы: всё подходящее по расширению, что лежит в корне.

@@ -44,10 +44,12 @@ public class Project
     //   DocsFolders    — папки (относительные пути от RootPath), дефолт docs/;
     //   DocsRootFiles  — файлы в корне поимённо, дефолт README.md (в корне лежит и код,
     //                    поэтому папкой он не выбирается — только конкретные файлы);
-    //   DocsTypes      — группы типов файлов («markdown», «pdf», «visio»…), дефолт markdown.
+    //   DocsTypes      — группы типов файлов («markdown», «pdf», «visio»…), дефолт markdown;
+    //   DocsHome       — документ «Начала» панели; null — авто (README в корне).
     public List<string>? DocsFolders { get; set; }
     public List<string>? DocsRootFiles { get; set; }
     public List<string>? DocsTypes { get; set; }
+    public string? DocsHome { get; set; }
     // Реестр общих тегов проекта (имя, порядок, цвет) — per-owner изоляция
     public List<ProjectTag> TagRegistry { get; set; } = [];
     // Правила авто-разрешений/запретов для permission-запросов (см. PermissionRule)

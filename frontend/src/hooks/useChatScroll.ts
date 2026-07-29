@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react';
 import type { ChatItem } from '../types';
 
 // Позиция чтения живёт ровно один reload: пишется только при выгрузке страницы
@@ -6,6 +6,8 @@ import type { ChatItem } from '../types';
 // открытием чата. Поэтому переключение чатов и возврат в него позже всегда дают конец
 // ленты, а случайный F5 возвращает туда, где читали.
 const SCROLL_TTL_MS = 5 * 60 * 1000;
+// Порог «лента у низа»: запас на дробные пиксели и хвостовые отступы
+const BOTTOM_EPS = 80;
 
 // Разовая уборка бессрочных записей прежнего формата (localStorage) — иначе они
 // остались бы у пользователей навсегда.
@@ -28,8 +30,15 @@ export function useChatScroll(sessionId: string, items: ChatItem[], isHistoryLoa
   // Плавающий composer переменной высоты — измеряем, чтобы лента упиралась ровно под него
   const composerWrapRef = useRef<HTMLDivElement>(null);
   const [composerH, setComposerH] = useState(96);
-  // Прилипание к низу: автоскролл при новых сообщениях только если пользователь уже внизу
+  // Прилипание к низу: автоскролл при новых сообщениях, пока лента «приклеена» к концу.
+  // ГЛАВНЫЙ ИНВАРИАНТ: отклеивает ленту ТОЛЬКО жест пользователя (колесо, тач, клавиши,
+  // перетаскивание полосы). Программные сдвиги геометрии — composer домерил свою высоту
+  // (96 → 181px, лента ужалась) или лента дорендерилась (подсветка кода, картинки, mermaid) —
+  // прилипание не снимают. Раньше снимали: первый же такой сдвиг ронял флаг в false, и весь
+  // дальнейший дорендер (в тяжёлом чате — десятки тысяч px) шёл мимо, а лента замирала там,
+  // где её застал первый кадр, то есть у начала.
   const atBottomRef = useRef(true);
+  const userGestureRef = useRef(false);
   // Восстановление позиции чтения после reload: храним позицию + высоту ленты per-session.
   const scrollKey = `cc-scroll-${sessionId}`;
   const pendingRestoreRef = useRef<{ top: number; h: number } | null>(null);
@@ -37,8 +46,9 @@ export function useChatScroll(sessionId: string, items: ChatItem[], isHistoryLoa
   // Показывать плавающую кнопку «вниз», когда пользователь отлистал вверх
   const [showScrollDown, setShowScrollDown] = useState(false);
 
-  // Сброс состояния при смене сессии
-  useEffect(() => {
+  // Сброс состояния при смене сессии. Layout-эффект: скролл выставляется до отрисовки
+  // кадра, поэтому лента не успевает мигнуть началом.
+  useLayoutEffect(() => {
     atBottomRef.current = true;
     restoredRef.current = false;
     setShowScrollDown(false);
@@ -54,15 +64,13 @@ export function useChatScroll(sessionId: string, items: ChatItem[], isHistoryLoa
       }
     } catch { /* недоступен sessionStorage / старый формат */ }
     pendingRestoreRef.current = saved;
-    if (saved == null) {
-      // Открытие чата без сохранённой позиции — сразу конец ленты. Полагаться на эффект
-      // автоскролла по items нельзя: вернулись в уже загруженный чат — массив тот же по
-      // ссылке, эффект не перезапустится, и лента осталась бы там, где её отлистали.
-      const el = scrollRef.current;
-      if (el) el.scrollTop = el.scrollHeight;
-      return;
-    }
-    atBottomRef.current = false;
+    // Конец ленты — состояние по умолчанию в любом случае: и когда сохранённой позиции нет,
+    // и пока лента не доросла до сохранённой высоты. Полагаться на эффект автоскролла по
+    // items нельзя — вернулись в уже загруженный чат, массив тот же по ссылке, эффект не
+    // перезапустится, и лента осталась бы там, где её отлистали.
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+    if (saved == null) return;
     // Запись одноразовая: она валидна ровно для первого открытия чата после reload,
     // дальше чат должен открываться в конце ленты. Стираем макротаском, а не сразу —
     // StrictMode в dev перемонтирует эффект синхронно, и второй проход обязан
@@ -78,7 +86,7 @@ export function useChatScroll(sessionId: string, items: ChatItem[], isHistoryLoa
     const save = () => {
       const el = scrollRef.current;
       if (!el) return;
-      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < BOTTOM_EPS;
       try {
         if (atBottom) sessionStorage.removeItem(scrollKey);
         else sessionStorage.setItem(scrollKey, JSON.stringify({
@@ -105,19 +113,75 @@ export function useChatScroll(sessionId: string, items: ChatItem[], isHistoryLoa
   const syncScrollState = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-    atBottomRef.current = atBottom;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < BOTTOM_EPS;
+    // Отклеиваем от низа только по живому жесту; приклеиваем обратно сразу, как пользователь
+    // сам довёл ленту до конца.
+    if (atBottom || userGestureRef.current) atBottomRef.current = atBottom;
     setShowScrollDown(!atBottom);
   }, []);
 
-  // Следим за изменением высоты scroll-контейнера (resize окна, dock expand)
+  // Жесты пользователя: пока идёт жест (и 400мс после) сдвиг позиции считаем его волей —
+  // только такой сдвиг снимает прилипание к низу.
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const ro = new ResizeObserver(syncScrollState);
+    let timer = 0;
+    const mark = () => {
+      userGestureRef.current = true;
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => { userGestureRef.current = false; }, 400);
+    };
+    // Клавиатурная прокрутка идёт мимо ленты (фокуса у неё нет) — слушаем окно, но только
+    // навигационные клавиши и не во время набора текста в композере.
+    const NAV = ['PageUp', 'PageDown', 'Home', 'End', 'ArrowUp', 'ArrowDown', ' '];
+    const onKey = (e: KeyboardEvent) => {
+      if (!NAV.includes(e.key)) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      mark();
+    };
+    el.addEventListener('wheel', mark, { passive: true });
+    el.addEventListener('touchmove', mark, { passive: true });
+    el.addEventListener('mousedown', mark); // перетаскивание полосы прокрутки
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.clearTimeout(timer);
+      el.removeEventListener('wheel', mark);
+      el.removeEventListener('touchmove', mark);
+      el.removeEventListener('mousedown', mark);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, []);
+
+  // Следим за изменением высоты scroll-контейнера (composer домерился, resize окна,
+  // dock expand): область прокрутки ужимается — конец ленты уезжает, и его надо догнать.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      if (atBottomRef.current && pendingRestoreRef.current == null) el.scrollTop = el.scrollHeight;
+      syncScrollState();
+    });
     ro.observe(el);
     return () => ro.disconnect();
   }, [syncScrollState]);
+
+  // Применяем сохранённую позицию, когда лента доросла до сохранённой высоты. Пока не
+  // доросла — держим конец ленты: раньше здесь стоял min(top, текущая высота), то есть
+  // при неудачном восстановлении (лента не дорастает до записанной высоты) чат так и
+  // оставался у начала.
+  const applyRestore = useCallback(() => {
+    const el = scrollRef.current;
+    const pend = pendingRestoreRef.current;
+    if (!el || pend == null) return;
+    if (el.scrollHeight < pend.h - 50) { el.scrollTop = el.scrollHeight; return; }
+    el.scrollTop = Math.min(pend.top, el.scrollHeight - el.clientHeight);
+    restoredRef.current = true;
+    pendingRestoreRef.current = null;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < BOTTOM_EPS;
+    atBottomRef.current = atBottom;
+    setShowScrollDown(!atBottom);
+  }, []);
 
   // Прилипание к низу при росте КОНТЕНТА (асинхронный дорендер — картинки, код, markdown)
   useEffect(() => {
@@ -125,22 +189,13 @@ export function useChatScroll(sessionId: string, items: ChatItem[], isHistoryLoa
     const el = scrollRef.current;
     if (!content || !el) return;
     const ro = new ResizeObserver(() => {
-      if (!restoredRef.current && pendingRestoreRef.current != null) {
-        // Есть недовосстановленная позиция — держим её
-        const pend = pendingRestoreRef.current;
-        el.scrollTop = Math.min(pend.top, el.scrollHeight - el.clientHeight);
-        if (el.scrollHeight >= pend.h - 50) {
-          restoredRef.current = true;
-          setShowScrollDown(el.scrollHeight - el.scrollTop - el.clientHeight >= 80);
-        }
-      } else if (atBottomRef.current) {
-        el.scrollTop = el.scrollHeight;
-      }
+      if (!restoredRef.current && pendingRestoreRef.current != null) { applyRestore(); return; }
+      if (atBottomRef.current) el.scrollTop = el.scrollHeight;
       syncScrollState();
     });
     ro.observe(content);
     return () => ro.disconnect();
-  }, [syncScrollState]);
+  }, [syncScrollState, applyRestore]);
 
   const handleMessagesScroll = syncScrollState;
 
@@ -151,57 +206,33 @@ export function useChatScroll(sessionId: string, items: ChatItem[], isHistoryLoa
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
-  // restoreTick — восстановление позиции при дорендере контента
-  const restoreTick = useCallback(() => {
-    if (restoredRef.current) return;
-    const el = scrollRef.current;
-    const pend = pendingRestoreRef.current;
-    if (!el) return;
-    if (pend == null) { restoredRef.current = true; return; }
-    el.scrollTop = Math.min(pend.top, el.scrollHeight - el.clientHeight);
-    if (el.scrollHeight >= pend.h - 50) {
-      restoredRef.current = true;
-      setShowScrollDown(el.scrollHeight - el.scrollTop - el.clientHeight >= 80);
-    }
-  }, []);
-
-  // Автоскролл при новых сообщениях / восстановлении истории
-  useEffect(() => {
-    // Если есть сохранённая позиция — восстанавливаем её (не скроллим вниз)
-    if (!restoredRef.current && pendingRestoreRef.current != null) {
-      const el = scrollRef.current;
-      const pend = pendingRestoreRef.current;
-      if (el) {
-        el.scrollTop = Math.min(pend.top, el.scrollHeight - el.clientHeight);
-        if (el.scrollHeight >= pend.h - 50) {
-          restoredRef.current = true;
-          const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-          setShowScrollDown(!atBottom);
-          atBottomRef.current = atBottom;
-        } else {
-          setShowScrollDown(true);
-        }
-      }
-      return;
-    }
-    // Нет сохранённой позиции — скроллим в конец
+  // Автоскролл при новых сообщениях / приходе истории. Layout-эффект: конец ленты
+  // выставляется до отрисовки кадра, поэтому пролёта от начала не видно.
+  useLayoutEffect(() => {
+    if (!restoredRef.current && pendingRestoreRef.current != null) { applyRestore(); return; }
     if (atBottomRef.current) {
-      bottomRef.current?.scrollIntoView({ behavior: 'instant' });
+      const el = scrollRef.current;
+      if (el) el.scrollTop = el.scrollHeight;
       setShowScrollDown(false);
     } else {
       setShowScrollDown(true);
     }
-  }, [items, restoreTick]);
+  }, [items, applyRestore]);
 
-  // Финал восстановления после загрузки истории
+  // Финал восстановления после загрузки истории: даём ленте дорасти, но не дольше 5с —
+  // дальше чат живёт в обычном режиме (в конце ленты, если восстановиться не удалось).
   useEffect(() => {
     if (isHistoryLoading || restoredRef.current) return;
     if (pendingRestoreRef.current == null) { restoredRef.current = true; return; }
-    restoreTick();
-    const raf = requestAnimationFrame(restoreTick);
-    const done = window.setTimeout(() => { restoredRef.current = true; syncScrollState(); }, 5000);
+    applyRestore();
+    const raf = requestAnimationFrame(applyRestore);
+    const done = window.setTimeout(() => {
+      restoredRef.current = true;
+      pendingRestoreRef.current = null;
+      syncScrollState();
+    }, 5000);
     return () => { cancelAnimationFrame(raf); clearTimeout(done); };
-  }, [isHistoryLoading, restoreTick, syncScrollState]);
+  }, [isHistoryLoading, applyRestore, syncScrollState]);
 
   return {
     bottomRef, scrollRef, contentRef, composerWrapRef, composerH,

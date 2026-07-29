@@ -278,7 +278,16 @@ Use cases (с резолюциями), архитектура интеграци
 
 Двухрежимная observability через OTel SDK: **dev** → Aspire Dashboard (in-memory, для
 живого дебага), **production** → SigNoz (ClickHouse, persistent 30d traces / 90d metrics).
-Алерты (email/Telegram) — отдельный будущий epic, пока выключены.
+**Алерты** доставляются в уведомления CCS (колокол + тост + web push на PWA, категория
+«Алерт»): `AlertPollingService` раз в 60с опрашивает `GET /api/v1/alerts` SigNoz и шлёт
+админам новые срабатывания через существующий `NotificationService`. Опрос, а не webhook —
+боевой хост слушает HTTPS с сертом на домен, и запрос из контейнера падает по SNI.
+Правила — код (`docker/observability/alerts/*.json` + `apply-alerts.ps1`), дедупликация
+по `fingerprint` (одно правило = по алерту на серию разреза), состояние —
+`data/alert-state.json`. Рассылает только инстанс с `Telemetry:Alerts:Enabled` (подписки
+per-инстанс). Страховка на случай мёртвого CCS — email-канал самого SigNoz для правила
+«Пульс телеметрии пропал». **Max для ботов закрыт** (только верифицированные юрлица РФ) —
+см. [docs/messenger-integration.md](docs/messenger-integration.md).
 
 - **Central doc**: [docs/observability.md](docs/observability.md) — scope, архитектура,
   дублирование с существующими сторами, privacy (PII sanitizer), cardinality guardrails,

@@ -1261,7 +1261,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         {items.length === 0 && !isHistoryLoading && online && (
           effectiveGreeting ?? (
             <ChatEmptyState hasProject={!!project} hasCLAUDEmd={hasCLAUDEmd} onHint={handleHint}
-              session={session} onSessionUpdated={onSessionUpdated} isMobile={isMobile}
+              session={session} project={project} onSessionUpdated={onSessionUpdated} isMobile={isMobile}
               personas={ctxPersonas} selectedPersonaId={session.personaId} onPickPersona={handlePersonaChange} />
           )
         )}

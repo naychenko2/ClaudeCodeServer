@@ -16,19 +16,17 @@ import { joinProject, leaveProject, onMessage, onReconnected } from '../lib/sign
 import { loadWorkspaceState, saveWorkspaceState } from '../lib/workspaceState';
 import { api } from '../lib/api';
 import { C, FONT } from '../lib/design';
-import { useSidebarWidth } from '../lib/sidebarWidth';
 import { MOBILE_MAX, MOBILE_QUERY, TABLET_MAX } from '../lib/breakpoints';
 import { PillSwitch } from '../components/Toolbar';
 import { ToolbarOverflowMenu, type OverflowItem } from '../components/ToolbarOverflowMenu';
 import type { HubTabValue } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
-import { BackButton, Button, IconButton, Splitter, SidebarSplitter } from '../components/ui';
+import { BackButton, Button, IconButton } from '../components/ui';
 import { CanvasBackdrop } from '../components/ui/CanvasBackdrop';
 import { ICON_SIZE, ICON_STROKE } from '../components/ui/icons';
 import { showToast } from '../lib/toast';
 import { navPush, navReplace, parseHash, type NavSnapshot } from '../lib/nav';
 import { EditDialog } from '../features/projects/dialogs/EditDialog';
-import { SidebarProjectSwitcher } from '../features/projects/SidebarProjectSwitcher';
 import { TasksPanel } from '../features/tasks/TasksPanel';
 import { PillViewSwitcher, ListIcon, ByDateIcon, BoardIcon } from '../features/tasks/bits';
 import { TasksListFilterButton, applyTaskFilters } from '../features/tasks/TasksListFilter';
@@ -253,7 +251,6 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
   // (файл/задача/чат) закрывает граф. Открывается из панели «Граф» в рельсе.
   const [graphOpen, setGraphOpen] = useState(false);
   const [fileFullscreen, setFileFullscreen] = useState(() => loadWorkspaceState(project.id)?.fileFullscreen ?? false);
-  const [chatFlex, setChatFlex] = useState(1); // 1:1 = 50/50 по умолчанию
   const [workflowRunningFor, setWorkflowRunningFor] = useState<string | null>(null);
   const [showUsage, setShowUsage] = useState(false);
   // Ссылка «Подробная статистика» в pop-up бейджа fal.ai открывает единый экран «Использование»
@@ -439,7 +436,6 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
       return prev === sessionId ? null : prev;
     });
   }, []);
-  const splitContainerRef = useRef<HTMLDivElement>(null);
   const [indexedFileNames, setIndexedFileNames] = useState<Set<string>>(new Set());
   const [knowledgeDocMap, setKnowledgeDocMap] = useState<Map<string, string>>(new Map()); // filename → docId
   const [indexingFiles, setIndexingFiles] = useState<Set<string>>(new Set());
@@ -486,9 +482,6 @@ const windowWidth = useWindowWidth();
   const viewportH = useViewportHeight();
   const isMobile = windowWidth <= MOBILE_MAX;
   const isTablet = windowWidth > MOBILE_MAX && windowWidth <= TABLET_MAX;
-  // Интерфейс «как десктопный Claude Code» — десктоп и планшет (на планшете —
-  // упрощённый solo-вариант внутри DesktopWorkspace); мобилка остаётся на старом UX
-  const ccPanelsMode = !isMobile;
   // Выбранный в панельке «Preview» сервис — его окно живёт в центре нового режима
   const ccActivePreview = previewServices.find(s => s.id === activePreviewId) ?? null;
 
@@ -824,49 +817,9 @@ const windowWidth = useWindowWidth();
     return () => window.removeEventListener('cc-pending-project-chat', consumePendingProjectChat);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.id]);
-  // Ширина сайдбара — общая для всех областей (перетаскиваемая, персистится)
-  const [sidebarWidth, setSidebarWidth] = useSidebarWidth();
-
-  // Режим сайдбара: pinned (в потоке) | collapsed (свёрнут). Сворачивание — кнопкой
-  // на сплиттере, разворот — гамбургером обратно в поток.
-  const [sidebarMode, setSidebarMode] = useState<'pinned' | 'collapsed'>(() => {
-    const v = localStorage.getItem('cc_sidebar_mode');
-    return v === 'collapsed' ? 'collapsed' : 'pinned';
-  });
-  useEffect(() => {
-    localStorage.setItem('cc_sidebar_mode', sidebarMode);
-  }, [sidebarMode]);
-
-  // Артефакты сессии живут в правой рельсе (RightPanelStack): открытие панелей и их
-  // ширина хранятся в сторе панелей, отдельного состояния здесь не нужно.
-
-  // Какой сплиттер сейчас тащим — для подсветки на всём протяжении drag (даже если курсор соскользнул)
-  const [draggingSplitter, setDraggingSplitter] = useState<null | 'sidebar' | 'split'>(null);
-  useEffect(() => {
-    if (!draggingSplitter) return;
-    const up = () => setDraggingSplitter(null);
-    window.addEventListener('pointerup', up);
-    return () => window.removeEventListener('pointerup', up);
-  }, [draggingSplitter]);
-
-  const handleSidebarSplitterMouseDown = (e: React.PointerEvent) => {
-    e.preventDefault();
-    const startX = e.clientX;
-    const startW = sidebarWidth;
-    const onMove = (ev: PointerEvent) => {
-      setSidebarWidth(Math.max(220, Math.min(520, startW + (ev.clientX - startX))));
-    };
-    const onUp = () => {
-      document.removeEventListener('pointermove', onMove);
-      document.removeEventListener('pointerup', onUp);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-    };
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-    document.addEventListener('pointermove', onMove);
-    document.addEventListener('pointerup', onUp);
-  };
+  // Сайдбар, его ширина и сплиттеры жили здесь, пока десктоп рисовался этим
+  // компонентом. Теперь десктоп и планшет — DesktopWorkspace с рельсами панелей
+  // (ширина и сворачивание в состоянии зон), а мобильная ветка сайдбара не имеет.
 
   // Документ «Граф»: крестик → центр к чату
   const handleGraphClose = useCallback(() => {
@@ -1156,32 +1109,9 @@ const windowWidth = useWindowWidth();
   };
 
   const handleEnterFullscreen = () => setFileFullscreen(true);
-  const handleExitFullscreen = () => setFileFullscreen(false);
 
-  const handleSplitterMouseDown = (e: React.PointerEvent) => {
-    e.preventDefault();
-    const container = splitContainerRef.current;
-    if (!container) return;
-    const rect = container.getBoundingClientRect();
-    const SPLITTER = 5;
-
-    const onMove = (ev: PointerEvent) => {
-      const available = rect.width - SPLITTER;
-      const chatW = Math.max(200, Math.min(available - 200, ev.clientX - rect.left));
-      const fileW = available - chatW;
-      if (fileW > 0) setChatFlex(chatW / fileW);
-    };
-    const onUp = () => {
-      document.removeEventListener('pointermove', onMove);
-      document.removeEventListener('pointerup', onUp);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-    };
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-    document.addEventListener('pointermove', onMove);
-    document.addEventListener('pointerup', onUp);
-  };
+  // Пропорция split-режима «чат | файл» и её сплиттер живут в DesktopWorkspace —
+  // мобильная ветка split не показывает
 
   const handleTabSwitch = (tab: LeftTab) => {
     setLeftTab(tab);
@@ -1250,57 +1180,6 @@ const windowWidth = useWindowWidth();
     onStopPreview: stopService,
   };
 
-  const Sidebar = (
-    <div style={{ width: '100%', display: 'flex', flexDirection: 'column', background: C.bgPanel, flexShrink: 0, height: '100%' }}>
-      {/* Планшет/десктоп: строка управления панелью + строка проекта + tabs (логотип — в HubHeader) */}
-      {!isMobile && (
-        <div style={{ padding: '8px 10px 14px', flexShrink: 0 }}>
-          {/* Строка проекта: кликабельное имя (→ к списку) + управление + пин панели.
-              Выровнено с заголовками других панелек (напр. «Чаты»): minHeight 28, край без
-              лишнего padding; hover-подложка кликабельной зоны компенсируется margin -6, чтобы
-              иконка/текст стояли вровень с краем панели, а фон при наведении чуть выступал. */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 13, minHeight: 28 }}>
-            {/* Плашка проекта = переключатель проектов: таблетка активного +
-                иконки других со статусами + палитра; настройки открываются
-                кликом по иконке активного проекта */}
-            <SidebarProjectSwitcher project={projectForEdit} onOpenSettings={() => setEditProjectOpen(true)} />
-          </div>
-          <PillSwitch<LeftTab>
-            value={leftTab}
-            options={leftTabOptions}
-            onChange={handleTabSwitch}
-            fill
-            autoCompact
-          />
-        </div>
-      )}
-      <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-        {leftTab === 'sessions' ? (
-          <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} onCleared={handleClearSession} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} />
-        ) : leftTab === 'tasks' ? (
-          <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={isMobile} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} groupTab={projectGroupTab} onGroupTab={setProjectGroupTab} filters={taskListFilters} onFilters={setTaskListFilters} />
-        ) : leftTab === 'personas' ? (
-          <ProjectPersonasPanel project={project} selectedId={personaCreating ? null : selectedPersonaId} onSelect={handlePersonaSelect} onNew={handlePersonaNew} onShowTeam={handleShowTeam} teamActive={!selectedPersonaId && !personaCreating} />
-        ) : leftTab === 'tools' ? (
-          <ToolsSidebar projectId={project.id} activeTab={toolsTab} onTabChange={setToolsTab}
-            terminals={terminals} onCreateTerminal={handleCreateTerminal}
-            onStopTerminal={handleStopTerminal} onRenameTerminal={handleRenameTerminal}
-            activeTerminalId={activeTerminalId} onSelectTerminal={handleSelectTerminal}
-            activePreviewId={activePreviewId} previewServices={previewServices}
-            onRefreshServices={refreshServices} onStartService={startService}
-            onStopService={stopService} onSelectPreview={handleSelectPreview}
-            terminalBusy={terminalBusy} />
-        ) : (
-          <div style={{ flex: 1, overflow: 'hidden' }}>
-            {fileSubTab === 'files'
-              ? <FileExplorer project={project} activeFilePath={openFile} isMobile={isMobile} alwaysShowIcons={isTablet} onOpenFile={(f) => { handleOpenFileFromTree(f); if (isMobile) setMobileView('chat'); }} onOpenGitDiff={handleOpenGitDiff} onOpenCommit={handleOpenCommit} onAddToKnowledge={handleAddToKnowledge} onAddFolderToKnowledge={handleAddFolderToKnowledge} onRemoveFromKnowledge={handleRemoveFromKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} indexingFolders={indexingFolders} onAttachToChat={activeSession && !fileFullscreen ? handleAttachToChat : undefined} onOpenKnowledge={() => setFileSubTab('knowledge')} />
-              : <KnowledgePanel project={project} isMobile={isMobile} alwaysShowIcons={isTablet} onDocumentsChanged={setIndexedFileNames} onBack={() => setFileSubTab('files')} />
-            }
-          </div>
-        )}
-      </div>
-    </div>
-  );
 
   // Пустое состояние центра (нет активного чата) — единый вид для мобилки и десктопа.
   // Создание чата только по клику: авто-создание при заходе убрано.
@@ -1458,9 +1337,7 @@ const windowWidth = useWindowWidth();
       {/* Тело: сайдбар + контент. position:relative — чтобы drawer/overlay легли под хедер */}
       <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden', position: 'relative' }}>
 
-      {/* Флаг workspace-cc-panels: альтернативное тело «как десктопный Claude Code»
-          (слева только чаты, справа рельса + стек панелей); выключен → всё как раньше */}
-      {ccPanelsMode ? (
+      {/* Тело десктопа и планшета: рельсы панелей по краям, центр между ними */}
         <DesktopWorkspace
           isTablet={isTablet}
           project={project}
@@ -1564,149 +1441,6 @@ const windowWidth = useWindowWidth();
             ),
           }}
         />
-      ) : (
-        <>
-
-      {/* === Pinned: sidebar в flex-потоке + сплиттер с кнопкой «свернуть» === */}
-      {sidebarMode === 'pinned' && (
-        <>
-          <div style={{ width: sidebarWidth, flexShrink: 0, height: '100%' }}>
-            {Sidebar}
-          </div>
-          <SidebarSplitter active={draggingSplitter === 'sidebar'}
-            onMouseDown={e => { setDraggingSplitter('sidebar'); handleSidebarSplitterMouseDown(e); }}
-            onCollapse={() => setSidebarMode('collapsed')} />
-        </>
-      )}
-
-      {/* Проп для ChatPanel — разворачивает свёрнутый sidebar в поток */}
-      {(() => {
-        const openSidebar = sidebarMode !== 'pinned' ? () => setSidebarMode('pinned') : undefined;
-
-        // NoSession с топбаром для ☰ (когда нет активного чата)
-        const NoSessionWithBar = (
-          <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-            {sidebarMode === 'collapsed' && (
-              <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', padding: '0 8px', height: 52, borderBottom: `1px solid ${C.divider}`, background: C.bgMain }}>
-                <IconButton
-                  size="md"
-                  variant="soft"
-                  onClick={() => setSidebarMode('pinned')}
-                  title="Открыть панель"
-                >
-                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-                    <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
-                  </svg>
-                </IconButton>
-              </div>
-            )}
-            {NoSession}
-          </div>
-        );
-
-        // Вкладка «Инструменты»: центральная зона = TerminalView или PreviewView
-        if (leftTab === 'tools') {
-          const collapsedBar = sidebarMode === 'collapsed' && (
-            <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', padding: '0 8px', height: 52, borderBottom: `1px solid ${C.divider}`, background: C.bgMain }}>
-              <IconButton size="md" variant="soft" onClick={() => setSidebarMode('pinned')} title="Открыть панель">
-                <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-                  <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
-                </svg>
-              </IconButton>
-            </div>
-          );
-          return (
-            <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-              {collapsedBar}
-              <ToolsPaneView {...toolsPaneProps} />
-            </div>
-          );
-        }
-
-        if (personasMode) {
-          const collapsedBar = sidebarMode === 'collapsed' && (
-            <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', padding: '0 8px', height: 52, borderBottom: `1px solid ${C.divider}`, background: C.bgMain }}>
-              <IconButton size="md" variant="soft" onClick={() => setSidebarMode('pinned')} title="Открыть панель">
-                <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-                  <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
-                </svg>
-              </IconButton>
-            </div>
-          );
-          return (
-            <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-              {collapsedBar}
-              <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
-                {(selectedPersonaId || personaCreating)
-                  ? <ProjectPersonaPane project={project} personaId={personaCreating ? null : selectedPersonaId} creating={personaCreating} initialView={pendingPersonaView} onOpenChat={handleOpenPersonaChat} onSelectPersona={handlePersonaSelectAfterCreate} onCleared={handlePersonaCleared} />
-                  : <TeamCommandCenter project={project} onOpenPersona={handlePersonaSelect} onNewPersona={handlePersonaNew} onOpenSession={handleOpenPersonaChat} onOpenSessionById={handleOpenTaskSession} />}
-              </div>
-            </div>
-          );
-        }
-
-        // Вкладка «Инструменты» — сразу ToolsPane, не трогаем openFile/selectedTask
-        if ((leftTab as string) === 'tools') {
-          return <ToolsPaneView {...toolsPaneProps} />;
-        }
-
-        return (
-          <>
-            {/* Коммит из git-«Истории» — просмотр в основной зоне (приоритет над чатом/задачей) */}
-            {!openFile && openCommitSha && (
-              <div style={{ flex: 1, overflow: 'hidden', display: 'flex' }}>
-                <GitCommitView project={project} sha={openCommitSha} initialPath={openCommitFile} onClose={closeCommitView} />
-              </div>
-            )}
-
-            {/* Открытая задача — карточка в основной зоне (как открытый файл), ✕ возвращает чат */}
-            {!openFile && !openCommitSha && selectedTask && (
-              <div style={{ flex: 1, overflow: 'hidden' }}>
-                <TaskDetailsPane key={selectedTask.id} task={selectedTask} project={project} startInEdit={selectedTask.id === autoEditTaskId} onOpenSession={handleOpenTaskSession} onOpenFile={handleOpenFileFromTree} onClose={backFromTask} onDeleted={backFromTask} />
-              </div>
-            )}
-
-            {/* Нет открытого файла и задачи — доска задач проекта, иначе чат, иначе инструменты */}
-            {!openFile && !openCommitSha && !selectedTask && (
-              <div style={{ flex: 1, overflow: 'hidden' }}>
-                {showProjectBoard
-                  ? ProjectBoardArea
-                  : activeSession
-                  ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onWorkflowRunning={handleWorkflowRunning} onOpenSidebar={openSidebar} skills={composerSkills} agents={skillsData?.agents} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} />
-                  : NoSessionWithBar}
-              </div>
-            )}
-
-            {/* Split: файл из чата, только на десктопе */}
-            {openFile && !fileFullscreen && !isTablet && (
-              <div ref={splitContainerRef} style={{ flex: 1, display: 'flex', overflow: 'hidden', minWidth: 0 }}>
-                <div style={{ flex: chatFlex, overflow: 'hidden', minWidth: 200 }}>
-                  {activeSession
-                    ? <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onWorkflowRunning={handleWorkflowRunning} onOpenSidebar={openSidebar} skills={composerSkills} agents={skillsData?.agents} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} />
-                    : NoSessionWithBar}
-                </div>
-                <Splitter orientation="v" active={draggingSplitter === 'split'}
-                  onMouseDown={e => { setDraggingSplitter('split'); handleSplitterMouseDown(e); }} />
-                <div style={{ flex: 1, overflow: 'hidden', minWidth: 200 }}>
-                  <FileViewer project={project} filePath={openFile} onClose={backFromFile} onToggleFullscreen={handleEnterFullscreen} fullscreen={fileFullscreen} onOpenSidebar={openSidebar} initialTab={openFileDiffMode ? 'diff' : undefined} gitStagePath={gitStagePath ?? undefined} />
-                </div>
-              </div>
-            )}
-
-            {/* Fullscreen: файл из дерева или планшет */}
-            {openFile && (fileFullscreen || isTablet) && (
-              <div style={{ flex: 1, overflow: 'hidden' }}>
-                {/* На планшете split недоступен (isTablet форсирует full, ветка сплита выше
-                    не рендерится) — входа в режим нет, поэтому и переключателя не показываем */}
-                <FileViewer project={project} filePath={openFile} onClose={backFromFile} onToggleFullscreen={isTablet ? undefined : handleExitFullscreen} fullscreen={fileFullscreen || isTablet} onOpenSidebar={openSidebar} initialTab={openFileDiffMode ? 'diff' : undefined} gitStagePath={gitStagePath ?? undefined} />
-              </div>
-            )}
-          </>
-        );
-      })()}
-
-        </>
-      )}
 
       </div>
 

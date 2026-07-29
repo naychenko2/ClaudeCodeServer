@@ -2,7 +2,7 @@ import { useSyncExternalStore } from 'react';
 
 // Закреплённые и недавние проекты для быстрого переключения в шапке (зона «Проекты»
 // + палитра). Храним только id — сами проекты берём из api.projects.list(). Клиентский
-// стор по образцу lib/sidebarWidth.ts: модульное состояние + подписчики + localStorage +
+// стор по образцу pages/workspace/panelStackState.ts: модульное состояние + подписчики + localStorage +
 // синхронизация между вкладками. Серверную модель Project не трогаем.
 
 const PINNED_KEY = 'cc_pinned_projects';   // порядок = порядок закрепления

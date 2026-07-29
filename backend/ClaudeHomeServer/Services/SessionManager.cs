@@ -959,9 +959,9 @@ public class SessionManager : IDisposable
             ? persona.ProjectId
             : contextProjectId;
 
-        // Персона без своей модели наследует назначение места «чат с персоной»
+        // Персона без своей модели идёт своим уровнем, без уровня — назначением места «чат с персоной»
         var personaModel = ResolveDefaultModel(Llm.LocalActionCatalog.ChatPersona,
-            persona.Model, resumeSessionId, ownerId);
+            _assignments.PersonaModel(persona, ownerId), resumeSessionId, ownerId);
 
         if (!string.IsNullOrEmpty(targetProjectId)
             && _projects.GetById(targetProjectId) is { } project && project.OwnerId == ownerId)
@@ -1012,9 +1012,9 @@ public class SessionManager : IDisposable
         var participants = ValidateParticipants(ownerId, personaIds);
         var leader = participants[0];
         var participantIds = participants.Select(p => p.Id).ToList();
-        // Ведущая без своей модели наследует назначение места «чат с персоной»
+        // Ведущая без своей модели идёт своим уровнем, без уровня — назначением места «чат с персоной»
         var leaderModel = ResolveDefaultModel(Llm.LocalActionCatalog.ChatPersona,
-            leader.Model, resumeSessionId: null, ownerId);
+            _assignments.PersonaModel(leader, ownerId), resumeSessionId: null, ownerId);
 
         if (leader.Scope == PersonaScope.Project && !string.IsNullOrEmpty(leader.ProjectId)
             && _projects.GetById(leader.ProjectId) is { } project && project.OwnerId == ownerId)
@@ -1547,22 +1547,28 @@ public class SessionManager : IDisposable
         entry.Info.AgentName = newAgentName;
         if (persona is not null)
         {
+            // Модель персоны: своя сильнее её уровня (уровень уже развёрнут в модель по
+            // слотам владельца) — дальше по тексту работаем только с этим значением.
+            // Владелец — ТОЛЬКО через ResolveOwnerId: у проектной сессии Session.OwnerId
+            // равен null (он живёт у проекта), и личные слоты тиров молча подменялись бы
+            // глобальными — см. комментарий у GetActiveTurnDelegation
+            var personaModel = _assignments.PersonaModel(persona, ResolveOwnerId(entry.Info));
             if (!started)
             {
                 // ?? — а не присваивание в лоб: у персоны без своей модели чат остаётся на той,
                 // что уже подставлена при создании (глобальная «модель по умолчанию»).
                 // Раньше здесь её затирало в null, и назначение персоны в свежий чат молча
                 // возвращало ход к дефолту CLI (заметнее всего в MCP chats_create + personaId)
-                entry.Info.Model = persona.Model ?? entry.Info.Model;
+                entry.Info.Model = personaModel ?? entry.Info.Model;
                 entry.Info.Effort = persona.Effort ?? entry.Info.Effort;
             }
-            else if (_llmProviders.ProviderKey(persona.Model) == _llmProviders.ProviderKey(entry.Info.Model)
-                && _subscriptionPool.SupportsModel(entry.Info.Provider ?? ClaudeSubscriptionPool.PrimaryKey, persona.Model))
+            else if (_llmProviders.ProviderKey(personaModel) == _llmProviders.ProviderKey(entry.Info.Model)
+                && _subscriptionPool.SupportsModel(entry.Info.Provider ?? ClaudeSubscriptionPool.PrimaryKey, personaModel))
             {
                 // Тот же провайдер И подписка сессии способна обслужить модель персоны —
                 // модель применяется со следующего хода; иначе оставляем модель сессии
                 // (характер всё равно её): пин Opus на аккаунте без Opus валил бы ход
-                entry.Info.Model = persona.Model ?? entry.Info.Model;
+                entry.Info.Model = personaModel ?? entry.Info.Model;
                 entry.Info.Effort = persona.Effort ?? entry.Info.Effort;
             }
         }

@@ -548,6 +548,77 @@ public class LocalActionRoutingTests
     }
 
     [Fact]
+    public void Resolver_УровеньВместоМодели_РазворачиваетсяВМодельСлота()
+    {
+        // Уровень задачи/персоны приходит маркером «tier:*» — резолвер обязан развернуть его
+        // в модель слота, иначе маркер ушёл бы в --model и осел в сессии
+        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });
+        var appSettings = new AppSettingsService(config);
+        appSettings.Save(new AppSettings { ModelTierStrong = "opus", ModelTierWeak = "haiku" });
+        var resolver = new ModelAssignmentResolver(appSettings, Store(config));
+
+        Assert.Equal("opus", resolver.Resolve(LocalActionCatalog.TasksExecutor, "tier:strong"));
+        Assert.Equal("haiku", resolver.Resolve(LocalActionCatalog.TasksExecutor, "tier:weak"));
+    }
+
+    [Fact]
+    public void Resolver_УровеньВместоМодели_ЛичныйСлотВладельца()
+    {
+        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });
+        var appSettings = new AppSettingsService(config);
+        appSettings.Save(new AppSettings { ModelTierStrong = "global-opus" });
+        var users = new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
+        var user = users.Add("u1", "password123", "user");
+        users.SetModelTiers(user.Id, strong: "user-opus", null, null);
+        var resolver = new ModelAssignmentResolver(appSettings, Store(config),
+            new UserModelTierResolver(users, appSettings));
+
+        Assert.Equal("user-opus", resolver.Resolve(LocalActionCatalog.TasksExecutor, "tier:strong", user.Id));
+        // Владелец без своего слота — глобальный слот инстанса
+        Assert.Equal("global-opus", resolver.Resolve(LocalActionCatalog.TasksExecutor, "tier:strong", "no-such-user"));
+    }
+
+    [Fact]
+    public void Resolver_УровеньВместоМодели_ПустойСлот_УходитНаНазначениеМеста()
+    {
+        // Слот не настроен — маркер наружу не отдаём (CLI его не поймёт): место идёт
+        // своим назначением, как будто уровень и не задавали
+        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });
+        var appSettings = new AppSettingsService(config);
+        appSettings.Save(new AppSettings { ModelTierMedium = "sonnet" });
+        var store = Store(config);
+        store.Set(LocalActionCatalog.TasksExecutor, "tier:medium");
+        var resolver = new ModelAssignmentResolver(appSettings, store);
+
+        Assert.Equal("sonnet", resolver.Resolve(LocalActionCatalog.TasksExecutor, "tier:strong"));
+    }
+
+    [Fact]
+    public void Resolver_МодельПерсоны_СвояСильнееУровня_УровеньСильнееМеста()
+    {
+        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });
+        var appSettings = new AppSettingsService(config);
+        appSettings.Save(new AppSettings { ModelTierStrong = "opus", ModelTierMedium = "sonnet" });
+        var users = new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
+        var user = users.Add("u1", "password123", "user");
+        users.SetModelTiers(user.Id, null, null, weak: "user-haiku");
+        var resolver = new ModelAssignmentResolver(appSettings, Store(config),
+            new UserModelTierResolver(users, appSettings));
+
+        // Явная модель персоны сильнее её уровня
+        Assert.Equal("glm-5.2", resolver.PersonaModel(
+            new Persona { Model = "glm-5.2", ModelTier = ModelTier.Weak }, user.Id));
+        // Без своей модели — уровень персоны, развёрнутый по слотам ВЛАДЕЛЬЦА (не маркер)
+        Assert.Equal("user-haiku", resolver.PersonaModel(
+            new Persona { ModelTier = ModelTier.Weak }, user.Id));
+        Assert.Equal("opus", resolver.PersonaModel(new Persona { ModelTier = ModelTier.Strong }, user.Id));
+        // Ни модели, ни уровня — null: место решает само
+        Assert.Null(resolver.PersonaModel(new Persona(), user.Id));
+        Assert.Equal("opus", resolver.Resolve(LocalActionCatalog.ChatPersona,
+            resolver.PersonaModel(new Persona(), user.Id), user.Id));
+    }
+
+    [Fact]
     public void Resolver_БезНазначения_СлотКаталога()
     {
         var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });

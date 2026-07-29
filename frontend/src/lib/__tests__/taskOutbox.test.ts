@@ -74,6 +74,13 @@ describe('applyUpdateLocally — зеркало семантики TaskManager.U
     expect(cleared.dueDate).toBe('2026-07-10');   // не менялось
   });
 
+  it('уровень модели: значение ставится, "" сбрасывает', () => {
+    const strong = applyUpdateLocally(base, { modelTier: 'strong' });
+    expect(strong.modelTier).toBe('strong');
+    expect(applyUpdateLocally(strong, { modelTier: '' }).modelTier).toBeUndefined();
+    expect(applyUpdateLocally(strong, { title: 'X' }).modelTier).toBe('strong');   // не трогали
+  });
+
   it('reminderMinutes < 0 убирает напоминание', () => {
     const r = applyUpdateLocally(base, { reminderMinutes: -1 });
     expect(r.reminderMinutes).toBeUndefined();

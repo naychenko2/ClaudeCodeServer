@@ -14,9 +14,33 @@ public sealed class ModelAssignmentResolver(
     LocalActionOverridesStore? store = null,
     UserModelTierResolver? userTiers = null)
 {
+    /// <summary>
+    /// Модель персоны как «явная» для места: своя модель сильнее её уровня, уровень —
+    /// сильнее назначения места (тот же порядок, что у исполнителя задач). Уровень
+    /// разворачиваем сразу в модель: маркер «tier:*» наружу не отдаём, иначе он осел бы
+    /// в Session.Model. null — ни модели, ни уровня (или слот пуст): решает место.
+    /// </summary>
+    public string? PersonaModel(Models.Persona? persona, string? ownerId = null)
+    {
+        if (!string.IsNullOrWhiteSpace(persona?.Model)) return persona.Model;
+        if (persona?.ModelTier is not { } tier) return null;
+        var model = userTiers?.ModelFor(tier, ownerId) ?? appSettings.TierModel(tier);
+        return string.IsNullOrWhiteSpace(model) ? null : model;
+    }
+
     public string? Resolve(string usageKey, string? explicitModel = null, string? ownerId = null)
     {
-        if (!string.IsNullOrWhiteSpace(explicitModel)) return explicitModel;
+        if (!string.IsNullOrWhiteSpace(explicitModel))
+        {
+            // Вместо имени модели вызывающий мог задать УРОВЕНЬ («tier:strong» — уровень задачи
+            // или персоны-исполнителя). Разворачиваем здесь: склейка слотов остаётся в одной
+            // точке (UserModelTierResolver), а маркер не оседает в сессии и не течёт наружу.
+            if (LocalActionOverridesStore.ParseTierRoute(explicitModel.Trim()) is not { } explicitTier)
+                return explicitModel;
+            var explicitTierModel = userTiers?.ModelFor(explicitTier, ownerId) ?? appSettings.TierModel(explicitTier);
+            if (!string.IsNullOrWhiteSpace(explicitTierModel)) return explicitTierModel;
+            // Слот пуст — маркер наружу не отдаём (CLI его не поймёт): место идёт своим назначением
+        }
 
         var action = LocalActionCatalog.Find(usageKey);
         if (store?.TryGet(usageKey) is { } assigned && !string.IsNullOrWhiteSpace(assigned))

@@ -145,10 +145,20 @@ Claude Design проект: `52adb1f7-312b-4f25-8c47-2bccfca9df94`
   `chat-new`, `chat-persona`, `tasks-executor`, `subagent-consultant`, `modules-llm` — им
   локаль и `direct:`-модели недоступны, резолвит `ModelAssignmentResolver`; фоновым —
   `CheapTextRunner` по маршруту. Пустая модель сущности (`Session.Model`, `Persona.Model`) =
-  «по назначению места»; явная модель и пины пантеона сильнее. Шлюз на границе запуска —
-  `ClaudeSession.EffectiveModel` (ключ места по сессии) и `OneShotClaudeRunner.ResolveModel`
-  (резолв ДО `BuildCliEnv`, `NormalizeModel` — ПОСЛЕ). Значение в сессии не фиксируется:
-  `Model = null` резолвится каждый ход, смена настройки подхватывается сама.
+  «по назначению места»; явная модель и пины пантеона сильнее. **Уровень (тир) можно задать
+  точечно** — `TaskItem.ModelTier` и `Persona.ModelTier` (`strong|medium|weak`, пусто = место):
+  у исполнения задачи порядок `задача → Persona.Model → Persona.ModelTier → место`
+  (`TaskExecutionService.ResolveExecutorModel`), у чатов персоны, групповых чатов, смены
+  спикера и `PersonaAskService` — `Persona.Model → Persona.ModelTier → место`
+  (`ModelAssignmentResolver.PersonaModel`, владельца резолвить только через
+  `SessionManager.ResolveOwnerId`). Значения приходят и из MCP от LLM-постановщика, поэтому
+  разбор — белый список трёх имён (`ModelTiers.TryParse`), не `Enum.TryParse`.
+  Шлюз на границе запуска — `ClaudeSession.EffectiveModel` (ключ места по сессии) и
+  `OneShotClaudeRunner.ResolveModel` (резолв ДО `BuildCliEnv`, `NormalizeModel` — ПОСЛЕ).
+  Значение в сессии не фиксируется: `Model = null` резолвится каждый ход, смена настройки
+  подхватывается сама. Заданный уровень — исключение: он разворачивается в модель при
+  создании сессии (`SessionManager.ResolveDefaultModel`) и дальше живёт как обычная явная
+  модель чата, поэтому смена слота задним числом на уже начатый чат не влияет.
 
 Фоновые one-shot действия (теги, сводки, память, changelog…) считаются дёшево по цепочке
 «выбранное → локальная Ollama → claude» (`LocalActionRouter` + `CheapTextRunner`, каталог —

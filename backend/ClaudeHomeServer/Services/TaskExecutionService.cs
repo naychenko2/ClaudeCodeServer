@@ -7,6 +7,18 @@ using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Services;
 
+/// <summary>
+/// Алиасы тиров моделей владельца (opus/sonnet/haiku) для таблицы уровней в постановке.
+/// Пустой алиас = за слотом стоит модель, чей тир алиасом не выражается (сторонний
+/// провайдер, незнакомый ID) — строку уровня в промпт не выводим, чтобы не врать.
+/// </summary>
+internal sealed record ModelTierAliases(string? Strong, string? Medium, string? Weak)
+{
+    public static readonly ModelTierAliases None = new(null, null, null);
+
+    public bool Any => Strong is not null || Medium is not null || Weak is not null;
+}
+
 // Claude-исполнитель задач: запускает отдельную чат-сессию по задаче (кнопкой или
 // автозапуском по сроку), следит за её ходом через SessionManager.OnSessionMessage
 // и уведомляет пользователя (тост + push) о завершении и запросах разрешений.
@@ -20,14 +32,30 @@ public class TaskExecutionService
     private readonly NotificationService _notif;
     private readonly NotesKnowledgeService _kb;
     private readonly ILogger<TaskExecutionService> _log;
+    // Слоты тиров владельца + реестр провайдеров: только ради алиасов в таблице уровней
+    // постановки (какой model= передавать в Task). null — постановка без этой таблицы.
+    private readonly Llm.UserModelTierResolver? _tiers;
+    private readonly Llm.LlmProviderRegistry? _providers;
+    // Справочник профилей категорий: даёт абсолютный путь для ссылки в постановке
+    // и гарантирует, что файл на диске есть. null — ссылки в промпте не будет.
+    private readonly PersonaAgentFileSync? _agentFiles;
+    // Среда исполнения владельца: путь справочника в постановке должен быть адресуем
+    // ИЗ неё, а не с хоста. null — считаем среду локальной (перевод тождественный).
+    private readonly Execution.ILauncherFactory? _launchers;
 
     public TaskExecutionService(
         TaskManager tasks, SessionManager sessions, PersonaManager personas,
         IHubContext<SessionHub> hub, PushService push,
         NotesKnowledgeService kb,
         NotificationService notif,
-        ILogger<TaskExecutionService> log, IConfiguration config)
+        ILogger<TaskExecutionService> log, IConfiguration config,
+        Llm.UserModelTierResolver? tiers = null, Llm.LlmProviderRegistry? providers = null,
+        PersonaAgentFileSync? agentFiles = null, Execution.ILauncherFactory? launchers = null)
     {
+        _tiers = tiers;
+        _providers = providers;
+        _agentFiles = agentFiles;
+        _launchers = launchers;
         _tasks = tasks;
         _sessions = sessions;
         _personas = personas;
@@ -72,10 +100,7 @@ public class TaskExecutionService
         }
 
         var name = "Задача: " + (task.Title.Length > 60 ? task.Title[..60] + "…" : task.Title);
-        // Модель исполнителя — только от персоны; пусто → сессия подставит глобальную
-        // «модель по умолчанию» (прежний конфиг Tasks:ExecutorModel убран: он молча
-        // перебивал бы её и был мёртвым — в appsettings его никто не задавал)
-        var model = persona?.Model;
+        var model = ResolveExecutorModel(task, persona);
         // taskExecution: true — форсирует tasks-MCP даже у персоны с ограничением Persona.Tools
         // (без «tasks»): исполнитель обязан управлять задачей через mcp__tasks__*.
         var session = task.ProjectId is not null
@@ -89,7 +114,8 @@ public class TaskExecutionService
             ?? throw new InvalidOperationException("Задача удалена");
         await _hub.BroadcastTaskChangedAsync(task.OwnerId, "updated", updated);
 
-        var prompt = BuildPrompt(updated, persona);
+        var prompt = BuildPrompt(updated, persona, ResolveTierAliases(task.OwnerId),
+            ResolveCategoryProfilesPath(task));
         // Обогащение контекста семантически близкими заметками
         prompt += await BuildNotesContextAsync(updated);
         await _sessions.SendMessageAsync(session.Id, prompt, [], auto: true, senderPersonaId: persona?.Id);
@@ -110,12 +136,63 @@ public class TaskExecutionService
         return updated;
     }
 
+    /// <summary>
+    /// Модель чата-исполнителя: уровень задачи (её ставит постановщик под конкретную работу)
+    /// сильнее конкретной модели персоны, та — сильнее уровня персоны. Уровень отдаём маркером
+    /// «tier:*»: в модель его развернёт ModelAssignmentResolver (единая точка склейки слотов).
+    /// null — модель не задана: сессия возьмёт её по назначению места (tasks-executor).
+    /// </summary>
+    internal static string? ResolveExecutorModel(TaskItem task, Persona? persona)
+    {
+        if (task.ModelTier is { } taskTier) return Llm.LocalActionOverridesStore.TierRoute(taskTier);
+        if (!string.IsNullOrWhiteSpace(persona?.Model)) return persona.Model;
+        return persona?.ModelTier is { } personaTier
+            ? Llm.LocalActionOverridesStore.TierRoute(personaTier)
+            : null;
+    }
+
+    // Алиасы тиров владельца для таблицы уровней в постановке: слот → модель → её алиас
+    // (пин алиаса, а не ID — он резолвится у любого провайдера, см. PersonaAgentFileSync)
+    private ModelTierAliases ResolveTierAliases(string? ownerId)
+    {
+        if (_tiers is null || _providers is null) return ModelTierAliases.None;
+        string? Alias(ModelTier tier) =>
+            PersonaAgentFileSync.ModelAliasFor(_providers, _tiers.ModelFor(tier, ownerId));
+        return new ModelTierAliases(Alias(ModelTier.Strong), Alias(ModelTier.Medium), Alias(ModelTier.Weak));
+    }
+
+    // Путь справочника категорий для ссылки в постановке. Бэкенд работает с хостовыми
+    // путями, а читать файл будет процесс исполнителя в среде владельца: у container-
+    // пользователя рабочая папка смонтирована под другим корнем, и хостовый адрес там
+    // не существует. Перевод — единственным способом, IPathMapper среды владельца.
+    private string? ResolveCategoryProfilesPath(TaskItem task)
+    {
+        var hostPath = _agentFiles?.EnsureCategoryProfiles(task.OwnerId!, task.ProjectId);
+        if (hostPath is null) return null;
+        var paths = _launchers?.ForOwner(task.OwnerId).Paths ?? Execution.IdentityPathMapper.Instance;
+        var runtimePath = ToRuntimeOrNull(paths, hostPath);
+        if (runtimePath is null)
+            _log.LogDebug("Справочник категорий {Path} недоступен в среде исполнения владельца {Owner} — " +
+                          "ссылку в постановку не кладу", hostPath, task.OwnerId);
+        return runtimePath;
+    }
+
+    // null — путь вне монтирований среды (аналог SafeJoin, см. DockerPathMapper):
+    // ссылаться на такой адрес нельзя, лучше не давать ссылки вовсе.
+    internal static string? ToRuntimeOrNull(Execution.IPathMapper paths, string hostPath)
+    {
+        try { return paths.ToRuntime(hostPath); }
+        catch { return null; }
+    }
+
     // Постановка задачи для Claude: контекст + правила ведения статуса через MCP tasks_*.
     // С персоной — структурированный 6-секционный контракт (персона-исполнитель);
     // без персоны — прежний формат (обратная совместимость).
-    internal static string BuildPrompt(TaskItem task, Persona? persona = null)
+    internal static string BuildPrompt(TaskItem task, Persona? persona = null,
+        ModelTierAliases? aliases = null, string? categoryProfilesPath = null)
     {
-        if (persona is not null) return BuildPersonaPrompt(task);
+        if (persona is not null)
+            return BuildPersonaPrompt(task, aliases ?? ModelTierAliases.None, categoryProfilesPath);
 
         var sb = new StringBuilder();
         sb.AppendLine($"Выполни задачу из трекера (id задачи: {task.Id}).");
@@ -154,7 +231,8 @@ public class TaskExecutionService
     // инжектится системным промптом сессии (персона-слой) — здесь только постановка.
     // Секция КОНТЕКСТ идёт последней: блок заметок (BuildNotesContextAsync)
     // дописывается после и попадает в неё же.
-    private static string BuildPersonaPrompt(TaskItem task)
+    private static string BuildPersonaPrompt(TaskItem task, ModelTierAliases aliases,
+        string? categoryProfilesPath = null)
     {
         var sb = new StringBuilder();
         sb.AppendLine("## ЗАДАЧА");
@@ -195,12 +273,43 @@ public class TaskExecutionService
         sb.AppendLine("- Не заявляй завершение раньше времени: «почти готово» — это не готово.");
         sb.AppendLine("- Если выполнить невозможно — не завершай задачу, а кратко опиши причину.");
         sb.AppendLine();
-        // Справочник категорий делегирования (OmO): как резать крупную работу на субагентов
+        // Как резать крупную работу на субагентов: короткая таблица профилей (OmO) +
+        // выбор канала и уровня модели. Полные профили — файлом на диске, не в промпте.
         sb.AppendLine("## ДЕЛЕГИРОВАНИЕ");
-        sb.AppendLine("Крупную задачу режь на субагентов по справочнику категорий ниже " +
-                      "(это профили постановки, а не имена инструментов); мелкую делай сам.");
+        sb.AppendLine("Крупную задачу режь на субагентов по таблице ниже; мелкую делай сам.");
+        sb.AppendLine();
+        sb.AppendLine("Канал делегирования выбирай по характеру работы:");
+        sb.AppendLine();
+        sb.AppendLine("| Что нужно | Канал | Кто ставит уровень |");
+        sb.AppendLine("|---|---|---|");
+        sb.AppendLine("| Мнение, разведка, ревью куска — read-only | `Task(персона, model=…)` | ты в вызове |");
+        sb.AppendLine("| Полноценная работа с правками и отчётом | `tasks_create(personaId, modelTier)` " +
+                      "+ `tasks_run_executor` | ты в задаче |");
+        if (aliases.Any)
+        {
+            sb.AppendLine();
+            sb.AppendLine("Уровень — поправка к дефолту места (без него субагент идёт назначением " +
+                          "«сабагенты-консультанты», задача — «исполнитель задач»):");
+            sb.AppendLine();
+            sb.AppendLine("| Уровень | `model=` в вызове `Task` | `modelTier` в задаче | Когда |");
+            sb.AppendLine("|---|---|---|---|");
+            if (aliases.Strong is { } strong)
+                sb.AppendLine($"| сильная | `{strong}` | `strong` | тяжёлое рассуждение, запутанная архитектура |");
+            if (aliases.Medium is { } medium)
+                sb.AppendLine($"| средняя | `{medium}` | `medium` | обычная работа |");
+            if (aliases.Weak is { } weak)
+                sb.AppendLine($"| слабая | `{weak}` | `weak` | рутина |");
+        }
         sb.AppendLine();
         sb.AppendLine(Prompts.OmoPrompts.DelegationCategories);
+        // Путь абсолютный: Read относительный не принимает. Не смогли обеспечить файл —
+        // ссылку не даём вовсе, чтобы исполнитель не бился в несуществующий путь.
+        if (categoryProfilesPath is not null)
+        {
+            sb.AppendLine();
+            sb.AppendLine("Нужен развёрнутый профиль категории (промпт-довесок, ворота выбора, " +
+                          $"предупреждения вызывающему) — прочитай файл `{categoryProfilesPath}`.");
+        }
         sb.AppendLine();
         sb.AppendLine("## КОНТЕКСТ");
         if (task.Subtasks.Count > 0)

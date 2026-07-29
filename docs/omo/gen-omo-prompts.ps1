@@ -40,7 +40,8 @@ $body
 }
 
 Write-Const 'ultrawork.md' 'OmoPrompts.Ultrawork.cs' 'Ultrawork' 'Режим максимального усилия ultrawork — инжект по магическому слову (флаг ultrawork-keyword).'
-Write-Const 'categories.md' 'OmoPrompts.Categories.cs' 'DelegationCategories' 'Категории делегирования — как резать работу на субагентов (подсказка оркестратору/исполнителю).'
+Write-Const 'categories.md' 'OmoPrompts.Categories.cs' 'DelegationCategories' 'Категории делегирования — короткая таблица «тип работы → уровень + как формулировать» (идёт в постановку задачи).'
+Write-Const 'category-profiles.md' 'OmoPrompts.CategoryProfiles.cs' 'DelegationCategoryProfiles' 'Развёрнутые профили категорий — файл-справочник на диске владельца (.claude/delegation-categories.md), в промпт НЕ попадает.'
 
 # Полные регламенты пантеона — один partial-файл каталога с 8 константами
 $pantheon = @(

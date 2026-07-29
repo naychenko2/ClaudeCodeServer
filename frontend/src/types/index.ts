@@ -123,6 +123,11 @@ export interface ProjectGroup {
 
 // --- Задачи ---
 
+// Уровень модели (слот «сильная/средняя/слабая») у задачи и персоны. На проводе — имя
+// слота; '' в DTO = сбросить уровень, undefined = не менять. Какая модель стоит за слотом,
+// решает пара «личный слот пользователя → глобальный» (lib/modelTiers.ts).
+export type ModelTierValue = 'strong' | 'medium' | 'weak';
+
 // Значения enum-ов приходят с бэка в camelCase (JsonStringEnumConverter)
 export type TaskStatus = 'todo' | 'inProgress' | 'done';
 export type TaskPriority = 'urgent' | 'high' | 'medium' | 'low';
@@ -163,6 +168,9 @@ export interface Task {
   seriesId?: string;         // общий id серии регулярной задачи
   linkedSessionId?: string;
   personaId?: string;        // исполнение от лица персоны (assignee=claude)
+  // Уровень модели исполнителя (слот strong/medium/weak); отсутствует — не задан:
+  // модель берётся от персоны-исполнителя и назначения места «Исполнитель задач»
+  modelTier?: ModelTierValue;
   // Время жизни чата исполнения (мин от последней активности); undefined/null — бессрочно
   executionExpiresAfterMinutes?: number | null;
   claudeStartedAt?: string;  // отметка запуска Claude-исполнителя
@@ -232,6 +240,8 @@ export interface CreateTaskDto {
   recurrence?: TaskRecurrence;
   linkedSessionId?: string;
   personaId?: string;        // исполнение от лица персоны
+  // Уровень модели исполнителя; не указано — не задан (модель по персоне и месту)
+  modelTier?: ModelTierValue;
   // Не указано — дефолт 1440 (сутки); отрицательное — бессрочно; N>=0 — TTL в минутах.
   // Имеет смысл только при исполнителе Claude/персона.
   executionExpiresAfterMinutes?: number;
@@ -257,6 +267,8 @@ export interface UpdateTaskDto {
   linkedSessionId?: string;
   // Персона-исполнитель: '' = убрать, undefined = не менять
   personaId?: string;
+  // Уровень модели исполнителя: '' = сбросить, undefined = не менять
+  modelTier?: ModelTierValue | '';
   // Время жизни чата исполнения: отрицательное = бессрочно, undefined = не менять, N>=0 = TTL
   executionExpiresAfterMinutes?: number;
   resultMarkdown?: string;    // '' = очистить, undefined = не менять
@@ -1195,6 +1207,9 @@ export interface Persona {
   systemPrompt?: string;      // «характер» — legacy-текст (у персон без contract)
   contract?: PersonaContract | null; // структурированный контракт (P1)
   model?: string;
+  // Уровень модели персоны (слот); отсутствует — не задан. Слабее явной model и слабее
+  // уровня самой задачи, когда персона выступает исполнителем
+  modelTier?: ModelTierValue;
   effort?: string;
   scope: PersonaScope;
   projectId?: string;         // задан только для scope === 'project'
@@ -1351,6 +1366,8 @@ export interface CreatePersonaDto {
   // Контракт характера; при обновлении: undefined — не менять, пустые слоты — сбросить
   contract?: PersonaContract;
   model?: string;
+  // Уровень модели персоны: '' = сбросить, undefined — не менять/не задавать
+  modelTier?: ModelTierValue | '';
   effort?: string;
   scope?: PersonaScope;
   projectId?: string;

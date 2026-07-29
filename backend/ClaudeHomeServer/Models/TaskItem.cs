@@ -1,3 +1,5 @@
+using ClaudeHomeServer.Services;
+
 namespace ClaudeHomeServer.Models;
 
 // Задача пользователя; может быть привязана к проекту или быть личной (ProjectId == null).
@@ -34,6 +36,10 @@ public class TaskItem
     // Применяется один раз при создании сессии в TaskExecutionService.ExecuteAsync;
     // имеет смысл только при Assignee=Claude. Дефолт 1440 (сутки) на новых задачах.
     public int? ExecutionExpiresAfterMinutes { get; set; } = 1440;
+    // Уровень модели исполнителя: под что именно эта работа — проектирование (Strong),
+    // реализация по плану (Medium), механическая правка (Weak). null — не задан: модель
+    // возьмётся от персоны-исполнителя и назначения места (см. TaskExecutionService.ResolveExecutorModel).
+    public ModelTier? ModelTier { get; set; }
     // Claude-исполнитель: отметка запуска (идемпотентность автозапуска, переживает рестарт)
     public DateTime? ClaudeStartedAt { get; set; }
     // Итог последнего запуска: success | error; null — ещё выполняется или не запускалась

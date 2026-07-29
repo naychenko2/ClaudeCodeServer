@@ -202,7 +202,8 @@ public class PersonaManager
         string? color, string? greeting, bool memoryEnabled, List<string>? tools = null,
         PersonaContract? contract = null, PersonaAccess access = PersonaAccess.Full,
         List<string>? disallowedTools = null, PersonaSpecialty specialty = PersonaSpecialty.None,
-        bool allProjectsAccess = false, bool subagentExecutor = false, string? handle = null)
+        bool allProjectsAccess = false, bool subagentExecutor = false, string? handle = null,
+        string? modelTier = null)
     {
         var persona = new Persona
         {
@@ -213,6 +214,8 @@ public class PersonaManager
             SystemPrompt = systemPrompt,
             Contract = NormalizeContract(contract),
             Model = LlmProviderRegistry.StripClaudeWindowAlias(model),
+            // Уровень модели: мусор и пустая строка — «не задан» (валидация — в контроллере)
+            ModelTier = ModelTiers.TryParse(modelTier, out var tier) ? tier : null,
             Effort = effort,
             Specialty = specialty,
             Scope = scope,
@@ -337,7 +340,8 @@ public class PersonaManager
         string? color, string? greeting, bool? memoryEnabled, List<string>? tools = null,
         PersonaContract? contract = null, PersonaAccess? access = null,
         List<string>? disallowedTools = null, PersonaSpecialty? specialty = null,
-        bool? allProjectsAccess = null, bool? subagentExecutor = null, string? handle = null)
+        bool? allProjectsAccess = null, bool? subagentExecutor = null, string? handle = null,
+        string? modelTier = null)
     {
         var persona = Get(id, userId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
@@ -375,6 +379,9 @@ public class PersonaManager
             // null — не менять; объект с пустыми слотами — сбросить контракт (нормализуется в null)
             if (contract is not null) persona.Contract = NormalizeContract(contract);
             if (model is not null) persona.Model = model.Length == 0 ? null : LlmProviderRegistry.StripClaudeWindowAlias(model);
+            // Уровень модели: null — не менять, "" (и мусор — его отсекает контроллер) — сбросить
+            if (modelTier is not null)
+                persona.ModelTier = ModelTiers.TryParse(modelTier, out var tier) ? tier : null;
             if (effort is not null) persona.Effort = effort.Length == 0 ? null : effort;
             // Специальность (функциональная роль): null — не менять; None — сбросить явно
             if (specialty is not null) persona.Specialty = specialty.Value;

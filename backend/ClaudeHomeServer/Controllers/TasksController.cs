@@ -41,6 +41,8 @@ public class ProjectTasksController(
         if (project is null) return NotFound();
         if (string.IsNullOrWhiteSpace(req.Title))
             return BadRequest(new { error = "Название задачи не может быть пустым" });
+        if (!ModelTiers.IsValidWireValue(req.ModelTier))
+            return BadRequest(new { error = ModelTiers.WireError });
 
         // Колонка доски → статус выводим из её категории
         var cat = BoardColumnHelper.Category(project, req.ColumnId);
@@ -172,6 +174,8 @@ public class TasksController(
     {
         if (string.IsNullOrWhiteSpace(req.Title))
             return BadRequest(new { error = "Название задачи не может быть пустым" });
+        if (!ModelTiers.IsValidWireValue(req.ModelTier))
+            return BadRequest(new { error = ModelTiers.WireError });
 
         // Колонка доски → статус из категории (у личных — только дефолтные колонки)
         var cat = BoardColumnHelper.Category(null, req.ColumnId);
@@ -241,6 +245,8 @@ public class TasksController(
     {
         var task = tasks.GetById(taskId);
         if (task is null || task.OwnerId != UserId) return NotFound();
+        if (!ModelTiers.IsValidWireValue(req.ModelTier))
+            return BadRequest(new { error = ModelTiers.WireError });
 
         // Целевой проект для валидации колонки/персоны: текущий, либо новый из req.ProjectId
         // (null в req = не менять; "" = сделать личной; guid = привязать к проекту)

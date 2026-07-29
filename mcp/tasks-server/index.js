@@ -294,6 +294,18 @@ const EXECUTION_TTL_SCHEMA = {
   description: 'Время жизни чата исполнения в минутах от последней активности (по умолчанию 1440 — сутки).',
 };
 
+// Уровень модели исполнителя: под какую работу задача. Резолвится в конкретную модель
+// на бэке (слоты «сильная/средняя/слабая» владельца). Не задан — уровень берётся
+// от персоны-исполнителя и назначения места «исполнитель задач».
+const MODEL_TIER_SCHEMA = {
+  type: 'string',
+  enum: ['strong', 'medium', 'weak'],
+  description: 'Уровень модели для исполнения: strong — проектирование, архитектура, ревью, ' +
+    'запутанный баг, многофайловый код; medium — реализация по готовому плану, тесты, документация; ' +
+    'weak — механическая правка, переименование, коммит, обновление текста. ' +
+    'Не указывай, если сомневаешься — уровень возьмётся от исполнителя и настроек системы.',
+};
+
 // Markdown-итог выполнения задачи — прикрепляет исполнитель при завершении/обновлении.
 // null/отсутствует = не менять, "" = очистить (как у description).
 const RESULT_MARKDOWN_SCHEMA = {
@@ -369,6 +381,7 @@ const TOOLS = [
         recurrence: RECURRENCE_SCHEMA,
         assignee: { type: 'string', enum: ENUMS.assignee, description: 'Исполнитель' },
         personaId: PERSONA_ID_SCHEMA,
+        modelTier: MODEL_TIER_SCHEMA,
         subtasks: { type: 'array', items: { type: 'string' }, description: 'Названия подзадач' },
         labels: { type: 'array', items: { type: 'string' }, description: 'Метки' },
         columnId: COLUMN_ID_SCHEMA,
@@ -395,6 +408,7 @@ const TOOLS = [
         recurrence: RECURRENCE_SCHEMA,
         assignee: { type: 'string', enum: ENUMS.assignee },
         personaId: PERSONA_ID_SCHEMA,
+        modelTier: MODEL_TIER_SCHEMA,
         resultMarkdown: RESULT_MARKDOWN_SCHEMA,
         linkedFiles: LINKED_FILES_SCHEMA,
         labels: { type: 'array', items: { type: 'string' }, description: 'Метки (заменяют список целиком)' },
@@ -583,7 +597,7 @@ async function callTool(name, args) {
 
     case 'tasks_create': {
       const body = { title: args.title };
-      for (const k of ['description', 'priority', 'dueDate', 'dueTime', 'reminderMinutes', 'recurrence', 'assignee', 'personaId', 'labels', 'columnId', 'executionExpiresAfterMinutes'])
+      for (const k of ['description', 'priority', 'dueDate', 'dueTime', 'reminderMinutes', 'recurrence', 'assignee', 'personaId', 'modelTier', 'labels', 'columnId', 'executionExpiresAfterMinutes'])
         if (args[k] !== undefined) body[k] = args[k];
       // Происхождение задачи из окружения хода: персона-постановщик (если ход шёл от её лица)
       // и чат-источник. Чат-источник — факт «задача рождена в этом чате», он не зависит от того,

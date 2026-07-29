@@ -16,6 +16,7 @@ import { getPersonaById, usePersonasVersion, personaLabel, ensurePersonasLoaded 
 import { IconNotes } from '../../features/notes/shared';
 import { saveChatNote, openNoteById } from '../../features/notes/saveToNote';
 import { MarkdownContent } from './MarkdownContent';
+import { CollapsibleMarkdownBody } from './AgentContentBlocks';
 import { parseDelegationReport } from '../../lib/delegationReport';
 import { ToolUseView } from './ToolUseView';
 import { PersonaAskView, isPersonaAsk } from './PersonaAskView';
@@ -406,10 +407,9 @@ function AgentMessageView({ text, persona, neutralTitle = 'Агент', note, or
         </div>
         {note && <span style={{ fontSize: 11, color: C.textMuted, flexShrink: 0 }}>{note}</span>}
       </div>
-      {/* Тело — Markdown */}
-      <div style={{ padding: '10px 12px', fontSize: 14, color: C.textHeading, wordBreak: 'break-word' }}>
-        <MarkdownContent text={text} />
-      </div>
+      {/* Тело — Markdown; длинная постановка задачи сворачивается тем же механизмом,
+          что и ответ консультации, иначе карточка хоронит ленту под инструкциями */}
+      <CollapsibleMarkdownBody text={text} accent={accent} padding="10px 12px" />
     </div>
   );
 }

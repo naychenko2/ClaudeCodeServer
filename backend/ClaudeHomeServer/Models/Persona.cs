@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Memory;
 
 namespace ClaudeHomeServer.Models;
@@ -145,6 +146,9 @@ public class Persona
     public PersonaContract? Contract { get; set; }
     // Модель CLI (алиас/id любого провайдера); null = дефолт сервера
     public string? Model { get; set; }
+    // Уровень модели персоны: слот «сильная/средняя/слабая» вместо конкретной модели.
+    // Слабее явной Model (та задана точечно) и слабее уровня самой задачи. null — не задан.
+    public ModelTier? ModelTier { get; set; }
     public string? Effort { get; set; }
     // Специальность (функциональная роль) для оркестрации — брифинг, статус команды,
     // память команды. None — не задана. См. PersonaSpecialty.

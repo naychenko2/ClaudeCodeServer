@@ -14,6 +14,8 @@ import { NO_PROJECT_COLOR, NO_PROJECT_LABEL, PRIORITY_LABEL, PRIORITY_ORDER, REC
 import { ExtBadge, PriorityFlag, SubtaskCheck } from './bits';
 import { DueDatePicker } from './DueDatePicker';
 import { ExecutorPicker } from './ExecutorPicker';
+import { ModelTierPicker } from '../../components/ModelTierPicker';
+import { parseTier, type ModelTierKey } from '../../lib/modelTiers';
 // CodeMirror тяжёлый — редактор грузим лениво, только при входе в правку. Статический
 // импорт здесь обнулял бы ленивую загрузку и в NoteView, и в FileViewer: сборщик тянет
 // модуль в основной чанк, если хоть один потребитель просит его статически.
@@ -76,6 +78,8 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
   const [assignee, setAssignee] = useState<TaskAssignee>(task.assignee ?? 'me');
   // Персона-исполнитель ('' — обычный Claude); выбирается единым пикером исполнителя
   const [personaId, setPersonaId] = useState(task.personaId ?? '');
+  // Уровень модели исполнителя ('' — по назначению места «Исполнитель задач»)
+  const [modelTier, setModelTier] = useState<ModelTierKey | ''>(parseTier(task.modelTier));
   // Время жизни чата исполнения (актуально только при исполнителе Claude/персона)
   const [ttlEnabled, setTtlEnabled] = useState(task.executionExpiresAfterMinutes != null);
   const [ttlMinutes, setTtlMinutes] = useState(task.executionExpiresAfterMinutes ?? DEFAULT_EXPIRY);
@@ -193,6 +197,8 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
         assignee,
         // Персона-исполнитель имеет смысл только у Claude; '' = убрать на бэке
         personaId: assignee === 'claude' && personaId ? personaId : '',
+        // Уровень модели — тоже только у Claude-исполнителя; '' = сбросить на бэке
+        modelTier: assignee === 'claude' && modelTier ? modelTier : '',
         // Время жизни чата исполнения; отрицательное = бессрочно на бэке
         executionExpiresAfterMinutes: ttlEnabled ? ttlMinutes : -1,
         // Смена проекта: '' = сделать личной, guid = привязать; отсутствие = не менять
@@ -490,6 +496,24 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
               onChange={v => { setAssignee(v.assignee); setPersonaId(v.personaId ?? ''); }}
             />
           </div>
+
+          {/* Уровень модели исполнителя — рядом с самим исполнителем: у задачи «Я»
+              модель не нужна, поле показываем только для Claude/персоны */}
+          {assignee === 'claude' && (
+            <>
+              <div style={fieldLabelStyle()}>Уровень модели</div>
+              <div style={{ marginBottom: 8 }}>
+                <ModelTierPicker
+                  value={modelTier}
+                  onChange={setModelTier}
+                  defaultHint="как настроено для исполнителя задач"
+                />
+              </div>
+              <div style={{ fontFamily: FONT.sans, fontSize: 12, color: C.textMuted, marginBottom: 22 }}>
+                Сложную работу — сильной модели, рутину — экономной. По умолчанию — как настроено для исполнителя задач.
+              </div>
+            </>
+          )}
 
           {/* Время жизни чата исполнения — только когда исполнитель не «Я» (чат вообще
               не создаётся для personaId=none/assignee=me) */}

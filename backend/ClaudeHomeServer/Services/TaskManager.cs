@@ -98,6 +98,8 @@ public class TaskManager
                 < 0 => null,
                 _ => req.ExecutionExpiresAfterMinutes,
             },
+            // Уровень модели исполнителя: мусор и пустая строка — «не задан» (валидация — в контроллере)
+            ModelTier = ModelTiers.TryParse(req.ModelTier, out var tier) ? tier : null,
             ResultMarkdown = req.ResultMarkdown,
             LinkedFiles = req.LinkedFiles ?? [],
             Subtasks = req.Subtasks?.Select(s => new TaskSubtask { Title = s.Title }).ToList() ?? [],
@@ -180,6 +182,9 @@ public class TaskManager
         // Время жизни чата исполнения: null = не менять, отрицательное = бессрочно, N>=0 = TTL
         if (req.ExecutionExpiresAfterMinutes is not null)
             task.ExecutionExpiresAfterMinutes = req.ExecutionExpiresAfterMinutes < 0 ? null : req.ExecutionExpiresAfterMinutes;
+        // Уровень модели: null = не менять, "" (и мусор — его отсекает контроллер) = сбросить
+        if (req.ModelTier is not null)
+            task.ModelTier = ModelTiers.TryParse(req.ModelTier, out var tier) ? tier : null;
         if (req.ResultMarkdown is not null) task.ResultMarkdown = req.ResultMarkdown;
         if (req.LinkedFiles is not null) task.LinkedFiles = req.LinkedFiles;
         if (req.Labels is not null) task.Labels = req.Labels;
@@ -418,6 +423,8 @@ public record CreateTaskRequest(
     // Время жизни чата исполнения (мин); не передано — дефолт 1440 (сутки),
     // отрицательное — бессрочно, N>=0 — TTL. Имеет смысл только при исполнителе Claude.
     int? ExecutionExpiresAfterMinutes = null,
+    // Уровень модели исполнителя: "strong|medium|weak"; не передано/пусто — не задан
+    string? ModelTier = null,
     // Происхождение: персона-постановщик и чат-источник (проставляет tasks-server из env
     // хода; UI/API их не шлют — null). См. TaskItem.CreatedByPersonaId/SourceSessionId.
     string? CreatedByPersonaId = null,
@@ -452,6 +459,8 @@ public record UpdateTaskRequest(
     // Смена проекта: null = не менять, "" = сделать личной (ProjectId=null), guid = привязать
     string? ProjectId = null,
     // Время жизни чата исполнения: null = не менять, отрицательное = бессрочно, N>=0 = TTL
-    int? ExecutionExpiresAfterMinutes = null);
+    int? ExecutionExpiresAfterMinutes = null,
+    // Уровень модели исполнителя: null = не менять, "" = сбросить, "strong|medium|weak" = задать
+    string? ModelTier = null);
 
 public record UpdateSubtaskRequest(string Id, string Title, bool IsDone);

@@ -2,8 +2,12 @@ using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Llm;
+using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClaudeHomeServer.Tests.Services;
 
@@ -23,6 +27,46 @@ public class TaskExecutionServiceTests
     public void IsSuccess_ПоSubtype(string subtype, bool expected)
     {
         TaskExecutionService.IsSuccess(Result(subtype)).Should().Be(expected);
+    }
+
+    // ─── Модель исполнителя: задача → персона → место ────────────────────────
+
+    [Fact]
+    public void ResolveExecutorModel_УровеньЗадачи_СильнееМоделиПерсоны()
+    {
+        var task = new TaskItem { Title = "t", ModelTier = ModelTier.Strong };
+        var persona = new Persona { Model = "glm-5.2", ModelTier = ModelTier.Weak };
+
+        // Маркер, а не конкретная модель: разворачивает его ModelAssignmentResolver
+        TaskExecutionService.ResolveExecutorModel(task, persona).Should().Be("tier:strong");
+    }
+
+    [Fact]
+    public void ResolveExecutorModel_БезУровняЗадачи_МодельПерсоны()
+    {
+        var task = new TaskItem { Title = "t" };
+        var persona = new Persona { Model = "glm-5.2", ModelTier = ModelTier.Weak };
+
+        TaskExecutionService.ResolveExecutorModel(task, persona).Should().Be("glm-5.2");
+    }
+
+    [Fact]
+    public void ResolveExecutorModel_БезМоделиПерсоны_ЕёУровень()
+    {
+        var task = new TaskItem { Title = "t" };
+        var persona = new Persona { ModelTier = ModelTier.Weak };
+
+        TaskExecutionService.ResolveExecutorModel(task, persona).Should().Be("tier:weak");
+    }
+
+    [Fact]
+    public void ResolveExecutorModel_НичегоНеЗадано_ПрежнееПоведение()
+    {
+        // Пусто → сессия резолвит место tasks-executor, как и до появления уровней
+        TaskExecutionService.ResolveExecutorModel(new TaskItem { Title = "t" }, persona: null)
+            .Should().BeNull();
+        TaskExecutionService.ResolveExecutorModel(new TaskItem { Title = "t" }, new Persona())
+            .Should().BeNull();
     }
 
     // ─── Отслеживание сессии ─────────────────────────────────────────────────
@@ -169,6 +213,124 @@ public class TaskExecutionServiceTests
         // Дисциплина: не выходить за рамки, при невозможности — не завершать
         prompt.Should().Contain("Не выходи за рамки задачи");
         prompt.Should().Contain("не завершай задачу");
+    }
+
+    [Fact]
+    public void BuildPrompt_СПерсоной_ДелегированиеБезПолныхПрофилей()
+    {
+        // Путь к справочнику — абсолютный: Read относительный не принимает
+        var profiles = Path.Combine(Path.GetTempPath(), "cwd", ".claude", "delegation-categories.md");
+        var prompt = TaskExecutionService.BuildPrompt(
+            new TaskItem { Title = "t" }, new Persona { Name = "Вера" },
+            categoryProfilesPath: profiles);
+
+        // Короткая таблица категорий — в промпте
+        prompt.Should().Contain("ultrabrain").And.Contain("visual-engineering");
+        // Полные профили — только файлом на диске, в промпт не вставляются
+        prompt.Should().NotContain("Ворота выбора");
+        prompt.Should().Contain(profiles);
+        // Правило выбора канала
+        prompt.Should().Contain("tasks_run_executor").And.Contain("model=");
+        // Разгрузка постановки: раньше секция делегирования одна весила ~30 КБ
+        prompt.Length.Should().BeLessThan(8000);
+    }
+
+    [Fact]
+    public void BuildPrompt_СправочникНеОбеспечен_СсылкиНет()
+    {
+        // Файла на диске нет (чужой файл, нерезолвимая папка) — гнать исполнителя
+        // в несуществующий путь незачем: блок ссылки просто не выводим
+        var prompt = TaskExecutionService.BuildPrompt(
+            new TaskItem { Title = "t" }, new Persona { Name = "Вера" });
+
+        prompt.Should().NotContain(PersonaAgentFileSync.CategoryProfilesFileName);
+        prompt.Should().Contain("ultrabrain", "короткая таблица категорий остаётся");
+    }
+
+    // ─── Путь справочника в среде исполнения владельца ────────────────────────
+
+    [Fact]
+    public void ToRuntimeOrNull_ВладелецВПесочнице_ПутьПереводитсяВКонтейнерный()
+    {
+        // Читать файл будет процесс в cc-sandbox: там рабочая папка смонтирована
+        // под /projects, и хостовый адрес не существует
+        var (paths, projectsRoot) = PathsForOwner(ExecutionEnvironments.Container);
+        var host = Path.Combine(projectsRoot, "anna", "app", ".claude",
+            PersonaAgentFileSync.CategoryProfilesFileName);
+
+        var runtime = TaskExecutionService.ToRuntimeOrNull(paths, host);
+
+        runtime.Should().Be("/projects/anna/app/.claude/" + PersonaAgentFileSync.CategoryProfilesFileName);
+        var prompt = TaskExecutionService.BuildPrompt(new TaskItem { Title = "t" },
+            new Persona { Name = "Вера" }, categoryProfilesPath: runtime);
+        prompt.Should().Contain(runtime).And.NotContain(host);
+    }
+
+    [Fact]
+    public void ToRuntimeOrNull_ЛокальныйВладелец_ПутьНеМеняется()
+    {
+        var (paths, _) = PathsForOwner(ExecutionEnvironments.Local);
+        var host = Path.Combine(Path.GetTempPath(), "proj", ".claude",
+            PersonaAgentFileSync.CategoryProfilesFileName);
+
+        TaskExecutionService.ToRuntimeOrNull(paths, host).Should().Be(host);
+    }
+
+    [Fact]
+    public void ToRuntimeOrNull_ПутьВнеМонтированийПесочницы_СсылкиВПостановкеНет()
+    {
+        var (paths, _) = PathsForOwner(ExecutionEnvironments.Container);
+        var outside = Path.Combine(Path.GetTempPath(), "elsewhere_" + Guid.NewGuid().ToString("N"),
+            ".claude", PersonaAgentFileSync.CategoryProfilesFileName);
+
+        var runtime = TaskExecutionService.ToRuntimeOrNull(paths, outside);
+
+        runtime.Should().BeNull("перевод невозможен — хостовый путь подставлять нельзя");
+        var prompt = TaskExecutionService.BuildPrompt(new TaskItem { Title = "t" },
+            new Persona { Name = "Вера" }, categoryProfilesPath: runtime);
+        prompt.Should().NotContain(PersonaAgentFileSync.CategoryProfilesFileName);
+        prompt.Should().Contain("ultrabrain", "короткая таблица категорий остаётся");
+    }
+
+    // Маппер путей владельца ровно той цепочкой, что в проде: ILauncherFactory.ForOwner().Paths
+    private static (IPathMapper Paths, string ProjectsRoot) PathsForOwner(string environment)
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), "tes_paths_" + Guid.NewGuid().ToString("N"));
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["DataPath"] = Path.Combine(tmp, "data", "projects.json"),
+            ["Sandbox:ProjectsRoot"] = Path.Combine(tmp, "ClaudeSandbox"),
+        }).Build();
+        var users = new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
+        var user = users.Add("owner_" + Guid.NewGuid().ToString("N")[..8], "pwd", "user", environment);
+        var sandbox = new SandboxManager(config, NullLogger<SandboxManager>.Instance);
+        var paths = new LauncherFactory(users, sandbox).ForOwner(user.Id).Paths;
+        return (paths, Path.Combine(tmp, "ClaudeSandbox"));
+    }
+
+    [Fact]
+    public void BuildPrompt_БезАлиасовТиров_ТаблицаУровнейНеВыводится()
+    {
+        // Слоты владельца — модели стороннего провайдера: алиас не определён, врать нечем
+        var prompt = TaskExecutionService.BuildPrompt(
+            new TaskItem { Title = "t" }, new Persona { Name = "Вера" }, ModelTierAliases.None);
+
+        // «сильная/средняя/слабая» есть и в таблице категорий — проверяем по колонке уровней
+        prompt.Should().NotContain("`strong`").And.NotContain("`weak`");
+        // Канал делегирования остаётся — он от алиасов не зависит
+        prompt.Should().Contain("tasks_create(personaId, modelTier)");
+    }
+
+    [Fact]
+    public void BuildPrompt_САлиасамиТиров_ПодставляетИхВТаблицу()
+    {
+        var prompt = TaskExecutionService.BuildPrompt(
+            new TaskItem { Title = "t" }, new Persona { Name = "Вера" },
+            new ModelTierAliases("opus", "sonnet", null));
+
+        prompt.Should().Contain("| сильная | `opus` | `strong` |");
+        prompt.Should().Contain("| средняя | `sonnet` | `medium` |");
+        prompt.Should().NotContain("`weak`", "у слабого слота алиас не определился");
     }
 
     // ─── Уведомления от лица персоны ─────────────────────────────────────────

@@ -199,6 +199,8 @@ public class PersonasController : ControllerBase
             return BadRequest("Для проектной персоны нужен корректный projectId");
         if (!TryParseAccess(req.Access, out var access))
             return BadRequest("Неверный профиль доступа (ожидается full | readOnly | custom)");
+        if (!ModelTiers.IsValidWireValue(req.ModelTier))
+            return BadRequest(new { error = ModelTiers.WireError });
 
         // Явные привязки валидируем ДО создания персоны — ошибка не оставляет полусозданную.
         // Персона ещё не существует — для само-проверки ProjectPersonas/ProjectTasks передаём
@@ -224,7 +226,7 @@ public class PersonasController : ControllerBase
                 req.Model, req.Effort, scope, req.ProjectId, req.Color, req.Greeting,
                 req.MemoryEnabled ?? true, req.Tools, req.Contract,
                 access ?? PersonaAccess.Full, req.DisallowedTools, req.Specialty ?? PersonaSpecialty.None,
-                req.AllProjectsAccess ?? false, req.SubagentExecutor ?? false, req.Handle);
+                req.AllProjectsAccess ?? false, req.SubagentExecutor ?? false, req.Handle, req.ModelTier);
         }
         catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
         if (bindings.Count > 0)
@@ -255,6 +257,8 @@ public class PersonasController : ControllerBase
             return BadRequest("Проект не найден или недоступен");
         if (!TryParseAccess(req.Access, out var access))
             return BadRequest("Неверный профиль доступа (ожидается full | readOnly | custom)");
+        if (!ModelTiers.IsValidWireValue(req.ModelTier))
+            return BadRequest(new { error = ModelTiers.WireError });
 
         Persona persona;
         try
@@ -262,7 +266,7 @@ public class PersonasController : ControllerBase
             persona = _personas.Update(id, UserId, req.Name, req.Role, req.Description, req.SystemPrompt,
                 req.Model, req.Effort, req.Scope, req.ProjectId, req.Color, req.Greeting,
                 req.MemoryEnabled, req.Tools, req.Contract, access, req.DisallowedTools, req.Specialty,
-                req.AllProjectsAccess, req.SubagentExecutor, req.Handle);
+                req.AllProjectsAccess, req.SubagentExecutor, req.Handle, req.ModelTier);
         }
         catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
         await Broadcast("updated", id);
@@ -2000,7 +2004,9 @@ public record CreatePersonaRequest(
     // Описание внешности для фотопортрета (англ.); пусто — берём из роли/описания персоны
     string? AvatarPrompt = null,
     // Ручной @handle (latin-slug); пусто — авто-генерация из имени. Занят/невалиден → 400
-    string? Handle = null);
+    string? Handle = null,
+    // Уровень модели («strong|medium|weak») вместо конкретной Model; null/"" — не задан
+    string? ModelTier = null);
 
 public record UpdatePersonaRequest(
     string? Name,
@@ -2030,7 +2036,9 @@ public record UpdatePersonaRequest(
     bool? SubagentExecutor = null,
     // Ручной @handle (latin-slug); null — не менять, "" — сбросить к авто-генерации.
     // Занят/невалиден → 400
-    string? Handle = null);
+    string? Handle = null,
+    // Уровень модели: null — не менять, "" — сбросить, "strong|medium|weak" — задать
+    string? ModelTier = null);
 
 public record CreatePersonaChatRequest(string Mode = "auto", string? ResumeSessionId = null, string? Name = null,
     string? ProjectId = null);

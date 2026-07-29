@@ -134,7 +134,10 @@ builder.Services.AddSingleton<TeamPlanningService>();
 // Пул подписок с восстановлением пометок исчерпания из снапшотов usage после рестарта
 builder.Services.AddSingleton(sp => new ClaudeSubscriptionPool(
     sp.GetRequiredService<IConfiguration>(), sp.GetRequiredService<UsageService>()));
-// Стартовый прогрев утилизации подписок (один пробный ход на аккаунт) — при HasExtra и флаге
+// Время последней фактической активности аккаунта пула (живой ход / идл-пинг) —
+// делит SessionManager (RateLimitMessage живого хода) и SubscriptionUsageWarmupService
+builder.Services.AddSingleton<SubscriptionActivityTracker>();
+// Стартовый прогрев + идл-пинг утилизации подписок (пробный ход на простаивающий аккаунт)
 builder.Services.AddHostedService<SubscriptionUsageWarmupService>();
 // Точная утилизация обоих окон (5ч + неделя) каждого аккаунта через api/oauth/usage;
 // singleton — статусы опроса per-аккаунт (токен не подходит / ошибка) читает /api/usage

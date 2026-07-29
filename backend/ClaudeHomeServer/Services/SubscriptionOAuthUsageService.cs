@@ -426,7 +426,7 @@ public sealed partial class SubscriptionOAuthUsageService(
             ? r.GetString() : null;
         if (utilization is null && resetsAt is null) return;
 
-        usage.Record(window, utilization, "allowed", isUsingOverage: false, resetsAt, subscriptionKey: key);
+        usage.Record(window, utilization, "allowed", isUsingOverage: false, resetsAt, subscriptionKey: key, source: "oauth");
     }
 
     // Перерасход: { "is_enabled": bool, "monthly_limit": N, "used_credits": N, "utilization": 0..100 }.
@@ -444,6 +444,6 @@ public sealed partial class SubscriptionOAuthUsageService(
         // isUsingOverage не ставим: окно и так называется «Перерасход», а флаг красил бы
         // его в danger при любой ненулевой трате — уровень тревоги пусть идёт по проценту
         usage.Record("extra_usage", utilization, "allowed", isUsingOverage: false,
-            resetsAt: null, subscriptionKey: key);
+            resetsAt: null, subscriptionKey: key, source: "oauth");
     }
 }

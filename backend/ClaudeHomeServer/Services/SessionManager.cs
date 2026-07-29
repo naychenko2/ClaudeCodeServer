@@ -208,6 +208,9 @@ public class SessionManager : IDisposable
     private readonly PersonaBindingsService _bindings;
     private readonly PersonaPromptBuilder _promptBuilder;
     private readonly ClaudeSubscriptionPool _subscriptionPool;
+    // Время последней фактической активности аккаунта пула (живой ход/пинг) для идл-пинга
+    // подписок (SubscriptionUsageWarmupService); null — в тестах, тогда просто не трогаем.
+    private readonly SubscriptionActivityTracker? _activity;
     private readonly ILogger<SessionManager> _log;
     // Драйверы среды исполнения владельцев (local / docker-песочница)
     private readonly Execution.ILauncherFactory _launchers;
@@ -265,9 +268,12 @@ public class SessionManager : IDisposable
         FileWatcherService? fileWatchers = null,
         // Опционально: планирование режима «Командная реализация» (Э2). Без него режим
         // включается, но план не строится — CreateTeamPlanAsync отдаёт причину отказа.
-        TeamPlanningService? teamPlanning = null)
+        TeamPlanningService? teamPlanning = null,
+        // Опционально (в тестах не передаётся): трекер активности аккаунтов пула подписок
+        SubscriptionActivityTracker? activity = null)
     {
         _teamPlanning = teamPlanning;
+        _activity = activity;
         _spend = spend;
         _codeGraphPrompt = codeGraphPrompt;
         _codeGraphs = codeGraphs;
@@ -4020,7 +4026,8 @@ public class SessionManager : IDisposable
                     RecordTurnSpend(entry, m);
                     break;
                 case RateLimitMessage m:
-                    _usage.Record(m.LimitType, m.Utilization, m.Status, m.IsUsingOverage, m.ResetsAt, m.OverageStatus, m.OverageResetsAt, subscriptionKey: entry?.Info.Provider);
+                    _usage.Record(m.LimitType, m.Utilization, m.Status, m.IsUsingOverage, m.ResetsAt, m.OverageStatus, m.OverageResetsAt, subscriptionKey: entry?.Info.Provider, source: "turn");
+                    _activity?.Touch(entry?.Info.Provider);
                     // Исчерпание лимита подписки → помечаем exhausted в пуле, чтобы новые чаты
                     // пошли на другую подписку. "rejected" — CLI отклонил ход; utilization >= 1.0
                     // без overage — окно выбрано (с overage ходы ещё проходят).

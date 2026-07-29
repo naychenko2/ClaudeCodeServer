@@ -379,11 +379,20 @@ public sealed partial class DocsIndexService
             outLinks[from] = resolved;
         }
 
-        // README первым, дальше по пути: панель показывает дерево в этом же порядке
+        // README первым, дальше по папке и ЗАГОЛОВКУ: панель показывает дерево в этом же
+        // порядке и подписывает строки заголовками — сортировка по имени файла выглядела бы
+        // в ней произвольной (observability-audit.md с заголовком «Аудит…» вставал не туда).
+        // Папка старше заголовка, иначе документы разных групп перемешались бы между собой.
         docs.Sort((a, b) =>
-            IsReadme(a.Path) != IsReadme(b.Path)
-                ? (IsReadme(a.Path) ? -1 : 1)
-                : string.Compare(a.Path, b.Path, StringComparison.OrdinalIgnoreCase));
+        {
+            if (IsReadme(a.Path) != IsReadme(b.Path)) return IsReadme(a.Path) ? -1 : 1;
+            var byFolder = string.Compare(Folder(a.Path), Folder(b.Path), StringComparison.OrdinalIgnoreCase);
+            if (byFolder != 0) return byFolder;
+            // Сравнение с учётом языка: заголовки русские, и ordinal ставил бы кириллицу
+            // после латиницы, а внутри кириллицы — по кодам, а не по алфавиту
+            var byTitle = string.Compare(a.Title, b.Title, StringComparison.CurrentCultureIgnoreCase);
+            return byTitle != 0 ? byTitle : string.Compare(a.Path, b.Path, StringComparison.OrdinalIgnoreCase);
+        });
 
         return new DocsCorpus
         {
@@ -394,6 +403,13 @@ public sealed partial class DocsIndexService
 
     private static bool IsReadme(string relativePath) =>
         string.Equals(relativePath, ReadmeName, StringComparison.OrdinalIgnoreCase);
+
+    // Папка документа («docs/adr/x.md» → «docs/adr»); корневые документы — пустая строка
+    private static string Folder(string relativePath)
+    {
+        var i = relativePath.LastIndexOf('/');
+        return i < 0 ? "" : relativePath[..i];
+    }
 
     // ---------- разбор markdown ----------
 

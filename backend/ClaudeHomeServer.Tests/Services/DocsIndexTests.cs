@@ -44,16 +44,27 @@ public class DocsIndexTests : IDisposable
     }
 
     [Fact]
-    public void Порядок_ReadmeПервый_ДальшеПоПути()
+    public void Порядок_ReadmeПервый_ДальшеПоЗаголовку()
     {
-        Write("# Б", "docs", "b.md");
-        Write("# А", "docs", "a.md");
+        // Имя файла и заголовок расходятся намеренно: панель подписывает строки заголовками,
+        // и сортировка по пути выглядела бы в ней произвольной
+        Write("# Яблоко", "docs", "a-first-by-name.md");
+        Write("# Абрикос", "docs", "z-last-by-name.md");
         Write("# Проект", "README.md");
 
         var index = _svc.GetIndex(_root);
 
         index[0].Path.Should().Be("README.md");
-        index.Skip(1).Select(d => d.Path).Should().ContainInOrder("docs/a.md", "docs/b.md");
+        index.Skip(1).Select(d => d.Title).Should().ContainInOrder("Абрикос", "Яблоко");
+    }
+
+    [Fact]
+    public void Порядок_ПапкаСтаршеЗаголовка_ГруппыНеПеремешиваются()
+    {
+        Write("# Яблоко", "docs", "a.md");
+        Write("# Абрикос", "docs", "adr", "b.md");
+
+        _svc.GetIndex(_root).Select(d => d.Path).Should().ContainInOrder("docs/a.md", "docs/adr/b.md");
     }
 
     [Fact]

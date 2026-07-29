@@ -172,14 +172,17 @@ public class ProjectManager
         return project;
     }
 
-    // Папки документации для панели «Документы». Отдельным методом, а не параметром Update:
-    // настройка узкая и приходит из самой панели, а Update и без того на девяти параметрах.
-    // null = вернуть к дефолту (docs/); пустой список = только README.md.
-    public Project SetDocsFolders(string id, IReadOnlyList<string>? folders)
+    // Область документации для панели «Документы». Отдельным методом, а не параметром
+    // Update: настройка узкая и приходит из самой панели, а Update и без того на девяти
+    // параметрах. null у оси = вернуть её к дефолту; пустой список = «ничего отсюда».
+    public Project SetDocsScope(string id, IReadOnlyList<string>? folders,
+        IReadOnlyList<string>? rootFiles, IReadOnlyList<string>? extensions)
     {
         var project = _projects.GetValueOrDefault(id)
             ?? throw new KeyNotFoundException($"Проект не найден: {id}");
         project.DocsFolders = folders is null ? null : [.. Docs.DocsIndexService.NormalizeFolders(folders)];
+        project.DocsRootFiles = rootFiles is null ? null : [.. Docs.DocsIndexService.NormalizeRootFiles(rootFiles)];
+        project.DocsExtensions = extensions is null ? null : [.. Docs.DocsIndexService.NormalizeExtensions(extensions)];
         project.UpdatedAt = DateTime.UtcNow;
         Save();
         return project;

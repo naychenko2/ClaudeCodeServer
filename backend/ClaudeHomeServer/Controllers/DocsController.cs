@@ -34,7 +34,7 @@ public class DocsController(DocsIndexService docs, ProjectManager projects) : Co
         try
         {
             var p = GetProject(projectId);
-            return Ok(docs.GetIndex(p.RootPath, p.DocsFolders));
+            return Ok(docs.GetIndex(p.RootPath, DocsIndexService.ScopeOf(p)));
         }
         catch (KeyNotFoundException) { return NotFound(); }
     }
@@ -48,7 +48,7 @@ public class DocsController(DocsIndexService docs, ProjectManager projects) : Co
         try
         {
             var p = GetProject(projectId);
-            var detail = docs.GetDoc(p.RootPath, path, p.DocsFolders);
+            var detail = docs.GetDoc(p.RootPath, path, DocsIndexService.ScopeOf(p));
             return detail is null ? NotFound() : Ok(detail);
         }
         catch (KeyNotFoundException) { return NotFound(); }
@@ -60,41 +60,37 @@ public class DocsController(DocsIndexService docs, ProjectManager projects) : Co
         try
         {
             var p = GetProject(projectId);
-            return Ok(docs.Search(p.RootPath, q, p.DocsFolders));
+            return Ok(docs.Search(p.RootPath, q, DocsIndexService.ScopeOf(p)));
         }
         catch (KeyNotFoundException) { return NotFound(); }
     }
 
-    // Настройка области: что выбрано и какие папки проекта вообще годятся в документацию
-    [HttpGet("folders")]
-    public IActionResult Folders(string projectId)
+    // Настройка области: что выбрано, что можно выбрать (папки, файлы корня, типы файлов)
+    [HttpGet("scope")]
+    public IActionResult Scope(string projectId)
     {
         try
         {
             var p = GetProject(projectId);
-            return Ok(FoldersInfo(p));
+            return Ok(docs.Describe(p.RootPath, DocsIndexService.ScopeOf(p)));
         }
         catch (KeyNotFoundException) { return NotFound(); }
     }
 
-    // Сохранить область. folders: null — вернуть к дефолту (docs/); [] — только README.md.
+    // Сохранить область. У каждой оси null — вернуть к дефолту, [] — «ничего отсюда».
     // Нормализация и отсев мусора — в сервисе, поэтому ответ отдаёт уже сохранённое значение,
     // а не присланное: фронт должен показать галки ровно такими, какими они легли в стор.
-    [HttpPut("folders")]
-    public IActionResult SetFolders(string projectId, [FromBody] SetDocsFoldersRequest req)
+    [HttpPut("scope")]
+    public IActionResult SetScope(string projectId, [FromBody] SetDocsScopeRequest req)
     {
         try
         {
             GetProject(projectId);   // владение проверяем до записи
-            return Ok(FoldersInfo(projects.SetDocsFolders(projectId, req.Folders)));
+            var saved = projects.SetDocsScope(projectId, req.Folders, req.RootFiles, req.Extensions);
+            return Ok(docs.Describe(saved.RootPath, DocsIndexService.ScopeOf(saved)));
         }
         catch (KeyNotFoundException) { return NotFound(); }
     }
-
-    private DocsFoldersInfo FoldersInfo(Project p) => new(
-        DocsIndexService.NormalizeFolders(p.DocsFolders),
-        docs.SuggestFolders(p.RootPath, p.DocsFolders),
-        DocsIndexService.DefaultFolders);
 }
 
-public record SetDocsFoldersRequest(List<string>? Folders);
+public record SetDocsScopeRequest(List<string>? Folders, List<string>? RootFiles, List<string>? Extensions);

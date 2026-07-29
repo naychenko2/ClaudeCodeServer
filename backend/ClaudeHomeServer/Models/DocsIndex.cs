@@ -34,12 +34,28 @@ public record DocDetail(string Path, string Title, string Content,
 // совпадения в заголовке документа или до первого подзаголовка).
 public record DocSearchHit(string Path, string Title, string? Slug, string Snippet);
 
-// Кандидат в папки документации: путь от корня проекта, сколько .md внутри (рекурсивно)
-// и есть ли папка на диске (выбранная, но удалённая папка остаётся в списке — иначе
-// галка молча пропала бы, и причина пустого корпуса была бы не видна).
+// Кандидат в папки документации: путь от корня проекта, сколько документов внутри
+// (рекурсивно, по расширениям области) и есть ли папка на диске (выбранная, но удалённая
+// остаётся в списке — иначе галка молча пропала бы, и причина пустого корпуса была бы
+// не видна).
 public record DocFolderCandidate(string Path, int Count, bool Exists);
 
-// Настройка области документации: что выбрано сейчас, что можно выбрать и что было бы
-// по умолчанию (кнопка «вернуть docs/» на фронте строится из Defaults, а не хардкодом).
-public record DocsFoldersInfo(IReadOnlyList<string> Selected, IReadOnlyList<DocFolderCandidate> Candidates,
-    IReadOnlyList<string> Defaults);
+// Кандидат в корневые файлы: имя файла и есть ли он на диске (тот же приём с выбранными,
+// которых уже нет)
+public record DocRootFileCandidate(string Name, bool Exists);
+
+// Область документации: три независимые оси. Пустой список любой из них — «ничего отсюда».
+public record DocsScope(
+    IReadOnlyList<string> Folders,
+    IReadOnlyList<string> RootFiles,
+    IReadOnlyList<string> Extensions);
+
+// Настройка области: что выбрано, что можно выбрать и что было бы по умолчанию (кнопка
+// «вернуть как было» на фронте строится из Defaults, а не хардкодом).
+public record DocsScopeInfo(
+    DocsScope Selected,
+    IReadOnlyList<DocFolderCandidate> FolderCandidates,
+    IReadOnlyList<DocRootFileCandidate> RootFileCandidates,
+    // Все расширения, которые продукт умеет показывать, — из них и выбирают
+    IReadOnlyList<string> SupportedExtensions,
+    DocsScope Defaults);

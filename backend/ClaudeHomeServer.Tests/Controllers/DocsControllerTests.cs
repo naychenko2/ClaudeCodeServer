@@ -100,27 +100,34 @@ public class DocsControllerTests : IClassFixture<TestWebApplicationFactory>
     }
 
     [Fact]
-    public async Task Папки_ОтдаютВыбранноеИКандидатов()
+    public async Task Область_ОтдаётВыбранноеКандидатовИДефолты()
     {
         var id = await SetupProjectAsync();
 
-        var response = await _client.GetAsync($"/api/projects/{id}/docs/folders");
+        var response = await _client.GetAsync($"/api/projects/{id}/docs/scope");
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
-        body.GetProperty("selected").EnumerateArray().Select(x => x.GetString()).Should().Equal("docs");
-        body.GetProperty("defaults").EnumerateArray().Select(x => x.GetString()).Should().Equal("docs");
+        var selected = body.GetProperty("selected");
+        selected.GetProperty("folders").EnumerateArray().Select(x => x.GetString()).Should().Equal("docs");
+        selected.GetProperty("rootFiles").EnumerateArray().Select(x => x.GetString()).Should().Equal("README.md");
+        selected.GetProperty("extensions").EnumerateArray().Select(x => x.GetString()).Should().Equal(".md");
         // backend/SECRET.md делает backend кандидатом, хотя в область он не входит
-        body.GetProperty("candidates").EnumerateArray().Select(c => c.GetProperty("path").GetString())
+        body.GetProperty("folderCandidates").EnumerateArray().Select(c => c.GetProperty("path").GetString())
             .Should().Contain(["docs", "backend"]);
+        body.GetProperty("rootFileCandidates").EnumerateArray().Select(c => c.GetProperty("name").GetString())
+            .Should().Contain("README.md");
+        body.GetProperty("supportedExtensions").EnumerateArray().Select(x => x.GetString())
+            .Should().Contain(".txt");
     }
 
     [Fact]
-    public async Task Папки_СменаОбласти_МеняетИндексИГейт()
+    public async Task Область_СменаПапок_МеняетИндексИГейт()
     {
         var id = await SetupProjectAsync();
 
-        var put = await _client.PutAsJsonAsync($"/api/projects/{id}/docs/folders", new { folders = new[] { "backend" } });
+        var put = await _client.PutAsJsonAsync($"/api/projects/{id}/docs/scope",
+            new { folders = new[] { "backend" }, rootFiles = new[] { "README.md" }, extensions = new[] { ".md" } });
         put.StatusCode.Should().Be(HttpStatusCode.OK);
 
         var index = JsonSerializer.Deserialize<JsonElement>(
@@ -134,15 +141,36 @@ public class DocsControllerTests : IClassFixture<TestWebApplicationFactory>
     }
 
     [Fact]
-    public async Task Папки_МусорныеЗначения_НеСохраняются()
+    public async Task Область_СнятыйФайлКорня_УходитИзИндекса()
     {
         var id = await SetupProjectAsync();
 
-        var put = await _client.PutAsJsonAsync($"/api/projects/{id}/docs/folders",
-            new { folders = new[] { "../../etc", "docs/" } });
+        await _client.PutAsJsonAsync($"/api/projects/{id}/docs/scope",
+            new { folders = new[] { "docs" }, rootFiles = Array.Empty<string>(), extensions = new[] { ".md" } });
 
-        var body = JsonSerializer.Deserialize<JsonElement>(await put.Content.ReadAsStringAsync());
-        body.GetProperty("selected").EnumerateArray().Select(x => x.GetString()).Should().Equal("docs");
+        var index = JsonSerializer.Deserialize<JsonElement>(
+            await (await _client.GetAsync($"/api/projects/{id}/docs")).Content.ReadAsStringAsync());
+        index.EnumerateArray().Select(d => d.GetProperty("path").GetString())
+            .Should().BeEquivalentTo(["docs/architecture.md"]);
+    }
+
+    [Fact]
+    public async Task Область_МусорныеЗначения_НеСохраняются()
+    {
+        var id = await SetupProjectAsync();
+
+        var put = await _client.PutAsJsonAsync($"/api/projects/{id}/docs/scope", new
+        {
+            folders = new[] { "../../etc", "docs/" },
+            rootFiles = new[] { "docs/architecture.md", "README.md" },
+            extensions = new[] { ".pdf", "MD" },
+        });
+
+        var selected = JsonSerializer.Deserialize<JsonElement>(await put.Content.ReadAsStringAsync())
+            .GetProperty("selected");
+        selected.GetProperty("folders").EnumerateArray().Select(x => x.GetString()).Should().Equal("docs");
+        selected.GetProperty("rootFiles").EnumerateArray().Select(x => x.GetString()).Should().Equal("README.md");
+        selected.GetProperty("extensions").EnumerateArray().Select(x => x.GetString()).Should().Equal(".md");
     }
 
     [Fact]

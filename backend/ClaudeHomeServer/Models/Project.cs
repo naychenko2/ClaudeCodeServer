@@ -39,10 +39,15 @@ public class Project
     public bool ShowHiddenFiles { get; set; } = false;
     public bool ToolsEnabled { get; set; } = false;
     public Dictionary<string, List<string>>? DocumentTags { get; set; }
-    // Папки документации для панели «Документы» (относительные пути от RootPath).
-    // null — дефолт (docs/); пустой список — осознанный выбор «только README.md в корне».
-    // README.md в области всегда, папкой он не настраивается.
+    // Область документации для панели «Документы». Везде null — «дефолт», а пустой
+    // список — осознанный выбор «ничего отсюда»:
+    //   DocsFolders    — папки (относительные пути от RootPath), дефолт docs/;
+    //   DocsRootFiles  — файлы в корне поимённо, дефолт README.md (в корне лежит и код,
+    //                    поэтому папкой он не выбирается — только конкретные файлы);
+    //   DocsExtensions — какие файлы считать документацией, дефолт .md.
     public List<string>? DocsFolders { get; set; }
+    public List<string>? DocsRootFiles { get; set; }
+    public List<string>? DocsExtensions { get; set; }
     // Реестр общих тегов проекта (имя, порядок, цвет) — per-owner изоляция
     public List<ProjectTag> TagRegistry { get; set; } = [];
     // Правила авто-разрешений/запретов для permission-запросов (см. PermissionRule)

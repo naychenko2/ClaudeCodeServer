@@ -17,18 +17,22 @@ namespace ClaudeHomeServer.Services.Docs;
 // контроллер — сюда попадает уже разрешённый корень.
 public sealed partial class DocsIndexService
 {
-    // Область документации. Имена точные: на Linux файловая система регистрозависима,
-    // и «Docs/» — это другая папка, а не та же самая.
-    private const string ReadmeName = "README.md";
+    // Область по умолчанию, пока проект не настроил свою: docs/ + README.md + markdown.
+    // Имена точные: на Linux файловая система регистрозависима, и «Docs/» — другая папка.
+    public static readonly DocsScope DefaultScope = new(["docs"], ["README.md"], [".md"]);
 
-    // Папки по умолчанию, пока проект не настроил свои (Project.DocsFolders == null)
-    public static readonly IReadOnlyList<string> DefaultFolders = ["docs"];
+    // Что продукт умеет показывать как документацию: markdown во всех расширениях плюс
+    // простой текст. Дальше этого списка область не расширяется — .pdf или .docx панель
+    // отрендерить не может, и предлагать их в настройке было бы обманом.
+    public static readonly IReadOnlyList<string> SupportedExtensions =
+        [".md", ".markdown", ".mdx", ".txt", ".rst"];
 
     // Предохранители: область не должна превращаться в обход всего репозитория
     private const int MaxDocs = 2000;
     private const long MaxDocBytes = 2 * 1024 * 1024;
     // Больше папок в области — это уже «весь репозиторий», а список в диалоге перестаёт читаться
     private const int MaxFolders = 30;
+    private const int MaxRootFiles = 50;
 
     // Глубина и объём поиска кандидатов в папки: диалогу нужны обозримые варианты,
     // а не полный обход репозитория с node_modules
@@ -66,19 +70,19 @@ public sealed partial class DocsIndexService
 
     // ---------- публичное API ----------
 
-    // folders во всех методах: null — папки по умолчанию (docs/), пустой список — только
-    // README.md. Настройка приходит из Project.DocsFolders, разбирать её здесь незачем —
-    // сервис не знает про проекты и работает от корня папки.
-    public IReadOnlyList<DocEntry> GetIndex(string rootPath, IReadOnlyList<string>? folders = null) =>
-        GetCorpus(rootPath, folders).Docs;
+    // scope во всех методах: null — область по умолчанию. Настройка приходит из полей
+    // Project.Docs*, разбирать её здесь незачем — сервис не знает про проекты и работает
+    // от корня папки.
+    public IReadOnlyList<DocEntry> GetIndex(string rootPath, DocsScope? scope = null) =>
+        GetCorpus(rootPath, scope).Docs;
 
     // Документ с содержимым и связями. null — путь вне области документации: это и есть
     // гейт эндпоинта. Проверяем ВХОЖДЕНИЕМ В ИНДЕКС, а не сравнением строки с «docs/»:
     // индекс построен обходом реальной файловой системы, поэтому вопрос регистра и
     // разделителей решается один раз здесь, одинаково для Windows и Linux.
-    public DocDetail? GetDoc(string rootPath, string relativePath, IReadOnlyList<string>? folders = null)
+    public DocDetail? GetDoc(string rootPath, string relativePath, DocsScope? scope = null)
     {
-        var corpus = GetCorpus(rootPath, folders);
+        var corpus = GetCorpus(rootPath, scope);
         var key = NormalizePath(relativePath);
         if (key is null || !corpus.ByPath.TryGetValue(key, out var entry)) return null;
         if (!corpus.Texts.TryGetValue(key, out var text)) return null;
@@ -89,10 +93,10 @@ public sealed partial class DocsIndexService
     }
 
     public IReadOnlyList<DocSearchHit> Search(string rootPath, string query,
-        IReadOnlyList<string>? folders = null, int limit = 50)
+        DocsScope? scope = null, int limit = 50)
     {
         if (string.IsNullOrWhiteSpace(query)) return [];
-        var corpus = GetCorpus(rootPath, folders);
+        var corpus = GetCorpus(rootPath, scope);
         var q = query.Trim();
         var hits = new List<DocSearchHit>();
 
@@ -128,13 +132,26 @@ public sealed partial class DocsIndexService
 
     // ---------- настройка области ----------
 
-    // Папки настройки к каноничному виду: прямые слэши, без краёв-разделителей, без дублей
-    // и без выходов за корень. Мусор молча отбрасывается — настройка приходит с фронта, и
-    // ронять из-за неё индекс всего проекта незачем.
-    // Пустой список НЕ подменяется дефолтом: «снял все галки» — это осознанное «только README».
+    // Область к каноничному виду. Мусор молча отбрасывается — настройка приходит с фронта,
+    // и ронять из-за неё индекс всего проекта незачем. Пустой список НЕ подменяется
+    // дефолтом: «снял все галки» — осознанный выбор, а не отсутствие настройки (это null).
+    public static DocsScope NormalizeScope(DocsScope? scope) => scope is null
+        ? DefaultScope
+        : new DocsScope(
+            NormalizeFolders(scope.Folders),
+            NormalizeRootFiles(scope.RootFiles),
+            NormalizeExtensions(scope.Extensions));
+
+    // Собрать область из полей проекта: у каждой оси свой null со своим дефолтом
+    public static DocsScope ScopeOf(Project project) => NormalizeScope(new DocsScope(
+        project.DocsFolders ?? DefaultScope.Folders,
+        project.DocsRootFiles ?? DefaultScope.RootFiles,
+        project.DocsExtensions ?? DefaultScope.Extensions));
+
+    // Папки: прямые слэши, без краёв-разделителей, без дублей и без выходов за корень
     public static IReadOnlyList<string> NormalizeFolders(IReadOnlyList<string>? folders)
     {
-        if (folders is null) return DefaultFolders;
+        if (folders is null) return DefaultScope.Folders;
         var result = new List<string>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var raw in folders)
@@ -143,6 +160,42 @@ public sealed partial class DocsIndexService
             if (folder is null || !seen.Add(folder)) continue;
             result.Add(folder);
             if (result.Count >= MaxFolders) break;
+        }
+        return result;
+    }
+
+    // Корневые файлы — именами, без путей: подпапки задаются папками, и «docs/x.md»
+    // здесь означал бы вторую дорогу к тому же файлу мимо настройки папок
+    public static IReadOnlyList<string> NormalizeRootFiles(IReadOnlyList<string>? files)
+    {
+        if (files is null) return DefaultScope.RootFiles;
+        var result = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var raw in files)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) continue;
+            var name = raw.Trim().Replace('\\', '/');
+            if (name.Contains('/') || name.Contains(':') || name is "." or "..") continue;
+            if (!seen.Add(name)) continue;
+            result.Add(name);
+            if (result.Count >= MaxRootFiles) break;
+        }
+        return result;
+    }
+
+    // Расширения: только те, что продукт умеет показывать. Точка и регистр приводятся,
+    // чтобы «MD» и «.md» не считались разными
+    public static IReadOnlyList<string> NormalizeExtensions(IReadOnlyList<string>? extensions)
+    {
+        if (extensions is null) return DefaultScope.Extensions;
+        var result = new List<string>();
+        foreach (var raw in extensions)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) continue;
+            var ext = raw.Trim().ToLowerInvariant();
+            if (!ext.StartsWith('.')) ext = '.' + ext;
+            if (!SupportedExtensions.Contains(ext) || result.Contains(ext)) continue;
+            result.Add(ext);
         }
         return result;
     }
@@ -167,13 +220,13 @@ public sealed partial class DocsIndexService
 
     // ---------- сборка корпуса ----------
 
-    private DocsCorpus GetCorpus(string rootPath, IReadOnlyList<string>? folders)
+    private DocsCorpus GetCorpus(string rootPath, DocsScope? rawScope)
     {
         var root = Path.GetFullPath(rootPath);
-        var scope = NormalizeFolders(folders);
+        var scope = NormalizeScope(rawScope);
         // Ключ кеша — корень ВМЕСТЕ с областью: у соседей по папке (один RootPath, разные
         // владельцы) настройки свои, и без области в ключе они вытесняли бы корпус друг друга
-        var key = root + "\n" + string.Join('\n', scope);
+        var key = $"{root}\n{string.Join('|', scope.Folders)}\n{string.Join('|', scope.RootFiles)}\n{string.Join('|', scope.Extensions)}";
         var files = CollectFiles(root, scope);
         var fingerprint = Fingerprint(root, files);
 
@@ -185,23 +238,28 @@ public sealed partial class DocsIndexService
         return corpus;
     }
 
-    // Файлы области. README ищем точным именем, выбранные папки обходим целиком.
-    private static List<string> CollectFiles(string root, IReadOnlyList<string> folders)
+    // Файлы области: выбранные файлы корня поимённо + выбранные папки целиком.
+    // Корневые файлы берём как названы, не проверяя расширение: раз пользователь выбрал
+    // файл явно — он важнее общего фильтра типов.
+    private static List<string> CollectFiles(string root, DocsScope scope)
     {
         var files = new List<string>();
         // Вложенные друг в друга папки настройки («docs» и «docs/adr») дают один файл дважды
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         try
         {
-            var readme = Path.Combine(root, ReadmeName);
-            if (File.Exists(readme) && seen.Add(readme)) files.Add(readme);
+            foreach (var name in scope.RootFiles)
+            {
+                var file = Path.Combine(root, name);
+                if (File.Exists(file) && seen.Add(file)) files.Add(file);
+            }
 
-            foreach (var folder in folders)
+            foreach (var folder in scope.Folders)
             {
                 if (files.Count >= MaxDocs) break;
                 var dir = Path.Combine(root, folder.Replace('/', Path.DirectorySeparatorChar));
                 if (!Directory.Exists(dir)) continue;
-                foreach (var file in EnumerateMarkdown(dir))
+                foreach (var file in EnumerateDocs(dir, scope.Extensions))
                 {
                     if (files.Count >= MaxDocs) break;
                     if (seen.Add(file)) files.Add(file);
@@ -213,10 +271,18 @@ public sealed partial class DocsIndexService
         return files;
     }
 
-    // Обход .md вручную, а не EnumerateFiles(AllDirectories): нужен пропуск служебных
+    private static bool HasExtension(string path, IReadOnlyList<string> extensions)
+    {
+        var ext = Path.GetExtension(path);
+        foreach (var allowed in extensions)
+            if (string.Equals(ext, allowed, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
+    // Обход вручную, а не EnumerateFiles(AllDirectories): нужен пропуск служебных
     // подпапок. Выбранной может оказаться папка с node_modules внутри, и рекурсия туда
     // затянула бы тысячи чужих README.
-    private static IEnumerable<string> EnumerateMarkdown(string dir)
+    private static IEnumerable<string> EnumerateDocs(string dir, IReadOnlyList<string> extensions)
     {
         var queue = new Queue<string>();
         queue.Enqueue(dir);
@@ -226,13 +292,16 @@ public sealed partial class DocsIndexService
             string[] files, subdirs;
             try
             {
-                files = Directory.GetFiles(current, "*.md");
+                files = Directory.GetFiles(current);
                 subdirs = Directory.GetDirectories(current);
             }
             catch (DirectoryNotFoundException) { continue; }
             catch (UnauthorizedAccessException) { continue; }
 
-            foreach (var f in files) yield return f;
+            // Фильтр по расширениям в коде, а не маской GetFiles: расширений в области
+            // несколько, и один проход дешевле нескольких обходов той же папки
+            foreach (var f in files)
+                if (HasExtension(f, extensions)) yield return f;
             foreach (var sub in subdirs)
             {
                 var name = Path.GetFileName(sub);
@@ -242,16 +311,57 @@ public sealed partial class DocsIndexService
         }
     }
 
-    // Кандидаты в папки документации: папки с .md внутри, неглубоко и без служебных.
-    // Выбранные добавляются всегда — в том числе несуществующие, иначе галка на удалённой
-    // папке пропала бы из диалога, и пустой список документов выглядел бы поломкой.
-    public IReadOnlyList<DocFolderCandidate> SuggestFolders(string rootPath, IReadOnlyList<string>? folders = null)
+    // Настройка области целиком: что выбрано, что можно выбрать, что было бы по умолчанию
+    public DocsScopeInfo Describe(string rootPath, DocsScope? rawScope = null)
+    {
+        var scope = NormalizeScope(rawScope);
+        return new DocsScopeInfo(
+            scope,
+            SuggestFolders(rootPath, scope),
+            SuggestRootFiles(rootPath, scope),
+            SupportedExtensions,
+            DefaultScope);
+    }
+
+    // Кандидаты в корневые файлы: всё подходящее по расширению, что лежит в корне.
+    // Считаем по ВСЕМ поддерживаемым расширениям, а не по выбранным: иначе, сузив типы
+    // до .md, пользователь терял бы из виду свой же выбранный CHANGELOG.txt.
+    public IReadOnlyList<DocRootFileCandidate> SuggestRootFiles(string rootPath, DocsScope? rawScope = null)
     {
         var root = Path.GetFullPath(rootPath);
+        var scope = NormalizeScope(rawScope);
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            foreach (var file in Directory.GetFiles(root))
+            {
+                if (!HasExtension(file, SupportedExtensions)) continue;
+                names.Add(Path.GetFileName(file));
+                if (names.Count >= MaxRootFiles) break;
+            }
+        }
+        catch (DirectoryNotFoundException) { /* корень проекта исчез — отдаём выбранные */ }
+        catch (UnauthorizedAccessException) { }
+
+        foreach (var name in scope.RootFiles) names.Add(name);
+
+        return names
+            .Select(n => new DocRootFileCandidate(n, File.Exists(Path.Combine(root, n))))
+            .OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    // Кандидаты в папки документации: папки с документами внутри, неглубоко и без служебных.
+    // Выбранные добавляются всегда — в том числе несуществующие, иначе галка на удалённой
+    // папке пропала бы из диалога, и пустой список документов выглядел бы поломкой.
+    public IReadOnlyList<DocFolderCandidate> SuggestFolders(string rootPath, DocsScope? rawScope = null)
+    {
+        var root = Path.GetFullPath(rootPath);
+        var scope = NormalizeScope(rawScope);
         var found = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         Walk(root, "", 0);
 
-        foreach (var folder in NormalizeFolders(folders))
+        foreach (var folder in scope.Folders)
             found.TryAdd(folder, 0);
 
         return found
@@ -260,20 +370,21 @@ public sealed partial class DocsIndexService
             .OrderBy(c => c.Path, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        // Возвращает число .md в поддереве: родительская папка показывает суммарный счётчик,
-        // даже когда её собственные .md лежат уровнем ниже (docs/ со всем внутри adr/)
+        // Возвращает число документов в поддереве: родительская папка показывает суммарный
+        // счётчик, даже когда её собственные документы лежат уровнем ниже (docs/ и docs/adr/).
+        // Считаем по расширениям ОБЛАСТИ — цифра должна совпадать с тем, что даст выбор папки
         int Walk(string dir, string rel, int depth)
         {
             string[] files, subdirs;
             try
             {
-                files = Directory.GetFiles(dir, "*.md");
+                files = Directory.GetFiles(dir);
                 subdirs = Directory.GetDirectories(dir);
             }
             catch (DirectoryNotFoundException) { return 0; }
             catch (UnauthorizedAccessException) { return 0; }
 
-            var count = files.Length;
+            var count = files.Count(f => HasExtension(f, scope.Extensions));
             if (depth < SuggestMaxDepth)
             {
                 foreach (var sub in subdirs)
@@ -385,6 +496,8 @@ public sealed partial class DocsIndexService
         // Папка старше заголовка, иначе документы разных групп перемешались бы между собой.
         docs.Sort((a, b) =>
         {
+            // README — первый среди корневых: он вход в документацию, а по алфавиту
+            // заголовков мог оказаться где угодно среди прочих файлов корня
             if (IsReadme(a.Path) != IsReadme(b.Path)) return IsReadme(a.Path) ? -1 : 1;
             var byFolder = string.Compare(Folder(a.Path), Folder(b.Path), StringComparison.OrdinalIgnoreCase);
             if (byFolder != 0) return byFolder;
@@ -401,8 +514,10 @@ public sealed partial class DocsIndexService
         };
     }
 
+    // README любого поддерживаемого расширения: в корне лежит и README.md, и README.txt
     private static bool IsReadme(string relativePath) =>
-        string.Equals(relativePath, ReadmeName, StringComparison.OrdinalIgnoreCase);
+        !relativePath.Contains('/') &&
+        Path.GetFileNameWithoutExtension(relativePath).Equals("README", StringComparison.OrdinalIgnoreCase);
 
     // Папка документа («docs/adr/x.md» → «docs/adr»); корневые документы — пустая строка
     private static string Folder(string relativePath)

@@ -286,7 +286,11 @@ public class DocsIndexTests : IDisposable
         _svc.Search(_root, "   ").Should().BeEmpty();
     }
 
-    // ─── Настройка области (Project.DocsFolders) ────────────────────────────
+    // ─── Настройка области (Project.Docs*) ──────────────────────────────────
+
+    // Область для теста: папки задаются явно, файлы корня и типы — дефолтные
+    private static DocsScope Scope(params string[] folders) =>
+        new(folders, DocsIndexService.DefaultScope.RootFiles, DocsIndexService.DefaultScope.Extensions);
 
     [Fact]
     public void Настройка_КастомнаяПапка_ЗамещаетDocs()
@@ -295,20 +299,20 @@ public class DocsIndexTests : IDisposable
         Write("# Из docs", "docs", "a.md");
         Write("# Из wiki", "wiki", "b.md");
 
-        var index = _svc.GetIndex(_root, ["wiki"]);
+        var index = _svc.GetIndex(_root, Scope("wiki"));
 
-        // README в области всегда — он не папка и настройкой не отключается
+        // README в дефолтной области — он выбран как файл корня, а не как папка
         index.Select(d => d.Path).Should().BeEquivalentTo(["README.md", "wiki/b.md"]);
     }
 
     [Fact]
-    public void Настройка_ПустойСписок_ОставляетТолькоReadme()
+    public void Настройка_ПустойСписокПапок_ОставляетТолькоФайлыКорня()
     {
         Write("# Проект", "README.md");
         Write("# Из docs", "docs", "a.md");
 
         // Пустой список — осознанное «снял все галки», а не «настройки нет»
-        _svc.GetIndex(_root, []).Select(d => d.Path).Should().BeEquivalentTo(["README.md"]);
+        _svc.GetIndex(_root, Scope()).Select(d => d.Path).Should().BeEquivalentTo(["README.md"]);
     }
 
     [Fact]
@@ -316,7 +320,7 @@ public class DocsIndexTests : IDisposable
     {
         Write("# Вложенный", "docs", "adr", "0001.md");
 
-        var index = _svc.GetIndex(_root, ["docs", "docs/adr"]);
+        var index = _svc.GetIndex(_root, Scope("docs", "docs/adr"));
 
         index.Should().ContainSingle().Which.Path.Should().Be("docs/adr/0001.md");
     }
@@ -327,8 +331,8 @@ public class DocsIndexTests : IDisposable
         Write("# Из docs", "docs", "a.md");
         Write("# Из wiki", "wiki", "b.md");
 
-        _svc.GetDoc(_root, "docs/a.md", ["wiki"]).Should().BeNull();
-        _svc.GetDoc(_root, "wiki/b.md", ["wiki"]).Should().NotBeNull();
+        _svc.GetDoc(_root, "docs/a.md", Scope("wiki")).Should().BeNull();
+        _svc.GetDoc(_root, "wiki/b.md", Scope("wiki")).Should().NotBeNull();
     }
 
     [Fact]
@@ -338,9 +342,128 @@ public class DocsIndexTests : IDisposable
         Write("# Из docs", "docs", "a.md");
 
         // Один корень, разные области — у соседей по папке настройки свои
-        _svc.GetIndex(_root, ["docs"]).Should().HaveCount(2);
-        _svc.GetIndex(_root, []).Should().HaveCount(1);
-        _svc.GetIndex(_root, ["docs"]).Should().HaveCount(2);
+        _svc.GetIndex(_root, Scope("docs")).Should().HaveCount(2);
+        _svc.GetIndex(_root, Scope()).Should().HaveCount(1);
+        _svc.GetIndex(_root, Scope("docs")).Should().HaveCount(2);
+    }
+
+    // ─── Файлы в корне ──────────────────────────────────────────────────────
+
+    [Fact]
+    public void ФайлыКорня_ВыбранныеПопадают_ОстальныеНет()
+    {
+        Write("# Проект", "README.md");
+        Write("# История", "CHANGELOG.md");
+        Write("# Вклад", "CONTRIBUTING.md");
+
+        var scope = new DocsScope([], ["README.md", "CHANGELOG.md"], [".md"]);
+
+        _svc.GetIndex(_root, scope).Select(d => d.Path)
+            .Should().BeEquivalentTo(["README.md", "CHANGELOG.md"]);
+    }
+
+    [Fact]
+    public void ФайлыКорня_ПустойСписок_УбираетДажеReadme()
+    {
+        Write("# Проект", "README.md");
+        Write("# Док", "docs", "a.md");
+
+        // README не привилегирован: он такой же выбранный файл, как остальные
+        _svc.GetIndex(_root, new DocsScope(["docs"], [], [".md"]))
+            .Select(d => d.Path).Should().BeEquivalentTo(["docs/a.md"]);
+    }
+
+    [Fact]
+    public void ФайлыКорня_ВыбранныйФайл_ОтдаётсяДажеСЧужимРасширением()
+    {
+        Write("Просто текст", "NOTES.txt");
+
+        // Явный выбор файла сильнее общего фильтра типов: пользователь назвал его поимённо
+        _svc.GetIndex(_root, new DocsScope([], ["NOTES.txt"], [".md"]))
+            .Should().ContainSingle().Which.Path.Should().Be("NOTES.txt");
+    }
+
+    [Fact]
+    public void ФайлыКорня_ФайлИзПодпапки_НеПринимается()
+    {
+        Write("# Док", "docs", "a.md");
+
+        // Подпапки задаются папками; путь здесь был бы второй дорогой мимо той настройки
+        _svc.GetIndex(_root, new DocsScope([], ["docs/a.md"], [".md"])).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Порядок_ReadmeПервыйСредиФайлевКорня()
+    {
+        Write("# Абрикос", "CHANGELOG.md");
+        Write("# Яблоко", "README.md");
+
+        var index = _svc.GetIndex(_root, new DocsScope([], ["README.md", "CHANGELOG.md"], [".md"]));
+
+        // README — вход в документацию, по алфавиту заголовков он был бы вторым
+        index[0].Path.Should().Be("README.md");
+    }
+
+    // ─── Расширения ─────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Расширения_ВОбластьПопадаетТолькоВыбранное()
+    {
+        Write("# Маркдаун", "docs", "a.md");
+        Write("Текст", "docs", "b.txt");
+        Write("Структурированный", "docs", "c.rst");
+
+        _svc.GetIndex(_root, new DocsScope(["docs"], [], [".md"]))
+            .Select(d => d.Path).Should().BeEquivalentTo(["docs/a.md"]);
+
+        _svc.GetIndex(_root, new DocsScope(["docs"], [], [".md", ".txt", ".rst"]))
+            .Select(d => d.Path).Should().BeEquivalentTo(["docs/a.md", "docs/b.txt", "docs/c.rst"]);
+    }
+
+    [Fact]
+    public void Расширения_ЗаголовокНеMarkdownФайла_ИзИмени()
+    {
+        Write("Просто текст без разметки", "docs", "readme-plain.txt");
+
+        _svc.GetIndex(_root, new DocsScope(["docs"], [], [".txt"]))
+            .Should().ContainSingle().Which.Title.Should().Be("readme-plain");
+    }
+
+    [Theory]
+    [InlineData("md", ".md")]
+    [InlineData(".MD", ".md")]
+    [InlineData(" .txt ", ".txt")]
+    public void Расширения_Нормализуются(string raw, string expected)
+    {
+        DocsIndexService.NormalizeExtensions([raw]).Should().Equal(expected);
+    }
+
+    [Theory]
+    [InlineData(".pdf")]
+    [InlineData(".docx")]
+    [InlineData("")]
+    [InlineData(".")]
+    public void Расширения_НеподдерживаемоеОтбрасывается(string raw)
+    {
+        // Панель их не отрендерит, и предлагать такое в настройке было бы обманом
+        DocsIndexService.NormalizeExtensions([raw]).Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("docs/a.md")]
+    [InlineData("../secret.md")]
+    [InlineData("C:/Windows/win.md")]
+    [InlineData("..")]
+    [InlineData("")]
+    public void ФайлыКорня_НепригодноеЗначение_Отбрасывается(string raw)
+    {
+        DocsIndexService.NormalizeRootFiles([raw]).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ФайлыКорня_Дубли_Схлопываются()
+    {
+        DocsIndexService.NormalizeRootFiles(["README.md", "readme.md"]).Should().ContainSingle();
     }
 
     [Fact]
@@ -349,7 +472,7 @@ public class DocsIndexTests : IDisposable
         Write("# Наш", "docs", "a.md");
         Write("# Чужой", "docs", "node_modules", "pkg", "README.md");
 
-        _svc.GetIndex(_root, ["docs"]).Should().ContainSingle().Which.Path.Should().Be("docs/a.md");
+        _svc.GetIndex(_root, Scope("docs")).Should().ContainSingle().Which.Path.Should().Be("docs/a.md");
     }
 
     [Theory]
@@ -393,7 +516,7 @@ public class DocsIndexTests : IDisposable
     [Fact]
     public void Нормализация_Null_ЭтоДефолт()
     {
-        DocsIndexService.NormalizeFolders(null).Should().Equal(DocsIndexService.DefaultFolders);
+        DocsIndexService.NormalizeFolders(null).Should().Equal(DocsIndexService.DefaultScope.Folders);
     }
 
     // ─── Кандидаты в папки документации ─────────────────────────────────────
@@ -422,7 +545,7 @@ public class DocsIndexTests : IDisposable
 
         // Выбранное пусто намеренно: с дефолтом в списке всегда была бы строка «docs»
         // (выбранные показываются даже несуществующими), и проверка кандидатов размылась бы
-        _svc.SuggestFolders(_root, []).Should().BeEmpty();
+        _svc.SuggestFolders(_root, Scope()).Should().BeEmpty();
     }
 
     [Fact]
@@ -430,13 +553,68 @@ public class DocsIndexTests : IDisposable
     {
         Write("# А", "docs", "a.md");
 
-        var candidates = _svc.SuggestFolders(_root, ["docs", "wiki"]);
+        var candidates = _svc.SuggestFolders(_root, Scope("docs", "wiki"));
 
         // Иначе галка на удалённой папке молча исчезла бы, и пустой список документов
         // выглядел бы поломкой панели, а не следствием настройки
         var wiki = candidates.Single(c => c.Path == "wiki");
         wiki.Exists.Should().BeFalse();
         wiki.Count.Should().Be(0);
+    }
+
+    // ─── Кандидаты в файлы корня ────────────────────────────────────────────
+
+    [Fact]
+    public void КандидатыКорня_ВсёПодходящееПоРасширению_ИзКорня()
+    {
+        Write("# Проект", "README.md");
+        Write("# История", "CHANGELOG.md");
+        Write("Заметки", "NOTES.txt");
+        Write("код", "Program.cs");            // не документация
+        Write("# Внутри папки", "docs", "a.md");   // не корень
+
+        var names = _svc.SuggestRootFiles(_root).Select(c => c.Name);
+
+        names.Should().BeEquivalentTo(["README.md", "CHANGELOG.md", "NOTES.txt"]);
+    }
+
+    [Fact]
+    public void КандидатыКорня_СчитаютсяПоВсемПоддерживаемым_НеПоВыбранным()
+    {
+        Write("# Проект", "README.md");
+        Write("Заметки", "NOTES.txt");
+
+        // Сузив типы до .md, пользователь не должен терять из виду свой же NOTES.txt
+        var names = _svc.SuggestRootFiles(_root, new DocsScope([], ["README.md"], [".md"]))
+            .Select(c => c.Name);
+
+        names.Should().Contain("NOTES.txt");
+    }
+
+    [Fact]
+    public void КандидатыКорня_ВыбранныйНесуществующий_ОстаётсяВСписке()
+    {
+        Write("# Проект", "README.md");
+
+        var candidates = _svc.SuggestRootFiles(_root, new DocsScope([], ["README.md", "GONE.md"], [".md"]));
+
+        candidates.Single(c => c.Name == "GONE.md").Exists.Should().BeFalse();
+        candidates.Single(c => c.Name == "README.md").Exists.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Описание_ОтдаётВыбранноеКандидатовИДефолты()
+    {
+        Write("# Проект", "README.md");
+        Write("# Док", "docs", "a.md");
+
+        var info = _svc.Describe(_root);
+
+        info.Selected.Should().BeEquivalentTo(DocsIndexService.DefaultScope);
+        info.FolderCandidates.Select(c => c.Path).Should().Contain("docs");
+        info.RootFileCandidates.Select(c => c.Name).Should().Contain("README.md");
+        info.SupportedExtensions.Should().Contain(".md").And.Contain(".txt");
+        info.Defaults.Should().BeEquivalentTo(DocsIndexService.DefaultScope);
     }
 
     public void Dispose()

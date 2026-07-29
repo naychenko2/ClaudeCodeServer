@@ -983,6 +983,12 @@ export const api = {
       request<void>('/history', { method: 'DELETE' }),
   },
 
+  // Раздел «Телеметрия»: статус проброса SigNoz — фронт решает, показать iframe или заглушку
+  telemetry: {
+    status: () =>
+      request<{ configured: boolean; reachable: boolean; proxyPath: string }>('/telemetry/status'),
+  },
+
   files: {
     list: (projectId: string, path = '') =>
       request<FileEntry[]>(`/projects/${projectId}/files?path=${encodeURIComponent(path)}`),

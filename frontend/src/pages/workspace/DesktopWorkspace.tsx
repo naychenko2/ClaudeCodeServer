@@ -7,7 +7,8 @@
 import { useState, useRef, type ReactNode, type PointerEvent as ReactPointerEvent } from 'react';
 import { Plus, MessageCircle } from 'lucide-react';
 import type { Project, Session, Task, SkillInfo, AgentInfo } from '../../types';
-import { C, FONT, ISLAND } from '../../lib/design';
+import { C, FONT, ISLAND, CHAT_MAX_W } from '../../lib/design';
+import { useCenterOffset } from '../../lib/centerOffset';
 import { Button, Island } from '../../components/ui';
 import { ICON_SIZE } from '../../components/ui/icons';
 import { IslandSplitter } from '../../components/ui/IslandSplitter';
@@ -198,6 +199,13 @@ export function DesktopWorkspace(p: Props) {
     </div>
   );
 
+  // В центре одиночный чат — единственный режим с колонкой фиксированной ширины,
+  // поэтому только ему нужна компенсация перекоса зон (файл, доска, граф и превью
+  // резиновые: им положено занимать всю колонку целиком).
+  const chatOnly = !p.openFile && !p.openCommitSha && !p.selectedTask && !personaOpen
+    && !p.teamCenterOpen && !p.boardOpen && !p.previewOpen && !p.graphOpen;
+  const { rootRef: offsetRootRef, centerRef: offsetCenterRef } = useCenterOffset(chatOnly ? CHAT_MAX_W : undefined);
+
   // Центральный остров: карточка на холсте, внутри — оригинальная обёртка режима
   // (flex:1 в колонке острова растягивает её на всю высоту). По бокам — доп. воздух
   // (ISLAND.centerGap сверх зазора-сплиттера), чтобы карточка не липла к соседям
@@ -211,7 +219,7 @@ export function DesktopWorkspace(p: Props) {
     // Холст Islands: собственный relative-контекст (fullscreen-панель и планшетный
     // drawer RightPanelStack позиционируются absolute от него). Справа padding нет —
     // рельса инструментов прижата к краю окна.
-    <div style={{
+    <div ref={offsetRootRef} style={{
       flex: 1, minWidth: 0, display: 'flex', position: 'relative',
       // Снизу — просторный pad, сверху — узкий gap под шапкой; по бокам 0 —
       // обе рельсы прижаты к краям окна.
@@ -282,8 +290,8 @@ export function DesktopWorkspace(p: Props) {
       )}
 
       {/* Одиночный чат — без рамки на холсте, в остров выделена только его шапка */}
-      {!p.openFile && !p.openCommitSha && !p.selectedTask && !personaOpen && !p.teamCenterOpen && !p.boardOpen && !p.previewOpen && !p.graphOpen && (
-        <div style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
+      {chatOnly && (
+        <div ref={offsetCenterRef} style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
           {chatPanel(true)}
         </div>
       )}

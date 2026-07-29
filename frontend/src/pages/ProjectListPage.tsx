@@ -265,6 +265,9 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
             left={<PanelZone side="left" panelStack={projectsPanels} allowedKeys={PROJECTS_KEYS} panels={zonePanels} />}
             right={<PanelZone side="right" panelStack={projectsPanels} allowedKeys={PROJECTS_KEYS} panels={zonePanels} />}
             centerBare
+            // Список проектов держится середины окна независимо от того, какая
+            // из зон панелей сейчас открыта
+            centerContentWidth={CHAT_MAX_W}
             center={
           // Центр без острова, шириной как контент чата (CHAT_MAX_W по центру)
           <main style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', width: '100%', maxWidth: CHAT_MAX_W, margin: '0 auto' }}>

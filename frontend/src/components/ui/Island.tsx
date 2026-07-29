@@ -5,7 +5,7 @@ import { C, FONT, ISLAND, R } from '../../lib/design';
 // фоне-холсте. Компонент задаёт только рамку/тень/скругление и фон-подложку —
 // контент красит свой корень сам (ребёнок с собственным background перекрывает
 // подложку), поэтому существующие панели оборачиваются без правки внутренностей.
-export function Island({ bg = ISLAND.bg, borderColor = ISLAND.border, shadow = ISLAND.shadow, style, rootProps, children }: {
+export function Island({ bg = ISLAND.bg, borderColor = ISLAND.border, shadow = ISLAND.shadow, style, rootProps, rootRef, children }: {
   bg?: string;
   // Рамка/тень настраиваемы: PanelShell подсвечивает drop-таргет accent-рамкой,
   // а во fullscreen усиливает тень до модальной
@@ -15,11 +15,15 @@ export function Island({ bg = ISLAND.bg, borderColor = ISLAND.border, shadow = I
   style?: CSSProperties;
   // Атрибуты корневого div (drop-обработчики DnD и т.п.)
   rootProps?: HTMLAttributes<HTMLDivElement>;
+  // Доступ к корневому узлу — для замеров раскладки (useCenterOffset). Отдельным
+  // пропом, а не через rootProps: ref в HTMLAttributes не входит.
+  rootRef?: (el: HTMLDivElement | null) => void;
   children: ReactNode;
 }) {
   return (
     <div
       {...rootProps}
+      ref={rootRef}
       style={{
         display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0,
         background: bg, border: `1px solid ${borderColor}`,

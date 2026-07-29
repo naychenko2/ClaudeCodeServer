@@ -1,5 +1,6 @@
 import type { PointerEvent as ReactPointerEvent, ReactNode } from 'react';
 import { C, ISLAND } from '../../lib/design';
+import { useCenterOffset } from '../../lib/centerOffset';
 import { Island } from './Island';
 import { IslandSidebarSplitter } from './IslandSidebarSplitter';
 
@@ -14,7 +15,7 @@ import { IslandSidebarSplitter } from './IslandSidebarSplitter';
 //   left     — готовая рельса панелей (LeftPanelStack), рендерится как есть;
 //   sidebar* — старый сайдбар-остров с ресайзом (Notes/Knowledge/Personas).
 // Когда передан left, слот sidebar игнорируется.
-export function IslandScaffold({ sidebarOpen = false, sidebar, sidebarWidth = 0, sidebarDragging = false, onSidebarDrag, onSidebarCollapse, center, centerBare, left, right }: {
+export function IslandScaffold({ sidebarOpen = false, sidebar, sidebarWidth = 0, sidebarDragging = false, onSidebarDrag, onSidebarCollapse, center, centerBare, centerContentWidth, left, right }: {
   // Старый sidebar slot — ОПЦИОНАЛЕН когда используется left (LeftPanelStack).
   sidebarOpen?: boolean;
   sidebar?: ReactNode;
@@ -28,6 +29,10 @@ export function IslandScaffold({ sidebarOpen = false, sidebar, sidebarWidth = 0,
   // Центр БЕЗ рамки-острова: контент живёт прямо на холсте (напр. чат, у которого
   // в остров выделена только шапка)
   centerBare?: boolean;
+  // Ширина контента внутри центра (CHAT_MAX_W и т.п.). Передана — центр держится
+  // середины ОКНА, а не середины остатка между зонами панелей (см. useCenterOffset).
+  // Не передана — центр резиновый, компенсировать нечего.
+  centerContentWidth?: number;
   // Готовая ЛЕВАЯ рельса (LeftPanelStack) — рендерится как есть, в начале flex-row.
   // Симметрична right: caller передаёт готовый ReactNode (рельса + панели).
   left?: ReactNode;
@@ -40,9 +45,12 @@ export function IslandScaffold({ sidebarOpen = false, sidebar, sidebarWidth = 0,
   // старый сайдбар-остров живёт с обычным паддингом холста.
   const paddingRight = right ? 0 : ISLAND.pad;
   const paddingLeft = hasLeftRail ? 0 : ISLAND.pad;
+  // Компенсация перекоса зон: центр остаётся посередине окна
+  const { rootRef: offsetRootRef, centerRef: offsetCenterRef } = useCenterOffset(centerContentWidth);
 
   return (
     <div
+      ref={offsetRootRef}
       style={{
         height: '100%', minHeight: 0, display: 'flex', position: 'relative',
         // Сверху — узкий gap под шапкой, по бокам и снизу — просторнее (pad).
@@ -68,11 +76,11 @@ export function IslandScaffold({ sidebarOpen = false, sidebar, sidebarWidth = 0,
         </>
       )}
       {centerBare ? (
-        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+        <div ref={offsetCenterRef} style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
           {center}
         </div>
       ) : (
-        <Island bg={C.bgMain} style={{ flex: 1, minWidth: 0 }}>
+        <Island rootRef={offsetCenterRef} bg={C.bgMain} style={{ flex: 1, minWidth: 0 }}>
           {center}
         </Island>
       )}

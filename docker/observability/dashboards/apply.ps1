@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Идемпотентный импортёр SigNoz-дашбордов из JSON-файлов в репозитории.
 
@@ -123,6 +123,17 @@ $headers = @{
 }
 if ($isJwt) { $headers['Authorization'] = "Bearer $Jwt" }
 
+# Те же заголовки для curl.exe — но через stdin, а не аргументами. Командная строка
+# процесса на Windows читается любым процессом того же пользователя (Get-CimInstance
+# Win32_Process, диспетчер задач с колонкой «Командная строка»), поэтому
+# `-H "SIGNOZ-API-KEY: ..."` показывал ключ всем желающим на время запроса.
+# `curl --config -` читает опции со стандартного ввода: ключ не попадает ни в аргументы,
+# ни на диск (временный файл пришлось бы ещё и гарантированно удалять).
+# Тело запроса идёт отдельно, через --data-binary @файл, так что stdin свободен.
+$curlConfig = @("header = `"SIGNOZ-API-KEY: $Jwt`"", 'header = "Content-Type: application/json; charset=utf-8"')
+if ($isJwt) { $curlConfig += "header = `"Authorization: Bearer $Jwt`"" }
+$curlConfig = $curlConfig -join "`n"
+
 # PowerShell 5.1 по умолчанию конвертирует строку-Body в ISO-8859-1 → кириллица
 # превращается в '?' на стороне SigNoz. Явно кодируем в UTF-8 байты.
 $Utf8 = [System.Text.Encoding]::UTF8
@@ -179,15 +190,12 @@ foreach ($file in $dashboardsFiles) {
     # кириллицу на отправке (даже с UTF-8 byte[]), а curl.exe шлёт файл как есть.
     $bodyFile = $file.FullName
 
-    # Заголовки для curl.exe (просто key:value строки)
-    $curlHeaders = @('-H', "SIGNOZ-API-KEY: $Jwt", '-H', 'Content-Type: application/json; charset=utf-8')
-    if ($isJwt) { $curlHeaders += @('-H', "Authorization: Bearer $Jwt") }
-
     # HTTP-код печатаем последней строкой (-w) и проверяем ЯВНО. Только на $LASTEXITCODE
     # полагаться нельзя: curl без -f отдаёт 0 и при 401/403/404/500, поэтому протухший
     # ключ выглядел как «✓ OK» — скрипт рапортовал успех, а в SigNoz ничего не заливалось.
-    function Invoke-SignozApi([string]$Method, [string]$Uri, [string[]]$Headers, [string]$File) {
-        $raw = & curl.exe -sS -X $Method $Uri @Headers --data-binary "@$File" -w "`n%{http_code}" 2>&1
+    # Заголовки (с ключом) приходят в curl по stdin через --config -, см. выше.
+    function Invoke-SignozApi([string]$Method, [string]$Uri, [string]$Config, [string]$File) {
+        $raw = $Config | & curl.exe -sS -X $Method $Uri --config - --data-binary "@$File" -w "`n%{http_code}" 2>&1
         $text = ($raw | Out-String).TrimEnd("`r", "`n")
         $lines = $text -split "`r?`n"
         $code = $lines[-1]
@@ -201,7 +209,7 @@ foreach ($file in $dashboardsFiles) {
 
     if ($match) {
         Write-Host "↻ Update '$($definition.title)' (id=$id)" -ForegroundColor Yellow
-        $r = Invoke-SignozApi 'PUT' "$SignozUrl/api/v1/dashboards/$id" $curlHeaders $bodyFile
+        $r = Invoke-SignozApi 'PUT' "$SignozUrl/api/v1/dashboards/$id" $curlConfig $bodyFile
         if ($r.Ok) {
             Write-Host "  ✓ OK (HTTP $($r.Code))" -ForegroundColor Green
             $updated++
@@ -212,7 +220,7 @@ foreach ($file in $dashboardsFiles) {
     }
     else {
         Write-Host "✓ Create '$($definition.title)'" -ForegroundColor Green
-        $r = Invoke-SignozApi 'POST' "$SignozUrl/api/v1/dashboards" $curlHeaders $bodyFile
+        $r = Invoke-SignozApi 'POST' "$SignozUrl/api/v1/dashboards" $curlConfig $bodyFile
         if ($r.Ok) {
             $newId = '?'
             try {
@@ -237,3 +245,4 @@ Write-Host ""
 Write-Host "─── Готово ───" -ForegroundColor Cyan
 Write-Host "Created: $created, Updated: $updated, Failed: $failed" -ForegroundColor $(if ($failed) { 'Yellow' } else { 'Green' })
 if ($failed) { exit 1 }
+

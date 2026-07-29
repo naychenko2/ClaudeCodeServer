@@ -16,6 +16,14 @@ services:
     environment:
     - SIGNOZ_OTEL_COLLECTOR_CLICKHOUSE_DSN=tcp://signoz-telemetrystore-clickhouse-0-0:9000
     - SIGNOZ_OTEL_COLLECTOR_TIMEOUT=10m
+    # ingester.yaml ссылается на ${env:LOW_CARDINAL_EXCEPTION_GROUPING}, а задать её было
+    # негде — переменная приезжала в коллектор ПУСТОЙ (проверено в живом контейнере).
+    # Он это молча терпел, но конфиг заявлял настройку, которой никто не управляет.
+    # false — то же поведение, что и при пустом значении: группировка исключений идёт по
+    # полному сообщению. true сгруппировал бы их по низкокардинальному ключу; нам это пока
+    # не нужно — исключений мы почти не пишем (RecordException=false у HttpClient, а
+    # PiiSanitizingLogProcessor обнуляет Exception в логах, оставляя только exception.type).
+    - LOW_CARDINAL_EXCEPTION_GROUPING=false
     # Версия запинена намеренно: с :latest любой docker compose pull подтягивает
     # новый мажор, а signoz-telemetrystore-migrator прогоняет НЕОБРАТИМЫЕ миграции
     # схемы ClickHouse — откатиться назад уже нельзя. Обновлять осознанно, сверяясь

@@ -368,37 +368,48 @@ AlertPollingService  →  NotificationService  →  колокол + тост + 
 > `error_type` и статус `Error`. Представление наполнится с первого отказа после
 > обновления инстанса.
 
-### Грабли: без колонок List View падает при применении
+### Грабли: колонки List View живут в `extraData`, а не в query
 
 Главная засада, и коварная: представление **сохраняется и открывается в списке**,
 сервер на запрос отвечает **200** с валидными данными — а фронт List View рушится уже
 при отрисовке результата, показывая красный блок
 `500 Cannot use 'in' operator to search for 'key' in service.name`. «500» тут врёт —
-это не серверная ошибка, а JS-исключение в браузере.
+это не серверная ошибка, а JS-исключение в браузере. Второй симптом того же корня —
+вечное «Retrieving your traces!» при открытии из панели Saved Views на Home.
 
-Причина — **пустой `selectFields`**. List View строит колонки из него; когда массив
-пуст, рендерер сваливается на строковый дефолт `service.name` и делает по нему
-`'key' in ...`. Лечится тем, что в `spec` кладётся дефолтный набор колонок трейса
-(снят из `defaultTraceSelectedColumns` фронтенда SigNoz):
+Причина — **колонки List View задаются НЕ в `compositeQuery`, а в отдельном top-level
+поле `extraData`** (JSON-**строка** с `selectColumns`). Без него рендерер сваливается на
+строковый дефолт `service.name` и делает по нему `'key' in ...`. Поле `spec.selectFields`
+на это НЕ влияет — тупик, на котором легко застрять (его наличие не спасает).
+
+Схема снята с официального `signoz-mcp-server`
+([pkg/views/examples.go](https://github.com/SigNoz/signoz-mcp-server/blob/main/pkg/views/examples.go)) —
+публичной доки по REST-созданию saved views у SigNoz нет, это clickops-путь. Рабочая форма:
 
 ```jsonc
-"selectFields": [
-  { "name": "service.name",          "signal": "traces", "fieldContext": "resource", "fieldDataType": "string" },
-  { "name": "name",                  "signal": "traces", "fieldContext": "span",     "fieldDataType": "string" },
-  { "name": "duration_nano",         "signal": "traces", "fieldContext": "span",     "fieldDataType": "" },
-  { "name": "http_method",           "signal": "traces", "fieldContext": "span",     "fieldDataType": "" },
-  { "name": "response_status_code",  "signal": "traces", "fieldContext": "span",     "fieldDataType": "" }
-]
+// top-level поле представления (СТРОКА, не объект):
+"extraData": "{\"selectColumns\":[{\"name\":\"service.name\",\"signal\":\"traces\"},{\"name\":\"name\",\"signal\":\"traces\"},{\"name\":\"duration_nano\",\"signal\":\"traces\"},{\"name\":\"response_status_code\",\"signal\":\"traces\"}]}",
+"compositeQuery": {
+  "queryType": "builder", "panelType": "list",
+  "queries": [ { "type": "builder_query", "spec": {
+    "name": "A", "signal": "traces", "source": "", "stepInterval": 0, "limit": 100,
+    "order": [ { "key": { "name": "timestamp" }, "direction": "desc" } ],  // не orderBy, не пусто
+    "filter":  { "expression": "name = 'chat.turn' AND outcome = 'error'" },
+    "having":  { "expression": "" }
+  } } ]
+}
 ```
 
-Заодно `groupBy`, `order`, `aggregations` держим **пустыми массивами**, а не `null`
-(v5-формат их опускает — тот же класс проблемы).
+> Подсказка в `signoz-mcp-server` «extraData … safe to leave \"\"» — **вводит в заблуждение**:
+> именно пустой `extraData` роняет List View на дефолтном резолве колонок.
 
 Проверять надо не список и не код возврата запроса, а **применение вьюхи с отрисовкой
-результата**: `POST candidate → выбрать во «Select a view» в Explorer → нет красного блока
-в результатах и нет `Cannot use 'in'` в консоли`. Первая попытка чинилась «на глаз» по
-списку и коду 200 — и пропустила падение при рендере. Проверено уже до результата на всех
-трёх.
+результата, причём на ОБОИХ путях**: из выпадашки «Select a view» в Explorer И из панели
+Saved Views на Home (последняя восстанавливает вьюху из URL другим кодовым путём и ловит
+падение, которого нет в первом). Первые попытки чинились «на глаз» по списку и коду 200,
+потом по одному только Explorer — и оба раза пропускали падение на Home-пути. Признак
+успеха — нормальное «This query had no results» (пустой результат), а не «Retrieving…»
+и не красный блок. Проверено на всех трёх с Home.
 
 ### Грабли: PUT портит представление
 

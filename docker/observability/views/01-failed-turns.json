@@ -3,7 +3,7 @@
   "category": "",
   "sourcePage": "traces",
   "tags": [""],
-  "extraData": "",
+  "extraData": "{\"selectColumns\":[{\"name\":\"service.name\",\"signal\":\"traces\"},{\"name\":\"name\",\"signal\":\"traces\"},{\"name\":\"duration_nano\",\"signal\":\"traces\"},{\"name\":\"response_status_code\",\"signal\":\"traces\"}]}",
   "compositeQuery": {
     "queryType": "builder",
     "panelType": "list",
@@ -13,22 +13,12 @@
         "spec": {
           "name": "A",
           "signal": "traces",
-          "disabled": false,
-          "filter": {
-            "expression": "name = 'chat.turn' AND outcome = 'error'"
-          },
-          "aggregations": [],
-          "groupBy": [],
-          "order": [],
-          "selectFields": [
-            { "name": "service.name", "signal": "traces", "fieldContext": "resource", "fieldDataType": "string" },
-            { "name": "name", "signal": "traces", "fieldContext": "span", "fieldDataType": "string" },
-            { "name": "duration_nano", "signal": "traces", "fieldContext": "span", "fieldDataType": "" },
-            { "name": "http_method", "signal": "traces", "fieldContext": "span", "fieldDataType": "" },
-            { "name": "response_status_code", "signal": "traces", "fieldContext": "span", "fieldDataType": "" }
-          ],
-          "having": { "expression": "" },
-          "limit": 100
+          "source": "",
+          "stepInterval": 0,
+          "limit": 100,
+          "order": [ { "key": { "name": "timestamp" }, "direction": "desc" } ],
+          "filter": { "expression": "name = 'chat.turn' AND outcome = 'error'" },
+          "having": { "expression": "" }
         }
       }
     ]

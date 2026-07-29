@@ -47,7 +47,11 @@ internal static class TurnTelemetry
 
     /// <summary>
     /// Запись результата хода по result-событию CLI: длительность из duration_ms
-    /// самого CLI (не пересчитывается), плюс ошибка при subtype=error.
+    /// самого CLI (не пересчитывается), плюс счётчик ошибок при отказе.
+    ///
+    /// Отказом считается не только subtype=error: при API-ошибке провайдера (напр. 429)
+    /// CLI отдаёт subtype=success с is_error=true — вызывающий обязан свести оба
+    /// признака в <paramref name="isError"/>, иначе отказ уедет в метрику как success.
     /// </summary>
     public static void RecordTurnResult(
         long durationMs, string provider, string? model, bool isError, string? apiErrorStatus)
@@ -57,6 +61,19 @@ internal static class TurnTelemetry
         if (isError)
             ServerMetrics.RecordLlmError(provider, ClassifyErrorType(apiErrorStatus));
     }
+
+    /// <summary>
+    /// Признак отказа хода по result-событию CLI.
+    ///
+    /// Отказ приходит двумя разными путями, и учитывать надо ОБА:
+    /// <list type="bullet">
+    /// <item>жёсткий сбой CLI — <c>subtype=error</c>;</item>
+    /// <item>API-ошибка провайдера (напр. 429) — <c>subtype=success</c> при <c>is_error=true</c>.</item>
+    /// </list>
+    /// Пока учитывался только первый, отказы провайдера уезжали в метрику как success.
+    /// </summary>
+    public static bool IsTurnFailure(string? subtype, bool isErrorFlag) =>
+        subtype == "error" || isErrorFlag;
 
     /// <summary>
     /// Срабатывание мягкого rate-limit (rate_limit_event от CLI).

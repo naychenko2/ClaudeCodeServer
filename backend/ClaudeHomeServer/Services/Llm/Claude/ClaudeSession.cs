@@ -2249,7 +2249,8 @@ public class ClaudeSession : ILlmSessionAdapter
                 // API-ошибка (напр. 429 у провайдера): CLI отдаёт subtype=success, но is_error=true
                 // и текст в result; синтетический assistant-текст не стримится дельтами —
                 // без этого пользователь увидел бы пустой «успешный» ход
-                if (root.TryGetProperty("is_error", out var isErr) && isErr.ValueKind == JsonValueKind.True
+                var isErrorFlag = root.TryGetProperty("is_error", out var isErr) && isErr.ValueKind == JsonValueKind.True;
+                if (isErrorFlag
                     && root.TryGetProperty("result", out var resText) && resText.ValueKind == JsonValueKind.String
                     && !string.IsNullOrWhiteSpace(resText.GetString()))
                     await _onMessage(new ErrorMessage(resText.GetString()!));
@@ -2257,9 +2258,11 @@ public class ClaudeSession : ILlmSessionAdapter
                 var ctxTokens = _lastContextTokens > 0 ? _lastContextTokens : (int?)null;
                 await _onMessage(new ResultMessage(subtype, durationMs, numTurns, usage, totalCost, apiErr, denials, ctxTokens, ParseUsageModel(root)));
                 // OTel: метрика длительности хода (duration_ms из самого CLI — не пересчитываем)
-                // и счётчик ошибок при subtype=error
+                // и счётчик ошибок. Оба признака отказа сводит IsTurnFailure: без is_error
+                // отказы провайдера (429) уходили в метрику как outcome=success — счётчик
+                // ccs.llm.errors пустовал, а мгновенные отказные ходы занижали p95 duration.
                 TurnTelemetry.RecordTurnResult(durationMs, Info.Provider, EffectiveModel,
-                    isError: subtype == "error", apiErrorStatus: apiErr);
+                    isError: TurnTelemetry.IsTurnFailure(subtype, isErrorFlag), apiErrorStatus: apiErr);
                 // Ход завершён. Без живых фоновых задач закрываем stdin — CLI выйдет сам,
                 // дальше ждём его не дольше ResultExitGrace. С ними stdin держим открытым:
                 // прогон доживает (агенты работают внутри процесса) и готов принять

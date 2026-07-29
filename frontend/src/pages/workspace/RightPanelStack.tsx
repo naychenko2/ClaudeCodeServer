@@ -8,7 +8,7 @@
 // Панели — «воздушные» скруглённые карточки с зазорами; границы высот тянутся
 // невидимыми хендлами в зазорах, ширина колонок — сплиттером слева от зоны.
 import { useEffect, useState, type ReactNode } from 'react';
-import { BookOpen, ClipboardList, FolderTree, GitCompare, ListTodo, Bot, User, Users, SquareTerminal, MonitorPlay, Network, type LucideIcon } from 'lucide-react';
+import { ScrollText, ClipboardList, FolderTree, GitCompare, ListTodo, Bot, User, Users, SquareTerminal, MonitorPlay, Network, type LucideIcon } from 'lucide-react';
 import type { Session } from '../../types';
 import { C, FONT, ISLAND, SHADOW } from '../../lib/design';
 import { ICON_STROKE } from '../../components/ui/icons';
@@ -37,9 +37,11 @@ const PANEL_META: Record<RightPanelKey, { title: string; Icon: LucideIcon }> = {
   // 'context' — досье персоны-собеседника (память/привязки/recall); отображается «Персона».
   context: { title: 'Персона', Icon: User },
   files: { title: 'Файлы', Icon: FolderTree },
-  // «Доки» рядом с «Файлами»: обе про содержимое репозитория, но Файлы — дерево для
-  // работы с кодом, а Доки — документация как связный корпус (README + docs/**)
-  docs: { title: 'Доки', Icon: BookOpen },
+  // «Документы» рядом с «Файлами»: обе про содержимое репозитория, но Файлы — дерево для
+  // работы с кодом, а Документы — документация как связный корпус (README + docs/**).
+  // Иконка не книжная: BookOpen занят «Знаниями» (lib/ai/actions), FileText — заметками
+  // и документами базы знаний; повтор читался бы как один и тот же раздел.
+  docs: { title: 'Документы', Icon: ScrollText },
   changes: { title: 'Изменения', Icon: GitCompare },
   tasks: { title: 'Задачи', Icon: ListTodo },
   graph: { title: 'Граф', Icon: Network },

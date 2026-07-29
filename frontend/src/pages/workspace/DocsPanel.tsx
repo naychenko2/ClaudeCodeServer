@@ -1,4 +1,4 @@
-// Панель «Доки» рельсы проекта: документация (README.md + docs/**) как связный корпус —
+// Панель «Документы» рельсы проекта: документация (README.md + docs/**) как связный корпус —
 // дерево документов, превью с оглавлением, поиск, переходы по ссылкам и обратные ссылки.
 //
 // Разграничение с соседями: «Файлы» — дерево репозитория для работы с кодом, «Заметки» —
@@ -9,7 +9,7 @@
 // «развернуть» в центральной области (тот же FileViewer, что и для остальных файлов).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { BookOpen, ChevronDown, ChevronRight, CornerUpRight, Link2, List, Maximize2, MessageSquarePlus, Search, X } from 'lucide-react';
+import { ChevronDown, ChevronRight, CornerUpRight, Link2, List, Maximize2, MessageSquarePlus, ScrollText, Search, X } from 'lucide-react';
 import type { Project, DocEntry, DocDetail, DocSearchHit } from '../../types';
 import { api } from '../../lib/api';
 import { onFilesChanged } from '../../lib/signalr';
@@ -27,6 +27,14 @@ interface Props {
   // Прикрепить путь к сообщению чата (документ целиком — вложением, не текстом)
   onAttachToChat: (path: string) => void;
 }
+
+// Высота зоны дерева документов: тянется хендлом, переживает перезагрузку.
+// Приём тот же, что у зоны скоупов в «Изменениях» (GitChangesRail) — одинаковое
+// поведение ресайза в панелях рельсы.
+const TREE_H_KEY = 'cc_docs_tree_h';
+const TREE_H_DEFAULT = 220;
+const TREE_H_MIN = 80;
+const TREE_H_MAX = 700;
 
 // Пути области, по которым решаем, надо ли перечитывать индекс после правок на диске
 function isDocPath(path: string): boolean {
@@ -49,6 +57,12 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
   const [query, setQuery] = useState('');
   const [hits, setHits] = useState<DocSearchHit[] | null>(null);
   const [treeOpen, setTreeOpen] = useState(true);
+  const [treeH, setTreeH] = useState<number>(() => {
+    try {
+      const n = Number(localStorage.getItem(TREE_H_KEY));
+      return Number.isFinite(n) && n >= TREE_H_MIN ? n : TREE_H_DEFAULT;
+    } catch { return TREE_H_DEFAULT; }
+  });
   const [backlinksOpen, setBacklinksOpen] = useState(false);
   const [tocOpen, setTocOpen] = useState(false);
   // Якорь, к которому нужно проскроллить после перехода по ссылке или из поиска.
@@ -138,6 +152,29 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc, knownDocs, onOpenFile]);
 
+  // Ресайз границы «дерево / превью»: тянем хендл вниз — дерево выше, превью ниже
+  const handleTreeResize = (e: React.PointerEvent) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startH = treeH;
+    let latest = startH;
+    const onMove = (ev: PointerEvent) => {
+      latest = Math.max(TREE_H_MIN, Math.min(TREE_H_MAX, startH + (ev.clientY - startY)));
+      setTreeH(latest);
+    };
+    const onUp = () => {
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      try { localStorage.setItem(TREE_H_KEY, String(Math.round(latest))); } catch { /* квота */ }
+    };
+    document.body.style.cursor = 'row-resize';
+    document.body.style.userSelect = 'none';
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
+  };
+
   const quoteSection = (slug: string, title: string) => {
     if (!doc) return;
     const section = sliceSection(doc.content, slug);
@@ -152,7 +189,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
   if (index && index.length === 0)
     return (
       <div style={emptyStyle}>
-        <BookOpen size={20} strokeWidth={ICON_STROKE} style={{ opacity: 0.5, marginBottom: SP.sm }} />
+        <ScrollText size={20} strokeWidth={ICON_STROKE} style={{ opacity: 0.5, marginBottom: SP.sm }} />
         <div>В проекте нет README.md и папки docs/</div>
       </div>
     );
@@ -164,7 +201,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
         <div style={{ position: 'relative' }}>
           <Search size={ICON_SIZE.xs} strokeWidth={ICON_STROKE}
             style={{ position: 'absolute', left: SP.sm, top: '50%', transform: 'translateY(-50%)', color: C.textMuted, pointerEvents: 'none' }} />
-          <TextField value={query} onChange={setQuery} placeholder="Поиск по докам"
+          <TextField value={query} onChange={setQuery} placeholder="Поиск по документам"
             style={{ height: 30, fontSize: FS.sm, paddingLeft: 28 }} />
         </div>
       </div>
@@ -183,8 +220,11 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
         </div>
       ) : (
         <>
-          {/* Дерево документов */}
-          <div style={{ flexShrink: 0, maxHeight: '38%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+          {/* Дерево документов: высота тянется хендлом ниже, свёрнутое — по содержимому */}
+          <div style={{
+            flexShrink: 0, display: 'flex', flexDirection: 'column', minHeight: 0,
+            height: treeOpen ? treeH : 'auto',
+          }}>
             <button onClick={() => setTreeOpen(v => !v)} style={sectionHeadStyle}>
               {treeOpen
                 ? <ChevronDown size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
@@ -204,13 +244,28 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
                       color: d.path === selected ? C.textHeading : C.textSecondary,
                       fontWeight: d.path === selected ? 600 : 400,
                     }}>
-                    <BookOpen size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0, opacity: 0.6 }} />
+                    {/* Без иконки: у всех строк она была бы одинаковой и не различала бы
+                        документы — отступ по вложенности несёт больше смысла */}
                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.title}</span>
                   </button>
                 ))}
               </div>
             )}
           </div>
+
+          {/* Хендл ресайза границы «дерево / превью» */}
+          {treeOpen && (
+            <div
+              onPointerDown={handleTreeResize}
+              title="Потяните, чтобы изменить высоту списка"
+              style={{
+                flexShrink: 0, height: 7, cursor: 'row-resize',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}
+            >
+              <div style={{ width: 28, height: 2, borderRadius: R.max, background: C.border }} />
+            </div>
+          )}
 
           {/* Превью документа */}
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, borderTop: `1px solid ${C.border}` }}>

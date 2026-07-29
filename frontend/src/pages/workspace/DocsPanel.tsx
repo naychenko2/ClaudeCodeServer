@@ -240,17 +240,21 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
     if (clickTimer.current) window.clearTimeout(clickTimer.current);
     clickTimer.current = window.setTimeout(() => {
       clickTimer.current = null;
-      // Клик всегда ведёт в превью — и включает его, если было выключено. Режим
-      // переключается самим чтением, а не отдельным действием «сначала включи зону».
-      // В центр документ уводит двойной клик и кнопка «развернуть»
-      openDoc(path);
-      if (!previewEnabled) setPreview(true);
+      // Одиночный клик — способ чтения ТЕКУЩЕГО режима: с превью показываем по месту,
+      // без него открываем в центре
+      if (previewEnabled) openDoc(path);
+      else onOpenFile(path);
     }, DOUBLE_CLICK_MS);
   };
 
+  // Двойной клик — второй способ, тот, которого сейчас нет под одиночным. В режиме превью
+  // это разворот в центре, в режиме списка — наоборот, открыть по месту (и включить зону,
+  // иначе показывать документ негде)
   const handleRowDoubleClick = (path: string) => {
     if (clickTimer.current) { window.clearTimeout(clickTimer.current); clickTimer.current = null; }
-    onOpenFile(path);
+    if (previewEnabled) { onOpenFile(path); return; }
+    openDoc(path);
+    setPreview(true);
   };
 
   // Клик по ссылке внутри превью: документ области — переход в панели,
@@ -534,7 +538,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
                         <button
                           onClick={() => handleRowClick(d.path)}
                           onDoubleClick={() => handleRowDoubleClick(d.path)}
-                          title={`${d.path}\nДвойной клик — открыть в центре`}
+                          title={`${d.path}\nДвойной клик — ${previewEnabled ? 'открыть в центре' : 'показать в превью'}`}
                           style={{
                             ...rowStyle,
                             flex: 1, minWidth: 0,

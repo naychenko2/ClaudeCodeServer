@@ -13,7 +13,6 @@ public class TaskSchedulerService(
     TaskManager tasks,
     UserStore users,
     IHubContext<SessionHub> hub,
-    PushService push,
     TaskExecutionService executor,
     DailyBriefingService briefing,
     PersonaAutomationService automation,

@@ -17,7 +17,7 @@ import { ChatPanel } from '../components/ChatPanel';
 import { PanelZone } from './workspace/PanelZone';
 import { useSessionPanels } from './workspace/useSessionPanels';
 import { chatPanels } from './workspace/panelStackState';
-import { CHAT_KEYS } from './workspace/panelCatalog';
+import { CHAT_KEYS, SESSION_KEYS } from './workspace/panelCatalog';
 import { ensurePersonasLoaded } from '../lib/personas';
 import { ensureTasksLoaded } from '../lib/tasks';
 import { markChatRead, useUnreadChatCount } from '../lib/chatReadState';
@@ -225,7 +225,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
             </div>
             <PanelZone
               side="right"
-              allowedKeys={CHAT_KEYS}
+              allowedKeys={SESSION_KEYS}
               hideWhenEmpty
               compact
               panelStack={chatPanels}
@@ -310,8 +310,12 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
           // сообщения (есть что показать в артефактах). Для нового пустого чата
           // рельса не нужна — это держит центральную область симметричной:
           // IslandScaffold видит right=undefined и применяет авто-компенсацию.
+          // Правой зоне доступны ТОЛЬКО панели сессии: список чатов рисует левая
+          // (контент есть лишь у неё), и уехавшая сюда панель «Чаты» пропадала бы
+          // с экрана целиком. Набор ключей это запрещает — и заодно чинит
+          // раскладку, сохранённую до появления правила.
           right={activeChat && activeChat.messageCount > 0 ? (
-            <PanelZone side="right" allowedKeys={CHAT_KEYS} hideWhenEmpty panelStack={chatPanels} panels={{}} sessionPanels={sessionPanels} />
+            <PanelZone side="right" allowedKeys={SESSION_KEYS} hideWhenEmpty panelStack={chatPanels} panels={{}} sessionPanels={sessionPanels} />
           ) : undefined}
         />
       </div>

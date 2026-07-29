@@ -22,15 +22,23 @@ import { clearPanelDragOver, endPanelDrag, setPanelDragOver, startPanelDrag, use
 // должна видеть чужой drag, иначе её направляющие не появятся. Каждая зона
 // смотрит на него через свой экземпляр хука и сравнивает позиции со своими
 // метками мест (tag).
-export function usePanelDnd({ zone, enabled, onSwap }: {
+export function usePanelDnd({ zone, enabled, accepts, onSwap }: {
   // Зона, в которой живёт этот экземпляр хука
   zone: Zone;
-  // false — шапка не таскается (одна панель, solo, компактный режим)
+  // false — шапка не таскается (компактный режим)
   enabled: boolean;
+  // Может ли ЭТА зона принять такую панель. Экраны отличаются набором панелей, и
+  // дроп ключа, который здесь некому нарисовать, оставлял бы панель невидимой:
+  // в родной зоне её уже нет, а тут она не рисуется.
+  accepts?: (k: PanelKey) => boolean;
   // Дроп ОДНОЙ панели на другую: они меняются местами (в т.ч. через границу зон)
   onSwap: (from: PanelKey, to: PanelKey) => void;
 }) {
   const { from, fromZone, over } = usePanelDragState();
+  // Панель тащат И эта зона её принимает. Дальше по коду ориентируемся на неё:
+  // непринимаемый дроп ведёт себя как «перетаскивания нет» — ни направляющих, ни
+  // подсветки, ни dropEffect (курсор сам покажет запрет).
+  const incoming = from !== null && (accepts?.(from) ?? true) ? from : null;
 
   // Место под курсором принадлежит ЭТОЙ зоне и имеет такую метку
   const isOver = (tag: string) => over?.zone === zone && over.tag === tag;
@@ -40,7 +48,7 @@ export function usePanelDnd({ zone, enabled, onSwap }: {
   const guideProps = (tag: string, onDropAt: (from: PanelKey) => void) => ({
     over: isOver(tag),
     onDragOver: (e: { preventDefault: () => void; dataTransfer: DataTransfer }) => {
-      if (!from) return;
+      if (!incoming) return;
       e.preventDefault();
       e.dataTransfer.dropEffect = 'move';
       setPanelDragOver(zone, tag);
@@ -48,7 +56,7 @@ export function usePanelDnd({ zone, enabled, onSwap }: {
     onDragLeave: () => clearPanelDragOver(zone, tag),
     onDrop: (e: { preventDefault: () => void }) => {
       e.preventDefault();
-      if (from) onDropAt(from);
+      if (incoming) onDropAt(incoming);
       endPanelDrag();
     },
   });
@@ -68,11 +76,11 @@ export function usePanelDnd({ zone, enabled, onSwap }: {
     return {
       draggable: enabled,
       dragged: from === k,
-      dropTarget: isOver(tag) && from !== null && from !== k,
+      dropTarget: isOver(tag) && incoming !== null && incoming !== k,
       rootProps: {
-        onDragOver: e => { if (from && from !== k) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setPanelDragOver(zone, tag); } },
+        onDragOver: e => { if (incoming && incoming !== k) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setPanelDragOver(zone, tag); } },
         onDragLeave: () => clearPanelDragOver(zone, tag),
-        onDrop: e => { e.preventDefault(); if (from && from !== k) onSwap(from, k); endPanelDrag(); },
+        onDrop: e => { e.preventDefault(); if (incoming && incoming !== k) onSwap(incoming, k); endPanelDrag(); },
       },
       headerProps: {
         onDragStart: e => { startPanelDrag(k, zone); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', k); },
@@ -81,7 +89,13 @@ export function usePanelDnd({ zone, enabled, onSwap }: {
     };
   };
 
-  return { from, fromZone, active: from !== null, end: endPanelDrag, isOver, guideProps, panelProps };
+  // active — панель тащат где-то на экране (нужно источнику: подсветить себя,
+  // подменить хендлы ресайза направляющими). accepting — тащат панель, которую
+  // ЭТА зона готова принять: по ней решается, показывать ли места вставки.
+  return {
+    from, fromZone, active: from !== null, accepting: incoming !== null,
+    end: endPanelDrag, isOver, guideProps, panelProps,
+  };
 }
 
 // ---------- ресайз ширины зоны ----------

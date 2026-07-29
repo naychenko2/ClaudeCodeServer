@@ -409,7 +409,7 @@
     {
       "id": "f3a1c2d4-4444-4444-8444-dddddddddddd",
       "title": "LLM Errors by Provider",
-      "description": "Ошибки провайдеров в секунду. Учитываются оба признака отказа: subtype=error (сбой CLI) и is_error=true при subtype=success (API-ошибка провайдера, напр. 429).",
+      "description": "Ошибки провайдеров в секунду. Учитываются оба признака отказа: subtype=error (сбой CLI) и is_error=true при subtype=success (API-ошибка провайдера, напр. 429). ПУСТАЯ ПАНЕЛЬ = ошибок не было, а не поломка: счётчик кумулятивный, и раз инкрементнувшись он появляется на КАЖДОМ сборе — пока ccs.llm.errors нет в базе вовсе, значит ни один ход не отказал. Сравни с соседней панелью rate-limit: там ряд есть, потому что мягкий rate_limit_event случался.",
       "panelTypes": "graph",
       "yAxisUnit": "",
       "timePreferance": "GLOBAL_TIME",
@@ -615,7 +615,7 @@
     {
       "id": "f3a1c2d4-6666-4666-8666-ffffffffffff",
       "title": "LLM Errors by Type",
-      "description": "Разбивка ошибок по категориям: rate_limit / auth / network / process_exit / unknown (TurnTelemetry.ClassifyErrorType).",
+      "description": "Разбивка ошибок по категориям: rate_limit / auth / network / process_exit / unknown (TurnTelemetry.ClassifyErrorType). Пустая панель = отказов не было; та же метрика, что и у «LLM Errors by Provider», поэтому пустуют они всегда вдвоём.",
       "panelTypes": "graph",
       "yAxisUnit": "",
       "timePreferance": "GLOBAL_TIME",

@@ -28,8 +28,6 @@ import { showToast } from '../lib/toast';
 import { navPush, navReplace, parseHash, type NavSnapshot } from '../lib/nav';
 import { EditDialog } from '../features/projects/dialogs/EditDialog';
 import { TasksPanel } from '../features/tasks/TasksPanel';
-import { PillViewSwitcher, ListIcon, ByDateIcon, BoardIcon } from '../features/tasks/bits';
-import { TasksListFilterButton, applyTaskFilters } from '../features/tasks/TasksListFilter';
 import { useTaskFilters, useTaskGroupTab } from '../lib/taskFilters';
 import { TaskDetailsPane } from '../features/tasks/TaskDetailsPane';
 import { TaskBoard } from '../features/tasks/board/TaskBoard';
@@ -503,11 +501,6 @@ const windowWidth = useWindowWidth();
     terminal: terminals.length,
     preview: previewServices.filter(s => s.status === 'started').length,
   }), [gitState.status, allTasks, project.id, terminals, previewServices]);
-  // Контролы шапки панели «Изменения»: собирает их сама панель (состояние вида и
-  // выбора живёт там), сюда приходит готовый узел. Колбэк стабильный — иначе
-  // публикация узла и ререндер страницы гоняли бы друг друга по кругу.
-  const [changesToolbar, setChangesToolbar] = useState<ReactNode>(null);
-  const handleChangesToolbar = useCallback((node: ReactNode) => setChangesToolbar(node), []);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   // Свежесозданная задача — её карточка открывается сразу в режиме редактирования
   const [autoEditTaskId, setAutoEditTaskId] = useState<string | null>(null);
@@ -534,32 +527,16 @@ const windowWidth = useWindowWidth();
     if (on && isMobile) setMobileView('chat');
     navPush({ screen: 'project', project, view, file: null, task: null, board: on });
   };
-  // Группировка списка задач («Список»/«По дате») — поднята сюда, чтобы переключатель
-  // видов можно было вынести в шапку карточки «Задачи» в cc-panels (общее состояние
-  // с содержимым панели). В старом сайдбаре переключатель остаётся внутри TasksPanel.
+  // Группировка списка задач («Список»/«По дате») и фильтры подняты сюда: вид
+  // задач управляет и центральной областью (доска), и переживает пересборку
+  // панели при смене раскладки. Контролы рисует сама TasksPanel — в шапке своей
+  // карточки (PanelHeaderSlot) либо в теле, если шапки нет.
   const { tab: projectGroupTab, setTab: setProjectGroupTab } = useTaskGroupTab(project.id);
-  // Фильтры списка задач (Статус/Исполнитель/Приоритет/Срок) — подняты сюда, чтобы
-  // шариться между cc-panels (кнопка Funnel в шапке острова) и старым сайдбаром/
-  // мобилой (кнопка внутри TasksPanel). Как projectGroupTab выше.
   const { filters: taskListFilters, setFilters: setTaskListFilters } = useTaskFilters(project.id);
-  // Значение и обработчик единого переключателя «Список | По дате | Доска»
-  const ccTasksView: 'status' | 'date' | 'board' = projectBoard ? 'board' : projectGroupTab;
-  const onCcTasksView = (v: 'status' | 'date' | 'board') => {
-    // handleProjectBoard пушит в историю навигации и localStorage — дёргаем его
-    // только при реальной смене режима доски, а не на каждом Список↔По дате
-    if (v === 'board') { if (!projectBoard) handleProjectBoard(true); return; }
-    if (projectBoard) handleProjectBoard(false);
-    setProjectGroupTab(v);
-  };
 
   const projectTasks = useMemo(
     () => allTasks.filter(t => t.projectId === project.id),
     [allTasks, project.id],
-  );
-  // Найдено задач после фильтров — для счётчика «N из M» в кнопке Funnel шапки cc-panels
-  const taskFilteredCount = useMemo(
-    () => applyTaskFilters(projectTasks, taskListFilters).length,
-    [projectTasks, taskListFilters],
   );
   const projectBoardById = useMemo(() => new Map([[project.id, project]]), [project]);
   // Кастомные колонки доски проекта (правятся в редакторе, обновляются локально после сохранения)
@@ -1398,51 +1375,12 @@ const windowWidth = useWindowWidth();
             files: fileSubTab === 'files'
               ? <FileExplorer project={project} activeFilePath={openFile} isMobile={false} onOpenFile={handleOpenFileFromTree} onOpenGitDiff={handleOpenGitDiff} onOpenCommit={handleOpenCommit} onAddToKnowledge={handleAddToKnowledge} onAddFolderToKnowledge={handleAddFolderToKnowledge} onRemoveFromKnowledge={handleRemoveFromKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} indexingFolders={indexingFolders} onAttachToChat={activeSession && !fileFullscreen ? handleAttachToChat : undefined} onOpenKnowledge={() => setFileSubTab('knowledge')} />
               : <KnowledgePanel project={project} isMobile={false} onDocumentsChanged={setIndexedFileNames} onBack={() => setFileSubTab('files')} />,
-            changes: <GitChangesRail project={project} onOpenDiff={handleOpenGitDiff} onOpenFile={handleOpenFileFromTree} onOpenCommit={handleOpenCommit} activeFilePath={openFile ?? openCommitFile} activeCommitSha={openCommitSha} onCommit={handleCommitVia} onScopeChange={clearCenterToChat} onToolbar={handleChangesToolbar} />,
-            tasks: <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={false} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} groupTab={projectGroupTab} onGroupTab={setProjectGroupTab} filters={taskListFilters} onFilters={setTaskListFilters} hideViewSwitcher />,
+            changes: <GitChangesRail project={project} onOpenDiff={handleOpenGitDiff} onOpenFile={handleOpenFileFromTree} onOpenCommit={handleOpenCommit} activeFilePath={openFile ?? openCommitFile} activeCommitSha={openCommitSha} onCommit={handleCommitVia} onScopeChange={clearCenterToChat} />,
+            tasks: <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={false} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} groupTab={projectGroupTab} onGroupTab={setProjectGroupTab} filters={taskListFilters} onFilters={setTaskListFilters} />,
             team: <ProjectPersonasPanel project={project} selectedId={personaCreating ? null : selectedPersonaId} onSelect={handlePersonaSelect} onNew={handlePersonaNew} onShowTeam={() => { handlePersonaCleared(); setTeamCenterOpen(true); }} teamActive={teamCenterOpen && !selectedPersonaId && !personaCreating} />,
             graph: <CodeGraphPanel projectId={project.id} graphOpen={graphOpen} onEnsureGraphOpen={ensureGraphOpen} onOpenFile={handleOpenFileFromTree} onBuild={handleGraphBuild} />,
             terminal: <TerminalPanelContent terminals={terminals} activeTerminalId={activeTerminalId} onSelect={handleSelectTerminal} onCreate={handleCreateTerminal} onStop={handleStopTerminal} onActivity={setTerminalBusy} />,
             preview: <PreviewPanelContent projectId={project.id} services={previewServices} activePreviewId={activePreviewId} onSelect={setActivePreviewId} onStart={startService} onStop={stopService} onRefresh={refreshServices} />,
-          }}
-          panelHeaderExtras={{
-            // Управление списком «Изменений» (выбор файлов, свернуть/развернуть,
-            // список/дерево) — панель собирает контролы сама и отдаёт сюда
-            changes: changesToolbar,
-            // Контролы задач в шапке карточки (порядок — по правке пользователя к
-            // макету А): [Plus: новая задача] [Funnel: фильтр] ДО переключателя видов.
-            // Funnel скрыт в режиме «Доска» (там свой BoardToolbar); Plus — во всех
-            // режимах. Состояние фильтров и вида — общее с содержимым панели.
-            tasks: (
-              <>
-                <IconButton
-                  tone="accent" size="sm" title="Новая задача"
-                  onClick={() => window.dispatchEvent(new CustomEvent('cc-tasks-new'))}
-                >
-                  <Plus size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-                </IconButton>
-                {ccTasksView !== 'board' && (
-                  <TasksListFilterButton
-                    variant="icon"
-                    filters={taskListFilters}
-                    onFilters={setTaskListFilters}
-                    total={projectTasks.length}
-                    found={taskFilteredCount}
-                  />
-                )}
-                <PillViewSwitcher<'status' | 'date' | 'board'>
-                  compact
-                  trackBg={C.track}
-                  value={ccTasksView}
-                  options={[
-                    { value: 'status', label: 'Список', icon: <ListIcon size={16} /> },
-                    { value: 'date', label: 'По дате', icon: <ByDateIcon size={16} /> },
-                    { value: 'board', label: 'Доска', icon: <BoardIcon size={16} /> },
-                  ]}
-                  onChange={onCcTasksView}
-                />
-              </>
-            ),
           }}
         />
 

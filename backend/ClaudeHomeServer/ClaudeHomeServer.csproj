@@ -55,7 +55,10 @@
     <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.17.0" />
     <PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.17.0" />
     <PackageReference Include="OpenTelemetry.Instrumentation.Http" Version="1.17.0" />
-    <PackageReference Include="OpenTelemetry.Instrumentation.Runtime" Version="1.17.0" />
+    <!-- OpenTelemetry.Instrumentation.Runtime не нужен: он даёт СВОЙ метр
+         (OpenTelemetry.Instrumentation.Runtime) через AddRuntimeInstrumentation(), а мы
+         слушаем встроенный в .NET метр System.Runtime — он есть в рантайме сам по себе.
+         Пакет висел подключённым, но не вызывался ни разу. -->
     <PackageReference Include="WebPush" Version="1.0.13" />
     <PackageReference Include="Yarp.ReverseProxy" Version="2.3.0" />
   </ItemGroup>

@@ -24,12 +24,16 @@ public static class ServerMetrics
     /// <summary>
     /// Разрешённые теги для метрик. Любой тег ВНЕ этого списка = баг.
     /// Состав контролируется тестом <c>AllowedTags_ContainsExactly_ExpectedSet</c>.
+    ///
+    /// Тега <c>direction</c> (input/output/cache_read/cache_creation) здесь нет намеренно:
+    /// он размечает ТОКЕНЫ, а учёт токенов в OTel запрещён решением C4 (source of truth —
+    /// SpendStore). Ни один Record*-метод его и не принимал — разрешение висело мёртвым
+    /// и противоречило собственному тесту <c>ServerMetrics_HasNoTokenMetrics</c>.
     /// </summary>
     public static readonly HashSet<string> AllowedTags = new()
     {
         "provider",    // claude, deepseek, glm, ollama, ...
         "model",       // claude-sonnet-4-5, glm-4, ...
-        "direction",   // input, output, cache_read, cache_creation
         "tool_name",   // идентификатор MCP-инструмента (≤80-90 значений)
         "outcome",     // success, error, timeout
         "error_type",  // rate_limit, network, auth, ...

@@ -1,5 +1,5 @@
 import { Fragment, type ReactNode } from 'react';
-import { ChevronsLeft, ChevronsRight, Columns2, Rows2, Square, type LucideIcon } from 'lucide-react';
+import { ChevronsLeft, ChevronsRight, Columns2, Square, type LucideIcon } from 'lucide-react';
 import { C, FONT, ISLAND } from '../../lib/design';
 import { ICON_STROKE } from './icons';
 import { ToolbarIconButton } from '../Toolbar';
@@ -109,29 +109,23 @@ export function PanelRail({ side, groups, visible = true, gapToCenter = 0, modeT
             marginLeft: gapToCenter,
           }),
     }}>
-      {/* Переключатель режима зоны. Справа multi — это раскладка КОЛОНКАМИ,
-          слева колонок нет и панели стакаются СТОПКОЙ: отсюда разные иконка
-          и подсказка, чтобы кнопка не обещала несуществующего. */}
-      {modeToggle && (() => {
-        const MultiIcon = isLeft ? Rows2 : Columns2;
-        const multiWord = isLeft ? 'Панели стопкой' : 'Раскладка колонками';
-        const multiHint = isLeft ? 'чтобы открывать несколько' : 'для раскладки колонками';
-        return (
-          <>
-            <ToolbarIconButton
-              onClick={modeToggle.onToggle}
-              title={modeToggle.soloMode
-                ? `Одна панель — нажмите, ${multiHint}`
-                : `${multiWord} — нажмите для режима одной панели`}
-            >
-              {modeToggle.soloMode
-                ? <Square size={15} strokeWidth={ICON_STROKE} />
-                : <MultiIcon size={15} strokeWidth={ICON_STROKE} />}
-            </ToolbarIconButton>
-            <RailSep margin="1px 0 2px" />
-          </>
-        );
-      })()}
+      {/* Переключатель режима зоны. multi — раскладка КОЛОНКАМИ; обе зоны её
+          умеют, поэтому иконка и подсказка у них одни и те же. */}
+      {modeToggle && (
+        <>
+          <ToolbarIconButton
+            onClick={modeToggle.onToggle}
+            title={modeToggle.soloMode
+              ? 'Одна панель — нажмите для раскладки колонками'
+              : 'Раскладка колонками — нажмите для режима одной панели'}
+          >
+            {modeToggle.soloMode
+              ? <Square size={15} strokeWidth={ICON_STROKE} />
+              : <Columns2 size={15} strokeWidth={ICON_STROKE} />}
+          </ToolbarIconButton>
+          <RailSep margin="1px 0 2px" />
+        </>
+      )}
 
       {shownGroups.map((group, gi) => (
         <Fragment key={gi}>

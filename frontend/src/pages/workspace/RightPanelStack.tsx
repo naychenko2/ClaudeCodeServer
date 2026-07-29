@@ -8,11 +8,11 @@
 // Панели — «воздушные» скруглённые карточки с зазорами; границы высот тянутся
 // невидимыми хендлами в зазорах, ширина колонок — сплиттером слева от зоны.
 import { useEffect, useRef, useState, type ReactNode, type DragEvent, type PointerEvent as ReactPointerEvent } from 'react';
-import { X, Columns2, Square, ChevronsRight, ChevronsLeft, ClipboardList, FolderTree, GitCompare, ListTodo, Bot, User, Users, SquareTerminal, MonitorPlay, Network, type LucideIcon } from 'lucide-react';
+import { Columns2, Square, ChevronsRight, ChevronsLeft, ClipboardList, FolderTree, GitCompare, ListTodo, Bot, User, Users, SquareTerminal, MonitorPlay, Network, type LucideIcon } from 'lucide-react';
 import type { Session } from '../../types';
-import { C, FONT, ISLAND, R, SHADOW } from '../../lib/design';
+import { C, FONT, ISLAND, SHADOW } from '../../lib/design';
 import { ICON_STROKE } from '../../components/ui/icons';
-import { Island, IslandHeader } from '../../components/ui/Island';
+import { PanelShell } from '../../components/ui/PanelShell';
 import { IslandSplitter } from '../../components/ui/IslandSplitter';
 import { ToolbarIconButton } from '../../components/Toolbar';
 import { useSessionArtifacts } from '../../hooks/useSessionArtifacts';
@@ -21,13 +21,14 @@ import { AgentsSection } from '../../components/artifacts/AgentsSection';
 import { ContextSection } from '../../components/artifacts/ContextSection';
 import { panelBadge } from '../../components/artifacts/meta';
 import { useWindowWidth } from '../../lib/breakpoints';
-import { wsPanelStack, PANEL_MIN_H, RAIL_W, type PanelKey, type PanelStack } from './panelStackState';
+import { wsPanelStack, PANEL_MIN_H, RAIL_W, RIGHT_PANEL_KEYS, type PanelKey, type RightPanelKey, type PanelStack } from './panelStackState';
 
 // Порог планшета: шире — панель в потоке рядом с чатом, уже — drawer поверх
 const TABLET_INLINE_MIN = 1000;
 
-// Иконки и заголовки панелей рельсы
-const PANEL_META: Record<PanelKey, { title: string; Icon: LucideIcon }> = {
+// Иконки и заголовки панелей ПРАВОЙ рельсы. Мета левой рельсы — своя,
+// в LeftPanelStack.LEFT_PANEL_META.
+const PANEL_META: Record<RightPanelKey, { title: string; Icon: LucideIcon }> = {
   plan: { title: 'План', Icon: ClipboardList },
   agents: { title: 'Агенты', Icon: Bot },
   // 'context' — досье персоны-собеседника (память/привязки/recall); отображается «Персона».
@@ -44,10 +45,11 @@ const PANEL_META: Record<PanelKey, { title: string; Icon: LucideIcon }> = {
 // Рельса разбита на две группы, разделённые сепаратором. Сверху — инструменты
 // ПРОЕКТА (файлы, изменения, задачи, команда, терминал, preview), снизу — панели
 // ТЕКУЩЕЙ СЕССИИ (План, Агенты, Персона). Порядок: проектные раньше сессионных.
-const PROJECT_RAIL_KEYS: PanelKey[] = ['files', 'changes', 'tasks', 'graph', 'team', 'terminal', 'preview'];
-const SESSION_RAIL_KEYS: PanelKey[] = ['plan', 'agents', 'context'];
+const PROJECT_RAIL_KEYS: RightPanelKey[] = ['files', 'changes', 'tasks', 'graph', 'team', 'terminal', 'preview'];
+const SESSION_RAIL_KEYS: RightPanelKey[] = ['plan', 'agents', 'context'];
 
 const GAP = ISLAND.gap; // зазор между карточками — та самая «воздушность»
+const RAIL_GAP = 4; // 2px перед сепаратором + 2px после
 
 interface Props {
   session: Session | null;
@@ -69,36 +71,62 @@ interface Props {
   // Готовый контент панелек (кроме Плана — он собирается здесь из артефактов сессии).
   // Строится в WorkspacePage, где живут состояние и обработчики этих инструментов.
   // В sessionOnly не нужен — проектных панелей там нет.
-  panels?: Partial<Record<Exclude<PanelKey, 'plan'>, ReactNode>>;
+  panels?: Partial<Record<Exclude<RightPanelKey, 'plan'>, ReactNode>>;
   // Контролы в шапку карточки (слева от кнопки закрытия) — напр. переключатель
   // видов задач. Собираются в WorkspacePage, состояние живёт там же.
-  panelHeaderExtras?: Partial<Record<PanelKey, ReactNode>>;
+  panelHeaderExtras?: Partial<Record<RightPanelKey, ReactNode>>;
   // Числа-кружки на кнопках ПРОЕКТА (changes/tasks/terminal/preview) — считаются в
   // WorkspacePage (там живут данные git/задач/терминалов/сервисов). Сессионные кнопки
   // свои числа берут из артефактов сессии (railBadgeCount), не отсюда.
-  railCounts?: Partial<Record<PanelKey, number>>;
+  railCounts?: Partial<Record<RightPanelKey, number>>;
   // Хук на ЯВНУЮ активацию панели кликом по иконке рельсы (панель в результате
   // открылась). Только клик: восстановление раскладки из localStorage его не дёргает.
   // Сейчас используется графом — открыть свой документ в центре вместе с панелью.
-  onPanelOpen?: (k: PanelKey) => void;
+  onPanelOpen?: (k: RightPanelKey) => void;
 }
 
 // Ширина/высота дроп-зоны сепаратора при перетаскивании (только оверлей, в потоке
 // места не занимает — иначе панели ужимались бы на время DnD)
 const SEP_HIT = 22;
+// Толщина направляющей-плейсхолдера. Длина штрихов у dashed пропорциональна
+// толщине границы, так что чем толще — тем крупнее штрихи.
+// ВАЖНО: у направляющей в покое borderRadius обязан быть 0. Скругление на
+// элементе, у которого content схлопнут в ноль (border-box + width == толщине
+// границы), браузер рисует дугой и штриховка вырождается в сплошную линию —
+// именно из-за этого плейсхолдер выглядел сплошным.
+const SEP_LINE = 2;
+// Отступ вдоль ДЛИНЫ направляющей — чтобы она не упиралась в торцы панелей
+const SEP_INSET = 8;
+// ЕДИНЫЙ зазор от кромки панели до направляющей. Все плейсхолдеры обязаны стоять
+// на одном расстоянии, поэтому смещение считается формулой из base, а не задаётся
+// вручную: у межколоночных зазор в потоке GAP, у крайних 0, у правого RAIL_GAP —
+// без пересчёта они вставали бы на 3 / 7 / 1 px от панели соответственно.
+//   sepShift(base) = SEP_CLEARANCE + SEP_LINE/2 - base/2
+// Для base = GAP сдвиг нулевой: центр зазора и есть нужное место.
+const SEP_CLEARANCE = 3;
+const sepShift = (base: number) => SEP_CLEARANCE + SEP_LINE / 2 - base / 2;
+// Приглушение направляющей в покое: она лишь намекает на возможные места вставки
+// и не должна спорить с контентом панелей. Цвет остаётся C.textSecondary (он задаёт
+// «характер» линии), гасится именно видимость — под курсором возвращается к 1,
+// поэтому переход в акцентную сплошную читается тем заметнее, чем тише покой.
+const SEP_REST_OPACITY = 0.25;
 
-// Вертикальный разделитель между колонками (и по краям зоны): в потоке всегда
-// занимает ровно `base` px (в покое и при DnD — одинаково), а дроп-зона выноса в
-// НОВУЮ колонку рисуется absolute-оверлеем поверх зазора: пунктирная направляющая,
-// при наведении — акцентная. Так раскладка при перетаскивании не «дышит».
-function ColumnSep({ dndActive, over, base = GAP, onDragOver, onDragLeave, onDrop }: {
+// Вертикальный разделитель между колонками (и по краям зоны). В потоке занимает
+// `base` px (по умолчанию 0 — панели при DnD не «дышат»), а дроп-зона выноса в
+// НОВУЮ колонку рисуется absolute-оверлеем поверх зазора: штриховая направляющая
+// (SEP_LINE), при наведении — сплошная акцентная.
+function ColumnSep({ dndActive, over, base = 0, edge, onDragOver, onDragLeave, onDrop }: {
   dndActive: boolean;
   over: boolean;
   base?: number;
+  // Крайняя позиция: 'start' — перед первой колонкой, 'end' — после последней.
+  // Направляющая уезжает наружу на sepShift(base), чтобы не липнуть к кромке.
+  edge?: 'start' | 'end';
   onDragOver: (e: DragEvent) => void;
   onDragLeave: () => void;
   onDrop: (e: DragEvent) => void;
 }) {
+  const shift = edge === 'start' ? -sepShift(base) : edge === 'end' ? sepShift(base) : 0;
   return (
     <div style={{ width: base, flexShrink: 0, alignSelf: 'stretch', position: 'relative' }}>
       {dndActive && (
@@ -109,33 +137,47 @@ function ColumnSep({ dndActive, over, base = GAP, onDragOver, onDragLeave, onDro
           style={{
             position: 'absolute', top: 0, bottom: 0, left: (base - SEP_HIT) / 2, width: SEP_HIT, zIndex: 5,
             display: 'flex', alignItems: 'stretch', justifyContent: 'center',
-            padding: '2px 0', boxSizing: 'border-box',
           }}
         >
+          {/* Коридор вокруг линии. Вертикальные поля — чтобы направляющая не
+              упиралась в торцы панелей, а висела в зазоре с воздухом. */}
           <div style={{
-            width: 2, borderRadius: 2, margin: '0 auto',
-            background: over ? C.accent : 'transparent',
-            borderLeft: over ? 'none' : `1px dashed ${C.textMuted}`,
-            opacity: over ? 1 : 0.5,
-            transition: 'background 0.12s ease, opacity 0.12s ease',
-          }} />
+            width: SEP_LINE, height: '100%',
+            display: 'flex', justifyContent: 'center',
+            padding: `${SEP_INSET}px 0`, boxSizing: 'content-box',
+            transform: shift ? `translateX(${shift}px)` : undefined,
+          }}>
+            {/* Направляющая: в покое штриховая приглушённым C.textMuted, под
+                курсором — сплошная акцентная. borderRadius в покое строго 0,
+                иначе штриховка вырождается в сплошную (см. SEP_LINE выше). */}
+            <div style={{
+              width: over ? SEP_LINE : 0, height: '100%', borderRadius: over ? SEP_LINE : 0,
+              background: over ? C.accent : 'transparent',
+              borderLeft: over ? 'none' : `${SEP_LINE}px dashed ${C.textSecondary}`,
+              opacity: over ? 1 : SEP_REST_OPACITY,
+              transition: 'background 0.12s ease, border-color 0.12s ease, opacity 0.12s ease',
+            }} />
+          </div>
         </div>
       )}
     </div>
   );
 }
 
-// Горизонтальный плейсхолдер вставки внутри колонки (над/между/под панелями):
-// парный к ColumnSep — в потоке занимает `base` px (0 по краям колонки, GAP между
-// панелями, где он подменяет хендл ресайза), сама дроп-зона — absolute-оверлей
-function RowSep({ dndActive, over, base = 0, onDragOver, onDragLeave, onDrop }: {
+// Горизонтальный плейсхолдер вставки внутри колонки: base=0 в потоке (панели
+// не двигаются), при DnD рисуется absolute-оверлеем — штриховая направляющая
+// внутри 6px-коридора. Парный к ColumnSep, стиль линии тот же.
+function RowSep({ dndActive, over, base = 0, edge, onDragOver, onDragLeave, onDrop }: {
   dndActive: boolean;
   over: boolean;
   base?: number;
+  // Крайняя позиция колонки: 'start' — над первой панелью, 'end' — под последней
+  edge?: 'start' | 'end';
   onDragOver: (e: DragEvent) => void;
   onDragLeave: () => void;
   onDrop: (e: DragEvent) => void;
 }) {
+  const shift = edge === 'start' ? -sepShift(base) : edge === 'end' ? sepShift(base) : 0;
   return (
     <div style={{ height: base, flexShrink: 0, position: 'relative' }}>
       {dndActive && (
@@ -145,17 +187,26 @@ function RowSep({ dndActive, over, base = 0, onDragOver, onDragLeave, onDrop }: 
           onDrop={onDrop}
           style={{
             position: 'absolute', left: 0, right: 0, top: (base - SEP_HIT) / 2, height: SEP_HIT, zIndex: 5,
-            display: 'flex', alignItems: 'center', justifyContent: 'stretch',
-            padding: '0 2px', boxSizing: 'border-box',
+            display: 'flex', alignItems: 'center',
           }}
         >
+          {/* Коридор вокруг линии. Горизонтальные поля — чтобы направляющая не
+              упиралась в боковые кромки панелей. */}
           <div style={{
-            height: 2, borderRadius: 2, flex: 1,
-            background: over ? C.accent : 'transparent',
-            borderTop: over ? 'none' : `1px dashed ${C.textMuted}`,
-            opacity: over ? 1 : 0.5,
-            transition: 'background 0.12s ease, opacity 0.12s ease', boxSizing: 'border-box',
-          }} />
+            height: SEP_LINE, flex: 1,
+            display: 'flex', alignItems: 'center',
+            padding: `0 ${SEP_INSET}px`, boxSizing: 'content-box',
+            transform: shift ? `translateY(${shift}px)` : undefined,
+          }}>
+            {/* Направляющая — зеркало вертикальной в ColumnSep */}
+            <div style={{
+              height: over ? SEP_LINE : 0, flex: 1, borderRadius: over ? SEP_LINE : 0,
+              background: over ? C.accent : 'transparent',
+              borderTop: over ? 'none' : `${SEP_LINE}px dashed ${C.textSecondary}`,
+              opacity: over ? 1 : SEP_REST_OPACITY,
+              transition: 'background 0.12s ease, border-color 0.12s ease, opacity 0.12s ease',
+            }} />
+          </div>
         </div>
       )}
     </div>
@@ -188,95 +239,6 @@ function GapHandle({ active, onPointerDown }: { active: boolean; onPointerDown: 
   );
 }
 
-// Карточка панельки: скруглённая, с шапкой 40px (drag-хендл для перестановки)
-// и кнопкой закрытия
-function PanelShell({ k, badge, headerExtras, canDrag, onClose, dragged, dropTarget, flash, onDragStart, onDragEnd, onDragOver, onDragLeave, onDrop, children }: {
-  k: PanelKey;
-  badge: string | null;
-  // Кастомные контролы в шапке (напр. переключатель видов задач) — слева от кнопок
-  headerExtras?: ReactNode;
-  // Solo-режим: одна панель без перетаскивания — шапка не drag-хендл
-  canDrag: boolean;
-  onClose: () => void;
-  dragged: boolean;
-  dropTarget: boolean;
-  // Кратковременная подсветка «панель уже открыта» — по событию cc-panel-flash
-  flash: boolean;
-  onDragStart: (e: DragEvent) => void;
-  onDragEnd: () => void;
-  onDragOver: (e: DragEvent) => void;
-  onDragLeave: () => void;
-  onDrop: (e: DragEvent) => void;
-  children: ReactNode;
-}) {
-  const { title, Icon } = PANEL_META[k];
-  // Плавное появление карточки при открытии/переносе: лёгкий fade + подъём
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => {
-    const id = requestAnimationFrame(() => setMounted(true));
-    return () => cancelAnimationFrame(id);
-  }, []);
-  const iconBtn = (onClick: () => void, btnTitle: string, icon: ReactNode) => (
-    <button
-      onClick={onClick}
-      title={btnTitle}
-      style={{
-        width: 26, height: 26, border: 'none', borderRadius: R.sm, background: 'transparent',
-        cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
-        color: C.textMuted, flexShrink: 0,
-      }}
-    >
-      {icon}
-    </button>
-  );
-  return (
-    <Island
-      // Вспышка «панель уже открыта» — CSS-анимацией (cc-panel-flash в index.css):
-      // два быстрых удара акцентным кольцом поверх обычной тени острова
-      rootProps={{ onDragOver, onDragLeave, onDrop, className: flash ? 'cc-panel-flash' : undefined }}
-      borderColor={dropTarget || flash ? C.accent : ISLAND.border}
-      shadow={dropTarget ? `0 0 0 1px ${C.accent}` : ISLAND.shadow}
-      style={{
-        flex: 1,
-        opacity: dragged ? 0.5 : mounted ? 1 : 0,
-        transform: mounted ? 'translateY(0) scale(1)' : 'translateY(5px) scale(0.99)',
-        transition: 'border-color 0.1s, box-shadow 0.1s, opacity 0.12s ease-out, transform 0.12s ease-out',
-      }}
-    >
-      <IslandHeader
-        icon={<Icon size={15} strokeWidth={ICON_STROKE} color={C.textSecondary} style={{ flexShrink: 0 }} />}
-        title={title}
-        badge={badge}
-        headerProps={{
-          draggable: canDrag,
-          onDragStart,
-          onDragEnd,
-          title: canDrag ? 'Перетащите, чтобы поменять панели местами' : undefined,
-          style: { cursor: canDrag ? 'grab' : 'default' },
-        }}
-        actions={iconBtn(onClose, 'Скрыть панель', <X size={14} strokeWidth={ICON_STROKE} />)}
-      >
-        {/* Контролы шапки (переключатель видов и т.п.): draggable=false, чтобы взаимодействие
-            с ними не инициировало перетаскивание карточки за шапку */}
-        {headerExtras && (
-          <span
-            draggable={false}
-            onDragStart={e => e.preventDefault()}
-            style={{ flexShrink: 0, display: 'flex', alignItems: 'center' }}
-          >
-            {headerExtras}
-          </span>
-        )}
-      </IslandHeader>
-      {/* Контентная зона панели — белая: отделяет рабочую область от кремовой шапки
-          карточки и от фона страницы с дудл-паттерном */}
-      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: C.bgWhite }}>
-        {children}
-      </div>
-    </Island>
-  );
-}
-
 export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobile, sessionOnly, panelStack, toolsEnabled, panels = {}, panelHeaderExtras, railCounts, onPanelOpen }: Props) {
   // Инстанс стора раскладки: оба объявлены на уровне модуля, поэтому вызов хука
   // безусловный и стабильный между рендерами (проп не меняется по ходу жизни экрана)
@@ -287,7 +249,7 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobi
   const compact = !!isTablet || !!isMobile;
   // Планшет: до ДВУХ панелей стеком в одной колонке; выбор локальный эфемерный —
   // десктопный layout не трогаем. Третья открытая вытесняет самую старую (FIFO).
-  const [tabletPanels, setTabletPanels] = useState<PanelKey[]>([]);
+  const [tabletPanels, setTabletPanels] = useState<RightPanelKey[]>([]);
   const tabletInline = windowWidth >= TABLET_INLINE_MIN;
   const sessionId = session?.id ?? null;
   // Артефакты сессии питают сессионную группу рельсы: План, Чек-лист (todos), Агенты
@@ -298,9 +260,13 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobi
   // executingTask=false: в рельсе artifacts считаются без заголовка задачи-исполнителя.
   const badgeOpts = { executingTask: false, personaId: session?.personaId ?? null, isChat: !projectId };
 
-  // Терминал/Preview скрыты при выключенных инструментах проекта
-  const keyAvailable = (k: PanelKey): boolean =>
-    (k !== 'terminal' && k !== 'preview') || !!toolsEnabled;
+  // Отбор ключей правой рельсы из общей раскладки стора: чужие (левые) ключи
+  // отбрасываются здесь же — предикат сужает тип, поэтому ниже по коду везде
+  // RightPanelKey и PANEL_META не нужны заглушки.
+  // Терминал/Preview дополнительно скрыты при выключенных инструментах проекта.
+  const keyAvailable = (k: PanelKey): k is RightPanelKey =>
+    (RIGHT_PANEL_KEYS as readonly string[]).includes(k)
+    && ((k !== 'terminal' && k !== 'preview') || !!toolsEnabled);
   const soloMode = mode === 'solo';
   // Состояние ЕДИНОЕ для обоих режимов: в solo layout содержит максимум одну
   // панель (toggle заменяет её), поэтому рендер одинаковый.
@@ -314,7 +280,7 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobi
   // собеседник-персона): иначе иконка скрыта целиком (а не дизейблится), вместе с ней
   // прячется и разделитель групп. Единый расчёт — panelBadge из meta.
   // Объявлено до расчёта ширины зоны: от него зависит скрытие пустой сессионной рельсы.
-  const railKeyVisible = (k: PanelKey): boolean => {
+  const railKeyVisible = (k: RightPanelKey): boolean => {
     if (!keyAvailable(k)) return false;
     if (k === 'plan') return plansCount > 0 || openKeys.includes(k);
     if (k === 'agents' || k === 'context') {
@@ -345,10 +311,10 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobi
   // Флеш «панель уже открыта»: внешние кнопки (git-бар над композером) шлют
   // cc-panel-flash, карточка на мгновение обводится акцентом. Счётчик n нужен,
   // чтобы повторный клик по той же панели перезапускал таймер.
-  const [flash, setFlash] = useState<{ key: PanelKey; n: number } | null>(null);
+  const [flash, setFlash] = useState<{ key: RightPanelKey; n: number } | null>(null);
   useEffect(() => {
     const onFlash = (e: Event) => {
-      const key = (e as CustomEvent<{ key?: PanelKey }>).detail?.key;
+      const key = (e as CustomEvent<{ key?: RightPanelKey }>).detail?.key;
       if (key) setFlash(cur => ({ key, n: (cur?.n ?? 0) + 1 }));
     };
     window.addEventListener('cc-panel-flash', onFlash);
@@ -366,12 +332,12 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobi
   const [dragging, setDragging] = useState<'width' | string | null>(null);
   // Drag-and-drop перестановки: какая панель тащится, над какой висит,
   // и над каким разделителем колонок (дроп туда = вынос в новую колонку)
-  const [dndFrom, setDndFrom] = useState<PanelKey | null>(null);
-  const [dndOver, setDndOver] = useState<PanelKey | null>(null);
+  const [dndFrom, setDndFrom] = useState<RightPanelKey | null>(null);
+  const [dndOver, setDndOver] = useState<RightPanelKey | null>(null);
   const [dndOverSep, setDndOverSep] = useState<number | null>(null);
   // Горизонтальный плейсхолдер под курсором: 'ci:ri'
   const [dndOverRow, setDndOverRow] = useState<string | null>(null);
-  const panelRefs = useRef<Partial<Record<PanelKey, HTMLDivElement | null>>>({});
+  const panelRefs = useRef<Partial<Record<RightPanelKey, HTMLDivElement | null>>>({});
 
   // Drag ширины зоны: тянем влево — колонки растут; width хранится на ОДНУ колонку
   const handleWidthDrag = (e: ReactPointerEvent) => {
@@ -397,7 +363,7 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobi
   // Drag хендла высот между соседними панелями aKey/bKey (в колонке десктопа
   // или в планшетном стеке): пиксельные высоты пары на старте → пересчёт весов
   // с клампом PANEL_MIN_H. tag — метка для подсветки активного хендла.
-  const handleRowDrag = (aKey: PanelKey, bKey: PanelKey, tag: string) => (e: ReactPointerEvent) => {
+  const handleRowDrag = (aKey: RightPanelKey, bKey: RightPanelKey, tag: string) => (e: ReactPointerEvent) => {
     e.preventDefault();
     const aEl = panelRefs.current[aKey];
     const bEl = panelRefs.current[bKey];
@@ -434,7 +400,7 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobi
     </div>
   );
 
-  const panelContent = (k: PanelKey): ReactNode => {
+  const panelContent = (k: RightPanelKey): ReactNode => {
     if (k === 'plan') {
       return plansCount > 0
         ? <PlanSection plans={artifacts.plans} projectId={projectId} />
@@ -453,7 +419,7 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobi
   };
 
   // Панелька в раскладке колонок
-  const renderPanel = (k: PanelKey) => {
+  const renderPanel = (k: RightPanelKey) => {
     return (
       <div
         key={k}
@@ -468,7 +434,8 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobi
         }}
       >
         <PanelShell
-          k={k}
+          icon={(() => { const I = PANEL_META[k].Icon; return <I size={15} strokeWidth={ICON_STROKE} color={C.textSecondary} style={{ flexShrink: 0 }} />; })()}
+          title={PANEL_META[k].title}
           badge={
             k === 'plan'
               ? (plansCount > 1 ? `${plansCount}` : null)
@@ -477,16 +444,20 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobi
                 : null
           }
           headerExtras={panelHeaderExtras?.[k]}
-          canDrag={!soloMode && !compact}
+          draggable={!soloMode && !compact}
           onClose={() => { if (compact) setTabletPanels(cur => cur.filter(x => x !== k)); else close(k); }}
           flash={flash?.key === k}
           dragged={dndFrom === k}
           dropTarget={dndOver === k && dndFrom !== null && dndFrom !== k}
-          onDragStart={e => { setDndFrom(k); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', k); }}
-          onDragEnd={() => { setDndFrom(null); setDndOver(null); setDndOverSep(null); setDndOverRow(null); }}
-          onDragOver={e => { if (dndFrom && dndFrom !== k) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDndOver(k); } }}
-          onDragLeave={() => { setDndOver(cur => (cur === k ? null : cur)); }}
-          onDrop={e => { e.preventDefault(); if (dndFrom && dndFrom !== k) swapWith(dndFrom, k); setDndFrom(null); setDndOver(null); }}
+          rootProps={{
+            onDragOver: e => { if (dndFrom && dndFrom !== k) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDndOver(k); } },
+            onDragLeave: () => { setDndOver(cur => (cur === k ? null : cur)); },
+            onDrop: e => { e.preventDefault(); if (dndFrom && dndFrom !== k) swapWith(dndFrom, k); setDndFrom(null); setDndOver(null); },
+          }}
+          headerProps={{
+            onDragStart: e => { setDndFrom(k); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', k); },
+            onDragEnd: () => { setDndFrom(null); setDndOver(null); setDndOverSep(null); setDndOverRow(null); },
+          }}
         >
           {panelContent(k)}
         </PanelShell>
@@ -499,7 +470,7 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobi
   // Агенты — открытые (running); Персона счётчика не имеет. Проектные (changes/tasks/
   // terminal/preview) берут готовое число из railCounts (считается в WorkspacePage).
   // 0 → кружок не рисуем.
-  const railBadgeCount = (k: PanelKey): number | null => {
+  const railBadgeCount = (k: RightPanelKey): number | null => {
     let n = 0;
     if (k === 'plan') n = artifacts.plans.filter(p => p.status !== 'approved').length;
     else if (k === 'agents') n = [...artifacts.agents, ...artifacts.workflows.flatMap(w => w.agents)]
@@ -510,7 +481,7 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobi
   };
 
   // Одна иконка рельсы (используется обеими группами: проектной и сессионной).
-  const renderRailIcon = (k: PanelKey): ReactNode => {
+  const renderRailIcon = (k: RightPanelKey): ReactNode => {
     if (!railKeyVisible(k)) return null;
     const isOpen = openKeys.includes(k);
     const { title, Icon } = PANEL_META[k];
@@ -567,7 +538,7 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobi
         );
         return tabletInline ? (
           <>
-            <IslandSplitter orientation="v" active={dragging === 'width'} onMouseDown={handleWidthDrag} />
+            <IslandSplitter orientation="v" active={dragging === 'width'} onMouseDown={handleWidthDrag} gap={RAIL_GAP} />
             <div style={{ width: width + GAP * 2, flexShrink: 0, display: 'flex', padding: `0 ${GAP}px`, boxSizing: 'border-box' }}>
               {stack}
             </div>
@@ -587,7 +558,7 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobi
           превращаются в дроп-зоны выноса панели в новую колонку. */}
       {columns.length > 0 && (
         <>
-          <IslandSplitter orientation="v" active={dragging === 'width'} onMouseDown={handleWidthDrag} />
+          <IslandSplitter orientation="v" active={dragging === 'width'} onMouseDown={handleWidthDrag} gap={RAIL_GAP} />
           <div style={{
             // В покое крайний ЛЕВЫЙ ColumnSep не рендерится (зазор от центра уже даёт
             // ресайз-сплиттер) — сепараторов columns.length; при DnD появляется и он,
@@ -604,26 +575,28 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobi
               <div key={ci} style={{ display: 'contents' }}>
                 {/* Крайний левый сеп (ci=0) — только как дроп-зона при DnD: в покое
                     зазор от центра уже обеспечен ресайз-сплиттером зоны */}
-                {(ci > 0 || dndFrom !== null) && (
-                  <ColumnSep
+                {/* Крайний левый сеп (ci=0) — всегда в DOM. В покое base=0 (не занимает
+                    места), при DnD плавно (transition) расширяется до RAIL_GAP. */}
+                <ColumnSep
                     dndActive={dndFrom !== null}
                     base={ci > 0 ? GAP : 0}
+                    edge={ci === 0 ? 'start' : undefined}
                     over={dndOverSep === ci}
                     onDragOver={e => { if (dndFrom) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDndOverSep(ci); } }}
                     onDragLeave={() => setDndOverSep(cur => (cur === ci ? null : cur))}
                     onDrop={e => { e.preventDefault(); if (dndFrom) moveToNewColumn(dndFrom, ci); setDndFrom(null); setDndOver(null); setDndOverSep(null); }}
                   />
-                )}
                 <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
                   {(() => {
                     // Горизонтальный плейсхолдер вставки на позицию ri колонки ci.
                     // base — место в потоке: по краям колонки 0 (в покое их нет),
                     // между панелями GAP (подменяет хендл ресайза той же высоты)
-                    const rowSep = (ri: number, base = 0) => (
+                    const rowSep = (ri: number, base = 0, edge?: 'start' | 'end') => (
                       <RowSep
                         key={`sep-${ri}`}
                         dndActive={dndFrom !== null}
                         base={base}
+                        edge={edge}
                         over={dndOverRow === `${ci}:${ri}`}
                         onDragOver={e => { if (dndFrom) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDndOverRow(`${ci}:${ri}`); } }}
                         onDragLeave={() => setDndOverRow(cur => (cur === `${ci}:${ri}` ? null : cur))}
@@ -632,7 +605,7 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobi
                     );
                     return (
                       <>
-                        {dndFrom !== null && rowSep(0)}
+                        {rowSep(0, 0, 'start')}
                         {col.map((k, ri) => (
                           <div key={k} style={{ display: 'contents' }}>
                             {ri > 0 && (
@@ -643,7 +616,7 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobi
                             {renderPanel(k)}
                           </div>
                         ))}
-                        {dndFrom !== null && rowSep(col.length)}
+                        {rowSep(col.length, 0, 'end')}
                       </>
                     );
                   })()}
@@ -652,6 +625,8 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobi
             ))}
             <ColumnSep
               dndActive={dndFrom !== null}
+              base={RAIL_GAP}
+              edge="end"
               over={dndOverSep === columns.length}
               onDragOver={e => { if (dndFrom) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDndOverSep(columns.length); } }}
               onDragLeave={() => setDndOverSep(cur => (cur === columns.length ? null : cur))}
@@ -670,13 +645,15 @@ export function RightPanelStack({ session, projectId, rootPath, isTablet, isMobi
         width: RAIL_W, flexShrink: 0, alignSelf: 'flex-start',
         display: 'flex', flexDirection: 'column', alignItems: 'center',
         // Тон шапок островов и сайдбаров — единая «оправа» интерфейса
-        gap: 6, paddingTop: 12, paddingBottom: 16, background: C.bgMain,
+        gap: 6, paddingTop: 7, paddingBottom: 7, background: C.bgMain,
         borderLeft: `1px solid ${C.border}`, borderTop: `1px solid ${C.border}`, borderBottom: `1px solid ${C.border}`,
-        borderTopLeftRadius: 26, borderBottomLeftRadius: 26, borderTopRightRadius: 0, borderBottomRightRadius: 0,
+        borderTopLeftRadius: ISLAND.radius, borderBottomLeftRadius: ISLAND.radius, borderTopRightRadius: 0, borderBottomRightRadius: 0,
         boxSizing: 'border-box', overflow: 'hidden',
         // Рельса — полукапсула-остров у края окна: тень как у остальных островов
         boxShadow: ISLAND.shadow,
-        marginLeft: (compact ? !(tabletKeys.length > 0 && tabletInline) : columns.length === 0) ? GAP : 0,
+        // Зазор между рельсой и панельной зоной — весь в ColumnSep (RAIL_GAP),
+        // marginLeft=0 чтобы не дублировать.
+        marginLeft: 0,
       }}>
         {/* Переключатель режима зоны: раскладка колонками (дефолт) ↔ одна панель.
             В компактном режиме (планшет/телефон) скрыт — там всегда одна панель */}

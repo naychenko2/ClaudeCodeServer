@@ -122,19 +122,9 @@ public class DifySyncErrorCounterTests
         reason.Should().Be("other");
     }
 
-    // ── ServerMetrics.RecordDifySyncError: smoke (не бросает) ───────────────
-
-    [Theory]
-    [InlineData("401")]
-    [InlineData("404")]
-    [InlineData("429")]
-    [InlineData("timeout")]
-    [InlineData("other")]
-    public void RecordDifySyncError_DoesNotThrow_ForEachReason(string reason)
-    {
-        // Smoke: метод должен принимать все валидные reason без исключений
-        var act = () => ServerMetrics.RecordDifySyncError(reason);
-
-        act.Should().NotThrow();
-    }
+    // Проверка того, что счётчик реально инкрементится на отказе Dify, живёт в
+    // DifyIndexErrorMetricTests: там дифф-синк гоняется через настоящий KnowledgeService
+    // с фейковым HTTP-слоем, а измерение читается MeterListener'ом. Здесь был smoke-тест
+    // «RecordDifySyncError не бросает» — он не мог упасть ни при какой поломке учёта
+    // и держался только за то, что метод существует.
 }

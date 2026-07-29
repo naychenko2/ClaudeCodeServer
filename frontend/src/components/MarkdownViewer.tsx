@@ -3,11 +3,14 @@ import type { ReactElement, ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import rehypeRaw from 'rehype-raw';
+import rehypeSanitize from 'rehype-sanitize';
 import type { Components } from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { MermaidDiagram } from './MermaidDiagram';
 import { C, FONT, R, SHADOW, Z } from '../lib/design';
+import { HTML_SCHEMA } from '../lib/markdownHtml';
 
 // Результат резолва вики-имени (для hover-preview и embed-вставок)
 export interface ResolvedNote {
@@ -41,10 +44,15 @@ interface Props {
   // файлов кода в центре. Внешние ссылки при этом уходят в новую вкладку.
   // Взаимоисключим с режимом заметок: onWikilink сильнее (см. notesMode ниже).
   onDocLink?: (href: string) => void;
+  // Резолв относительного src картинки в загружаемый URL. Без него `![](img/x.png)` и
+  // `<img src="docs/y.png">` в документе проекта не грузятся: путь относителен корню
+  // репозитория, а не адресу страницы. Возвращает undefined — оставить src как есть.
+  resolveImageSrc?: (src: string) => string | undefined;
 }
 
 const mono = FONT.mono;
 const serif = FONT.serif;
+
 
 // Отрезает YAML-frontmatter для ПРОСМОТРА (иначе title/annotates/теги рендерятся
 // как текст: «key: value» перед `---` становится жирным setext-заголовком).
@@ -316,7 +324,7 @@ const CUSTOM_SCHEMES = ['wikilink:', 'noteembed:', 'noteatt:'];
 
 interface HoverState { x: number; y: number; data: ResolvedNote }
 
-export function MarkdownViewer({ content, blockPos, onWikilink, existingTitles, resolveNote, embedSource, embedDepth = 0, hideLeadingH1, onDocLink }: Props) {
+export function MarkdownViewer({ content, blockPos, onWikilink, existingTitles, resolveNote, embedSource, embedDepth = 0, hideLeadingH1, onDocLink, resolveImageSrc }: Props) {
   // Режим заметок: включаем рендер [[wikilinks]]/![[embeds]] и внешние ссылки синим
   // (info), чтобы три класса ссылок различались (живая accent / призрак / внешняя).
   const notesMode = onWikilink != null;
@@ -429,18 +437,39 @@ export function MarkdownViewer({ content, blockPos, onWikilink, existingTitles, 
       }
     : merged;
 
+  // Картинки документа лежат в репозитории: путь в src относителен документа, а не адреса
+  // страницы. Слой поверх режимов, а не внутри docs-ветки: в центральной области документ
+  // рендерит DocComments — там режима доков нет, а картинки те же
+  const withImages: Components = resolveImageSrc
+    ? {
+        ...withHidden,
+        img: ({ src, alt, width, height }) => (
+          <img
+            src={(src && resolveImageSrc(src)) ?? src}
+            alt={alt ?? ''}
+            width={width}
+            height={height}
+            style={{ maxWidth: '100%', height: 'auto', borderRadius: 8, margin: '8px 0' }}
+          />
+        ),
+      }
+    : withHidden;
+
   const finalComponents = useMemo(
-    () => (blockPos ? withBlockPos(withHidden, toRaw) : withHidden),
+    () => (blockPos ? withBlockPos(withImages, toRaw) : withImages),
     // merged пересобирается каждый рендер — зависимость от стабильных первопричин.
     // onDocLink в списке обязателен: панель «Документы» пересоздаёт колбэк при смене
     // открытого документа, и без него в components остался бы устаревший переход.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [blockPos, toRaw, notesMode, docsMode, onDocLink, existingTitles, resolveNote, embedSource, hideLeadingH1]);
+    [blockPos, toRaw, notesMode, docsMode, onDocLink, resolveImageSrc, existingTitles, resolveNote, embedSource, hideLeadingH1]);
 
   return (
     <div style={{ fontFamily: FONT.sans, fontSize: 14, lineHeight: 1.7, color: C.textHeading, width: '100%' }}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
+        // Порядок обязателен: raw превращает HTML-строки в узлы, sanitize следом их чистит.
+        // Поменять местами — значит пропустить сырой HTML мимо белого списка
+        rehypePlugins={[rehypeRaw, [rehypeSanitize, HTML_SCHEMA]]}
         urlTransform={url => (CUSTOM_SCHEMES.some(s => url.startsWith(s)) ? url : defaultUrlTransform(url))}
         components={finalComponents}
       >{source}</ReactMarkdown>

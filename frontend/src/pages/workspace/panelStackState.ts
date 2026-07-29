@@ -8,15 +8,29 @@
 // держат НЕЗАВИСИМЫЕ раскладки, не мешая друг другу.
 import { useCallback, useSyncExternalStore } from 'react';
 
-// Набор рабочих панелей рельсы (порядок = порядок иконок). Артефактные категории
-// сессионная группа (plan/agents/context — План, Агенты, Персона) собирается из
-// артефактов сессии; остальное — инструменты проекта, как в десктопном Claude Code.
+// Набор панелей ПРАВОЙ рельсы (порядок = порядок иконок). Сессионная группа
+// (plan/agents/context — План, Агенты, Персона) собирается из артефактов сессии;
+// остальное — инструменты проекта, как в десктопном Claude Code.
 // Ключи agents/context совпадают с meta.tsx ради panelBadge.
-export const PANEL_KEYS = ['plan', 'agents', 'context', 'files', 'changes', 'tasks', 'graph', 'team', 'terminal', 'preview'] as const;
-export type PanelKey = typeof PANEL_KEYS[number];
+export const RIGHT_PANEL_KEYS = ['plan', 'agents', 'context', 'files', 'changes', 'tasks', 'graph', 'team', 'terminal', 'preview'] as const;
+export type RightPanelKey = typeof RIGHT_PANEL_KEYS[number];
+
+// Ключи ЛЕВОЙ рельсы — сайдбары разделов (ChatsPage sessionOnly, Workspace полный).
+// Порядок = порядок иконок в рельсе сверху вниз.
+export const LEFT_PANEL_KEYS = ['chats', 'files', 'tasks', 'personas', 'tools'] as const;
+export type LeftPanelKey = typeof LEFT_PANEL_KEYS[number];
+
+// Общий тип ключа: стор параметризован неймспейсом и обслуживает ОБЕ рельсы,
+// поэтому санитайз и персист работают с объединением. Сами рельсы типизуются
+// своим набором (RightPanelKey / LeftPanelKey) и отбрасывают чужие ключи
+// предикатом при чтении раскладки — так в PANEL_META не нужны заглушки.
+export type PanelKey = RightPanelKey | LeftPanelKey;
+export const PANEL_KEYS: readonly PanelKey[] = [
+  ...new Set<PanelKey>([...RIGHT_PANEL_KEYS, ...LEFT_PANEL_KEYS]),
+];
 
 export const PANEL_MIN_H = 120;  // минимальная высота панельки, px (шапка 40 + контент)
-export const RAIL_W = 44;        // ширина рельсы иконок
+export const RAIL_W = 40;        // ширина рельсы иконок
 export const COL_MIN = 280;      // клампы ширины ОДНОЙ колонки панелей
 export const COL_MAX = 560;
 export const COL_DEFAULT = 340;
@@ -194,7 +208,7 @@ export interface PanelStack {
 // Фабрика независимого инстанса: своё состояние в замыкании + свои ключи
 // localStorage `cc_{ns}_panels_*`. Инстансы создаются на уровне модуля (ниже),
 // поэтому семантика чтения localStorage при импорте — та же, что была у синглтона.
-function createPanelStack(ns: string, opts?: { legacyOpenKey?: string }) {
+function createPanelStack(ns: string, opts?: { legacyOpenKey?: string; defaultLayout?: PanelKey[][] }) {
   const KEY_LAYOUT = `cc_${ns}_panels_layout`;
   const KEY_WEIGHTS = `cc_${ns}_panels_weights`;
   const KEY_WIDTH = `cc_${ns}_panels_width`;
@@ -203,7 +217,18 @@ function createPanelStack(ns: string, opts?: { legacyOpenKey?: string }) {
   // Старый плоский список — мигрируется в layout (только у воркспейсного инстанса)
   const legacyOpen = opts?.legacyOpenKey ? lsGet(opts.legacyOpenKey) : null;
 
-  let _layout: PanelKey[][] = parseLayout(lsGet(KEY_LAYOUT), legacyOpen);
+  // Раскладка: приоритет — сохранённая в localStorage → legacy-миграция → defaultLayout.
+  // defaultLayout полезен для левых рельс, где базовая панель должна быть открыта
+  // при первом запуске (напр. chats в ChatsPage). После закрытия пользователем —
+  // состояние сохранится, и при следующем визите панель останется закрытой.
+  let _layout: PanelKey[][] = (() => {
+    const lsLayout = lsGet(KEY_LAYOUT);
+    if (lsLayout) {
+      try { return sanitizeLayout(JSON.parse(lsLayout)); } catch { /* fallthrough to default */ }
+    }
+    if (legacyOpen) return parseLayout(null, legacyOpen);
+    return sanitizeLayout(opts?.defaultLayout ?? []);
+  })();
   let _weights: Partial<Record<PanelKey, number>> = parseWeights(lsGet(KEY_WEIGHTS));
   let _width = parseWidth(lsGet(KEY_WIDTH));
   let _mode: PanelMode = lsGet(KEY_MODE) === 'solo' ? 'solo' : 'multi';
@@ -328,6 +353,14 @@ function createPanelStack(ns: string, opts?: { legacyOpenKey?: string }) {
 export const wsPanelStack = createPanelStack('ws', { legacyOpenKey: 'cc_ws_panels_open' });
 // Инстанс раздела «Чаты» — независимая раскладка сессионной рельсы (cc_chat_panels_*).
 export const chatPanelStack = createPanelStack('chat');
+
+// ЛЕВЫЕ инстансы — зеркальные правым, но для левой рельсы (cc_{ns}_left_panels_*).
+// Чаты sessionOnly (только chats) и воркспейс (все 5: chats/files/tasks/personas/tools)
+// держат НЕЗАВИСИМЫЕ раскладки.
+// defaultLayout=['chats'] — базовая панель открывается при первом запуске;
+// после закрытия пользователем состояние сохранится в localStorage.
+export const wsLeftPanelStack = createPanelStack('ws_left', { defaultLayout: [['chats']] });
+export const chatLeftPanelStack = createPanelStack('chat_left', { defaultLayout: [['chats']] });
 
 // Совместимость: прежний хук = воркспейсный инстанс (RightPanelStack, ProjectGitBar).
 export const usePanelStack = wsPanelStack.use;

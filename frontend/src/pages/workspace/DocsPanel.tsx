@@ -10,7 +10,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight, CornerUpRight, Link2, List, Maximize2, MessageSquarePlus, PanelBottom, Pin, ScrollText, Search, SlidersHorizontal, X } from 'lucide-react';
-import type { Project, DocEntry, DocDetail, DocSearchHit } from '../../types';
+import type { Project, DocEntry, DocDetail, DocSearchHit, DocsScope } from '../../types';
 import { api } from '../../lib/api';
 import { onFilesChanged } from '../../lib/signalr';
 import { C, FONT, FS, R, SHADOW, SP } from '../../lib/design';
@@ -57,6 +57,11 @@ const FOLDERS_H_DEFAULT = 110;
 const FOLDERS_H_MIN = ROW_H * 2;
 const FOLDERS_H_MAX = 400;
 
+// Расширения, по которым панель узнаёт документ, пока не спросила настройку области
+// у сервера. Список там же и живёт (DocsIndexService.SupportedExtensions) — здесь он
+// нужен только до первого открытия диалога, чтобы решить, перечитывать ли индекс
+const DEFAULT_DOC_EXTS = ['.md', '.markdown', '.mdx', '.txt', '.rst'];
+
 // Папка пути («docs/adr/x.md» → «docs/adr»); файл в корне — пустая строка
 function folderOf(path: string): string {
   const i = path.lastIndexOf('/');
@@ -100,9 +105,10 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
   });
   const [backlinksOpen, setBacklinksOpen] = useState(false);
   const [tocOpen, setTocOpen] = useState(false);
-  // Область документации (папки проекта). null — панель её не спрашивала: диалог грузит
-  // настройку сам, а до его открытия хватает эвристики по индексу (см. isDocPath ниже)
-  const [scope, setScope] = useState<string[] | null>(null);
+  // Область документации (папки, файлы корня, типы). null — панель её не спрашивала:
+  // диалог грузит настройку сам, а до его открытия хватает эвристики по индексу
+  // (см. isDocPath ниже)
+  const [scope, setScope] = useState<DocsScope | null>(null);
   const [scopeOpen, setScopeOpen] = useState(false);
   // Список папок — то же, что оглавление для документа, только для самого списка:
   // групп до десятка, а документов десятки, и мотать до нужной надоедает
@@ -170,10 +176,17 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
 
   const isDocPath = useCallback((raw: string) => {
     const p = raw.replace(/\\/g, '/');
-    if (!p.toLowerCase().endsWith('.md')) return false;
-    if (p === 'README.md' || knownDocs.has(p.toLowerCase())) return true;
-    if (scope) return scope.some(f => p.startsWith(`${f}/`));
-    return docFolders.has(folderOf(p));
+    const lower = p.toLowerCase();
+    if (knownDocs.has(lower)) return true;
+    if (scope) {
+      // Файл корня — только поимённо: там же лежит код, и расширение ни о чём не говорит
+      if (!p.includes('/')) return scope.rootFiles.some(f => f.toLowerCase() === lower);
+      return scope.extensions.some(e => lower.endsWith(e))
+        && scope.folders.some(f => lower.startsWith(`${f.toLowerCase()}/`));
+    }
+    // Настройки ещё не спрашивали: судим по текущему корпусу — тот же тип файла
+    // в папке, где документы уже есть
+    return DEFAULT_DOC_EXTS.some(e => lower.endsWith(e)) && docFolders.has(folderOf(p));
   }, [knownDocs, docFolders, scope]);
 
   const loadIndex = useCallback(() => {

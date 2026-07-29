@@ -136,6 +136,37 @@ public class TaskExecutionServiceTests
     }
 
     [Fact]
+    public void BuildDelegatorNotification_Успех_ВедётВИсходныйЧат()
+    {
+        // Единственное уведомление о завершении делегированной задачи — ссылка ведёт туда,
+        // где следом появится доклад-реплика исполнителя
+        var task = new TaskItem { Title = "Задача", Status = TaskItemStatus.Done, ProjectId = "p1" };
+        var delegator = new Persona { Name = "Тимлид" };
+        var source = new Session { Id = "s1", ProjectId = "p1" };
+
+        var n = TaskExecutionService.BuildDelegatorNotification(task, ok: true, delegator, source);
+
+        n.Title.Should().Be("Делегированная задача выполнена");
+        n.Url.Should().Be("/project/p1/chat/s1");
+        n.Tag.Should().Be("Постановщик");
+    }
+
+    [Fact]
+    public void BuildDelegatorNotification_Провал_ВедётНаКарточкуЗадачи()
+    {
+        // При провале доклада в исходном чате не будет — вести туда некуда, разбираются
+        // в карточке задачи (оттуда виден чат исполнителя)
+        var task = new TaskItem { Title = "Задача", Status = TaskItemStatus.InProgress, ProjectId = "p1" };
+        var delegator = new Persona { Name = "Тимлид" };
+        var source = new Session { Id = "s1", ProjectId = "p1" };
+
+        var n = TaskExecutionService.BuildDelegatorNotification(task, ok: false, delegator, source);
+
+        n.Title.Should().Be("Делегированная задача не выполнена");
+        n.Url.Should().Be(TaskSchedulerService.TaskUrl(task));
+    }
+
+    [Fact]
     public void BuildWaitingNotification_permission_request_ЖдётОтвета()
     {
         var task = new TaskItem { Title = "Задача", ProjectId = "p1" };

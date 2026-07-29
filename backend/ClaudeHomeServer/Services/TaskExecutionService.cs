@@ -391,10 +391,12 @@ public class TaskExecutionService
                     if (!ok)
                     {
                         // Провал хода — L0 «не выполнена» требует только сигнал R (этот ход),
-                        // join с сигналом D не нужен — задача обычно даже не Done
+                        // join с сигналом D не нужен — задача обычно даже не Done.
+                        // Уведомление о судьбе задачи ровно одно (см. NotifyDelegatorAsync):
+                        // делегированная — от лица постановщика, обычная — от лица исполнителя
                         var persona = updated.PersonaId is not null ? _personas.Get(updated.PersonaId, updated.OwnerId!) : null;
-                        await NotifyAsync(updated, BuildResultNotification(updated, ok, persona));
-                        await NotifyDelegatorAsync(updated, ok);
+                        if (!await NotifyDelegatorAsync(updated, ok))
+                            await NotifyAsync(updated, BuildResultNotification(updated, ok, persona));
                         // Режим «Командная реализация» (Э4): провал под-задачи — одна перевыдача,
                         // второй провал той же под-задачи — эскалация. Решает TeamWaveService
                         // (он знает план и бюджет), поэтому здесь только хук — цикл зависимостей
@@ -465,9 +467,11 @@ public class TaskExecutionService
         }
 
         var persona = task.PersonaId is not null ? _personas.Get(task.PersonaId, task.OwnerId!) : null;
-        // L0: тост владельцу «завершил работу» + отдельное уведомление постановщику (если делегировано)
-        await NotifyAsync(task, BuildResultNotification(task, ok: true, persona));
-        await NotifyDelegatorAsync(task, ok: true);
+        // L0: ровно ОДИН тост о факте завершения. Делегированная задача → уведомление
+        // постановщика (ведёт в исходный чат, где лежит доклад ниже); обычная либо
+        // нерезолвимый постановщик → обычное «Завершил работу над задачей».
+        if (!await NotifyDelegatorAsync(task, ok: true))
+            await NotifyAsync(task, BuildResultNotification(task, ok: true, persona));
         // Модель Z: активный доклад в чат постановщика (в дополнение к L0-тосту выше)
         await ReportToDelegatorAsync(task, persona);
     }
@@ -501,21 +505,25 @@ public class TaskExecutionService
             Tag: "Исполнитель");
     }
 
-    // L0-доставка постановщику: задача делегирована персоной из чата → отдельное уведомление
-    // от её лица со ссылкой на исходный чат (без агентского хода — бесплатный дефолт).
-    // Скип: постановщик не задан, совпадает с исполнителем (дубль «Завершил работу») или удалён.
-    private async Task NotifyDelegatorAsync(TaskItem task, bool ok)
+    // L0-доставка постановщику: задача делегирована персоной из чата → уведомление от её лица
+    // со ссылкой на исходный чат (без агентского хода — бесплатный дефолт). Оно ЗАМЕНЯЕТ собой
+    // обычное «Завершил работу над задачей», а не дополняет его: постановщик-персона и владелец
+    // задачи — всегда один и тот же человек (персоны per-owner, обе отправки идут в task.OwnerId),
+    // поэтому два тоста об одном факте были дублем. Возвращает true — уведомление ушло, обычное
+    // слать не надо; false — не делегирование, и вызывающий шлёт обычное.
+    // Скип: постановщик не задан, совпадает с исполнителем или удалён.
+    private async Task<bool> NotifyDelegatorAsync(TaskItem task, bool ok)
     {
         if (task.CreatedByPersonaId is null || task.CreatedByPersonaId == task.PersonaId)
         {
             _log.LogInformation("L0 задачи {TaskId}: пропуск — не делегирование (постановщик не задан или совпадает с исполнителем)", task.Id);
-            return;
+            return false;
         }
         var delegator = _personas.Get(task.CreatedByPersonaId, task.OwnerId!);
         if (delegator is null)
         {
             _log.LogInformation("L0 задачи {TaskId}: пропуск — постановщик {PersonaId} не найден", task.Id, task.CreatedByPersonaId);
-            return;
+            return false;
         }
         // SourceSessionId приходит из тела POST и мог указать на чужой чат — ссылку строим
         // только по сессии владельца задачи, иначе fallback на TaskUrl
@@ -523,16 +531,19 @@ public class TaskExecutionService
         if (sourceSession is not null && _sessions.ResolveOwnerId(sourceSession) != task.OwnerId)
             sourceSession = null;
         await NotifyAsync(task, BuildDelegatorNotification(task, ok, delegator, sourceSession));
-        _log.LogInformation("L0 задачи {TaskId}: отправлено постановщику {PersonaId}", task.Id, delegator.Id);
+        _log.LogInformation("L0 задачи {TaskId}: отправлено постановщику {PersonaId} (обычное уведомление подавлено)", task.Id, delegator.Id);
+        return true;
     }
 
-    // Уведомление постановщику о завершении делегированной задачи: Url — исходный чат
-    // (SourceSessionId); чат удалён/неизвестен → ссылка на задачу
+    // Уведомление постановщику о судьбе делегированной задачи: при успехе Url — исходный чат
+    // (SourceSessionId), куда следом ложится доклад-реплика; чат удалён/неизвестен — ссылка на
+    // задачу. При провале ссылка ВСЕГДА на задачу: доклада в исходном чате не будет, а разбираться
+    // надо в карточке (оттуда виден чат исполнителя) — это уведомление теперь единственное.
     internal static NotificationMessage BuildDelegatorNotification(
         TaskItem task, bool ok, Persona delegator, Session? sourceSession) => new(
         Title: ok ? "Делегированная задача выполнена" : "Делегированная задача не выполнена",
         Body: task.Title,
-        Url: sourceSession is null
+        Url: sourceSession is null || !ok
             ? TaskSchedulerService.TaskUrl(task)
             : string.IsNullOrEmpty(sourceSession.ProjectId)
                 ? $"/chats/{sourceSession.Id}"

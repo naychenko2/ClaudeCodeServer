@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { AlertTriangle, ChevronRight, History, RefreshCw, Settings, Trash2 } from 'lucide-react';
 import type { AuthState, ChangelogDay, ChangelogGeneration, ChangelogItem, DaySummaryStub, ChangelogStatus } from '../types';
 import { api } from '../lib/api';
-import { C, FONT, FS, R, MODAL_W, SHADOW } from '../lib/design';
+import { C, FONT, FS, R, MODAL_W, SHADOW, CHAT_MAX_W } from '../lib/design';
 import { useIsMobile } from '../lib/breakpoints';
 import { EmptyState } from './EmptyState';
 import { HubHeader } from './HubHeader';
@@ -297,7 +297,9 @@ export function ProductHistory({ isMobile, onClose, auth, onLogout, onHubTab }: 
         </div>
       )}
       {selDay && (
-        <div style={{ maxWidth: 900, width: '100%' }}>
+        // Лента дня — колонка чтения (как сообщения чата и текст заметки), поэтому
+        // ширина от CHAT_MAX_W, а не от сеточной CONTENT_MAX_W
+        <div style={{ maxWidth: CHAT_MAX_W, width: '100%' }}>
             {/* Шапка дня: дата + фильтр + вкладки категорий. На телефоне зафиксирована
                 (sticky) при скролле ленты пунктов — даты и категории всегда на виду */}
             <div style={isMobile ? {

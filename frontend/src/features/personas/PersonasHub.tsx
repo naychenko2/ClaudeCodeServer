@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import { Plus, Sparkles, MessageSquare, Brain, ListChecks, Zap, Users, AtSign } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { Persona, Session } from '../../types';
-import { C, FONT, R } from '../../lib/design';
+import { C, FONT, R, CONTENT_MAX_W } from '../../lib/design';
 import { personaTitleLines } from '../../lib/personas';
 import { PersonaAvatar } from './PersonaAvatar';
 import { PersonaActivityFeed } from './PersonaActivityFeed';
@@ -34,8 +34,8 @@ export function PersonasHub({ personas, talking, onTalk, onOpenSession, onNew, o
 
   return (
     // Фон прозрачный: под центром виден дудл-фон страницы (CanvasBackdrop)
-    <div ref={scrollRef} style={{ height: '100%', overflowY: 'auto' }}>
-      <div style={{ maxWidth: 1180, margin: '0 auto', padding: '28px 32px 60px' }}>
+    <div ref={scrollRef} style={{ height: '100%', overflowY: 'auto', padding: '0 32px' }}>
+      <div style={{ maxWidth: CONTENT_MAX_W, margin: '0 auto', padding: '28px 0 60px' }}>
 
         {/* Шапка: текст слева, компактная карточка «что умеет персона» справа */}
         <div style={heroRow}>

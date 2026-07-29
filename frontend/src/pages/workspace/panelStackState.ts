@@ -301,6 +301,14 @@ export function closePanel(zones: PanelZones, k: PanelKey): PanelZones {
   return withZone(zones, zone, z => ({ ...z, layout: removePanel(z.layout, k) }));
 }
 
+// Закрыть панель, бросив её на рельсу зоны: она не просто закрывается, а
+// оставляет иконку ИМЕННО ТАМ, куда её бросили (даже если лежала в соседней
+// зоне) — это и есть «убрать панель с глаз, но положить кнопку под руку».
+export function closePanelTo(zones: PanelZones, zone: Zone, k: PanelKey): PanelZones {
+  const closed = closePanel(zones, k);
+  return { ...closed, home: { ...closed.home, [k]: zone } };
+}
+
 // Открыть панель В ЗОНЕ. Если она открыта в другой — это перенос: из прежней
 // зоны панель уходит. В solo-режиме целевой зоны раскладка схлопывается до неё.
 export function openPanelIn(zones: PanelZones, zone: Zone, k: PanelKey): PanelZones {
@@ -457,8 +465,11 @@ export interface PanelZonesApi {
   zones: PanelZones;
   // Клик по иконке рельсы зоны
   toggle: (zone: Zone, k: PanelKey) => void;
-  // Крестик в шапке панели — закрывает, где бы она ни лежала
+  // Закрыть панель, где бы она ни лежала (её иконка остаётся в прежней зоне)
   close: (k: PanelKey) => void;
+  // Дроп панели на рельсу: закрыть и положить иконку ИМЕННО в эту зону — панель
+  // убирают туда, где потом хотят её найти
+  closeTo: (zone: Zone, k: PanelKey) => void;
   // Дроп панели на панель (в том числе через границу зон)
   swapWith: (a: PanelKey, b: PanelKey) => void;
   // Дроп в плейсхолдер строки / в разделитель колонок целевой зоны
@@ -550,6 +561,8 @@ function createPanelZones(ns: string, opts?: {
 
     const close = useCallback((k: PanelKey) => { commit(closePanel(_zones, k)); }, []);
 
+    const closeTo = useCallback((zone: Zone, k: PanelKey) => { commit(closePanelTo(_zones, zone, k)); }, []);
+
     const swapWith = useCallback((a: PanelKey, b: PanelKey) => {
       // Вес — высота СЛОТА, а не панели: вместе с местами меняем и веса,
       // иначе панель утащила бы свою высоту и раскладка «прыгнула» бы
@@ -607,7 +620,7 @@ function createPanelZones(ns: string, opts?: {
       return wasOpen;
     }, []);
 
-    return { zones, toggle, close, swapWith, moveAt, moveToNewColumn, setMode, setWidth, toggleCollapsed, setWeights, reveal };
+    return { zones, toggle, close, closeTo, swapWith, moveAt, moveToNewColumn, setMode, setWidth, toggleCollapsed, setWeights, reveal };
   }
 
   return { use: usePanelZones };

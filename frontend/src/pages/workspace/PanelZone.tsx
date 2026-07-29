@@ -80,7 +80,7 @@ export function PanelZone({
   allowedKeys = WORKSPACE_KEYS, hideWhenEmpty, toolsEnabled, compact, sessionPanels, onPanelOpen,
 }: Props) {
   const usePanels = (panelStack ?? wsPanels).use;
-  const { zones, toggle, setMode, setWidth, setWeights, toggleCollapsed, swapWith, moveAt, moveToNewColumn } = usePanels();
+  const { zones, toggle, closeTo, setMode, setWidth, setWeights, toggleCollapsed, swapWith, moveAt, moveToNewColumn } = usePanels();
   const zoneState = zones[side];
   const { layout, mode, width } = zoneState;
   const windowWidth = useWindowWidth();
@@ -159,6 +159,8 @@ export function PanelZone({
     // из него нужно ровно так же (принимающая solo-зона меняет свою панель на
     // гостя, см. moveAcrossAt). Без DnD только компактный режим.
     enabled: openKeys.length > 0 && !compact,
+    // Зона принимает только те панели, которые сама умеет показать
+    accepts: keyAvailable,
     onSwap: swapWith,
   });
 
@@ -207,12 +209,29 @@ export function PanelZone({
   // Панель тащат из соседней зоны — эта обязана показаться, даже когда пуста:
   // иначе, утащив отсюда последнюю панель, вернуть её перетаскиванием было бы
   // некуда (осталась бы только дорога через закрытие панели).
-  const acceptsForeign = dnd.active && dnd.fromZone !== side && !compact;
+  const acceptsForeign = dnd.accepting && dnd.fromZone !== side && !compact;
 
   // Ранний return — ПОСЛЕ всех хуков (useSyncExternalStore, useEffect выше).
   // Ни одной доступной панели и ничего не открыто — зоны на экране нет вовсе,
   // иначе у контента торчала бы пустая полоса рельсы.
   if (availableKeys.length === 0 && openKeys.length === 0 && !acceptsForeign) return null;
+
+  // Где лежит перетаскиваемая панель в ВИДИМОЙ раскладке этой зоны (null — тащат
+  // из соседней). Нужно, чтобы не предлагать места, дающие ту же раскладку:
+  // «над собой», «под собой» и вынос в свою же колонку, если панель в ней одна.
+  // Такие направляющие сбивают — человек целится, отпускает, и ничего не меняется.
+  const dragPos = (() => {
+    if (!dnd.from) return null;
+    for (let vi = 0; vi < columns.length; vi++) {
+      const ri = columns[vi].keys.indexOf(dnd.from);
+      if (ri >= 0) return { vi, ri, alone: columns[vi].keys.length === 1 };
+    }
+    return null;
+  })();
+  const rowGuideUseless = (vi: number, ri: number) =>
+    dragPos != null && dragPos.vi === vi && (ri === dragPos.ri || ri === dragPos.ri + 1);
+  const colGuideUseless = (vi: number) =>
+    dragPos != null && dragPos.alone && (vi === dragPos.vi || vi === dragPos.vi + 1);
 
   // Настоящий индекс СТРОКИ в layout по видимой позиции ri колонки: пропущенные
   // (недоступные) панели сдвигают нумерацию, а moveAt ждёт индекс в исходной
@@ -231,13 +250,18 @@ export function PanelZone({
   // Направляющая места вставки в колонку. base — место в потоке: по краям колонки
   // 0 (в покое их нет), между панелями GAP — там направляющая подменяет хендл
   // ресайза той же высоты.
-  const rowGuide = (col: { ci: number; keys: PanelKey[] }, vi: number, ri: number, base = 0, edge?: 'start' | 'end') => (
+  const rowGuide = (col: { ci: number; keys: PanelKey[] }, vi: number, ri: number, base = 0, edge?: 'start' | 'end', fill?: boolean) => (
     <PanelDropGuide
       axis="y"
       key={`row-${vi}-${ri}`}
-      dndActive={dnd.active}
+      dndActive={dnd.accepting && !rowGuideUseless(vi, ri)}
       base={base}
       edge={edge}
+      fill={fill}
+      // В большом плейсхолдере показываем иконку той панели, которую тащат: место
+      // размером в полколонки без опознавательных знаков читается как «что-то
+      // сломалось», а не как «панель встанет сюда»
+      icon={dnd.from ? PANEL_META[dnd.from].Icon : undefined}
       {...dnd.guideProps(`row:${vi}:${ri}`, from => moveAt(from, side, col.ci, layoutRowFor(col, ri)))}
     />
   );
@@ -247,7 +271,7 @@ export function PanelZone({
     <PanelDropGuide
       axis="x"
       key={`col-${vi}`}
-      dndActive={dnd.active}
+      dndActive={dnd.accepting && !colGuideUseless(vi)}
       base={base}
       edge={edge}
       {...dnd.guideProps(`col:${vi}`, from => moveToNewColumn(from, side, layoutSepFor(vi)))}
@@ -329,6 +353,10 @@ export function PanelZone({
         disabled: openKeys.length === 0 && !isZoneCollapsed(zoneState),
         onToggle: () => toggleCollapsed(side),
       }}
+      // Дроп на рельсу убирает панель с экрана, оставляя её кнопку ЗДЕСЬ — в том
+      // числе когда панель тащат из соседней зоны: так «уберу и положу поближе»
+      // делается одним движением, без промежуточного переноса.
+      drop={{ active: dnd.accepting, ...dnd.guideProps('rail', from => closeTo(side, from)) }}
     />
   );
 
@@ -375,7 +403,10 @@ export function PanelZone({
                 {renderPanel(k, col.keys.length > 1)}
               </Fragment>
             ))}
-            {rowGuide(col, vi, col.keys.length, 0, 'end')}
+            {/* Последняя направляющая забирает весь свободный низ колонки: панели
+                с высотой по контенту не достают до края, и целиться в полоску у их
+                кромки, когда ниже пустует полколонки, — мучение */}
+            {rowGuide(col, vi, col.keys.length, 0, 'end', true)}
           </div>
         </Fragment>
       ))}

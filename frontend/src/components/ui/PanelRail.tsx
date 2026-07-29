@@ -1,6 +1,6 @@
-import { Fragment, useState } from 'react';
+import { Fragment, useState, type DragEvent } from 'react';
 import { ChevronsLeft, ChevronsRight, Columns2, Square, X, type LucideIcon } from 'lucide-react';
-import { C, FONT, ISLAND } from '../../lib/design';
+import { C, FONT, ISLAND, R } from '../../lib/design';
 import { ICON_STROKE } from './icons';
 import { ToolbarIconButton } from '../Toolbar';
 
@@ -49,6 +49,16 @@ interface Props {
   modeToggle?: { soloMode: boolean; onToggle: () => void };
   // Кнопка «свернуть все» (снизу). Не передана — не рендерится.
   collapse?: { collapsed: boolean; disabled: boolean; onToggle: () => void };
+  // Рельса как место дропа: пока панель тащат, вся рельса принимает её и на
+  // отпускание закрывает, оставляя иконку здесь. Иначе убрать панель во время
+  // перетаскивания было нечем — приходилось бросать её обратно и жать крестик.
+  drop?: {
+    active: boolean;
+    over: boolean;
+    onDragOver: (e: DragEvent) => void;
+    onDragLeave: () => void;
+    onDrop: (e: DragEvent) => void;
+  };
 }
 
 // Разделитель групп внутри рельсы. margin разный у верхнего/групповых/нижнего —
@@ -103,8 +113,9 @@ function RailButton({ item, soleIcon: SoleIcon }: { item: RailItem; soleIcon?: L
   );
 }
 
-export function PanelRail({ side, groups, visible = true, gapToCenter = 0, modeToggle, collapse }: Props) {
+export function PanelRail({ side, groups, visible = true, gapToCenter = 0, modeToggle, collapse, drop }: Props) {
   const isLeft = side === 'left';
+  const dropping = !!drop?.active;
 
   // Пустые группы отбрасываем ДО отрисовки сепараторов — иначе между скрытой
   // группой и соседней остался бы висячий разделитель.
@@ -116,20 +127,41 @@ export function PanelRail({ side, groups, visible = true, gapToCenter = 0, modeT
   const soleItem = shownGroups.reduce((n, g) => n + g.length, 0) === 1;
   const soleIcon: LucideIcon | undefined = soleItem ? (isLeft ? ChevronsLeft : ChevronsRight) : undefined;
 
-  return (
-    <div style={{
+  // Обработчики дропа висят и на капсуле, и на мишени под ней: целиться удобнее в
+  // мишень, но и вся рельса принимает панель — промахнуться мимо 40px-полосы
+  // труднее, чем мимо квадрата.
+  const dropProps = {
+    onDragOver: drop?.onDragOver,
+    onDragLeave: drop?.onDragLeave,
+    onDrop: drop?.onDrop,
+  };
+
+  const railBorder = dropping
+    ? `1px ${drop?.over ? 'solid' : 'dashed'} ${C.accent}`
+    : `1px solid ${C.border}`;
+
+  const rail = (
+    <div
+      {...dropProps}
+      style={{
       width: visible ? RAIL_W : 0,
       opacity: visible ? 1 : 0,
       pointerEvents: visible ? 'auto' : 'none',
       transition: 'width 0.15s ease-out, opacity 0.12s ease-out',
-      flexShrink: 0, alignSelf: 'flex-start',
+      flexShrink: 0,
       display: 'flex', flexDirection: 'column', alignItems: 'center',
       // Тон шапок островов и сайдбаров — единая «оправа» интерфейса.
       // Вертикальный отступ подобран так, чтобы капсула с ОДНОЙ иконкой была
       // ровно в высоту шапки панели (ISLAND.headerH), а центр первой кнопки
       // сел на линию её заголовка: рельса теперь всегда на виду рядом с шапкой.
-      gap: 6, paddingTop: 4, paddingBottom: 4, background: C.bgMain,
-      borderTop: `1px solid ${C.border}`, borderBottom: `1px solid ${C.border}`,
+      gap: 6, paddingTop: 4, paddingBottom: 4,
+      // Пока панель тащат, рельса — приёмник: обводка пунктирная, под курсором —
+      // сплошная акцентная с подложкой. Границу везде задаём ОДНОЙ строкой
+      // railBorder, а не правим потом borderColor/borderStyle: React запрещает
+      // мешать сокращённые свойства с посторонними (borderTop и т.п.) — снимая
+      // одно, он не восстанавливает другое.
+      background: dropping && drop?.over ? C.accentMuted : C.bgMain,
+      borderTop: railBorder, borderBottom: railBorder,
       boxSizing: 'border-box', overflow: 'hidden',
       // Рельса — полукапсула-остров у края окна: тень как у остальных островов
       boxShadow: ISLAND.shadow,
@@ -137,12 +169,12 @@ export function PanelRail({ side, groups, visible = true, gapToCenter = 0, modeT
       // краю окна — прямая и без бордера.
       ...(isLeft
         ? {
-            borderRight: `1px solid ${C.border}`,
+            borderRight: railBorder,
             borderTopRightRadius: ISLAND.radius, borderBottomRightRadius: ISLAND.radius,
             marginRight: gapToCenter,
           }
         : {
-            borderLeft: `1px solid ${C.border}`,
+            borderLeft: railBorder,
             borderTopLeftRadius: ISLAND.radius, borderBottomLeftRadius: ISLAND.radius,
             marginLeft: gapToCenter,
           }),
@@ -195,6 +227,38 @@ export function PanelRail({ side, groups, visible = true, gapToCenter = 0, modeT
           </>
         );
       })()}
+
+    </div>
+  );
+
+  // Мишень стоит ПОД рельсой, на холсте, а не внутри столбца иконок: внутри она
+  // растила бы капсулу, и рельса подпрыгивала бы ровно в тот момент, когда в неё
+  // уже целятся курсором.
+  return (
+    <div style={{
+      alignSelf: 'flex-start', flexShrink: 0,
+      display: 'flex', flexDirection: 'column', alignItems: 'center', gap: ISLAND.gap,
+    }}>
+      {rail}
+      {dropping && (
+        <div
+          {...dropProps}
+          title="Отпустите — панель скроется, кнопка останется здесь"
+          style={{
+            width: RAIL_W, height: RAIL_W, flexShrink: 0, boxSizing: 'border-box',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            borderRadius: R.md,
+            border: `1.5px dashed ${drop?.over ? C.accent : C.textMuted}`,
+            background: drop?.over ? C.accentMuted : C.bgMain,
+            color: drop?.over ? C.accent : C.textMuted,
+            transition: 'background 0.12s, border-color 0.12s, color 0.12s',
+            // Тот же отступ от центра, что у капсулы — мишень стоит точно под ней
+            ...(isLeft ? { marginRight: gapToCenter } : { marginLeft: gapToCenter }),
+          }}
+        >
+          <X size={18} strokeWidth={ICON_STROKE} />
+        </div>
+      )}
     </div>
   );
 }

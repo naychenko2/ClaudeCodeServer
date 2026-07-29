@@ -7,7 +7,7 @@ import {
   parseWeights, parseWidth, normalizeWeights,
   sanitizeZones, emptyZones, zoneOf, openPanelIn, togglePanelIn, closePanel,
   swapAcross, moveAcrossAt, moveAcrossToNewColumn, isZoneCollapsed, migrateZones, revealPanel,
-  enforceZoneInvariant, homeOf, trackHome, parseHome,
+  enforceZoneInvariant, homeOf, trackHome, parseHome, closePanelTo,
   COL_DEFAULT, COL_MIN, COL_MAX,
   type PanelZones,
 } from '../../pages/workspace/panelStackState';
@@ -296,6 +296,15 @@ describe('homeOf / trackHome — иконка закрытой панели', ()
     const r = revealPanel(trackHome(closePanel(moved, 'changes')), 'changes');
     expect(r.wasOpen).toBe(false);
     expect(zoneOf(r.zones, 'changes')).toBe('left');
+  });
+
+  it('дроп на рельсу закрывает панель и кладёт её иконку в эту зону', () => {
+    // «Задачи» открыты справа, бросили на ЛЕВУЮ рельсу: панель закрылась, а её
+    // кнопка ждёт слева — там, куда бросили
+    const z = closePanelTo(zones([['chats']], [['tasks']]), 'left', 'tasks');
+    expect(zoneOf(z, 'tasks')).toBeNull();
+    expect(homeOf(z, 'tasks')).toBe('left');
+    expect(z.left.layout).toEqual([['chats']]);
   });
 
   it('parseHome отбрасывает мусор и переводит упразднённые ключи', () => {

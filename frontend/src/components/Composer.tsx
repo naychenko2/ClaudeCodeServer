@@ -22,6 +22,7 @@ import { useAssistantName } from './chat/contexts';
 import { getDraft, setDraft } from '../lib/drafts';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { useVoiceInput } from '../hooks/useVoiceInput';
+import { Modal, ModalActions } from './ui';
 import type { SkillInfo, AgentInfo, Persona, WorkLoopState } from '../types';
 
 export interface ComposerProps {
@@ -77,6 +78,12 @@ export interface ComposerProps {
   // Тумблер виден при заданном onToggleWorktree (только проектный чат с git)
   worktreeBranch?: string | null;
   onToggleWorktree?: () => void | Promise<void>;
+  // Дерево ХОДА: агент внутри хода ушёл в свой git worktree (EnterWorktree), минуя
+  // Session.worktreePath выше. null/отсутствует — ход идёт там, куда его отправил сервер.
+  // Считает ChatPanel по ленте (computeTurnTree), не Composer. turnTreeLive — идёт ли
+  // ход сейчас (пока идёт — кнопка «Отдельное дерево» блокируется, см. worktreeButton)
+  turnTree?: { name: string; path: string } | null;
+  turnTreeLive?: boolean;
   // Краткий контекст последних реплик чата — для механики «Панель экспертов»
   // с настройкой «Приложить контекст чата» (собирает ChatPanel из ленты)
   chatContext?: string;
@@ -254,6 +261,8 @@ export function Composer({
   onToggleWorkLoop,
   worktreeBranch = null,
   onToggleWorktree,
+  turnTree = null,
+  turnTreeLive = false,
   chatContext,
   promptSuggestion = null,
   rateWindow,
@@ -314,6 +323,10 @@ export function Composer({
   }, [restore?.seq, sessionId]);
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  // Мобильная шторка дерева хода: полный путь недоступен по hover (title), поэтому
+  // тап открывает карточку с путём и кнопкой копирования
+  const [turnSheetOpen, setTurnSheetOpen] = useState(false);
+  const [turnPathCopied, setTurnPathCopied] = useState(false);
   // Опасный режим (bypass) ждёт подтверждения в модалке перед применением
   const [pendingMode, setPendingMode] = useState<Mode | null>(null);
   // Autocomplete скиллов
@@ -700,35 +713,130 @@ export function Composer({
     </span>
   ) : null;
 
-  // Отдельное git worktree: тумблер + бейдж ветки (как loopButton/loopBadge)
+  // Отдельное git worktree: тумблер + бейдж (как loopButton/loopBadge). Бейдж теперь
+  // умеет показывать ещё и дерево ХОДА (turnTree, см. lib/turnWorktree) — состояние,
+  // которым эта кнопка не управляет (она про дерево ЧАТА).
   const worktreeActive = !!worktreeBranch;
+  const turnTreeActive = !!turnTree;
+  // Гейт безопасности: пока идёт ход, бейдж рядом может показывать дерево ХОДА, а не
+  // чата — кнопка с той же иконкой физически удаляет worktree ЧАТА, и лёгкая путаница
+  // снесла бы совсем не то дерево. Плюс переключать дерево чата, пока в нём работает
+  // процесс хода, нельзя и само по себе
+  const worktreeToggleDisabled = isGenerating;
+  const worktreeButtonTitle = worktreeToggleDisabled
+    ? 'Пока идёт ход, дерево чата переключать нельзя'
+    : worktreeActive
+      ? `Чат работает в отдельном дереве (ветка ${worktreeBranch}) — нажми, чтобы вернуть в проект`
+      : 'Отдельное дерево: чат работает в изолированном git worktree на своей ветке';
   const worktreeButton = onToggleWorktree ? (
     <button
-      onClick={onToggleWorktree}
-      title={worktreeActive
-        ? `Чат работает в отдельном дереве (ветка ${worktreeBranch}) — нажми, чтобы вернуть в проект`
-        : 'Отдельное дерево: чат работает в изолированном git worktree на своей ветке'}
+      onClick={worktreeToggleDisabled ? undefined : onToggleWorktree}
+      disabled={worktreeToggleDisabled}
+      title={worktreeButtonTitle}
       style={{
         width: isMobile ? 36 : 32, height: isMobile ? 36 : 32, borderRadius: R.pill, border: 'none',
         background: worktreeActive ? C.accentLight : 'none',
-        cursor: 'pointer', color: worktreeActive ? C.accent : C.textMuted,
+        cursor: worktreeToggleDisabled ? 'default' : 'pointer', color: worktreeActive ? C.accent : C.textMuted,
         display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-        transition: 'color 0.15s, background 0.15s',
+        opacity: worktreeToggleDisabled ? 0.4 : 1,
+        transition: 'color 0.15s, background 0.15s, opacity 0.15s',
       }}
     >
       <FolderGit2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
     </button>
   ) : null;
-  const worktreeBadge = onToggleWorktree && worktreeActive ? (
-    <span title={`Изолированное дерево чата, ветка ${worktreeBranch}`} style={{
-      display: 'inline-flex', alignItems: 'center', height: isMobile ? 26 : 24, maxWidth: 180,
-      padding: '0 9px', borderRadius: R.pill, background: C.accentLight, color: C.accent,
-      fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden',
-      textOverflow: 'ellipsis', flexShrink: 0,
+
+  // Заголовок title бейджа — обязательно формулируется ПРО ХОД, а не про чат: состояние
+  // может смениться между ходами, текст должен объяснять, почему индикатор исчез
+  const turnTreeTitle = turnTree
+    ? (worktreeActive
+        ? `Чат в дереве ${worktreeBranch} · ${turnTreeLive ? 'ход выполняется в' : 'последний ход выполнялся в'} ${turnTree.path}`
+        : (turnTreeLive ? `Ход выполняется в дереве агента: ${turnTree.path}` : `Последний ход выполнялся в ${turnTree.path}`))
+    : '';
+
+  const worktreeBadge = !turnTreeActive ? (
+    // Ветка 1: только дерево чата — сегодняшнее поведение, без изменений
+    onToggleWorktree && worktreeActive ? (
+      <span title={`Изолированное дерево чата, ветка ${worktreeBranch}`} style={{
+        display: 'inline-flex', alignItems: 'center', height: isMobile ? 26 : 24, maxWidth: 180,
+        padding: '0 9px', borderRadius: R.pill, background: C.accentLight, color: C.accent,
+        fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden',
+        textOverflow: 'ellipsis', flexShrink: 0,
+      }}>
+        {worktreeBranch}
+      </span>
+    ) : null
+  ) : isMobile ? (
+    // Ветка 2/3 на мобиле: пилюля icon-only, тап открывает шторку с полным путём
+    <button
+      type="button"
+      role="button"
+      tabIndex={0}
+      aria-label={worktreeActive
+        ? `Чат в дереве ${worktreeBranch}, ${turnTreeLive ? 'ход выполняется' : 'последний ход выполнялся'} в дереве агента ${turnTree!.name}`
+        : `${turnTreeLive ? 'Ход выполняется' : 'Последний ход выполнялся'} в дереве агента ${turnTree!.name}`}
+      title={turnTreeTitle}
+      onClick={() => setTurnSheetOpen(true)}
+      style={{
+        position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        width: 26, height: 26, borderRadius: R.pill, border: `1px solid ${C.border}`,
+        background: worktreeActive ? C.accentLight : C.bgSelected,
+        color: worktreeActive ? C.accent : C.textSecondary,
+        cursor: 'pointer', flexShrink: 0, outline: 'none',
+      }}
+      onFocus={e => { e.currentTarget.style.boxShadow = SHADOW.focus; }}
+      onBlur={e => { e.currentTarget.style.boxShadow = 'none'; }}
+    >
+      <FolderGit2 size={13} strokeWidth={ICON_STROKE} />
+      <span style={{
+        position: 'absolute', top: -1, right: -1, width: 6, height: 6, borderRadius: R.full,
+        background: C.info, border: `1.5px solid ${C.bgMain}`,
+        opacity: turnTreeLive ? 1 : 0.4,
+        animation: turnTreeLive ? 'pulsedot 1.2s ease-in-out infinite' : 'none',
+      }} />
+    </button>
+  ) : worktreeActive ? (
+    // Ветка 3 (десктоп): составная пилюля — accent-сегмент (дерево чата, только иконка) +
+    // нейтральный сегмент (дерево хода). Ветка чата уходит в title, ширина как у ветки 1
+    <span title={turnTreeTitle} style={{
+      display: 'inline-flex', alignItems: 'stretch', height: 24, maxWidth: 180,
+      borderRadius: R.pill, border: `1px solid ${C.border}`, overflow: 'hidden', flexShrink: 0,
     }}>
-      {worktreeBranch}
+      <span style={{
+        width: 24, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+        background: C.accentLight, color: C.accent,
+      }}>
+        <FolderGit2 size={12} strokeWidth={ICON_STROKE} />
+      </span>
+      <span style={{
+        display: 'inline-flex', alignItems: 'center', gap: 6, padding: '0 9px', minWidth: 0,
+        background: C.bgSelected, color: C.textSecondary, fontSize: 11, fontWeight: 600,
+      }}>
+        {/* minWidth:0 обязателен — иначе flex-item не сжимается своим содержимым
+            и текст молча обрезается родительским overflow:hidden БЕЗ «…» */}
+        <span style={{ minWidth: 0, fontFamily: FONT.mono, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>ход: {turnTree!.name}</span>
+        <span style={{
+          width: 6, height: 6, borderRadius: R.full, background: C.info, flexShrink: 0,
+          opacity: turnTreeLive ? 1 : 0.4,
+          animation: turnTreeLive ? 'pulsedot 1.2s ease-in-out infinite' : 'none',
+        }} />
+      </span>
     </span>
-  ) : null;
+  ) : (
+    // Ветка 2 (десктоп): только дерево хода — нейтральная пилюля
+    <span title={turnTreeTitle} style={{
+      display: 'inline-flex', alignItems: 'center', gap: 6, height: 24, maxWidth: 180,
+      padding: '0 9px', borderRadius: R.pill, background: C.bgSelected, border: `1px solid ${C.border}`,
+      color: C.textSecondary, fontSize: FS.xs, fontWeight: 600, flexShrink: 0,
+    }}>
+      <span style={{ minWidth: 0, fontFamily: FONT.mono, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>ход: {turnTree!.name}</span>
+      <span style={{
+        width: 6, height: 6, borderRadius: R.full, background: C.info, flexShrink: 0,
+        opacity: turnTreeLive ? 1 : 0.4,
+        animation: turnTreeLive ? 'pulsedot 1.2s ease-in-out infinite' : 'none',
+      }} />
+    </span>
+  );
 
   const inputArea = isListening ? (
     <div style={{ ...dotsStyle, gap: 10 }}>
@@ -998,10 +1106,14 @@ export function Composer({
     { key: 'attach', node: attachButton, item: { key: 'attach', icon: <Plus size={16} strokeWidth={ICON_STROKE} />, label: 'Прикрепить файл', sublabel: 'Добавить файл к сообщению', onClick: onAttach } },
     slashButton && { key: 'slash', node: slashButton, item: { key: 'slash', icon: <span style={{ fontFamily: FONT.mono, fontSize: 15, fontWeight: 700, lineHeight: 1 }}>/</span>, label: 'Вставить скилл', sublabel: 'Список навыков через «/»', onClick: handleSlashButton } },
     loopButton && { key: 'loop', node: loopButton, item: { key: 'loop', icon: <RefreshCw size={16} strokeWidth={ICON_STROKE} />, label: 'Цикл «до готово»', sublabel: 'Повторять итерациями, пока не готово', toggle: loopActive, onClick: () => { void onToggleWorkLoop?.(); } } },
-    worktreeButton && { key: 'worktree', node: worktreeButton, item: { key: 'worktree', icon: <FolderGit2 size={16} strokeWidth={ICON_STROKE} />, label: 'Отдельное дерево', sublabel: 'Чат в изолированном git worktree', toggle: worktreeActive, onClick: () => { void onToggleWorktree?.(); } } },
+    worktreeButton && { key: 'worktree', node: worktreeButton, item: { key: 'worktree', icon: <FolderGit2 size={16} strokeWidth={ICON_STROKE} />, label: 'Отдельное дерево', sublabel: worktreeToggleDisabled ? 'Пока идёт ход, недоступно' : 'Чат в изолированном git worktree', toggle: worktreeActive, disabled: worktreeToggleDisabled, onClick: () => { if (!worktreeToggleDisabled) void onToggleWorktree?.(); } } },
     discussButton && { key: 'discuss', node: discussButton, item: { key: 'discuss', icon: <Users size={16} strokeWidth={ICON_STROKE} />, label: 'Обсудить с командой', sublabel: 'Выбрать механику совместной работы', toggle: teamOpen, onClick: () => setTeamOpen(o => !o) } },
   ].filter(Boolean) as { key: string; node: React.ReactNode; item: OverflowItem }[];
 
+  // Место под бейдж дерева хода резервируем ВСЕГДА, когда доступна кнопка «Отдельное
+  // дерево» — даже пока сам бейдж ещё не показан. Иначе старт хода (EnterWorktree)
+  // мгновенно раздувает badgesRef и выталкивает соседнюю кнопку в «⋯» прямо под пальцем.
+  // Цена — одна кнопка постоянно в меню; предсказуемость важнее
   const visibleCount = useToolbarOverflow({
     stripRef, fixedLeftRef, badgesRef, rightRef,
     count: collapsible.length,
@@ -1009,6 +1121,7 @@ export function Composer({
     itemWidth: isMobile ? 36 : 32,
     gap: isMobile ? 6 : 4,
     menuWidth: isMobile ? 40 : 34,
+    reserve: onToggleWorktree ? 32 : 0,
   });
   const hiddenItems = collapsible.slice(visibleCount).map(c => c.item);
 
@@ -1228,6 +1341,49 @@ export function Composer({
         onConfirm={() => { onModeChange(pendingMode); setPendingMode(null); }}
         onCancel={() => setPendingMode(null)}
       />
+    )}
+
+    {/* Мобильная шторка дерева хода: полный путь недоступен по hover (title) — тап
+        открывает карточку с путём и копированием */}
+    {turnSheetOpen && turnTree && (
+      <Modal
+        width={420}
+        title="Дерево хода"
+        onClose={() => setTurnSheetOpen(false)}
+        footer={
+          <ModalActions
+            cancelLabel="Закрыть"
+            onCancel={() => setTurnSheetOpen(false)}
+            confirmVariant="secondary"
+            confirmLabel={turnPathCopied ? 'Скопировано' : 'Скопировать путь'}
+            onConfirm={() => {
+              navigator.clipboard?.writeText(turnTree.path).then(() => {
+                setTurnPathCopied(true);
+                setTimeout(() => setTurnPathCopied(false), 1500);
+              }).catch(() => {});
+            }}
+          />
+        }
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {worktreeActive && (
+            <div style={{ fontSize: FS.sm, color: C.textMuted }}>
+              Чат работает в дереве <span style={{ fontFamily: FONT.mono, color: C.textSecondary }}>{worktreeBranch}</span>
+            </div>
+          )}
+          <div>
+            <div style={{ fontSize: FS.sm, color: C.textMuted, marginBottom: 4 }}>
+              {turnTreeLive ? 'Ход выполняется в дереве агента:' : 'Последний ход выполнялся в дереве агента:'}
+            </div>
+            <div style={{ fontFamily: FONT.mono, fontSize: FS.sm, color: C.textHeading, wordBreak: 'break-all' }}>
+              {turnTree.path}
+            </div>
+          </div>
+          <div style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.5 }}>
+            Агент создал своё дерево внутри хода, кнопка «Отдельное дерево» им не управляет.
+          </div>
+        </div>
+      </Modal>
     )}
     </div>
   );

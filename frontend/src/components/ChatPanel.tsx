@@ -17,6 +17,7 @@ import { detectTeamMechanic } from '../features/team/teamMechanics';
 import { setLastMechanic } from '../lib/lastMechanic';
 import { toRateWindows, worstWindow } from '../lib/rateLimit';
 import { estimateContext } from '../lib/context';
+import { computeTurnTree, sessionStartedBoundaries } from '../lib/turnWorktree';
 import { useCtxThresholds } from '../lib/contextPrefs';
 import { notify } from '../lib/notify';
 import { type Mode, ModeIcon, MODES, isDangerMode } from '../lib/modes';
@@ -652,6 +653,13 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   const planPhase = useMemo(() => derivePlanPhase(items, mode, isWaiting), [items, mode, isWaiting]);
   const planningKind = planPhase === 'planning' ? 'planning' : planPhase === 'replanning' ? 'replanning' : undefined;
 
+  // Дерево ХОДА (turnWorktree с бэка + EnterWorktree первого хода, см. lib/turnWorktree) —
+  // бейдж композера и разделитель в ленте считают его отсюда, а не из Session.worktreePath
+  const turnTree = useMemo(() => computeTurnTree(items), [items]);
+  // Индексы session_started, видимые в ленте разделителем «ход в дереве агента»/«ход
+  // вернулся в проект» (остальные session_started прозрачны для группировки, см. isInvisible)
+  const turnBoundaries = useMemo(() => sessionStartedBoundaries(items), [items]);
+
   // Активный workflow — сырой прогресс фаз (чистая функция от ленты, без мутаций)
   const rawWorkflowInfo = useMemo(() => {
     for (let i = items.length - 1; i >= 0; i--) {
@@ -840,12 +848,13 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       taskPlan={i === lastTaskIdx && taskTodos.length > 0 ? taskTodos : undefined}
       agentActivity={extras?.agentActivity}
       agentRenderChild={extras?.agentRenderChild}
+      turnBoundaryKind={item.kind === 'session_started' ? turnBoundaries.get(i) : undefined}
     />
   ), [
     online, isWaiting, items.length, lastResultIndex, toggleThinking, allowPermission,
     denyPermission, allowAlways, answerQuestion, handleRespondPlan, planVersions,
     lastApprovedPlanIdx, mode, onOpenFile, project, handleRevert, handleRetry,
-    interrupt, handleMigrateProvider, lastTaskIdx, taskTodos, changeMode,
+    interrupt, handleMigrateProvider, lastTaskIdx, taskTodos, changeMode, turnBoundaries,
   ]);
 
   // Блок действий: подряд идущие карточки инструментов + изменения файлов объединяем
@@ -941,19 +950,23 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       } else if (inBlock(items[i], i)) {
         const start = i;
         const slice: Array<[ChatItem, number]> = [];
-        // Прозрачные для группировки: рендерятся в null и не должны рвать стопку действий
-        const isInvisible = (it: ChatItem) => it.kind === 'session_started' || it.kind === 'resumed' || it.kind === 'fal_cost';
+        // Прозрачные для группировки: рендерятся в null и не должны рвать стопку действий.
+        // session_started на «границе» дерева хода (turnBoundaries) — исключение: он
+        // теперь ВИДИМ (разделитель «ход в дереве агента»/«ход вернулся в проект»)
+        // и обязан рвать стопку действий, как любой другой видимый элемент
+        const isInvisible = (it: ChatItem, idx: number) =>
+          (it.kind === 'session_started' && !turnBoundaries.has(idx)) || it.kind === 'resumed' || it.kind === 'fal_cost';
         // Размышления верхнего уровня прячем внутрь группы, если они стоят МЕЖДУ действиями
         const isThought = (it: ChatItem) => (it.kind === 'thinking' && !it.parentToolUseId) || it.kind === 'redacted_thinking';
         const isSuppressed = (it: ChatItem) => suppressedByWorkflow.has(it) || suppressedByAgentParent.has(it);
         while (i < items.length) {
-          if (isSuppressed(items[i]) || isInvisible(items[i])) { i++; continue; }
+          if (isSuppressed(items[i]) || isInvisible(items[i], i)) { i++; continue; }
           if (inBlock(items[i], i)) { slice.push([items[i], i]); i++; continue; }
           if (isThought(items[i])) {
             // Lookahead: впитываем размышления, только если дальше идёт ещё действие —
             // размышление перед финальным ответом остаётся видимой строкой над ним
             let j = i;
-            while (j < items.length && (isThought(items[j]) || isInvisible(items[j]) || isSuppressed(items[j]))) j++;
+            while (j < items.length && (isThought(items[j]) || isInvisible(items[j], j) || isSuppressed(items[j]))) j++;
             if (j < items.length && inBlock(items[j], j)) {
               for (; i < j; i++) if (isThought(items[i])) slice.push([items[i], i]);
               continue;
@@ -989,7 +1002,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         // Хвостовые размышления не сигнал: они могут впитаться в группу при следующем
         // действии, и группа мигала бы свернулась/раскрылась на каждом межшаговом thinking.
         let after = i;
-        while (after < items.length && (isThought(items[after]) || isInvisible(items[after]) || isSuppressed(items[after]))) after++;
+        while (after < items.length && (isThought(items[after]) || isInvisible(items[after], after) || isSuppressed(items[after]))) after++;
         // Последняя группа сворачивается и когда после неё ещё нет видимого элемента,
         // но ход уже завершён (сессия не работает): иначе действия последнего диалога
         // оставались бы раскрытыми в отличие от всех предыдущих групп.
@@ -1093,7 +1106,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     return result;
     // personasVersion: findConsultedPersona матчит по стору персон — после его загрузки
     // карточки консультаций пересобираются с активностью внутри
-  }, [items, renderItem, lastTaskIdx, execZone, online, onOpenFile, project, handleRevert, personasVersion, sessionBusy]);
+  }, [items, renderItem, lastTaskIdx, execZone, online, onOpenFile, project, handleRevert, personasVersion, sessionBusy, turnBoundaries]);
 
   const headerBar = (
     <ChatHeaderBar
@@ -1324,6 +1337,8 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
             onToggleWorkLoop={handleToggleWorkLoop}
             worktreeBranch={session.worktreeBranch}
             onToggleWorktree={project ? openWorktreeConfirm : undefined}
+            turnTree={turnTree}
+            turnTreeLive={isWaiting}
             chatContext={chatContext}
             promptSuggestion={promptSuggestion}
             rateWindow={worstRate}

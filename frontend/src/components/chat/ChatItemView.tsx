@@ -445,6 +445,10 @@ interface ItemProps {
   // Универсальный рендер элементов активности (renderItem из ChatPanel) —
   // чтобы внутри секции работали ВСЕ возможности обычной ленты
   agentRenderChild?: (item: ChatItem, idx: number) => React.ReactNode;
+  // Для kind='session_started': считает ChatPanel (sessionStartedBoundaries) — 'entered'
+  // рисует разделитель «ход в дереве агента», 'returned' — «ход вернулся в проект»;
+  // undefined — этот session_started прозрачен, рендерится в null (как сегодня)
+  turnBoundaryKind?: 'entered' | 'returned';
 }
 
 // React.memo: переключатель по kind — самый массовый компонент ленты. Элементы ChatItem
@@ -532,7 +536,7 @@ function ProviderLimitCard({ item, online, onMigrate }: {
   );
 }
 
-export const ChatItemView = memo(function ChatItemView({ item, index, online, streaming, isLastResult, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, onMigrateProvider, taskPlan, agentActivity, agentRenderChild }: ItemProps) {
+export const ChatItemView = memo(function ChatItemView({ item, index, online, streaming, isLastResult, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, onMigrateProvider, taskPlan, agentActivity, agentRenderChild, turnBoundaryKind }: ItemProps) {
   const project = useContext(ChatProjectContext);
   const persona = useContext(PersonaContext);
   const asstName = useAssistantName();
@@ -631,9 +635,31 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       );
     }
 
-    case 'session_started':
-      // Старт чата не показываем — тех-инфа (модель/режим/cwd/MCP) дублирует шапку и раздувает чат
-      return null;
+    case 'session_started': {
+      // Старт чата обычно не показываем — тех-инфа (модель/режим/cwd/MCP) дублирует шапку
+      // и раздувает ленту. Исключение — «граница» дерева хода (turnBoundaryKind, считает
+      // ChatPanel): агент внутри хода ушёл в свой git worktree мимо Session.worktreePath,
+      // и это стоит отметить в ленте, как и возврат обратно. По образцу compact_boundary
+      if (!turnBoundaryKind) return null;
+      const entered = turnBoundaryKind === 'entered';
+      // Нейтральное время: разделитель — отметка о прошедшем событии истории, а не
+      // индикатор текущего состояния (тем занят бейдж композера, см. Composer.turnTree)
+      const title = entered
+        ? `Дерево агента: ${item.turnWorktree!.path}`
+        : (project ? `Корень проекта: ${project.rootPath}` : 'Ход вернулся в корень проекта');
+      return (
+        <div style={{ alignSelf: 'stretch', display: 'flex', alignItems: 'center', gap: 10, color: C.textMuted, fontSize: 11, margin: '2px 0' }} title={title}>
+          <div style={{ flex: 1, height: 1, background: C.border }} />
+          <span style={{ display: 'flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap' }}>
+            <span style={{ color: C.textMuted }}>⎇</span>
+            {entered
+              ? <>ход в дереве агента · <span style={{ fontFamily: FONT.mono }}>{item.turnWorktree!.name}</span></>
+              : 'ход вернулся в корень проекта'}
+          </span>
+          <div style={{ flex: 1, height: 1, background: C.border }} />
+        </div>
+      );
+    }
 
     case 'text': {
       // Доклад делегированной задачи (модель Z) — гостевая реплика несёт маркер первой

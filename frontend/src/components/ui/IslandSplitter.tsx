@@ -7,10 +7,13 @@ import { C, ISLAND } from '../../lib/design';
 // невидимые ±4px по бокам (как ±6px у старого 1px-Splitter).
 // API совместим со Splitter: onMouseDown — Pointer Events (mouse + touch + pen),
 // touchAction:none — тач тянет, а не скроллит.
-export function IslandSplitter({ orientation = 'v', active, onMouseDown }: {
+export function IslandSplitter({ orientation = 'v', active, onMouseDown, gap = ISLAND.gap }: {
   orientation?: 'v' | 'h';
   active: boolean;
   onMouseDown: (e: ReactPointerEvent) => void;
+  // Ширина (для vertical) / высота (для horizontal) сплиттера.
+  // Дефолт — ISLAND.gap (8px). Caller может уменьшить (напр. 4px для рельсы).
+  gap?: number;
 }) {
   const vertical = orientation === 'v';
   const [hover, setHover] = useState(false);
@@ -25,8 +28,8 @@ export function IslandSplitter({ orientation = 'v', active, onMouseDown }: {
         touchAction: 'none', background: 'transparent',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         ...(vertical
-          ? { flex: `0 0 ${ISLAND.gap}px`, width: ISLAND.gap, alignSelf: 'stretch' }
-          : { height: ISLAND.gap, width: '100%' }),
+          ? { flex: `0 0 ${gap}px`, width: gap, alignSelf: 'stretch' }
+          : { height: gap, width: '100%' }),
       }}
     >
       <div style={{

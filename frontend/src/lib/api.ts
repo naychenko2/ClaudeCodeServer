@@ -991,6 +991,17 @@ export const api = {
   },
 
   files: {
+    // URL файла проекта для браузерного <img>/<video>: токен через ?access_token=,
+    // потому что тег не шлёт заголовки. Нужен картинкам в markdown — README ссылается
+    // на них относительным путём, а base64 из files/content для <img src> не подходит
+    fileUrl: (projectId: string, path: string): string => {
+      const token = typeof localStorage !== 'undefined'
+        ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
+        : null;
+      const params = new URLSearchParams({ path });
+      if (token) params.set('access_token', token);
+      return `/api/projects/${encodeURIComponent(projectId)}/files/stream?${params}`;
+    },
     list: (projectId: string, path = '') =>
       request<FileEntry[]>(`/projects/${projectId}/files?path=${encodeURIComponent(path)}`),
     tree: (projectId: string, path = '') =>

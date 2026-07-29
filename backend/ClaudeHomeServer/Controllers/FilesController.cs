@@ -422,6 +422,12 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
                 "mov" => "video/quicktime",
                 "avi" => "video/x-msvideo",
                 "mkv" => "video/x-matroska",
+                // Картинки: эндпоинт отдаёт их для <img src> в markdown (README с
+                // относительными путями). Без типа браузер угадывает по содержимому,
+                // а SVG в таком режиме не рендерится вовсе
+                "png" or "gif" or "bmp" or "webp" or "avif" => $"image/{ext}",
+                "jpg" or "jpeg" => "image/jpeg",
+                "svg" => "image/svg+xml",
                 _ => "application/octet-stream"
             };
             return PhysicalFile(safePath, mime, enableRangeProcessing: true);

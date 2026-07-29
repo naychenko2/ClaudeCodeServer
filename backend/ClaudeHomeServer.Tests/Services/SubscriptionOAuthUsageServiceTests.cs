@@ -193,6 +193,111 @@ public class SubscriptionOAuthUsageServiceTests : IDisposable
         accounts.Single(a => a.Key == "second").Token.Should().Be("token-second");
     }
 
+    // --- LoginCommandFor: готовая PowerShell-команда входа для плашки «нужен claude login» ---
+
+    private static IDisposable SystemEnv(string key, string? value)
+    {
+        var prev = Environment.GetEnvironmentVariable(key);
+        Environment.SetEnvironmentVariable(key, value);
+        return new Restore(key, prev);
+    }
+
+    private sealed class Restore(string key, string? prevValue) : IDisposable
+    {
+        public void Dispose() => Environment.SetEnvironmentVariable(key, prevValue);
+    }
+
+    [Fact]
+    public void LoginCommandFor_АккаунтПула_СодержитПутьSubКлючИClaudeLogin()
+    {
+        using var _ = SystemEnv("CLAUDE_CODE_OAUTH_TOKEN", null);
+        var svc = CreateServiceWith(new Dictionary<string, string?>
+        {
+            [$"{ClaudeSubscriptionPool.Section}:second:OAuthToken"] = "token-second",
+        });
+
+        var expectedDir = Path.Combine(_tempDir, "claude-profiles", "sub-second");
+        svc.LoginCommandFor("second").Should().Be($"$env:CLAUDE_CONFIG_DIR = \"{expectedDir}\"; claude login");
+    }
+
+    [Fact]
+    public void LoginCommandFor_PrimaryВПуле_ИдётПоТойЖеСхемеЧтоПодписка()
+    {
+        using var _ = SystemEnv("CLAUDE_CODE_OAUTH_TOKEN", null);
+        var svc = CreateServiceWith(new Dictionary<string, string?>
+        {
+            [$"{ClaudeSubscriptionPool.Section}:claude:OAuthToken"] = "token-claude",
+        });
+
+        var expectedDir = Path.Combine(_tempDir, "claude-profiles", "sub-claude");
+        svc.LoginCommandFor("claude").Should().Be($"$env:CLAUDE_CONFIG_DIR = \"{expectedDir}\"; claude login");
+    }
+
+    [Fact]
+    public void LoginCommandFor_PrimaryНеВПуле_ТокенИзEnv_Null()
+    {
+        using var _ = SystemEnv("CLAUDE_CODE_OAUTH_TOKEN", "env-token");
+        var svc = CreateServiceWith(new Dictionary<string, string?>());
+
+        svc.LoginCommandFor("claude").Should().BeNull("env-токен перекроет вход в файл профиля");
+    }
+
+    [Fact]
+    public void LoginCommandFor_PrimaryНеВПуле_ТокенИзКонфига_Null()
+    {
+        using var _ = SystemEnv("CLAUDE_CODE_OAUTH_TOKEN", null);
+        var svc = CreateServiceWith(new Dictionary<string, string?>
+        {
+            ["Claude:OAuthToken"] = "cfg-token",
+        });
+
+        svc.LoginCommandFor("claude").Should().BeNull("конфиг-токен перекроет вход в файл профиля");
+    }
+
+    [Fact]
+    public void LoginCommandFor_PrimaryНеВПуле_ФайловыеКреды_КомандаСПутёмПрофиля()
+    {
+        using var _ = SystemEnv("CLAUDE_CODE_OAUTH_TOKEN", null);
+        var profileDir = Path.Combine(_tempDir, "user-home", ".claude");
+        var svc = CreateServiceWith(new Dictionary<string, string?>
+        {
+            ["ClaudeUserProfileDir"] = profileDir,
+        });
+
+        svc.LoginCommandFor("claude").Should().Be($"$env:CLAUDE_CONFIG_DIR = \"{profileDir}\"; claude login");
+    }
+
+    [Fact]
+    public void LoginCommandFor_ПутьСПробелами_ВесьПутьВОднойПареКавычек()
+    {
+        using var _ = SystemEnv("CLAUDE_CODE_OAUTH_TOKEN", null);
+        var dirWithSpaces = Path.Combine(_tempDir, "user profile dir", ".claude");
+        var svc = CreateServiceWith(new Dictionary<string, string?>
+        {
+            ["ClaudeUserProfileDir"] = dirWithSpaces,
+        });
+
+        var cmd = svc.LoginCommandFor("claude");
+
+        cmd.Should().Be($"$env:CLAUDE_CONFIG_DIR = \"{dirWithSpaces}\"; claude login");
+    }
+
+    [Fact]
+    public void LoginCommandFor_ПутьСКавычкой_ЭкранируетсяБэктиком()
+    {
+        using var _ = SystemEnv("CLAUDE_CODE_OAUTH_TOKEN", null);
+        var dirWithQuote = Path.Combine(_tempDir, "weird\"dir", ".claude");
+        var svc = CreateServiceWith(new Dictionary<string, string?>
+        {
+            ["ClaudeUserProfileDir"] = dirWithQuote,
+        });
+
+        var cmd = svc.LoginCommandFor("claude");
+
+        cmd.Should().Contain("weird`\"dir", "двойная кавычка внутри пути экранируется бэктиком — иначе PS-строка оборвётся раньше времени");
+        cmd.Should().StartWith("$env:CLAUDE_CONFIG_DIR = \"").And.EndWith("; claude login");
+    }
+
     // --- Рефреш протухшего access-токена профиля (sub-профили CLI не обновляет) ---
 
     private const string UsageEndpoint = "https://api.anthropic.com/api/oauth/usage";

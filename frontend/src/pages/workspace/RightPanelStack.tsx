@@ -8,7 +8,7 @@
 // Панели — «воздушные» скруглённые карточки с зазорами; границы высот тянутся
 // невидимыми хендлами в зазорах, ширина колонок — сплиттером слева от зоны.
 import { useEffect, useState, type ReactNode } from 'react';
-import { Library, ClipboardList, FolderTree, GitCompare, ListTodo, Bot, User, Users, SquareTerminal, MonitorPlay, Network, type LucideIcon } from 'lucide-react';
+import { BookOpenText, ClipboardList, FolderTree, GitCompare, ListTodo, Bot, User, Users, SquareTerminal, MonitorPlay, Network, type LucideIcon } from 'lucide-react';
 import type { Session } from '../../types';
 import { C, FONT, ISLAND, SHADOW } from '../../lib/design';
 import { ICON_STROKE } from '../../components/ui/icons';
@@ -39,10 +39,10 @@ const PANEL_META: Record<RightPanelKey, { title: string; Icon: LucideIcon }> = {
   files: { title: 'Файлы', Icon: FolderTree },
   // «Документы» рядом с «Файлами»: обе про содержимое репозитория, но Файлы — дерево для
   // работы с кодом, а Документы — документация как связный корпус (README + docs/**).
-  // Библиотека: корпус документации, а не отдельный документ. BookOpen занят «Знаниями»
-  // (lib/ai/actions), FileText — заметками, а свиток читался как «текстовый файл»
-  // и документами базы знаний; повтор читался бы как один и тот же раздел.
-  docs: { title: 'Документация', Icon: Library },
+  // Раскрытая книга с текстом: читаемая документация. Родственный BookOpen занят
+  // «Знаниями» (lib/ai/actions, KnowledgePanel, FileExplorer) — здесь строки текста
+  // внутри разводят их между собой; FileText отдан заметкам.
+  docs: { title: 'Документация', Icon: BookOpenText },
   changes: { title: 'Изменения', Icon: GitCompare },
   tasks: { title: 'Задачи', Icon: ListTodo },
   graph: { title: 'Граф', Icon: Network },

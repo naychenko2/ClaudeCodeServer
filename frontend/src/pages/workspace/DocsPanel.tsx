@@ -15,7 +15,7 @@ import { api } from '../../lib/api';
 import { onFilesChanged } from '../../lib/signalr';
 import { C, FONT, FS, R, SHADOW, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
-import { Button, IconButton, TextField } from '../../components/ui';
+import { Button, IconButton, PillSwitch, TextField } from '../../components/ui';
 import { DocsScopeDialog } from './DocsScopeDialog';
 import { MarkdownViewer } from '../../components/MarkdownViewer';
 import { ListDateDivider, LIST_FLASH_CLASS, LIST_FLASH_MS } from '../../components/ListDateDivider';
@@ -524,19 +524,22 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
         flexShrink: 0, position: 'relative', display: 'flex', alignItems: 'center', gap: SP.xs,
         padding: `${SP.sm}px ${SP.md}px`, borderBottom: `1px solid ${C.border}`,
       }}>
-        {/* Домик — тумблер домашнего вида: слева и отдельно от остальных, потому что
-            переключает не отображение списка, а то, ЧТО показывает панель целиком */}
+        {/* Что показывает панель: README или корпус. Переключатель, а не кнопка —
+            это два равноправных вида, и видно, в каком из них находишься */}
         {homePath && (
-          <IconButton
-            title={homeOpen ? 'README на всю панель — выключить' : 'README на всю панель — включить'}
-            active={homeOpen}
-            onClick={() => setHome(!homeOpen)}
-            size="sm"
-          >
-            <Home size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-          </IconButton>
+          <PillSwitch
+            value={homeOpen ? 'home' : 'list'}
+            options={[
+              { value: 'home', label: 'Начало', icon: <Home size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> },
+              { value: 'list', label: 'Документы', icon: <List size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> },
+            ]}
+            onChange={v => setHome(v === 'home')}
+          />
         )}
         <div style={{ flex: 1 }} />
+        {/* Кнопки списка — только в режиме «Документы»: в «Начале» им нечем управлять,
+            там один документ на всю панель */}
+        {!homeOpen && <>
         {/* Поиск открывает ряд правых кнопок: он первый по частоте, но такой же режим
             панели, как и соседи, — отдельная подпись выбивала его из ряда */}
         <IconButton
@@ -587,10 +590,12 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
         >
           <PanelBottom size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
         </IconButton>
-        {/* Область документации: дефолт docs/, но соглашение о папке в проектах разное */}
+        {/* Область документации: дефолт docs/, но соглашение о папке в проектах разное.
+            Тоже прячется в «Начале»: там нечего настраивать — README в области всегда */}
         <IconButton title="Папки документации" onClick={() => setScopeOpen(true)} size="sm">
           <SlidersHorizontal size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
         </IconButton>
+        </>}
 
         {/* Поповер папок: клик прокручивает список к нужной группе */}
         {foldersOpen && (
@@ -625,27 +630,9 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
       {/* Домашний режим: README на всю панель, поверх списка. Список не размонтируется —
           закрыл домик и он на прежнем месте, с прежней прокруткой */}
       {homeOpen && homePath ? (
+        // Без своей шапки: заголовок и так первой строкой документа, а переключиться
+        // и настроить область можно в ряду выше — вторая полоса кнопок была бы лишней
         <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-          <div style={{
-            flexShrink: 0, display: 'flex', alignItems: 'center', gap: SP.xs,
-            padding: `${SP.xs}px ${SP.sm}px`, borderBottom: `1px solid ${C.border}`,
-          }}>
-            <Home size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0, color: C.accent }} />
-            <span style={{
-              fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: 600, color: C.textHeading,
-              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-            }}>{homeDoc?.title ?? homePath}</span>
-            <div style={{ flex: 1 }} />
-            <IconButton title="Документ в чат — вложением" onClick={() => onAttachToChat(homePath)} size="sm">
-              <MessageSquarePlus size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-            </IconButton>
-            <IconButton title="Развернуть в центре" onClick={() => onOpenFile(homePath)} size="sm">
-              <Maximize2 size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-            </IconButton>
-            <IconButton title="Закрыть — перейти к списку документов" onClick={() => setHome(false)} size="sm">
-              <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-            </IconButton>
-          </div>
           <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: `${SP.md}px ${SP.md}px ${SP.xl}px` }}>
             {!homeDoc && <div style={emptyStyle}>Загружаем…</div>}
             {homeDoc && (

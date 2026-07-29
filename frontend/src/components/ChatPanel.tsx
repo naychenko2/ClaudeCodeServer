@@ -616,9 +616,10 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
 
   // Миграция чата на другого провайдера (кнопка карточки provider_limit при исчерпании
   // лимита): сервер перевозит транскрипт, событие provider_switched гасит карточку и
-  // рисует разделитель; ошибку показывает сама карточка
-  const handleMigrateProvider = useCallback(async (model: string) => {
-    const updated = await api.chats.migrateProvider(session.id, model);
+  // рисует разделитель; ошибку показывает сама карточка. subscriptionKey задан только у
+  // опций «аккаунт пула» (kind='subscription') — явный выбор подписки вместо автовыбора
+  const handleMigrateProvider = useCallback(async (model: string, subscriptionKey?: string) => {
+    const updated = await api.chats.migrateProvider(session.id, model, subscriptionKey);
     onSessionUpdated?.(updated);
   }, [session.id, onSessionUpdated]);
 

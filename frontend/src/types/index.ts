@@ -651,11 +651,17 @@ export interface LaunchConfigEntry {
   env?: Record<string, string>;
 }
 
-// Вариант продолжения чата на стороннем провайдере (из события provider_limit)
+// Вариант продолжения чата при исчерпании лимита (из события provider_limit):
+// kind='subscription' — другой аккаунт того же пула подписок Claude (та же модель,
+// tierLabel — тариф «Max 5×», utilization 0..1); kind='provider' (дефолт) — сторонний
+// провайдер (tierLabel/utilization не заполняются)
 export interface ProviderFallbackOption {
   key: string;
   displayName: string;
   model: string;
+  kind?: 'subscription' | 'provider';
+  tierLabel?: string | null;
+  utilization?: number | null;
 }
 
 // Состояние одного окна лимита подписки (из rate_limit_event). utilization: 0..1.

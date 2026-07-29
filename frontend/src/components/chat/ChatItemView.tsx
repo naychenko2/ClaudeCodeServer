@@ -1,6 +1,7 @@
 import { memo, useState, useContext, useEffect } from 'react';
 import { SquareCheck, SquarePen, Check, Copy, AlertCircle, RotateCcw, AlertTriangle, X } from 'lucide-react';
-import type { ChatItem, Persona } from '../../types';
+import type { ChatItem, Persona, ProviderFallbackOption } from '../../types';
+import { splitFallbackOptions, formatSubscriptionMeta } from '../../lib/providerLimit';
 import type { TodoItem } from '../../hooks/useSessionArtifacts';
 import type { Mode } from '../../lib/modes';
 import { C, FONT, SHADOW, R } from '../../lib/design';
@@ -437,7 +438,7 @@ interface ItemProps {
   onRetry: () => void;
   onInterrupt: () => void;
   // Миграция чата на другого провайдера (карточка «Продолжить на …» при исчерпании лимита)
-  onMigrateProvider?: (model: string) => Promise<void>;
+  onMigrateProvider?: (model: string, subscriptionKey?: string) => Promise<void>;
   // Агрегированный чек-лист TaskCreate/TaskUpdate — приходит только на последний task-вызов ленты
   taskPlan?: TodoItem[];
   // Вложенная активность сабагента-персоны (дочерние tool_use/text/thinking с индексами) —
@@ -456,17 +457,24 @@ interface ItemProps {
 // React.memo: переключатель по kind — самый массовый компонент ленты. Элементы ChatItem
 // иммутабельны по ссылке (обновление элемента = новый объект), пропсы-функции стабильны
 // (useCallback в ChatPanel) — при дописывании ленты старые элементы не перерендериваются.
-// Карточка «Лимит исчерпан — продолжить на стороннем провайдере»: кнопка на каждый
-// настроенный провайдер; клик мигрирует чат (транскрипт переезжает, контекст сохраняется).
-// После миграции карточка гаснет по provider_switched (resolved в chatReducer).
-function ProviderLimitCard({ item, online, onMigrate }: {
+// Карточка «Лимит исчерпан — продолжить чат»: две секции опций — сначала здоровые
+// аккаунты того же пула подписок (kind='subscription', та же модель, своя предоплата),
+// затем сторонние провайдеры (модель сменится, оплата с их баланса). Клик мигрирует чат
+// (транскрипт переезжает, контекст сохраняется); у опции пула передаём её key как
+// subscriptionKey — явный выбор вместо автовыбора пулом. После миграции карточка
+// гаснет по provider_switched (resolved в chatReducer).
+// export — для dev-витрины UiKitPage (демо обеих секций без живого лимита)
+export function ProviderLimitCard({ item, online, onMigrate }: {
   item: Extract<ChatItem, { kind: 'provider_limit' }>;
   online: boolean;
-  onMigrate?: (model: string) => Promise<void>;
+  onMigrate?: (model: string, subscriptionKey?: string) => Promise<void>;
 }) {
-  const [busyModel, setBusyModel] = useState<string | null>(null);
+  // Busy по ключу опции, не по модели: у аккаунтов пула модель одна и та же
+  const [busyKey, setBusyKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   if (item.resolved || item.providers.length === 0) return null;
+
+  const { subscriptions, providers } = splitFallbackOptions(item.providers);
 
   let when = '';
   if (item.resetsAt) {
@@ -480,18 +488,26 @@ function ProviderLimitCard({ item, online, onMigrate }: {
     }
   }
 
-  const migrate = async (model: string) => {
-    if (!onMigrate || busyModel) return;
-    setBusyModel(model);
+  const migrate = async (option: ProviderFallbackOption) => {
+    if (!onMigrate || busyKey) return;
+    setBusyKey(option.key);
     setError(null);
     try {
-      await onMigrate(model);
+      await onMigrate(option.model, option.kind === 'subscription' ? option.key : undefined);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Не удалось переключить чат');
     } finally {
-      setBusyModel(null);
+      setBusyKey(null);
     }
   };
+
+  const optionButtonStyle = (key: string): React.CSSProperties => ({
+    padding: '5px 12px', borderRadius: 8, border: `1px solid ${C.warning}`,
+    background: C.bgWhite, color: C.textHeading, fontSize: 12.5, fontWeight: 600,
+    cursor: !online || busyKey ? 'default' : 'pointer',
+    opacity: !online || (busyKey !== null && busyKey !== key) ? 0.55 : 1,
+    fontFamily: 'inherit',
+  });
 
   return (
     <div style={{
@@ -504,30 +520,53 @@ function ProviderLimitCard({ item, online, onMigrate }: {
         <span>⏳</span>
         <span>
           Лимит подписки исчерпан{when ? <span style={{ opacity: 0.75 }}> · {when}</span> : null}.
-          Можно продолжить этот чат на другом провайдере — контекст сохранится.
+          {subscriptions.length > 0
+            ? ' Можно продолжить этот чат на другом аккаунте пула или стороннем провайдере — контекст сохранится.'
+            : ' Можно продолжить этот чат на другом провайдере — контекст сохранится.'}
         </span>
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        {item.providers.map(p => (
-          <button
-            key={p.key}
-            onClick={() => void migrate(p.model)}
-            disabled={!online || !onMigrate || busyModel !== null}
-            style={{
-              padding: '5px 12px', borderRadius: 8, border: `1px solid ${C.warning}`,
-              background: C.bgWhite, color: C.textHeading, fontSize: 12.5, fontWeight: 600,
-              cursor: !online || busyModel ? 'default' : 'pointer',
-              opacity: !online || (busyModel !== null && busyModel !== p.model) ? 0.55 : 1,
-              fontFamily: 'inherit',
-            }}
-          >
-            {busyModel === p.model ? 'Переключаю…' : `Продолжить на ${p.displayName}`}
-          </button>
-        ))}
-        <span style={{ fontSize: 11.5, color: C.textMuted }}>
-          Оплата — с баланса провайдера, модель сменится
-        </span>
-      </div>
+      {subscriptions.length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          {subscriptions.map(p => {
+            const meta = formatSubscriptionMeta(p);
+            return (
+              <button
+                key={p.key}
+                onClick={() => void migrate(p)}
+                disabled={!online || !onMigrate || busyKey !== null}
+                style={{ ...optionButtonStyle(p.key), display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 1 }}
+              >
+                {busyKey === p.key ? 'Переключаю…' : (
+                  <>
+                    <span>Продолжить на «{p.displayName}»</span>
+                    {meta && <span style={{ fontSize: 11, fontWeight: 400, opacity: 0.7 }}>{meta}</span>}
+                  </>
+                )}
+              </button>
+            );
+          })}
+          <span style={{ fontSize: 11.5, color: C.textMuted }}>
+            Та же модель — расходуется выбранный аккаунт
+          </span>
+        </div>
+      )}
+      {providers.length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          {providers.map(p => (
+            <button
+              key={p.key}
+              onClick={() => void migrate(p)}
+              disabled={!online || !onMigrate || busyKey !== null}
+              style={optionButtonStyle(p.key)}
+            >
+              {busyKey === p.key ? 'Переключаю…' : `Продолжить на ${p.displayName}`}
+            </button>
+          ))}
+          <span style={{ fontSize: 11.5, color: C.textMuted }}>
+            Оплата — с баланса провайдера, модель сменится
+          </span>
+        </div>
+      )}
       {error && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: C.dangerText, fontSize: 12 }}>
           <AlertCircle size={13} style={{ flexShrink: 0 }} />

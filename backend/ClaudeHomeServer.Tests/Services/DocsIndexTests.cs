@@ -290,7 +290,7 @@ public class DocsIndexTests : IDisposable
 
     // Область для теста: папки задаются явно, файлы корня и типы — дефолтные
     private static DocsScope Scope(params string[] folders) =>
-        new(folders, DocsIndexService.DefaultScope.RootFiles, DocsIndexService.DefaultScope.Extensions);
+        new(folders, DocsIndexService.DefaultScope.RootFiles, DocsIndexService.DefaultScope.Types);
 
     [Fact]
     public void Настройка_КастомнаяПапка_ЗамещаетDocs()
@@ -356,7 +356,7 @@ public class DocsIndexTests : IDisposable
         Write("# История", "CHANGELOG.md");
         Write("# Вклад", "CONTRIBUTING.md");
 
-        var scope = new DocsScope([], ["README.md", "CHANGELOG.md"], [".md"]);
+        var scope = new DocsScope([], ["README.md", "CHANGELOG.md"], ["markdown"]);
 
         _svc.GetIndex(_root, scope).Select(d => d.Path)
             .Should().BeEquivalentTo(["README.md", "CHANGELOG.md"]);
@@ -369,7 +369,7 @@ public class DocsIndexTests : IDisposable
         Write("# Док", "docs", "a.md");
 
         // README не привилегирован: он такой же выбранный файл, как остальные
-        _svc.GetIndex(_root, new DocsScope(["docs"], [], [".md"]))
+        _svc.GetIndex(_root, new DocsScope(["docs"], [], ["markdown"]))
             .Select(d => d.Path).Should().BeEquivalentTo(["docs/a.md"]);
     }
 
@@ -379,7 +379,7 @@ public class DocsIndexTests : IDisposable
         Write("Просто текст", "NOTES.txt");
 
         // Явный выбор файла сильнее общего фильтра типов: пользователь назвал его поимённо
-        _svc.GetIndex(_root, new DocsScope([], ["NOTES.txt"], [".md"]))
+        _svc.GetIndex(_root, new DocsScope([], ["NOTES.txt"], ["markdown"]))
             .Should().ContainSingle().Which.Path.Should().Be("NOTES.txt");
     }
 
@@ -389,7 +389,7 @@ public class DocsIndexTests : IDisposable
         Write("# Док", "docs", "a.md");
 
         // Подпапки задаются папками; путь здесь был бы второй дорогой мимо той настройки
-        _svc.GetIndex(_root, new DocsScope([], ["docs/a.md"], [".md"])).Should().BeEmpty();
+        _svc.GetIndex(_root, new DocsScope([], ["docs/a.md"], ["markdown"])).Should().BeEmpty();
     }
 
     [Fact]
@@ -398,55 +398,85 @@ public class DocsIndexTests : IDisposable
         Write("# Абрикос", "CHANGELOG.md");
         Write("# Яблоко", "README.md");
 
-        var index = _svc.GetIndex(_root, new DocsScope([], ["README.md", "CHANGELOG.md"], [".md"]));
+        var index = _svc.GetIndex(_root, new DocsScope([], ["README.md", "CHANGELOG.md"], ["markdown"]));
 
         // README — вход в документацию, по алфавиту заголовков он был бы вторым
         index[0].Path.Should().Be("README.md");
     }
 
-    // ─── Расширения ─────────────────────────────────────────────────────────
+    // ─── Типы файлов (группы) ───────────────────────────────────────────────
 
     [Fact]
-    public void Расширения_ВОбластьПопадаетТолькоВыбранное()
+    public void Типы_ВОбластьПопадаетТолькоВыбраннаяГруппа()
     {
         Write("# Маркдаун", "docs", "a.md");
         Write("Текст", "docs", "b.txt");
-        Write("Структурированный", "docs", "c.rst");
 
-        _svc.GetIndex(_root, new DocsScope(["docs"], [], [".md"]))
+        _svc.GetIndex(_root, new DocsScope(["docs"], [], ["markdown"]))
             .Select(d => d.Path).Should().BeEquivalentTo(["docs/a.md"]);
 
-        _svc.GetIndex(_root, new DocsScope(["docs"], [], [".md", ".txt", ".rst"]))
-            .Select(d => d.Path).Should().BeEquivalentTo(["docs/a.md", "docs/b.txt", "docs/c.rst"]);
+        _svc.GetIndex(_root, new DocsScope(["docs"], [], ["markdown", "text"]))
+            .Select(d => d.Path).Should().BeEquivalentTo(["docs/a.md", "docs/b.txt"]);
     }
 
     [Fact]
-    public void Расширения_ЗаголовокНеMarkdownФайла_ИзИмени()
+    public void Типы_ЗаголовокТекстовогоФайла_ИзИмени()
     {
         Write("Просто текст без разметки", "docs", "readme-plain.txt");
 
-        _svc.GetIndex(_root, new DocsScope(["docs"], [], [".txt"]))
+        _svc.GetIndex(_root, new DocsScope(["docs"], [], ["text"]))
             .Should().ContainSingle().Which.Title.Should().Be("readme-plain");
     }
 
-    [Theory]
-    [InlineData("md", ".md")]
-    [InlineData(".MD", ".md")]
-    [InlineData(" .txt ", ".txt")]
-    public void Расширения_Нормализуются(string raw, string expected)
+    [Fact]
+    public void Типы_БинарныйФайл_ВСпискеНоБезРазбора()
     {
-        DocsIndexService.NormalizeExtensions([raw]).Should().Equal(expected);
+        Write("%PDF-1.7 не настоящий, но и не текст", "docs", "spec.pdf");
+
+        var entry = _svc.GetIndex(_root, new DocsScope(["docs"], [], ["pdf"])).Should().ContainSingle().Subject;
+
+        entry.Binary.Should().BeTrue();
+        entry.Title.Should().Be("spec.pdf");   // имя целиком: расширение здесь несёт смысл
+        entry.Headings.Should().BeEmpty();
+
+        // Содержимое не отдаётся — панель предложит открыть его в центре
+        var doc = _svc.GetDoc(_root, "docs/spec.pdf", new DocsScope(["docs"], [], ["pdf"]))!;
+        doc.Binary.Should().BeTrue();
+        doc.Content.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Типы_ГруппаРаскрываетсяВоВсеСвоиРасширения()
+    {
+        Write("картинка", "docs", "schema.png");
+        Write("другая", "docs", "photo.jpeg");
+
+        _svc.GetIndex(_root, new DocsScope(["docs"], [], ["image"]))
+            .Select(d => d.Path).Should().BeEquivalentTo(["docs/schema.png", "docs/photo.jpeg"]);
     }
 
     [Theory]
-    [InlineData(".pdf")]
-    [InlineData(".docx")]
-    [InlineData("")]
-    [InlineData(".")]
-    public void Расширения_НеподдерживаемоеОтбрасывается(string raw)
+    [InlineData("markdown")]
+    [InlineData("MARKDOWN")]
+    public void Типы_РегистрНеВажен(string raw)
     {
-        // Панель их не отрендерит, и предлагать такое в настройке было бы обманом
-        DocsIndexService.NormalizeExtensions([raw]).Should().BeEmpty();
+        DocsIndexService.NormalizeTypes([raw]).Should().Equal("markdown");
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("выдумка")]
+    [InlineData(".md")]
+    public void Типы_НеизвестнаяГруппа_Отбрасывается(string raw)
+    {
+        // Ключи групп, а не расширения: «.md» здесь не значение, а мимо контракта
+        DocsIndexService.NormalizeTypes([raw]).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Типы_ПорядокКаталога_НеЗависитОтПорядкаВыбора()
+    {
+        DocsIndexService.NormalizeTypes(["pdf", "markdown"]).Should().Equal("markdown", "pdf");
     }
 
     [Theory]
@@ -585,7 +615,7 @@ public class DocsIndexTests : IDisposable
         Write("Заметки", "NOTES.txt");
 
         // Сузив типы до .md, пользователь не должен терять из виду свой же NOTES.txt
-        var names = _svc.SuggestRootFiles(_root, new DocsScope([], ["README.md"], [".md"]))
+        var names = _svc.SuggestRootFiles(_root, new DocsScope([], ["README.md"], ["markdown"]))
             .Select(c => c.Name);
 
         names.Should().Contain("NOTES.txt");
@@ -596,7 +626,7 @@ public class DocsIndexTests : IDisposable
     {
         Write("# Проект", "README.md");
 
-        var candidates = _svc.SuggestRootFiles(_root, new DocsScope([], ["README.md", "GONE.md"], [".md"]));
+        var candidates = _svc.SuggestRootFiles(_root, new DocsScope([], ["README.md", "GONE.md"], ["markdown"]));
 
         candidates.Single(c => c.Name == "GONE.md").Exists.Should().BeFalse();
         candidates.Single(c => c.Name == "README.md").Exists.Should().BeTrue();
@@ -613,7 +643,7 @@ public class DocsIndexTests : IDisposable
         info.Selected.Should().BeEquivalentTo(DocsIndexService.DefaultScope);
         info.FolderCandidates.Select(c => c.Path).Should().Contain("docs");
         info.RootFileCandidates.Select(c => c.Name).Should().Contain("README.md");
-        info.SupportedExtensions.Should().Contain(".md").And.Contain(".txt");
+        info.TypeGroups.Select(g => g.Key).Should().Contain(["markdown", "pdf", "visio", "audio"]);
         info.Defaults.Should().BeEquivalentTo(DocsIndexService.DefaultScope);
     }
 

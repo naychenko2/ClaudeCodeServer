@@ -86,11 +86,11 @@ public class DocsController(DocsIndexService docs, ProjectManager projects) : Co
         try
         {
             GetProject(projectId);   // владение проверяем до записи
-            var saved = projects.SetDocsScope(projectId, req.Folders, req.RootFiles, req.Extensions);
+            var saved = projects.SetDocsScope(projectId, req.Folders, req.RootFiles, req.Types);
             return Ok(docs.Describe(saved.RootPath, DocsIndexService.ScopeOf(saved)));
         }
         catch (KeyNotFoundException) { return NotFound(); }
     }
 }
 
-public record SetDocsScopeRequest(List<string>? Folders, List<string>? RootFiles, List<string>? Extensions);
+public record SetDocsScopeRequest(List<string>? Folders, List<string>? RootFiles, List<string>? Types);

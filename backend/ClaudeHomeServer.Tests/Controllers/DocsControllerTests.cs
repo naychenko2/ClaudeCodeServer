@@ -111,14 +111,15 @@ public class DocsControllerTests : IClassFixture<TestWebApplicationFactory>
         var selected = body.GetProperty("selected");
         selected.GetProperty("folders").EnumerateArray().Select(x => x.GetString()).Should().Equal("docs");
         selected.GetProperty("rootFiles").EnumerateArray().Select(x => x.GetString()).Should().Equal("README.md");
-        selected.GetProperty("extensions").EnumerateArray().Select(x => x.GetString()).Should().Equal(".md");
+        selected.GetProperty("types").EnumerateArray().Select(x => x.GetString()).Should().Equal("markdown");
         // backend/SECRET.md делает backend кандидатом, хотя в область он не входит
         body.GetProperty("folderCandidates").EnumerateArray().Select(c => c.GetProperty("path").GetString())
             .Should().Contain(["docs", "backend"]);
         body.GetProperty("rootFileCandidates").EnumerateArray().Select(c => c.GetProperty("name").GetString())
             .Should().Contain("README.md");
-        body.GetProperty("supportedExtensions").EnumerateArray().Select(x => x.GetString())
-            .Should().Contain(".txt");
+        // Группы типов — из них и выбирают; расширения внутри группы клиенту не нужны
+        body.GetProperty("typeGroups").EnumerateArray().Select(g => g.GetProperty("key").GetString())
+            .Should().Contain(["markdown", "pdf", "visio", "audio"]);
     }
 
     [Fact]
@@ -127,7 +128,7 @@ public class DocsControllerTests : IClassFixture<TestWebApplicationFactory>
         var id = await SetupProjectAsync();
 
         var put = await _client.PutAsJsonAsync($"/api/projects/{id}/docs/scope",
-            new { folders = new[] { "backend" }, rootFiles = new[] { "README.md" }, extensions = new[] { ".md" } });
+            new { folders = new[] { "backend" }, rootFiles = new[] { "README.md" }, types = new[] { "markdown" } });
         put.StatusCode.Should().Be(HttpStatusCode.OK);
 
         var index = JsonSerializer.Deserialize<JsonElement>(
@@ -146,7 +147,7 @@ public class DocsControllerTests : IClassFixture<TestWebApplicationFactory>
         var id = await SetupProjectAsync();
 
         await _client.PutAsJsonAsync($"/api/projects/{id}/docs/scope",
-            new { folders = new[] { "docs" }, rootFiles = Array.Empty<string>(), extensions = new[] { ".md" } });
+            new { folders = new[] { "docs" }, rootFiles = Array.Empty<string>(), types = new[] { "markdown" } });
 
         var index = JsonSerializer.Deserialize<JsonElement>(
             await (await _client.GetAsync($"/api/projects/{id}/docs")).Content.ReadAsStringAsync());
@@ -163,14 +164,14 @@ public class DocsControllerTests : IClassFixture<TestWebApplicationFactory>
         {
             folders = new[] { "../../etc", "docs/" },
             rootFiles = new[] { "docs/architecture.md", "README.md" },
-            extensions = new[] { ".pdf", "MD" },
+            types = new[] { "выдумка", "MARKDOWN" },
         });
 
         var selected = JsonSerializer.Deserialize<JsonElement>(await put.Content.ReadAsStringAsync())
             .GetProperty("selected");
         selected.GetProperty("folders").EnumerateArray().Select(x => x.GetString()).Should().Equal("docs");
         selected.GetProperty("rootFiles").EnumerateArray().Select(x => x.GetString()).Should().Equal("README.md");
-        selected.GetProperty("extensions").EnumerateArray().Select(x => x.GetString()).Should().Equal(".md");
+        selected.GetProperty("types").EnumerateArray().Select(x => x.GetString()).Should().Equal("markdown");
     }
 
     [Fact]

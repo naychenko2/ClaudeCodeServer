@@ -19,13 +19,41 @@ public sealed partial class DocsIndexService
 {
     // Область по умолчанию, пока проект не настроил свою: docs/ + README.md + markdown.
     // Имена точные: на Linux файловая система регистрозависима, и «Docs/» — другая папка.
-    public static readonly DocsScope DefaultScope = new(["docs"], ["README.md"], [".md"]);
+    public static readonly DocsScope DefaultScope = new(["docs"], ["README.md"], ["markdown"]);
 
-    // Что продукт умеет показывать как документацию: markdown во всех расширениях плюс
-    // простой текст. Дальше этого списка область не расширяется — .pdf или .docx панель
-    // отрендерить не может, и предлагать их в настройке было бы обманом.
+    // Что можно включить в документацию — ровно то, что продукт умеет открыть
+    // (FileService.ViewableDocuments / IsImageFile / IsAudioFile / IsVideoFile и drawio
+    // в FileViewer). Группами, а не списком расширений: их три десятка, и в настройке
+    // они не читаются.
+    //
+    // Text=false — файл без текста: он числится в списке и открывается в центральной
+    // области, но заголовков, ссылок и поиска по телу у него нет и быть не может.
+    public static readonly IReadOnlyList<DocTypeGroup> TypeGroups =
+    [
+        new("markdown", "Markdown", [".md"], true),
+        new("text", "Текст", [".txt"], true),
+        new("pdf", "PDF", [".pdf"], false),
+        new("office", "Office", [".docx", ".xlsx", ".pptx"], false),
+        new("visio", "Visio", [".vsdx", ".vsdm", ".vssx", ".vssm", ".vstx", ".vstm"], false),
+        new("diagram", "Диаграммы", [".drawio", ".dio"], false),
+        new("image", "Картинки", [".png", ".jpg", ".jpeg", ".gif", ".bmp", ".svg", ".webp"], false),
+        new("audio", "Аудио", [".mp3", ".wav", ".ogg", ".flac", ".aac", ".m4a", ".opus", ".weba"], false),
+        new("video", "Видео", [".mp4", ".webm", ".mov", ".avi", ".mkv"], false),
+    ];
+
     public static readonly IReadOnlyList<string> SupportedExtensions =
-        [".md", ".markdown", ".mdx", ".txt", ".rst"];
+        [.. TypeGroups.SelectMany(g => g.Extensions)];
+
+    // Расширения, содержимое которых разбирается в корпус
+    private static readonly HashSet<string> TextExtensions =
+        new(TypeGroups.Where(g => g.Text).SelectMany(g => g.Extensions), StringComparer.OrdinalIgnoreCase);
+
+    private static bool IsTextDoc(string path) => TextExtensions.Contains(Path.GetExtension(path));
+
+    // Расширения выбранных групп — область работает с ними, а хранится в группах
+    public static IReadOnlyList<string> ExtensionsOf(IReadOnlyList<string> types) =>
+        [.. TypeGroups.Where(g => types.Contains(g.Key, StringComparer.OrdinalIgnoreCase))
+            .SelectMany(g => g.Extensions)];
 
     // Предохранители: область не должна превращаться в обход всего репозитория
     private const int MaxDocs = 2000;
@@ -85,6 +113,11 @@ public sealed partial class DocsIndexService
         var corpus = GetCorpus(rootPath, scope);
         var key = NormalizePath(relativePath);
         if (key is null || !corpus.ByPath.TryGetValue(key, out var entry)) return null;
+        // Бинарный отдаётся без содержимого: панель предложит открыть его в центре,
+        // где живут просмотрщики pdf/office/visio/картинок/звука
+        if (entry.Binary)
+            return new DocDetail(entry.Path, entry.Title, "", [],
+                corpus.Backlinks.TryGetValue(key, out var refs) ? refs : [], Binary: true);
         if (!corpus.Texts.TryGetValue(key, out var text)) return null;
         return new DocDetail(
             entry.Path, entry.Title, text,
@@ -140,13 +173,13 @@ public sealed partial class DocsIndexService
         : new DocsScope(
             NormalizeFolders(scope.Folders),
             NormalizeRootFiles(scope.RootFiles),
-            NormalizeExtensions(scope.Extensions));
+            NormalizeTypes(scope.Types));
 
     // Собрать область из полей проекта: у каждой оси свой null со своим дефолтом
     public static DocsScope ScopeOf(Project project) => NormalizeScope(new DocsScope(
         project.DocsFolders ?? DefaultScope.Folders,
         project.DocsRootFiles ?? DefaultScope.RootFiles,
-        project.DocsExtensions ?? DefaultScope.Extensions));
+        project.DocsTypes ?? DefaultScope.Types));
 
     // Папки: прямые слэши, без краёв-разделителей, без дублей и без выходов за корень
     public static IReadOnlyList<string> NormalizeFolders(IReadOnlyList<string>? folders)
@@ -183,21 +216,13 @@ public sealed partial class DocsIndexService
         return result;
     }
 
-    // Расширения: только те, что продукт умеет показывать. Точка и регистр приводятся,
-    // чтобы «MD» и «.md» не считались разными
-    public static IReadOnlyList<string> NormalizeExtensions(IReadOnlyList<string>? extensions)
+    // Типы: только известные группы каталога. Порядок — как в каталоге, чтобы настройка
+    // не зависела от того, в каком порядке юзер щёлкал чипы
+    public static IReadOnlyList<string> NormalizeTypes(IReadOnlyList<string>? types)
     {
-        if (extensions is null) return DefaultScope.Extensions;
-        var result = new List<string>();
-        foreach (var raw in extensions)
-        {
-            if (string.IsNullOrWhiteSpace(raw)) continue;
-            var ext = raw.Trim().ToLowerInvariant();
-            if (!ext.StartsWith('.')) ext = '.' + ext;
-            if (!SupportedExtensions.Contains(ext) || result.Contains(ext)) continue;
-            result.Add(ext);
-        }
-        return result;
+        if (types is null) return DefaultScope.Types;
+        return [.. TypeGroups.Select(g => g.Key)
+            .Where(key => types.Contains(key, StringComparer.OrdinalIgnoreCase))];
     }
 
     // Одна папка настройки. null — значение непригодно: пустое, абсолютное («C:\…», «/etc»)
@@ -226,7 +251,7 @@ public sealed partial class DocsIndexService
         var scope = NormalizeScope(rawScope);
         // Ключ кеша — корень ВМЕСТЕ с областью: у соседей по папке (один RootPath, разные
         // владельцы) настройки свои, и без области в ключе они вытесняли бы корпус друг друга
-        var key = $"{root}\n{string.Join('|', scope.Folders)}\n{string.Join('|', scope.RootFiles)}\n{string.Join('|', scope.Extensions)}";
+        var key = $"{root}\n{string.Join('|', scope.Folders)}\n{string.Join('|', scope.RootFiles)}\n{string.Join('|', scope.Types)}";
         var files = CollectFiles(root, scope);
         var fingerprint = Fingerprint(root, files);
 
@@ -259,7 +284,7 @@ public sealed partial class DocsIndexService
                 if (files.Count >= MaxDocs) break;
                 var dir = Path.Combine(root, folder.Replace('/', Path.DirectorySeparatorChar));
                 if (!Directory.Exists(dir)) continue;
-                foreach (var file in EnumerateDocs(dir, scope.Extensions))
+                foreach (var file in EnumerateDocs(dir, ExtensionsOf(scope.Types)))
                 {
                     if (files.Count >= MaxDocs) break;
                     if (seen.Add(file)) files.Add(file);
@@ -319,7 +344,7 @@ public sealed partial class DocsIndexService
             scope,
             SuggestFolders(rootPath, scope),
             SuggestRootFiles(rootPath, scope),
-            SupportedExtensions,
+            TypeGroups,
             DefaultScope);
     }
 
@@ -372,7 +397,8 @@ public sealed partial class DocsIndexService
 
         // Возвращает число документов в поддереве: родительская папка показывает суммарный
         // счётчик, даже когда её собственные документы лежат уровнем ниже (docs/ и docs/adr/).
-        // Считаем по расширениям ОБЛАСТИ — цифра должна совпадать с тем, что даст выбор папки
+        // Считаем по ВСЕМ поддерживаемым расширениям, а не по выбранным типам: иначе цифра
+        // в диалоге врала бы, пока выбор типов там ещё редактируется и не сохранён
         int Walk(string dir, string rel, int depth)
         {
             string[] files, subdirs;
@@ -384,7 +410,7 @@ public sealed partial class DocsIndexService
             catch (DirectoryNotFoundException) { return 0; }
             catch (UnauthorizedAccessException) { return 0; }
 
-            var count = files.Count(f => HasExtension(f, scope.Extensions));
+            var count = files.Count(f => HasExtension(f, SupportedExtensions));
             if (depth < SuggestMaxDepth)
             {
                 foreach (var sub in subdirs)
@@ -428,12 +454,29 @@ public sealed partial class DocsIndexService
         foreach (var file in files)
         {
             var rel = Relative(root, file);
-            string text;
             FileInfo info;
             try
             {
                 info = new FileInfo(file);
-                if (!info.Exists || info.Length > MaxDocBytes) continue;
+                if (!info.Exists) continue;
+            }
+            catch (IOException) { continue; }
+            catch (UnauthorizedAccessException) { continue; }
+
+            // Файл без текста (pdf, visio, картинка, звук) числится в списке, но не читается:
+            // держать в кеше мегабайты байтов незачем, а разбирать в них нечего
+            if (!IsTextDoc(file))
+            {
+                var binary = new DocEntry(rel, Path.GetFileName(file), info.LastWriteTimeUtc, info.Length, [], Binary: true);
+                if (!byPath.TryAdd(rel, binary)) continue;
+                docs.Add(binary);
+                continue;
+            }
+
+            string text;
+            try
+            {
+                if (info.Length > MaxDocBytes) continue;
                 text = File.ReadAllText(file);
             }
             catch (IOException) { continue; }             // файл переписывают прямо сейчас

@@ -18,8 +18,8 @@ import { GitCommitView } from '../../components/GitCommitView';
 import { TaskDetailsPane } from '../../features/tasks/TaskDetailsPane';
 import { ProjectPersonaPane } from '../../features/personas/ProjectPersonasPanel';
 import { SidebarProjectSwitcher } from '../../features/projects/SidebarProjectSwitcher';
-import { RightPanelStack } from './RightPanelStack';
-import { LeftPanelStack } from './LeftPanelStack';
+import { PanelZone } from './PanelZone';
+import { useSessionPanels } from './useSessionPanels';
 import { startPointerDrag } from '../../lib/pointerDrag';
 import type { PanelKey } from './panelCatalog';
 
@@ -85,9 +85,10 @@ interface Props {
   // Документ «Граф зависимостей»: открывается из панельки «Граф», живёт в центре
   graphOpen: boolean;
   graphArea: ReactNode;
-  // Правая рельса: доступность инструментов + готовый контент панелек
+  // Панели проекта: доступность инструментов + готовый контент панелек.
+  // Контент общий для обеих зон — панель рисует та зона, в которой она лежит.
   toolsEnabled: boolean;
-  panels: Partial<Record<Exclude<PanelKey, 'plan'>, ReactNode>>;
+  panels: Partial<Record<PanelKey, ReactNode>>;
   // Контролы в шапки карточек панелей (напр. переключатель видов задач)
   panelHeaderExtras?: Partial<Record<PanelKey, ReactNode>>;
   // Числа-кружки на кнопках проекта в рельсе (changes/tasks/terminal/preview)
@@ -99,6 +100,11 @@ interface Props {
 export function DesktopWorkspace(p: Props) {
   // Подсветка активного сплиттера: сайдбар или split чат|файл
   const [dragging, setDragging] = useState<'sidebar' | 'split' | null>(null);
+
+  // Панели текущей сессии (План/Агенты/Персона). Раньше их собирала правая зона
+  // внутри себя — и потому они были прибиты к ней; теперь это часть общего набора,
+  // и они переносятся между рельсами наравне с остальными.
+  const sessionPanels = useSessionPanels(p.activeSession, p.project.id, p.project.rootPath);
 
   // Пропорция чат/файл в split-режиме (как chatFlex в старой ветке; не персистится)
   const [chatFlex, setChatFlex] = useState(1);
@@ -150,6 +156,11 @@ export function DesktopWorkspace(p: Props) {
       </div>
     </div>
   );
+
+  // ОБЩИЙ набор контента панелей: обе зоны получают его целиком и рисуют только
+  // те панели, что лежат именно в них. Чаты собираются здесь, инструменты
+  // проекта приходят из WorkspacePage, панели сессии — из useSessionPanels.
+  const zonePanels: Partial<Record<PanelKey, ReactNode>> = { chats: chatsPanel, ...p.panels };
 
   // Фабрика центра-чата: одиночный режим — чат без рамки с шапкой-островом
   // (headerIsland), в split рядом с файлом — обычный вид внутри своего острова
@@ -207,10 +218,19 @@ export function DesktopWorkspace(p: Props) {
       // Фон прозрачный: дудл-холст (CanvasBackdrop) рисует корень WorkspacePage
       padding: `${ISLAND.gap}px 0 ${ISLAND.pad}px 0`,
     }}>
-      {/* === Слева: рельса иконок + панель чатов (зеркало правой рельсы) ===
-          Открытие/сворачивание — иконкой рельсы, ширина тянется её сплиттером;
-          прежние sidebarMode/useSidebarWidth здесь больше не нужны. */}
-      <LeftPanelStack panels={{ chats: chatsPanel }} />
+      {/* === Слева: рельса иконок + её панели ===
+          Обе зоны получают ОДИН набор контента: панель рисует та зона, в которой
+          она сейчас лежит, поэтому её можно перетащить с одной стороны на другую.
+          Открытие/сворачивание — иконкой рельсы, ширина тянется её сплиттером. */}
+      <PanelZone
+        side="left"
+        panels={zonePanels}
+        panelHeaderExtras={p.panelHeaderExtras}
+        railCounts={p.railCounts}
+        toolsEnabled={p.toolsEnabled}
+        sessionPanels={sessionPanels}
+        onPanelOpen={p.onPanelOpen}
+      />
 
       {/* === Центр: коммит → задача → персона → доска → файл (split/fullscreen) → чат === */}
       {!p.openFile && p.openCommitSha && centerIsland(
@@ -292,15 +312,14 @@ export function DesktopWorkspace(p: Props) {
       )}
 
       {/* === Справа: стек рабочих панелей + рельса иконок === */}
-      <RightPanelStack
-        isTablet={p.isTablet}
-        session={p.activeSession}
-        projectId={p.project.id}
-        rootPath={p.project.rootPath}
-        toolsEnabled={p.toolsEnabled}
-        panels={p.panels}
+      <PanelZone
+        side="right"
+        compact={p.isTablet}
+        panels={zonePanels}
         panelHeaderExtras={p.panelHeaderExtras}
         railCounts={p.railCounts}
+        toolsEnabled={p.toolsEnabled}
+        sessionPanels={sessionPanels}
         onPanelOpen={p.onPanelOpen}
       />
     </div>

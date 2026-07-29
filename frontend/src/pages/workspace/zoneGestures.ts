@@ -1,6 +1,8 @@
 import { useRef, useState, type HTMLAttributes, type PointerEvent as ReactPointerEvent } from 'react';
 import { startPointerDrag } from '../../lib/pointerDrag';
 import { PANEL_MIN_H } from './panelStackState';
+import type { PanelKey, Zone } from './panelCatalog';
+import { clearPanelDragOver, endPanelDrag, setPanelDragOver, startPanelDrag, usePanelDragState } from './panelDrag';
 
 // Механика зоны панелей, общая для левой и правой рельс: перетаскивание панелей,
 // ресайз ширины зоны и высот внутри колонки.
@@ -13,55 +15,73 @@ import { PANEL_MIN_H } from './panelStackState';
 
 // ---------- перетаскивание панелей ----------
 
-// Состояние DnD и готовый набор пропсов для PanelShell.
+// Готовый набор пропсов для PanelShell поверх ОБЩЕГО состояния перетаскивания
+// (panelDrag): какая панель тащится, из какой зоны и над каким местом висит.
 //
-// Хук держит только то, что у зон общее: какая панель тащится и над какой висит.
-// Позиции вставки (разделитель колонок и пара «колонка:строка») остаются в самой
-// зоне — она же переводит их в координаты своей раскладки; чтобы они сбрасывались
-// вместе с DnD, зона отдаёт свой сброс через onEnd.
-export function usePanelDnd<K extends string>({ enabled, onSwap, onEnd }: {
+// Состояние общее, потому что панель переносится между рельсами: зона-приёмник
+// должна видеть чужой drag, иначе её направляющие не появятся. Каждая зона
+// смотрит на него через свой экземпляр хука и сравнивает позиции со своими
+// метками мест (tag).
+export function usePanelDnd({ zone, enabled, onSwap }: {
+  // Зона, в которой живёт этот экземпляр хука
+  zone: Zone;
   // false — шапка не таскается (одна панель, solo, компактный режим)
   enabled: boolean;
-  // Дроп ОДНОЙ панели на другую: они меняются местами
-  onSwap: (from: K, to: K) => void;
-  // Сброс позиционных состояний зоны — вызывается при любом завершении drag'а
-  onEnd?: () => void;
+  // Дроп ОДНОЙ панели на другую: они меняются местами (в т.ч. через границу зон)
+  onSwap: (from: PanelKey, to: PanelKey) => void;
 }) {
-  const [from, setFrom] = useState<K | null>(null);
-  const [over, setOver] = useState<K | null>(null);
+  const { from, fromZone, over } = usePanelDragState();
 
-  const end = () => {
-    setFrom(null);
-    setOver(null);
-    onEnd?.();
-  };
+  // Место под курсором принадлежит ЭТОЙ зоне и имеет такую метку
+  const isOver = (tag: string) => over?.zone === zone && over.tag === tag;
+
+  // Пропсы места вставки (направляющей): подсветка + обработчики дропа.
+  // dropTag — метка места внутри зоны ('row:ci:ri', 'col:i').
+  const guideProps = (tag: string, onDropAt: (from: PanelKey) => void) => ({
+    over: isOver(tag),
+    onDragOver: (e: { preventDefault: () => void; dataTransfer: DataTransfer }) => {
+      if (!from) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      setPanelDragOver(zone, tag);
+    },
+    onDragLeave: () => clearPanelDragOver(zone, tag),
+    onDrop: (e: { preventDefault: () => void }) => {
+      e.preventDefault();
+      if (from) onDropAt(from);
+      endPanelDrag();
+    },
+  });
 
   // Пропсы одной панели: подсветка источника/цели + обработчики дропа НА неё.
   // Перетаскивание начинается с шапки (headerProps), а принимает дроп вся
   // карточка (rootProps) — попасть в неё проще, чем в 40px шапки.
-  const panelProps = (k: K): {
+  const panelProps = (k: PanelKey): {
     draggable: boolean;
     dragged: boolean;
     dropTarget: boolean;
     rootProps: HTMLAttributes<HTMLDivElement>;
     // draggable сужен до boolean — так его объявляет PanelShell
     headerProps: HTMLAttributes<HTMLDivElement> & { draggable?: boolean };
-  } => ({
-    draggable: enabled,
-    dragged: from === k,
-    dropTarget: over === k && from !== null && from !== k,
-    rootProps: {
-      onDragOver: e => { if (from && from !== k) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setOver(k); } },
-      onDragLeave: () => { setOver(cur => (cur === k ? null : cur)); },
-      onDrop: e => { e.preventDefault(); if (from && from !== k) onSwap(from, k); end(); },
-    },
-    headerProps: {
-      onDragStart: e => { setFrom(k); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', k); },
-      onDragEnd: end,
-    },
-  });
+  } => {
+    const tag = `panel:${k}`;
+    return {
+      draggable: enabled,
+      dragged: from === k,
+      dropTarget: isOver(tag) && from !== null && from !== k,
+      rootProps: {
+        onDragOver: e => { if (from && from !== k) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setPanelDragOver(zone, tag); } },
+        onDragLeave: () => clearPanelDragOver(zone, tag),
+        onDrop: e => { e.preventDefault(); if (from && from !== k) onSwap(from, k); endPanelDrag(); },
+      },
+      headerProps: {
+        onDragStart: e => { startPanelDrag(k, zone); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', k); },
+        onDragEnd: endPanelDrag,
+      },
+    };
+  };
 
-  return { from, active: from !== null, end, panelProps };
+  return { from, fromZone, active: from !== null, end: endPanelDrag, isOver, guideProps, panelProps };
 }
 
 // ---------- ресайз ширины зоны ----------
@@ -138,3 +158,5 @@ export function usePanelRowResize<K extends string>(
 
 // Слот панели (обёртка с весом и клампом высоты) — соседний PanelSlot.tsx:
 // в одном файле с хуками компонент держать нельзя, это ломает fast refresh.
+// Сама зона — PanelZone.tsx; имена файлов не должны различаться только регистром,
+// иначе сборка спотыкается о регистронезависимую файловую систему.

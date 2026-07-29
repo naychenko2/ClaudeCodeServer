@@ -7,7 +7,8 @@ import { ChatPanel } from '../components/ChatPanel';
 import { FileViewer } from '../components/FileViewer';
 import { GitCommitView } from '../components/GitCommitView';
 import { GitChangesRail } from '../components/GitChangesRail';
-import { RightPanelStack } from './workspace/RightPanelStack';
+import { PanelZone } from './workspace/PanelZone';
+import { useSessionPanels } from './workspace/useSessionPanels';
 import { KnowledgePanel } from '../components/KnowledgePanel';
 import { UsageScreen } from '../components/UsageScreen';
 import { joinProject, leaveProject, onMessage, onReconnected } from '../lib/signalr';
@@ -902,6 +903,10 @@ const windowWidth = useWindowWidth();
     if (k === 'graph') ensureGraphOpen();
   }, [ensureGraphOpen]);
 
+  // Панели сессии для МОБИЛЬНОЙ ветки (десктоп собирает их в DesktopWorkspace).
+  // Раньше их строила правая зона внутри себя — теперь контент приходит снаружи.
+  const mobileSessionPanels = useSessionPanels(activeSession, project.id, project.rootPath);
+
   const handleSelectSession = (session: Session, firstMessage?: string, autoSelect?: boolean) => {
     setActiveSession(session);
     setPendingMessage(firstMessage);
@@ -1404,7 +1409,7 @@ const windowWidth = useWindowWidth();
                 <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
                   <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onBack={backFromChat} onWorkflowRunning={handleWorkflowRunning} skills={composerSkills} agents={skillsData?.agents} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} />
                 </div>
-                <RightPanelStack sessionOnly isMobile session={activeSession} projectId={project.id} rootPath={project.rootPath} />
+                <PanelZone side="right" sessionOnly compact panels={{}} sessionPanels={mobileSessionPanels} />
               </div>
             )
             : NoSession

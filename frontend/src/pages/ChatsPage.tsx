@@ -14,8 +14,8 @@ import type { HubTabValue } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
 import { ChatList } from '../components/ChatList';
 import { ChatPanel } from '../components/ChatPanel';
-import { RightPanelStack } from './workspace/RightPanelStack';
-import { LeftPanelStack } from './workspace/LeftPanelStack';
+import { PanelZone } from './workspace/PanelZone';
+import { useSessionPanels } from './workspace/useSessionPanels';
 import { chatPanels } from './workspace/panelStackState';
 import { ensurePersonasLoaded } from '../lib/personas';
 import { ensureTasksLoaded } from '../lib/tasks';
@@ -169,6 +169,10 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
   // Бейдж непрочитанных на иконке рельсы — реактивен к markChatRead
   const unreadCount = useUnreadChatCount(chats);
 
+  // Панели активного чата (План/Агенты/Персона). Проекта здесь нет — артефакты
+  // берутся по одной сессии.
+  const sessionPanels = useSessionPanels(activeChat);
+
   // Открытый чат всегда прочитан: пока он на экране, приходящие в него сообщения
   // не должны копить бейдж. Следим и за updatedAt, а не только за сменой чата.
   const activeChatId = activeChat?.id;
@@ -218,11 +222,13 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
                 onWorkflowRunning={handleWorkflowRunning}
               />
             </div>
-            <RightPanelStack
+            <PanelZone
+              side="right"
               sessionOnly
-              isMobile
+              compact
               panelStack={chatPanels}
-              session={activeChat}
+              panels={{}}
+              sessionPanels={sessionPanels}
             />
           </div>
         ) : (
@@ -247,11 +253,13 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
       <div style={{ flex: 1, minHeight: 0 }}>
         <IslandScaffold
           left={
-            <LeftPanelStack
+            <PanelZone
+              side="left"
               sessionOnly
               panelStack={chatPanels}
               panels={{ chats: sidebar }}
               railCounts={{ chats: unreadCount }}
+              sessionPanels={sessionPanels}
             />
           }
           centerBare
@@ -297,7 +305,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
           // рельса не нужна — это держит центральную область симметричной:
           // IslandScaffold видит right=undefined и применяет авто-компенсацию.
           right={activeChat && activeChat.messageCount > 0 ? (
-            <RightPanelStack sessionOnly panelStack={chatPanels} session={activeChat} />
+            <PanelZone side="right" sessionOnly panelStack={chatPanels} panels={{}} sessionPanels={sessionPanels} />
           ) : undefined}
         />
       </div>

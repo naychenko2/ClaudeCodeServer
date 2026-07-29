@@ -124,8 +124,11 @@ export function PanelRail({ side, groups, visible = true, gapToCenter = 0, modeT
       transition: 'width 0.15s ease-out, opacity 0.12s ease-out',
       flexShrink: 0, alignSelf: 'flex-start',
       display: 'flex', flexDirection: 'column', alignItems: 'center',
-      // Тон шапок островов и сайдбаров — единая «оправа» интерфейса
-      gap: 6, paddingTop: 7, paddingBottom: 7, background: C.bgMain,
+      // Тон шапок островов и сайдбаров — единая «оправа» интерфейса.
+      // Вертикальный отступ подобран так, чтобы капсула с ОДНОЙ иконкой была
+      // ровно в высоту шапки панели (ISLAND.headerH), а центр первой кнопки
+      // сел на линию её заголовка: рельса теперь всегда на виду рядом с шапкой.
+      gap: 6, paddingTop: 4, paddingBottom: 4, background: C.bgMain,
       borderTop: `1px solid ${C.border}`, borderBottom: `1px solid ${C.border}`,
       boxSizing: 'border-box', overflow: 'hidden',
       // Рельса — полукапсула-остров у края окна: тень как у остальных островов

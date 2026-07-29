@@ -109,11 +109,14 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
   // прыжка непонятно, куда смотреть. Тот же язык, что у подсветки панелей рельсы —
   // акцентная рамка (PanelShell flash)
   const [flashFolder, setFlashFolder] = useState<string | null>(null);
+  // Куда прыгали последней — отметка в списке папок, пока документ не выбран
+  const [lastFolder, setLastFolder] = useState<string | null>(null);
   const flashTimer = useRef<number | null>(null);
   useEffect(() => () => { if (flashTimer.current) window.clearTimeout(flashTimer.current); }, []);
 
   const jumpToFolder = (folder: string) => {
     folderRefs.current.get(folder)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    setLastFolder(folder);
     setFlashFolder(folder);
     if (flashTimer.current) window.clearTimeout(flashTimer.current);
     flashTimer.current = window.setTimeout(() => setFlashFolder(null), LIST_FLASH_MS);
@@ -294,6 +297,9 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
       title={folder || 'корень проекта'}
       style={{
         ...rowStyle, minHeight: ROW_H,
+        // Текущая папка — тем же выделением, что выбранный документ: список постоянно
+        // на виду, и одной жирности мало, чтобы поймать её взглядом
+        background: current ? C.bgSelected : 'transparent',
         color: current ? C.textHeading : C.textSecondary,
         fontWeight: current ? 600 : 400,
       }}
@@ -305,8 +311,10 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
     </button>
   );
 
-  // Папка выбранного документа — ориентир «где я» в закреплённом списке
-  const currentFolder = selected ? folderOf(selected) : null;
+  // Ориентир «где я» в закреплённом списке: папка выбранного документа, а пока выбора нет
+  // (свежая вкладка) — та, к которой прыгали последней. Иначе список стоит без отметки
+  // вообще и выглядит неработающим
+  const currentFolder = selected ? folderOf(selected) : lastFolder;
   // Кнопка и блок нужны, только когда есть что выбирать: с единственной папкой
   // список папок вёл бы сам в себя
   const hasFolderNav = groups.filter(([f]) => f).length > 1;
@@ -443,17 +451,23 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
                 два десятка, и без ограничения блок вытеснил бы сами документы */}
             {foldersPinned && hasFolderNav && (
               <>
+                {/* Без подложки: блок — часть того же списка, а заливка спорила бы с
+                    выделением строк. Отбивку даёт заголовок и полоса хендла снизу */}
                 <div style={{
                   flexShrink: 0, height: foldersH, overflowY: 'auto',
-                  padding: `${SP.xs}px ${SP.xs}px`, background: C.bgInset,
+                  padding: `${SP.xs}px ${SP.xs}px`,
                 }}>
                   <div style={{
-                    display: 'flex', alignItems: 'center',
-                    padding: `0 ${SP.sm}px ${SP.xxs}px`,
+                    display: 'flex', alignItems: 'center', gap: SP.xs,
+                    padding: `0 ${SP.xxs}px ${SP.xxs}px ${SP.sm}px`,
                     fontSize: FS.xs, fontWeight: 700, color: C.textMuted,
                     textTransform: 'uppercase', letterSpacing: '0.03em',
                   }}>
                     Папки
+                    <div style={{ flex: 1 }} />
+                    <IconButton title="Открепить список папок" onClick={() => pinFolders(false)} size="xs">
+                      <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+                    </IconButton>
                   </div>
                   {groups.map(([folder, docs]) => folderRow(folder, docs.length, folder === currentFolder))}
                 </div>
@@ -464,8 +478,9 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
                   })}
                   title="Потяните, чтобы изменить высоту списка папок"
                   style={{
-                    flexShrink: 0, height: 7, cursor: 'row-resize', background: C.bgInset,
-                    borderBottom: `1px solid ${C.border}`,
+                    // Полоса как у границы «список / превью» — одна и та же роль в панели
+                    flexShrink: 0, height: 7, cursor: 'row-resize', background: C.bgMain,
+                    borderTop: `1px solid ${C.border}`, borderBottom: `1px solid ${C.border}`,
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
                   }}
                 >

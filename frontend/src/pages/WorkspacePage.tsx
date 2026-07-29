@@ -1337,8 +1337,9 @@ const windowWidth = useWindowWidth();
       {/* Тело: сайдбар + контент. position:relative — чтобы drawer/overlay легли под хедер.
           overflow — clip с запасом, а не hidden: тени островов и попапа-превью панели
           выходят за верхнюю кромку тела, и hidden срезал их ровной полосой под шапкой.
-          Запас берёт только тени: сам контент по-прежнему обрезается по границе. */}
-      <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'clip', overflowClipMargin: 16, position: 'relative' }}>
+          Запас берёт только тени: сам контент по-прежнему обрезается по границе.
+          40px — по модальной тени попапа (разлёт 60 при сдвиге 24 → вверх ~36). */}
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'clip', overflowClipMargin: 40, position: 'relative' }}>
 
       {/* Тело десктопа и планшета: рельсы панелей по краям, центр между ними */}
         <DesktopWorkspace

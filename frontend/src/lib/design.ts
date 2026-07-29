@@ -142,6 +142,7 @@ export const SHADOW = {
   island:   'var(--shadow-island)',     // панель-остров: заметнее card (контакт + разлёт)
   dropdown: 'var(--shadow-dropdown)',   // выпадающие меню
   modal:    'var(--shadow-modal)',      // модальные окна
+  peek:     'var(--shadow-peek)',       // попап-превью панели: остров НАД раскладкой
   sheet:    'var(--shadow-sheet)',      // мобильная шторка (тень кверху)
   button:   'var(--shadow-button)',     // свечение основной кнопки
   fab:      'var(--shadow-fab)',        // плавающая круглая кнопка (FAB) с accent-заливкой

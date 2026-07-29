@@ -4,6 +4,7 @@ using System.Text;
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Telemetry;
 using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Services;
@@ -95,7 +96,11 @@ public sealed class ProjectKnowledgeSyncService
         _ = Task.Run(async () =>
         {
             try { await SyncAsync(rootPath, hints); }
-            catch (Exception ex) { _logger.LogWarning(ex, "Синхронизация базы знаний проекта {Root}", rootPath); }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Синхронизация базы знаний проекта {Root}", rootPath);
+                ServerMetrics.RecordDifySyncError(DifyErrorCategorizer.Categorize(ex));
+            }
         });
     }
 
@@ -123,6 +128,12 @@ public sealed class ProjectKnowledgeSyncService
                 catch (Exception ex)
                 {
                     _logger.LogWarning(ex, "Синк документа {Path} в датасете {Dataset}", path, datasetId);
+                    // Здесь ловится и отказ ИНДЕКСАЦИИ (ReindexAsync пробрасывает наверх) —
+                    // главный источник сбоев Dify: 429 при потоке правок, таймаут на большом
+                    // файле. Best-effort удаления внутри Reindex/SyncOne в счётчик намеренно
+                    // не идут: 404 на уже удалённом документе — штатный шум, он размывал бы
+                    // смысл метрики «что-то не проиндексировалось».
+                    ServerMetrics.RecordDifySyncError(DifyErrorCategorizer.Categorize(ex));
                 }
             }
 

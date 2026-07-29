@@ -54,7 +54,20 @@ public static class MemoryDify
                     ServerMetrics.RecordDifySyncError(DifyErrorCategorizer.Categorize(ex));
                 }
 
-            var info = await knowledge.IndexFileByTextAsync(datasetId, it.DocName, it.Text, it.Tags);
+            // Индексация — главный источник отказов Dify (429 при потоке записей, таймаут
+            // на большом тексте), и до этого catch'а она была единственным незакрытым местом:
+            // исключение вылетало из всего DiffSync, метрика молчала, а Save() у вызывающего
+            // не доходил — терялся и прогресс по уже перенесённым записям. Теперь запись
+            // пропускается: хеш не сохранён, значит следующий синк попробует её снова.
+            DifyDocumentInfo info;
+            try { info = await knowledge.IndexFileByTextAsync(datasetId, it.DocName, it.Text, it.Tags); }
+            catch (Exception ex)
+            {
+                log?.LogWarning(ex, "memory-dify: индексация записи {Entry}", it.Id);
+                ServerMetrics.RecordDifySyncError(DifyErrorCategorizer.Categorize(ex));
+                continue;
+            }
+
             setDoc(it.Id, new MemoryDocRef { DocId = info.Id, Hash = hash });
             changed++;
         }

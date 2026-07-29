@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
+using System.Text.Json;
 
 namespace ClaudeHomeServer.Telemetry;
 
@@ -89,6 +90,47 @@ internal static class TurnTelemetry
         ServerMetrics.RecordLlmDuration(durationMs, provider, model ?? "unknown", outcome);
         if (isError)
             ServerMetrics.RecordLlmError(provider, ClassifyErrorType(apiErrorStatus));
+    }
+
+    /// <summary>
+    /// Модель, которой РЕАЛЬНО идёт ход, из события stream-json.
+    ///
+    /// Зачем: <c>Session.Model</c> и слоты тиров — это НАМЕРЕНИЕ. Когда модель у чата не задана
+    /// и слот пуст, резолвер отдаёт null («решает CLI»), и в телеметрию уходил литерал
+    /// <c>unknown</c> — на боевом ходе так и вышло. Ответить «чем считали» по такой метрике
+    /// нельзя, а именно за этим на дашборд заведена панель моделей.
+    ///
+    /// CLI называет модель сам, в двух видах событий:
+    /// <list type="bullet">
+    /// <item><c>system/init</c> — поле <c>model</c> верхнего уровня (модель прогона);</item>
+    /// <item><c>assistant</c> — <c>message.model</c> (модель, которая выдала этот ответ).</item>
+    /// </list>
+    /// Второе точнее: init называет модель на старте прогона, а ответ — по факту.
+    /// Возвращает null, если события не того типа или поле пустое.
+    /// </summary>
+    public static string? ModelFromEvent(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object) return null;
+
+        // assistant: message.model — берём первым, он ближе к факту
+        if (root.TryGetProperty("message", out var message)
+            && message.ValueKind == JsonValueKind.Object
+            && message.TryGetProperty("model", out var msgModel)
+            && msgModel.ValueKind == JsonValueKind.String
+            && msgModel.GetString() is { Length: > 0 } fromMessage)
+        {
+            return fromMessage;
+        }
+
+        // system/init: model верхнего уровня
+        if (root.TryGetProperty("model", out var topModel)
+            && topModel.ValueKind == JsonValueKind.String
+            && topModel.GetString() is { Length: > 0 } fromTop)
+        {
+            return fromTop;
+        }
+
+        return null;
     }
 
     /// <summary>

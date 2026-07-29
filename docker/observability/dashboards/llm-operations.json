@@ -8,150 +8,410 @@
   ],
   "layout": [
     {
-      "h": 3,
-      "w": 3,
-      "x": 0,
-      "y": 0,
-      "i": "f3a1c2d4-8888-4888-8888-888888888888",
+      "h": 1,
+      "i": "f3a1c2d4-0001-4001-8001-000000000001",
+      "maxH": 1,
+      "minH": 1,
+      "minW": 12,
       "moved": false,
       "static": false,
-      "minH": 2,
-      "minW": 3
+      "w": 12,
+      "x": 0,
+      "y": 0
     },
     {
       "h": 3,
+      "i": "f3a1c2d4-8888-4888-8888-888888888888",
+      "minH": 2,
+      "minW": 3,
+      "moved": false,
+      "static": false,
+      "w": 3,
+      "x": 0,
+      "y": 1
+    },
+    {
+      "h": 3,
+      "i": "f3a1c2d4-bbbb-4bbb-8bbb-333333333333",
+      "minH": 2,
+      "minW": 3,
+      "moved": false,
+      "static": false,
       "w": 3,
       "x": 3,
-      "y": 0,
-      "i": "f3a1c2d4-bbbb-4bbb-8bbb-333333333333",
-      "moved": false,
-      "static": false,
-      "minH": 2,
-      "minW": 3
+      "y": 1
     },
     {
       "h": 3,
+      "i": "f3a1c2d4-cccc-4ccc-8ccc-444444444444",
+      "minH": 2,
+      "minW": 3,
+      "moved": false,
+      "static": false,
       "w": 3,
       "x": 6,
-      "y": 0,
-      "i": "f3a1c2d4-cccc-4ccc-8ccc-444444444444",
-      "moved": false,
-      "static": false,
-      "minH": 2,
-      "minW": 3
+      "y": 1
     },
     {
       "h": 3,
+      "i": "f3a1c2d4-dddd-4ddd-8ddd-555555555555",
+      "minH": 2,
+      "minW": 3,
+      "moved": false,
+      "static": false,
       "w": 3,
       "x": 9,
-      "y": 0,
-      "i": "f3a1c2d4-dddd-4ddd-8ddd-555555555555",
+      "y": 1
+    },
+    {
+      "h": 1,
+      "i": "f3a1c2d4-0002-4002-8002-000000000002",
+      "maxH": 1,
+      "minH": 1,
+      "minW": 12,
       "moved": false,
       "static": false,
-      "minH": 2,
-      "minW": 3
+      "w": 12,
+      "x": 0,
+      "y": 4.0
     },
     {
       "h": 5,
-      "w": 6,
-      "x": 0,
-      "y": 3,
       "i": "f3a1c2d4-2222-4222-8222-bbbbbbbbbbbb",
+      "minH": 2,
+      "minW": 3,
       "moved": false,
       "static": false,
-      "minH": 2,
-      "minW": 3
+      "w": 6,
+      "x": 0,
+      "y": 5.0
     },
     {
       "h": 5,
-      "w": 6,
-      "x": 6,
-      "y": 3,
       "i": "f3a1c2d4-3333-4333-8333-cccccccccccc",
+      "minH": 2,
+      "minW": 3,
       "moved": false,
       "static": false,
-      "minH": 2,
-      "minW": 3
+      "w": 6,
+      "x": 6,
+      "y": 5.0
+    },
+    {
+      "h": 1,
+      "i": "f3a1c2d4-0003-4003-8003-000000000003",
+      "maxH": 1,
+      "minH": 1,
+      "minW": 12,
+      "moved": false,
+      "static": false,
+      "w": 12,
+      "x": 0,
+      "y": 10.0
     },
     {
       "h": 4,
+      "i": "f3a1c2d4-1111-4111-8111-aaaaaaaaaaaa",
+      "minH": 2,
+      "minW": 3,
+      "moved": false,
+      "static": false,
       "w": 6,
       "x": 0,
-      "y": 8,
-      "i": "f3a1c2d4-1111-4111-8111-aaaaaaaaaaaa",
-      "moved": false,
-      "static": false,
-      "minH": 2,
-      "minW": 3
+      "y": 11.0
     },
     {
       "h": 4,
+      "i": "f3a1c2d4-7777-4777-8777-999999999999",
+      "minH": 2,
+      "minW": 3,
+      "moved": false,
+      "static": false,
       "w": 6,
       "x": 6,
-      "y": 8,
-      "i": "f3a1c2d4-7777-4777-8777-999999999999",
+      "y": 11.0
+    },
+    {
+      "h": 1,
+      "i": "f3a1c2d4-0004-4004-8004-000000000004",
+      "maxH": 1,
+      "minH": 1,
+      "minW": 12,
       "moved": false,
       "static": false,
-      "minH": 2,
-      "minW": 3
+      "w": 12,
+      "x": 0,
+      "y": 15.0
     },
     {
       "h": 4,
+      "i": "f3a1c2d4-4444-4444-8444-dddddddddddd",
+      "minH": 2,
+      "minW": 3,
+      "moved": false,
+      "static": false,
       "w": 4,
       "x": 0,
-      "y": 12,
-      "i": "f3a1c2d4-4444-4444-8444-dddddddddddd",
-      "moved": false,
-      "static": false,
-      "minH": 2,
-      "minW": 3
+      "y": 16.0
     },
     {
       "h": 4,
+      "i": "f3a1c2d4-6666-4666-8666-ffffffffffff",
+      "minH": 2,
+      "minW": 3,
+      "moved": false,
+      "static": false,
       "w": 4,
       "x": 4,
-      "y": 12,
-      "i": "f3a1c2d4-6666-4666-8666-ffffffffffff",
-      "moved": false,
-      "static": false,
-      "minH": 2,
-      "minW": 3
+      "y": 16.0
     },
     {
       "h": 4,
+      "i": "f3a1c2d4-5555-4555-8555-eeeeeeeeeeee",
+      "minH": 2,
+      "minW": 3,
+      "moved": false,
+      "static": false,
       "w": 4,
       "x": 8,
-      "y": 12,
-      "i": "f3a1c2d4-5555-4555-8555-eeeeeeeeeeee",
+      "y": 16.0
+    },
+    {
+      "h": 1,
+      "i": "f3a1c2d4-0005-4005-8005-000000000005",
+      "maxH": 1,
+      "minH": 1,
+      "minW": 12,
       "moved": false,
       "static": false,
-      "minH": 2,
-      "minW": 3
+      "w": 12,
+      "x": 0,
+      "y": 20.0
     },
     {
       "h": 4,
+      "i": "f3a1c2d4-9999-4999-8999-111111111111",
+      "minH": 2,
+      "minW": 3,
+      "moved": false,
+      "static": false,
       "w": 6,
       "x": 0,
-      "y": 16,
-      "i": "f3a1c2d4-9999-4999-8999-111111111111",
-      "moved": false,
-      "static": false,
-      "minH": 2,
-      "minW": 3
+      "y": 21.0
     },
     {
       "h": 4,
-      "w": 6,
-      "x": 6,
-      "y": 16,
       "i": "f3a1c2d4-aaaa-4aaa-8aaa-222222222222",
+      "minH": 2,
+      "minW": 3,
       "moved": false,
       "static": false,
-      "minH": 2,
-      "minW": 3
+      "w": 6,
+      "x": 6,
+      "y": 21.0
     }
   ],
+  "panelMap": {
+    "f3a1c2d4-0001-4001-8001-000000000001": {
+      "collapsed": false,
+      "widgets": [
+        {
+          "h": 3,
+          "i": "f3a1c2d4-8888-4888-8888-888888888888",
+          "minH": 2,
+          "minW": 3,
+          "moved": false,
+          "static": false,
+          "w": 3,
+          "x": 0,
+          "y": 1
+        },
+        {
+          "h": 3,
+          "i": "f3a1c2d4-bbbb-4bbb-8bbb-333333333333",
+          "minH": 2,
+          "minW": 3,
+          "moved": false,
+          "static": false,
+          "w": 3,
+          "x": 3,
+          "y": 1
+        },
+        {
+          "h": 3,
+          "i": "f3a1c2d4-cccc-4ccc-8ccc-444444444444",
+          "minH": 2,
+          "minW": 3,
+          "moved": false,
+          "static": false,
+          "w": 3,
+          "x": 6,
+          "y": 1
+        },
+        {
+          "h": 3,
+          "i": "f3a1c2d4-dddd-4ddd-8ddd-555555555555",
+          "minH": 2,
+          "minW": 3,
+          "moved": false,
+          "static": false,
+          "w": 3,
+          "x": 9,
+          "y": 1
+        }
+      ]
+    },
+    "f3a1c2d4-0002-4002-8002-000000000002": {
+      "collapsed": false,
+      "widgets": [
+        {
+          "h": 5,
+          "i": "f3a1c2d4-2222-4222-8222-bbbbbbbbbbbb",
+          "minH": 2,
+          "minW": 3,
+          "moved": false,
+          "static": false,
+          "w": 6,
+          "x": 0,
+          "y": 5.0
+        },
+        {
+          "h": 5,
+          "i": "f3a1c2d4-3333-4333-8333-cccccccccccc",
+          "minH": 2,
+          "minW": 3,
+          "moved": false,
+          "static": false,
+          "w": 6,
+          "x": 6,
+          "y": 5.0
+        }
+      ]
+    },
+    "f3a1c2d4-0003-4003-8003-000000000003": {
+      "collapsed": false,
+      "widgets": [
+        {
+          "h": 4,
+          "i": "f3a1c2d4-1111-4111-8111-aaaaaaaaaaaa",
+          "minH": 2,
+          "minW": 3,
+          "moved": false,
+          "static": false,
+          "w": 6,
+          "x": 0,
+          "y": 11.0
+        },
+        {
+          "h": 4,
+          "i": "f3a1c2d4-7777-4777-8777-999999999999",
+          "minH": 2,
+          "minW": 3,
+          "moved": false,
+          "static": false,
+          "w": 6,
+          "x": 6,
+          "y": 11.0
+        }
+      ]
+    },
+    "f3a1c2d4-0004-4004-8004-000000000004": {
+      "collapsed": false,
+      "widgets": [
+        {
+          "h": 4,
+          "i": "f3a1c2d4-4444-4444-8444-dddddddddddd",
+          "minH": 2,
+          "minW": 3,
+          "moved": false,
+          "static": false,
+          "w": 4,
+          "x": 0,
+          "y": 16.0
+        },
+        {
+          "h": 4,
+          "i": "f3a1c2d4-6666-4666-8666-ffffffffffff",
+          "minH": 2,
+          "minW": 3,
+          "moved": false,
+          "static": false,
+          "w": 4,
+          "x": 4,
+          "y": 16.0
+        },
+        {
+          "h": 4,
+          "i": "f3a1c2d4-5555-4555-8555-eeeeeeeeeeee",
+          "minH": 2,
+          "minW": 3,
+          "moved": false,
+          "static": false,
+          "w": 4,
+          "x": 8,
+          "y": 16.0
+        }
+      ]
+    },
+    "f3a1c2d4-0005-4005-8005-000000000005": {
+      "collapsed": false,
+      "widgets": [
+        {
+          "h": 4,
+          "i": "f3a1c2d4-9999-4999-8999-111111111111",
+          "minH": 2,
+          "minW": 3,
+          "moved": false,
+          "static": false,
+          "w": 6,
+          "x": 0,
+          "y": 21.0
+        },
+        {
+          "h": 4,
+          "i": "f3a1c2d4-aaaa-4aaa-8aaa-222222222222",
+          "minH": 2,
+          "minW": 3,
+          "moved": false,
+          "static": false,
+          "w": 6,
+          "x": 6,
+          "y": 21.0
+        }
+      ]
+    }
+  },
   "widgets": [
+    {
+      "description": "",
+      "id": "f3a1c2d4-0001-4001-8001-000000000001",
+      "panelTypes": "row",
+      "title": "Состояние"
+    },
+    {
+      "description": "",
+      "id": "f3a1c2d4-0002-4002-8002-000000000002",
+      "panelTypes": "row",
+      "title": "Скорость ходов"
+    },
+    {
+      "description": "",
+      "id": "f3a1c2d4-0003-4003-8003-000000000003",
+      "panelTypes": "row",
+      "title": "Объём работы"
+    },
+    {
+      "description": "",
+      "id": "f3a1c2d4-0004-4004-8004-000000000004",
+      "panelTypes": "row",
+      "title": "Сбои"
+    },
+    {
+      "description": "",
+      "id": "f3a1c2d4-0005-4005-8005-000000000005",
+      "panelTypes": "row",
+      "title": "MCP и инструменты"
+    },
     {
       "id": "f3a1c2d4-8888-4888-8888-888888888888",
       "title": "Пульс телеметрии",
@@ -538,7 +798,7 @@
     },
     {
       "id": "f3a1c2d4-2222-4222-8222-bbbbbbbbbbbb",
-      "title": "Длительность хода — p99",
+      "title": "p99 — худшие ходы",
       "description": "Худшие ходы: 1% ответов идёт дольше этой линии. Показывает, насколько плохо бывает, когда бывает плохо.",
       "panelTypes": "graph",
       "yAxisUnit": "ms",
@@ -641,7 +901,7 @@
     },
     {
       "id": "f3a1c2d4-3333-4333-8333-cccccccccccc",
-      "title": "Длительность хода — медиана",
+      "title": "Медиана — типичный ход",
       "description": "Типичный ход. Сравнение с p99 рядом показывает разброс: медиана ровная, а p99 скачет — тормозят отдельные ходы, а не провайдер целиком.",
       "panelTypes": "graph",
       "yAxisUnit": "ms",
@@ -847,7 +1107,7 @@
     },
     {
       "id": "f3a1c2d4-7777-4777-8777-999999999999",
-      "title": "Чем считаем — модели",
+      "title": "Какими моделями считаем",
       "description": "Какие модели реально работают. Проверка того, что настройки слотов применились: в списке чужая или неожиданно дорогая модель — назначения разъехались.",
       "panelTypes": "graph",
       "yAxisUnit": "",
@@ -950,7 +1210,7 @@
     },
     {
       "id": "f3a1c2d4-4444-4444-8444-dddddddddddd",
-      "title": "Отказы ходов — по провайдерам",
+      "title": "Кто отваливается",
       "description": "Кто из провайдеров отваливается. Считается и жёсткий сбой CLI, и API-ошибка вроде 429. Пусто = с последнего перезапуска сервера отказов не было.",
       "panelTypes": "graph",
       "yAxisUnit": "",
@@ -1053,7 +1313,7 @@
     },
     {
       "id": "f3a1c2d4-6666-4666-8666-ffffffffffff",
-      "title": "Отказы ходов — почему",
+      "title": "Почему отваливается",
       "description": "Та же метрика в разрезе причины: rate_limit / auth / network / process_exit. Отвечает на главный вопрос при отказах — чинить квоту, ключ или сеть.",
       "panelTypes": "graph",
       "yAxisUnit": "",
@@ -1259,7 +1519,7 @@
     },
     {
       "id": "f3a1c2d4-9999-4999-8999-111111111111",
-      "title": "MCP — вызовы инструментов",
+      "title": "Вызовы инструментов",
       "description": "Чем модель пользуется: задачи, заметки, файлы. Раньше это было видно только ручным разбором истории чатов.",
       "panelTypes": "graph",
       "yAxisUnit": "",
@@ -1362,7 +1622,7 @@
     },
     {
       "id": "f3a1c2d4-aaaa-4aaa-8aaa-222222222222",
-      "title": "MCP — отказы инструментов",
+      "title": "Отказы инструментов",
       "description": "Ради этой панели учёт и заводился: жалоба «инструменты отваливаются» теперь видна с точностью до инструмента и HTTP-кода.",
       "panelTypes": "graph",
       "yAxisUnit": "",

@@ -47,10 +47,13 @@ public class StoredUserMessage(string text, string[]? attachedPaths = null, bool
     public bool? Auto { get; init; } = auto;
 }
 
-public class StoredSessionStartedMessage(string model, string mode) : StoredMessage
+public class StoredSessionStartedMessage(string model, string mode, TurnWorktreeInfo? turnWorktree = null) : StoredMessage
 {
     public string Model { get; init; } = model;
     public string Mode { get; init; } = mode;
+    // Ход шёл в чужом дереве (см. TurnWorktreeInfo) — null у записей до этого поля
+    // десериализуется штатно (System.Text.Json подставляет default для отсутствующих свойств)
+    public TurnWorktreeInfo? TurnWorktree { get; init; } = turnWorktree;
 }
 
 public class StoredTextMessage(string text, string? personaId = null, string? parentToolUseId = null) : StoredMessage

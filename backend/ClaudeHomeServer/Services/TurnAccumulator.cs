@@ -60,9 +60,9 @@ internal class TurnAccumulator
                 senderOrigin));
     }
 
-    public void OnSessionStarted(string model, string mode)
+    public void OnSessionStarted(string model, string mode, TurnWorktreeInfo? worktree = null)
     {
-        lock (_lock) _currentTurn.Add(new StoredSessionStartedMessage(model, mode));
+        lock (_lock) _currentTurn.Add(new StoredSessionStartedMessage(model, mode, worktree));
     }
 
     public void OnTextDelta(string text)

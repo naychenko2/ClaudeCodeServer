@@ -2133,9 +2133,10 @@ public class ClaudeSession : ILlmSessionAdapter
                             if (name.Length > 0) mcp.Add(new McpServerInfo(name, status));
                         }
                     }
+                    var worktree = ResolveTurnWorktree(cwd, _rootPath, _launcher);
                     await _onMessage(new SessionStartedMessage(
                         Info.ClaudeSessionId!, isResume, model, Info.Mode.ToWireToken(), cwd, toolCount, mcp,
-                        Capabilities.Provider, Capabilities));
+                        Capabilities.Provider, Capabilities, worktree));
 
                     // Поток inline-сабагентов этого хода — из их транскриптов на диске.
                     // Same-process ход (init повторяется в том же процессе, контекст тот же) —
@@ -2783,6 +2784,47 @@ public class ClaudeSession : ILlmSessionAdapter
             + IntProp(u, "cache_read_input_tokens")
             + IntProp(u, "cache_creation_input_tokens");
         if (tokens > 0) _lastContextTokens = tokens;
+    }
+
+    // Ход мог уйти в собственный git worktree через встроенный инструмент EnterWorktree —
+    // это происходит мимо тумблера чата (Session.WorktreePath/SetWorktreeAsync), поэтому
+    // фактический cwd из system/init сверяем с тем, что сервер сам передал в WorkingDirectory
+    // при запуске процесса. rootPath уже учитывает штатное дерево чата (SessionManager.EffectiveRoot
+    // подставляет Session.WorktreePath ДО старта процесса) — совпадение с ним тоже даёт null.
+    internal static TurnWorktreeInfo? ResolveTurnWorktree(string? cwd, string rootPath, Execution.IProcessLauncher launcher)
+    {
+        if (string.IsNullOrEmpty(cwd)) return null;
+
+        // Признак косметический (подпись в UI), а вызывается на каждом system/init у всех
+        // пользователей — сбой нормализации пути (Path.GetFullPath внутри NormalizePath
+        // кидает ArgumentException/NotSupportedException на не вполне обычных путях) не должен
+        // ронять ход целиком: необработанное исключение здесь ушло бы в общий catch цикла чтения
+        // прогона ДО отправки SessionStartedMessage — не проставился бы ClaudeSessionId и не
+        // поднялись бы _subagentWatcher/_transcriptTailer. Деградация — как в BuildTurnMcpConfig.
+        try
+        {
+            // В песочнице WorkingDirectory переводится в контейнерный путь при старте процесса
+            // (DockerProcessRunner) — сверяем с тем же переводом, иначе КАЖДЫЙ ход в контейнере
+            // ложно считался бы «чужим деревом» (cwd там всегда в другом пространстве путей)
+            var expected = rootPath;
+            if (launcher.IsSandboxed)
+            {
+                try { expected = launcher.Paths.ToRuntime(rootPath); }
+                catch (InvalidOperationException) { /* непереводимый корень — сравниваем как есть */ }
+            }
+
+            if (WorkspaceKnowledgeStore.NormalizePath(cwd) == WorkspaceKnowledgeStore.NormalizePath(expected))
+                return null;
+
+            var trimmed = cwd.TrimEnd('/', '\\');
+            var name = trimmed.Length > 0 ? Path.GetFileName(trimmed) : cwd;
+            return new TurnWorktreeInfo(cwd, string.IsNullOrEmpty(name) ? cwd : name);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[ClaudeSession] Не удалось определить дерево хода для cwd={cwd}: {ex.Message}");
+            return null;
+        }
     }
 
     // Токены хода из result. Основной источник — modelUsage: агрегат по ВСЕМ итерациям хода

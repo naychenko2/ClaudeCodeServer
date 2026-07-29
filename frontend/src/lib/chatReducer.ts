@@ -189,7 +189,7 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
         return prev.items.some(i => i.kind === 'resumed')
           ? prev
           : withItems([...prev.items, { kind: 'resumed' }]);
-      return withItems([...prev.items, { kind: 'session_started', model: msg.model, mode: msg.mode, cwd: msg.cwd, toolCount: msg.toolCount, mcpServers: msg.mcpServers }]);
+      return withItems([...prev.items, { kind: 'session_started', model: msg.model, mode: msg.mode, cwd: msg.cwd, toolCount: msg.toolCount, mcpServers: msg.mcpServers, turnWorktree: msg.turnWorktree }]);
 
     case 'text_delta': {
       const last = prev.items[prev.items.length - 1];

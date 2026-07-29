@@ -534,7 +534,10 @@ export interface StoredWorkflowProgress {
 
 // WebSocket сообщения от сервера — sessionId присутствует во всех типах
 export type ServerMessage = { sessionId: string } & (
-  | { type: 'session_started'; claudeSessionId: string; isResume: boolean; model: string; mode: string; cwd?: string; toolCount?: number; mcpServers?: { name: string; status: string }[] }
+  // turnWorktree — фактическая рабочая папка ЭТОГО хода, если агент внутри хода ушёл
+  // в свой git worktree (инструмент EnterWorktree), минуя Session.worktreePath.
+  // null/отсутствует — ход идёт там, куда его отправил сервер
+  | { type: 'session_started'; claudeSessionId: string; isResume: boolean; model: string; mode: string; cwd?: string; toolCount?: number; mcpServers?: { name: string; status: string }[]; turnWorktree?: { path: string; name: string } | null }
   | { type: 'text_delta'; text: string }
   | { type: 'user_message'; text: string; attachedPaths?: string[]; senderPersonaId?: string; auto?: boolean; senderOrigin?: string; senderChatName?: string }
   // Гостевая реплика персоны без агентского хода (0 токенов) — доклад о завершении
@@ -904,7 +907,7 @@ export type ChatItem =
   // либо «Вне проектов»): рисуем чипом, чтобы было видно, откуда прилетело. Считает сервер.
   // senderChatName — имя чата-отправителя: заголовок карточки, когда персоны у него нет
   | { kind: 'user_message'; text: string; attachedPaths?: string[]; viaAgent?: boolean; senderPersonaId?: string; systemDirective?: boolean; auto?: boolean; senderOrigin?: string; senderChatName?: string }
-  | { kind: 'session_started'; model: string; mode: string; cwd?: string; toolCount?: number; mcpServers?: { name: string; status: string }[] }
+  | { kind: 'session_started'; model: string; mode: string; cwd?: string; toolCount?: number; mcpServers?: { name: string; status: string }[]; turnWorktree?: { path: string; name: string } | null }
   // personaId — авторство реплики (персона на момент хода); после смены собеседника
   // старые реплики сохраняют прежний аватар. Отсутствует у обычного ассистента.
   // parentToolUseId — текст/thinking сабагента: рендерится внутри карточки родительского

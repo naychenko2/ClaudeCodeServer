@@ -11,12 +11,18 @@ public abstract record ServerMessage(string Type)
 
 public record McpServerInfo(string Name, string Status);
 
+// Ход ушёл в дерево, отличное от того, куда его отправил сервер (агент вызвал встроенный
+// EnterWorktree в обход тумблера чата) — Path/Name фактического cwd для короткой подписи в UI.
+// null у SessionStartedMessage.TurnWorktree — обычный случай, ход идёт в ожидаемой папке.
+public sealed record TurnWorktreeInfo(string Path, string Name);
+
 // ClaudeSessionId — id сессии у провайдера (у Claude — транскрипт CLI, у DeepSeek — GUID истории);
 // имя поля историческое, не меняем ради обратной совместимости фронта.
-// Provider/Capabilities — хвостовые optional-поля, старый фронт их игнорирует.
+// Provider/Capabilities/TurnWorktree — хвостовые optional-поля, старый фронт их игнорирует.
 public record SessionStartedMessage(string ClaudeSessionId, bool IsResume, string Model, string Mode,
     string? Cwd = null, int ToolCount = 0, IReadOnlyList<McpServerInfo>? McpServers = null,
-    string Provider = "claude", Services.Llm.LlmCapabilities? Capabilities = null)
+    string Provider = "claude", Services.Llm.LlmCapabilities? Capabilities = null,
+    TurnWorktreeInfo? TurnWorktree = null)
     : ServerMessage("session_started");
 
 public record TextDeltaMessage(string Text)

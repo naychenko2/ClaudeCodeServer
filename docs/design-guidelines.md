@@ -56,6 +56,7 @@
 |---|---|---|
 | Кнопка | `Button` (variants: primary / secondary / ghost / ghostAccent / danger / dashed; sizes: sm / md / lg) | `ui/Button` |
 | Иконка-кнопка | `IconButton`, в тулбарах — `ToolbarIconButton` | `ui/IconButton`, `components/Toolbar` |
+| Переключатель видов иконками | `IconSegmented` (дорожка + едущая плашка) | `ui/IconSegmented` |
 | Поле ввода | `TextField` / `TextArea` / `IconField` + `FieldLabel` | `ui/Field` |
 | Модалка | `Modal` + `ModalActions`; ширина из `MODAL_W` | `ui/Modal` |
 | Подтверждение удаления | `ConfirmDialog` | `ui/ConfirmDialog` |
@@ -63,11 +64,68 @@
 | Переключатель-сегменты | `SegmentedControl` | `ui/Segmented` |
 | Тумблер | `Toggle` | `ui/Toggle` |
 | Карточка-остров | `Island` + `IslandHeader` | `ui/Island` |
+| Панель в рельсе | `PanelShell` | `ui/PanelShell` |
+| Контролы в шапке панели | `PanelHeaderSlot` (+ `useHasPanelHeader`) | `ui/PanelHeaderSlot` |
 | Каркас хаб-страницы | `IslandScaffold` + `CanvasBackdrop` + `useSidebarDrag` | `ui/IslandScaffold` |
 | Сплиттеры | `IslandSidebarSplitter` / `IslandSplitter` / `Splitter` | `ui/*Splitter` |
 | Тулбар экрана | `Toolbar` (+ `ToolbarOverflowMenu`), геометрия из `TB` | `components/Toolbar` |
 | Пустое состояние | `EmptyState` | `components/EmptyState` |
 | Спиннер ожидания | `WaitingIndicator` | `ui/WaitingIndicator` |
+
+## Контролы в шапке панели
+
+Шапку панели рисует `PanelShell`, и слоты в ней распределены жёстко (слева
+направо): иконка → заголовок → бейдж → **контролы панели** → системные кнопки
+(`headerActions`, по умолчанию крестик из `onClose`). Геометрия задана
+оболочкой — высота `ISLAND.headerH`, свои паддинги и высоты не выдумываем.
+
+**Кнопки, переключатели и фильтры панель кладёт в шапку сама** — через
+`PanelHeaderSlot` у себя в JSX. Владелец экрана в этом не участвует: ни пропов
+с готовым `ReactNode`, ни колбэков «отдай мне свой тулбар», ни `window`-событий
+на нажатие.
+
+```tsx
+function MyPanel() {
+  const [view, setView] = useState<'list' | 'tree'>('list');
+  const inHeader = useHasPanelHeader();
+  return (
+    <>
+      {inHeader && (
+        <PanelHeaderSlot>
+          <IconButton size="sm" title="Обновить" onClick={reload}>
+            <RefreshCw size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+          </IconButton>
+          <PillViewSwitcher compact value={view} options={…} onChange={setView} />
+        </PanelHeaderSlot>
+      )}
+      …контент…
+    </>
+  );
+}
+```
+
+Правила:
+
+- **Один `PanelHeaderSlot` на панель.** Несколько встанут в порядке
+  монтирования — порядок неочевиден.
+- **Порядок контролов: сначала вспомогательные, главное действие — последним.**
+  Фильтр и переключатель видов идут нейтральными иконками, действие — кнопкой
+  с подписью (`Button variant="primary" size="xs"`) в конце ряда. Переключатели —
+  `IconSegmented`: цвет иконок в нём не меняется, выбор показывает белая
+  плашка, иначе рядом с оранжевой кнопкой возникает второй «активный» акцент.
+- **Высота контролов шапки — 24** (`Button size="xs"`, `IconButton size="xs"`,
+  `IconSegmented`), чтобы ряд читался одной линией.
+- **Только примитивы из `ui/`** (`IconButton`, `PillViewSwitcher`, `Menu`…).
+  Самодельная кнопка из `div` — дефект, как и везде.
+- **Шапки может не быть** (мобильный стек, сайдбар без `PanelShell`).
+  `useHasPanelHeader()` отвечает на это синхронно, в первом же рендере —
+  панель с двумя раскладками (иконки в шапке / полноразмерная строка в теле)
+  выбирает по нему, не моргая. Эталон — [TasksPanel](../frontend/src/features/tasks/TasksPanel.tsx).
+- **Слот ищет ближайший `PanelShell` вверх по дереву.** Панель, вложенная в
+  контент другой панели, попадёт в шапку внешней — это нужное поведение
+  `bare`-режима, но во вложенных виджетах слот использовать не стоит.
+- **`headerActions` — не для контролов панели.** Это системные кнопки
+  оболочки; передашь свои — потеряешь автоматический крестик закрытия.
 
 ## Рецепт нового раздела (хаб-страницы)
 

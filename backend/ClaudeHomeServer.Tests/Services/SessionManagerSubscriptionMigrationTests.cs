@@ -197,6 +197,9 @@ public class SessionManagerSubscriptionMigrationTests : IDisposable
         var dstFile = Path.Combine(llmProviders.GetProfileDir("sub-acc-b"), "projects",
             TranscriptMigrator.FlattenCwd(dir), claudeSessionId + ".jsonl");
         File.Exists(dstFile).Should().BeTrue("транскрипт должен переехать в профиль целевой подписки");
+        // Подпись разделителя — про подписку, а не безликое «Продолжено на AI»
+        _sentMessages.OfType<ProviderSwitchedMessage>().Single().Label
+            .Should().Be("Продолжено на подписке «acc-b»");
     }
 
     [Fact]

@@ -866,6 +866,7 @@ public class SessionManager : IDisposable
         var currentKey = _llmProviders.ResolveByModel(entry.Info.Model)?.Key
             ?? entry.Info.Provider ?? ClaudeSubscriptionPool.PrimaryKey;
 
+        ClaudeSubscriptionConfig? pickedSub = null;
         string targetKey;
         if (!string.IsNullOrWhiteSpace(subscriptionKey))
         {
@@ -876,6 +877,7 @@ public class SessionManager : IDisposable
                 throw new InvalidOperationException($"Подписка «{subscriptionKey}» не настроена");
             if (!_subscriptionPool.SupportsModel(sub.Key, newModel))
                 throw new InvalidOperationException($"Подписка «{sub.Key}» не поддерживает модель «{newModel}»");
+            pickedSub = sub;
             targetKey = sub.Key;
         }
         else
@@ -907,9 +909,11 @@ public class SessionManager : IDisposable
         if (entry.Process is not null) entry.AdapterStale = true;
         SaveSessions();
 
-        var label = target is null ? "AI"
-            : string.IsNullOrWhiteSpace(target.DisplayName) ? target.Key : target.DisplayName;
-        await BroadcastAsync(sessionId, new ProviderSwitchedMessage(targetKey, newModel, $"Продолжено на {label}"));
+        // Явно выбранный аккаунт пула — подпись «на подписке», а не безликое «на AI»
+        var switchLabel = pickedSub is not null
+            ? $"Продолжено на подписке «{(string.IsNullOrWhiteSpace(pickedSub.DisplayName) ? pickedSub.Key : pickedSub.DisplayName)}»"
+            : $"Продолжено на {(target is null ? "AI" : string.IsNullOrWhiteSpace(target.DisplayName) ? target.Key : target.DisplayName)}";
+        await BroadcastAsync(sessionId, new ProviderSwitchedMessage(targetKey, newModel, switchLabel));
         Console.WriteLine($"[SessionManager] Чат {sessionId} мигрирован: {currentKey} → {targetKey} ({newModel})");
         return entry.Info;
     }

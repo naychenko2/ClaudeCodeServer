@@ -31,15 +31,14 @@ interface Props {
 // Высота зоны дерева документов: тянется хендлом, переживает перезагрузку.
 // Приём тот же, что у зоны скоупов в «Изменениях» (GitChangesRail) — одинаковое
 // поведение ресайза в панелях рельсы.
-// Высота строки списка = высота кнопок действий: место под них зарезервировано всегда,
-// иначе появление иконок при наведении дёргало бы разметку
-const ROW_H = 28;
+// Высота строки списка: список длинный (десятки документов), поэтому плотный
+const ROW_H = 22;
 
 // Порог, в пределах которого второй клик считается двойным (и отменяет одиночный)
 const DOUBLE_CLICK_MS = 220;
 
-// Тумблер нижней зоны: с превью (дефолт) или только список. Решение пользователя
-// про режим работы панели, поэтому переживает перезагрузку
+// Тумблер нижней зоны. По умолчанию выключена: панель открывают ради списка, а превью —
+// осознанный режим. Решение пользователя, поэтому переживает перезагрузку
 const PREVIEW_KEY = 'cc_docs_preview';
 
 const TREE_H_KEY = 'cc_docs_tree_h';
@@ -67,9 +66,8 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [hits, setHits] = useState<DocSearchHit[] | null>(null);
-  const [treeOpen, setTreeOpen] = useState(true);
   const [previewEnabled, setPreviewEnabled] = useState<boolean>(() => {
-    try { return localStorage.getItem(PREVIEW_KEY) !== '0'; } catch { return true; }
+    try { return localStorage.getItem(PREVIEW_KEY) === '1'; } catch { return false; }
   });
   const [treeH, setTreeH] = useState<number>(() => {
     try {
@@ -176,6 +174,9 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
   useEffect(() => () => { if (clickTimer.current) window.clearTimeout(clickTimer.current); }, []);
 
   const handleRowClick = (path: string) => {
+    // Выделение — сразу: откладывается загрузка документа, а не отклик на клик,
+    // иначе строка подсвечивалась через порог двойного клика и это выглядело поломкой
+    setSelected(path);
     if (clickTimer.current) window.clearTimeout(clickTimer.current);
     clickTimer.current = window.setTimeout(() => {
       clickTimer.current = null;
@@ -299,22 +300,11 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
         <>
           {/* Дерево документов. С выключенной нижней зоной занимает всю панель;
               с включённой — высоту, заданную хендлом ресайза */}
-          <div style={previewEnabled ? {
-            flexShrink: 0, display: 'flex', flexDirection: 'column', minHeight: 0,
-            height: treeOpen ? treeH : 'auto',
-          } : {
-            flex: treeOpen ? 1 : undefined, flexShrink: treeOpen ? 1 : 0,
-            display: 'flex', flexDirection: 'column', minHeight: 0,
-          }}>
-            <button onClick={() => setTreeOpen(v => !v)} style={sectionHeadStyle}>
-              {treeOpen
-                ? <ChevronDown size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-                : <ChevronRight size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
-              Документы
-              <span style={{ marginLeft: 'auto', color: C.textMuted, fontWeight: 400 }}>{index?.length ?? ''}</span>
-            </button>
-            {treeOpen && (
-              <div style={{ overflowY: 'auto', padding: `0 ${SP.xs}px ${SP.xs}px` }}>
+          <div style={previewEnabled
+            ? { flexShrink: 0, display: 'flex', flexDirection: 'column', minHeight: 0, height: treeH }
+            : { flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }
+          }>
+            <div style={{ overflowY: 'auto', padding: `${SP.xs}px ${SP.xs}px` }}>
                 {groups.map(([folder, docs]) => (
                   <div key={folder}>
                     {/* Подпись папки: без неё отступ вложенности читался как сдвиг без причины */}
@@ -349,13 +339,12 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
                     ))}
                   </div>
                 ))}
-              </div>
-            )}
+            </div>
           </div>
 
           {/* Хендл ресайза границы «список / превью».
               Фон как у шапки панели: полоса читается частью её оформления, а не швом */}
-          {treeOpen && previewEnabled && (
+          {previewEnabled && (
             <div
               onPointerDown={handleTreeResize}
               title="Потяните, чтобы изменить высоту списка"
@@ -474,18 +463,21 @@ const sectionHeadStyle = {
   textTransform: 'uppercase' as const, letterSpacing: '0.03em',
 };
 
-// Подпись папки над её документами: тише строк списка — это ориентир, а не элемент выбора
+// Подпись папки над её документами. С фоном и прилипанием к верху: в плотном списке
+// строчка без подложки сливалась с документами, а при прокрутке терялось, где мы находимся
 const folderHeadStyle = {
-  padding: `${SP.sm}px ${SP.sm}px ${SP.xxs}px`,
-  fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted,
+  position: 'sticky' as const, top: 0, zIndex: 1,
+  padding: `2px ${SP.sm}px`, margin: `${SP.xs}px 0 2px`,
+  background: C.bgInset, borderRadius: R.sm,
+  fontFamily: FONT.mono, fontSize: FS.xs, color: C.textSecondary,
   overflow: 'hidden' as const, textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const,
 };
 
 const rowStyle = {
-  display: 'flex', alignItems: 'center', gap: SP.sm, width: '100%',
-  padding: `${SP.xs}px ${SP.sm}px`, border: 'none', background: 'transparent',
+  display: 'flex', alignItems: 'center', gap: SP.xs, width: '100%',
+  padding: `1px ${SP.sm}px`, border: 'none', background: 'transparent',
   borderRadius: R.md, cursor: 'pointer', textAlign: 'left' as const,
-  fontFamily: FONT.sans, fontSize: FS.sm, minWidth: 0,
+  fontFamily: FONT.sans, fontSize: FS.sm, lineHeight: 1.35, minWidth: 0,
 };
 
 const hitStyle = {

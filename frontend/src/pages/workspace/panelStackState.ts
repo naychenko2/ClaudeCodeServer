@@ -29,8 +29,9 @@ export const PANEL_KEYS: readonly PanelKey[] = [
   ...new Set<PanelKey>([...RIGHT_PANEL_KEYS, ...LEFT_PANEL_KEYS]),
 ];
 
+// Размеры самой рельсы (RAIL_W/RAIL_GAP) живут рядом с её компонентом —
+// components/ui/PanelRail: к состоянию раскладки они отношения не имеют.
 export const PANEL_MIN_H = 120;  // минимальная высота панельки, px (шапка 40 + контент)
-export const RAIL_W = 40;        // ширина рельсы иконок
 export const COL_MIN = 280;      // клампы ширины ОДНОЙ колонки панелей
 export const COL_MAX = 560;
 export const COL_DEFAULT = 340;
@@ -208,7 +209,7 @@ export interface PanelStack {
 // Фабрика независимого инстанса: своё состояние в замыкании + свои ключи
 // localStorage `cc_{ns}_panels_*`. Инстансы создаются на уровне модуля (ниже),
 // поэтому семантика чтения localStorage при импорте — та же, что была у синглтона.
-function createPanelStack(ns: string, opts?: { legacyOpenKey?: string; defaultLayout?: PanelKey[][] }) {
+function createPanelStack(ns: string, opts?: { legacyOpenKey?: string; defaultLayout?: PanelKey[][]; singleColumn?: boolean }) {
   const KEY_LAYOUT = `cc_${ns}_panels_layout`;
   const KEY_WEIGHTS = `cc_${ns}_panels_weights`;
   const KEY_WIDTH = `cc_${ns}_panels_width`;
@@ -217,18 +218,28 @@ function createPanelStack(ns: string, opts?: { legacyOpenKey?: string; defaultLa
   // Старый плоский список — мигрируется в layout (только у воркспейсного инстанса)
   const legacyOpen = opts?.legacyOpenKey ? lsGet(opts.legacyOpenKey) : null;
 
+  // Схлопывание в ОДНУ колонку для зон, которые колонок не рисуют (левая рельса).
+  // Без него addPanel разложил бы третью панель во вторую колонку: визуально она
+  // всё равно встала бы в общую стопку, но координаты слотов (colIdx у moveAt)
+  // разъехались бы с тем, что видит пользователь.
+  const oneCol = (cols: PanelKey[][]): PanelKey[][] => {
+    if (!opts?.singleColumn) return cols;
+    const flat = cols.flat();
+    return flat.length ? [flat] : [];
+  };
+
   // Раскладка: приоритет — сохранённая в localStorage → legacy-миграция → defaultLayout.
   // defaultLayout полезен для левых рельс, где базовая панель должна быть открыта
   // при первом запуске (напр. chats в ChatsPage). После закрытия пользователем —
   // состояние сохранится, и при следующем визите панель останется закрытой.
-  let _layout: PanelKey[][] = (() => {
+  let _layout: PanelKey[][] = oneCol((() => {
     const lsLayout = lsGet(KEY_LAYOUT);
     if (lsLayout) {
       try { return sanitizeLayout(JSON.parse(lsLayout)); } catch { /* fallthrough to default */ }
     }
     if (legacyOpen) return parseLayout(null, legacyOpen);
     return sanitizeLayout(opts?.defaultLayout ?? []);
-  })();
+  })());
   let _weights: Partial<Record<PanelKey, number>> = parseWeights(lsGet(KEY_WEIGHTS));
   let _width = parseWidth(lsGet(KEY_WIDTH));
   let _mode: PanelMode = lsGet(KEY_MODE) === 'solo' ? 'solo' : 'multi';
@@ -249,7 +260,7 @@ function createPanelStack(ns: string, opts?: { legacyOpenKey?: string; defaultLa
   }
 
   function setLayout(next: PanelKey[][]) {
-    _layout = sanitizeLayout(next);
+    _layout = oneCol(sanitizeLayout(next));
     _weights = normalizeWeights(_layout.flat(), _weights);
     persist();
     emit();
@@ -359,8 +370,9 @@ export const chatPanelStack = createPanelStack('chat');
 // держат НЕЗАВИСИМЫЕ раскладки.
 // defaultLayout=['chats'] — базовая панель открывается при первом запуске;
 // после закрытия пользователем состояние сохранится в localStorage.
-export const wsLeftPanelStack = createPanelStack('ws_left', { defaultLayout: [['chats']] });
-export const chatLeftPanelStack = createPanelStack('chat_left', { defaultLayout: [['chats']] });
+// singleColumn: левая зона рисует панели одной стопкой, колонок у неё нет.
+export const wsLeftPanelStack = createPanelStack('ws_left', { defaultLayout: [['chats']], singleColumn: true });
+export const chatLeftPanelStack = createPanelStack('chat_left', { defaultLayout: [['chats']], singleColumn: true });
 
 // Совместимость: прежний хук = воркспейсный инстанс (RightPanelStack, ProjectGitBar).
 export const usePanelStack = wsPanelStack.use;

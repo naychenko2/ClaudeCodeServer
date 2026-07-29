@@ -192,7 +192,10 @@ export function PanelShell({
     <Island
       bg={ISLAND.bg}
       borderColor={dropTarget || flash ? C.accent : ISLAND.border}
-      shadow={dropTarget ? `0 0 0 1px ${C.accent}` : ISLAND.shadow}
+      // Перетаскиваемая панель «вдавливается»: теряет тень и чуть уменьшается,
+      // будто прижата к холсту. Полупрозрачной её не делаем — сквозь неё
+      // просвечивал контент, и было не понять, что именно едет за курсором.
+      shadow={dropTarget ? `0 0 0 1px ${C.accent}` : dragged ? 'none' : ISLAND.shadow}
       style={{
         // fill=true (дефолт) — flex:1, панель растягивается на всю высоту.
         // fill=false — flex: '0 1 auto', панель по контенту, но сжимается
@@ -200,15 +203,13 @@ export function PanelShell({
         // родителя — тогда срабатывает внутренний скролл контента.
         flex: fill ? 1 : '0 1 auto',
         maxHeight: fill ? undefined : '100%',
-        opacity: dragged ? 0.5 : (mounted || !animate) ? 1 : 0,
-        transform: (mounted || !animate)
-          ? 'translateY(0) scale(1)'
-          : slideDirection === 'left'
-            ? 'translateX(-5px) scale(0.99)'
-            : 'translateY(5px) scale(0.99)',
+        opacity: (mounted || !animate) ? 1 : 0,
+        transform: !(mounted || !animate)
+          ? (slideDirection === 'left' ? 'translateX(-5px) scale(0.99)' : 'translateY(5px) scale(0.99)')
+          : dragged ? 'scale(0.985)' : 'translateY(0) scale(1)',
         transition: animate
-          ? 'border-color 0.1s, box-shadow 0.1s, opacity 0.12s ease-out, transform 0.12s ease-out'
-          : 'border-color 0.1s, box-shadow 0.1s',
+          ? 'border-color 0.1s, box-shadow 0.15s, opacity 0.12s ease-out, transform 0.12s ease-out'
+          : 'border-color 0.1s, box-shadow 0.15s, transform 0.12s ease-out',
         ...style,
       }}
       rootProps={{

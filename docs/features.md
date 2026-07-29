@@ -95,9 +95,9 @@ accent-цветом. Иконки авторов — эмодзи-роли (`AUT
 ([OmcPersonaRouting](../backend/ClaudeHomeServer/Services/Prompts/OmcPersonaRouting.cs)) —
 советнические типы (analyst/critic/planner/architect…) замещаются персонами по
 `PersonaSpecialty` (+фолбэк по названию роли), исполнительские (executor/qa-tester/git-master…)
-— только персонами с опт-ином `Persona.SubagentExecutor` (тумблер «Исполнитель в сабагентах»,
-только при Access=Full: сабагент получает Write/Edit/Bash и рамку исполнителя,
-`PersonaConsultantToolset.IsExecutor`). Team-режим (tmux) и npm-CLI `omc` не поддерживаются;
+— только персонами со Specialty=Executor при Access=Full: сабагент получает Write/Edit/Bash
+и рамку исполнителя (`PersonaConsultantToolset.IsExecutor`). Team-режим (tmux) и npm-CLI `omc`
+не поддерживаются;
 `/oh-my-claudecode:setup` не запускать. Подробности — [docker.md](docker.md).
 
 ## Механики OmO в чатах (флаг `work-loop`)

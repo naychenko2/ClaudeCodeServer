@@ -8,8 +8,8 @@ namespace ClaudeHomeServer.Services;
 // персоны-собеседника, чьи действия одобряет живой пользователь; у сабагента-консультанта
 // permission-канала нет вовсе (фоновый контекст), поэтому базовый набор жёстко read-only.
 // Write-исключения два: собственная память персоны (pmem-сервер) и режим ИСПОЛНИТЕЛЯ —
-// явный опт-ин Persona.SubagentExecutor при Access=Full добавляет файлы+Bash (радиус
-// поражения ограничен песочницей контейнера и папками, проброшенными в сессию).
+// Access=Full вместе со Specialty=Executor добавляет файлы+Bash (радиус поражения
+// ограничен песочницей контейнера и папками, проброшенными в сессию).
 public static class PersonaConsultantToolset
 {
     // Встроенные read-инструменты CLI: чтение и поиск по файлам зоны сессии
@@ -74,15 +74,15 @@ public static class PersonaConsultantToolset
         return tools;
     }
 
-    // Персона-исполнитель: write-набор в сабагенте разрешён только явным опт-ином
-    // при полном профиле доступа (не-Full профиль гасит флаг и в PersonaManager)
+    // Персона-исполнитель: write-набор в сабагенте разрешён специальности «исполнитель»
+    // при полном профиле доступа (не-Full профиль не даёт write независимо от специальности)
     public static bool IsExecutor(Persona persona) =>
-        persona.Access == PersonaAccess.Full && persona.SubagentExecutor;
+        persona.Access == PersonaAccess.Full && persona.Specialty == PersonaSpecialty.Executor;
 
     // Полный allow-list консультанта. Custom.DisallowedTools персоны только СУЖАЕТ набор
     // (точное совпадение имени); Access расширить его не может — безопасность сабагента
     // не зависит от профиля, рассчитанного на живой надзор. Единственное расширение —
-    // явный опт-ин исполнителя (IsExecutor). Гейты tasks/notes/web — эффективные
+    // специальность исполнителя (IsExecutor). Гейты tasks/notes/web — эффективные
     // возможности персоны (EffectiveToolEnabled: Tool-привязка приоритетнее Persona.Tools).
     public static IReadOnlyList<string> Build(Persona persona, bool webAllowed,
         bool tasksAllowed = true, bool notesAllowed = true)

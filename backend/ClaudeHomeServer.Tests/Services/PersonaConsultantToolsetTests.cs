@@ -120,6 +120,28 @@ public class PersonaConsultantToolsetTests
     }
 
     [Fact]
+    public void Исполнитель_WriteEditBash_ТолькоПриFullИSpecialtyExecutor()
+    {
+        var executorFull = Make(access: PersonaAccess.Full);
+        executorFull.Specialty = PersonaSpecialty.Executor;
+        PersonaConsultantToolset.IsExecutor(executorFull).Should().BeTrue();
+        PersonaConsultantToolset.Build(executorFull, webAllowed: false)
+            .Should().Contain(["Write", "Edit", "Bash"]);
+
+        var executorReadOnly = Make(access: PersonaAccess.ReadOnly);
+        executorReadOnly.Specialty = PersonaSpecialty.Executor;
+        PersonaConsultantToolset.IsExecutor(executorReadOnly).Should().BeFalse();
+        PersonaConsultantToolset.Build(executorReadOnly, webAllowed: false)
+            .Should().NotContain(["Write", "Edit", "Bash"]);
+
+        var reviewerFull = Make(access: PersonaAccess.Full);
+        reviewerFull.Specialty = PersonaSpecialty.Reviewer;
+        PersonaConsultantToolset.IsExecutor(reviewerFull).Should().BeFalse();
+        PersonaConsultantToolset.Build(reviewerFull, webAllowed: false)
+            .Should().NotContain(["Write", "Edit", "Bash"]);
+    }
+
+    [Fact]
     public void PmemServerKey_НормализуетHandle()
     {
         PersonaConsultantToolset.PmemServerKey("gefest").Should().Be("pmem_gefest");

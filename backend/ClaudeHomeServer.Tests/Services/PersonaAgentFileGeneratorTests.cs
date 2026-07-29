@@ -187,6 +187,34 @@ public class PersonaAgentFileGeneratorTests
     }
 
     [Fact]
+    public void MaxTurns_И_РабочийДоступ_ТолькоПриFullИSpecialtyExecutor()
+    {
+        var executorFull = MakePersona();
+        executorFull.Access = PersonaAccess.Full;
+        executorFull.Specialty = PersonaSpecialty.Executor;
+        var executorText = MakeGenerator().Generate(executorFull, Ctx());
+        executorText.Should().Contain("maxTurns: 50");
+        executorText.Should().Contain("tools: Read, Grep, Glob, Write, Edit, Bash");
+        executorText.Should().Contain("## Рабочий доступ исполнителя");
+
+        var executorReadOnly = MakePersona();
+        executorReadOnly.Access = PersonaAccess.ReadOnly;
+        executorReadOnly.Specialty = PersonaSpecialty.Executor;
+        var readOnlyText = MakeGenerator().Generate(executorReadOnly, Ctx());
+        readOnlyText.Should().Contain("maxTurns: 25");
+        readOnlyText.Should().NotContain("Write").And.NotContain("Edit").And.NotContain("Bash");
+        readOnlyText.Should().NotContain("## Рабочий доступ исполнителя");
+
+        var reviewerFull = MakePersona();
+        reviewerFull.Access = PersonaAccess.Full;
+        reviewerFull.Specialty = PersonaSpecialty.Reviewer;
+        var reviewerText = MakeGenerator().Generate(reviewerFull, Ctx());
+        reviewerText.Should().Contain("maxTurns: 25");
+        reviewerText.Should().NotContain("Write").And.NotContain("Edit").And.NotContain("Bash");
+        reviewerText.Should().NotContain("## Рабочий доступ исполнителя");
+    }
+
+    [Fact]
     public void Дисциплина_НейтральнаяДляСабагента()
     {
         // Дисциплина не зависит от модели персоны: файл общий для всех провайдеров

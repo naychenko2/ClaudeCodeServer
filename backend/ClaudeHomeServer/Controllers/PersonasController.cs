@@ -226,7 +226,7 @@ public class PersonasController : ControllerBase
                 req.Model, req.Effort, scope, req.ProjectId, req.Color, req.Greeting,
                 req.MemoryEnabled ?? true, req.Tools, req.Contract,
                 access ?? PersonaAccess.Full, req.DisallowedTools, req.Specialty ?? PersonaSpecialty.None,
-                req.AllProjectsAccess ?? false, req.SubagentExecutor ?? false, req.Handle, req.ModelTier);
+                req.AllProjectsAccess ?? false, req.Handle, req.ModelTier);
         }
         catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
         if (bindings.Count > 0)
@@ -266,7 +266,7 @@ public class PersonasController : ControllerBase
             persona = _personas.Update(id, UserId, req.Name, req.Role, req.Description, req.SystemPrompt,
                 req.Model, req.Effort, req.Scope, req.ProjectId, req.Color, req.Greeting,
                 req.MemoryEnabled, req.Tools, req.Contract, access, req.DisallowedTools, req.Specialty,
-                req.AllProjectsAccess, req.SubagentExecutor, req.Handle, req.ModelTier);
+                req.AllProjectsAccess, req.Handle, req.ModelTier);
         }
         catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
         await Broadcast("updated", id);
@@ -1995,8 +1995,6 @@ public record CreatePersonaRequest(
     bool? AutoBindings = null,
     // Доступ ко всем проектам владельца (текущим и будущим) — только для Scope.Global
     bool? AllProjectsAccess = null,
-    // Исполнитель в сабагентах (write-набор в файловом сабагенте); только при Access=full
-    bool? SubagentExecutor = null,
     // true — после создания сгенерировать фото-аватар (best-effort, требует Fal:ApiKey).
     // Опт-ин для авто/LLM-путей создания (напр. пакетная команда из ai/team) — обычное
     // создание через форму/мастер не шлёт этот параметр, там инициалы или явный выбор
@@ -2032,8 +2030,6 @@ public record UpdatePersonaRequest(
     // Доступ ко всем проектам владельца (текущим и будущим); null — не менять.
     // Игнорируется (сбрасывается в false), если персона не Scope.Global
     bool? AllProjectsAccess = null,
-    // Исполнитель в сабагентах; null — не менять, гаснет при Access != full
-    bool? SubagentExecutor = null,
     // Ручной @handle (latin-slug); null — не менять, "" — сбросить к авто-генерации.
     // Занят/невалиден → 400
     string? Handle = null,

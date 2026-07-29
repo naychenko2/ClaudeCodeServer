@@ -7,6 +7,7 @@ import {
   parseWeights, parseWidth, normalizeWeights,
   sanitizeZones, emptyZones, zoneOf, openPanelIn, togglePanelIn, closePanel,
   swapAcross, moveAcrossAt, moveAcrossToNewColumn, isZoneCollapsed, migrateZones, revealPanel,
+  enforceZoneInvariant,
   COL_DEFAULT, COL_MIN, COL_MAX,
   type PanelZones,
 } from '../../pages/workspace/panelStackState';
@@ -263,6 +264,42 @@ describe('isZoneCollapsed', () => {
     expect(isZoneCollapsed(z.left)).toBe(true);
     expect(isZoneCollapsed(z.right)).toBe(false);
     expect(isZoneCollapsed(emptyZones().left)).toBe(false);
+  });
+});
+
+describe('enforceZoneInvariant — панель ровно в одном месте', () => {
+  it('спрятанный набор не хранит панель, уехавшую в другую зону', () => {
+    // Сценарий бага: свернули левую (chats ушёл в её stash), потом открыли chats
+    // и перетащили направо. Разворачивание stash вернуло бы вторую копию.
+    const z = enforceZoneInvariant(sanitizeZones({
+      left: { layout: [], stash: [['chats']] },
+      right: { layout: [['files', 'chats']] },
+    }));
+    expect(z.right.layout).toEqual([['files', 'chats']]);
+    expect(z.left.stash).toEqual([]);
+  });
+
+  it('раскладка на экране сильнее спрятанного набора своей же зоны', () => {
+    const z = enforceZoneInvariant(sanitizeZones({
+      left: { layout: [['chats']], stash: [['chats', 'tasks']] },
+      right: { layout: [] },
+    }));
+    expect(z.left.layout).toEqual([['chats']]);
+    expect(z.left.stash).toEqual([['tasks']]);
+  });
+
+  it('дубль между раскладками зон остаётся справа', () => {
+    const z = enforceZoneInvariant(sanitizeZones({
+      left: { layout: [['chats', 'files']] },
+      right: { layout: [['files']] },
+    }));
+    expect(z.right.layout).toEqual([['files']]);
+    expect(z.left.layout).toEqual([['chats']]);
+  });
+
+  it('чистое состояние не меняется', () => {
+    const z = sanitizeZones({ left: { layout: [['chats']] }, right: { layout: [['files']], stash: [['tasks']] } });
+    expect(enforceZoneInvariant(z)).toEqual(z);
   });
 });
 

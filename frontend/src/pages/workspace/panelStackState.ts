@@ -206,24 +206,55 @@ export function openKeysOf(zones: PanelZones): PanelKey[] {
   return [...zones.left.layout.flat(), ...zones.right.layout.flat()];
 }
 
-// Санитайз пары зон с соблюдением инварианта «панель в одной зоне».
-// Приоритет у ПРАВОЙ: там исторически живут панели с настоящим контентом
-// (слева files/tasks успели побывать dev-заглушками), поэтому дубль из
-// сохранённой раскладки остаётся справа, а слева отбрасывается.
+// Приведение пары зон к инварианту «панель ровно в одном месте».
+//
+// Мест на самом деле ЧЕТЫРЕ: раскладка каждой зоны и её спрятанный кнопкой
+// «Свернуть все» набор. Stash — это отложенный layout, поэтому панель, уехавшая
+// в соседнюю зону, обязана исчезнуть и из него: иначе разворачивание вернёт её
+// второй копией, и одна и та же панель окажется в обеих рельсах.
+//
+// Приоритет: то, что НА ЭКРАНЕ, сильнее спрятанного; среди раскладок — правая
+// (там исторически живут панели с настоящим контентом, слева files/tasks успели
+// побывать dev-заглушками).
+export function enforceZoneInvariant(zones: PanelZones): PanelZones {
+  const seen = new Set<PanelKey>();
+  const claim = (cols: PanelKey[][]): PanelKey[][] => {
+    const out: PanelKey[][] = [];
+    for (const col of cols) {
+      const clean = col.filter(k => !seen.has(k));
+      clean.forEach(k => seen.add(k));
+      if (clean.length) out.push(clean);
+    }
+    return out;
+  };
+  const rightLayout = claim(zones.right.layout);
+  const leftLayout = claim(zones.left.layout);
+  const rightStash = claim(zones.right.stash);
+  const leftStash = claim(zones.left.stash);
+  return {
+    ...zones,
+    right: { ...zones.right, layout: rightLayout, stash: rightStash },
+    left: { ...zones.left, layout: leftLayout, stash: leftStash },
+  };
+}
+
+// Санитайз пары зон из сохранённого состояния: валидация полей плюс инвариант
 export function sanitizeZones(raw: unknown): PanelZones {
   const src = (raw && typeof raw === 'object' ? raw : {}) as Partial<Record<Zone, unknown>> & { weights?: unknown };
-  const readZone = (v: unknown, exclude?: Set<PanelKey>): ZoneState => {
+  const readZone = (v: unknown): ZoneState => {
     const z = (v && typeof v === 'object' ? v : {}) as Partial<ZoneState>;
     return {
-      layout: sanitizeLayout(z.layout, exclude),
+      layout: sanitizeLayout(z.layout),
       mode: z.mode === 'solo' ? 'solo' : 'multi',
       width: typeof z.width === 'number' ? parseWidth(String(z.width)) : COL_DEFAULT,
       stash: sanitizeLayout(z.stash),
     };
   };
-  const right = readZone(src.right);
-  const left = readZone(src.left, new Set(right.layout.flat()));
-  return { left, right, weights: parseWeights(JSON.stringify(src.weights ?? {})) };
+  return enforceZoneInvariant({
+    left: readZone(src.left),
+    right: readZone(src.right),
+    weights: parseWeights(JSON.stringify(src.weights ?? {})),
+  });
 }
 
 function withZone(zones: PanelZones, zone: Zone, next: (z: ZoneState) => ZoneState): PanelZones {
@@ -334,9 +365,6 @@ export function migrateZones(read: (key: string) => string | null, ns: string, l
     return parseLayout(null, legacy);
   };
 
-  const right = readLayout(rightRaw, legacyOpen);
-  const left = sanitizeLayout(readLayout(leftRaw, null), new Set(right.flat()));
-
   const zone = (layout: PanelKey[][], prefix: string): ZoneState => ({
     layout,
     mode: read(`${prefix}_mode`) === 'solo' ? 'solo' : 'multi',
@@ -344,15 +372,17 @@ export function migrateZones(read: (key: string) => string | null, ns: string, l
     stash: sanitizeLayout((() => { try { return JSON.parse(read(`${prefix}_stash`) ?? '[]'); } catch { return []; } })()),
   });
 
-  return {
-    right: zone(right, `cc_${ns}_panels`),
-    left: zone(left, `cc_${ns}_left_panels`),
-    // Веса были раздельными; при совпадении ключа берём правый (см. sanitizeZones)
+  // Дубли между старыми раскладками (files/tasks были в обоих наборах) снимает
+  // общий инвариант — он же чистит и спрятанные наборы
+  return enforceZoneInvariant({
+    right: zone(readLayout(rightRaw, legacyOpen), `cc_${ns}_panels`),
+    left: zone(readLayout(leftRaw, null), `cc_${ns}_left_panels`),
+    // Веса были раздельными; при совпадении ключа берём правый
     weights: {
       ...parseWeights(read(`cc_${ns}_left_panels_weights`)),
       ...parseWeights(read(`cc_${ns}_panels_weights`)),
     },
-  };
+  });
 }
 
 // ---------- API стора ----------
@@ -415,9 +445,16 @@ function createPanelZones(ns: string, opts?: { legacyOpenKey?: string; defaultZo
   // (или откатом кода) молча разошлась бы с тем, что человек видит на экране.
   if (migrated) persist();
 
-  // Единая точка записи: нормализует веса по всем открытым панелям обеих зон
+  // Единая точка записи: держит инвариант «панель ровно в одном месте» и
+  // нормализует веса по всем открытым панелям обеих зон.
+  //
+  // Инвариант проверяется ИМЕННО ЗДЕСЬ, а не в операциях: спрятанный набор
+  // (stash) живёт мимо них — панель успевает уехать в соседнюю зону уже после
+  // того, как её запомнила кнопка «Свернуть все», и разворачивание вернуло бы
+  // вторую копию.
   function commit(next: PanelZones) {
-    _zones = { ...next, weights: normalizeWeights(openKeysOf(next), next.weights) };
+    const clean = enforceZoneInvariant(next);
+    _zones = { ...clean, weights: normalizeWeights(openKeysOf(clean), clean.weights) };
     persist();
     emit();
   }

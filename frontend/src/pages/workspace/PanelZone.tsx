@@ -80,7 +80,7 @@ export function PanelZone({
   allowedKeys = WORKSPACE_KEYS, hideWhenEmpty, toolsEnabled, compact, sessionPanels, onPanelOpen,
 }: Props) {
   const usePanels = (panelStack ?? wsPanels).use;
-  const { zones, toggle, closeTo, setMode, setWidth, setWeights, toggleCollapsed, swapWith, moveAt, moveToNewColumn } = usePanels();
+  const { zones, toggle, closeTo, evict, setMode, setWidth, setWeights, toggleCollapsed, swapWith, moveAt, moveToNewColumn } = usePanels();
   const zoneState = zones[side];
   const { layout, mode, width } = zoneState;
   const windowWidth = useWindowWidth();
@@ -150,6 +150,15 @@ export function PanelZone({
   // Управлять раскладкой при единственной доступной панели нечем: тумблер режима
   // и «свернуть все» в этом случае не рисуем.
   const singlePanelMode = availableKeys.length === 1 && !compact;
+
+  // Ремонт сохранённой раскладки: панель, которой на этом экране в этой зоне быть
+  // не может, выселяется домой. Иначе она пропадала совсем — в родной зоне её нет
+  // («лежит в соседней»), а соседняя нарисовать её не умеет. Проверка идёт по
+  // allowedKeys, а не по наличию контента: набор экрана статичен, а контент
+  // приезжает асинхронно и на полкадра бывает пустым у кого угодно.
+  useEffect(() => {
+    evict(side, allowedKeys);
+  }, [evict, side, allowedKeys, layout, zoneState.stash]);
 
   const dnd = usePanelDnd({
     zone: side,

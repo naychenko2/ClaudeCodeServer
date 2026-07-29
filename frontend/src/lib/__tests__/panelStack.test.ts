@@ -7,7 +7,7 @@ import {
   parseWeights, parseWidth, normalizeWeights,
   sanitizeZones, emptyZones, zoneOf, openPanelIn, togglePanelIn, closePanel,
   swapAcross, moveAcrossAt, moveAcrossToNewColumn, isZoneCollapsed, migrateZones, revealPanel,
-  enforceZoneInvariant, homeOf, trackHome, parseHome, closePanelTo,
+  enforceZoneInvariant, homeOf, trackHome, parseHome, closePanelTo, evictForeign,
   COL_DEFAULT, COL_MIN, COL_MAX,
   type PanelZones,
 } from '../../pages/workspace/panelStackState';
@@ -318,6 +318,33 @@ describe('homeOf / trackHome — иконка закрытой панели', ()
     const saved = trackHome(moveAcrossAt(zones([['chats']], [['tasks']]), 'tasks', 'left', 0, 1));
     const restored = sanitizeZones(JSON.parse(JSON.stringify(saved)));
     expect(homeOf(restored, 'tasks')).toBe('left');
+  });
+});
+
+describe('evictForeign — ремонт раскладки под набор экрана', () => {
+  const SESSION = ['plan', 'agents', 'context'] as const;
+
+  it('возвращает панель домой из зоны, где её некому нарисовать', () => {
+    // «Чаты» уехали в правую зону раздела, где доступны только панели сессии:
+    // там они невидимы, а слева считаются «лежащими в соседней зоне»
+    const broken = trackHome(zones([], [['chats', 'plan']]));
+    const fixed = evictForeign(broken, 'right', SESSION);
+    expect(fixed).not.toBeNull();
+    expect(fixed!.right.layout).toEqual([['plan']]);
+    expect(zoneOf(fixed!, 'chats')).toBeNull();
+    expect(homeOf(fixed!, 'chats')).toBe('left');
+  });
+
+  it('чистит и спрятанный «свернуть все» набор', () => {
+    const broken = sanitizeZones({ left: { layout: [] }, right: { layout: [], stash: [['chats']] } });
+    const fixed = evictForeign(trackHome(broken), 'right', SESSION);
+    expect(fixed!.right.stash).toEqual([]);
+    expect(homeOf(fixed!, 'chats')).toBe('left');
+  });
+
+  it('нечего выселять — null, чтобы не будить подписчиков', () => {
+    expect(evictForeign(zones([['chats']], [['plan']]), 'right', SESSION)).toBeNull();
+    expect(evictForeign(zones([['chats']], []), 'right', SESSION)).toBeNull();
   });
 });
 

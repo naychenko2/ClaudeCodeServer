@@ -377,6 +377,26 @@ export function moveAcrossToNewColumn(zones: PanelZones, k: PanelKey, zone: Zone
   });
 }
 
+// Выселить из зоны панели, которых на этом экране в ней быть не может, и вернуть
+// их иконки в домашнюю зону. Нужно как ремонт: экраны отличаются набором панелей
+// (в разделе «Чаты» правая зона держит только артефакты сессии), а сохранённая
+// раскладка живёт дольше — панель, уехавшая туда, где её некому нарисовать,
+// пропадала с концами: в своей зоне её нет, в чужой она невидима.
+// null — выселять нечего (сигнал вызывающему не дёргать запись).
+export function evictForeign(zones: PanelZones, zone: Zone, allowed: readonly PanelKey[]): PanelZones | null {
+  const z = zones[zone];
+  const strays = [...z.layout.flat(), ...z.stash.flat()].filter(k => !allowed.includes(k));
+  if (strays.length === 0) return null;
+  const drop = (cols: PanelKey[][]) => cols.map(c => c.filter(k => allowed.includes(k))).filter(c => c.length > 0);
+  const home = { ...zones.home };
+  for (const k of strays) home[k] = PANEL_HOME[k];
+  return {
+    ...zones,
+    home,
+    [zone]: { ...z, layout: drop(z.layout), stash: drop(z.stash) },
+  };
+}
+
 // Зона «свёрнута»: своих открытых панелей нет, но спрятанный набор есть
 export function isZoneCollapsed(z: ZoneState): boolean {
   return z.layout.flat().length === 0 && z.stash.flat().length > 0;
@@ -470,6 +490,9 @@ export interface PanelZonesApi {
   // Дроп панели на рельсу: закрыть и положить иконку ИМЕННО в эту зону — панель
   // убирают туда, где потом хотят её найти
   closeTo: (zone: Zone, k: PanelKey) => void;
+  // Ремонт сохранённой раскладки: выгнать из зоны панели, которых на этом экране
+  // в ней быть не может (см. evictForeign)
+  evict: (zone: Zone, allowed: readonly PanelKey[]) => void;
   // Дроп панели на панель (в том числе через границу зон)
   swapWith: (a: PanelKey, b: PanelKey) => void;
   // Дроп в плейсхолдер строки / в разделитель колонок целевой зоны
@@ -563,6 +586,12 @@ function createPanelZones(ns: string, opts?: {
 
     const closeTo = useCallback((zone: Zone, k: PanelKey) => { commit(closePanelTo(_zones, zone, k)); }, []);
 
+    const evict = useCallback((zone: Zone, allowed: readonly PanelKey[]) => {
+      // null — выселять нечего: молчим, чтобы не будить подписчиков на каждый рендер
+      const next = evictForeign(_zones, zone, allowed);
+      if (next) commit(next);
+    }, []);
+
     const swapWith = useCallback((a: PanelKey, b: PanelKey) => {
       // Вес — высота СЛОТА, а не панели: вместе с местами меняем и веса,
       // иначе панель утащила бы свою высоту и раскладка «прыгнула» бы
@@ -620,7 +649,7 @@ function createPanelZones(ns: string, opts?: {
       return wasOpen;
     }, []);
 
-    return { zones, toggle, close, closeTo, swapWith, moveAt, moveToNewColumn, setMode, setWidth, toggleCollapsed, setWeights, reveal };
+    return { zones, toggle, close, closeTo, evict, swapWith, moveAt, moveToNewColumn, setMode, setWidth, toggleCollapsed, setWeights, reveal };
   }
 
   return { use: usePanelZones };

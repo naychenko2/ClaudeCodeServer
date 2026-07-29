@@ -1,0 +1,32 @@
+{
+  "name": "Ошибки LLM по типам",
+  "category": "",
+  "sourcePage": "metrics",
+  "tags": [""],
+  "compositeQuery": {
+    "queryType": "builder",
+    "panelType": "graph",
+    "queries": [
+      {
+        "type": "builder_query",
+        "spec": {
+          "name": "A",
+          "signal": "metrics",
+          "source": "",
+          "stepInterval": 60,
+          "limit": 100,
+          "order": [ { "key": { "name": "__result" }, "direction": "desc" } ],
+          "filter": { "expression": "" },
+          "having": { "expression": "" },
+          "aggregations": [
+            { "metricName": "ccs.llm.errors", "temporality": "Cumulative", "timeAggregation": "rate", "spaceAggregation": "sum" }
+          ],
+          "groupBy": [
+            { "name": "error_type", "fieldDataType": "string" },
+            { "name": "deployment.environment", "fieldDataType": "string" }
+          ]
+        }
+      }
+    ]
+  }
+}

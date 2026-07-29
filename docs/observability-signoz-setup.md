@@ -277,6 +277,70 @@ Get-Content "signoz-metastore-YYYYMMDD.sql" `
 трактуется как значение по умолчанию), но поведение не задано контрактом
 и сломается на версии, ужесточившей парсинг. Добавить переменную явно в compose.
 
+## Чистка мусорных данных
+
+Отладка телеметрии оставляет в базе мусор: тестовые GUID'ы в тегах, значения из
+кода, который потом починили (PII в пути, пустой `tool_name`, `model: unknown`).
+TTL их уберёт сам, но **до этого они портят не графики, а выпадашки и каталог метрик** —
+то есть подсказывают несуществующие значения тому, кто разбирает инцидент.
+
+### Где что лежит
+
+| Таблица | Что внутри | Движок | Мутировать? |
+|---|---|---|---|
+| `signoz_metrics.samples_v4` | точки метрик | `ReplicatedMergeTree` | да |
+| `signoz_metrics.time_series_v4` | ряды и их labels (каталог метрик) | `ReplicatedReplacingMergeTree` | да |
+| `signoz_traces.signoz_index_v3` | спаны | `ReplicatedMergeTree` | да |
+| `signoz_traces.tag_attributes_v2` | **значения атрибутов для автокомплита** | `ReplicatedReplacingMergeTree` | да |
+| `distributed_*` | вьюхи поверх локальных | `Distributed` | **нет**, только читать |
+
+Мусор живёт в двух местах сразу: в самих спанах/сэмплах и отдельно в
+`tag_attributes_v2`. Вычистишь только спаны — значение останется в выпадашке.
+
+### Порядок
+
+Всегда три шага; второй без первого — путь к потере живых данных.
+
+```powershell
+# 1. Dry-run: ровно тот же WHERE, что пойдёт в DELETE
+docker exec signoz-telemetrystore-clickhouse-0-0 clickhouse-client --query `
+  "SELECT tag_key, string_value, count() FROM signoz_traces.tag_attributes_v2
+   WHERE tag_key = 'tool_name' AND trim(string_value) = ''
+   GROUP BY 1,2 FORMAT TSV"
+
+# 2. Мутация — синхронно, иначе вернётся до применения
+docker exec signoz-telemetrystore-clickhouse-0-0 clickhouse-client --query `
+  "ALTER TABLE signoz_traces.tag_attributes_v2 DELETE
+   WHERE tag_key = 'tool_name' AND trim(string_value) = ''
+   SETTINGS mutations_sync = 2"
+
+# 3. Верификация — по DISTINCT значениям, НЕ по count()
+docker exec signoz-telemetrystore-clickhouse-0-0 clickhouse-client --query `
+  "SELECT DISTINCT string_value FROM signoz_traces.tag_attributes_v2
+   WHERE tag_key = 'tool_name' ORDER BY 1 FORMAT TSV"
+```
+
+### Грабли
+
+- **Обратный слеш в литерале — escape-последовательность.** `WHERE string_value =
+  'C:\Users\depec\...'` не совпадёт ни с чем: ClickHouse прочтёт `\U` и `\d` как escape.
+  Это тихий промах — запрос отработает и вернёт ноль строк, из чего легко сделать вывод
+  «чистить нечего». Матчить подстрокой: `position(string_value, 'AppData') > 0`.
+- **Пустое значение может быть непустой строкой.** Фильтр `length(value) < 3` пропустит
+  значение из трёх пробелов. Правильно — `trim(value) = ''`.
+- **`count()` после мутации не измеряет результат.** У `ReplacingMergeTree` мутация
+  провоцирует мерж, и число строк падает само по себе за счёт схлопывания дублей
+  (в одну из чисток: 827 → 413 при 12 удалённых значениях). Проверять надо составом
+  `DISTINCT`, иначе решишь, что снёс лишнее.
+- **Мутировать только локальные таблицы.** `ALTER … DELETE` по `distributed_*` — не тот
+  объект; вьюха мутации не переживает осмысленно.
+- **Сначала посмотреть, что рядом.** Предикат вроде «пустое значение» задевает и легитимные
+  теги: в одной из чисток под тот же шаблон попадали 42 валидных пустых значения других
+  атрибутов. Поэтому dry-run группируется по `tag_key`, а не только считает строки.
+
+> Чистка — операция для мусора, попавшего по нашей же ошибке. Штатное удаление данных —
+> это TTL (см. «Retention»); руками туда лезть не надо.
+
 ## Обновление SigNoz
 
 Текущая версия — **v0.134.0** (коллектор v0.144.6), теги запинены в

@@ -94,6 +94,61 @@
       "static": false,
       "minH": 2,
       "minW": 6
+    },
+    {
+      "h": 4,
+      "w": 6,
+      "x": 0,
+      "y": 24,
+      "i": "f3a1c2d4-9999-4999-8999-111111111111",
+      "moved": false,
+      "static": false,
+      "minH": 2,
+      "minW": 3
+    },
+    {
+      "h": 4,
+      "w": 6,
+      "x": 6,
+      "y": 24,
+      "i": "f3a1c2d4-aaaa-4aaa-8aaa-222222222222",
+      "moved": false,
+      "static": false,
+      "minH": 2,
+      "minW": 3
+    },
+    {
+      "h": 4,
+      "w": 4,
+      "x": 0,
+      "y": 28,
+      "i": "f3a1c2d4-bbbb-4bbb-8bbb-333333333333",
+      "moved": false,
+      "static": false,
+      "minH": 2,
+      "minW": 3
+    },
+    {
+      "h": 4,
+      "w": 4,
+      "x": 4,
+      "y": 28,
+      "i": "f3a1c2d4-cccc-4ccc-8ccc-444444444444",
+      "moved": false,
+      "static": false,
+      "minH": 2,
+      "minW": 3
+    },
+    {
+      "h": 4,
+      "w": 4,
+      "x": 8,
+      "y": 28,
+      "i": "f3a1c2d4-dddd-4ddd-8ddd-555555555555",
+      "moved": false,
+      "static": false,
+      "minH": 2,
+      "minW": 3
     }
   ],
   "widgets": [
@@ -409,7 +464,7 @@
     {
       "id": "f3a1c2d4-4444-4444-8444-dddddddddddd",
       "title": "LLM Errors by Provider",
-      "description": "Ошибки провайдеров в секунду. Учитываются оба признака отказа: subtype=error (сбой CLI) и is_error=true при subtype=success (API-ошибка провайдера, напр. 429). ПУСТАЯ ПАНЕЛЬ = ошибок не было, а не поломка: счётчик кумулятивный, и раз инкрементнувшись он появляется на КАЖДОМ сборе — пока ccs.llm.errors нет в базе вовсе, значит ни один ход не отказал. Сравни с соседней панелью rate-limit: там ряд есть, потому что мягкий rate_limit_event случался.",
+      "description": "Ошибки провайдеров в секунду. Учитываются оба признака отказа: subtype=error (сбой CLI) и is_error=true при subtype=success (API-ошибка провайдера, напр. 429). ПУСТАЯ ПАНЕЛЬ = в ТЕКУЩЕМ запуске сервера отказов не было, а не поломка: счётчик кумулятивный и живёт в процессе — пока его не инкрементнули ни разу, метрика не экспортируется вовсе, а после первого отказа приезжает на каждом сборе. Судить по этой панели о прошлом нельзя ещё и потому, что исторические точки ccs.llm.errors были удалены при чистке тестового мусора (в каталоге signoz_metrics.metadata видно, что реальные отказы у провайдеров claude и deepseek регистрировались).",
       "panelTypes": "graph",
       "yAxisUnit": "",
       "timePreferance": "GLOBAL_TIME",
@@ -615,7 +670,7 @@
     {
       "id": "f3a1c2d4-6666-4666-8666-ffffffffffff",
       "title": "LLM Errors by Type",
-      "description": "Разбивка ошибок по категориям: rate_limit / auth / network / process_exit / unknown (TurnTelemetry.ClassifyErrorType). Пустая панель = отказов не было; та же метрика, что и у «LLM Errors by Provider», поэтому пустуют они всегда вдвоём.",
+      "description": "Разбивка ошибок по категориям: rate_limit / auth / network / process_exit / unknown (TurnTelemetry.ClassifyErrorType). Та же метрика, что и у «LLM Errors by Provider», поэтому пустуют они всегда вдвоём — причина пустоты описана там.",
       "panelTypes": "graph",
       "yAxisUnit": "",
       "timePreferance": "GLOBAL_TIME",
@@ -885,6 +940,500 @@
           }
         ],
         "id": "e36c1dc9-32fb-4627-ae74-460fd3757426",
+        "promql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "queryType": "builder",
+        "unit": ""
+      },
+      "bucketCount": 30,
+      "bucketWidth": 0,
+      "columnUnits": {},
+      "decimalPrecision": 2,
+      "fillMode": "none",
+      "isLogScale": false,
+      "legendPosition": "bottom",
+      "lineInterpolation": "spline",
+      "lineStyle": "solid",
+      "mergeAllActiveQueries": false,
+      "showPoints": false,
+      "spanGaps": true,
+      "stackedBarChart": false,
+      "customLegendColors": {},
+      "contextLinks": {
+        "linksData": []
+      }
+    },
+    {
+      "id": "f3a1c2d4-9999-4999-8999-111111111111",
+      "title": "MCP Calls by Tool",
+      "description": "Вызовы продуктовых MCP-серверов к бэкенду, приращение за интервал (не в секунду: вызовов единицы, ставка выглядела бы нулём). Источник — McpCallLog по заголовкам X-Caller-Session-Id + X-Mcp-Tool. Инструмент, не приславший имя, схлопывается в unnamed, мусорное имя — в other (MetricTagGuard): путь запроса с GUID в тег не пускаем. Подробности по каждому вызову — GET /api/mcp/calls.",
+      "panelTypes": "graph",
+      "yAxisUnit": "",
+      "timePreferance": "GLOBAL_TIME",
+      "queryType": "builder",
+      "nullZeroValues": "zero",
+      "isStacked": false,
+      "opacity": "1",
+      "fillSpans": false,
+      "softMin": 0,
+      "softMax": 0,
+      "thresholds": [],
+      "query": {
+        "builder": {
+          "queryData": [
+            {
+              "aggregations": [
+                {
+                  "temporality": "Cumulative",
+                  "reduceTo": "avg",
+                  "metricName": "ccs.mcp.calls",
+                  "spaceAggregation": "sum",
+                  "timeAggregation": "increase"
+                }
+              ],
+              "dataSource": "metrics",
+              "disabled": false,
+              "expression": "A",
+              "filter": {
+                "expression": ""
+              },
+              "functions": [],
+              "groupBy": [
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "tool_name",
+                  "isJSON": false,
+                  "dataType": "string"
+                },
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "deployment.environment",
+                  "isJSON": false,
+                  "dataType": "string"
+                }
+              ],
+              "having": {
+                "expression": ""
+              },
+              "legend": "{{tool_name}} · {{deployment.environment}}",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "source": "",
+              "stepInterval": null
+            }
+          ],
+          "queryFormulas": [],
+          "queryTraceOperator": []
+        },
+        "clickhouse_sql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "id": "7b1f04c2-5f1a-4a3e-9c0d-1a2b3c4d5e6f",
+        "promql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "queryType": "builder",
+        "unit": ""
+      },
+      "bucketCount": 30,
+      "bucketWidth": 0,
+      "columnUnits": {},
+      "decimalPrecision": 2,
+      "fillMode": "none",
+      "isLogScale": false,
+      "legendPosition": "bottom",
+      "lineInterpolation": "spline",
+      "lineStyle": "solid",
+      "mergeAllActiveQueries": false,
+      "showPoints": false,
+      "spanGaps": true,
+      "stackedBarChart": false,
+      "customLegendColors": {},
+      "contextLinks": {
+        "linksData": []
+      }
+    },
+    {
+      "id": "f3a1c2d4-aaaa-4aaa-8aaa-222222222222",
+      "title": "MCP Errors by Tool",
+      "description": "Отказы MCP-вызовов (HTTP >= 400) по инструментам. Ради этого и заводился учёт: жалобу «инструменты отваливаются» раньше приходилось разбирать вручную по data/sessions/*/history.json — со стороны бэкенда не было видно ни частоты вызовов, ни доли отказов. Пусто = в текущем запуске сервера отказов не было (счётчик кумулятивный и живёт в процессе).",
+      "panelTypes": "graph",
+      "yAxisUnit": "",
+      "timePreferance": "GLOBAL_TIME",
+      "queryType": "builder",
+      "nullZeroValues": "zero",
+      "isStacked": false,
+      "opacity": "1",
+      "fillSpans": false,
+      "softMin": 0,
+      "softMax": 0,
+      "thresholds": [],
+      "query": {
+        "builder": {
+          "queryData": [
+            {
+              "aggregations": [
+                {
+                  "temporality": "Cumulative",
+                  "reduceTo": "avg",
+                  "metricName": "ccs.mcp.errors",
+                  "spaceAggregation": "sum",
+                  "timeAggregation": "increase"
+                }
+              ],
+              "dataSource": "metrics",
+              "disabled": false,
+              "expression": "A",
+              "filter": {
+                "expression": ""
+              },
+              "functions": [],
+              "groupBy": [
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "tool_name",
+                  "isJSON": false,
+                  "dataType": "string"
+                },
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "error_type",
+                  "isJSON": false,
+                  "dataType": "string"
+                }
+              ],
+              "having": {
+                "expression": ""
+              },
+              "legend": "{{tool_name}} · {{error_type}}",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "source": "",
+              "stepInterval": null
+            }
+          ],
+          "queryFormulas": [],
+          "queryTraceOperator": []
+        },
+        "clickhouse_sql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "id": "9d2e15a3-6c4b-4d7f-8e1a-2b3c4d5e6f70",
+        "promql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "queryType": "builder",
+        "unit": ""
+      },
+      "bucketCount": 30,
+      "bucketWidth": 0,
+      "columnUnits": {},
+      "decimalPrecision": 2,
+      "fillMode": "none",
+      "isLogScale": false,
+      "legendPosition": "bottom",
+      "lineInterpolation": "spline",
+      "lineStyle": "solid",
+      "mergeAllActiveQueries": false,
+      "showPoints": false,
+      "spanGaps": true,
+      "stackedBarChart": false,
+      "customLegendColors": {},
+      "contextLinks": {
+        "linksData": []
+      }
+    },
+    {
+      "id": "f3a1c2d4-bbbb-4bbb-8bbb-333333333333",
+      "title": "Активные сессии",
+      "description": "Чаты, которые прямо сейчас работают или ждут человека (SessionLiveness.IsLive — тот же предикат, что у сводки главной). Гейдж, поэтому timeAggregation=latest. Не путать с соседней панелью «Чатов в реестре»: до июля 2026 под этим именем отдавался как раз размер реестра, из-за чего график показывал сотни и не падал после рестарта.",
+      "panelTypes": "graph",
+      "yAxisUnit": "",
+      "timePreferance": "GLOBAL_TIME",
+      "queryType": "builder",
+      "nullZeroValues": "zero",
+      "isStacked": false,
+      "opacity": "1",
+      "fillSpans": false,
+      "softMin": 0,
+      "softMax": 0,
+      "thresholds": [],
+      "query": {
+        "builder": {
+          "queryData": [
+            {
+              "aggregations": [
+                {
+                  "temporality": "Unspecified",
+                  "reduceTo": "avg",
+                  "metricName": "ccs.sessions.active",
+                  "spaceAggregation": "max",
+                  "timeAggregation": "latest"
+                }
+              ],
+              "dataSource": "metrics",
+              "disabled": false,
+              "expression": "A",
+              "filter": {
+                "expression": ""
+              },
+              "functions": [],
+              "groupBy": [
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "deployment.environment",
+                  "isJSON": false,
+                  "dataType": "string"
+                }
+              ],
+              "having": {
+                "expression": ""
+              },
+              "legend": "активные · {{deployment.environment}}",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "source": "",
+              "stepInterval": null
+            }
+          ],
+          "queryFormulas": [],
+          "queryTraceOperator": []
+        },
+        "clickhouse_sql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "id": "c4a7b209-8e3d-4f1b-9a2c-3d4e5f607182",
+        "promql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "queryType": "builder",
+        "unit": ""
+      },
+      "bucketCount": 30,
+      "bucketWidth": 0,
+      "columnUnits": {},
+      "decimalPrecision": 2,
+      "fillMode": "none",
+      "isLogScale": false,
+      "legendPosition": "bottom",
+      "lineInterpolation": "spline",
+      "lineStyle": "solid",
+      "mergeAllActiveQueries": false,
+      "showPoints": false,
+      "spanGaps": true,
+      "stackedBarChart": false,
+      "customLegendColors": {},
+      "contextLinks": {
+        "linksData": []
+      }
+    },
+    {
+      "id": "f3a1c2d4-cccc-4ccc-8ccc-444444444444",
+      "title": "WebSocket-соединения",
+      "description": "Живые SignalR-соединения (ConnectionDiagnostics.ActiveCount). Ноль при живом сервере означает, что ни одна вкладка не подключена — либо что фронт не может достучаться до хаба.",
+      "panelTypes": "graph",
+      "yAxisUnit": "",
+      "timePreferance": "GLOBAL_TIME",
+      "queryType": "builder",
+      "nullZeroValues": "zero",
+      "isStacked": false,
+      "opacity": "1",
+      "fillSpans": false,
+      "softMin": 0,
+      "softMax": 0,
+      "thresholds": [],
+      "query": {
+        "builder": {
+          "queryData": [
+            {
+              "aggregations": [
+                {
+                  "temporality": "Unspecified",
+                  "reduceTo": "avg",
+                  "metricName": "ccs.websocket.connections",
+                  "spaceAggregation": "max",
+                  "timeAggregation": "latest"
+                }
+              ],
+              "dataSource": "metrics",
+              "disabled": false,
+              "expression": "A",
+              "filter": {
+                "expression": ""
+              },
+              "functions": [],
+              "groupBy": [
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "deployment.environment",
+                  "isJSON": false,
+                  "dataType": "string"
+                }
+              ],
+              "having": {
+                "expression": ""
+              },
+              "legend": "соединения · {{deployment.environment}}",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "source": "",
+              "stepInterval": null
+            }
+          ],
+          "queryFormulas": [],
+          "queryTraceOperator": []
+        },
+        "clickhouse_sql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "id": "d5b8c31a-9f4e-4a2c-8b3d-4e5f60718293",
+        "promql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "queryType": "builder",
+        "unit": ""
+      },
+      "bucketCount": 30,
+      "bucketWidth": 0,
+      "columnUnits": {},
+      "decimalPrecision": 2,
+      "fillMode": "none",
+      "isLogScale": false,
+      "legendPosition": "bottom",
+      "lineInterpolation": "spline",
+      "lineStyle": "solid",
+      "mergeAllActiveQueries": false,
+      "showPoints": false,
+      "spanGaps": true,
+      "stackedBarChart": false,
+      "customLegendColors": {},
+      "contextLinks": {
+        "linksData": []
+      }
+    },
+    {
+      "id": "f3a1c2d4-dddd-4ddd-8ddd-555555555555",
+      "title": "Чатов в реестре",
+      "description": "Размер стора SessionManager — все чаты, поднятые из data/sessions.json, а не активность. Полезен как индикатор роста: рывок вверх без роста активных сессий означает, что чаты создаются и не убираются (напр. временные чаты не истекают).",
+      "panelTypes": "graph",
+      "yAxisUnit": "",
+      "timePreferance": "GLOBAL_TIME",
+      "queryType": "builder",
+      "nullZeroValues": "zero",
+      "isStacked": false,
+      "opacity": "1",
+      "fillSpans": false,
+      "softMin": 0,
+      "softMax": 0,
+      "thresholds": [],
+      "query": {
+        "builder": {
+          "queryData": [
+            {
+              "aggregations": [
+                {
+                  "temporality": "Unspecified",
+                  "reduceTo": "avg",
+                  "metricName": "ccs.sessions.total",
+                  "spaceAggregation": "max",
+                  "timeAggregation": "latest"
+                }
+              ],
+              "dataSource": "metrics",
+              "disabled": false,
+              "expression": "A",
+              "filter": {
+                "expression": ""
+              },
+              "functions": [],
+              "groupBy": [
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "deployment.environment",
+                  "isJSON": false,
+                  "dataType": "string"
+                }
+              ],
+              "having": {
+                "expression": ""
+              },
+              "legend": "в реестре · {{deployment.environment}}",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "source": "",
+              "stepInterval": null
+            }
+          ],
+          "queryFormulas": [],
+          "queryTraceOperator": []
+        },
+        "clickhouse_sql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "id": "e6c9d42b-a05f-4b3d-9c4e-5f6071829304",
         "promql": [
           {
             "legend": "",

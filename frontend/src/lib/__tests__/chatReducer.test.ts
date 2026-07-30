@@ -477,10 +477,32 @@ describe('applyServerMessage: exited закрывает фоновые карт�
     expect(next.items[0]).toMatchObject({ bgDone: true, bgAborted: true });
   });
 
+  it('workflow, завершённый вотчером (workflowDone), fail-safe не трогает — успех не превращается в «прервано»', () => {
+    // workflowDone — независимый канал завершения workflow (вотчер workflow_progress),
+    // он может прийти раньше структурного bg_agent_done; exited не должен его перетирать
+    const wf = toolUse('w1', { name: 'Workflow', result: 'Workflow launched in background. Transcript dir: /tmp/x', workflowDone: true });
+    const initial = state({ items: [wf] });
+    const next = run([{ type: 'exited' }], initial);
+    expect(next.items).toBe(initial.items);
+    expect(next.items[0]).not.toHaveProperty('bgAborted');
+    // И опоздавший настоящий bg_agent_done(aborted: false) доезжает — карточка не залипла
+    const done = run([{ type: 'bg_agent_done', toolUseIds: ['w1'], aborted: false }], next);
+    expect(done.items[0]).toMatchObject({ bgDone: true });
+    expect(done.items[0]).not.toHaveProperty('bgAborted', true);
+  });
+
   it('tool_use без результата (ещё не bg) fail-safe не помечает', () => {
     const initial = state({ items: [toolUse('t1')] });
     const next = run([{ type: 'exited' }], initial);
     expect(next.items).toBe(initial.items);
+  });
+
+  it('повторный exited без открытых bg-карточек — no-op (items той же ссылкой)', () => {
+    const initial = state({ items: [{ kind: 'text', text: 'готово' }, toolUse('t9', { result: 'ok' })] });
+    const next = run([{ type: 'exited' }], initial);
+    expect(next.items).toBe(initial.items);
+    const again = run([{ type: 'exited' }], next);
+    expect(again.items).toBe(next.items);
   });
 
   it('fail-safe сочетается с аварийным session_ended: карточки закрыты, разделитель добавлен', () => {

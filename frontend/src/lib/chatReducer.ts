@@ -437,10 +437,12 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
       const abnormal = prev.isWaiting && !(last && (last.kind === 'interrupted' || last.kind === 'error' || last.kind === 'session_ended'));
       // Fail-safe: ещё открытые карточки фоновых агентов закрываем «прервано» — после exited
       // финальное bg_agent_done уже не доедет, иначе спиннер висит навсегда. Уже пришедшие
-      // терминальные статусы (bgDone: успех/ошибка) не перетираем.
+      // терминальные статусы не перетираем: bgDone (успех/ошибка по bg_agent_done) и
+      // workflowDone (успех по вотчеру workflow_progress — у workflow это независимый
+      // канал завершения, он может прийти раньше структурного bg_agent_done).
       let bgClosed = false;
       const items = prev.items.map(item => {
-        if (item.kind !== 'tool_use' || item.bgDone === true || !isBgLaunchResult(item.result)) return item;
+        if (item.kind !== 'tool_use' || item.bgDone === true || item.workflowDone === true || !isBgLaunchResult(item.result)) return item;
         bgClosed = true;
         return { ...item, bgDone: true, bgAborted: true };
       });

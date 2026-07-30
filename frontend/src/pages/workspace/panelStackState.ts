@@ -93,6 +93,15 @@ export function addPanel(layout: PanelKey[][], k: PanelKey): PanelKey[][] {
   return out;
 }
 
+// Куда встанет ЕЩЁ НЕ ОТКРЫТАЯ панель — то же правило, что у addPanel, но без
+// самой вставки: нужно рельсе, чтобы под курсором показать место будущей панели
+// (призрак в раскладке). Возвращает индекс колонки, либо newColumn — панель
+// заведёт свою колонку справа.
+export function nextPlacement(layout: PanelKey[][]): { ci: number } | { newColumn: true } {
+  const last = layout[layout.length - 1];
+  return last && last.length < COL_CAP ? { ci: layout.length - 1 } : { newColumn: true };
+}
+
 // Закрытие панели: удалить, пустые колонки схлопнуть
 export function removePanel(layout: PanelKey[][], k: PanelKey): PanelKey[][] {
   return layout.map(c => c.filter(x => x !== k)).filter(c => c.length > 0);

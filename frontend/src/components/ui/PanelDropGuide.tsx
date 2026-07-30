@@ -1,4 +1,4 @@
-import type { DragEvent } from 'react';
+import type { CSSProperties, DragEvent, HTMLAttributes } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { C, ISLAND } from '../../lib/design';
 
@@ -15,7 +15,7 @@ import { C, ISLAND } from '../../lib/design';
 
 // Ширина/высота дроп-зоны при перетаскивании (только оверлей, в потоке места
 // не занимает — иначе панели ужимались бы на время DnD)
-const SEP_HIT = 22;
+export const SEP_HIT = 22;
 // Толщина направляющей. Длина штрихов у dashed пропорциональна толщине границы,
 // так что чем толще — тем крупнее штрихи.
 // ВАЖНО: у направляющей в покое borderRadius обязан быть 0. Скругление на
@@ -32,15 +32,94 @@ const SEP_INSET = 8;
 //   sepShift(base) = SEP_CLEARANCE + SEP_LINE/2 - base/2
 // Для base = GAP сдвиг нулевой: центр зазора и есть нужное место.
 const SEP_CLEARANCE = 3;
-const sepShift = (base: number) => SEP_CLEARANCE + SEP_LINE / 2 - base / 2;
+// Экспортируется, потому что то же место вставки рисует и наведение на иконку
+// рельсы (PanelZone): считать сдвиг там второй раз значило бы развести знаки —
+// линия наведения уже успела уехать на 9px внутрь панели, пока формула жила здесь.
+export const sepShift = (base: number) => SEP_CLEARANCE + SEP_LINE / 2 - base / 2;
 // Приглушение направляющей в покое: она лишь намекает на возможные места вставки
 // и не должна спорить с контентом панелей. Цвет остаётся C.textSecondary (он задаёт
 // «характер» линии), гасится именно видимость — под курсором возвращается к 1,
 // поэтому переход в акцентную сплошную читается тем заметнее, чем тише покой.
-const SEP_REST_OPACITY = 0.25;
-// Большое место вставки в покое гасится слабее линии: у него есть подложка и
+// Значение общее с рамкой большого места: тонкая линия и контур прямоугольника —
+// один и тот же знак, и при 0.25 линия рядом с ним выглядела выцветшей.
+const SEP_REST_OPACITY = 0.6;
+// Большое место вставки в покое гасится слабее сплошного: у него есть подложка и
 // иконка, и при 0.25 они превращались в грязное пятно вместо подсказки.
 const FILL_REST_OPACITY = 0.6;
+
+// Прямоугольник «сюда встанет панель» — общий знак для двух путей открытия:
+// дроп перетаскиваемой панели и наведение на её иконку в рельсе. Вид один, чтобы
+// одно и то же обещание не выглядело по-разному; отличается только мишень —
+// у наведения её нет (boxProps пуст, сверху ставят pointerEvents: none).
+export function PanelDropSpot({ over = false, icon: Icon, boxProps, style }: {
+  over?: boolean;
+  icon?: LucideIcon;
+  boxProps?: Pick<HTMLAttributes<HTMLDivElement>, 'onDragOver' | 'onDragLeave' | 'onDrop'>;
+  style?: CSSProperties;
+}) {
+  return (
+    <div
+      {...boxProps}
+      style={{
+        boxSizing: 'border-box',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        border: `${SEP_LINE}px dashed ${over ? C.accent : C.textSecondary}`,
+        borderRadius: ISLAND.radius,
+        // Место читается как «сюда встанет панель» — у него есть подложка, а не
+        // только контур: под курсором акцентная, в покое — тон утопленных зон
+        background: over ? C.accentMuted : C.bgInset,
+        color: over ? C.accent : C.textMuted,
+        opacity: over ? 1 : FILL_REST_OPACITY,
+        transition: 'background 0.12s ease, border-color 0.12s ease, opacity 0.12s ease',
+        ...style,
+      }}
+    >
+      {Icon && <Icon size={26} strokeWidth={1.5} />}
+    </div>
+  );
+}
+
+// Направляющая-линия места вставки. Второй знак той же пары, что PanelDropSpot:
+// прямоугольник обещает панель во всю свободную область, линия — что панель
+// втиснется в этот стык. Общий и для дропа, и для наведения на иконку рельсы.
+export function PanelDropLine({ axis, over = false, shift = 0 }: {
+  axis: 'x' | 'y';
+  over?: boolean;
+  // Сдвиг от кромки панели наружу (крайние места вставки) — см. sepShift
+  shift?: number;
+}) {
+  const vertical = axis === 'x';
+  return (
+    // Коридор вокруг линии. Поля вдоль её длины — чтобы направляющая не
+    // упиралась в кромки панелей, а висела в зазоре с воздухом.
+    <div style={{
+      display: 'flex', boxSizing: 'content-box',
+      transform: shift ? `translate${vertical ? 'X' : 'Y'}(${shift}px)` : undefined,
+      ...(vertical
+        ? { width: SEP_LINE, height: '100%', justifyContent: 'center', padding: `${SEP_INSET}px 0` }
+        : { height: SEP_LINE, flex: 1, alignItems: 'center', padding: `0 ${SEP_INSET}px` }),
+    }}>
+      {/* Направляющая: в покое штриховая приглушённая, под курсором —
+          сплошная акцентная. borderRadius в покое строго 0, иначе
+          штриховка вырождается в сплошную (см. SEP_LINE выше). */}
+      <div style={{
+        borderRadius: over ? SEP_LINE : 0,
+        background: over ? C.accent : 'transparent',
+        opacity: over ? 1 : SEP_REST_OPACITY,
+        transition: 'background 0.12s ease, border-color 0.12s ease, opacity 0.12s ease',
+        ...(vertical
+          ? {
+              width: over ? SEP_LINE : 0, height: '100%',
+              borderLeft: over ? 'none' : `${SEP_LINE}px dashed ${C.textSecondary}`,
+            }
+          : {
+              height: over ? SEP_LINE : 0, flex: 1,
+              borderTop: over ? 'none' : `${SEP_LINE}px dashed ${C.textSecondary}`,
+            }),
+      }} />
+    </div>
+  );
+}
 
 export function PanelDropGuide({ axis, dndActive, over, base = 0, edge, fill, icon: Icon, onDragOver, onDragLeave, onDrop }: {
   // 'x' — вертикальная направляющая (между колонками), 'y' — горизонтальная
@@ -85,28 +164,16 @@ export function PanelDropGuide({ axis, dndActive, over, base = 0, edge, fill, ic
         // Свободный низ колонки целиком: и мишень дропа, и рамка будущего места.
         // Линии здесь мало — она сообщала бы «встанет вплотную к панели», хотя
         // панель займёт как раз всю эту пустоту.
-        <div
-          onDragOver={onDragOver}
-          onDragLeave={onDragLeave}
-          onDrop={onDrop}
+        <PanelDropSpot
+          over={over}
+          icon={Icon}
+          boxProps={{ onDragOver, onDragLeave, onDrop }}
           style={{
             position: 'absolute', zIndex: 5,
             left: 0, right: 0, top: base + SEP_CLEARANCE, bottom: 0,
-            boxSizing: 'border-box',
             margin: `0 ${SEP_INSET}px`,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            border: `${SEP_LINE}px dashed ${over ? C.accent : C.textSecondary}`,
-            borderRadius: ISLAND.radius,
-            // Место читается как «сюда встанет панель» — у него есть подложка, а не
-            // только контур: под курсором акцентная, в покое — тон утопленных зон
-            background: over ? C.accentMuted : C.bgInset,
-            color: over ? C.accent : C.textMuted,
-            opacity: over ? 1 : FILL_REST_OPACITY,
-            transition: 'background 0.12s ease, border-color 0.12s ease, opacity 0.12s ease',
           }}
-        >
-          {Icon && <Icon size={26} strokeWidth={1.5} />}
-        </div>
+        />
       ) : dndActive && (
         <div
           onDragOver={onDragOver}
@@ -125,34 +192,7 @@ export function PanelDropGuide({ axis, dndActive, over, base = 0, edge, fill, ic
                 }),
           }}
         >
-          {/* Коридор вокруг линии. Поля вдоль её длины — чтобы направляющая не
-              упиралась в кромки панелей, а висела в зазоре с воздухом. */}
-          <div style={{
-            display: 'flex', boxSizing: 'content-box',
-            transform: shift ? `translate${vertical ? 'X' : 'Y'}(${shift}px)` : undefined,
-            ...(vertical
-              ? { width: SEP_LINE, height: '100%', justifyContent: 'center', padding: `${SEP_INSET}px 0` }
-              : { height: SEP_LINE, flex: 1, alignItems: 'center', padding: `0 ${SEP_INSET}px` }),
-          }}>
-            {/* Направляющая: в покое штриховая приглушённая, под курсором —
-                сплошная акцентная. borderRadius в покое строго 0, иначе
-                штриховка вырождается в сплошную (см. SEP_LINE выше). */}
-            <div style={{
-              borderRadius: over ? SEP_LINE : 0,
-              background: over ? C.accent : 'transparent',
-              opacity: over ? 1 : SEP_REST_OPACITY,
-              transition: 'background 0.12s ease, border-color 0.12s ease, opacity 0.12s ease',
-              ...(vertical
-                ? {
-                    width: over ? SEP_LINE : 0, height: '100%',
-                    borderLeft: over ? 'none' : `${SEP_LINE}px dashed ${C.textSecondary}`,
-                  }
-                : {
-                    height: over ? SEP_LINE : 0, flex: 1,
-                    borderTop: over ? 'none' : `${SEP_LINE}px dashed ${C.textSecondary}`,
-                  }),
-            }} />
-          </div>
+          <PanelDropLine axis={axis} over={over} shift={shift} />
         </div>
       )}
     </div>

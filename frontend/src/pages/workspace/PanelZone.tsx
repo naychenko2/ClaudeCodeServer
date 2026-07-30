@@ -27,7 +27,7 @@ import { IslandSplitter } from '../../components/ui/IslandSplitter';
 import { useWindowWidth } from '../../lib/breakpoints';
 import {
   PANEL_META, PANEL_KEYS, PROJECT_KEYS, SESSION_KEYS, TOOLS_KEYS, WORKSPACE_KEYS,
-  type PanelKey, type Zone,
+  isFixedHeight, type PanelKey, type Zone,
 } from './panelCatalog';
 import { wsPanels, homeOf, isZoneCollapsed, zoneOf, type PanelZonesStore } from './panelStackState';
 import { usePanelDnd, usePanelRowResize, usePanelWidthDrag } from './zoneGestures';
@@ -358,6 +358,9 @@ export function PanelZone({
   // больше, высоту делят веса слотов — тогда между ними и появляется хендл ресайза.
   const renderPanel = (k: PanelKey, multiInCol: boolean): ReactNode => {
     const { title, Icon } = PANEL_META[k];
+    // Панель фиксированной высоты (переключатель проектов) высоту не делит:
+    // растянутая, она давала бы полколонки пустоты под одной строкой контента
+    const byContent = isFixedHeight(k);
     const shell = (
       <PanelShell
         icon={<Icon size={15} strokeWidth={ICON_STROKE} color={C.textSecondary} style={{ flexShrink: 0 }} />}
@@ -369,7 +372,7 @@ export function PanelZone({
         // там, где её только что закрыли.
         onClose={compact ? () => setTabletPanels(cur => cur.filter(x => x !== k)) : () => closeTo(side, k)}
         closeMode={compact ? 'button' : 'icon'}
-        fill={multiInCol}
+        fill={multiInCol && !byContent}
         flash={flash?.key === k}
         slideDirection={isLeft ? 'left' : 'up'}
         // Анимация появления — только когда карточка действительно возникла на
@@ -385,7 +388,9 @@ export function PanelZone({
         {content(k)}
       </PanelShell>
     );
-    if (!multiInCol) return shell;
+    // Слот с весом — только у панелей, которые высоту делят. Панель по контенту
+    // идёт в колонку как есть: вес ей нечего распределять.
+    if (!multiInCol || byContent) return shell;
     return (
       <PanelSlot
         weight={zones.weights[k]}
@@ -506,12 +511,16 @@ export function PanelZone({
                 {ri > 0 && (
                   dnd.active
                     ? rowGuide(col, vi, ri, GAP)
-                    : <IslandSplitter
-                        orientation="h"
-                        active={rowDragging === `${vi}:${ri}`}
-                        onMouseDown={handleRowDrag(col.keys[ri - 1], k, `${vi}:${ri}`)}
-                        gap={GAP}
-                      />
+                    // Панель фиксированной высоты не делит её с соседом — тянуть
+                    // между ними нечего, остаётся простой зазор вместо хендла
+                    : isFixedHeight(k) || isFixedHeight(col.keys[ri - 1])
+                      ? <div style={{ height: GAP, flexShrink: 0 }} />
+                      : <IslandSplitter
+                          orientation="h"
+                          active={rowDragging === `${vi}:${ri}`}
+                          onMouseDown={handleRowDrag(col.keys[ri - 1], k, `${vi}:${ri}`)}
+                          gap={GAP}
+                        />
                 )}
                 {renderPanel(k, col.keys.length > 1)}
               </Fragment>

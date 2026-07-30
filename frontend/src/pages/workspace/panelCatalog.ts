@@ -15,7 +15,7 @@
 // это разные типы: там, где импортируются оба, брать один из них под алиасом.
 import {
   ClipboardList, FolderTree, GitCompare, ListTodo, Bot, User, Users,
-  SquareTerminal, MonitorPlay, Network, MessageCircle, NotebookPen, Library,
+  SquareTerminal, MonitorPlay, Network, MessageCircle, NotebookPen, Library, LayoutGrid,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -28,7 +28,7 @@ export type Zone = 'left' | 'right';
 // решает сам экран (проп allowedKeys у PanelZone): в воркспейсе — инструменты
 // проекта и сессии, в разделах хаба — их собственные панели.
 export const PANEL_KEYS = [
-  'chats', 'files', 'changes', 'tasks', 'graph', 'team', 'terminal', 'preview',
+  'projects', 'chats', 'files', 'changes', 'tasks', 'graph', 'team', 'terminal', 'preview',
   'plan', 'agents', 'context',
   // Панели разделов хаба
   'notesList', 'notesGraph', 'knowledgeList', 'personasList', 'projectGroups',
@@ -37,6 +37,9 @@ export type PanelKey = typeof PANEL_KEYS[number];
 
 // Иконка и заголовок панели — общие для обеих зон.
 export const PANEL_META: Record<PanelKey, { title: string; Icon: LucideIcon }> = {
+  // Переключатель проектов: сменить проект, не уходя из воркспейса. Иконка та же,
+  // что у «Всех проектов» в палитре и сайдбаре раздела — одна сущность, один знак.
+  projects: { title: 'Проекты',   Icon: LayoutGrid },
   chats:    { title: 'Чаты',      Icon: MessageCircle },
   files:    { title: 'Файлы',     Icon: FolderTree },
   changes:  { title: 'Изменения', Icon: GitCompare },
@@ -65,6 +68,7 @@ export const PANEL_META: Record<PanelKey, { title: string; Icon: LucideIcon }> =
 // открывается по умолчанию. Открытая панель показывает иконку в ТОЙ зоне, где
 // лежит, — то есть иконка ездит вместе с панелью, а закрытие возвращает её домой.
 export const PANEL_HOME: Record<PanelKey, Zone> = {
+  projects: 'left',
   chats: 'left',
   files: 'right',
   changes: 'right',
@@ -86,7 +90,7 @@ export const PANEL_HOME: Record<PanelKey, Zone> = {
 
 // Наборы ключей по экранам — что вообще доступно в этой рельсе (проп allowedKeys)
 export const WORKSPACE_KEYS: readonly PanelKey[] = [
-  'chats', 'files', 'changes', 'tasks', 'graph', 'team', 'terminal', 'preview',
+  'projects', 'chats', 'files', 'changes', 'tasks', 'graph', 'team', 'terminal', 'preview',
   'plan', 'agents', 'context',
 ];
 // Раздел «Чаты»: список чатов плюс панели активной сессии (проекта там нет)
@@ -108,6 +112,17 @@ export const PROJECT_KEYS: readonly PanelKey[] = PANEL_KEYS.filter(k => !SESSION
 
 // Панели, доступные только при включённых инструментах проекта.
 export const TOOLS_KEYS: readonly PanelKey[] = ['terminal', 'preview'];
+
+// Панели ФИКСИРОВАННОЙ ВЫСОТЫ: их содержимое не тянется (строка-переключатель
+// проектов), и растянутая карточка дала бы полколонки пустоты под одной строкой.
+// Такая панель всегда стоит по контенту — и в одиночку, и в общей колонке; высоту
+// между собой делят остальные, а хендл ресайза рядом с ней не рисуется: тянуть
+// нечего. Первая такая панель — «Проекты».
+export const FIXED_HEIGHT_KEYS: readonly PanelKey[] = ['projects'];
+
+export function isFixedHeight(k: PanelKey): boolean {
+  return FIXED_HEIGHT_KEYS.includes(k);
+}
 
 export function isPanelKey(v: unknown): v is PanelKey {
   return typeof v === 'string' && (PANEL_KEYS as readonly string[]).includes(v);

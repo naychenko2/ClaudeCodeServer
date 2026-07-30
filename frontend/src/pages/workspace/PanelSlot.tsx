@@ -1,15 +1,21 @@
 import type { ReactNode } from 'react';
 import { PANEL_MIN_H } from './panelStackState';
 
-// Место панели в колонке — общее для левой и правой зон: высота по весу слота,
-// кламп снизу и плавное перераспределение при открытии/закрытии соседей.
+// Место панели в колонке — общее для левой и правой зон: высота по весу слота
+// и кламп снизу.
 //
 // Вес — свойство СЛОТА, а не панели: при перестановке панели меняются местами
 // вместе с весами (см. swapWith в panelStackState), поэтому раскладка не «прыгает».
-export function PanelSlot({ weight = 1, resizing, slotRef, children }: {
+//
+// Слот оборачивает панель ВСЕГДА, даже когда та высоту не делит: разная обёртка
+// в двух ветках меняла тип узла на позиции, React размонтировал карточку и
+// монтировал заново — соседняя панель при открытии второй в колонке проигрывала
+// анимацию появления и теряла своё состояние (раскрытые папки, скролл, поиск).
+export function PanelSlot({ weight = 1, fill = true, slotRef, children }: {
   weight?: number;
-  // Идёт ручной drag границы — transition выключается, иначе слот отстаёт от курсора
-  resizing: boolean;
+  // Панель делит высоту колонки по весу. false — высота по контенту: одиночная
+  // панель в колонке и панели фиксированной высоты (переключатель проектов).
+  fill?: boolean;
   slotRef?: (el: HTMLDivElement | null) => void;
   children: ReactNode;
 }) {
@@ -19,9 +25,13 @@ export function PanelSlot({ weight = 1, resizing, slotRef, children }: {
     <div
       ref={slotRef}
       style={{
-        flex: `${weight} 1 0`, minHeight: PANEL_MIN_H,
+        // Перераспределение высоты идёт БЕЗ transition: панель, которую не
+        // трогали, не должна ехать из-за соседа — ни при открытии второй панели
+        // в колонке, ни при её закрытии, ни при ручном перетаскивании границы
+        // (там плавность вообще вредна — слот отставал бы от курсора).
+        flex: fill ? `${weight} 1 0` : '0 1 auto',
+        minHeight: fill ? PANEL_MIN_H : 0,
         display: 'flex', flexDirection: 'column', minWidth: 0,
-        transition: resizing ? 'none' : 'flex-grow 0.15s ease-out',
       }}
     >
       {children}

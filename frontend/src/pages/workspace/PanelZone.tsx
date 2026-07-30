@@ -422,14 +422,17 @@ export function PanelZone({
         {content(k)}
       </PanelShell>
     );
-    // Слот с весом — только у панелей, которые высоту делят. Панель по контенту
-    // идёт в колонку как есть: вес ей нечего распределять.
-    if (!multiInCol || byContent) return shell;
+    // Слот ставится ВСЕГДА — иначе при появлении соседа в колонке менялся бы тип
+    // узла на позиции и React перемонтировал бы карточку (анимация появления на
+    // ровном месте и потерянное состояние панели). Вес распределяют только те,
+    // кто высоту делит; остальным слот отдаёт высоту по контенту.
+    const shares = multiInCol && !byContent;
     return (
       <PanelSlot
-        weight={zones.weights[k]}
-        resizing={rowDragging != null}
-        slotRef={el => { panelRefs.current[k] = el; }}
+        fill={shares}
+        weight={shares ? zones.weights[k] : undefined}
+        // Ссылка на слот нужна ресайзу высот — а он бывает только у делящих
+        slotRef={shares ? el => { panelRefs.current[k] = el; } : undefined}
       >
         {shell}
       </PanelSlot>

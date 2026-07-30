@@ -131,6 +131,17 @@ export function isFixedHeight(k: PanelKey): boolean {
   return FIXED_HEIGHT_KEYS.includes(k);
 }
 
+// Панели ПОЛНОЙ ВЫСОТЫ: тянутся до нижней кромки ВСЕГДА, включая одиночную панель
+// в колонке у центра, где прочие стоят по контенту (см. panelStretched). Для таких
+// панелей контент — связный корпус на весь экран (документация: дерево + оглавление
+// + просмотр), и обрезок по высоте с пустым низом под ним читается как полупустая
+// карточка. Зеркальная пара к FIXED_HEIGHT_KEYS; пересекаться наборы не должны.
+export const FULL_HEIGHT_KEYS: readonly PanelKey[] = ['docs'];
+
+export function isFullHeight(k: PanelKey): boolean {
+  return FULL_HEIGHT_KEYS.includes(k);
+}
+
 export function isPanelKey(v: unknown): v is PanelKey {
   return typeof v === 'string' && (PANEL_KEYS as readonly string[]).includes(v);
 }

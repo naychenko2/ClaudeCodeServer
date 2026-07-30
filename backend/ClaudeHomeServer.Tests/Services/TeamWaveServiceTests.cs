@@ -408,7 +408,17 @@ public class TeamWaveServiceTests : IDisposable
             """;
         var (plan, reason) = await _sessions.CreateTeamPlanAsync(session.Id, "Экспорт задач в CSV", UserId);
         reason.Should().BeNull();
-        return (_sessions.GetById(session.Id)!, plan!);
+
+        // Держим штаб «занятым»: закрытие волны шлёт координатору сводку (summaryTurn), а у
+        // свободного чата это запускает РЕАЛЬНЫЙ ход claude (TestLauncherFactory → LocalProcessRunner).
+        // На CI (ubuntu без claude) такой ход падает мгновенно и асинхронно через
+        // HandleTeamTurnEndAsync переводит только что выставленную стадию Checking в AwaitingDecision —
+        // проверка входа в Checking гоняется с этим падением. При статусе Working сводка уходит
+        // в очередь (EnqueuePending), процесс не стартует, стадия детерминирована. Ход штаба тесты
+        // класса и так симулируют вручную (HandleTeamTurnEndAsync), на реальный запуск не полагаясь.
+        var running = _sessions.GetById(session.Id)!;
+        running.Status = SessionStatus.Working;
+        return (running, plan!);
     }
 
     private SessionTeamImplement Team(string sessionId) => _sessions.GetById(sessionId)!.TeamImplement!;
@@ -874,6 +884,11 @@ public class TeamWaveServiceTests : IDisposable
             """;
         var (plan, _) = await _sessions.CreateTeamPlanAsync(session.Id, "Экспорт задач в CSV", UserId);
         await _sessions.RespondTeamPlanAsync(session.Id, plan!.Id, TeamPlanDecision.Run, userId: UserId);
+
+        // Штаб «занят»: сводка закрытой волны уходит в очередь, а не запускает реальный ход
+        // claude, который на CI без claude падает и роняет Checking → AwaitingDecision (см. подробно
+        // в MakeRunningStabAsync). Ход штаба тест ниже симулирует вручную (HandleTeamTurnEndAsync).
+        _sessions.GetById(session.Id)!.Status = SessionStatus.Working;
 
         // Итерация отработала: обе волны закрыты исполнителями, координатор подвёл итог
         foreach (var wave in (int[])[1, 2])

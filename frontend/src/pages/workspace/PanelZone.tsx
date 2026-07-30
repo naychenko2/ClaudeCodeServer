@@ -34,7 +34,7 @@ import { IslandSplitter } from '../../components/ui/IslandSplitter';
 import { useWindowWidth } from '../../lib/breakpoints';
 import {
   PANEL_META, PANEL_KEYS, PROJECT_KEYS, SESSION_KEYS, TOOLS_KEYS, WORKSPACE_KEYS,
-  isFixedHeight, type PanelKey, type Zone,
+  isFixedHeight, isFullHeight, type PanelKey, type Zone,
 } from './panelCatalog';
 import { wsPanels, homeOf, isZoneCollapsed, nextPlacement, zoneOf, PANEL_MIN_H, type PanelZonesStore } from './panelStackState';
 import { usePanelColResize, usePanelDnd, usePanelRowResize, usePanelWidthDrag } from './zoneGestures';
@@ -146,9 +146,11 @@ export function PanelZone({
   // должен растягиваться на весь экран. Как только в колонке у центра 2+ панели —
   // они тянутся до низа и делят высоту по весам (обычный ресайз), иначе колонка
   // рваная. Во втором и дальних рядах панели тянутся всегда. Фиксированные
-  // (FIXED_HEIGHT_KEYS) не тянутся нигде. colLen — число панелей в колонке.
+  // (FIXED_HEIGHT_KEYS) не тянутся нигде; панели полной высоты (FULL_HEIGHT_KEYS,
+  // напр. Документация) — тянутся всегда, даже одиночкой у центра. colLen — число
+  // панелей в колонке.
   const panelStretched = (k: PanelKey, vi: number, colLen: number): boolean =>
-    !isFixedHeight(k) && (vi !== centerVi || colLen > 1);
+    !isFixedHeight(k) && (isFullHeight(k) || vi !== centerVi || colLen > 1);
   // Колонка стоит по контенту целиком — под ней свободный низ (место для новой
   // панели, растяжимая направляющая, укороченный сплиттер ширины).
   const colByContent = (keys: PanelKey[], vi: number): boolean =>
@@ -449,7 +451,7 @@ export function PanelZone({
     // растянутая, она давала бы полколонки пустоты под одной строкой контента
     const byContent = isFixedHeight(k);
     const stretched = vi === undefined
-      ? multiInCol && !byContent
+      ? (multiInCol || isFullHeight(k)) && !byContent
       : panelStretched(k, vi, multiInCol ? 2 : 1);
     const shell = (
       <PanelShell
@@ -600,7 +602,7 @@ export function PanelZone({
   };
   const splitterLen = compact
     // Компактный стек: две панели делят высоту между собой, одна стоит по контенту
-    ? contentLen(tabletKeys, k => tabletKeys.length > 1 && !isFixedHeight(k))
+    ? contentLen(tabletKeys, k => (tabletKeys.length > 1 || isFullHeight(k)) && !isFixedHeight(k))
     : (columns[centerVi]
         ? contentLen(columns[centerVi].keys, k => panelStretched(k, centerVi, columns[centerVi].keys.length))
         : null);

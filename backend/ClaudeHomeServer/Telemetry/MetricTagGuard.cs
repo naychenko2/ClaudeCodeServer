@@ -32,7 +32,7 @@ public static class MetricTagGuard
     /// <summary>Значение не прошло форму или лимит различных значений.</summary>
     public const string Overflow = "other";
 
-    // Реальных MCP-инструментов ≤ 80-90 (docs/observability-audit.md) — запас втрое.
+    // Реальных MCP-инструментов ≤ 80-90 (docs/observability/audit.md) — запас втрое.
     private static readonly TagValueLimiter Tools = new(256);
 
     // Моделей у инстанса единицы: три слота тиров, пантеон персон, direct:-маршруты

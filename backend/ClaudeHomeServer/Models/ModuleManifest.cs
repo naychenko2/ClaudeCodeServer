@@ -4,7 +4,7 @@ namespace ClaudeHomeServer.Models;
 
 /// <summary>
 /// Манифест внешнего модуля (module.json) по контракту
-/// docs/module-platform-integration-contract.md §2. Читается ModuleRegistry на старте.
+/// docs/modules/integration-contract.md §2. Читается ModuleRegistry на старте.
 /// Поля контракта мажора 1; неизвестные поля манифеста игнорируются (forward-compat).
 /// </summary>
 public sealed class ModuleManifest

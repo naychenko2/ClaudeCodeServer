@@ -6,7 +6,7 @@
 # OTLP: localhost:4317 (gRPC), localhost:4318 (HTTP) → контейнер ingester
 #
 # Vendored compose: docker/observability/compose.yaml (сгенерирован Foundry)
-# Docs: docs/observability-signoz-setup.md, docs/observability-dashboards.md
+# Docs: docs/observability/signoz-setup.md, docs/observability/dashboards.md
 
 # Overlay для SigNoz observability stack.
 #

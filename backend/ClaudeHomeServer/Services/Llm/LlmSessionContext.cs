@@ -72,7 +72,7 @@ public sealed record WidgetsMcpContext;
 // SessionId уезжает в X-Caller-Session-Id (наблюдаемость GET /api/mcp/calls).
 public sealed record CodeGraphMcpContext(string ApiUrl, string Token, string ProjectId, string? SessionId = null);
 
-// Один MCP-сервер внешнего модуля (контракт docs/module-platform-integration-contract.md §6):
+// Один MCP-сервер внешнего модуля (контракт docs/modules/integration-contract.md §6):
 // Key — ключ сервера в mcp-конфиге хода, Command/Args — запуск из манифеста (args уже
 // резолвнуты от каталога модуля), ModuleId — id модуля, ApiUrl — адрес модуля ЧЕРЕЗ gateway
 // ядра ({ядро}/api/modules/{id}), TokenFactory — свежий модульный токен chan=mcp (TTL 60 мин)

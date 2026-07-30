@@ -120,7 +120,7 @@ public static class ObservabilityExtensions
             // он устарел: AspNetCore/Http 1.17.0 дают GA-метрики, а метры ниже нативны в .NET 10.
             //
             // PII: метрики идут в pipeline БЕЗ PiiSanitizingProcessor (он только в WithTracing).
-            // Все перечисленные метры вычитаны на PII-аудите (см. docs/observability-dashboards.md):
+            // Все перечисленные метры вычитаны на PII-аудите (см. docs/observability/dashboards.md):
             // ни один не несёт user_id/session_id/path/prompt — только method/route/status/host.
             m.AddMeter("Microsoft.AspNetCore.Hosting");     // http.server.request.duration
             m.AddMeter("Microsoft.AspNetCore.Server.Kestrel"); // kestrel.active_connections, tls handshakes

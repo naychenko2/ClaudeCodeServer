@@ -5,7 +5,7 @@ namespace ClaudeHomeServer.Telemetry.Alerts;
 ///
 /// Направление запроса — от приложения к SigNoz. Обратное (webhook из контейнера в CCS)
 /// упирается в привязку боевого хоста по имени: http.sys отвечает
-/// «Bad Request - Invalid Hostname», см. docs/observability.md.
+/// «Bad Request - Invalid Hostname», см. docs/observability/overview.md.
 /// </summary>
 public sealed class SignozAlertsClient(
     IHttpClientFactory factory,

@@ -1,5 +1,5 @@
 // Чип общего тега на карточке чата + меню маркировки (мультивыбор чекбоксами).
-// Визуал — по макету docs/mockups/chat-tags-switch.html: тонированный фон от цвета
+// Визуал — по макету docs/design/mockups/chat-tags-switch.html: тонированный фон от цвета
 // тега (цвет без реестра → accent), точка-индикатор, крестик удаления по hover.
 import { useEffect, useState } from 'react';
 import { Check, Plus, X } from 'lucide-react';

@@ -46,7 +46,7 @@
 
 .NOTES
     SigNoz v0.71 dashboard API — v1 (snake_case, layout+widgets, НЕ Perses v2).
-    Документация схемы: docs/observability-dashboards.md.
+    Документация схемы: docs/observability/dashboards.md.
 #>
 [CmdletBinding(DefaultParameterSetName = 'Jwt')]
 param(

@@ -1613,7 +1613,7 @@ export interface CreateNotificationRequest {
 
 // ===== Аналитика расхода токенов (Spend Analytics v2, /api/spend/*) =====
 
-// Токены везде объектом — форма ответа бэкенда (docs/spend-analytics-v2-api.md)
+// Токены везде объектом — форма ответа бэкенда (docs/architecture/spend-analytics-api.md)
 export interface SpendTokens {
   input: number;
   output: number;

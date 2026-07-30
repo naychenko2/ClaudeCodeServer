@@ -93,7 +93,7 @@ builder.Services.AddSignalR(o =>
             new JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase)));
 
 // Observability: OTel SDK (traces + metrics) с two-mode конфигурацией.
-// Конфиг через секцию Telemetry в appsettings*.json. См. docs/observability.md.
+// Конфиг через секцию Telemetry в appsettings*.json. См. docs/observability/overview.md.
 builder.Services.AddObservability(builder.Configuration);
 
 builder.Services.AddSingleton<UserStore>();
@@ -281,7 +281,7 @@ builder.Services.AddReverseProxy()
         // живого бэкенда и не блокирует шлюз надолго при недоступности.
         handler.ConnectTimeout = TimeSpan.FromSeconds(2);
     });
-// Платформа внешних модулей (docs/module-platform-integration-contract.md): реестр манифестов,
+// Платформа внешних модулей (docs/modules/integration-contract.md): реестр манифестов,
 // RS256-токены с JWKS и ДОБАВОЧНЫЙ провайдер YARP-конфига из реестра (LoadFromConfig выше
 // не заменяется — YARP объединяет несколько IProxyConfigProvider, существующие маршруты
 // OnlyOffice/drawio/forgejo работают как раньше).

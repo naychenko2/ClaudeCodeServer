@@ -27,7 +27,7 @@
     .\apply-alerts.ps1
 
 .NOTES
-    Схема правила снята с DTO SigNoz v0.134; разбор — docs/observability.md, раздел «Алертинг».
+    Схема правила снята с DTO SigNoz v0.134; разбор — docs/observability/overview.md, раздел «Алертинг».
 #>
 [CmdletBinding()]
 param(

@@ -1,6 +1,6 @@
 {
   "title": "Здоровье сервера",
-  "description": "Что происходит с сервером: живой ли он, как быстро отвечают модели, что ломается, чем пользуются агенты. Метрики — Meter ClaudeHomeServer.Core (backend/ClaudeHomeServer/Telemetry/ServerMetrics.cs). Дев и боевой инстанс шлют в один SigNoz, поэтому панели разрезаны по deployment.environment. Источник правды — docker/observability/dashboards/llm-operations.json, применяется через apply.ps1; тонкости схемы и разбор пустых панелей — docs/observability-dashboards.md.",
+  "description": "Что происходит с сервером: живой ли он, как быстро отвечают модели, что ломается, чем пользуются агенты. Метрики — Meter ClaudeHomeServer.Core (backend/ClaudeHomeServer/Telemetry/ServerMetrics.cs). Дев и боевой инстанс шлют в один SigNoz, поэтому панели разрезаны по deployment.environment. Источник правды — docker/observability/dashboards/llm-operations.json, применяется через apply.ps1; тонкости схемы и разбор пустых панелей — docs/observability/dashboards.md.",
   "tags": [
     "claude-home-server",
     "llm",

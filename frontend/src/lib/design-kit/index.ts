@@ -1,5 +1,5 @@
 // Design-kit ядра для внешних модулей — единый entry MF-expose
-// 'aihome_shell/design-kit' (контракт §7.1, docs/module-platform-integration-contract.md).
+// 'aihome_shell/design-kit' (контракт §7.1, docs/modules/integration-contract.md).
 //
 // Правила состава (R16): мажор кита = мажор schemaVersion контракта; добавление
 // экспорта — минор, удаление или смена публичного API — мажор. Модуль сверяет

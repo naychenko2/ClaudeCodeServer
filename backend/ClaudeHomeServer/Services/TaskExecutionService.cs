@@ -181,7 +181,7 @@ public class TaskExecutionService
         sb.AppendLine("## ОБЯЗАТЕЛЬНО");
         sb.AppendLine("- Задача уже переведена в статус inProgress — поддерживай статус актуальным.");
         // Верификационная дисциплина и правило остановки — из oh-my-openagent
-        // (Hephaestus/Sisyphus-Junior, см. docs/omo-adoption.md)
+        // (Hephaestus/Sisyphus-Junior, см. docs/omo/adoption.md)
         sb.AppendLine("- НЕТ СВИДЕТЕЛЬСТВ = НЕ ГОТОВО: перед завершением прогони фактическую проверку " +
                       "(сборка, тесты, реальный результат) и приведи её вывод в итоге.");
         sb.AppendLine("- Делегировал часть работы субагенту — не доверяй его отчёту на слово, проверь результат сам.");

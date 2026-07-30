@@ -8,7 +8,7 @@ import { useChatDrag } from './ChatGroupingDnd';
 // === Строка дерева чатов: отступ + connector-линии + chevron вокруг ChatCard ===
 // Линии и контрол рисуются здесь, а НЕ в карточке: у ChatCard overflow:hidden,
 // он обрезал бы вертикали. Сама карточка передаётся как children без изменений.
-// Геометрия — docs/mockups/chat-list-tree-spec.md: одна формула оси spineX на всех
+// Геометрия — docs/design/mockups/chat-list-tree-spec.md: одна формула оси spineX на всех
 // уровнях, глубина отступа клампится на 6.
 //
 // Строка одновременно источник и цель перетаскивания (ручная группировка —

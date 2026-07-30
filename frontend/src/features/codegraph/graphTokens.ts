@@ -1,6 +1,6 @@
 // Цвета и глифы графа — производные от токенов дизайн-системы (C.*). Никакого
 // сырого hex: меняется тема — меняются и цвета узлов/рёбер. Соответствие токенов
-// семантике связей и типов — из макета Майи (docs/mockups/code-graph-panel.md).
+// семантике связей и типов — из макета Майи (docs/design/mockups/code-graph-panel.md).
 import { C } from '../../lib/design';
 import type { CodeGraphNodeKind, CodeGraphRelation, CodeGraphConfidence } from '../../types';
 

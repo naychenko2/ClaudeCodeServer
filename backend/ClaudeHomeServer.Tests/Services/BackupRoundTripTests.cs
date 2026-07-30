@@ -290,6 +290,13 @@ public class BackupRoundTripTests : IDisposable
         thread.Start();
         thread.Join();
 
+        // Thread.Join не гарантирует, что ОС уже пометила именованный мьютекс
+        // заброшенным — под нагрузкой между завершением потока и AbandonedMutexException
+        // есть окно, и мгновенный ассерт флакал. Опрос с дедлайном вместо него.
+        var deadline = DateTime.UtcNow.AddSeconds(2);
+        while (InstanceLock.IsServerRunning(DataDir) && DateTime.UtcNow < deadline)
+            Thread.Sleep(50);
+
         InstanceLock.IsServerRunning(DataDir).Should().BeFalse();
         InstanceLock.IsServerRunning(DataDir).Should().BeFalse();
     }

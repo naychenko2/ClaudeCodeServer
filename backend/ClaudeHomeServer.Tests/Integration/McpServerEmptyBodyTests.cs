@@ -41,17 +41,37 @@ public class McpServerEmptyBodyTests
         return port;
     }
 
+    // Между пробой свободного порта и bind'ом — TOCTOU-окно: параллельный тест или
+    // процесс может занять порт, и тест флакал на HttpListenerException. Ретрай
+    // с новым портом; пять отказов подряд — среда без HttpListener, пропуск как раньше.
+    private static HttpListener StartHttpListenerWithRetry(out int port)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            var candidate = FreeTcpPort();
+            var listener = new HttpListener();
+            listener.Prefixes.Add($"http://localhost:{candidate}/");
+            try
+            {
+                listener.Start();
+                port = candidate;
+                return listener;
+            }
+            catch (HttpListenerException ex)
+            {
+                listener.Close();
+                if (attempt >= 5) Skip.If(true, $"HttpListener недоступен: {ex.Message}");
+            }
+        }
+    }
+
     [SkippableFact]
     public void ПустоеТелоУспешногоОтвета_ЗаписьНеСчитаетсяОшибкой()
     {
         var serverPath = FindServerPath("workspace-server");
         Skip.If(serverPath is null, "mcp/workspace-server/index.js не найден");
 
-        var port = FreeTcpPort();
-        using var listener = new HttpListener();
-        listener.Prefixes.Add($"http://localhost:{port}/");
-        try { listener.Start(); }
-        catch (HttpListenerException ex) { Skip.If(true, $"HttpListener недоступен: {ex.Message}"); }
+        using var listener = StartHttpListenerWithRetry(out var port);
 
         // Заглушка бэкенда отвечает ровно как FilesController.MkDir: 200 и ни байта тела
         _ = Task.Run(async () =>

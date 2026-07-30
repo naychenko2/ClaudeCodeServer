@@ -43,6 +43,30 @@ public class McpServerRetryTests
         return port;
     }
 
+    // Между пробой свободного порта и bind'ом — TOCTOU-окно: параллельный тест или
+    // процесс может занять порт, и тест флакал на HttpListenerException. Ретрай
+    // с новым портом; пять отказов подряд — среда без HttpListener, пропуск как раньше.
+    private static HttpListener StartHttpListenerWithRetry(out int port)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            var candidate = FreeTcpPort();
+            var listener = new HttpListener();
+            listener.Prefixes.Add($"http://localhost:{candidate}/");
+            try
+            {
+                listener.Start();
+                port = candidate;
+                return listener;
+            }
+            catch (HttpListenerException ex)
+            {
+                listener.Close();
+                if (attempt >= 5) Skip.If(true, $"HttpListener недоступен: {ex.Message}");
+            }
+        }
+    }
+
     /// <summary>
     /// Гоняет один tools/call против заглушки, отвечающей по сценарию.
     /// Возвращает (текст ответа модели, isError, сколько запросов дошло до бэкенда).
@@ -53,11 +77,7 @@ public class McpServerRetryTests
         var serverPath = FindServerPath("tasks-server");
         Skip.If(serverPath is null, "mcp/tasks-server/index.js не найден");
 
-        var port = FreeTcpPort();
-        using var listener = new HttpListener();
-        listener.Prefixes.Add($"http://localhost:{port}/");
-        try { listener.Start(); }
-        catch (HttpListenerException ex) { Skip.If(true, $"HttpListener недоступен: {ex.Message}"); }
+        using var listener = StartHttpListenerWithRetry(out var port);
 
         var requests = 0;
         using var stop = new CancellationTokenSource();

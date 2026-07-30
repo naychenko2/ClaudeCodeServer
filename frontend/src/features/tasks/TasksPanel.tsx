@@ -148,8 +148,11 @@ export function TasksPanel({ project, selectedTaskId, onSelect, isMobile, boardM
       {/* Контролы в шапке карточки: [фильтр] [вид] [+ новая задача].
           Создание — последним и залитым accent: это главное действие панели,
           и в ряду нейтральных иконок оно должно читаться первым. Funnel скрыт
-          в режиме «Доска» (там свой BoardToolbar). */}
+          в режиме «Доска» (там свой BoardToolbar). Кнопка создания живёт в
+          закреплённом слоте (pinned) — она видна всегда, а нейтральные иконки
+          по-прежнему проявляются по наведению на карточку. */}
       {inHeader && (
+        <>
         <PanelHeaderSlot>
           {panelTab !== 'board' && (
             <TasksListFilterButton
@@ -169,6 +172,8 @@ export function TasksPanel({ project, selectedTaskId, onSelect, isMobile, boardM
             ])}
             onChange={onPanelTab}
           />
+        </PanelHeaderSlot>
+        <PanelHeaderSlot pinned>
           <Button
             variant="primary" size="xs" title="Новая задача"
             leftIcon={<Plus size={13} strokeWidth={ICON_STROKE} />}
@@ -177,6 +182,7 @@ export function TasksPanel({ project, selectedTaskId, onSelect, isMobile, boardM
             Задача
           </Button>
         </PanelHeaderSlot>
+        </>
       )}
 
       {/* Без шапки (мобила): та же тройка контролов, но полноразмерная — кнопка

@@ -25,7 +25,8 @@ export function ProjectsPanel({ project, onOpenSettings }: {
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: C.bgWhite }}>
       {/* Две кнопки одной высоты: нейтральный поиск и акцентное создание. Поиск
           открывает палитру поверх центра — она умеет и переход к проекту, и
-          «Все проекты», и создание. */}
+          «Все проекты», и создание. Создание — в закреплённом слоте (pinned):
+          видно всегда, поиск проявляется по наведению на карточку. */}
       <PanelHeaderSlot>
         <Button
           variant="ghost" size="xs" title="Перейти к проекту"
@@ -34,6 +35,8 @@ export function ProjectsPanel({ project, onOpenSettings }: {
         >
           Найти
         </Button>
+      </PanelHeaderSlot>
+      <PanelHeaderSlot pinned>
         <Button
           variant="primary" size="xs" title="Новый проект"
           leftIcon={<Plus size={13} strokeWidth={ICON_STROKE} />}

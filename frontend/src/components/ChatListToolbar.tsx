@@ -185,8 +185,11 @@ export function ChatListToolbar({
   // порядок с «Задачами» и «Проектами». Пилюля группировки сюда не влезает и
   // уехала секцией в поповер фильтров: из трёх осей вида она самая редкая, а
   // фильтр, сортировка и иерархия остаются на виду одним кликом.
+  // «+ Чат» — в закреплённом слоте (pinned): нейтральные иконки проявляются по
+  // наведению, а главное действие видно всегда.
   if (inHeader) {
     return (
+      <>
       <PanelHeaderSlot>
         <FilterBar
           sessions={sessions} filters={filters} patch={patch} allPersonas={allPersonas}
@@ -220,7 +223,9 @@ export function ChatListToolbar({
         >
           <ListTree size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
         </IconButton>
-        {!hideNew && (
+      </PanelHeaderSlot>
+      {!hideNew && (
+        <PanelHeaderSlot pinned>
           <Button
             variant="primary" size="xs" title="Новый чат" loading={creating}
             leftIcon={<Plus size={13} strokeWidth={ICON_STROKE} />}
@@ -228,8 +233,9 @@ export function ChatListToolbar({
           >
             Чат
           </Button>
-        )}
-      </PanelHeaderSlot>
+        </PanelHeaderSlot>
+      )}
+      </>
     );
   }
 

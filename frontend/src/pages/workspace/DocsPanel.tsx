@@ -19,8 +19,7 @@ import { api } from '../../lib/api';
 import { onFilesChanged } from '../../lib/signalr';
 import { C, FONT, FS, R, SHADOW, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
-import { Button, EmptyState, IconButton, PanelHeaderSlot, PillSwitch, TextField } from '../../components/ui';
-import { useHasPanelHeader } from '../../components/ui/panelHeaderSlotContext';
+import { Button, EmptyState, IconButton, IconSegmented, PanelHeaderSlot, TextField, useHasPanelHeader } from '../../components/ui';
 import { DocsScopeDialog } from './DocsScopeDialog';
 import { MarkdownViewer } from '../../components/MarkdownViewer';
 import { ListDateDivider, LIST_FLASH_CLASS, LIST_FLASH_MS } from '../../components/ListDateDivider';
@@ -954,16 +953,15 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
   // колонке ради иконок, которые прекрасно живут рядом с заголовком.
   const controls = (
     <>
-      {/* Что показывает панель: README или корпус. Переключатель, а не кнопка —
-          это два равноправных вида, и видно, в каком из них находишься.
-          iconsOnly: подписи уезжают в подсказку — домик и книга говорят сами за себя */}
+      {/* Что показывает панель: README или корпус. Переключатель видов в шапке —
+          IconSegmented, тот же примитив и размер, что у видов в «Задачах»:
+          PillSwitch крупнее и в ряду шапки выбивался из общего строя */}
       {homePath && (
-        <PillSwitch
-          iconsOnly
+        <IconSegmented<'home' | 'list'>
           value={homeOpen ? 'home' : 'list'}
           options={[
-            { value: 'home', label: 'Начало', icon: <Home size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> },
-            { value: 'list', label: 'Документы', icon: <BookText size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> },
+            { value: 'home', label: 'Начало', icon: <Home size={14} strokeWidth={ICON_STROKE} /> },
+            { value: 'list', label: 'Документы', icon: <BookText size={14} strokeWidth={ICON_STROKE} /> },
           ]}
           onChange={v => setHome(v === 'home')}
         />
@@ -1038,11 +1036,12 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
     return <div style={emptyStyle}>{error}</div>;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
-      {/* Ряд действий панели. Поиск здесь кнопкой, а не полем: колонка узкая, а поле
-          занимало её почти целиком ради действия, которое нужно изредка.
-          Пустой панели ряд не нужен вовсе — управлять нечем, а полоса под шапкой
-          выглядела бы недоделкой; всё нужное предлагает само пустое состояние */}
+    // position: relative — точка отсчёта для поповера папок: его кнопка уехала
+    // порталом в шапку карточки, и без якоря он считал координаты от чужого предка
+    <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+      {/* Контролы панели — в шапке карточки (PanelHeaderSlot). Свой ряд остаётся
+          только там, где шапки нет; пустой панели он не нужен вовсе — управлять
+          нечем, а всё нужное предлагает само пустое состояние */}
       {hasDocs && (hasPanelHeader
         ? <PanelHeaderSlot>{controls}</PanelHeaderSlot>
         // Шапки нет (мобильный стек) — рисуем те же контролы своим рядом
@@ -1052,12 +1051,12 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
           }}>{controls}</div>
       )}
 
-      {/* Поповер папок живёт в теле панели, а не рядом с кнопкой: кнопка уехала
-          порталом в шапку карточки, и позиционировать от неё нечего */}
+      {/* Поповер папок висит у верхнего края тела панели, под самой шапкой: кнопка,
+          которой он открывается, уехала порталом туда же */}
       {foldersOpen && (
         // Мышь внутри поповера держит его открытым: уход отсюда — тот же таймер,
         // что и с кнопки
-        <div style={{ ...tocPopoverStyle, top: 0, padding: `${SP.xs}px 0` }}
+        <div style={{ ...tocPopoverStyle, top: SP.xs, padding: `${SP.xs}px 0` }}
           onMouseEnter={hoverFolders} onMouseLeave={unhoverFolders}>
           {groups.map(([folder, docs]) => folderRow(folder, docs.length, folder === activeFolder))}
         </div>

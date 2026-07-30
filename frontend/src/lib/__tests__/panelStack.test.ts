@@ -3,11 +3,11 @@
 // ключей localStorage, валидация мусора и нормализация весов.
 import { describe, it, expect } from 'vitest';
 import {
-  sanitizeLayout, parseLayout, addPanel, removePanel, swapPanels, movePanelToNewColumn, movePanelAt,
-  parseWeights, parseWidth, normalizeWeights,
+  sanitizeLayout, parseLayout, addPanel, nextPlacement, removePanel, swapPanels, movePanelToNewColumn, movePanelAt,
+  parseWeights, parseWidth, normalizeWeights, parseColFlex, normalizeColFlex,
   sanitizeZones, emptyZones, zoneOf, openPanelIn, togglePanelIn, closePanel,
   swapAcross, moveAcrossAt, moveAcrossToNewColumn, isZoneCollapsed, migrateZones, revealPanel,
-  enforceZoneInvariant, homeOf, trackHome, parseHome, closePanelTo, evictForeign,
+  enforceZoneInvariant, homeOf, trackHome, parseHome, closePanelTo, evictForeign, replacePanelWith,
   COL_DEFAULT, COL_MIN, COL_MAX,
   type PanelZones,
 } from '../../pages/workspace/panelStackState';
@@ -61,6 +61,24 @@ describe('addPanel — дефолтная расстановка', () => {
 
   it('уже открытая панель не дублируется', () => {
     expect(addPanel([['plan']], 'plan')).toEqual([['plan']]);
+  });
+
+  it('левая зона: новая колонка рождается у рельсы (в начало), прежние отъезжают к центру', () => {
+    let l = addPanel([], 'plan', 'left');
+    expect(l).toEqual([['plan']]);
+    l = addPanel(l, 'files', 'left');
+    expect(l).toEqual([['plan', 'files']]);
+    // третья не в конец (это был бы центр), а новой колонкой у рельсы — в начало
+    l = addPanel(l, 'tasks', 'left');
+    expect(l).toEqual([['tasks'], ['plan', 'files']]);
+  });
+
+  it('nextPlacement учитывает сторону: у левой зоны новая колонка с индексом 0', () => {
+    expect(nextPlacement([['plan', 'files']], 'left')).toEqual({ newColumn: true });
+    expect(nextPlacement([['plan']], 'left')).toEqual({ ci: 0 });
+    // правая (дефолт) — прежнее правило: колонка у конца
+    expect(nextPlacement([['plan', 'files']], 'right')).toEqual({ newColumn: true });
+    expect(nextPlacement([['plan']])).toEqual({ ci: 0 });
   });
 });
 
@@ -162,6 +180,33 @@ describe('parseWeights', () => {
   });
 });
 
+describe('parseColFlex / normalizeColFlex — доли ширины колонок', () => {
+  it('parseColFlex: мусор и неположительные заменяются на 1, не-массив пуст', () => {
+    expect(parseColFlex([1.5, 'x', -2, 0.5])).toEqual([1.5, 1, 1, 0.5]);
+    expect(parseColFlex(null)).toEqual([]);
+    expect(parseColFlex({})).toEqual([]);
+  });
+
+  it('normalizeColFlex: одна колонка — пусто (делить нечего)', () => {
+    expect(normalizeColFlex(1, [2])).toEqual([]);
+    expect(normalizeColFlex(0, [])).toEqual([]);
+  });
+
+  it('normalizeColFlex: длину приводит к числу колонок, сумму — к нему же', () => {
+    // две колонки, доли 1 и 3 → сумма 4, нормируем к 2: [0.5, 1.5]
+    expect(normalizeColFlex(2, [1, 3])).toEqual([0.5, 1.5]);
+    // недостающие добираются 1, лишние отрезаются
+    expect(normalizeColFlex(2, [3])).toEqual([1.5, 0.5]);
+    expect(normalizeColFlex(2, [1, 1, 5])).toEqual([1, 1]);
+  });
+
+  it('переживает сериализацию: sanitizeZones приводит colFlex к числу колонок', () => {
+    const saved = { ...zones([['chats'], ['files']], []), left: { layout: [['chats'], ['files']], colFlex: [1, 3] } };
+    const restored = sanitizeZones(JSON.parse(JSON.stringify(saved)));
+    expect(restored.left.colFlex).toEqual([0.5, 1.5]);
+  });
+});
+
 describe('parseWidth', () => {
   it('мусор → дефолт, значения клампятся в COL_MIN..COL_MAX', () => {
     expect(parseWidth(null)).toBe(COL_DEFAULT);
@@ -230,6 +275,35 @@ describe('swapAcross — дроп панели на панель через гр
     const base = zones([['chats']], [['files']]);
     expect(swapAcross(base, 'chats', 'graph')).toEqual(base);
     expect(swapAcross(base, 'chats', 'chats')).toEqual(base);
+  });
+});
+
+describe('replacePanelWith — дроп кнопки из рельсы на открытую панель', () => {
+  it('гость встаёт в слот хозяина, хозяин закрывается и оставляет кнопку в своей зоне', () => {
+    const z = trackHome(replacePanelWith(zones([['chats']], [['files', 'tasks']]), 'changes', 'files'));
+    expect(z.right.layout).toEqual([['changes', 'tasks']]);
+    expect(zoneOf(z, 'files')).toBeNull();
+    expect(homeOf(z, 'files')).toBe('right');
+    // соседей замена не касается
+    expect(z.left.layout).toEqual([['chats']]);
+  });
+
+  it('замещение в solo-зоне не плодит вторую панель', () => {
+    const base = sanitizeZones({ left: { layout: [['chats']] }, right: { layout: [['files']], mode: 'solo' } });
+    const z = replacePanelWith(base, 'tasks', 'files');
+    expect(z.right.layout).toEqual([['tasks']]);
+  });
+
+  it('гость из соседней зоны уходит из неё (панель ровно в одной зоне)', () => {
+    const z = replacePanelWith(zones([['chats']], [['files']]), 'chats', 'files');
+    expect(z.left.layout).toEqual([]);
+    expect(z.right.layout).toEqual([['chats']]);
+  });
+
+  it('закрытый хозяин и guest===host — без изменений', () => {
+    const base = zones([['chats']], [['files']]);
+    expect(replacePanelWith(base, 'tasks', 'graph')).toEqual(base);
+    expect(replacePanelWith(base, 'files', 'files')).toEqual(base);
   });
 });
 
@@ -323,6 +397,19 @@ describe('homeOf / trackHome — иконка закрытой панели', ()
     expect(zoneOf(z, 'tasks')).toBeNull();
     expect(homeOf(z, 'tasks')).toBe('left');
     expect(z.left.layout).toEqual([['chats']]);
+  });
+
+  it('дроп КНОПКИ на чужую рельсу переносит только иконку — панель остаётся закрытой', () => {
+    // «Изменения» нигде не открыты, их кнопку перетащили с правой рельсы на левую:
+    // открывать панель не нужно, меняется только сторона, где живёт кнопка
+    const base = zones([['chats']], [['tasks']]);
+    expect(homeOf(base, 'changes')).toBe('right');
+    const z = closePanelTo(base, 'left', 'changes');
+    expect(zoneOf(z, 'changes')).toBeNull();
+    expect(homeOf(z, 'changes')).toBe('left');
+    // раскладки обеих зон нетронуты
+    expect(z.left.layout).toEqual([['chats']]);
+    expect(z.right.layout).toEqual([['tasks']]);
   });
 
   it('parseHome отбрасывает мусор и переводит упразднённые ключи', () => {

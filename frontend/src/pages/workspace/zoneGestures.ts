@@ -1,6 +1,6 @@
 import { useRef, useState, type HTMLAttributes, type PointerEvent as ReactPointerEvent } from 'react';
 import { startPointerDrag } from '../../lib/pointerDrag';
-import { PANEL_MIN_H } from './panelStackState';
+import { COL_MIN, PANEL_MIN_H } from './panelStackState';
 import type { PanelKey, Zone } from './panelCatalog';
 import { clearPanelDragOver, endPanelDrag, markPanelMoved, setPanelDragOver, startPanelDrag, usePanelDragState } from './panelDrag';
 
@@ -183,6 +183,57 @@ export function usePanelRowResize<K extends string>(
   };
 
   return { panelRefs, rowDragging, handleRowDrag };
+}
+
+// ---------- ресайз ширины между колонками ----------
+
+// Граница между двумя соседними КОЛОНКАМИ зоны. Как и ресайз высот, работает с
+// долями (colFlex), а не пикселями: колонки делят общую ширину зоны, и перетянутая
+// граница переносит долю от одной колонки к другой, сумма пары сохраняется —
+// соседние колонки не шевелятся, общий масштаб зоны (width) не трогается.
+//
+// Живые ширины пары берём на старте из DOM-узлов колонок (colRefs) — так же, как
+// ресайз высот берёт высоты панелей.
+export function usePanelColResize(
+  colFlex: number[],
+  setColFlex: (next: number[]) => void,
+) {
+  const colRefs = useRef<Record<number, HTMLDivElement | null>>({});
+  const [colDragging, setColDragging] = useState<number | null>(null);
+
+  // aCi/bCi — РЕАЛЬНЫЕ индексы колонок в layout (по ним же ключ colFlex).
+  const handleColDrag = (aCi: number, bCi: number, sign: 1 | -1) => (e: ReactPointerEvent) => {
+    e.preventDefault();
+    const aEl = colRefs.current[aCi];
+    const bEl = colRefs.current[bCi];
+    if (!aEl || !bEl) return;
+    const startX = e.clientX;
+    const wa = aEl.getBoundingClientRect().width;
+    const wb = bEl.getBoundingClientRect().width;
+    const fa = colFlex[aCi] ?? 1;
+    const fb = colFlex[bCi] ?? 1;
+    setColDragging(aCi);
+    startPointerDrag(
+      ev => {
+        // sign разворачивает жест по стороне: у правой зоны колонки растут влево,
+        // поэтому движение курсора вправо ужимает левую колонку пары
+        const dx = (ev.clientX - startX) * sign;
+        // Минимум колонки — COL_MIN в пикселях, переведённый в долю через масштаб
+        // «доля/пиксель» пары (fa+fb на wa+wb)
+        const perPx = (fa + fb) / (wa + wb);
+        const minShare = COL_MIN * perPx;
+        const total = fa + fb;
+        const faNext = Math.max(minShare, Math.min(total - minShare, (wa + dx) * perPx));
+        const next = [...colFlex];
+        next[aCi] = faNext;
+        next[bCi] = total - faNext;
+        setColFlex(next);
+      },
+      { cursor: 'col-resize', onEnd: () => setColDragging(null) },
+    );
+  };
+
+  return { colRefs, colDragging, handleColDrag };
 }
 
 // Слот панели (обёртка с весом и клампом высоты) — соседний PanelSlot.tsx:

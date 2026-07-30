@@ -82,13 +82,18 @@ export function parseLayout(rawLayout: string | null, rawLegacyOpen: string | nu
   return [];
 }
 
-// Открытие панели: в последнюю колонку, пока в ней меньше COL_CAP, иначе новая
-// колонка справа (1-я во всю высоту, 2-я вниз, 3-я вправо, 4-я вниз третьей…)
-export function addPanel(layout: PanelKey[][], k: PanelKey): PanelKey[][] {
+// Открытие панели: в колонку У РЕЛЬСЫ, пока в ней меньше COL_CAP, иначе новая
+// колонка тоже РОЖДАЕТСЯ У РЕЛЬСЫ, а прежние отъезжают к центру. Рельса у правой
+// зоны справа (её колонка — последняя в массиве, новая пушится в конец), у левой
+// слева (её колонка — первая, новая встаёт в начало). Раньше сторону не учитывали
+// и новая колонка всегда лезла в конец — у левой зоны это центр, а не край.
+export function addPanel(layout: PanelKey[][], k: PanelKey, side: Zone = 'right'): PanelKey[][] {
   if (layout.flat().includes(k)) return layout;
   const out = layout.map(c => [...c]);
-  const last = out[out.length - 1];
-  if (last && last.length < COL_CAP) last.push(k);
+  const railIdx = side === 'left' ? 0 : out.length - 1;
+  const railCol = out[railIdx];
+  if (railCol && railCol.length < COL_CAP) railCol.push(k);
+  else if (side === 'left') out.unshift([k]);
   else out.push([k]);
   return out;
 }
@@ -96,10 +101,11 @@ export function addPanel(layout: PanelKey[][], k: PanelKey): PanelKey[][] {
 // Куда встанет ЕЩЁ НЕ ОТКРЫТАЯ панель — то же правило, что у addPanel, но без
 // самой вставки: нужно рельсе, чтобы под курсором показать место будущей панели
 // (призрак в раскладке). Возвращает индекс колонки, либо newColumn — панель
-// заведёт свою колонку справа.
-export function nextPlacement(layout: PanelKey[][]): { ci: number } | { newColumn: true } {
-  const last = layout[layout.length - 1];
-  return last && last.length < COL_CAP ? { ci: layout.length - 1 } : { newColumn: true };
+// заведёт свою колонку у рельсы.
+export function nextPlacement(layout: PanelKey[][], side: Zone = 'right'): { ci: number } | { newColumn: true } {
+  const railIdx = side === 'left' ? 0 : layout.length - 1;
+  const railCol = layout[railIdx];
+  return railCol && railCol.length < COL_CAP ? { ci: railIdx } : { newColumn: true };
 }
 
 // Закрытие панели: удалить, пустые колонки схлопнуть
@@ -159,6 +165,26 @@ export function parseWeights(raw: string | null): Partial<Record<PanelKey, numbe
   } catch { return {}; }
 }
 
+// Доли ширины колонок из сохранённого состояния: массив положительных конечных
+// чисел, прочее отбрасываем (тогда колонки равны). Длину под layout приведёт
+// normalizeColFlex при первом коммите.
+export function parseColFlex(raw: unknown): number[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map(v => (typeof v === 'number' && Number.isFinite(v) && v > 0.05 ? v : 1));
+}
+
+// Привести доли к числу колонок layout: лишние отрезать, недостающим дать 1,
+// сумму подравнять к числу колонок (защита от дрейфа после многих ресайзов, как у
+// весов высот). Пустой/единичный вход у одной колонки не хранится — там делить
+// нечего.
+export function normalizeColFlex(colCount: number, flex: number[]): number[] {
+  if (colCount <= 1) return [];
+  const cur = Array.from({ length: colCount }, (_, i) => (flex[i] != null && flex[i] > 0.05 ? flex[i] : 1));
+  const sum = cur.reduce((a, b) => a + b, 0);
+  const factor = sum > 0 ? colCount / sum : 1;
+  return cur.map(v => v * factor);
+}
+
 export function parseWidth(raw: string | null): number {
   // Number(null) и Number('') дают 0, а не NaN — отсутствие значения проверяем явно
   if (raw == null || raw.trim() === '') return COL_DEFAULT;
@@ -184,7 +210,14 @@ export function normalizeWeights(open: PanelKey[], weights: Partial<Record<Panel
 export interface ZoneState {
   layout: PanelKey[][];
   mode: PanelMode;
+  // Ширина ОДНОЙ колонки — общий масштаб зоны (центральный сплиттер). Итоговая
+  // ширина зоны = число колонок × width; между собой колонки делят её по colFlex.
   width: number;
+  // Доли ширины колонок (grow-ratio), позиционно по РЕАЛЬНОМУ индексу колонки в
+  // layout. Пусто/1 у всех — колонки равны (как было). Их меняет сплиттер МЕЖДУ
+  // колонками, перераспределяя ширину внутри пары; общий масштаб (width) при этом
+  // не трогается. Позиционно, а не по ключу панели: колонка — место, не сущность.
+  colFlex: number[];
   // Раскладка, спрятанная кнопкой «Свернуть все» — повторный клик вернёт её как была
   stash: PanelKey[][];
 }
@@ -202,7 +235,7 @@ export interface PanelZones {
 }
 
 export function emptyZone(): ZoneState {
-  return { layout: [], mode: 'multi', width: COL_DEFAULT, stash: [] };
+  return { layout: [], mode: 'multi', width: COL_DEFAULT, colFlex: [], stash: [] };
 }
 
 export function emptyZones(): PanelZones {
@@ -272,10 +305,12 @@ export function sanitizeZones(raw: unknown): PanelZones {
   const src = (raw && typeof raw === 'object' ? raw : {}) as Partial<Record<Zone, unknown>> & { weights?: unknown };
   const readZone = (v: unknown): ZoneState => {
     const z = (v && typeof v === 'object' ? v : {}) as Partial<ZoneState>;
+    const layout = sanitizeLayout(z.layout);
     return {
-      layout: sanitizeLayout(z.layout),
+      layout,
       mode: z.mode === 'solo' ? 'solo' : 'multi',
       width: typeof z.width === 'number' ? parseWidth(String(z.width)) : COL_DEFAULT,
+      colFlex: normalizeColFlex(layout.length, parseColFlex(z.colFlex)),
       stash: sanitizeLayout(z.stash),
     };
   };
@@ -324,7 +359,7 @@ export function openPanelIn(zones: PanelZones, zone: Zone, k: PanelKey): PanelZo
   const base = closePanel(zones, k);
   return withZone(base, zone, z => ({
     ...z,
-    layout: z.mode === 'solo' ? [[k]] : addPanel(z.layout, k),
+    layout: z.mode === 'solo' ? [[k]] : addPanel(z.layout, k, zone),
   }));
 }
 
@@ -349,6 +384,28 @@ export function swapAcross(zones: PanelZones, a: PanelKey, b: PanelKey): PanelZo
     [za]: { ...zones[za], layout: swapIn(zones[za].layout, a, b) },
     [zb]: { ...zones[zb], layout: swapIn(zones[zb].layout, b, a) },
   };
+}
+
+// Дроп панели ИЗ РЕЛЬСЫ на открытую панель: гость занимает её слот (вместе с
+// местом в колонке и весом — вес переносит вызывающий), а хозяин уходит с экрана,
+// оставляя иконку на рельсе СВОЕЙ зоны — там, где он только что был.
+//
+// Обменом (swapAcross) это быть не может: у закрытого гостя нет слота, который он
+// отдал бы взамен, поэтому swapAcross на закрытой панели молча возвращает всё как
+// было. Отсюда отдельная операция, а не ветка в обмене.
+export function replacePanelWith(zones: PanelZones, guest: PanelKey, host: PanelKey): PanelZones {
+  if (guest === host) return zones;
+  const zh = zoneOf(zones, host);
+  if (!zh) return zones;
+  // Гость мог быть открыт в соседней зоне — оттуда он уходит (инвариант «панель
+  // ровно в одной зоне»). Дроп открытой панели на панель обычно идёт обменом, но
+  // операция обязана быть корректной и здесь, а не только для гостя из рельсы.
+  const base = closePanel(zones, guest);
+  const filled = withZone(base, zh, z => ({
+    ...z,
+    layout: z.layout.map(col => col.map(k => (k === host ? guest : k))),
+  }));
+  return { ...filled, home: { ...filled.home, [host]: zh } };
 }
 
 // Дроп в горизонтальный плейсхолдер зоны. Внутри своей зоны — обычная
@@ -445,6 +502,8 @@ export function migrateZones(read: (key: string) => string | null, ns: string, l
     layout,
     mode: read(`${prefix}_mode`) === 'solo' ? 'solo' : 'multi',
     width: parseWidth(read(`${prefix}_width`)),
+    // Долей ширины старое состояние не знало — колонки равны
+    colFlex: [],
     stash: sanitizeLayout((() => { try { return JSON.parse(read(`${prefix}_stash`) ?? '[]'); } catch { return []; } })()),
   });
 
@@ -486,6 +545,7 @@ export function migrateSidebarSection(
       stash: collapsed ? [[panelKey]] : [],
       mode: 'multi',
       width: parseWidth(read(LEGACY_SIDEBAR_WIDTH_KEY)),
+      colFlex: [],
     },
   };
 }
@@ -499,13 +559,18 @@ export interface PanelZonesApi {
   // Закрыть панель, где бы она ни лежала (её иконка остаётся в прежней зоне)
   close: (k: PanelKey) => void;
   // Дроп панели на рельсу: закрыть и положить иконку ИМЕННО в эту зону — панель
-  // убирают туда, где потом хотят её найти
+  // убирают туда, где потом хотят её найти. Для ЗАКРЫТОЙ панели закрывать нечего,
+  // и остаётся только переезд иконки: так кнопка переносится между сторонами, не
+  // открывая панель.
   closeTo: (zone: Zone, k: PanelKey) => void;
   // Ремонт сохранённой раскладки: выгнать из зоны панели, которых на этом экране
   // в ней быть не может (см. evictForeign)
   evict: (zone: Zone, allowed: readonly PanelKey[]) => void;
   // Дроп панели на панель (в том числе через границу зон)
   swapWith: (a: PanelKey, b: PanelKey) => void;
+  // Дроп панели из рельсы на открытую панель: гость встаёт в её слот, хозяин
+  // закрывается (см. replacePanelWith)
+  replaceWith: (guest: PanelKey, host: PanelKey) => void;
   // Дроп в плейсхолдер строки / в разделитель колонок целевой зоны
   moveAt: (k: PanelKey, zone: Zone, colIdx: number, rowIdx: number) => void;
   moveToNewColumn: (k: PanelKey, zone: Zone, insertIdx: number) => void;
@@ -513,6 +578,8 @@ export interface PanelZonesApi {
   setWidth: (zone: Zone, n: number) => void;
   toggleCollapsed: (zone: Zone) => void;
   setWeights: (next: Partial<Record<PanelKey, number>>) => void;
+  // Доли ширины колонок зоны — ресайз границы МЕЖДУ колонками, см. colFlex
+  setColFlex: (zone: Zone, next: number[]) => void;
   // Показать панель по внешнему запросу (git-бар над композером). Возвращает
   // true, если она УЖЕ была открыта — тогда вызывающий просит её мигнуть.
   reveal: (k: PanelKey) => boolean;
@@ -576,7 +643,14 @@ function createPanelZones(ns: string, opts?: {
   // вторую копию.
   function commit(next: PanelZones) {
     const clean = trackHome(enforceZoneInvariant(next));
-    _zones = { ...clean, weights: normalizeWeights(openKeysOf(clean), clean.weights) };
+    // Доли ширины колонок держим синхронными с числом колонок каждой зоны: открыли/
+    // закрыли колонку — массив подрос/укоротился, лишнего мусора не копится.
+    const withFlex = {
+      ...clean,
+      left: { ...clean.left, colFlex: normalizeColFlex(clean.left.layout.length, clean.left.colFlex) },
+      right: { ...clean.right, colFlex: normalizeColFlex(clean.right.layout.length, clean.right.colFlex) },
+    };
+    _zones = { ...withFlex, weights: normalizeWeights(openKeysOf(withFlex), withFlex.weights) };
     persist();
     emit();
   }
@@ -615,6 +689,16 @@ function createPanelZones(ns: string, opts?: {
       const wb = _zones.weights[b] ?? 1;
       const swapped = swapAcross(_zones, a, b);
       commit({ ...swapped, weights: { ...swapped.weights, [a]: wb, [b]: wa } });
+    }, []);
+
+    // Дроп из рельсы на открытую панель: гость занимает её слот вместе с высотой —
+    // вес привязан к СЛОТУ, а не к панели, поэтому переезжает к гостю (иначе
+    // раскладка «прыгнула» бы на чужой высоте). Хозяин уходит закрытым, свой
+    // прежний вес не теряет: откроется — вернётся с ним.
+    const replaceWith = useCallback((guest: PanelKey, host: PanelKey) => {
+      const wh = _zones.weights[host] ?? 1;
+      const next = replacePanelWith(_zones, guest, host);
+      commit({ ...next, weights: { ...next.weights, [guest]: wh } });
     }, []);
 
     // Дроп в направляющую: перенос открытой панели либо открытие закрытой —
@@ -663,13 +747,22 @@ function createPanelZones(ns: string, opts?: {
       emit();
     }, []);
 
+    // Ресайз ширины между колонками: пишем массив долей напрямую, мимо commit —
+    // как у весов, нормализацию длины делает commit при смене раскладки, а на
+    // каждом кадре ресайза она не нужна (число колонок не меняется)
+    const setColFlex = useCallback((zone: Zone, next: number[]) => {
+      _zones = withZone(_zones, zone, z => ({ ...z, colFlex: next }));
+      persist();
+      emit();
+    }, []);
+
     const reveal = useCallback((k: PanelKey) => {
       const { zones: next, wasOpen } = revealPanel(_zones, k);
       if (!wasOpen) commit(next);
       return wasOpen;
     }, []);
 
-    return { zones, toggle, close, closeTo, evict, swapWith, moveAt, moveToNewColumn, setMode, setWidth, toggleCollapsed, setWeights, reveal };
+    return { zones, toggle, close, closeTo, evict, swapWith, replaceWith, moveAt, moveToNewColumn, setMode, setWidth, toggleCollapsed, setWeights, setColFlex, reveal };
   }
 
   return { use: usePanelZones };

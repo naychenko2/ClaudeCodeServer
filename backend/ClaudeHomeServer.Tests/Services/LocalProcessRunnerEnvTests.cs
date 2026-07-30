@@ -11,6 +11,9 @@ namespace ClaudeHomeServer.Tests.Services;
 // эндпоинту — вместе с токеном подписки, без единой ошибки в логах.
 // Процессы здесь не запускаются намеренно: тесты гоняются и на linux-раннере CI, а проверять
 // надо правило сборки окружения, а не факт запуска — потому Start распилен на BuildStartInfo.
+// Коллекция SystemEnv — общая с DockerProcessRunnerEnvTests: оба манипулируют process-global
+// Environment.SetEnvironmentVariable, xunit не должен гонять их параллельно (флаки).
+[Collection("SystemEnv")]
 public class LocalProcessRunnerEnvTests
 {
     private static ProcessSpec Spec(
@@ -54,7 +57,8 @@ public class LocalProcessRunnerEnvTests
     public void ClearEnv_НеТрогаетТокенПодписки()
     {
         // На CLAUDE_CODE_OAUTH_TOKEN держится вход по подписке: его пробрасывают снаружи
-        // (Runner берёт из реестра, docker — из окружения хоста). Выкинь его — и отвалится всё.
+        // (Runner берёт из реестра, docker — per-exec фолбэком в BuildTurnEnv). Выкинь его —
+        // и отвалится всё.
         using var _ = SystemEnv("CLAUDE_CODE_OAUTH_TOKEN", "токен-подписки");
 
         var psi = LocalProcessRunner.BuildStartInfo(Spec(clear: LlmProviderRegistry.ProviderEnvKeys));

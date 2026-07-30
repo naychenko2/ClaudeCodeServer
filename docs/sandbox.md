@@ -31,6 +31,45 @@
 - **MCP из песочницы** — `*_API_URL` = `Sandbox:McpApiUrl` (`host.docker.internal:5000`,
   Kestrel хоста) через `ResolveTasksApiUrl(ownerId)`; node-серверы `mcp/*/index.js`
   лежат в образе под `/app/mcp` (переписываются в `BuildTurnMcpConfig`).
+- **Токен подписки (CLAUDE_CODE_OAUTH_TOKEN) — доставка per-exec.** Одна точка правды —
+  `DockerProcessRunner.BuildTurnEnv`: в конец env каждого `docker exec` докладывается
+  primary-токен из окружения бэкенда, если ход его ещё не несёт (`CLAUDE_CODE_OAUTH_TOKEN`,
+  `ANTHROPIC_AUTH_TOKEN` или `ANTHROPIC_API_KEY` уже в env — например, ход аккаунта пула или
+  стороннего провайдера — фолбэк пропускается, инвариант «токен подписки не уезжает чужому
+  эндпоинту» держится). `docker run` (создание/пересоздание контейнера в `SandboxManager`)
+  токен больше НЕ передаёт — раньше он запекался в момент создания и не обновлялся, поэтому
+  контейнер, поднятый до появления токена в окружении бэкенда, жил без него до пересоздания.
+  `EnsureRunningAsync` логирует warning в ветке создания контейнера, если токена в
+  окружении бэкенда нет.
+- **Миграция транскриптов (смена провайдера, фейловер пула, worktree).** Транскрипт CLI —
+  локальный файл `{профиль}/projects/{уплощённый cwd}/{csid}.jsonl`, поэтому «переезд» чата
+  между провайдерами и рабочими папками — это копирование файла (`TranscriptMigrator`).
+  У container-юзера обе координаты другие, и обе считает `SessionManager`:
+  - **профиль** — `ConfigRootFor(ownerId, providerKey)`: хостовый корень
+    (`ConfigRootForProvider`) переводится в песочный `{data/sandbox-profiles}/{ownerId}/{ключ}`.
+    Ключ выводится из ИМЕНИ ПАПКИ хостового корня, а `~/.claude` (профиль без оверрайда) →
+    `default` — ровно то же правило, что в `DockerProcessRunner.RewriteProfileEnv`, которое
+    задаёт `CLAUDE_CONFIG_DIR` живого хода. **Зеркало обязано сходиться**: расчёт ключа
+    из `providerKey` («primary → default») разошёлся бы с ходом, потому что
+    `ConfigRootForProvider("claude")` отдаёт `sub-claude`, когда запись `claude` задана в
+    пуле подписок с токеном. Сторожат два теста в `SessionManagerContainerMigrationTests`.
+  - **cwd** — `CwdForOwner(ownerId, hostCwd)` через `IPathMapper.ToRuntime`: CLI внутри
+    контейнера видит `/projects/…` и уплощает именно этот путь (`-projects-…`), а бэкенд
+    хранит хостовый `C:\…`. Путь вне монтирований `ToRuntime` отвергает: у явных операций
+    (`MigrateProviderAsync`, `SetWorktreeAsync`) причина уезжает пользователю (400), у
+    авто-фейловера пула — тихая деградация с логом, как и любой другой отказ переноса.
+    В `SetWorktreeAsync` перевод обеих папок считается ДО `WorktreeAddAsync`/
+    `WorktreeRemoveAsync` — иначе исключение маппинга обошло бы rollback и оставило
+    дерево-сироту.
+
+  Уборка при удалении чата (`DeleteTranscript` → `DeleteEverywhere`) ключ не считает вовсе:
+  она берёт ВСЕ папки `{sandbox-profiles}/{ownerId}/*` и полагается на фолбэк-скан, потому
+  что приходящий cwd хостовый, а копии после переездов остаются намеренно.
+
+  ⚠️ **Egress-proxy.** Если `Sandbox:Proxy` настроен с whitelist только Anthropic-доменов,
+  чат, мигрированный на СТОРОННИЙ эндпоинт, перестанет работать: сама миграция пройдёт
+  (это копирование файлов на хосте), а первый же ход упадёт сетевой ошибкой из контейнера.
+  Pre-flight проверки эндпоинта намеренно нет — лечится расширением whitelist прокси.
 - **Корни проектов разведены**: local-юзеры — `DefaultProjectsPath`, container-юзеры —
   `Sandbox:ProjectsRoot` (в песочницу монтируется только он). Единая точка резолва —
   [UserHomeResolver.cs](../backend/ClaudeHomeServer/Services/UserHomeResolver.cs): домашняя

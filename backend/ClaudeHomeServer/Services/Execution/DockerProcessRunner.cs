@@ -42,13 +42,7 @@ public sealed class DockerProcessRunner : IProcessLauncher
         // Дешёвый (троттлёный) гарант, что контейнер поднят и актуален
         _sandbox.EnsureRunningAsync().GetAwaiter().GetResult();
 
-        // spec.ClearEnv здесь намеренно не применяется: окружение хода собирается с нуля
-        // и уезжает в контейнер через -e, хостовые переменные в него не наследуются —
-        // вычищать нечего. Изоляция от системных ANTHROPIC_* получается сама собой.
-        var env = spec.Env is null
-            ? new Dictionary<string, string>()
-            : new Dictionary<string, string>(spec.Env);
-        RewriteProfileEnv(env);
+        var env = BuildTurnEnv(spec.Env);
 
         var turnId = spec.TurnId ?? Guid.NewGuid().ToString("N")[..12];
         var dockerArgs = new List<string> { "exec" };
@@ -125,6 +119,32 @@ public sealed class DockerProcessRunner : IProcessLauncher
         // Затем клиентский docker-процесс на хосте (освобождает пайпы)
         try { process.Kill(entireProcessTree: true); }
         catch { /* процесс уже завершился */ }
+    }
+
+    // Сборка env хода: копия spec.Env + песочный CLAUDE_CONFIG_DIR + фолбэк токена подписки.
+    // Вынесено из Start, чтобы правило сборки можно было проверить тестом без запуска
+    // процессов (как LocalProcessRunner.BuildStartInfo) — тесты гоняются и на linux-раннере CI.
+    // ClearEnv здесь намеренно не применяется: окружение хода собирается с нуля и уезжает
+    // в контейнер через -e, хостовые переменные в него не наследуются — вычищать нечего.
+    // Изоляция от системных ANTHROPIC_* получается сама собой.
+    internal Dictionary<string, string> BuildTurnEnv(IReadOnlyDictionary<string, string>? specEnv)
+    {
+        var env = specEnv is null
+            ? new Dictionary<string, string>()
+            : new Dictionary<string, string>(specEnv);
+        RewriteProfileEnv(env);
+
+        // Единая точка правды для токена подписки в песочнице: раньше он клался только
+        // при docker run (SandboxManager.BuildRunArgs), поэтому контейнер, созданный ДО
+        // появления токена, жил без него навсегда. Докладываем на каждый exec, кроме ходов
+        // на чужой эндпоинт/аккаунт пула — токен подписки не должен уезжать чужому эндпоинту.
+        if (!env.ContainsKey("CLAUDE_CODE_OAUTH_TOKEN")
+            && !env.ContainsKey("ANTHROPIC_AUTH_TOKEN")
+            && !env.ContainsKey("ANTHROPIC_API_KEY")
+            && Environment.GetEnvironmentVariable("CLAUDE_CODE_OAUTH_TOKEN") is { Length: > 0 } token)
+            env["CLAUDE_CODE_OAUTH_TOKEN"] = token;
+
+        return env;
     }
 
     // CLAUDE_CONFIG_DIR: хостовый путь профиля (BuildCliEnv кладёт data/claude-profiles/{key})

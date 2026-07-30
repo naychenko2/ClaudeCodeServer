@@ -184,7 +184,8 @@ public class LlmProviderRegistry
     // без единой ошибки в логах. Продукт обязан сам определять свой маршрут целиком.
     //
     // CLAUDE_CODE_OAUTH_TOKEN сюда НЕ входит осознанно: на нём держится вход по подписке,
-    // его пробрасывают снаружи (Runner берёт из реестра, docker — из окружения хоста).
+    // его пробрасывают снаружи (Runner берёт из реестра, docker — per-exec фолбэком
+    // в DockerProcessRunner.BuildTurnEnv из окружения бэкенда).
     public static readonly string[] ProviderEnvKeys =
     [
         "CLAUDE_CONFIG_DIR",

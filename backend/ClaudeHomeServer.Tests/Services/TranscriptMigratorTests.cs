@@ -24,6 +24,8 @@ public class TranscriptMigratorTests : IDisposable
     }
 
     private const string Cwd = @"C:\Projects\my-app";
+    // Рабочая папка после включения отдельного дерева чата (TryRelocateCwd)
+    private const string NewCwd = @"C:\Homes\admin\.worktrees\my-app\wt-feature";
     private const string SessionId = "abc-123";
 
     private string SeedTranscript(string root, string? flat = null, string content = "{\"type\":\"user\"}")
@@ -122,6 +124,78 @@ public class TranscriptMigratorTests : IDisposable
         TranscriptMigrator.TryMigrate(_src, _dst, Cwd, SessionId, out _).Should().BeTrue();
 
         File.Exists(Path.Combine(_dst, "projects", "legacy-layout", SessionId + ".jsonl")).Should().BeTrue();
+    }
+
+    // --- Переезд между рабочими папками одного профиля (worktree чата) ---
+
+    [Fact]
+    public void TryRelocateCwd_КопируетВПапкуНовогоCwd()
+    {
+        // Целевая папка считается от НОВОГО cwd (в отличие от TryMigrate, где она
+        // намеренно берётся у источника): --resume ищет транскрипт по уплощённому cwd
+        SeedTranscript(_src, content: "line1\nline2");
+
+        var ok = TranscriptMigrator.TryRelocateCwd(_src, Cwd, NewCwd, SessionId, out var error);
+
+        ok.Should().BeTrue(error);
+        var dstFile = Path.Combine(_src, "projects", TranscriptMigrator.FlattenCwd(NewCwd), SessionId + ".jsonl");
+        File.Exists(dstFile).Should().BeTrue();
+        File.ReadAllText(dstFile).Should().Be("line1\nline2");
+    }
+
+    [Fact]
+    public void TryRelocateCwd_ИсходникОстаётся()
+    {
+        // Обратный переезд (выключение worktree) дешевле, если копия старого cwd на месте
+        var seeded = SeedTranscript(_src);
+
+        TranscriptMigrator.TryRelocateCwd(_src, Cwd, NewCwd, SessionId, out _).Should().BeTrue();
+
+        File.Exists(seeded).Should().BeTrue();
+    }
+
+    [Fact]
+    public void TryRelocateCwd_ПереноситПапкуСабагентов()
+    {
+        var srcFile = SeedTranscript(_src);
+        var subagents = Path.Combine(Path.GetDirectoryName(srcFile)!, SessionId, "subagents");
+        Directory.CreateDirectory(subagents);
+        File.WriteAllText(Path.Combine(subagents, "agent-1.jsonl"), "{}");
+
+        TranscriptMigrator.TryRelocateCwd(_src, Cwd, NewCwd, SessionId, out _).Should().BeTrue();
+
+        File.Exists(Path.Combine(_src, "projects", TranscriptMigrator.FlattenCwd(NewCwd),
+            SessionId, "subagents", "agent-1.jsonl")).Should().BeTrue();
+    }
+
+    [Fact]
+    public void TryRelocateCwd_ТранскриптНеНайден_ОшибкаБезИзменений()
+    {
+        // Вызывающий (SetWorktreeAsync) по false откатывает уже созданное дерево —
+        // значит папку нового cwd мы после неудачи оставлять не должны
+        var ok = TranscriptMigrator.TryRelocateCwd(_src, Cwd, NewCwd, SessionId, out var error);
+
+        ok.Should().BeFalse();
+        error.Should().Contain(SessionId);
+        Directory.Exists(Path.Combine(_src, "projects", TranscriptMigrator.FlattenCwd(NewCwd)))
+            .Should().BeFalse();
+    }
+
+    [Fact]
+    public void TryRelocateCwd_КонтейнерныйCwd_УплощаетсяПоСлешам()
+    {
+        // У container-пользователя CLI видит контейнерный путь (/projects/…), поэтому
+        // и переезд считается по нему же — уплощение одинаково для обоих разделителей
+        const string containerCwd = "/projects/foo";
+        const string containerWt = "/projects/foo/.worktrees/wt-bar";
+        SeedTranscript(_src, flat: TranscriptMigrator.FlattenCwd(containerCwd));
+
+        var ok = TranscriptMigrator.TryRelocateCwd(_src, containerCwd, containerWt, SessionId, out var error);
+
+        ok.Should().BeTrue(error);
+        TranscriptMigrator.FlattenCwd(containerCwd).Should().Be("-projects-foo");
+        File.Exists(Path.Combine(_src, "projects", TranscriptMigrator.FlattenCwd(containerWt),
+            SessionId + ".jsonl")).Should().BeTrue();
     }
 
     // --- Уборка транскрипта при удалении чата ---

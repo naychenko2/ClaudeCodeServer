@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, type CSSProperties } from 'react';
+import { useState, useRef, useEffect, useCallback, type CSSProperties, type ReactNode } from 'react';
 import { AlertTriangle, Ban, ArrowUp, Check, ChevronDown, FolderGit2, Mic, Paperclip, Plus, RefreshCw, Users, WifiOff, X } from 'lucide-react';
 import { C, R, FS, FONT, SHADOW, Z } from '../lib/design';
 import { type RateWindow, RATE_COLORS, windowLabel, fmtReset } from '../lib/rateLimit';
@@ -15,6 +15,7 @@ import {
   DEFAULT_TEAM_SETTINGS, buildTeamTurnText, teamMechanic,
   type TeamMechanicId, type TeamMechanicSettings,
 } from '../features/team/teamMechanics';
+import { TeamImplementBadge } from '../features/team/TeamImplementBadge';
 import { setLastMechanic } from '../lib/lastMechanic';
 import { type Mode, MODE_META, MODES, ModeIcon, isDangerMode } from '../lib/modes';
 import { DangerModeConfirm } from './DangerModeConfirm';
@@ -22,7 +23,7 @@ import { useAssistantName } from './chat/contexts';
 import { getDraft, setDraft } from '../lib/drafts';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { useVoiceInput } from '../hooks/useVoiceInput';
-import type { SkillInfo, AgentInfo, Persona, WorkLoopState } from '../types';
+import type { SkillInfo, AgentInfo, Persona, WorkLoopState, SessionTeamImplement } from '../types';
 
 export interface ComposerProps {
   // Ключ чата — под него хранится черновик недовведённого текста
@@ -73,8 +74,22 @@ export interface ComposerProps {
   // Promise — чтобы автопилот с «до готово» мог дождаться включения цикла до отправки
   workLoop?: WorkLoopState | null;
   onToggleWorkLoop?: () => void | Promise<void>;
+  // Режим «Командная реализация» (флаг team-implement-mode): состояние (live с фолбэком
+  // на Session.teamImplement); null — режим выключен. Бейдж виден при заданных обработчиках
+  teamImplement?: SessionTeamImplement | null;
+  onToggleTeamImplementAuto?: () => void | Promise<void>;
+  onDisableTeamImplement?: () => void | Promise<void>;
+  // «Остановить» прогон: режим остаётся включённым, новые волны не стартуют
+  onStopTeamImplement?: () => void | Promise<void>;
+  // Включение режима из карточки механики «Командная реализация»: состав (пустой =
+  // вся команда проекта) и авто-волны. Без обработчика карточка ничего не делает
+  onEnableTeamImplement?: (opts: { autoWaves: boolean; executorPersonaIds: string[] }) => void | Promise<void>;
+  // Чат внутри проекта: вне проекта у режима нет команды по умолчанию
+  isProjectChat?: boolean;
   // Отдельное git worktree чата: имя ветки (null — чат в основном дереве проекта).
-  // Тумблер виден при заданном onToggleWorktree (только проектный чат с git)
+  // Тумблер виден при заданном onToggleWorktree (только проектный чат с git).
+  // Само имя ветки здесь НЕ показываем — оно живёт в git-баре над композером
+  // (ProjectGitBar), в композере остаётся только управление
   worktreeBranch?: string | null;
   onToggleWorktree?: () => void | Promise<void>;
   // Краткий контекст последних реплик чата — для механики «Панель экспертов»
@@ -150,6 +165,91 @@ function Waveform() {
 
 function fmtRecTime(s: number): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
+// Сегментированная пилюля активного режима — «склейка» кнопки-тумблера с её значением
+// (вариант A из docs/mockups/composer-toggle-chip-merge.html). Грамматика полосы:
+// выключенный режим — прежняя круглая кнопка в левом ряду, включённый — пилюля в группе
+// состояния, чей ведущий сегмент-иконка и есть та самая кнопка (иконка и действие
+// прежние, порядок пилюль повторяет порядок кнопок). Опасная зона НЕ расширяется:
+// действие живёт только на сегменте ~28px, значение пассивно (подробности в title).
+//
+// Склейку используют цикл «до готово» и командная механика. Дерево чата — осознанное
+// ИСКЛЮЧЕНИЕ (круглый тумблер без значения, см. worktreeButton): его значение живёт
+// в git-баре над композером. Не «унифицировать» пилюлю дерева обратно!
+function ModePill({
+  isMobile,
+  icon,
+  leadTitle,
+  onLeadClick,
+  leadDisabled = false,
+  valueTitle,
+  maxWidth,
+  value,
+  trailing = null,
+}: {
+  isMobile?: boolean;
+  // Иконка сегмента — обязана совпадать с иконкой круглой кнопки, из которой переехала
+  icon: ReactNode;
+  leadTitle: string;
+  // Не задан — сегмент пассивен (курсор обычный, клик ничего не делает)
+  onLeadClick?: () => void;
+  // Гейт «идёт ход»: та же форма, что у заблокированной круглой кнопки (opacity .4)
+  leadDisabled?: boolean;
+  valueTitle?: string;
+  maxWidth?: number;
+  // Значение пилюли (номер итерации цикла, короткое имя механики)
+  value: ReactNode;
+  // Доп. узел в хвосте значения (✕ командной механики)
+  trailing?: ReactNode;
+}) {
+  const h = isMobile ? 30 : 28; // высоты пилюли из макета (badge-шкалы в design.ts нет)
+
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'stretch', height: h, maxWidth: maxWidth ?? '100%',
+      borderRadius: R.pill, overflow: 'hidden', flexShrink: 0,
+      background: C.accentLight,
+    }}>
+      <button
+        type="button"
+        title={leadTitle}
+        aria-label={leadTitle}
+        onClick={leadDisabled ? undefined : onLeadClick}
+        disabled={leadDisabled}
+        onMouseEnter={e => { if (!leadDisabled && onLeadClick) e.currentTarget.style.background = C.accentMuted; }}
+        onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+        // Кольцо — outline внутри сегмента: SHADOW.focus рисуется наружу и срезался бы
+        // родительским overflow:hidden пилюли
+        onFocus={e => { e.currentTarget.style.outline = `2px solid ${C.accent}`; e.currentTarget.style.outlineOffset = '-2px'; }}
+        onBlur={e => { e.currentTarget.style.outline = 'none'; }}
+        style={{
+          width: h, flexShrink: 0, border: 'none', padding: 0,
+          borderRight: `1px solid ${C.accentMuted}`,
+          background: 'transparent',
+          color: C.accent,
+          cursor: leadDisabled || !onLeadClick ? 'default' : 'pointer',
+          opacity: leadDisabled ? 0.4 : 1,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', outline: 'none',
+          transition: 'background 0.15s, opacity 0.15s',
+        }}
+      >
+        {icon}
+      </button>
+      <span
+        title={valueTitle}
+        style={{
+          display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0,
+          padding: '0 9px',
+          color: C.accent,
+          fontSize: FS.xs, fontWeight: 600, whiteSpace: 'nowrap',
+        }}
+      >
+        {value}
+        {trailing}
+      </span>
+    </span>
+  );
 }
 
 // Полоска-индикатор лимита подписки по верхней кромке карточки композера.
@@ -252,6 +352,12 @@ export function Composer({
   onCreateGroup,
   workLoop = null,
   onToggleWorkLoop,
+  teamImplement = null,
+  onToggleTeamImplementAuto,
+  onDisableTeamImplement,
+  onStopTeamImplement,
+  onEnableTeamImplement,
+  isProjectChat = false,
   worktreeBranch = null,
   onToggleWorktree,
   chatContext,
@@ -479,6 +585,27 @@ export function Composer({
   const handleSend = async () => {
     const t = text.trim();
 
+    // Режим «Командная реализация»: обвязки нет — включаем режим на сессии и отправляем
+    // тему обычным сообщением, дальше чат работает штабом (планирование → волны → проверка)
+    if (teamMech === 'implementMode') {
+      if (!t) { setTeamOpen(true); return; }
+      // Вне проекта команды нет — состав обязателен (подсказка в зоне настроек)
+      if (!isProjectChat && teamSettings.participants.length === 0) { setTeamOpen(true); return; }
+      // Режим уже включён — сообщение уходит как новая вводная, не пересобирая состояние
+      if (!teamImplement && onEnableTeamImplement) {
+        await onEnableTeamImplement({
+          autoWaves: teamSettings.modeAutoWaves,
+          executorPersonaIds: teamSettings.participants.map(p => p.id),
+        });
+      }
+      setLastMechanic(sessionId, 'implementMode');
+      onSend(t, attachments);
+      setTeamMech(null);
+      setTeamOpen(false);
+      resetInput();
+      return;
+    }
+
     // Командный ход: текст поля — тема, обвязка собирается buildTeamTurnText
     if (teamMech) {
       // Валидация: тема обязательна везде, кроме QA-цикла и ревью/красной команды
@@ -629,8 +756,9 @@ export function Composer({
     </button>
   ) : null;
 
-  // Кнопка «Обсудить с командой» — тоггл раскрывашки механик (активная — как loopButton)
-  const discussButton = canDiscuss ? (
+  // Кнопка «Обсудить с командой» — тоггл раскрывашки механик. Пока механика выбрана,
+  // кнопка «переехала» в пилюлю состояния (teamPill) и из ряда убирается
+  const discussButton = canDiscuss && !teamMech ? (
     <button
       onClick={() => setTeamOpen(o => !o)}
       title="Обсудить с командой"
@@ -646,41 +774,48 @@ export function Composer({
     </button>
   ) : null;
 
-  // Чип выбранной командной механики — слева от поля ввода; крестик снимает режим
+  // Пилюля выбранной командной механики — склейка кнопки «Обсудить с командой» с её
+  // чипом: сегмент-иконка открывает раскрывашку настроек (бывшая кнопка), ✕ снимает
+  // режим (бывший крестик чипа) — оба действия как раньше, просто в одном контуре
   const teamMechMeta = teamMech ? teamMechanic(teamMech) : null;
   const TeamMechIcon = teamMechMeta?.icon;
-  const teamChip = teamMechMeta && TeamMechIcon ? (
-    <span style={{
-      display: 'inline-flex', alignItems: 'center', gap: 6, height: isMobile ? 26 : 24,
-      padding: '0 4px 0 10px', borderRadius: R.max, background: C.accentLight, color: C.accent,
-      fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0,
-    }}>
-      <TeamMechIcon size={13} strokeWidth={2} style={{ flexShrink: 0 }} />
-      {teamMechMeta.name}
-      <button
-        onClick={() => setTeamMech(null)}
-        title="Отменить режим"
-        style={{
-          border: 'none', background: 'none', color: C.accent, cursor: 'pointer',
-          width: 18, height: 18, borderRadius: R.full, padding: 0,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}
-      >
-        <X size={12} strokeWidth={ICON_STROKE} />
-      </button>
-    </span>
+  const teamPill = teamMechMeta && TeamMechIcon ? (
+    <ModePill
+      isMobile={isMobile}
+      icon={<TeamMechIcon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+      leadTitle={`Командная механика «${teamMechMeta.name}» — настройки`}
+      onLeadClick={() => setTeamOpen(o => !o)}
+      valueTitle={`Активна механика «${teamMechMeta.name}». Иконка — настройки, ✕ — снять режим`}
+      // Короткое имя из словаря механик (teamMechanics.ts) — полное вываливалось бы за
+      // границы пилюли на узкой ширине; расшифровка — в leadTitle/valueTitle выше
+      value={teamMechMeta.shortName}
+      trailing={
+        <button
+          onClick={() => setTeamMech(null)}
+          title="Отменить режим"
+          style={{
+            border: 'none', background: 'none', color: C.accent, cursor: 'pointer',
+            width: 18, height: 18, borderRadius: R.full, padding: 0, flexShrink: 0,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}
+        >
+          <X size={12} strokeWidth={ICON_STROKE} />
+        </button>
+      }
+    />
   ) : null;
 
-  // Цикл «до готово»: тумблер + компактный бейдж прогресса итераций
+  // Цикл «до готово»: выключен — круглая кнопка в ряду, включён — пилюля в группе
+  // состояния, чей сегмент-иконка и есть кнопка (клик останавливает цикл, без confirm)
   const loopActive = !!workLoop?.active;
-  const loopButton = onToggleWorkLoop ? (
+  const loopButton = onToggleWorkLoop && !loopActive ? (
     <button
       onClick={onToggleWorkLoop}
       title="Цикл «до готово»: агент работает итерациями, пока не отчитается о завершении, затем верификационный ход"
       style={{
         width: isMobile ? 36 : 32, height: isMobile ? 36 : 32, borderRadius: R.pill, border: 'none',
-        background: loopActive ? C.accentLight : 'none',
-        cursor: 'pointer', color: loopActive ? C.accent : C.textMuted,
+        background: 'none',
+        cursor: 'pointer', color: C.textMuted,
         display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
         transition: 'color 0.15s, background 0.15s',
       }}
@@ -688,46 +823,66 @@ export function Composer({
       <RefreshCw size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
     </button>
   ) : null;
-  const loopBadge = onToggleWorkLoop && loopActive && workLoop ? (
-    <span style={{
-      display: 'inline-flex', alignItems: 'center', height: isMobile ? 26 : 24,
-      padding: '0 9px', borderRadius: R.pill, background: C.accentLight, color: C.accent,
-      fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0,
-    }}>
-      {workLoop.phase === 'verifying'
-        ? 'Цикл: верификация'
-        : `Цикл: итерация ${workLoop.iteration}/${workLoop.maxIterations}`}
-    </span>
+  const loopPill = onToggleWorkLoop && loopActive && workLoop ? (
+    <ModePill
+      isMobile={isMobile}
+      icon={<RefreshCw size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+      leadTitle="Остановить цикл «до готово»"
+      onLeadClick={() => void onToggleWorkLoop()}
+      valueTitle={workLoop.phase === 'verifying'
+        ? 'Цикл «до готово»: верификационный ход'
+        : `Цикл «до готово»: итерация ${workLoop.iteration} из ${workLoop.maxIterations}`}
+      value={workLoop.phase === 'verifying'
+        ? (isMobile ? 'Проверка' : 'Цикл: верификация')
+        : (isMobile ? `${workLoop.iteration}/${workLoop.maxIterations}` : `Цикл: итерация ${workLoop.iteration}/${workLoop.maxIterations}`)}
+    />
   ) : null;
 
-  // Отдельное git worktree: тумблер + бейдж ветки (как loopButton/loopBadge)
+  // Режим «Командная реализация» (флаг team-implement-mode): бейдж стадии + чип «Авто»
+  const teamImplementBadge = teamImplement && onToggleTeamImplementAuto && onDisableTeamImplement ? (
+    <TeamImplementBadge
+      state={teamImplement}
+      chatMode={mode}
+      isMobile={isMobile}
+      onToggleAuto={onToggleTeamImplementAuto}
+      onDisable={onDisableTeamImplement}
+      onStop={onStopTeamImplement}
+    />
+  ) : null;
+
+  // Отдельное git worktree чата — круглая кнопка-тумблер в ряду: активное состояние
+  // показывает только заливка accent (как у discussButton), БЕЗ имени ветки рядом.
+  // Это осознанное ИСКЛЮЧЕНИЕ из склеенной грамматики режимов (цикл и команда таскают
+  // значение в пилюле состояния): у дерева значение живёт в git-баре над композером
+  // (ProjectGitBar — там же дифф и «Опубликовать»), дублировать его в полосе не нужно.
+  // Дерево ХОДА (turnWorktree) здесь тоже не показываем — оно в том же баре.
+  // Не «унифицировать» склейку дерева обратно!
   const worktreeActive = !!worktreeBranch;
+  // Гейт безопасности: пока идёт ход, дерево чата переключать нельзя — процесс хода
+  // работает в нём прямо сейчас
+  const worktreeToggleDisabled = isGenerating;
+  const worktreeButtonTitle = worktreeToggleDisabled
+    ? 'Пока идёт ход, дерево чата переключать нельзя'
+    : worktreeActive
+      ? `Чат работает в отдельном дереве (ветка ${worktreeBranch}) — нажми, чтобы вернуть в проект`
+      : 'Отдельное дерево: чат работает в изолированном git worktree на своей ветке';
   const worktreeButton = onToggleWorktree ? (
     <button
-      onClick={onToggleWorktree}
-      title={worktreeActive
-        ? `Чат работает в отдельном дереве (ветка ${worktreeBranch}) — нажми, чтобы вернуть в проект`
-        : 'Отдельное дерево: чат работает в изолированном git worktree на своей ветке'}
+      onClick={worktreeToggleDisabled ? undefined : onToggleWorktree}
+      disabled={worktreeToggleDisabled}
+      title={worktreeButtonTitle}
       style={{
         width: isMobile ? 36 : 32, height: isMobile ? 36 : 32, borderRadius: R.pill, border: 'none',
         background: worktreeActive ? C.accentLight : 'none',
-        cursor: 'pointer', color: worktreeActive ? C.accent : C.textMuted,
+        cursor: worktreeToggleDisabled ? 'default' : 'pointer',
+        color: worktreeActive ? C.accent : C.textMuted,
         display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-        transition: 'color 0.15s, background 0.15s',
+        opacity: worktreeToggleDisabled ? 0.4 : 1,
+        transition: 'color 0.15s, background 0.15s, opacity 0.15s',
       }}
     >
       <FolderGit2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
     </button>
-  ) : null;
-  const worktreeBadge = onToggleWorktree && worktreeActive ? (
-    <span title={`Изолированное дерево чата, ветка ${worktreeBranch}`} style={{
-      display: 'inline-flex', alignItems: 'center', height: isMobile ? 26 : 24, maxWidth: 180,
-      padding: '0 9px', borderRadius: R.pill, background: C.accentLight, color: C.accent,
-      fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden',
-      textOverflow: 'ellipsis', flexShrink: 0,
-    }}>
-      {worktreeBranch}
-    </span>
   ) : null;
 
   const inputArea = isListening ? (
@@ -998,7 +1153,7 @@ export function Composer({
     { key: 'attach', node: attachButton, item: { key: 'attach', icon: <Plus size={16} strokeWidth={ICON_STROKE} />, label: 'Прикрепить файл', sublabel: 'Добавить файл к сообщению', onClick: onAttach } },
     slashButton && { key: 'slash', node: slashButton, item: { key: 'slash', icon: <span style={{ fontFamily: FONT.mono, fontSize: 15, fontWeight: 700, lineHeight: 1 }}>/</span>, label: 'Вставить скилл', sublabel: 'Список навыков через «/»', onClick: handleSlashButton } },
     loopButton && { key: 'loop', node: loopButton, item: { key: 'loop', icon: <RefreshCw size={16} strokeWidth={ICON_STROKE} />, label: 'Цикл «до готово»', sublabel: 'Повторять итерациями, пока не готово', toggle: loopActive, onClick: () => { void onToggleWorkLoop?.(); } } },
-    worktreeButton && { key: 'worktree', node: worktreeButton, item: { key: 'worktree', icon: <FolderGit2 size={16} strokeWidth={ICON_STROKE} />, label: 'Отдельное дерево', sublabel: 'Чат в изолированном git worktree', toggle: worktreeActive, onClick: () => { void onToggleWorktree?.(); } } },
+    worktreeButton && { key: 'worktree', node: worktreeButton, item: { key: 'worktree', icon: <FolderGit2 size={16} strokeWidth={ICON_STROKE} />, label: 'Отдельное дерево', sublabel: worktreeToggleDisabled ? (worktreeActive ? `Включено · ${worktreeBranch} · идёт ход…` : 'Пока идёт ход, недоступно') : (worktreeActive ? `Включено · ${worktreeBranch}` : 'Чат в изолированном git worktree'), toggle: worktreeActive, disabled: worktreeToggleDisabled, onClick: () => { if (!worktreeToggleDisabled) void onToggleWorktree?.(); } } },
     discussButton && { key: 'discuss', node: discussButton, item: { key: 'discuss', icon: <Users size={16} strokeWidth={ICON_STROKE} />, label: 'Обсудить с командой', sublabel: 'Выбрать механику совместной работы', toggle: teamOpen, onClick: () => setTeamOpen(o => !o) } },
   ].filter(Boolean) as { key: string; node: React.ReactNode; item: OverflowItem }[];
 
@@ -1010,7 +1165,46 @@ export function Composer({
     gap: isMobile ? 6 : 4,
     menuWidth: isMobile ? 40 : 34,
   });
-  const hiddenItems = collapsible.slice(visibleCount).map(c => c.item);
+  // Запасной клапан переполнения: badgesRef не сворачивается поэлементно, он жмётся
+  // flex'ом и режет пилюли через overflow:hidden. До склейки на узком десктопе это
+  // прятало только ЗНАЧЕНИЯ (кнопки режимов оставались в ряду), а теперь прячет и
+  // управление — поэтому переполненные пилюли дублируем строками-свитчами в «⋯»
+  // (как в макете: «пилюля не влезла → режим свитчем, значение в sublabel»).
+  // Два нюанса замера: (1) scrollWidth меняется без resize самого блока (новая пилюля
+  // в том же clientWidth) — мерим и на каждый рендер, и по ResizeObserver;
+  // (2) сам клапан занимает menuWidth+gap полосы и мог бы поддерживать переполнение,
+  // его оправдывающее — поэтому порог с запасом: клапан только когда без него обрезка
+  // была бы заметной, а не пару пикселей
+  const OVERFLOW_SLACK = isMobile ? 62 : 54; // menuWidth + gap + ~16px запаса
+  const [badgesOverflowed, setBadgesOverflowed] = useState(false);
+  useEffect(() => {
+    const el = badgesRef.current;
+    if (!el) return;
+    const check = () => setBadgesOverflowed(el.scrollWidth > el.clientWidth + OVERFLOW_SLACK);
+    check();
+    const ro = new ResizeObserver(check);
+    ro.observe(el);
+    return () => ro.disconnect();
+  });
+
+  // Пилюли активных режимов не сворачиваются (живут в badgesRef). В «⋯» дублируем их
+  // строками-свитчами: цикл — только когда пилюли реально обрезаны (его «N/M» видно
+  // в самой пилюле); команду — на мобиле также когда «⋯» уже открыт свёрнутыми
+  // кнопками (её значение короткое, sublabel — единственное место, где оно видно,
+  // а дубль в существующее меню ничего не стоит). Дерева здесь нет: его кнопка-тумблер
+  // живёт в сворачиваемом ряду (collapsible) и попадает в «⋯» общим путём — дубль
+  // не нужен, а значение ветки показывает git-бар
+  const collapsedAny = visibleCount < collapsible.length;
+  const dupOnMobile = isMobile && (collapsedAny || badgesOverflowed);
+  const activeModeItems = ([
+    badgesOverflowed && loopActive && workLoop && onToggleWorkLoop && { key: 'loop-on', icon: <RefreshCw size={16} strokeWidth={ICON_STROKE} />, label: 'Цикл «до готово»',
+      sublabel: workLoop.phase === 'verifying' ? 'Включено · верификация' : `Включено · итерация ${workLoop.iteration}/${workLoop.maxIterations}`,
+      toggle: true, onClick: () => { void onToggleWorkLoop(); } },
+    (dupOnMobile || (!isMobile && badgesOverflowed)) && teamMechMeta && { key: 'discuss-on', icon: <Users size={16} strokeWidth={ICON_STROKE} />, label: 'Обсудить с командой',
+      sublabel: `Включено · ${teamMechMeta.name}`, toggle: true,
+      onClick: () => setTeamMech(null) },
+  ].filter(Boolean) as OverflowItem[]);
+  const hiddenItems = [...collapsible.slice(visibleCount).map(c => c.item), ...activeModeItems];
 
   // Офлайн: заглушка вместо полей. Компонент остаётся смонтированным, поэтому
   // набранный текст (text) сохраняется до возврата в онлайн. Ранний return строго
@@ -1047,6 +1241,8 @@ export function Composer({
           settings={teamSettings}
           candidates={mentionable}
           availableSkills={skills.map(s => s.name)}
+          isProjectChat={isProjectChat}
+          chatMode={mode}
           isMobile={isMobile}
           onPick={id => { setTeamMech(id); textareaRef.current?.focus(); }}
           onSettings={setTeamSettings}
@@ -1195,9 +1391,9 @@ export function Composer({
           indicator={hiddenItems.some(i => i.toggle)} />
       )}
       <div ref={badgesRef} style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 6 : 4, minWidth: 0, overflow: 'hidden' }}>
-        {loopBadge}
-        {worktreeBadge}
-        {teamChip}
+        {loopPill}
+        {teamImplementBadge}
+        {teamPill}
       </div>
       {/* Правая группа: модель → усилие → собеседник, прижаты к правому краю */}
       {(onModelChange || onEffortChange || companionSelector) && (

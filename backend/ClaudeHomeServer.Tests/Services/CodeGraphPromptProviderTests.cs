@@ -150,6 +150,49 @@ public class CodeGraphPromptProviderTests
     }
 
     [Fact]
+    public async Task GetSliceAsync_ГрафаДереваНет_ОтдаётSliceГлавнойВеткиСПометкой()
+    {
+        // Чат в отдельном worktree: свой граф ещё не построен, граф корня проекта есть.
+        var main = MkRootDir();
+        WriteCs(main);
+        var worktree = MkRootDir();
+        var (provider, _, persistence) = MkProvider();
+        await persistence.SaveAsync(main, HubGraph(), CancellationToken.None);
+
+        var slice = await provider.GetSliceAsync(worktree, main);
+
+        slice.Should().NotBeNull("пустой промпт хуже приблизительного — отдаём срез главной ветки");
+        slice.Should().Contain("Demo.Hub");
+        slice.Should().Contain("ГЛАВНОЙ ветки", "агент должен знать, что срез не от его дерева");
+    }
+
+    [Fact]
+    public async Task GetSliceAsync_ГрафДереваЕсть_FallbackНеПрименяется()
+    {
+        var main = MkRootDir();
+        WriteCs(main);
+        var worktree = MkRootDir();
+        WriteCs(worktree);
+        var (provider, _, persistence) = MkProvider();
+        // У дерева свой граф — пометка про главную ветку не нужна.
+        await persistence.SaveAsync(main, HubGraph(leaves: 11), CancellationToken.None);
+        await persistence.SaveAsync(worktree, HubGraph(leaves: 14), CancellationToken.None);
+
+        var slice = await provider.GetSliceAsync(worktree, main);
+
+        slice.Should().NotBeNull();
+        slice.Should().Contain("14 связей", "slice построен по графу самого дерева");
+        slice.Should().NotContain("ГЛАВНОЙ ветки");
+    }
+
+    [Fact]
+    public async Task GetSliceAsync_ГрафовНетНиУДереваНиУПроекта_ВозвращаетNull()
+    {
+        var (provider, _, _) = MkProvider();
+        (await provider.GetSliceAsync(MkRootDir(), MkRootDir())).Should().BeNull();
+    }
+
+    [Fact]
     public async Task GetSliceAsync_ТеЖеИзменения_ПереиспользуетКэшБезПерезагрузкиГрафа()
     {
         var dir = MkRootDir();

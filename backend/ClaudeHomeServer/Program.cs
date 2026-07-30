@@ -127,11 +127,17 @@ builder.Services.AddSingleton<PersonaPromptBuilder>();
 builder.Services.AddSingleton<PersonaMemoryService>();
 builder.Services.AddSingleton<TeamMemoryService>();
 builder.Services.AddSingleton<PersonaBindingsService>();
+// Планирование режима «Командная реализация» (Э2): подбор координатора/планировщика,
+// карточки кандидатов и структурный план
+builder.Services.AddSingleton<TeamPlanningService>();
 // Файловые сабагенты-персоны: генерация + синк .md-агентов
 // Пул подписок с восстановлением пометок исчерпания из снапшотов usage после рестарта
 builder.Services.AddSingleton(sp => new ClaudeSubscriptionPool(
     sp.GetRequiredService<IConfiguration>(), sp.GetRequiredService<UsageService>()));
-// Стартовый прогрев утилизации подписок (один пробный ход на аккаунт) — при HasExtra и флаге
+// Время последней фактической активности аккаунта пула (живой ход / идл-пинг) —
+// делит SessionManager (RateLimitMessage живого хода) и SubscriptionUsageWarmupService
+builder.Services.AddSingleton<SubscriptionActivityTracker>();
+// Стартовый прогрев + идл-пинг утилизации подписок (пробный ход на простаивающий аккаунт)
 builder.Services.AddHostedService<SubscriptionUsageWarmupService>();
 // Точная утилизация обоих окон (5ч + неделя) каждого аккаунта через api/oauth/usage;
 // singleton — статусы опроса per-аккаунт (токен не подходит / ошибка) читает /api/usage
@@ -233,6 +239,13 @@ builder.Services.AddSingleton<NotificationService>();
 builder.Services.AddSingleton<PushSubscriptionStore>();
 builder.Services.AddSingleton<PushService>();
 builder.Services.AddSingleton<TaskExecutionService>();
+// Раздача под-задач и волны режима «Командная реализация» (Э3): создание задач по плану
+// и пакетный запуск исполнителей. Конструктор вешает хук в SessionManager — сервис нужно
+// прогреть на старте (ниже), иначе «Запустить» в карточке плана осталось бы без раздачи.
+builder.Services.AddSingleton<TeamWaveService>();
+// Сторож зависших волн (Э4): без него молчаливо умерший исполнитель оставлял бы штаб
+// в стадии «волна N» навсегда
+builder.Services.AddHostedService<TeamWaveWatchdog>();
 builder.Services.AddSingleton<SessionSummaryService>();
 builder.Services.AddSingleton<ChatTaskExtractionService>();
 builder.Services.AddSingleton<DailyBriefingService>();
@@ -272,6 +285,12 @@ builder.Services.AddHttpClient("fal");
 builder.Services.AddHttpClient("llm-provider");
 builder.Services.AddHttpClient("anthropic-oauth");
 builder.Services.AddHttpForwarder();
+// Раздел «Телеметрия»: опции проброса SigNoz UI (Telemetry:Ui) + короткий HTTP-клиент
+// для health-пинга статуса. Опции регистрируем ВСЕГДА (выключенные тоже) — их читают
+// и контроллер статуса, и middleware проброса /telemetry-proxy/** ниже.
+builder.Services.AddSingleton(
+    ClaudeHomeServer.Telemetry.TelemetryUiOptions.FromConfig(builder.Configuration));
+builder.Services.AddHttpClient("telemetry-ui", c => c.Timeout = TimeSpan.FromSeconds(3));
 builder.Services.AddReverseProxy()
     .LoadFromConfig(builder.Configuration.GetSection("ReverseProxy"))
     .ConfigureHttpClient((_, handler) =>
@@ -475,6 +494,8 @@ if (!inspectionMode)
     }
 }
 app.Services.GetRequiredService<JwtService>();
+// Раздача волн «Командной реализации»: конструктор вешает хук в SessionManager
+app.Services.GetRequiredService<TeamWaveService>();
 // Синк файловых сабагентов-персон: подписки на события PersonaManager должны встать
 // до первых запросов (иначе ранние правки персон не долетят до .md-файлов).
 // В копии НЕ поднимаем: синк пишет .claude/agents/*.md в реальные папки проектов
@@ -743,6 +764,81 @@ app.Use(async (ctx, next) =>
             ctx.Request.Path = restPath.Length == 0 ? "/" : restPath;
             var forwarder = ctx.RequestServices.GetRequiredService<IHttpForwarder>();
             await forwarder.SendAsync(ctx, $"http://127.0.0.1:{port}", previewInvoker,
+                ForwarderRequestConfig.Empty, HttpTransformer.Default);
+            return;
+        }
+        await next();
+    });
+}
+
+// Telemetry proxy: /telemetry-proxy/** → SigNoz UI (раздел «Телеметрия», admin-only).
+// Same-origin проброс для iframe: браузер грузит /telemetry-proxy/ с нашего origin, мы
+// форвардим на локальный SigNoz. Ключевое отличие от preview выше — префикс НЕ срезаем:
+// SigNoz с env SIGNOZ_GLOBAL_EXTERNAL__URL=.../telemetry-proxy сам живёт под этим base-path
+// (вставляет <base href> в SPA, ассеты и API резолвятся под префиксом — подтверждено спайком),
+// поэтому HttpTransformer.Default отдаёт путь как есть. Стоит ДО раздачи фронта/SPA-fallback,
+// чтобы /telemetry-proxy/* не ушёл в index.html.
+{
+    var telemetryUi = app.Services.GetRequiredService<ClaudeHomeServer.Telemetry.TelemetryUiOptions>();
+    var telemetryInvoker = new HttpMessageInvoker(new SocketsHttpHandler
+    {
+        UseProxy = false,
+        AllowAutoRedirect = false,
+        AutomaticDecompression = DecompressionMethods.None,
+        UseCookies = false,
+    });
+
+    app.Use(async (ctx, next) =>
+    {
+        var path = ctx.Request.Path.Value ?? "";
+        if (path.Equals("/telemetry-proxy", StringComparison.OrdinalIgnoreCase) ||
+            path.StartsWith("/telemetry-proxy/", StringComparison.OrdinalIgnoreCase))
+        {
+            // Выключено в конфиге — 503, фронт покажет заглушку «настрой, администратор».
+            if (!telemetryUi.Enabled)
+            {
+                ctx.Response.StatusCode = 503;
+                ctx.Response.ContentType = "application/json; charset=utf-8";
+                await ctx.Response.WriteAsync("{\"error\":\"Телеметрия не настроена\"}");
+                return;
+            }
+
+            // Аутентификация как у preview: iframe не носит Bearer, поэтому токен берём из
+            // cookie cc_telemetry (её ставит фронт перед загрузкой iframe — уходит и с
+            // сабресурсами SigNoz), либо из access_token / Bearer (прямое открытие в новой вкладке).
+            var jwtSvc = ctx.RequestServices.GetRequiredService<JwtService>();
+            var token = ctx.Request.Cookies["cc_telemetry"];
+            if (string.IsNullOrEmpty(token))
+            {
+                var q = ctx.Request.Query["access_token"].ToString();
+                if (!string.IsNullOrEmpty(q)) token = q;
+                else
+                {
+                    var auth = ctx.Request.Headers.Authorization.ToString();
+                    if (auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+                        token = auth["Bearer ".Length..].Trim();
+                }
+            }
+            var userId = jwtSvc.ValidateUserToken(token);
+            if (userId is null)
+            {
+                ctx.Response.StatusCode = 401;
+                await ctx.Response.WriteAsync("{\"error\":\"Требуется авторизация\"}");
+                return;
+            }
+            // Телеметрия — админская. Роль берём из стора (source-of-truth: ловит отзыв роли,
+            // в отличие от роли из уже выданного JWT). Не админ — 403, чтобы валидный
+            // cc_telemetry не-админа не пускал к SigNoz.
+            var user = ctx.RequestServices.GetRequiredService<UserStore>().GetById(userId);
+            if (user is null || user.Role != "admin")
+            {
+                ctx.Response.StatusCode = 403;
+                await ctx.Response.WriteAsync("{\"error\":\"Доступ запрещён\"}");
+                return;
+            }
+
+            var forwarder = ctx.RequestServices.GetRequiredService<IHttpForwarder>();
+            await forwarder.SendAsync(ctx, telemetryUi.InternalUrl, telemetryInvoker,
                 ForwarderRequestConfig.Empty, HttpTransformer.Default);
             return;
         }

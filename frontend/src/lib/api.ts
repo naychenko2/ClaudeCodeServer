@@ -902,6 +902,23 @@ export const api = {
         method: 'PUT',
         body: JSON.stringify({ enabled }),
       }),
+    // Режим «Командная реализация» (флаг team-implement-mode): вкл/выкл режима чата-штаба.
+    // При включении можно сразу задать авто-волны и состав (пустой список = вся команда)
+    setTeamImplement: (id: string, enabled: boolean, opts?: { autoWaves?: boolean; coordinatorPersonaId?: string; plannerPersonaId?: string; executorPersonaIds?: string[] }) =>
+      request<Session>(`/chats/${id}/team-implement`, {
+        method: 'PUT',
+        body: JSON.stringify({ enabled, ...opts }),
+      }),
+    // Переключение авто-волн на ходу (из бейджа режима): трогает только флаг, не режим
+    setTeamImplementAuto: (id: string, autoWaves: boolean) =>
+      request<Session>(`/chats/${id}/team-implement/auto`, {
+        method: 'PUT',
+        body: JSON.stringify({ autoWaves }),
+      }),
+    // «Остановить» (кнопка человека): новые волны не стартуют, текущие исполнители
+    // дорабатывают начатое. В ленте появляется карточка остановки с «Продолжить»
+    stopTeamImplement: (id: string) =>
+      request<Session>(`/chats/${id}/team-implement/stop`, { method: 'PUT' }),
     // Отдельное git worktree чата: вкл — сессия переезжает в изолированное дерево на новой
     // ветке (начатый чат — с переносом контекста), выкл — возврат в корень проекта.
     // force подтверждает потерю несохранённых правок дерева. Только проектные чаты.
@@ -914,11 +931,12 @@ export const api = {
       }),
     // Миграция чата на другого провайдера («Продолжить на …» при исчерпании лимита):
     // транскрипт переезжает в профиль провайдера, контекст сохраняется. Работает и для
-    // проектных сессий
-    migrateProvider: (id: string, model: string) =>
+    // проектных сессий. subscriptionKey — явный выбор аккаунта того же пула подписок
+    // (кнопка kind='subscription' карточки лимита); для сторонних провайдеров не передаётся
+    migrateProvider: (id: string, model: string, subscriptionKey?: string) =>
       request<Session>(`/chats/${id}/migrate-provider`, {
         method: 'POST',
-        body: JSON.stringify({ model }),
+        body: JSON.stringify(subscriptionKey ? { model, subscriptionKey } : { model }),
       }),
     // Режим прав: сохраняем сразу при выборе в Composer, иначе он доехал бы до сессии
     // только вместе со следующим сообщением и терялся при уходе со страницы
@@ -990,6 +1008,12 @@ export const api = {
           home: scope.home === undefined ? null : scope.home,
         }),
       }),
+  },
+
+  // Раздел «Телеметрия»: статус проброса SigNoz — фронт решает, показать iframe или заглушку
+  telemetry: {
+    status: () =>
+      request<{ configured: boolean; reachable: boolean; proxyPath: string }>('/telemetry/status'),
   },
 
   files: {

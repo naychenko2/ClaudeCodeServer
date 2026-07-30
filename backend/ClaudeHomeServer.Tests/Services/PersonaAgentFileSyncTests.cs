@@ -149,10 +149,72 @@ public class PersonaAgentFileSyncTests : IDisposable
         for (var i = 0; i < 5; i++) Create($"Персона{i}");
         _sut.SyncOwner("owner-1", force: true);
 
+        // Только файлы агентов: рядом в .claude/ лежит ещё справочник категорий делегирования
         var files = Directory.EnumerateFiles(Path.Combine(_agentsBase, "owner-1"), "*.md",
-            SearchOption.AllDirectories).ToList();
+            SearchOption.AllDirectories)
+            .Where(f => Path.GetFileName(Path.GetDirectoryName(f)) == "agents")
+            .ToList();
         files.Should().HaveCount(3, "кап Persona:AgentFilesMax=3");
         _sut.EligiblePersonas("owner-1").Should().HaveCount(3);
+    }
+
+    [Fact]
+    public void Reconcile_КладётСправочникКатегорийВРабочуюПапку()
+    {
+        Create("Кто-то");
+        _sut.SyncOwner("owner-1", force: true);
+
+        // Рядом с .claude/agents/, в самой рабочей папке — по относительному пути из промпта
+        var profiles = Path.Combine(_agentsBase, "owner-1", "shared", ".claude",
+            PersonaAgentFileSync.CategoryProfilesFileName);
+        File.Exists(profiles).Should().BeTrue();
+        var text = File.ReadAllText(profiles);
+        text.Should().Contain("ultrabrain").And.Contain("Ворота выбора");
+        text.Should().StartWith(PersonaAgentFileSync.CategoryProfilesMarker, "по шапке узнаём свой файл");
+        PersonaAgentFileSync.CategoryProfilesRelativePath.Should().Be(".claude/delegation-categories.md");
+    }
+
+    [Fact]
+    public void СправочникКатегорий_ЧужойФайлСТемЖеИменем_НеТрогаем()
+    {
+        // В .claude/ рабочей папки пользователь мог завести свой delegation-categories.md —
+        // терять чужие данные нельзя даже в служебной папке
+        var projRoot = Path.Combine(_tempDir, "alien-profiles");
+        Directory.CreateDirectory(Path.Combine(projRoot, ".claude"));
+        var project = _projects.Create("Проект", projRoot, "owner-1", "owner");
+        var path = Path.Combine(projRoot, ".claude", PersonaAgentFileSync.CategoryProfilesFileName);
+        File.WriteAllText(path, "# Мои заметки по делегированию");
+
+        _sut.SyncOwner("owner-1", force: true);
+
+        File.ReadAllText(path).Should().Be("# Мои заметки по делегированию");
+        // И путь наружу не отдаём: ссылаться в постановке на чужой файл незачем
+        _sut.EnsureCategoryProfiles("owner-1", project.Id).Should().BeNull();
+    }
+
+    [Fact]
+    public void EnsureCategoryProfiles_ПроектБезФайла_ПишетМимоТроттлинга()
+    {
+        // Троттлинг SyncOwner — 5 минут: проект, созданный сразу перед запуском задачи,
+        // иначе получил бы в постановке ссылку на несуществующий файл
+        _sut.SyncOwner("owner-1", force: true);
+        var projRoot = Path.Combine(_tempDir, "fresh-project");
+        Directory.CreateDirectory(projRoot);
+        var project = _projects.Create("Свежий", projRoot, "owner-1", "owner");
+        var expected = Path.Combine(projRoot, ".claude", PersonaAgentFileSync.CategoryProfilesFileName);
+        File.Exists(expected).Should().BeFalse("SyncOwner в окне троттлинга сюда не дойдёт");
+
+        var path = _sut.EnsureCategoryProfiles("owner-1", project.Id);
+
+        path.Should().Be(expected);
+        Path.IsPathRooted(path!).Should().BeTrue("в промпт идёт абсолютный путь — Read другой не примет");
+        File.ReadAllText(path!).Should().Contain("ultrabrain");
+    }
+
+    [Fact]
+    public void EnsureCategoryProfiles_НеизвестныйПроект_Null()
+    {
+        _sut.EnsureCategoryProfiles("owner-1", "no-such-project").Should().BeNull();
     }
 
     [Fact]

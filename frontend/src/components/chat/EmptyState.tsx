@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { Session, Persona } from '../../types';
+import type { Session, Persona, Project } from '../../types';
 import { C, R, FONT } from '../../lib/design';
 import { NewChatSetup } from './NewChatSetup';
 import { useAssistantName } from './contexts';
@@ -13,12 +13,14 @@ const HINTS = ['Объясни структуру проекта', 'Найди �
 const CHAT_HINTS = ['Найди информацию в интернете', 'Напиши пост для соцсетей', 'Сгенерируй картинку'];
 
 // Empty state пустого чата: приветствие/чипы-подсказки; для проекта без CLAUDE.md — CTA /init.
-// Внизу — настройка будущего чата (модель + усилие рассуждения), пока не отправлено первое сообщение.
-export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, onSessionUpdated, isMobile, personas, selectedPersonaId, onPickPersona }: {
+// Внизу — настройка будущего чата (модель, усилие, время жизни, теги), пока не отправлено первое сообщение.
+export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, project, onSessionUpdated, isMobile, personas, selectedPersonaId, onPickPersona }: {
   hasProject: boolean;
   hasCLAUDEmd: boolean | null;
   onHint: (hint: string) => void;
   session?: Session;
+  // Полный проект — только для реестра тегов в NewChatSetup (per-project); hasProject остаётся для остального контента
+  project?: Project;
   onSessionUpdated?: (s: Session) => void;
   isMobile?: boolean;
   // Доступные персоны — ряд «Поговорить с…» для пустого чата
@@ -150,9 +152,9 @@ export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, onSes
               />
             )}
 
-            {/* Настройка чата — модель и усилие рассуждения (до первого сообщения) */}
+            {/* Настройка чата — модель, усилие рассуждения, время жизни, теги (до первого сообщения) */}
             {session && (
-              <NewChatSetup session={session} onSessionUpdated={onSessionUpdated} isMobile={isMobile} />
+              <NewChatSetup session={session} project={project} onSessionUpdated={onSessionUpdated} isMobile={isMobile} />
             )}
           </div>
   );

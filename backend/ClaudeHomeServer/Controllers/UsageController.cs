@@ -55,7 +55,8 @@ public class UsageController(UsageService usage, ClaudeSubscriptionPool? subscri
                     InRotation: subscriptionPool.IsInRotation(key),
                     Utilization: subscriptionPool.EffectiveUtilization(key),
                     Exhausted: subscriptionPool.IsExhausted(key),
-                    Tier: subscriptionPool.TierLabel(key));
+                    Tier: subscriptionPool.TierLabel(key),
+                    LoginCommand: oauthUsage.LoginCommandFor(key));
             }
             // Фактическая цель роутинга (куда ушёл бы новый чат) — детерминированный выбор,
             // чтобы бейдж не мигал между равными аккаунтами при обновлении экрана

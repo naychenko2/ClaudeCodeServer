@@ -4,8 +4,12 @@
 // Оборачивается в centerIsland в DesktopWorkspace — как прочие документы центра.
 // Состояния: построен (SVG-холст) / empty (404) / loading / building (сборка идёт,
 // авто-polling стора) / error. isStale — мягкий warning-бейдж в шапке + «Перестроить»
-// как главное действие. На мобиле документ на весь экран, режимы и паспорт — в нижней
-// шторке по FAB.
+// как главное действие. На мобиле документ на весь экран, паспорт — в нижней шторке по FAB.
+//
+// Навигация — единая цепочка крошек, не тумблер режимов: документ открывается сразу
+// в «Обзоре» (граф групп неймспейсов по слоям), а «Фокус» (окрестность одного типа) —
+// не отдельная вкладка, а место, куда приводит клик по типу. Крошки одинаково понимают
+// оба вида шагов (группа → обзор с раскрытием, тип → фокус) — см. lib/codeGraph.ts.
 import { useMemo, useState, useEffect } from 'react';
 import { Network, RefreshCw, X, SlidersHorizontal, AlertTriangle } from 'lucide-react';
 import { C, FONT, FS, R, SP, SHADOW } from '../../lib/design';
@@ -14,8 +18,10 @@ import { Toolbar, ToolbarIconButton } from '../../components/Toolbar';
 import { Modal } from '../../components/ui/Modal';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { useCodeGraph, useCodeGraphActions } from '../../lib/codeGraph';
-import { layoutGraph } from './graphLayout';
-import { CodeGraphCanvas } from './CodeGraphCanvas';
+import { graphDegree } from './graphFocus';
+import { buildFocusModel } from './graphFocus';
+import { buildOverviewScene, layoutOverview, defaultExpandedGroups, type OverviewItem } from './graphOverview';
+import { CodeGraphFocusCanvas, CodeGraphOverviewCanvas } from './CodeGraphCanvas';
 import { CodeGraphPanel } from './CodeGraphPanel';
 
 interface Props {
@@ -35,11 +41,93 @@ function formatBuiltAt(iso?: string | null): string | null {
   return `${pad(d.getDate())}.${pad(d.getMonth() + 1)} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+interface CrumbDisplay {
+  key: string;
+  label: string;
+  step: number;   // индекс в s.navPath, -1 — корень «Обзора»
+}
+
 export function CodeGraphDocument({ projectId, isMobile, onClose, onOpenFile, onBuild }: Props) {
   const s = useCodeGraph();
   const a = useCodeGraphActions();
   const [sheetOpen, setSheetOpen] = useState(false);
-  const layout = useMemo(() => (s.data ? layoutGraph(s.data) : null), [s.data]);
+  const degree = useMemo(() => (s.data ? graphDegree(s.data) : undefined), [s.data]);
+
+  // «Фокус»: окрестность выбранного типа — крошки, счётчик и сам холст рисуют одну
+  // и ту же модель, второй раз её считать незачем
+  const focus = useMemo(() => {
+    if (!s.data || !s.selectedId) return null;
+    return buildFocusModel(s.data, s.selectedId, {
+      filters: s.filters,
+      hideTests: s.hideTestNodes,
+      depth2: s.focusDepth2,
+      mobile: isMobile,
+      degree,
+    });
+  }, [s.data, s.selectedId, s.filters, s.hideTestNodes, s.focusDepth2, isMobile, degree]);
+
+  // «Обзор»: холст показывает группы неймспейсов по слоям, не типы.
+  // Раскрытые пользователем группы — сверх автоматически раскрытого общего корня.
+  const overviewExpanded = useMemo(() => {
+    if (!s.data) return new Set<string>();
+    const base = defaultExpandedGroups(s.data.nodes);
+    for (const g of s.overviewExpanded) base.add(g);
+    return base;
+  }, [s.data, s.overviewExpanded]);
+
+  const overviewScene = useMemo(() => {
+    if (!s.data || s.viewMode !== 'overview') return null;
+    return buildOverviewScene(s.data, {
+      expanded: overviewExpanded,
+      typesGroup: s.overviewTypesGroup,
+      hideTests: s.hideTestNodes,
+      filters: s.filters,
+      typesLimit: isMobile ? 12 : 30,
+    });
+  }, [s.data, s.viewMode, overviewExpanded, s.overviewTypesGroup, s.hideTestNodes, s.filters, isMobile]);
+
+  const overviewLayout = useMemo(
+    () => (overviewScene ? layoutOverview(overviewScene, { mobile: isMobile }) : null),
+    [overviewScene, isMobile],
+  );
+
+  // Ключ анимации перехода «Обзора»: меняется при любой смене раскрытия — не завязан
+  // на identity объектов сцены/раскладки (те пересоздаются на каждый рендер)
+  const overviewAnimKey = useMemo(
+    () => s.navPath.filter(step => step.kind === 'group').map(g => `${g.group}:${g.drilled}`).join('>'),
+    [s.navPath],
+  );
+
+  // Единая цепочка крошек: «Обзор» (корень, всегда первый) + шаги навигации — группа
+  // ведёт в обзор с соответствующим раскрытием, тип — в фокус на нём. Не растёт
+  // неограниченно: середина сворачивается в «…» (на мобиле — агрессивнее).
+  const crumbs = useMemo<CrumbDisplay[]>(() => {
+    const root: CrumbDisplay = { key: 'root', label: 'Обзор', step: -1 };
+    if (!s.navPath.length) return [root];
+    const byId = s.data ? new Map(s.data.nodes.map(n => [n.id, n])) : null;
+    const steps: CrumbDisplay[] = s.navPath.map((step, i) => step.kind === 'node'
+      ? { key: `n:${step.id}:${i}`, label: byId?.get(step.id)?.label ?? step.id, step: i }
+      : { key: `g:${step.group}:${i}`, label: step.group.split('.').pop() ?? step.group, step: i });
+    const maxTail = isMobile ? 2 : 4;
+    if (steps.length <= maxTail) return [root, ...steps];
+    const tail = steps.slice(-maxTail);
+    const ellipsis: CrumbDisplay = { key: 'ellipsis', label: '…', step: steps.length - maxTail - 1 };
+    return [root, ellipsis, ...tail];
+  }, [s.navPath, s.data, isMobile]);
+
+  // Клик по группе «Обзора»: есть куда раскрыть глубже — раскрываем на уровень, иначе —
+  // сразу до типов. Двойной клик — всегда до типов. Клик по типу — переход в «Фокус»
+  // (сквозной вход: цепочка группа-шагов пересчитывается заново от корня к типу).
+  const onOverviewItemClick = (it: OverviewItem) => {
+    if (it.kind === 'node') { a.select(it.node!.id); return; }
+    if (it.kind !== 'group') return;
+    if (it.hasChildren && !overviewExpanded.has(it.group!)) a.expandGroup(it.group!);
+    else a.drillOverviewTypes(it.group!);
+  };
+  const onOverviewItemDblClick = (it: OverviewItem) => {
+    if (it.kind === 'node') { a.select(it.node!.id); return; }
+    if (it.kind === 'group') a.drillOverviewTypes(it.group!);
+  };
 
   // Документ сам запускает загрузку при монтировании (мобила: граф открывается
   // из меню «⋯» без панели рельсы, которая обычно триггерит load). Идемпотентно.
@@ -141,16 +229,64 @@ export function CodeGraphDocument({ projectId, isMobile, onClose, onOpenFile, on
           />
         )}
 
-        {s.status === 'ready' && layout && s.data && (
-          <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
-            <CodeGraphCanvas
-              graph={s.data}
-              layout={layout}
-              filters={s.filters}
-              selectedId={s.selectedId}
-              query={s.query}
-              onSelect={a.select}
-            />
+        {s.status === 'ready' && s.data && (
+          <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+            {/* Единая цепочка крошек: «Назад» — один шаг; клик по ступени — возврат
+                ровно на неё, всё правее отбрасывается */}
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: SP.sm, padding: `${SP.sm} ${SP.md}`,
+              borderBottom: `1px solid ${C.borderLight}`, background: C.bgPanel, flexShrink: 0,
+              overflowX: 'auto', whiteSpace: 'nowrap',
+            }}>
+              <BackButton onClick={() => a.back()} title="Назад"
+                iconSize={ICON_SIZE.xs}
+                style={{ opacity: s.navPath.length ? 1 : 0.4, pointerEvents: s.navPath.length ? 'auto' : 'none' }}>
+                <span style={{ fontSize: FS.xs, color: C.textSecondary }}>Назад</span>
+              </BackButton>
+              <span style={{ width: 1, height: 14, background: C.borderLight, flexShrink: 0 }} />
+              {crumbs.map((c, i) => {
+                const last = i === crumbs.length - 1;
+                return (
+                  <span key={c.key} style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs, flexShrink: 0 }}>
+                    {i > 0 && <span style={{ color: C.textMuted, fontSize: FS.xs }}>›</span>}
+                    <span
+                      onClick={last ? undefined : () => a.toStep(c.step)}
+                      title={last ? undefined : `Вернуться к ${c.label}`}
+                      style={{
+                        fontFamily: FONT.mono, fontSize: FS.xs,
+                        color: last ? C.textHeading : C.info,
+                        fontWeight: last ? 600 : 400,
+                        cursor: last ? 'default' : 'pointer',
+                        padding: '2px 6px', borderRadius: R.sm,
+                      }}>{c.label}</span>
+                  </span>
+                );
+              })}
+              {!isMobile && focus && (
+                <span style={{ marginLeft: 'auto', fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, paddingLeft: SP.sm }}>
+                  {focus.center.fullyQualifiedName}
+                </span>
+              )}
+            </div>
+
+            <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
+            {s.viewMode === 'focus' && focus && (
+              <CodeGraphFocusCanvas
+                focus={focus}
+                onRefocus={a.refocus}
+                onClear={() => a.select(null)}
+                onExpandTail={side => { a.setFocusTail(side); if (isMobile) setSheetOpen(true); }}
+              />
+            )}
+            {s.viewMode === 'overview' && overviewScene && overviewLayout && (
+              <CodeGraphOverviewCanvas
+                scene={overviewScene}
+                layout={overviewLayout}
+                animKey={overviewAnimKey}
+                onItemClick={onOverviewItemClick}
+                onItemDblClick={onOverviewItemDblClick}
+              />
+            )}
             {/* Мобила: FAB режимов/паспорта с бейджем числа активных фильтров */}
             {isMobile && (
               <button onClick={() => setSheetOpen(true)} title="Режимы и паспорт графа"
@@ -168,6 +304,38 @@ export function CodeGraphDocument({ projectId, isMobile, onClose, onOpenFile, on
                   }}>{modesBadge}</span>
                 )}
               </button>
+            )}
+            </div>
+
+            {/* Счётчик фокуса: честно проговаривает, сколько показано и сколько скрыто */}
+            {s.viewMode === 'focus' && focus && (
+              <div style={{
+                flexShrink: 0, padding: `${SP.xs} ${SP.md}`, borderTop: `1px solid ${C.borderLight}`,
+                background: C.bgInset, fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted,
+                overflowX: 'auto', whiteSpace: 'nowrap',
+              }}>
+                {`показано ${focus.shownCount} из ${s.data.nodes.length} узлов · глубина ${s.focusDepth2 ? 2 : 1}`}
+                {s.focusDepth2 && ` (второе кольцо: ${focus.secondShown} из ${focus.secondTotal}, остальные скрыты)`}
+                {` · связей у центра: ${focus.centerDegree}`}
+                {(focus.incoming.length > focus.limit || focus.outgoing.length > focus.limit)
+                  && ` · в заглушках: ${Math.max(0, focus.incoming.length - focus.limit) + Math.max(0, focus.outgoing.length - focus.limit)}`}
+              </div>
+            )}
+
+            {/* Счётчик обзора: сколько элементов на холсте и сколько типов/связей за ними стоит */}
+            {s.viewMode === 'overview' && overviewScene && (
+              <div style={{
+                flexShrink: 0, padding: `${SP.xs} ${SP.md}`, borderTop: `1px solid ${C.borderLight}`,
+                background: C.bgInset, fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted,
+                overflowX: 'auto', whiteSpace: 'nowrap',
+              }}>
+                {(() => {
+                  const groups = overviewScene.items.filter(it => it.kind !== 'node').length;
+                  const types = overviewScene.items.filter(it => it.kind === 'node').length;
+                  return `на холсте ${overviewScene.items.length} элементов (${groups} групп + ${types} типов) · `
+                    + `${overviewScene.totalTypeCount - types} типов свёрнуты в группы · ${overviewScene.bundles.length} пучков связей`;
+                })()}
+              </div>
             )}
           </div>
         )}

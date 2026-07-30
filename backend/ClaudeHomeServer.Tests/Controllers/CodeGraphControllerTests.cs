@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.CodeGraph;
 using ClaudeHomeServer.Services.CodeGraph.Core;
 using ClaudeHomeServer.Tests.Helpers;
@@ -403,6 +404,93 @@ public class CodeGraphControllerTests : IClassFixture<TestWebApplicationFactory>
             .StatusCode.Should().Be(HttpStatusCode.Forbidden);
         (await other.GetAsync($"/api/projects/{id}/code-graph/hubs"))
             .StatusCode.Should().Be(HttpStatusCode.Forbidden);
+    }
+
+    // ===== ?rootPath= — граф отдельного дерева чата (ADR-003) =====
+
+    // Проект + чат, которому «включили» отдельное дерево: сам git-worktree здесь не нужен —
+    // проверяется контракт контроллера (белый список путей), а не работа git.
+    private async Task<(string ProjectId, string WorktreeDir)> ProjectWithWorktreeChatAsync(string name)
+    {
+        var dir = MkProjectDir(name);
+        WriteCs(dir);
+        var project = await CreateProjectAsync(name, dir);
+        var projectId = project.GetProperty("id").GetString()!;
+
+        var created = await _client.PostAsJsonAsync($"/api/projects/{projectId}/sessions", new { mode = "auto" });
+        created.EnsureSuccessStatusCode();
+        var sessionId = JsonSerializer.Deserialize<JsonElement>(await created.Content.ReadAsStringAsync())
+            .GetProperty("id").GetString()!;
+
+        var worktree = MkProjectDir(name + "_wt");
+        WriteCs(worktree);
+        _factory.Services.GetRequiredService<SessionManager>().GetById(sessionId)!.WorktreePath = worktree;
+
+        return (projectId, worktree);
+    }
+
+    [Fact]
+    public async Task Get_RootPathОтдельногоДереваЧата_Возвращает200СЕгоГрафом()
+    {
+        var (projectId, worktree) = await ProjectWithWorktreeChatAsync("wt-graph");
+        // Граф есть ТОЛЬКО у отдельного дерева: у корня проекта его не строили.
+        await SaveGraphAsync(worktree, SampleGraph());
+
+        var resp = await _client.GetAsync(
+            $"/api/projects/{projectId}/code-graph?rootPath={Uri.EscapeDataString(worktree)}");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync());
+        body.GetProperty("nodes").GetArrayLength().Should().Be(3);
+
+        // Тонкие запросы (за ними MCP-инструменты) смотрят в то же дерево.
+        var find = await _client.GetAsync(
+            $"/api/projects/{projectId}/code-graph/find?q=Foo&rootPath={Uri.EscapeDataString(worktree)}");
+        find.StatusCode.Should().Be(HttpStatusCode.OK);
+        JsonSerializer.Deserialize<JsonElement>(await find.Content.ReadAsStringAsync())
+            .GetProperty("results").EnumerateArray().First()
+            .GetProperty("fqn").GetString().Should().Be("Demo.Foo");
+
+        // А граф корня проекта не построен — тот же чат «из основного дерева» ничего не находит.
+        var main = await _client.GetAsync($"/api/projects/{projectId}/code-graph/find?q=Foo");
+        main.StatusCode.Should().Be(HttpStatusCode.NotFound, "граф основного дерева не строился");
+    }
+
+    [Fact]
+    public async Task Запросы_RootPathВнеБелогоСписка_Возвращают400()
+    {
+        var (projectId, _) = await ProjectWithWorktreeChatAsync("wt-alien");
+        // Существующая папка на диске, но не корень проекта и не дерево его чатов —
+        // белый список её не пропускает (иначе чтение чужих деревьев по HTTP).
+        var alien = MkProjectDir("alien-tree");
+        WriteCs(alien);
+        var escaped = Uri.EscapeDataString(alien);
+
+        (await _client.GetAsync($"/api/projects/{projectId}/code-graph?rootPath={escaped}"))
+            .StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await _client.GetAsync($"/api/projects/{projectId}/code-graph/find?q=Foo&rootPath={escaped}"))
+            .StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await _client.GetAsync($"/api/projects/{projectId}/code-graph/neighbors?node=Foo&rootPath={escaped}"))
+            .StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await _client.GetAsync($"/api/projects/{projectId}/code-graph/hubs?rootPath={escaped}"))
+            .StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await _client.PostAsync($"/api/projects/{projectId}/code-graph/build?rootPath={escaped}", content: null))
+            .StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task Get_RootPathКорняПроекта_РаботаетКакБезПараметра()
+    {
+        var dir = MkProjectDir("root-explicit");
+        WriteCs(dir);
+        var project = await CreateProjectAsync("root-explicit", dir);
+        var id = project.GetProperty("id").GetString()!;
+        await SaveGraphAsync(dir, SampleGraph());
+
+        var resp = await _client.GetAsync(
+            $"/api/projects/{id}/code-graph?rootPath={Uri.EscapeDataString(dir)}");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync())
+            .GetProperty("nodes").GetArrayLength().Should().Be(3);
     }
 }
 

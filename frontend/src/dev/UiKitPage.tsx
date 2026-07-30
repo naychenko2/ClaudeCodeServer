@@ -29,7 +29,8 @@ import { Rows3, Pin, FolderOpen, Bell } from 'lucide-react';
 import { C, FONT, FS, SP, R, SHADOW, ISLAND, MODAL_W, GROUP_COLORS } from '../lib/design';
 import { AGENT_COLORS } from '../components/AgentSelector';
 import { ChatCard } from '../components/ChatCard';
-import type { Session } from '../types';
+import { ProviderLimitCard } from '../components/chat/ChatItemView';
+import type { Session, ChatItem } from '../types';
 import { useThemeMode, setThemeMode, type ThemeMode } from '../lib/themeMode';
 import { useIsMobile } from '../lib/breakpoints';
 import { CanvasBackdrop } from '../components/ui/CanvasBackdrop';
@@ -1491,6 +1492,29 @@ const DEMO_SESSIONS: Session[] = [
   },
 ];
 
+// Демо карточки лимита: полная (аккаунты пула + сторонние провайдеры) и короткая
+// (только сторонние — когда здоровых аккаунтов в пуле не осталось). resetsAt —
+// «через пару часов», чтобы подпись сброса была «сегодня в HH:MM».
+const DEMO_PROVIDER_LIMIT_ITEMS: Extract<ChatItem, { kind: 'provider_limit' }>[] = [
+  {
+    kind: 'provider_limit',
+    resetsAt: new Date(Date.now() + 2 * 3600_000).toISOString(),
+    providers: [
+      { key: 'acc-second', displayName: 'Вторая', model: 'claude-sonnet-5', kind: 'subscription', tierLabel: 'Max 5×', utilization: 0.41 },
+      { key: 'acc-third', displayName: 'Запасная', model: 'claude-sonnet-5', kind: 'subscription', tierLabel: 'Pro', utilization: 0.12 },
+      { key: 'glm', displayName: 'GLM', model: 'glm-4.7' },
+      { key: 'deepseek', displayName: 'DeepSeek', model: 'deepseek-chat' },
+    ],
+  },
+  {
+    kind: 'provider_limit',
+    providers: [
+      { key: 'glm', displayName: 'GLM', model: 'glm-4.7' },
+      { key: 'deepseek', displayName: 'DeepSeek', model: 'deepseek-chat' },
+    ],
+  },
+];
+
 // Мета 9 панелей правой рельсы — копия PANEL_META из RightPanelStack (там
 // не экспортируется). Меняется только Icon и title; контент у каждого свой.
 const PANELS_DEMO: { key: string; title: string; Icon: LucideIcon; accent?: boolean }[] = [
@@ -2273,6 +2297,25 @@ function PanelsSection() {
             воркспейсе SessionList стоит рядом с Файлами/Изменениями/Задачами,
             все на C.bgWhite — поэтому обёртка принудительно белая.
           </p>
+        </SubBlock>
+
+        {/* Карточка лимита подписки из ленты чата: секция аккаунтов пула (та же
+            модель, своя предоплата) идёт перед сторонними провайдерами; когда
+            здоровых аккаунтов нет — карточка выглядит как раньше. onMigrate не
+            задан — кнопки демо, без реальной миграции. */}
+        <SubBlock label="ProviderLimitCard — лимит исчерпан: аккаунты пула + сторонние / только сторонние">
+          <div style={{
+            background: C.bgWhite,
+            borderRadius: R.xl,
+            padding: SP.md,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: SP.sm,
+          }}>
+            {DEMO_PROVIDER_LIMIT_ITEMS.map((it, i) => (
+              <ProviderLimitCard key={i} item={it} online={true} />
+            ))}
+          </div>
         </SubBlock>
 
         {/* Шпаргалка по 4 фоновым тонам дизайн-системы. Плашки красятся

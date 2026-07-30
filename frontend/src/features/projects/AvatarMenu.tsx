@@ -3,7 +3,7 @@ import { C, R, SHADOW, Z } from '../../lib/design';
 import { ConnectionStatus } from '../../components/ConnectionStatus';
 import { SegmentedControl } from '../../components/ui';
 import { useThemeMode, setThemeMode, type ThemeMode } from '../../lib/themeMode';
-import { History, Book, Gauge, Users, Lock, FlaskConical, LogOut, Mic, Cpu, Coins, Palette } from 'lucide-react';
+import { History, Book, Gauge, Users, Lock, FlaskConical, LogOut, Mic, Cpu, Coins, Palette, Activity } from 'lucide-react';
 import { ICON_SIZE } from '../../components/ui/icons';
 import { isMicKeyboardFallback, clearMicKeyboardFallback } from '../../lib/voiceInput';
 import { showToast } from '../../lib/toast';
@@ -52,12 +52,15 @@ interface Props {
   // «Аналитика токенов» (расход по ходам/моделям/проектам) — раздел-таб без вкладки,
   // вызов из меню аватара рядом с «Использованием». undefined — пункт не показывать
   onOpenSpend?: () => void;
+  // «Телеметрия» (встроенный SigNoz UI) — раздел-таб без вкладки, только для админов.
+  // HubHeader передаёт колбэк лишь админу, поэтому здесь достаточно проверки на undefined.
+  onOpenTelemetry?: () => void;
   // «Поставщики моделей» (настройка слотов и фоновых ИИ-действий) — доступно всем,
   // но режим диалога зависит от роли (admin видит уровни 1 и 3 + чужие профили).
   onShowBackgroundTasks?: () => void;
 }
 
-export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout, onShowChangePassword, onShowFeatureFlags, onShowUserManagement, hideStatus, onShowHistory, historyBadge = 0, historyNeverSeen = false, historyActive = false, onOpenKnowledge, onShowUsage, onOpenSpend, onShowBackgroundTasks }: Props) {
+export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout, onShowChangePassword, onShowFeatureFlags, onShowUserManagement, hideStatus, onShowHistory, historyBadge = 0, historyNeverSeen = false, historyActive = false, onOpenKnowledge, onShowUsage, onOpenSpend, onOpenTelemetry, onShowBackgroundTasks }: Props) {
   // Как обращаемся к пользователю; логин остаётся видимым отдельной строкой,
   // чтобы было понятно, под каким аккаунтом сидишь
   const name = displayName?.trim() || username;
@@ -153,6 +156,15 @@ export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout
             >
               <Coins size={ICON_SIZE.xs} strokeWidth={2} />
               Аналитика токенов
+            </button>
+          )}
+          {onOpenTelemetry && (
+            <button
+              onClick={() => { setOpen(false); onOpenTelemetry(); }}
+              style={dropdownItem}
+            >
+              <Activity size={ICON_SIZE.xs} strokeWidth={2} />
+              Телеметрия
             </button>
           )}
           <MenuDivider />

@@ -7,23 +7,34 @@ using ClaudeHomeServer.Services.Llm.Claude;
 
 namespace ClaudeHomeServer.Services;
 
-// Стартовый прогрев утилизации подписок: один минимальный ход claude по каждому аккаунту,
-// чтобы получить свежий rate_limit_event и записать актуальную утилизацию 5h-окна в usage.json.
-// Дальше пул (ClaudeSubscriptionPool) роутит новые чаты по этим снимкам, а не по устаревшим.
-// Побочно: если аккаунт отвечает "лимит исчерпан" — помечаем его exhausted в пуле.
+// Идл-пинг утилизации подписок: минимальный ход claude --model haiku по каждому
+// ПРОСТАИВАЮЩЕМУ аккаунту пула — свежий rate_limit_event без ожидания живого чата.
+// Простаивающий = с момента последней ФАКТИЧЕСКОЙ активности (живой ход чата ИЛИ прошлый
+// пинг — SubscriptionActivityTracker) прошло больше ClaudeSubscriptions:IdlePingMinutes
+// (дефолт 5, 0 — выключено). У аккаунтов с живыми чатами свежесть и так даёт их
+// rate_limit_event — пинговать их незачем.
 //
-// Запускается только при наличии дополнительных подписок (иначе роутить некого) и за флагом
-// ClaudeSubscriptions:WarmupOnStartup (дефолт true). Best-effort: любые ошибки логируются и
-// не мешают старту приложения.
+// Решение Андрея 2026-07-29: доступность/ротация не должны зависеть от протухающих
+// access-токенов — идл-пинг всегда идёт setup-токеном пула (долгоживущим). OAuth-снимки
+// SubscriptionOAuthUsageService таймер простоя НЕ сбрасывают (остаётся отдельным
+// best-effort источником полных окон 5h/7d/per-model/перерасхода, эту фичу не заменяет).
+//
+// Стартовый прогрев (WarmupOnStartup, дефолт true) — по всем аккаунтам сразу. Дальше тик
+// раз в минуту отбирает простаивающих (тики не накладываются — следующий WaitForNextTickAsync
+// ждётся только после того, как отработали все пробы текущего). Побочно: "лимит исчерпан" →
+// MarkExhausted; здоровый ответ на ранее исчерпанном → Reset (возврат в ротацию раньше
+// resetsAt). Best-effort: любые ошибки логируются и не мешают старту приложения.
 public sealed class SubscriptionUsageWarmupService(
     ClaudeSubscriptionPool pool,
     UsageService usage,
     LlmProviderRegistry providers,
+    SubscriptionActivityTracker activity,
     IConfiguration config) : BackgroundService
 {
     private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(60);
-    private const int DefaultRecheckMinutes = 15;
+    private const int DefaultIdlePingMinutes = 5;
     private const string Prompt = "ping";
+    private const string PingModel = "haiku";
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -37,23 +48,34 @@ public sealed class SubscriptionUsageWarmupService(
         if (config.GetValue($"{ClaudeSubscriptionPool.Section}:WarmupOnStartup", true))
             await ProbeKeysAsync(AllKeys(), timeout, stoppingToken);
 
-        // Периодический переопрос ВЫВЕДЕННЫХ из ротации аккаунтов: ловим возврат раньше resetsAt
-        // (и с реальной цифрой), не трогая здоровые (они и так получают ходы). 0 — выключено.
-        var interval = config.GetValue($"{ClaudeSubscriptionPool.Section}:RecheckIntervalMinutes", DefaultRecheckMinutes);
-        if (interval <= 0) return;
+        var idleThreshold = ResolveIdleThreshold();
+        if (idleThreshold is null) return;
 
-        using var timer = new PeriodicTimer(TimeSpan.FromMinutes(interval));
+        using var timer = new PeriodicTimer(TimeSpan.FromMinutes(1));
         try
         {
             while (await timer.WaitForNextTickAsync(stoppingToken))
             {
-                var parked = AllKeys().Where(k => !pool.IsInRotation(k)).ToList();
-                if (parked.Count > 0)
-                    await ProbeKeysAsync(parked, timeout, stoppingToken);
+                var due = KeysDueForPing(idleThreshold.Value);
+                if (due.Count > 0)
+                    await ProbeKeysAsync(due, timeout, stoppingToken);
             }
         }
         catch (OperationCanceledException) { /* остановка приложения */ }
     }
+
+    // Порог простоя из конфига; null — механизм выключен (IdlePingMinutes <= 0).
+    // Вынесено отдельно, чтобы рубильник проверялся тестом без запуска тикающего цикла.
+    internal TimeSpan? ResolveIdleThreshold()
+    {
+        var minutes = config.GetValue($"{ClaudeSubscriptionPool.Section}:IdlePingMinutes", DefaultIdlePingMinutes);
+        return minutes <= 0 ? null : TimeSpan.FromMinutes(minutes);
+    }
+
+    // Ключи пула, простаивающие дольше порога — кандидаты на пинг этого тика.
+    // Вынесено отдельно от ExecuteAsync: проверяется тестом без ожидания реальной минуты.
+    internal List<string> KeysDueForPing(TimeSpan idleThreshold) =>
+        AllKeys().Where(k => activity.IsIdle(k, idleThreshold)).ToList();
 
     // Все настроенные подписки пула (каждая — по своему токену). Локальный Claude не пробуем:
     // warmup вообще работает только при непустом пуле (HasExtra), а вход без ключа лимиты не копит.
@@ -83,6 +105,12 @@ public sealed class SubscriptionUsageWarmupService(
 
     private async Task ProbeAsync(string key, TimeSpan timeout, CancellationToken ct)
     {
+        // Env подписки пула: изолированный профиль + её токен (для всех, включая "claude").
+        var sub = pool.All.FirstOrDefault(s => s.Key == key);
+        if (sub is null || !sub.Enabled) return;
+        var env = providers.BuildOAuthCliEnv(sub.Key, sub.OAuthToken, sub.ApiKey);
+        if (env is null) return;
+
         var workDir = Path.Combine(Path.GetTempPath(), "claude-warmup");
         Directory.CreateDirectory(workDir);
 
@@ -100,22 +128,14 @@ public sealed class SubscriptionUsageWarmupService(
             StandardInputEncoding = utf8NoBom,
             CreateNoWindow = true,
         };
-        // stream-json в print-режиме требует --verbose; так CLI и отдаёт rate_limit_event.
-        psi.ArgumentList.Add("--print");
-        psi.ArgumentList.Add("--output-format");
-        psi.ArgumentList.Add("stream-json");
-        psi.ArgumentList.Add("--verbose");
-        // Хуки плагинов не нужны и плодят окна консоли на хосте (warmup — всегда local)
-        foreach (var a in ClaudeRuntimeSettings.HooksOffArgs(Execution.LocalProcessRunner.Instance))
+        foreach (var a in BuildProbeArgs(ClaudeRuntimeSettings.HooksOffArgs(Execution.LocalProcessRunner.Instance)))
             psi.ArgumentList.Add(a);
-
-        // Env подписки пула: изолированный профиль + её токен (для всех, включая "claude").
-        var sub = pool.All.FirstOrDefault(s => s.Key == key);
-        if (sub is null || !sub.Enabled) return;
-        var env = providers.BuildOAuthCliEnv(sub.Key, sub.OAuthToken, sub.ApiKey);
-        if (env is null) return;
         foreach (var (k, v) in env)
             psi.Environment[k] = v;
+
+        // Отсчёт простоя — от ПОПЫТКИ пинга, а не от успеха: иначе сбойный аккаунт (таймаут,
+        // недоступный CLI) пинговался бы каждую минуту вместо раза в IdlePingMinutes.
+        activity.Touch(key);
 
         using var process = Process.Start(psi)
             ?? throw new InvalidOperationException("не удалось запустить claude");
@@ -154,6 +174,20 @@ public sealed class SubscriptionUsageWarmupService(
         }
     }
 
+    // Аргументы пробного хода. Вынесены отдельно, чтобы состав флагов (в т.ч. --model —
+    // пинг обязан идти самой дешёвой моделью, не тем, чем обычно ходит владелец) проверялся
+    // тестом без запуска процесса.
+    internal static List<string> BuildProbeArgs(IEnumerable<string> hooksOffArgs)
+    {
+        // stream-json в print-режиме требует --verbose; так CLI и отдаёт rate_limit_event.
+        var args = new List<string> { "--print", "--output-format", "stream-json", "--verbose" };
+        // Хуки плагинов не нужны и плодят окна консоли на хосте (warmup — всегда local)
+        args.AddRange(hooksOffArgs);
+        args.Add("--model");
+        args.Add(PingModel);
+        return args;
+    }
+
     private static RateLimitMessage? TryParseLine(string line)
     {
         try
@@ -173,10 +207,10 @@ public sealed class SubscriptionUsageWarmupService(
     // Записываем снимок утилизации и правим состояние пула по свежему ответу:
     // отбит (rejected/100%) → MarkExhausted; здоровый ответ на ранее исчерпанном аккаунте →
     // снимаем пометку (возврат в ротацию раньше resetsAt). Та же логика exhausted, что в SessionManager.
-    private void RecordAndGuard(string key, RateLimitMessage m)
+    internal void RecordAndGuard(string key, RateLimitMessage m)
     {
         usage.Record(m.LimitType, m.Utilization, m.Status, m.IsUsingOverage, m.ResetsAt,
-            m.OverageStatus, m.OverageResetsAt, subscriptionKey: key);
+            m.OverageStatus, m.OverageResetsAt, subscriptionKey: key, source: "probe");
 
         if (m.Status == "rejected" || (m.Utilization >= 1.0 && !m.IsUsingOverage))
         {

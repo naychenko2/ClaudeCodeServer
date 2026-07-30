@@ -63,7 +63,7 @@ public sealed class AlertPollingService(
         var fetched = await client.FetchAsync(ct);
         if (fetched is null) return;   // опрос не удался — состояние не трогаем
 
-        var actionable = AlertDigest.Actionable(fetched);
+        var actionable = AlertDigest.Actionable(fetched, options.Environments);
         var diff = AlertDigest.Diff(actionable, state.KnownFingerprints);
         if (diff.IsEmpty) return;
 

@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Prompts;
 using ClaudeHomeServer.Telemetry;
 
 namespace ClaudeHomeServer.Services.Llm.Claude;
@@ -659,6 +660,8 @@ public class ClaudeSession : ILlmSessionAdapter
                         ["CODEGRAPH_API_TOKEN"] = _codeGraphMcp.Token,
                         ["CODEGRAPH_PROJECT_ID"] = _codeGraphMcp.ProjectId,
                         ["CODEGRAPH_SESSION_ID"] = _codeGraphMcp.SessionId ?? "",
+                        // Рабочее дерево хода: отдельное worktree чата имеет свой граф
+                        ["CODEGRAPH_ROOT_PATH"] = _codeGraphMcp.RootPath ?? "",
                     },
                 };
             }
@@ -1043,6 +1046,18 @@ public class ClaudeSession : ILlmSessionAdapter
     // пользователю. Возвращает "allow" | "deny" | "cancelled" (Interrupt во время ожидания).
     private async Task<string> DecidePermissionAsync(string requestId, string toolName, JsonElement inputEl, object toolInput)
     {
+        // Гард «координатор не пишет код сам» (Э7-фикс): жёстче project-правил и «всегда
+        // разрешать» — иначе достаточно один раз кликнуть «Разрешить всегда» на Bash, и
+        // настройка перестаёт что-либо значить. См. CoordinatorWriteGuard про эвристику
+        // и про то, почему это работает не в любом --permission-mode.
+        if (Info.TeamImplement is { CoordinatorNoCode: true }
+            && CoordinatorWriteGuard.IsShellTool(toolName)
+            && inputEl.ValueKind == JsonValueKind.Object
+            && inputEl.TryGetProperty("command", out var cmdEl)
+            && cmdEl.ValueKind == JsonValueKind.String
+            && CoordinatorWriteGuard.LooksLikeFileWrite(cmdEl.GetString()))
+            return "deny";
+
         // Правила проекта: deny приоритетнее; allow — авто-разрешить; null — спросить пользователя
         var ruleDecision = PermissionRuleEvaluator.Evaluate(_permissionRules?.Invoke(), toolName, inputEl);
         if (ruleDecision == "deny") return "deny";
@@ -2147,9 +2162,10 @@ public class ClaudeSession : ILlmSessionAdapter
                             if (name.Length > 0) mcp.Add(new McpServerInfo(name, status));
                         }
                     }
+                    var worktree = ResolveTurnWorktree(cwd, _rootPath, _launcher);
                     await _onMessage(new SessionStartedMessage(
                         Info.ClaudeSessionId!, isResume, model, Info.Mode.ToWireToken(), cwd, toolCount, mcp,
-                        Capabilities.Provider, Capabilities));
+                        Capabilities.Provider, Capabilities, worktree));
 
                     // Поток inline-сабагентов этого хода — из их транскриптов на диске.
                     // Same-process ход (init повторяется в том же процессе, контекст тот же) —
@@ -2293,9 +2309,12 @@ public class ClaudeSession : ILlmSessionAdapter
                 // Модель — фактическая (её назвал CLI), а не та, что просили: при пустом слоте
                 // EffectiveModel равен null и метрика получала unknown вместо ответа на вопрос
                 // «чем считали». Намерение остаётся фолбэком, если CLI модель не назвал.
+                var turnFailed = TurnTelemetry.IsTurnFailure(subtype, isErrorFlag);
                 TurnTelemetry.RecordTurnResult(durationMs, Info.Provider, _turnCliModel ?? EffectiveModel,
-                    isError: TurnTelemetry.IsTurnFailure(subtype, isErrorFlag), apiErrorStatus: apiErr,
+                    isError: turnFailed, apiErrorStatus: apiErr,
                     isSandboxed: _launcher.IsSandboxed);
+                // Тот же исход — на спан: иначе в трейсах отказной ход неотличим от успешного
+                TurnTelemetry.MarkTurnOutcome(_turnActivity, turnFailed, apiErr);
                 // Ход завершён. Без живых фоновых задач закрываем stdin — CLI выйдет сам,
                 // дальше ждём его не дольше ResultExitGrace. С ними stdin держим открытым:
                 // прогон доживает (агенты работают внутри процесса) и готов принять
@@ -2804,6 +2823,47 @@ public class ClaudeSession : ILlmSessionAdapter
             + IntProp(u, "cache_read_input_tokens")
             + IntProp(u, "cache_creation_input_tokens");
         if (tokens > 0) _lastContextTokens = tokens;
+    }
+
+    // Ход мог уйти в собственный git worktree через встроенный инструмент EnterWorktree —
+    // это происходит мимо тумблера чата (Session.WorktreePath/SetWorktreeAsync), поэтому
+    // фактический cwd из system/init сверяем с тем, что сервер сам передал в WorkingDirectory
+    // при запуске процесса. rootPath уже учитывает штатное дерево чата (SessionManager.EffectiveRoot
+    // подставляет Session.WorktreePath ДО старта процесса) — совпадение с ним тоже даёт null.
+    internal static TurnWorktreeInfo? ResolveTurnWorktree(string? cwd, string rootPath, Execution.IProcessLauncher launcher)
+    {
+        if (string.IsNullOrEmpty(cwd)) return null;
+
+        // Признак косметический (подпись в UI), а вызывается на каждом system/init у всех
+        // пользователей — сбой нормализации пути (Path.GetFullPath внутри NormalizePath
+        // кидает ArgumentException/NotSupportedException на не вполне обычных путях) не должен
+        // ронять ход целиком: необработанное исключение здесь ушло бы в общий catch цикла чтения
+        // прогона ДО отправки SessionStartedMessage — не проставился бы ClaudeSessionId и не
+        // поднялись бы _subagentWatcher/_transcriptTailer. Деградация — как в BuildTurnMcpConfig.
+        try
+        {
+            // В песочнице WorkingDirectory переводится в контейнерный путь при старте процесса
+            // (DockerProcessRunner) — сверяем с тем же переводом, иначе КАЖДЫЙ ход в контейнере
+            // ложно считался бы «чужим деревом» (cwd там всегда в другом пространстве путей)
+            var expected = rootPath;
+            if (launcher.IsSandboxed)
+            {
+                try { expected = launcher.Paths.ToRuntime(rootPath); }
+                catch (InvalidOperationException) { /* непереводимый корень — сравниваем как есть */ }
+            }
+
+            if (WorkspaceKnowledgeStore.NormalizePath(cwd) == WorkspaceKnowledgeStore.NormalizePath(expected))
+                return null;
+
+            var trimmed = cwd.TrimEnd('/', '\\');
+            var name = trimmed.Length > 0 ? Path.GetFileName(trimmed) : cwd;
+            return new TurnWorktreeInfo(cwd, string.IsNullOrEmpty(name) ? cwd : name);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[ClaudeSession] Не удалось определить дерево хода для cwd={cwd}: {ex.Message}");
+            return null;
+        }
     }
 
     // Токены хода из result. Основной источник — modelUsage: агрегат по ВСЕМ итерациям хода

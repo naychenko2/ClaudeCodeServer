@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { RateLimitInfo, UsageSnapshot } from '../../types';
-import { toRateWindows, worstWindow, fmtReset, windowLabel, latestPerWindow, overageLabel } from '../rateLimit';
+import { toRateWindows, worstWindow, fmtReset, windowLabel, latestPerWindow, latestWithUtilization, snapshotFreshnessLabel, overageLabel } from '../rateLimit';
 
 const win = (limitType: string, over: Partial<RateLimitInfo> = {}): RateLimitInfo =>
   ({ limitType, ...over });
@@ -192,5 +192,67 @@ describe('overageLabel', () => {
   it('неизвестный статус или его отсутствие → «перерасход ограничен», сырой статус не утекает', () => {
     expect(overageLabel('some_new_status')).toBe('перерасход ограничен');
     expect(overageLabel(undefined)).toBe('перерасход ограничен');
+  });
+});
+
+describe('latestWithUtilization', () => {
+  const snap = (timestamp: string, utilization?: number, source?: UsageSnapshot['source']): UsageSnapshot =>
+    ({ timestamp, limitType: 'five_hour', utilization, source });
+
+  it('пустой список или снимки без процента → null', () => {
+    expect(latestWithUtilization([])).toBeNull();
+    expect(latestWithUtilization([snap('2026-07-29T10:00:00Z')])).toBeNull();
+  });
+
+  it('выбирает самый свежий снимок с процентом, игнорируя resets-only', () => {
+    const out = latestWithUtilization([
+      snap('2026-07-29T10:00:00Z', 0.3, 'oauth'),
+      snap('2026-07-29T12:00:00Z'),            // свежее, но без utilization — не считается
+      snap('2026-07-29T11:00:00Z', 0.4, 'probe'),
+    ]);
+    expect(out?.source).toBe('probe');
+    expect(out?.timestamp).toBe('2026-07-29T11:00:00Z');
+  });
+
+  it('битый timestamp пропускается', () => {
+    const out = latestWithUtilization([
+      snap('не дата', 0.9, 'turn'),
+      snap('2026-07-29T10:00:00Z', 0.3, 'oauth'),
+    ]);
+    expect(out?.source).toBe('oauth');
+  });
+});
+
+describe('snapshotFreshnessLabel', () => {
+  const NOW = new Date('2026-07-29T12:00:00Z').getTime();
+  const ago = (ms: number) => new Date(NOW - ms).toISOString();
+
+  it('невалидный timestamp → null', () => {
+    expect(snapshotFreshnessLabel('turn', 'не дата', NOW)).toBeNull();
+  });
+
+  it('моложе минуты → «только что», с источником и без', () => {
+    expect(snapshotFreshnessLabel('turn', ago(20_000), NOW)).toBe('Живой ход · только что');
+    expect(snapshotFreshnessLabel(null, ago(20_000), NOW)).toBe('только что');
+  });
+
+  it('минуты → «N мин назад» с ярлыком каждого источника', () => {
+    expect(snapshotFreshnessLabel('turn', ago(3 * 60_000), NOW)).toBe('Живой ход · 3 мин назад');
+    expect(snapshotFreshnessLabel('probe', ago(3 * 60_000), NOW)).toBe('Пинг · 3 мин назад');
+    expect(snapshotFreshnessLabel('oauth', ago(3 * 60_000), NOW)).toBe('OAuth-опрос · 3 мин назад');
+  });
+
+  it('60+ минут → «N ч назад»; без источника — только возраст', () => {
+    expect(snapshotFreshnessLabel('probe', ago(125 * 60_000), NOW)).toBe('Пинг · 2 ч назад');
+    expect(snapshotFreshnessLabel(null, ago(125 * 60_000), NOW)).toBe('2 ч назад');
+    expect(snapshotFreshnessLabel(undefined, ago(90 * 60_000), NOW)).toBe('1 ч назад');
+  });
+
+  it('неизвестный источник не утекает в подпись — только возраст', () => {
+    expect(snapshotFreshnessLabel('что-то-новое' as UsageSnapshot['source'], ago(5 * 60_000), NOW)).toBe('5 мин назад');
+  });
+
+  it('метка в будущем (расхождение часов) → «только что», не отрицательный возраст', () => {
+    expect(snapshotFreshnessLabel('probe', ago(-30_000), NOW)).toBe('Пинг · только что');
   });
 });

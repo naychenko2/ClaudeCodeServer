@@ -1,0 +1,26 @@
+{
+  "name": "Отказавшие ходы",
+  "category": "",
+  "sourcePage": "traces",
+  "tags": [""],
+  "extraData": "{\"selectColumns\":[{\"name\":\"service.name\",\"signal\":\"traces\"},{\"name\":\"name\",\"signal\":\"traces\"},{\"name\":\"duration_nano\",\"signal\":\"traces\"},{\"name\":\"response_status_code\",\"signal\":\"traces\"}]}",
+  "compositeQuery": {
+    "queryType": "builder",
+    "panelType": "list",
+    "queries": [
+      {
+        "type": "builder_query",
+        "spec": {
+          "name": "A",
+          "signal": "traces",
+          "source": "",
+          "stepInterval": 0,
+          "limit": 100,
+          "order": [ { "key": { "name": "timestamp" }, "direction": "desc" } ],
+          "filter": { "expression": "name = 'chat.turn' AND outcome = 'error'" },
+          "having": { "expression": "" }
+        }
+      }
+    ]
+  }
+}

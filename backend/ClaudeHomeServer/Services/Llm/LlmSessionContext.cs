@@ -70,7 +70,10 @@ public sealed record WidgetsMcpContext;
 // токен владельца и проект, чей граф доступен инструментами. ProjectId обязателен —
 // граф ключуется проектом, в чате вне проекта сервер не подключается.
 // SessionId уезжает в X-Caller-Session-Id (наблюдаемость GET /api/mcp/calls).
-public sealed record CodeGraphMcpContext(string ApiUrl, string Token, string ProjectId, string? SessionId = null);
+// RootPath — рабочее дерево сессии: у чата с отдельным worktree свой граф (ADR-003);
+// null/пусто — граф корня проекта.
+public sealed record CodeGraphMcpContext(string ApiUrl, string Token, string ProjectId,
+    string? SessionId = null, string? RootPath = null);
 
 // Один MCP-сервер внешнего модуля (контракт docs/modules/integration-contract.md §6):
 // Key — ключ сервера в mcp-конфиге хода, Command/Args — запуск из манифеста (args уже

@@ -104,6 +104,37 @@ public class AlertDigestTests
             .Which.Fingerprint.Should().Be("live");
     }
 
+    [Fact]
+    public void Actionable_FiltersByEnvironment_WhenConfigured()
+    {
+        // Рассылает один инстанс, а SigNoz отдаёт ему алерты обоих контуров — при желании
+        // дев-шум можно отсечь, оставив только боевой
+        var alerts = AlertDigest.Parse(LiveSample);
+
+        AlertDigest.Actionable(alerts, ["production"]).Select(a => a.Environment)
+            .Should().Equal("production");
+    }
+
+    [Fact]
+    public void Actionable_EmptyEnvironmentList_KeepsEverything()
+    {
+        AlertDigest.Actionable(AlertDigest.Parse(LiveSample), []).Should().HaveCount(2);
+    }
+
+    [Fact]
+    public void Actionable_AlertWithoutEnvironment_SurvivesFilter()
+    {
+        // Правило без разреза по среде касается инсталляции целиком — отфильтровав его,
+        // мы промолчали бы о том, что важно всем контурам сразу
+        var alert = new SignozAlert
+        {
+            Fingerprint = "f",
+            Labels = new Dictionary<string, string> { ["alertname"] = "Пульс пропал" },
+        };
+
+        AlertDigest.Actionable([alert], ["production"]).Should().ContainSingle();
+    }
+
     // ==== дифф: главная защита от превращения алертов в шум ====
 
     [Fact]

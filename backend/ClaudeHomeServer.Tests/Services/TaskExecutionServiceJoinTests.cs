@@ -19,10 +19,14 @@ namespace ClaudeHomeServer.Tests.Services;
 // ограничивается L0-уведомлением через NotificationService (файловый сторадж) — ReportToDelegatorAsync
 // и NotifyDelegatorAsync короткозамыкаются до обращения к SessionManager. Полный пайплайн модели Z
 // (реальный ход постановщика) требует claude.exe и здесь, как и в TaskExecutionServiceTests, не гоняется.
+//
+// Здесь же — дедупликация уведомлений о судьбе задачи (та же точка доставки): о факте завершения
+// приходит РОВНО одно уведомление, делегирование лишь меняет его лицо и ссылку.
 public class TaskExecutionServiceJoinTests : IDisposable
 {
     private readonly string _dir;
     private readonly TaskManager _tasks;
+    private readonly PersonaManager _personas;
     private readonly NotificationStore _notifStore;
     private readonly TaskExecutionService _sut;
 
@@ -41,6 +45,7 @@ public class TaskExecutionServiceJoinTests : IDisposable
         var appSettings = new AppSettingsService(config);
         var projectManager = new ProjectManager(config, userStore, appSettings);
         var personas = new PersonaManager(config);
+        _personas = personas;
         _tasks = new TaskManager(config, personas: personas);
 
         var hub = new Mock<IHubContext<SessionHub>>();
@@ -225,6 +230,86 @@ public class TaskExecutionServiceJoinTests : IDisposable
 
         _tasks.GetById(task.Id)!.CompletionDelivered.Should().BeFalse();
         (await CountNotificationsAsync(task.OwnerId!)).Should().Be(0);
+    }
+
+    // ─── (д) дедупликация: о факте завершения — ровно одно уведомление ──────
+    // Постановщик-персона и владелец задачи — всегда один человек (персоны per-owner,
+    // обе отправки идут в task.OwnerId), поэтому «Завершил работу над задачей» +
+    // «Делегированная задача выполнена» были двумя тостами об одном факте.
+
+    private Persona CreatePersona(string ownerId, string name) =>
+        _personas.Create(ownerId, name, role: "Тимлид", description: null, systemPrompt: null,
+            model: null, effort: null, scope: PersonaScope.Global, projectId: null,
+            color: null, greeting: null, memoryEnabled: false);
+
+    [Fact]
+    public async Task TryDeliverCompletionAsync_ДелегированнаяЗадача_ОдноУведомлениеПостановщика()
+    {
+        // SourceSessionId не задаём: доклад модели Z тут неприменим (ShouldReportToDelegator),
+        // проверяем именно состав тостов
+        var task = CreateTrackedTask();
+        var delegator = CreatePersona(task.OwnerId!, "Постановщик");
+        task.CreatedByPersonaId = delegator.Id;
+        _tasks.MarkClaudeResult(task.Id, "success");
+        task.Status = TaskItemStatus.Done;
+
+        await _sut.TryDeliverCompletionAsync(task);
+
+        var items = await _notifStore.GetListAsync(task.OwnerId!);
+        items.Should().ContainSingle("о факте завершения приходит одно уведомление");
+        items[0].Title.Should().Be("Делегированная задача выполнена");
+        items[0].Tag.Should().Be("Постановщик");
+    }
+
+    [Fact]
+    public async Task TryDeliverCompletionAsync_ПостановщикСовпадаетСИсполнителем_ОбычноеУведомление()
+    {
+        // Персона поставила задачу сама себе — делегирования нет, работает обычный тост
+        var task = CreateTrackedTask();
+        var persona = CreatePersona(task.OwnerId!, "Исполнитель");
+        task.CreatedByPersonaId = persona.Id;
+        task.PersonaId = persona.Id;
+        _tasks.MarkClaudeResult(task.Id, "success");
+        task.Status = TaskItemStatus.Done;
+
+        await _sut.TryDeliverCompletionAsync(task);
+
+        var items = await _notifStore.GetListAsync(task.OwnerId!);
+        items.Should().ContainSingle();
+        items[0].Title.Should().Be("Завершил работу над задачей");
+    }
+
+    [Fact]
+    public async Task TryDeliverCompletionAsync_ПостановщикУдалён_ФолбэкНаОбычноеУведомление()
+    {
+        // Персона-постановщик удалена (или чужая) — без фолбэка юзер не узнал бы о завершении
+        var task = CreateTrackedTask();
+        task.CreatedByPersonaId = Guid.NewGuid().ToString();
+        _tasks.MarkClaudeResult(task.Id, "success");
+        task.Status = TaskItemStatus.Done;
+
+        await _sut.TryDeliverCompletionAsync(task);
+
+        var items = await _notifStore.GetListAsync(task.OwnerId!);
+        items.Should().ContainSingle();
+        items[0].Title.Should().Be("Завершил работу над задачей");
+    }
+
+    [Fact]
+    public async Task OnSessionMessageAsync_ПровалДелегированной_ОдноУведомлениеСоСсылкойНаЗадачу()
+    {
+        var task = CreateTrackedTask();
+        var delegator = CreatePersona(task.OwnerId!, "Постановщик");
+        task.CreatedByPersonaId = delegator.Id;
+        var session = new Session { Id = "sess-1", OwnerId = task.OwnerId };
+
+        await _sut.OnSessionMessageAsync(session, new ResultMessage("error", DurationMs: 100, NumTurns: 1, Usage: null, TotalCostUsd: null));
+
+        var items = await _notifStore.GetListAsync(task.OwnerId!);
+        items.Should().ContainSingle("уведомление о провале тоже одно");
+        items[0].Title.Should().Be("Делегированная задача не выполнена");
+        items[0].Url.Should().Be(TaskSchedulerService.TaskUrl(_tasks.GetById(task.Id)!),
+            "доклада в исходном чате нет — разбираться идём в карточку задачи");
     }
 
     [Fact]

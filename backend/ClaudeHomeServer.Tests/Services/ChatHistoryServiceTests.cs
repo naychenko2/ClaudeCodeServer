@@ -150,6 +150,24 @@ public class ChatHistoryServiceTests : IDisposable
         loaded[7].Should().BeOfType<StoredErrorMessage>().Which.Text.Should().Be("oops");
     }
 
+    // Записи session_started до добавления поля TurnWorktree не несли его вовсе — System.Text.Json
+    // обязан подставить default (null), а не бросить, иначе вся история старого чата пропадала бы
+    [Fact]
+    public async Task LoadAsync_SessionStartedБезTurnWorktreeВJson_ЧитаетсяСNull()
+    {
+        var sessionId = Guid.NewGuid().ToString();
+        var dir = Path.Combine(_tempDir, "sessions", sessionId);
+        Directory.CreateDirectory(dir);
+        await File.WriteAllTextAsync(Path.Combine(dir, "history.json"),
+            """[{"kind":"session_started","model":"claude-3","mode":"auto"}]""");
+
+        var loaded = await _sut.LoadAsync(sessionId);
+
+        loaded.Should().ContainSingle()
+            .Which.Should().BeOfType<StoredSessionStartedMessage>()
+            .Which.TurnWorktree.Should().BeNull();
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_tempDir))

@@ -224,6 +224,11 @@ export interface ProjectGroup {
 
 // --- Задачи ---
 
+// Уровень модели (слот «сильная/средняя/слабая») у задачи и персоны. На проводе — имя
+// слота; '' в DTO = сбросить уровень, undefined = не менять. Какая модель стоит за слотом,
+// решает пара «личный слот пользователя → глобальный» (lib/modelTiers.ts).
+export type ModelTierValue = 'strong' | 'medium' | 'weak';
+
 // Значения enum-ов приходят с бэка в camelCase (JsonStringEnumConverter)
 export type TaskStatus = 'todo' | 'inProgress' | 'done';
 export type TaskPriority = 'urgent' | 'high' | 'medium' | 'low';
@@ -264,6 +269,9 @@ export interface Task {
   seriesId?: string;         // общий id серии регулярной задачи
   linkedSessionId?: string;
   personaId?: string;        // исполнение от лица персоны (assignee=claude)
+  // Уровень модели исполнителя (слот strong/medium/weak); отсутствует — не задан:
+  // модель берётся от персоны-исполнителя и назначения места «Исполнитель задач»
+  modelTier?: ModelTierValue;
   // Время жизни чата исполнения (мин от последней активности); undefined/null — бессрочно
   executionExpiresAfterMinutes?: number | null;
   claudeStartedAt?: string;  // отметка запуска Claude-исполнителя
@@ -333,6 +341,8 @@ export interface CreateTaskDto {
   recurrence?: TaskRecurrence;
   linkedSessionId?: string;
   personaId?: string;        // исполнение от лица персоны
+  // Уровень модели исполнителя; не указано — не задан (модель по персоне и месту)
+  modelTier?: ModelTierValue;
   // Не указано — дефолт 1440 (сутки); отрицательное — бессрочно; N>=0 — TTL в минутах.
   // Имеет смысл только при исполнителе Claude/персона.
   executionExpiresAfterMinutes?: number;
@@ -358,6 +368,8 @@ export interface UpdateTaskDto {
   linkedSessionId?: string;
   // Персона-исполнитель: '' = убрать, undefined = не менять
   personaId?: string;
+  // Уровень модели исполнителя: '' = сбросить, undefined = не менять
+  modelTier?: ModelTierValue | '';
   // Время жизни чата исполнения: отрицательное = бессрочно, undefined = не менять, N>=0 = TTL
   executionExpiresAfterMinutes?: number;
   resultMarkdown?: string;    // '' = очистить, undefined = не менять
@@ -428,6 +440,8 @@ export interface Session {
   expiresAfterMinutes?: number | null;
   // Цикл «до готово» (флаг work-loop); null/отсутствует — цикл выключен
   workLoop?: { promise: string; iteration: number; maxIterations: number; phase: 'working' | 'verifying' } | null;
+  // Режим «Командная реализация» (флаг team-implement-mode); null/отсутствует — режим выключен
+  teamImplement?: SessionTeamImplement | null;
   // Отдельное git worktree чата: рабочая папка сессии вместо корня проекта.
   // null/отсутствует — чат в основном дереве. Только у проектных чатов.
   worktreePath?: string | null;
@@ -621,7 +635,10 @@ export interface StoredWorkflowProgress {
 
 // WebSocket сообщения от сервера — sessionId присутствует во всех типах
 export type ServerMessage = { sessionId: string } & (
-  | { type: 'session_started'; claudeSessionId: string; isResume: boolean; model: string; mode: string; cwd?: string; toolCount?: number; mcpServers?: { name: string; status: string }[] }
+  // turnWorktree — фактическая рабочая папка ЭТОГО хода, если агент внутри хода ушёл
+  // в свой git worktree (инструмент EnterWorktree), минуя Session.worktreePath.
+  // null/отсутствует — ход идёт там, куда его отправил сервер
+  | { type: 'session_started'; claudeSessionId: string; isResume: boolean; model: string; mode: string; cwd?: string; toolCount?: number; mcpServers?: { name: string; status: string }[]; turnWorktree?: { path: string; name: string } | null }
   | { type: 'text_delta'; text: string }
   | { type: 'user_message'; text: string; attachedPaths?: string[]; senderPersonaId?: string; auto?: boolean; senderOrigin?: string; senderChatName?: string }
   // Гостевая реплика персоны без агентского хода (0 токенов) — доклад о завершении
@@ -674,6 +691,15 @@ export type ServerMessage = { sessionId: string } & (
   // чат на стороннем провайдере (карточка с кнопками)
   | { type: 'provider_limit'; resetsAt?: string; providers: ProviderFallbackOption[] }
   | { type: 'work_loop'; active: boolean; iteration: number; maxIterations: number; phase: string | null }
+  // Режим «Командная реализация»: приходит при каждом изменении (вкл/стадия/волна/авто/стоп)
+  | { type: 'team_implement'; active: boolean; stage: TeamImplementStage | null; waveNumber: number; autoWaves: boolean; coordinatorPersonaId: string | null; plannerPersonaId: string | null; executorPersonaIds: string[] | null; budget: TeamImplementBudget | null; planCardId: string | null; plannedWaves?: number; coordinatorNoCode?: boolean; stopped?: boolean }
+  // Карточка плана командной реализации. Переиздаётся при каждой правке (смена исполнителя,
+  // решение человека) с тем же planId — клиент обновляет карточку, а не плодит дубли
+  | { type: 'team_plan'; planId: string; plan: TeamPlan; resolved: boolean; approved: boolean | null }
+  // Карточка остановки командной реализации: причина + кнопки решения. Переиздаётся при
+  // ответе человека (resolved=true) с тем же escalationId — клиент обновляет карточку.
+  // Поля плоские (в истории та же карточка лежит вложенным объектом escalation)
+  | { type: 'team_escalation'; escalationId: string; kind: TeamEscalationKind; title: string; details: string; actions: TeamEscalationAction[]; taskId: string | null; wave: number; resolved: boolean; chosenActionId: string | null }
   | { type: 'preview_status'; status: string; port?: number; error?: string; serviceId?: string }
   | { type: 'notification'; title: string; body: string; url?: string; kind: 'reminder' | 'claude' | 'info' | 'success' | 'meeting'; notificationId?: string; notifType?: string; projectId?: string; sessionId?: string; taskId?: string; source?: string; tag?: string; personaId?: string; personaName?: string; personaRole?: string; personaColor?: string; personaHasAvatar?: boolean; projectName?: string }
   | { type: 'recall_manifest'; items: RecallItem[] }
@@ -726,11 +752,17 @@ export interface LaunchConfigEntry {
   env?: Record<string, string>;
 }
 
-// Вариант продолжения чата на стороннем провайдере (из события provider_limit)
+// Вариант продолжения чата при исчерпании лимита (из события provider_limit):
+// kind='subscription' — другой аккаунт того же пула подписок Claude (та же модель,
+// tierLabel — тариф «Max 5×», utilization 0..1); kind='provider' (дефолт) — сторонний
+// провайдер (tierLabel/utilization не заполняются)
 export interface ProviderFallbackOption {
   key: string;
   displayName: string;
   model: string;
+  kind?: 'subscription' | 'provider';
+  tierLabel?: string | null;
+  utilization?: number | null;
 }
 
 // Состояние одного окна лимита подписки (из rate_limit_event). utilization: 0..1.
@@ -756,6 +788,9 @@ export interface UsageSnapshot {
   resetsAt?: string;
   overageStatus?: string;
   overageResetsAt?: string;
+  // Кто записал снимок: живой ход чата, идл-пинг простаивающего аккаунта или OAuth-опрос
+  // лимитов; null/отсутствует — записи до фичи идл-пинга (обратная совместимость)
+  source?: 'turn' | 'probe' | 'oauth' | null;
 }
 
 // Тариф подписки (с бэка, из credentials)
@@ -824,6 +859,9 @@ export interface SubscriptionUsage {
   exhausted?: boolean;
   // Ярлык тарифа ("Max 20×", "Pro", …) — по нему пул приоритизирует аккаунты
   tier?: string;
+  // Готовая PowerShell-команда входа в профиль аккаунта (для плашки «нужен claude login»);
+  // null — команда неприменима (токен приходит из env, логин в файл не поможет)
+  loginCommand?: string | null;
 }
 
 // Статистика аккаунта fal.ai (баланс + расход за период)
@@ -850,6 +888,128 @@ export interface WorkLoopState {
   phase: string | null;
 }
 
+// === Режим «Командная реализация» (флаг team-implement-mode) ===
+// Стадии непрерывного контура — совпадают с wire-токенами TeamImplementStage на бэке
+export type TeamImplementStage =
+  | 'planning'          // координатор готовит карточку плана
+  | 'confirming'        // план ждёт единственного согласования
+  | 'wave'              // волна исполнителей в работе
+  | 'awaitingDecision'  // эскалация: ждёт решения человека
+  | 'checking'          // финальная проверка (сборка/тесты)
+  | 'idle';             // итерация закрыта, режим ждёт новой вводной
+
+// Бюджет итерации: счётчики «израсходовано» + потолки (сбрасывается по новой вводной).
+// wakeups — срочные вызовы координатора докладом-блокером снизу (свой потолок)
+export interface TeamImplementBudget {
+  tasksUsed: number;
+  wavesUsed: number;
+  runsUsed: number;
+  retriesUsed: number;
+  wakeupsUsed: number;
+  maxTasks: number;
+  maxWaves: number;
+  maxRuns: number;
+  maxRetries: number;
+  maxWakeups: number;
+}
+
+// Состояние режима на сессии (Session.teamImplement); null — режим выключен.
+// Состав исполнителей: пустой список = вся команда проекта.
+export interface SessionTeamImplement {
+  stage: TeamImplementStage;
+  waveNumber: number;
+  // Плановое число волн текущей итерации (из карточки плана); 0 — план ещё не запускался.
+  // Бейдж «волна N из M» берёт M отсюда, а не из потолка бюджета — тот про расход
+  plannedWaves: number;
+  autoWaves: boolean;
+  // Человек нажал «Остановить»: текущие исполнители дорабатывают, новые волны не стартуют.
+  // Снимается решением «Продолжить» по карточке остановки либо новой вводной
+  stopped: boolean;
+  coordinatorPersonaId?: string | null;
+  plannerPersonaId?: string | null;
+  executorPersonaIds: string[];
+  budget: TeamImplementBudget;
+  // «Координатор не пишет код сам»: у чата-штаба отключены инструменты правки файлов
+  coordinatorNoCode: boolean;
+  planCardId?: string | null;
+}
+
+// Live-состояние режима (из события team_implement; флаг team-implement-mode)
+export interface TeamImplementState extends SessionTeamImplement {
+  active: boolean;
+}
+
+// Под-задача плана командной реализации: единица раздачи (в Э3 из неё создаётся задача).
+// executorRationale — одна строка «почему именно он» от планировщика; в ней же приходят
+// пометки бэка «проверьте выбор» / «не обосновал», когда подбор ненадёжен.
+export interface TeamPlanSubtask {
+  id: string;
+  title: string;
+  goal: string;
+  executorPersonaId?: string | null;
+  executorRationale: string;
+  files: string[];
+  wave: number;
+  doneCriteria: string;
+}
+
+// Структурный план командной реализации (карточка в ленте штаба).
+// waveCount/executorCount считает бэкенд — подзаголовок карточки собирается из них.
+export interface TeamPlan {
+  id: string;
+  request: string;
+  summary: string;
+  plannerPersonaId?: string | null;
+  approved?: boolean | null;
+  createdAt: string;
+  waveCount: number;
+  executorCount: number;
+  subtasks: TeamPlanSubtask[];
+}
+
+// Решение человека по карточке плана (метод хаба RespondTeamPlan)
+export type TeamPlanDecision = 'run' | 'reassign' | 'cancel';
+
+// Триггер остановки практики — wire-токены TeamEscalationKind с бэка.
+// waveGate — не проблема, а гейт «волна закрыта, запускать следующую?» при снятом авто;
+// stopped — пауза по команде человека; waveAdded — вовсе не остановка (см. ниже)
+export type TeamEscalationKind =
+  | 'blocker'
+  | 'taskFailed'
+  | 'planDeviation'
+  | 'checkFailed'
+  | 'productDecision'
+  | 'budgetExhausted'
+  | 'waveStalled'
+  | 'waveGate'
+  | 'stopped'
+  // Информация (Э5): по новой вводной развёрнута добавочная волна. Работа уже идёт,
+  // клика карточка не ждёт — только показывает состав и даёт «Остановить»
+  | 'waveAdded';
+
+// Кнопка карточки остановки: id — wire-токен решения, label — подпись для человека
+export interface TeamEscalationAction {
+  id: string;
+  label: string;
+}
+
+// Карточка остановки режима «Командная реализация» (Э4). Форма — как в истории чата
+// (StoredTeamEscalationMessage.escalation); live-событие приходит плоским и собирается
+// в этот же объект редьюсером
+export interface TeamEscalation {
+  id: string;
+  kind: TeamEscalationKind;
+  title: string;
+  details: string;
+  actions: TeamEscalationAction[];
+  taskId?: string | null;
+  wave: number;
+  // Только в истории — у live-события времени нет
+  createdAt?: string;
+  resolved: boolean;
+  chosenActionId?: string | null;
+}
+
 // Элементы чата
 export type ChatItem =
   // viaAgent — сообщение прислано не человеком, а агентом из другой сессии (chats_send);
@@ -860,7 +1020,7 @@ export type ChatItem =
   // либо «Вне проектов»): рисуем чипом, чтобы было видно, откуда прилетело. Считает сервер.
   // senderChatName — имя чата-отправителя: заголовок карточки, когда персоны у него нет
   | { kind: 'user_message'; text: string; attachedPaths?: string[]; viaAgent?: boolean; senderPersonaId?: string; systemDirective?: boolean; auto?: boolean; senderOrigin?: string; senderChatName?: string }
-  | { kind: 'session_started'; model: string; mode: string; cwd?: string; toolCount?: number; mcpServers?: { name: string; status: string }[] }
+  | { kind: 'session_started'; model: string; mode: string; cwd?: string; toolCount?: number; mcpServers?: { name: string; status: string }[]; turnWorktree?: { path: string; name: string } | null }
   // personaId — авторство реплики (персона на момент хода); после смены собеседника
   // старые реплики сохраняют прежний аватар. Отсутствует у обычного ассистента.
   // parentToolUseId — текст/thinking сабагента: рендерится внутри карточки родительского
@@ -874,6 +1034,12 @@ export type ChatItem =
   | { kind: 'permission_request'; requestId: string; toolName: string; toolInput: unknown; resolved: boolean; decision?: 'allowed' | 'denied' | 'always' }
   | { kind: 'ask_question'; toolUseId: string; input: unknown; resolved: boolean; answers?: Record<string, string | string[]> }
   | { kind: 'plan_review'; requestId: string; plan: string; resolved: boolean; approved?: boolean; feedback?: string }
+  // Карточка плана командной реализации: структурный план (под-задачи, исполнители,
+  // волны) с кнопками «Запустить» / «Изменить план» / «Отменить». Сверяется по planId
+  | { kind: 'team_plan'; planId: string; plan: TeamPlan; resolved: boolean; approved?: boolean | null }
+  // Карточка остановки командной реализации: причина, суть и кнопки решения.
+  // Сверяется по escalationId — ответ человека переиздаёт ту же карточку решённой
+  | { kind: 'team_escalation'; escalationId: string; escalation: TeamEscalation }
   | { kind: 'file_changed'; path: string; added: number; removed: number }
   | { kind: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo; totalCostUsd?: number; apiErrorStatus?: string; permissionDenials?: string[]; contextTokens?: number }
   | { kind: 'fal_cost'; requestId: string; endpointId?: string; costUsd: number; outputUnits?: number; unitPrice?: number }
@@ -1296,6 +1462,9 @@ export interface Persona {
   systemPrompt?: string;      // «характер» — legacy-текст (у персон без contract)
   contract?: PersonaContract | null; // структурированный контракт (P1)
   model?: string;
+  // Уровень модели персоны (слот); отсутствует — не задан. Слабее явной model и слабее
+  // уровня самой задачи, когда персона выступает исполнителем
+  modelTier?: ModelTierValue;
   effort?: string;
   scope: PersonaScope;
   projectId?: string;         // задан только для scope === 'project'
@@ -1452,6 +1621,8 @@ export interface CreatePersonaDto {
   // Контракт характера; при обновлении: undefined — не менять, пустые слоты — сбросить
   contract?: PersonaContract;
   model?: string;
+  // Уровень модели персоны: '' = сбросить, undefined — не менять/не задавать
+  modelTier?: ModelTierValue | '';
   effort?: string;
   scope?: PersonaScope;
   projectId?: string;

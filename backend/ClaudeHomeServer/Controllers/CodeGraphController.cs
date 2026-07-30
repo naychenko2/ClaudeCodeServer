@@ -12,6 +12,8 @@ namespace ClaudeHomeServer.Controllers;
 /// GET /api/projects/{projectId}/code-graph — узлы/рёбра/god-узлы + метаданные.
 /// Тонкие запросы для MCP-сервера codegraph (агент): /find, /neighbors, /hubs —
 /// отдают компактный срез вместо снимка целиком (~1 МБ на проект).
+/// Опциональный ?rootPath= выбирает дерево: корень проекта (по умолчанию) либо отдельное
+/// worktree чата — у него свой граф (ADR-003).
 /// </summary>
 [ApiController]
 [Authorize]
@@ -20,10 +22,40 @@ public class CodeGraphController(
     CodeGraphService graphs,
     CodeGraphQueryService queries,
     ProjectManager projects,
+    SessionManager sessions,
+    FileWatcherService watchers,
     ILogger<CodeGraphController> logger) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string? UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub);
+
+    /// <summary>
+    /// Дерево, к графу которого идёт запрос. Без ?rootPath= — корень проекта (прежнее поведение).
+    /// С параметром принимаются ТОЛЬКО свои деревья: корень проекта либо worktree одной из его
+    /// сессий — белым списком, а не проверкой существования пути, иначе через параметр читались
+    /// бы чужие деревья с диска. Не подошедший путь → null (контроллер отвечает 400: владельца
+    /// проверили выше, это спор о параметре, а не о доступе).
+    /// Для worktree заодно лениво поднимаем watcher его файлов: контроллер — единственная дверь
+    /// к графу отдельного дерева (MCP-инструменты и панель ходят сюда), поэтому «первое обращение
+    /// к графу» видно именно здесь.
+    /// </summary>
+    private string? ResolveRoot(Models.Project project, string? rootPath)
+    {
+        if (string.IsNullOrWhiteSpace(rootPath)) return project.RootPath;
+
+        var wanted = WorkspaceKnowledgeStore.NormalizePath(rootPath);
+        if (wanted == WorkspaceKnowledgeStore.NormalizePath(project.RootPath)) return project.RootPath;
+
+        var session = sessions.GetByProject(project.Id).FirstOrDefault(s =>
+            s.WorktreePath is { } wt && WorkspaceKnowledgeStore.NormalizePath(wt) == wanted);
+        if (session?.WorktreePath is not { } worktree) return null;
+
+        watchers.WatchPath("worktree:" + session.Id, worktree);
+        return worktree;
+    }
+
+    private IActionResult BadRoot() =>
+        BadRequest(new { message = "Неизвестное рабочее дерево: rootPath не совпадает ни с папкой проекта, ни с отдельным деревом его чатов" });
 
     /// <summary>
     /// Граф кода проекта (v1): 200 — граф (возможно isStale); 404 — не построен/проект не найден
@@ -31,7 +63,8 @@ public class CodeGraphController(
     /// 403 — чужой проект.
     /// </summary>
     [HttpGet]
-    public async Task<IActionResult> Get(string projectId, CancellationToken ct)
+    public async Task<IActionResult> Get(string projectId, [FromQuery] string? rootPath,
+        CancellationToken ct)
     {
         var project = projects.GetById(projectId);
         if (project is null)
@@ -44,16 +77,17 @@ public class CodeGraphController(
             // Чужой проект — явно 403 (контракт задачи): UI различает «нет доступа» и «графа нет».
             return Forbid();
         }
+        if (ResolveRoot(project, rootPath) is not { } root) return BadRoot();
 
         try
         {
-            var snapshot = await graphs.GetSnapshotAsync(project.RootPath, ct);
+            var snapshot = await graphs.GetSnapshotAsync(root, ct);
             if (snapshot is null)
             {
                 // Граф ещё не построен — запускаем фоновый initial-build (не блокируя запрос):
                 // HOTFIX прода — без этого граф строился только реактивно на .cs-сохранения,
                 // и на свежем старте (без правок) панель «Граф» оставалась пустой.
-                graphs.StartRebuildIfIdle(project.RootPath);
+                graphs.StartRebuildIfIdle(root);
                 Response.Headers["X-CodeGraph-Building"] = "true";
                 return NotFound(new
                 {
@@ -65,7 +99,7 @@ public class CodeGraphController(
             // Граф есть, но несвежий (.cs новее BuiltAt) — фоновое обновление, не блокируя ответ:
             // UI показывает граф с пометкой устаревания, а следующий GET получит уже свежий снимок.
             if (snapshot.Metadata.IsStale)
-                graphs.StartRebuildIfIdle(project.RootPath);
+                graphs.StartRebuildIfIdle(root);
 
             return Ok(snapshot);
         }
@@ -82,17 +116,19 @@ public class CodeGraphController(
     /// Немедленный rebuild, минуя окно дебаунса (для пустого/устаревшего графа).
     /// </summary>
     [HttpPost("build")]
-    public async Task<IActionResult> Build(string projectId, CancellationToken ct)
+    public async Task<IActionResult> Build(string projectId, [FromQuery] string? rootPath,
+        CancellationToken ct)
     {
         var project = projects.GetById(projectId);
         if (project is null)
             return NotFound();
         if (project.OwnerId != UserId)
             return Forbid();
+        if (ResolveRoot(project, rootPath) is not { } root) return BadRoot();
 
         try
         {
-            await graphs.RebuildAsync(project.RootPath, ct);
+            await graphs.RebuildAsync(root, ct);
             return Accepted();
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -113,9 +149,10 @@ public class CodeGraphController(
     /// </summary>
     [HttpGet("find")]
     public Task<IActionResult> Find(string projectId, [FromQuery] string q,
-        [FromQuery] int limit = CodeGraphQueryService.DefaultLimit, CancellationToken ct = default)
-        => QueryAsync(projectId, "поиска по графу кода",
-            async project => await queries.FindAsync(project.RootPath, q, limit, ct) is { } result
+        [FromQuery] int limit = CodeGraphQueryService.DefaultLimit,
+        [FromQuery] string? rootPath = null, CancellationToken ct = default)
+        => QueryAsync(projectId, rootPath, "поиска по графу кода",
+            async root => await queries.FindAsync(root, q, limit, ct) is { } result
                 ? Ok(result) : null,
             ct);
 
@@ -127,11 +164,12 @@ public class CodeGraphController(
     [HttpGet("neighbors")]
     public Task<IActionResult> Neighbors(string projectId, [FromQuery] string node,
         [FromQuery] string? direction = null, [FromQuery] string? relation = null,
-        [FromQuery] int limit = CodeGraphQueryService.DefaultLimit, CancellationToken ct = default)
-        => QueryAsync(projectId, "запроса связей узла графа",
-            async project =>
+        [FromQuery] int limit = CodeGraphQueryService.DefaultLimit,
+        [FromQuery] string? rootPath = null, CancellationToken ct = default)
+        => QueryAsync(projectId, rootPath, "запроса связей узла графа",
+            async root =>
             {
-                var outcome = await queries.NeighborsAsync(project.RootPath, node, direction, relation, limit, ct);
+                var outcome = await queries.NeighborsAsync(root, node, direction, relation, limit, ct);
                 if (!outcome.HasGraph) return null; // граф не построен — общий 404 + фоновая постройка
                 if (outcome.Result is null)
                     return NotFound(new
@@ -149,29 +187,31 @@ public class CodeGraphController(
     /// </summary>
     [HttpGet("hubs")]
     public Task<IActionResult> Hubs(string projectId,
-        [FromQuery] int limit = 10, CancellationToken ct = default)
-        => QueryAsync(projectId, "запроса хабов графа кода",
-            async project => await queries.HubsAsync(project.RootPath, limit, ct) is { } result
+        [FromQuery] int limit = 10, [FromQuery] string? rootPath = null, CancellationToken ct = default)
+        => QueryAsync(projectId, rootPath, "запроса хабов графа кода",
+            async root => await queries.HubsAsync(root, limit, ct) is { } result
                 ? Ok(result) : null,
             ct);
 
     /// <summary>
-    /// Общая обвязка тонких запросов: владение проектом (404/403), «графа нет» → 404
-    /// с запуском фоновой постройки (как GET снимка), ошибки → 500 с логом.
-    /// query возвращает null, когда графа для проекта ещё нет.
+    /// Общая обвязка тонких запросов: владение проектом (404/403), выбор дерева (400 на чужом
+    /// rootPath), «графа нет» → 404 с запуском фоновой постройки (как GET снимка), ошибки → 500
+    /// с логом. query получает путь дерева и возвращает null, когда графа для него ещё нет.
     /// </summary>
     private async Task<IActionResult> QueryAsync(
-        string projectId, string what, Func<Models.Project, Task<IActionResult?>> query, CancellationToken ct)
+        string projectId, string? rootPath, string what,
+        Func<string, Task<IActionResult?>> query, CancellationToken ct)
     {
         var project = projects.GetById(projectId);
         if (project is null) return NotFound();
         if (project.OwnerId != UserId) return Forbid();
+        if (ResolveRoot(project, rootPath) is not { } root) return BadRoot();
 
         try
         {
-            if (await query(project) is { } result) return result;
+            if (await query(root) is { } result) return result;
 
-            graphs.StartRebuildIfIdle(project.RootPath);
+            graphs.StartRebuildIfIdle(root);
             Response.Headers["X-CodeGraph-Building"] = "true";
             return NotFound(new
             {

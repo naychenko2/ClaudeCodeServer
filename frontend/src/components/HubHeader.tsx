@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Bell, House, Share2, Users } from 'lucide-react';
+import { Bell, ExternalLink, House, Share2, Users } from 'lucide-react';
 import type { AuthState } from '../types';
 import { C, FONT, TB, SHADOW } from '../lib/design';
 import { useIsMobile } from '../lib/breakpoints';
@@ -22,6 +22,9 @@ interface Props {
   // Открыта страница «Что нового» (она не вкладка хаба, а overlay) — подсвечиваем
   // её кнопку в шапке, как подсвечен колокольчик в разделе уведомлений
   historyActive?: boolean;
+  // «Открыть в новом окне» — иконка перед колокольчиком (раздел «Телеметрия»).
+  // Задаётся только когда есть что открывать (SigNoz доступен); undefined — иконки нет.
+  onOpenExternal?: () => void;
 }
 
 // Событие открытия продуктовой истории — слушает App (overlay на верхнем уровне)
@@ -35,7 +38,7 @@ export const productHistorySeenKey = (userId?: string | null) =>
 
 // Верхняя шапка-хаб главной страницы: логотип слева, переключатель «Чаты | Проекты» по центру,
 // аватар/меню справа. На мобилке логотип и URL-бейдж скрыты (не помещаются).
-export function HubHeader({ value, onTab, auth, onLogout, historyActive }: Props) {
+export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenExternal }: Props) {
   const isMobile = useIsMobile();
   const [showUserMgmt, setShowUserMgmt] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
@@ -167,6 +170,25 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive }: Props
 
       {/* Правая секция — меню аватара (управление пользователями — внутри меню, admin) */}
       <div style={{ flex: isMobile ? 'none' : 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8 }}>
+        {/* «Открыть в новом окне» — только в разделе «Телеметрия» и только когда SigNoz
+            доступен (иначе открылась бы вкладка с ошибкой прокси). Иконкой, как колокольчик. */}
+        {onOpenExternal && (
+          <button
+            onClick={onOpenExternal}
+            aria-label="Открыть в новом окне"
+            title="Открыть в новом окне"
+            style={{
+              width: 32, height: 32, borderRadius: 8, border: 'none',
+              background: 'none', color: C.textSecondary, cursor: 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+            }}
+            onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'none'; }}
+          >
+            <ExternalLink size={17} strokeWidth={2} />
+          </button>
+        )}
+
         {/* Колокольчик уведомлений — бейдж с числом непрочитанных */}
         <button
           onClick={() => onTab('notifications')}
@@ -225,6 +247,8 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive }: Props
           // в таббар они не входят, а отдельного меню разделов больше нет
           onOpenKnowledge={() => onTab('knowledge')}
           onOpenSpend={() => onTab('spend')}
+          // Телеметрия — только админам (проброс SigNoz под [Authorize(Roles=admin)])
+          onOpenTelemetry={isAdmin ? () => onTab('telemetry') : undefined}
           onShowHistory={openHistory}
           historyBadge={historyBadge}
           historyNeverSeen={neverSeen}

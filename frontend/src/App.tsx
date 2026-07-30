@@ -39,6 +39,7 @@ import { KnowledgePage } from './features/knowledge/KnowledgePage'
 import { NotificationsPage } from './features/notifications/NotificationsPage'
 import { HomePage } from './pages/HomePage'
 import { SpendPage } from './features/spend/SpendPage'
+import { TelemetryPage } from './features/telemetry/TelemetryPage'
 import { OPEN_SPEND_EVENT, type SpendOpenContext } from './lib/spend'
 
 const OPEN_PROJECT_KEY = 'cc_open_project'
@@ -115,6 +116,7 @@ export default function App() {
     if (initialHash?.screen === 'personas') return 'personas'
     if (initialHash?.screen === 'knowledge') return 'knowledge'
     if (initialHash?.screen === 'spend') return 'spend'
+    if (initialHash?.screen === 'telemetry') return 'telemetry'
     if (initialHash?.screen === 'notifications') return 'notifications'
     if (initialHash?.screen === 'module' && initialHash.moduleId) return `module:${initialHash.moduleId}` as HubTabValue
     if (initialHash?.screen === 'projects' || initialHash?.screen === 'project') return 'projects'
@@ -336,7 +338,7 @@ export default function App() {
     // поэтому стандартный seed ниже сбросил бы URL на дефолт (#/home) → hashchange listener
     // погасил бы uiKitMode, и витрина закрылась бы сразу после открытия.
     if (isDevUiKitHash()) return;
-    const seed: NavSnapshot = { screen: hubTab === 'home' ? 'home' : hubTab === 'chats' ? 'chats' : hubTab === 'calendar' ? 'calendar' : hubTab === 'notes' ? 'notes' : hubTab === 'personas' ? 'personas' : hubTab === 'knowledge' ? 'knowledge' : hubTab === 'spend' ? 'spend' : hubTab === 'notifications' ? 'notifications' : 'projects' }
+    const seed: NavSnapshot = { screen: hubTab === 'home' ? 'home' : hubTab === 'chats' ? 'chats' : hubTab === 'calendar' ? 'calendar' : hubTab === 'notes' ? 'notes' : hubTab === 'personas' ? 'personas' : hubTab === 'knowledge' ? 'knowledge' : hubTab === 'spend' ? 'spend' : hubTab === 'telemetry' ? 'telemetry' : hubTab === 'notifications' ? 'notifications' : 'projects' }
     // Диплинк #/notes/{id}: сохраняем заметку в снимок, иначе сид затрёт id в URL
     if (seed.screen === 'notes' && initialHash?.screen === 'notes') seed.note = initialHash.noteId ?? null
     // Диплинк #/personas/{id}: сохраняем персону в снимок, иначе сид затрёт id в URL
@@ -399,6 +401,9 @@ export default function App() {
       } else if (s?.screen === 'spend') {
         // Раздел «Аналитика токенов» — проект «спит»
         if (hubTab !== 'spend') { localStorage.setItem(HUB_TAB_KEY, 'spend'); setHubTab('spend') }
+      } else if (s?.screen === 'telemetry') {
+        // Раздел «Телеметрия» — проект «спит»
+        if (hubTab !== 'telemetry') { localStorage.setItem(HUB_TAB_KEY, 'telemetry'); setHubTab('telemetry') }
       } else if (s?.screen === 'notifications') {
         // Раздел «Уведомления» — проект «спит»
         if (hubTab !== 'notifications') { localStorage.setItem(HUB_TAB_KEY, 'notifications'); setHubTab('notifications') }
@@ -536,7 +541,7 @@ export default function App() {
     const moduleId = moduleIdOf(t)
     const dest: NavSnapshot = moduleId
       ? { screen: 'module', moduleId }
-      : { screen: t === 'home' ? 'home' : t === 'chats' ? 'chats' : t === 'calendar' ? 'calendar' : t === 'notes' ? 'notes' : t === 'personas' ? 'personas' : t === 'knowledge' ? 'knowledge' : t === 'spend' ? 'spend' : t === 'notifications' ? 'notifications' : 'projects' }
+      : { screen: t === 'home' ? 'home' : t === 'chats' ? 'chats' : t === 'calendar' ? 'calendar' : t === 'notes' ? 'notes' : t === 'personas' ? 'personas' : t === 'knowledge' ? 'knowledge' : t === 'spend' ? 'spend' : t === 'telemetry' ? 'telemetry' : t === 'notifications' ? 'notifications' : 'projects' }
     // Если на текущем табе открыто «глубокое» состояние (заметка/файл/задача/персона/база) — уходя,
     // сохраняем его в истории (navPush), чтобы Back вернул именно к нему. Уход С дашборда
     // «Домой» — тоже push: дашборд — хаб-центр, Back с любого раздела возвращает на него.
@@ -776,6 +781,8 @@ export default function App() {
               ? <KnowledgePage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
             : effectiveHubTab === 'spend'
               ? <SpendPage auth={auth} onLogout={logout} onHubTab={switchHubTab} ctx={spendCtx ?? {}} onClose={() => switchHubTab('home')} />
+            : effectiveHubTab === 'telemetry'
+              ? <TelemetryPage auth={auth} onLogout={logout} onHubTab={switchHubTab} onClose={() => switchHubTab('home')} />
               : effectiveHubTab === 'notifications'
                 ? <NotificationsPage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
               : moduleIdOf(effectiveHubTab)
@@ -802,7 +809,9 @@ export default function App() {
           }}
         />
       )}
-      {auth && !authChecking && <AiLauncher />}
+      {/* В разделе «Телеметрия» iframe SigNoz занимает весь экран, и плавающая
+          AI-кнопка перекрывала бы его контролы в правом нижнем углу — прячем её там */}
+      {auth && !authChecking && effectiveHubTab !== 'telemetry' && <AiLauncher />}
       {auth && aiSearchOpen && <GlobalSearch onClose={() => setAiSearchOpen(false)} />}
     </>
   )

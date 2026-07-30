@@ -18,7 +18,7 @@ runbook развёртывания SigNoz вынесены в отдельные
 - **Alerting** (email/Telegram уведомления) — отложено, см. [Future Epics](#future-epics-explicitly-deferred).
 - **Persistent postmortem beyond SigNoz** (Tempo/Loki) — N/A: SigNoz + ClickHouse уже даёт
   персистентное хранение (30d traces / 90d metrics, см.
-  [observability-signoz-setup.md](signoz-setup.md#retention-срок-хранения)).
+  [signoz-setup.md](signoz-setup.md#retention-срок-хранения)).
 - **End-user-facing telemetry UI** — аудитория телеметрии = администратор, не конечный
   пользователь.
 - **Per-user metric attribution** — соображения приватности: только атрибут
@@ -278,6 +278,13 @@ AlertPollingService  →  NotificationService  →  колокол + тост + 
 лежат в `data/` каждого инстанса отдельно, поэтому доставить на телефон может лишь тот,
 на который подписана PWA — обычно боевой. Получатели — пользователи с ролью `admin`.
 
+> **Дев-тревоги приходят на устройства боевого — так и задумано.** SigNoz отдаёт
+> опрашивающему инстансу алерты ВСЕХ контуров, а рассылает их тот единственный, у кого есть
+> подписки. Иначе о проблемах дева не узнал бы никто. Контур виден в заголовке
+> («… — dev») и в источнике уведомления. Если дев шумит экспериментами, его можно отсечь:
+> `Telemetry:Alerts:Environments: ["production"]`. Алерты без метки контура проходят
+> фильтр всегда — правило без разреза по среде касается инсталляции целиком.
+
 | Событие | Куда | Будит? |
 |---|---|---|
 | Алерт загорелся | колокол + тост + push, категория «Алерт» (⚠) | да |
@@ -337,6 +344,202 @@ AlertPollingService  →  NotificationService  →  колокол + тост + 
 Выключено или без ключа — служба не поднимается вовсе. Состояние разосланного лежит
 в `data/alert-state.json` и переживает перезапуск: повторять старые тревоги после
 рестарта не нужно.
+
+## Сохранённые представления (Saved Views)
+
+Дашборд отвечает на вопрос «что происходит», представление — «дай ту самую выборку,
+которую я собираю руками каждый раз». Это сохранённый запрос в Explorer: фильтр,
+разрезы и колонки под именем. Живут в репе как код
+(`docker/observability/views/*.json`), накатываются `apply-views.ps1`.
+
+| Представление | Раздел | Что отбирает | Когда открывать |
+|---|---|---|---|
+| Отказавшие ходы | traces | `chat.turn` с `outcome = 'error'` | пришёл алерт «Всплеск ошибок LLM» |
+| Медленные ходы | traces | `chat.turn` дольше 30 с | пришёл алерт про деградацию скорости |
+| Запуски в песочнице | traces | `process.start` с `kind = 'docker'` | разбор «контейнер тормозит или нет» |
+| Предупреждения и ошибки | logs | `severity_text` = Warning/Error | быстрый триаж — 129 значимых строк из ~4200 |
+| p99 длительности хода | metrics | p99 `ccs.llm.duration.bucket` по контурам | график деградации скорости |
+| Ошибки LLM по типам | metrics | rate `ccs.llm.errors` по `error_type` | всплеск отказов в разрезе причин |
+
+Traces- и logs-представления — прямое продолжение алерта: алерт говорит «что-то не так»,
+представление показывает, что именно. Metrics-представления частично дублируют дашборд
+«Здоровье сервера» (там те же графики с разрезами) — заведены по запросу как быстрый
+доступ из Explorer, но дашборд для метрик остаётся основным инструментом.
+
+> **Отказы в трейсах появились не сразу.** Раньше упавший ход был неотличим от
+> успешного: `outcome`/`error_type` жили только в метриках, а статус спана оставался
+> `Unset` — то есть дашборд показывал, что отказы есть, а открыть их в Traces Explorer
+> было нечем. Теперь `TurnTelemetry.MarkTurnOutcome` ставит на спан тег `outcome`,
+> `error_type` и статус `Error`. Представление наполнится с первого отказа после
+> обновления инстанса.
+
+### Грабли: колонки List View живут в `extraData`, а не в query
+
+Главная засада, и коварная: представление **сохраняется и открывается в списке**,
+сервер на запрос отвечает **200** с валидными данными — а фронт List View рушится уже
+при отрисовке результата, показывая красный блок
+`500 Cannot use 'in' operator to search for 'key' in service.name`. «500» тут врёт —
+это не серверная ошибка, а JS-исключение в браузере. Второй симптом того же корня —
+вечное «Retrieving your traces!» при открытии из панели Saved Views на Home.
+
+Причина — **колонки List View задаются НЕ в `compositeQuery`, а в отдельном top-level
+поле `extraData`** (JSON-**строка** с `selectColumns`). Без него рендерер сваливается на
+строковый дефолт `service.name` и делает по нему `'key' in ...`. Поле `spec.selectFields`
+на это НЕ влияет — тупик, на котором легко застрять (его наличие не спасает).
+
+Схема снята с официального `signoz-mcp-server`
+([pkg/views/examples.go](https://github.com/SigNoz/signoz-mcp-server/blob/main/pkg/views/examples.go)) —
+публичной доки по REST-созданию saved views у SigNoz нет, это clickops-путь. Рабочая форма:
+
+```jsonc
+// top-level поле представления (СТРОКА, не объект):
+"extraData": "{\"selectColumns\":[{\"name\":\"service.name\",\"signal\":\"traces\"},{\"name\":\"name\",\"signal\":\"traces\"},{\"name\":\"duration_nano\",\"signal\":\"traces\"},{\"name\":\"response_status_code\",\"signal\":\"traces\"}]}",
+"compositeQuery": {
+  "queryType": "builder", "panelType": "list",
+  "queries": [ { "type": "builder_query", "spec": {
+    "name": "A", "signal": "traces", "source": "", "stepInterval": 0, "limit": 100,
+    "order": [ { "key": { "name": "timestamp" }, "direction": "desc" } ],  // не orderBy, не пусто
+    "filter":  { "expression": "name = 'chat.turn' AND outcome = 'error'" },
+    "having":  { "expression": "" }
+  } } ]
+}
+```
+
+> Подсказка в `signoz-mcp-server` «extraData … safe to leave \"\"» — **вводит в заблуждение**:
+> именно пустой `extraData` роняет List View на дефолтном резолве колонок.
+
+**Отличия по разделам** (`signal` внутри `spec` обязан совпадать с `sourcePage`):
+
+- **logs** (`panelType: list`) — та же засада с `extraData.selectColumns`, что у traces
+  (в официальном примере его нет, но без него List View так же падает — колонки задаём
+  явно: `timestamp, severity_text, service.name, body`). `order` — два ключа
+  (`timestamp`, затем `id` для устойчивой пагинации). Severity фильтруется равенством
+  строки: `severity_text = 'Warning' OR severity_text = 'Error'` (значения в наших логах —
+  `Information`/`Warning`/`Error`, не `WARN`/`ERROR`).
+- **metrics** (`panelType: graph`) — **`extraData` не нужен** (это график, а не таблица
+  колонок — тот класс падения там невозможен), но обязателен блок `aggregations`
+  (`metricName` + `timeAggregation` + `spaceAggregation`), `stepInterval: 60` и
+  `order` по `__result`.
+
+Проверять надо не список и не код возврата запроса, а **применение вьюхи с отрисовкой
+результата, причём на ОБОИХ путях**: из выпадашки «Select a view» в Explorer И из панели
+Saved Views на Home (последняя восстанавливает вьюху из URL другим кодовым путём и ловит
+падение, которого нет в первом). Первые попытки чинились «на глаз» по списку и коду 200,
+потом по одному только Explorer — и оба раза пропускали падение на Home-пути. Признак
+успеха — нормальное «This query had no results» / «No data» (пустой результат), а не
+«Retrieving…» и не красный блок. Проверено на всех шести с Home.
+
+### Грабли: PUT портит представление
+
+`PUT /api/v1/explorer/views/{id}` в SigNoz v0.134 отвечает **200**, но сохраняет запрос
+испорченным. Следом ломается не одна запись, а **вся выдача раздела**:
+
+```
+GET /api/v1/explorer/views?sourcePage=traces
+→ 500  error in unmarshalling explorer query data: invalid character '\'
+```
+
+Чинится только удалением битой записи по id — а его после поломки уже не получить из
+API, потому что список не читается. Достать можно из метастора:
+
+```powershell
+docker exec signoz-metastore-postgres-0 psql -U signoz -d signoz `
+  -c "SELECT id, name, source_page FROM saved_views ORDER BY created_at;"
+```
+
+Поэтому `apply-views.ps1` обновляет через **DELETE + POST** и никогда не шлёт PUT.
+Проверено прямым опытом: тот же файл через POST даёт читаемый список, через PUT —
+сломанный.
+
+Ещё одна мелочь того же рода: `GET /api/v1/explorer/views` **без** `?sourcePage=`
+возвращает пустой список, а не все представления. Легко решить, что ничего
+не создалось, и наплодить дублей.
+
+## Раздел «Телеметрия» в UI (встроенный SigNoz)
+
+SigNoz живёт на `127.0.0.1:3301` (bind к localhost), поэтому «в лоб» его видно только с
+хост-машины. Чтобы телеметрия открывалась и удалённо (с телефона через PWA), UI встроен
+в CCS отдельным разделом (меню аватара → «Телеметрия», **только у админов**) через
+`<iframe>` с **same-origin пробросом**: браузер грузит `/telemetry-proxy/` с нашего
+origin, а бэкенд форвардит на локальный SigNoz.
+
+**Как это собрано:**
+
+- **Проброс** — middleware `/telemetry-proxy/**` в [Program.cs](../../backend/ClaudeHomeServer/Program.cs)
+  (по образцу preview-прокси, `IHttpForwarder`, WebSocket-upgrade нативно). Аутентификация
+  под iframe — cookie `cc_telemetry` (iframe не носит `Authorization`); роль сверяется по
+  `UserStore` (не админ → 403, даже с валидной cookie). Выключено в конфиге → 503.
+- **base-path** — префикс `/telemetry-proxy` **не срезается**: SigNoz поднят с env
+  `SIGNOZ_GLOBAL_EXTERNAL__URL=…/telemetry-proxy` (overlay `docker-compose.observability.yml`,
+  через переменную `SIGNOZ_EXTERNAL_URL`) и сам релоцирует SPA под префикс — вставляет
+  `<base href="/telemetry-proxy/">`, ассеты и внутренний API резолвятся под ним. Спайк
+  подтвердил: корень `/` при этом отдаёт 404 (с SPA-fallback CCS не конфликтует), а
+  `/api/v1/health` продолжает отвечать и на корне — поэтому vendored healthcheck трогать
+  не пришлось.
+- **Статус** — `GET /api/telemetry/status` (`{configured, reachable, proxyPath}`,
+  admin-only). Фронт по нему решает: iframe или заглушка «настрой, администратор». На
+  ненадёжный iframe `onerror` не полагаемся — статус приходит server-side.
+- **Логин** — внутри iframe обычная форма входа SigNoz (свои креды, не CCS). Public
+  Sharing / anonymous в Community-редакции нет, автологин не делаем — вход разовый, JWT
+  живёт в localStorage нашего origin.
+
+**Включение:**
+
+```jsonc
+"Telemetry": {
+  "Ui": {
+    "Enabled": true,                    // раздел показывает SigNoz; false — заглушка
+    "InternalUrl": "http://localhost:3301"  // куда форвардить (порт из overlay)
+  }
+}
+```
+
+Плюс SigNoz должен быть поднят с `SIGNOZ_EXTERNAL_URL` (см. overlay). Забыть env → SPA
+не встанет под префикс, iframe будет пустым при живом бэкенде.
+
+### Настройка на новом инстансе (свой отдельный CCS)
+
+Раздел работает per-инстанс: у каждого CCS свой SigNoz (наш bind'ится к `127.0.0.1` и
+извне недоступен — общий использовать нельзя). Ниже — как поднять телеметрию на чистом
+инстансе. Команды даны напрямую: подразумевается, что у инстанса **нет оркестратора
+`ClaudeCodeServerRunner`** — запуск и рестарт CCS выполняются вручную (`dotnet run`,
+опубликованный exe или `docker-compose.claude.yml` — как этот инстанс обычно и запускают).
+
+1. **Код с фичей.** Обновить репозиторий до версии, где раздел «Телеметрия» есть
+   (`git pull`), пересобрать бэк и фронт.
+2. **Поднять свой SigNoz:**
+   ```
+   docker compose -f docker-compose.observability.yml up -d
+   ```
+   base-path env (`SIGNOZ_EXTERNAL_URL`) уже в overlay с рабочим дефолтом `localhost` —
+   менять не нужно (важен только PATH `/telemetry-proxy`, он фиксирован; ХОСТ в base не
+   идёт). При первом заходе на `http://localhost:3301/telemetry-proxy/` SigNoz предложит
+   создать первый аккаунт — это **отдельный логин SigNoz** (не аккаунт CCS), у каждого
+   инстанса свой.
+3. **Включить в своём `appsettings.Local.json`** (машинно-специфичный, не в гите; образец —
+   `appsettings.Local.example.json`):
+   ```jsonc
+   "Telemetry": {
+     // чтобы в SigNoz были данные — CCS слал телеметрию в свой локальный SigNoz
+     "Backends": { "Production": { "Enabled": true, "OtlpEndpoint": "http://localhost:4318" } },
+     // сам раздел (iframe → локальный SigNoz)
+     "Ui": { "Enabled": true, "InternalUrl": "http://localhost:3301" }
+   }
+   ```
+   Без `Backends.Production` раздел откроется, но SigNoz будет пустым.
+4. **Роль admin.** Раздел admin-only — пользователь инстанса должен быть `admin` (на своём
+   инстансе обычно так и есть).
+5. **Рестарт CCS вручную.** `appsettings.Local.json` читается на старте — перезапустить
+   процесс (нет трея-оркестратора, поднять тем же способом, что и обычно).
+6. **За реверс-прокси/на своём домене** — ничего дополнительного: проброс `/telemetry-proxy`
+   относительный, работает на любом origin (в dev — тот же проброс уже прописан в
+   `vite.config.ts`).
+
+Опционально, если нужен тот же набор, что на основном инстансе:
+- дашборды/представления/правила алертов — накатить на свой SigNoz из репы: `apply.ps1`,
+  `apply-views.ps1`, `apply-alerts.ps1` (см. соответствующие доки);
+- push-алерты на свой телефон — `Telemetry:Alerts:Enabled=true` + свой SigNoz ApiKey
+  (это про доставку алертов, а не про UI-раздел; подписки живут в `data/` этого инстанса).
 
 ## Cross-links
 

@@ -60,9 +60,9 @@ internal class TurnAccumulator
                 senderOrigin));
     }
 
-    public void OnSessionStarted(string model, string mode)
+    public void OnSessionStarted(string model, string mode, TurnWorktreeInfo? worktree = null)
     {
-        lock (_lock) _currentTurn.Add(new StoredSessionStartedMessage(model, mode));
+        lock (_lock) _currentTurn.Add(new StoredSessionStartedMessage(model, mode, worktree));
     }
 
     public void OnTextDelta(string text)
@@ -241,6 +241,87 @@ internal class TurnAccumulator
         {
             if (_pendingPlans.TryGetValue(requestId, out var msg)) { msg.Resolved = true; msg.Approved = approved; msg.Feedback = feedback; }
         }
+    }
+
+    // Карточка плана «Командной реализации» (Э2): публикуется бэкендом, а не CLI.
+    public void OnTeamPlan(Models.TeamImplementPlan plan)
+    {
+        lock (_lock)
+        {
+            FlushBuffers();
+            _currentTurn.Add(new StoredTeamPlanMessage { PlanId = plan.Id, Plan = plan });
+        }
+    }
+
+    // Правка/решение по карточке плана. В отличие от plan_review ищем по ВСЕЙ истории:
+    // карточка ждёт человека дольше хода, а pending-словари чистятся на границе хода
+    // (FlushAsync). Возвращает false, если карточки с таким id нет.
+    public bool OnTeamPlanUpdated(string planId, Models.TeamImplementPlan plan, bool? approved)
+    {
+        lock (_lock)
+        {
+            var card = _currentTurn.Concat(_history).OfType<StoredTeamPlanMessage>()
+                .LastOrDefault(m => m.PlanId == planId);
+            if (card is null) return false;
+            card.Plan = plan;
+            if (approved is not null) { card.Resolved = true; card.Approved = approved; }
+            return true;
+        }
+    }
+
+    // Карточка плана по id — источник правды при ответе хаба (правка исполнителя приходит
+    // после рестарта сервера, когда состояние есть только в истории).
+    public Models.TeamImplementPlan? FindTeamPlan(string planId)
+    {
+        lock (_lock)
+            return _currentTurn.Concat(_history).OfType<StoredTeamPlanMessage>()
+                .LastOrDefault(m => m.PlanId == planId && !m.Resolved)?.Plan;
+    }
+
+    // План независимо от того, разрешена ли карточка (Э4): после «Запустить» карточка
+    // Resolved, а автономный цикл волн ходит по этому же плану — раздаёт остаток и правит
+    // счётчик попыток под-задач.
+    public Models.TeamImplementPlan? FindTeamPlanAny(string planId)
+    {
+        lock (_lock)
+            return _currentTurn.Concat(_history).OfType<StoredTeamPlanMessage>()
+                .LastOrDefault(m => m.PlanId == planId)?.Plan;
+    }
+
+    // Карточка остановки (Э4): публикуется бэкендом, как карточка плана.
+    public void OnTeamEscalation(Models.TeamEscalation escalation)
+    {
+        lock (_lock)
+        {
+            FlushBuffers();
+            _currentTurn.Add(new StoredTeamEscalationMessage
+            {
+                EscalationId = escalation.Id,
+                Escalation = escalation,
+            });
+        }
+    }
+
+    // Решение человека по карточке остановки. Ищем по всей истории — карточка ждёт человека
+    // дольше хода. false — карточки с таким id нет либо она уже разрешена.
+    public bool OnTeamEscalationResolved(string escalationId, string? actionId)
+    {
+        lock (_lock)
+        {
+            var card = _currentTurn.Concat(_history).OfType<StoredTeamEscalationMessage>()
+                .LastOrDefault(m => m.EscalationId == escalationId);
+            if (card is null || card.Escalation.Resolved) return false;
+            card.Escalation.Resolved = true;
+            card.Escalation.ChosenActionId = actionId;
+            return true;
+        }
+    }
+
+    public Models.TeamEscalation? FindTeamEscalation(string escalationId)
+    {
+        lock (_lock)
+            return _currentTurn.Concat(_history).OfType<StoredTeamEscalationMessage>()
+                .LastOrDefault(m => m.EscalationId == escalationId)?.Escalation;
     }
 
     public async Task OnResultAsync(string subtype, long durationMs, int numTurns,

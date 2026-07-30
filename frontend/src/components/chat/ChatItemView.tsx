@@ -1,6 +1,7 @@
 import { memo, useState, useContext, useEffect } from 'react';
 import { SquareCheck, SquarePen, Check, Copy, AlertCircle, RotateCcw, AlertTriangle, X } from 'lucide-react';
-import type { ChatItem, Persona } from '../../types';
+import type { ChatItem, Persona, ProviderFallbackOption } from '../../types';
+import { splitFallbackOptions, formatSubscriptionMeta } from '../../lib/providerLimit';
 import type { TodoItem } from '../../hooks/useSessionArtifacts';
 import type { Mode } from '../../lib/modes';
 import { C, FONT, SHADOW, R } from '../../lib/design';
@@ -16,6 +17,7 @@ import { getPersonaById, usePersonasVersion, personaLabel, ensurePersonasLoaded 
 import { IconNotes } from '../../features/notes/shared';
 import { saveChatNote, openNoteById } from '../../features/notes/saveToNote';
 import { MarkdownContent } from './MarkdownContent';
+import { CollapsibleMarkdownBody } from './AgentContentBlocks';
 import { parseDelegationReport } from '../../lib/delegationReport';
 import { ToolUseView } from './ToolUseView';
 import { PersonaAskView, isPersonaAsk } from './PersonaAskView';
@@ -25,6 +27,8 @@ import { TaskCreatedView, isTasksCreate } from './TaskCreatedView';
 import type { ActivityEntry } from './timeline';
 import { AskQuestionView } from './AskQuestionView';
 import { PlanReviewView } from './PlanReviewView';
+import { TeamPlanView } from './TeamPlanView';
+import { TeamEscalationView } from './TeamEscalationView';
 
 // Разбор input инструмента TodoWrite → пункты чек-листа (каждый вызов несет полный список)
 function parseTodoWriteInput(input: unknown): TodoItem[] {
@@ -406,10 +410,9 @@ function AgentMessageView({ text, persona, neutralTitle = 'Агент', note, or
         </div>
         {note && <span style={{ fontSize: 11, color: C.textMuted, flexShrink: 0 }}>{note}</span>}
       </div>
-      {/* Тело — Markdown */}
-      <div style={{ padding: '10px 12px', fontSize: 14, color: C.textHeading, wordBreak: 'break-word' }}>
-        <MarkdownContent text={text} />
-      </div>
+      {/* Тело — Markdown; длинная постановка задачи сворачивается тем же механизмом,
+          что и ответ консультации, иначе карточка хоронит ленту под инструкциями */}
+      <CollapsibleMarkdownBody text={text} accent={accent} padding="10px 12px" />
     </div>
   );
 }
@@ -435,7 +438,7 @@ interface ItemProps {
   onRetry: () => void;
   onInterrupt: () => void;
   // Миграция чата на другого провайдера (карточка «Продолжить на …» при исчерпании лимита)
-  onMigrateProvider?: (model: string) => Promise<void>;
+  onMigrateProvider?: (model: string, subscriptionKey?: string) => Promise<void>;
   // Агрегированный чек-лист TaskCreate/TaskUpdate — приходит только на последний task-вызов ленты
   taskPlan?: TodoItem[];
   // Вложенная активность сабагента-персоны (дочерние tool_use/text/thinking с индексами) —
@@ -445,22 +448,33 @@ interface ItemProps {
   // Универсальный рендер элементов активности (renderItem из ChatPanel) —
   // чтобы внутри секции работали ВСЕ возможности обычной ленты
   agentRenderChild?: (item: ChatItem, idx: number) => React.ReactNode;
+  // Для kind='session_started': считает ChatPanel (sessionStartedBoundaries) — 'entered'
+  // рисует разделитель «ход в дереве агента», 'returned' — «ход вернулся в проект»;
+  // undefined — этот session_started прозрачен, рендерится в null (как сегодня)
+  turnBoundaryKind?: 'entered' | 'returned';
 }
 
 // React.memo: переключатель по kind — самый массовый компонент ленты. Элементы ChatItem
 // иммутабельны по ссылке (обновление элемента = новый объект), пропсы-функции стабильны
 // (useCallback в ChatPanel) — при дописывании ленты старые элементы не перерендериваются.
-// Карточка «Лимит исчерпан — продолжить на стороннем провайдере»: кнопка на каждый
-// настроенный провайдер; клик мигрирует чат (транскрипт переезжает, контекст сохраняется).
-// После миграции карточка гаснет по provider_switched (resolved в chatReducer).
-function ProviderLimitCard({ item, online, onMigrate }: {
+// Карточка «Лимит исчерпан — продолжить чат»: две секции опций — сначала здоровые
+// аккаунты того же пула подписок (kind='subscription', та же модель, своя предоплата),
+// затем сторонние провайдеры (модель сменится, оплата с их баланса). Клик мигрирует чат
+// (транскрипт переезжает, контекст сохраняется); у опции пула передаём её key как
+// subscriptionKey — явный выбор вместо автовыбора пулом. После миграции карточка
+// гаснет по provider_switched (resolved в chatReducer).
+// export — для dev-витрины UiKitPage (демо обеих секций без живого лимита)
+export function ProviderLimitCard({ item, online, onMigrate }: {
   item: Extract<ChatItem, { kind: 'provider_limit' }>;
   online: boolean;
-  onMigrate?: (model: string) => Promise<void>;
+  onMigrate?: (model: string, subscriptionKey?: string) => Promise<void>;
 }) {
-  const [busyModel, setBusyModel] = useState<string | null>(null);
+  // Busy по ключу опции, не по модели: у аккаунтов пула модель одна и та же
+  const [busyKey, setBusyKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   if (item.resolved || item.providers.length === 0) return null;
+
+  const { subscriptions, providers } = splitFallbackOptions(item.providers);
 
   let when = '';
   if (item.resetsAt) {
@@ -474,18 +488,26 @@ function ProviderLimitCard({ item, online, onMigrate }: {
     }
   }
 
-  const migrate = async (model: string) => {
-    if (!onMigrate || busyModel) return;
-    setBusyModel(model);
+  const migrate = async (option: ProviderFallbackOption) => {
+    if (!onMigrate || busyKey) return;
+    setBusyKey(option.key);
     setError(null);
     try {
-      await onMigrate(model);
+      await onMigrate(option.model, option.kind === 'subscription' ? option.key : undefined);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Не удалось переключить чат');
     } finally {
-      setBusyModel(null);
+      setBusyKey(null);
     }
   };
+
+  const optionButtonStyle = (key: string): React.CSSProperties => ({
+    padding: '5px 12px', borderRadius: 8, border: `1px solid ${C.warning}`,
+    background: C.bgWhite, color: C.textHeading, fontSize: 12.5, fontWeight: 600,
+    cursor: !online || busyKey ? 'default' : 'pointer',
+    opacity: !online || (busyKey !== null && busyKey !== key) ? 0.55 : 1,
+    fontFamily: 'inherit',
+  });
 
   return (
     <div style={{
@@ -498,30 +520,53 @@ function ProviderLimitCard({ item, online, onMigrate }: {
         <span>⏳</span>
         <span>
           Лимит подписки исчерпан{when ? <span style={{ opacity: 0.75 }}> · {when}</span> : null}.
-          Можно продолжить этот чат на другом провайдере — контекст сохранится.
+          {subscriptions.length > 0
+            ? ' Можно продолжить этот чат на другом аккаунте пула или стороннем провайдере — контекст сохранится.'
+            : ' Можно продолжить этот чат на другом провайдере — контекст сохранится.'}
         </span>
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        {item.providers.map(p => (
-          <button
-            key={p.key}
-            onClick={() => void migrate(p.model)}
-            disabled={!online || !onMigrate || busyModel !== null}
-            style={{
-              padding: '5px 12px', borderRadius: 8, border: `1px solid ${C.warning}`,
-              background: C.bgWhite, color: C.textHeading, fontSize: 12.5, fontWeight: 600,
-              cursor: !online || busyModel ? 'default' : 'pointer',
-              opacity: !online || (busyModel !== null && busyModel !== p.model) ? 0.55 : 1,
-              fontFamily: 'inherit',
-            }}
-          >
-            {busyModel === p.model ? 'Переключаю…' : `Продолжить на ${p.displayName}`}
-          </button>
-        ))}
-        <span style={{ fontSize: 11.5, color: C.textMuted }}>
-          Оплата — с баланса провайдера, модель сменится
-        </span>
-      </div>
+      {subscriptions.length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          {subscriptions.map(p => {
+            const meta = formatSubscriptionMeta(p);
+            return (
+              <button
+                key={p.key}
+                onClick={() => void migrate(p)}
+                disabled={!online || !onMigrate || busyKey !== null}
+                style={{ ...optionButtonStyle(p.key), display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 1 }}
+              >
+                {busyKey === p.key ? 'Переключаю…' : (
+                  <>
+                    <span>Продолжить на «{p.displayName}»</span>
+                    {meta && <span style={{ fontSize: 11, fontWeight: 400, opacity: 0.7 }}>{meta}</span>}
+                  </>
+                )}
+              </button>
+            );
+          })}
+          <span style={{ fontSize: 11.5, color: C.textMuted }}>
+            Та же модель — расходуется выбранный аккаунт
+          </span>
+        </div>
+      )}
+      {providers.length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          {providers.map(p => (
+            <button
+              key={p.key}
+              onClick={() => void migrate(p)}
+              disabled={!online || !onMigrate || busyKey !== null}
+              style={optionButtonStyle(p.key)}
+            >
+              {busyKey === p.key ? 'Переключаю…' : `Продолжить на ${p.displayName}`}
+            </button>
+          ))}
+          <span style={{ fontSize: 11.5, color: C.textMuted }}>
+            Оплата — с баланса провайдера, модель сменится
+          </span>
+        </div>
+      )}
       {error && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: C.dangerText, fontSize: 12 }}>
           <AlertCircle size={13} style={{ flexShrink: 0 }} />
@@ -532,7 +577,7 @@ function ProviderLimitCard({ item, online, onMigrate }: {
   );
 }
 
-export const ChatItemView = memo(function ChatItemView({ item, index, online, streaming, isLastResult, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, onMigrateProvider, taskPlan, agentActivity, agentRenderChild }: ItemProps) {
+export const ChatItemView = memo(function ChatItemView({ item, index, online, streaming, isLastResult, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, onMigrateProvider, taskPlan, agentActivity, agentRenderChild, turnBoundaryKind }: ItemProps) {
   const project = useContext(ChatProjectContext);
   const persona = useContext(PersonaContext);
   const asstName = useAssistantName();
@@ -631,9 +676,31 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       );
     }
 
-    case 'session_started':
-      // Старт чата не показываем — тех-инфа (модель/режим/cwd/MCP) дублирует шапку и раздувает чат
-      return null;
+    case 'session_started': {
+      // Старт чата обычно не показываем — тех-инфа (модель/режим/cwd/MCP) дублирует шапку
+      // и раздувает ленту. Исключение — «граница» дерева хода (turnBoundaryKind, считает
+      // ChatPanel): агент внутри хода ушёл в свой git worktree мимо Session.worktreePath,
+      // и это стоит отметить в ленте, как и возврат обратно. По образцу compact_boundary
+      if (!turnBoundaryKind) return null;
+      const entered = turnBoundaryKind === 'entered';
+      // Нейтральное время: разделитель — отметка о прошедшем событии истории, а не
+      // индикатор текущего состояния (тем занят git-бар, см. ProjectGitBar.turnTree)
+      const title = entered
+        ? `Дерево агента: ${item.turnWorktree!.path}`
+        : (project ? `Корень проекта: ${project.rootPath}` : 'Ход вернулся в корень проекта');
+      return (
+        <div style={{ alignSelf: 'stretch', display: 'flex', alignItems: 'center', gap: 10, color: C.textMuted, fontSize: 11, margin: '2px 0' }} title={title}>
+          <div style={{ flex: 1, height: 1, background: C.border }} />
+          <span style={{ display: 'flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap' }}>
+            <span style={{ color: C.textMuted }}>⎇</span>
+            {entered
+              ? <>ход в дереве агента · <span style={{ fontFamily: FONT.mono }}>{item.turnWorktree!.name}</span></>
+              : 'ход вернулся в корень проекта'}
+          </span>
+          <div style={{ flex: 1, height: 1, background: C.border }} />
+        </div>
+      );
+    }
 
     case 'text': {
       // Доклад делегированной задачи (модель Z) — гостевая реплика несёт маркер первой
@@ -768,6 +835,14 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
 
     case 'plan_review':
       return <PlanReviewView item={item} online={online} onRespond={onRespondPlan} version={planVersion} showBadge={planShowBadge} showSwitch={planShowSwitch} onSwitchMode={onSwitchMode} />;
+
+    case 'team_plan':
+      // Действия и состояние режима карточка берёт из TeamPlanContext (провайдит ChatPanel)
+      return <TeamPlanView item={item} online={online} />;
+
+    case 'team_escalation':
+      // Карточка остановки: решение уходит через TeamEscalationContext (провайдит ChatPanel)
+      return <TeamEscalationView item={item} online={online} />;
 
     case 'permission_request':
       return <PermissionRequestView item={item} online={online}

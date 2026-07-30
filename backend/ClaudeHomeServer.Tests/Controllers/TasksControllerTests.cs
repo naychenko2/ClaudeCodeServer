@@ -37,6 +37,53 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         return persona.GetProperty("id").GetString()!;
     }
 
+    // ─── Уровень модели (modelTier) ──────────────────────────────────────────
+
+    [Fact]
+    public async Task Create_СУровнемМодели_Сохраняется()
+    {
+        var task = await CreateTaskAsync(new { title = "разобрать архитектуру", modelTier = "strong" });
+
+        task.GetProperty("modelTier").GetString().Should().Be("strong");
+    }
+
+    [Fact]
+    public async Task Create_СНеизвестнымУровнем_400()
+    {
+        var response = await _client.PostAsJsonAsync("/api/tasks",
+            new { title = "задача", modelTier = "гениальная" });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task Update_ПустойУровень_Сбрасывает()
+    {
+        var task = await CreateTaskAsync(new { title = "правка", modelTier = "weak" });
+        var id = task.GetProperty("id").GetString();
+
+        var response = await _client.PutAsJsonAsync($"/api/tasks/{id}", new { modelTier = "" });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var updated = await response.Content.ReadFromJsonAsync<JsonElement>();
+        updated.GetProperty("modelTier").ValueKind.Should().Be(JsonValueKind.Null);
+    }
+
+    [Fact]
+    public async Task СозданиеПерсоны_СУровнемМодели_Сохраняется()
+    {
+        var response = await _client.PostAsJsonAsync("/api/personas",
+            new { name = "Уровневая", modelTier = "medium" });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var persona = await response.Content.ReadFromJsonAsync<JsonElement>();
+        persona.GetProperty("modelTier").GetString().Should().Be("medium");
+
+        var bad = await _client.PostAsJsonAsync("/api/personas",
+            new { name = "Кривая", modelTier = "ultra" });
+        bad.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
     [Fact]
     public async Task Create_СЧужойПерсоной_400()
     {

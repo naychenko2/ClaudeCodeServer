@@ -150,10 +150,20 @@ Claude Design проект: `52adb1f7-312b-4f25-8c47-2bccfca9df94`
   `chat-new`, `chat-persona`, `tasks-executor`, `subagent-consultant`, `modules-llm` — им
   локаль и `direct:`-модели недоступны, резолвит `ModelAssignmentResolver`; фоновым —
   `CheapTextRunner` по маршруту. Пустая модель сущности (`Session.Model`, `Persona.Model`) =
-  «по назначению места»; явная модель и пины пантеона сильнее. Шлюз на границе запуска —
-  `ClaudeSession.EffectiveModel` (ключ места по сессии) и `OneShotClaudeRunner.ResolveModel`
-  (резолв ДО `BuildCliEnv`, `NormalizeModel` — ПОСЛЕ). Значение в сессии не фиксируется:
-  `Model = null` резолвится каждый ход, смена настройки подхватывается сама.
+  «по назначению места»; явная модель и пины пантеона сильнее. **Уровень (тир) можно задать
+  точечно** — `TaskItem.ModelTier` и `Persona.ModelTier` (`strong|medium|weak`, пусто = место):
+  у исполнения задачи порядок `задача → Persona.Model → Persona.ModelTier → место`
+  (`TaskExecutionService.ResolveExecutorModel`), у чатов персоны, групповых чатов, смены
+  спикера и `PersonaAskService` — `Persona.Model → Persona.ModelTier → место`
+  (`ModelAssignmentResolver.PersonaModel`, владельца резолвить только через
+  `SessionManager.ResolveOwnerId`). Значения приходят и из MCP от LLM-постановщика, поэтому
+  разбор — белый список трёх имён (`ModelTiers.TryParse`), не `Enum.TryParse`.
+  Шлюз на границе запуска — `ClaudeSession.EffectiveModel` (ключ места по сессии) и
+  `OneShotClaudeRunner.ResolveModel` (резолв ДО `BuildCliEnv`, `NormalizeModel` — ПОСЛЕ).
+  Значение в сессии не фиксируется: `Model = null` резолвится каждый ход, смена настройки
+  подхватывается сама. Заданный уровень — исключение: он разворачивается в модель при
+  создании сессии (`SessionManager.ResolveDefaultModel`) и дальше живёт как обычная явная
+  модель чата, поэтому смена слота задним числом на уже начатый чат не влияет.
 
 Фоновые one-shot действия (теги, сводки, память, changelog…) считаются дёшево по цепочке
 «выбранное → локальная Ollama → claude» (`LocalActionRouter` + `CheapTextRunner`, каталог —
@@ -282,6 +292,11 @@ Use cases (с резолюциями), архитектура интеграци
 per-инстанс). Страховка на случай мёртвого CCS — email-канал самого SigNoz для правила
 «Пульс телеметрии пропал». **Max для ботов закрыт** (только верифицированные юрлица РФ) —
 см. [docs/research/messenger-integration.md](docs/research/messenger-integration.md).
+**Раздел «Телеметрия» в UI** (меню аватара, admin-only): SigNoz встроен `<iframe>` через
+same-origin проброс `/telemetry-proxy/**` (middleware в Program.cs, cookie `cc_telemetry`,
+роль по `UserStore`). SigNoz релоцирует SPA под префикс через env `SIGNOZ_GLOBAL_EXTERNAL__URL`
+(overlay, переменная `SIGNOZ_EXTERNAL_URL`); фронт решает iframe/заглушку по
+`GET /api/telemetry/status`. Включение — `Telemetry:Ui:Enabled`.
 
 - **Central doc**: [docs/observability/overview.md](docs/observability/overview.md) — scope, архитектура,
   дублирование с существующими сторами, privacy (PII sanitizer), cardinality guardrails,
@@ -291,7 +306,7 @@ per-инстанс). Страховка на случай мёртвого CCS �
   McpCallLog in-memory, ProjectEventLogService SQLite). **SpendStore = source of truth
   для billing (токены/стоимость), OTel метрики НЕ дублируют его.**
 - **SigNoz setup**: [docs/observability/signoz-setup.md](docs/observability/signoz-setup.md) —
-  развёртывание vendored SigNoz v0.71.0 (`docker/observability/`), retention, backup,
+  развёртывание vendored SigNoz v0.134.0 (`docker/observability/`), retention, backup,
   troubleshooting.
 
 Включение per-instance через `appsettings.Local.json` секция `Telemetry`. Все порты

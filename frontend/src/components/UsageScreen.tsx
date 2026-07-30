@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
-import { X, AlertTriangle } from 'lucide-react';
+import { X, AlertTriangle, Copy, Check } from 'lucide-react';
 import { api } from '../lib/api';
 import type { UsageResponse, FalAccountResponse, UsageSnapshot, OllamaUsageInfo } from '../types';
-import { C, FONT, SHADOW } from '../lib/design';
-import { type RateWindow, RATE_COLORS, windowLabel, fmtReset, latestPerWindow, overageLabel, seriesByWindow, worstWindow } from '../lib/rateLimit';
+import { C, FONT, SHADOW, FS } from '../lib/design';
+import { type RateWindow, RATE_COLORS, windowLabel, fmtReset, latestPerWindow, latestWithUtilization, snapshotFreshnessLabel, overageLabel, seriesByWindow, worstWindow } from '../lib/rateLimit';
 import { type RotationInfo, rotationBadgeState } from '../lib/rotation';
 import { cliProviderKeys, providerCapsByKey, providerLabel } from '../lib/models';
+import { Button } from './ui/Button';
+import { ICON_SIZE } from './ui/icons';
 
 const STALE_MS = 30 * 60 * 1000;
 const MONEY = C.accent;
@@ -107,27 +109,55 @@ function TierPill({ tier }: { tier: string }) {
 }
 
 // Плашка «точные проценты недоступны»: поллер получает 401/403 (setup-токен) либо
-// свежих (< 30 мин) снимков с процентом просто нет — устаревшие цифры не выдаём за точные
-function NeedLoginBanner() {
+// свежих (< 30 мин) снимков с процентом просто нет — устаревшие цифры не выдаём за точные.
+// Когда бэкенд знает готовую команду входа в профиль аккаунта (loginCommand != null),
+// показываем её моноширинным блоком с кнопкой копирования — паттерн как в чате
+// (кнопка меняет текст на «Скопировано» на 1.5 с).
+function NeedLoginBanner({ loginCommand }: { loginCommand?: string | null }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    if (!loginCommand) return;
+    navigator.clipboard?.writeText(loginCommand).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }).catch(() => {});
+  };
   return (
     <div style={{ fontSize: 11.5, color: C.warningText, background: C.warningBg, border: `1px solid ${C.warning}`, borderRadius: 8, padding: '6px 10px', marginBottom: 12, lineHeight: 1.5 }}>
       Точные проценты недоступны: аккаунт работает на setup-токене, а API лимитов принимает
       только полноценный вход. Выполните <code style={{ fontFamily: FONT.mono, fontSize: 11 }}>claude login</code> в профиле подписки.
+      {loginCommand && (
+        <>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
+            <code style={{ flex: 1, minWidth: 0, overflowX: 'auto', whiteSpace: 'nowrap', fontFamily: FONT.mono, fontSize: 11,
+              color: C.textHeading, background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: 8, padding: '6px 9px' }}>
+              {loginCommand}
+            </code>
+            <Button variant="ghostFilled" size="sm" onClick={copy} title="Скопировать команду входа"
+              leftIcon={copied
+                ? <Check size={ICON_SIZE.xs} color={C.success} strokeWidth={3} style={{ flexShrink: 0 }} />
+                : <Copy size={ICON_SIZE.xs} strokeWidth={2} style={{ flexShrink: 0 }} />}
+              style={{ flexShrink: 0, minHeight: 30, padding: '4px 11px', fontSize: 12, ...(copied ? { color: C.successText } : {}) }}>
+              {copied ? 'Скопировано' : 'Скопировать'}
+            </Button>
+          </div>
+          <div style={{ fontSize: 11, marginTop: 6 }}>
+            Выполни на машине сервера и войди в нужный аккаунт — данные обновятся в течение пары минут.
+          </div>
+        </>
+      )}
     </div>
   );
 }
 
-function ClaudeTab({ snapshots, rotation, tier, pollStatus }: { snapshots: UsageSnapshot[] | null | undefined; rotation?: RotationInfo; tier?: string; pollStatus?: string }) {
+function ClaudeTab({ snapshots, rotation, tier, pollStatus, loginCommand }: { snapshots: UsageSnapshot[] | null | undefined; rotation?: RotationInfo; tier?: string; pollStatus?: string; loginCommand?: string | null }) {
   const windows = snapshots ? latestPerWindow(snapshots) : [];
   const series = snapshots ? seriesByWindow(snapshots) : {};
   // Свежесть — только по снимкам С ПРОЦЕНТОМ: rate_limit_event ходов шлёт одни resets,
   // и такой снимок не должен выдавать устаревшие проценты за свежие
-  const utilTs = (snapshots ?? []).reduce<number>((a, s) => {
-    if (typeof s.utilization !== 'number') return a;
-    const t = new Date(s.timestamp).getTime();
-    return t > a ? t : a;
-  }, 0);
+  const latestUtil = snapshots ? latestWithUtilization(snapshots) : null;
+  const utilTs = latestUtil ? new Date(latestUtil.timestamp).getTime() : 0;
   const staleUtil = utilTs === 0 || Date.now() - utilTs > STALE_MS;
+  // Подпись «источник · возраст»: свежий пинг/ход говорит, что цифры актуальны, даже когда
+  // OAuth-опрос не отвечает (плашка unauthorized тогда — дополнение, а не маска данных)
+  const freshness = latestUtil ? snapshotFreshnessLabel(latestUtil.source, latestUtil.timestamp) : null;
   const needLogin = pollStatus === 'unauthorized' || (windows.length > 0 && staleUtil);
   const worst = worstWindow(windows);
   const trend = worst ? (series[worst.limitType] ?? []) : [];
@@ -141,7 +171,7 @@ function ClaudeTab({ snapshots, rotation, tier, pollStatus }: { snapshots: Usage
     return (
       <div>
         {badge}
-        {pollStatus === 'unauthorized' && <NeedLoginBanner />}
+        {pollStatus === 'unauthorized' && <NeedLoginBanner loginCommand={loginCommand} />}
         <div style={{ padding: '36px 12px', textAlign: 'center', color: C.textMuted, fontSize: 12.5, lineHeight: 1.5 }}>
           <div style={{ fontSize: 24, marginBottom: 6, opacity: 0.5 }}>◌</div>
           Данные о лимитах появятся в течение нескольких минут — они обновляются автоматически.
@@ -151,9 +181,9 @@ function ClaudeTab({ snapshots, rotation, tier, pollStatus }: { snapshots: Usage
   return (
     <div style={{ opacity: staleUtil ? 0.6 : 1 }}>
       {badge}
-      {needLogin && <NeedLoginBanner />}
-      {utilTs > 0 && (
-        <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 8 }}>{fmtAgo(new Date(utilTs).toISOString())}</div>
+      {needLogin && <NeedLoginBanner loginCommand={loginCommand} />}
+      {freshness && (
+        <div style={{ fontSize: FS.xs, color: C.textMuted, marginBottom: 8 }}>{freshness}</div>
       )}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
         {windows.map(w => <WindowCard key={w.limitType} w={w} />)}
@@ -535,8 +565,8 @@ export function UsageScreen({ onClose }: { onClose: () => void }) {
           ))}
         </div>
         <div style={{ flex: 1, overflow: 'auto', padding: '16px 20px 18px' }}>
-          {tab === 'claude' ? <ClaudeTab snapshots={usage?.subscriptions?.['claude']?.snapshots ?? (usage ? claudeSnaps : usage)} rotation={rotationOf('claude')} tier={usage?.subscriptions?.['claude']?.tier} pollStatus={usage?.pollStatuses?.['claude']} />
-            : subKeys.includes(tab) ? <ClaudeTab snapshots={usage?.subscriptions?.[tab]?.snapshots} rotation={rotationOf(tab)} tier={usage?.subscriptions?.[tab]?.tier} pollStatus={usage?.pollStatuses?.[tab]} />
+          {tab === 'claude' ? <ClaudeTab snapshots={usage?.subscriptions?.['claude']?.snapshots ?? (usage ? claudeSnaps : usage)} rotation={rotationOf('claude')} tier={usage?.subscriptions?.['claude']?.tier} pollStatus={usage?.pollStatuses?.['claude']} loginCommand={usage?.subscriptions?.['claude']?.loginCommand} />
+            : subKeys.includes(tab) ? <ClaudeTab snapshots={usage?.subscriptions?.[tab]?.snapshots} rotation={rotationOf(tab)} tier={usage?.subscriptions?.[tab]?.tier} pollStatus={usage?.pollStatuses?.[tab]} loginCommand={usage?.subscriptions?.[tab]?.loginCommand} />
             : tab === 'fal' ? <FalTab days={days} setDays={setDays} />
             : tab === 'ollama' ? <OllamaTab info={usage?.ollama} />
             : <ProviderTab providerKey={tab} data={provData[tab]} />}

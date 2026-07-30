@@ -137,6 +137,50 @@ public class ChatsController(SessionManager sessions, FileService files, ILogger
         return updated is null ? NotFound() : Ok(updated);
     }
 
+    // Режим «Командная реализация» (флаг team-implement-mode): вкл/выкл режима чата-штаба.
+    // При включении можно сразу задать состав (пустой/null список исполнителей = вся команда
+    // проекта). Как loop, работает и для проектной сессии (GetOwned резолвит владельца).
+    [HttpPut("{id}/team-implement")]
+    public async Task<IActionResult> SetTeamImplement(string id, [FromBody] SetTeamImplementRequest req)
+    {
+        if (sessions.GetOwned(id, UserId) is null) return NotFound();
+        var updated = await sessions.SetTeamImplementAsync(id, req.Enabled,
+            req.AutoWaves, req.CoordinatorPersonaId, req.PlannerPersonaId,
+            req.ExecutorPersonaIds, UserId, req.CoordinatorNoCode);
+        return updated is null ? NotFound() : Ok(updated);
+    }
+
+    // «Остановить» (Э4): текущие исполнители дорабатывают, новые волны не стартуют.
+    // Снимается решением человека по карточке остановки («Продолжить»).
+    [HttpPut("{id}/team-implement/stop")]
+    public async Task<IActionResult> StopTeamImplement(string id)
+    {
+        if (sessions.GetOwned(id, UserId) is null) return NotFound();
+        var updated = await sessions.StopTeamImplementAsync(id, UserId);
+        if (updated is null) return NotFound();
+        if (updated.TeamImplement is { } team && sessions.TeamEscalationRaiser is { } raise)
+            await raise(updated, new Models.TeamEscalation
+            {
+                Kind = Models.TeamEscalationKind.Stopped,
+                Title = "Практика остановлена",
+                Details = "Новые волны не стартуют. Запущенные исполнители доработают начатое — " +
+                          "нажмите «Продолжить», когда команде можно идти дальше.",
+                Wave = team.WaveNumber,
+                Actions = Models.TeamEscalationActions.For(Models.TeamEscalationKind.Stopped),
+            });
+        return Ok(updated);
+    }
+
+    // Переключение авто-волн на ходу (из бейджа режима): не трогает сам режим, только флаг.
+    // Как loop, работает и для проектной сессии (GetOwned резолвит владельца через проект).
+    [HttpPut("{id}/team-implement/auto")]
+    public async Task<IActionResult> SetTeamImplementAuto(string id, [FromBody] SetTeamImplementAutoRequest req)
+    {
+        if (sessions.GetOwned(id, UserId) is null) return NotFound();
+        var updated = await sessions.SetTeamImplementAutoAsync(id, req.AutoWaves, UserId);
+        return updated is null ? NotFound() : Ok(updated);
+    }
+
     // Отдельное git worktree чата: вкл — сессия переезжает в изолированное дерево на новой
     // ветке (начатый чат — с переносом контекста), выкл — возврат в корень проекта.
     // Force подтверждает потерю несохранённых правок дерева. Как loop, работает и для
@@ -173,12 +217,15 @@ public class ChatsController(SessionManager sessions, FileService files, ILogger
     // исчерпании лимита подписки): транскрипт CLI переносится в профиль целевого
     // провайдера, разговор продолжается через --resume с сохранением контекста.
     // Как и loop, работает и для проектной сессии (владелец резолвится через проект).
+    // SubscriptionKey — явный выбор аккаунта пула подписок (кнопка карточки с
+    // Kind="subscription"); пусто — старое поведение (сторонний провайдер по Model
+    // либо автовыбор аккаунта пула).
     [HttpPost("{id}/migrate-provider")]
     public async Task<IActionResult> MigrateProvider(string id, [FromBody] MigrateProviderRequest req)
     {
         try
         {
-            return Ok(await sessions.MigrateProviderAsync(id, UserId, req.Model));
+            return Ok(await sessions.MigrateProviderAsync(id, UserId, req.Model, req.SubscriptionKey));
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
@@ -266,8 +313,24 @@ public record SetParticipantsRequest(List<string>? PersonaIds);
 
 public record SetWorkLoopRequest(bool Enabled);
 
+// Включение режима «Командная реализация». ExecutorPersonaIds null/пустой = вся команда
+// проекта (планировщик подбирает по компетенциям в Э2). CoordinatorPersonaId/PlannerPersonaId
+// опциональны — назначаются в Э2; здесь лишь сохраняются, если фронт уже их знает.
+// CoordinatorNoCode — правило «координатор не пишет код сам» (по умолчанию включено):
+// у чата-штаба отключаются инструменты правки файлов, работа идёт задачами.
+public record SetTeamImplementRequest(
+    bool Enabled,
+    bool AutoWaves = true,
+    string? CoordinatorPersonaId = null,
+    string? PlannerPersonaId = null,
+    IReadOnlyList<string>? ExecutorPersonaIds = null,
+    bool CoordinatorNoCode = true);
+
+// Переключение авто-волн на ходу (из бейджа режима)
+public record SetTeamImplementAutoRequest(bool AutoWaves);
+
 public record SetWorktreeRequest(bool Enabled, string? Branch = null, bool Force = false);
 
-public record MigrateProviderRequest(string Model);
+public record MigrateProviderRequest(string Model, string? SubscriptionKey = null);
 
 public record SetModeRequest(string Mode);

@@ -1,0 +1,29 @@
+{
+  "name": "Предупреждения и ошибки",
+  "category": "",
+  "sourcePage": "logs",
+  "tags": [""],
+  "extraData": "{\"selectColumns\":[{\"name\":\"timestamp\",\"signal\":\"logs\"},{\"name\":\"severity_text\",\"signal\":\"logs\"},{\"name\":\"service.name\",\"signal\":\"logs\"},{\"name\":\"body\",\"signal\":\"logs\"}]}",
+  "compositeQuery": {
+    "queryType": "builder",
+    "panelType": "list",
+    "queries": [
+      {
+        "type": "builder_query",
+        "spec": {
+          "name": "A",
+          "signal": "logs",
+          "source": "",
+          "stepInterval": 0,
+          "limit": 100,
+          "order": [
+            { "key": { "name": "timestamp" }, "direction": "desc" },
+            { "key": { "name": "id" }, "direction": "desc" }
+          ],
+          "filter": { "expression": "severity_text = 'Warning' OR severity_text = 'Error'" },
+          "having": { "expression": "" }
+        }
+      }
+    ]
+  }
+}

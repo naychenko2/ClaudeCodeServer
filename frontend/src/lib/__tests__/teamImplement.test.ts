@@ -1,0 +1,115 @@
+// Подписи бейджа режима «Командная реализация»: «волна N из M» берёт M из планового
+// числа волн (plannedWaves), а не из потолка бюджета — иначе план в 2 волны показывался
+// бы как «волна 1 из 4» (потолок maxWaves).
+import { describe, it, expect } from 'vitest';
+import type { TeamEscalationKind } from '../../types';
+import {
+  teamImplementBadgeText, teamImplementStageShort, teamImplementTone,
+  teamEscalationTone, teamEscalationInformational, teamEscalationDetailsLines,
+  teamImplementSwitchesMode, teamImplementModeHeld, teamImplementModeWarning,
+  TEAM_IMPLEMENT_MODE_HELD,
+} from '../teamImplement';
+
+// Включение режима меняет чужую настройку — режим прав чата (SessionManager.
+// SetTeamImplementAsync переводит acceptEdits/bypass в auto). Предупреждение показываем
+// только там, где переключать есть что, и подписи берём из MODE_META, а не свои
+describe('предупреждение о смене режима прав чата', () => {
+  it('переключение будет только из «Авто-правок» и «Без ограничений»', () => {
+    expect(teamImplementSwitchesMode('acceptEdits')).toBe(true);
+    expect(teamImplementSwitchesMode('bypass')).toBe(true);
+  });
+
+  it('в спрашивающих режимах переключать нечего — строки нет', () => {
+    for (const m of ['default', 'plan', 'auto', 'dontAsk'] as const)
+      expect(teamImplementSwitchesMode(m)).toBe(false);
+  });
+
+  it('текст называет режимы их подписями из интерфейса', () => {
+    expect(teamImplementModeWarning('acceptEdits'))
+      .toBe('Режим прав чата переключится с «Авто-правки» на «Авто»'
+        + ' — иначе координатор сможет писать файлы в обход правила');
+    expect(teamImplementModeWarning('bypass')).toContain('с «Без ограничений» на «Авто»');
+  });
+
+  it('сноска в поповере — только пока чат в удерживаемом режиме', () => {
+    expect(teamImplementModeHeld('auto')).toBe(true);
+    expect(teamImplementModeHeld('acceptEdits')).toBe(false);
+    expect(teamImplementModeHeld('default')).toBe(false);
+    expect(TEAM_IMPLEMENT_MODE_HELD).toContain('«Авто»');
+  });
+});
+
+describe('подписи бейджа командной реализации', () => {
+  it('план в две волны показывает «волна 1 из 2»', () => {
+    expect(teamImplementBadgeText('wave', 1, 2)).toBe('Командная реализация · волна 1 из 2');
+    expect(teamImplementStageShort('wave', 1, 2)).toBe('волна 1/2');
+  });
+
+  it('до запуска плана (plannedWaves = 0) число волн не выдумывается', () => {
+    expect(teamImplementBadgeText('wave', 1, 0)).toBe('Командная реализация · волна 1');
+    expect(teamImplementStageShort('wave', 1, 0)).toBe('волна 1');
+  });
+
+  it('остальные стадии подписаны текстами продуктового плана', () => {
+    expect(teamImplementBadgeText('planning', 0, 0)).toBe('Командная реализация · планирование');
+    expect(teamImplementBadgeText('awaitingDecision', 2, 3)).toBe('Командная реализация · нужно решение');
+    expect(teamImplementBadgeText('idle', 2, 3)).toBe('Командная реализация · ждёт задачу');
+  });
+
+  // Ожидание вводной — не работа и не «стоит и ждёт решения»: тон muted (в бейдже
+  // из-за него же гаснет пульс точки), в узкой строке списка чатов — «ожидает»
+  it('стадия idle — muted-тон и короткая форма для маркера чата', () => {
+    expect(teamImplementTone('idle')).toBe('idle');
+    expect(teamImplementStageShort('idle', 0, 0)).toBe('ожидает');
+    expect(teamImplementTone('wave')).toBe('work');
+    expect(teamImplementTone('awaitingDecision')).toBe('wait');
+  });
+});
+
+describe('карточка эскалации: тон и разбор деталей', () => {
+  // Добавочная волна (Э5) — не проблема и не запрос решения: работа уже идёт,
+  // поэтому карточка не должна выглядеть как warning «команда встала и ждёт тебя»
+  it('waveAdded — штатный ход событий, информационная карточка', () => {
+    expect(teamEscalationTone('waveAdded')).toBe('work');
+    expect(teamEscalationInformational('waveAdded')).toBe(true);
+  });
+
+  it('остальные виды остаются как были, решения ждут только они', () => {
+    expect(teamEscalationTone('blocker')).toBe('warning');
+    expect(teamEscalationTone('waveGate')).toBe('success');
+    expect(teamEscalationTone('stopped')).toBe('muted');
+    expect(teamEscalationInformational('waveGate')).toBe(false);
+  });
+
+  // Бэкенд заводит новые виды раньше, чем фронт про них узнаёт: незнакомый токен
+  // обязан отрисоваться дефолтной карточкой, а не уронить ленту исключением
+  it('незнакомый с бэка kind не роняет карточку — дефолтный warning', () => {
+    const unknown = 'somethingNewFromBackend' as TeamEscalationKind;
+    expect(teamEscalationTone(unknown)).toBe('warning');
+    expect(teamEscalationInformational(unknown)).toBe(false);
+  });
+
+  // Состав под-задач приходит строками «— Заголовок (волна N)» — их рисуем списком,
+  // остальное абзацами (иначе карточка добавочной волны читается одной простынёй)
+  it('details режется на абзацы и пункты состава', () => {
+    const details = [
+      'Под-задач: 2 · волн: 1 · исполнителей: 2.',
+      '— Экспорт в XLSX (волна 1)',
+      '— Кнопка выгрузки (волна 1)',
+      'Работа уже идёт: авто-волны включены, и подтверждения она не ждёт.',
+    ].join('\n');
+    expect(teamEscalationDetailsLines(details)).toEqual([
+      { kind: 'text', text: 'Под-задач: 2 · волн: 1 · исполнителей: 2.' },
+      { kind: 'item', text: 'Экспорт в XLSX (волна 1)' },
+      { kind: 'item', text: 'Кнопка выгрузки (волна 1)' },
+      { kind: 'text', text: 'Работа уже идёт: авто-волны включены, и подтверждения она не ждёт.' },
+    ]);
+  });
+
+  it('однострочный details остаётся одним абзацем, пустой — ничем', () => {
+    expect(teamEscalationDetailsLines('Кира: нет доступа к базе')).toEqual([
+      { kind: 'text', text: 'Кира: нет доступа к базе' },
+    ]);
+    expect(teamEscalationDetailsLines('')).toEqual([]);
+  });
+});

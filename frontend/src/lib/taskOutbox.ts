@@ -312,6 +312,8 @@ export function applyUpdateLocally(task: Task, dto: UpdateTaskDto): Task {
     next.personaId = dto.personaId === '' ? undefined : dto.personaId;
     if (next.personaId) next.assignee = 'claude';
   }
+  // Уровень модели исполнителя: '' — сбросить (семантика строковых полей на бэке)
+  if (dto.modelTier !== undefined) next.modelTier = dto.modelTier === '' ? undefined : dto.modelTier;
   if (dto.recurrence !== undefined) {
     next.recurrence = dto.recurrence.type === 'none' ? undefined : dto.recurrence;
     if (next.recurrence && !next.seriesId) next.seriesId = next.id;

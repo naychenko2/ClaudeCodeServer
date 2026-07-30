@@ -5,12 +5,17 @@
 import type { LucideIcon } from 'lucide-react';
 import {
   BadgeCheck, Boxes, FlaskConical, GraduationCap, HelpCircle, MessagesSquare,
-  Rocket, Route, Scale, ScanSearch, Swords,
+  Rocket, Route, Scale, ScanSearch, Swords, Users,
 } from 'lucide-react';
+import { FLAGS } from '../../lib/featureFlags';
 
+// `implement` — быстрый workflow-ход «Командный спринт» (субагенты внутри одного хода);
+// id менять нельзя: по нему детектятся старые ходы `/team-implement` в лентах.
+// `implementMode` — режим чата «Командная реализация» (чат-штаб): включается REST-вызовом,
+// а не текстом хода, поэтому в детекторе его нет.
 export type TeamMechanicId =
   | 'discuss' | 'panel' | 'consensus' | 'interview'
-  | 'autopilot' | 'implement' | 'qa' | 'review' | 'redteam' | 'trace' | 'sci';
+  | 'autopilot' | 'implement' | 'implementMode' | 'qa' | 'review' | 'redteam' | 'trace' | 'sci';
 
 export type TeamMechanicGroup = 'Обсудить' | 'Спланировать' | 'Сделать' | 'Проверить' | 'Исследовать';
 
@@ -51,6 +56,7 @@ export interface TeamMechanicSettings {
   attackAngles: AttackAngle[];      // redteam: углы атаки
   implWorktree: boolean;            // implement: параллельно в worktree (иначе последовательно)
   implVerify: boolean;              // implement: финальная проверка тестами/сборкой
+  modeAutoWaves: boolean;           // implementMode: авто-волны при включении режима
 }
 
 export const DEFAULT_TEAM_SETTINGS: TeamMechanicSettings = {
@@ -68,12 +74,18 @@ export const DEFAULT_TEAM_SETTINGS: TeamMechanicSettings = {
   attackAngles: ['edge-cases', 'wrong-assumptions', 'failure-modes'],
   implWorktree: false,
   implVerify: true,
+  modeAutoWaves: true,
 };
 
 export interface TeamMechanic {
   id: TeamMechanicId;
   group: TeamMechanicGroup;
   name: string;
+  // Короткое имя для чипов в тесных местах (композер, карточка чата, шапка): полное
+  // название там не помещается на мобильной ширине (320px) и переполняет пилюлю.
+  // Единственная точка словаря сокращений — везде, где рендерится чип механики,
+  // берём shortName, а name отдаётся в title/aria-label как расшифровка
+  shortName: string;
   icon: LucideIcon;
   desc: string;
   /** Ориентир тяжести: 1 — дёшево, 3 — жжёт токены */
@@ -81,63 +93,70 @@ export interface TeamMechanic {
   placeholder: string;
   /** Имя скилла, который должен быть в окружении (см. api.skills); null — работает всегда */
   requiredSkill: string | null;
+  /** Фич-флаг механики (см. lib/featureFlags); без него карточка не показывается вовсе */
+  featureFlag?: string;
   /** Карточка следующей итерации — показывается задизейбленной */
   soon?: boolean;
 }
 
 export const TEAM_MECHANICS: TeamMechanic[] = [
   {
-    id: 'discuss', group: 'Обсудить', name: 'Дискуссия', icon: MessagesSquare, cost: 1,
+    id: 'discuss', group: 'Обсудить', name: 'Дискуссия', shortName: 'Дискуссия', icon: MessagesSquare, cost: 1,
     desc: 'Быстро спросить мнения персон', placeholder: 'Вопрос для дискуссии…',
     requiredSkill: null,
   },
   {
-    id: 'panel', group: 'Обсудить', name: 'Панель экспертов', icon: GraduationCap, cost: 2,
+    id: 'panel', group: 'Обсудить', name: 'Панель экспертов', shortName: 'Панель', icon: GraduationCap, cost: 2,
     desc: 'Дебаты: идеи → критика → синтез', placeholder: 'Тема для панели экспертов…',
     requiredSkill: 'panel-of-experts',
   },
   {
-    id: 'consensus', group: 'Спланировать', name: 'Консенсус-план', icon: Scale, cost: 2,
+    id: 'consensus', group: 'Спланировать', name: 'Консенсус-план', shortName: 'Консенсус', icon: Scale, cost: 2,
     desc: 'План через спор до одобрения критика', placeholder: 'Задача для планирования…',
     requiredSkill: 'oh-my-claudecode:ralplan',
   },
   {
-    id: 'interview', group: 'Спланировать', name: 'Интервью', icon: HelpCircle, cost: 1,
+    id: 'interview', group: 'Спланировать', name: 'Интервью', shortName: 'Интервью', icon: HelpCircle, cost: 1,
     desc: 'Вопросы до кристальной постановки', placeholder: 'Идея, которую нужно прояснить…',
     requiredSkill: 'oh-my-claudecode:deep-interview',
   },
   {
-    id: 'autopilot', group: 'Сделать', name: 'Автопилот', icon: Rocket, cost: 3,
+    id: 'autopilot', group: 'Сделать', name: 'Автопилот', shortName: 'Автопилот', icon: Rocket, cost: 3,
     desc: 'От идеи до работающего кода', placeholder: 'Что построить?…',
     requiredSkill: 'oh-my-claudecode:autopilot',
   },
   {
-    id: 'implement', group: 'Сделать', name: 'Командная реализация', icon: Boxes, cost: 3,
-    desc: 'Разбить и раздать исполнителям', placeholder: 'Что реализовать командой?…',
+    id: 'implementMode', group: 'Сделать', name: 'Командная реализация', shortName: 'КР', icon: Users, cost: 3,
+    desc: 'Штаб фичи: план, задачи, исполнители', placeholder: 'Что реализовать командой?…',
+    requiredSkill: null, featureFlag: FLAGS.teamImplementMode,
+  },
+  {
+    id: 'implement', group: 'Сделать', name: 'Командный спринт', shortName: 'КС', icon: Boxes, cost: 3,
+    desc: 'Быстро разбить и раздать субагентам', placeholder: 'Что сделать спринтом?…',
     requiredSkill: 'team-implement',
   },
   {
-    id: 'qa', group: 'Проверить', name: 'QA-цикл', icon: BadgeCheck, cost: 2,
+    id: 'qa', group: 'Проверить', name: 'QA-цикл', shortName: 'QA-цикл', icon: BadgeCheck, cost: 2,
     desc: 'Чинит до зелёной проверки', placeholder: 'Комментарий к прогону (необязательно)…',
     requiredSkill: 'oh-my-claudecode:ultraqa',
   },
   {
-    id: 'review', group: 'Проверить', name: 'Ревью-консилиум', icon: ScanSearch, cost: 2,
+    id: 'review', group: 'Проверить', name: 'Ревью-консилиум', shortName: 'Консилиум', icon: ScanSearch, cost: 2,
     desc: 'Ревью с N линз + проверка находок', placeholder: 'Что ревьюим (пусто — текущий дифф)…',
     requiredSkill: 'review-consilium',
   },
   {
-    id: 'redteam', group: 'Проверить', name: 'Красная команда', icon: Swords, cost: 2,
+    id: 'redteam', group: 'Проверить', name: 'Красная команда', shortName: 'Ред-тим', icon: Swords, cost: 2,
     desc: 'Атака решения с разных углов', placeholder: 'Что проверить на прочность?…',
     requiredSkill: 'red-team',
   },
   {
-    id: 'trace', group: 'Исследовать', name: 'Трассировка', icon: Route, cost: 2,
+    id: 'trace', group: 'Исследовать', name: 'Трассировка', shortName: 'Трассировка', icon: Route, cost: 2,
     desc: 'Конкурирующие гипотезы «почему»', placeholder: 'Наблюдение, которое нужно объяснить…',
     requiredSkill: 'oh-my-claudecode:trace',
   },
   {
-    id: 'sci', group: 'Исследовать', name: 'Анализ кода', icon: FlaskConical, cost: 2,
+    id: 'sci', group: 'Исследовать', name: 'Анализ кода', shortName: 'Анализ', icon: FlaskConical, cost: 2,
     desc: 'Параллельные учёные + отчёт', placeholder: 'Цель анализа…',
     requiredSkill: 'oh-my-claudecode:sciomc',
   },
@@ -238,6 +257,10 @@ export function buildTeamTurnText(
       if (s.participants.length > 0) args.executors = s.participants.map(p => p.handle);
       return `/team-implement ${JSON.stringify(args)}`;
     }
+    case 'implementMode':
+      // Режим чата: обвязки нет — тема уходит обычным сообщением, а сам режим включается
+      // REST-вызовом PUT /chats/{id}/team-implement до отправки (см. Composer.handleSend)
+      return t;
   }
 }
 
@@ -281,6 +304,7 @@ export function costEstimate(id: TeamMechanicId, s: TeamMechanicSettings): strin
     }
     case 'redteam': return `${s.attackAngles.length || 1} углов атаки + синтез`;
     case 'implement': return s.implWorktree ? 'параллельно в worktree + merge' : 'последовательная раздача';
+    case 'implementMode': return s.modeAutoWaves ? 'волны идут сами, пока хватает бюджета' : 'подтверждение после каждой волны';
   }
 }
 
@@ -387,6 +411,9 @@ export function describeTeamTurn(text: string | null | undefined): TeamTurnInfo 
     case 'trace':
     case 'sci':
       topic = quotedTopic(t);
+      break;
+    case 'implementMode':
+      // Не детектится (обычное сообщение) — ветка недостижима, нужна для полноты switch
       break;
   }
 

@@ -6,10 +6,10 @@
 import { useEffect, useMemo } from 'react';
 import { Search, ChevronRight, FileCode, RefreshCw, AlertTriangle, Loader } from 'lucide-react';
 import { C, FONT, FS, R, SP } from '../../lib/design';
-import { Button, Dot, IconField, EmptyState, WaitingIndicator } from '../../components/ui';
+import { Button, Dot, IconField, EmptyState, WaitingIndicator, Toggle } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { useCodeGraph, useCodeGraphActions, GRAPH_RELATIONS } from '../../lib/codeGraph';
-import { layoutGraph } from './graphLayout';
+import { focusNeighbours, graphDegree, isTestSourceFile } from './graphFocus';
 import {
   EDGE_COLOR, EDGE_BG, KIND_COLOR, KIND_RING, KIND_GLYPH, RELATION_LABEL,
 } from './graphTokens';
@@ -23,7 +23,7 @@ interface Props {
   // Открыть документ графа в центре (если закрыт). Любое режимное действие панели
   // (фильтр, god-узел, поиск, переход в паспорте) открывает документ — правило макета.
   onEnsureGraphOpen: () => void;
-  onOpenFile: (path: string) => void;
+  onOpenFile: (path: string, line?: number) => void;
   onBuild: () => void;
 }
 
@@ -35,7 +35,7 @@ export function CodeGraphPanel({ projectId, graphOpen, onEnsureGraphOpen, onOpen
   // безопасно вызывать на каждом рендере, сетевых дублей не будет
   useEffect(() => { a.load(projectId); }, [a, projectId]);
 
-  const layout = useMemo(() => (s.data ? layoutGraph(s.data) : null), [s.data]);
+  const degree = useMemo(() => (s.data ? graphDegree(s.data) : undefined), [s.data]);
 
   // Счётчики рёбер по типу связи — для подписи чипов
   const relCounts = useMemo(() => {
@@ -48,6 +48,28 @@ export function CodeGraphPanel({ projectId, graphOpen, onEnsureGraphOpen, onOpen
     if (!s.selectedId || !s.data) return null;
     return s.data.nodes.find(n => n.id === s.selectedId) ?? null;
   }, [s.selectedId, s.data]);
+
+  // Поиск: узлы, чей label или FQN содержит запрос
+  const searchResults = useMemo(() => {
+    if (!s.query.trim() || !s.data) return [];
+    const q = s.query.trim().toLowerCase();
+    return s.data.nodes.filter(n =>
+      n.label.toLowerCase().includes(q) || n.fullyQualifiedName.toLowerCase().includes(q)
+    );
+  }, [s.query, s.data]);
+
+  // Счётчики скрытых узлов для подписи под фильтрами
+  const hiddenTestCount = useMemo(() => {
+    if (!s.hideTestNodes || !s.data) return 0;
+    return s.data.nodes.filter(n => isTestSourceFile(n.sourceFile)).length;
+  }, [s.hideTestNodes, s.data]);
+
+  const hiddenOrphanCount = useMemo(() => {
+    if (!s.hideOrphanNodes || !s.data) return 0;
+    const deg = new Map<string, number>();
+    for (const e of s.data.edges) { deg.set(e.source, (deg.get(e.source) ?? 0) + 1); deg.set(e.target, (deg.get(e.target) ?? 0) + 1); }
+    return s.data.nodes.filter(n => !deg.has(n.id) || deg.get(n.id) === 0).length;
+  }, [s.hideOrphanNodes, s.data]);
 
   const disabled = s.status === 'loading' || s.status === 'building';
   const empty = s.status === 'empty';
@@ -135,6 +157,53 @@ export function CodeGraphPanel({ projectId, graphOpen, onEnsureGraphOpen, onOpen
           radius={R.xl}
           fontSize={FS.sm}
         />
+        {/* Список результатов поиска — до 20, остальные счётчиком */}
+        {s.query.trim() && searchResults.length > 0 && (
+          <div style={{ marginTop: SP.sm, maxHeight: 240, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {searchResults.slice(0, SEARCH_LIMIT).map(n => (
+              <div key={n.id} onClick={() => { a.select(n.id); onEnsureGraphOpen(); }}
+                style={searchHitStyle}>
+                <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, fontWeight: 600, color: C.textHeading, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{n.label}</span>
+                <span style={{ fontSize: 10, color: C.textMuted, fontFamily: FONT.mono, flexShrink: 0 }}>{KIND_GLYPH[n.kind]}</span>
+                <span style={{ fontSize: 10, color: C.textMuted, flexShrink: 0, maxWidth: 100, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{n.sourceFile}:{n.sourceLocation}</span>
+                <span style={{ fontSize: 10, color: C.textMuted, fontFamily: FONT.mono, flexShrink: 0 }}>{degree?.get(n.id) ?? '?'}</span>
+              </div>
+            ))}
+            {searchResults.length > SEARCH_LIMIT && (
+              <div style={{ fontSize: FS.xs, color: C.textMuted, padding: '4px 8px', textAlign: 'center' }}>
+                + ещё {searchResults.length - SEARCH_LIMIT}
+              </div>
+            )}
+          </div>
+        )}
+        {s.query.trim() && searchResults.length === 0 && (
+          <div style={{ fontSize: FS.xs, color: C.textMuted, marginTop: SP.sm, padding: '4px 0' }}>
+            Ничего не найдено
+          </div>
+        )}
+      </Section>
+
+      {/* Фильтры отображения — чипы-тогглы */}
+      <Section title="Фильтры">
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          <Button variant={s.hideTestNodes ? 'ghostFilled' : 'ghost'} size="sm" pill
+            style={{ padding: '4px 10px', minHeight: 26, fontSize: FS.xs }}
+            onClick={withEnsureOpen(() => a.toggleHideTestNodes())}>
+            <span style={{ color: s.hideTestNodes ? C.textHeading : C.textMuted }}>скрыть тесты</span>
+          </Button>
+          <Button variant={s.hideOrphanNodes ? 'ghostFilled' : 'ghost'} size="sm" pill
+            style={{ padding: '4px 10px', minHeight: 26, fontSize: FS.xs }}
+            onClick={withEnsureOpen(() => a.toggleHideOrphanNodes())}>
+            <span style={{ color: s.hideOrphanNodes ? C.textHeading : C.textMuted }}>скрыть сироты</span>
+          </Button>
+        </div>
+        {/* Подпись сколько скрыто */}
+        {s.data && (s.hideTestNodes || s.hideOrphanNodes) && (
+          <div style={{ fontSize: FS.xs, color: C.textMuted, marginTop: SP.xs }}>
+            {[s.hideTestNodes ? hiddenTestCount : null, s.hideOrphanNodes ? hiddenOrphanCount : null]
+              .filter(Boolean).join(' · ')}
+          </div>
+        )}
       </Section>
 
       {/* Связи — строка чипов-тогглов */}
@@ -159,6 +228,28 @@ export function CodeGraphPanel({ projectId, graphOpen, onEnsureGraphOpen, onOpen
         </div>
       </Section>
 
+      {/* Фокус холста — появляется, когда узел выбран (холст показывает его окрестность) */}
+      {s.selectedId && s.data && (
+        <Section title="Фокус">
+          <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm }}>
+            <span style={{ fontSize: FS.sm, color: C.textPrimary, flex: 1 }}>Глубина 2</span>
+            <Toggle checked={s.focusDepth2} onChange={() => a.toggleFocusDepth2()} width={36} height={21}
+              ariaLabel="Показывать второе кольцо соседей" />
+          </div>
+          <p style={{ fontSize: FS.xs, color: C.textMuted, marginTop: SP.xs, marginBottom: 0, lineHeight: 1.45 }}>
+            Второе кольцо строится только для 6 самых связанных соседей — полная окрестность
+            глубины 2 у крупного типа это сотни узлов.
+          </p>
+          {/* Раскрытый хвост: то, что не поместилось на холст и ушло в заглушку «+N» */}
+          {s.focusTail && (
+            <FocusTail graph={s.data} centerId={s.selectedId} side={s.focusTail}
+              filters={s.filters} hideTests={s.hideTestNodes} degree={degree}
+              onSelect={id => { a.refocus(id); onEnsureGraphOpen(); }}
+              onClose={() => a.setFocusTail(null)} />
+          )}
+        </Section>
+      )}
+
       {/* Легенда и god-узлы — сворачиваемая секция (по умолчанию свёрнута) */}
       <div style={{ borderBottom: `1px solid ${C.borderLight}` }}>
         <button onClick={() => a.setLegendOpen(!s.legendOpen)} disabled={disabled}
@@ -173,17 +264,16 @@ export function CodeGraphPanel({ projectId, graphOpen, onEnsureGraphOpen, onOpen
             {(['Class', 'Interface', 'Struct', 'Enum'] as const).map(k => (
               <LegendRow key={k} color={KIND_RING[k]} glyph={KIND_GLYPH[k]} label={k} />
             ))}
-            {/* god-узлы */}
+            {/* god-узлы: порог minDegree=10 даёт 140 узлов, показываем топ-15 пока бэкенд не поправлен */}
             {s.data && s.data.godNodes.length > 0 && (
               <>
                 <div style={{ ...sectionTitleStyle, marginTop: SP.sm, marginBottom: SP.xs }}>
                   God-узлы <Dot color={C.accent} size={7} />
                 </div>
-                {s.data.godNodes.map(id => {
-                  const ln = layout?.byId.get(id);
-                  const node = ln?.node ?? s.data!.nodes.find(n => n.id === id);
+                {s.data.godNodes.slice(0, 15).map(id => {
+                  const node = s.data!.nodes.find(n => n.id === id);
                   if (!node) return null;
-                  const deg = layout?.degree.get(id) ?? 0;
+                  const deg = degree?.get(id) ?? 0;
                   return (
                     <div key={id} onClick={withEnsureOpen(() => a.select(id))} style={godItemStyle}>
                       <span style={{ width: 8, height: 8, borderRadius: R.full, background: C.accent, flexShrink: 0, boxShadow: `0 0 0 3px ${C.accentLight}` }} />
@@ -205,7 +295,7 @@ export function CodeGraphPanel({ projectId, graphOpen, onEnsureGraphOpen, onOpen
       <div style={{ padding: SP.md, flex: 1, minHeight: 0, overflowY: 'auto' }}>
         <div style={sectionTitleStyle}>Паспорт типа</div>
         {selected ? (
-          <Passport node={selected} graph={s.data!} onSelect={id => { a.select(id); onEnsureGraphOpen(); }} onOpenFile={onOpenFile} />
+          <Passport node={selected} graph={s.data!} onSelect={id => { a.refocus(id); onEnsureGraphOpen(); }} onOpenFile={onOpenFile} />
         ) : (
           <p style={{ fontSize: FS.sm, color: C.textMuted, textAlign: 'center', padding: `${SP.md} ${SP.xs}`, lineHeight: 1.5 }}>
             Выберите узел на графе —<br />здесь появится его паспорт
@@ -228,12 +318,54 @@ export function CodeGraphPanel({ projectId, graphOpen, onEnsureGraphOpen, onOpen
   );
 }
 
+// === Хвост соседей фокуса ===
+// Холст показывает 16 соседей на сторону, остальные — в заглушке «+N».
+// Клик по заглушке раскрывает здесь ПОЛНЫЙ список стороны с переходом по клику.
+function FocusTail({ graph, centerId, side, filters, hideTests, degree, onSelect, onClose }: {
+  graph: CodeGraph;
+  centerId: string;
+  side: 'in' | 'out';
+  filters: Record<CodeGraphRelation, boolean>;
+  hideTests: boolean;
+  degree?: Map<string, number>;
+  onSelect: (id: string) => void;
+  onClose: () => void;
+}) {
+  const list = useMemo(
+    () => focusNeighbours(graph, centerId, side, { filters, hideTests, degree }),
+    [graph, centerId, side, filters, hideTests, degree],
+  );
+
+  return (
+    <div style={{ marginTop: SP.sm }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: SP.xs }}>
+        <span style={sectionTitleStyle}>
+          {side === 'in' ? 'Зависят от него' : 'От кого зависит он'} · {list.length}
+        </span>
+        <LinkAction onClick={onClose}>свернуть</LinkAction>
+      </div>
+      {list.length ? (
+        <div style={{ maxHeight: 220, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
+          {list.map(o => (
+            <div key={o.node.id} onClick={() => onSelect(o.node.id)} style={searchHitStyle}>
+              <span style={{ color: C.textMuted, fontSize: FS.xs, flexShrink: 0 }}>{side === 'in' ? '←' : '→'}</span>
+              <Dot color={EDGE_COLOR[o.relations[0] ?? 'Calls']} />
+              <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textHeading, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.node.label}</span>
+              <span style={{ fontFamily: FONT.mono, fontSize: 10, color: C.textMuted, flexShrink: 0 }}>{o.degree}</span>
+            </div>
+          ))}
+        </div>
+      ) : <RelEmpty />}
+    </div>
+  );
+}
+
 // === Паспорт узла ===
 function Passport({ node, graph, onSelect, onOpenFile }: {
   node: CodeGraphNode;
   graph: CodeGraph;
   onSelect: (id: string) => void;
-  onOpenFile: (path: string) => void;
+  onOpenFile: (path: string, line?: number) => void;
 }) {
   const isGod = graph.godNodes.includes(node.id);
   const outgoing = graph.edges.filter(e => e.source === node.id);
@@ -270,8 +402,8 @@ function Passport({ node, graph, onSelect, onOpenFile }: {
       </div>
       <div style={{ fontFamily: FONT.serif, fontSize: FS.lg, fontWeight: 700, color: C.textHeading, marginTop: 6 }}>{node.label}</div>
       <div style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textSecondary, marginTop: 3, wordBreak: 'break-all' }}>{node.fullyQualifiedName}</div>
-      {/* Переход к исходнику */}
-      <div onClick={() => onOpenFile(node.sourceFile)} title="Открыть во вкладке «Файлы»"
+      {/* Переход к исходнику — открываем на конкретной строке */}
+      <div onClick={() => onOpenFile(node.sourceFile, parseSourceLine(node.sourceLocation))} title="Открыть во вкладке «Файлы»"
         style={{ display: 'flex', alignItems: 'flex-start', gap: 7, fontFamily: FONT.mono, fontSize: FS.xs, color: C.info, background: C.infoBg, borderRadius: R.lg, padding: '7px 9px', cursor: 'pointer', margin: '8px 0', wordBreak: 'break-all' }}>
         <FileCode size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0, marginTop: 1 }} />
         <span style={{ textDecoration: 'underline' }}>{node.sourceFile}:{node.sourceLocation}</span>
@@ -331,6 +463,15 @@ function EDGE_BG_forKind(kind: keyof typeof KIND_COLOR): string {
   return C.bgSelected;                                   // Class — нейтральный
 }
 
+// Парсинг sourceLocation ("line 6" / "6:12" / "6") → номер строки или undefined
+function parseSourceLine(loc: string): number | undefined {
+  if (!loc) return undefined;
+  const m = loc.match(/(?:line\s*)?(\d+)/);
+  return m ? parseInt(m[1], 10) : undefined;
+}
+
+const SEARCH_LIMIT = 20;
+
 // === Общие стили секций (inline) ===
 const sectionTitleStyle: React.CSSProperties = {
   fontSize: FS.xs, textTransform: 'uppercase', letterSpacing: '0.6px',
@@ -351,4 +492,8 @@ const relLinkStyle: React.CSSProperties = {
 const kindBadgeStyle: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: FS.xs, fontWeight: 600,
   textTransform: 'uppercase', letterSpacing: '0.5px', padding: '2px 8px', borderRadius: R.sm,
+};
+const searchHitStyle: React.CSSProperties = {
+  display: 'flex', alignItems: 'center', gap: 6, padding: '5px 8px',
+  borderRadius: R.lg, cursor: 'pointer', fontSize: FS.xs,
 };

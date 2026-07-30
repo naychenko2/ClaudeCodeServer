@@ -79,7 +79,7 @@ services:
       - http://localhost:8080/api/v1/health
       timeout: 10s
     # Запинено по той же причине, что и коллектор: :latest + необратимые миграции
-    # ClickHouse = невозможность отката. Версия соответствует docs/observability/*.md.
+    # ClickHouse = невозможность отката. Версия соответствует docs/observability-*.md.
     image: signoz/signoz:v0.134.0
     networks:
     - signoz-network

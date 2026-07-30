@@ -11,12 +11,18 @@ public abstract record ServerMessage(string Type)
 
 public record McpServerInfo(string Name, string Status);
 
+// Ход ушёл в дерево, отличное от того, куда его отправил сервер (агент вызвал встроенный
+// EnterWorktree в обход тумблера чата) — Path/Name фактического cwd для короткой подписи в UI.
+// null у SessionStartedMessage.TurnWorktree — обычный случай, ход идёт в ожидаемой папке.
+public sealed record TurnWorktreeInfo(string Path, string Name);
+
 // ClaudeSessionId — id сессии у провайдера (у Claude — транскрипт CLI, у DeepSeek — GUID истории);
 // имя поля историческое, не меняем ради обратной совместимости фронта.
-// Provider/Capabilities — хвостовые optional-поля, старый фронт их игнорирует.
+// Provider/Capabilities/TurnWorktree — хвостовые optional-поля, старый фронт их игнорирует.
 public record SessionStartedMessage(string ClaudeSessionId, bool IsResume, string Model, string Mode,
     string? Cwd = null, int ToolCount = 0, IReadOnlyList<McpServerInfo>? McpServers = null,
-    string Provider = "claude", Services.Llm.LlmCapabilities? Capabilities = null)
+    string Provider = "claude", Services.Llm.LlmCapabilities? Capabilities = null,
+    TurnWorktreeInfo? TurnWorktree = null)
     : ServerMessage("session_started");
 
 public record TextDeltaMessage(string Text)
@@ -242,16 +248,73 @@ public record SpeakerChangedMessage(string PersonaId, string Label)
 public record WorkLoopMessage(bool Active, int Iteration, int MaxIterations, string? Phase)
     : ServerMessage("work_loop");
 
+// Карточка плана режима «Командная реализация» (Э2): структурный план в ленту штаба.
+// Аналог plan_review, но план — объект (под-задачи, исполнители, обоснование, волны),
+// а не текст. Ответ — SessionHub.RespondTeamPlan. Событие переиздаётся при смене
+// исполнителя (Reassign), поэтому клиент сверяет карточку по PlanId.
+public record TeamPlanMessage(
+        string PlanId,
+        Models.TeamImplementPlan Plan,
+        bool Resolved,
+        bool? Approved)
+    : ServerMessage("team_plan");
+
+// Карточка остановки режима «Командная реализация» (Э4): блокер исполнителя, провал задачи,
+// исчерпанный бюджет, зависшая волна… Kind — wire-токен триггера, Actions — кнопки решения.
+// Событие переиздаётся при ответе человека (Resolved=true), клиент сверяет по EscalationId.
+public record TeamEscalationMessage(
+        string EscalationId,
+        string Kind,
+        string Title,
+        string Details,
+        IReadOnlyList<Models.TeamEscalationAction> Actions,
+        string? TaskId,
+        int Wave,
+        bool Resolved,
+        string? ChosenActionId)
+    : ServerMessage("team_escalation");
+
+// Состояние режима «Командная реализация» (флаг team-implement-mode): для бейджа в композере
+// и маркера в списке чатов. Stage — wire-токен стадии (planning/confirming/wave/…).
+// PlannedWaves — плановое число волн текущей итерации (Э3): бейдж «волна N из M» берёт
+// M отсюда; 0 — план ещё не запускался (тогда M показывать нечем).
+public record TeamImplementMessage(
+        bool Active,
+        string? Stage,
+        int WaveNumber,
+        bool AutoWaves,
+        string? CoordinatorPersonaId,
+        string? PlannerPersonaId,
+        IReadOnlyList<string>? ExecutorPersonaIds,
+        Models.TeamImplementBudget? Budget,
+        string? PlanCardId,
+        int PlannedWaves = 0,
+        bool CoordinatorNoCode = true,
+        // Человек нажал «Остановить» (Э4): новые волны не стартуют, пока он не продолжит.
+        // Отдельно от стадии: практика может ждать решения и без остановки (блокер, провал).
+        bool Stopped = false)
+    : ServerMessage("team_implement");
+
 // Чат переключён на другой аккаунт/провайдер. Auto=true — тихий фейловер внутри пула
 // подписок Claude (та же модель и эндпоинт, в ленту не попадает); иначе — явная миграция
 // на стороннего провайдера, Label — подпись разделителя «Продолжено на …».
 public record ProviderSwitchedMessage(string Provider, string? Model = null, string? Label = null, bool Auto = false)
     : ServerMessage("provider_switched");
 
-// Лимит подписки исчерпан и внутри пула переключиться некуда: предложение продолжить
-// чат на стороннем провайдере (карточка с кнопками в ленте). Providers — доступные
-// варианты: ключ, имя для кнопки и модель, с которой пойдёт продолжение.
-public record ProviderFallbackOption(string Key, string DisplayName, string Model);
+// Лимит подписки исчерпан: предложение продолжить чат карточкой с кнопками в ленте —
+// либо на другом здоровом аккаунте того же пула подписок (Kind="subscription", та же
+// модель и эндпоинт, но своя предоплата), либо на стороннем провайдере (Kind="provider",
+// дефолт — старое поведение, TierLabel/Utilization не заполняются). Providers — доступные
+// варианты: Key — ключ подписки пула ИЛИ ключ стороннего провайдера (различается Kind),
+// DisplayName — имя для кнопки, Model — модель, с которой пойдёт продолжение (у аккаунтов
+// пула это модель текущего чата — она не меняется, меняется только аккаунт).
+public record ProviderFallbackOption(
+    string Key,
+    string DisplayName,
+    string Model,
+    string Kind = "provider",
+    string? TierLabel = null,
+    double? Utilization = null);
 public record ProviderLimitMessage(string? ResetsAt, IReadOnlyList<ProviderFallbackOption> Providers)
     : ServerMessage("provider_limit");
 

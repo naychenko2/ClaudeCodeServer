@@ -63,7 +63,7 @@ interface Props {
   selectedTask: Task | null;
   autoEditTaskId: string | null;
   onOpenTaskSession: (sessionId: string) => void;
-  onOpenFileFromTree: (path: string) => void;
+  onOpenFileFromTree: (path: string, line?: number) => void;
   onCloseTask: () => void;
   // Персона из панельки «Команда» — студия в центре (приоритет ниже задачи, выше доски)
   selectedPersonaId: string | null;

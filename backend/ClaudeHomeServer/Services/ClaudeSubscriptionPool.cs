@@ -57,11 +57,17 @@ public class ClaudeSubscriptionPool
 
     // Пометки исчерпания живут in-memory и теряются при рестарте сервера — восстанавливаем
     // из последних снапшотов usage: окно rejected (или выбрано без overage) со сбросом в будущем.
+    // Снимки source="oauth" (SubscriptionOAuthUsageService) исключены: тот пишет status="allowed"
+    // ВСЕГДА, независимо от реальной утилизации (эндпоинт отдаёт только проценты, не вердикт
+    // accept/reject) — как хронологически последний в группе LimitType он маскировал бы более
+    // раннее реальное исчерпание по rejected-ходу/пингу (source="turn"/"probe"), и после рестарта
+    // Pick() снова выбирал бы мёртвый по недельному окну аккаунт с виду свежим 5h-окном.
     private void RestoreFromSnapshots(UsageService usage)
     {
         foreach (var (key, snapshots) in usage.GetAllBySubscription())
         {
-            foreach (var last in snapshots.GroupBy(s => s.LimitType).Select(g => g.Last()))
+            foreach (var last in snapshots.Where(s => s.Source != "oauth")
+                .GroupBy(s => s.LimitType).Select(g => g.Last()))
             {
                 if (last.Status != "rejected" && !(last.Utilization >= 1.0 && !last.IsUsingOverage))
                     continue;

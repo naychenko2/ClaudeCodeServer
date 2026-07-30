@@ -79,7 +79,13 @@
   с персонами в ролях (`/panel-of-experts`, `/review-consilium`, `/red-team`,
   `/team-implement` — participants/executors = handle персон) и `/oh-my-claudecode:*`
   (персоны туда подставляются хинтом OmcPersonaRouting); доступность механики гейтится
-  наличием скилла (`requiredSkill`). Старые серверные механики «Совещание» (P7) и
+  наличием скилла (`requiredSkill`) и, если задан, фич-флагом (`featureFlag`).
+  **Исключение — «Командная реализация»** (`implementMode`, флаг `team-implement-mode`):
+  единственная механика без workflow-хода — она включает режим чата-штаба REST-вызовом
+  (`PUT /chats/{id}/team-implement`), дальше работа идёт задачами на персон-исполнителей
+  (см. [features.md](features.md#командная-реализация--режим-чата-флаг-team-implement-mode)).
+  Прежний быстрый ход `/team-implement` остался под именем **«Командный спринт»** (id
+  механики `implement` не менялся — по нему детектятся старые ходы в лентах). Старые серверные механики «Совещание» (P7) и
   «Конвейер пантеона» УДАЛЕНЫ вместе с DiscussTeamDialog/MeetingView/PipelineView;
   legacy `meeting_phase`/`pipeline_phase` в старых историях молча пропускаются
   (ChatHistoryService).

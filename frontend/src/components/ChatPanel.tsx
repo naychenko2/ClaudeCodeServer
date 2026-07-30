@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect, useMemo, useCallback, Fragment } from 'react';
 import { ArrowDown, RotateCw, CircleHelp } from 'lucide-react';
-import type { Project, Session, ChatItem, SkillInfo, AgentInfo, ClaudeBilling, Persona, WorkLoopState } from '../types';
+import type { Project, Session, ChatItem, SkillInfo, AgentInfo, ClaudeBilling, Persona, WorkLoopState, SessionTeamImplement, TeamPlanDecision } from '../types';
 import { useSession } from '../hooks/useSession';
+import { useFeature, FLAGS } from '../lib/featureFlags';
 import { usePersonasVersion, getPersonaById, getPersonasSnapshot, ensurePersonasLoaded, personaLabel } from '../lib/personas';
 import { findConsultedPersona } from './chat/PersonaTaskView';
 import { showToast } from '../lib/toast';
@@ -17,6 +18,7 @@ import { detectTeamMechanic } from '../features/team/teamMechanics';
 import { setLastMechanic } from '../lib/lastMechanic';
 import { toRateWindows, worstWindow } from '../lib/rateLimit';
 import { estimateContext } from '../lib/context';
+import { computeTurnTree, sessionStartedBoundaries } from '../lib/turnWorktree';
 import { useCtxThresholds } from '../lib/contextPrefs';
 import { notify } from '../lib/notify';
 import { type Mode, ModeIcon, MODES, isDangerMode } from '../lib/modes';
@@ -28,7 +30,7 @@ import { EditSessionDialog } from './EditSessionDialog';
 import { C, R, SHADOW, CHAT_MAX_W } from '../lib/design';
 import { setChatContext, AI_RECOMPUTE_EVENT } from '../lib/ai/chatContext';
 import { ChatHeaderBar, type CostStats, type FalCostStats } from './chat/ChatHeaderBar';
-import { ChatProjectContext, ChatOpenFileContext, FalCostContext, AssistantNameContext, PersonaContext } from './chat/contexts';
+import { ChatProjectContext, ChatOpenFileContext, FalCostContext, AssistantNameContext, PersonaContext, TeamPlanContext, TeamEscalationContext, type TeamPlanChatContext, type TeamEscalationChatContext } from './chat/contexts';
 import { WaitingIndicator } from './ui/WaitingIndicator';
 import { Modal, ModalActions } from './ui';
 import { ChatEmptyState } from './chat/EmptyState';
@@ -116,7 +118,7 @@ function derivePlanPhase(items: ChatItem[], mode: Mode, isWaiting: boolean): Pla
 }
 
 export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, attachedFiles, onAttachedFilesChange, artifactsOpen, onToggleArtifacts, greetingBubble, headerIsland }: Props) {
-  const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, workLoop: liveWorkLoop, promptSuggestion, pending, composerRestore, consumeRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, interrupt, compact, toggleThinking, noteCompanionSwitch, cancelPending } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
+  const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, workLoop: liveWorkLoop, teamImplement: liveTeamImplement, promptSuggestion, pending, composerRestore, consumeRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, respondTeamPlan, respondTeamEscalation, interrupt, compact, toggleThinking, noteCompanionSwitch, cancelPending } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
   // Цикл «до готово» (флаг work-loop): live-состояние из событий work_loop,
   // до первого события — из Session.workLoop; null — цикл выключен
   const workLoopState = useMemo<WorkLoopState | null>(() => {
@@ -133,6 +135,61 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       showToast('Цикл «до готово»', err instanceof Error ? err.message : 'Не удалось переключить цикл');
     }
   }, [session.id, workLoopState, onSessionUpdated]);
+
+  // Режим «Командная реализация» (флаг team-implement-mode): live-состояние из событий
+  // team_implement, до первого события — из Session.teamImplement; null — режим выключен
+  const teamImplementOn = useFeature(FLAGS.teamImplementMode);
+  const teamImplementState = useMemo<SessionTeamImplement | null>(() => {
+    if (!teamImplementOn) return null;
+    if (liveTeamImplement !== undefined) {
+      if (!liveTeamImplement.active) return null;
+      const { active: _active, ...rest } = liveTeamImplement;
+      return rest;
+    }
+    return session.teamImplement ?? null;
+  }, [teamImplementOn, liveTeamImplement, session.teamImplement]);
+  const handleToggleTeamImplementAuto = useCallback(async () => {
+    if (!teamImplementState) return;
+    try {
+      const updated = await api.chats.setTeamImplementAuto(session.id, !teamImplementState.autoWaves);
+      onSessionUpdated?.(updated);
+    } catch (err) {
+      showToast('Командная реализация', err instanceof Error ? err.message : 'Не удалось переключить авто-волны');
+    }
+  }, [session.id, teamImplementState, onSessionUpdated]);
+  // Включение режима из карточки механики «Командная реализация» (композер): состав
+  // пустой = вся команда проекта, координатора бэкенд берёт из собеседника чата
+  const handleEnableTeamImplement = useCallback(async (opts: { autoWaves: boolean; executorPersonaIds: string[] }) => {
+    try {
+      const updated = await api.chats.setTeamImplement(session.id, true, {
+        autoWaves: opts.autoWaves,
+        executorPersonaIds: opts.executorPersonaIds,
+      });
+      onSessionUpdated?.(updated);
+    } catch (err) {
+      showToast('Командная реализация', err instanceof Error ? err.message : 'Не удалось включить режим');
+    }
+  }, [session.id, onSessionUpdated]);
+  const handleDisableTeamImplement = useCallback(async () => {
+    try {
+      const updated = await api.chats.setTeamImplement(session.id, false);
+      onSessionUpdated?.(updated);
+      showToast('Командная реализация', 'Режим выключен — чат стал обычным разговором');
+    } catch (err) {
+      showToast('Командная реализация', err instanceof Error ? err.message : 'Не удалось выключить режим');
+    }
+  }, [session.id, onSessionUpdated]);
+  // «Остановить»: режим остаётся включённым, но новые волны не стартуют — карточку
+  // остановки с «Продолжить» публикует бэкенд, она приезжает событием в ленту
+  const handleStopTeamImplement = useCallback(async () => {
+    try {
+      const updated = await api.chats.stopTeamImplement(session.id);
+      onSessionUpdated?.(updated);
+      showToast('Командная реализация', 'Практика остановлена — новые волны не стартуют');
+    } catch (err) {
+      showToast('Командная реализация', err instanceof Error ? err.message : 'Не удалось остановить практику');
+    }
+  }, [session.id, onSessionUpdated]);
 
   // === Отдельное git worktree чата ===
   // Пока активен чат в worktree, все git-запросы проекта несут его sessionId —
@@ -559,9 +616,10 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
 
   // Миграция чата на другого провайдера (кнопка карточки provider_limit при исчерпании
   // лимита): сервер перевозит транскрипт, событие provider_switched гасит карточку и
-  // рисует разделитель; ошибку показывает сама карточка
-  const handleMigrateProvider = useCallback(async (model: string) => {
-    const updated = await api.chats.migrateProvider(session.id, model);
+  // рисует разделитель; ошибку показывает сама карточка. subscriptionKey задан только у
+  // опций «аккаунт пула» (kind='subscription') — явный выбор подписки вместо автовыбора
+  const handleMigrateProvider = useCallback(async (model: string, subscriptionKey?: string) => {
+    const updated = await api.chats.migrateProvider(session.id, model, subscriptionKey);
     onSessionUpdated?.(updated);
   }, [session.id, onSessionUpdated]);
 
@@ -604,6 +662,38 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   const handleRespondPlan = useCallback((requestId: string, approve: boolean, feedback?: string) => {
     respondPlan(requestId, approve, feedback);
   }, [respondPlan]);
+
+  // Обвязка карточки плана «Командной реализации»: состояние режима + действия.
+  // Решение уходит в хаб (run/reassign/cancel), правка плана — обычным сообщением
+  // координатору. Контекст, а не пропы: карточка лежит глубоко в ленте.
+  const handleRespondTeamPlan = useCallback((planId: string, decision: TeamPlanDecision,
+    subtaskId?: string, executorPersonaId?: string) => {
+    respondTeamPlan(planId, decision, subtaskId, executorPersonaId).catch(err => {
+      showToast('Командная реализация', err instanceof Error ? err.message : 'Не удалось отправить решение по плану');
+    });
+  }, [respondTeamPlan]);
+  const handleTeamPlanMessage = useCallback((text: string) => {
+    atBottomRef.current = true;
+    send(text, [], modeRef.current);
+  }, [send]);
+  const teamPlanCtx = useMemo<TeamPlanChatContext | null>(() => teamImplementState ? {
+    autoWaves: teamImplementState.autoWaves,
+    waveNumber: teamImplementState.waveNumber,
+    executorPersonaIds: teamImplementState.executorPersonaIds,
+    onRespond: handleRespondTeamPlan,
+    onSendMessage: handleTeamPlanMessage,
+  } : null, [teamImplementState, handleRespondTeamPlan, handleTeamPlanMessage]);
+
+  // Обвязка карточек остановки (Э4): решение уходит в хаб, карточка гаснет.
+  // Контекст живёт, пока включён режим — в выключенном чате карточки только читаются
+  const handleRespondTeamEscalation = useCallback((escalationId: string, actionId?: string, comment?: string) => {
+    respondTeamEscalation(escalationId, actionId, comment).catch(err => {
+      showToast('Командная реализация', err instanceof Error ? err.message : 'Не удалось отправить решение');
+    });
+  }, [respondTeamEscalation]);
+  const teamEscalationCtx = useMemo<TeamEscalationChatContext | null>(() => teamImplementState
+    ? { onRespond: handleRespondTeamEscalation }
+    : null, [teamImplementState, handleRespondTeamEscalation]);
 
   // Откат файла — стабильный колбэк для карточек file_changed в ленте
   const projectId = project?.id;
@@ -651,6 +741,13 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   // Фаза режима «План» (для контекстного индикатора и подписи WaitingIndicator)
   const planPhase = useMemo(() => derivePlanPhase(items, mode, isWaiting), [items, mode, isWaiting]);
   const planningKind = planPhase === 'planning' ? 'planning' : planPhase === 'replanning' ? 'replanning' : undefined;
+
+  // Дерево ХОДА (turnWorktree с бэка + EnterWorktree первого хода, см. lib/turnWorktree) —
+  // git-бар и разделитель в ленте считают его отсюда, а не из Session.worktreePath
+  const turnTree = useMemo(() => computeTurnTree(items), [items]);
+  // Индексы session_started, видимые в ленте разделителем «ход в дереве агента»/«ход
+  // вернулся в проект» (остальные session_started прозрачны для группировки, см. isInvisible)
+  const turnBoundaries = useMemo(() => sessionStartedBoundaries(items), [items]);
 
   // Активный workflow — сырой прогресс фаз (чистая функция от ленты, без мутаций)
   const rawWorkflowInfo = useMemo(() => {
@@ -840,12 +937,13 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       taskPlan={i === lastTaskIdx && taskTodos.length > 0 ? taskTodos : undefined}
       agentActivity={extras?.agentActivity}
       agentRenderChild={extras?.agentRenderChild}
+      turnBoundaryKind={item.kind === 'session_started' ? turnBoundaries.get(i) : undefined}
     />
   ), [
     online, isWaiting, items.length, lastResultIndex, toggleThinking, allowPermission,
     denyPermission, allowAlways, answerQuestion, handleRespondPlan, planVersions,
     lastApprovedPlanIdx, mode, onOpenFile, project, handleRevert, handleRetry,
-    interrupt, handleMigrateProvider, lastTaskIdx, taskTodos, changeMode,
+    interrupt, handleMigrateProvider, lastTaskIdx, taskTodos, changeMode, turnBoundaries,
   ]);
 
   // Блок действий: подряд идущие карточки инструментов + изменения файлов объединяем
@@ -941,19 +1039,23 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       } else if (inBlock(items[i], i)) {
         const start = i;
         const slice: Array<[ChatItem, number]> = [];
-        // Прозрачные для группировки: рендерятся в null и не должны рвать стопку действий
-        const isInvisible = (it: ChatItem) => it.kind === 'session_started' || it.kind === 'resumed' || it.kind === 'fal_cost';
+        // Прозрачные для группировки: рендерятся в null и не должны рвать стопку действий.
+        // session_started на «границе» дерева хода (turnBoundaries) — исключение: он
+        // теперь ВИДИМ (разделитель «ход в дереве агента»/«ход вернулся в проект»)
+        // и обязан рвать стопку действий, как любой другой видимый элемент
+        const isInvisible = (it: ChatItem, idx: number) =>
+          (it.kind === 'session_started' && !turnBoundaries.has(idx)) || it.kind === 'resumed' || it.kind === 'fal_cost';
         // Размышления верхнего уровня прячем внутрь группы, если они стоят МЕЖДУ действиями
         const isThought = (it: ChatItem) => (it.kind === 'thinking' && !it.parentToolUseId) || it.kind === 'redacted_thinking';
         const isSuppressed = (it: ChatItem) => suppressedByWorkflow.has(it) || suppressedByAgentParent.has(it);
         while (i < items.length) {
-          if (isSuppressed(items[i]) || isInvisible(items[i])) { i++; continue; }
+          if (isSuppressed(items[i]) || isInvisible(items[i], i)) { i++; continue; }
           if (inBlock(items[i], i)) { slice.push([items[i], i]); i++; continue; }
           if (isThought(items[i])) {
             // Lookahead: впитываем размышления, только если дальше идёт ещё действие —
             // размышление перед финальным ответом остаётся видимой строкой над ним
             let j = i;
-            while (j < items.length && (isThought(items[j]) || isInvisible(items[j]) || isSuppressed(items[j]))) j++;
+            while (j < items.length && (isThought(items[j]) || isInvisible(items[j], j) || isSuppressed(items[j]))) j++;
             if (j < items.length && inBlock(items[j], j)) {
               for (; i < j; i++) if (isThought(items[i])) slice.push([items[i], i]);
               continue;
@@ -989,7 +1091,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         // Хвостовые размышления не сигнал: они могут впитаться в группу при следующем
         // действии, и группа мигала бы свернулась/раскрылась на каждом межшаговом thinking.
         let after = i;
-        while (after < items.length && (isThought(items[after]) || isInvisible(items[after]) || isSuppressed(items[after]))) after++;
+        while (after < items.length && (isThought(items[after]) || isInvisible(items[after], after) || isSuppressed(items[after]))) after++;
         // Последняя группа сворачивается и когда после неё ещё нет видимого элемента,
         // но ход уже завершён (сессия не работает): иначе действия последнего диалога
         // оставались бы раскрытыми в отличие от всех предыдущих групп.
@@ -1093,7 +1195,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     return result;
     // personasVersion: findConsultedPersona матчит по стору персон — после его загрузки
     // карточки консультаций пересобираются с активностью внутри
-  }, [items, renderItem, lastTaskIdx, execZone, online, onOpenFile, project, handleRevert, personasVersion, sessionBusy]);
+  }, [items, renderItem, lastTaskIdx, execZone, online, onOpenFile, project, handleRevert, personasVersion, sessionBusy, turnBoundaries]);
 
   const headerBar = (
     <ChatHeaderBar
@@ -1160,12 +1262,12 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         {items.length === 0 && !isHistoryLoading && online && (
           effectiveGreeting ?? (
             <ChatEmptyState hasProject={!!project} hasCLAUDEmd={hasCLAUDEmd} onHint={handleHint}
-              session={session} onSessionUpdated={onSessionUpdated} isMobile={isMobile}
+              session={session} project={project} onSessionUpdated={onSessionUpdated} isMobile={isMobile}
               personas={ctxPersonas} selectedPersonaId={session.personaId} onPickPersona={handlePersonaChange} />
           )
         )}
 
-        <FalCostContext.Provider value={falCostByRequest}><ChatProjectContext.Provider value={projectCtx}><ChatOpenFileContext.Provider value={onOpenFile ?? null}>{renderedItems}</ChatOpenFileContext.Provider></ChatProjectContext.Provider></FalCostContext.Provider>
+        <FalCostContext.Provider value={falCostByRequest}><ChatProjectContext.Provider value={projectCtx}><ChatOpenFileContext.Provider value={onOpenFile ?? null}><TeamPlanContext.Provider value={teamPlanCtx}><TeamEscalationContext.Provider value={teamEscalationCtx}>{renderedItems}</TeamEscalationContext.Provider></TeamPlanContext.Provider></ChatOpenFileContext.Provider></ChatProjectContext.Provider></FalCostContext.Provider>
 
         {online && showWaiting && (
           // Текст индикатора ставим по левому краю чата (как пузыри), а домик уезжает
@@ -1275,10 +1377,11 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
               Режим «Без ограничений» — {asstName} действует без подтверждений
             </div>
           )}
-          {/* Git-бар над композером (только проектный чат на десктопе): ветка/worktree,
-              суммарный diff и кнопки «Зафиксировать»/«Опубликовать». Правой панели
-              «Изменения» на мобиле нет — отсюда гейт !isMobile. */}
-          {project && !isMobile && <ProjectGitBar project={project} session={session} onCommitOwn={handleCommitOwn} />}
+          {/* Git-бар над композером (только проектный чат на десктопе): ветка/worktree
+              чата, дерево текущего хода, суммарный diff и кнопки «Зафиксировать»/
+              «Опубликовать». Правой панели «Изменения» на мобиле нет — отсюда гейт
+              !isMobile; на мобиле о дереве хода сообщает только отметка в ленте. */}
+          {project && !isMobile && <ProjectGitBar project={project} session={session} turnTree={turnTree} turnTreeLive={isWaiting} onCommitOwn={handleCommitOwn} />}
           {/* Подъём композера над лентой даёт сама белая карточка (Composer), а не эта
               обёртка: полоса контролов вынесена из карточки, и тень на обёртке рисовала
               серый ореол вокруг пустой области под ней и полоску над полем ввода. */}
@@ -1322,6 +1425,12 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
             onCreateGroup={handleCreateGroup}
             workLoop={workLoopState}
             onToggleWorkLoop={handleToggleWorkLoop}
+            teamImplement={teamImplementState}
+            onToggleTeamImplementAuto={teamImplementState ? handleToggleTeamImplementAuto : undefined}
+            onDisableTeamImplement={teamImplementState ? handleDisableTeamImplement : undefined}
+            onStopTeamImplement={teamImplementState ? handleStopTeamImplement : undefined}
+            onEnableTeamImplement={teamImplementOn ? handleEnableTeamImplement : undefined}
+            isProjectChat={!!project}
             worktreeBranch={session.worktreeBranch}
             onToggleWorktree={project ? openWorktreeConfirm : undefined}
             chatContext={chatContext}

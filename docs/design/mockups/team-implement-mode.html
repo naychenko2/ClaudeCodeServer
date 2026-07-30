@@ -1,0 +1,1109 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Режим «Командная реализация» — макеты (Э0)</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=PT+Serif:wght@400;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    /* Токены — один-в-один frontend/src/lib/theme.css (обе темы) + design.ts.
+       Сырых hex вне этого блока нет: стили только через var(--*).
+       Цвета персон — данные палитры (как GROUP_COLORS/AGENT_COLORS), не тема. */
+    :root {
+      --font-sans: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      --font-serif: 'PT Serif', Georgia, serif;
+      --font-mono: 'JetBrains Mono', 'Courier New', monospace;
+      --fs-xs: 11px; --fs-sm: 12px; --fs-base: 13px; --fs-md: 14px; --fs-lg: 16px; --fs-h2: 22px; --fs-h1: 28px;
+      --sp-xxs: 2px; --sp-xs: 4px; --sp-sm: 8px; --sp-md: 12px; --sp-lg: 16px; --sp-xl: 24px;
+      --r-sm: 6px; --r-md: 8px; --r-lg: 10px; --r-xl: 12px; --r-xxl: 14px; --r-pill: 9px; --r-modal: 20px; --r-sheet: 22px; --r-max: 999px;
+      --c-bg-main: #F4F0E8; --c-bg-panel: #EDE7DC; --c-bg-card: #FBF8F2; --c-bg-white: #FFFFFF;
+      --c-bg-selected: #E8E1D4; --c-bg-inset: #E7E0D2;
+      --c-text-heading: #2A251F; --c-text-primary: #39332B; --c-text-secondary: #756B5E; --c-text-muted: #9A8F7E;
+      --c-on-accent: #FBF8F2; --c-on-dark: #FFFFFF;
+      --c-accent: #D97757; --c-accent-light: #F4ECE1; --c-accent-muted: #EAD3C5;
+      --c-border: #E0D7C8; --c-border-light: #E8E1D4; --c-divider: #DDD4C4; --c-dashed: #D0C6B4; --c-track: #D8CFBE;
+      --c-overlay: rgba(23,19,15,.42); --c-glass: rgba(255,255,255,.74);
+      --c-success: #5E8B4E; --c-success-bg: #E9F1E8; --c-success-text: #3F7A4F;
+      --c-warning: #C9923E; --c-warning-bg: #FBEFE0; --c-warning-text: #8A6A28;
+      --c-danger: #B4452F; --c-danger-bg: #FBF1EC; --c-danger-text: #B4452F;
+      --c-info: #3E7CA6; --c-info-bg: #E7EFF5;
+      --shadow-focus: 0 0 0 3px rgba(217,119,87,.14);
+      --shadow-card: 0 2px 8px rgba(60,50,35,.05);
+      --shadow-island: 0 1px 2px rgba(60,50,35,.06), 0 6px 20px rgba(60,50,35,.10);
+      --shadow-dropdown: 0 8px 28px rgba(60,50,35,.16);
+      --shadow-modal: 0 18px 60px rgba(23,19,15,.28);
+      --shadow-sheet: 0 -8px 40px rgba(23,19,15,.22);
+      --shadow-button: 0 4px 14px rgba(217,119,87,.30);
+      --shadow-thumb: 0 1px 3px rgba(42,37,31,.12);
+      /* Палитра персон — данные (как AGENT_COLORS), конвенция PersonaAvatar */
+      --persona-blue: #3E7CA6; --persona-purple: #8E4A82; --persona-green: #3F7A4F;
+      --persona-orange: #C2693B; --persona-red: #B4452F; --persona-indigo: #4B6BB0; --persona-khaki: #7A7250;
+    }
+    [data-theme="dark"] {
+      --c-bg-main: #201C18; --c-bg-panel: #272320; --c-bg-card: #2E2A25; --c-bg-white: #2E2A25;
+      --c-bg-selected: #38332D; --c-bg-inset: #1B1815;
+      --c-text-heading: #F2ECE1; --c-text-primary: #EDE6DB; --c-text-secondary: #B3A897; --c-text-muted: #8A8072;
+      --c-on-accent: #201C18;
+      --c-accent: #E38A6A; --c-accent-light: #3A2E27; --c-accent-muted: #4A362C;
+      --c-border: #3D3830; --c-border-light: #34302A; --c-divider: #454037; --c-dashed: #4A443B; --c-track: #453F37;
+      --c-overlay: rgba(0,0,0,.62); --c-glass: rgba(46,42,37,.74);
+      --c-success: #7CB86A; --c-success-bg: #232E20; --c-success-text: #8FCB79;
+      --c-warning: #E0AC5A; --c-warning-bg: #322717; --c-warning-text: #E7B96E;
+      --c-danger: #E8785E; --c-danger-bg: #331F1B; --c-danger-text: #EE8A72;
+      --c-info: #5FA0CC; --c-info-bg: #1E2A33;
+      --shadow-focus: 0 0 0 3px rgba(227,138,106,.24);
+      --shadow-card: 0 2px 10px rgba(0,0,0,.35);
+      --shadow-island: 0 1px 2px rgba(0,0,0,.30), 0 8px 24px rgba(0,0,0,.45);
+      --shadow-dropdown: 0 10px 32px rgba(0,0,0,.55);
+      --shadow-modal: 0 20px 64px rgba(0,0,0,.62);
+      --shadow-sheet: 0 -10px 46px rgba(0,0,0,.55);
+      --shadow-button: 0 4px 16px rgba(227,138,106,.34);
+      --shadow-thumb: 0 1px 3px rgba(0,0,0,.45);
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: var(--font-sans); font-size: var(--fs-base); color: var(--c-text-primary); background: var(--c-bg-main); line-height: 1.5; padding: var(--sp-lg); }
+    svg.ic { display: block; flex-shrink: 0; }
+
+    .theme-toggle { margin-left: auto; flex-shrink: 0; }
+    .theme-toggle button { padding: var(--sp-sm) var(--sp-md); font-family: var(--font-sans); font-size: var(--fs-sm); font-weight: 600; color: var(--c-text-heading); background: var(--c-bg-white); border: 1px solid var(--c-border); border-radius: var(--r-md); cursor: pointer; }
+    .theme-toggle button:hover { border-color: var(--c-accent); }
+
+    .mockup-container { max-width: 1340px; margin: 0 auto; display: flex; flex-direction: column; gap: var(--sp-xl); }
+    .mockup-header { display: flex; align-items: flex-start; gap: var(--sp-lg); flex-wrap: wrap; }
+    .mockup-header h1 { font-family: var(--font-serif); font-size: var(--fs-h1); font-weight: 600; color: var(--c-text-heading); margin-bottom: var(--sp-xs); }
+    .mockup-header p { font-size: var(--fs-md); color: var(--c-text-secondary); max-width: 820px; }
+    .mockup-section { background: var(--c-bg-card); border-radius: var(--r-xxl); border: 1px solid var(--c-border-light); overflow: hidden; }
+    .section-header { padding: var(--sp-md) var(--sp-lg); background: var(--c-bg-inset); border-bottom: 1px solid var(--c-border); display: flex; align-items: center; gap: var(--sp-md); flex-wrap: wrap; }
+    .section-title { font-family: var(--font-serif); font-size: var(--fs-h2); font-weight: 600; color: var(--c-text-heading); }
+    .section-subtitle { font-size: var(--fs-sm); color: var(--c-text-secondary); margin-left: auto; }
+    .section-body { padding: var(--sp-lg); }
+    .note { margin-top: var(--sp-md); padding: var(--sp-md); background: var(--c-bg-selected); border-radius: var(--r-lg); font-size: var(--fs-sm); color: var(--c-text-secondary); }
+    .note b, .note strong { color: var(--c-text-heading); }
+    .note code { font-family: var(--font-mono); font-size: var(--fs-xs); background: var(--c-bg-card); padding: 1px 5px; border-radius: var(--r-sm); }
+
+    .frames { display: flex; gap: var(--sp-lg); flex-wrap: wrap; align-items: flex-start; }
+    .frame { flex-shrink: 0; min-width: 0; }
+    .frame-caption { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--c-text-muted); margin-bottom: var(--sp-xs); display: flex; justify-content: space-between; gap: 8px; }
+    .frame-caption b { color: var(--c-accent); font-weight: 600; }
+
+    /* === Лента чата (холст под карточками) === */
+    .chat-feed { background: var(--c-bg-main); border: 1px solid var(--c-border); border-radius: var(--r-lg); padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+
+    /* === Композер (скелет: строка бейджей + поле) === */
+    .composer { background: var(--c-bg-white); border: 1px solid var(--c-border); border-radius: 16px; box-shadow: var(--shadow-card); }
+    .composer-badges { display: flex; align-items: center; gap: 6px; padding: 8px 10px 0; flex-wrap: wrap; }
+    .composer-body { display: flex; align-items: flex-end; gap: 8px; padding: 8px 10px 10px; }
+    .composer-input { flex: 1; min-width: 0; font-size: var(--fs-md); color: var(--c-text-muted); padding: 6px 2px; }
+    .composer-send { width: 32px; height: 32px; border-radius: var(--r-pill); background: var(--c-accent); color: var(--c-on-accent); display: flex; align-items: center; justify-content: center; flex-shrink: 0; box-shadow: var(--shadow-button); }
+
+    /* === Бейдж режима (по образцу loopBadge в Composer): pill 24/26, FS.xs, 600 === */
+    .ti-badge { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px; border-radius: var(--r-pill); font-size: var(--fs-xs); font-weight: 600; white-space: nowrap; flex-shrink: 0; cursor: pointer; border: none; font-family: var(--font-sans); }
+    .ti-badge.mob { height: 26px; }
+    .ti-badge.tone-work { background: var(--c-accent-light); color: var(--c-accent); }
+    .ti-badge.tone-wait { background: var(--c-warning-bg); color: var(--c-warning-text); }
+    .ti-badge.tone-idle { background: var(--c-bg-selected); color: var(--c-text-secondary); }
+    .ti-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+    .tone-work .ti-dot { background: var(--c-accent); animation: ti-pulse 1.6s ease-in-out infinite; }
+    .tone-wait .ti-dot { background: var(--c-warning); animation: ti-pulse 1.2s ease-in-out infinite; }
+    .tone-idle .ti-dot { background: var(--c-text-muted); }
+    @keyframes ti-pulse { 0%,100% { opacity: 1; transform: scale(1); } 50% { opacity: .45; transform: scale(.8); } }
+
+    /* === Чип «Авто» — переключаемый, рядом с бейджем === */
+    .ti-auto { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 9px; border-radius: var(--r-pill); font-size: var(--fs-xs); font-weight: 600; white-space: nowrap; flex-shrink: 0; cursor: pointer; font-family: var(--font-sans); transition: background .15s, color .15s, border-color .15s; }
+    .ti-auto.mob { height: 26px; }
+    .ti-auto.on { background: var(--c-accent-light); color: var(--c-accent); border: 1px solid var(--c-accent-muted); }
+    .ti-auto.off { background: transparent; color: var(--c-text-muted); border: 1px solid var(--c-border); }
+
+    /* === Поповер бейджа (описание + выключение) === */
+    .ti-popover { position: relative; width: 300px; background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: var(--r-xl); box-shadow: var(--shadow-dropdown); padding: 12px 14px; }
+    .ti-popover h4 { font-family: var(--font-serif); font-size: 14px; font-weight: 700; color: var(--c-text-heading); margin-bottom: 4px; display: flex; align-items: center; gap: 7px; }
+    .ti-popover p { font-size: var(--fs-sm); color: var(--c-text-secondary); line-height: 1.45; }
+    .ti-popover .ti-pop-actions { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--c-divider); }
+    .ti-pop-danger { display: flex; align-items: center; gap: 7px; width: 100%; border: none; background: none; cursor: pointer; font-family: var(--font-sans); font-size: var(--fs-base); font-weight: 600; color: var(--c-danger-text); padding: 7px 8px; border-radius: var(--r-md); text-align: left; }
+    .ti-pop-danger:hover { background: var(--c-danger-bg); }
+
+    /* === Модалка подтверждения (MODAL_W.confirm = 380) === */
+    .modal-veil { background: var(--c-overlay); border-radius: var(--r-lg); padding: 40px 20px; display: flex; align-items: center; justify-content: center; }
+    .modal { width: 380px; max-width: 100%; background: var(--c-bg-card); border-radius: var(--r-modal); box-shadow: var(--shadow-modal); padding: 18px 20px; }
+    .modal h3 { font-family: var(--font-serif); font-size: 17px; font-weight: 700; color: var(--c-text-heading); margin-bottom: 8px; }
+    .modal p { font-size: var(--fs-base); color: var(--c-text-secondary); line-height: 1.5; }
+    .modal-actions { display: flex; gap: 8px; margin-top: 16px; justify-content: flex-end; }
+
+    /* === Кнопки (ui/Button) === */
+    .btn { display: inline-flex; align-items: center; justify-content: center; gap: 7px; border: none; cursor: pointer; font-family: var(--font-sans); font-weight: 600; border-radius: var(--r-lg); min-height: 40px; padding: 9px 16px; font-size: var(--fs-base); }
+    .btn-primary { background: var(--c-accent); color: var(--c-on-accent); box-shadow: var(--shadow-button); font-weight: 700; }
+    .btn-secondary { background: var(--c-bg-white); color: var(--c-text-heading); border: 1px solid var(--c-border); }
+    .btn-ghost { background: transparent; color: var(--c-text-secondary); }
+    .btn-ghost:hover { background: var(--c-bg-selected); }
+    .btn.sm { min-height: 34px; padding: 6px 12px; font-size: var(--fs-sm); border-radius: var(--r-lg); }
+
+    /* === Список чатов (сайдбар) === */
+    .sidebar { width: 308px; background: var(--c-bg-main); border: 1px solid var(--c-border); border-radius: var(--r-lg); padding: 8px; display: flex; flex-direction: column; }
+    .chat-card { position: relative; background: var(--c-bg-white); border: 1px solid var(--c-border-light); border-radius: var(--r-xl); padding: 11px 12px; margin-bottom: 5px; box-shadow: var(--shadow-card); display: flex; flex-direction: column; gap: 3px; cursor: pointer; }
+    .chat-card.active { background: var(--c-accent-light); border-color: var(--c-accent); box-shadow: var(--shadow-button); }
+    .chat-card.active::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--c-accent); border-radius: 4px 0 0 4px; }
+    .chat-card.child { margin-left: 22px; }
+    .chat-row1 { display: flex; align-items: center; gap: 6px; min-width: 0; }
+    .chat-status { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .chat-name { font-size: 13.5px; font-weight: 600; color: var(--c-text-heading); flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .chat-preview { font-size: var(--fs-sm); color: var(--c-text-muted); line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    /* Маркер режима в строке названия (по образцу WF-бейджа в ChatCard) */
+    .ti-marker { display: inline-flex; align-items: center; gap: 4px; height: 17px; padding: 0 6px; border-radius: var(--r-max); font-size: 10px; font-weight: 600; line-height: 1; flex-shrink: 0; white-space: nowrap; }
+    .ti-marker.tone-work { background: var(--c-accent-light); color: var(--c-accent); border: 1px solid var(--c-accent-muted); }
+    .ti-marker.tone-wait { background: var(--c-warning-bg); color: var(--c-warning-text); border: 1px solid var(--c-warning); }
+    .ti-marker.tone-idle { background: var(--c-bg-selected); color: var(--c-text-muted); border: 1px solid transparent; }
+  </style>
+</head>
+<body>
+<div class="mockup-container">
+  <div class="mockup-header">
+    <div>
+      <h1>Режим «Командная реализация»</h1>
+      <p>Э0: бейдж режима в композере со стадиями и чипом «Авто», маркер в списке чатов, карточка плана, карточки эскалации, сводка волны и ожидание вводной. Обе темы, десктоп и мобила. Тексты — из раздела «Тексты» плана <code>docs/architecture/team-implement-mode.md</code>.</p>
+    </div>
+    <div class="theme-toggle"><button id="themeBtn">Тёмная тема</button></div>
+  </div>
+<style>
+  /* === Карточка плана (по образцу plan_review, но accent-ось) === */
+  .plan-card { border: 1px solid var(--c-accent-muted); border-left: 4px solid var(--c-accent); border-radius: var(--r-xl); padding: 14px 16px; background: var(--c-bg-card); box-shadow: var(--shadow-card); }
+  .plan-head { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 4px; }
+  .plan-icon { width: 28px; height: 28px; border-radius: var(--r-md); background: var(--c-accent); flex-shrink: 0; display: flex; align-items: center; justify-content: center; color: var(--c-on-accent); }
+  .plan-title { font-family: var(--font-serif); font-size: 15px; font-weight: 700; color: var(--c-text-heading); line-height: 1.2; }
+  .plan-sub { font-size: var(--fs-sm); color: var(--c-text-secondary); margin-top: 2px; }
+  .plan-badge { flex-shrink: 0; background: var(--c-accent-light); color: var(--c-accent); border-radius: var(--r-sm); padding: 2px 8px; font-size: var(--fs-xs); font-weight: 600; white-space: nowrap; }
+  .plan-body { margin: 12px 0; background: var(--c-bg-white); border: 1px solid var(--c-border); border-radius: var(--r-lg); padding: 6px 10px; max-height: 330px; overflow: auto; position: relative; }
+  .wave-label { font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--c-text-muted); padding: 8px 2px 4px; display: flex; align-items: center; gap: 6px; }
+  .wave-label .wave-line { flex: 1; height: 1px; background: var(--c-border-light); }
+  .subtask { padding: 7px 2px; border-top: 1px solid var(--c-border-light); }
+  .subtask:first-of-type { border-top: none; }
+  .subtask-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .subtask-name { font-size: var(--fs-base); font-weight: 600; color: var(--c-text-heading); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  .subtask-files { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--c-text-muted); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .subtask-why { font-size: var(--fs-xs); color: var(--c-text-muted); margin-top: 3px; line-height: 1.4; }
+  /* Кликабельный чип исполнителя (цвет — данные персоны) */
+  .exec-chip { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 7px; border-radius: var(--r-max); border: 1px solid var(--c-border); background: var(--c-bg-card); cursor: pointer; font-size: var(--fs-xs); font-weight: 600; color: var(--c-text-heading); font-family: var(--font-sans); flex-shrink: 0; transition: border-color .12s, background .12s; }
+  .exec-chip:hover { border-color: var(--c-accent); }
+  .exec-chip .p-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .exec-chip .p-chev { color: var(--c-text-muted); display: flex; }
+  .plan-note { display: flex; align-items: flex-start; gap: 6px; font-size: var(--fs-xs); color: var(--c-text-muted); margin-top: 8px; line-height: 1.45; }
+  .plan-actions { display: flex; gap: 8px; }
+  .plan-actions .btn-primary { flex: 1; }
+
+  /* Поповер выбора исполнителя */
+  .exec-popover { width: 252px; background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: var(--r-xl); box-shadow: var(--shadow-dropdown); padding: 6px; }
+  .exec-option { display: flex; align-items: center; gap: 8px; width: 100%; border: none; background: none; cursor: pointer; padding: 7px 9px; border-radius: var(--r-md); font-family: var(--font-sans); font-size: var(--fs-base); color: var(--c-text-heading); text-align: left; }
+  .exec-option:hover { background: var(--c-bg-selected); }
+  .exec-option .p-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+  .exec-option .p-role { font-size: var(--fs-xs); color: var(--c-text-muted); margin-left: auto; flex-shrink: 0; }
+  .exec-option.current { background: var(--c-accent-light); }
+  .exec-option.current .p-role { color: var(--c-accent); }
+
+  /* Решённые состояния карточки плана */
+  .plan-resolved { border-radius: var(--r-xl); padding: 11px 14px; display: flex; flex-direction: column; gap: 6px; }
+  .plan-resolved.ok { border: 1px solid var(--c-success-bg); border-left: 3px solid var(--c-success); background: var(--c-success-bg); }
+  .plan-resolved.ok .plan-resolved-line { color: var(--c-success-text); }
+  .plan-resolved.cancelled { border: 1px solid var(--c-border); border-left: 3px solid var(--c-text-muted); background: var(--c-bg-white); }
+  .plan-resolved.cancelled .plan-resolved-line { color: var(--c-text-secondary); }
+  .plan-resolved-line { display: flex; align-items: center; gap: 8px; font-size: var(--fs-base); font-weight: 600; }
+  .plan-disclosure { display: inline-flex; align-items: center; gap: 5px; background: none; border: none; cursor: pointer; padding: 0; font-size: var(--fs-sm); font-weight: 600; color: var(--c-text-secondary); font-family: var(--font-sans); }
+
+  /* === Карточка эскалации (единый шаблон, warning-ось) === */
+  .esc-card { border: 1px solid var(--c-border); border-left: 4px solid var(--c-warning); border-radius: var(--r-xl); padding: 12px 14px; background: var(--c-bg-card); box-shadow: var(--shadow-card); display: flex; flex-direction: column; gap: 8px; }
+  .esc-head { display: flex; align-items: flex-start; gap: 9px; }
+  .esc-icon { width: 26px; height: 26px; border-radius: var(--r-md); background: var(--c-warning-bg); color: var(--c-warning-text); flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
+  .esc-title { font-size: var(--fs-base); font-weight: 700; color: var(--c-text-heading); line-height: 1.3; }
+  .esc-body { font-size: var(--fs-sm); color: var(--c-text-secondary); line-height: 1.45; }
+  .esc-body code { font-family: var(--font-mono); font-size: var(--fs-xs); background: var(--c-bg-selected); padding: 1px 5px; border-radius: var(--r-sm); }
+  .esc-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .esc-actions .btn-primary { flex: 1; min-width: 130px; }
+  .esc-reply { border-top: 1px dashed var(--c-divider); padding-top: 8px; display: flex; flex-direction: column; gap: 8px; }
+  .esc-reply textarea { width: 100%; border-radius: var(--r-lg); border: 1px solid var(--c-border); background: var(--c-bg-white); padding: 8px 10px; font-size: var(--fs-base); color: var(--c-text-heading); font-family: var(--font-sans); resize: none; outline: none; }
+  .esc-reply textarea:focus { border-color: var(--c-accent); box-shadow: var(--shadow-focus); }
+
+  /* === Сводка волны === */
+  .wave-summary-auto { display: flex; align-items: center; gap: 8px; padding: 8px 12px; font-size: var(--fs-sm); color: var(--c-text-secondary); }
+  .wave-summary-auto .chk { color: var(--c-success); display: flex; }
+  .wave-card { border: 1px solid var(--c-border); border-left: 4px solid var(--c-success); border-radius: var(--r-xl); padding: 12px 14px; background: var(--c-bg-card); box-shadow: var(--shadow-card); display: flex; flex-direction: column; gap: 8px; }
+
+  /* === Итог итерации === */
+  .final-card { border-radius: var(--r-xl); padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; box-shadow: var(--shadow-card); }
+  .final-card.ok { border: 1px solid var(--c-success-bg); border-left: 4px solid var(--c-success); background: var(--c-success-bg); }
+  .final-card.bad { border: 1px solid var(--c-warning-bg); border-left: 4px solid var(--c-warning); background: var(--c-warning-bg); }
+  .final-line { display: flex; align-items: flex-start; gap: 9px; font-size: var(--fs-base); font-weight: 600; line-height: 1.4; }
+  .final-card.ok .final-line { color: var(--c-success-text); }
+  .final-card.bad .final-line { color: var(--c-warning-text); }
+  .final-hint { font-size: var(--fs-sm); color: var(--c-text-secondary); line-height: 1.45; }
+
+  /* === Push-уведомление === */
+  .push { width: 300px; background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: var(--r-xxl); box-shadow: var(--shadow-dropdown); padding: 12px 14px; display: flex; gap: 10px; align-items: flex-start; }
+  .push-icon { width: 30px; height: 30px; border-radius: var(--r-md); background: var(--c-accent); color: var(--c-on-accent); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .push-title { font-size: var(--fs-base); font-weight: 700; color: var(--c-text-heading); }
+  .push-body { font-size: var(--fs-sm); color: var(--c-text-secondary); margin-top: 1px; line-height: 1.4; }
+  .push-time { margin-left: auto; font-size: var(--fs-xs); color: var(--c-text-muted); flex-shrink: 0; }
+
+  /* === TeamDrawer (карточки механик) === */
+  .drawer { background: var(--c-bg-panel); border: 1px solid var(--c-border); border-radius: 16px 16px 6px 6px; box-shadow: var(--shadow-sheet); overflow: hidden; }
+  .drawer-head { display: flex; align-items: center; padding: 12px 16px 4px; }
+  .drawer-head h3 { font-family: var(--font-serif); font-size: 15px; font-weight: 700; color: var(--c-text-heading); }
+  .drawer-head span { margin-left: 10px; color: var(--c-text-muted); font-size: var(--fs-xs); }
+  .drawer-grid { padding: 8px 16px 2px; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px 14px; }
+  .drawer-group-label { font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--c-text-muted); padding-left: 2px; }
+  .mech-card { position: relative; display: flex; gap: 9px; align-items: flex-start; background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: var(--r-xl); padding: 8px 10px; cursor: pointer; text-align: left; font-family: var(--font-sans); color: var(--c-text-primary); width: 100%; transition: border-color .12s, box-shadow .12s; }
+  .mech-card:hover { border-color: var(--c-accent); }
+  .mech-card.selected { background: var(--c-accent-light); border-color: var(--c-accent); box-shadow: var(--shadow-focus); }
+  .mech-card .mc-icon { flex-shrink: 0; margin-top: 1px; display: flex; color: var(--c-text-secondary); }
+  .mech-card.selected .mc-icon { color: var(--c-accent); }
+  .mech-card .mc-name { display: block; font-weight: 700; font-size: var(--fs-sm); color: var(--c-text-heading); line-height: 1.25; padding-right: 20px; }
+  .mech-card .mc-desc { display: block; font-size: 10.5px; color: var(--c-text-secondary); margin-top: 2px; line-height: 1.3; }
+  .mech-card .mc-cost { position: absolute; top: 8px; right: 9px; font-size: 9.5px; color: var(--c-text-muted); letter-spacing: .05em; }
+  .mech-card .mc-new { position: absolute; top: 7px; right: 8px; font-size: 9px; font-weight: 700; color: var(--c-accent); border: 1px solid var(--c-accent-muted); padding: 1px 5px; border-radius: var(--r-max); background: var(--c-accent-light); }
+  .drawer-settings { padding: 10px 16px 14px; border-top: 1px dashed var(--c-divider); margin-top: 8px; display: flex; flex-direction: column; gap: 10px; }
+  .set-row { display: flex; align-items: flex-start; gap: 8px; flex-wrap: wrap; }
+  .set-label { font-size: var(--fs-xs); font-weight: 600; color: var(--c-text-secondary); padding-top: 4px; }
+  .set-hint { font-size: var(--fs-xs); color: var(--c-text-muted); line-height: 1.4; }
+  .set-hint.warn { color: var(--c-warning-text); }
+  .p-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--c-border); background: var(--c-bg-card); border-radius: var(--r-max); padding: 3px 10px; cursor: pointer; font-size: 11.5px; color: var(--c-text-primary); font-family: var(--font-sans); }
+  .p-chip.on { border-color: var(--c-accent); background: var(--c-accent-light); }
+  .p-chip .p-dot { width: 8px; height: 8px; border-radius: 50%; }
+  /* Тумблер (ui/Toggle): дорожка track, бегунок bgWhite */
+  .toggle { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
+  .toggle .t-track { width: 34px; height: 20px; border-radius: var(--r-max); background: var(--c-track); position: relative; transition: background .15s; flex-shrink: 0; }
+  .toggle .t-thumb { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--c-bg-white); box-shadow: var(--shadow-thumb); transition: left .15s; }
+  .toggle.on .t-track { background: var(--c-accent); }
+  .toggle.on .t-thumb { left: 16px; }
+  .toggle .t-label { font-size: var(--fs-sm); color: var(--c-text-primary); font-weight: 600; }
+
+  /* Мобильный фрейм */
+  .mob-frame { width: 390px; max-width: 100%; border: 1px solid var(--c-border); border-radius: 24px; overflow: hidden; background: var(--c-bg-main); box-shadow: var(--shadow-island); display: flex; flex-direction: column; }
+  .mob-head { padding: 10px 14px; background: var(--c-bg-inset); border-bottom: 1px solid var(--c-border); font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--c-text-muted); }
+  .mob-body { padding: 10px; display: flex; flex-direction: column; gap: 10px; }
+</style>
+
+<!-- ======================= 1. БЕЙДЖ РЕЖИМА В КОМПОЗЕРЕ ======================= -->
+<div class="mockup-section">
+  <div class="section-header">
+    <span class="section-title">1 · Бейдж режима в композере</span>
+    <span class="section-subtitle">ti-badge: pill 24/26 · три тона по смыслу стадии · чип «Авто» рядом</span>
+  </div>
+  <div class="section-body">
+    <div class="frames">
+
+      <div class="frame" style="flex:1; min-width:340px;">
+        <div class="frame-caption"><span><b>Стадии работы</b> — тон accent (команда в деле)</span></div>
+        <div class="composer">
+          <div class="composer-badges">
+            <button class="ti-badge tone-work" title="Чат работает как штаб: задачи ставятся исполнителям, их чаты видны под этим в списке. Напишите, что ещё нужно сделать — команда возьмёт в работу">
+              <svg class="ic" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+              Командная реализация · планирование
+              <span class="ti-dot"></span>
+            </button>
+            <button class="ti-auto on" title="Авто-волны — не спрашивать после каждой волны. План согласуете один раз, дальше команда работает сама, пока хватает бюджета">
+              <svg class="ic" width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+              Авто
+            </button>
+          </div>
+          <div class="composer-body">
+            <div class="composer-input">Что реализовать командой?…</div>
+            <div class="composer-send"><svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg></div>
+          </div>
+        </div>
+        <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;">
+          <button class="ti-badge tone-work"><svg class="ic" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>Командная реализация · волна 2 из 3<span class="ti-dot"></span></button>
+          <button class="ti-badge tone-work"><svg class="ic" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>Командная реализация · проверка<span class="ti-dot"></span></button>
+        </div>
+      </div>
+
+      <div class="frame" style="flex:1; min-width:340px;">
+        <div class="frame-caption"><span><b>Стадии ожидания</b> — «ждёт человека» warning · «ждёт задачу» muted</span></div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button class="ti-badge tone-wait"><svg class="ic" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>Командная реализация · ждёт подтверждения<span class="ti-dot"></span></button>
+          <button class="ti-badge tone-wait"><svg class="ic" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>Командная реализация · нужно решение<span class="ti-dot"></span></button>
+          <button class="ti-badge tone-idle"><svg class="ic" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>Командная реализация · ждёт задачу<span class="ti-dot"></span></button>
+        </div>
+        <div class="note" style="margin-top:10px;">
+          <b>Три тона — по тому, кто должен действовать:</b> accent «работает» (планирование / волна N из M / проверка), warning «ждёт человека» (ждёт подтверждения / нужно решение — единственные стадии, где практика стоит без пользователя), muted «ждёт задачу» (итерация закрыта, режим жив). Пульс точки — только у «живых» стадий, у «ждёт задачу» точка статичная.
+        </div>
+        <div style="display:flex; gap:8px; margin-top:10px; align-items:center; flex-wrap:wrap;">
+          <span style="font-size:var(--fs-xs); color:var(--c-text-muted); font-family:var(--font-mono);">чип «Авто»:</span>
+          <button class="ti-auto on"><svg class="ic" width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>Авто</button>
+          <button class="ti-auto off"><svg class="ic" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>Авто</button>
+          <span style="font-size:var(--fs-xs); color:var(--c-text-muted);">вкл / выкл — кликом, тултип: «Авто-волны — не спрашивать после каждой волны. План согласуете один раз, дальше команда работает сама, пока хватает бюджета»</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="frames" style="margin-top:16px;">
+      <div class="frame">
+        <div class="frame-caption"><span><b>Клик по бейджу</b> → поповер: что за режим + выключение</span></div>
+        <div class="ti-popover">
+          <h4><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--c-accent)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>Командная реализация</h4>
+          <p>Чат работает как штаб: задачи ставятся исполнителям, их чаты видны под этим в списке. Напишите, что ещё нужно сделать — команда возьмёт в работу.</p>
+          <div class="ti-pop-actions">
+            <button class="ti-pop-danger">
+              <svg class="ic" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>
+              Выключить режим
+            </button>
+          </div>
+        </div>
+      </div>
+      <div class="frame" style="flex:1; min-width:420px;">
+        <div class="frame-caption"><span><b>Выключение — с подтверждением</b> (Modal, MODAL_W.confirm = 380)</span></div>
+        <div class="modal-veil">
+          <div class="modal">
+            <h3>Выключить командную реализацию?</h3>
+            <p>Текущие исполнители доработают свои задачи, новые волны не стартуют. Чат станет обычным разговором — включить режим обратно можно в любой момент.</p>
+            <div class="modal-actions">
+              <button class="btn btn-ghost sm">Оставить</button>
+              <button class="btn btn-primary sm">Выключить</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="note">
+      <b>Спека для Киры.</b> Бейдж — по образцу <code>loopBadge</code> в <code>Composer.tsx</code> (pill, высота 24, на мобиле 26, <code>FS.xs</code>, weight 600), живёт в той же строке бейджей над полем. Клик по бейджу открывает поповер (не тултип): описание режима + «Выключить режим»; выключение — через <code>Modal</code> с подтверждением. Чип «Авто» — отдельный контрол рядом, переключается одним кликом (PUT по образцу <code>/chats/{id}/loop</code>), подтверждения не требует. Иконка бейджа — <code>Users</code> 11px (lucide, <code>ICON_SIZE.xs</code>).
+    </div>
+  </div>
+</div>
+
+<!-- ======================= 2. МАРКЕР В СПИСКЕ ЧАТОВ ======================= -->
+<div class="mockup-section">
+  <div class="section-header">
+    <span class="section-title">2 · Маркер режима в списке чатов</span>
+    <span class="section-subtitle">ti-marker по образцу WF-бейджа в ChatCard · дети-исполнители под штабом</span>
+  </div>
+  <div class="section-body">
+    <div class="frames">
+      <div class="frame">
+        <div class="frame-caption"><span><b>Штаб в работе</b> (активный чат) + дети</span></div>
+        <div class="sidebar">
+          <div class="chat-card active">
+            <div class="chat-row1">
+              <span class="chat-status" style="background:var(--c-accent);"></span>
+              <span class="chat-name">Экспорт трат в CSV</span>
+              <span class="ti-marker tone-work" title="Командная реализация · волна 2 из 3">
+                <svg class="ic" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                волна 2/3
+              </span>
+            </div>
+            <div class="chat-preview">Волна 1 закрыта: 3 из 3. Запускаю волну 2</div>
+          </div>
+          <div class="chat-card child">
+            <div class="chat-row1">
+              <span class="chat-status" style="background:var(--c-accent);"></span>
+              <svg class="ic" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--c-text-muted)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+              <span class="chat-name">Ревью формата и правки</span>
+            </div>
+            <div class="chat-preview">Глеб · работает</div>
+          </div>
+          <div class="chat-card child">
+            <div class="chat-row1">
+              <span class="chat-status" style="background:var(--c-text-muted);"></span>
+              <svg class="ic" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--c-text-muted)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+              <span class="chat-name">Итоговая проверка: сборка + тесты</span>
+            </div>
+            <div class="chat-preview">Глеб · в очереди волны 2</div>
+          </div>
+          <div class="chat-card">
+            <div class="chat-row1">
+              <span class="chat-status" style="background:var(--c-text-muted);"></span>
+              <span class="chat-name">Разбор трат за июль</span>
+            </div>
+            <div class="chat-preview">Обычный чат — без маркера</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="frame">
+        <div class="frame-caption"><span><b>Ждёт человека</b> — warning, заметен в списке первым делом</span></div>
+        <div class="sidebar">
+          <div class="chat-card">
+            <div class="chat-row1">
+              <span class="chat-status" style="background:var(--c-text-muted);"></span>
+              <span class="chat-name">Экспорт трат в CSV</span>
+              <span class="ti-marker tone-wait" title="Командная реализация · нужно решение">
+                <svg class="ic" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                решение
+              </span>
+            </div>
+            <div class="chat-preview">Исполнитель застрял: нет доступа к продовой базе трат…</div>
+          </div>
+          <div class="chat-card">
+            <div class="chat-row1">
+              <span class="chat-status" style="background:var(--c-text-muted);"></span>
+              <span class="chat-name">Панель уведомлений</span>
+              <span class="ti-marker tone-wait" title="Командная реализация · ждёт подтверждения">
+                <svg class="ic" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                согласование
+              </span>
+            </div>
+            <div class="chat-preview">План командной реализации · 4 под-задачи · 2 волны</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="frame">
+        <div class="frame-caption"><span><b>Ждёт задачу</b> — muted, не кричит, но видно, что режим жив</span></div>
+        <div class="sidebar">
+          <div class="chat-card">
+            <div class="chat-row1">
+              <span class="chat-status" style="background:var(--c-text-muted);"></span>
+              <span class="chat-name">Экспорт трат в CSV</span>
+              <span class="ti-marker tone-idle" title="Командная реализация · ждёт задачу">
+                <svg class="ic" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                ожидает
+              </span>
+            </div>
+            <div class="chat-preview">Итерация завершена: 5 задач, 3 исполнителя, проверка пройдена</div>
+          </div>
+        </div>
+        <div class="note">
+          <b>Короткие формы стадий для узкой строки:</b> планирование → «планирует», ждёт подтверждения → «согласование», волна N из M → «волна 2/3», нужно решение → «решение», проверка → «проверка», ждёт задачу → «ожидает». Полные формы — в тултипе и в бейдже композера. Тултип маркера = полная строка бейджа.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ======================= 3. КАРТОЧКА ПЛАНА В ЛЕНТЕ ======================= -->
+<div class="mockup-section">
+  <div class="section-header">
+    <span class="section-title">3 · Карточка плана в ленте</span>
+    <span class="section-subtitle">образец — plan_review (ExitPlanMode), но accent-ось · чип исполнителя меняется на месте</span>
+  </div>
+  <div class="section-body">
+    <div class="frames">
+
+      <div class="frame" style="flex:1.2; min-width:480px;">
+        <div class="frame-caption"><span><b>На подтверждении</b> — авто-волны включены (примечание под кнопками)</span></div>
+        <div class="chat-feed">
+          <div class="plan-card">
+            <div class="plan-head">
+              <span class="plan-icon">
+                <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+              </span>
+              <div style="flex:1; min-width:0;">
+                <div class="plan-title">План командной реализации</div>
+                <div class="plan-sub">5 под-задач · 2 волны · 3 исполнителя</div>
+              </div>
+              <span class="plan-badge">на подтверждении</span>
+            </div>
+            <div class="plan-body">
+              <div class="wave-label">Волна 1 · параллельно <span class="wave-line"></span></div>
+              <div class="subtask">
+                <div class="subtask-row">
+                  <span class="subtask-name">Модель экспорта и эндпоинт GET /api/spend/export</span>
+                  <button class="exec-chip" title="Сменить исполнителя">
+                    <span class="p-dot" style="background:var(--persona-blue);"></span>Денис
+                    <span class="p-chev"><svg class="ic" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></span>
+                  </button>
+                </div>
+                <div class="subtask-files">backend/Controllers/SpendController.cs · Services/Spend/SpendStore.cs</div>
+                <div class="subtask-why">SpendStore и контроллеры трат — его зона</div>
+              </div>
+              <div class="subtask">
+                <div class="subtask-row">
+                  <span class="subtask-name">Кнопка «Выгрузить CSV» и диалог на экране трат</span>
+                  <button class="exec-chip" title="Сменить исполнителя">
+                    <span class="p-dot" style="background:var(--persona-orange);"></span>Кира
+                    <span class="p-chev"><svg class="ic" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></span>
+                  </button>
+                </div>
+                <div class="subtask-files">frontend/src/features/spend/SpendScreen.tsx · spend/exportCsv.ts</div>
+                <div class="subtask-why">Экран трат делала она</div>
+              </div>
+              <div class="subtask">
+                <div class="subtask-row">
+                  <span class="subtask-name">Тесты формата CSV и эндпоинта</span>
+                  <button class="exec-chip" title="Сменить исполнителя">
+                    <span class="p-dot" style="background:var(--persona-blue);"></span>Денис
+                    <span class="p-chev"><svg class="ic" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></span>
+                  </button>
+                </div>
+                <div class="subtask-files">backend/ClaudeHomeServer.Tests/SpendExportTests.cs</div>
+                <div class="subtask-why">Продолжение его же кода — без передачи контекста</div>
+              </div>
+              <div class="wave-label">Волна 2 · после первой <span class="wave-line"></span></div>
+              <div class="subtask">
+                <div class="subtask-row">
+                  <span class="subtask-name">Ревью формата и правки по замечаниям</span>
+                  <button class="exec-chip" title="Сменить исполнителя">
+                    <span class="p-dot" style="background:var(--persona-green);"></span>Глеб
+                    <span class="p-chev"><svg class="ic" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></span>
+                  </button>
+                </div>
+                <div class="subtask-files">по диффу волны 1</div>
+                <div class="subtask-why">Ревьюер команды по умолчанию</div>
+              </div>
+              <div class="subtask">
+                <div class="subtask-row">
+                  <span class="subtask-name">Итоговая проверка: сборка + тесты</span>
+                  <button class="exec-chip" title="Сменить исполнителя">
+                    <span class="p-dot" style="background:var(--persona-green);"></span>Глеб
+                    <span class="p-chev"><svg class="ic" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></span>
+                  </button>
+                </div>
+                <div class="subtask-files">весь проект</div>
+                <div class="subtask-why">Финальный прогон перед отчётом</div>
+              </div>
+            </div>
+            <div class="plan-actions">
+              <button class="btn btn-primary">
+                <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+                Запустить
+              </button>
+              <button class="btn btn-secondary">Изменить план</button>
+              <button class="btn btn-ghost">Отменить</button>
+            </div>
+            <div class="plan-note">
+              <svg class="ic" width="11" height="11" viewBox="0 0 24 24" fill="currentColor" style="margin-top:1px;"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+              После запуска волны пойдут одна за другой — вмешаемся только при проблеме или исчерпании бюджета
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="frame">
+        <div class="frame-caption"><span><b>Смена исполнителя</b> — поповер у чипа, правка на месте</span></div>
+        <div class="exec-popover">
+          <button class="exec-option"><span class="p-dot" style="background:var(--persona-indigo);"></span>Александр<span class="p-role">Тимлид</span></button>
+          <button class="exec-option current"><span class="p-dot" style="background:var(--persona-blue);"></span>Денис<span class="p-role">Backend</span></button>
+          <button class="exec-option"><span class="p-dot" style="background:var(--persona-orange);"></span>Кира<span class="p-role">Frontend</span></button>
+          <button class="exec-option"><span class="p-dot" style="background:var(--persona-green);"></span>Глеб<span class="p-role">Ревьюер</span></button>
+          <button class="exec-option"><span class="p-dot" style="background:var(--persona-purple);"></span>Вера<span class="p-role">QA</span></button>
+          <button class="exec-option"><span class="p-dot" style="background:var(--persona-khaki);"></span>Марк<span class="p-role">DevOps</span></button>
+        </div>
+        <div class="note">
+          В списке — <b>вся команда проекта</b> (или явно выбранный состав). Текущий исполнитель подсвечен <code>C.accentLight</code>. После выбора чип обновляется на месте, карточка плана не пересобирается. Обоснование серым остаётся от планировщика — правке подлежит только исполнитель.
+        </div>
+        <div class="note" style="margin-top:10px;">
+          <b>Авто выключено:</b> примечание под кнопками не показываем — после каждой волны будет карточка «Запустить волну 2?» (см. секцию 5).
+        </div>
+      </div>
+    </div>
+
+    <div class="frames" style="margin-top:16px;">
+      <div class="frame" style="flex:1; min-width:380px;">
+        <div class="frame-caption"><span><b>Решённые состояния</b> — запущен / отменён (как у plan_review)</span></div>
+        <div class="chat-feed">
+          <div class="plan-resolved ok">
+            <div class="plan-resolved-line">
+              <svg class="ic" width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="8" fill="var(--c-success)"/><path d="M4.5 8.2l2.2 2.2 4.8-4.8" stroke="var(--c-on-accent)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              План запущен — идёт волна 1 из 2
+            </div>
+            <button class="plan-disclosure"><span style="display:inline-block;">▸</span> Показать план</button>
+          </div>
+          <div class="plan-resolved cancelled">
+            <div class="plan-resolved-line">
+              <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--c-text-muted)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+              План отменён
+            </div>
+            <button class="plan-disclosure"><span style="display:inline-block;">▸</span> Показать план</button>
+          </div>
+        </div>
+        <div class="note">Решённая карточка остаётся в ленте референсом: тело плана уходит под disclosure «Показать план», как в <code>CollapsedPlanBody</code>.</div>
+      </div>
+
+      <div class="frame" style="flex:1.4; min-width:480px;">
+        <div class="frame-caption"><span><b>Краевые случаи</b> — длинные названия, много файлов, 12 под-задач</span></div>
+        <div class="chat-feed">
+          <div class="plan-card">
+            <div class="plan-head">
+              <span class="plan-icon"><svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>
+              <div style="flex:1; min-width:0;">
+                <div class="plan-title">План командной реализации</div>
+                <div class="plan-sub">12 под-задач · 4 волны · 5 исполнителей</div>
+              </div>
+              <span class="plan-badge">на подтверждении</span>
+            </div>
+            <div class="plan-body" style="max-height:220px;">
+              <div class="wave-label">Волна 1 · параллельно <span class="wave-line"></span></div>
+              <div class="subtask">
+                <div class="subtask-row">
+                  <span class="subtask-name" title="Перенести резолв провайдера модели на двухуровневую схему с per-user слотами поверх глобальных">Перенести резолв провайдера модели на двухуровневую схему с per-user слотами поверх глобальных</span>
+                  <button class="exec-chip"><span class="p-dot" style="background:var(--persona-blue);"></span>Денис<span class="p-chev"><svg class="ic" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></span></button>
+                </div>
+                <div class="subtask-files" title="Services/Llm/LlmProviderRegistry.cs · Services/Llm/UserModelTierResolver.cs · Services/Llm/ModelAssignmentResolver.cs +4">Services/Llm/LlmProviderRegistry.cs · Services/Llm/UserModelTierResolver.cs +4</div>
+                <div class="subtask-why">Владелец слоя LLM-провайдеров</div>
+              </div>
+              <div class="subtask">
+                <div class="subtask-row">
+                  <span class="subtask-name">Диалог «Поставщики моделей»: уровень личных слотов</span>
+                  <button class="exec-chip"><span class="p-dot" style="background:var(--persona-orange);"></span>Кира<span class="p-chev"><svg class="ic" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></span></button>
+                </div>
+                <div class="subtask-files">frontend/src/features/models/ModelProvidersDialog.tsx</div>
+                <div class="subtask-why">Диалог делала она, уровень 2 тоже её</div>
+              </div>
+              <div class="wave-label">Волна 2 · после первой <span class="wave-line"></span></div>
+              <div class="subtask">
+                <div class="subtask-row">
+                  <span class="subtask-name">Тесты резолвера по владельцу действия</span>
+                  <button class="exec-chip"><span class="p-dot" style="background:var(--persona-blue);"></span>Денис<span class="p-chev"><svg class="ic" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></span></button>
+                </div>
+                <div class="subtask-files">backend/ClaudeHomeServer.Tests/UserModelTierResolverTests.cs</div>
+                <div class="subtask-why">Продолжение его же кода</div>
+              </div>
+              <div style="padding:6px 2px; font-size:var(--fs-xs); color:var(--c-text-muted); text-align:center;">… ещё 8 под-задач (скролл, fade снизу как в plan_review) …</div>
+            </div>
+            <div class="plan-actions">
+              <button class="btn btn-primary"><svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 3 20 12 6 21 6 3"/></svg>Запустить</button>
+              <button class="btn btn-secondary">Изменить план</button>
+              <button class="btn btn-ghost">Отменить</button>
+            </div>
+          </div>
+        </div>
+        <div class="note">Название обрезается ellipsis'ом (полный текст — в <code>title</code>), чип исполнителя не сжимается. Файлы: первые два пути + «+N», полный список — в <code>title</code>. Больше ~8 строк — скролл тела с fade, как тело плана в <code>PlanReviewView</code>.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ======================= 4. КАРТОЧКИ ЭСКАЛАЦИИ ======================= -->
+<div class="mockup-section">
+  <div class="section-header">
+    <span class="section-title">4 · Карточки эскалации</span>
+    <span class="section-subtitle">единый шаблон: warning borderLeft · причина + суть одной строкой + 2–3 кнопки · тексты из таблицы плана</span>
+  </div>
+  <div class="section-body">
+    <div class="frames">
+
+      <div class="frame" style="flex:1; min-width:400px;">
+        <div class="frame-caption"><span><b>1 · Исполнитель застрял</b> (блокер)</span></div>
+        <div class="esc-card">
+          <div class="esc-head">
+            <span class="esc-icon"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg></span>
+            <div class="esc-title">Исполнитель застрял</div>
+          </div>
+          <div class="esc-body">Кира: нет доступа к продовой базе трат — выгрузку проверить не на чём. Задача «Кнопка „Выгрузить CSV“» остановлена.</div>
+          <div class="esc-actions">
+            <button class="btn btn-primary sm">Ответить</button>
+            <button class="btn btn-secondary sm">Отдать другому</button>
+            <button class="btn btn-ghost sm">Снять задачу</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="frame" style="flex:1; min-width:400px;">
+        <div class="frame-caption"><span><b>1а · «Ответить» раскрывает поле</b> — ответ обычным сообщением</span></div>
+        <div class="esc-card">
+          <div class="esc-head">
+            <span class="esc-icon"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg></span>
+            <div class="esc-title">Исполнитель застрял</div>
+          </div>
+          <div class="esc-body">Кира: нет доступа к продовой базе трат — выгрузку проверить не на чём.</div>
+          <div class="esc-reply">
+            <textarea rows="2" placeholder="Что делать? Ответ уйдёт координатору обычным сообщением"></textarea>
+            <div class="esc-actions">
+              <button class="btn btn-primary sm">Отправить</button>
+              <button class="btn btn-ghost sm">Назад</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="frame" style="flex:1; min-width:400px;">
+        <div class="frame-caption"><span><b>2 · Двойной провал</b></span></div>
+        <div class="esc-card">
+          <div class="esc-head">
+            <span class="esc-icon"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg></span>
+            <div class="esc-title">Задача «Тесты формата CSV» не удалась дважды</div>
+          </div>
+          <div class="esc-body">Тесты падают на кодировке: выгрузка в UTF-8 BOM ломает сравнение эталона. Одна перевыдача уже была.</div>
+          <div class="esc-actions">
+            <button class="btn btn-primary sm">Отдать другому</button>
+            <button class="btn btn-secondary sm">Пропустить</button>
+            <button class="btn btn-ghost sm">Завершить</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="frame" style="flex:1; min-width:400px;">
+        <div class="frame-caption"><span><b>3 · Выход за план</b></span></div>
+        <div class="esc-card">
+          <div class="esc-head">
+            <span class="esc-icon"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg></span>
+            <div class="esc-title">Работа выходит за план</div>
+          </div>
+          <div class="esc-body">Для выгрузки больших периодов нужна правка <code>SpendStore</code> — файла нет во владении задачи, а объём вырос с 2 до 5 файлов.</div>
+          <div class="esc-actions">
+            <button class="btn btn-primary sm">Разрешить</button>
+            <button class="btn btn-secondary sm">Оставить в плане</button>
+            <button class="btn btn-ghost sm">Пересобрать волну</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="frame" style="flex:1; min-width:400px;">
+        <div class="frame-caption"><span><b>4 · Красная проверка</b></span></div>
+        <div class="esc-card">
+          <div class="esc-head">
+            <span class="esc-icon"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg></span>
+            <div class="esc-title">Сборка/тесты не проходят</div>
+          </div>
+          <div class="esc-body">После двух попыток починки: <code>SpendExportTests</code> — 2 падения из 14. Остальное зелёное.</div>
+          <div class="esc-actions">
+            <button class="btn btn-primary sm">Чинить дальше</button>
+            <button class="btn btn-secondary sm">Завершить с замечаниями</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="frame" style="flex:1; min-width:400px;">
+        <div class="frame-caption"><span><b>5 · Продуктовая развилка</b> — вопрос координатора с вариантами</span></div>
+        <div class="esc-card">
+          <div class="esc-head">
+            <span class="esc-icon"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg></span>
+            <div class="esc-title">Нужно ваше решение</div>
+          </div>
+          <div class="esc-body">Оба варианта рабочие. Как выгружать: файлом в загрузки браузера или документом в раздел «Файлы» проекта?</div>
+          <div class="esc-actions">
+            <button class="btn btn-primary sm">Файлом в загрузки</button>
+            <button class="btn btn-secondary sm">Документом в «Файлы»</button>
+            <button class="btn btn-ghost sm">Свой вариант</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="frame" style="flex:1; min-width:400px;">
+        <div class="frame-caption"><span><b>6 · Бюджет исчерпан</b></span></div>
+        <div class="esc-card">
+          <div class="esc-head">
+            <span class="esc-icon"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg></span>
+            <div class="esc-title">Бюджет итерации исчерпан</div>
+          </div>
+          <div class="esc-body">Израсходовано: 12 задач, 4 волны. Две под-задачи волны 4 остались незапущенными.</div>
+          <div class="esc-actions">
+            <button class="btn btn-primary sm">Добавить бюджет</button>
+            <button class="btn btn-secondary sm">Завершить итерацию</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="frame" style="flex:1; min-width:400px;">
+        <div class="frame-caption"><span><b>7 · Волна зависла</b></span></div>
+        <div class="esc-card">
+          <div class="esc-head">
+            <span class="esc-icon"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></span>
+            <div class="esc-title">Волна не двигается</div>
+          </div>
+          <div class="esc-body">Задача «Ревью формата и правки» молчит дольше 15 минут — процесс жив, прогресса нет.</div>
+          <div class="esc-actions">
+            <button class="btn btn-primary sm">Перезапустить</button>
+            <button class="btn btn-secondary sm">Снять</button>
+            <button class="btn btn-ghost sm">Завершить</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="frame" style="flex:1; min-width:400px;">
+        <div class="frame-caption"><span><b>8 · Стоп пользователя</b> — пауза, а не вопрос</span></div>
+        <div class="esc-card" style="border-left-color:var(--c-text-muted);">
+          <div class="esc-head">
+            <span class="esc-icon" style="background:var(--c-bg-selected); color:var(--c-text-secondary);"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg></span>
+            <div class="esc-title">Остановлено по вашей команде</div>
+          </div>
+          <div class="esc-body">Текущие исполнители дорабатывают, новые не стартуют.</div>
+          <div class="esc-actions">
+            <button class="btn btn-primary sm">Возобновить</button>
+            <button class="btn btn-secondary sm">Завершить итерацию</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="frame">
+        <div class="frame-caption"><span><b>Push рядом с карточкой</b> — когда человека нет в чате</span></div>
+        <div class="push">
+          <span class="push-icon"><svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>
+          <div style="min-width:0;">
+            <div class="push-title">Команда ждёт вашего решения</div>
+            <div class="push-body">Исполнитель застрял: нет доступа к продовой базе трат</div>
+          </div>
+          <span class="push-time">сейчас</span>
+        </div>
+        <div class="note">
+          Каждая эскалация = карточка в ленте + системное уведомление + web push. Заголовок push всегда «Команда ждёт вашего решения», тело — суть одной строкой. Стоп пользователя — единственная карточка без warning: это пауза по воле человека, поэтому muted-ось.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ======================= 5. СВОДКА ВОЛНЫ ======================= -->
+<div class="mockup-section">
+  <div class="section-header">
+    <span class="section-title">5 · Сводка волны</span>
+    <span class="section-subtitle">при авто — строка без кнопок · без авто — карточка с решением</span>
+  </div>
+  <div class="section-body">
+    <div class="frames">
+      <div class="frame" style="flex:1; min-width:380px;">
+        <div class="frame-caption"><span><b>Авто включён</b> — информационная строка, следующая волна уже идёт</span></div>
+        <div class="chat-feed">
+          <div class="wave-summary-auto">
+            <span class="chk"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>
+            Волна 1 закрыта: 3 из 3. Запускаю волну 2
+          </div>
+          <div class="wave-summary-auto" style="padding-top:0;">
+            <span class="chk"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>
+            Волна 2 закрыта: 2 из 3 — одна задача перевыдана (причина: конфликт в SpendStore.cs)
+          </div>
+        </div>
+        <div class="note">Никаких карточек «запустить следующую?» при включённом авто — это железное правило приёмки. Перевыдачи и отклонения от идеала видны в той же строке, второй строкой.</div>
+      </div>
+
+      <div class="frame" style="flex:1; min-width:380px;">
+        <div class="frame-caption"><span><b>Авто выключен</b> — карточка с решением после каждой волны</span></div>
+        <div class="chat-feed">
+          <div class="wave-card">
+            <div class="esc-head">
+              <span class="esc-icon" style="background:var(--c-success-bg); color:var(--c-success-text);"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>
+              <div class="esc-title">Волна 1 закрыта: 3 из 3. Запустить волну 2?</div>
+            </div>
+            <div class="esc-body">В волне 2 — две под-задачи: «Ревью формата и правки», «Итоговая проверка: сборка + тесты».</div>
+            <div class="esc-actions">
+              <button class="btn btn-primary sm">Запустить</button>
+              <button class="btn btn-secondary sm">Изменить остаток плана</button>
+              <button class="btn btn-ghost sm">Завершить итерацию</button>
+            </div>
+          </div>
+        </div>
+        <div class="note">Та же конструкция, что карточка эскалации, но на success-оси: волна закрылась штатно, проблемы нет — решение «продолжать или нет».</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ======================= 6. ОЖИДАНИЕ ВВОДНОЙ ======================= -->
+<div class="mockup-section">
+  <div class="section-header">
+    <span class="section-title">6 · Итог итерации и ожидание вводной</span>
+    <span class="section-subtitle">режим не выключается — бейдж переходит в «ждёт задачу»</span>
+  </div>
+  <div class="section-body">
+    <div class="frames">
+      <div class="frame" style="flex:1; min-width:400px;">
+        <div class="frame-caption"><span><b>Проверка зелёная</b></span></div>
+        <div class="chat-feed">
+          <div class="final-card ok">
+            <div class="final-line">
+              <svg class="ic" width="16" height="16" viewBox="0 0 16 16" fill="none" style="margin-top:2px;"><circle cx="8" cy="8" r="8" fill="var(--c-success)"/><path d="M4.5 8.2l2.2 2.2 4.8-4.8" stroke="var(--c-on-accent)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              Итерация завершена: 5 задач, 3 исполнителя, проверка пройдена
+            </div>
+            <div class="final-hint">Напишите, что делать дальше — команда возьмёт в работу. Режим остаётся включённым.</div>
+          </div>
+          <div class="composer">
+            <div class="composer-badges">
+              <button class="ti-badge tone-idle mob"><svg class="ic" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>Командная реализация · ждёт задачу<span class="ti-dot"></span></button>
+              <button class="ti-auto on mob"><svg class="ic" width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>Авто</button>
+            </div>
+            <div class="composer-body">
+              <div class="composer-input">теперь добавь экспорт в XLSX…</div>
+              <div class="composer-send"><svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="frame" style="flex:1; min-width:400px;">
+        <div class="frame-caption"><span><b>Проверка красная</b> — итерация закрыта с замечаниями</span></div>
+        <div class="chat-feed">
+          <div class="final-card bad">
+            <div class="final-line">
+              <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-top:2px;"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg>
+              Итерация завершена: 5 задач, 3 исполнителя, проверка не прошла: осталось 2 замечания
+            </div>
+            <div class="final-hint">Напишите, что делать дальше — команда возьмёт в работу. Режим остаётся включённым.</div>
+          </div>
+        </div>
+        <div class="note">
+          <b>Новая вводная в этом чате</b> (работа, а не разговор) разворачивает новую волну без повторного включения режима: координатор декомпозирует, публикует карточку состава (при авто — информационную, с кнопкой «Остановить»), бюджет обнуляется. Вопрос («что сейчас в работе?») получает обычный ответ без задач.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ======================= 7. КАРТОЧКИ МЕХАНИК В ГРУППЕ «СДЕЛАТЬ» ======================= -->
+<div class="mockup-section">
+  <div class="section-header">
+    <span class="section-title">7 · Карточки механик в TeamDrawer</span>
+    <span class="section-subtitle">«Командная реализация» (режим) и «Командный спринт» (бывшая быстрая) — рядом, читаются как разные инструменты</span>
+  </div>
+  <div class="section-body">
+    <div class="frame" style="width:100%;">
+      <div class="frame-caption"><span><b>Группа «Сделать»</b> — новая карточка выбрана, настройки внизу</span></div>
+      <div class="drawer">
+        <div class="drawer-head">
+          <h3>Обсудить с командой</h3>
+          <span>выбери механику — тему пиши в поле сообщения</span>
+        </div>
+        <div class="drawer-grid">
+          <div style="display:flex; flex-direction:column; gap:6px;">
+            <span class="drawer-group-label">Сделать</span>
+            <button class="mech-card">
+              <span class="mc-cost">¢¢¢</span>
+              <span class="mc-icon"><svg class="ic" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/></svg></span>
+              <span><span class="mc-name">Автопилот</span><span class="mc-desc">От идеи до работающего кода</span></span>
+            </button>
+            <button class="mech-card selected">
+              <span class="mc-new">режим</span>
+              <span class="mc-icon"><svg class="ic" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>
+              <span><span class="mc-name">Командная реализация</span><span class="mc-desc">Штаб фичи: план, задачи, исполнители</span></span>
+            </button>
+            <button class="mech-card">
+              <span class="mc-cost">¢¢¢</span>
+              <span class="mc-icon"><svg class="ic" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg></span>
+              <span><span class="mc-name">Командный спринт</span><span class="mc-desc">Быстро разбить и раздать субагентам</span></span>
+            </button>
+          </div>
+        </div>
+        <div class="drawer-settings">
+          <div class="set-row">
+            <span class="set-label">Исполнители (по умолчанию — вся команда проекта):</span>
+            <button class="p-chip"><span class="p-dot" style="background:var(--persona-indigo);"></span>Александр</button>
+            <button class="p-chip"><span class="p-dot" style="background:var(--persona-blue);"></span>Денис</button>
+            <button class="p-chip"><span class="p-dot" style="background:var(--persona-orange);"></span>Кира</button>
+            <button class="p-chip"><span class="p-dot" style="background:var(--persona-green);"></span>Глеб</button>
+            <button class="p-chip"><span class="p-dot" style="background:var(--persona-purple);"></span>Вера</button>
+            <button class="p-chip"><span class="p-dot" style="background:var(--persona-khaki);"></span>Марк</button>
+          </div>
+          <span class="set-hint">Оставьте пустым, и планировщик подберёт людей под каждую часть работы сам</span>
+          <div class="set-row" style="align-items:center;">
+            <span class="toggle on">
+              <span class="t-track"><span class="t-thumb"></span></span>
+              <span class="t-label">Авто-волны — не спрашивать после каждой волны</span>
+            </span>
+          </div>
+          <span class="set-hint">План согласуете один раз. Дальше команда работает сама, пока хватает бюджета</span>
+        </div>
+      </div>
+      <div class="note">
+        <b>Переименование:</b> бывшая «Командная реализация» (быстрый workflow) становится «Командным спринтом» — иконку <code>Boxes</code> и цену ¢¢¢ она сохраняет, меняются только имя и desc. Новой карточке режима — иконка <code>Users</code> и метка «режим» вместо цены: это не одноразовый ход. Плейсхолдер композера после выбора: режим — «Что реализовать командой?…», спринт — «Что сделать спринтом?…».
+      </div>
+      <div class="note">
+        <b>Глобальный чат (вне проекта):</b> команды нет — чипы пусты, и вместо подписи-подсказки warning: «Выберите исполнителей — вне проекта команды нет, и подбирать не из кого». Без выбора практика не стартует.
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ======================= 8. МОБИЛЬНАЯ РАСКЛАДКА ======================= -->
+<div class="mockup-section">
+  <div class="section-header">
+    <span class="section-title">8 · Мобильная раскладка (390px)</span>
+    <span class="section-subtitle">бейдж 26px · карточки на всю ширину · тач-цели ≥ 40px у кнопок</span>
+  </div>
+  <div class="section-body">
+    <div class="frames">
+
+      <div class="frame">
+        <div class="frame-caption"><span><b>Композер</b> — «ждёт решения» + чип</span></div>
+        <div class="mob-frame">
+          <div class="mob-head">390 · composer</div>
+          <div class="mob-body">
+            <div class="composer">
+              <div class="composer-badges">
+                <button class="ti-badge tone-wait mob"><svg class="ic" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>Командная реализация · нужно решение<span class="ti-dot"></span></button>
+                <button class="ti-auto on mob"><svg class="ic" width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>Авто</button>
+              </div>
+              <div class="composer-body">
+                <div class="composer-input">Сообщение…</div>
+                <div class="composer-send"><svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="note">Бейдж и чип не переносятся (nowrap): строка бейджей скроллится по горизонтали, как сейчас строка бейджей композера. Поповер бейджа на мобиле — <b>нижняя шторка</b> (общий паттерн: шторки вместо модалок).</div>
+      </div>
+
+      <div class="frame">
+        <div class="frame-caption"><span><b>Карточка плана</b> — на всю ширину ленты</span></div>
+        <div class="mob-frame">
+          <div class="mob-head">390 · plan card</div>
+          <div class="mob-body">
+            <div class="plan-card" style="padding:12px;">
+              <div class="plan-head">
+                <span class="plan-icon"><svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>
+                <div style="flex:1; min-width:0;">
+                  <div class="plan-title">План командной реализации</div>
+                  <div class="plan-sub">5 под-задач · 2 волны · 3 исполнителя</div>
+                </div>
+              </div>
+              <div class="plan-body" style="max-height:200px;">
+                <div class="wave-label">Волна 1 <span class="wave-line"></span></div>
+                <div class="subtask">
+                  <div class="subtask-row">
+                    <span class="subtask-name">Модель экспорта и эндпоинт</span>
+                    <button class="exec-chip" style="height:26px;"><span class="p-dot" style="background:var(--persona-blue);"></span>Денис<span class="p-chev"><svg class="ic" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></span></button>
+                  </div>
+                  <div class="subtask-files">SpendController.cs · SpendStore.cs</div>
+                </div>
+                <div class="subtask">
+                  <div class="subtask-row">
+                    <span class="subtask-name">Кнопка «Выгрузить CSV»</span>
+                    <button class="exec-chip" style="height:26px;"><span class="p-dot" style="background:var(--persona-orange);"></span>Кира<span class="p-chev"><svg class="ic" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></span></button>
+                  </div>
+                  <div class="subtask-files">SpendScreen.tsx · exportCsv.ts</div>
+                </div>
+              </div>
+              <div class="plan-actions" style="flex-wrap:wrap;">
+                <button class="btn btn-primary" style="min-height:44px;"><svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 3 20 12 6 21 6 3"/></svg>Запустить</button>
+                <button class="btn btn-secondary" style="min-height:44px;">Изменить</button>
+                <button class="btn btn-ghost" style="min-height:44px;">Отменить</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="note">Бейдж «на подтверждении» на узкой ширине прячем (есть бейдж режима в композере). Чип исполнителя — 26px (тач). «Отменить» уезжает в перенос строки кнопок. Выбор исполнителя — шторкой со списком команды, тач-цели 40px.</div>
+      </div>
+
+      <div class="frame">
+        <div class="frame-caption"><span><b>Эскалация + список</b></span></div>
+        <div class="mob-frame">
+          <div class="mob-head">390 · escalation / chats</div>
+          <div class="mob-body">
+            <div class="esc-card">
+              <div class="esc-head">
+                <span class="esc-icon"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg></span>
+                <div class="esc-title">Исполнитель застрял</div>
+              </div>
+              <div class="esc-body">Кира: нет доступа к продовой базе трат — выгрузку проверить не на чём.</div>
+              <div class="esc-actions">
+                <button class="btn btn-primary sm" style="min-height:40px;">Ответить</button>
+                <button class="btn btn-secondary sm" style="min-height:40px;">Отдать другому</button>
+              </div>
+            </div>
+            <div class="chat-card" style="margin-bottom:0;">
+              <div class="chat-row1">
+                <span class="chat-status" style="background:var(--c-text-muted);"></span>
+                <span class="chat-name">Экспорт трат в CSV</span>
+                <span class="ti-marker tone-wait"><svg class="ic" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>решение</span>
+              </div>
+              <div class="chat-preview">Исполнитель застрял: нет доступа…</div>
+            </div>
+          </div>
+        </div>
+        <div class="note">Третья кнопка эскалации («Снять задачу») переносится на вторую строку — кнопки flex-wrap. Push приходит и когда PWA в фоне — это основной канал возврата в штаб с мобилы.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</div><!-- /mockup-container -->
+
+<script>
+  // Переключение темы; #dark в адресе — сразу тёмная (удобно для скриншотов)
+  const btn = document.getElementById('themeBtn');
+  const applyTheme = (dark) => {
+    document.documentElement.dataset.theme = dark ? 'dark' : '';
+    btn.textContent = dark ? 'Светлая тема' : 'Тёмная тема';
+  };
+  btn.addEventListener('click', () => applyTheme(document.documentElement.dataset.theme !== 'dark'));
+  if (location.hash === '#dark') applyTheme(true);
+</script>
+</body>
+</html>

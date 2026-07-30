@@ -49,6 +49,7 @@ public static class LocalActionCatalog
     public const string ChatTitle = "chat-title";
     public const string ChatRetitle = "chat-retitle";
     public const string ChatExtractTasks = "chat-extract-tasks";
+    public const string TeamImplementPlan = "team-implement-plan";
     public const string MemoryWriteResolve = "memory-write-resolve";
     public const string PersonaMemoryAutolearn = "persona-memory-autolearn";
     public const string TeamMemoryAutolearn = "team-memory-autolearn";
@@ -115,6 +116,11 @@ public static class LocalActionCatalog
         new(ChatTitle, "Заголовок чата", "Чаты", CheapProfile.Small, DefaultLocal: true),
         new(ChatRetitle, "Обновление названия чата", "Чаты", CheapProfile.Text, DefaultLocal: true),
         new(ChatExtractTasks, "Извлечение задач из чата", "Задачи", CheapProfile.Large, DefaultLocal: true),
+        // Планировщик режима «Командная реализация»: декомпозиция вводной и подбор
+        // исполнителей по компетенциям. Локаль намеренно выключена — слабая модель
+        // раздаёт работу случайно, а весь смысл места в осмысленном выборе персоны.
+        new(TeamImplementPlan, "Планировщик командной реализации", "Задачи", CheapProfile.Large,
+            DefaultLocal: false, Tier: ModelTier.Strong),
         new(MemoryWriteResolve, "Резолвер записи памяти", "Память", CheapProfile.Small, DefaultLocal: true),
         new(PersonaMemoryAutolearn, "Автолёрн памяти персон", "Память", CheapProfile.Large, DefaultLocal: true),
         new(TeamMemoryAutolearn, "Автолёрн памяти команды", "Память", CheapProfile.Large, DefaultLocal: true),

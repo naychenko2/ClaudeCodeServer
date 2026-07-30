@@ -37,6 +37,24 @@ public sealed class DenyOnDelegatedTurnAttribute(string action) : Attribute, IAc
     /// </summary>
     public bool AlsoWhenExecutorSuppressed { get; init; }
 
+    /// <summary>
+    /// Режим «Командная реализация» (Э4): на ходу координатора запрет заменяется КВОТОЙ —
+    /// пока цел бюджет итерации, штаб волен запускать исполнителей сам (иначе автономный
+    /// цикл волн невозможен), а исчерпание бюджета возвращает прежний 403.
+    /// Квота расходуется на ЛЮБОМ неделегированном ходу штаба, включая обычный человеческий:
+    /// иначе координатор спокойно спамит «создать задачу + запустить» мимо бюджета — дыра
+    /// ровно в той защите, ради которой запрет и меняли на квоту.
+    /// Делегированного хода (agentDepth ≥ 1) исключение не касается: цепочка делегирования
+    /// дальше не идёт независимо от режима.
+    /// </summary>
+    public bool AllowInTeamImplement { get; init; }
+
+    // Ключ HttpContext.Items: квота расходуется здесь, в OnActionExecuting, ДО того как
+    // действие реально что-то сделало — храним, за какую (сессия, владелец) она списана,
+    // чтобы OnActionExecuted мог вернуть единицу, если действие не состоялось (m3, второй
+    // проход Глеба: 404/400 не должны жечь бюджет команды быстрее, чем идёт реальная работа).
+    private const string ConsumedRunKey = "TeamImplementRunConsumed";
+
     public void OnActionExecuting(ActionExecutingContext context)
     {
         var http = context.HttpContext;
@@ -48,6 +66,31 @@ public sealed class DenyOnDelegatedTurnAttribute(string action) : Attribute, IAc
 
         var turn = sessions.GetActiveTurnDelegation(callerSessionId, userId);
         var delegated = IsDelegated(turn);
+
+        // Квота вместо запрета — на ЛЮБОМ неделегированном ходу штаба, а не только на
+        // реакционном: обычный ход координатора запускает исполнителей той же кнопкой, и
+        // мимо бюджета он не должен идти. Разрешение сразу расходует единицу — счёт ведёт
+        // бэкенд в точке запуска. Вердикт NotTeamMode = чат не штаб: решает прежний запрет.
+        if (!delegated && AllowInTeamImplement)
+        {
+            var (verdict, reason) = sessions.TryConsumeTeamImplementRun(callerSessionId, userId);
+            if (verdict == SessionManager.TeamRunQuota.Allowed)
+            {
+                http.Items[ConsumedRunKey] = (callerSessionId, userId);
+                return;
+            }
+            if (verdict == SessionManager.TeamRunQuota.Exhausted)
+            {
+                context.Result = new ObjectResult(new
+                {
+                    error = $"{action} недоступно: {reason}. Доложи человеку сводку и дождись "
+                        + "его решения (подтвердить план, добавить бюджет или завершить итерацию).",
+                })
+                { StatusCode = StatusCodes.Status403Forbidden };
+                return;
+            }
+        }
+
         if (!delegated && !IsSuppressedExecutorTurn(turn, AlsoWhenExecutorSuppressed)) return;
 
         context.Result = new ObjectResult(new
@@ -63,7 +106,22 @@ public sealed class DenyOnDelegatedTurnAttribute(string action) : Attribute, IAc
         { StatusCode = StatusCodes.Status403Forbidden };
     }
 
-    public void OnActionExecuted(ActionExecutedContext context) { }
+    public void OnActionExecuted(ActionExecutedContext context)
+    {
+        // Единица списана авансом в OnActionExecuting — вернуть её, если действие не
+        // состоялось: контроллер отдал 4xx (задача не найдена, неверное состояние) или упал
+        // исключением. Успех (обычно 200 Ok) единицу не трогает — она честно расходована.
+        if (context.HttpContext.Items[ConsumedRunKey] is not (string sessionId, string userId)) return;
+        var statusCode = context.Result switch
+        {
+            ObjectResult obj => obj.StatusCode,
+            StatusCodeResult sc => sc.StatusCode,
+            _ => null,
+        };
+        if (context.Exception is null && statusCode is null or < 400) return;
+        if (context.HttpContext.RequestServices.GetService<SessionManager>() is { } sessions)
+            sessions.RefundTeamImplementRun(sessionId, userId);
+    }
 
     // Решение вынесено из фильтра, чтобы проверяться таблицей без HttpContext и DI
     internal static bool IsDelegated(TurnDelegationState turn) => turn.AgentDepth >= 1;

@@ -102,4 +102,48 @@ public class FileWatcherServiceTests : IClassFixture<TestWebApplicationFactory>
             watcher.Unwatch(projectId, conn);
         }
     }
+
+    [Fact]
+    public async Task WatchPath_ОтдельноеДеревоВнеПроекта_ТриггеритRebuildЕгоГрафа()
+    {
+        // Дерево чата лежит вне RootPath любого проекта (ADR-003) — проектный watcher его
+        // не видит, поэтому граф обновляет отдельный watcher по пути.
+        var worktree = Path.Combine(_factory.TempDir, "wt_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(worktree);
+        File.WriteAllText(Path.Combine(worktree, "Foo.cs"), "namespace Demo { public class Foo {} }");
+
+        var watcher = _factory.Services.GetRequiredService<FileWatcherService>();
+        var graphs = _factory.Services.GetRequiredService<CodeGraphService>();
+        const string key = "worktree:test-session";
+        try
+        {
+            watcher.WatchPath(key, worktree);
+
+            // Правка в дереве: новый тип, которого нет в основной ветке.
+            File.WriteAllText(Path.Combine(worktree, "OnlyHere.cs"),
+                "namespace Demo { public class OnlyHere {} }");
+
+            // Ждём полный контур: poll → flush → NotifyCodeGraph → дебаунс → rebuild → save.
+            var deadline = DateTime.UtcNow.AddSeconds(15);
+            var found = false;
+            while (DateTime.UtcNow < deadline)
+            {
+                var snapshot = await graphs.GetSnapshotAsync(worktree, CancellationToken.None);
+                if (snapshot is not null
+                    && snapshot.Nodes.Any(n => n.SourceFile.Contains("OnlyHere.cs")))
+                {
+                    found = true;
+                    break;
+                }
+                await Task.Delay(200);
+            }
+
+            found.Should().BeTrue(
+                "правка .cs в отдельном дереве должна дойти до графа ЭТОГО дерева: WatchPath → CodeGraph");
+        }
+        finally
+        {
+            watcher.UnwatchPath(key);
+        }
+    }
 }

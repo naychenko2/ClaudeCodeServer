@@ -243,6 +243,8 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
   const [openFileDiffMode, setOpenFileDiffMode] = useState(false);
   // Путь unstaged-файла из git-«Изменений» — включает зернистый stage хунков в diff-вкладке
   const [gitStagePath, setGitStagePath] = useState<string | null>(null);
+  // Номер строки для скролла при открытии файла (из графа) — сбрасывается после применения
+  const [scrollToLine, setScrollToLine] = useState<number | undefined>(undefined);
   // Коммит открыт из git-панели «История» → просмотр в контентной области
   const [openCommitSha, setOpenCommitSha] = useState<string | null>(null);
   // Файл коммита, на котором сразу открыть diff (клик по файлу в стеке «Изменения»); null — первый
@@ -1054,14 +1056,15 @@ const windowWidth = useWindowWidth();
     }
   }, [leftTab, selectedPersonaId, personaCreating]);
 
-  // из дерева файлов → всегда полноэкранный режим
-  const handleOpenFileFromTree = (filePath: string) => {
+  // из дерева файлов → всегда полноэкранный режим; опциональная строка для скролла
+  const handleOpenFileFromTree = (filePath: string, line?: number) => {
     setOpenCommitSha(null);
     setOpenFile(filePath);
     setOpenFileDiffMode(false);
     setGitStagePath(null);
     setFileFullscreen(true);
     setGraphOpen(false);
+    setScrollToLine(line);
     navPush({ screen: 'project', project, view: mobileView, file: filePath });
   };
 
@@ -1414,7 +1417,7 @@ const windowWidth = useWindowWidth();
         {/* Просмотр файла — FileViewer имеет свою шапку */}
         {openFile && (
           <div style={{ flex: 1, overflow: 'hidden' }}>
-            <FileViewer project={project} filePath={openFile} isMobile onClose={backFromFile} initialTab={openFileDiffMode ? 'diff' : undefined} gitStagePath={gitStagePath ?? undefined} />
+            <FileViewer project={project} filePath={openFile} isMobile onClose={backFromFile} initialTab={openFileDiffMode ? 'diff' : undefined} gitStagePath={gitStagePath ?? undefined} scrollToLine={scrollToLine} />
           </div>
         )}
         {/* Просмотр коммита из git-«Истории» */}
@@ -1686,7 +1689,7 @@ const windowWidth = useWindowWidth();
                 <Splitter orientation="v" active={draggingSplitter === 'split'}
                   onMouseDown={e => { setDraggingSplitter('split'); handleSplitterMouseDown(e); }} />
                 <div style={{ flex: 1, overflow: 'hidden', minWidth: 200 }}>
-                  <FileViewer project={project} filePath={openFile} onClose={backFromFile} onToggleFullscreen={handleEnterFullscreen} fullscreen={fileFullscreen} onOpenSidebar={openSidebar} initialTab={openFileDiffMode ? 'diff' : undefined} gitStagePath={gitStagePath ?? undefined} />
+                  <FileViewer project={project} filePath={openFile} onClose={backFromFile} onToggleFullscreen={handleEnterFullscreen} fullscreen={fileFullscreen} onOpenSidebar={openSidebar} initialTab={openFileDiffMode ? 'diff' : undefined} gitStagePath={gitStagePath ?? undefined} scrollToLine={scrollToLine} />
                 </div>
               </div>
             )}
@@ -1696,7 +1699,7 @@ const windowWidth = useWindowWidth();
               <div style={{ flex: 1, overflow: 'hidden' }}>
                 {/* На планшете split недоступен (isTablet форсирует full, ветка сплита выше
                     не рендерится) — входа в режим нет, поэтому и переключателя не показываем */}
-                <FileViewer project={project} filePath={openFile} onClose={backFromFile} onToggleFullscreen={isTablet ? undefined : handleExitFullscreen} fullscreen={fileFullscreen || isTablet} onOpenSidebar={openSidebar} initialTab={openFileDiffMode ? 'diff' : undefined} gitStagePath={gitStagePath ?? undefined} />
+                <FileViewer project={project} filePath={openFile} onClose={backFromFile} onToggleFullscreen={isTablet ? undefined : handleExitFullscreen} fullscreen={fileFullscreen || isTablet} onOpenSidebar={openSidebar} initialTab={openFileDiffMode ? 'diff' : undefined} gitStagePath={gitStagePath ?? undefined} scrollToLine={scrollToLine} />
               </div>
             )}
           </>

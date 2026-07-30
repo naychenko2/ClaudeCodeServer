@@ -1,32 +1,39 @@
-// Состояние правых панелей нового интерфейса проекта (workspace-cc-panels):
-// раскладка по колонкам (как в Claude Code Desktop), веса высот и ширина колонки.
+// Состояние панелей воркспейса: ДВЕ зоны (левая и правая рельсы), в каждой —
+// раскладка колонками (как в Claude Code Desktop), режим, ширина колонки и
+// спрятанный кнопкой «свернуть все» набор.
+//
+// Ключевой инвариант: панель лежит РОВНО В ОДНОЙ зоне. Открытие панели в зоне
+// удаляет её из другой — это и есть перенос между рельсами. Поэтому состояние
+// зон живёт в ОДНОМ сторе: два независимых стора не могли бы соблюсти инвариант.
+//
 // Раскладка ЯВНАЯ — PanelKey[][] (массив колонок): дефолт «по две на колонку»
-// в порядке открытия, но drag-and-drop может дать любое распределение
-// (например одна панель в первой колонке и две во второй).
-// Персист в localStorage — свои ключи cc_{ns}_panels_*, старые cc_artifacts_* не трогаем.
-// Стор параметризован неймспейсом (createPanelStack): воркспейс и раздел «Чаты»
+// в порядке открытия, но drag-and-drop может дать любое распределение.
+// Персист в localStorage — ключ cc_{ns}_zones; старые раздельные ключи
+// (cc_{ns}_panels_* и cc_{ns}_left_panels_*) читаются как миграция и НЕ удаляются,
+// чтобы откат кода вернул прежнее состояние.
+// Стор параметризован неймспейсом (createPanelZones): воркспейс и раздел «Чаты»
 // держат НЕЗАВИСИМЫЕ раскладки, не мешая друг другу.
 import { useCallback, useSyncExternalStore } from 'react';
+import { PANEL_HOME, isPanelKey, migrateLegacyKey, type PanelKey, type Zone } from './panelCatalog';
 
-// Набор рабочих панелей рельсы (порядок = порядок иконок). Артефактные категории
-// сессионная группа (plan/agents/context — План, Агенты, Персона) собирается из
-// артефактов сессии; остальное — инструменты проекта, как в десктопном Claude Code.
-// Ключи agents/context совпадают с meta.tsx ради panelBadge.
-export const PANEL_KEYS = ['plan', 'agents', 'context', 'files', 'changes', 'tasks', 'graph', 'team', 'terminal', 'preview'] as const;
-export type PanelKey = typeof PANEL_KEYS[number];
+// Реестр панелей (ключи, мета, домашние зоны) — соседний panelCatalog.ts.
+// Здесь только раскладка: что где лежит и какого размера.
+export type { PanelKey, Zone } from './panelCatalog';
 
+// Размеры самой рельсы (RAIL_W/RAIL_GAP) живут рядом с её компонентом —
+// components/ui/PanelRail: к состоянию раскладки они отношения не имеют.
 export const PANEL_MIN_H = 120;  // минимальная высота панельки, px (шапка 40 + контент)
-export const RAIL_W = 44;        // ширина рельсы иконок
 export const COL_MIN = 280;      // клампы ширины ОДНОЙ колонки панелей
 export const COL_MAX = 560;
 export const COL_DEFAULT = 340;
 export const COL_CAP = 2;        // дефолтная вместимость колонки при открытии новой панели
 
-// Режим зоны панелей: раскладка колонками (дефолт) или одна выбранная панель.
+// Режим зоны: раскладка колонками (дефолт) или одна выбранная панель.
 // Состояние ЕДИНОЕ (без отдельной памяти на режим): вход в solo схлопывает
-// раскладку до одной панели, возврат в multi продолжает с текущего состояния —
-// старый набор «множественных вкладок» не воскресает.
+// раскладку до одной панели, возврат в multi продолжает с текущего состояния.
 export type PanelMode = 'multi' | 'solo';
+
+export const ZONES: readonly Zone[] = ['left', 'right'];
 
 // Тесты гоняются в среде node (без jsdom) — доступ к localStorage через guard,
 // чтобы импорт модуля не падал вне браузера.
@@ -37,16 +44,13 @@ function lsSet(key: string, value: string) {
   try { if (typeof localStorage !== 'undefined') localStorage.setItem(key, value); } catch { /* квота/приватный режим — молча */ }
 }
 
-// ---------- чистые функции (покрыты тестом panelStack.test.ts) ----------
+// ---------- раскладка ОДНОЙ зоны (чистые функции, покрыты panelStack.test.ts) ----------
 
-function isPanelKey(v: unknown): v is PanelKey {
-  return typeof v === 'string' && (PANEL_KEYS as readonly string[]).includes(v);
-}
-
-// Санитайз раскладки: только известные ключи, без дублей, без пустых колонок
-export function sanitizeLayout(cols: unknown): PanelKey[][] {
+// Санитайз раскладки: только известные ключи, без дублей, без пустых колонок.
+// exclude — ключи, уже занятые другой зоной (инвариант «панель в одной зоне»).
+export function sanitizeLayout(cols: unknown, exclude?: Set<PanelKey>): PanelKey[][] {
   if (!Array.isArray(cols)) return [];
-  const seen = new Set<PanelKey>();
+  const seen = new Set<PanelKey>(exclude);
   const out: PanelKey[][] = [];
   for (const col of cols) {
     if (!Array.isArray(col)) continue;
@@ -78,15 +82,30 @@ export function parseLayout(rawLayout: string | null, rawLegacyOpen: string | nu
   return [];
 }
 
-// Открытие панели: в последнюю колонку, пока в ней меньше COL_CAP, иначе новая
-// колонка справа (1-я во всю высоту, 2-я вниз, 3-я вправо, 4-я вниз третьей…)
-export function addPanel(layout: PanelKey[][], k: PanelKey): PanelKey[][] {
+// Открытие панели: в колонку У РЕЛЬСЫ, пока в ней меньше COL_CAP, иначе новая
+// колонка тоже РОЖДАЕТСЯ У РЕЛЬСЫ, а прежние отъезжают к центру. Рельса у правой
+// зоны справа (её колонка — последняя в массиве, новая пушится в конец), у левой
+// слева (её колонка — первая, новая встаёт в начало). Раньше сторону не учитывали
+// и новая колонка всегда лезла в конец — у левой зоны это центр, а не край.
+export function addPanel(layout: PanelKey[][], k: PanelKey, side: Zone = 'right'): PanelKey[][] {
   if (layout.flat().includes(k)) return layout;
   const out = layout.map(c => [...c]);
-  const last = out[out.length - 1];
-  if (last && last.length < COL_CAP) last.push(k);
+  const railIdx = side === 'left' ? 0 : out.length - 1;
+  const railCol = out[railIdx];
+  if (railCol && railCol.length < COL_CAP) railCol.push(k);
+  else if (side === 'left') out.unshift([k]);
   else out.push([k]);
   return out;
+}
+
+// Куда встанет ЕЩЁ НЕ ОТКРЫТАЯ панель — то же правило, что у addPanel, но без
+// самой вставки: нужно рельсе, чтобы под курсором показать место будущей панели
+// (призрак в раскладке). Возвращает индекс колонки, либо newColumn — панель
+// заведёт свою колонку у рельсы.
+export function nextPlacement(layout: PanelKey[][], side: Zone = 'right'): { ci: number } | { newColumn: true } {
+  const railIdx = side === 'left' ? 0 : layout.length - 1;
+  const railCol = layout[railIdx];
+  return railCol && railCol.length < COL_CAP ? { ci: railIdx } : { newColumn: true };
 }
 
 // Закрытие панели: удалить, пустые колонки схлопнуть
@@ -97,8 +116,6 @@ export function removePanel(layout: PanelKey[][], k: PanelKey): PanelKey[][] {
 // Drag-and-drop панели НА панель: они МЕНЯЮТСЯ МЕСТАМИ (a встаёт в слот b и
 // наоборот), в том числе между колонками. Сама раскладка при этом не меняется —
 // число колонок и порядок слотов те же, переезжает только содержимое.
-// Другое распределение (вставка, вынос в новую колонку) делают дроп-зоны
-// плейсхолдеров: movePanelAt и movePanelToNewColumn.
 export function swapPanels(layout: PanelKey[][], a: PanelKey, b: PanelKey): PanelKey[][] {
   if (a === b) return layout;
   const flat = layout.flat();
@@ -141,10 +158,31 @@ export function parseWeights(raw: string | null): Partial<Record<PanelKey, numbe
     if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return {};
     const out: Partial<Record<PanelKey, number>> = {};
     for (const [k, v] of Object.entries(obj)) {
-      if (isPanelKey(k) && typeof v === 'number' && Number.isFinite(v) && v > 0.05) out[k] = v;
+      const key = migrateLegacyKey(k);
+      if (key && typeof v === 'number' && Number.isFinite(v) && v > 0.05) out[key] = v;
     }
     return out;
   } catch { return {}; }
+}
+
+// Доли ширины колонок из сохранённого состояния: массив положительных конечных
+// чисел, прочее отбрасываем (тогда колонки равны). Длину под layout приведёт
+// normalizeColFlex при первом коммите.
+export function parseColFlex(raw: unknown): number[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map(v => (typeof v === 'number' && Number.isFinite(v) && v > 0.05 ? v : 1));
+}
+
+// Привести доли к числу колонок layout: лишние отрезать, недостающим дать 1,
+// сумму подравнять к числу колонок (защита от дрейфа после многих ресайзов, как у
+// весов высот). Пустой/единичный вход у одной колонки не хранится — там делить
+// нечего.
+export function normalizeColFlex(colCount: number, flex: number[]): number[] {
+  if (colCount <= 1) return [];
+  const cur = Array.from({ length: colCount }, (_, i) => (flex[i] != null && flex[i] > 0.05 ? flex[i] : 1));
+  const sum = cur.reduce((a, b) => a + b, 0);
+  const factor = sum > 0 ? colCount / sum : 1;
+  return cur.map(v => v * factor);
 }
 
 export function parseWidth(raw: string | null): number {
@@ -167,167 +205,597 @@ export function normalizeWeights(open: PanelKey[], weights: Partial<Record<Panel
   return out;
 }
 
-export interface PanelStack {
+// ---------- состояние ОБЕИХ зон (чистые функции) ----------
+
+export interface ZoneState {
   layout: PanelKey[][];
-  weights: Partial<Record<PanelKey, number>>;
-  width: number;
-  // Режим зоны: 'multi' — раскладка колонками (дефолт), 'solo' — одна выбранная панель
   mode: PanelMode;
-  toggle: (k: PanelKey) => void;
-  close: (k: PanelKey) => void;
-  // Кнопка внизу рельсы: свернуть все открытые панели / вернуть свёрнутый набор как был
-  collapsed: boolean;
-  toggleCollapsed: () => void;
-  setWeights: (next: Partial<Record<PanelKey, number>>) => void;
-  setWidth: (n: number) => void;
-  // Drag-and-drop панели на панель: поменять их местами
-  swapWith: (a: PanelKey, b: PanelKey) => void;
-  // Drag-and-drop в разделитель: вынести панель в новую колонку на позицию insertIdx
-  moveToNewColumn: (from: PanelKey, insertIdx: number) => void;
-  // Drag-and-drop в горизонтальный плейсхолдер: вставить в колонку colIdx на позицию rowIdx
-  moveAt: (from: PanelKey, colIdx: number, rowIdx: number) => void;
-  setMode: (m: PanelMode) => void;
+  // Ширина ОДНОЙ колонки — общий масштаб зоны (центральный сплиттер). Итоговая
+  // ширина зоны = число колонок × width; между собой колонки делят её по colFlex.
+  width: number;
+  // Доли ширины колонок (grow-ratio), позиционно по РЕАЛЬНОМУ индексу колонки в
+  // layout. Пусто/1 у всех — колонки равны (как было). Их меняет сплиттер МЕЖДУ
+  // колонками, перераспределяя ширину внутри пары; общий масштаб (width) при этом
+  // не трогается. Позиционно, а не по ключу панели: колонка — место, не сущность.
+  colFlex: number[];
+  // Раскладка, спрятанная кнопкой «Свернуть все» — повторный клик вернёт её как была
+  stash: PanelKey[][];
 }
 
-// ---------- модульный стор-инстанс (паттерн — как lib/sidebarWidth.ts) ----------
+export interface PanelZones {
+  left: ZoneState;
+  right: ZoneState;
+  // Вес = высота СЛОТА панели. Общий для зон: панель уносит свой вес с собой.
+  weights: Partial<Record<PanelKey, number>>;
+  // Где панель лежала в последний раз. Закрытая панель показывает иконку именно
+  // здесь, а не в зашитой домашней зоне: перетащив «Задачи» налево и закрыв их,
+  // человек ждёт кнопку слева — там, где панель была, а не там, где родилась.
+  // Пусто (панель ещё нигде не открывали) — берётся PANEL_HOME.
+  home: Partial<Record<PanelKey, Zone>>;
+}
 
-// Фабрика независимого инстанса: своё состояние в замыкании + свои ключи
-// localStorage `cc_{ns}_panels_*`. Инстансы создаются на уровне модуля (ниже),
-// поэтому семантика чтения localStorage при импорте — та же, что была у синглтона.
-function createPanelStack(ns: string, opts?: { legacyOpenKey?: string }) {
-  const KEY_LAYOUT = `cc_${ns}_panels_layout`;
-  const KEY_WEIGHTS = `cc_${ns}_panels_weights`;
-  const KEY_WIDTH = `cc_${ns}_panels_width`;
-  const KEY_MODE = `cc_${ns}_panels_mode`;     // 'multi' (раскладка, дефолт) | 'solo' (одна панель)
-  const KEY_STASH = `cc_${ns}_panels_stash`;   // раскладка, спрятанная кнопкой «Свернуть все»
-  // Старый плоский список — мигрируется в layout (только у воркспейсного инстанса)
-  const legacyOpen = opts?.legacyOpenKey ? lsGet(opts.legacyOpenKey) : null;
+export function emptyZone(): ZoneState {
+  return { layout: [], mode: 'multi', width: COL_DEFAULT, colFlex: [], stash: [] };
+}
 
-  let _layout: PanelKey[][] = parseLayout(lsGet(KEY_LAYOUT), legacyOpen);
-  let _weights: Partial<Record<PanelKey, number>> = parseWeights(lsGet(KEY_WEIGHTS));
-  let _width = parseWidth(lsGet(KEY_WIDTH));
-  let _mode: PanelMode = lsGet(KEY_MODE) === 'solo' ? 'solo' : 'multi';
-  // Спрятанная кнопкой «Свернуть все» раскладка — повторный клик вернёт её как была
-  let _stash: PanelKey[][] = (() => {
-    try { return sanitizeLayout(JSON.parse(lsGet(KEY_STASH) ?? '[]')); } catch { return []; }
-  })();
+export function emptyZones(): PanelZones {
+  return { left: emptyZone(), right: emptyZone(), weights: {}, home: {} };
+}
+
+// Зона, в которой панель показывает свою иконку, когда закрыта
+export function homeOf(zones: PanelZones, k: PanelKey): Zone {
+  return zones.home[k] ?? PANEL_HOME[k];
+}
+
+// Запомнить, где сейчас лежит каждая панель — включая спрятанные «свернуть все»:
+// разворачивание вернёт их в ту же зону, значит и иконка ждёт там же.
+export function trackHome(zones: PanelZones): PanelZones {
+  const home = { ...zones.home };
+  for (const zone of ZONES) {
+    for (const k of [...zones[zone].layout.flat(), ...zones[zone].stash.flat()]) home[k] = zone;
+  }
+  return { ...zones, home };
+}
+
+// В какой зоне лежит панель (null — закрыта)
+export function zoneOf(zones: PanelZones, k: PanelKey): Zone | null {
+  if (zones.left.layout.flat().includes(k)) return 'left';
+  if (zones.right.layout.flat().includes(k)) return 'right';
+  return null;
+}
+
+export function openKeysOf(zones: PanelZones): PanelKey[] {
+  return [...zones.left.layout.flat(), ...zones.right.layout.flat()];
+}
+
+// Приведение пары зон к инварианту «панель ровно в одном месте».
+//
+// Мест на самом деле ЧЕТЫРЕ: раскладка каждой зоны и её спрятанный кнопкой
+// «Свернуть все» набор. Stash — это отложенный layout, поэтому панель, уехавшая
+// в соседнюю зону, обязана исчезнуть и из него: иначе разворачивание вернёт её
+// второй копией, и одна и та же панель окажется в обеих рельсах.
+//
+// Приоритет: то, что НА ЭКРАНЕ, сильнее спрятанного; среди раскладок — правая
+// (там исторически живут панели с настоящим контентом, слева files/tasks успели
+// побывать dev-заглушками).
+export function enforceZoneInvariant(zones: PanelZones): PanelZones {
+  const seen = new Set<PanelKey>();
+  const claim = (cols: PanelKey[][]): PanelKey[][] => {
+    const out: PanelKey[][] = [];
+    for (const col of cols) {
+      const clean = col.filter(k => !seen.has(k));
+      clean.forEach(k => seen.add(k));
+      if (clean.length) out.push(clean);
+    }
+    return out;
+  };
+  const rightLayout = claim(zones.right.layout);
+  const leftLayout = claim(zones.left.layout);
+  const rightStash = claim(zones.right.stash);
+  const leftStash = claim(zones.left.stash);
+  return {
+    ...zones,
+    right: { ...zones.right, layout: rightLayout, stash: rightStash },
+    left: { ...zones.left, layout: leftLayout, stash: leftStash },
+  };
+}
+
+// Санитайз пары зон из сохранённого состояния: валидация полей плюс инвариант
+export function sanitizeZones(raw: unknown): PanelZones {
+  const src = (raw && typeof raw === 'object' ? raw : {}) as Partial<Record<Zone, unknown>> & { weights?: unknown };
+  const readZone = (v: unknown): ZoneState => {
+    const z = (v && typeof v === 'object' ? v : {}) as Partial<ZoneState>;
+    const layout = sanitizeLayout(z.layout);
+    return {
+      layout,
+      mode: z.mode === 'solo' ? 'solo' : 'multi',
+      width: typeof z.width === 'number' ? parseWidth(String(z.width)) : COL_DEFAULT,
+      colFlex: normalizeColFlex(layout.length, parseColFlex(z.colFlex)),
+      stash: sanitizeLayout(z.stash),
+    };
+  };
+  return enforceZoneInvariant({
+    left: readZone(src.left),
+    right: readZone(src.right),
+    weights: parseWeights(JSON.stringify(src.weights ?? {})),
+    home: parseHome((src as { home?: unknown }).home),
+  });
+}
+
+// Сохранённая привязка «панель → зона»: чужие ключи и значения отбрасываем,
+// упразднённые имена переводим (personas → team), как и у весов.
+export function parseHome(raw: unknown): Partial<Record<PanelKey, Zone>> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const out: Partial<Record<PanelKey, Zone>> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    const key = migrateLegacyKey(k);
+    if (key && (v === 'left' || v === 'right')) out[key] = v;
+  }
+  return out;
+}
+
+function withZone(zones: PanelZones, zone: Zone, next: (z: ZoneState) => ZoneState): PanelZones {
+  return { ...zones, [zone]: next(zones[zone]) };
+}
+
+// Убрать панель из ЛЮБОЙ зоны (не трогая веса — панель может открыться снова)
+export function closePanel(zones: PanelZones, k: PanelKey): PanelZones {
+  const zone = zoneOf(zones, k);
+  if (!zone) return zones;
+  return withZone(zones, zone, z => ({ ...z, layout: removePanel(z.layout, k) }));
+}
+
+// Закрыть панель, бросив её на рельсу зоны: она не просто закрывается, а
+// оставляет иконку ИМЕННО ТАМ, куда её бросили (даже если лежала в соседней
+// зоне) — это и есть «убрать панель с глаз, но положить кнопку под руку».
+export function closePanelTo(zones: PanelZones, zone: Zone, k: PanelKey): PanelZones {
+  const closed = closePanel(zones, k);
+  return { ...closed, home: { ...closed.home, [k]: zone } };
+}
+
+// Открыть панель В ЗОНЕ. Если она открыта в другой — это перенос: из прежней
+// зоны панель уходит. В solo-режиме целевой зоны раскладка схлопывается до неё.
+export function openPanelIn(zones: PanelZones, zone: Zone, k: PanelKey): PanelZones {
+  const base = closePanel(zones, k);
+  return withZone(base, zone, z => ({
+    ...z,
+    layout: z.mode === 'solo' ? [[k]] : addPanel(z.layout, k, zone),
+  }));
+}
+
+// Клик по иконке рельсы: панель открыта В ЭТОЙ зоне — закрыть, иначе открыть
+// здесь (в том числе забрав из соседней зоны).
+export function togglePanelIn(zones: PanelZones, zone: Zone, k: PanelKey): PanelZones {
+  return zoneOf(zones, k) === zone ? closePanel(zones, k) : openPanelIn(zones, zone, k);
+}
+
+// Дроп панели НА панель — они меняются местами, в том числе через границу зон:
+// каждая встаёт в слот другой, раскладки обеих зон по форме не меняются.
+export function swapAcross(zones: PanelZones, a: PanelKey, b: PanelKey): PanelZones {
+  if (a === b) return zones;
+  const za = zoneOf(zones, a);
+  const zb = zoneOf(zones, b);
+  if (!za || !zb) return zones;
+  if (za === zb) return withZone(zones, za, z => ({ ...z, layout: swapPanels(z.layout, a, b) }));
+  const swapIn = (layout: PanelKey[][], from: PanelKey, to: PanelKey) =>
+    layout.map(col => col.map(k => (k === from ? to : k)));
+  return {
+    ...zones,
+    [za]: { ...zones[za], layout: swapIn(zones[za].layout, a, b) },
+    [zb]: { ...zones[zb], layout: swapIn(zones[zb].layout, b, a) },
+  };
+}
+
+// Дроп панели ИЗ РЕЛЬСЫ на открытую панель: гость занимает её слот (вместе с
+// местом в колонке и весом — вес переносит вызывающий), а хозяин уходит с экрана,
+// оставляя иконку на рельсе СВОЕЙ зоны — там, где он только что был.
+//
+// Обменом (swapAcross) это быть не может: у закрытого гостя нет слота, который он
+// отдал бы взамен, поэтому swapAcross на закрытой панели молча возвращает всё как
+// было. Отсюда отдельная операция, а не ветка в обмене.
+export function replacePanelWith(zones: PanelZones, guest: PanelKey, host: PanelKey): PanelZones {
+  if (guest === host) return zones;
+  const zh = zoneOf(zones, host);
+  if (!zh) return zones;
+  // Гость мог быть открыт в соседней зоне — оттуда он уходит (инвариант «панель
+  // ровно в одной зоне»). Дроп открытой панели на панель обычно идёт обменом, но
+  // операция обязана быть корректной и здесь, а не только для гостя из рельсы.
+  const base = closePanel(zones, guest);
+  const filled = withZone(base, zh, z => ({
+    ...z,
+    layout: z.layout.map(col => col.map(k => (k === host ? guest : k))),
+  }));
+  return { ...filled, home: { ...filled.home, [host]: zh } };
+}
+
+// Дроп в горизонтальный плейсхолдер зоны. Внутри своей зоны — обычная
+// перестановка; из другой зоны панель сначала уходит из неё, а затем встаёт в
+// указанную колонку. Пустая целевая зона принимает панель первой колонкой.
+export function moveAcrossAt(zones: PanelZones, k: PanelKey, zone: Zone, colIdx: number, rowIdx: number): PanelZones {
+  // src === null — панель закрыта: её тащат из рельсы, и дроп её ОТКРЫВАЕТ ровно
+  // в указанном месте (ветка ниже так и работает: убрать из прежней зоны нечего,
+  // остаётся вставка)
+  const src = zoneOf(zones, k);
+  if (src === zone) return withZone(zones, zone, z => ({ ...z, layout: movePanelAt(z.layout, k, colIdx, rowIdx) }));
+  const base = closePanel(zones, k);
+  return withZone(base, zone, z => {
+    // Зона в режиме одной панели принимает гостя вместо своей — как при клике по
+    // иконке (openPanelIn), иначе перенос втихую сломал бы её режим
+    if (z.mode === 'solo') return { ...z, layout: [[k]] };
+    const cols = z.layout.map(c => [...c]);
+    if (cols.length === 0) return { ...z, layout: [[k]] };
+    if (colIdx < 0 || colIdx >= cols.length) return z;
+    cols[colIdx].splice(Math.max(0, Math.min(cols[colIdx].length, rowIdx)), 0, k);
+    return { ...z, layout: cols };
+  });
+}
+
+// Дроп в разделитель колонок зоны: панель выносится в НОВУЮ колонку, в том
+// числе перелетая из соседней зоны.
+export function moveAcrossToNewColumn(zones: PanelZones, k: PanelKey, zone: Zone, insertIdx: number): PanelZones {
+  // Закрытую панель (src === null) дроп открывает новой колонкой на этом месте
+  const src = zoneOf(zones, k);
+  if (src === zone) return withZone(zones, zone, z => ({ ...z, layout: movePanelToNewColumn(z.layout, k, insertIdx) }));
+  const base = closePanel(zones, k);
+  return withZone(base, zone, z => {
+    if (z.mode === 'solo') return { ...z, layout: [[k]] };
+    const cols = z.layout.map(c => [...c]);
+    cols.splice(Math.max(0, Math.min(cols.length, insertIdx)), 0, [k]);
+    return { ...z, layout: cols };
+  });
+}
+
+// Выселить из зоны панели, которых на этом экране в ней быть не может, и вернуть
+// их иконки в домашнюю зону. Нужно как ремонт: экраны отличаются набором панелей
+// (в разделе «Чаты» правая зона держит только артефакты сессии), а сохранённая
+// раскладка живёт дольше — панель, уехавшая туда, где её некому нарисовать,
+// пропадала с концами: в своей зоне её нет, в чужой она невидима.
+// null — выселять нечего (сигнал вызывающему не дёргать запись).
+export function evictForeign(zones: PanelZones, zone: Zone, allowed: readonly PanelKey[]): PanelZones | null {
+  const z = zones[zone];
+  const strays = [...z.layout.flat(), ...z.stash.flat()].filter(k => !allowed.includes(k));
+  if (strays.length === 0) return null;
+  const drop = (cols: PanelKey[][]) => cols.map(c => c.filter(k => allowed.includes(k))).filter(c => c.length > 0);
+  const home = { ...zones.home };
+  for (const k of strays) home[k] = PANEL_HOME[k];
+  return {
+    ...zones,
+    home,
+    [zone]: { ...z, layout: drop(z.layout), stash: drop(z.stash) },
+  };
+}
+
+// Зона «свёрнута»: своих открытых панелей нет, но спрятанный набор есть
+export function isZoneCollapsed(z: ZoneState): boolean {
+  return z.layout.flat().length === 0 && z.stash.flat().length > 0;
+}
+
+// Показать панель по внешнему запросу (git-бар над композером просит «Изменения»).
+// Открытую НЕ трогаем и не перетаскиваем через полэкрана: вызывающий вместо этого
+// просит её мигнуть. Закрытая открывается в своей домашней зоне.
+export function revealPanel(zones: PanelZones, k: PanelKey): { zones: PanelZones; wasOpen: boolean } {
+  if (zoneOf(zones, k)) return { zones, wasOpen: true };
+  return { zones: openPanelIn(zones, homeOf(zones, k), k), wasOpen: false };
+}
+
+// ---------- миграция со старых раздельных ключей ----------
+
+// Раньше зоны были двумя независимыми сторами: cc_{ns}_panels_* (правая) и
+// cc_{ns}_left_panels_* (левая). Читаем обе раскладки, переводим упразднённые
+// ключи (personas → team, tools отбрасывается) и снимаем дубли в пользу правой.
+export function migrateZones(read: (key: string) => string | null, ns: string, legacyOpenKey?: string): PanelZones | null {
+  const rightRaw = read(`cc_${ns}_panels_layout`);
+  const leftRaw = read(`cc_${ns}_left_panels_layout`);
+  const legacyOpen = legacyOpenKey ? read(legacyOpenKey) : null;
+  if (!rightRaw && !leftRaw && !legacyOpen) return null;
+
+  const readLayout = (raw: string | null, legacy: string | null): PanelKey[][] => {
+    const src = raw ? (() => { try { return JSON.parse(raw); } catch { return null; } })() : null;
+    if (Array.isArray(src)) {
+      // Перевод ключей делаем ДО санитайза: personas/tools иначе отсеются как чужие
+      return sanitizeLayout(src.map(col => (Array.isArray(col) ? col.map(migrateLegacyKey).filter(Boolean) : col)));
+    }
+    return parseLayout(null, legacy);
+  };
+
+  const zone = (layout: PanelKey[][], prefix: string): ZoneState => ({
+    layout,
+    mode: read(`${prefix}_mode`) === 'solo' ? 'solo' : 'multi',
+    width: parseWidth(read(`${prefix}_width`)),
+    // Долей ширины старое состояние не знало — колонки равны
+    colFlex: [],
+    stash: sanitizeLayout((() => { try { return JSON.parse(read(`${prefix}_stash`) ?? '[]'); } catch { return []; } })()),
+  });
+
+  // Дубли между старыми раскладками (files/tasks были в обоих наборах) снимает
+  // общий инвариант — он же чистит и спрятанные наборы
+  return enforceZoneInvariant({
+    right: zone(readLayout(rightRaw, legacyOpen), `cc_${ns}_panels`),
+    left: zone(readLayout(leftRaw, null), `cc_${ns}_left_panels`),
+    // Веса были раздельными; при совпадении ключа берём правый
+    weights: {
+      ...parseWeights(read(`cc_${ns}_left_panels_weights`)),
+      ...parseWeights(read(`cc_${ns}_panels_weights`)),
+    },
+    // Привязки к зонам старое состояние не знало — их проставит trackHome по
+    // фактическому расположению панелей при первой же записи
+    home: {},
+  });
+}
+
+// Разделы хаба (Заметки, Знания, Персоны, Проекты) до перехода на рельсу держали
+// обычный сайдбар: режим pinned/collapsed в своём ключе и ОБЩУЮ на все разделы
+// ширину. Переводим это в состояние зоны, чтобы свёрнутый сайдбар остался
+// свёрнутым, а привычная ширина не сбросилась на дефолтную.
+export const LEGACY_SIDEBAR_WIDTH_KEY = 'cc_sidebar_width';
+
+export function migrateSidebarSection(
+  read: (key: string) => string | null,
+  modeKey: string,
+  panelKey: PanelKey,
+): PanelZones | null {
+  const mode = read(modeKey);
+  if (mode == null) return null;
+  // collapsed — панель прячется в stash: кнопка «свернуть» вернёт её как была
+  const collapsed = mode === 'collapsed';
+  return {
+    ...emptyZones(),
+    left: {
+      layout: collapsed ? [] : [[panelKey]],
+      stash: collapsed ? [[panelKey]] : [],
+      mode: 'multi',
+      width: parseWidth(read(LEGACY_SIDEBAR_WIDTH_KEY)),
+      colFlex: [],
+    },
+  };
+}
+
+// ---------- API стора ----------
+
+export interface PanelZonesApi {
+  zones: PanelZones;
+  // Клик по иконке рельсы зоны
+  toggle: (zone: Zone, k: PanelKey) => void;
+  // Закрыть панель, где бы она ни лежала (её иконка остаётся в прежней зоне)
+  close: (k: PanelKey) => void;
+  // Дроп панели на рельсу: закрыть и положить иконку ИМЕННО в эту зону — панель
+  // убирают туда, где потом хотят её найти. Для ЗАКРЫТОЙ панели закрывать нечего,
+  // и остаётся только переезд иконки: так кнопка переносится между сторонами, не
+  // открывая панель.
+  closeTo: (zone: Zone, k: PanelKey) => void;
+  // Ремонт сохранённой раскладки: выгнать из зоны панели, которых на этом экране
+  // в ней быть не может (см. evictForeign)
+  evict: (zone: Zone, allowed: readonly PanelKey[]) => void;
+  // Дроп панели на панель (в том числе через границу зон)
+  swapWith: (a: PanelKey, b: PanelKey) => void;
+  // Дроп панели из рельсы на открытую панель: гость встаёт в её слот, хозяин
+  // закрывается (см. replacePanelWith)
+  replaceWith: (guest: PanelKey, host: PanelKey) => void;
+  // Дроп в плейсхолдер строки / в разделитель колонок целевой зоны
+  moveAt: (k: PanelKey, zone: Zone, colIdx: number, rowIdx: number) => void;
+  moveToNewColumn: (k: PanelKey, zone: Zone, insertIdx: number) => void;
+  setMode: (zone: Zone, m: PanelMode) => void;
+  setWidth: (zone: Zone, n: number) => void;
+  toggleCollapsed: (zone: Zone) => void;
+  setWeights: (next: Partial<Record<PanelKey, number>>) => void;
+  // Доли ширины колонок зоны — ресайз границы МЕЖДУ колонками, см. colFlex
+  setColFlex: (zone: Zone, next: number[]) => void;
+  // Показать панель по внешнему запросу (git-бар над композером). Возвращает
+  // true, если она УЖЕ была открыта — тогда вызывающий просит её мигнуть.
+  reveal: (k: PanelKey) => boolean;
+}
+
+export type PanelZonesStore = { use: () => PanelZonesApi };
+
+// Фабрика независимого инстанса: своё состояние в замыкании + свой ключ
+// localStorage cc_{ns}_zones. Инстансы создаются на уровне модуля (ниже),
+// поэтому чтение localStorage происходит при импорте — как было до зон.
+function createPanelZones(ns: string, opts?: {
+  legacyOpenKey?: string;
+  defaultZones?: Partial<Record<Zone, PanelKey[][]>>;
+  // Раздел переезжает со старого сайдбара: его ключ режима и панель, в которую
+  // превращается прежний сайдбар
+  legacySidebar?: { modeKey: string; panelKey: PanelKey };
+}): PanelZonesStore {
+  const KEY = `cc_${ns}_zones`;
+
+  // Приоритет: новое состояние → миграция со старых раздельных ключей → дефолт.
+  // defaultZones нужен там, где базовая панель должна быть открыта при первом
+  // запуске (напр. chats слева). После закрытия пользователем состояние
+  // сохранится, и при следующем визите панель останется закрытой.
+  // migrated — состояние переехало со старых ключей и ещё не записано под новым
+  let migrated = false;
+  // trackHome на входе: у сохранённого состояния привязок может не быть (старый
+  // формат, миграция, дефолт) — тогда они выводятся из того, где панели лежат
+  let _zones: PanelZones = trackHome((() => {
+    const raw = lsGet(KEY);
+    if (raw) {
+      try { return sanitizeZones(JSON.parse(raw)); } catch { /* мусор → миграция/дефолт */ }
+    }
+    const fromLegacy = migrateZones(lsGet, ns, opts?.legacyOpenKey);
+    if (fromLegacy) { migrated = true; return fromLegacy; }
+    const fromSidebar = opts?.legacySidebar
+      && migrateSidebarSection(lsGet, opts.legacySidebar.modeKey, opts.legacySidebar.panelKey);
+    if (fromSidebar) { migrated = true; return fromSidebar; }
+    return sanitizeZones({
+      left: { layout: opts?.defaultZones?.left ?? [] },
+      right: { layout: opts?.defaultZones?.right ?? [] },
+    });
+  })());
+
   const listeners = new Set<() => void>();
   function emit() { listeners.forEach(l => l()); }
   function subscribe(l: () => void) { listeners.add(l); return () => { listeners.delete(l); }; }
 
-  function persist() {
-    lsSet(KEY_LAYOUT, JSON.stringify(_layout));
-    lsSet(KEY_WEIGHTS, JSON.stringify(_weights));
-    lsSet(KEY_WIDTH, String(_width));
-    lsSet(KEY_MODE, _mode);
-    lsSet(KEY_STASH, JSON.stringify(_stash));
-  }
+  function persist() { lsSet(KEY, JSON.stringify(_zones)); }
 
-  function setLayout(next: PanelKey[][]) {
-    _layout = sanitizeLayout(next);
-    _weights = normalizeWeights(_layout.flat(), _weights);
+  // Переезд фиксируем сразу, не дожидаясь первого действия пользователя: иначе
+  // состояние живёт только в памяти, и любая правка старых ключей другой вкладкой
+  // (или откатом кода) молча разошлась бы с тем, что человек видит на экране.
+  if (migrated) persist();
+
+  // Единая точка записи: держит инвариант «панель ровно в одном месте» и
+  // нормализует веса по всем открытым панелям обеих зон.
+  //
+  // Инвариант проверяется ИМЕННО ЗДЕСЬ, а не в операциях: спрятанный набор
+  // (stash) живёт мимо них — панель успевает уехать в соседнюю зону уже после
+  // того, как её запомнила кнопка «Свернуть все», и разворачивание вернуло бы
+  // вторую копию.
+  function commit(next: PanelZones) {
+    const clean = trackHome(enforceZoneInvariant(next));
+    // Доли ширины колонок держим синхронными с числом колонок каждой зоны: открыли/
+    // закрыли колонку — массив подрос/укоротился, лишнего мусора не копится.
+    const withFlex = {
+      ...clean,
+      left: { ...clean.left, colFlex: normalizeColFlex(clean.left.layout.length, clean.left.colFlex) },
+      right: { ...clean.right, colFlex: normalizeColFlex(clean.right.layout.length, clean.right.colFlex) },
+    };
+    _zones = { ...withFlex, weights: normalizeWeights(openKeysOf(withFlex), withFlex.weights) };
     persist();
     emit();
   }
 
-  function usePanelStack(): PanelStack {
-    const layout = useSyncExternalStore(subscribe, () => _layout);
-    const weights = useSyncExternalStore(subscribe, () => _weights);
-    const width = useSyncExternalStore(subscribe, () => _width);
-    const mode = useSyncExternalStore(subscribe, () => _mode);
+  // Вес новой панели заводим ДО раскладки, иначе normalizeWeights даст ей 1 уже
+  // после деления и соседи дрогнут. Нужно и клику по иконке, и дропу из рельсы:
+  // оба открывают панель, которой в раскладке ещё не было.
+  function ensureWeight(k: PanelKey) {
+    if (_zones.weights[k] == null) {
+      _zones = { ..._zones, weights: { ..._zones.weights, [k]: 1 } };
+    }
+  }
 
-    const toggle = useCallback((k: PanelKey) => {
-      const isOpen = _layout.flat().includes(k);
-      if (_mode === 'solo') {
-        // Solo: иконки работают как радио — открытая панель ЗАМЕНЯЕТСЯ выбранной,
-        // повторный клик по активной скрывает её (состояние общее с multi)
-        setLayout(isOpen ? [] : [[k]]);
-        return;
-      }
-      if (isOpen) {
-        setLayout(removePanel(_layout, k));
-      } else {
-        const cur = _weights[k];
-        if (cur == null) _weights = { ..._weights, [k]: 1 };
-        setLayout(addPanel(_layout, k));
-      }
+  function usePanelZones(): PanelZonesApi {
+    const zones = useSyncExternalStore(subscribe, () => _zones);
+
+    const toggle = useCallback((zone: Zone, k: PanelKey) => {
+      ensureWeight(k);
+      commit(togglePanelIn(_zones, zone, k));
     }, []);
 
-    const close = useCallback((k: PanelKey) => {
-      setLayout(removePanel(_layout, k));
-    }, []);
+    const close = useCallback((k: PanelKey) => { commit(closePanel(_zones, k)); }, []);
 
-    const collapsed = useSyncExternalStore(subscribe, () => _layout.flat().length === 0 && _stash.flat().length > 0);
+    const closeTo = useCallback((zone: Zone, k: PanelKey) => { commit(closePanelTo(_zones, zone, k)); }, []);
 
-    // Свернуть все панели (набор прячется в stash) / вернуть спрятанный набор как был
-    const toggleCollapsed = useCallback(() => {
-      if (_layout.flat().length > 0) {
-        _stash = _layout;
-        setLayout([]);
-      } else if (_stash.flat().length > 0) {
-        const restore = _stash;
-        _stash = [];
-        setLayout(restore);
-      }
-    }, []);
-
-    const setWeights = useCallback((next: Partial<Record<PanelKey, number>>) => {
-      _weights = { ..._weights, ...next };
-      persist();
-      emit();
-    }, []);
-
-    const setWidth = useCallback((n: number) => {
-      _width = Math.min(COL_MAX, Math.max(COL_MIN, Math.round(n)));
-      persist();
-      emit();
+    const evict = useCallback((zone: Zone, allowed: readonly PanelKey[]) => {
+      // null — выселять нечего: молчим, чтобы не будить подписчиков на каждый рендер
+      const next = evictForeign(_zones, zone, allowed);
+      if (next) commit(next);
     }, []);
 
     const swapWith = useCallback((a: PanelKey, b: PanelKey) => {
-      const flat = _layout.flat();
-      if (a !== b && flat.includes(a) && flat.includes(b)) {
-        // Вес — высота СЛОТА, а не панели: вместе с местами меняем и веса,
-        // иначе панель утащила бы свою высоту и раскладка «прыгнула» бы
-        const wa = _weights[a] ?? 1;
-        const wb = _weights[b] ?? 1;
-        _weights = { ..._weights, [a]: wb, [b]: wa };
-      }
-      setLayout(swapPanels(_layout, a, b));
+      // Вес — высота СЛОТА, а не панели: вместе с местами меняем и веса,
+      // иначе панель утащила бы свою высоту и раскладка «прыгнула» бы
+      const wa = _zones.weights[a] ?? 1;
+      const wb = _zones.weights[b] ?? 1;
+      const swapped = swapAcross(_zones, a, b);
+      commit({ ...swapped, weights: { ...swapped.weights, [a]: wb, [b]: wa } });
     }, []);
 
-    const moveToNewColumn = useCallback((from: PanelKey, insertIdx: number) => {
-      setLayout(movePanelToNewColumn(_layout, from, insertIdx));
+    // Дроп из рельсы на открытую панель: гость занимает её слот вместе с высотой —
+    // вес привязан к СЛОТУ, а не к панели, поэтому переезжает к гостю (иначе
+    // раскладка «прыгнула» бы на чужой высоте). Хозяин уходит закрытым, свой
+    // прежний вес не теряет: откроется — вернётся с ним.
+    const replaceWith = useCallback((guest: PanelKey, host: PanelKey) => {
+      const wh = _zones.weights[host] ?? 1;
+      const next = replacePanelWith(_zones, guest, host);
+      commit({ ...next, weights: { ...next.weights, [guest]: wh } });
     }, []);
 
-    const moveAt = useCallback((from: PanelKey, colIdx: number, rowIdx: number) => {
-      setLayout(movePanelAt(_layout, from, colIdx, rowIdx));
+    // Дроп в направляющую: перенос открытой панели либо открытие закрытой —
+    // её тащат из рельсы, и место дропа и есть выбранное для неё место
+    const moveAt = useCallback((k: PanelKey, zone: Zone, colIdx: number, rowIdx: number) => {
+      ensureWeight(k);
+      commit(moveAcrossAt(_zones, k, zone, colIdx, rowIdx));
     }, []);
 
-    const setMode = useCallback((m: PanelMode) => {
-      if (_mode === m) return;
-      _mode = m;
-      // Вход в solo СХЛОПЫВАЕТ раскладку до одной панели (первой открытой) —
+    const moveToNewColumn = useCallback((k: PanelKey, zone: Zone, insertIdx: number) => {
+      ensureWeight(k);
+      commit(moveAcrossToNewColumn(_zones, k, zone, insertIdx));
+    }, []);
+
+    const setMode = useCallback((zone: Zone, m: PanelMode) => {
+      if (_zones[zone].mode === m) return;
+      // Вход в solo СХЛОПЫВАЕТ раскладку зоны до одной панели (первой открытой) —
       // остальные реально закрываются; возврат в multi продолжает с текущего
       // состояния, старый набор не восстанавливается.
-      if (m === 'solo') {
-        const first = _layout.flat()[0];
-        setLayout(first ? [[first]] : []);
-        return;
-      }
+      const first = _zones[zone].layout.flat()[0];
+      commit(withZone(_zones, zone, z => ({
+        ...z,
+        mode: m,
+        layout: m === 'solo' ? (first ? [[first]] : []) : z.layout,
+      })));
+    }, []);
+
+    const setWidth = useCallback((zone: Zone, n: number) => {
+      commit(withZone(_zones, zone, z => ({ ...z, width: Math.min(COL_MAX, Math.max(COL_MIN, Math.round(n))) })));
+    }, []);
+
+    // Свернуть все панели зоны (набор прячется в stash) / вернуть его как был
+    const toggleCollapsed = useCallback((zone: Zone) => {
+      commit(withZone(_zones, zone, z => {
+        if (z.layout.flat().length > 0) return { ...z, stash: z.layout, layout: [] };
+        if (z.stash.flat().length > 0) return { ...z, layout: z.stash, stash: [] };
+        return z;
+      }));
+    }, []);
+
+    const setWeights = useCallback((next: Partial<Record<PanelKey, number>>) => {
+      // Ресайз высот пишем БЕЗ нормализации: она бы тут же вернула перетянутую
+      // границу к равным долям
+      _zones = { ..._zones, weights: { ..._zones.weights, ...next } };
       persist();
       emit();
     }, []);
 
-    return { layout, weights, width, mode, toggle, close, collapsed, toggleCollapsed, setWeights, setWidth, swapWith, moveToNewColumn, moveAt, setMode };
+    // Ресайз ширины между колонками: пишем массив долей напрямую, мимо commit —
+    // как у весов, нормализацию длины делает commit при смене раскладки, а на
+    // каждом кадре ресайза она не нужна (число колонок не меняется)
+    const setColFlex = useCallback((zone: Zone, next: number[]) => {
+      _zones = withZone(_zones, zone, z => ({ ...z, colFlex: next }));
+      persist();
+      emit();
+    }, []);
+
+    const reveal = useCallback((k: PanelKey) => {
+      const { zones: next, wasOpen } = revealPanel(_zones, k);
+      if (!wasOpen) commit(next);
+      return wasOpen;
+    }, []);
+
+    return { zones, toggle, close, closeTo, evict, swapWith, replaceWith, moveAt, moveToNewColumn, setMode, setWidth, toggleCollapsed, setWeights, setColFlex, reveal };
   }
 
-  return { use: usePanelStack };
+  return { use: usePanelZones };
 }
 
-// Инстанс воркспейса — ключи cc_ws_panels_* и legacy-миграция, как было до фабрики.
-export const wsPanelStack = createPanelStack('ws', { legacyOpenKey: 'cc_ws_panels_open' });
-// Инстанс раздела «Чаты» — независимая раскладка сессионной рельсы (cc_chat_panels_*).
-export const chatPanelStack = createPanelStack('chat');
+// Инстанс воркспейса — ключ cc_ws_zones, миграция со старых cc_ws_panels_* /
+// cc_ws_left_panels_* и совсем старого плоского списка cc_ws_panels_open.
+// Слева при первом запуске открыты «Чаты».
+export const wsPanels = createPanelZones('ws', {
+  legacyOpenKey: 'cc_ws_panels_open',
+  defaultZones: { left: [['chats']] },
+});
 
-// Совместимость: прежний хук = воркспейсный инстанс (RightPanelStack, ProjectGitBar).
-export const usePanelStack = wsPanelStack.use;
+// Инстанс раздела «Чаты» — независимая раскладка (cc_chat_zones).
+export const chatPanels = createPanelZones('chat', {
+  defaultZones: { left: [['chats']] },
+});
+
+// Разделы хаба: у каждого своя раскладка и своя ширина колонки (раньше ширина
+// была общей на все разделы — один ключ cc_sidebar_width).
+export const notesPanels = createPanelZones('notes', {
+  defaultZones: { left: [['notesList']] },
+  legacySidebar: { modeKey: 'cc_notes_sidebar_mode', panelKey: 'notesList' },
+});
+export const knowledgePanels = createPanelZones('knowledge', {
+  defaultZones: { left: [['knowledgeList']] },
+  legacySidebar: { modeKey: 'cc_knowledge_sidebar_mode', panelKey: 'knowledgeList' },
+});
+export const personasPanels = createPanelZones('personas', {
+  defaultZones: { left: [['personasList']] },
+  legacySidebar: { modeKey: 'cc_personas_sidebar_mode', panelKey: 'personasList' },
+});
+export const projectsPanels = createPanelZones('projects', {
+  defaultZones: { left: [['projectGroups']] },
+  legacySidebar: { modeKey: 'cc_projects_sidebar_mode', panelKey: 'projectGroups' },
+});

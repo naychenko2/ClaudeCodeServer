@@ -11,7 +11,7 @@ namespace ClaudeHomeServer.Controllers;
 [Route("api/usage")]
 public class UsageController(UsageService usage, ClaudeSubscriptionPool? subscriptionPool,
     LlmProviderRegistry providers, LocalActionRouter localRouter, OllamaClient ollama,
-    SubscriptionOAuthUsageService oauthUsage, IConfiguration config) : ControllerBase
+    SubscriptionOAuthUsageService oauthUsage) : ControllerBase
 {
     // История снимков использования лимитов подписки + тариф + per-subscription (для экрана usage)
     [HttpGet]

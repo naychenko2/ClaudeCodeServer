@@ -260,6 +260,18 @@ public class ClaudeSession : ILlmSessionAdapter
     // Метка текущего хода — по ней драйвер песочницы добивает процесс внутри контейнера
     private string? _currentTurnId;
 
+    // Модель, которой РЕАЛЬНО идёт ход: CLI называет её в system/init и в message.model
+    // каждого ответа (TurnTelemetry.ModelFromEvent). EffectiveModel — лишь намерение, и при
+    // пустом слоте он null, из-за чего в телеметрию уходил литерал unknown.
+    private string? _turnCliModel;
+
+    // Спан идущего хода — чтобы дописать в него фактическую модель, когда CLI её назовёт.
+    // Тег ставится в двух местах, но никогда одновременно: при старте хода (до запуска
+    // процесса, поток RunTurnAsync) и потом из ридера stdout, пока RunTurnAsync ждёт
+    // завершения. Ссылка на уже закрытый спан безвредна: SetTag после Stop ничего не
+    // меняет — спан к тому моменту экспортирован.
+    private Activity? _turnActivity;
+
     public ClaudeSession(Session info, LlmSessionContext context,
         string? mcpConfigPath = null, SkillsService? skills = null,
         WorkspaceKnowledgeStore? workspaceStore = null, string[]? disallowedTools = null,
@@ -417,9 +429,12 @@ public class ClaudeSession : ILlmSessionAdapter
                 // Кросс-проектные ProjectTasks-привязки текущей персоны: доступ к задачам
                 // ДРУГИХ проектов владельца (extraProjectIdsCsv), подмножество только для
                 // чтения — extraReadOnlyCsv (create/update/delete там запрещены)
-                var extraProjectIdsCsv = _tasksMcp.ExtraProjectIds is { Count: > 0 } extraIds
+                // hasTasks ⇒ _tasksMcp не null (путь сервера резолвится только при заданном
+                // контексте), но связь через промежуточный флаг компилятор не видит — идём
+                // через ?., чтобы инвариант не держался на подавлении nullable-анализа
+                var extraProjectIdsCsv = _tasksMcp?.ExtraProjectIds is { Count: > 0 } extraIds
                     ? string.Join(",", extraIds) : "";
-                var extraReadOnlyCsv = _tasksMcp.ExtraProjectIdsReadOnly is { Count: > 0 } extraRo
+                var extraReadOnlyCsv = _tasksMcp?.ExtraProjectIdsReadOnly is { Count: > 0 } extraRo
                     ? string.Join(",", extraRo) : "";
                 servers["tasks"] = new System.Text.Json.Nodes.JsonObject
                 {
@@ -1259,6 +1274,11 @@ public class ClaudeSession : ILlmSessionAdapter
             model: EffectiveModel,
             provider: Info.Provider);
 
+        // Модель в спане выше — намерение (что просили). Факт назовёт сам CLI по ходу
+        // прогона, тогда тег перезапишется на реальную модель; см. HandleStreamJson.
+        _turnActivity = turnActivity;
+        _turnCliModel = null;
+
         // --print обязателен: без него --output-format/--input-format/--include-partial-messages/--permission-prompt-tool не работают
         // --input-format stream-json нужен: мы посылаем JSON-объекты в stdin, а не plain text
         var args = new List<string>
@@ -1816,7 +1836,7 @@ public class ClaudeSession : ILlmSessionAdapter
         // OTel: дочерний спан запуска процесса (родитель — активный chat.turn).
         Process process;
         using (var procActivity = TurnTelemetry.StartProcessSpan(
-                   kind: _launcher.IsSandboxed ? "docker" : "local",
+                   kind: TurnTelemetry.ExecutionKind(_launcher.IsSandboxed),
                    command: _launcher.ClaudeCliCommand,
                    sessionId: Info.ClaudeSessionId ?? Info.Id.ToString(),
                    mcpConfigHash: TurnTelemetry.McpConfigHash(effectiveMcpConfig)))
@@ -2127,6 +2147,15 @@ public class ClaudeSession : ILlmSessionAdapter
 
         if (!root.TryGetProperty("type", out var typeProp)) return;
 
+        // Фактическая модель хода. Одной строкой на все виды событий: CLI называет её и в
+        // system/init, и в message.model каждого ответа — разбор в TurnTelemetry.ModelFromEvent.
+        // До этого в телеметрию шло намерение (EffectiveModel), а при пустом слоте — unknown.
+        if (TurnTelemetry.ModelFromEvent(root) is { Length: > 0 } cliModel && cliModel != _turnCliModel)
+        {
+            _turnCliModel = cliModel;
+            _turnActivity?.SetTag("model", cliModel);
+        }
+
         switch (typeProp.GetString())
         {
             case "system":
@@ -2281,7 +2310,8 @@ public class ClaudeSession : ILlmSessionAdapter
                 // API-ошибка (напр. 429 у провайдера): CLI отдаёт subtype=success, но is_error=true
                 // и текст в result; синтетический assistant-текст не стримится дельтами —
                 // без этого пользователь увидел бы пустой «успешный» ход
-                if (root.TryGetProperty("is_error", out var isErr) && isErr.ValueKind == JsonValueKind.True
+                var isErrorFlag = root.TryGetProperty("is_error", out var isErr) && isErr.ValueKind == JsonValueKind.True;
+                if (isErrorFlag
                     && root.TryGetProperty("result", out var resText) && resText.ValueKind == JsonValueKind.String
                     && !string.IsNullOrWhiteSpace(resText.GetString()))
                     await _onMessage(new ErrorMessage(resText.GetString()!));
@@ -2289,9 +2319,18 @@ public class ClaudeSession : ILlmSessionAdapter
                 var ctxTokens = _lastContextTokens > 0 ? _lastContextTokens : (int?)null;
                 await _onMessage(new ResultMessage(subtype, durationMs, numTurns, usage, totalCost, apiErr, denials, ctxTokens, ParseUsageModel(root)));
                 // OTel: метрика длительности хода (duration_ms из самого CLI — не пересчитываем)
-                // и счётчик ошибок при subtype=error
-                TurnTelemetry.RecordTurnResult(durationMs, Info.Provider, EffectiveModel,
-                    isError: subtype == "error", apiErrorStatus: apiErr);
+                // и счётчик ошибок. Оба признака отказа сводит IsTurnFailure: без is_error
+                // отказы провайдера (429) уходили в метрику как outcome=success — счётчик
+                // ccs.llm.errors пустовал, а мгновенные отказные ходы занижали p95 duration.
+                // Модель — фактическая (её назвал CLI), а не та, что просили: при пустом слоте
+                // EffectiveModel равен null и метрика получала unknown вместо ответа на вопрос
+                // «чем считали». Намерение остаётся фолбэком, если CLI модель не назвал.
+                var turnFailed = TurnTelemetry.IsTurnFailure(subtype, isErrorFlag);
+                TurnTelemetry.RecordTurnResult(durationMs, Info.Provider, _turnCliModel ?? EffectiveModel,
+                    isError: turnFailed, apiErrorStatus: apiErr,
+                    isSandboxed: _launcher.IsSandboxed);
+                // Тот же исход — на спан: иначе в трейсах отказной ход неотличим от успешного
+                TurnTelemetry.MarkTurnOutcome(_turnActivity, turnFailed, apiErr);
                 // Ход завершён. Без живых фоновых задач закрываем stdin — CLI выйдет сам,
                 // дальше ждём его не дольше ResultExitGrace. С ними stdin держим открытым:
                 // прогон доживает (агенты работают внутри процесса) и готов принять

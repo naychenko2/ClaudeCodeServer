@@ -1,4 +1,4 @@
-import type { Project, ProjectGroup, ProjectTag, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, BackupStatus, BackupSummary, CodeGraph } from '../types';
+import type { Project, ProjectGroup, ProjectTag, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo } from '../types';
 import { request } from './offline';
 
 // Личные/админские слоты моделей: сильная/средняя/слабая.
@@ -983,7 +983,51 @@ export const api = {
       request<void>('/history', { method: 'DELETE' }),
   },
 
+  // Документация проекта (README.md + docs/**) для панели «Документы»: корпус со связями,
+  // а не файлы — отсюда отдельная секция рядом с files
+  docs: {
+    index: (projectId: string) =>
+      request<DocEntry[]>(`/projects/${projectId}/docs`),
+    doc: (projectId: string, path: string) =>
+      request<DocDetail>(`/projects/${projectId}/docs/doc?path=${encodeURIComponent(path)}`),
+    search: (projectId: string, q: string) =>
+      request<DocSearchHit[]>(`/projects/${projectId}/docs/search?q=${encodeURIComponent(q)}`),
+    // Область документации: что выбрано и что вообще годится (папки, файлы корня, типы)
+    scope: (projectId: string) =>
+      request<DocsScopeInfo>(`/projects/${projectId}/docs/scope`),
+    // У каждой оси null — вернуть её к дефолту, [] — «ничего отсюда».
+    // Ответ отдаёт СОХРАНЁННОЕ значение (сервер отбрасывает мусор), его и показываем
+    setScope: (projectId: string, scope: Partial<DocsScope>) =>
+      request<DocsScopeInfo>(`/projects/${projectId}/docs/scope`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          folders: scope.folders ?? null,
+          rootFiles: scope.rootFiles ?? null,
+          types: scope.types ?? null,
+          // undefined — не трогать выбор «Начала»; '' — вернуть авто-README
+          home: scope.home === undefined ? null : scope.home,
+        }),
+      }),
+  },
+
+  // Раздел «Телеметрия»: статус проброса SigNoz — фронт решает, показать iframe или заглушку
+  telemetry: {
+    status: () =>
+      request<{ configured: boolean; reachable: boolean; proxyPath: string }>('/telemetry/status'),
+  },
+
   files: {
+    // URL файла проекта для браузерного <img>/<video>: токен через ?access_token=,
+    // потому что тег не шлёт заголовки. Нужен картинкам в markdown — README ссылается
+    // на них относительным путём, а base64 из files/content для <img src> не подходит
+    fileUrl: (projectId: string, path: string): string => {
+      const token = typeof localStorage !== 'undefined'
+        ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
+        : null;
+      const params = new URLSearchParams({ path });
+      if (token) params.set('access_token', token);
+      return `/api/projects/${encodeURIComponent(projectId)}/files/stream?${params}`;
+    },
     list: (projectId: string, path = '') =>
       request<FileEntry[]>(`/projects/${projectId}/files?path=${encodeURIComponent(path)}`),
     tree: (projectId: string, path = '') =>

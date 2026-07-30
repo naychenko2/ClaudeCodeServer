@@ -101,6 +101,10 @@
   --shadow-island:   0 1px 2px rgba(60, 50, 35, 0.06), 0 6px 20px rgba(60, 50, 35, 0.10);
   --shadow-dropdown: 0 8px 28px rgba(60, 50, 35, 0.16);
   --shadow-modal:    0 24px 60px rgba(23, 19, 15, 0.40);
+  /* Попап-превью панели: остров, поднятый НАД раскладкой. Один размытый слой
+     читается как дымка, поэтому тень двойная — плотная контактная у самой кромки
+     плюс широкий разлёт: он и создаёт ощущение высоты над соседними панелями */
+  --shadow-peek:     0 2px 6px rgba(60, 50, 35, 0.14), 0 20px 48px rgba(23, 19, 15, 0.32);
   --shadow-sheet:    0 -8px 40px rgba(23, 19, 15, 0.22);
   --shadow-button:   0 4px 14px rgba(217, 119, 87, 0.30);
   --shadow-fab:      0 6px 18px rgba(217, 119, 87, 0.42);
@@ -222,6 +226,7 @@
   --shadow-island:   0 1px 2px rgba(0, 0, 0, 0.30), 0 8px 24px rgba(0, 0, 0, 0.45);
   --shadow-dropdown: 0 10px 32px rgba(0, 0, 0, 0.55);
   --shadow-modal:    0 28px 70px rgba(0, 0, 0, 0.65);
+  --shadow-peek:     0 2px 8px rgba(0, 0, 0, 0.50), 0 24px 56px rgba(0, 0, 0, 0.68);
   --shadow-sheet:    0 -10px 46px rgba(0, 0, 0, 0.55);
   --shadow-button:   0 4px 16px rgba(227, 138, 106, 0.34);
   --shadow-fab:      0 6px 20px rgba(227, 138, 106, 0.46);

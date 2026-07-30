@@ -1,4 +1,4 @@
-// Стор внешних модулей платформы (контракт docs/module-platform-integration-contract.md,
+// Стор внешних модулей платформы (контракт docs/modules/integration-contract.md,
 // ТЗ R5/R6): список включённых модулей приходит с бэка (GET /api/modules), а их remote
 // ./Tab грузятся через Module Federation в рантайме. Паттерн стора — как featureFlags.ts.
 

@@ -20,7 +20,7 @@ public sealed class SummaryGenerationException(string message) : Exception(messa
 public class SessionSummaryService(
     SessionManager sessions, ProjectManager projects, NotesService notes,
     NotesKnowledgeService kb, Llm.ICheapTextRunner cheap,
-    IHubContext<SessionHub> hub, PushService push,
+    IHubContext<SessionHub> hub,
     NotificationService notif, IConfiguration config,
     ILogger<SessionSummaryService> logger)
 {

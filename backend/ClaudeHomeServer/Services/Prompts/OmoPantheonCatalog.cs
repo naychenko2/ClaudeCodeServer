@@ -23,7 +23,7 @@ public sealed record PantheonTemplate(
     PersonaSpecialty Specialty = PersonaSpecialty.None);
 
 // Каталог пантеона OmO: 8 ролей с полными переведёнными промптами oh-my-openagent
-// (по договорённости с авторами, соответствие — docs/omo-adoption.md). Полные
+// (по договорённости с авторами, соответствие — docs/omo/adoption.md). Полные
 // регламенты (Instructions) — в сгенерированном partial OmoPantheonCatalog.Instructions.cs.
 public static partial class OmoPantheonCatalog
 {

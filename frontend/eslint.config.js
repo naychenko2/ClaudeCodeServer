@@ -6,7 +6,7 @@ import tseslint from 'typescript-eslint'
 import { defineConfig, globalIgnores } from 'eslint/config'
 import noRawColor from './eslint-rules/no-raw-color.js'
 
-// Файлы, которым сырой hex положен по природе (см. docs/design-guidelines.md,
+// Файлы, которым сырой hex положен по природе (см. docs/design/guidelines.md,
 // раздел «Железные правила» — там же перечислены легальные исключения):
 //  - темы сторонних редакторов/вьюверов: они принимают только конкретные значения,
 //    CSS-переменные хоста до них не доходят;

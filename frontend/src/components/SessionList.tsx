@@ -55,6 +55,10 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   useLastMechanicVersion();
   const personas = usePersonas();
   const [sessions, setSessions] = useState<Session[]>([]);
+  // Список приехал с сервера хотя бы раз. До этого о числе чатов молчим: пустой
+  // стартовый массив — не «чатов нет», а «ещё не знаем», и владелец, который по
+  // этому числу решает показывать ли панель, схлопнул бы её сразу после открытия
+  const [loaded, setLoaded] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
   const [editTarget, setEditTarget] = useState<Session | null>(null);
   // Карточка под курсором — на ней показываем действия (на тач-устройствах hover нет, там действия видны всегда)
@@ -130,7 +134,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     }
   };
 
-  useEffect(() => { onSessionsChanged?.(sessions.length); }, [sessions.length, onSessionsChanged]);
+  useEffect(() => { if (loaded) onSessionsChanged?.(sessions.length); }, [loaded, sessions.length, onSessionsChanged]);
 
   const createNew = async (): Promise<Session> => {
     const s = await api.sessions.create(project.id, 'auto');
@@ -150,6 +154,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
       const list = await api.sessions.list(project.id).catch(() => null);
       if (!list) return;
       setSessions(list);
+      setLoaded(true);
       if (!initializedRef.current) {
         initializedRef.current = true;
         // Автовыбор первого чата, если он есть. Пустой список чат НЕ создаём —
@@ -428,7 +433,11 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         isMobile={isMobile}
       />
 
-      <div style={{ flex: 1, overflowY: 'auto', padding: '8px 8px' }}>
+      {/* Сверху отступ ужимается только под разделитель группы («Сегодня»): свой
+          верхний padding у него есть, и вместе с общим набегало 18px пустоты под
+          шапкой. Без группировки список начинается сразу карточкой — ей нужен
+          обычный отступ, иначе она липнет к заголовку. */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: `${groupBy === 'none' ? 8 : 2}px 8px 8px` }}>
         {(tree ? tree.rows.length === 0 : filteredSessions.length === 0) && sessions.length > 0 && (
           <EmptyState
             compact

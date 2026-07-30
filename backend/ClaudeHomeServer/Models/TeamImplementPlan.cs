@@ -3,7 +3,7 @@ namespace ClaudeHomeServer.Models;
 // План командной реализации (Э2): результат работы планировщика — структура, а не текст.
 // Публикуется карточкой в ленту штаба, человек правит исполнителей и подтверждает запуск
 // (единственное согласование итерации). Раздача под-задач и волны — Э3.
-// См. docs/features/team-implement-mode.md, раздел «Этапы → Э2».
+// См. docs/architecture/team-implement-mode.md, раздел «Этапы → Э2».
 public class TeamImplementPlan
 {
     // Id карточки плана: попадает в Session.TeamImplement.PlanCardId и в ответ хаба

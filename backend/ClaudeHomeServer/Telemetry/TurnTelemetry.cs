@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
+using System.Text.Json;
 
 namespace ClaudeHomeServer.Telemetry;
 
@@ -29,6 +30,32 @@ internal static class TurnTelemetry
     }
 
     /// <summary>
+    /// Помечает спан хода исходом: тег <c>outcome</c>, а для отказа — <c>error_type</c>
+    /// и статус <see cref="ActivityStatusCode.Error"/>.
+    ///
+    /// Без этого упавший ход в трейсах НИЧЕМ не отличался от успешного: outcome и
+    /// error_type жили только в метриках, а статус спана оставался Unset. То есть
+    /// на дашборде было видно, что отказы есть, а открыть в Traces Explorer именно
+    /// их — нечем: отобрать не по чему.
+    ///
+    /// Кардинальность здесь не проблема (в отличие от метрик): оба значения берутся
+    /// из замкнутых наборов, а спаны не образуют временных рядов.
+    /// </summary>
+    public static void MarkTurnOutcome(Activity? activity, bool isError, string? apiErrorStatus)
+    {
+        if (activity is null) return;
+
+        activity.SetTag("outcome", isError ? "error" : "success");
+        if (!isError) return;
+
+        var errorType = ClassifyErrorType(apiErrorStatus);
+        activity.SetTag("error_type", errorType);
+        // Description не заполняем: PiiSanitizingProcessor всё равно его обнуляет,
+        // а в текст ошибки провайдера легко попадают данные пользователя.
+        activity.SetStatus(ActivityStatusCode.Error);
+    }
+
+    /// <summary>
     /// Дочерний спан запуска процесса claude CLI. Родитель — активный chat.turn
     /// (Activity.Current на момент вызова). kind: "local" | "docker".
     /// </summary>
@@ -39,24 +66,120 @@ internal static class TurnTelemetry
         if (activity is null) return null;
         activity
             .SetTag("kind", kind)
-            .SetTag("command", command)
+            .SetTag("command", ExecutableName(command))
             .SetTag("session_id", sessionId)
             .SetTag("mcp_config_hash", mcpConfigHash);
         return activity;
     }
 
     /// <summary>
+    /// Только имя исполняемого файла — без каталогов.
+    ///
+    /// Вызывающий передаёт команду запуска как есть, а на хосте это абсолютный путь вида
+    /// <c>C:\Users\{имя}\AppData\Roaming\npm\...\claude.exe</c> — то есть имя пользователя ОС
+    /// внутри значения. Санитайзер это не ловил: он классифицирует по имени тега, а тег
+    /// <c>command</c> состоит в allowlist (пути хэшируются по ключам вида *_path). Утечку
+    /// нашли на боевых данных: спан приехал в SigNoz с полным путём.
+    ///
+    /// Режем в источнике, а не правилом санитайзера: диагностическая ценность тега — «какой
+    /// бинарь запустили» (claude.exe против docker), каталог для этого не нужен, а хэш вместо
+    /// имени сделал бы тег нечитаемым. Разделители режем оба сразу (<c>/</c> и <c>\</c>) руками,
+    /// не через <c>Path.GetFileName</c>: тот ориентируется на разделители текущей ОС, и на Linux
+    /// (где гоняется CI) обратный слэш — обычный символ имени, поэтому Windows-путь не резался бы.
+    /// </summary>
+    internal static string ExecutableName(string? command)
+    {
+        if (string.IsNullOrWhiteSpace(command)) return "unknown";
+        var trimmed = command.Trim();
+        var cut = trimmed.LastIndexOfAny(new[] { '/', '\\' });
+        var name = cut >= 0 ? trimmed[(cut + 1)..] : trimmed;
+        return string.IsNullOrEmpty(name) ? "unknown" : name;
+    }
+
+    /// <summary>
+    /// Среда исполнения хода одним словом: <c>docker</c> — процесс claude идёт в песочнице,
+    /// <c>local</c> — на машине сервера. Выбирает её <c>ILauncherFactory.ForOwner</c> по полю
+    /// <c>User.ExecutionEnvironment</c> ВЛАДЕЛЬЦА процесса, поэтому в одном инстансе ходы
+    /// разных пользователей идут в разных средах.
+    ///
+    /// Общая точка для спана <c>process.start</c> (тег <c>kind</c>) и метрик хода
+    /// (тег <c>execution</c>): словарь значений один, иначе трейс и метрика перестанут
+    /// биться друг с другом при разборе «песочница тормозит или нет».
+    /// </summary>
+    public static string ExecutionKind(bool isSandboxed) => isSandboxed ? "docker" : "local";
+
+    /// <summary>
     /// Запись результата хода по result-событию CLI: длительность из duration_ms
-    /// самого CLI (не пересчитывается), плюс ошибка при subtype=error.
+    /// самого CLI (не пересчитывается), плюс счётчик ошибок при отказе.
+    ///
+    /// Отказом считается не только subtype=error: при API-ошибке провайдера (напр. 429)
+    /// CLI отдаёт subtype=success с is_error=true — вызывающий обязан свести оба
+    /// признака в <paramref name="isError"/>, иначе отказ уедет в метрику как success.
     /// </summary>
     public static void RecordTurnResult(
-        long durationMs, string provider, string? model, bool isError, string? apiErrorStatus)
+        long durationMs, string provider, string? model, bool isError, string? apiErrorStatus,
+        bool isSandboxed = false)
     {
         var outcome = isError ? "error" : "success";
-        ServerMetrics.RecordLlmDuration(durationMs, provider, model ?? "unknown", outcome);
+        var execution = ExecutionKind(isSandboxed);
+        ServerMetrics.RecordLlmDuration(durationMs, provider, model ?? "unknown", outcome, execution);
         if (isError)
-            ServerMetrics.RecordLlmError(provider, ClassifyErrorType(apiErrorStatus));
+            ServerMetrics.RecordLlmError(provider, ClassifyErrorType(apiErrorStatus), execution);
     }
+
+    /// <summary>
+    /// Модель, которой РЕАЛЬНО идёт ход, из события stream-json.
+    ///
+    /// Зачем: <c>Session.Model</c> и слоты тиров — это НАМЕРЕНИЕ. Когда модель у чата не задана
+    /// и слот пуст, резолвер отдаёт null («решает CLI»), и в телеметрию уходил литерал
+    /// <c>unknown</c> — на боевом ходе так и вышло. Ответить «чем считали» по такой метрике
+    /// нельзя, а именно за этим на дашборд заведена панель моделей.
+    ///
+    /// CLI называет модель сам, в двух видах событий:
+    /// <list type="bullet">
+    /// <item><c>system/init</c> — поле <c>model</c> верхнего уровня (модель прогона);</item>
+    /// <item><c>assistant</c> — <c>message.model</c> (модель, которая выдала этот ответ).</item>
+    /// </list>
+    /// Второе точнее: init называет модель на старте прогона, а ответ — по факту.
+    /// Возвращает null, если события не того типа или поле пустое.
+    /// </summary>
+    public static string? ModelFromEvent(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object) return null;
+
+        // assistant: message.model — берём первым, он ближе к факту
+        if (root.TryGetProperty("message", out var message)
+            && message.ValueKind == JsonValueKind.Object
+            && message.TryGetProperty("model", out var msgModel)
+            && msgModel.ValueKind == JsonValueKind.String
+            && msgModel.GetString() is { Length: > 0 } fromMessage)
+        {
+            return fromMessage;
+        }
+
+        // system/init: model верхнего уровня
+        if (root.TryGetProperty("model", out var topModel)
+            && topModel.ValueKind == JsonValueKind.String
+            && topModel.GetString() is { Length: > 0 } fromTop)
+        {
+            return fromTop;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Признак отказа хода по result-событию CLI.
+    ///
+    /// Отказ приходит двумя разными путями, и учитывать надо ОБА:
+    /// <list type="bullet">
+    /// <item>жёсткий сбой CLI — <c>subtype=error</c>;</item>
+    /// <item>API-ошибка провайдера (напр. 429) — <c>subtype=success</c> при <c>is_error=true</c>.</item>
+    /// </list>
+    /// Пока учитывался только первый, отказы провайдера уезжали в метрику как success.
+    /// </summary>
+    public static bool IsTurnFailure(string? subtype, bool isErrorFlag) =>
+        subtype == "error" || isErrorFlag;
 
     /// <summary>
     /// Срабатывание мягкого rate-limit (rate_limit_event от CLI).

@@ -5,7 +5,7 @@ using ClaudeHomeServer.Models;
 namespace ClaudeHomeServer.Services.Modules;
 
 /// <summary>
-/// Реестр внешних модулей (контракт docs/module-platform-integration-contract.md, ТЗ R1).
+/// Реестр внешних модулей (контракт docs/modules/integration-contract.md, ТЗ R1).
 /// На старте читает манифесты module.json из каталога модулей (Modules:Path, дефолт
 /// {data}/modules/*/module.json) и явного списка путей Modules:Manifests. Ядро обязано
 /// стартовать при любом содержимом манифестов: битый JSON / несовместимый мажор /

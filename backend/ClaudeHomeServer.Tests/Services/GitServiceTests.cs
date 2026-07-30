@@ -71,6 +71,23 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
         st.Untracked.Should().ContainSingle(f => f.Path == "new.txt");
     }
 
+    // Новая папка должна разворачиваться в файлы (-uall). Без флага git отдаёт её одной записью
+    // «assets/», и панель изменений открывала путь папки как файл — чтение файла падало.
+    // Имя папки нейтральное: дефолтный .gitignore из InitAsync игнорирует служебные (.claude и пр.).
+    [Fact]
+    public async Task Status_Новая_Папка_Разворачивается_В_Файлы()
+    {
+        var dir = Path.Combine(_repo, "assets");
+        Directory.CreateDirectory(dir);
+        await File.WriteAllTextAsync(Path.Combine(dir, "one.txt"), "раз\n");
+        await File.WriteAllTextAsync(Path.Combine(dir, "two.txt"), "два\n");
+
+        var st = await _git.StatusAsync(null, _repo);
+
+        st.Untracked.Select(f => f.Path).Should().Contain(["assets/one.txt", "assets/two.txt"]);
+        st.Untracked.Should().NotContain(f => f.Path.EndsWith('/'));
+    }
+
     [Fact]
     public async Task Commit_Кириллица_И_Amend()
     {

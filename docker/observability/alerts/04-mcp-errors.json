@@ -1,0 +1,43 @@
+{
+  "alert": "Отказы MCP-инструментов",
+  "alertType": "METRIC_BASED_ALERT",
+  "ruleType": "threshold_rule",
+  "description": "Инструменты продукта (задачи, заметки, знания) начали отваливаться. Тихий класс сбоев: в чате это выглядит как «Claude почему-то не сделал», а не как ошибка.",
+  "evalWindow": "15m",
+  "frequency": "5m",
+  "labels": { "severity": "warning" },
+  "annotations": {
+    "description": "За 15 минут больше трёх отказов MCP. Подробности по инструментам — GET /api/mcp/calls (доля отказов и последние сбои).",
+    "summary": "MCP-инструменты отваливаются"
+  },
+  "preferredChannels": ["ccs-alerts-email"],
+  "condition": {
+    "selectedQueryName": "A",
+    "op": "above",
+    "matchType": "at_least_once",
+    "target": 3,
+    "compositeQuery": {
+      "queryType": "builder",
+      "panelType": "graph",
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "metrics",
+            "disabled": false,
+            "aggregations": [
+              {
+                "metricName": "ccs.mcp.errors",
+                "temporality": "Cumulative",
+                "timeAggregation": "increase",
+                "spaceAggregation": "sum"
+              }
+            ],
+            "groupBy": [ { "name": "deployment.environment", "fieldDataType": "string" } ]
+          }
+        }
+      ]
+    }
+  }
+}

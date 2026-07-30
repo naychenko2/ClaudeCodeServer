@@ -94,7 +94,7 @@ public static class TeamImplementStageExtensions
 }
 
 // Бюджет итерации режима «Командная реализация»: считается на одну вводную человека и
-// сбрасывается с каждой новой (см. docs/features/team-implement-mode.md, «Бюджет»).
+// сбрасывается с каждой новой (см. docs/architecture/team-implement-mode.md, «Бюджет»).
 // Счётчики «израсходовано» инкрементирует бэкенд в точке запуска (Э3–Э4), НЕ модель.
 // Потолки — настраиваемые дефолты (TeamImplement:* в конфиге), выставляются при включении.
 public class TeamImplementBudget

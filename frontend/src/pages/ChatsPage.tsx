@@ -1,24 +1,26 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Menu as MenuIcon, MessageCircle, Plus } from 'lucide-react';
+import { MessageCircle, Plus } from 'lucide-react';
 import type { AuthState, Session, SkillInfo } from '../types';
 import { api } from '../lib/api';
 import { joinUser, onMessage } from '../lib/signalr';
 import { navPush, navReplace, getNav, type NavSnapshot } from '../lib/nav';
 import { showToast } from '../lib/toast';
-import { C, FONT } from '../lib/design';
-import { useSidebarDrag } from '../lib/sidebarWidth';
+import { C, FONT, CHAT_MAX_W } from '../lib/design';
 import { useIsMobile } from '../lib/breakpoints';
-import { Button, IconButton, IslandScaffold } from '../components/ui';
+import { Button, IslandScaffold } from '../components/ui';
 import { CanvasBackdrop } from '../components/ui/CanvasBackdrop';
 import { ICON_SIZE } from '../components/ui/icons';
 import type { HubTabValue } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
 import { ChatList } from '../components/ChatList';
 import { ChatPanel } from '../components/ChatPanel';
-import { RightPanelStack } from './workspace/RightPanelStack';
-import { chatPanelStack } from './workspace/panelStackState';
+import { PanelZone } from './workspace/PanelZone';
+import { useSessionPanels } from './workspace/useSessionPanels';
+import { chatPanels } from './workspace/panelStackState';
+import { CHAT_KEYS, SESSION_KEYS } from './workspace/panelCatalog';
 import { ensurePersonasLoaded } from '../lib/personas';
 import { ensureTasksLoaded } from '../lib/tasks';
+import { markChatRead, useUnreadChatCount } from '../lib/chatReadState';
 
 const OPEN_CHAT_KEY = 'cc_open_chat';
 
@@ -53,18 +55,9 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
   // Вложения относятся к конкретному чату — сбрасываем при смене активного
   useEffect(() => { setAttachedFiles([]); }, [activeId]);
 
-  // Режим сайдбара чатов: pinned (в потоке) | collapsed (свёрнут). Сворачивание —
-  // кнопкой на сплиттере, разворот — гамбургером обратно в поток.
-  const [sidebarMode, setSidebarMode] = useState<'pinned' | 'collapsed'>(() =>
-    localStorage.getItem('cc_chats_sidebar_mode') === 'collapsed' ? 'collapsed' : 'pinned'
-  );
-  useEffect(() => {
-    localStorage.setItem('cc_chats_sidebar_mode', sidebarMode);
-  }, [sidebarMode]);
-
-  // Ширина сайдбара — общая для всех разделов (единый хук: та же ширина и клампы,
-  // что в «Проектах», «Заметках», воркспейсе).
-  const { width: sidebarWidth, dragging: draggingSplitter, startDrag: handleSidebarSplitterMouseDown } = useSidebarDrag();
+  // Видимость и ширина панели чатов целиком на LeftPanelStack (стор
+  // chatPanels: рельса RAIL_W + панель с ресайзом). Прежние
+  // sidebarMode/useSidebarDrag удалены — они больше ничем не управляли.
 
   // Артефакты сессии живут в правой рельсе (RightPanelStack в режиме sessionOnly):
   // открытие панелей и их ширина хранятся в собственном инстансе стора (cc_chat_panels_*),
@@ -111,7 +104,6 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
       // NotificationToasts и стор задач). Ранний LeaveUser выкидывал всё
       // соединение из группы → task_changed переставал доходить в проектном чате.
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth.id]);
 
   // Back/forward браузера внутри вкладки «Чаты» — синхронизируем активный чат из истории
@@ -141,13 +133,14 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
     };
     window.addEventListener('cc-open-chat', open);
     return () => window.removeEventListener('cc-open-chat', open);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const selectChat = (chat: Session) => {
     setActiveId(chat.id);
     localStorage.setItem(OPEN_CHAT_KEY, chat.id);
     navPush({ screen: 'chats', chatId: chat.id });
+    // Отмечаем чат как прочитанный — бейдж непрочитанных пересчитается
+    markChatRead(chat.id);
   };
 
   // Возврат из открытого чата к списку (мобилка). Детерминированно, не полагаясь на history.back():
@@ -174,6 +167,21 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
 
   const activeChat = chats.find(c => c.id === activeId) ?? null;
 
+  // Бейдж непрочитанных на иконке рельсы — реактивен к markChatRead
+  const unreadCount = useUnreadChatCount(chats);
+
+  // Панели активного чата (План/Агенты/Персона). Проекта здесь нет — артефакты
+  // берутся по одной сессии.
+  const sessionPanels = useSessionPanels(activeChat);
+
+  // Открытый чат всегда прочитан: пока он на экране, приходящие в него сообщения
+  // не должны копить бейдж. Следим и за updatedAt, а не только за сменой чата.
+  const activeChatId = activeChat?.id;
+  const activeChatUpdatedAt = activeChat?.updatedAt;
+  useEffect(() => {
+    if (activeChatId) markChatRead(activeChatId);
+  }, [activeChatId, activeChatUpdatedAt]);
+
   // Чат отредактирован/закреплён — обновить в списке
   const handleChatEdited = (updated: Session) =>
     setChats(prev => prev.map(c => c.id === updated.id ? { ...c, ...updated } : c));
@@ -184,18 +192,13 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
     if (activeId === id) backToList();
   };
 
-  // Развернуть свёрнутый сайдбар в поток — проброс в шапку ChatPanel
-  const openSidebar = sidebarMode !== 'pinned' ? () => setSidebarMode('pinned') : undefined;
-
-  // Внутренность сайдбара-острова: список чатов (управление сворачиванием — на
-  // сплиттере). Паддинг здесь, а не на обёртке: IslandScaffold отступы не добавляет.
-  const sidebarInner = (
-    <div style={{ flex: 1, minHeight: 0, padding: '8px 10px 14px', display: 'flex', flexDirection: 'column' }}>
-      <div style={{ flex: 1, minHeight: 0 }}>
-        <ChatList chats={chats} activeId={activeId} onSelect={selectChat} onNew={newChat} creating={creating} onEdited={handleChatEdited} onDeleted={handleChatDeleted} workflowRunningFor={workflowRunningFor ?? undefined} />
-      </div>
-    </div>
-  );
+  // Сайдбар: ChatList в режиме bare — без своей PanelShell (LeftPanelStack
+  // оборачивает в свой PanelShell). Иначе двойной заголовок/обёртка.
+  // chats.length === 0 → sidebar=null: IslandScaffold тогда не рендерит сайдбар,
+  // центральная область занимает всю ширину.
+  const sidebar = chats.length > 0 ? (
+    <ChatList bare chats={chats} activeId={activeId} onSelect={selectChat} onNew={newChat} creating={creating} onEdited={handleChatEdited} onDeleted={handleChatDeleted} workflowRunningFor={workflowRunningFor ?? undefined} />
+  ) : null;
 
   // === Мобильная раскладка: список ИЛИ полноэкранный чат (не две панели) ===
   if (isMobile) {
@@ -220,11 +223,14 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
                 onWorkflowRunning={handleWorkflowRunning}
               />
             </div>
-            <RightPanelStack
-              sessionOnly
-              isMobile
-              panelStack={chatPanelStack}
-              session={activeChat}
+            <PanelZone
+              side="right"
+              allowedKeys={SESSION_KEYS}
+              hideWhenEmpty
+              compact
+              panelStack={chatPanels}
+              panels={{}}
+              sessionPanels={sessionPanels}
             />
           </div>
         ) : (
@@ -245,16 +251,24 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
       <CanvasBackdrop />
       <HubHeader value="chats" onTab={onHubTab} auth={auth} onLogout={onLogout} />
 
-      {/* Тело: остров-сайдбар + центральный остров (+ остров артефактов) на холсте */}
+      {/* Тело: левая рельса + центральный остров (+ остров артефактов) на холсте */}
       <div style={{ flex: 1, minHeight: 0 }}>
         <IslandScaffold
-          sidebarOpen={sidebarMode === 'pinned'}
-          sidebar={sidebarInner}
-          sidebarWidth={sidebarWidth}
-          sidebarDragging={draggingSplitter}
-          onSidebarDrag={handleSidebarSplitterMouseDown}
-          onSidebarCollapse={() => setSidebarMode('collapsed')}
+          left={
+            <PanelZone
+              side="left"
+              allowedKeys={CHAT_KEYS}
+              hideWhenEmpty
+              panelStack={chatPanels}
+              panels={{ chats: sidebar }}
+              railCounts={{ chats: unreadCount }}
+              sessionPanels={sessionPanels}
+            />
+          }
           centerBare
+          // Лента и композер держатся середины окна, даже когда список чатов
+          // открыт слева, а сессионная рельса справа — узкая
+          centerContentWidth={CHAT_MAX_W}
           center={activeChat ? (
             <ChatPanel
               key={activeChat.id}
@@ -263,19 +277,11 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
               skills={skills}
               attachedFiles={attachedFiles}
               onAttachedFilesChange={setAttachedFiles}
-              onOpenSidebar={openSidebar}
               onSessionUpdated={updated => setChats(prev => prev.map(c => c.id === updated.id ? updated : c))}
               onWorkflowRunning={handleWorkflowRunning}
             />
           ) : (
             <>
-              {sidebarMode === 'collapsed' && (
-                <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', padding: '0 8px', height: 52, borderBottom: `1px solid ${C.divider}` }}>
-                  <IconButton onClick={() => setSidebarMode('pinned')} title="Открыть панель" size="md" variant="soft">
-                    <MenuIcon size={ICON_SIZE.sm} strokeWidth={2} />
-                  </IconButton>
-                </div>
-              )}
               <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', maxWidth: 400, gap: 10 }}>
                   {/* Иконка раздела */}
@@ -295,15 +301,20 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
                   >
                     Новый чат
                   </Button>
-                  <div style={{ fontSize: 12, color: C.textMuted, marginTop: 2 }}>или выберите чат слева</div>
                 </div>
               </div>
             </>
           )}
-          // Сессионная рельса (План/Агенты/Персона) — постоянная, как в проектах:
-          // сама приносит сплиттер ширины, панели-острова и полосу иконок
-          right={activeChat ? (
-            <RightPanelStack sessionOnly panelStack={chatPanelStack} session={activeChat} />
+          // Сессионная рельса (План/Агенты/Персона) — только когда в чате есть
+          // сообщения (есть что показать в артефактах). Для нового пустого чата
+          // рельса не нужна — это держит центральную область симметричной:
+          // IslandScaffold видит right=undefined и применяет авто-компенсацию.
+          // Правой зоне доступны ТОЛЬКО панели сессии: список чатов рисует левая
+          // (контент есть лишь у неё), и уехавшая сюда панель «Чаты» пропадала бы
+          // с экрана целиком. Набор ключей это запрещает — и заодно чинит
+          // раскладку, сохранённую до появления правила.
+          right={activeChat && activeChat.messageCount > 0 ? (
+            <PanelZone side="right" allowedKeys={SESSION_KEYS} hideWhenEmpty panelStack={chatPanels} panels={{}} sessionPanels={sessionPanels} />
           ) : undefined}
         />
       </div>

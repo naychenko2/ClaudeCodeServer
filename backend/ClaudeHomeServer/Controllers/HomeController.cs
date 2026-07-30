@@ -32,19 +32,14 @@ public class HomeController(SessionManager sessions, ProjectManager projects) : 
             .OrderByDescending(s => s.UpdatedAt)
             .ToList();
 
-        // «Живая» сессия: работает/ждет, либо реально запускается (уже есть сообщение).
-        // Пустой новорожденный чат тоже имеет статус Starting (процесс claude стартует
-        // лениво при первом сообщении) — это не активность, ему место в «недавних».
-        static bool IsLive(Session s) =>
-            s.Status is SessionStatus.Working or SessionStatus.Waiting
-            || (s.Status is SessionStatus.Starting && s.MessageCount > 0);
-
+        // «Живая» сессия — общее определение SessionLiveness.IsLive: его же считает
+        // гейдж ccs.sessions.active, чтобы сводка и метрика не разъезжались.
         var active = all
-            .Where(IsLive)
+            .Where(SessionLiveness.IsLive)
             .Select(s => ToDto(s, projectNames))
             .ToList();
         var recentItems = all
-            .Where(s => !IsLive(s) && s.Status is not SessionStatus.Orphaned)
+            .Where(s => !s.IsLive() && s.Status is not SessionStatus.Orphaned)
             .Take(recent)
             .Select(s => ToDto(s, projectNames))
             .ToList();

@@ -1,0 +1,1765 @@
+{
+  "title": "Здоровье сервера",
+  "description": "Что происходит с сервером: живой ли он, как быстро отвечают модели, что ломается, чем пользуются агенты. Метрики — Meter ClaudeHomeServer.Core (backend/ClaudeHomeServer/Telemetry/ServerMetrics.cs). Дев и боевой инстанс шлют в один SigNoz, поэтому панели разрезаны по deployment.environment. Источник правды — docker/observability/dashboards/llm-operations.json, применяется через apply.ps1; тонкости схемы и разбор пустых панелей — docs/observability/dashboards.md.",
+  "tags": [
+    "claude-home-server",
+    "llm",
+    "operations"
+  ],
+  "variables": {
+    "3f8c1d20-77aa-4b6e-9d51-6c0e5a1f2b34": {
+      "id": "3f8c1d20-77aa-4b6e-9d51-6c0e5a1f2b34",
+      "name": "environment",
+      "description": "Контур: dev или боевой. Оба инстанса шлют в один SigNoz и различаются только этим тегом.",
+      "type": "QUERY",
+      "queryValue": "SELECT DISTINCT JSONExtractString(labels, 'deployment.environment') AS `deployment.environment` FROM signoz_metrics.time_series_v4 WHERE metric_name LIKE 'ccs.%' AND unix_milli >= (toUnixTimestamp(now() - toIntervalDay(7)) * 1000) AND JSONExtractString(labels, 'deployment.environment') != '' ORDER BY 1",
+      "customValue": "",
+      "textboxValue": "",
+      "multiSelect": true,
+      "showALLOption": true,
+      "allSelected": true,
+      "sort": "ASC",
+      "order": 0,
+      "modificationUUID": "5a2b9e14-3c6d-4f8a-b071-9e4d2c8a6f15"
+    }
+  },
+  "layout": [
+    {
+      "h": 1,
+      "i": "f3a1c2d4-0001-4001-8001-000000000001",
+      "maxH": 1,
+      "minH": 1,
+      "minW": 12,
+      "moved": false,
+      "static": false,
+      "w": 12,
+      "x": 0,
+      "y": 0
+    },
+    {
+      "h": 3,
+      "i": "f3a1c2d4-8888-4888-8888-888888888888",
+      "minH": 2,
+      "minW": 3,
+      "moved": false,
+      "static": false,
+      "w": 3,
+      "x": 0,
+      "y": 1
+    },
+    {
+      "h": 3,
+      "i": "f3a1c2d4-bbbb-4bbb-8bbb-333333333333",
+      "minH": 2,
+      "minW": 3,
+      "moved": false,
+      "static": false,
+      "w": 3,
+      "x": 3,
+      "y": 1
+    },
+    {
+      "h": 3,
+      "i": "f3a1c2d4-cccc-4ccc-8ccc-444444444444",
+      "minH": 2,
+      "minW": 3,
+      "moved": false,
+      "static": false,
+      "w": 3,
+      "x": 6,
+      "y": 1
+    },
+    {
+      "h": 3,
+      "i": "f3a1c2d4-dddd-4ddd-8ddd-555555555555",
+      "minH": 2,
+      "minW": 3,
+      "moved": false,
+      "static": false,
+      "w": 3,
+      "x": 9,
+      "y": 1
+    },
+    {
+      "h": 1,
+      "i": "f3a1c2d4-0002-4002-8002-000000000002",
+      "maxH": 1,
+      "minH": 1,
+      "minW": 12,
+      "moved": false,
+      "static": false,
+      "w": 12,
+      "x": 0,
+      "y": 4.0
+    },
+    {
+      "h": 5,
+      "i": "f3a1c2d4-2222-4222-8222-bbbbbbbbbbbb",
+      "minH": 2,
+      "minW": 3,
+      "moved": false,
+      "static": false,
+      "w": 6,
+      "x": 0,
+      "y": 5.0
+    },
+    {
+      "h": 5,
+      "i": "f3a1c2d4-3333-4333-8333-cccccccccccc",
+      "minH": 2,
+      "minW": 3,
+      "moved": false,
+      "static": false,
+      "w": 6,
+      "x": 6,
+      "y": 5.0
+    },
+    {
+      "h": 1,
+      "i": "f3a1c2d4-0003-4003-8003-000000000003",
+      "maxH": 1,
+      "minH": 1,
+      "minW": 12,
+      "moved": false,
+      "static": false,
+      "w": 12,
+      "x": 0,
+      "y": 10.0
+    },
+    {
+      "h": 4,
+      "i": "f3a1c2d4-1111-4111-8111-aaaaaaaaaaaa",
+      "minH": 2,
+      "minW": 3,
+      "moved": false,
+      "static": false,
+      "w": 6,
+      "x": 0,
+      "y": 11.0
+    },
+    {
+      "h": 4,
+      "i": "f3a1c2d4-7777-4777-8777-999999999999",
+      "minH": 2,
+      "minW": 3,
+      "moved": false,
+      "static": false,
+      "w": 6,
+      "x": 6,
+      "y": 11.0
+    },
+    {
+      "h": 1,
+      "i": "f3a1c2d4-0004-4004-8004-000000000004",
+      "maxH": 1,
+      "minH": 1,
+      "minW": 12,
+      "moved": false,
+      "static": false,
+      "w": 12,
+      "x": 0,
+      "y": 15.0
+    },
+    {
+      "h": 4,
+      "i": "f3a1c2d4-4444-4444-8444-dddddddddddd",
+      "minH": 2,
+      "minW": 3,
+      "moved": false,
+      "static": false,
+      "w": 4,
+      "x": 0,
+      "y": 16.0
+    },
+    {
+      "h": 4,
+      "i": "f3a1c2d4-6666-4666-8666-ffffffffffff",
+      "minH": 2,
+      "minW": 3,
+      "moved": false,
+      "static": false,
+      "w": 4,
+      "x": 4,
+      "y": 16.0
+    },
+    {
+      "h": 4,
+      "i": "f3a1c2d4-5555-4555-8555-eeeeeeeeeeee",
+      "minH": 2,
+      "minW": 3,
+      "moved": false,
+      "static": false,
+      "w": 4,
+      "x": 8,
+      "y": 16.0
+    },
+    {
+      "h": 1,
+      "i": "f3a1c2d4-0005-4005-8005-000000000005",
+      "maxH": 1,
+      "minH": 1,
+      "minW": 12,
+      "moved": false,
+      "static": false,
+      "w": 12,
+      "x": 0,
+      "y": 20.0
+    },
+    {
+      "h": 4,
+      "i": "f3a1c2d4-9999-4999-8999-111111111111",
+      "minH": 2,
+      "minW": 3,
+      "moved": false,
+      "static": false,
+      "w": 6,
+      "x": 0,
+      "y": 21.0
+    },
+    {
+      "h": 4,
+      "i": "f3a1c2d4-aaaa-4aaa-8aaa-222222222222",
+      "minH": 2,
+      "minW": 3,
+      "moved": false,
+      "static": false,
+      "w": 6,
+      "x": 6,
+      "y": 21.0
+    }
+  ],
+  "panelMap": {
+    "f3a1c2d4-0001-4001-8001-000000000001": {
+      "collapsed": false,
+      "widgets": [
+        {
+          "h": 3,
+          "i": "f3a1c2d4-8888-4888-8888-888888888888",
+          "minH": 2,
+          "minW": 3,
+          "moved": false,
+          "static": false,
+          "w": 3,
+          "x": 0,
+          "y": 1
+        },
+        {
+          "h": 3,
+          "i": "f3a1c2d4-bbbb-4bbb-8bbb-333333333333",
+          "minH": 2,
+          "minW": 3,
+          "moved": false,
+          "static": false,
+          "w": 3,
+          "x": 3,
+          "y": 1
+        },
+        {
+          "h": 3,
+          "i": "f3a1c2d4-cccc-4ccc-8ccc-444444444444",
+          "minH": 2,
+          "minW": 3,
+          "moved": false,
+          "static": false,
+          "w": 3,
+          "x": 6,
+          "y": 1
+        },
+        {
+          "h": 3,
+          "i": "f3a1c2d4-dddd-4ddd-8ddd-555555555555",
+          "minH": 2,
+          "minW": 3,
+          "moved": false,
+          "static": false,
+          "w": 3,
+          "x": 9,
+          "y": 1
+        }
+      ]
+    },
+    "f3a1c2d4-0002-4002-8002-000000000002": {
+      "collapsed": false,
+      "widgets": [
+        {
+          "h": 5,
+          "i": "f3a1c2d4-2222-4222-8222-bbbbbbbbbbbb",
+          "minH": 2,
+          "minW": 3,
+          "moved": false,
+          "static": false,
+          "w": 6,
+          "x": 0,
+          "y": 5.0
+        },
+        {
+          "h": 5,
+          "i": "f3a1c2d4-3333-4333-8333-cccccccccccc",
+          "minH": 2,
+          "minW": 3,
+          "moved": false,
+          "static": false,
+          "w": 6,
+          "x": 6,
+          "y": 5.0
+        }
+      ]
+    },
+    "f3a1c2d4-0003-4003-8003-000000000003": {
+      "collapsed": false,
+      "widgets": [
+        {
+          "h": 4,
+          "i": "f3a1c2d4-1111-4111-8111-aaaaaaaaaaaa",
+          "minH": 2,
+          "minW": 3,
+          "moved": false,
+          "static": false,
+          "w": 6,
+          "x": 0,
+          "y": 11.0
+        },
+        {
+          "h": 4,
+          "i": "f3a1c2d4-7777-4777-8777-999999999999",
+          "minH": 2,
+          "minW": 3,
+          "moved": false,
+          "static": false,
+          "w": 6,
+          "x": 6,
+          "y": 11.0
+        }
+      ]
+    },
+    "f3a1c2d4-0004-4004-8004-000000000004": {
+      "collapsed": false,
+      "widgets": [
+        {
+          "h": 4,
+          "i": "f3a1c2d4-4444-4444-8444-dddddddddddd",
+          "minH": 2,
+          "minW": 3,
+          "moved": false,
+          "static": false,
+          "w": 4,
+          "x": 0,
+          "y": 16.0
+        },
+        {
+          "h": 4,
+          "i": "f3a1c2d4-6666-4666-8666-ffffffffffff",
+          "minH": 2,
+          "minW": 3,
+          "moved": false,
+          "static": false,
+          "w": 4,
+          "x": 4,
+          "y": 16.0
+        },
+        {
+          "h": 4,
+          "i": "f3a1c2d4-5555-4555-8555-eeeeeeeeeeee",
+          "minH": 2,
+          "minW": 3,
+          "moved": false,
+          "static": false,
+          "w": 4,
+          "x": 8,
+          "y": 16.0
+        }
+      ]
+    },
+    "f3a1c2d4-0005-4005-8005-000000000005": {
+      "collapsed": false,
+      "widgets": [
+        {
+          "h": 4,
+          "i": "f3a1c2d4-9999-4999-8999-111111111111",
+          "minH": 2,
+          "minW": 3,
+          "moved": false,
+          "static": false,
+          "w": 6,
+          "x": 0,
+          "y": 21.0
+        },
+        {
+          "h": 4,
+          "i": "f3a1c2d4-aaaa-4aaa-8aaa-222222222222",
+          "minH": 2,
+          "minW": 3,
+          "moved": false,
+          "static": false,
+          "w": 6,
+          "x": 6,
+          "y": 21.0
+        }
+      ]
+    }
+  },
+  "widgets": [
+    {
+      "description": "",
+      "id": "f3a1c2d4-0001-4001-8001-000000000001",
+      "panelTypes": "row",
+      "title": "Состояние"
+    },
+    {
+      "description": "",
+      "id": "f3a1c2d4-0002-4002-8002-000000000002",
+      "panelTypes": "row",
+      "title": "Скорость ходов"
+    },
+    {
+      "description": "",
+      "id": "f3a1c2d4-0003-4003-8003-000000000003",
+      "panelTypes": "row",
+      "title": "Объём работы"
+    },
+    {
+      "description": "",
+      "id": "f3a1c2d4-0004-4004-8004-000000000004",
+      "panelTypes": "row",
+      "title": "Сбои"
+    },
+    {
+      "description": "",
+      "id": "f3a1c2d4-0005-4005-8005-000000000005",
+      "panelTypes": "row",
+      "title": "MCP и инструменты"
+    },
+    {
+      "id": "f3a1c2d4-8888-4888-8888-888888888888",
+      "title": "Пульс телеметрии",
+      "description": "Тикает — значит сервер жив и метрики доезжают до SigNoz. Линия оборвалась, а сервер работает — сломалась сама телеметрия, и остальным панелям верить нельзя.",
+      "panelTypes": "graph",
+      "yAxisUnit": "",
+      "timePreferance": "GLOBAL_TIME",
+      "queryType": "builder",
+      "nullZeroValues": "zero",
+      "isStacked": false,
+      "opacity": "1",
+      "fillSpans": false,
+      "softMin": 0,
+      "softMax": 0,
+      "thresholds": [],
+      "query": {
+        "builder": {
+          "queryData": [
+            {
+              "aggregations": [
+                {
+                  "temporality": "Cumulative",
+                  "reduceTo": "avg",
+                  "metricName": "ccs.telemetry.heartbeat",
+                  "spaceAggregation": "sum",
+                  "timeAggregation": "rate"
+                }
+              ],
+              "dataSource": "metrics",
+              "disabled": false,
+              "expression": "A",
+              "filter": {
+                "expression": "deployment.environment IN $environment"
+              },
+              "functions": [],
+              "groupBy": [
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "deployment.environment",
+                  "isJSON": false,
+                  "dataType": "string"
+                }
+              ],
+              "having": {
+                "expression": ""
+              },
+              "legend": "пульс · {{deployment.environment}}",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "source": "",
+              "stepInterval": null
+            }
+          ],
+          "queryFormulas": [],
+          "queryTraceOperator": []
+        },
+        "clickhouse_sql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "id": "e36c1dc9-32fb-4627-ae74-460fd3757426",
+        "promql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "queryType": "builder",
+        "unit": ""
+      },
+      "bucketCount": 30,
+      "bucketWidth": 0,
+      "columnUnits": {},
+      "decimalPrecision": 2,
+      "fillMode": "none",
+      "isLogScale": false,
+      "legendPosition": "bottom",
+      "lineInterpolation": "linear",
+      "lineStyle": "solid",
+      "mergeAllActiveQueries": false,
+      "showPoints": true,
+      "spanGaps": true,
+      "stackedBarChart": false,
+      "customLegendColors": {},
+      "contextLinks": {
+        "linksData": []
+      }
+    },
+    {
+      "id": "f3a1c2d4-bbbb-4bbb-8bbb-333333333333",
+      "title": "Активные сессии",
+      "description": "Сколько чатов прямо сейчас работают или ждут ответа человека. По ней видно реальную нагрузку и зависшие чаты: держится больше нуля часами — кто-то застрял в ожидании.",
+      "panelTypes": "graph",
+      "yAxisUnit": "",
+      "timePreferance": "GLOBAL_TIME",
+      "queryType": "builder",
+      "nullZeroValues": "zero",
+      "isStacked": false,
+      "opacity": "1",
+      "fillSpans": false,
+      "softMin": 0,
+      "softMax": 0,
+      "thresholds": [],
+      "query": {
+        "builder": {
+          "queryData": [
+            {
+              "aggregations": [
+                {
+                  "temporality": "Unspecified",
+                  "reduceTo": "avg",
+                  "metricName": "ccs.sessions.active",
+                  "spaceAggregation": "max",
+                  "timeAggregation": "latest"
+                }
+              ],
+              "dataSource": "metrics",
+              "disabled": false,
+              "expression": "A",
+              "filter": {
+                "expression": "deployment.environment IN $environment"
+              },
+              "functions": [],
+              "groupBy": [
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "deployment.environment",
+                  "isJSON": false,
+                  "dataType": "string"
+                }
+              ],
+              "having": {
+                "expression": ""
+              },
+              "legend": "активные · {{deployment.environment}}",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "source": "",
+              "stepInterval": null
+            }
+          ],
+          "queryFormulas": [],
+          "queryTraceOperator": []
+        },
+        "clickhouse_sql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "id": "c4a7b209-8e3d-4f1b-9a2c-3d4e5f607182",
+        "promql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "queryType": "builder",
+        "unit": ""
+      },
+      "bucketCount": 30,
+      "bucketWidth": 0,
+      "columnUnits": {},
+      "decimalPrecision": 0,
+      "fillMode": "none",
+      "isLogScale": false,
+      "legendPosition": "bottom",
+      "lineInterpolation": "linear",
+      "lineStyle": "solid",
+      "mergeAllActiveQueries": false,
+      "showPoints": true,
+      "spanGaps": true,
+      "stackedBarChart": false,
+      "customLegendColors": {},
+      "contextLinks": {
+        "linksData": []
+      }
+    },
+    {
+      "id": "f3a1c2d4-cccc-4ccc-8ccc-444444444444",
+      "title": "WebSocket-соединения",
+      "description": "Открытые вкладки продукта. Ноль при живом сервере — фронт не достучался до хаба; это первое место, куда смотреть, когда «интерфейс не обновляется».",
+      "panelTypes": "graph",
+      "yAxisUnit": "",
+      "timePreferance": "GLOBAL_TIME",
+      "queryType": "builder",
+      "nullZeroValues": "zero",
+      "isStacked": false,
+      "opacity": "1",
+      "fillSpans": false,
+      "softMin": 0,
+      "softMax": 0,
+      "thresholds": [],
+      "query": {
+        "builder": {
+          "queryData": [
+            {
+              "aggregations": [
+                {
+                  "temporality": "Unspecified",
+                  "reduceTo": "avg",
+                  "metricName": "ccs.websocket.connections",
+                  "spaceAggregation": "max",
+                  "timeAggregation": "latest"
+                }
+              ],
+              "dataSource": "metrics",
+              "disabled": false,
+              "expression": "A",
+              "filter": {
+                "expression": "deployment.environment IN $environment"
+              },
+              "functions": [],
+              "groupBy": [
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "deployment.environment",
+                  "isJSON": false,
+                  "dataType": "string"
+                }
+              ],
+              "having": {
+                "expression": ""
+              },
+              "legend": "соединения · {{deployment.environment}}",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "source": "",
+              "stepInterval": null
+            }
+          ],
+          "queryFormulas": [],
+          "queryTraceOperator": []
+        },
+        "clickhouse_sql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "id": "d5b8c31a-9f4e-4a2c-8b3d-4e5f60718293",
+        "promql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "queryType": "builder",
+        "unit": ""
+      },
+      "bucketCount": 30,
+      "bucketWidth": 0,
+      "columnUnits": {},
+      "decimalPrecision": 0,
+      "fillMode": "none",
+      "isLogScale": false,
+      "legendPosition": "bottom",
+      "lineInterpolation": "linear",
+      "lineStyle": "solid",
+      "mergeAllActiveQueries": false,
+      "showPoints": true,
+      "spanGaps": true,
+      "stackedBarChart": false,
+      "customLegendColors": {},
+      "contextLinks": {
+        "linksData": []
+      }
+    },
+    {
+      "id": "f3a1c2d4-dddd-4ddd-8ddd-555555555555",
+      "title": "Чатов в реестре",
+      "description": "Сколько всего чатов хранит сервер. Растёт, пока активных сессий нет — чаты создаются и не убираются (например, временные не истекают).",
+      "panelTypes": "graph",
+      "yAxisUnit": "",
+      "timePreferance": "GLOBAL_TIME",
+      "queryType": "builder",
+      "nullZeroValues": "zero",
+      "isStacked": false,
+      "opacity": "1",
+      "fillSpans": false,
+      "softMin": 0,
+      "softMax": 0,
+      "thresholds": [],
+      "query": {
+        "builder": {
+          "queryData": [
+            {
+              "aggregations": [
+                {
+                  "temporality": "Unspecified",
+                  "reduceTo": "avg",
+                  "metricName": "ccs.sessions.total",
+                  "spaceAggregation": "max",
+                  "timeAggregation": "latest"
+                }
+              ],
+              "dataSource": "metrics",
+              "disabled": false,
+              "expression": "A",
+              "filter": {
+                "expression": "deployment.environment IN $environment"
+              },
+              "functions": [],
+              "groupBy": [
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "deployment.environment",
+                  "isJSON": false,
+                  "dataType": "string"
+                }
+              ],
+              "having": {
+                "expression": ""
+              },
+              "legend": "в реестре · {{deployment.environment}}",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "source": "",
+              "stepInterval": null
+            }
+          ],
+          "queryFormulas": [],
+          "queryTraceOperator": []
+        },
+        "clickhouse_sql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "id": "e6c9d42b-a05f-4b3d-9c4e-5f6071829304",
+        "promql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "queryType": "builder",
+        "unit": ""
+      },
+      "bucketCount": 30,
+      "bucketWidth": 0,
+      "columnUnits": {},
+      "decimalPrecision": 0,
+      "fillMode": "none",
+      "isLogScale": false,
+      "legendPosition": "bottom",
+      "lineInterpolation": "linear",
+      "lineStyle": "solid",
+      "mergeAllActiveQueries": false,
+      "showPoints": true,
+      "spanGaps": true,
+      "stackedBarChart": false,
+      "customLegendColors": {},
+      "contextLinks": {
+        "linksData": []
+      }
+    },
+    {
+      "id": "f3a1c2d4-2222-4222-8222-bbbbbbbbbbbb",
+      "title": "p99 — худшие ходы",
+      "description": "Худшие ходы: 1% ответов идёт дольше этой линии. Показывает, насколько плохо бывает, когда бывает плохо. Разрез local/docker отвечает, тормозит ли песочница — но осторожно: среду выбирает ВЛАДЕЛЕЦ процесса, поэтому при нескольких пользователях это скорее «чьи ходы медленнее».",
+      "panelTypes": "graph",
+      "yAxisUnit": "ms",
+      "timePreferance": "GLOBAL_TIME",
+      "queryType": "builder",
+      "nullZeroValues": "zero",
+      "isStacked": false,
+      "opacity": "1",
+      "fillSpans": false,
+      "softMin": 0,
+      "softMax": 0,
+      "thresholds": [],
+      "query": {
+        "builder": {
+          "queryData": [
+            {
+              "aggregations": [
+                {
+                  "temporality": "Cumulative",
+                  "reduceTo": "avg",
+                  "metricName": "ccs.llm.duration.bucket",
+                  "spaceAggregation": "p99",
+                  "timeAggregation": "rate"
+                }
+              ],
+              "dataSource": "metrics",
+              "disabled": false,
+              "expression": "A",
+              "filter": {
+                "expression": "deployment.environment IN $environment"
+              },
+              "functions": [],
+              "groupBy": [
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "provider",
+                  "isJSON": false,
+                  "dataType": "string"
+                },
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "deployment.environment",
+                  "isJSON": false,
+                  "dataType": "string"
+                },
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "execution",
+                  "isJSON": false,
+                  "dataType": "string"
+                }
+              ],
+              "having": {
+                "expression": ""
+              },
+              "legend": "{{provider}} · {{deployment.environment}} · {{execution}}",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "source": "",
+              "stepInterval": null
+            }
+          ],
+          "queryFormulas": [],
+          "queryTraceOperator": []
+        },
+        "clickhouse_sql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "id": "9a3b1c2d-1111-4111-8111-aaaaaaaaaaa1",
+        "promql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "queryType": "builder",
+        "unit": ""
+      },
+      "bucketCount": 30,
+      "bucketWidth": 0,
+      "columnUnits": {},
+      "decimalPrecision": 0,
+      "fillMode": "none",
+      "isLogScale": false,
+      "legendPosition": "bottom",
+      "lineInterpolation": "spline",
+      "lineStyle": "solid",
+      "mergeAllActiveQueries": false,
+      "showPoints": false,
+      "spanGaps": true,
+      "stackedBarChart": false,
+      "customLegendColors": {},
+      "contextLinks": {
+        "linksData": []
+      }
+    },
+    {
+      "id": "f3a1c2d4-3333-4333-8333-cccccccccccc",
+      "title": "Медиана — типичный ход",
+      "description": "Типичный ход. Сравнение с p99 рядом показывает разброс: медиана ровная, а p99 скачет — тормозят отдельные ходы, а не провайдер целиком. Разрез local/docker — хост против песочницы.",
+      "panelTypes": "graph",
+      "yAxisUnit": "ms",
+      "timePreferance": "GLOBAL_TIME",
+      "queryType": "builder",
+      "nullZeroValues": "zero",
+      "isStacked": false,
+      "opacity": "1",
+      "fillSpans": false,
+      "softMin": 0,
+      "softMax": 0,
+      "thresholds": [],
+      "query": {
+        "builder": {
+          "queryData": [
+            {
+              "aggregations": [
+                {
+                  "temporality": "Cumulative",
+                  "reduceTo": "avg",
+                  "metricName": "ccs.llm.duration.bucket",
+                  "spaceAggregation": "p50",
+                  "timeAggregation": "rate"
+                }
+              ],
+              "dataSource": "metrics",
+              "disabled": false,
+              "expression": "A",
+              "filter": {
+                "expression": "deployment.environment IN $environment"
+              },
+              "functions": [],
+              "groupBy": [
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "provider",
+                  "isJSON": false,
+                  "dataType": "string"
+                },
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "deployment.environment",
+                  "isJSON": false,
+                  "dataType": "string"
+                },
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "execution",
+                  "isJSON": false,
+                  "dataType": "string"
+                }
+              ],
+              "having": {
+                "expression": ""
+              },
+              "legend": "{{provider}} · {{deployment.environment}} · {{execution}}",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "source": "",
+              "stepInterval": null
+            }
+          ],
+          "queryFormulas": [],
+          "queryTraceOperator": []
+        },
+        "clickhouse_sql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "id": "9a3b1c2d-2222-4222-8222-aaaaaaaaaaa2",
+        "promql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "queryType": "builder",
+        "unit": ""
+      },
+      "bucketCount": 30,
+      "bucketWidth": 0,
+      "columnUnits": {},
+      "decimalPrecision": 0,
+      "fillMode": "none",
+      "isLogScale": false,
+      "legendPosition": "bottom",
+      "lineInterpolation": "spline",
+      "lineStyle": "solid",
+      "mergeAllActiveQueries": false,
+      "showPoints": false,
+      "spanGaps": true,
+      "stackedBarChart": false,
+      "customLegendColors": {},
+      "contextLinks": {
+        "linksData": []
+      }
+    },
+    {
+      "id": "f3a1c2d4-1111-4111-8111-aaaaaaaaaaaa",
+      "title": "Ходы в секунду",
+      "description": "Нагрузка на LLM по провайдерам. Нужна как знаменатель: всплеск отказов на соседних панелях без роста этой линии — проблема провайдера, а не наплыв работы.",
+      "panelTypes": "graph",
+      "yAxisUnit": "",
+      "timePreferance": "GLOBAL_TIME",
+      "queryType": "builder",
+      "nullZeroValues": "zero",
+      "isStacked": false,
+      "opacity": "1",
+      "fillSpans": false,
+      "softMin": 0,
+      "softMax": 0,
+      "thresholds": [],
+      "query": {
+        "builder": {
+          "queryData": [
+            {
+              "aggregations": [
+                {
+                  "temporality": "Cumulative",
+                  "reduceTo": "avg",
+                  "metricName": "ccs.llm.duration.count",
+                  "spaceAggregation": "sum",
+                  "timeAggregation": "rate"
+                }
+              ],
+              "dataSource": "metrics",
+              "disabled": false,
+              "expression": "A",
+              "filter": {
+                "expression": "deployment.environment IN $environment"
+              },
+              "functions": [],
+              "groupBy": [
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "provider",
+                  "isJSON": false,
+                  "dataType": "string"
+                },
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "deployment.environment",
+                  "isJSON": false,
+                  "dataType": "string"
+                }
+              ],
+              "having": {
+                "expression": ""
+              },
+              "legend": "{{provider}} · {{deployment.environment}}",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "source": "",
+              "stepInterval": null
+            }
+          ],
+          "queryFormulas": [],
+          "queryTraceOperator": []
+        },
+        "clickhouse_sql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "id": "21c0d93e-f41c-4d26-8231-8a58c1790ef6",
+        "promql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "queryType": "builder",
+        "unit": ""
+      },
+      "bucketCount": 30,
+      "bucketWidth": 0,
+      "columnUnits": {},
+      "decimalPrecision": 2,
+      "fillMode": "none",
+      "isLogScale": false,
+      "legendPosition": "bottom",
+      "lineInterpolation": "spline",
+      "lineStyle": "solid",
+      "mergeAllActiveQueries": false,
+      "showPoints": false,
+      "spanGaps": true,
+      "stackedBarChart": false,
+      "customLegendColors": {},
+      "contextLinks": {
+        "linksData": []
+      }
+    },
+    {
+      "id": "f3a1c2d4-7777-4777-8777-999999999999",
+      "title": "Какими моделями считаем",
+      "description": "Какие модели реально работают. Проверка того, что настройки слотов применились: в списке чужая или неожиданно дорогая модель — назначения разъехались.",
+      "panelTypes": "graph",
+      "yAxisUnit": "",
+      "timePreferance": "GLOBAL_TIME",
+      "queryType": "builder",
+      "nullZeroValues": "zero",
+      "isStacked": false,
+      "opacity": "1",
+      "fillSpans": false,
+      "softMin": 0,
+      "softMax": 0,
+      "thresholds": [],
+      "query": {
+        "builder": {
+          "queryData": [
+            {
+              "aggregations": [
+                {
+                  "temporality": "Cumulative",
+                  "reduceTo": "avg",
+                  "metricName": "ccs.llm.duration.count",
+                  "spaceAggregation": "sum",
+                  "timeAggregation": "rate"
+                }
+              ],
+              "dataSource": "metrics",
+              "disabled": false,
+              "expression": "A",
+              "filter": {
+                "expression": "deployment.environment IN $environment"
+              },
+              "functions": [],
+              "groupBy": [
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "model",
+                  "isJSON": false,
+                  "dataType": "string"
+                },
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "deployment.environment",
+                  "isJSON": false,
+                  "dataType": "string"
+                }
+              ],
+              "having": {
+                "expression": ""
+              },
+              "legend": "{{model}} · {{deployment.environment}}",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "source": "",
+              "stepInterval": null
+            }
+          ],
+          "queryFormulas": [],
+          "queryTraceOperator": []
+        },
+        "clickhouse_sql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "id": "9a3b1c2d-3333-4333-8333-aaaaaaaaaaa3",
+        "promql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "queryType": "builder",
+        "unit": ""
+      },
+      "bucketCount": 30,
+      "bucketWidth": 0,
+      "columnUnits": {},
+      "decimalPrecision": 2,
+      "fillMode": "none",
+      "isLogScale": false,
+      "legendPosition": "bottom",
+      "lineInterpolation": "spline",
+      "lineStyle": "solid",
+      "mergeAllActiveQueries": false,
+      "showPoints": false,
+      "spanGaps": true,
+      "stackedBarChart": false,
+      "customLegendColors": {},
+      "contextLinks": {
+        "linksData": []
+      }
+    },
+    {
+      "id": "f3a1c2d4-4444-4444-8444-dddddddddddd",
+      "title": "Кто отваливается",
+      "description": "Кто из провайдеров отваливается. Считается и жёсткий сбой CLI, и API-ошибка вроде 429. Разрез local/docker показывает, лезут ли отказы именно из песочницы. Пусто = с последнего перезапуска сервера отказов не было.",
+      "panelTypes": "graph",
+      "yAxisUnit": "",
+      "timePreferance": "GLOBAL_TIME",
+      "queryType": "builder",
+      "nullZeroValues": "zero",
+      "isStacked": true,
+      "opacity": "1",
+      "fillSpans": false,
+      "softMin": 0,
+      "softMax": 0,
+      "thresholds": [],
+      "query": {
+        "builder": {
+          "queryData": [
+            {
+              "aggregations": [
+                {
+                  "temporality": "Cumulative",
+                  "reduceTo": "avg",
+                  "metricName": "ccs.llm.errors",
+                  "spaceAggregation": "sum",
+                  "timeAggregation": "increase"
+                }
+              ],
+              "dataSource": "metrics",
+              "disabled": false,
+              "expression": "A",
+              "filter": {
+                "expression": "deployment.environment IN $environment"
+              },
+              "functions": [],
+              "groupBy": [
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "provider",
+                  "isJSON": false,
+                  "dataType": "string"
+                },
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "deployment.environment",
+                  "isJSON": false,
+                  "dataType": "string"
+                },
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "execution",
+                  "isJSON": false,
+                  "dataType": "string"
+                }
+              ],
+              "having": {
+                "expression": ""
+              },
+              "legend": "{{provider}} · {{deployment.environment}} · {{execution}}",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "source": "",
+              "stepInterval": null
+            }
+          ],
+          "queryFormulas": [],
+          "queryTraceOperator": []
+        },
+        "clickhouse_sql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "id": "9a3b1c2d-4444-4444-8444-aaaaaaaaaaa4",
+        "promql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "queryType": "builder",
+        "unit": ""
+      },
+      "bucketCount": 30,
+      "bucketWidth": 0,
+      "columnUnits": {},
+      "decimalPrecision": 0,
+      "fillMode": "none",
+      "isLogScale": false,
+      "legendPosition": "bottom",
+      "lineInterpolation": "linear",
+      "lineStyle": "solid",
+      "mergeAllActiveQueries": false,
+      "showPoints": true,
+      "spanGaps": true,
+      "stackedBarChart": false,
+      "customLegendColors": {},
+      "contextLinks": {
+        "linksData": []
+      }
+    },
+    {
+      "id": "f3a1c2d4-6666-4666-8666-ffffffffffff",
+      "title": "Почему отваливается",
+      "description": "Та же метрика в разрезе причины: rate_limit / auth / network / process_exit. Отвечает на главный вопрос при отказах — чинить квоту, ключ или сеть.",
+      "panelTypes": "graph",
+      "yAxisUnit": "",
+      "timePreferance": "GLOBAL_TIME",
+      "queryType": "builder",
+      "nullZeroValues": "zero",
+      "isStacked": true,
+      "opacity": "1",
+      "fillSpans": false,
+      "softMin": 0,
+      "softMax": 0,
+      "thresholds": [],
+      "query": {
+        "builder": {
+          "queryData": [
+            {
+              "aggregations": [
+                {
+                  "temporality": "Cumulative",
+                  "reduceTo": "avg",
+                  "metricName": "ccs.llm.errors",
+                  "spaceAggregation": "sum",
+                  "timeAggregation": "increase"
+                }
+              ],
+              "dataSource": "metrics",
+              "disabled": false,
+              "expression": "A",
+              "filter": {
+                "expression": "deployment.environment IN $environment"
+              },
+              "functions": [],
+              "groupBy": [
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "error_type",
+                  "isJSON": false,
+                  "dataType": "string"
+                },
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "deployment.environment",
+                  "isJSON": false,
+                  "dataType": "string"
+                }
+              ],
+              "having": {
+                "expression": ""
+              },
+              "legend": "{{error_type}} · {{deployment.environment}}",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "source": "",
+              "stepInterval": null
+            }
+          ],
+          "queryFormulas": [],
+          "queryTraceOperator": []
+        },
+        "clickhouse_sql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "id": "9a3b1c2d-5555-4555-8555-aaaaaaaaaaa5",
+        "promql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "queryType": "builder",
+        "unit": ""
+      },
+      "bucketCount": 30,
+      "bucketWidth": 0,
+      "columnUnits": {},
+      "decimalPrecision": 0,
+      "fillMode": "none",
+      "isLogScale": false,
+      "legendPosition": "bottom",
+      "lineInterpolation": "linear",
+      "lineStyle": "solid",
+      "mergeAllActiveQueries": false,
+      "showPoints": true,
+      "spanGaps": true,
+      "stackedBarChart": false,
+      "customLegendColors": {},
+      "contextLinks": {
+        "linksData": []
+      }
+    },
+    {
+      "id": "f3a1c2d4-5555-4555-8555-eeeeeeeeeeee",
+      "title": "Упирались в лимит",
+      "description": "Мягкие предупреждения провайдера о квоте — ход при этом не падает. Ранний сигнал: растёт здесь сейчас, значит скоро посыплются отказы слева.",
+      "panelTypes": "graph",
+      "yAxisUnit": "",
+      "timePreferance": "GLOBAL_TIME",
+      "queryType": "builder",
+      "nullZeroValues": "zero",
+      "isStacked": true,
+      "opacity": "1",
+      "fillSpans": false,
+      "softMin": 0,
+      "softMax": 0,
+      "thresholds": [],
+      "query": {
+        "builder": {
+          "queryData": [
+            {
+              "aggregations": [
+                {
+                  "temporality": "Cumulative",
+                  "reduceTo": "avg",
+                  "metricName": "ccs.llm.rate_limit_hits",
+                  "spaceAggregation": "sum",
+                  "timeAggregation": "increase"
+                }
+              ],
+              "dataSource": "metrics",
+              "disabled": false,
+              "expression": "A",
+              "filter": {
+                "expression": "deployment.environment IN $environment"
+              },
+              "functions": [],
+              "groupBy": [
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "provider",
+                  "isJSON": false,
+                  "dataType": "string"
+                },
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "deployment.environment",
+                  "isJSON": false,
+                  "dataType": "string"
+                }
+              ],
+              "having": {
+                "expression": ""
+              },
+              "legend": "{{provider}} · {{deployment.environment}}",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "source": "",
+              "stepInterval": null
+            }
+          ],
+          "queryFormulas": [],
+          "queryTraceOperator": []
+        },
+        "clickhouse_sql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "id": "9a3b1c2d-6666-4666-8666-aaaaaaaaaaa6",
+        "promql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "queryType": "builder",
+        "unit": ""
+      },
+      "bucketCount": 30,
+      "bucketWidth": 0,
+      "columnUnits": {},
+      "decimalPrecision": 0,
+      "fillMode": "none",
+      "isLogScale": false,
+      "legendPosition": "bottom",
+      "lineInterpolation": "linear",
+      "lineStyle": "solid",
+      "mergeAllActiveQueries": false,
+      "showPoints": true,
+      "spanGaps": true,
+      "stackedBarChart": false,
+      "customLegendColors": {},
+      "contextLinks": {
+        "linksData": []
+      }
+    },
+    {
+      "id": "f3a1c2d4-9999-4999-8999-111111111111",
+      "title": "Вызовы инструментов",
+      "description": "Чем модель пользуется: задачи, заметки, файлы. Раньше это было видно только ручным разбором истории чатов.",
+      "panelTypes": "graph",
+      "yAxisUnit": "",
+      "timePreferance": "GLOBAL_TIME",
+      "queryType": "builder",
+      "nullZeroValues": "zero",
+      "isStacked": true,
+      "opacity": "1",
+      "fillSpans": false,
+      "softMin": 0,
+      "softMax": 0,
+      "thresholds": [],
+      "query": {
+        "builder": {
+          "queryData": [
+            {
+              "aggregations": [
+                {
+                  "temporality": "Cumulative",
+                  "reduceTo": "avg",
+                  "metricName": "ccs.mcp.calls",
+                  "spaceAggregation": "sum",
+                  "timeAggregation": "increase"
+                }
+              ],
+              "dataSource": "metrics",
+              "disabled": false,
+              "expression": "A",
+              "filter": {
+                "expression": "deployment.environment IN $environment"
+              },
+              "functions": [],
+              "groupBy": [
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "tool_name",
+                  "isJSON": false,
+                  "dataType": "string"
+                },
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "deployment.environment",
+                  "isJSON": false,
+                  "dataType": "string"
+                }
+              ],
+              "having": {
+                "expression": ""
+              },
+              "legend": "{{tool_name}} · {{deployment.environment}}",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "source": "",
+              "stepInterval": null
+            }
+          ],
+          "queryFormulas": [],
+          "queryTraceOperator": []
+        },
+        "clickhouse_sql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "id": "7b1f04c2-5f1a-4a3e-9c0d-1a2b3c4d5e6f",
+        "promql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "queryType": "builder",
+        "unit": ""
+      },
+      "bucketCount": 30,
+      "bucketWidth": 0,
+      "columnUnits": {},
+      "decimalPrecision": 0,
+      "fillMode": "none",
+      "isLogScale": false,
+      "legendPosition": "bottom",
+      "lineInterpolation": "linear",
+      "lineStyle": "solid",
+      "mergeAllActiveQueries": false,
+      "showPoints": true,
+      "spanGaps": true,
+      "stackedBarChart": false,
+      "customLegendColors": {},
+      "contextLinks": {
+        "linksData": []
+      }
+    },
+    {
+      "id": "f3a1c2d4-aaaa-4aaa-8aaa-222222222222",
+      "title": "Отказы инструментов",
+      "description": "Ради этой панели учёт и заводился: жалоба «инструменты отваливаются» теперь видна с точностью до инструмента и HTTP-кода.",
+      "panelTypes": "graph",
+      "yAxisUnit": "",
+      "timePreferance": "GLOBAL_TIME",
+      "queryType": "builder",
+      "nullZeroValues": "zero",
+      "isStacked": true,
+      "opacity": "1",
+      "fillSpans": false,
+      "softMin": 0,
+      "softMax": 0,
+      "thresholds": [],
+      "query": {
+        "builder": {
+          "queryData": [
+            {
+              "aggregations": [
+                {
+                  "temporality": "Cumulative",
+                  "reduceTo": "avg",
+                  "metricName": "ccs.mcp.errors",
+                  "spaceAggregation": "sum",
+                  "timeAggregation": "increase"
+                }
+              ],
+              "dataSource": "metrics",
+              "disabled": false,
+              "expression": "A",
+              "filter": {
+                "expression": "deployment.environment IN $environment"
+              },
+              "functions": [],
+              "groupBy": [
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "tool_name",
+                  "isJSON": false,
+                  "dataType": "string"
+                },
+                {
+                  "isColumn": false,
+                  "type": "tag",
+                  "key": "error_type",
+                  "isJSON": false,
+                  "dataType": "string"
+                }
+              ],
+              "having": {
+                "expression": ""
+              },
+              "legend": "{{tool_name}} · {{error_type}}",
+              "limit": null,
+              "orderBy": [],
+              "queryName": "A",
+              "source": "",
+              "stepInterval": null
+            }
+          ],
+          "queryFormulas": [],
+          "queryTraceOperator": []
+        },
+        "clickhouse_sql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "id": "9d2e15a3-6c4b-4d7f-8e1a-2b3c4d5e6f70",
+        "promql": [
+          {
+            "legend": "",
+            "name": "A",
+            "disabled": false,
+            "query": ""
+          }
+        ],
+        "queryType": "builder",
+        "unit": ""
+      },
+      "bucketCount": 30,
+      "bucketWidth": 0,
+      "columnUnits": {},
+      "decimalPrecision": 0,
+      "fillMode": "none",
+      "isLogScale": false,
+      "legendPosition": "bottom",
+      "lineInterpolation": "linear",
+      "lineStyle": "solid",
+      "mergeAllActiveQueries": false,
+      "showPoints": true,
+      "spanGaps": true,
+      "stackedBarChart": false,
+      "customLegendColors": {},
+      "contextLinks": {
+        "linksData": []
+      }
+    }
+  ]
+}

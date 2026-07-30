@@ -1,41 +1,48 @@
 ﻿# Run: docker compose -f docker-compose.observability.yml up -d
 # Stop: docker compose -f docker-compose.observability.yml down
 #
-# SigNoz observability stack
-# UI:   http://localhost:3301
-# OTLP: localhost:4317 (gRPC), localhost:4318 (HTTP)
+# SigNoz observability stack (v0.134+)
+# UI:   http://localhost:3301  → проброшен на 8080 контейнера signoz-signoz-0
+# OTLP: localhost:4317 (gRPC), localhost:4318 (HTTP) → контейнер ingester
 #
-# Vendored compose: docker/observability/docker-compose.yaml
-# Docs: docs/observability-signoz-setup.md
+# Vendored compose: docker/observability/compose.yaml (сгенерирован Foundry)
+# Docs: docs/observability/signoz-setup.md, docs/observability/dashboards.md
 
-# Overlay для SigNoz observability stack
+# Overlay для SigNoz observability stack.
 #
-# Запуск (через include — Docker Compose v2.20+):
-#   docker compose -f docker-compose.observability.yml up -d
-#
-# Альтернатива (старые версии Compose):
-#   docker compose \
-#     -f docker/observability/docker-compose.yaml \
-#     -f docker-compose.observability.yml \
-#     up -d
+# name зафиксирован явно: иначе project name выводится из директории запуска
+# (claudecodeserver), а контейнеры/тома привязаны к проекту "signoz" (как в
+# vendored compose). Без этого были бы конфликты имён и потеря данных.
 #
 # Переопределения:
-# 1. Bind UI (3301) и OTLP (4317/4318) к localhost — безопасность (нет внешнего доступа)
-# 2. Network остаётся из vendored compose (signoz-net)
+# 1. Bind UI (3301→8080) и OTLP (4317/4318) к localhost — безопасность (нет
+#    внешнего доступа). Используем !override чтобы не дублировать порты из
+#    vendored (там 4317/4318 уже слушаются, добавление второго = конфликт).
+# 2. Network остаётся из vendored (signoz-network).
+
+name: signoz
 
 include:
-  - path: docker/observability/docker-compose.yaml
+  - path: docker/observability/compose.yaml
 
 services:
-  # UI SigNoz — только localhost. Для внешнего доступа — reverse-proxy с auth
-  # (можно использовать существующий Yarp + API-key auth ClaudeHomeServer).
-  frontend:
-    ports:
-      - "127.0.0.1:3301:3301"
+  # SigNoz UI + API. В v0.134 это единый контейнер signoz-signoz-0 (раньше было
+  # два: query-service + frontend). Снаружи оставляем привычный URL :3301.
+  signoz-signoz-0:
+    # base-path для встроенного раздела «Телеметрия» (iframe в CCS через same-origin
+    # проброс /telemetry-proxy/). SigNoz релоцирует SPA под этот префикс: вставляет
+    # <base href="/telemetry-proxy/"> и резолвит ассеты/API под ним. PATH в значении
+    # обязан быть /telemetry-proxy (совпадает с middleware проброса в CCS); ХОСТ разнится
+    # по контуру, поэтому берётся из переменной SIGNOZ_EXTERNAL_URL (dev — дефолт ниже,
+    # prod — задать в .env рядом с compose, напр. https://<домен>/telemetry-proxy).
+    environment:
+      - SIGNOZ_GLOBAL_EXTERNAL__URL=${SIGNOZ_EXTERNAL_URL:-http://localhost:3301/telemetry-proxy}
+    ports: !override
+      - "127.0.0.1:3301:8080"
 
-  # OTLP receivers — только localhost. Предотвращает подключение внешних
-  # телеметрийных источников без явного проброса портов.
-  otel-collector:
-    ports:
+  # OTLP receivers (ingester). Bind к localhost — внешний мир не должен слать
+  # телеметрию без явного проброса.
+  ingester:
+    ports: !override
       - "127.0.0.1:4317:4317"  # OTLP gRPC
       - "127.0.0.1:4318:4318"  # OTLP HTTP

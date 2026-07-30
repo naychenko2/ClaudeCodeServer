@@ -1,0 +1,775 @@
+using System.Collections.Concurrent;
+using System.Text;
+using System.Text.RegularExpressions;
+using ClaudeHomeServer.Models;
+
+namespace ClaudeHomeServer.Services.Docs;
+
+// Индекс документации проекта для панели «Доки»: README.md в корне + docs/**/*.md.
+//
+// Зачем отдельный сервис, а не files/tree + files/content: панели нужна документация как
+// СВЯЗНЫЙ КОРПУС — заголовки, слаги якорей, ссылки между документами и обратные ссылки.
+// Собрать это с фронта означало бы скачать все документы и разобрать их в браузере на
+// каждое открытие панели.
+//
+// Кеш живёт на КОРЕНЬ ПАПКИ, а не на проект: у соседей по папке (один RootPath, разные
+// владельцы) документация одна и та же, разбирать её дважды незачем. Доступ проверяет
+// контроллер — сюда попадает уже разрешённый корень.
+public sealed partial class DocsIndexService
+{
+    // Область по умолчанию, пока проект не настроил свою: docs/ + README.md + markdown.
+    // Имена точные: на Linux файловая система регистрозависима, и «Docs/» — другая папка.
+    public static readonly DocsScope DefaultScope = new(["docs"], ["README.md"], ["markdown"]);
+
+    // Что можно включить в документацию — ровно то, что продукт умеет открыть
+    // (FileService.ViewableDocuments / IsImageFile / IsAudioFile / IsVideoFile и drawio
+    // в FileViewer). Группами, а не списком расширений: их три десятка, и в настройке
+    // они не читаются.
+    //
+    // Text=false — файл без текста: он числится в списке и открывается в центральной
+    // области, но заголовков, ссылок и поиска по телу у него нет и быть не может.
+    public static readonly IReadOnlyList<DocTypeGroup> TypeGroups =
+    [
+        new("markdown", "Markdown", [".md"], true),
+        new("text", "Текст", [".txt"], true),
+        new("pdf", "PDF", [".pdf"], false),
+        new("office", "Office", [".docx", ".xlsx", ".pptx"], false),
+        new("visio", "Visio", [".vsdx", ".vsdm", ".vssx", ".vssm", ".vstx", ".vstm"], false),
+        new("diagram", "Диаграммы", [".drawio", ".dio"], false),
+        new("image", "Картинки", [".png", ".jpg", ".jpeg", ".gif", ".bmp", ".svg", ".webp"], false),
+        new("audio", "Аудио", [".mp3", ".wav", ".ogg", ".flac", ".aac", ".m4a", ".opus", ".weba"], false),
+        new("video", "Видео", [".mp4", ".webm", ".mov", ".avi", ".mkv"], false),
+    ];
+
+    public static readonly IReadOnlyList<string> SupportedExtensions =
+        [.. TypeGroups.SelectMany(g => g.Extensions)];
+
+    // Расширения, содержимое которых разбирается в корпус
+    private static readonly HashSet<string> TextExtensions =
+        new(TypeGroups.Where(g => g.Text).SelectMany(g => g.Extensions), StringComparer.OrdinalIgnoreCase);
+
+    private static bool IsTextDoc(string path) => TextExtensions.Contains(Path.GetExtension(path));
+
+    // Расширения выбранных групп — область работает с ними, а хранится в группах
+    public static IReadOnlyList<string> ExtensionsOf(IReadOnlyList<string> types) =>
+        [.. TypeGroups.Where(g => types.Contains(g.Key, StringComparer.OrdinalIgnoreCase))
+            .SelectMany(g => g.Extensions)];
+
+    // Предохранители: область не должна превращаться в обход всего репозитория
+    private const int MaxDocs = 2000;
+    private const long MaxDocBytes = 2 * 1024 * 1024;
+    // Больше папок в области — это уже «весь репозиторий», а список в диалоге перестаёт читаться
+    private const int MaxFolders = 30;
+    private const int MaxRootFiles = 50;
+
+    // Глубина и объём поиска кандидатов в папки: диалогу нужны обозримые варианты,
+    // а не полный обход репозитория с node_modules
+    private const int SuggestMaxDepth = 3;
+    private const int SuggestMaxFolders = 200;
+
+    // Папки, которые не документация ни в одном проекте: обходить их дорого, а .md внутри
+    // (README пакетов, шаблоны генераторов) только зашумили бы и область, и список кандидатов
+    private static readonly HashSet<string> SkipDirs = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "node_modules", "bin", "obj", "dist", "build", "out", "target", "vendor",
+        "packages", "venv", "__pycache__", "coverage", "TestResults",
+    };
+
+    // Сколько символов текста показываем вокруг совпадения в поиске
+    private const int SnippetRadius = 60;
+
+    private readonly ConcurrentDictionary<string, CachedIndex> _cache = new(StringComparer.OrdinalIgnoreCase);
+
+    // Разобранный корпус + отпечаток файлов, по которому решаем, не устарел ли он
+    private sealed record CachedIndex(string Fingerprint, DocsCorpus Corpus);
+
+    internal sealed class DocsCorpus
+    {
+        public required IReadOnlyList<DocEntry> Docs { get; init; }
+        // Ключи всех словарей — относительный путь документа с прямыми слэшами.
+        // Сравнение без учёта регистра: ссылки в доках пишут вольно, а на Windows
+        // (среда разработки) регистр и так не различается. Коллизии на регистро-
+        // зависимой ФС не роняют разбор — вторая запись просто не добавляется.
+        public required Dictionary<string, DocEntry> ByPath { get; init; }
+        public required Dictionary<string, string> Texts { get; init; }
+        public required Dictionary<string, List<DocLink>> OutLinks { get; init; }
+        public required Dictionary<string, List<DocBacklink>> Backlinks { get; init; }
+    }
+
+    // ---------- публичное API ----------
+
+    // scope во всех методах: null — область по умолчанию. Настройка приходит из полей
+    // Project.Docs*, разбирать её здесь незачем — сервис не знает про проекты и работает
+    // от корня папки.
+    public IReadOnlyList<DocEntry> GetIndex(string rootPath, DocsScope? scope = null) =>
+        GetCorpus(rootPath, scope).Docs;
+
+    // Документ с содержимым и связями. null — путь вне области документации: это и есть
+    // гейт эндпоинта. Проверяем ВХОЖДЕНИЕМ В ИНДЕКС, а не сравнением строки с «docs/»:
+    // индекс построен обходом реальной файловой системы, поэтому вопрос регистра и
+    // разделителей решается один раз здесь, одинаково для Windows и Linux.
+    public DocDetail? GetDoc(string rootPath, string relativePath, DocsScope? scope = null)
+    {
+        var corpus = GetCorpus(rootPath, scope);
+        var key = NormalizePath(relativePath);
+        if (key is null || !corpus.ByPath.TryGetValue(key, out var entry)) return null;
+        // Бинарный отдаётся без содержимого: панель предложит открыть его в центре,
+        // где живут просмотрщики pdf/office/visio/картинок/звука
+        if (entry.Binary)
+            return new DocDetail(entry.Path, entry.Title, "", [],
+                corpus.Backlinks.TryGetValue(key, out var refs) ? refs : [], Binary: true);
+        if (!corpus.Texts.TryGetValue(key, out var text)) return null;
+        return new DocDetail(
+            entry.Path, entry.Title, text,
+            corpus.OutLinks.TryGetValue(key, out var outs) ? outs : [],
+            corpus.Backlinks.TryGetValue(key, out var backs) ? backs : []);
+    }
+
+    public IReadOnlyList<DocSearchHit> Search(string rootPath, string query,
+        DocsScope? scope = null, int limit = 50)
+    {
+        if (string.IsNullOrWhiteSpace(query)) return [];
+        var corpus = GetCorpus(rootPath, scope);
+        var q = query.Trim();
+        var hits = new List<DocSearchHit>();
+
+        foreach (var doc in corpus.Docs)
+        {
+            if (hits.Count >= limit) break;
+
+            // Заголовок документа и путь — совпадение без фрагмента текста
+            if (doc.Title.Contains(q, StringComparison.OrdinalIgnoreCase) ||
+                doc.Path.Contains(q, StringComparison.OrdinalIgnoreCase))
+            {
+                hits.Add(new DocSearchHit(doc.Path, doc.Title, null, doc.Title));
+                continue;
+            }
+
+            // Подзаголовок — ведём сразу к разделу
+            var heading = doc.Headings.FirstOrDefault(h => h.Text.Contains(q, StringComparison.OrdinalIgnoreCase));
+            if (heading is not null)
+            {
+                hits.Add(new DocSearchHit(doc.Path, doc.Title, heading.Slug, heading.Text));
+                continue;
+            }
+
+            // Тело документа — фрагмент вокруг совпадения + якорь ближайшего заголовка выше
+            if (!corpus.Texts.TryGetValue(doc.Path, out var text)) continue;
+            var idx = text.IndexOf(q, StringComparison.OrdinalIgnoreCase);
+            if (idx < 0) continue;
+            hits.Add(new DocSearchHit(doc.Path, doc.Title, HeadingAbove(text, idx, doc.Headings), Snippet(text, idx, q.Length)));
+        }
+
+        return hits;
+    }
+
+    // ---------- настройка области ----------
+
+    // Область к каноничному виду. Мусор молча отбрасывается — настройка приходит с фронта,
+    // и ронять из-за неё индекс всего проекта незачем. Пустой список НЕ подменяется
+    // дефолтом: «снял все галки» — осознанный выбор, а не отсутствие настройки (это null).
+    public static DocsScope NormalizeScope(DocsScope? scope) => scope is null
+        ? DefaultScope
+        : new DocsScope(
+            NormalizeFolders(scope.Folders),
+            NormalizeRootFiles(scope.RootFiles),
+            NormalizeTypes(scope.Types),
+            NormalizeHome(scope.Home));
+
+    // Домашний документ — путь от корня проекта (в отличие от файлов корня, он может
+    // лежать в папке). Значение вне корня отбрасывается: гейт области дальше всё равно
+    // не отдаст такой документ, и молчаливо пустое «Начало» было бы непонятным
+    public static string? NormalizeHome(string? home)
+    {
+        if (string.IsNullOrWhiteSpace(home)) return null;
+        var s = home.Trim().Replace('\\', '/').TrimStart('/');
+        if (s.Contains(':')) return null;
+        var segments = new List<string>();
+        foreach (var seg in s.Split('/', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (seg == ".") continue;
+            if (seg == "..") return null;
+            segments.Add(seg);
+        }
+        return segments.Count == 0 ? null : string.Join('/', segments);
+    }
+
+    // Что панель показывает «Началом»: явно выбранный документ, если он есть в корпусе,
+    // иначе README из корня. Решает бэкенд, а не фронт: правило одно и то же для индекса,
+    // и панели незачем знать про «readme.*» и порядок предпочтений
+    public string? ResolveHome(string rootPath, DocsScope? rawScope = null)
+    {
+        var scope = NormalizeScope(rawScope);
+        var corpus = GetCorpus(rootPath, scope);
+        if (scope.Home is not null && corpus.ByPath.TryGetValue(scope.Home, out var chosen))
+            return chosen.Path;
+        return corpus.Docs.FirstOrDefault(d => IsReadme(d.Path))?.Path;
+    }
+
+    // Собрать область из полей проекта: у каждой оси свой null со своим дефолтом
+    public static DocsScope ScopeOf(Project project) => NormalizeScope(new DocsScope(
+        project.DocsFolders ?? DefaultScope.Folders,
+        project.DocsRootFiles ?? DefaultScope.RootFiles,
+        project.DocsTypes ?? DefaultScope.Types,
+        project.DocsHome));
+
+    // Папки: прямые слэши, без краёв-разделителей, без дублей и без выходов за корень
+    public static IReadOnlyList<string> NormalizeFolders(IReadOnlyList<string>? folders)
+    {
+        if (folders is null) return DefaultScope.Folders;
+        var result = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var raw in folders)
+        {
+            var folder = NormalizeFolder(raw);
+            if (folder is null || !seen.Add(folder)) continue;
+            result.Add(folder);
+            if (result.Count >= MaxFolders) break;
+        }
+        return result;
+    }
+
+    // Корневые файлы — именами, без путей: подпапки задаются папками, и «docs/x.md»
+    // здесь означал бы вторую дорогу к тому же файлу мимо настройки папок
+    public static IReadOnlyList<string> NormalizeRootFiles(IReadOnlyList<string>? files)
+    {
+        if (files is null) return DefaultScope.RootFiles;
+        var result = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var raw in files)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) continue;
+            var name = raw.Trim().Replace('\\', '/');
+            if (name.Contains('/') || name.Contains(':') || name is "." or "..") continue;
+            if (!seen.Add(name)) continue;
+            result.Add(name);
+            if (result.Count >= MaxRootFiles) break;
+        }
+        return result;
+    }
+
+    // Типы: только известные группы каталога. Порядок — как в каталоге, чтобы настройка
+    // не зависела от того, в каком порядке юзер щёлкал чипы
+    public static IReadOnlyList<string> NormalizeTypes(IReadOnlyList<string>? types)
+    {
+        if (types is null) return DefaultScope.Types;
+        return [.. TypeGroups.Select(g => g.Key)
+            .Where(key => types.Contains(key, StringComparer.OrdinalIgnoreCase))];
+    }
+
+    // Одна папка настройки. null — значение непригодно: пустое, абсолютное («C:\…», «/etc»)
+    // или уводящее выше корня. Корень проекта («.», «/») тоже отбрасываем: выбор корня
+    // означал бы обход всего репозитория, а README и так в области всегда.
+    private static string? NormalizeFolder(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        var s = raw.Trim().Replace('\\', '/');
+        if (s.Contains(':')) return null;               // «C:/…» и alternate data stream
+        var segments = new List<string>();
+        foreach (var seg in s.Split('/', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (seg == ".") continue;
+            if (seg == "..") return null;               // выход за корень проекта
+            segments.Add(seg);
+        }
+        return segments.Count == 0 ? null : string.Join('/', segments);
+    }
+
+    // ---------- сборка корпуса ----------
+
+    private DocsCorpus GetCorpus(string rootPath, DocsScope? rawScope)
+    {
+        var root = Path.GetFullPath(rootPath);
+        var scope = NormalizeScope(rawScope);
+        // Ключ кеша — корень ВМЕСТЕ с областью: у соседей по папке (один RootPath, разные
+        // владельцы) настройки свои, и без области в ключе они вытесняли бы корпус друг друга
+        var key = $"{root}\n{string.Join('|', scope.Folders)}\n{string.Join('|', scope.RootFiles)}\n{string.Join('|', scope.Types)}";
+        var files = CollectFiles(root, scope);
+        var fingerprint = Fingerprint(root, files);
+
+        if (_cache.TryGetValue(key, out var cached) && cached.Fingerprint == fingerprint)
+            return cached.Corpus;
+
+        var corpus = BuildCorpus(root, files);
+        _cache[key] = new CachedIndex(fingerprint, corpus);
+        return corpus;
+    }
+
+    // Файлы области: выбранные файлы корня поимённо + выбранные папки целиком.
+    // Корневые файлы берём как названы, не проверяя расширение: раз пользователь выбрал
+    // файл явно — он важнее общего фильтра типов.
+    private static List<string> CollectFiles(string root, DocsScope scope)
+    {
+        var files = new List<string>();
+        // Вложенные друг в друга папки настройки («docs» и «docs/adr») дают один файл дважды
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            foreach (var name in scope.RootFiles)
+            {
+                var file = Path.Combine(root, name);
+                if (File.Exists(file) && seen.Add(file)) files.Add(file);
+            }
+
+            foreach (var folder in scope.Folders)
+            {
+                if (files.Count >= MaxDocs) break;
+                var dir = Path.Combine(root, folder.Replace('/', Path.DirectorySeparatorChar));
+                if (!Directory.Exists(dir)) continue;
+                foreach (var file in EnumerateDocs(dir, ExtensionsOf(scope.Types)))
+                {
+                    if (files.Count >= MaxDocs) break;
+                    if (seen.Add(file)) files.Add(file);
+                }
+            }
+        }
+        catch (DirectoryNotFoundException) { /* папку удалили между проверкой и обходом */ }
+        catch (UnauthorizedAccessException) { /* нет прав на часть дерева — отдаём что смогли */ }
+        return files;
+    }
+
+    private static bool HasExtension(string path, IReadOnlyList<string> extensions)
+    {
+        var ext = Path.GetExtension(path);
+        foreach (var allowed in extensions)
+            if (string.Equals(ext, allowed, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
+    // Обход вручную, а не EnumerateFiles(AllDirectories): нужен пропуск служебных
+    // подпапок. Выбранной может оказаться папка с node_modules внутри, и рекурсия туда
+    // затянула бы тысячи чужих README.
+    private static IEnumerable<string> EnumerateDocs(string dir, IReadOnlyList<string> extensions)
+    {
+        var queue = new Queue<string>();
+        queue.Enqueue(dir);
+        while (queue.Count > 0)
+        {
+            var current = queue.Dequeue();
+            string[] files, subdirs;
+            try
+            {
+                files = Directory.GetFiles(current);
+                subdirs = Directory.GetDirectories(current);
+            }
+            catch (DirectoryNotFoundException) { continue; }
+            catch (UnauthorizedAccessException) { continue; }
+
+            // Фильтр по расширениям в коде, а не маской GetFiles: расширений в области
+            // несколько, и один проход дешевле нескольких обходов той же папки
+            foreach (var f in files)
+                if (HasExtension(f, extensions)) yield return f;
+            foreach (var sub in subdirs)
+            {
+                var name = Path.GetFileName(sub);
+                if (name.StartsWith('.') || SkipDirs.Contains(name)) continue;
+                queue.Enqueue(sub);
+            }
+        }
+    }
+
+    // Настройка области целиком: что выбрано, что можно выбрать, что было бы по умолчанию
+    public DocsScopeInfo Describe(string rootPath, DocsScope? rawScope = null)
+    {
+        var scope = NormalizeScope(rawScope);
+        return new DocsScopeInfo(
+            scope,
+            SuggestFolders(rootPath, scope),
+            SuggestRootFiles(rootPath, scope),
+            TypeGroups,
+            DefaultScope,
+            // Документы области — из них выбирают «Начало»; заодно панель узнаёт,
+            // какой документ им сейчас работает
+            GetIndex(rootPath, scope).Select(d => new DocOption(d.Path, d.Title)).ToList(),
+            ResolveHome(rootPath, scope));
+    }
+
+    // Кандидаты в корневые файлы: всё подходящее по расширению, что лежит в корне.
+    // Считаем по ВСЕМ поддерживаемым расширениям, а не по выбранным: иначе, сузив типы
+    // до .md, пользователь терял бы из виду свой же выбранный CHANGELOG.txt.
+    public IReadOnlyList<DocRootFileCandidate> SuggestRootFiles(string rootPath, DocsScope? rawScope = null)
+    {
+        var root = Path.GetFullPath(rootPath);
+        var scope = NormalizeScope(rawScope);
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            foreach (var file in Directory.GetFiles(root))
+            {
+                if (!HasExtension(file, SupportedExtensions)) continue;
+                names.Add(Path.GetFileName(file));
+                if (names.Count >= MaxRootFiles) break;
+            }
+        }
+        catch (DirectoryNotFoundException) { /* корень проекта исчез — отдаём выбранные */ }
+        catch (UnauthorizedAccessException) { }
+
+        foreach (var name in scope.RootFiles) names.Add(name);
+
+        return names
+            .Select(n => new DocRootFileCandidate(n, File.Exists(Path.Combine(root, n))))
+            .OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    // Кандидаты в папки документации: папки с документами внутри, неглубоко и без служебных.
+    // Выбранные добавляются всегда — в том числе несуществующие, иначе галка на удалённой
+    // папке пропала бы из диалога, и пустой список документов выглядел бы поломкой.
+    public IReadOnlyList<DocFolderCandidate> SuggestFolders(string rootPath, DocsScope? rawScope = null)
+    {
+        var root = Path.GetFullPath(rootPath);
+        var scope = NormalizeScope(rawScope);
+        var found = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        Walk(root, "", 0);
+
+        foreach (var folder in scope.Folders)
+            found.TryAdd(folder, 0);
+
+        return found
+            .Select(kv => new DocFolderCandidate(kv.Key, kv.Value,
+                Directory.Exists(Path.Combine(root, kv.Key.Replace('/', Path.DirectorySeparatorChar)))))
+            .OrderBy(c => c.Path, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        // Возвращает число документов в поддереве: родительская папка показывает суммарный
+        // счётчик, даже когда её собственные документы лежат уровнем ниже (docs/ и docs/adr/).
+        // Считаем по ВСЕМ поддерживаемым расширениям, а не по выбранным типам: иначе цифра
+        // в диалоге врала бы, пока выбор типов там ещё редактируется и не сохранён
+        int Walk(string dir, string rel, int depth)
+        {
+            string[] files, subdirs;
+            try
+            {
+                files = Directory.GetFiles(dir);
+                subdirs = Directory.GetDirectories(dir);
+            }
+            catch (DirectoryNotFoundException) { return 0; }
+            catch (UnauthorizedAccessException) { return 0; }
+
+            var count = files.Count(f => HasExtension(f, SupportedExtensions));
+            if (depth < SuggestMaxDepth)
+            {
+                foreach (var sub in subdirs)
+                {
+                    var name = Path.GetFileName(sub);
+                    if (name.StartsWith('.') || SkipDirs.Contains(name)) continue;
+                    count += Walk(sub, rel.Length == 0 ? name : $"{rel}/{name}", depth + 1);
+                }
+            }
+            // Корень проекта папкой-кандидатом не бывает: его выбор = обход всего репозитория
+            if (rel.Length > 0 && count > 0 && found.Count < SuggestMaxFolders) found[rel] = count;
+            return count;
+        }
+    }
+
+    // Отпечаток области: путь + время правки + размер каждого файла. Не «максимальный
+    // mtime + количество»: удаление одного файла с добавлением другого в ту же секунду
+    // такой ключ не заметил бы, и панель показывала бы устаревший корпус.
+    private static string Fingerprint(string root, List<string> files)
+    {
+        var sb = new StringBuilder();
+        foreach (var f in files.OrderBy(x => x, StringComparer.Ordinal))
+        {
+            var info = new FileInfo(f);
+            sb.Append(Relative(root, f)).Append('|')
+              .Append(info.Exists ? info.LastWriteTimeUtc.Ticks : 0).Append('|')
+              .Append(info.Exists ? info.Length : -1).Append('\n');
+        }
+        return sb.ToString();
+    }
+
+    private static DocsCorpus BuildCorpus(string root, List<string> files)
+    {
+        var docs = new List<DocEntry>();
+        var byPath = new Dictionary<string, DocEntry>(StringComparer.OrdinalIgnoreCase);
+        var texts = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        // Ссылки собираем сырыми: класс Doc/Repo можно определить только когда известен
+        // ВЕСЬ состав области, поэтому классификация — вторым проходом ниже.
+        var rawLinks = new Dictionary<string, List<ParsedLink>>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var file in files)
+        {
+            var rel = Relative(root, file);
+            FileInfo info;
+            try
+            {
+                info = new FileInfo(file);
+                if (!info.Exists) continue;
+            }
+            catch (IOException) { continue; }
+            catch (UnauthorizedAccessException) { continue; }
+
+            // Файл без текста (pdf, visio, картинка, звук) числится в списке, но не читается:
+            // держать в кеше мегабайты байтов незачем, а разбирать в них нечего
+            if (!IsTextDoc(file))
+            {
+                var binary = new DocEntry(rel, Path.GetFileName(file), info.LastWriteTimeUtc, info.Length, [], Binary: true);
+                if (!byPath.TryAdd(rel, binary)) continue;
+                docs.Add(binary);
+                continue;
+            }
+
+            string text;
+            try
+            {
+                if (info.Length > MaxDocBytes) continue;
+                text = File.ReadAllText(file);
+            }
+            catch (IOException) { continue; }             // файл переписывают прямо сейчас
+            catch (UnauthorizedAccessException) { continue; }
+
+            var parsed = ParseDocument(text);
+            var title = parsed.Title ?? Path.GetFileNameWithoutExtension(file);
+            var entry = new DocEntry(rel, title, info.LastWriteTimeUtc, info.Length, parsed.Headings);
+
+            // TryAdd, а не индексатор: на регистрозависимой ФС рядом могут лежать
+            // docs/api.md и docs/API.md — дубль по ключу не должен ронять разбор
+            if (!byPath.TryAdd(rel, entry)) continue;
+            docs.Add(entry);
+            texts[rel] = text;
+            rawLinks[rel] = parsed.Links;
+        }
+
+        var outLinks = new Dictionary<string, List<DocLink>>(StringComparer.OrdinalIgnoreCase);
+        var backlinks = new Dictionary<string, List<DocBacklink>>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var (from, links) in rawLinks)
+        {
+            var resolved = new List<DocLink>();
+            foreach (var link in links)
+            {
+                if (IsExternal(link.Target))
+                {
+                    resolved.Add(new DocLink(link.Target, null, DocLinkKind.External, link.Text));
+                    continue;
+                }
+
+                // Ссылка-якорь внутри того же документа
+                if (link.Target.Length == 0 && link.Anchor is not null)
+                {
+                    resolved.Add(new DocLink(from, link.Anchor, DocLinkKind.Doc, link.Text));
+                    continue;
+                }
+
+                var target = ResolveRelative(from, link.Target);
+                if (target is null) continue;   // ведёт за пределы проекта — не наша забота
+
+                var kind = byPath.ContainsKey(target) ? DocLinkKind.Doc : DocLinkKind.Repo;
+                resolved.Add(new DocLink(target, link.Anchor, kind, link.Text));
+
+                if (kind != DocLinkKind.Doc || string.Equals(target, from, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                // Обратные ссылки — разворот исходящих, отдельного хранилища нет (как в NotesService)
+                var sourceTitle = byPath.TryGetValue(from, out var src) ? src.Title : from;
+                if (!backlinks.TryGetValue(target, out var list))
+                    backlinks[target] = list = [];
+                if (!list.Any(b => string.Equals(b.Path, from, StringComparison.OrdinalIgnoreCase) && b.Anchor == link.Anchor))
+                    list.Add(new DocBacklink(from, sourceTitle, link.Anchor));
+            }
+            outLinks[from] = resolved;
+        }
+
+        // README первым, дальше по папке и ЗАГОЛОВКУ: панель показывает дерево в этом же
+        // порядке и подписывает строки заголовками — сортировка по имени файла выглядела бы
+        // в ней произвольной (observability-audit.md с заголовком «Аудит…» вставал не туда).
+        // Папка старше заголовка, иначе документы разных групп перемешались бы между собой.
+        docs.Sort((a, b) =>
+        {
+            // README — первый среди корневых: он вход в документацию, а по алфавиту
+            // заголовков мог оказаться где угодно среди прочих файлов корня
+            if (IsReadme(a.Path) != IsReadme(b.Path)) return IsReadme(a.Path) ? -1 : 1;
+            var byFolder = string.Compare(Folder(a.Path), Folder(b.Path), StringComparison.OrdinalIgnoreCase);
+            if (byFolder != 0) return byFolder;
+            // Сравнение с учётом языка: заголовки русские, и ordinal ставил бы кириллицу
+            // после латиницы, а внутри кириллицы — по кодам, а не по алфавиту
+            var byTitle = string.Compare(a.Title, b.Title, StringComparison.CurrentCultureIgnoreCase);
+            return byTitle != 0 ? byTitle : string.Compare(a.Path, b.Path, StringComparison.OrdinalIgnoreCase);
+        });
+
+        return new DocsCorpus
+        {
+            Docs = docs, ByPath = byPath, Texts = texts,
+            OutLinks = outLinks, Backlinks = backlinks,
+        };
+    }
+
+    // README любого поддерживаемого расширения: в корне лежит и README.md, и README.txt
+    private static bool IsReadme(string relativePath) =>
+        !relativePath.Contains('/') &&
+        Path.GetFileNameWithoutExtension(relativePath).Equals("README", StringComparison.OrdinalIgnoreCase);
+
+    // Папка документа («docs/adr/x.md» → «docs/adr»); корневые документы — пустая строка
+    private static string Folder(string relativePath)
+    {
+        var i = relativePath.LastIndexOf('/');
+        return i < 0 ? "" : relativePath[..i];
+    }
+
+    // ---------- разбор markdown ----------
+
+    // Сырая ссылка до классификации: путь и якорь уже разделены
+    internal readonly record struct ParsedLink(string Target, string? Anchor, string Text);
+
+    internal sealed record ParsedDocument(string? Title, IReadOnlyList<DocHeading> Headings, List<ParsedLink> Links);
+
+    // Заголовок вне блока кода: «## Текст» (до трёх пробелов отступа, как в CommonMark)
+    [GeneratedRegex(@"^ {0,3}(#{1,6})\s+(.+?)\s*#*\s*$")]
+    private static partial Regex HeadingRegex();
+
+    // Ссылка [текст](цель) — но не картинка ![alt](src): у картинок навигации нет.
+    // Хвостовой title в кавычках отбрасывается вместе с пробелом перед ним.
+    [GeneratedRegex(@"(?<!\!)\[([^\]]*)\]\(\s*([^)\s]*)(?:\s+""[^""]*"")?\s*\)")]
+    private static partial Regex LinkRegex();
+
+    // Ограда блока кода: ``` или ~~~ (с отступом до трёх пробелов)
+    [GeneratedRegex(@"^ {0,3}(`{3,}|~{3,})")]
+    private static partial Regex FenceRegex();
+
+    internal static ParsedDocument ParseDocument(string markdown)
+    {
+        string? title = null;
+        var headings = new List<DocHeading>();
+        var links = new List<ParsedLink>();
+        var inFence = false;
+
+        foreach (var raw in markdown.Split('\n'))
+        {
+            var line = raw.TrimEnd('\r');
+
+            // Блоки кода пропускаем целиком: «# комментарий» в bash-примере — не заголовок,
+            // а markdown-ссылка в примере кода — не связь между документами
+            if (FenceRegex().IsMatch(line)) { inFence = !inFence; continue; }
+            if (inFence) continue;
+
+            var h = HeadingRegex().Match(line);
+            if (h.Success)
+            {
+                var level = h.Groups[1].Value.Length;
+                var text = StripMarkdown(h.Groups[2].Value);
+                if (level == 1 && title is null) title = text;
+                else if (level is >= 2 and <= 3) headings.Add(new DocHeading(level, text, Slugify(text)));
+            }
+
+            foreach (Match m in LinkRegex().Matches(line))
+            {
+                var target = m.Groups[2].Value.Trim();
+                if (target.Length == 0) continue;
+                var (path, anchor) = SplitAnchor(target);
+                links.Add(new ParsedLink(path, anchor, StripMarkdown(m.Groups[1].Value)));
+            }
+        }
+
+        return new ParsedDocument(title, headings, links);
+    }
+
+    // Текст без markdown-разметки: код, выделение, ссылки и картинки схлопываются в текст.
+    // От ЭТОГО текста считается слаг — фронт получает уже очищенный textContent DOM-узла,
+    // и при разных входах одинаковая функция слагификации дала бы разные якоря.
+    internal static string StripMarkdown(string text)
+    {
+        var s = text;
+        s = Regex.Replace(s, @"!\[([^\]]*)\]\([^)]*\)", "$1");   // картинка → alt
+        s = Regex.Replace(s, @"\[([^\]]*)\]\([^)]*\)", "$1");    // ссылка → подпись
+        s = s.Replace("`", "");
+        s = Regex.Replace(s, @"\*\*|__|\*|_|~~", "");
+        return s.Trim();
+    }
+
+    // Слаг якоря: нижний регистр, разделители в дефис, прочая пунктуация отброшена.
+    // Буквы любых алфавитов сохраняются — заголовки в проекте русские.
+    internal static string Slugify(string headingText)
+    {
+        var sb = new StringBuilder();
+        foreach (var ch in StripMarkdown(headingText).ToLowerInvariant())
+        {
+            if (char.IsLetterOrDigit(ch)) sb.Append(ch);
+            else if (ch is ' ' or '\t' or '-' or '_' or '.' or '/') sb.Append('-');
+        }
+        // Схлопываем повторы дефисов и обрезаем края
+        var slug = Regex.Replace(sb.ToString(), "-{2,}", "-").Trim('-');
+        return slug;
+    }
+
+    // «foo.md#раздел» → ("foo.md", "раздел"); якорь нормализуется тем же слагом,
+    // потому что в доках его пишут и словами, и уже готовым слагом.
+    // Декодирование обязательно: в markdown кириллический якорь часто записан процент-
+    // энкодингом («#%D1%81%D1%80%D0%BE%D0%BA»), и без decode слаг получался мусорный —
+    // переход по такой ссылке открывал документ с начала вместо нужного раздела.
+    internal static (string Path, string? Anchor) SplitAnchor(string target)
+    {
+        var i = target.IndexOf('#');
+        if (i < 0) return (target, null);
+        var raw = target[(i + 1)..];
+        string decoded;
+        try { decoded = Uri.UnescapeDataString(raw); }
+        catch (UriFormatException) { decoded = raw; }   // битая %-последовательность
+        var anchor = Slugify(decoded);
+        return (target[..i], anchor.Length == 0 ? null : anchor);
+    }
+
+    internal static bool IsExternal(string target) =>
+        target.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+        target.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
+        target.StartsWith("mailto:", StringComparison.OrdinalIgnoreCase) ||
+        target.StartsWith("//", StringComparison.Ordinal);
+
+    // Путь ссылки относительно документа-источника → путь от корня проекта.
+    // null — ссылка уводит выше корня: такие в корпус не берём.
+    internal static string? ResolveRelative(string fromDoc, string target)
+    {
+        var decoded = Uri.UnescapeDataString(target.Replace('\\', '/'));
+        var baseDir = fromDoc.Contains('/') ? fromDoc[..fromDoc.LastIndexOf('/')] : "";
+        var combined = decoded.StartsWith('/')
+            ? decoded.TrimStart('/')
+            : baseDir.Length > 0 ? $"{baseDir}/{decoded}" : decoded;
+
+        var segments = new List<string>();
+        foreach (var seg in combined.Split('/', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (seg == ".") continue;
+            if (seg == "..")
+            {
+                if (segments.Count == 0) return null;   // выше корня проекта
+                segments.RemoveAt(segments.Count - 1);
+                continue;
+            }
+            segments.Add(seg);
+        }
+        return segments.Count == 0 ? null : string.Join('/', segments);
+    }
+
+    // ---------- вспомогательное ----------
+
+    // Путь от корня с прямыми слэшами: один формат для API, ссылок и ключей словарей
+    private static string Relative(string root, string fullPath) =>
+        Path.GetRelativePath(root, fullPath).Replace('\\', '/');
+
+    // Нормализация пути из запроса к формату ключей корпуса
+    private static string? NormalizePath(string relativePath)
+    {
+        if (string.IsNullOrWhiteSpace(relativePath)) return null;
+        var normalized = relativePath.Replace('\\', '/').TrimStart('/');
+        return normalized.Length == 0 ? null : normalized;
+    }
+
+    // Якорь ближайшего заголовка выше совпадения — чтобы поиск вёл сразу в раздел
+    private static string? HeadingAbove(string text, int matchIndex, IReadOnlyList<DocHeading> headings)
+    {
+        string? slug = null;
+        foreach (var h in headings)
+        {
+            var pos = text.IndexOf(h.Text, StringComparison.Ordinal);
+            if (pos < 0 || pos > matchIndex) continue;
+            slug = h.Slug;
+        }
+        return slug;
+    }
+
+    private static string Snippet(string text, int matchIndex, int matchLength)
+    {
+        var start = Math.Max(0, matchIndex - SnippetRadius);
+        var end = Math.Min(text.Length, matchIndex + matchLength + SnippetRadius);
+        var body = text[start..end].Replace('\n', ' ').Replace('\r', ' ').Trim();
+        return (start > 0 ? "…" : "") + body + (end < text.Length ? "…" : "");
+    }
+}

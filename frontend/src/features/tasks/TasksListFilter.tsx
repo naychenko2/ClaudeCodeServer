@@ -1,6 +1,6 @@
 // Фильтр списка задач (режим проекта): кнопка-триггер (Funnel) + поповер с полным
 // составом фильтров (Статус / Исполнитель / Приоритет / Срок). На мобиле поповер
-// превращается в боттом-шит. Стиль и состав — по макету docs/mockups/tasks-filter-variant-a.html.
+// превращается в боттом-шит. Стиль и состав — по макету docs/design/mockups/tasks-filter-variant-a.html.
 // Сама фильтрация списка живёт в TasksPanel (applyTaskFilters); здесь — только UI и
 // тип состояния. Источник истины по точкам/лейблам — lib/tasks (STATUS_DOT/PRIORITY_*),
 // срок — та же группировка, что в TasksPanel.dateGroupKey.
@@ -10,6 +10,7 @@ import { createPortal } from 'react-dom';
 import { Funnel } from 'lucide-react';
 import { C, FONT, R, SHADOW, Z } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
+import { IconButton } from '../../components/ui';
 import {
   STATUS_DOT, STATUS_LABEL, PRIORITY_COLOR, PRIORITY_LABEL, PRIORITY_ORDER, daysFromToday,
 } from '../../lib/tasks';
@@ -103,6 +104,9 @@ const SECTION_LABEL: CSSProperties = {
 
 // === Кнопка-триггер + поповер ===
 
+// Ширина десктопного поповера (нужна до рендера — по ней клампится позиция)
+const POPOVER_W = 252;
+
 // variant:
 //   'icon'    — компактная 26×26 в шапке острова (cc-panels)
 //   'sidebar' — квадратная 34px в строке действий старого сайдбара
@@ -117,19 +121,46 @@ export function TasksListFilterButton({ variant, filters, onFilters, total, foun
   const mobile = isMobile ?? useIsMobile();
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
+  const popRef = useRef<HTMLDivElement>(null);
+  // Рамка триггера на момент открытия — поповер живёт в портале и позиционируется
+  // по ней (см. ниже, почему не absolute)
+  const [anchor, setAnchor] = useState<DOMRect | null>(null);
   const count = countActiveFilterGroups(filters);
   const active = count > 0;
 
-  // Закрытие: клик вне (десктоп) + Esc (везде) — паттерн ToolbarOverflowMenu
+  const toggleOpen = () => {
+    setAnchor(rootRef.current?.getBoundingClientRect() ?? null);
+    setOpen(o => !o);
+  };
+
+  // Закрытие: клик вне (десктоп) + Esc (везде) — паттерн ToolbarOverflowMenu.
+  // Поповер вынесен в портал, поэтому «вне» — это вне И триггера, И карточки.
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+      const t = e.target as Node;
+      if (rootRef.current?.contains(t) || popRef.current?.contains(t)) return;
+      setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); setOpen(false); } };
+    // Прокрутка страницы/панели уводит карточку от кнопки — проще закрыть, чем
+    // догонять. Но прокрутка ВНУТРИ самой карточки (список фильтров длиннее
+    // экрана) — обычная работа с ней, а не уход: её пропускаем.
+    const onScroll = (e: Event) => {
+      if (popRef.current?.contains(e.target as Node)) return;
+      setOpen(false);
+    };
+    const onResize = () => setOpen(false);
     document.addEventListener('mousedown', onDown);
     document.addEventListener('keydown', onKey);
-    return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey); };
+    window.addEventListener('resize', onResize);
+    window.addEventListener('scroll', onScroll, true);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+      window.removeEventListener('resize', onResize);
+      window.removeEventListener('scroll', onScroll, true);
+    };
   }, [open]);
 
   const badge: CSSProperties = variant === 'icon'
@@ -137,22 +168,18 @@ export function TasksListFilterButton({ variant, filters, onFilters, total, foun
     : { top: -5, right: -5, minWidth: 15, height: 15, border: `1.5px solid ${C.bgPanel}` };
 
   const trigger = variant === 'icon' ? (
-    <button
-      type="button" title="Фильтр" aria-haspopup="menu" aria-expanded={open}
-      onClick={() => setOpen(o => !o)}
-      style={{
-        position: 'relative', width: 28, height: 28, border: 'none', borderRadius: R.sm,
-        background: active ? C.accentLight : 'transparent', color: active ? C.accent : C.textMuted,
-        cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-      }}
+    // Высота 24 — общая для всего ряда контролов шапки панели (см. design-guidelines)
+    <IconButton
+      size="xs" active={active} title="Фильтр" onClick={toggleOpen}
+      style={{ position: 'relative' }}
     >
       <Funnel size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
       {count > 0 && <FilterBadge count={count} style={badge} />}
-    </button>
+    </IconButton>
   ) : (
     <button
       type="button" title="Фильтр" aria-haspopup="menu" aria-expanded={open}
-      onClick={() => setOpen(o => !o)}
+      onClick={toggleOpen}
       style={{
         position: 'relative', width: 34, height: 34, boxSizing: 'border-box',
         border: `1px solid ${active ? C.accent : C.border}`, borderRadius: R.lg,
@@ -173,11 +200,18 @@ export function TasksListFilterButton({ variant, filters, onFilters, total, foun
     <div ref={rootRef} style={{ position: 'relative', flexShrink: 0, display: 'inline-flex' }}>
       {trigger}
 
-      {/* Десктоп: поповер прибит к правому краю триггера, поверх списка */}
-      {open && !mobile && (
-        <div role="menu" style={{
-          position: 'absolute', top: 'calc(100% + 4px)', right: 0,
-          width: 252, boxSizing: 'border-box',
+      {/* Десктоп: поповер висит от правого края триггера — но в ПОРТАЛЕ и fixed.
+          Кнопка живёт в шапке панели, а карточка панели клиппует содержимое
+          (Island: overflow hidden) и вдобавок несёт transform, из-за которого
+          даже position:fixed привязался бы к ней. Абсолютный поповер такую
+          панель не переживает — его срезает по её краю. */}
+      {open && !mobile && anchor && createPortal(
+        <div ref={popRef} role="menu" style={{
+          position: 'fixed',
+          top: anchor.bottom + 4,
+          left: Math.max(8, Math.min(anchor.right - POPOVER_W, window.innerWidth - POPOVER_W - 8)),
+          width: POPOVER_W, boxSizing: 'border-box',
+          maxHeight: `calc(100vh - ${anchor.bottom + 16}px)`, overflowY: 'auto',
           background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
           boxShadow: SHADOW.dropdown, padding: '12px 12px 10px', zIndex: Z.dropdown,
         }}>
@@ -186,7 +220,8 @@ export function TasksListFilterButton({ variant, filters, onFilters, total, foun
             onReset={() => onFilters(EMPTY_TASK_FILTERS)}
             found={found} total={total} resetDisabled={count === 0}
           />
-        </div>
+        </div>,
+        document.body,
       )}
 
       {/* Мобила: боттом-шит с крупными tap-целями и кнопкой «Показать N задач» */}

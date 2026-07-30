@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Search, Pin, PinOff, Plus, LayoutGrid } from 'lucide-react';
 import { C, R, SHADOW, Z, FONT, FS } from '../../lib/design';
 import type { Project } from '../../types';
 import { ProjectIcon } from './ProjectIcon';
-import { useAllProjects, openProjectViaEvent } from './useAllProjects';
+import { useAllProjects, openProjectViaEvent, openAllProjects, openNewProjectFlow } from './useAllProjects';
 import { usePinnedIds, useRecentIds, isPinned, togglePin } from '../../lib/pinnedProjects';
 
 // Командная палитра переключения проектов: поиск + секции «Закреплённые» и «Недавние».
@@ -87,14 +88,8 @@ export function ProjectPalette({ currentProjectId, onClose }: { currentProjectId
   // «Все проекты» — к списку проектов (из открытого проекта диплинк #/projects выводит
   // к списку через switchHubTab); «Новый проект» — туда же + флаг, по которому
   // ProjectListPage сразу откроет диалог создания
-  const goAllProjects = () => {
-    onClose();
-    window.dispatchEvent(new CustomEvent('cc-open-url', { detail: { url: '#/projects' } }));
-  };
-  const goNewProject = () => {
-    sessionStorage.setItem('cc_pending_new_project', '1');
-    goAllProjects();
-  };
+  const goAllProjects = () => { onClose(); openAllProjects(); };
+  const goNewProject = () => { onClose(); openNewProjectFlow(); };
 
   const Section = ({ title, items }: { title: string; items: Project[] }) => items.length ? (
     <>
@@ -105,7 +100,10 @@ export function ProjectPalette({ currentProjectId, onClose }: { currentProjectId
 
   const empty = !currentList.length && !pinnedList.length && !recentList.length && !restList.length;
 
-  return (
+  // Портал в body обязателен: палитру открывают в том числе из панели-карточки,
+  // а та несёт transform (анимация появления) и overflow:hidden — внутри неё
+  // position:fixed отсчитывается от карточки и обрезается по её краю.
+  return createPortal(
     <div
       onClick={onClose}
       style={{
@@ -150,7 +148,8 @@ export function ProjectPalette({ currentProjectId, onClose }: { currentProjectId
           <FooterButton icon={<LayoutGrid size={15} strokeWidth={2} />} label="Все проекты" onClick={goAllProjects} />
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

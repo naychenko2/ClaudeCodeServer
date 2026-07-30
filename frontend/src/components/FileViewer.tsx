@@ -21,6 +21,7 @@ import sql from 'react-syntax-highlighter/dist/esm/languages/prism/sql';
 import markup from 'react-syntax-highlighter/dist/esm/languages/prism/markup';
 import type { Project, GitBlameLine, GitLogEntry } from '../types';
 import { api } from '../lib/api';
+import { resolveDocImage } from '../lib/docsLinks';
 import { OfflineError } from '../lib/offline';
 import { useGitState, ensureGit, gitRestoreFile, loadGitRemote } from '../lib/git';
 import { parseDiffToHunks, buildHunkPatch, buildLinesPatch } from '../lib/gitPatch';
@@ -1572,7 +1573,16 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
                     </div>
                   )
                   : isMarkdown
-                  ? <div data-selection-scope="doc" data-selection-priority="2"><DocCommentedMarkdown scope={project.id} docPath={filePath} content={content} isMobile={isMobile} onCounts={onCommentCounts} /></div>
+                  ? <div data-selection-scope="doc" data-selection-priority="2"><DocCommentedMarkdown
+                      scope={project.id} docPath={filePath} content={content} isMobile={isMobile}
+                      onCounts={onCommentCounts}
+                      // Логотип и скриншоты README лежат рядом в репозитории: путь в src
+                      // относителен документа, грузить их надо через файловый эндпоинт
+                      viewer={{ resolveImageSrc: src => {
+                        const target = resolveDocImage(filePath, src);
+                        return target ? api.files.fileUrl(project.id, target) : undefined;
+                      } }}
+                    /></div>
                   : <div data-selection-scope="doc" data-selection-priority="2"><SyntaxHighlighter
                       language={getLanguage(filePath)}
                       style={codeTheme}

@@ -24,12 +24,17 @@ public static class ServerMetrics
     /// <summary>
     /// Разрешённые теги для метрик. Любой тег ВНЕ этого списка = баг.
     /// Состав контролируется тестом <c>AllowedTags_ContainsExactly_ExpectedSet</c>.
+    ///
+    /// Тега <c>direction</c> (input/output/cache_read/cache_creation) здесь нет намеренно:
+    /// он размечает ТОКЕНЫ, а учёт токенов в OTel запрещён решением C4 (source of truth —
+    /// SpendStore). Ни один Record*-метод его и не принимал — разрешение висело мёртвым
+    /// и противоречило собственному тесту <c>ServerMetrics_HasNoTokenMetrics</c>.
     /// </summary>
     public static readonly HashSet<string> AllowedTags = new()
     {
         "provider",    // claude, deepseek, glm, ollama, ...
         "model",       // claude-sonnet-4-5, glm-4, ...
-        "direction",   // input, output, cache_read, cache_creation
+        "execution",   // local | docker — среда исполнения хода (ровно два значения)
         "tool_name",   // идентификатор MCP-инструмента (≤80-90 значений)
         "outcome",     // success, error, timeout
         "error_type",  // rate_limit, network, auth, ...
@@ -48,54 +53,90 @@ public static class ServerMetrics
         unit: "ms",
         description: "Длительность хода LLM (ms)");
 
+    /// <summary>
+    /// Явные границы бакетов для <see cref="LlmDuration"/> (мс). Регистрируются как View
+    /// в ObservabilityExtensions.
+    ///
+    /// Зачем: дефолтные границы OTel заканчиваются на 10 000 мс, а ход LLM идёт от единиц
+    /// до сотен секунд — практически ВСЕ замеры падали в последний бакет (10000, +Inf].
+    /// Квантили считаются интерполяцией по бакетам, поэтому p95/p99 упирались в 10 000
+    /// и не различали ход на 30 секунд и ход на 10 минут: метрика формально была,
+    /// а ответить «какие ходы самые долгие» ею было нельзя (на живых данных p99 = 9975).
+    ///
+    /// Шкала до 20 минут с сгущением на 5–60 с — там основная масса ходов.
+    /// </summary>
+    public static readonly double[] LlmDurationBoundaries =
+        [1_000, 2_500, 5_000, 10_000, 20_000, 30_000, 60_000, 120_000, 300_000, 600_000, 1_200_000];
+
     // ── Counters ─────────────────────────────────────────────────────────────
+    // unit по конвенции OTel: для счётчиков событий — фигурные скобки с сущностью,
+    // которую считаем ({error}, {call}); это не единица измерения, а пометка смысла.
 
     public static readonly Counter<long> LlmErrors = _meter.CreateCounter<long>(
         "ccs.llm.errors",
+        unit: "{error}",
         description: "Ошибки LLM-провайдеров");
 
     public static readonly Counter<long> LlmRateLimitHits = _meter.CreateCounter<long>(
         "ccs.llm.rate_limit_hits",
+        unit: "{hit}",
         description: "Срабатывания rate-limit");
 
     public static readonly Counter<long> McpCalls = _meter.CreateCounter<long>(
         "ccs.mcp.calls",
+        unit: "{call}",
         description: "Вызовы MCP-инструментов");
 
     public static readonly Counter<long> McpErrors = _meter.CreateCounter<long>(
         "ccs.mcp.errors",
+        unit: "{error}",
         description: "Ошибки MCP-инструментов");
 
     public static readonly Counter<long> DifySyncErrors = _meter.CreateCounter<long>(
         "ccs.dify.sync.errors",
+        unit: "{error}",
         description: "Ошибки синхронизации с Dify (DiffSync)");
 
     public static readonly Counter<long> TelemetryHeartbeat = _meter.CreateCounter<long>(
         "ccs.telemetry.heartbeat",
+        unit: "{tick}",
         description: "Heartbeat телеметрии — если остановился, pipeline сломан");
 
     // ── Recording API ────────────────────────────────────────────────────────
     // Строковые параметры = теги (camelCase ↔ snake_case ↔ AllowedTags).
     // Числовой параметр (где есть) = скалярное значение метрики.
+    //
+    // Имена тегов ограничены allowlist'ом выше, ЗНАЧЕНИЯ — через MetricTagGuard:
+    // tool_name и model приходят снаружи (заголовок MCP-сервера, поле сессии из PUT),
+    // и без ограничителя каждое новое значение заводит вечный ряд в ClickHouse.
 
-    /// <summary>Записать длительность хода LLM. Теги захардкожены в сигнатуре.</summary>
+    /// <summary>
+    /// Записать длительность хода LLM. Теги захардкожены в сигнатуре.
+    ///
+    /// <paramref name="execution"/> — среда исполнения хода (<c>local</c>/<c>docker</c>,
+    /// см. <see cref="TurnTelemetry.ExecutionKind"/>). Ограничитель значений ей не нужен:
+    /// значений ровно два и берутся они из кода, а не снаружи.
+    /// </summary>
     public static void RecordLlmDuration(
         double durationMs,
         string provider,
         string model,
-        string outcome = "success")
+        string outcome = "success",
+        string execution = "local")
     {
         LlmDuration.Record(durationMs,
             new KeyValuePair<string, object?>("provider", provider),
-            new KeyValuePair<string, object?>("model", model),
-            new KeyValuePair<string, object?>("outcome", outcome));
+            new KeyValuePair<string, object?>("model", MetricTagGuard.Model(model)),
+            new KeyValuePair<string, object?>("outcome", outcome),
+            new KeyValuePair<string, object?>("execution", execution));
     }
 
-    public static void RecordLlmError(string provider, string errorType)
+    public static void RecordLlmError(string provider, string errorType, string execution = "local")
     {
         LlmErrors.Add(1,
             new KeyValuePair<string, object?>("provider", provider),
-            new KeyValuePair<string, object?>("error_type", errorType));
+            new KeyValuePair<string, object?>("error_type", errorType),
+            new KeyValuePair<string, object?>("execution", execution));
     }
 
     public static void RecordRateLimitHit(string provider)
@@ -107,14 +148,14 @@ public static class ServerMetrics
     public static void RecordMcpCall(string toolName, string outcome)
     {
         McpCalls.Add(1,
-            new KeyValuePair<string, object?>("tool_name", toolName),
+            new KeyValuePair<string, object?>("tool_name", MetricTagGuard.Tool(toolName)),
             new KeyValuePair<string, object?>("outcome", outcome));
     }
 
     public static void RecordMcpError(string toolName, string errorType)
     {
         McpErrors.Add(1,
-            new KeyValuePair<string, object?>("tool_name", toolName),
+            new KeyValuePair<string, object?>("tool_name", MetricTagGuard.Tool(toolName)),
             new KeyValuePair<string, object?>("error_type", errorType));
     }
 

@@ -19,14 +19,16 @@ public static class ServerActivitySource
     /// <summary>
     /// Имена спанов — константы, чтобы не плодить опечатки и магические строки
     /// в местах вызова <c>ServerActivitySource.Instance.StartActivity(...)</c>.
+    ///
+    /// Здесь только то, что действительно создаётся. Раньше рядом лежали ещё
+    /// <c>tool.use</c>, <c>permission.request</c>, <c>mcp.call</c> и <c>dify.sync</c> —
+    /// ни один из них не создавался нигде, и список читался как перечень имеющихся
+    /// спанов, хотя был перечнем намерений. Понадобится спан — константа заводится
+    /// вместе с местом вызова.
     /// </summary>
     public static class SpanNames
     {
         public const string ChatTurn = "chat.turn";
         public const string ProcessStart = "process.start";
-        public const string ToolUse = "tool.use";
-        public const string PermissionRequest = "permission.request";
-        public const string McpCall = "mcp.call";
-        public const string DifySync = "dify.sync";
     }
 }

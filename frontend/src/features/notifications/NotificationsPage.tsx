@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Bell, CheckCheck, Search, Trash2, Columns, SlidersHorizontal, Folder } from 'lucide-react';
-import { C, FONT, FS, R, SP, SHADOW } from '../../lib/design';
+import { C, FONT, FS, R, SP, SHADOW, CONTENT_MAX_W } from '../../lib/design';
 import { NotificationAvatar, hasPersona, notifAccentColor } from './NotificationAvatar';
 import { HubHeader } from '../../components/HubHeader';
 import { CanvasBackdrop } from '../../components/ui/CanvasBackdrop';
@@ -178,6 +178,7 @@ function NotificationCard({ item, onRead, onDelete }: {
 const FILTERS = [
   { key: 'all', label: 'Все' },
   { key: 'unread', label: 'Непрочитанные' },
+  { key: 'alert', label: '⚠ Алерты' },
   { key: 'reminder', label: '⏰ Напоминания' },
   { key: 'claude', label: '● AI' },
   { key: 'info', label: 'ℹ Системные' },
@@ -259,7 +260,7 @@ export function NotificationsPage({ auth, onLogout, onHubTab }: {
         {/* Ширина каркаса НЕ зависит от режима — иначе заголовок и переключатель
             ездят по горизонтали при клике. Широкая раскладка нужна только
             «Диспетчеру»; шапка и лента уведомлений живут в колонке 680. */}
-        <div style={{ width: '100%', maxWidth: 1180 }}>
+        <div style={{ width: '100%', maxWidth: CONTENT_MAX_W }}>
 
           {/* Page header. Ширина шапки следует за контентом режима (680 у ленты,
               1180 у канбана) — тогда «Период» диспетчера идёт вровень со своей

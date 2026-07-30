@@ -38,6 +38,13 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
 
     private string GetRoot(string projectId) => GetProject(projectId).RootPath;
 
+    // Путь ведёт в папку, а не в файл. Проверка нужна файловым эндпоинтам: путь папки с
+    // завершающим слешем (так `git status` отдаёт новую папку — «.claude/», и панель изменений
+    // передаёт его как файл) роняет File.ReadAllText через DirectoryNotFoundException → 500.
+    // SafeJoin здесь не глушим: выход за пределы проекта обрабатывают сами эндпоинты (403).
+    private static bool IsDirectoryPath(string root, string path) =>
+        Directory.Exists(FileService.SafeJoinPublic(root, path));
+
     // Проставляет состояние синхронизации (direct/inherited/null) каждой записи
     private IEnumerable<FileEntry> Annotate(string projectId, IEnumerable<FileEntry> entries) =>
         entries.Select(e => e with { Synced = sync.GetSyncState(projectId, e.Path) });
@@ -79,6 +86,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
         try
         {
             var root = GetRoot(projectId);
+            if (IsDirectoryPath(root, path)) return NotFound();
 
             // Просматриваемые документы (pdf/docx/xlsx) — отдаём base64 для клиентского рендеринга
             var doc = files.GetDocumentInfo(path);
@@ -178,6 +186,8 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (FileNotFoundException) { return NotFound(); }
+        // Путь ведёт в несуществующую папку (или она исчезла между проверкой и чтением)
+        catch (DirectoryNotFoundException) { return NotFound(); }
         catch (UnauthorizedAccessException) { return StatusCode(403); }
     }
 
@@ -195,6 +205,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
     private async Task<string?> GetAiTextAsync(string projectId, string path, CancellationToken ct)
     {
         var root = GetRoot(projectId);
+        if (IsDirectoryPath(root, path)) return null;   // папка — не документ (клиенту 400)
         if (files.GetDocumentInfo(path) is { } d)
         {
             if (d.Kind == "visio") return null; // markitdown не конвертирует Visio
@@ -305,8 +316,15 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
     [HttpPut("content")]
     public IActionResult SaveContent(string projectId, [FromQuery] string path, [FromBody] SaveContentRequest req)
     {
-        try { files.WriteFile(GetRoot(projectId), path, req.Content); return Ok(); }
+        try
+        {
+            var root = GetRoot(projectId);
+            if (IsDirectoryPath(root, path)) return NotFound();
+            files.WriteFile(root, path, req.Content);
+            return Ok();
+        }
         catch (KeyNotFoundException) { return NotFound(); }
+        catch (DirectoryNotFoundException) { return NotFound(); }
         catch (UnauthorizedAccessException) { return StatusCode(403); }
     }
 
@@ -422,6 +440,12 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
                 "mov" => "video/quicktime",
                 "avi" => "video/x-msvideo",
                 "mkv" => "video/x-matroska",
+                // Картинки: эндпоинт отдаёт их для <img src> в markdown (README с
+                // относительными путями). Без типа браузер угадывает по содержимому,
+                // а SVG в таком режиме не рендерится вовсе
+                "png" or "gif" or "bmp" or "webp" or "avif" => $"image/{ext}",
+                "jpg" or "jpeg" => "image/jpeg",
+                "svg" => "image/svg+xml",
                 _ => "application/octet-stream"
             };
             return PhysicalFile(safePath, mime, enableRangeProcessing: true);

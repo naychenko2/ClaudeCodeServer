@@ -13,7 +13,7 @@ namespace ClaudeHomeServer.Services;
 // Task.SourceSessionId, новой иерархии не заводим.
 // Волны считает бэкенд, а не модель: волна = под-задачи, у которых нет невыполненных
 // зависимостей (все под-задачи предыдущих волн закрыты).
-// См. docs/features/team-implement-mode.md, раздел «Этапы → Э3».
+// См. docs/architecture/team-implement-mode.md, раздел «Этапы → Э3».
 public class TeamWaveService
 {
     private readonly SessionManager _sessions;
@@ -516,11 +516,12 @@ public class TeamWaveService
             Body: escalation.Title,
             Url: ChatUrl(session),
             Kind: "claude",
-            SessionId: session.Id,
             TaskId: escalation.TaskId,
             ProjectId: session.ProjectId,
             PersonaId: authorId,
-            Tag: "Командная реализация"), sendPush: away);
+            // SessionId — унаследованное init-свойство базы ServerMessage, не параметр
+            // конструктора: задаётся инициализатором (см. NotificationService и др.)
+            Tag: "Командная реализация") { SessionId = session.Id }, sendPush: away);
     }
 
     // Вопрос интервью ждёт человека (Э8): ASK-карточка в ленте штаба — та же ситуация, что
@@ -540,10 +541,9 @@ public class TeamWaveService
             Body: TeamImplementPrompts.QuestionNotificationBody,
             Url: ChatUrl(session),
             Kind: "claude",
-            SessionId: session.Id,
             ProjectId: session.ProjectId,
             PersonaId: authorId,
-            Tag: "Командная реализация"), sendPush: !_sessions.HasViewers(session.Id));
+            Tag: "Командная реализация") { SessionId = session.Id }, sendPush: !_sessions.HasViewers(session.Id));
     }
 
     private static string ChatUrl(Session session) => string.IsNullOrEmpty(session.ProjectId)

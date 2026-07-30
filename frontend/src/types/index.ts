@@ -93,6 +93,107 @@ export interface CodeGraph {
   metadata: CodeGraphMetadata;
 }
 
+// ─── Документация проекта (панель «Документы»: README.md + docs/**) ───────────────
+// Класс ссылки: doc — другой документ области (навигация внутри панели),
+// repo — файл проекта вне области, обычно код (открывается в центре),
+// external — http/https/mailto.
+export type DocLinkKind = 'doc' | 'repo' | 'external';
+
+export interface DocLink {
+  target: string;           // путь от корня проекта (doc/repo) либо URL (external)
+  anchor: string | null;    // слаг якоря после «#»
+  kind: DocLinkKind;
+  text: string;             // подпись ссылки
+}
+
+// Слаг считается от текста заголовка без markdown-разметки — тем же алгоритмом,
+// что и на фронте (lib/docsLinks.ts): по нему панель находит раздел в DOM
+export interface DocHeading {
+  level: number;
+  text: string;
+  slug: string;
+}
+
+export interface DocEntry {
+  path: string;             // путь от корня проекта с прямыми слэшами
+  title: string;            // первый H1, иначе имя файла
+  modified: string;         // ISO
+  size: number;
+  headings: DocHeading[];
+  binary?: boolean;         // файл без текста — открывается только в центре
+}
+
+export interface DocBacklink {
+  path: string;
+  title: string;
+  anchor: string | null;
+}
+
+export interface DocDetail {
+  path: string;
+  title: string;
+  content: string;          // исходный markdown; у бинарного пусто
+  links: DocLink[];
+  backlinks: DocBacklink[];
+  binary?: boolean;         // pdf/visio/картинка/звук — превью не покажет, только центр
+}
+
+export interface DocSearchHit {
+  path: string;
+  title: string;
+  slug: string | null;      // якорь ближайшего заголовка над совпадением
+  snippet: string;
+}
+
+// Папка-кандидат в область документации: сколько документов внутри (со вложенными,
+// по расширениям области) и есть ли она на диске (выбранная, но удалённая остаётся
+// в списке с exists=false)
+export interface DocFolderCandidate {
+  path: string;
+  count: number;
+  exists: boolean;
+}
+
+// Файл-кандидат из корня проекта (тот же приём с выбранными, которых уже нет)
+export interface DocRootFileCandidate {
+  name: string;
+  exists: boolean;
+}
+
+// Область документации: три независимые оси. Пустой список любой из них — «ничего отсюда»
+export interface DocsScope {
+  folders: string[];
+  rootFiles: string[];       // имена файлов в корне проекта, без путей
+  types: string[];           // ключи групп типов: "markdown", "pdf", "visio"…
+  home?: string | null;      // документ «Начала»; null — авто (README корня)
+}
+
+// Документ области как вариант выбора начального
+export interface DocOption {
+  path: string;
+  title: string;
+}
+
+// Группа типов файлов. text=false — файл без текста (pdf, visio, картинка, звук):
+// он числится в списке, но открывается только в центральной области
+export interface DocTypeGroup {
+  key: string;
+  title: string;
+  extensions: string[];
+  text: boolean;
+}
+
+// Настройка области: что выбрано, что можно выбрать и что было бы по умолчанию
+export interface DocsScopeInfo {
+  selected: DocsScope;
+  folderCandidates: DocFolderCandidate[];
+  rootFileCandidates: DocRootFileCandidate[];
+  typeGroups: DocTypeGroup[];      // всё, что продукт умеет открыть
+  defaults: DocsScope;
+  documents: DocOption[];          // документы области — варианты для «Начала»
+  home: string | null;             // что сейчас работает «Началом» (выбор или README)
+}
+
 // Элемент доски агентов (диспетчерская: GET /api/board/agents)
 export interface BoardItem {
   taskId: string;
@@ -1661,7 +1762,9 @@ export interface TeamMemberDraft {
 
 // ===== Уведомления (центр уведомлений) =====
 
-export type NotificationKind = 'reminder' | 'claude' | 'info' | 'success' | 'meeting';
+// alert — тревоги телеметрии (SigNoz). Отдельный вид, а не 'info': иначе срочное
+// тонет среди саммари и дайджестов, и отфильтровать его нечем.
+export type NotificationKind = 'reminder' | 'claude' | 'info' | 'success' | 'meeting' | 'alert';
 
 export interface NotificationItem {
   id: string;
@@ -1708,7 +1811,7 @@ export interface CreateNotificationRequest {
 
 // ===== Аналитика расхода токенов (Spend Analytics v2, /api/spend/*) =====
 
-// Токены везде объектом — форма ответа бэкенда (docs/spend-analytics-v2-api.md)
+// Токены везде объектом — форма ответа бэкенда (docs/architecture/spend-analytics-api.md)
 export interface SpendTokens {
   input: number;
   output: number;

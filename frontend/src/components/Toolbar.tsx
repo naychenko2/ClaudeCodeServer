@@ -43,19 +43,22 @@ export function Toolbar({ isMobile, noBorder, bg, children, style }: {
 
 // === Icon-кнопка тулбара — тонкая обёртка над общим ui/IconButton ===
 // Сохранена для обратной совместимости API (isMobile → размер тач-таргета).
-export function ToolbarIconButton({ onClick, title, isMobile, color, disabled, active, children }: {
+// Кнопки рельсы — круглые (borderRadius 32), дефолт задаётся здесь, а не в
+// каждом вызове через style. Если нужен override — передать style (мержится).
+export function ToolbarIconButton({ onClick, title, isMobile, color, disabled, active, style, children }: {
   onClick?: (e: MouseEvent) => void;
   title?: string;
   isMobile?: boolean;
   color?: string;
   disabled?: boolean;
   active?: boolean;
+  style?: CSSProperties;
   children: ReactNode;
 }) {
   return (
     <IconButton
       onClick={onClick} title={title} disabled={disabled} active={active} color={color}
-      size={isMobile ? 'lg' : 'md'}
+      size={isMobile ? 'lg' : 'md'} style={style}
     >
       {children}
     </IconButton>

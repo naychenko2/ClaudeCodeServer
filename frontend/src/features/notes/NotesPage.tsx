@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { Menu as MenuIcon, MessageCircle, Plus } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { MessageCircle, Plus } from 'lucide-react';
 import type { AuthState, NoteDetail, NoteSemanticHit, NoteSummary } from '../../types';
 import type { HubTabValue } from '../../components/HubTabs';
 import { HubHeader } from '../../components/HubHeader';
@@ -17,11 +17,13 @@ import { NoteView } from './NoteView';
 import { NotesGraph, type GraphStats } from './NotesGraph';
 import { GraphSettingsBody } from './graph/GraphSettingsBody';
 import { useGraphSettings } from './graph/graphSettings';
-import { Button, IslandScaffold, IconButton, ConfirmDialog } from '../../components/ui';
+import { Button, IslandScaffold, ConfirmDialog } from '../../components/ui';
 import { CanvasBackdrop } from '../../components/ui/CanvasBackdrop';
 import { ICON_SIZE } from '../../components/ui/icons';
 import { CollapseGroup, IconSearch, IconPlus, IconCalendarDay, SourceDot } from './shared';
-import { useSidebarDrag } from '../../lib/sidebarWidth';
+import { PanelZone } from '../../pages/workspace/PanelZone';
+import { notesPanels, zoneOf } from '../../pages/workspace/panelStackState';
+import { NOTES_KEYS } from '../../pages/workspace/panelCatalog';
 import { useIsMobile, useWindowWidth } from '../../lib/breakpoints';
 import { FLAGS, useFeature } from '../../lib/featureFlags';
 
@@ -96,7 +98,9 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   }, [notes]);
   const [tagsExpanded, setTagsExpanded] = useState(false);
   const hasCommentRoots = docAnnotationsOn && notes.some(n => n.annotation && !n.annotation.isReply);
-  const [mode, setMode] = useState<Mode>('notes');
+  // Режим МОБИЛЬНОЙ ветки: там панелей нет, разделами по-прежнему рулит переключатель.
+  // На десктопе режим задаёт открытая панель графа (см. graphPanelOpen ниже).
+  const [mobileMode, setMobileMode] = useState<Mode>('notes');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   // Активные фильтры-операторы в запросе — бейдж на свёрнутой группе «Фильтры»
@@ -110,14 +114,21 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   const [graphSettings, setGraphSettings] = useGraphSettings('cc_graph_global');
   const [graphStats, setGraphStats] = useState<GraphStats | null>(null);
 
-  // Ширина сайдбара — общая со всеми разделами (чаты/проекты/воркспейс)
-  const { width: listWidth, dragging: listDragging, startDrag: startListDrag } = useSidebarDrag();
+  // Раздел живёт на рельсе панелей: список заметок и настройки графа — две
+  // отдельные панели. Ширина, сворачивание и раскладка — в состоянии зон
+  // (прежние sidebarMode + общая на все разделы ширина больше не нужны).
+  const { zones, close: closePanel } = notesPanels.use();
+  // На десктопе режим раздела определяется тем, открыта ли панель графа: она и
+  // есть «вход в граф», а центр показывает то, чем сейчас управляют слева.
+  const graphPanelOpen = zoneOf(zones, 'notesGraph') != null;
 
-  // Режим сайдбара: pinned (в потоке) | collapsed (свёрнут). Сворачивание — кнопкой
-  // на сплиттере, разворот — гамбургером обратно в поток.
-  const [sidebarMode, setSidebarMode] = useState<'pinned' | 'collapsed'>(() =>
-    localStorage.getItem('cc_notes_sidebar_mode') === 'collapsed' ? 'collapsed' : 'pinned');
-  useEffect(() => { localStorage.setItem('cc_notes_sidebar_mode', sidebarMode); }, [sidebarMode]);
+  // Уйти из графа обратно к заметкам: на мобиле это смена режима, на десктопе —
+  // закрытие панели графа (центр сам вернётся к заметке). Ссылка стабильна —
+  // функцию слушает эффект AI-хаба, и пересоздание переподписывало бы его каждый рендер.
+  const leaveGraph = useCallback(() => {
+    setMobileMode('notes');
+    closePanel('notesGraph');
+  }, [closePanel]);
 
   useEffect(() => { void ensureNotesLoaded(); }, []);
 
@@ -183,13 +194,13 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   useEffect(() => {
     const onRun = (e: Event) => {
       if ((e as CustomEvent<{ action?: string }>).detail?.action !== 'note.semantic') return;
-      setMode('notes');
+      leaveGraph();
       if (semanticAvailable) setSearchMode('semantic');
       setTimeout(() => searchInputRef.current?.focus(), 50);
     };
     window.addEventListener('cc-ai-run', onRun);
     return () => window.removeEventListener('cc-ai-run', onRun);
-  }, [semanticAvailable]);
+  }, [semanticAvailable, leaveGraph]);
   useEffect(() => {
     const q = query.trim();
     if (!q) { setResults(null); setSemanticHits(null); return; }
@@ -258,7 +269,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   const openDaily = () => {
     const d = new Date();
     const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-    void api.notes.daily(iso).then(n => { bumpNotes(); setMode('notes'); selectNote(n.id); });
+    void api.notes.daily(iso).then(n => { bumpNotes(); leaveGraph(); selectNote(n.id); });
   };
 
   const askClaude = (note: NoteDetail) => {
@@ -268,15 +279,19 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
     onHubTab('chats');
   };
 
-  // Панель управления в сайдбаре (как у Workspace: всё управление разделом — слева)
-  const sidebarControls = (
+  // Управление разделом. На десктопе список и граф — две панели рельсы, поэтому
+  // переключатель режима там не нужен: withModeSwitch остаётся только для мобилы,
+  // где панелей нет. listMode — показывать ли поиск и фильтры списка.
+  const sidebarControls = ({ withModeSwitch, listMode }: { withModeSwitch: boolean; listMode: boolean }) => (
     <div style={{ padding: '10px 10px 9px', borderBottom: `1px solid ${C.border}`, display: 'flex', flexDirection: 'column', gap: 8, flex: 'none' }}>
-      <PillSwitch<Mode>
-        fill
-        value={mode} onChange={setMode}
-        options={[{ value: 'notes', label: 'Заметки' }, { value: 'graph', label: 'Граф' }]}
-      />
-      {mode === 'notes' && (
+      {withModeSwitch && (
+        <PillSwitch<Mode>
+          fill
+          value={mobileMode} onChange={setMobileMode}
+          options={[{ value: 'notes', label: 'Заметки' }, { value: 'graph', label: 'Граф' }]}
+        />
+      )}
+      {listMode && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.md, height: 30, padding: '0 8px', color: C.textMuted }}>
           <IconSearch />
           <input
@@ -302,7 +317,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
       {/* Фильтры списка — свёрнутая группа (бейдж показывает активные, когда закрыта).
           Чипы патчат операторы в строке поиска, текст запроса сохраняется.
           «Теги» — по всем заметкам; «Комментарии» — только заметки-комментарии к документам */}
-      {mode === 'notes' && (allTags.length > 0 || hasCommentRoots) && (
+      {listMode && (allTags.length > 0 || hasCommentRoots) && (
         <CollapseGroup
           defaultOpen={false}
           title={<span style={{ fontSize: 12, fontWeight: 500 }}>Фильтры</span>}
@@ -407,23 +422,43 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
           if (hit) { setSelectedId(hit.newId); navReplace({ screen: 'notes', note: hit.newId }); }
         }} />;
 
-  // Сайдбар целиком: управление сверху, ниже — список (режим «Заметки») или фильтры («Граф»)
+  // Мобильный сайдбар: управление сверху с переключателем, ниже — список или
+  // настройки графа (панелей на мобиле нет — там всё те же два режима)
   const sidebar = (
     <>
-      {sidebarControls}
+      {sidebarControls({ withModeSwitch: true, listMode: mobileMode === 'notes' })}
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
-        {mode === 'notes' ? listPane : graphSidebar}
+        {mobileMode === 'notes' ? listPane : graphSidebar}
       </div>
     </>
   );
 
+  // Панели рельсы: «Заметки» (поиск, фильтры, список) и «Граф» (статистика и
+  // настройки карты связей). Заголовок каждой рисует PanelShell.
+  const zonePanels = {
+    notesList: (
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: C.bgWhite }}>
+        {sidebarControls({ withModeSwitch: false, listMode: true })}
+        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>{listPane}</div>
+      </div>
+    ),
+    notesGraph: (
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', background: C.bgWhite }}>
+        {graphSidebar}
+      </div>
+    ),
+  };
+
   // Центральная зона: заметка/пустое состояние или граф. Десктоп (hero-стиль
   // «как календарь и чаты»): центр без общего острова — заметка сама рисует
   // заголовок на холсте + тело-остров; граф оборачивается в остров здесь.
+  // Что показывать в центре: на мобиле — выбранный режим, на десктопе — граф,
+  // пока открыта его панель (она и есть вход в карту связей)
+  const mode: Mode = isMobile ? mobileMode : (graphPanelOpen ? 'graph' : 'notes');
   const centerPane = mode === 'graph'
     ? <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden',
         ...(!isMobile ? { background: C.bgMain, border: `1px solid ${ISLAND.border}`, borderRadius: ISLAND.radius, boxShadow: ISLAND.shadow } : {}) }}>
-        <NotesGraph selectedId={selectedId} onSelectNode={id => { setMode('notes'); selectNote(id); }}
+        <NotesGraph selectedId={selectedId} onSelectNode={id => { leaveGraph(); selectNote(id); }}
           maxNodes={isMobile ? 40 : undefined}
           settings={graphSettings} onSettingsChange={setGraphSettings}
           hidePanel={false} onStats={setGraphStats} />
@@ -462,7 +497,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
     // Мобайл: один экран за раз — сайдбар (список/фильтры+граф) ↔ заметка
     mode === 'graph'
       ? <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: C.bgPanel }}>
-          {sidebarControls}
+          {sidebarControls({ withModeSwitch: true, listMode: false })}
           <div style={{ flex: 1, minHeight: 0, background: C.bgMain }}>{centerPane}</div>
         </div>
       : (mobileView === 'list' || !selectedId)
@@ -470,29 +505,15 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
         // Возврат к списку — стрелкой/заголовком в тулбаре заметки (onBack), как у файлов
         : <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>{centerPane}</div>
   ) : (
-    // Десктоп: остров-сайдбар + ресайз-зазор | центр на холсте (hero-стиль:
-    // заметка сама рисует заголовок на холсте + тело-остров, граф — остров)
+    // Десктоп: рельса панелей по краям | центр на холсте (hero-стиль: заметка сама
+    // рисует заголовок на холсте + тело-остров, граф — остров). Сворачивание,
+    // ширина и перенос панели между сторонами — механика зон, своего сайдбара и
+    // гамбургера разделу больше не нужно.
     <IslandScaffold
-      sidebarOpen={sidebarMode === 'pinned'}
-      sidebar={sidebar}
-      sidebarWidth={listWidth}
-      sidebarDragging={listDragging}
-      onSidebarDrag={startListDrag}
-      onSidebarCollapse={() => setSidebarMode('collapsed')}
+      left={<PanelZone side="left" panelStack={notesPanels} allowedKeys={NOTES_KEYS} panels={zonePanels} />}
+      right={<PanelZone side="right" panelStack={notesPanels} allowedKeys={NOTES_KEYS} panels={zonePanels} />}
       centerBare
-      center={
-        <>
-          {/* В свёрнутом режиме — тонкая шапка с гамбургером «открыть панель» */}
-          {sidebarMode === 'collapsed' && (
-            <div style={{ flex: 'none', display: 'flex', alignItems: 'center', padding: '0 8px', height: 48, borderBottom: `1px solid ${C.divider}` }}>
-              <IconButton onClick={() => setSidebarMode('pinned')} title="Открыть панель" size="md" variant="soft">
-                <MenuIcon size={ICON_SIZE.sm} strokeWidth={2} />
-              </IconButton>
-            </div>
-          )}
-          <div style={{ flex: 1, minWidth: 0, minHeight: 0 }}>{centerPane}</div>
-        </>
-      }
+      center={<div style={{ flex: 1, minWidth: 0, minHeight: 0 }}>{centerPane}</div>}
     />
   );
 

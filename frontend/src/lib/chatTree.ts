@@ -1,6 +1,6 @@
 // Иерархия списка чатов: сборка леса по Session.parentSessionId и
 // персистентность свёрнутых веток. Раздельно по областям, как chatFilters:
-// 'global' и каждый projectId. Спецификация — docs/mockups/chat-list-tree-spec.md.
+// 'global' и каждый projectId. Спецификация — docs/design/mockups/chat-list-tree-spec.md.
 import { useEffect, useRef, useState } from 'react';
 import type { Session } from '../types';
 import type { ChatSortOrder } from './chatFilters';

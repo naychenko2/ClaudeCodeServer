@@ -176,6 +176,99 @@ public class PiiSanitizerTests
     }
 
     [Fact]
+    public void StableSemconvHttpAttributes_AreKept()
+    {
+        // Регрессия: allowlist был собран на именах semconv доOTel-1.0 (http.method,
+        // http.status_code), а инструментации 1.17.0 пишут стабильные имена. Они не
+        // находились в списке и дропались — спаны приезжали в SigNoz вообще пустыми.
+        using var activity = CreateActivity(
+            ("http.request.method", "GET"),
+            ("http.response.status_code", 200),
+            ("http.route", "api/projects/{projectId}/files/tree"),
+            ("url.scheme", "https"),
+            ("server.address", "api.z.ai"),
+            ("server.port", 443),
+            ("network.protocol.version", "1.1"),
+            ("error.type", "timeout"));
+
+        var processor = new PiiSanitizingProcessor();
+        processor.OnEnd(activity);
+
+        activity.GetTagItem("http.request.method").Should().Be("GET");
+        activity.GetTagItem("http.response.status_code").Should().Be(200);
+        activity.GetTagItem("http.route").Should().Be("api/projects/{projectId}/files/tree");
+        activity.GetTagItem("url.scheme").Should().Be("https");
+        activity.GetTagItem("server.address").Should().Be("api.z.ai", "иначе непонятно, к кому ходили");
+        activity.GetTagItem("server.port").Should().Be(443);
+        activity.GetTagItem("network.protocol.version").Should().Be("1.1");
+        activity.GetTagItem("error.type").Should().Be("timeout");
+    }
+
+    [Fact]
+    public void FullUrlWithQuery_IsNotKept()
+    {
+        // В query-строке уезжают API-ключи (Dify/OpenRouter) — url.full и url.query
+        // намеренно НЕ в allowlist. Путь виден через http.route.
+        using var activity = CreateActivity(
+            ("url.full", "https://api.example.com/v1/datasets?api_key=dataset-SECRET123"),
+            ("url.query", "api_key=dataset-SECRET123"));
+
+        var processor = new PiiSanitizingProcessor();
+        processor.OnEnd(activity);
+
+        activity.GetTagItem("url.full").Should().BeNull();
+        activity.GetTagItem("url.query").Should().BeNull();
+    }
+
+    [Fact]
+    public void UrlPath_IsHashed_NotExposed()
+    {
+        // Конкретный путь может нести имена файлов — хэшируем (корреляция остаётся)
+        using var activity = CreateActivity(("url.path", "/api/projects/p1/files/Договор.docx"));
+
+        var processor = new PiiSanitizingProcessor();
+        processor.OnEnd(activity);
+
+        var value = activity.GetTagItem("url.path")?.ToString();
+        value.Should().NotContain("Договор");
+        value.Should().HaveLength(8);
+    }
+
+    [Fact]
+    public void StatusDescription_IsCleared()
+    {
+        // Инструментация кладёт сюда текст исключения: URL с query (там ключи)
+        // и абсолютные пути сборки. Код ошибки остаётся в Status.
+        using var activity = new Activity("test");
+        activity.SetStatus(ActivityStatusCode.Error,
+            "HttpRequestException: GET https://api.example.com?api_key=SECRET failed at C:\\build\\src\\Foo.cs");
+
+        var processor = new PiiSanitizingProcessor();
+        processor.OnEnd(activity);
+
+        activity.StatusDescription.Should().BeNull();
+        activity.Status.Should().Be(ActivityStatusCode.Error, "сам факт ошибки теряться не должен");
+    }
+
+    [Fact]
+    public void PascalCaseKeys_FollowSameRules()
+    {
+        // Логи присылают {SessionId}/{UserId}, спаны — session_id/user_id.
+        // Правило должно быть одно, иначе стиль записи решает, утечёт PII или нет.
+        using var activity = CreateActivity(
+            ("SessionId", "ses-1"),
+            ("UserId", "usr-1"),
+            ("PersonaName", "Марк"));
+
+        var processor = new PiiSanitizingProcessor();
+        processor.OnEnd(activity);
+
+        activity.GetTagItem("SessionId").Should().Be("ses-1");
+        activity.GetTagItem("UserId").Should().BeNull();
+        activity.GetTagItem("PersonaName").Should().BeNull();
+    }
+
+    [Fact]
     public void TokensMetadata_IsKept()
     {
         // tokens_input / tokens_output — operational (не PII), содержит подстроку "token"

@@ -25,7 +25,7 @@ import { ListDateDivider } from './ListDateDivider';
 import { dayGroupTitle } from '../lib/chatGroups';
 import { authorEmoji, authorName } from '../lib/authorEmoji';
 import { getExtMeta } from './FileExplorer';
-import { Modal, ModalActions, TextArea, TextField, IconButton, Button, Menu, MenuItem } from './ui';
+import { Modal, ModalActions, TextArea, TextField, IconButton, Button, Menu, MenuItem, PanelHeaderSlot, IconSegmented } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 
 const COMMIT_SUMMARY_MAX = 72;
@@ -59,10 +59,6 @@ interface Props {
   activeCommitSha?: string | null; // подсветка открытого коммита в истории ветки
   onCommit?: (where: 'chat' | 'newChat') => void;  // делегировать фиксацию чату / новому чату
   onScopeChange?: () => void;  // сменили скоуп/коммит — центральную область сбросить к чату
-  // Контролы управления списком (выбор файлов, свернуть/развернуть, список/дерево)
-  // живут в ШАПКЕ карточки-панели, а не над списком: панель отдаёт их владельцу,
-  // а тот кладёт в panelHeaderExtras. Колбэк обязан быть стабильным (useCallback).
-  onToolbar?: (node: React.ReactNode) => void;
 }
 
 // Строка файла активного скоупа после объединения групп статуса
@@ -143,7 +139,7 @@ function buildTree(files: RowFile[]): TreeNode[] {
   return sortRec(collapse(root.children));
 }
 
-export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, activeFilePath, activeCommitSha, onCommit, onScopeChange, onToolbar }: Props) {
+export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, activeFilePath, activeCommitSha, onCommit, onScopeChange }: Props) {
   const st = useGitState(project.id);
   const status = st.status;
 
@@ -517,21 +513,19 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
   // Раньше это была отдельная строка над списком (с подписью скоупа слева); теперь
   // кнопки живут в шапке панели, а подпись убрана — активный скоуп и так подсвечен
   // в нижнем селекторе. Состояние (вид, режим выбора, свёрнутые папки) остаётся
-  // внутри компонента, наружу уходит только готовый узел.
-  useEffect(() => {
-    if (!onToolbar) return;
-    // История ветки списком файлов не управляется — кнопок там нет
-    onToolbar(isBranch ? null : (
-      <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+  // внутри компонента: наружу уходит не узел, а портал в слот шапки.
+  // История ветки списком файлов не управляется — кнопок там нет.
+  const headerControls = isBranch ? null : (
+    <PanelHeaderSlot>
         {/* Режим выбора файлов (чекбоксы) — только для текущих изменений */}
         {isWorking && rows.length > 0 && (
           <>
-            <IconButton size="sm" title={selectMode ? 'Скрыть выбор файлов' : 'Выбрать файлы для коммита'}
+            <IconButton size="xs" title={selectMode ? 'Скрыть выбор файлов' : 'Выбрать файлы для коммита'}
               active={selectMode} onClick={() => setSelectMode(v => !v)}>
               <ListChecks size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
             </IconButton>
             {selectMode && (
-              <IconButton size="sm" title={allSelected ? 'Снять все' : 'Выбрать все'}
+              <IconButton size="xs" title={allSelected ? 'Снять все' : 'Выбрать все'}
                 tone="accent" onClick={toggleAll}>
                 {allSelected
                   ? <span style={{ fontSize: 13, fontWeight: 700 }}>—</span>
@@ -543,34 +537,28 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
         {/* Свернуть/развернуть на уровень — только в дереве */}
         {viewMode === 'tree' && dirDepths.size > 0 && (
           <>
-            <IconButton size="sm" title="Свернуть на уровень" onClick={collapseOne}>
+            <IconButton size="xs" title="Свернуть на уровень" onClick={collapseOne}>
               <FoldVertical size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
             </IconButton>
-            <IconButton size="sm" title="Развернуть на уровень" onClick={expandOne}>
+            <IconButton size="xs" title="Развернуть на уровень" onClick={expandOne}>
               <UnfoldVertical size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
             </IconButton>
           </>
         )}
-        <span style={{ display: 'flex', border: `1px solid ${C.border}`, borderRadius: R.md, overflow: 'hidden', flexShrink: 0 }}>
-          <button onClick={() => setView('list')} title="Списком"
-            style={{ display: 'flex', padding: '3px 7px', border: 'none', cursor: 'pointer', background: viewMode === 'list' ? C.accentLight : 'transparent' }}>
-            <List size={14} strokeWidth={ICON_STROKE} color={viewMode === 'list' ? C.accent : C.textMuted} />
-          </button>
-          <button onClick={() => setView('tree')} title="Деревом"
-            style={{ display: 'flex', padding: '3px 7px', border: 'none', cursor: 'pointer', background: viewMode === 'tree' ? C.accentLight : 'transparent' }}>
-            <ListTree size={14} strokeWidth={ICON_STROKE} color={viewMode === 'tree' ? C.accent : C.textMuted} />
-          </button>
-        </span>
-      </span>
-    ));
-    return () => onToolbar(null);
-    // Узел пересобирается при изменении того, от чего зависит вид кнопок и их
-    // обработчики (collapseOne/expandOne читают collapsedDirs и dirDepths)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onToolbar, isBranch, isWorking, rows.length, selectMode, allSelected, viewMode, dirDepths, collapsedDirs]);
+        <IconSegmented<'list' | 'tree'>
+          value={viewMode}
+          onChange={setView}
+          options={[
+            { value: 'list', label: 'Списком', icon: <List size={14} strokeWidth={ICON_STROKE} /> },
+            { value: 'tree', label: 'Деревом', icon: <ListTree size={14} strokeWidth={ICON_STROKE} /> },
+          ]}
+        />
+    </PanelHeaderSlot>
+  );
 
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+      {headerControls}
       {st.error && (
         <div onClick={() => clearGitError(project.id)} title="Скрыть"
           style={{ margin: '8px 12px', fontSize: 12, color: C.dangerText, fontFamily: FONT.sans, lineHeight: 1.4, cursor: 'pointer' }}>
@@ -580,7 +568,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
 
       {/* === Верхняя зона: файлы активного скоупа (видны всегда, даже при фиксации).
              Своей шапки у зоны нет — управление списком уехало в шапку карточки
-             панели (см. toolbar и проп onToolbar) === */}
+             панели (см. headerControls выше) === */}
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         {/* Тело: история ветки (скоуп «ветка») ИЛИ список/дерево файлов */}
         <div style={{ flex: 1, overflowY: 'auto', padding: '8px 8px 6px' }}>

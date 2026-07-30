@@ -1,5 +1,5 @@
 // Режим «Командная реализация» (флаг team-implement-mode): подписи стадий и тоны
-// бейджа/маркера. Тексты — дословно из docs/features/team-implement-mode.md («Тексты»)
+// бейджа/маркера. Тексты — дословно из docs/architecture/team-implement-mode.md («Тексты»)
 // и макета docs/mockups/team-implement-mode.html (короткие формы маркера).
 
 import type { SessionTeamImplement, TeamEscalationKind, TeamImplementBudget, TeamImplementStage } from '../types';

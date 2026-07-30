@@ -17,8 +17,14 @@ jobs:
           # что на образе раннера случайно оказался предустановленный SDK 10.x — при
           # обновлении образа это молча сломалось бы.
           dotnet-version: 10.0.x
+      # Предупреждения компилятора — ошибка сборки, но только здесь, а не в
+      # Directory.Build.props: локально они не должны мешать отладке (временно
+      # неиспользуемая переменная — норма в процессе работы, а не повод глушить
+      # предупреждение прагмой). Гейт стоит там, где решается попадание в master.
+      # Список кодов, выведенных из-под гейта (NuGet-предупреждения, зависящие от
+      # сети и внешних advisory), — в свойстве WarningsNotAsErrors там же, в props.
       - name: Build
-        run: dotnet build backend/ClaudeHomeServer.slnx
+        run: dotnet build backend/ClaudeHomeServer.slnx -warnaserror
       - name: Test
         run: dotnet test backend/ClaudeHomeServer.Tests/ClaudeHomeServer.Tests.csproj --no-build
 

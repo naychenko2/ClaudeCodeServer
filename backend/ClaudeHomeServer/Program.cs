@@ -93,7 +93,7 @@ builder.Services.AddSignalR(o =>
             new JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase)));
 
 // Observability: OTel SDK (traces + metrics) с two-mode конфигурацией.
-// Конфиг через секцию Telemetry в appsettings*.json. См. docs/observability.md.
+// Конфиг через секцию Telemetry в appsettings*.json. См. docs/observability/overview.md.
 builder.Services.AddObservability(builder.Configuration);
 
 builder.Services.AddSingleton<UserStore>();
@@ -161,6 +161,9 @@ builder.Services.AddHostedService<PersonaProjectBindingsMigration>();
 builder.Services.AddSingleton<TaskManager>();
 builder.Services.AddSingleton<TaskAiService>();
 builder.Services.AddSingleton<FileService>();
+// Документация проекта (README + docs/) для панели «Доки»: индекс, связи, поиск.
+// Кеш живёт внутри сервиса и ключуется корнем папки, поэтому singleton.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Docs.DocsIndexService>();
 // Документы: конвертация в Markdown (markitdown) + ИИ-помощь (суммари/выжимка/теги) на локальной модели
 builder.Services.AddSingleton<MarkitdownService>();
 builder.Services.AddSingleton<DocumentAiService>();
@@ -282,6 +285,12 @@ builder.Services.AddHttpClient("fal");
 builder.Services.AddHttpClient("llm-provider");
 builder.Services.AddHttpClient("anthropic-oauth");
 builder.Services.AddHttpForwarder();
+// Раздел «Телеметрия»: опции проброса SigNoz UI (Telemetry:Ui) + короткий HTTP-клиент
+// для health-пинга статуса. Опции регистрируем ВСЕГДА (выключенные тоже) — их читают
+// и контроллер статуса, и middleware проброса /telemetry-proxy/** ниже.
+builder.Services.AddSingleton(
+    ClaudeHomeServer.Telemetry.TelemetryUiOptions.FromConfig(builder.Configuration));
+builder.Services.AddHttpClient("telemetry-ui", c => c.Timeout = TimeSpan.FromSeconds(3));
 builder.Services.AddReverseProxy()
     .LoadFromConfig(builder.Configuration.GetSection("ReverseProxy"))
     .ConfigureHttpClient((_, handler) =>
@@ -291,7 +300,7 @@ builder.Services.AddReverseProxy()
         // живого бэкенда и не блокирует шлюз надолго при недоступности.
         handler.ConnectTimeout = TimeSpan.FromSeconds(2);
     });
-// Платформа внешних модулей (docs/module-platform-integration-contract.md): реестр манифестов,
+// Платформа внешних модулей (docs/modules/integration-contract.md): реестр манифестов,
 // RS256-токены с JWKS и ДОБАВОЧНЫЙ провайдер YARP-конфига из реестра (LoadFromConfig выше
 // не заменяется — YARP объединяет несколько IProxyConfigProvider, существующие маршруты
 // OnlyOffice/drawio/forgejo работают как раньше).
@@ -755,6 +764,81 @@ app.Use(async (ctx, next) =>
             ctx.Request.Path = restPath.Length == 0 ? "/" : restPath;
             var forwarder = ctx.RequestServices.GetRequiredService<IHttpForwarder>();
             await forwarder.SendAsync(ctx, $"http://127.0.0.1:{port}", previewInvoker,
+                ForwarderRequestConfig.Empty, HttpTransformer.Default);
+            return;
+        }
+        await next();
+    });
+}
+
+// Telemetry proxy: /telemetry-proxy/** → SigNoz UI (раздел «Телеметрия», admin-only).
+// Same-origin проброс для iframe: браузер грузит /telemetry-proxy/ с нашего origin, мы
+// форвардим на локальный SigNoz. Ключевое отличие от preview выше — префикс НЕ срезаем:
+// SigNoz с env SIGNOZ_GLOBAL_EXTERNAL__URL=.../telemetry-proxy сам живёт под этим base-path
+// (вставляет <base href> в SPA, ассеты и API резолвятся под префиксом — подтверждено спайком),
+// поэтому HttpTransformer.Default отдаёт путь как есть. Стоит ДО раздачи фронта/SPA-fallback,
+// чтобы /telemetry-proxy/* не ушёл в index.html.
+{
+    var telemetryUi = app.Services.GetRequiredService<ClaudeHomeServer.Telemetry.TelemetryUiOptions>();
+    var telemetryInvoker = new HttpMessageInvoker(new SocketsHttpHandler
+    {
+        UseProxy = false,
+        AllowAutoRedirect = false,
+        AutomaticDecompression = DecompressionMethods.None,
+        UseCookies = false,
+    });
+
+    app.Use(async (ctx, next) =>
+    {
+        var path = ctx.Request.Path.Value ?? "";
+        if (path.Equals("/telemetry-proxy", StringComparison.OrdinalIgnoreCase) ||
+            path.StartsWith("/telemetry-proxy/", StringComparison.OrdinalIgnoreCase))
+        {
+            // Выключено в конфиге — 503, фронт покажет заглушку «настрой, администратор».
+            if (!telemetryUi.Enabled)
+            {
+                ctx.Response.StatusCode = 503;
+                ctx.Response.ContentType = "application/json; charset=utf-8";
+                await ctx.Response.WriteAsync("{\"error\":\"Телеметрия не настроена\"}");
+                return;
+            }
+
+            // Аутентификация как у preview: iframe не носит Bearer, поэтому токен берём из
+            // cookie cc_telemetry (её ставит фронт перед загрузкой iframe — уходит и с
+            // сабресурсами SigNoz), либо из access_token / Bearer (прямое открытие в новой вкладке).
+            var jwtSvc = ctx.RequestServices.GetRequiredService<JwtService>();
+            var token = ctx.Request.Cookies["cc_telemetry"];
+            if (string.IsNullOrEmpty(token))
+            {
+                var q = ctx.Request.Query["access_token"].ToString();
+                if (!string.IsNullOrEmpty(q)) token = q;
+                else
+                {
+                    var auth = ctx.Request.Headers.Authorization.ToString();
+                    if (auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+                        token = auth["Bearer ".Length..].Trim();
+                }
+            }
+            var userId = jwtSvc.ValidateUserToken(token);
+            if (userId is null)
+            {
+                ctx.Response.StatusCode = 401;
+                await ctx.Response.WriteAsync("{\"error\":\"Требуется авторизация\"}");
+                return;
+            }
+            // Телеметрия — админская. Роль берём из стора (source-of-truth: ловит отзыв роли,
+            // в отличие от роли из уже выданного JWT). Не админ — 403, чтобы валидный
+            // cc_telemetry не-админа не пускал к SigNoz.
+            var user = ctx.RequestServices.GetRequiredService<UserStore>().GetById(userId);
+            if (user is null || user.Role != "admin")
+            {
+                ctx.Response.StatusCode = 403;
+                await ctx.Response.WriteAsync("{\"error\":\"Доступ запрещён\"}");
+                return;
+            }
+
+            var forwarder = ctx.RequestServices.GetRequiredService<IHttpForwarder>();
+            await forwarder.SendAsync(ctx, telemetryUi.InternalUrl, telemetryInvoker,
                 ForwarderRequestConfig.Empty, HttpTransformer.Default);
             return;
         }

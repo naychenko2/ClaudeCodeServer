@@ -8,7 +8,7 @@ namespace ClaudeHomeServer.Services;
 // Планирование режима «Командная реализация» (Э2): кто планирует, из кого выбирать и
 // как получить структурный план с исполнителем под каждой под-задачей.
 // Раздача задач и волны — Э3, здесь только план и его карточка.
-// См. docs/features/team-implement-mode.md, раздел «Этапы → Э2».
+// См. docs/architecture/team-implement-mode.md, раздел «Этапы → Э2».
 public class TeamPlanningService(
     PersonaManager personas,
     ICheapTextRunner? cheap = null,

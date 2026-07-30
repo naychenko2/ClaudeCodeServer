@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef, useMemo, useLayoutEffect, type ReactNode } from 'react';
+import { useState, useEffect, useRef, useMemo, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { Filter, Search, X, Pin, Clock, Users } from 'lucide-react';
 import type { Persona, Session } from '../types';
 import { C, R, FONT, FS, SHADOW, Z, SP } from '../lib/design';
@@ -9,7 +10,7 @@ import { PersonaAvatar } from '../features/personas/PersonaAvatar';
 import {
   ALL_ORIGINS, ALL_STATUS_CHIPS,
   chatStatusOf, isDefaultFilters, defaultChatFiltersKeepingView,
-  type ChatFilters, type ChatStatusChip, type ChatOnlyFilter,
+  type ChatFilters, type ChatStatusChip, type ChatOnlyFilter, type ChatGroupBy,
 } from '../lib/chatFilters';
 
 // === Фильтр списка чатов: IconButton-триггер с бейджем скрытых + поповер (десктоп)
@@ -54,8 +55,17 @@ interface FilterBarProps {
   // Сколько чатов скрыто текущими фильтрами (бейдж на триггере и футер)
   hiddenCount: number;
   isMobile?: boolean;
-  // Размер триггера — ступень тулбара (sm на узких, md на широких, lg на мобиле)
-  triggerSize?: 'sm' | 'md' | 'lg';
+  // Размер триггера — ступень тулбара (sm на узких, md на широких, lg на мобиле,
+  // xs в шапке панели: там весь ряд контролов высотой 24)
+  triggerSize?: 'xs' | 'sm' | 'md' | 'lg';
+  // Секция «Группировка» внутри поповера. Нужна, когда тулбар уехал в шапку
+  // панели: там на пилюлю группировки места нет, а из трёх осей вида она самая
+  // редкая. В мобильной шторке не показывается — группировка там своя, в «Виде».
+  grouping?: {
+    value: ChatGroupBy;
+    options: { value: ChatGroupBy; label: string; icon: ReactNode }[];
+    onChange: (v: ChatGroupBy) => void;
+  };
 }
 
 // === Чип мультивыбора ===
@@ -344,13 +354,19 @@ export function ChatFilterResetActions({ search, hasNonSearchFilters, onResetSea
 }
 
 export function FilterBar({
-  sessions, filters, patch, allPersonas, hiddenCount, isMobile, triggerSize = 'sm',
+  sessions, filters, patch, allPersonas, hiddenCount, isMobile, triggerSize = 'sm', grouping,
 }: FilterBarProps) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
-  // Позиция поповера — fixed по rect триггера, кламп к окну (не вылезает ни за
-  // край панели, ни за край экрана на узких ширинах)
-  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const popRef = useRef<HTMLDivElement>(null);
+  // Рамка триггера на момент открытия: поповер живёт в портале и позиционируется
+  // по ней — с клампом к окну, чтобы не вылезал за край на узких ширинах
+  const [anchor, setAnchor] = useState<DOMRect | null>(null);
+
+  const toggleOpen = () => {
+    setAnchor(rootRef.current?.getBoundingClientRect() ?? null);
+    setOpen(o => !o);
+  };
 
   const selectedPersona = filters.personaId
     ? allPersonas.find(p => p.id === filters.personaId) ?? null
@@ -362,34 +378,35 @@ export function FilterBar({
 
   // Закрытие десктоп-поповера по клику вне и по Esc (оба режима). Мобильная шторка
   // закрывается сама через ui/Modal (overlay/Esc).
+  // Поповер вынесен в портал, поэтому «вне» — это вне И триггера, И карточки.
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
       if (isMobile) return;
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+      const t = e.target as Node;
+      if (rootRef.current?.contains(t) || popRef.current?.contains(t)) return;
+      setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    // Прокрутка списка чатов или страницы уводит карточку от кнопки — закрываем,
+    // а не догоняем. Прокрутка ВНУТРИ карточки (секции длиннее экрана) — обычная
+    // работа с ней: такие события пропускаем, иначе поповер закрывался бы от
+    // собственного колеса.
+    const onScroll = (e: Event) => {
+      if (popRef.current?.contains(e.target as Node)) return;
+      setOpen(false);
+    };
+    const onResize = () => setOpen(false);
     document.addEventListener('mousedown', onDown);
     document.addEventListener('keydown', onKey);
+    window.addEventListener('resize', onResize);
+    window.addEventListener('scroll', onScroll, true);
     return () => {
       document.removeEventListener('mousedown', onDown);
       document.removeEventListener('keydown', onKey);
+      window.removeEventListener('resize', onResize);
+      window.removeEventListener('scroll', onScroll, true);
     };
-  }, [open, isMobile]);
-
-  // Позиция поповера — от кнопки, при открытии и ресайзе окна
-  useLayoutEffect(() => {
-    if (!open || isMobile) { setPos(null); return; }
-    const place = () => {
-      const btn = rootRef.current?.querySelector('button');
-      if (!btn) return;
-      const rect = btn.getBoundingClientRect();
-      const left = Math.max(8, Math.min(rect.left, window.innerWidth - POPOVER_W - 8));
-      setPos({ top: rect.bottom + 4, left });
-    };
-    place();
-    window.addEventListener('resize', place);
-    return () => window.removeEventListener('resize', place);
   }, [open, isMobile]);
 
   const trigger = (
@@ -398,7 +415,7 @@ export function FilterBar({
         size={triggerSize}
         active={hasFilters}
         title={hasFilters ? `Фильтры: ${summary}` : 'Фильтры и поиск'}
-        onClick={() => setOpen(o => !o)}
+        onClick={toggleOpen}
       >
         <Filter size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
       </IconButton>
@@ -441,22 +458,43 @@ export function FilterBar({
     <div ref={rootRef} style={{ position: 'relative', flexShrink: 0, display: 'inline-flex' }}>
       {trigger}
 
-      {/* Десктоп: компактный поповер под кнопкой (fixed по rect триггера) */}
-      {open && !isMobile && pos && (
-        <div style={{
-          position: 'fixed', top: pos.top, left: pos.left,
-          width: POPOVER_W, maxHeight: 478, overflowY: 'auto',
+      {/* Десктоп: компактный поповер под кнопкой — в ПОРТАЛЕ и fixed. Список чатов
+          живёт в панели-острове: та клиппует содержимое (overflow hidden) и несёт
+          transform, из-за которого к ней привязался бы даже position:fixed.
+          Поповер внутри такой панели срезался по её краю.
+          Высота — до низа окна: карточка длиннее экрана скроллится внутри себя. */}
+      {open && !isMobile && anchor && createPortal(
+        <div ref={popRef} style={{
+          position: 'fixed',
+          top: anchor.bottom + 4,
+          left: Math.max(8, Math.min(anchor.left, window.innerWidth - POPOVER_W - 8)),
+          width: POPOVER_W, boxSizing: 'border-box',
+          maxHeight: `calc(100vh - ${anchor.bottom + 16}px)`, overflowY: 'auto',
           background: C.bgWhite, border: `1px solid ${C.border}`,
           borderRadius: R.xl, boxShadow: SHADOW.dropdown,
           padding: SP.md, zIndex: Z.dropdown,
         }}>
           <FilterContent sessions={sessions} filters={filters} patch={patch} allPersonas={allPersonas} />
+          {grouping && (
+            <div style={{ marginTop: SP.md }}>
+              <SectionTitle>Группировка</SectionTitle>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs }}>
+                {grouping.options.map(o => (
+                  <Chip key={o.value} active={o.value === grouping.value} onClick={() => grouping.onChange(o.value)}>
+                    {o.icon}
+                    {o.label}
+                  </Chip>
+                ))}
+              </div>
+            </div>
+          )}
           <div style={{
             marginTop: SP.xs, paddingTop: SP.sm, borderTop: `1px solid ${C.borderLight}`,
           }}>
             {footerRow}
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
 
       {/* Мобайл: шторка через ui/Modal (единый bottom-sheet с overlay/Esc/safe-area) */}

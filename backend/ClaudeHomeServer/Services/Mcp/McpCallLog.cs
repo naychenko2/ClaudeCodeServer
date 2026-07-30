@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using ClaudeHomeServer.Telemetry;
 
 namespace ClaudeHomeServer.Services.Mcp;
 
@@ -19,6 +20,12 @@ public sealed class McpCallLog
     // Хватает, чтобы увидеть картину сбоя, и не растёт бесконечно на долгоживущем процессе
     private const int MaxFailures = 200;
 
+    // Потолок различных строк-инструментов в таблице. Ключ приходит снаружи (заголовок
+    // MCP-сервера, а без него — путь запроса с GUID), поэтому без потолка словарь на
+    // долгоживущем процессе растёт неограниченно. Всё сверх — в общую строку Overflow.
+    private const int MaxTools = 512;
+    private const string Overflow = "(прочее)";
+
     private readonly ConcurrentDictionary<string, ToolCounters> _byTool = new(StringComparer.Ordinal);
     private readonly ConcurrentQueue<McpCallFailure> _failures = new();
 
@@ -29,15 +36,40 @@ public sealed class McpCallLog
         public long TotalMs;
     }
 
-    public void Record(string tool, string? sessionId, string path, int statusCode, long elapsedMs)
+    /// <summary>
+    /// Учесть вызов. <paramref name="tool"/> — значение заголовка <c>X-Mcp-Tool</c>;
+    /// null/пусто означает, что инструмент не назвался (старая версия сервера в песочнице,
+    /// чужой клиент с тем же заголовком).
+    /// </summary>
+    public void Record(string? tool, string? sessionId, string path, int statusCode, long elapsedMs)
     {
-        var counters = _byTool.GetOrAdd(tool, _ => new ToolCounters());
+        // Имя для таблицы диагностики: безымянный вызов показываем вместе с путём —
+        // иначе непонятно, какой эндпоинт дёргают без имени инструмента.
+        var display = string.IsNullOrEmpty(tool) ? $"(без имени) {path}" : tool;
+        if (!_byTool.ContainsKey(display) && _byTool.Count >= MaxTools) display = Overflow;
+
+        var counters = _byTool.GetOrAdd(display, _ => new ToolCounters());
         Interlocked.Increment(ref counters.Calls);
         Interlocked.Add(ref counters.TotalMs, elapsedMs);
+
+        // OTel-метрики (ccs.mcp.calls / ccs.mcp.errors). Раньше RecordMcp* были
+        // определены в ServerMetrics, но никто их не вызывал — мёртвые счётчики.
+        // Единая точка записи — здесь, рядом с in-memory агрегацией, без дублей.
+        //
+        // В метрику идёт СЫРОЕ значение заголовка, а не display: путь с GUID в теге
+        // tool_name — это и взрыв кардинальности, и PII в сторе, который живёт до конца
+        // retention. Ограничитель значений — MetricTagGuard внутри ServerMetrics
+        // (безымянный вызов схлопывается в "unnamed", мусор — в "other").
+        var metricTool = tool ?? "";
+        var outcome = statusCode < 400 ? "success" : "error";
+        ServerMetrics.RecordMcpCall(metricTool, outcome);
+        if (statusCode >= 400)
+            ServerMetrics.RecordMcpError(metricTool, "http_" + statusCode);
+
         if (statusCode < 400) return;
 
         Interlocked.Increment(ref counters.Failures);
-        _failures.Enqueue(new McpCallFailure(DateTime.UtcNow, tool, sessionId, path, statusCode, elapsedMs));
+        _failures.Enqueue(new McpCallFailure(DateTime.UtcNow, display, sessionId, path, statusCode, elapsedMs));
         // Кольцо: держим только хвост
         while (_failures.Count > MaxFailures && _failures.TryDequeue(out _)) { }
     }

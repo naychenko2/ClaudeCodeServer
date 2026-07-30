@@ -118,7 +118,10 @@ public sealed class GitService(ILauncherFactory launchers)
         if (!IsGitRepo(root))
             return new GitStatusDto(false, null, null, 0, 0, false, [], [], []);
 
-        var r = await RunAsync(ownerId, root, ["status", "--porcelain=v2", "--branch", "-z"], ct: ct);
+        // -uall обязателен: без него git сворачивает неотслеживаемую папку в ОДНУ запись с
+        // завершающим слешем (`.claude/`), а панель изменений рисует её как файл — клик по
+        // такой записи уходил в files/content с путём папки и валил чтение (500).
+        var r = await RunAsync(ownerId, root, ["status", "--porcelain=v2", "--branch", "-z", "-uall"], ct: ct);
         if (!r.Ok)
             return new GitStatusDto(false, null, null, 0, 0, false, [], [], []);
         var dto = ParsePorcelainV2(r.Stdout);
@@ -142,6 +145,9 @@ public sealed class GitService(ILauncherFactory launchers)
     // Статистика строк по файлам: tracked — `git diff HEAD --numstat` (staged+unstaged суммарно vs
     // HEAD), untracked — `git diff --no-index` по каждому. Пустой репо/нет HEAD → tracked-часть пуста
     // (не кидаем: файлы всё равно untracked). Ключ словаря — путь файла (для rename — новый путь).
+    // Сколько неотслеживаемых файлов считаем построчно (см. комментарий в цикле ниже)
+    private const int UntrackedNumstatLimit = 200;
+
     private async Task<Dictionary<string, (int add, int del, bool binary)>> NumstatAsync(
         string? ownerId, string root, IEnumerable<string> untracked, CancellationToken ct)
     {
@@ -150,8 +156,10 @@ public sealed class GitService(ILauncherFactory launchers)
         var tracked = await RunAsync(ownerId, root, ["diff", "HEAD", "--numstat", "-z"], ct: ct);
         if (tracked.Ok) ParseNumstatZ(tracked.Stdout, map);
 
-        // untracked нет в `diff HEAD` — считаем по одному через --no-index (даёт числа и `-` для бинаря)
-        foreach (var rel in untracked)
+        // untracked нет в `diff HEAD` — считаем по одному через --no-index (даёт числа и `-` для бинаря).
+        // Лимит: на каждый файл — свой запуск git, а с -uall новая папка разворачивается во все
+        // свои файлы (репо без .gitignore даёт их сотнями). Сверх лимита панель просто без «+N/−M».
+        foreach (var rel in untracked.Take(UntrackedNumstatLimit))
         {
             var r = await RunAsync(ownerId, root,
                 ["diff", "--no-index", "--numstat", "-z", "--", "/dev/null", rel], ct: ct);

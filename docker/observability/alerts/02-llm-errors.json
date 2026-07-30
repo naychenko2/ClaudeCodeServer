@@ -1,0 +1,46 @@
+{
+  "alert": "Всплеск ошибок LLM",
+  "alertType": "METRIC_BASED_ALERT",
+  "ruleType": "threshold_rule",
+  "description": "Ходы падают чаще обычного. Ловит протухший OAuth-токен (auth), исчерпанные лимиты (rate_limit) и падение провайдера — случаи, когда всё ломается молча.",
+  "evalWindow": "10m",
+  "frequency": "5m",
+  "labels": { "severity": "warning" },
+  "annotations": {
+    "description": "За 10 минут ошибок больше пяти. Разрез по error_type в описании алерта подскажет причину: auth — перелогинить CLI, rate_limit — упёрлись в лимиты, network — провайдер недоступен.",
+    "summary": "Ходы LLM падают"
+  },
+  "preferredChannels": ["ccs-alerts-email"],
+  "condition": {
+    "selectedQueryName": "A",
+    "op": "above",
+    "matchType": "at_least_once",
+    "target": 5,
+    "compositeQuery": {
+      "queryType": "builder",
+      "panelType": "graph",
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "metrics",
+            "disabled": false,
+            "aggregations": [
+              {
+                "metricName": "ccs.llm.errors",
+                "temporality": "Cumulative",
+                "timeAggregation": "increase",
+                "spaceAggregation": "sum"
+              }
+            ],
+            "groupBy": [
+              { "name": "deployment.environment", "fieldDataType": "string" },
+              { "name": "error_type", "fieldDataType": "string" }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

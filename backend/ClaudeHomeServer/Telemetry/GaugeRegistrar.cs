@@ -14,16 +14,30 @@ public static class GaugeRegistrar
 {
     private static int _registered;
 
-    /// <summary>Создаёт ObservableGauges, читающие из переданных источников. Идемпотентно.</summary>
-    public static void Register(Func<int> sessionsProvider, Func<int> connectionsProvider)
+    /// <summary>
+    /// Создаёт ObservableGauges, читающие из переданных источников. Идемпотентно.
+    ///
+    /// <paramref name="liveSessionsProvider"/> и <paramref name="totalSessionsProvider"/> —
+    /// разные величины, и раньше они были склеены: под именем «активные сессии» гейдж отдавал
+    /// размер реестра, то есть все чаты, когда-либо созданные и не удалённые. График показывал
+    /// сотни, не падал после рестарта и не реагировал на работу — мерил не то, что обещал.
+    /// </summary>
+    public static void Register(
+        Func<int> liveSessionsProvider, Func<int> totalSessionsProvider, Func<int> connectionsProvider)
     {
         if (Interlocked.Exchange(ref _registered, 1) == 1) return;
 
         ServerMetrics.MeterInstance.CreateObservableGauge(
             "ccs.sessions.active",
-            observeValue: () => sessionsProvider(),
+            observeValue: () => liveSessionsProvider(),
             unit: "sessions",
-            description: "Активные сессии (зарегистрированные в SessionManager)");
+            description: "Сессии, которые сейчас работают или ждут человека (SessionLiveness.IsLive)");
+
+        ServerMetrics.MeterInstance.CreateObservableGauge(
+            "ccs.sessions.total",
+            observeValue: () => totalSessionsProvider(),
+            unit: "sessions",
+            description: "Всего чатов в реестре SessionManager — размер стора, а не активность");
 
         ServerMetrics.MeterInstance.CreateObservableGauge(
             "ccs.websocket.connections",

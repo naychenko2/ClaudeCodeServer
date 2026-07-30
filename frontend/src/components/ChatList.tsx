@@ -4,14 +4,14 @@ import type { Session } from '../types';
 import { api } from '../lib/api';
 import { useOnline } from '../hooks/useOnline';
 import { EditSessionDialog } from './EditSessionDialog';
-import { C, FS, MODAL_W } from '../lib/design';
-import { Modal, ModalActions, Button } from './ui';
+import { C, FS, ISLAND, MODAL_W } from '../lib/design';
+import { Modal, ModalActions, Button, PanelShell, useHasPanelHeader } from './ui';
 import { groupChats, sortChatsFlat } from '../lib/chatGroups';
 import { usePersonas, usePersonasVersion } from '../lib/personas';
 import { ChatFilterResetActions } from './FilterBar';
 import { ChatListToolbar } from './ChatListToolbar';
 import { EmptyState } from './ui';
-import { ICON_SIZE } from './ui/icons';
+import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { useChatFilters, useSanitizePersonaFilter, matchChatFilter, isDefaultFilters, defaultChatFiltersKeepingView, buildHiddenReason, type ChatGroupBy } from '../lib/chatFilters';
 import { buildChatTreeRows, splitChatTreeByRoots, useTreeCollapse } from '../lib/chatTree';
 import { useLastMechanicVersion } from '../lib/lastMechanic';
@@ -33,12 +33,16 @@ interface Props {
   isMobile?: boolean;
   // Чат с активным workflow — плашка «WF» на его карточке
   workflowRunningFor?: string;
+  // bare=true — рендерит только контент (toolbar + список), БЕЗ обёртки PanelShell.
+  // Используется когда ChatList встроен в другую панель, которая сама несёт
+  // PanelShell (напр. LeftPanelStack). Иначе двойной PanelShell = два заголовка.
+  bare?: boolean;
 }
 
 // Режимы группировки глобального списка: реестра тегов у него нет — только Дни/Без
 const GROUP_BY_OPTIONS: ChatGroupBy[] = ['days', 'none'];
 
-export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited, onDeleted, isMobile = false, workflowRunningFor }: Props) {
+export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited, onDeleted, isMobile = false, workflowRunningFor, bare = false }: Props) {
   const online = useOnline();
   // Подписка на стор персон — перерисоваться, когда список подгрузится (аватары чатов персон)
   usePersonasVersion();
@@ -61,6 +65,10 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
   const groupBy: ChatGroupBy = GROUP_BY_OPTIONS.includes(filters.groupBy) ? filters.groupBy : 'days';
   // Память свёрнутых веток дерева
   const { collapsedIds, toggleCollapse } = useTreeCollapse('global');
+
+  // Список лежит в карточке с шапкой — контролы уедут туда сами (PanelHeaderSlot),
+  // и собственная полоса тулбара в теле не нужна
+  const inHeader = useHasPanelHeader();
 
   const personas = usePersonas();
 
@@ -144,91 +152,102 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
     />
   );
 
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
-      <ChatListToolbar
-        onNew={onNew}
-        creating={creating}
-        sessions={chats}
-        filters={{ ...filters, groupBy }}
-        patch={patch}
-        allPersonas={personas}
-        hiddenCount={hiddenCount}
-        isMobile={isMobile}
-        groupByOptions={GROUP_BY_OPTIONS}
-      />
+  // === Общие части обоих режимов (bare и PanelShell) ===
+  // Собраны по одному разу: иначе тулбар, список и модалки пришлось бы держать
+  // продублированными в двух ветках return.
+  const toolbar = (
+    <ChatListToolbar
+      onNew={onNew}
+      creating={creating}
+      sessions={chats}
+      filters={{ ...filters, groupBy }}
+      patch={patch}
+      allPersonas={personas}
+      hiddenCount={hiddenCount}
+      isMobile={isMobile}
+      groupByOptions={GROUP_BY_OPTIONS}
+    />
+  );
 
-      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', margin: '0 -4px', padding: '0 4px' }}>
-        {chats.length === 0 && (
-          <EmptyState
-            compact={!isMobile}
-            icon={<MessageCircle size={isMobile ? ICON_SIZE.xl : ICON_SIZE.lg} strokeWidth={2} />}
-            title="Здесь будут ваши чаты"
-            subtitle="Создавайте чаты с AI и персонами для личных тем, идей и задач."
-            action={
-              <Button
-                variant="primary" size="md" loading={creating}
-                onClick={onNew}
-                leftIcon={<Plus size={ICON_SIZE.sm} strokeWidth={2} />}
-              >
-                Создать первый чат
-              </Button>
-            }
-          />
-        )}
-        {(tree ? tree.rows.length === 0 : filteredChats.length === 0) && chats.length > 0 && (
-          <EmptyState
-            compact
-            icon={<FilterX size={20} strokeWidth={2} />}
-            title="Ничего не нашлось"
-            subtitle={buildHiddenReason(chats.length, filters.search)}
-            action={
-              <ChatFilterResetActions
-                search={filters.search}
-                hasNonSearchFilters={!isDefaultFilters({ ...filters, search: '' })}
-                onResetSearch={() => patch({ search: '' })}
-                onResetAll={() => patch(defaultChatFiltersKeepingView(filters))}
-              />
-            }
-          />
-        )}
-        {treeSegments ? (
-          <ChatGroupingDnd chats={chats} isMobile={isMobile} onEdited={onEdited}>
-            {tree!.linkCount === 0 && tree!.rows.length > 0 && (
-              <div style={{ padding: '10px 8px', fontSize: FS.sm, color: C.textMuted }}>
-                ⋔ Пока нет вложенных чатов — перетащите чат на другой, чтобы вложить.
-                Здесь же появятся исполнители делегированных задач.
+
+  // Содержимое списка. Пустой список — приглашение создать первый чат; если чаты
+  // есть, но фильтры всё скрыли — подсказка со сбросом.
+  const listContent = (
+    <>
+      {chats.length === 0 && (
+        <EmptyState
+          compact={!isMobile}
+          icon={<MessageCircle size={isMobile ? ICON_SIZE.xl : ICON_SIZE.lg} strokeWidth={2} />}
+          title="Здесь будут ваши чаты"
+          subtitle="Создавайте чаты с AI и персонами для личных тем, идей и задач."
+          action={
+            <Button
+              variant="primary" size="md" loading={creating}
+              onClick={onNew}
+              leftIcon={<Plus size={ICON_SIZE.sm} strokeWidth={2} />}
+            >
+              Создать первый чат
+            </Button>
+          }
+        />
+      )}
+      {(tree ? tree.rows.length === 0 : filteredChats.length === 0) && chats.length > 0 && (
+        <EmptyState
+          compact
+          icon={<FilterX size={20} strokeWidth={2} />}
+          title="Ничего не нашлось"
+          subtitle={buildHiddenReason(chats.length, filters.search)}
+          action={
+            <ChatFilterResetActions
+              search={filters.search}
+              hasNonSearchFilters={!isDefaultFilters({ ...filters, search: '' })}
+              onResetSearch={() => patch({ search: '' })}
+              onResetAll={() => patch(defaultChatFiltersKeepingView(filters))}
+            />
+          }
+        />
+      )}
+      {treeSegments ? (
+        <ChatGroupingDnd chats={chats} isMobile={isMobile} onEdited={onEdited}>
+          {tree!.linkCount === 0 && tree!.rows.length > 0 && (
+            <div style={{ padding: '10px 8px', fontSize: FS.sm, color: C.textMuted }}>
+              ⋔ Пока нет вложенных чатов — перетащите чат на другой, чтобы вложить.
+              Здесь же появятся исполнители делегированных задач.
+            </div>
+          )}
+          {groupBy === 'none' ? (
+            treeSegments.map(({ seg }) => seg.map(row => (
+              <ChatTreeRow key={row.chat.id} row={row} isMobile={isMobile} onToggleCollapse={toggleCollapse}>
+                {renderCard(row.chat)}
+              </ChatTreeRow>
+            )))
+          ) : (
+            dayGroups.map(g => (
+              <div key={g.title} style={{ marginBottom: 6 }}>
+                <ListDateDivider title={g.title} />
+                {g.items.map(root => segByRootId!.get(root.id)?.map(row => (
+                  <ChatTreeRow key={row.chat.id} row={row} isMobile={isMobile} onToggleCollapse={toggleCollapse}>
+                    {renderCard(row.chat)}
+                  </ChatTreeRow>
+                )))}
               </div>
-            )}
-            {groupBy === 'none' ? (
-              treeSegments.map(({ seg }) => seg.map(row => (
-                <ChatTreeRow key={row.chat.id} row={row} isMobile={isMobile} onToggleCollapse={toggleCollapse}>
-                  {renderCard(row.chat)}
-                </ChatTreeRow>
-              )))
-            ) : (
-              dayGroups.map(g => (
-                <div key={g.title} style={{ marginBottom: 6 }}>
-                  <ListDateDivider title={g.title} />
-                  {g.items.map(root => segByRootId!.get(root.id)?.map(row => (
-                    <ChatTreeRow key={row.chat.id} row={row} isMobile={isMobile} onToggleCollapse={toggleCollapse}>
-                      {renderCard(row.chat)}
-                    </ChatTreeRow>
-                  )))}
-                </div>
-              ))
-            )}
-          </ChatGroupingDnd>
-        ) : flatList ? (
-          flatList.map(renderCard)
-        ) : dayGroups.map(g => (
-          <div key={g.title} style={{ marginBottom: 6 }}>
-            <ListDateDivider title={g.title} />
-            {g.items.map(renderCard)}
-          </div>
-        ))}
-      </div>
+            ))
+          )}
+        </ChatGroupingDnd>
+      ) : flatList ? (
+        flatList.map(renderCard)
+      ) : dayGroups.map(g => (
+        <div key={g.title} style={{ marginBottom: 6 }}>
+          <ListDateDivider title={g.title} />
+          {g.items.map(renderCard)}
+        </div>
+      ))}
+    </>
+  );
 
+  // Модалки редактирования и удаления — общие для обоих режимов
+  const dialogs = (
+    <>
       {editTarget && (
         <EditSessionDialog
           session={editTarget}
@@ -236,7 +255,6 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
           onClose={() => setEditTarget(null)}
         />
       )}
-
       {deleteTarget && (
         <Modal
           title="Удалить чат?"
@@ -257,6 +275,77 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
           }
         />
       )}
+    </>
+  );
+
+  // Скроллящаяся зона списка. Отступ тот же, что у списка чатов проекта
+  // (SessionList): один и тот же ChatCard в двух местах должен стоять одинаково,
+  // а раньше здесь карточки шли вплотную к краям панели. Padding заодно решает
+  // задачу прежнего отрицательного margin — тени и ховер больше не срезаются
+  // краем скролл-контейнера.
+  const scrollArea = (
+    // Сверху отступ ужимается только под разделитель группы («Сегодня»): свой
+    // верхний padding у него есть, и вместе с общим набегало 18px пустоты под
+    // шапкой. Без группировки список начинается сразу карточкой — ей нужен
+    // обычный отступ, иначе она липнет к заголовку.
+    <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: `${groupBy === 'none' ? 8 : 2}px 8px 8px` }}>
+      {listContent}
     </div>
+  );
+
+  // bare=true — только контент (тулбар + список), без своей PanelShell:
+  // оболочку несёт вызывающая панель (напр. LeftPanelStack), иначе вышел бы
+  // остров в острове с двумя заголовками. Оформление тулбара повторяет
+  // PanelShell.toolbar, чтобы оба режима выглядели одинаково.
+  if (bare) {
+    return (
+      <>
+        {/* Полоса тулбара нужна, только когда контролы остались в теле. В карточке
+            с шапкой они уезжают туда порталом, и обёртка стала бы пустой серой
+            полосой под заголовком. */}
+        {inHeader ? toolbar : (
+          <div style={{
+            flexShrink: 0,
+            padding: '8px 10px 9px',
+            borderBottom: `1px solid ${C.border}`,
+            background: ISLAND.bg,
+            display: 'flex', flexDirection: 'column', gap: 8,
+          }}>
+            {toolbar}
+          </div>
+        )}
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: C.bgWhite }}>
+          {scrollArea}
+        </div>
+        {dialogs}
+      </>
+    );
+  }
+
+  return (
+    <>
+      <PanelShell
+        icon={
+          <MessageCircle
+            size={ICON_SIZE.sm}
+            strokeWidth={ICON_STROKE}
+            color={C.textSecondary}
+            style={{ flexShrink: 0 }}
+          />
+        }
+        title="Чаты"
+        badge={chats.length > 0 ? String(chats.length) : null}
+        // fill=false: панель занимает по контенту, не растягивается на всю
+        // высоту сайдбара — если чатов мало, низ остаётся свободным.
+        fill={false}
+      >
+        {/* Тулбар — обычным ребёнком, а не через toolbar: контролы внутри шапки
+            уедут порталом сами, и полоса под заголовком не останется пустой.
+            Мобильная ступень порталу не подлежит и рисуется здесь же, в теле. */}
+        {toolbar}
+        {scrollArea}
+      </PanelShell>
+      {dialogs}
+    </>
   );
 }

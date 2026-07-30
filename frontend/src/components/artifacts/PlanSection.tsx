@@ -1,10 +1,11 @@
 // Секция «План»: навигатор планов + статус + оглавление + текст.
 // Перенесена из ArtifactsPanel verbatim при разбиении на секции.
-import { useState, useRef, useEffect, type CSSProperties } from 'react';
+import { useState, useRef, type CSSProperties } from 'react';
 import { ChevronRight, ChevronLeft, ChevronsRight, List } from 'lucide-react';
 import { C, FONT, R, SHADOW } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { MarkdownViewer } from '../MarkdownViewer';
+import { useHeadings, scrollToHeading, type Heading } from '../../hooks/useHeadings';
 import type { PlanArtifact, PlanStatus } from '../../hooks/useSessionArtifacts';
 import { IconNotes } from '../../features/notes/shared';
 import { saveChatNote, openNoteById } from '../../features/notes/saveToNote';
@@ -18,10 +19,8 @@ const navChip: CSSProperties = {
   border: `1px solid ${C.border}`, background: C.bgInset, color: C.textSecondary,
 };
 
-// Заголовок оглавления = реальный <h*> узел из отрендеренного плана.
-// Единый источник (DOM), чтобы список TOC и цель скролла были тем же узлом —
-// иначе строковый парсер разъезжается с рендером remark (Setext, blockquote и пр.).
-interface Heading { level: number; text: string; el: HTMLElement }
+// Заголовок оглавления = реальный <h*> узел из отрендеренного плана; сбор — общий хук
+// useHeadings (им же пользуется панель «Документы»).
 
 // Чип «в заметку» в навигаторе плана — сохраняет текущий план в базу заметок
 function SavePlanChip({ plan, projectId }: { plan: string; projectId?: string }) {
@@ -81,26 +80,11 @@ export function PlanSection({ plans, projectId }: { plans: PlanArtifact[]; proje
 
   // Оглавление текущего плана + поповер
   const [tocOpen, setTocOpen] = useState(false);
-  const [headings, setHeadings] = useState<Heading[]>([]);
   const planContentRef = useRef<HTMLDivElement>(null);
+  const headings = useHeadings(planContentRef, curPlan?.plan);
 
-  // Заголовки берём из реального DOM плана (после рендера MarkdownViewer) — один источник,
-  // никакого рассинхрона со строковым парсером. Пересбор при смене текста плана.
-  const planText = curPlan?.plan;
-  useEffect(() => {
-    const root = planContentRef.current;
-    if (!root) { setHeadings([]); return; }
-    const list: Heading[] = [];
-    root.querySelectorAll('h1,h2,h3,h4,h5,h6').forEach(n => {
-      const el = n as HTMLElement;
-      const text = (el.textContent ?? '').trim();
-      if (text) list.push({ level: Number(el.tagName[1]), text, el });
-    });
-    setHeadings(list);
-  }, [planText]);
-
-  const scrollToHeading = (h: Heading) => {
-    h.el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  const goToHeading = (h: Heading) => {
+    scrollToHeading(h);
     setTocOpen(false);
   };
 
@@ -166,7 +150,7 @@ export function PlanSection({ plans, projectId }: { plans: PlanArtifact[]; proje
               {headings.map((h, i) => (
                 <button
                   key={i}
-                  onClick={() => scrollToHeading(h)}
+                  onClick={() => goToHeading(h)}
                   style={{
                     width: '100%', textAlign: 'left', border: 'none', background: 'transparent', cursor: 'pointer',
                     padding: '5px 12px', paddingLeft: 12 + (h.level - 1) * 12,

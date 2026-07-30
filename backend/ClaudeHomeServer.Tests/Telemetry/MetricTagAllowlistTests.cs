@@ -122,7 +122,9 @@ public class MetricTagAllowlistTests
         {
             "provider",    // claude, deepseek, glm, ollama, ...
             "model",       // claude-sonnet-4-5, glm-4, ...
-            "direction",   // input, output, cache_read, cache_creation
+            "execution",   // local | docker — среда исполнения хода, ровно два значения
+            // direction (input/output/cache_read/cache_creation) убран: он размечает токены,
+            // а учёт токенов в OTel запрещён (C4) — см. ServerMetrics_HasNoTokenMetrics ниже
             "tool_name",   // идентификатор MCP-инструмента (≤80-90 значений)
             "outcome",     // success, error, timeout
             "error_type",  // rate_limit, network, auth, ...

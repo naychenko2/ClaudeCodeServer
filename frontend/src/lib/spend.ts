@@ -1,5 +1,5 @@
 // Аналитика расхода токенов (Spend Analytics v2): словари разрезов, форматирование,
-// событие открытия раздела. Данные — /api/spend/* (docs/spend-analytics-v2-api.md).
+// событие открытия раздела. Данные — /api/spend/* (docs/architecture/spend-analytics-api.md).
 import { C } from './design';
 
 // Разрезы pivot-дерева и фильтров. 'turn' — терминальный псевдо-уровень (лист-ходы).

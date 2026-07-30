@@ -68,6 +68,10 @@ public class TestWebApplicationFactory : WebApplicationFactory<Program>, IDispos
                 ["FileWatcher:UsePolling"] = "true",
                 ["FileWatcher:PollIntervalMs"] = "150",
                 ["CodeGraph:RebuildDebounceMs"] = "50"
+                // Телеметрию отсюда отключить НЕЛЬЗЯ: Program.cs подключает
+                // appsettings.Local.json ПОСЛЕ источников этой фабрики, поэтому
+                // Telemetry:Backends:*:Enabled из файла разработчика сильнее.
+                // Экспорт глушится переменной окружения — см. TestTelemetryGuard.
             });
         });
 

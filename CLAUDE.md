@@ -3,16 +3,20 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 > **Держи этот файл компактным.** CLAUDE.md загружается в контекст КАЖДОЙ сессии — это
-> карта проекта, а не энциклопедия. Детальные описания подсистем живут в `docs/*.md`;
+> карта проекта, а не энциклопедия. Детальные описания подсистем живут в `docs/`;
 > здесь — команды, архитектура, инварианты и короткие выжимки со ссылками. Новое крупное
-> описание — сразу отдельным файлом в `docs/` плюс выжимка со ссылкой отсюда (формат —
-> как у существующих разделов). Не раздувать этот файл обратно.
+> описание — сразу отдельным файлом в нужном разделе `docs/` плюс выжимка со ссылкой
+> отсюда (формат — как у существующих разделов). Не раздувать этот файл обратно.
+>
+> Раздел выбирается по роли документа: `architecture/` — как устроено, `operations/` —
+> как запускать, `adr/` — почему решили так, `research/` — исследования и срезы во
+> времени, `design/` — конвенция и прототипы. Карта корпуса — [docs/README.md](docs/README.md).
 
 ## Команды
 
 > **Стандарт: сборка и тестирование — в dev-контейнере.** По умолчанию собираем и
 > прогоняем приложение в контейнере (песочница для Claude + единое воспроизводимое
-> окружение), а не на хосте. Подробности — [docs/docker.md](docs/docker.md).
+> окружение), а не на хосте. Подробности — [docs/operations/docker.md](docs/operations/docker.md).
 
 ```powershell
 # Контейнер (из корня проекта) — основной путь
@@ -47,7 +51,7 @@ cd frontend; npm run build     # production-сборка (tsc -b + vite)
 (`CLAUDE_CODE_OAUTH_TOKEN`) в песочницу доставляется per-exec (`DockerProcessRunner.BuildTurnEnv`
 на каждый `docker exec`), а не запекается при создании контейнера.
 **Перед правками в `Services/Execution/`, `SandboxManager`, `UserHomeResolver` — прочитай
-[docs/sandbox.md](docs/sandbox.md)** (монтирования, interrupt, MCP из песочницы, overrides).
+[docs/architecture/sandbox.md](docs/architecture/sandbox.md)** (монтирования, interrupt, MCP из песочницы, overrides).
 
 ## Архитектура
 
@@ -90,7 +94,7 @@ Claude Design проект: `52adb1f7-312b-4f25-8c47-2bccfca9df94`
 
 ## Дизайн-система
 
-**Полная конвенция — [docs/design-guidelines.md](docs/design-guidelines.md). Обязательна
+**Полная конвенция — [docs/design/guidelines.md](docs/design/guidelines.md). Обязательна
 для ЛЮБЫХ изменений UI** — гайд и есть общая канва, по которой идут все дальнейшие
 доработки. Выжимка железных правил:
 
@@ -116,7 +120,8 @@ Claude Design проект: `52adb1f7-312b-4f25-8c47-2bccfca9df94`
 - Стили: только inline-objects, без Tailwind/CSS-modules.
 - Каждый экран живёт на мобиле (`useIsMobile`, шторки вместо модалок).
 - Новый раздел строится по «Рецепту нового раздела» из гайда (эталон — KnowledgePage);
-  заметный UI — перед коммитом прогоняется через субагента `designer`.
+  для заметного UI перед коммитом **предложить** прогон через субагента `designer`
+  и дождаться ответа — сам, без спроса, он не запускается.
 
 ## LLM-провайдеры (Services/Llm)
 
@@ -169,7 +174,7 @@ Claude Design проект: `52adb1f7-312b-4f25-8c47-2bccfca9df94`
 «Кто что выполняет»), выбор действует сразу. Дефолтный маршрут — слот по профилю сложности
 (Small/Text → слабая, Large → средняя); зашитый в потребителе тир (обычно `haiku`) остаётся
 фолбэком на случай пустого слота. **Перед правками в `Services/Llm/` — прочитай
-[docs/llm-providers.md](docs/llm-providers.md).**
+[docs/architecture/llm-providers.md](docs/architecture/llm-providers.md).**
 
 ## Claude Code CLI subprocess
 
@@ -202,7 +207,7 @@ available». Ограничения по ходу — на бэкенде: се�
 `GET /api/mcp/calls` (админ) — счётчики вызовов, доля отказов и последние сбои по каждому
 инструменту (заголовки `X-Caller-Session-Id` + `X-Mcp-Tool` → `McpCallLogMiddleware`). Состав
 инструментов, живучесть stdio-цикла и грабли HTTPS-деплоя («fetch failed» у всех инструментов
-при живом бэкенде → явный `McpTasksApiUrl`) — [docs/mcp-servers.md](docs/mcp-servers.md).
+при живом бэкенде → явный `McpTasksApiUrl`) — [docs/architecture/mcp-servers.md](docs/architecture/mcp-servers.md).
 
 ## Заметки и Знания (Dify RAG)
 
@@ -214,7 +219,7 @@ MCP notes-server; семантика — Dify-датасет `{username}:notes` 
 юзеру, иначе 403). Файлы проектов синкаются в датасеты дифф-по-хешам с дебаунсом 15с
 (`ProjectKnowledgeSyncService`) + lifecycle-каскады (удаление проекта/юзера, смена RootPath).
 Контуры Dev/Prod на одном Dify разводит `Dify:Namespace`. **Перед правками — прочитай
-[docs/knowledge.md](docs/knowledge.md).**
+[docs/architecture/knowledge.md](docs/architecture/knowledge.md).**
 
 ## Интеграция с мессенджерами (Max / Telegram) — не реализовано
 
@@ -229,9 +234,9 @@ Use cases (с резолюциями), архитектура интеграци
 по образцу `PersonaAutomationService`, `IMessengerClient` для нескольких адаптеров, mapping
 `external_chat_id ↔ session_id`) и расширенные варианты использования (личка с глобальной
 персоной, проект-специфичные чаты, уведомления от имени персон — через `Session.PersonaId`
-и `Session.ProjectId` как оси routing'а) — [docs/messenger-integration.md](docs/messenger-integration.md).
+и `Session.ProjectId` как оси routing'а) — [docs/research/messenger-integration.md](docs/research/messenger-integration.md).
 **Решение по ботам:** один бот с routing по чатам для solo (CCS-уведомления + телеметрия,
-см. [observability.md](docs/observability.md) «Future Epics — Alerting»); переход на двух
+см. [observability.md](docs/observability/overview.md) «Future Epics — Alerting»); переход на двух
 ботов при появлении второго юзера или шумной телеметрии. Общая .NET-библиотека Max API
 клиента — переиспользуется между CCS и сервисом телеметрии.
 
@@ -252,23 +257,23 @@ Use cases (с резолюциями), архитектура интеграци
 Флаги: `personas`, `persona-memory-autolearn`, `persona-memory-consolidation`,
 `persona-mentions`, `persona-group-chats`. **Перед правками в персонах (промпт, память,
 групповые чаты, пантеон OmO, аватары, MCP personas/memory) — прочитай
-[docs/personas.md](docs/personas.md).**
+[docs/architecture/personas.md](docs/architecture/personas.md).**
 
 ## Механики OmO в чатах
 
-Тексты — переводы oh-my-openagent ([docs/omo-adoption.md](docs/omo-adoption.md)); рантайм —
+Тексты — переводы oh-my-openagent ([docs/omo/adoption.md](docs/omo/adoption.md)); рантайм —
 `Services/Prompts/OmoPrompts*.cs` (генерируются скриптом docs/omo/gen-omo-prompts.ps1).
 Главное — цикл «до готово» (флаг `work-loop`): тумблер в композере, протокол маркера
 `<promise>ГОТОВО</promise>`, автопродолжение хода до маркера/лимита, затем верификационный
-ход. Детали — [docs/features.md](docs/features.md), раздел «Механики OmO».
+ход. Детали — [docs/architecture/features.md](docs/architecture/features.md), раздел «Механики OmO».
 
 ## REST API
 
 Все эндпоинты (кроме `/api/auth/ping`) и SignalR-хаб — под `[Authorize]` (API-ключ);
 `ping` дополнительно под rate-limit (`Auth:PingRateLimit`, дефолт 10/мин на IP).
-Полный справочник эндпоинтов — [docs/api.md](docs/api.md) (источник правды — контроллеры).
+Полный справочник эндпоинтов — [docs/architecture/api.md](docs/architecture/api.md) (источник правды — контроллеры).
 Значения фич-флагов фронт получает из `GET /api/auth/me` (поле `featureFlags`).
-Удалённый доступ — [docs/remote-access.md](docs/remote-access.md).
+Удалённый доступ — [docs/operations/remote-access.md](docs/operations/remote-access.md).
 
 ## SignalR Hub `/hubs/session`
 
@@ -279,24 +284,38 @@ Use cases (с резолюциями), архитектура интеграци
 
 Двухрежимная observability через OTel SDK: **dev** → Aspire Dashboard (in-memory, для
 живого дебага), **production** → SigNoz (ClickHouse, persistent 30d traces / 90d metrics).
-Алерты (email/Telegram) — отдельный будущий epic, пока выключены.
+**Алерты** доставляются в уведомления CCS (колокол + тост + web push на PWA, категория
+«Алерт»): `AlertPollingService` раз в 60с опрашивает `GET /api/v1/alerts` SigNoz и шлёт
+админам новые срабатывания через существующий `NotificationService`. Опрос, а не webhook —
+боевой хост слушает HTTPS с сертом на домен, и запрос из контейнера падает по SNI.
+Правила — код (`docker/observability/alerts/*.json` + `apply-alerts.ps1`), дедупликация
+по `fingerprint` (одно правило = по алерту на серию разреза), состояние —
+`data/alert-state.json`. Рассылает только инстанс с `Telemetry:Alerts:Enabled` (подписки
+per-инстанс). Страховка на случай мёртвого CCS — email-канал самого SigNoz для правила
+«Пульс телеметрии пропал». **Max для ботов закрыт** (только верифицированные юрлица РФ) —
+см. [docs/research/messenger-integration.md](docs/research/messenger-integration.md).
+**Раздел «Телеметрия» в UI** (меню аватара, admin-only): SigNoz встроен `<iframe>` через
+same-origin проброс `/telemetry-proxy/**` (middleware в Program.cs, cookie `cc_telemetry`,
+роль по `UserStore`). SigNoz релоцирует SPA под префикс через env `SIGNOZ_GLOBAL_EXTERNAL__URL`
+(overlay, переменная `SIGNOZ_EXTERNAL_URL`); фронт решает iframe/заглушку по
+`GET /api/telemetry/status`. Включение — `Telemetry:Ui:Enabled`.
 
-- **Central doc**: [docs/observability.md](docs/observability.md) — scope, архитектура,
+- **Central doc**: [docs/observability/overview.md](docs/observability/overview.md) — scope, архитектура,
   дублирование с существующими сторами, privacy (PII sanitizer), cardinality guardrails,
   sampling strategy, future epics.
-- **Audit**: [docs/observability-audit.md](docs/observability-audit.md) — карта
+- **Audit**: [docs/observability/audit.md](docs/observability/audit.md) — карта
   существующих observability-поверхностей (SpendStore JSONL, ModuleLlmUsageStore,
   McpCallLog in-memory, ProjectEventLogService SQLite). **SpendStore = source of truth
   для billing (токены/стоимость), OTel метрики НЕ дублируют его.**
-- **SigNoz setup**: [docs/observability-signoz-setup.md](docs/observability-signoz-setup.md) —
-  развёртывание vendored SigNoz v0.71.0 (`docker/observability/`), retention, backup,
+- **SigNoz setup**: [docs/observability/signoz-setup.md](docs/observability/signoz-setup.md) —
+  развёртывание vendored SigNoz v0.134.0 (`docker/observability/`), retention, backup,
   troubleshooting.
 
 Включение per-instance через `appsettings.Local.json` секция `Telemetry`. Все порты
 (SigNoz UI :3301, OTLP :4317/4318) bind'ятся к `127.0.0.1` через overlay
 `docker-compose.observability.yml`. PII-санитайзер (`PiiSanitizingProcessor`) сидит первым
 в pipeline — оба backend'а получают очищенные данные. **Перед правками в `Telemetry/`
-или новыми метриками — прочитай [docs/observability.md](docs/observability.md).**
+или новыми метриками — прочитай [docs/observability/overview.md](docs/observability/overview.md).**
 
 ## Реализовано
 
@@ -306,8 +325,11 @@ CSP), артефакты сессии (панель, derived из ленты), �
 (AI-сводка коммитов по дням), плагин oh-my-claudecode (авто-установка + роутинг персон
 в сабагенты), задачи v3 (напоминания, регулярные, web push, Claude/персона-исполнитель),
 бэкапы каталога `data` (расписание + `exe --backup/--restore/--inspect`, меню трея, виджет
-на главной; настройка — секция `Backup` в `appsettings.Local.json`).
-Детали каждой фичи — [docs/features.md](docs/features.md).
+на главной; настройка — секция `Backup` в `appsettings.Local.json`), панель «Документация»
+(документация проекта настраиваемой областью — файлы корня + папки + типы файлов, дефолт `README.md` + `docs/**` + Markdown
+как связный корпус: дерево, оглавление, поиск,
+переходы по ссылкам, обратные ссылки, отправка документа или раздела в чат).
+Детали каждой фичи — [docs/architecture/features.md](docs/architecture/features.md).
 
 ## Фич-флаги (feature toggles)
 
@@ -334,7 +356,7 @@ override в `data/users.json`; фронт — стор [lib/featureFlags.ts](fro
 
 | Агент | Роль |
 |---|---|
-| `designer` | ревью UI-изменений по [docs/design-guidelines.md](docs/design-guidelines.md); прогонять перед коммитом заметного UI |
+| `designer` | ревью UI-изменений по [docs/design/guidelines.md](docs/design/guidelines.md); запускается только по явному согласию — перед коммитом заметного UI его предлагают, а не вызывают молча |
 
 ## Конфигурация
 
@@ -407,7 +429,7 @@ override в `data/users.json`; фронт — стор [lib/featureFlags.ts](fro
   (5) **критичный стор** → добавь в `BackupValidation.Validate`, иначе его порча не
   остановит восстановление. Ломающее изменение формата любого стора = инкремент
   `BackupSchema.Version` (иначе старый код молча обнулит стор при откате).
-  Детали — [docs/features.md](docs/features.md#бэкапы-и-восстановление)
+  Детали — [docs/architecture/features.md](docs/architecture/features.md#бэкапы-и-восстановление)
 - Комментарии в коде по-русски
 
 ## Коммиты

@@ -1,7 +1,7 @@
 namespace ClaudeHomeServer.Services.Prompts;
 
 // Рантайм-тексты, перенесённые из oh-my-openagent по договорённости с авторами
-// (русский перевод — обязательное условие; соответствие оригиналам — docs/omo-adoption.md,
+// (русский перевод — обязательное условие; соответствие оригиналам — docs/omo/adoption.md,
 // полные переводы — docs/omo/translations/).
 // Собственная вставка ultrawork удалена (2026-07): магслово ловит keyword-detector
 // плагина oh-my-claudecode, дублирующая серверная накачка промпта не нужна.

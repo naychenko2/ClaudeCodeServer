@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import type { Persona, Session } from '../types';
 import { C, FONT, FS, SP } from '../lib/design';
-import { Button, IconButton, Menu, MenuItem, Modal, PillSwitch, Toggle } from './ui';
+import { Button, IconButton, Menu, MenuItem, Modal, PanelHeaderSlot, PillSwitch, Toggle, useHasPanelHeader } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { FilterBar } from './FilterBar';
 import type { ChatFilters, ChatGroupBy, ChatSortOrder } from '../lib/chatFilters';
@@ -68,6 +68,9 @@ export function ChatListToolbar({
   isMobile = false, groupByOptions = ['days', 'tags', 'none'],
 }: ChatListToolbarProps) {
   const rootRef = useRef<HTMLDivElement>(null);
+  // Список живёт в карточке с шапкой — контролы уезжают туда (как у «Задач» и
+  // «Изменений»), и собственная строка тулбара в теле не нужна вовсе
+  const inHeader = useHasPanelHeader();
   // Ширина панели для ступени; 288 — дефолт сайдбара, чтобы не моргнуть compact на старте
   const [width, setWidth] = useState(288);
   useEffect(() => {
@@ -177,7 +180,60 @@ export function ChatListToolbar({
     );
   }
 
-  // === Десктопные ступени ===
+  // === Контролы в шапке карточки: [фильтр] [сортировка] [иерархия] [+ Чат] ===
+  // Ряд нейтральных иконок 24px, главное действие последним и залитым — общий
+  // порядок с «Задачами» и «Проектами». Пилюля группировки сюда не влезает и
+  // уехала секцией в поповер фильтров: из трёх осей вида она самая редкая, а
+  // фильтр, сортировка и иерархия остаются на виду одним кликом.
+  if (inHeader) {
+    return (
+      <PanelHeaderSlot>
+        <FilterBar
+          sessions={sessions} filters={filters} patch={patch} allPersonas={allPersonas}
+          hiddenCount={hiddenCount} triggerSize="xs"
+          grouping={{
+            value: groupBy,
+            options: groupByOptions.map(v => {
+              const m = GROUP_BY_META[v];
+              return {
+                value: v,
+                label: v === 'none' ? 'Без группировки' : m.label,
+                icon: <m.Icon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
+              };
+            }),
+            onChange: v => patch({ groupBy: v }),
+          }}
+        />
+        <IconButton
+          size="xs"
+          active={sortOrder !== 'newest'}
+          title={sort.title}
+          onClick={() => patch({ sortOrder: sortOrder === 'newest' ? 'oldest' : 'newest' })}
+        >
+          <sort.Icon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+        </IconButton>
+        <IconButton
+          size="xs"
+          active={hierarchy}
+          title={`Иерархия: ${hierarchy ? 'вкл' : 'выкл'}`}
+          onClick={() => patch({ hierarchy: !hierarchy })}
+        >
+          <ListTree size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+        </IconButton>
+        {!hideNew && (
+          <Button
+            variant="primary" size="xs" title="Новый чат" loading={creating}
+            leftIcon={<Plus size={13} strokeWidth={ICON_STROKE} />}
+            onClick={onNew}
+          >
+            Чат
+          </Button>
+        )}
+      </PanelHeaderSlot>
+    );
+  }
+
+  // === Десктопные ступени (без шапки: сайдбар раздела «Чаты», dev-витрина) ===
   const groupByMeta = GROUP_BY_META[groupBy] ?? GROUP_BY_META.days;
   return (
     <div ref={rootRef} style={{

@@ -9,6 +9,7 @@ import { C, FONT, R } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { EmptyState } from '../../components/EmptyState';
 import { Button } from '../../components/ui/Button';
+import { IconSegmented, PanelHeaderSlot, useHasPanelHeader } from '../../components/ui';
 import {
   STATUS_DOT, STATUS_LABEL, daysFromToday, ensureTasksLoaded, useTasks,
 } from '../../lib/tasks';
@@ -34,15 +35,13 @@ interface Props {
   boardMode?: boolean;
   onBoardMode?: (on: boolean) => void;
   onEditColumns?: () => void;   // открыть редактор колонок (десктоп-тулбар в сайдбаре)
-  // Управляемая группировка списка (когда переключатель вынесен в шапку панели —
-  // cc-panels). Без пропа — панель держит состояние сама (старый сайдбар/мобила).
+  // Управляемая группировка списка (когда вид задач влияет на центральную область —
+  // воркспейс). Без пропа — панель держит состояние сама (мобила).
   groupTab?: GroupTab;
   onGroupTab?: (t: GroupTab) => void;
-  // Спрятать внутренний переключатель видов — он вынесен в шапку карточки (cc-panels)
-  hideViewSwitcher?: boolean;
   // Фильтры списка (Статус/Исполнитель/Приоритет/Срок). Поднимаются в WorkspacePage,
-  // чтобы шариться между cc-panels (кнопка в шапке) и старым сайдбаром. Без пропа —
-  // панель держит состояние сама.
+  // чтобы переживать пересборку панели при смене раскладки. Без пропа — панель
+  // держит состояние сама.
   filters?: TaskListFilters;
   onFilters?: (f: TaskListFilters) => void;
 }
@@ -97,7 +96,7 @@ function groupByDate(tasks: Task[]): Group[] {
     .filter(g => g.tasks.length > 0);
 }
 
-export function TasksPanel({ project, selectedTaskId, onSelect, isMobile, boardMode, onBoardMode, onEditColumns, groupTab: groupTabProp, onGroupTab, hideViewSwitcher, filters: filtersProp, onFilters: onFiltersProp }: Props) {
+export function TasksPanel({ project, selectedTaskId, onSelect, isMobile, boardMode, onBoardMode, onEditColumns, groupTab: groupTabProp, onGroupTab, filters: filtersProp, onFilters: onFiltersProp }: Props) {
   const allTasks = useTasks();
   const [loading, setLoading] = useState(true);
   // Группировка списка: управляемая сверху (cc-panels) или локальная (старый сайдбар)
@@ -110,15 +109,9 @@ export function TasksPanel({ project, selectedTaskId, onSelect, isMobile, boardM
   const filters = filtersProp ?? localFilters;
   const onFilters = onFiltersProp ?? setLocalFilters;
 
-  // Кнопка «Новая задача» в шапке cc-panels (panelHeaderExtras) живёт вне TasksPanel —
-  // она открывает этот диалог через window-событие (как cc-panel-flash). Других
-  // слушателей нет: одновременно смонтирован только один TasksPanel (раскладки
-  // cc-panels / pinned / mobile взаимоисключающие).
-  useEffect(() => {
-    const onNew = () => setShowCreate(true);
-    window.addEventListener('cc-tasks-new', onNew);
-    return () => window.removeEventListener('cc-tasks-new', onNew);
-  }, []);
+  // Панель в карточке с шапкой — контролы уезжают туда (компактный ряд иконок);
+  // без шапки (мобила) остаётся полноразмерная строка действий в теле панели.
+  const inHeader = useHasPanelHeader();
 
   // Значение переключателя: доска или одна из группировок списка
   const panelTab: PanelTab = boardMode ? 'board' : groupTab;
@@ -152,15 +145,47 @@ export function TasksPanel({ project, selectedTaskId, onSelect, isMobile, boardM
     // flex:1 + minHeight:0 — шапка (переключатель и кнопка) закреплена, скроллится только список:
     // процентная высота во вложенных flex-колонках может резолвиться в auto, и тогда ехал весь блок
     <div style={{ display: 'flex', flexDirection: 'column', flex: '1 1 auto', minHeight: 0, height: '100%', overflow: 'hidden' }}>
-      {/* Подвкладки «Список | По дате | Доска»: пилюля-переключатель в стиле сегментов
-          панели «Файлы» (дорожка + плашка-ползунок), иконка и подпись в ряд.
-          В cc-panels переключатель вынесен в шапку карточки (hideViewSwitcher). */}
-      {!hideViewSwitcher && (
+      {/* Контролы в шапке карточки: [фильтр] [вид] [+ новая задача].
+          Создание — последним и залитым accent: это главное действие панели,
+          и в ряду нейтральных иконок оно должно читаться первым. Funnel скрыт
+          в режиме «Доска» (там свой BoardToolbar). */}
+      {inHeader && (
+        <PanelHeaderSlot>
+          {panelTab !== 'board' && (
+            <TasksListFilterButton
+              variant="icon"
+              filters={filters}
+              onFilters={onFilters}
+              total={tasks.length}
+              found={filteredTasks.length}
+            />
+          )}
+          <IconSegmented<PanelTab>
+            value={panelTab}
+            options={tabOptions([
+              { value: 'status', label: 'Список', icon: <ListIcon size={14} /> },
+              { value: 'date', label: 'По дате', icon: <ByDateIcon size={14} /> },
+              { value: 'board', label: 'Доска', icon: <BoardIcon size={14} /> },
+            ])}
+            onChange={onPanelTab}
+          />
+          <Button
+            variant="primary" size="xs" title="Новая задача"
+            leftIcon={<Plus size={13} strokeWidth={ICON_STROKE} />}
+            onClick={() => setShowCreate(true)}
+          >
+            Задача
+          </Button>
+        </PanelHeaderSlot>
+      )}
+
+      {/* Без шапки (мобила): та же тройка контролов, но полноразмерная — кнопка
+          «Новая задача» на всю ширину, под ней переключатель видов пилюлей. */}
+      {!inHeader && (
         <>
           {/* Строка действий: «Новая задача» (flex:1) + «Фильтр» (Funnel) — НАД
               переключателем видов (правка пользователя к макету А). Funnel скрыт
-              в режиме доски (там свой BoardToolbar); Plus виден во всех режимах.
-              В cc-panels эта строка и переключатель вынесены в шапку острова. */}
+              в режиме доски (там свой BoardToolbar); Plus виден во всех режимах. */}
           <div style={{ padding: isMobile ? '8px 12px 4px' : '8px 12px 4px', display: 'flex', gap: 7, alignItems: 'stretch', flexShrink: 0 }}>
             <button
               onClick={() => setShowCreate(true)}

@@ -60,7 +60,7 @@ public sealed class GitAutoCommitService(
 
             // Плашка «Изменения сохранены» в ленту чата — со ссылкой на просмотр коммита
             await hub.Clients.Group(session.Id)
-                .SendAsync("message", new GitTurnCommitMessage(session.Id, project.Id, sha, subject));
+                .SendAsync("message", new GitTurnCommitMessage(project.Id, sha, subject) { SessionId = session.Id });
 
             if (project.GitAutoPush && project.GitRemoteUrl is not null)
             {

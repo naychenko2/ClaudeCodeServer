@@ -86,10 +86,13 @@ public class ProjectManager
 
     public Project Create(string name, string? rootPath, string userId, string username, bool createDirectory = false, string? groupId = null, string? color = null)
     {
-        // Путь не задан — «Новый проект»: папку под него придумываем сами
-        var autoPath = string.IsNullOrWhiteSpace(rootPath);
-        if (autoPath)
+        // Путь не задан — «Новый проект»: папку под него придумываем сами.
+        // Проверка стоит прямо в if (а не через заранее вычисленный флаг): так компилятор
+        // видит, что ниже rootPath уже не null, и GetFullPath обходится без подавления
+        var autoPath = false;
+        if (string.IsNullOrWhiteSpace(rootPath))
         {
+            autoPath = true;
             // Домашняя папка владельца: у изолированных — в корне песочницы, у остальных —
             // в DefaultProjectsPath; прослойка {username} может быть снята override'ом конфига
             var env = _sandbox is not null
@@ -164,6 +167,24 @@ public class ProjectManager
         // color: null = не менять; "" = сброс цвета (дефолтный фолбэк на фронте); иначе — ключ палитры.
         // Смена цвета картинку НЕ сбрасывает — она приоритетнее инициалов при Kind==Image.
         if (color is not null) project.Icon.Color = color.Length == 0 ? null : color;
+        project.UpdatedAt = DateTime.UtcNow;
+        Save();
+        return project;
+    }
+
+    // Область документации для панели «Документы». Отдельным методом, а не параметром
+    // Update: настройка узкая и приходит из самой панели, а Update и без того на девяти
+    // параметрах. null у оси = вернуть её к дефолту; пустой список = «ничего отсюда».
+    public Project SetDocsScope(string id, IReadOnlyList<string>? folders,
+        IReadOnlyList<string>? rootFiles, IReadOnlyList<string>? types, string? home)
+    {
+        var project = _projects.GetValueOrDefault(id)
+            ?? throw new KeyNotFoundException($"Проект не найден: {id}");
+        project.DocsFolders = folders is null ? null : [.. Docs.DocsIndexService.NormalizeFolders(folders)];
+        project.DocsRootFiles = rootFiles is null ? null : [.. Docs.DocsIndexService.NormalizeRootFiles(rootFiles)];
+        project.DocsTypes = types is null ? null : [.. Docs.DocsIndexService.NormalizeTypes(types)];
+        // Пустая строка — «вернуть авто-выбор README», как у color/groupId выше
+        project.DocsHome = home is null ? project.DocsHome : Docs.DocsIndexService.NormalizeHome(home);
         project.UpdatedAt = DateTime.UtcNow;
         Save();
         return project;

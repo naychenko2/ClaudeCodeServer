@@ -10,6 +10,19 @@ export function openProjectViaEvent(p: Project) {
   window.dispatchEvent(new CustomEvent('cc-open-session', { detail: { project: p } }));
 }
 
+// Уйти к списку проектов (из открытого проекта диплинк #/projects выводит туда
+// через switchHubTab)
+export function openAllProjects() {
+  window.dispatchEvent(new CustomEvent('cc-open-url', { detail: { url: '#/projects' } }));
+}
+
+// Создание проекта живёт на странице списка: уходим туда с флагом, по которому
+// ProjectListPage сразу открывает диалог. Отсюда — и палитра, и панель проектов.
+export function openNewProjectFlow() {
+  sessionStorage.setItem('cc_pending_new_project', '1');
+  openAllProjects();
+}
+
 // Общий кэш списка проектов для зоны переключения и палитры: чтобы два компонента шапки
 // не дёргали /projects по отдельности. Мягкий TTL — список проектов меняется редко.
 

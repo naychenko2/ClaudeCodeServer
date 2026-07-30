@@ -59,6 +59,12 @@ const TREE_H_KEY = 'cc_docs_tree_h';
 const TREE_H_DEFAULT = 220;
 const TREE_H_MIN = 80;
 const TREE_H_MAX = 700;
+// Минимумы зон при нехватке высоты. Высота списка запомнена в пикселях, а панель
+// переезжает между местами разной высоты — в низком месте запомненные 474 px съедали
+// всё тело, превью схлопывалось в ноль вместе с хендлом ресайза, и вернуть его было
+// уже нечем. Поэтому зоны сжимаются обе, но ни одна не пропадает совсем
+const PREVIEW_MIN_H = 140;
+const TREE_SQUEEZE_H = 64;
 
 // Закреплённый список папок над документами (свой блок с прокруткой и высотой) снят:
 // список папок открывается поповером по кнопке. Ключи и размеры нужны только вместе
@@ -530,6 +536,9 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
   const searching = query.trim().length >= 2;
 
   const contentRef = useRef<HTMLDivElement>(null);
+  // Зона списка: тянут её от ФАКТИЧЕСКОЙ высоты, а не от запомненной. В низкой панели
+  // список ужат сжатием, и старт от запомненного значения давал бы скачок вниз
+  const treeRef = useRef<HTMLDivElement>(null);
   const headings = useHeadings(contentRef, doc?.content);
 
   // Пути документов нижним регистром — по ним отличаем переход внутри панели
@@ -1091,11 +1100,16 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
       ) : (
         <>
           {/* Дерево документов. С выключенной нижней зоной занимает всю панель;
-              с включённой — высоту, заданную хендлом ресайза */}
-          <div style={previewEnabled
-            ? { flexShrink: 0, display: 'flex', flexDirection: 'column', minHeight: 0, height: treeH }
-            : { flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }
-          }>
+              с включённой — высоту, заданную хендлом ресайза. Высота идёт basis'ом
+              со сжатием, а не height: в панели ниже запомненной высоты список
+              отдаёт лишнее, вместо того чтобы вытеснить превью за край */}
+          <div
+            ref={treeRef}
+            style={previewEnabled
+              ? { flexGrow: 0, flexShrink: 1, flexBasis: treeH, display: 'flex', flexDirection: 'column', minHeight: TREE_SQUEEZE_H }
+              : { flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }
+            }
+          >
             {/* Закреплённый блок папок над списком убран: теперь список папок живёт
                 только поповером по кнопке. Постоянный блок съедал высоту документов,
                 а своя прокрутка и хендл высоты делали панель из двух списков.
@@ -1267,7 +1281,8 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
           {previewEnabled && (
             <div
               onPointerDown={e => startResize(e, {
-                from: treeH, set: setTreeH, key: TREE_H_KEY,
+                from: treeRef.current?.getBoundingClientRect().height ?? treeH,
+                set: setTreeH, key: TREE_H_KEY,
                 min: TREE_H_MIN, max: TREE_H_MAX,
               })}
               title="Потяните, чтобы изменить высоту списка"
@@ -1284,7 +1299,10 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
           {/* Нижняя зона: живёт постоянно, пока включён тумблер. Без выбранного документа
               показывает подсказку — так граница зон не скачет при каждом открытии */}
           {previewEnabled && (
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+          // Не сжимается: дефицит высоты забирает список выше (до TREE_SQUEEZE_H).
+          // Раньше превью с flex:1 отдавало списку всё до нуля и пропадало насовсем,
+          // а пропорциональное сжатие обеих зон вдобавок ломало запомненную высоту списка
+          <div style={{ flexGrow: 1, flexShrink: 0, flexBasis: PREVIEW_MIN_H, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
             {doc && (
               <div style={{
                 flexShrink: 0, position: 'relative', display: 'flex', alignItems: 'center', gap: SP.xs,

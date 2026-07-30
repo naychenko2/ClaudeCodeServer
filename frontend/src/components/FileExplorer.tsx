@@ -1072,7 +1072,6 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
       : isActive ? C.accentMuted
       : hoveredPath === entry.path ? C.bgSelected
       : normPath(entry.path) === newlyCreatedPath ? C.accentLight
-      : (sstate || folderSyncing) ? C.accentLight
       : notesRoot ? C.accentLight
       : 'transparent';
     // Десктоп: кластер иконок липнет к правому краю видимой области при горизонтальном скролле

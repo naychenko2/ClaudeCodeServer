@@ -3723,19 +3723,19 @@ public class SessionManager : IDisposable
 
             // Рабочие папки ГЛАЗАМИ CLI считаем ДО создания дерева: у container-пользователя
             // ToRuntime отвергает путь вне монтирований, а исключение после WorktreeAddAsync
-            // обошло бы rollback ниже и оставило дерево-сироту
-            string? srcCwd = null, dstCwd = null;
-            if (entry.Info.ClaudeSessionId is not null)
-            {
-                srcCwd = CwdForOwner(ownerId, project.RootPath);
-                dstCwd = CwdForOwner(ownerId, wtPath);
-            }
+            // обошло бы rollback ниже и оставило дерево-сироту. ClaudeSessionId читаем ОДИН
+            // РАЗ здесь же: WorktreeAddAsync ниже содержит await, и повторное чтение после
+            // него могло бы увидеть другое значение (null → появился, если параллельно
+            // стартовал первый ход чата), а srcCwd/dstCwd остались бы не посчитаны
+            (string Csid, string Src, string Dst)? migration = entry.Info.ClaudeSessionId is string csid0
+                ? (csid0, CwdForOwner(ownerId, project.RootPath), CwdForOwner(ownerId, wtPath))
+                : null;
 
             await _git.WorktreeAddAsync(ownerId, project.RootPath, wtPath, branchName);
 
-            if (entry.Info.ClaudeSessionId is string csid
+            if (migration is { } m
                 && !Llm.TranscriptMigrator.TryRelocateCwd(
-                    ConfigRootFor(ownerId, entry.Info.Provider), srcCwd!, dstCwd!, csid, out var err))
+                    ConfigRootFor(ownerId, entry.Info.Provider), m.Src, m.Dst, m.Csid, out var err))
             {
                 // Дерево без контекста бесполезно — откатываем и отдаём причину наружу
                 try { await _git.WorktreeRemoveAsync(ownerId, project.RootPath, wtPath, force: true); }
@@ -3749,13 +3749,11 @@ public class SessionManager : IDisposable
         else
         {
             var wtPath = entry.Info.WorktreePath!;
-            // Как и при включении — перевод путей до снятия дерева (см. выше)
-            string? srcCwd = null, dstCwd = null;
-            if (entry.Info.ClaudeSessionId is not null)
-            {
-                srcCwd = CwdForOwner(ownerId, wtPath);
-                dstCwd = CwdForOwner(ownerId, project.RootPath);
-            }
+            // Как и при включении — перевод путей до снятия дерева (см. выше), ClaudeSessionId
+            // читаем один раз здесь же (ниже есть await StatusAsync/WorktreeRemoveAsync)
+            (string Csid, string Src, string Dst)? migration = entry.Info.ClaudeSessionId is string csid0
+                ? (csid0, CwdForOwner(ownerId, wtPath), CwdForOwner(ownerId, project.RootPath))
+                : null;
 
             // Гейт: незакоммиченные правки в дереве пропадут вместе с ним (ветка остаётся)
             if (!force)
@@ -3766,9 +3764,9 @@ public class SessionManager : IDisposable
                         "В отдельном дереве есть несохранённые изменения — зафиксируйте их или подтвердите принудительное удаление");
             }
 
-            if (entry.Info.ClaudeSessionId is string csid
+            if (migration is { } m
                 && !Llm.TranscriptMigrator.TryRelocateCwd(
-                    ConfigRootFor(ownerId, entry.Info.Provider), srcCwd!, dstCwd!, csid, out var err))
+                    ConfigRootFor(ownerId, entry.Info.Provider), m.Src, m.Dst, m.Csid, out var err))
                 throw new Git.GitCommandException($"Не удалось перенести контекст разговора: {err}");
 
             await _git.WorktreeRemoveAsync(ownerId, project.RootPath, wtPath, force);

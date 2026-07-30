@@ -876,6 +876,9 @@ const windowWidth = useWindowWidth();
     setCreatingSession(true);
     try {
       const s = await api.sessions.create(project.id, 'auto');
+      // Панель чатов скрыта, пока чатов нет, — считаем сами: её SessionList ещё
+      // не смонтирован и сообщить о появлении первого чата некому
+      setChatCount(n => (n ?? 0) + 1);
       handleSelectSession(s);
     } catch (e) {
       showToast('Чат', e instanceof Error ? e.message : 'Не удалось создать чат');
@@ -904,6 +907,7 @@ const windowWidth = useWindowWidth();
   const handleClearSession = useCallback(() => {
     setActiveSession(null);
     setPendingMessage(undefined);
+    setChatCount(0);
   }, []);
 
   // Возобновление прерванного (orphaned) чата живёт внутри ChatPanel: обычный ход
@@ -937,6 +941,24 @@ const windowWidth = useWindowWidth();
       } catch { /* офлайн — оставляем как есть */ }
     });
     return () => { leaveProject(project.id).catch(() => {}); unsub(); };
+  }, [project.id]);
+
+  // Сколько чатов у проекта. Нужно ЗДЕСЬ, а не внутри панели: пустая панель «Чаты»
+  // не показывается совсем (как сайдбар в разделе «Чаты»), и пока её нет — считать
+  // некому. Точное значение приходит от SessionList, пока панель на экране;
+  // первичная загрузка и удаление чата обрабатываются тут.
+  const [chatCount, setChatCount] = useState<number | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const refresh = () => {
+      api.sessions.list(project.id)
+        .then(list => { if (alive) setChatCount(list.length); })
+        .catch(() => { /* офлайн — оставляем прежнее значение */ });
+    };
+    refresh();
+    // Чат могли удалить и мимо панели (временный по сроку, другая вкладка)
+    const off = onMessage(msg => { if (msg.type === 'chat_deleted') refresh(); });
+    return () => { alive = false; off(); };
   }, [project.id]);
 
   // Обновляем статус activeSession при status_changed — иначе session.status в ChatPanel frozen
@@ -1224,7 +1246,7 @@ const windowWidth = useWindowWidth();
         <div style={{ flex: 1, display: !openFile && mobileView === 'sidebar' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
           <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
             {leftTab === 'sessions'
-              ? <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} onCleared={handleClearSession} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} />
+              ? <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} onSessionsChanged={setChatCount} onCleared={handleClearSession} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} />
               : leftTab === 'tasks'
               ? <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={isMobile} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} groupTab={projectGroupTab} onGroupTab={setProjectGroupTab} filters={taskListFilters} onFilters={setTaskListFilters} />
               : leftTab === 'personas'
@@ -1328,6 +1350,8 @@ const windowWidth = useWindowWidth();
           project={project}
           projectForEdit={projectForEdit}
           railCounts={railCounts}
+          chatCount={chatCount}
+          onSessionsChanged={setChatCount}
           onOpenProjectSettings={() => setEditProjectOpen(true)}
           activeSession={activeSession}
           onSelectSession={handleSelectSession}

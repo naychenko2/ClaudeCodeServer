@@ -92,6 +92,11 @@ interface Props {
   panels: Partial<Record<PanelKey, ReactNode>>;
   // Числа-кружки на кнопках проекта в рельсе (changes/tasks/terminal/preview)
   railCounts?: Partial<Record<PanelKey, number>>;
+  // Сколько чатов у проекта; null — ещё не знаем. Пока чатов нет, панель «Чаты»
+  // не рендерится совсем — как сайдбар в разделе «Чаты»
+  chatCount: number | null;
+  // Точное число от списка чатов, пока панель на экране
+  onSessionsChanged: (n: number) => void;
   // Хук на явную активацию панели из рельсы (клик открыл панель) — проброс в RightPanelStack
   onPanelOpen?: (k: PanelKey) => void;
 }
@@ -142,9 +147,12 @@ export function DesktopWorkspace(p: Props) {
   // здесь только содержимое — список чатов на белом фоне контентной зоны, как у
   // панелей правой рельсы. Переключатель проектов раньше жил шапкой внутри этой
   // панели; теперь у него своя — «Проекты».
-  const chatsPanel = (
+  // Пока чатов нет — панели нет вовсе (undefined в наборе). Так же ведёт себя сайдбар
+  // раздела «Чаты»: пустой список показывать незачем, а создать чат зовёт центр.
+  // chatCount === null — ещё считаем: панель показываем, чтобы она не мигала на старте.
+  const chatsPanel = p.chatCount === 0 ? undefined : (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: C.bgWhite }}>
-      <SessionList project={p.project} activeSession={p.activeSession} onSelect={handleSelectSession} onSessionUpdated={p.onSessionUpdated} onCleared={p.onClearSession} isMobile={false} workflowRunningFor={p.workflowRunningFor} />
+      <SessionList project={p.project} activeSession={p.activeSession} onSelect={handleSelectSession} onSessionUpdated={p.onSessionUpdated} onSessionsChanged={p.onSessionsChanged} onCleared={p.onClearSession} isMobile={false} workflowRunningFor={p.workflowRunningFor} />
     </div>
   );
 

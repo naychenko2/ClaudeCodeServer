@@ -301,7 +301,6 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
                   >
                     Новый чат
                   </Button>
-                  <div style={{ fontSize: 12, color: C.textMuted, marginTop: 2 }}>или выберите чат слева</div>
                 </div>
               </div>
             </>

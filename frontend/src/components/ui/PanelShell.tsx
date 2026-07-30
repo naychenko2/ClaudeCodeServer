@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties, type HTMLAttributes, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type CSSProperties, type HTMLAttributes, type ReactNode } from 'react';
 import { Children } from 'react';
 import { X, type LucideIcon } from 'lucide-react';
 import { C, ISLAND } from '../../lib/design';
@@ -138,6 +138,40 @@ export function PanelShell({
   // Курсор на шапке — иконка панели предлагает закрыть её (closeMode: 'icon')
   const [headerHover, setHeaderHover] = useState(false);
   const [headerEl, setHeaderEl] = useState<HTMLDivElement | null>(null);
+
+  // Контролы шапки (переключатели вида, действия, крестик) проявляются, только
+  // пока курсор на карточке — в покое шапка чистая: иконка панели, заголовок,
+  // бейдж. На устройствах без наведения (тач) прятать нечем: контролы видны
+  // всегда, иначе к ним было бы не подобраться.
+  const [hoverCapable] = useState(
+    () => typeof window !== 'undefined' && !!window.matchMedia?.('(hover: hover)').matches);
+  const [panelHover, setPanelHover] = useState(false);
+  const controlsVisible = !hoverCapable || panelHover;
+  // Общий стиль угасания для всех трёх обёрток контролов шапки
+  const controlsFade: CSSProperties = {
+    opacity: controlsVisible ? 1 : 0,
+    transition: 'opacity 0.15s ease',
+  };
+
+  // Наведение на всю карточку ловим на корне острова. Нативно (mouseenter/
+  // mouseleave не всплывают и стреляют строго на границе узла) — переходы внутрь
+  // портальных контролов, что физически лежат в этом же узле, за уход не считаются.
+  const [rootEl, setRootEl] = useState<HTMLDivElement | null>(null);
+  const setRoots = useCallback((el: HTMLDivElement | null) => {
+    setRootEl(el);
+    rootRef?.(el);
+  }, [rootRef]);
+  useEffect(() => {
+    if (!rootEl || !hoverCapable) return;
+    const on = () => setPanelHover(true);
+    const off = () => setPanelHover(false);
+    rootEl.addEventListener('mouseenter', on);
+    rootEl.addEventListener('mouseleave', off);
+    return () => {
+      rootEl.removeEventListener('mouseenter', on);
+      rootEl.removeEventListener('mouseleave', off);
+    };
+  }, [rootEl, hoverCapable]);
 
   // Курсор в зоне контролов шапки (слот панели + системные actions). Пока он там,
   // перетаскивание карточки за шапку выключено — иначе нажатие на кнопку легко
@@ -279,16 +313,16 @@ export function PanelShell({
         ...rootProps,
         className: flash ? `cc-panel-flash ${rootProps?.className ?? ''}`.trim() : rootProps?.className,
       }}
-      rootRef={rootRef}
+      rootRef={setRoots}
     >
       <IslandHeader
         icon={headerIcon}
         title={title}
         badge={badge}
-        actions={actions ? <span {...controlsHoverProps} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>{actions}</span> : actions}
+        actions={actions ? <span {...controlsHoverProps} style={{ display: 'flex', alignItems: 'center', gap: 4, ...controlsFade }}>{actions}</span> : actions}
         // Левый слот — у самого названия панели (PanelHeaderSlot side="left")
         leading={<div ref={setSlotLeftEl} draggable={false} onDragStart={e => e.preventDefault()}
-          style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 4 }} />}
+          style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 4, ...controlsFade }} />}
         headerProps={{
           ...headerProps,
           ref: setHeaderEl,
@@ -310,7 +344,7 @@ export function PanelShell({
           ref={setSlotEl}
           draggable={false}
           onDragStart={e => e.preventDefault()}
-          style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 4 }}
+          style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 4, ...controlsFade }}
         />
       </IslandHeader>
 

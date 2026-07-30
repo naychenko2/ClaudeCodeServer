@@ -50,4 +50,64 @@ public class DockerProcessRunnerEnvTests
 
         env["CLAUDE_CONFIG_DIR"].Should().Be($"{SandboxManager.ProfilesMount}/owner-1/default");
     }
+
+    // Значение не важно — важен сам факт появления/отсутствия ключа в итоговом env
+    private static IDisposable SystemOAuthToken(string? value)
+    {
+        var previous = Environment.GetEnvironmentVariable("CLAUDE_CODE_OAUTH_TOKEN");
+        Environment.SetEnvironmentVariable("CLAUDE_CODE_OAUTH_TOKEN", value);
+        return new Restore(previous);
+    }
+
+    private sealed class Restore(string? previous) : IDisposable
+    {
+        public void Dispose() => Environment.SetEnvironmentVariable("CLAUDE_CODE_OAUTH_TOKEN", previous);
+    }
+
+    [Fact]
+    public void BuildTurnEnv_ДокладываетТокенПодпискиИзОкруженияБэкенда()
+    {
+        using var _ = SystemOAuthToken("токен-подписки");
+        var runner = CreateRunner("owner-1");
+
+        var env = runner.BuildTurnEnv(specEnv: null);
+
+        env["CLAUDE_CODE_OAUTH_TOKEN"].Should().Be("токен-подписки");
+    }
+
+    [Fact]
+    public void BuildTurnEnv_НеПеретираетТокенПулаИзSpecEnv()
+    {
+        using var _ = SystemOAuthToken("токен-подписки-бэкенда");
+        var runner = CreateRunner("owner-1");
+
+        var env = runner.BuildTurnEnv(new Dictionary<string, string> { ["CLAUDE_CODE_OAUTH_TOKEN"] = "токен-пула" });
+
+        env["CLAUDE_CODE_OAUTH_TOKEN"].Should().Be("токен-пула");
+    }
+
+    [Theory]
+    [InlineData("ANTHROPIC_AUTH_TOKEN")]
+    [InlineData("ANTHROPIC_API_KEY")]
+    public void BuildTurnEnv_НеДокладываетТокенХодуСAuthToken(string key)
+    {
+        using var _ = SystemOAuthToken("токен-подписки-бэкенда");
+        var runner = CreateRunner("owner-1");
+
+        var env = runner.BuildTurnEnv(new Dictionary<string, string> { [key] = "чужой-ключ" });
+
+        env.Should().NotContainKey("CLAUDE_CODE_OAUTH_TOKEN",
+            "токен подписки не должен уезжать ходу на чужой эндпоинт/аккаунт");
+    }
+
+    [Fact]
+    public void BuildTurnEnv_БезТокенаВОкружении_КлючНеПоявляется()
+    {
+        using var _ = SystemOAuthToken(null);
+        var runner = CreateRunner("owner-1");
+
+        var env = runner.BuildTurnEnv(specEnv: null);
+
+        env.Should().NotContainKey("CLAUDE_CODE_OAUTH_TOKEN");
+    }
 }

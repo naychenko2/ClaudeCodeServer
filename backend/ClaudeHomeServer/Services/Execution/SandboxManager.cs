@@ -127,6 +127,10 @@ public sealed class SandboxManager
                 await DockerAsync(ct, "rm", "-f", Options.ContainerName);
             }
 
+            if (Environment.GetEnvironmentVariable("CLAUDE_CODE_OAUTH_TOKEN") is not { Length: > 0 })
+                _log.LogWarning("В окружении бэкенда нет CLAUDE_CODE_OAUTH_TOKEN: ходы " +
+                    "container-пользователей на primary-подписке будут падать «Not logged in»");
+
             var args = BuildRunArgs(confHash);
             var run = await DockerAsync(ct, args.ToArray());
             if (run.Code != 0)
@@ -152,13 +156,9 @@ public sealed class SandboxManager
             "-p", $"{Options.PortRangeStart}-{portEnd}:{Options.PortRangeStart}-{portEnd}",
             "--add-host", "host.docker.internal:host-gateway",
         };
-        // Подписка Claude: долгоживущий setup-token наследуется процессом бэкенда
-        // (Program.cs кладёт его в env) — прокидываем в песочницу
-        if (Environment.GetEnvironmentVariable("CLAUDE_CODE_OAUTH_TOKEN") is { Length: > 0 } token)
-        {
-            args.Add("-e");
-            args.Add($"CLAUDE_CODE_OAUTH_TOKEN={token}");
-        }
+        // Токен подписки в контейнер здесь НЕ кладём: он запёкся бы в момент создания и не
+        // обновлялся бы после — единая точка правды теперь DockerProcessRunner.BuildTurnEnv
+        // (доставка per-exec, на каждый docker exec заново).
         if (!string.IsNullOrWhiteSpace(Options.Proxy))
         {
             foreach (var key in new[] { "HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy" })

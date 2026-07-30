@@ -57,7 +57,8 @@ public class LocalProcessRunnerEnvTests
     public void ClearEnv_НеТрогаетТокенПодписки()
     {
         // На CLAUDE_CODE_OAUTH_TOKEN держится вход по подписке: его пробрасывают снаружи
-        // (Runner берёт из реестра, docker — из окружения хоста). Выкинь его — и отвалится всё.
+        // (Runner берёт из реестра, docker — per-exec фолбэком в BuildTurnEnv). Выкинь его —
+        // и отвалится всё.
         using var _ = SystemEnv("CLAUDE_CODE_OAUTH_TOKEN", "токен-подписки");
 
         var psi = LocalProcessRunner.BuildStartInfo(Spec(clear: LlmProviderRegistry.ProviderEnvKeys));

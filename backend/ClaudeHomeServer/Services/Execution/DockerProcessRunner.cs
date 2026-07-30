@@ -121,9 +121,9 @@ public sealed class DockerProcessRunner : IProcessLauncher
         catch { /* процесс уже завершился */ }
     }
 
-    // Сборка env хода: копия spec.Env + песочный CLAUDE_CONFIG_DIR. Вынесено из Start, чтобы
-    // правило сборки можно было проверить тестом без запуска процессов (как
-    // LocalProcessRunner.BuildStartInfo) — тесты гоняются и на linux-раннере CI.
+    // Сборка env хода: копия spec.Env + песочный CLAUDE_CONFIG_DIR + фолбэк токена подписки.
+    // Вынесено из Start, чтобы правило сборки можно было проверить тестом без запуска
+    // процессов (как LocalProcessRunner.BuildStartInfo) — тесты гоняются и на linux-раннере CI.
     // ClearEnv здесь намеренно не применяется: окружение хода собирается с нуля и уезжает
     // в контейнер через -e, хостовые переменные в него не наследуются — вычищать нечего.
     // Изоляция от системных ANTHROPIC_* получается сама собой.
@@ -133,6 +133,17 @@ public sealed class DockerProcessRunner : IProcessLauncher
             ? new Dictionary<string, string>()
             : new Dictionary<string, string>(specEnv);
         RewriteProfileEnv(env);
+
+        // Единая точка правды для токена подписки в песочнице: раньше он клался только
+        // при docker run (SandboxManager.BuildRunArgs), поэтому контейнер, созданный ДО
+        // появления токена, жил без него навсегда. Докладываем на каждый exec, кроме ходов
+        // на чужой эндпоинт/аккаунт пула — токен подписки не должен уезжать чужому эндпоинту.
+        if (!env.ContainsKey("CLAUDE_CODE_OAUTH_TOKEN")
+            && !env.ContainsKey("ANTHROPIC_AUTH_TOKEN")
+            && !env.ContainsKey("ANTHROPIC_API_KEY")
+            && Environment.GetEnvironmentVariable("CLAUDE_CODE_OAUTH_TOKEN") is { Length: > 0 } token)
+            env["CLAUDE_CODE_OAUTH_TOKEN"] = token;
+
         return env;
     }
 

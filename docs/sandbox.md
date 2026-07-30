@@ -31,6 +31,16 @@
 - **MCP из песочницы** — `*_API_URL` = `Sandbox:McpApiUrl` (`host.docker.internal:5000`,
   Kestrel хоста) через `ResolveTasksApiUrl(ownerId)`; node-серверы `mcp/*/index.js`
   лежат в образе под `/app/mcp` (переписываются в `BuildTurnMcpConfig`).
+- **Токен подписки (CLAUDE_CODE_OAUTH_TOKEN) — доставка per-exec.** Одна точка правды —
+  `DockerProcessRunner.BuildTurnEnv`: в конец env каждого `docker exec` докладывается
+  primary-токен из окружения бэкенда, если ход его ещё не несёт (`CLAUDE_CODE_OAUTH_TOKEN`,
+  `ANTHROPIC_AUTH_TOKEN` или `ANTHROPIC_API_KEY` уже в env — например, ход аккаунта пула или
+  стороннего провайдера — фолбэк пропускается, инвариант «токен подписки не уезжает чужому
+  эндпоинту» держится). `docker run` (создание/пересоздание контейнера в `SandboxManager`)
+  токен больше НЕ передаёт — раньше он запекался в момент создания и не обновлялся, поэтому
+  контейнер, поднятый до появления токена в окружении бэкенда, жил без него до пересоздания.
+  `EnsureRunningAsync` логирует warning в ветке создания контейнера, если токена в
+  окружении бэкенда нет.
 - **Корни проектов разведены**: local-юзеры — `DefaultProjectsPath`, container-юзеры —
   `Sandbox:ProjectsRoot` (в песочницу монтируется только он). Единая точка резолва —
   [UserHomeResolver.cs](../backend/ClaudeHomeServer/Services/UserHomeResolver.cs): домашняя

@@ -43,7 +43,9 @@ cd frontend; npm run build     # production-сборка (tsc -b + vite)
 монтирований → ошибка, аналог SafeJoin). Домашние папки юзеров — единая точка
 [UserHomeResolver.cs](backend/ClaudeHomeServer/Services/UserHomeResolver.cs)
 (+ override `Projects:UserHomeOverrides` в appsettings.Local.json).
-**Инвариант:** смена `ExecutionEnvironment` при существующих чатах запрещена.
+**Инвариант:** смена `ExecutionEnvironment` при существующих чатах запрещена. Токен подписки
+(`CLAUDE_CODE_OAUTH_TOKEN`) в песочницу доставляется per-exec (`DockerProcessRunner.BuildTurnEnv`
+на каждый `docker exec`), а не запекается при создании контейнера.
 **Перед правками в `Services/Execution/`, `SandboxManager`, `UserHomeResolver` — прочитай
 [docs/sandbox.md](docs/sandbox.md)** (монтирования, interrupt, MCP из песочницы, overrides).
 

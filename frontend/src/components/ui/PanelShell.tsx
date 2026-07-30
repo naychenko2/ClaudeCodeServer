@@ -137,6 +137,7 @@ export function PanelShell({
 
   // Курсор на шапке — иконка панели предлагает закрыть её (closeMode: 'icon')
   const [headerHover, setHeaderHover] = useState(false);
+  const [headerEl, setHeaderEl] = useState<HTMLDivElement | null>(null);
 
   // Курсор в зоне контролов шапки (слот панели + системные actions). Пока он там,
   // перетаскивание карточки за шапку выключено — иначе нажатие на кнопку легко
@@ -173,6 +174,35 @@ export function PanelShell({
     });
   }, [slotEl, slotLeftEl]);
 
+  // Действие на иконке: пока курсор на шапке, иконка панели слева подменяется
+  // кнопкой и кликается. Так шапка не тратит место на отдельный контрол — ровно
+  // как иконка той же панели в рельсе. По умолчанию это закрытие, но попап-превью
+  // подставляет сюда булавку «закрепить».
+  // Считается ДО ранних return: от него зависит эффект наведения ниже, а хуки
+  // обязаны вызываться на каждом рендере.
+  const act = iconAction ?? (closeMode === 'icon' && onClose
+    ? { Icon: X, title: 'Скрыть панель', onClick: onClose }
+    : null);
+  const closeByIcon = !!act;
+
+  // Наведение на саму ШАПКУ — тоже нативно, и по той же причине. С react-пропсами
+  // переход курсора с шапки на её контрол читался как уход: контролы приезжают
+  // порталом, в React-дереве они не потомки шапки, и onMouseLeave срабатывал на
+  // каждом таком переходе — крестик на иконке панели мигал, пока ведёшь мышь по
+  // ряду кнопок. Нативные mouseenter/mouseleave смотрят на настоящий DOM, где
+  // кнопки лежат внутри шапки, и молчат при перемещении внутри неё.
+  useEffect(() => {
+    if (!headerEl || !closeByIcon) return;
+    const on = () => setHeaderHover(true);
+    const off = () => setHeaderHover(false);
+    headerEl.addEventListener('mouseenter', on);
+    headerEl.addEventListener('mouseleave', off);
+    return () => {
+      headerEl.removeEventListener('mouseenter', on);
+      headerEl.removeEventListener('mouseleave', off);
+    };
+  }, [headerEl, closeByIcon]);
+
   // hideIfEmpty: Children.toArray уже отбрасывает null/undefined/false/true/""
   // (React делает это автоматически). Если после фильтрации пусто — не рендерим.
   const realChildren = Children.toArray(children);
@@ -185,15 +215,6 @@ export function PanelShell({
   if (bare) {
     return <>{children}</>;
   }
-
-  // Действие на иконке: пока курсор на шапке, иконка панели слева подменяется
-  // кнопкой и кликается. Так шапка не тратит место на отдельный контрол — ровно
-  // как иконка той же панели в рельсе. По умолчанию это закрытие, но попап-превью
-  // подставляет сюда булавку «закрепить».
-  const act = iconAction ?? (closeMode === 'icon' && onClose
-    ? { Icon: X, title: 'Скрыть панель', onClick: onClose }
-    : null);
-  const closeByIcon = !!act;
 
   // Кнопка закрытия — короткий путь: caller может передать свой headerActions
   // целиком, тогда onClose игнорируется
@@ -270,6 +291,7 @@ export function PanelShell({
           style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 4 }} />}
         headerProps={{
           ...headerProps,
+          ref: setHeaderEl,
           // Над кнопками карточка не тащится: draggable снимается с шапки, пока
           // курсор в зоне контролов. Одного draggable={false} на самих кнопках мало —
           // dragstart рождается на шапке (она источник), их обработчики его не видят,
@@ -280,10 +302,6 @@ export function PanelShell({
             ...headerProps?.style,
             cursor: draggable && !overControls ? 'grab' : 'default',
           },
-          ...(closeByIcon ? {
-            onMouseEnter: () => setHeaderHover(true),
-            onMouseLeave: () => setHeaderHover(false),
-          } : null),
         }}
       >
         {/* Слот контролов панели: сюда порталом приезжает содержимое PanelHeaderSlot.

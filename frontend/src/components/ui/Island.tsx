@@ -1,4 +1,4 @@
-import type { CSSProperties, HTMLAttributes, ReactNode } from 'react';
+import type { CSSProperties, HTMLAttributes, Ref, ReactNode } from 'react';
 import { C, FONT, ISLAND, R } from '../../lib/design';
 
 // Карточка-остров (стиль Rider Islands): скруглённая рамка-клиппер на общем
@@ -48,8 +48,10 @@ export function IslandHeader({ icon, title, badge, actions, headerProps, childre
   leading?: ReactNode;
   // Кнопки справа (fullscreen/close и т.п.)
   actions?: ReactNode;
-  // Атрибуты корня шапки: draggable/drag-обработчики/cursor для DnD PanelShell
-  headerProps?: HTMLAttributes<HTMLDivElement> & { draggable?: boolean };
+  // Атрибуты корня шапки: draggable/drag-обработчики/cursor для DnD PanelShell.
+  // ref нужен PanelShell, чтобы слушать наведение на шапку нативно: её контролы
+  // приезжают порталом, и react-события про них врут (см. PanelShell)
+  headerProps?: HTMLAttributes<HTMLDivElement> & { draggable?: boolean; ref?: Ref<HTMLDivElement> };
   // Дополнительные контролы между заголовком и actions
   children?: ReactNode;
 }) {

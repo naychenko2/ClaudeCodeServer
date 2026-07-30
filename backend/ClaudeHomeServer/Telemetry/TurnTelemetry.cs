@@ -83,22 +83,17 @@ internal static class TurnTelemetry
     ///
     /// Режем в источнике, а не правилом санитайзера: диагностическая ценность тега — «какой
     /// бинарь запустили» (claude.exe против docker), каталог для этого не нужен, а хэш вместо
-    /// имени сделал бы тег нечитаемым. Разделители и Windows, и Unix: <c>Path.GetFileName</c>
-    /// на Windows считает <c>/</c> разделителем, поэтому путь из песочницы режется тоже.
+    /// имени сделал бы тег нечитаемым. Разделители режем оба сразу (<c>/</c> и <c>\</c>) руками,
+    /// не через <c>Path.GetFileName</c>: тот ориентируется на разделители текущей ОС, и на Linux
+    /// (где гоняется CI) обратный слэш — обычный символ имени, поэтому Windows-путь не резался бы.
     /// </summary>
     internal static string ExecutableName(string? command)
     {
         if (string.IsNullOrWhiteSpace(command)) return "unknown";
-        try
-        {
-            var name = Path.GetFileName(command.Trim());
-            return string.IsNullOrEmpty(name) ? "unknown" : name;
-        }
-        catch
-        {
-            // Недопустимые символы в пути — сам факт запуска важнее имени бинаря
-            return "unknown";
-        }
+        var trimmed = command.Trim();
+        var cut = trimmed.LastIndexOfAny(new[] { '/', '\\' });
+        var name = cut >= 0 ? trimmed[(cut + 1)..] : trimmed;
+        return string.IsNullOrEmpty(name) ? "unknown" : name;
     }
 
     /// <summary>

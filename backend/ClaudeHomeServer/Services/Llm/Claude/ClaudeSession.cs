@@ -2666,8 +2666,11 @@ public class ClaudeSession : ILlmSessionAdapter
     // Структурное событие CLI: завершение фоновой задачи (completed/failed/stopped) — точный
     // аналог текстового <task-notification>, но с готовым статусом (текстовый путь статус не
     // несёт и всегда считает завершение успешным). Fallback: если task_id не учтён в PendingBg
-    // (запуск проехал мимо и структурного, и текстового пути), но tool_use_id известен —
-    // закрываем карточку по нему всё равно, иначе она крутилась бы вечно.
+    // (запуск проехал мимо и структурного, и текстового пути), но tool_use_id ещё числится
+    // кандидатом/неучтённым — закрываем карточку по нему всё равно, иначе она крутилась бы
+    // вечно. Гейт по факту снятия: повторное событие уже закрытой задачи ничего не находит
+    // ни в PendingBg, ни в BgLaunchCandidates/UnknownBgToolUses — done не шлём, чтобы не
+    // задваивать карточку в UI.
     private void HandleStructuredTaskNotification(CliRun run, JsonElement root)
     {
         if (ParseTaskNotification(root) is not { } n) return;
@@ -2678,13 +2681,18 @@ public class ClaudeSession : ILlmSessionAdapter
 
         if (string.IsNullOrEmpty(doneTool) && !string.IsNullOrEmpty(toolUseId))
         {
+            bool wasTracked;
             lock (run.PendingBg)
             {
-                run.BgLaunchCandidates.Remove(toolUseId);
-                if (run.UnknownBgToolUses.Remove(toolUseId) && run.UnknownBgToolUses.Count == 0)
-                    run.PendingBgUnknown = false;
+                wasTracked = run.BgLaunchCandidates.Remove(toolUseId);
+                if (run.UnknownBgToolUses.Remove(toolUseId))
+                {
+                    wasTracked = true;
+                    if (run.UnknownBgToolUses.Count == 0)
+                        run.PendingBgUnknown = false;
+                }
             }
-            doneTool = toolUseId;
+            if (wasTracked) doneTool = toolUseId;
         }
         if (string.IsNullOrEmpty(doneTool)) return;
 

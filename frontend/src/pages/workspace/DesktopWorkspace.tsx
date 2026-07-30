@@ -55,7 +55,7 @@ interface Props {
   openFileDiffMode: boolean;
   gitStagePath?: string | null;
   fileFullscreen: boolean;
-  onEnterFullscreen: () => void;
+  onToggleFullscreen: () => void;
   openCommitSha: string | null;
   openCommitFile?: string | null;
   onCloseCommit: () => void;
@@ -308,7 +308,7 @@ export function DesktopWorkspace(p: Props) {
           <IslandSplitter orientation="v" active={dragging === 'split'} onMouseDown={handleSplitDrag} />
           <Island bg={C.bgMain} style={{ flex: 1, minWidth: 200 }}>
             <div style={{ flex: 1, overflow: 'hidden' }}>
-              <FileViewer project={p.project} filePath={p.openFile} onClose={p.onCloseFile} onToggleFullscreen={p.onEnterFullscreen} initialTab={p.openFileDiffMode ? 'diff' : undefined} gitStagePath={p.gitStagePath ?? undefined} />
+              <FileViewer project={p.project} filePath={p.openFile} onClose={p.onCloseFile} onToggleFullscreen={p.onToggleFullscreen} initialTab={p.openFileDiffMode ? 'diff' : undefined} gitStagePath={p.gitStagePath ?? undefined} />
             </div>
           </Island>
         </div>
@@ -316,7 +316,8 @@ export function DesktopWorkspace(p: Props) {
 
       {p.openFile && (p.fileFullscreen || p.isTablet) && centerIsland(
         <div style={{ flex: 1, overflow: 'hidden' }}>
-          <FileViewer project={p.project} filePath={p.openFile} onClose={p.onCloseFile} initialTab={p.openFileDiffMode ? 'diff' : undefined} gitStagePath={p.gitStagePath ?? undefined} />
+          {/* На планшете сплита нет — тумблер режима не показываем */}
+          <FileViewer project={p.project} filePath={p.openFile} onClose={p.onCloseFile} onToggleFullscreen={p.isTablet ? undefined : p.onToggleFullscreen} fullscreen={p.fileFullscreen} initialTab={p.openFileDiffMode ? 'diff' : undefined} gitStagePath={p.gitStagePath ?? undefined} />
         </div>
       )}
 

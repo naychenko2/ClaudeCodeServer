@@ -1111,7 +1111,7 @@ const windowWidth = useWindowWidth();
     if (id) void api.projects.previewActive(project.id, id).catch(() => {});
   };
 
-  const handleEnterFullscreen = () => setFileFullscreen(true);
+  const handleToggleFileFullscreen = () => setFileFullscreen(v => !v);
 
   // Пропорция split-режима «чат | файл» и её сплиттер живут в DesktopWorkspace —
   // мобильная ветка split не показывает
@@ -1371,7 +1371,7 @@ const windowWidth = useWindowWidth();
           openFileDiffMode={openFileDiffMode}
           gitStagePath={gitStagePath}
           fileFullscreen={fileFullscreen}
-          onEnterFullscreen={handleEnterFullscreen}
+          onToggleFullscreen={handleToggleFileFullscreen}
           openCommitSha={openCommitSha}
           openCommitFile={openCommitFile}
           onCloseCommit={closeCommitView}

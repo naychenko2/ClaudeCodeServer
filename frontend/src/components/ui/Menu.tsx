@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { CSSProperties, MouseEvent, ReactNode } from 'react';
 import { C, R, FONT, SHADOW, Z } from '../../lib/design';
 
@@ -9,6 +10,10 @@ import { C, R, FONT, SHADOW, Z } from '../../lib/design';
 //  - anchor: fixed по DOMRect триггера — для меню внутри скролл-контейнеров
 //    (overflow списка обрезал бы absolute). Направление — от maxHeight: вверх,
 //    если под якорем не хватает места; по горизонтали клампится в окно.
+//    Рисуется порталом в body: position:fixed отсчитывается от viewport, только
+//    пока НИ У ОДНОГО предка нет transform/filter/perspective — а карточка
+//    PanelShell держит transform ради анимации появления, и меню внутри панели
+//    уезжало на её смещение и обрезалось overflow острова.
 // Закрытие по Esc/скроллу в anchor-режиме — на вызывающей стороне (поведение, не контрол).
 export function Menu({ onClose, align = 'right', top = 30, bottom, minWidth = 200, anchor, maxHeight = 300, children }: {
   onClose: () => void;
@@ -33,7 +38,7 @@ export function Menu({ onClose, align = 'right', top = 30, bottom, minWidth = 20
   } else {
     pos = { position: 'absolute', ...(bottom != null ? { bottom } : { top }), [align]: 0 };
   }
-  return (
+  const card = (
     <>
       <div style={{ position: 'fixed', inset: 0, zIndex: Z.dropdown }} onClick={onClose} />
       <div style={{
@@ -45,6 +50,9 @@ export function Menu({ onClose, align = 'right', top = 30, bottom, minWidth = 20
       </div>
     </>
   );
+  // Обычный режим остаётся на месте: он позиционируется absolute относительно
+  // своего родителя, и портал оторвал бы его от точки отсчёта
+  return anchor ? createPortal(card, document.body) : card;
 }
 
 // Единый пункт выпадающего меню.

@@ -951,10 +951,9 @@ const windowWidth = useWindowWidth();
   useEffect(() => {
     let alive = true;
     const refresh = () => {
-      console.log('[chatCount] запрос списка чатов', project.id);
       api.sessions.list(project.id)
-        .then(list => { console.log('[chatCount] пришло', list.length); if (alive) setChatCount(list.length); })
-        .catch(e => { console.log('[chatCount] ошибка', e); });
+        .then(list => { if (alive) setChatCount(list.length); })
+        .catch(() => { /* офлайн — оставляем прежнее значение */ });
     };
     refresh();
     // Чат могли удалить и мимо панели (временный по сроку, другая вкладка)

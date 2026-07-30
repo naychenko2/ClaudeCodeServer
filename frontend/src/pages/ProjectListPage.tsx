@@ -269,8 +269,12 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
             // из зон панелей сейчас открыта
             centerContentWidth={CHAT_MAX_W}
             center={
-          // Центр без острова, шириной как контент чата (CHAT_MAX_W по центру)
-          <main style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', width: '100%', maxWidth: CHAT_MAX_W, margin: '0 auto' }}>
+          // Центр без острова, шириной как контент чата (CHAT_MAX_W по центру).
+          // minHeight: 0 обязателен: у flex-элемента min-height по умолчанию auto, поэтому
+          // колонка не сжимается ниже своего содержимого — при десятке проектов она росла
+          // вместе со списком, тот раздувался до полной высоты контента, и прокрутка
+          // не включалась совсем: хвост уезжал за нижний край экрана без доступа
+          <main style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', width: '100%', maxWidth: CHAT_MAX_W, margin: '0 auto' }}>
             {/* Шапка панели: заголовок + сортировка + Проект */}
             <div style={{ flexShrink: 0, padding: '20px 26px 14px', display: 'flex', alignItems: 'center', gap: 12 }}>
               {/* Заголовок раздела — единый стиль с «Календарём» (serif 28 / 500) */}
@@ -398,8 +402,9 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
           )}
         </div>
 
-        {/* Прокручиваемая область */}
-        <div style={{ flex: 1, overflowY: 'auto', paddingBottom: 14, paddingRight: 6 }}>
+        {/* Прокручиваемая область (minHeight: 0 — по той же причине, что и на десктопе:
+            без него скроллер растёт вместе с содержимым вместо прокрутки) */}
+        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingBottom: 14, paddingRight: 6 }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
             {ungrouped.map(p => (
               <ProjectCard key={p.id} project={p} index={idx(p)} online={online} hasActiveSession={activeSessions.has(p.id)}

@@ -12,13 +12,15 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { DndContext, MouseSensor, TouchSensor, closestCenter, useSensor, useSensors } from '@dnd-kit/core';
 import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { BookOpenText, BookText, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, FileQuestion, Home, Link2, List, Maximize2, MessageSquarePlus, PanelBottom, Pin, PinOff, Search, SlidersHorizontal, X } from 'lucide-react';
+// ChevronsDownUp/ChevronsUpDown вернутся вместе с кнопками уровней папок (см. controls)
+import { BookOpenText, BookText, ChevronDown, ChevronRight, FileQuestion, Home, Link2, List, Maximize2, MessageSquarePlus, PanelBottom, Pin, PinOff, Search, SlidersHorizontal, X } from 'lucide-react';
 import type { Project, DocEntry, DocDetail, DocSearchHit, DocsScopeInfo } from '../../types';
 import { api } from '../../lib/api';
 import { onFilesChanged } from '../../lib/signalr';
 import { C, FONT, FS, R, SHADOW, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
-import { Button, EmptyState, IconButton, PillSwitch, TextField } from '../../components/ui';
+import { Button, EmptyState, IconButton, PanelHeaderSlot, PillSwitch, TextField } from '../../components/ui';
+import { useHasPanelHeader } from '../../components/ui/panelHeaderSlotContext';
 import { DocsScopeDialog } from './DocsScopeDialog';
 import { MarkdownViewer } from '../../components/MarkdownViewer';
 import { ListDateDivider, LIST_FLASH_CLASS, LIST_FLASH_MS } from '../../components/ListDateDivider';
@@ -116,10 +118,11 @@ function groupLabel(folder: string): string {
 }
 
 // Настоящая папка: у корневой группы подписи нет, а у закреплённых она своя — ни ту,
-// ни другую кнопки уровней не трогают и в глубину не считают
-function isFolderGroup(folder: string): boolean {
-  return !!folder && folder !== PINNED_GROUP;
-}
+// ни другую кнопки уровней не трогают и в глубину не считают. Нужна вместе с ними
+// (см. закомментированные collapseLevel/expandLevel).
+// function isFolderGroup(folder: string): boolean {
+//   return !!folder && folder !== PINNED_GROUP;
+// }
 
 // Бейдж расширения в строке документа; у начального — домик вместо него
 function DocBadge({ path, home }: { path: string; home?: boolean }) {
@@ -356,6 +359,8 @@ function prefillComposer(text: string): void {
 }
 
 export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath, onCloseFile }: Props) {
+  // Есть ли у панели шапка (PanelShell). Нет — мобильный стек: контролы рисуем рядом
+  const hasPanelHeader = useHasPanelHeader();
   const [index, setIndex] = useState<DocEntry[] | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [doc, setDoc] = useState<DocDetail | null>(null);
@@ -854,33 +859,34 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
   // список папок вёл бы сам в себя
   const hasFolderNav = groups.filter(([f]) => f).length > 1;
 
-  // Что вообще можно сворачивать: настоящие папки, без корневой группы и закреплённых
-  const foldableFolders = groups.map(([f]) => f).filter(isFolderGroup);
-
-  // Глубина папки: «docs» — 1, «docs/design/mockups» — 3. По ней кнопки сворачивают
-  // и разворачивают ПО ОДНОМУ уровню за нажатие: в корпусе с тремя уровнями «свернуть
-  // всё» одним махом прячет и то, что нужно было оставить
-  const depthOf = (folder: string) => folder.split('/').length;
-
-  const collapseLevel = () => {
-    const open = foldableFolders.filter(f => !collapsed.has(f));
-    if (!open.length) return;
-    // Сворачиваем самый глубокий открытый уровень — дальше подъём к корню
-    const deepest = Math.max(...open.map(depthOf));
-    const next = new Set(collapsed);
-    open.filter(f => depthOf(f) === deepest).forEach(f => next.add(f));
-    saveCollapsed(next);
-  };
-
-  const expandLevel = () => {
-    const shut = foldableFolders.filter(f => collapsed.has(f));
-    if (!shut.length) return;
-    // Разворачиваем самый мелкий свёрнутый уровень: сначала верхние ветки, потом вложенные
-    const shallowest = Math.min(...shut.map(depthOf));
-    const next = new Set(collapsed);
-    shut.filter(f => depthOf(f) === shallowest).forEach(f => next.delete(f));
-    saveCollapsed(next);
-  };
+  // Уровни папок. Кнопки «свернуть/развернуть уровень» в шапку не переехали, поэтому
+  // и обработчики лежат закомментированными — вернуть можно вместе с кнопками (см.
+  // controls ниже). Сворачивание при этом никуда не делось: клик по подписи группы.
+  //
+  // const foldableFolders = groups.map(([f]) => f).filter(isFolderGroup);
+  // // Глубина папки: «docs» — 1, «docs/design/mockups» — 3. По ней кнопки ходят
+  // // ПО ОДНОМУ уровню за нажатие: «свернуть всё» одним махом прячет и нужное
+  // const depthOf = (folder: string) => folder.split('/').length;
+  //
+  // const collapseLevel = () => {
+  //   const open = foldableFolders.filter(f => !collapsed.has(f));
+  //   if (!open.length) return;
+  //   // Сворачиваем самый глубокий открытый уровень — дальше подъём к корню
+  //   const deepest = Math.max(...open.map(depthOf));
+  //   const next = new Set(collapsed);
+  //   open.filter(f => depthOf(f) === deepest).forEach(f => next.add(f));
+  //   saveCollapsed(next);
+  // };
+  //
+  // const expandLevel = () => {
+  //   const shut = foldableFolders.filter(f => collapsed.has(f));
+  //   if (!shut.length) return;
+  //   // Разворачиваем самый мелкий свёрнутый уровень: сначала верхние ветки
+  //   const shallowest = Math.min(...shut.map(depthOf));
+  //   const next = new Set(collapsed);
+  //   shut.filter(f => depthOf(f) === shallowest).forEach(f => next.delete(f));
+  //   saveCollapsed(next);
+  // };
 
   // Домашний вид показывается, только когда README реально есть. Без этой проверки
   // сохранённый флаг прятал кнопки в проекте без README — панель оставалась с пустой
@@ -943,40 +949,29 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
     />
   );
 
-  if (error && !index)
-    return <div style={emptyStyle}>{error}</div>;
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
-      {/* Ряд действий панели. Поиск здесь кнопкой, а не полем: колонка узкая, а поле
-          занимало её почти целиком ради действия, которое нужно изредка.
-          Пустой панели ряд не нужен вовсе — управлять нечем, а полоса под шапкой
-          выглядела бы недоделкой; всё нужное предлагает само пустое состояние */}
-      {hasDocs && <div style={{
-        flexShrink: 0, position: 'relative', display: 'flex', alignItems: 'center', gap: SP.xs,
-        padding: `${SP.sm}px ${SP.md}px`, borderBottom: `1px solid ${C.border}`,
-      }}>
-        {/* Что показывает панель: README или корпус. Переключатель, а не кнопка —
-            это два равноправных вида, и видно, в каком из них находишься.
-            iconsOnly: подписи уезжают в подсказку — домик и книга говорят сами за
-            себя, а в узкой панели два слова забирали место у ряда кнопок справа */}
-        {homePath && (
-          <PillSwitch
-            iconsOnly
-            value={homeOpen ? 'home' : 'list'}
-            options={[
-              { value: 'home', label: 'Начало', icon: <Home size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> },
-              { value: 'list', label: 'Документы', icon: <BookText size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> },
-            ]}
-            onChange={v => setHome(v === 'home')}
-          />
-        )}
-        <div style={{ flex: 1 }} />
-        {/* Кнопки списка — только в режиме «Документы» и только когда список не пуст:
-            в «Начале» ими нечем управлять, а в пустой панели нечего искать и листать */}
-        {!homeView && hasDocs && <>
-        {/* Поиск открывает ряд правых кнопок: он первый по частоте, но такой же режим
-            панели, как и соседи, — отдельная подпись выбивала его из ряда */}
+  // Контролы панели: штатное место для них — шапка карточки (PanelHeaderSlot),
+  // а не собственный ряд под ней. Раньше ряд занимал целую полосу высоты в узкой
+  // колонке ради иконок, которые прекрасно живут рядом с заголовком.
+  const controls = (
+    <>
+      {/* Что показывает панель: README или корпус. Переключатель, а не кнопка —
+          это два равноправных вида, и видно, в каком из них находишься.
+          iconsOnly: подписи уезжают в подсказку — домик и книга говорят сами за себя */}
+      {homePath && (
+        <PillSwitch
+          iconsOnly
+          value={homeOpen ? 'home' : 'list'}
+          options={[
+            { value: 'home', label: 'Начало', icon: <Home size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> },
+            { value: 'list', label: 'Документы', icon: <BookText size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> },
+          ]}
+          onChange={v => setHome(v === 'home')}
+        />
+      )}
+      {/* Остальные — только в режиме «Документы»: в «Начале» ими нечем управлять */}
+      {!homeView && <>
+        {/* Поиск кнопкой, а не полем: колонка узкая, а поле занимало её почти
+            целиком ради действия, которое нужно изредка */}
         <IconButton
           title={searchOpen ? 'Закрыть поиск' : 'Поиск по документам'}
           active={searchOpen || query.length > 0}
@@ -986,13 +981,9 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
           <Search size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
         </IconButton>
         {/* Папки списка — оглавление для самого списка. Появляется, только когда групп
-            больше одной: с единственной папкой кнопка вела бы в никуда.
-            Закреплённый список живёт над документами, и поповер тогда не нужен —
-            кнопка становится «открепить» */}
+            больше одной: с единственной папкой кнопка вела бы в никуда */}
         {hasFolderNav && (
-          // Наведение показывает список, клик — закрепляет его над документами.
-          // Разные жесты для «посмотреть» и «оставить»: беглый взгляд на папки нужен
-          // куда чаще, чем постоянный блок, и ради него не стоит ничего нажимать
+          // Наведение показывает список, клик — закрепляет его над документами
           <span onMouseEnter={hoverFolders} onMouseLeave={unhoverFolders}>
             <IconButton
               title={foldersPinned ? 'Открепить список папок' : 'Папки — клик закрепит список'}
@@ -1000,9 +991,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
               active={foldersOpen || foldersPinned}
               size="sm"
             >
-              {/* Иконка показывает, что даст клик, и только когда он осмыслен: булавка
-                  над раскрытым поповером («закрепить»), перечёркнутая — под курсором
-                  у закреплённого («открепить»). В покое — обычный список */}
+              {/* Иконка показывает, что даст клик, и только когда он осмыслен */}
               {foldersPinned
                 ? (foldersHover
                   ? <PinOff size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
@@ -1013,29 +1002,20 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
             </IconButton>
           </span>
         )}
-        {/* Свернуть/развернуть — по одному уровню вложенности за нажатие. Показываем,
-            только когда в корпусе есть папки: без них сворачивать нечего.
-            Кнопка гаснет, когда её уровень исчерпан — всё уже свёрнуто или всё раскрыто */}
+        {/* Свернуть/развернуть уровень папок — в шапку не переехали: ряд там и так
+            плотный, а сворачивание доступно кликом по подписи самой группы.
+            Оставлено закомментированным до решения, нужны ли кнопки вообще.
         {foldableFolders.length > 0 && <>
-          <IconButton
-            title="Свернуть уровень папок"
-            onClick={collapseLevel}
-            disabled={!foldableFolders.some(f => !collapsed.has(f))}
-            size="sm"
-          >
+          <IconButton title="Свернуть уровень папок" onClick={collapseLevel}
+            disabled={!foldableFolders.some(f => !collapsed.has(f))} size="sm">
             <ChevronsDownUp size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
           </IconButton>
-          <IconButton
-            title="Развернуть уровень папок"
-            onClick={expandLevel}
-            disabled={!foldableFolders.some(f => collapsed.has(f))}
-            size="sm"
-          >
+          <IconButton title="Развернуть уровень папок" onClick={expandLevel}
+            disabled={!foldableFolders.some(f => collapsed.has(f))} size="sm">
             <ChevronsUpDown size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
           </IconButton>
         </>}
-        {/* «В чат» живёт только в шапке превью — там, где открытый документ виден. Здесь
-            кнопка половину времени стояла отключённой и занимала место в узком ряду */}
+        */}
         {/* Режим работы панели: со встроенным превью или только список (тогда документ
             открывается сразу в центральной области) */}
         <IconButton
@@ -1046,24 +1026,42 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
         >
           <PanelBottom size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
         </IconButton>
-        {/* Область документации: дефолт docs/, но соглашение о папке в проектах разное.
-            В «Начале» прячется — там нечего настраивать; в пустой панели её открывает
-            кнопка прямо из пустого состояния */}
+        {/* Область документации: дефолт docs/, но соглашение о папке в проектах разное */}
         <IconButton title="Папки документации" onClick={() => setScopeOpen(true)} size="sm">
           <SlidersHorizontal size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
         </IconButton>
-        </>}
+      </>}
+    </>
+  );
 
-        {/* Поповер папок: клик прокручивает список к нужной группе */}
-        {foldersOpen && (
-          // Мышь внутри поповера держит его открытым: уход отсюда — тот же таймер,
-          // что и с кнопки
-          <div style={{ ...tocPopoverStyle, padding: `${SP.xs}px 0` }}
-            onMouseEnter={hoverFolders} onMouseLeave={unhoverFolders}>
-            {groups.map(([folder, docs]) => folderRow(folder, docs.length, folder === activeFolder))}
-          </div>
-        )}
-      </div>}
+  if (error && !index)
+    return <div style={emptyStyle}>{error}</div>;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+      {/* Ряд действий панели. Поиск здесь кнопкой, а не полем: колонка узкая, а поле
+          занимало её почти целиком ради действия, которое нужно изредка.
+          Пустой панели ряд не нужен вовсе — управлять нечем, а полоса под шапкой
+          выглядела бы недоделкой; всё нужное предлагает само пустое состояние */}
+      {hasDocs && (hasPanelHeader
+        ? <PanelHeaderSlot>{controls}</PanelHeaderSlot>
+        // Шапки нет (мобильный стек) — рисуем те же контролы своим рядом
+        : <div style={{
+            flexShrink: 0, display: 'flex', alignItems: 'center', gap: SP.xs,
+            padding: `${SP.sm}px ${SP.md}px`, borderBottom: `1px solid ${C.border}`,
+          }}>{controls}</div>
+      )}
+
+      {/* Поповер папок живёт в теле панели, а не рядом с кнопкой: кнопка уехала
+          порталом в шапку карточки, и позиционировать от неё нечего */}
+      {foldersOpen && (
+        // Мышь внутри поповера держит его открытым: уход отсюда — тот же таймер,
+        // что и с кнопки
+        <div style={{ ...tocPopoverStyle, top: 0, padding: `${SP.xs}px 0` }}
+          onMouseEnter={hoverFolders} onMouseLeave={unhoverFolders}>
+          {groups.map(([folder, docs]) => folderRow(folder, docs.length, folder === activeFolder))}
+        </div>
+      )}
 
       {/* Строка поиска — отдельным рядом СВЕРХУ, сразу под кнопками: результаты
           появляются ниже, и поле стоит над тем, что оно фильтрует */}

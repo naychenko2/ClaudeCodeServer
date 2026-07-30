@@ -8,8 +8,11 @@
 // Колонка узкая, поэтому превью тут для чтения «по месту», а крупное чтение — кнопкой
 // «развернуть» в центральной области (тот же FileViewer, что и для остальных файлов).
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { BookOpenText, ChevronDown, ChevronRight, CornerUpRight, FileQuestion, Home, Link2, List, Maximize2, MessageSquarePlus, PanelBottom, Pin, PinOff, Search, SlidersHorizontal, X } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { DndContext, MouseSensor, TouchSensor, closestCenter, useSensor, useSensors } from '@dnd-kit/core';
+import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
+import { BookOpenText, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, CornerUpRight, FileQuestion, Home, Link2, List, Maximize2, MessageSquarePlus, PanelBottom, Pin, PinOff, Search, SlidersHorizontal, X } from 'lucide-react';
 import type { Project, DocEntry, DocDetail, DocSearchHit, DocsScopeInfo } from '../../types';
 import { api } from '../../lib/api';
 import { onFilesChanged } from '../../lib/signalr';
@@ -22,6 +25,7 @@ import { ListDateDivider, LIST_FLASH_CLASS, LIST_FLASH_MS } from '../../componen
 import { getExtMeta as extMeta } from '../../components/FileExplorer';
 import { useHeadings, scrollToHeading } from '../../hooks/useHeadings';
 import { resolveDocImage, resolveDocLink, sliceSection, slugify } from '../../lib/docsLinks';
+import { DRAG_MOUSE_ACTIVATION, DRAG_TOUCH_ACTIVATION } from '../../lib/dnd';
 
 interface Props {
   project: Project;
@@ -61,6 +65,25 @@ const FOLDERS_H_DEFAULT = 110;
 const FOLDERS_H_MIN = ROW_H * 2;
 const FOLDERS_H_MAX = 400;
 
+// Свёрнутые папки — привязаны к проекту: в разных репозиториях папки разные, и общий
+// список сворачивал бы в одном то, чего в другом нет
+const COLLAPSED_KEY = 'cc_docs_collapsed';
+
+// Закреплённые документы — тоже по проекту
+const PINNED_KEY = 'cc_docs_pinned';
+
+// Ключ группы закреплённых. С нулевым символом: имя папки таким быть не может,
+// а значит группа не столкнётся с настоящей папкой в состоянии свёрнутых
+const PINNED_GROUP = '\u0000pinned';
+
+// Подстраховка на случай, если браузер не знает scrollend (он есть не везде): дольше
+// этого плавная прокрутка списка всё равно не длится
+const SCROLL_SETTLE_MS = 420;
+
+// Разворачивание группы. Тем же числом задержан прыжок к свёрнутой папке: пока высота
+// едет, координаты строк меняются, и прокрутка приехала бы не туда
+const EXPAND_MS = 180;
+
 // Расширения дефолтной области (группа «Markdown»), по которым панель узнаёт документ,
 // пока не спросила настройку у сервера. Полный каталог живёт там (DocsIndexService.
 // TypeGroups) — здесь нужно лишь решить, перечитывать ли индекс после правок на диске
@@ -74,6 +97,23 @@ const HOME_KEY = 'cc_docs_home';
 function folderOf(path: string): string {
   const i = path.lastIndexOf('/');
   return i < 0 ? '' : path.slice(0, i);
+}
+
+// Папка как подпись группы: слеш читается как «путь к файлу», а здесь это ветка
+// оглавления — точка-разделитель ведёт взгляд по уровням и не спорит с путями документов
+function folderLabel(folder: string): string {
+  return folder.split('/').join(' · ');
+}
+
+// Подпись группы: у закреплённых своя, у папок — путь через точку
+function groupLabel(folder: string): string {
+  return folder === PINNED_GROUP ? 'Закреплённые' : folderLabel(folder);
+}
+
+// Настоящая папка: у корневой группы подписи нет, а у закреплённых она своя — ни ту,
+// ни другую кнопки уровней не трогают и в глубину не считают
+function isFolderGroup(folder: string): boolean {
+  return !!folder && folder !== PINNED_GROUP;
 }
 
 // Бейдж расширения в строке документа; у начального — домик вместо него
@@ -98,7 +138,14 @@ function DocBadge({ path, home }: { path: string; home?: boolean }) {
 // Отличать «прилипла / не прилипла» пробовали наблюдателем, но в панели несколько
 // вложенных скроллеров (список, превью, закреплённые папки), и корень наблюдения
 // приходилось угадывать — постоянный фон делает то же самое без единого условия.
-function FolderSticky({ folder, flash }: { folder: string; flash: boolean }) {
+function FolderSticky({ folder, flash, collapsed, hidden, onToggle }: {
+  folder: string;
+  flash: boolean;
+  collapsed: boolean;
+  // Сколько документов скрыто — показываем только у свёрнутой: у развёрнутой они и так видны
+  hidden: number;
+  onToggle: () => void;
+}) {
   return (
     // Фон — ровно полотно панели: в потоке подпись выглядит как раньше, а прилипнув
     // перекрывает уезжающие строки. Отрицательные поля тянут подложку на всю ширину
@@ -107,10 +154,39 @@ function FolderSticky({ folder, flash }: { folder: string; flash: boolean }) {
       // top отрицательный: плашка прилипает вплотную к краю списка, а не ниже него.
       // Компенсируем и верхний отступ списка, и собственный отступ разделителя —
       // иначе между краем и подписью остаётся полоска, сквозь которую видно строки
+      // Левый отступ на 4px больше прочих: с ним шеврон встаёт ровно в колонку бейджей
+      // расширений (строка документа сдвинута на SP.sm, а разделитель тянет подложку
+      // за край списка отрицательным полем — эти сдвиги и складываются)
       position: 'sticky', top: -(SP.xs + 5), zIndex: 1,
-      background: C.bgWhite, margin: `0 -${SP.xs}px`, padding: `${SP.xs}px ${SP.xs}px 0`,
+      background: C.bgWhite, margin: `0 -${SP.xs}px`, padding: `${SP.xs}px ${SP.xs}px 0 ${SP.sm}px`,
     }}>
-      <ListDateDivider title={folder} align="left" dense flash={flash} />
+      <ListDateDivider
+        title={groupLabel(folder)}
+        align="left" dense flash={flash}
+        onClick={onToggle}
+        titleAttr={`${groupLabel(folder)} — ${collapsed ? 'показать' : 'скрыть'} документы`}
+        leading={
+          // Ширина как у бейджа расширения: шеврон встаёт с документами в одну колонку,
+          // и левый край списка читается одной линией сверху вниз
+          <span style={{
+            width: 16, flexShrink: 0, display: 'flex',
+            alignItems: 'center', justifyContent: 'center',
+          }}>
+            <ChevronRight
+              size={12} strokeWidth={2.4}
+              style={{
+                color: flash ? C.accent : C.textMuted,
+                // Поворотом, а не второй иконкой: состояние читается как продолжение
+                // движения, и подпись не дёргается на кадр при смене
+                transform: collapsed ? 'none' : 'rotate(90deg)', transition: 'transform .15s ease',
+              }}
+            />
+          </span>
+        }
+        trailing={collapsed
+          ? <span style={{ flexShrink: 0, fontSize: 10, color: C.textMuted }}>{hidden}</span>
+          : undefined}
+      />
     </div>
   );
 }
@@ -125,7 +201,7 @@ function FolderRow({ folder, count, current, onJump }: {
   onJump: () => void;
 }) {
   const [hover, setHover] = useState(false);
-  const label = folder || 'корень проекта';
+  const label = folder ? groupLabel(folder) : 'корень проекта';
   return (
     <button
       onClick={onJump}
@@ -145,6 +221,95 @@ function FolderRow({ folder, count, current, onJump }: {
       <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
       <span style={{ marginLeft: 'auto', color: C.textMuted, fontSize: FS.xs }}>{count}</span>
     </button>
+  );
+}
+
+// Строка документа. Отдельным компонентом ради состояния наведения: список длинный,
+// и держать его в панели значило бы перерисовывать все строки на каждое движение мыши.
+// Бейдж расширения под курсором превращается в булавку — отдельной кнопки закрепления
+// в строке нет места, а место иконки всё равно занято состоянием документа
+function DocRow({ doc, selected, home, pinned, onOpen, onExpand, onTogglePin }: {
+  doc: DocEntry;
+  selected: boolean;
+  home: boolean;
+  pinned: boolean;
+  onOpen: () => void;
+  onExpand: () => void;
+  onTogglePin: () => void;
+}) {
+  const [hover, setHover] = useState(false);
+  const [pinHover, setPinHover] = useState(false);
+  const showPin = hover || pinned;
+  return (
+    <div
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => { setHover(false); setPinHover(false); }}
+      style={{
+        display: 'flex', alignItems: 'center', borderRadius: R.md,
+        background: selected ? C.bgSelected : 'transparent',
+        minHeight: ROW_H, paddingLeft: SP.sm,
+      }}
+    >
+      <button
+        onClick={onTogglePin}
+        onMouseEnter={() => setPinHover(true)}
+        onMouseLeave={() => setPinHover(false)}
+        title={pinned ? 'Открепить — вернуть в свою папку' : 'Закрепить внизу списка'}
+        style={{
+          width: 16, height: 16, flexShrink: 0, padding: 0, border: 'none',
+          background: 'transparent', cursor: 'pointer',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}
+      >
+        {/* Иконка показывает, что даст клик: булавка под курсором у обычного документа,
+            перечёркнутая — у закреплённого. В покое у закреплённого булавка остаётся:
+            иначе он ничем не отличается от соседей по группе */}
+        {showPin
+          ? (pinned && pinHover
+            ? <PinOff size={12} strokeWidth={2.2} style={{ color: C.textSecondary }} />
+            : <Pin size={12} strokeWidth={2.2} style={{ color: pinned ? C.accent : C.textMuted }} />)
+          : <DocBadge path={doc.path} home={home} />}
+      </button>
+      <button
+        onClick={onOpen}
+        onDoubleClick={onExpand}
+        // Только путь: подсказка про двойной клик висела над каждой строкой и мешала
+        // читать сам путь, ради которого её и открывают
+        title={doc.path}
+        style={{
+          ...rowStyle,
+          flex: 1, minWidth: 0,
+          // Без отступа под вложенность: группу уже обозначает разделитель сверху,
+          // а сдвиг ломал общую левую линию списка
+          paddingLeft: SP.xs,
+          color: selected ? C.textHeading : C.textSecondary,
+          fontWeight: selected ? 600 : 400,
+        }}>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{doc.title}</span>
+      </button>
+    </div>
+  );
+}
+
+// Закреплённая строка: та же строка документа, но перетаскиваемая — порядок в блоке
+// задаёт пользователь. Жест и пороги общие с доской задач и деревом чатов (lib/dnd),
+// поэтому клик по строке от перетаскивания отличается сдвигом, а не отдельной ручкой
+function SortablePinnedRow({ doc, children }: { doc: DocEntry; children: ReactNode }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
+    useSortable({ id: doc.path });
+  return (
+    <div
+      ref={setNodeRef}
+      style={{
+        transform: CSS.Transform.toString(transform),
+        transition,
+        opacity: isDragging ? 0.4 : 1,
+      }}
+      {...attributes}
+      {...listeners}
+    >
+      {children}
+    </div>
   );
 }
 
@@ -213,20 +378,116 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
   // было неверно: после прыжка в другую папку отметка оставалась на старой, потому что
   // выбор документа никуда не делся
   const [activeFolder, setActiveFolder] = useState<string | null>(null);
+  // Свёрнутые папки: в корпусе с десятком разделов половина обычно не нужна, а список
+  // длинный. Храним по проекту — папки у репозиториев разные
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem(`${COLLAPSED_KEY}:${project.id}`);
+      return new Set<string>(raw ? JSON.parse(raw) as string[] : []);
+    } catch { return new Set<string>(); }
+  });
+  // Закреплённые — СПИСОК, а не множество: их порядок задаёт пользователь перетаскиванием,
+  // и «как пришло из индекса» тут не годится
+  const [pinnedOrder, setPinnedOrder] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem(`${PINNED_KEY}:${project.id}`);
+      return raw ? JSON.parse(raw) as string[] : [];
+    } catch { return []; }
+  });
+  const pinned = useMemo(() => new Set(pinnedOrder), [pinnedOrder]);
+  // Пороги старта перетаскивания — общие для всех списков продукта (см. lib/dnd):
+  // мышь по сдвигу, палец по долгому нажатию, иначе жест забрал бы прокрутку списка
+  const pinSensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: DRAG_MOUSE_ACTIVATION }),
+    useSensor(TouchSensor, { activationConstraint: DRAG_TOUCH_ACTIVATION }),
+  );
+  const listRef = useRef<HTMLDivElement>(null);
   const flashTimer = useRef<number | null>(null);
   const hoverTimer = useRef<number | null>(null);
+  const settleTimer = useRef<number | null>(null);
   useEffect(() => () => {
     if (flashTimer.current) window.clearTimeout(flashTimer.current);
     if (hoverTimer.current) window.clearTimeout(hoverTimer.current);
+    if (settleTimer.current) window.clearTimeout(settleTimer.current);
   }, []);
 
-  const jumpToFolder = (folder: string) => {
-    folderRefs.current.get(folder)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    setActiveFolder(folder);
+  const saveCollapsed = (next: Set<string>) => {
+    setCollapsed(next);
+    try {
+      localStorage.setItem(`${COLLAPSED_KEY}:${project.id}`, JSON.stringify([...next]));
+    } catch { /* приватный режим — обойдёмся без запоминания */ }
+  };
+
+  const toggleFolder = (folder: string) => {
+    const next = new Set(collapsed);
+    if (!next.delete(folder)) next.add(folder);
+    saveCollapsed(next);
+  };
+
+  const savePinned = (next: string[]) => {
+    setPinnedOrder(next);
+    try {
+      localStorage.setItem(`${PINNED_KEY}:${project.id}`, JSON.stringify(next));
+    } catch { /* приватный режим — обойдёмся без запоминания */ }
+  };
+
+  const togglePin = (path: string) => {
+    savePinned(pinned.has(path)
+      ? pinnedOrder.filter(p => p !== path)
+      // Новый — в конец: он присоединяется к уже расставленным, а не лезет им в начало
+      : [...pinnedOrder, path]);
+  };
+
+  const movePinned = (from: string, to: string) => {
+    const a = pinnedOrder.indexOf(from);
+    const b = pinnedOrder.indexOf(to);
+    if (a < 0 || b < 0 || a === b) return;
+    savePinned(arrayMove(pinnedOrder, a, b));
+  };
+
+  const flashNow = (folder: string) => {
     setFlashFolder(folder);
     if (flashTimer.current) window.clearTimeout(flashTimer.current);
     flashTimer.current = window.setTimeout(() => setFlashFolder(null), LIST_FLASH_MS);
+  };
+
+  // Прыжок к папке. Мигание — ПОСЛЕ остановки прокрутки: затухание длится 300 мс, и
+  // запущенное вместе со смуз-скроллом оно отыгрывало вхолостую — до места доезжала
+  // уже погасшая подпись. Если прокрутка не нужна (папка на месте, или список упёрся
+  // в конец), мигаем сразу — ждать нечего.
+  const scrollToFolder = (folder: string) => {
+    const el = folderRefs.current.get(folder);
+    const box = listRef.current;
+    if (!el || !box) { flashNow(folder); return; }
+    const delta = el.getBoundingClientRect().top - box.getBoundingClientRect().top;
+    const limit = Math.max(box.scrollHeight - box.clientHeight, 0);
+    const target = Math.min(Math.max(box.scrollTop + delta, 0), limit);
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (Math.abs(target - box.scrollTop) < 2) { flashNow(folder); return; }
+    let done = false;
+    const onEnd = () => {
+      if (done) return;
+      done = true;
+      box.removeEventListener('scrollend', onEnd);
+      flashNow(folder);
+    };
+    box.addEventListener('scrollend', onEnd);
+    if (settleTimer.current) window.clearTimeout(settleTimer.current);
+    settleTimer.current = window.setTimeout(onEnd, SCROLL_SETTLE_MS);
+  };
+
+  const jumpToFolder = (folder: string) => {
+    setActiveFolder(folder);
     setFoldersOpen(false);
+    // Прыжок в свёрнутую папку показывал бы одну подпись — разворачиваем её, но
+    // прокручиваем следующим кадром: до перерисовки геометрия ещё от свёрнутого списка
+    if (collapsed.has(folder)) {
+      toggleFolder(folder);
+      if (settleTimer.current) window.clearTimeout(settleTimer.current);
+      settleTimer.current = window.setTimeout(() => scrollToFolder(folder), EXPAND_MS + 20);
+      return;
+    }
+    scrollToFolder(folder);
   };
   // Якорь, к которому нужно проскроллить после перехода по ссылке или из поиска.
   // Хранится ВМЕСТЕ с путём документа: между сменой документа и пересбором оглавления
@@ -259,6 +520,16 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
     return [...byFolder.entries()].sort(([a], [b]) =>
       a === '' ? -1 : b === '' ? 1 : a.localeCompare(b));
   }, [index]);
+
+  // Закреплённые дублируются ОТДЕЛЬНЫМ блоком у нижнего края списка: их закрепляют,
+  // чтобы держать под рукой, а до нужного места длинного списка ещё надо домотать.
+  // Из своей папки документ при этом никуда не девается — там он помечен булавкой
+  const pinnedDocs = useMemo(() => {
+    const byPath = new Map((index ?? []).map(d => [d.path, d]));
+    // Порядок берём из списка закреплений, а не из индекса; пропавшие с диска молча
+    // выпадают — чистить хранилище на каждое исчезновение файла не нужно
+    return pinnedOrder.map(p => byPath.get(p)).filter((d): d is DocEntry => !!d);
+  }, [index, pinnedOrder]);
 
 
   // «Наш ли это путь» после правок на диске. Область настраивается, поэтому судим по
@@ -524,6 +795,34 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
   // список папок вёл бы сам в себя
   const hasFolderNav = groups.filter(([f]) => f).length > 1;
 
+  // Что вообще можно сворачивать: настоящие папки, без корневой группы и закреплённых
+  const foldableFolders = groups.map(([f]) => f).filter(isFolderGroup);
+
+  // Глубина папки: «docs» — 1, «docs/design/mockups» — 3. По ней кнопки сворачивают
+  // и разворачивают ПО ОДНОМУ уровню за нажатие: в корпусе с тремя уровнями «свернуть
+  // всё» одним махом прячет и то, что нужно было оставить
+  const depthOf = (folder: string) => folder.split('/').length;
+
+  const collapseLevel = () => {
+    const open = foldableFolders.filter(f => !collapsed.has(f));
+    if (!open.length) return;
+    // Сворачиваем самый глубокий открытый уровень — дальше подъём к корню
+    const deepest = Math.max(...open.map(depthOf));
+    const next = new Set(collapsed);
+    open.filter(f => depthOf(f) === deepest).forEach(f => next.add(f));
+    saveCollapsed(next);
+  };
+
+  const expandLevel = () => {
+    const shut = foldableFolders.filter(f => collapsed.has(f));
+    if (!shut.length) return;
+    // Разворачиваем самый мелкий свёрнутый уровень: сначала верхние ветки, потом вложенные
+    const shallowest = Math.min(...shut.map(depthOf));
+    const next = new Set(collapsed);
+    shut.filter(f => depthOf(f) === shallowest).forEach(f => next.delete(f));
+    saveCollapsed(next);
+  };
+
   // Домашний вид показывается, только когда README реально есть. Без этой проверки
   // сохранённый флаг прятал кнопки в проекте без README — панель оставалась с пустой
   // полосой сверху и списком, которым нечем управлять
@@ -641,6 +940,27 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
             </IconButton>
           </span>
         )}
+        {/* Свернуть/развернуть — по одному уровню вложенности за нажатие. Показываем,
+            только когда в корпусе есть папки: без них сворачивать нечего.
+            Кнопка гаснет, когда её уровень исчерпан — всё уже свёрнуто или всё раскрыто */}
+        {foldableFolders.length > 0 && <>
+          <IconButton
+            title="Свернуть уровень папок"
+            onClick={collapseLevel}
+            disabled={!foldableFolders.some(f => !collapsed.has(f))}
+            size="sm"
+          >
+            <ChevronsDownUp size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+          </IconButton>
+          <IconButton
+            title="Развернуть уровень папок"
+            onClick={expandLevel}
+            disabled={!foldableFolders.some(f => collapsed.has(f))}
+            size="sm"
+          >
+            <ChevronsUpDown size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+          </IconButton>
+        </>}
         {/* «В чат» живёт только в шапке превью — там, где открытый документ виден. Здесь
             кнопка половину времени стояла отключённой и занимала место в узком ряду */}
         {/* Режим работы панели: со встроенным превью или только список (тогда документ
@@ -766,7 +1086,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
               </>
             )}
 
-            <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: `${SP.xs}px ${SP.xs}px` }}>
+            <div ref={listRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: `${SP.xs}px ${SP.xs}px` }}>
                 {index?.length === 0 && (
                   // Общий примитив, а не своя вёрстка: пустые состояния в продукте
                   // выглядят одинаково, и это одно из них
@@ -790,7 +1110,10 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
                     }
                   />
                 )}
-                {groups.map(([folder, docs]) => (
+                {groups.map(([folder, docs]) => {
+                  // Корневая группа без подписи — сворачивать её нечем и незачем
+                  const isCollapsed = !!folder && collapsed.has(folder);
+                  return (
                   <div
                     key={folder}
                     // Мигает вся секция целиком — подпись и её документы, чтобы после
@@ -805,40 +1128,97 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
                         общий приём для «границы группы» в списках — и никакой подложки,
                         которая спорила бы с выделением строки */}
                     {folder && (
-                      <FolderSticky folder={folder} flash={flashFolder === folder} />
+                      <FolderSticky
+                        folder={folder}
+                        flash={flashFolder === folder}
+                        collapsed={isCollapsed}
+                        hidden={docs.length}
+                        onToggle={() => toggleFolder(folder)}
+                      />
                     )}
+                    {/* Сворачивание высотой grid-строки: она анимируется от 0fr к 1fr, и
+                        замерять высоту содержимого не нужно. visibility гасится ПОСЛЕ
+                        анимации — иначе скрытые строки остаются в порядке обхода табом */}
+                    <div style={{
+                      display: 'grid',
+                      gridTemplateRows: isCollapsed ? '0fr' : '1fr',
+                      transition: isCollapsed
+                        ? `grid-template-rows ${EXPAND_MS}ms ease, visibility 0s linear ${EXPAND_MS}ms`
+                        : `grid-template-rows ${EXPAND_MS}ms ease`,
+                      visibility: isCollapsed ? 'hidden' : 'visible',
+                    }}>
+                    <div style={{ overflow: 'hidden', minHeight: 0 }}>
                     {docs.map(d => (
-                      <div
+                      <DocRow
                         key={d.path}
-                        style={{
-                          display: 'flex', alignItems: 'center', borderRadius: R.md,
-                          background: d.path === selected ? C.bgSelected : 'transparent',
-                          minHeight: ROW_H,
-                        }}
-                      >
-                        <button
-                          onClick={() => handleRowClick(d.path)}
-                          onDoubleClick={() => handleRowDoubleClick(d.path)}
-                          title={`${d.path}\nДвойной клик — ${previewEnabled ? 'открыть в центре' : 'показать в превью'}`}
-                          style={{
-                            ...rowStyle,
-                            flex: 1, minWidth: 0,
-                            // Без отступа под вложенность: группу уже обозначает разделитель
-                            // сверху, а сдвиг ломал общую левую линию списка
-                            paddingLeft: SP.sm,
-                            color: d.path === selected ? C.textHeading : C.textSecondary,
-                            fontWeight: d.path === selected ? 600 : 400,
-                          }}>
-                          {/* Бейдж расширения — тот же, что в «Файлах» и «Изменениях»;
-                              у README вместо него домик: он не рядовой документ, а вход */}
-                          <DocBadge path={d.path} home={d.path === homePath} />
-                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.title}</span>
-                        </button>
-                      </div>
+                        doc={d}
+                        selected={d.path === selected}
+                        home={d.path === homePath}
+                        pinned={pinned.has(d.path)}
+                        onOpen={() => handleRowClick(d.path)}
+                        onExpand={() => handleRowDoubleClick(d.path)}
+                        onTogglePin={() => togglePin(d.path)}
+                      />
                     ))}
+                    </div>
+                    </div>
                   </div>
-                ))}
+                  );
+                })}
             </div>
+
+            {/* Закреплённые — всегда на виду, у нижнего края списка. Своя прокрутка:
+                закрепить можно и десяток, а вытеснять ими сам список нельзя.
+                Свернуть их можно так же, как папку, — останется одна подпись */}
+            {pinnedDocs.length > 0 && (
+              <div style={{
+                flexShrink: 0, maxHeight: '45%', overflowY: 'auto',
+                padding: `0 ${SP.xs}px ${SP.xs}px`,
+                borderTop: `1px solid ${C.border}`, background: C.bgWhite,
+              }}>
+                <FolderSticky
+                  folder={PINNED_GROUP}
+                  flash={false}
+                  collapsed={collapsed.has(PINNED_GROUP)}
+                  hidden={pinnedDocs.length}
+                  onToggle={() => toggleFolder(PINNED_GROUP)}
+                />
+                <div style={{
+                  display: 'grid',
+                  gridTemplateRows: collapsed.has(PINNED_GROUP) ? '0fr' : '1fr',
+                  transition: collapsed.has(PINNED_GROUP)
+                    ? `grid-template-rows ${EXPAND_MS}ms ease, visibility 0s linear ${EXPAND_MS}ms`
+                    : `grid-template-rows ${EXPAND_MS}ms ease`,
+                  visibility: collapsed.has(PINNED_GROUP) ? 'hidden' : 'visible',
+                }}>
+                  <div style={{ overflow: 'hidden', minHeight: 0 }}>
+                    <DndContext
+                      sensors={pinSensors}
+                      collisionDetection={closestCenter}
+                      onDragEnd={e => {
+                        if (e.over) movePinned(String(e.active.id), String(e.over.id));
+                      }}
+                    >
+                      <SortableContext items={pinnedDocs.map(d => d.path)} strategy={verticalListSortingStrategy}>
+                        {pinnedDocs.map(d => (
+                          <SortablePinnedRow key={d.path} doc={d}>
+                            <DocRow
+                              doc={d}
+                              selected={d.path === selected}
+                              home={d.path === homePath}
+                              pinned
+                              onOpen={() => handleRowClick(d.path)}
+                              onExpand={() => handleRowDoubleClick(d.path)}
+                              onTogglePin={() => togglePin(d.path)}
+                            />
+                          </SortablePinnedRow>
+                        ))}
+                      </SortableContext>
+                    </DndContext>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Хендл ресайза границы «список / превью».

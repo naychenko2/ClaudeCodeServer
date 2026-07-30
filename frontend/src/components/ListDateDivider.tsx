@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { C } from '../lib/design';
 
 // Мигание при переходе к группе списка: одно короткое затухание по прозрачности — без
@@ -21,26 +22,33 @@ if (typeof document !== 'undefined' && !document.getElementById('cc-list-flash-s
  * В списках чатов заменяет дату на самих карточках — по разделителю видно, какие чаты
  * относятся к одному дню, и карточка не тратит на это место.
  *
- * align='left' + dense — вариант для плотных списков (панель «Документы»): подпись прижата
+ * align='left' + dense — вариант для плотных списков (панель «Документация»): подпись прижата
  * влево, слева от неё остаётся короткий отрезок черты, отступы вдвое меньше.
+ *
+ * С onClick разделитель становится переключателем группы (свернуть/развернуть) — корень
+ * тогда кнопка, а не div: у сворачивания есть клавиатура и фокус, самодельный кликабельный
+ * div их теряет. leading/trailing — место под шеврон и счётчик скрытых строк.
  */
-export function ListDateDivider({ title, align = 'center', dense = false, flash = false }: {
+export function ListDateDivider({
+  title, align = 'center', dense = false, flash = false, onClick, leading, trailing, titleAttr,
+}: {
   title: string;
   align?: 'center' | 'left';
   dense?: boolean;
   // Кратко подсветить и мигнуть — «вот сюда прокрутили»
   flash?: boolean;
+  onClick?: () => void;
+  leading?: ReactNode;
+  trailing?: ReactNode;
+  // Подсказка при наведении: у кликабельного разделителя объясняет, что будет по клику
+  titleAttr?: string;
 }) {
   const lineColor = flash ? C.accent : C.divider;
   const line = { flex: 1, height: 1, background: lineColor };
   const stub = { width: 10, height: 1, background: lineColor, flexShrink: 0 };
-  return (
-    <div
-      style={{
-        display: 'flex', alignItems: 'center', gap: 8,
-        padding: dense ? '5px 4px 3px' : '10px 4px 7px',
-      }}
-    >
+  const body = (
+    <>
+      {leading}
       <div style={align === 'left' ? stub : line} />
       <span style={{
         fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap',
@@ -49,6 +57,25 @@ export function ListDateDivider({ title, align = 'center', dense = false, flash 
         {title}
       </span>
       <div style={line} />
-    </div>
+      {trailing}
+    </>
+  );
+  const layout = {
+    display: 'flex', alignItems: 'center', gap: 8,
+    padding: dense ? '5px 4px 3px' : '10px 4px 7px',
+  };
+  if (!onClick) return <div style={layout}>{body}</div>;
+  return (
+    <button
+      onClick={onClick}
+      title={titleAttr}
+      style={{
+        ...layout,
+        width: '100%', border: 'none', background: 'transparent',
+        cursor: 'pointer', font: 'inherit', textAlign: 'left',
+      }}
+    >
+      {body}
+    </button>
   );
 }

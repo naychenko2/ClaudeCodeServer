@@ -109,6 +109,10 @@ function RailButton({ item, soleIcon: SoleIcon }: { item: RailItem; soleIcon?: L
   return (
     <span
       {...item.dragProps}
+      // Метка для зоны: по ней она проверяет, под курсором ли ещё иконка.
+      // Одного onMouseLeave мало — если кнопка перестроилась или исчезла под
+      // курсором, событие не приходит вовсе и подсказка зоны залипает.
+      data-rail-item={item.key}
       onMouseEnter={() => { setHover(true); item.onHoverStart?.(); }}
       onMouseLeave={() => { setHover(false); item.onHoverEnd?.(); }}
       style={{ display: 'flex' }}

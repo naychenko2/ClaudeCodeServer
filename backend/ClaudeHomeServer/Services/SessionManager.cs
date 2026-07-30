@@ -3676,8 +3676,10 @@ public class SessionManager : IDisposable
     // перевести туда рабочую папку сессии; выкл — вернуть чат в корень проекта и снять дерево.
     // Начатый чат переезжает С КОНТЕКСТОМ: транскрипт CLI копируется в папку нового cwd
     // (--resume ищет его по уплощённому cwd); не удалось скопировать — операция отменяется,
-    // контекст дороже фичи. Процесс не трогаем: между ходами его нет, AdapterStale
-    // пересоберёт контекст со следующего хода.
+    // контекст дороже фичи. У container-пользователя и профиль, и cwd берутся в песочной
+    // раскладке (ConfigRootFor/CwdForOwner) — переезд работает так же, как на хосте.
+    // Процесс не трогаем: между ходами его нет, AdapterStale пересоберёт контекст со
+    // следующего хода.
     public async Task<Session?> SetWorktreeAsync(string sessionId, bool enabled,
         string? branch = null, bool force = false, string? userId = null)
     {
@@ -3693,15 +3695,6 @@ public class SessionManager : IDisposable
 
         // Идемпотентность: повторное включение/выключение — no-op
         if (enabled == (entry.Info.WorktreePath is not null)) return entry.Info;
-
-        // Переезд НАЧАТОГО чата требует переноса транскрипта; профили container-пользователей
-        // живут в песочной раскладке (см. TryPoolFailover) — там поддержано только включение
-        // worktree ДО первого хода
-        var isContainer = ownerId is not null
-            && _users.GetById(ownerId)?.ExecutionEnvironment == ExecutionEnvironments.Container;
-        if (entry.Info.ClaudeSessionId is not null && isContainer)
-            throw new InvalidOperationException(
-                "Переезд начатого чата в песочнице не поддерживается — включите отдельное дерево в новом чате");
 
         if (enabled)
         {
@@ -3728,11 +3721,21 @@ public class SessionManager : IDisposable
             var wtPath = Path.Combine(home, ".worktrees", projSlug, branchName.Replace('/', '-'));
             Directory.CreateDirectory(Path.GetDirectoryName(wtPath)!);
 
+            // Рабочие папки ГЛАЗАМИ CLI считаем ДО создания дерева: у container-пользователя
+            // ToRuntime отвергает путь вне монтирований, а исключение после WorktreeAddAsync
+            // обошло бы rollback ниже и оставило дерево-сироту
+            string? srcCwd = null, dstCwd = null;
+            if (entry.Info.ClaudeSessionId is not null)
+            {
+                srcCwd = CwdForOwner(ownerId, project.RootPath);
+                dstCwd = CwdForOwner(ownerId, wtPath);
+            }
+
             await _git.WorktreeAddAsync(ownerId, project.RootPath, wtPath, branchName);
 
             if (entry.Info.ClaudeSessionId is string csid
                 && !Llm.TranscriptMigrator.TryRelocateCwd(
-                    ConfigRootForProvider(entry.Info.Provider), project.RootPath, wtPath, csid, out var err))
+                    ConfigRootFor(ownerId, entry.Info.Provider), srcCwd!, dstCwd!, csid, out var err))
             {
                 // Дерево без контекста бесполезно — откатываем и отдаём причину наружу
                 try { await _git.WorktreeRemoveAsync(ownerId, project.RootPath, wtPath, force: true); }
@@ -3746,6 +3749,14 @@ public class SessionManager : IDisposable
         else
         {
             var wtPath = entry.Info.WorktreePath!;
+            // Как и при включении — перевод путей до снятия дерева (см. выше)
+            string? srcCwd = null, dstCwd = null;
+            if (entry.Info.ClaudeSessionId is not null)
+            {
+                srcCwd = CwdForOwner(ownerId, wtPath);
+                dstCwd = CwdForOwner(ownerId, project.RootPath);
+            }
+
             // Гейт: незакоммиченные правки в дереве пропадут вместе с ним (ветка остаётся)
             if (!force)
             {
@@ -3757,7 +3768,7 @@ public class SessionManager : IDisposable
 
             if (entry.Info.ClaudeSessionId is string csid
                 && !Llm.TranscriptMigrator.TryRelocateCwd(
-                    ConfigRootForProvider(entry.Info.Provider), wtPath, project.RootPath, csid, out var err))
+                    ConfigRootFor(ownerId, entry.Info.Provider), srcCwd!, dstCwd!, csid, out var err))
                 throw new Git.GitCommandException($"Не удалось перенести контекст разговора: {err}");
 
             await _git.WorktreeRemoveAsync(ownerId, project.RootPath, wtPath, force);

@@ -127,7 +127,7 @@ ALTER TABLE signoz_metrics.samples_v4
 
 ### Объём диска
 
-Расчёт для одного инстанса ClaudeHomeServer (см. `docs/observability-audit.md`):
+Расчёт для одного инстанса ClaudeHomeServer (см. `docs/observability/audit.md`):
 
 | Тип данных | 30 дней | 90 дней |
 |---|---|---|
@@ -199,7 +199,7 @@ Overlay (`docker-compose.observability.yml`) bind'ит все 3 порта к `1
 
 **Дашборды бэкапить не нужно** — они лежат в репе как код
 (`docker/observability/dashboards/*.json`) и накатываются `apply.ps1`. Это и есть
-основной механизм восстановления; см. [observability-dashboards.md](observability-dashboards.md).
+основной механизм восстановления; см. [observability-dashboards.md](dashboards.md).
 
 Метастор (пользователи, алерты) — через `pg_dump`, а не копированием файлов тома:
 у работающей СУБД снимок файлов даёт неконсистентный результат.

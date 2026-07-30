@@ -1,6 +1,6 @@
 # Среда исполнения пользователей (local / container)
 
-> Подробная документация подсистемы. Выжимка и инварианты — в [CLAUDE.md](../CLAUDE.md),
+> Подробная документация подсистемы. Выжимка и инварианты — в [CLAUDE.md](../../CLAUDE.md),
 > раздел «Среда исполнения». Читать перед правками в `Services/Execution/`, `SandboxManager`,
 > `UserHomeResolver` и всём, что касается запуска процессов пользователей.
 
@@ -10,7 +10,7 @@
 с полным доступом. **container** — всё исполняется в общей docker-песочнице `cc-sandbox`.
 Модель предполагает бэкенд НА ХОСТЕ (Windows), а не в контейнере.
 
-- **Слой запуска** — [Services/Execution/](../backend/ClaudeHomeServer/Services/Execution/):
+- **Слой запуска** — [Services/Execution/](../../backend/ClaudeHomeServer/Services/Execution/):
   `IProcessLauncher` (`ProcessSpec` → `Process`) с драйверами `LocalProcessRunner`
   (Process.Start, как раньше) и `DockerProcessRunner` (`docker exec -i cc-sandbox
   /app/run-turn.sh <turnId> …`, stdio stream-json насквозь). Резолв по владельцу —
@@ -33,7 +33,7 @@
   лежат в образе под `/app/mcp` (переписываются в `BuildTurnMcpConfig`).
 - **Корни проектов разведены**: local-юзеры — `DefaultProjectsPath`, container-юзеры —
   `Sandbox:ProjectsRoot` (в песочницу монтируется только он). Единая точка резолва —
-  [UserHomeResolver.cs](../backend/ClaudeHomeServer/Services/UserHomeResolver.cs): домашняя
+  [UserHomeResolver.cs](../../backend/ClaudeHomeServer/Services/UserHomeResolver.cs): домашняя
   папка юзера = `{база по среде}/{логин}`, внутри неё живут проекты без явного пути, `Chats`
   и корни файловых триггеров. Все четыре потребителя (`ProjectManager.Create`,
   `SessionManager.ResolveChatRoot`, `PersonaAgentFileSync.ChatRoot`, `AutomationRootResolver`)

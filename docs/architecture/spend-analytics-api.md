@@ -2,7 +2,7 @@
 
 Бэкенд фичи «Аналитика использования токенов v2» (спека
 `.omc/specs/deep-interview-token-spend-analytics-v2.md`, прототип
-`docs/mockups/spend-analytics-v2-prototype.html`). Метрика — токены; стоимость $
+`docs/design/mockups/spend-analytics-v2-prototype.html`). Метрика — токены; стоимость $
 собирается в данных про запас, но API на экраны её не отдаёт.
 
 ## Общее

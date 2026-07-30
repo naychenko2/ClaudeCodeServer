@@ -15,7 +15,7 @@
 
 ## Что и как заимствовано
 
-Полные переводы с построчным соответствием — в [docs/omo/translations/](omo/translations/):
+Полные переводы с построчным соответствием — в [docs/omo/translations/](translations/):
 у каждого файла frontmatter `source` (путь в репо OmO), `sourceCommit` (17104e1f),
 `usage` (место в нашем продукте) и секция **«Адаптации»** — исчерпывающий список
 отступлений от дословного перевода (замены инструментов OpenCode/Codex на аналоги
@@ -30,14 +30,14 @@ raw-тексты — `frontend/src/features/personas/omo/*.md`.
 
 | Агент OmO | Наш шаблон | Источник (репо OmO) | Перевод |
 |---|---|---|---|
-| Sisyphus | Оркестратор (Сизиф) | `packages/omo-opencode/src/agents/sisyphus/default.ts` | [sisyphus.md](omo/translations/sisyphus.md) |
-| Hephaestus | Мастер (Гефест) | `packages/omo-opencode/src/agents/hephaestus/gpt.ts` | [hephaestus.md](omo/translations/hephaestus.md) |
-| Prometheus | Планировщик (Прометей) | `packages/prompts-core/prompts/prometheus/default.md` + skill `ulw-plan` + plan-prepend из `delegate-task/constants.ts` | [prometheus.md](omo/translations/prometheus.md) |
-| Atlas | Координатор (Атлант) | `packages/prompts-core/prompts/atlas/default.md` | [atlas.md](omo/translations/atlas.md) |
-| Metis | Аналитик (Метида) | `packages/omo-opencode/src/agents/metis.ts` | [metis.md](omo/translations/metis.md) |
-| Momus | Ревьюер (Мом) | `packages/omo-opencode/src/agents/momus.ts` | [momus.md](omo/translations/momus.md) |
-| Oracle | Консультант (Оракул) | `packages/omo-opencode/src/agents/oracle.ts` | [oracle.md](omo/translations/oracle.md) |
-| Librarian | Библиотекарь (Клио) | `packages/omo-opencode/src/agents/librarian.ts` | [librarian.md](omo/translations/librarian.md) |
+| Sisyphus | Оркестратор (Сизиф) | `packages/omo-opencode/src/agents/sisyphus/default.ts` | [sisyphus.md](translations/sisyphus.md) |
+| Hephaestus | Мастер (Гефест) | `packages/omo-opencode/src/agents/hephaestus/gpt.ts` | [hephaestus.md](translations/hephaestus.md) |
+| Prometheus | Планировщик (Прометей) | `packages/prompts-core/prompts/prometheus/default.md` + skill `ulw-plan` + plan-prepend из `delegate-task/constants.ts` | [prometheus.md](translations/prometheus.md) |
+| Atlas | Координатор (Атлант) | `packages/prompts-core/prompts/atlas/default.md` | [atlas.md](translations/atlas.md) |
+| Metis | Аналитик (Метида) | `packages/omo-opencode/src/agents/metis.ts` | [metis.md](translations/metis.md) |
+| Momus | Ревьюер (Мом) | `packages/omo-opencode/src/agents/momus.ts` | [momus.md](translations/momus.md) |
+| Oracle | Консультант (Оракул) | `packages/omo-opencode/src/agents/oracle.ts` | [oracle.md](translations/oracle.md) |
+| Librarian | Библиотекарь (Клио) | `packages/omo-opencode/src/agents/librarian.ts` | [librarian.md](translations/librarian.md) |
 
 Ограничения инструментов агентов OmO переданы нашими профилями доступа персон
 (readOnly у Прометея/Метиды/Мома/Оракула/Клио) и набором возможностей (tasks/notes/web).
@@ -51,12 +51,12 @@ raw-тексты — `frontend/src/features/personas/omo/*.md`.
 
 | Материал OmO | Источник | Перевод | Где используется у нас |
 |---|---|---|---|
-| Режим ultrawork | `packages/prompts-core/prompts/ultrawork/default.md` | [ultrawork.md](omo/translations/ultrawork.md) | Магическое слово ultrawork/ulw/«ультра» в сообщении → инжект блока в ход (флаг `ultrawork-keyword`); константа `OmoPrompts.Ultrawork` (генерируется из перевода) |
-| Циклы ralph-loop / ulw-loop | `builtin-commands/templates/ralph-loop.ts`, `hooks/ralph-loop/continuation-prompt-builder.ts` | [loops.md](omo/translations/loops.md) | Цикл «до готово» (флаг `work-loop`): протокол хода, continuation-сообщения, верификационный ход (`OmoPrompts.WorkLoop*`). Верификацию Оракулом заменили самопроверкой со свидетельствами / ревьюером-субагентом |
-| Hyperplan (адверсариальное планирование) | `.opencode/skills/hyperplan/SKILL.md` | [hyperplan.md](omo/translations/hyperplan.md) | Фазовые промпты совещания персон (`PersonaMeetingService`: перекрёстная атака, ЗАЩИТА/УТОЧНЕНИЕ/УСТУПКА, дистилляция) и обвязка дискуссии «Обсудить с командой» (`DiscussTeamDialog`) |
-| Категории делегирования (8 шт.) | `src/tools/delegate-task/*-categories.ts` | [categories.md](omo/translations/categories.md) | Справочник «ДЕЛЕГИРОВАНИЕ» в промпте персоны-исполнителя задач (`TaskExecutionService`); константа `OmoPrompts.DelegationCategories` |
-| Model-специфичные дисциплинарные блоки | `src/agents/sisyphus/{claude-opus-4-7,gpt-5-5,glm-5-2,gemini}.ts` | [model-discipline.md](omo/translations/model-discipline.md) | Дисциплинарные секции `PersonaPromptBuilder` по провайдерам: Claude ← ветка Claude («наименьшее правильное изменение»), DeepSeek ← ветка GPT (самопроверка, намерение хода), GLM ← ветка GLM (пять сбоев, outcome-first) |
-| Верификационная дисциплина исполнителя | Hephaestus/Sisyphus-Junior (Termination, «no evidence = not complete») | [hephaestus.md](omo/translations/hephaestus.md), [sisyphus.md](omo/translations/sisyphus.md) | Правила «НЕТ СВИДЕТЕЛЬСТВ = НЕ ГОТОВО» и «остановись после первой успешной верификации» в контракте персоны-исполнителя задач |
+| Режим ultrawork | `packages/prompts-core/prompts/ultrawork/default.md` | [ultrawork.md](translations/ultrawork.md) | Магическое слово ultrawork/ulw/«ультра» в сообщении → инжект блока в ход (флаг `ultrawork-keyword`); константа `OmoPrompts.Ultrawork` (генерируется из перевода) |
+| Циклы ralph-loop / ulw-loop | `builtin-commands/templates/ralph-loop.ts`, `hooks/ralph-loop/continuation-prompt-builder.ts` | [loops.md](translations/loops.md) | Цикл «до готово» (флаг `work-loop`): протокол хода, continuation-сообщения, верификационный ход (`OmoPrompts.WorkLoop*`). Верификацию Оракулом заменили самопроверкой со свидетельствами / ревьюером-субагентом |
+| Hyperplan (адверсариальное планирование) | `.opencode/skills/hyperplan/SKILL.md` | [hyperplan.md](translations/hyperplan.md) | Фазовые промпты совещания персон (`PersonaMeetingService`: перекрёстная атака, ЗАЩИТА/УТОЧНЕНИЕ/УСТУПКА, дистилляция) и обвязка дискуссии «Обсудить с командой» (`DiscussTeamDialog`) |
+| Категории делегирования (8 шт.) | `src/tools/delegate-task/*-categories.ts` | [categories.md](translations/categories.md) | Справочник «ДЕЛЕГИРОВАНИЕ» в промпте персоны-исполнителя задач (`TaskExecutionService`); константа `OmoPrompts.DelegationCategories` |
+| Model-специфичные дисциплинарные блоки | `src/agents/sisyphus/{claude-opus-4-7,gpt-5-5,glm-5-2,gemini}.ts` | [model-discipline.md](translations/model-discipline.md) | Дисциплинарные секции `PersonaPromptBuilder` по провайдерам: Claude ← ветка Claude («наименьшее правильное изменение»), DeepSeek ← ветка GPT (самопроверка, намерение хода), GLM ← ветка GLM (пять сбоев, outcome-first) |
+| Верификационная дисциплина исполнителя | Hephaestus/Sisyphus-Junior (Termination, «no evidence = not complete») | [hephaestus.md](translations/hephaestus.md), [sisyphus.md](translations/sisyphus.md) | Правила «НЕТ СВИДЕТЕЛЬСТВ = НЕ ГОТОВО» и «остановись после первой успешной верификации» в контракте персоны-исполнителя задач |
 
 ### Не заимствовано (бэклог, отдельное согласование при необходимости)
 
@@ -77,6 +77,6 @@ comment-checker, skills (`programming`, `debugging`, `frontend` и др. — у 
 
 ## Обновление переводов
 
-Рантайм-константы генерируются из переводов скриптом [gen-omo-prompts.ps1](omo/gen-omo-prompts.ps1);
+Рантайм-константы генерируются из переводов скриптом [gen-omo-prompts.ps1](gen-omo-prompts.ps1);
 фронтовые raw-тексты `frontend/src/features/personas/omo/*.md` — копия тел переводов без
 frontmatter и секции «Адаптации». Правишь перевод → перегенерируй/перекопируй.

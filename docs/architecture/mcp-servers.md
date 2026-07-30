@@ -1,6 +1,6 @@
 # MCP-серверы продукта (mcp/*)
 
-> Подробная документация. Выжимка и общий механизм подключения — в [CLAUDE.md](../CLAUDE.md),
+> Подробная документация. Выжимка и общий механизм подключения — в [CLAUDE.md](../../CLAUDE.md),
 > раздел «MCP-серверы». Читать перед правками в `mcp/*/index.js` и `BuildTurnMcpConfig`.
 
 Все серверы — по одному файлу `mcp/{имя}-server/index.js`: чистый Node (stdio JSON-RPC,
@@ -12,7 +12,7 @@ notes/memory/personas — [personas.md](personas.md) и [knowledge.md](knowledge
 
 ## Сервер задач (mcp/tasks-server)
 
-Один файл [mcp/tasks-server/index.js](../mcp/tasks-server/index.js). Инструменты: `tasks_list`,
+Один файл [mcp/tasks-server/index.js](../../mcp/tasks-server/index.js). Инструменты: `tasks_list`,
 `tasks_search`, `tasks_get`, `tasks_create`, `tasks_update`, `tasks_complete`, `tasks_delete`,
 `tasks_add_subtask`, `tasks_toggle_subtask`, `tasks_run_executor`, `tasks_suggest_meta`,
 `tasks_normalize_title`, `tasks_find_duplicate`.
@@ -25,7 +25,7 @@ notes/memory/personas — [personas.md](personas.md) и [knowledge.md](knowledge
 
 ## Сервер графа кода (mcp/codegraph-server)
 
-Один файл [mcp/codegraph-server/index.js](../mcp/codegraph-server/index.js). Инструменты:
+Один файл [mcp/codegraph-server/index.js](../../mcp/codegraph-server/index.js). Инструменты:
 `codegraph_find` (найти тип по имени или части FQN), `codegraph_neighbors` (связи типа —
 кто зависит и от чего, с типом связи Calls/Implements/References и confidence),
 `codegraph_hubs` (топ типов по связности).

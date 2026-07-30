@@ -3,7 +3,7 @@
 Конвенция для ВСЕХ изменений UI — общая канва разработки: новый код обязан ей
 следовать, старый подтягивается по мере касания (правило бойскаута). Документ описывает
 то, что уже реализовано в коде; источник правды по значениям —
-[design.ts](../frontend/src/lib/design.ts) и [theme.css](../frontend/src/lib/theme.css).
+[design.ts](../../frontend/src/lib/design.ts) и [theme.css](../../frontend/src/lib/theme.css).
 
 ## Принципы
 
@@ -37,13 +37,13 @@
     лайтбокс) — это `C.onDark`: он белый в обеих темах, иначе надпись пропала бы.
 - **Размеры — из шкал**: шрифты `FS`, отступы `SP`, радиусы `R`, тени `SHADOW`,
   z-index `Z`, ширины модалок `MODAL_W`. Magic numbers вида `fontSize: 13.5` не заводим.
-- **Контролы — только из [components/ui/](../frontend/src/components/ui)** (и общих
+- **Контролы — только из [components/ui/](../../frontend/src/components/ui)** (и общих
   компонентов уровнем выше — Toolbar, EmptyState). Свою кнопку/поле/модалку/тумблер
   из div собирать нельзя — если примитива не хватает, расширь его пропом или заведи
   новый в `ui/` (см. «Как расширять систему»).
 - **Стили — inline-objects**. Без Tailwind, CSS-модулей и styled-components.
   Глобальный CSS — только theme.css и index.css (анимации, шрифты).
-- **Иконки — lucide-react**, размеры из `ICON_SIZE` ([ui/icons.ts](../frontend/src/components/ui/icons.ts)).
+- **Иконки — lucide-react**, размеры из `ICON_SIZE` ([ui/icons.ts](../../frontend/src/components/ui/icons.ts)).
   Инлайновые SVG — только когда в lucide нет подходящей.
 - **Каждый экран работает на мобиле**: `useIsMobile()` (lib/breakpoints), у примитивов
   есть `isMobile`-пропы, модалки на мобиле — шторкой (это уже умеет Modal).
@@ -71,7 +71,7 @@
 
 ## Рецепт нового раздела (хаб-страницы)
 
-Эталоны — [KnowledgePage](../frontend/src/features/knowledge/KnowledgePage.tsx),
+Эталоны — [KnowledgePage](../../frontend/src/features/knowledge/KnowledgePage.tsx),
 NotesPage, PersonasPage. Скелет desktop-ветки:
 
 ```tsx
@@ -109,8 +109,8 @@ cd frontend; npm run lint:design
 Прогон обязан быть **зелёным**; он гоняет только дизайн-правила, поэтому в нём не тонут
 замечания (общий `npm run lint` сейчас несёт сотни замечаний легаси-долга по react-hooks
 и типам — это отдельная история). Само правило —
-[frontend/eslint-rules/no-raw-color.js](../frontend/eslint-rules/no-raw-color.js), список
-файлов-исключений — `RAW_COLOR_ALLOWED` в [eslint.config.js](../frontend/eslint.config.js).
+[frontend/eslint-rules/no-raw-color.js](../../frontend/eslint-rules/no-raw-color.js), список
+файлов-исключений — `RAW_COLOR_ALLOWED` в [eslint.config.js](../../frontend/eslint.config.js).
 
 Что делать, когда правило сработало:
 
@@ -132,7 +132,7 @@ background: '#111',
 - **Новый цвет**: переменная в theme.css В ОБЕ темы (светлую и тёмную) + ключ в `C`
   с комментарием о роли. Не заводи близнеца существующего тона — сначала проверь палитру.
 - **Новый повторяющийся паттерн** (встретился второй раз — уже паттерн): выноси
-  в `ui/` и добавляй в реэкспорт [ui/index.ts](../frontend/src/components/ui/index.ts).
+  в `ui/` и добавляй в реэкспорт [ui/index.ts](../../frontend/src/components/ui/index.ts).
 - **Вариант примитива**: расширяй пропом существующий компонент (как `ButtonVariant`),
   а не форкай копию рядом.
 - **Отклонение от гайда осознанно нужно** (особый экран, эксперимент): оставь комментарий

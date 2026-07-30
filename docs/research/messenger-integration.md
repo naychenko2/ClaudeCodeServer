@@ -15,13 +15,13 @@
 >
 > **Что сделано вместо.** Задача «алерты в мессенджер» закрыта без мессенджера: тревоги
 > телеметрии доставляются через уже построенный web push CCS на PWA — см.
-> [observability.md, раздел «Алертинг»](observability.md). Ни регистрации, ни модерации,
+> [observability.md, раздел «Алертинг»](../observability/overview.md). Ни регистрации, ни модерации,
 > ни статусов это не требует.
 >
 > Всё, что ниже, остаётся в силе как ресёрч на случай появления юрлица или выбора
 > другого мессенджера.
 
-> Подробная документация. Выжимка — в [CLAUDE.md](../CLAUDE.md), раздел «Интеграция с
+> Подробная документация. Выжимка — в [CLAUDE.md](../../CLAUDE.md), раздел «Интеграция с
 > мессенджерами». Читать перед правками в `Services/Messenger/` и связанных с ними
 > webhook-контроллерах.
 
@@ -350,7 +350,7 @@ Max / Telegram ──webhook──▶ MessengerWebhookController (новый, PO
 ## Архитектурное решение: один бот или несколько
 
 **Контекст:** в перспективе у CCS два источника сообщений в мессенджер — собственные
-уведомления CCS и алерты телеметрии (см. [observability.md](observability.md),
+уведомления CCS и алерты телеметрии (см. [observability.md](../observability/overview.md),
 раздел «Future Epics — Alerting»).
 
 ### Вариант A — два разных бота
@@ -413,7 +413,7 @@ CCS, и сервисом телеметрии).
   верификация профиля, модерация перед публикацией. Учитывать в lead time первого деплоя.
 - **HTTPS + trusted CA.** Self-signed не работает с мая 2026. Для dev-деплоя за nginx /
   Caddy нужен валидный серт (Let's Encrypt или российский Минцифры). Смотреть
-  [remote-access.md](remote-access.md) для существующей схемы терминирования TLS.
+  [remote-access.md](../operations/remote-access.md) для существующей схемы терминирования TLS.
 - **Только РФ.** Международным юзерам бесполезен — делать fallback на Telegram.
 - **30 rps rate limit.** Для solo-сценариев хватит, но при массовом деплое (много юзеров,
   много чатов) — продумать батчинг или несколько ботов.
@@ -446,15 +446,15 @@ CCS, и сервисом телеметрии).
 
 ## Cross-links
 
-- [CLAUDE.md](../CLAUDE.md) — общая архитектура, SignalR hub, auth, REST API.
-- [observability.md](observability.md) — телеметрия CCS; в «Future Epics — Alerting»
+- [CLAUDE.md](../../CLAUDE.md) — общая архитектура, SignalR hub, auth, REST API.
+- [observability.md](../observability/overview.md) — телеметрия CCS; в «Future Epics — Alerting»
   упомянуты Telegram-алерты. При реализации интеграции с Max — использовать общую
   .NET-библиотеку клиента и одного бота (см. раздел выше).
-- [mcp-servers.md](mcp-servers.md) — паттерн внешних интеграций (HTTP + service token).
-- [personas.md](personas.md) — персоны, `PersonaPromptBuilder`, память, зоны, доступы;
+- [mcp-servers.md](../architecture/mcp-servers.md) — паттерн внешних интеграций (HTTP + service token).
+- [personas.md](../architecture/personas.md) — персоны, `PersonaPromptBuilder`, память, зоны, доступы;
   используются в расширенных кейсах A/B/C (см. раздел выше).
-- [features.md](features.md) — `notifications-server` и продуктовые уведомления.
-- [remote-access.md](remote-access.md) — существующая схема публичного доступа и TLS.
+- [features.md](../architecture/features.md) — `notifications-server` и продуктовые уведомления.
+- [remote-access.md](../operations/remote-access.md) — существующая схема публичного доступа и TLS.
 
 ## Источники (проверено июль 2026)
 

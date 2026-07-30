@@ -26,9 +26,9 @@
 
 > Уникальных P1 — **7**: дефект «TodoWrite-план» зафиксирован дважды (MA2 и MD4) с разных сторон.
 
-Детальные отчёты: [`audit/mockup-A-mobile.md`](audit/mockup-A-mobile.md) · [`B-desktop`](audit/mockup-B-desktop.md) · [`C-tablet`](audit/mockup-C-tablet.md) · [`D-chat-states`](audit/mockup-D-chat-states.md) · [`E-composer-system`](audit/mockup-E-composer-system.md).
+Детальные отчёты: [`audit/mockup-A-mobile.md`](../../audit/mockup-A-mobile.md) · [`B-desktop`](../../audit/mockup-B-desktop.md) · [`C-tablet`](../../audit/mockup-C-tablet.md) · [`D-chat-states`](../../audit/mockup-D-chat-states.md) · [`E-composer-system`](../../audit/mockup-E-composer-system.md).
 
-*(Отдельным, вторичным слоем ранее проверена дисциплина токенов `design.ts` — 76 пунктов в [`audit/01–04`](audit/). Это про «код vs свои токены», а не про задумку, поэтому здесь не дублируется.)*
+*(Отдельным, вторичным слоем ранее проверена дисциплина токенов `design.ts` — 76 пунктов в [`audit/01–04`](../../audit/). Это про «код vs свои токены», а не про задумку, поэтому здесь не дублируется.)*
 
 ---
 

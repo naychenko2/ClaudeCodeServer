@@ -1,12 +1,12 @@
 # REST API
 
 > Справочник эндпоинтов. Актуальный источник правды — контроллеры в
-> [backend/ClaudeHomeServer/Controllers/](../backend/ClaudeHomeServer/Controllers/);
+> [backend/ClaudeHomeServer/Controllers/](../../backend/ClaudeHomeServer/Controllers/);
 > при расхождении верить коду и чинить этот файл.
 
 Все эндпоинты (кроме `/api/auth/ping`) и SignalR-хаб защищены `[Authorize]` —
 доступ только по API-ключу. `ping` дополнительно под rate-limit (`Auth:PingRateLimit`,
-по умолчанию 10/мин на IP). См. [remote-access.md](remote-access.md).
+по умолчанию 10/мин на IP). См. [remote-access.md](../operations/remote-access.md).
 
 ```
 POST /api/auth/ping             { serverUrl, apiKey } → { ok } | 401 | 429  (ключ + rate-limit)
@@ -67,4 +67,4 @@ GET                 /api/knowledge/{id}/search?q=&topK=&method=semantic|fulltext
 
 Эффективные значения флагов также возвращаются в `GET /api/auth/me` (поле `featureFlags`),
 чтобы фронт получал их тем же запросом, что и при старте. Подробнее — раздел «Фич-флаги»
-в [CLAUDE.md](../CLAUDE.md).
+в [CLAUDE.md](../../CLAUDE.md).

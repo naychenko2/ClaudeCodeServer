@@ -18,7 +18,7 @@ runbook развёртывания SigNoz вынесены в отдельные
 - **Alerting** (email/Telegram уведомления) — отложено, см. [Future Epics](#future-epics-explicitly-deferred).
 - **Persistent postmortem beyond SigNoz** (Tempo/Loki) — N/A: SigNoz + ClickHouse уже даёт
   персистентное хранение (30d traces / 90d metrics, см.
-  [observability-signoz-setup.md](observability-signoz-setup.md#retention-срок-хранения)).
+  [observability-signoz-setup.md](signoz-setup.md#retention-срок-хранения)).
 - **End-user-facing telemetry UI** — аудитория телеметрии = администратор, не конечный
   пользователь.
 - **Per-user metric attribution** — соображения приватности: только атрибут
@@ -65,7 +65,7 @@ runbook развёртывания SigNoz вынесены в отдельные
 - **Retention:** 30 дней traces / 90 дней metrics (TTL в таблицах ClickHouse).
 - **Встроенные дашборды** и query-режим поверх traces/metrics.
 - **UI:** http://localhost:3301
-- **Развёртывание и troubleshooting:** [docs/observability-signoz-setup.md](observability-signoz-setup.md)
+- **Развёртывание и troubleshooting:** [docs/observability/signoz-setup.md](signoz-setup.md)
 
 ### Aspire Dashboard (dev, optional)
 
@@ -75,7 +75,7 @@ runbook развёртывания SigNoz вынесены в отдельные
 
 ## Duplication Architecture
 
-Подробный аудит существующих поверхностей: [docs/observability-audit.md](observability-audit.md).
+Подробный аудит существующих поверхностей: [docs/observability/audit.md](audit.md).
 
 **Принцип (вывод из аудита):** OTel добавляет **операционный слой** (latency, error rates,
 rate-limiting), а не дублирует существующие доменные сторы. SpendStore остаётся source of
@@ -340,15 +340,15 @@ AlertPollingService  →  NotificationService  →  колокол + тост + 
 
 ## Cross-links
 
-- [Аудит существующих поверхностей](observability-audit.md) — что уже есть в проекте, чтобы
+- [Аудит существующих поверхностей](audit.md) — что уже есть в проекте, чтобы
   не дублировать. Сводная таблица 4 сторов + cross-reference планируемых OTel-метрик.
-- [SigNoz setup runbook](observability-signoz-setup.md) — развёртывание stack, retention,
+- [SigNoz setup runbook](signoz-setup.md) — развёртывание stack, retention,
   порты, troubleshooting, объём диска.
-- [SigNoz-дашборды](observability-dashboards.md) — дашборды как IaC: JSON в репе,
+- [SigNoz-дашборды](dashboards.md) — дашборды как IaC: JSON в репе,
   идемпотентный импорт через `apply.ps1`, backup-стратегия.
-- [MCP-servers docs](mcp-servers.md) — диагностика MCP-вызовов через `GET /api/mcp/calls`
+- [MCP-servers docs](../architecture/mcp-servers.md) — диагностика MCP-вызовов через `GET /api/mcp/calls`
   (in-memory счётчики, дополняют OTel).
-- [CLAUDE.md](../CLAUDE.md) — общая архитектура проекта, REST API, соглашения.
+- [CLAUDE.md](../../CLAUDE.md) — общая архитектура проекта, REST API, соглашения.
 
 ## Future Epics (explicitly deferred)
 

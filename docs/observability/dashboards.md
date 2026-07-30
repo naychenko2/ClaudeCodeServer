@@ -2,7 +2,7 @@
 
 Дашборды хранятся в репе как JSON (`docker/observability/dashboards/*.json`) —
 source of truth. В SigNoz они заливаются идемпотентным скриптом
-[`apply.ps1`](../docker/observability/dashboards/apply.ps1) через REST API. Так
+[`apply.ps1`](../../docker/observability/dashboards/apply.ps1) через REST API. Так
 переустановка SigNoz или `docker compose down -v` не теряет конфигурацию: один
 запуск скрипта возвращает всё на место.
 
@@ -289,5 +289,5 @@ docker\observability\dashboards\apply.ps1
 
 ## Cross-links
 
-- [Observability overview](observability.md) — общая архитектура OTel-стека
-- [SigNoz setup](observability-signoz-setup.md) — развёртывание SigNoz, troubleshooting
+- [Observability overview](overview.md) — общая архитектура OTel-стека
+- [SigNoz setup](signoz-setup.md) — развёртывание SigNoz, troubleshooting

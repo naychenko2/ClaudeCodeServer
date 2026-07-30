@@ -1,6 +1,6 @@
 # Хаб раздела «Персоны» — концепция (на утверждение)
 
-Кликабельный макет: `docs/mockups/personas-hub.html`.
+Кликабельный макет: `docs/design/mockups/personas-hub.html`.
 
 ## Проблема
 
@@ -8,7 +8,7 @@
 заглушка (иконка + заголовок + подсказка + кнопка «Новая персона»). Для главной
 страницы целого раздела это слишком бедно. Готового аналога «командного хаба» для
 копирования в коде нет — вкладка «Команда» в проектах устроена так же скудно
-(`ProjectPersonaEmpty` в [ProjectPersonasPanel.tsx](../../frontend/src/features/personas/ProjectPersonasPanel.tsx)).
+(`ProjectPersonaEmpty` в [ProjectPersonasPanel.tsx](../../../frontend/src/features/personas/ProjectPersonasPanel.tsx)).
 Композиция ниже спроектирована с нуля, в дизайн-системе продукта.
 
 ## Итерация 2 (правки пользователя)

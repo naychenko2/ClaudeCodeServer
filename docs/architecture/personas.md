@@ -1,6 +1,6 @@
 # Персоны
 
-> Подробная документация подсистемы. Выжимка и инварианты — в [CLAUDE.md](../CLAUDE.md),
+> Подробная документация подсистемы. Выжимка и инварианты — в [CLAUDE.md](../../CLAUDE.md),
 > раздел «Персоны». Читать перед правками в `PersonaManager`, `PersonaPromptBuilder`,
 > памяти персон, групповых чатах, `features/personas/` и MCP-серверах personas/memory.
 
@@ -11,21 +11,21 @@
 «Роль (Имя)»), имя, характер, аватар, модель/усилие, зона, приветствие, долгая память.
 Изоляция per-owner (как задачи/заметки).
 
-- **Модель**: [Persona.cs](../backend/ClaudeHomeServer/Models/Persona.cs) — `Persona`
+- **Модель**: [Persona.cs](../../backend/ClaudeHomeServer/Models/Persona.cs) — `Persona`
   (Name, Role, Handle, Description, SystemPrompt, Model/Effort, Scope `Global|Project`, ProjectId,
   Avatar `{Kind initials|image, Color, ImageFile}`, Greeting, MemoryEnabled) +
   `PersonaMemoryEntry` (Type `Semantic|Episodic|Procedural`, Text, Tags, Salience). Хранилище —
   `data/personas.json`, ассеты (аватары) — `data/personas/{id}/`.
-- **CRUD**: [PersonaManager.cs](../backend/ClaudeHomeServer/Services/PersonaManager.cs) — per-owner
+- **CRUD**: [PersonaManager.cs](../../backend/ClaudeHomeServer/Services/PersonaManager.cs) — per-owner
   (`Get(id, userId)` проверяет OwnerId), генерация уникального slug-`Handle`.
-  [PersonasController.cs](../backend/ClaudeHomeServer/Controllers/PersonasController.cs) —
+  [PersonasController.cs](../../backend/ClaudeHomeServer/Controllers/PersonasController.cs) —
   `/api/personas/*` (CRUD с фильтрами `?scope=context|project|global&projectId=`, `{id}/chats`,
   `{id}/memory*`, `{id}/avatar*`, `ai/character` — LLM-генерация/улучшение характера с
   уточняющим промптом); realtime — `PersonasChangedMessage` (created/updated/deleted/memory).
 - **Чат с персоной**: `Session.PersonaId`; `SessionManager.CreatePersonaChatAsync` маршрутизирует
   по зоне — **глобальная** персона → чат вне проекта (scope = все данные владельца, `ProjectId=null`
   в tasks/notes MCP), **проектная** → сессия в её проекте (scope = только проект). Характер персоны
-  инжектится в системный промпт как персональный слой ([ClaudeSession.cs](../backend/ClaudeHomeServer/Services/Llm/Claude/ClaudeSession.cs),
+  инжектится в системный промпт как персональный слой ([ClaudeSession.cs](../../backend/ClaudeHomeServer/Services/Llm/Claude/ClaudeSession.cs),
   приоритет над .md-агентом); персона-слой (промпт+память) восстанавливается и после рестарта
   (`BuildPersonaLayer` в `EnsureProcessAsync`). Назначение/смена собеседника —
   `SessionManager.SetPersona` (`POST /chats/{id}/persona`, `POST .../sessions/{sid}/persona`),
@@ -34,14 +34,14 @@
   `Session.PersonaSwitched` добавляет в промпт оговорку про чужие прошлые ответы, на фронте
   локальный разделитель «Теперь отвечает: …». Scope НЕ требует спец-логики — он
   предопределён типом сессии.
-- **Шаблоны ролей** ([personaTemplates.ts](../frontend/src/features/personas/personaTemplates.ts)):
+- **Шаблоны ролей** ([personaTemplates.ts](../../frontend/src/features/personas/personaTemplates.ts)):
   6 готовых ролей с промптами-контрактами (Ревьюер, Планировщик, Аналитик, Ментор, Секретарь,
   Дизайнер) — сетка карточек на экране создания (PersonaQuickCreate), выбор предзаполняет
   PersonaForm (`initial`), включая дефолтные возможности, модель и усилие.
 - **Пантеон OmO — подключаемая команда** (built-in-подход, как у самих OmO): каталог —
-  [OmoPantheonCatalog.cs](../backend/ClaudeHomeServer/Services/Prompts/OmoPantheonCatalog.cs)
+  [OmoPantheonCatalog.cs](../../backend/ClaudeHomeServer/Services/Prompts/OmoPantheonCatalog.cs)
   (8 ролей с ПОЛНЫМИ переведёнными промптами, по договорённости с авторами —
-  [omo-adoption.md](omo-adoption.md)): Оркестратор (Сизиф), Мастер (Гефест),
+  [omo-adoption.md](../omo/adoption.md)): Оркестратор (Сизиф), Мастер (Гефест),
   Планировщик (Прометей), Координатор (Атлант), Аналитик (Метида), Ревьюер (Мом),
   Консультант (Оракул), Библиотекарь (Клио); регламенты — сгенерированный partial
   `OmoPantheonCatalog.Instructions.cs` (docs/omo/gen-omo-prompts.ps1 из переводов).
@@ -49,7 +49,7 @@
   `POST /api/personas/pantheon/connect` {keys?} — идемпотентно создаёт ГЛОБАЛЬНЫЕ персоны
   с готовыми именами (советники — readOnly). **Роли видны всегда**: в селекторах собеседника,
   групповых чатах и диалоге «Обсудить с командой» отдельная группа «Пантеон OmO»
-  (виртуальные роли из [usePantheon.ts](../frontend/src/features/personas/usePantheon.ts));
+  (роли пантеона — персоны с непустым `templateKey`, см. [PersonaList.tsx](../../frontend/src/features/personas/PersonaList.tsx));
   при выборе роль тихо материализуется (`materializePantheon` → connect по ключу) — явной
   кнопки подключения нет. **Авто-обновление регламентов**: `Persona.TemplateInstructionsHash` —
   SHA-256 поставленной из каталога инструкции; при старте (`RefreshPantheonInstructions`)
@@ -71,10 +71,10 @@
   `Persona:AskTimeoutMs`, дефолт 120с; после ответа консультация уходит в память
   персоны — `PersonaMemoryAutolearnService.LearnFromConsultation`, фокус не трогается).
   Анти-рекурсия по построению: one-shot без MCP, глубина делегирования 1. Фронт: автокомплит `@` в Composer
-  ([MentionsDropdown.tsx](../frontend/src/components/MentionsDropdown.tsx)). Handle персон
+  ([MentionsDropdown.tsx](../../frontend/src/components/MentionsDropdown.tsx)). Handle персон
   транслитерируется из кириллицы (PersonaManager.Slugify).
 - **Механики «Обсудить с командой»** (поверх @упоминаний): реестр и сборка текста хода —
-  [teamMechanics.ts](../frontend/src/features/team/teamMechanics.ts) (`buildTeamTurnText`),
+  [teamMechanics.ts](../../frontend/src/features/team/teamMechanics.ts) (`buildTeamTurnText`),
   бэкенд и протокол не участвуют. Механики: дискуссия через @упоминания, workflow-скрипты
   с персонами в ролях (`/panel-of-experts`, `/review-consilium`, `/red-team`,
   `/team-implement` — participants/executors = handle персон) и `/oh-my-claudecode:*`
@@ -87,19 +87,19 @@
   mustNot/outputFormat/speechExamples/instructions — слоты вместо единого текста; legacy
   `SystemPrompt` остаётся у персон без контракта; `instructions` — длинный регламент роли
   отдельной секцией «## Инструкция», в PersonaForm свёрнут при пустом). Единый сборщик
-  промпта — [PersonaPromptBuilder.cs](../backend/ClaudeHomeServer/Services/PersonaPromptBuilder.cs):
+  промпта — [PersonaPromptBuilder.cs](../../backend/ClaudeHomeServer/Services/PersonaPromptBuilder.cs):
   идентичность + секции контракта + дисциплинарная обвязка по провайдеру модели секциями
   из model-веток OmO (Claude — краткость + прагматизм наименьшего изменения; DeepSeek —
   полный набор + самопроверка и намерение хода; GLM — калибровка пяти сбоев + outcome-first,
   без секции достоверности).
-- **Память v2 (P3)**: скоринг взвешенной суммой ([PersonaMemoryScorer.cs](../backend/ClaudeHomeServer/Services/PersonaMemoryScorer.cs)),
+- **Память v2 (P3)**: скоринг взвешенной суммой ([PersonaMemoryScorer.cs](../../backend/ClaudeHomeServer/Services/PersonaMemoryScorer.cs)),
   reinforcement (Touch при recall) и **рабочий фокус** «что я сейчас делаю» (одна ячейка,
   в recall первым блоком; `GET/DELETE {id}/focus`). Autolearn выставляет salience и фокус;
   фоновая консолидация (LLM-merge дублей + вытеснение) — за флагом `persona-memory-consolidation`
-  ([PersonaMemoryConsolidationService.cs](../backend/ClaudeHomeServer/Services/PersonaMemoryConsolidationService.cs)).
+  ([PersonaMemoryConsolidationService.cs](../../backend/ClaudeHomeServer/Services/PersonaMemoryConsolidationService.cs)).
 - **Профили доступа (P6)**: `Persona.Access` — `full` | `readOnly` (смотрит и советует, ничего
   не меняет) | `custom` (свой список `DisallowedTools`); в disallowed-инструменты сессии их
-  превращает [PersonaAccessPolicy.cs](../backend/ClaudeHomeServer/Services/PersonaAccessPolicy.cs)
+  превращает [PersonaAccessPolicy.cs](../../backend/ClaudeHomeServer/Services/PersonaAccessPolicy.cs)
   (`BuildExtraDisallowed`, поверх ограничений `Tools`).
 - **Персона-исполнитель задач**: `TaskItem.PersonaId` — задача выполняется силами Claude «от лица»
   персоны (её характер/модель/память). Инвариант `PersonaId != null ⇒ Assignee = Claude`
@@ -108,11 +108,11 @@
   AcceptEdits с `personaId`, 6-секционный контракт `BuildPersonaPrompt`, уведомления от лица;
   деградация без персоны). Валидация — `TaskPersonaValidator` (персона владельца; проектная — только
   свой проект). **Три канала назначения** вокруг одного поля `personaId`: (1) UI — единый пикер
-  «Исполнитель» ([ExecutorPicker.tsx](../frontend/src/features/tasks/ExecutorPicker.tsx)) в форме и
+  «Исполнитель» ([ExecutorPicker.tsx](../../frontend/src/features/tasks/ExecutorPicker.tsx)) в форме и
   диалоге создания; (2) REST — `personaId` в POST/PUT задач + фильтр `GET /api/tasks?personaId=`;
   (3) MCP — `personaId` в `tasks_create`/`tasks_update` + `personas_list` для id (подсказка в
   промпте tasks-server при подключённом personas-server). Вкладка **«Задачи»** в студии персоны
-  ([PersonaTasksPanel.tsx](../frontend/src/features/personas/PersonaTasksPanel.tsx)) — отфильтрованный
+  ([PersonaTasksPanel.tsx](../../frontend/src/features/personas/PersonaTasksPanel.tsx)) — отфильтрованный
   вид реальных задач (те же `TaskCard`), клик открывает задачу в её разделе (`openTaskInSection` →
   событие `cc-open-url`), кнопка «Поручить задачу» = `NewTaskDialog` с предзаполненным исполнителем;
   факт-чип «Задачи» на Обзоре. **Проактивность («пишет первой» по расписанию) удалена** — сценарий
@@ -121,7 +121,7 @@
   первая — ведущая), `Session.PersonaId` = активный спикер. Создание —
   `SessionManager.CreateGroupChatAsync` (`POST /api/chats/group`; зона — по ведущей, как у
   CreatePersonaChatAsync), состав — `PUT /api/chats/{id}/participants` (спикер сохраняется,
-  если остался, иначе ведущая). Роутинг хода — [GroupChatRouter.cs](../backend/ClaudeHomeServer/Services/GroupChatRouter.cs)
+  если остался, иначе ведущая). Роутинг хода — [GroupChatRouter.cs](../../backend/ClaudeHomeServer/Services/GroupChatRouter.cs)
   (первый @handle участника в тексте → спикер, остальные → AlsoMentioned; без упоминаний —
   текущий/ведущая) в `SendMessageAsync` до пересоздания процесса: `SwitchSpeaker` (общее ядро
   с SetPersona) + `speaker_changed` клиентам (разделитель «Теперь отвечает: …», рендер общий
@@ -133,15 +133,15 @@
   предупреждение про разных провайдеров), стек аватаров в ChatHeaderBar (активный — с
   цветным кольцом), участники первыми в @автокомплите.
 - **Долгая память** (типизация 2026 semantic/episodic/procedural):
-  [PersonaMemoryService.cs](../backend/ClaudeHomeServer/Services/PersonaMemoryService.cs) — записи в
+  [PersonaMemoryService.cs](../../backend/ClaudeHomeServer/Services/PersonaMemoryService.cs) — записи в
   `data/persona-memory.json` (источник правды) + семантический слой в Dify-датасет
   `{username}:persona:{handle}` (дифф по хешам, дебаунс 15с; без Dify — полнотекст-fallback).
   Retrieval со скорингом `relevance × recency(полураспад 30д) × typeWeight(0.6/0.3/0.1) × salience`.
   Auto-recall в системный промпт каждого хода (`BuildPersonaRecallProvider`, независим от заметок).
-- **MCP**: [mcp/memory-server/index.js](../mcp/memory-server/index.js) (без зависимостей) —
+- **MCP**: [mcp/memory-server/index.js](../../mcp/memory-server/index.js) (без зависимостей) —
   memory_remember/search/list/forget; подключение как tasks/notes (env `MEMORY_API_URL/TOKEN/PERSONA_ID`
   в `BuildTurnMcpConfig` + подсказка в промпт). Явный write-path: персона сама решает, что запомнить.
-- **MCP персон**: [mcp/personas-server/index.js](../mcp/personas-server/index.js) (без зависимостей) —
+- **MCP персон**: [mcp/personas-server/index.js](../../mcp/personas-server/index.js) (без зависимостей) —
   personas_list/get/create/update/delete/generate_avatar (CRUD персон из любого чата; создание
   глобальных и проектных — дефолтный projectId из сессии). Подключение как tasks/notes
   (env `PERSONAS_API_URL/TOKEN/PROJECT_ID` в `BuildTurnMcpConfig` + подсказка в промпт), но только
@@ -152,7 +152,7 @@
   может настраивать проактивность любой персоне, включая себя); значения enum триггера/веса
   действия — camelCase (`gitCommit`/`taskStatus`/`gate`/`work`, см. `JsonStringEnumConverter` в Program.cs).
 - **Аватар**: инициалы+цвет (палитра `AGENT_COLORS`) базой; фото-генерация через fal.ai —
-  [FalImageService.cs](../backend/ClaudeHomeServer/Services/FalImageService.cs) (`Fal:ApiKey`, модель
+  [FalImageService.cs](../../backend/ClaudeHomeServer/Services/FalImageService.cs) (`Fal:ApiKey`, модель
   `Fal:ImageModel`, дефолт `fal-ai/flux/schnell`; для фото-аватаров задают `flux/dev`). Генерация
   возвращает 1-4 **кандидата** (`POST {id}/avatar/generate` {prompt?,count?} → candidates во временную
   папку, аватар НЕ меняется), пользователь выбирает (`POST {id}/avatar/select`), отдача — `GET {id}/avatar`
@@ -160,25 +160,25 @@
   (`POST {id}/avatar/upload` — original + cropped + параметры кропа; валидация по magic bytes)
   и перекроп сохранённого оригинала без перезагрузки файла (`POST {id}/avatar/recrop`,
   `GET {id}/avatar/original`).
-- **Авто-память** (флаг `persona-memory-autolearn`): [PersonaMemoryAutolearnService.cs](../backend/ClaudeHomeServer/Services/PersonaMemoryAutolearnService.cs) —
+- **Авто-память** (флаг `persona-memory-autolearn`): [PersonaMemoryAutolearnService.cs](../../backend/ClaudeHomeServer/Services/PersonaMemoryAutolearnService.cs) —
   IHostedService на `SessionManager.OnSessionMessage`; по завершении хода персонной сессии one-shot
   извлекает факты (semantic) и итог (episodic) из транскрипта и сохраняет в память (дедуп в `Remember`).
-- **Фронт**: [features/personas/](../frontend/src/features/personas/) — PersonasPage (глобальный раздел,
+- **Фронт**: [features/personas/](../../frontend/src/features/personas/) — PersonasPage (глобальный раздел,
   только `scope=global`): сайдбар PersonaList | центр «Студия-профиль»; редактор
-  [PersonaForm.tsx](../frontend/src/features/personas/PersonaForm.tsx) — одна колонка 680 в стиле
+  [PersonaForm.tsx](../../frontend/src/features/personas/PersonaForm.tsx) — одна колонка 680 в стиле
   TaskEditForm: hero-аватар 80 (инлайн-генерация 4 кандидатов + цвет), безрамочная serif-«Роль»,
   Характер во всю ширину (липкая панель пресетов + ✨Сгенерировать/✨Улучшить с уточняющим
   промптом-поповером, autoGrow без скролла), Поведение (модель/усилие/зона/приветствие),
-  Память-summary (счётчики + «Открыть память»); действия — в [PersonaToolbar.tsx](../frontend/src/features/personas/PersonaToolbar.tsx)
+  Память-summary (счётчики + «Открыть память»); действия — в [PersonaToolbar.tsx](../../frontend/src/features/personas/PersonaToolbar.tsx)
   (общий Toolbar: Профиль|Память, Поговорить, ⋯-меню с Удалить, Сохранить + dirty-индикатор).
   В проекте — вкладка «Команда» (`leftTab='agents'` WorkspacePage): список в сайдбаре
-  ([ProjectPersonasPanel.tsx](../frontend/src/features/personas/ProjectPersonasPanel.tsx)), форма — в
+  ([ProjectPersonasPanel.tsx](../../frontend/src/features/personas/ProjectPersonasPanel.tsx)), форма — в
   контентной зоне. Идентификация в чатах: плашки ChatList/SessionList (аватар+«Роль (Имя)»+цвет),
   агент в тулбаре чата (ChatHeaderBar: аватар+роль/имя+зона+полоса цвета), аватар у реплик
   (PersonaContext→ChatItemView), приветствие (PersonaGreeting). Запуск чата: «Поговорить» из
-  студии, [PersonaSelector](../frontend/src/components/PersonaSelector.tsx) в композере пустого чата
+  студии, [CompanionSelector](../../frontend/src/components/CompanionSelector.tsx) в композере пустого чата
   (группы «Команда проекта»/«Глобальные»), пилюли «Поговорить с…» в empty state (в проекте
-  команда сразу, глобальные за «+N ещё»). Стор [lib/personas.ts](../frontend/src/lib/personas.ts)
+  команда сразу, глобальные за «+N ещё»). Стор [lib/personas.ts](../../frontend/src/lib/personas.ts)
   (realtime personas_changed; `personaLabel`/`personaTitleLines` — единый формат «Роль (Имя)»).
 - **Флаги**: `personas` (раздел + чат + память + аватар + персона-исполнитель задач + вкладка
   «Задачи»), `persona-memory-autolearn` (авто-извлечение фактов из диалога),

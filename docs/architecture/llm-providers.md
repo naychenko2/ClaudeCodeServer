@@ -1,6 +1,6 @@
 # LLM-провайдеры (Services/Llm)
 
-> Подробная документация подсистемы. Выжимка и инварианты — в [CLAUDE.md](../CLAUDE.md),
+> Подробная документация подсистемы. Выжимка и инварианты — в [CLAUDE.md](../../CLAUDE.md),
 > раздел «LLM-провайдеры». Читать перед правками в `Services/Llm/`, конфиге `LlmProviders`,
 > фоновых one-shot действиях и всём, что касается запуска claude CLI.
 
@@ -119,7 +119,7 @@ UI скрывает недоступное (`useModelCaps` в `lib/models.ts`), 
 `/api/chat`, `think:false`), OpenRouter — прямым HTTP (`CloudCheapClient`, OpenAI-совместимый
 `/chat/completions`), оба мимо claude CLI (старт CLI ~15с убил бы смысл «быстро и часто»).
 Маршрутизация — per-action, исполнителя выбирает админ:
-- **Каталог** — [LocalActionCatalog.cs](../backend/ClaudeHomeServer/Services/Llm/LocalActionCatalog.cs):
+- **Каталог** — [LocalActionCatalog.cs](../../backend/ClaudeHomeServer/Services/Llm/LocalActionCatalog.cs):
   все фоновые действия (ключ, группа, профиль вызова small/text/large, `DefaultLocal` —
   рекомендация). **changelog** («Что нового») входит — идёт через `RunDetailedAsync` (сохраняет
   usage/стоимость на claude-пути; на бесплатной модели usage=null, стоимость 0). НЕ входят:
@@ -128,7 +128,7 @@ UI скрывает недоступное (`useModelCaps` в `lib/models.ts`), 
 - **Бесплатные модели OpenRouter** — КУРИРУЕМЫЙ короткий список в конфиге (не полный `/models`:
   там 300+ моделей, много мусора и перегруженных upstream-провайдером): **агентские** для чата —
   `LlmProviders:openrouter:Models` (обычный путь провайдера через claude CLI); **для прямого
-  адаптера** [CloudCheapClient.cs](../backend/ClaudeHomeServer/Services/Llm/CloudCheapClient.cs)
+  адаптера** [CloudCheapClient.cs](../../backend/ClaudeHomeServer/Services/Llm/CloudCheapClient.cs)
   (HTTP, только фоновые) — `OpenRouter:DirectModels`, `ModelCatalogService.AppendOpenRouterDirect`
   добавляет их с префиксом `direct:` и `provider=openrouter-direct`. Два транспорта различаются
   в маршруте префиксом `direct:` (модель без него — через провайдер/CLI, с ним — через адаптер).
@@ -138,7 +138,7 @@ UI скрывает недоступное (`useModelCaps` в `lib/models.ts`), 
   только проверенные на стабильный streaming (Nemotron 3 Ultra/Super, Laguna S 2.1, North Mini
   Code; Gemma/Muse Spark исключены как нестабильные). В агентском ModelPicker (чат/сессия/персона)
   `direct:`-модели СКРЫТЫ (проп `includeDirect`) — там нужны агентские вызовы.
-- **Роутер** — [LocalActionRouter.cs](../backend/ClaudeHomeServer/Services/Llm/LocalActionRouter.cs):
+- **Роутер** — [LocalActionRouter.cs](../../backend/ClaudeHomeServer/Services/Llm/LocalActionRouter.cs):
   `Resolve(key)` → `ActionRoute(Kind, Model, Source, Tier)`, где `Kind` — исполнитель ПЕРВОГО шага
   (`Local` | `Claude` | `Tier` со слотом | `Model` c id конкретной модели провайдера), а приоритет
   источников — **выбор админа → `Ollama:Actions` конфига → `DefaultLocal` каталога** (политика A —
@@ -159,7 +159,7 @@ UI скрывает недоступное (`useModelCaps` в `lib/models.ts`), 
   Ollama. **Последний шаг без страховки**: отказ claude уходит наверх исключением, и потребитель
   деградирует как раньше. Отмену `CancellationToken` по цепочке НЕ фолбэчим — это не сбой модели.
   При `Kind=Claude` шаг локали пропускается, иначе выбор «Claude» не отличался бы от «локаль».
-- **Выбор админа** — [LocalActionOverridesStore.cs](../backend/ClaudeHomeServer/Services/Llm/LocalActionOverridesStore.cs):
+- **Выбор админа** — [LocalActionOverridesStore.cs](../../backend/ClaudeHomeServer/Services/Llm/LocalActionOverridesStore.cs):
   `data/local-actions.json` (путь от `DataPath`), значение — `"local"` | `"claude"` | id модели;
   снимок в неизменяемом словаре заменяется целиком при записи. Старый формат (`bool`: true=локаль,
   false=claude) мигрируется при чтении. Роутер — singleton, но читает стор на каждом вызове,
@@ -168,7 +168,7 @@ UI скрывает недоступное (`useModelCaps` в `lib/models.ts`), 
   ней разрешается в модель по владельцу действия (см. выше). PUT валидирует
   модель по `ModelCatalogService` и настроенности провайдера — опечатка в id иначе всплыла бы
   только при первом фоновом вызове.
-- **Раннер** — [CheapTextRunner.cs](../backend/ClaudeHomeServer/Services/Llm/CheapTextRunner.cs)
+- **Раннер** — [CheapTextRunner.cs](../../backend/ClaudeHomeServer/Services/Llm/CheapTextRunner.cs)
   (`ICheapTextRunner.RunAsync(actionKey, prompt, fallbackModel?, ownerId?, jsonFormat?)` +
   `RunDetailedAsync(...)` для changelog — тот же маршрут, но с usage и override таймаута/лимита):
   локаль по профилю; `jsonFormat` (обычно строка `"json"`) уводит локальный путь в
@@ -186,7 +186,7 @@ UI скрывает недоступное (`useModelCaps` в `lib/models.ts`), 
   = локаль выключена; ненастроенный провайдер openrouter = облачный адаптер выключен.
 - **UI** — вкладка «Локально» на экране «Использование» показывает ТОЛЬКО локальную модель Ollama
   (какая, адрес, сколько действий на ней). Слоты и назначения — в админском диалоге
-  [ModelProvidersModal.tsx](../frontend/src/components/ModelProvidersModal.tsx) («Поставщики
+  [ModelProvidersModal.tsx](../../frontend/src/components/ModelProvidersModal.tsx) («Поставщики
   моделей», пункт меню профиля, только `cc_role=admin`): уровень 2 «Три модели» (слоты
   сильная/средняя/слабая), уровень 3 «Кто что выполняет» — строки мест по разделам, в дропдауне
   сверху три слота, затем «Локальная» (скрыта у агентных мест), затем полный `ModelPicker`

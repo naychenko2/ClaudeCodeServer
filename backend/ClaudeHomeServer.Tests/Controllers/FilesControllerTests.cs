@@ -155,6 +155,21 @@ public class FilesControllerTests : IClassFixture<TestWebApplicationFactory>
             "visio", "application/vnd.ms-visio.drawing");
     }
 
+    // Путь папки (в т.ч. с завершающим слешем, как его отдаёт `git status` для новой папки)
+    // не должен ронять чтение: раньше File.ReadAllText кидал DirectoryNotFoundException → 500
+    [Theory]
+    [InlineData(".claude")]
+    [InlineData(".claude/")]
+    public async Task GetContent_DirectoryPath_Returns404(string path)
+    {
+        var (id, dir) = await SetupProjectWithFileAsync();
+        Directory.CreateDirectory(Path.Combine(dir, ".claude"));
+
+        var response = await _client.GetAsync($"/api/projects/{id}/files/content?path={Uri.EscapeDataString(path)}");
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
     [Fact]
     public async Task GetContent_NonExistentFile_Returns404()
     {

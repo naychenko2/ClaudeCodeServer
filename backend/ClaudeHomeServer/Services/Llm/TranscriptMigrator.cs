@@ -79,10 +79,11 @@ public static class TranscriptMigrator
                     var byConvention = Path.Combine(projects, FlattenCwd(cwd), claudeSessionId + ".jsonl");
                     if (File.Exists(byConvention)) Add(byConvention);
                 }
-                // Фолбэк-скан. Нужен не только для раскладок других версий CLI и копий,
-                // осевших после переездов cwd: у container-пользователя CLI уплощает
-                // КОНТЕЙНЕРНЫЙ cwd (/projects/…), а сюда приходит хостовый (C:\…), поэтому
-                // путь «по соглашению» там не сходится в принципе и находит именно скан
+                // Фолбэк-скан: раскладки других версий CLI и копии, осевшие после переездов
+                // cwd (TryMigrate/TryRelocateCwd исходники не удаляют). Отдельно он важен для
+                // container-пользователей: CLI уплощает КОНТЕЙНЕРНЫЙ cwd (/projects/…), а сюда
+                // от DeleteTranscript приходит хостовый (C:\…) — путь «по соглашению» там не
+                // сходится в принципе, и файл находит именно скан
                 foreach (var dir in Directory.GetDirectories(projects))
                 {
                     var candidate = Path.Combine(dir, claudeSessionId + ".jsonl");

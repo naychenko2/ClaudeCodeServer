@@ -719,7 +719,9 @@ public class SessionManager : IDisposable
     // (включая "claude", если задана с токеном) — claude-profiles/sub-{key}; ключ CLI-провайдера
     // — claude-profiles/{key}; иначе (локальный Claude — пул пуст, или provider не задан) —
     // пользовательский ~/.claude без оверрайда. Зеркалит выбор env хода в ClaudeSession
-    // (BuildOAuthCliEnv / BuildCliEnv).
+    // (BuildOAuthCliEnv / BuildCliEnv). ХОСТОВАЯ раскладка: у container-пользователя профиль
+    // переписывается на песочный, поэтому ходить сюда напрямую нельзя — только через
+    // ConfigRootFor(ownerId, key), который знает обе раскладки.
     private string ConfigRootForProvider(string? providerKey)
     {
         if (string.IsNullOrEmpty(providerKey))
@@ -729,6 +731,35 @@ public class SessionManager : IDisposable
         if (_subscriptionPool.All.Any(s => s.Key == providerKey && s.Enabled))
             return _llmProviders.GetProfileDir("sub-" + providerKey);
         return _llmProviders.UserProfileDir;
+    }
+
+    // Корень профиля CLI С УЧЁТОМ СРЕДЫ владельца. У container-пользователя ход идёт в
+    // песочнице, и DockerProcessRunner.RewriteProfileEnv подменяет профиль на
+    // {ProfilesHostDir}/{ownerId}/{ключ}, где ключ — имя папки хостового профиля, а «без
+    // оверрайда» (~/.claude) → "default". Ключ выводится именно из имени папки (та же
+    // операция, что в RewriteProfileEnv), а не из providerKey: ConfigRootForProvider("claude")
+    // отдаёт sub-claude, если запись «claude» задана в пуле с токеном, и наивный маппинг
+    // «primary → default» разошёлся бы с реальной раскладкой хода.
+    private string ConfigRootFor(string? ownerId, string? providerKey)
+    {
+        var hostRoot = ConfigRootForProvider(providerKey);
+        if (ownerId is null || _users.GetById(ownerId)?.ExecutionEnvironment != ExecutionEnvironments.Container)
+            return hostRoot;
+        var key = string.Equals(Path.GetFullPath(hostRoot), Path.GetFullPath(_llmProviders.UserProfileDir),
+                StringComparison.OrdinalIgnoreCase)
+            ? "default"
+            : Path.GetFileName(hostRoot.TrimEnd('\\', '/'));
+        return Path.Combine(_sandbox.ProfilesHostDir, ownerId, key);
+    }
+
+    // Рабочая папка ГЛАЗАМИ CLI: у container-пользователя процесс видит контейнерный путь
+    // (/projects/…), по нему же CLI уплощает имя папки транскрипта. Путь вне монтирований
+    // песочницы ToRuntime отвергает исключением (аналог SafeJoin) — вызывающий решает сам,
+    // отдать его наружу (явная миграция → 400) или деградировать тихо (авто-фейловер).
+    private string CwdForOwner(string? ownerId, string hostCwd)
+    {
+        var launcher = _launchers.ForOwner(ownerId);
+        return launcher.IsSandboxed ? launcher.Paths.ToRuntime(hostCwd) : hostCwd;
     }
 
     // Рабочая папка сессии: отдельное worktree чата приоритетнее корня проекта.
@@ -778,19 +809,23 @@ public class SessionManager : IDisposable
         var pick = _subscriptionPool.Pick(entry.Info.Model);
         if (pick == current || _subscriptionPool.IsExhausted(pick)) return; // переключаться некуда
 
-        // Транскрипты container-пользователей живут в песочных профилях с другой
-        // раскладкой — не мигрируем (штатная деградация: чат ждёт сброса окна, как раньше)
         var ownerId = ResolveOwnerId(entry.Info);
-        if (ownerId is not null
-            && _users.GetById(ownerId)?.ExecutionEnvironment == ExecutionEnvironments.Container)
-            return;
-
         if (entry.Info.ClaudeSessionId is not null)
         {
-            var cwd = TryResolveCwd(entry.Info);
-            if (cwd is null) return;
-            if (!TranscriptMigrator.TryMigrate(ConfigRootForProvider(current),
-                    ConfigRootForProvider(pick), cwd, entry.Info.ClaudeSessionId, out var error))
+            var hostCwd = TryResolveCwd(entry.Info);
+            if (hostCwd is null) return;
+            // Транскрипт container-пользователя лежит под КОНТЕЙНЕРНЫМ cwd в песочном
+            // профиле. Путь вне монтирований (проект переехал наружу) — не повод ронять
+            // ход: фейловер здесь и так деградирует тихо, чат просто ждёт сброса окна
+            string cwd;
+            try { cwd = CwdForOwner(ownerId, hostCwd); }
+            catch (InvalidOperationException ex)
+            {
+                Console.Error.WriteLine($"[SessionManager] Фейловер пула отменён ({sessionId}): {ex.Message}");
+                return;
+            }
+            if (!TranscriptMigrator.TryMigrate(ConfigRootFor(ownerId, current),
+                    ConfigRootFor(ownerId, pick), cwd, entry.Info.ClaudeSessionId, out var error))
             {
                 Console.Error.WriteLine($"[SessionManager] Фейловер пула отменён ({sessionId}): {error}");
                 return;
@@ -889,15 +924,16 @@ public class SessionManager : IDisposable
         if (string.Equals(targetKey, currentKey, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("Чат уже на этом провайдере");
 
-        if (_users.GetById(ownerId)?.ExecutionEnvironment == ExecutionEnvironments.Container)
-            throw new InvalidOperationException("Миграция чата в контейнерной среде пока недоступна");
-
         if (entry.Info.ClaudeSessionId is not null)
         {
-            var cwd = TryResolveCwd(entry.Info)
+            var hostCwd = TryResolveCwd(entry.Info)
                 ?? throw new InvalidOperationException("Не удалось определить рабочую папку чата");
-            if (!TranscriptMigrator.TryMigrate(ConfigRootForProvider(currentKey),
-                    ConfigRootForProvider(targetKey), cwd, entry.Info.ClaudeSessionId, out var error))
+            // У container-пользователя и корни (песочные профили), и cwd (контейнерный путь)
+            // другие. Исключение ToRuntime (путь вне монтирований) намеренно не глушим:
+            // операция явная, пользователь должен увидеть причину отказа (400)
+            var cwd = CwdForOwner(ownerId, hostCwd);
+            if (!TranscriptMigrator.TryMigrate(ConfigRootFor(ownerId, currentKey),
+                    ConfigRootFor(ownerId, targetKey), cwd, entry.Info.ClaudeSessionId, out var error))
                 throw new InvalidOperationException($"Не удалось перенести транскрипт: {error}");
         }
 
@@ -3907,8 +3943,9 @@ public class SessionManager : IDisposable
         try
         {
             var roots = new List<string>(_llmProviders.GetAllConfigRoots());
-            // Профили песочницы владельца: {ProfilesHostDir}/{ownerId}/{key}
-            // (раскладку задает DockerProcessRunner.RewriteProfileEnv)
+            // Профили песочницы владельца: {ProfilesHostDir}/{ownerId}/{key} (раскладку задает
+            // DockerProcessRunner.RewriteProfileEnv, ее же зеркалит ConfigRootFor). Здесь берем
+            // ВСЕ папки владельца, а не считаем ключ: чат мог мигрировать между профилями
             if (ResolveOwnerId(info) is string ownerId)
             {
                 var ownerProfiles = Path.Combine(_sandbox.ProfilesHostDir, ownerId);

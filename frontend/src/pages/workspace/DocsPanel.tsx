@@ -957,7 +957,12 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
         {hasFolderNav && (
           <IconButton
             title={foldersAnchor ? 'Скрыть список папок' : 'Список папок'}
-            onClick={e => setFoldersAnchor(a => a ? null : e.currentTarget.getBoundingClientRect())}
+            // Прямоугольник снимаем СРАЗУ: внутри функционального апдейта React уже
+            // обнулил currentTarget, и обращение к нему роняло панель
+            onClick={e => {
+              const rect = e.currentTarget.getBoundingClientRect();
+              setFoldersAnchor(a => (a ? null : rect));
+            }}
             active={!!foldersAnchor}
             size="sm"
           >
@@ -1293,7 +1298,10 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
                 {headings.length > 0 && (
                   <IconButton
                     title="Оглавление"
-                    onClick={e => setTocAnchor(a => a ? null : e.currentTarget.getBoundingClientRect())}
+                    onClick={e => {
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      setTocAnchor(a => (a ? null : rect));
+                    }}
                     active={!!tocAnchor}
                     size="sm"
                   >

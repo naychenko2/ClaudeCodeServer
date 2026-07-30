@@ -63,7 +63,10 @@ export function PanelDropSpot({ over = false, icon: Icon, boxProps, style }: {
       style={{
         boxSizing: 'border-box',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        border: `${SEP_LINE}px dashed ${over ? C.accent : C.textSecondary}`,
+        // Под курсором контур сплошной — как у линии, которая на дропе тоже
+        // перестаёт быть штриховой: штрих означает «возможное место», сплошная —
+        // «панель встанет сюда»
+        border: `${SEP_LINE}px ${over ? 'solid' : 'dashed'} ${over ? C.accent : C.textSecondary}`,
         borderRadius: ISLAND.radius,
         // Место читается как «сюда встанет панель» — у него есть подложка, а не
         // только контур: под курсором акцентная, в покое — тон утопленных зон

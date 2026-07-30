@@ -16,7 +16,10 @@ import { ToolbarIconButton } from '../Toolbar';
 // Ширина рельсы и зазор между рельсой и зоной панелей. Значения общие: рельсы
 // обязаны быть зеркальны, иначе одна зона визуально «толще» другой.
 export const RAIL_W = 40;
-export const RAIL_GAP = 4;
+// Зазор 8, а не 4: в него встаёт крайняя направляющая места вставки (толщина 2 плюс
+// отступ от кромки панели). При 4 она прижималась к рельсе вплотную и читалась как
+// её граница, а не как «сюда встанет колонка».
+export const RAIL_GAP = 8;
 
 // Одна иконка рельсы. key нужен только React'у — сам ключ панели рельса не
 // трактует, всю логику (что открыто, что видно) решает вызывающий стек.
@@ -31,10 +34,13 @@ export interface RailItem {
   // Иконка — ручка перетаскивания панели: закрытую можно вытащить из рельсы
   // прямо в нужное место раскладки, не открывая её кликом наугад
   dragProps?: HTMLAttributes<HTMLElement> & { draggable?: boolean };
-  // Панель показывается попапом, пока курсор на иконке. Передано — иконка под
-  // курсором становится булавкой: клик закрепит панель в раскладке.
-  onPeekStart?: () => void;
-  onPeekEnd?: () => void;
+  // Курсор вошёл на иконку / ушёл с неё. Что показать — решает зона: место
+  // будущей панели в раскладке (призрак) или попап-превью.
+  onHoverStart?: () => void;
+  onHoverEnd?: () => void;
+  // Под курсором иконка становится булавкой: рядом висит попап-превью, и клик
+  // его закрепит. Без попапа булавке взяться неоткуда — обычная иконка панели.
+  pinnable?: boolean;
 }
 
 interface Props {
@@ -95,7 +101,7 @@ function RailButton({ item, soleIcon: SoleIcon }: { item: RailItem; soleIcon?: L
   const closing = !sole && item.active && hover;
   // Закрытая панель под курсором показывается попапом, а иконка предлагает её
   // закрепить: клик оставит панель в раскладке, уход курсора — уберёт попап.
-  const pinning = !item.active && hover && !!item.onPeekStart;
+  const pinning = !item.active && hover && !!item.pinnable;
   const Icon = sole ? SoleIcon : closing ? X : pinning ? Pin : item.Icon;
   const title = item.active
     ? `Скрыть «${item.title}»`
@@ -103,8 +109,8 @@ function RailButton({ item, soleIcon: SoleIcon }: { item: RailItem; soleIcon?: L
   return (
     <span
       {...item.dragProps}
-      onMouseEnter={() => { setHover(true); item.onPeekStart?.(); }}
-      onMouseLeave={() => { setHover(false); item.onPeekEnd?.(); }}
+      onMouseEnter={() => { setHover(true); item.onHoverStart?.(); }}
+      onMouseLeave={() => { setHover(false); item.onHoverEnd?.(); }}
       style={{ display: 'flex' }}
     >
       <ToolbarIconButton

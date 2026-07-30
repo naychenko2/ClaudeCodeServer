@@ -32,6 +32,7 @@ import {
 import { wsPanels, homeOf, isZoneCollapsed, zoneOf, type PanelZonesStore } from './panelStackState';
 import { usePanelDnd, usePanelRowResize, usePanelWidthDrag } from './zoneGestures';
 import { usePanelPeek } from './panelPeek';
+import { useSoloPanelHeight } from './soloPanelHeight';
 import { PanelSlot } from './PanelSlot';
 import type { SessionPanels } from './useSessionPanels';
 
@@ -87,6 +88,9 @@ export function PanelZone({
   const isLeft = side === 'left';
 
   const { panelRefs, rowDragging, handleRowDrag } = usePanelRowResize<PanelKey>(zones.weights, setWeights);
+  // Высота одиночной панели: по ней укорачивается сплиттер ширины, иначе его
+  // grip висит в пустоте под короткой панелью
+  const [soloPanelRef, soloPanelH] = useSoloPanelHeight();
 
   // Компактный режим: до ДВУХ панелей стеком; выбор локальный эфемерный —
   // раскладка зоны не трогается. Третья открытая вытесняет самую старую (FIFO).
@@ -369,6 +373,9 @@ export function PanelZone({
         flash={flash?.key === k}
         slideDirection={isLeft ? 'left' : 'up'}
         animate={pinned !== k}
+        // Одна панель в колонке — её высоту меряем: по ней укорачивается
+        // сплиттер ширины (см. soloPanelHeight)
+        rootRef={multiInCol ? undefined : soloPanelRef}
         {...dnd.panelProps(k)}
       >
         {content(k)}
@@ -458,7 +465,14 @@ export function PanelZone({
   // Прокладка между рельсой и панелями зоны
   const railGapBox = <div style={{ width: RAIL_GAP, flexShrink: 0 }} />;
 
-  const splitter = <IslandSplitter orientation="v" active={widthDragging} onMouseDown={handleWidthDrag} gap={RAIL_GAP} />;
+  // Сплиттер ширины: длиной с панель, когда та одна и по контенту (иначе тянулся
+  // бы через весь пустой холст, а grip оказывался напротив пустоты)
+  const splitter = (
+    <IslandSplitter
+      orientation="v" active={widthDragging} onMouseDown={handleWidthDrag}
+      gap={RAIL_GAP} length={soloPanelH ?? undefined}
+    />
+  );
 
   // Колонки зоны. Крайние направляющие в потоке нулевые: зазоры уже дают
   // прокладка у рельсы и сплиттер у центра. Дроп-зоны направляющих —

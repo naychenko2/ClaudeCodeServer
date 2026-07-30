@@ -52,6 +52,9 @@ interface PanelShellProps {
   flash?: boolean;
   // Атрибуты корневого Island: onDragOver/onDragLeave/onDrop для DnD
   rootProps?: HTMLAttributes<HTMLDivElement>;
+  // Доступ к корневому узлу карточки — для замеров раскладки (высота панели
+  // под растяжимый плейсхолдер). Отдельным пропом: ref в HTMLAttributes не входит.
+  rootRef?: (el: HTMLDivElement | null) => void;
   // Атрибуты шапки: draggable/onDragStart/onDragEnd
   headerProps?: HTMLAttributes<HTMLDivElement> & { draggable?: boolean };
 
@@ -107,6 +110,7 @@ export function PanelShell({
   dropTarget = false,
   flash = false,
   rootProps,
+  rootRef,
   headerProps,
   bare = false,
   onClose,
@@ -220,6 +224,7 @@ export function PanelShell({
         ...rootProps,
         className: flash ? `cc-panel-flash ${rootProps?.className ?? ''}`.trim() : rootProps?.className,
       }}
+      rootRef={rootRef}
     >
       <IslandHeader
         icon={headerIcon}

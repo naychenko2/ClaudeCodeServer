@@ -139,6 +139,13 @@ public class PersonaConsultantToolsetTests
         PersonaConsultantToolset.IsExecutor(reviewerFull).Should().BeFalse();
         PersonaConsultantToolset.Build(reviewerFull, webAllowed: false)
             .Should().NotContain(["Write", "Edit", "Bash"]);
+
+        // Custom — не Full: даже без единого запрета в DisallowedTools write не появляется
+        var executorCustom = Make(access: PersonaAccess.Custom, disallowed: []);
+        executorCustom.Specialty = PersonaSpecialty.Executor;
+        PersonaConsultantToolset.IsExecutor(executorCustom).Should().BeFalse();
+        PersonaConsultantToolset.Build(executorCustom, webAllowed: false)
+            .Should().NotContain(["Write", "Edit", "Bash"]);
     }
 
     [Fact]

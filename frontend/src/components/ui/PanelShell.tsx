@@ -147,10 +147,18 @@ export function PanelShell({
     () => typeof window !== 'undefined' && !!window.matchMedia?.('(hover: hover)').matches);
   const [panelHover, setPanelHover] = useState(false);
   const controlsVisible = !hoverCapable || panelHover;
-  // Общий стиль угасания для всех трёх обёрток контролов шапки
+  // Общий стиль для всех трёх обёрток контролов шапки. Скрытые контролы не только
+  // гаснут, но и СХЛОПЫВАЮТСЯ по ширине (maxWidth: 0): прозрачность сама по себе
+  // оставляет элемент в потоке, и невидимые кнопки продолжали занимать место —
+  // заголовок жался и в узкой колонке резался многоточием («Документация» →
+  // «Документа…»), хотя кнопок не видно. В покое всю ширину шапки забирает
+  // заголовок, кнопки появляются по наведению. overflow прячем только на время
+  // схлопывания, чтобы у видимых контролов ничего не подрезалось.
   const controlsFade: CSSProperties = {
     opacity: controlsVisible ? 1 : 0,
-    transition: 'opacity 0.15s ease',
+    maxWidth: controlsVisible ? undefined : 0,
+    overflow: controlsVisible ? undefined : 'hidden',
+    transition: 'opacity 0.1s ease-out',
   };
 
   // Наведение на всю карточку ловим на корне острова. Нативно (mouseenter/

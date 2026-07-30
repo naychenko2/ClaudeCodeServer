@@ -21,13 +21,13 @@ Claude. Сервер поднимается у вас (локально или �
 Зачем это нужно:
 
 - **Доступ откуда угодно.** Claude Code работает на домашней машине, а вы общаетесь с ним
-  с ноутбука или телефона — через [Tailscale + HTTPS](docs/remote-access.md).
+  с ноутбука или телефона — через [Tailscale + HTTPS](docs/operations/remote-access.md).
 - **Не только код.** Универсальный ассистент: чаты вне проектов, поиск в интернете, генерация
   текстов и изображений, работа с офисными документами.
 - **Свой контур.** Всё крутится на вашем железе, доступ — по API-ключу, трафик шифруется.
 
 <div align="center">
-<img src="docs/screenshots/workspace.png" width="820" alt="Рабочая область: чат, дерево файлов, визуализация workflow" />
+<img src="docs/assets/screenshots/workspace.png" width="820" alt="Рабочая область: чат, дерево файлов, визуализация workflow" />
 <br/><sub>Рабочая область проекта: чат с Claude, дерево файлов, визуализация параллельного workflow и учёт стоимости</sub>
 </div>
 
@@ -50,8 +50,8 @@ Claude. Сервер поднимается у вас (локально или �
   возобновление прерванных (`--resume`)
 
 <div align="center">
-<img src="docs/screenshots/projects.png" width="49%" alt="Список проектов с группами" />
-<img src="docs/screenshots/chats.png" width="49%" alt="Раздел чатов вне проектов" />
+<img src="docs/assets/screenshots/projects.png" width="49%" alt="Список проектов с группами" />
+<img src="docs/assets/screenshots/chats.png" width="49%" alt="Раздел чатов вне проектов" />
 <br/><sub>Слева — проекты с группами, справа — раздел «Чаты» вне проектов</sub>
 </div>
 
@@ -63,7 +63,7 @@ Claude. Сервер поднимается у вас (локально или �
 - Защита от path traversal (`SafeJoin`)
 
 <div align="center">
-<img src="docs/screenshots/files.png" width="820" alt="Файловый менеджер и просмотр файла" />
+<img src="docs/assets/screenshots/files.png" width="820" alt="Файловый менеджер и просмотр файла" />
 </div>
 
 ### 🧠 База знаний и медиа
@@ -74,12 +74,12 @@ Claude. Сервер поднимается у вас (локально или �
 - Аутентификация по API-ключу (`[Authorize]` на всех эндпоинтах и хабе), rate-limit
 - **Фич-флаги** per-user (dark launch): включение экспериментальных функций без пересборки
 - Экран «Использование»: статистика Claude + fal.ai
-- Удалённый доступ по HTTPS через Tailscale — см. [docs/remote-access.md](docs/remote-access.md)
+- Удалённый доступ по HTTPS через Tailscale — см. [docs/operations/remote-access.md](docs/operations/remote-access.md)
 
 ## Экран входа
 
 <div align="center">
-<img src="docs/screenshots/login.png" width="620" alt="Экран входа" />
+<img src="docs/assets/screenshots/login.png" width="620" alt="Экран входа" />
 </div>
 
 ## Архитектура
@@ -124,7 +124,7 @@ accent `#D97757`, тёплая бежевая палитра. Стили — inl
 ## Быстрый старт
 
 > **Стандарт — сборка и запуск в dev-контейнере** (песочница для Claude + воспроизводимое
-> окружение). Подробности — [docs/docker.md](docs/docker.md).
+> окружение). Подробности — [docs/operations/docker.md](docs/operations/docker.md).
 
 ```bash
 # 1. Один раз: настроить пути и egress-прокси
@@ -162,9 +162,10 @@ cd frontend; npm run dev                             # :5173 (проксируе
 ## Документация
 
 - [CLAUDE.md](CLAUDE.md) — архитектура, REST API, соглашения
-- [docs/docker.md](docs/docker.md) — контейнеризация и песочница
-- [docs/remote-access.md](docs/remote-access.md) — удалённый доступ (Tailscale + HTTPS)
-- [docs/feature-parity.md](docs/feature-parity.md) — соответствие возможностям Claude Code
+- [docs/README.md](docs/README.md) — карта корпуса документации: что в каком разделе
+- [docs/operations/docker.md](docs/operations/docker.md) — контейнеризация и песочница
+- [docs/operations/remote-access.md](docs/operations/remote-access.md) — удалённый доступ (Tailscale + HTTPS)
+- [docs/research/feature-parity.md](docs/research/feature-parity.md) — соответствие возможностям Claude Code
 
 ---
 

@@ -16,6 +16,13 @@
 //
 // Панели — «воздушные» скруглённые карточки с зазорами; границы высот тянутся
 // невидимыми хендлами в зазорах, ширина колонок — сплиттером со стороны центра.
+//
+// ВЫСОТА (panelStretched): пустой низ под панелью терпим только у ОДИНОЧНОЙ панели
+// в колонке у центра — короткий список чатов не растягивается на весь экран. Как
+// только в колонке 2+ панели (в любом ряду) — они тянутся до нижней кромки и делят
+// высоту по весам, там же живёт хендл ресайза. Колонки разной длины посреди зоны
+// читались бы как рваная раскладка, поэтому одиночную «по контенту» держим лишь у
+// самого центра. Ширину колонок делит сплиттер между ними (colFlex).
 import { Fragment, useEffect, useState, type DragEvent, type ReactNode } from 'react';
 import { Pin } from 'lucide-react';
 import { C, ISLAND, SHADOW, PANEL_ANIM } from '../../lib/design';
@@ -27,13 +34,13 @@ import { IslandSplitter } from '../../components/ui/IslandSplitter';
 import { useWindowWidth } from '../../lib/breakpoints';
 import {
   PANEL_META, PANEL_KEYS, PROJECT_KEYS, SESSION_KEYS, TOOLS_KEYS, WORKSPACE_KEYS,
-  isFixedHeight, isFullHeight, type PanelKey, type Zone,
+  isFixedHeight, type PanelKey, type Zone,
 } from './panelCatalog';
 import { wsPanels, homeOf, isZoneCollapsed, nextPlacement, zoneOf, PANEL_MIN_H, type PanelZonesStore } from './panelStackState';
-import { usePanelDnd, usePanelRowResize, usePanelWidthDrag } from './zoneGestures';
+import { usePanelColResize, usePanelDnd, usePanelRowResize, usePanelWidthDrag } from './zoneGestures';
 import { usePanelPeek } from './panelPeek';
 import { useRailHover } from './railHover';
-import { useSoloPanelHeight } from './soloPanelHeight';
+import { usePanelHeights } from './panelHeights';
 import { PanelSlot } from './PanelSlot';
 import type { SessionPanels } from './useSessionPanels';
 
@@ -87,16 +94,18 @@ export function PanelZone({
   allowedKeys = WORKSPACE_KEYS, hideWhenEmpty, toolsEnabled, compact, sessionPanels, onPanelOpen,
 }: Props) {
   const usePanels = (panelStack ?? wsPanels).use;
-  const { zones, toggle, closeTo, evict, setMode, setWidth, setWeights, toggleCollapsed, swapWith, moveAt, moveToNewColumn } = usePanels();
+  const { zones, toggle, closeTo, evict, setMode, setWidth, setWeights, setColFlex, toggleCollapsed, swapWith, replaceWith, moveAt, moveToNewColumn } = usePanels();
   const zoneState = zones[side];
-  const { layout, mode, width } = zoneState;
+  const { layout, mode, width, colFlex } = zoneState;
   const windowWidth = useWindowWidth();
   const isLeft = side === 'left';
 
   const { panelRefs, rowDragging, handleRowDrag } = usePanelRowResize<PanelKey>(zones.weights, setWeights);
-  // Высота одиночной панели: по ней укорачивается сплиттер ширины, иначе его
-  // grip висит в пустоте под короткой панелью
-  const [soloPanelRef, soloPanelH] = useSoloPanelHeight();
+  // Ресайз ширины между колонками: доли colFlex перетягиваются внутри пары
+  const { colRefs, colDragging, handleColDrag } = usePanelColResize(colFlex, next => setColFlex(side, next));
+  // Высоты панелей, стоящих по контенту: по их сумме укорачивается сплиттер ширины,
+  // иначе его grip висит в пустоте под короткой колонкой.
+  const [panelHeightRef, panelH] = usePanelHeights<PanelKey>();
 
   // Компактный режим: до ДВУХ панелей стеком; выбор локальный эфемерный —
   // раскладка зоны не трогается. Третья открытая вытесняет самую старую (FIFO).
@@ -128,6 +137,22 @@ export function PanelZone({
     .filter(c => c.keys.length > 0);
   const tabletKeys = compact ? tabletPanels.filter(keyAvailable) : [];
   const openKeys = compact ? tabletKeys : columns.flatMap(c => c.keys);
+
+  // Колонка, ближайшая к ЦЕНТРУ экрана: у левой зоны это последняя (панели растут
+  // от рельсы вправо), у правой — первая (порядок зеркальный).
+  const centerVi = isLeft ? columns.length - 1 : 0;
+  // Растягивается ли панель на всю высоту слота. Пустой низ (высота по контенту)
+  // терпим ТОЛЬКО у ОДИНОЧНОЙ панели в колонке у центра: короткий список чатов не
+  // должен растягиваться на весь экран. Как только в колонке у центра 2+ панели —
+  // они тянутся до низа и делят высоту по весам (обычный ресайз), иначе колонка
+  // рваная. Во втором и дальних рядах панели тянутся всегда. Фиксированные
+  // (FIXED_HEIGHT_KEYS) не тянутся нигде. colLen — число панелей в колонке.
+  const panelStretched = (k: PanelKey, vi: number, colLen: number): boolean =>
+    !isFixedHeight(k) && (vi !== centerVi || colLen > 1);
+  // Колонка стоит по контенту целиком — под ней свободный низ (место для новой
+  // панели, растяжимая направляющая, укороченный сплиттер ширины).
+  const colByContent = (keys: PanelKey[], vi: number): boolean =>
+    !keys.some(k => panelStretched(k, vi, keys.length));
 
   // Иконка панели живёт в ТОЙ зоне, где панель лежит; закрытая — в домашней.
   // Отсюда «иконка едет вместе с панелью», а закрытие возвращает её домой.
@@ -185,7 +210,14 @@ export function PanelZone({
     enabled: openKeys.length > 0 && !compact,
     // Зона принимает только те панели, которые сама умеет показать
     accepts: keyAvailable,
-    onSwap: swapWith,
+    // Дроп НА панель: две открытые меняются местами, а кнопка из рельсы (панель
+    // закрыта — своего слота у неё нет) ЗАМЕЩАЕТ панель под курсором: гость встаёт
+    // в её слот, хозяин уходит закрытым. Так кнопкой можно открыть панель именно
+    // вместо конкретной соседки, а не туда, куда решит раскладка.
+    onSwap: (from, to) => {
+      if (zoneOf(zones, from) === null) replaceWith(from, to);
+      else swapWith(from, to);
+    },
   });
 
   // Иконка ЗАКРЫТОЙ панели под курсором: в раскладке показываем место, куда эта
@@ -201,7 +233,7 @@ export function PanelZone({
   const ghostKey = !compact && !soloMode && !dnd.active
     && hoverKey && !openKeys.includes(hoverKey) && keyAvailable(hoverKey)
     ? hoverKey : null;
-  const ghostAt = ghostKey ? nextPlacement(layout) : null;
+  const ghostAt = ghostKey ? nextPlacement(layout, side) : null;
   // Колонка призрака в ВИДИМЫХ координатах: раскладка может держать колонки из
   // недоступных на этом экране панелей, и их индексы со списком columns не совпадают
   const ghostCol = ghostAt && 'ci' in ghostAt ? columns.findIndex(c => c.ci === ghostAt.ci) : -1;
@@ -268,6 +300,18 @@ export function PanelZone({
 
   // Тащат ЗАКРЫТУЮ панель (её вытянули за иконку из рельсы) — дроп её откроет
   const dragClosed = dnd.from !== null && zoneOf(zones, dnd.from) === null;
+
+  // Панель, которую примет РЕЛЬСА этой зоны (null — мишени нет), и что дроп сделает:
+  //  • открытая на СВОЕЙ рельсе (fromZone === side) — закрыть, оставив кнопку здесь;
+  //  • открытая на ЧУЖОЙ рельсе — перенести панель в эту зону (открыть тут);
+  //  • кнопка закрытой панели — только на рельсе ДРУГОЙ стороны (переезд кнопки);
+  //    на своей дроп ничего бы не изменил.
+  // Закрытая на своей стороне мишени не даёт; открытую принимают ОБЕ рельсы.
+  const railDrop = dnd.accepting && dnd.from !== null
+    && (dragClosed ? homeOf(zones, dnd.from) !== side : true)
+    ? dnd.from : null;
+  // Дроп на СВОЮ рельсу открытой панели = закрыть; иначе (чужая рельса) = перенос.
+  const railWillClose = railDrop != null && !dragClosed && dnd.fromZone === side;
 
   // Панель тащат из соседней зоны или из рельсы — эта обязана показаться, даже
   // когда пуста: иначе, утащив отсюда последнюю панель, вернуть её было бы
@@ -395,21 +439,18 @@ export function PanelZone({
     },
   }));
 
-  // Карточка панели. multiInCol=false — высота по контенту: короткий список чатов
-  // не должен растягиваться на весь экран. Как только в колонке две панели и
-  // больше, высоту делят веса слотов — тогда между ними и появляется хендл ресайза.
-  const renderPanel = (k: PanelKey, multiInCol: boolean): ReactNode => {
+  // Карточка панели. Растягивается ли она на всю высоту, решает panelStretched:
+  // одиночная панель в колонке у центра — по контенту, всё прочее (2+ в колонке,
+  // ряды не у центра) — на всю высоту с делением по весам. В компактном режиме
+  // колонок нет (vi не передан) — там стек из двух панелей делит высоту, как и был.
+  const renderPanel = (k: PanelKey, multiInCol: boolean, vi?: number): ReactNode => {
     const { title, Icon } = PANEL_META[k];
-    // Панель фиксированной высоты (переключатель проектов) высоту не делит:
+    // Панель фиксированной высоты (переключатель проектов) не тянется никогда:
     // растянутая, она давала бы полколонки пустоты под одной строкой контента
     const byContent = isFixedHeight(k);
-    // Одна в колонке, но тянется на всю высоту (Документация): дефолт одиночной
-    // панели — высота по контенту, а этой отдаём весь низ колонки. С соседом
-    // (multiInCol) признак не действует — высоту делят веса, как у всех.
-    const soloFill = !multiInCol && !byContent && isFullHeight(k);
-    // Панель растянута на всю высоту слота: либо делит колонку с соседями, либо
-    // одиночная full-height. Фиксированные (byContent) — никогда.
-    const stretched = (multiInCol && !byContent) || soloFill;
+    const stretched = vi === undefined
+      ? multiInCol && !byContent
+      : panelStretched(k, vi, multiInCol ? 2 : 1);
     const shell = (
       <PanelShell
         icon={<Icon size={15} strokeWidth={ICON_STROKE} color={C.textSecondary} style={{ flexShrink: 0 }} />}
@@ -429,9 +470,10 @@ export function PanelZone({
         // «прилетает» одна панель — соседние перестраиваются, но с места не
         // сходили, и мигать им незачем.
         animate={pinned !== k && (dnd.moved === null || dnd.moved === k)}
-        // Одна панель в колонке — её высоту меряем: по ней укорачивается
-        // сплиттер ширины (см. soloPanelHeight)
-        rootRef={multiInCol ? undefined : soloPanelRef}
+        // Панель стоит по контенту — её высоту меряем: по сумме таких высот
+        // укорачивается сплиттер ширины (см. panelHeights). Растянутая мерки не
+        // требует — она и так до низа.
+        rootRef={stretched ? undefined : panelHeightRef(k)}
         {...dnd.panelProps(k)}
       >
         {content(k)}
@@ -441,14 +483,15 @@ export function PanelZone({
     // узла на позиции и React перемонтировал бы карточку (анимация появления на
     // ровном месте и потерянное состояние панели). Вес распределяют только те,
     // кто высоту делит; остальным слот отдаёт высоту по контенту.
-    const shares = multiInCol && !byContent;
+    //
+    // Делят высоту только растянутые соседи. Растянутая в одиночку идёт без веса
+    // (weight по умолчанию 1 → flex:1) и без ресайза — делить не с кем.
+    const shares = multiInCol && stretched;
     return (
       <PanelSlot
-        // Растянут и делящий колонку, и одиночная full-height; последняя без веса
-        // (weight по умолчанию 1 → flex:1) и без ресайза — делить не с кем.
         fill={stretched}
         weight={shares ? zones.weights[k] : undefined}
-        // Ссылка на слот нужна ресайзу высот — а он бывает только у делящих
+        // Ссылка на слот нужна ресайзу высот по весам — а он бывает только у делящих
         slotRef={shares ? el => { panelRefs.current[k] = el; } : undefined}
       >
         {shell}
@@ -515,12 +558,25 @@ export function PanelZone({
         disabled: openKeys.length === 0 && !isZoneCollapsed(zoneState),
         onToggle: () => toggleCollapsed(side),
       }}
-      // Дроп на рельсу убирает панель с экрана, оставляя её кнопку здесь. Мишень
-      // предлагает только СВОЯ рельса и только для открытой панели: у закрытой
-      // скрывать нечего, а противоположная сторона во время перетаскивания занята
-      // приёмом — «убрать» там значило бы два разных исхода на одном пути курсора.
-      drop={dnd.accepting && !dragClosed && dnd.fromZone === side
-        ? { active: true, ...dnd.guideProps('rail', from => closeTo(side, from)) }
+      // Дроп на рельсу — три исхода на одном пути (см. railDrop / railWillClose):
+      //  • СВОЯ рельса открытой панели → закрыть, оставив кнопку здесь;
+      //  • ЧУЖАЯ рельса открытой панели → перенести панель в эту зону (открыть тут);
+      //  • ЧУЖАЯ рельса закрытой кнопки → переезд самой кнопки, не открывая панель.
+      // Раньше для переноса на другую сторону приходилось целиться в направляющие
+      // колонок; теперь хватает броска на рельсу.
+      drop={railDrop
+        ? {
+            active: true,
+            // Знак мишени: крестик — только когда дроп ЗАКРОЕТ панель (своя рельса);
+            // иначе иконка панели — «встанет/переедет сюда»
+            icon: railWillClose ? undefined : PANEL_META[railDrop].Icon,
+            ...dnd.guideProps('rail', from => {
+              // Открытую панель на чужой рельсе ОТКРЫВАЕМ в этой зоне (перенос);
+              // остальное (закрытие своей / переезд кнопки) делает closeTo
+              if (!railWillClose && zoneOf(zones, from) !== null) toggle(side, from);
+              else closeTo(side, from);
+            }),
+          }
         : undefined}
     />
   );
@@ -528,40 +584,54 @@ export function PanelZone({
   // Прокладка между рельсой и панелями зоны
   const railGapBox = <div style={{ width: RAIL_GAP, flexShrink: 0 }} />;
 
-  // Сплиттер ширины: длиной с панель, когда та одна и по контенту (иначе тянулся
-  // бы через весь пустой холст, а grip оказывался напротив пустоты)
+  // Длина сплиттера ширины: он стоит вплотную к колонке у центра, и когда та по
+  // контенту (иначе тянулся бы через весь пустой холст, а grip оказывался напротив
+  // пустоты), длина — сумма высот её панелей плюс зазоры между ними. Хоть у одной
+  // панели замера ещё нет — тянемся на всю высоту, иначе сплиттер мигнёт огрызком.
+  const contentLen = (keys: PanelKey[], stretched: (k: PanelKey) => boolean): number | null => {
+    if (keys.length === 0 || keys.some(stretched)) return null;
+    let sum = GAP * (keys.length - 1);
+    for (const k of keys) {
+      const h = panelH[k];
+      if (h == null) return null;
+      sum += h;
+    }
+    return sum;
+  };
+  const splitterLen = compact
+    // Компактный стек: две панели делят высоту между собой, одна стоит по контенту
+    ? contentLen(tabletKeys, k => tabletKeys.length > 1 && !isFixedHeight(k))
+    : (columns[centerVi]
+        ? contentLen(columns[centerVi].keys, k => panelStretched(k, centerVi, columns[centerVi].keys.length))
+        : null);
   const splitter = (
     <IslandSplitter
       orientation="v" active={widthDragging} onMouseDown={handleWidthDrag}
-      gap={RAIL_GAP} length={soloPanelH ?? undefined}
+      gap={RAIL_GAP} length={splitterLen ?? undefined}
     />
   );
 
   // Призрак места: пунктирная карточка с иконкой панели — тот же язык, что у
   // большого места вставки при перетаскивании, только без мишени дропа.
   // pointerEvents: none — призрак висит в раскладке, но курсору не мешает.
-  // Знак места — тот же, что при перетаскивании, и по тому же правилу: если в
-  // колонке свободный низ (там ровно одна панель, её высота по контенту), панель
-  // займёт его целиком — рисуем прямоугольник; если низа нет, она втиснется
-  // стыком к соседям — рисуем линию. Мишени у наведения нет: pointerEvents none.
-  // Одиночная full-height панель (Документация) заняла весь низ — свободного
-  // места под ней нет, поэтому знак тонкий (линия), а не прямоугольник: иначе
-  // панель на каждое наведение схлопывалась бы вдвое, освобождая место призраку.
-  const ghostRoomy = !ghostNewCol && ghostCol >= 0 && columns[ghostCol].keys.length === 1
-    && !isFullHeight(columns[ghostCol].keys[0]);
-  // Место под одиночной full-height панелью: линию рисуем ОВЕРЛЕЕМ у её нижней
-  // кромки, а не блоком в потоке. Блок (flexShrink:0) отжимал бы растянутую панель
-  // вверх на свою высоту — «задирал» её при каждом наведении. Оверлей стоит ровно
-  // там, куда встаёт перетаскиваемая панель (та же геометрия, что у rowGuide 'end').
-  const ghostSoloFull = !ghostNewCol && ghostCol >= 0 && columns[ghostCol].keys.length === 1
-    && isFullHeight(columns[ghostCol].keys[0]);
+  // Знак места — тот же, что при перетаскивании, и по тому же правилу: если у
+  // колонки свободный низ (её панели стоят по контенту — ряд у центра), панель
+  // займёт его целиком, рисуем прямоугольник; если низа нет (ряд растянут до
+  // кромки) — она втиснется стыком к соседям, рисуем линию. Мишени у наведения
+  // нет: pointerEvents none.
+  const ghostRoomy = !ghostNewCol && ghostCol >= 0
+    && colByContent(columns[ghostCol].keys, ghostCol);
+  // Место в растянутой колонке: линию рисуем ОВЕРЛЕЕМ у её нижней кромки, а не
+  // блоком в потоке. Блок (flexShrink:0) отжимал бы растянутые панели вверх на свою
+  // высоту — «задирал» их при каждом наведении. Оверлей стоит ровно там, куда
+  // встаёт перетаскиваемая панель (та же геометрия, что у rowGuide 'end').
   const ghostBox = ghostKey && (ghostRoomy ? (
     <PanelDropSpot
       icon={PANEL_META[ghostKey].Icon}
       style={{ flex: 1, minHeight: PANEL_MIN_H, pointerEvents: 'none' }}
     />
-  ) : ghostSoloFull ? (
-    // Нулевая высота в потоке + absolute-линия у кромки: панель не сдвигается,
+  ) : (
+    // Нулевая высота в потоке + absolute-линия у кромки: панели не сдвигаются,
     // знак совпадает с местом вставки при перетаскивании (base 0, edge 'end').
     <div style={{ height: 0, position: 'relative', pointerEvents: 'none' }}>
       <div style={{
@@ -571,14 +641,29 @@ export function PanelZone({
         <PanelDropLine axis="y" shift={sepShift(0)} />
       </div>
     </div>
-  ) : (
-    <div style={{ height: SEP_HIT, flexShrink: 0, display: 'flex', alignItems: 'center', pointerEvents: 'none' }}>
-      <PanelDropLine axis="y" />
-    </div>
   ));
   // Зазор перед местом в занятой колонке — как между панелями. Линия свой воздух
   // несёт сама (коридор SEP_HIT), поэтому зазор нужен только прямоугольнику.
   const ghostGap = ghostRoomy ? <div style={{ height: GAP, flexShrink: 0 }} /> : null;
+
+  // Вертикальная линия «здесь заведётся новая колонка». Геометрия дословно как у
+  // крайней направляющей при перетаскивании (PanelDropGuide с base 0): нулевая
+  // ширина в потоке, хит-зона центром на кромке, линия отодвинута наружу на
+  // sepShift. Знак сдвига — по стороне: у правой зоны колонка у ПРАВОГО края
+  // (edge 'end', сдвиг наружу вправо, +sepShift), у левой — у ЛЕВОГО (edge 'start',
+  // сдвиг влево, −sepShift). Одним знаком на обе стороны линия у левой рельсы
+  // уезжала вправо от настоящего места вставки. Считать «на глаз» уже пробовали.
+  const newColShift = isLeft ? -sepShift(0) : sepShift(0);
+  const newColGhost = (
+    <div style={{ width: 0, flexShrink: 0, position: 'relative', alignSelf: 'stretch' }}>
+      <div style={{
+        position: 'absolute', top: 0, bottom: 0, left: -SEP_HIT / 2, width: SEP_HIT,
+        display: 'flex', alignItems: 'stretch', justifyContent: 'center', pointerEvents: 'none',
+      }}>
+        <PanelDropLine axis="x" shift={newColShift} />
+      </div>
+    </div>
+  );
 
   // Колонки зоны. Крайние направляющие в потоке нулевые: зазоры уже дают
   // прокладка у рельсы и сплиттер у центра. Дроп-зоны направляющих —
@@ -593,46 +678,73 @@ export function PanelZone({
       overflow: 'visible',
       transition: widthDragging ? 'none' : `width ${PANEL_ANIM}`,
     }}>
+      {/* Новая колонка левой зоны рождается у рельсы (слева) — линию рисуем перед
+          колонками, зеркально правой зоне */}
+      {ghostKey && ghostNewCol && isLeft && newColGhost}
       {columns.map((col, vi) => (
         <Fragment key={col.ci}>
-          {colGuide(vi, vi > 0 ? GAP : 0, vi === 0 ? 'start' : undefined)}
-          <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+          {/* Между колонками: в покое — сплиттер ширины (перетягивает доли пары),
+              на время перетаскивания — направляющая новой колонки той же ширины
+              (base GAP), раскладка от подмены не «дышит». Перед ПЕРВОЙ колонкой
+              сплиттера нет — там край, и это направляющая новой колонки у рельсы. */}
+          {vi === 0
+            ? colGuide(vi, 0, 'start')
+            : dnd.active
+              ? colGuide(vi, GAP)
+              : <IslandSplitter
+                  orientation="v"
+                  active={colDragging === columns[vi - 1].ci}
+                  onMouseDown={handleColDrag(columns[vi - 1].ci, col.ci, 1)}
+                  gap={GAP}
+                />}
+          <div
+            // Ссылка на колонку — ресайзу ширины: по её пикселям берётся доля на старте
+            ref={el => { colRefs.current[col.ci] = el; }}
+            // Доля ширины колонки (grow-ratio): равные → 1, перетянутые делят зону
+            style={{ flex: `${colFlex[col.ci] ?? 1} 1 0`, minWidth: 0, display: 'flex', flexDirection: 'column' }}
+          >
             {/* Место будущей панели — под уже открытыми в этой колонке */}
             {rowGuide(col, vi, 0, 0, 'start')}
-            {col.keys.map((k, ri) => (
-              <Fragment key={k}>
-                {/* Между соседними панелями — хендл ресайза высот (тот же grip,
-                    что у сплиттера ширины). Он же и есть зазор: отдельный gap
-                    колонке не нужен, иначе между панелями было бы вдвое.
-                    На время перетаскивания хендл подменяется направляющей той же
-                    высоты — раскладка от этого не «дышит». */}
-                {ri > 0 && (
-                  dnd.active
-                    ? rowGuide(col, vi, ri, GAP)
-                    // Панель фиксированной высоты не делит её с соседом — тянуть
-                    // между ними нечего, остаётся простой зазор вместо хендла
-                    : isFixedHeight(k) || isFixedHeight(col.keys[ri - 1])
-                      ? <div style={{ height: GAP, flexShrink: 0 }} />
-                      : <IslandSplitter
-                          orientation="h"
-                          active={rowDragging === `${vi}:${ri}`}
-                          onMouseDown={handleRowDrag(col.keys[ri - 1], k, `${vi}:${ri}`)}
-                          gap={GAP}
-                        />
-                )}
-                {renderPanel(k, col.keys.length > 1)}
-              </Fragment>
-            ))}
+            {col.keys.map((k, ri) => {
+              const prev = col.keys[ri - 1];
+              const tag = `${vi}:${ri}`;
+              // Растянутые соседи делят высоту долями (веса) — им весовой ресайз.
+              // Колонка с 2+ панелями всегда растянута (см. panelStretched), так что
+              // пара стретчится; фиксированная (Проекты) высоту не делит — там зазор.
+              const pairShares = ri > 0
+                && panelStretched(k, vi, col.keys.length)
+                && panelStretched(prev, vi, col.keys.length);
+              return (
+                <Fragment key={k}>
+                  {/* Между соседними панелями — хендл ресайза высот (тот же grip,
+                      что у сплиттера ширины). Он же и есть зазор: отдельный gap
+                      колонке не нужен, иначе между панелями было бы вдвое.
+                      На время перетаскивания хендл подменяется направляющей той же
+                      высоты — раскладка от этого не «дышит». */}
+                  {ri > 0 && (
+                    dnd.active
+                      ? rowGuide(col, vi, ri, GAP)
+                      : pairShares
+                        ? <IslandSplitter
+                            orientation="h"
+                            active={rowDragging === tag}
+                            onMouseDown={handleRowDrag(prev, k, tag)}
+                            gap={GAP}
+                          />
+                        : <div style={{ height: GAP, flexShrink: 0 }} />
+                  )}
+                  {renderPanel(k, col.keys.length > 1, vi)}
+                </Fragment>
+              );
+            })}
             {/* Последняя направляющая забирает свободный низ колонки — но ТОЛЬКО
-                когда он там есть. Свободное место бывает у одиночной панели: её
-                высота по контенту, и целиться в полоску у кромки, когда ниже
-                пустует полколонки, — мучение. Панели в общей колонке делят высоту
-                между собой, растягиваясь до края, и растяжимая направляющая
-                отбирала бы у них долю: колонка переставала доходить до низа. То же
-                и у одиночной full-height (Документация) — она сама заняла весь низ,
-                свободного места нет. */}
+                когда он там есть. Свободное место бывает у колонки по контенту (ряд
+                у центра): целиться в полоску у кромки, когда ниже пустует полколонки,
+                — мучение. Растянутый ряд доходит до низа сам, и растяжимая
+                направляющая отбирала бы у его панелей долю: колонка переставала бы
+                доходить до кромки. */}
             {rowGuide(col, vi, col.keys.length, 0, 'end',
-              col.keys.length === 1 && !isFullHeight(col.keys[0]) && ghostCol !== vi)}
+              colByContent(col.keys, vi) && ghostCol !== vi)}
             {/* Место будущей панели забирает низ колонки целиком: растяжимая
                 направляющая рядом с ним не растягивается, иначе делила бы остаток
                 пополам и призрак отрывался бы от панели полосой пустоты */}
@@ -640,23 +752,13 @@ export function PanelZone({
           </div>
         </Fragment>
       ))}
-      {/* Панель заведёт свою колонку — обещаем это вертикальной линией у края
-          зоны, ровно как направляющая между колонками при перетаскивании.
-          Линия висит оверлеем в нулевой ширине: раскладка не «дышит». */}
-      {ghostKey && ghostNewCol && (
-        // Геометрия дословно как у крайней направляющей при перетаскивании
-        // (PanelDropGuide с base 0 и edge 'end'): нулевая ширина в потоке,
-        // хит-зона центром на кромке зоны, линия отодвинута наружу на sepShift.
-        // Считать это «на глаз» уже пробовали — линия уезжала внутрь панели.
-        <div style={{ width: 0, flexShrink: 0, position: 'relative', alignSelf: 'stretch' }}>
-          <div style={{
-            position: 'absolute', top: 0, bottom: 0, left: -SEP_HIT / 2, width: SEP_HIT,
-            display: 'flex', alignItems: 'stretch', justifyContent: 'center', pointerEvents: 'none',
-          }}>
-            <PanelDropLine axis="x" shift={sepShift(0)} />
-          </div>
-        </div>
-      )}
+      {/* Панель заведёт свою колонку — обещаем это вертикальной линией У РЕЛЬСЫ
+          (новая колонка рождается там, см. addPanel), ровно как направляющая между
+          колонками при перетаскивании. Линия висит оверлеем в нулевой ширине:
+          раскладка не «дышит». У правой зоны рельса справа — линия в конце ряда
+          колонок; у левой рельса слева — линию рисуем ПЕРЕД колонками, иначе она
+          уезжала к центру. */}
+      {ghostKey && ghostNewCol && !isLeft && newColGhost}
       {colGuide(columns.length, 0, 'end')}
     </div>
   );

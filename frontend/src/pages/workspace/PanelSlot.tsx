@@ -14,7 +14,7 @@ import { PANEL_MIN_H } from './panelStackState';
 export function PanelSlot({ weight = 1, fill = true, slotRef, children }: {
   weight?: number;
   // Панель делит высоту колонки по весу. false — высота по контенту: одиночная
-  // панель в колонке и панели фиксированной высоты (переключатель проектов).
+  // панель в колонке у центра и панели фиксированной высоты (переключатель проектов).
   fill?: boolean;
   slotRef?: (el: HTMLDivElement | null) => void;
   children: ReactNode;

@@ -138,6 +138,15 @@ export function PanelShell({
   // Курсор на шапке — иконка панели предлагает закрыть её (closeMode: 'icon')
   const [headerHover, setHeaderHover] = useState(false);
 
+  // Курсор в зоне контролов шапки (слот панели + системные actions). Пока он там,
+  // перетаскивание карточки за шапку выключено — иначе нажатие на кнопку легко
+  // превращается в перенос панели
+  const [overControls, setOverControls] = useState(false);
+  const controlsHoverProps = {
+    onMouseEnter: () => setOverControls(true),
+    onMouseLeave: () => setOverControls(false),
+  };
+
   // Узел-слот в шапке, куда панель-содержимое телепортирует свои контролы
   // (PanelHeaderSlot). Через состояние, а не ref: портал должен отрисоваться
   // после того, как узел появился в DOM, а значит нужен повторный рендер.
@@ -235,23 +244,29 @@ export function PanelShell({
         icon={headerIcon}
         title={title}
         badge={badge}
-        actions={actions}
+        actions={actions ? <span {...controlsHoverProps} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>{actions}</span> : actions}
         headerProps={{
           ...headerProps,
-          draggable,
-          title: draggable ? 'Перетащите, чтобы поменять панели местами' : headerProps?.title,
-          style: { ...headerProps?.style, cursor: draggable ? 'grab' : 'default' },
+          // Над кнопками карточка не тащится: draggable снимается с шапки, пока
+          // курсор в зоне контролов. Одного draggable={false} на самих кнопках мало —
+          // dragstart рождается на шапке (она источник), их обработчики его не видят,
+          // и попытка нажать кнопку уезжала перетаскиванием панели
+          draggable: draggable && !overControls,
+          title: draggable && !overControls ? 'Перетащите, чтобы поменять панели местами' : headerProps?.title,
+          style: {
+            ...headerProps?.style,
+            cursor: draggable && !overControls ? 'grab' : 'default',
+          },
           ...(closeByIcon ? {
             onMouseEnter: () => setHeaderHover(true),
             onMouseLeave: () => setHeaderHover(false),
           } : null),
         }}
       >
-        {/* Слот контролов панели: сюда порталом приезжает содержимое
-            PanelHeaderSlot. draggable=false — чтобы взаимодействие с кнопками
-            не инициировало перетаскивание карточки за шапку. */}
+        {/* Слот контролов панели: сюда порталом приезжает содержимое PanelHeaderSlot */}
         <div
           ref={setSlotEl}
+          {...controlsHoverProps}
           draggable={false}
           onDragStart={e => e.preventDefault()}
           style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 4 }}

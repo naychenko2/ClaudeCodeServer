@@ -284,9 +284,11 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
   // задачу прежнего отрицательного margin — тени и ховер больше не срезаются
   // краем скролл-контейнера.
   const scrollArea = (
-    // Сверху отступ меньше: у разделителя группы («Сегодня») свой верхний
-    // padding, и вместе с общим получалось 18px пустоты под шапкой
-    <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '2px 8px 8px' }}>
+    // Сверху отступ ужимается только под разделитель группы («Сегодня»): свой
+    // верхний padding у него есть, и вместе с общим набегало 18px пустоты под
+    // шапкой. Без группировки список начинается сразу карточкой — ей нужен
+    // обычный отступ, иначе она липнет к заголовку.
+    <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: `${groupBy === 'none' ? 8 : 2}px 8px 8px` }}>
       {listContent}
     </div>
   );

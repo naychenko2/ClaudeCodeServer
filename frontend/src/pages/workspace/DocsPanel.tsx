@@ -949,6 +949,14 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
     <>
       {/* Без шапки переключатель идёт первым в общем ряду — своего места слева там нет */}
       {!hasPanelHeader && viewSwitch}
+      {/* В режиме «Начало» — единственный контрол: развернуть начальный документ
+          в центральной области. Та же кнопка (иконка, тултип, жест), что у превью
+          снизу, — «развернуть» читается одинаково в обоих режимах чтения */}
+      {homeView && homePath && (
+        <IconButton title="Развернуть в центре" onClick={() => onOpenFile(homePath)} size="sm">
+          <Maximize2 size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+        </IconButton>
+      )}
       {/* Остальные — только в режиме «Документы»: в «Начале» ими нечем управлять */}
       {!homeView && <>
         {/* Поиск кнопкой, а не полем: колонка узкая, а поле занимало её почти

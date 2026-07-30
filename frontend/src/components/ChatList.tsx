@@ -274,10 +274,13 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
     </>
   );
 
-  // Скроллящаяся зона списка. Отрицательный margin с компенсирующим padding —
-  // чтобы тени/ховер карточек не срезались краем скролл-контейнера.
+  // Скроллящаяся зона списка. Отступ тот же, что у списка чатов проекта
+  // (SessionList): один и тот же ChatCard в двух местах должен стоять одинаково,
+  // а раньше здесь карточки шли вплотную к краям панели. Padding заодно решает
+  // задачу прежнего отрицательного margin — тени и ховер больше не срезаются
+  // краем скролл-контейнера.
   const scrollArea = (
-    <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', margin: '0 -4px', padding: '0 4px' }}>
+    <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '8px 8px' }}>
       {listContent}
     </div>
   );

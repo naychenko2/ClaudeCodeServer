@@ -436,6 +436,82 @@ describe('applyServerMessage: завершение хода', () => {
   });
 });
 
+// --- exited: fail-safe закрытие bg-карточек ---
+
+describe('applyServerMessage: exited закрывает фоновые карточки', () => {
+  // Квитанция фонового запуска — по ней UI отличает bg-карточку от обычного tool_use
+  const bgToolUse = (id: string, extra: Partial<Extract<ChatItem, { kind: 'tool_use' }>> = {}): ChatItem =>
+    toolUse(id, { result: 'Async agent launched successfully. agentId: a1', ...extra });
+
+  it('открытая bg-карточка переводится в «прервано» (bgDone + bgAborted)', () => {
+    const next = run([{ type: 'exited' }], state({ items: [bgToolUse('t1')] }));
+    expect(next.items[0]).toMatchObject({ kind: 'tool_use', id: 't1', bgDone: true, bgAborted: true });
+  });
+
+  it('закрываются все открытые bg-карточки разом, обычный tool_use не трогается', () => {
+    const next = run([{ type: 'exited' }], state({
+      items: [bgToolUse('t1'), toolUse('t2', { result: 'ok' }), bgToolUse('t3')],
+    }));
+    expect(next.items[0]).toMatchObject({ bgDone: true, bgAborted: true });
+    expect(next.items[1]).not.toHaveProperty('bgDone');
+    expect(next.items[2]).toMatchObject({ bgDone: true, bgAborted: true });
+  });
+
+  it('уже завершённая bg-карточка (успех) не перетирается в «прервано»', () => {
+    const initial = state({ items: [bgToolUse('t1', { bgDone: true })] });
+    const next = run([{ type: 'exited' }], initial);
+    expect(next.items[0]).toMatchObject({ bgDone: true });
+    expect(next.items[0]).not.toHaveProperty('bgAborted', true);
+    expect(next.items).toBe(initial.items);
+  });
+
+  it('bg-карточка, прерванная ранее событием, сохраняет свой терминальный статус', () => {
+    const initial = state({ items: [bgToolUse('t1', { bgDone: true, bgAborted: true })] });
+    const next = run([{ type: 'exited' }], initial);
+    expect(next.items).toBe(initial.items);
+  });
+
+  it('bg-карточка workflow (Transcript dir) тоже закрывается', () => {
+    const wf = toolUse('w1', { name: 'Workflow', result: 'Workflow launched in background. Transcript dir: /tmp/x' });
+    const next = run([{ type: 'exited' }], state({ items: [wf] }));
+    expect(next.items[0]).toMatchObject({ bgDone: true, bgAborted: true });
+  });
+
+  it('workflow, завершённый вотчером (workflowDone), fail-safe не трогает — успех не превращается в «прервано»', () => {
+    // workflowDone — независимый канал завершения workflow (вотчер workflow_progress),
+    // он может прийти раньше структурного bg_agent_done; exited не должен его перетирать
+    const wf = toolUse('w1', { name: 'Workflow', result: 'Workflow launched in background. Transcript dir: /tmp/x', workflowDone: true });
+    const initial = state({ items: [wf] });
+    const next = run([{ type: 'exited' }], initial);
+    expect(next.items).toBe(initial.items);
+    expect(next.items[0]).not.toHaveProperty('bgAborted');
+    // И опоздавший настоящий bg_agent_done(aborted: false) доезжает — карточка не залипла
+    const done = run([{ type: 'bg_agent_done', toolUseIds: ['w1'], aborted: false }], next);
+    expect(done.items[0]).toMatchObject({ bgDone: true });
+    expect(done.items[0]).not.toHaveProperty('bgAborted', true);
+  });
+
+  it('tool_use без результата (ещё не bg) fail-safe не помечает', () => {
+    const initial = state({ items: [toolUse('t1')] });
+    const next = run([{ type: 'exited' }], initial);
+    expect(next.items).toBe(initial.items);
+  });
+
+  it('повторный exited без открытых bg-карточек — no-op (items той же ссылкой)', () => {
+    const initial = state({ items: [{ kind: 'text', text: 'готово' }, toolUse('t9', { result: 'ok' })] });
+    const next = run([{ type: 'exited' }], initial);
+    expect(next.items).toBe(initial.items);
+    const again = run([{ type: 'exited' }], next);
+    expect(again.items).toBe(next.items);
+  });
+
+  it('fail-safe сочетается с аварийным session_ended: карточки закрыты, разделитель добавлен', () => {
+    const next = run([{ type: 'exited' }], state({ isWaiting: true, items: [bgToolUse('t1')] }));
+    expect(next.items[0]).toMatchObject({ bgDone: true, bgAborted: true });
+    expect(next.items[next.items.length - 1]).toEqual({ kind: 'session_ended' });
+  });
+});
+
 // --- rate_limit / fal_cost / прочие ---
 
 describe('applyServerMessage: телеметрия', () => {

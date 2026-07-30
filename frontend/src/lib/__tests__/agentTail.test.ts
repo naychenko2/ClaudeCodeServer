@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { splitAgentResultTail, formatTailTokens, formatTailDuration, isBgLaunchResult } from '../agentTail';
+import { splitAgentResultTail, formatTailTokens, formatTailDuration, isBgLaunchResult, asyncLaunchAckNote } from '../agentTail';
 
 // Реальный формат хвоста из транскриптов CLI: строка agentId (с подсказкой SendMessage
 // в скобках) + блок <usage> с переводами строк между парами ключ-значение
@@ -81,5 +81,16 @@ describe('форматтеры', () => {
     expect(formatTailDuration(31510)).toBe('32с');
     expect(formatTailDuration(772726)).toBe('12м 53с');
     expect(formatTailDuration(120000)).toBe('2м');
+  });
+});
+
+describe('asyncLaunchAckNote', () => {
+  it('живой агент — «работает в фоне»', () => {
+    expect(asyncLaunchAckNote(undefined)).toBe('Агент работает в фоне — его ход виден в списке действий.');
+    expect(asyncLaunchAckNote(false)).toBe('Агент работает в фоне — его ход виден в списке действий.');
+  });
+
+  it('прерванный агент — честная пометка вместо «работает в фоне»', () => {
+    expect(asyncLaunchAckNote(true)).toBe('Агент прерван — задача не завершена.');
   });
 });

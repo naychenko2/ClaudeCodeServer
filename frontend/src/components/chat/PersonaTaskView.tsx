@@ -51,13 +51,14 @@ export function findConsultedPersona(item: ToolUseItem, personas: Persona[], pro
 // (agentRole), остальная структура идентична.
 // Системный хвост CLI в ответе (agentId + <usage>) вырезается и рендерится
 // аккуратной строкой метрик «токены · действия · время».
-export function PersonaConsultCard({ persona, agentRole, question, summary, running, isError, answer, children, badge = 'консультант', emptyAnswerNote }: {
+export function PersonaConsultCard({ persona, agentRole, question, summary, running, isError, aborted, answer, children, badge = 'консультант', emptyAnswerNote }: {
   persona?: Persona | null;
   agentRole?: string;         // тип/роль обычного агента (не-персоны), если информативна
   question: string;           // полный вопрос (раскрывается кликом)
   summary?: string;           // короткое описание вопроса (description вызова)
   running: boolean;
   isError: boolean;
+  aborted?: boolean;          // фоновый агент прерван — статус в шапке, иначе карточка молчит об обрыве
   answer: string;
   children?: React.ReactNode; // секция активности между вопросом и ответом
   // Чип роли вызова в шапке: 'консультант' у Task-консультаций чата; null — скрыть
@@ -128,6 +129,9 @@ export function PersonaConsultCard({ persona, agentRole, question, summary, runn
         )}
         {!running && isError && (
           <span style={{ fontSize: 11, color: C.dangerText, flexShrink: 0 }}>ошибка</span>
+        )}
+        {!running && !isError && aborted && (
+          <span style={{ fontSize: 11, color: C.dangerText, flexShrink: 0 }}>прервано</span>
         )}
       </div>
 
@@ -255,6 +259,7 @@ export const PersonaTaskView = memo(function PersonaTaskView({ item, online, onO
       summary={summary}
       running={running}
       isError={!!item.isError}
+      aborted={settledBg && item.bgAborted === true}
       answer={answer}
       emptyAnswerNote={bgNoAnswer ? 'Агент прерван — ответа не будет' : undefined}
       badge={badge}

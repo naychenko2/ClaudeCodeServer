@@ -2079,8 +2079,11 @@ public class ClaudeSession : ILlmSessionAdapter
             run.UnknownBgToolUses.Clear();
         }
         run.PendingBgUnknown = false;
+        // drainSubagent: false — _subagentWatcher либо уже продренирован и обнулён выше
+        // (wasCurrent), либо принадлежит НОВОМУ прогону, заместившему этот (!wasCurrent):
+        // дренировать чужой поток здесь было бы порчей его состояния.
         if (orphanedTools.Count > 0)
-            await _onMessage(new BgAgentDoneMessage(orphanedTools, Aborted: true));
+            await CompleteBgTasksAsync(orphanedTools, aborted: true, drainSubagent: false);
 
         // Ход, ждущий result, его уже не дождётся — процесс умер: резолвим, чтобы
         // RunTurnAsync не завис (обрыв пользователю виден по ExitedMessage/статусу)
@@ -2232,6 +2235,13 @@ public class ClaudeSession : ILlmSessionAdapter
                     if (status == "compacting" || compactResult is not null)
                         await _onMessage(new CompactStatusMessage(status, compactResult, compactError));
                 }
+                // Структурные события жизненного цикла фоновых агентов (CLI 2.1.220+) —
+                // ПЕРВИЧНЫЙ источник учёта наравне с текстовыми путями (TrackBgLaunch,
+                // <task-notification>, TaskOutput): несут готовую пару task_id↔tool_use_id
+                // без регекс-разбора текста. Текстовые пути не удаляем — фолбэк для старых CLI.
+                else if (sysSubtype == "task_started") HandleTaskStarted(run, root);
+                else if (sysSubtype == "task_notification") HandleStructuredTaskNotification(run, root);
+                else if (sysSubtype == "background_tasks_changed") HandleBackgroundTasksChanged(run, root);
                 break;
 
             case "stream_event":
@@ -2546,6 +2556,33 @@ public class ClaudeSession : ILlmSessionAdapter
         };
     }
 
+    // Разбор структурных сабтайпов system-события CLI 2.1.220+. Чистые функции (вынесены
+    // ради юнит-тестов на реальных JSON-образцах CLI) — без побочных эффектов и состояния прогона.
+
+    // task_started: (TaskId, ToolUseId) — null, если task_id или tool_use_id пустые/отсутствуют
+    // (без tool_use_id привязать задачу к карточке в ленте нечем).
+    internal static (string TaskId, string ToolUseId)? ParseTaskStarted(JsonElement root)
+    {
+        var taskId = StringProp(root, "task_id");
+        var toolUseId = StringProp(root, "tool_use_id");
+        return string.IsNullOrEmpty(taskId) || string.IsNullOrEmpty(toolUseId) ? null : (taskId, toolUseId);
+    }
+
+    // task_notification (структурный): (TaskId, ToolUseId?, Aborted) — null, если task_id
+    // отсутствует. Aborted = статус не "completed" (failed/stopped и любой нераспознанный
+    // считаем обрывом — тот же принцип, что и у ParseTaskOutputCompletion).
+    internal static (string TaskId, string? ToolUseId, bool Aborted)? ParseTaskNotification(JsonElement root)
+    {
+        var taskId = StringProp(root, "task_id");
+        return string.IsNullOrEmpty(taskId) ? null : (taskId, StringProp(root, "tool_use_id"), StringProp(root, "status") != "completed");
+    }
+
+    // background_tasks_changed: true — массив tasks присутствует и пуст. Единственное
+    // безопасное применение этого события (см. HandleBackgroundTasksChanged) — остальные
+    // его формы (непустой список) намеренно не разбираем.
+    internal static bool IsBackgroundTasksEmptySnapshot(JsonElement root) =>
+        root.TryGetProperty("tasks", out var tasks) && tasks.ValueKind == JsonValueKind.Array && tasks.GetArrayLength() == 0;
+
     // Учёт запуска фоновой задачи по tool_result: async-агент — «Async agent launched …
     // agentId: X», возобновление — «Agent "X" … resumed from transcript in the background»,
     // workflow — «runId: wf_…». Структурный кандидат (run_in_background/Workflow из
@@ -2578,11 +2615,28 @@ public class ClaudeSession : ILlmSessionAdapter
         }
     }
 
+    // Общая точка завершения фоновой(ых) задачи(задач): дочитывает хвост сабагента (финальный
+    // текст должен лечь в ленту РАНЬШЕ индикатора завершения) и шлёт клиентам bg_agent_done.
+    // Переиспользуется всеми путями завершения: task-notification (текстовый и структурный),
+    // TaskOutput-опрос, смерть процесса (FinalizeRunAsync — drainSubagent: false, там
+    // _subagentWatcher либо уже продренирован и обнулён, либо принадлежит НОВОМУ прогону,
+    // и трогать его нельзя). Снятие задачи из PendingBg/Unknown — забота вызывающего кода:
+    // у путей разный способ поиска (регекс по тексту, словарный Remove по task_id,
+    // bulk-очистка при обрыве прогона).
+    private async Task CompleteBgTasksAsync(IReadOnlyList<string> toolUseIds, bool aborted, bool drainSubagent = true)
+    {
+        if (toolUseIds.Count == 0) return;
+        if (drainSubagent && _subagentWatcher is { IsDisposed: false } watcher) await watcher.DrainAsync();
+        await _onMessage(new BgAgentDoneMessage(toolUseIds, Aborted: aborted));
+    }
+
     // Уведомление CLI о завершении фоновых задач: user-ход со строковым content
     // <task-notification>…<task-id>X</task-id>… Вычёркиваем задачи из pending и шлём клиентам
     // bg_agent_done (карточки агентов переключаются из «работает» в «ответ готов» только
     // по этому событию); если прогон между ходами и pending опустел — закрываем stdin:
     // CLI дообработает хвост (свой ход-продолжение с ответом на уведомление) и выйдет сам.
+    // Текстовый путь статус не несёт — завершение всегда считается успешным (Aborted: false);
+    // структурный task_notification (HandleStructuredTaskNotification) точнее.
     private void HandleTaskNotification(string? text)
     {
         var run = _run;
@@ -2605,12 +2659,7 @@ public class ClaudeSession : ILlmSessionAdapter
         if (doneTools.Count > 0)
             _ = Task.Run(async () =>
             {
-                try
-                {
-                    // Финальный текст агента должен лечь в ленту РАНЬШЕ события завершения
-                    if (_subagentWatcher is { IsDisposed: false } watcher) await watcher.DrainAsync();
-                    await _onMessage(new BgAgentDoneMessage(doneTools));
-                }
+                try { await CompleteBgTasksAsync(doneTools, aborted: false); }
                 catch (Exception ex)
                 {
                     Console.Error.WriteLine($"[ClaudeSession] bg_agent_done не разослан: {ex.Message}");
@@ -2641,18 +2690,88 @@ public class ClaudeSession : ILlmSessionAdapter
         var tool = doneTool;
         _ = Task.Run(async () =>
         {
-            try
-            {
-                // Финальный текст агента должен лечь в ленту РАНЬШЕ события завершения
-                if (_subagentWatcher is { IsDisposed: false } watcher) await watcher.DrainAsync();
-                await _onMessage(new BgAgentDoneMessage([tool], Aborted: aborted));
-            }
+            try { await CompleteBgTasksAsync([tool], aborted); }
             catch (Exception ex)
             {
                 Console.Error.WriteLine($"[ClaudeSession] bg_agent_done (TaskOutput) не разослан: {ex.Message}");
             }
         });
         CloseStdinIfIdle(run);
+    }
+
+    // Структурное событие CLI: старт фоновой задачи. Первичный (точный) источник учёта —
+    // несёт готовую пару task_id↔tool_use_id, в отличие от TrackBgLaunch (регекс по тексту
+    // tool_result). Идемпотентно: повторное/дублирующее событие того же task_id просто
+    // перезапишет тем же значением; если tool_use_id уже был учтён как неизвестный (текстовый
+    // путь не смог распарсить id) — снимаем его оттуда, чтобы карточка не осталась висеть
+    // в UnknownBgToolUses и не закрылась дважды при финализации прогона.
+    private void HandleTaskStarted(CliRun run, JsonElement root)
+    {
+        if (ParseTaskStarted(root) is not { } started) return;
+        var (taskId, toolUseId) = started;
+        lock (run.PendingBg)
+        {
+            run.PendingBg[taskId] = toolUseId;
+            run.BgLaunchCandidates.Remove(toolUseId);
+            if (run.UnknownBgToolUses.Remove(toolUseId) && run.UnknownBgToolUses.Count == 0)
+                run.PendingBgUnknown = false;
+        }
+    }
+
+    // Структурное событие CLI: завершение фоновой задачи (completed/failed/stopped) — точный
+    // аналог текстового <task-notification>, но с готовым статусом (текстовый путь статус не
+    // несёт и всегда считает завершение успешным). Fallback: если task_id не учтён в PendingBg
+    // (запуск проехал мимо и структурного, и текстового пути), но tool_use_id ещё числится
+    // кандидатом/неучтённым — закрываем карточку по нему всё равно, иначе она крутилась бы
+    // вечно. Гейт по факту снятия: повторное событие уже закрытой задачи ничего не находит
+    // ни в PendingBg, ни в BgLaunchCandidates/UnknownBgToolUses — done не шлём, чтобы не
+    // задваивать карточку в UI.
+    private void HandleStructuredTaskNotification(CliRun run, JsonElement root)
+    {
+        if (ParseTaskNotification(root) is not { } n) return;
+        var (taskId, toolUseId, aborted) = n;
+
+        string? doneTool;
+        lock (run.PendingBg) run.PendingBg.Remove(taskId, out doneTool);
+
+        if (string.IsNullOrEmpty(doneTool) && !string.IsNullOrEmpty(toolUseId))
+        {
+            bool wasTracked;
+            lock (run.PendingBg)
+            {
+                wasTracked = run.BgLaunchCandidates.Remove(toolUseId);
+                if (run.UnknownBgToolUses.Remove(toolUseId))
+                {
+                    wasTracked = true;
+                    if (run.UnknownBgToolUses.Count == 0)
+                        run.PendingBgUnknown = false;
+                }
+            }
+            if (wasTracked) doneTool = toolUseId;
+        }
+        if (string.IsNullOrEmpty(doneTool)) return;
+
+        Console.WriteLine($"[ClaudeSession] Фоновая задача завершилась (структурно, aborted={aborted})");
+        var tool = doneTool;
+        _ = Task.Run(async () =>
+        {
+            try { await CompleteBgTasksAsync([tool], aborted); }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[ClaudeSession] bg_agent_done (structured) не разослан: {ex.Message}");
+            }
+        });
+        CloseStdinIfIdle(run);
+    }
+
+    // Структурное событие CLI: снэпшот живых фоновых задач. Единственное безопасное
+    // применение — пустой tasks сбрасывает PendingBgUnknown (CLI сам подтвердил: неучтённых
+    // задач больше нет). Карточки НЕ закрываем и PendingBg/UnknownBgToolUses не чистим здесь:
+    // пустой снэпшот наблюдался живьём и ДО task_notification — закрытие карточек остаётся
+    // за ним (и за финализацией прогона), не за этим событием.
+    private void HandleBackgroundTasksChanged(CliRun run, JsonElement root)
+    {
+        if (IsBackgroundTasksEmptySnapshot(root)) run.PendingBgUnknown = false;
     }
 
     private async Task HandleStreamEventAsync(JsonElement root)
@@ -2946,6 +3065,8 @@ public class ClaudeSession : ILlmSessionAdapter
         o.TryGetProperty(name, out var e) && e.ValueKind == JsonValueKind.Number && e.TryGetInt64(out var v) ? v : def;
     internal static double? DoubleProp(JsonElement o, string name) =>
         o.TryGetProperty(name, out var e) && e.ValueKind == JsonValueKind.Number && e.TryGetDouble(out var v) ? v : (double?)null;
+    internal static string? StringProp(JsonElement o, string name) =>
+        o.TryGetProperty(name, out var e) && e.ValueKind == JsonValueKind.String ? e.GetString() : null;
 
     public async ValueTask DisposeAsync()
     {

@@ -64,7 +64,8 @@ public class TeamWaveServiceTests : IDisposable
     public void Dispose()
     {
         _sessions.KillAllProcesses();
-        if (Directory.Exists(_dir)) Directory.Delete(_dir, recursive: true);
+        // Устойчиво к гонке с фоновой записью истории чата (см. TestFs)
+        Helpers.TestFs.DeleteDirectoryResilient(_dir);
         GC.SuppressFinalize(this);
     }
 

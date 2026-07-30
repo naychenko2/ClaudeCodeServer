@@ -11,6 +11,9 @@ namespace ClaudeHomeServer.Tests.Services;
 // эндпоинту — вместе с токеном подписки, без единой ошибки в логах.
 // Процессы здесь не запускаются намеренно: тесты гоняются и на linux-раннере CI, а проверять
 // надо правило сборки окружения, а не факт запуска — потому Start распилен на BuildStartInfo.
+// Коллекция SystemEnv — общая с DockerProcessRunnerEnvTests: оба манипулируют process-global
+// Environment.SetEnvironmentVariable, xunit не должен гонять их параллельно (флаки).
+[Collection("SystemEnv")]
 public class LocalProcessRunnerEnvTests
 {
     private static ProcessSpec Spec(

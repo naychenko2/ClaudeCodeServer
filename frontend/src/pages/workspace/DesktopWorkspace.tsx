@@ -187,7 +187,7 @@ export function DesktopWorkspace(p: Props) {
             С чего начнём?
           </div>
           <div style={{ fontSize: 13.5, color: C.textSecondary, lineHeight: 1.55, maxWidth: 360 }}>
-            Начните новый чат по этому проекту или выберите существующий слева.
+            Начните новый чат по этому проекту.
           </div>
           <Button
             variant="primary" size="md" glow loading={p.creatingSession}

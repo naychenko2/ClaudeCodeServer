@@ -866,4 +866,30 @@ describe('serverHistoryNewer', () => {
   it('клиент реально длиннее (оптимистичный ввод) → false', () => {
     expect(serverHistoryNewer([u('в')], [u('в'), u('ещё')])).toBe(false);
   });
+
+  it('равная длина, у клиента text не доехал вовсе → сервер новее', () => {
+    // Дыра «снимок снят — в группу ещё не вошли»: у клиента вместо ответа только
+    // карточка инструмента, текстовой реплики нет совсем (lastText = null)
+    const prev: ChatItem[] = [u('в'), { kind: 'tool_use', id: 't1', name: 'Bash', input: {} }];
+    expect(serverHistoryNewer([u('в'), t('ответ')], prev)).toBe(true);
+  });
+
+  it('равная длина, у клиента text нет, а у сервера он пустой → false (пустышкой не затираем)', () => {
+    const prev: ChatItem[] = [u('в'), { kind: 'tool_use', id: 't1', name: 'Bash', input: {} }];
+    expect(serverHistoryNewer([u('в'), t('')], prev)).toBe(false);
+  });
+
+  it('равная длина, text нет ни у сервера, ни у клиента → false', () => {
+    const server: ChatItem[] = [u('в'), { kind: 'result', subtype: 'success', durationMs: 1, numTurns: 1 }];
+    const prev: ChatItem[] = [u('в'), { kind: 'tool_use', id: 't1', name: 'Bash', input: {} }];
+    expect(serverHistoryNewer(server, prev)).toBe(false);
+  });
+
+  it('live-only у клиента + дозаписанный конец хода у сервера → true', () => {
+    // Клиент: вопрос + прерывание (live-only) + частичный текст = 3, stored-часть 2;
+    // сервер: вопрос + полный текст + result = 3 → сервер новее по длине stored-части
+    const prev: ChatItem[] = [u('в'), { kind: 'interrupted' }, t('час')];
+    const server: ChatItem[] = [u('в'), t('частичный ответ'), { kind: 'result', subtype: 'success', durationMs: 1, numTurns: 1 }];
+    expect(serverHistoryNewer(server, prev)).toBe(true);
+  });
 });

@@ -1,10 +1,13 @@
 using System.Net.Http.Json;
 using System.Text.Json;
+using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http.Connections;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.AspNetCore.SignalR.Client;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ClaudeHomeServer.Tests.Hubs;
 
@@ -114,6 +117,93 @@ public class SessionHubTests : IClassFixture<TestWebApplicationFactory>, IAsyncL
         var act = () => conn.InvokeAsync("JoinSession", "ghost-session");
 
         await act.Should().ThrowAsync<HubException>();
+    }
+
+    // ─── JoinSession: реплей статуса ─────────────────────────────────────────
+
+    // Собирает status_changed, приходящие соединению, чтобы проверять реплей при входе в группу
+    private static (List<JsonElement> Received, SemaphoreSlim Signal) CollectStatuses(HubConnection conn)
+    {
+        List<JsonElement> received = [];
+        SemaphoreSlim signal = new(0);
+        conn.On<JsonElement>("message", msg =>
+        {
+            if (msg.TryGetProperty("type", out var type) && type.GetString() == "status_changed")
+            {
+                lock (received) received.Add(msg);
+                signal.Release();
+            }
+        });
+        return (received, signal);
+    }
+
+    private void SetStatus(string sessionId, SessionStatus status) =>
+        _factory.Services.GetRequiredService<SessionManager>().GetById(sessionId)!.Status = status;
+
+    [Theory]
+    [InlineData(SessionStatus.Active)]
+    [InlineData(SessionStatus.Error)]
+    [InlineData(SessionStatus.Finished)]
+    public async Task JoinSession_ЗавершённаяСессия_РеплеитСтатус(SessionStatus status)
+    {
+        // Клиент, пропустивший конец хода вне группы, узнаёт о нём только из этого реплея —
+        // иначе у него навсегда остаётся «Claude печатает…»
+        var projectId = await CreateProjectAsync();
+        var sessionId = await CreateSessionAsync(projectId);
+        SetStatus(sessionId, status);
+        var conn = await ConnectAsync(TestWebApplicationFactory.TestUsername, TestWebApplicationFactory.TestPassword);
+        var (received, signal) = CollectStatuses(conn);
+
+        await conn.InvokeAsync("JoinSession", sessionId);
+
+        (await signal.WaitAsync(TimeSpan.FromSeconds(10))).Should().BeTrue("статус должен прийти при входе в группу");
+        lock (received)
+        {
+            received.Should().HaveCount(1);
+            received[0].GetProperty("status").GetString().Should().Be(status.ToString().ToLowerInvariant());
+            received[0].GetProperty("sessionId").GetString().Should().Be(sessionId);
+        }
+    }
+
+    [Fact]
+    public async Task JoinSession_РабочаяСессия_РеплеитСтатус()
+    {
+        // Прежнее поведение (working/waiting/starting) не сломано расширением реплея
+        var projectId = await CreateProjectAsync();
+        var sessionId = await CreateSessionAsync(projectId);
+        SetStatus(sessionId, SessionStatus.Working);
+        var conn = await ConnectAsync(TestWebApplicationFactory.TestUsername, TestWebApplicationFactory.TestPassword);
+        var (received, signal) = CollectStatuses(conn);
+
+        await conn.InvokeAsync("JoinSession", sessionId);
+
+        (await signal.WaitAsync(TimeSpan.FromSeconds(10))).Should().BeTrue();
+        lock (received) received[0].GetProperty("status").GetString().Should().Be("working");
+    }
+
+    [Fact]
+    public async Task JoinSession_РеплейСтатуса_ТолькоCaller()
+    {
+        // Реплей адресный: вход второго клиента не должен слать статус всей группе,
+        // иначе чужие вкладки получали бы ложный «конец хода»
+        var projectId = await CreateProjectAsync();
+        var sessionId = await CreateSessionAsync(projectId);
+        SetStatus(sessionId, SessionStatus.Active);
+
+        var first = await ConnectAsync(TestWebApplicationFactory.TestUsername, TestWebApplicationFactory.TestPassword);
+        var (firstReceived, firstSignal) = CollectStatuses(first);
+        await first.InvokeAsync("JoinSession", sessionId);
+        (await firstSignal.WaitAsync(TimeSpan.FromSeconds(10))).Should().BeTrue();
+
+        var second = await ConnectAsync(TestWebApplicationFactory.TestUsername, TestWebApplicationFactory.TestPassword);
+        var (secondReceived, secondSignal) = CollectStatuses(second);
+        await second.InvokeAsync("JoinSession", sessionId);
+        (await secondSignal.WaitAsync(TimeSpan.FromSeconds(10))).Should().BeTrue();
+
+        // Запас на доставку по LongPolling: если бы реплей шёл в группу, он бы уже дошёл
+        await Task.Delay(TimeSpan.FromMilliseconds(500));
+        lock (secondReceived) secondReceived.Should().HaveCount(1);
+        lock (firstReceived) firstReceived.Should().HaveCount(1, "первому соединению чужой join статус не шлёт");
     }
 
     // ─── JoinProject ─────────────────────────────────────────────────────────

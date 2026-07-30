@@ -626,7 +626,7 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
                 <Field label="Приветствие" hint="С чего персона начинает разговор">
                   <TextField value={greeting} onChange={setGreeting} placeholder="Привет! Чем помочь?" />
                 </Field>
-                <Field label="Специальность" hint="Функциональная роль для оркестрации: конвейер, брифинг, статус команды. У «Исполнителя» с полным профилем доступа в сабагентах есть право на правки файлов и команды — остальные специальности там только консультируют.">
+                <Field label="Специальность" hint="Функциональная роль для оркестрации: конвейер, брифинг, статус команды. У «Исполнителя» и «Тестировщика» с полным профилем доступа в сабагентах есть право на правки файлов и команды — остальные специальности там только консультируют.">
                   <select value={specialty} onChange={e => setSpecialty(e.target.value as PersonaSpecialty)} style={selectStyle} aria-label="Специальность">
                     <option value="none">Не задана</option>
                     <option value="analyst">Аналитик</option>

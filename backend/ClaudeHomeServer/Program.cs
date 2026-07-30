@@ -81,6 +81,21 @@ builder.Services.AddControllers()
         o.JsonSerializerOptions.Converters.Add(
             new JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase)));
 
+// Hosted-сервисы: в Testing-среде (TestWebApplicationFactory) НЕ регистрируются без
+// явного флага Testing:EnableHostedServices=true — 17 фоновых циклов на каждый из
+// ~27 бутов тестовых хостов только жгли время прогона и порождали фоновую возню
+// (диагностика 2026-07-30). Singleton-регистрации остаются — лениво достаются из DI.
+var enableHostedServices = !builder.Environment.IsEnvironment("Testing")
+    || builder.Configuration.GetValue<bool>("Testing:EnableHostedServices");
+void AddHosted<T>() where T : class, IHostedService
+{
+    if (enableHostedServices) builder.Services.AddHostedService<T>();
+}
+void AddHostedFrom<T>(Func<IServiceProvider, T> factory) where T : class, IHostedService
+{
+    if (enableHostedServices) builder.Services.AddHostedService(factory);
+}
+
 builder.Services.AddSignalR(o =>
     {
         // Смягчаем разрывы у клиентов с дрожащим каналом (мобильные, засыпающие вкладки):
@@ -142,26 +157,26 @@ builder.Services.AddSingleton(sp => new ClaudeSubscriptionPool(
 // делит SessionManager (RateLimitMessage живого хода) и SubscriptionUsageWarmupService
 builder.Services.AddSingleton<SubscriptionActivityTracker>();
 // Стартовый прогрев + идл-пинг утилизации подписок (пробный ход на простаивающий аккаунт)
-builder.Services.AddHostedService<SubscriptionUsageWarmupService>();
+AddHosted<SubscriptionUsageWarmupService>();
 // Точная утилизация обоих окон (5ч + неделя) каждого аккаунта через api/oauth/usage;
 // singleton — статусы опроса per-аккаунт (токен не подходит / ошибка) читает /api/usage
 builder.Services.AddSingleton<SubscriptionOAuthUsageService>();
-builder.Services.AddHostedService(sp => sp.GetRequiredService<SubscriptionOAuthUsageService>());
+AddHostedFrom(sp => sp.GetRequiredService<SubscriptionOAuthUsageService>());
 builder.Services.AddSingleton<PersonaAgentFileGenerator>();
 builder.Services.AddSingleton<PersonaAgentFileSync>();
 builder.Services.AddSingleton<FalImageService>();
 // Консолидация памяти — singleton + hosted: autolearn ставит заявки через RequestConsolidation
 builder.Services.AddSingleton<PersonaMemoryConsolidationService>();
-builder.Services.AddHostedService(sp => sp.GetRequiredService<PersonaMemoryConsolidationService>());
+AddHostedFrom(sp => sp.GetRequiredService<PersonaMemoryConsolidationService>());
 // Autolearn — singleton + hosted: PersonaAskService пишет память после консультаций напрямую
 builder.Services.AddSingleton<PersonaMemoryAutolearnService>();
-builder.Services.AddHostedService(sp => sp.GetRequiredService<PersonaMemoryAutolearnService>());
+AddHostedFrom(sp => sp.GetRequiredService<PersonaMemoryAutolearnService>());
 // Консолидация памяти команды проекта — singleton + hosted: team-autolearn ставит заявки RequestConsolidation
 builder.Services.AddSingleton<TeamMemoryConsolidationService>();
-builder.Services.AddHostedService(sp => sp.GetRequiredService<TeamMemoryConsolidationService>());
-builder.Services.AddHostedService<TeamMemoryAutolearnService>();
+AddHostedFrom(sp => sp.GetRequiredService<TeamMemoryConsolidationService>());
+AddHosted<TeamMemoryAutolearnService>();
 // Разовый backfill дефолтных привязок существующим проектным персонам (файлы/заметки/знания)
-builder.Services.AddHostedService<PersonaProjectBindingsMigration>();
+AddHosted<PersonaProjectBindingsMigration>();
 builder.Services.AddSingleton<TaskManager>();
 builder.Services.AddSingleton<TaskAiService>();
 builder.Services.AddSingleton<FileService>();
@@ -174,7 +189,7 @@ builder.Services.AddSingleton<DocumentAiService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Git.GitService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Git.GitServerService>();
 // Режим документов: авто-commit/push после каждого хода Claude (Project.GitAutoCommit)
-builder.Services.AddHostedService<ClaudeHomeServer.Services.Git.GitAutoCommitService>();
+AddHosted<ClaudeHomeServer.Services.Git.GitAutoCommitService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Git.GitAiService>();
 builder.Services.AddSingleton<NotesService>();
 builder.Services.AddSingleton<NotesKnowledgeService>();
@@ -187,7 +202,7 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Spend.SpendStore>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Spend.ISpendCollector>(
     sp => sp.GetRequiredService<ClaudeHomeServer.Services.Spend.SpendStore>());
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Spend.SpendAnalyticsService>();
-builder.Services.AddHostedService<ClaudeHomeServer.Services.Spend.SpendMaintenanceService>();
+AddHosted<ClaudeHomeServer.Services.Spend.SpendMaintenanceService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.OneShotClaudeRunner>();
 // AI-хаб: локальное ранжирование действий через Ollama (бесплатно, мимо claude CLI)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.OllamaClient>();
@@ -249,7 +264,7 @@ builder.Services.AddSingleton<TaskExecutionService>();
 builder.Services.AddSingleton<TeamWaveService>();
 // Сторож зависших волн (Э4): без него молчаливо умерший исполнитель оставлял бы штаб
 // в стадии «волна N» навсегда
-builder.Services.AddHostedService<TeamWaveWatchdog>();
+AddHosted<TeamWaveWatchdog>();
 builder.Services.AddSingleton<SessionSummaryService>();
 builder.Services.AddSingleton<ChatTaskExtractionService>();
 builder.Services.AddSingleton<DailyBriefingService>();
@@ -265,14 +280,14 @@ builder.Services.AddSingleton<ITriggerSource, TaskStatusTriggerSource>();
 builder.Services.AddSingleton<PersonaAutomationService>();
 // Бэкапы: singleton + hosted-обёртка — снапшот дёргают и таймер, и админский API
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Backup.BackupService>();
-builder.Services.AddHostedService(sp =>
+AddHostedFrom(sp =>
     sp.GetRequiredService<ClaudeHomeServer.Services.Backup.BackupService>());
-builder.Services.AddHostedService<TaskSchedulerService>();
-builder.Services.AddHostedService<ChatExpiryService>();
-builder.Services.AddHostedService<ChatTurnLoggerService>();
-builder.Services.AddHostedService<NoteExpiryService>();
+AddHosted<TaskSchedulerService>();
+AddHosted<ChatExpiryService>();
+AddHosted<ChatTurnLoggerService>();
+AddHosted<NoteExpiryService>();
 // Фоновый прогрев сводок «Что нового» — чтобы клик по дню отдавал кеш, а не ждал генерацию
-builder.Services.AddHostedService<ChangelogWarmupService>();
+AddHosted<ChangelogWarmupService>();
 // Терминал (PTY) и Preview (dev-server) — под гейтом workspace-destructive
 builder.Services.AddSingleton<TerminalService>();
 builder.Services.AddSingleton<DevServerService>();
@@ -320,7 +335,7 @@ builder.Services.AddSingleton<KnowledgeService>();
 // Синк «файл проекта ↔ документ БЗ»: singleton + hosted-мост событий хода Claude
 // (мост заодно гарантирует инстанцирование синка — подписку на FileService.OnMutated)
 builder.Services.AddSingleton<ProjectKnowledgeSyncService>();
-builder.Services.AddHostedService<ProjectKnowledgeTurnSync>();
+AddHosted<ProjectKnowledgeTurnSync>();
 // Каскадная уборка знаний при удалении пользователя (UsersController)
 builder.Services.AddSingleton<UserKnowledgeCascade>();
 

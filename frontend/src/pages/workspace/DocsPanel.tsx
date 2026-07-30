@@ -17,9 +17,9 @@ import { BookOpenText, BookText, ChevronDown, ChevronRight, FileQuestion, Home, 
 import type { Project, DocEntry, DocDetail, DocSearchHit, DocsScopeInfo } from '../../types';
 import { api } from '../../lib/api';
 import { onFilesChanged } from '../../lib/signalr';
-import { C, FONT, FS, R, SHADOW, SP } from '../../lib/design';
+import { C, FONT, FS, R, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
-import { Button, EmptyState, IconButton, IconSegmented, PanelHeaderSlot, TextField, useHasPanelHeader } from '../../components/ui';
+import { Button, EmptyState, IconButton, IconSegmented, Menu, PanelHeaderSlot, TextField, useHasPanelHeader } from '../../components/ui';
 import { DocsScopeDialog } from './DocsScopeDialog';
 import { MarkdownViewer } from '../../components/MarkdownViewer';
 import { ListDateDivider, LIST_FLASH_CLASS, LIST_FLASH_MS } from '../../components/ListDateDivider';
@@ -50,8 +50,6 @@ const ROW_H = 22;
 // Порог, в пределах которого второй клик считается двойным (и отменяет одиночный)
 const DOUBLE_CLICK_MS = 220;
 
-// Задержка закрытия поповера папок после ухода мыши — на путь от кнопки до списка
-const HOVER_CLOSE_MS = 220;
 
 // Тумблер нижней зоны. По умолчанию выключена: панель открывают ради списка, а превью —
 // осознанный режим. Решение пользователя, поэтому переживает перезагрузку
@@ -383,7 +381,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
   // const [foldersPinned, setFoldersPinned] = useState(…);
   // const [foldersH, setFoldersH] = useState(…);
   const [backlinksOpen, setBacklinksOpen] = useState(false);
-  const [tocOpen, setTocOpen] = useState(false);
+  const [tocAnchor, setTocAnchor] = useState<DOMRect | null>(null);
   // Домашний режим: README на всю панель. Он же стартовый — панель чаще открывают
   // «почитать про проект», чем искать конкретный документ в списке
   const [homeOpen, setHomeOpen] = useState<boolean>(() => {
@@ -399,7 +397,9 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
   const [scopeOpen, setScopeOpen] = useState(false);
   // Список папок — то же, что оглавление для документа, только для самого списка:
   // групп до десятка, а документов десятки, и мотать до нужной надоедает
-  const [foldersOpen, setFoldersOpen] = useState(false);
+  // Прямоугольник кнопки-якоря: поповер рисуется fixed по нему (Menu), иначе
+  // absolute внутри панели обрезался её краем, когда места мало
+  const [foldersAnchor, setFoldersAnchor] = useState<DOMRect | null>(null);
 
   const folderRefs = useRef(new Map<string, HTMLDivElement>());
   // Папка, к которой только что прокрутили: подсвечиваем на секунду, иначе после
@@ -436,13 +436,9 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
   );
   const listRef = useRef<HTMLDivElement>(null);
   const flashTimer = useRef<number | null>(null);
-  const hoverTimer = useRef<number | null>(null);
-  const tocHoverTimer = useRef<number | null>(null);
   const settleTimer = useRef<number | null>(null);
   useEffect(() => () => {
     if (flashTimer.current) window.clearTimeout(flashTimer.current);
-    if (hoverTimer.current) window.clearTimeout(hoverTimer.current);
-    if (tocHoverTimer.current) window.clearTimeout(tocHoverTimer.current);
     if (settleTimer.current) window.clearTimeout(settleTimer.current);
   }, []);
 
@@ -513,7 +509,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
 
   const jumpToFolder = (folder: string) => {
     setActiveFolder(folder);
-    setFoldersOpen(false);
+    setFoldersAnchor(null);
     // Прыжок в свёрнутую папку показывал бы одну подпись — разворачиваем её, но
     // прокручиваем следующим кадром: до перерисовки геометрия ещё от свёрнутого списка
     if (collapsed.has(folder)) {
@@ -678,7 +674,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
     if (clickTimer.current) { window.clearTimeout(clickTimer.current); clickTimer.current = null; }
     setSelected(null);
     setDoc(null);
-    setTocOpen(false);
+    setTocAnchor(null);
     setBacklinksOpen(false);
   };
 
@@ -901,37 +897,17 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
   //   try { localStorage.setItem(FOLDERS_PIN_KEY, next ? '1' : '0'); } catch { /* квота */ }
   // };
   //
-  // Открытие по наведению тоже убрано: поповер выскакивал при проходе мыши мимо
-  // кнопки. Осталось закрытие с задержкой — уход курсора за пределы поповера.
-  // const hoverFolders = () => { … };
-
-  const unhoverFolders = () => {
-    if (hoverTimer.current) window.clearTimeout(hoverTimer.current);
-    hoverTimer.current = window.setTimeout(() => setFoldersOpen(false), HOVER_CLOSE_MS);
-  };
-  // Мышь вернулась в поповер — отменяем запланированное закрытие
-  const keepFolders = () => {
-    if (hoverTimer.current) window.clearTimeout(hoverTimer.current);
-  };
+  // Открытие и закрытие по наведению убраны совсем: список папок и оглавление —
+  // это Menu, он закрывается кликом вне (своя подложка), и таймеры ни к чему.
 
   const quoteSection = (slug: string, title: string) => {
     if (!doc) return;
     const section = sliceSection(doc.content, slug);
     if (!section) return;
     prefillComposer(`Вопрос по разделу «${title}» документа ${doc.path}:\n\n${section}\n\n`);
-    setTocOpen(false);
+    setTocAnchor(null);
   };
 
-  // Оглавление документа — тот же жест, что у списка папок: открывает клик по кнопке,
-  // а наведение больше ничего не делает. Уход курсора из поповера закрывает его
-  // с задержкой, чтобы зазор между кнопкой и списком не обрывал взаимодействие
-  const unhoverToc = () => {
-    if (tocHoverTimer.current) window.clearTimeout(tocHoverTimer.current);
-    tocHoverTimer.current = window.setTimeout(() => setTocOpen(false), HOVER_CLOSE_MS);
-  };
-  const keepToc = () => {
-    if (tocHoverTimer.current) window.clearTimeout(tocHoverTimer.current);
-  };
 
   // Область настраивается, поэтому пустой список — не тупик: диалог открывается прямо
   // отсюда. Ранний return тут был бы вреден — вместе со списком исчезала бы и шапка,
@@ -980,9 +956,9 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
             больше одной: с единственной папкой кнопка вела бы в никуда */}
         {hasFolderNav && (
           <IconButton
-            title={foldersOpen ? 'Скрыть список папок' : 'Список папок'}
-            onClick={() => setFoldersOpen(v => !v)}
-            active={foldersOpen}
+            title={foldersAnchor ? 'Скрыть список папок' : 'Список папок'}
+            onClick={e => setFoldersAnchor(a => a ? null : e.currentTarget.getBoundingClientRect())}
+            active={!!foldersAnchor}
             size="sm"
           >
             <List size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
@@ -1044,15 +1020,13 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
           }}>{controls}</div>
       )}
 
-      {/* Поповер папок висит у верхнего края тела панели, под самой шапкой: кнопка,
-          которой он открывается, уехала порталом туда же */}
-      {foldersOpen && (
-        // Мышь внутри поповера держит его открытым: уход отсюда — тот же таймер,
-        // что и с кнопки
-        <div style={{ ...tocPopoverStyle, top: SP.xs, padding: `${SP.xs}px 0` }}
-          onMouseEnter={keepFolders} onMouseLeave={unhoverFolders}>
+      {/* Список папок — общим Menu в anchor-режиме: fixed по кнопке, с выбором
+          направления и клампом в окно. Свой absolute обрезался краем панели,
+          стоило ей стать пониже */}
+      {foldersAnchor && (
+        <Menu anchor={foldersAnchor} minWidth={260} maxHeight={320} onClose={() => setFoldersAnchor(null)}>
           {groups.map(([folder, docs]) => folderRow(folder, docs.length, folder === activeFolder))}
-        </div>
+        </Menu>
       )}
 
       {/* Строка поиска — отдельным рядом СВЕРХУ, сразу под кнопками: результаты
@@ -1317,13 +1291,14 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
                 }}>{doc.title}</span>
                 <div style={{ flex: 1 }} />
                 {headings.length > 0 && (
-                  // Наведение раскрывает оглавление, клик оставляет его открытым —
-                  // тот же жест, что у списка папок в шапке панели
-                  <span>
-                    <IconButton title="Оглавление" onClick={() => setTocOpen(v => !v)} active={tocOpen} size="sm">
-                      <List size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-                    </IconButton>
-                  </span>
+                  <IconButton
+                    title="Оглавление"
+                    onClick={e => setTocAnchor(a => a ? null : e.currentTarget.getBoundingClientRect())}
+                    active={!!tocAnchor}
+                    size="sm"
+                  >
+                    <List size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+                  </IconButton>
                 )}
                 <IconButton title="Документ в чат — вложением" onClick={() => onAttachToChat(doc.path)} size="sm">
                   <MessageSquarePlus size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
@@ -1341,12 +1316,11 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
                   <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
                 </IconButton>
 
-                {/* Оглавление: без заголовка и крестика — строки говорят сами за себя,
-                    а закрывает уход курсора. Плотность и шрифт те же, что у списка папок:
-                    оба — оглавления, и выглядеть должны одинаково */}
-                {tocOpen && headings.length > 0 && (
-                  <div style={{ ...tocPopoverStyle, padding: `${SP.xs}px 0` }}
-                    onMouseEnter={keepToc} onMouseLeave={unhoverToc}>
+                {/* Оглавление — тем же Menu, что и список папок: строки говорят сами
+                    за себя, закрывает клик вне. Свой absolute обрезался краем превью,
+                    когда зона документа низкая */}
+                {tocAnchor && headings.length > 0 && (
+                  <Menu anchor={tocAnchor} minWidth={260} maxHeight={320} onClose={() => setTocAnchor(null)}>
                     {headings.map((h, i) => (
                       <TocRow
                         key={i}
@@ -1354,11 +1328,11 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
                         // Уровень заголовка — отступом: иначе плоский список не показывает
                         // вложенность разделов
                         indent={(h.level - 1) * SP.md}
-                        onJump={() => { scrollToHeading(h); setTocOpen(false); }}
+                        onJump={() => { scrollToHeading(h); setTocAnchor(null); }}
                         onQuote={() => quoteSection(slugify(h.text), h.text)}
                       />
                     ))}
-                  </div>
+                  </Menu>
                 )}
               </div>
             )}
@@ -1439,9 +1413,5 @@ const hitStyle = {
   fontFamily: FONT.sans,
 };
 
-const tocPopoverStyle = {
-  position: 'absolute' as const, top: '100%', right: SP.sm, zIndex: 5,
-  width: 260, maxHeight: 320, overflowY: 'auto' as const,
-  background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: R.lg,
-  boxShadow: SHADOW.dropdown,
-};
+// Свой стиль поповера убран: оба списка рисует общий Menu в anchor-режиме — он
+// сам выбирает направление и не даёт краю панели себя обрезать.

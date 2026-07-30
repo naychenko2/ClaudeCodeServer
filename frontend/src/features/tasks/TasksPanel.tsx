@@ -174,7 +174,7 @@ export function TasksPanel({ project, selectedTaskId, onSelect, isMobile, boardM
             leftIcon={<Plus size={13} strokeWidth={ICON_STROKE} />}
             onClick={() => setShowCreate(true)}
           >
-            Создать
+            Задача
           </Button>
         </PanelHeaderSlot>
       )}

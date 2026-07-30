@@ -39,7 +39,7 @@ export function ProjectsPanel({ project, onOpenSettings }: {
           leftIcon={<Plus size={13} strokeWidth={ICON_STROKE} />}
           onClick={openNewProjectFlow}
         >
-          Создать
+          Проект
         </Button>
       </PanelHeaderSlot>
 

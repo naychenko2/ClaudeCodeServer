@@ -12,7 +12,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { DndContext, MouseSensor, TouchSensor, closestCenter, useSensor, useSensors } from '@dnd-kit/core';
 import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { BookOpenText, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, FileQuestion, Home, Link2, List, Maximize2, MessageSquarePlus, PanelBottom, Pin, PinOff, Search, SlidersHorizontal, X } from 'lucide-react';
+import { BookOpenText, BookText, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, FileQuestion, Home, Link2, List, Maximize2, MessageSquarePlus, PanelBottom, Pin, PinOff, Search, SlidersHorizontal, X } from 'lucide-react';
 import type { Project, DocEntry, DocDetail, DocSearchHit, DocsScopeInfo } from '../../types';
 import { api } from '../../lib/api';
 import { onFilesChanged } from '../../lib/signalr';
@@ -957,13 +957,16 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
         padding: `${SP.sm}px ${SP.md}px`, borderBottom: `1px solid ${C.border}`,
       }}>
         {/* Что показывает панель: README или корпус. Переключатель, а не кнопка —
-            это два равноправных вида, и видно, в каком из них находишься */}
+            это два равноправных вида, и видно, в каком из них находишься.
+            iconsOnly: подписи уезжают в подсказку — домик и книга говорят сами за
+            себя, а в узкой панели два слова забирали место у ряда кнопок справа */}
         {homePath && (
           <PillSwitch
+            iconsOnly
             value={homeOpen ? 'home' : 'list'}
             options={[
               { value: 'home', label: 'Начало', icon: <Home size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> },
-              { value: 'list', label: 'Документы', icon: <List size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> },
+              { value: 'list', label: 'Документы', icon: <BookText size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> },
             ]}
             onChange={v => setHome(v === 'home')}
           />

@@ -35,7 +35,11 @@ var builder = WebApplication.CreateBuilder(args);
 // Файл вне git (.gitignore), у каждого свой. Грузится последним — переопределяет
 // appsettings.json и appsettings.{Environment}.json. Необязателен: нет файла — берутся
 // дефолты из git (важно, чтобы у брата ничего не отъехало).
-builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: true);
+// В Testing (TestWebApplicationFactory) файл НЕ подключаем: иначе боевые токены
+// подписок, Dify:ApiKey и ключи LlmProviders разработчика протекают в тестовые хосты,
+// а прогрев подписок запускает настоящие claude.exe с боевым OAuth-токеном.
+if (!builder.Environment.IsEnvironment("Testing"))
+    builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: true);
 
 // Инспекционная копия: её параметры обязаны победить Local.json, который только что лёг
 // поверх командной строки. Иначе копия открыла бы боевой DataPath и боевой Dify.

@@ -50,12 +50,19 @@ public class TestWebApplicationFactory : WebApplicationFactory<Program>, IDispos
         var emptyClaudeProfile = Path.Combine(TempDir, "claude-user-profile");
         Directory.CreateDirectory(emptyClaudeProfile);
 
+        // Среда Testing: Program.cs по ней НЕ подключает appsettings.Local.json
+        // разработчика — боевые токены подписок/провайдеров не протекают в тестовый хост
+        builder.UseEnvironment("Testing");
+
         builder.ConfigureAppConfiguration((_, config) =>
         {
             config.AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["DataPath"] = Path.Combine(TempDir, "projects.json"),
                 ["ClaudeUserProfileDir"] = emptyClaudeProfile,
+                // страховка от прогрева подписок реальными claude.exe «ping»-ходами:
+                // ключ читается в рантайме, InMemory-источник фабрики сильнее любого файла
+                ["ClaudeSubscriptions:WarmupOnStartup"] = "false",
                 // высокий лимит, чтобы rate-limit не флакал обычные тесты login
                 ["Auth:LoginRateLimit"] = "1000",
                 // не опрашивать claude CLI при прогреве каталога моделей: каждый подъём

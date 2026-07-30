@@ -233,6 +233,27 @@ if (Test-Path (Join-Path $difySrc 'dist\index.js')) {
     Write-Host '  mcp-dify пропущен: нет dist/index.js (собери mcp-dify перед деплоем)' -ForegroundColor DarkYellow
 }
 
+# --- 6.5 Поставляемые workflow-скрипты в профиль CLI (~/.claude/workflows) ---
+# Механики «Обсудить с командой» (панель экспертов, ревью-консилиум, красная команда,
+# командный спринт) запускаются по ИМЕНИ workflow, поэтому скрипт обязан лежать в профиле
+# CLI: без него плитка в UI задизейблена («скилл не установлен в этом окружении»), так как
+# GET /api/skills читает именно этот каталог. В контейнере продукта раскладку делает
+# entrypoint, профилям песочницы — DockerProcessRunner, а хостовому деплою было некому.
+# CRLF снимаем: на скрипт с \r CLI отвечает «script contains control characters».
+Write-Host '[7.5/9] Workflow-скрипты в профиль CLI...' -ForegroundColor Yellow
+$wfDst = Join-Path $env:USERPROFILE '.claude\workflows'
+New-Item -ItemType Directory -Force $wfDst -ErrorAction Stop | Out-Null
+foreach ($wf in Get-ChildItem (Join-Path $repo 'claude-defaults\workflows\*.js')) {
+    $lf = (Get-Content $wf.FullName -Raw) -replace "`r`n", "`n"
+    $dst = Join-Path $wfDst $wf.Name
+    # Пишем только при отличии: mtime — рабочий сигнал для синка профилей провайдеров
+    # (LlmProviderRegistry: «копировать новее по mtime») и для кэша meta-блоков
+    if (-not (Test-Path $dst) -or [IO.File]::ReadAllText($dst) -ne $lf) {
+        [IO.File]::WriteAllText($dst, $lf)
+        Write-Host "  обновлён $($wf.Name)" -ForegroundColor DarkGray
+    }
+}
+
 # --- 7. Пересборка образа песочницы (синхронизация с версией хоста) ---
 # Образ claude-sandbox несёт В СЕБЕ код MCP-серверов (/app/mcp), run-turn.sh, claude-defaults
 # и сам claude CLI. Бэкенд на хосте свежий, но ходы container-юзеров и их MCP исполняются

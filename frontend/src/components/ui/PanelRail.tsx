@@ -72,6 +72,10 @@ interface Props {
   drop?: {
     active: boolean;
     over: boolean;
+    // Знак на мишени. Дефолт — крестик («панель уберётся»). Когда тащат кнопку
+    // ЗАКРЫТОЙ панели, убирать нечего: там знак — иконка самой панели, то есть
+    // «её кнопка переедет на эту рельсу».
+    icon?: LucideIcon;
     onDragOver: (e: DragEvent) => void;
     onDragLeave: () => void;
     onDrop: (e: DragEvent) => void;
@@ -97,6 +101,16 @@ function RailSep({ margin }: { margin: string }) {
 // эта же кнопка.
 function RailButton({ item, soleIcon: SoleIcon }: { item: RailItem; soleIcon?: LucideIcon }) {
   const [hover, setHover] = useState(false);
+  // Во время HTML5-drag браузер не шлёт mouse-события, поэтому hover, поднятый при
+  // захвате иконки, залипает: после дропа панель могла стать активной, и залипший
+  // hover рисовал бы на её иконке крестик закрытия. Гасим hover на старте и конце
+  // перетаскивания, не теряя авторский обработчик из dragProps.
+  const { onDragStart: dragStart, onDragEnd: dragEnd, ...dragRest } = item.dragProps ?? {};
+  const dragProps = item.dragProps && {
+    ...dragRest,
+    onDragStart: (e: DragEvent<HTMLElement>) => { setHover(false); dragStart?.(e); },
+    onDragEnd: (e: DragEvent<HTMLElement>) => { setHover(false); dragEnd?.(e); },
+  };
   const sole = !!SoleIcon && item.active;
   const closing = !sole && item.active && hover;
   // Закрытая панель под курсором показывается попапом, а иконка предлагает её
@@ -108,7 +122,7 @@ function RailButton({ item, soleIcon: SoleIcon }: { item: RailItem; soleIcon?: L
     : pinning ? `Закрепить «${item.title}»` : item.title;
   return (
     <span
-      {...item.dragProps}
+      {...dragProps}
       // Метка для зоны: по ней она проверяет, под курсором ли ещё иконка.
       // Одного onMouseLeave мало — если кнопка перестроилась или исчезла под
       // курсором, событие не приходит вовсе и подсказка зоны залипает.
@@ -260,20 +274,24 @@ export function PanelRail({ side, groups, visible = true, gapToCenter = 0, modeT
       })()}
 
       {/* Пока панель тащат, рельса СТАНОВИТСЯ мишенью: иконки закрываются
-          непрозрачным слоем с крестиком — «отпусти здесь, и панель уберётся».
+          непрозрачным слоем со знаком дропа — крестик «панель уберётся» либо
+          иконка панели «её кнопка переедет сюда».
           Именно слоем поверх, а не отдельным блоком: так мишень наследует место и
           высоту рельсы, ничего не двигая на экране в момент, когда в неё целятся. */}
-      {dropping && (
-        <div style={{
-          position: 'absolute', inset: 0, zIndex: 2,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          background: drop?.over ? C.accentMuted : C.bgMain,
-          color: drop?.over ? C.accent : C.textMuted,
-          transition: 'background 0.12s, color 0.12s',
-        }}>
-          <X size={18} strokeWidth={ICON_STROKE} />
-        </div>
-      )}
+      {dropping && (() => {
+        const DropIcon = drop?.icon ?? X;
+        return (
+          <div style={{
+            position: 'absolute', inset: 0, zIndex: 2,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            background: drop?.over ? C.accentMuted : C.bgMain,
+            color: drop?.over ? C.accent : C.textMuted,
+            transition: 'background 0.12s, color 0.12s',
+          }}>
+            <DropIcon size={18} strokeWidth={ICON_STROKE} />
+          </div>
+        );
+      })()}
     </div>
   );
 

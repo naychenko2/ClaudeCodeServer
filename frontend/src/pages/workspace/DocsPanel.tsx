@@ -12,7 +12,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { DndContext, MouseSensor, TouchSensor, closestCenter, useSensor, useSensors } from '@dnd-kit/core';
 import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { BookOpenText, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, CornerUpRight, FileQuestion, Home, Link2, List, Maximize2, MessageSquarePlus, PanelBottom, Pin, PinOff, Search, SlidersHorizontal, X } from 'lucide-react';
+import { BookOpenText, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, FileQuestion, Home, Link2, List, Maximize2, MessageSquarePlus, PanelBottom, Pin, PinOff, Search, SlidersHorizontal, X } from 'lucide-react';
 import type { Project, DocEntry, DocDetail, DocSearchHit, DocsScopeInfo } from '../../types';
 import { api } from '../../lib/api';
 import { onFilesChanged } from '../../lib/signalr';
@@ -33,6 +33,11 @@ interface Props {
   onOpenFile: (path: string) => void;
   // Прикрепить путь к сообщению чата (документ целиком — вложением, не текстом)
   onAttachToChat: (path: string) => void;
+  // Что открыто в центральной области. Панель сама этого не знает, а выделение в списке
+  // обязано за этим следовать: закрыли файл в центре — строка перестаёт быть выбранной
+  activeFilePath?: string | null;
+  // Закрыть файл в центре (тот же обработчик, что у крестика просмотрщика)
+  onCloseFile?: () => void;
 }
 
 // Высота зоны дерева документов: тянется хендлом, переживает перезагрузку.
@@ -224,6 +229,36 @@ function FolderRow({ folder, count, current, onJump }: {
   );
 }
 
+// Строка оглавления документа. Тот же вид, что у строки папки в списке переходов:
+// это одна и та же роль — «прыгнуть к месту», и разной плотностью они бы спорили
+function TocRow({ text, indent, onJump, onQuote }: {
+  text: string;
+  indent: number;
+  onJump: () => void;
+  onQuote: () => void;
+}) {
+  const [hover, setHover] = useState(false);
+  return (
+    <button
+      onClick={onJump}
+      // Раздел в чат — правым кликом. Раньше для этого у каждой строки висела стрелка,
+      // но в узком поповере ряд иконок забирал больше внимания, чем сами заголовки
+      onContextMenu={e => { e.preventDefault(); onQuote(); }}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      title={`${text}\nПравый клик — раздел в чат цитатой`}
+      style={{
+        ...rowStyle, minHeight: ROW_H,
+        paddingLeft: SP.sm + indent,
+        background: hover ? C.bgInset : 'transparent',
+        color: hover ? C.textHeading : C.textSecondary,
+      }}
+    >
+      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{text}</span>
+    </button>
+  );
+}
+
 // Строка документа. Отдельным компонентом ради состояния наведения: список длинный,
 // и держать его в панели значило бы перерисовывать все строки на каждое движение мыши.
 // Бейдж расширения под курсором превращается в булавку — отдельной кнопки закрепления
@@ -320,7 +355,7 @@ function prefillComposer(text: string): void {
   window.dispatchEvent(new Event('cc-compose-prefill'));
 }
 
-export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
+export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath, onCloseFile }: Props) {
   const [index, setIndex] = useState<DocEntry[] | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [doc, setDoc] = useState<DocDetail | null>(null);
@@ -404,10 +439,12 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
   const listRef = useRef<HTMLDivElement>(null);
   const flashTimer = useRef<number | null>(null);
   const hoverTimer = useRef<number | null>(null);
+  const tocHoverTimer = useRef<number | null>(null);
   const settleTimer = useRef<number | null>(null);
   useEffect(() => () => {
     if (flashTimer.current) window.clearTimeout(flashTimer.current);
     if (hoverTimer.current) window.clearTimeout(hoverTimer.current);
+    if (tocHoverTimer.current) window.clearTimeout(tocHoverTimer.current);
     if (settleTimer.current) window.clearTimeout(settleTimer.current);
   }, []);
 
@@ -637,7 +674,29 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
   const clickTimer = useRef<number | null>(null);
   useEffect(() => () => { if (clickTimer.current) window.clearTimeout(clickTimer.current); }, []);
 
+  // Показ документа снят: выделение уходит вместе с ним, иначе список продолжал бы
+  // показывать выбранным то, что уже закрыто
+  const closeDoc = () => {
+    if (clickTimer.current) { window.clearTimeout(clickTimer.current); clickTimer.current = null; }
+    setSelected(null);
+    setDoc(null);
+    setTocOpen(false);
+    setBacklinksOpen(false);
+  };
+
+  // Строка выделена, пока документ реально ПОКАЗАН: в центральной области — пока открыт
+  // там, в превью — пока зона включена и документ загружен. Проверка `previewEnabled`
+  // обязательна: содержимое грузится на любой выбор (им живут переходы по ссылкам и
+  // поиск), поэтому без неё выделение переживало бы закрытие файла в центре
+  const isShown = (path: string) =>
+    path === activeFilePath || (previewEnabled && !!doc && path === selected);
+
   const handleRowClick = (path: string) => {
+    // Повторный клик по показанному документу закрывает его — той же строкой, что открыла
+    if (path === activeFilePath) { closeDoc(); onCloseFile?.(); return; }
+    // Только когда превью показано: иначе загруженный «про запас» документ съедал бы
+    // первый клик после закрытия файла в центре — вместо открытия ничего бы не произошло
+    if (previewEnabled && path === selected && doc) { closeDoc(); return; }
     // Выделение — сразу: откладывается загрузка документа, а не отклик на клик,
     // иначе строка подсвечивалась через порог двойного клика и это выглядело поломкой
     setSelected(path);
@@ -860,6 +919,17 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
     if (!section) return;
     prefillComposer(`Вопрос по разделу «${title}» документа ${doc.path}:\n\n${section}\n\n`);
     setTocOpen(false);
+  };
+
+  // Оглавление документа открывается наведением — тем же жестом, что список папок:
+  // заглянуть в структуру нужно куда чаще, чем держать её открытой
+  const hoverToc = () => {
+    if (tocHoverTimer.current) window.clearTimeout(tocHoverTimer.current);
+    setTocOpen(true);
+  };
+  const unhoverToc = () => {
+    if (tocHoverTimer.current) window.clearTimeout(tocHoverTimer.current);
+    tocHoverTimer.current = window.setTimeout(() => setTocOpen(false), HOVER_CLOSE_MS);
   };
 
   // Область настраивается, поэтому пустой список — не тупик: диалог открывается прямо
@@ -1152,7 +1222,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
                       <DocRow
                         key={d.path}
                         doc={d}
-                        selected={d.path === selected}
+                        selected={isShown(d.path)}
                         home={d.path === homePath}
                         pinned={pinned.has(d.path)}
                         onOpen={() => handleRowClick(d.path)}
@@ -1204,7 +1274,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
                           <SortablePinnedRow key={d.path} doc={d}>
                             <DocRow
                               doc={d}
-                              selected={d.path === selected}
+                              selected={isShown(d.path)}
                               home={d.path === homePath}
                               pinned
                               onOpen={() => handleRowClick(d.path)}
@@ -1255,9 +1325,13 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
                 }}>{doc.title}</span>
                 <div style={{ flex: 1 }} />
                 {headings.length > 0 && (
-                  <IconButton title="Оглавление" onClick={() => setTocOpen(v => !v)} active={tocOpen} size="sm">
-                    <List size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-                  </IconButton>
+                  // Наведение раскрывает оглавление, клик оставляет его открытым —
+                  // тот же жест, что у списка папок в шапке панели
+                  <span onMouseEnter={hoverToc} onMouseLeave={unhoverToc}>
+                    <IconButton title="Оглавление" onClick={() => setTocOpen(v => !v)} active={tocOpen} size="sm">
+                      <List size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+                    </IconButton>
+                  </span>
                 )}
                 <IconButton title="Документ в чат — вложением" onClick={() => onAttachToChat(doc.path)} size="sm">
                   <MessageSquarePlus size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
@@ -1267,34 +1341,30 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat }: Props) {
                 </IconButton>
                 {/* Закрытие превью = выход в режим «только список»: зона не прячется на один
                     документ, чтобы вернуться от следующего же клика — режим и есть ответ */}
-                <IconButton title="Закрыть превью — остаться со списком" onClick={() => setPreview(false)} size="sm">
+                <IconButton
+                  title="Закрыть превью — остаться со списком"
+                  onClick={() => { setPreview(false); closeDoc(); }}
+                  size="sm"
+                >
                   <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
                 </IconButton>
 
-                {/* Оглавление: у каждого пункта — переход и отправка раздела в чат цитатой */}
+                {/* Оглавление: без заголовка и крестика — строки говорят сами за себя,
+                    а закрывает уход курсора. Плотность и шрифт те же, что у списка папок:
+                    оба — оглавления, и выглядеть должны одинаково */}
                 {tocOpen && headings.length > 0 && (
-                  <div style={tocPopoverStyle}>
-                    <div style={{ display: 'flex', alignItems: 'center', padding: `${SP.xs}px ${SP.sm}px`, borderBottom: `1px solid ${C.border}` }}>
-                      <span style={{ fontSize: FS.xs, fontWeight: 700, color: C.textSecondary, textTransform: 'uppercase', letterSpacing: '0.03em' }}>
-                        Оглавление
-                      </span>
-                      <div style={{ flex: 1 }} />
-                      <IconButton title="Закрыть" onClick={() => setTocOpen(false)} size="sm">
-                        <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-                      </IconButton>
-                    </div>
+                  <div style={{ ...tocPopoverStyle, padding: `${SP.xs}px 0` }}
+                    onMouseEnter={hoverToc} onMouseLeave={unhoverToc}>
                     {headings.map((h, i) => (
-                      <div key={i} style={{ display: 'flex', alignItems: 'center' }}>
-                        <button
-                          onClick={() => { scrollToHeading(h); setTocOpen(false); }}
-                          style={{ ...rowStyle, flex: 1, paddingLeft: SP.sm + (h.level - 1) * SP.md, color: C.textSecondary }}>
-                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{h.text}</span>
-                        </button>
-                        <IconButton title="Раздел в чат — цитатой" size="sm"
-                          onClick={() => quoteSection(slugify(h.text), h.text)}>
-                          <CornerUpRight size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-                        </IconButton>
-                      </div>
+                      <TocRow
+                        key={i}
+                        text={h.text}
+                        // Уровень заголовка — отступом: иначе плоский список не показывает
+                        // вложенность разделов
+                        indent={(h.level - 1) * SP.md}
+                        onJump={() => { scrollToHeading(h); setTocOpen(false); }}
+                        onQuote={() => quoteSection(slugify(h.text), h.text)}
+                      />
                     ))}
                   </div>
                 )}

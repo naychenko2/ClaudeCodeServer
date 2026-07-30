@@ -1514,7 +1514,7 @@ const windowWidth = useWindowWidth();
               : <KnowledgePanel project={project} isMobile={false} onDocumentsChanged={setIndexedFileNames} onBack={() => setFileSubTab('files')} />,
             // Документация проекта: превью и навигация — в панели, крупное чтение —
             // «развернуть» тем же путём, что открываются остальные файлы
-            docs: <DocsPanel project={project} onOpenFile={handleOpenFileFromTree} onAttachToChat={handleAttachToChat} />,
+            docs: <DocsPanel project={project} onOpenFile={handleOpenFileFromTree} onAttachToChat={handleAttachToChat} activeFilePath={openFile} onCloseFile={backFromFile} />,
             changes: <GitChangesRail project={project} onOpenDiff={handleOpenGitDiff} onOpenFile={handleOpenFileFromTree} onOpenCommit={handleOpenCommit} activeFilePath={openFile ?? openCommitFile} activeCommitSha={openCommitSha} onCommit={handleCommitVia} onScopeChange={clearCenterToChat} onToolbar={handleChangesToolbar} />,
             tasks: <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={false} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} groupTab={projectGroupTab} onGroupTab={setProjectGroupTab} filters={taskListFilters} onFilters={setTaskListFilters} hideViewSwitcher />,
             team: <ProjectPersonasPanel project={project} selectedId={personaCreating ? null : selectedPersonaId} onSelect={handlePersonaSelect} onNew={handlePersonaNew} onShowTeam={() => { handlePersonaCleared(); setTeamCenterOpen(true); }} teamActive={teamCenterOpen && !selectedPersonaId && !personaCreating} />,

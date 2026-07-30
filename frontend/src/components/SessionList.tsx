@@ -433,7 +433,9 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         isMobile={isMobile}
       />
 
-      <div style={{ flex: 1, overflowY: 'auto', padding: '8px 8px' }}>
+      {/* Сверху отступ меньше: у разделителя группы («Сегодня») свой верхний
+          padding, и вместе с общим получалось 18px пустоты под шапкой */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '2px 8px 8px' }}>
         {(tree ? tree.rows.length === 0 : filteredSessions.length === 0) && sessions.length > 0 && (
           <EmptyState
             compact

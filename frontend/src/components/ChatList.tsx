@@ -5,7 +5,7 @@ import { api } from '../lib/api';
 import { useOnline } from '../hooks/useOnline';
 import { EditSessionDialog } from './EditSessionDialog';
 import { C, FS, ISLAND, MODAL_W } from '../lib/design';
-import { Modal, ModalActions, Button, PanelShell } from './ui';
+import { Modal, ModalActions, Button, PanelShell, useHasPanelHeader } from './ui';
 import { groupChats, sortChatsFlat } from '../lib/chatGroups';
 import { usePersonas, usePersonasVersion } from '../lib/personas';
 import { ChatFilterResetActions } from './FilterBar';
@@ -65,6 +65,10 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
   const groupBy: ChatGroupBy = GROUP_BY_OPTIONS.includes(filters.groupBy) ? filters.groupBy : 'days';
   // Память свёрнутых веток дерева
   const { collapsedIds, toggleCollapse } = useTreeCollapse('global');
+
+  // Список лежит в карточке с шапкой — контролы уедут туда сами (PanelHeaderSlot),
+  // и собственная полоса тулбара в теле не нужна
+  const inHeader = useHasPanelHeader();
 
   const personas = usePersonas();
 
@@ -280,7 +284,9 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
   // задачу прежнего отрицательного margin — тени и ховер больше не срезаются
   // краем скролл-контейнера.
   const scrollArea = (
-    <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '8px 8px' }}>
+    // Сверху отступ меньше: у разделителя группы («Сегодня») свой верхний
+    // padding, и вместе с общим получалось 18px пустоты под шапкой
+    <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '2px 8px 8px' }}>
       {listContent}
     </div>
   );
@@ -292,15 +298,20 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
   if (bare) {
     return (
       <>
-        <div style={{
-          flexShrink: 0,
-          padding: '8px 10px 9px',
-          borderBottom: `1px solid ${C.border}`,
-          background: ISLAND.bg,
-          display: 'flex', flexDirection: 'column', gap: 8,
-        }}>
-          {toolbar}
-        </div>
+        {/* Полоса тулбара нужна, только когда контролы остались в теле. В карточке
+            с шапкой они уезжают туда порталом, и обёртка стала бы пустой серой
+            полосой под заголовком. */}
+        {inHeader ? toolbar : (
+          <div style={{
+            flexShrink: 0,
+            padding: '8px 10px 9px',
+            borderBottom: `1px solid ${C.border}`,
+            background: ISLAND.bg,
+            display: 'flex', flexDirection: 'column', gap: 8,
+          }}>
+            {toolbar}
+          </div>
+        )}
         <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: C.bgWhite }}>
           {scrollArea}
         </div>
@@ -325,8 +336,11 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
         // fill=false: панель занимает по контенту, не растягивается на всю
         // высоту сайдбара — если чатов мало, низ остаётся свободным.
         fill={false}
-        toolbar={toolbar}
       >
+        {/* Тулбар — обычным ребёнком, а не через toolbar: контролы внутри шапки
+            уедут порталом сами, и полоса под заголовком не останется пустой.
+            Мобильная ступень порталу не подлежит и рисуется здесь же, в теле. */}
+        {toolbar}
         {scrollArea}
       </PanelShell>
       {dialogs}

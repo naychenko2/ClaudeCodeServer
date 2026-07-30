@@ -164,8 +164,11 @@ export function PanelRail({ side, groups, visible = true, gapToCenter = 0, modeT
     onDrop: drop?.onDrop,
   };
 
+  // Штриховая обводка мишени в покое — серая, тем же цветом, что знаки места
+  // вставки в зоне (PanelDropGuide): «сюда можно» на всём экране выглядит
+  // одинаково, а акцент приберегается для «отпустишь — попадёт вот сюда».
   const railBorder = dropping
-    ? `1px ${drop?.over ? 'solid' : 'dashed'} ${C.accent}`
+    ? (drop?.over ? `1px solid ${C.accent}` : `1px dashed ${C.textSecondary}`)
     : `1px solid ${C.border}`;
 
   const rail = (

@@ -249,15 +249,13 @@ public record WorkLoopMessage(bool Active, int Iteration, int MaxIterations, str
 // Аналог plan_review, но план — объект (под-задачи, исполнители, обоснование, волны),
 // а не текст. Ответ — SessionHub.RespondTeamPlan. Событие переиздаётся при смене
 // исполнителя (Reassign), поэтому клиент сверяет карточку по PlanId.
-// PersonaId (Э8) — автор карточки: планировщик, зафиксированный в момент публикации.
-// Карточка рисуется как речь персоны (аватар + имя в шапке); null — персоны нет, шапка
-// деградирует до обезличенной.
+// Автор карточки (шапка «аватар + имя») — Plan.PlannerPersonaId, уже вложенный в план
+// с Э2; отдельного поля на верхнем уровне сообщения не нужно.
 public record TeamPlanMessage(
         string PlanId,
         Models.TeamImplementPlan Plan,
         bool Resolved,
-        bool? Approved,
-        string? PersonaId = null)
+        bool? Approved)
     : ServerMessage("team_plan");
 
 // Карточка остановки режима «Командная реализация» (Э4): блокер исполнителя, провал задачи,

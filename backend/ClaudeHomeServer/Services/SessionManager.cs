@@ -2971,7 +2971,7 @@ public class SessionManager : IDisposable
             await BroadcastTeamImplementAsync(sessionId, entry);
         }
         await BroadcastAsync(sessionId, new TeamPlanMessage(plan.Id, plan, additional,
-            additional ? true : null, plan.PlannerPersonaId));
+            additional ? true : null));
 
         if (!additional) return;
 
@@ -3624,13 +3624,14 @@ public class SessionManager : IDisposable
             return;
         }
 
-        // Молчаливый тупик (Э7-фикс, находка Веры Major №3): координатор ни разу не довёл
-        // дело до волны (WaveNumber == 0) и закончил ход в planning без маркера работы —
-        // вводная, с которой начинается практика, повисла бы без следа: ход завершился,
-        // плана нет, карточки нет, бейдж «планирование» никогда не сдвинется. После первой
+        // Молчаливый тупик (Э7-фикс, находка Веры Major №3; Э8 расширил на Interview —
+        // ревью Глеба): координатор ни разу не довёл дело до волны (WaveNumber == 0) и
+        // закончил ход в planning или interview без маркера работы/эскалации — вводная, с
+        // которой начинается практика, повисла бы без следа: ход завершился, плана нет,
+        // карточки нет, бейдж «интервью»/«планирование» никогда не сдвинется. После первой
         // волны (WaveNumber > 0) такой же ответ без маркера — легитимный разговор по
         // WorkClassificationProtocol («что сейчас в работе?» и т.п.), эскалацию не поднимаем.
-        if (team.Stage == TeamImplementStage.Planning && team.WaveNumber == 0)
+        if (team.Stage is TeamImplementStage.Interview or TeamImplementStage.Planning && team.WaveNumber == 0)
         {
             var stalled = new TeamEscalation
             {

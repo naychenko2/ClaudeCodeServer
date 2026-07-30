@@ -2099,6 +2099,25 @@ public class SessionManagerTests : IDisposable
         card.Kind.Should().Be("productDecision");
     }
 
+    // Э8-фикс (ревью Глеба): тот же класс молчаливого тупика, что чинил Э7-фикс, но не был
+    // портирован на новую стадию Interview — координатор, закончивший первый ход итерации
+    // обычным текстом без <team:work> и без <escalate:...>, вешал бы практику на «интервью»
+    // навсегда без единой карточки.
+    [Fact]
+    public async Task КонецХода_InterviewБезМаркераИБезВолн_ЗовётЧеловекаКарточкойВместоМолчания()
+    {
+        var (session, _, _) = await MakeInterviewStabAsync("ti-interview-silent-stall");
+        _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.Interview);
+
+        await _sut.HandleTeamTurnEndAsync(session.Id, "Хорошо, посмотрю что тут можно сделать.", failed: false);
+
+        var ti = _sut.GetById(session.Id)!.TeamImplement!;
+        ti.Stage.Should().Be(TeamImplementStage.AwaitingDecision,
+            "молчаливый тупик в интервью закрывается карточкой, а не бесконечным «интервью»");
+        var card = _sentMessages.OfType<TeamEscalationMessage>().Last();
+        card.Kind.Should().Be("productDecision");
+    }
+
     // Регресс-страховка: после хотя бы одной волны marker-less ответ в planning/idle —
     // легитимный разговор по WorkClassificationProtocol («почему выбрали Киру?» и т.п.),
     // а не тупик. Карточка тут была бы навязчивым шумом на каждой обычной реплике.
@@ -2385,8 +2404,8 @@ public class SessionManagerTests : IDisposable
         var card = _sentMessages.OfType<TeamPlanMessage>().Last();
         card.Plan.Version.Should().Be(1);
         card.Resolved.Should().BeFalse("первоначальный план итерации ждёт подтверждения всегда");
-        card.PersonaId.Should().NotBeNull("карточка плана идёт от лица планировщика");
-        card.PersonaId.Should().Be(card.Plan.PlannerPersonaId);
+        card.Plan.PlannerPersonaId.Should().NotBeNull(
+            "карточка плана идёт от лица планировщика — авторство несёт сам Plan, без дублирующего поля в TeamPlanMessage");
 
         var after = _sut.GetById(session.Id)!;
         after.TeamImplement!.Stage.Should().Be(TeamImplementStage.Confirming);

@@ -22,16 +22,17 @@ import { C, ISLAND, SHADOW, PANEL_ANIM } from '../../lib/design';
 import { ICON_STROKE } from '../../components/ui/icons';
 import { PanelShell } from '../../components/ui/PanelShell';
 import { PanelRail, RAIL_W, RAIL_GAP, type RailItem } from '../../components/ui/PanelRail';
-import { PanelDropGuide } from '../../components/ui/PanelDropGuide';
+import { PanelDropGuide, PanelDropLine, PanelDropSpot, SEP_HIT, sepShift } from '../../components/ui/PanelDropGuide';
 import { IslandSplitter } from '../../components/ui/IslandSplitter';
 import { useWindowWidth } from '../../lib/breakpoints';
 import {
   PANEL_META, PANEL_KEYS, PROJECT_KEYS, SESSION_KEYS, TOOLS_KEYS, WORKSPACE_KEYS,
   isFixedHeight, type PanelKey, type Zone,
 } from './panelCatalog';
-import { wsPanels, homeOf, isZoneCollapsed, zoneOf, type PanelZonesStore } from './panelStackState';
+import { wsPanels, homeOf, isZoneCollapsed, nextPlacement, zoneOf, PANEL_MIN_H, type PanelZonesStore } from './panelStackState';
 import { usePanelDnd, usePanelRowResize, usePanelWidthDrag } from './zoneGestures';
 import { usePanelPeek } from './panelPeek';
+import { useRailHover } from './railHover';
 import { useSoloPanelHeight } from './soloPanelHeight';
 import { PanelSlot } from './PanelSlot';
 import type { SessionPanels } from './useSessionPanels';
@@ -46,6 +47,11 @@ const TABLET_INLINE_MIN = 1000;
 // которой можно было бы встать невидимым оверлеем, а целиться в невидимую кромку
 // окна — мучение. Полоса живёт только пока панель тащат.
 const EMPTY_DROP_W = 28;
+
+// Попап-превью панели по наведению на иконку рельсы временно выключен: механика
+// готова (panelPeek + peek в PanelRail), но пока живём без неё. Флаг — чтобы
+// вернуть одним значением, а не восстанавливать вырезанный код.
+const PEEK_ENABLED = false;
 
 interface Props {
   // Сторона окна, к которой прижата зона
@@ -182,8 +188,32 @@ export function PanelZone({
     onSwap: swapWith,
   });
 
+  // Иконка ЗАКРЫТОЙ панели под курсором: в раскладке показываем место, куда эта
+  // панель встанет по клику. Дешевле любого превью и отвечает на главный вопрос
+  // рельсы — «куда оно денется», особенно когда панелей уже несколько.
+  // Гашение с паузой (railHover) — иначе призрак мигал бы на зазорах между иконками.
+  const hovered = useRailHover();
+  const hoverKey = hovered.key;
+
+  // Место, куда встанет панель под курсором: та же логика, что у открытия
+  // (nextPlacement = правило addPanel). В solo-режиме показывать нечего — там
+  // новая панель просто заменяет единственную.
+  const ghostKey = !compact && !soloMode && !dnd.active
+    && hoverKey && !openKeys.includes(hoverKey) && keyAvailable(hoverKey)
+    ? hoverKey : null;
+  const ghostAt = ghostKey ? nextPlacement(layout) : null;
+  // Колонка призрака в ВИДИМЫХ координатах: раскладка может держать колонки из
+  // недоступных на этом экране панелей, и их индексы со списком columns не совпадают
+  const ghostCol = ghostAt && 'ci' in ghostAt ? columns.findIndex(c => c.ci === ghostAt.ci) : -1;
+  // Своя колонка нужна и когда место — новая колонка, и когда целевая колонка
+  // раскладки на этом экране не показана
+  const ghostNewCol = !!ghostAt && ghostCol < 0;
+
   // Ширина зоны: колонки по width плюс зазоры МЕЖДУ ними (крайние направляющие
-  // в покое нулевые: зазор к рельсе даёт отдельная прокладка, к центру — сплиттер)
+  // в покое нулевые: зазор к рельсе даёт отдельная прокладка, к центру — сплиттер).
+  // Место будущей колонки ширины не занимает: её обещает вертикальная линия у
+  // края зоны — раздвигать раскладку под курсором значило бы дёргать центр на
+  // каждое наведение, да и при перетаскивании новая колонка показана так же.
   const zoneW = columns.length > 0 ? columns.length * width + (columns.length - 1) * GAP : 0;
   // Ширина зоны: тянем от кромки окна — колонки растут; width хранится на ОДНУ
   // колонку, поэтому сдвиг курсора делится на их число
@@ -233,7 +263,8 @@ export function PanelZone({
   // этом самом месте, поэтому появляется без анимации — иначе картинка дёргается,
   // будто панель прилетела из рельсы. Сбрасывается при обычном открытии кликом.
   const [pinned, setPinned] = useState<PanelKey | null>(null);
-  const peek = peeked.key && !openKeys.includes(peeked.key) && !dnd.active ? peeked.key : null;
+  const peek = PEEK_ENABLED && peeked.key && !openKeys.includes(peeked.key) && !dnd.active
+    ? peeked.key : null;
 
   // Тащат ЗАКРЫТУЮ панель (её вытянули за иконку из рельсы) — дроп её откроет
   const dragClosed = dnd.from !== null && zoneOf(zones, dnd.from) === null;
@@ -329,11 +360,13 @@ export function PanelZone({
       const src = dnd.dragSourceProps(k);
       return { ...src, onDragStart: (e: DragEvent<HTMLElement>) => { peeked.clear(); src.onDragStart?.(e); } };
     })(),
-    // Превью по наведению — только у закрытых панелей и только на десктопе:
-    // открытая и так на экране, а на тач-экране наведения не бывает
+    // Наведение на иконку ЗАКРЫТОЙ панели и только на десктопе (на тач-экране
+    // наведения не бывает): зона показывает место, куда панель встанет по клику,
+    // а при включённом попапе — ещё и превью её содержимого.
     ...(compact || openKeys.includes(k) ? null : {
-      onPeekStart: () => peeked.show(k),
-      onPeekEnd: () => peeked.hide(),
+      pinnable: PEEK_ENABLED,
+      onHoverStart: () => { hovered.enter(k); if (PEEK_ENABLED) peeked.show(k); },
+      onHoverEnd: () => { hovered.leave(); peeked.hide(); },
     }),
     onClick: () => {
       const isOpen = openKeys.includes(k);
@@ -343,6 +376,7 @@ export function PanelZone({
       // обязана встать без анимации: она уже стоит на этом месте. Клик по любой
       // другой иконке — обычное открытие, с анимацией.
       peeked.clear();
+      hovered.clear();
       setPinned(peek === k ? k : null);
       if (compact) {
         // До двух панелей: третья вытесняет самую старую (FIFO)
@@ -483,6 +517,28 @@ export function PanelZone({
     />
   );
 
+  // Призрак места: пунктирная карточка с иконкой панели — тот же язык, что у
+  // большого места вставки при перетаскивании, только без мишени дропа.
+  // pointerEvents: none — призрак висит в раскладке, но курсору не мешает.
+  // Знак места — тот же, что при перетаскивании, и по тому же правилу: если в
+  // колонке свободный низ (там ровно одна панель, её высота по контенту), панель
+  // займёт его целиком — рисуем прямоугольник; если низа нет, она втиснется
+  // стыком к соседям — рисуем линию. Мишени у наведения нет: pointerEvents none.
+  const ghostRoomy = !ghostNewCol && ghostCol >= 0 && columns[ghostCol].keys.length === 1;
+  const ghostBox = ghostKey && (ghostRoomy ? (
+    <PanelDropSpot
+      icon={PANEL_META[ghostKey].Icon}
+      style={{ flex: 1, minHeight: PANEL_MIN_H, pointerEvents: 'none' }}
+    />
+  ) : (
+    <div style={{ height: SEP_HIT, flexShrink: 0, display: 'flex', alignItems: 'center', pointerEvents: 'none' }}>
+      <PanelDropLine axis="y" />
+    </div>
+  ));
+  // Зазор перед местом в занятой колонке — как между панелями. Линия свой воздух
+  // несёт сама (коридор SEP_HIT), поэтому зазор нужен только прямоугольнику.
+  const ghostGap = ghostRoomy ? <div style={{ height: GAP, flexShrink: 0 }} /> : null;
+
   // Колонки зоны. Крайние направляющие в потоке нулевые: зазоры уже дают
   // прокладка у рельсы и сплиттер у центра. Дроп-зоны направляющих —
   // absolute-оверлеи, поэтому при DnD раскладка не «дышит».
@@ -500,6 +556,7 @@ export function PanelZone({
         <Fragment key={col.ci}>
           {colGuide(vi, vi > 0 ? GAP : 0, vi === 0 ? 'start' : undefined)}
           <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+            {/* Место будущей панели — под уже открытыми в этой колонке */}
             {rowGuide(col, vi, 0, 0, 'start')}
             {col.keys.map((k, ri) => (
               <Fragment key={k}>
@@ -531,10 +588,31 @@ export function PanelZone({
                 пустует полколонки, — мучение. Панели в общей колонке делят высоту
                 между собой, растягиваясь до края, и растяжимая направляющая
                 отбирала бы у них долю: колонка переставала доходить до низа. */}
-            {rowGuide(col, vi, col.keys.length, 0, 'end', col.keys.length === 1)}
+            {rowGuide(col, vi, col.keys.length, 0, 'end', col.keys.length === 1 && ghostCol !== vi)}
+            {/* Место будущей панели забирает низ колонки целиком: растяжимая
+                направляющая рядом с ним не растягивается, иначе делила бы остаток
+                пополам и призрак отрывался бы от панели полосой пустоты */}
+            {ghostKey && ghostCol === vi && <>{ghostGap}{ghostBox}</>}
           </div>
         </Fragment>
       ))}
+      {/* Панель заведёт свою колонку — обещаем это вертикальной линией у края
+          зоны, ровно как направляющая между колонками при перетаскивании.
+          Линия висит оверлеем в нулевой ширине: раскладка не «дышит». */}
+      {ghostKey && ghostNewCol && (
+        // Геометрия дословно как у крайней направляющей при перетаскивании
+        // (PanelDropGuide с base 0 и edge 'end'): нулевая ширина в потоке,
+        // хит-зона центром на кромке зоны, линия отодвинута наружу на sepShift.
+        // Считать это «на глаз» уже пробовали — линия уезжала внутрь панели.
+        <div style={{ width: 0, flexShrink: 0, position: 'relative', alignSelf: 'stretch' }}>
+          <div style={{
+            position: 'absolute', top: 0, bottom: 0, left: -SEP_HIT / 2, width: SEP_HIT,
+            display: 'flex', alignItems: 'stretch', justifyContent: 'center', pointerEvents: 'none',
+          }}>
+            <PanelDropLine axis="x" shift={sepShift(0)} />
+          </div>
+        </div>
+      )}
       {colGuide(columns.length, 0, 'end')}
     </div>
   );

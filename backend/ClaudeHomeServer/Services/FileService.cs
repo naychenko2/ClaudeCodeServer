@@ -468,7 +468,9 @@ public class FileService(
             else
             {
                 // Фолбэк без DI (юнит-тесты): прежний прямой запуск git на хосте
-                var psi = new System.Diagnostics.ProcessStartInfo("git", "status --porcelain")
+                // -uall — как в GitService.StatusAsync: иначе новая папка приходит одной записью
+                // «dir/», и файлы внутри неё не помечаются новыми в дереве
+                var psi = new System.Diagnostics.ProcessStartInfo("git", "status --porcelain -uall")
                 {
                     WorkingDirectory = rootPath,
                     RedirectStandardOutput = true,

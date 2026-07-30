@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Tests.Helpers;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Llm;
@@ -11,7 +12,7 @@ public class PersonaAgentFileGeneratorTests
 {
     private static PersonaAgentFileGenerator MakeGenerator()
     {
-        var config = new ConfigurationBuilder().Build();
+        var config = TestConfig.Build();
         return new PersonaAgentFileGenerator(new PersonaPromptBuilder(new LlmProviderRegistry(config)));
     }
 
@@ -61,14 +62,14 @@ public class PersonaAgentFileGeneratorTests
     [Fact]
     public void ModelAliasFor_ТолькоТирClaudeМоделей()
     {
-        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        var config = TestConfig.Build(new Dictionary<string, string?>
         {
             ["LlmProviders:deepseek:DisplayName"] = "DeepSeek",
             ["LlmProviders:deepseek:AnthropicBaseUrl"] = "https://api.deepseek.com/anthropic",
             ["LlmProviders:deepseek:ApiKey"] = "sk-test",
             ["LlmProviders:deepseek:Models:0:Id"] = "deepseek-chat",
             ["LlmProviders:deepseek:Models:1:Id"] = "deepseek-sonnet-x",
-        }).Build();
+        });
         var providers = new LlmProviderRegistry(config);
 
         PersonaAgentFileSync.ModelAliasFor(providers, "opus").Should().Be("opus");

@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Tests.Helpers;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Llm;
@@ -22,13 +23,11 @@ public class PersonaAgentFileSyncTests : IDisposable
     {
         _tempDir = Path.Combine(Path.GetTempPath(), "pagent_tests_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_tempDir);
-        var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["DataPath"] = Path.Combine(_tempDir, "projects.json"),
-                ["Persona:AgentFilesMax"] = "3", // маленький кап для теста
-            })
-            .Build();
+        var config = TestConfig.Build(new Dictionary<string, string?>
+        {
+            ["DataPath"] = Path.Combine(_tempDir, "projects.json"),
+            ["Persona:AgentFilesMax"] = "3", // маленький кап для теста
+        });
 
         var users = new UserStore(config, new ClaudeHomeServer.Tests.Helpers.FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         var appSettings = new AppSettingsService(config);

@@ -12,7 +12,7 @@ namespace ClaudeHomeServer.Tests.Services;
 public class LocalActionRoutingTests
 {
     private static IConfiguration Config(Dictionary<string, string?> d) =>
-        new ConfigurationBuilder().AddInMemoryCollection(d).Build();
+        TestConfig.Build(d);
 
     private sealed class NullHttpFactory : IHttpClientFactory
     {

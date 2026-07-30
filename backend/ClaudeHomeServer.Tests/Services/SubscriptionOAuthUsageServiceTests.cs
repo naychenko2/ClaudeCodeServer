@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Tests.Helpers;
 using System.Net;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -44,10 +45,10 @@ public class SubscriptionOAuthUsageServiceTests : IDisposable
 
     private (SubscriptionOAuthUsageService Service, UsageService Usage) CreateService(StubHandler handler)
     {
-        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        var config = TestConfig.Build(new Dictionary<string, string?>
         {
             ["DataPath"] = Path.Combine(_tempDir, "projects.json"),
-        }).Build();
+        });
         var usage = new UsageService(config);
         var svc = new SubscriptionOAuthUsageService(
             new ClaudeSubscriptionPool(config), usage, new LlmProviderRegistry(config),
@@ -149,7 +150,7 @@ public class SubscriptionOAuthUsageServiceTests : IDisposable
             ["DataPath"] = Path.Combine(_tempDir, "projects.json"),
         };
         foreach (var (k, v) in extraConfig) dict[k] = v;
-        var config = new ConfigurationBuilder().AddInMemoryCollection(dict).Build();
+        var config = TestConfig.Build(dict);
         var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.OK));
         var svc = new SubscriptionOAuthUsageService(
             new ClaudeSubscriptionPool(config), new UsageService(config), new LlmProviderRegistry(config),

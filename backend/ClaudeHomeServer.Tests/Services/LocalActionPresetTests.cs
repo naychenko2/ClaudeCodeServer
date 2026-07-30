@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Tests.Helpers;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Llm;
 using Microsoft.Extensions.Configuration;
@@ -22,7 +23,7 @@ public class LocalActionPresetTests
         Directory.CreateDirectory(dir);
         d["DataPath"] = Path.Combine(dir, "projects.json");
         d["ModelCatalog:QueryCli"] = "false";
-        return new ConfigurationBuilder().AddInMemoryCollection(d).Build();
+        return TestConfig.Build(d);
     }
 
     private static (LocalActionPresetService Service, LocalActionOverridesStore Store) Build(

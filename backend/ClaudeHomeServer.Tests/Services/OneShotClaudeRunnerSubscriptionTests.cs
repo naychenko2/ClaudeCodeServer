@@ -37,7 +37,7 @@ public class OneShotClaudeRunnerSubscriptionTests : IDisposable
         };
         foreach (var key in subKeys)
             dict[$"{ClaudeSubscriptionPool.Section}:{key}:OAuthToken"] = "token-" + key;
-        var config = new ConfigurationBuilder().AddInMemoryCollection(dict).Build();
+        var config = TestConfig.Build(dict);
 
         var pool = new ClaudeSubscriptionPool(config);
         var providers = new LlmProviderRegistry(config);
@@ -85,7 +85,7 @@ public class OneShotClaudeRunnerSubscriptionTests : IDisposable
             ["LlmProviders:deepseek:Models:0:Id"] = "deepseek-chat",
             [$"{ClaudeSubscriptionPool.Section}:second:OAuthToken"] = "token-second",
         };
-        var config = new ConfigurationBuilder().AddInMemoryCollection(dict).Build();
+        var config = TestConfig.Build(dict);
         var pool = new ClaudeSubscriptionPool(config);
         var providers = new LlmProviderRegistry(config);
         var runner = new OneShotClaudeRunner(providers, TestLauncherFactory.Instance, config,
@@ -104,11 +104,10 @@ public class OneShotClaudeRunnerSubscriptionTests : IDisposable
     {
         // Без subscriptionPool в конструкторе (как большинство одноразовых вызовов
         // в проде до этой фичи) — деградация тихая, без NRE.
-        var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["DataPath"] = Path.Combine(_tempDir, "projects.json"),
-            }).Build();
+        var config = TestConfig.Build(new Dictionary<string, string?>
+        {
+            ["DataPath"] = Path.Combine(_tempDir, "projects.json"),
+        });
         var runner = new OneShotClaudeRunner(new LlmProviderRegistry(config), TestLauncherFactory.Instance, config);
 
         var (env, poolSubKey) = runner.ResolveEnv("sonnet");
@@ -123,11 +122,10 @@ public class OneShotClaudeRunnerSubscriptionTests : IDisposable
     public void RecordSpend_АккаунтПула_АтрибутируетсяЕмуАНеClaude()
     {
         var spend = new CollectingSpend();
-        var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["DataPath"] = Path.Combine(_tempDir, "projects.json"),
-            }).Build();
+        var config = TestConfig.Build(new Dictionary<string, string?>
+        {
+            ["DataPath"] = Path.Combine(_tempDir, "projects.json"),
+        });
         var runner = new OneShotClaudeRunner(new LlmProviderRegistry(config), TestLauncherFactory.Instance,
             config, spend: spend);
         var result = new OneShotResult("текст", new OneShotUsage(10, 0, 0, 5, 0.01, "claude-sonnet-5"), 100);
@@ -143,11 +141,10 @@ public class OneShotClaudeRunnerSubscriptionTests : IDisposable
     public void RecordSpend_БезВыбраннойПодписки_ПоведениеКакРаньше()
     {
         var spend = new CollectingSpend();
-        var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["DataPath"] = Path.Combine(_tempDir, "projects.json"),
-            }).Build();
+        var config = TestConfig.Build(new Dictionary<string, string?>
+        {
+            ["DataPath"] = Path.Combine(_tempDir, "projects.json"),
+        });
         var runner = new OneShotClaudeRunner(new LlmProviderRegistry(config), TestLauncherFactory.Instance,
             config, spend: spend);
         var result = new OneShotResult("текст", new OneShotUsage(10, 0, 0, 5, 0.01, "claude-sonnet-5"), 100);

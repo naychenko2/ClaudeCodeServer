@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Tests.Helpers;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Llm;
@@ -36,7 +37,7 @@ public class SubscriptionUsageWarmupServiceTests : IDisposable
             dict[$"{ClaudeSubscriptionPool.Section}:{key}:OAuthToken"] = "token-" + key;
         if (idlePingMinutes is not null)
             dict[$"{ClaudeSubscriptionPool.Section}:IdlePingMinutes"] = idlePingMinutes.Value.ToString();
-        var config = new ConfigurationBuilder().AddInMemoryCollection(dict).Build();
+        var config = TestConfig.Build(dict);
 
         var usage = new UsageService(config);
         var pool = new ClaudeSubscriptionPool(config, usage);

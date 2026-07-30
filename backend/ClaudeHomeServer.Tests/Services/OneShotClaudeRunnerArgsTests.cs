@@ -116,11 +116,10 @@ public class OneShotClaudeRunnerArgsTests
     {
         var tempDir = Path.Combine(Path.GetTempPath(), "oneshot_dm_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempDir);
-        var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["DataPath"] = Path.Combine(tempDir, "projects.json"),
-            }).Build();
+        var config = TestConfig.Build(new Dictionary<string, string?>
+        {
+            ["DataPath"] = Path.Combine(tempDir, "projects.json"),
+        });
         var settings = new ClaudeHomeServer.Services.AppSettingsService(config);
         var users = new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         var userTiers = new UserModelTierResolver(users, settings);

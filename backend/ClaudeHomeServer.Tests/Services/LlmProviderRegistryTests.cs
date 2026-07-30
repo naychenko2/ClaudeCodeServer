@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Tests.Helpers;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Llm;
 using FluentAssertions;
@@ -29,7 +30,7 @@ public class LlmProviderRegistryTests
             ["LlmProviders:glm:Models:0:Id"] = "glm-5.2",
         };
         foreach (var (k, v) in extra ?? []) settings[k] = v;
-        var config = new ConfigurationBuilder().AddInMemoryCollection(settings).Build();
+        var config = TestConfig.Build(settings);
         return new LlmProviderRegistry(config);
     }
 

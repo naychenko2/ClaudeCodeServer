@@ -44,12 +44,18 @@ public class TestWebApplicationFactory : WebApplicationFactory<Program>, IDispos
         // Создаём users.json до старта хоста — UserStore прочитает его при инициализации
         Directory.CreateDirectory(TempDir);
         CreateUsersFile(TempDir);
+        // Пустой «пользовательский профиль CLI»: без оверрайда LlmProviderRegistry брал бы
+        // реальный ~/.claude разработчика и синкал его (13k файлов, ~95 MB) в temp-профиль
+        // на каждом хосте, где ход строится с профилем подписки/провайдера
+        var emptyClaudeProfile = Path.Combine(TempDir, "claude-user-profile");
+        Directory.CreateDirectory(emptyClaudeProfile);
 
         builder.ConfigureAppConfiguration((_, config) =>
         {
             config.AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["DataPath"] = Path.Combine(TempDir, "projects.json"),
+                ["ClaudeUserProfileDir"] = emptyClaudeProfile,
                 // высокий лимит, чтобы rate-limit не флакал обычные тесты login
                 ["Auth:LoginRateLimit"] = "1000",
                 // не опрашивать claude CLI при прогреве каталога моделей: каждый подъём

@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Tests.Helpers;
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Llm;
 using FluentAssertions;
@@ -111,12 +112,10 @@ public class LocalProcessRunnerEnvTests
 
     private static LlmProviderRegistry Registry(bool inheritSystemEnv)
     {
-        var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Claude:InheritSystemEnv"] = inheritSystemEnv ? "true" : "false",
-            })
-            .Build();
+        var config = TestConfig.Build(new Dictionary<string, string?>
+        {
+            ["Claude:InheritSystemEnv"] = inheritSystemEnv ? "true" : "false",
+        });
         return new LlmProviderRegistry(config);
     }
 }

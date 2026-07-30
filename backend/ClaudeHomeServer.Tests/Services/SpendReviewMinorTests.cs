@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Tests.Helpers;
 using System.Net;
 using System.Text;
 using ClaudeHomeServer.Controllers;
@@ -129,14 +130,12 @@ public class SpendReviewMinorTests : IDisposable
     public async Task CloudCheap_RecordSpend_ПрокидываетВладельцаИПодпись()
     {
         var spend = new CollectingSpend();
-        var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["LlmProviders:openrouter:ApiKey"] = "key",
-                ["LlmProviders:openrouter:AnthropicBaseUrl"] = "https://openrouter.ai/api",
-                ["LlmProviders:openrouter:ApiBaseUrl"] = "https://openrouter.ai/api/v1",
-            })
-            .Build();
+        var config = TestConfig.Build(new Dictionary<string, string?>
+        {
+            ["LlmProviders:openrouter:ApiKey"] = "key",
+            ["LlmProviders:openrouter:AnthropicBaseUrl"] = "https://openrouter.ai/api",
+            ["LlmProviders:openrouter:ApiBaseUrl"] = "https://openrouter.ai/api/v1",
+        });
         var providers = new LlmProviderRegistry(config);
         var client = new CloudCheapClient(new FakeHttpFactory(new FakeHandler(OpenRouterJson)),
             config, providers, NullLogger<CloudCheapClient>.Instance, spend);
@@ -181,13 +180,11 @@ public class SpendReviewMinorTests : IDisposable
         new(new FakeHttpFactory(new FakeHandler(OllamaJson)), OllamaConfig(),
             NullLogger<OllamaClient>.Instance, spend);
 
-    private IConfiguration OllamaConfig() => new ConfigurationBuilder()
-        .AddInMemoryCollection(new Dictionary<string, string?>
-        {
-            ["Ollama:Model"] = "qwen3",
-            ["DataPath"] = Path.Combine(_dir, "projects.json"),
-        })
-        .Build();
+    private IConfiguration OllamaConfig() => TestConfig.Build(new Dictionary<string, string?>
+    {
+        ["Ollama:Model"] = "qwen3",
+        ["DataPath"] = Path.Combine(_dir, "projects.json"),
+    });
 
     private sealed class CollectingSpend : ISpendCollector
     {

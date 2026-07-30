@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Tests.Helpers;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Llm;
@@ -25,11 +26,10 @@ public class ChangelogServiceTests : IDisposable
         _cacheDir = Path.Combine(_tempDir, "data", "changelog");
 
         // Без Changelog:SourceRepoPath — источник не задан, коммитов нет
-        var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["DataPath"] = Path.Combine(_tempDir, "data", "projects.json")
-            }).Build();
+        var config = TestConfig.Build(new Dictionary<string, string?>
+        {
+            ["DataPath"] = Path.Combine(_tempDir, "data", "projects.json")
+        });
 
         _sut = new ChangelogService(new FileService(), config, NullLogger<ChangelogService>.Instance,
             BuildCheapRunner(config));

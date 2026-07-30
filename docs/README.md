@@ -12,19 +12,22 @@
 
 | Раздел | Отвечает на вопрос | Что внутри |
 |---|---|---|
-| [architecture/](architecture/) | как устроено | справочники подсистем — обязательное чтение перед правками кода |
-| [observability/](observability/) | что видно в проде | телеметрия: обзор, аудит поверхностей, дашборды, развёртывание SigNoz |
-| [modules/](modules/) | как подключаются внешние модули | контракт «ядро ↔ модуль» и ТЗ на его части |
-| [operations/](operations/) | как запускать и обслуживать | контейнер, удалённый доступ |
-| [design/](design/) | как это выглядит | конвенция дизайна, аудит соответствия макетам, кликабельные прототипы |
-| [adr/](adr/) | почему решили так | architecture decision records |
-| [research/](research/) | что выяснили | исследования и срезы во времени — **не поддерживаются** после написания |
-| [omo/](omo/) | чужие материалы | переводы промптов oh-my-openagent + правовая рамка |
-| [assets/](assets/) | картинки и файлы | скриншоты README, тема OnlyOffice |
+| `architecture/` | как устроено | справочники подсистем — обязательное чтение перед правками кода |
+| `observability/` | что видно в проде | телеметрия: обзор, аудит поверхностей, дашборды, развёртывание SigNoz |
+| `modules/` | как подключаются внешние модули | контракт «ядро ↔ модуль» и ТЗ на его части |
+| `operations/` | как запускать и обслуживать | контейнер, удалённый доступ |
+| `design/` | как это выглядит | конвенция дизайна, аудит соответствия макетам, кликабельные прототипы |
+| `adr/` | почему решили так | architecture decision records |
+| `research/` | что выяснили | исследования и срезы во времени — **не поддерживаются** после написания |
+| `omo/` | чужие материалы | переводы промптов oh-my-openagent + правовая рамка |
+| `assets/` | картинки и файлы | скриншоты README, тема OnlyOffice |
+
+Ссылки на конкретные документы — ниже: панель «Документация» открывает по ссылке файл,
+а папку показать не может, поэтому в таблице они и не ссылки.
 
 ## Что где лежит
 
-**[architecture/](architecture/)** — [api.md](architecture/api.md) (справочник REST),
+**architecture/** — [api.md](architecture/api.md) (справочник REST),
 [features.md](architecture/features.md) (детали реализованных фич),
 [sandbox.md](architecture/sandbox.md) (среда исполнения local/container),
 [llm-providers.md](architecture/llm-providers.md),
@@ -33,14 +36,27 @@
 [personas.md](architecture/personas.md),
 [spend-analytics-api.md](architecture/spend-analytics-api.md).
 
-**[observability/](observability/)** — [overview.md](observability/overview.md) — главный
-документ раздела; остальные три подчинены ему.
+**observability/** — [overview.md](observability/overview.md) — главный документ раздела;
+[audit.md](observability/audit.md), [dashboards.md](observability/dashboards.md) и
+[signoz-setup.md](observability/signoz-setup.md) подчинены ему.
 
-**[modules/](modules/)** — [integration-contract.md](modules/integration-contract.md) —
-источник правды; ТЗ (`core-requirements`, `design-kit`, `llm-channel`) ссылаются на него.
+**modules/** — [integration-contract.md](modules/integration-contract.md) — источник правды;
+ТЗ ([core-requirements.md](modules/core-requirements.md), [design-kit.md](modules/design-kit.md),
+[llm-channel.md](modules/llm-channel.md)) ссылаются на него.
 
-**[research/](research/)** — материалы с датой: паритет фич с Claude Code, исследование
-мессенджеров (не реализовано), дорожная карта командной зоны. Читать как «так было тогда».
+**operations/** — [docker.md](operations/docker.md) (сборка и запуск в контейнере),
+[remote-access.md](operations/remote-access.md) (Tailscale + HTTPS).
+
+**design/** — [guidelines.md](design/guidelines.md) (обязательна для правок UI),
+[audit.md](design/audit.md) (сверка реализации с макетами), `mockups/` — кликабельные
+прототипы в HTML.
+
+**research/** — материалы с датой: [feature-parity.md](research/feature-parity.md),
+[messenger-integration.md](research/messenger-integration.md) (не реализовано),
+[roadmap-team-zone.md](research/roadmap-team-zone.md). Читать как «так было тогда».
+
+**omo/** — [adoption.md](omo/adoption.md) (правовая рамка), `translations/` — переводы
+промптов, из которых генерируются `Services/Prompts/OmoPrompts*.cs`.
 
 ## Куда класть новое
 

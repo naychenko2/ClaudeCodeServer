@@ -1,12 +1,12 @@
 <div align="center">
 
-<img src="frontend/public/pwa-192x192.png" width="88" height="88" alt="Claude Home" />
+<img src="frontend/public/pwa-192x192.png" width="88" height="88" alt="AI Home" />
 
-# Claude Home
+# AI Home
 
-**Самостоятельно размещаемый веб-клиент для [Claude Code](https://claude.com/claude-code).**
-Ведите диалоги с Claude Code по своим проектам из браузера или с телефона — с файловым
-менеджером, базой знаний, генерацией медиа и офисными документами.
+**Самостоятельно размещаемый веб-интерфейс для агентных AI-ассистентов.**
+Ведите диалоги по своим проектам из браузера или с телефона — с файловым менеджером,
+задачами, персонами, базой знаний и офисными документами.
 
 </div>
 
@@ -14,114 +14,100 @@
 
 ## Что это
 
-**Claude Home** оборачивает CLI Claude Code в веб-приложение с чат-интерфейсом в эстетике
-Claude. Сервер поднимается у вас (локально или в Docker-контейнере), запускает `claude` как
-подпроцесс на ваших проектах и стримит ход диалога в браузер через WebSocket (SignalR).
+**AI Home** оборачивает агентный CLI в веб-приложение с чат-интерфейсом. Сервер поднимается
+у вас (локально или в Docker-контейнере), запускает ассистента как подпроцесс на ваших
+проектах и стримит ход диалога в браузер через WebSocket (SignalR).
+
+Рантайм один — CLI [Claude Code](https://claude.com/claude-code), но модель за ним не
+обязана быть от Anthropic: GLM и DeepSeek подключаются оверрайдами окружения на каждый ход,
+а фоновая мелочь (заголовки чатов, теги, сводки) уходит на локальную Ollama или OpenRouter.
+Какой моделью идёт каждое место — решает админ в настройках, см.
+[architecture/llm-providers.md](docs/architecture/llm-providers.md).
 
 Зачем это нужно:
 
-- **Доступ откуда угодно.** Claude Code работает на домашней машине, а вы общаетесь с ним
+- **Доступ откуда угодно.** Ассистент работает на домашней машине, а вы общаетесь с ним
   с ноутбука или телефона — через [Tailscale + HTTPS](docs/operations/remote-access.md).
-- **Не только код.** Универсальный ассистент: чаты вне проектов, поиск в интернете, генерация
-  текстов и изображений, работа с офисными документами.
-- **Свой контур.** Всё крутится на вашем железе, доступ — по API-ключу, трафик шифруется.
+- **Не только код.** Универсальный ассистент: чаты вне проектов, задачи и заметки, поиск
+  в интернете, генерация текстов и изображений, работа с офисными документами.
+- **Свой контур.** Всё крутится на вашем железе, доступ — по логину и паролю, трафик шифруется.
 
 <div align="center">
 <img src="docs/assets/screenshots/workspace.png" width="820" alt="Рабочая область: чат, дерево файлов, визуализация workflow" />
 <br/><sub>Рабочая область проекта: чат с Claude, дерево файлов, визуализация параллельного workflow и учёт стоимости</sub>
 </div>
 
-## Возможности
+Вокруг чата собран рабочий контур: проекты с файловым менеджером и git-разницей, задачи
+с напоминаниями, персоны-собеседники со своей памятью, заметки в markdown-хранилище,
+семантический поиск по проекту, генерация медиа, бэкапы и телеметрия. Полный перечень
+с деталями реализации — [docs/architecture/features.md](docs/architecture/features.md).
 
-### 💬 Чат с Claude Code
-- Стриминг ответа в реальном времени: текст, рассуждения (thinking), вызовы инструментов
-- Режимы работы: ⚡ авто, 📋 план (с согласованием), ❓ с подтверждениями, «без ограничений»
-- Запросы разрешений и интерактивные вопросы прямо в ленте
-- Выбор модели и уровня усилий (effort), суб-агенты и скиллы
-- Голосовой ввод, вложения файлов, повтор запроса, прерывание
-- **Mermaid-диаграммы** рендерятся прямо в чате, с полноэкранным зумом
-- Визуализация **workflow**: фазы, параллельные агенты, их статусы
-- Учёт стоимости и токенов (Claude), лимиты подписки, траты на fal.ai
+## С чего начать
 
-### 🗂 Чаты и проекты
-- **Чаты вне проектов** — универсальный ассистент без привязки к репозиторию
-- **Проекты** с группировкой, двухпанельный лейаут на десктопе, поиск и сортировка
-- Сессии: создание с именем/режимом/моделью, авто-именование по первому сообщению,
-  возобновление прерванных (`--resume`)
+Маршруты чтения — каждая строка ведёт в отдельный документ:
 
-<div align="center">
-<img src="docs/assets/screenshots/projects.png" width="49%" alt="Список проектов с группами" />
-<img src="docs/assets/screenshots/chats.png" width="49%" alt="Раздел чатов вне проектов" />
-<br/><sub>Слева — проекты с группами, справа — раздел «Чаты» вне проектов</sub>
-</div>
+| Хочу | Читать |
+|---|---|
+| Запустить у себя | [operations/docker.md](docs/operations/docker.md) → [operations/remote-access.md](docs/operations/remote-access.md) |
+| Понять устройство | [CLAUDE.md](CLAUDE.md) → [architecture/api.md](docs/architecture/api.md) → [architecture/sandbox.md](docs/architecture/sandbox.md) |
+| Разобраться, что уже умеет | [architecture/features.md](docs/architecture/features.md) |
+| Поправить интерфейс | [design/guidelines.md](docs/design/guidelines.md) — обязательна для любых правок UI |
+| Понять работу с моделями | [architecture/llm-providers.md](docs/architecture/llm-providers.md) — провайдеры, три слота, таблица назначений |
+| Подключить свой инструмент | [architecture/mcp-servers.md](docs/architecture/mcp-servers.md) |
+| Настроить персон и память | [architecture/personas.md](docs/architecture/personas.md) |
+| Поднять телеметрию | [observability/overview.md](docs/observability/overview.md) |
+| Узнать, почему сделано так | [ADR-001: происхождение задач и чатов](docs/adr/ADR-001-task-and-chat-origin.md), [ADR-002: god-узлы графа кода](docs/adr/ADR-002-code-graph-god-nodes-in-prompt.md) |
 
-### 📁 Файловый менеджер
-- Дерево файлов, поиск, просмотр и редактирование
-- Git-diff и revert изменений, подсветка синтаксиса
-- Бинарные файлы и изображения, просмотр `.mmd` как отрендеренной диаграммы
-- Просмотр и редактирование **docx/pptx/xlsx** через встроенный OnlyOffice
-- Защита от path traversal (`SafeJoin`)
+Карта всего корпуса документации — [docs/README.md](docs/README.md): что лежит в каждом
+разделе и куда класть новое.
 
-<div align="center">
-<img src="docs/assets/screenshots/files.png" width="820" alt="Файловый менеджер и просмотр файла" />
-</div>
-
-### 🧠 База знаний и медиа
-- **Знания** — индексация файлов проекта в векторную БЗ (Dify) для RAG-поиска
-- **Генерация медиа** через fal.ai (картинки, видео) с учётом трат и остатка баланса
-
-### 🔐 Доступ и эксплуатация
-- Аутентификация по API-ключу (`[Authorize]` на всех эндпоинтах и хабе), rate-limit
-- **Фич-флаги** per-user (dark launch): включение экспериментальных функций без пересборки
-- Экран «Использование»: статистика Claude + fal.ai
-- Удалённый доступ по HTTPS через Tailscale — см. [docs/operations/remote-access.md](docs/operations/remote-access.md)
-
-## Экран входа
-
-<div align="center">
-<img src="docs/assets/screenshots/login.png" width="620" alt="Экран входа" />
-</div>
-
-## Архитектура
+## Как устроено
 
 ```
-Браузер (React 18 + TypeScript)
-    │ SignalR (WebSocket)
+Браузер (React 18 + TypeScript, PWA)
+    │ REST + SignalR (WebSocket)
     ▼
 ASP.NET Core 10 (:5000)
- ├── Controllers/     Auth, Projects, Sessions, Files, FeatureFlags, Chats
- ├── Hubs/SessionHub  SignalR /hubs/session
+ ├── Controllers/     чаты и сессии, проекты и файлы, персоны, задачи, заметки,
+ │                    знания, модели и траты, бэкапы, админка
+ ├── Hubs/SessionHub  стрим хода диалога в браузер
  ├── Services/
- │    ├── ProjectManager     реестр проектов (data/projects.json)
- │    ├── SessionManager      сессии + broadcast через IHubContext
- │    ├── ClaudeSession        обёртка над процессом claude
- │    └── FileService          файловый менеджер (SafeJoin)
- └── Protocol/ServerMessage    типы WS-событий
+ │    ├── Llm/         провайдеры и запуск claude CLI (Claude/ClaudeSession)
+ │    ├── Execution/   запуск процессов: на машине сервера или в docker-песочнице
+ │    ├── Docs/ Git/ CodeGraph/ Memory/ Modules/ Prompts/ Spend/ Backup/
+ │    └── …            проекты, сессии, файловый менеджер (SafeJoin)
+ ├── Telemetry/       OpenTelemetry → Aspire (dev) / SigNoz (production)
+ └── Protocol/        типы событий WebSocket
     │
     ▼
 claude CLI  (--print --output-format stream-json --input-format stream-json …)
     WorkingDirectory = корень проекта
+    ▲
+    └── mcp/*-server — инструменты продукта: задачи, заметки, персоны, память,
+        виджеты, граф кода, уведомления, рабочая область
 ```
 
 Сервер запускает `claude` в режиме стрим-JSON и маппит его события на сообщения WebSocket
 (`text_delta`, `thinking_delta`, `tool_use`, `tool_result`, `permission_request`, `result` …).
-Подробности — в [CLAUDE.md](CLAUDE.md).
+Инварианты, соглашения и карта кода — в [CLAUDE.md](CLAUDE.md).
 
 ### Стек
 
 | Слой | Технологии |
 |---|---|
-| Frontend | React 18, TypeScript, Vite, SignalR-client, react-markdown, mermaid |
-| Backend | ASP.NET Core 10, SignalR, Kestrel (TLS) |
+| Frontend | React 18, TypeScript, Vite, SignalR-client, react-markdown, mermaid, dnd-kit |
+| Backend | ASP.NET Core 10, SignalR, Kestrel (TLS), YARP |
 | CLI | Claude Code (`@anthropic-ai/claude-code`) |
+| Модели | Claude по подписке; GLM и DeepSeek env-оверрайдами; Ollama и OpenRouter для фоновых задач |
 | Интеграции | Dify (RAG), fal.ai (медиа), OnlyOffice Document Server |
+| Телеметрия | OpenTelemetry, Aspire Dashboard (dev), SigNoz (production) |
 | Деплой | Docker (multi-stage), Tailscale + HTTPS |
 
 Дизайн-система: PT Serif (заголовки) · Hanken Grotesk (UI) · JetBrains Mono (код);
 accent `#D97757`, тёплая бежевая палитра. Стили — inline-объекты, единые токены в
 [`frontend/src/lib/design.ts`](frontend/src/lib/design.ts).
 
-## Быстрый старт
+## Запуск
 
 > **Стандарт — сборка и запуск в dev-контейнере** (песочница для Claude + воспроизводимое
 > окружение). Подробности — [docs/operations/docker.md](docs/operations/docker.md).
@@ -149,8 +135,8 @@ cd frontend; npm run dev                             # :5173 (проксируе
 ```
 </details>
 
-Первый вход — по API-ключу: он берётся из `Auth:ApiKey` или автогенерируется в
-`data/auth-key.txt` (печатается в консоль при старте).
+Первый старт создаёт пользователя `admin` со случайным паролем и **один раз** печатает его
+в консоль — сохраните его сразу, потом пароль меняется в настройках профиля.
 
 ## Конфигурация
 
@@ -161,11 +147,30 @@ cd frontend; npm run dev                             # :5173 (проксируе
 
 ## Документация
 
-- [CLAUDE.md](CLAUDE.md) — архитектура, REST API, соглашения
-- [docs/README.md](docs/README.md) — карта корпуса документации: что в каком разделе
-- [docs/operations/docker.md](docs/operations/docker.md) — контейнеризация и песочница
-- [docs/operations/remote-access.md](docs/operations/remote-access.md) — удалённый доступ (Tailscale + HTTPS)
-- [docs/research/feature-parity.md](docs/research/feature-parity.md) — соответствие возможностям Claude Code
+- [docs/README.md](docs/README.md) — карта корпуса: что в каком разделе и куда класть новое
+- [CLAUDE.md](CLAUDE.md) — карта кода, инварианты, соглашения
+- [docs/architecture/features.md](docs/architecture/features.md) — что уже реализовано и как
+- [docs/architecture/api.md](docs/architecture/api.md) — справочник REST-эндпоинтов
+
+<details>
+<summary>Ещё скриншоты</summary>
+
+<div align="center">
+<img src="docs/assets/screenshots/projects.png" width="49%" alt="Список проектов с группами" />
+<img src="docs/assets/screenshots/chats.png" width="49%" alt="Раздел чатов вне проектов" />
+<br/><sub>Слева — проекты с группами, справа — раздел «Чаты» вне проектов</sub>
+</div>
+
+<div align="center">
+<img src="docs/assets/screenshots/files.png" width="820" alt="Файловый менеджер и просмотр файла" />
+<br/><sub>Файловый менеджер: дерево, просмотр и правка, git-разница</sub>
+</div>
+
+<div align="center">
+<img src="docs/assets/screenshots/login.png" width="620" alt="Экран входа" />
+<br/><sub>Экран входа</sub>
+</div>
+</details>
 
 ---
 

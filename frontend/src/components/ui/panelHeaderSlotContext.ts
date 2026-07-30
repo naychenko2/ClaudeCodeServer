@@ -11,9 +11,13 @@ export interface PanelHeaderSlotValue {
   // вариантом контролов.
   hasHeader: boolean;
   el: HTMLElement | null;
+  // Слот СЛЕВА, сразу за названием панели. Нужен переключателям вида: они
+  // относятся к самой панели («что показываем»), и у её имени читаются как часть
+  // заголовка, а не как ещё одна кнопка в правой группе действий.
+  elLeft: HTMLElement | null;
 }
 
-const EMPTY: PanelHeaderSlotValue = { hasHeader: false, el: null };
+const EMPTY: PanelHeaderSlotValue = { hasHeader: false, el: null, elLeft: null };
 
 export const PanelHeaderSlotContext = createContext<PanelHeaderSlotValue>(EMPTY);
 

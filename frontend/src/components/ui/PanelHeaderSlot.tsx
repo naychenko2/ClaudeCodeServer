@@ -36,7 +36,14 @@ import { PanelHeaderSlotContext } from './panelHeaderSlotContext';
 //   молча ничего не рендерит — проверяй useHasPanelHeader() и рисуй вариант
 //   контролов в теле панели.
 
-export function PanelHeaderSlot({ children }: { children: ReactNode }) {
-  const { el } = useContext(PanelHeaderSlotContext);
-  return el ? createPortal(children, el) : null;
+export function PanelHeaderSlot({ children, side = 'right' }: {
+  children: ReactNode;
+  // 'left' — сразу за названием панели: место переключателей вида, которые
+  // отвечают на вопрос «что показываем» и читаются как продолжение заголовка.
+  // 'right' (по умолчанию) — общая группа действий панели.
+  side?: 'left' | 'right';
+}) {
+  const { el, elLeft } = useContext(PanelHeaderSlotContext);
+  const target = side === 'left' ? elLeft : el;
+  return target ? createPortal(children, target) : null;
 }

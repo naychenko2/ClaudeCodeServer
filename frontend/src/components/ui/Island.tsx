@@ -38,10 +38,14 @@ export function Island({ bg = ISLAND.bg, borderColor = ISLAND.border, shadow = I
 
 // Шапка острова: утоплена относительно тела карточки, читается как заголовочная
 // зона. Геометрия — из эталонного PanelShell (RightPanelStack).
-export function IslandHeader({ icon, title, badge, actions, headerProps, children }: {
+export function IslandHeader({ icon, title, badge, actions, headerProps, children, leading }: {
   icon?: ReactNode;
   title: string;
   badge?: string | null;
+  // Контролы вплотную к названию панели — переключатели вида («что показываем»).
+  // Стоят ДО распорки, поэтому читаются как продолжение заголовка, а не как ещё
+  // одна кнопка в правой группе
+  leading?: ReactNode;
   // Кнопки справа (fullscreen/close и т.п.)
   actions?: ReactNode;
   // Атрибуты корня шапки: draggable/drag-обработчики/cursor для DnD PanelShell
@@ -63,9 +67,13 @@ export function IslandHeader({ icon, title, badge, actions, headerProps, childre
       }}
     >
       {icon}
-      <span style={{ fontFamily: FONT.sans, fontSize: 13, fontWeight: 600, color: C.textHeading, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+      {/* Заголовок сжимается, но не растягивается: распорка ниже отдана отдельному
+          элементу, иначе leading-контролы уезжали бы вправо вместе с ней */}
+      <span style={{ fontFamily: FONT.sans, fontSize: 13, fontWeight: 600, color: C.textHeading, flex: '0 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {title}
       </span>
+      {leading}
+      <div style={{ flex: 1, minWidth: 0 }} />
       {badge && (
         <span style={{
           flexShrink: 0, fontFamily: FONT.mono, fontSize: 10.5, fontWeight: 600,

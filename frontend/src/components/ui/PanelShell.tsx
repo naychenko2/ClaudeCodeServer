@@ -142,6 +142,7 @@ export function PanelShell({
   // перетаскивание карточки за шапку выключено — иначе нажатие на кнопку легко
   // превращается в перенос панели
   const [overControls, setOverControls] = useState(false);
+  // Для системных actions хватает React-обработчиков: это обычные дети шапки
   const controlsHoverProps = {
     onMouseEnter: () => setOverControls(true),
     onMouseLeave: () => setOverControls(false),
@@ -151,7 +152,26 @@ export function PanelShell({
   // (PanelHeaderSlot). Через состояние, а не ref: портал должен отрисоваться
   // после того, как узел появился в DOM, а значит нужен повторный рендер.
   const [slotEl, setSlotEl] = useState<HTMLDivElement | null>(null);
-  const slotValue = useMemo(() => ({ hasHeader: true, el: slotEl }), [slotEl]);
+  const [slotLeftEl, setSlotLeftEl] = useState<HTMLDivElement | null>(null);
+  const slotValue = useMemo(
+    () => ({ hasHeader: true, el: slotEl, elLeft: slotLeftEl }),
+    [slotEl, slotLeftEl]);
+
+  // Наведение на СЛОТ ловим нативно, а не пропсами React. Контролы приезжают в него
+  // порталом, и react-события идут по React-дереву — то есть в саму панель, мимо
+  // этого узла: onMouseEnter здесь не срабатывал бы, и панель продолжала уезжать
+  // при нажатии на её же кнопки.
+  useEffect(() => {
+    const nodes = [slotEl, slotLeftEl].filter((n): n is HTMLDivElement => !!n);
+    if (!nodes.length) return;
+    const on = () => setOverControls(true);
+    const off = () => setOverControls(false);
+    nodes.forEach(n => { n.addEventListener('mouseenter', on); n.addEventListener('mouseleave', off); });
+    return () => nodes.forEach(n => {
+      n.removeEventListener('mouseenter', on);
+      n.removeEventListener('mouseleave', off);
+    });
+  }, [slotEl, slotLeftEl]);
 
   // hideIfEmpty: Children.toArray уже отбрасывает null/undefined/false/true/""
   // (React делает это автоматически). Если после фильтрации пусто — не рендерим.
@@ -245,6 +265,9 @@ export function PanelShell({
         title={title}
         badge={badge}
         actions={actions ? <span {...controlsHoverProps} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>{actions}</span> : actions}
+        // Левый слот — у самого названия панели (PanelHeaderSlot side="left")
+        leading={<div ref={setSlotLeftEl} draggable={false} onDragStart={e => e.preventDefault()}
+          style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 4 }} />}
         headerProps={{
           ...headerProps,
           // Над кнопками карточка не тащится: draggable снимается с шапки, пока
@@ -263,10 +286,10 @@ export function PanelShell({
           } : null),
         }}
       >
-        {/* Слот контролов панели: сюда порталом приезжает содержимое PanelHeaderSlot */}
+        {/* Слот контролов панели: сюда порталом приезжает содержимое PanelHeaderSlot.
+            Наведение отслеживается нативно (см. эффект выше) */}
         <div
           ref={setSlotEl}
-          {...controlsHoverProps}
           draggable={false}
           onDragStart={e => e.preventDefault()}
           style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 4 }}

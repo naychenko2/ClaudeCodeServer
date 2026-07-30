@@ -27,7 +27,7 @@ import { IslandSplitter } from '../../components/ui/IslandSplitter';
 import { useWindowWidth } from '../../lib/breakpoints';
 import {
   PANEL_META, PANEL_KEYS, PROJECT_KEYS, SESSION_KEYS, TOOLS_KEYS, WORKSPACE_KEYS,
-  isFixedHeight, type PanelKey, type Zone,
+  isFixedHeight, isFullHeight, type PanelKey, type Zone,
 } from './panelCatalog';
 import { wsPanels, homeOf, isZoneCollapsed, nextPlacement, zoneOf, PANEL_MIN_H, type PanelZonesStore } from './panelStackState';
 import { usePanelDnd, usePanelRowResize, usePanelWidthDrag } from './zoneGestures';
@@ -403,6 +403,13 @@ export function PanelZone({
     // Панель фиксированной высоты (переключатель проектов) высоту не делит:
     // растянутая, она давала бы полколонки пустоты под одной строкой контента
     const byContent = isFixedHeight(k);
+    // Одна в колонке, но тянется на всю высоту (Документация): дефолт одиночной
+    // панели — высота по контенту, а этой отдаём весь низ колонки. С соседом
+    // (multiInCol) признак не действует — высоту делят веса, как у всех.
+    const soloFill = !multiInCol && !byContent && isFullHeight(k);
+    // Панель растянута на всю высоту слота: либо делит колонку с соседями, либо
+    // одиночная full-height. Фиксированные (byContent) — никогда.
+    const stretched = (multiInCol && !byContent) || soloFill;
     const shell = (
       <PanelShell
         icon={<Icon size={15} strokeWidth={ICON_STROKE} color={C.textSecondary} style={{ flexShrink: 0 }} />}
@@ -414,7 +421,7 @@ export function PanelZone({
         // там, где её только что закрыли.
         onClose={compact ? () => setTabletPanels(cur => cur.filter(x => x !== k)) : () => closeTo(side, k)}
         closeMode={compact ? 'button' : 'icon'}
-        fill={multiInCol && !byContent}
+        fill={stretched}
         flash={flash?.key === k}
         slideDirection={isLeft ? 'left' : 'up'}
         // Анимация появления — только когда карточка действительно возникла на
@@ -437,7 +444,9 @@ export function PanelZone({
     const shares = multiInCol && !byContent;
     return (
       <PanelSlot
-        fill={shares}
+        // Растянут и делящий колонку, и одиночная full-height; последняя без веса
+        // (weight по умолчанию 1 → flex:1) и без ресайза — делить не с кем.
+        fill={stretched}
         weight={shares ? zones.weights[k] : undefined}
         // Ссылка на слот нужна ресайзу высот — а он бывает только у делящих
         slotRef={shares ? el => { panelRefs.current[k] = el; } : undefined}
@@ -535,12 +544,33 @@ export function PanelZone({
   // колонке свободный низ (там ровно одна панель, её высота по контенту), панель
   // займёт его целиком — рисуем прямоугольник; если низа нет, она втиснется
   // стыком к соседям — рисуем линию. Мишени у наведения нет: pointerEvents none.
-  const ghostRoomy = !ghostNewCol && ghostCol >= 0 && columns[ghostCol].keys.length === 1;
+  // Одиночная full-height панель (Документация) заняла весь низ — свободного
+  // места под ней нет, поэтому знак тонкий (линия), а не прямоугольник: иначе
+  // панель на каждое наведение схлопывалась бы вдвое, освобождая место призраку.
+  const ghostRoomy = !ghostNewCol && ghostCol >= 0 && columns[ghostCol].keys.length === 1
+    && !isFullHeight(columns[ghostCol].keys[0]);
+  // Место под одиночной full-height панелью: линию рисуем ОВЕРЛЕЕМ у её нижней
+  // кромки, а не блоком в потоке. Блок (flexShrink:0) отжимал бы растянутую панель
+  // вверх на свою высоту — «задирал» её при каждом наведении. Оверлей стоит ровно
+  // там, куда встаёт перетаскиваемая панель (та же геометрия, что у rowGuide 'end').
+  const ghostSoloFull = !ghostNewCol && ghostCol >= 0 && columns[ghostCol].keys.length === 1
+    && isFullHeight(columns[ghostCol].keys[0]);
   const ghostBox = ghostKey && (ghostRoomy ? (
     <PanelDropSpot
       icon={PANEL_META[ghostKey].Icon}
       style={{ flex: 1, minHeight: PANEL_MIN_H, pointerEvents: 'none' }}
     />
+  ) : ghostSoloFull ? (
+    // Нулевая высота в потоке + absolute-линия у кромки: панель не сдвигается,
+    // знак совпадает с местом вставки при перетаскивании (base 0, edge 'end').
+    <div style={{ height: 0, position: 'relative', pointerEvents: 'none' }}>
+      <div style={{
+        position: 'absolute', left: 0, right: 0, top: -SEP_HIT / 2, height: SEP_HIT,
+        display: 'flex', alignItems: 'center',
+      }}>
+        <PanelDropLine axis="y" shift={sepShift(0)} />
+      </div>
+    </div>
   ) : (
     <div style={{ height: SEP_HIT, flexShrink: 0, display: 'flex', alignItems: 'center', pointerEvents: 'none' }}>
       <PanelDropLine axis="y" />
@@ -598,8 +628,11 @@ export function PanelZone({
                 высота по контенту, и целиться в полоску у кромки, когда ниже
                 пустует полколонки, — мучение. Панели в общей колонке делят высоту
                 между собой, растягиваясь до края, и растяжимая направляющая
-                отбирала бы у них долю: колонка переставала доходить до низа. */}
-            {rowGuide(col, vi, col.keys.length, 0, 'end', col.keys.length === 1 && ghostCol !== vi)}
+                отбирала бы у них долю: колонка переставала доходить до низа. То же
+                и у одиночной full-height (Документация) — она сама заняла весь низ,
+                свободного места нет. */}
+            {rowGuide(col, vi, col.keys.length, 0, 'end',
+              col.keys.length === 1 && !isFullHeight(col.keys[0]) && ghostCol !== vi)}
             {/* Место будущей панели забирает низ колонки целиком: растяжимая
                 направляющая рядом с ним не растягивается, иначе делила бы остаток
                 пополам и призрак отрывался бы от панели полосой пустоты */}

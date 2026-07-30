@@ -131,6 +131,20 @@ export function isFixedHeight(k: PanelKey): boolean {
   return FIXED_HEIGHT_KEYS.includes(k);
 }
 
+// Панели, которые В ОДИНОЧКУ в колонке тянутся на ВСЮ высоту, а не встают по
+// контенту. Зеркальный к FIXED_HEIGHT_KEYS случай: дефолт одиночной панели —
+// высота по контенту (короткий список чатов не должен растягиваться на весь
+// экран), но у панели-корпуса (Документация: дерево + оглавление + просмотрщик)
+// пустой низ под коротким оглавлением читается как обрезка, а не как «воздух».
+// Признак действует ТОЛЬКО пока панель одна в колонке: как только рядом встаёт
+// сосед, обе честно делят высоту по весам, как все остальные. Первая такая
+// панель — «Документация».
+export const FULL_HEIGHT_KEYS: readonly PanelKey[] = ['docs'];
+
+export function isFullHeight(k: PanelKey): boolean {
+  return FULL_HEIGHT_KEYS.includes(k);
+}
+
 export function isPanelKey(v: unknown): v is PanelKey {
   return typeof v === 'string' && (PANEL_KEYS as readonly string[]).includes(v);
 }

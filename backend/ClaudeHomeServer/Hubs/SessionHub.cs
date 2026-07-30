@@ -59,9 +59,11 @@ public class SessionHub : Hub
         _sessions.AddViewer(sessionId, Context.ConnectionId);
         await Groups.AddToGroupAsync(Context.ConnectionId, sessionId);
 
-        // Новый клиент сразу получает текущий статус (чтобы не пропустить working при workflow)
+        // Новый клиент сразу получает текущий статус — и активный (чтобы не пропустить
+        // working при workflow), и завершённый: клиент, пропустивший конец хода вне группы,
+        // иначе навсегда остаётся с зависшим ожиданием ответа.
         var info = _sessions.GetSessionInfo(sessionId);
-        if (info is { Status: SessionStatus.Working or SessionStatus.Waiting or SessionStatus.Starting })
+        if (info is not null)
         {
             var statusMsg = new StatusChangedMessage(info.Status.ToString().ToLower(), info.LastMessage, info.MessageCount)
                 with

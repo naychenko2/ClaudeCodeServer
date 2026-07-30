@@ -37,6 +37,34 @@ const loadHistory = (sid: string, projectId?: string) =>
 const normalizeFor = (sid: string, raw: unknown[]) =>
   normalizeHistory(raw, { deriveSpeakers: getState(sid).isGroup });
 
+// Ход завершён, если последний содержательный элемент истории — result или error.
+// fal_cost дописывается асинхронно уже после конца хода, на признак не влияет.
+// Пока ход идёт, хвостом истории всегда что-то из хода (user_message пишется в
+// аккумулятор сразу при отправке) — ложного «завершён» это не даёт.
+function historyTurnFinished(items: ChatItem[]): boolean {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const kind = items[i].kind;
+    if (kind === 'fal_cost') continue;
+    return kind === 'result' || kind === 'error';
+  }
+  return false;
+}
+
+// Перезагрузка истории с сервера с применением, если она новее живой ленты
+// (сервер — источник истины, сверка — serverHistoryNewer). Заодно лечит залипший
+// isWaiting: у завершённого хвоста ход точно кончился, даже если событие result
+// прошло мимо клиента, пока он был вне SignalR-группы.
+async function reloadHistory(sid: string, projectId?: string) {
+  try {
+    const raw = await loadHistory(sid, projectId);
+    const items = normalizeFor(sid, raw);
+    setState(sid, prev => {
+      if (!serverHistoryNewer(items, prev.items)) return prev;
+      return { ...prev, items, isWaiting: historyTurnFinished(items) ? false : prev.isWaiting };
+    });
+  } catch { /* история недоступна — не блокируем */ }
+}
+
 function getState(sid: string): SessionState {
   if (!_store.has(sid)) _store.set(sid, { ...initialChatState(), isJoined: false, isHistoryLoading: true });
   return _store.get(sid)!;
@@ -148,14 +176,7 @@ function ensureHandler() {
     // Побочный эффект вне редьюсера: при переходе в active перезагружаем историю —
     // клиент мог пропустить text_delta/tool_use пока был оффлайн или не в группе
     if (msg.type === 'status_changed' && msg.status === 'active') {
-      const projectId = getState(sid).projectId;
-      loadHistory(sid, projectId).then(raw => {
-        const serverItems = normalizeFor(sid, raw);
-        setState(sid, p => {
-          if (!serverHistoryNewer(serverItems, p.items)) return p;
-          return { ...p, items: serverItems };
-        });
-      }).catch(() => {});
+      reloadHistory(sid, getState(sid).projectId);
     }
   });
 }
@@ -182,7 +203,10 @@ async function joinAndLoadHistory(sid: string, projectId?: string) {
       // (сверка без live-only элементов — см. serverHistoryNewer). Иначе оставляем
       // живые сообщения от стриминга (race condition при активном ходе).
       if (!serverHistoryNewer(items, prev.items)) return { ...prev, isHistoryLoading: false };
-      return { ...prev, items, isHistoryLoading: false };
+      return {
+        ...prev, items, isHistoryLoading: false,
+        isWaiting: historyTurnFinished(items) ? false : prev.isWaiting,
+      };
     });
   } catch {
     // История недоступна — не блокируем работу
@@ -192,7 +216,12 @@ async function joinAndLoadHistory(sid: string, projectId?: string) {
   // Присоединение к группе — фоном, не блокирует чтение истории.
   // Офлайн промис не зарезолвится — это нормально, при reconnect перезайдём.
   joinSession(sid)
-    .then(() => setState(sid, prev => ({ ...prev, isJoined: true })))
+    .then(() => {
+      setState(sid, prev => ({ ...prev, isJoined: true }));
+      // Снапшот ПОСЛЕ входа в группу закрывает дыру «история снята — событий ещё не шлют»:
+      // всё, что появится позже этого снимка, гарантированно доедет живьём.
+      return reloadHistory(sid, projectId);
+    })
     .catch(() => { /* офлайн — остаёмся без группы, читаем из кэша */ });
 }
 
@@ -222,13 +251,7 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
     // Нужно чтобы после завершённых ходов (пока был открыт другой чат) данные были актуальны.
     const st = getState(sessionId);
     if (st.isJoined && !st.isWaiting) {
-      loadHistory(sessionId, projectId).then(raw => {
-        const serverItems = normalizeFor(sessionId, raw);
-        setState(sessionId, prev => {
-          if (!serverHistoryNewer(serverItems, prev.items)) return prev;
-          return { ...prev, items: serverItems };
-        });
-      }).catch(() => {});
+      reloadHistory(sessionId, projectId);
     }
 
     return () => {

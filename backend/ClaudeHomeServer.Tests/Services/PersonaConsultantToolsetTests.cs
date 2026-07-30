@@ -120,7 +120,7 @@ public class PersonaConsultantToolsetTests
     }
 
     [Fact]
-    public void Исполнитель_WriteEditBash_ТолькоПриFullИSpecialtyExecutor()
+    public void Исполнитель_WriteEditBash_ТолькоПриFullИSpecialtyExecutorИлиTester()
     {
         var executorFull = Make(access: PersonaAccess.Full);
         executorFull.Specialty = PersonaSpecialty.Executor;
@@ -132,6 +132,18 @@ public class PersonaConsultantToolsetTests
         executorReadOnly.Specialty = PersonaSpecialty.Executor;
         PersonaConsultantToolset.IsExecutor(executorReadOnly).Should().BeFalse();
         PersonaConsultantToolset.Build(executorReadOnly, webAllowed: false)
+            .Should().NotContain(["Write", "Edit", "Bash"]);
+
+        var testerFull = Make(access: PersonaAccess.Full);
+        testerFull.Specialty = PersonaSpecialty.Tester;
+        PersonaConsultantToolset.IsExecutor(testerFull).Should().BeTrue();
+        PersonaConsultantToolset.Build(testerFull, webAllowed: false)
+            .Should().Contain(["Write", "Edit", "Bash"]);
+
+        var testerReadOnly = Make(access: PersonaAccess.ReadOnly);
+        testerReadOnly.Specialty = PersonaSpecialty.Tester;
+        PersonaConsultantToolset.IsExecutor(testerReadOnly).Should().BeFalse();
+        PersonaConsultantToolset.Build(testerReadOnly, webAllowed: false)
             .Should().NotContain(["Write", "Edit", "Bash"]);
 
         var reviewerFull = Make(access: PersonaAccess.Full);

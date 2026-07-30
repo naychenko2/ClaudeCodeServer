@@ -187,7 +187,7 @@ public class PersonaAgentFileGeneratorTests
     }
 
     [Fact]
-    public void MaxTurns_И_РабочийДоступ_ТолькоПриFullИSpecialtyExecutor()
+    public void MaxTurns_И_РабочийДоступ_ТолькоПриFullИSpecialtyExecutorИлиTester()
     {
         var executorFull = MakePersona();
         executorFull.Access = PersonaAccess.Full;
@@ -204,6 +204,22 @@ public class PersonaAgentFileGeneratorTests
         readOnlyText.Should().Contain("maxTurns: 25");
         readOnlyText.Should().NotContain("Write").And.NotContain("Edit").And.NotContain("Bash");
         readOnlyText.Should().NotContain("## Рабочий доступ исполнителя");
+
+        var testerFull = MakePersona();
+        testerFull.Access = PersonaAccess.Full;
+        testerFull.Specialty = PersonaSpecialty.Tester;
+        var testerText = MakeGenerator().Generate(testerFull, Ctx());
+        testerText.Should().Contain("maxTurns: 50");
+        testerText.Should().Contain("tools: Read, Grep, Glob, Write, Edit, Bash");
+        testerText.Should().Contain("## Рабочий доступ исполнителя");
+
+        var testerReadOnly = MakePersona();
+        testerReadOnly.Access = PersonaAccess.ReadOnly;
+        testerReadOnly.Specialty = PersonaSpecialty.Tester;
+        var testerReadOnlyText = MakeGenerator().Generate(testerReadOnly, Ctx());
+        testerReadOnlyText.Should().Contain("maxTurns: 25");
+        testerReadOnlyText.Should().NotContain("Write").And.NotContain("Edit").And.NotContain("Bash");
+        testerReadOnlyText.Should().NotContain("## Рабочий доступ исполнителя");
 
         var reviewerFull = MakePersona();
         reviewerFull.Access = PersonaAccess.Full;

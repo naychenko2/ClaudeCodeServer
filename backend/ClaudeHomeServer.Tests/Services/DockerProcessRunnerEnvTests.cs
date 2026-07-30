@@ -14,9 +14,14 @@ public class SystemEnvCollection;
 // LocalProcessRunnerEnvTests, процессы/docker здесь не запускаются — проверяем только
 // сборку словаря, поэтому тесты гоняются и на linux-раннере CI без настоящего docker CLI.
 [Collection("SystemEnv")]
-public class DockerProcessRunnerEnvTests
+public class DockerProcessRunnerEnvTests : IDisposable
 {
     private readonly string _tempDir = Path.Combine(Path.GetTempPath(), "ccs-docker-env-tests-" + Guid.NewGuid().ToString("N"));
+
+    public void Dispose()
+    {
+        try { Directory.Delete(_tempDir, recursive: true); } catch { /* тест-мусор */ }
+    }
 
     private DockerProcessRunner CreateRunner(string ownerId = "owner-1")
     {

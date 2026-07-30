@@ -21,9 +21,12 @@ export interface PanelDragState {
   from: PanelKey | null;
   fromZone: Zone | null;
   over: { zone: Zone; tag: string } | null;
+  // Панель, которую ТОЛЬКО ЧТО переставили дропом. Живёт пару кадров и нужна
+  // обеим зонам сразу — см. markPanelMoved.
+  moved: PanelKey | null;
 }
 
-const IDLE: PanelDragState = { from: null, fromZone: null, over: null };
+const IDLE: PanelDragState = { from: null, fromZone: null, over: null, moved: null };
 
 let _state: PanelDragState = IDLE;
 const listeners = new Set<() => void>();
@@ -32,8 +35,26 @@ function emit() { listeners.forEach(l => l()); }
 function subscribe(l: () => void) { listeners.add(l); return () => { listeners.delete(l); }; }
 
 export function startPanelDrag(from: PanelKey, fromZone: Zone) {
-  _state = { from, fromZone, over: null };
+  _state = { from, fromZone, over: null, moved: null };
   emit();
+}
+
+// Метка «эту панель только что переставили». Пока она держится, ОСТАЛЬНЫЕ панели
+// рисуются без анимации появления: перенос перестраивает колонки, React
+// перемонтирует карточки соседей — и они, стоя на своих местах, мигали бы
+// «прилётом» вместе с той единственной, что действительно переехала.
+//
+// Метка снимается через кадр после перерисовки: к этому моменту карточки уже
+// смонтированы, и возвращённая анимация им ничего не двигает. Живёт в общем
+// сторе, потому что перестраиваются ОБЕ зоны — и та, откуда панель ушла, тоже.
+export function markPanelMoved(k: PanelKey) {
+  _state = { ..._state, moved: k };
+  emit();
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (_state.moved !== k) return;
+    _state = { ..._state, moved: null };
+    emit();
+  }));
 }
 
 // Курсор вошёл в место вставки / ушёл из него (tag === null). Уход гасит
@@ -62,7 +83,9 @@ export function clearPanelDragOver(zone: Zone, tag: string) {
 
 export function endPanelDrag() {
   if (_state === IDLE) return;
-  _state = IDLE;
+  // moved переживает конец перетаскивания: dragend приходит ПОСЛЕ drop, и
+  // сброс в IDLE стёр бы метку раньше, чем зоны успели перерисоваться.
+  _state = { ...IDLE, moved: _state.moved };
   emit();
 }
 

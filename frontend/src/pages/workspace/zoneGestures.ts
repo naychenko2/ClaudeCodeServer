@@ -2,7 +2,7 @@ import { useRef, useState, type HTMLAttributes, type PointerEvent as ReactPointe
 import { startPointerDrag } from '../../lib/pointerDrag';
 import { PANEL_MIN_H } from './panelStackState';
 import type { PanelKey, Zone } from './panelCatalog';
-import { clearPanelDragOver, endPanelDrag, setPanelDragOver, startPanelDrag, usePanelDragState } from './panelDrag';
+import { clearPanelDragOver, endPanelDrag, markPanelMoved, setPanelDragOver, startPanelDrag, usePanelDragState } from './panelDrag';
 
 // Механика зоны панелей, общая для левой и правой рельс: перетаскивание панелей,
 // ресайз ширины зоны и высот внутри колонки.
@@ -34,7 +34,7 @@ export function usePanelDnd({ zone, enabled, accepts, onSwap }: {
   // Дроп ОДНОЙ панели на другую: они меняются местами (в т.ч. через границу зон)
   onSwap: (from: PanelKey, to: PanelKey) => void;
 }) {
-  const { from, fromZone, over } = usePanelDragState();
+  const { from, fromZone, over, moved } = usePanelDragState();
   // Панель тащат И эта зона её принимает. Дальше по коду ориентируемся на неё:
   // непринимаемый дроп ведёт себя как «перетаскивания нет» — ни направляющих, ни
   // подсветки, ни dropEffect (курсор сам покажет запрет).
@@ -56,7 +56,9 @@ export function usePanelDnd({ zone, enabled, accepts, onSwap }: {
     onDragLeave: () => clearPanelDragOver(zone, tag),
     onDrop: (e: { preventDefault: () => void }) => {
       e.preventDefault();
-      if (incoming) onDropAt(incoming);
+      // Метку ставим ДО перестройки раскладки: рендер с новыми колонками должен
+      // застать её, иначе непричастные панели успеют мигнуть появлением
+      if (incoming) { markPanelMoved(incoming); onDropAt(incoming); }
       endPanelDrag();
     },
   });
@@ -89,7 +91,11 @@ export function usePanelDnd({ zone, enabled, accepts, onSwap }: {
       rootProps: {
         onDragOver: e => { if (incoming && incoming !== k) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setPanelDragOver(zone, tag); } },
         onDragLeave: () => clearPanelDragOver(zone, tag),
-        onDrop: e => { e.preventDefault(); if (incoming && incoming !== k) onSwap(incoming, k); endPanelDrag(); },
+        onDrop: e => {
+          e.preventDefault();
+          if (incoming && incoming !== k) { markPanelMoved(incoming); onSwap(incoming, k); }
+          endPanelDrag();
+        },
       },
       headerProps: dragSourceProps(k),
     };
@@ -100,6 +106,9 @@ export function usePanelDnd({ zone, enabled, accepts, onSwap }: {
   // ЭТА зона готова принять: по ней решается, показывать ли места вставки.
   return {
     from, fromZone, active: from !== null, accepting: incoming !== null,
+    // Панель, которую только что перенесли: анимацию появления в перестроенной
+    // раскладке получает ТОЛЬКО она (см. markPanelMoved)
+    moved,
     end: endPanelDrag, isOver, guideProps, panelProps, dragSourceProps,
   };
 }

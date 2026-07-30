@@ -372,7 +372,11 @@ export function PanelZone({
         fill={multiInCol}
         flash={flash?.key === k}
         slideDirection={isLeft ? 'left' : 'up'}
-        animate={pinned !== k}
+        // Анимация появления — только когда карточка действительно возникла на
+        // новом месте: закреплённый попап уже стоит перед глазами, а при переносе
+        // «прилетает» одна панель — соседние перестраиваются, но с места не
+        // сходили, и мигать им незачем.
+        animate={pinned !== k && (dnd.moved === null || dnd.moved === k)}
         // Одна панель в колонке — её высоту меряем: по ней укорачивается
         // сплиттер ширины (см. soloPanelHeight)
         rootRef={multiInCol ? undefined : soloPanelRef}

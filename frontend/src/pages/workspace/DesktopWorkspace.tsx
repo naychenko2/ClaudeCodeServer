@@ -18,7 +18,7 @@ import { FileViewer } from '../../components/FileViewer';
 import { GitCommitView } from '../../components/GitCommitView';
 import { TaskDetailsPane } from '../../features/tasks/TaskDetailsPane';
 import { ProjectPersonaPane } from '../../features/personas/ProjectPersonasPanel';
-import { SidebarProjectSwitcher } from '../../features/projects/SidebarProjectSwitcher';
+import { ProjectsPanel } from '../../features/projects/ProjectsPanel';
 import { PanelZone } from './PanelZone';
 import { useSessionPanels } from './useSessionPanels';
 import { startPointerDrag } from '../../lib/pointerDrag';
@@ -139,27 +139,23 @@ export function DesktopWorkspace(p: Props) {
   const personaOpen = !!p.selectedPersonaId || p.personaCreating;
 
   // Контент панели «Чаты» левой рельсы. Заголовок панели рисует PanelShell, поэтому
-  // здесь только содержимое: переключатель проектов и список чатов на белом фоне
-  // контентной зоны — как у панелей правой рельсы.
-  // Переключатель проектов пока живёт в контенте панели; в планах — вынести его
-  // в собственную панель рельсы.
+  // здесь только содержимое — список чатов на белом фоне контентной зоны, как у
+  // панелей правой рельсы. Переключатель проектов раньше жил шапкой внутри этой
+  // панели; теперь у него своя — «Проекты».
   const chatsPanel = (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: C.bgWhite }}>
-      <div style={{ padding: '8px 10px', flexShrink: 0, borderBottom: `1px solid ${C.border}` }}>
-        {/* Плашка проекта = переключатель проектов; настройки открываются
-            кликом по иконке активного проекта */}
-        <SidebarProjectSwitcher project={p.projectForEdit} onOpenSettings={p.onOpenProjectSettings} />
-      </div>
-      <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-        <SessionList project={p.project} activeSession={p.activeSession} onSelect={handleSelectSession} onSessionUpdated={p.onSessionUpdated} onCleared={p.onClearSession} isMobile={false} workflowRunningFor={p.workflowRunningFor} />
-      </div>
+      <SessionList project={p.project} activeSession={p.activeSession} onSelect={handleSelectSession} onSessionUpdated={p.onSessionUpdated} onCleared={p.onClearSession} isMobile={false} workflowRunningFor={p.workflowRunningFor} />
     </div>
   );
 
   // ОБЩИЙ набор контента панелей: обе зоны получают его целиком и рисуют только
-  // те панели, что лежат именно в них. Чаты собираются здесь, инструменты
+  // те панели, что лежат именно в них. Чаты и проекты собираются здесь, инструменты
   // проекта приходят из WorkspacePage, панели сессии — из useSessionPanels.
-  const zonePanels: Partial<Record<PanelKey, ReactNode>> = { chats: chatsPanel, ...p.panels };
+  const zonePanels: Partial<Record<PanelKey, ReactNode>> = {
+    chats: chatsPanel,
+    projects: <ProjectsPanel project={p.projectForEdit} onOpenSettings={p.onOpenProjectSettings} />,
+    ...p.panels,
+  };
 
   // Фабрика центра-чата: одиночный режим — чат без рамки с шапкой-островом
   // (headerIsland), в split рядом с файлом — обычный вид внутри своего острова

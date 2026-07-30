@@ -91,9 +91,12 @@ function CandidateIcon({ p, activity, active, dragging, shift, onPointerDown, on
   );
 }
 
-export function SidebarProjectSwitcher({ project, onOpenSettings }: {
+export function SidebarProjectSwitcher({ project, onOpenSettings, hideSearch }: {
   project: Project;               // активный проект (свежая версия из WorkspacePage)
   onOpenSettings: () => void;     // клик по чипу активного — настройки проекта
+  // Лупа «+N» не нужна: поиск по проектам вынесен в шапку панели (ProjectsPanel).
+  // Тогда и место под неё в ряду не резервируется — иконок влезает больше.
+  hideSearch?: boolean;
 }) {
   const projects = useAllProjects();
   const pinnedIds = usePinnedIds();
@@ -147,7 +150,8 @@ export function SidebarProjectSwitcher({ project, onOpenSettings }: {
   // влезают. Тесно → «компактный»: активный обычной иконкой с кольцом. Режим зависит от
   // rowW → при ресайзе панели переключается автоматически.
   // Проекты, которых нет в плашке (только в палитре) → лупа «+N» будет в любом случае
-  const tailW = projects.length > items.length ? LUPA_W : 0;
+  const overflowReserve = hideSearch ? 0 : LUPA_W;
+  const tailW = projects.length > items.length ? overflowReserve : 0;
   const rich = rowW > 0 && (CHIP_RICH + otherCount * ICON_W + sepReserve + tailW + 6) <= rowW;
   const activeItem = items.find(p => p.id === project.id) ?? null;
   // rowItems — то, что идёт иконками в ряду (и участвует в группах/DnD).
@@ -161,7 +165,7 @@ export function SidebarProjectSwitcher({ project, onOpenSettings }: {
     const fitAll = Math.floor((rowW - tailW - sepReserve - 6) / ICON_W) >= items.length;
     const slots = Math.max(0, Math.min(MAX_SLOTS, fitAll
       ? items.length
-      : Math.floor((rowW - LUPA_W - sepReserve - 6) / ICON_W)));
+      : Math.floor((rowW - overflowReserve - sepReserve - 6) / ICON_W)));
     shown = items.slice(0, slots);
     // Активный обязан быть виден (редкий случай переполнения)
     if (slots > 0 && !shown.some(p => p.id === project.id)) {
@@ -390,8 +394,9 @@ export function SidebarProjectSwitcher({ project, onOpenSettings }: {
           );
         })}
 
-        {/* Лупа / «+N»: палитра всех проектов; микро-точка — скрытый «ждущий» проект */}
-        {hiddenCount > 0 && (
+        {/* Лупа / «+N»: палитра всех проектов; микро-точка — скрытый «ждущий» проект.
+            В панели «Проекты» её нет — поиск живёт в шапке карточки. */}
+        {hiddenCount > 0 && !hideSearch && (
           <button
             aria-label="Все проекты (палитра)"
             title={`Еще ${hiddenCount} проектов`}

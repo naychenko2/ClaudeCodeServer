@@ -177,6 +177,9 @@ public class StoredTeamPlanMessage : StoredMessage
     public Models.TeamImplementPlan Plan { get; set; } = new();
     public bool Resolved { get; set; }
     public bool? Approved { get; set; }
+    // Автор карточки (Э8): планировщик на момент публикации. В истории — чтобы после
+    // рестарта и смены координатора карточка осталась речью того, кто её написал.
+    public string? PersonaId { get; set; }
 }
 
 // Карточка остановки режима «Командная реализация» (Э4): причина и кнопки решения.

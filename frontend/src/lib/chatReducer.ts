@@ -512,6 +512,8 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
           coordinatorNoCode: msg.coordinatorNoCode ?? true,
           stopped: msg.stopped ?? false,
           planCardId: msg.planCardId,
+          modeLocked: msg.modeLocked ?? false,
+          planVersion: msg.planVersion ?? 0,
         },
       };
 
@@ -550,6 +552,9 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
           createdAt: prevCard?.escalation.createdAt,
           resolved: msg.resolved,
           chosenActionId: msg.chosenActionId,
+          // Автор (Э8) фиксируется в момент публикации — если переиздание вдруг придёт без
+          // него, не даём авторству карточки «мигать» на пустое
+          personaId: msg.personaId ?? prevCard?.escalation.personaId,
         },
       };
       if (idx < 0) return withItems([...prev.items, card]);

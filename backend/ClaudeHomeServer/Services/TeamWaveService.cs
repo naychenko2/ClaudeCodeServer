@@ -22,6 +22,7 @@ public class TeamWaveService
     private readonly IHubContext<SessionHub> _hub;
     private readonly TaskExecutionService? _exec;
     private readonly NotificationService? _notif;
+    private readonly PersonaManager _personas;
     private readonly ILogger<TeamWaveService> _log;
     // Таймаут волны (Э4): волна молчит дольше — сторож поднимает эскалацию.
     private readonly TimeSpan _waveTimeout;
@@ -31,6 +32,10 @@ public class TeamWaveService
 
     public TeamWaveService(SessionManager sessions, TaskManager tasks, ProjectManager projects,
         IHubContext<SessionHub> hub, ILogger<TeamWaveService> log,
+        // Имя персоны-автора для текста уведомлений и push (Э8) — зависимость обязательная:
+        // «карточки и уведомления от лица персоны» это требование фичи, а не украшение,
+        // и молча деградировать до обезличенного текста из-за DI мы не хотим.
+        PersonaManager personas,
         // Опционально (в тестах не передаётся): без исполнителя задачи создаются, но не стартуют
         TaskExecutionService? exec = null,
         // Опционально: уведомление + web push на каждую остановку (Э4)
@@ -44,6 +49,7 @@ public class TeamWaveService
         _log = log;
         _exec = exec;
         _notif = notif;
+        _personas = personas;
         // Дефолт великоват намеренно: таймаут считается от ПОСЛЕДНЕЙ активности волны, и
         // срабатывать он должен на настоящем зависании, а не на длинной честной работе
         // (сборка + тесты у исполнителя легко занимают полчаса).
@@ -54,6 +60,8 @@ public class TeamWaveService
         _sessions.TeamWaveStarter = (session, plan) => StartWaveAsync(session, plan);
         // Э4: карточка остановки + уведомление с push — единая точка на все триггеры
         _sessions.TeamEscalationRaiser = RaiseEscalationAsync;
+        // Э8: ASK-вопрос интервью тоже будит человека уведомлением и push
+        _sessions.TeamQuestionNotifier = OnStabQuestionAsync;
         // Закрытие волны ловим на переходе задачи в Done — единственном пути в Done (Update)
         _tasks.TaskCompleted += OnTaskDone;
         // Провал хода исполнителя: одна перевыдача, второй провал — эскалация
@@ -126,9 +134,19 @@ public class TeamWaveService
         var gate = _sessions.WithTeamState(session.Id, t =>
         {
             // Человек нажал «Остановить»: текущие исполнители дорабатывают, новые не стартуют
-            if (t.Stopped) return (Reserved: false, Stopped: true, Exceeded: (string?)null);
+            if (t.Stopped) return (Reserved: false, Stopped: true, Exceeded: (string?)null, Stale: (string?)null);
+            // Э8: волна идёт ТОЛЬКО по подтверждённой последней версии плана. Два случая:
+            // план устарел (после интервью опубликован vN+1 — старый доигрывать нельзя) либо
+            // новая версия ещё не подтверждена человеком (авто-волны смену плана не покрывают).
+            // Нули — состояние или карточка из до-Э8: гард выключен, прежнее поведение цело.
+            if (t.PlanVersion > 0 && plan.Version < t.PlanVersion)
+                return (false, false, null,
+                    $"план версии {plan.Version} устарел: актуальна версия {t.PlanVersion}");
+            if (t.ApprovedPlanVersion > 0 && plan.Version > t.ApprovedPlanVersion)
+                return (false, false, null,
+                    $"версия плана {plan.Version} ещё не подтверждена человеком");
             if (t.Budget.ExceededReasonForWave(subtasks.Count) is { } reason)
-                return (Reserved: false, Stopped: false, Exceeded: reason);
+                return (Reserved: false, Stopped: false, Exceeded: reason, Stale: (string?)null);
 
             t.Budget.TasksUsed += subtasks.Count;
             t.Budget.RunsUsed += subtasks.Count;
@@ -139,11 +157,18 @@ public class TeamWaveService
             // Отсечки для сторожа зависших волн (Э4): волна идёт, пока поля не обнулены
             t.WaveStartedAt = DateTime.UtcNow;
             t.WaveActivityAt = DateTime.UtcNow;
-            return (Reserved: true, Stopped: false, Exceeded: null);
+            return (Reserved: true, Stopped: false, Exceeded: null, Stale: (string?)null);
         });
         if (gate.Stopped)
         {
             _log.LogInformation("Волна {Wave} плана {PlanId} не стартовала: практика остановлена человеком", wave, plan.Id);
+            return [];
+        }
+        // Устаревшая/неподтверждённая версия плана (Э8): молчим намеренно — карточка плана vN
+        // уже висит в ленте и ждёт «Запустить», вторая карточка про то же только мешала бы.
+        if (gate.Stale is { } stale)
+        {
+            _log.LogInformation("Волна {Wave} плана {PlanId} не стартовала: {Reason}", wave, plan.Id, stale);
             return [];
         }
         if (gate.Exceeded is { } exceeded)
@@ -480,19 +505,55 @@ public class TeamWaveService
 
         // Push — только когда человека нет в этом чате: он и так видит карточку в ленте
         var away = !_sessions.HasViewers(session.Id);
+        var authorId = escalation.PersonaId
+            ?? session.TeamImplement?.CoordinatorPersonaId ?? session.PersonaId;
+        // Заголовок от имени персоны (Э8): в push видны только Title и Body, поэтому имя
+        // вклеиваем в текст — обезличенное «Команда ждёт…» остаётся фолбэком, когда персоны
+        // у штаба нет. Тупик в волне — не «решение», а ответы на вопросы: текст свой.
+        var waitingForAnswers = escalation.Kind == TeamEscalationKind.NeedsClarification;
         await _notif.SendNotificationMessageAsync(ownerId, new Protocol.NotificationMessage(
-            Title: "Команда ждёт вашего решения",
+            Title: TeamImplementPrompts.WaitingTitle(PersonaName(authorId, ownerId), waitingForAnswers),
             Body: escalation.Title,
-            Url: string.IsNullOrEmpty(session.ProjectId)
-                ? $"/chats/{session.Id}"
-                : $"/project/{session.ProjectId}/chat/{session.Id}",
+            Url: ChatUrl(session),
             Kind: "claude",
             SessionId: session.Id,
             TaskId: escalation.TaskId,
             ProjectId: session.ProjectId,
-            PersonaId: session.TeamImplement?.CoordinatorPersonaId ?? session.PersonaId,
+            PersonaId: authorId,
             Tag: "Командная реализация"), sendPush: away);
     }
+
+    // Вопрос интервью ждёт человека (Э8): ASK-карточка в ленте штаба — та же ситуация, что
+    // permission-запрос у исполнителя задачи, поэтому и обвязка та же (ср.
+    // TaskExecutionService.BuildWaitingNotification): уведомление всегда, push — когда
+    // человека нет в чате. Иначе интервью молча ждало бы ответа, а «молчаливых пауз не бывает».
+    internal async Task OnStabQuestionAsync(Session session)
+    {
+        if (_notif is null) return;
+        var ownerId = session.OwnerId
+            ?? (session.ProjectId is { } pid ? _projects.GetById(pid)?.OwnerId : null);
+        if (ownerId is null) return;
+
+        var authorId = session.TeamImplement?.CoordinatorPersonaId ?? session.PersonaId;
+        await _notif.SendNotificationMessageAsync(ownerId, new Protocol.NotificationMessage(
+            Title: TeamImplementPrompts.WaitingTitle(PersonaName(authorId, ownerId), waitingForAnswers: true),
+            Body: TeamImplementPrompts.QuestionNotificationBody,
+            Url: ChatUrl(session),
+            Kind: "claude",
+            SessionId: session.Id,
+            ProjectId: session.ProjectId,
+            PersonaId: authorId,
+            Tag: "Командная реализация"), sendPush: !_sessions.HasViewers(session.Id));
+    }
+
+    private static string ChatUrl(Session session) => string.IsNullOrEmpty(session.ProjectId)
+        ? $"/chats/{session.Id}"
+        : $"/project/{session.ProjectId}/chat/{session.Id}";
+
+    // Имя персоны-автора для текста уведомления. null — персоны нет, реестр не передан или
+    // персона удалена: текст деградирует до обезличенного.
+    private string? PersonaName(string? personaId, string ownerId) =>
+        personaId is not null && _personas.Get(personaId, ownerId) is { } p ? p.Name : null;
 
     private bool IsDone(string taskId) => _tasks.GetById(taskId)?.Status == TaskItemStatus.Done;
 }

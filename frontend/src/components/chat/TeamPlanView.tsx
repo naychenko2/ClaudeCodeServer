@@ -1,11 +1,12 @@
 import { useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Users, Play, Zap, ChevronDown, RotateCcw, AlertTriangle, Check } from 'lucide-react';
 import type { ChatItem, Persona, TeamPlan, TeamPlanSubtask } from '../../types';
-import { C, FONT, R, SHADOW, SP } from '../../lib/design';
+import { C, FS, FONT, R, SHADOW, SP } from '../../lib/design';
 import { relPath } from '../../lib/paths';
 import { useIsMobile } from '../../lib/breakpoints';
 import { ensurePersonasLoaded, getPersonaById, usePersonas, usePersonasVersion } from '../../lib/personas';
 import { agentDotColor } from '../AgentSelector';
+import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { Button } from '../ui/Button';
 import { Dot } from '../ui/Dot';
 import { Menu } from '../ui/Menu';
@@ -28,6 +29,42 @@ function planSummaryLine(plan: TeamPlan): string {
   if (plan.executorCount > 0)
     parts.push(`${plan.executorCount} ${plural(plan.executorCount, 'исполнитель', 'исполнителя', 'исполнителей')}`);
   return parts.join(' · ');
+}
+
+// Версия плана (Э8): «План v1» — всегда; «· обновлён после уточнений» — только у v2+
+function planVersionLabel(plan: TeamPlan): string {
+  const version = plan.version > 0 ? plan.version : 1;
+  return version > 1 ? `План v${version} · обновлён после уточнений` : `План v${version}`;
+}
+
+// Полный подзаголовок: версия плана + счётчики под-задач/волн/исполнителей
+function planSubtitle(plan: TeamPlan): string {
+  return [planVersionLabel(plan), planSummaryLine(plan)].join(' · ');
+}
+
+// Блок «Что изменилось» / «Допущения» (Э8): пунктирная рамка, метка заглавными,
+// строки с точкой-маркером. Скрывается целиком, когда список пуст
+function AnnotationBlock({ label, items }: { label: string; items: string[] }) {
+  if (items.length === 0) return null;
+  return (
+    <div style={{ border: `1px dashed ${C.dashed}`, borderRadius: R.lg, padding: '8px 10px 6px', margin: '10px 0' }}>
+      <div style={{
+        fontSize: 10, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase',
+        color: C.textMuted, padding: '0 2px 4px',
+      }}>
+        {label}
+      </div>
+      {items.map((text, i) => (
+        <div key={i} style={{
+          display: 'flex', alignItems: 'flex-start', gap: 8, padding: '3px 2px',
+          fontSize: 12.5, color: C.textSecondary, lineHeight: 1.45,
+        }}>
+          <span style={{ width: 4, height: 4, borderRadius: '50%', background: C.textMuted, flexShrink: 0, marginTop: 7 }} />
+          <span style={{ minWidth: 0, wordBreak: 'break-word' }}>{text}</span>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 // Подпись группы волны: первая идёт параллельно, следующие ждут предыдущую
@@ -294,6 +331,22 @@ export function TeamPlanView({ item, online }: {
   const plan = item.plan;
   const rootPath = project?.rootPath;
 
+  // Автор карточки (Э8): планировщик ИЗ ПЛАНА, не из текущего состояния режима — авторство
+  // истории не должно меняться при смене координатора/планировщика. null у штаба без персоны —
+  // тогда шапка остаётся прежним обезличенным вариантом
+  const author = plan.plannerPersonaId ? getPersonaById(plan.plannerPersonaId) : undefined;
+  const AuthorByline = author ? (
+    <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, minWidth: 0 }}>
+      <span style={{
+        fontSize: FS.sm, fontWeight: 700, color: C.textHeading,
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      }}>
+        {author.name}
+      </span>
+      <span style={{ fontSize: FS.xs, color: C.textMuted, flexShrink: 0 }}>· планировщик</span>
+    </div>
+  ) : null;
+
   // Кандидаты для смены исполнителя: явно выбранный состав либо вся команда контекста
   // (глобальные персоны + персоны этого проекта) — зеркало TeamPlanningService.ResolveCandidates
   const candidates = useMemo(() => {
@@ -321,6 +374,14 @@ export function TeamPlanView({ item, online }: {
           </svg>
           {waveLine}
         </div>
+        {/* Мини-подпись автора (Э8): сохраняется и в свёрнутой карточке — после смены
+            координатора видно, чей это был план */}
+        {author && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: C.textMuted }}>
+            <PersonaAvatar persona={author} size={16} />
+            {author.name} · планировщик
+          </div>
+        )}
         <CollapsedPlan plan={plan} isMobile={isMobile} rootPath={rootPath} />
       </div>
     );
@@ -338,6 +399,12 @@ export function TeamPlanView({ item, online }: {
           <RotateCcw size={15} color={C.textMuted} strokeWidth={2} style={{ flexShrink: 0 }} />
           План отменён
         </div>
+        {author && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: C.textMuted }}>
+            <PersonaAvatar persona={author} size={16} />
+            {author.name} · планировщик
+          </div>
+        )}
         <CollapsedPlan plan={plan} isMobile={isMobile} rootPath={rootPath} />
       </div>
     );
@@ -362,20 +429,35 @@ export function TeamPlanView({ item, online }: {
       borderRadius: R.xl, padding: '14px 16px', background: C.bgCard, boxShadow: SHADOW.card,
     }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 4 }}>
-        <span style={{
-          width: 28, height: 28, borderRadius: R.md, background: C.accent, flexShrink: 0,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}>
-          <Users size={15} color={C.onAccent} strokeWidth={2.2} />
-        </span>
+        {author ? (
+          <PersonaAvatar persona={author} size={28} />
+        ) : (
+          <span style={{
+            width: 28, height: 28, borderRadius: R.md, background: C.accent, flexShrink: 0,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            <Users size={15} color={C.onAccent} strokeWidth={2.2} />
+          </span>
+        )}
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontFamily: FONT.serif, fontSize: 15, fontWeight: 700, color: C.textHeading, lineHeight: 1.2 }}>
+          {AuthorByline}
+          <div style={{
+            fontFamily: FONT.serif, fontSize: 15, fontWeight: 700, color: C.textHeading, lineHeight: 1.2,
+            marginTop: author ? 1 : 0,
+          }}>
             План командной реализации
           </div>
           <div style={{ fontSize: 12, color: C.textSecondary, marginTop: 2 }}>
-            {planSummaryLine(plan)}
+            {planSubtitle(plan)}
           </div>
         </div>
+        {/* Kind-иконка уходит на правый край, когда шапку занял аватар персоны — тот же
+            паттерн «единой шапки штаба», что и у карточек эскалации */}
+        {author && (
+          <span style={{ flexShrink: 0, marginTop: 1, color: C.accent }}>
+            <Users size={16} strokeWidth={2.2} />
+          </span>
+        )}
         <span style={{
           flexShrink: 0, background: C.accentLight, color: C.accent, borderRadius: R.sm,
           padding: '2px 8px', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap',
@@ -388,8 +470,16 @@ export function TeamPlanView({ item, online }: {
         <div style={{ fontSize: 12.5, color: C.textSecondary, lineHeight: 1.45 }}>{plan.summary}</div>
       )}
 
+      {/* «Что изменилось» (Э8, только у v2+) — над телом плана: человек уже читал v1,
+          подтверждает именно дельту */}
+      <AnnotationBlock label={`Что изменилось в v${plan.version > 0 ? plan.version : 1} — по вашим ответам`} items={plan.changes} />
+
       <PlanBody plan={plan} candidates={candidates} onReassign={reassign}
         readOnly={!canAct} isMobile={isMobile} rootPath={rootPath} />
+
+      {/* «Допущения» (Э8) — под телом, над кнопками: путь «вопросов нет» — главный
+          носитель, декларируются вместе с планом */}
+      <AnnotationBlock label="Допущения" items={plan.assumptions} />
 
       {!online ? (
         <div style={{ fontSize: 12, color: C.textMuted }}>Недоступно офлайн</div>

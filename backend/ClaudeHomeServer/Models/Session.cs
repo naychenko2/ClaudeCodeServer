@@ -52,6 +52,10 @@ public class SessionWorkLoop
 // Wire-токены отдаёт ToWireToken (camelCase), совпадают с метками бейджа режима на фронте.
 public enum TeamImplementStage
 {
+    // Координатор спрашивает человека по вводной, прежде чем планировать (Э8): вопросы идут
+    // ASK-карточками, волны на паузе, чат работает в план-режиме. Первая вводная итерации
+    // проходит интервью всегда; тупик в волне возвращает практику сюда же.
+    Interview,
     // Координатор декомпозирует вводную и готовит карточку плана
     Planning,
     // Карточка плана ждёт единственного согласования человека («Запустить»)
@@ -71,6 +75,7 @@ public static class TeamImplementStageExtensions
     // Wire-токен стадии для фронта (camelCase)
     public static string ToWireToken(this TeamImplementStage stage) => stage switch
     {
+        TeamImplementStage.Interview => "interview",
         TeamImplementStage.Planning => "planning",
         TeamImplementStage.Confirming => "confirming",
         TeamImplementStage.Wave => "wave",
@@ -79,6 +84,13 @@ public static class TeamImplementStageExtensions
         TeamImplementStage.Idle => "idle",
         _ => "planning",
     };
+
+    // Стадии, на которых штаб думает, а не работает (Э8): интервью, планирование и ожидание
+    // подтверждения плана. Чат в них держится в план-режиме — правки запрещены самой
+    // permission-механикой CLI, а селектор режима у человека заблокирован до «Запустить».
+    public static bool IsPlanPhase(this TeamImplementStage stage) =>
+        stage is TeamImplementStage.Interview or TeamImplementStage.Planning
+            or TeamImplementStage.Confirming;
 }
 
 // Бюджет итерации режима «Командная реализация»: считается на одну вводную человека и
@@ -176,6 +188,28 @@ public class SessionTeamImplement
     public bool CoordinatorNoCode { get; set; } = true;
     // id карточки плана в ленте чата (Э2 — новый тип сообщения). null — план ещё не опубликован.
     public string? PlanCardId { get; set; }
+
+    // --- Э8: интервью, план-режим и версии плана ---
+
+    // Режим прав человека, сохранённый на входе в интервью: на стадиях интервью и
+    // планирования чат работает в `Plan`, а на «Запустить» (Confirming → Wave) возвращается
+    // сюда. Живёт на состоянии режима, поэтому переживает рестарт сервера посреди
+    // планирования. null — план-режим сейчас не навязан (или выбор уже возвращён).
+    public ClaudeMode? SavedMode { get; set; }
+    // Версия последнего ОПУБЛИКОВАННОГО плана итерации: карточка «План v2 · обновлён после
+    // уточнений». 0 — планов ещё не публиковали (и у состояний, сохранённых до Э8).
+    public int PlanVersion { get; set; }
+    // Версия плана, по которой человек разрешил работу («Запустить»; у добавочной волны при
+    // авто — сама вводная). Волна стартует ТОЛЬКО по ней: иначе после перепланирования
+    // авто-волна доигрывала бы отменённый vN-1, обходя обязательное подтверждение (Э8).
+    public int ApprovedPlanVersion { get; set; }
+    // Раундов вопросов интервью задано по текущей вводной: протокол разрешает максимум 2,
+    // дальше «не развилка → допущение». Сбрасывается новой вводной человека.
+    public int InterviewRounds { get; set; }
+    // Интервью вызвано тупиком в волне (маркер `<escalate:clarify>`), а не входом в итерацию:
+    // следующий план — новая версия, и подтверждение карточкой обязательно ДАЖЕ при
+    // включённых авто-волнах (авто покрывает волны по неизменному плану, но не смену плана).
+    public bool Replanning { get; set; }
 }
 
 public class Session

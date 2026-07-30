@@ -591,14 +591,17 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'provider_limit'; resetsAt?: string; providers: ProviderFallbackOption[] }
   | { type: 'work_loop'; active: boolean; iteration: number; maxIterations: number; phase: string | null }
   // Режим «Командная реализация»: приходит при каждом изменении (вкл/стадия/волна/авто/стоп)
-  | { type: 'team_implement'; active: boolean; stage: TeamImplementStage | null; waveNumber: number; autoWaves: boolean; coordinatorPersonaId: string | null; plannerPersonaId: string | null; executorPersonaIds: string[] | null; budget: TeamImplementBudget | null; planCardId: string | null; plannedWaves?: number; coordinatorNoCode?: boolean; stopped?: boolean }
+  // modeLocked/planVersion — Э8: план-режим навязан чату (интервью/планирование),
+  // версия текущего плана итерации
+  | { type: 'team_implement'; active: boolean; stage: TeamImplementStage | null; waveNumber: number; autoWaves: boolean; coordinatorPersonaId: string | null; plannerPersonaId: string | null; executorPersonaIds: string[] | null; budget: TeamImplementBudget | null; planCardId: string | null; plannedWaves?: number; coordinatorNoCode?: boolean; stopped?: boolean; modeLocked?: boolean; planVersion?: number }
   // Карточка плана командной реализации. Переиздаётся при каждой правке (смена исполнителя,
   // решение человека) с тем же planId — клиент обновляет карточку, а не плодит дубли
   | { type: 'team_plan'; planId: string; plan: TeamPlan; resolved: boolean; approved: boolean | null }
   // Карточка остановки командной реализации: причина + кнопки решения. Переиздаётся при
   // ответе человека (resolved=true) с тем же escalationId — клиент обновляет карточку.
   // Поля плоские (в истории та же карточка лежит вложенным объектом escalation)
-  | { type: 'team_escalation'; escalationId: string; kind: TeamEscalationKind; title: string; details: string; actions: TeamEscalationAction[]; taskId: string | null; wave: number; resolved: boolean; chosenActionId: string | null }
+  // personaId — автор карточки (Э8, координатор на момент публикации)
+  | { type: 'team_escalation'; escalationId: string; kind: TeamEscalationKind; title: string; details: string; actions: TeamEscalationAction[]; taskId: string | null; wave: number; resolved: boolean; chosenActionId: string | null; personaId?: string | null }
   | { type: 'preview_status'; status: string; port?: number; error?: string; serviceId?: string }
   | { type: 'notification'; title: string; body: string; url?: string; kind: 'reminder' | 'claude' | 'info' | 'success' | 'meeting'; notificationId?: string; notifType?: string; projectId?: string; sessionId?: string; taskId?: string; source?: string; tag?: string; personaId?: string; personaName?: string; personaRole?: string; personaColor?: string; personaHasAvatar?: boolean; projectName?: string }
   | { type: 'recall_manifest'; items: RecallItem[] }
@@ -790,6 +793,7 @@ export interface WorkLoopState {
 // === Режим «Командная реализация» (флаг team-implement-mode) ===
 // Стадии непрерывного контура — совпадают с wire-токенами TeamImplementStage на бэке
 export type TeamImplementStage =
+  | 'interview'         // координатор спрашивает человека, прежде чем планировать (Э8)
   | 'planning'          // координатор готовит карточку плана
   | 'confirming'        // план ждёт единственного согласования
   | 'wave'              // волна исполнителей в работе
@@ -831,6 +835,18 @@ export interface SessionTeamImplement {
   // «Координатор не пишет код сам»: у чата-штаба отключены инструменты правки файлов
   coordinatorNoCode: boolean;
   planCardId?: string | null;
+  // Э8: план-режим навязан чату (стадии интервью/планирования) — селектор режима в
+  // композере показывает «план» и заблокирован. Присутствует у live-состояния (событие
+  // team_implement присылает готовое значение); при REST-гидратации до первого события
+  // считаем его сами из savedMode — см. teamImplementModeLocked()
+  modeLocked?: boolean;
+  // Э8: режим прав человека, сохранённый на входе в план-режим (raw-поле REST-гидратации,
+  // SessionTeamImplement.SavedMode с бэка) — вернётся после согласования плана. У live-события
+  // его нет, там сразу приходит посчитанный modeLocked
+  savedMode?: Mode | null;
+  // Э8: версия текущего плана итерации (0 — планов ещё не было). Имя совпадает и на REST,
+  // и в live-событии — маппится напрямую
+  planVersion: number;
 }
 
 // Live-состояние режима (из события team_implement; флаг team-implement-mode)
@@ -864,6 +880,13 @@ export interface TeamPlan {
   waveCount: number;
   executorCount: number;
   subtasks: TeamPlanSubtask[];
+  // Э8: версия плана в итерации — 1 у первого, растёт с каждым перепланированием после
+  // интервью. Карточка показывает «План v2 · обновлён после уточнений»
+  version: number;
+  // Э8: допущения планировщика — путь «вопросов нет» (утверждаются вместе с планом)
+  assumptions: string[];
+  // Э8: «что изменилось» у плана vN относительно предыдущей версии; пусто у v1
+  changes: string[];
 }
 
 // Решение человека по карточке плана (метод хаба RespondTeamPlan)
@@ -884,7 +907,10 @@ export type TeamEscalationKind =
   | 'stopped'
   // Информация (Э5): по новой вводной развёрнута добавочная волна. Работа уже идёт,
   // клика карточка не ждёт — только показывает состав и даёт «Остановить»
-  | 'waveAdded';
+  | 'waveAdded'
+  // Тупик в волне (Э8): координатор не знает, как действовать дальше — требования неясны.
+  // Волны на паузе, дальше — интервью (ASK-карточки); без кнопок, тон не тревожный
+  | 'needsClarification';
 
 // Кнопка карточки остановки: id — wire-токен решения, label — подпись для человека
 export interface TeamEscalationAction {
@@ -907,6 +933,9 @@ export interface TeamEscalation {
   createdAt?: string;
   resolved: boolean;
   chosenActionId?: string | null;
+  // Автор карточки (Э8): координатор на момент публикации — карточка идёт от его лица.
+  // null — персоны у штаба нет, шапка деградирует до обезличенного варианта
+  personaId?: string | null;
 }
 
 // Элементы чата

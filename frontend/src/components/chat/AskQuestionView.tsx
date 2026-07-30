@@ -143,7 +143,7 @@ export function AskQuestionView({ item, online, onAnswer, onInterrupt }: {
             </button>
           );
         })}
-        {/* Свой вариант (free-text) */}
+        {/* Другое (free-text) */}
         {(() => {
           const open = !!customOpen[qi];
           const filled = open && (customText[qi]?.trim().length ?? 0) > 0;
@@ -152,7 +152,7 @@ export function AskQuestionView({ item, online, onAnswer, onInterrupt }: {
               <div onClick={() => !disabled && toggleCustom(qi, !!q.multiSelect)}
                 style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 12px', minHeight: 44, boxSizing: 'border-box', cursor: disabled ? 'default' : 'pointer' }}>
                 <SquarePen size={14} color={C.textMuted} strokeWidth={2} style={{ flexShrink: 0 }} />
-                <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: open ? C.textHeading : C.textMuted }}>Свой вариант{open ? '' : '…'}</span>
+                <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: open ? C.textHeading : C.textMuted }}>Другое{open ? '' : '…'}</span>
                 {q.multiSelect && <span style={{ flexShrink: 0, display: 'flex' }}><ChoiceMarker multi selected={filled} /></span>}
               </div>
               {open && (

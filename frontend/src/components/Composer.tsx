@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback, type CSSProperties, type ReactNode } from 'react';
-import { AlertTriangle, Ban, ArrowUp, Check, ChevronDown, FolderGit2, Mic, Paperclip, Plus, RefreshCw, Users, WifiOff, X } from 'lucide-react';
-import { C, R, FS, FONT, SHADOW, Z } from '../lib/design';
+import { AlertTriangle, Ban, ArrowUp, Check, ChevronDown, FolderGit2, Lock, Mic, Paperclip, Plus, RefreshCw, Users, WifiOff, X } from 'lucide-react';
+import { C, R, FS, FONT, MODAL_W, SHADOW, Z } from '../lib/design';
 import { type RateWindow, RATE_COLORS, windowLabel, fmtReset } from '../lib/rateLimit';
 import { SkillsDropdown } from './SkillsDropdown';
 import { MentionsDropdown } from './MentionsDropdown';
@@ -16,11 +16,13 @@ import {
   type TeamMechanicId, type TeamMechanicSettings,
 } from '../features/team/teamMechanics';
 import { TeamImplementBadge } from '../features/team/TeamImplementBadge';
+import { teamImplementModeLocked, TEAM_IMPLEMENT_MODE_LOCKED_TOOLTIP } from '../lib/teamImplement';
 import { setLastMechanic } from '../lib/lastMechanic';
 import { type Mode, MODE_META, MODES, ModeIcon, isDangerMode } from '../lib/modes';
 import { DangerModeConfirm } from './DangerModeConfirm';
 import { useAssistantName } from './chat/contexts';
 import { getDraft, setDraft } from '../lib/drafts';
+import { Modal } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { useVoiceInput } from '../hooks/useVoiceInput';
 import type { SkillInfo, AgentInfo, Persona, WorkLoopState, SessionTeamImplement } from '../types';
@@ -422,6 +424,14 @@ export function Composer({
   const [dragOver, setDragOver] = useState(false);
   // Опасный режим (bypass) ждёт подтверждения в модалке перед применением
   const [pendingMode, setPendingMode] = useState<Mode | null>(null);
+  // Штаб «Командной реализации» думает (Э8): стадии интервью/планирования держат чат
+  // в план-режиме, селектор показывает «план» и заблокирован — независимо от того,
+  // что сейчас лежит в mode (после разблокировки значение снова приходит с бэкенда)
+  const modeLocked = teamImplement ? teamImplementModeLocked(teamImplement) : false;
+  const displayMode: Mode = modeLocked ? 'plan' : mode;
+  // Пояснение залоченного селектора: десктоп — статичный каллаут в потоке (Майя ловила
+  // перекрытие композера всплывающим пузырём), мобила — нижняя шторка (hover недоступен)
+  const [lockInfoOpen, setLockInfoOpen] = useState(false);
   // Autocomplete скиллов
   const [showSkillsDropdown, setShowSkillsDropdown] = useState(false);
   const [skillQuery, setSkillQuery] = useState('');
@@ -472,15 +482,18 @@ export function Composer({
     }
   }, [sessionId]);
 
-  // Закрытие меню режимов по клику вне него
+  // Закрытие меню режимов (и каллаута лока, Э8) по клику вне него
   useEffect(() => {
-    if (!modeMenuOpen) return;
+    if (!modeMenuOpen && !lockInfoOpen) return;
     const onDown = (e: MouseEvent) => {
-      if (modeRef.current && !modeRef.current.contains(e.target as Node)) setModeMenuOpen(false);
+      if (modeRef.current && !modeRef.current.contains(e.target as Node)) {
+        setModeMenuOpen(false);
+        setLockInfoOpen(false);
+      }
     };
     document.addEventListener('mousedown', onDown);
     return () => document.removeEventListener('mousedown', onDown);
-  }, [modeMenuOpen]);
+  }, [modeMenuOpen, lockInfoOpen]);
 
   const hasText = text.trim().length > 0;
 
@@ -959,13 +972,18 @@ export function Composer({
   const modeButton = (
     <div ref={modeRef} style={{ position: 'relative', flexShrink: 0 }}>
       <button
-        onClick={() => setModeMenuOpen(o => !o)}
+        onClick={() => {
+          // Штаб планирует (Э8) — селектор не открывается, клик/тап раскрывает пояснение:
+          // на десктопе — статичный каллаут в потоке, на мобиле — нижняя шторка (Modal)
+          if (modeLocked) { setLockInfoOpen(o => !o); return; }
+          setModeMenuOpen(o => !o);
+        }}
         // В сжатом виде подпись скрыта — значение уносим в тултип, как у модели и усилия
-        title={`Режим работы: ${MODE_META[mode].label}`}
+        title={modeLocked ? TEAM_IMPLEMENT_MODE_LOCKED_TOOLTIP : `Режим работы: ${MODE_META[displayMode].label}`}
         // Фон только на наведении/открытии: полоса лежит на тени карточки композера,
         // и залитые плашки разрезали бы её пятнами
-        onMouseEnter={e => { if (!modeMenuOpen) e.currentTarget.style.background = C.accentLight; }}
-        onMouseLeave={e => { if (!modeMenuOpen) e.currentTarget.style.background = 'transparent'; }}
+        onMouseEnter={e => { if (!modeMenuOpen && !modeLocked) e.currentTarget.style.background = C.accentLight; }}
+        onMouseLeave={e => { if (!modeMenuOpen && !modeLocked) e.currentTarget.style.background = 'transparent'; }}
         style={{
           // Сжатый (мобильный) вид — иконка + шеврон без подписи
           ...(isMobile
@@ -973,20 +991,24 @@ export function Composer({
             : { height: 28, padding: '0 10px' }),
           borderRadius: R.md, border: 'none',
           background: modeMenuOpen ? C.bgSelected : 'transparent',
-          color: mode === 'bypass' ? C.danger : C.textSecondary,
-          fontSize: 12.5, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap',
+          color: modeLocked ? C.textMuted : displayMode === 'bypass' ? C.danger : C.textSecondary,
+          fontSize: 12.5, fontWeight: 600, cursor: modeLocked ? 'default' : 'pointer', whiteSpace: 'nowrap',
           display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
           transition: 'background 0.15s',
         }}
       >
-        <ModeIcon mode={mode} />
+        <ModeIcon mode={displayMode} />
         {/* В сжатом виде прячем только подпись (длинные названия распирают строку) —
             шеврон остаётся, как у модели, усилия и собеседника. Название — в тултипе. */}
-        {!isMobile && MODE_META[mode].label}
-        <ChevronDown size={isMobile ? 10 : ICON_SIZE.xs} strokeWidth={ICON_STROKE}
-          style={{ flexShrink: 0, opacity: 0.55, transform: modeMenuOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
+        {!isMobile && MODE_META[displayMode].label}
+        {modeLocked ? (
+          <Lock size={10} strokeWidth={ICON_STROKE} style={{ flexShrink: 0, opacity: 0.6 }} />
+        ) : (
+          <ChevronDown size={isMobile ? 10 : ICON_SIZE.xs} strokeWidth={ICON_STROKE}
+            style={{ flexShrink: 0, opacity: 0.55, transform: modeMenuOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
+        )}
       </button>
-      {modeMenuOpen && (
+      {modeMenuOpen && !modeLocked && (
         <div style={{
           // Десктоп: absolute от кнопки (вправо). Мобил: fixed во всю ширину (left/right 16px),
           // bottom — чуть выше кнопки по getBoundingClientRect, чтобы меню не уезжало за край
@@ -1028,6 +1050,38 @@ export function Composer({
           })}
         </div>
       )}
+      {/* Пояснение лока (Э8), мобила — нижняя шторка: hover недоступен на тач, поэтому
+          тап открывает Modal вместо статичного каллаута десктопа */}
+      {lockInfoOpen && isMobile && (
+        <Modal title="Штаб планирует" onClose={() => setLockInfoOpen(false)} width={MODAL_W.confirm}>
+          <p style={{ fontSize: FS.sm, color: C.textSecondary, lineHeight: 1.5, margin: 0 }}>
+            {TEAM_IMPLEMENT_MODE_LOCKED_TOOLTIP}
+          </p>
+        </Modal>
+      )}
+    </div>
+  );
+
+  // Пояснение лока (Э8), десктоп: статичный каллаут В ПОТОКЕ (не всплывающий пузырь) —
+  // рендерится отдельной строкой под полосой контролов, а не поповером у кнопки, чтобы
+  // не перекрывать поле ввода композера (Майя ловила это на макете)
+  const lockInfoCallout = lockInfoOpen && (
+    <div style={{
+      marginTop: 6, padding: '8px 10px', borderRadius: R.lg,
+      background: C.bgSelected, border: `1px solid ${C.border}`,
+      display: 'flex', alignItems: 'flex-start', gap: 7,
+    }}>
+      <Lock size={12} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0, marginTop: 2 }} />
+      <span style={{ flex: 1, minWidth: 0, fontSize: FS.sm, color: C.textSecondary, lineHeight: 1.4 }}>
+        {TEAM_IMPLEMENT_MODE_LOCKED_TOOLTIP}
+      </span>
+      <button
+        onClick={() => setLockInfoOpen(false)}
+        aria-label="Закрыть"
+        style={{ flexShrink: 0, background: 'none', border: 'none', cursor: 'pointer', color: C.textMuted, padding: 2, display: 'flex' }}
+      >
+        <X size={12} strokeWidth={ICON_STROKE} />
+      </button>
     </div>
   );
 
@@ -1416,6 +1470,9 @@ export function Composer({
         </div>
       )}
     </div>
+
+    {/* Десктоп-только: на мобиле пояснение лока уходит в шторку (Modal внутри modeButton) */}
+    {!isMobile && lockInfoCallout}
 
     {pendingMode && (
       <DangerModeConfirm

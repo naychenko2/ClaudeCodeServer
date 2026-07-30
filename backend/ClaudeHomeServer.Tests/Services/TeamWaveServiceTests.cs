@@ -58,7 +58,7 @@ public class TeamWaveServiceTests : IDisposable
         _teamPlanning = new TeamPlanningService(_personas, new StubPlanner(() => _plannerAnswer));
         _sessions = CreateSessionManager(config, userStore, appSettings, hub);
         _sut = new TeamWaveService(_sessions, _tasks, _projects, hub.Object,
-            NullLogger<TeamWaveService>.Instance);
+            NullLogger<TeamWaveService>.Instance, _personas);
     }
 
     public void Dispose()
@@ -773,6 +773,88 @@ public class TeamWaveServiceTests : IDisposable
         TeamImplementPrompts.CoordinatorTurn(team).Should().NotContain("<team:work>",
             "вторая волна поверх идущей не разворачивается");
     }
+
+    // --- Э8: волна идёт только по подтверждённой последней версии плана ---
+
+    [Fact]
+    public async Task StartWave_ПоУстаревшейВерсииПлана_НеСтартует()
+    {
+        // После уточнений опубликован план v2 — доигрывать v1 нельзя, иначе авто-волна
+        // обошла бы обязательное подтверждение новой версии
+        var (session, backend, frontend) = await MakeStabAsync("wave-stale");
+        var plan = MakePlan(backend, frontend);
+        plan.Version = 1;
+        _sessions.WithTeamState(session.Id, t =>
+        {
+            t.PlanVersion = 2;
+            t.ApprovedPlanVersion = 1;
+            return true;
+        });
+
+        var created = await _sut.StartWaveAsync(session, plan);
+
+        created.Should().BeEmpty("актуальна версия 2 — старый план не доигрывается");
+        Team(session.Id).Budget.TasksUsed.Should().Be(0, "бюджет на устаревший план не тратится");
+    }
+
+    [Fact]
+    public async Task StartWave_ПоНеподтверждённойВерсииПлана_НеСтартует()
+    {
+        var (session, backend, frontend) = await MakeStabAsync("wave-unapproved");
+        var plan = MakePlan(backend, frontend);
+        plan.Version = 2;
+        _sessions.WithTeamState(session.Id, t =>
+        {
+            t.PlanVersion = 2;
+            t.ApprovedPlanVersion = 1;
+            return true;
+        });
+
+        var created = await _sut.StartWaveAsync(session, plan);
+
+        created.Should().BeEmpty("новая версия плана ждёт кнопки «Запустить» даже при авто-волнах");
+    }
+
+    [Fact]
+    public async Task StartWave_СостояниеБезВерсий_РаботаетПоСтарому()
+    {
+        // Обратная совместимость: у чатов, начатых до Э8, версий в состоянии нет (нули) —
+        // гард выключен, иначе идущая практика встала бы прямо на апгрейде сервера
+        var (session, backend, frontend) = await MakeStabAsync("wave-legacy");
+        var plan = MakePlan(backend, frontend);
+
+        var created = await _sut.StartWaveAsync(session, plan);
+
+        created.Should().HaveCount(1);
+    }
+
+    [Fact]
+    public async Task CheckStalledWaves_ВСтадииИнтервью_НеЭскалирует()
+    {
+        // Ожидание ответа человека — не зависание: в интервью таймаут волны не тикает
+        var (session, backend, frontend) = await MakeStabAsync("wave-interview-timeout");
+        await _sut.StartWaveAsync(session, MakePlan(backend, frontend));
+        _sessions.WithTeamState(session.Id, t =>
+        {
+            t.Stage = TeamImplementStage.Interview;
+            t.WaveStartedAt = DateTime.UtcNow.AddDays(-1);
+            t.WaveActivityAt = DateTime.UtcNow.AddDays(-1);
+            return true;
+        });
+
+        await _sut.CheckStalledWavesAsync();
+
+        Team(session.Id).Stage.Should().Be(TeamImplementStage.Interview, "карточки зависания в интервью нет");
+    }
+
+    [Theory]
+    // Уведомление и push идут от лица персоны штаба; без персоны — обезличенный фолбэк
+    [InlineData("Алекс", false, "Алекс: нужно ваше решение")]
+    [InlineData("Алекс", true, "Алекс ждёт ответов по задаче")]
+    [InlineData(null, false, "Команда ждёт вашего решения")]
+    [InlineData(null, true, "Команда ждёт ответов по задаче")]
+    public void WaitingTitle_ПерсонифицированныйЗаголовок(string? persona, bool answers, string expected) =>
+        TeamImplementPrompts.WaitingTitle(persona, answers).Should().Be(expected);
 
     // --- Э5: непрерывный контур — новая вводная разворачивает волну с нуля ---
 

@@ -2,7 +2,7 @@
 // бейджа/маркера. Тексты — дословно из docs/features/team-implement-mode.md («Тексты»)
 // и макета docs/mockups/team-implement-mode.html (короткие формы маркера).
 
-import type { TeamEscalationKind, TeamImplementBudget, TeamImplementStage } from '../types';
+import type { SessionTeamImplement, TeamEscalationKind, TeamImplementBudget, TeamImplementStage } from '../types';
 import { MODE_META, type Mode } from './modes';
 
 // Тон по тому, кто должен действовать: work — команда работает (accent),
@@ -11,6 +11,7 @@ export type TeamImplementTone = 'work' | 'wait' | 'idle';
 
 export function teamImplementTone(stage: TeamImplementStage): TeamImplementTone {
   switch (stage) {
+    case 'interview':
     case 'confirming':
     case 'awaitingDecision':
       return 'wait';
@@ -31,6 +32,7 @@ function waveText(waveNumber: number, plannedWaves?: number): string {
 // Полная подпись стадии для бейджа в композере (и тултипа маркера)
 export function teamImplementStageLabel(stage: TeamImplementStage, waveNumber: number, plannedWaves?: number): string {
   switch (stage) {
+    case 'interview': return 'интервью';
     case 'planning': return 'планирование';
     case 'confirming': return 'ждёт подтверждения';
     case 'wave': return waveText(waveNumber, plannedWaves);
@@ -43,6 +45,7 @@ export function teamImplementStageLabel(stage: TeamImplementStage, waveNumber: n
 // Короткая форма для маркера в узкой строке списка чатов
 export function teamImplementStageShort(stage: TeamImplementStage, waveNumber: number, plannedWaves?: number): string {
   switch (stage) {
+    case 'interview': return 'вопросы';
     case 'planning': return 'планирует';
     case 'confirming': return 'согласование';
     case 'wave': return plannedWaves && plannedWaves > 0 ? `волна ${waveNumber}/${plannedWaves}` : `волна ${waveNumber}`;
@@ -101,6 +104,18 @@ export function teamImplementModeHeld(mode: Mode): boolean {
   return mode === TEAM_IMPLEMENT_MODE;
 }
 
+// === Э8: план-режим на стадиях интервью/планирования ===
+// Штаб думает — селектор режима в композере заблокирован на «План» до согласования плана.
+// Live-состояние (после первого события team_implement) уже несёт готовый modeLocked;
+// REST-гидратация до первого события считает его сама из savedMode (SessionTeamImplement.SavedMode)
+export function teamImplementModeLocked(state: SessionTeamImplement): boolean {
+  return state.modeLocked ?? state.savedMode != null;
+}
+
+// Тултип заблокированного селектора режима (текст — «Тексты Э8» продуктового плана).
+// Тот же текст возвращает бэкенд в ошибке PUT /chats/{id}/mode, если запрос всё же ушёл
+export const TEAM_IMPLEMENT_MODE_LOCKED_TOOLTIP = 'Штаб планирует. Режим вернётся после согласования плана';
+
 // Подтверждение выключения режима
 export const TEAM_IMPLEMENT_DISABLE_TITLE = 'Выключить командную реализацию?';
 export const TEAM_IMPLEMENT_DISABLE_TEXT =
@@ -144,7 +159,11 @@ export type TeamEscalationTone = 'warning' | 'success' | 'muted' | 'work';
 export function teamEscalationTone(kind: TeamEscalationKind): TeamEscalationTone {
   switch (kind) {
     case 'waveGate': return 'success';
-    case 'stopped': return 'muted';
+    // Пауза, а не проблема (Э8): планировщику нужны уточнения, а не что-то сломалось —
+    // тот же спокойный тон, что у паузы по команде человека
+    case 'stopped':
+    case 'needsClarification':
+      return 'muted';
     case 'waveAdded': return 'work';
     default: return 'warning';
   }

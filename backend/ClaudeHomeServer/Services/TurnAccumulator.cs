@@ -249,7 +249,15 @@ internal class TurnAccumulator
         lock (_lock)
         {
             FlushBuffers();
-            _currentTurn.Add(new StoredTeamPlanMessage { PlanId = plan.Id, Plan = plan });
+            // PersonaId (Э8) — автор карточки на момент публикации: планировщик. Пишем в
+            // stored-слой, чтобы шапка «аватар + имя» жила и после рестарта, и после смены
+            // координатора (тот менять историю не должен).
+            _currentTurn.Add(new StoredTeamPlanMessage
+            {
+                PlanId = plan.Id,
+                Plan = plan,
+                PersonaId = plan.PlannerPersonaId,
+            });
         }
     }
 

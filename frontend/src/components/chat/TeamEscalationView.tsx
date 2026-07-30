@@ -1,5 +1,5 @@
-import { useContext, useState } from 'react';
-import { AlertTriangle, Check, CircleHelp, Clock, ListPlus, Pause } from 'lucide-react';
+import { useContext, useEffect, useState } from 'react';
+import { AlertTriangle, Check, CircleHelp, Clock, ListPlus, MessageCircleQuestion, Pause } from 'lucide-react';
 import type { ChatItem, TeamEscalationAction, TeamEscalationKind } from '../../types';
 import { C, FS, FONT, R, SHADOW, SP } from '../../lib/design';
 import {
@@ -7,15 +7,19 @@ import {
   teamEscalationDetailsLines,
   TEAM_ESCALATION_REPLY_PLACEHOLDER, TEAM_ESCALATION_REPLY_HINT_DECISION,
 } from '../../lib/teamImplement';
+import { ensurePersonasLoaded, getPersonaById, usePersonasVersion } from '../../lib/personas';
+import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { Button } from '../ui/Button';
 import { TeamEscalationContext } from './contexts';
 
 // Иконка триггера: проблемы — треугольник, вопрос человеку — «?», зависание — часы,
 // пауза по команде — знак паузы, гейт волны — галочка (волна закрылась штатно),
-// добавочная волна — список с плюсом (в работу ушли новые под-задачи)
+// добавочная волна — список с плюсом (в работу ушли новые под-задачи),
+// тупик в волне (Э8) — вопрос в облаке (перекликается с ASK-карточкой интервью)
 function KindIcon({ kind, size = 14 }: { kind: TeamEscalationKind; size?: number }) {
   switch (kind) {
     case 'productDecision': return <CircleHelp size={size} strokeWidth={2.2} />;
+    case 'needsClarification': return <MessageCircleQuestion size={size} strokeWidth={2.2} />;
     case 'waveStalled': return <Clock size={size} strokeWidth={2.2} />;
     case 'stopped': return <Pause size={size} strokeWidth={2.2} fill="currentColor" />;
     case 'waveGate': return <Check size={size} strokeWidth={2.4} />;
@@ -109,11 +113,19 @@ export function TeamEscalationView({ item, online }: {
 }) {
   const ctx = useContext(TeamEscalationContext);
   const [replying, setReplying] = useState<TeamEscalationAction | null>(null);
+  // В не-персон-чате стор персон мог быть не загружен — резолвим автора карточки (Э8)
+  usePersonasVersion();
+  useEffect(() => { void ensurePersonasLoaded(); }, []);
 
   const esc = item.escalation;
   const tone = teamEscalationTone(esc.kind);
   const informational = teamEscalationInformational(esc.kind);
   const canAct = online && !!ctx && !esc.resolved;
+
+  // Автор карточки (Э8): координатор ИЗ КАРТОЧКИ — фиксируется в момент публикации,
+  // авторство истории не меняется при смене координатора. null — у штаба нет персоны,
+  // шапка остаётся прежним обезличенным вариантом (иконка триггера на квадрате)
+  const author = esc.personaId ? getPersonaById(esc.personaId) : undefined;
 
   const accent = tone === 'success' ? C.success
     : tone === 'muted' ? C.textMuted
@@ -142,14 +154,23 @@ export function TeamEscalationView({ item, online }: {
         display: 'flex', flexDirection: 'column', gap: 6,
       }}>
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9 }}>
-          <span style={{
-            width: 22, height: 22, borderRadius: R.md, flexShrink: 0, marginTop: 1,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            background: C.bgSelected, color: C.textMuted,
-          }}>
-            <KindIcon kind={esc.kind} size={12} />
-          </span>
+          {author ? (
+            <PersonaAvatar persona={author} size={28} />
+          ) : (
+            <span style={{
+              width: 28, height: 28, borderRadius: R.md, flexShrink: 0,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              background: C.bgSelected, color: C.textMuted,
+            }}>
+              <KindIcon kind={esc.kind} size={14} />
+            </span>
+          )}
           <div style={{ minWidth: 0 }}>
+            {author && (
+              <div style={{ fontSize: FS.xs, color: C.textMuted, marginBottom: 1 }}>
+                {author.name} · координатор
+              </div>
+            )}
             <div style={{ fontSize: FS.base, fontWeight: 600, color: C.textSecondary, lineHeight: 1.3 }}>
               {esc.title}
             </div>
@@ -170,15 +191,33 @@ export function TeamEscalationView({ item, online }: {
       display: 'flex', flexDirection: 'column', gap: SP.sm,
     }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9 }}>
-        <span style={{
-          width: 26, height: 26, borderRadius: R.md, flexShrink: 0,
-          display: 'flex', alignItems: 'center', justifyContent: 'center', ...iconStyle,
-        }}>
-          <KindIcon kind={esc.kind} />
-        </span>
-        <div style={{ fontSize: FS.base, fontWeight: 700, color: C.textHeading, lineHeight: 1.3, minWidth: 0 }}>
-          {esc.title}
+        {author ? (
+          <PersonaAvatar persona={author} size={28} />
+        ) : (
+          <span style={{
+            width: 28, height: 28, borderRadius: R.md, flexShrink: 0,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', ...iconStyle,
+          }}>
+            <KindIcon kind={esc.kind} />
+          </span>
+        )}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          {author && (
+            <div style={{ fontSize: FS.xs, color: C.textMuted, marginBottom: 1 }}>
+              {author.name} · координатор
+            </div>
+          )}
+          <div style={{ fontSize: FS.base, fontWeight: 700, color: C.textHeading, lineHeight: 1.3 }}>
+            {esc.title}
+          </div>
         </div>
+        {/* Kind-иконка уходит на правый край, когда шапка занята аватаром персоны —
+            цветовая ось (borderLeft + иконка) по-прежнему различает 8 видов остановки */}
+        {author && (
+          <span style={{ flexShrink: 0, marginTop: 1, color: accent }}>
+            <KindIcon kind={esc.kind} size={16} />
+          </span>
+        )}
       </div>
 
       {esc.details && <Details text={esc.details} />}

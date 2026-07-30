@@ -162,7 +162,7 @@
   <div class="mockup-header">
     <div>
       <h1>Режим «Командная реализация»</h1>
-      <p>Э0: бейдж режима в композере со стадиями и чипом «Авто», маркер в списке чатов, карточка плана, карточки эскалации, сводка волны и ожидание вводной. Обе темы, десктоп и мобила. Тексты — из раздела «Тексты» плана <code>docs/features/team-implement-mode.md</code>.</p>
+      <p>Э0: бейдж режима в композере со стадиями и чипом «Авто», маркер в списке чатов, карточка плана, карточки эскалации, сводка волны и ожидание вводной. <b>Э8 (2026-07-30):</b> стадия интервью (реплика персоны + ASK-карточка, заблокированный селектор режима), единая шапка карточек штаба с автором (аватар + имя + роль), карточка плана vN — блоки «Что изменилось» и «Допущения», push от имени персоны. Обе темы, десктоп и мобила. Тексты — из раздела «Тексты» плана <code>docs/features/team-implement-mode.md</code>.</p>
     </div>
     <div class="theme-toggle"><button id="themeBtn">Тёмная тема</button></div>
   </div>
@@ -280,6 +280,57 @@
   .mob-frame { width: 390px; max-width: 100%; border: 1px solid var(--c-border); border-radius: 24px; overflow: hidden; background: var(--c-bg-main); box-shadow: var(--shadow-island); display: flex; flex-direction: column; }
   .mob-head { padding: 10px 14px; background: var(--c-bg-inset); border-bottom: 1px solid var(--c-border); font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--c-text-muted); }
   .mob-body { padding: 10px; display: flex; flex-direction: column; gap: 10px; }
+
+  /* === Э8: единая шапка карточек штаба — аватар + имя + роль + kind-иконка === */
+  .p-ava { border-radius: 50%; flex-shrink: 0; display: flex; align-items: center; justify-content: center; color: var(--c-on-dark); font-weight: 700; user-select: none; }
+  .sh-head { display: flex; align-items: flex-start; gap: 9px; }
+  .sh-byline { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+  .sh-name { font-size: var(--fs-sm); font-weight: 700; color: var(--c-text-heading); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sh-role { font-size: var(--fs-xs); color: var(--c-text-muted); white-space: nowrap; flex-shrink: 0; }
+  .sh-kind { flex-shrink: 0; display: flex; margin-top: 1px; }
+  /* Мини-подпись автора в свёрнутых (решённых) карточках */
+  .sh-mini { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-xs); font-weight: 600; color: var(--c-text-muted); flex-shrink: 0; }
+
+  /* === Э8: блок «Что изменилось» (над телом плана) и «Допущения» (под телом) === */
+  .plan-annot { border: 1px dashed var(--c-dashed); border-radius: var(--r-lg); padding: 8px 10px 6px; }
+  .plan-annot-label { font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--c-text-muted); padding: 0 2px 4px; display: flex; align-items: center; gap: 6px; }
+  .diff-row { display: flex; align-items: flex-start; gap: 8px; padding: 4px 2px; font-size: var(--fs-base); color: var(--c-text-primary); line-height: 1.4; }
+  .diff-sign { width: 16px; height: 16px; border-radius: var(--r-sm); display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; flex-shrink: 0; margin-top: 2px; }
+  .diff-sign.add { background: var(--c-success-bg); color: var(--c-success-text); }
+  .diff-sign.del { background: var(--c-danger-bg); color: var(--c-danger-text); }
+  .diff-sign.move { background: var(--c-warning-bg); color: var(--c-warning-text); }
+  .assump-row { display: flex; align-items: flex-start; gap: 8px; padding: 3px 2px; font-size: var(--fs-sm); color: var(--c-text-secondary); line-height: 1.45; }
+  .assump-dot { width: 4px; height: 4px; border-radius: 50%; background: var(--c-text-muted); flex-shrink: 0; margin-top: 7px; }
+  .assump-hint { font-size: var(--fs-xs); color: var(--c-text-muted); margin: 5px 2px 0; line-height: 1.4; }
+
+  /* === Э8: ASK-карточка интервью (существующий AskQuestionView, без изменений конструкции) === */
+  .ask-card { border: 1px solid var(--c-accent-muted); border-left: 3px solid var(--c-accent); border-radius: var(--r-xl); padding: 13px 14px; background: var(--c-accent-light); }
+  .ask-head { display: flex; align-items: center; gap: 7px; font-size: var(--fs-base); font-weight: 600; color: var(--c-text-heading); margin-bottom: 11px; }
+  .ask-count { margin-left: auto; font-size: var(--fs-sm); font-weight: 600; color: var(--c-text-muted); font-family: var(--font-mono); }
+  .ask-tabs { display: flex; gap: 6px; margin-bottom: 12px; overflow-x: auto; }
+  .ask-tab { height: 28px; padding: 0 11px; border-radius: 14px; font-size: var(--fs-sm); font-weight: 600; border: 1px solid var(--c-border); background: var(--c-bg-white); color: var(--c-text-secondary); display: flex; align-items: center; gap: 6px; white-space: nowrap; flex-shrink: 0; }
+  .ask-tab.active { border: 1.5px solid var(--c-accent); background: var(--c-accent-light); color: var(--c-text-heading); }
+  .ask-q { font-size: var(--fs-base); color: var(--c-text-heading); font-weight: 600; margin-bottom: 9px; }
+  .ask-opt { display: flex; align-items: flex-start; gap: 9px; padding: 9px 12px; border-radius: 9px; border: 1px solid var(--c-border); background: var(--c-bg-white); margin-bottom: 6px; font-size: var(--fs-base); font-weight: 600; color: var(--c-text-heading); }
+  .ask-opt .o-text { flex: 1; min-width: 0; }
+  .ask-opt .o-desc { display: block; font-size: var(--fs-sm); color: var(--c-text-secondary); font-weight: 400; margin-top: 2px; line-height: 1.4; }
+  .ask-opt.other { border-style: dashed; border-color: var(--c-dashed); background: transparent; color: var(--c-text-muted); }
+  .rec-chip { font-size: 10px; font-weight: 700; color: var(--c-accent); background: var(--c-accent-light); border: 1px solid var(--c-accent-muted); border-radius: var(--r-max); padding: 1px 6px; white-space: nowrap; flex-shrink: 0; margin-top: 1px; }
+
+  /* === Э8: селектор режима в композере — залочен на стадиях интервью/планирования === */
+  .composer-controls { display: flex; align-items: center; gap: 4px; padding: 0 10px 8px; flex-wrap: wrap; }
+  .mode-pill { display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: var(--r-md); font-size: 12.5px; font-weight: 600; color: var(--c-text-secondary); white-space: nowrap; border: none; background: transparent; font-family: var(--font-sans); }
+  .mode-pill.locked { cursor: default; }
+  .mode-pill:not(.locked):hover { background: var(--c-accent-light); }
+  .mode-pill .lock { color: var(--c-text-muted); display: flex; }
+  .mode-pill .chev { color: var(--c-text-secondary); opacity: .55; display: flex; }
+  /* Фауз-тултип (в продукте — нативный title) */
+  .tooltip-wrap { position: relative; display: inline-block; }
+  .tooltip-bubble { position: absolute; bottom: calc(100% + 8px); left: 0; width: 248px; background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: var(--r-lg); box-shadow: var(--shadow-dropdown); padding: 8px 11px; font-size: var(--fs-sm); color: var(--c-text-heading); line-height: 1.4; z-index: 5; }
+  .tooltip-bubble::after { content: ''; position: absolute; top: 100%; left: 22px; width: 8px; height: 8px; background: var(--c-bg-card); border-right: 1px solid var(--c-border); border-bottom: 1px solid var(--c-border); transform: translateY(-4px) rotate(45deg); }
+  /* Вариант пузыря ПОД контролом (стрелка сверху) */
+  .tooltip-bubble.below { bottom: auto; top: calc(100% + 8px); }
+  .tooltip-bubble.below::after { top: 0; border: none; border-left: 1px solid var(--c-border); border-top: 1px solid var(--c-border); transform: translateY(4px) rotate(45deg); }
 </style>
 
 <!-- ======================= 1. БЕЙДЖ РЕЖИМА В КОМПОЗЕРЕ ======================= -->
@@ -319,12 +370,13 @@
       <div class="frame" style="flex:1; min-width:340px;">
         <div class="frame-caption"><span><b>Стадии ожидания</b> — «ждёт человека» warning · «ждёт задачу» muted</span></div>
         <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button class="ti-badge tone-wait"><svg class="ic" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>Командная реализация · интервью<span class="ti-dot"></span></button>
           <button class="ti-badge tone-wait"><svg class="ic" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>Командная реализация · ждёт подтверждения<span class="ti-dot"></span></button>
           <button class="ti-badge tone-wait"><svg class="ic" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>Командная реализация · нужно решение<span class="ti-dot"></span></button>
           <button class="ti-badge tone-idle"><svg class="ic" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>Командная реализация · ждёт задачу<span class="ti-dot"></span></button>
         </div>
         <div class="note" style="margin-top:10px;">
-          <b>Три тона — по тому, кто должен действовать:</b> accent «работает» (планирование / волна N из M / проверка), warning «ждёт человека» (ждёт подтверждения / нужно решение — единственные стадии, где практика стоит без пользователя), muted «ждёт задачу» (итерация закрыта, режим жив). Пульс точки — только у «живых» стадий, у «ждёт задачу» точка статичная.
+          <b>Три тона — по тому, кто должен действовать:</b> accent «работает» (планирование / волна N из M / проверка), warning «ждёт человека» (<b>интервью (Э8)</b> / ждёт подтверждения / нужно решение — единственные стадии, где практика стоит без пользователя), muted «ждёт задачу» (итерация закрыта, режим жив). Пульс точки — только у «живых» стадий, у «ждёт задачу» точка статичная. <b>Интервью</b> — warning: команда задала вопросы и стоит до ответа; таймаут волны в этой стадии не тикает (ожидание человека — не зависание).
         </div>
         <div style="display:flex; gap:8px; margin-top:10px; align-items:center; flex-wrap:wrap;">
           <span style="font-size:var(--fs-xs); color:var(--c-text-muted); font-family:var(--font-mono);">чип «Авто»:</span>
@@ -425,6 +477,17 @@
             <div class="chat-row1">
               <span class="chat-status" style="background:var(--c-text-muted);"></span>
               <span class="chat-name">Экспорт трат в CSV</span>
+              <span class="ti-marker tone-wait" title="Командная реализация · интервью">
+                <svg class="ic" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                вопросы
+              </span>
+            </div>
+            <div class="chat-preview">Пара вопросов перед планом: формат дат в CSV?…</div>
+          </div>
+          <div class="chat-card">
+            <div class="chat-row1">
+              <span class="chat-status" style="background:var(--c-text-muted);"></span>
+              <span class="chat-name">Экспорт трат в CSV</span>
               <span class="ti-marker tone-wait" title="Командная реализация · нужно решение">
                 <svg class="ic" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
                 решение
@@ -462,36 +525,143 @@
           </div>
         </div>
         <div class="note">
-          <b>Короткие формы стадий для узкой строки:</b> планирование → «планирует», ждёт подтверждения → «согласование», волна N из M → «волна 2/3», нужно решение → «решение», проверка → «проверка», ждёт задачу → «ожидает». Полные формы — в тултипе и в бейдже композера. Тултип маркера = полная строка бейджа.
+          <b>Короткие формы стадий для узкой строки:</b> интервью → «вопросы», планирование → «планирует», ждёт подтверждения → «согласование», волна N из M → «волна 2/3», нужно решение → «решение», проверка → «проверка», ждёт задачу → «ожидает». Полные формы — в тултипе и в бейдже композера. Тултип маркера = полная строка бейджа.
         </div>
       </div>
     </div>
   </div>
 </div>
 
-<!-- ======================= 3. КАРТОЧКА ПЛАНА В ЛЕНТЕ ======================= -->
+<!-- ======================= 3. СТАДИЯ ИНТЕРВЬЮ (Э8) ======================= -->
 <div class="mockup-section">
   <div class="section-header">
-    <span class="section-title">3 · Карточка плана в ленте</span>
-    <span class="section-subtitle">образец — plan_review (ExitPlanMode), но accent-ось · чип исполнителя меняется на месте</span>
+    <span class="section-title">3 · Стадия интервью (Э8)</span>
+    <span class="section-subtitle">реплика координатора с аватаром · штатная ASK-карточка · селектор режима «План» залочен</span>
+  </div>
+  <div class="section-body">
+    <div class="frames">
+
+      <div class="frame" style="flex:1.3; min-width:480px;">
+        <div class="frame-caption"><span><b>Вопросы перед планом</b> — реплика от персоны + ASK-карточка с кнопками</span></div>
+        <div class="chat-feed">
+          <!-- Реплика координатора: обычный паттерн чата персоны — аватар слева -->
+          <div style="display:flex; gap:9px; align-items:flex-start;">
+            <span class="p-ava" style="width:28px; height:28px; font-size:11px; background:var(--persona-indigo); margin-top:1px;">АЛ</span>
+            <div style="flex:1; min-width:0; font-size:var(--fs-md); color:var(--c-text-primary); line-height:1.5;">Пара вопросов перед планом. Выберите варианты — или «Другое», чтобы ответить своими словами.</div>
+          </div>
+          <!-- ASK-карточка (AskQuestionView): конструкция существующая, нового не заводим -->
+          <div class="ask-card">
+            <div class="ask-head">
+              <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--c-accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+              Александр уточняет
+              <span class="ask-count">1 / 2</span>
+            </div>
+            <div class="ask-tabs">
+              <span class="ask-tab active"><span style="width:6px; height:6px; border-radius:50%; background:var(--c-accent);"></span>Формат дат</span>
+              <span class="ask-tab"><span style="width:6px; height:6px; border-radius:50%; background:var(--c-text-muted);"></span>Кэш выгрузки</span>
+            </div>
+            <div class="ask-q">Какой формат дат писать в CSV?</div>
+            <div class="ask-opt">
+              <svg class="ic" width="16" height="16" viewBox="0 0 16 16" fill="none" style="margin-top:1px;"><circle cx="8" cy="8" r="6.5" stroke="var(--c-text-muted)" stroke-width="1.5"/></svg>
+              <span class="o-text">ISO 8601<span class="o-desc">2026-07-30 — сортируется текстом, читается везде</span></span>
+              <span class="rec-chip">советуем</span>
+            </div>
+            <div class="ask-opt">
+              <svg class="ic" width="16" height="16" viewBox="0 0 16 16" fill="none" style="margin-top:1px;"><circle cx="8" cy="8" r="6.5" stroke="var(--c-text-muted)" stroke-width="1.5"/></svg>
+              <span class="o-text">Локальный<span class="o-desc">30.07.2026 — привычен в Excel, ломает сортировку</span></span>
+            </div>
+            <div class="ask-opt other">
+              <svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-top:1px;"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
+              <span class="o-text">Другое…</span>
+            </div>
+          </div>
+          <!-- Композер в стадии интервью: бейдж warning + селектор режима залочен на «План» -->
+          <div class="composer">
+            <div class="composer-badges">
+              <button class="ti-badge tone-wait" title="Команда задала вопросы и ждёт ответов — волны не тикают"><svg class="ic" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>Командная реализация · интервью<span class="ti-dot"></span></button>
+            </div>
+            <div class="composer-body">
+              <div class="composer-input">Можно и своими словами — обычное сообщение…</div>
+              <div class="composer-send"><svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg></div>
+            </div>
+            <div class="composer-controls">
+              <span class="tooltip-wrap">
+                <button class="mode-pill locked" title="Штаб планирует. Режим вернётся после согласования плана">
+                  <svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 12h6"/><path d="M9 16h6"/></svg>
+                  План
+                  <span class="lock"><svg class="ic" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>
+                </button>
+              </span>
+              <button class="mode-pill" title="Модель">
+                <svg class="ic" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.8a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3L12 3z"/></svg>
+                Sonnet 4.5
+                <span class="chev"><svg class="ic" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></span>
+              </button>
+            </div>
+          </div>
+          <!-- В продукте тултип — нативный title у залоченного селектора; на макете показан статичным пузырём -->
+          <div class="tooltip-bubble below" style="position:static; width:auto; max-width:300px;">Штаб планирует. Режим вернётся после согласования плана</div>
+        </div>
+      </div>
+
+      <div class="frame" style="flex:1; min-width:380px;">
+        <div class="frame-caption"><span><b>Путь «вопросов нет»</b> — фейковых вопросов не бывает</span></div>
+        <div class="chat-feed">
+          <div style="display:flex; gap:9px; align-items:flex-start;">
+            <span class="p-ava" style="width:28px; height:28px; font-size:11px; background:var(--persona-indigo); margin-top:1px;">АЛ</span>
+            <div style="flex:1; min-width:0; font-size:var(--fs-md); color:var(--c-text-primary); line-height:1.5;">Постановка ясна, вопросов нет — собрал план на допущениях. Проверьте их под планом: если что-то не так, «Изменить план» и напишите правку.</div>
+          </div>
+          <div class="composer">
+            <div class="composer-badges">
+              <button class="ti-badge tone-work"><svg class="ic" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>Командная реализация · планирование<span class="ti-dot"></span></button>
+            </div>
+            <div class="composer-body">
+              <div class="composer-input">Сообщение…</div>
+              <div class="composer-send"><svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg></div>
+            </div>
+            <div class="composer-controls">
+              <button class="mode-pill locked" title="Штаб планирует. Режим вернётся после согласования плана">
+                <svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 12h6"/><path d="M9 16h6"/></svg>
+                План
+                <span class="lock"><svg class="ic" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>
+              </button>
+            </div>
+          </div>
+        </div>
+        <div class="note">
+          <b>Лок селектора — на обеих стадиях</b> (интервью и планирование — один непрерывный план-режим): иконка <code>ClipboardList</code> + «План» + замок 10px вместо шеврона, <code>cursor: default</code>, hover-фона нет. Тултип — нативный <code>title</code> (на макете показан пузырём): «Штаб планирует. Режим вернётся после согласования плана». После «Запустить» селектор разблокируется и показывает прежний режим пользователя. Остальные контролы (модель, усилие) не блокируются.
+        </div>
+        <div class="note">
+          <b>ASK-карточка — существующая</b> (<code>AskQuestionView</code>), своих карточек вопросов не заводим. Отличия для интервью — контентные: до 4 вопросов раунд (вкладки), рекомендуемый вариант с чипом «советуем», свободный ответ — «Другое…» (label существующего «Свой вариант» подтягиваем под согласованные тексты Э8). Максимум 2 раунда на вводную. Вопросы текстом-простынёй — запрещены протоколом.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ======================= 4. КАРТОЧКА ПЛАНА В ЛЕНТЕ ======================= -->
+<div class="mockup-section">
+  <div class="section-header">
+    <span class="section-title">4 · Карточка плана в ленте</span>
+    <span class="section-subtitle">шапка с автором (Э8) · v1 с «Допущениями» · v2 с «Что изменилось» · чип исполнителя меняется на месте</span>
   </div>
   <div class="section-body">
     <div class="frames">
 
       <div class="frame" style="flex:1.2; min-width:480px;">
-        <div class="frame-caption"><span><b>На подтверждении</b> — авто-волны включены (примечание под кнопками)</span></div>
+        <div class="frame-caption"><span><b>На подтверждении, путь «вопросов нет»</b> — v1 с блоком «Допущения»</span></div>
         <div class="chat-feed">
           <div class="plan-card">
-            <div class="plan-head">
-              <span class="plan-icon">
-                <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-              </span>
+            <div class="sh-head">
+              <span class="p-ava" style="width:28px; height:28px; font-size:11px; background:var(--persona-indigo);">АЛ</span>
               <div style="flex:1; min-width:0;">
-                <div class="plan-title">План командной реализации</div>
-                <div class="plan-sub">5 под-задач · 2 волны · 3 исполнителя</div>
+                <div class="sh-byline"><span class="sh-name">Александр</span><span class="sh-role">· планировщик</span></div>
+                <div class="plan-title" style="margin-top:1px;">План командной реализации</div>
               </div>
+              <span class="sh-kind" style="color:var(--c-accent);"><svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>
               <span class="plan-badge">на подтверждении</span>
             </div>
+            <div class="plan-sub" style="margin:2px 0 0 37px;">План v1 · 5 под-задач · 2 волны · 3 исполнителя</div>
             <div class="plan-body">
               <div class="wave-label">Волна 1 · параллельно <span class="wave-line"></span></div>
               <div class="subtask">
@@ -551,6 +721,13 @@
                 <div class="subtask-why">Финальный прогон перед отчётом</div>
               </div>
             </div>
+            <div class="plan-annot" style="margin:10px 0;">
+              <div class="plan-annot-label">Допущения — вопросов не было, проверьте</div>
+              <div class="assump-row"><span class="assump-dot"></span>Разделитель — запятая, экранирование по RFC 4180 (Excel открывает без танцев)</div>
+              <div class="assump-row"><span class="assump-dot"></span>Выгружается текущий фильтр экрана трат, а не весь журнал</div>
+              <div class="assump-row"><span class="assump-dot"></span>Имя файла — по дате выгрузки: <code style="font-family:var(--font-mono); font-size:var(--fs-xs); background:var(--c-bg-selected); padding:1px 5px; border-radius:var(--r-sm);">spend-2026-07-30.csv</code></div>
+              <div class="assump-hint">Не совпадает с ожиданиями — «Изменить план» и напишите правку, команда пересоберёт карточку.</div>
+            </div>
             <div class="plan-actions">
               <button class="btn btn-primary">
                 <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 3 20 12 6 21 6 3"/></svg>
@@ -587,13 +764,119 @@
     </div>
 
     <div class="frames" style="margin-top:16px;">
+      <div class="frame" style="flex:1.2; min-width:480px;">
+        <div class="frame-caption"><span><b>План v2 после ответов интервью</b> — блок «Что изменилось» над телом плана (Э8)</span></div>
+        <div class="chat-feed">
+          <div class="plan-card">
+            <div class="sh-head">
+              <span class="p-ava" style="width:28px; height:28px; font-size:11px; background:var(--persona-indigo);">АЛ</span>
+              <div style="flex:1; min-width:0;">
+                <div class="sh-byline"><span class="sh-name">Александр</span><span class="sh-role">· планировщик</span></div>
+                <div class="plan-title" style="margin-top:1px;">План командной реализации</div>
+              </div>
+              <span class="sh-kind" style="color:var(--c-accent);"><svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>
+              <span class="plan-badge">на подтверждении</span>
+            </div>
+            <div class="plan-sub" style="margin:2px 0 0 37px;"><b>План v2 · обновлён после уточнений</b> · 5 под-задач · 2 волны · 3 исполнителя</div>
+            <div class="plan-annot" style="margin:12px 0 0;">
+              <div class="plan-annot-label">Что изменилось в v2 — по вашим ответам</div>
+              <div class="diff-row"><span class="diff-sign add">+</span><span><b>Добавлена:</b> «Миграция формата дат в выгрузке» — Денис, волна 1 (вы выбрали ISO 8601)</span></div>
+              <div class="diff-row"><span class="diff-sign del">−</span><span><b>Убрана:</b> «Кэш выгрузки» — по вашему ответу кэш не нужен</span></div>
+              <div class="diff-row"><span class="diff-sign move">→</span><span><b>Перенесена:</b> «Кнопка „Выгрузить CSV“» — из волны 1 в волну 2, после миграции формата</span></div>
+            </div>
+            <div class="plan-body" style="margin-top:10px;">
+              <div class="wave-label">Волна 1 · параллельно <span class="wave-line"></span></div>
+              <div class="subtask">
+                <div class="subtask-row">
+                  <span class="subtask-name">Миграция формата дат в выгрузке (ISO 8601)</span>
+                  <button class="exec-chip" title="Сменить исполнителя"><span class="p-dot" style="background:var(--persona-blue);"></span>Денис<span class="p-chev"><svg class="ic" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></span></button>
+                </div>
+                <div class="subtask-files">Services/Spend/SpendExport.cs</div>
+                <div class="subtask-why">Новая задача v2 — его зона, рядом с его эндпоинтом</div>
+              </div>
+              <div class="subtask">
+                <div class="subtask-row">
+                  <span class="subtask-name">Модель экспорта и эндпоинт GET /api/spend/export</span>
+                  <button class="exec-chip" title="Сменить исполнителя"><span class="p-dot" style="background:var(--persona-blue);"></span>Денис<span class="p-chev"><svg class="ic" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></span></button>
+                </div>
+                <div class="subtask-files">backend/Controllers/SpendController.cs · Services/Spend/SpendStore.cs</div>
+                <div class="subtask-why">Без изменений из v1</div>
+              </div>
+              <div class="wave-label">Волна 2 · после первой <span class="wave-line"></span></div>
+              <div class="subtask">
+                <div class="subtask-row">
+                  <span class="subtask-name">Кнопка «Выгрузить CSV» и диалог на экране трат</span>
+                  <button class="exec-chip" title="Сменить исполнителя"><span class="p-dot" style="background:var(--persona-orange);"></span>Кира<span class="p-chev"><svg class="ic" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></span></button>
+                </div>
+                <div class="subtask-files">frontend/src/features/spend/SpendScreen.tsx · spend/exportCsv.ts</div>
+                <div class="subtask-why">Перенесена из волны 1 — зависит от формата дат</div>
+              </div>
+              <div class="subtask">
+                <div class="subtask-row">
+                  <span class="subtask-name">Тесты формата CSV и эндпоинта</span>
+                  <button class="exec-chip" title="Сменить исполнителя"><span class="p-dot" style="background:var(--persona-blue);"></span>Денис<span class="p-chev"><svg class="ic" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></span></button>
+                </div>
+                <div class="subtask-files">backend/ClaudeHomeServer.Tests/SpendExportTests.cs</div>
+                <div class="subtask-why">Без изменений из v1</div>
+              </div>
+            </div>
+            <div class="plan-actions" style="margin-top:12px;">
+              <button class="btn btn-primary">
+                <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+                Запустить
+              </button>
+              <button class="btn btn-secondary">Изменить план</button>
+              <button class="btn btn-ghost">Отменить</button>
+            </div>
+          </div>
+        </div>
+        <div class="note">
+          <b>Подтверждение vN обязательно даже при включённых авто-волнах</b> — авто покрывает волны по неизменному плану, но не смену самого плана. «Что изменилось» стоит <b>над</b> телом: человек уже читал v1, подтверждает он именно дельту (знаки: <span style="color:var(--c-success-text); font-weight:700;">+</span> добавлена, <span style="color:var(--c-danger-text); font-weight:700;">−</span> убрана, <span style="color:var(--c-warning-text); font-weight:700;">→</span> перенесена/изменена — diff-конвенция). Тело плана v2 отражает правки; строки «Без изменений из v1» серым — чтобы дельта не тонула. Волна стартует только по подтверждённой последней версии.
+        </div>
+      </div>
+
+      <div class="frame" style="flex:1; min-width:380px;">
+        <div class="frame-caption"><span><b>Шапка карточек штаба — единый паттерн (Э8)</b></span></div>
+        <div class="chat-feed">
+          <div class="plan-card" style="padding:12px 14px;">
+            <div class="sh-head">
+              <span class="p-ava" style="width:28px; height:28px; font-size:11px; background:var(--persona-indigo);">АЛ</span>
+              <div style="flex:1; min-width:0;">
+                <div class="sh-byline"><span class="sh-name">Александр</span><span class="sh-role">· планировщик</span></div>
+                <div class="plan-title" style="margin-top:1px;">План командной реализации</div>
+              </div>
+              <span class="sh-kind" style="color:var(--c-accent);"><svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>
+            </div>
+          </div>
+          <div class="esc-card">
+            <div class="sh-head">
+              <span class="p-ava" style="width:28px; height:28px; font-size:11px; background:var(--persona-indigo);">АЛ</span>
+              <div style="flex:1; min-width:0;">
+                <div class="sh-byline"><span class="sh-name">Александр</span><span class="sh-role">· координатор</span></div>
+                <div class="esc-title" style="margin-top:1px;">Исполнитель застрял</div>
+              </div>
+              <span class="sh-kind" style="color:var(--c-warning-text);"><svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg></span>
+            </div>
+          </div>
+        </div>
+        <div class="note">
+          <b>Одинаково в карточке плана, эскалациях, сводках и бюджете:</b> аватар 28 (тот же <code>PersonaAvatar</code>, что у реплик в ленте — фото или инициалы на цвете персоны) → имя 12/700 + роль 11 muted («· планировщик» у плана, «· координатор» у остальных) → заголовок карточки. Kind-иконка 16px уходит на правый край: цветовая ось теперь её несёт (accent у плана, warning у эскалации, success у сводки). <b>Автор фиксируется в момент публикации</b> — после смены координатора старые карточки сохраняют исходного автора. У штаба нет персоны — обезличенный вариант (иконка, как раньше) остаётся фолбэком.
+        </div>
+        <div class="note">
+          <b>Подзаголовок с версией:</b> «План vN» — всегда; «· обновлён после уточнений» — только у v2+; дальше счётчики «5 под-задач · 2 волны · 3 исполнителя». На узкой ширине обрезается ellipsis'ом с полным текстом в <code>title</code>.
+        </div>
+      </div>
+    </div>
+
+    <div class="frames" style="margin-top:16px;">
       <div class="frame" style="flex:1; min-width:380px;">
         <div class="frame-caption"><span><b>Решённые состояния</b> — запущен / отменён (как у plan_review)</span></div>
         <div class="chat-feed">
           <div class="plan-resolved ok">
             <div class="plan-resolved-line">
               <svg class="ic" width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="8" fill="var(--c-success)"/><path d="M4.5 8.2l2.2 2.2 4.8-4.8" stroke="var(--c-on-accent)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              План запущен — идёт волна 1 из 2
+              План v2 запущен — идёт волна 1 из 2
+              <span class="sh-mini"><span class="p-ava" style="width:16px; height:16px; font-size:7px; background:var(--persona-indigo);">АЛ</span>Александр</span>
             </div>
             <button class="plan-disclosure"><span style="display:inline-block;">▸</span> Показать план</button>
           </div>
@@ -601,25 +884,28 @@
             <div class="plan-resolved-line">
               <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--c-text-muted)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
               План отменён
+              <span class="sh-mini"><span class="p-ava" style="width:16px; height:16px; font-size:7px; background:var(--persona-indigo);">АЛ</span>Александр</span>
             </div>
             <button class="plan-disclosure"><span style="display:inline-block;">▸</span> Показать план</button>
           </div>
         </div>
-        <div class="note">Решённая карточка остаётся в ленте референсом: тело плана уходит под disclosure «Показать план», как в <code>CollapsedPlanBody</code>.</div>
+        <div class="note">Решённая карточка остаётся в ленте референсом: тело плана уходит под disclosure «Показать план», как в <code>CollapsedPlanBody</code>. Мини-подпись автора (аватар 16 + имя) сохраняется и здесь — после смены координатора видно, чей это был план.</div>
       </div>
 
       <div class="frame" style="flex:1.4; min-width:480px;">
         <div class="frame-caption"><span><b>Краевые случаи</b> — длинные названия, много файлов, 12 под-задач</span></div>
         <div class="chat-feed">
           <div class="plan-card">
-            <div class="plan-head">
-              <span class="plan-icon"><svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>
+            <div class="sh-head">
+              <span class="p-ava" style="width:28px; height:28px; font-size:11px; background:var(--persona-indigo);">АЛ</span>
               <div style="flex:1; min-width:0;">
-                <div class="plan-title">План командной реализации</div>
-                <div class="plan-sub">12 под-задач · 4 волны · 5 исполнителей</div>
+                <div class="sh-byline"><span class="sh-name">Александр</span><span class="sh-role">· планировщик</span></div>
+                <div class="plan-title" style="margin-top:1px;">План командной реализации</div>
               </div>
+              <span class="sh-kind" style="color:var(--c-accent);"><svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>
               <span class="plan-badge">на подтверждении</span>
             </div>
+            <div class="plan-sub" style="margin:2px 0 0 37px;">План v1 · 12 под-задач · 4 волны · 5 исполнителей</div>
             <div class="plan-body" style="max-height:220px;">
               <div class="wave-label">Волна 1 · параллельно <span class="wave-line"></span></div>
               <div class="subtask">
@@ -662,11 +948,11 @@
   </div>
 </div>
 
-<!-- ======================= 4. КАРТОЧКИ ЭСКАЛАЦИИ ======================= -->
+<!-- ======================= 5. КАРТОЧКИ ЭСКАЛАЦИИ ======================= -->
 <div class="mockup-section">
   <div class="section-header">
-    <span class="section-title">4 · Карточки эскалации</span>
-    <span class="section-subtitle">единый шаблон: warning borderLeft · причина + суть одной строкой + 2–3 кнопки · тексты из таблицы плана</span>
+    <span class="section-title">5 · Карточки эскалации</span>
+    <span class="section-subtitle">шапка с автором (Э8): аватар + имя + «· координатор», kind-иконка справа · warning borderLeft · 2–3 кнопки</span>
   </div>
   <div class="section-body">
     <div class="frames">
@@ -674,9 +960,13 @@
       <div class="frame" style="flex:1; min-width:400px;">
         <div class="frame-caption"><span><b>1 · Исполнитель застрял</b> (блокер)</span></div>
         <div class="esc-card">
-          <div class="esc-head">
-            <span class="esc-icon"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg></span>
-            <div class="esc-title">Исполнитель застрял</div>
+          <div class="sh-head">
+            <span class="p-ava" style="width:28px; height:28px; font-size:11px; background:var(--persona-indigo);">АЛ</span>
+            <div style="flex:1; min-width:0;">
+              <div class="sh-byline"><span class="sh-name">Александр</span><span class="sh-role">· координатор</span></div>
+              <div class="esc-title" style="margin-top:1px;">Исполнитель застрял</div>
+            </div>
+            <span class="sh-kind" style="color:var(--c-warning-text);"><svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg></span>
           </div>
           <div class="esc-body">Кира: нет доступа к продовой базе трат — выгрузку проверить не на чём. Задача «Кнопка „Выгрузить CSV“» остановлена.</div>
           <div class="esc-actions">
@@ -690,9 +980,13 @@
       <div class="frame" style="flex:1; min-width:400px;">
         <div class="frame-caption"><span><b>1а · «Ответить» раскрывает поле</b> — ответ обычным сообщением</span></div>
         <div class="esc-card">
-          <div class="esc-head">
-            <span class="esc-icon"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg></span>
-            <div class="esc-title">Исполнитель застрял</div>
+          <div class="sh-head">
+            <span class="p-ava" style="width:28px; height:28px; font-size:11px; background:var(--persona-indigo);">АЛ</span>
+            <div style="flex:1; min-width:0;">
+              <div class="sh-byline"><span class="sh-name">Александр</span><span class="sh-role">· координатор</span></div>
+              <div class="esc-title" style="margin-top:1px;">Исполнитель застрял</div>
+            </div>
+            <span class="sh-kind" style="color:var(--c-warning-text);"><svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg></span>
           </div>
           <div class="esc-body">Кира: нет доступа к продовой базе трат — выгрузку проверить не на чём.</div>
           <div class="esc-reply">
@@ -708,9 +1002,13 @@
       <div class="frame" style="flex:1; min-width:400px;">
         <div class="frame-caption"><span><b>2 · Двойной провал</b></span></div>
         <div class="esc-card">
-          <div class="esc-head">
-            <span class="esc-icon"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg></span>
-            <div class="esc-title">Задача «Тесты формата CSV» не удалась дважды</div>
+          <div class="sh-head">
+            <span class="p-ava" style="width:28px; height:28px; font-size:11px; background:var(--persona-indigo);">АЛ</span>
+            <div style="flex:1; min-width:0;">
+              <div class="sh-byline"><span class="sh-name">Александр</span><span class="sh-role">· координатор</span></div>
+              <div class="esc-title" style="margin-top:1px;">Задача «Тесты формата CSV» не удалась дважды</div>
+            </div>
+            <span class="sh-kind" style="color:var(--c-warning-text);"><svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg></span>
           </div>
           <div class="esc-body">Тесты падают на кодировке: выгрузка в UTF-8 BOM ломает сравнение эталона. Одна перевыдача уже была.</div>
           <div class="esc-actions">
@@ -724,9 +1022,13 @@
       <div class="frame" style="flex:1; min-width:400px;">
         <div class="frame-caption"><span><b>3 · Выход за план</b></span></div>
         <div class="esc-card">
-          <div class="esc-head">
-            <span class="esc-icon"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg></span>
-            <div class="esc-title">Работа выходит за план</div>
+          <div class="sh-head">
+            <span class="p-ava" style="width:28px; height:28px; font-size:11px; background:var(--persona-indigo);">АЛ</span>
+            <div style="flex:1; min-width:0;">
+              <div class="sh-byline"><span class="sh-name">Александр</span><span class="sh-role">· координатор</span></div>
+              <div class="esc-title" style="margin-top:1px;">Работа выходит за план</div>
+            </div>
+            <span class="sh-kind" style="color:var(--c-warning-text);"><svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg></span>
           </div>
           <div class="esc-body">Для выгрузки больших периодов нужна правка <code>SpendStore</code> — файла нет во владении задачи, а объём вырос с 2 до 5 файлов.</div>
           <div class="esc-actions">
@@ -740,9 +1042,13 @@
       <div class="frame" style="flex:1; min-width:400px;">
         <div class="frame-caption"><span><b>4 · Красная проверка</b></span></div>
         <div class="esc-card">
-          <div class="esc-head">
-            <span class="esc-icon"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg></span>
-            <div class="esc-title">Сборка/тесты не проходят</div>
+          <div class="sh-head">
+            <span class="p-ava" style="width:28px; height:28px; font-size:11px; background:var(--persona-indigo);">АЛ</span>
+            <div style="flex:1; min-width:0;">
+              <div class="sh-byline"><span class="sh-name">Александр</span><span class="sh-role">· координатор</span></div>
+              <div class="esc-title" style="margin-top:1px;">Сборка/тесты не проходят</div>
+            </div>
+            <span class="sh-kind" style="color:var(--c-warning-text);"><svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg></span>
           </div>
           <div class="esc-body">После двух попыток починки: <code>SpendExportTests</code> — 2 падения из 14. Остальное зелёное.</div>
           <div class="esc-actions">
@@ -755,9 +1061,13 @@
       <div class="frame" style="flex:1; min-width:400px;">
         <div class="frame-caption"><span><b>5 · Продуктовая развилка</b> — вопрос координатора с вариантами</span></div>
         <div class="esc-card">
-          <div class="esc-head">
-            <span class="esc-icon"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg></span>
-            <div class="esc-title">Нужно ваше решение</div>
+          <div class="sh-head">
+            <span class="p-ava" style="width:28px; height:28px; font-size:11px; background:var(--persona-indigo);">АЛ</span>
+            <div style="flex:1; min-width:0;">
+              <div class="sh-byline"><span class="sh-name">Александр</span><span class="sh-role">· координатор</span></div>
+              <div class="esc-title" style="margin-top:1px;">Нужно ваше решение</div>
+            </div>
+            <span class="sh-kind" style="color:var(--c-warning-text);"><svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg></span>
           </div>
           <div class="esc-body">Оба варианта рабочие. Как выгружать: файлом в загрузки браузера или документом в раздел «Файлы» проекта?</div>
           <div class="esc-actions">
@@ -771,9 +1081,13 @@
       <div class="frame" style="flex:1; min-width:400px;">
         <div class="frame-caption"><span><b>6 · Бюджет исчерпан</b></span></div>
         <div class="esc-card">
-          <div class="esc-head">
-            <span class="esc-icon"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg></span>
-            <div class="esc-title">Бюджет итерации исчерпан</div>
+          <div class="sh-head">
+            <span class="p-ava" style="width:28px; height:28px; font-size:11px; background:var(--persona-indigo);">АЛ</span>
+            <div style="flex:1; min-width:0;">
+              <div class="sh-byline"><span class="sh-name">Александр</span><span class="sh-role">· координатор</span></div>
+              <div class="esc-title" style="margin-top:1px;">Бюджет итерации исчерпан</div>
+            </div>
+            <span class="sh-kind" style="color:var(--c-warning-text);"><svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg></span>
           </div>
           <div class="esc-body">Израсходовано: 12 задач, 4 волны. Две под-задачи волны 4 остались незапущенными.</div>
           <div class="esc-actions">
@@ -786,9 +1100,13 @@
       <div class="frame" style="flex:1; min-width:400px;">
         <div class="frame-caption"><span><b>7 · Волна зависла</b></span></div>
         <div class="esc-card">
-          <div class="esc-head">
-            <span class="esc-icon"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></span>
-            <div class="esc-title">Волна не двигается</div>
+          <div class="sh-head">
+            <span class="p-ava" style="width:28px; height:28px; font-size:11px; background:var(--persona-indigo);">АЛ</span>
+            <div style="flex:1; min-width:0;">
+              <div class="sh-byline"><span class="sh-name">Александр</span><span class="sh-role">· координатор</span></div>
+              <div class="esc-title" style="margin-top:1px;">Волна не двигается</div>
+            </div>
+            <span class="sh-kind" style="color:var(--c-warning-text);"><svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></span>
           </div>
           <div class="esc-body">Задача «Ревью формата и правки» молчит дольше 15 минут — процесс жив, прогресса нет.</div>
           <div class="esc-actions">
@@ -802,9 +1120,13 @@
       <div class="frame" style="flex:1; min-width:400px;">
         <div class="frame-caption"><span><b>8 · Стоп пользователя</b> — пауза, а не вопрос</span></div>
         <div class="esc-card" style="border-left-color:var(--c-text-muted);">
-          <div class="esc-head">
-            <span class="esc-icon" style="background:var(--c-bg-selected); color:var(--c-text-secondary);"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg></span>
-            <div class="esc-title">Остановлено по вашей команде</div>
+          <div class="sh-head">
+            <span class="p-ava" style="width:28px; height:28px; font-size:11px; background:var(--persona-indigo);">АЛ</span>
+            <div style="flex:1; min-width:0;">
+              <div class="sh-byline"><span class="sh-name">Александр</span><span class="sh-role">· координатор</span></div>
+              <div class="esc-title" style="margin-top:1px;">Остановлено по вашей команде</div>
+            </div>
+            <span class="sh-kind" style="color:var(--c-text-muted);"><svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg></span>
           </div>
           <div class="esc-body">Текущие исполнители дорабатывают, новые не стартуют.</div>
           <div class="esc-actions">
@@ -815,28 +1137,36 @@
       </div>
 
       <div class="frame">
-        <div class="frame-caption"><span><b>Push рядом с карточкой</b> — когда человека нет в чате</span></div>
+        <div class="frame-caption"><span><b>Push — от имени персоны (Э8)</b> — когда человека нет в чате</span></div>
         <div class="push">
-          <span class="push-icon"><svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>
+          <span class="p-ava" style="width:30px; height:30px; font-size:12px; background:var(--persona-indigo);">АЛ</span>
           <div style="min-width:0;">
-            <div class="push-title">Команда ждёт вашего решения</div>
+            <div class="push-title">Александр: нужно ваше решение</div>
             <div class="push-body">Исполнитель застрял: нет доступа к продовой базе трат</div>
           </div>
           <span class="push-time">сейчас</span>
         </div>
+        <div class="push" style="margin-top:10px;">
+          <span class="p-ava" style="width:30px; height:30px; font-size:12px; background:var(--persona-indigo);">АЛ</span>
+          <div style="min-width:0;">
+            <div class="push-title">Александр ждёт ответов по задаче</div>
+            <div class="push-body">Пара вопросов перед планом: формат дат в CSV?</div>
+          </div>
+          <span class="push-time">2 мин</span>
+        </div>
         <div class="note">
-          Каждая эскалация = карточка в ленте + системное уведомление + web push. Заголовок push всегда «Команда ждёт вашего решения», тело — суть одной строкой. Стоп пользователя — единственная карточка без warning: это пауза по воле человека, поэтому muted-ось.
+          Каждая эскалация = карточка в ленте + системное уведомление + web push. <b>Push и уведомления — от имени персоны (Э8):</b> «{Имя}: нужно ваше решение», «{Имя} ждёт ответов по задаче»; иконка — аватар персоны (как <code>NotificationAvatar</code>). Обезличенное «Команда ждёт вашего решения» — фолбэк, если у штаба вдруг нет персоны. Стоп пользователя — единственная карточка без warning: это пауза по воле человека, поэтому muted-ось.
         </div>
       </div>
     </div>
   </div>
 </div>
 
-<!-- ======================= 5. СВОДКА ВОЛНЫ ======================= -->
+<!-- ======================= 6. СВОДКА ВОЛНЫ ======================= -->
 <div class="mockup-section">
   <div class="section-header">
-    <span class="section-title">5 · Сводка волны</span>
-    <span class="section-subtitle">при авто — строка без кнопок · без авто — карточка с решением</span>
+    <span class="section-title">6 · Сводка волны</span>
+    <span class="section-subtitle">при авто — строка без кнопок (журнал, без шапки) · без авто — карточка с решением и шапкой автора</span>
   </div>
   <div class="section-body">
     <div class="frames">
@@ -859,9 +1189,13 @@
         <div class="frame-caption"><span><b>Авто выключен</b> — карточка с решением после каждой волны</span></div>
         <div class="chat-feed">
           <div class="wave-card">
-            <div class="esc-head">
-              <span class="esc-icon" style="background:var(--c-success-bg); color:var(--c-success-text);"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>
-              <div class="esc-title">Волна 1 закрыта: 3 из 3. Запустить волну 2?</div>
+            <div class="sh-head">
+              <span class="p-ava" style="width:28px; height:28px; font-size:11px; background:var(--persona-indigo);">АЛ</span>
+              <div style="flex:1; min-width:0;">
+                <div class="sh-byline"><span class="sh-name">Александр</span><span class="sh-role">· координатор</span></div>
+                <div class="esc-title" style="margin-top:1px;">Волна 1 закрыта: 3 из 3. Запустить волну 2?</div>
+              </div>
+              <span class="sh-kind" style="color:var(--c-success-text);"><svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>
             </div>
             <div class="esc-body">В волне 2 — две под-задачи: «Ревью формата и правки», «Итоговая проверка: сборка + тесты».</div>
             <div class="esc-actions">
@@ -871,16 +1205,16 @@
             </div>
           </div>
         </div>
-        <div class="note">Та же конструкция, что карточка эскалации, но на success-оси: волна закрылась штатно, проблемы нет — решение «продолжать или нет».</div>
+        <div class="note">Та же конструкция, что карточка эскалации, но на success-оси: волна закрылась штатно, проблемы нет — решение «продолжать или нет». Это карточка-решение от координатора — шапка с автором на месте. Авто-строка слева — журнал работы, а не обращение к человеку, поэтому шапки у неё нет.</div>
       </div>
     </div>
   </div>
 </div>
 
-<!-- ======================= 6. ОЖИДАНИЕ ВВОДНОЙ ======================= -->
+<!-- ======================= 7. ОЖИДАНИЕ ВВОДНОЙ ======================= -->
 <div class="mockup-section">
   <div class="section-header">
-    <span class="section-title">6 · Итог итерации и ожидание вводной</span>
+    <span class="section-title">7 · Итог итерации и ожидание вводной</span>
     <span class="section-subtitle">режим не выключается — бейдж переходит в «ждёт задачу»</span>
   </div>
   <div class="section-body">
@@ -889,11 +1223,15 @@
         <div class="frame-caption"><span><b>Проверка зелёная</b></span></div>
         <div class="chat-feed">
           <div class="final-card ok">
-            <div class="final-line">
-              <svg class="ic" width="16" height="16" viewBox="0 0 16 16" fill="none" style="margin-top:2px;"><circle cx="8" cy="8" r="8" fill="var(--c-success)"/><path d="M4.5 8.2l2.2 2.2 4.8-4.8" stroke="var(--c-on-accent)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              Итерация завершена: 5 задач, 3 исполнителя, проверка пройдена
+            <div class="sh-head">
+              <span class="p-ava" style="width:28px; height:28px; font-size:11px; background:var(--persona-indigo);">АЛ</span>
+              <div style="flex:1; min-width:0;">
+                <div class="sh-byline"><span class="sh-name">Александр</span><span class="sh-role">· координатор</span></div>
+                <div class="final-line" style="margin-top:1px;">Итерация завершена: 5 задач, 3 исполнителя, проверка пройдена</div>
+              </div>
+              <span class="sh-kind" style="color:var(--c-success-text);"><svg class="ic" width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="8" fill="var(--c-success)"/><path d="M4.5 8.2l2.2 2.2 4.8-4.8" stroke="var(--c-on-accent)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
             </div>
-            <div class="final-hint">Напишите, что делать дальше — команда возьмёт в работу. Режим остаётся включённым.</div>
+            <div class="final-hint" style="margin-left:37px;">Напишите, что делать дальше — команда возьмёт в работу. Режим остаётся включённым.</div>
           </div>
           <div class="composer">
             <div class="composer-badges">
@@ -912,11 +1250,15 @@
         <div class="frame-caption"><span><b>Проверка красная</b> — итерация закрыта с замечаниями</span></div>
         <div class="chat-feed">
           <div class="final-card bad">
-            <div class="final-line">
-              <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-top:2px;"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg>
-              Итерация завершена: 5 задач, 3 исполнителя, проверка не прошла: осталось 2 замечания
+            <div class="sh-head">
+              <span class="p-ava" style="width:28px; height:28px; font-size:11px; background:var(--persona-indigo);">АЛ</span>
+              <div style="flex:1; min-width:0;">
+                <div class="sh-byline"><span class="sh-name">Александр</span><span class="sh-role">· координатор</span></div>
+                <div class="final-line" style="margin-top:1px;">Итерация завершена: 5 задач, 3 исполнителя, проверка не прошла: осталось 2 замечания</div>
+              </div>
+              <span class="sh-kind" style="color:var(--c-warning-text);"><svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg></span>
             </div>
-            <div class="final-hint">Напишите, что делать дальше — команда возьмёт в работу. Режим остаётся включённым.</div>
+            <div class="final-hint" style="margin-left:37px;">Напишите, что делать дальше — команда возьмёт в работу. Режим остаётся включённым.</div>
           </div>
         </div>
         <div class="note">
@@ -927,10 +1269,10 @@
   </div>
 </div>
 
-<!-- ======================= 7. КАРТОЧКИ МЕХАНИК В ГРУППЕ «СДЕЛАТЬ» ======================= -->
+<!-- ======================= 8. КАРТОЧКИ МЕХАНИК В ГРУППЕ «СДЕЛАТЬ» ======================= -->
 <div class="mockup-section">
   <div class="section-header">
-    <span class="section-title">7 · Карточки механик в TeamDrawer</span>
+    <span class="section-title">8 · Карточки механик в TeamDrawer</span>
     <span class="section-subtitle">«Командная реализация» (режим) и «Командный спринт» (бывшая быстрая) — рядом, читаются как разные инструменты</span>
   </div>
   <div class="section-body">
@@ -991,10 +1333,10 @@
   </div>
 </div>
 
-<!-- ======================= 8. МОБИЛЬНАЯ РАСКЛАДКА ======================= -->
+<!-- ======================= 9. МОБИЛЬНАЯ РАСКЛАДКА ======================= -->
 <div class="mockup-section">
   <div class="section-header">
-    <span class="section-title">8 · Мобильная раскладка (390px)</span>
+    <span class="section-title">9 · Мобильная раскладка (390px)</span>
     <span class="section-subtitle">бейдж 26px · карточки на всю ширину · тач-цели ≥ 40px у кнопок</span>
   </div>
   <div class="section-body">
@@ -1026,13 +1368,14 @@
           <div class="mob-head">390 · plan card</div>
           <div class="mob-body">
             <div class="plan-card" style="padding:12px;">
-              <div class="plan-head">
-                <span class="plan-icon"><svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>
+              <div class="sh-head">
+                <span class="p-ava" style="width:28px; height:28px; font-size:11px; background:var(--persona-indigo);">АЛ</span>
                 <div style="flex:1; min-width:0;">
-                  <div class="plan-title">План командной реализации</div>
-                  <div class="plan-sub">5 под-задач · 2 волны · 3 исполнителя</div>
+                  <div class="sh-byline"><span class="sh-name">Александр</span><span class="sh-role">· планировщик</span></div>
+                  <div class="plan-title" style="margin-top:1px;">План командной реализации</div>
                 </div>
               </div>
+              <div class="plan-sub" style="margin:2px 0 0 37px;" title="План v1 · 5 под-задач · 2 волны · 3 исполнителя">План v1 · 5 под-задач · 2 волны</div>
               <div class="plan-body" style="max-height:200px;">
                 <div class="wave-label">Волна 1 <span class="wave-line"></span></div>
                 <div class="subtask">
@@ -1050,6 +1393,11 @@
                   <div class="subtask-files">SpendScreen.tsx · exportCsv.ts</div>
                 </div>
               </div>
+              <div class="plan-annot" style="margin:10px 0;">
+                <div class="plan-annot-label">Допущения</div>
+                <div class="assump-row"><span class="assump-dot"></span>Разделитель — запятая, RFC 4180</div>
+                <div class="assump-row"><span class="assump-dot"></span>Выгружается текущий фильтр трат</div>
+              </div>
               <div class="plan-actions" style="flex-wrap:wrap;">
                 <button class="btn btn-primary" style="min-height:44px;"><svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 3 20 12 6 21 6 3"/></svg>Запустить</button>
                 <button class="btn btn-secondary" style="min-height:44px;">Изменить</button>
@@ -1058,7 +1406,7 @@
             </div>
           </div>
         </div>
-        <div class="note">Бейдж «на подтверждении» на узкой ширине прячем (есть бейдж режима в композере). Чип исполнителя — 26px (тач). «Отменить» уезжает в перенос строки кнопок. Выбор исполнителя — шторкой со списком команды, тач-цели 40px.</div>
+        <div class="note">Бейдж «на подтверждении» на узкой ширине прячем (есть бейдж режима в композере), kind-иконка тоже — остаются аватар, имя и заголовок. Подзаголовок версии ужат до «План v1 · 5 под-задач · 2 волны», полный — в <code>title</code>. Чип исполнителя — 26px (тач). «Отменить» уезжает в перенос строки кнопок. Выбор исполнителя — шторкой со списком команды, тач-цели 40px. «Допущения» на мобиле — до 2 строк, остальное в развёрнутом теле.</div>
       </div>
 
       <div class="frame">
@@ -1067,9 +1415,13 @@
           <div class="mob-head">390 · escalation / chats</div>
           <div class="mob-body">
             <div class="esc-card">
-              <div class="esc-head">
-                <span class="esc-icon"><svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg></span>
-                <div class="esc-title">Исполнитель застрял</div>
+              <div class="sh-head">
+                <span class="p-ava" style="width:28px; height:28px; font-size:11px; background:var(--persona-indigo);">АЛ</span>
+                <div style="flex:1; min-width:0;">
+                  <div class="sh-byline"><span class="sh-name">Александр</span><span class="sh-role">· координатор</span></div>
+                  <div class="esc-title" style="margin-top:1px;">Исполнитель застрял</div>
+                </div>
+                <span class="sh-kind" style="color:var(--c-warning-text);"><svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg></span>
               </div>
               <div class="esc-body">Кира: нет доступа к продовой базе трат — выгрузку проверить не на чём.</div>
               <div class="esc-actions">
@@ -1088,6 +1440,56 @@
           </div>
         </div>
         <div class="note">Третья кнопка эскалации («Снять задачу») переносится на вторую строку — кнопки flex-wrap. Push приходит и когда PWA в фоне — это основной канал возврата в штаб с мобилы.</div>
+      </div>
+
+      <div class="frame">
+        <div class="frame-caption"><span><b>Интервью (Э8)</b> — ASK + залоченный селектор (icon-only)</span></div>
+        <div class="mob-frame">
+          <div class="mob-head">390 · interview</div>
+          <div class="mob-body">
+            <div style="display:flex; gap:8px; align-items:flex-start;">
+              <span class="p-ava" style="width:28px; height:28px; font-size:11px; background:var(--persona-indigo); margin-top:1px;">АЛ</span>
+              <div style="flex:1; min-width:0; font-size:var(--fs-base); color:var(--c-text-primary); line-height:1.45;">Пара вопросов перед планом. Выберите варианты — или «Другое», чтобы ответить своими словами.</div>
+            </div>
+            <div class="ask-card" style="padding:11px 12px;">
+              <div class="ask-head" style="margin-bottom:9px;">
+                <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--c-accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                Александр уточняет
+                <span class="ask-count">1 / 2</span>
+              </div>
+              <div class="ask-q">Какой формат дат писать в CSV?</div>
+              <div class="ask-opt" style="min-height:44px;">
+                <svg class="ic" width="16" height="16" viewBox="0 0 16 16" fill="none" style="margin-top:2px;"><circle cx="8" cy="8" r="6.5" stroke="var(--c-text-muted)" stroke-width="1.5"/></svg>
+                <span class="o-text">ISO 8601</span>
+                <span class="rec-chip">советуем</span>
+              </div>
+              <div class="ask-opt" style="min-height:44px;">
+                <svg class="ic" width="16" height="16" viewBox="0 0 16 16" fill="none" style="margin-top:2px;"><circle cx="8" cy="8" r="6.5" stroke="var(--c-text-muted)" stroke-width="1.5"/></svg>
+                <span class="o-text">Локальный</span>
+              </div>
+              <div class="ask-opt other" style="min-height:44px;">
+                <svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-top:2px;"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
+                <span class="o-text">Другое…</span>
+              </div>
+            </div>
+            <div class="composer">
+              <div class="composer-badges">
+                <button class="ti-badge tone-wait mob"><svg class="ic" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>Командная реализация · интервью<span class="ti-dot"></span></button>
+              </div>
+              <div class="composer-controls" style="padding-top:6px;">
+                <button class="mode-pill locked mob" style="height:36px; padding:0 8px;" title="Штаб планирует. Режим вернётся после согласования плана">
+                  <svg class="ic" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 12h6"/><path d="M9 16h6"/></svg>
+                  <span class="lock"><svg class="ic" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>
+                </button>
+                <button class="mode-pill mob" style="height:36px; padding:0 8px;" title="Модель: Sonnet 4.5">
+                  <svg class="ic" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.8a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3L12 3z"/></svg>
+                  <span class="chev"><svg class="ic" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="note">На мобиле селектор режима и так icon-only (подпись скрыта, значение — в тултипе): у залоченного замок вместо шеврона, подпись «План» не нужна — иконка <code>ClipboardList</code> её несёт. Долгий тап/тап по залоченному показывает подсказку — на таче тултип недоступен, поэтому тап открывает нижнюю шторку с текстом «Штаб планирует. Режим вернётся после согласования плана». Варианты ASK — тач-цели ≥ 44px (как в компоненте).</div>
       </div>
     </div>
   </div>

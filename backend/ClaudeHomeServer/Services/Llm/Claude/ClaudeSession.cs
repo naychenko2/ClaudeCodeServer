@@ -1374,6 +1374,22 @@ public class ClaudeSession : ILlmSessionAdapter
             var basePrompt = ProjectManager.BuildSystemPrompt(
                 _rawSystemPrompt, currentDatasetId != null, currentWk?.DocumentTags);
 
+            // Подсказка про AskUserQuestion — только на интерактивном ходу, где на карточку
+            // есть кому ответить: не исполнитель задачи, не ход правила автоматизации персоны
+            // и не делегированный ход (вызван Task() из другого чата) — тот же признак «нет
+            // живого пользователя», что и в гейте авто-allow permission (Info.TaskExecution/
+            // AutomationRuleId) выше по файлу.
+            if (!Info.TaskExecution && Info.AutomationRuleId is null && _currentTurnAgentDepth < 1)
+            {
+                var askHint =
+                    "Если нужно уточнить что-то у пользователя и у вопроса есть 2–4 осмысленных варианта ответа — " +
+                    "задай его инструментом AskUserQuestion (рекомендуемый вариант первым) вместо вопроса текстом: " +
+                    "он покажет пользователю кнопки для выбора. Открытый вопрос без осмысленных вариантов — как обычно, текстом.";
+                basePrompt = string.IsNullOrWhiteSpace(basePrompt)
+                    ? askHint
+                    : basePrompt + "\n\n" + askHint;
+            }
+
             // Подсказка про систему задач — только когда tasks-server подключён
             if (_tasksMcp is not null)
             {

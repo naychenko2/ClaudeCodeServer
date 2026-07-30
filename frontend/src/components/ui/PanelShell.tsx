@@ -174,19 +174,24 @@ export function PanelShell({
     </IconButton>
   ) : undefined);
 
-  // Место иконки в шапке — всегда 24×24, независимо от того, лежит там иконка
-  // панели или кнопка действия. Иначе при наведении подмена меняла бы ширину
-  // и заголовок дёргался вбок.
+  // Место иконки в потоке шапки — ровно размер самой иконки (15), как было до
+  // появления кнопки-действия: иначе иконка и заголовок съезжали бы вправо на
+  // половину разницы. Кнопка под курсором крупнее слота и выступает за него
+  // симметрично — слева её принимает padding шапки, справа зазор до заголовка.
   const headerIcon = (
     <span style={{
-      width: 24, height: 24, flexShrink: 0,
+      position: 'relative', width: 15, height: 15, flexShrink: 0,
       display: 'flex', alignItems: 'center', justifyContent: 'center',
     }}>
       {act && headerHover ? (
         // Под курсором иконка панели превращается в полноценную кнопку —
         // с подложкой, чтобы читалась как нажимаемая, а не как значок.
         // draggable=false — иначе нажатие начнёт тащить карточку за шапку.
-        <span draggable={false} onDragStart={e => e.preventDefault()} style={{ display: 'flex' }}>
+        <span
+          draggable={false}
+          onDragStart={e => e.preventDefault()}
+          style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', display: 'flex' }}
+        >
           <IconButton size="xs" variant="soft" title={act.title} onClick={act.onClick}>
             <act.Icon size={14} strokeWidth={ICON_STROKE} />
           </IconButton>

@@ -27,8 +27,9 @@ import { PanelHeaderSlotContext } from './panelHeaderSlotContext';
 // и «Задачи» (проп panelHeaderExtras + window-событие на кнопку).
 //
 // Правила:
-// - один PanelHeaderSlot на панель (несколько встанут в порядке монтирования —
-//   порядок неочевиден, лучше собрать всё в один);
+// - один PanelHeaderSlot на каждую зону шапки (обычная / side="left" / pinned):
+//   несколько слотов в одну зону встанут в порядке монтирования — порядок
+//   неочевиден, лучше собрать всё в один;
 // - слот ищет БЛИЖАЙШИЙ PanelShell вверх по дереву. Панель, вложенная в контент
 //   другой панели, попадёт в шапку внешней — это осознанное поведение bare-режима,
 //   но во вложенных списках-виджетах слот использовать не стоит;
@@ -36,14 +37,19 @@ import { PanelHeaderSlotContext } from './panelHeaderSlotContext';
 //   молча ничего не рендерит — проверяй useHasPanelHeader() и рисуй вариант
 //   контролов в теле панели.
 
-export function PanelHeaderSlot({ children, side = 'right' }: {
+export function PanelHeaderSlot({ children, side = 'right', pinned = false }: {
   children: ReactNode;
   // 'left' — сразу за названием панели: место переключателей вида, которые
   // отвечают на вопрос «что показываем» и читаются как продолжение заголовка.
   // 'right' (по умолчанию) — общая группа действий панели.
   side?: 'left' | 'right';
+  // true — контролы закреплены: видны всегда, а не только пока курсор на карточке.
+  // Только для ГЛАВНОГО действия панели (одна залитая кнопка «+ …»); ряд
+  // нейтральных иконок закреплять не надо — шапка в покое должна оставаться
+  // чистой. Сильнее side: закреплённая зона всегда справа.
+  pinned?: boolean;
 }) {
-  const { el, elLeft } = useContext(PanelHeaderSlotContext);
-  const target = side === 'left' ? elLeft : el;
+  const { el, elLeft, elPinned } = useContext(PanelHeaderSlotContext);
+  const target = pinned ? elPinned : side === 'left' ? elLeft : el;
   return target ? createPortal(children, target) : null;
 }

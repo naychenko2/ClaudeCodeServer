@@ -15,9 +15,13 @@ export interface PanelHeaderSlotValue {
   // относятся к самой панели («что показываем»), и у её имени читаются как часть
   // заголовка, а не как ещё одна кнопка в правой группе действий.
   elLeft: HTMLElement | null;
+  // Закреплённый слот справа — контролы, которые НЕ гаснут без курсора. Сюда
+  // кладётся главное действие панели («+ Чат», «+ Задача», «+ Проект»): оно
+  // должно быть видно всегда, иначе на пустой панели непонятно, чем её наполнить.
+  elPinned: HTMLElement | null;
 }
 
-const EMPTY: PanelHeaderSlotValue = { hasHeader: false, el: null, elLeft: null };
+const EMPTY: PanelHeaderSlotValue = { hasHeader: false, el: null, elLeft: null, elPinned: null };
 
 export const PanelHeaderSlotContext = createContext<PanelHeaderSlotValue>(EMPTY);
 

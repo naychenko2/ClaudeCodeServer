@@ -196,16 +196,17 @@ export function PanelShell({
   // после того, как узел появился в DOM, а значит нужен повторный рендер.
   const [slotEl, setSlotEl] = useState<HTMLDivElement | null>(null);
   const [slotLeftEl, setSlotLeftEl] = useState<HTMLDivElement | null>(null);
+  const [slotPinnedEl, setSlotPinnedEl] = useState<HTMLDivElement | null>(null);
   const slotValue = useMemo(
-    () => ({ hasHeader: true, el: slotEl, elLeft: slotLeftEl }),
-    [slotEl, slotLeftEl]);
+    () => ({ hasHeader: true, el: slotEl, elLeft: slotLeftEl, elPinned: slotPinnedEl }),
+    [slotEl, slotLeftEl, slotPinnedEl]);
 
   // Наведение на СЛОТ ловим нативно, а не пропсами React. Контролы приезжают в него
   // порталом, и react-события идут по React-дереву — то есть в саму панель, мимо
   // этого узла: onMouseEnter здесь не срабатывал бы, и панель продолжала уезжать
   // при нажатии на её же кнопки.
   useEffect(() => {
-    const nodes = [slotEl, slotLeftEl].filter((n): n is HTMLDivElement => !!n);
+    const nodes = [slotEl, slotLeftEl, slotPinnedEl].filter((n): n is HTMLDivElement => !!n);
     if (!nodes.length) return;
     const on = () => setOverControls(true);
     const off = () => setOverControls(false);
@@ -214,7 +215,7 @@ export function PanelShell({
       n.removeEventListener('mouseenter', on);
       n.removeEventListener('mouseleave', off);
     });
-  }, [slotEl, slotLeftEl]);
+  }, [slotEl, slotLeftEl, slotPinnedEl]);
 
   // Действие на иконке: пока курсор на шапке, иконка панели слева подменяется
   // кнопкой и кликается. Так шапка не тратит место на отдельный контрол — ровно
@@ -353,6 +354,23 @@ export function PanelShell({
           draggable={false}
           onDragStart={e => e.preventDefault()}
           style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 4, ...controlsFade }}
+        />
+        {/* Закреплённый слот (PanelHeaderSlot pinned) — главное действие панели.
+            Живёт вне controlsFade: видно всегда, включая покой. Стоит после общей
+            группы, поэтому при скрытых контролах кнопка просто прижимается вправо,
+            а не прыгает по шапке. В покое приглушено — залитая accent-кнопка в
+            каждой панели перетягивала бы внимание на себя; под курсором выходит
+            на полный контраст. Схлопывать по ширине, как controlsFade, нельзя:
+            кнопка остаётся кликабельной. */}
+        <div
+          ref={setSlotPinnedEl}
+          draggable={false}
+          onDragStart={e => e.preventDefault()}
+          style={{
+            flexShrink: 0, display: 'flex', alignItems: 'center', gap: 4,
+            opacity: controlsVisible ? 1 : 0.55,
+            transition: 'opacity 0.1s ease-out',
+          }}
         />
       </IslandHeader>
 

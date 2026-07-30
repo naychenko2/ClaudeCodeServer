@@ -56,6 +56,15 @@ export function isAsyncLaunchAck(result: string | null | undefined): boolean {
   return /^Async agent launched successfully/i.test((result ?? '').trimStart());
 }
 
+// Текст тела карточки вместо квитанции фонового запуска: пока агент жив — «работает
+// в фоне», после прерывания (bgAborted) — честное «прерван», иначе карточка врёт,
+// будто задача успешно завершена.
+export function asyncLaunchAckNote(bgAborted: boolean | undefined): string {
+  return bgAborted === true
+    ? 'Агент прерван — задача не завершена.'
+    : 'Агент работает в фоне — его ход виден в списке действий.';
+}
+
 // Любая квитанция фонового запуска (Agent run_in_background / Workflow / resume агента):
 // по такому result судить о завершённости НЕЛЬЗЯ — он приходит мгновенно при старте.
 // Достоверный признак завершения — bgDone (событие bg_agent_done) либо workflowDone.

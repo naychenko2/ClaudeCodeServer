@@ -3,7 +3,7 @@ import { Plug, Eye, SquarePen, Terminal, Globe, CircleUser, Sparkles, SquareChec
 import type { ChatItem } from '../../types';
 import { C, FONT } from '../../lib/design';
 import { relPath, stripRoot } from '../../lib/paths';
-import { splitAgentResultTail, formatTailTokens, formatTailDuration, isAsyncLaunchAck } from '../../lib/agentTail';
+import { splitAgentResultTail, formatTailTokens, formatTailDuration, isAsyncLaunchAck, asyncLaunchAckNote } from '../../lib/agentTail';
 import { ChatProjectContext, FalCostContext } from './contexts';
 import { MediaBlock, extractMediaFromResult, extractMediaMeta, mediaLabel } from './MediaBlock';
 
@@ -147,11 +147,12 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
   const agentSplit = useMemo(() => {
     if (!isAgentTool || item.result == null) return null;
     // Квитанция фонового запуска (run_in_background) — служебная метаинформация CLI,
-    // сырым текстом её не показываем; ход агента виден в его блоке действий
+    // сырым текстом её не показываем; ход агента виден в его блоке действий.
+    // Прерванный агент (bgAborted) — честная пометка вместо «работает в фоне».
     if (isAsyncLaunchAck(item.result))
-      return { body: 'Агент работает в фоне — его ход виден в списке действий.', tail: null };
+      return { body: asyncLaunchAckNote(item.bgAborted), tail: null };
     return splitAgentResultTail(item.result);
-  }, [isAgentTool, item.result]);
+  }, [isAgentTool, item.result, item.bgAborted]);
   // Медиа (изображения + видео) из результата MCP-инструментов
   const media = hasResult && !item.isError ? extractMediaFromResult(item.result!) : [];
   const mediaMeta = hasResult && !item.isError ? extractMediaMeta(item.result!) : {};
@@ -212,8 +213,8 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
             })()
           : <span style={{ flex: 1 }} />}
         {item.result !== undefined && (
-          <span style={{ fontSize: 11, color: item.isError ? C.dangerText : C.textMuted, flexShrink: 0 }}>
-            {item.isError ? 'ошибка' : hasMedia ? mediaLabel(media) : 'готово'}
+          <span style={{ fontSize: 11, color: item.isError || item.bgAborted ? C.dangerText : C.textMuted, flexShrink: 0 }}>
+            {item.isError ? 'ошибка' : item.bgAborted ? 'прервано' : hasMedia ? mediaLabel(media) : 'готово'}
           </span>
         )}
         {hasBody && (

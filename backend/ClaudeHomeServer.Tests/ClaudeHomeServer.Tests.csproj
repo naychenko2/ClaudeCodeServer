@@ -28,4 +28,10 @@
     <!-- Мост: юниты парсера кадров (internals) + интеграционные тесты гоняют exe из bin -->
     <ProjectReference Include="..\ConPtyBridge\ConPtyBridge.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Ограничение параллелизма планировщика: при 24 потоках блокирующие тесты
+         (git, node MCP, буты веб-хостов) забивали слоты, стена росла на 40% и
+         всплывали флаки (диагностика 2026-07-30). 6 — с запасом и для CI (4 ядра) -->
+    <None Include="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

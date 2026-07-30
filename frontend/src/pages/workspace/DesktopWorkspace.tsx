@@ -7,7 +7,8 @@
 import { useState, useRef, type ReactNode, type PointerEvent as ReactPointerEvent } from 'react';
 import { Plus, MessageCircle } from 'lucide-react';
 import type { Project, Session, Task, SkillInfo, AgentInfo } from '../../types';
-import { C, FONT, ISLAND } from '../../lib/design';
+import { C, FONT, ISLAND, CHAT_MAX_W } from '../../lib/design';
+import { useCenterOffset } from '../../lib/centerOffset';
 import { Button, Island } from '../../components/ui';
 import { ICON_SIZE } from '../../components/ui/icons';
 import { IslandSplitter } from '../../components/ui/IslandSplitter';
@@ -17,11 +18,11 @@ import { FileViewer } from '../../components/FileViewer';
 import { GitCommitView } from '../../components/GitCommitView';
 import { TaskDetailsPane } from '../../features/tasks/TaskDetailsPane';
 import { ProjectPersonaPane } from '../../features/personas/ProjectPersonasPanel';
-import { SidebarProjectSwitcher } from '../../features/projects/SidebarProjectSwitcher';
-import { RightPanelStack } from './RightPanelStack';
-import { LeftPanelStack } from './LeftPanelStack';
+import { ProjectsPanel } from '../../features/projects/ProjectsPanel';
+import { PanelZone } from './PanelZone';
+import { useSessionPanels } from './useSessionPanels';
 import { startPointerDrag } from '../../lib/pointerDrag';
-import type { PanelKey } from './panelStackState';
+import type { PanelKey } from './panelCatalog';
 
 export type SidebarMode = 'pinned' | 'collapsed';
 
@@ -85,11 +86,10 @@ interface Props {
   // Документ «Граф зависимостей»: открывается из панельки «Граф», живёт в центре
   graphOpen: boolean;
   graphArea: ReactNode;
-  // Правая рельса: доступность инструментов + готовый контент панелек
+  // Панели проекта: доступность инструментов + готовый контент панелек.
+  // Контент общий для обеих зон — панель рисует та зона, в которой она лежит.
   toolsEnabled: boolean;
-  panels: Partial<Record<Exclude<PanelKey, 'plan'>, ReactNode>>;
-  // Контролы в шапки карточек панелей (напр. переключатель видов задач)
-  panelHeaderExtras?: Partial<Record<PanelKey, ReactNode>>;
+  panels: Partial<Record<PanelKey, ReactNode>>;
   // Числа-кружки на кнопках проекта в рельсе (changes/tasks/terminal/preview)
   railCounts?: Partial<Record<PanelKey, number>>;
   // Хук на явную активацию панели из рельсы (клик открыл панель) — проброс в RightPanelStack
@@ -99,6 +99,11 @@ interface Props {
 export function DesktopWorkspace(p: Props) {
   // Подсветка активного сплиттера: сайдбар или split чат|файл
   const [dragging, setDragging] = useState<'sidebar' | 'split' | null>(null);
+
+  // Панели текущей сессии (План/Агенты/Персона). Раньше их собирала правая зона
+  // внутри себя — и потому они были прибиты к ней; теперь это часть общего набора,
+  // и они переносятся между рельсами наравне с остальными.
+  const sessionPanels = useSessionPanels(p.activeSession, p.project.id, p.project.rootPath);
 
   // Пропорция чат/файл в split-режиме (как chatFlex в старой ветке; не персистится)
   const [chatFlex, setChatFlex] = useState(1);
@@ -134,22 +139,23 @@ export function DesktopWorkspace(p: Props) {
   const personaOpen = !!p.selectedPersonaId || p.personaCreating;
 
   // Контент панели «Чаты» левой рельсы. Заголовок панели рисует PanelShell, поэтому
-  // здесь только содержимое: переключатель проектов и список чатов на белом фоне
-  // контентной зоны — как у панелей правой рельсы.
-  // Переключатель проектов пока живёт в контенте панели; в планах — вынести его
-  // в собственную панель рельсы.
+  // здесь только содержимое — список чатов на белом фоне контентной зоны, как у
+  // панелей правой рельсы. Переключатель проектов раньше жил шапкой внутри этой
+  // панели; теперь у него своя — «Проекты».
   const chatsPanel = (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: C.bgWhite }}>
-      <div style={{ padding: '8px 10px', flexShrink: 0, borderBottom: `1px solid ${C.border}` }}>
-        {/* Плашка проекта = переключатель проектов; настройки открываются
-            кликом по иконке активного проекта */}
-        <SidebarProjectSwitcher project={p.projectForEdit} onOpenSettings={p.onOpenProjectSettings} />
-      </div>
-      <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-        <SessionList project={p.project} activeSession={p.activeSession} onSelect={handleSelectSession} onSessionUpdated={p.onSessionUpdated} onCleared={p.onClearSession} isMobile={false} workflowRunningFor={p.workflowRunningFor} />
-      </div>
+      <SessionList project={p.project} activeSession={p.activeSession} onSelect={handleSelectSession} onSessionUpdated={p.onSessionUpdated} onCleared={p.onClearSession} isMobile={false} workflowRunningFor={p.workflowRunningFor} />
     </div>
   );
+
+  // ОБЩИЙ набор контента панелей: обе зоны получают его целиком и рисуют только
+  // те панели, что лежат именно в них. Чаты и проекты собираются здесь, инструменты
+  // проекта приходят из WorkspacePage, панели сессии — из useSessionPanels.
+  const zonePanels: Partial<Record<PanelKey, ReactNode>> = {
+    chats: chatsPanel,
+    projects: <ProjectsPanel project={p.projectForEdit} onOpenSettings={p.onOpenProjectSettings} />,
+    ...p.panels,
+  };
 
   // Фабрика центра-чата: одиночный режим — чат без рамки с шапкой-островом
   // (headerIsland), в split рядом с файлом — обычный вид внутри своего острова
@@ -187,6 +193,13 @@ export function DesktopWorkspace(p: Props) {
     </div>
   );
 
+  // В центре одиночный чат — единственный режим с колонкой фиксированной ширины,
+  // поэтому только ему нужна компенсация перекоса зон (файл, доска, граф и превью
+  // резиновые: им положено занимать всю колонку целиком).
+  const chatOnly = !p.openFile && !p.openCommitSha && !p.selectedTask && !personaOpen
+    && !p.teamCenterOpen && !p.boardOpen && !p.previewOpen && !p.graphOpen;
+  const { rootRef: offsetRootRef, centerRef: offsetCenterRef } = useCenterOffset(chatOnly ? CHAT_MAX_W : undefined);
+
   // Центральный остров: карточка на холсте, внутри — оригинальная обёртка режима
   // (flex:1 в колонке острова растягивает её на всю высоту). По бокам — доп. воздух
   // (ISLAND.centerGap сверх зазора-сплиттера), чтобы карточка не липла к соседям
@@ -200,17 +213,25 @@ export function DesktopWorkspace(p: Props) {
     // Холст Islands: собственный relative-контекст (fullscreen-панель и планшетный
     // drawer RightPanelStack позиционируются absolute от него). Справа padding нет —
     // рельса инструментов прижата к краю окна.
-    <div style={{
+    <div ref={offsetRootRef} style={{
       flex: 1, minWidth: 0, display: 'flex', position: 'relative',
       // Снизу — просторный pad, сверху — узкий gap под шапкой; по бокам 0 —
       // обе рельсы прижаты к краям окна.
       // Фон прозрачный: дудл-холст (CanvasBackdrop) рисует корень WorkspacePage
       padding: `${ISLAND.gap}px 0 ${ISLAND.pad}px 0`,
     }}>
-      {/* === Слева: рельса иконок + панель чатов (зеркало правой рельсы) ===
-          Открытие/сворачивание — иконкой рельсы, ширина тянется её сплиттером;
-          прежние sidebarMode/useSidebarWidth здесь больше не нужны. */}
-      <LeftPanelStack panels={{ chats: chatsPanel }} />
+      {/* === Слева: рельса иконок + её панели ===
+          Обе зоны получают ОДИН набор контента: панель рисует та зона, в которой
+          она сейчас лежит, поэтому её можно перетащить с одной стороны на другую.
+          Открытие/сворачивание — иконкой рельсы, ширина тянется её сплиттером. */}
+      <PanelZone
+        side="left"
+        panels={zonePanels}
+        railCounts={p.railCounts}
+        toolsEnabled={p.toolsEnabled}
+        sessionPanels={sessionPanels}
+        onPanelOpen={p.onPanelOpen}
+      />
 
       {/* === Центр: коммит → задача → персона → доска → файл (split/fullscreen) → чат === */}
       {!p.openFile && p.openCommitSha && centerIsland(
@@ -262,8 +283,8 @@ export function DesktopWorkspace(p: Props) {
       )}
 
       {/* Одиночный чат — без рамки на холсте, в остров выделена только его шапка */}
-      {!p.openFile && !p.openCommitSha && !p.selectedTask && !personaOpen && !p.teamCenterOpen && !p.boardOpen && !p.previewOpen && !p.graphOpen && (
-        <div style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
+      {chatOnly && (
+        <div ref={offsetCenterRef} style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
           {chatPanel(true)}
         </div>
       )}
@@ -292,15 +313,13 @@ export function DesktopWorkspace(p: Props) {
       )}
 
       {/* === Справа: стек рабочих панелей + рельса иконок === */}
-      <RightPanelStack
-        isTablet={p.isTablet}
-        session={p.activeSession}
-        projectId={p.project.id}
-        rootPath={p.project.rootPath}
-        toolsEnabled={p.toolsEnabled}
-        panels={p.panels}
-        panelHeaderExtras={p.panelHeaderExtras}
+      <PanelZone
+        side="right"
+        compact={p.isTablet}
+        panels={zonePanels}
         railCounts={p.railCounts}
+        toolsEnabled={p.toolsEnabled}
+        sessionPanels={sessionPanels}
         onPanelOpen={p.onPanelOpen}
       />
     </div>

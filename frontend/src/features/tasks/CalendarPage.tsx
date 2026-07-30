@@ -8,7 +8,7 @@ import type { HubTabValue } from '../../components/HubTabs';
 import { navPush, navReplace, parseHash, type NavSnapshot } from '../../lib/nav';
 import { HubHeader } from '../../components/HubHeader';
 import { PillSwitch } from '../../components/Toolbar';
-import { C, FONT, ISLAND, SHADOW } from '../../lib/design';
+import { C, FONT, ISLAND, SHADOW, CONTENT_MAX_W } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { Button, Island } from '../../components/ui';
 import { CanvasBackdrop } from '../../components/ui/CanvasBackdrop';
@@ -265,14 +265,20 @@ export function CalendarPage({ auth, onLogout, onHubTab, onOpenTask }: Props) {
 
       {isMobile ? (
         <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
-          <div style={{ maxWidth: 1180, margin: '0 auto', padding: '0 16px', boxSizing: 'border-box' }}>
+          {/* Предел здесь — страховка для широкого планшета; на телефоне он не достигается,
+              поэтому боковой padding на том же элементе безвреден */}
+          <div style={{ maxWidth: CONTENT_MAX_W, margin: '0 auto', padding: '0 16px', boxSizing: 'border-box' }}>
             {currentView}
           </div>
         </div>
       ) : (
         // Десктоп (Islands): шапка раздела — на холсте, текущий вид — остров
         // со своим внутренним скроллом (раньше шапка и вид скроллились вместе)
-        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', maxWidth: 1244, width: '100%', margin: '0 auto', padding: `0 32px ${ISLAND.pad}px`, boxSizing: 'border-box' }}>
+        // Боковые отступы — на внешнем контейнере, полотно несёт только нижний:
+        // при border-box padding на самом полотне сузил бы его видимую ширину
+        // и увёл календарь от соседних разделов (см. CONTENT_MAX_W в design.ts)
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: '0 32px', boxSizing: 'border-box' }}>
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', maxWidth: CONTENT_MAX_W, width: '100%', margin: '0 auto', paddingBottom: ISLAND.pad, boxSizing: 'border-box' }}>
           {/* Заголовок + переключатель вида + «Задача» */}
           <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 14, margin: '20px 0 14px' }}>
             <h1 style={{ margin: 0, fontFamily: FONT.serif, fontSize: 28, fontWeight: 500, color: C.textHeading, flex: 1 }}>
@@ -300,6 +306,7 @@ export function CalendarPage({ auth, onLogout, onHubTab, onOpenTask }: Props) {
               {currentView}
             </div>
           </Island>
+        </div>
         </div>
       )}
 

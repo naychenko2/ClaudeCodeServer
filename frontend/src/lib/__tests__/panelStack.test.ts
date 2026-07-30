@@ -1,12 +1,21 @@
-// Тесты чистых функций состояния правых панелей (workspace-cc-panels):
-// раскладка по колонкам, миграция со старого плоского списка, валидация
-// мусора из localStorage и нормализация весов.
+// Тесты чистых функций состояния панелей воркспейса: раскладка по колонкам
+// внутри зоны, перенос панелей МЕЖДУ зонами, миграция со старых раздельных
+// ключей localStorage, валидация мусора и нормализация весов.
 import { describe, it, expect } from 'vitest';
 import {
   sanitizeLayout, parseLayout, addPanel, removePanel, swapPanels, movePanelToNewColumn, movePanelAt,
   parseWeights, parseWidth, normalizeWeights,
+  sanitizeZones, emptyZones, zoneOf, openPanelIn, togglePanelIn, closePanel,
+  swapAcross, moveAcrossAt, moveAcrossToNewColumn, isZoneCollapsed, migrateZones, revealPanel,
+  enforceZoneInvariant, homeOf, trackHome, parseHome, closePanelTo, evictForeign,
   COL_DEFAULT, COL_MIN, COL_MAX,
+  type PanelZones,
 } from '../../pages/workspace/panelStackState';
+
+// Компактный конструктор пары зон: остальные поля берутся дефолтные
+function zones(left: string[][], right: string[][]): PanelZones {
+  return sanitizeZones({ left: { layout: left }, right: { layout: right } });
+}
 
 describe('sanitizeLayout', () => {
   it('мусор даёт пустую раскладку', () => {
@@ -160,6 +169,308 @@ describe('parseWidth', () => {
     expect(parseWidth('100')).toBe(COL_MIN);
     expect(parseWidth('9000')).toBe(COL_MAX);
     expect(parseWidth('400')).toBe(400);
+  });
+});
+
+describe('sanitizeZones — инвариант «панель в одной зоне»', () => {
+  it('дубль между зонами остаётся справа (там настоящий контент)', () => {
+    const z = zones([['chats', 'files']], [['files', 'tasks']]);
+    expect(z.left.layout).toEqual([['chats']]);
+    expect(z.right.layout).toEqual([['files', 'tasks']]);
+  });
+
+  it('мусор даёт пустые зоны с дефолтами', () => {
+    const z = sanitizeZones('ерунда');
+    expect(z).toEqual(emptyZones());
+    expect(z.right.width).toBe(COL_DEFAULT);
+    expect(z.right.mode).toBe('multi');
+  });
+});
+
+describe('zoneOf / openPanelIn / togglePanelIn', () => {
+  it('открытие панели в другой зоне — это перенос, а не копия', () => {
+    const z = openPanelIn(zones([['chats']], [['files']]), 'left', 'files');
+    expect(zoneOf(z, 'files')).toBe('left');
+    expect(z.right.layout).toEqual([]);
+    expect(z.left.layout).toEqual([['chats', 'files']]);
+  });
+
+  it('клик по иконке своей зоны закрывает, чужой — забирает к себе', () => {
+    const base = zones([['chats']], [['files']]);
+    expect(togglePanelIn(base, 'left', 'chats').left.layout).toEqual([]);
+    expect(zoneOf(togglePanelIn(base, 'left', 'files'), 'files')).toBe('left');
+  });
+
+  it('в solo-зоне открытие вытесняет прежнюю панель', () => {
+    const base = sanitizeZones({ left: { layout: [['chats']], mode: 'solo' }, right: { layout: [['files']] } });
+    const z = openPanelIn(base, 'left', 'files');
+    expect(z.left.layout).toEqual([['files']]);
+    expect(z.right.layout).toEqual([]);
+  });
+
+  it('закрытие убирает панель из любой зоны', () => {
+    expect(closePanel(zones([['chats']], [['files']]), 'files').right.layout).toEqual([]);
+    expect(zoneOf(closePanel(zones([['chats']], []), 'chats'), 'chats')).toBeNull();
+  });
+});
+
+describe('swapAcross — дроп панели на панель через границу зон', () => {
+  it('панели меняются зонами, форма раскладок сохраняется', () => {
+    const z = swapAcross(zones([['chats']], [['files', 'tasks']]), 'chats', 'tasks');
+    expect(z.left.layout).toEqual([['tasks']]);
+    expect(z.right.layout).toEqual([['files', 'chats']]);
+  });
+
+  it('внутри одной зоны работает как обычный swap', () => {
+    const z = swapAcross(zones([], [['files', 'tasks']]), 'files', 'tasks');
+    expect(z.right.layout).toEqual([['tasks', 'files']]);
+  });
+
+  it('закрытая панель и a===b — без изменений', () => {
+    const base = zones([['chats']], [['files']]);
+    expect(swapAcross(base, 'chats', 'graph')).toEqual(base);
+    expect(swapAcross(base, 'chats', 'chats')).toEqual(base);
+  });
+});
+
+describe('moveAcrossAt / moveAcrossToNewColumn — дроп в направляющие чужой зоны', () => {
+  it('вставляет панель из другой зоны в указанную колонку и строку', () => {
+    const z = moveAcrossAt(zones([['chats']], [['files', 'tasks']]), 'chats', 'right', 0, 1);
+    expect(z.left.layout).toEqual([]);
+    expect(z.right.layout).toEqual([['files', 'chats', 'tasks']]);
+  });
+
+  it('пустая зона принимает панель первой колонкой', () => {
+    const z = moveAcrossAt(zones([], [['files']]), 'files', 'left', 0, 0);
+    expect(z.left.layout).toEqual([['files']]);
+    expect(z.right.layout).toEqual([]);
+  });
+
+  it('выносит панель из другой зоны в новую колонку на позицию разделителя', () => {
+    const z = moveAcrossToNewColumn(zones([['chats']], [['files'], ['tasks']]), 'chats', 'right', 1);
+    expect(z.right.layout).toEqual([['files'], ['chats'], ['tasks']]);
+    expect(z.left.layout).toEqual([]);
+  });
+
+  it('внутри своей зоны остаётся обычной перестановкой', () => {
+    const z = moveAcrossAt(zones([], [['files', 'tasks']]), 'tasks', 'right', 0, 0);
+    expect(z.right.layout).toEqual([['tasks', 'files']]);
+  });
+
+  it('закрытая панель открывается ровно там, куда её бросили', () => {
+    // Иконку тащат из рельсы: панель не лежит ни в одной зоне, и дроп в
+    // направляющую — это её открытие в выбранном месте, а не перенос
+    const z = moveAcrossAt(zones([['chats']], [['files', 'tasks']]), 'changes', 'right', 0, 1);
+    expect(z.right.layout).toEqual([['files', 'changes', 'tasks']]);
+    expect(z.left.layout).toEqual([['chats']]);
+  });
+
+  it('дроп закрытой панели в разделитель открывает её новой колонкой', () => {
+    const z = moveAcrossToNewColumn(zones([], [['files']]), 'tasks', 'right', 0);
+    expect(z.right.layout).toEqual([['tasks'], ['files']]);
+  });
+
+  it('пустая зона принимает закрытую панель первой колонкой', () => {
+    const z = moveAcrossAt(zones([['chats']], []), 'files', 'right', 0, 0);
+    expect(z.right.layout).toEqual([['files']]);
+  });
+
+  it('зона в режиме одной панели меняет свою панель на гостя', () => {
+    const base = sanitizeZones({ left: { layout: [['chats']] }, right: { layout: [['files']], mode: 'solo' } });
+    const z = moveAcrossAt(base, 'chats', 'right', 0, 0);
+    expect(z.right.layout).toEqual([['chats']]);
+    expect(z.left.layout).toEqual([]);
+  });
+
+  it('дроп в разделитель solo-зоны тоже не плодит вторую панель', () => {
+    const base = sanitizeZones({ left: { layout: [['chats']] }, right: { layout: [['files']], mode: 'solo' } });
+    const z = moveAcrossToNewColumn(base, 'chats', 'right', 0);
+    expect(z.right.layout).toEqual([['chats']]);
+  });
+});
+
+describe('homeOf / trackHome — иконка закрытой панели', () => {
+  it('до первого открытия берётся домашняя зона из реестра', () => {
+    expect(homeOf(emptyZones(), 'tasks')).toBe('right');
+    expect(homeOf(emptyZones(), 'chats')).toBe('left');
+  });
+
+  it('панель, переехавшая в другую зону, остаётся её иконкой после закрытия', () => {
+    const moved = trackHome(moveAcrossAt(zones([['chats']], [['tasks']]), 'tasks', 'left', 0, 1));
+    expect(homeOf(moved, 'tasks')).toBe('left');
+    // закрытие привязку не сбрасывает — иконка ждёт там, где панель лежала
+    const closed = trackHome(closePanel(moved, 'tasks'));
+    expect(zoneOf(closed, 'tasks')).toBeNull();
+    expect(homeOf(closed, 'tasks')).toBe('left');
+  });
+
+  it('спрятанные «свернуть все» панели тоже держат свою зону', () => {
+    const z = trackHome(sanitizeZones({ left: { layout: [], stash: [['tasks']] }, right: { layout: [] } }));
+    expect(homeOf(z, 'tasks')).toBe('left');
+  });
+
+  it('внешний запрос открывает панель там, где её закрыли', () => {
+    const moved = trackHome(moveAcrossAt(zones([['chats']], [['changes']]), 'changes', 'left', 0, 1));
+    const r = revealPanel(trackHome(closePanel(moved, 'changes')), 'changes');
+    expect(r.wasOpen).toBe(false);
+    expect(zoneOf(r.zones, 'changes')).toBe('left');
+  });
+
+  it('дроп на рельсу закрывает панель и кладёт её иконку в эту зону', () => {
+    // «Задачи» открыты справа, бросили на ЛЕВУЮ рельсу: панель закрылась, а её
+    // кнопка ждёт слева — там, куда бросили
+    const z = closePanelTo(zones([['chats']], [['tasks']]), 'left', 'tasks');
+    expect(zoneOf(z, 'tasks')).toBeNull();
+    expect(homeOf(z, 'tasks')).toBe('left');
+    expect(z.left.layout).toEqual([['chats']]);
+  });
+
+  it('parseHome отбрасывает мусор и переводит упразднённые ключи', () => {
+    expect(parseHome({ tasks: 'left', personas: 'right', files: 'up', junk: 'left' }))
+      .toEqual({ tasks: 'left', team: 'right' });
+    expect(parseHome(null)).toEqual({});
+    expect(parseHome(['tasks'])).toEqual({});
+  });
+
+  it('переживает сериализацию состояния', () => {
+    const saved = trackHome(moveAcrossAt(zones([['chats']], [['tasks']]), 'tasks', 'left', 0, 1));
+    const restored = sanitizeZones(JSON.parse(JSON.stringify(saved)));
+    expect(homeOf(restored, 'tasks')).toBe('left');
+  });
+});
+
+describe('evictForeign — ремонт раскладки под набор экрана', () => {
+  const SESSION = ['plan', 'agents', 'context'] as const;
+
+  it('возвращает панель домой из зоны, где её некому нарисовать', () => {
+    // «Чаты» уехали в правую зону раздела, где доступны только панели сессии:
+    // там они невидимы, а слева считаются «лежащими в соседней зоне»
+    const broken = trackHome(zones([], [['chats', 'plan']]));
+    const fixed = evictForeign(broken, 'right', SESSION);
+    expect(fixed).not.toBeNull();
+    expect(fixed!.right.layout).toEqual([['plan']]);
+    expect(zoneOf(fixed!, 'chats')).toBeNull();
+    expect(homeOf(fixed!, 'chats')).toBe('left');
+  });
+
+  it('чистит и спрятанный «свернуть все» набор', () => {
+    const broken = sanitizeZones({ left: { layout: [] }, right: { layout: [], stash: [['chats']] } });
+    const fixed = evictForeign(trackHome(broken), 'right', SESSION);
+    expect(fixed!.right.stash).toEqual([]);
+    expect(homeOf(fixed!, 'chats')).toBe('left');
+  });
+
+  it('нечего выселять — null, чтобы не будить подписчиков', () => {
+    expect(evictForeign(zones([['chats']], [['plan']]), 'right', SESSION)).toBeNull();
+    expect(evictForeign(zones([['chats']], []), 'right', SESSION)).toBeNull();
+  });
+});
+
+describe('isZoneCollapsed', () => {
+  it('свёрнута = своих панелей нет, но спрятанный набор есть', () => {
+    const z = sanitizeZones({ left: { layout: [], stash: [['chats']] }, right: { layout: [['files']] } });
+    expect(isZoneCollapsed(z.left)).toBe(true);
+    expect(isZoneCollapsed(z.right)).toBe(false);
+    expect(isZoneCollapsed(emptyZones().left)).toBe(false);
+  });
+});
+
+describe('enforceZoneInvariant — панель ровно в одном месте', () => {
+  it('спрятанный набор не хранит панель, уехавшую в другую зону', () => {
+    // Сценарий бага: свернули левую (chats ушёл в её stash), потом открыли chats
+    // и перетащили направо. Разворачивание stash вернуло бы вторую копию.
+    const z = enforceZoneInvariant(sanitizeZones({
+      left: { layout: [], stash: [['chats']] },
+      right: { layout: [['files', 'chats']] },
+    }));
+    expect(z.right.layout).toEqual([['files', 'chats']]);
+    expect(z.left.stash).toEqual([]);
+  });
+
+  it('раскладка на экране сильнее спрятанного набора своей же зоны', () => {
+    const z = enforceZoneInvariant(sanitizeZones({
+      left: { layout: [['chats']], stash: [['chats', 'tasks']] },
+      right: { layout: [] },
+    }));
+    expect(z.left.layout).toEqual([['chats']]);
+    expect(z.left.stash).toEqual([['tasks']]);
+  });
+
+  it('дубль между раскладками зон остаётся справа', () => {
+    const z = enforceZoneInvariant(sanitizeZones({
+      left: { layout: [['chats', 'files']] },
+      right: { layout: [['files']] },
+    }));
+    expect(z.right.layout).toEqual([['files']]);
+    expect(z.left.layout).toEqual([['chats']]);
+  });
+
+  it('чистое состояние не меняется', () => {
+    const z = sanitizeZones({ left: { layout: [['chats']] }, right: { layout: [['files']], stash: [['tasks']] } });
+    expect(enforceZoneInvariant(z)).toEqual(z);
+  });
+});
+
+describe('revealPanel — внешний запрос показать панель (git-бар)', () => {
+  it('закрытая открывается в своей домашней зоне', () => {
+    const r = revealPanel(emptyZones(), 'changes');
+    expect(r.wasOpen).toBe(false);
+    expect(zoneOf(r.zones, 'changes')).toBe('right');
+    // «Чаты» дома слева — та же функция кладёт их в другую зону
+    expect(zoneOf(revealPanel(emptyZones(), 'chats').zones, 'chats')).toBe('left');
+  });
+
+  it('уже открытую не двигает — ни в своей зоне, ни в чужой', () => {
+    const дома = zones([], [['changes']]);
+    expect(revealPanel(дома, 'changes')).toEqual({ zones: дома, wasOpen: true });
+    // панель уехала в левую зону — её оставляют там, а не тащат обратно домой
+    const переехала = zones([['changes']], []);
+    expect(revealPanel(переехала, 'changes')).toEqual({ zones: переехала, wasOpen: true });
+  });
+});
+
+describe('migrateZones — переезд со старых раздельных ключей', () => {
+  const store = (data: Record<string, string>) => (k: string) => data[k] ?? null;
+
+  it('переводит упразднённые ключи: personas → team, tools отбрасывается', () => {
+    const z = migrateZones(store({
+      'cc_ws_left_panels_layout': '[["chats","personas"],["tools"]]',
+    }), 'ws');
+    expect(z?.left.layout).toEqual([['chats', 'team']]);
+  });
+
+  it('дубль в обеих зонах остаётся справа', () => {
+    const z = migrateZones(store({
+      'cc_ws_panels_layout': '[["files","tasks"]]',
+      'cc_ws_left_panels_layout': '[["chats","files"]]',
+    }), 'ws');
+    expect(z?.right.layout).toEqual([['files', 'tasks']]);
+    expect(z?.left.layout).toEqual([['chats']]);
+  });
+
+  it('переносит режим, ширину и спрятанный набор каждой зоны отдельно', () => {
+    const z = migrateZones(store({
+      'cc_ws_panels_layout': '[["files"]]',
+      'cc_ws_panels_width': '420',
+      'cc_ws_panels_mode': 'solo',
+      'cc_ws_left_panels_layout': '[]',
+      'cc_ws_left_panels_width': '300',
+      'cc_ws_left_panels_stash': '[["chats"]]',
+    }), 'ws');
+    expect(z?.right.width).toBe(420);
+    expect(z?.right.mode).toBe('solo');
+    expect(z?.left.width).toBe(300);
+    expect(z?.left.stash).toEqual([['chats']]);
+    expect(z?.left.mode).toBe('multi');
+  });
+
+  it('мигрирует совсем старый плоский список правой зоны', () => {
+    const z = migrateZones(store({ 'cc_ws_panels_open': '["files","tasks","team"]' }), 'ws', 'cc_ws_panels_open');
+    expect(z?.right.layout).toEqual([['files', 'tasks'], ['team']]);
+  });
+
+  it('без старых ключей возвращает null (значит применяется дефолт)', () => {
+    expect(migrateZones(store({}), 'ws')).toBeNull();
   });
 });
 

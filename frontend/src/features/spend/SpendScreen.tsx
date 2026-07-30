@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { X } from 'lucide-react';
 import type { SpendOverviewResponse } from '../../types';
 import { api } from '../../lib/api';
-import { C, FONT, ISLAND, R, SHADOW, Z } from '../../lib/design';
+import { C, FONT, ISLAND, R, SHADOW, Z, CONTENT_MAX_W } from '../../lib/design';
 import { useIsMobile } from '../../lib/breakpoints';
 import { MiniSegment } from '../home/WidgetCard';
 import {
@@ -194,7 +194,7 @@ export function SpendScreen({ ctx, isAdmin, onClose, embedded }: {
     }>
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: isMobile ? 0 : 16 }}>
         <div style={{
-          maxWidth: 1220, margin: '0 auto',
+          maxWidth: CONTENT_MAX_W, margin: '0 auto',
           background: C.bgPanel,
           border: isMobile ? 'none' : `1px solid ${C.borderLight}`,
           borderRadius: isMobile ? 0 : ISLAND.radius,

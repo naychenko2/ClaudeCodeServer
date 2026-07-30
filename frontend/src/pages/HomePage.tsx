@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { displayNameOf, type AuthState, type Project } from '../types';
-import { C, FONT } from '../lib/design';
+import { C, FONT, HOME_MAX_W } from '../lib/design';
 import { useIsMobile } from '../lib/breakpoints';
 import { ensurePersonasLoaded } from '../lib/personas';
 import { HubHeader } from '../components/HubHeader';
@@ -52,8 +52,12 @@ export function HomePage({ auth, onLogout, onHubTab, onOpenProject }: Props) {
       {/* Дудл-фон на всю страницу — от самого верха окна, шапка лежит на нём */}
       <CanvasBackdrop />
       <HubHeader value="home" onTab={onHubTab} auth={auth} onLogout={onLogout} />
-      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
-        <div style={{ maxWidth: 1080, margin: '0 auto', padding: isMobile ? '18px 14px 28px' : '26px 26px 40px' }}>
+      {/* Ширина дашборда — своя (HOME_MAX_W): почему не колонка чтения и не сетка
+          раздела, объяснено при константе. Боковые отступы — на скролл-контейнере,
+          а полотно несёт только вертикальные: при border-box padding на самом
+          полотне сузил бы видимую ширину и увёл её от заявленной (см. design.ts) */}
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: isMobile ? '0 14px' : '0 26px' }}>
+        <div style={{ maxWidth: HOME_MAX_W, margin: '0 auto', padding: isMobile ? '18px 0 28px' : '26px 0 40px' }}>
           {/* Приветствие */}
           <div style={{ marginBottom: isMobile ? 16 : 22 }}>
             <div style={{ fontFamily: FONT.serif, fontSize: isMobile ? 24 : 28, fontWeight: 500, color: C.textHeading }}>

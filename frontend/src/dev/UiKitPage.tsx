@@ -25,7 +25,7 @@ import {
   Funnel, Check, BookOpen,
   Calendar, Share2, MessageCircle,
 } from 'lucide-react';
-import { Rows3, Pin, FolderOpen, Bell } from 'lucide-react';
+import { Rows3, Pin, FolderOpen, Bell, List, ListTree } from 'lucide-react';
 import { C, FONT, FS, SP, R, SHADOW, ISLAND, MODAL_W, GROUP_COLORS } from '../lib/design';
 import { AGENT_COLORS } from '../components/AgentSelector';
 import { ChatCard } from '../components/ChatCard';
@@ -35,11 +35,12 @@ import { useThemeMode, setThemeMode, type ThemeMode } from '../lib/themeMode';
 import { useIsMobile } from '../lib/breakpoints';
 import { CanvasBackdrop } from '../components/ui/CanvasBackdrop';
 import {
-  Island, IslandHeader, SegmentedControl, Toggle, Dot,
+  Island, IslandHeader, SegmentedControl, IconSegmented, Toggle, Dot,
   Button, IconButton, Modal, ModalActions, ConfirmDialog,
   Menu, MenuItem, BackButton, WaitingIndicator,
   IslandScaffold, Splitter, SidebarSplitter, IslandSplitter, IslandSidebarSplitter,
   TextField, TextArea, IconField, Field, FieldLabel,
+  PanelShell, PanelHeaderSlot, useHasPanelHeader,
 } from '../components/ui';
 import { ICON_SIZE, ICON_STROKE, ICON_PROPS } from '../components/ui/icons';
 import { Toolbar, ToolbarIconButton } from '../components/Toolbar';
@@ -1657,6 +1658,43 @@ function KnowledgeRow({ kb, active }: { kb: { name: string; tag: string; count: 
   );
 }
 
+// Живой эталон слота шапки: контролы объявлены ВНУТРИ содержимого панели и
+// приезжают в шапку порталом. Никаких пропов от владельца — он рендерит только
+// <PanelShell><HeaderSlotDemoContent /></PanelShell>.
+function HeaderSlotDemoContent() {
+  const [view, setView] = useState<'list' | 'tree'>('list');
+  // Шапки может не быть (мобила) — тогда контролы рисуются в теле панели
+  const inHeader = useHasPanelHeader();
+  const controls = (
+    <>
+      <IconButton size="sm" tone="accent" title="Добавить">
+        <Plus size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+      </IconButton>
+      <IconSegmented<'list' | 'tree'>
+        value={view}
+        onChange={setView}
+        options={[
+          { value: 'list', label: 'Списком', icon: <List size={14} strokeWidth={ICON_STROKE} /> },
+          { value: 'tree', label: 'Деревом', icon: <ListTree size={14} strokeWidth={ICON_STROKE} /> },
+        ]}
+      />
+    </>
+  );
+  return (
+    <>
+      {inHeader && <PanelHeaderSlot>{controls}</PanelHeaderSlot>}
+      <div style={{ padding: SP.md, display: 'flex', flexDirection: 'column', gap: SP.xs }}>
+        {!inHeader && <div style={{ display: 'flex', gap: SP.xs }}>{controls}</div>}
+        <div style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted }}>
+          вид: {view === 'list' ? 'списком' : 'деревом'}
+        </div>
+        <div style={{ height: 8, borderRadius: R.sm, background: C.borderLight, width: '70%' }} />
+        <div style={{ height: 8, borderRadius: R.sm, background: C.borderLight, width: '45%' }} />
+      </div>
+    </>
+  );
+}
+
 // === Секция «Панели правой рельсы» =================================
 // Все 9 панелей (План/Агенты/Персона + Файлы/Изменения/Задачи/Команда/
 // Терминал/Preview) в виде мини-PanelShell — одна сетка, чтобы видеть,
@@ -1828,6 +1866,30 @@ function PanelsSection() {
               </Island>
             ))}
           </div>
+        </SubBlock>
+
+        {/* Контролы в шапке панели — единственный штатный механизм.
+            Здесь настоящий PanelShell с настоящим PanelHeaderSlot: кнопки
+            живут в коде содержимого, а видны в шапке карточки. */}
+        <SubBlock label="Контролы в шапке — PanelHeaderSlot (живой)">
+          <div style={{ maxWidth: 340 }}>
+            <PanelShell
+              icon={<FolderOpen size={15} strokeWidth={ICON_STROKE} color={C.textSecondary} style={{ flexShrink: 0 }} />}
+              title="Панель с контролами"
+              badge="12"
+              fill={false}
+              animate={false}
+            >
+              <HeaderSlotDemoContent />
+            </PanelShell>
+          </div>
+          <p style={{ margin: `${SP.sm}px 0 0`, fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.mono, lineHeight: 1.5 }}>
+            Панель кладёт кнопки в шапку сама — <code style={{ color: C.accent }}>PanelHeaderSlot</code> телепортирует
+            их порталом в ближайший <code style={{ color: C.accent }}>PanelShell</code>. Владелец экрана не участвует:
+            ни пропов с готовым узлом, ни колбэков «отдай тулбар», ни window-событий.
+            Нет шапки (мобила) — <code style={{ color: C.accent }}>useHasPanelHeader()</code> вернёт false,
+            и панель рисует те же контролы в теле.
+          </p>
         </SubBlock>
 
         {/* Левые сайдбары разделов — реальные стили шапок и контента.

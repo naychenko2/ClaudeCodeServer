@@ -15,12 +15,12 @@
 // доступны модулю через DOM-контекст, а cc-iconbtn инжектирует сам IconButton.
 // Их переименование или удаление = мажор кита, как и смена API экспортов.
 
-export const DESIGN_KIT_VERSION = '1.1.0';
+export const DESIGN_KIT_VERSION = '1.2.0';
 
 // === Токены (R14) ===
 export {
   C, FONT, FS, R, SP, SHADOW, ISLAND, TB, Z,
-  MODAL_W, CHAT_MAX_W, FIELD, GROUP_COLORS,
+  MODAL_W, CHAT_MAX_W, CONTENT_MAX_W, FIELD, GROUP_COLORS,
 } from '../design';
 export { MOBILE_MAX, TABLET_MAX, MOBILE_QUERY, TABLET_QUERY, useIsMobile, useWindowWidth } from '../breakpoints';
 

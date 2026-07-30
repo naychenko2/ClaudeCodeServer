@@ -7,13 +7,17 @@ import { C, ISLAND } from '../../lib/design';
 // невидимые ±4px по бокам (как ±6px у старого 1px-Splitter).
 // API совместим со Splitter: onMouseDown — Pointer Events (mouse + touch + pen),
 // touchAction:none — тач тянет, а не скроллит.
-export function IslandSplitter({ orientation = 'v', active, onMouseDown, gap = ISLAND.gap }: {
+export function IslandSplitter({ orientation = 'v', active, onMouseDown, gap = ISLAND.gap, length }: {
   orientation?: 'v' | 'h';
   active: boolean;
   onMouseDown: (e: ReactPointerEvent) => void;
   // Ширина (для vertical) / высота (для horizontal) сплиттера.
   // Дефолт — ISLAND.gap (8px). Caller может уменьшить (напр. 4px для рельсы).
   gap?: number;
+  // Длина сплиттера вдоль островов (для vertical — высота). По умолчанию тянется
+  // на весь родитель. Задаётся, когда рядом стоит остров по контенту: иначе
+  // сплиттер уходит в пустоту холста, а grip повисает далеко от того, что двигает.
+  length?: number;
 }) {
   const vertical = orientation === 'v';
   const [hover, setHover] = useState(false);
@@ -28,8 +32,10 @@ export function IslandSplitter({ orientation = 'v', active, onMouseDown, gap = I
         touchAction: 'none', background: 'transparent',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         ...(vertical
-          ? { flex: `0 0 ${gap}px`, width: gap, alignSelf: 'stretch' }
-          : { height: gap, width: '100%' }),
+          ? length != null
+            ? { flex: `0 0 ${gap}px`, width: gap, height: length, alignSelf: 'flex-start' }
+            : { flex: `0 0 ${gap}px`, width: gap, alignSelf: 'stretch' }
+          : { height: gap, width: length != null ? length : '100%' }),
       }}
     >
       <div style={{

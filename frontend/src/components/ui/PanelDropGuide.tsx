@@ -1,5 +1,6 @@
 import type { DragEvent } from 'react';
-import { C } from '../../lib/design';
+import type { LucideIcon } from 'lucide-react';
+import { C, ISLAND } from '../../lib/design';
 
 // Направляющая-плейсхолдер места вставки при перетаскивании панелей — общая для
 // обеих зон (RightPanelStack, LeftPanelStack).
@@ -37,8 +38,11 @@ const sepShift = (base: number) => SEP_CLEARANCE + SEP_LINE / 2 - base / 2;
 // «характер» линии), гасится именно видимость — под курсором возвращается к 1,
 // поэтому переход в акцентную сплошную читается тем заметнее, чем тише покой.
 const SEP_REST_OPACITY = 0.25;
+// Большое место вставки в покое гасится слабее линии: у него есть подложка и
+// иконка, и при 0.25 они превращались в грязное пятно вместо подсказки.
+const FILL_REST_OPACITY = 0.6;
 
-export function PanelDropGuide({ axis, dndActive, over, base = 0, edge, onDragOver, onDragLeave, onDrop }: {
+export function PanelDropGuide({ axis, dndActive, over, base = 0, edge, fill, icon: Icon, onDragOver, onDragLeave, onDrop }: {
   // 'x' — вертикальная направляющая (между колонками), 'y' — горизонтальная
   // (между панелями внутри колонки)
   axis: 'x' | 'y';
@@ -49,6 +53,15 @@ export function PanelDropGuide({ axis, dndActive, over, base = 0, edge, onDragOv
   // последней. Направляющая уезжает наружу на sepShift(base), чтобы не липнуть
   // к кромке; в середине зазора (base = GAP) сдвиг не нужен.
   edge?: 'start' | 'end';
+  // Забрать ВСЮ свободную высоту колонки под дроп-зону. Нужно последней
+  // направляющей: панели с высотой по контенту (короткий список чатов) не
+  // достают до низа, и целиться приходилось в узкую полоску у их кромки, хотя
+  // ниже пустует полколонки. Сама линия остаётся у кромки панели — она
+  // показывает МЕСТО вставки, а не размер будущей панели.
+  fill?: boolean;
+  // Иконка перетаскиваемой панели — рисуется в центре большого плейсхолдера
+  // (только при fill: в тонкой линии её негде показать)
+  icon?: LucideIcon;
   onDragOver: (e: DragEvent) => void;
   onDragLeave: () => void;
   onDrop: (e: DragEvent) => void;
@@ -58,9 +71,43 @@ export function PanelDropGuide({ axis, dndActive, over, base = 0, edge, onDragOv
   return (
     <div style={vertical
       ? { width: base, flexShrink: 0, alignSelf: 'stretch', position: 'relative' }
-      : { height: base, flexShrink: 0, position: 'relative' }}
+      : {
+          height: base, flexShrink: 0, position: 'relative',
+          // Растяжимое место вставки: забирает свободный низ колонки. Когда его
+          // нет (панель заняла всю высоту), на время перетаскивания держим хотя бы
+          // полосу в высоту обычной дроп-зоны — иначе поставить вторую панель под
+          // первую было бы просто некуда. В покое minHeight нулевой, колонка не
+          // «дышит».
+          ...(fill ? { flex: 1, minHeight: dndActive ? SEP_HIT : base } : null),
+        }}
     >
-      {dndActive && (
+      {dndActive && fill && !vertical ? (
+        // Свободный низ колонки целиком: и мишень дропа, и рамка будущего места.
+        // Линии здесь мало — она сообщала бы «встанет вплотную к панели», хотя
+        // панель займёт как раз всю эту пустоту.
+        <div
+          onDragOver={onDragOver}
+          onDragLeave={onDragLeave}
+          onDrop={onDrop}
+          style={{
+            position: 'absolute', zIndex: 5,
+            left: 0, right: 0, top: base + SEP_CLEARANCE, bottom: 0,
+            boxSizing: 'border-box',
+            margin: `0 ${SEP_INSET}px`,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            border: `${SEP_LINE}px dashed ${over ? C.accent : C.textSecondary}`,
+            borderRadius: ISLAND.radius,
+            // Место читается как «сюда встанет панель» — у него есть подложка, а не
+            // только контур: под курсором акцентная, в покое — тон утопленных зон
+            background: over ? C.accentMuted : C.bgInset,
+            color: over ? C.accent : C.textMuted,
+            opacity: over ? 1 : FILL_REST_OPACITY,
+            transition: 'background 0.12s ease, border-color 0.12s ease, opacity 0.12s ease',
+          }}
+        >
+          {Icon && <Icon size={26} strokeWidth={1.5} />}
+        </div>
+      ) : dndActive && (
         <div
           onDragOver={onDragOver}
           onDragLeave={onDragLeave}

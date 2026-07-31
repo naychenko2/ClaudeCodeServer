@@ -16,6 +16,14 @@ import { showToast } from '../toast';
 
 const PENDING_KEY = 'cc_pending_chat_prompt';
 
+// Положить затравку в УЖЕ открытый композер (тот же канал, что «Про файл …» в FileViewer
+// и цитата раздела в DocsPanel). Текст ложится только в пустое поле — набранный черновик
+// важнее. Композера нет — затравка дождётся его в sessionStorage (Composer.consume на маунте).
+export function prefillComposer(text: string): void {
+  sessionStorage.setItem(PENDING_KEY, text);
+  window.dispatchEvent(new Event('cc-compose-prefill'));
+}
+
 export async function startChatWithPrompt(text: string, ctx: AiActionCtx): Promise<void> {
   // Проект берём только на его экране — глобальные действия всегда идут в чат вне проекта
   const project = ctx.nav?.screen === 'project' ? ctx.nav.project : undefined;

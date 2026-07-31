@@ -85,7 +85,7 @@ public class SessionManagerTests : IDisposable
         var falCost = new FalCostService(new Mock<IHttpClientFactory>().Object, config);
         _usage = new UsageService(config);
         _activity = new SubscriptionActivityTracker();
-        var jwt = new JwtService(config, NullLogger<JwtService>.Instance);
+        var jwt = new JwtService(config, userStore, NullLogger<JwtService>.Instance);
         var server = new Mock<Microsoft.AspNetCore.Hosting.Server.IServer>();
         server.Setup(s => s.Features).Returns(new Microsoft.AspNetCore.Http.Features.FeatureCollection());
         var wkStore = new WorkspaceKnowledgeStore(config);

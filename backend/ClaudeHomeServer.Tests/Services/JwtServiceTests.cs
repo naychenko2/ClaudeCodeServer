@@ -14,6 +14,7 @@ public class JwtServiceTests : IDisposable
 {
     private readonly string _tempDir;
     private readonly IConfiguration _config;
+    private readonly UserStore _users;
     private readonly JwtService _sut;
 
     public JwtServiceTests()
@@ -21,8 +22,15 @@ public class JwtServiceTests : IDisposable
         _tempDir = Path.Combine(Path.GetTempPath(), "jwt_tests_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_tempDir);
         _config = BuildConfig(_tempDir);
-        _sut = new JwtService(_config, NullLogger<JwtService>.Instance);
+        _users = NewUserStore(_tempDir);
+        _sut = new JwtService(_config, _users, NullLogger<JwtService>.Instance);
     }
+
+    private static UserStore NewUserStore(string dir) =>
+        new(BuildConfig(dir), new Helpers.FakeHostEnvironment(), NullLogger<UserStore>.Instance);
+
+    // Токен проверяется против живого UserStore, поэтому пользователь теста должен в нём быть
+    private User AddUser(string username) => _users.Add(username, "password-1", "user");
 
     public void Dispose()
     {
@@ -111,6 +119,92 @@ public class JwtServiceTests : IDisposable
         validated.ValidTo.Should().BeCloseTo(
             DateTime.UtcNow.Add(JwtService.ServiceTokenLifetime),
             TimeSpan.FromMinutes(1));
+    }
+
+    // --- Версия сессий (отзыв токенов сменой пароля) ---
+
+    [Fact]
+    public void Issue_ContainsCurrentTokenVersion()
+    {
+        var user = AddUser("alice");
+
+        var principal = Validate(_sut.Issue(user).token, _sut.ValidationParameters, out _);
+
+        principal.FindFirst(JwtService.TokenVersionClaim)!.Value
+            .Should().Be(user.TokenVersion.ToString());
+    }
+
+    [Fact]
+    public void IssueServiceToken_MarkedAsService_WithoutVersion()
+    {
+        var principal = Validate(_sut.IssueServiceToken("user-42"), _sut.ValidationParameters, out _);
+
+        principal.FindFirst(JwtService.TokenKindClaim)!.Value.Should().Be(JwtService.ServiceTokenKind);
+        principal.FindFirst(JwtService.TokenVersionClaim).Should().BeNull();
+    }
+
+    [Fact]
+    public void ValidateUserToken_AfterPasswordChange_OldTokenRejected_NewOneWorks()
+    {
+        var user = AddUser("alice");
+        var oldToken = _sut.Issue(user).token;
+
+        _users.ChangePassword(user.Id, "password-1", "password-2").Should().BeTrue();
+
+        _sut.ValidateUserToken(oldToken).Should().BeNull();
+        // Свежий токен несёт уже новую версию (user — та же ссылка, что лежит в сторе)
+        _sut.ValidateUserToken(_sut.Issue(user).token).Should().Be(user.Id);
+    }
+
+    [Fact]
+    public void ValidateUserToken_AfterAdminReset_OldTokenRejected()
+    {
+        var user = AddUser("alice");
+        var token = _sut.Issue(user).token;
+
+        _users.ResetPassword(user.Id, "reset-password").Should().BeTrue();
+
+        _sut.ValidateUserToken(token).Should().BeNull();
+    }
+
+    [Fact]
+    public void ValidateUserToken_ServiceToken_SurvivesPasswordChange()
+    {
+        // Сервисный токен MCP выдаётся сервером самому себе — смена пароля не должна рвать ход
+        var user = AddUser("alice");
+        var service = _sut.IssueServiceToken(user.Id);
+
+        _users.ChangePassword(user.Id, "password-1", "password-2").Should().BeTrue();
+
+        _sut.ValidateUserToken(service).Should().Be(user.Id);
+    }
+
+    [Fact]
+    public void ValidateUserToken_TokenWithoutVersionClaim_Rejected()
+    {
+        // Токен «до фикса»: подписан настоящим секретом, но claim tv в нём нет
+        var user = AddUser("alice");
+        var secret = File.ReadAllText(Path.Combine(_tempDir, "jwt-secret.txt")).Trim();
+        var key = new SymmetricSecurityKey(System.Text.Encoding.UTF8.GetBytes(secret));
+        var legacy = new JwtSecurityTokenHandler().WriteToken(new JwtSecurityToken(
+            issuer: "ClaudeHomeServer",
+            audience: "ClaudeHomeServer",
+            claims: [new Claim(JwtRegisteredClaimNames.Sub, user.Id)],
+            expires: DateTime.UtcNow.AddHours(1),
+            signingCredentials: new SigningCredentials(key, SecurityAlgorithms.HmacSha256)));
+
+        _sut.ValidateUserToken(legacy).Should().BeNull();
+    }
+
+    [Fact]
+    public void ValidateUserToken_DeletedUser_Rejected()
+    {
+        var user = AddUser("alice");
+        var token = _sut.Issue(user).token;
+
+        _users.Delete(user.Id).Should().BeTrue();
+
+        _sut.ValidateUserToken(token).Should().BeNull();
     }
 
     // --- Подделка ---
@@ -227,9 +321,10 @@ public class JwtServiceTests : IDisposable
     [Fact]
     public void ValidateUserToken_GoodToken_ReturnsSub_AndNullOnGarbage()
     {
-        var token = _sut.Issue(new User { Id = "u-7", Username = "alice" }).token;
+        var user = AddUser("alice");
+        var token = _sut.Issue(user).token;
 
-        _sut.ValidateUserToken(token).Should().Be("u-7");
+        _sut.ValidateUserToken(token).Should().Be(user.Id);
         _sut.ValidateUserToken("not-a-token").Should().BeNull();
         _sut.ValidateUserToken(null).Should().BeNull();
     }
@@ -254,7 +349,7 @@ public class JwtServiceTests : IDisposable
         var (token, _) = _sut.Issue(new User { Username = "alice" });
 
         // «Рестарт сервера»: новый сервис с тем же DataPath переиспользует секрет
-        var restarted = new JwtService(BuildConfig(_tempDir), NullLogger<JwtService>.Instance);
+        var restarted = new JwtService(BuildConfig(_tempDir), _users, NullLogger<JwtService>.Instance);
 
         File.ReadAllText(secretPath).Should().Be(secretBefore);
         var act = () => Validate(token, restarted.ValidationParameters, out _);
@@ -266,7 +361,7 @@ public class JwtServiceTests : IDisposable
     {
         var otherDir = Path.Combine(_tempDir, "other");
         Directory.CreateDirectory(otherDir);
-        var other = new JwtService(BuildConfig(otherDir), NullLogger<JwtService>.Instance);
+        var other = new JwtService(BuildConfig(otherDir), NewUserStore(otherDir), NullLogger<JwtService>.Instance);
         var (token, _) = _sut.Issue(new User { Username = "alice" });
 
         var act = () => Validate(token, other.ValidationParameters, out _);

@@ -1,4 +1,5 @@
-﻿using System.IdentityModel.Tokens.Jwt;
+﻿using System.Globalization;
+using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
@@ -11,9 +12,19 @@ public class JwtService
 {
     private static readonly TimeSpan TokenLifetime = TimeSpan.FromDays(30);
     private readonly SymmetricSecurityKey _key;
+    private readonly UserStore _users;
 
-    public JwtService(IConfiguration config, ILogger<JwtService> logger)
+    // Версия сессий пользователя (User.TokenVersion) в токене: смена пароля бампает её в сторе,
+    // и все ранее выданные токены перестают проходить проверку (см. IsSessionCurrent)
+    public const string TokenVersionClaim = "tv";
+    // Метка сервисного токена: он выдаётся сервером самому себе (MCP, push), пароль в его
+    // выдаче не участвует — значит и отзывать его при смене пароля нечего
+    public const string TokenKindClaim = "typ";
+    public const string ServiceTokenKind = "svc";
+
+    public JwtService(IConfiguration config, UserStore users, ILogger<JwtService> logger)
     {
+        _users = users;
         var dataPath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
         var dataDir = Path.GetDirectoryName(dataPath) ?? Path.Combine(AppContext.BaseDirectory, "data");
         var secretPath = Path.Combine(dataDir, "jwt-secret.txt");
@@ -44,6 +55,7 @@ public class JwtService
             new Claim(JwtRegisteredClaimNames.Sub, user.Id),
             new Claim(ClaimTypes.Name, user.Username),
             new Claim(ClaimTypes.Role, user.Role),
+            new Claim(TokenVersionClaim, user.TokenVersion.ToString(CultureInfo.InvariantCulture)),
         };
         var jwt = new JwtSecurityToken(
             issuer: "ClaudeHomeServer",
@@ -69,6 +81,9 @@ public class JwtService
             new Claim(JwtRegisteredClaimNames.Sub, userId),
             new Claim(ClaimTypes.Name, "mcp-tasks"),
             new Claim(ClaimTypes.Role, "user"),
+            // Явная метка вместо опоры на имя "mcp-tasks": по ней проверка версии сессий
+            // пропускает сервисные токены, и живой ход Claude не рвётся сменой пароля
+            new Claim(TokenKindClaim, ServiceTokenKind),
         };
         var jwt = new JwtSecurityToken(
             issuer: "ClaudeHomeServer",
@@ -133,6 +148,28 @@ public class JwtService
         catch { return null; }
     }
 
+    /// <summary>
+    /// Жив ли предъявленный токен с точки зрения версии сессий: сервисные пропускаем,
+    /// у пользовательских claim tv обязан совпасть с текущей версией в UserStore.
+    /// Единственная точка правила — её зовут и JwtBearer (весь [Authorize]-периметр),
+    /// и ValidateUserToken (middleware вне MVC).
+    /// </summary>
+    public bool IsSessionCurrent(ClaimsPrincipal? principal)
+    {
+        if (principal is null) return false;
+        if (principal.FindFirstValue(TokenKindClaim) == ServiceTokenKind) return true;
+
+        var userId = principal.FindFirstValue(JwtRegisteredClaimNames.Sub);
+        if (string.IsNullOrEmpty(userId)) return false;
+
+        // Токена без claim tv (выпущен до введения версий) достаточно, чтобы отказать:
+        // именно такие токены смена пароля и не отзывала
+        var raw = principal.FindFirstValue(TokenVersionClaim);
+        if (!int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var version)) return false;
+
+        return _users.IsTokenVersionCurrent(userId, version);
+    }
+
     // Валидирует обычный пользовательский/сервисный JWT и возвращает sub (userId) или null.
     // Используется вне MVC-пайплайна (preview-middleware), где нет готового ctx.User.
     public string? ValidateUserToken(string? token)
@@ -141,6 +178,8 @@ public class JwtService
         try
         {
             var principal = new JwtSecurityTokenHandler { MapInboundClaims = false }.ValidateToken(token, ValidationParameters, out _);
+            // Подпись и срок — ещё не всё: токен могли отозвать сменой пароля
+            if (!IsSessionCurrent(principal)) return null;
             return principal.FindFirstValue(JwtRegisteredClaimNames.Sub);
         }
         catch { return null; }

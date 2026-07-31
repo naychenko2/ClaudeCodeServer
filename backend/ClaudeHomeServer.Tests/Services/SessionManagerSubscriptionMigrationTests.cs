@@ -69,7 +69,7 @@ public class SessionManagerSubscriptionMigrationTests : IDisposable
             new WorkspaceKnowledgeStore(config), llmProviders, subPool);
         var falCost = new FalCostService(new Mock<IHttpClientFactory>().Object, config);
         var usage = new UsageService(config);
-        var jwt = new JwtService(config, NullLogger<JwtService>.Instance);
+        var jwt = new JwtService(config, userStore, NullLogger<JwtService>.Instance);
         var server = new Mock<Microsoft.AspNetCore.Hosting.Server.IServer>();
         server.Setup(s => s.Features).Returns(new Microsoft.AspNetCore.Http.Features.FeatureCollection());
         var wkStore = new WorkspaceKnowledgeStore(config);

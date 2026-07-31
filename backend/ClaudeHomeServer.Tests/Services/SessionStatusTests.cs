@@ -69,7 +69,7 @@ public class SessionStatusTests : IDisposable
         var usage = new UsageService(_config);
         var userStore = new UserStore(_config, new ClaudeHomeServer.Tests.Helpers.FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         var appSettings = new AppSettingsService(_config);
-        var jwt = new JwtService(_config, NullLogger<JwtService>.Instance);
+        var jwt = new JwtService(_config, userStore, NullLogger<JwtService>.Instance);
         var server = new Mock<Microsoft.AspNetCore.Hosting.Server.IServer>();
         server.Setup(s => s.Features).Returns(new Microsoft.AspNetCore.Http.Features.FeatureCollection());
         var wkStore = new WorkspaceKnowledgeStore(_config);

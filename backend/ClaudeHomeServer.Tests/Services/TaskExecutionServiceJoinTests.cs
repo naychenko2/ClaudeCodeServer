@@ -58,7 +58,7 @@ public class TaskExecutionServiceJoinTests : IDisposable
         hub.Setup(h => h.Clients).Returns(clients.Object);
 
         var pushStore = new PushSubscriptionStore(config);
-        var jwt = new JwtService(config, NullLogger<JwtService>.Instance);
+        var jwt = new JwtService(config, userStore, NullLogger<JwtService>.Instance);
         var push = new PushService(config, pushStore, jwt, NullLogger<PushService>.Instance);
         _notifStore = new NotificationStore(config, NullLogger<NotificationStore>.Instance);
         var notif = new NotificationService(_notifStore, hub.Object, push, personas, projectManager, NullLogger<NotificationService>.Instance);
@@ -94,7 +94,7 @@ public class TaskExecutionServiceJoinTests : IDisposable
             config, new SkillsService(), new WorkspaceKnowledgeStore(config), llmProviders, subPool);
         var falCost = new FalCostService(new Mock<IHttpClientFactory>().Object, config);
         var usage = new UsageService(config);
-        var jwt = new JwtService(config, NullLogger<JwtService>.Instance);
+        var jwt = new JwtService(config, userStore, NullLogger<JwtService>.Instance);
         var server = new Mock<Microsoft.AspNetCore.Hosting.Server.IServer>();
         server.Setup(s => s.Features).Returns(new Microsoft.AspNetCore.Http.Features.FeatureCollection());
         var flags = new FeatureFlagService(userStore);

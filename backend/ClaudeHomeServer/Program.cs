@@ -354,6 +354,14 @@ builder.Services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationSc
                 var token = ctx.Request.Query["access_token"].ToString();
                 if (!string.IsNullOrWhiteSpace(token)) ctx.Token = token;
                 return Task.CompletedTask;
+            },
+            // Отзыв токенов сменой пароля: подпись и срок ещё ничего не гарантируют.
+            // Здесь проверка накрывает весь [Authorize]-периметр — REST и handshake SignalR
+            OnTokenValidated = ctx =>
+            {
+                var svc = ctx.HttpContext.RequestServices.GetRequiredService<JwtService>();
+                if (!svc.IsSessionCurrent(ctx.Principal)) ctx.Fail("Токен отозван сменой пароля");
+                return Task.CompletedTask;
             }
         };
     });

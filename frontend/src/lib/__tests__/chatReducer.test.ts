@@ -47,7 +47,8 @@ describe('applyServerMessage: дельты текста', () => {
       { type: 'text_delta', text: 'При' },
       { type: 'text_delta', text: 'вет' },
     ]);
-    expect(next.items).toEqual([{ kind: 'text', text: 'Привет' }]);
+    // ts — время начала поста, проставляется на первой дельте (подпись в панели поста)
+    expect(next.items).toEqual([{ kind: 'text', text: 'Привет', ts: expect.any(Number) }]);
   });
 
   it('text_delta после элемента другого вида открывает новый text', () => {
@@ -56,7 +57,7 @@ describe('applyServerMessage: дельты текста', () => {
       state({ items: [{ kind: 'text', text: 'до' }, toolUse('t1')] }),
     );
     expect(next.items).toHaveLength(3);
-    expect(next.items[2]).toEqual({ kind: 'text', text: 'после' });
+    expect(next.items[2]).toEqual({ kind: 'text', text: 'после', ts: expect.any(Number) });
   });
 
   it('thinking_delta накапливается и сохраняет expanded', () => {
@@ -76,7 +77,7 @@ describe('applyServerMessage: дельты текста', () => {
       state({ items: [{ kind: 'text', text: 'сабагент', parentToolUseId: 'task1' }] }),
     );
     expect(next.items).toHaveLength(2);
-    expect(next.items[1]).toEqual({ kind: 'text', text: 'основной' });
+    expect(next.items[1]).toEqual({ kind: 'text', text: 'основной', ts: expect.any(Number) });
   });
 
   it('thinking_delta не приклеивается к thinking сабагента', () => {
@@ -98,7 +99,7 @@ describe('applyServerMessage: поток сабагента', () => {
       { type: 'agent_text', parentToolUseId: 'task1', text: 'реплика сабагента' },
     ]);
     expect(next.items).toEqual([
-      { kind: 'text', text: 'основной' },
+      { kind: 'text', text: 'основной', ts: expect.any(Number) },
       { kind: 'text', text: 'реплика сабагента', parentToolUseId: 'task1' },
     ]);
   });
@@ -382,6 +383,43 @@ describe('applyServerMessage: завершение хода', () => {
     expect(next.items[0]).toMatchObject({ kind: 'result', subtype: 'success', usage, totalCostUsd: 0.01 });
   });
 
+  it('result клеит модель хода постам этого хода', () => {
+    const next = run([
+      { type: 'text_delta', text: 'ответ' },
+      { type: 'result', subtype: 'success', durationMs: 100, numTurns: 1, usageModel: 'claude-opus-4-8' },
+    ]);
+    expect(next.items[0]).toMatchObject({ kind: 'text', text: 'ответ', model: 'claude-opus-4-8' });
+  });
+
+  // Смена модели по ходу разговора: у каждого поста должна остаться СВОЯ модель,
+  // иначе лента задним числом переписывала бы историю под текущую
+  it('result не перебивает модель постов прошлого хода', () => {
+    const next = run([
+      { type: 'text_delta', text: 'первый' },
+      { type: 'result', subtype: 'success', durationMs: 100, numTurns: 1, usageModel: 'claude-haiku-4-5' },
+      { type: 'text_delta', text: 'второй' },
+      { type: 'result', subtype: 'success', durationMs: 100, numTurns: 1, usageModel: 'claude-opus-4-8' },
+    ]);
+    const texts = next.items.filter(i => i.kind === 'text');
+    expect(texts).toHaveLength(2);
+    expect(texts[0]).toMatchObject({ model: 'claude-haiku-4-5' });
+    expect(texts[1]).toMatchObject({ model: 'claude-opus-4-8' });
+  });
+
+  it('result не помечает моделью текст сабагента', () => {
+    const next = run([
+      { type: 'agent_text', parentToolUseId: 'task1', text: 'от сабагента' },
+      { type: 'result', subtype: 'success', durationMs: 100, numTurns: 1, usageModel: 'claude-opus-4-8' },
+    ]);
+    expect(next.items[0]).toMatchObject({ kind: 'text', parentToolUseId: 'task1' });
+    expect((next.items[0] as { model?: string }).model).toBeUndefined();
+  });
+
+  it('текстовому посту проставляется время', () => {
+    const next = run([{ type: 'text_delta', text: 'привет' }]);
+    expect((next.items[0] as { ts?: number }).ts).toBeGreaterThan(0);
+  });
+
   it('error снимает isWaiting, ошибка с возможностью повтора', () => {
     const next = run([{ type: 'error', text: 'упало' }], state({ isWaiting: true }));
     expect(next.isWaiting).toBe(false);
@@ -639,6 +677,25 @@ describe('normalizeHistory', () => {
 
   it('пустая история → пустой список', () => {
     expect(normalizeHistory([])).toEqual([]);
+  });
+
+  // В истории поле зовётся timestamp, в ленте — ts. Без перекладывания панель поста
+  // после перезагрузки оставалась бы без времени, хотя на диске оно есть
+  it('timestamp из истории становится ts, модель переносится как есть', () => {
+    const raw = [
+      { kind: 'user_message', text: 'вопрос', timestamp: 1785517625484 },
+      { kind: 'text', text: 'ответ', timestamp: 1785517630000, model: 'claude-opus-4-8' },
+    ];
+    expect(normalizeHistory(raw)).toEqual([
+      { kind: 'user_message', text: 'вопрос', ts: 1785517625484 },
+      { kind: 'text', text: 'ответ', ts: 1785517630000, model: 'claude-opus-4-8' },
+    ]);
+  });
+
+  // Старая история поля не несёт — ts просто не появляется, ничего не падает
+  it('история без timestamp остаётся без ts', () => {
+    expect(normalizeHistory([{ kind: 'text', text: 'старый' }]))
+      .toEqual([{ kind: 'text', text: 'старый' }]);
   });
 
   it('bgDone из stored tool_use переносится в ChatItem', () => {

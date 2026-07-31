@@ -131,6 +131,12 @@ export function normalizeHistory(raw: unknown[], opts?: { deriveSpeakers?: boole
 
     if (m.kind === 'thinking') items.push({ ...m, expanded: false } as unknown as ChatItem);
     else if (m.kind === 'error') items.push({ ...m, canRetry: false } as unknown as ChatItem);
+    else if (m.kind === 'text' || m.kind === 'user_message') {
+      // В истории поле называется timestamp (StoredMessage.Timestamp), в ленте — ts:
+      // без перекладывания панель поста осталась бы без времени после перезагрузки
+      const { timestamp, ...rest } = m as unknown as Record<string, unknown> & { timestamp?: number };
+      items.push({ ...rest, ...(timestamp !== undefined ? { ts: timestamp } : {}) } as unknown as ChatItem);
+    }
     else items.push(m as unknown as ChatItem);
   }
   return items;
@@ -199,7 +205,10 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
       // начинаем новый элемент (тот же «разрез», что делает FlushBuffers в истории).
       if (last?.kind === 'text' && !last.parentToolUseId)
         return withItems([...prev.items.slice(0, -1), { ...last, text: last.text + msg.text }]);
-      return withItems([...prev.items, { kind: 'text', text: msg.text }]);
+      // ts ставим на ПЕРВОЙ дельте поста — это момент, когда ассистент начал его писать
+      // (тот же смысл, что у _textBufStartedAt в TurnAccumulator). Модели тут ещё нет:
+      // её принесёт result в конце хода (case 'result' ниже)
+      return withItems([...prev.items, { kind: 'text', text: msg.text, ts: Date.now() }]);
     }
 
     case 'user_message':
@@ -208,6 +217,7 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
       // (auto=false) этим событием не рассылается.
       return withItems([...prev.items, {
         kind: 'user_message', text: msg.text,
+        ts: msg.timestamp ?? Date.now(),
         ...(msg.attachedPaths ? { attachedPaths: msg.attachedPaths } : {}),
         ...(msg.senderPersonaId ? { senderPersonaId: msg.senderPersonaId } : {}),
         ...(msg.senderOrigin ? { senderOrigin: msg.senderOrigin } : {}),
@@ -238,7 +248,7 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
       // Модель Z: гостевая реплика исполнителя-персоны, вставленная без агентского хода.
       // Рендерится как обычная text-реплика с её личностью (personaId) — маркер доклада
       // распознаётся в ChatItemView (parseDelegationReport), не здесь.
-      return withItems([...prev.items, { kind: 'text', text: msg.text, personaId: msg.personaId }]);
+      return withItems([...prev.items, { kind: 'text', text: msg.text, personaId: msg.personaId, ts: msg.timestamp ?? Date.now() }]);
 
     case 'thinking_delta': {
       const last = prev.items[prev.items.length - 1];
@@ -358,12 +368,24 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
       return withItems([...prev.items, { kind: 'file_changed', path: msg.path, added: msg.added, removed: msg.removed }]);
     }
 
-    case 'result':
-      return {
-        ...prev,
-        isWaiting: false,
-        items: [...prev.items, { kind: 'result', subtype: msg.subtype, durationMs: msg.durationMs, numTurns: msg.numTurns, usage: msg.usage, totalCostUsd: msg.totalCostUsd, apiErrorStatus: msg.apiErrorStatus, permissionDenials: msg.permissionDenials, contextTokens: msg.contextTokens }],
-      };
+    case 'result': {
+      // Модель хода известна только сейчас — проставляем её постам ЭТОГО хода задним
+      // числом (тот же backfill, что делает TurnAccumulator.OnResultAsync для истории,
+      // иначе живая лента и перезагрузка расходились бы). Границей хода назад служит
+      // предыдущий result; сабагентские тексты (parentToolUseId) пропускаем — они
+      // могли идти другой моделью.
+      const items = prev.items.slice();
+      if (msg.usageModel) {
+        for (let i = items.length - 1; i >= 0; i--) {
+          const it = items[i];
+          if (it.kind === 'result') break;
+          if (it.kind === 'text' && !it.parentToolUseId && !it.model)
+            items[i] = { ...it, model: msg.usageModel };
+        }
+      }
+      items.push({ kind: 'result', subtype: msg.subtype, durationMs: msg.durationMs, numTurns: msg.numTurns, usage: msg.usage, totalCostUsd: msg.totalCostUsd, apiErrorStatus: msg.apiErrorStatus, permissionDenials: msg.permissionDenials, contextTokens: msg.contextTokens });
+      return { ...prev, isWaiting: false, items };
+    }
 
     case 'fal_cost':
       // Стоимость генерации fal.ai приходит асинхронно. Дедуп по requestId

@@ -1170,6 +1170,10 @@ export const api = {
       request<GitStatus>(`/projects/${projectId}/git/pull${gq(projectId)}`, { method: 'POST', timeoutMs: 120_000 }),
     push: (projectId: string) =>
       request<GitStatus>(`/projects/${projectId}/git/push${gq(projectId)}`, { method: 'POST', timeoutMs: 120_000 }),
+    // «Подтянуть и опубликовать»: rebase на origin + push (ветка разошлась с origin).
+    // Дольше push: внутри две сетевые операции подряд
+    sync: (projectId: string) =>
+      request<GitStatus>(`/projects/${projectId}/git/sync${gq(projectId)}`, { method: 'POST', timeoutMs: 180_000 }),
     // Частичный stage: patch — unified diff одного хунка/строк (сервер применяет с --recount)
     stageHunk: (projectId: string, patch: string) =>
       request<GitStatus>(`/projects/${projectId}/git/stage-hunk${gq(projectId)}`, { method: 'POST', body: JSON.stringify({ patch }) }),

@@ -18,6 +18,12 @@ export interface GitProjectState {
   stashes: GitStashEntry[];
   remote: GitRemoteInfo | null;  // удалённый репозиторий + авто-коммит (null — не загружено)
   error: string | null;    // последняя ошибка операции (409 { error }) — компактная строка в UI
+  // Последняя ошибка — расхождение с origin (409 { diverged: true }): у неё есть лекарство,
+  // и UI предлагает «Подтянуть и опубликовать» вместо простого текста ошибки
+  diverged: boolean;
+  // Файлы, на которых споткнулось автоматическое слияние (409 { conflictFiles }): UI
+  // показывает их поимённо и предлагает разобрать конфликт в чате
+  conflictFiles: string[];
   busy: boolean;           // идёт сетевая git-операция (блокируем кнопки)
 }
 
@@ -25,7 +31,7 @@ const EMPTY: GitProjectState = {
   status: null, statusLoaded: false,
   log: [], logLoaded: false,
   unpushed: [], unpushedLoaded: false,
-  branches: [], stashes: [], remote: null, error: null, busy: false,
+  branches: [], stashes: [], remote: null, error: null, diverged: false, conflictFiles: [], busy: false,
 };
 
 const _state = new Map<string, GitProjectState>();
@@ -166,15 +172,28 @@ export async function loadGitRemote(projectId: string): Promise<void> {
   } catch { /* без remote-инфо скрываем кнопку Forgejo и настройки авто-коммита */ }
 }
 
+// Данные из тела 409 сверх текста ошибки: расхождение с origin (лечится «Подтянуть и
+// опубликовать») и файлы неразрешённого конфликта. request() вешает распарсенное тело
+// ошибки на поле body (см. lib/offline.ts).
+function errorBody(e: unknown): { diverged?: boolean; conflictFiles?: string[] } {
+  return (e as { body?: { diverged?: boolean; conflictFiles?: string[] } } | null)?.body ?? {};
+}
+
 // Общая обёртка мутации: busy + сброс ошибки → операция → свежий статус либо ошибка в стор
 async function mutate(projectId: string, op: () => Promise<GitStatus>): Promise<boolean> {
-  patch(projectId, { busy: true, error: null });
+  patch(projectId, { busy: true, error: null, diverged: false, conflictFiles: [] });
   try {
     const status = await op();
     patch(projectId, { status, statusLoaded: true, busy: false });
     return true;
   } catch (e) {
-    patch(projectId, { busy: false, error: e instanceof Error ? e.message : 'Ошибка git-операции' });
+    const body = errorBody(e);
+    patch(projectId, {
+      busy: false,
+      error: e instanceof Error ? e.message : 'Ошибка git-операции',
+      diverged: body.diverged === true,
+      conflictFiles: body.conflictFiles ?? [],
+    });
     return false;
   }
 }
@@ -221,6 +240,10 @@ export const gitPull = (projectId: string) =>
   mutate(projectId, () => api.git.pull(projectId));
 export const gitPush = (projectId: string) =>
   mutate(projectId, () => api.git.push(projectId));
+// «Подтянуть и опубликовать»: rebase на origin + push одним действием — для ветки,
+// разошедшейся с origin (обычный push там отклоняется, pull --ff-only не проходит)
+export const gitSync = (projectId: string) =>
+  mutate(projectId, () => api.git.sync(projectId));
 
 // Документный режим: вернуть файл к версии коммита (в авто-режиме сразу фиксируется)
 export const gitRestoreFile = (projectId: string, sha: string, path: string) =>

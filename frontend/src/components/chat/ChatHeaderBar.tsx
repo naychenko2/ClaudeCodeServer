@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Plus, Menu, Hourglass, FileText, Settings } from 'lucide-react';
 import type { Project, Session, ClaudeBilling, Persona } from '../../types';
 import { api } from '../../lib/api';
-import { modelLabel, modelProvider, assistantName, useModelLabel } from '../../lib/models';
+import { modelLabel, modelProvider, assistantName } from '../../lib/models';
 import { effortLabel } from '../../lib/effort';
 import { formatTimeLeft } from '../../lib/expiry';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
@@ -830,7 +830,6 @@ function ExtractTasksButton({ session, hasMessages, online }: { session: Session
 export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, billing, onBillingChange, rateWindows, onOpenSettings, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, artifactsOpen, onToggleArtifacts, artifactFileCount, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, island }: ChatHeaderBarProps) {
   // Поповер управления участниками группового чата (клик по стеку аватаров)
   const [participantsOpen, setParticipantsOpen] = useState(false);
-  const sessionModelLabel = useModelLabel(session.model);
   const asstName = assistantName(session.model);
   const providerKey = session.provider ?? modelProvider(session.model);
   const isCliProvider = providerKey !== 'claude';
@@ -932,9 +931,11 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
           <span style={{ fontSize: 11.5, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             Отвечает: {persona ? personaTitleLines(persona).primary + (personaTitleLines(persona).secondary ? ` (${personaTitleLines(persona).secondary})` : '') : '—'}
           </span>
-          {!isMobile && (
+          {/* Модель здесь больше не пишем: она у каждого поста своя (её показывает
+              строка действий под постом), а в шапке вводила в заблуждение после смены */}
+          {!isMobile && session.effort && (
             <span style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
-              · {sessionModelLabel}{session.effort && ` · ${effortLabel(session.effort)}`}
+              · {effortLabel(session.effort)}
             </span>
           )}
         </div>
@@ -963,9 +964,9 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
           }}>
             {personaZoneText}
           </span>
-          {!isMobile && (
+          {!isMobile && session.effort && (
             <span style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
-              {sessionModelLabel}{session.effort && ` · ${effortLabel(session.effort)}`}
+              {effortLabel(session.effort)}
             </span>
           )}
         </div>
@@ -987,8 +988,8 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
           </span>
         )}
         {/* На мобиле имя проекта не дублируем — оно доступно через кнопку «назад» */}
-        {!isMobile && <span>{project ? project.name : 'без проекта'} · </span>}{sessionModelLabel}
-        {session.effort && <span> · {effortLabel(session.effort)}</span>}
+        {!isMobile && <span>{project ? project.name : 'без проекта'}</span>}
+        {session.effort && <span>{!isMobile && ' · '}{effortLabel(session.effort)}</span>}
       </div>
     </div>
   );
@@ -1143,9 +1144,9 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
         {personaZoneText}
       </span>
     );
-    // Модель/усилие — только выбранные ЯВНО: метка «По умолчанию» ничего не сообщает
-    const modelBits = [session.model ? sessionModelLabel : null, session.effort ? effortLabel(session.effort) : null]
-      .filter(Boolean).join(' · ');
+    // Только усилие, и только выбранное ЯВНО: метка «По умолчанию» ничего не сообщает.
+    // Модель ушла к постам — в шапке она врала после смены модели по ходу разговора
+    const modelBits = session.effort ? effortLabel(session.effort) : '';
     const modelLine = modelBits ? (
       <span style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
         {modelBits}

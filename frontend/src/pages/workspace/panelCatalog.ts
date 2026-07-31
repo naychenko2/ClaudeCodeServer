@@ -15,7 +15,7 @@
 // это разные типы: там, где импортируются оба, брать один из них под алиасом.
 import {
   BookOpenText, ClipboardList, FolderTree, GitCompare, ListTodo, Bot, User, Users,
-  SquareTerminal, MonitorPlay, Network, MessageCircle, NotebookPen, Library, LayoutGrid,
+  SquareTerminal, MonitorPlay, Network, MessageCircle, NotebookPen, Library,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -28,7 +28,7 @@ export type Zone = 'left' | 'right';
 // решает сам экран (проп allowedKeys у PanelZone): в воркспейсе — инструменты
 // проекта и сессии, в разделах хаба — их собственные панели.
 export const PANEL_KEYS = [
-  'projects', 'chats', 'files', 'docs', 'changes', 'tasks', 'graph', 'team', 'terminal', 'preview',
+  'chats', 'files', 'docs', 'changes', 'tasks', 'graph', 'team', 'terminal', 'preview',
   'plan', 'agents', 'context',
   // Панели разделов хаба
   'notesList', 'notesGraph', 'knowledgeList', 'personasList', 'projectGroups',
@@ -37,9 +37,6 @@ export type PanelKey = typeof PANEL_KEYS[number];
 
 // Иконка и заголовок панели — общие для обеих зон.
 export const PANEL_META: Record<PanelKey, { title: string; Icon: LucideIcon }> = {
-  // Переключатель проектов: сменить проект, не уходя из воркспейса. Иконка та же,
-  // что у «Всех проектов» в палитре и сайдбаре раздела — одна сущность, один знак.
-  projects: { title: 'Проекты',   Icon: LayoutGrid },
   chats:    { title: 'Чаты',      Icon: MessageCircle },
   files:    { title: 'Файлы',     Icon: FolderTree },
   // «Документы» рядом с «Файлами»: обе про содержимое репозитория, но Файлы — дерево
@@ -74,7 +71,6 @@ export const PANEL_META: Record<PanelKey, { title: string; Icon: LucideIcon }> =
 // открывается по умолчанию. Открытая панель показывает иконку в ТОЙ зоне, где
 // лежит, — то есть иконка ездит вместе с панелью, а закрытие возвращает её домой.
 export const PANEL_HOME: Record<PanelKey, Zone> = {
-  projects: 'left',
   chats: 'left',
   files: 'right',
   docs: 'right',
@@ -97,7 +93,7 @@ export const PANEL_HOME: Record<PanelKey, Zone> = {
 
 // Наборы ключей по экранам — что вообще доступно в этой рельсе (проп allowedKeys)
 export const WORKSPACE_KEYS: readonly PanelKey[] = [
-  'projects', 'chats', 'files', 'docs', 'changes', 'tasks', 'graph', 'team', 'terminal', 'preview',
+  'chats', 'files', 'docs', 'changes', 'tasks', 'graph', 'team', 'terminal', 'preview',
   'plan', 'agents', 'context',
 ];
 // Раздел «Чаты»: список чатов плюс панели активной сессии (проекта там нет)
@@ -113,29 +109,23 @@ export const PROJECTS_KEYS: readonly PanelKey[] = ['projectGroups'];
 // инструментов проекта.
 export const SESSION_KEYS: readonly PanelKey[] = ['plan', 'agents', 'context'];
 
-// Всё, что не относится к текущей сессии: инструменты проекта и панели разделов.
-// Первая группа рельсы — от сессионной её отделяет сепаратор.
-export const PROJECT_KEYS: readonly PanelKey[] = PANEL_KEYS.filter(k => !SESSION_KEYS.includes(k));
-
-// Панели, доступные только при включённых инструментах проекта.
+// Панели, доступные только при включённых инструментах проекта. В рельсе они идут
+// СВОЕЙ группой: остальные панели показывают содержимое проекта, эти запускают в нём
+// процессы — и выключаются вместе с инструментами, унося и свой разделитель.
 export const TOOLS_KEYS: readonly PanelKey[] = ['terminal', 'preview'];
 
-// Панели ФИКСИРОВАННОЙ ВЫСОТЫ: их содержимое не тянется (строка-переключатель
-// проектов), и растянутая карточка дала бы полколонки пустоты под одной строкой.
-// Такая панель стоит по контенту ВСЕГДА — в любом ряду и с любыми соседями (а
-// растягиваются ли соседи, решает ряд: см. panelStretched в PanelZone). Хендл
-// ресайза рядом с ней не рисуется: тянуть нечего. Первая такая — «Проекты».
-export const FIXED_HEIGHT_KEYS: readonly PanelKey[] = ['projects'];
-
-export function isFixedHeight(k: PanelKey): boolean {
-  return FIXED_HEIGHT_KEYS.includes(k);
-}
+// Содержимое проекта и панели разделов: всё, что не относится ни к текущей сессии,
+// ни к запуску процессов. Первая группа рельсы, дальше инструменты и сессионные —
+// разделители между ними рисует сама рельса.
+export const PROJECT_KEYS: readonly PanelKey[] = PANEL_KEYS.filter(
+  k => !SESSION_KEYS.includes(k) && !TOOLS_KEYS.includes(k),
+);
 
 // Панели ПОЛНОЙ ВЫСОТЫ: тянутся до нижней кромки ВСЕГДА, включая одиночную панель
 // в колонке у центра, где прочие стоят по контенту (см. panelStretched). Для таких
 // панелей контент — связный корпус на весь экран (документация: дерево + оглавление
 // + просмотр), и обрезок по высоте с пустым низом под ним читается как полупустая
-// карточка. Зеркальная пара к FIXED_HEIGHT_KEYS; пересекаться наборы не должны.
+// карточка.
 export const FULL_HEIGHT_KEYS: readonly PanelKey[] = ['docs'];
 
 export function isFullHeight(k: PanelKey): boolean {
@@ -150,6 +140,8 @@ export function isPanelKey(v: unknown): v is PanelKey {
 // схлопнуты в одну панель, поэтому сохранённые у пользователей ключи левой рельсы
 // надо перевести на общие; `tools` пары-наследника не имеет и отбрасывается —
 // его роль закрывают `terminal` и `preview`, которые пользователь откроет сам.
+// Так же отбрасывается `projects`: панель-переключатель проектов упразднена, её
+// заменил док проектов второй левой рельсой (features/projects/ProjectRail).
 const LEGACY_KEY_ALIASES: Record<string, PanelKey> = {
   personas: 'team',
 };

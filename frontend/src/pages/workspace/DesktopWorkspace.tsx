@@ -18,7 +18,7 @@ import { FileViewer } from '../../components/FileViewer';
 import { GitCommitView } from '../../components/GitCommitView';
 import { TaskDetailsPane } from '../../features/tasks/TaskDetailsPane';
 import { ProjectPersonaPane } from '../../features/personas/ProjectPersonasPanel';
-import { ProjectsPanel } from '../../features/projects/ProjectsPanel';
+import { ProjectRail } from '../../features/projects/ProjectRail';
 import { PanelZone } from './PanelZone';
 import { useSessionPanels } from './useSessionPanels';
 import { startPointerDrag } from '../../lib/pointerDrag';
@@ -145,8 +145,8 @@ export function DesktopWorkspace(p: Props) {
 
   // Контент панели «Чаты» левой рельсы. Заголовок панели рисует PanelShell, поэтому
   // здесь только содержимое — список чатов на белом фоне контентной зоны, как у
-  // панелей правой рельсы. Переключатель проектов раньше жил шапкой внутри этой
-  // панели; теперь у него своя — «Проекты».
+  // панелей правой рельсы. Переключатель проектов жил сначала шапкой внутри этой
+  // панели, потом отдельной панелью «Проекты»; теперь это док второй левой рельсы.
   // Пока чатов нет — панели нет вовсе (undefined в наборе). Так же ведёт себя сайдбар
   // раздела «Чаты»: пустой список показывать незачем, а создать чат зовёт центр.
   // chatCount === null — ещё считаем: панель показываем, чтобы она не мигала на старте.
@@ -157,11 +157,10 @@ export function DesktopWorkspace(p: Props) {
   );
 
   // ОБЩИЙ набор контента панелей: обе зоны получают его целиком и рисуют только
-  // те панели, что лежат именно в них. Чаты и проекты собираются здесь, инструменты
-  // проекта приходят из WorkspacePage, панели сессии — из useSessionPanels.
+  // те панели, что лежат именно в них. Чаты собираются здесь, инструменты проекта
+  // приходят из WorkspacePage, панели сессии — из useSessionPanels.
   const zonePanels: Partial<Record<PanelKey, ReactNode>> = {
     chats: chatsPanel,
-    projects: <ProjectsPanel project={p.projectForEdit} onOpenSettings={p.onOpenProjectSettings} />,
     ...p.panels,
   };
 
@@ -228,10 +227,12 @@ export function DesktopWorkspace(p: Props) {
       // Фон прозрачный: дудл-холст (CanvasBackdrop) рисует корень WorkspacePage
       padding: `${ISLAND.gap}px 0 ${ISLAND.pad}px 0`,
     }}>
-      {/* === Слева: рельса иконок + её панели ===
+      {/* === Слева: рельса иконок + её панели, под рельсой — док проектов ===
           Обе зоны получают ОДИН набор контента: панель рисует та зона, в которой
           она сейчас лежит, поэтому её можно перетащить с одной стороны на другую.
-          Открытие/сворачивание — иконкой рельсы, ширина тянется её сплиттером. */}
+          Открытие/сворачивание — иконкой рельсы, ширина тянется её сплиттером.
+          Док проектов в раскладке не участвует: он вторая капсула у края окна и
+          переключает проект, не уводя из воркспейса. */}
       <PanelZone
         side="left"
         panels={zonePanels}
@@ -239,6 +240,7 @@ export function DesktopWorkspace(p: Props) {
         toolsEnabled={p.toolsEnabled}
         sessionPanels={sessionPanels}
         onPanelOpen={p.onPanelOpen}
+        railFooter={<ProjectRail project={p.projectForEdit} onOpenSettings={p.onOpenProjectSettings} />}
       />
 
       {/* === Центр: коммит → задача → персона → доска → файл (split/fullscreen) → чат === */}

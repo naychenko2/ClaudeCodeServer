@@ -34,7 +34,7 @@ import { IslandSplitter } from '../../components/ui/IslandSplitter';
 import { useWindowWidth } from '../../lib/breakpoints';
 import {
   PANEL_META, PANEL_KEYS, PROJECT_KEYS, SESSION_KEYS, TOOLS_KEYS, WORKSPACE_KEYS,
-  isFixedHeight, isFullHeight, type PanelKey, type Zone,
+  isFullHeight, type PanelKey, type Zone,
 } from './panelCatalog';
 import { wsPanels, homeOf, isZoneCollapsed, nextPlacement, zoneOf, PANEL_MIN_H, type PanelZonesStore } from './panelStackState';
 import { usePanelColResize, usePanelDnd, usePanelRowResize, usePanelWidthDrag } from './zoneGestures';
@@ -87,11 +87,16 @@ interface Props {
   // Хук на ЯВНУЮ активацию панели кликом по иконке рельсы (панель открылась).
   // Только клик: восстановление раскладки из localStorage его не дёргает.
   onPanelOpen?: (k: PanelKey) => void;
+  // Второй остров ПОД рельсой зоны — сейчас это док проектов воркспейса. К раскладке
+  // панелей он отношения не имеет, но живёт в той же вертикали у края окна, поэтому
+  // держит зону на экране даже когда открывать в ней нечего.
+  railFooter?: ReactNode;
 }
 
 export function PanelZone({
   side, panels, railCounts, panelStack,
   allowedKeys = WORKSPACE_KEYS, hideWhenEmpty, toolsEnabled, compact, sessionPanels, onPanelOpen,
+  railFooter,
 }: Props) {
   const usePanels = (panelStack ?? wsPanels).use;
   const { zones, toggle, closeTo, evict, setMode, setWidth, setWeights, setColFlex, toggleCollapsed, swapWith, replaceWith, moveAt, moveToNewColumn } = usePanels();
@@ -145,12 +150,11 @@ export function PanelZone({
   // терпим ТОЛЬКО у ОДИНОЧНОЙ панели в колонке у центра: короткий список чатов не
   // должен растягиваться на весь экран. Как только в колонке у центра 2+ панели —
   // они тянутся до низа и делят высоту по весам (обычный ресайз), иначе колонка
-  // рваная. Во втором и дальних рядах панели тянутся всегда. Фиксированные
-  // (FIXED_HEIGHT_KEYS) не тянутся нигде; панели полной высоты (FULL_HEIGHT_KEYS,
-  // напр. Документация) — тянутся всегда, даже одиночкой у центра. colLen — число
-  // панелей в колонке.
+  // рваная. Во втором и дальних рядах панели тянутся всегда; панели полной высоты
+  // (FULL_HEIGHT_KEYS, напр. Документация) — тянутся всегда, даже одиночкой у
+  // центра. colLen — число панелей в колонке.
   const panelStretched = (k: PanelKey, vi: number, colLen: number): boolean =>
-    !isFixedHeight(k) && (isFullHeight(k) || vi !== centerVi || colLen > 1);
+    isFullHeight(k) || vi !== centerVi || colLen > 1;
   // Колонка стоит по контенту целиком — под ней свободный низ (место для новой
   // панели, растяжимая направляющая, укороченный сплиттер ширины).
   const colByContent = (keys: PanelKey[], vi: number): boolean =>
@@ -258,7 +262,9 @@ export function PanelZone({
   // ширину в глобальную переменную (её читает AiLauncher). Слагаемые считаются ПО
   // РАЗМЕТКЕ: рельса + зазор до панелей + сама зона + её ресайз-сплиттер.
   // Drawer компактного режима не считаем — он overlay и живёт поверх контента сам.
-  const zoneEdgeW = !showRail ? 0 : RAIL_W + RAIL_GAP + (compact
+  // Кромку занимает и док под рельсой: даже при схлопнутой рельсе панелей он стоит
+  // на своём месте, и FAB, посчитанный по нулю, уехал бы под него.
+  const zoneEdgeW = !showRail ? (railFooter ? RAIL_W + RAIL_GAP : 0) : RAIL_W + RAIL_GAP + (compact
     ? (tabletKeys.length > 0 && tabletInline ? width + GAP * 2 : 0)
     : (columns.length > 0 ? zoneW + RAIL_GAP : 0));
   useEffect(() => {
@@ -322,8 +328,10 @@ export function PanelZone({
 
   // Ранний return — ПОСЛЕ всех хуков (useSyncExternalStore, useEffect выше).
   // Ни одной доступной панели и ничего не открыто — зоны на экране нет вовсе,
-  // иначе у контента торчала бы пустая полоса рельсы.
-  if (availableKeys.length === 0 && openKeys.length === 0 && !acceptsForeign) return null;
+  // иначе у контента торчала бы пустая полоса рельсы. Док под рельсой от раскладки
+  // не зависит: пока он есть, зона остаётся на экране (капсула рельсы при этом
+  // схлопнута — showRail её погасит).
+  if (availableKeys.length === 0 && openKeys.length === 0 && !acceptsForeign && !railFooter) return null;
 
   // Где лежит перетаскиваемая панель в ВИДИМОЙ раскладке этой зоны (null — тащат
   // из соседней). Нужно, чтобы не предлагать места, дающие ту же раскладку:
@@ -447,11 +455,8 @@ export function PanelZone({
   // колонок нет (vi не передан) — там стек из двух панелей делит высоту, как и был.
   const renderPanel = (k: PanelKey, multiInCol: boolean, vi?: number): ReactNode => {
     const { title, Icon } = PANEL_META[k];
-    // Панель фиксированной высоты (переключатель проектов) не тянется никогда:
-    // растянутая, она давала бы полколонки пустоты под одной строкой контента
-    const byContent = isFixedHeight(k);
     const stretched = vi === undefined
-      ? (multiInCol || isFullHeight(k)) && !byContent
+      ? multiInCol || isFullHeight(k)
       : panelStretched(k, vi, multiInCol ? 2 : 1);
     const shell = (
       <PanelShell
@@ -543,9 +548,11 @@ export function PanelZone({
         onMouseEnter: () => peeked.hold(),
         onMouseLeave: () => peeked.hide(),
       } : undefined}
-      // Две группы: инструменты ПРОЕКТА и панели ТЕКУЩЕЙ СЕССИИ. Разделитель между
-      // ними PanelRail рисует сам и убирает вместе с пустой группой.
-      groups={[railGroup(PROJECT_KEYS), railGroup(SESSION_KEYS)]}
+      footer={railFooter}
+      // Три группы: содержимое ПРОЕКТА, инструменты запуска (Терминал, Preview) и
+      // панели ТЕКУЩЕЙ СЕССИИ. Разделители между ними PanelRail рисует сам и убирает
+      // вместе с пустой группой — выключенные инструменты уносят и свою черту.
+      groups={[railGroup(PROJECT_KEYS), railGroup(TOOLS_KEYS), railGroup(SESSION_KEYS)]}
       // Свой зазор до центра нужен только при закрытых панелях: иначе его даёт
       // прокладка перед зоной
       gapToCenter={openKeys.length === 0 ? RAIL_GAP : 0}
@@ -602,7 +609,7 @@ export function PanelZone({
   };
   const splitterLen = compact
     // Компактный стек: две панели делят высоту между собой, одна стоит по контенту
-    ? contentLen(tabletKeys, k => (tabletKeys.length > 1 || isFullHeight(k)) && !isFixedHeight(k))
+    ? contentLen(tabletKeys, k => tabletKeys.length > 1 || isFullHeight(k))
     : (columns[centerVi]
         ? contentLen(columns[centerVi].keys, k => panelStretched(k, centerVi, columns[centerVi].keys.length))
         : null);
@@ -712,7 +719,7 @@ export function PanelZone({
               const tag = `${vi}:${ri}`;
               // Растянутые соседи делят высоту долями (веса) — им весовой ресайз.
               // Колонка с 2+ панелями всегда растянута (см. panelStretched), так что
-              // пара стретчится; фиксированная (Проекты) высоту не делит — там зазор.
+              // пара стретчится; нерастянутой паре делить нечего — там просто зазор.
               const pairShares = ri > 0
                 && panelStretched(k, vi, col.keys.length)
                 && panelStretched(prev, vi, col.keys.length);

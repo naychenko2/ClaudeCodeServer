@@ -7,7 +7,7 @@
 import { useState, useRef, type ReactNode, type PointerEvent as ReactPointerEvent } from 'react';
 import { Plus, MessageCircle } from 'lucide-react';
 import type { Project, Session, Task, SkillInfo, AgentInfo } from '../../types';
-import { C, FONT, ISLAND, CHAT_MAX_W } from '../../lib/design';
+import { C, FONT, ISLAND, CHAT_COLUMN_W } from '../../lib/design';
 import { useCenterOffset } from '../../lib/centerOffset';
 import { Button, Island } from '../../components/ui';
 import { ICON_SIZE } from '../../components/ui/icons';
@@ -203,9 +203,11 @@ export function DesktopWorkspace(p: Props) {
   // В центре одиночный чат — единственный режим с колонкой фиксированной ширины,
   // поэтому только ему нужна компенсация перекоса зон (файл, доска, граф и превью
   // резиновые: им положено занимать всю колонку целиком).
+  // Ширина — CHAT_COLUMN_W, а не CHAT_MAX_W: компенсации отдаётся только то, что
+  // остаётся сверх ПОЛНОЙ потребности ленты (колонка + жёлоб + полоса прокрутки).
   const chatOnly = !p.openFile && !p.openCommitSha && !p.selectedTask && !personaOpen
     && !p.teamCenterOpen && !p.boardOpen && !p.previewOpen && !p.graphOpen;
-  const { rootRef: offsetRootRef, centerRef: offsetCenterRef } = useCenterOffset(chatOnly ? CHAT_MAX_W : undefined);
+  const { rootRef: offsetRootRef, centerRef: offsetCenterRef } = useCenterOffset(chatOnly ? CHAT_COLUMN_W : undefined);
 
   // Центральный остров: карточка на холсте, внутри — оригинальная обёртка режима
   // (flex:1 в колонке острова растягивает её на всю высоту). По бокам — доп. воздух

@@ -1,10 +1,10 @@
-import { Fragment, useState, type DragEvent, type HTMLAttributes, type ReactNode } from 'react';
+import { Fragment, type DragEvent, type HTMLAttributes, type ReactNode } from 'react';
 import { ChevronsLeft, ChevronsRight, Columns2, Pin, Square, X, type LucideIcon } from 'lucide-react';
 import { C, FONT, ISLAND, Z } from '../../lib/design';
 import { ICON_STROKE } from './icons';
-import { RailFlyout } from './RailFlyout';
+import { RailCapsule, RAIL_W, RAIL_GAP } from './RailCapsule';
+import { RailIconButton } from './RailIconButton';
 import { RailSep } from './RailSep';
-import { ToolbarIconButton } from '../Toolbar';
 
 // Вертикальная рельса иконок у края окна — полукапсула-остров, из которой
 // открываются панели-карточки. Общая для ОБЕИХ зон: RightPanelStack (инструменты
@@ -15,13 +15,8 @@ import { ToolbarIconButton } from '../Toolbar';
 // Раньше это были два дословно скопированных блока в обоих стеках — правка
 // одного молча расходилась с другим.
 
-// Ширина рельсы и зазор между рельсой и зоной панелей. Значения общие: рельсы
-// обязаны быть зеркальны, иначе одна зона визуально «толще» другой.
-export const RAIL_W = 40;
-// Зазор 8, а не 4: в него встаёт крайняя направляющая места вставки (толщина 2 плюс
-// отступ от кромки панели). При 4 она прижималась к рельсе вплотную и читалась как
-// её граница, а не как «сюда встанет колонка».
-export const RAIL_GAP = 8;
+// Геометрия капсулы (ширина, зазор до центра) живёт вместе с ней — RailCapsule.
+export { RAIL_W, RAIL_GAP };
 
 // Одна иконка рельсы. key нужен только React'у — сам ключ панели рельса не
 // трактует, всю логику (что открыто, что видно) решает вызывающий стек.
@@ -89,31 +84,6 @@ interface Props {
 }
 
 
-// Служебная кнопка рельсы (режим зоны, «свернуть все») — с той же подписью сбоку,
-// что и иконки панелей: подсказка в рельсе везде одна и та же механика.
-function RailHoverButton({ side, label, onClick, disabled, children }: {
-  side: 'left' | 'right';
-  label: string;
-  onClick: () => void;
-  disabled?: boolean;
-  children: ReactNode;
-}) {
-  const [hover, setHover] = useState(false);
-  return (
-    <span
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      style={{ display: 'flex' }}
-    >
-      <RailFlyout side={side} label={label} open={hover} railWidth={RAIL_W}>
-        <ToolbarIconButton onClick={onClick} disabled={disabled} ariaLabel={label}>
-          {children}
-        </ToolbarIconButton>
-      </RailFlyout>
-    </span>
-  );
-}
-
 // Иконка панели. У ОТКРЫТОЙ панели под курсором иконка подменяется на закрывающую:
 // это и есть кнопка «закрыть». Своего крестика в шапке у панели больше нет —
 // клик по активной иконке и раньше закрывал панель, теперь он ещё и выглядит
@@ -126,44 +96,45 @@ function RailHoverButton({ side, label, onClick, disabled, children }: {
 // выбор; кнопки «свернуть все» внизу при одной панели тоже нет — её роль забирает
 // эта же кнопка.
 function RailButton({ item, side, soleIcon: SoleIcon }: { item: RailItem; side: 'left' | 'right'; soleIcon?: LucideIcon }) {
-  const [hover, setHover] = useState(false);
   // Во время HTML5-drag браузер не шлёт mouse-события, поэтому hover, поднятый при
   // захвате иконки, залипает: после дропа панель могла стать активной, и залипший
-  // hover рисовал бы на её иконке крестик закрытия. Гасим hover на старте и конце
-  // перетаскивания, не теряя авторский обработчик из dragProps.
+  // hover рисовал бы на её иконке крестик закрытия. Гасим наведение на старте и
+  // конце перетаскивания, не теряя авторский обработчик из dragProps. Кнопка держит
+  // hover у себя, поэтому «погасить» здесь — это сообщить ей, что курсор ушёл.
   const { onDragStart: dragStart, onDragEnd: dragEnd, ...dragRest } = item.dragProps ?? {};
+  const leave = (e: DragEvent<HTMLElement>) => {
+    (e.currentTarget as HTMLElement).dispatchEvent(new MouseEvent('mouseleave', { bubbles: false }));
+  };
   const dragProps = item.dragProps && {
     ...dragRest,
-    onDragStart: (e: DragEvent<HTMLElement>) => { setHover(false); dragStart?.(e); },
-    onDragEnd: (e: DragEvent<HTMLElement>) => { setHover(false); dragEnd?.(e); },
+    onDragStart: (e: DragEvent<HTMLElement>) => { leave(e); dragStart?.(e); },
+    onDragEnd: (e: DragEvent<HTMLElement>) => { leave(e); dragEnd?.(e); },
   };
   const sole = !!SoleIcon && item.active;
-  const closing = !sole && item.active && hover;
-  // Закрытая панель под курсором показывается попапом, а иконка предлагает её
-  // закрепить: клик оставит панель в раскладке, уход курсора — уберёт попап.
-  const pinning = !item.active && hover && !!item.pinnable;
-  const Icon = sole ? SoleIcon : closing ? X : pinning ? Pin : item.Icon;
-  const title = item.active
-    ? `Скрыть «${item.title}»`
-    : pinning ? `Закрепить «${item.title}»` : item.title;
   return (
-    <span
-      {...dragProps}
-      // Метка для зоны: по ней она проверяет, под курсором ли ещё иконка.
-      // Одного onMouseLeave мало — если кнопка перестроилась или исчезла под
-      // курсором, событие не приходит вовсе и подсказка зоны залипает.
-      data-rail-item={item.key}
-      onMouseEnter={() => { setHover(true); item.onHoverStart?.(); }}
-      onMouseLeave={() => { setHover(false); item.onHoverEnd?.(); }}
-      style={{ display: 'flex' }}
+    <RailIconButton
+      side={side}
+      // Подпись меняется по наведению вместе с иконкой: у открытой панели клик
+      // закрывает, у закрытой с попапом — закрепляет
+      label={item.active ? `Скрыть «${item.title}»` : item.title}
+      active={item.active && !sole}
+      onClick={item.onClick}
+      onHoverChange={h => (h ? item.onHoverStart?.() : item.onHoverEnd?.())}
+      wrapper={{
+        ...dragProps,
+        // Метка для зоны: по ней она проверяет, под курсором ли ещё иконка.
+        // Одного onMouseLeave мало — если кнопка перестроилась или исчезла под
+        // курсором, событие не приходит вовсе и подсказка зоны залипает.
+        'data-rail-item': item.key,
+      } as HTMLAttributes<HTMLElement>}
     >
-      {/* Подпись сбоку вместо нативного тултипа — общее поведение всех рельс */}
-      <RailFlyout side={side} label={title} open={hover} railWidth={RAIL_W}>
-        <ToolbarIconButton
-          onClick={item.onClick}
-          active={item.active && !sole}
-          ariaLabel={title}
-        >
+      {hover => {
+        const closing = !sole && item.active && hover;
+        // Закрытая панель под курсором показывается попапом, а иконка предлагает её
+        // закрепить: клик оставит панель в раскладке, уход курсора — уберёт попап.
+        const pinning = !item.active && hover && !!item.pinnable;
+        const Icon = sole ? SoleIcon : closing ? X : pinning ? Pin : item.Icon;
+        return (
           <div style={{ position: 'relative', display: 'flex' }}>
             <Icon size={17} strokeWidth={ICON_STROKE} />
             {/* Кружок с числом при закрывающей иконке прячем: рядом с «закрыть» счётчик
@@ -178,9 +149,9 @@ function RailButton({ item, side, soleIcon: SoleIcon }: { item: RailItem; side: 
               </span>
             ) : null}
           </div>
-        </ToolbarIconButton>
-      </RailFlyout>
-    </span>
+        );
+      }}
+    </RailIconButton>
   );
 }
 
@@ -219,48 +190,16 @@ export function PanelRail({ side, groups, visible = true, gapToCenter = 0, modeT
       : `1px solid ${C.border}`;
 
   const rail = (
-    <div
+    <RailCapsule
       {...dropProps}
-      style={{
-      width: visible ? RAIL_W : 0,
-      opacity: visible ? 1 : 0,
-      pointerEvents: visible ? 'auto' : 'none',
-      // Схлопывается и по ВЫСОТЕ: под рельсой может стоять второй остров (док
-      // проектов), и невидимая капсула, сохранив свою высоту, держала бы его на
-      // отступе от верха — на пустом месте.
-      maxHeight: visible ? undefined : 0,
-      transition: 'width 0.15s ease-out, opacity 0.12s ease-out',
-      flexShrink: 0, position: 'relative',
-      display: 'flex', flexDirection: 'column', alignItems: 'center',
-      // Тон шапок островов и сайдбаров — единая «оправа» интерфейса.
-      // Вертикальный отступ подобран так, чтобы капсула с ОДНОЙ иконкой была
-      // ровно в высоту шапки панели (ISLAND.headerH), а центр первой кнопки
-      // сел на линию её заголовка: рельса теперь всегда на виду рядом с шапкой.
-      gap: 6, paddingTop: visible ? 4 : 0, paddingBottom: visible ? 4 : 0,
+      side={side}
+      visible={visible}
+      gapToCenter={gapToCenter}
       // Пока панель тащат, рельса — приёмник: обводка пунктирная, под курсором —
-      // сплошная акцентная с подложкой. Границу везде задаём ОДНОЙ строкой
-      // railBorder, а не правим потом borderColor/borderStyle: React запрещает
-      // мешать сокращённые свойства с посторонними (borderTop и т.п.) — снимая
-      // одно, он не восстанавливает другое.
-      background: dropping && drop?.over ? C.accentMuted : C.bgMain,
-      borderTop: railBorder, borderBottom: railBorder,
-      boxSizing: 'border-box', overflow: 'hidden',
-      // Рельса — полукапсула-остров у края окна: тень как у остальных островов
-      boxShadow: ISLAND.shadow,
-      // Скруглена и обведена только сторона, обращённая к центру; прижатая к
-      // краю окна — прямая и без бордера.
-      ...(isLeft
-        ? {
-            borderRight: railBorder,
-            borderTopRightRadius: ISLAND.radius, borderBottomRightRadius: ISLAND.radius,
-            marginRight: gapToCenter,
-          }
-        : {
-            borderLeft: railBorder,
-            borderTopLeftRadius: ISLAND.radius, borderBottomLeftRadius: ISLAND.radius,
-            marginLeft: gapToCenter,
-          }),
-    }}>
+      // сплошная акцентная с подложкой
+      border={railBorder}
+      background={dropping && drop?.over ? C.accentMuted : undefined}
+    >
       {/* Переключатель режима зоны. multi — раскладка КОЛОНКАМИ; обе зоны её
           умеют, поэтому иконка и подсказка у них одни и те же. */}
       {modeToggle && (() => {
@@ -270,11 +209,11 @@ export function PanelRail({ side, groups, visible = true, gapToCenter = 0, modeT
         const label = modeToggle.soloMode ? 'Одна панель' : 'Колонки';
         return (
           <>
-            <RailHoverButton side={side} label={label} onClick={modeToggle.onToggle}>
+            <RailIconButton side={side} label={label} onClick={modeToggle.onToggle}>
               {modeToggle.soloMode
                 ? <Square size={15} strokeWidth={ICON_STROKE} />
                 : <Columns2 size={15} strokeWidth={ICON_STROKE} />}
-            </RailHoverButton>
+            </RailIconButton>
             <RailSep margin="1px 0 2px" />
           </>
         );
@@ -300,7 +239,7 @@ export function PanelRail({ side, groups, visible = true, gapToCenter = 0, modeT
           <>
             <RailSep margin="2px 0 1px" />
             <div style={{ opacity: collapse.disabled ? 0.3 : 1 }}>
-              <RailHoverButton
+              <RailIconButton
                 side={side}
                 label={collapse.collapsed ? 'Открыть свёрнутые панели' : 'Свернуть все панели'}
                 onClick={collapse.onToggle}
@@ -309,7 +248,7 @@ export function PanelRail({ side, groups, visible = true, gapToCenter = 0, modeT
                 <div style={{ display: 'flex', color: collapse.disabled ? C.textMuted : undefined }}>
                   <CollapseIcon size={16} strokeWidth={ICON_STROKE} />
                 </div>
-              </RailHoverButton>
+              </RailIconButton>
             </div>
           </>
         );
@@ -334,7 +273,7 @@ export function PanelRail({ side, groups, visible = true, gapToCenter = 0, modeT
           </div>
         );
       })()}
-    </div>
+    </RailCapsule>
   );
 
   // Мишень стоит ПОД рельсой, на холсте, а не внутри столбца иконок: внутри она

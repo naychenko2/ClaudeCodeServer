@@ -1,12 +1,11 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Pin, Plus, Search } from 'lucide-react';
-import { C, R, FS, FONT, Z, SHADOW, ISLAND } from '../../lib/design';
+import { C, R, FS, FONT, Z, SHADOW } from '../../lib/design';
 import type { Project } from '../../types';
-import { IconButton, RailFlyout, RailSep } from '../../components/ui';
+import { RailCapsule, RailIconButton, RailSep } from '../../components/ui';
 import { PanelDropLine } from '../../components/ui/PanelDropGuide';
 import { ICON_STROKE } from '../../components/ui/icons';
-import { RAIL_W } from '../../components/ui/PanelRail';
 import { ProjectIcon, type ProjectIconOutline } from './ProjectIcon';
 import { ProjectPalette } from './ProjectPalette';
 import { useAllProjects, openProjectViaEvent, openNewProjectFlow } from './useAllProjects';
@@ -51,30 +50,6 @@ const STATUS_TITLE: Record<ProjectActivity['status'], string> = {
   working: 'агент работает',
 };
 
-// Служебная кнопка дока («+», поиск) — тот же примитив и та же подпись сбоку, что у
-// кнопок рельсы панелей
-function DockButton({ side, label, onClick, children }: {
-  side: 'left' | 'right';
-  label: string;
-  onClick: () => void;
-  children: ReactNode;
-}) {
-  const [hover, setHover] = useState(false);
-  return (
-    <span
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      style={{ display: 'flex' }}
-    >
-      <RailFlyout side={side} label={label} open={hover} railWidth={RAIL_W}>
-        <IconButton size="md" ariaLabel={label} onClick={onClick}>
-          {children}
-        </IconButton>
-      </RailFlyout>
-    </span>
-  );
-}
-
 // Кнопка проекта в доке. Тот же примитив, что у всех кнопок рельсы (IconButton):
 // одинаковые бокс, скругление, hover-подложка, подсветка активного и focus-ring —
 // внутри вместо lucide-иконки квадратик проекта. Перетаскивание и контекст-меню
@@ -98,7 +73,6 @@ function ProjectDockIcon({ p, activity, active, outline, dragging, dragActive, s
   onContextMenu: (e: React.MouseEvent, p: Project) => void;
 }) {
   const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [hover, setHover] = useState(false);
   useEffect(() => () => { if (pressTimer.current) clearTimeout(pressTimer.current); }, []);
   const label = activity ? `${p.name} — ${STATUS_TITLE[activity.status]}` : p.name;
   return (
@@ -106,8 +80,6 @@ function ProjectDockIcon({ p, activity, active, outline, dragging, dragActive, s
       data-swicon={p.id}
       onPointerDown={e => onPointerDown(e, p)}
       onContextMenu={e => onContextMenu(e, p)}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
       onTouchStart={e => {
         const t = e.touches[0];
         pressTimer.current = setTimeout(() => {
@@ -122,19 +94,23 @@ function ProjectDockIcon({ p, activity, active, outline, dragging, dragActive, s
         transition: 'opacity 0.12s', touchAction: 'none',
       }}
     >
-      {/* Подпись сбоку — только имя проекта */}
-      <RailFlyout side={side} label={label} open={hover && !dragActive} railWidth={RAIL_W}>
-        {/* Кнопка-картинка: иконка проекта занимает бокс ЦЕЛИКОМ (штриховым иконкам
-            панелей нужен воздух вокруг глифа, картинке — нет). В фокусе только
-            текущий проект — он в полном цвете; остальные до наведения показаны
-            контуром с инициалами, чтобы весить не больше служебных значков рельсы. */}
-        {/* Кольцо выбранного нужно только когда иконка нарисована картинкой: в покое
-            выбранный и так помечен акцентным контуром, и второй знак поверх него был
-            бы шумом */}
-        <IconButton size="md" variant="media" active={active && !outline} ariaLabel={label} onClick={() => onClick(p)}>
-          <ProjectIcon project={p} size={ICON_BOX} radius={R.md} outline={outline} />
-        </IconButton>
-      </RailFlyout>
+      {/* Кнопка-картинка: иконка проекта занимает бокс ЦЕЛИКОМ (штриховым иконкам
+          панелей нужен воздух вокруг глифа, картинке — нет). В фокусе только текущий
+          проект — он в полном цвете; остальные до наведения показаны контуром с
+          инициалами, чтобы весить не больше служебных значков рельсы.
+          Кольцо выбранного нужно только когда иконка нарисована картинкой: в покое
+          выбранный и так помечен акцентным контуром, и второй знак поверх него был
+          бы шумом. */}
+      <RailIconButton
+        side={side}
+        label={label}
+        variant="media"
+        active={active && !outline}
+        hoverSuppressed={dragActive}
+        onClick={() => onClick(p)}
+      >
+        <ProjectIcon project={p} size={ICON_BOX} radius={R.md} outline={outline} />
+      </RailIconButton>
       {/* Точка статуса живёт НАД кнопкой, а не внутри неё: обесцвечивание невыбранных
           красит всё содержимое кнопки, а «агент ждёт ответа» обязан оставаться
           оранжевым именно у чужого проекта — ради этого сигнала док и смотрят. */}
@@ -357,30 +333,21 @@ export function ProjectRail({ project, onOpenSettings, side = 'left' }: {
         @keyframes ccProjGhostPop { from { transform: scale(0.8) rotate(-3deg); opacity: 0 } to { transform: scale(1) rotate(-3deg); opacity: 0.95 } }
       `}</style>
 
-      {/* Капсула-остров: та же геометрия, что у рельсы панелей — прижата к краю окна,
-          скруглена и обведена только со стороны центра */}
-      <div
+      {/* Капсула-остров — тот же примитив, что несёт рельсу панелей: геометрия
+          (ширина, скругление к центру, бордеры, тень) у всех рельс общая */}
+      <RailCapsule
+        side={side}
         onMouseEnter={() => setRailHover(true)}
         onMouseLeave={() => setRailHover(false)}
-        style={{
-        width: RAIL_W, flexShrink: 0, boxSizing: 'border-box', position: 'relative',
-        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: CAP_GAP,
-        paddingTop: 4, paddingBottom: 4,
-        background: C.bgMain,
-        borderTop: `1px solid ${C.border}`,
-        borderBottom: `1px solid ${C.border}`,
-        borderRight: `1px solid ${C.border}`,
-        borderTopRightRadius: ISLAND.radius, borderBottomRightRadius: ISLAND.radius,
-        boxShadow: ISLAND.shadow,
         // Пока иконку тащат, капсула для мыши сквозная: место вставки считается по
         // координатам курсора (события ловит window), а вот наведение на кнопки под
         // ним — чистый мусор. Иначе иконки подсвечивались бы и подпрыгивали ровно там,
         // куда человек целится.
-        pointerEvents: dragView ? 'none' : undefined,
-      }}>
+        style={dragView ? { pointerEvents: 'none' } : undefined}
+      >
         {/* Поиск по всем проектам: палитра умеет и переход, и создание, и «Все проекты».
             Кружок — сколько проектов не поместилось в док. */}
-        <DockButton
+        <RailIconButton
           side={side}
           label={hiddenCount > 0
             ? `Перейти к проекту (ещё ${hiddenCount}${hiddenWaiting ? ' · агент ждет ответа' : ''})`
@@ -404,7 +371,7 @@ export function ProjectRail({ project, onOpenSettings, side = 'left' }: {
               </span>
             )}
           </div>
-        </DockButton>
+        </RailIconButton>
         <RailSep />
 
         {/* Столбец иконок: закреплённые, разделитель, недавние */}
@@ -465,10 +432,10 @@ export function ProjectRail({ project, onOpenSettings, side = 'left' }: {
         <RailSep />
         {/* Новый проект. Мастер проекта требует места, которого в рельсе нет, поэтому
             уводим в раздел «Проекты» с уже открытым диалогом. */}
-        <DockButton side={side} label="Новый проект" onClick={openNewProjectFlow}>
+        <RailIconButton side={side} label="Новый проект" onClick={openNewProjectFlow}>
           <Plus size={17} strokeWidth={ICON_STROKE} />
-        </DockButton>
-      </div>
+        </RailIconButton>
+      </RailCapsule>
 
       {/* Призрак перетаскиваемой иконки — порталом в body (капсула режет содержимое по
           своим скруглениям) и СБОКУ от курсора, в сторону центра окна. Под курсором он

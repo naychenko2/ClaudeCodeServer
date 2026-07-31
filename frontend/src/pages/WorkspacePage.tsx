@@ -1398,7 +1398,10 @@ const windowWidth = useWindowWidth();
           graphOpen={graphOpen}
           graphArea={<CodeGraphDocument projectId={project.id} isMobile={false} onClose={handleGraphClose} onOpenFile={handleOpenFileFromTree} onBuild={handleGraphBuild} />}
           onPanelOpen={handlePanelOpen}
-          toolsEnabled={!!project.toolsEnabled}
+          // Из projectForEdit, а не из project: настройки правят именно его, и по
+          // старому объекту Терминал с Preview появлялись в рельсе только после
+          // перезагрузки страницы
+          toolsEnabled={!!projectForEdit.toolsEnabled}
           panels={{
             files: fileSubTab === 'files'
               ? <FileExplorer project={project} activeFilePath={openFile} isMobile={false} onOpenFile={handleOpenFileFromTree} onOpenGitDiff={handleOpenGitDiff} onOpenCommit={handleOpenCommit} onAddToKnowledge={handleAddToKnowledge} onAddFolderToKnowledge={handleAddFolderToKnowledge} onRemoveFromKnowledge={handleRemoveFromKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} indexingFolders={indexingFolders} onAttachToChat={activeSession && !fileFullscreen ? handleAttachToChat : undefined} onOpenKnowledge={() => setFileSubTab('knowledge')} />

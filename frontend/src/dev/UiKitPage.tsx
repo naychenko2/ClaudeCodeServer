@@ -40,7 +40,7 @@ import {
   Menu, MenuItem, BackButton, WaitingIndicator,
   IslandScaffold, Splitter, SidebarSplitter, IslandSplitter, IslandSidebarSplitter,
   TextField, TextArea, IconField, Field, FieldLabel,
-  PanelShell, PanelHeaderSlot, useHasPanelHeader,
+  PanelShell, PanelHeaderSlot, useHasPanelHeader, RailFlyout,
 } from '../components/ui';
 import { ICON_SIZE, ICON_STROKE, ICON_PROPS } from '../components/ui/icons';
 import { Toolbar, ToolbarIconButton } from '../components/Toolbar';
@@ -224,7 +224,7 @@ export function UiKitPage() {
               <PanelsSection />
             </div>
 
-            {/* Секция «Шапки» — HubHeader, SidebarProjectSwitcher, IslandHeader */}
+            {/* Секция «Шапки» — HubHeader, ProjectRail, IslandHeader */}
             <div id="sec-headers" style={{ scrollMarginTop: STICKY_OFFSET }}>
               <HeadersSection />
             </div>
@@ -2460,8 +2460,35 @@ function PanelsSection() {
 
 // === Секция «Шапки» ===============================================
 // Верхние панели уровня экрана: HubHeader (главная шапка хаба),
-// SidebarProjectSwitcher (переключатель проектов в сайдбаре воркспейса) и
+// ProjectRail (док проектов второй левой рельсой воркспейса) и
 // IslandHeader как атомарный паттерн шапки острова/панели рельсы.
+// Живая демонстрация RailFlyout: кнопка рельсы с подписью сбоку, при action —
+// ещё и с кнопкой в подписи (у дока проектов так открываются настройки).
+function RailFlyoutDemo({ label, action }: { label: string; action?: boolean }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <span
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{ display: 'flex' }}
+    >
+      <RailFlyout
+        side="left"
+        label={label}
+        open={hover}
+        railWidth={0}
+        action={action ? { Icon: Settings, title: 'Настройки проекта', onClick: () => {} } : undefined}
+      >
+        <IconButton size="md" ariaLabel={label}>
+          {action
+            ? <LayoutTemplate size={17} strokeWidth={ICON_STROKE} />
+            : <ListTree size={17} strokeWidth={ICON_STROKE} />}
+        </IconButton>
+      </RailFlyout>
+    </span>
+  );
+}
+
 function HeadersSection() {
   return (
     <Island>
@@ -2596,90 +2623,83 @@ function HeadersSection() {
           </p>
         </SubBlock>
 
-        {/* 2. SidebarProjectSwitcher — переключатель проектов в плашке
-            сайдбара воркспейса. Активный проект — чип [иконка + имя + Settings],
-            остальные — компактные иконки; порядок стабильный (закреплённые
-            сверху), есть статус-точки и drag-and-drop. */}
-        <SubBlock label="SidebarProjectSwitcher — переключатель проектов (воркспейс)">
+        {/* 2. ProjectRail — док проектов ВТОРОЙ левой рельсой (под рельсой
+            панелей). Вертикальная капсула той же геометрии: «+» новый проект,
+            закреплённые, недавние, поиск с «+N». Настройки активного проекта
+            живут в подписи его иконки (RailFlyout), а не отдельной кнопкой. */}
+        <SubBlock label="ProjectRail — док проектов (вторая левая рельса)">
           <div style={{
-            display: 'flex', alignItems: 'center', gap: SP.xs,
-            padding: `${SP.sm}px ${SP.md}px`,
-            background: C.bgPanel,
-            borderRadius: R.lg,
-            border: `1px solid ${C.border}`,
+            width: 40, boxSizing: 'border-box',
+            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: SP.xs + 2,
+            paddingTop: SP.xs, paddingBottom: SP.xs,
+            background: C.bgMain,
+            borderTop: `1px solid ${C.border}`,
+            borderBottom: `1px solid ${C.border}`,
+            borderRight: `1px solid ${C.border}`,
+            borderTopRightRadius: ISLAND.radius, borderBottomRightRadius: ISLAND.radius,
+            boxShadow: ISLAND.shadow,
           }}>
-            {/* Чип активного проекта: иконка + имя + Settings */}
+            {/* Новый проект */}
             <div style={{
-              display: 'flex', alignItems: 'center', gap: SP.sm,
-              padding: `${SP.xs}px ${SP.sm}px`,
-              borderRadius: R.md,
-              background: C.bgWhite,
-              boxShadow: SHADOW.card,
-              flexShrink: 0,
+              width: 32, height: 32, borderRadius: R.md, cursor: 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textMuted,
             }}>
-              {/* ProjectIcon-плашка */}
-              <div style={{
-                width: 22, height: 22, borderRadius: R.sm,
-                background: AGENT_COLORS.blue, color: C.onDark,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: 11, fontWeight: 700,
-              }}>
-                CC
-              </div>
-              <span style={{
-                fontSize: FS.sm, fontWeight: 600, color: C.textHeading,
-                whiteSpace: 'nowrap',
-              }}>
-                ClaudeCodeServer
-              </span>
-              {/* Шестерёнка настроек проекта */}
-              <Settings size={13} strokeWidth={2} color={C.textMuted} style={{ cursor: 'pointer' }} />
+              <Plus size={17} strokeWidth={ICON_STROKE} />
             </div>
+            <div style={{ width: 22, height: 1, background: C.border }} />
 
-            {/* Разделитель групп */}
-            <div style={{ width: 1, alignSelf: 'stretch', background: C.border }} />
-
-            {/* Compact иконки других проектов с статус-точками */}
+            {/* Закреплённые, затем недавние. Кнопка — IconButton md variant="media":
+                картинка занимает бокс целиком, а состояние показывает сама — текущий
+                проект в полном цвете, прочие до наведения контурные (ProjectIcon
+                outline: рамка и инициалы, даже если у проекта картинка). */}
             {[
-              { initials: 'B',  color: AGENT_COLORS.green,   status: 'working' },
-              { initials: 'Д',  color: AGENT_COLORS.orange,  status: 'waiting' },
-              { initials: 'P',  color: AGENT_COLORS.pink,    status: undefined },
-              { initials: 'M',  color: AGENT_COLORS.cyan,    status: undefined },
+              { initials: 'CC', color: AGENT_COLORS.blue,   active: true,  status: undefined, sepBefore: false },
+              { initials: 'B',  color: AGENT_COLORS.green,  active: false, status: 'working', sepBefore: false },
+              { initials: 'Д',  color: AGENT_COLORS.orange, active: false, status: 'waiting', sepBefore: true },
+              { initials: 'P',  color: AGENT_COLORS.pink,   active: false, status: undefined, sepBefore: false },
             ].map(p => (
-              <div key={p.initials} style={{ position: 'relative', flexShrink: 0 }}>
+              <Fragment key={p.initials}>
+                {p.sepBefore && <div style={{ width: 22, height: 2, background: C.divider, borderRadius: 1 }} />}
                 <div style={{
-                  width: 30, height: 30, borderRadius: R.sm,
-                  background: p.color, color: C.onDark,
+                  width: 32, height: 32, borderRadius: R.md, cursor: 'pointer',
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontWeight: 700, fontSize: 12,
-                  cursor: 'pointer',
+                  position: 'relative',
+                  background: p.active ? p.color : 'transparent',
+                  color: p.active ? C.onDark : C.textMuted,
+                  border: p.active ? undefined : `1px solid ${C.border}`,
+                  boxSizing: 'border-box',
+                  fontWeight: p.active ? 700 : 600, fontSize: 12,
                 }}>
                   {p.initials}
+                  {/* Статус-точка: working=success / waiting=accent */}
+                  {p.status && (
+                    <span style={{
+                      position: 'absolute', top: -2, right: -2,
+                      width: 8, height: 8, borderRadius: R.full,
+                      background: p.status === 'working' ? C.success : C.accent,
+                      border: `2px solid ${C.bgMain}`, boxSizing: 'content-box',
+                    }} />
+                  )}
                 </div>
-                {/* Статус-точка: working=success / waiting=accent */}
-                {p.status && (
-                  <span style={{
-                    position: 'absolute', bottom: -1, right: -1,
-                    width: 9, height: 9, borderRadius: '50%',
-                    background: p.status === 'working' ? C.success : C.accent,
-                    border: `2px solid ${C.bgPanel}`,
-                  }} />
-                )}
-              </div>
+              </Fragment>
             ))}
 
-            {/* Хвост: лупа «+N» → палитра всех проектов */}
+            <div style={{ width: 22, height: 1, background: C.border }} />
+            {/* Поиск: кружок — сколько проектов не поместилось */}
             <div style={{
-              display: 'flex', alignItems: 'center', gap: SP.xxs,
-              padding: `${SP.xs}px ${SP.sm}px`,
-              borderRadius: R.sm,
-              background: 'transparent',
-              color: C.textMuted,
-              fontSize: FS.xs, cursor: 'pointer',
-              flexShrink: 0,
+              width: 32, height: 32, borderRadius: R.md, cursor: 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textMuted,
             }}>
-              <Search size={13} strokeWidth={2} />
-              <span style={{ fontFamily: FONT.mono }}>+7</span>
+              <div style={{ position: 'relative', display: 'flex' }}>
+                <Search size={17} strokeWidth={ICON_STROKE} />
+                <span style={{
+                  position: 'absolute', top: -6, right: -7, minWidth: 14, height: 14, padding: '0 3px',
+                  borderRadius: 7, background: C.accent, color: C.onAccent,
+                  fontSize: 9, fontWeight: 700, lineHeight: '14px', textAlign: 'center',
+                }}>
+                  7
+                </span>
+              </div>
             </div>
           </div>
           <p style={{
@@ -2687,15 +2707,46 @@ function HeadersSection() {
             fontSize: FS.xs, color: C.textMuted,
             fontFamily: FONT.mono, lineHeight: 1.5,
           }}>
-            Чип активного проекта разворачивается на всю ширину сайдбара, остальные
-            — компактные иконки. Порядок СТАБИЛЬНЫЙ: закреплённые (Pin) сверху,
-            недавние — append-only, активный остаётся на своей позиции при выборе.
-            Статус-точки: working (зелёная) / waiting (оранжевая). Drag-and-drop
-            для пина; правый клик — контекст-меню; «+N» открывает палитру всех.
+            Вторая капсула у левой кромки, под рельсой панелей. Порядок СТАБИЛЬНЫЙ:
+            закреплённые (Pin) сверху, недавние — append-only, активный остаётся на
+            своей позиции и остаётся единственным в полном цвете — прочие обесцвечены
+            и возвращают цвет под курсором (там же лёгкий подъём). Статус-точки
+            рисуются ПОВЕРХ кнопки, поэтому «агент ждёт» виден и у серой иконки:
+            working (зелёная) / waiting (оранжевая). Вертикальный drag-and-drop —
+            сторона разделителя решает пин/недавние, место вставки показывает линия
+            (иконки не расступаются); правый клик — контекст-меню; что не влезло по
+            высоте, уходит в «+N» на лупе. Подпись при наведении и настройки
+            активного проекта — общий RailFlyout, см. блок ниже.
           </p>
         </SubBlock>
 
-        {/* 3. IslandHeader — атомарный паттерн шапки острова. Используется
+        {/* 3. RailFlyout — подпись кнопки рельсы (живой примитив). Общее поведение
+            обеих рельс и дока: подпись сбоку вместо нативного title, при нужде с
+            кнопкой-действием. */}
+        <SubBlock label="RailFlyout — подпись кнопки рельсы (живой)">
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: SP.xl,
+            padding: `${SP.md}px ${SP.lg}px`,
+            background: C.bgMain, borderRadius: R.lg, border: `1px solid ${C.border}`,
+          }}>
+            <RailFlyoutDemo label="Задачи" />
+            <RailFlyoutDemo label="ClaudeCodeServer" action />
+          </div>
+          <p style={{
+            margin: 0, marginTop: SP.sm,
+            fontSize: FS.xs, color: C.textMuted,
+            fontFamily: FONT.mono, lineHeight: 1.5,
+          }}>
+            Наведите на кнопки. В 40px-рельсе подписей нет места, а нативный title
+            приходит с задержкой браузера и не умеет носить кнопку. Плашка —
+            продолжение кнопки: та же высота, тот же тон, что у кнопки под курсором,
+            примыкает вплотную, а кнопка на стыке теряет скругление и раскрывается в
+            неё. Курсор доходит до действия, не теряя подсказку; у кнопок БЕЗ действия
+            она гаснет сразу.
+          </p>
+        </SubBlock>
+
+        {/* 4. IslandHeader — атомарный паттерн шапки острова. Используется
             в PanelShell правой рельсы и в IslandsSection витрины. */}
         <SubBlock label="IslandHeader — атомарный паттерн (правая рельса · секции витрины)">
           <Island bg={C.bgMain} borderColor={ISLAND.border} style={{ overflow: 'hidden' }}>

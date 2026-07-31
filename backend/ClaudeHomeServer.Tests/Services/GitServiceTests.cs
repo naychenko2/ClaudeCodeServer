@@ -19,6 +19,8 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
 
     private readonly string _repo;
     private readonly GitService _git = new(new LocalOnlyFactory());
+    // Временные папки сверх _repo (bare-«сервер» и второй клон в тестах публикации)
+    private readonly List<string> _extraDirs = [];
 
     public GitServiceTests()
     {
@@ -41,18 +43,15 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
 
     public void Dispose()
     {
-        try { Directory.Delete(_repo, recursive: true); }
-        catch { /* git на Windows держит readonly-объекты — не роняем прогон */ }
+        foreach (var dir in _extraDirs.Append(_repo))
+        {
+            try { Directory.Delete(dir, recursive: true); }
+            catch { /* git на Windows держит readonly-объекты — не роняем прогон */ }
+        }
     }
 
-    // Прямой git для арранжей (без ассертов на сам GitService)
-    private async Task RawGit(params string[] args)
-    {
-        var psi = new ProcessStartInfo("git") { WorkingDirectory = _repo, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
-        foreach (var a in args) psi.ArgumentList.Add(a);
-        using var p = Process.Start(psi)!;
-        await p.WaitForExitAsync();
-    }
+    // Прямой git для арранжей (без ассертов на сам GitService); в произвольной папке — RawGitIn
+    private Task RawGit(params string[] args) => RawGitIn(_repo, args);
 
     [Fact]
     public async Task Status_Разбирает_Staged_Unstaged_Untracked()
@@ -219,6 +218,101 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
     {
         var act = () => _git.PushAsync(null, _repo);
         await act.Should().ThrowAsync<GitCommandException>();
+    }
+
+    // ---------- Публикация при расхождении с origin ----------
+
+    // Разводит ветку с origin: поднимает bare-«сервер», уводит его вперёд чужим коммитом
+    // через второй клон и добавляет свой локальный коммит. На выходе ahead>0 И behind>0 —
+    // ровно та ситуация, где обычный push отклоняется, а pull --ff-only не проходит.
+    // conflicting: обе стороны правят ОДНУ строку одного файла — тогда rebase не сойдётся
+    private async Task SetupDivergedAsync(bool conflicting = false)
+    {
+        var tmp = Path.GetTempPath();
+        var bare = Path.Combine(tmp, "gitsvc_bare_" + Guid.NewGuid().ToString("N"));
+        var other = Path.Combine(tmp, "gitsvc_other_" + Guid.NewGuid().ToString("N"));
+        _extraDirs.Add(bare);
+        _extraDirs.Add(other);
+
+        // -b main обязателен: без него HEAD голого репозитория смотрит на master, клон
+        // встаёт на несуществующую ветку и чужой коммит уходит мимо main — расхождения
+        // не возникает вовсе (на этом тесты и ловили арранж)
+        await RawGitIn(tmp, "init", "--bare", "-b", "main", bare);
+        await RawGit("remote", "add", "origin", bare);
+        await RawGit("push", "-u", "origin", "main");
+
+        // Чужой коммит: origin уходит вперёд
+        await RawGitIn(tmp, "clone", bare, other);
+        await RawGitIn(other, "config", "user.email", "other@test");
+        await RawGitIn(other, "config", "user.name", "Другой");
+        if (conflicting) await File.WriteAllTextAsync(Path.Combine(other, "a.txt"), "один\nверсия сервера\nтри\n");
+        else await File.WriteAllTextAsync(Path.Combine(other, "server.txt"), "с сервера\n");
+        await RawGitIn(other, "add", "-A");
+        await RawGitIn(other, "commit", "-m", "коммит на сервере");
+        await RawGitIn(other, "push");
+
+        // Свой коммит поверх старого состояния — ветки разошлись
+        if (conflicting) await File.WriteAllTextAsync(Path.Combine(_repo, "a.txt"), "один\nмоя версия\nтри\n");
+        else await File.WriteAllTextAsync(Path.Combine(_repo, "local.txt"), "локальный\n");
+        await _git.StageAllAsync(null, _repo);
+        await _git.CommitAsync(null, _repo, "локальный коммит");
+        await _git.FetchAsync(null, _repo);   // чтобы behind посчитался
+    }
+
+    [Fact]
+    public async Task Push_При_Расхождении_Даёт_GitDivergedException()
+    {
+        await SetupDivergedAsync();
+
+        var act = () => _git.PushAsync(null, _repo);
+        await act.Should().ThrowAsync<GitDivergedException>();
+    }
+
+    [Fact]
+    public async Task Sync_Линеаризует_Расхождение_И_Публикует()
+    {
+        await SetupDivergedAsync();
+
+        await _git.SyncAsync(null, _repo, "main", hasUpstream: true);
+
+        var st = await _git.StatusAsync(null, _repo);
+        st.Ahead.Should().Be(0);
+        st.Behind.Should().Be(0);
+        // Обе стороны на месте: чужой коммит подтянут, свой лёг поверх (rebase)
+        File.Exists(Path.Combine(_repo, "server.txt")).Should().BeTrue();
+        File.Exists(Path.Combine(_repo, "local.txt")).Should().BeTrue();
+    }
+
+    // Конфликт: подтянуть автоматически нельзя — откатываемся в исходное состояние
+    // и называем файлы, на которых споткнулись (UI показывает их и зовёт разобрать в чате)
+    [Fact]
+    public async Task Sync_При_Конфликте_Откатывает_И_Называет_Файлы()
+    {
+        await SetupDivergedAsync(conflicting: true);
+
+        var act = () => _git.SyncAsync(null, _repo, "main", hasUpstream: true);
+
+        var ex = await act.Should().ThrowAsync<GitConflictException>();
+        ex.Which.Files.Should().Contain("a.txt");
+        // Откат: расхождение осталось нетронутым, публикации не было
+        var st = await _git.StatusAsync(null, _repo);
+        st.Ahead.Should().Be(1);
+        st.Behind.Should().Be(1);
+    }
+
+    // Незафиксированные правки не должны мешать публикации: --autostash убирает их
+    // на время rebase и возвращает после
+    [Fact]
+    public async Task Sync_Переживает_Грязное_Рабочее_Дерево()
+    {
+        await SetupDivergedAsync();
+        await File.WriteAllTextAsync(Path.Combine(_repo, "a.txt"), "правка на лету\n");
+
+        await _git.SyncAsync(null, _repo, "main", hasUpstream: true);
+
+        var st = await _git.StatusAsync(null, _repo);
+        st.Ahead.Should().Be(0);
+        st.Unstaged.Should().ContainSingle(f => f.Path == "a.txt");
     }
 
     // ---------- Игнор вложений чата ----------

@@ -292,6 +292,7 @@ public class TeamWaveService
         // Ход-сводка координатору уходит ПОСЛЕ освобождения лока: запуск хода поднимает
         // процесс CLI (секунды), и держать на это время закрытие волны незачем.
         string? summaryTurn = null;
+        string? summaryNote = null;
         var gate = _waveLocks.GetOrAdd(session.Id, _ => new SemaphoreSlim(1, 1));
         await gate.WaitAsync();
         try
@@ -349,12 +350,14 @@ public class TeamWaveService
 
             // Сводку волны публикует координатор — ему и уходит ход с фактами закрытия
             summaryTurn = TeamImplementPrompts.WaveClosedTurn(wave, current.Count, current.Count, started, nextWave);
+            summaryNote = $"Волна {wave} закрыта — сводка передана координатору";
         }
         finally { gate.Release(); }
 
         if (summaryTurn is not null)
             await _sessions.SendOrEnqueueAsync(session.Id, summaryTurn,
-                senderPersonaId: null, silent: true, suppressTasksExecute: true);
+                senderPersonaId: null, silent: true, suppressTasksExecute: true,
+                staffNote: summaryNote);
     }
 
     // Провал хода исполнителя (хук TaskExecutionService.TeamTaskFailed): одна перевыдача

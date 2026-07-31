@@ -1570,7 +1570,8 @@ public class SessionManagerTests : IDisposable
             sessionId, entry, text,
             /*senderPersonaId*/ null, /*senderOrigin*/ null, /*agentDepth*/ 0,
             /*silent*/ false, /*suppressTasksExecute*/ false, /*senderChatName*/ null,
-            SessionManager.PendingKind.Agent, /*attachedPaths*/ null, /*mode*/ null
+            SessionManager.PendingKind.Agent, /*attachedPaths*/ null, /*mode*/ null,
+            /*staffNote*/ null
         ])!;
         await task;
         return (SendAndWaitResult)task.GetType().GetProperty("Result")!.GetValue(task)!;
@@ -1844,6 +1845,8 @@ public class SessionManagerTests : IDisposable
         var budget = _sut.GetById(session.Id)!.TeamImplement!.Budget;
         var maxTasksBefore = budget.MaxTasks;
         budget.RunsUsed = budget.MaxRuns;
+        // Исчерпание бюджета случается на ходу итерации — волна уже стартовала
+        _sut.GetById(session.Id)!.TeamImplement!.WaveNumber = 1;
 
         // Действие агента (гейт запуска) потолки не двигает — оно их только читает
         _sut.TryConsumeTeamImplementRun(session.Id, TestUserId);
@@ -1895,6 +1898,8 @@ public class SessionManagerTests : IDisposable
     public async Task КарточкаОстановки_ОтветЧеловека_ГаситКарточкуИВозвращаетВРаботу()
     {
         var (session, _, _) = await MakeTeamStabAsync("ti-escalation-answer");
+        // Блокер приходит от исполнителя идущей волны
+        _sut.GetById(session.Id)!.TeamImplement!.WaveNumber = 1;
         var escalation = new TeamEscalation
         {
             Kind = TeamEscalationKind.Blocker,
@@ -1911,6 +1916,34 @@ public class SessionManagerTests : IDisposable
         last.Resolved.Should().BeTrue();
         last.ChosenActionId.Should().Be("answer");
         _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.Wave);
+        // Служебный ход координатору — с подписью плашки механики вместо пузыря «Автоматически»
+        _sentMessages.OfType<UserMessageMessage>().Last().StaffNote
+            .Should().Be("Ответ на карточку передан координатору");
+    }
+
+    // Прод 2026-07-31: ответ на карточку «Координатор не понял вводную» (кнопок нет — ответ
+    // полем, actionId=null) ставил Stage=Wave при WaveNumber=0 и PlanCardId=null — «волна-
+    // призрак»: статус врёт «идёт волна 0, дождись докладов», волн/задач/плана нет, сторож
+    // не тикает (WaveStartedAt=null). Ответ до первой волны возвращает практику в стадию,
+    // из которой пришла карточка.
+    [Fact]
+    public async Task КарточкаНеПонялВводную_ОтветЧеловека_ВозвращаетВИнтервьюАНеВПризрачнуюВолну()
+    {
+        var (session, _, _) = await MakeInterviewStabAsync("ti-stall-answer");
+        await _sut.HandleTeamTurnEndAsync(session.Id, "Хорошо, посмотрю что тут можно сделать.", failed: false);
+        var card = _sentMessages.OfType<TeamEscalationMessage>().Last();
+        card.Kind.Should().Be("productDecision");
+        _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.AwaitingDecision);
+
+        var ok = await _sut.RespondTeamEscalationAsync(session.Id, card.EscalationId, null,
+            "нужен экспорт именно в CSV, кнопка в тулбаре", TestUserId);
+
+        ok.Should().BeTrue();
+        var ti = _sut.GetById(session.Id)!.TeamImplement!;
+        ti.WaveNumber.Should().Be(0);
+        ti.Stage.Should().Be(TeamImplementStage.Interview,
+            "до первой волны ответ на эскалацию возвращает практику в стадию карточки, " +
+            "а не в «волну-призрак» без плана и сторожа");
     }
 
     // Штаб с планом и хуком раздачи: возвращает план и «раздано ли» по клику
@@ -1922,7 +1955,14 @@ public class SessionManagerTests : IDisposable
         var (plan, reason) = await _sut.CreateTeamPlanAsync(session.Id, "Экспорт", TestUserId);
         reason.Should().BeNull();
         TeamImplementPlan? handed = null;
-        _sut.TeamWaveStarter = (_, p) => { handed = p; return Task.CompletedTask; };
+        _sut.TeamWaveStarter = (s, p) =>
+        {
+            handed = p;
+            // Как настоящая раздача (TeamWaveService.StartWaveCore): реально стартовавшая
+            // волна сама переводит стадию — ответ на карточку её больше не форсирует
+            s.TeamImplement!.Stage = TeamImplementStage.Wave;
+            return Task.CompletedTask;
+        };
         return (session, plan!, () => handed);
     }
 
@@ -1987,6 +2027,9 @@ public class SessionManagerTests : IDisposable
         TeamEscalationKind.PlanDeviation, "нужен файл вне владения")]
     [InlineData("<escalate:check>падает 3 теста</escalate>", TeamEscalationKind.CheckFailed, "падает 3 теста")]
     [InlineData("<escalate:decision>CSV или XLSX?</escalate>", TeamEscalationKind.ProductDecision, "CSV или XLSX?")]
+    // Модель по XML-привычке закрывает тег по имени (</escalate:check>) — принимаем оба варианта
+    [InlineData("<escalate:check>падает 3 теста</escalate:check>", TeamEscalationKind.CheckFailed, "падает 3 теста")]
+    [InlineData("<escalate:clarify>что именно неясно</escalate:clarify>", TeamEscalationKind.NeedsClarification, "что именно неясно")]
     public void МаркерЭскалации_РазбираетсяПоТипу(string text, TeamEscalationKind kind, string details)
     {
         var parsed = SessionManager.ParseEscalationMarker(text);
@@ -2158,9 +2201,22 @@ public class SessionManagerTests : IDisposable
     [Theory]
     [InlineData("Понял, беру в работу.\n<team:work>добавить экспорт в CSV</team>", "добавить экспорт в CSV")]
     [InlineData("<team:work>  починить сортировку  </team>", "починить сортировку")]
+    // Закрытие по имени (</team:work>) — так модель реально генерирует (прод 2026-07-31)
+    [InlineData("<team:work>добавить экспорт в CSV</team:work>", "добавить экспорт в CSV")]
     public void МаркерРаботы_РазбираетсяИзОтветаКоординатора(string text, string expected)
     {
         SessionManager.ParseWorkMarker(text).Should().Be(expected);
+    }
+
+    // Прод 2026-07-31: координатор выдал постановку ~14 КБ и закрыл тег по имени — строгое
+    // </team> маркер роняло, и вводная уходила в вечный цикл «Координатор не понял вводную».
+    [Fact]
+    public void МаркерРаботы_ЗакрытиеПоИмениНаДлиннойПостановке_Разбирается()
+    {
+        var brief = new string('x', 14 * 1024);
+
+        SessionManager.ParseWorkMarker($"<team:work>{brief}</team:work>").Should().Be(brief);
+        SessionManager.ParseWorkMarker($"<team:work>{brief}</team>").Should().Be(brief);
     }
 
     [Fact]

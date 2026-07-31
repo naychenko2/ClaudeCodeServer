@@ -919,7 +919,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   const chatContext = useMemo(() => {
     const parts: string[] = [];
     for (const it of items) {
-      if (it.kind === 'user_message' && !it.systemDirective) parts.push(`Пользователь: ${it.text}`);
+      if (it.kind === 'user_message' && !it.systemDirective && !it.staffNote) parts.push(`Пользователь: ${it.text}`);
       else if (it.kind === 'text' && !it.parentToolUseId) parts.push(`Ассистент: ${it.text}`);
     }
     const tail = parts.slice(-6).map(t => t.length > 300 ? t.slice(0, 300) + '…' : t);

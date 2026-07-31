@@ -52,12 +52,12 @@ internal class TurnAccumulator
 
     public void OnUserMessage(string text, IReadOnlyList<string> attachedPaths, bool viaAgent = false,
         string? senderPersonaId = null, bool systemDirective = false, bool auto = false,
-        string? senderOrigin = null)
+        string? senderOrigin = null, string? staffNote = null)
     {
         lock (_lock)
             _currentTurn.Add(new StoredUserMessage(text, attachedPaths.Count > 0 ? [.. attachedPaths] : null,
                 viaAgent ? true : null, senderPersonaId, systemDirective ? true : null, auto ? true : null,
-                senderOrigin));
+                senderOrigin, staffNote: staffNote));
     }
 
     public void OnSessionStarted(string model, string mode, TurnWorktreeInfo? worktree = null)

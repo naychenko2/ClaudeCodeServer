@@ -22,7 +22,7 @@ public abstract class StoredMessage { }
 
 public class StoredUserMessage(string text, string[]? attachedPaths = null, bool? viaAgent = null,
     string? senderPersonaId = null, bool? systemDirective = null, bool? auto = null,
-    string? senderOrigin = null, string? senderChatName = null) : StoredMessage
+    string? senderOrigin = null, string? senderChatName = null, string? staffNote = null) : StoredMessage
 {
     // Источник входящего сообщения, когда оно пришло ИЗ ДРУГОГО места: имя чужого проекта
     // либо «Вне проектов». Заполняет сервер, сравнив проекты отправителя и получателя;
@@ -31,6 +31,10 @@ public class StoredUserMessage(string text, string[]? attachedPaths = null, bool
     // Имя чата-отправителя — подпись карточки, когда персоны у него нет: «Задача: починить
     // билд» отвечает на вопрос «кто пишет» лучше, чем безликое «Агент»
     public string? SenderChatName { get; init; } = senderChatName;
+    // Служебный ход механики штаба (ответ на карточку, возврат в интервью, сводка волны):
+    // UI рисует компактную плашку-разделитель с этой подписью вместо пузыря «Автоматически»
+    // с сырым текстом директивы. null — обычное сообщение
+    public string? StaffNote { get; init; } = staffNote;
 
     public string Text { get; init; } = text;
     public string[]? AttachedPaths { get; init; } = attachedPaths;

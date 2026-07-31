@@ -212,6 +212,7 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
         ...(msg.senderPersonaId ? { senderPersonaId: msg.senderPersonaId } : {}),
         ...(msg.senderOrigin ? { senderOrigin: msg.senderOrigin } : {}),
         ...(msg.senderChatName ? { senderChatName: msg.senderChatName } : {}),
+        ...(msg.staffNote ? { staffNote: msg.staffNote } : {}),
         ...(msg.auto ? { auto: true } : {}),
       }]);
 

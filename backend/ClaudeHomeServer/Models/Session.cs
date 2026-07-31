@@ -149,6 +149,10 @@ public class SessionTeamImplement
 {
     // Стадия непрерывного контура (см. TeamImplementStage)
     public TeamImplementStage Stage { get; set; } = TeamImplementStage.Planning;
+    // Стадия, из которой практика ушла в «ждёт решения»: ответ человека до первой волны
+    // возвращает её СЮДА (интервью/планирование), а не в Wave — иначе «волна-призрак»
+    // (WaveNumber=0, плана нет, сторож не тикает; прод 2026-07-31). null — не в ожидании.
+    public TeamImplementStage? StageBeforeDecision { get; set; }
     // Номер текущей волны (растёт с каждой стартованной; 0 — волн ещё не было)
     public int WaveNumber { get; set; }
     // Плановое число волн текущей итерации: проставляется при запуске плана (Э3) и

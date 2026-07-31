@@ -92,11 +92,13 @@ public class SessionManager : IDisposable
     // самозапустить новую задачу и закольцевать A↔B.
     // SenderChatName — имя чата-отправителя: подпись карточки, когда персоны у него нет
     // («Входящее сообщение» ни о чём не говорит, а имя чата отвечает на вопрос «кто пишет»).
+    // StaffNote — служебный ход механики штаба: в ленте рисуется плашкой-разделителем
+    // с этой подписью, а не пузырём «Автоматически» (см. StoredUserMessage.StaffNote).
     public record QueuedMessage(
         string Id, string Text, string? SenderPersonaId, string? SenderOrigin,
         int AgentDepth, DateTime EnqueuedAt, bool Silent = false, bool SuppressTasksExecute = false,
         string? SenderChatName = null, PendingKind Kind = PendingKind.Agent,
-        IReadOnlyList<string>? AttachedPaths = null, string? Mode = null);
+        IReadOnlyList<string>? AttachedPaths = null, string? Mode = null, string? StaffNote = null);
 
     public enum PendingKind { Agent, User }
 
@@ -1788,7 +1790,7 @@ public class SessionManager : IDisposable
     // Пользовательское сообщение в занятом чате больше не пишется в stdin процесса молча:
     // встаёт в видимую серверную очередь (pending_messages) и доставляется по FIFO —
     // возвращаемый исход (Started/Queued) говорит клиенту, рисовать ли оптимистичный баллон.
-    public async Task<SendUserOutcome> SendMessageAsync(string sessionId, string text, IReadOnlyList<string> attachedPaths, string? mode = null, bool systemDirective = false, bool auto = false, string? senderPersonaId = null, bool suppressTasksExecute = false, string? senderOrigin = null)
+    public async Task<SendUserOutcome> SendMessageAsync(string sessionId, string text, IReadOnlyList<string> attachedPaths, string? mode = null, bool systemDirective = false, bool auto = false, string? senderPersonaId = null, bool suppressTasksExecute = false, string? senderOrigin = null, string? staffNote = null)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry))
             throw new InvalidOperationException("Сессия не найдена");
@@ -1851,7 +1853,7 @@ public class SessionManager : IDisposable
         }
 
         await SendDirectAsync(sessionId, entry, text, attachedPaths, mode, systemDirective, auto,
-            senderPersonaId, suppressTasksExecute, senderOrigin);
+            senderPersonaId, suppressTasksExecute, senderOrigin, staffNote: staffNote);
         return SendUserOutcome.Started;
     }
 
@@ -1860,7 +1862,8 @@ public class SessionManager : IDisposable
     // призраком, поэтому live-баллон бродкастим так же, как для сервер-инициированных отправок.
     private async Task SendDirectAsync(string sessionId, SessionEntry entry, string text,
         IReadOnlyList<string> attachedPaths, string? mode, bool systemDirective, bool auto,
-        string? senderPersonaId, bool suppressTasksExecute, string? senderOrigin, bool fromQueue = false)
+        string? senderPersonaId, bool suppressTasksExecute, string? senderOrigin, bool fromQueue = false,
+        string? staffNote = null)
     {
         // Режим, выбранный в Composer, применяется со следующего хода: процесс claude
         // пересоздаётся в RunTurnAsync и читает --permission-mode из Info.Mode.
@@ -1889,7 +1892,7 @@ public class SessionManager : IDisposable
         // рассылка дублировала сообщение в ленте (см. комментарий у внутриходовых событий).
         if ((auto || fromQueue) && !systemDirective)
             await BroadcastAsync(sessionId,
-                new UserMessageMessage(text, attachedPaths.Count > 0 ? attachedPaths : null, senderPersonaId, auto, senderOrigin));
+                new UserMessageMessage(text, attachedPaths.Count > 0 ? attachedPaths : null, senderPersonaId, auto, senderOrigin, StaffNote: staffNote));
 
         await EnsureProcessAsync(sessionId, entry);
 
@@ -1916,7 +1919,7 @@ public class SessionManager : IDisposable
 
         await ApplyStatusAsync(sessionId, entry, SessionStatus.Working);
 
-        entry.Accumulator?.OnUserMessage(text, attachedPaths, systemDirective: systemDirective, auto: auto, senderPersonaId: senderPersonaId, senderOrigin: senderOrigin);
+        entry.Accumulator?.OnUserMessage(text, attachedPaths, systemDirective: systemDirective, auto: auto, senderPersonaId: senderPersonaId, senderOrigin: senderOrigin, staffNote: staffNote);
 
         // Push-источники автоматизаций: @упоминание персоны в тексте пользователя.
         // Fire-and-forget — обработчик не должен тормозить ход (он лишь детектит и ставит в очередь).
@@ -2055,7 +2058,8 @@ public class SessionManager : IDisposable
     private async Task<SendAndWaitResult> EnqueuePendingAsync(string sessionId, SessionEntry entry,
         string text, string? senderPersonaId, string? senderOrigin, int agentDepth,
         bool silent = false, bool suppressTasksExecute = false, string? senderChatName = null,
-        PendingKind kind = PendingKind.Agent, IReadOnlyList<string>? attachedPaths = null, string? mode = null)
+        PendingKind kind = PendingKind.Agent, IReadOnlyList<string>? attachedPaths = null,
+        string? mode = null, string? staffNote = null)
     {
         bool dispatchNow;
         int position;
@@ -2069,7 +2073,7 @@ public class SessionManager : IDisposable
 
             entry.Pending.Add(new QueuedMessage(Guid.NewGuid().ToString("N"), text, senderPersonaId,
                 senderOrigin, agentDepth, DateTime.UtcNow, silent, suppressTasksExecute, senderChatName,
-                kind, attachedPaths, mode));
+                kind, attachedPaths, mode, staffNote));
             position = entry.Pending.Count;
 
             // Защита от гонки TOCTOU: статус занятости читается БЕЗ лока выше (в SendMessageAsync/
@@ -2102,7 +2106,7 @@ public class SessionManager : IDisposable
     // Interrupt. Возвращает true, если сообщение отложено.
     public async Task<bool> SendOrEnqueueAsync(string sessionId, string text,
         string? senderPersonaId = null, string? senderOrigin = null,
-        bool silent = false, bool suppressTasksExecute = false)
+        bool silent = false, bool suppressTasksExecute = false, string? staffNote = null)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry))
             throw new InvalidOperationException("Сессия не найдена");
@@ -2110,12 +2114,12 @@ public class SessionManager : IDisposable
         if (entry.Info.Status is SessionStatus.Working or SessionStatus.Waiting)
         {
             await EnqueuePendingAsync(sessionId, entry, text, senderPersonaId, senderOrigin,
-                agentDepth: 0, silent, suppressTasksExecute);
+                agentDepth: 0, silent, suppressTasksExecute, staffNote: staffNote);
             return true;
         }
 
         await SendMessageAsync(sessionId, text, [], auto: true, senderPersonaId: senderPersonaId,
-            suppressTasksExecute: suppressTasksExecute, senderOrigin: senderOrigin);
+            suppressTasksExecute: suppressTasksExecute, senderOrigin: senderOrigin, staffNote: staffNote);
         return false;
     }
 
@@ -2341,7 +2345,7 @@ public class SessionManager : IDisposable
             else
                 await SendMessageAsync(sessionId, next.Text, [], auto: true,
                     senderPersonaId: next.SenderPersonaId, senderOrigin: next.SenderOrigin,
-                    suppressTasksExecute: next.SuppressTasksExecute);
+                    suppressTasksExecute: next.SuppressTasksExecute, staffNote: next.StaffNote);
         }
         catch (Exception ex)
         {
@@ -3427,6 +3431,11 @@ public class SessionManager : IDisposable
         if (escalation.Kind == TeamEscalationKind.NeedsClarification) return;
         WithTeamState(sessionId, t =>
         {
+            // Запоминаем, откуда практика пришла в ожидание: ответ человека до первой волны
+            // вернёт её в эту стадию, а не в Wave. Повторная карточка поверх ожидания исходную
+            // стадию не затирает — иначе возврат шёл бы в «ждёт решения» самого себя.
+            if (t.Stage != TeamImplementStage.AwaitingDecision)
+                t.StageBeforeDecision = t.Stage;
             t.Stage = TeamImplementStage.AwaitingDecision;
             // Волна больше не считается идущей: сторож зависших волн не должен второй раз
             // эскалировать то, что уже ждёт человека
@@ -3514,8 +3523,18 @@ public class SessionManager : IDisposable
                     "finish" or "finishWithIssues" => TeamImplementStage.Checking,
                     "stop" => team.Stage,
                     "keepFixing" => TeamImplementStage.Checking,
-                    _ => TeamImplementStage.Wave,
+                    // До первой волны «вернуть в работу» некуда: волны ещё не стартовали,
+                    // и Wave здесь — «волна-призрак» (WaveNumber=0, PlanCardId=null, сторож
+                    // не тикает, статус врёт про доклады — прод 2026-07-31). Возвращаем
+                    // стадию, из которой пришла карточка (интервью/планирование). Если волна
+                    // реально стартует по этому решению (runNext/addBudget/resume с планом),
+                    // стадию Wave выставит сама раздача (TeamWaveService.StartWaveCore).
+                    _ => team.WaveNumber == 0
+                        ? team.StageBeforeDecision ?? team.Stage
+                        : TeamImplementStage.Wave,
                 };
+                // Решение принято, карточка гаснет — сохранённая стадия отработана
+                team.StageBeforeDecision = null;
                 // Вернулись в волну — заводим страховку таймаута заново: без отсечки сторож
                 // молчал бы, и повторное зависание той же волны снова осталось бы незамеченным
                 if (team.Stage == TeamImplementStage.Wave && team.WaveNumber > 0
@@ -3558,10 +3577,12 @@ public class SessionManager : IDisposable
             }
         }
 
-        // Координатор узнаёт решение обычным ходом — как если бы человек написал его текстом
+        // Координатор узнаёт решение обычным ходом — как если бы человек написал его текстом.
+        // В ленте — плашка механики, а не пузырь «Автоматически» с сырым текстом директивы.
         await SendOrEnqueueAsync(sessionId,
             TeamImplementPrompts.EscalationResolvedTurn(escalation, label, comment),
-            senderPersonaId: null, silent: true, suppressTasksExecute: true);
+            senderPersonaId: null, silent: true, suppressTasksExecute: true,
+            staffNote: "Ответ на карточку передан координатору");
         return true;
     }
 
@@ -3605,8 +3626,11 @@ public class SessionManager : IDisposable
         if (string.IsNullOrWhiteSpace(text)) return null;
         var stripped = System.Text.RegularExpressions.Regex.Replace(text, "```[\\s\\S]*?(```|$)", "");
         stripped = System.Text.RegularExpressions.Regex.Replace(stripped, "`[^`\n]*`", "");
+        // Закрывающий тег — с именем или без: модель по XML-привычке пишет </escalate:check>
+        // вместо канонического </escalate> (в thinking цитирует формат верно, при генерации
+        // закрывает по имени) — строгое сравнение роняло маркер в молчаливый тупик.
         var m = System.Text.RegularExpressions.Regex.Match(stripped,
-            @"<escalate:(deviation|check|decision|clarify)>([\s\S]*?)</escalate>");
+            @"<escalate:(deviation|check|decision|clarify)>([\s\S]*?)</escalate(?::\w+)?>");
         if (!m.Success) return null;
         var kind = m.Groups[1].Value switch
         {
@@ -3628,7 +3652,10 @@ public class SessionManager : IDisposable
         if (string.IsNullOrWhiteSpace(text)) return null;
         var stripped = System.Text.RegularExpressions.Regex.Replace(text, "```[\\s\\S]*?(```|$)", "");
         stripped = System.Text.RegularExpressions.Regex.Replace(stripped, "`[^`\n]*`", "");
-        var m = System.Text.RegularExpressions.Regex.Match(stripped, @"<team:work>([\s\S]*?)</team>");
+        // Закрытие — </team> или </team:work>: на длинной постановке модель закрывает тег
+        // по имени, и строгий </team> не распознавал маркер — вводная падала в карточку
+        // «Координатор не понял вводную» (прод 2026-07-31).
+        var m = System.Text.RegularExpressions.Regex.Match(stripped, @"<team:work>([\s\S]*?)</team(?::work)?>");
         if (!m.Success) return null;
         var request = m.Groups[1].Value.Trim();
         return request.Length == 0 ? null : request;
@@ -3842,7 +3869,8 @@ public class SessionManager : IDisposable
 
         if (withTurn)
             await SendOrEnqueueAsync(sessionId, TeamImplementPrompts.ClarifyInterviewTurn(reason),
-                senderPersonaId: null, silent: true, suppressTasksExecute: true);
+                senderPersonaId: null, silent: true, suppressTasksExecute: true,
+                staffNote: "Возврат в интервью — координатор задаст вопросы");
     }
 
     // Координатор задал вопрос ASK-карточкой (Э8). В интервью это очередной раунд (их не

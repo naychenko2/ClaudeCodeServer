@@ -585,6 +585,23 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
   usePersonasVersion();
   switch (item.kind) {
     case 'user_message': {
+      // Служебный ход механики штаба (ответ на карточку, возврат в интервью, сводка волны) —
+      // компактная плашка-разделитель вместо пузыря «Автоматически» с сырым текстом директивы
+      if (item.staffNote) {
+        return (
+          <div style={{ alignSelf: 'center', display: 'flex', alignItems: 'center', gap: 8, maxWidth: '100%' }}>
+            <div style={{ flex: 1, minWidth: 24, height: 1, background: C.border }} />
+            <span style={{
+              fontSize: 12, color: C.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden',
+              textOverflow: 'ellipsis', padding: '3px 10px', borderRadius: 999,
+              background: C.bgSelected, border: `1px solid ${C.border}`,
+            }}>
+              ⚑ {item.staffNote}
+            </span>
+            <div style={{ flex: 1, minWidth: 24, height: 1, background: C.border }} />
+          </div>
+        );
+      }
       // Служебная директива цикла «до готово» (continuation/verification) — компактная
       // плашка-разделитель вместо сырого текста в пузыре пользователя
       if (item.systemDirective) {

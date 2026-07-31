@@ -110,7 +110,9 @@ public class SessionManagerTests : IDisposable
         // Планирование «Командной реализации» (Э2): раннер планировщика подставной —
         // ответ задаётся тестом через _plannerAnswer
         _teamPlanning = new TeamPlanningService(personas, new StubCheapRunner(() => _plannerAnswer));
-        _sut = new SessionManager(_projectManager, hub.Object, _historyService, config, adapters, falCost, _usage, appSettings, userStore, jwt, server.Object, llmProviders, notesKb, flags, personas, personaMemory, bindings, promptBuilder, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox, assignments: assignments, teamPlanning: _teamPlanning, activity: _activity);
+        // Git — настоящий CLI: нужен привязке чата к существующему дереву (AttachWorktreeAsync
+        // сверяет путь с «git worktree list»); остальные тесты его не трогают
+        _sut = new SessionManager(_projectManager, hub.Object, _historyService, config, adapters, falCost, _usage, appSettings, userStore, jwt, server.Object, llmProviders, notesKb, flags, personas, personaMemory, bindings, promptBuilder, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox, git: new ClaudeHomeServer.Services.Git.GitService(TestLauncherFactory.Instance), assignments: assignments, teamPlanning: _teamPlanning, activity: _activity);
     }
 
     public void Dispose()
@@ -942,24 +944,251 @@ public class SessionManagerTests : IDisposable
         pending.Should().NotContain(p => p.Text == "user-последнее");
     }
 
+    // --- Прерывание хода входящим сообщением (enqueue + interrupt) ---
+
     [Fact]
-    public async Task SendMessage_User_ВЦиклеДоГотово_СтавитсяВОчередьБезЗапускаХода()
+    public async Task SendMessage_User_ЗанятыйЧат_ПрерываетХод_ИДоставляетПоExited()
     {
-        // Пользовательская очередь ждёт конца ВСЕГО цикла, не итерации: между итерациями
-        // work-loop чат на мгновение свободен, но пользовательское не должно вклиниваться
-        var dir = MkProjectDir("uqloop");
-        var project = _projectManager.Create("UQLOOP", dir, TestUserId, TestUsername);
-        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        // Сообщение пользователя в занятый чат больше не ждёт конца хода пассивно:
+        // встаёт в очередь И прерывает текущий ход. Убитый процесс не шлёт result —
+        // очередь разбирается по exited ТОГО ЖЕ прогона (SessionEntry.DrainOnExitedRun).
+        var session = await MkBusySessionAsync("preempt", SessionStatus.Working);
+        session.Name = "есть имя"; // иначе фоновый уточнятор заголовка полезет в локальную модель
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+
+        var outcome = await _sut.SendMessageAsync(session.Id, "срочное", []);
+
+        outcome.Should().Be(SessionManager.SendUserOutcome.Queued);
+        adapter.Verify(a => a.Interrupt(), Times.Once());
+        _sut.GetPending(session.Id).Should().ContainSingle().Which.Text.Should().Be("срочное");
+
+        // Конец прерванного хода — только exited (процесс убит): очередь разбирается сразу
+        await InvokeOnMessageAsync(session.Id, new TurnAccumulator(new List<StoredMessage>()),
+            new ExitedMessage(), TestRunId);
+        await WaitForSendAsync(adapter, TimeSpan.FromSeconds(2));
+
+        adapter.Verify(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()), Times.Once());
+        _sut.GetPending(session.Id).Should().BeEmpty("прерывание доставляет сообщение немедленно");
+    }
+
+    [Fact]
+    public async Task SendMessage_User_ВЦиклеДоГотово_СнимаетЦиклИПрерываетХод()
+    {
+        // Пользовательское прерывает ВСЁ, включая цикл «до готово»: цикл снимается
+        // синхронно (как по «Стоп»), текущий ход прерывается, сообщение доставится по exited
+        var session = await MkBusySessionAsync("preempt-loop", SessionStatus.Working);
         await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
-        var messageCountBefore = session.MessageCount;
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
 
         var outcome = await _sut.SendMessageAsync(session.Id, "вмешаться в цикл", []);
 
         outcome.Should().Be(SessionManager.SendUserOutcome.Queued);
+        _sut.GetById(session.Id)!.WorkLoop.Should().BeNull("сообщение пользователя обрывает цикл");
+        adapter.Verify(a => a.Interrupt(), Times.Once());
         _sut.GetPending(session.Id).Should().ContainSingle()
             .Which.Kind.Should().Be(SessionManager.PendingKind.User);
-        _sut.GetById(session.Id)!.MessageCount.Should().Be(messageCountBefore,
-            "ход не пошёл в процесс — сообщение ждёт конца цикла в очереди");
+    }
+
+    [Fact]
+    public async Task SendMessage_User_ЦиклМеждуИтерациями_СнимаетЦиклИДоставляетСразу()
+    {
+        // Между итерациями цикла чат на мгновение свободен: прерывать нечего (Interrupt
+        // не зовётся), но цикл снимается, и доставку форсирует dispatchNow постановки
+        var session = await MkBusySessionAsync("preempt-idle-loop", SessionStatus.Active);
+        session.Name = "есть имя";
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+
+        var outcome = await _sut.SendMessageAsync(session.Id, "вмешаться между итерациями", []);
+
+        outcome.Should().Be(SessionManager.SendUserOutcome.Queued);
+        _sut.GetById(session.Id)!.WorkLoop.Should().BeNull();
+        adapter.Verify(a => a.Interrupt(), Times.Never());
+        await WaitForSendAsync(adapter, TimeSpan.FromSeconds(2));
+        adapter.Verify(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()), Times.Once());
+        _sut.GetPending(session.Id).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task SendMessageAndWait_ОбычныйЗанятыйЧат_ПрерываетХод()
+    {
+        // Агентское сообщение (chats_send) в обычный занятый чат тоже прерывает ход —
+        // доклад доставится сразу, а не после многоминутного хода
+        var session = await MkBusySessionAsync("agent-preempt", SessionStatus.Working);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+
+        var result = await _sut.SendMessageAndWaitAsync(session.Id, "срочный доклад", TimeSpan.Zero);
+
+        result.Should().BeOfType<SendAndWaitResult.Queued>();
+        adapter.Verify(a => a.Interrupt(), Times.Once());
+        _sut.GetPending(session.Id).Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task SendMessageAndWait_ЧатВЦиклеДоГотово_НеПрерывает()
+    {
+        // Доклады персон не рушат цикл «до готово»: сообщение ждёт конца всего цикла
+        var session = await MkBusySessionAsync("agent-loop", SessionStatus.Working);
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+
+        var result = await _sut.SendMessageAndWaitAsync(session.Id, "доклад в цикл", TimeSpan.Zero);
+
+        result.Should().BeOfType<SendAndWaitResult.Queued>();
+        adapter.Verify(a => a.Interrupt(), Times.Never());
+        _sut.GetById(session.Id)!.WorkLoop.Should().NotBeNull("агентское сообщение не трогает цикл");
+        _sut.GetPending(session.Id).Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task SendMessageAndWait_ЧатШтаба_НеПрерывает()
+    {
+        // Штаб «Командной реализации» агентским сообщением не рушится — прежняя очередь
+        var (session, _, _) = await MakeTeamStabAsync("agent-stab-preempt");
+        session.Status = SessionStatus.Working;
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+
+        var result = await _sut.SendMessageAndWaitAsync(session.Id, "доклад штабу", TimeSpan.Zero);
+
+        result.Should().BeOfType<SendAndWaitResult.Queued>();
+        adapter.Verify(a => a.Interrupt(), Times.Never());
+        _sut.GetPending(session.Id).Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task Interrupt_Ручной_ЗамороженнаяОчередьНеРазбираетсяПоExited()
+    {
+        // Регресс «Стоп»: ручное прерывание замораживает очередь, и exited убитого хода
+        // НЕ доставляет отложенное — даже если перед этим постановка взводила разбор по exited
+        var session = await MkBusySessionAsync("stop-exited", SessionStatus.Working);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+        await _sut.SendMessageAndWaitAsync(session.Id, "не доставлять", TimeSpan.Zero);
+
+        _sut.Interrupt(session.Id);
+        await InvokeOnMessageAsync(session.Id, new TurnAccumulator(new List<StoredMessage>()),
+            new ExitedMessage(), TestRunId);
+
+        await Task.Delay(150); // drain не должен запуститься
+        _sut.GetPending(session.Id).Should().ContainSingle()
+            .Which.Text.Should().Be("не доставлять");
+        adapter.Verify(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()), Times.Never());
+    }
+
+    [Fact]
+    public async Task SendMessage_User_ЗанятыйШтаб_ПрерываетХодИЧиститМаркерыУбитого()
+    {
+        // Ход штаба убит пользовательским сообщением — result по нему не придёт, а с ним
+        // не придёт и разбор конца хода, потребляющий буфер маркеров. Оставленный маркер
+        // склеился бы с текстом следующего хода и применился задним числом: фантомная
+        // эскалация и сдвиг стадии («волна-призрак»).
+        var (session, _, _) = await MakeTeamStabAsync("stab-preempt-user");
+        session.Status = SessionStatus.Working;
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+        // Координатор успел написать маркер — он копится в буфере хода штаба
+        await InvokeOnMessageAsync(session.Id, new TurnAccumulator(new List<StoredMessage>()),
+            new TextDeltaMessage("<<<ЭСКАЛАЦИЯ: расхождение с планом>>>"), TestRunId);
+        GetTeamTurnText(entry).Should().NotBeEmpty("предусловие: буфер хода штаба непуст");
+
+        var outcome = await _sut.SendMessageAsync(session.Id, "как дела?", []);
+
+        outcome.Should().Be(SessionManager.SendUserOutcome.Queued);
+        adapter.Verify(a => a.Interrupt(), Times.Once());
+        GetTeamTurnText(entry).Should().BeEmpty("маркеры убитого хода не доживают до следующего");
+    }
+
+    [Fact]
+    public async Task Exited_ЧужогоПрогона_НеРазбираетОчередьПрерванногоХода()
+    {
+        // exited доживающего прогона опаздывает до ~30 мин: не привязанный к прогону разбор
+        // увёл бы сообщение в умирающий от interrupt адаптер — из видимой очереди изъято,
+        // в семафоре адаптера потеряно
+        var session = await MkBusySessionAsync("late-exited", SessionStatus.Working);
+        session.Name = "есть имя";
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object, runId: 7);
+        await _sut.SendMessageAndWaitAsync(session.Id, "доклад", TimeSpan.Zero); // enqueue + interrupt
+
+        // Поздний exited СТАРОГО прогона
+        await InvokeOnMessageAsync(session.Id, new TurnAccumulator(new List<StoredMessage>()),
+            new ExitedMessage(), runId: 6);
+
+        await Task.Delay(150); // разбор не должен запуститься
+        _sut.GetPending(session.Id).Should().ContainSingle().Which.Text.Should().Be("доклад");
+        adapter.Verify(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()), Times.Never());
+
+        // exited прерванного прогона — доставка идёт
+        await InvokeOnMessageAsync(session.Id, new TurnAccumulator(new List<StoredMessage>()),
+            new ExitedMessage(), runId: 7);
+        await WaitForSendAsync(adapter, TimeSpan.FromSeconds(2));
+        _sut.GetPending(session.Id).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Exited_ПослеШтатногоResult_НеДренитОчередьВторойРаз()
+    {
+        // Прерванный ход всё же успел закончиться штатно: очередь разобрал result, метка
+        // разбора по exited погашена. Поздний exited того же прогона не должен выпускать
+        // следующее сообщение параллельно уже идущему ходу.
+        var session = await MkBusySessionAsync("result-then-exited", SessionStatus.Working);
+        session.Name = "есть имя";
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+        await _sut.SendMessageAndWaitAsync(session.Id, "первое", TimeSpan.Zero);
+        await _sut.SendMessageAndWaitAsync(session.Id, "второе", TimeSpan.Zero);
+
+        await InvokeOnMessageAsync(session.Id, new TurnAccumulator(new List<StoredMessage>()),
+            new ResultMessage("success", 10, 1, null, null), TestRunId);
+        await WaitForSendAsync(adapter, TimeSpan.FromSeconds(2)); // result выпустил «первое»
+
+        await InvokeOnMessageAsync(session.Id, new TurnAccumulator(new List<StoredMessage>()),
+            new ExitedMessage(), TestRunId);
+
+        await Task.Delay(150); // второй разбор не должен запуститься
+        adapter.Verify(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()), Times.Once());
+        _sut.GetPending(session.Id).Should().ContainSingle().Which.Text.Should().Be("второе");
+    }
+
+    // Буфер текста хода штаба (маркеры координатора) — под своим локом, как в SessionManager
+    private static string GetTeamTurnText(object entry)
+    {
+        var buffer = (System.Text.StringBuilder)entry.GetType().GetField("TeamTurnText")!.GetValue(entry)!;
+        lock (entry.GetType().GetField("TeamTurnLock")!.GetValue(entry)!) return buffer.ToString();
+    }
+
+    // Ждём именно доставку (SendMessageAsync мока): drain — fire-and-forget Task.Run,
+    // а Invocations целиком не годятся — там уже лежат Interrupt/Info этого же сценария
+    private static async Task WaitForSendAsync(Mock<ILlmSessionAdapter> adapter, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            if (adapter.Invocations.Any(i => i.Method.Name == nameof(ILlmSessionAdapter.SendMessageAsync)))
+                return;
+            await Task.Delay(10);
+        }
     }
 
     // --- Режим «Командная реализация» (флаг team-implement-mode): каркас состояния ---
@@ -1555,8 +1784,16 @@ public class SessionManagerTests : IDisposable
         return adapter;
     }
 
-    private static void SetProcess(object entry, ILlmSessionAdapter adapter) =>
+    // Подставной адаптер занимает место процесса вместе с идентификатором прогона: очередь
+    // по exited разбирается только для прогона, чей ход прерывали (SessionEntry.DrainOnExitedRun),
+    // поэтому в такие сценарии тот же runId уходит и в InvokeOnMessageAsync
+    private const long TestRunId = 1;
+
+    private static void SetProcess(object entry, ILlmSessionAdapter adapter, long runId = TestRunId)
+    {
         entry.GetType().GetField("Process")!.SetValue(entry, adapter);
+        entry.GetType().GetField("RunId")!.SetValue(entry, runId);
+    }
 
     private static void SetQueueFrozen(object entry, bool value) =>
         entry.GetType().GetField("QueueFrozen")!.SetValue(entry, value);
@@ -3262,12 +3499,120 @@ public class SessionManagerTests : IDisposable
         return _sentMessages.OfType<ComposerRestoreMessage>().ToList();
     }
 
+    // --- Привязка чата к УЖЕ существующему дереву (чат-исполнитель задачи с worktree) ---
+    // Отличие от SetWorktreeAsync: дерево не создаётся и транскрипт не мигрирует — только
+    // поля свежей сессии до первого хода, cwd подставит EnsureProcessAsync.
+
+    // Репозиторий с одним коммитом и linked worktree на ветке wt/тест
+    private async Task<(Project Project, string Worktree)> MkRepoWithWorktreeAsync(string name)
+    {
+        var dir = MkProjectDir(name);
+        var project = _projectManager.Create(name, dir, TestUserId, TestUsername);
+        var git = new ClaudeHomeServer.Services.Git.GitService(TestLauncherFactory.Instance);
+        await git.InitAsync(null, dir);
+        // Личность коммиттера — локально в репе: на CI глобального git-конфига может не быть
+        await RawGitAsync(dir, "config", "user.email", "test@test");
+        await RawGitAsync(dir, "config", "user.name", "Тест");
+        await File.WriteAllTextAsync(Path.Combine(dir, "a.txt"), "один\n");
+        await git.StageAllAsync(null, dir);
+        await git.CommitAsync(null, dir, "начальный коммит");
+        var worktree = Path.Combine(_tempDir, "wt_" + name);
+        await git.WorktreeAddAsync(null, dir, worktree, "wt/тест");
+        return (project, worktree);
+    }
+
+    // Прямой git для арранжей (как в GitServiceTests)
+    private static async Task RawGitAsync(string root, params string[] args)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo("git")
+        {
+            WorkingDirectory = root,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        foreach (var a in args) psi.ArgumentList.Add(a);
+        using var p = System.Diagnostics.Process.Start(psi)!;
+        await p.WaitForExitAsync();
+    }
+
+    [Fact]
+    [Trait("Category", "Slow")]
+    public async Task AttachWorktree_СуществующееДеревоПроекта_СессияПолучаетПутьИВетку()
+    {
+        var (project, worktree) = await MkRepoWithWorktreeAsync("attach-ok");
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.AcceptEdits);
+
+        var attached = await _sut.AttachWorktreeAsync(session.Id, worktree);
+
+        attached.Should().BeTrue();
+        var info = _sut.GetById(session.Id)!;
+        info.WorktreePath.Should().Be(Path.GetFullPath(worktree));
+        // Ветку не передавали — берётся из самого дерева
+        info.WorktreeBranch.Should().Be("wt/тест");
+    }
+
+    [Fact]
+    [Trait("Category", "Slow")]
+    public async Task AttachWorktree_ПутьНеЧислитсяВРепе_ОтказБезПривязки()
+    {
+        var (project, _) = await MkRepoWithWorktreeAsync("attach-alien");
+        // Папка есть на диске, но деревом проекта не является
+        var alien = Directory.CreateDirectory(Path.Combine(_tempDir, "alien")).FullName;
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.AcceptEdits);
+
+        var attached = await _sut.AttachWorktreeAsync(session.Id, alien);
+
+        attached.Should().BeFalse();
+        // Мягкая деградация: чат остаётся в корне проекта
+        _sut.GetById(session.Id)!.WorktreePath.Should().BeNull();
+    }
+
+    [Fact]
+    [Trait("Category", "Slow")]
+    public async Task AttachWorktree_ПутиНетНаДиске_Отказ()
+    {
+        var (project, worktree) = await MkRepoWithWorktreeAsync("attach-missing");
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.AcceptEdits);
+
+        var attached = await _sut.AttachWorktreeAsync(session.Id, worktree + "-нет", "wt/тест");
+
+        attached.Should().BeFalse();
+        _sut.GetById(session.Id)!.WorktreePath.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task AttachWorktree_ЧатВнеПроекта_Отказ()
+    {
+        // У личной задачи проекта нет — дерева тоже: привязывать не к чему
+        var user = _userStore.Add("attach-personal", "pw-123456", "user");
+        var session = await _sut.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits);
+
+        (await _sut.AttachWorktreeAsync(session.Id, _tempDir)).Should().BeFalse();
+        _sut.GetById(session.Id)!.WorktreePath.Should().BeNull();
+    }
+
+    [Fact]
+    [Trait("Category", "Slow")]
+    public async Task AttachWorktree_НачатыйЧат_Отказ()
+    {
+        // Контекст начатого чата привязан к прежнему cwd (--resume ищет транскрипт по нему):
+        // переезд с контекстом — только через SetWorktreeAsync
+        var (project, worktree) = await MkRepoWithWorktreeAsync("attach-started");
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.AcceptEdits);
+        _sut.GetById(session.Id)!.ClaudeSessionId = "csid-1";
+
+        (await _sut.AttachWorktreeAsync(session.Id, worktree)).Should().BeFalse();
+        _sut.GetById(session.Id)!.WorktreePath.Should().BeNull();
+    }
+
     // --- Живой ход: rate_limit_event пишет usage с source=turn и трогает activity tracker ---
 
-    private async Task InvokeOnMessageAsync(string sessionId, TurnAccumulator acc, ServerMessage msg)
+    private async Task InvokeOnMessageAsync(string sessionId, TurnAccumulator acc, ServerMessage msg,
+        long runId = 0)
     {
         var method = typeof(SessionManager).GetMethod("OnMessageAsync", BindingFlags.NonPublic | BindingFlags.Instance)!;
-        var task = (Task)method.Invoke(_sut, [sessionId, acc, msg])!;
+        var task = (Task)method.Invoke(_sut, [sessionId, acc, msg, runId])!;
         await task;
     }
 

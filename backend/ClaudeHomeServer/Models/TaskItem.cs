@@ -40,6 +40,13 @@ public class TaskItem
     // реализация по плану (Medium), механическая правка (Weak). null — не задан: модель
     // возьмётся от персоны-исполнителя и назначения места (см. TaskExecutionService.ResolveExecutorModel).
     public ModelTier? ModelTier { get; set; }
+    // Отдельное git worktree для чата-исполнителя: путь СУЩЕСТВУЮЩЕГО дерева (хостовый) и
+    // его ветка. Дерево здесь не создаётся — поле означает «работай в этом дереве» (штаб
+    // «Командной реализации» раздаёт исполнителям своё). null — исполнитель стартует в корне
+    // проекта; у личной задачи (ProjectId == null) поля не хранятся — worktree без репы
+    // проекта не бывает (TaskManager.NormalizeWorktree).
+    public string? WorktreePath { get; set; }
+    public string? WorktreeBranch { get; set; }
     // Claude-исполнитель: отметка запуска (идемпотентность автозапуска, переживает рестарт)
     public DateTime? ClaudeStartedAt { get; set; }
     // Итог последнего запуска: success | error; null — ещё выполняется или не запускалась

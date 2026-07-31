@@ -194,6 +194,10 @@ public class TeamWaveService
                 Title: subtask.Title,
                 Description: TeamImplementPrompts.SubtaskDescription(plan, subtask,
                     session.WorktreePath, session.WorktreeBranch),
+                // Дерево штаба — источником правды полем: чат-исполнитель стартует прямо в нём
+                // (TaskExecutionService), подсказка в описании остаётся человеку и модели
+                WorktreePath: session.WorktreePath,
+                WorktreeBranch: session.WorktreeBranch,
                 // Исполнитель — персона плана; PersonaId подразумевает Assignee=Claude
                 PersonaId: subtask.ExecutorPersonaId,
                 // Происхождение: чат-штаб как источник (из него же вычисляется

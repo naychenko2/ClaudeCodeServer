@@ -306,6 +306,20 @@ const MODEL_TIER_SCHEMA = {
     'Не указывай, если сомневаешься — уровень возьмётся от исполнителя и настроек системы.',
 };
 
+// Отдельное git worktree для чата-исполнителя: дерево должно УЖЕ существовать (тумблер
+// worktree в чате или git worktree add). Бэкенд сверяет путь с «git worktree list» репы
+// проекта; не сошлось — исполнитель просто стартует в корне проекта.
+const WORKTREE_PATH_SCHEMA = {
+  type: 'string',
+  description: 'Абсолютный путь СУЩЕСТВУЮЩЕГО git worktree проекта — чат-исполнитель стартует прямо в нём. ' +
+    'Дерево не создаётся: путь, которого нет в git worktree list проекта, игнорируется. "" — убрать.',
+};
+
+const WORKTREE_BRANCH_SCHEMA = {
+  type: 'string',
+  description: 'Ветка этого worktree (метка в git-баре чата). Не указана — возьмётся из самого дерева.',
+};
+
 // Markdown-итог выполнения задачи — прикрепляет исполнитель при завершении/обновлении.
 // null/отсутствует = не менять, "" = очистить (как у description).
 const RESULT_MARKDOWN_SCHEMA = {
@@ -382,6 +396,8 @@ const TOOLS = [
         assignee: { type: 'string', enum: ENUMS.assignee, description: 'Исполнитель' },
         personaId: PERSONA_ID_SCHEMA,
         modelTier: MODEL_TIER_SCHEMA,
+        worktreePath: WORKTREE_PATH_SCHEMA,
+        worktreeBranch: WORKTREE_BRANCH_SCHEMA,
         subtasks: { type: 'array', items: { type: 'string' }, description: 'Названия подзадач' },
         labels: { type: 'array', items: { type: 'string' }, description: 'Метки' },
         columnId: COLUMN_ID_SCHEMA,
@@ -409,6 +425,8 @@ const TOOLS = [
         assignee: { type: 'string', enum: ENUMS.assignee },
         personaId: PERSONA_ID_SCHEMA,
         modelTier: MODEL_TIER_SCHEMA,
+        worktreePath: WORKTREE_PATH_SCHEMA,
+        worktreeBranch: WORKTREE_BRANCH_SCHEMA,
         resultMarkdown: RESULT_MARKDOWN_SCHEMA,
         linkedFiles: LINKED_FILES_SCHEMA,
         labels: { type: 'array', items: { type: 'string' }, description: 'Метки (заменяют список целиком)' },
@@ -597,7 +615,7 @@ async function callTool(name, args) {
 
     case 'tasks_create': {
       const body = { title: args.title };
-      for (const k of ['description', 'priority', 'dueDate', 'dueTime', 'reminderMinutes', 'recurrence', 'assignee', 'personaId', 'modelTier', 'labels', 'columnId', 'executionExpiresAfterMinutes'])
+      for (const k of ['description', 'priority', 'dueDate', 'dueTime', 'reminderMinutes', 'recurrence', 'assignee', 'personaId', 'modelTier', 'worktreePath', 'worktreeBranch', 'labels', 'columnId', 'executionExpiresAfterMinutes'])
         if (args[k] !== undefined) body[k] = args[k];
       // Происхождение задачи из окружения хода: персона-постановщик (если ход шёл от её лица)
       // и чат-источник. Чат-источник — факт «задача рождена в этом чате», он не зависит от того,

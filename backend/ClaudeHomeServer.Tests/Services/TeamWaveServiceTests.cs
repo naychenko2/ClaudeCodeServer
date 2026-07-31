@@ -299,6 +299,34 @@ public class TeamWaveServiceTests : IDisposable
         created[0].Description.Should().Contain("feature/x");
     }
 
+    [Fact]
+    public async Task StartWave_ШтабВWorktree_ПодЗадачаНесётДеревоПолем()
+    {
+        // Источник правды — поле задачи: по нему чат-исполнитель стартует прямо в дереве
+        // (TaskExecutionService → SessionManager.AttachWorktreeAsync), а не «догадывается»
+        // из текста описания
+        var (session, backend, frontend) = await MakeStabAsync("wave-worktree-field");
+        session.WorktreePath = Path.Combine(_dir, "wt", "feature-y");
+        session.WorktreeBranch = "feature/y";
+        var plan = MakePlan(backend, frontend);
+
+        var created = await _sut.StartWaveAsync(session, plan);
+
+        created[0].WorktreePath.Should().Be(session.WorktreePath);
+        created[0].WorktreeBranch.Should().Be("feature/y");
+    }
+
+    [Fact]
+    public async Task StartWave_ШтабБезWorktree_ПодЗадачаБезДерева()
+    {
+        var (session, backend, frontend) = await MakeStabAsync("wave-no-worktree");
+        var plan = MakePlan(backend, frontend);
+
+        var created = await _sut.StartWaveAsync(session, plan);
+
+        created[0].WorktreePath.Should().BeNull("исполнитель стартует в корне проекта");
+    }
+
     // --- Выбор волны (чистая логика зависимостей) ---
 
     [Fact]

@@ -100,6 +100,9 @@ public class TaskManager
             },
             // Уровень модели исполнителя: мусор и пустая строка — «не задан» (валидация — в контроллере)
             ModelTier = ModelTiers.TryParse(req.ModelTier, out var tier) ? tier : null,
+            // Дерево исполнителя: пустое значение = «не задано» (нормализация — ниже)
+            WorktreePath = Trimmed(req.WorktreePath),
+            WorktreeBranch = Trimmed(req.WorktreeBranch),
             ResultMarkdown = req.ResultMarkdown,
             LinkedFiles = req.LinkedFiles ?? [],
             Subtasks = req.Subtasks?.Select(s => new TaskSubtask { Title = s.Title }).ToList() ?? [],
@@ -117,6 +120,7 @@ public class TaskManager
         if (task.Recurrence is not null) task.SeriesId = task.Id;
         // Инвариант: исполнитель-персона подразумевает исполнение силами Claude
         NormalizePersonaAssignee(task);
+        NormalizeWorktree(task);
         _tasks[task.Id] = task;
         Save();
         LogTask(task, ProjectEventTypes.TaskCreated, $"Создана задача «{task.Title}»");
@@ -130,6 +134,19 @@ public class TaskManager
     {
         if (task.PersonaId is not null) task.Assignee = TaskItemAssignee.Claude;
     }
+
+    // Инвариант: worktree — дерево репы ПРОЕКТА. У личной задачи (и у задачи, которую сделали
+    // личной) хранить путь незачем — исполнитель всё равно стартует в чате вне проекта.
+    private static void NormalizeWorktree(TaskItem task)
+    {
+        if (task.ProjectId is not null) return;
+        task.WorktreePath = null;
+        task.WorktreeBranch = null;
+    }
+
+    // Пустая/пробельная строка запроса = «значение не задано»
+    private static string? Trimmed(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     // Глубина цепочки делегирования новой задачи: если её создали из чата, который сам
     // сейчас исполняет родительскую задачу (её LinkedSessionId == sourceSessionId) —
@@ -185,6 +202,9 @@ public class TaskManager
         // Уровень модели: null = не менять, "" (и мусор — его отсекает контроллер) = сбросить
         if (req.ModelTier is not null)
             task.ModelTier = ModelTiers.TryParse(req.ModelTier, out var tier) ? tier : null;
+        // Дерево чата-исполнителя: null = не менять, "" (и пробелы) = сбросить
+        if (req.WorktreePath is not null) task.WorktreePath = Trimmed(req.WorktreePath);
+        if (req.WorktreeBranch is not null) task.WorktreeBranch = Trimmed(req.WorktreeBranch);
         if (req.ResultMarkdown is not null) task.ResultMarkdown = req.ResultMarkdown;
         if (req.LinkedFiles is not null) task.LinkedFiles = req.LinkedFiles;
         if (req.Labels is not null) task.Labels = req.Labels;
@@ -220,6 +240,8 @@ public class TaskManager
 
         // Инвариант «персона ⇒ Claude» — после того как учли и Assignee, и PersonaId
         NormalizePersonaAssignee(task);
+        // Инвариант «worktree только у проектной задачи» — после смены проекта выше
+        NormalizeWorktree(task);
         task.UpdatedAt = DateTime.UtcNow;
         Save();
         // Завершение задачи фиксируем в логе (переход в Done — заметное командное событие)
@@ -428,7 +450,11 @@ public record CreateTaskRequest(
     // Происхождение: персона-постановщик и чат-источник (проставляет tasks-server из env
     // хода; UI/API их не шлют — null). См. TaskItem.CreatedByPersonaId/SourceSessionId.
     string? CreatedByPersonaId = null,
-    string? SourceSessionId = null);
+    string? SourceSessionId = null,
+    // Дерево для чата-исполнителя (см. TaskItem.WorktreePath): путь СУЩЕСТВУЮЩЕГО worktree
+    // проекта и его ветка. У личной задачи игнорируются.
+    string? WorktreePath = null,
+    string? WorktreeBranch = null);
 
 public record CreateSubtaskRequest(string Title);
 
@@ -461,6 +487,9 @@ public record UpdateTaskRequest(
     // Время жизни чата исполнения: null = не менять, отрицательное = бессрочно, N>=0 = TTL
     int? ExecutionExpiresAfterMinutes = null,
     // Уровень модели исполнителя: null = не менять, "" = сбросить, "strong|medium|weak" = задать
-    string? ModelTier = null);
+    string? ModelTier = null,
+    // Дерево чата-исполнителя (см. TaskItem.WorktreePath): null = не менять, "" = сбросить
+    string? WorktreePath = null,
+    string? WorktreeBranch = null);
 
 public record UpdateSubtaskRequest(string Id, string Title, bool IsDone);

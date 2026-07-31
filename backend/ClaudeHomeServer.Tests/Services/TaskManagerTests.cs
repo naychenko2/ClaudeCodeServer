@@ -1,4 +1,4 @@
-using ClaudeHomeServer.Models;
+﻿using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
@@ -483,5 +483,60 @@ public class TaskManagerTests : IDisposable
         var next = _sut.SpawnNextOccurrence(_sut.GetById(task.Id)!);
 
         next!.DelegationDepth.Should().Be(1);
+    }
+
+    // ─── Дерево чата-исполнителя (worktree на задаче) ────────────────────────
+    // Путь строим от temp: Windows-литерал на Linux считался бы относительным (см. CLAUDE.md)
+
+    private static readonly string Wt = Path.Combine(Path.GetTempPath(), "wt", "feature-x");
+
+    [Fact]
+    public void Create_ПроектнаяЗадача_ХранитДеревоИсполнителя()
+    {
+        var task = _sut.Create("proj-1", "user-1", new CreateTaskRequest("в дереве",
+            WorktreePath: Wt + " ", WorktreeBranch: " wt/feature-x"));
+
+        task.WorktreePath.Should().Be(Wt);
+        task.WorktreeBranch.Should().Be("wt/feature-x");
+
+        // Переживает рестарт (поле в data/tasks.json)
+        new TaskManager(BuildConfig(_dir)).GetById(task.Id)!.WorktreePath.Should().Be(Wt);
+    }
+
+    [Fact]
+    public void Create_ЛичнаяЗадача_ДеревоИгнорируется()
+    {
+        // Worktree — дерево репы проекта; у личной задачи проекта нет
+        var task = _sut.Create(null, "user-1", new CreateTaskRequest("личная",
+            WorktreePath: Wt, WorktreeBranch: "wt/feature-x"));
+
+        task.WorktreePath.Should().BeNull();
+        task.WorktreeBranch.Should().BeNull();
+    }
+
+    [Fact]
+    public void Update_ПустаяСтрока_СбрасываетДерево()
+    {
+        var task = _sut.Create("proj-1", "u", new CreateTaskRequest("t",
+            WorktreePath: Wt, WorktreeBranch: "wt/a"));
+
+        // null — не менять
+        _sut.Update(task.Id, new UpdateTaskRequest(Title: "t2"))!.WorktreePath.Should().Be(Wt);
+
+        var cleared = _sut.Update(task.Id, new UpdateTaskRequest(WorktreePath: "", WorktreeBranch: ""))!;
+        cleared.WorktreePath.Should().BeNull();
+        cleared.WorktreeBranch.Should().BeNull();
+    }
+
+    [Fact]
+    public void Update_ЗадачаСталаЛичной_ДеревоСбрасывается()
+    {
+        var task = _sut.Create("proj-1", "u", new CreateTaskRequest("t",
+            WorktreePath: Wt, WorktreeBranch: "wt/a"));
+
+        var personal = _sut.Update(task.Id, new UpdateTaskRequest(ProjectId: ""))!;
+
+        personal.WorktreePath.Should().BeNull();
+        personal.WorktreeBranch.Should().BeNull();
     }
 }

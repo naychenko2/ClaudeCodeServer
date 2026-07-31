@@ -115,6 +115,15 @@ public class TaskExecutionService
                 effort: persona?.Effort, personaId: persona?.Id, taskExecution: true, taskId: task.Id);
         if (task.ExecutionExpiresAfterMinutes is { } ttl) _sessions.SetExpiry(session.Id, ttl);
 
+        // Задача с деревом (штаб «Командной реализации» раздаёт исполнителям своё): чат
+        // стартует сразу в нём. Дерево уже существует — только присваиваем поля свежей
+        // сессии до первого хода, cwd подставит EnsureProcessAsync. Невалидный путь не
+        // должен ронять запуск: мягко деградируем в корень проекта.
+        if (task.WorktreePath is { } worktree && task.ProjectId is not null
+            && !await _sessions.AttachWorktreeAsync(session.Id, worktree, task.WorktreeBranch))
+            _log.LogWarning("Дерево {Worktree} задачи {TaskId} не подошло (нет на диске либо не числится " +
+                "в git worktree list проекта) — исполнитель стартует в корне проекта", worktree, task.Id);
+
         var updated = _tasks.MarkClaudeStarted(task.Id, session.Id, DateTime.UtcNow)
             ?? throw new InvalidOperationException("Задача удалена");
         await _hub.BroadcastTaskChangedAsync(task.OwnerId, "updated", updated);

@@ -2147,13 +2147,16 @@ public class SessionManager : IDisposable
 
         // Лицо отчёта: персона чата-отправителя, иначе — нейтральная карточка с его именем
         var persona = chat.PersonaId;
+        // Время доклада ставим один раз и кладём в оба слоя (история + живая лента), чтобы
+        // подпись поста не разъезжалась между перезагрузкой и пришедшим в моменте событием
+        var reportTs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         await AppendStoredAsync(parentId,
             persona is not null
-                ? new StoredTextMessage(text, personaId: persona)
-                : new Protocol.StoredUserMessage(text, viaAgent: true, senderChatName: chat.Name),
+                ? new StoredTextMessage(text, personaId: persona, timestamp: reportTs)
+                : new Protocol.StoredUserMessage(text, viaAgent: true, senderChatName: chat.Name, timestamp: reportTs),
             persona is not null
-                ? new GuestTextMessage(text, persona)
-                : new UserMessageMessage(text, null, null, true, null, chat.Name));
+                ? new GuestTextMessage(text, persona, reportTs)
+                : new UserMessageMessage(text, null, null, true, null, chat.Name, reportTs));
 
         if (!withTurn) return ReportUpResult.Delivered;
 
@@ -4339,7 +4342,7 @@ public class SessionManager : IDisposable
                     if (entry is not null) entry.LastRecallManifest = m;
                     break;
                 case ResultMessage m:
-                    await acc.OnResultAsync(m.Subtype, m.DurationMs, m.NumTurns, m.Usage, m.TotalCostUsd, m.ApiErrorStatus, m.PermissionDenials, _history, m.ContextTokens);
+                    await acc.OnResultAsync(m.Subtype, m.DurationMs, m.NumTurns, m.Usage, m.TotalCostUsd, m.ApiErrorStatus, m.PermissionDenials, _history, m.ContextTokens, m.UsageModel);
                     if (entry is not null) entry.LoopTurnFailed = m.Subtype == "error";
                     RecordTurnSpend(entry, m);
                     break;

@@ -57,7 +57,7 @@ internal class TurnAccumulator
         lock (_lock)
             _currentTurn.Add(new StoredUserMessage(text, attachedPaths.Count > 0 ? [.. attachedPaths] : null,
                 viaAgent ? true : null, senderPersonaId, systemDirective ? true : null, auto ? true : null,
-                senderOrigin));
+                senderOrigin, timestamp: NowMs()));
     }
 
     public void OnSessionStarted(string model, string mode, TurnWorktreeInfo? worktree = null)
@@ -65,9 +65,20 @@ internal class TurnAccumulator
         lock (_lock) _currentTurn.Add(new StoredSessionStartedMessage(model, mode, worktree));
     }
 
+    // Время начала накопления текстового поста (Unix-мс UTC). Берём момент ПЕРВОЙ дельты,
+    // а не флаша: пост «написан» тогда, когда ассистент начал его писать, а флаш может
+    // случиться сильно позже — на первом же вызове инструмента.
+    private long? _textBufStartedAt;
+
+    private static long NowMs() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
     public void OnTextDelta(string text)
     {
-        lock (_lock) _textBuf.Append(text);
+        lock (_lock)
+        {
+            _textBufStartedAt ??= NowMs();
+            _textBuf.Append(text);
+        }
     }
 
     public void OnThinkingDelta(string text)
@@ -100,7 +111,7 @@ internal class TurnAccumulator
         lock (_lock)
         {
             FlushBuffers();
-            _currentTurn.Add(new StoredTextMessage(text, null, parentToolUseId));
+            _currentTurn.Add(new StoredTextMessage(text, null, parentToolUseId, timestamp: NowMs()));
         }
     }
 
@@ -334,11 +345,17 @@ internal class TurnAccumulator
 
     public async Task OnResultAsync(string subtype, long durationMs, int numTurns,
         UsageInfo? usage, double? totalCostUsd, string? apiErrorStatus, IReadOnlyList<string>? permissionDenials, ChatHistoryService svc,
-        int? contextTokens = null)
+        int? contextTokens = null, string? usageModel = null)
     {
         lock (_lock)
         {
             FlushBuffers();
+            // Модель хода известна только сейчас (её несёт result), а посты этого хода уже
+            // созданы — проставляем задним числом. Сабагентские тексты (ParentToolUseId)
+            // пропускаем: они могли идти другой моделью, и UsageModel про них не говорит.
+            foreach (var m in _currentTurn)
+                if (m is StoredTextMessage t && t.ParentToolUseId is null && t.Model is null)
+                    t.Model = usageModel;
             _currentTurn.Add(new StoredResultMessage(subtype, durationMs, numTurns, usage, totalCostUsd, apiErrorStatus, permissionDenials, contextTokens));
         }
         await FlushAsync(svc);
@@ -390,7 +407,8 @@ internal class TurnAccumulator
             if (_thinkingBuf.Length > 0)
                 result.Add(new StoredThinkingMessage(_thinkingBuf.ToString()));
             if (_textBuf.Length > 0)
-                result.Add(new StoredTextMessage(_textBuf.ToString(), _personaId));
+                result.Add(new StoredTextMessage(_textBuf.ToString(), _personaId,
+                    timestamp: _textBufStartedAt ?? NowMs()));
             return result;
         }
     }
@@ -415,8 +433,10 @@ internal class TurnAccumulator
     {
         if (_textBuf.Length > 0)
         {
-            _currentTurn.Add(new StoredTextMessage(_textBuf.ToString(), _personaId));
+            _currentTurn.Add(new StoredTextMessage(_textBuf.ToString(), _personaId,
+                timestamp: _textBufStartedAt ?? NowMs()));
             _textBuf.Clear();
+            _textBufStartedAt = null;
         }
         if (_thinkingBuf.Length > 0)
         {

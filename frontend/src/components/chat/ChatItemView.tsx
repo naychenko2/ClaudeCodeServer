@@ -1,10 +1,12 @@
 import { memo, useState, useContext, useEffect } from 'react';
-import { SquareCheck, SquarePen, Check, Copy, AlertCircle, RotateCcw, AlertTriangle, X } from 'lucide-react';
+import { SquareCheck, SquarePen, Check, Copy, AlertCircle, RotateCcw, AlertTriangle, X, Brain, Clock } from 'lucide-react';
 import type { ChatItem, Persona, ProviderFallbackOption } from '../../types';
 import { splitFallbackOptions, formatSubscriptionMeta } from '../../lib/providerLimit';
 import type { TodoItem } from '../../hooks/useSessionArtifacts';
 import type { Mode } from '../../lib/modes';
 import { C, FONT, SHADOW, R } from '../../lib/design';
+import { useModelLabel } from '../../lib/models';
+import { formatPostTime, formatPostTimeFull } from '../../lib/postTime';
 import { relPath, stripRoot } from '../../lib/paths';
 import { hasUltraworkKeyword } from '../../lib/ultrawork';
 import { detectTeamMechanic, describeTeamTurn } from '../../features/team/teamMechanics';
@@ -245,13 +247,138 @@ export const FileChangedRow = memo(function FileChangedRow({ item, online, onOpe
   );
 });
 
-// Ответ ассистента. Действия «Копировать/В заметку/Повторить» — иконками в правом
-// верхнем углу: десктоп — fade-in по hover на сообщении, мобайл (тач) — всегда видимы.
-function TextMessageView({ text, online, onRetry, streaming }: { text: string; online: boolean; onRetry: () => void; streaming?: boolean }) {
+// Насколько строка действий опущена под пузырь. Тем же числом посты с этой строкой
+// раздвигаются по вертикали (POST_BAR_GAP), иначе всплывающая строка ложилась бы
+// на следующий пост — лента идёт с gap 2px.
+const POST_BAR_H = 20;
+// Зазор чуть меньше высоты строки: она заезжает в поле соседнего поста на пару
+// пикселей, но всплывает поверх (zIndex) и читаться это не мешает
+const POST_BAR_GAP = POST_BAR_H - 5;
+
+// Строка под постом: сначала действия, потом модель, потом время. Ни фона, ни рамки —
+// это подпись к посту, а не элемент управления: заметной она становится только под
+// курсором. Держится оверлеем (`position:absolute` ПОД пузырём), поэтому места в ленте
+// не занимает и посты не раздвигает.
+// align — с какой стороны прижата: ответы ассистента идут слева, пузыри человека справа.
+function PostActionBar({ align = 'left', children }: {
+  align?: 'left' | 'right'; children?: React.ReactNode;
+}) {
+  return (
+    <div className="cc-actions" style={{
+      position: 'absolute', bottom: -POST_BAR_H, [align]: 4, zIndex: 2,
+      display: 'flex', alignItems: 'center', gap: 7,
+      maxWidth: '100%',
+    }}>
+      {children}
+    </div>
+  );
+}
+
+// Мета поста — модель и время простым текстом. Оба слагаемых необязательны: старая
+// история их не несёт, и тогда под постом остаются одни действия.
+function PostMeta({ model, ts }: { model?: string; ts?: number }) {
+  const label = useModelLabel(model);
+  const time = formatPostTime(ts);
+  const timeFull = formatPostTimeFull(ts);
+  if (!model && !time) return null;
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0,
+      fontFamily: FONT.sans, fontSize: 11, color: C.textMuted, whiteSpace: 'nowrap',
+    }}>
+      {model && (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, minWidth: 0 }}
+          title={`Модель этого ответа: ${label}`}>
+          <Brain size={12} strokeWidth={2} style={{ flexShrink: 0 }} />
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</span>
+        </span>
+      )}
+      {time && (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}
+          title={timeFull ?? undefined}>
+          <Clock size={12} strokeWidth={2} style={{ flexShrink: 0 }} />
+          {time}
+        </span>
+      )}
+    </span>
+  );
+}
+
+// Кнопка в строке действий поста — общая для ответа ассистента и пузыря человека.
+// Без заливки и рамки: подсветка только цветом иконки, чтобы строка читалась как
+// подпись, а не как ряд кнопок.
+const postIconBtn: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+  width: 20, height: 20, borderRadius: 5, border: 'none', background: 'none',
+  color: C.textMuted, cursor: 'pointer', fontFamily: 'inherit', padding: 0,
+};
+
+// Наведение подсвечивает саму иконку (заливки нет)
+const postIconHover = {
+  onMouseEnter: (e: React.MouseEvent<HTMLButtonElement>) => { e.currentTarget.style.color = C.textHeading; },
+  onMouseLeave: (e: React.MouseEvent<HTMLButtonElement>) => { e.currentTarget.style.color = C.textMuted; },
+};
+
+// Тап по посту на мобиле раскрывает панель действий (на десктопе — hover, это CSS).
+// Тап по ссылке/кнопке/коду и тап, завершающий выделение текста, не считаем — иначе
+// панель дёргалась бы при обычном чтении и копировании.
+function usePostTap() {
+  const [tapped, setTapped] = useState(false);
+  const handleTap = (e: React.MouseEvent) => {
+    if ((e.target as HTMLElement).closest('a, button, input, textarea, pre, code')) return;
+    if (window.getSelection()?.toString()) return;
+    setTapped(t => !t);
+  };
+  return { tapped, handleTap };
+}
+
+// Кнопка «Скопировать» с отметкой об успехе — одинаково нужна обоим видам постов
+function CopyButton({ text, label }: { text: string; label: string }) {
   const [copied, setCopied] = useState(false);
   const copy = () => {
-    navigator.clipboard?.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }).catch(() => {});
+    navigator.clipboard?.writeText(text)
+      .then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); })
+      .catch(() => {});
   };
+  return (
+    <button onClick={copy} style={postIconBtn} title={copied ? 'Скопировано' : label} aria-label={label}
+      {...postIconHover}>
+      {copied
+        ? <Check size={14} color={C.success} strokeWidth={3} style={{ flexShrink: 0 }} />
+        : <Copy size={13} strokeWidth={2} style={{ flexShrink: 0 }} />}
+    </button>
+  );
+}
+
+// Пузырь сообщения человека: та же панель по hover, но короче — копирование и время
+// (модель к своему сообщению отношения не имеет). Вынесен из switch, потому что
+// копирование и тап держат состояние, а хуки внутри case недопустимы.
+function UserMessageBubble({ text, ts, children }: { text: string; ts?: number; children: React.ReactNode }) {
+  const { tapped, handleTap } = usePostTap();
+  return (
+    <div className={`cc-msg${tapped ? ' cc-msg--tapped' : ''}`} onClick={handleTap}
+      style={{
+        position: 'relative', maxWidth: '100%', marginBottom: POST_BAR_GAP,
+        background: C.bgWhite, color: C.textPrimary,
+        border: `1px solid ${C.borderLight}`, boxShadow: SHADOW.card,
+        borderRadius: '18px 18px 4px 18px', padding: '12px 17px', fontSize: 14,
+      }}>
+      {children}
+      {/* Прижата вправо — по стороне, с которой стоит сам пузырь человека */}
+      <PostActionBar align="right">
+        <CopyButton text={text} label="Скопировать сообщение" />
+        <PostMeta ts={ts} />
+      </PostActionBar>
+    </div>
+  );
+}
+
+// Ответ ассистента. Панель «мета + Копировать/В заметку/Повторить» — оверлеем у нижней
+// кромки: десктоп — fade-in по hover на сообщении, мобайл (тач) — по тапу.
+function TextMessageView({ text, online, onRetry, streaming, model, ts }: {
+  text: string; online: boolean; onRetry: () => void; streaming?: boolean;
+  model?: string; ts?: number;
+}) {
   // «В заметку»: сохранение ответа в базу заметок (проект → notes/, чат → personal)
   const project = useContext(ChatProjectContext);
   const [savedNoteId, setSavedNoteId] = useState<string | null>(null);
@@ -266,44 +393,30 @@ function TextMessageView({ text, online, onRetry, streaming }: { text: string; o
       .catch(() => { setNoteError(true); setTimeout(() => setNoteError(false), 3000); })
       .finally(() => setSavingNote(false));
   };
-  const iconBtn: React.CSSProperties = {
-    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-    width: 26, height: 26, borderRadius: 7, border: 'none', background: C.bgSelected,
-    color: C.textMuted, cursor: 'pointer', fontFamily: 'inherit', padding: 0,
-  };
-  // Тач: действия показываются по тапу на сообщении (на десктопе — по hover, это CSS).
-  // Тап по ссылке/кнопке/коду и тап, завершающий выделение текста, не считаем — иначе
-  // панель дёргалась бы при обычном чтении и копировании.
-  const [tapped, setTapped] = useState(false);
-  const handleTap = (e: React.MouseEvent) => {
-    if ((e.target as HTMLElement).closest('a, button, input, textarea, pre, code')) return;
-    if (window.getSelection()?.toString()) return;
-    setTapped(t => !t);
-  };
+  const iconBtn = postIconBtn;
+  const { tapped, handleTap } = usePostTap();
   return (
+    // Обёртка нужна, чтобы строка действий висела ПОД пузырём: у самого пузыря
+    // overflow:hidden (обрезает контент), и вылезающую наружу строку он бы срезал
     <div className={`cc-msg${tapped ? ' cc-msg--tapped' : ''}`} onClick={handleTap}
-      style={{
-        position: 'relative', display: 'flex', flexDirection: 'column', gap: 6, maxWidth: '100%', overflow: 'hidden',
+      style={{ position: 'relative', maxWidth: '100%', marginBottom: streaming ? 0 : POST_BAR_GAP }}>
+      <div style={{
+        display: 'flex', flexDirection: 'column', gap: 6, maxWidth: '100%', overflow: 'hidden',
         // Полупрозрачный «лист» под ответом: лента лежит на фоне с дудл-паттерном,
         // и без подложки рисунок лез бы прямо под текст
         background: C.msgBg, borderRadius: R.xl, padding: '9px 12px',
       }}>
-      {/* data-selection-doc: Ctrl+A в чате выделяет последний ответ ассистента (см. selectionScope) */}
-      <div data-selection-doc="" style={{ fontSize: 14, color: C.textHeading, wordBreak: 'break-word' }}>
-        <MarkdownContent text={text} />
-        {/* Мигающая каретка стриминга (B2) */}
-        {streaming && <span style={{ display: 'inline-block', width: 7, height: 15, marginTop: 3, borderRadius: 1, background: C.accent, animation: 'blink 1s step-start infinite', verticalAlign: 'text-bottom' }} />}
+        {/* data-selection-doc: Ctrl+A в чате выделяет последний ответ ассистента (см. selectionScope) */}
+        <div data-selection-doc="" style={{ fontSize: 14, color: C.textHeading, wordBreak: 'break-word' }}>
+          <MarkdownContent text={text} />
+          {/* Мигающая каретка стриминга (B2) */}
+          {streaming && <span style={{ display: 'inline-block', width: 7, height: 15, marginTop: 3, borderRadius: 1, background: C.accent, animation: 'blink 1s step-start infinite', verticalAlign: 'text-bottom' }} />}
+        </div>
       </div>
-      {/* Действия — компактными иконками в правом верхнем углу (CSS управляет hover/тач) */}
+      {/* Строка под постом: действия, затем модель и время. Оверлей, места не занимает */}
       {!streaming && (
-        <div className="cc-actions" style={{ position: 'absolute', top: 6, right: 8, display: 'flex', gap: 4 }}>
-          <button onClick={copy} style={iconBtn} title={copied ? 'Скопировано' : 'Скопировать ответ'} aria-label="Скопировать ответ"
-            onMouseEnter={e => { if (!copied) e.currentTarget.style.background = C.bgInset; }}
-            onMouseLeave={e => { if (!copied) e.currentTarget.style.background = C.bgSelected; }}>
-            {copied
-              ? <Check size={14} color={C.success} strokeWidth={3} style={{ flexShrink: 0 }} />
-              : <Copy size={13} strokeWidth={2} style={{ flexShrink: 0 }} />}
-          </button>
+        <PostActionBar>
+          <CopyButton text={text} label="Скопировать ответ" />
           {online && (
             <>
               {savedNoteId && (
@@ -316,8 +429,7 @@ function TextMessageView({ text, online, onRetry, streaming }: { text: string; o
               <button onClick={saveNote} disabled={savingNote} style={{ ...iconBtn, opacity: savingNote ? 0.5 : 1 }}
                 title={noteError ? 'Не удалось сохранить' : savedNoteId ? 'Сохранено в заметки' : 'Сохранить в заметку'}
                 aria-label="Сохранить в заметку"
-                onMouseEnter={e => { if (!savedNoteId) e.currentTarget.style.background = C.bgInset; }}
-                onMouseLeave={e => { if (!savedNoteId) e.currentTarget.style.background = C.bgSelected; }}>
+                {...postIconHover}>
                 {savedNoteId
                   ? <Check size={14} color={C.success} strokeWidth={3} style={{ flexShrink: 0 }} />
                   : noteError
@@ -328,12 +440,13 @@ function TextMessageView({ text, online, onRetry, streaming }: { text: string; o
           )}
           {online && (
             <button onClick={onRetry} style={iconBtn} title="Повторить последний запрос" aria-label="Повторить последний запрос"
-              onMouseEnter={e => (e.currentTarget.style.background = C.bgInset)}
-              onMouseLeave={e => (e.currentTarget.style.background = C.bgSelected)}>
+              {...postIconHover}>
               <RotateCcw size={13} strokeWidth={2} style={{ flexShrink: 0 }} />
             </button>
           )}
-        </div>
+          {/* Модель и время — после действий, как подпись к посту */}
+          <PostMeta model={model} ts={ts} />
+        </PostActionBar>
       )}
     </div>
   );
@@ -627,11 +740,7 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       }
       return (
         <div style={{ alignSelf: 'flex-end', maxWidth: '80%', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
-          <div style={{
-            background: C.bgWhite, color: C.textPrimary,
-            border: `1px solid ${C.borderLight}`, boxShadow: SHADOW.card,
-            borderRadius: '18px 18px 4px 18px', padding: '12px 17px', fontSize: 14,
-          }}>
+          <UserMessageBubble text={item.text} ts={item.ts}>
             {teamInfo ? (
               /* Командный ход механики: вместо сырой слэш-команды/JSON — карточка
                  запроса (механика + тема + чипы параметров). Сырой текст остаётся
@@ -671,7 +780,7 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
                 ))}
               </div>
             )}
-          </div>
+          </UserMessageBubble>
         </div>
       );
     }
@@ -709,7 +818,8 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       const msg = (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           {report && <DelegationReportBadge title={report.title} />}
-          <TextMessageView text={report ? report.body : item.text} online={online} onRetry={onRetry} streaming={streaming} />
+          <TextMessageView text={report ? report.body : item.text} online={online} onRetry={onRetry} streaming={streaming}
+            model={item.model} ts={item.ts} />
         </div>
       );
       // В персон-чате слева от реплики ассистента — её аватар (главный сигнал «говорит она»).

@@ -35,6 +35,7 @@ export const C = {
   bgWhite:     'var(--c-bg-white)',
   bgSelected:  'var(--c-bg-selected)',
   bgInset:     'var(--c-bg-inset)',   // утопленные зоны/футеры панелей
+  bgInsetSoft: 'var(--c-bg-inset-soft)', // то же, но полупрозрачное — дудл-холст просвечивает
 
   // Текст
   textHeading:   'var(--c-text-heading)',   // заголовки и акцентный текст

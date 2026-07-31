@@ -1,7 +1,7 @@
 /* eslint-disable react-hooks/rules-of-hooks --
    Хук здесь гоняется вне React: модуль react замокан мини-раннером ниже, порядок
    вызова хуков и жизненный цикл эффектов держит openChat. */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { ChatItem } from '../../types';
 
 // Тесты гонки «снапшот истории → вход в SignalR-группу» и залипания isWaiting
@@ -48,7 +48,19 @@ const m = vi.hoisted(() => ({
   joinSession: vi.fn<(sid: string) => Promise<void>>(async () => { }),
   leaveSession: vi.fn<(sid: string) => Promise<void>>(async () => { }),
   sendMessage: vi.fn<() => Promise<'started' | 'queued'>>(async () => 'started'),
+  // Обработчики сообщений хаба — через них тест играет роль сервера
+  messageHandlers: [] as Array<(msg: unknown) => void>,
 }));
+
+// Стаб document: окружение node, а реконсиляция по фокусу вешается на visibilitychange.
+// Ставим ДО импорта useSession — обработчик регистрируется один раз при первом вызове хука.
+const visibilityHandlers: Array<() => void> = [];
+(globalThis as unknown as { document: unknown }).document = {
+  visibilityState: 'visible',
+  addEventListener: (type: string, h: () => void) => {
+    if (type === 'visibilitychange') visibilityHandlers.push(h);
+  },
+};
 
 vi.mock('../../lib/api', () => ({
   api: {
@@ -64,7 +76,7 @@ vi.mock('../../lib/signalr', () => ({
   joinSession: (sid: string) => m.joinSession(sid),
   joinProject: vi.fn(async () => { }),
   leaveSession: (sid: string) => m.leaveSession(sid),
-  onMessage: vi.fn(() => () => { }),
+  onMessage: (h: (msg: unknown) => void) => { m.messageHandlers.push(h); return () => { }; },
   onReconnected: vi.fn(() => () => { }),
   sendMessage: (...args: unknown[]) => m.sendMessage(...(args as [])),
   respondPermission: vi.fn(async () => { }),
@@ -77,7 +89,11 @@ vi.mock('../../lib/signalr', () => ({
   setMode: vi.fn(async () => { }),
 }));
 
-const { useSession } = await import('../useSession');
+const { useSession, waitDiag } = await import('../useSession');
+
+// Сервер шлёт статус в сессию (в т.ч. replay в ответ на JoinSession)
+const emitStatus = (sid: string, status: string) =>
+  m.messageHandlers.forEach(h => h({ type: 'status_changed', sessionId: sid, status }));
 
 // --- Хелперы ---
 
@@ -137,6 +153,105 @@ beforeEach(() => {
   m.leaveSession.mockClear();
   m.sendMessage.mockClear();
   m.sendMessage.mockResolvedValue('started');
+});
+
+describe('useSession: реконсиляция isWaiting с серверным статусом', () => {
+  // Сколько раз переспрашивали статус ИМЕННО этой сессии (чужие чаты из соседних тестов
+  // могут висеть в модульном сторе — считаем адресно)
+  const joinsFor = (sid: string) => m.joinSession.mock.calls.filter(c => c[0] === sid).length;
+
+  let warn: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    warn = vi.spyOn(console, 'warn').mockImplementation(() => { });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    warn.mockRestore();
+  });
+
+  // Прокрутка цепочки промисов на фейковых таймерах
+  const tick = async () => { for (let i = 0; i < 6; i++) await vi.advanceTimersByTimeAsync(1); };
+
+  it('залипший isWaiting снимается по replay-статусу, который принёс poll', async () => {
+    const sid = nextSid();
+    const chat = openChat(sid);
+    await tick();
+    await chat.first.send('привет');
+    expect(chat.render().isWaiting).toBe(true);
+
+    // Ход давно кончился, но result до клиента не доехал
+    const before = joinsFor(sid);
+    const mismatchesBefore = waitDiag.mismatches;
+    await vi.advanceTimersByTimeAsync(25_000);
+    expect(joinsFor(sid)).toBe(before + 1); // poll переспросил статус
+
+    emitStatus(sid, 'active');              // replay от сервера
+    expect(chat.render().isWaiting).toBe(false);
+    expect(waitDiag.mismatches).toBe(mismatchesBefore + 1);
+    expect(waitDiag.last).toMatchObject({ sid, client: true, server: 'active' });
+
+    chat.unmount();
+  });
+
+  it('poll гаснет после снятия флага и не переспрашивает дальше', async () => {
+    const sid = nextSid();
+    const chat = openChat(sid);
+    await tick();
+    await chat.first.send('привет');
+
+    await vi.advanceTimersByTimeAsync(25_000);
+    expect(vi.getTimerCount()).toBe(1); // ход идёт — таймер один, рендеры его не плодят
+    chat.render(); chat.render();
+    expect(vi.getTimerCount()).toBe(1);
+
+    emitStatus(sid, 'active');
+    expect(chat.render().isWaiting).toBe(false);
+    expect(vi.getTimerCount()).toBe(0); // флаг снят — таймер погашен сразу
+
+    const after = joinsFor(sid);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(joinsFor(sid)).toBe(after); // занятых чатов не осталось — таймер погас
+
+    chat.unmount();
+  });
+
+  it('закрытый чат не поллится, даже если у него висит isWaiting', async () => {
+    const sid = nextSid();
+    const chat = openChat(sid);
+    await tick();
+    await chat.first.send('привет');
+    chat.unmount(); // ушли в другой чат, ход по данным клиента ещё идёт
+
+    const before = joinsFor(sid);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(joinsFor(sid)).toBe(before);
+  });
+
+  it('возврат фокуса на вкладку ставит isWaiting, если ход на самом деле идёт', async () => {
+    const sid = nextSid();
+    const chat = openChat(sid);
+    await tick();
+    expect(chat.render().isWaiting).toBe(false); // событие working прошло мимо клиента
+
+    const before = joinsFor(sid);
+    const mismatchesBefore = waitDiag.mismatches;
+    visibilityHandlers.forEach(h => h());
+    expect(joinsFor(sid)).toBe(before + 1);
+
+    emitStatus(sid, 'working');
+    expect(chat.render().isWaiting).toBe(true);
+    expect(waitDiag.mismatches).toBe(mismatchesBefore + 1);
+    expect(waitDiag.last).toMatchObject({ sid, client: false, server: 'working' });
+
+    // Совпадающий статус расхождением не считается
+    visibilityHandlers.forEach(h => h());
+    emitStatus(sid, 'working');
+    expect(waitDiag.mismatches).toBe(mismatchesBefore + 1);
+
+    chat.unmount();
+  });
 });
 
 describe('useSession: возврат в чат после пропущенного конца хода', () => {

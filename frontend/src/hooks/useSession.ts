@@ -76,6 +76,8 @@ function getState(sid: string): SessionState {
 function touch(sid: string, next: SessionState) {
   _store.set(sid, next);
   _lastSeen.set(sid, Date.now());
+  // Poll реконсиляции живёт ровно пока есть занятый открытый чат (см. syncWaitPoll)
+  syncWaitPoll();
 }
 
 function setState(sid: string, updater: (prev: SessionState) => SessionState) {
@@ -105,6 +107,71 @@ function evictColdSessions() {
 
 function updateItems(sid: string, fn: (items: ChatItem[]) => ChatItem[]) {
   setState(sid, prev => ({ ...prev, items: fn(prev.items) }));
+}
+
+// --- Реконсиляция isWaiting с серверным статусом ---
+// Клиентский флаг чисто событийный: любое пропущенное событие (разрыв сети, вкладка вне
+// группы, гонка) оставляет его врущим до следующего события. Лечение — повторный
+// joinSession: хаб идемпотентен и на КАЖДЫЙ вызов шлёт вызвавшему авторитетный
+// status_changed, который редьюсер применяет к isWaiting. Бэкенд менять не нужно.
+
+const RECONCILE_POLL_MS = 25_000;   // как часто переспрашиваем статус занятого открытого чата
+const RECONCILE_WINDOW_MS = 10_000; // сколько ждём replay, чтобы засчитать его как ответ на запрос
+
+// Сессии, ждущие replay-статуса: sid → ts запроса
+const _reconciling = new Map<string, number>();
+
+// Счётчик расхождений клиентского флага с серверным статусом — чтобы понять, какой класс
+// рассинхрона доминирует. Из консоли доступен как window.__ccWaitDiag.
+export const waitDiag = {
+  mismatches: 0,
+  last: null as { sid: string; client: boolean; server: string; at: string } | null,
+};
+if (typeof window !== 'undefined')
+  (window as unknown as Record<string, unknown>).__ccWaitDiag = waitDiag;
+
+const isWatched = (sid: string) => (_listeners.get(sid)?.size ?? 0) > 0;
+
+// Запрос авторитетного статуса. Ошибку глотаем: офлайн вылечит reconnect-обработчик.
+function reconcile(sid: string) {
+  _reconciling.set(sid, Date.now());
+  joinSession(sid).catch(() => { _reconciling.delete(sid); });
+}
+
+let _pollTimer: ReturnType<typeof setInterval> | null = null;
+
+// Тик poll: переспрашиваем статус у занятых открытых сессий
+function pollWaiting() {
+  for (const [sid, s] of _store) if (s.isWaiting && isWatched(sid)) reconcile(sid);
+  syncWaitPoll();
+}
+
+// Ленивый poll: таймер нужен, пока есть хоть одна занятая (isWaiting) открытая (есть
+// подписчики) сессия, и гаснет сразу, как такая пропала — снят флаг или ушли зрители.
+// Таймер один на модуль, поэтому повторные рендеры его не плодят.
+function syncWaitPoll() {
+  let busy = false;
+  for (const [sid, s] of _store) {
+    if (s.isWaiting && isWatched(sid)) { busy = true; break; }
+  }
+  if (busy && _pollTimer === null) _pollTimer = setInterval(pollWaiting, RECONCILE_POLL_MS);
+  else if (!busy && _pollTimer !== null) { clearInterval(_pollTimer); _pollTimer = null; }
+}
+
+// Диагностика расхождения: сверяем клиентский флаг с replay-статусом, пришедшим в ответ
+// на нашу реконсиляцию (обычная смена статуса по ходу рассинхроном не считается).
+function noteReconcileResult(sid: string, clientWaiting: boolean, status: string) {
+  const requestedAt = _reconciling.get(sid);
+  if (requestedAt === undefined) return;
+  _reconciling.delete(sid);
+  if (Date.now() - requestedAt > RECONCILE_WINDOW_MS) return; // ответ уже не наш
+  const serverWaiting = status === 'working' || status === 'waiting';
+  const known = serverWaiting || status === 'active' || status === 'error'
+    || status === 'finished' || status === 'orphaned';
+  if (!known || clientWaiting === serverWaiting) return;
+  waitDiag.mismatches++;
+  waitDiag.last = { sid, client: clientWaiting, server: status, at: new Date().toISOString() };
+  console.warn(`[wait-sync] расхождение индикатора: ${sid} — клиент isWaiting=${clientWaiting}, сервер «${status}»`);
 }
 
 // Единственный глобальный обработчик — регистрируется один раз при загрузке модуля
@@ -175,10 +242,21 @@ function ensureHandler() {
 
     // Побочный эффект вне редьюсера: при переходе в active перезагружаем историю —
     // клиент мог пропустить text_delta/tool_use пока был оффлайн или не в группе
-    if (msg.type === 'status_changed' && msg.status === 'active') {
-      reloadHistory(sid, getState(sid).projectId);
+    if (msg.type === 'status_changed') {
+      // Флаг сверяем ДО применения редьюсера — prev держит клиентское состояние
+      noteReconcileResult(sid, prev.isWaiting, msg.status);
+      if (msg.status === 'active') reloadHistory(sid, getState(sid).projectId);
     }
   });
+
+  // Возврат внимания на вкладку: пока она была скрыта, события могли пройти мимо
+  // (разрыв WS, троттлинг таймеров) — переспрашиваем статус у открытых чатов
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState !== 'visible') return;
+      for (const sid of _listeners.keys()) if (isWatched(sid)) reconcile(sid);
+    });
+  }
 }
 
 
@@ -253,6 +331,8 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
     if (st.isJoined && !st.isWaiting) {
       reloadHistory(sessionId, projectId);
     }
+    // Появился зритель — у занятого чата poll без мутации состояния не завёлся бы
+    syncWaitPoll();
 
     return () => {
       listeners.delete(notify);

@@ -12,6 +12,15 @@ export const GIT_MODES: { value: GitMode; label: string; hint: string }[] = [
   { value: 'auto', label: 'Автоматическое ведение истории', hint: 'Каждый ход ИИ сохраняется в историю сам. Рекомендуется для работы с документами' },
 ];
 
+// Высота карточки режима: паддинги 7+7, строка 13px с рамкой в 1px. Экспортируется
+// ради скелета в EditDialog — тот держит место под ещё не приехавший git-статус, и
+// считать высоту второй раз значило бы развести её с настоящей карточкой.
+export const GIT_CARD_H = 33;
+// Высота тела блока «История файлов» по САМОМУ ВЫСОКОМУ состоянию — три карточки с
+// зазорами. Им же держится место, пока едет git-статус, и к нему подтягивается
+// вариант репозитория (бейдж и две карточки), который на пару пикселей ниже.
+export const GIT_BODY_H = GIT_CARD_H * 3 + 5 * 2;
+
 // Компактная однострочная радио-карточка режима истории (EditDialog + AddProjectDialog).
 export function GitModeCard({ active, label, hint, disabled, onClick }: {
   active: boolean; label: string; hint: string; disabled?: boolean; onClick: () => void;

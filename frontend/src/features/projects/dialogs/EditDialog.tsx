@@ -8,7 +8,7 @@ import { C, FONT, R } from '../../../lib/design';
 import { Modal, ModalActions, TextArea, Field, Button, Toggle } from '../../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
 import { GroupSelect } from '../GroupSelect';
-import { GitModeCard, GitPushRow } from '../components/GitModeCards';
+import { GIT_BODY_H, GIT_CARD_H, GitModeCard, GitPushRow } from '../components/GitModeCards';
 import { ProjectSyncToggle } from '../../../components/ProjectSyncToggle';
 import { ProjectIconSection } from '../ProjectIconSection';
 import { invalidateProjectsCache } from '../useAllProjects';
@@ -77,8 +77,18 @@ function GitHistorySection({ project }: { project: Project }) {
         История файлов (Git)
       </div>
       {err && <div style={{ fontSize: 12, color: C.dangerText }}>{err}</div>}
+      {/* Высота тела фиксирована снизу ВО ВСЕХ состояниях: git-статус приезжает
+          отдельным запросом, и без резерва диалог подпрыгивал на ~90px в момент
+          ответа. Одного скелета мало — у репозитория готовый набор (бейдж и две
+          карточки) на пару пикселей ниже трёх карточек, и диалог оседал на 2px.
+          minHeight по самому высокому варианту убирает и это. */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 5, minHeight: GIT_BODY_H }}>
       {loading ? (
-        <div style={{ fontSize: 12.5, color: C.textMuted }}>Загрузка…</div>
+        <>
+          {[0, 1, 2].map(i => (
+            <div key={i} aria-hidden style={{ height: GIT_CARD_H, borderRadius: R.lg, background: C.bgInset }} />
+          ))}
+        </>
       ) : !isRepo ? (
         <>
           <GitModeCard active label="Без ведения истории" hint="Обычная папка — версии файлов не сохраняются" onClick={() => {}} />
@@ -110,6 +120,7 @@ function GitHistorySection({ project }: { project: Project }) {
           )}
         </>
       )}
+      </div>
     </div>
   );
 }

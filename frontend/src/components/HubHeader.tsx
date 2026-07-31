@@ -1,8 +1,11 @@
 import { useState, useEffect } from 'react';
-import { Bell, ExternalLink, House, Share2, Users } from 'lucide-react';
-import type { AuthState } from '../types';
-import { C, FONT, TB, SHADOW } from '../lib/design';
-import { useIsMobile } from '../lib/breakpoints';
+import { Bell, ChevronRight, ExternalLink, House, Settings, Share2, Users } from 'lucide-react';
+import type { AuthState, Project } from '../types';
+import { C, FONT, R, TB, SHADOW } from '../lib/design';
+import { useIsMobile, useWindowWidth, MOBILE_MAX, TABLET_MAX } from '../lib/breakpoints';
+import { IconButton } from './ui/IconButton';
+import { ICON_SIZE } from './ui/icons';
+import { ProjectIcon } from '../features/projects/ProjectIcon';
 import { HubTabs, type HubTab, type HubTabValue, isModuleTab } from './HubTabs';
 import { ToolbarOverflowMenu, type OverflowItem } from './ToolbarOverflowMenu';
 import { AvatarMenu } from '../features/projects/AvatarMenu';
@@ -25,6 +28,11 @@ interface Props {
   // «Открыть в новом окне» — иконка перед колокольчиком (раздел «Телеметрия»).
   // Задаётся только когда есть что открывать (SigNoz доступен); undefined — иконки нет.
   onOpenExternal?: () => void;
+  // Активный проект воркспейса: задан — после логотипа рисуем хлебную крошку
+  // «Домой › иконка + имя проекта» с кнопкой настроек. В разделах хаба (Чаты,
+  // Заметки…) проекта нет — крошка не рисуется. Только десктоп.
+  project?: Project;
+  onOpenProjectSettings?: () => void;
 }
 
 // Событие открытия продуктовой истории — слушает App (overlay на верхнем уровне)
@@ -38,8 +46,14 @@ export const productHistorySeenKey = (userId?: string | null) =>
 
 // Верхняя шапка-хаб главной страницы: логотип слева, переключатель «Чаты | Проекты» по центру,
 // аватар/меню справа. На мобилке логотип и URL-бейдж скрыты (не помещаются).
-export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenExternal }: Props) {
+export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenExternal, project, onOpenProjectSettings }: Props) {
   const isMobile = useIsMobile();
+  // Планшет (601–1199): вкладки хаба занимают всю ширину центра, и текст логотипа
+  // «AI Home» рядом с крошкой проекта уже не помещается — левая секция обрезается.
+  // Сворачиваем логотип до одной favicon-кнопки «Домой», отдавая место главному
+  // ориентиру «где я» — имени проекта. На полном десктопе места хватает обоим.
+  const w = useWindowWidth();
+  const isTablet = w > MOBILE_MAX && w <= TABLET_MAX;
   const [showUserMgmt, setShowUserMgmt] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [showFeatureFlags, setShowFeatureFlags] = useState(false);
@@ -120,18 +134,45 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
       onMouseEnter={() => setLogoHover(true)}
       onMouseLeave={() => setLogoHover(false)}
       style={{
-        display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, cursor: 'pointer',
+        display: 'flex', alignItems: 'center', gap: isTablet ? 0 : 8, minWidth: 0, cursor: 'pointer',
         // Плашка в тон кнопке аватара, но со скруглением hover-подложки (не пилюля).
-        // Левый край выровнен с карточками списка чатов под ней (padX 16 + 9)
-        padding: '4px 12px 4px 7px', marginLeft: 9, borderRadius: 8,
+        // Левый край выровнен с карточками списка чатов под ней (padX 16 + 9).
+        // На планшете текста нет — плашка сжимается до квадратной favicon-кнопки.
+        padding: isTablet ? 6 : '4px 12px 4px 7px', marginLeft: 9, borderRadius: 8,
         background: logoHover ? C.bgSelected : C.bgPanel, transition: 'background 0.15s',
       }}
     >
       <img src="/favicon.svg" alt="" width={26} height={26} style={{ display: 'block', flexShrink: 0 }} />
-      <span style={{ fontFamily: FONT.serif, fontSize: 18, fontWeight: 500, color: C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-        AI Home
-      </span>
+      {!isTablet && (
+        <span style={{ fontFamily: FONT.serif, fontSize: 18, fontWeight: 500, color: C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          AI Home
+        </span>
+      )}
     </div>
+  );
+
+  // Хлебная крошка активного проекта: «Домой › иконка + имя [⚙]». Отвечает на вопрос
+  // «где я»: в вертикальном доке проект узнаётся только по подсветке иконки, а имя
+  // всплывает лишь по наведению. Крошка держит его на виду всегда. Настройки —
+  // отдельной кнопкой в плашке (тот же диалог, что и из подписи иконки в доке).
+  const projectCrumb = project && (
+    <>
+      <ChevronRight size={ICON_SIZE.xs} strokeWidth={2} color={C.textMuted} style={{ flexShrink: 0 }} />
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+        <ProjectIcon project={project} size={22} radius={R.sm} />
+        <span
+          title={project.name}
+          style={{ fontFamily: FONT.sans, fontSize: 15, fontWeight: 500, color: C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: isTablet ? 150 : 220 }}
+        >
+          {project.name}
+        </span>
+        {onOpenProjectSettings && (
+          <IconButton size="sm" ariaLabel="Настройки проекта" title="Настройки проекта" onClick={onOpenProjectSettings}>
+            <Settings size={ICON_SIZE.sm} strokeWidth={2} />
+          </IconButton>
+        )}
+      </div>
+    </>
   );
 
   return (
@@ -147,8 +188,9 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
       {/* Левая секция — логотип, он же вход на дашборд. На мобиле скрыт: место нужно
           вкладкам, а на дашборд там ведёт пункт «Домой» в «⋯ Разделы» */}
       {!isMobile && (
-        <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center' }}>
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
           {logo}
+          {projectCrumb}
         </div>
       )}
 

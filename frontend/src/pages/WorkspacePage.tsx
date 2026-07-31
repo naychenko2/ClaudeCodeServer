@@ -1335,7 +1335,7 @@ const windowWidth = useWindowWidth();
       {/* Дудл-фон на всю страницу — начинается от самого верха окна, шапка лежит на нём */}
       <CanvasBackdrop />
       {/* Единый верхний хаб-хедер на всю ширину (симметрия с разделом «Чаты») */}
-      <HubHeader value="projects" onTab={onSwitchHub} auth={auth} onLogout={onLogout} />
+      <HubHeader value="projects" onTab={onSwitchHub} auth={auth} onLogout={onLogout} project={projectForEdit} onOpenProjectSettings={() => setEditProjectOpen(true)} />
 
       {/* Тело: сайдбар + контент. position:relative — чтобы drawer/overlay легли под хедер.
           overflow — clip с запасом, а не hidden: тени островов и попапа-превью панели

@@ -1,7 +1,8 @@
 // Геометрия области прокрутки чата: жёлоб слева под значок ожидания и
 // компенсация, удерживающая колонку сообщений по центру окна.
 import { describe, it, expect } from 'vitest';
-import { gutterBox, CHAT_GUTTER_L } from '../chatGutter';
+import { gutterBox } from '../chatGutter';
+import { CHAT_GUTTER_L, CHAT_MAX_W, CHAT_COLUMN_W } from '../design';
 
 const CW = 950;
 
@@ -36,5 +37,17 @@ describe('gutterBox', () => {
   it('жёлоба хватает на значок с дымком', () => {
     // Значок 19px вынесен на 29px влево, дым уходит ещё на 7px
     expect(CHAT_GUTTER_L).toBeGreaterThanOrEqual(29 + 7);
+  });
+
+  // CHAT_COLUMN_W — то же самое число, но заранее: раскладке (useCenterOffset) нужно
+  // знать полную потребность ленты ДО замеров, а не после. Разъедутся — компенсация
+  // перекоса зон снова начнёт сжимать ленту раньше времени
+  // (полоса шире жёлоба в равенство не входит: там marginRight упирается в ноль,
+  // но таких полос не бывает — крайний реальный случай и есть жёлоб)
+  it('CHAT_COLUMN_W равен реальному месту под коробку при любой полосе', () => {
+    for (const scrollbarW of [0, 10, 15, 17, CHAT_GUTTER_L]) {
+      const box = gutterBox(CHAT_MAX_W, scrollbarW);
+      expect(box.maxWidth + box.marginRight).toBe(CHAT_COLUMN_W);
+    }
   });
 });

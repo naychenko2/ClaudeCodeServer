@@ -561,28 +561,40 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     await send(text, paths, mode);
   };
 
-  // Git-бар «Зафиксировать своё»: делегируем текущему чату коммит ТОЛЬКО файлов,
-  // затронутых в этом диалоге (из ленты file_changed). Список даём явно, чтобы
-  // Claude не захватил чужие изменения рабочего дерева. Плюс подмешиваем стиль
-  // сообщения из панели «Изменения» (effective — тот же, что у ✨-генерации), чтобы
-  // делегированный коммит и кнопка ✨ давали один формат.
-  const handleCommitOwn = useCallback(() => {
+  // Git-бар «Зафиксировать»: делегируем коммит текущему чату (Claude сам вызовет git
+  // и придумает сообщение). Общая обвязка для обоих режимов («своё» / «всё»):
+  // подтягиваем стиль сообщения из панели «Изменения» (effective — тот же, что у
+  // ✨-генерации, чтобы делегированный коммит и кнопка ✨ давали один формат) и шлём
+  // агенту готовый промпт. buildBody получает суффикс со стилем и собирает текст.
+  const commitViaChat = useCallback((buildBody: (style: string) => string) => {
     if (!project) return;
-    const own = [...new Set(items.filter(i => i.kind === 'file_changed').map(i => i.path))];
-    const list = own.length ? ` Файлы, которые ты менял в этом чате: ${own.join(', ')} — закоммить только их.` : '';
+    const pid = project.id;
     void (async () => {
       let style = '';
       try {
-        const info = await api.git.getCommitPrompt(project.id);
+        const info = await api.git.getCommitPrompt(pid);
         if (info.effective?.trim()) style = `\n\nОформи сообщение коммита строго по этому стилю:\n${info.effective.trim()}`;
       } catch { /* офлайн/нет промпта — коммитим по общим правилам */ }
       atBottomRef.current = true;
-      await send(
-        `Зафиксируй (git commit) изменения, сделанные в рамках этого чата — только то, что ты правил в этом диалоге, не затрагивая остальные изменения рабочего дерева.${list} Сам придумай осмысленное сообщение коммита по сути изменений.${style}`,
-        [], mode);
+      await send(buildBody(style), [], mode);
     })();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project, items, send, mode]);
+  }, [project, send, mode]);
+
+  // «Только этот чат»: список затронутых в диалоге файлов (из ленты file_changed)
+  // даём явно, чтобы Claude не захватил чужие изменения рабочего дерева.
+  const handleCommitOwn = useCallback(() => {
+    const own = [...new Set(items.filter(i => i.kind === 'file_changed').map(i => i.path))];
+    const list = own.length ? ` Файлы, которые ты менял в этом чате: ${own.join(', ')} — закоммить только их.` : '';
+    commitViaChat(style =>
+      `Зафиксируй (git commit) изменения, сделанные в рамках этого чата — только то, что ты правил в этом диалоге, не затрагивая остальные изменения рабочего дерева.${list} Сам придумай осмысленное сообщение коммита по сути изменений.${style}`);
+  }, [items, commitViaChat]);
+
+  // «Всё рабочее дерево»: коммитим все незафиксированные изменения без ограничения
+  // диалогом (staged + unstaged, включая правки не из этого чата).
+  const handleCommitAll = useCallback(() => {
+    commitViaChat(style =>
+      `Зафиксируй (git commit) все незафиксированные изменения рабочего дерева. Сам придумай осмысленное сообщение коммита по сути изменений.${style}`);
+  }, [commitViaChat]);
 
   // Загрузка файлов с устройства — один эндпоинт для обоих типов чата: сервер кладёт файл
   // в рабочую папку сессии (для worktree-чата — в неё же, а не в корень проекта) и сам
@@ -1412,7 +1424,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
               чата, дерево текущего хода, суммарный diff и кнопки «Зафиксировать»/
               «Опубликовать». Правой панели «Изменения» на мобиле нет — отсюда гейт
               !isMobile; на мобиле о дереве хода сообщает только отметка в ленте. */}
-          {project && !isMobile && <ProjectGitBar project={project} session={session} turnTree={turnTree} turnTreeLive={isWaiting} onCommitOwn={handleCommitOwn} />}
+          {project && !isMobile && <ProjectGitBar project={project} session={session} turnTree={turnTree} turnTreeLive={isWaiting} onCommitOwn={handleCommitOwn} onCommitAll={handleCommitAll} />}
           {/* Подъём композера над лентой даёт сама белая карточка (Composer), а не эта
               обёртка: полоса контролов вынесена из карточки, и тень на обёртке рисовала
               серый ореол вокруг пустой области под ней и полоску над полем ввода. */}

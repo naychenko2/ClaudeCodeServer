@@ -15,7 +15,7 @@ import { C, R, FONT, SHADOW, Z } from '../../lib/design';
 //    PanelShell держит transform ради анимации появления, и меню внутри панели
 //    уезжало на её смещение и обрезалось overflow острова.
 // Закрытие по Esc/скроллу в anchor-режиме — на вызывающей стороне (поведение, не контрол).
-export function Menu({ onClose, align = 'right', top = 30, bottom, minWidth = 200, anchor, maxHeight = 300, children }: {
+export function Menu({ onClose, align = 'right', top = 30, bottom, minWidth = 200, anchor, maxHeight = 300, gap = 6, children }: {
   onClose: () => void;
   align?: 'left' | 'right';
   top?: number;
@@ -25,15 +25,17 @@ export function Menu({ onClose, align = 'right', top = 30, bottom, minWidth = 20
   anchor?: DOMRect;
   // высота меню для выбора направления в anchor-режиме (вверх, если снизу не влезает)
   maxHeight?: number;
+  // зазор между якорем и карточкой в anchor-режиме; меньше — попап липнет к триггеру
+  gap?: number;
   children: ReactNode;
 }) {
   let pos: CSSProperties;
   if (anchor) {
-    const openUp = anchor.bottom + 6 + maxHeight > window.innerHeight && anchor.top > maxHeight;
+    const openUp = anchor.bottom + gap + maxHeight > window.innerHeight && anchor.top > maxHeight;
     const left = Math.max(8, Math.min(anchor.right - minWidth, window.innerWidth - minWidth - 8));
     pos = {
       position: 'fixed', left,
-      ...(openUp ? { bottom: window.innerHeight - anchor.top + 6 } : { top: anchor.bottom + 6 }),
+      ...(openUp ? { bottom: window.innerHeight - anchor.top + gap } : { top: anchor.bottom + gap }),
     };
   } else {
     pos = { position: 'absolute', ...(bottom != null ? { bottom } : { top }), [align]: 0 };

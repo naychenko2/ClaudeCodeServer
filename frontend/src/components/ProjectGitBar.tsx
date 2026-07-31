@@ -8,17 +8,40 @@
 // узнать «где мы работаем» было бы неоткуда (композер значение дерева не показывает,
 // там только кнопка-тумблер).
 import { useEffect, useState } from 'react';
-import { GitBranch, FolderGit2, GitCommit, CloudUpload } from 'lucide-react';
+import { GitBranch, FolderGit2, GitCommit, CloudUpload, ChevronDown } from 'lucide-react';
 import type { Project, Session } from '../types';
-import { C, FONT, R } from '../lib/design';
+import { C, FONT, FS, R, SP } from '../lib/design';
 import { basename } from '../lib/paths';
 import { ensureGit, useGitState, loadUnpushedLog, gitPush, workingDiffStat } from '../lib/git';
 import type { TurnTree } from '../lib/turnWorktree';
 import { wsPanels } from '../pages/workspace/panelStackState';
-import { Modal, ModalActions } from './ui';
+import { Modal, ModalActions, Menu } from './ui';
 import { ICON_STROKE } from './ui/icons';
 
-export function ProjectGitBar({ project, session, turnTree = null, turnTreeLive = false, onCommitOwn }: {
+// Строка меню коммита в стиле оглавления DocsPanel (TocRow): плотный текстовый ряд
+// без иконок, hover-подложка bgInset, приглушённый текст до наведения. Роль та же —
+// «выбрать вариант из короткого списка», поэтому и вид общий.
+function CommitMenuRow({ label, onClick }: { label: string; onClick: () => void }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <button
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        display: 'flex', alignItems: 'center', width: '100%', minHeight: 22,
+        padding: `1px ${SP.sm}px`, border: 'none', borderRadius: R.md, cursor: 'pointer',
+        textAlign: 'left', fontFamily: FONT.sans, fontSize: FS.sm, lineHeight: 1.35, minWidth: 0,
+        background: hover ? C.bgInset : 'transparent',
+        color: hover ? C.textHeading : C.textSecondary,
+      }}
+    >
+      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
+    </button>
+  );
+}
+
+export function ProjectGitBar({ project, session, turnTree = null, turnTreeLive = false, onCommitOwn, onCommitAll }: {
   project: Project;
   session?: Session;
   // Дерево ХОДА: агент внутри хода ушёл в свой git worktree (EnterWorktree), минуя
@@ -26,12 +49,16 @@ export function ProjectGitBar({ project, session, turnTree = null, turnTreeLive 
   // нейтральным тоном; turnTreeLive — идёт ли ход сейчас (пульс-точка и формулировка title)
   turnTree?: TurnTree | null;
   turnTreeLive?: boolean;
+  // Коммит только файлов этого диалога / всех изменений рабочего дерева
   onCommitOwn: () => void;
+  onCommitAll: () => void;
 }) {
   const st = useGitState(project.id);
   const status = st.status;
   const { reveal } = wsPanels.use();
   const [publishConfirm, setPublishConfirm] = useState(false);
+  // rect кнопки «Зафиксировать» — открытое меню выбора области коммита (null = закрыто)
+  const [commitMenu, setCommitMenu] = useState<DOMRect | null>(null);
   // Чат в отдельном worktree: запросы стора уже идут в его дерево (gitSessionContext),
   // перечитываем статус при переключении дерева у активной сессии
   const worktreeBranch = session?.worktreeBranch ?? null;
@@ -41,6 +68,14 @@ export function ProjectGitBar({ project, session, turnTree = null, turnTreeLive 
     ensureGit(project.id, true);
     void loadUnpushedLog(project.id);
   }, [project.id, worktreeBranch]);
+
+  // Меню коммита в anchor-режиме само не ловит Esc — закрываем на вызывающей стороне
+  useEffect(() => {
+    if (!commitMenu) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setCommitMenu(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [commitMenu]);
 
   const diff = workingDiffStat(status);
   const ahead = status?.ahead ?? 0;
@@ -131,21 +166,33 @@ export function ProjectGitBar({ project, session, turnTree = null, turnTreeLive 
         </button>
       )}
 
-      {/* Зафиксировать своё — делегирует чату коммит ТОЛЬКО изменений этого диалога */}
+      {/* Зафиксировать — делегирует коммит чату; меню выбирает область: только
+          изменения этого диалога («своё») или всё рабочее дерево. */}
       {diff.files > 0 && (
-        <button
-          type="button"
-          onClick={onCommitOwn}
-          title="Зафиксировать в чате только изменения этого диалога"
-          style={{
-            display: 'flex', alignItems: 'center', gap: 6, height: 28, padding: '0 12px',
-            border: `1px solid ${C.border}`, borderRadius: R.md, background: C.bgInset,
-            cursor: 'pointer', fontFamily: FONT.sans, fontSize: 12.5, color: C.textHeading, flexShrink: 0,
-          }}
-        >
-          <GitCommit size={15} strokeWidth={ICON_STROKE} color={C.accent} />
-          Зафиксировать своё
-        </button>
+        <div style={{ position: 'relative', display: 'flex', flexShrink: 0 }}>
+          <button
+            type="button"
+            onClick={e => setCommitMenu(e.currentTarget.getBoundingClientRect())}
+            title="Зафиксировать изменения (git commit)"
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6, height: 28, padding: '0 10px 0 12px',
+              // Фон светлее плашки (bgPanel, как у соседней diff-пилюли): подложка
+              // панели утоплена, и кнопка на её же тоне держалась бы только рамкой
+              border: `1px solid ${C.border}`, borderRadius: R.md, background: C.bgPanel,
+              cursor: 'pointer', fontFamily: FONT.sans, fontSize: 12.5, color: C.textHeading,
+            }}
+          >
+            <GitCommit size={15} strokeWidth={ICON_STROKE} color={C.accent} />
+            Зафиксировать
+            <ChevronDown size={14} strokeWidth={ICON_STROKE} color={C.textMuted} />
+          </button>
+          {commitMenu && (
+            <Menu anchor={commitMenu} minWidth={190} maxHeight={90} gap={2} onClose={() => setCommitMenu(null)}>
+              <CommitMenuRow label="Только этот чат" onClick={() => { setCommitMenu(null); onCommitOwn(); }} />
+              <CommitMenuRow label="Всё дерево" onClick={() => { setCommitMenu(null); onCommitAll(); }} />
+            </Menu>
+          )}
+        </div>
       )}
 
       {/* Опубликовать N — git push с подтверждением */}

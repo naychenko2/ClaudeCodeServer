@@ -121,6 +121,11 @@ public record ResultMessage(string Subtype, long DurationMs, int NumTurns, Usage
 public record FalCostMessage(string RequestId, string? EndpointId, double CostUsd, double? OutputUnits = null, double? UnitPrice = null)
     : ServerMessage("fal_cost");
 
+// Учёт завершённой glif-генерации: приходит синхронно из tool_result (кредиты есть в _meta.glif).
+// Контракт с фронтом: camelCase (jobId, outputType, mediaCount, credits, model).
+public record GlifCostMessage(string JobId, string? OutputType, int MediaCount, double? Credits = null, string? Model = null)
+    : ServerMessage("glif_cost");
+
 // Ответ оборван по лимиту токенов (assistant stop_reason == max_tokens)
 public record TruncatedMessage() : ServerMessage("truncated");
 

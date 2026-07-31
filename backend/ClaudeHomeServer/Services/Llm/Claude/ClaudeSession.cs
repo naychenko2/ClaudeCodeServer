@@ -215,6 +215,9 @@ public class ClaudeSession : ILlmSessionAdapter
     // Ключ HTTP MCP-сервера fal-ai (Fal:McpApiKey) — сервер инжектится в конфиг хода
     // из appsettings, а не хардкодится в .mcp.json (секрет вне git); пусто — без fal-ai
     private readonly string? _falMcpApiKey;
+    // Токен HTTP MCP-сервера glif (Glif:McpToken) — второй генератор медиа рядом с fal-ai;
+    // инжектится тем же путём из appsettings; пусто — без glif
+    private readonly string? _glifMcpToken;
     private readonly SkillsService? _skills;
     private readonly WorkspaceKnowledgeStore? _wkStore;
     // Провайдер правил разрешений проекта — резолвим каждый запрос (правила могут меняться)
@@ -280,6 +283,7 @@ public class ClaudeSession : ILlmSessionAdapter
         FileWatcherOptions? fileWatcherOptions = null,
         TimeSpan? bgLingerTimeout = null,
         string? falMcpApiKey = null,
+        string? glifMcpToken = null,
         ModelAssignmentResolver? assignments = null)
     {
         _providers = providers;
@@ -291,6 +295,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _onMessage = context.OnMessage;
         _mcpConfigPath = mcpConfigPath;
         _falMcpApiKey = falMcpApiKey;
+        _glifMcpToken = glifMcpToken;
         _rawSystemPrompt = context.RawSystemPrompt;
         _skills = skills;
         _wkStore = workspaceStore;
@@ -355,9 +360,10 @@ public class ClaudeSession : ILlmSessionAdapter
         var hasDataset = !string.IsNullOrEmpty(datasetId);
         var hasModules = _modulesMcp is { Servers.Count: > 0 };
         var hasFalAi = !string.IsNullOrEmpty(_falMcpApiKey);
+        var hasGlif = !string.IsNullOrEmpty(_glifMcpToken);
         var userServers = LoadUserScopeMcpServers();
         if (!hasTasks && !hasNotes && !hasMemory && !hasPersonas && !hasWorkspace && !hasNotifications
-            && !hasWidgets && !hasCodeGraph && !hasDataset && !hasModules && !hasFalAi && userServers is null
+            && !hasWidgets && !hasCodeGraph && !hasDataset && !hasModules && !hasFalAi && !hasGlif && userServers is null
             && !(hasConsultants && memoryServerPath is not null)) return (null, "");
 
         try
@@ -412,6 +418,22 @@ public class ClaudeSession : ILlmSessionAdapter
                     ["headers"] = new System.Text.Json.Nodes.JsonObject
                     {
                         ["Authorization"] = $"Bearer {_falMcpApiKey}",
+                    },
+                };
+            }
+
+            // Продуктовый HTTP-сервер glif (агентская генерация медиа, glif.app): инжектится из
+            // Glif:McpToken тем же путём, что fal-ai — паритет хост/песочница, ПОСЛЕ user-scope
+            // и базового конфига (одноимённый сервер оттуда перекрывается)
+            if (hasGlif)
+            {
+                servers["glif"] = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["type"] = "http",
+                    ["url"] = "https://glif.app/api/mcp",
+                    ["headers"] = new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["Authorization"] = $"Bearer {_glifMcpToken}",
                     },
                 };
             }

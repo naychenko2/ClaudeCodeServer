@@ -55,7 +55,7 @@ function WindowRow({ w }: { w: RateWindow }) {
 // Компактная выжимка UsageScreen; «Подробнее» открывает полный экран модалом.
 export function UsageWidget() {
   const [usage, setUsage] = useState<UsageResponse | null>(null);
-  const [balances, setBalances] = useState<Array<{ key: string; label: string; value: number }>>([]);
+  const [balances, setBalances] = useState<Array<{ key: string; label: string; value: number; credits?: boolean }>>([]);
   const [showUsage, setShowUsage] = useState(false);
 
   useEffect(() => {
@@ -78,6 +78,13 @@ export function UsageWidget() {
         .then(d => {
           if (cancelled || !d.enabled || typeof d.balance !== 'number') return;
           setBalances(prev => [...prev.filter(b => b.key !== 'fal'), { key: 'fal', label: 'fal.ai', value: d.balance! }]);
+        })
+        .catch(() => {});
+      api.glif.account()
+        .then(d => {
+          if (cancelled || !d.enabled || typeof d.balance !== 'number') return;
+          // glif считает в кредитах, не в USD — формат плашки другой
+          setBalances(prev => [...prev.filter(b => b.key !== 'glif'), { key: 'glif', label: 'glif', value: d.balance!, credits: true }]);
         })
         .catch(() => {});
     };
@@ -143,7 +150,9 @@ export function UsageWidget() {
                 fontFamily: FONT.mono, fontSize: 15, fontWeight: 700,
                 color: b.value < LOW_BALANCE ? C.dangerText : C.textHeading,
               }}>
-                ${b.value < 1 ? b.value.toFixed(3) : b.value.toFixed(2)}
+                {b.credits
+                  ? `${(Number.isInteger(b.value) ? b.value.toLocaleString('ru-RU') : b.value.toFixed(2))} кр.`
+                  : `$${b.value < 1 ? b.value.toFixed(3) : b.value.toFixed(2)}`}
               </span>
               <span style={{ fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted }}>{b.label}</span>
             </div>

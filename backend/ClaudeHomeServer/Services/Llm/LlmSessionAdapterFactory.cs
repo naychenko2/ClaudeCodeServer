@@ -17,6 +17,8 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
     private readonly string? _mcpConfigPath;
     // Ключ HTTP MCP-сервера fal-ai (инжектится в конфиг хода в BuildTurnMcpConfig)
     private readonly string? _falMcpApiKey;
+    // Токен HTTP MCP-сервера glif (инжектится там же, рядом с fal-ai)
+    private readonly string? _glifMcpToken;
     private readonly string[] _disallowedTools;
     private readonly SkillsService _skills;
     private readonly WorkspaceKnowledgeStore _workspaceStore;
@@ -35,6 +37,7 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
         _assignments = assignments;
         _mcpConfigPath = config["McpConfigPath"];
         _falMcpApiKey = config["Fal:McpApiKey"];
+        _glifMcpToken = config["Glif:McpToken"];
         _disallowedTools = config.GetSection("Claude:DisallowedTools").Get<string[]>() ?? [];
         // Шумоподавление ватчера изменений файлов (секция FileWatcher) — пустые списки
         // в конфиге дают дефолты, отдельные ключи переопределяют только себя
@@ -74,6 +77,6 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
                 $"Провайдер «{provider.DisplayName}» не настроен: задай LlmProviders:{provider.Key}:ApiKey в appsettings.Local.json");
         return new Claude.ClaudeSession(session, context, _mcpConfigPath, _skills,
             _workspaceStore, _disallowedTools, _providers, _subscriptionPool, _fileWatcherOptions,
-            _bgLingerTimeout, _falMcpApiKey, _assignments);
+            _bgLingerTimeout, _falMcpApiKey, _glifMcpToken, _assignments);
     }
 }

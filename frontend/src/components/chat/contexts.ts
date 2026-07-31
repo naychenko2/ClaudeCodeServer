@@ -47,3 +47,14 @@ export const TeamEscalationContext = createContext<TeamEscalationChatContext | n
 // Контекст точной стоимости генераций fal.ai: requestId → списанная сумма (USD).
 // Наполняется из fal_cost-сообщений (backend опрашивает billing-events по request_id).
 export const FalCostContext = createContext<Map<string, number>>(new Map());
+
+// Списанные кредиты генераций glif: jobId → кредиты. Наполняется из glif_cost-элементов
+// ленты (только те, где backend нашёл billing в payload — остальных в карте нет).
+export const GlifCostContext = createContext<Map<string, number>>(new Map());
+
+// Видимое медиа tool-блоков ленты после кросс-блочного дедупа (glif project_update +
+// media_view одного URL — один блок; строится в ChatPanel через buildMediaVisibility).
+// Значение по id tool_use — массив медиа (пустой = всё скрыто дедупом).
+// null — карта не построена (рендер вне ленты): блок показывает своё медиа как есть.
+// Тип массива — MediaItem из MediaBlock (импорт type-only, чтобы не тянуть компонент в контексты)
+export const MediaVisibilityContext = createContext<Map<string, import('./MediaBlock').MediaItem[]> | null>(null);

@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { X, AlertTriangle, Copy, Check } from 'lucide-react';
 import { api } from '../lib/api';
-import type { UsageResponse, FalAccountResponse, UsageSnapshot, OllamaUsageInfo } from '../types';
-import { C, FONT, SHADOW, FS } from '../lib/design';
+import type { UsageResponse, FalAccountResponse, GlifAccountResponse, UsageSnapshot, OllamaUsageInfo } from '../types';
+import { C, FONT, SHADOW, FS, R } from '../lib/design';
 import { type RateWindow, RATE_COLORS, windowLabel, fmtReset, latestPerWindow, latestWithUtilization, snapshotFreshnessLabel, overageLabel, seriesByWindow, worstWindow } from '../lib/rateLimit';
 import { type RotationInfo, rotationBadgeState } from '../lib/rotation';
 import { cliProviderKeys, providerCapsByKey, providerLabel } from '../lib/models';
@@ -433,6 +433,89 @@ function FalTab({ days, setDays }: { days: number; setDays: (d: number) => void 
   );
 }
 
+// Статусы подписки glif (billing.plan.status) — читаемо, чипом в духе TierPill
+const PLAN_STATUS_RU: Record<string, string> = {
+  active: 'Активна', trialing: 'Пробный период', past_due: 'Просрочена оплата',
+  unpaid: 'Не оплачена', canceled: 'Отменена', cancelled: 'Отменена',
+  incomplete: 'Не завершена', incomplete_expired: 'Не завершена', paused: 'Приостановлена',
+};
+// Статусы, при которых тариф требует внимания — подсвечиваем warning-тоном
+const PLAN_STATUS_WARN = new Set(['past_due', 'unpaid', 'incomplete', 'incomplete_expired']);
+
+// Карточка glif — по контракту GET /api/glif/account: план, баланс КРЕДИТОВ (не USD),
+// расход тремя фиксированными окнами (24 ч / 7 д / 30 д). Без ключа — тот же empty-state, что у fal.
+function GlifTab() {
+  const [glif, setGlif] = useState<GlifAccountResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    let c = false;
+    api.glif.account()
+      .then(d => { if (!c) { setGlif(d); setLoading(false); } })
+      .catch(() => { if (!c) { setGlif({ enabled: false }); setLoading(false); } });
+    return () => { c = true; };
+  }, []);
+
+  const enabled = glif?.enabled !== false;
+  const balance = glif?.balance ?? null;
+  const lowBal = typeof balance === 'number' && balance < LOW_BALANCE;
+  // Кредиты: целые — как есть, дробные — два знака; подпись «кредитов»
+  const credits = (v: number) => (Number.isInteger(v) ? v.toLocaleString('ru-RU') : v.toFixed(2));
+  const spend = glif?.spend ?? null;
+  const hasSpend = !!spend && [spend.last24h, spend.last7d, spend.last30d].some(v => typeof v === 'number' && v > 0);
+  const planStatusRu = glif?.planStatus ? (PLAN_STATUS_RU[glif.planStatus] ?? glif.planStatus) : null;
+  const planWarn = !!glif?.planStatus && PLAN_STATUS_WARN.has(glif.planStatus);
+
+  return (
+    <div>
+      {(glif?.plan || planStatusRu) && (
+        <div style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          {planStatusRu && (
+            <span style={{ display: 'inline-flex', alignItems: 'center', fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: 600, borderRadius: R.md, padding: '5px 11px',
+              color: planWarn ? C.warningText : C.accent, background: planWarn ? C.warningBg : C.accentMuted,
+              border: `1px solid ${planWarn ? C.warningText : C.accent}` }}>
+              Тариф: {planStatusRu}
+            </span>
+          )}
+          {/* Сырой productId (prod_…) — справочно, приглушённо; полный — в тултипе */}
+          {glif?.plan && (
+            <span title={`ID продукта glif: ${glif.plan}`}
+              style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted,
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 220 }}>
+              {glif.plan}
+            </span>
+          )}
+        </div>
+      )}
+      {loading && !glif ? (
+        <div style={{ padding: '40px 0', textAlign: 'center', color: C.textMuted, fontSize: 13 }}>Загрузка…</div>
+      ) : !enabled ? (
+        <div style={{ padding: '36px 12px', textAlign: 'center', color: C.textMuted, fontSize: 12.5, lineHeight: 1.5 }}>
+          <div style={{ fontSize: 24, marginBottom: 6, opacity: 0.5 }}>◌</div>
+          glif не подключён. Добавьте токен (<span style={{ fontFamily: FONT.mono }}>Glif:McpToken</span> в appsettings.Local.json), чтобы видеть баланс и расход.
+        </div>
+      ) : (
+        <div style={{ opacity: loading ? 0.5 : 1 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
+            <MetricCard value={typeof balance === 'number' ? credits(balance) : '—'} label="кредитов glif" valueColor={lowBal ? C.dangerText : MONEY} tone={lowBal ? 'danger' : undefined}>
+              <a href="https://glif.app" target="_blank" rel="noopener noreferrer"
+                style={{ display: 'inline-block', marginTop: 8, color: C.accent, fontSize: 11, fontWeight: 600, textDecoration: 'none' }}>кабинет ↗</a>
+            </MetricCard>
+            <MetricCard value={typeof spend?.last24h === 'number' ? credits(spend.last24h) : '—'} label="расход за 24 часа" valueColor={MONEY} />
+            <MetricCard value={typeof spend?.last7d === 'number' ? credits(spend.last7d) : '—'} label="расход за 7 дней" valueColor={MONEY} />
+            <MetricCard value={typeof spend?.last30d === 'number' ? credits(spend.last30d) : '—'} label="расход за 30 дней" valueColor={MONEY} />
+          </div>
+          {!hasSpend && (
+            <div style={{ padding: '20px 8px', textAlign: 'center', color: C.textMuted, fontSize: 12.5 }}>Расхода за последние 30 дней не было.</div>
+          )}
+          <div style={{ fontSize: 11, color: C.textMuted, marginTop: 14, lineHeight: 1.5 }}>
+            Баланс и расход — в кредитах glif (не деньги). Курс кредита смотрите в кабинете.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // «Локально» — Ollama: какая локальная модель настроена и сколько фоновых действий сейчас
 // начинается с неё. Лимитов/баланса нет (бесплатно). Сам выбор исполнителя каждого действия
 // вынесен в отдельный диалог «Поставщики моделей» (меню профиля, только админ).
@@ -474,6 +557,7 @@ export function UsageScreen({ onClose }: { onClose: () => void }) {
   const [usage, setUsage] = useState<UsageResponse | null>(null);
   const [days, setDays] = useState(7);
   const [falBalance, setFalBalance] = useState<number | null | undefined>(undefined);
+  const [glifBalance, setGlifBalance] = useState<number | null | undefined>(undefined);
   const [provData, setProvData] = useState<Record<string, ProviderUsage | null | undefined>>({});
   const providerKeys = cliProviderKeys();
 
@@ -481,6 +565,7 @@ export function UsageScreen({ onClose }: { onClose: () => void }) {
     let c = false;
     api.usage.get().then(d => { if (!c) setUsage(d); }).catch(() => { if (!c) setUsage({ snapshots: [] }); });
     api.fal.account(7).then(d => { if (!c) setFalBalance(d.enabled ? (d.balance ?? null) : null); }).catch(() => { if (!c) setFalBalance(null); });
+    api.glif.account().then(d => { if (!c) setGlifBalance(d.enabled ? (d.balance ?? null) : null); }).catch(() => { if (!c) setGlifBalance(null); });
     for (const key of cliProviderKeys()) {
       if (!providerCapsByKey(key).hasBalance) continue;
       api.providers.usage(key)
@@ -505,6 +590,7 @@ export function UsageScreen({ onClose }: { onClose: () => void }) {
   const worst = worstWindow(windows);
   const plan = usage?.plan;
   const lowBal = typeof falBalance === 'number' && falBalance < LOW_BALANCE;
+  const glifLow = typeof glifBalance === 'number' && glifBalance < LOW_BALANCE;
   const provBalanceOf = (key: string) => {
     const b = provData[key]?.balance;
     return b ? parseFloat(b.totalBalance) : NaN;
@@ -530,7 +616,7 @@ export function UsageScreen({ onClose }: { onClose: () => void }) {
   const tabs = ([['claude', usage?.subscriptions?.['claude']?.name ?? 'Claude']] as [string, string][])
     .concat(subKeys.filter(k => k !== 'claude').map(k => [k, usage!.subscriptions![k].name ?? k] as [string, string]))
     .concat(providerKeys.map(k => [k, providerLabel(k)] as [string, string]))
-    .concat([['fal', 'fal.ai']])
+    .concat([['fal', 'fal.ai'], ['glif', 'glif']])
     .concat([['ollama', 'Локально']]);
 
   return (
@@ -550,6 +636,7 @@ export function UsageScreen({ onClose }: { onClose: () => void }) {
             <span key={k}> · {providerLabel(k)} <span style={{ fontFamily: FONT.mono, color: provLow(k) ? C.dangerText : MONEY, fontWeight: 700 }}>{provBalanceOf(k).toFixed(2)} {provData[k]?.balance?.currency}</span></span>
           ))}
           {typeof falBalance === 'number' && <span> · fal <span style={{ fontFamily: FONT.mono, color: lowBal ? C.dangerText : MONEY, fontWeight: 700 }}>{money(falBalance)}</span></span>}
+          {typeof glifBalance === 'number' && <span> · glif <span style={{ fontFamily: FONT.mono, color: glifLow ? C.dangerText : MONEY, fontWeight: 700 }}>{glifBalance.toLocaleString('ru-RU')} кр.</span></span>}
         </div>
         <div style={{ display: 'flex', gap: 6, padding: '0 18px', borderBottom: `1px solid ${C.bgInset}`, flexShrink: 0, overflowX: 'auto', scrollbarWidth: 'none' }}>
           {tabs.map(([key, lbl]) => (
@@ -560,7 +647,8 @@ export function UsageScreen({ onClose }: { onClose: () => void }) {
                 flexShrink: 0, whiteSpace: 'nowrap' }}>
               {lbl}
               {key === 'fal' && lowBal && <span style={{ width: 6, height: 6, borderRadius: '50%', background: C.danger }} />}
-              {key !== 'fal' && key !== 'claude' && !subKeys.includes(key) && provLow(key) && <span style={{ width: 6, height: 6, borderRadius: '50%', background: C.danger }} />}
+              {key === 'glif' && glifLow && <span style={{ width: 6, height: 6, borderRadius: '50%', background: C.danger }} />}
+              {key !== 'fal' && key !== 'glif' && key !== 'claude' && !subKeys.includes(key) && provLow(key) && <span style={{ width: 6, height: 6, borderRadius: '50%', background: C.danger }} />}
             </button>
           ))}
         </div>
@@ -568,6 +656,7 @@ export function UsageScreen({ onClose }: { onClose: () => void }) {
           {tab === 'claude' ? <ClaudeTab snapshots={usage?.subscriptions?.['claude']?.snapshots ?? (usage ? claudeSnaps : usage)} rotation={rotationOf('claude')} tier={usage?.subscriptions?.['claude']?.tier} pollStatus={usage?.pollStatuses?.['claude']} loginCommand={usage?.subscriptions?.['claude']?.loginCommand} />
             : subKeys.includes(tab) ? <ClaudeTab snapshots={usage?.subscriptions?.[tab]?.snapshots} rotation={rotationOf(tab)} tier={usage?.subscriptions?.[tab]?.tier} pollStatus={usage?.pollStatuses?.[tab]} loginCommand={usage?.subscriptions?.[tab]?.loginCommand} />
             : tab === 'fal' ? <FalTab days={days} setDays={setDays} />
+            : tab === 'glif' ? <GlifTab />
             : tab === 'ollama' ? <OllamaTab info={usage?.ollama} />
             : <ProviderTab providerKey={tab} data={provData[tab]} />}
         </div>

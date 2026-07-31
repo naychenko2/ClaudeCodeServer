@@ -243,6 +243,7 @@ builder.Services.AddSingleton<ChatHistoryService>();
 builder.Services.AddSingleton<WorkspaceKnowledgeStore>();
 builder.Services.AddSingleton<FalCostService>();
 builder.Services.AddSingleton<FalAccountService>();
+builder.Services.AddSingleton<GlifAccountService>();
 builder.Services.AddSingleton<UsageService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.LlmProviderRegistry>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ProviderBalanceService>();
@@ -301,6 +302,7 @@ builder.Services.AddHttpClient("safe-download")
 builder.Services.AddHttpClient("dify");
 builder.Services.AddHttpClient("forgejo");
 builder.Services.AddHttpClient("fal");
+builder.Services.AddHttpClient("glif");
 builder.Services.AddHttpClient("llm-provider");
 builder.Services.AddHttpClient("anthropic-oauth");
 builder.Services.AddHttpForwarder();

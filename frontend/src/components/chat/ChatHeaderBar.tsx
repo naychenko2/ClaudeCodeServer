@@ -28,6 +28,7 @@ import { TeamMechanicBadge } from '../../features/team/TeamMechanicBadge';
 import type { TeamMechanicId } from '../../features/team/teamMechanics';
 import { resolveChatOrigin } from '../../lib/chatOrigin';
 import { SpendBadge } from '../../features/spend/SpendBadge';
+import { type GlifGenStats, fmtCredits } from './glifStats';
 
 // Накопительная статистика стоимости/токенов по всем result-элементам ленты
 export interface CostStats {
@@ -549,6 +550,72 @@ function FalCostBadge({ stats, isMobile }: { stats: FalCostStats; isMobile?: boo
   );
 }
 
+// Тело поповера генераций glif: разбивка по типам медиа + кредиты (когда billing доехал)
+// + баланс аккаунта (асинхронно) + ссылка на статистику.
+// Вынесено для переиспользования в отдельном GlifCostBadge и в объединённом мобильном чипе.
+function GlifPopoverBody({ stats }: { stats: GlifGenStats }) {
+  // undefined = грузится, null = недоступно, number = баланс кредитов
+  const [balance, setBalance] = useState<number | null | undefined>(undefined);
+  useEffect(() => {
+    let cancelled = false;
+    api.glif.account()
+      .then(d => { if (!cancelled) setBalance(d.enabled ? (d.balance ?? null) : null); })
+      .catch(() => { if (!cancelled) setBalance(null); });
+    return () => { cancelled = true; };
+  }, []);
+  const balanceText = balance === undefined ? '…' : typeof balance === 'number' ? fmtCredits(balance) : '—';
+  // Разбивка по типам одной inline-строкой: топ-2 + «+N в статистике» (как у fal по моделям)
+  const entries = [...stats.byType.entries()].sort((a, b) => b[1] - a[1]);
+  const topTypes = entries.slice(0, 2);
+  const moreCount = entries.length - topTypes.length;
+  const inline = topTypes
+    .map(([t, n]) => `${t}${n > 1 ? ` ×${n}` : ''}`)
+    .join('  ·  ');
+  return (
+    <>
+      {/* Герой — генерации этого чата (за этим и кликнули) */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', fontFamily: FONT.sans, fontSize: 11, fontWeight: 700, color: C.textMuted, textTransform: 'uppercase', letterSpacing: 0.4 }}>
+        <span>Генерации glif · этот чат</span>
+        {stats.hasCredits && <span style={{ letterSpacing: 0 }}>{fmtCredits(stats.credits)}</span>}
+      </div>
+      <div style={{ fontFamily: FONT.mono, fontSize: 22, fontWeight: 700, color: C.accent, margin: '2px 0 4px' }}>{stats.count} ген.</div>
+      {inline && (
+        <div style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textSecondary, marginBottom: 4, lineHeight: 1.4 }}>
+          {inline}{moreCount > 0 ? `  ·  +${moreCount} в статистике` : ''}
+        </div>
+      )}
+      {/* Баланс аккаунта — отдельной плашкой (другая сущность), в кредитах */}
+      <div style={{
+        marginTop: 8, padding: '8px 10px', borderRadius: R.lg,
+        background: C.bgInset,
+        display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
+        fontFamily: FONT.sans, fontSize: 12, color: C.textSecondary,
+      }}>
+        <span>Счёт glif <span style={{ fontFamily: FONT.mono, fontWeight: 700, color: C.accent }}>{balanceText}</span></span>
+      </div>
+      <div style={{ marginTop: 10 }}>
+        <button type="button" onClick={() => window.dispatchEvent(new Event('open-fal-stats'))}
+          style={{ border: 'none', background: 'none', cursor: 'pointer', padding: 0, fontFamily: FONT.sans, fontSize: 12, fontWeight: 600, color: C.accent }}>
+          Подробная статистика →
+        </button>
+      </div>
+    </>
+  );
+}
+
+// Бейдж генераций glif (медиа). Пер-кредитной цены нет — значение это счётчик
+// генераций (+ сумма кредитов, когда billing приехал). Разбивка по типам медиа.
+function GlifCostBadge({ stats, isMobile }: { stats: GlifGenStats; isMobile?: boolean }) {
+  if (stats.count <= 0) return null;
+  const amount = `${stats.count} ген.` + (stats.hasCredits ? ` · ${fmtCredits(stats.credits)}` : '');
+  return (
+    <BadgeShell label="glif" amount={amount} isMobile={isMobile}
+      title="Генерации glif (медиа) — нажмите для разбивки">
+      <GlifPopoverBody stats={stats} />
+    </BadgeShell>
+  );
+}
+
 // Приоритет tone: danger важнее warn (для объединения подсветок контекста и стоимости)
 function worseTone(a?: 'warn' | 'danger', b?: 'warn' | 'danger'): 'warn' | 'danger' | undefined {
   if (a === 'danger' || b === 'danger') return 'danger';
@@ -564,14 +631,14 @@ function MobileCombinedBadge(props: {
   estimate: ContextEstimate; isWaiting: boolean; isCompacting: boolean;
   canCompact: boolean; compactNote?: string; onCompact: () => void; online: boolean; assistantName: string;
   // стоимость
-  isCliProvider: boolean; providerName: string; cost: CostStats; falCost: FalCostStats;
+  isCliProvider: boolean; providerName: string; cost: CostStats; falCost: FalCostStats; glifCost: GlifGenStats;
   balance: ProviderBalance | null; billing: ClaudeBilling; onBillingChange?: (b: ClaudeBilling) => void;
   windows: RateWindow[];
   // workflow (мобилка): прогресс фаз втягивается в этот же чип вместо отдельного бейджа
   activeWorkflow?: { phasesDone: number; phasesTotal: number };
 }) {
   const {
-    estimate, isCompacting, isCliProvider, providerName, cost, falCost, balance, billing, windows, activeWorkflow,
+    estimate, isCompacting, isCliProvider, providerName, cost, falCost, glifCost, balance, billing, windows, activeWorkflow,
   } = props;
   const wfActive = !!activeWorkflow;
 
@@ -581,8 +648,9 @@ function MobileCombinedBadge(props: {
     ? hasProviderCostInfo(cost, balance)
     : hasClaudeCostInfo(cost, windows);
   const hasFal = !isCliProvider && falCost.total > 0;
+  const hasGlif = !isCliProvider && glifCost.count > 0;
   // Совсем нечего показывать — прячем чип (но активный workflow держит чип на экране)
-  if (!showCtx && !showCost && !hasFal && !wfActive) return null;
+  if (!showCtx && !showCost && !hasFal && !hasGlif && !wfActive) return null;
 
   // Подсветка пилюли — худшая из контекста и стоимости
   const ctxTone = estimate.level !== 'normal' ? estimate.level : undefined;
@@ -612,7 +680,7 @@ function MobileCombinedBadge(props: {
           <span>{activeWorkflow!.phasesTotal > 0 ? `${activeWorkflow!.phasesDone}/${activeWorkflow!.phasesTotal}` : ''}</span>
         </span>
       ) : showCtx ? <ContextAmount estimate={estimate} isCompacting={isCompacting} isMobile /> : null}
-      {(showCost || hasFal) && (
+      {(showCost || hasFal || hasGlif) && (
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{costSummary}</span>
       )}
     </span>
@@ -651,6 +719,11 @@ function MobileCombinedBadge(props: {
           <FalPopoverBody stats={falCost} />
         </div>
       )}
+      {hasGlif && (
+        <div style={sectionDivider}>
+          <GlifPopoverBody stats={glifCost} />
+        </div>
+      )}
     </BadgeShell>
   );
 }
@@ -663,6 +736,7 @@ interface ChatHeaderBarProps {
   online: boolean;
   cost: CostStats;
   falCost: FalCostStats;
+  glifCost: GlifGenStats;
   billing: ClaudeBilling;
   // Не задан — переключать нельзя (не админ): показывается только текущий режим
   onBillingChange?: (b: ClaudeBilling) => void;
@@ -827,7 +901,7 @@ function ExtractTasksButton({ session, hasMessages, online }: { session: Session
   );
 }
 
-export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, billing, onBillingChange, rateWindows, onOpenSettings, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, artifactsOpen, onToggleArtifacts, artifactFileCount, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, island }: ChatHeaderBarProps) {
+export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, onBillingChange, rateWindows, onOpenSettings, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, artifactsOpen, onToggleArtifacts, artifactFileCount, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, island }: ChatHeaderBarProps) {
   // Поповер управления участниками группового чата (клик по стеку аватаров)
   const [participantsOpen, setParticipantsOpen] = useState(false);
   const sessionModelLabel = useModelLabel(session.model);
@@ -1066,7 +1140,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
         estimate={ctxEstimate} isWaiting={isWaiting} isCompacting={isCompacting}
         canCompact={canCompact} compactNote={compactNote} onCompact={onCompact}
         online={online} assistantName={asstName}
-        isCliProvider={isCliProvider} providerName={asstName} cost={cost} falCost={falCost}
+        isCliProvider={isCliProvider} providerName={asstName} cost={cost} falCost={falCost} glifCost={glifCost}
         balance={provBalance} billing={billing} onBillingChange={onBillingChange} windows={rateWindows}
         activeWorkflow={activeWorkflow}
       />
@@ -1077,6 +1151,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       {ctxBadge}
       {providerCostBadge}
       <FalCostBadge stats={falCost} isMobile={isMobile} />
+      <GlifCostBadge stats={glifCost} isMobile={isMobile} />
       {spendBadge}
     </>
   );

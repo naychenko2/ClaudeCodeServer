@@ -4,8 +4,9 @@ import type { ChatItem } from '../../types';
 import { C, FONT } from '../../lib/design';
 import { relPath, stripRoot } from '../../lib/paths';
 import { splitAgentResultTail, formatTailTokens, formatTailDuration, isAsyncLaunchAck, asyncLaunchAckNote } from '../../lib/agentTail';
-import { ChatProjectContext, FalCostContext } from './contexts';
-import { MediaBlock, extractMediaFromResult, extractMediaMeta, mediaLabel } from './MediaBlock';
+import { ChatProjectContext, FalCostContext, GlifCostContext } from './contexts';
+import { MediaBlock, extractMediaMeta, mediaLabel } from './MediaBlock';
+import { useVisibleMedia } from './mediaDedup';
 
 // Спиннер для выполняющегося инструмента
 function ToolSpinner() {
@@ -52,9 +53,22 @@ const TOOL_LABELS: Record<string, string> = {
   taskcreate: 'Задача', taskupdate: 'Задача', tasklist: 'Список задач', taskget: 'Задача',
   killshell: 'Остановка команды',
 };
-// Имя инструмента для показа: MCP → «server · tool», известные — по-русски, прочее — как есть
+// Русские подписи MCP-инструментов по полному имени (mcp__server__tool) —
+// без них лента показывала бы сырое «glif · compose_project»
+const MCP_TOOL_LABELS: Record<string, string> = {
+  mcp__glif__compose_project: 'Генерация медиа glif',
+  mcp__glif__get_job_status: 'Статус генерации glif',
+  mcp__glif__view_media: 'Показ медиа glif',
+  mcp__glif__upload_file: 'Загрузка файла glif',
+  mcp__glif__get_project: 'Проекты glif',
+  mcp__glif__list_projects: 'Проекты glif',
+  mcp__glif__list_user_skills: 'Скиллы glif',
+  mcp__glif__get_user_skill: 'Скиллы glif',
+  mcp__glif__whoami: 'Аккаунт glif',
+};
+// Имя инструмента для показа: MCP — по карте, иначе «server · tool»; известные — по-русски, прочее — как есть
 export function toolLabel(name: string): string {
-  if (name.startsWith('mcp__')) return name.slice(5).replace(/__/g, ' · ');
+  if (name.startsWith('mcp__')) return MCP_TOOL_LABELS[name] ?? name.slice(5).replace(/__/g, ' · ');
   return TOOL_LABELS[name.toLowerCase()] ?? name;
 }
 
@@ -153,9 +167,11 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
       return { body: asyncLaunchAckNote(item.bgAborted), tail: null };
     return splitAgentResultTail(item.result);
   }, [isAgentTool, item.result, item.bgAborted]);
-  // Медиа (изображения + видео) из результата MCP-инструментов
-  const media = hasResult && !item.isError ? extractMediaFromResult(item.result!) : [];
-  const mediaMeta = hasResult && !item.isError ? extractMediaMeta(item.result!) : {};
+  // Медиа (изображения + видео) из результата MCP-инструментов. Сквозной дедуп ленты
+  // (glif project_update + media_view одного URL) применяется картой из контекста
+  const rawMedia = useVisibleMedia(item);
+  const media = hasResult && !item.isError ? rawMedia : [];
+  const mediaMeta = hasResult && !item.isError ? extractMediaMeta(item.result!, media) : {};
   const hasMedia = media.length > 0;
 
   // Точная стоимость генерации fal.ai приходит с backend (billing-events по request_id).
@@ -167,6 +183,11 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
     catch { return undefined; }
   }, [hasMedia, hasResult, item.isError, item.result]);
   const falCostUsd = falRequestId ? falCostByRequest.get(falRequestId) : undefined;
+  // glif: стоимость приезжает прямо в JSON результата (_meta.glif.billing) — берём из меты
+  const costUsd = falCostUsd ?? mediaMeta.costUsd;
+  // Кредиты glif — с backend (glif_cost по jobId, только когда зонд нашёл billing)
+  const glifCostByJob = useContext(GlifCostContext);
+  const glifCredits = mediaMeta.jobId ? glifCostByJob.get(mediaMeta.jobId) : undefined;
   // Генерация fal распознана, но стоимость ещё не подсчитана (биллинг приходит с задержкой)
   const costPending = hasMedia && !!falRequestId && falCostUsd === undefined;
   // «Считается…» не должно висеть вечно: если стоимость так и не пришла (напр. старое
@@ -227,7 +248,7 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
           {media.map((m, i) => {
             const filename = m.fileName ?? m.url.split('/').pop()?.split('?')[0] ?? m.kind;
             return (
-              <MediaBlock key={i} m={m} filename={filename} model={falModel} inferenceTime={mediaMeta.inferenceTime} costUsd={falCostUsd} costPending={costPending && !pendingExpired} online={online} />
+              <MediaBlock key={i} m={m} filename={filename} model={falModel} inferenceTime={mediaMeta.inferenceTime} costUsd={costUsd} costPending={costPending && !pendingExpired} credits={glifCredits} source={mediaMeta.source} outputType={mediaMeta.outputType} online={online} />
             );
           })}
         </div>

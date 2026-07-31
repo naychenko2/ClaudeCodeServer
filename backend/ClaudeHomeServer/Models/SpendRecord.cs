@@ -9,6 +9,7 @@ public static class SpendSources
     public const string ChatTurn = "chat-turn";
     public const string OneShot = "one-shot";
     public const string Fal = "fal";
+    public const string Glif = "glif";
     public const string Free = "free";
 
     // Бесплатный исполнитель: локальная Ollama, прямой адаптер любого OpenAI-совместимого

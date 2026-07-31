@@ -163,6 +163,16 @@ export default function App() {
     return () => window.removeEventListener('popstate', onPop)
   }, [])
 
+  // Уход в раздел из «глубокого» места (открытый проект, заметка, файл, задача, персона,
+  // база знаний) добавляет запись в историю, а не затирает текущую: иначе снимок того, откуда
+  // ушли, пропадает и Back уводит мимо. Латеральные переходы с плоского экрана — replace.
+  const navToSection = (dest: NavSnapshot) => {
+    const cur = getNav()
+    const deep = !!cur && (cur.screen === 'project' || !!cur.note || !!cur.file || !!cur.task || !!cur.persona || !!cur.knowledge)
+    if (deep) navPush(dest)
+    else navReplace(dest)
+  }
+
   // Раздел «Аналитика токенов» — полноценная вкладка хаба (вход через меню аватара,
   // как «Знания»), поэтому главная шапка остаётся сверху. Контекст открытия
   // (фильтр/день/паспорт хода) несем в spendCtx и пробрасываем в экран.
@@ -186,16 +196,6 @@ export default function App() {
     window.addEventListener(OPEN_GLOBAL_SEARCH_EVENT, open)
     return () => window.removeEventListener(OPEN_GLOBAL_SEARCH_EVENT, open)
   }, [])
-
-  // Уход в раздел из «глубокого» места (открытый проект, заметка, файл, задача, персона,
-  // база знаний) добавляет запись в историю, а не затирает текущую: иначе снимок того, откуда
-  // ушли, пропадает и Back уводит мимо. Латеральные переходы с плоского экрана — replace.
-  const navToSection = (dest: NavSnapshot) => {
-    const cur = getNav()
-    const deep = !!cur && (cur.screen === 'project' || !!cur.note || !!cur.file || !!cur.task || !!cur.persona || !!cur.knowledge)
-    if (deep) navPush(dest)
-    else navReplace(dest)
-  }
 
   // Переход в раздел «Заметки» по клику на [[wikilink]] из файлов/чата.
   // Целевая заметка передаётся через sessionStorage (cc_pending_note_title),

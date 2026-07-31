@@ -62,11 +62,12 @@ public sealed class SpendMaintenanceService(SpendStore store, SessionManager ses
 
             var results = messages.OfType<StoredResultMessage>().Where(m => m.Usage is not null).ToList();
             var falCosts = messages.OfType<StoredFalCostMessage>().ToList();
-            if (results.Count == 0 && falCosts.Count == 0) continue;
+            var glifCosts = messages.OfType<StoredGlifCostMessage>().ToList();
+            if (results.Count == 0 && falCosts.Count == 0 && glifCosts.Count == 0) continue;
 
             var ownerId = sessions.ResolveOwnerId(session) ?? "";
             var provider = SpendSources.NormalizeProvider(session.Provider);
-            var total = results.Count + falCosts.Count;
+            var total = results.Count + falCosts.Count + glifCosts.Count;
             var index = 0;
 
             foreach (var m in results)
@@ -118,6 +119,30 @@ public sealed class SpendMaintenanceService(SpendStore store, SessionManager ses
                     CostUsd = m.CostUsd,
                     Generations = 1,
                     Label = m.EndpointId,
+                });
+                imported++;
+            }
+
+            foreach (var m in glifCosts)
+            {
+                var i = index++;
+                var ts = Spread(session.CreatedAt, session.UpdatedAt, i, total);
+                if (ts >= t0) continue;
+                store.Record(new SpendRecord
+                {
+                    Id = BackfillId(session.ClaudeSessionId, i),
+                    Timestamp = ts,
+                    OwnerId = ownerId,
+                    ProjectId = session.ProjectId,
+                    SessionId = session.Id,
+                    TaskId = session.TaskId,
+                    PersonaId = session.PersonaId,
+                    Provider = "glif",
+                    Model = m.Model ?? m.OutputType,
+                    Source = SpendSources.Glif,
+                    CostUsd = null,
+                    Generations = 1,
+                    Label = m.OutputType,
                 });
                 imported++;
             }

@@ -128,8 +128,8 @@ export function MarkdownContent({ text }: { text: string }) {
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
       urlTransform={(url, key) => {
-        // fal.media src — блокируем: картинки уже показаны в MediaBlock из tool_result
-        if (key === 'src' && matchesHosts(url, FAL_HOSTS)) return null;
+        // Медиа-домены (fal/glif) src — блокируем: медиа уже показаны в MediaBlock из tool_result
+        if (key === 'src' && matchesHosts(url, MEDIA_HOSTS)) return null;
         // Абсолютный путь внутри проекта (Claude часто пишет полный путь) — оставляем как
         // есть: defaultUrlTransform режет его, приняв «C:» за неизвестный протокол
         if (project && /^[a-zA-Z]:[\\/]/.test(url) && toRelative(url, project.rootPath)) return url;
@@ -155,6 +155,15 @@ export function MarkdownContent({ text }: { text: string }) {
           const text = String(children).replace(/\n$/, '');
           if (language === 'mermaid') {
             return <MermaidDiagram code={text} />;
+          }
+          // ```ui — служебная Gallery-разметка glif: показываем обычным код-блоком,
+          // медиа рендерятся из resource_link/assets результата инструмента
+          if (language === 'ui') {
+            return (
+              <pre style={{ background: C.outputBg, border: `1px solid ${C.outputBorder}`, borderRadius: 8, padding: '10px 14px', margin: '6px 0', overflowX: 'auto' }}>
+                <code style={{ fontFamily: FONT.mono, fontSize: 12.5, color: C.textPrimary, lineHeight: 1.5 }} {...props}>{text}</code>
+              </pre>
+            );
           }
           if (language) {
             return (
@@ -237,14 +246,19 @@ export function proxyUrl(url: string): string {
   return `/api/proxy?${params}`;
 }
 
-// Домены, которые разрешены прокси-контроллером на бэкенде (синхронизировать с AllowedHosts)
+// Домены, которые разрешены прокси-контроллером на бэкенде (синхронизировать с AllowedHosts).
+// glif-медиа — glifusercontent.com и res.cloudinary.com (их CDN); glif.app/glif.xyz в списке
+// нет намеренно: бэкенд их не проксирует (там страницы, а не медиа) — projectUrl из ответа
+// glif остаётся обычной ссылкой.
 const PROXY_ALLOWED_HOSTS = [
   'fal.media', 'fal.run', 'queue.fal.run', 'cdn.fal.ai',
   'storage.googleapis.com', 'replicate.delivery', 'pbxt.replicate.delivery',
+  'glifusercontent.com', 'res.cloudinary.com',
 ];
 
-// Домены fal.ai — их src в markdown не проксируем: картинки уже показаны в MediaBlock
-const FAL_HOSTS = ['fal.media', 'fal.run', 'queue.fal.run', 'cdn.fal.ai'];
+// Домены генераторов медиа — их src в markdown не проксируем: медиа уже показаны в MediaBlock.
+// res.cloudinary.com здесь нет намеренно: это общий CDN, ссылку на него в markdown показываем.
+const MEDIA_HOSTS = ['fal.media', 'fal.run', 'queue.fal.run', 'cdn.fal.ai', 'glifusercontent.com'];
 
 function matchesHosts(url: string, hosts: string[]): boolean {
   try {

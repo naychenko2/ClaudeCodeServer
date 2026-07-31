@@ -15,6 +15,7 @@ namespace ClaudeHomeServer.Protocol;
 [JsonDerivedType(typeof(StoredFileChangedMessage), "file_changed")]
 [JsonDerivedType(typeof(StoredResultMessage), "result")]
 [JsonDerivedType(typeof(StoredFalCostMessage), "fal_cost")]
+[JsonDerivedType(typeof(StoredGlifCostMessage), "glif_cost")]
 [JsonDerivedType(typeof(StoredCompactBoundaryMessage), "compact_boundary")]
 [JsonDerivedType(typeof(StoredErrorMessage), "error")]
 [JsonDerivedType(typeof(StoredWorkflowProgressMessage), "workflow_progress")]
@@ -123,6 +124,17 @@ public class StoredFalCostMessage(string requestId, string? endpointId, double c
     public double CostUsd { get; init; } = costUsd;
     public double? OutputUnits { get; init; } = outputUnits;
     public double? UnitPrice { get; init; } = unitPrice;
+}
+
+// Учёт завершённой glif-генерации (кредиты из _meta.glif), приходит вне хода — отдельная запись
+public class StoredGlifCostMessage(string jobId, string? outputType, int mediaCount,
+    double? credits = null, string? model = null) : StoredMessage
+{
+    public string JobId { get; init; } = jobId;
+    public string? OutputType { get; init; } = outputType;
+    public int MediaCount { get; init; } = mediaCount;
+    public double? Credits { get; init; } = credits;
+    public string? Model { get; init; } = model;
 }
 
 // Result/IsError заполняются позже — при получении tool_result от Claude

@@ -32,11 +32,22 @@ export const SPEND_SOURCES: Record<string, { label: string; color: string }> = {
   'chat-turn': { label: 'Ходы', color: C.accent },
   'one-shot': { label: 'Фоновые', color: C.info },
   fal: { label: 'fal.ai', color: C.plan },
+  glif: { label: 'glif', color: C.warning },
   free: { label: 'Бесплатные', color: C.success },
 };
 
 export const sourceLabel = (s: string) => SPEND_SOURCES[s]?.label ?? s;
 export const sourceColor = (s: string) => SPEND_SOURCES[s]?.color ?? C.textMuted;
+// Текстовый вариант цвета источника — для моноширинных значений в анализе
+// (у SPEND_SOURCES цвета серий «плотные», на подложке читается text-пара)
+export const sourceTextColor = (s: string) =>
+  s === 'fal' ? C.planText : s === 'glif' ? C.warningText : sourceColor(s);
+
+// Источники-«генерации медиа»: денежной суммы у записи нет, показываются счётчиком
+// генераций (как fal). Бэкенд считает Generations у любых source — фронт лишь
+// различает такие источники для подписей и формата значений.
+export const GEN_SOURCES: readonly string[] = ['fal', 'glif'];
+export const isGenSource = (s: string) => GEN_SOURCES.includes(s);
 
 // Имена «пустых» узлов (key: "") бэкенд уже подставляет в name; страховка на null
 export function nodeName(_dim: SpendDim, key: string, name: string | null): string {

@@ -17,6 +17,33 @@
 - Файловый менеджер: дерево, поиск, просмотр/редактирование, diff/revert, бинарные, изображения, loading
 - Несохранённые изменения: диалог при закрытии файла
 
+## Генерация медиа (fal.ai, glif)
+
+Медиа из результатов MCP-инструментов генерации рендерятся прямо в ленте чата —
+[MediaBlock.tsx](../../frontend/src/components/chat/MediaBlock.tsx) (изображение/видео/аудио-плеер,
+футер с метой, кнопки «Скачать» и «Добавить в проект» через `/api/proxy`). Парсинг устойчивый
+(точные форматы вендоров не зафиксированы), `extractMediaFromResult`:
+
+- **fal.ai**: массивы `images`/`videos`/`audio_files`/`audios` в корне/`result`/`data`/`output`,
+  одиночные `video`/`audio`/`image`; классификация по `content_type`/расширению, `fal.media`/`fal.run`
+  без типа → изображение. Точная стоимость приходит с backend (billing-events по `request_id` →
+  `FalCostContext`), пока не пришла — «считается…» (снимается через 30 с).
+- **glif**: MCP-блоки `resource_link`/`resource` в `content` (uri + mimeType), `assets` из
+  `get_project` (uri, `type`, `metadata.{format,width,height}`), JSON внутри text-блоков;
+  хосты `glifusercontent.com` / `res.cloudinary.com` без типа → изображение. Дедуп по URL
+  (один файл из assets и resource_link показывается раз). Футер помечается «glif» (+ `outputType`
+  из `_meta.glif`). Backend распознаёт completed-генерацию по `tool_result` и эмитит
+  `glif_cost` → история (`StoredGlifCostMessage`) + SignalR + `SpendStore` (`SpendSources.Glif`).
+  Fenced-блоки ` ```ui ` (Gallery-разметка glif) остаются обычными код-блоками.
+- Домены обоих генераторов — в `PROXY_ALLOWED_HOSTS`/`MEDIA_HOSTS`
+  ([MarkdownContent.tsx](../../frontend/src/components/chat/MarkdownContent.tsx), синхронизировать
+  с `AllowedHosts` прокси-контроллера); src медиа-доменов в markdown блокируется — показан в MediaBlock.
+
+**Карточки использования** — экран «Использование» ([UsageScreen.tsx](../../frontend/src/components/UsageScreen.tsx))
+и виджет на главной ([UsageWidget.tsx](../../frontend/src/features/home/UsageWidget.tsx)):
+fal — `GET /api/fal/account` (баланс USD + расход по моделям/дням); glif — `GET /api/glif/account`
+(план, баланс КРЕДИТОВ — не USD, расход окнами 24 ч/7 д/30 д; без ключа — empty-state как у fal).
+
 ## Виджеты в чате
 
 Штатная фича, без флага: модель показывает интерактивные HTML-виджеты (дашборды, графики,

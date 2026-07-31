@@ -31,7 +31,8 @@ import { C, R, SHADOW, CHAT_MAX_W } from '../lib/design';
 import { CHAT_GUTTER_L, VAR_SHIFT, VAR_W, useChatGutter } from '../lib/chatGutter';
 import { setChatContext, AI_RECOMPUTE_EVENT } from '../lib/ai/chatContext';
 import { ChatHeaderBar, type CostStats, type FalCostStats } from './chat/ChatHeaderBar';
-import { ChatProjectContext, ChatOpenFileContext, FalCostContext, AssistantNameContext, PersonaContext, TeamPlanContext, TeamEscalationContext, type TeamPlanChatContext, type TeamEscalationChatContext } from './chat/contexts';
+import { computeGlifGenStats } from './chat/glifStats';
+import { ChatProjectContext, ChatOpenFileContext, FalCostContext, GlifCostContext, AssistantNameContext, MediaVisibilityContext, PersonaContext, TeamPlanContext, TeamEscalationContext, type TeamPlanChatContext, type TeamEscalationChatContext } from './chat/contexts';
 import { WaitingIndicator } from './ui/WaitingIndicator';
 import { Modal, ModalActions } from './ui';
 import { ChatEmptyState } from './chat/EmptyState';
@@ -41,7 +42,7 @@ import { splitAgentResultTail } from '../lib/agentTail';
 import { ChatItemView, FileChangedRow } from './chat/ChatItemView';
 import { PendingMessageList } from './chat/PendingMessageView';
 import { type ToolUseItem } from './chat/ToolUseView';
-import { extractMediaFromResult } from './chat/MediaBlock';
+import { buildMediaVisibility } from './chat/mediaDedup';
 import { isTasksCreate } from './chat/TaskCreatedView';
 import { isWidgetShow } from './chat/WidgetView';
 import { WorkflowBlockView } from './chat/WorkflowBlockView';
@@ -389,6 +390,19 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     }
     return { total, count, byModel };
   }, [items]);
+
+  // Списанные кредиты glif: jobId → кредиты (для подписи под медиа). Только элементы
+  // с известным billing — у остальных credits нет, и в карту они не попадают.
+  const glifCostByJob = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const it of items)
+      if (it.kind === 'glif_cost' && typeof it.credits === 'number' && !map.has(it.jobId))
+        map.set(it.jobId, it.credits);
+    return map;
+  }, [items]);
+
+  // Накопительный счётчик генераций glif по сессии: число, разбивка по типам, сумма кредитов.
+  const glifGenStats = useMemo(() => computeGlifGenStats(items), [items]);
 
   // Тип оплаты Claude (подписка/api) — глобальная настройка; влияет на подачу стоимости Claude
   const [claudeBilling, setClaudeBilling] = useState<ClaudeBilling>('subscription');
@@ -973,6 +987,11 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   // рвут ни file_changed, ни размышления между действиями, ни невидимые элементы —
   // как только агент пошёл дальше (следующий видимый элемент после группы), весь блок
   // (включая одиночное действие) сворачивается в строку «N действий».
+  // Карта видимого медиа tool-блоков: сквозной дедуп по URL через всю ленту
+  // (glif: project_update + view_media одного файла — один MediaBlock, выживает галерея).
+  // Extract кэширован по ссылке на элемент, поэтому пересчёт на стрим-дельту дёшев
+  const mediaVisibility = useMemo(() => buildMediaVisibility(items), [items]);
+
   // Группировка — O(n) с постройкой карт по всей ленте (useMemo).
   const renderedItems = useMemo(() => {
     // Последний task-вызов (lastTaskIdx) исключаем из блока действий, как и TodoWrite:
@@ -1066,7 +1085,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         // теперь ВИДИМ (разделитель «ход в дереве агента»/«ход вернулся в проект»)
         // и обязан рвать стопку действий, как любой другой видимый элемент
         const isInvisible = (it: ChatItem, idx: number) =>
-          (it.kind === 'session_started' && !turnBoundaries.has(idx)) || it.kind === 'resumed' || it.kind === 'fal_cost';
+          (it.kind === 'session_started' && !turnBoundaries.has(idx)) || it.kind === 'resumed' || it.kind === 'fal_cost' || it.kind === 'glif_cost';
         // Размышления верхнего уровня прячем внутрь группы, если они стоят МЕЖДУ действиями
         const isThought = (it: ChatItem) => (it.kind === 'thinking' && !it.parentToolUseId) || it.kind === 'redacted_thinking';
         const isSuppressed = (it: ChatItem) => suppressedByWorkflow.has(it) || suppressedByAgentParent.has(it);
@@ -1094,10 +1113,12 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
           it.kind === 'tool_use' && (it.name.toLowerCase() === 'task' || it.name.toLowerCase() === 'agent');
         // Медиа-результаты (сгенерированные fal.ai картинки/видео) тоже не прячем в свёртку:
         // карточка с изображением и футером ведёт себя как агенты — видна в summary,
-        // на своём месте при раскрытии и не входит в счётчик «N действий»
+        // на своём месте при раскрытии и не входит в счётчик «N действий».
+        // Считаем по карте дедупа: блок, чьё медиа целиком скрыто (glif project_update
+        // после media_view), — обычная строка инструмента
         const isMediaEntry = (it: ChatItem) =>
           it.kind === 'tool_use' && !it.isError && typeof it.result === 'string'
-          && extractMediaFromResult(it.result).length > 0;
+          && (mediaVisibility.get(it.id)?.length ?? 0) > 0;
         // Карточка «Задача создана» (tasks_create) — тоже не прячется в свёртку;
         // ошибочный вызов деградирует в обычную строку инструмента и сворачивается как все
         const isTaskCardEntry = (it: ChatItem) => it.kind === 'tool_use' && !it.isError && isTasksCreate(it.name);
@@ -1228,6 +1249,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       online={online}
       cost={costStats}
       falCost={falCostStats}
+      glifCost={glifGenStats}
       billing={claudeBilling}
       onBillingChange={canEditBilling ? changeBilling : undefined}
       rateWindows={rateWindows}
@@ -1305,7 +1327,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
           )
         )}
 
-        <FalCostContext.Provider value={falCostByRequest}><ChatProjectContext.Provider value={projectCtx}><ChatOpenFileContext.Provider value={onOpenFile ?? null}><TeamPlanContext.Provider value={teamPlanCtx}><TeamEscalationContext.Provider value={teamEscalationCtx}>{renderedItems}</TeamEscalationContext.Provider></TeamPlanContext.Provider></ChatOpenFileContext.Provider></ChatProjectContext.Provider></FalCostContext.Provider>
+        <FalCostContext.Provider value={falCostByRequest}><GlifCostContext.Provider value={glifCostByJob}><MediaVisibilityContext.Provider value={mediaVisibility}><ChatProjectContext.Provider value={projectCtx}><ChatOpenFileContext.Provider value={onOpenFile ?? null}><TeamPlanContext.Provider value={teamPlanCtx}><TeamEscalationContext.Provider value={teamEscalationCtx}>{renderedItems}</TeamEscalationContext.Provider></TeamPlanContext.Provider></ChatOpenFileContext.Provider></ChatProjectContext.Provider></MediaVisibilityContext.Provider></GlifCostContext.Provider></FalCostContext.Provider>
 
         {online && showWaiting && (
           // Текст индикатора ставим по левому краю чата (как пузыри), а домик уезжает

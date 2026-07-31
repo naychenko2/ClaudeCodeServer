@@ -223,6 +223,8 @@ public class SessionManager : IDisposable
     private readonly PersonaAgentFileSync? _agentSync;
     // Git-операции worktree чата (null — в тестах: worktree-фича выключена)
     private readonly Git.GitService? _git;
+    // Учёт glif-генераций (null — в тестах или когда фича не настроена)
+    private readonly GlifAccountService? _glif;
     // Аналитика расхода токенов (null — в тестах: сбор выключен)
     private readonly Spend.ISpendCollector? _spend;
     // Per-ход slice top-10 god-nodes Code Graph в системный промпт (ADR вариант A);
@@ -272,10 +274,13 @@ public class SessionManager : IDisposable
         // включается, но план не строится — CreateTeamPlanAsync отдаёт причину отказа.
         TeamPlanningService? teamPlanning = null,
         // Опционально (в тестах не передаётся): трекер активности аккаунтов пула подписок
-        SubscriptionActivityTracker? activity = null)
+        SubscriptionActivityTracker? activity = null,
+        // Опционально: учёт glif-генераций; без него детект glif_cost не работает
+        GlifAccountService? glif = null)
     {
         _teamPlanning = teamPlanning;
         _activity = activity;
+        _glif = glif;
         _spend = spend;
         _codeGraphPrompt = codeGraphPrompt;
         _codeGraphs = codeGraphs;
@@ -4262,6 +4267,8 @@ public class SessionManager : IDisposable
 
         // Догоняем стоимость старых fal-генераций, у которых её ещё нет (фоном, дедуп внутри)
         BackfillFalCosts(sessionId, list);
+        // Догоняем учёт старых glif-генераций, у которых ещё нет glif_cost
+        BackfillGlifCosts(sessionId, list);
         return list;
     }
 
@@ -4326,6 +4333,7 @@ public class SessionManager : IDisposable
                     acc.OnToolResult(m.ToolUseId, m.Content, m.IsError);
                     await acc.SaveSnapshotAsync(_history); // промежуточное сохранение после каждого tool call
                     TryTrackFalCost(sessionId, m.Content); // fire-and-forget: стоимость придёт позже
+                    TryTrackGlifCost(sessionId, m.Content); // синхронно: кредиты уже в tool_result
                     break;
                 case WorkflowProgressMessage m:
                     if (entry is not null)
@@ -4590,6 +4598,98 @@ public class SessionManager : IDisposable
             if (rid != null && !have.Contains(rid))
                 _falCost.Track(sessionId, rid);
         }
+    }
+
+    // Детектит завершённую glif-генерацию прямо в tool_result: кредиты уже есть в _meta.glif,
+    // поэтому публикуем сообщение синхронно, без фонового опроса как у fal.
+    private void TryTrackGlifCost(string sessionId, string content)
+    {
+        if (_glif?.Enabled != true) return;
+        var msg = GlifCostParser.TryParse(content);
+        if (msg is not null)
+            _ = PublishGlifCostAsync(sessionId, msg);
+    }
+
+    // Догоняет учёт для СТАРЫХ glif-генераций в истории, у которых ещё нет glif_cost.
+    // Вызывается при загрузке истории сессии.
+    private void BackfillGlifCosts(string sessionId, IReadOnlyList<StoredMessage> history)
+    {
+        if (_glif?.Enabled != true) return;
+        var have = new HashSet<string>();
+        foreach (var m in history)
+            if (m is StoredGlifCostMessage g) have.Add(g.JobId);
+        foreach (var m in history)
+        {
+            if (m is not StoredToolUseMessage t || t.IsError || string.IsNullOrEmpty(t.Result)) continue;
+            var msg = GlifCostParser.TryParse(t.Result);
+            if (msg is not null && !have.Contains(msg.JobId))
+                _ = PublishGlifCostAsync(sessionId, msg);
+        }
+    }
+
+    // Публикация учёта glif-генерации: запись в историю (дедуп) + broadcast клиентам.
+    // Зеркало PublishFalCostAsync: активная сессия → аккумулятор; неактивная → прямо на диск.
+    public async Task PublishGlifCostAsync(string sessionId, GlifCostMessage msg)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return;
+
+        await _falPersistLock.WaitAsync();
+        bool duplicate = false;
+        try
+        {
+            if (entry.Accumulator is not null)
+            {
+                if (!entry.Accumulator.OnGlifCost(msg.JobId, msg.OutputType, msg.MediaCount, msg.Credits, msg.Model))
+                    duplicate = true;
+                else
+                {
+                    try { await entry.Accumulator.SaveSnapshotAsync(_history); }
+                    catch (Exception ex) { Console.Error.WriteLine($"[GlifCost] Сохранение истории ({sessionId}) не удалось: {ex.Message}"); }
+                }
+            }
+            else if (entry.Info.ClaudeSessionId is string key)
+            {
+                try
+                {
+                    var stored = await _history.LoadAsync(key);
+                    if (stored.Any(m => m is StoredGlifCostMessage g && g.JobId == msg.JobId))
+                        duplicate = true;
+                    else
+                    {
+                        stored.Add(new StoredGlifCostMessage(msg.JobId, msg.OutputType, msg.MediaCount, msg.Credits, msg.Model));
+                        await _history.SaveAsync(key, stored);
+                    }
+                }
+                catch (Exception ex) { Console.Error.WriteLine($"[GlifCost] Прямая запись истории ({sessionId}) не удалась: {ex.Message}"); }
+            }
+        }
+        finally { _falPersistLock.Release(); }
+
+        if (duplicate) return;
+
+        // Аналитика: генерация glif — счётчик операций, кредиты про запас, стоимость USD неизвестна.
+        if (_spend is not null)
+            try
+            {
+                var s = entry.Info;
+                _spend.Record(new SpendRecord
+                {
+                    OwnerId = ResolveOwnerId(s) ?? "",
+                    ProjectId = s.ProjectId,
+                    SessionId = s.Id,
+                    TaskId = s.TaskId,
+                    PersonaId = s.PersonaId,
+                    Provider = "glif",
+                    Model = msg.Model ?? msg.OutputType,
+                    Source = SpendSources.Glif,
+                    CostUsd = null,
+                    Generations = 1,
+                    Label = msg.OutputType,
+                });
+            }
+            catch (Exception ex) { _log.LogWarning(ex, "spend: запись генерации glif не удалась"); }
+
+        await BroadcastAsync(sessionId, msg);
     }
 
     // Публикация найденной стоимости fal.ai: запись в историю (дедуп) + broadcast клиентам.

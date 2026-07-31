@@ -9,8 +9,8 @@ import type {
 import { api } from '../../lib/api';
 import { C, FONT, R, SHADOW, Z } from '../../lib/design';
 import {
-  ADMIN_ONLY_DIMS, DIM_LABELS, SPEND_PRESETS, fmtDate, fmtTok, fmtTime, nodeName,
-  sourceColor, sourceLabel, spendQuery,
+  ADMIN_ONLY_DIMS, DIM_LABELS, SPEND_PRESETS, fmtDate, fmtTok, fmtTime, isGenSource, nodeName,
+  sourceColor, sourceLabel, sourceTextColor, spendQuery,
   type SpendDim, type SpendFilter, type SpendLevel,
 } from '../../lib/spend';
 import type { SpendState } from './SpendScreen';
@@ -330,7 +330,7 @@ export function SpendAnalysis({ st, patch, range, showUsers, isMobile, overview,
   function renderTurnRow(t: SpendTurnDto): ReactNode {
     const key = `turn:${t.id}`;
     const sel = st.selKey === key;
-    const isFal = t.source === 'fal';
+    const isGen = isGenSource(t.source);
     const isFree = t.source === 'free';
     return (
       <div
@@ -349,7 +349,7 @@ export function SpendAnalysis({ st, patch, range, showUsers, isMobile, overview,
           {fmtDate(t.timestamp.slice(0, 10))} {fmtTime(t.timestamp)}
         </span>
         <span style={{ fontSize: 11, color: C.textMuted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0, fontFamily: FONT.sans }}>
-          {isFal ? `fal.ai · ${t.model ?? t.label ?? ''}` : [t.label ?? undefined, t.model ?? undefined].filter(Boolean).join(' · ')}
+          {isGen ? `${sourceLabel(t.source)} · ${t.model ?? t.label ?? ''}` : [t.label ?? undefined, t.model ?? undefined].filter(Boolean).join(' · ')}
         </span>
         {isFree && (
           <span style={{ fontSize: 10, padding: '1px 7px', borderRadius: R.sm, background: C.successBg, color: C.successText, flexShrink: 0, fontFamily: FONT.sans }}>
@@ -357,10 +357,10 @@ export function SpendAnalysis({ st, patch, range, showUsers, isMobile, overview,
           </span>
         )}
         <span style={{
-          marginLeft: 'auto', fontFamily: FONT.mono, fontSize: isFal ? 11 : 12, fontWeight: 600, flexShrink: 0,
-          color: isFal ? C.planText : isFree ? C.successText : C.textHeading,
+          marginLeft: 'auto', fontFamily: FONT.mono, fontSize: isGen ? 11 : 12, fontWeight: 600, flexShrink: 0,
+          color: isGen ? sourceTextColor(t.source) : isFree ? C.successText : C.textHeading,
         }}>
-          {isFal ? `${t.generations} ген.` : fmtTok(t.tokens.total)}
+          {isGen ? `${t.generations} ген.` : fmtTok(t.tokens.total)}
         </span>
       </div>
     );
@@ -429,7 +429,8 @@ export function SpendAnalysis({ st, patch, range, showUsers, isMobile, overview,
           const open = expanded.has(key) && hasKids;
           const sel = st.selKey === key;
           const share = total > 0 ? n.tokens.total / total : 0;
-          const falOnly = n.tokens.total === 0 && n.falGenerations > 0;
+          // Узел только из генераций медиа (fal/glif): токенов нет — значение счётчиком цветом серии
+          const genOnly = n.tokens.total === 0 && n.falGenerations > 0;
           const isFreeSrc = dim === 'source' && n.key === 'free';
           const filters: SpendFilter[] = [...ancestors, { dim, val: n.key, label: name }];
           return (
@@ -458,10 +459,10 @@ export function SpendAnalysis({ st, patch, range, showUsers, isMobile, overview,
                   </span>
                 )}
                 <span style={{
-                  marginLeft: 'auto', fontFamily: FONT.mono, fontSize: falOnly ? 11 : 12, fontWeight: 600, flexShrink: 0,
-                  color: falOnly ? C.planText : isFreeSrc ? C.successText : C.textHeading,
+                  marginLeft: 'auto', fontFamily: FONT.mono, fontSize: genOnly ? 11 : 12, fontWeight: 600, flexShrink: 0,
+                  color: genOnly ? (dim === 'source' ? sourceTextColor(n.key) : C.planText) : isFreeSrc ? C.successText : C.textHeading,
                 }}>
-                  {falOnly ? `${n.falGenerations} ген.` : fmtTok(n.tokens.total)}
+                  {genOnly ? `${n.falGenerations} ген.` : fmtTok(n.tokens.total)}
                 </span>
                 {share > 0.01 && (
                   <div style={{ position: 'absolute', left: 10, right: 10, bottom: 2, height: 3, borderRadius: 2, overflow: 'hidden', pointerEvents: 'none' }}>
@@ -623,7 +624,9 @@ function OverviewBody({ ov, shareOfRoot, hasTurnLevel, onShowTurns, detailDays }
 }) {
   const s = ov.totals;
   const freeRow = ov.cards.sources.find(r => r.key === 'free');
-  const srcRows = ov.cards.sources.filter(r => r.key !== 'fal' && r.tokens.total > 0);
+  const srcRows = ov.cards.sources.filter(r => !isGenSource(r.key) && r.tokens.total > 0);
+  // Генерации медиа по источникам (fal/glif) — из карточки источников: ov.falGenerations суммарный
+  const genRows = ov.cards.sources.filter(r => isGenSource(r.key) && r.falGenerations > 0);
   const stackTotal = srcRows.reduce((a, r) => a + r.tokens.total, 0);
   const models = ov.cards.models.slice(0, 4);
   const modelsMax = Math.max(1, ...models.map(m => m.tokens.total));
@@ -634,7 +637,7 @@ function OverviewBody({ ov, shareOfRoot, hasTurnLevel, onShowTurns, detailDays }
         <Metric label="Токены за период" value={fmtTok(s.total)} color={C.accent}
           sub={shareOfRoot !== null ? `${Math.round(shareOfRoot * 100)}% текущего среза` : undefined} />
         <Metric label="Ходов" value={String(ov.turns)}
-          sub={ov.falGenerations ? `+ ${ov.falGenerations} генераций fal.ai` : windowClamped ? 'часть периода — агрегаты (🔒)' : 'все в окне детализации'} />
+          sub={ov.falGenerations ? `+ ${ov.falGenerations} генераций медиа` : windowClamped ? 'часть периода — агрегаты (🔒)' : 'все в окне детализации'} />
         <Metric label="In / Out" value={`${fmtTok(s.input)} / ${fmtTok(s.output)}`}
           sub={`cache read ${fmtTok(s.cacheRead)} · create ${fmtTok(s.cacheCreation)}`} />
         <Metric label="Бесплатные" value={freeRow ? fmtTok(freeRow.tokens.total) : '—'} color={C.successText}
@@ -656,11 +659,11 @@ function OverviewBody({ ov, shareOfRoot, hasTurnLevel, onShowTurns, detailDays }
                 <Dot color={sourceColor(r.key)} size={8} />{sourceLabel(r.key)} {fmtTok(r.tokens.total)}
               </span>
             ))}
-            {ov.falGenerations > 0 && (
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, color: C.textSecondary, fontFamily: FONT.sans }}>
-                <Dot color={sourceColor('fal')} size={8} />fal.ai · {ov.falGenerations} генераций
+            {genRows.map(r => (
+              <span key={r.key} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, color: C.textSecondary, fontFamily: FONT.sans }}>
+                <Dot color={sourceColor(r.key)} size={8} />{sourceLabel(r.key)} · {r.falGenerations} генераций
               </span>
-            )}
+            ))}
           </div>
         </Section>
       )}
@@ -744,7 +747,7 @@ function TurnPassport({ detail, showUsers, onCloseScreen }: {
     return <div style={{ padding: 18 }}><Skel w="55%" h={20} style={{ marginBottom: 12 }} /><Skel w="100%" h={110} /></div>;
   }
   const t = detail.turn;
-  const isFal = t.source === 'fal';
+  const isGen = isGenSource(t.source);
   const chatTotal = detail.neighbors.reduce((a, n) => a + n.total, 0);
   const share = chatTotal > 0 ? Math.round(t.tokens.total / chatTotal * 100) : 0;
   const win = detail.neighbors;
@@ -778,15 +781,15 @@ function TurnPassport({ detail, showUsers, onCloseScreen }: {
     <>
       <DetailHead
         path={pathParts.join(' › ')}
-        title={`${isFal ? 'Генерация fal.ai' : 'Ход'} · ${fmtDate(t.timestamp.slice(0, 10))}, ${fmtTime(t.timestamp)}`}
+        title={`${isGen ? `Генерация ${sourceLabel(t.source)}` : 'Ход'} · ${fmtDate(t.timestamp.slice(0, 10))}, ${fmtTime(t.timestamp)}`}
         sub={subParts.join(' · ')}
       />
       <div style={{ padding: '14px 18px 18px', display: 'flex', flexDirection: 'column', gap: 12, overflow: 'auto', maxHeight: 610 }}>
-        {isFal ? (
+        {isGen ? (
           <div style={{ border: `1px solid ${C.borderLight}`, borderRadius: R.lg, background: C.bgPanel, padding: 12 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-              <span style={{ fontWeight: 600, color: C.textHeading, fontSize: 13, fontFamily: FONT.sans }}>Операция fal.ai</span>
-              <span style={{ marginLeft: 'auto', fontFamily: FONT.mono, fontWeight: 600, color: C.planText }}>{t.generations} ген.</span>
+              <span style={{ fontWeight: 600, color: C.textHeading, fontSize: 13, fontFamily: FONT.sans }}>Операция {sourceLabel(t.source)}</span>
+              <span style={{ marginLeft: 'auto', fontFamily: FONT.mono, fontWeight: 600, color: sourceTextColor(t.source) }}>{t.generations} ген.</span>
             </div>
             <div style={{ fontSize: 11, color: C.textSecondary, fontFamily: FONT.sans }}>
               Модель {t.model ?? t.label ?? '—'} · токенов нет — считаем генерации. В суммы токенов не входит.
@@ -820,7 +823,7 @@ function TurnPassport({ detail, showUsers, onCloseScreen }: {
           </div>
         )}
 
-        {!isFal && comp.length > 0 && (
+        {!isGen && comp.length > 0 && (
           <Section title="Состав хода по типам токенов">
             {comp.map(([l, v, color]) => (
               <HBar key={l} label={l} value={fmtTok(v)} share={v / compMax} color={color} />
@@ -833,7 +836,7 @@ function TurnPassport({ detail, showUsers, onCloseScreen }: {
           </Section>
         )}
 
-        {!isFal && win.length > 1 && (
+        {!isGen && win.length > 1 && (
           <Section title={`Чат «${t.chatName ?? t.taskTitle ?? '…'}» рядом с этим ходом`}>
             <div style={{ display: 'flex', alignItems: 'flex-end', gap: 2, height: 44 }}>
               {win.map(n => (

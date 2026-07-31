@@ -369,6 +369,21 @@ internal class TurnAccumulator
         }
     }
 
+    // Учёт завершённой glif-генерации приходит синхронно из tool_result — добавляем в историю.
+    // Возвращает false, если запись с таким jobId уже есть.
+    public bool OnGlifCost(string jobId, string? outputType, int mediaCount, double? credits, string? model)
+    {
+        lock (_lock)
+        {
+            bool exists =
+                _history.Any(m => m is StoredGlifCostMessage g && g.JobId == jobId) ||
+                _currentTurn.Any(m => m is StoredGlifCostMessage g && g.JobId == jobId);
+            if (exists) return false;
+            _history.Add(new StoredGlifCostMessage(jobId, outputType, mediaCount, credits, model));
+            return true;
+        }
+    }
+
     // Внеходовая запись (карточка фазы совещания и т.п.) — сразу в _history,
     // минуя текущий ход (как OnFalCost, но без дедупа — он на вызывающей стороне)
     public void Append(StoredMessage message)

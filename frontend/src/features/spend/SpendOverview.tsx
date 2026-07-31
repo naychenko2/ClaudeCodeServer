@@ -5,7 +5,7 @@ import type { ReactNode } from 'react';
 import type { SpendCardRow, SpendOverviewResponse, SpendTurnDto } from '../../types';
 import { C, FONT, R, SHADOW } from '../../lib/design';
 import {
-  DIM_LABELS, SPEND_SOURCES, fmtDate, fmtTok, fmtTime, nodeName, sourceColor, sourceLabel,
+  DIM_LABELS, SPEND_SOURCES, fmtDate, fmtTok, fmtTime, isGenSource, nodeName, sourceColor, sourceLabel,
   type SpendDim, type SpendFilter,
 } from '../../lib/spend';
 import { Dot, EmptyBody, GhostBtn, nodeIcon } from './spendUi';
@@ -86,9 +86,12 @@ function topCard(opts: {
       onMore={() => opts.onOpen({ pivotDim: opts.dim })}>
       {rows.map((r, i) => {
         const name = nodeName(opts.dim, r.key, r.name);
-        const falOnly = r.tokens.total === 0 && r.falGenerations > 0;
+        // Строка только из генераций медиа (fal/glif): токенов нет — значение счётчиком,
+        // цветом серии (у fal — plan, у glif — warning), а не акцентом токенов
+        const genOnly = r.tokens.total === 0 && r.falGenerations > 0;
         const isFree = opts.dim === 'source' && r.key === 'free';
-        const isFal = opts.dim === 'source' && r.key === 'fal';
+        const isGen = opts.dim === 'source' && isGenSource(r.key);
+        const genColor = opts.dim === 'source' ? sourceColor(r.key) : C.planText;
         const barColor = opts.dim === 'source' ? sourceColor(r.key) : C.accent;
         return (
           <TopRow
@@ -97,9 +100,9 @@ function topCard(opts: {
             icon={nodeIcon(opts.dim, name, r.meta, opts.dim === 'source' ? sourceColor(r.key) : undefined)}
             name={opts.dim === 'source' ? sourceLabel(r.key) : name}
             meta={opts.dim === 'chat' ? (r.meta === 'task' ? 'задача' : null) : null}
-            share={falOnly || isFal ? 0 : r.tokens.total / max}
-            value={falOnly || isFal ? `${r.falGenerations} ген.` : fmtTok(r.tokens.total)}
-            valueColor={falOnly || isFal ? C.planText : isFree ? C.successText : C.accent}
+            share={genOnly || isGen ? 0 : r.tokens.total / max}
+            value={genOnly || isGen ? `${r.falGenerations} ген.` : fmtTok(r.tokens.total)}
+            valueColor={genOnly || isGen ? genColor : isFree ? C.successText : C.accent}
             barColor={barColor}
             onClick={() => opts.onOpen({ filter: { dim: opts.dim, val: r.key, label: opts.dim === 'source' ? sourceLabel(r.key) : name } })}
           />
@@ -146,7 +149,7 @@ export function SpendOverview({ data, showUsers, isMobile, filtersActive, onOpen
     bars.push(
       <div
         key={d.date}
-        title={`${fmtDate(d.date)} · ${fmtTok(d.total)}${d.falGenerations ? ` · fal ${d.falGenerations} ген.` : ''}${d.aggregated ? ' · агрегат (🔒 ходы недоступны)' : ''}`}
+        title={`${fmtDate(d.date)} · ${fmtTok(d.total)}${d.falGenerations ? ` · ${d.falGenerations} ген.` : ''}${d.aggregated ? ' · агрегат (🔒 ходы недоступны)' : ''}`}
         onClick={clickable ? () => onOpen({ day: d.date }) : undefined}
         style={{
           flex: 1, display: 'flex', flexDirection: 'column-reverse', gap: 1, minWidth: 3,
@@ -170,13 +173,19 @@ export function SpendOverview({ data, showUsers, isMobile, filtersActive, onOpen
   const days = data.byDay;
   const avgTurn = s.total / Math.max(1, data.turns);
 
-  const heroMini = [
+  // Генерации медиа по источникам (fal/glif) — из карточки источников: у API один
+  // суммарный счётчик falGenerations, а разрез по источникам живёт в cards.sources
+  const genRows = data.cards.sources.filter(r => isGenSource(r.key) && r.falGenerations > 0);
+
+  const heroMini: { v: string; l: string; color?: string }[] = [
     { v: String(data.turns), l: 'ходов' },
     { v: fmtTok(avgTurn), l: 'средний ход' },
     { v: `${fmtTok(s.input)} / ${fmtTok(s.output)}`, l: 'in / out' },
     { v: fmtTok(s.cacheRead), l: 'cache read' },
     { v: fmtTok(data.byDay.reduce((a, d) => a + (d.bySource['free'] ?? 0), 0)), l: 'бесплатные', color: C.successText },
-    { v: String(data.falGenerations), l: 'генераций fal.ai', color: C.planText },
+    ...(genRows.length > 0
+      ? genRows.map(r => ({ v: String(r.falGenerations), l: `генераций ${sourceLabel(r.key)}`, color: sourceColor(r.key) }))
+      : [{ v: '0', l: 'генераций fal.ai', color: C.planText }]),
   ];
 
   // Дорогие ходы — только детальное окно; клик — паспорт хода в анализе
@@ -258,9 +267,17 @@ export function SpendOverview({ data, showUsers, isMobile, filtersActive, onOpen
                   <Dot color={sourceColor(k)} />{SPEND_SOURCES[k].label}
                 </span>
               ))}
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: C.textSecondary, fontFamily: FONT.sans }}>
-                <Dot color={sourceColor('fal')} />fal.ai — {data.falGenerations} ген.
-              </span>
+              {genRows.length > 0
+                ? genRows.map(r => (
+                  <span key={r.key} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: C.textSecondary, fontFamily: FONT.sans }}>
+                    <Dot color={sourceColor(r.key)} />{sourceLabel(r.key)} — {r.falGenerations} ген.
+                  </span>
+                ))
+                : (
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: C.textSecondary, fontFamily: FONT.sans }}>
+                    <Dot color={sourceColor('fal')} />fal.ai — 0 ген.
+                  </span>
+                )}
               {!isMobile && (
                 <span style={{ marginLeft: 'auto', fontSize: 11, color: C.textMuted, fontFamily: FONT.sans }}>
                   клик по дню → анализ дня{hasAgg ? ' · слева от пунктира — агрегаты' : ''}

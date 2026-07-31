@@ -58,6 +58,48 @@ node-сервере — хуже: инвалидация при перестро
 инструмента. Раньше там стояли панель «Граф» и REST-эндпоинт: обе двери для агента закрыты
 (панель для человека, ключа к REST у него нет).
 
+## Внешние HTTP-серверы генерации медиа (fal-ai, glif)
+
+Это не наши node-серверы, а hosted MCP обоих провайдеров — в `BuildTurnMcpConfig` инжектится
+только описание (`type: http`, `url`, `headers.Authorization` с ключом из appsettings), поэтому
+секреты не лежат в `.mcp.json`/git. Оба ставятся ПОСЛЕ user-scope серверов и базового конфига
+(одноимённые перекрываются), одинаково для хоста и песочницы, для всех пользователей; пустой
+ключ — сервер не добавляется. Ключ сервера входит в ServerKeys-сигнатуру запуска (инвариант
+«состав tools/list не зависит от хода» — ниже). Выбор генератора — за моделью, дефолта нет:
+сильные стороны описаны в блоке генерации медиа `ProjectManager.BuiltInSystemPrompt`.
+
+**fal-ai** — `https://mcp.fal.ai/mcp`, ключ `Fal:McpApiKey` (Bearer). Прямой доступ к моделям:
+явный выбор endpoint'а, очередь, точная стоимость прогона.
+
+**glif** — `https://glif.app/api/mcp` (JSON-RPC 2.0 over Streamable HTTP, endpoint stateless —
+`mcp-session-id` не выдаётся, прямой `tools/call` без initialize; ответы — SSE-кадры
+`event: message`), токен `Glif:McpToken` (Bearer `glif_v1_...`, создаётся на
+https://glif.app/settings/api-tokens, нужен платный план). Агентские workflow из топовых
+моделей, готовые стили/скиллы, мультимодальные входы. Инструменты (9, по живому tools/list):
+
+- `compose_project` — создать/продолжить проект из промпта; асинхронная генерация 1–5 мин,
+  возвращает сразу `jobId` (+ `projectId`, `projectUrl`, `status`);
+- `get_job_status` — опрос джобы (записи живут ~30 мин после финиша; дальше медиа — в
+  `get_project`); completed-ответ несёт text-блоки + `resource_link` на медиа + JSON-хвост
+  `{project_id, job_id}` + `_meta.glif` (`outputType`, статус, `subtractedCredits`, `toolExecutions`).
+  Backend-пайплайн (`GlifCostParser`) извлекает `jobId`/`outputType`/`media`/`subtractedCredits`/
+  `nativeToolId` и публикует `glif_cost` → история + SignalR + `SpendStore`;
+- `view_media` — интерактивный просмотр, один вызов после completed (не на `working`-опросах);
+- `get_project` (assets включены: `[{assetId, uri, type, source:"generated"|"uploaded",
+  filename, mimeType, sizeInBytes, createdAt, metadata:{format,width,height}}]`),
+  `list_projects`, `list_user_skills` / `get_user_skill` (только личные скиллы),
+  `upload_file` (референсы для `compose_project`), `whoami`.
+
+`whoami` обслуживает и наш `GET /api/glif/account` — `GlifAccountService` дёргает его прямым
+`tools/call` тем же токеном (кэш 60с, без токена `enabled=false`). Живая форма ответа:
+`{ identity:{userId,username}, session:{apiTokenLabel}, billing:{ plan:{productId,status,
+periodEnd}, credits:{available,subscription,extra}, spend:{last24h,last7d,last30d} } }`
+(в `structuredContent` + дубль JSON-строкой в text-блоке). Баланс и расход — в КРЕДИТАХ,
+расход — готовые агрегаты за 24ч/7д/30д (серии по дням сервер не даёт). Медиа-ссылки
+(resource_link, assets.uri) живут на двух хостах: `res.cloudinary.com` (cloud `dzkwltgyd`,
+`image|video/upload` — и generated, и uploaded) и `glifusercontent.com` (рендеры `/i:r/…`) —
+оба в белом списке `ProxyController.AllowedHosts` (подтверждены живым `get_project`).
+
 ## Инвариант: состав инструментов не зависит от хода
 
 **Набор `tools/list` MCP-сервера обязан быть одинаковым на всех ходах сессии.** Ключи серверов

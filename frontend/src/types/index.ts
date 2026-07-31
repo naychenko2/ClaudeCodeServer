@@ -664,6 +664,8 @@ export type ServerMessage = { sessionId: string } & (
   // usage для этого не годится: он суммирует все запросы хода, включая сабагентов.
   | { type: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo; totalCostUsd?: number; apiErrorStatus?: string; permissionDenials?: string[]; contextTokens?: number }
   | { type: 'fal_cost'; requestId: string; endpointId?: string; costUsd: number; outputUnits?: number; unitPrice?: number }
+  // Завершённая генерация glif: счётчик + кредиты (если billing доехал в payload). Дедуп по jobId.
+  | { type: 'glif_cost'; jobId: string; outputType?: string; mediaCount: number; credits?: number; model?: string }
   | { type: 'error'; text: string }
   | { type: 'rate_limit'; limitType: string; resetsAt?: string; status?: string; utilization?: number; isUsingOverage?: boolean; overageStatus?: string; overageResetsAt?: string }
   | { type: 'compact_boundary'; trigger: string; preTokens?: number; postTokens?: number }
@@ -883,6 +885,18 @@ export interface FalAccountResponse {
   usage?: FalUsageSummary | null;
 }
 
+// Статистика аккаунта glif (план + баланс кредитов + расход за окна).
+// Кредиты, не USD: currency="credits". Агрегаты расхода фиксированные (24ч/7д/30д).
+export interface GlifSpend { last24h?: number; last7d?: number; last30d?: number; }
+export interface GlifAccountResponse {
+  enabled: boolean;
+  plan?: string | null;
+  planStatus?: string | null;
+  balance?: number | null;
+  currency?: string | null;
+  spend?: GlifSpend | null;
+}
+
 // Live-состояние цикла «до готово» (из события work_loop; флаг work-loop)
 export interface WorkLoopState {
   active: boolean;
@@ -1074,6 +1088,7 @@ export type ChatItem =
   | { kind: 'file_changed'; path: string; added: number; removed: number }
   | { kind: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo; totalCostUsd?: number; apiErrorStatus?: string; permissionDenials?: string[]; contextTokens?: number }
   | { kind: 'fal_cost'; requestId: string; endpointId?: string; costUsd: number; outputUnits?: number; unitPrice?: number }
+  | { kind: 'glif_cost'; jobId: string; outputType?: string; mediaCount: number; credits?: number; model?: string }
   | { kind: 'rate_limit'; limitType: string; resetsAt?: string; status?: string }
   | { kind: 'compact_boundary'; trigger: string; preTokens?: number; postTokens?: number }
   | { kind: 'truncated' }

@@ -38,6 +38,7 @@ public class SpendBackfillTests : IDisposable
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["DataPath"] = Path.Combine(_dir, "projects.json"),
+                ["Glif:McpToken"] = "glif-test-token",
             })
             .Build();
 
@@ -63,6 +64,7 @@ public class SpendBackfillTests : IDisposable
         var adapters = new ClaudeHomeServer.Services.Llm.LlmSessionAdapterFactory(
             config, new SkillsService(), new WorkspaceKnowledgeStore(config), llmProviders, subPool);
         var falCost = new FalCostService(new Mock<IHttpClientFactory>().Object, config);
+        var glif = new GlifAccountService(new Mock<IHttpClientFactory>().Object, config);
         var usage = new UsageService(config);
         var jwt = new JwtService(config, _userStore, NullLogger<JwtService>.Instance);
         var server = new Mock<Microsoft.AspNetCore.Hosting.Server.IServer>();
@@ -82,7 +84,8 @@ public class SpendBackfillTests : IDisposable
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
         _sessions = new SessionManager(_projectManager, hub.Object, _history, config, adapters, falCost, usage,
             appSettings, _userStore, jwt, server.Object, llmProviders, notesKb, flags, _personas, personaMemory,
-            bindings, promptBuilder, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox);
+            bindings, promptBuilder, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox,
+            glif: glif);
     }
 
     public void Dispose()
@@ -182,5 +185,37 @@ public class SpendBackfillTests : IDisposable
         // У u2 за окном пусто — до фикса плашка показывалась и ему (любые daily без фильтра)
         analytics.Turns(from, to, new SpendFilter(Owner: "u2"), 50, 0, null, "u2")
             .WindowClamped.Should().BeFalse();
+    }
+
+    // --- glif: backfill учитывает StoredGlifCostMessage ---
+
+    [Fact]
+    public async Task Backfill_GlifCost_СоздаетSpendRecord()
+    {
+        var user = _userStore.Add("glif-bf-user", "pw-123456", "user");
+        var projDir = Directory.CreateDirectory(Path.Combine(_dir, "proj_glif_bf")).FullName;
+        var project = _projectManager.Create("GlifBF", projDir, user.Id, user.Username);
+        var session = await _sessions.CreateAsync(project.Id, ClaudeMode.Auto);
+        session.ClaudeSessionId = "cs-glif-backfill-1";
+
+        var history = new List<StoredMessage>
+        {
+            new StoredGlifCostMessage("job-glif-1", "image", 2, 9.2, "image_seedream_v45_v1"),
+        };
+        await _history.SaveAsync(session.ClaudeSessionId, history);
+
+        var store = new SpendStore(_spendDir, detailDays: 30);
+        var imported = await NewMaintenance(store).BackfillAsync(DateTime.UtcNow.AddDays(1), CancellationToken.None);
+
+        imported.Should().Be(1);
+        var all = store.DetailsBetween(DateOnly.MinValue, DateOnly.MaxValue);
+        all.Should().HaveCount(1);
+        var r = all[0];
+        r.Provider.Should().Be("glif");
+        r.Source.Should().Be(SpendSources.Glif);
+        r.Generations.Should().Be(1);
+        r.Model.Should().Be("image_seedream_v45_v1");
+        r.Label.Should().Be("image");
+        r.CostUsd.Should().BeNull();
     }
 }

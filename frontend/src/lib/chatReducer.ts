@@ -373,6 +373,12 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
         ? prev
         : withItems([...prev.items, { kind: 'fal_cost', requestId: msg.requestId, endpointId: msg.endpointId, costUsd: msg.costUsd, outputUnits: msg.outputUnits, unitPrice: msg.unitPrice }]);
 
+    case 'glif_cost':
+      // Завершённая генерация glif (compose_project + get_job_status несут один jobId).
+      return prev.items.some(it => it.kind === 'glif_cost' && it.jobId === msg.jobId)
+        ? prev
+        : withItems([...prev.items, { kind: 'glif_cost', jobId: msg.jobId, outputType: msg.outputType, mediaCount: msg.mediaCount, credits: msg.credits, model: msg.model }]);
+
     case 'truncated':
       return withItems([...prev.items, { kind: 'truncated' }]);
 

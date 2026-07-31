@@ -7,6 +7,7 @@ import { getEffectiveTheme } from '../../lib/themeMode';
 import { Modal, ModalActions } from '../ui';
 import { proxyUrl } from './MarkdownContent';
 import { ChatProjectContext } from './contexts';
+import { fmtCredits } from './glifStats';
 
 export function mediaLabel(items: MediaItem[]): string {
   const imgCount = items.filter(m => m.kind === 'image').length;
@@ -25,60 +26,194 @@ export type MediaItem =
   | { kind: 'video'; url: string; width?: number; height?: number; duration?: number; fileName?: string }
   | { kind: 'audio'; url: string; duration?: number; fileName?: string };
 
-function classifyUrl(item: any): 'image' | 'video' | 'audio' | null {
-  if (typeof item?.url !== 'string') return null;
-  const ct: string = item.content_type ?? '';
-  if (ct.startsWith('video/') || /\.(mp4|webm|mov|avi|mkv)(\?|$)/i.test(item.url)) return 'video';
-  if (ct.startsWith('audio/') || /\.(mp3|wav|ogg|flac|aac|m4a|opus|weba)(\?|$)/i.test(item.url)) return 'audio';
-  if (ct.startsWith('image/') || /\.(png|jpg|jpeg|gif|webp|svg|avif)(\?|$)/i.test(item.url)) return 'image';
+// Домены glif-медиа (подтверждены живым токеном; синхронно с AllowedHosts бэкенд-прокси):
+// медиа без типа с них считаем изображением (как fal.media). res.cloudinary.com — их CDN
+// для части выдачи. glif.app/glif.xyz здесь нет: там страницы, а не медиа-файлы.
+const GLIF_HOSTS = ['glifusercontent.com', 'res.cloudinary.com'];
+// Специфичные для glif хосты — по ним определяем источник генерации (cloudinary —
+// общий CDN, для детекта источника не используем, только для классификации типа)
+const GLIF_SPECIFIC_HOSTS = ['glifusercontent.com'];
+
+function hostMatches(url: string, hosts: string[]): boolean {
+  try {
+    const h = new URL(url).hostname;
+    return hosts.some(x => h === x || h.endsWith('.' + x));
+  } catch { return false; }
+}
+
+export function classifyUrl(item: any): 'image' | 'video' | 'audio' | null {
+  const url = item?.url ?? item?.uri;
+  if (typeof url !== 'string') return null;
+  // Явный тип элемента: glif assets — type:"image"|"video"|"audio",
+  // glif view_media media[] — kind с теми же значениями
+  const t: string = typeof item?.type === 'string' ? item.type
+    : typeof item?.kind === 'string' && ['image', 'video', 'audio'].includes(item.kind) ? item.kind
+    : '';
+  if (t === 'video') return 'video';
+  if (t === 'audio') return 'audio';
+  if (t === 'image') return 'image';
+  // MIME: fal — content_type; glif (MCP resource_link / assets) — mimeType/contentType;
+  // запасной вариант — формат файла (glif assets: metadata.format = "png"/"mp4"/…)
+  const ct: string = item.content_type ?? item.mimeType ?? item.contentType ?? '';
+  const fmt: string = typeof item?.metadata?.format === 'string' ? `.${item.metadata.format.toLowerCase()}` : '';
+  if (ct.startsWith('video/') || /\.(mp4|webm|mov|avi|mkv)(\?|$)/i.test(url) || /\.(mp4|webm|mov|avi|mkv)$/.test(fmt)) return 'video';
+  if (ct.startsWith('audio/') || /\.(mp3|wav|ogg|flac|aac|m4a|opus|weba)(\?|$)/i.test(url) || /\.(mp3|wav|ogg|flac|aac|m4a|opus|weba)$/.test(fmt)) return 'audio';
+  if (ct.startsWith('image/') || /\.(png|jpg|jpeg|gif|webp|svg|avif)(\?|$)/i.test(url) || /\.(png|jpg|jpeg|gif|webp|svg|avif)$/.test(fmt)) return 'image';
   // fal.media без content_type — по умолчанию изображение (совместимость)
-  if (item.url.includes('fal.media') || item.url.includes('fal.run')) return 'image';
+  if (url.includes('fal.media') || url.includes('fal.run')) return 'image';
+  // glif-хост без mimeType — тоже изображение
+  if (hostMatches(url, GLIF_HOSTS)) return 'image';
   return null;
 }
 
-// Извлекает изображения и видео из JSON-результата MCP-инструмента (fal-ai и аналогичные)
-export function extractMediaFromResult(result: string): MediaItem[] {
-  try {
-    const parsed = JSON.parse(result);
-    const items: MediaItem[] = [];
+// Маркерная строка сплющенного CLI tool_result: `[Resource link: name] <url>`.
+// Боевой формат: CLI плющит content-блоки resource_link в текст, JSON-хвост идёт следом —
+// целиком такая строка не JSON, поэтому маркеры вытаскиваем regex'ом независимо от JSON.
+const RESOURCE_LINK_RE = /\[Resource link:\s*([^\]]+)\]\s*(https?:\/\/\S+)/g;
 
-    // Массив images/videos/audio в разных местах ответа
-    for (const root of [parsed, parsed?.result, parsed?.data, parsed?.output]) {
-      if (!root) continue;
-      for (const arr of [root.images, root.videos, root.audio_files, root.audios]) {
-        if (Array.isArray(arr)) {
-          for (const item of arr) {
-            const kind = classifyUrl(item);
-            if (kind === 'audio') items.push({ kind: 'audio', url: item.url, duration: item.duration, fileName: item.file_name });
-            else if (kind) items.push({ kind, url: item.url, width: item.width, height: item.height, fileName: item.file_name, ...(kind === 'video' ? { duration: item.duration } : {}) } as MediaItem);
-          }
-        }
+// Толерантный разбор результата: целиком JSON — отлично; нет — пробуем хвост от первой
+// фигурной скобки до последней (сплющенный боевой формат «мусор + {json}»).
+// На мусоре не падаем — вернём null, медиа из маркеров всё равно покажутся.
+function parseLoose(text: string): any {
+  try { return JSON.parse(text); } catch { /* не чистый JSON */ }
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start < 0 || end <= start) return null;
+  try { return JSON.parse(text.slice(start, end + 1)); } catch { return null; }
+}
+
+// Извлекает изображения, видео и аудио из результата MCP-инструмента.
+// Форматы: fal-ai (массивы images/videos/audio_files в корне/result/data/output,
+// одиночные video/audio) и glif (MCP-блоки resource_link/resource в content, assets из
+// get_project, media[] из view_media, JSON внутри text-блоков, маркерные строки
+// `[Resource link: …] url` сплющенного CLI). Один и тот же файл, пришедший разными
+// путями (маркер + media[] + assets), показывается один раз — дедуп по URL.
+// Входные референсы пользователя (source="uploaded", glifchat-image-input-production
+// в пути) — не результат генерации, не показываем.
+export function extractMediaFromResult(result: string): MediaItem[] {
+  const items: MediaItem[] = [];
+
+  const push = (item: any) => {
+    const url = item?.url ?? item?.uri;
+    if (typeof url !== 'string') return;
+    // Входные изображения пользователя (uploaded) — не выход генерации
+    if (item?.source === 'uploaded' || url.includes('glifchat-image-input-production')) return;
+    const kind = classifyUrl(item);
+    if (!kind) return;
+    if (items.some(m => m.url === url)) return;
+    const fileName = item.file_name ?? item.fileName ?? item.filename ?? item.name ?? item.title;
+    // Размеры: fal кладёт в корень элемента, glif assets — в metadata.{width,height};
+    // в view_media media[] размеров нет — блок рендерится без них, это ок
+    const width = item.width ?? item.metadata?.width;
+    const height = item.height ?? item.metadata?.height;
+    if (kind === 'audio') items.push({ kind: 'audio', url, duration: item.duration, fileName });
+    else items.push({ kind, url, width, height, fileName, ...(kind === 'video' ? { duration: item.duration } : {}) } as MediaItem);
+  };
+
+  const scan = (obj: any, depth: number) => {
+    if (!obj || typeof obj !== 'object' || depth > 3) return;
+    if (Array.isArray(obj)) {
+      // Массив MCP-блоков контента (glif): resource_link / resource
+      for (const b of obj) {
+        if (b?.type === 'resource_link') push(b);
+        else if (b?.type === 'resource') push(b?.resource);
       }
-      // Одиночный объект video
-      if (root.video && typeof root.video?.url === 'string') {
-        const v = root.video;
-        items.push({ kind: 'video', url: v.url, width: v.width, height: v.height, duration: v.duration, fileName: v.file_name });
-      }
-      // Одиночный объект audio / audio_file
-      for (const key of ['audio', 'audio_file']) {
-        const a = root[key];
-        if (a && typeof a?.url === 'string') {
-          items.push({ kind: 'audio', url: a.url, duration: a.duration, fileName: a.file_name });
+      return;
+    }
+    // Массивы медиа (fal + glif assets + glif view_media media[])
+    for (const arr of [obj.images, obj.videos, obj.audio_files, obj.audios, obj.assets, obj.media]) {
+      if (Array.isArray(arr)) for (const item of arr) push(item);
+    }
+    // Одиночные объекты
+    for (const key of ['video', 'audio', 'audio_file', 'image']) push(obj[key]);
+    // MCP CallToolResult: content-блоки; text-блоки могут нести JSON (glif-хвосты)
+    if (Array.isArray(obj.content)) {
+      scan(obj.content, depth + 1);
+      for (const b of obj.content) {
+        if (b?.type === 'text' && typeof b.text === 'string' && b.text.trimStart().startsWith('{')) {
+          try { scan(JSON.parse(b.text), depth + 1); } catch { /* обычный текст */ }
         }
       }
     }
+    for (const key of ['result', 'data', 'output', 'project', 'structuredContent']) scan(obj[key], depth + 1);
+  };
 
-    return items;
-  } catch {
-    return [];
+  // 1. Маркерные строки боевого формата — независимо от того, парсится ли JSON-хвост
+  for (const m of result.matchAll(RESOURCE_LINK_RE)) {
+    push({ name: m[1].trim(), url: m[2] });
   }
+  // 2. JSON целиком или хвостом — fal-формат и glif structuredContent
+  const parsed = parseLoose(result);
+  if (parsed) scan(parsed, 0);
+
+  return items;
 }
 
-// Извлекает метаданные генерации (модель, время) из JSON-результата MCP-инструмента.
-// Стоимость берётся отдельно — точная, с backend (см. FalCostContext).
-export function extractMediaMeta(result: string): { model?: string; inferenceTime?: number } {
+export interface MediaMeta {
+  model?: string;
+  inferenceTime?: number;
+  // Источник генерации: fal (request_id/endpoint_id) или glif (_meta.glif, project_id+job_id,
+  // медиа с glif-хоста). В футере метку показываем только для glif — рендер fal не меняется.
+  source?: 'fal' | 'glif';
+  outputType?: string;
+  // jobId генерации glif — ключ сопоставления с glif_cost (кредиты с backend, GlifCostContext)
+  jobId?: string;
+  // Стоимость, если доехала в самом tool_result (glif _meta.billing telemetry).
+  // Точная стоимость fal берётся отдельно — с backend (см. FalCostContext).
+  costUsd?: number;
+}
+
+// Поля _meta.glif, в которых billing telemetry несёт сумму. Только точные имена —
+// спекулятивные (cost/total/price/…) убраны: чужое одноимённое поле давало фантомную цену.
+// Нет поля → нет цены (для glif «считается…» не показываем).
+const BILLING_COST_KEYS = ['costUsd', 'cost_usd'];
+
+function findGlifBillingCost(glif: any): number | undefined {
+  if (!glif || typeof glif !== 'object') return undefined;
+  for (const bag of [glif.billing, glif.billingTelemetry, glif.billing_telemetry, glif.telemetry, glif]) {
+    if (!bag || typeof bag !== 'object') continue;
+    for (const k of BILLING_COST_KEYS) {
+      const v = Number(bag[k]);
+      if (Number.isFinite(v) && v > 0) return v;
+    }
+  }
+  return undefined;
+}
+
+// Признаки glif-результата: _meta.glif / meta.glif; пара project_id+job_id (get_job_status)
+// или camelCase projectId (боевой view_media — без job_id) в корне / structuredContent /
+// JSON-хвосте text-блока; outputType вида media_*; либо медиа с glif-хоста
+function detectGlif(parsed: any, media: MediaItem[]): { glifMeta?: any; isGlif: boolean; outputType?: string } {
+  // JSON не разобрался (битый хвост) — источник всё равно определяем по хостам медиа
+  if (!parsed || typeof parsed !== 'object')
+    return { isGlif: media.some(m => hostMatches(m.url, GLIF_SPECIFIC_HOSTS)) };
+  const glifMeta = parsed?._meta?.glif ?? parsed?.meta?.glif;
+  if (glifMeta && typeof glifMeta === 'object') return { glifMeta, isGlif: true };
+  // Кандидатные объекты: сам результат и его structuredContent (хвост view_media)
+  const bags = [parsed, parsed?.structuredContent, parsed?.result];
+  const isGlifBag = (o: any) =>
+    typeof o?.projectId === 'string' || // camelCase без job_id — боевой view_media
+    (typeof o?.project_id === 'string' && typeof o?.job_id === 'string') ||
+    (typeof o?.outputType === 'string' && o.outputType.startsWith('media_'));
+  for (const bag of bags) {
+    if (isGlifBag(bag)) return { isGlif: true, outputType: typeof bag?.outputType === 'string' ? bag.outputType : undefined };
+  }
+  const blocks = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.content) ? parsed.content : [];
+  for (const b of blocks) {
+    if (b?.type === 'text' && typeof b.text === 'string' && b.text.trimStart().startsWith('{')) {
+      try { if (isGlifBag(JSON.parse(b.text))) return { isGlif: true }; } catch { /* не JSON */ }
+    }
+  }
+  if (media.some(m => hostMatches(m.url, GLIF_SPECIFIC_HOSTS))) return { isGlif: true };
+  return { isGlif: false };
+}
+
+// Извлекает метаданные генерации (источник, модель, время, стоимость из JSON) из
+// результата MCP-инструмента. media — уже извлечённые элементы (extractMediaFromResult),
+// чтобы не парсить результат дважды; без него посчитаются внутри.
+export function extractMediaMeta(result: string, media?: MediaItem[]): MediaMeta {
   try {
-    const parsed = JSON.parse(result);
+    const parsed = parseLoose(result);
     // Имя модели: endpoint_id → берём только короткое имя после последнего / (в результате fal обычно отсутствует)
     const endpointId: string | undefined = parsed?.endpoint_id;
     const model = endpointId ? endpointId.split('/').pop() : undefined;
@@ -90,9 +225,27 @@ export function extractMediaMeta(result: string): { model?: string; inferenceTim
       parsed?.timings?.inference ??
       parsed?.metrics?.inference_time ??
       undefined;
+
+    const items = media ?? extractMediaFromResult(result);
+    const { glifMeta, isGlif, outputType: bagOutputType } = detectGlif(parsed, items);
+    // jobId glif-генерации: в _meta.glif или в одном из «мешков» результата (snake/camel)
+    const jobId: string | undefined = [glifMeta, parsed, parsed?.structuredContent, parsed?.result]
+      .map(b => b?.jobId ?? b?.job_id)
+      .find(v => typeof v === 'string');
+    const source: MediaMeta['source'] = isGlif
+      ? 'glif'
+      : (parsed?.request_id || endpointId || items.some(m => m.url.includes('fal.media') || m.url.includes('fal.run')))
+        ? 'fal'
+        : undefined;
+    const outputType = glifMeta?.outputType ?? glifMeta?.output_type ?? (isGlif ? bagOutputType ?? parsed?.outputType : undefined);
+
     return {
       model: model || undefined,
       inferenceTime: inferenceTime ? Number(inferenceTime) : undefined,
+      source,
+      outputType: typeof outputType === 'string' ? outputType : undefined,
+      jobId: isGlif ? jobId : undefined,
+      costUsd: findGlifBillingCost(glifMeta),
     };
   } catch {
     return {};
@@ -109,6 +262,9 @@ export function MediaBlock({
   inferenceTime,
   costUsd,
   costPending,
+  credits,
+  source,
+  outputType,
   online = true,
 }: {
   m: MediaItem;
@@ -117,6 +273,10 @@ export function MediaBlock({
   inferenceTime?: number;
   costUsd?: number;
   costPending?: boolean;
+  // Списанные кредиты glif (с backend по jobId через GlifCostContext); нет — не показываем
+  credits?: number;
+  source?: 'fal' | 'glif';
+  outputType?: string;
   online?: boolean;
 }) {
   const project = useContext(ChatProjectContext);
@@ -165,13 +325,18 @@ export function MediaBlock({
 
   // Строка метаданных
   const metaParts: string[] = [];
+  // Метка источника — только glif: fal-рендер исторически без метки, не меняем
+  if (source === 'glif') metaParts.push(outputType ? `glif · ${outputType}` : 'glif');
   if (m.kind !== 'audio' && m.width && m.height) metaParts.push(`${m.width}×${m.height}`);
   if ((m.kind === 'video' || m.kind === 'audio') && m.duration) metaParts.push(`${m.duration.toFixed(1)}с`);
   if (inferenceTime) metaParts.push(`${inferenceTime.toFixed(1)}с`);
   if (model) metaParts.push(model);
-  // Точная стоимость с backend (billing-events). Пока не пришла — «считается…».
+  // Стоимость: fal — точная, с backend (billing-events, «считается…» пока ждём);
+  // glif — если доехала в JSON результата; не доехала — просто без цены, без вечной метки.
   if (costUsd) metaParts.push(costUsd < 0.01 ? `$${costUsd.toFixed(4)}` : `$${costUsd.toFixed(2)}`);
   else if (costPending) metaParts.push('считается…');
+  // Кредиты glif — с backend по jobId (glif_cost); нет данных — ничего не добавляем
+  if (credits !== undefined) metaParts.push(fmtCredits(credits));
 
   const btnBase: React.CSSProperties = {
     display: 'inline-flex', alignItems: 'center', gap: 4,

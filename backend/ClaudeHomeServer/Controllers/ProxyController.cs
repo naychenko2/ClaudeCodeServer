@@ -12,6 +12,10 @@ public class ProxyController(IHttpClientFactory httpClientFactory) : ControllerB
     [
         "fal.media", "fal.run", "queue.fal.run", "cdn.fal.ai",
         "storage.googleapis.com", "replicate.delivery", "pbxt.replicate.delivery",
+        // glif.app: рендеры с glifusercontent.com (/i:r/…), сгенерированное и загруженное
+        // медиа — с Cloudinary (res.cloudinary.com/dzkwltgyd/image|video/upload);
+        // оба подтверждены живым get_project (2026-07-31)
+        "glifusercontent.com", "res.cloudinary.com",
     ];
 
     /// <summary>

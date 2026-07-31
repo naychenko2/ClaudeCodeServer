@@ -2,12 +2,17 @@
 
 // Две буквы для иконки проекта: по первым буквам двух слов, иначе первые 2 буквы одного слова
 // (по образцу personaInitials). Fallback — «?».
+// Режем по code points ([...s], а не по code units [i]/slice), иначе эмодзи и прочие
+// символы вне BMP рвутся пополам на суррогатной паре и дают кракозябру.
 export function projectInitials(name: string): string {
   const t = name.trim();
   if (!t) return '?';
-  const words = t.split(/\s+/).filter(Boolean);
-  if (words.length >= 2) return (words[0][0] + words[1][0]).toUpperCase();
-  return t.slice(0, 2).toUpperCase();
+  const first = (s: string, n: number) => [...s].slice(0, n).join('');
+  // Бьём и по пробелам, и по дефису/подчёркиванию — kebab/snake-имена дают инициалы
+  // по кускам: «claude-code-server» → CC, «my_project» → MP.
+  const words = t.split(/[\s\-_]+/).filter(Boolean);
+  if (words.length >= 2) return (first(words[0], 1) + first(words[1], 1)).toUpperCase();
+  return first(t, 2).toUpperCase();
 }
 
 function plural(n: number, one: string, few: string, many: string): string {

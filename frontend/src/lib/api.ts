@@ -49,6 +49,15 @@ function gq(projectId: string, sep: '?' | '&' = '?'): string {
   return gitSessionCtx?.projectId === projectId ? `${sep}sessionId=${gitSessionCtx.sessionId}` : '';
 }
 
+// Перезапись cc_token после смены пароля: старый токен сервер отозвал, а хранилище
+// выбирает не вызывающий — оно задано галкой «запомнить меня» на входе (localStorage
+// против sessionStorage). Пишем туда, где токен уже лежит, режим входа не меняем.
+export function setStoredToken(token: string) {
+  if (typeof window === 'undefined') return;
+  if (localStorage.getItem('cc_token') !== null) localStorage.setItem('cc_token', token);
+  else sessionStorage.setItem('cc_token', token);
+}
+
 // Projects
 export const api = {
   auth: {
@@ -59,8 +68,9 @@ export const api = {
       }),
     me: () =>
       request<{ userId: string; username: string; displayName?: string | null; role: string; featureFlags?: Record<string, boolean>; contextThresholds?: { warnPct: number; dangerPct: number } | null }>('/auth/me'),
+    // Возвращает свежий токен: смена пароля отзывает все прежние, включая текущий
     changePassword: (currentPassword: string, newPassword: string) =>
-      request<void>('/auth/password', {
+      request<{ token: string; expiresAt: string }>('/auth/password', {
         method: 'PUT',
         body: JSON.stringify({ currentPassword, newPassword }),
       }),

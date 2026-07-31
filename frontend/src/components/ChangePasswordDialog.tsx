@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Modal, ModalActions, TextField } from './ui';
-import { api } from '../lib/api';
+import { api, setStoredToken } from '../lib/api';
 import { C, MODAL_W } from '../lib/design';
 
 interface Props {
@@ -27,7 +27,10 @@ export function ChangePasswordDialog({ onClose }: Props) {
     setError('');
     setLoading(true);
     try {
-      await api.auth.changePassword(current, next);
+      // Прежний токен сервер только что отозвал — без подмены следующий же запрос
+      // вернул бы 401 и выкинул на логин то самое устройство, с которого меняли пароль
+      const { token } = await api.auth.changePassword(current, next);
+      setStoredToken(token);
       onClose();
     } catch (e: any) {
       setError(e.message ?? 'Ошибка смены пароля');

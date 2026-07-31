@@ -101,7 +101,12 @@ public class AuthController(UserStore users, JwtService jwt, FeatureFlagService 
         if (!users.ChangePassword(userId, req.CurrentPassword ?? "", req.NewPassword))
             return BadRequest(new { error = "Неверный текущий пароль" });
 
-        return NoContent();
+        // Смена пароля отозвала ВСЕ токены пользователя, включая текущий — иначе автор смены
+        // разлогинил бы сам себя. Отдаём свежий: перечитываем юзера, чтобы взять новую версию
+        var user = users.GetById(userId);
+        if (user is null) return Unauthorized();
+        var (token, expiresAt) = jwt.Issue(user);
+        return Ok(new { token, expiresAt });
     }
 }
 

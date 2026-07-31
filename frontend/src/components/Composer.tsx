@@ -718,9 +718,10 @@ export function Composer({
     border: `1px solid ${dragOver || hasText ? C.accent : C.border}`,
     borderRadius: R.xxl,
     padding: isMobile ? '8px 10px' : '7px 8px',
-    // Карточка всегда приподнята над лентой (она плавает поверх неё) — раньше подъём
-    // давала обёртка в ChatPanel, но её тень пачкала вынесенную наружу полосу контролов
-    boxShadow: dragOver ? SHADOW.focus : SHADOW.dropdown,
+    // Подъём как у островов, но разлётом ВВЕРХ (SHADOW.lift): композер стоит на
+    // самой кромке холста — его губа выровнена по низу соседних островов, и
+    // нижнюю половину обычной тени срезал бы край
+    boxShadow: dragOver ? SHADOW.focus : SHADOW.lift,
     display: 'flex',
     flexDirection: 'column',
     gap: 0,
@@ -1434,6 +1435,9 @@ export function Composer({
             margin: '-12px 0 0', padding: '15px 8px 4px',
             background: C.bgMain, border: `1px solid ${C.borderLight}`,
             borderRadius: `0 0 ${R.xxl}px ${R.xxl}px`,
+            // Низ фигуры обводит та же тень, что у панелей-островов: губа стоит с
+            // ними на одной линии, и обрыв без тени рядом с их мягким низом виден
+            boxShadow: SHADOW.island,
           }),
     }}>
       <div ref={fixedLeftRef} style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 6 : 4, flexShrink: 0 }}>

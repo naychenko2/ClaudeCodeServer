@@ -1391,7 +1391,11 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       {/* Composer — плавающий над лентой; фон прозрачный, контент виден под/вокруг него */}
       <div ref={composerWrapRef} style={{
         position: 'absolute', left: 0, right: 0, bottom: 0,
-        padding: isMobile ? '0 12px 12px' : '0 24px 18px',
+        // Снизу воздуха нет, когда чат стоит прямо на холсте (headerIsland): его
+        // даёт padding холста (ISLAND.pad), и губа композера встаёт на одну линию
+        // с нижней кромкой соседних островов. Внутри острова (split чат|файл)
+        // отступ нужен — у Island своего padding нет, композер лёг бы на рамку.
+        padding: isMobile ? '0 12px 12px' : `0 24px ${headerIsland ? 0 : 18}px`,
         pointerEvents: 'none',
       }}>
         <div style={{ maxWidth: CHAT_MAX_W, margin: '0 auto', pointerEvents: 'auto' }}>

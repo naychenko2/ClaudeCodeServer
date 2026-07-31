@@ -120,6 +120,21 @@ public class UserStore
     {
         user.PasswordHash = _hasher.HashPassword(user, password);
         user.NtHash = WebDav.NtlmHelper.ComputeNtHash(password);
+        // Смена пароля обесценивает все ранее выданные токены этого пользователя
+        user.TokenVersion++;
+    }
+
+    /// <summary>
+    /// Совпадает ли версия из токена с текущей версией сессий пользователя.
+    /// Неизвестный пользователь — всегда false (удалённый аккаунт не должен ходить по токену).
+    /// </summary>
+    public bool IsTokenVersionCurrent(string userId, int version)
+    {
+        lock (_lock)
+        {
+            var user = _users.FirstOrDefault(u => u.Id == userId);
+            return user is not null && user.TokenVersion == version;
+        }
     }
 
     public User? GetById(string id)
@@ -215,6 +230,9 @@ public class UserStore
             user.PasswordHash = _hasher.HashPassword(user, newPassword);
             // NtHash пересчитается лениво при следующем логине
             user.NtHash = null;
+            // Идём мимо SetPasswordInternal (там NtHash считается сразу) — версию бампаем сами:
+            // админский сброс обязан выкидывать пользователя со всех устройств
+            user.TokenVersion++;
             Save();
             return true;
         }

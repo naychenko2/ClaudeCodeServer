@@ -8,6 +8,10 @@ public class User
     // аватара. null/пусто — показываем Username. Логин остаётся идентификатором входа.
     public string? DisplayName { get; set; }
     public string PasswordHash { get; set; } = "";
+    // Версия сессий: растёт при КАЖДОЙ смене пароля (своей и админского сброса). Выданный
+    // токен несёт её в claim tv, и токен со старой версией отвергается — так смена пароля
+    // отзывает входы на других устройствах. У записей, созданных до появления поля, — 0.
+    public int TokenVersion { get; set; }
     public string Role { get; set; } = "user";
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     // NT-хэш для NTLM WebDAV: MD4(UTF-16LE(password)); null — если пользователь ещё не логинился после обновления

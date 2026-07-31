@@ -45,9 +45,11 @@ export function Toolbar({ isMobile, noBorder, bg, children, style }: {
 // Сохранена для обратной совместимости API (isMobile → размер тач-таргета).
 // Кнопки рельсы — круглые (borderRadius 32), дефолт задаётся здесь, а не в
 // каждом вызове через style. Если нужен override — передать style (мержится).
-export function ToolbarIconButton({ onClick, title, isMobile, color, disabled, active, style, children }: {
+export function ToolbarIconButton({ onClick, title, ariaLabel, isMobile, color, disabled, active, style, children }: {
   onClick?: (e: MouseEvent) => void;
   title?: string;
+  // Имя без нативного тултипа — когда подсказку рисует кто-то другой (см. IconButton)
+  ariaLabel?: string;
   isMobile?: boolean;
   color?: string;
   disabled?: boolean;
@@ -57,7 +59,7 @@ export function ToolbarIconButton({ onClick, title, isMobile, color, disabled, a
 }) {
   return (
     <IconButton
-      onClick={onClick} title={title} disabled={disabled} active={active} color={color}
+      onClick={onClick} title={title} ariaLabel={ariaLabel} disabled={disabled} active={active} color={color}
       size={isMobile ? 'lg' : 'md'} style={style}
     >
       {children}

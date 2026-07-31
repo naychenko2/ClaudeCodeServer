@@ -7,7 +7,12 @@ import { C, R, TB, SHADOW } from '../../lib/design';
 
 export type IconButtonSize = 'xs' | 'sm' | 'md' | 'lg';
 export type IconButtonTone = 'muted' | 'accent' | 'danger';
-export type IconButtonVariant = 'ghost' | 'soft';
+// ghost — прозрачная; soft — с подложкой C.bgPanel; media — внутри КАРТИНКА
+// (иконка проекта, аватар), а не штриховая иконка: она занимает бокс целиком,
+// поэтому заливка под ней не видна вовсе. Состояние такая кнопка сообщает самим
+// содержимым (в доке проектов — цветом против контура), а от кнопки берёт только
+// лёгкий подъём под курсором.
+export type IconButtonVariant = 'ghost' | 'soft' | 'media';
 
 // Единая шкала: 24(плотные строки списков/дерева) / 28 / 32 / 40(тач). Радиус — R.sm/R.md, для тач R.lg.
 const SIZE: Record<IconButtonSize, { box: number; radius: number }> = {
@@ -35,30 +40,47 @@ if (typeof document !== 'undefined' && !document.getElementById('cc-iconbtn-styl
 interface Props {
   onClick?: (e: MouseEvent) => void;
   title?: string;
+  // Имя кнопки БЕЗ нативного тултипа: подсказку рисует кто-то другой (плашка
+  // рельсы — RailFlyout), и браузерный title вылезал бы поверх неё вторым
+  // объяснением того же самого. Задан — title не ставится вовсе.
+  ariaLabel?: string;
   disabled?: boolean;
   active?: boolean;
   size?: IconButtonSize;
   tone?: IconButtonTone;
-  variant?: IconButtonVariant;   // ghost — прозрачный; soft — подложка C.bgPanel
+  variant?: IconButtonVariant;   // см. IconButtonVariant
   color?: string;                // переопределить цвет иконки в покое
   style?: CSSProperties;
   children: ReactNode;           // svg
 }
 
 export function IconButton({
-  onClick, title, disabled, active, size = 'md', tone = 'muted', variant = 'ghost', color, style, children,
+  onClick, title, ariaLabel, disabled, active, size = 'md', tone = 'muted', variant = 'ghost', color, style, children,
 }: Props) {
   const [hover, setHover] = useState(false);
   const s = SIZE[size];
   const t = TONE[tone];
+  const media = variant === 'media';
   const base = variant === 'soft' ? C.bgPanel : 'transparent';
-  const bg = disabled ? base : (active ? C.accentMuted : (hover ? t.hoverBg : base));
+  // У media-кнопки картинка закрывает бокс целиком — заливка под ней невидима,
+  // поэтому состояния она показывает КОЛЬЦОМ снаружи: акцентным у выбранной,
+  // блёклым при наведении. Внутренний контур цветом холста отбивает кольцо от
+  // самой картинки, иначе оно читается как её собственная рамка.
+  const bg = media ? 'transparent' : (disabled ? base : (active ? C.accentMuted : (hover ? t.hoverBg : base)));
   const fg = disabled ? C.border : (active ? C.accent : (hover ? t.hoverColor : (color ?? t.idle)));
+  // Подъём мелкий намеренно: рядом с кнопкой раскрывается подсказка ровно её высоты,
+  // и заметный масштаб дал бы ступеньку на стыке.
+  const mediaLift = media && hover && !disabled ? 'scale(1.05)' : undefined;
+  // Выбранная media-кнопка обводится кольцом: заливку под непрозрачной картинкой не
+  // видно, а знать, что выбрано, надо. Кольцо тонкое не от скромности — в 40px-рельсе
+  // кнопка 32 оставляет по 3px на сторону, и всё толще вылезло бы за кромку капсулы.
+  const mediaRing = media && active ? `0 0 0 1px ${C.bgMain}, 0 0 0 3px ${C.accent}` : undefined;
   return (
     <button
       className={FOCUS_CLASS}
       onClick={onClick}
-      title={title}
+      title={ariaLabel ? undefined : title}
+      aria-label={ariaLabel ?? title}
       disabled={disabled}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
@@ -66,8 +88,8 @@ export function IconButton({
         width: s.box, height: s.box, flexShrink: 0, padding: 0,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         border: 'none', borderRadius: s.radius, cursor: disabled ? 'default' : 'pointer',
-        background: bg, color: fg,
-        transition: 'background 0.12s, color 0.12s, box-shadow 0.12s',
+        background: bg, color: fg, transform: mediaLift, boxShadow: mediaRing,
+        transition: 'background 0.12s, color 0.12s, box-shadow 0.12s, transform 0.12s',
         ...style,
       }}
     >

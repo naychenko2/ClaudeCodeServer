@@ -25,6 +25,11 @@ export const SEP_HIT = 22;
 const SEP_LINE = 2;
 // Отступ вдоль ДЛИНЫ направляющей — чтобы она не упиралась в торцы панелей
 const SEP_INSET = 8;
+// Шаг штриховки направляющей: сам штрих и период (штрих + пробел). Частый мелкий
+// пунктир читается как «здесь может встать», редкий крупный — как декоративная
+// рамка; в короткой линии дока последнее особенно заметно.
+const DASH_LEN = 3;
+const DASH_STEP = 6;
 // ЕДИНЫЙ зазор от кромки панели до направляющей. Все плейсхолдеры обязаны стоять
 // на одном расстоянии, поэтому смещение считается формулой из base, а не задаётся
 // вручную: у межколоночных зазор в потоке GAP, у крайних 0, у правого RAIL_GAP —
@@ -85,11 +90,14 @@ export function PanelDropSpot({ over = false, icon: Icon, boxProps, style }: {
 // Направляющая-линия места вставки. Второй знак той же пары, что PanelDropSpot:
 // прямоугольник обещает панель во всю свободную область, линия — что панель
 // втиснется в этот стык. Общий и для дропа, и для наведения на иконку рельсы.
-export function PanelDropLine({ axis, over = false, shift = 0 }: {
+export function PanelDropLine({ axis, over = false, shift = 0, inset = SEP_INSET }: {
   axis: 'x' | 'y';
   over?: boolean;
   // Сдвиг от кромки панели наружу (крайние места вставки) — см. sepShift
   shift?: number;
+  // Поля по торцам линии. Между панелями им нужен воздух, чтобы направляющая не
+  // упиралась в их кромки; в 40px-рельсе те же 8px съедали бы половину длины.
+  inset?: number;
 }) {
   const vertical = axis === 'x';
   return (
@@ -99,26 +107,23 @@ export function PanelDropLine({ axis, over = false, shift = 0 }: {
       display: 'flex', boxSizing: 'content-box',
       transform: shift ? `translate${vertical ? 'X' : 'Y'}(${shift}px)` : undefined,
       ...(vertical
-        ? { width: SEP_LINE, height: '100%', justifyContent: 'center', padding: `${SEP_INSET}px 0` }
-        : { height: SEP_LINE, flex: 1, alignItems: 'center', padding: `0 ${SEP_INSET}px` }),
+        ? { width: SEP_LINE, height: '100%', justifyContent: 'center', padding: `${inset}px 0` }
+        : { height: SEP_LINE, flex: 1, alignItems: 'center', padding: `0 ${inset}px` }),
     }}>
       {/* Направляющая: в покое штриховая приглушённая, под курсором —
-          сплошная акцентная. borderRadius в покое строго 0, иначе
-          штриховка вырождается в сплошную (см. SEP_LINE выше). */}
+          сплошная акцентная. Штрих рисуется ГРАДИЕНТОМ, а не border: dashed
+          привязывает длину штриха к толщине линии (при 2px они выходят длинными
+          и редкими), а градиент задаёт шаг сам — DASH_STEP. */}
       <div style={{
         borderRadius: over ? SEP_LINE : 0,
-        background: over ? C.accent : 'transparent',
+        background: over
+          ? C.accent
+          : `repeating-linear-gradient(${vertical ? 'to bottom' : 'to right'}, ${C.textSecondary} 0 ${DASH_LEN}px, transparent ${DASH_LEN}px ${DASH_STEP}px)`,
         opacity: over ? 1 : SEP_REST_OPACITY,
-        transition: 'background 0.12s ease, border-color 0.12s ease, opacity 0.12s ease',
+        transition: 'background 0.12s ease, opacity 0.12s ease',
         ...(vertical
-          ? {
-              width: over ? SEP_LINE : 0, height: '100%',
-              borderLeft: over ? 'none' : `${SEP_LINE}px dashed ${C.textSecondary}`,
-            }
-          : {
-              height: over ? SEP_LINE : 0, flex: 1,
-              borderTop: over ? 'none' : `${SEP_LINE}px dashed ${C.textSecondary}`,
-            }),
+          ? { width: SEP_LINE, height: '100%' }
+          : { height: SEP_LINE, flex: 1 }),
       }} />
     </div>
   );

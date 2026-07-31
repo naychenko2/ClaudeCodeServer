@@ -96,15 +96,35 @@ public class ModelCatalogService(LlmProviderRegistry providers, IHttpClientFacto
         var result = new List<ModelInfo>(claude);
         foreach (var p in providers.Enabled)
             await AppendProviderModelsAsync(result, p, ct);
-        AppendOpenRouterDirect(result);
+        AppendDirectSources(result);
         return result;
     }
 
-    // Модели прямого HTTP-адаптера OpenRouter (для фоновых one-shot задач) — КУРИРУЕМЫЙ список
-    // из конфига OpenRouter:DirectModels, с префиксом "direct:" и виртуальным провайдером
-    // openrouter-direct (в пикере фоновых задач — отдельная группа). Агентские модели чата
-    // приходят обычным путём через LlmProviders:openrouter:Models (AppendProviderModelsAsync).
-    // Показываем, только если провайдер-источник настроен (есть ключ) — иначе адаптер не работает.
+    // Прямые (бесплатные) модели всех OpenAI-совместимых источников: legacy openrouter-direct
+    // из OpenRouter:DirectModels + источники из CheapHttpSources:{key} с виртуальным провайдером
+    // {key}-direct. openrouter-direct не переименовываем — совместимость с spend и пресетами.
+    private void AppendDirectSources(List<ModelInfo> result)
+    {
+        AppendOpenRouterDirect(result);
+
+        foreach (var child in config.GetSection("CheapHttpSources").GetChildren())
+        {
+            var sourceKey = child.Key;
+            var providerKey = child["Provider"] is { Length: > 0 } p ? p : sourceKey;
+            if (providers.GetByKey(providerKey) is not { Enabled: true }) continue;
+
+            foreach (var m in child.GetSection("Models").GetChildren())
+            {
+                var cfg = m.Get<LlmModelConfig>();
+                if (cfg is null || string.IsNullOrWhiteSpace(cfg.Id)) continue;
+                result.Add(new ModelInfo(Llm.CloudCheapClient.RoutePrefix + cfg.Id, cfg.DisplayName,
+                    cfg.Description, $"{sourceKey}-direct", cfg.ContextWindow));
+            }
+        }
+    }
+
+    // Модели прямого HTTP-адаптера OpenRouter (legacy) — КУРИРУЕМЫЙ список из конфига
+    // OpenRouter:DirectModels, с префиксом "direct:" и виртуальным провайдером openrouter-direct.
     private void AppendOpenRouterDirect(List<ModelInfo> result)
     {
         var providerKey = config["OpenRouter:Provider"] is { Length: > 0 } p ? p : "openrouter";

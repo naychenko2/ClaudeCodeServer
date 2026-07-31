@@ -23,6 +23,7 @@ public class LocalActionPresetTests
         Directory.CreateDirectory(dir);
         d["DataPath"] = Path.Combine(dir, "projects.json");
         d["ModelCatalog:QueryCli"] = "false";
+        d["ModelCatalog:QueryProviderApis"] = "false";
         return TestConfig.Build(d);
     }
 
@@ -103,6 +104,32 @@ public class LocalActionPresetTests
         // И лёгкие, и сильные — на бесплатную облачную (никаких local/claude)
         Assert.Equal(direct, store.TryGet(LocalActionCatalog.NotesTags));
         Assert.Equal(direct, store.TryGet(LocalActionCatalog.Changelog));
+    }
+
+    [Fact]
+    public async Task FreeOnly_TwoSources_PrefersByConfigOrderAndProfile()
+    {
+        var cfg = WithFreeModel(new() { ["Ollama:Model"] = "qwen3:14b" });
+        cfg["LlmProviders:freellmapi:DisplayName"] = "FreeLLM";
+        cfg["LlmProviders:freellmapi:ApiKey"] = "test-key";
+        cfg["LlmProviders:freellmapi:AnthropicBaseUrl"] = "http://localhost:3001";
+        cfg["LlmProviders:freellmapi:ApiBaseUrl"] = "http://localhost:3001/v1";
+        cfg["CheapHttpSources:freellmapi:Provider"] = "freellmapi";
+        // Small-профилю хватает fast; Large-профилю нужен smart (окно fast меньше порога Large)
+        cfg["CheapHttpSources:freellmapi:Models:0:Id"] = "auto:fast";
+        cfg["CheapHttpSources:freellmapi:Models:0:DisplayName"] = "FreeLLM Fast";
+        cfg["CheapHttpSources:freellmapi:Models:0:ContextWindow"] = "8192";
+        cfg["CheapHttpSources:freellmapi:Models:1:Id"] = "auto:smart";
+        cfg["CheapHttpSources:freellmapi:Models:1:DisplayName"] = "FreeLLM Smart";
+        cfg["CheapHttpSources:freellmapi:Models:1:ContextWindow"] = "128000";
+
+        var (service, store) = Build(cfg);
+        await service.ApplyAsync(ActionPreset.FreeOnly);
+
+        // freellmapi первый в CheapHttpSources → Small (NotesTags) берёт auto:fast
+        Assert.Equal(CloudCheapClient.RoutePrefix + "auto:fast", store.TryGet(LocalActionCatalog.NotesTags));
+        // Large (Changelog) требует больше окна → auto:smart
+        Assert.Equal(CloudCheapClient.RoutePrefix + "auto:smart", store.TryGet(LocalActionCatalog.Changelog));
     }
 
     [Fact]

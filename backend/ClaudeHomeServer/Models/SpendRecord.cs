@@ -11,10 +11,11 @@ public static class SpendSources
     public const string Fal = "fal";
     public const string Free = "free";
 
-    // Бесплатный исполнитель: локальная Ollama, прямой адаптер агрегатора или модель ":free"
-    // через CLI. Такие траты выделяются источником free независимо от того, ход это или one-shot.
+    // Бесплатный исполнитель: локальная Ollama, прямой адаптер любого OpenAI-совместимого
+    // источника (провайдер заканчивается на "-direct") или модель ":free" через CLI.
     public static bool IsFree(string provider, string? model) =>
-        provider is "ollama" or Services.Llm.CloudCheapClient.DirectProviderKey
+        provider is "ollama"
+        || provider.EndsWith("-direct", StringComparison.OrdinalIgnoreCase)
         || (model is not null && model.EndsWith(":free", StringComparison.OrdinalIgnoreCase));
 
     // Дополнительные подписки Claude (sub-*) — тот же провайдер claude, отдельной осью не нужны

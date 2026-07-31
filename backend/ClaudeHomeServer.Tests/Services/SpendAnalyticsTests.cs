@@ -245,6 +245,7 @@ public class SpendAnalyticsTests : IDisposable
     {
         Assert.True(SpendSources.IsFree("ollama", "qwen3:14b"));
         Assert.True(SpendSources.IsFree("openrouter-direct", "any"));
+        Assert.True(SpendSources.IsFree("freellmapi-direct", "auto:fast"));
         Assert.True(SpendSources.IsFree("openrouter", "nvidia/nemotron:free"));
         Assert.False(SpendSources.IsFree("claude", "opus"));
         Assert.Equal("claude", SpendSources.NormalizeProvider("sub-work"));

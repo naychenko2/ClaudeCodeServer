@@ -25,8 +25,9 @@ namespace ClaudeHomeServer.Services.Llm;
 // продукта) всегда на Claude.
 //
 // Тир Claude по профилю — из конфига Recommended:ClaudeTiers; бесплатная модель — из каталога
-// прямых моделей OpenRouter (provider=openrouter-direct, курируемый список OpenRouter:DirectModels),
-// ранжирование — по OpenRouter:PreferredFree с фолбэком на эвристику «наибольшее окно».
+// прямых моделей всех источников (provider={source}-direct), ранжирование — по курируемому
+// порядку моделей в конфиге источника (OpenRouter:PreferredFree для openrouter, Models для
+// остальных) с фолбэком на эвристику «наибольшее окно».
 public enum ActionPreset { Recommended, FreeOnly, LocalFirst, Balanced, Tiers, TiersLocal }
 
 public sealed class LocalActionPresetService(
@@ -51,12 +52,16 @@ public sealed class LocalActionPresetService(
             profile == CheapProfile.Large ? ModelTier.Medium : ModelTier.Weak);
     }
 
-    // Прямые (бесплатные) модели OpenRouter из каталога — provider=openrouter-direct, Value уже
-    // с префиксом direct:. Их наличие определяет доступность пресетов с бесплатной облачной моделью.
+    // Прямые (бесплатные) модели всех OpenAI-совместимых источников (openrouter-direct, freellmapi-direct, …)
+    // — Value уже с префиксом direct:. Их наличие определяет доступность пресетов с бесплатной облачной моделью.
     private async Task<IReadOnlyList<ModelCatalogService.ModelInfo>> DirectModelsAsync(CancellationToken ct) =>
         (await models.GetModelsAsync(ct))
-            .Where(m => m.Provider == CloudCheapClient.DirectProviderKey)
+            .Where(m => m.Provider.EndsWith("-direct", StringComparison.OrdinalIgnoreCase))
             .ToList();
+
+    // Ключ источника прямой модели: provider заканчивается на "-direct".
+    private static string SourceKeyOf(ModelCatalogService.ModelInfo m) =>
+        m.Provider[..^"-direct".Length];
 
     // Есть ли из чего собрать бесплатный облачный маршрут (нужно FreeOnly и «сильным» в LocalFirst).
     public async Task<bool> FreeAvailableAsync(CancellationToken ct = default) =>
@@ -128,27 +133,58 @@ public sealed class LocalActionPresetService(
         return routes.Count;
     }
 
-    // Бесплатная облачная модель под профиль: сперва первая подходящая из PreferredFree
-    // (окно ≥ NumCtx профиля), иначе — наибольшее окно среди годных, иначе — просто
-    // наибольшее окно. Value модели уже несёт префикс direct: — возвращаем как есть.
+    // Бесплатная облачная модель под профиль: для каждого источника сперва первая подходящая
+    // модель из его курируемого списка (окно ≥ NumCtx профиля), затем — наибольшее окно среди
+    // всех direct-моделей. Value уже несёт префикс direct: — возвращаем как есть.
     private string? PickFree(IReadOnlyList<ModelCatalogService.ModelInfo> direct, CheapProfile profile)
     {
         if (direct.Count == 0) return null;
         var minCtx = router.ProfileSpec(profile).NumCtx;
 
-        var preferred = config.GetSection("OpenRouter:PreferredFree").Get<string[]>() ?? [];
-        foreach (var id in preferred)
+        var bySource = direct
+            .GroupBy(m => SourceKeyOf(m), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
+
+        // Порядок источников — как в конфиге CheapHttpSources; оставшиеся (legacy openrouter) — в конце.
+        var sourceKeys = config.GetSection("CheapHttpSources").GetChildren()
+            .Select(c => c.Key)
+            .Where(k => bySource.ContainsKey(k))
+            .ToList();
+        foreach (var k in bySource.Keys)
+            if (!sourceKeys.Contains(k, StringComparer.OrdinalIgnoreCase))
+                sourceKeys.Add(k);
+
+        foreach (var sourceKey in sourceKeys)
         {
-            // PreferredFree задаётся чистыми id (как в DirectModels) — сверяем без префикса direct:.
-            var hit = direct.FirstOrDefault(m =>
-                string.Equals(CloudCheapClient.StripPrefix(m.Value), id, StringComparison.OrdinalIgnoreCase)
-                && (m.ContextWindow ?? 0) >= minCtx);
-            if (hit is not null) return hit.Value;
+            foreach (var id in PreferredIds(sourceKey))
+            {
+                var hit = direct.FirstOrDefault(m =>
+                    string.Equals(SourceKeyOf(m), sourceKey, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(CloudCheapClient.StripPrefix(m.Value), id, StringComparison.OrdinalIgnoreCase)
+                    && (m.ContextWindow ?? 0) >= minCtx);
+                if (hit is not null) return hit.Value;
+            }
         }
 
         var fit = direct.Where(m => (m.ContextWindow ?? 0) >= minCtx)
                       .OrderByDescending(m => m.ContextWindow ?? 0).FirstOrDefault()
                   ?? direct.OrderByDescending(m => m.ContextWindow ?? 0).First();
         return fit.Value;
+    }
+
+    // Курируемый порядок моделей источника: у openrouter — легаси PreferredFree,
+    // у остальных (freellmapi и т.д.) — список Models из CheapHttpSources:{key}:Models.
+    private string[] PreferredIds(string sourceKey)
+    {
+        if (string.Equals(sourceKey, "openrouter", StringComparison.OrdinalIgnoreCase))
+            return config.GetSection("OpenRouter:PreferredFree").Get<string[]>() ?? [];
+
+        var ids = new List<string>();
+        foreach (var child in config.GetSection($"CheapHttpSources:{sourceKey}:Models").GetChildren())
+        {
+            var id = child["Id"] ?? child.Value;
+            if (!string.IsNullOrWhiteSpace(id)) ids.Add(id);
+        }
+        return ids.ToArray();
     }
 }

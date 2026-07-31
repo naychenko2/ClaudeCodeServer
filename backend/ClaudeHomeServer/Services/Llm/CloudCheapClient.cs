@@ -2,24 +2,20 @@ using System.Text.Json;
 
 namespace ClaudeHomeServer.Services.Llm;
 
-// Прямой HTTP-адаптер к OpenAI-совместимому эндпоинту агрегатора (OpenRouter) для
-// БЕСПЛАТНОГО выполнения фоновых one-shot действий на моделях ":free". Второй транспорт
-// рядом с провайдером (CLI): тот же OpenRouter, но вызов идёт напрямую (POST /chat/completions),
-// а не через claude CLI — старт CLI ~15с на вызов убил бы смысл «быстро и часто», прямой
-// HTTP отвечает за ~3.5с. Ответ разбирают те же парсеры потребителей, что и ответ claude.
-//
-// Конкретную модель выбирает админ в пикере фоновых действий (приходит в GenerateTextAsync);
-// список доступных моделей — курируемый OpenRouter:DirectModels (см. ModelCatalogService).
-// Эндпоинт и ключ — из настроенного CLI-провайдера (LlmProviders:{Provider}), здесь не дублируются.
-// Провайдер не настроен → Enabled=false (маршрут молча уходит на локаль/claude).
+// Прямой HTTP-адаптер к одному или нескольким OpenAI-совместимым источникам для
+// БЕСПЛАТНОГО выполнения фоновых one-shot действий. Источники задаются секцией
+// CheapHttpSources:{key}:{ Provider, Models[] }; пустая секция — фолбэк на legacy
+// OpenRouter:Provider + OpenRouter:DirectModels. Маршрут модели сохраняет префикс
+// direct:<modelId>; источник внутри резолвится по id модели через курируемый список
+// каждого источника. Коллизия id между источниками разрешается в пользу первого по
+// порядку в конфиге.
 public sealed class CloudCheapClient
 {
     // Префикс id модели в маршруте действия, помечающий прямой транспорт: "direct:<modelId>".
-    // Так один и тот же OpenRouter различается в сторе и пикере — модель без префикса идёт
-    // через провайдер (claude CLI), с префиксом — через этот адаптер (прямой HTTP).
     public const string RoutePrefix = "direct:";
 
-    // Виртуальный ключ провайдера прямого адаптера для группировки в каталоге/пикере
+    // Виртуальный ключ провайдера прямого адаптера для группировки в каталоге/пикере.
+    // Legacy-источник openrouter сохраняет это имя для совместимости spend и пресетов.
     public const string DirectProviderKey = "openrouter-direct";
 
     public static bool IsDirectRoute(string? route) =>
@@ -30,17 +26,25 @@ public sealed class CloudCheapClient
 
     private readonly IHttpClientFactory _http;
     private readonly ILogger<CloudCheapClient> _logger;
-    private readonly LlmProviderConfigView _provider;
+    private readonly List<Source> _sources = [];
     // Сбор расхода бесплатных вызовов (null — в тестах: аналитика выключена)
     private readonly Spend.ISpendCollector? _spend;
 
-    // Ключ провайдера-источника эндпоинта/ключа (дефолт openrouter)
+    // Ключ legacy-провайдера-источника (openrouter по умолчанию). Сохраняется для
+    // обратной совместимости с кодом, который ожидал единственный источник.
     public string ProviderKey { get; }
 
-    public bool Enabled => _provider.Configured;
+    public bool Enabled => _sources.Any(s => s.Configured);
 
-    // Адрес эндпоинта для UI использования (без ключа)
-    public string? BaseUrl => _provider.Configured ? _provider.ApiBaseUrl : null;
+    // Адрес эндпоинта первого настроенного источника для UI использования (без ключа)
+    public string? BaseUrl => _sources.FirstOrDefault(s => s.Configured)?.ApiBaseUrl;
+
+    public IReadOnlyList<Source> Sources => _sources;
+
+    public record Source(string Key, string ProviderKey, string ApiBaseUrl, string ApiKey, IReadOnlyList<string> Models)
+    {
+        public bool Configured => !string.IsNullOrWhiteSpace(ApiBaseUrl) && !string.IsNullOrWhiteSpace(ApiKey);
+    }
 
     public CloudCheapClient(IHttpClientFactory http, IConfiguration config,
         LlmProviderRegistry providers, ILogger<CloudCheapClient> logger,
@@ -49,16 +53,70 @@ public sealed class CloudCheapClient
         _http = http;
         _logger = logger;
         _spend = spend;
-        ProviderKey = config["OpenRouter:Provider"] is { Length: > 0 } p ? p : "openrouter";
+        ProviderKey = config["OpenRouter:Provider"] is { Length: > 0 } legacyProvider ? legacyProvider : "openrouter";
 
-        var cfg = providers.GetByKey(ProviderKey);
-        _provider = new LlmProviderConfigView(
-            Configured: cfg is { Enabled: true } && !string.IsNullOrWhiteSpace(cfg.ApiBaseUrl),
-            ApiBaseUrl: cfg?.ApiBaseUrl?.TrimEnd('/') ?? "",
-            ApiKey: cfg?.ApiKey ?? "");
+        // Legacy openrouter-direct всегда на месте (совместимость с spend и пресетами);
+        // дополнительные источники добавляются из CheapHttpSources.
+        AddLegacyOpenRouterSource(providers, config);
+
+        foreach (var child in config.GetSection("CheapHttpSources").GetChildren())
+        {
+            var sourceKey = child.Key;
+            var providerKey = child["Provider"] is { Length: > 0 } configuredProvider ? configuredProvider : sourceKey;
+            var cfg = providers.GetByKey(providerKey);
+            var models = child.GetSection("Models").GetChildren()
+                .Select(c => c.Get<Models.LlmModelConfig>()?.Id ?? c["Id"] ?? c.Value)
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .OfType<string>()
+                .ToList();
+            _sources.Add(new Source(sourceKey, providerKey,
+                cfg?.ApiBaseUrl?.TrimEnd('/') ?? "",
+                cfg?.ApiKey ?? "",
+                models));
+        }
     }
 
-    private sealed record LlmProviderConfigView(bool Configured, string ApiBaseUrl, string ApiKey);
+    private void AddLegacyOpenRouterSource(LlmProviderRegistry providers, IConfiguration config)
+    {
+        var cfg = providers.GetByKey(ProviderKey);
+        var models = config.GetSection("OpenRouter:DirectModels").GetChildren()
+            .Select(c => c.Get<Models.LlmModelConfig>()?.Id ?? c["Id"] ?? c.Value)
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .OfType<string>()
+            .ToList();
+        _sources.Add(new Source(ProviderKey, ProviderKey,
+            cfg?.ApiBaseUrl?.TrimEnd('/') ?? "",
+            cfg?.ApiKey ?? "",
+            models));
+    }
+
+    // Найти источник, к которому относится id модели. Первый подходящий источник
+    // по порядку в конфиге выигрывает; коллизия логируется как предупреждение.
+    // Если id неизвестен ни одному источнику — фолбэк на первый настроенный источник
+    // (сохраняет поведение одиночного openrouter и прямых вызовов вне каталога).
+    public Source? ResolveSource(string model)
+    {
+        var id = StripPrefix(model);
+        if (string.IsNullOrWhiteSpace(id)) return null;
+
+        Source? winner = null;
+        foreach (var s in _sources)
+        {
+            if (!s.Models.Contains(id, StringComparer.OrdinalIgnoreCase)) continue;
+            if (winner is null)
+            {
+                winner = s;
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "Коллизия id модели {Model} между источниками {First} и {Second}; выигрывает {Winner}",
+                    id, winner.Key, s.Key, winner.Key);
+                break;
+            }
+        }
+        return winner ?? _sources.FirstOrDefault(s => s.Configured);
+    }
 
     // Свободнотекстовая генерация выбранной моделью (контракт совпадает с
     // OllamaClient.GenerateTextAsync). maxTokens — лимит вывода профиля. Возвращает null при
@@ -67,13 +125,15 @@ public sealed class CloudCheapClient
         string model, string prompt, TimeSpan timeout, int maxTokens,
         string? ownerId = null, string? label = null, CancellationToken ct = default)
     {
-        if (!_provider.Configured || string.IsNullOrWhiteSpace(model)) return null;
+        var source = ResolveSource(model);
+        if (source is null || !source.Configured) return null;
+
         try
         {
             var client = _http.CreateClient("llm-provider");
             client.Timeout = timeout;
 
-            using var req = new HttpRequestMessage(HttpMethod.Post, $"{_provider.ApiBaseUrl}/chat/completions")
+            using var req = new HttpRequestMessage(HttpMethod.Post, $"{source.ApiBaseUrl}/chat/completions")
             {
                 Content = JsonContent.Create(new
                 {
@@ -85,15 +145,15 @@ public sealed class CloudCheapClient
                 }),
             };
             req.Headers.Authorization =
-                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _provider.ApiKey);
+                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", source.ApiKey);
 
             using var resp = await client.SendAsync(req, ct);
             if (!resp.IsSuccessStatusCode)
             {
                 // 429 — исчерпан суточный/минутный лимит бесплатных моделей: штатный сценарий,
                 // не шумим ошибкой, вызывающий уходит на следующий маршрут
-                _logger.LogDebug("{Provider} /chat/completions вернул {Status} для {Model}",
-                    ProviderKey, resp.StatusCode, model);
+                _logger.LogDebug("{Source} /chat/completions вернул {Status} для {Model}",
+                    source.Key, resp.StatusCode, model);
                 return null;
             }
 
@@ -107,20 +167,20 @@ public sealed class CloudCheapClient
                     ? c.GetString()
                     : null;
             if (string.IsNullOrWhiteSpace(content)) return null;
-            RecordSpend(model, json, ownerId, label);
+            RecordSpend(model, source.Key, json, ownerId, label);
             return content;
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "{Provider} недоступен, фолбэк на следующий маршрут", ProviderKey);
+            _logger.LogDebug(ex, "{Source} недоступен, фолбэк на следующий маршрут", source.Key);
             return null;
         }
     }
 
     // Расход прямого вызова в аналитику: токены из usage OpenAI-совместимого ответа,
-    // стоимость 0 (модели ":free") — источник free. Владелец и подпись действия приходят
-    // от вызывающего (CheapTextRunner); без них запись системная. Ошибка записи вызов не роняет.
-    private void RecordSpend(string model, JsonElement json, string? ownerId, string? label)
+    // стоимость 0 (модели бесплатные). Источник spend провайдера — {sourceKey}-direct.
+    // Ошибка записи вызов не роняет.
+    private void RecordSpend(string model, string sourceKey, JsonElement json, string? ownerId, string? label)
     {
         if (_spend is null) return;
         try
@@ -136,7 +196,7 @@ public sealed class CloudCheapClient
             _spend.Record(new Models.SpendRecord
             {
                 OwnerId = ownerId ?? "",
-                Provider = DirectProviderKey,
+                Provider = $"{sourceKey}-direct",
                 Model = model,
                 Source = Models.SpendSources.Free,
                 Label = label,

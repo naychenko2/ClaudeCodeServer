@@ -290,9 +290,12 @@ export function DesktopWorkspace(p: Props) {
         </div>
       )}
 
-      {/* Одиночный чат — без рамки на холсте, в остров выделена только его шапка */}
+      {/* Одиночный чат — без рамки на холсте, в остров выделена только его шапка.
+          overflow visible: композер стоит на нижней кромке зоны, и hidden срезал бы
+          его тень (у ленты свой скролл, вылезать наружу нечему). Так же устроена
+          обёртка centerBare в IslandScaffold, где чат живёт на холсте */}
       {chatOnly && (
-        <div ref={offsetCenterRef} style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
+        <div ref={offsetCenterRef} style={{ flex: 1, overflow: 'visible', minWidth: 0 }}>
           {chatPanel(true)}
         </div>
       )}

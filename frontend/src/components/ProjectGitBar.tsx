@@ -109,7 +109,10 @@ export function ProjectGitBar({ project, session, turnTree = null, turnTreeLive 
     <div style={{
       display: 'flex', alignItems: 'center', gap: 12, margin: '10px 0 8px',
       height: 51, padding: '0 8px 0 12px',
-      background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: R.xxl,
+      // Ни рамки, ни тени: плашку держит один полупрозрачный утопленный тон
+      // (bgInsetSoft) — сквозь неё виден дудл-паттерн холста. Скругление общее
+      // с карточкой поля ввода под ней
+      background: C.bgInsetSoft, borderRadius: R.xxl,
     }}>
       {/* Ветка / имя worktree; папка-иконка — чат в отдельном дереве */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
@@ -130,7 +133,9 @@ export function ProjectGitBar({ project, session, turnTree = null, turnTreeLive 
           title={`${turnTreeLive ? 'Ход выполняется' : 'Последний ход выполнялся'} в дереве агента: ${turnTree.path}`}
           style={{
             display: 'flex', alignItems: 'center', gap: 6, height: 28, maxWidth: 220,
-            padding: '0 11px', borderRadius: R.md, background: C.bgSelected,
+            // Тон приподнятых элементов панели (bgPanel): на утопленной подложке
+            // bgSelected почти сливался с ней в светлой теме
+            padding: '0 11px', borderRadius: R.md, background: C.bgPanel,
             border: `1px solid ${C.border}`, color: C.textSecondary, flexShrink: 0, minWidth: 0,
           }}
         >

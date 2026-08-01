@@ -557,12 +557,17 @@ public class ClaudeSession : ILlmSessionAdapter
                 var personaMentions = _personasMcp.MentionsHint is not null
                     && personaAgents is not { AgentHandles.Count: > 0 }
                     ? "1" : "0";
-                // Write-инструменты управления персонами (create/update/delete, automation_*,
-                // bindings_set, generate_avatar) — ВСЕГДА загружены. Гейт по agentDepth снят:
-                // он давал самый частый «No such tool available» прода (personas_create), а
-                // реального ограничения не нёс — права персоны и так режутся Persona.Tools /
-                // ExtraDisallowedTools, а у файловых сабагентов — их allow-list.
+                // Общий рубильник write-инструментов персон — ВСЕГДА "1". Гейт по agentDepth
+                // и по тексту хода снят: он давал самый частый «No such tool available» прода
+                // (personas_create), а реального ограничения не нёс — права персоны и так режутся
+                // Persona.Tools / ExtraDisallowedTools, а у файловых сабагентов — их allow-list.
+                // Состав write-инструментов режут модули manage/automation ниже — но по ПЕРСОНЕ.
                 const string personaWrite = "1";
+                // Модули сервера персон: manage (CRUD персон) и automation (правила
+                // проактивности) — решение принято ПО ПЕРСОНЕ в SessionManager
+                // (PersonaBindingsService.SectionEnabled), от хода не зависит.
+                var personaManage = _personasMcp.ManageEnabled ? "1" : "0";
+                var personaAutomation = _personasMcp.AutomationEnabled ? "1" : "0";
                 // Кросс-проектные ProjectPersonas-привязки: доступ к команде/точечным персонам
                 // ДРУГОГО проекта — расширяют personas_list(scope=context) и резолв handle в persona_ask
                 var extraProjectIdsCsv = _personasMcp.ExtraProjectIds is { Count: > 0 } extraProjects
@@ -586,14 +591,17 @@ public class ClaudeSession : ILlmSessionAdapter
                         ["PERSONAS_MENTIONS"] = personaMentions,
                         ["PERSONAS_BINDINGS"] = _personasMcp.BindingsEnabled ? "1" : "0",
                         ["PERSONAS_WRITE"] = personaWrite,
+                        ["PERSONAS_MANAGE"] = personaManage,
+                        ["PERSONAS_AUTOMATION"] = personaAutomation,
                         ["PERSONAS_EXTRA_PROJECT_IDS"] = extraProjectIdsCsv,
                         ["PERSONAS_EXTRA_PERSONA_IDS"] = extraPersonaIdsCsv,
                     },
                 };
-                // Область персон зависит от mentions/bindings/extra-скоупов — в сигнатуру.
-                // Все они постоянны в рамках сессии (состав персон, привязки), поэтому процесс
-                // от них не «мерцает»; write в сигнатуре больше нет — он всегда включён.
-                shapes["personas"] = $"m{personaMentions}b{(_personasMcp.BindingsEnabled ? "1" : "0")}:{extraProjectIdsCsv}:{extraPersonaIdsCsv}";
+                // Область персон зависит от mentions/bindings/модулей/extra-скоупов — в сигнатуру.
+                // Все они постоянны в рамках сессии (состав персон, привязки, роль), поэтому
+                // процесс от них не «мерцает»; write в сигнатуре больше нет — он всегда включён.
+                shapes["personas"] = $"m{personaMentions}b{(_personasMcp.BindingsEnabled ? "1" : "0")}"
+                    + $"g{personaManage}a{personaAutomation}:{extraProjectIdsCsv}:{extraPersonaIdsCsv}";
             }
 
             if (hasWorkspace)

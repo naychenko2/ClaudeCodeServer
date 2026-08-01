@@ -34,6 +34,10 @@ public class PersonaBindingsService
             ["files"] = ("Файлы проектов", "Секция files workspace: чтение/правка файлов любого проекта"),
             ["knowledge"] = ("Базы знаний", "Секция knowledge workspace: семантический поиск по базам проектов"),
             ["destructive"] = ("Удаление (опасно)", "Секция destructive workspace: безвозвратное удаление файлов проектов и чатов (files_delete/chats_delete) — только по явной просьбе пользователя"),
+            ["git"] = ("Git проектов", "Секция git workspace (mcp__wsp__git_*): статус, diff, история, blame, stage/commit. Надстройка над секцией files"),
+            ["kb"] = ("Базы знаний владельца", "Секция knowledge_bases workspace (mcp__wsp__kb_*): датасеты Dify владельца — список, поиск, добавление документа. Надстройка над секцией knowledge"),
+            ["personas-manage"] = ("Управление персонами", "Модуль manage сервера персон: personas_create/update/delete/bindings_set/generate_avatar/ai_team"),
+            ["personas-automation"] = ("Правила проактивности", "Модуль automation сервера персон: personas_automation_* — триггеры, по которым персона пишет сама"),
         };
 
     // Ключи-рубильники MCP-серверов: гейтятся ТОЛЬКО Tool-привязкой (ServerToolEnabled).
@@ -41,6 +45,12 @@ public class PersonaBindingsService
     public static readonly IReadOnlySet<string> ServerKeys =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             { "personas", "consultants", "codegraph", "notifications", "widgets" };
+
+    // Ключи секций-надстроек, дефолт которых задаёт пресет по Persona.Specialty
+    // (SpecialtySections). Решение — SectionEnabled.
+    public static readonly IReadOnlySet<string> PresetKeys =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            { "git", "kb", "personas-manage", "personas-automation" };
 
     private readonly PersonaManager _personas;
     private readonly ProjectManager _projects;
@@ -100,6 +110,52 @@ public class PersonaBindingsService
         if (persona is null) return true;
         return FindToolBinding(persona, key) is not { Mode: PersonaBindingMode.Off };
     }
+
+    // Секция-надстройка под пресетом (PresetKeys: git/kb/personas-manage/personas-automation).
+    // Эти инструменты раньше ехали пакетом со своей базовой секцией (git с files,
+    // knowledge_bases с knowledge, manage/automation — со всем сервером персон) и стоили
+    // контекста всем персонам подряд. Теперь дефолт задаёт роль, а не пакет.
+    // Порядок решения: явная Tool-привязка → явный список Persona.Tools → пресет по specialty.
+    // Ни один шаг не расширяет прав против прежнего поведения: суженный Persona.Tools
+    // остаётся белым списком, а пресет говорит только там, где список = null («без ограничений»).
+    // Не персонная сессия (persona == null) пресетов не знает вовсе — обычный чат получает всё,
+    // как раньше. Решение зависит ТОЛЬКО от персоны → детерминировано на сессию (состав
+    // tools/list не смеет мерцать между ходами).
+    public bool SectionEnabled(string? ownerId, Persona? persona, string key)
+    {
+        if (persona is null) return true;
+        if (FindToolBinding(persona, key) is { } binding) return binding.Mode != PersonaBindingMode.Off;
+        // Фолбэк на Persona.Tools — только если список реально знает ключи-надстройки: старые
+        // списки состояли из tasks/notes/web и о них не подозревали, а трактовать их как белый
+        // список для новых ключей = навсегда убить пресет у всякой персоны с суженным Tools.
+        if (persona.Tools is { } tools && tools.Any(t => PresetKeys.Contains(t)))
+            return tools.Contains(key, StringComparer.OrdinalIgnoreCase);
+        return SpecialtySections(persona.Specialty).Contains(key);
+    }
+
+    // Пресет секций по специализации персоны: кому какие надстройки нужны по роли.
+    // История и диффы проекта — тем, кто работает с кодом: исполнителю (правит), ревьюеру
+    // и тестировщику (читают изменения; у них ещё и Access=ReadOnly отбирает Bash, так что
+    // wsp-git — единственный оставшийся канал к git). Библиотекарю — базы знаний владельца,
+    // координатору и секретарю — управление командой и её проактивностью. Остальным — ядро.
+    // Секции chats тут намеренно нет: в ней живёт chats_report_up — канал отчёта исполнителя
+    // вверх по делегированию, выключать его по умолчанию у исполнителей нельзя.
+    public static IReadOnlySet<string> SpecialtySections(PersonaSpecialty specialty) => specialty switch
+    {
+        PersonaSpecialty.Executor or PersonaSpecialty.Reviewer or PersonaSpecialty.Tester => GitSections,
+        PersonaSpecialty.Librarian => LibrarianSections,
+        PersonaSpecialty.Coordinator or PersonaSpecialty.Secretary => CoordinatorSections,
+        _ => CoreSections,
+    };
+
+    private static readonly IReadOnlySet<string> CoreSections =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    private static readonly IReadOnlySet<string> GitSections =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "git" };
+    private static readonly IReadOnlySet<string> LibrarianSections =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "kb" };
+    private static readonly IReadOnlySet<string> CoordinatorSections =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "personas-manage", "personas-automation" };
 
     // Последняя Tool-привязка персоны по ключу (последняя побеждает — как в UI списка привязок)
     private static PersonaBinding? FindToolBinding(Persona persona, string key) =>

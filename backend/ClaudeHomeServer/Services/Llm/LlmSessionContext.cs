@@ -42,10 +42,15 @@ public record WorkspaceMcpContext(string ApiUrl, string Token, string? ProjectId
 // ExtraProjectIds/ExtraPersonaIds — кросс-проектные ProjectPersonas-привязки текущей персоны:
 // расширяют personas_list(scope=context) и резолв handle в persona_ask за пределы ProjectId —
 // ExtraProjectIds даёт всю команду проекта, ExtraPersonaIds — точечных персон.
+// ManageEnabled — модуль manage (personas_create/update/delete/bindings_set/generate_avatar/
+// ai_team), AutomationEnabled — модуль automation (personas_automation_*): секции сервера
+// за отдельными tool-ключами personas-manage/personas-automation с дефолтом по роли персоны.
+// Ядро сервера (personas_list/get, привязки, persona_ask) от них не зависит.
 // Не Claude-специфичен, как и остальные контексты.
 public record PersonasMcpContext(string ApiUrl, string Token, string? ProjectId,
     string? SelfPersonaId = null, string? MentionsHint = null, bool BindingsEnabled = false,
-    IReadOnlyList<string>? ExtraProjectIds = null, IReadOnlyList<string>? ExtraPersonaIds = null);
+    IReadOnlyList<string>? ExtraProjectIds = null, IReadOnlyList<string>? ExtraPersonaIds = null,
+    bool ManageEnabled = true, bool AutomationEnabled = true);
 
 // Элемент манифеста recall — что персона подтянула в ход (память/заметка/база/команда) для
 // атрибуции «опирается на…» / «использовано сейчас» (F3). Kind ∈ memory|note|knowledge|team

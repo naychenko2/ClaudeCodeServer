@@ -108,6 +108,31 @@ public class McpToolsetStabilityTests
     }
 
     /// <summary>
+    /// Секции-надстройки с пресетом по роли (git/kb в workspace, manage/automation в сервере
+    /// персон): решаются ТОЛЬКО по персоне через единую точку SectionEnabled. Свой набор
+    /// инструментов у каждой, поэтому зависимость от хода тут так же смертельна.
+    /// </summary>
+    [SkippableTheory]
+    [InlineData("private WorkspaceMcpContext? BuildWorkspaceContext", "git", "kb")]
+    [InlineData("private PersonasMcpContext? BuildPersonasContext", "personas-manage", "personas-automation")]
+    public void СекцииПоРоли_ГейтятсяТолькоПоПерсоне(string signature, string first, string second)
+    {
+        var path = FindSource("Services", "SessionManager.cs");
+        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+
+        var body = MethodBody(File.ReadAllText(path!), signature);
+
+        foreach (var key in new[] { first, second })
+            body.Should().Contain($"\"{key}\"",
+                $"секция обязана гейтиться Tool-ключом {key} (привязка type: tool, target: {key})");
+        body.Should().Contain("SectionEnabled(",
+            "решение принимает единая точка PersonaBindingsService.SectionEnabled "
+            + "(привязка → Persona.Tools → пресет по specialty)");
+        body.Should().NotContain("_currentTurn",
+            "состояние хода не должно влиять на состав секций");
+    }
+
+    /// <summary>
     /// Провайдер сабагентов-консультантов (pmem-серверы + --add-dir) гейтится тем же
     /// ConsultantsEnabled, а не собственной копией правила.
     /// </summary>

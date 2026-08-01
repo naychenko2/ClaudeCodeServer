@@ -54,8 +54,9 @@ public class PersonaBindingsServiceTests : IDisposable
         if (Directory.Exists(_tempDir)) Directory.Delete(_tempDir, recursive: true);
     }
 
-    private Persona MakePersona(List<string>? tools = null, List<PersonaBinding>? bindings = null) =>
-        new() { OwnerId = _userId, Name = "Тест", Tools = tools, Bindings = bindings };
+    private Persona MakePersona(List<string>? tools = null, List<PersonaBinding>? bindings = null,
+        PersonaSpecialty specialty = PersonaSpecialty.None) =>
+        new() { OwnerId = _userId, Name = "Тест", Tools = tools, Bindings = bindings, Specialty = specialty };
 
     private static PersonaBinding ToolBinding(string target, PersonaBindingMode mode) =>
         new() { Type = PersonaBindingType.Tool, Target = target, Condition = "по запросу", Mode = mode };
@@ -189,6 +190,98 @@ public class PersonaBindingsServiceTests : IDisposable
     {
         // Иначе Off-привязку на такой ключ отклонит валидация ValidateAsync
         foreach (var key in PersonaBindingsService.ServerKeys)
+            PersonaBindingsService.ToolCatalog.Should().ContainKey(key);
+    }
+
+    // --- SectionEnabled (секции-надстройки с дефолтом по specialty) ---
+
+    [Fact]
+    public void SectionEnabled_БезПерсоны_Разрешено()
+    {
+        // Обычный чат (не персонный) пресетов не знает — состав как раньше
+        foreach (var key in PersonaBindingsService.PresetKeys)
+            _sut.SectionEnabled(_userId, null, key).Should().BeTrue($"ключ {key}");
+    }
+
+    [Theory]
+    [InlineData(PersonaSpecialty.Executor, "git")]
+    [InlineData(PersonaSpecialty.Reviewer, "git")]
+    [InlineData(PersonaSpecialty.Tester, "git")]
+    [InlineData(PersonaSpecialty.Librarian, "kb")]
+    [InlineData(PersonaSpecialty.Coordinator, "personas-manage")]
+    [InlineData(PersonaSpecialty.Coordinator, "personas-automation")]
+    [InlineData(PersonaSpecialty.Secretary, "personas-manage")]
+    [InlineData(PersonaSpecialty.Secretary, "personas-automation")]
+    public void SectionEnabled_ПресетПоSpecialty_ДаётСвоиСекции(PersonaSpecialty specialty, string key)
+    {
+        var persona = MakePersona(specialty: specialty);
+
+        _sut.SectionEnabled(_userId, persona, key).Should().BeTrue();
+        // соседние ключи пресет не раздаёт — иначе разрез по ролям не экономит контекст
+        foreach (var other in PersonaBindingsService.PresetKeys.Where(k => k != key
+                     && !PersonaBindingsService.SpecialtySections(specialty).Contains(k)))
+            _sut.SectionEnabled(_userId, persona, other).Should().BeFalse($"ключ {other}");
+    }
+
+    [Fact]
+    public void SectionEnabled_БезSpecialty_ТолькоЯдро()
+    {
+        var persona = MakePersona();
+        foreach (var key in PersonaBindingsService.PresetKeys)
+            _sut.SectionEnabled(_userId, persona, key).Should().BeFalse($"ключ {key}");
+    }
+
+    [Fact]
+    public void SectionEnabled_ПривязкаПриоритетнееПресета()
+    {
+        // Явно включили kb аналитику, которому пресет его не давал
+        var withBinding = MakePersona(bindings: [ToolBinding("kb", PersonaBindingMode.Auto)]);
+        _sut.SectionEnabled(_userId, withBinding, "kb").Should().BeTrue();
+
+        // И наоборот: Off у исполнителя сильнее пресета executor → git
+        var offBinding = MakePersona(bindings: [ToolBinding("git", PersonaBindingMode.Off)],
+            specialty: PersonaSpecialty.Executor);
+        _sut.SectionEnabled(_userId, offBinding, "git").Should().BeFalse();
+    }
+
+    [Fact]
+    public void SectionEnabled_TollsСКлючамиНадстроек_БелыйСписок()
+    {
+        // Список возможностей ЗНАЕТ новые ключи — значит он про них и высказался: белый список
+        var persona = MakePersona(tools: ["kb"], specialty: PersonaSpecialty.Coordinator);
+        _sut.SectionEnabled(_userId, persona, "kb").Should().BeTrue();
+        _sut.SectionEnabled(_userId, persona, "personas-manage").Should().BeFalse();
+    }
+
+    [Fact]
+    public void SectionEnabled_ЛегасиTools_НеУбиваетПресет()
+    {
+        // Старый суженный список (только tasks/notes/web) о ключах-надстройках не знал —
+        // трактовать его как запрет значило бы навсегда выключить пресет такой персоне
+        var persona = MakePersona(tools: ["tasks", "notes"], specialty: PersonaSpecialty.Coordinator);
+        _sut.SectionEnabled(_userId, persona, "personas-manage").Should().BeTrue();
+        _sut.SectionEnabled(_userId, persona, "git").Should().BeFalse("пресет координатора git не даёт");
+    }
+
+    [Fact]
+    public void SectionEnabled_СтабильноНаВсехХодах()
+    {
+        // Состав tools/list входит в сигнатуру запуска CLI: решение обязано быть одинаковым
+        // на каждом ходу сессии, иначе процесс перезапускается со всеми MCP-серверами
+        var persona = MakePersona(specialty: PersonaSpecialty.Executor);
+        for (var turn = 1; turn <= 10; turn++)
+        {
+            _sut.SectionEnabled(_userId, persona, "git").Should().BeTrue($"ход {turn}");
+            _sut.SectionEnabled(_userId, persona, "kb").Should().BeFalse($"ход {turn}");
+        }
+    }
+
+    [Fact]
+    public void PresetKeys_ЕстьВКаталогеЦелей()
+    {
+        // Иначе привязку на такой ключ отклонит валидация ValidateAsync, и включить
+        // выключенную пресетом секцию будет нечем
+        foreach (var key in PersonaBindingsService.PresetKeys)
             PersonaBindingsService.ToolCatalog.Should().ContainKey(key);
     }
 

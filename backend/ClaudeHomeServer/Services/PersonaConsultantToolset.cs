@@ -37,7 +37,10 @@ public static class PersonaConsultantToolset
     [
         "mcp__personas__personas_list", "mcp__personas__personas_get",
         "mcp__personas__personas_bindings_list", "mcp__personas__personas_suggest_bindings",
-        "mcp__personas__knowledge_search", "mcp__personas__personas_automation_list",
+        // personas_automation_list убран: модуль automation монтируется по персоне РОДИТЕЛЬСКОЙ
+        // сессии (ключ personas-automation), а этот allow-list строится по консультанту —
+        // синхронизировать их нечем, и объявленный инструмент отдавал бы «No such tool available»
+        "mcp__personas__knowledge_search",
     ];
 
     public static readonly string[] WspRead =

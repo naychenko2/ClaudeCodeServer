@@ -1536,11 +1536,18 @@ public class SessionManager : IDisposable
         var extraPersonaIds = externalPersonaScopes.Where(s => s.PersonaId is not null)
             .Select(s => s.PersonaId!).Distinct().ToList();
 
+        // Модули сервера персон: manage (CRUD персон) и automation (правила проактивности) —
+        // за своими tool-ключами с дефолтом по роли (SectionEnabled → SpecialtySections).
+        // Ядро (personas_list/get, привязки, persona_ask) остаётся у всех, у кого сервер включён.
+        var manage = _bindings.SectionEnabled(ownerId, persona, "personas-manage");
+        var automation = _bindings.SectionEnabled(ownerId, persona, "personas-automation");
+
         var token = GetServiceToken(ownerId);
         return new PersonasMcpContext(ResolveTasksApiUrl(ownerId), token, projectId, selfPersonaId,
             mentionsHint, BindingsEnabled: true,
             extraProjectIds.Count > 0 ? extraProjectIds : null,
-            extraPersonaIds.Count > 0 ? extraPersonaIds : null);
+            extraPersonaIds.Count > 0 ? extraPersonaIds : null,
+            ManageEnabled: manage, AutomationEnabled: automation);
     }
 
     // Контекст MCP-сервера рабочего пространства: доступ ко всем проектам владельца
@@ -1579,11 +1586,15 @@ public class SessionManager : IDisposable
                 chatScopes is null ? "null" : string.Join("|", chatScopes));
         if (sections.Count == 0) return null;
         // Git-инструменты (read: status/diff/log/blame/file_log; write: commit/stage за
-        // WORKSPACE_WRITE) идут вместе с доступом к файлам — кто видит файлы проекта, видит и
-        // его историю. Базы знаний Dify владельца (kb_list/search/add_document) — вместе со
-        // знаниями. Обе — надстройки над базовыми секциями, отдельного tool-ключа не заводим.
-        if (sections.Contains("files")) sections.Add("git");
-        if (sections.Contains("knowledge")) sections.Add("knowledge_bases");
+        // WORKSPACE_WRITE) и базы знаний Dify владельца (kb_list/search/add_document) —
+        // надстройки над базовыми секциями files/knowledge: без базовой секции не монтируются,
+        // а внутри неё решает свой tool-ключ (git/kb) с дефолтом по роли персоны
+        // (PersonaBindingsService.SectionEnabled — пресет SpecialtySections). Раньше обе ехали
+        // с базовой секцией безусловно и стоили контекста персонам, которым не нужны.
+        if (sections.Contains("files") && _bindings.SectionEnabled(ownerId, persona, "git"))
+            sections.Add("git");
+        if (sections.Contains("knowledge") && _bindings.SectionEnabled(ownerId, persona, "kb"))
+            sections.Add("knowledge_bases");
         // Разрушающие операции (files_delete/chats_delete) — за отдельным флагом
         // workspace-destructive; персоне дополнительно нужен tool-ключ destructive
         // (Tool-привязка или Persona.Tools). Одна destructive без базовых секций не монтируется.

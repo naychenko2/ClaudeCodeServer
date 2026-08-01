@@ -75,6 +75,25 @@
   ключи `consultants` и `personas` игнорируются (`ConsultantsEnabled`/`PersonasEnabled`) —
   спикер обязан уметь спросить коллег по чату, а `BuildGroupChatHint` безусловно отсылает
   к блоку о консультациях из personas-server.
+- **Секции-надстройки с пресетом по роли** (`PersonaBindingsService.PresetKeys`: `git`, `kb`,
+  `personas-manage`, `personas-automation`; решение — `SectionEnabled`): наборы инструментов,
+  которые раньше ехали пакетом со своей базовой секцией и стоили контекста всем персонам
+  подряд. `git` (wsp `git_*`) — надстройка над секцией `files`, `kb` (wsp `kb_*`) — над
+  `knowledge`: без базовой секции не монтируются вовсе. `personas-manage`
+  (`personas_create/update/delete/bindings_set/generate_avatar/ai_team`, env `PERSONAS_MANAGE`)
+  и `personas-automation` (`personas_automation_*`, env `PERSONAS_AUTOMATION`, самые тяжёлые
+  схемы `triggerArgs`) — модули personas-server поверх его ядра (`personas_list`/`personas_get`,
+  привязки, `persona_ask`), которое остаётся у всех, у кого сервер включён. Порядок решения:
+  явная Tool-привязка → `Persona.Tools`, **если он знает хоть один из этих ключей** (тогда
+  остаётся белым списком; легаси-список из `tasks`/`notes`/`web` о них не подозревал и пресет
+  не убивает) → **пресет по `Persona.Specialty`** (`SpecialtySections`):
+  `Executor`/`Reviewer`/`Tester` → `git` (у ревьюера и тестировщика `Access=ReadOnly` отбирает
+  ещё и `Bash`, так что wsp-git — единственный оставшийся канал к диффу),
+  `Librarian` → `kb`, `Coordinator`/`Secretary` → `personas-manage` + `personas-automation`,
+  остальные — только ядро. Не персонная сессия пресетов не знает — обычный чат получает всё. Секции `chats`
+  в пресете намеренно нет: в ней живёт `chats_report_up` — канал отчёта исполнителя вверх
+  по делегированию. Тот же инвариант, что у рубильников: решение зависит ТОЛЬКО от персоны
+  (сторож — `McpToolsetStabilityTests`).
 - **@упоминания (флаг `persona-mentions`)**: надстройка над MCP персон — при включённом
   флаге и наличии других персон в контексте personas-server получает env `PERSONAS_MENTIONS=1`
   (регистрирует инструмент `persona_ask`) и `PERSONAS_SELF_ID`, а в промпт добавляется

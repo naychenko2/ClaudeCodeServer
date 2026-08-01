@@ -12,22 +12,30 @@
 //   PERSONAS_BINDINGS   — "1" = включены привязки (флаг persona-bindings): добавляются
 //                         инструменты personas_bindings_list/suggest/set и параметры
 //                         bindings/autoBindings в personas_create/personas_update
-//   PERSONAS_WRITE      — "0" = скрыть write-инструменты управления персонами (create/update/
-//                         delete, bindings_set, automation_create/update/delete/test,
-//                         generate_avatar). Аварийный рубильник прямых запусков: ClaudeSession
-//                         шлёт "1" ВСЕГДА — состав инструментов не имеет права зависеть от хода
-//                         (иначе процесс CLI перезапускается со всеми MCP, а personas_create
-//                         «пропадает»). Права персоны режут Persona.Tools/ExtraDisallowedTools.
+//   PERSONAS_WRITE      — "0" = скрыть ВСЕ write-инструменты сразу (модули manage и automation).
+//                         Аварийный рубильник прямых запусков: ClaudeSession шлёт "1" ВСЕГДА —
+//                         состав инструментов не имеет права зависеть от хода (иначе процесс CLI
+//                         перезапускается со всеми MCP, а personas_create «пропадает»).
+//   PERSONAS_MANAGE     — "0" = скрыть модуль manage: personas_create/update/delete/
+//                         bindings_set/generate_avatar/ai_team (плюс справочник слотов характера).
+//   PERSONAS_AUTOMATION — "0" = скрыть модуль automation: personas_automation_list/create/
+//                         update/delete/test (плюс справочник параметров триггера — самые
+//                         тяжёлые схемы сервера).
+//                         Оба модуля решаются ПО ПЕРСОНЕ (tool-ключи personas-manage /
+//                         personas-automation, дефолт — пресет по Persona.Specialty), значит
+//                         постоянны в рамках сессии. Ядро сервера (personas_list/get, привязки,
+//                         persona_ask) от них не зависит. Права персоны дополнительно режут
+//                         Persona.Tools/ExtraDisallowedTools.
 //   PERSONAS_EXTRA_PROJECT_IDS  — CSV id проектов из кросс-проектных привязок ProjectPersonas
 //                         текущей персоны: вся их команда видна в personas_list(scope=context)
 //                         и резолвится по handle в persona_ask (в дополнение к своему контексту)
 //   PERSONAS_EXTRA_PERSONA_IDS  — CSV id точечных персон из тех же привязок (сужение до одной
 //                         персоны вместо всей команды её проекта)
 //
-//   Правила проактивности (personas_automation_*) доступны ВСЕГДА, без флага (как
-//   personas_create/update) — automation-эндпоинты бэкенда ничем не гейтятся. Персона может
-//   настраивать проактивность ЛЮБОЙ персоне, включая саму себя, без обязательного участия
-//   пользователя — осознанное решение (в отличие от bindings, самоограничения тут нет).
+//   Правила проактивности (personas_automation_*) — свой модуль (PERSONAS_AUTOMATION);
+//   automation-эндпоинты бэкенда ничем не гейтятся, и персона с модулем может настраивать
+//   проактивность ЛЮБОЙ персоне, включая саму себя, без обязательного участия пользователя —
+//   осознанное решение (в отличие от bindings, самоограничения тут нет).
 //
 // Персона — AI-собеседник с именем, ролью, характером и аватаром; бывает глобальной
 // или привязанной к проекту. Изоляция per-owner — на стороне backend (токен определяет
@@ -70,9 +78,12 @@ const SELF_ID = process.env.PERSONAS_SELF_ID || null;
 const SESSION_ID = process.env.PERSONAS_SESSION_ID || null;
 const MENTIONS = process.env.PERSONAS_MENTIONS === '1';
 const BINDINGS = process.env.PERSONAS_BINDINGS === '1';
-// Write-инструменты управления персонами. Выключаются только явным "0" (ClaudeSession
-// ставит его на ходах без интента управления командой) — иначе включены (совместимость).
+// Общий аварийный рубильник write-инструментов (прямые запуски сервера вне ClaudeSession)
 const WRITE = process.env.PERSONAS_WRITE !== '0';
+// Модули сервера: manage — CRUD персон, automation — правила проактивности. Выключаются
+// явным "0"; без переменной включены (совместимость с прямыми запусками и старым конфигом).
+const MANAGE = WRITE && process.env.PERSONAS_MANAGE !== '0';
+const AUTOMATION = WRITE && process.env.PERSONAS_AUTOMATION !== '0';
 // Кросс-проектные привязки ProjectPersonas: доступ к команде/точечным персонам ДРУГОГО проекта
 const EXTRA_PROJECT_IDS = (process.env.PERSONAS_EXTRA_PROJECT_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
 const EXTRA_PERSONA_IDS = (process.env.PERSONAS_EXTRA_PERSONA_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -295,19 +306,23 @@ const AUTOMATION_KEYS = ['name', 'enabled', 'triggerType', 'triggerArgs', 'condi
 // живой пробой: из 6 КБ маркеров доехали первые ~2050 символов). Поэтому сюда идёт только то,
 // что дублировалось по нескольку раз, в максимально плотной форме — всё остальное осталось
 // в схемах. При правке следи за длиной: хвост за лимитом до модели не доедет.
-// Секции справочника следуют флагам ровно как состав инструментов: без write-инструментов
-// слоты характера некому применять, без BINDINGS нет привязок. Иначе в урезанном режиме
-// (3 инструмента) справочник весил бы больше самих схем.
+// Секции справочника следуют флагам ровно как состав инструментов: без модуля manage
+// слоты характера некому применять, без AUTOMATION не нужны параметры триггера, без
+// BINDINGS нет привязок. Иначе в урезанном режиме (3 инструмента) справочник весил бы
+// больше самих схем.
 const INSTRUCTIONS = [
   'Справочники сервера «Персоны» (на них ссылаются описания инструментов).',
-  ...(WRITE ? [
+  ...(MANAGE ? [
     '',
     'СЛОТЫ ХАРАКТЕРА (create/update), заполняй все: character — характер на «ты» («Ты — …»),',
     '  2-5 предложений; tone — тон одной фразой; mustDo/mustNot — по 2-4 пункта «всегда»/',
     '  «никогда»; outputFormat — формат ответов; speechExamples — 1-2 реплики от лица персоны;',
     '  greeting — приветствие. systemPrompt — устаревший единый текст характера.',
   ] : []),
-  ...(BINDINGS ? [
+  // Формат привязки нужен только тем, кто их СОСТАВЛЯЕТ (create/update/bindings_set —
+  // все под MANAGE): без модуля bindings_list отдаёт готовые записи, конструировать нечего,
+  // а справочник съедал бы ~700 символов из жёсткого лимита instructions
+  ...(BINDINGS && MANAGE ? [
   '',
   'ПРИВЯЗКА (bindings в create/update, bindings_set): { type, target, path?, condition?, mode? }.',
   '  type → target/path: project — проект целиком (projectId); projectPath — папка/файл проекта',
@@ -318,7 +333,7 @@ const INSTRUCTIONS = [
   '  проекта (projectId; path "readonly" = только чтение, пусто = полный доступ).',
   '  condition — когда применять (пусто = всегда). mode — auto (дефолт) | always | off.',
   ] : []),
-  ...(WRITE ? [
+  ...(AUTOMATION ? [
   '',
   'ПАРАМЕТРЫ ТРИГГЕРА (triggerArgs в automation_create/update) по triggerType:',
   '  timer: { schedule: { type: "daily"|"weekdays"|"weekly"|"interval", time: "HH:mm",',
@@ -355,7 +370,7 @@ const TOOLS = [
       properties: { id: { type: 'string', description: 'ID персоны' } },
     },
   },
-  ...(WRITE ? [{
+  ...(MANAGE ? [{
     name: 'personas_create',
     description: `Создать персону — AI-собеседника с именем, ролью и характером. ${CONTEXT_NOTE} ` +
       `Заполняй ВСЕ слоты характера — ${SEE_INSTRUCTIONS}.`,
@@ -408,14 +423,18 @@ const TOOLS = [
     {
       name: 'personas_suggest_bindings',
       description: 'AI-подбор привязок под роль персоны (по каталогу проектов/баз/заметок/скиллов ' +
-        'владельца). Возвращает кандидатов, НЕ сохраняет — сохрани нужные через personas_bindings_set.',
+        'владельца). Возвращает кандидатов, НЕ сохраняет — ' + (MANAGE
+          ? 'сохрани нужные через personas_bindings_set.'
+          : 'сохранить их может только персона с модулем manage, покажи список пользователю.'),
       inputSchema: {
         type: 'object',
         required: ['id'],
         properties: { id: { type: 'string', description: 'ID персоны' } },
       },
     },
-    ...(WRITE ? [{
+    // bindings_set — правка чужой персоны, поэтому едет с модулем manage, а не с
+    // read-инструментами привязок (иначе персона без manage меняла бы права коллегам)
+    ...(MANAGE ? [{
       name: 'personas_bindings_set',
       description: 'Полная замена набора привязок персоны (пустой массив — убрать все). ' +
         'Свои собственные привязки персона менять не может.',
@@ -466,9 +485,10 @@ const TOOLS = [
       },
     },
   ] : []),
-  // Правила проактивности: событие-триггер → персона сама пишет в закреплённый чат правила,
-  // без запроса пользователя. Доступно всегда (без флага), для любой персоны, включая себя.
-  {
+  // Модуль automation: событие-триггер → персона сама пишет в закреплённый чат правила,
+  // без запроса пользователя. Для любой персоны, включая себя. Схемы triggerArgs — самые
+  // тяжёлые на сервере, поэтому весь модуль за своим ключом (personas-automation).
+  ...(AUTOMATION ? [{
     name: 'personas_automation_list',
     description: 'Список правил проактивности персоны — триггеры и условия, при которых она ' +
       'сама пишет в закреплённый чат правила без запроса пользователя.',
@@ -478,7 +498,7 @@ const TOOLS = [
       properties: { id: { type: 'string', description: 'ID персоны' } },
     },
   },
-  ...(WRITE ? [{
+  {
     name: 'personas_automation_create',
     description: 'Создать правило проактивности персоны. Можно для ЛЮБОЙ персоны, включая ' +
       'саму себя — самоограничений нет. Троттлинг (тихие часы, минимальный интервал, потолок ' +
@@ -530,8 +550,9 @@ const TOOLS = [
         ruleId: { type: 'string', description: 'ID правила' },
       },
     },
-  },
-  {
+  }] : []),
+  // Хвост модуля manage: удаление персоны, аватар и генерация состава команды
+  ...(MANAGE ? [{
     name: 'personas_delete',
     description: 'Удалить персону по id. Действие необратимо: долгая память персоны тоже удаляется.',
     inputSchema: {
@@ -624,16 +645,22 @@ function contractFrom(args) {
   return Object.keys(c).length ? c : null;
 }
 
-// Write-инструменты управления персонами — скрыты только при явном PERSONAS_WRITE="0"
-const WRITE_TOOLS = new Set([
+// Инструменты модулей — список TOOLS их уже фильтрует, но исполнение перепроверяем
+// отдельно (defense-in-depth: выключенный модуль не должен отработать при ошибке экспозиции)
+const MANAGE_TOOLS = new Set([
   'personas_create', 'personas_update', 'personas_delete', 'personas_bindings_set',
-  'personas_automation_create', 'personas_automation_update', 'personas_automation_delete',
-  'personas_automation_test', 'personas_generate_avatar', 'personas_ai_team',
+  'personas_generate_avatar', 'personas_ai_team',
+]);
+const AUTOMATION_TOOLS = new Set([
+  'personas_automation_list', 'personas_automation_create', 'personas_automation_update',
+  'personas_automation_delete', 'personas_automation_test',
 ]);
 
 async function callTool(name, args) {
-  if (!WRITE && WRITE_TOOLS.has(name))
-    throw new Error('Инструмент управления персонами недоступен в этом ходе. Попроси пользователя явно сформулировать запрос на управление командой (создать/изменить/настроить персону) — тогда инструменты появятся.');
+  if (!MANAGE && MANAGE_TOOLS.has(name))
+    throw new Error('Инструмент управления персонами недоступен этой персоне (модуль manage выключен). Попроси пользователя включить его привязкой tool:personas-manage.');
+  if (!AUTOMATION && AUTOMATION_TOOLS.has(name))
+    throw new Error('Инструменты правил проактивности недоступны этой персоне (модуль automation выключен). Попроси пользователя включить его привязкой tool:personas-automation.');
   switch (name) {
     case 'personas_list': {
       const scope = args.scope ?? 'context';

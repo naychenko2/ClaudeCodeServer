@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { MessageSquare } from 'lucide-react';
+import { MessageSquare, PowerOff } from 'lucide-react';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import type { Persona, PersonaBinding, PersonaMemoryEntry, PersonaMemoryType, Session, Task } from '../../types';
 import { api } from '../../lib/api';
@@ -249,6 +249,33 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
       ))}
     </div>
   );
+
+  // === Сводка «что выключено» (фича persona-tool-gates): Off-Tool-привязки — чтобы
+  // владелец не удивлялся, почему персона вдруг не пользуется частью возможностей ===
+  const offToolBindings = (bindings ?? []).filter(b => b.type === 'tool' && b.mode === 'off');
+  const gatesSection = offToolBindings.length > 0 ? (
+    <div style={{
+      display: 'flex', alignItems: 'flex-start', gap: 10,
+      background: C.warningBg, border: `1px solid ${C.warning}`, borderRadius: R.xl,
+      padding: '10px 14px', fontFamily: FONT.sans,
+    }}>
+      <PowerOff size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ color: C.warningText, flexShrink: 0, marginTop: 1 }} />
+      <div style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: C.warningText, lineHeight: 1.5 }}>
+        <span style={{ fontWeight: 600 }}>
+          Выключено {offToolBindings.length} {plural(offToolBindings.length, 'инструмент', 'инструмента', 'инструментов')}:
+        </span>{' '}
+        {offToolBindings.map(bindingLabelOf).join(', ')}.
+        {onOpenKnowledge && (
+          <>
+            {' '}
+            <button type="button" onClick={onOpenKnowledge} style={{ ...linkBtn, marginTop: 0 }}>
+              Настроить →
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  ) : null;
 
   // === Характер (read-only, длинный — сворачивается с fade) ===
   const characterSection = (
@@ -769,6 +796,7 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
         {greeting}
       </div>
       {factsRow}
+      {gatesSection}
       {characterSection}
       {rulesSection}
       {knowledgeSection}

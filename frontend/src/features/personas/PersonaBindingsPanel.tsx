@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { X, Link, Plus, Search, Check as CheckIcon, SquarePen, CheckCircle2, Power, Trash2, Globe } from 'lucide-react';
+import { X, Link, Plus, Search, Check as CheckIcon, SquarePen, CheckCircle2, Power, Trash2, Globe, Minimize2 } from 'lucide-react';
 import type { BindingTarget, Persona, PersonaBinding, PersonaBindingDto, PersonaBindingMode, PersonaBindingType, ServerMessage, SkillSuggestion } from '../../types';
 import { C, FONT, R, SHADOW } from '../../lib/design';
 import { api } from '../../lib/api';
 import { onMessage } from '../../lib/signalr';
 import { bumpPersonas } from '../../lib/personas';
 import { showToast } from '../../lib/toast';
-import { Button, IconField, Menu, MenuItem, TextArea, Toggle, WaitingIndicator } from '../../components/ui';
+import { Button, ConfirmDialog, IconField, Menu, MenuItem, TextArea, Toggle, WaitingIndicator } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { useAiJob, runAiJob, patchAiJobResult, resetAiJob } from '../../lib/aiJobStore';
 import { SkillSearchDialog } from '../../components/SkillSearchDialog';
@@ -120,6 +120,10 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
   const [menuId, setMenuId] = useState<string | null>(null);
 
   const [panel, setPanel] = useState<AddPanelState | null>(null);
+  // Пресет «Минимум» (фича persona-tool-gates): подтверждение + каталог целей для его текста
+  const [minimalConfirm, setMinimalConfirm] = useState(false);
+  const [minimalBusy, setMinimalBusy] = useState(false);
+  const [minimalCatalog, setMinimalCatalog] = useState<BindingTarget[] | null>(null);
   const suggestKey = `personas:${persona.id}:bindings-suggest`;
   const suggestJob = useAiJob<SuggestResult>(suggestKey);
   const [adding, setAdding] = useState(false);
@@ -242,6 +246,57 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
   const flash = (ids: string[]) => {
     setFlashIds(new Set(ids));
     window.setTimeout(() => setFlashIds(new Set()), 1200);
+  };
+
+  // Пресет «Минимум» (фича persona-tool-gates): Off-Tool-привязка на КАЖДЫЙ ключ каталога
+  // «tool» (сегодня — tasks/notes/web/personas/consultants/codegraph/notifications/widgets/
+  // projects/chats/files/knowledge/destructive; каталог грузится с бэка, новые ключи попадут
+  // в пресет сами). Долгую память персоны (MemoryEnabled) не трогаем — это отдельный флаг.
+  const openMinimal = () => {
+    setMinimalConfirm(true);
+    if (!minimalCatalog) void fetchBindingTargets('tool').then(setMinimalCatalog).catch(() => setMinimalCatalog([]));
+  };
+
+  const applyMinimal = async () => {
+    setMinimalBusy(true);
+    try {
+      const catalog = minimalCatalog ?? await fetchBindingTargets('tool');
+      const current = bindings ?? [];
+      // Резолв ключа каталога на существующую привязку — ПОСЛЕДНЯЯ по порядку, как на
+      // бэке (LastOrDefault в PersonaBindingsService/SessionManager): при легаси-дублях
+      // UI и рантайм должны сойтись на одной и той же привязке.
+      const lastByTarget = new Map<string, string>();
+      for (const b of current) if (b.type === 'tool') lastByTarget.set(b.target.toLowerCase(), b.id);
+
+      // Один цельный набор для PUT-замены: существующие привязки как есть, кроме
+      // последней по каждому ключу каталога — она выключается; недостающие ключи
+      // добавляются новыми off-привязками. touchedIdx — позиции, которые реально меняются.
+      const touchedIdx = new Set<number>();
+      const next: PersonaBindingDto[] = current.map((b, i) => {
+        if (b.type !== 'tool' || lastByTarget.get(b.target.toLowerCase()) !== b.id || b.mode === 'off')
+          return { type: b.type, target: b.target, path: b.path ?? undefined, condition: b.condition, mode: b.mode };
+        touchedIdx.add(i);
+        return { type: b.type, target: b.target, path: b.path ?? undefined, condition: b.condition, mode: 'off' };
+      });
+      for (const t of catalog) {
+        if (lastByTarget.has(t.id.toLowerCase())) continue;
+        touchedIdx.add(next.length);
+        next.push({ type: 'tool', target: t.id, mode: 'off', condition: '' });
+      }
+
+      const updated = await api.personas.setBindings(persona.id, next);
+      setBindings(updated);
+      setMinimalConfirm(false);
+      flash([...touchedIdx].map(i => updated[i]?.id).filter((id): id is string => !!id));
+      showToast('Умения', touchedIdx.size > 0
+        ? `Пресет «Минимум» применён — выключено ${touchedIdx.size}.`
+        : 'Уже был минимум — менять нечего.');
+    } catch (e) {
+      showToast('Умения', e instanceof Error ? e.message : 'Не удалось применить пресет «Минимум».');
+      void load();
+    } finally {
+      setMinimalBusy(false);
+    }
   };
 
   // Добавление из панели-степпера
@@ -505,6 +560,11 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
               options={MODE_OPTIONS}
             />
             <div style={{ fontSize: 11.5, color: C.textMuted, marginTop: 6 }}>{MODE_HINT[b.mode]}</div>
+            {b.type === 'tool' && b.target.toLowerCase() === 'consultants' && (
+              <div style={{ fontSize: 11.5, color: C.textMuted, marginTop: 4 }}>
+                В групповых чатах этот ключ игнорируется — упоминания коллег и их память там доступны всегда.
+              </div>
+            )}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 14 }}>
               <button onClick={() => askDelete(b)} style={delLink}>
                 {confirmDelId === b.id ? 'Точно удалить?' : 'Удалить привязку'}
@@ -537,6 +597,15 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
         </div>
         <div style={{ fontSize: 12.5, color: C.textMuted, lineHeight: 1.5, marginTop: 4 }}>
           Что персона знает и умеет — и когда этим пользоваться. Изменения сохраняются сразу.
+        </div>
+
+        {/* Пресет «Минимум»: выключает все инструменты и разделы одной кнопкой — экономия
+            контекста для персон, которым не нужен полный набор возможностей */}
+        <div style={{ marginTop: 12 }}>
+          <Button variant="ghost" size="sm" disabled={minimalBusy || bindings === null}
+            leftIcon={<Minimize2 size={14} strokeWidth={ICON_STROKE} />} onClick={openMinimal}>
+            Пресет «Минимум»
+          </Button>
         </div>
 
         {/* Доступ ко всем проектам — персона-уровневый флаг, не привязка (только у глобальных) */}
@@ -863,6 +932,31 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
             onClose={() => { resetAiJob(panelCondKey); setPanel(null); }}
             onCommit={() => void commitPanel()}
             onAiCondition={runPanelAiCondition}
+          />
+        )}
+
+        {minimalConfirm && (
+          <ConfirmDialog
+            title="Применить пресет «Минимум»?"
+            subtitle={
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div>
+                  Выключит персоне доступ ко всем инструментам и разделам ниже (кроме её
+                  собственной долгой памяти — она не трогается):
+                </div>
+                <div style={{ fontSize: 12.5, color: C.textSecondary, lineHeight: 1.6 }}>
+                  {minimalCatalog === null ? 'Загружаю список…' : minimalCatalog.map(t => t.label).join(', ')}
+                </div>
+                <div style={{ fontSize: 12, color: C.textMuted }}>
+                  Экономит десятки тысяч токенов контекста на каждый ход. В любой момент
+                  можно включить обратно по одной привязке.
+                </div>
+              </div>
+            }
+            confirmLabel="Выключить"
+            confirmVariant="danger"
+            onConfirm={applyMinimal}
+            onCancel={() => setMinimalConfirm(false)}
           />
         )}
       </div>

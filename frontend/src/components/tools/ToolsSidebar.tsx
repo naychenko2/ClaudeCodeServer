@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Plus, Terminal, Monitor, Circle, Square, Play, RefreshCw, X } from 'lucide-react'
+import { Plus, Terminal, Monitor, Circle, Square, Play, RefreshCw } from 'lucide-react'
 import { C, R, FONT } from '../../lib/design'
-import { IconButton } from '../ui'
+import { IconButton, Button, PanelHeaderSlot, useHasPanelHeader } from '../ui'
+import { statusColor } from '../preview/PreviewView'
+import { AddServiceDialog } from '../preview/AddServiceDialog'
 import type * as ts from '../../lib/terminalSignalr'
-import { api } from '../../lib/api'
-import type { ProjectService, LaunchConfigEntry } from '../../types'
+import type { ProjectService } from '../../types'
 
 type ToolsTab = 'terminal' | 'preview'
 
@@ -31,12 +32,15 @@ interface Props {
 // Русская метка и порядок групп источников
 const SOURCE_META: Record<string, { label: string; order: number }> = {
   'launch.json': { label: 'Сохранённые', order: 0 },
-  'npm': { label: 'Node', order: 1 },
-  'dotnet': { label: '.NET', order: 2 },
-  'docker-compose': { label: 'Docker', order: 3 },
-  'procfile': { label: 'Procfile', order: 4 },
-  'makefile': { label: 'Makefile', order: 5 },
-  'custom': { label: 'Прочее', order: 6 },
+  // Конфигурации Rider — сразу за сохранёнными: это тоже настроенный человеком запуск,
+  // в отличие от догадок разбора манифестов
+  'rider': { label: 'Rider', order: 1 },
+  'npm': { label: 'Node', order: 2 },
+  'dotnet': { label: '.NET', order: 3 },
+  'docker-compose': { label: 'Docker', order: 4 },
+  'procfile': { label: 'Procfile', order: 5 },
+  'makefile': { label: 'Makefile', order: 6 },
+  'custom': { label: 'Прочее', order: 7 },
 }
 const sourceMeta = (s: string) => SOURCE_META[s] ?? { label: s, order: 9 }
 
@@ -90,7 +94,7 @@ export function ToolsSidebar({
           </TabButton>
           <TabButton active={activeTab === 'preview'} onClick={() => onTabChange('preview')}>
             <Monitor size={14} strokeWidth={2} />
-            Preview
+            Сервисы
           </TabButton>
         </div>
       </div>
@@ -177,8 +181,8 @@ export function ToolsSidebar({
   )
 }
 
-// Список сервисов Preview с группировкой и формой «Добавить свой…» — экспортирован:
-// его же рендерит панелька «Preview» нового интерфейса (workspace-cc-panels)
+// Список сервисов проекта с группировкой по источникам — экспортирован: его же
+// рендерит панелька «Сервисы» нового интерфейса (workspace-cc-panels)
 export function PreviewServiceList({
   projectId, groups, hasAny, activePreviewId,
   onRefreshServices, onStartService, onStopService, onSelectPreview,
@@ -193,45 +197,57 @@ export function PreviewServiceList({
   onSelectPreview: (serviceId: string) => void
 }) {
   const [adding, setAdding] = useState(false)
-  const [form, setForm] = useState({ name: '', command: 'npm', args: 'run dev', port: '' })
-  const [saving, setSaving] = useState(false)
-
-  const saveCustom = useCallback(async () => {
-    const command = form.command.trim()
-    if (!command) return
-    setSaving(true)
-    try {
-      const cur = await api.projects.getLaunchConfig(projectId)
-      const entry: LaunchConfigEntry = {
-        name: form.name.trim() || command,
-        runtimeExecutable: command,
-        runtimeArgs: form.args.split(' ').filter(Boolean),
-        port: form.port.trim() ? Number(form.port) : undefined,
-      }
-      await api.projects.putLaunchConfig(projectId, [...cur.configurations, entry])
-      setAdding(false)
-      setForm({ name: '', command: 'npm', args: 'run dev', port: '' })
-      onRefreshServices()
-    } catch { /* ignore */ }
-    setSaving(false)
-  }, [projectId, form, onRefreshServices])
+  // Панель в новой раскладке живёт в карточке с шапкой — действия уезжают туда.
+  // Старый режим (вкладки этого сайдбара) шапки не имеет: там они остаются в теле.
+  const inHeader = useHasPanelHeader()
+  // Составные конфигурации показывают состав по именам, а приходят по id
+  const nameById = new Map(groups.flatMap(([, items]) => items).map(s => [s.id, s.name]))
 
   return (
     <div style={{ flex: 1, overflowY: 'auto', padding: '8px 10px' }}>
-      {/* Панель действий */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '2px 4px 8px' }}>
-        <span style={{ fontSize: 11, fontWeight: 600, color: C.textMuted, textTransform: 'uppercase', letterSpacing: 0.4 }}>
-          Сервисы
-        </span>
-        <IconButton size="xs" variant="soft" onClick={onRefreshServices} title="Обновить список">
-          <RefreshCw size={12} />
-        </IconButton>
-      </div>
+      {inHeader ? (
+        <>
+          <PanelHeaderSlot>
+            <IconButton size="xs" variant="soft" onClick={onRefreshServices} title="Обновить список">
+              <RefreshCw size={12} />
+            </IconButton>
+          </PanelHeaderSlot>
+          {/* Главное действие панели — в закреплённом слоте: без него на пустой
+              панели непонятно, чем её наполнить */}
+          <PanelHeaderSlot pinned>
+            <Button
+              variant="primary" size="xs" title="Добавить свой запуск"
+              leftIcon={<Plus size={13} strokeWidth={2} />}
+              onClick={() => setAdding(true)}
+            >
+              Сервис
+            </Button>
+          </PanelHeaderSlot>
+        </>
+      ) : (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '2px 4px 8px' }}>
+          <span style={{ fontSize: 11, fontWeight: 600, color: C.textMuted, textTransform: 'uppercase', letterSpacing: 0.4 }}>
+            Сервисы
+          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <IconButton size="xs" variant="soft" onClick={onRefreshServices} title="Обновить список">
+              <RefreshCw size={12} />
+            </IconButton>
+            <Button
+              variant="primary" size="xs" title="Добавить свой запуск"
+              leftIcon={<Plus size={13} strokeWidth={2} />}
+              onClick={() => setAdding(true)}
+            >
+              Сервис
+            </Button>
+          </div>
+        </div>
+      )}
 
-      {!hasAny && !adding && (
+      {!hasAny && (
         <div style={{ padding: '12px 8px', fontSize: 12, color: C.textMuted, lineHeight: 1.5 }}>
-          Запускаемые сервисы не найдены. Добавьте свой запуск ниже —
-          он сохранится в <code style={{ fontFamily: FONT.mono, fontSize: 11 }}>.claude/launch.json</code>.
+          Запускаемые сервисы не найдены. Добавьте свой запуск — он сохранится
+          в <code style={{ fontFamily: FONT.mono, fontSize: 11 }}>.claude/launch.json</code>.
         </div>
       )}
 
@@ -244,6 +260,7 @@ export function PreviewServiceList({
             <ServiceRow
               key={svc.id}
               svc={svc}
+              memberNames={svc.members?.map(id => nameById.get(id) ?? id)}
               active={activePreviewId === svc.id}
               onStart={() => onStartService(svc)}
               onStop={() => onStopService(svc.id)}
@@ -253,64 +270,47 @@ export function PreviewServiceList({
         </div>
       ))}
 
-      {/* Добавить свой сервис */}
-      {adding ? (
-        <div style={{ border: `1px solid ${C.border}`, borderRadius: R.md, padding: 10, marginTop: 4, background: C.bgWhite }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-            <span style={{ fontSize: 12, fontWeight: 600, color: C.textPrimary }}>Свой запуск</span>
-            <IconButton size="xs" variant="soft" onClick={() => setAdding(false)} title="Отмена">
-              <X size={12} />
-            </IconButton>
-          </div>
-          <FormInput placeholder="Название (необязательно)" value={form.name} onChange={v => setForm(f => ({ ...f, name: v }))} />
-          <FormInput placeholder="Команда (напр. npm)" value={form.command} onChange={v => setForm(f => ({ ...f, command: v }))} />
-          <FormInput placeholder="Аргументы (напр. run dev)" value={form.args} onChange={v => setForm(f => ({ ...f, args: v }))} />
-          <FormInput placeholder="Порт (необязательно)" value={form.port} onChange={v => setForm(f => ({ ...f, port: v }))} />
-          <button
-            onClick={saveCustom}
-            disabled={saving || !form.command.trim()}
-            style={{
-              width: '100%', marginTop: 6, padding: '7px 10px', borderRadius: R.sm,
-              border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600,
-              background: C.accent, color: C.onAccent, opacity: saving || !form.command.trim() ? 0.6 : 1,
-            }}
-          >
-            {saving ? 'Сохранение…' : 'Сохранить в launch.json'}
-          </button>
-        </div>
-      ) : (
-        <button onClick={() => setAdding(true)} style={dashedButtonStyle}>
-          <Plus size={14} strokeWidth={2} />
-          Добавить свой…
-        </button>
+      {adding && (
+        <AddServiceDialog
+          projectId={projectId}
+          onClose={() => setAdding(false)}
+          onSaved={onRefreshServices}
+        />
       )}
     </div>
   )
 }
 
-function ServiceRow({ svc, active, onStart, onStop, onSelect }: {
+function ServiceRow({ svc, memberNames, active, onStart, onStop, onSelect }: {
   svc: ProjectService
+  memberNames?: string[]
   active: boolean
   onStart: () => void
   onStop: () => void
   onSelect: () => void
 }) {
+  // «Стоп» — только у полностью живого сервиса. У частично поднятой группы кнопка
+  // остаётся «Запустить»: она доподнимет недостающих участников
   const running = svc.status === 'started' || svc.status === 'starting'
+  const partial = svc.status === 'partial'
+  // Порт слушает процесс, поднятый вне продукта: показать в превью можем, запускать
+  // нечего (упадёт с «порт занят»), останавливать не наше дело
+  const external = svc.status === 'external'
   const port = svc.runningPort ?? svc.suggestedPort
-  const cmd = svc.command ? `${svc.command} ${svc.args.join(' ')}`.trim() : svc.name
-  const dotColor = svc.status === 'started' ? C.success
-    : svc.status === 'starting' ? C.warning
-    : svc.status === 'error' ? C.danger
-    : C.textMuted
+  // У составной конфигурации команды нет — вместо неё показываем состав
+  const cmd = memberNames?.length
+    ? memberNames.join(' + ')
+    : svc.command ? `${svc.command} ${svc.args.join(' ')}`.trim() : svc.name
+  const dotColor = statusColor(svc.status)
 
   return (
     <div
-      onClick={() => { if (running) onSelect() }}
+      onClick={() => { if (running || external || partial) onSelect() }}
       title={svc.error ?? undefined}
       style={{
         display: 'flex', alignItems: 'center', gap: 8,
         padding: '7px 8px', borderRadius: R.md,
-        cursor: running ? 'pointer' : 'default',
+        cursor: running || external || partial ? 'pointer' : 'default',
         background: active ? C.bgSelected : 'transparent',
         marginBottom: 2,
       }}
@@ -325,8 +325,18 @@ function ServiceRow({ svc, active, onStart, onStop, onSelect }: {
         <div style={{ fontSize: 11, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: FONT.mono }}>
           {cmd}{port ? `  ·  :${port}` : ''}
         </div>
+        {external && (
+          <div style={{ fontSize: 11, color: C.info }}>запущен снаружи</div>
+        )}
+        {svc.status === 'partial' && (
+          <div style={{ fontSize: 11, color: C.warning }}>запущена часть сервисов</div>
+        )}
       </div>
-      {running ? (
+      {external ? (
+        <IconButton size="xs" variant="soft" onClick={e => { e.stopPropagation(); onSelect() }} title="Показать страницу">
+          <Monitor size={12} />
+        </IconButton>
+      ) : running ? (
         <IconButton size="xs" variant="soft" onClick={e => { e.stopPropagation(); onStop() }} title="Остановить">
           <Square size={10} />
         </IconButton>
@@ -339,21 +349,7 @@ function ServiceRow({ svc, active, onStart, onStop, onSelect }: {
   )
 }
 
-function FormInput({ placeholder, value, onChange }: { placeholder: string; value: string; onChange: (v: string) => void }) {
-  return (
-    <input
-      value={value}
-      placeholder={placeholder}
-      onChange={e => onChange(e.target.value)}
-      style={{
-        width: '100%', boxSizing: 'border-box', marginBottom: 6,
-        padding: '6px 8px', borderRadius: R.sm, border: `1px solid ${C.border}`,
-        fontSize: 12, color: C.textPrimary, background: C.bgMain, fontFamily: FONT.sans,
-      }}
-    />
-  )
-}
-
+// Пунктирная кнопка «Новый терминал» во вкладке терминалов
 const dashedButtonStyle: React.CSSProperties = {
   width: '100%', padding: '8px 10px', borderRadius: R.md, cursor: 'pointer',
   border: `1px dashed ${C.border}`, background: 'transparent',

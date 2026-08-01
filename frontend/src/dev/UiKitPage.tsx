@@ -1527,7 +1527,7 @@ const PANELS_DEMO: { key: string; title: string; Icon: LucideIcon; accent?: bool
   { key: 'tasks',    title: 'Задачи',    Icon: ListTodo },
   { key: 'team',     title: 'Команда',   Icon: Users },
   { key: 'terminal', title: 'Терминал',  Icon: SquareTerminal, accent: true },
-  { key: 'preview',  title: 'Preview',   Icon: MonitorPlay, accent: true },
+  { key: 'preview',  title: 'Сервисы',   Icon: MonitorPlay, accent: true },
 ];
 
 // Четыре фоновых тона дизайн-системы (Rider Islands): холст → остров →

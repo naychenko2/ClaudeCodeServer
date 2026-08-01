@@ -215,6 +215,54 @@ public class FileServiceTests : IDisposable
         entry.Path.Should().Be("f.txt");
     }
 
+    // ─── Tree ────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Tree_ShowHiddenTrue_ReturnsFileInHiddenDir()
+    {
+        Directory.CreateDirectory(Path.Combine(_root, ".omc", "specs"));
+        File.WriteAllText(Path.Combine(_root, ".omc", "specs", "a.md"), "");
+
+        _svc.Tree(_root, showHidden: true).Should()
+            .Contain(e => e.Path == ".omc/specs/a.md");
+    }
+
+    [Fact]
+    public void Tree_ShowHiddenFalse_HiddenDirExcluded()
+    {
+        Directory.CreateDirectory(Path.Combine(_root, ".omc", "specs"));
+        File.WriteAllText(Path.Combine(_root, ".omc", "specs", "a.md"), "");
+
+        _svc.Tree(_root, showHidden: false).Should()
+            .NotContain(e => e.Path.StartsWith(".omc", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Tree_ClaudeWorktrees_ExcludedEvenWithShowHidden()
+    {
+        // .claude/worktrees/<имя> — полные копии репозитория (git worktree);
+        // не должны раздувать дерево ни при каком значении showHidden
+        var wt = Path.Combine(_root, ".claude", "worktrees", "feature-x");
+        Directory.CreateDirectory(wt);
+        File.WriteAllText(Path.Combine(wt, "Program.cs"), "");
+
+        _svc.Tree(_root, showHidden: true).Should()
+            .NotContain(e => e.Path.StartsWith(".claude/worktrees", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Tree_RegularFolderNamedWorktrees_NotExcluded()
+    {
+        // Исключение — по пути ".claude/worktrees", а не по имени "worktrees":
+        // обычная папка с таким именем в другом месте проекта не должна пострадать
+        var dir = Path.Combine(_root, "packages", "worktrees");
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "readme.txt"), "");
+
+        _svc.Tree(_root, showHidden: true).Should()
+            .Contain(e => e.Path == "packages/worktrees/readme.txt");
+    }
+
     // ─── Search ──────────────────────────────────────────────────────────────
 
     [Fact]

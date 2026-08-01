@@ -99,6 +99,41 @@ public class FilesControllerTests : IClassFixture<TestWebApplicationFactory>
     }
 
     [Fact]
+    public async Task Tree_ShowHiddenQueryParam_OverridesProjectSetting()
+    {
+        // Дефолт проекта — ShowHiddenFiles: false; без query-параметра дерево прежнее
+        var (id, dir) = await SetupProjectWithFileAsync("visible.txt");
+        Directory.CreateDirectory(Path.Combine(dir, ".omc"));
+        File.WriteAllText(Path.Combine(dir, ".omc", "spec.md"), "");
+
+        var withoutParam = await _client.GetAsync($"/api/projects/{id}/files/tree");
+        withoutParam.StatusCode.Should().Be(HttpStatusCode.OK);
+        var bodyWithout = JsonSerializer.Deserialize<JsonElement>(await withoutParam.Content.ReadAsStringAsync());
+        bodyWithout.EnumerateArray().Should().NotContain(e => e.GetProperty("path").GetString() == ".omc/spec.md");
+
+        // showHidden=true в query — виден скрытый файл независимо от настройки проекта
+        var withParam = await _client.GetAsync($"/api/projects/{id}/files/tree?showHidden=true");
+        withParam.StatusCode.Should().Be(HttpStatusCode.OK);
+        var bodyWith = JsonSerializer.Deserialize<JsonElement>(await withParam.Content.ReadAsStringAsync());
+        bodyWith.EnumerateArray().Should().Contain(e => e.GetProperty("path").GetString() == ".omc/spec.md");
+    }
+
+    [Fact]
+    public async Task Tree_ClaudeWorktrees_NeverIncluded()
+    {
+        var (id, dir) = await SetupProjectWithFileAsync("visible.txt");
+        var wt = Path.Combine(dir, ".claude", "worktrees", "feature-x");
+        Directory.CreateDirectory(wt);
+        File.WriteAllText(Path.Combine(wt, "Program.cs"), "");
+
+        var response = await _client.GetAsync($"/api/projects/{id}/files/tree?showHidden=true");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        body.EnumerateArray().Should()
+            .NotContain(e => e.GetProperty("path").GetString()!.StartsWith(".claude/worktrees", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task Search_NonExistentProject_Returns404()
     {
         var response = await _client.GetAsync("/api/projects/nonexistent/files/search?q=test");

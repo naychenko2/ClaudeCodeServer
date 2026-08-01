@@ -46,6 +46,14 @@ public class FileService(
     // Предохранитель от патологически больших деревьев
     private const int TreeMaxEntries = 20000;
 
+    // .claude/worktrees/<имя> — полные копии репозитория (git worktree). При showHidden=true
+    // рекурсия в них раздувает дерево и вытесняет настоящие файлы проекта из TreeMaxEntries.
+    // Проверка по относительному пути, а не по имени "worktrees" — обычная папка с таким
+    // именем в другом месте проекта исключаться не должна.
+    private static bool IsWorktreesPath(string relativePath) =>
+        relativePath.Equals(".claude/worktrees", StringComparison.OrdinalIgnoreCase) ||
+        relativePath.StartsWith(".claude/worktrees/", StringComparison.OrdinalIgnoreCase);
+
     // Защита от path traversal
     internal static string SafeJoin(string root, string relativePath)
     {
@@ -149,8 +157,9 @@ public class FileService(
                 var info = new DirectoryInfo(d);
                 if (TreeExcludes.Contains(info.Name)) continue;
                 if (!showHidden && info.Name.StartsWith('.')) continue;
-                result.Add(new FileEntry(info.Name, Path.GetRelativePath(rootPath, d).Replace('\\', '/'),
-                    true, null, info.LastWriteTimeUtc, false));
+                var relDir = Path.GetRelativePath(rootPath, d).Replace('\\', '/');
+                if (IsWorktreesPath(relDir)) continue;
+                result.Add(new FileEntry(info.Name, relDir, true, null, info.LastWriteTimeUtc, false));
                 Walk(d);
             }
 

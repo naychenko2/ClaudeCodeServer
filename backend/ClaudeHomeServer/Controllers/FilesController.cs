@@ -62,12 +62,12 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
     }
 
     [HttpGet("tree")]
-    public IActionResult Tree(string projectId, [FromQuery] string path = "")
+    public IActionResult Tree(string projectId, [FromQuery] string path = "", [FromQuery] bool? showHidden = null)
     {
         try
         {
             var p = GetProject(projectId);
-            return Ok(Annotate(projectId, files.Tree(p.RootPath, path, p.ShowHiddenFiles)));
+            return Ok(Annotate(projectId, files.Tree(p.RootPath, path, showHidden ?? p.ShowHiddenFiles)));
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (DirectoryNotFoundException) { return NotFound(); }

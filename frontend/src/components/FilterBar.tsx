@@ -442,7 +442,7 @@ export function FilterBar({
         <span style={{
           position: 'absolute', top: -5, right: -5, pointerEvents: 'none',
           minWidth: 16, height: 16, padding: '0 4px', boxSizing: 'border-box',
-          borderRadius: R.max, background: C.bgWhite, color: C.textSecondary,
+          borderRadius: R.max, background: C.bgSelected, color: C.textSecondary,
           border: `1px solid ${C.border}`,
           fontFamily: FONT.mono, fontSize: 10, fontWeight: 700, lineHeight: '14px',
           textAlign: 'center',

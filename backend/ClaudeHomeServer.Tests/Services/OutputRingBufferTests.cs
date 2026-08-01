@@ -30,6 +30,17 @@ public class OutputRingBufferTests
     }
 
     [Fact]
+    public void Append_KeepsSizeBounded_WithoutTrimmingEveryTime()
+    {
+        // Обрезка сдвигает весь буфер, поэтому она с запасом: размер гуляет между
+        // лимитом и лимитом+25%, но за верхнюю границу не уходит никогда.
+        var buf = new OutputRingBuffer(100);
+        for (var i = 0; i < 500; i++) buf.Append("0123456789");
+
+        buf.GetAll().Length.Should().BeInRange(100, 125);
+    }
+
+    [Fact]
     public void Append_HandlesChunkLargerThanLimit()
     {
         var buf = new OutputRingBuffer(5);

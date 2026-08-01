@@ -17,15 +17,24 @@ public sealed class OutputRingBuffer
     private readonly object _lock = new();
     private readonly StringBuilder _buffer = new();
     private readonly int _maxChars;
+    // Порог, после которого режем хвост. Резать ровно по _maxChars нельзя: обрезка
+    // сдвигает ВЕСЬ буфер (O(n)), и на полном буфере это происходило бы на каждой
+    // строке — дев-сервер во время сборки печатает их тысячами. С запасом в четверть
+    // сдвиг случается раз в ~50 тысяч символов, то есть амортизированно O(1).
+    private readonly int _trimAtChars;
 
-    public OutputRingBuffer(int maxChars = 200_000) => _maxChars = maxChars;
+    public OutputRingBuffer(int maxChars = 200_000)
+    {
+        _maxChars = maxChars;
+        _trimAtChars = maxChars + Math.Max(1, maxChars / 4);
+    }
 
     public void Append(string chunk)
     {
         lock (_lock)
         {
             _buffer.Append(chunk);
-            if (_buffer.Length > _maxChars)
+            if (_buffer.Length > _trimAtChars)
                 _buffer.Remove(0, _buffer.Length - _maxChars);
         }
     }

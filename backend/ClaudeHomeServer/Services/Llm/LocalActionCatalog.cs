@@ -53,6 +53,7 @@ public static class LocalActionCatalog
     public const string MemoryWriteResolve = "memory-write-resolve";
     public const string PersonaMemoryAutolearn = "persona-memory-autolearn";
     public const string TeamMemoryAutolearn = "team-memory-autolearn";
+    public const string TeamMemoryCompress = "team-memory-compress";
     public const string PersonaMemoryConsolidate = "persona-memory-consolidate";
     public const string TeamMemoryConsolidate = "team-memory-consolidate";
     public const string AutomationGate = "automation-gate";
@@ -124,6 +125,10 @@ public static class LocalActionCatalog
         new(MemoryWriteResolve, "Резолвер записи памяти", "Память", CheapProfile.Small, DefaultLocal: true),
         new(PersonaMemoryAutolearn, "Автолёрн памяти персон", "Память", CheapProfile.Large, DefaultLocal: true),
         new(TeamMemoryAutolearn, "Автолёрн памяти команды", "Память", CheapProfile.Large, DefaultLocal: true),
+        // Сжатие авто-записи памяти команды длиннее ~700 символов до сути (~500) — только
+        // бесплатная цепочка (RunFreeAsync): при недоступности локали/адаптера — жёсткая
+        // обрезка на стороне TeamMemoryService, платить claude за это не нужно.
+        new(TeamMemoryCompress, "Сжатие авто-записи памяти команды", "Память", CheapProfile.Small, DefaultLocal: true),
         new(PersonaMemoryConsolidate, "Консолидация памяти персон", "Память", CheapProfile.Text, DefaultLocal: true),
         new(TeamMemoryConsolidate, "Консолидация памяти команды", "Память", CheapProfile.Text, DefaultLocal: true),
         new(AutomationGate, "Гейт проактивности персон", "Персоны", CheapProfile.Small, DefaultLocal: true),

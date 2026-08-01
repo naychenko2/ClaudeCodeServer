@@ -42,6 +42,9 @@ public class TeamMemoryService
     private readonly ProjectManager? _projects;
     // LLM-резолвер записи памяти (разрешение противоречий на авто-пути); null в юнит-тестах
     private readonly Memory.MemoryWriteResolver? _resolver;
+    // Сжатие авто-записи (autolearn/резолвер), длиннее AutoCompressThreshold; null в юнит-тестах —
+    // тогда сразу жёсткая обрезка (см. CompressIfLongAsync)
+    private readonly Llm.ICheapTextRunner? _cheap;
 
     // Sibling-стор семантического слоя: data/team-memory-knowledge.json (ключ «owner:project»)
     private readonly string _knowledgeStorePath;
@@ -64,13 +67,14 @@ public class TeamMemoryService
 
     public TeamMemoryService(IConfiguration config, ILogger<TeamMemoryService>? log = null,
         KnowledgeService? knowledge = null, UserStore? users = null, ProjectManager? projects = null,
-        Memory.MemoryWriteResolver? resolver = null)
+        Memory.MemoryWriteResolver? resolver = null, Llm.ICheapTextRunner? cheap = null)
     {
         _log = log;
         _knowledge = knowledge;
         _users = users;
         _projects = projects;
         _resolver = resolver;
+        _cheap = cheap;
         var dataDir = Path.GetDirectoryName(
             config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))!;
         _storePath = Path.Combine(dataDir, "team-memory.json");
@@ -186,7 +190,7 @@ public class TeamMemoryService
         TeamMemorySource source = TeamMemorySource.Manual,
         string? sourceSessionId = null, double? salience = null)
     {
-        var trimmed = text.Trim();
+        var trimmed = await CompressIfLongAsync(source, text.Trim());
         var state = GetKnowledgeState(ownerId, projectId);
         if (Available && !string.IsNullOrEmpty(state.DatasetId))
         {
@@ -202,7 +206,7 @@ public class TeamMemoryService
             }
             catch (Exception ex) { _log?.LogDebug(ex, "team-memory: семантический дедуп {Project}", projectId); }
         }
-        return Add(ownerId, projectId, text, type, source, sourceSessionId, salience);
+        return Add(ownerId, projectId, trimmed, type, source, sourceSessionId, salience);
     }
 
     // Найти запись того же типа, семантически близкую к тексту (Dify retrieve, порог DedupThreshold)
@@ -242,10 +246,10 @@ public class TeamMemoryService
         if (_resolver is not { Enabled: true } || !Available)
             return await AddAsync(ownerId, projectId, text, type, source, sourceSessionId, salience);
 
-        var trimmed = text.Trim();
+        var trimmed = await CompressIfLongAsync(source, text.Trim());
         var state = GetKnowledgeState(ownerId, projectId);
         if (string.IsNullOrEmpty(state.DatasetId))   // датасета ещё нет — сопоставлять не с чем
-            return await AddAsync(ownerId, projectId, text, type, source, sourceSessionId, salience);
+            return await AddAsync(ownerId, projectId, trimmed, type, source, sourceSessionId, salience);
 
         try
         {
@@ -257,7 +261,7 @@ public class TeamMemoryService
                 return dup;
             }
             if (candidates.Count == 0)   // нет соседей в зоне конфликта — обычное добавление
-                return Add(ownerId, projectId, text, type, source, sourceSessionId, salience);
+                return Add(ownerId, projectId, trimmed, type, source, sourceSessionId, salience);
 
             var decision = await _resolver.ResolveAsync(ownerId, trimmed, TypeLabel(type), candidates);
             switch (decision.Op)
@@ -266,20 +270,22 @@ public class TeamMemoryService
                     return null;   // дубль/незначимо — ничего не добавляем
                 case Memory.MemoryWriteOp.Update when !string.IsNullOrEmpty(decision.TargetId):
                     // Новый уточняет существующий → заменяем текст target на объединённую формулировку
-                    return Update(ownerId, projectId, decision.TargetId, decision.MergedText!)
-                        ?? Add(ownerId, projectId, text, type, source, sourceSessionId, salience);
+                    // (тоже LLM-текст резолвера — тот же гейт длины, что и у обычной авто-записи)
+                    var merged = await CompressIfLongAsync(source, decision.MergedText!.Trim());
+                    return Update(ownerId, projectId, decision.TargetId, merged)
+                        ?? Add(ownerId, projectId, trimmed, type, source, sourceSessionId, salience);
                 case Memory.MemoryWriteOp.Delete when !string.IsNullOrEmpty(decision.TargetId):
                     // Новый делает существующий устаревшим → удаляем target, добавляем новый
                     Remove(ownerId, projectId, decision.TargetId);
-                    return Add(ownerId, projectId, text, type, source, sourceSessionId, salience);
+                    return Add(ownerId, projectId, trimmed, type, source, sourceSessionId, salience);
                 default:   // Add и невалидные Update/Delete
-                    return Add(ownerId, projectId, text, type, source, sourceSessionId, salience);
+                    return Add(ownerId, projectId, trimmed, type, source, sourceSessionId, salience);
             }
         }
         catch (Exception ex)
         {
             _log?.LogDebug(ex, "team-memory: разрешение записи {Project}", projectId);
-            return Add(ownerId, projectId, text, type, source, sourceSessionId, salience);
+            return Add(ownerId, projectId, trimmed, type, source, sourceSessionId, salience);
         }
     }
 
@@ -450,6 +456,43 @@ public class TeamMemoryService
     // там потеря факта из-за отказа хуже длинной записи. Уже сохранённые длинные записи
     // читаются и правятся как раньше: гейт стоит только на новом тексте.
     public const int MaxTextLength = 1000;
+
+    // Гейт авто-записи (autolearn/резолвер противоречий): ручную запись контроллер уже держит
+    // в MaxTextLength, но экстрактор-LLM иногда игнорирует «кратко» и отдаёт абзац — такие
+    // записи реально доходили до 2-3 КБ в сторе и Dify. Порог срабатывания — 700 (не хотим
+    // трогать записи, которые и так укладываются в разумный размер), цель сжатия — 500
+    // (тот же порядок, что у ручной «одна мысль на запись»).
+    private const int AutoCompressThreshold = 700;
+    private const int AutoCompressTarget = 500;
+
+    // Сжать длинную АВТО-запись (Source != Manual) до сути через CheapTextRunner; ручную не
+    // трогаем — она уже ограничена MaxTextLength на контроллере. LLM недоступна, ошиблась или
+    // не сократила (пустой/длиннее исходного ответ) — жёсткая обрезка по границе слова (Shorten),
+    // потеря хвоста лучше простыни на 2-3 КБ в сторе и Dify.
+    private async Task<string> CompressIfLongAsync(TeamMemorySource source, string text)
+    {
+        if (source == TeamMemorySource.Manual || text.Length <= AutoCompressThreshold) return text;
+        if (_cheap is not null)
+        {
+            try
+            {
+                var prompt = "Сократи текст ниже до сути, не длиннее " + AutoCompressTarget +
+                    " символов, сохрани ключевой факт. Ответь ТОЛЬКО сокращённым текстом на русском, " +
+                    "без кавычек, пояснений и вступлений.\n\nТекст:\n" + text;
+                var compressed = (await _cheap.RunFreeAsync(Llm.LocalActionCatalog.TeamMemoryCompress, prompt))
+                    ?.Trim().Trim('"', '«', '»');
+                if (!string.IsNullOrWhiteSpace(compressed) && compressed.Length < text.Length)
+                {
+                    var softTruncated = false;
+                    return compressed.Length <= AutoCompressTarget
+                        ? compressed : Shorten(compressed, AutoCompressTarget, ref softTruncated);
+                }
+            }
+            catch (Exception ex) { _log?.LogDebug(ex, "team-memory: сжатие авто-записи не удалось"); }
+        }
+        var hardTruncated = false;
+        return Shorten(text, AutoCompressTarget, ref hardTruncated);
+    }
 
     private static string FormatRecall(IReadOnlyList<TeamMemoryEntry> ranked)
     {

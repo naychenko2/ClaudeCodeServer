@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
@@ -113,5 +114,110 @@ public class ProjectsControllerTeamMemoryTests : IClassFixture<TestWebApplicatio
         var response = await _client.PutAsJsonAsync($"/api/projects/{projectId}/team-memory/{entryId}", new { text });
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    // --- Диета памяти команды (③): гейт записи — только персоне ПРОЕКТА памяти ---
+
+    private const string CallerPersonaHeader = "X-Caller-Persona-Id";
+
+    private string CreatePersona(string ownerId, PersonaScope scope, string? projectId)
+    {
+        var personas = _factory.Services.GetRequiredService<PersonaManager>();
+        var persona = personas.Create(ownerId, "Тест-персона", null, null, null, null, null,
+            scope, projectId, null, null, memoryEnabled: true);
+        return persona.Id;
+    }
+
+    private HttpRequestMessage Request(HttpMethod method, string path, object? body, string? callerPersonaId)
+    {
+        var req = new HttpRequestMessage(method, path);
+        if (body is not null) req.Content = JsonContent.Create(body);
+        if (callerPersonaId is not null) req.Headers.Add(CallerPersonaHeader, callerPersonaId);
+        return req;
+    }
+
+    [Fact]
+    public async Task Add_БезЗаголовкаПерсоны_Разрешено()
+    {
+        var projectId = await CreateProjectAsync();
+
+        var response = await _client.SendAsync(
+            Request(HttpMethod.Post, $"/api/projects/{projectId}/team-memory", new { text = "Факт" }, callerPersonaId: null));
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    public async Task Add_ПерсонаЭтогоЖеПроекта_Разрешено()
+    {
+        var ownerId = _factory.Services.GetRequiredService<UserStore>().FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
+        var projectId = await CreateProjectAsync();
+        var personaId = CreatePersona(ownerId, PersonaScope.Project, projectId);
+
+        var response = await _client.SendAsync(
+            Request(HttpMethod.Post, $"/api/projects/{projectId}/team-memory", new { text = "Факт" }, personaId));
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    public async Task Add_ГлобальнаяПерсона_Запрещено403()
+    {
+        var ownerId = _factory.Services.GetRequiredService<UserStore>().FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
+        var projectId = await CreateProjectAsync();
+        var personaId = CreatePersona(ownerId, PersonaScope.Global, null);
+
+        var response = await _client.SendAsync(
+            Request(HttpMethod.Post, $"/api/projects/{projectId}/team-memory", new { text = "Факт" }, personaId));
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        var body = await response.Content.ReadAsStringAsync();
+        body.Should().Contain("team_memory_list", "отказ обязан объяснять, что читать всё ещё можно");
+    }
+
+    [Fact]
+    public async Task Add_ПерсонаДругогоПроекта_Запрещено403()
+    {
+        var ownerId = _factory.Services.GetRequiredService<UserStore>().FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
+        var projectId = await CreateProjectAsync();
+        var otherProjectId = await CreateProjectAsync();
+        var personaId = CreatePersona(ownerId, PersonaScope.Project, otherProjectId);
+
+        var response = await _client.SendAsync(
+            Request(HttpMethod.Post, $"/api/projects/{projectId}/team-memory", new { text = "Факт" }, personaId));
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+    }
+
+    [Fact]
+    public async Task Update_ГлобальнаяПерсона_Запрещено403()
+    {
+        var ownerId = _factory.Services.GetRequiredService<UserStore>().FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
+        var projectId = await CreateProjectAsync();
+        var entryId = SeedOversizedEntry(ownerId, projectId, 10);
+        var personaId = CreatePersona(ownerId, PersonaScope.Global, null);
+
+        var response = await _client.SendAsync(
+            Request(HttpMethod.Put, $"/api/projects/{projectId}/team-memory/{entryId}", new { text = "Новый текст" }, personaId));
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+    }
+
+    [Fact]
+    public async Task Remove_ГлобальнаяПерсона_Запрещено403()
+    {
+        var ownerId = _factory.Services.GetRequiredService<UserStore>().FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
+        var projectId = await CreateProjectAsync();
+        var entryId = SeedOversizedEntry(ownerId, projectId, 10);
+        var personaId = CreatePersona(ownerId, PersonaScope.Global, null);
+
+        var response = await _client.SendAsync(
+            Request(HttpMethod.Delete, $"/api/projects/{projectId}/team-memory/{entryId}", null, personaId));
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+
+        // Читать всё равно можно — гейт только на запись
+        var list = await _client.GetFromJsonAsync<JsonElement>($"/api/projects/{projectId}/team-memory");
+        list.EnumerateArray().Should().ContainSingle(e => e.GetProperty("id").GetString() == entryId);
     }
 }

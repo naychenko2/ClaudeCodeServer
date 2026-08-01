@@ -15,7 +15,11 @@
 // Память КОМАНДЫ проекта (③-3.4) — отдельное хранилище (TeamMemoryService), общее для
 // ВСЕХ персон проекта: плоский список фактов без типов, recall'ится наравне с личной
 // памятью в системный промпт каждого хода. team_memory_* — то же CRUD, что и у ручного
-// ввода через UI «Командный центр», но доступное персоне прямо из разговора.
+// ввода через UI «Командный центр», но доступное персоне прямо из разговора. Инструменты
+// регистрируются в ЛЮБОМ проектном чате (MEMORY_PROJECT_ID задан персоне текущего чата,
+// не только персонам проекта), а вот remember/update/forget бэкенд разрешает только персоне
+// САМОГО этого проекта — у прочих (глобальная персона, консультант другого проекта) 403 с
+// пояснением; list/search read-only и открыты всем (диета памяти команды, ч.3).
 
 import { createInterface } from 'node:readline';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -105,6 +109,11 @@ async function api(path, { timeoutMs = 60_000, ...options } = {}, attempt = 0) {
         'Content-Type': 'application/json; charset=utf-8',
         Authorization: `Bearer ${API_TOKEN}`,
         ...(callCtx.getStore()?.tool ? { 'X-Mcp-Tool': callCtx.getStore().tool } : {}),
+        // Персона-вызыватель для гейта записи команды на бэкенде (ProjectsController):
+        // team_memory_remember/update/forget разрешены только персоне ПРОЕКТА памяти, у
+        // которой пишем. Пусто — сессия без персоны (обычный чат проекта) — бэкенд считает
+        // это «своим» и не гейтит. PERSONA_ID пуст и на personal-эндпоинты не влияет.
+        ...(PERSONA_ID ? { 'X-Caller-Persona-Id': PERSONA_ID } : {}),
         ...(options.headers ?? {}),
       },
     });
@@ -254,14 +263,20 @@ const TOOLS = [
   },
 ];
 
-// team_memory_* — только у проектных персон (PROJECT_ID задан). Память команды не типизирована
-// (в отличие от personal semantic/episodic/procedural) — плоский список общих фактов проекта.
+// team_memory_* доступны в ЛЮБОМ проектном чате (PROJECT_ID задан) — не только персонам этого
+// проекта: список/поиск открыты всем (глобальной персоне, консультанту другого проекта — тоже),
+// а вот remember/update/forget бэкенд разрешает только персоне САМОГО этого проекта (см.
+// ProjectsController.TeamMemoryWriteAllowed) — у остальных 403 с пояснением в тексте ошибки.
+// Память команды не типизирована (в отличие от personal semantic/episodic/procedural) —
+// плоский список общих фактов проекта.
 const TEAM_TOOLS = [
   {
     name: 'team_memory_remember',
     description: 'Запомнить факт в общую память КОМАНДЫ проекта — увидят и смогут использовать ' +
       'ВСЕ персоны проекта, не только ты. Пиши сюда то, что относится к проекту в целом (общие ' +
-      'договорённости, структура данных, ограничения), а не личные заметки о себе.',
+      'договорённости, структура данных, ограничения), а не личные заметки о себе. Доступно только ' +
+      'персоне ЭТОГО проекта — у глобальной персоны или консультанта другого проекта вызов откажет ' +
+      '(используй team_memory_list/team_memory_search для чтения).',
     inputSchema: {
       type: 'object',
       required: ['text'],
@@ -291,12 +306,23 @@ const TEAM_TOOLS = [
   },
   {
     name: 'team_memory_list',
-    description: 'Перечислить всё, что команда проекта уже знает (общая память, не личная).',
-    inputSchema: { type: 'object', properties: {} },
+    description: 'Перечислить, что команда проекта уже знает (общая память, не личная). Без ' +
+      'параметров — первая страница с усечёнными текстами (полный текст записи — id или full). ' +
+      'Ответ несёт total: если записей больше, чем показано, догрузи следующую страницу через offset.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Вернуть одну запись целиком по id (без усечения текста)' },
+        limit: { type: 'integer', minimum: 1, maximum: 50, description: 'Сколько записей на странице (по умолчанию 20)' },
+        offset: { type: 'integer', minimum: 0, description: 'Сколько записей пропустить (пагинация)' },
+        full: { type: 'boolean', description: 'Не усекать текст записей страницы (по умолчанию усекается до 200 символов)' },
+      },
+    },
   },
   {
     name: 'team_memory_forget',
-    description: 'Удалить запись из общей памяти команды проекта по id (устарела/оказалась неверной).',
+    description: 'Удалить запись из общей памяти команды проекта по id (устарела/оказалась неверной). ' +
+      'Доступно только персоне ЭТОГО проекта.',
     inputSchema: {
       type: 'object',
       required: ['id'],
@@ -307,7 +333,7 @@ const TEAM_TOOLS = [
     name: 'team_memory_update',
     description: 'Переписать (уточнить) запись общей памяти команды проекта по id: заменяет её текст. ' +
       'Используй, когда общий факт/договорённость изменились — вместо дубля через team_memory_remember. ' +
-      'id узнаёшь через team_memory_list/team_memory_search.',
+      'id узнаёшь через team_memory_list/team_memory_search. Доступно только персоне ЭТОГО проекта.',
     inputSchema: {
       type: 'object',
       required: ['id', 'text'],
@@ -402,8 +428,25 @@ async function callTool(name, args) {
       return json(await api(`${teamBase}/search?${params}`));
     }
 
-    case 'team_memory_list':
-      return json(await api(teamBase));
+    case 'team_memory_list': {
+      // Стор целиком приходит с бэкенда без усечения (UI «Командного центра» на нём же и
+      // держится) — пагинация/усечение текста только здесь, на выдаче модели: 200 записей
+      // по 3 КБ каждая в контексте хода — ровно та простыня, из-за которой диета и затевалась.
+      const list = await api(teamBase);
+      if (args.id) {
+        const entry = list.find(e => e.id === args.id);
+        if (!entry) return { content: [{ type: 'text', text: `Запись ${args.id} не найдена в памяти команды.` }], isError: true };
+        return json(entry);
+      }
+      const limit = Number.isInteger(args.limit) ? Math.min(Math.max(args.limit, 1), 50) : 20;
+      const offset = Number.isInteger(args.offset) && args.offset > 0 ? args.offset : 0;
+      const full = args.full === true;
+      const TEXT_LIMIT = 200;
+      const items = list.slice(offset, offset + limit).map(e => (full || e.text.length <= TEXT_LIMIT)
+        ? e
+        : { ...e, text: e.text.slice(0, TEXT_LIMIT).trimEnd() + '…' });
+      return json({ total: list.length, offset, limit, items });
+    }
 
     case 'team_memory_forget':
       await api(`${teamBase}/${encodeURIComponent(args.id)}`, { method: 'DELETE' });

@@ -137,4 +137,137 @@ public class PreviewControllerTests : IClassFixture<TestWebApplicationFactory>
             s.GetProperty("saved").GetBoolean() &&
             s.GetProperty("name").GetString() == "api");
     }
+
+    // ── Сервисы, поднятые вне продукта ────────────────────────────────────────
+
+    /// <summary>Слушающий сокет на свободном порту — эмуляция сервера, запущенного снаружи.</summary>
+    private static System.Net.Sockets.TcpListener StartListener(out int port)
+    {
+        var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        listener.Start();
+        port = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+        return listener;
+    }
+
+    private async Task SaveServiceAsync(string projectId, string name, int? port)
+    {
+        var response = await _owner.PutAsJsonAsync($"/api/projects/{projectId}/launch-config", new
+        {
+            configurations = new[]
+            {
+                new { name, runtimeExecutable = "npm", runtimeArgs = new[] { "run", "dev" }, port }
+            }
+        });
+        response.EnsureSuccessStatusCode();
+    }
+
+    [Fact]
+    public async Task Services_PortListening_MarksServiceExternal()
+    {
+        var (projectId, _) = await CreateProjectAsync();
+        using var listener = StartListener(out var port);
+        await SaveServiceAsync(projectId, "external-web", port);
+
+        var response = await _owner.GetAsync($"/api/projects/{projectId}/services");
+        response.EnsureSuccessStatusCode();
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var svc = json.GetProperty("services").EnumerateArray()
+            .First(s => s.GetProperty("name").GetString() == "external-web");
+
+        svc.GetProperty("status").GetString().Should().Be("external");
+        svc.GetProperty("runningPort").GetInt32().Should().Be(port);
+    }
+
+    [Fact]
+    public async Task Services_PortFree_KeepsServiceIdle()
+    {
+        var (projectId, _) = await CreateProjectAsync();
+        // Порт занимаем и сразу освобождаем — так он гарантированно свободен
+        var listener = StartListener(out var port);
+        listener.Stop();
+        await SaveServiceAsync(projectId, "idle-web", port);
+
+        var response = await _owner.GetAsync($"/api/projects/{projectId}/services");
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var svc = json.GetProperty("services").EnumerateArray()
+            .First(s => s.GetProperty("name").GetString() == "idle-web");
+
+        svc.GetProperty("status").GetString().Should().Be("idle");
+    }
+
+    [Fact]
+    public async Task ActiveExternal_ListeningService_ReturnsItsPort()
+    {
+        var (projectId, _) = await CreateProjectAsync();
+        using var listener = StartListener(out var port);
+        await SaveServiceAsync(projectId, "external-web", port);
+
+        var services = await (await _owner.GetAsync($"/api/projects/{projectId}/services"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        var serviceId = services.GetProperty("services").EnumerateArray()
+            .First(s => s.GetProperty("name").GetString() == "external-web")
+            .GetProperty("id").GetString();
+
+        var response = await _owner.PostAsJsonAsync(
+            $"/api/projects/{projectId}/preview/active-external", new { serviceId });
+        response.EnsureSuccessStatusCode();
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        json.GetProperty("port").GetInt32().Should().Be(port);
+    }
+
+    [Fact]
+    public async Task ActiveExternal_PortNotListening_ReturnsBadRequest()
+    {
+        var (projectId, _) = await CreateProjectAsync();
+        var listener = StartListener(out var port);
+        listener.Stop();
+        await SaveServiceAsync(projectId, "dead-web", port);
+
+        var services = await (await _owner.GetAsync($"/api/projects/{projectId}/services"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        var serviceId = services.GetProperty("services").EnumerateArray()
+            .First(s => s.GetProperty("name").GetString() == "dead-web")
+            .GetProperty("id").GetString();
+
+        var response = await _owner.PostAsJsonAsync(
+            $"/api/projects/{projectId}/preview/active-external", new { serviceId });
+        response.StatusCode.Should().Be(System.Net.HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task ActiveExternal_ServiceWithoutPort_ReturnsBadRequest()
+    {
+        var (projectId, _) = await CreateProjectAsync();
+        await SaveServiceAsync(projectId, "no-port", null);
+
+        var services = await (await _owner.GetAsync($"/api/projects/{projectId}/services"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        var serviceId = services.GetProperty("services").EnumerateArray()
+            .First(s => s.GetProperty("name").GetString() == "no-port")
+            .GetProperty("id").GetString();
+
+        var response = await _owner.PostAsJsonAsync(
+            $"/api/projects/{projectId}/preview/active-external", new { serviceId });
+        response.StatusCode.Should().Be(System.Net.HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task ActiveExternal_UnknownService_ReturnsNotFound()
+    {
+        var (projectId, _) = await CreateProjectAsync();
+        var response = await _owner.PostAsJsonAsync(
+            $"/api/projects/{projectId}/preview/active-external", new { serviceId = "does-not-exist" });
+        response.StatusCode.Should().Be(System.Net.HttpStatusCode.NotFound);
+    }
+
+    [Fact]
+    public async Task ActiveExternal_AsNonOwner_ReturnsForbid()
+    {
+        var (projectId, _) = await CreateProjectAsync();
+        var other = _factory.CreateAuthenticatedClient(
+            TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
+        var response = await other.PostAsJsonAsync(
+            $"/api/projects/{projectId}/preview/active-external", new { serviceId = "any" });
+        response.StatusCode.Should().Be(System.Net.HttpStatusCode.Forbidden);
+    }
 }

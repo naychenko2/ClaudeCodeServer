@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Xml.Linq;
 using ClaudeHomeServer.Models;
 
 namespace ClaudeHomeServer.Services;
@@ -12,14 +13,17 @@ namespace ClaudeHomeServer.Services;
 public record ProjectServiceInfo(
     string Id,
     string Name,
-    string Source,          // launch.json | npm | dotnet | docker-compose | procfile | makefile | custom
+    string Source,          // launch.json | rider | npm | dotnet | docker-compose | procfile | makefile | custom
     string Command,
     string[] Args,
     string? Cwd,            // относительный путь от RootPath (null = корень)
     int? SuggestedPort,
     bool AutoPort,
     bool Saved,             // из .claude/launch.json (можно редактировать/удалять)
-    Dictionary<string, string>? Env = null
+    Dictionary<string, string>? Env = null,
+    // Составной запуск (multilaunch у Rider): id входящих сервисов. У группы своей
+    // команды нет — она запускает участников, каждый остаётся отдельным процессом.
+    string[]? Members = null
 );
 
 /// <summary>
@@ -58,9 +62,12 @@ public sealed class ProjectServiceDiscovery
         }
 
         // 2) Инференс из манифестов; дубли (по сигнатуре) отбрасываем в пользу saved.
+        // Конфигурации Rider идут первыми среди инференса: это явное намерение человека
+        // с осмысленным именем («Backend»), а разбор манифестов — догадка («dev»).
         if (Directory.Exists(root))
         {
-            foreach (var svc in SafeParse(() => ParseNode(root), "package.json")
+            foreach (var svc in SafeParse(() => ParseRider(root), "конфигурации Rider")
+                .Concat(SafeParse(() => ParseNode(root), "package.json"))
                 .Concat(SafeParse(() => ParseDotnet(root), "launchSettings.json"))
                 .Concat(SafeParse(() => ParseCompose(root), "docker-compose"))
                 .Concat(SafeParse(() => ParseProcfile(root), "Procfile"))
@@ -112,6 +119,276 @@ public sealed class ProjectServiceDiscovery
             _log.LogDebug(ex, "Парсер {Label} упал", label);
             return [];
         }
+    }
+
+    // ── Конфигурации запуска Rider ────────────────────────────────────────
+    //
+    // Два места: `.run/*.run.xml` (лежит рядом с solution — у нас это `backend/.run`)
+    // и `.idea/**/runConfigurations/*.xml` (у Rider путь бывает вложенным:
+    // `.idea/.idea.<Solution>/.idea/runConfigurations`). Обе папки начинаются с точки,
+    // поэтому общий обход FindFiles их не видит — здесь свой, знающий про них.
+    //
+    // Поддерживаем три типа. Остальные пропускаем осознанно: `multilaunch` — это
+    // несколько процессов разом, а у нас «один сервис — один процесс»; скриптовые
+    // (ShConfigurationType, PowerShellRunType) неотличимы от несерверных.
+    private List<ProjectServiceInfo> ParseRider(string root)
+    {
+        var list = new List<ProjectServiceInfo>();
+        // Составные разбираем вторым проходом: их ссылки указывают на конфигурации из
+        // ДРУГИХ файлов, поэтому резолвить их можно только когда собраны все простые.
+        var compound = new List<(string Name, List<string> Refs)>();
+
+        foreach (var (file, projectDir) in FindRiderConfigs(root))
+        {
+            XDocument doc;
+            try { doc = XDocument.Load(file); }
+            catch (Exception ex)
+            {
+                _log.LogDebug(ex, "Не разобрана конфигурация Rider {File}", file);
+                continue;
+            }
+
+            foreach (var cfg in doc.Descendants("configuration"))
+            {
+                var name = cfg.Attribute("name")?.Value;
+                var type = cfg.Attribute("type")?.Value;
+                if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(type)) continue;
+
+                if (type == "com.intellij.execution.configurations.multilaunch")
+                {
+                    var refs = cfg.Descendants("ExecutableSnapshot")
+                        .Select(e => e.Elements("option").FirstOrDefault(o => o.Attribute("name")?.Value == "id")?
+                            .Attribute("value")?.Value)
+                        .Where(v => !string.IsNullOrWhiteSpace(v))
+                        .Select(v => v!)
+                        .ToList();
+                    if (refs.Count > 0) compound.Add((name, refs));
+                    continue;
+                }
+
+                var svc = type switch
+                {
+                    "LaunchSettings" => RiderLaunchSettings(root, projectDir, cfg, name),
+                    "js.build_tools.npm" => RiderNpm(root, projectDir, cfg, name),
+                    "docker-deploy" => RiderCompose(root, projectDir, cfg, name),
+                    // Скриптовые типы (ShConfigurationType, PowerShellRunType) пропускаем:
+                    // отличить сервер от разовой утилиты в них нечем
+                    _ => null,
+                };
+                if (svc != null) list.Add(svc);
+            }
+        }
+
+        foreach (var (name, refs) in compound)
+        {
+            var members = refs.Select(r => ResolveRiderRef(r, list)).Where(m => m != null).Select(m => m!.Id).ToArray();
+            // Группа без единого разрешённого участника бесполезна: скорее всего она
+            // состоит из типов, которые мы не поддерживаем
+            if (members.Length == 0) continue;
+            list.Add(new ProjectServiceInfo(
+                Id: Slug($"rider-group-{name}"),
+                Name: name,
+                Source: "rider",
+                Command: "",
+                Args: [],
+                Cwd: null,
+                SuggestedPort: null,
+                AutoPort: false,
+                Saved: false,
+                Members: members));
+        }
+
+        return list;
+    }
+
+    /// <summary>
+    /// Ссылка вида `runConfig:{фабрика}.{имя}` — например `runConfig:npm.Frontend` или
+    /// `runConfig:.NET Launch Settings Profile.Backend (Telemetry Prod)`. Имя фабрики само
+    /// содержит точки, поэтому сопоставляем по суффиксу и берём самое длинное совпадение:
+    /// иначе «Backend» перехватил бы ссылку на «Telemetry Backend».
+    /// </summary>
+    private static ProjectServiceInfo? ResolveRiderRef(string reference, List<ProjectServiceInfo> known)
+    {
+        var id = reference.StartsWith("runConfig:", StringComparison.Ordinal)
+            ? reference["runConfig:".Length..]
+            : reference;
+
+        return known
+            .Where(s => s.Source == "rider" &&
+                        id.EndsWith("." + s.Name, StringComparison.Ordinal))
+            .OrderByDescending(s => s.Name.Length)
+            .FirstOrDefault();
+    }
+
+    /// <summary>Файлы конфигураций вместе с их $PROJECT_DIR$ (папкой, где лежит .run/.idea).</summary>
+    private static List<(string File, string ProjectDir)> FindRiderConfigs(string root)
+    {
+        var results = new List<(string, string)>();
+
+        void Collect(string dir)
+        {
+            var run = Path.Combine(dir, ".run");
+            if (Directory.Exists(run))
+                foreach (var f in SafeGetFiles(run, "*.run.xml")) results.Add((f, dir));
+
+            var idea = Path.Combine(dir, ".idea");
+            if (!Directory.Exists(idea)) return;
+            // Папка runConfigurations лежит на неизвестной глубине внутри .idea
+            try
+            {
+                foreach (var rc in Directory.GetDirectories(idea, "runConfigurations", SearchOption.AllDirectories))
+                    foreach (var f in SafeGetFiles(rc, "*.xml")) results.Add((f, dir));
+            }
+            catch { /* нет прав/битые ссылки — конфигураций просто нет */ }
+        }
+
+        void Walk(string dir, int depth)
+        {
+            Collect(dir);
+            if (depth >= 2) return;   // solution обычно в корне или на уровень ниже
+            string[] dirs;
+            try { dirs = Directory.GetDirectories(dir); }
+            catch { return; }
+            foreach (var d in dirs)
+            {
+                var name = Path.GetFileName(d);
+                if (name.StartsWith('.')) continue;
+                if (FileService.TreeExcludes.Contains(name)) continue;
+                Walk(d, depth + 1);
+            }
+        }
+
+        Walk(root, 0);
+        return results;
+    }
+
+    private static string[] SafeGetFiles(string dir, string pattern)
+    {
+        try { return Directory.GetFiles(dir, pattern); }
+        catch { return []; }
+    }
+
+    private static string? RiderOption(XElement cfg, string name) =>
+        cfg.Elements("option").FirstOrDefault(o => o.Attribute("name")?.Value == name)?.Attribute("value")?.Value;
+
+    /// <summary>
+    /// Абсолютный путь из значения конфигурации Rider. `$PROJECT_DIR$` подставляем, дальше
+    /// проверяем SafeJoin: конфигурации сплошь ссылаются наружу (`$PROJECT_DIR$/../frontend`,
+    /// интерпретатор в System32), а запускать мы имеем право только внутри проекта.
+    /// Ссылка за пределы корня → null, конфигурация пропускается.
+    /// </summary>
+    private static string? ResolveRiderPath(string root, string projectDir, string? value)
+    {
+        var raw = value?.Trim();
+        if (string.IsNullOrEmpty(raw)) return null;
+        raw = raw.Replace("$PROJECT_DIR$", projectDir);
+        try
+        {
+            var full = Path.IsPathRooted(raw) ? Path.GetFullPath(raw) : Path.GetFullPath(Path.Combine(projectDir, raw));
+            return FileService.SafeJoinPublic(root, full);
+        }
+        catch (UnauthorizedAccessException) { return null; }   // за пределами проекта
+        catch (ArgumentException) { return null; }             // недопустимые символы в пути
+        catch (NotSupportedException) { return null; }
+    }
+
+    // Профиль launchSettings.json: `dotnet run --project X --launch-profile Y`.
+    // Ровно то же, что собирает ParseDotnet, — вид аргументов обязан совпадать,
+    // иначе дедуп по сигнатуре не сработает и в списке будет два одинаковых запуска.
+    private ProjectServiceInfo? RiderLaunchSettings(string root, string projectDir, XElement cfg, string name)
+    {
+        var csproj = ResolveRiderPath(root, projectDir, RiderOption(cfg, "LAUNCH_PROFILE_PROJECT_FILE_PATH"));
+        if (csproj is null) return null;
+
+        var profile = RiderOption(cfg, "LAUNCH_PROFILE_NAME");
+        var projRef = RelCwd(root, csproj) ?? Path.GetFileName(csproj);
+        string[] args = string.IsNullOrWhiteSpace(profile)
+            ? ["run", "--project", projRef]
+            : ["run", "--project", projRef, "--launch-profile", profile];
+
+        return new ProjectServiceInfo(
+            Id: Slug($"rider-{name}"),
+            Name: name,
+            Source: "rider",
+            Command: "dotnet",
+            Args: args,
+            Cwd: null,
+            SuggestedPort: string.IsNullOrWhiteSpace(profile) ? null : LaunchProfilePort(csproj, profile),
+            AutoPort: false,
+            Saved: false);
+    }
+
+    /// <summary>Порт профиля из launchSettings.json рядом с csproj (http предпочтительнее https).</summary>
+    private static int? LaunchProfilePort(string csprojPath, string profileName)
+    {
+        try
+        {
+            var path = Path.Combine(Path.GetDirectoryName(csprojPath)!, "Properties", "launchSettings.json");
+            if (!File.Exists(path)) return null;
+            using var doc = JsonDocument.Parse(File.ReadAllText(path));
+            if (!doc.RootElement.TryGetProperty("profiles", out var profiles)) return null;
+            if (!profiles.TryGetProperty(profileName, out var profile)) return null;
+            if (!profile.TryGetProperty("applicationUrl", out var url) || url.ValueKind != JsonValueKind.String) return null;
+            return FirstHttpPort(url.GetString());
+        }
+        catch { return null; }
+    }
+
+    private ProjectServiceInfo? RiderNpm(string root, string projectDir, XElement cfg, string name)
+    {
+        var pkg = ResolveRiderPath(root, projectDir, cfg.Element("package-json")?.Attribute("value")?.Value);
+        if (pkg is null) return null;
+        var script = cfg.Element("scripts")?.Elements("script").FirstOrDefault()?.Attribute("value")?.Value;
+        if (string.IsNullOrWhiteSpace(script)) return null;
+
+        var command = cfg.Element("command")?.Attribute("value")?.Value ?? "run";
+        var pkgDir = Path.GetDirectoryName(pkg)!;
+        var cwd = RelCwd(root, pkgDir);
+        var mgr = DetectPackageManager(pkgDir, root);
+        // Как в ParseNode: npm требует «run <script>», у pnpm/yarn скрипт идёт сам по себе
+        var args = mgr == "npm" ? new[] { command, script } : new[] { script };
+
+        return new ProjectServiceInfo(
+            Id: Slug($"rider-{name}"),
+            Name: name,
+            Source: "rider",
+            Command: mgr,
+            Args: args,
+            Cwd: cwd,
+            SuggestedPort: null,   // Vite/webpack печатают URL в вывод — поймаем при старте
+            AutoPort: false,
+            Saved: false);
+    }
+
+    private ProjectServiceInfo? RiderCompose(string root, string projectDir, XElement cfg, string name)
+    {
+        var settings = cfg.Element("deployment")?.Element("settings");
+        if (settings is null) return null;
+
+        var sourceFile = settings.Elements("option")
+            .FirstOrDefault(o => o.Attribute("name")?.Value == "sourceFilePath")?.Attribute("value")?.Value;
+        var full = ResolveRiderPath(root, projectDir, sourceFile);
+        if (full is null) return null;
+        var rel = RelCwd(root, full) ?? Path.GetFileName(full);
+
+        var args = new List<string> { "compose", "-f", rel };
+        var profiles = settings.Elements("option")
+            .FirstOrDefault(o => o.Attribute("name")?.Value == "profiles")?.Element("list")?
+            .Elements("option").Select(o => o.Attribute("value")?.Value)
+            .Where(v => !string.IsNullOrWhiteSpace(v)) ?? [];
+        foreach (var p in profiles) { args.Add("--profile"); args.Add(p!); }
+        args.Add("up");
+
+        return new ProjectServiceInfo(
+            Id: Slug($"rider-{name}"),
+            Name: name,
+            Source: "rider",
+            Command: "docker",
+            Args: [.. args],
+            Cwd: null,
+            SuggestedPort: null,   // хостовые порты знает сам compose-файл, его парсит ParseCompose
+            AutoPort: false,
+            Saved: false);
     }
 
     // ── package.json scripts ──────────────────────────────────────────────
@@ -441,8 +718,13 @@ public sealed class ProjectServiceDiscovery
         return https;
     }
 
+    // Ключ дедупликации: один и тот же запуск, найденный разными парсерами, должен
+    // схлопнуться. У составных конфигураций команды нет — их различает состав, иначе
+    // все группы проекта выглядели бы одинаково («пустая команда») и остался бы один.
     private static string Signature(ProjectServiceInfo s) =>
-        $"{s.Command} {string.Join(' ', s.Args)}@{s.Cwd ?? ""}";
+        s.Members is { Length: > 0 }
+            ? "group:" + string.Join(',', s.Members)
+            : $"{s.Command} {string.Join(' ', s.Args)}@{s.Cwd ?? ""}";
 
     private static string Slug(string s)
     {

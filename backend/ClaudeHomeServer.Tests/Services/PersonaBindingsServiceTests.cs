@@ -207,6 +207,7 @@ public class PersonaBindingsServiceTests : IDisposable
     [InlineData(PersonaSpecialty.Executor, "git")]
     [InlineData(PersonaSpecialty.Reviewer, "git")]
     [InlineData(PersonaSpecialty.Tester, "git")]
+    [InlineData(PersonaSpecialty.Tester, "browser")]
     [InlineData(PersonaSpecialty.Librarian, "kb")]
     [InlineData(PersonaSpecialty.Coordinator, "personas-manage")]
     [InlineData(PersonaSpecialty.Coordinator, "personas-automation")]
@@ -221,6 +222,15 @@ public class PersonaBindingsServiceTests : IDisposable
         foreach (var other in PersonaBindingsService.PresetKeys.Where(k => k != key
                      && !PersonaBindingsService.SpecialtySections(specialty).Contains(k)))
             _sut.SectionEnabled(_userId, persona, other).Should().BeFalse($"ключ {other}");
+    }
+
+    [Fact]
+    public void SectionEnabled_Браузер_ТолькоТестировщику()
+    {
+        // Плагин playwright (24 browser_*-инструмента) держим у того, чья работа — щёлкать UI
+        foreach (var specialty in Enum.GetValues<PersonaSpecialty>())
+            _sut.SectionEnabled(_userId, MakePersona(specialty: specialty), "browser")
+                .Should().Be(specialty == PersonaSpecialty.Tester, $"роль {specialty}");
     }
 
     [Fact]

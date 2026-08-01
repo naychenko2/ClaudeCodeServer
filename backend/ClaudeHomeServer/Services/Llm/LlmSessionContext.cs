@@ -168,4 +168,9 @@ public sealed record LlmSessionContext(
     WidgetsMcpContext? WidgetsMcp = null,
     // MCP-сервер графа кода (codegraph_find/neighbors/hubs): навигация агента по структуре
     // проекта. null — чат вне проекта или нет владельца.
-    CodeGraphMcpContext? CodeGraphMcp = null);
+    CodeGraphMcpContext? CodeGraphMcp = null,
+    // Браузер (плагин playwright, 24 browser_*-инструмента): false — плагин гасится на
+    // запуске CLI (ClaudeRuntimeSettings). Решение принимается по персоне, не по ходу —
+    // Tool-ключ «browser» с дефолтом по роли (тестировщику включён). true — как раньше:
+    // чат без персоны и все прочие пути ничего не теряют.
+    bool BrowserEnabled = true);

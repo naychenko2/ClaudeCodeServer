@@ -38,6 +38,7 @@ public class PersonaBindingsService
             ["kb"] = ("Личные базы знаний", "Личные базы знаний: управление документами, которые ваша персона может искать при ответах (загрузка, поиск, удаление документов)"),
             ["personas-manage"] = ("Создание и редактирование персон", "Создание и редактирование персон: полный контроль над командой — их описаниями, знаниями, внешностью и правилами"),
             ["personas-automation"] = ("Автоматизация персон", "Автоматизация персон: настройка триггеров (по времени, событиям, упоминаниям), при которых персона автоматически пишет в нужный чат"),
+            ["browser"] = ("Браузер", "Управление браузером (плагин playwright): открыть страницу, кликнуть, заполнить форму, снять скриншот — ручная проверка интерфейса"),
         };
 
     // Ключи-рубильники MCP-серверов: гейтятся ТОЛЬКО Tool-привязкой (ServerToolEnabled).
@@ -50,7 +51,7 @@ public class PersonaBindingsService
     // (SpecialtySections). Решение — SectionEnabled.
     public static readonly IReadOnlySet<string> PresetKeys =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-            { "git", "kb", "personas-manage", "personas-automation" };
+            { "git", "kb", "personas-manage", "personas-automation", "browser" };
 
     private readonly PersonaManager _personas;
     private readonly ProjectManager _projects;
@@ -138,11 +139,14 @@ public class PersonaBindingsService
     // и тестировщику (читают изменения; у них ещё и Access=ReadOnly отбирает Bash, так что
     // wsp-git — единственный оставшийся канал к git). Библиотекарю — базы знаний владельца,
     // координатору и секретарю — управление командой и её проактивностью. Остальным — ядро.
+    // Браузер (плагин playwright) — только тестировщику: ручная проверка UI это его работа,
+    // остальным 24 browser_*-инструмента лишь занимают место в контексте.
     // Секции chats тут намеренно нет: в ней живёт chats_report_up — канал отчёта исполнителя
     // вверх по делегированию, выключать его по умолчанию у исполнителей нельзя.
     public static IReadOnlySet<string> SpecialtySections(PersonaSpecialty specialty) => specialty switch
     {
-        PersonaSpecialty.Executor or PersonaSpecialty.Reviewer or PersonaSpecialty.Tester => GitSections,
+        PersonaSpecialty.Tester => TesterSections,
+        PersonaSpecialty.Executor or PersonaSpecialty.Reviewer => GitSections,
         PersonaSpecialty.Librarian => LibrarianSections,
         PersonaSpecialty.Coordinator or PersonaSpecialty.Secretary => CoordinatorSections,
         _ => CoreSections,
@@ -152,6 +156,8 @@ public class PersonaBindingsService
         new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     private static readonly IReadOnlySet<string> GitSections =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "git" };
+    private static readonly IReadOnlySet<string> TesterSections =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "git", "browser" };
     private static readonly IReadOnlySet<string> LibrarianSections =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "kb" };
     private static readonly IReadOnlySet<string> CoordinatorSections =

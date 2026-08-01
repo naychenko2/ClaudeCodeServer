@@ -109,7 +109,9 @@ Claude Design проект: `52adb1f7-312b-4f25-8c47-2bccfca9df94`
   токеном — `C.onAccent`, на подложке вне темы (палитра, фото, лайтбокс) — `C.onDark`.
 - **Проверяется линтом:** `cd frontend; npm run lint:design` обязан быть зелёным (правило
   `design/no-raw-color`; исключения — список `RAW_COLOR_ALLOWED` в eslint.config.js либо
-  построчный `eslint-disable-next-line` с причиной).
+  построчный `eslint-disable-next-line` с причиной). Гейт стоит **перед коммитом**, а не
+  после каждой правки: щиток судит только цвета и на изменениях раскладки, логики или
+  замене токена на токен ловить ему нечего. По ходу работы хватает `npx tsc -b`.
 - Размеры — из шкал: `FS` (шрифты), `SP` (отступы), `R` (радиусы), `SHADOW`, `Z`, `MODAL_W`.
 - Контролы — только из `frontend/src/components/ui/` (Button, Modal, Field, Menu, Toggle,
   Island/IslandScaffold…) плюс общие Toolbar/EmptyState. Самодельные кнопки/модалки из

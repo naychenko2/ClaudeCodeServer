@@ -12,6 +12,7 @@ import { fmtDate, shortAgo } from './memoryTypes';
 export function MemoryEntryCard({
   entry, typeMeta, onRemove, removing, onToNote, onConfirm,
   editing, editText, onEditTextChange, onStartEdit, onSaveEdit, onCancelEdit, savingEdit,
+  editError, editMaxLength,
 }: {
   entry: MemoryEntryView;
   typeMeta: MemoryTypeMeta;
@@ -26,9 +27,12 @@ export function MemoryEntryCard({
   onSaveEdit: () => void;
   onCancelEdit: () => void;
   savingEdit: boolean;
+  editError?: string | null;
+  editMaxLength?: number;
 }) {
   const isAuto = entry.origin === 'auto';
   const removeLabel = isAuto ? 'Отклонить' : 'Забыть';
+  const editOverLimit = editMaxLength != null && editText.trim().length > editMaxLength;
 
   return (
     <div style={{
@@ -50,9 +54,15 @@ export function MemoryEntryCard({
               else if (e.key === 'Escape') { e.preventDefault(); onCancelEdit(); }
             }}
           />
-          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'flex-end' }}>
+            {editError && <span style={{ fontSize: 12, color: C.dangerText, fontFamily: FONT.sans, marginRight: 'auto' }}>{editError}</span>}
+            {editMaxLength != null && (
+              <span style={{ fontSize: 11.5, color: editOverLimit ? C.dangerText : C.textMuted, fontFamily: FONT.sans }}>
+                {editText.trim().length} / {editMaxLength}
+              </span>
+            )}
             <button onClick={onCancelEdit} disabled={savingEdit} style={editGhostBtn}>Отмена</button>
-            <button onClick={onSaveEdit} disabled={savingEdit || !editText.trim()} style={{ ...editSaveBtn, opacity: savingEdit || !editText.trim() ? 0.55 : 1 }}>
+            <button onClick={onSaveEdit} disabled={savingEdit || !editText.trim() || editOverLimit} style={{ ...editSaveBtn, opacity: savingEdit || !editText.trim() || editOverLimit ? 0.55 : 1 }}>
               {savingEdit ? 'Сохраняю…' : 'Сохранить'}
             </button>
           </div>

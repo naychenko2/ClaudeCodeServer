@@ -201,6 +201,8 @@ public class PersonasController : ControllerBase
             return BadRequest("Неверный профиль доступа (ожидается full | readOnly | custom)");
         if (!ModelTiers.IsValidWireValue(req.ModelTier))
             return BadRequest(new { error = ModelTiers.WireError });
+        if (PersonaManager.ExceedsContractLimit(req.Contract, req.SystemPrompt, 0, out var tooBig))
+            return BadRequest(new { error = tooBig });
 
         // Явные привязки валидируем ДО создания персоны — ошибка не оставляет полусозданную.
         // Персона ещё не существует — для само-проверки ProjectPersonas/ProjectTasks передаём
@@ -249,7 +251,7 @@ public class PersonasController : ControllerBase
     [HttpPut("{id}")]
     public async Task<ActionResult<Persona>> Update(string id, [FromBody] UpdatePersonaRequest req)
     {
-        if (_personas.Get(id, UserId) is null) return NotFound();
+        if (_personas.Get(id, UserId) is not { } current) return NotFound();
         if (req.Scope == PersonaScope.Project && !ValidProject(req.ProjectId))
             return BadRequest("Для проектной персоны нужен корректный projectId");
         // Любой непустой projectId (в т.ч. при partial-update без scope) — только свой проект
@@ -259,6 +261,15 @@ public class PersonasController : ControllerBase
             return BadRequest("Неверный профиль доступа (ожидается full | readOnly | custom)");
         if (!ModelTiers.IsValidWireValue(req.ModelTier))
             return BadRequest(new { error = ModelTiers.WireError });
+        // Partial-update: null-поля не меняются, поэтому размер считаем по эффективному контракту.
+        // Порог — только на рост: у раздутой персоны остаётся право сохранить сокращение
+        if (req.Contract is not null || req.SystemPrompt is not null)
+        {
+            var currentSize = PersonaManager.ContractSize(current.Contract, current.SystemPrompt);
+            if (PersonaManager.ExceedsContractLimit(req.Contract ?? current.Contract,
+                    req.SystemPrompt ?? current.SystemPrompt, currentSize, out var tooBig))
+                return BadRequest(new { error = tooBig });
+        }
 
         Persona persona;
         try
@@ -610,6 +621,8 @@ public class PersonasController : ControllerBase
             OutputFormat = draft.OutputFormat,
             SpeechExamples = draft.SpeechExamples,
         };
+        if (PersonaManager.ExceedsContractLimit(contract, null, 0, out var tooBig))
+            return BadRequest(new { error = tooBig });
         var persona = _personas.Create(UserId, draft.Name!, draft.Role, draft.Description,
             systemPrompt: null, model: null, effort: null, scope, req.ProjectId,
             color, draft.Greeting, memoryEnabled: true, tools: null, contract: contract);

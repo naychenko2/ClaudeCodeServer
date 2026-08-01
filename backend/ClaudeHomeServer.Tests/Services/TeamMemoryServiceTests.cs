@@ -98,6 +98,35 @@ public class TeamMemoryServiceTests : IDisposable
     }
 
     [Fact]
+    public void BuildRecallBlock_ДлиннаяЗапись_ОбрезаетсяПоГраницеСловаСПодсказкой()
+    {
+        // Запись заведомо длиннее потолка recall'а — блок обязан её укоротить, а не нести целиком
+        var longText = "деплойный " + string.Join(' ', Enumerable.Repeat("наблюдение", 60));
+        _svc.Add("o1", "p1", longText);
+
+        var block = _svc.BuildRecallBlock("o1", "p1", "деплойный").Text;
+
+        block.Should().NotBeNull();
+        var line = block!.Split('\n').First(l => l.StartsWith("- ")).TrimEnd();
+        line.Length.Should().BeLessThan(TeamMemoryService.RecallTextLimit + 10);
+        line.Should().EndWith("…");
+        line.Should().NotContain("наблюде…");   // рубим по пробелу, а не посреди слова
+        block.Should().Contain("team_memory_list");
+    }
+
+    [Fact]
+    public void BuildRecallBlock_КороткаяЗапись_НеТрогаетсяИБезПодсказки()
+    {
+        _svc.Add("o1", "p1", "Прод на naychenko.me");
+
+        var block = _svc.BuildRecallBlock("o1", "p1", "прод").Text;
+
+        block.Should().Contain("- Прод на naychenko.me");
+        block.Should().NotContain("…");
+        block.Should().NotContain("team_memory_list");
+    }
+
+    [Fact]
     public void Load_СтарыйСторБезНовыхПолей_ПолучаетДефолты()
     {
         // Старый формат: запись только с Id/OwnerId/ProjectId/Text/CreatedAt (PascalCase, как писал прежний код)

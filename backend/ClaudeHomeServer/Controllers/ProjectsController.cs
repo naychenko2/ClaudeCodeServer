@@ -72,6 +72,24 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     // === Память команды проекта (③-3.4) === — общие факты/договорённости, которые recall'ят
     // все персоны команды проекта наравне с личной памятью.
 
+    // Гейт длины записи командной памяти: в recall она всё равно обрежется (RecallTextLimit),
+    // а простыня на 2-3 КБ засоряет общий стор и Dify. Ошибка объясняет, что делать дальше.
+    // current — длина уже сохранённого текста (0 при создании): запрет срабатывает только на
+    // РОСТ сверх лимита, чтобы уже раздутую запись можно было пересохранить без изменений или
+    // сократить (как PersonaManager.ExceedsContractLimit для контракта персоны) — иначе её
+    // вообще нельзя было бы привести в порядок.
+    private static bool TooLongTeamMemory(string text, int current, out object error)
+    {
+        var length = text.Trim().Length;
+        error = new
+        {
+            error = $"Запись памяти команды длиннее {TeamMemoryService.MaxTextLength} символов "
+                + $"(сейчас {length}). Одна запись — одна мысль: разбей на несколько коротких "
+                + "или сократи до сути; подробности держи в заметке или документе проекта.",
+        };
+        return length > TeamMemoryService.MaxTextLength && length > current;
+    }
+
     [HttpGet("{id}/team-memory")]
     public IActionResult TeamMemory(string id)
     {
@@ -86,6 +104,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         var p = projects.GetById(id);
         if (p is null || p.OwnerId != UserId) return NotFound();
         if (string.IsNullOrWhiteSpace(req.Text)) return BadRequest(new { error = "Пустой текст" });
+        if (TooLongTeamMemory(req.Text, 0, out var tooLong)) return BadRequest(tooLong);
         var entry = teamMemory.Add(UserId, id, req.Text, req.Type ?? TeamMemoryType.Fact);
         await BroadcastTeamMemory("added", id, entry.Id);
         return Ok(entry);
@@ -96,7 +115,10 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     {
         var p = projects.GetById(id);
         if (p is null || p.OwnerId != UserId) return NotFound();
+        var existing = teamMemory.List(UserId, id).FirstOrDefault(e => e.Id == entryId);
+        if (existing is null) return NotFound();
         if (string.IsNullOrWhiteSpace(req.Text)) return BadRequest(new { error = "Пустой текст" });
+        if (TooLongTeamMemory(req.Text, existing.Text.Trim().Length, out var tooLong)) return BadRequest(tooLong);
         var entry = teamMemory.Update(UserId, id, entryId, req.Text);
         if (entry is null) return NotFound();
         await BroadcastTeamMemory("updated", id, entryId);

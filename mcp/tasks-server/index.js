@@ -243,11 +243,16 @@ const DEFAULT_COLUMNS = [
   { id: 'done', name: 'Готово', category: 'done' },
 ];
 
+// Ссылка на справочник сервера (поле instructions ответа initialize): развёрнутые пояснения
+// к повторению, уровню модели, персоне-исполнителю и worktree лежат ТАМ — один раз на сервер,
+// а не в каждой из схем create/update, где раньше дублировались слово в слово.
+const SEE_INSTRUCTIONS = 'см. инструкции сервера tasks';
+
 // Схема columnId: колонка доски проекта. Статус выводится из категории колонки на бэке —
 // достаточно указать columnId (список — через tasks_board_columns).
 const COLUMN_ID_SCHEMA = {
   type: 'string',
-  description: 'ID колонки доски проекта (см. tasks_board_columns). Статус выставится по категории колонки. Актуально только для проектных задач.',
+  description: 'ID колонки доски проекта (см. tasks_board_columns); статус выставится по её категории',
 };
 
 // Правило повторения задачи (соответствует TaskRecurrence на бэке).
@@ -255,21 +260,13 @@ const COLUMN_ID_SCHEMA = {
 // текущего в done автоматически создаётся следующий (нужен фич-флаг task-recurrence).
 const RECURRENCE_SCHEMA = {
   type: 'object',
-  description: 'Повторение задачи. Требует dueDate. Реально существует один экземпляр серии; следующий создаётся при завершении текущего.',
+  description: `Повторение задачи, требует dueDate (${SEE_INSTRUCTIONS})`,
   required: ['type'],
   properties: {
-    type: {
-      type: 'string',
-      enum: ['none', 'daily', 'weekly', 'monthly', 'yearly'],
-      description: "Период повторения. 'none' — только в tasks_update, означает «убрать повторение»",
-    },
-    interval: { type: 'integer', minimum: 1, description: 'Каждые N периодов (по умолчанию 1): каждые 2 недели — weekly + interval 2' },
-    weekdays: {
-      type: 'array',
-      items: { type: 'integer', minimum: 1, maximum: 7 },
-      description: 'Только для weekly: дни недели по ISO (1=Пн … 7=Вс). Напр. [1,3,5] — Пн/Ср/Пт',
-    },
-    until: { type: 'string', description: 'Последняя дата серии YYYY-MM-DD (включительно); опустить — бессрочно' },
+    type: { type: 'string', enum: ['none', 'daily', 'weekly', 'monthly', 'yearly'] },
+    interval: { type: 'integer', minimum: 1, description: 'Каждые N периодов (дефолт 1)' },
+    weekdays: { type: 'array', items: { type: 'integer', minimum: 1, maximum: 7 }, description: 'Только для weekly: ISO-дни (1=Пн … 7=Вс)' },
+    until: { type: 'string', description: 'Последняя дата серии YYYY-MM-DD; опустить — бессрочно' },
   },
 };
 
@@ -283,7 +280,7 @@ const REMINDER_MINUTES_SCHEMA = {
 // (MCP personas-server). Назначение персоны автоматически ставит исполнителя Claude.
 const PERSONA_ID_SCHEMA = {
   type: 'string',
-  description: 'ID персоны-исполнителя (см. personas_list). Задачу выполнит Claude от её лица. При указании personaId assignee ставить не нужно — он выставится автоматически. "" — снять персону.',
+  description: `ID персоны-исполнителя (см. personas_list); assignee выставится сам, "" — снять`,
 };
 
 // Время жизни чата исполнения (актуально только при исполнителе Claude/персона):
@@ -291,7 +288,7 @@ const PERSONA_ID_SCHEMA = {
 // Не указано — дефолт 1440 (сутки).
 const EXECUTION_TTL_SCHEMA = {
   type: 'integer',
-  description: 'Время жизни чата исполнения в минутах от последней активности (по умолчанию 1440 — сутки).',
+  description: 'TTL чата исполнения в минутах от последней активности (дефолт 1440)',
 };
 
 // Уровень модели исполнителя: под какую работу задача. Резолвится в конкретную модель
@@ -300,10 +297,7 @@ const EXECUTION_TTL_SCHEMA = {
 const MODEL_TIER_SCHEMA = {
   type: 'string',
   enum: ['strong', 'medium', 'weak'],
-  description: 'Уровень модели для исполнения: strong — проектирование, архитектура, ревью, ' +
-    'запутанный баг, многофайловый код; medium — реализация по готовому плану, тесты, документация; ' +
-    'weak — механическая правка, переименование, коммит, обновление текста. ' +
-    'Не указывай, если сомневаешься — уровень возьмётся от исполнителя и настроек системы.',
+  description: `Уровень модели исполнения (${SEE_INSTRUCTIONS}); сомневаешься — не указывай`,
 };
 
 // Отдельное git worktree для чата-исполнителя: дерево должно УЖЕ существовать (тумблер
@@ -311,13 +305,12 @@ const MODEL_TIER_SCHEMA = {
 // проекта; не сошлось — исполнитель просто стартует в корне проекта.
 const WORKTREE_PATH_SCHEMA = {
   type: 'string',
-  description: 'Абсолютный путь СУЩЕСТВУЮЩЕГО git worktree проекта — чат-исполнитель стартует прямо в нём. ' +
-    'Дерево не создаётся: путь, которого нет в git worktree list проекта, игнорируется. "" — убрать.',
+  description: `Абсолютный путь СУЩЕСТВУЮЩЕГО git worktree проекта (${SEE_INSTRUCTIONS}); "" — убрать`,
 };
 
 const WORKTREE_BRANCH_SCHEMA = {
   type: 'string',
-  description: 'Ветка этого worktree (метка в git-баре чата). Не указана — возьмётся из самого дерева.',
+  description: 'Ветка этого worktree (метка в git-баре чата); пусто — из самого дерева',
 };
 
 // Markdown-итог выполнения задачи — прикрепляет исполнитель при завершении/обновлении.
@@ -335,12 +328,32 @@ const LINKED_FILES_SCHEMA = {
   description: 'Пути файлов проекта (от корня проекта, через /). Заменяют список целиком.',
 };
 
+// Справочник сервера (поле instructions ответа initialize): клиент кладёт его в контекст один
+// раз на сервер, тогда как повторённый в схемах текст оплачивается в каждой из них — правило
+// повторения, уровень модели и worktree шли ×2 (tasks_create + tasks_update).
+const INSTRUCTIONS = [
+  'Справочники сервера «Задачи» (на них ссылаются описания инструментов).',
+  '',
+  'ПОВТОРЕНИЕ (recurrence): требует dueDate; существует ОДИН экземпляр серии, следующий создаётся',
+  '  при завершении текущего. type: daily|weekly|monthly|yearly; "none" — только в tasks_update,',
+  '  «убрать повторение». interval — каждые N периодов (2 недели = weekly + interval 2).',
+  '',
+  'УРОВЕНЬ МОДЕЛИ (modelTier): strong — проектирование, архитектура, ревью, запутанный баг,',
+  '  многофайловый код; medium — реализация по плану, тесты, документация; weak — механическая',
+  '  правка, переименование, коммит. Не задан — от персоны-исполнителя и настроек системы.',
+  '',
+  'WORKTREE (worktreePath): дерево должно УЖЕ существовать — бэкенд сверяет путь с «git worktree',
+  '  list» проекта, чужой путь игнорируется и исполнитель стартует в корне проекта.',
+  '',
+  'ОЧИСТКА ПОЛЕЙ в tasks_update: "" в dueDate/dueTime убирает срок, отрицательное значение в',
+  '  reminderMinutes убирает напоминание, а в executionExpiresAfterMinutes — делает чат бессрочным.',
+].join('\n');
+
 const TOOLS = [
   {
     name: 'tasks_list_projects',
-    description: 'Проекты, чьи задачи доступны в этом ходу: текущий проект чата плюс проекты из ' +
-      'кросс-проектных привязок ProjectTasks персоны — с id, именем и readOnly. Используй, чтобы узнать, ' +
-      'куда можно адресовать задачу через projectId в tasks_create/tasks_list.',
+    description: 'Проекты, чьи задачи доступны в этом ходу (текущий плюс кросс-проектные привязки): ' +
+      'id, имя, readOnly. По ним выбирай projectId для tasks_create/tasks_list.',
     inputSchema: { type: 'object', properties: {} },
   },
   {
@@ -352,10 +365,10 @@ const TOOLS = [
         status: { type: 'string', enum: ENUMS.status, description: 'Фильтр по статусу' },
         priority: { type: 'string', enum: ENUMS.priority, description: 'Фильтр по приоритету' },
         assignee: { type: 'string', enum: ENUMS.assignee, description: 'Фильтр по исполнителю (me — пользователь, claude — Claude)' },
-        from: { type: 'string', description: 'Показывать задачи со сроком от даты (включительно), YYYY-MM-DD. Задачи без срока не попадают в выборку.' },
-        to: { type: 'string', description: 'Показывать задачи со сроком до даты (включительно), YYYY-MM-DD. Задачи без срока не попадают в выборку.' },
-        scope: { type: 'string', enum: ['context', 'all'], description: 'context (по умолчанию) — текущий проект/личные; all — все задачи пользователя' },
-        projectId: { type: 'string', description: 'Явный проект (текущий или из tasks_list_projects) — переопределяет scope/контекст, список только его задач.' },
+        from: { type: 'string', description: 'Срок от даты включительно, YYYY-MM-DD (задачи без срока не попадают)' },
+        to: { type: 'string', description: 'Срок до даты включительно, YYYY-MM-DD (задачи без срока не попадают)' },
+        scope: { type: 'string', enum: ['context', 'all'], description: 'context (дефолт) — текущий проект/личные; all — все задачи пользователя' },
+        projectId: { type: 'string', description: 'Явный проект — переопределяет scope, только его задачи' },
       },
     },
   },
@@ -402,13 +415,14 @@ const TOOLS = [
         labels: { type: 'array', items: { type: 'string' }, description: 'Метки' },
         columnId: COLUMN_ID_SCHEMA,
         executionExpiresAfterMinutes: EXECUTION_TTL_SCHEMA,
-        projectId: { type: 'string', description: 'Проект для задачи, если не текущий (см. tasks_list_projects) — нужна привязка ProjectTasks с полным доступом (не readonly).' },
+        projectId: { type: 'string', description: 'Проект задачи, если не текущий (см. tasks_list_projects; нужен полный доступ)' },
       },
     },
   },
   {
     name: 'tasks_update',
-    description: 'Обновить поля задачи (передавать только изменяемые). Пустая строка в dueDate/dueTime очищает поле; recurrence с type "none" убирает повторение.',
+    description: 'Обновить поля задачи: поля как при создании, передавай только изменяемые. ' +
+      `Очистка значений и сброс повторения — ${SEE_INSTRUCTIONS}.`,
     inputSchema: {
       type: 'object',
       required: ['id'],
@@ -420,7 +434,7 @@ const TOOLS = [
         priority: { type: 'string', enum: ENUMS.priority },
         dueDate: { type: 'string', description: 'YYYY-MM-DD или "" чтобы убрать срок' },
         dueTime: { type: 'string', description: 'HH:MM или "" чтобы убрать время' },
-        reminderMinutes: { ...REMINDER_MINUTES_SCHEMA, description: REMINDER_MINUTES_SCHEMA.description + ' Отрицательное значение — убрать напоминание.' },
+        reminderMinutes: REMINDER_MINUTES_SCHEMA,
         recurrence: RECURRENCE_SCHEMA,
         assignee: { type: 'string', enum: ENUMS.assignee },
         personaId: PERSONA_ID_SCHEMA,
@@ -430,9 +444,9 @@ const TOOLS = [
         resultMarkdown: RESULT_MARKDOWN_SCHEMA,
         linkedFiles: LINKED_FILES_SCHEMA,
         labels: { type: 'array', items: { type: 'string' }, description: 'Метки (заменяют список целиком)' },
-        columnId: { ...COLUMN_ID_SCHEMA, description: COLUMN_ID_SCHEMA.description + ' Пустая строка — сброс на дефолтную колонку категории.' },
-        executionExpiresAfterMinutes: { ...EXECUTION_TTL_SCHEMA, description: EXECUTION_TTL_SCHEMA.description + ' Отрицательное значение — сделать бессрочным.' },
-        projectId: { type: 'string', description: 'Перенести задачу в другой проект (см. tasks_list_projects, нужна привязка ProjectTasks с полным доступом) или "" — сделать личной.' },
+        columnId: { ...COLUMN_ID_SCHEMA, description: COLUMN_ID_SCHEMA.description + '; "" — сброс на дефолтную' },
+        executionExpiresAfterMinutes: EXECUTION_TTL_SCHEMA,
+        projectId: { type: 'string', description: 'Перенести в другой проект (см. tasks_list_projects) или "" — сделать личной' },
       },
     },
   },
@@ -443,16 +457,16 @@ const TOOLS = [
   },
   {
     name: 'tasks_complete',
-    description: 'Пометить задачу выполненной (status → done). Можно сразу прикрепить итог: ' +
-      'resultMarkdown (короткое описание сделанного) и linkedFiles (пути итоговых файлов проекта). ' +
-      'Это ТОЛЬКО смена статуса на done. НЕ запускает исполнителя — для запуска используй tasks_run_executor.',
+    description: 'Пометить задачу выполненной (status → done) и сразу прикрепить итог: ' +
+      'resultMarkdown (что сделано) и linkedFiles (итоговые файлы). Это ТОЛЬКО смена статуса — ' +
+      'исполнителя запускает tasks_run_executor.',
     inputSchema: {
       type: 'object',
       required: ['id'],
       properties: {
         id: { type: 'string', description: 'ID задачи' },
-        resultMarkdown: { ...RESULT_MARKDOWN_SCHEMA, description: 'Короткий итог сделанного (markdown) — прикрепится к задаче при завершении.' },
-        linkedFiles: { ...LINKED_FILES_SCHEMA, description: 'Итоговые файлы проекта (пути от корня, через /) — прикрепятся к задаче при завершении.' },
+        resultMarkdown: { ...RESULT_MARKDOWN_SCHEMA, description: 'Короткий итог сделанного (markdown)' },
+        linkedFiles: { ...LINKED_FILES_SCHEMA, description: 'Итоговые файлы проекта (пути от корня, через /)' },
       },
     },
   },
@@ -752,6 +766,7 @@ async function handleMessage(msg) {
           protocolVersion: params?.protocolVersion ?? '2024-11-05',
           capabilities: { tools: {} },
           serverInfo: { name: 'tasks', version: '1.0.0' },
+          instructions: INSTRUCTIONS,
         });
         break;
       case 'tools/list':

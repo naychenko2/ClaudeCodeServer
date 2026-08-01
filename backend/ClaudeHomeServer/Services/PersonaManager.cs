@@ -182,6 +182,44 @@ public class PersonaManager
     private static string? TrimToNull(string? s) =>
         string.IsNullOrWhiteSpace(s) ? null : s.Trim();
 
+    // --- Потолок контракта персоны ---
+
+    // Весь слой персоны уезжает в claude аргументом --append-system-prompt (ClaudeSession),
+    // а командная строка Windows ограничена 32767 символами вместе с остальным промптом хода
+    // (контекст проекта, привязки, code graph, recall памяти, дисциплинарный слой) — это ещё
+    // 8-12 КБ. Отсюда потолок самого контракта: 12 000 символов оставляют запас, при котором
+    // ход стартует. Проверяется только на пользовательской записи (PersonasController → UI и
+    // MCP personas_create/update); ConnectPantheon с его каталожными регламентами идёт мимо.
+    public const int MaxContractChars = 12_000;
+
+    // Суммарный размер контракта: все слоты плюс legacy-SystemPrompt — ровно то, что
+    // PersonaPromptBuilder разворачивает в секции системного промпта.
+    public static int ContractSize(PersonaContract? contract, string? systemPrompt)
+    {
+        var size = systemPrompt?.Length ?? 0;
+        if (contract is null) return size;
+        size += (contract.Character?.Length ?? 0) + (contract.Tone?.Length ?? 0)
+            + (contract.OutputFormat?.Length ?? 0) + (contract.Instructions?.Length ?? 0);
+        foreach (var list in new[] { contract.MustDo, contract.MustNot, contract.SpeechExamples })
+            if (list is not null)
+                foreach (var item in list) size += item?.Length ?? 0;
+        return size;
+    }
+
+    // Превышен ли потолок. current — размер уже сохранённого контракта (0 при создании):
+    // существующие раздутые персоны должны продолжать работать и правиться, поэтому запрет
+    // срабатывает только на РОСТ сверх лимита — сокращать такой контракт можно всегда.
+    public static bool ExceedsContractLimit(
+        PersonaContract? contract, string? systemPrompt, int current, out string error)
+    {
+        var size = ContractSize(contract, systemPrompt);
+        error = $"Контракт персоны — {size} символов при потолке {MaxContractChars}. "
+            + "Весь характер уезжает в системный промпт хода, и при таком размере запуск чата "
+            + "упрётся в лимит командной строки. Сократи слоты (обычно длинна «Инструкция»), "
+            + "а подробный регламент держи в заметке или файле проекта.";
+        return size > MaxContractChars && size > current;
+    }
+
     // Нормализация пользовательского списка запретов (Custom-профиль):
     // трим, выброс пустых, дедуп; пустой список → null
     internal static List<string>? NormalizeDisallowed(List<string>? tools)

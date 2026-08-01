@@ -101,17 +101,15 @@ export function TeamCommandCenter({
   }, [events]);
 
   const personaById = (id: string) => team.find(p => p.id === id);
+  // Ошибку (в т.ч. 400 «длиннее 1000 символов») пробрасываем дальше — MemoryPanel
+  // показывает e.message рядом с полем и не чистит набранный текст при провале.
   const addMem = async (text: string, type: TeamMemoryType) => {
-    try {
-      const entry = await api.projects.addTeamMemory(project.id, text, type);
-      setMem(prev => [entry, ...(prev ?? [])]);
-    } catch { showToast('Память команды', 'Не удалось сохранить запись.'); }
+    const entry = await api.projects.addTeamMemory(project.id, text, type);
+    setMem(prev => [entry, ...(prev ?? [])]);
   };
   const updateMem = async (id: string, text: string) => {
-    try {
-      const updated = await api.projects.updateTeamMemory(project.id, id, text);
-      setMem(prev => (prev ?? []).map(m => m.id === id ? updated : m));
-    } catch { showToast('Память команды', 'Не удалось сохранить изменения.'); }
+    const updated = await api.projects.updateTeamMemory(project.id, id, text);
+    setMem(prev => (prev ?? []).map(m => m.id === id ? updated : m));
   };
   const removeMem = async (id: string) => {
     try {

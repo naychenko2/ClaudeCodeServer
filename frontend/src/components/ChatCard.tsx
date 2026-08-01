@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { AlertCircle, CheckCircle2, Clock, MoreVertical, Pin, Tags, Trash2, Users, Wrench } from 'lucide-react';
+import { useState, useRef, useEffect } from 'react';
+import { AlertCircle, CheckCircle2, Clock, MoreVertical, Pencil, Pin, Tags, Trash2, Users, Wrench } from 'lucide-react';
 import type { Session } from '../types';
 import { C, R, SHADOW, FONT } from '../lib/design';
 import { IconButton, Menu, MenuItem } from './ui';
@@ -125,6 +125,10 @@ interface Props {
   onRemoveTag?: (name: string) => void;
   // Открыть меню маркировки тегами (кнопка в действиях; якорь — rect кнопки для fixed-позиции)
   onAssignTags?: (anchor: DOMRect) => void;
+  // Переименование чата прямо в карточке (пункт меню «Переименовать»). Не задан —
+  // пункта нет. Отклонённый промис оставляет карточку в режиме правки с набранным
+  // текстом: имя не сохранилось, и молча выкидывать пользователя из ввода нельзя
+  onRename?: (name: string) => Promise<unknown>;
 }
 
 /**
@@ -136,7 +140,7 @@ interface Props {
  */
 export function ChatCard({
   session: s, isActive, isMobile, fallbackName, online, hovered, workflowRunning,
-  onSelect, onHover, onDelete, onTogglePin, tags, onRemoveTag, onAssignTags,
+  onSelect, onHover, onDelete, onTogglePin, tags, onRemoveTag, onAssignTags, onRename,
 }: Props) {
   // Чат от лица персоны: мини-аватар в строке названия и акцент её цвета
   const persona = s.personaId ? getPersonaById(s.personaId) : undefined;
@@ -161,12 +165,55 @@ export function ChatCard({
   const teamImplementOn = useFeature(FLAGS.teamImplementMode);
   // Открытое меню действий: rect кнопки-триггера (null — закрыто)
   const [menu, setMenu] = useState<DOMRect | null>(null);
+  // Правка названия прямо в карточке: пункт меню превращает заголовок в поле ввода —
+  // ради одного имени открывать форму настроек чата не надо. У чата-исполнителя задачи
+  // переименования нет: там в заголовке стоит имя ЗАДАЧИ (taskChat.title), и правка
+  // s.name не изменила бы ни строчки на экране
+  const canRename = !!onRename && !taskChat;
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+  const [saving, setSaving] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  // Отмена по Esc: снятый с DOM input может успеть отдать blur, а тот сохраняет —
+  // флаг гасит ровно этот случай, не трогая обычный уход фокуса
+  const cancelledRef = useRef(false);
+  useEffect(() => {
+    if (!editing) return;
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, [editing]);
+
+  // Имя на момент входа в правку. Пока поле открыто, название может приехать со
+  // стороны: авто-заголовок нового чата (событие chat_renamed) или действие «Обновить
+  // название» из AI-хаба. Ввод при этом НЕ трогаем — набранное важнее, а сохранение
+  // всё равно победит (бэкенд на явном имени ставит NameLocked). Но молчать нельзя:
+  // разошлись — подсвечиваем поле и объясняем в тултипе, что именно перезапишем
+  const startNameRef = useRef<string | null>(null);
+  const externalName = editing && (s.name ?? '') !== (startNameRef.current ?? '') ? (s.name ?? '') : null;
+
+  const startRename = () => { startNameRef.current = s.name ?? ''; setDraft(s.name ?? ''); setEditing(true); };
+  const cancelRename = () => { setEditing(false); setSaving(false); };
+  const commitRename = async () => {
+    if (!onRename || !editing || saving) return;
+    const next = draft.trim();
+    // Пустое поле или имя без изменений — просто выходим из правки, запрос не шлём
+    if (!next || next === (s.name ?? '')) { cancelRename(); return; }
+    setSaving(true);
+    try {
+      await onRename(next);
+      setEditing(false);
+    } catch { /* сохранить не вышло — остаёмся в правке, набранный текст на месте */ }
+    setSaving(false);
+  };
   // Действия: с мышью — по наведению, на тач-устройствах — у выбранного чата.
   // Показывать их на тач всегда нельзя: они висели бы поверх лица собеседника на
   // каждой карточке. Тап по чату и открывает его, и раскрывает кнопки.
   // Проверяем возможность hover, а не ширину: на планшете в широкой раскладке
   // isMobile=false, но навести всё равно нечем
-  const showActions = online && (CAN_HOVER ? hovered : isActive);
+  // Во время правки названия действий нет: кнопка «⋮» стоит вплотную к полю ввода,
+  // и её меню (закрепить/теги/удалить) применялось бы к чату, имя которого ещё не
+  // сохранено. Уходит вся кнопка, а не только меню — раскладку она не двигает (absolute)
+  const showActions = online && !editing && (CAN_HOVER ? hovered : isActive);
   const cardBg = isActive ? C.accentLight : C.bgWhite;
   // Лицо для подложки: у группы — ведущая (первая в составе)
   const backdropPersona = group.length > 1 ? group[0] : persona;
@@ -238,12 +285,53 @@ export function ChatCard({
               <Wrench size={12} strokeWidth={2.2} />
             </span>
           )}
-          <span title={displayName} style={{
-            fontSize: 13.5, fontWeight: isActive ? 700 : 600, color: C.textHeading,
-            flex: '0 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-          }}>
-            {displayName}
-          </span>
+          {editing ? (
+            // Поле правки стоит ровно на месте заголовка: строка карточки не
+            // перестраивается, соседние метки не прыгают. Клики гасим — иначе
+            // попытка поставить курсор открывала бы чат (onClick всей карточки)
+            <input
+              ref={inputRef}
+              value={draft}
+              disabled={saving}
+              placeholder={fallbackName}
+              aria-label="Название чата"
+              title={externalName
+                ? `Пока вы правите, чат переименовали в «${externalName}». Сохранение перезапишет это название.`
+                : undefined}
+              onChange={e => setDraft(e.target.value)}
+              onClick={e => e.stopPropagation()}
+              onMouseDown={e => e.stopPropagation()}
+              onKeyDown={e => {
+                e.stopPropagation();
+                if (e.key === 'Enter') { e.preventDefault(); void commitRename(); }
+                if (e.key === 'Escape') { e.preventDefault(); cancelledRef.current = true; cancelRename(); }
+              }}
+              onBlur={() => {
+                if (cancelledRef.current) { cancelledRef.current = false; return; }
+                void commitRename();
+              }}
+              style={{
+                // Высота с border-box держится вровень со строкой заголовка (13.5px
+                // текста ≈ 18px строки) — иначе появление поля толкало строку вниз.
+                // Тон приглушённый: поле правки в списке — не акцент, оранжевая рамка
+                // здесь кричала. Внимание к нему привлекают курсор и выделенный текст
+                flex: '1 1 auto', minWidth: 0, boxSizing: 'border-box',
+                height: 19, padding: '0 5px', lineHeight: 1,
+                fontSize: 13.5, fontWeight: 600, fontFamily: 'inherit', color: C.textHeading,
+                background: C.bgSelected, borderRadius: R.sm, outline: 'none',
+                // Жёлтая рамка — единственный сигнал, что имя увели из-под правки
+                border: `1px solid ${externalName ? C.warning : C.border}`,
+                opacity: saving ? 0.6 : 1,
+              }}
+            />
+          ) : (
+            <span title={displayName} style={{
+              fontSize: 13.5, fontWeight: isActive ? 700 : 600, color: C.textHeading,
+              flex: '0 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            }}>
+              {displayName}
+            </span>
+          )}
           {teamImplementOn && <TeamImplementMarker session={s} />}
           <ExpiryBadge session={s} />
           {/* Закрепление: иконка-признак, сама кнопка живёт в блоке действий */}
@@ -324,8 +412,18 @@ export function ChatCard({
         </div>
       )}
 
-      {menu && (
-        <Menu anchor={menu} onClose={() => setMenu(null)} minWidth={132} maxHeight={112} gap={4}>
+      {menu && !editing && (
+        <Menu anchor={menu} onClose={() => setMenu(null)} minWidth={158}
+          // Высота меню решает, куда его раскрыть (вверх/вниз) — считаем по составу
+          maxHeight={(1 + (canRename ? 1 : 0) + (onTogglePin ? 1 : 0) + (onAssignTags ? 1 : 0)) * 34 + 10}
+          gap={4}>
+          {canRename && (
+            <MenuItem
+              icon={<Pencil size={15} strokeWidth={2} />}
+              label="Переименовать"
+              onClick={e => { e.stopPropagation(); setMenu(null); startRename(); }}
+            />
+          )}
           {onTogglePin && (
             <MenuItem
               icon={<Pin size={15} strokeWidth={2} fill={s.isPinned ? 'currentColor' : 'none'} />}

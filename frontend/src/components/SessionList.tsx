@@ -116,6 +116,11 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
       });
   };
 
+  // Переименование из карточки списка: ответ раскладывается тем же путём, что и теги —
+  // в список и (если чат открыт) владельцу, чтобы шапка панели не отстала
+  const renameSession = (s: Session, name: string) =>
+    api.sessions.update(project.id, s.id, { name }).then(updated => handleSessionUpdated(updated));
+
   const toggleTag = (s: Session, name: string) => {
     const tags = s.tags ?? [];
     const has = tags.some(t => t.toLowerCase() === name.toLowerCase());
@@ -363,6 +368,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
       tags={chatTagsSorted(s, registry).map(name => ({ name, color: tagColor(registry, name) }))}
       onRemoveTag={online ? name => toggleTag(s, name) : undefined}
       onAssignTags={online ? anchor => setTagMenu(prev => prev?.sessionId === s.id ? null : { sessionId: s.id, anchor }) : undefined}
+      onRename={online ? name => renameSession(s, name) : undefined}
     />
   );
 

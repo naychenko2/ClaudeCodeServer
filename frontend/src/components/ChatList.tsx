@@ -98,6 +98,13 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
     } catch { /* сеть упала — не блокируем */ }
   };
 
+  // Переименование из карточки списка: ответ бэкенда отдаём владельцу — у активного
+  // чата от него же обновляется шапка панели
+  const renameChat = async (chat: Session, name: string) => {
+    const updated = await api.chats.update(chat.id, { name });
+    onEdited(updated);
+  };
+
   const handleDelete = async () => {
     if (!deleteTarget) return;
     try {
@@ -146,6 +153,7 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
       onHover={h => setHoveredId(h ? chat.id : null)}
       onDelete={() => setDeleteTarget(chat)}
       onTogglePin={() => togglePin(chat)}
+      onRename={online ? name => renameChat(chat, name) : undefined}
     />
   );
 

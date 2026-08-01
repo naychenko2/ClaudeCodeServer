@@ -29,12 +29,17 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
     // Резолвер назначений: сессия без своей модели идёт на модель своего места (слоты
     // тиров), поэтому и провайдер резолвится по эффективной модели, а не по пустой Model
     private readonly ModelAssignmentResolver? _assignments;
+    // Атрибуция file_changed чату-источнику — singleton на процесс, общий для всех сессий;
+    // null — в тестах фабрики, собранных без него (фильтрация тогда просто выключена)
+    private readonly FileChangeAttributor? _fileChangeAttributor;
 
     public LlmSessionAdapterFactory(IConfiguration config, SkillsService skills,
         WorkspaceKnowledgeStore workspaceStore, LlmProviderRegistry providers,
-        ClaudeSubscriptionPool subscriptionPool, ModelAssignmentResolver? assignments = null)
+        ClaudeSubscriptionPool subscriptionPool, ModelAssignmentResolver? assignments = null,
+        FileChangeAttributor? fileChangeAttributor = null)
     {
         _assignments = assignments;
+        _fileChangeAttributor = fileChangeAttributor;
         _mcpConfigPath = config["McpConfigPath"];
         _falMcpApiKey = config["Fal:McpApiKey"];
         _glifMcpToken = config["Glif:McpToken"];
@@ -77,6 +82,6 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
                 $"Провайдер «{provider.DisplayName}» не настроен: задай LlmProviders:{provider.Key}:ApiKey в appsettings.Local.json");
         return new Claude.ClaudeSession(session, context, _mcpConfigPath, _skills,
             _workspaceStore, _disallowedTools, _providers, _subscriptionPool, _fileWatcherOptions,
-            _bgLingerTimeout, _falMcpApiKey, _glifMcpToken, _assignments);
+            _bgLingerTimeout, _falMcpApiKey, _glifMcpToken, _assignments, _fileChangeAttributor);
     }
 }

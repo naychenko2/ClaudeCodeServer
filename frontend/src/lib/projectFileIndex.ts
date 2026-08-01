@@ -5,7 +5,7 @@
 
 import { useEffect, useSyncExternalStore } from 'react';
 import { api } from './api';
-import { toRelative } from './paths';
+import { toRelative, basename } from './paths';
 
 // путь в нижнем регистре → путь как в дереве (ФС Windows регистронезависимая)
 export type ProjectFileIndex = ReadonlyMap<string, string>;
@@ -49,9 +49,48 @@ export function useProjectFileIndex(projectId: string | null): ProjectFileIndex 
   return useSyncExternalStore(subscribe, snapshot, snapshot);
 }
 
+// Вторичный индекс для B1 (голое имя файла / частичный путь-суффикс): basename в нижнем
+// регистре → список путей дерева. Строится лениво из основного индекса и кэшируется по его
+// ссылке (WeakMap) — пересчёт только когда дерево реально перезагрузилось (новый Map в load()).
+const _basenameIndexes = new WeakMap<ProjectFileIndex, ReadonlyMap<string, string[]>>();
+
+function basenameIndexOf(index: ProjectFileIndex): ReadonlyMap<string, string[]> {
+  const cached = _basenameIndexes.get(index);
+  if (cached) return cached;
+  const map = new Map<string, string[]>();
+  for (const treePath of index.values()) {
+    const name = basename(treePath).toLowerCase();
+    const list = map.get(name);
+    if (list) list.push(treePath); else map.set(name, [treePath]);
+  }
+  _basenameIndexes.set(index, map);
+  return map;
+}
+
+// Похоже на путь к файлу: заканчивается расширением с буквы (отсекает версии «v1.2.3» —
+// после точки цифра, а не буква — и просто слова без расширения).
+const FILE_LIKE_MENTION = /\.[a-z][a-z0-9]{0,7}$/i;
+
+// B1: голое имя файла («ChatItemView.tsx») или частичный путь-суффикс («chat/ChatItemView.tsx») —
+// ссылка, только если в дереве проекта РОВНО один файл с таким basename и суффиксом (границы —
+// начало строки или разделитель перед совпадением). Ноль или несколько кандидатов — не гадаем.
+function lookupBySuffix(index: ProjectFileIndex, rel: string): string | null {
+  if (!FILE_LIKE_MENTION.test(rel)) return null;
+  const suffix = rel.replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase();
+  const name = basename(suffix);
+  const candidates = basenameIndexOf(index).get(name);
+  if (!candidates) return null;
+  const matches = candidates.filter(treePath => {
+    const pl = treePath.replace(/\\/g, '/').toLowerCase();
+    return pl === suffix || pl.endsWith('/' + suffix);
+  });
+  return matches.length === 1 ? matches[0] : null;
+}
+
 // Резолв упоминания пути в файл проекта: абсолютный путь внутри корня приводится к
-// относительному, якорь/квери и URL-экранирование снимаются. Возвращает путь как в
-// дереве проекта либо null — тогда это не ссылка, а обычный текст.
+// относительному, якорь/квери и URL-экранирование снимаются. Точный путь приоритетнее
+// суффиксного (B1). Возвращает путь как в дереве проекта либо null — тогда это не ссылка,
+// а обычный текст (для абсолютных путей вне корня см. A1 в MarkdownContent).
 export function lookupProjectFile(index: ProjectFileIndex, raw: string, rootPath: string): string | null {
   if (!raw || index.size === 0) return null;
   let p = raw.trim().split(/[#?]/)[0];
@@ -59,5 +98,6 @@ export function lookupProjectFile(index: ProjectFileIndex, raw: string, rootPath
   try { p = decodeURIComponent(p); } catch { /* не URL-экранирован — как есть */ }
   const rel = toRelative(p, rootPath);
   if (!rel) return null;
-  return index.get(rel.replace(/\/+$/, '').toLowerCase()) ?? null;
+  const exact = index.get(rel.replace(/\/+$/, '').toLowerCase());
+  return exact ?? lookupBySuffix(index, rel);
 }

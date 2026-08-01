@@ -8,9 +8,13 @@ import { MermaidDiagram } from '../MermaidDiagram';
 import { api } from '../../lib/api';
 import { C, FONT, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
-import { toRelative } from '../../lib/paths';
+import { relPathTree } from '../../lib/paths';
 import { useProjectFileIndex, lookupProjectFile } from '../../lib/projectFileIndex';
-import { ChatProjectContext, ChatOpenFileContext } from './contexts';
+import { ChatProjectContext, ChatTreePathContext, ChatOpenFileContext } from './contexts';
+
+// Абсолютный путь (Windows-диск или POSIX) — для A1: упоминание вне корня проекта тоже
+// становится ссылкой (открытие само покажет ошибку, если файла на самом деле нет).
+const ABS_PATH_RE = /^[A-Za-z]:[\\/]|^\//;
 
 // Картинка из markdown: внешние URL (http/https/data) — напрямую; локальный путь файла
 // проекта (например, картинка, скачанная Claude) — грузим через API и показываем как data-URL.
@@ -117,12 +121,25 @@ export function stripServiceMarkers(text: string): string {
 // Рендер текста Claude с поддержкой Markdown
 export function MarkdownContent({ text }: { text: string }) {
   const project = useContext(ChatProjectContext);
+  const treePath = useContext(ChatTreePathContext);
   const onOpenFile = useContext(ChatOpenFileContext);
   const fileIndex = useProjectFileIndex(project?.id ?? null);
-  // Упоминание пути → файл проекта, если он там реально есть (иначе ссылки не будет).
+  // Упоминание пути → файл проекта: точный/суффиксный путь из индекса (lookupProjectFile,
+  // включая B1) либо, если индекс молчит, абсолютный путь — тоже ссылка без проверки
+  // существования (A1; открытие само покажет ошибку, если файла на самом деле нет).
+  // label — короткий текст для абсолютного пути внутри активного дерева/корня чата.
   // Вне проекта и без обработчика открытия фича молчит — текст как раньше.
-  const resolveFile = (raw?: string | null): string | null =>
-    project && onOpenFile && raw ? lookupProjectFile(fileIndex, raw, project.rootPath) : null;
+  const resolveFileMention = (raw?: string | null): { path: string; label?: string } | null => {
+    if (!project || !onOpenFile || !raw) return null;
+    const known = lookupProjectFile(fileIndex, raw, project.rootPath);
+    if (known) return { path: known };
+    let p = raw.trim().split(/[#?]/)[0];
+    if (!p) return null;
+    try { p = decodeURIComponent(p); } catch { /* не URL-экранирован — как есть */ }
+    if (!ABS_PATH_RE.test(p)) return null;
+    const label = relPathTree(p, project.rootPath, treePath);
+    return { path: p, label: label !== p ? label : undefined };
+  };
 
   return (
     <ReactMarkdown
@@ -130,9 +147,10 @@ export function MarkdownContent({ text }: { text: string }) {
       urlTransform={(url, key) => {
         // Медиа-домены (fal/glif) src — блокируем: медиа уже показаны в MediaBlock из tool_result
         if (key === 'src' && matchesHosts(url, MEDIA_HOSTS)) return null;
-        // Абсолютный путь внутри проекта (Claude часто пишет полный путь) — оставляем как
-        // есть: defaultUrlTransform режет его, приняв «C:» за неизвестный протокол
-        if (project && /^[a-zA-Z]:[\\/]/.test(url) && toRelative(url, project.rootPath)) return url;
+        // Абсолютный путь (в т.ч. вне корня проекта, A1) — оставляем как есть: defaultUrlTransform
+        // режет его, приняв «C:» за неизвестный протокол; существование не проверяем —
+        // resolveFileMention сам решит, стал ли он ссылкой на файл
+        if (project && ABS_PATH_RE.test(url)) return url;
         // остальные внешние URL (src и href) — через прокси если домен разрешён
         return isProxiable(url) ? proxyUrl(url) : defaultUrlTransform(url);
       }}
@@ -184,9 +202,9 @@ export function MarkdownContent({ text }: { text: string }) {
               </pre>
             );
           }
-          // Путь к существующему файлу проекта в бэктиках — кликабельная ссылка на просмотр
-          const filePath = resolveFile(text);
-          if (filePath) return <FileLink path={filePath} onOpen={onOpenFile!} mono>{children}</FileLink>;
+          // Путь к файлу проекта в бэктиках — кликабельная ссылка на просмотр
+          const mention = resolveFileMention(text);
+          if (mention) return <FileLink path={mention.path} onOpen={onOpenFile!} mono>{mention.label ?? children}</FileLink>;
           return (
             <code style={INLINE_CODE} {...props}>
               {children}
@@ -202,9 +220,10 @@ export function MarkdownContent({ text }: { text: string }) {
           </blockquote>
         ),
         a: ({ children, href }) => {
-          // Ссылка на файл проекта ([гайд](docs/…)) открывает его на просмотр, а не наружу
-          const filePath = resolveFile(href);
-          if (filePath) return <FileLink path={filePath} onOpen={onOpenFile!}>{children}</FileLink>;
+          // Ссылка на файл проекта ([гайд](docs/…)) открывает его на просмотр, а не наружу.
+          // Текст ссылки — как написал автор markdown, label из resolveFileMention сюда не идёт.
+          const mention = resolveFileMention(href);
+          if (mention) return <FileLink path={mention.path} onOpen={onOpenFile!}>{children}</FileLink>;
           return (
             <a href={href} style={{ color: C.accent, textDecoration: 'underline' }} target="_blank" rel="noopener noreferrer">
               {children}

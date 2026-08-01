@@ -6,6 +6,7 @@ import { C, R, FONT, FS, SHADOW, Z, SP } from '../lib/design';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { Modal, IconButton } from './ui';
 import { personaLabel } from '../lib/personas';
+import { useCanHover } from '../lib/pointer';
 import { PersonaAvatar } from '../features/personas/PersonaAvatar';
 import {
   ALL_ORIGINS, ALL_STATUS_CHIPS,
@@ -359,6 +360,7 @@ export function FilterBar({
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const popRef = useRef<HTMLDivElement>(null);
+  const canHover = useCanHover();
   // Рамка триггера на момент открытия: поповер живёт в портале и позиционируется
   // по ней — с клампом к окну, чтобы не вылезал за край на узких ширинах
   const [anchor, setAnchor] = useState<DOMRect | null>(null);
@@ -392,11 +394,26 @@ export function FilterBar({
     // а не догоняем. Прокрутка ВНУТРИ карточки (секции длиннее экрана) — обычная
     // работа с ней: такие события пропускаем, иначе поповер закрывался бы от
     // собственного колеса.
+    //
+    // scroll не всплывает, поэтому его ловят в capture — а он приносит скролл ЛЮБОГО
+    // элемента страницы, а не только того, где сидит кнопка. Открытый фильтр закрывался
+    // сам собой от чужой ленты: лента чата липнет к низу на каждый пришедший кусок
+    // ответа (useChatScroll), и поповер захлопывался прямо под курсором. Якорь двигает
+    // только прокрутка контейнера, ВНУТРИ которого лежит триггер, — по ней и закрываем
+    // (document как источник прокрутки страницы под это условие тоже попадает).
     const onScroll = (e: Event) => {
-      if (popRef.current?.contains(e.target as Node)) return;
+      const t = e.target as Node | null;
+      if (!t || popRef.current?.contains(t)) return;
+      if (rootRef.current && t.contains?.(rootRef.current)) setOpen(false);
+    };
+    const onResize = () => {
+      // На тач-устройствах resize — это выезд/уборка виртуальной клавиатуры или поворот:
+      // поповер не должен захлопываться от них (особенно от клавиатуры, которую сам же
+      // поповер зовёт фокусом в поле поиска — открывался и сразу закрывался). Десктоп:
+      // изменили ширину окна — якорь устарел, закрываем.
+      if (!canHover) return;
       setOpen(false);
     };
-    const onResize = () => setOpen(false);
     document.addEventListener('mousedown', onDown);
     document.addEventListener('keydown', onKey);
     window.addEventListener('resize', onResize);
@@ -407,7 +424,7 @@ export function FilterBar({
       window.removeEventListener('resize', onResize);
       window.removeEventListener('scroll', onScroll, true);
     };
-  }, [open, isMobile]);
+  }, [open, isMobile, canHover]);
 
   const trigger = (
     <span style={{ position: 'relative', display: 'inline-flex', flexShrink: 0 }}>
@@ -420,12 +437,15 @@ export function FilterBar({
         <Filter size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
       </IconButton>
       {hiddenCount > 0 && (
+        // Справочный счётчик скрытых чатов, а не событие — потому нейтральный, не акцент:
+        // оранжевый бейдж дёргал глаз на каждой панели, где архив задач скрыт дефолтом.
         <span style={{
           position: 'absolute', top: -5, right: -5, pointerEvents: 'none',
           minWidth: 16, height: 16, padding: '0 4px', boxSizing: 'border-box',
-          borderRadius: R.max, background: C.accent, color: C.onAccent,
+          borderRadius: R.max, background: C.bgWhite, color: C.textSecondary,
+          border: `1px solid ${C.border}`,
           fontFamily: FONT.mono, fontSize: 10, fontWeight: 700, lineHeight: '14px',
-          textAlign: 'center', border: `2px solid ${C.bgMain}`,
+          textAlign: 'center',
         }}>
           {hiddenCount}
         </span>

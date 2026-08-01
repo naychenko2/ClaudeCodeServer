@@ -959,14 +959,31 @@ app.MapControllers();
 app.MapHub<SessionHub>("/hubs/session");
 app.MapHub<TerminalHub>("/hubs/terminal");
 
-// Graceful shutdown: гасим все живые процессы claude, терминалы и dev-серверы
+// Graceful shutdown: гасим все живые процессы claude, терминалы и dev-серверы.
+//
+// Ссылки берём СЕЙЧАС, а не в колбэке: если хост не смог подняться (занятый порт —
+// обычное дело, когда рядом уже крутится второй инстанс), провайдер успевает
+// освободиться раньше, чем сработает ApplicationStopping, и резолв падал с
+// ObjectDisposedException — гасить процессы было уже нечем. Все три сервиса —
+// синглтоны, так что заранее взятая ссылка та же самая.
+var shutdownSessions = app.Services.GetRequiredService<SessionManager>();
+var shutdownTerminals = app.Services.GetRequiredService<TerminalService>();
+var shutdownDevServers = app.Services.GetRequiredService<DevServerService>();
+
 app.Lifetime.ApplicationStopping.Register(() =>
 {
-    app.Services.GetRequiredService<SessionManager>().KillAllProcesses();
-    app.Services.GetRequiredService<TerminalService>().Dispose();
-    app.Services.GetRequiredService<DevServerService>().Dispose();
+    // Каждый шаг отдельно: упавшая уборка одного не должна оставить процессы других
+    static void Safe(Action step, string what)
+    {
+        try { step(); }
+        catch (Exception ex) { Console.Error.WriteLine($"Shutdown: {what} — {ex.Message}"); }
+    }
+
+    Safe(shutdownSessions.KillAllProcesses, "процессы claude");
+    Safe(shutdownTerminals.Dispose, "терминалы");
+    Safe(shutdownDevServers.Dispose, "dev-серверы");
     // Тот же pid-файл принадлежит боевому серверу — копия его не трогает
-    if (!inspectionMode) ProcessRegistry.KillAll();
+    if (!inspectionMode) Safe(ProcessRegistry.KillAll, "реестр процессов");
 });
 
 app.Run();

@@ -438,7 +438,9 @@ public class SessionManager : IDisposable
     }
 
     // Контекст MCP-сервера памяти персоны (тот же сервисный токен владельца, что и tasks/notes).
-    // projectId — только у проектных персон (③-3.4: даёт доступ к team_memory_* команды).
+    // projectId — проект ТЕКУЩЕГО чата (③-3.4: даёт доступ к team_memory_* команды), не scope
+    // персоны — см. BuildPersonaLayer: любая персона в проектном чате получает эти инструменты,
+    // пишет ли она в команду реально — решает бэкенд-гейт (ProjectsController.TeamMemoryWriteAllowed).
     private MemoryMcpContext BuildMemoryContext(string ownerId, string personaId, string? projectId)
     {
         var token = GetServiceToken(ownerId);
@@ -1261,8 +1263,14 @@ public class SessionManager : IDisposable
         // Долгая память — только если включена у персоны
         if (persona.MemoryEnabled)
         {
-            var teamProjectId = persona.Scope == PersonaScope.Project ? persona.ProjectId : null;
-            return (prompt, BuildMemoryContext(ownerId, persona.Id, teamProjectId),
+            // team_memory_* (③-3.4, диета памяти команды ч.3) — по проекту ТЕКУЩЕГО чата, не по
+            // scope персоны: состав MCP-инструментов один и тот же у проектных и глобальных персон
+            // (инвариант «tools/list не зависит от хода» — тем более не от того, какая персона),
+            // а пишет ли персона в команду — решает бэкенд (ProjectsController.TeamMemoryWriteAllowed:
+            // Persona.Scope==Project && Persona.ProjectId==id проекта памяти). Глобальная персона в
+            // проектном чате получает team_memory_list/search (read-only), персона другого проекта —
+            // так же; вне проектного чата (session.ProjectId пуст) команды памяти нет вообще.
+            return (prompt, BuildMemoryContext(ownerId, persona.Id, session.ProjectId),
                 BuildPersonaRecallProvider(ownerId, persona.Id), persona);
         }
         return (prompt, null, null, persona);
@@ -1436,12 +1444,15 @@ public class SessionManager : IDisposable
                 var (subagents, _) = SplitConsultants(ownerId, session,
                     _personas.GetForContext(ownerId, projectId).ToList());
                 var token = GetServiceToken(ownerId);
+                // ProjectId консультанта — проект ТЕКУЩЕГО чата (как у BuildPersonaLayer выше), не
+                // scope самого консультанта: приглашённая в проектный workflow глобальная персона
+                // тоже должна видеть team_memory_list/search этого проекта (read-only — пишет только
+                // персона САМОГО проекта, гейт в ProjectsController.TeamMemoryWriteAllowed).
                 var servers = subagents
                     .Where(p => p.MemoryEnabled)
                     .Select(p => new ConsultantMemoryServer(
                         PersonaConsultantToolset.PmemServerKey(p.Handle),
-                        ResolveTasksApiUrl(ownerId), token, p.Id,
-                        p.Scope == PersonaScope.Project ? p.ProjectId : null))
+                        ResolveTasksApiUrl(ownerId), token, p.Id, projectId))
                     .ToList();
                 var handles = subagents.Select(p => p.Handle).Where(h => !string.IsNullOrWhiteSpace(h)).ToList()!;
                 return new PersonaAgentsContext(addDirs, servers, handles);

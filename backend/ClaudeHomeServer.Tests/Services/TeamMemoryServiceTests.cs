@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Llm;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 
@@ -18,14 +19,32 @@ public class TeamMemoryServiceTests : IDisposable
         _svc = NewService();
     }
 
-    private TeamMemoryService NewService()
+    private TeamMemoryService NewService(ICheapTextRunner? cheap = null)
     {
         var config = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["DataPath"] = Path.Combine(_dir, "projects.json"),
             }).Build();
-        return new TeamMemoryService(config);
+        return new TeamMemoryService(config, cheap: cheap);
+    }
+
+    // Заглушка ICheapTextRunner: у сжатия авто-записи задействован только RunFreeAsync
+    // (бесплатная цепочка — платить claude за сжатие фактов не нужно).
+    private sealed class FakeCheapRunner : ICheapTextRunner
+    {
+        public Func<string, string, string?>? OnRunFree { get; init; }
+        public bool UsesLocal(string actionKey) => true;
+        public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
+            string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+        public Task<string?> RunLocalOnlyAsync(string actionKey, string prompt, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+        public Task<string?> RunFreeAsync(string actionKey, string prompt, object? jsonFormat = null,
+            CancellationToken ct = default) => Task.FromResult(OnRunFree?.Invoke(actionKey, prompt));
+        public Task<OneShotResult> RunDetailedAsync(string actionKey, string prompt, string? fallbackModel = null,
+            string? ownerId = null, TimeSpan? timeout = null, int? maxTokens = null, object? jsonFormat = null,
+            CancellationToken ct = default) => throw new NotSupportedException();
     }
 
     public void Dispose()
@@ -155,5 +174,72 @@ public class TeamMemoryServiceTests : IDisposable
         e.Type.Should().Be(TeamMemoryType.Decision);
         e.Source.Should().Be(TeamMemorySource.AutoMeeting);
         e.Salience.Should().Be(0.7);
+    }
+
+    // --- Диета памяти команды (①): сжатие длинной авто-записи на записи ---
+
+    private static string LongText(string word, int count) => string.Join(' ', Enumerable.Repeat(word, count));
+
+    [Fact]
+    public async Task AddAsync_ДлиннаяАвтоЗапись_СжимаетсяЧерезCheapRunner()
+    {
+        var cheap = new FakeCheapRunner { OnRunFree = (_, _) => "Сжатый факт про прод" };
+        var svc = NewService(cheap);
+        var longText = LongText("автозаписи-предложение-транскрипта", 40);
+        longText.Length.Should().BeGreaterThan(700);
+
+        var entry = await svc.AddAsync("o1", "p1", longText, source: TeamMemorySource.AutoTurn);
+
+        entry.Text.Should().Be("Сжатый факт про прод");
+    }
+
+    [Fact]
+    public async Task AddAsync_ДлиннаяАвтоЗапись_CheapRunnerНедоступен_ОбрезаетсяПоГраницеСлова()
+    {
+        var svc = NewService();   // cheap = null — сразу жёсткая обрезка
+        var longText = LongText("слово", 200);
+
+        var entry = await svc.AddAsync("o1", "p1", longText, source: TeamMemorySource.AutoTurn);
+
+        entry.Text.Length.Should().BeLessThan(longText.Length);
+        entry.Text.Should().EndWith("…");
+        entry.Text.Should().NotContain("сло…");   // рубим по пробелу, а не посреди слова
+    }
+
+    [Fact]
+    public async Task AddAsync_ДлиннаяАвтоЗапись_CheapRunnerВернулПусто_ОбрезаетсяПоГраницеСлова()
+    {
+        var cheap = new FakeCheapRunner { OnRunFree = (_, _) => null };
+        var svc = NewService(cheap);
+        var longText = LongText("слово", 200);
+
+        var entry = await svc.AddAsync("o1", "p1", longText, source: TeamMemorySource.AutoTurn);
+
+        entry.Text.Length.Should().BeLessThan(longText.Length);
+        entry.Text.Should().EndWith("…");
+    }
+
+    [Fact]
+    public async Task AddAsync_ДлиннаяРучнаяЗапись_НеСжимается()
+    {
+        var cheap = new FakeCheapRunner { OnRunFree = (_, _) => "не должно быть вызвано" };
+        var svc = NewService(cheap);
+        var longText = LongText("ручной-текст-записи", 60);
+        longText.Length.Should().BeGreaterThan(700);
+
+        var entry = await svc.AddAsync("o1", "p1", longText, source: TeamMemorySource.Manual);
+
+        entry.Text.Should().Be(longText.Trim());
+    }
+
+    [Fact]
+    public async Task AddAsync_КороткаяАвтоЗапись_НеТрогается()
+    {
+        var cheap = new FakeCheapRunner { OnRunFree = (_, _) => "не должно быть вызвано" };
+        var svc = NewService(cheap);
+
+        var entry = await svc.AddAsync("o1", "p1", "Короткий факт", source: TeamMemorySource.AutoTurn);
+
+        entry.Text.Should().Be("Короткий факт");
     }
 }

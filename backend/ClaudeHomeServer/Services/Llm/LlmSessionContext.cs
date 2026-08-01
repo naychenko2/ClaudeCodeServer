@@ -17,9 +17,13 @@ public record TasksMcpContext(string ApiUrl, string Token, string? ProjectId,
 public record NotesMcpContext(string ApiUrl, string Token, string? ProjectId);
 
 // Контекст MCP-сервера памяти персоны: адрес API, сервисный токен владельца, id персоны,
-// чья долгая память доступна инструментами mcp__memory__* в этой сессии, и проект персоны
-// (③-3.4: проектная персона дополнительно получает team_memory_* — общую память команды
-// проекта; null — глобальная персона, командной памяти нет).
+// чья долгая память доступна инструментами mcp__memory__* в этой сессии, и проект ТЕКУЩЕГО
+// ЧАТА (③-3.4: даёт доступ к team_memory_* — общей памяти команды; null — чат вне проекта,
+// командной памяти нет). ProjectId — от чата, не от scope персоны: глобальная персона и
+// консультант другого проекта тоже получают team_memory_list/search (read-only) внутри
+// проектного чата — пишет ли персона в команду, решает бэкенд (ProjectsController.
+// TeamMemoryWriteAllowed: Persona.Scope==Project && Persona.ProjectId==id проекта памяти),
+// состав MCP-инструментов от этого не зависит (диета памяти команды, ч.3).
 public record MemoryMcpContext(string ApiUrl, string Token, string PersonaId, string? ProjectId = null);
 
 // Контекст MCP-сервера рабочего пространства: доступ сессии ко всем проектам владельца

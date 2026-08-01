@@ -142,12 +142,18 @@ export function normalizeHistory(raw: unknown[], opts?: { deriveSpeakers?: boole
   return items;
 }
 
-// Элементы, живущие только в живой ленте вкладки — в history.json не персистятся.
-// При сверке «история сервера новее?» их надо исключать из длины клиента, иначе
-// live-only элементы завышают её и дозаписанная история никогда не подтягивается.
-const LIVE_ONLY_KINDS = new Set<ChatItem['kind']>([
-  'permission_request', 'interrupted', 'resumed', 'session_ended',
-  'companion_switched', 'truncated', 'redacted_thinking',
+// Виды элементов, которые бэкенд пишет в history.json — дискриминаторы StoredMessage
+// (Protocol/StoredMessage.cs; workflow_progress персистится, но своим элементом ленты
+// не становится — normalizeHistory вливает его в карточку tool_use). Всё остальное живёт
+// только в ленте вкладки и при сверке «история сервера новее?» не считается: иначе
+// live-only элемент завышает длину клиента, серверная история навсегда признаётся
+// не новее, и оборванный посреди хода ответ залипает до перезагрузки страницы.
+// Список белый, а не чёрный, намеренно: новый вид элемента ленты по умолчанию
+// считается live-only и сверку не ломает. Сторож соответствия — chatReducer.test.ts.
+export const PERSISTED_KINDS = new Set<ChatItem['kind']>([
+  'user_message', 'session_started', 'text', 'thinking', 'tool_use',
+  'ask_question', 'plan_review', 'team_plan', 'team_escalation',
+  'file_changed', 'result', 'fal_cost', 'glif_cost', 'compact_boundary', 'error',
 ]);
 
 // Стоит ли заменить живую ленту историей с сервера: сравнение длин БЕЗ live-only
@@ -156,7 +162,7 @@ const LIVE_ONLY_KINDS = new Set<ChatItem['kind']>([
 // text-элемент у него длиннее (дозаписанный хвост после флаша буфера).
 // После замены items той же историей проверка даёт false — цикла перезагрузок нет.
 export function serverHistoryNewer(serverItems: ChatItem[], prevItems: ChatItem[]): boolean {
-  const countable = (items: ChatItem[]) => items.filter(i => !LIVE_ONLY_KINDS.has(i.kind));
+  const countable = (items: ChatItem[]) => items.filter(i => PERSISTED_KINDS.has(i.kind));
   const server = countable(serverItems);
   const prev = countable(prevItems);
   if (server.length !== prev.length) return server.length > prev.length;

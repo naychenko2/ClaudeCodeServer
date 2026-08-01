@@ -904,11 +904,17 @@ function ExtractTasksButton({ session, hasMessages, online }: { session: Session
 export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, onBillingChange, rateWindows, onOpenSettings, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, artifactsOpen, onToggleArtifacts, artifactFileCount, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, island }: ChatHeaderBarProps) {
   // Поповер управления участниками группового чата (клик по стеку аватаров)
   const [participantsOpen, setParticipantsOpen] = useState(false);
-  // Клик по блоку персоны — карточка персоны в разделе «Персоны» (диплинк #/personas/{id}).
+  // Клик по блоку персоны — карточка персоны: в проектном чате открывается в контентной зоне
+  // проекта (вкладка «Команда», #/project/{id}/persona/{pid}), в глобальном — раздел «Персоны».
   // На мобиле блок вложен в BackButton («назад к списку») — там клик остаётся за ним.
   const [personaHover, setPersonaHover] = useState(false);
   const openPersonaCard = persona
-    ? () => { window.dispatchEvent(new CustomEvent('cc-open-url', { detail: { url: `#/personas/${encodeURIComponent(persona.id)}` } })); }
+    ? () => {
+        const url = project
+          ? `#/project/${project.id}/persona/${encodeURIComponent(persona.id)}`
+          : `#/personas/${encodeURIComponent(persona.id)}`;
+        window.dispatchEvent(new CustomEvent('cc-open-url', { detail: { url } }));
+      }
     : null;
   const personaCardLink = openPersonaCard && !(isMobile && onBack) ? {
     role: 'button' as const, tabIndex: 0,

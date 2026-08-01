@@ -170,6 +170,14 @@ public sealed class PersonaMemoryAutolearnService : IHostedService
     {
         try
         {
+            // Тот же гейт содержательности, что у сессионного хода (Memory-диета) — короткая
+            // консультация жжёт тот же тег персона-memory-autolearn в спенд-логе
+            if (question.Trim().Length + answer.Trim().Length < _minTurnChars)
+            {
+                LogSkip(persona.Id, "консультация", Memory.AutolearnSkipReason.LowContent);
+                return;
+            }
+
             var transcript = $"Ассистент (по поручению пользователя): {question}\n\n{persona.Name}: {answer}";
             if (transcript.Length > TranscriptBudget) transcript = transcript[..TranscriptBudget];
 

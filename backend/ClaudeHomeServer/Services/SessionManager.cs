@@ -424,6 +424,14 @@ public class SessionManager : IDisposable
         ownerId is not null && _bindings.ServerToolEnabled(ownerId, persona, "widgets")
             ? new WidgetsMcpContext() : null;
 
+    // Браузер (плагин playwright): нужен по роли тестировщику, остальным персонам — нет.
+    // Ключ-надстройка «browser» с дефолтом по пресету (SectionEnabled → SpecialtySections),
+    // как git/kb; чат без персоны получает браузер как раньше — ручную проверку страницы
+    // человек делает из своего чата. Решение зависит только от персоны, поэтому постоянно
+    // в рамках сессии (оно входит в сигнатуру прогона — см. ClaudeRuntimeSettings).
+    private bool BrowserEnabled(string? ownerId, Persona? persona) =>
+        persona is null || _bindings.SectionEnabled(ownerId, persona, "browser");
+
     // Контекст MCP-сервера графа кода: инструменты codegraph_* доступны только в чате проекта —
     // граф ключуется проектом (в чате вне проекта искать нечего). Тот же сервисный токен
     // владельца, что у tasks/notes; владение проектом дополнительно проверяет CodeGraphController.
@@ -1874,7 +1882,8 @@ public class SessionManager : IDisposable
             Launcher: _launchers.ForOwner(ownerId),
             ModulesMcp: BuildModulesContext(ownerId),
             WidgetsMcp: BuildWidgetsContext(ownerId, persona.Persona),
-            CodeGraphMcp: BuildCodeGraphContext(ownerId, session.ProjectId, session.Id, rootPath, persona.Persona)));
+            CodeGraphMcp: BuildCodeGraphContext(ownerId, session.ProjectId, session.Id, rootPath, persona.Persona),
+            BrowserEnabled: BrowserEnabled(ownerId, persona.Persona)));
         entry.Process = adapter;
         entry.RunId = runId;
 
@@ -2651,7 +2660,8 @@ public class SessionManager : IDisposable
                 ModulesMcp: BuildModulesContext(entry.Info.OwnerId),
                 WidgetsMcp: BuildWidgetsContext(entry.Info.OwnerId, persona.Persona),
                 // Чат вне проекта — графа кода нет (он ключуется проектом)
-                CodeGraphMcp: null);
+                CodeGraphMcp: null,
+                BrowserEnabled: BrowserEnabled(entry.Info.OwnerId, persona.Persona));
         }
         else
         {
@@ -2680,7 +2690,8 @@ public class SessionManager : IDisposable
                 Launcher: _launchers.ForOwner(project.OwnerId),
                 ModulesMcp: BuildModulesContext(project.OwnerId),
                 WidgetsMcp: BuildWidgetsContext(project.OwnerId, persona.Persona),
-                CodeGraphMcp: BuildCodeGraphContext(project.OwnerId, project.Id, entry.Info.Id, rootPath, persona.Persona));
+                CodeGraphMcp: BuildCodeGraphContext(project.OwnerId, project.Id, entry.Info.Id, rootPath, persona.Persona),
+                BrowserEnabled: BrowserEnabled(project.OwnerId, persona.Persona));
         }
         var adapter = _adapters.Create(entry.Info, context);
         entry.Process = adapter;

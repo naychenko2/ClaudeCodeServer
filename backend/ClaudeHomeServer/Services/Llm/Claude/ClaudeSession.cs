@@ -195,6 +195,16 @@ public class ClaudeSession : ILlmSessionAdapter
     private static readonly string[] BuiltInTaskTools =
         ["TaskGet", "TaskList", "TaskCreate", "TaskUpdate"];
 
+    // Браузерные инструменты, которые приходят в сессию ПОМИМО нашего MCP-конфига, — два
+    // независимых канала: MCP плагина playwright (профили CLI) и коннектор аккаунта claude.ai
+    // «microsoft/playwright-mcp». Гасить достаточно обоих сразу: выключение одного плагина
+    // ничего не даёт — модель просто идёт браузером из коннектора (проверено живым прогоном).
+    // Маски (а не enabledPlugins) закрывают инструменты и в песочнице, где --settings не
+    // передаётся. Маска `mcp__server__*` для CLI законна даже если сервера в сессии нет —
+    // так же блокируются коннекторы из Claude:DisallowedTools.
+    private static readonly string[] BrowserTools =
+        ["mcp__plugin_playwright_playwright__*", "mcp__microsoft_playwright-mcp__*"];
+
     // Инструменты правки файлов — используются для атрибуции file_changed
     // (FileChangeAttributor.Claim), чтобы TurnFileWatcher чужого чата того же rootPath
     // не показал карточку правки, сделанной этой сессией. NotebookEdit — единственный
@@ -283,6 +293,8 @@ public class ClaudeSession : ILlmSessionAdapter
     // Файловые сабагенты-персоны: план хода — папки --add-dir
     // + pmem-серверы памяти консультантов; вычисляется на каждый ход
     private readonly Func<PersonaAgentsContext?>? _personaAgentsProvider;
+    // Браузер (плагин playwright) в этой сессии: false — гасим плагин на запуске CLI
+    private readonly bool _browserEnabled;
     // Реестр CLI-провайдеров: env-оверрайды процесса (ANTHROPIC_BASE_URL и др.)
     // для сторонних моделей; null — всегда родной Claude
     private readonly LlmProviderRegistry? _providers;
@@ -348,6 +360,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _widgetsMcp = context.WidgetsMcp;
         _codeGraphMcp = context.CodeGraphMcp;
         _personaAgentsProvider = context.PersonaAgentsProvider;
+        _browserEnabled = context.BrowserEnabled;
         _launcher = context.Launcher ?? Execution.LocalProcessRunner.Instance;
         // Запреты конфига + ограничения возможностей персоны (ExtraDisallowedTools)
         _disallowedTools = context.ExtraDisallowedTools is { Count: > 0 } extra
@@ -359,6 +372,9 @@ public class ClaudeSession : ILlmSessionAdapter
         // получает «No tasks» и бросает задачу). Без задач в сессии — не трогаем.
         if (context.TasksMcp is not null)
             _disallowedTools = [.. _disallowedTools, .. BuiltInTaskTools];
+        // Браузер не положен персоне по роли — закрываем оба канала (плагин + коннектор)
+        if (!_browserEnabled)
+            _disallowedTools = [.. _disallowedTools, .. BrowserTools];
         _fileChangeAttributor = fileChangeAttributor;
         _fileWatcher = new TurnFileWatcher(_rootPath, _onMessage, fileWatcherOptions,
             fileChangeAttributor, info.Id);
@@ -1370,8 +1386,10 @@ public class ClaudeSession : ILlmSessionAdapter
             "--permission-prompt-tool", "stdio"
         };
 
-        // Отключаем хуки плагинов на хосте (окна консоли на каждый ход); скиллы остаются
-        args.AddRange(ClaudeRuntimeSettings.HooksOffArgs(_launcher));
+        // Отключаем хуки плагинов на хосте (окна консоли на каждый ход); скиллы остаются.
+        // Тем же файлом гасится плагин браузера, если он персоне не положен по роли —
+        // путь файла входит в сигнатуру прогона, но решение постоянно в рамках сессии.
+        args.AddRange(ClaudeRuntimeSettings.HooksOffArgs(_launcher, _browserEnabled));
 
         if (Info.ClaudeSessionId is not null)
             args.AddRange(["--resume", Info.ClaudeSessionId]);

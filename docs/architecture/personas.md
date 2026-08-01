@@ -77,8 +77,8 @@
   спикер обязан уметь спросить коллег по чату, а `BuildGroupChatHint` безусловно отсылает
   к блоку о консультациях из personas-server.
 - **Секции-надстройки с пресетом по роли** (`PersonaBindingsService.PresetKeys`: `git`, `kb`,
-  `personas-manage`, `personas-automation`, `notes-annotations`; решение — `SectionEnabled`):
-  наборы инструментов,
+  `personas-manage`, `personas-automation`, `notes-annotations`, `browser`; решение —
+  `SectionEnabled`): наборы инструментов,
   которые раньше ехали пакетом со своей базовой секцией и стоили контекста всем персонам
   подряд. `git` (wsp `git_*`) — надстройка над секцией `files`, `kb` (wsp `kb_*`) — над
   `knowledge`: без базовой секции не монтируются вовсе. `notes-annotations` (env
@@ -96,6 +96,7 @@
   не убивает) → **пресет по `Persona.Specialty`** (`SpecialtySections`):
   `Executor`/`Reviewer`/`Tester` → `git` (у ревьюера и тестировщика `Access=ReadOnly` отбирает
   ещё и `Bash`, так что wsp-git — единственный оставшийся канал к диффу),
+  `Tester` вдобавок → `browser`,
   `Librarian` → `kb`, `Coordinator`/`Secretary` → `personas-manage` + `personas-automation`,
   остальные — только ядро. Не персонная сессия пресетов не знает — обычный чат получает всё.
   **Источник решения различим** (`SectionOrigin`: `Off`/`Preset`/`Explicit`): пресет по роли
@@ -107,6 +108,16 @@
   в пресете намеренно нет: в ней живёт `chats_report_up` — канал отчёта исполнителя вверх
   по делегированию. Тот же инвариант, что у рубильников: решение зависит ТОЛЬКО от персоны
   (сторож — `McpToolsetStabilityTests`).
+  Ключ `browser` — особый: инструменты браузера приходят не из нашего MCP-конфига, а двумя
+  внешними каналами — плагином CLI `playwright@claude-plugins-official`
+  (`mcp__plugin_playwright_playwright__*`; в профили провайдеров он разъехался синком
+  `LlmProviderRegistry.SyncUserProfile`, копирующим `~/.claude/plugins`) и коннектором аккаунта
+  claude.ai `microsoft/playwright-mcp`. Поэтому выключение закрывает оба: плагин гасится
+  `enabledPlugins` в файле `--settings` хода (`ClaudeRuntimeSettings`), инструменты обоих —
+  масками в `--disallowedTools` (`ClaudeSession.BrowserTools`). В песочнице `--settings`
+  не передаётся вовсе, там работают только маски. Оба рычага действуют на ВЕСЬ процесс хода,
+  поэтому решение берётся по персоне главной сессии: вызванный из неё файловый сабагент-консультант
+  наследует её режим браузера, а не свой (то же ограничение, что у pmem-серверов).
 - **@упоминания (флаг `persona-mentions`)**: надстройка над MCP персон — при включённом
   флаге и наличии других персон в контексте personas-server получает env `PERSONAS_MENTIONS=1`
   (регистрирует инструмент `persona_ask`) и `PERSONAS_SELF_ID`, а в промпт добавляется

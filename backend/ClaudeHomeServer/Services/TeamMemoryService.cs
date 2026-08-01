@@ -438,14 +438,49 @@ public class TeamMemoryService
             .ToList();
     }
 
+    // Предел записи в блоке recall. Записи разрослись до 2-3 КБ каждая, и блок командной памяти
+    // съедал 8-10 КБ КАЖДОГО хода — при том, что личная память давно режется по 240 символов
+    // (PersonaMemoryService.BuildRecallAsync). Сам стор не трогаем: обрезка только на выдаче
+    // в промпт, полный текст персона всегда доберёт через team_memory_list.
+    public const int RecallTextLimit = 280;
+
+    // Потолок ОДНОЙ записи на ручной записи (UI и MCP team_memory_remember/team_memory_update).
+    // Память команды — «одна мысль на запись»: всё, что длиннее, в recall всё равно обрежется,
+    // а в сторе и в Dify будет висеть целиком. Авто-захват и консолидация через него не идут —
+    // там потеря факта из-за отказа хуже длинной записи. Уже сохранённые длинные записи
+    // читаются и правятся как раньше: гейт стоит только на новом тексте.
+    public const int MaxTextLength = 1000;
+
     private static string FormatRecall(IReadOnlyList<TeamMemoryEntry> ranked)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("## Память команды проекта");
-        sb.AppendLine("Общие факты и договорённости проекта (помнят все персоны команды):");
+        var truncated = false;
+        var lines = new List<string>(ranked.Count);
         foreach (var e in ranked)
-            sb.AppendLine($"- {e.Text}");
+        {
+            var text = Shorten(e.Text.ReplaceLineEndings(" "), RecallTextLimit, ref truncated);
+            lines.Add($"- {text}");
+        }
+
+        sb.AppendLine("## Память команды проекта");
+        sb.AppendLine(truncated
+            ? "Общие факты и договорённости проекта (помнят все персоны команды; длинные записи обрезаны — полный текст записи через team_memory_list):"
+            : "Общие факты и договорённости проекта (помнят все персоны команды):");
+        foreach (var line in lines)
+            sb.AppendLine(line);
         return sb.ToString();
+    }
+
+    // Обрезка по границе слова: рубим по последнему пробелу в пределах лимита, чтобы фраза
+    // не обрывалась посреди слова. Слова длиннее лимита (пути, ссылки) режем как есть.
+    private static string Shorten(string text, int limit, ref bool truncated)
+    {
+        if (text.Length <= limit) return text;
+        truncated = true;
+        var head = text[..limit];
+        var space = head.LastIndexOf(' ');
+        if (space > limit / 2) head = head[..space];
+        return head.TrimEnd(' ', ',', ';', '.', '—', '-') + "…";
     }
 
     // --- Консолидация (P4): применение операций merge/drop под save-lock ---

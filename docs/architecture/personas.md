@@ -61,6 +61,20 @@
   LlmSessionContext; выключенный `web` добавляет WebSearch/WebFetch в
   `ExtraDisallowedTools` (поверх `Claude:DisallowedTools`). UI — секция «Возможности»
   (3 тумблера) в PersonaForm.
+- **Рубильники MCP-серверов персоны** (`PersonaBindingsService.ServerKeys`: `personas`,
+  `consultants`, `codegraph`, `notifications`, `widgets`): выключаются Off-привязкой
+  (`type: tool`, `target: <ключ>`) и только ею — фолбэка на `Persona.Tools` у этих ключей нет
+  (`ServerToolEnabled`, в отличие от `EffectiveToolEnabled`), иначе персона с суженным списком
+  возможностей разом лишилась бы серверов, которые сегодня получает безусловно. Гейты стоят при
+  сборке `LlmSessionContext`: `personas` снимает personas-server целиком (вместе с `persona_ask`),
+  `consultants` — pmem-серверы консультантов, `--add-dir` с их .md-агентами и подсказку
+  со списком коллег, `codegraph` — сервер графа и его выжимку в промпте, `notifications`
+  и `widgets` — свои серверы. Подсказки в промпте условны от наличия сервера, отдельно
+  их гейтить не нужно. Два инварианта: решение зависит ТОЛЬКО от персоны (состав `tools/list`
+  не смеет мерцать между ходами — сторож `McpToolsetStabilityTests`), а в **групповом чате**
+  ключи `consultants` и `personas` игнорируются (`ConsultantsEnabled`/`PersonasEnabled`) —
+  спикер обязан уметь спросить коллег по чату, а `BuildGroupChatHint` безусловно отсылает
+  к блоку о консультациях из personas-server.
 - **@упоминания (флаг `persona-mentions`)**: надстройка над MCP персон — при включённом
   флаге и наличии других персон в контексте personas-server получает env `PERSONAS_MENTIONS=1`
   (регистрирует инструмент `persona_ask`) и `PERSONAS_SELF_ID`, а в промпт добавляется

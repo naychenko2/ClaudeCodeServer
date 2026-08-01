@@ -3288,4 +3288,163 @@ public class SessionManagerTests : IDisposable
         snap.SubscriptionKey.Should().Be(ClaudeSubscriptionPool.PrimaryKey);
         _activity.IsIdle(ClaudeSubscriptionPool.PrimaryKey, TimeSpan.FromMinutes(10)).Should().BeFalse();
     }
+
+    // --- Per-persona рубильники MCP-серверов (Off-привязка type: tool, target: <ключ>) ---
+
+    private object? InvokePrivate(string name, params object?[] args)
+    {
+        var method = typeof(SessionManager).GetMethod(name,
+            BindingFlags.NonPublic | BindingFlags.Instance)!;
+        return method.Invoke(_sut, args);
+    }
+
+    // Персона проекта + Off-привязки на перечисленные ключи (пусто — дефолтная персона)
+    private Persona MkGatedPersona(string projectId, string suffix, params string[] offKeys)
+    {
+        var persona = _personaManager.Create(TestUserId, "Гейт-" + suffix, role: null, description: null,
+            systemPrompt: null, model: null, effort: null, scope: PersonaScope.Project,
+            projectId: projectId, color: null, greeting: null, memoryEnabled: false);
+        if (offKeys.Length == 0) return persona;
+        return _personaManager.UpdateBindings(persona.Id, TestUserId,
+            offKeys.Select(k => new PersonaBinding
+            {
+                Type = PersonaBindingType.Tool, Target = k, Mode = PersonaBindingMode.Off,
+            }).ToList());
+    }
+
+    [Fact]
+    public async Task ГейтыСерверов_БезПривязок_ВсёПодключено()
+    {
+        var dir = MkProjectDir("gates-default");
+        var project = _projectManager.Create("GD", dir, TestUserId, TestUsername);
+        var persona = MkGatedPersona(project.Id, "default");
+        // Вторая персона в контексте — иначе подсказки о консультациях не из чего строить
+        MkGatedPersona(project.Id, "peer");
+        var session = await _sut.CreatePersonaChatAsync(TestUserId, persona.Id, ClaudeMode.Auto);
+
+        InvokePrivate("BuildWidgetsContext", TestUserId, persona).Should().NotBeNull();
+        InvokePrivate("BuildNotificationsContext", TestUserId, persona.Id, persona).Should().NotBeNull();
+        InvokePrivate("BuildCodeGraphContext", TestUserId, project.Id, session.Id, dir, persona)
+            .Should().NotBeNull();
+        var personas = InvokePrivate("BuildPersonasContext", TestUserId, project.Id, session, persona)
+            .Should().BeOfType<PersonasMcpContext>().Subject;
+        personas.MentionsHint.Should().NotBeNull("консультации включены по умолчанию");
+        InvokePrivate("ConsultantsEnabled", TestUserId, session, persona).Should().Be(true);
+    }
+
+    [Fact]
+    public async Task ГейтыСерверов_OffПривязки_СнимаютСерверы()
+    {
+        var dir = MkProjectDir("gates-off");
+        var project = _projectManager.Create("GO", dir, TestUserId, TestUsername);
+        var persona = MkGatedPersona(project.Id, "off",
+            "widgets", "notifications", "codegraph", "personas");
+        var session = await _sut.CreatePersonaChatAsync(TestUserId, persona.Id, ClaudeMode.Auto);
+
+        InvokePrivate("BuildWidgetsContext", TestUserId, persona).Should().BeNull();
+        InvokePrivate("BuildNotificationsContext", TestUserId, persona.Id, persona).Should().BeNull();
+        InvokePrivate("BuildCodeGraphContext", TestUserId, project.Id, session.Id, dir, persona)
+            .Should().BeNull();
+        InvokePrivate("BuildPersonasContext", TestUserId, project.Id, session, persona).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ГейтыСерверов_СессияБезПерсоны_НеЗатронута()
+    {
+        var dir = MkProjectDir("gates-nopersona");
+        var project = _projectManager.Create("GN", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+
+        InvokePrivate("BuildWidgetsContext", TestUserId, null).Should().NotBeNull();
+        InvokePrivate("BuildNotificationsContext", TestUserId, null, null).Should().NotBeNull();
+        InvokePrivate("BuildCodeGraphContext", TestUserId, project.Id, session.Id, dir, null)
+            .Should().NotBeNull();
+        InvokePrivate("BuildPersonasContext", TestUserId, project.Id, session, null).Should().NotBeNull();
+        InvokePrivate("ConsultantsEnabled", TestUserId, session, null).Should().Be(true);
+    }
+
+    [Fact]
+    public async Task Консультанты_Off_СнимаютПодсказкуНоОставляютСерверПерсон()
+    {
+        var dir = MkProjectDir("gates-consult");
+        var project = _projectManager.Create("GC", dir, TestUserId, TestUsername);
+        var persona = MkGatedPersona(project.Id, "consult", "consultants");
+        MkGatedPersona(project.Id, "consult-peer");
+        var session = await _sut.CreatePersonaChatAsync(TestUserId, persona.Id, ClaudeMode.Auto);
+
+        InvokePrivate("ConsultantsEnabled", TestUserId, session, persona).Should().Be(false);
+        InvokePrivate("BuildPersonaAgentsProvider", TestUserId, session, persona).Should().BeNull(
+            "нет ни pmem-серверов, ни --add-dir с .md-агентами");
+        var personas = InvokePrivate("BuildPersonasContext", TestUserId, project.Id, session, persona)
+            .Should().BeOfType<PersonasMcpContext>().Subject;
+        personas.MentionsHint.Should().BeNull(
+            "без консультаций persona_ask и список коллег не нужны (PERSONAS_MENTIONS=0)");
+    }
+
+    [Fact]
+    public async Task Консультанты_Off_ВГрупповомЧатеИгнорируется()
+    {
+        // Спикер обязан уметь спросить коллег по чату — иначе групповой чат ломается по замыслу
+        var (user, project, personas) = MkGroupFixture(3, "gates-group");
+        var speaker = _personaManager.UpdateBindings(personas[0].Id, user.Id,
+        [
+            new PersonaBinding { Type = PersonaBindingType.Tool, Target = "consultants", Mode = PersonaBindingMode.Off },
+        ]);
+        var session = await _sut.CreateGroupChatAsync(user.Id, personas.Select(p => p.Id).ToList(),
+            ClaudeMode.Auto, "Команда");
+
+        InvokePrivate("ConsultantsEnabled", user.Id, session, speaker).Should().Be(true);
+        var ctx = InvokePrivate("BuildPersonasContext", user.Id, project.Id, session, speaker)
+            .Should().BeOfType<PersonasMcpContext>().Subject;
+        ctx.MentionsHint.Should().NotBeNull("в групповом чате коллеги остаются доступными");
+    }
+
+    [Fact]
+    public async Task Personas_Off_ВГрупповомЧатеИгнорируется()
+    {
+        // Спикер обязан уметь спросить коллег через persona_ask — иначе BuildGroupChatHint
+        // безосновательно отсылает к блоку о консультациях, а его нет (регресс из ревью 995702c5)
+        var (user, project, personas) = MkGroupFixture(3, "gates-group-personas");
+        var speaker = _personaManager.UpdateBindings(personas[0].Id, user.Id,
+        [
+            new PersonaBinding { Type = PersonaBindingType.Tool, Target = "personas", Mode = PersonaBindingMode.Off },
+        ]);
+        var session = await _sut.CreateGroupChatAsync(user.Id, personas.Select(p => p.Id).ToList(),
+            ClaudeMode.Auto, "Команда-персоны");
+
+        InvokePrivate("PersonasEnabled", user.Id, session, speaker).Should().Be(true);
+        var ctx = InvokePrivate("BuildPersonasContext", user.Id, project.Id, session, speaker)
+            .Should().BeOfType<PersonasMcpContext>().Subject;
+        ctx.MentionsHint.Should().NotBeNull("в групповом чате сервер персон остаётся подключён");
+    }
+
+    [Fact]
+    public async Task Personas_Off_ОдиночныйЧатТойЖеПерсоны_СнимаетСервер()
+    {
+        var dir = MkProjectDir("gates-personas-solo");
+        var project = _projectManager.Create("GPS", dir, TestUserId, TestUsername);
+        var persona = MkGatedPersona(project.Id, "personas-solo", "personas");
+        var session = await _sut.CreatePersonaChatAsync(TestUserId, persona.Id, ClaudeMode.Auto);
+
+        InvokePrivate("PersonasEnabled", TestUserId, session, persona).Should().Be(false);
+        InvokePrivate("BuildPersonasContext", TestUserId, project.Id, session, persona).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ГейтыСерверов_РешениеОдинаковоеНаВсехХодах()
+    {
+        // Состав tools/list входит в сигнатуру запуска CLI: «мерцание» между ходами убивает
+        // процесс claude со всеми MCP-серверами
+        var dir = MkProjectDir("gates-stable");
+        var project = _projectManager.Create("GS", dir, TestUserId, TestUsername);
+        var persona = MkGatedPersona(project.Id, "stable", "codegraph");
+        var session = await _sut.CreatePersonaChatAsync(TestUserId, persona.Id, ClaudeMode.Auto);
+
+        for (var turn = 1; turn <= 5; turn++)
+        {
+            InvokePrivate("BuildCodeGraphContext", TestUserId, project.Id, session.Id, dir, persona)
+                .Should().BeNull($"ход {turn}");
+            InvokePrivate("BuildWidgetsContext", TestUserId, persona).Should().NotBeNull($"ход {turn}");
+        }
+    }
 }

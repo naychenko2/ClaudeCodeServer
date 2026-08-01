@@ -16,9 +16,8 @@ public class PersonaBindingsService
     // Always-выжимок на ход — не больше
     public const int AlwaysLimit = 3;
 
-    // Каталог ключей Tool-привязок: возможности персоны + секции workspace.
-    // «personas» — валидная цель правила, но рубильником MCP персон не является
-    // (persona.Tools его никогда не содержал — гейтить нечем без ломки старых персон).
+    // Каталог ключей Tool-привязок: возможности персоны + секции workspace + рубильники
+    // MCP-серверов (ServerKeys — их Persona.Tools никогда не знал, см. ServerToolEnabled).
     public static readonly IReadOnlyDictionary<string, (string Label, string Hint)> ToolCatalog =
         new Dictionary<string, (string, string)>(StringComparer.OrdinalIgnoreCase)
         {
@@ -26,12 +25,22 @@ public class PersonaBindingsService
             ["notes"] = ("Заметки", "База знаний заметок (mcp__notes__*): markdown-vault со связями"),
             ["web"] = ("Веб-поиск", "Встроенные WebSearch/WebFetch — поиск и чтение страниц в интернете"),
             ["personas"] = ("Персоны", "Раздел персон (mcp__personas__*): CRUD и @упоминания"),
+            ["consultants"] = ("Консультации персон", "Персоны-консультанты: сабагенты .md (Task по handle), их память mcp__pmem_* и persona_ask"),
+            ["codegraph"] = ("Граф кода", "Граф кода проекта (mcp__codegraph__*) и его выжимка в промпте"),
+            ["notifications"] = ("Уведомления", "Уведомления пользователя (mcp__notifications__*): создать, отметить прочитанным"),
+            ["widgets"] = ("Виджеты", "Интерактивные HTML-виджеты в ленте чата (mcp__widgets__widget_show)"),
             ["projects"] = ("Проекты", "Секция projects workspace: список и карточки проектов владельца"),
             ["chats"] = ("Чаты", "Секция chats workspace: история и отправка сообщений в другие чаты"),
             ["files"] = ("Файлы проектов", "Секция files workspace: чтение/правка файлов любого проекта"),
             ["knowledge"] = ("Базы знаний", "Секция knowledge workspace: семантический поиск по базам проектов"),
             ["destructive"] = ("Удаление (опасно)", "Секция destructive workspace: безвозвратное удаление файлов проектов и чатов (files_delete/chats_delete) — только по явной просьбе пользователя"),
         };
+
+    // Ключи-рубильники MCP-серверов: гейтятся ТОЛЬКО Tool-привязкой (ServerToolEnabled).
+    // Фолбэка на Persona.Tools у них нет — см. там же почему.
+    public static readonly IReadOnlySet<string> ServerKeys =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            { "personas", "consultants", "codegraph", "notifications", "widgets" };
 
     private readonly PersonaManager _personas;
     private readonly ProjectManager _projects;
@@ -74,11 +83,28 @@ public class PersonaBindingsService
     public bool EffectiveToolEnabled(string? ownerId, Persona? persona, string key)
     {
         if (persona is null) return true;
-        var binding = persona.Bindings?.LastOrDefault(b => b.Type == PersonaBindingType.Tool
-            && string.Equals(b.Target, key, StringComparison.OrdinalIgnoreCase));
+        var binding = FindToolBinding(persona, key);
         if (binding is not null) return binding.Mode != PersonaBindingMode.Off;
         return persona.Tools is null || persona.Tools.Contains(key, StringComparer.OrdinalIgnoreCase);
     }
+
+    // Рубильник MCP-сервера персоны (ServerKeys: personas/consultants/codegraph/notifications/
+    // widgets). Отличие от EffectiveToolEnabled — НЕТ фолбэка на Persona.Tools: этих ключей
+    // старый список возможностей не знал вовсе, и персона с суженным Tools (напр. ["tasks"])
+    // разом лишилась бы серверов, которые сегодня получает безусловно. Выключает только явная
+    // Off-привязка (type: tool, target: <ключ>) — дефолт «всё включено» остаётся байт-в-байт.
+    // Решение зависит ТОЛЬКО от персоны, поэтому детерминировано на сессию (состав tools/list
+    // не смеет мерцать между ходами); правка персоны инвалидирует адаптер — InvalidatePersonaSessions.
+    public bool ServerToolEnabled(string? ownerId, Persona? persona, string key)
+    {
+        if (persona is null) return true;
+        return FindToolBinding(persona, key) is not { Mode: PersonaBindingMode.Off };
+    }
+
+    // Последняя Tool-привязка персоны по ключу (последняя побеждает — как в UI списка привязок)
+    private static PersonaBinding? FindToolBinding(Persona persona, string key) =>
+        persona.Bindings?.LastOrDefault(b => b.Type == PersonaBindingType.Tool
+            && string.Equals(b.Target, key, StringComparison.OrdinalIgnoreCase));
 
     // --- Сужение зоны workspace ---
 

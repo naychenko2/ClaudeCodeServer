@@ -23,6 +23,11 @@ public sealed class PersonaMemoryAutolearnService : IHostedService
     private readonly IConfiguration _config;
     private readonly ILogger<PersonaMemoryAutolearnService> _log;
     private readonly ProjectEventLogService? _events;
+    // Гейт содержательности хода (Memory-диета): порог длины реплик последнего хода — короче
+    // не стоит прогона LLM. Дефолт 400 — середина заданного диапазона 300-500 символов.
+    private readonly int _minTurnChars;
+    // Счётчик пропусков autolearn с момента старта процесса — в лог, чтобы видеть эффект гейта
+    private int _skipped;
 
     public PersonaMemoryAutolearnService(SessionManager sessions, PersonaManager personas,
         PersonaMemoryService memory, PersonaMemoryConsolidationService consolidation,
@@ -38,6 +43,7 @@ public sealed class PersonaMemoryAutolearnService : IHostedService
         _config = config;
         _log = log;
         _events = events;
+        _minTurnChars = int.TryParse(config["Memory:AutolearnMinTurnChars"], out var mtc) && mtc > 0 ? mtc : 400;
     }
 
     public Task StartAsync(CancellationToken ct)
@@ -60,9 +66,23 @@ public sealed class PersonaMemoryAutolearnService : IHostedService
         var persona = _personas.GetByIdInternal(session.PersonaId);
         if (persona is null || !persona.MemoryEnabled) return Task.CompletedTask;
 
+        var skipReason = Memory.AutolearnGate.CheckSession(session);
+        if (skipReason != Memory.AutolearnSkipReason.None)
+        {
+            LogSkip(persona.Id, session.Id, skipReason);
+            return Task.CompletedTask;
+        }
+
         // Извлечение не должно тормозить пайплайн хода/broadcast — уводим в фон
         _ = Task.Run(() => LearnSafeAsync(session.Id, persona));
         return Task.CompletedTask;
+    }
+
+    private void LogSkip(string personaId, string sessionId, Memory.AutolearnSkipReason reason)
+    {
+        var total = Interlocked.Increment(ref _skipped);
+        _log.LogDebug("autolearn: персона {Persona}, сессия {Session} — пропуск ({Reason}), всего пропусков {Total}",
+            personaId, sessionId, reason, total);
     }
 
     private async Task LearnSafeAsync(string sessionId, Persona persona)
@@ -72,6 +92,12 @@ public sealed class PersonaMemoryAutolearnService : IHostedService
             var history = await _sessions.GetHistoryAsync(sessionId);
             var transcript = SessionSummaryService.BuildTranscript(history, TranscriptBudget);
             if (string.IsNullOrWhiteSpace(transcript)) return;
+
+            if (Memory.AutolearnGate.CheckContent(history, _minTurnChars) != Memory.AutolearnSkipReason.None)
+            {
+                LogSkip(persona.Id, sessionId, Memory.AutolearnSkipReason.LowContent);
+                return;
+            }
 
             var raw = await _cheap.RunAsync(Llm.LocalActionCatalog.PersonaMemoryAutolearn,
                 BuildPrompt(persona, transcript),
@@ -144,6 +170,14 @@ public sealed class PersonaMemoryAutolearnService : IHostedService
     {
         try
         {
+            // Тот же гейт содержательности, что у сессионного хода (Memory-диета) — короткая
+            // консультация жжёт тот же тег персона-memory-autolearn в спенд-логе
+            if (question.Trim().Length + answer.Trim().Length < _minTurnChars)
+            {
+                LogSkip(persona.Id, "консультация", Memory.AutolearnSkipReason.LowContent);
+                return;
+            }
+
             var transcript = $"Ассистент (по поручению пользователя): {question}\n\n{persona.Name}: {answer}";
             if (transcript.Length > TranscriptBudget) transcript = transcript[..TranscriptBudget];
 

@@ -38,12 +38,29 @@ public sealed class MemoryWriteResolver(
     public bool Enabled { get; } =
         !bool.TryParse(config["Memory:ConflictResolution"], out var v) || v;
 
+    // Порог локального keyword-скора (MemoryFulltext.Relevance): ниже него ни один кандидат не
+    // считается реально похожим по словам, хотя семантический retrieve его и подобрал —
+    // конфликта нет, пишем ADD сразу без LLM-вызова (Memory-диета).
+    private readonly double _keywordThreshold =
+        double.TryParse(config["Memory:ResolveKeywordThreshold"], System.Globalization.CultureInfo.InvariantCulture, out var kt)
+            ? kt : 0.15;
+
     // Резолвит операцию записи нового факта относительно близких кандидатов того же скоупа.
     // Пустой список кандидатов → ADD без вызова LLM. Ошибка/таймаут/мусор → ADD (фолбэк).
     public async Task<MemoryWriteDecision> ResolveAsync(string? ownerId, string newText, string typeLabel,
         IReadOnlyList<MemoryWriteCandidate> candidates, TimeSpan? timeout = null, CancellationToken ct = default)
     {
         if (candidates.Count == 0 || string.IsNullOrWhiteSpace(newText)) return MemoryWriteDecision.Add;
+
+        // Пре-фильтр: ни один кандидат не проходит даже низкий keyword-порог — реального
+        // спора нет, LLM не зовём
+        var relevance = MemoryFulltext.Relevance(candidates, newText, c => c.Id, c => c.Text, _ => null);
+        if (relevance.Count == 0 || relevance.Values.Max() < _keywordThreshold)
+        {
+            log.LogDebug("memory-write-resolver: пре-фильтр отсёк LLM-вызов (keyword-скор ниже {Threshold})",
+                _keywordThreshold);
+            return MemoryWriteDecision.Add;
+        }
         try
         {
             // timeout игнорируется для локали (профиль каталога задаёт таймаут); для claude-пути — дефолт раннера

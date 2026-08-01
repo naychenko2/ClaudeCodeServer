@@ -1939,7 +1939,6 @@ function PanelsSection() {
                     workflowRunning={false}
                     onSelect={() => {}}
                     onHover={() => {}}
-                    onEdit={() => {}}
                     onDelete={() => {}}
                   />
                 ))}
@@ -1986,7 +1985,6 @@ function PanelsSection() {
                     workflowRunning={false}
                     onSelect={() => {}}
                     onHover={() => {}}
-                    onEdit={() => {}}
                     onDelete={() => {}}
                   />
                 ))}
@@ -2298,7 +2296,6 @@ function PanelsSection() {
                       workflowRunning={false}
                       onSelect={() => {}}
                       onHover={() => {}}
-                      onEdit={() => {}}
                       onDelete={() => {}}
                     />
                   ))}
@@ -2337,7 +2334,6 @@ function PanelsSection() {
                       workflowRunning={false}
                       onSelect={() => {}}
                       onHover={() => {}}
-                      onEdit={() => {}}
                       onDelete={() => {}}
                     />
                   ))}

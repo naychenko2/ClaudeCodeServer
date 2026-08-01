@@ -4,7 +4,6 @@ import type { Project, ProjectTag, Session } from '../types';
 import { api } from '../lib/api';
 import { onMessage, onReconnected } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
-import { EditSessionDialog } from './EditSessionDialog';
 import { C, FS, GROUP_COLORS, MODAL_W, R } from '../lib/design';
 import { Modal, ModalActions } from './ui';
 import { usePersonas, usePersonasVersion } from '../lib/personas';
@@ -60,7 +59,6 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   // этому числу решает показывать ли панель, схлопнул бы её сразу после открытия
   const [loaded, setLoaded] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
-  const [editTarget, setEditTarget] = useState<Session | null>(null);
   // Карточка под курсором — на ней показываем действия (на тач-устройствах hover нет, там действия видны всегда)
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const initializedRef = useRef(false);
@@ -361,7 +359,6 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
       workflowRunning={workflowRunningFor === s.id}
       onSelect={() => onSelect(s)}
       onHover={h => setHoveredId(h ? s.id : null)}
-      onEdit={() => setEditTarget(s)}
       onDelete={() => setDeleteTarget(s)}
       tags={chatTagsSorted(s, registry).map(name => ({ name, color: tagColor(registry, name) }))}
       onRemoveTag={online ? name => toggleTag(s, name) : undefined}
@@ -525,13 +522,6 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         );
       })()}
 
-      {editTarget && (
-        <EditSessionDialog
-          session={editTarget}
-          onSaved={handleSessionUpdated}
-          onClose={() => setEditTarget(null)}
-        />
-      )}
 
       {deleteTarget && (
         <Modal

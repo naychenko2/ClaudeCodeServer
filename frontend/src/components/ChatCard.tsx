@@ -1,7 +1,8 @@
-import { AlertCircle, CheckCircle2, Clock, Pin, SquarePen, Tags, Trash2, Users, Wrench } from 'lucide-react';
+import { useState } from 'react';
+import { AlertCircle, CheckCircle2, Clock, MoreVertical, Pin, Tags, Trash2, Users, Wrench } from 'lucide-react';
 import type { Session } from '../types';
 import { C, R, SHADOW, FONT } from '../lib/design';
-import { IconButton } from './ui';
+import { IconButton, Menu, MenuItem } from './ui';
 import { ICON_STROKE } from './ui/icons';
 import { StatusIndicator } from './StatusIndicator';
 import { ExpiryBadge } from './ExpiryBadge';
@@ -18,24 +19,25 @@ import { getLastMechanic } from '../lib/lastMechanic';
 import { useFeature, FLAGS } from '../lib/featureFlags';
 import { teamImplementTone, teamImplementStageShort, teamImplementBadgeText } from '../lib/teamImplement';
 
-// Ширина правой зоны: под ней ровно помещаются три кнопки действий (по 24) с их
-// отступом. Лицо собеседника занимает эту же полосу, кнопки всплывают поверх него
+// Ширина правой зоны под лицо собеседника; на её левой кромке стоит столбик действий
 const COMPANION_W = 84;
+
+// Кнопка меню действий (IconButton size="xs") и её отступ от правого края; по
+// вертикали она стоит по центру карточки. Место одно на всех карточках — и с
+// собеседником, и без, чтобы кнопка не прыгала при переходе между чатами
+const ACTION_BOX = 24;
+const ACTIONS_RIGHT = 4;
+
+// Минимальная высота карточки: не меньше двух текстовых строк (название + превью,
+// чтобы чат без последнего сообщения не схлопывался) и не меньше кнопки действий
+const TWO_LINES = 42;
 
 // Умеет ли устройство наводить курсор. На тач-экранах hover не наступает никогда,
 // поэтому кнопки действий там показываем постоянно (приём как в MarkdownViewer)
 const CAN_HOVER = typeof window !== 'undefined' && !window.matchMedia('(hover: none)').matches;
 
-// Стекло под кнопками действий: они лежат поверх лица собеседника, глухая
-// подложка вырезала бы в нём прямоугольник. Текст в зону лица не заходит вовсе,
-// поэтому под надписями никаких облачек нет
-const GLASS: React.CSSProperties = {
-  background: C.glass,
-  backdropFilter: 'blur(6px)',
-  WebkitBackdropFilter: 'blur(6px)',
-  borderRadius: R.md,
-  padding: '2px 7px',
-};
+// Подложки под кнопкой действий нет: в покое видна только иконка, фон появляется
+// под курсором — его рисует сам IconButton
 
 // Собеседник в правом углу карточки — общий PersonaBackdrop (вынесен в PersonaFace.tsx,
 // его же использует hero-шапка открытого чата); ширина полосы = COMPANION_W.
@@ -114,7 +116,6 @@ interface Props {
   workflowRunning: boolean;
   onSelect: () => void;
   onHover: (hovered: boolean) => void;
-  onEdit: () => void;
   onDelete: () => void;
   // Не задан — чат без закрепления (списки проекта)
   onTogglePin?: () => void;
@@ -129,12 +130,13 @@ interface Props {
 /**
  * Карточка чата в боковых списках (глобальном ChatList и проектном SessionList).
  * Раскладка: строка «статус + собеседник + название + время», под ней — бейджи
- * и превью последнего сообщения во всю ширину. Действия всплывают поверх времени
- * по наведению, поэтому текст под ними места не теряет.
+ * и превью последнего сообщения во всю ширину. Высота — не меньше двух текстовых
+ * строк, поэтому карточки в списке стоят единой сеткой. Действия всплывают по
+ * наведению вертикальным столбиком на стыке текста и лица собеседника.
  */
 export function ChatCard({
   session: s, isActive, isMobile, fallbackName, online, hovered, workflowRunning,
-  onSelect, onHover, onEdit, onDelete, onTogglePin, tags, onRemoveTag, onAssignTags,
+  onSelect, onHover, onDelete, onTogglePin, tags, onRemoveTag, onAssignTags,
 }: Props) {
   // Чат от лица персоны: мини-аватар в строке названия и акцент её цвета
   const persona = s.personaId ? getPersonaById(s.personaId) : undefined;
@@ -157,6 +159,8 @@ export function ChatCard({
   const mechanic = getLastMechanic(s.id);
   // Режим «Командная реализация» — маркер стадии в строке названия (за фич-флагом)
   const teamImplementOn = useFeature(FLAGS.teamImplementMode);
+  // Открытое меню действий: rect кнопки-триггера (null — закрыто)
+  const [menu, setMenu] = useState<DOMRect | null>(null);
   // Действия: с мышью — по наведению, на тач-устройствах — у выбранного чата.
   // Показывать их на тач всегда нельзя: они висели бы поверх лица собеседника на
   // каждой карточке. Тап по чату и открывает его, и раскрывает кнопки.
@@ -166,8 +170,8 @@ export function ChatCard({
   const cardBg = isActive ? C.accentLight : C.bgWhite;
   // Лицо для подложки: у группы — ведущая (первая в составе)
   const backdropPersona = group.length > 1 ? group[0] : persona;
-  // Стекло — только когда под кнопками есть лицо; на чистом фоне глухая подложка
-  const glass = backdropPersona ? GLASS : { background: cardBg, borderRadius: R.md, padding: '2px 4px' };
+  const padV = isMobile ? 14 : 11;
+  const minHeight = Math.max(padV * 2 + TWO_LINES, ACTION_BOX + 8);
   // Собеседник назван словами только в тултипе точки статуса — в самой карточке
   // его показывает подложка, строку под текст он не занимает
   const companionTitle = group.length > 1 ? (
@@ -187,8 +191,8 @@ export function ChatCard({
       style={{
         position: 'relative',
         // отдельные longhand-свойства: со shorthand + undefined React обнуляет padding-left
-        paddingTop: isMobile ? 14 : 11,
-        paddingBottom: isMobile ? 14 : 11,
+        paddingTop: padV,
+        paddingBottom: padV,
         paddingRight: isMobile ? 16 : 12,
         // у активной карточки добавляем слева место под акцентную полосу
         paddingLeft: (isMobile ? 16 : 12) + (isActive ? 6 : 0),
@@ -201,7 +205,11 @@ export function ChatCard({
         boxShadow: isActive ? SHADOW.button : SHADOW.card,
         display: 'flex',
         flexDirection: 'column',
+        justifyContent: 'center',
         gap: 3,
+        // единая высота карточек в списке: короткий чат не выше длинного
+        minHeight,
+        boxSizing: 'border-box',
       }}
     >
       {/* Собеседник — в правом углу; в группе лицо даёт ведущая.
@@ -292,38 +300,55 @@ export function ChatCard({
         )}
       </div>
 
-      {/* Действия — в правой полосе поверх лица, прижаты к низу карточки */}
+      {/* Действия — одной кнопкой «⋮» у правого края по центру высоты, место одно и
+          то же при любом составе карточки. Само меню открывается порталом по rect
+          кнопки (anchor-режим Menu): список чатов скроллится, и absolute-меню
+          обрезалось бы его overflow */}
       {showActions && (
         <div style={{
-          ...glass, position: 'absolute', bottom: isMobile ? 8 : 6, right: isMobile ? 12 : 8, zIndex: 1,
-          display: 'flex', alignItems: 'center',
+          position: 'absolute', top: '50%', transform: 'translateY(-50%)',
+          right: ACTIONS_RIGHT, zIndex: 1, display: 'flex',
         }}>
-          {onTogglePin && (
-            <IconButton
-              onClick={e => { e.stopPropagation(); onTogglePin(); }}
-              title={s.isPinned ? 'Открепить' : 'Закрепить'}
-              size="xs" active={s.isPinned}
-            >
-              <Pin size={14} strokeWidth={2} fill={s.isPinned ? 'currentColor' : 'none'} />
-            </IconButton>
-          )}
-          {onAssignTags && (
-            <IconButton
-              onClick={e => { e.stopPropagation(); onAssignTags(e.currentTarget.getBoundingClientRect()); }}
-              title="Метки (общие теги)"
-              size="xs"
-              active={(s.tags?.length ?? 0) > 0}
-            >
-              <Tags size={14} strokeWidth={2} />
-            </IconButton>
-          )}
-          <IconButton onClick={e => { e.stopPropagation(); onEdit(); }} title="Настройки чата" size="xs">
-            <SquarePen size={14} strokeWidth={2} />
-          </IconButton>
-          <IconButton onClick={e => { e.stopPropagation(); onDelete(); }} title="Удалить чат" size="xs" tone="danger">
-            <Trash2 size={14} strokeWidth={2} />
+          <IconButton
+            onClick={e => {
+              e.stopPropagation();
+              const r = e.currentTarget.getBoundingClientRect();
+              setMenu(prev => (prev ? null : r));
+            }}
+            title="Действия с чатом"
+            size="xs"
+            active={!!menu}
+          >
+            <MoreVertical size={14} strokeWidth={2} />
           </IconButton>
         </div>
+      )}
+
+      {menu && (
+        <Menu anchor={menu} onClose={() => setMenu(null)} minWidth={132} maxHeight={112} gap={4}>
+          {onTogglePin && (
+            <MenuItem
+              icon={<Pin size={15} strokeWidth={2} fill={s.isPinned ? 'currentColor' : 'none'} />}
+              label={s.isPinned ? 'Открепить' : 'Закрепить'}
+              onClick={e => { e.stopPropagation(); setMenu(null); onTogglePin(); }}
+            />
+          )}
+          {onAssignTags && (
+            <MenuItem
+              icon={<Tags size={15} strokeWidth={2} />}
+              label="Теги"
+              // Меню маркировки открывается по тому же якорю: кнопка «⋮» уже
+              // исчезнет вместе с этим меню, и её rect брать будет неоткуда
+              onClick={e => { e.stopPropagation(); const anchor = menu; setMenu(null); onAssignTags(anchor); }}
+            />
+          )}
+          <MenuItem
+            icon={<Trash2 size={15} strokeWidth={2} />}
+            label="Удалить"
+            danger
+            onClick={e => { e.stopPropagation(); setMenu(null); onDelete(); }}
+          />
+        </Menu>
       )}
     </div>
   );

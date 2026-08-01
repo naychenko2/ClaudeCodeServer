@@ -3,7 +3,6 @@ import { FilterX, MessageCircle, Plus } from 'lucide-react';
 import type { Session } from '../types';
 import { api } from '../lib/api';
 import { useOnline } from '../hooks/useOnline';
-import { EditSessionDialog } from './EditSessionDialog';
 import { C, FS, ISLAND, MODAL_W } from '../lib/design';
 import { Modal, ModalActions, Button, PanelShell, useHasPanelHeader } from './ui';
 import { groupChats, sortChatsFlat } from '../lib/chatGroups';
@@ -48,7 +47,6 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
   usePersonasVersion();
   // Подписка на стор механик — перерисовать список при запуске новой механики
   useLastMechanicVersion();
-  const [editTarget, setEditTarget] = useState<Session | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
   // Карточка под курсором — на ней показываем действия (на тач-устройствах hover нет, там действия видны всегда)
   const [hoveredId, setHoveredId] = useState<string | null>(null);
@@ -146,7 +144,6 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
       workflowRunning={workflowRunningFor === chat.id}
       onSelect={() => onSelect(chat)}
       onHover={h => setHoveredId(h ? chat.id : null)}
-      onEdit={() => setEditTarget(chat)}
       onDelete={() => setDeleteTarget(chat)}
       onTogglePin={() => togglePin(chat)}
     />
@@ -245,16 +242,10 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
     </>
   );
 
-  // Модалки редактирования и удаления — общие для обоих режимов
+  // Модалка удаления — общая для обоих режимов. Настройки чата из списка не
+  // открываются: их вход — шапка открытого чата
   const dialogs = (
     <>
-      {editTarget && (
-        <EditSessionDialog
-          session={editTarget}
-          onSaved={updated => { onEdited(updated); }}
-          onClose={() => setEditTarget(null)}
-        />
-      )}
       {deleteTarget && (
         <Modal
           title="Удалить чат?"

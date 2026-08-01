@@ -22,21 +22,17 @@ internal sealed class DevServerInstance : IDisposable
     public string? Error { get; set; }
     public DateTime LastActivity { get; set; }
 
-    // Хвост вывода (stdout+stderr) — для диагностики, когда старт провалился
-    private readonly object _outLock = new();
-    private readonly Queue<string> _outputTail = new();
-    public void AppendOutput(string line)
-    {
-        lock (_outLock)
-        {
-            _outputTail.Enqueue(line);
-            while (_outputTail.Count > 40) _outputTail.Dequeue();
-        }
-    }
-    public string OutputTail()
-    {
-        lock (_outLock) return string.Join("\n", _outputTail);
-    }
+    // Вывод (stdout+stderr) живёт ровно столько, сколько инстанс в реестре, на диск не
+    // пишется. Служит двум целям: реплей вкладке «Логи» при подписке и хвост для текста
+    // ошибки, когда сервис не поднялся.
+    private const int ErrorTailLines = 40;
+    private readonly OutputRingBuffer _output = new();
+
+    public void AppendOutput(string chunk) => _output.Append(chunk);
+    public string GetBufferedOutput() => _output.GetAll();
+
+    /// <summary>Последние строки вывода — текст ошибки, когда сервис не начал слушать порт.</summary>
+    public string OutputTail() => _output.TailLines(ErrorTailLines);
 
     // Драйвер среды, запустивший процесс + метка хода: в песочнице убить процесс
     // может только он (Kill docker-клиента не трогает процесс в контейнере)
@@ -412,13 +408,17 @@ public sealed class DevServerService : IDisposable
 
     private async Task DrainStreams(Process process, DevServerInstance instance)
     {
-        async Task Pump(TextReader reader)
+        async Task Pump(TextReader reader, bool isError)
         {
             string? line;
             while ((line = await reader.ReadLineAsync()) != null)
             {
                 instance.LastActivity = DateTime.UtcNow;
-                instance.AppendOutput(line);
+                // CRLF, а не LF: xterm переносит строку только по возврату каретки
+                var chunk = line + "\r\n";
+                instance.AppendOutput(chunk);
+                // Рассылка не должна тормозить дренаж: буфер процесса переполнится — он повиснет
+                _ = BroadcastLog(instance, chunk, isError);
                 // Порт из вывода нужен только если он не задан заранее; готовность проверит StartAsync.
                 if (instance.Port != 0) continue;
                 var m = PortRegex.Match(line);
@@ -428,7 +428,7 @@ public sealed class DevServerService : IDisposable
 
         try
         {
-            await Task.WhenAll(Pump(process.StandardOutput), Pump(process.StandardError));
+            await Task.WhenAll(Pump(process.StandardOutput, false), Pump(process.StandardError, true));
         }
         catch (Exception ex)
         {
@@ -443,6 +443,35 @@ public sealed class DevServerService : IDisposable
         var port = ((IPEndPoint)listener.LocalEndpoint).Port;
         listener.Stop();
         return port;
+    }
+
+    /// <summary>
+    /// Имя SignalR-группы подписчиков логов сервиса. Группа на КОНКРЕТНЫЙ сервис, а не на
+    /// владельца: иначе вывод дев-сервера сыпался бы во все открытые вкладки пользователя.
+    /// </summary>
+    public static string LogGroup(string projectId, string serviceId) => $"preview_{projectId}:{serviceId}";
+
+    /// <summary>
+    /// Накопленный вывод сервиса — реплей новому подписчику. null, если сервис не запущен.
+    /// </summary>
+    public string? GetLogBuffer(string projectId, string serviceId, string userId)
+    {
+        if (!_servers.TryGetValue(Key(projectId, serviceId), out var inst)) return null;
+        if (inst.UserId != userId) throw new UnauthorizedAccessException("Доступ запрещён");
+        return inst.GetBufferedOutput();
+    }
+
+    private async Task BroadcastLog(DevServerInstance instance, string data, bool isError)
+    {
+        try
+        {
+            await _hub.Clients.Group(LogGroup(instance.ProjectId, instance.ServiceId))
+                .SendAsync("message", new PreviewLogMessage(instance.ServiceId, data, isError));
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug(ex, "Не удалось разослать лог сервиса {ServiceId}", instance.ServiceId);
+        }
     }
 
     private async Task BroadcastStatus(string projectId, string serviceId, string status, int? port, string? error = null)

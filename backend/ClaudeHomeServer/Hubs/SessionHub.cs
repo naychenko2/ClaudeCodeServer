@@ -16,13 +16,16 @@ public class SessionHub : Hub
     private readonly ProjectManager _projects;
     private readonly FileWatcherService _watcher;
     private readonly ConnectionDiagnostics _diag;
+    private readonly DevServerService _devServer;
 
-    public SessionHub(SessionManager sessions, ProjectManager projects, FileWatcherService watcher, ConnectionDiagnostics diag)
+    public SessionHub(SessionManager sessions, ProjectManager projects, FileWatcherService watcher,
+        ConnectionDiagnostics diag, DevServerService devServer)
     {
         _sessions = sessions;
         _projects = projects;
         _watcher = watcher;
         _diag = diag;
+        _devServer = devServer;
     }
 
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
@@ -124,6 +127,24 @@ public class SessionHub : Hub
         await Groups.RemoveFromGroupAsync(Context.ConnectionId, "project_" + projectId);
         _watcher.Unwatch(projectId, Context.ConnectionId);
     }
+
+    // Подписка на вывод дев-сервера (вкладка «Логи» панели «Сервисы»). Группа — на
+    // конкретный сервис, поэтому подписок ровно столько, сколько открытых вкладок логов.
+    //
+    // Порядок важен: накопленный буфер уходит АДРЕСНО вызывающему ДО входа в группу.
+    // Наоборот — и строки, пришедшие между реплеем и подпиской, задвоятся. Тот же приём,
+    // что в TerminalService.ConnectAsync.
+    public async Task JoinPreviewLog(string projectId, string serviceId)
+    {
+        if (!OwnsProject(projectId)) throw Denied();
+        var buffered = _devServer.GetLogBuffer(projectId, serviceId, UserId!);
+        if (!string.IsNullOrEmpty(buffered))
+            await Clients.Caller.SendAsync("message", new PreviewLogMessage(serviceId, buffered));
+        await Groups.AddToGroupAsync(Context.ConnectionId, DevServerService.LogGroup(projectId, serviceId));
+    }
+
+    public Task LeavePreviewLog(string projectId, string serviceId) =>
+        Groups.RemoveFromGroupAsync(Context.ConnectionId, DevServerService.LogGroup(projectId, serviceId));
 
     // Группа для realtime-обновления списка чатов вне проекта (без файлового watcher).
     // Подписаться можно только на самого себя.

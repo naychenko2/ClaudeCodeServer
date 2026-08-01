@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Prompts;
 using ClaudeHomeServer.Telemetry;
 
@@ -194,6 +195,31 @@ public class ClaudeSession : ILlmSessionAdapter
     private static readonly string[] BuiltInTaskTools =
         ["TaskGet", "TaskList", "TaskCreate", "TaskUpdate"];
 
+    // Инструменты правки файлов — используются для атрибуции file_changed
+    // (FileChangeAttributor.Claim), чтобы TurnFileWatcher чужого чата того же rootPath
+    // не показал карточку правки, сделанной этой сессией. NotebookEdit — единственный
+    // с другим именем аргумента (notebook_path, не file_path — сверено с фронтом,
+    // frontend/src/components/chat/ToolUseView.tsx: inp.file_path ?? inp.path ?? inp.notebook_path).
+    private static readonly Dictionary<string, string> FileWriteToolPathKey =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Edit"] = "file_path",
+            ["Write"] = "file_path",
+            ["MultiEdit"] = "file_path",
+            ["NotebookEdit"] = "notebook_path",
+        };
+
+    // Путь файла из аргументов tool_use для инструментов правки; null — не инструмент
+    // правки или в аргументах нет непустой строки по ожидаемому ключу
+    private static string? ExtractFileWritePath(string toolName, JsonElement input)
+    {
+        if (!FileWriteToolPathKey.TryGetValue(toolName, out var key)) return null;
+        if (input.ValueKind != JsonValueKind.Object) return null;
+        return input.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String
+            ? v.GetString() is { Length: > 0 } s ? s : null
+            : null;
+    }
+
     // Свои MCP-серверы (mcp/*-server, mcp-dify — код этого репозитория, собираются в
     // BuildTurnMcpConfig): работа с данными самого пользователя внутри системы, не внешнее
     // действие с побочным эффектом наружу (в отличие от Google Drive/Gamma/Miro/figma и
@@ -209,6 +235,12 @@ public class ClaudeSession : ILlmSessionAdapter
 
     // Отслеживание изменений файлов на время хода
     private readonly TurnFileWatcher _fileWatcher;
+    // Атрибуция file_changed чату-источнику при параллельных ходах одного проекта
+    // (см. FileChangeAttributor); null — фильтрация выключена (тесты)
+    private readonly FileChangeAttributor? _fileChangeAttributor;
+    // tool_use_id → путь ОЖИДАЮЩЕЙ заявки на правку (см. ExtractFileWritePath): подтверждается
+    // в Claim по успешному tool_result, снимается без Claim при ошибке/отказе permission
+    private readonly ConcurrentDictionary<string, string> _pendingFileClaims = new();
 
     private readonly string? _rawSystemPrompt;
     private readonly string? _mcpConfigPath;
@@ -284,7 +316,8 @@ public class ClaudeSession : ILlmSessionAdapter
         TimeSpan? bgLingerTimeout = null,
         string? falMcpApiKey = null,
         string? glifMcpToken = null,
-        ModelAssignmentResolver? assignments = null)
+        ModelAssignmentResolver? assignments = null,
+        FileChangeAttributor? fileChangeAttributor = null)
     {
         _providers = providers;
         _assignments = assignments;
@@ -326,7 +359,9 @@ public class ClaudeSession : ILlmSessionAdapter
         // получает «No tasks» и бросает задачу). Без задач в сессии — не трогаем.
         if (context.TasksMcp is not null)
             _disallowedTools = [.. _disallowedTools, .. BuiltInTaskTools];
-        _fileWatcher = new TurnFileWatcher(_rootPath, _onMessage, fileWatcherOptions);
+        _fileChangeAttributor = fileChangeAttributor;
+        _fileWatcher = new TurnFileWatcher(_rootPath, _onMessage, fileWatcherOptions,
+            fileChangeAttributor, info.Id);
     }
 
     // Объединённый MCP-конфиг хода: серверы из базового конфига (Dify с инжекцией
@@ -1054,6 +1089,11 @@ public class ClaudeSession : ILlmSessionAdapter
         }
 
         var behavior = await DecidePermissionAsync(requestId, toolName, inputEl, input);
+        // Отказ в разрешении ИЛИ Interrupt: инструмент не выполнится, tool_result может не
+        // прийти вовсе — снимаем ожидающую заявку атрибуции (см. _pendingFileClaims) ДО раннего
+        // return по cancelled, иначе она провисит в словаре до конца жизни ClaudeSession
+        // (своего TTL, в отличие от FileChangeAttributor, у _pendingFileClaims нет)
+        if (behavior != "allow") _pendingFileClaims.TryRemove(toolUseId, out _);
         if (behavior == "cancelled") return; // Interrupt — процесс убит, отвечать некому
         // allow БЕЗ updatedInput: CLI продолжает с исходным вводом модели. Эхо updatedInput
         // ломало Workflow — возвращённый хэндлером ввод CLI прогоняет через доп. проверку
@@ -2491,6 +2531,12 @@ public class ClaudeSession : ILlmSessionAdapter
             var toolUseId = block.TryGetProperty("tool_use_id", out var tuid) ? tuid.GetString() ?? "" : "";
             var isError = block.TryGetProperty("is_error", out var ie) && ie.GetBoolean();
 
+            // Атрибуция file_changed: заявка на путь из tool_use подтверждается ТОЛЬКО здесь,
+            // по успешному результату — упавшая правка (old_string не найден и т.п.) не должна
+            // глушить настоящую параллельную правку того же файла в другой сессии
+            if (_pendingFileClaims.TryRemove(toolUseId, out var claimedPath) && !isError)
+                _fileChangeAttributor?.Claim(Info.Id, claimedPath);
+
             var resultContent = "";
             if (block.TryGetProperty("content", out var c))
             {
@@ -2882,6 +2928,16 @@ public class ClaudeSession : ILlmSessionAdapter
             var toolName = block.TryGetProperty("name", out var tn) ? tn.GetString() ?? "" : "";
             var toolInput = block.TryGetProperty("input", out var ti)
                 ? JsonSerializer.Deserialize<object>(ti.GetRawText())! : new object();
+
+            // Атрибуция file_changed (см. FileChangeAttributor): путь запоминаем как ОЖИДАЮЩУЮ
+            // заявку — подтвердим (Claim) только по успешному tool_result (HandleUserMessageAsync)
+            // или снимем при отказе permission (HandleControlRequestAsync). Заявлять сразу здесь
+            // нельзя: правка может быть отклонена пользователем или упасть с ошибкой (old_string
+            // не найден и т.п.) — тогда чужая сессия, реально правящая тот же файл в те же 15с,
+            // молча потеряла бы свою карточку из-за протухшей заявки несостоявшейся правки.
+            if (_fileChangeAttributor is not null && toolId.Length > 0
+                && ExtractFileWritePath(toolName, ti) is { Length: > 0 } fp)
+                _pendingFileClaims[toolId] = Path.IsPathRooted(fp) ? fp : Path.Combine(_rootPath, fp);
 
             // Служебные инструменты не дублируем в ленте: AskUserQuestion/ExitPlanMode показываем
             // отдельными карточками (вопрос/план), ToolSearch — внутренняя загрузка схем инструментов

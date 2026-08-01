@@ -36,12 +36,19 @@ public sealed class TurnFileWatcher : IDisposable
     // ход за ходом, а запуск git-процесса на каждое событие дорог)
     private readonly ConcurrentDictionary<string, bool> _gitIgnoreCache = new();
     private readonly bool _isGitRepo;
+    // Атрибуция file_changed чату-источнику (см. FileChangeAttributor): null — фильтрация
+    // выключена (тесты, сессия без владельца), как и раньше.
+    private readonly FileChangeAttributor? _attributor;
+    private readonly string? _ownerSessionId;
 
-    public TurnFileWatcher(string rootPath, Func<ServerMessage, Task> onMessage, FileWatcherOptions? options = null)
+    public TurnFileWatcher(string rootPath, Func<ServerMessage, Task> onMessage, FileWatcherOptions? options = null,
+        FileChangeAttributor? attributor = null, string? ownerSessionId = null)
     {
         _rootPath = rootPath;
         _onMessage = onMessage;
         _options = options ?? FileWatcherOptions.Default;
+        _attributor = attributor;
+        _ownerSessionId = ownerSessionId;
         _ignoreDirs = new HashSet<string>(_options.IgnoreDirs, StringComparer.OrdinalIgnoreCase);
         // Дешёвая проверка «это git-репо»: .git — каталог (обычный клон) или файл
         // (worktree/submodule). Без неё git check-ignore в не-git папке впустую
@@ -99,9 +106,15 @@ public sealed class TurnFileWatcher : IDisposable
                 var rel = Path.GetRelativePath(_rootPath, fullPath).Replace('\\', '/');
                 var newContent = File.Exists(fullPath) ? File.ReadAllText(fullPath) : null;
                 _fileCache.TryGetValue(fullPath, out var oldContent);
+                // Кэш обновляем ДО проверки атрибуции: подавленная карточка не должна оставить
+                // это правку в diff-базе для следующего события своего же хода
                 _fileCache[fullPath] = newContent;
                 var (added, removed) = CountLineDiff(oldContent, newContent);
                 if (added == 0 && removed == 0) return;
+                // Путь только что заявлен ДРУГОЙ живой сессией (параллельный ход того же
+                // проекта) — карточку покажет её собственный watcher, здесь дублировать не надо
+                if (_attributor is not null && _ownerSessionId is not null
+                    && _attributor.IsClaimedByOther(_ownerSessionId, fullPath)) return;
                 _ = _onMessage(new FileChangedMessage(rel, added, removed));
             }
             catch { /* файл занят/удалён между событиями watcher-а — пропускаем */ }

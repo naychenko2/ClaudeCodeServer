@@ -10,11 +10,14 @@ namespace ClaudeHomeServer.Services.Llm.Claude;
 // работают, а эффект keyword-detector воспроизводит OmcKeywordRouting на стороне
 // сервера.
 //
-// Второй режим файла — «без браузера»: тем же enabledPlugins выключается плагин
-// playwright (24 browser_*-инструмента). Плагин установлен пользователем в ~/.claude
-// и оттуда разъехался по всем профилям CLI (LlmProviderRegistry.SyncUserProfile
-// копирует каталог plugins целиком), так что браузер получал каждый чат каждого
-// профиля. Кому он нужен по роли — решает Tool-ключ «browser» персоны
+// Второй режим файла — гейт браузера: enabledPlugins явно включает или выключает
+// плагин playwright (24 browser_*-инструмента) независимо от того, что лежит в
+// settings.json профиля. Раньше при browserEnabled=true ключ не писался вовсе —
+// плагин доставался тем случайно: LlmProviderRegistry.SyncUserProfile синкает
+// settings.json профиля ЦЕЛИКОМ с хостового (обычно {}), затирая enabledPlugins,
+// которое кто-то мог включить вручную. Явная запись true/false на каждый ход
+// делает доступность браузера зависимой ТОЛЬКО от роли персоны, а не от состояния
+// профильного файла. Кому он нужен по роли — решает Tool-ключ «browser» персоны
 // (PersonaBindingsService, дефолт по пресету: тестировщику включён).
 //
 // Только для local-среды: в песочнице (Linux) окон нет, а путь к хостовому файлу
@@ -50,9 +53,8 @@ public static class ClaudeRuntimeSettings
             Directory.CreateDirectory(dir);
             var path = Path.Combine(dir,
                 browserEnabled ? "hooks-off.settings.json" : "hooks-off-no-browser.settings.json");
-            File.WriteAllText(path, browserEnabled
-                ? "{\"disableAllHooks\":true}"
-                : $"{{\"disableAllHooks\":true,\"enabledPlugins\":{{\"{BrowserPluginKey}\":false}}}}");
+            File.WriteAllText(path,
+                $"{{\"disableAllHooks\":true,\"enabledPlugins\":{{\"{BrowserPluginKey}\":{(browserEnabled ? "true" : "false")}}}}}");
             _cachedPaths[cacheKey] = path;
             return path;
         }

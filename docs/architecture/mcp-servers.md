@@ -13,9 +13,14 @@ notes/memory/personas — [personas.md](personas.md) и [knowledge.md](knowledge
 ## Сервер задач (mcp/tasks-server)
 
 Один файл [mcp/tasks-server/index.js](../../mcp/tasks-server/index.js). Инструменты: `tasks_list`,
-`tasks_search`, `tasks_get`, `tasks_create`, `tasks_update`, `tasks_complete`, `tasks_delete`,
-`tasks_add_subtask`, `tasks_toggle_subtask`, `tasks_run_executor`, `tasks_suggest_meta`,
-`tasks_normalize_title`, `tasks_find_duplicate`.
+`tasks_list_projects`, `tasks_search`, `tasks_get`, `tasks_create`, `tasks_update`, `tasks_complete`,
+`tasks_delete`, `tasks_add_subtask`, `tasks_toggle_subtask`, `tasks_board_columns`,
+`tasks_run_executor`, `tasks_find_duplicate`.
+
+`tasks_suggest_meta` и `tasks_normalize_title` из состава чата убраны (август 2026): это хелперы
+формы задачи, их зовёт фронт по REST (`/api/tasks/ai/classify`, `/api/tasks/ai/normalize-title`),
+а модель за две недели наблюдений не позвала ни разу — заголовок и приоритет она формулирует
+сама прямо в `tasks_create`. Эндпоинты бэкенда остались на месте.
 
 Подключение автоматическое: `BuildTurnMcpConfig` передаёт env
 `TASKS_API_URL` (адрес Kestrel или конфиг `McpTasksApiUrl`), `TASKS_API_TOKEN`
@@ -121,9 +126,9 @@ CLI. Стоит составу зависеть от свойства хода �
 `chats_send` бэкенд тоже считает сам — из env она протухала при переиспользовании прогона.
 
 Разрешено то, что постоянно в рамках сессии: рубильники серверов и секции-надстройки
-по роли персоны (`git`/`kb` в wsp, модули `PERSONAS_MANAGE`/`PERSONAS_AUTOMATION` в
-personas-server) решаются ТОЛЬКО по персоне — см. «Секции-надстройки с пресетом по роли»
-в [personas.md](personas.md) — и входят в `shapes` штатно.
+по роли персоны (`git`/`git_write`/`kb` в wsp, модули `PERSONAS_MANAGE`/`PERSONAS_AUTOMATION`
+в personas-server, `NOTES_ANNOTATIONS` в notes-server) решаются ТОЛЬКО по персоне — см.
+«Секции-надстройки с пресетом по роли» в [personas.md](personas.md) — и входят в `shapes` штатно.
 
 Сторож инварианта — `McpToolsetStabilityTests`: следит, чтобы в теле `BuildTurnMcpConfig`
 не появилось обращений к состоянию хода. Подсказки в системном промпте под запрет не попадают
@@ -134,6 +139,34 @@ personas-server) решаются ТОЛЬКО по персоне — см. «�
 в ходе падает «No such tool available» (claude-code#19282), а аккаунт-коннекторы claude.ai
 переводят CLI в режим deferred-tools, где ленивый сервер вовсе прячет инструменты от модели.
 
+## Диета состава по данным использования
+
+Схема каждого инструмента лежит в контексте КАЖДОГО хода, поэтому состав режется по фактическому
+спросу — счётчики `GET /api/mcp/calls` плюс разбор транскриптов (последний срез: 3 795 ходов
+за 14 дней, август 2026). Правило разреза одно: то, что не звали, уходит за tool-ключ с дефолтом
+«выключено», а не удаляется — включить обратно можно привязкой персоны, не трогая код.
+
+- **Заметки** разрезаны на ядро (`notes_list`/`search`/`semantic_search`/`read`/`create`/`update`/
+  `move`) и модуль `notes-annotations` (env `NOTES_ANNOTATIONS`): комментарии к markdown-документам
+  (`notes_annotate`/`annotations`/`reply`/`thread`/`set_status`) плюс редкие операции
+  (`notes_daily`, `notes_promote_task`, `notes_suggest_title`, `notes_backlinks`, `notes_graph`,
+  `notes_delete`, `notes_resolve`). Дефолт модуля — выключен (0 вызовов за срез): 19 инструментов
+  сервера превращаются в 7. Обычный чат (без персоны) получает модуль, как раньше.
+- **Git в wsp** — две секции: `git` (чтение: `git_status`/`git_diff`/`git_log`) и `git_write`
+  (`git_stage`/`git_commit`). Пресет по роли (исполнитель, ревьюер, тестировщик) даёт только
+  чтение; запись добавляет явно включённый персоне ключ `git` (`SectionOrigin` → `Explicit`).
+  `git_blame` и `git_file_log` убраны из состава вовсе (0 вызовов; REST-эндпоинты живы).
+- **Уведомления** — сервер по умолчанию только у персон с модулем автоматизации и у обычных
+  чатов (`PersonaBindingsService.NotificationsEnabled`); остальным — привязкой `tool:notifications`.
+- **`files_read`** отдаёт максимум `READ_MAX_LINES` (2000) строк, как встроенный Read: в ответе
+  `truncated`/`nextOffset` и подсказка продолжить с `offset`. Явный `limit` больше потолка
+  уважается — модель попросила осознанно.
+- **`tasks_suggest_meta`/`tasks_normalize_title`** убраны из состава (см. раздел сервера задач).
+
+Смена дефолта — поведенческое изменение для СУЩЕСТВУЮЩИХ персон: тексты каталога
+(`PersonaBindingsService.ToolCatalog`) говорят, что включается привязкой, а сторожа состава —
+`McpToolsetStabilityTests`, `WorkspaceMcpServerToolsTests`, `NotesAndTasksMcpServerToolsTests`.
+
 ## Таймауты, ретраи и классы ошибок
 
 Общий `api()` каждого сервера (код одинаковый — серверы намеренно не делят модули, см. правило
@@ -141,8 +174,8 @@ personas-server) решаются ТОЛЬКО по персоне — см. «�
 
 - **Таймаут** `AbortSignal.timeout(timeoutMs)`, по умолчанию 60с (notifications — 30с). Без него
   подвисший бэкенд держал вызов до дефолта undici (~300с). Инструментам, за которыми стоит модель
-  или внешний сервис, передаётся `timeoutMs: LLM_TIMEOUT_MS` (180с): `tasks_suggest_meta`,
-  `tasks_normalize_title`, `tasks_find_duplicate`, `notes_suggest_title`, `files_document_summary`,
+  или внешний сервис, передаётся `timeoutMs: LLM_TIMEOUT_MS` (180с):
+  `tasks_find_duplicate`, `notes_suggest_title`, `files_document_summary`,
   `files_document_extract`, `files_to_markdown`, `knowledge_index`. У `persona_ask` — 300с
   (это целый ход Claude), у `chats_send` таймаута нет вовсе (бэкенд сам отвечает 202).
 - **Ретраи** `RETRY_DELAYS_MS = [300, 900]` на 408/425/429/5xx и сетевые сбои — но только для

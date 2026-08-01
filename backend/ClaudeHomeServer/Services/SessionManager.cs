@@ -405,12 +405,15 @@ public class SessionManager : IDisposable
             extraIds.Count > 0 ? extraIds : null, extraReadOnly.Count > 0 ? extraReadOnly : null);
     }
 
-    // Контекст MCP-сервера заметок; null — только для чата без владельца
-    private NotesMcpContext? BuildNotesContext(string? ownerId, string? projectId)
+    // Контекст MCP-сервера заметок; null — только для чата без владельца.
+    // Модуль комментариев к документам и редких операций — за ключом notes-annotations
+    // (дефолт выключен, решение ПО ПЕРСОНЕ: PersonaBindingsService.SectionEnabled).
+    private NotesMcpContext? BuildNotesContext(string? ownerId, string? projectId, Persona? persona)
     {
         if (ownerId is null) return null;
         var token = GetServiceToken(ownerId);
-        return new NotesMcpContext(ResolveTasksApiUrl(ownerId), token, projectId);
+        return new NotesMcpContext(ResolveTasksApiUrl(ownerId), token, projectId,
+            AnnotationsEnabled: _bindings.SectionEnabled(ownerId, persona, "notes-annotations"));
     }
 
     // Контекст MCP-сервера виджетов чата: чистый маркер «сессия с владельцем» —
@@ -1596,14 +1599,22 @@ public class SessionManager : IDisposable
                     .ToString() ?? "нет",
                 chatScopes is null ? "null" : string.Join("|", chatScopes));
         if (sections.Count == 0) return null;
-        // Git-инструменты (read: status/diff/log/blame/file_log; write: commit/stage за
-        // WORKSPACE_WRITE) и базы знаний Dify владельца (kb_list/search/add_document) —
+        // Git-инструменты (read: status/diff/log; write: stage/commit — секция git_write)
+        // и базы знаний Dify владельца (kb_list/search/add_document) —
         // надстройки над базовыми секциями files/knowledge: без базовой секции не монтируются,
         // а внутри неё решает свой tool-ключ (git/kb) с дефолтом по роли персоны
         // (PersonaBindingsService.SectionEnabled — пресет SpecialtySections). Раньше обе ехали
         // с базовой секцией безусловно и стоили контекста персонам, которым не нужны.
-        if (sections.Contains("files") && _bindings.SectionEnabled(ownerId, persona, "git"))
+        // Секция git приходит двумя ступенями: пресет по роли даёт ЧТЕНИЕ истории
+        // (git_status/diff/log), запись (git_stage/git_commit) добавляет только явно
+        // включённый ключ git — исполнители коммитят через Bash, а ролям ReadOnly запись
+        // не нужна по определению (SectionOrigin, там же данные использования).
+        var gitOrigin = _bindings.SectionOrigin(ownerId, persona, "git");
+        if (sections.Contains("files") && gitOrigin != SectionSource.Off)
+        {
             sections.Add("git");
+            if (gitOrigin == SectionSource.Explicit) sections.Add("git_write");
+        }
         if (sections.Contains("knowledge") && _bindings.SectionEnabled(ownerId, persona, "kb"))
             sections.Add("knowledge_bases");
         // Разрушающие операции (files_delete/chats_delete) — за отдельным флагом
@@ -1664,13 +1675,14 @@ public class SessionManager : IDisposable
         return servers.Count > 0 ? new ModulesMcpContext(servers) : null;
     }
 
-    // Контекст MCP-сервера уведомлений: всегда подключается, когда есть владелец.
-    // Тот же сервисный токен, что у tasks/notes/workspace.
-    // Персона может выключить сервер Off-привязкой tool:notifications.
+    // Контекст MCP-сервера уведомлений: обычному чату — всегда, персоне — по роли
+    // (модуль автоматизации) либо по явной привязке tool:notifications; Off-привязка
+    // выключает в любом случае. Единая точка решения — PersonaBindingsService.NotificationsEnabled
+    // (по ПЕРСОНЕ, не по ходу). Тот же сервисный токен, что у tasks/notes/workspace.
     private NotificationsMcpContext? BuildNotificationsContext(string? ownerId, string? personaId, Persona? persona)
     {
         if (ownerId is null) return null;
-        if (!_bindings.ServerToolEnabled(ownerId, persona, "notifications")) return null;
+        if (!_bindings.NotificationsEnabled(ownerId, persona)) return null;
         var token = GetServiceToken(ownerId);
         return new NotificationsMcpContext(ResolveTasksApiUrl(ownerId), token, personaId);
     }
@@ -1847,7 +1859,7 @@ public class SessionManager : IDisposable
             msg => OnMessageAsync(session.Id, accumulator, msg, runId),
             rawSystemPrompt, permissionRules,
             TasksMcp: TasksMcpEnabled(ownerId, session, persona.Persona) ? BuildTasksContext(ownerId, session.ProjectId, persona.Persona) : null,
-            NotesMcp: _bindings.EffectiveToolEnabled(ownerId, persona.Persona, "notes") ? BuildNotesContext(ownerId, session.ProjectId) : null,
+            NotesMcp: _bindings.EffectiveToolEnabled(ownerId, persona.Persona, "notes") ? BuildNotesContext(ownerId, session.ProjectId, persona.Persona) : null,
             RecallProvider: BuildRecallProvider(ownerId),
             PersonaPromptProvider: persona.Prompt,
             MemoryMcp: persona.Memory ?? BuildTeamMemoryContext(ownerId, session.ProjectId),
@@ -2623,7 +2635,7 @@ public class SessionManager : IDisposable
                 msg => OnMessageAsync(sessionId, accumulator, msg, runId),
                 RawSystemPrompt: null, PermissionRules: null,
                 TasksMcp: TasksMcpEnabled(entry.Info.OwnerId, entry.Info, persona.Persona) ? BuildTasksContext(entry.Info.OwnerId, null, persona.Persona) : null,
-                NotesMcp: _bindings.EffectiveToolEnabled(entry.Info.OwnerId, persona.Persona, "notes") ? BuildNotesContext(entry.Info.OwnerId, null) : null,
+                NotesMcp: _bindings.EffectiveToolEnabled(entry.Info.OwnerId, persona.Persona, "notes") ? BuildNotesContext(entry.Info.OwnerId, null, persona.Persona) : null,
                 RecallProvider: BuildRecallProvider(entry.Info.OwnerId),
                 PersonaPromptProvider: persona.Prompt,
                 MemoryMcp: persona.Memory,
@@ -2653,7 +2665,7 @@ public class SessionManager : IDisposable
                 project.SystemPrompt,
                 () => _projects.GetById(entry.Info.ProjectId!)?.PermissionRules ?? (IReadOnlyList<PermissionRule>)Array.Empty<PermissionRule>(),
                 TasksMcp: TasksMcpEnabled(project.OwnerId, entry.Info, persona.Persona) ? BuildTasksContext(project.OwnerId, project.Id, persona.Persona) : null,
-                NotesMcp: _bindings.EffectiveToolEnabled(project.OwnerId, persona.Persona, "notes") ? BuildNotesContext(project.OwnerId, project.Id) : null,
+                NotesMcp: _bindings.EffectiveToolEnabled(project.OwnerId, persona.Persona, "notes") ? BuildNotesContext(project.OwnerId, project.Id, persona.Persona) : null,
                 RecallProvider: BuildRecallProvider(project.OwnerId),
                 PersonaPromptProvider: persona.Prompt,
                 MemoryMcp: persona.Memory ?? BuildTeamMemoryContext(project.OwnerId, project.Id),

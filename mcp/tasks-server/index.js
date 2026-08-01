@@ -505,29 +505,10 @@ const TOOLS = [
       },
     },
   },
-  {
-    name: 'tasks_suggest_meta',
-    description: 'Предложить приоритет (low/medium/high/urgent) и до 3 меток по названию и описанию задачи. ' +
-      'Считает бесплатная локальная модель (если настроена), иначе Claude. Ничего не сохраняет — только предложение.',
-    inputSchema: {
-      type: 'object',
-      required: ['title'],
-      properties: {
-        title: { type: 'string', description: 'Название задачи' },
-        description: { type: 'string', description: 'Описание задачи (опционально)' },
-      },
-    },
-  },
-  {
-    name: 'tasks_normalize_title',
-    description: 'Привести заголовок задачи к аккуратному виду (повелительное наклонение, чистка голосового ввода), ' +
-      'вынести упомянутый срок в dueHint. Возвращает {title, dueHint}. Бесплатная локальная модель, если настроена.',
-    inputSchema: {
-      type: 'object',
-      required: ['title'],
-      properties: { title: { type: 'string', description: 'Сырой заголовок (напр. из голосового ввода)' } },
-    },
-  },
+  // tasks_suggest_meta и tasks_normalize_title из инструментов чата убраны: это UI-хелперы
+  // формы задачи, их зовёт фронт по REST (/api/tasks/ai/classify, /ai/normalize-title).
+  // За две недели наблюдений модель не позвала их ни разу — заголовок и приоритет она
+  // и так формулирует сама, прямо в tasks_create.
   {
     name: 'tasks_find_duplicate',
     description: 'Проверить, дублирует ли новая задача одну из существующих задач владельца (предотбор по ключевым словам + ' +
@@ -710,16 +691,6 @@ async function callTool(name, args) {
         method: 'PUT', body: JSON.stringify({ subtasks }),
       }));
     }
-
-    case 'tasks_suggest_meta': {
-      const body = { title: String(args.title), description: args.description, projectId: PROJECT_ID || null };
-      return json(await api('/api/tasks/ai/classify', { method: 'POST', body: JSON.stringify(body), timeoutMs: LLM_TIMEOUT_MS }));
-    }
-
-    case 'tasks_normalize_title':
-      return json(await api('/api/tasks/ai/normalize-title', {
-        method: 'POST', body: JSON.stringify({ title: String(args.title) }), timeoutMs: LLM_TIMEOUT_MS,
-      }));
 
     case 'tasks_find_duplicate': {
       const body = { title: String(args.title), description: args.description, projectId: PROJECT_ID || null };

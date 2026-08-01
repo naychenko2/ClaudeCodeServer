@@ -14,7 +14,10 @@ public record TasksMcpContext(string ApiUrl, string Token, string? ProjectId,
 
 // Контекст MCP-сервера заметок: адрес API, сервисный токен владельца и проект
 // (задаёт источник по умолчанию для создания заметок; null — личный vault).
-public record NotesMcpContext(string ApiUrl, string Token, string? ProjectId);
+// AnnotationsEnabled — модуль комментариев к документам и редких операций заметок
+// (ключ notes-annotations, дефолт выключен): решается ПО ПЕРСОНЕ, не по ходу.
+public record NotesMcpContext(string ApiUrl, string Token, string? ProjectId,
+    bool AnnotationsEnabled = true);
 
 // Контекст MCP-сервера памяти персоны: адрес API, сервисный токен владельца, id персоны,
 // чья долгая память доступна инструментами mcp__memory__* в этой сессии, и проект ТЕКУЩЕГО

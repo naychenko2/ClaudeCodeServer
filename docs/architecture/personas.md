@@ -62,7 +62,8 @@
   `ExtraDisallowedTools` (поверх `Claude:DisallowedTools`). UI — секция «Возможности»
   (3 тумблера) в PersonaForm.
 - **Рубильники MCP-серверов персоны** (`PersonaBindingsService.ServerKeys`: `personas`,
-  `consultants`, `codegraph`, `notifications`, `widgets`): выключаются Off-привязкой
+  `consultants`, `codegraph`, `widgets`; `notifications` — там же, но с дефолтом по роли,
+  см. ниже): выключаются Off-привязкой
   (`type: tool`, `target: <ключ>`) и только ею — фолбэка на `Persona.Tools` у этих ключей нет
   (`ServerToolEnabled`, в отличие от `EffectiveToolEnabled`), иначе персона с суженным списком
   возможностей разом лишилась бы серверов, которые сегодня получает безусловно. Гейты стоят при
@@ -76,10 +77,16 @@
   спикер обязан уметь спросить коллег по чату, а `BuildGroupChatHint` безусловно отсылает
   к блоку о консультациях из personas-server.
 - **Секции-надстройки с пресетом по роли** (`PersonaBindingsService.PresetKeys`: `git`, `kb`,
-  `personas-manage`, `personas-automation`; решение — `SectionEnabled`): наборы инструментов,
+  `personas-manage`, `personas-automation`, `notes-annotations`; решение — `SectionEnabled`):
+  наборы инструментов,
   которые раньше ехали пакетом со своей базовой секцией и стоили контекста всем персонам
   подряд. `git` (wsp `git_*`) — надстройка над секцией `files`, `kb` (wsp `kb_*`) — над
-  `knowledge`: без базовой секции не монтируются вовсе. `personas-manage`
+  `knowledge`: без базовой секции не монтируются вовсе. `notes-annotations` (env
+  `NOTES_ANNOTATIONS`) — модуль notes-server: комментарии к markdown-документам плюс редкие
+  операции заметок (дневник, граф, обратные ссылки, удаление, промоут чекбокса, резолв
+  `[[ссылки]]`, подсказка заголовка); ядро заметок остаётся у всех. Дефолт — выключен
+  (0 вызовов за 14 дней наблюдений, см. «Диета состава» в [mcp-servers.md](mcp-servers.md)).
+  `personas-manage`
   (`personas_create/update/delete/bindings_set/generate_avatar/ai_team`, env `PERSONAS_MANAGE`)
   и `personas-automation` (`personas_automation_*`, env `PERSONAS_AUTOMATION`, самые тяжёлые
   схемы `triggerArgs`) — модули personas-server поверх его ядра (`personas_list`/`personas_get`,
@@ -90,7 +97,13 @@
   `Executor`/`Reviewer`/`Tester` → `git` (у ревьюера и тестировщика `Access=ReadOnly` отбирает
   ещё и `Bash`, так что wsp-git — единственный оставшийся канал к диффу),
   `Librarian` → `kb`, `Coordinator`/`Secretary` → `personas-manage` + `personas-automation`,
-  остальные — только ядро. Не персонная сессия пресетов не знает — обычный чат получает всё. Секции `chats`
+  остальные — только ядро. Не персонная сессия пресетов не знает — обычный чат получает всё.
+  **Источник решения различим** (`SectionOrigin`: `Off`/`Preset`/`Explicit`): пресет по роли
+  даёт wsp-git только на ЧТЕНИЕ (`git_status`/`git_diff`/`git_log`), а запись истории
+  (`git_stage`/`git_commit`, секция `git_write`) добавляет лишь явно включённый ключ `git` —
+  коммитят обычно через Bash, а ролям `ReadOnly` запись не нужна по определению.
+  **Сервер уведомлений** (`NotificationsEnabled`) устроен так же: Off-привязка → `Persona.Tools`
+  → модуль автоматизации по роли; персоне без роли его даёт только явная привязка. Секции `chats`
   в пресете намеренно нет: в ней живёт `chats_report_up` — канал отчёта исполнителя вверх
   по делегированию. Тот же инвариант, что у рубильников: решение зависит ТОЛЬКО от персоны
   (сторож — `McpToolsetStabilityTests`).

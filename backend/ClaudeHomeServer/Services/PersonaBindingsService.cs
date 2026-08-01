@@ -4,6 +4,11 @@ using ClaudeHomeServer.Models;
 
 namespace ClaudeHomeServer.Services;
 
+// Откуда пришло решение по секции-надстройке персоны: выключена / дал пресет по роли /
+// включена явно (Tool-привязка или Persona.Tools). Различать источник нужно там, где
+// «по роли» уже́е, чем «попросили руками» — см. SectionOrigin.
+public enum SectionSource { Off, Preset, Explicit }
+
 // Привязки персон к источникам знаний и правилам (фича persona-bindings).
 // На каждый ход персонной сессии строит блок для системного промпта:
 // индекс «[тип] Когда: {условие} → {способ подгрузки}» + выжимки привязок режима
@@ -27,21 +32,24 @@ public class PersonaBindingsService
             ["personas"] = ("Персоны", "Раздел персон (mcp__personas__*): CRUD и @упоминания"),
             ["consultants"] = ("Консультации персон", "Персоны-консультанты: сабагенты .md (Task по handle), их память mcp__pmem_* и persona_ask"),
             ["codegraph"] = ("Граф кода", "Граф кода проекта (mcp__codegraph__*) и его выжимка в промпте"),
-            ["notifications"] = ("Уведомления", "Уведомления пользователя (mcp__notifications__*): создать, отметить прочитанным"),
+            ["notifications"] = ("Уведомления", "Уведомления пользователя (mcp__notifications__*): создать, отметить прочитанным. По умолчанию — только у персон с модулем автоматизации (остальным включается этой привязкой)"),
             ["widgets"] = ("Виджеты", "Интерактивные HTML-виджеты в ленте чата (mcp__widgets__widget_show)"),
             ["projects"] = ("Проекты", "Секция projects workspace: список и карточки проектов владельца"),
             ["chats"] = ("Чаты", "Секция chats workspace: история и отправка сообщений в другие чаты"),
             ["files"] = ("Файлы проектов", "Секция files workspace: чтение/правка файлов любого проекта"),
             ["knowledge"] = ("Базы знаний", "Секция knowledge workspace: семантический поиск по базам проектов"),
             ["destructive"] = ("Удаление (опасно)", "Секция destructive workspace: безвозвратное удаление файлов проектов и чатов (files_delete/chats_delete) — только по явной просьбе пользователя"),
-            ["git"] = ("История проектов", "История изменений проекта: кто, когда и что менял; просмотр diff и сохранение версий (коммиты)"),
-            ["kb"] = ("Личные базы знаний", "Личные базы знаний: управление документами, которые ваша персона может искать при ответах (загрузка, поиск, удаление документов)"),
+            ["git"] = ("История проектов", "История изменений проекта: кто, когда и что менял, просмотр diff. Роли-пресеты (исполнитель, ревьюер, тестировщик) получают только чтение; эта привязка добавляет сверх него сохранение версий (индексация и коммиты)"),
+            ["kb"] = ("Личные базы знаний", "Личные базы знаний: управление документами, которые ваша персона может искать при ответах (загрузка, поиск, удаление документов). По умолчанию — только у библиотекаря"),
+            ["notes-annotations"] = ("Комментарии к документам и редкие операции заметок", "Комментарии к markdown-документам (обсуждение по фрагментам, треды, статусы) плюс редкие операции заметок: дневник, граф связей, обратные ссылки, удаление. По умолчанию выключено — заметки остаются в ядре (создать, прочитать, найти, изменить, переместить)"),
             ["personas-manage"] = ("Создание и редактирование персон", "Создание и редактирование персон: полный контроль над командой — их описаниями, знаниями, внешностью и правилами"),
             ["personas-automation"] = ("Автоматизация персон", "Автоматизация персон: настройка триггеров (по времени, событиям, упоминаниям), при которых персона автоматически пишет в нужный чат"),
         };
 
     // Ключи-рубильники MCP-серверов: гейтятся ТОЛЬКО Tool-привязкой (ServerToolEnabled).
-    // Фолбэка на Persona.Tools у них нет — см. там же почему.
+    // Фолбэка на Persona.Tools у них нет — см. там же почему. Исключение — notifications:
+    // у него сверх Off-привязки есть дефолт по роли (NotificationsEnabled), и решение
+    // по серверу принимает он, а не голый ServerToolEnabled.
     public static readonly IReadOnlySet<string> ServerKeys =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             { "personas", "consultants", "codegraph", "notifications", "widgets" };
@@ -50,7 +58,7 @@ public class PersonaBindingsService
     // (SpecialtySections). Решение — SectionEnabled.
     public static readonly IReadOnlySet<string> PresetKeys =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-            { "git", "kb", "personas-manage", "personas-automation" };
+            { "git", "kb", "personas-manage", "personas-automation", "notes-annotations" };
 
     private readonly PersonaManager _personas;
     private readonly ProjectManager _projects;
@@ -111,7 +119,8 @@ public class PersonaBindingsService
         return FindToolBinding(persona, key) is not { Mode: PersonaBindingMode.Off };
     }
 
-    // Секция-надстройка под пресетом (PresetKeys: git/kb/personas-manage/personas-automation).
+    // Секция-надстройка под пресетом (PresetKeys: git/kb/personas-manage/personas-automation/
+    // notes-annotations).
     // Эти инструменты раньше ехали пакетом со своей базовой секцией (git с files,
     // knowledge_bases с knowledge, manage/automation — со всем сервером персон) и стоили
     // контекста всем персонам подряд. Теперь дефолт задаёт роль, а не пакет.
@@ -121,16 +130,44 @@ public class PersonaBindingsService
     // Не персонная сессия (persona == null) пресетов не знает вовсе — обычный чат получает всё,
     // как раньше. Решение зависит ТОЛЬКО от персоны → детерминировано на сессию (состав
     // tools/list не смеет мерцать между ходами).
-    public bool SectionEnabled(string? ownerId, Persona? persona, string key)
+    public bool SectionEnabled(string? ownerId, Persona? persona, string key) =>
+        SectionOrigin(ownerId, persona, key) != SectionSource.Off;
+
+    // Откуда взялось решение по секции-надстройке. Нужно там, где «дал пресет по роли» и
+    // «включили руками» — не одно и то же: секция git по пресету идёт только на чтение
+    // (status/diff/log), а запись истории (git_stage/git_commit) добавляет лишь явное
+    // включение ключа. Данные использования: коммитят исполнители через Bash, а wsp-git
+    // для ролей ReadOnly — единственный канал ЧТЕНИЯ диффа, ради него пресет и существует.
+    public SectionSource SectionOrigin(string? ownerId, Persona? persona, string key)
     {
-        if (persona is null) return true;
-        if (FindToolBinding(persona, key) is { } binding) return binding.Mode != PersonaBindingMode.Off;
+        // Обычный чат (не персонный) пресетов не знает и получает всё — как раньше
+        if (persona is null) return SectionSource.Explicit;
+        if (FindToolBinding(persona, key) is { } binding)
+            return binding.Mode == PersonaBindingMode.Off ? SectionSource.Off : SectionSource.Explicit;
         // Фолбэк на Persona.Tools — только если список реально знает ключи-надстройки: старые
         // списки состояли из tasks/notes/web и о них не подозревали, а трактовать их как белый
         // список для новых ключей = навсегда убить пресет у всякой персоны с суженным Tools.
         if (persona.Tools is { } tools && tools.Any(t => PresetKeys.Contains(t)))
-            return tools.Contains(key, StringComparer.OrdinalIgnoreCase);
-        return SpecialtySections(persona.Specialty).Contains(key);
+            return tools.Contains(key, StringComparer.OrdinalIgnoreCase)
+                ? SectionSource.Explicit : SectionSource.Off;
+        return SpecialtySections(persona.Specialty).Contains(key)
+            ? SectionSource.Preset : SectionSource.Off;
+    }
+
+    // Сервер уведомлений: за 14 дней наблюдений его звали единицы ходов, а инструменты висели
+    // у всех персон подряд. Дефолт сузили до тех, кому уведомления нужны по роли — персон
+    // с модулем автоматизации (они настраивают проактивность и сами шлют человеку карточки);
+    // остальным включается явной привязкой tool:notifications. Обычный чат получает сервер
+    // как раньше. Решение зависит ТОЛЬКО от персоны → детерминировано на сессию.
+    public bool NotificationsEnabled(string? ownerId, Persona? persona)
+    {
+        if (persona is null) return true;
+        if (FindToolBinding(persona, "notifications") is { } binding)
+            return binding.Mode != PersonaBindingMode.Off;
+        // Персона, чей список возможностей явно называет уведомления, получает их и без привязки
+        if (persona.Tools is { } tools && tools.Contains("notifications", StringComparer.OrdinalIgnoreCase))
+            return true;
+        return SectionEnabled(ownerId, persona, "personas-automation");
     }
 
     // Пресет секций по специализации персоны: кому какие надстройки нужны по роли.

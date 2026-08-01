@@ -276,6 +276,84 @@ public class PersonaBindingsServiceTests : IDisposable
         }
     }
 
+    // --- SectionOrigin (источник решения: пресет по роли vs явное включение) ---
+
+    [Theory]
+    [InlineData(PersonaSpecialty.Executor, SectionSource.Preset)]
+    [InlineData(PersonaSpecialty.None, SectionSource.Off)]
+    public void SectionOrigin_Пресет_ОтличимОтЯвногоВключения(PersonaSpecialty specialty, SectionSource expected)
+    {
+        // Пресет по роли даёт git на ЧТЕНИЕ, запись истории добавляет только явный ключ:
+        // на этом различии стоит секция git_write в BuildWorkspaceContext
+        _sut.SectionOrigin(_userId, MakePersona(specialty: specialty), "git").Should().Be(expected);
+    }
+
+    [Fact]
+    public void SectionOrigin_ЯвноеВключение_Explicit()
+    {
+        var byBinding = MakePersona(bindings: [ToolBinding("git", PersonaBindingMode.Auto)]);
+        _sut.SectionOrigin(_userId, byBinding, "git").Should().Be(SectionSource.Explicit);
+
+        // Список возможностей, знающий ключи-надстройки, — тоже явное высказывание
+        var byTools = MakePersona(tools: ["git"]);
+        _sut.SectionOrigin(_userId, byTools, "git").Should().Be(SectionSource.Explicit);
+
+        // Off сильнее пресета
+        var off = MakePersona(bindings: [ToolBinding("git", PersonaBindingMode.Off)],
+            specialty: PersonaSpecialty.Executor);
+        _sut.SectionOrigin(_userId, off, "git").Should().Be(SectionSource.Off);
+
+        // Обычный чат пресетов не знает — получает всё, как раньше
+        _sut.SectionOrigin(_userId, null, "git").Should().Be(SectionSource.Explicit);
+    }
+
+    // --- NotificationsEnabled (дефолт сервера уведомлений по роли) ---
+
+    [Fact]
+    public void NotificationsEnabled_БезПерсоны_Разрешено()
+    {
+        _sut.NotificationsEnabled(_userId, null).Should().BeTrue();
+    }
+
+    [Fact]
+    public void NotificationsEnabled_ПерсонаБезРоли_Выключено()
+    {
+        // Дефолт сузили по данным использования: инструменты уведомлений висели у всех,
+        // а звали их единицы ходов
+        _sut.NotificationsEnabled(_userId, MakePersona()).Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData(PersonaSpecialty.Coordinator)]
+    [InlineData(PersonaSpecialty.Secretary)]
+    public void NotificationsEnabled_МодульАвтоматизации_Включает(PersonaSpecialty specialty)
+    {
+        // Кому проактивность положена по роли, тому и уведомления
+        _sut.NotificationsEnabled(_userId, MakePersona(specialty: specialty)).Should().BeTrue();
+    }
+
+    [Fact]
+    public void NotificationsEnabled_ЯвнаяПривязка_СильнееДефолта()
+    {
+        var on = MakePersona(bindings: [ToolBinding("notifications", PersonaBindingMode.Auto)]);
+        _sut.NotificationsEnabled(_userId, on).Should().BeTrue();
+
+        var off = MakePersona(bindings: [ToolBinding("notifications", PersonaBindingMode.Off)],
+            specialty: PersonaSpecialty.Coordinator);
+        _sut.NotificationsEnabled(_userId, off).Should().BeFalse();
+
+        // Список возможностей, называющий уведомления, — тоже явное «да»
+        _sut.NotificationsEnabled(_userId, MakePersona(tools: ["notifications"])).Should().BeTrue();
+    }
+
+    [Fact]
+    public void NotificationsEnabled_СтабильноНаВсехХодах()
+    {
+        var persona = MakePersona(specialty: PersonaSpecialty.Executor);
+        for (var turn = 1; turn <= 10; turn++)
+            _sut.NotificationsEnabled(_userId, persona).Should().BeFalse($"ход {turn}");
+    }
+
     [Fact]
     public void PresetKeys_ЕстьВКаталогеЦелей()
     {

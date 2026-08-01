@@ -527,6 +527,12 @@ public class ClaudeSession : ILlmSessionAdapter
 
             if (hasNotes)
             {
+                // Модуль комментариев к документам и редких операций (дневник, граф, backlinks,
+                // удаление, промоут чекбокса, подсказка заголовка) — решение ПО ПЕРСОНЕ
+                // (ключ notes-annotations, PersonaBindingsService.SectionEnabled), от хода
+                // не зависит. Ядро заметок (создать/прочитать/найти/изменить/переместить)
+                // остаётся у всех, у кого сервер включён.
+                var notesAnnotations = _notesMcp!.AnnotationsEnabled ? "1" : "0";
                 servers["notes"] = new System.Text.Json.Nodes.JsonObject
                 {
                     ["command"] = "node",
@@ -536,12 +542,15 @@ public class ClaudeSession : ILlmSessionAdapter
                     ["alwaysLoad"] = true,
                     ["env"] = new System.Text.Json.Nodes.JsonObject
                     {
-                        ["NOTES_API_URL"] = _notesMcp!.ApiUrl,
+                        ["NOTES_API_URL"] = _notesMcp.ApiUrl,
                         ["NOTES_API_TOKEN"] = _notesMcp.Token,
                         ["NOTES_PROJECT_ID"] = _notesMcp.ProjectId ?? "",
                         ["NOTES_SESSION_ID"] = Info.Id,
+                        ["NOTES_ANNOTATIONS"] = notesAnnotations,
                     },
                 };
+                // Состав инструментов заметок зависит от модуля — в сигнатуру запуска
+                shapes["notes"] = $"a{notesAnnotations}";
             }
 
             if (hasWidgets)
@@ -1528,16 +1537,24 @@ public class ClaudeSession : ILlmSessionAdapter
                 var scope = _notesMcp.ProjectId is not null
                     ? "По умолчанию создавай заметки в notes/ текущего проекта; source=\"personal\" — в личный vault."
                     : "По умолчанию создавай заметки в личный vault пользователя; source=<projectId> — в notes/ проекта.";
+                // Модуль комментариев и редких операций — только когда он смонтирован этой
+                // сессии: подсказывать инструменты, которых нет в tools/list, значит гнать
+                // модель на «No such tool available»
+                var annotationsHint = _notesMcp.AnnotationsEnabled
+                    ? " Плюс редкие операции: notes_backlinks, notes_graph, notes_delete, notes_daily (дневник), " +
+                      "notes_promote_task (чекбокс → задача), notes_resolve ([[ссылка]] → заметка). " +
+                      "Комментарии к markdown-документам: notes_annotate (оставить комментарий к дословному фрагменту " +
+                      "документа — anchorText копируй точно из файла), notes_annotations (комментарии документа с их " +
+                      "статусами), notes_reply/notes_thread (ответы в треде комментария), " +
+                      "notes_set_status (resolved = обработан), notes_search со status:open — найти необработанные."
+                    : "";
                 var notesHint =
                     "У пользователя есть база знаний «Заметки» (Obsidian-совместимая: markdown-файлы со связями [[Заголовок]], " +
                     "обратными ссылками и графом). Веди её через MCP-инструменты mcp__notes__* (notes_list, notes_search, " +
-                    "notes_read, notes_create, notes_update, notes_backlinks, notes_graph, notes_delete). " + scope + " " +
+                    "notes_semantic_search, notes_read, notes_create, notes_update, notes_move). " + scope + " " +
                     "Связывай заметки друг с другом через [[Заголовок другой заметки]] — по этим ссылкам строится граф знаний. " +
-                    "Когда пользователь просит записать/законспектировать/связать мысль или найти по заметкам — используй эти инструменты. " +
-                    "Комментарии к markdown-документам: notes_annotate (оставить комментарий к дословному фрагменту документа — " +
-                    "anchorText копируй точно из файла), notes_annotations (комментарии документа с их статусами), " +
-                    "notes_reply/notes_thread (ответы в треде комментария), " +
-                    "notes_set_status (resolved = обработан), notes_search со status:open — найти необработанные.";
+                    "Когда пользователь просит записать/законспектировать/связать мысль или найти по заметкам — используй эти инструменты." +
+                    annotationsHint;
                 basePrompt = string.IsNullOrWhiteSpace(basePrompt)
                     ? notesHint
                     : basePrompt + "\n\n" + notesHint;
@@ -1641,11 +1658,14 @@ public class ClaudeSession : ILlmSessionAdapter
                         ? " Удаление (files_delete, chats_delete) на делегированном ходу запрещено."
                         : " Разрушающие операции files_delete и chats_delete НЕВОССТАНОВИМЫ: применяй их ТОЛЬКО " +
                           "по явной просьбе пользователя удалить конкретный файл или чат, никогда по своей инициативе.";
-                // Git — только когда секция git смонтирована (идёт с files). Read и write всегда доступны.
-                var gitHint = _workspaceMcp.Sections.Contains("git")
-                    ? " Git любого проекта: git_status, git_diff, git_log, git_blame, git_file_log, " +
-                      "а по явной просьбе — git_stage и git_commit."
-                    : "";
+                // Git — только когда секция git смонтирована (идёт с files). Запись истории
+                // (stage/commit) — отдельная секция git_write: её даёт лишь явно включённый
+                // ключ git, пресет по роли оставляет чтение.
+                var gitHint = !_workspaceMcp.Sections.Contains("git") ? ""
+                    : _workspaceMcp.Sections.Contains("git_write")
+                        ? " Git любого проекта: git_status, git_diff, git_log, а по явной просьбе — " +
+                          "git_stage и git_commit."
+                        : " Git любого проекта (только чтение): git_status, git_diff, git_log.";
                 // Базы знаний Dify пользователя (личные и публичные, не проектные) — секция knowledge_bases.
                 var kbHint = _workspaceMcp.Sections.Contains("knowledge_bases")
                     ? " Базы знаний пользователя: kb_list, kb_get, kb_search (семантика/полнотекст), kb_add_document."

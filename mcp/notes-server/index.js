@@ -5,6 +5,14 @@
 //   NOTES_API_URL    — базовый URL бэкенда (http://127.0.0.1:5000)
 //   NOTES_API_TOKEN  — сервисный JWT владельца сессии
 //   NOTES_PROJECT_ID — id проекта сессии; пусто = контекст личного vault
+//   NOTES_ANNOTATIONS — "0" = скрыть модуль комментариев к документам (notes_annotate/
+//                      annotations/reply/thread/set_status) и редкие операции (notes_daily,
+//                      notes_promote_task, notes_suggest_title, notes_backlinks, notes_graph,
+//                      notes_delete, notes_resolve). Ядро (list/search/semantic_search/read/
+//                      create/update/move) остаётся всегда. Решается ПО ПЕРСОНЕ (tool-ключ
+//                      notes-annotations, дефолт выключен), значит постоянно в рамках сессии —
+//                      состав tools/list не имеет права зависеть от хода. Без переменной
+//                      модуль включён (совместимость с прямыми запусками сервера).
 //
 // Заметки — это .md файлы (Obsidian-совместимо): личный vault + notes/ проектов
 // владельца. Граф связей [[wikilinks]] единый per-owner поверх всех источников.
@@ -40,6 +48,9 @@ const callCtx = new AsyncLocalStorage();
 const API_URL = (process.env.NOTES_API_URL ?? 'http://localhost:5000').replace(/\/$/, '');
 const API_TOKEN = process.env.NOTES_API_TOKEN ?? '';
 const PROJECT_ID = process.env.NOTES_PROJECT_ID || null;
+// Модуль комментариев к документам + редкие операции заметок (см. шапку). Выключается
+// явным "0"; без переменной включён.
+const ANNOTATIONS = process.env.NOTES_ANNOTATIONS !== '0';
 
 // Секундная недоступность бэкенда (рестарт, деплой, перезапуск прокси) превращалась в серию
 // красных карточек: ретраев не было ни одного. Паузы короткие — вызов инструмента не должен
@@ -145,7 +156,9 @@ const CONTEXT_NOTE = PROJECT_ID
   ? 'По умолчанию заметки создаются в notes/ текущего проекта. source="personal" — в личный vault.'
   : 'По умолчанию заметки создаются в личный vault пользователя. source=<projectId> — в notes/ проекта.';
 
-const TOOLS = [
+// Ядро заметок — доступно всегда: перечислить, найти (текстом и по смыслу), прочитать,
+// создать, изменить, переместить. Всё остальное живёт в модуле ANNOTATION_TOOLS ниже.
+const CORE_TOOLS = [
   {
     name: 'notes_list',
     description: 'Список заметок пользователя по всем источникам (личный vault + notes/ его проектов). Можно сузить фильтром source.',
@@ -178,16 +191,6 @@ const TOOLS = [
     },
   },
   {
-    name: 'notes_suggest_title',
-    description: 'Предложить короткий заголовок заметки по её содержимому (напр. для «Без названия»). ' +
-      'Возвращает {title}. Ничего не сохраняет. Бесплатная локальная модель, если настроена, иначе Claude.',
-    inputSchema: {
-      type: 'object',
-      required: ['id'],
-      properties: { id: { type: 'string', description: 'ID заметки' } },
-    },
-  },
-  {
     name: 'notes_create',
     description: `Создать заметку (.md). В тексте связывай с другими заметками через [[Заголовок]]. ${CONTEXT_NOTE}`,
     inputSchema: {
@@ -212,6 +215,47 @@ const TOOLS = [
         title: { type: 'string', description: 'Новый заголовок (переименует файл)' },
         content: { type: 'string', description: 'Новое содержимое (markdown), заменяет целиком' },
       },
+    },
+  },
+  {
+    name: 'notes_move',
+    description: 'Переместить заметку в другую папку и/или другой источник. id заметки при этом меняется (путь входит в id) — используй возвращённый id дальше. Входящие [[wikilinks]] на неё сервер чинит автоматически. Переименование (смена заголовка) делается отдельно через notes_update.',
+    inputSchema: {
+      type: 'object',
+      required: ['id'],
+      properties: {
+        id: { type: 'string', description: 'ID заметки' },
+        folder: { type: 'string', description: 'Целевая папка внутри источника ("Идеи/Черновики"); пусто или отсутствует — корень источника' },
+        targetSource: { type: 'string', description: 'Перенести в другой источник: "personal" или id проекта. По умолчанию — текущий источник заметки' },
+      },
+    },
+  },
+  {
+    name: 'notes_semantic_search',
+    description: 'Семантический поиск по заметкам (по смыслу, не по подстроке): находит близкие по содержанию заметки со score и сниппетом. Используй, когда точный текст неизвестен.',
+    inputSchema: {
+      type: 'object',
+      required: ['query'],
+      properties: {
+        query: { type: 'string', description: 'Смысловой запрос' },
+        topK: { type: 'integer', minimum: 1, maximum: 20, description: 'Сколько результатов (по умолчанию 8)' },
+      },
+    },
+  },
+];
+
+// Модуль «комментарии к документам + редкие операции» (env NOTES_ANNOTATIONS, tool-ключ
+// notes-annotations). Дефолт выключен: за две недели наблюдений ни один из этих
+// инструментов не звали ни разу, а их схемы висели в контексте каждого хода.
+const ANNOTATION_TOOLS = [
+  {
+    name: 'notes_suggest_title',
+    description: 'Предложить короткий заголовок заметки по её содержимому (напр. для «Без названия»). ' +
+      'Возвращает {title}. Ничего не сохраняет. Бесплатная локальная модель, если настроена, иначе Claude.',
+    inputSchema: {
+      type: 'object',
+      required: ['id'],
+      properties: { id: { type: 'string', description: 'ID заметки' } },
     },
   },
   {
@@ -299,19 +343,6 @@ const TOOLS = [
     },
   },
   {
-    name: 'notes_move',
-    description: 'Переместить заметку в другую папку и/или другой источник. id заметки при этом меняется (путь входит в id) — используй возвращённый id дальше. Входящие [[wikilinks]] на неё сервер чинит автоматически. Переименование (смена заголовка) делается отдельно через notes_update.',
-    inputSchema: {
-      type: 'object',
-      required: ['id'],
-      properties: {
-        id: { type: 'string', description: 'ID заметки' },
-        folder: { type: 'string', description: 'Целевая папка внутри источника ("Идеи/Черновики"); пусто или отсутствует — корень источника' },
-        targetSource: { type: 'string', description: 'Перенести в другой источник: "personal" или id проекта. По умолчанию — текущий источник заметки' },
-      },
-    },
-  },
-  {
     name: 'notes_daily',
     description: 'Открыть или создать дневниковую заметку (Journal/YYYY-MM-DD.md в личном vault). Если передан content — дописать его в конец заметки. Удобно для быстрых записей «в дневник за сегодня».',
     inputSchema: {
@@ -347,25 +378,21 @@ const TOOLS = [
       },
     },
   },
-  {
-    name: 'notes_semantic_search',
-    description: 'Семантический поиск по заметкам (по смыслу, не по подстроке): находит близкие по содержанию заметки со score и сниппетом. Используй, когда точный текст неизвестен.',
-    inputSchema: {
-      type: 'object',
-      required: ['query'],
-      properties: {
-        query: { type: 'string', description: 'Смысловой запрос' },
-        topK: { type: 'integer', minimum: 1, maximum: 20, description: 'Сколько результатов (по умолчанию 8)' },
-      },
-    },
-  },
 ];
+
+const TOOLS = ANNOTATIONS ? [...CORE_TOOLS, ...ANNOTATION_TOOLS] : CORE_TOOLS;
+
+// Имена инструментов модуля — список TOOLS их уже фильтрует, но исполнение перепроверяем
+// отдельно (defense-in-depth: выключенный модуль не должен отработать при ошибке экспозиции)
+const ANNOTATION_TOOL_NAMES = new Set(ANNOTATION_TOOLS.map(t => t.name));
 
 function json(data) {
   return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
 }
 
 async function callTool(name, args) {
+  if (!ANNOTATIONS && ANNOTATION_TOOL_NAMES.has(name))
+    throw new Error('Инструмент недоступен этой персоне (модуль комментариев и редких операций заметок выключен). Попроси пользователя включить его привязкой tool:notes-annotations.');
   switch (name) {
     case 'notes_list': {
       const params = new URLSearchParams();

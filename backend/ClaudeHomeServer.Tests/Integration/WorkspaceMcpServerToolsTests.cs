@@ -108,4 +108,26 @@ public class WorkspaceMcpServerToolsTests
 
         tools.Should().NotContain(t => t.StartsWith("chats_"));
     }
+
+    [SkippableFact]
+    public void СекцияGit_БезGitWrite_ТолькоЧтениеИстории()
+    {
+        // Пресет по роли даёт чтение истории; запись (stage/commit) — отдельная секция
+        var tools = ListTools("projects,files,knowledge,search,git", write: "1");
+        if (tools is null) return;
+
+        tools.Should().Contain(["git_status", "git_diff", "git_log"]);
+        tools.Should().NotContain("git_stage").And.NotContain("git_commit");
+        // Инструменты с нулевым спросом убраны из состава вовсе (REST-эндпоинты остались)
+        tools.Should().NotContain("git_blame").And.NotContain("git_file_log");
+    }
+
+    [SkippableFact]
+    public void СекцияGitWrite_ДобавляетЗаписьИстории()
+    {
+        var tools = ListTools("projects,files,knowledge,search,git,git_write", write: "1");
+        if (tools is null) return;
+
+        tools.Should().Contain(["git_status", "git_diff", "git_log", "git_stage", "git_commit"]);
+    }
 }

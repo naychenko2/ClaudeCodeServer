@@ -3668,13 +3668,35 @@ public class SessionManagerTests : IDisposable
         var session = await _sut.CreatePersonaChatAsync(TestUserId, persona.Id, ClaudeMode.Auto);
 
         InvokePrivate("BuildWidgetsContext", TestUserId, persona).Should().NotBeNull();
-        InvokePrivate("BuildNotificationsContext", TestUserId, persona.Id, persona).Should().NotBeNull();
+        // Уведомления — исключение из «без привязок включено всё»: с августа 2026 сервер идёт
+        // по роли (модуль автоматизации), персоне без роли его даёт только явная привязка
+        InvokePrivate("BuildNotificationsContext", TestUserId, persona.Id, persona).Should().BeNull();
         InvokePrivate("BuildCodeGraphContext", TestUserId, project.Id, session.Id, dir, persona)
             .Should().NotBeNull();
         var personas = InvokePrivate("BuildPersonasContext", TestUserId, project.Id, session, persona)
             .Should().BeOfType<PersonasMcpContext>().Subject;
         personas.MentionsHint.Should().NotBeNull("консультации включены по умолчанию");
         InvokePrivate("ConsultantsEnabled", TestUserId, session, persona).Should().Be(true);
+    }
+
+    [Fact]
+    public async Task Уведомления_ЯвнаяПривязка_ПодключаетСервер()
+    {
+        // Дефолт сузили по данным использования, но включить сервер обратно можно
+        // привязкой персоны — без правок кода
+        var dir = MkProjectDir("gates-notif");
+        var project = _projectManager.Create("GNo", dir, TestUserId, TestUsername);
+        var persona = MkGatedPersona(project.Id, "notif");
+        persona = _personaManager.UpdateBindings(persona.Id, TestUserId,
+            [new PersonaBinding
+            {
+                Type = PersonaBindingType.Tool, Target = "notifications",
+                Mode = PersonaBindingMode.Auto,
+            }])!;
+        await _sut.CreatePersonaChatAsync(TestUserId, persona.Id, ClaudeMode.Auto);
+
+        InvokePrivate("BuildNotificationsContext", TestUserId, persona.Id, persona)
+            .Should().NotBeNull();
     }
 
     [Fact]

@@ -85,7 +85,6 @@ public class McpToolsetStabilityTests
     /// </summary>
     [SkippableTheory]
     [InlineData("private WidgetsMcpContext? BuildWidgetsContext", "widgets")]
-    [InlineData("private NotificationsMcpContext? BuildNotificationsContext", "notifications")]
     [InlineData("private CodeGraphMcpContext? BuildCodeGraphContext", "codegraph")]
     [InlineData("private Func<string?, Task<string?>>? BuildCodeGraphProvider", "codegraph")]
     [InlineData("private bool PersonasEnabled", "personas")]
@@ -99,10 +98,11 @@ public class McpToolsetStabilityTests
 
         body.Should().Contain($"\"{key}\"",
             $"сервер обязан гейтиться Tool-ключом {key} (Off-привязка type: tool, target: {key})");
-        body.Should().MatchRegex(@"(ServerToolEnabled|ConsultantsEnabled)\(",
+        body.Should().MatchRegex(@"(ServerToolEnabled|ConsultantsEnabled|NotificationsEnabled)\(",
             "решение принимает единая точка PersonaBindingsService.ServerToolEnabled "
             + "(для консультантов и персон — обёртки ConsultantsEnabled/PersonasEnabled "
-            + "с исключением для групповых чатов)");
+            + "с исключением для групповых чатов; для уведомлений — NotificationsEnabled "
+            + "с дефолтом по роли)");
         body.Should().NotContain("_currentTurn",
             "состояние хода не должно влиять на состав серверов");
     }
@@ -130,6 +130,49 @@ public class McpToolsetStabilityTests
             + "(привязка → Persona.Tools → пресет по specialty)");
         body.Should().NotContain("_currentTurn",
             "состояние хода не должно влиять на состав секций");
+    }
+
+    /// <summary>
+    /// Сервер уведомлений: дефолт сузили до персон с модулем автоматизации, решение —
+    /// единая точка NotificationsEnabled (ключ notifications живёт внутри неё). Обычный
+    /// чат получает сервер как раньше. Зависимость от хода тут так же смертельна.
+    /// </summary>
+    [SkippableFact]
+    public void СерверУведомлений_РешаетсяЕдинойТочкойПоПерсоне()
+    {
+        var path = FindSource("Services", "SessionManager.cs");
+        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+
+        var body = MethodBody(File.ReadAllText(path!),
+            "private NotificationsMcpContext? BuildNotificationsContext");
+
+        body.Should().Contain("NotificationsEnabled(",
+            "решение принимает PersonaBindingsService.NotificationsEnabled "
+            + "(Off-привязка → Persona.Tools → модуль автоматизации по роли)");
+        body.Should().NotContain("_currentTurn",
+            "состояние хода не должно влиять на состав серверов");
+    }
+
+    /// <summary>
+    /// Модуль заметок «комментарии к документам + редкие операции» (ключ notes-annotations,
+    /// env NOTES_ANNOTATIONS): состав tools/list сервера заметок зависит от него, значит
+    /// решать его смеет только персона.
+    /// </summary>
+    [SkippableFact]
+    public void МодульЗаметок_ГейтитсяТолькоПоПерсоне()
+    {
+        var path = FindSource("Services", "SessionManager.cs");
+        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+
+        var body = MethodBody(File.ReadAllText(path!),
+            "private NotesMcpContext? BuildNotesContext");
+
+        body.Should().Contain("\"notes-annotations\"",
+            "модуль обязан гейтиться Tool-ключом notes-annotations");
+        body.Should().Contain("SectionEnabled(",
+            "решение принимает единая точка PersonaBindingsService.SectionEnabled");
+        body.Should().NotContain("_currentTurn",
+            "состояние хода не должно влиять на состав инструментов заметок");
     }
 
     /// <summary>

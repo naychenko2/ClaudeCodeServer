@@ -6,7 +6,11 @@
 //   WORKSPACE_API_URL         — базовый URL бэкенда (http://127.0.0.1:5000)
 //   WORKSPACE_API_TOKEN       — сервисный JWT владельца сессии
 //   WORKSPACE_PROJECT_ID      — id проекта текущей сессии; пусто = чат вне проекта
-//   WORKSPACE_SECTIONS        — csv включённых секций (projects,files,knowledge,search[,chats,git,knowledge_bases,destructive])
+//   WORKSPACE_SECTIONS        — csv включённых секций (projects,files,knowledge,search[,chats,
+//                               git,git_write,knowledge_bases,destructive]). git — чтение истории
+//                               (status/diff/log), git_write — её запись (stage/commit): секцию
+//                               записи даёт только явно включённый персоне ключ git, пресет
+//                               по роли оставляет чтение (см. SessionManager.BuildWorkspaceContext)
 //   WORKSPACE_PROJECT_IDS     — csv разрешённых projectId; пусто = все проекты владельца
 //   WORKSPACE_SELF_SESSION_ID — id самой сессии: запрет chats_send самому себе + заголовок
 //                               X-Caller-Session-Id (по нему бэкенд сам определяет глубину
@@ -80,6 +84,10 @@ const WRITE_TOOLS = new Set([
 
 // Ограничение выдачи files_tree — дерево большого проекта не должно раздувать контекст
 const TREE_MAX_ENTRIES = 500;
+// Потолок выдачи files_read, как у встроенного Read: файл целиком живёт в контексте
+// до конца сессии, а читают им обычно ради куска. Явный limit больше потолка уважаем —
+// модель попросила осознанно.
+const READ_MAX_LINES = 2000;
 
 // --- HTTP к бэкенду ---
 
@@ -328,7 +336,9 @@ const SECTION_TOOLS = {
     },
     {
       name: 'files_read',
-      description: 'Прочитать текстовый файл проекта. Для бинарных возвращаются только тип и размер.',
+      description: `Прочитать текстовый файл проекта. Для бинарных возвращаются только тип и размер. ` +
+        `Выдача обрезается до ${READ_MAX_LINES} строк — читай длинный файл кусками (offset/limit), ` +
+        `а нужное место ищи files_search/knowledge_search: прочитанное остаётся в контексте до конца сессии.`,
       inputSchema: {
         type: 'object',
         required: ['projectId', 'path'],
@@ -336,7 +346,7 @@ const SECTION_TOOLS = {
           projectId: { type: 'string', description: 'ID проекта' },
           path: { type: 'string', description: 'Относительный путь файла' },
           offset: { type: 'integer', minimum: 0, description: 'С какой строки читать (0 по умолчанию)' },
-          limit: { type: 'integer', minimum: 1, description: 'Сколько строк вернуть (по умолчанию весь файл)' },
+          limit: { type: 'integer', minimum: 1, description: `Сколько строк вернуть (по умолчанию ${READ_MAX_LINES})` },
         },
       },
     },
@@ -486,9 +496,10 @@ const SECTION_TOOLS = {
       },
     },
   ],
-  // Секция git — работа с git-репозиторием ЛЮБОГО проекта владельца (read всегда,
-  // write git_commit/git_stage — только при WORKSPACE_WRITE). Все инструменты требуют
-  // projectId и уважают WORKSPACE_PROJECT_IDS (checkProjectAllowed).
+  // Секция git — ЧТЕНИЕ истории git-репозитория ЛЮБОГО проекта владельца. Все инструменты
+  // требуют projectId и уважают WORKSPACE_PROJECT_IDS (checkProjectAllowed).
+  // git_blame и git_file_log отсюда убраны: за две недели наблюдений их не звали ни разу,
+  // а схемы висели в контексте каждого хода (REST-эндпоинты бэкенда остались на месте).
   git: [
     {
       name: 'git_status',
@@ -527,30 +538,10 @@ const SECTION_TOOLS = {
         },
       },
     },
-    {
-      name: 'git_blame',
-      description: 'Аннотация авторства файла построчно (git blame): по строкам — коммит, автор, дата.',
-      inputSchema: {
-        type: 'object',
-        required: ['projectId', 'path'],
-        properties: {
-          projectId: { type: 'string', description: 'ID проекта' },
-          path: { type: 'string', description: 'Относительный путь файла' },
-        },
-      },
-    },
-    {
-      name: 'git_file_log',
-      description: 'История коммитов одного файла (git log --follow — учитывает переименования).',
-      inputSchema: {
-        type: 'object',
-        required: ['projectId', 'path'],
-        properties: {
-          projectId: { type: 'string', description: 'ID проекта' },
-          path: { type: 'string', description: 'Относительный путь файла' },
-        },
-      },
-    },
+  ],
+  // Секция git_write — запись истории (индексация и коммит). Отдельно от чтения: коммитят
+  // обычно через Bash, а ролям «только чтение» запись не нужна по определению.
+  git_write: [
     {
       name: 'git_commit',
       description: 'Зафиксировать проиндексированные изменения проекта коммитом с сообщением message. ' +
@@ -863,14 +854,25 @@ async function callTool(name, args) {
           note: 'Бинарный файл — содержимое не возвращается',
         });
       }
-      let text = data.content ?? '';
-      if (args.offset || args.limit) {
-        const lines = text.split('\n');
-        const start = Math.max(0, args.offset ?? 0);
-        const slice = lines.slice(start, args.limit ? start + args.limit : undefined);
-        return json({ path: args.path, offsetLines: start, totalLines: lines.length, content: slice.join('\n') });
-      }
-      return json({ path: args.path, content: text });
+      // Читаем кусками всегда: без потолка полная выдача большого файла оседала в контексте
+      // до конца сессии. Явный limit сильнее потолка — модель попросила осознанно.
+      const lines = (data.content ?? '').split('\n');
+      const start = Math.max(0, args.offset ?? 0);
+      // limit: 0 (модель «обнулила» вместо «не указывать») трактуем как «не задан»: иначе
+      // выдача пуста, а nextOffset равен offset — модель ходит по кругу
+      const limit = args.limit > 0 ? args.limit : READ_MAX_LINES;
+      const slice = lines.slice(start, start + limit);
+      const nextOffset = start + slice.length;
+      const truncated = nextOffset < lines.length;
+      return json({
+        path: args.path,
+        offsetLines: start,
+        totalLines: lines.length,
+        content: slice.join('\n'),
+        ...(truncated
+          ? { truncated: true, nextOffset, note: `Показаны строки ${start}–${nextOffset - 1} из ${lines.length} — продолжение через offset: ${nextOffset}` }
+          : {}),
+      });
     }
 
     case 'files_document_read': {
@@ -1162,18 +1164,6 @@ async function callTool(name, args) {
       if (args.limit) params.set('limit', String(args.limit));
       if (args.branch) params.set('branch', String(args.branch));
       return json(await api(`/api/projects/${args.projectId}/git/log?${params}`));
-    }
-
-    case 'git_blame': {
-      checkProjectAllowed(args.projectId);
-      const params = new URLSearchParams({ path: String(args.path ?? '') });
-      return json(await api(`/api/projects/${args.projectId}/git/blame?${params}`));
-    }
-
-    case 'git_file_log': {
-      checkProjectAllowed(args.projectId);
-      const params = new URLSearchParams({ path: String(args.path ?? '') });
-      return json(await api(`/api/projects/${args.projectId}/git/file-log?${params}`));
     }
 
     case 'git_commit': {

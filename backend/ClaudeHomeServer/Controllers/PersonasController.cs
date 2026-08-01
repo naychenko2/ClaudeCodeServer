@@ -1307,7 +1307,8 @@ public class PersonasController : ControllerBase
     // notes | tool | skill; для notes с ?source= — папки внутри источника; для узкого пикера
     // ProjectPersonas — personasInProject?source={projectId} (персоны команды проекта).
     [HttpGet("binding-targets")]
-    public async Task<ActionResult> BindingTargets([FromQuery] string? type, [FromQuery] string? source)
+    public async Task<ActionResult> BindingTargets([FromQuery] string? type, [FromQuery] string? source,
+        [FromQuery] string? personaId)
     {
         switch (type?.Trim().ToLowerInvariant())
         {
@@ -1355,8 +1356,31 @@ public class PersonasController : ControllerBase
                     .Select(s => new { id = s.Key, label = s.Label, hint = (string?)null, meta = (string?)null }));
 
             case "tool":
-                return Ok(PersonaBindingsService.ToolCatalog
-                    .Select(kv => new { id = kv.Key, label = kv.Value.Label, hint = kv.Value.Hint, meta = (string?)null }));
+                {
+                    Persona? persona = null;
+                    if (!string.IsNullOrWhiteSpace(personaId))
+                    {
+                        persona = _personas.Get(personaId, UserId);
+                        if (persona is null) return NotFound();
+                    }
+
+                    return Ok(PersonaBindingsService.ToolCatalog
+                        .Select(kv =>
+                        {
+                            if (persona is null)
+                                return (object)new { id = kv.Key, label = kv.Value.Label, hint = kv.Value.Hint, meta = (string?)null };
+                            var (enabled, origin) = _bindings.GetToolDefaultState(UserId, persona, kv.Key);
+                            return (object)new
+                            {
+                                id = kv.Key,
+                                label = kv.Value.Label,
+                                hint = kv.Value.Hint,
+                                meta = (string?)null,
+                                defaultEnabled = enabled,
+                                defaultOrigin = origin,
+                            };
+                        }));
+                }
 
             case "skill":
                 return Ok(_skills.GetGlobalSkills()

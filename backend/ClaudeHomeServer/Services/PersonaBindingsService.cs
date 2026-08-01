@@ -61,6 +61,12 @@ public class PersonaBindingsService
         new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             { "git", "kb", "personas-manage", "personas-automation", "notes-annotations", "browser" };
 
+    // Секции workspace-сервера, которые показываются в каталоге Tool-привязок.
+    // Дефолт каждой берётся из BuildWorkspaceContext (без Tool-привязки на сам ключ).
+    private static readonly IReadOnlySet<string> WorkspaceSectionKeys =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            { "projects", "chats", "files", "knowledge", "destructive" };
+
     private readonly PersonaManager _personas;
     private readonly ProjectManager _projects;
     private readonly WorkspaceKnowledgeStore _wkStore;
@@ -169,6 +175,70 @@ public class PersonaBindingsService
         if (persona.Tools is { } tools && tools.Contains("notifications", StringComparer.OrdinalIgnoreCase))
             return true;
         return SectionEnabled(ownerId, persona, "personas-automation");
+    }
+
+    // Дефолтное состояние Tool-ключа для пикера привязок персоны.
+    // БЕЗ учёта Tool-привязки на сам этот ключ; привязки других ключей учитываются,
+    // если они участвуют в правиле (например, personas-automation для notifications).
+    // origin: "settings" — Persona.Tools, "role" — пресет по Specialty, null — системный дефолт.
+    public (bool Enabled, string? Origin) GetToolDefaultState(string? ownerId, Persona persona, string key)
+    {
+        // Уведомления: специальное правило — по роли автоматизации или явному Tools.
+        // notifications входит в ServerKeys, поэтому эта ветка должна быть ПЕРВОЙ.
+        if (string.Equals(key, "notifications", StringComparison.OrdinalIgnoreCase))
+        {
+            if (persona.Tools is { } tools && tools.Contains("notifications", StringComparer.OrdinalIgnoreCase))
+                return (true, "settings");
+            return SectionEnabled(ownerId, persona, "personas-automation")
+                ? (true, "role")
+                : (false, null);
+        }
+
+        // MCP-серверы-рубильники: дефолт всегда включён (выключить можно только Off-привязкой)
+        if (ServerKeys.Contains(key))
+            return (true, null);
+
+        // Секции-надстройки с дефолтом по пресету
+        if (PresetKeys.Contains(key))
+            return PresetDefaultState(persona, key);
+
+        // Секции workspace: дефолт как в BuildWorkspaceContext, origin всегда null
+        if (WorkspaceSectionKeys.Contains(key))
+            return (WorkspaceSectionDefault(ownerId, persona, key), null);
+
+        // Оставшиеся ключи — ядро (tasks/notes/web и пр.): семантика EffectiveToolEnabled
+        if (persona.Tools is { } coreTools)
+            return (coreTools.Contains(key, StringComparer.OrdinalIgnoreCase), "settings");
+        return (true, null);
+    }
+
+    private static (bool Enabled, string? Origin) PresetDefaultState(Persona persona, string key)
+    {
+        if (persona.Tools is { } tools && tools.Any(t => PresetKeys.Contains(t)))
+            return (tools.Contains(key, StringComparer.OrdinalIgnoreCase), "settings");
+        return SpecialtySections(persona.Specialty).Contains(key)
+            ? (true, "role")
+            : (false, null);
+    }
+
+    private bool WorkspaceSectionDefault(string? ownerId, Persona persona, string key)
+    {
+        var effectiveOwnerId = ownerId ?? persona.OwnerId;
+        if (string.Equals(key, "chats", StringComparison.OrdinalIgnoreCase))
+        {
+            if (persona.Tools is null || persona.Tools.Contains("chats", StringComparer.OrdinalIgnoreCase))
+                return true;
+            return BuildChatScopes(effectiveOwnerId, persona) is { Count: > 0 };
+        }
+
+        if (string.Equals(key, "destructive", StringComparison.OrdinalIgnoreCase))
+        {
+            if (persona.Access == PersonaAccess.ReadOnly) return false;
+            return persona.Tools is null || persona.Tools.Contains(key, StringComparer.OrdinalIgnoreCase);
+        }
+
+        // projects, files, knowledge
+        return persona.Tools is null || persona.Tools.Contains(key, StringComparer.OrdinalIgnoreCase);
     }
 
     // Пресет секций по специализации персоны: кому какие надстройки нужны по роли.

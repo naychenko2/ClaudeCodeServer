@@ -55,8 +55,8 @@ public class PersonaBindingsServiceTests : IDisposable
     }
 
     private Persona MakePersona(List<string>? tools = null, List<PersonaBinding>? bindings = null,
-        PersonaSpecialty specialty = PersonaSpecialty.None) =>
-        new() { OwnerId = _userId, Name = "Тест", Tools = tools, Bindings = bindings, Specialty = specialty };
+        PersonaSpecialty specialty = PersonaSpecialty.None, PersonaAccess access = PersonaAccess.Full) =>
+        new() { OwnerId = _userId, Name = "Тест", Tools = tools, Bindings = bindings, Specialty = specialty, Access = access };
 
     private static PersonaBinding ToolBinding(string target, PersonaBindingMode mode) =>
         new() { Type = PersonaBindingType.Tool, Target = target, Condition = "по запросу", Mode = mode };
@@ -371,6 +371,118 @@ public class PersonaBindingsServiceTests : IDisposable
         // выключенную пресетом секцию будет нечем
         foreach (var key in PersonaBindingsService.PresetKeys)
             PersonaBindingsService.ToolCatalog.Should().ContainKey(key);
+    }
+
+    // --- GetToolDefaultState (дефолт пикера Tool-привязок без учёта Tool-привязки на ключ) ---
+
+    [Fact]
+    public void GetToolDefaultState_БезPersonaId_НеПрименимо()
+    {
+        // Этот метод вызывается только когда personaId передан; здесь проверяем,
+        // что для ядерных ключей с null-Tools дефолт включён с origin=null.
+        var persona = MakePersona();
+        _sut.GetToolDefaultState(_userId, persona, "tasks").Should().Be((true, (string?)null));
+        _sut.GetToolDefaultState(_userId, persona, "notes").Should().Be((true, (string?)null));
+    }
+
+    [Fact]
+    public void GetToolDefaultState_Tools_БелыйСписок()
+    {
+        var persona = MakePersona(tools: ["tasks"]);
+        _sut.GetToolDefaultState(_userId, persona, "tasks").Should().Be((true, "settings"));
+        _sut.GetToolDefaultState(_userId, persona, "notes").Should().Be((false, "settings"));
+        _sut.GetToolDefaultState(_userId, persona, "web").Should().Be((false, "settings"));
+    }
+
+    [Fact]
+    public void GetToolDefaultState_ServerKeys_ВсегдаВключены()
+    {
+        var persona = MakePersona(tools: ["tasks"]);
+        foreach (var key in PersonaBindingsService.ServerKeys.Where(k =>
+            !string.Equals(k, "notifications", StringComparison.OrdinalIgnoreCase)))
+            _sut.GetToolDefaultState(_userId, persona, key).Should().Be((true, (string?)null), $"ключ {key}");
+    }
+
+    [Fact]
+    public void GetToolDefaultState_Notifications_ПоРолиИлиTools()
+    {
+        // Без роли и без Tools — выключено
+        _sut.GetToolDefaultState(_userId, MakePersona(), "notifications")
+            .Should().Be((false, (string?)null));
+
+        // Явный Tools → settings
+        _sut.GetToolDefaultState(_userId, MakePersona(tools: ["notifications"]), "notifications")
+            .Should().Be((true, "settings"));
+
+        // Роль с автоматизацией → role
+        _sut.GetToolDefaultState(_userId, MakePersona(specialty: PersonaSpecialty.Coordinator), "notifications")
+            .Should().Be((true, "role"));
+    }
+
+    [Theory]
+    [InlineData(PersonaSpecialty.Executor, "git", true, "role")]
+    [InlineData(PersonaSpecialty.Executor, "kb", false, null)]
+    [InlineData(PersonaSpecialty.Tester, "browser", true, "role")]
+    [InlineData(PersonaSpecialty.Coordinator, "personas-manage", true, "role")]
+    public void GetToolDefaultState_PresetKeys_ПресетПоSpecialty(PersonaSpecialty specialty, string key, bool enabled, string? origin)
+    {
+        _sut.GetToolDefaultState(_userId, MakePersona(specialty: specialty), key)
+            .Should().Be((enabled, origin));
+    }
+
+    [Fact]
+    public void GetToolDefaultState_PresetKeys_ToolsЗнаетКлючи_БелыйСписок()
+    {
+        // Если Tools содержит хотя бы один PresetKey, все PresetKeys решаются по Tools
+        var persona = MakePersona(tools: ["git"]);
+        _sut.GetToolDefaultState(_userId, persona, "git").Should().Be((true, "settings"));
+        _sut.GetToolDefaultState(_userId, persona, "kb").Should().Be((false, "settings"));
+        _sut.GetToolDefaultState(_userId, persona, "browser").Should().Be((false, "settings"));
+    }
+
+    [Fact]
+    public void GetToolDefaultState_PresetKeys_ToolsНеЗнаетКлючи_СохраняетПресет()
+    {
+        // Старый суженный Tools (tasks/notes) не должен убить пресет по роли
+        var persona = MakePersona(tools: ["tasks", "notes"], specialty: PersonaSpecialty.Executor);
+        _sut.GetToolDefaultState(_userId, persona, "git").Should().Be((true, "role"));
+    }
+
+    [Fact]
+    public void GetToolDefaultState_Workspace_ДефолтВключено()
+    {
+        var persona = MakePersona();
+        _sut.GetToolDefaultState(_userId, persona, "projects").Should().Be((true, (string?)null));
+        _sut.GetToolDefaultState(_userId, persona, "files").Should().Be((true, (string?)null));
+        _sut.GetToolDefaultState(_userId, persona, "knowledge").Should().Be((true, (string?)null));
+    }
+
+    [Fact]
+    public void GetToolDefaultState_Workspace_СуженныйTools_Отключает()
+    {
+        var persona = MakePersona(tools: ["notes"]);
+        _sut.GetToolDefaultState(_userId, persona, "projects").Should().Be((false, (string?)null));
+        _sut.GetToolDefaultState(_userId, persona, "files").Should().Be((false, (string?)null));
+    }
+
+    [Fact]
+    public void GetToolDefaultState_Chats_ВключаетсяProjectPersonas()
+    {
+        var narrow = MakePersona(tools: ["notes"]);
+        _sut.GetToolDefaultState(_userId, narrow, "chats").Should().Be((false, (string?)null));
+
+        var delegator = MakePersona(tools: ["notes"], bindings:
+        [
+            new PersonaBinding { Type = PersonaBindingType.ProjectPersonas, Target = "p1" },
+        ]);
+        _sut.GetToolDefaultState(_userId, delegator, "chats").Should().Be((true, (string?)null));
+    }
+
+    [Fact]
+    public void GetToolDefaultState_Destructive_ReadOnly_Отключено()
+    {
+        var persona = MakePersona(access: PersonaAccess.ReadOnly);
+        _sut.GetToolDefaultState(_userId, persona, "destructive").Should().Be((false, (string?)null));
     }
 
     // --- BuildFileScopes ---

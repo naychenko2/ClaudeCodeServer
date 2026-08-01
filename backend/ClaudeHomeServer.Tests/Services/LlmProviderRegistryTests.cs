@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using ClaudeHomeServer.Tests.Helpers;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Llm;
@@ -194,6 +195,106 @@ public class LlmProviderRegistryTests
             File.Exists(Path.Combine(profile, "settings.json")).Should().BeTrue();
             File.Exists(Path.Combine(profile, "rules", "style.md")).Should().BeTrue();
             File.Exists(Path.Combine(profile, ".credentials.json")).Should().BeFalse();
+        }
+        finally
+        {
+            try { Directory.Delete(tmp, recursive: true); } catch { }
+        }
+    }
+
+    // settings.json профиля мержится по ключам, а не копируется файлом: в нём живут env
+    // маршрута провайдера, permissions.allow и enabledPlugins, которые File.Copy стирал
+    [Fact]
+    public void СинкSettingsJson_МержПоКлючам_ПрофильныеКлючиВыживают()
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), "llmreg_" + Guid.NewGuid().ToString("N"));
+        var userDir = Path.Combine(tmp, "user-claude");
+        var profileDir = Path.Combine(tmp, "data", "claude-profiles", "deepseek");
+        Directory.CreateDirectory(userDir);
+        Directory.CreateDirectory(profileDir);
+
+        var profilePath = Path.Combine(profileDir, "settings.json");
+        File.WriteAllText(profilePath, """
+        {
+          "env": {
+            "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
+            "ANTHROPIC_AUTH_TOKEN": "sk-профиль"
+          },
+          "permissions": { "allow": ["Bash(git:*)"] },
+          "enabledPlugins": { "playwright@claude-plugins-official": true },
+          "model": "deepseek-v4-pro"
+        }
+        """);
+
+        var hostPath = Path.Combine(userDir, "settings.json");
+        File.WriteAllText(hostPath, """
+        {
+          "env": {
+            "ANTHROPIC_BASE_URL": "https://api.anthropic.com",
+            "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "8192"
+          },
+          "permissions": { "deny": ["Read(./secrets/**)"] },
+          "model": "opus",
+          "cleanupPeriodDays": 30
+        }
+        """);
+        // Источник заведомо новее приёмника — иначе синк пропустит файл по mtime
+        File.SetLastWriteTimeUtc(profilePath, DateTime.UtcNow.AddMinutes(-10));
+        File.SetLastWriteTimeUtc(hostPath, DateTime.UtcNow);
+
+        try
+        {
+            var reg = Create(new()
+            {
+                ["ClaudeUserProfileDir"] = userDir,
+                ["DataPath"] = Path.Combine(tmp, "data", "projects.json"),
+            });
+            reg.BuildCliEnv("deepseek-v4-pro");
+
+            var merged = JsonNode.Parse(File.ReadAllText(profilePath))!;
+
+            // env: профильное значение сильнее хостового (оно задаёт маршрут CLI),
+            // но хостовые ключи, которых в профиле нет, добавляются
+            merged["env"]!["ANTHROPIC_BASE_URL"]!.GetValue<string>()
+                .Should().Be("https://api.deepseek.com/anthropic");
+            merged["env"]!["ANTHROPIC_AUTH_TOKEN"]!.GetValue<string>().Should().Be("sk-профиль");
+            merged["env"]!["CLAUDE_CODE_MAX_OUTPUT_TOKENS"]!.GetValue<string>().Should().Be("8192");
+
+            // permissions и enabledPlugins профиля не потеряны
+            merged["permissions"]!["allow"]!.AsArray()[0]!.GetValue<string>().Should().Be("Bash(git:*)");
+            merged["permissions"]!["deny"]!.AsArray()[0]!.GetValue<string>().Should().Be("Read(./secrets/**)");
+            merged["enabledPlugins"]!["playwright@claude-plugins-official"]!.GetValue<bool>()
+                .Should().BeTrue();
+
+            // остальные ключи — хостовые сильнее, новые добавляются
+            merged["model"]!.GetValue<string>().Should().Be("opus");
+            merged["cleanupPeriodDays"]!.GetValue<int>().Should().Be(30);
+        }
+        finally
+        {
+            try { Directory.Delete(tmp, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void СинкSettingsJson_ПрофильБезФайла_ПолучаетХостовый()
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), "llmreg_" + Guid.NewGuid().ToString("N"));
+        var userDir = Path.Combine(tmp, "user-claude");
+        Directory.CreateDirectory(userDir);
+        File.WriteAllText(Path.Combine(userDir, "settings.json"), """{ "model": "opus" }""");
+
+        try
+        {
+            var reg = Create(new()
+            {
+                ["ClaudeUserProfileDir"] = userDir,
+                ["DataPath"] = Path.Combine(tmp, "data", "projects.json"),
+            });
+            var profile = reg.BuildCliEnv("deepseek-v4-pro")!["CLAUDE_CONFIG_DIR"];
+
+            var merged = JsonNode.Parse(File.ReadAllText(Path.Combine(profile, "settings.json")))!;
+            merged["model"]!.GetValue<string>().Should().Be("opus");
         }
         finally
         {

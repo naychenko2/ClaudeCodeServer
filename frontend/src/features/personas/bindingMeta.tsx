@@ -116,6 +116,14 @@ export function bindingsCounter(bindings: PersonaBinding[]): string {
 // не дёргают бэк заново (инвалидация — перезагрузкой страницы, целей мало).
 const targetsCache = new Map<string, Promise<BindingTarget[]>>();
 
+// Сбросить кэш каталога целей типа (и все его варианты с source) — вызывать при
+// realtime-сигнале о том, что список целей этого типа мог измениться (напр. knowledge_changed)
+export function invalidateBindingTargets(type: string): void {
+  for (const key of targetsCache.keys()) {
+    if (key === type || key.startsWith(`${type}|`)) targetsCache.delete(key);
+  }
+}
+
 export function fetchBindingTargets(type: string, source?: string): Promise<BindingTarget[]> {
   const key = source ? `${type}|${source}` : type;
   let p = targetsCache.get(key);

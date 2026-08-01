@@ -7,6 +7,7 @@ import { useSyncExternalStore } from 'react';
 import type { KnowledgeBaseSummary } from '../types';
 import { api } from './api';
 import { joinUser, onMessage, onReconnected } from './signalr';
+import { invalidateBindingTargets } from '../features/personas/bindingMeta';
 
 let _items: KnowledgeBaseSummary[] = [];
 let _configured = true;
@@ -30,7 +31,10 @@ function wireRealtime() {
   if (_realtimeWired) return;
   _realtimeWired = true;
   onMessage(msg => {
-    if (msg.type === 'knowledge_changed') void reloadKnowledge();
+    if (msg.type === 'knowledge_changed') {
+      void reloadKnowledge();
+      invalidateBindingTargets('knowledge');
+    }
   });
   onReconnected(() => { joinUserGroup(); void reloadKnowledge(); });
 }

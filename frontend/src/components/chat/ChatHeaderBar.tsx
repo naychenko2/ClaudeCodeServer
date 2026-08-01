@@ -904,6 +904,19 @@ function ExtractTasksButton({ session, hasMessages, online }: { session: Session
 export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, onBillingChange, rateWindows, onOpenSettings, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, artifactsOpen, onToggleArtifacts, artifactFileCount, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, island }: ChatHeaderBarProps) {
   // Поповер управления участниками группового чата (клик по стеку аватаров)
   const [participantsOpen, setParticipantsOpen] = useState(false);
+  // Клик по блоку персоны — карточка персоны в разделе «Персоны» (диплинк #/personas/{id}).
+  // На мобиле блок вложен в BackButton («назад к списку») — там клик остаётся за ним.
+  const [personaHover, setPersonaHover] = useState(false);
+  const openPersonaCard = persona
+    ? () => { window.location.hash = `#/personas/${encodeURIComponent(persona.id)}`; }
+    : null;
+  const personaCardLink = openPersonaCard && !(isMobile && onBack) ? {
+    role: 'button' as const, tabIndex: 0,
+    onClick: openPersonaCard,
+    onKeyDown: (e: React.KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openPersonaCard(); } },
+    onMouseEnter: () => setPersonaHover(true),
+    onMouseLeave: () => setPersonaHover(false),
+  } : null;
   const asstName = assistantName(session.model);
   const providerKey = session.provider ?? modelProvider(session.model);
   const isCliProvider = providerKey !== 'claude';
@@ -1016,11 +1029,16 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       </div>
     </div>
   ) : persona && personaAccent ? (
-    <div title={session.name ?? undefined} style={{ minWidth: titleMinW, flex: 1, display: 'flex', alignItems: 'center', gap: 9 }}>
+    <div
+      {...(personaCardLink ?? {})}
+      title={personaCardLink
+        ? `${session.name ? `${session.name} · ` : ''}Открыть карточку персоны`
+        : (session.name ?? undefined)}
+      style={{ minWidth: titleMinW, flex: 1, display: 'flex', alignItems: 'center', gap: 9, cursor: personaCardLink ? 'pointer' : undefined }}>
       <PersonaAvatar persona={persona} size={28} />
       <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-        {/* Роль — заголовок (serif, цвет персоны) */}
-        <span style={{ fontFamily: FONT.serif, fontSize: 16, fontWeight: 600, color: personaAccent, letterSpacing: '-0.01em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {/* Роль — заголовок (serif, цвет персоны); hover — подчёркивание как у ссылки */}
+        <span style={{ fontFamily: FONT.serif, fontSize: 16, fontWeight: 600, color: personaAccent, letterSpacing: '-0.01em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textDecoration: personaHover ? 'underline' : undefined }}>
           {personaTitleLines(persona).primary}
         </span>
         {/* Строка 2: имя персоны + пилюля зоны + модель/effort (компактно) */}
@@ -1245,7 +1263,12 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
         </div>
       </div>
     ) : persona && personaAccent ? (
-      <div style={{ minWidth: 240, flex: 1, display: 'flex', alignItems: 'center', gap: 12 }} title={session.name ?? undefined}>
+      <div
+        {...(personaCardLink ?? {})}
+        style={{ minWidth: 240, flex: 1, display: 'flex', alignItems: 'center', gap: 12, cursor: personaCardLink ? 'pointer' : undefined }}
+        title={personaCardLink
+          ? `${session.name ? `${session.name} · ` : ''}Открыть карточку персоны`
+          : (session.name ?? undefined)}>
         {/* Фото персоны: скруглённый квадрат с чётким краем (вариант A) */}
         <PersonaFace
           persona={persona} align="center" fontSize={24}
@@ -1255,7 +1278,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
           }}
         />
         <div style={{ minWidth: 0, flex: 1 }}>
-          <div style={{ fontFamily: FONT.serif, fontSize: 28, fontWeight: 500, color: personaAccent, letterSpacing: '-0.01em', lineHeight: 1.25, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <div style={{ fontFamily: FONT.serif, fontSize: 28, fontWeight: 500, color: personaAccent, letterSpacing: '-0.01em', lineHeight: 1.25, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textDecoration: personaHover ? 'underline' : undefined }}>
             {personaTitleLines(persona).primary}
             {personaTitleLines(persona).secondary && (
               <span style={{ color: C.textMuted, fontSize: 21 }}> · {personaTitleLines(persona).secondary}</span>

@@ -25,7 +25,9 @@ public static class ClaudeRuntimeSettings
     // Плагин официального маркетплейса, дающий mcp__plugin_playwright_playwright__browser_*
     private const string BrowserPluginKey = "playwright@claude-plugins-official";
 
-    private static readonly Dictionary<bool, string> _cachedPaths = [];
+    // Ключ кэша — (temp-каталог среды, режим): temp у драйверов запуска разный, и одного
+    // флага мало — первый владелец «застолбил» бы путь в своей папке для всех остальных
+    private static readonly Dictionary<(string TempDir, bool Browser), string> _cachedPaths = [];
     private static readonly Lock _lock = new();
 
     // Аргументы --settings для запуска claude; пусто для песочницы.
@@ -42,7 +44,8 @@ public static class ClaudeRuntimeSettings
     {
         lock (_lock)
         {
-            if (_cachedPaths.TryGetValue(browserEnabled, out var cached) && File.Exists(cached)) return cached;
+            var cacheKey = (hostTempDir, browserEnabled);
+            if (_cachedPaths.TryGetValue(cacheKey, out var cached) && File.Exists(cached)) return cached;
             var dir = Path.Combine(hostTempDir, "claude-runtime");
             Directory.CreateDirectory(dir);
             var path = Path.Combine(dir,
@@ -50,7 +53,7 @@ public static class ClaudeRuntimeSettings
             File.WriteAllText(path, browserEnabled
                 ? "{\"disableAllHooks\":true}"
                 : $"{{\"disableAllHooks\":true,\"enabledPlugins\":{{\"{BrowserPluginKey}\":false}}}}");
-            _cachedPaths[browserEnabled] = path;
+            _cachedPaths[cacheKey] = path;
             return path;
         }
     }

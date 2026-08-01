@@ -368,6 +368,13 @@ public record RecallItemDto(string Kind, string? Ref, string Title, string? Snip
 public record RecallManifestMessage(IReadOnlyList<RecallItemDto> Items)
     : ServerMessage("recall_manifest");
 
+// Снимок промпта хода записан: id для кнопки «какой промпт ушёл» под постом.
+// Текст по SignalR не гоняем — фронт забирает его отдельным REST-запросом при открытии.
+// Applied=false — ход доигрывался в живом процессе, и этот промпт модели не уходил;
+// действует снимок старта прогона (InheritedFromId).
+public record PromptSnapshotMessage(string SnapshotId, bool Applied, string? InheritedFromId = null)
+    : ServerMessage("prompt_snapshot");
+
 // Подсказка следующего сообщения: текст от claude CLI после хода.
 // Эфемерное событие — в history.json не пишется (нет case в OnMessageAsync и StoredMessage).
 public record PromptSuggestionMessage(string Text)

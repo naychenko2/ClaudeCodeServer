@@ -142,6 +142,8 @@ public class SessionManager : IDisposable
     private readonly Modules.ModuleRegistry? _modules;
     private readonly Modules.ModuleTokenService? _moduleTokens;
     private readonly ChatHistoryService _history;
+    // Снимки промпта ходов (кнопка «какой промпт ушёл»); null — в тестах
+    private readonly PromptSnapshotStore? _promptSnapshots;
     private readonly string _sessionsFilePath;
     private readonly Lock _saveLock = new();
     // Автосохранение сессий каждые 30с
@@ -292,8 +294,12 @@ public class SessionManager : IDisposable
         // Опционально (в тестах не передаётся): трекер активности аккаунтов пула подписок
         SubscriptionActivityTracker? activity = null,
         // Опционально: учёт glif-генераций; без него детект glif_cost не работает
-        GlifAccountService? glif = null)
+        GlifAccountService? glif = null,
+        // Опционально (в тестах не передаётся): снимки промпта ходов — кнопка «какой промпт
+        // ушёл» под постом. Без него ходы идут как раньше, просто без снимков.
+        PromptSnapshotStore? promptSnapshots = null)
     {
+        _promptSnapshots = promptSnapshots;
         _teamPlanning = teamPlanning;
         _activity = activity;
         _glif = glif;
@@ -802,6 +808,17 @@ public class SessionManager : IDisposable
         var launcher = _launchers.ForOwner(ownerId);
         return launcher.IsSandboxed ? launcher.Paths.ToRuntime(hostCwd) : hostCwd;
     }
+
+    // Приёмник снимков промпта для сессии: замыкает её id — адаптер ключа хранилища не знает.
+    // null — стор не подключён (тесты): ходы идут как раньше, просто без снимков.
+    private Func<PromptSnapshotDraft, string?>? PromptSinkFor(string sessionId) =>
+        _promptSnapshots is null ? null : draft => _promptSnapshots.Save(sessionId, draft);
+
+    // Дозапись состава инструментов в снимок: приходит из system/init, уже после его записи
+    private Action<string, IReadOnlyList<string>, IReadOnlyList<McpServerInfo>>? PromptToolsSinkFor(string sessionId) =>
+        _promptSnapshots is null
+            ? null
+            : (snapshotId, tools, servers) => _promptSnapshots.AttachCliLayer(sessionId, snapshotId, tools, servers);
 
     // Рабочая папка сессии: отдельное worktree чата приоритетнее корня проекта.
     // Единая точка подмены cwd — через неё идут обе funnel-точки LlmSessionContext.
@@ -1883,7 +1900,10 @@ public class SessionManager : IDisposable
             ModulesMcp: BuildModulesContext(ownerId),
             WidgetsMcp: BuildWidgetsContext(ownerId, persona.Persona),
             CodeGraphMcp: BuildCodeGraphContext(ownerId, session.ProjectId, session.Id, rootPath, persona.Persona),
-            BrowserEnabled: BrowserEnabled(ownerId, persona.Persona)));
+            BrowserEnabled: BrowserEnabled(ownerId, persona.Persona),
+            PromptSnapshotSink: PromptSinkFor(session.Id),
+            PromptSnapshotToolsSink: PromptToolsSinkFor(session.Id),
+            CliConfigRoot: ConfigRootFor(ownerId, session.Provider)));
         entry.Process = adapter;
         entry.RunId = runId;
 
@@ -2661,7 +2681,10 @@ public class SessionManager : IDisposable
                 WidgetsMcp: BuildWidgetsContext(entry.Info.OwnerId, persona.Persona),
                 // Чат вне проекта — графа кода нет (он ключуется проектом)
                 CodeGraphMcp: null,
-                BrowserEnabled: BrowserEnabled(entry.Info.OwnerId, persona.Persona));
+                BrowserEnabled: BrowserEnabled(entry.Info.OwnerId, persona.Persona),
+                PromptSnapshotSink: PromptSinkFor(entry.Info.Id),
+                PromptSnapshotToolsSink: PromptToolsSinkFor(entry.Info.Id),
+                CliConfigRoot: ConfigRootFor(entry.Info.OwnerId, entry.Info.Provider));
         }
         else
         {
@@ -2691,7 +2714,10 @@ public class SessionManager : IDisposable
                 ModulesMcp: BuildModulesContext(project.OwnerId),
                 WidgetsMcp: BuildWidgetsContext(project.OwnerId, persona.Persona),
                 CodeGraphMcp: BuildCodeGraphContext(project.OwnerId, project.Id, entry.Info.Id, rootPath, persona.Persona),
-                BrowserEnabled: BrowserEnabled(project.OwnerId, persona.Persona));
+                BrowserEnabled: BrowserEnabled(project.OwnerId, persona.Persona),
+                PromptSnapshotSink: PromptSinkFor(entry.Info.Id),
+                PromptSnapshotToolsSink: PromptToolsSinkFor(entry.Info.Id),
+                CliConfigRoot: ConfigRootFor(project.OwnerId, entry.Info.Provider));
         }
         var adapter = _adapters.Create(entry.Info, context);
         entry.Process = adapter;
@@ -4400,6 +4426,10 @@ public class SessionManager : IDisposable
                 DeleteTranscript(entry.Info, csid);
             }
         }
+        // Снимки промпта ключуются id ЧАТА, а не транскриптом, — гейт общего разговора выше
+        // к ним не относится: у чата-двойника свои снимки, и его лента их не потеряет
+        _promptSnapshots?.DeleteAll(sessionId);
+
         // Отдельное worktree чата сносим вместе с чатом (best-effort; ветка остаётся в репе)
         if (entry.Info.WorktreePath is string wt && entry.Info.ProjectId is string wpid && _git is not null)
         {
@@ -4601,6 +4631,12 @@ public class SessionManager : IDisposable
                     break;
                 case RecallManifestMessage m:
                     if (entry is not null) entry.LastRecallManifest = m;
+                    break;
+                case PromptSnapshotMessage m:
+                    // Привязываем снимок к сообщению, которым начался ход: под ним живёт
+                    // кнопка «какой промпт ушёл». Событие приходит ДО result — иначе
+                    // FlushAsync уже унёс бы текущий ход из _currentTurn.
+                    acc.SetPromptSnapshot(m.SnapshotId);
                     break;
                 case ResultMessage m:
                     await acc.OnResultAsync(m.Subtype, m.DurationMs, m.NumTurns, m.Usage, m.TotalCostUsd, m.ApiErrorStatus, m.PermissionDenials, _history, m.ContextTokens, m.UsageModel);

@@ -1,0 +1,502 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Persona Tool Picker — v3 Cards</title>
+  <style>
+    :root {
+      --c-bg-main: #F4F0E8;
+      --c-bg-panel: #EDE7DC;
+      --c-bg-card: #FBF8F2;
+      --c-bg-white: #FFFFFF;
+      --c-bg-selected: #E8E1D4;
+      --c-bg-inset: #E7E0D2;
+      --c-text-heading: #2A251F;
+      --c-text-primary: #39332B;
+      --c-text-secondary: #756B5E;
+      --c-text-muted: #9A8F7E;
+      --c-on-accent: #FBF8F2;
+      --c-accent: #D97757;
+      --c-accent-light: #F4ECE1;
+      --c-border: #E0D7C8;
+      --c-border-light: #E8E1D4;
+      --c-success: #5E8B4E;
+      --c-success-bg: #E9F1E8;
+      --c-success-text: #3F7A4F;
+      --c-warning: #C9923E;
+      --c-warning-bg: #FBEFE0;
+      --c-warning-text: #8A6A28;
+      --c-danger: #B4452F;
+      --c-danger-bg: #FBF1EC;
+      --c-danger-text: #B4452F;
+      --c-danger-border: #F5C6BF;
+      --c-info: #3E7CA6;
+      --c-info-bg: #E7EFF5;
+      --c-plan: #6C5CB0;
+      --c-plan-light: #EEEBF8;
+      --c-plan-text: #4E4196;
+      --shadow-card: 0 2px 8px rgba(60, 50, 35, 0.05);
+      --shadow-focus: 0 0 0 3px rgba(217, 119, 87, 0.14);
+      font-family: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    }
+    [data-theme="dark"] {
+      --c-bg-main: #201C18;
+      --c-bg-panel: #272320;
+      --c-bg-card: #2E2A25;
+      --c-bg-white: #2E2A25;
+      --c-bg-selected: #38332D;
+      --c-bg-inset: #1B1815;
+      --c-text-heading: #F2ECE1;
+      --c-text-primary: #EDE6DB;
+      --c-text-secondary: #B3A897;
+      --c-text-muted: #8A8072;
+      --c-on-accent: #201C18;
+      --c-accent: #E38A6A;
+      --c-accent-light: #3A2E27;
+      --c-border: #3D3830;
+      --c-border-light: #34302A;
+      --c-success: #7CB86A;
+      --c-success-bg: #232E20;
+      --c-success-text: #8FCB79;
+      --c-warning: #E0AC5A;
+      --c-warning-bg: #322717;
+      --c-warning-text: #E7B96E;
+      --c-danger: #E8785E;
+      --c-danger-bg: #331F1B;
+      --c-danger-text: #EE8A72;
+      --c-danger-border: #5A302A;
+      --c-info: #5FA0CC;
+      --c-info-bg: #1E2A33;
+      --c-plan: #9385D8;
+      --c-plan-light: #2A2540;
+      --c-plan-text: #B0A4E6;
+      --shadow-card: 0 2px 10px rgba(0, 0, 0, 0.35);
+      --shadow-focus: 0 0 0 3px rgba(227, 138, 106, 0.24);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--c-bg-main);
+      color: var(--c-text-primary);
+      padding: 24px 16px;
+    }
+    .wrap { max-width: 720px; margin: 0 auto; }
+    .crumb {
+      font-size: 12px;
+      color: var(--c-text-secondary);
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .search {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: var(--c-bg-card);
+      border: 1px solid var(--c-border);
+      border-radius: 10px;
+      padding: 0 12px;
+      height: 38px;
+      margin-bottom: 14px;
+      box-shadow: var(--shadow-card);
+    }
+    .search input {
+      border: none;
+      background: transparent;
+      flex: 1;
+      outline: none;
+      color: var(--c-text-heading);
+      font-size: 13px;
+      font-family: inherit;
+    }
+    .group-title {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--c-text-secondary);
+      margin: 18px 0 10px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 10px;
+    }
+    .card-item {
+      background: var(--c-bg-card);
+      border: 1px solid var(--c-border-light);
+      border-radius: 12px;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      transition: border-color 0.12s, box-shadow 0.12s;
+    }
+    .card-item:hover {
+      border-color: var(--c-border);
+    }
+    .card-item.danger {
+      border-color: var(--c-danger-border);
+      background: var(--c-danger-bg);
+    }
+    .card-head {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .icon {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      color: #fff;
+    }
+    .icon.base { background: var(--c-success); }
+    .icon.mcp { background: var(--c-info); }
+    .icon.workspace { background: var(--c-plan); }
+    .icon.specialty { background: var(--c-warning); }
+    .icon.danger { background: var(--c-danger); }
+    .label {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--c-text-heading);
+    }
+    .hint {
+      font-size: 11.5px;
+      color: var(--c-text-muted);
+      line-height: 1.35;
+    }
+    .state {
+      font-size: 11px;
+      color: var(--c-text-secondary);
+      margin-top: -2px;
+    }
+    .state.enabled { color: var(--c-success-text); }
+    .state.disabled { color: var(--c-text-muted); }
+    .mode {
+      display: flex;
+      gap: 4px;
+      background: var(--c-bg-white);
+      border: 1px solid var(--c-border);
+      border-radius: 8px;
+      padding: 2px;
+    }
+    .mode button {
+      flex: 1;
+      border: none;
+      background: transparent;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--c-text-secondary);
+      padding: 5px 0;
+      cursor: pointer;
+      font-family: inherit;
+      transition: background 0.12s, color 0.12s;
+    }
+    .mode button:hover {
+      color: var(--c-text-heading);
+    }
+    .mode button.active {
+      background: var(--c-accent);
+      color: var(--c-on-accent);
+    }
+    .mode button.active.always {
+      background: var(--c-info);
+      color: #fff;
+    }
+    .mode button.active.off {
+      background: var(--c-bg-selected);
+      color: var(--c-text-heading);
+    }
+    .mode button:focus-visible {
+      outline: none;
+      box-shadow: var(--shadow-focus);
+    }
+    .theme {
+      position: fixed;
+      top: 12px;
+      right: 12px;
+      background: var(--c-bg-panel);
+      border: 1px solid var(--c-border);
+      border-radius: 8px;
+      padding: 6px 10px;
+      font-size: 12px;
+      cursor: pointer;
+      color: var(--c-text-secondary);
+    }
+    .state-box {
+      padding: 14px;
+      font-size: 12.5px;
+      color: var(--c-text-muted);
+      text-align: center;
+    }
+    .state-box.error { color: var(--c-danger-text); }
+    @media (max-width: 560px) {
+      .grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <button class="theme" onclick="toggleTheme()">Светлая / тёмная</button>
+  <div class="wrap">
+    <div class="crumb"><span>←</span> Инструмент</div>
+    <div class="search">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="11" cy="11" r="8"/>
+        <path d="m21 21-4.3-4.3"/>
+      </svg>
+      <input placeholder="Найти инструмент…" />
+    </div>
+
+    <div class="group-title">Базовые</div>
+    <div class="grid">
+      <div class="card-item">
+        <div class="card-head">
+          <div class="icon base">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="m9 11 3 3L22 4"/>
+              <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+            </svg>
+          </div>
+          <div class="label">Задачи</div>
+        </div>
+        <div class="hint">Система задач: списки дел, напоминания, доска</div>
+        <div class="state enabled">Включён по умолчанию</div>
+        <div class="mode">
+          <button class="active">Авто</button>
+          <button>Всегда</button>
+          <button class="off">Выкл</button>
+        </div>
+      </div>
+      <div class="card-item">
+        <div class="card-head">
+          <div class="icon base">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 20h9"/>
+              <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>
+            </svg>
+          </div>
+          <div class="label">Заметки</div>
+        </div>
+        <div class="hint">База знаний заметок: markdown-vault</div>
+        <div class="state enabled">Включён по умолчанию</div>
+        <div class="mode">
+          <button>Авто</button>
+          <button class="active always">Всегда</button>
+          <button class="off">Выкл</button>
+        </div>
+      </div>
+      <div class="card-item">
+        <div class="card-head">
+          <div class="icon base">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/>
+              <path d="M2 12h20"/>
+              <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+            </svg>
+          </div>
+          <div class="label">Веб-поиск</div>
+        </div>
+        <div class="hint">Поиск и чтение страниц в интернете</div>
+        <div class="state disabled">Выключен в настройках персоны</div>
+        <div class="mode">
+          <button class="active">Авто</button>
+          <button>Всегда</button>
+          <button class="active off">Выкл</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="group-title">MCP-серверы</div>
+    <div class="grid">
+      <div class="card-item">
+        <div class="card-head">
+          <div class="icon mcp">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
+              <circle cx="9" cy="7" r="4"/>
+              <path d="M22 21v-2a4 4 0 0 0-3-3.87"/>
+              <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+            </svg>
+          </div>
+          <div class="label">Персоны</div>
+        </div>
+        <div class="hint">Раздел персон: CRUD и @упоминания</div>
+        <div class="state disabled">Не подключён</div>
+        <div class="mode">
+          <button class="active">Авто</button>
+          <button>Всегда</button>
+          <button class="off">Выкл</button>
+        </div>
+      </div>
+      <div class="card-item">
+        <div class="card-head">
+          <div class="icon mcp">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/>
+            </svg>
+          </div>
+          <div class="label">Консультации персон</div>
+        </div>
+        <div class="hint">Персоны-консультанты и их память</div>
+        <div class="state disabled">Не подключён</div>
+        <div class="mode">
+          <button class="active">Авто</button>
+          <button>Всегда</button>
+          <button class="off">Выкл</button>
+        </div>
+      </div>
+      <div class="card-item">
+        <div class="card-head">
+          <div class="icon mcp">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="18" cy="5" r="3"/>
+              <circle cx="6" cy="12" r="3"/>
+              <circle cx="18" cy="19" r="3"/>
+              <path d="M8.59 13.51 15.42 17.49"/>
+              <path d="m15.41 6.51-6.82 3.98"/>
+            </svg>
+          </div>
+          <div class="label">Граф кода</div>
+        </div>
+        <div class="hint">Граф кода проекта и его выжимка в промпте</div>
+        <div class="state disabled">Не подключён</div>
+        <div class="mode">
+          <button class="active">Авто</button>
+          <button>Всегда</button>
+          <button class="off">Выкл</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="group-title">Рабочее пространство</div>
+    <div class="grid">
+      <div class="card-item">
+        <div class="card-head">
+          <div class="icon workspace">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9L14 11"/>
+              <path d="M2 14h12"/>
+            </svg>
+          </div>
+          <div class="label">Файлы проектов</div>
+        </div>
+        <div class="hint">Чтение и правка файлов любого проекта</div>
+        <div class="state enabled">Включён по умолчанию</div>
+        <div class="mode">
+          <button class="active">Авто</button>
+          <button>Всегда</button>
+          <button class="off">Выкл</button>
+        </div>
+      </div>
+      <div class="card-item">
+        <div class="card-head">
+          <div class="icon workspace">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M4 20V10a2 2 0 0 1 2-2h3l2-2h7a2 2 0 0 1 2 2v12"/>
+              <path d="M2 20h20"/>
+            </svg>
+          </div>
+          <div class="label">Проекты</div>
+        </div>
+        <div class="hint">Список и карточки проектов владельца</div>
+        <div class="state enabled">Включён по умолчанию</div>
+        <div class="mode">
+          <button class="active">Авто</button>
+          <button>Всегда</button>
+          <button class="off">Выкл</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="group-title">По специальности</div>
+    <div class="grid">
+      <div class="card-item">
+        <div class="card-head">
+          <div class="icon specialty">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M6 20.8q-1 .6-2-.2a1.6 1.6 0 0 1-.2-2.2L7.6 14"/>
+              <path d="M18 20.8q1 .6 2-.2a1.6 1.6 0 0 0 .2-2.2L16.4 14"/>
+              <path d="M12 2v4"/>
+            </svg>
+          </div>
+          <div class="label">Браузер</div>
+        </div>
+        <div class="hint">Ручная проверка интерфейса через плагин playwright</div>
+        <div class="state enabled">Включён по роли (тестировщик)</div>
+        <div class="mode">
+          <button class="active">Авто</button>
+          <button>Всегда</button>
+          <button class="off">Выкл</button>
+        </div>
+      </div>
+      <div class="card-item">
+        <div class="card-head">
+          <div class="icon specialty">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 12c-2-2.67-4-4-6-4a6 6 0 0 0 0 12c2 0 4-1.33 6-4Zm0 0c2 2.67 4 4 6 4a6 6 0 0 0 0-12c-2 0-4 1.33-6 4Z"/>
+            </svg>
+          </div>
+          <div class="label">История проектов</div>
+        </div>
+        <div class="hint">Diff, log, commit — у ролей, работающих с кодом</div>
+        <div class="state enabled">Включён по роли (исполнитель)</div>
+        <div class="mode">
+          <button class="active">Авто</button>
+          <button>Всегда</button>
+          <button class="off">Выкл</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="group-title">Опасные</div>
+    <div class="grid">
+      <div class="card-item danger">
+        <div class="card-head">
+          <div class="icon danger">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M3 6h18"/>
+              <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/>
+              <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>
+            </svg>
+          </div>
+          <div class="label">Удаление</div>
+        </div>
+        <div class="hint">Безвозвратное удаление файлов проектов и чатов</div>
+        <div class="state disabled">Привязка выключена</div>
+        <div class="mode">
+          <button>Авто</button>
+          <button>Всегда</button>
+          <button class="active off">Выкл</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Примеры состояний -->
+    <!--
+    <div class="card-item" style="margin-top: 16px;">
+      <div class="state-box">Загрузка…</div>
+    </div>
+    <div class="card-item" style="margin-top: 16px;">
+      <div class="state-box error">Не удалось загрузить список инструментов.</div>
+    </div>
+    <div class="card-item" style="margin-top: 16px;">
+      <div class="state-box">Ничего не найдено</div>
+    </div>
+    -->
+  </div>
+  <script>
+    function toggleTheme() {
+      document.documentElement.dataset.theme =
+        document.documentElement.dataset.theme === 'dark' ? '' : 'dark';
+    }
+  </script>
+</body>
+</html>

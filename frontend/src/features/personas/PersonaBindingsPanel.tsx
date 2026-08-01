@@ -19,6 +19,7 @@ import {
   fetchBindingTargets, useBindingLabels,
 } from './bindingMeta';
 import { Stepper, Crumb } from './stepperUi';
+import { ToolTargetPicker } from './ToolTargetPicker';
 
 // Вкладка «Умения» студии персоны (фича persona-bindings): карточки привязок
 // «источник + правило, когда им пользоваться». Семантика мгновенного сохранения
@@ -315,6 +316,32 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
       flash([created.id]);
     } catch (e) {
       showToast('Умения', e instanceof Error ? e.message : 'Не удалось добавить привязку.');
+    }
+  };
+
+  // Inline-переключатель режима в пикере инструментов (гибрид v1+v3): без привязки —
+  // создать с выбранным режимом; с привязкой — сменить режим; повторный клик по
+  // активному режиму — снять привязку (инструмент возвращается к дефолту персоны).
+  const setToolMode = async (target: BindingTarget, existing: PersonaBinding | undefined, mode: PersonaBindingMode) => {
+    try {
+      if (existing && existing.mode === mode) {
+        await api.personas.removeBinding(persona.id, existing.id);
+        setBindings(prev => (prev ?? []).filter(x => x.id !== existing.id));
+      } else if (existing) {
+        const updated = await api.personas.updateBinding(persona.id, existing.id, {
+          type: existing.type, target: existing.target, path: existing.path ?? undefined,
+          condition: existing.condition, mode,
+        });
+        setBindings(prev => (prev ?? []).map(x => x.id === existing.id ? updated : x));
+      } else {
+        const created = await api.personas.addBinding(persona.id, {
+          type: 'tool', target: target.id, condition: '', mode,
+        });
+        setBindings(prev => [...(prev ?? []), created]);
+      }
+    } catch (e) {
+      showToast('Умения', e instanceof Error ? e.message : 'Не удалось сохранить привязку.');
+      throw e;   // пикер по ошибке просто снимает pending
     }
   };
 
@@ -928,6 +955,12 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
             isMobile={isMobile}
             aiBusy={panelAiBusy}
             ownProjectId={persona.scope === 'project' ? persona.projectId : undefined}
+            toolPicker={{
+              personaId: persona.id,
+              bindings: list,
+              onSetMode: setToolMode,
+              onOpenRule: t => setPanel(p => p ? { ...p, step: 3, targetId: t.id, targetLabel: t.label, path: undefined } : p),
+            }}
             onChange={setPanel}
             onClose={() => { resetAiJob(panelCondKey); setPanel(null); }}
             onCommit={() => void commitPanel()}
@@ -965,7 +998,7 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
 }
 
 // === Инлайн-панель «Добавить привязку»: ① Тип → ② Цель → ③ Правило ===
-function AddPanel({ panel, accent, isMobile, aiBusy, ownProjectId, onChange, onClose, onCommit, onAiCondition }: {
+function AddPanel({ panel, accent, isMobile, aiBusy, ownProjectId, toolPicker, onChange, onClose, onCommit, onAiCondition }: {
   panel: AddPanelState;
   accent: string;
   isMobile: boolean;
@@ -973,6 +1006,13 @@ function AddPanel({ panel, accent, isMobile, aiBusy, ownProjectId, onChange, onC
   // Проект самой персоны (scope=project) — исключаем его из пикера projectPersonas/
   // projectTasks: обращаться к своей же команде/задачам через кросс-проектную привязку бессмысленно
   ownProjectId?: string;
+  // Контекст пикера инструментов (гибрид v1+v3): персона, её привязки и мгновенные мутации
+  toolPicker: {
+    personaId: string;
+    bindings: PersonaBinding[];
+    onSetMode: (target: BindingTarget, existing: PersonaBinding | undefined, mode: PersonaBindingMode) => Promise<void>;
+    onOpenRule: (target: BindingTarget) => void;
+  };
   onChange: (p: AddPanelState) => void;
   onClose: () => void;
   onCommit: () => void;
@@ -1022,7 +1062,7 @@ function AddPanel({ panel, accent, isMobile, aiBusy, ownProjectId, onChange, onC
       )}
 
       {panel.step === 2 && panel.type && (
-        <TargetPicker panel={panel} onChange={onChange} ownProjectId={ownProjectId} />
+        <TargetPicker panel={panel} onChange={onChange} ownProjectId={ownProjectId} toolPicker={toolPicker} />
       )}
 
       {panel.step === 3 && panel.type && (
@@ -1063,15 +1103,22 @@ function AddPanel({ panel, accent, isMobile, aiBusy, ownProjectId, onChange, onC
   );
 }
 
-// Шаг ② «Цель»: пикер по типу. project/knowledge/tool/skill — один список;
+// Шаг ② «Цель»: пикер по типу. project/knowledge/skill — один список; у tool —
+// свой ToolTargetPicker (группы, иконки, inline-режим);
 // notes — источник, затем «весь источник» или папка; projectPath — проект,
 // затем ручной ввод пути (mono, дерево в v1 не строим); projectPersonas — проект,
 // затем «вся команда» или конкретная персона; projectTasks — проект, затем
 // переключатель «Полный доступ / Только чтение».
-function TargetPicker({ panel, ownProjectId, onChange }: {
+function TargetPicker({ panel, ownProjectId, toolPicker, onChange }: {
   panel: AddPanelState;
   // Проект самой персоны — исключается из списка (нет смысла в кросс-привязке на себя)
   ownProjectId?: string;
+  toolPicker: {
+    personaId: string;
+    bindings: PersonaBinding[];
+    onSetMode: (target: BindingTarget, existing: PersonaBinding | undefined, mode: PersonaBindingMode) => Promise<void>;
+    onOpenRule: (target: BindingTarget) => void;
+  };
   onChange: (p: AddPanelState) => void;
 }) {
   const type = panel.type!;
@@ -1087,6 +1134,8 @@ function TargetPicker({ panel, ownProjectId, onChange }: {
   const notesSource = panel.notesSource ?? null;
 
   useEffect(() => {
+    // У инструментов свой пикер с собственной загрузкой (нужен personaId в запросе)
+    if (type === 'tool') return;
     let alive = true;
     setItems(null);
     setLoadError(false);
@@ -1095,6 +1144,23 @@ function TargetPicker({ panel, ownProjectId, onChange }: {
       .catch(() => { if (alive) { setItems([]); setLoadError(true); } });
     return () => { alive = false; };
   }, [catalogType, type, notesSource]);
+
+  // Инструменты — групповой пикер с иконками и inline-переключателем режима
+  if (type === 'tool') {
+    return (
+      <>
+        <Crumb onClick={() => onChange({ ...panel, step: 1, type: undefined, targetId: undefined, targetLabel: undefined, path: undefined, pathLabel: undefined, notesSource: null })}>
+          {BINDING_ICONS[type](13)} {BINDING_TYPE_META[type].name}
+        </Crumb>
+        <ToolTargetPicker
+          personaId={toolPicker.personaId}
+          bindings={toolPicker.bindings}
+          onSetMode={toolPicker.onSetMode}
+          onOpenRule={toolPicker.onOpenRule}
+        />
+      </>
+    );
+  }
 
   const q = query.trim().toLowerCase();
   const filtered = (items ?? [])

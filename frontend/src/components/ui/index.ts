@@ -25,6 +25,7 @@ export { ModalActions, useIsMobileModal } from './ModalActions';
 export { ConfirmDialog } from './ConfirmDialog';
 export { Field, FieldLabel, TextField, TextArea, IconField } from './Field';
 export { SegmentedControl } from './Segmented';
+export { InlineSegmented } from './InlineSegmented';
 export { IconSegmented } from './IconSegmented';
 export type { IconSegmentedOption } from './IconSegmented';
 export { Toggle } from './Toggle';

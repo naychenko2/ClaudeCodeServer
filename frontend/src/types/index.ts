@@ -1658,6 +1658,10 @@ export interface BindingTarget {
   label: string;
   hint?: string | null;
   meta?: string | null;
+  // Дефолт инструмента у конкретной персоны (только type=tool с personaId):
+  // включён ли без привязки и чем задан дефолт (настройки / пресет роли / системный)
+  defaultEnabled?: boolean | null;
+  defaultOrigin?: 'settings' | 'role' | null;
 }
 
 // Тело создания персоны (POST /api/personas). Большинство полей опциональны.

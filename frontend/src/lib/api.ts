@@ -780,10 +780,12 @@ export const api = {
         method: 'PUT', body: JSON.stringify({ bindings }),
       }),
     // Каталог целей для пикера: type = project | knowledge | notes | tool | skill;
-    // для notes с source= — папки внутри источника
-    bindingTargets: (type: string, source?: string) => {
+    // для notes с source= — папки внутри источника; для tool с personaId= —
+    // дефолтное состояние каждого инструмента у этой персоны (defaultEnabled/defaultOrigin)
+    bindingTargets: (type: string, source?: string, personaId?: string) => {
       const qs = new URLSearchParams({ type });
       if (source) qs.set('source', source);
+      if (personaId) qs.set('personaId', personaId);
       return request<BindingTarget[]>(`/personas/binding-targets?${qs}`);
     },
     // AI-формулировка условия «когда пользоваться» по содержимому источника (LLM, до ~60с)

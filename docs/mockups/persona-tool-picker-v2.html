@@ -1,0 +1,472 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Persona Tool Picker — v2 Active + Available</title>
+  <style>
+    :root {
+      --c-bg-main: #F4F0E8;
+      --c-bg-panel: #EDE7DC;
+      --c-bg-card: #FBF8F2;
+      --c-bg-white: #FFFFFF;
+      --c-bg-selected: #E8E1D4;
+      --c-bg-inset: #E7E0D2;
+      --c-text-heading: #2A251F;
+      --c-text-primary: #39332B;
+      --c-text-secondary: #756B5E;
+      --c-text-muted: #9A8F7E;
+      --c-on-accent: #FBF8F2;
+      --c-accent: #D97757;
+      --c-accent-light: #F4ECE1;
+      --c-border: #E0D7C8;
+      --c-border-light: #E8E1D4;
+      --c-success: #5E8B4E;
+      --c-success-bg: #E9F1E8;
+      --c-success-text: #3F7A4F;
+      --c-warning: #C9923E;
+      --c-warning-bg: #FBEFE0;
+      --c-warning-text: #8A6A28;
+      --c-danger: #B4452F;
+      --c-danger-bg: #FBF1EC;
+      --c-danger-text: #B4452F;
+      --c-danger-border: #F5C6BF;
+      --c-info: #3E7CA6;
+      --c-info-bg: #E7EFF5;
+      --c-plan: #6C5CB0;
+      --c-plan-light: #EEEBF8;
+      --c-plan-text: #4E4196;
+      --shadow-card: 0 2px 8px rgba(60, 50, 35, 0.05);
+      --shadow-focus: 0 0 0 3px rgba(217, 119, 87, 0.14);
+      font-family: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    }
+    [data-theme="dark"] {
+      --c-bg-main: #201C18;
+      --c-bg-panel: #272320;
+      --c-bg-card: #2E2A25;
+      --c-bg-white: #2E2A25;
+      --c-bg-selected: #38332D;
+      --c-bg-inset: #1B1815;
+      --c-text-heading: #F2ECE1;
+      --c-text-primary: #EDE6DB;
+      --c-text-secondary: #B3A897;
+      --c-text-muted: #8A8072;
+      --c-on-accent: #201C18;
+      --c-accent: #E38A6A;
+      --c-accent-light: #3A2E27;
+      --c-border: #3D3830;
+      --c-border-light: #34302A;
+      --c-success: #7CB86A;
+      --c-success-bg: #232E20;
+      --c-success-text: #8FCB79;
+      --c-warning: #E0AC5A;
+      --c-warning-bg: #322717;
+      --c-warning-text: #E7B96E;
+      --c-danger: #E8785E;
+      --c-danger-bg: #331F1B;
+      --c-danger-text: #EE8A72;
+      --c-danger-border: #5A302A;
+      --c-info: #5FA0CC;
+      --c-info-bg: #1E2A33;
+      --c-plan: #9385D8;
+      --c-plan-light: #2A2540;
+      --c-plan-text: #B0A4E6;
+      --shadow-card: 0 2px 10px rgba(0, 0, 0, 0.35);
+      --shadow-focus: 0 0 0 3px rgba(227, 138, 106, 0.24);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--c-bg-main);
+      color: var(--c-text-primary);
+      padding: 24px 16px;
+    }
+    .wrap { max-width: 900px; margin: 0 auto; }
+    .crumb {
+      font-size: 12px;
+      color: var(--c-text-secondary);
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .cols {
+      display: grid;
+      grid-template-columns: 1fr 300px;
+      gap: 16px;
+      align-items: start;
+    }
+    .card {
+      background: var(--c-bg-card);
+      border: 1px solid var(--c-border-light);
+      border-radius: 14px;
+      box-shadow: var(--shadow-card);
+      padding: 14px;
+    }
+    .search {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: var(--c-bg-white);
+      border: 1px solid var(--c-border);
+      border-radius: 10px;
+      padding: 0 12px;
+      height: 38px;
+      margin-bottom: 12px;
+    }
+    .search input {
+      border: none;
+      background: transparent;
+      flex: 1;
+      outline: none;
+      color: var(--c-text-heading);
+      font-size: 13px;
+      font-family: inherit;
+    }
+    .group-title {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--c-text-secondary);
+      margin: 16px 0 6px;
+    }
+    .row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      width: 100%;
+      padding: 9px 10px;
+      border-radius: 10px;
+      cursor: pointer;
+      transition: background 0.12s;
+      min-height: 48px;
+      border: 1px solid transparent;
+    }
+    .row:hover, .row:focus {
+      background: var(--c-bg-selected);
+      outline: none;
+    }
+    .row:focus-visible {
+      box-shadow: var(--shadow-focus);
+    }
+    .icon {
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      color: #fff;
+    }
+    .icon.base { background: var(--c-success); }
+    .icon.mcp { background: var(--c-info); }
+    .icon.workspace { background: var(--c-plan); }
+    .icon.specialty { background: var(--c-warning); }
+    .icon.danger { background: var(--c-danger); }
+    .body { flex: 1; min-width: 0; }
+    .label {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--c-text-heading);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .hint {
+      font-size: 11.5px;
+      color: var(--c-text-muted);
+      line-height: 1.3;
+    }
+    .badge {
+      font-size: 10px;
+      font-weight: 600;
+      padding: 2px 7px;
+      border-radius: 8px;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .badge.auto { background: var(--c-accent-light); color: var(--c-accent); }
+    .badge.always { background: var(--c-info-bg); color: var(--c-info); }
+    .badge.off { background: var(--c-bg-selected); color: var(--c-text-muted); }
+    .badge.default { background: var(--c-success-bg); color: var(--c-success-text); }
+    .active-head {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--c-text-heading);
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .active-count {
+      font-size: 11px;
+      color: var(--c-text-muted);
+      font-weight: 500;
+    }
+    .active-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 10px;
+      border-radius: 10px;
+      background: var(--c-bg-white);
+      border: 1px solid var(--c-border);
+      margin-bottom: 8px;
+      cursor: pointer;
+      transition: background 0.12s;
+    }
+    .active-item:hover, .active-item:focus {
+      background: var(--c-bg-selected);
+      outline: none;
+    }
+    .active-item:focus-visible {
+      box-shadow: var(--shadow-focus);
+    }
+    .active-item.danger {
+      border-color: var(--c-danger-border);
+      background: var(--c-danger-bg);
+    }
+    .active-item .label { font-size: 12.5px; }
+    .active-empty {
+      font-size: 12px;
+      color: var(--c-text-muted);
+      text-align: center;
+      padding: 18px 8px;
+      border: 1px dashed var(--c-border);
+      border-radius: 10px;
+    }
+    .theme {
+      position: fixed;
+      top: 12px;
+      right: 12px;
+      background: var(--c-bg-panel);
+      border: 1px solid var(--c-border);
+      border-radius: 8px;
+      padding: 6px 10px;
+      font-size: 12px;
+      cursor: pointer;
+      color: var(--c-text-secondary);
+    }
+    .state-box {
+      padding: 14px;
+      font-size: 12.5px;
+      color: var(--c-text-muted);
+      text-align: center;
+    }
+    .state-box.error { color: var(--c-danger-text); }
+    @media (max-width: 720px) {
+      .cols {
+        grid-template-columns: 1fr;
+      }
+      .active-col {
+        order: -1;
+      }
+      .label {
+        white-space: normal;
+        overflow: visible;
+        text-overflow: unset;
+      }
+      .hint {
+        white-space: normal;
+        overflow: visible;
+      }
+    }
+  </style>
+</head>
+<body>
+  <button class="theme" onclick="toggleTheme()">Светлая / тёмная</button>
+  <div class="wrap">
+    <div class="crumb"><span>←</span> Инструмент</div>
+    <div class="cols">
+      <div class="card catalog-col">
+        <div class="search">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="8"/>
+            <path d="m21 21-4.3-4.3"/>
+          </svg>
+          <input placeholder="Найти инструмент…" />
+        </div>
+
+        <div class="group-title">Базовые</div>
+        <div class="row" tabindex="0">
+          <div class="icon base">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="m9 11 3 3L22 4"/>
+              <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+            </svg>
+          </div>
+          <div class="body">
+            <div class="label">Задачи</div>
+            <div class="hint">Система задач: списки дел, напоминания, доска</div>
+          </div>
+        </div>
+        <div class="row" tabindex="0">
+          <div class="icon base">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 20h9"/>
+              <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>
+            </svg>
+          </div>
+          <div class="body">
+            <div class="label">Заметки</div>
+            <div class="hint">База знаний заметок: markdown-vault</div>
+          </div>
+        </div>
+        <div class="row" tabindex="0">
+          <div class="icon base">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/>
+              <path d="M2 12h20"/>
+              <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+            </svg>
+          </div>
+          <div class="body">
+            <div class="label">Веб-поиск</div>
+            <div class="hint">Поиск и чтение страниц в интернете</div>
+          </div>
+          <span class="badge off">выкл</span>
+        </div>
+
+        <div class="group-title">MCP-серверы</div>
+        <div class="row" tabindex="0">
+          <div class="icon mcp">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
+              <circle cx="9" cy="7" r="4"/>
+              <path d="M22 21v-2a4 4 0 0 0-3-3.87"/>
+              <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+            </svg>
+          </div>
+          <div class="body">
+            <div class="label">Персоны</div>
+            <div class="hint">CRUD и @упоминания</div>
+          </div>
+          <span class="badge auto">привязка: авто</span>
+        </div>
+        <div class="row" tabindex="0">
+          <div class="icon mcp">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/>
+            </svg>
+          </div>
+          <div class="body">
+            <div class="label">Консультации персон</div>
+            <div class="hint">Сабагенты и их память</div>
+          </div>
+        </div>
+        <div class="row" tabindex="0">
+          <div class="icon mcp">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="18" cy="5" r="3"/>
+              <circle cx="6" cy="12" r="3"/>
+              <circle cx="18" cy="19" r="3"/>
+              <path d="M8.59 13.51 15.42 17.49"/>
+              <path d="m15.41 6.51-6.82 3.98"/>
+            </svg>
+          </div>
+          <div class="body">
+            <div class="label">Граф кода</div>
+            <div class="hint">Граф и выжимка</div>
+          </div>
+        </div>
+
+        <div class="group-title">Рабочее пространство</div>
+        <div class="row" tabindex="0">
+          <div class="icon workspace">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9L14 11"/>
+              <path d="M2 14h12"/>
+            </svg>
+          </div>
+          <div class="body">
+            <div class="label">Файлы проектов</div>
+            <div class="hint">Чтение и правка файлов любого проекта</div>
+          </div>
+        </div>
+
+        <div class="group-title">Опасные</div>
+        <div class="row" tabindex="0">
+          <div class="icon danger">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M3 6h18"/>
+              <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/>
+              <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>
+            </svg>
+          </div>
+          <div class="body">
+            <div class="label">Удаление (опасно)</div>
+            <div class="hint">files_delete / chats_delete</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card active-col">
+        <div class="active-head">
+          Уже подключено
+          <span class="active-count">3 привязки</span>
+        </div>
+        <div class="active-item" tabindex="0">
+          <div class="icon mcp">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
+              <circle cx="9" cy="7" r="4"/>
+              <path d="M22 21v-2a4 4 0 0 0-3-3.87"/>
+              <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+            </svg>
+          </div>
+          <div class="body">
+            <div class="label">Персоны</div>
+          </div>
+          <span class="badge auto">авто</span>
+        </div>
+        <div class="active-item danger" tabindex="0">
+          <div class="icon danger">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M3 6h18"/>
+              <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/>
+              <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>
+            </svg>
+          </div>
+          <div class="body">
+            <div class="label">Удаление (опасно)</div>
+          </div>
+          <span class="badge off">выкл</span>
+        </div>
+        <div class="active-item" tabindex="0">
+          <div class="icon base">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 20h9"/>
+              <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>
+            </svg>
+          </div>
+          <div class="body">
+            <div class="label">Заметки</div>
+          </div>
+          <span class="badge always">всегда</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Примеры состояний -->
+    <!--
+    <div class="card" style="margin-top: 16px;">
+      <div class="state-box">Загрузка…</div>
+    </div>
+    <div class="card" style="margin-top: 16px;">
+      <div class="state-box error">Не удалось загрузить список инструментов.</div>
+    </div>
+    <div class="card" style="margin-top: 16px;">
+      <div class="state-box">Ничего не найдено</div>
+    </div>
+    -->
+  </div>
+  <script>
+    function toggleTheme() {
+      document.documentElement.dataset.theme =
+        document.documentElement.dataset.theme === 'dark' ? '' : 'dark';
+    }
+  </script>
+</body>
+</html>

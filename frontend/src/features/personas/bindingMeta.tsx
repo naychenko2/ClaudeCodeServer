@@ -124,11 +124,11 @@ export function invalidateBindingTargets(type: string): void {
   }
 }
 
-export function fetchBindingTargets(type: string, source?: string): Promise<BindingTarget[]> {
-  const key = source ? `${type}|${source}` : type;
+export function fetchBindingTargets(type: string, source?: string, personaId?: string): Promise<BindingTarget[]> {
+  const key = [type, source, personaId].filter(Boolean).join('|');
   let p = targetsCache.get(key);
   if (!p) {
-    p = api.personas.bindingTargets(type, source).catch(err => {
+    p = api.personas.bindingTargets(type, source, personaId).catch(err => {
       targetsCache.delete(key);   // не кэшируем ошибку
       throw err;
     });

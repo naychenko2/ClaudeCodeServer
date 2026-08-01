@@ -1052,8 +1052,8 @@ export const api = {
     },
     list: (projectId: string, path = '') =>
       request<FileEntry[]>(`/projects/${projectId}/files?path=${encodeURIComponent(path)}`),
-    tree: (projectId: string, path = '') =>
-      request<FileEntry[]>(`/projects/${projectId}/files/tree?path=${encodeURIComponent(path)}`),
+    tree: (projectId: string, path = '', showHidden?: boolean) =>
+      request<FileEntry[]>(`/projects/${projectId}/files/tree?path=${encodeURIComponent(path)}${showHidden ? '&showHidden=true' : ''}`),
     search: (projectId: string, q: string) =>
       request<FileEntry[]>(`/projects/${projectId}/files/search?q=${encodeURIComponent(q)}`),
     getContent: (projectId: string, path: string) =>

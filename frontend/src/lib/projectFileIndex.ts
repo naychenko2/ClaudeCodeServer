@@ -25,7 +25,7 @@ function load(projectId: string) {
   const at = _checkedAt.get(projectId);
   if (at != null && Date.now() - at < TTL_MS) return;
   _inFlight.add(projectId);
-  api.files.tree(projectId)
+  api.files.tree(projectId, '', true)
     .then(entries => {
       const idx = new Map<string, string>();
       for (const e of entries) if (!e.isDirectory) idx.set(e.path.toLowerCase(), e.path);

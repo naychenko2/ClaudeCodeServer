@@ -240,6 +240,8 @@ builder.Services.AddSingleton<SkillGenerationService>();
 builder.Services.AddSingleton<FileWatcherService>();
 builder.Services.AddSingleton<ConnectionDiagnostics>();
 builder.Services.AddSingleton<ChatHistoryService>();
+builder.Services.AddSingleton<PromptSnapshotStore>();
+builder.Services.AddSingleton<PromptAuditService>();
 builder.Services.AddSingleton<WorkspaceKnowledgeStore>();
 builder.Services.AddSingleton<FalCostService>();
 builder.Services.AddSingleton<FalAccountService>();

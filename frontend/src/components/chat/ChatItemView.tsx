@@ -7,11 +7,11 @@ import type { Mode } from '../../lib/modes';
 import { C, FONT, SHADOW, R } from '../../lib/design';
 import { useModelLabel } from '../../lib/models';
 import { formatPostTime, formatPostTimeFull } from '../../lib/postTime';
-import { relPath, stripRoot } from '../../lib/paths';
+import { relPathTree, stripRootTree } from '../../lib/paths';
 import { hasUltraworkKeyword } from '../../lib/ultrawork';
 import { detectTeamMechanic, describeTeamTurn } from '../../features/team/teamMechanics';
 import { TeamTurnRequest } from '../../features/team/TeamTurnCard';
-import { ChatProjectContext, PersonaContext, useAssistantName } from './contexts';
+import { ChatProjectContext, ChatTreePathContext, PersonaContext, useAssistantName } from './contexts';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { AGENT_COLORS } from '../AgentSelector';
 import { MessageOriginChip } from '../MessageOriginChip';
@@ -108,15 +108,16 @@ function PermissionRequestView({ item, online, onAllow, onDeny, onAllowAlways }:
 }) {
   const [open, setOpen] = useState(false);
   const project = useContext(ChatProjectContext);
+  const treePath = useContext(ChatTreePathContext);
   const asstName = useAssistantName();
 
   // Что именно собирается выполнить Claude — команда/путь/аргументы
   const detail = (() => {
     const inp = item.toolInput as Record<string, unknown> | null;
     if (!inp) return '';
-    if (typeof inp.command === 'string') return stripRoot(inp.command, project?.rootPath);
-    if (typeof inp.file_path === 'string') return relPath(inp.file_path, project?.rootPath);
-    if (typeof inp.path === 'string') return relPath(inp.path, project?.rootPath);
+    if (typeof inp.command === 'string') return stripRootTree(inp.command, project?.rootPath, treePath);
+    if (typeof inp.file_path === 'string') return relPathTree(inp.file_path, project?.rootPath, treePath);
+    if (typeof inp.path === 'string') return relPathTree(inp.path, project?.rootPath, treePath);
     try { const s = JSON.stringify(inp, null, 2); return s === '{}' ? '' : s; } catch { return ''; }
   })();
   // Консольная команда (Bash/shell) → тёмный «терминал»; прочее (путь файла и т.п.) → светлая панель
@@ -225,7 +226,8 @@ export const FileChangedRow = memo(function FileChangedRow({ item, online, onOpe
   onRevert?: (path: string) => void;
 }) {
   const project = useContext(ChatProjectContext);
-  const relativePath = relPath(item.path, project?.rootPath);
+  const treePath = useContext(ChatTreePathContext);
+  const relativePath = relPathTree(item.path, project?.rootPath, treePath);
   return (
     <div style={{ padding: '3px 0', display: 'flex', alignItems: 'center', gap: 10 }}>
       <span style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0, color: C.accent }}>
@@ -692,6 +694,7 @@ export function ProviderLimitCard({ item, online, onMigrate }: {
 
 export const ChatItemView = memo(function ChatItemView({ item, index, online, streaming, isLastResult, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, onMigrateProvider, taskPlan, agentActivity, agentRenderChild, turnBoundaryKind }: ItemProps) {
   const project = useContext(ChatProjectContext);
+  const treePath = useContext(ChatTreePathContext);
   const persona = useContext(PersonaContext);
   const asstName = useAssistantName();
   // Подписка на стор персон: авторские аватары реплик (personaId) обновятся после загрузки стора
@@ -792,7 +795,7 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
                     padding: '1px 6px', fontSize: 11,
                   }}>
                     {/* В проекте — путь относительно корня; в чате без проекта — только имя файла */}
-                    {project ? relPath(p, project.rootPath) : (p.replace(/\\/g, '/').split('/').pop() ?? p)}
+                    {project ? relPathTree(p, project.rootPath, treePath) : (p.replace(/\\/g, '/').split('/').pop() ?? p)}
                   </span>
                 ))}
               </div>
@@ -995,7 +998,7 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       );
 
     case 'file_changed': {
-      const fileName = relPath(item.path, project?.rootPath);
+      const fileName = relPathTree(item.path, project?.rootPath, treePath);
       // Заметка (notes/*.md): подпись «Заметка · …», клик ведёт в раздел «Заметки»
       const isNote = /(^|\/)notes\/[^/]*\.md$/i.test(item.path);
       const noteTitle = item.path.split(/[\\/]/).pop()!.replace(/\.md$/i, '');

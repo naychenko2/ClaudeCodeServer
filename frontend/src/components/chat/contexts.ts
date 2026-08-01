@@ -4,6 +4,12 @@ import type { Persona, TeamPlanDecision } from '../../types';
 // Контекст текущего проекта — для резолва локальных путей картинок в сообщениях
 export const ChatProjectContext = createContext<{ id: string; rootPath: string } | null>(null);
 
+// Корень активного git-дерева (worktree) хода/чата — пути в ленте сначала пробуют
+// относительность к нему (короче и без префикса .claude/worktrees/…), и только
+// при неудаче — к корню проекта. Провайдится ChatPanel (turnTree.path ?? session.worktreePath);
+// null — дерева нет, пути считаются как раньше, только от rootPath.
+export const ChatTreePathContext = createContext<string | null>(null);
+
 // Открыть файл проекта на просмотр — тем же путём, что дерево и карточки инструментов.
 // Контекстом, а не пропом: MarkdownContent сидит глубоко в ленте, а ссылки на файлы
 // в тексте ассистента нужны в каждом её отпрыске.

@@ -32,7 +32,7 @@ import { VAR_SHIFT, VAR_W, useChatGutter } from '../lib/chatGutter';
 import { setChatContext, AI_RECOMPUTE_EVENT } from '../lib/ai/chatContext';
 import { ChatHeaderBar, type CostStats, type FalCostStats } from './chat/ChatHeaderBar';
 import { computeGlifGenStats } from './chat/glifStats';
-import { ChatProjectContext, ChatOpenFileContext, FalCostContext, GlifCostContext, AssistantNameContext, MediaVisibilityContext, PersonaContext, TeamPlanContext, TeamEscalationContext, type TeamPlanChatContext, type TeamEscalationChatContext } from './chat/contexts';
+import { ChatProjectContext, ChatTreePathContext, ChatOpenFileContext, FalCostContext, GlifCostContext, AssistantNameContext, MediaVisibilityContext, PersonaContext, TeamPlanContext, TeamEscalationContext, type TeamPlanChatContext, type TeamEscalationChatContext } from './chat/contexts';
 import { WaitingIndicator } from './ui/WaitingIndicator';
 import { Modal, ModalActions } from './ui';
 import { ChatEmptyState } from './chat/EmptyState';
@@ -784,6 +784,9 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   // Индексы session_started, видимые в ленте разделителем «ход в дереве агента»/«ход
   // вернулся в проект» (остальные session_started прозрачны для группировки, см. isInvisible)
   const turnBoundaries = useMemo(() => sessionStartedBoundaries(items), [items]);
+  // Активный корень дерева для показа путей: дерево хода сильнее дерева чата
+  // (см. ChatTreePathContext) — приоритет как у самого turnTree/git-бара.
+  const treePathCtx = useMemo(() => turnTree?.path ?? session.worktreePath ?? null, [turnTree, session.worktreePath]);
 
   // Активный workflow — сырой прогресс фаз (чистая функция от ленты, без мутаций)
   const rawWorkflowInfo = useMemo(() => {
@@ -1327,7 +1330,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
           )
         )}
 
-        <FalCostContext.Provider value={falCostByRequest}><GlifCostContext.Provider value={glifCostByJob}><MediaVisibilityContext.Provider value={mediaVisibility}><ChatProjectContext.Provider value={projectCtx}><ChatOpenFileContext.Provider value={onOpenFile ?? null}><TeamPlanContext.Provider value={teamPlanCtx}><TeamEscalationContext.Provider value={teamEscalationCtx}>{renderedItems}</TeamEscalationContext.Provider></TeamPlanContext.Provider></ChatOpenFileContext.Provider></ChatProjectContext.Provider></MediaVisibilityContext.Provider></GlifCostContext.Provider></FalCostContext.Provider>
+        <FalCostContext.Provider value={falCostByRequest}><GlifCostContext.Provider value={glifCostByJob}><MediaVisibilityContext.Provider value={mediaVisibility}><ChatProjectContext.Provider value={projectCtx}><ChatTreePathContext.Provider value={treePathCtx}><ChatOpenFileContext.Provider value={onOpenFile ?? null}><TeamPlanContext.Provider value={teamPlanCtx}><TeamEscalationContext.Provider value={teamEscalationCtx}>{renderedItems}</TeamEscalationContext.Provider></TeamPlanContext.Provider></ChatOpenFileContext.Provider></ChatTreePathContext.Provider></ChatProjectContext.Provider></MediaVisibilityContext.Provider></GlifCostContext.Provider></FalCostContext.Provider>
 
         {online && showWaiting && (
           // Текст индикатора ставим по левому краю чата (как пузыри), а домик уезжает

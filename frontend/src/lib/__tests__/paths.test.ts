@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { toRelative, relPath, stripRoot } from '../paths';
+import { toRelative, relPath, stripRoot, relPathTree, stripRootTree } from '../paths';
 
 const ROOT = 'C:\\Sources\\MyProject';
 
@@ -108,5 +108,43 @@ describe('stripRoot', () => {
   it('без корня — текст без изменений', () => {
     expect(stripRoot('echo hi', ROOT)).toBe('echo hi');
     expect(stripRoot('echo hi')).toBe('echo hi');
+  });
+});
+
+// --- relPathTree: приоритет «дерево → корень проекта» ---
+
+const TREE = 'C:\\Sources\\MyProject\\.claude\\worktrees\\wt-a';
+
+describe('relPathTree', () => {
+  it('файл внутри дерева → относительный к дереву, без префикса .claude/worktrees/…', () => {
+    expect(relPathTree('C:\\Sources\\MyProject\\.claude\\worktrees\\wt-a\\src\\app.ts', ROOT, TREE)).toBe('src/app.ts');
+  });
+
+  it('файл вне дерева, но внутри корня → относительный к корню', () => {
+    expect(relPathTree('C:\\Sources\\MyProject\\README.md', ROOT, TREE)).toBe('README.md');
+  });
+
+  it('дерева нет (null) → как relPath к корню', () => {
+    expect(relPathTree('C:\\Sources\\MyProject\\src\\app.ts', ROOT, null)).toBe('src/app.ts');
+  });
+
+  it('файл вне корня и вне дерева — без изменений', () => {
+    expect(relPathTree('D:\\Other\\file.ts', ROOT, TREE)).toBe('D:\\Other\\file.ts');
+  });
+});
+
+// --- stripRootTree: приоритет «дерево → корень проекта» для произвольного текста ---
+
+describe('stripRootTree', () => {
+  it('путь дерева в тексте → остаток относительно дерева', () => {
+    expect(stripRootTree(`cat ${TREE}\\src\\a.ts`, ROOT, TREE)).toBe('cat src\\a.ts');
+  });
+
+  it('путь корня (вне дерева) в тексте → остаток относительно корня', () => {
+    expect(stripRootTree(`cat ${ROOT}\\README.md`, ROOT, TREE)).toBe('cat README.md');
+  });
+
+  it('дерева нет (null) — ведёт себя как stripRoot', () => {
+    expect(stripRootTree(`cat ${ROOT}\\a.ts`, ROOT, null)).toBe('cat a.ts');
   });
 });

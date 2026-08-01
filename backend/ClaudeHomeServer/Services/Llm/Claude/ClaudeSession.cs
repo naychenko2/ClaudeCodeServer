@@ -122,6 +122,9 @@ public class ClaudeSession : ILlmSessionAdapter
         public string? TurnMcpPath { get; init; }
         // turnId запуска — по нему pid-файл прогона в песочнице (Kill контейнерного pgid)
         public string? LaunchTurnId { get; init; }
+        // Снимок промпта, с которым прогон СТАРТОВАЛ. Ходы, доигрывающиеся в этом же процессе,
+        // ссылаются на него (inheritedFromId): их собственный промпт модели не уходил.
+        public string? PromptSnapshotId { get; init; }
         public Task? ReaderTask { get; set; }
         public Task<string>? StderrTask { get; set; }
         // Ход завершён (result без parent_tool_use_id получен); между ходами true.
@@ -285,6 +288,15 @@ public class ClaudeSession : ILlmSessionAdapter
     private readonly Func<string, Task<string?>>? _bindingsProvider;
     // Per-ход slice top-10 god-nodes Code Graph (ADR вариант A): null — без rootPath/фичи
     private readonly Func<string?, Task<string?>>? _codeGraphProvider;
+    // Снимок промпта хода: черновик → id записанного снимка. null — снимки не ведутся.
+    private readonly Func<PromptSnapshotDraft, string?>? _promptSnapshotSink;
+    // Дозапись в снимок состава инструментов из system/init (он приходит после старта)
+    private readonly Action<string, IReadOnlyList<string>, IReadOnlyList<McpServerInfo>>? _promptSnapshotToolsSink;
+    // Корень профиля CLI этого хода (CLAUDE_CONFIG_DIR) — для блока «слой CLI»
+    private readonly string? _cliConfigRoot;
+    // Id снимка текущего хода: пишет поток хода (RunTurnAsync), читает поток stdout-ридера,
+    // дописывающий в снимок состав инструментов из system/init. Отсюда volatile.
+    private volatile string? _currentSnapshotId;
     // MCP-сервер персон: CRUD из любого чата + @упоминания/persona_ask
     private readonly PersonasMcpContext? _personasMcp;
     // MCP-сервер рабочего пространства: проекты/файлы/знания/поиск владельца
@@ -360,6 +372,9 @@ public class ClaudeSession : ILlmSessionAdapter
         _personaRecallProvider = context.PersonaRecallProvider;
         _bindingsProvider = context.BindingsProvider;
         _codeGraphProvider = context.CodeGraphProvider;
+        _promptSnapshotSink = context.PromptSnapshotSink;
+        _promptSnapshotToolsSink = context.PromptSnapshotToolsSink;
+        _cliConfigRoot = context.CliConfigRoot;
         _personasMcp = context.PersonasMcp;
         _workspaceMcp = context.WorkspaceMcp;
         _notificationsMcp = context.NotificationsMcp;
@@ -395,7 +410,11 @@ public class ClaudeSession : ILlmSessionAdapter
     // в сигнатуру прогона (сам путь и содержимое меняются каждый ход: новый файл, свежий JWT)
     // turnText в параметрах больше нет: текст хода не имеет права влиять на состав инструментов
     // (гейт WriteIntentGate менял его между ходами → перезапуск процесса со всеми MCP)
-    private (string? Path, string ServerKeys) BuildTurnMcpConfig(string? datasetId, PersonaAgentsContext? personaAgents = null)
+    // ServerKeys — строка сигнатуры («ключ:отпечаток-состава»), НЕ список серверов: отпечаток
+    // сам содержит запятые, парсить его нельзя. ServerNames — плоский список ключей для
+    // показа человеку (снимок промпта хода).
+    private (string? Path, string ServerKeys, IReadOnlyList<string> ServerNames) BuildTurnMcpConfig(
+        string? datasetId, PersonaAgentsContext? personaAgents = null)
     {
         var tasksServerPath = _tasksMcp is not null ? MapMcpPath(TasksServerLocator.FindTasksServerPath()) : null;
         var hasTasks = tasksServerPath is not null;
@@ -422,7 +441,7 @@ public class ClaudeSession : ILlmSessionAdapter
         var userServers = LoadUserScopeMcpServers();
         if (!hasTasks && !hasNotes && !hasMemory && !hasPersonas && !hasWorkspace && !hasNotifications
             && !hasWidgets && !hasCodeGraph && !hasDataset && !hasModules && !hasFalAi && !hasGlif && userServers is null
-            && !(hasConsultants && memoryServerPath is not null)) return (null, "");
+            && !(hasConsultants && memoryServerPath is not null)) return (null, "", []);
 
         try
         {
@@ -836,7 +855,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 }
             }
 
-            if (servers.Count == 0) return (null, "");
+            if (servers.Count == 0) return (null, "", []);
             var combined = new System.Text.Json.Nodes.JsonObject { ["mcpServers"] = servers };
             // HostTempDir среды: для песочницы это bind-mount — процесс claude увидит файл
             var tmpPath = Path.Combine(_launcher.HostTempDir, $"claude-mcp-{Guid.NewGuid():N}.json");
@@ -845,14 +864,15 @@ public class ClaudeSession : ILlmSessionAdapter
             // (PERSONAS_WRITE/MENTIONS, WORKSPACE_WRITE/секции, TASKS_EXECUTE) меняет сигнатуру
             // запуска → живой процесс доживания не переиспользуется, инструменты поднимаются
             return (tmpPath, string.Join(",", servers
-                .Select(kv => shapes.TryGetValue(kv.Key, out var shp) ? $"{kv.Key}:{shp}" : kv.Key)
-                .OrderBy(k => k, StringComparer.Ordinal)));
+                    .Select(kv => shapes.TryGetValue(kv.Key, out var shp) ? $"{kv.Key}:{shp}" : kv.Key)
+                    .OrderBy(k => k, StringComparer.Ordinal)),
+                servers.Select(kv => kv.Key).OrderBy(k => k, StringComparer.Ordinal).ToList());
         }
         catch (Exception ex)
         {
             // Без лога сессия молча пойдёт без MCP-серверов (tasks/dify) — обязательно сообщаем
             Console.Error.WriteLine($"[ClaudeSession] Не удалось собрать MCP-конфиг хода, используется базовый конфиг: {ex.Message}");
-            return (null, "");
+            return (null, "", []);
         }
     }
 
@@ -1457,7 +1477,7 @@ public class ClaudeSession : ILlmSessionAdapter
         // MCP-конфиг: создаём каждый ход с актуальным dataset id (мог появиться после создания сессии)
         var currentWk = _wkStore?.GetByPath(_rootPath);
         var currentDatasetId = currentWk?.DifyDatasetId;
-        var (turnMcpPath, mcpServerKeys) = BuildTurnMcpConfig(currentDatasetId, personaAgents);
+        var (turnMcpPath, mcpServerKeys, mcpServerNames) = BuildTurnMcpConfig(currentDatasetId, personaAgents);
         var effectiveMcpConfig = turnMcpPath ?? _mcpConfigPath;
         if (!string.IsNullOrWhiteSpace(effectiveMcpConfig) && File.Exists(effectiveMcpConfig))
         {
@@ -1499,14 +1519,44 @@ public class ClaudeSession : ILlmSessionAdapter
         // (смена собеседника посреди доживания = несовместимый ход → новый процесс)
         string? personaLayerPrompt = null;
 
+        // Секции промпта хода — нужны ниже, при записи снимка «что ушло модели»
+        // (снимок пишется уже после развилки same-process, когда известно, применён ли он)
+        List<PromptSectionDto> sections = [];
+
         // Системный промпт: пересчитываем и передаём КАЖДЫЙ ход. Ход в новом процессе
         // (claude --print --resume) получает его через --append-system-prompt — тот не
         // сохраняется в транскрипте сессии: не передать → инструкции (fal-ai/запрет ASCII,
         // Dify, теги) пропадут. Same-process ход промпт живого процесса НЕ обновляет —
         // recall/подсказки на нём остаются со старта прогона (мягкая деградация).
         {
-            var basePrompt = ProjectManager.BuildSystemPrompt(
-                _rawSystemPrompt, currentDatasetId != null, currentWk?.DocumentTags);
+            // Секции — единственный источник правды: из этого списка собирается и текст для
+            // --append-system-prompt (TurnPromptAssembler.Combine), и снимок «что ушло модели»
+            // (кнопка под постом). Пустые куски список игнорирует — как игнорировала их
+            // прежняя склейка «пусто ? кусок : накопленное + \n\n + кусок».
+            // stable=false — кусок пересчитывается под текст хода (recall, привязки, граф):
+            // такие ломают переиспользование кэша префикса, и в UI это видно.
+            // group — чья это часть: по ней UI считает, во сколько обходится персона.
+            void Add(string key, string title, string? text, bool stable = true, string group = "misc")
+            {
+                if (!string.IsNullOrWhiteSpace(text))
+                    sections.Add(new PromptSectionDto(key, title, text, Stable: stable, Group: group));
+            }
+
+            // Системный промпт проекта — теми же частями, что показывает карточка проекта
+            // (/effective-prompt): встроенная константа, промпт проекта, автодополнения Dify.
+            // Индекс в ключе разводит две auto-части (блок Dify и инструкция по тегам).
+            var partIndex = 0;
+            foreach (var part in ProjectManager.GetSystemPromptParts(
+                         _rawSystemPrompt, currentDatasetId != null, currentWk?.DocumentTags))
+            {
+                var partTitle = part.Kind switch
+                {
+                    "builtin" => "Встроенный промпт продукта",
+                    "user" => "Промпт проекта",
+                    _ => "Автодополнение промпта (Dify, теги)",
+                };
+                Add($"project-{part.Kind}-{partIndex++}", partTitle, part.Content, group: "project");
+            }
 
             // Подсказка про AskUserQuestion — только на интерактивном ходу, где на карточку
             // есть кому ответить: не исполнитель задачи, не ход правила автоматизации персоны
@@ -1519,9 +1569,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     "Если нужно уточнить что-то у пользователя и у вопроса есть 2–4 осмысленных варианта ответа — " +
                     "задай его инструментом AskUserQuestion (рекомендуемый вариант первым) вместо вопроса текстом: " +
                     "он покажет пользователю кнопки для выбора. Открытый вопрос без осмысленных вариантов — как обычно, текстом.";
-                basePrompt = string.IsNullOrWhiteSpace(basePrompt)
-                    ? askHint
-                    : basePrompt + "\n\n" + askHint;
+                Add("ask-question", "Подсказка про AskUserQuestion", askHint);
             }
 
             // Подсказка про систему задач — только когда tasks-server подключён
@@ -1561,9 +1609,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     "tasks_update, tasks_complete, tasks_delete, tasks_add_subtask, tasks_toggle_subtask, tasks_board_columns). " + scope + " " +
                     "Когда пользователь просит создать/найти/изменить задачу, напоминание или список дел — используй эти инструменты, " +
                     "а не файлы или собственный список. Даты — в формате YYYY-MM-DD, время HH:MM." + columnsHint + executeHint + personaExecHint + resultHint + crossProjectHint;
-                basePrompt = string.IsNullOrWhiteSpace(basePrompt)
-                    ? tasksHint
-                    : basePrompt + "\n\n" + tasksHint;
+                Add("mcp-tasks", "Подсказка про задачи (mcp__tasks__*)", tasksHint, group: "mcp");
             }
 
             // Подсказка про базу заметок — только когда notes-server подключён
@@ -1590,9 +1636,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     "Связывай заметки друг с другом через [[Заголовок другой заметки]] — по этим ссылкам строится граф знаний. " +
                     "Когда пользователь просит записать/законспектировать/связать мысль или найти по заметкам — используй эти инструменты." +
                     annotationsHint;
-                basePrompt = string.IsNullOrWhiteSpace(basePrompt)
-                    ? notesHint
-                    : basePrompt + "\n\n" + notesHint;
+                Add("mcp-notes", "Подсказка про заметки (mcp__notes__*)", notesHint, group: "mcp");
             }
 
             // Подсказка про виджеты — только когда widgets-server подключён
@@ -1608,9 +1652,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     "CSS-переменные var(--cc-bg), var(--cc-text), var(--cc-accent), var(--cc-border), var(--cc-muted). " +
                     "Верстай адаптивно: лента бывает узкой (320px). Виджет уже показан пользователю — не пересказывай " +
                     "его содержимое текстом, достаточно короткого комментария.";
-                basePrompt = string.IsNullOrWhiteSpace(basePrompt)
-                    ? widgetsHint
-                    : basePrompt + "\n\n" + widgetsHint;
+                Add("mcp-widgets", "Подсказка про виджеты (widget_show)", widgetsHint, group: "mcp");
             }
 
             // Подсказка про показ картинок — только у чата с проектом: локальный путь фронт
@@ -1633,9 +1675,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     "это показать её СЕБЕ, в ленте пользователя она так не появится; единственный способ показать " +
                     "ему — markdown-картинка на файл внутри проекта. Читай изображение в свой контекст, только если " +
                     "тебе самому нужно его рассмотреть: крупный файл дорого стоит и раздувает контекст.";
-                basePrompt = string.IsNullOrWhiteSpace(basePrompt)
-                    ? imagesHint
-                    : basePrompt + "\n\n" + imagesHint;
+                Add("images", "Подсказка про показ картинок", imagesHint, group: "project");
             }
 
             // Манифест recall (F3): что персона подтянула в этот ход — заметки + память.
@@ -1649,10 +1689,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 RecallBlock? recallBlock = null;
                 try { recallBlock = await _recallProvider(text); }
                 catch { /* recall не должен ронять ход */ }
-                if (!string.IsNullOrWhiteSpace(recallBlock?.Text))
-                    basePrompt = string.IsNullOrWhiteSpace(basePrompt)
-                        ? recallBlock.Text
-                        : basePrompt + "\n\n" + recallBlock.Text;
+                Add("recall-notes", "Auto-recall заметок", recallBlock?.Text, stable: false, group: "recall");
                 if (recallBlock?.Items.Count > 0)
                 {
                     manifestItems ??= new List<RecallItem>();
@@ -1687,9 +1724,7 @@ public class ClaudeSession : ILlmSessionAdapter
                         ", personas_bindings_set — заменить набор; в personas_create — параметры bindings/autoBindings. " +
                         "Свои собственные привязки персона менять не может.";
                 }
-                basePrompt = string.IsNullOrWhiteSpace(basePrompt)
-                    ? personasHint
-                    : basePrompt + "\n\n" + personasHint;
+                Add("mcp-personas", "Подсказка про персон (mcp__personas__*)", personasHint, group: "persona");
             }
 
             // Подсказка про рабочее пространство — только когда workspace-server подключён
@@ -1741,9 +1776,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     "Когда пользователь спрашивает «где-то у меня было…» — начинай с search_unified." +
                     " Если вызов вернул «No such tool available» — сервер ещё подключается: " +
                     "подожди мгновение и повтори тот же вызов.";
-                basePrompt = string.IsNullOrWhiteSpace(basePrompt)
-                    ? workspaceHint
-                    : basePrompt + "\n\n" + workspaceHint;
+                Add("mcp-workspace", "Подсказка про рабочее пространство (mcp__wsp__*)", workspaceHint, group: "mcp");
             }
 
             // Подсказка про долгую память. Персонная сессия — личная (memory_*) + командная (team_*);
@@ -1778,20 +1811,13 @@ public class ClaudeSession : ILlmSessionAdapter
                             : " и полезно в дальнейшей работе над ним. Если пользователь просит «запомнить для команды/проекта» — используй team_memory_remember.");
                     memoryHint = memoryHint is null ? teamHint : memoryHint + teamHint;
                 }
-                if (memoryHint is not null)
-                    basePrompt = string.IsNullOrWhiteSpace(basePrompt)
-                        ? memoryHint
-                        : basePrompt + "\n\n" + memoryHint;
+                Add("mcp-memory", "Подсказка про долгую память (mcp__memory__*)", memoryHint, group: "persona");
             }
 
             // Подсказка про @упоминания (список «@handle — Роль (Имя)» + persona_ask) —
             // только при включённом флаге persona-mentions и наличии других персон
             if (_personasMcp?.MentionsHint is { } mentionsHint)
-            {
-                basePrompt = string.IsNullOrWhiteSpace(basePrompt)
-                    ? mentionsHint
-                    : basePrompt + "\n\n" + mentionsHint;
-            }
+                Add("persona-mentions", "Подсказка про @упоминания персон", mentionsHint, group: "persona");
 
             // Подсказка про субагентов-персон в Workflow: перечисляем handle'ы доступных
             // .md-агентов (из --add-dir) — модель должна знать, что их можно вызывать
@@ -1807,9 +1833,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     "persona_ask задаёт одноразовый вопрос в отдельный чат, а не запускает субагента. " +
                     "Для Workflow всегда используй Task(agentType=\"handle\").\n" +
                     "Доступные agentType: " + string.Join(", ", personaAgents.AgentHandles) + ".";
-                basePrompt = string.IsNullOrWhiteSpace(basePrompt)
-                    ? workflowHint
-                    : basePrompt + "\n\n" + workflowHint;
+                Add("workflow-subagents", "Подсказка про персон-субагентов в Workflow", workflowHint, group: "persona");
             }
 
             // Auto-recall долгой памяти персоны: релевантные записи по тексту хода.
@@ -1820,10 +1844,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 RecallBlock? memRecall = null;
                 try { memRecall = await _personaRecallProvider(text); }
                 catch { /* recall памяти не должен ронять ход */ }
-                if (!string.IsNullOrWhiteSpace(memRecall?.Text))
-                    basePrompt = string.IsNullOrWhiteSpace(basePrompt)
-                        ? memRecall.Text
-                        : basePrompt + "\n\n" + memRecall.Text;
+                Add("recall-memory", "Auto-recall долгой памяти персоны", memRecall?.Text, stable: false, group: "persona");
                 if (memRecall?.Items.Count > 0)
                 {
                     manifestItems ??= new List<RecallItem>();
@@ -1839,10 +1860,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 string? bindingsBlock = null;
                 try { bindingsBlock = await _bindingsProvider(text); }
                 catch { /* блок привязок не должен ронять ход */ }
-                if (!string.IsNullOrWhiteSpace(bindingsBlock))
-                    basePrompt = string.IsNullOrWhiteSpace(basePrompt)
-                        ? bindingsBlock
-                        : basePrompt + "\n\n" + bindingsBlock;
+                Add("persona-bindings", "Привязанные знания и правила персоны", bindingsBlock, stable: false, group: "persona");
             }
 
             // Slice top-10 god-nodes Code Graph: хабы по связности для холодного старта
@@ -1853,10 +1871,9 @@ public class ClaudeSession : ILlmSessionAdapter
                 string? codeGraphBlock = null;
                 try { codeGraphBlock = await _codeGraphProvider(text); }
                 catch { /* блок графа не должен ронять ход */ }
-                if (!string.IsNullOrWhiteSpace(codeGraphBlock))
-                    basePrompt = string.IsNullOrWhiteSpace(basePrompt)
-                        ? codeGraphBlock
-                        : basePrompt + "\n\n" + codeGraphBlock;
+                // Граф меняется при пересборке, а не под текст хода, но и стабильным
+                // его не назовёшь: правки кода прилетают в промпт следующего же хода
+                Add("code-graph", "Slice графа кода (god-узлы)", codeGraphBlock, stable: false, group: "project");
             }
 
             // Персональный слой: промпт персоны имеет приоритет
@@ -1866,14 +1883,23 @@ public class ClaudeSession : ILlmSessionAdapter
                 agentPrompt = _skills.GetAgentSystemPrompt(_rootPath, Info.AgentName);
             personaLayerPrompt = agentPrompt;
 
-            var combinedPrompt = agentPrompt is not null
-                ? (string.IsNullOrWhiteSpace(basePrompt)
-                    ? agentPrompt
-                    : basePrompt + "\n\n---\n\n" + agentPrompt)
-                : basePrompt;
+            var combinedPrompt = TurnPromptAssembler.Combine(sections, agentPrompt);
 
             if (!string.IsNullOrWhiteSpace(combinedPrompt))
                 args.AddRange(["--append-system-prompt", combinedPrompt]);
+
+            // Слой персоны — тоже часть того, что ушло модели: кладём его секцией уже ПОСЛЕ
+            // склейки (Combine принимает его отдельным аргументом, чтобы не спутать порядок).
+            if (!string.IsNullOrWhiteSpace(agentPrompt))
+                sections.Add(new PromptSectionDto("persona-layer", "Слой персоны", agentPrompt,
+                    Group: "persona"));
+
+            // Текст хода — не системный промпт, но модель видит именно его: сюда уже вклеены
+            // обвязки OmO (SessionManager.BuildCliTurnText), разворот скилла и имена вложений,
+            // а в ленте и истории лежит исходное сообщение человека. Kind = turn: в склейку
+            // не идёт, в шторке — отдельным блоком.
+            sections.Add(new PromptSectionDto("turn-text", "Текст хода, ушедший CLI", text, "turn",
+                Stable: false, Group: "turn"));
 
             // Манифест recall (F3): что персона подтянула из памяти в этот ход — клиенту,
             // для «опирается на…» / «использовано сейчас» во вкладке контекста персоны.
@@ -1951,6 +1977,11 @@ public class ClaudeSession : ILlmSessionAdapter
             && TrySubmitTurn(existing, userMessageJson))
         {
             Console.WriteLine("[ClaudeSession] Ход отдан живому процессу прогона (фоновые агенты доживают)");
+            // Снимок ДО ожидания конца хода: событие обязано опередить result, иначе
+            // TurnAccumulator сбросит текущий ход, и id уже некуда будет прицепить.
+            // applied=false — промпт пересобран, но модели не ушёл: работает промпт старта.
+            PublishPromptSnapshot(sections, args, mcpServerNames,
+                applied: false, inheritedFromId: existing.PromptSnapshotId);
             if (turnMcpPath != null)
                 try { File.Delete(turnMcpPath); }
                 catch (Exception ex)
@@ -1975,6 +2006,13 @@ public class ClaudeSession : ILlmSessionAdapter
                 try { await prevReader.WaitAsync(TimeSpan.FromSeconds(15), CancellationToken.None); }
                 catch (TimeoutException) { /* финализация зависла — не блокируем новый ход */ }
         }
+
+        // Ход идёт новым процессом — этот промпт модель и увидит. Пишем снимок ДО старта:
+        // id нужен прогону (CliRun.PromptSnapshotId), чтобы следующие same-process ходы
+        // могли на него сослаться. Процесс может не стартовать — тогда снимок останется
+        // с applied=true при неушедшем промпте, но ход тут же закончится ошибкой рядом.
+        var turnSnapshotId = PublishPromptSnapshot(sections, args, mcpServerNames,
+            applied: true, inheritedFromId: null);
 
         // claude.exe пишет/читает UTF-8. Без явной кодировки .NET берёт системную
         // OEM code page (напр. CP866 на русской Windows) → кракозябры в ответах.
@@ -2014,7 +2052,7 @@ public class ClaudeSession : ILlmSessionAdapter
 
             _fileWatcher.Start();
 
-            run = new CliRun { Process = process, Signature = signature, TurnMcpPath = turnMcpPath, LaunchTurnId = _currentTurnId, PromptSuggestionsActive = promptSuggestionsActive };
+            run = new CliRun { Process = process, Signature = signature, TurnMcpPath = turnMcpPath, LaunchTurnId = _currentTurnId, PromptSuggestionsActive = promptSuggestionsActive, PromptSnapshotId = turnSnapshotId };
             // Читаем stderr асинхронно, иначе при переполнении буфера процесс зависнет
             run.StderrTask = process.StandardError.ReadToEndAsync(ct);
 
@@ -2245,6 +2283,119 @@ public class ClaudeSession : ILlmSessionAdapter
             await _onMessage(new ExitedMessage());
     }
 
+    /// <summary>
+    /// Записать снимок промпта хода и сообщить клиенту его id (кнопка «какой промпт ушёл»).
+    /// applied=false — ход доигрывается в живом процессе: собранный сейчас промпт модели НЕ
+    /// уходил, она работает с промптом старта прогона (inheritedFromId).
+    /// Возвращает id снимка либо null (снимки не ведутся / запись не удалась).
+    /// </summary>
+    private string? PublishPromptSnapshot(IReadOnlyList<PromptSectionDto> sections,
+        IReadOnlyList<string> args, IReadOnlyList<string> mcpServerNames,
+        bool applied, string? inheritedFromId)
+    {
+        if (_promptSnapshotSink is null) return null;
+
+        string? id = null;
+        try
+        {
+            id = _promptSnapshotSink(new PromptSnapshotDraft(
+                applied, inheritedFromId, sections, MaskArgs(args), mcpServerNames,
+                EffectiveModel, Info.Mode.ToWireToken(), BuildCliLayerFiles()));
+        }
+        catch (Exception ex)
+        {
+            // Снимок диагностический — его сбой не имеет права ронять ход
+            Console.Error.WriteLine($"[ClaudeSession] Снимок промпта не записан: {ex.Message}");
+        }
+
+        _currentSnapshotId = id;
+        if (id is not null)
+            _ = _onMessage(new PromptSnapshotMessage(id, applied, inheritedFromId));
+        return id;
+    }
+
+    /// <summary>
+    /// Файловая часть слоя CLI: оба CLAUDE.md с раскрытыми импортами, каталог скиллов и вес
+    /// истории, которую подтянет --resume. Всё резолвится по окружению ЭТОГО хода (рабочая
+    /// папка чата, профиль CLI), а не по «вообще машине» — иначе показали бы то, чего CLI
+    /// не видел. Состав инструментов сюда не входит: он приходит позже, из system/init.
+    /// </summary>
+    private CliLayerDto BuildCliLayerFiles()
+    {
+        var files = new List<PromptSectionDto>();
+        AddClaudeMd(files, Path.Combine(_rootPath, "CLAUDE.md"), "CLAUDE.md рабочей папки");
+        AddClaudeMd(files, Path.Combine(_rootPath, ".claude", "CLAUDE.md"), ".claude/CLAUDE.md рабочей папки");
+        if (_cliConfigRoot is { Length: > 0 } configRoot)
+            AddClaudeMd(files, Path.Combine(configRoot, "CLAUDE.md"), "CLAUDE.md профиля CLI");
+
+        var skills = new List<CliSkillDto>();
+        if (_skills is not null)
+        {
+            try
+            {
+                if (_cliConfigRoot is { Length: > 0 } root)
+                    skills.AddRange(_skills.GetSkillsInConfigRoot(root)
+                        .Select(s => new CliSkillDto(s.Name, s.Description, "profile")));
+                skills.AddRange(_skills.GetProjectSkills(_rootPath)
+                    .Select(s => new CliSkillDto(s.Name, s.Description, "project")));
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[ClaudeSession] Каталог скиллов для снимка не прочитан: {ex.Message}");
+            }
+        }
+
+        var (bytes, messages) = TranscriptStats();
+        return new CliLayerDto(Files: files, Skills: skills,
+            TranscriptBytes: bytes, TranscriptMessages: messages);
+    }
+
+    private static void AddClaudeMd(List<PromptSectionDto> files, string path, string title)
+    {
+        if (ClaudeMdExpander.Read(path) is { } text)
+            files.Add(new PromptSectionDto(path, title, text, "cli-file"));
+    }
+
+    // Вес истории разговора, которую CLI подтягивает по --resume. Содержимое транскрипта
+    // в снимок не тащим (это вся переписка) — только размер и число сообщений.
+    private (long? Bytes, int? Messages) TranscriptStats()
+    {
+        if (_cliConfigRoot is not { Length: > 0 } root || Info.ClaudeSessionId is not { } csid)
+            return (null, null);
+        try
+        {
+            var path = TranscriptMigrator.FindTranscript(root, _rootPath, csid);
+            if (path is null) return (null, null);
+            return (new FileInfo(path).Length, File.ReadLines(path).Count());
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return (null, null);
+        }
+    }
+
+    // Аргументы запуска для показа человеку. Системный промпт не дублируем (он и есть
+    // секции), а путь temp-конфига MCP заменяем именем файла: внутри сервисный JWT владельца.
+    private static IReadOnlyList<string> MaskArgs(IReadOnlyList<string> args)
+    {
+        var result = new List<string>(args.Count);
+        for (var i = 0; i < args.Count; i++)
+        {
+            result.Add(args[i]);
+            if (args[i] == "--append-system-prompt" && i + 1 < args.Count)
+            {
+                result.Add("<секции промпта выше>");
+                i++;
+            }
+            else if (args[i] == "--mcp-config" && i + 1 < args.Count)
+            {
+                result.Add(Path.GetFileName(args[i + 1]));
+                i++;
+            }
+        }
+        return result;
+    }
+
     // Сигнатура окружения прогона — жёсткая часть запуска процесса. Совпала у следующего
     // хода → его можно отдать живому процессу в stdin; отличие → новый процесс.
     // Исключены изменчивые на каждый ход части: --resume (не меняется в рамках сессии),
@@ -2319,7 +2470,13 @@ public class ClaudeSession : ILlmSessionAdapter
                     Info.ClaudeSessionId = sid.GetString();
                     var model = root.TryGetProperty("model", out var m) ? m.GetString() ?? "" : "";
                     var cwd = root.TryGetProperty("cwd", out var cw) && cw.ValueKind == JsonValueKind.String ? cw.GetString() : null;
-                    var toolCount = root.TryGetProperty("tools", out var tl) && tl.ValueKind == JsonValueKind.Array ? tl.GetArrayLength() : 0;
+                    var hasTools = root.TryGetProperty("tools", out var tl) && tl.ValueKind == JsonValueKind.Array;
+                    var toolCount = hasTools ? tl.GetArrayLength() : 0;
+                    // Имена инструментов — единственная часть «невидимого» слоя CLI, которую он
+                    // сам про себя рассказывает: складываем их в снимок промпта хода
+                    var toolNames = hasTools
+                        ? tl.EnumerateArray().Select(t => t.GetString() ?? "").Where(n => n.Length > 0).ToList()
+                        : [];
                     List<McpServerInfo>? mcp = null;
                     if (root.TryGetProperty("mcp_servers", out var ms) && ms.ValueKind == JsonValueKind.Array)
                     {
@@ -2331,6 +2488,18 @@ public class ClaudeSession : ILlmSessionAdapter
                             if (name.Length > 0) mcp.Add(new McpServerInfo(name, status));
                         }
                     }
+                    // Дописываем состав инструментов в снимок текущего хода. init повторяется
+                    // и на same-process ходах, и на ходах-продолжениях CLI — перезапись тем же
+                    // составом безвредна. Снимок мог уехать по ретеншну: стор молча выйдет.
+                    if (_currentSnapshotId is { } snapshotId && _promptSnapshotToolsSink is not null)
+                    {
+                        try { _promptSnapshotToolsSink(snapshotId, toolNames, mcp ?? []); }
+                        catch (Exception ex)
+                        {
+                            Console.Error.WriteLine($"[ClaudeSession] Состав инструментов в снимок не дописан: {ex.Message}");
+                        }
+                    }
+
                     var worktree = ResolveTurnWorktree(cwd, _rootPath, _launcher);
                     await _onMessage(new SessionStartedMessage(
                         Info.ClaudeSessionId!, isResume, model, Info.Mode.ToWireToken(), cwd, toolCount, mcp,

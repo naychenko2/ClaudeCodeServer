@@ -615,6 +615,20 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
       // Подсказка следующего сообщения — приходит после result хода; в ленту не попадает
       return { ...prev, promptSuggestion: msg.text };
 
+    case 'prompt_snapshot': {
+      // Снимок промпта записан — цепляем его id к сообщению, которым начался ход:
+      // под ним живёт кнопка «какой промпт ушёл». Сообщение человека клиент добавляет
+      // оптимистично, поэтому событие догоняет уже готовый пузырь.
+      // Нет ни одного user_message (ход-продолжение цикла «до готово», делегированный
+      // ход без live-пузыря) — вешать не на что, лента остаётся как есть.
+      const idx = prev.items.findLastIndex(i => i.kind === 'user_message');
+      const target = idx >= 0 ? prev.items[idx] : null;
+      if (target?.kind !== 'user_message') return prev;
+      const items = prev.items.slice();
+      items[idx] = { ...target, promptSnapshotId: msg.snapshotId };
+      return withItems(items);
+    }
+
     case 'status_changed':
       // Синхронизируем isWaiting по статусу — работает для всех открытых вкладок/браузеров.
       // Перезагрузка истории при переходе в active — побочный эффект, остаётся в хуке.

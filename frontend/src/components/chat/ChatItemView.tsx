@@ -1,5 +1,5 @@
 import { memo, useState, useContext, useEffect } from 'react';
-import { SquareCheck, SquarePen, Check, Copy, AlertCircle, RotateCcw, AlertTriangle, X, Brain, Clock } from 'lucide-react';
+import { SquareCheck, SquarePen, Check, Copy, AlertCircle, RotateCcw, AlertTriangle, X, Brain, Clock, ScrollText } from 'lucide-react';
 import type { ChatItem, Persona, ProviderFallbackOption } from '../../types';
 import { splitFallbackOptions, formatSubscriptionMeta } from '../../lib/providerLimit';
 import type { TodoItem } from '../../hooks/useSessionArtifacts';
@@ -11,7 +11,8 @@ import { relPathTree, stripRootTree } from '../../lib/paths';
 import { hasUltraworkKeyword } from '../../lib/ultrawork';
 import { detectTeamMechanic, describeTeamTurn } from '../../features/team/teamMechanics';
 import { TeamTurnRequest } from '../../features/team/TeamTurnCard';
-import { ChatProjectContext, ChatTreePathContext, PersonaContext, useAssistantName } from './contexts';
+import { ChatProjectContext, ChatTreePathContext, ChatSessionContext, PersonaContext, useAssistantName } from './contexts';
+import { PromptSnapshotDialog } from '../../features/chat/PromptSnapshotDialog';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { AGENT_COLORS } from '../AgentSelector';
 import { MessageOriginChip } from '../MessageOriginChip';
@@ -334,6 +335,31 @@ function usePostTap() {
   return { tapped, handleTap };
 }
 
+// Кнопка «какой промпт ушёл» — открывает шторку со снимком промпта этого хода.
+// Живёт в панели под постом рядом с копированием; без id сессии (вне ленты) не рендерится.
+function PromptSnapshotButton({ snapshotId, contextTokens, turnCache }: {
+  snapshotId: string; contextTokens?: number | null;
+  turnCache?: { read: number; creation: number } | null;
+}) {
+  const sessionId = useContext(ChatSessionContext);
+  const [open, setOpen] = useState(false);
+  if (!sessionId) return null;
+  return (
+    <>
+      <button onClick={() => setOpen(true)} style={postIconBtn}
+        title="Какой промпт ушёл на этом ходу" aria-label="Какой промпт ушёл на этом ходу"
+        {...postIconHover}>
+        <ScrollText size={13} strokeWidth={2} style={{ flexShrink: 0 }} />
+      </button>
+      {open && (
+        <PromptSnapshotDialog sessionId={sessionId} snapshotId={snapshotId}
+          contextTokens={contextTokens} turnCache={turnCache}
+          onClose={() => setOpen(false)} />
+      )}
+    </>
+  );
+}
+
 // Кнопка «Скопировать» с отметкой об успехе — одинаково нужна обоим видам постов
 function CopyButton({ text, label }: { text: string; label: string }) {
   const [copied, setCopied] = useState(false);
@@ -355,7 +381,11 @@ function CopyButton({ text, label }: { text: string; label: string }) {
 // Пузырь сообщения человека: та же панель по hover, но короче — копирование и время
 // (модель к своему сообщению отношения не имеет). Вынесен из switch, потому что
 // копирование и тап держат состояние, а хуки внутри case недопустимы.
-function UserMessageBubble({ text, ts, children }: { text: string; ts?: number; children: React.ReactNode }) {
+function UserMessageBubble({ text, ts, promptSnapshotId, turnContextTokens, turnCache, children }: {
+  text: string; ts?: number; promptSnapshotId?: string; turnContextTokens?: number | null;
+  turnCache?: { read: number; creation: number } | null;
+  children: React.ReactNode;
+}) {
   const { tapped, handleTap } = usePostTap();
   return (
     <div className={`cc-msg${tapped ? ' cc-msg--tapped' : ''}`} onClick={handleTap}
@@ -369,6 +399,9 @@ function UserMessageBubble({ text, ts, children }: { text: string; ts?: number; 
       {/* Прижата вправо — по стороне, с которой стоит сам пузырь человека */}
       <PostActionBar align="right">
         <CopyButton text={text} label="Скопировать сообщение" />
+        {promptSnapshotId && (
+          <PromptSnapshotButton snapshotId={promptSnapshotId} contextTokens={turnContextTokens} turnCache={turnCache} />
+        )}
         <PostMeta ts={ts} />
       </PostActionBar>
     </div>
@@ -377,9 +410,10 @@ function UserMessageBubble({ text, ts, children }: { text: string; ts?: number; 
 
 // Ответ ассистента. Панель «мета + Копировать/В заметку/Повторить» — оверлеем у нижней
 // кромки: десктоп — fade-in по hover на сообщении, мобайл (тач) — по тапу.
-function TextMessageView({ text, online, onRetry, streaming, model, ts }: {
+function TextMessageView({ text, online, onRetry, streaming, model, ts, promptSnapshotId, turnContextTokens, turnCache }: {
   text: string; online: boolean; onRetry: () => void; streaming?: boolean;
-  model?: string; ts?: number;
+  model?: string; ts?: number; promptSnapshotId?: string; turnContextTokens?: number | null;
+  turnCache?: { read: number; creation: number } | null;
 }) {
   // «В заметку»: сохранение ответа в базу заметок (проект → notes/, чат → personal)
   const project = useContext(ChatProjectContext);
@@ -419,6 +453,9 @@ function TextMessageView({ text, online, onRetry, streaming, model, ts }: {
       {!streaming && (
         <PostActionBar>
           <CopyButton text={text} label="Скопировать ответ" />
+          {promptSnapshotId && (
+            <PromptSnapshotButton snapshotId={promptSnapshotId} contextTokens={turnContextTokens} turnCache={turnCache} />
+          )}
           {online && (
             <>
               {savedNoteId && (
@@ -556,6 +593,12 @@ interface ItemProps {
   onMigrateProvider?: (model: string, subscriptionKey?: string) => Promise<void>;
   // Агрегированный чек-лист TaskCreate/TaskUpdate — приходит только на последний task-вызов ленты
   taskPlan?: TodoItem[];
+  // Снимок промпта хода, к которому относится этот пост, и размер контекста его запроса —
+  // оба считает ChatPanel скользящим окном по ленте (у поста ассистента своего id нет).
+  // undefined — история до появления снимков либо пост сабагента: кнопки не будет
+  promptSnapshotId?: string;
+  turnContextTokens?: number | null;
+  turnCache?: { read: number; creation: number } | null;
   // Вложенная активность сабагента-персоны (дочерние tool_use/text/thinking с индексами) —
   // рендерится секцией внутри карточки консультации (передаёт ChatPanel только для
   // персона-вызовов Task)
@@ -692,7 +735,7 @@ export function ProviderLimitCard({ item, online, onMigrate }: {
   );
 }
 
-export const ChatItemView = memo(function ChatItemView({ item, index, online, streaming, isLastResult, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, onMigrateProvider, taskPlan, agentActivity, agentRenderChild, turnBoundaryKind }: ItemProps) {
+export const ChatItemView = memo(function ChatItemView({ item, index, online, streaming, isLastResult, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, onMigrateProvider, taskPlan, agentActivity, agentRenderChild, turnBoundaryKind, promptSnapshotId, turnContextTokens, turnCache }: ItemProps) {
   const project = useContext(ChatProjectContext);
   const treePath = useContext(ChatTreePathContext);
   const persona = useContext(PersonaContext);
@@ -760,7 +803,8 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       }
       return (
         <div style={{ alignSelf: 'flex-end', maxWidth: '80%', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
-          <UserMessageBubble text={item.text} ts={item.ts}>
+          <UserMessageBubble text={item.text} ts={item.ts}
+            promptSnapshotId={item.promptSnapshotId} turnContextTokens={turnContextTokens} turnCache={turnCache}>
             {teamInfo ? (
               /* Командный ход механики: вместо сырой слэш-команды/JSON — карточка
                  запроса (механика + тема + чипы параметров). Сырой текст остаётся
@@ -835,11 +879,15 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       // Доклад делегированной задачи (модель Z) — гостевая реплика несёт маркер первой
       // строкой; распознаём его и рендерим бейджем, а в тело идёт только сам доклад
       const report = parseDelegationReport(item.text);
+      // Пост сабагента кнопки «какой промпт ушёл» не получает: его промпт собирал CLI,
+      // а наш снимок описывает ход основного агента
       const msg = (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           {report && <DelegationReportBadge title={report.title} />}
           <TextMessageView text={report ? report.body : item.text} online={online} onRetry={onRetry} streaming={streaming}
-            model={item.model} ts={item.ts} />
+            model={item.model} ts={item.ts}
+            promptSnapshotId={item.parentToolUseId ? undefined : promptSnapshotId}
+            turnContextTokens={turnContextTokens} turnCache={turnCache} />
         </div>
       );
       // В персон-чате слева от реплики ассистента — её аватар (главный сигнал «говорит она»).

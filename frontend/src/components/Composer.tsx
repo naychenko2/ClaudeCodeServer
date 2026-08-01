@@ -110,6 +110,13 @@ export interface ComposerProps {
   onReplaceAttachments?: (paths: string[]) => void;
 }
 
+// Ступени полосы контролов («губы» под полем ввода) — по ширине САМОЙ полосы, не окна.
+// Ниже STRIP_COMPACT правая группа (модель, усилие, собеседник) и селектор режима живут
+// иконками без подписей; выше STRIP_WIDE собеседнику разрешена длинная подпись. Между
+// ними — подписи есть, но короткие. Замеряется в самом Composer (stripWidth).
+const STRIP_COMPACT = 640;
+const STRIP_WIDE = 900;
+
 // Получить имя файла из пути
 function basename(filePath: string): string {
   return filePath.replace(/\\/g, '/').split('/').pop() ?? filePath;
@@ -464,6 +471,28 @@ export function Composer({
   const fixedLeftRef = useRef<HTMLDivElement>(null);
   const badgesRef = useRef<HTMLDivElement>(null);
   const rightRef = useRef<HTMLDivElement>(null);
+
+  // Ширина САМОЙ полосы, а не окна. Ступени раскладки губы раньше считались от isMobile
+  // (ширина окна ≤600), и на планшете, телефоне в ландшафте и в сплите получалось так:
+  // окно широкое → «десктопный» режим, а губа рядом со списком чатов узкая → пикеры
+  // разворачивались в полные подписи, кнопки не сворачивались, и строка вылезала за край.
+  // 0 — ещё не померили: до первого замера считаем полосу просторной, чтобы компактная
+  // форма не мигала на первом кадре. offline в зависимостях — в офлайне полосы нет в DOM,
+  // и наблюдателя надо переподписать на вернувшийся узел.
+  const [stripWidth, setStripWidth] = useState(0);
+  useEffect(() => {
+    const el = stripRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const read = () => setStripWidth(el.clientWidth);
+    const ro = new ResizeObserver(read);
+    ro.observe(el);
+    read();
+    return () => ro.disconnect();
+  }, [offline]);
+  // Пикеры справа схлопнуты в иконки; подпись режима убрана
+  const compactStrip = !!isMobile || (stripWidth > 0 && stripWidth < STRIP_COMPACT);
+  // Собеседнику можно длинную подпись (иначе она режется по 200px)
+  const widePickers = !compactStrip && (stripWidth === 0 || stripWidth >= STRIP_WIDE);
 
   // Голосовой ввод целиком в хуке: распознанное дописываем к тексту, а при мёртвом
   // движке просто ставим фокус — диктовать будет системный ввод клавиатуры
@@ -986,9 +1015,10 @@ export function Composer({
         onMouseEnter={e => { if (!modeMenuOpen && !modeLocked) e.currentTarget.style.background = C.accentLight; }}
         onMouseLeave={e => { if (!modeMenuOpen && !modeLocked) e.currentTarget.style.background = 'transparent'; }}
         style={{
-          // Сжатый (мобильный) вид — иконка + шеврон без подписи
-          ...(isMobile
-            ? { height: 36, padding: '0 6px', justifyContent: 'center', gap: 3 }
+          // Сжатый вид — иконка + шеврон без подписи. Высота остаётся тач-размером
+          // мобилы (36) только на мобиле: на планшете полоса десктопная, сжата лишь ширина
+          ...(compactStrip
+            ? { height: isMobile ? 36 : 28, padding: '0 6px', justifyContent: 'center', gap: 3 }
             : { height: 28, padding: '0 10px' }),
           borderRadius: R.md, border: 'none',
           background: modeMenuOpen ? C.bgSelected : 'transparent',
@@ -1001,11 +1031,11 @@ export function Composer({
         <ModeIcon mode={displayMode} />
         {/* В сжатом виде прячем только подпись (длинные названия распирают строку) —
             шеврон остаётся, как у модели, усилия и собеседника. Название — в тултипе. */}
-        {!isMobile && MODE_META[displayMode].label}
+        {!compactStrip && MODE_META[displayMode].label}
         {modeLocked ? (
           <Lock size={10} strokeWidth={ICON_STROKE} style={{ flexShrink: 0, opacity: 0.6 }} />
         ) : (
-          <ChevronDown size={isMobile ? 10 : ICON_SIZE.xs} strokeWidth={ICON_STROKE}
+          <ChevronDown size={compactStrip ? 10 : ICON_SIZE.xs} strokeWidth={ICON_STROKE}
             style={{ flexShrink: 0, opacity: 0.55, transform: modeMenuOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
         )}
       </button>
@@ -1195,8 +1225,8 @@ export function Composer({
       selectedAgentName={selectedAgentName ?? null}
       onSelect={onCompanionChange}
       isMobile={isMobile}
-      wide={!isMobile}
-      compact={isMobile}
+      wide={widePickers}
+      compact={compactStrip}
       onCreateGroup={onCreateGroup}
     />
   ) : null;
@@ -1215,7 +1245,10 @@ export function Composer({
   const visibleCount = useToolbarOverflow({
     stripRef, fixedLeftRef, badgesRef, rightRef,
     count: collapsible.length,
-    enabled: !!isMobile,
+    // Всегда включено (как в шапке FileViewer): решает замер полосы, а не ширина окна.
+    // Гейт по isMobile оставлял планшет и телефон в ландшафте вовсе без сворачивания —
+    // кнопки с flexShrink:0 выдавливали строку за край губы
+    enabled: true,
     itemWidth: isMobile ? 36 : 32,
     gap: isMobile ? 6 : 4,
     menuWidth: isMobile ? 40 : 34,
@@ -1244,18 +1277,18 @@ export function Composer({
 
   // Пилюли активных режимов не сворачиваются (живут в badgesRef). В «⋯» дублируем их
   // строками-свитчами: цикл — только когда пилюли реально обрезаны (его «N/M» видно
-  // в самой пилюле); команду — на мобиле также когда «⋯» уже открыт свёрнутыми
-  // кнопками (её значение короткое, sublabel — единственное место, где оно видно,
-  // а дубль в существующее меню ничего не стоит). Дерева здесь нет: его кнопка-тумблер
-  // живёт в сворачиваемом ряду (collapsible) и попадает в «⋯» общим путём — дубль
-  // не нужен, а значение ветки показывает git-бар
+  // в самой пилюле); команду — также когда «⋯» уже открыт свёрнутыми кнопками (её
+  // значение короткое, sublabel — единственное место, где оно видно, а дубль в
+  // существующее меню ничего не стоит). Критерий узости — сам факт сворачивания, а не
+  // isMobile: полоса жмётся и на планшете. Дерева здесь нет: его кнопка-тумблер живёт
+  // в сворачиваемом ряду (collapsible) и попадает в «⋯» общим путём — дубль не нужен,
+  // а значение ветки показывает git-бар
   const collapsedAny = visibleCount < collapsible.length;
-  const dupOnMobile = isMobile && (collapsedAny || badgesOverflowed);
   const activeModeItems = ([
     badgesOverflowed && loopActive && workLoop && onToggleWorkLoop && { key: 'loop-on', icon: <RefreshCw size={16} strokeWidth={ICON_STROKE} />, label: 'Цикл «до готово»',
       sublabel: workLoop.phase === 'verifying' ? 'Включено · верификация' : `Включено · итерация ${workLoop.iteration}/${workLoop.maxIterations}`,
       toggle: true, onClick: () => { void onToggleWorkLoop(); } },
-    (dupOnMobile || (!isMobile && badgesOverflowed)) && teamMechMeta && { key: 'discuss-on', icon: <Users size={16} strokeWidth={ICON_STROKE} />, label: 'Обсудить с командой',
+    (collapsedAny || badgesOverflowed) && teamMechMeta && { key: 'discuss-on', icon: <Users size={16} strokeWidth={ICON_STROKE} />, label: 'Обсудить с командой',
       sublabel: `Включено · ${teamMechMeta.name}`, toggle: true,
       onClick: () => setTeamMech(null) },
   ].filter(Boolean) as OverflowItem[]);
@@ -1462,13 +1495,13 @@ export function Composer({
               onChange={onModelChange}
               started={chatStarted}
               isMobile={isMobile}
-              compact={isMobile}
+              compact={compactStrip}
               // У чата с персоной своё назначение модели — пункт «По умолчанию» подписывается им
               usage={selectedPersona ? USAGE.chatPersona : USAGE.chatNew}
             />
           )}
           {onEffortChange && (
-            <ComposerEffortPicker value={effort} onChange={onEffortChange} isMobile={isMobile} compact={isMobile} />
+            <ComposerEffortPicker value={effort} onChange={onEffortChange} isMobile={isMobile} compact={compactStrip} />
           )}
           {companionSelector}
         </div>

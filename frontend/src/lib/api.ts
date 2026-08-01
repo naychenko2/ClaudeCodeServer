@@ -774,6 +774,11 @@ export const api = {
       request<void>(`/personas/${encodeURIComponent(id)}/bindings/${encodeURIComponent(bindingId)}`, {
         method: 'DELETE',
       }),
+    // Полная замена набора привязок одним запросом (атомарно на бэке) — напр. пресет «Минимум»
+    setBindings: (id: string, bindings: PersonaBindingDto[]) =>
+      request<PersonaBinding[]>(`/personas/${encodeURIComponent(id)}/bindings`, {
+        method: 'PUT', body: JSON.stringify({ bindings }),
+      }),
     // Каталог целей для пикера: type = project | knowledge | notes | tool | skill;
     // для notes с source= — папки внутри источника
     bindingTargets: (type: string, source?: string) => {

@@ -122,6 +122,76 @@ public class PersonaBindingsServiceTests : IDisposable
         _sut.EffectiveToolEnabled(_userId, persona, "tasks").Should().BeTrue();
     }
 
+    // --- ServerToolEnabled (рубильники MCP-серверов) ---
+
+    [Fact]
+    public void ServerToolEnabled_БезПерсоны_Разрешено()
+    {
+        foreach (var key in PersonaBindingsService.ServerKeys)
+            _sut.ServerToolEnabled(_userId, null, key).Should().BeTrue($"ключ {key}");
+    }
+
+    [Fact]
+    public void ServerToolEnabled_СуженныйTools_НеВыключаетСерверы()
+    {
+        // Ключевой инвариант дефолта: Persona.Tools этих ключей никогда не содержал, поэтому
+        // фолбэка на него нет — иначе персона со списком ["tasks"] разом лишилась бы серверов,
+        // которые сегодня получает безусловно
+        var persona = MakePersona(tools: ["tasks"]);
+        foreach (var key in PersonaBindingsService.ServerKeys)
+            _sut.ServerToolEnabled(_userId, persona, key).Should().BeTrue($"ключ {key}");
+        // а старая семантика Tools у своих ключей осталась прежней
+        _sut.EffectiveToolEnabled(_userId, persona, "notes").Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData("personas")]
+    [InlineData("consultants")]
+    [InlineData("codegraph")]
+    [InlineData("notifications")]
+    [InlineData("widgets")]
+    public void ServerToolEnabled_OffПривязка_Выключает(string key)
+    {
+        var persona = MakePersona(bindings: [ToolBinding(key, PersonaBindingMode.Off)]);
+
+        _sut.ServerToolEnabled(_userId, persona, key).Should().BeFalse();
+        // соседние ключи не затронуты
+        foreach (var other in PersonaBindingsService.ServerKeys.Where(k => k != key))
+            _sut.ServerToolEnabled(_userId, persona, other).Should().BeTrue($"ключ {other}");
+    }
+
+    [Fact]
+    public void ServerToolEnabled_РежимыКромеOff_Включают()
+    {
+        foreach (var mode in new[] { PersonaBindingMode.Auto, PersonaBindingMode.Always })
+        {
+            var persona = MakePersona(bindings: [ToolBinding("widgets", mode)]);
+            _sut.ServerToolEnabled(_userId, persona, "widgets").Should().BeTrue($"режим {mode}");
+        }
+    }
+
+    [Fact]
+    public void ServerToolEnabled_СтабильноНаВсехХодах()
+    {
+        // Состав tools/list входит в сигнатуру запуска CLI: решение обязано быть одинаковым
+        // на каждом ходу сессии, иначе процесс перезапускается со всеми MCP-серверами
+        var persona = MakePersona(tools: ["tasks"],
+            bindings: [ToolBinding("codegraph", PersonaBindingMode.Off)]);
+        for (var turn = 1; turn <= 10; turn++)
+        {
+            _sut.ServerToolEnabled(_userId, persona, "codegraph").Should().BeFalse($"ход {turn}");
+            _sut.ServerToolEnabled(_userId, persona, "personas").Should().BeTrue($"ход {turn}");
+        }
+    }
+
+    [Fact]
+    public void ServerKeys_ЕстьВКаталогеЦелей()
+    {
+        // Иначе Off-привязку на такой ключ отклонит валидация ValidateAsync
+        foreach (var key in PersonaBindingsService.ServerKeys)
+            PersonaBindingsService.ToolCatalog.Should().ContainKey(key);
+    }
+
     // --- BuildFileScopes ---
 
     [Fact]

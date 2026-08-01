@@ -415,19 +415,24 @@ public class SessionManager : IDisposable
 
     // Контекст MCP-сервера виджетов чата: чистый маркер «сессия с владельцем» —
     // серверу не нужны ни API, ни токен, он только валидирует input (HTML рендерит фронт).
-    // Фича штатная (без фич-флага), как personas/notifications.
-    private WidgetsMcpContext? BuildWidgetsContext(string? ownerId) =>
-        ownerId is not null ? new WidgetsMcpContext() : null;
+    // Фича штатная (без фич-флага), как personas/notifications; персона может выключить
+    // сервер Off-привязкой tool:widgets (PersonaBindingsService.ServerToolEnabled).
+    private WidgetsMcpContext? BuildWidgetsContext(string? ownerId, Persona? persona) =>
+        ownerId is not null && _bindings.ServerToolEnabled(ownerId, persona, "widgets")
+            ? new WidgetsMcpContext() : null;
 
     // Контекст MCP-сервера графа кода: инструменты codegraph_* доступны только в чате проекта —
     // граф ключуется проектом (в чате вне проекта искать нечего). Тот же сервисный токен
     // владельца, что у tasks/notes; владение проектом дополнительно проверяет CodeGraphController.
     // rootPath — рабочее дерево сессии (EffectiveRoot): у чата с отдельным worktree свой граф,
     // иначе инструменты смотрели бы в основное дерево, а правки шли в другое (ADR-003).
+    // Персона может выключить граф Off-привязкой tool:codegraph — тогда нет ни сервера,
+    // ни slice в промпте (BuildCodeGraphProvider).
     private CodeGraphMcpContext? BuildCodeGraphContext(string? ownerId, string? projectId, string sessionId,
-        string? rootPath)
+        string? rootPath, Persona? persona)
     {
         if (ownerId is null || string.IsNullOrEmpty(projectId)) return null;
+        if (!_bindings.ServerToolEnabled(ownerId, persona, "codegraph")) return null;
         var token = GetServiceToken(ownerId);
         return new CodeGraphMcpContext(ResolveTasksApiUrl(ownerId), token, projectId, sessionId, rootPath);
     }
@@ -1289,9 +1294,12 @@ public class SessionManager : IDisposable
     // провайдер не injecting (тесты) или сессия без rootPath (чат вне проекта).
     // fallbackRoot — корень проекта у чата с отдельным worktree: пока свой граф дерева не
     // построен, в промпт идёт slice главной ветки с пометкой (ADR-003), а не пустота.
-    private Func<string?, Task<string?>>? BuildCodeGraphProvider(string? rootPath, string? fallbackRoot = null)
+    private Func<string?, Task<string?>>? BuildCodeGraphProvider(string? ownerId, Persona? persona,
+        string? rootPath, string? fallbackRoot = null)
     {
         if (_codeGraphPrompt is null || string.IsNullOrWhiteSpace(rootPath)) return null;
+        // Off-привязка tool:codegraph убирает и выжимку графа из промпта — заодно с сервером
+        if (!_bindings.ServerToolEnabled(ownerId, persona, "codegraph")) return null;
         return _ => _codeGraphPrompt.GetSliceAsync(rootPath, fallbackRoot);
     }
 
@@ -1390,13 +1398,33 @@ public class SessionManager : IDisposable
         return (subagents, viaAsk);
     }
 
+    // Решение «даём ли персоне консультантов» (сабагенты .md + их pmem-серверы + подсказка
+    // с persona_ask): ключ tool:consultants. В ГРУППОВОМ чате ключ ИГНОРИРУЕТСЯ — спикер
+    // обязан уметь спросить коллег по чату (BuildGroupChatHint прямо отсылает к этому блоку),
+    // иначе групповой чат ломается по замыслу. Решение зависит только от персоны и состава
+    // чата — детерминировано на сессию, состав tools/list от хода не зависит.
+    private bool ConsultantsEnabled(string? ownerId, Session session, Persona? persona) =>
+        session.Participants is { Count: > 1 }
+        || _bindings.ServerToolEnabled(ownerId, persona, "consultants");
+
+    // Решение «даём ли персоне сервер персон» (CRUD + persona_ask): ключ tool:personas.
+    // В ГРУППОВОМ чате ключ ИГНОРИРУЕТСЯ по той же причине, что и tool:consultants —
+    // BuildGroupChatHint безусловно отсылает к блоку о консультациях (MentionsHint из
+    // этого же сервера), Off-привязка сняла бы сервер и подсказка стала бы враньём.
+    private bool PersonasEnabled(string? ownerId, Session session, Persona? persona) =>
+        session.Participants is { Count: > 1 }
+        || _bindings.ServerToolEnabled(ownerId, persona, "personas");
+
     // План файловых сабагентов-персон на ход: папки для --add-dir + pmem-серверы памяти
     // видимых персон. Замыкание вычисляется на каждый ход (актуальные персоны и модель
     // сессии); внутри — троттлёный reconcile файлов. Ошибки → null (ход идёт без
     // консультантов, persona_ask остаётся).
-    private Func<PersonaAgentsContext?>? BuildPersonaAgentsProvider(string? ownerId, Session session)
+    private Func<PersonaAgentsContext?>? BuildPersonaAgentsProvider(string? ownerId, Session session, Persona? persona)
     {
         if (ownerId is null || _agentSync is null) return null;
+        // Off-привязка tool:consultants убирает и pmem-серверы, и --add-dir с .md-агентами
+        // (подсказка про Workflow отпадает следом — она условна от AgentHandles)
+        if (!ConsultantsEnabled(ownerId, session, persona)) return null;
         return () =>
         {
             try
@@ -1490,11 +1518,17 @@ public class SessionManager : IDisposable
     private PersonasMcpContext? BuildPersonasContext(string? ownerId, string? projectId, Session session, Persona? persona = null)
     {
         if (ownerId is null) return null;
+        // Off-привязка tool:personas снимает сервер персон целиком (вместе с CRUD и persona_ask);
+        // в групповом чате исключение — см. PersonasEnabled
+        if (!PersonasEnabled(ownerId, session, persona)) return null;
 
         var selfPersonaId = session.PersonaId;
-        // @упоминания (persona_ask + подсказка) теперь всегда включены
-        var mentionsHint = BuildMentionsHint(ownerId, session,
-            ResolveOtherPersonas(ownerId, projectId, session, persona));
+        // @упоминания (persona_ask + подсказка) включены всегда, кроме Off-привязки
+        // tool:consultants: без консультаций и подсказки не нужно, и persona_ask
+        // выключается вместе с ней (PERSONAS_MENTIONS собирается из MentionsHint).
+        var mentionsHint = ConsultantsEnabled(ownerId, session, persona)
+            ? BuildMentionsHint(ownerId, session, ResolveOtherPersonas(ownerId, projectId, session, persona))
+            : null;
 
         var externalPersonaScopes = _bindings.BuildExternalPersonaScopes(ownerId, persona);
         var extraProjectIds = externalPersonaScopes.Where(s => s.PersonaId is null)
@@ -1610,9 +1644,11 @@ public class SessionManager : IDisposable
 
     // Контекст MCP-сервера уведомлений: всегда подключается, когда есть владелец.
     // Тот же сервисный токен, что у tasks/notes/workspace.
-    private NotificationsMcpContext? BuildNotificationsContext(string? ownerId, string? personaId)
+    // Персона может выключить сервер Off-привязкой tool:notifications.
+    private NotificationsMcpContext? BuildNotificationsContext(string? ownerId, string? personaId, Persona? persona)
     {
         if (ownerId is null) return null;
+        if (!_bindings.ServerToolEnabled(ownerId, persona, "notifications")) return null;
         var token = GetServiceToken(ownerId);
         return new NotificationsMcpContext(ResolveTasksApiUrl(ownerId), token, personaId);
     }
@@ -1796,15 +1832,15 @@ public class SessionManager : IDisposable
             PersonaRecallProvider: persona.Recall,
             ExtraDisallowedTools: BuildExtraDisallowed(ownerId, persona.Persona, session),
             PersonasMcp: BuildPersonasContext(ownerId, session.ProjectId, session, persona.Persona),
-            NotificationsMcp: BuildNotificationsContext(ownerId, session.PersonaId),
+            NotificationsMcp: BuildNotificationsContext(ownerId, session.PersonaId, persona.Persona),
             WorkspaceMcp: workspace,
             BindingsProvider: BuildBindingsProvider(ownerId, session.PersonaId, workspace?.Sections),
-            CodeGraphProvider: BuildCodeGraphProvider(rootPath, projectRoot),
-            PersonaAgentsProvider: BuildPersonaAgentsProvider(ownerId, session),
+            CodeGraphProvider: BuildCodeGraphProvider(ownerId, persona.Persona, rootPath, projectRoot),
+            PersonaAgentsProvider: BuildPersonaAgentsProvider(ownerId, session, persona.Persona),
             Launcher: _launchers.ForOwner(ownerId),
             ModulesMcp: BuildModulesContext(ownerId),
-            WidgetsMcp: BuildWidgetsContext(ownerId),
-            CodeGraphMcp: BuildCodeGraphContext(ownerId, session.ProjectId, session.Id, rootPath)));
+            WidgetsMcp: BuildWidgetsContext(ownerId, persona.Persona),
+            CodeGraphMcp: BuildCodeGraphContext(ownerId, session.ProjectId, session.Id, rootPath, persona.Persona)));
         entry.Process = adapter;
         entry.RunId = runId;
 
@@ -2569,14 +2605,14 @@ public class SessionManager : IDisposable
                 PersonaRecallProvider: persona.Recall,
                 ExtraDisallowedTools: BuildExtraDisallowed(entry.Info.OwnerId, persona.Persona, entry.Info),
                 PersonasMcp: BuildPersonasContext(entry.Info.OwnerId, null, entry.Info, persona.Persona),
-                NotificationsMcp: BuildNotificationsContext(entry.Info.OwnerId, entry.Info.PersonaId),
+                NotificationsMcp: BuildNotificationsContext(entry.Info.OwnerId, entry.Info.PersonaId, persona.Persona),
                 WorkspaceMcp: workspace,
                 BindingsProvider: BuildBindingsProvider(entry.Info.OwnerId, entry.Info.PersonaId, workspace?.Sections),
-                CodeGraphProvider: BuildCodeGraphProvider(rootPath),
-                PersonaAgentsProvider: BuildPersonaAgentsProvider(entry.Info.OwnerId, entry.Info),
+                CodeGraphProvider: BuildCodeGraphProvider(entry.Info.OwnerId, persona.Persona, rootPath),
+                PersonaAgentsProvider: BuildPersonaAgentsProvider(entry.Info.OwnerId, entry.Info, persona.Persona),
                 Launcher: _launchers.ForOwner(entry.Info.OwnerId),
                 ModulesMcp: BuildModulesContext(entry.Info.OwnerId),
-                WidgetsMcp: BuildWidgetsContext(entry.Info.OwnerId),
+                WidgetsMcp: BuildWidgetsContext(entry.Info.OwnerId, persona.Persona),
                 // Чат вне проекта — графа кода нет (он ключуется проектом)
                 CodeGraphMcp: null);
         }
@@ -2599,15 +2635,15 @@ public class SessionManager : IDisposable
                 PersonaRecallProvider: persona.Recall,
                 ExtraDisallowedTools: BuildExtraDisallowed(project.OwnerId, persona.Persona, entry.Info),
                 PersonasMcp: BuildPersonasContext(project.OwnerId, project.Id, entry.Info, persona.Persona),
-                NotificationsMcp: BuildNotificationsContext(project.OwnerId, entry.Info.PersonaId),
+                NotificationsMcp: BuildNotificationsContext(project.OwnerId, entry.Info.PersonaId, persona.Persona),
                 WorkspaceMcp: workspace,
                 BindingsProvider: BuildBindingsProvider(project.OwnerId, entry.Info.PersonaId, workspace?.Sections),
-                CodeGraphProvider: BuildCodeGraphProvider(rootPath, project.RootPath),
-                PersonaAgentsProvider: BuildPersonaAgentsProvider(project.OwnerId, entry.Info),
+                CodeGraphProvider: BuildCodeGraphProvider(project.OwnerId, persona.Persona, rootPath, project.RootPath),
+                PersonaAgentsProvider: BuildPersonaAgentsProvider(project.OwnerId, entry.Info, persona.Persona),
                 Launcher: _launchers.ForOwner(project.OwnerId),
                 ModulesMcp: BuildModulesContext(project.OwnerId),
-                WidgetsMcp: BuildWidgetsContext(project.OwnerId),
-                CodeGraphMcp: BuildCodeGraphContext(project.OwnerId, project.Id, entry.Info.Id, rootPath));
+                WidgetsMcp: BuildWidgetsContext(project.OwnerId, persona.Persona),
+                CodeGraphMcp: BuildCodeGraphContext(project.OwnerId, project.Id, entry.Info.Id, rootPath, persona.Persona));
         }
         var adapter = _adapters.Create(entry.Info, context);
         entry.Process = adapter;

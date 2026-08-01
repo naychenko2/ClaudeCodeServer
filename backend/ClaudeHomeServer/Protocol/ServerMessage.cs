@@ -179,9 +179,11 @@ public record ChatRenamedMessage(string Name)
 public record PreviewStatusMessage(string Status, int? Port = null, string? Error = null, string? ServiceId = null)
     : ServerMessage("preview_status");
 
-// Preview dev-server: вывод сервиса (Data — фрагмент текста с CRLF). Уходит только
-// подписчикам группы конкретного сервиса, см. DevServerService.LogGroup
-public record PreviewLogMessage(string ServiceId, string Data, bool IsError = false)
+// Вывод дев-сервера (Data — накопленный за тик фрагмент текста с CRLF). Уходит только
+// подписчикам группы конкретного сервиса, см. DevServerService.LogGroup.
+// stdout и stderr склеены в порядке появления: разделять их флагом было бы враньём —
+// в батче за тик перемешаны оба потока.
+public record PreviewLogMessage(string ServiceId, string Data)
     : ServerMessage("preview_log");
 
 public record StatusChangedMessage(string Status, string? LastMessage = null, int MessageCount = 0)

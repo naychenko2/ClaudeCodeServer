@@ -131,16 +131,19 @@ public class SessionHub : Hub
     // Подписка на вывод дев-сервера (вкладка «Логи» панели «Сервисы»). Группа — на
     // конкретный сервис, поэтому подписок ровно столько, сколько открытых вкладок логов.
     //
-    // Порядок важен: накопленный буфер уходит АДРЕСНО вызывающему ДО входа в группу.
-    // Наоборот — и строки, пришедшие между реплеем и подпиской, задвоятся. Тот же приём,
-    // что в TerminalService.ConnectAsync.
-    public async Task JoinPreviewLog(string projectId, string serviceId)
+    // Накопленный буфер ВОЗВРАЩАЕТСЯ вызывающему, а не рассылается сообщением. Рассылка
+    // (даже адресная, Clients.Caller) приходит в соединение, а не в конкретный вьюер:
+    // при быстром пере-монтировании — а в dev его гарантирует StrictMode — свежий вьюер
+    // ловил и свой реплей, и чужой, и весь лог показывался дважды.
+    //
+    // Снимок берём ДО входа в группу: строка, пришедшая ровно в этот зазор, потеряется,
+    // но задвоиться не может. Из двух зол в логе виднее второе.
+    public async Task<string?> JoinPreviewLog(string projectId, string serviceId)
     {
         if (!OwnsProject(projectId)) throw Denied();
         var buffered = _devServer.GetLogBuffer(projectId, serviceId, UserId!);
-        if (!string.IsNullOrEmpty(buffered))
-            await Clients.Caller.SendAsync("message", new PreviewLogMessage(serviceId, buffered));
         await Groups.AddToGroupAsync(Context.ConnectionId, DevServerService.LogGroup(projectId, serviceId));
+        return buffered;
     }
 
     public Task LeavePreviewLog(string projectId, string serviceId) =>

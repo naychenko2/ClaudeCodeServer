@@ -50,6 +50,8 @@ const m = vi.hoisted(() => ({
   sendMessage: vi.fn<() => Promise<'started' | 'queued'>>(async () => 'started'),
   // Обработчики сообщений хаба — через них тест играет роль сервера
   messageHandlers: [] as Array<(msg: unknown) => void>,
+  // Обработчики восстановления соединения — тест играет реконнект хаба
+  reconnectHandlers: [] as Array<() => Promise<void> | void>,
 }));
 
 // Стаб document: окружение node, а реконсиляция по фокусу вешается на visibilitychange.
@@ -77,7 +79,7 @@ vi.mock('../../lib/signalr', () => ({
   joinProject: vi.fn(async () => { }),
   leaveSession: (sid: string) => m.leaveSession(sid),
   onMessage: (h: (msg: unknown) => void) => { m.messageHandlers.push(h); return () => { }; },
-  onReconnected: vi.fn(() => () => { }),
+  onReconnected: (h: () => Promise<void> | void) => { m.reconnectHandlers.push(h); return () => { }; },
   sendMessage: (...args: unknown[]) => m.sendMessage(...(args as [])),
   respondPermission: vi.fn(async () => { }),
   interruptSession: vi.fn(async () => { }),
@@ -359,6 +361,46 @@ describe('useSession: снапшот после входа в группу', () 
     const st = back.render();
     expect(st.items).toHaveLength(6);
     expect(st.items.at(-1)!.kind).toBe('result');
+  });
+});
+
+describe('useSession: членство в группе', () => {
+  const joinsFor = (sid: string) => m.joinSession.mock.calls.filter(c => c[0] === sid).length;
+
+  it('чат с упавшим первым join перезаходит в группу после реконнекта', async () => {
+    const sid = nextSid();
+    m.joinSession.mockRejectedValueOnce(new Error('офлайн'));
+
+    const chat = openChat(sid);
+    await flush();
+    expect(chat.render().isJoined).toBe(false); // в группу не попали, повторов нет
+
+    // Соединение восстановилось: сессию смотрят — перезаходим, хотя isJoined=false
+    const before = joinsFor(sid);
+    await m.reconnectHandlers[0]!();
+    await flush();
+
+    expect(joinsFor(sid)).toBe(before + 1);
+    expect(chat.render().isJoined).toBe(true);
+
+    chat.unmount();
+  });
+
+  it('реплей active в окне send не сбрасывает ожидание, после окна — сбрасывает', async () => {
+    const sid = nextSid();
+    const chat = openChat(sid);
+    await flush();
+
+    // Хаб реплеит статус на каждый JoinSession — тут «active», ход ещё не стартовал
+    m.joinSession.mockImplementationOnce(async () => { emitStatus(sid, 'active'); });
+    await chat.first.send('привет');
+    expect(chat.render().isWaiting).toBe(true);
+
+    // Окно отправки закрыто — статус снова управляет флагом
+    emitStatus(sid, 'active');
+    expect(chat.render().isWaiting).toBe(false);
+
+    chat.unmount();
   });
 });
 

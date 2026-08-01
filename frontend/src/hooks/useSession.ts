@@ -132,11 +132,30 @@ if (typeof window !== 'undefined')
 
 const isWatched = (sid: string) => (_listeners.get(sid)?.size ?? 0) > 0;
 
+// Статусы, означающие «ход не идёт» (редьюсер снимает по ним isWaiting)
+const isIdleStatus = (status: string) =>
+  status === 'active' || status === 'error' || status === 'finished' || status === 'orphaned';
+
+// Единственная точка входа в SignalR-группу: любой успешный join отмечает членство.
+// Раньше isJoined выставлял только joinAndLoadHistory, поэтому чат с упавшим первым
+// join навсегда оставался «не в группе» — onReconnected его пропускал, live-события
+// не доходили, и лента оживала лишь после переключения чатов.
+function joinTracked(sid: string): Promise<void> {
+  return joinSession(sid).then(() => {
+    if (!getState(sid).isJoined) setState(sid, prev => ({ ...prev, isJoined: true }));
+  });
+}
+
 // Запрос авторитетного статуса. Ошибку глотаем: офлайн вылечит reconnect-обработчик.
 function reconcile(sid: string) {
   _reconciling.set(sid, Date.now());
-  joinSession(sid).catch(() => { _reconciling.delete(sid); });
+  joinTracked(sid).catch(() => { _reconciling.delete(sid); });
 }
+
+// Окно отправки: sid здесь с начала send() до ответа хаба. Реплей статуса на JoinSession
+// внутри этого окна описывает состояние ДО нашего хода, и понижающий статус (ход ещё не
+// стартовал) не должен гасить оптимистичный isWaiting и дёргать reloadHistory.
+const _sending = new Set<string>();
 
 let _pollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -166,8 +185,7 @@ function noteReconcileResult(sid: string, clientWaiting: boolean, status: string
   _reconciling.delete(sid);
   if (Date.now() - requestedAt > RECONCILE_WINDOW_MS) return; // ответ уже не наш
   const serverWaiting = status === 'working' || status === 'waiting';
-  const known = serverWaiting || status === 'active' || status === 'error'
-    || status === 'finished' || status === 'orphaned';
+  const known = serverWaiting || isIdleStatus(status);
   if (!known || clientWaiting === serverWaiting) return;
   waitDiag.mismatches++;
   waitDiag.last = { sid, client: clientWaiting, server: status, at: new Date().toISOString() };
@@ -201,9 +219,11 @@ function ensureHandler() {
     }
 
     for (const [sid, s] of _store) {
-      if (!s.isJoined) continue;
+      // Перезаходим и в сессии, которые считают себя вне группы, но их кто-то смотрит:
+      // ровно так выглядит чат с упавшим первым join — по isJoined он пропускался навсегда
+      if (!s.isJoined && !isWatched(sid)) continue;
       try {
-        await joinSession(sid);
+        await joinTracked(sid);
         // Историю подтягиваем для сессий с живой активностью на момент разрыва
         // (working/waiting → isWaiting) И для открытых сейчас (есть подписчики-компоненты) —
         // открыта одна-две, дёшево; иначе завершённый в офлайне ход не доехал бы до ленты
@@ -227,6 +247,14 @@ function ensureHandler() {
   onMessage((msg: ServerMessage) => {
     const sid = msg.sessionId;
     if (!sid) return;
+
+    // Понижающий реплей статуса в окне send относится к состоянию ДО отправки —
+    // гасим его целиком, иначе он снимет ожидание и запустит лишнюю перезагрузку
+    // истории наперегонки со стримом только что стартовавшего хода.
+    if (msg.type === 'status_changed' && _sending.has(sid) && isIdleStatus(msg.status)) {
+      _reconciling.delete(sid);
+      return;
+    }
 
     // Чистая часть — в редьюсере (lib/chatReducer.ts). Если состояние не изменилось
     // (вернулась та же ссылка) — подписчиков не будим.
@@ -293,9 +321,8 @@ async function joinAndLoadHistory(sid: string, projectId?: string) {
 
   // Присоединение к группе — фоном, не блокирует чтение истории.
   // Офлайн промис не зарезолвится — это нормально, при reconnect перезайдём.
-  joinSession(sid)
+  joinTracked(sid)
     .then(() => {
-      setState(sid, prev => ({ ...prev, isJoined: true }));
       // Снапшот ПОСЛЕ входа в группу закрывает дыру «история снята — событий ещё не шлют»:
       // всё, что появится позже этого снимка, гарантированно доедет живьём.
       return reloadHistory(sid, projectId);
@@ -328,8 +355,12 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
     // При переключении на уже-присоединённую сессию подтягиваем историю с сервера.
     // Нужно чтобы после завершённых ходов (пока был открыт другой чат) данные были актуальны.
     const st = getState(sessionId);
-    if (st.isJoined && !st.isWaiting) {
-      reloadHistory(sessionId, projectId);
+    if (st.isJoined) {
+      // Повторный вход дёшев и идемпотентен, зато чинит членство в группе, если она
+      // потерялась незаметно (переподключение хаба, рестарт сервера), и приносит
+      // авторитетный статус реплеем — открытие чата всегда лечит рассинхрон.
+      reconcile(sessionId);
+      if (!st.isWaiting) reloadHistory(sessionId, projectId);
     }
     // Появился зритель — у занятого чата poll без мутации состояния не завёлся бы
     syncWaitPoll();
@@ -374,12 +405,12 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
     // очередь (карточку даст снимок pending_messages), а доставленное вернётся user_message.
     // Опережающий баллон при queued дал бы зависший дубль — гонка «отправил в момент
     // завершения хода». promptSuggestion сбрасываем: обычный ход идёт в обход редьюсера.
+    _sending.add(sessionId);
     setState(sessionId, prev => ({ ...prev, isWaiting: true, promptSuggestion: null }));
     try {
       // Всегда подтверждаем членство в группе перед отправкой:
       // защита от потери группы при переподключении или переключении проекта
-      await joinSession(sessionId);
-      setState(sessionId, prev => ({ ...prev, isJoined: true }));
+      await joinTracked(sessionId);
       const outcome = await sendMessage(sessionId, text, attachedPaths, mode, auto);
       // 'started' — ход запущен: рисуем оптимистичный баллон (как раньше). Авто-ходы сервер
       // рассылает user_message в session-группу, поэтому их не дублируем.
@@ -397,6 +428,8 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
           canRetry: true,
         }],
       }));
+    } finally {
+      _sending.delete(sessionId);
     }
   }, [sessionId]);
 
@@ -426,7 +459,7 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
           ? { ...item, resolved: true, decision: 'allowed' as const } : item
       ),
     }));
-    await joinSession(sessionId); // гарантируем группу перед ответом
+    await joinTracked(sessionId); // гарантируем группу перед ответом
     await respondPermission(sessionId, requestId, 'allow');
   }, [sessionId]);
 
@@ -440,7 +473,7 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
           ? { ...item, resolved: true, decision: 'denied' as const } : item
       ),
     }));
-    await joinSession(sessionId); // гарантируем группу перед ответом
+    await joinTracked(sessionId); // гарантируем группу перед ответом
     await respondPermission(sessionId, requestId, 'deny');
   }, [sessionId]);
 
@@ -455,7 +488,7 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
           ? { ...item, resolved: true, decision: 'always' as const } : item
       ),
     }));
-    await joinSession(sessionId); // гарантируем группу перед ответом
+    await joinTracked(sessionId); // гарантируем группу перед ответом
     await respondPermission(sessionId, requestId, 'allow_always');
   }, [sessionId]);
 
@@ -465,7 +498,7 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
     if (!sessionId) return;
     setState(sessionId, prev => ({ ...prev, isWaiting: true, isCompacting: true, compactNote: undefined }));
     try {
-      await joinSession(sessionId); // гарантируем группу перед отправкой
+      await joinTracked(sessionId); // гарантируем группу перед отправкой
       await compactSession(sessionId);
     } catch (err) {
       setState(sessionId, prev => ({
@@ -509,7 +542,7 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
           ? { ...item, resolved: true, answers } : item
       ),
     }));
-    await joinSession(sessionId); // гарантируем группу перед ответом
+    await joinTracked(sessionId); // гарантируем группу перед ответом
     await sendAnswer(sessionId, toolUseId, answerText);
   }, [sessionId]);
 
@@ -523,7 +556,7 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
           ? { ...item, resolved: true, approved: approve, feedback } : item
       ),
     }));
-    await joinSession(sessionId); // гарантируем группу перед ответом
+    await joinTracked(sessionId); // гарантируем группу перед ответом
     await sendPlanDecision(sessionId, requestId, approve, feedback);
   }, [sessionId]);
 
@@ -551,7 +584,7 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
         return { ...item, resolved: true, approved: decision === 'run' };
       }),
     }));
-    await joinSession(sessionId); // гарантируем группу перед ответом
+    await joinTracked(sessionId); // гарантируем группу перед ответом
     await sendTeamPlanDecision(sessionId, planId, decision, subtaskId, executorPersonaId);
   }, [sessionId]);
 
@@ -568,7 +601,7 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
           : item
       ),
     }));
-    await joinSession(sessionId); // гарантируем группу перед ответом
+    await joinTracked(sessionId); // гарантируем группу перед ответом
     await sendTeamEscalationDecision(sessionId, escalationId, actionId, comment);
   }, [sessionId]);
 

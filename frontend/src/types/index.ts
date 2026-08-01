@@ -708,6 +708,10 @@ export type ServerMessage = { sessionId: string } & (
   // personaId — автор карточки (Э8, координатор на момент публикации)
   | { type: 'team_escalation'; escalationId: string; kind: TeamEscalationKind; title: string; details: string; actions: TeamEscalationAction[]; taskId: string | null; wave: number; resolved: boolean; chosenActionId: string | null; personaId?: string | null }
   | { type: 'preview_status'; status: string; port?: number; error?: string; serviceId?: string }
+  // Вывод дев-сервера — приходит только подписчикам группы конкретного сервиса
+  // (JoinPreviewLog), а не всем вкладкам пользователя. data — накопленное за тик
+  // (~100 мс) сразу куском: построчная рассылка захлёбывалась на сборках
+  | { type: 'preview_log'; serviceId: string; data: string }
   | { type: 'notification'; title: string; body: string; url?: string; kind: 'reminder' | 'claude' | 'info' | 'success' | 'meeting'; notificationId?: string; notifType?: string; projectId?: string; sessionId?: string; taskId?: string; source?: string; tag?: string; personaId?: string; personaName?: string; personaRole?: string; personaColor?: string; personaHasAvatar?: boolean; projectName?: string }
   | { type: 'recall_manifest'; items: RecallItem[] }
   // Полный снимок очереди сообщений занятой сессии (постановка/отмена/доставка).
@@ -741,9 +745,14 @@ export interface ProjectService {
   suggestedPort: number | null;
   autoPort: boolean;
   saved: boolean;               // из .claude/launch.json — можно редактировать/удалять
-  status: string;               // idle | starting | started | stopped | error
+  // idle | starting | started | stopped | error | external (порт слушает процесс,
+  // запущенный вне продукта — остановить его нельзя и логов у него нет)
+  status: string;
   runningPort: number | null;
   error: string | null;
+  // Составной запуск (Rider multilaunch): id входящих сервисов. Своей команды у
+  // группы нет — она поднимает участников, статус и порт производные от них
+  members?: string[] | null;
 }
 
 // Одна конфигурация из .claude/launch.json (формат Claude Desktop)

@@ -370,6 +370,12 @@ export const api = {
       request<{ activeServiceId: string }>(`/projects/${id}/preview/active`, {
         method: 'POST', body: JSON.stringify({ serviceId }),
       }),
+    // Сервис поднят вне продукта (Rider, терминал) — показать его в превью.
+    // Порт выбирает сервер по конфигурации сервиса, клиент его не передаёт.
+    previewActiveExternal: (id: string, serviceId: string) =>
+      request<{ activeServiceId: string; port: number }>(`/projects/${id}/preview/active-external`, {
+        method: 'POST', body: JSON.stringify({ serviceId }),
+      }),
     getLaunchConfig: (id: string) =>
       request<{ configurations: LaunchConfigEntry[] }>(`/projects/${id}/launch-config`),
     putLaunchConfig: (id: string, configurations: LaunchConfigEntry[]) =>

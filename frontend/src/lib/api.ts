@@ -1125,6 +1125,14 @@ export const api = {
     },
   },
 
+  // Просмотр файла вне корня проекта (абсолютный путь) — например, файл открытый
+  // из карточки инструмента чата в другом проекте/дереве. Формат ответа тот же, что
+  // у files/content; 403 — путь вне досягаемости песочницы, 400 — путь не абсолютный.
+  hostFiles: {
+    getContent: (path: string) =>
+      request<{ content: string | null; isBinary: boolean; isImage: boolean; isVideo?: boolean; isAudio?: boolean; isDocument?: boolean; docKind?: string; mimeType?: string; base64?: string; fileSize?: number }>(`/host-files/content?path=${encodeURIComponent(path)}`),
+  },
+
   // Git проекта (раздел «Файлы» → «Изменения»/«История»); ошибки операций — 409 { error }
   git: {
     // ?sessionId= (gq): активный worktree-чат переводит запросы в своё дерево — суффикс

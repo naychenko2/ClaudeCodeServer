@@ -21,6 +21,7 @@ import sql from 'react-syntax-highlighter/dist/esm/languages/prism/sql';
 import markup from 'react-syntax-highlighter/dist/esm/languages/prism/markup';
 import type { Project, GitBlameLine, GitLogEntry } from '../types';
 import { api } from '../lib/api';
+import { basename } from '../lib/paths';
 import { resolveDocImage } from '../lib/docsLinks';
 import { OfflineError } from '../lib/offline';
 import { useGitState, ensureGit, gitRestoreFile, loadGitRemote } from '../lib/git';
@@ -300,9 +301,15 @@ function AudioFilePlayer({ src, mimeType, fileName, fileSizeMb }: {
 
 export function FileViewer({ project, filePath, onClose, onToggleFullscreen, fullscreen, isMobile, onOpenSidebar, initialTab, gitStagePath, scrollToLine }: Props) {
   const online = useOnline();
+  // Хост-режим: путь абсолютный (вне корня проекта) — файл открыт карточкой инструмента/
+  // изменённого файла чата, живущего в другом дереве. Контент — через /host-files/content,
+  // а не projects/{id}/files/*: обычные project-эндпоинты дали бы 403 (SafeJoin).
+  const isHostMode = /^[A-Za-z]:[\\/]|^\//.test(filePath);
   // Заметки vault (notes/*.md): рендерим [[wikilinks]] и уводим по клику в раздел «Заметки»
   const allNotes = useNotes();
-  const isNotesFile = /(^|\/)notes\//i.test(filePath);
+  // На абсолютном пути эвристика ложно срабатывает (мало ли где встретится «notes/»
+  // за пределами проекта) — в хост-режиме файл заметкой не считается никогда.
+  const isNotesFile = !isHostMode && /(^|\/)notes\//i.test(filePath);
   useEffect(() => { if (isNotesFile) void ensureNotesLoaded(); }, [isNotesFile]);
   const noteTitles = useMemo(() => existingTitleSet(allNotes), [allNotes]);
   const openNoteByTitle = (t: string) => {
@@ -350,6 +357,9 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   const [fileContent, setFileContent] = useState<FileContent | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
+  // 403 хост-режима (путь вне досягаемости песочницы) — отдельно от прочих ошибок,
+  // у него человекочитаемое сообщение вместо общего «не удалось открыть»
+  const [loadForbidden, setLoadForbidden] = useState(false);
   const [diff, setDiff] = useState<string | null>(null);
   const [tab, setTab] = useState<ViewTab>('file');
   // Git: репо-статус (гейт вкладки «Авторы»), blame-кэш и busy зернистого stage
@@ -438,6 +448,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
     setDrawioMode('view');
     setLoading(true);
     setLoadError(false);
+    setLoadForbidden(false);
     setFileContent(null);
     setImgDims(null);
     setActionError(null);
@@ -447,13 +458,19 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
     setVersionSha(null);
     setVersionDiff(null);
     setRestoreConfirmSha(null);
-    api.files.getContent(project.id, filePath).then(r => {
+    const contentPromise = isHostMode ? api.hostFiles.getContent(filePath) : api.files.getContent(project.id, filePath);
+    contentPromise.then(r => {
       setFileContent(r);
       setEditContent(r.content ?? '');
-    }).catch(() => setLoadError(true)).finally(() => setLoading(false));
+    }).catch(e => {
+      if (isHostMode && (e as { status?: number })?.status === 403) setLoadForbidden(true);
+      setLoadError(true);
+    }).finally(() => setLoading(false));
+    // Дифф — понятие проектного git-репо; у файла вне проекта его нет
+    if (isHostMode) setDiff(null);
     // diff недоступен офлайн — мягко игнорируем ошибку
-    fetchDiff().then(r => setDiff(r.diff)).catch(() => setDiff(null));
-  }, [project.id, filePath, gitStagePath]);
+    else fetchDiff().then(r => setDiff(r.diff)).catch(() => setDiff(null));
+  }, [project.id, filePath, gitStagePath, isHostMode]);
 
   // Blame — лениво при первом открытии вкладки «Авторы» (кэш до смены файла)
   useEffect(() => {
@@ -555,8 +572,10 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
     loadDownloadedSet(project.id);
   }, [project.id]);
 
-  // Watcher: открытый файл изменился на диске → перечитываем (если не редактируем — не затираем правки)
+  // Watcher: открытый файл изменился на диске → перечитываем (если не редактируем — не затираем правки).
+  // Хост-режим — файл вне проекта, событий по нему не будет: подписка бессмысленна.
   useEffect(() => {
+    if (isHostMode) return;
     return onFilesChanged(({ projectId, paths }) => {
       // Пока draw.io в режиме edit — не перечитываем: autosave сам пишет файл,
       // а перезагрузка content дала бы лишние refetch на каждый autosave.
@@ -569,7 +588,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
       setBlame(null);   // авторство устарело — перечитается при открытии вкладки
       setBlameError(false);
     });
-  }, [project.id, filePath, editing, drawioMode, gitStagePath]);
+  }, [project.id, filePath, editing, drawioMode, gitStagePath, isHostMode]);
 
   const handleToggleSync = () => {
     toggleSyncMark(project.id, {
@@ -676,8 +695,9 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   const [docAi, setDocAi] = useState<{ title: string; markdown: string } | null>(null);
   const [docAiBusy, setDocAiBusy] = useState(false);
   const runDocAi = async (kind: 'summary' | 'extract' | 'tags' | 'convert') => {
-    // Разрешаем документы (pdf/docx/…) и текстовые файлы; блокируем прочие бинарные и повторный клик
-    if (docAiBusy || !fileContent || (fileContent.isBinary && !fileContent.isDocument)) return;
+    // Разрешаем документы (pdf/docx/…) и текстовые файлы; блокируем прочие бинарные и повторный клик.
+    // Хост-режим — эндпоинты проектные (project.id + путь), для файла вне проекта не сработают
+    if (docAiBusy || isHostMode || !fileContent || (fileContent.isBinary && !fileContent.isDocument)) return;
     setDocAiBusy(true);
     beginAiBusy();
     try {
@@ -724,7 +744,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
       else if (a === 'file.extract') void runDocAi('extract');
       else if (a === 'file.tags') void runDocAi('tags');
       else if (a === 'file.convert') void runDocAi('convert');
-      else if (a === 'file.toMarkdown') void (async () => {
+      else if (a === 'file.toMarkdown' && !isHostMode) void (async () => {
         beginAiBusy();
         try {
           const r = await api.files.toMarkdown(project.id, filePath);
@@ -790,7 +810,9 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
     URL.revokeObjectURL(url);
   };
 
-  const fileName = filePath.split('/').pop() ?? filePath;
+  // basename (не split('/').pop()): хост-путь может прийти с обратными слэшами
+  // (Windows), как есть — relPath не нормализует то, что вне корня проекта
+  const fileName = basename(filePath) || filePath;
   const isMarkdown = /\.(md|mdx)$/i.test(fileName);
   // Текстовый файл, содержимое которого можно скопировать целиком
   const isCopyableText = !!fileContent && !fileContent.isBinary && !fileContent.isImage
@@ -825,8 +847,9 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
     added: diff.split('\n').filter(l => l.startsWith('+') && !l.startsWith('+++')).length,
     removed: diff.split('\n').filter(l => l.startsWith('-') && !l.startsWith('---')).length,
   } : null;
-  // Вкладка «Авторы» (blame) — только для текстовых файлов в git-репо
-  const showBlameTab = inRepo && !loading && !loadError && !!fileContent && !fileContent.isBinary && !fileContent.isImage;
+  // Вкладка «Авторы» (blame) — только для текстовых файлов в git-репо; в хост-режиме
+  // git-вкладки скрыты целиком (файл вне проекта — своего репо/истории тут нет)
+  const showBlameTab = !isHostMode && inRepo && !loading && !loadError && !!fileContent && !fileContent.isBinary && !fileContent.isImage;
   const fileSizeMb = fileContent?.fileSize != null ? (fileContent.fileSize / 1024 / 1024).toFixed(2) : null;
 
   const btnPrimary: React.CSSProperties = {
@@ -834,7 +857,9 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
     borderRadius: 8, padding: '5px 13px', cursor: 'pointer', fontSize: 13, fontWeight: 600,
   };
 
-  const isOfficeFile = !loading && !loadError && tab === 'file' && !!fileContent?.isDocument && fileContent.docKind !== 'pdf';
+  // OnlyOffice — эндпоинт проектный (project.id + filePath), для хост-файла не сработает;
+  // офисные документы вне проекта показываем как обычный бинарник (см. рендер ниже)
+  const isOfficeFile = !isHostMode && !loading && !loadError && tab === 'file' && !!fileContent?.isDocument && fileContent.docKind !== 'pdf';
   // Visio OnlyOffice открывает только на просмотр — переключатель «Редактировать» не показываем
   const isVisioFile = fileContent?.docKind === 'visio';
   const isCodeEditing = editing && tab === 'file' && !fileContent?.isBinary && !fileContent?.isImage;
@@ -947,7 +972,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
           icon: <DiscardIcon />, onClick: () => setOfficeDiscardDialog(true),
         };
       }
-    } else if (isDrawioViewing) {
+    } else if (isDrawioViewing && !isHostMode) {
       mainAction = drawioMode === 'view'
         ? {
             key: 'drawio-edit', label: 'Редактировать',
@@ -959,7 +984,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
             icon: <Eye size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
             onClick: () => { void (async () => { await drawioRef.current?.flush(); setDrawioMode('view'); })(); },
           };
-    } else if (online && !isMobile && !fileContent?.isBinary) {
+    } else if (online && !isMobile && !isHostMode && !fileContent?.isBinary) {
       // На мобиле правку открывает плавающая кнопка (FAB) внизу слева
       mainAction = {
         key: 'edit', label: 'Править', primary: true,
@@ -1027,7 +1052,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
         },
       });
     }
-    if (!loadError && online && !editing) {
+    if (!loadError && online && !editing && !isHostMode) {
       const cloud = <CloudGlyph filled={syncState === 'direct'} />;
       if (pending) {
         secondary.push(syncState === 'direct'
@@ -1083,7 +1108,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
         item: { key: 'download', icon: <Download size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />, label: 'Скачать', onClick: handleDownload },
       });
     }
-    if (online && !editing) {
+    if (online && !editing && !isHostMode) {
       secondary.push({
         key: 'delete',
         node: (
@@ -1375,7 +1400,15 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
           </div>
         )}
 
-        {!loading && loadError && (
+        {!loading && loadError && loadForbidden && (
+          <EmptyState
+            icon={<File size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} />}
+            title="Файл вне досягаемости песочницы"
+            subtitle={filePath}
+          />
+        )}
+
+        {!loading && loadError && !loadForbidden && (
           <EmptyState
             icon={<File size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} />}
             title={online ? 'Не удалось открыть файл' : 'Файл не синхронизирован'}
@@ -1404,7 +1437,9 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
               </div>
             )}
 
-            {fileContent?.isVideo && (
+            {/* Стрим — проектный эндпоинт (project.id + путь): для хост-файла вне
+                проекта не сработает, показываем как обычный бинарник со скачиванием */}
+            {fileContent?.isVideo && !isHostMode && (
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, padding: 16 }}>
                 <video
                   controls
@@ -1419,7 +1454,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
               </div>
             )}
 
-            {fileContent?.isAudio && (
+            {fileContent?.isAudio && !isHostMode && (
               isMobile
                 ? (
                   <div style={{ display: 'flex', justifyContent: 'center', padding: 20 }}>
@@ -1473,8 +1508,9 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
                   />
             )}
 
-            {/* Office-файлы (docx/xlsx/pptx) — через OnlyOffice Document Server */}
-            {fileContent?.isDocument && fileContent.docKind !== 'pdf' && (
+            {/* Office-файлы (docx/xlsx/pptx) — через OnlyOffice Document Server (проектный
+                эндпоинт); для хост-файла вне проекта не сработает — только скачивание */}
+            {fileContent?.isDocument && fileContent.docKind !== 'pdf' && !isHostMode && (
               <div style={{ position: 'relative', width: '100%', height: '100%' }}>
                 <OfficeViewer
                   key={`${filePath}-${officeMode}-${officeCacheKey ?? ''}`}
@@ -1490,6 +1526,21 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
                   </div>
                 )}
               </div>
+            )}
+
+            {isHostMode && fileContent && (fileContent.isVideo || fileContent.isAudio || (fileContent.isDocument && fileContent.docKind !== 'pdf')) && (
+              <EmptyState
+                icon={<File size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} />}
+                title="Просмотр недоступен вне проекта"
+                subtitle={`${fileName}${fileSizeMb ? ` — ${fileSizeMb} МБ` : ''}`}
+                action={
+                  fileContent.base64 ? (
+                    <button onClick={handleDownload} style={{ ...btnPrimary, padding: '8px 16px' }}>
+                      Скачать
+                    </button>
+                  ) : undefined
+                }
+              />
             )}
 
             {fileContent?.isBinary && !fileContent.isImage && !fileContent.isVideo && !fileContent.isAudio && !fileContent.isDocument && (
@@ -1572,6 +1623,10 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
                       )}
                     </div>
                   )
+                  : isMarkdown && isHostMode
+                  // Хост-режим: без комментариев к документу и резолва картинок —
+                  // обе фичи проектные (scope=project.id), для файла вне проекта не годятся
+                  ? <div data-selection-scope="doc" data-selection-priority="2"><MarkdownViewer content={content} /></div>
                   : isMarkdown
                   ? <div data-selection-scope="doc" data-selection-priority="2"><DocCommentedMarkdown
                       scope={project.id} docPath={filePath} content={content} isMobile={isMobile}
@@ -1710,7 +1765,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
 
       {/* Плавающая кнопка редактирования на мобиле (MA4). ЛЕВЫЙ нижний угол — правый занят
           глобальным AiLauncher (⌘/Ctrl+K), чтобы кнопки не накладывались. */}
-      {isMobile && online && !editing && tab === 'file' && fileContent && !fileContent.isBinary && !fileContent.isImage && !fileContent.isDocument && !fileContent.isVideo && !fileContent.isAudio && !isDrawio && !(isHtml && htmlTab === 'preview') && (
+      {isMobile && online && !editing && !isHostMode && tab === 'file' && fileContent && !fileContent.isBinary && !fileContent.isImage && !fileContent.isDocument && !fileContent.isVideo && !fileContent.isAudio && !isDrawio && !(isHtml && htmlTab === 'preview') && (
         <button
           onClick={() => { setEditing(true); setTab('file'); }}
           title="Редактировать"

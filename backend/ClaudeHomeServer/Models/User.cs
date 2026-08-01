@@ -14,8 +14,10 @@ public class User
     public int TokenVersion { get; set; }
     public string Role { get; set; } = "user";
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
-    // NT-хэш для NTLM WebDAV: MD4(UTF-16LE(password)); null — если пользователь ещё не логинился после обновления
-    public byte[]? NtHash { get; set; }
+    // NT-хэш пароля (легаси-поле NtHash) здесь больше не хранится: NTLM WebDAV делает
+    // Negotiate/SSPI и хэш никто не читал, а users.json уезжает в облачный бэкап —
+    // MD4(UTF-16LE(password)) ломается перебором и годится для pass-the-hash.
+    // Остатки поля вычищает разовая миграция в UserStore.Load.
     // Per-user override фич-флагов поверх дефолтов из FeatureFlagCatalog; null/отсутствует — все по дефолту
     public Dictionary<string, bool>? FeatureFlags { get; set; }
     // Per-user слоты тиров моделей. null/пусто — наследовать глобальный слот инстанса.

@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Git;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Prompts;
 using ClaudeHomeServer.Telemetry;
@@ -242,6 +243,12 @@ public class ClaudeSession : ILlmSessionAdapter
     // некому — авторазрешаем, как и остальные свои серверы (доступ ограничен allow-list агента).
     private static readonly string[] BuiltInMcpServerPrefixes =
         ["mcp__tasks__", "mcp__notes__", "mcp__memory__", "mcp__personas__", "mcp__wsp__", "mcp__notifications__", "mcp__widgets__", "mcp__dify__", "mcp__pmem_"];
+
+    // Игнор служебной папки вложений в git ставится лениво один раз за жизнь сессии:
+    // модель кладёт туда картинки для показа в ленте (см. подсказку про картинки в промпте),
+    // а у проекта со своим .gitignore правила может не быть — при аплоаде его пишет
+    // ChatsController, но модель загружает файлы мимо него.
+    private bool _attachmentsExcludeEnsured;
 
     // Отслеживание изменений файлов на время хода
     private readonly TurnFileWatcher _fileWatcher;
@@ -1359,6 +1366,16 @@ public class ClaudeSession : ILlmSessionAdapter
         _currentTurnAgentDepth = agentDepth;
         _currentTurnSuppressTasksExecute = suppressTasksExecute;
 
+        // Картинки, которые модель показывает в ленте, живут в служебной папке вложений —
+        // в git-статусе проекта они светиться не должны. Лениво (один раз за жизнь сессии)
+        // и best-effort: нет репозитория или прав на запись — ход это не касается.
+        if (!_attachmentsExcludeEnsured && Info.ProjectId is not null)
+        {
+            _attachmentsExcludeEnsured = true;
+            try { GitService.EnsureAttachmentsExcluded(_rootPath); }
+            catch { /* игнор вложений — не критично для хода */ }
+        }
+
         // OTel: корневой спан хода. using гарантирует Dispose в конце метода
         // (все return-пути и исключения). turn_id генерируем здесь — он нужен
         // спану для всех путей (включая same-process, где _launcher.Start не идёт).
@@ -1594,6 +1611,31 @@ public class ClaudeSession : ILlmSessionAdapter
                 basePrompt = string.IsNullOrWhiteSpace(basePrompt)
                     ? widgetsHint
                     : basePrompt + "\n\n" + widgetsHint;
+            }
+
+            // Подсказка про показ картинок — только у чата с проектом: локальный путь фронт
+            // резолвит относительно RootPath проекта (ChatImage), вне проекта показать нечем.
+            // Без этой подсказки модель знает единственный способ «показать» — виджет, и уходит
+            // в тупик: в песочнице виджета внешние ресурсы запрещены, остаётся только base64.
+            if (Info.ProjectId is not null)
+            {
+                var imagesHint =
+                    "Чтобы ПОКАЗАТЬ пользователю картинку в ленте чата (скриншот, сгенерированное или скачанное " +
+                    "изображение, готовый график-файл), виджет не нужен: сохрани файл внутри рабочей папки проекта " +
+                    "и вставь в ответ markdown-картинку ![подпись](относительный/путь.png) — приложение подгрузит " +
+                    "её из проекта и покажет прямо в сообщении. Путь пиши от корня проекта через /, абсолютный путь " +
+                    "внутри проекта тоже понимается. Файл ВНЕ папки проекта (например во временной папке системы) " +
+                    "показать нельзя — сначала перенеси его в проект. Служебные картинки, которым не место в " +
+                    "репозитории (скриншоты, промежуточные кадры), клади в подпапку " + FileService.AttachmentsDir +
+                    "/ — она скрыта из дерева файлов, из синка базы знаний и исключена из git. Не встраивай картинку " +
+                    "в виджет и не печатай её base64 в чат: в песочнице виджета внешние ресурсы заблокированы, " +
+                    "а base64 в ленте бесполезен и съедает контекст. Учти: прочитать картинку инструментом (Read) — " +
+                    "это показать её СЕБЕ, в ленте пользователя она так не появится; единственный способ показать " +
+                    "ему — markdown-картинка на файл внутри проекта. Читай изображение в свой контекст, только если " +
+                    "тебе самому нужно его рассмотреть: крупный файл дорого стоит и раздувает контекст.";
+                basePrompt = string.IsNullOrWhiteSpace(basePrompt)
+                    ? imagesHint
+                    : basePrompt + "\n\n" + imagesHint;
             }
 
             // Манифест recall (F3): что персона подтянула в этот ход — заметки + память.

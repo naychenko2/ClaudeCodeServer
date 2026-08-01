@@ -1,5 +1,5 @@
-import { useState, useEffect, useContext, type CSSProperties, type ReactNode } from 'react';
-import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
+import { useState, useEffect, useContext, useMemo, memo, type CSSProperties, type ReactNode } from 'react';
+import ReactMarkdown, { defaultUrlTransform, type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
@@ -28,34 +28,60 @@ export function isFileLikeAbsPath(p: string): boolean {
   return WINDOWS_ABS_PATH_RE.test(p) || FILE_LIKE_MENTION.test(p);
 }
 
+// Кэш уже загруженных картинок проекта: «projectId|путь» → data-URL. Модульный, потому
+// что переживает перемонтирование компонента: лента перерисовывается на каждом обновлении
+// чата, и без кэша картинка каждый раз уходила бы в «Загрузка…» и заново тянула base64.
+// Лимит — простой FIFO: base64 крупных скриншотов держать в памяти пачками ни к чему.
+const IMAGE_CACHE_LIMIT = 24;
+const _imageCache = new Map<string, string>();
+
+function cacheImage(key: string, dataUrl: string): void {
+  if (_imageCache.size >= IMAGE_CACHE_LIMIT) {
+    const oldest = _imageCache.keys().next();
+    if (!oldest.done) _imageCache.delete(oldest.value);
+  }
+  _imageCache.set(key, dataUrl);
+}
+
+// Путь картинки относительно корня проекта (Claude мог дать абсолютный путь внутри проекта)
+function toProjectRelative(src: string, rootPath: string): string {
+  let rel = src.replace(/\\/g, '/');
+  const root = rootPath.replace(/\\/g, '/');
+  if (rel.toLowerCase().startsWith(root.toLowerCase())) rel = rel.slice(root.length);
+  return rel.replace(/^\/+/, '');
+}
+
 // Картинка из markdown: внешние URL (http/https/data) — напрямую; локальный путь файла
 // проекта (например, картинка, скачанная Claude) — грузим через API и показываем как data-URL.
 function ChatImage({ src, alt }: { src?: string; alt?: string }) {
   const project = useContext(ChatProjectContext);
   // /api/proxy?... — уже проксированный URL (от urlTransform)
   const isRemote = !!src && /^(https?:|data:|\/api\/proxy)/i.test(src);
+  const cacheKey = src && !isRemote && project ? `${project.id}|${toProjectRelative(src, project.rootPath)}` : null;
+  // Кэш читаем на рендере, а не через setState в эффекте: после перемонтирования картинка
+  // должна стоять сразу, без промежуточного «Загрузка…» — это и есть мигание.
+  const cached = cacheKey ? _imageCache.get(cacheKey) ?? null : null;
   const [resolved, setResolved] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
-    if (!src || isRemote || !project) return;
+    if (!src || isRemote || !project || !cacheKey || cached) return;
     let cancelled = false;
-    // Путь относительно корня проекта (Claude мог дать абсолютный путь внутри проекта)
-    let rel = src.replace(/\\/g, '/');
-    const root = project.rootPath.replace(/\\/g, '/');
-    if (rel.toLowerCase().startsWith(root.toLowerCase())) rel = rel.slice(root.length);
-    rel = rel.replace(/^\/+/, '');
-    api.files.getContent(project.id, rel)
+    api.files.getContent(project.id, toProjectRelative(src, project.rootPath))
       .then(r => {
         if (cancelled) return;
-        if (r.isImage && r.base64) setResolved(`data:${r.mimeType ?? 'image/png'};base64,${r.base64}`);
+        if (r.isImage && r.base64) {
+          const dataUrl = `data:${r.mimeType ?? 'image/png'};base64,${r.base64}`;
+          cacheImage(cacheKey, dataUrl);
+          setResolved(dataUrl);
+        }
         else setFailed(true);
       })
       .catch(() => { if (!cancelled) setFailed(true); });
     return () => { cancelled = true; };
-  }, [src, isRemote, project]);
+  }, [src, isRemote, project, cacheKey, cached]);
 
-  const finalSrc = isRemote ? src : resolved;
+  const finalSrc = isRemote ? src : cached ?? resolved;
 
   if (failed) return <span style={{ fontSize: 13, color: C.textMuted }}>🖼 {alt || src}</span>;
   if (!finalSrc) return <span style={{ fontSize: 13, color: C.textMuted }}>Загрузка изображения…</span>;
@@ -130,43 +156,48 @@ export function stripServiceMarkers(text: string): string {
   return out.replace(/\n{3,}/g, '\n\n').trim();
 }
 
-// Рендер текста Claude с поддержкой Markdown
-export function MarkdownContent({ text }: { text: string }) {
+const REMARK_PLUGINS = [remarkGfm];
+
+// Рендер текста Claude с поддержкой Markdown.
+// memo + мемоизированная карта components: react-markdown использует её функции как ТИПЫ
+// элементов, поэтому новая ссылка на каждый рендер размонтировала бы поддерево целиком.
+// Для картинок это выливалось в мигание — ChatImage терял загруженный data-URL и тянул
+// файл заново (лента перерисовывается на каждом обновлении объекта проекта).
+export const MarkdownContent = memo(function MarkdownContent({ text }: { text: string }) {
   const project = useContext(ChatProjectContext);
   const treePath = useContext(ChatTreePathContext);
   const onOpenFile = useContext(ChatOpenFileContext);
   const fileIndex = useProjectFileIndex(project?.id ?? null);
-  // Упоминание пути → файл проекта: точный/суффиксный путь из индекса (lookupProjectFile,
-  // включая B1) либо, если индекс молчит, абсолютный путь — тоже ссылка без проверки
-  // существования (A1; открытие само покажет ошибку, если файла на самом деле нет).
-  // label — короткий текст для абсолютного пути внутри активного дерева/корня чата.
-  // Вне проекта и без обработчика открытия фича молчит — текст как раньше.
-  const resolveFileMention = (raw?: string | null): { path: string; label?: string } | null => {
-    if (!project || !onOpenFile || !raw) return null;
-    const known = lookupProjectFile(fileIndex, raw, project.rootPath);
-    if (known) return { path: known };
-    let p = raw.trim().split(/[#?]/)[0];
-    if (!p) return null;
-    try { p = decodeURIComponent(p); } catch { /* не URL-экранирован — как есть */ }
-    if (!isFileLikeAbsPath(p)) return null;
-    const label = relPathTree(p, project.rootPath, treePath);
-    return { path: p, label: label !== p ? label : undefined };
-  };
 
-  return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
-      urlTransform={(url, key) => {
-        // Медиа-домены (fal/glif) src — блокируем: медиа уже показаны в MediaBlock из tool_result
-        if (key === 'src' && matchesHosts(url, MEDIA_HOSTS)) return null;
-        // Абсолютный путь (в т.ч. вне корня проекта, A1) — оставляем как есть: defaultUrlTransform
-        // режет его, приняв «C:» за неизвестный протокол; существование не проверяем —
-        // resolveFileMention сам решит, стал ли он ссылкой на файл
-        if (project && ABS_PATH_RE.test(url)) return url;
-        // остальные внешние URL (src и href) — через прокси если домен разрешён
-        return isProxiable(url) ? proxyUrl(url) : defaultUrlTransform(url);
-      }}
-      components={{
+  const urlTransform = useMemo(() => (url: string, key: string) => {
+    // Медиа-домены (fal/glif) src — блокируем: медиа уже показаны в MediaBlock из tool_result
+    if (key === 'src' && matchesHosts(url, MEDIA_HOSTS)) return null;
+    // Абсолютный путь (в т.ч. вне корня проекта, A1) — оставляем как есть: defaultUrlTransform
+    // режет его, приняв «C:» за неизвестный протокол; существование не проверяем —
+    // resolveFileMention сам решит, стал ли он ссылкой на файл
+    if (project && ABS_PATH_RE.test(url)) return url;
+    // остальные внешние URL (src и href) — через прокси если домен разрешён
+    return isProxiable(url) ? proxyUrl(url) : defaultUrlTransform(url);
+  }, [project]);
+
+  const components = useMemo<Components>(() => {
+    // Упоминание пути → файл проекта: точный/суффиксный путь из индекса (lookupProjectFile,
+    // включая B1) либо, если индекс молчит, абсолютный путь — тоже ссылка без проверки
+    // существования (A1; открытие само покажет ошибку, если файла на самом деле нет).
+    // label — короткий текст для абсолютного пути внутри активного дерева/корня чата.
+    // Вне проекта и без обработчика открытия фича молчит — текст как раньше.
+    const resolveFileMention = (raw?: string | null): { path: string; label?: string } | null => {
+      if (!project || !onOpenFile || !raw) return null;
+      const known = lookupProjectFile(fileIndex, raw, project.rootPath);
+      if (known) return { path: known };
+      let p = raw.trim().split(/[#?]/)[0];
+      if (!p) return null;
+      try { p = decodeURIComponent(p); } catch { /* не URL-экранирован — как есть */ }
+      if (!isFileLikeAbsPath(p)) return null;
+      const label = relPathTree(p, project.rootPath, treePath);
+      return { path: p, label: label !== p ? label : undefined };
+    };
+    return {
         p: ({ children }) => (
           <p style={{ margin: '0 0 8px 0', lineHeight: 1.6 }}>{children}</p>
         ),
@@ -260,12 +291,16 @@ export function MarkdownContent({ text }: { text: string }) {
         td: ({ children }) => (
           <td style={{ border: `1px solid ${C.border}`, padding: '6px 10px' }}>{children}</td>
         ),
-      }}
-    >
+    };
+    // treePath — в зависимостях: от него зависит короткий label абсолютного пути
+  }, [project, onOpenFile, fileIndex, treePath]);
+
+  return (
+    <ReactMarkdown remarkPlugins={REMARK_PLUGINS} urlTransform={urlTransform} components={components}>
       {stripServiceMarkers(text)}
     </ReactMarkdown>
   );
-}
+});
 
 // Оборачивает внешний URL через backend-прокси (/api/proxy) — поддерживает любой тип контента
 export function proxyUrl(url: string): string {

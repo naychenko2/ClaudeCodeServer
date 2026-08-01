@@ -367,10 +367,12 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
 
     return () => {
       listeners.delete(notify);
-      // Покидаем группу SignalR только когда сессию не смотрит больше ни один компонент:
-      // ChatPanel и ArtifactsPanel (useSessionArtifacts) делят одну сессию, и уход одного
-      // не должен рвать realtime другого. Последний ушедший снимает счётчик зрителей
-      // (сервер сможет слать push/тост) и сбрасывает isJoined для перезахода при возврате.
+      // Отпускаем сессию только когда её не смотрит больше ни один компонент: ChatPanel и
+      // ArtifactsPanel (useSessionArtifacts) делят одну сессию, и уход одного не должен рвать
+      // realtime другого. Последний ушедший снимает счётчик зрителей (сервер сможет слать
+      // push/тост) и сбрасывает isJoined для перезахода при возврате. Из группы SignalR при
+      // этом выводит СЕРВЕР и только если ход не идёт (SessionHub.LeaveSession): события
+      // незавершённого хода продолжают капать сюда в фоне, иначе лента останется с обрывком.
       if ((_listeners.get(sessionId)?.size ?? 0) === 0) {
         leaveSession(sessionId);
         setState(sessionId, prev => ({ ...prev, isJoined: false }));

@@ -92,11 +92,25 @@ public class SessionHub : Hub
                 new PendingMessagesMessage(queued) with { SessionId = sessionId });
     }
 
+    // Уход из чата: зрителя снимаем всегда (сервер снова вправе слать push/тост о конце хода),
+    // а вот из группы выходим ТОЛЬКО когда ход не идёт. Иначе события начатого хода (дельты,
+    // tool_use, result) летят мимо вкладки, и восстановить ленту можно лишь снимком истории —
+    // ровно так терялся хвост ответа, когда пользователь уходил в другой чат, не дождавшись
+    // ответа. Оставшийся в группе клиент копит события в модульном сторе useSession, поэтому
+    // при возврате лента уже целая. Группа отпустится сама при обрыве связи (OnDisconnectedAsync).
     public async Task LeaveSession(string sessionId)
     {
         _sessions.RemoveViewer(sessionId, Context.ConnectionId);
+        if (TurnInProgress(sessionId)) return;
         await Groups.RemoveFromGroupAsync(Context.ConnectionId, sessionId);
     }
+
+    // Идёт ли ход прямо сейчас — та же тройка статусов, что считают живой сессию
+    // BoardService и TaskExecutionService. Waiting входит: чат ждёт ответа на карточку
+    // разрешения/вопроса, и она приходит в группу.
+    private bool TurnInProgress(string sessionId) =>
+        _sessions.GetSessionInfo(sessionId)?.Status
+            is SessionStatus.Starting or SessionStatus.Working or SessionStatus.Waiting;
 
     public async Task JoinProject(string projectId)
     {

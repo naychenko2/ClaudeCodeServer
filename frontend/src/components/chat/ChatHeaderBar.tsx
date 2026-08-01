@@ -908,7 +908,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // На мобиле блок вложен в BackButton («назад к списку») — там клик остаётся за ним.
   const [personaHover, setPersonaHover] = useState(false);
   const openPersonaCard = persona
-    ? () => { window.location.hash = `#/personas/${encodeURIComponent(persona.id)}`; }
+    ? () => { window.dispatchEvent(new CustomEvent('cc-open-url', { detail: { url: `#/personas/${encodeURIComponent(persona.id)}` } })); }
     : null;
   const personaCardLink = openPersonaCard && !(isMobile && onBack) ? {
     role: 'button' as const, tabIndex: 0,

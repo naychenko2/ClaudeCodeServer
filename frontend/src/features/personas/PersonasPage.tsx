@@ -78,6 +78,9 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
         sessionStorage.removeItem('cc_pending_persona_view');
         setSelectedId(pending); setMobileView('card');
         setPendingView(view === 'automation' ? 'automation' : null);
+        // Диплинк на проектную персону — в дефолтном «Глобальные» её нет в списке, переключаем
+        const target = allPersonas.find(p => p.id === pending);
+        if (target && target.scope !== 'global') setListMode('all');
         navPush({ screen: 'personas', persona: pending });
         return;
       }
@@ -85,6 +88,8 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
       if (t?.screen === 'personas' && t.personaId) {
         setSelectedId(t.personaId); setMobileView('card');
         setPendingView(t.personaView === 'automation' ? 'automation' : null);
+        const target = allPersonas.find(p => p.id === t.personaId);
+        if (target && target.scope !== 'global') setListMode('all');
       }
     };
     consume();

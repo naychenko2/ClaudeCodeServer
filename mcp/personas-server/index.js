@@ -187,6 +187,11 @@ const CONTEXT_NOTE = PROJECT_ID
 
 const COLORS = ['yellow', 'orange', 'blue', 'green', 'purple', 'red', 'brown', 'cyan', 'pink'];
 
+// Ссылка на справочник сервера (поле instructions ответа initialize): развёрнутые описания
+// слотов характера, привязок и triggerArgs лежат ТАМ и попадают в контекст один раз на сервер,
+// а не в каждую схему. Дублировать их в description — значит платить за них ×2…×3.
+const SEE_INSTRUCTIONS = 'см. инструкции сервера personas';
+
 // Общие поля персоны для create/update (кроме name — у create он обязателен)
 const PERSONA_FIELDS = {
   role: { type: 'string', description: 'Роль — главное в отображении («Роль (Имя)»), например «Дизайнер»' },
@@ -194,38 +199,33 @@ const PERSONA_FIELDS = {
     type: 'string',
     enum: ['none', 'analyst', 'planner', 'reviewer', 'executor', 'secretary',
       'coordinator', 'mentor', 'designer', 'consultant', 'librarian', 'tester'],
-    description: 'Функциональная специализация для оркестрации команды: роутинг типовых ' +
-      'сабагентов oh-my-claudecode на эту персону (analyst/planner/reviewer/executor/…), ' +
-      'а также брифинг и общая память команды. none — не задана (дефолт). ' +
-      'executor или tester при полном профиле доступа (access "full") даёт персоне право ' +
-      'править файлы и запускать команды в сабагентах — выставляй осознанно.',
+    description: 'Специализация для оркестрации команды (роутинг типовых сабагентов на персону); '
+      + 'executor/tester при access "full" даёт право править файлы — выставляй осознанно',
   },
   description: { type: 'string', description: 'Короткое описание, кто это (для карточки)' },
-  // Контракт характера — по слотам (собирается в contract на бэкенде)
-  character: { type: 'string', description: 'Характер и ценности персоны на «ты» («Ты — …»), 2-5 предложений' },
-  tone: { type: 'string', description: 'Тон общения одной короткой фразой (напр. «сухо и по делу»)' },
-  mustDo: { type: 'array', items: { type: 'string' }, description: 'Правила «что делать всегда», 2-4 коротких пункта' },
-  mustNot: { type: 'array', items: { type: 'string' }, description: 'Анти-паттерны «чего не делать никогда», 2-4 пункта' },
-  outputFormat: { type: 'string', description: 'Требования к формату ответов, 1-2 предложения' },
-  speechExamples: { type: 'array', items: { type: 'string' }, description: '1-2 характерные реплики от лица персоны (образцы стиля)' },
-  systemPrompt: { type: 'string', description: 'УСТАРЕЛО: единый текст характера — используй character и остальные слоты' },
+  // Контракт характера — по слотам (собирается в contract на бэкенде). Что писать в каждый
+  // слот — в INSTRUCTIONS: здесь description только там, где имя поля само за себя не говорит.
+  character: { type: 'string', description: `Характер на «ты» («Ты — …»), 2-5 предложений; слоты — ${SEE_INSTRUCTIONS}` },
+  tone: { type: 'string' },
+  mustDo: { type: 'array', items: { type: 'string' } },
+  mustNot: { type: 'array', items: { type: 'string' } },
+  outputFormat: { type: 'string' },
+  speechExamples: { type: 'array', items: { type: 'string' } },
+  systemPrompt: { type: 'string', description: 'УСТАРЕЛО: единый текст характера — используй character' },
   model: { type: 'string', description: 'Модель LLM (пусто = дефолт сервера)' },
   // Уровень модели вместо конкретной: резолвится в модель на бэке (слоты владельца).
   // Явная model сильнее уровня; уровень самой задачи сильнее обоих.
   modelTier: {
     type: 'string',
     enum: ['strong', 'medium', 'weak'],
-    description: 'Уровень модели для исполнения: strong — проектирование, архитектура, ревью, ' +
-      'запутанный баг, многофайловый код; medium — реализация по готовому плану, тесты, документация; ' +
-      'weak — механическая правка, переименование, коммит, обновление текста. ' +
-      'Не указывай, если сомневаешься — уровень возьмётся от настроек системы.',
+    description: 'strong — архитектура, ревью, запутанный баг; medium — работа по плану; '
+      + 'weak — рутина. Сомневаешься — не указывай',
   },
   effort: { type: 'string', description: 'Усилие рассуждения модели' },
-  color: { type: 'string', enum: COLORS, description: 'Цвет аватара из палитры' },
-  greeting: { type: 'string', description: 'Приветствие — первое сообщение от лица персоны' },
+  color: { type: 'string', enum: COLORS },
+  greeting: { type: 'string' },
   memoryEnabled: { type: 'boolean', description: 'Долгая память персоны (по умолчанию включена)' },
-  handle: { type: 'string', description: 'Ручной @handle (латинский slug, для @упоминаний); ' +
-    'пусто при создании — авто-генерация из имени; занят/невалиден → ошибка' },
+  handle: { type: 'string', description: '@handle (латинский slug); пусто при создании — авто из имени' },
 };
 
 // Привязка персоны (флаг persona-bindings): источник знаний или правило с условием применения
@@ -233,15 +233,17 @@ const BINDING_ITEM_SCHEMA = {
   type: 'object',
   required: ['type', 'target'],
   properties: {
+    // Что означают target/path при каждом type и как писать condition/mode — в INSTRUCTIONS:
+    // эта схема встречается трижды (create, update, bindings_set), любой текст здесь тройной
     type: {
       type: 'string',
       enum: ['project', 'projectPath', 'knowledge', 'notes', 'tool', 'skill', 'projectPersonas', 'projectTasks'],
-      description: 'Тип: project — проект целиком; projectPath — папка/файл проекта; knowledge — база знаний (datasetId); notes — источник заметок; tool — рубильник инструмента; skill — глобальный скилл; projectPersonas — команда ЧУЖОГО проекта (persona_ask/@упоминание); projectTasks — задачи ЧУЖОГО проекта',
+      description: `формат привязки — ${SEE_INSTRUCTIONS}`,
     },
-    target: { type: 'string', description: 'Цель: projectId | datasetId | source заметок ("personal"/projectId) | ключ инструмента (tasks/notes/web/…) | имя скилла | projectId (для projectPersonas/projectTasks)' },
-    path: { type: 'string', description: 'Путь внутри цели (для projectPath — обязателен; для notes — папка источника; для projectPersonas — id персоны, сужающий до неё одной, пусто = вся команда; для projectTasks — "readonly" для доступа только для чтения, пусто = полный доступ)' },
-    condition: { type: 'string', description: 'Когда персоне применять источник (1-2 предложения; пусто = «всегда под рукой»)' },
-    mode: { type: 'string', enum: ['auto', 'always', 'off'], description: 'Режим: auto — по условию (дефолт); always — выжимка в каждый ход; off — выключена' },
+    target: { type: 'string' },
+    path: { type: 'string' },
+    condition: { type: 'string' },
+    mode: { type: 'string', enum: ['auto', 'always', 'off'] },
   },
 };
 
@@ -263,43 +265,73 @@ const PROJECT_HINT = PROJECT_ID ? ` Текущий проект этого ча�
 const AUTOMATION_FIELDS = {
   name: { type: 'string', description: 'Человекочитаемое имя правила («Следить за релизами») — видно в списке и в заголовке чата правила' },
   enabled: { type: 'boolean', description: 'Включено ли правило (по умолчанию true)' },
+  // Смысл триггеров, форм triggerArgs и веса действия — в INSTRUCTIONS (набор идёт ×2:
+  // automation_create + automation_update)
   triggerType: {
     type: 'string', enum: TRIGGER_TYPES,
-    description: 'Тип триггера: timer — по расписанию; file/note/gitCommit/taskStatus — опрос ' +
-      'изменений на тике; mention — по @упоминанию handle этой персоны (детектится сам, без опроса).',
+    description: 'timer — по расписанию; file/note/gitCommit/taskStatus — опрос изменений; '
+      + 'mention — по @упоминанию handle персоны',
   },
-  triggerArgs: {
-    type: 'object',
-    description: 'Параметры триггера — форма зависит от triggerType:\n' +
-      '  timer: { schedule: { type: "daily"|"weekdays"|"weekly"|"interval", time: "HH:mm", weekdays?: [1..7] (1=пн), intervalMinutes?: number }, tz?: string }\n' +
-      '  file: { projectId, glob: "src/**/*.ts", kinds: ["created","changed"] }\n' +
-      '        — ИЛИ вместо projectId ключ folder (только для ГЛОБАЛЬНОЙ персоны без проекта): folder — относительный подпуть в основной папке пользователя, "" = вся основная папка. Не задавай projectId и folder одновременно.\n' +
-      '  note: { source: "personal"|projectId, tags?: ["#тег"], section?: "папка" }\n' +
-      '  gitCommit: { projectId, paths?: ["src/**"] } — ИЛИ folder (см. file; папка должна быть git-репозиторием)\n' +
-      '  taskStatus: { projectId?, from?: статус, to?: статус, assignee?: "me"|"claude" }\n' +
-      '  mention: {} — не заполняй, срабатывает автоматически.' + PROJECT_HINT,
-  },
-  conditionOnlyIf: { type: 'string', description: 'Доп. условие-предикат для LLM-гейта («реагируй, только если касается деплоя»); пусто — без доп. условия (гейт всё равно спрашивает «стоит ли реагировать»)' },
-  quietFrom: { type: 'string', description: 'Начало тихих часов "HH:mm" (местное время владельца) — правило не срабатывает в этом окне' },
-  quietTo: { type: 'string', description: 'Конец тихих часов "HH:mm" (поддерживается переход через полночь, напр. 23:00→07:00)' },
-  minIntervalMinutes: { type: 'integer', minimum: 1, description: 'Минимальный интервал между срабатываниями (троттлинг); по умолчанию 5 мин (для file — 1 мин)' },
-  actionWeight: {
-    type: 'string', enum: ACTION_WEIGHTS,
-    description: 'gate — оценить событие и коротко ответить текстом, без тяжёлых действий; ' +
-      'work — полноценный агентский ход (может править файлы, заводить задачи/заметки через инструменты)',
-  },
-  actionInstruction: { type: 'string', description: 'Инструкция себе на реакцию при срабатывании (что делать/о чём написать)' },
-  rememberInHistory: { type: 'boolean', description: 'Записывать карточку-итог срабатывания в историю чата правила' },
-  actionExpiresAfterMinutes: {
-    type: ['integer', 'null'],
-    description: 'TTL чата правила в минутах от последней активности (как у временных чатов); ' +
-      'null — бессрочно; не указывай, чтобы оставить дефолт (1440 при создании / текущее значение при обновлении)',
-  },
+  triggerArgs: { type: 'object', description: 'Параметры триггера, форма зависит от triggerType' },
+  conditionOnlyIf: { type: 'string', description: 'Доп. условие для LLM-гейта («только если касается деплоя»)' },
+  quietFrom: { type: 'string', description: 'Начало тихих часов "HH:mm" (местное время владельца)' },
+  quietTo: { type: 'string', description: 'Конец тихих часов "HH:mm" (можно через полночь)' },
+  minIntervalMinutes: { type: 'integer', minimum: 1, description: 'Минимальный интервал срабатываний; дефолт 5 мин (file — 1 мин)' },
+  actionWeight: { type: 'string', enum: ACTION_WEIGHTS, description: 'gate — оценить и коротко ответить; work — полноценный агентский ход' },
+  actionInstruction: { type: 'string', description: 'Инструкция себе на реакцию при срабатывании' },
+  rememberInHistory: { type: 'boolean', description: 'Писать карточку-итог в историю чата правила' },
+  actionExpiresAfterMinutes: { type: ['integer', 'null'], description: 'TTL чата правила, мин; null — бессрочно; не указывай — дефолт 1440' },
 };
 
 const AUTOMATION_KEYS = ['name', 'enabled', 'triggerType', 'triggerArgs', 'conditionOnlyIf',
   'quietFrom', 'quietTo', 'minIntervalMinutes', 'actionWeight', 'actionInstruction',
   'rememberInHistory', 'actionExpiresAfterMinutes'];
+
+// Справочник сервера (поле instructions ответа initialize). Клиент кладёт его в контекст ОДИН
+// раз на сервер, тогда как текст в description оплачивается в каждой схеме, где повторён:
+// слоты характера шли ×2 (create+update), triggerArgs ×2, привязка ×3.
+//
+// ВАЖНО: claude CLI усекает instructions примерно на 2 КБ, дописывая «… [truncated]» (проверено
+// живой пробой: из 6 КБ маркеров доехали первые ~2050 символов). Поэтому сюда идёт только то,
+// что дублировалось по нескольку раз, в максимально плотной форме — всё остальное осталось
+// в схемах. При правке следи за длиной: хвост за лимитом до модели не доедет.
+// Секции справочника следуют флагам ровно как состав инструментов: без write-инструментов
+// слоты характера некому применять, без BINDINGS нет привязок. Иначе в урезанном режиме
+// (3 инструмента) справочник весил бы больше самих схем.
+const INSTRUCTIONS = [
+  'Справочники сервера «Персоны» (на них ссылаются описания инструментов).',
+  ...(WRITE ? [
+    '',
+    'СЛОТЫ ХАРАКТЕРА (create/update), заполняй все: character — характер на «ты» («Ты — …»),',
+    '  2-5 предложений; tone — тон одной фразой; mustDo/mustNot — по 2-4 пункта «всегда»/',
+    '  «никогда»; outputFormat — формат ответов; speechExamples — 1-2 реплики от лица персоны;',
+    '  greeting — приветствие. systemPrompt — устаревший единый текст характера.',
+  ] : []),
+  ...(BINDINGS ? [
+  '',
+  'ПРИВЯЗКА (bindings в create/update, bindings_set): { type, target, path?, condition?, mode? }.',
+  '  type → target/path: project — проект целиком (projectId); projectPath — папка/файл проекта',
+  '  (projectId; path обязателен); knowledge — база знаний (datasetId); notes — заметки',
+  '  ("personal"|projectId; path: папка); tool — рубильник инструмента (tasks/notes/web/…);',
+  '  skill — скилл (имя); projectPersonas — команда ЧУЖОГО проекта для persona_ask (projectId;',
+  '  path: id персоны = сужение до неё, пусто = вся команда); projectTasks — задачи ЧУЖОГО',
+  '  проекта (projectId; path "readonly" = только чтение, пусто = полный доступ).',
+  '  condition — когда применять (пусто = всегда). mode — auto (дефолт) | always | off.',
+  ] : []),
+  ...(WRITE ? [
+  '',
+  'ПАРАМЕТРЫ ТРИГГЕРА (triggerArgs в automation_create/update) по triggerType:',
+  '  timer: { schedule: { type: "daily"|"weekdays"|"weekly"|"interval", time: "HH:mm",',
+  '    weekdays?: [1..7] (1=пн), intervalMinutes?: number }, tz?: string }',
+  '  file: { projectId, glob: "src/**/*.ts", kinds: ["created","changed"] }',
+  '  note: { source: "personal"|projectId, tags?: ["#тег"], section?: "папка" }',
+  '  gitCommit: { projectId, paths?: ["src/**"] } — папка должна быть git-репозиторием',
+  '  taskStatus: { projectId?, from?, to?, assignee?: "me"|"claude" }',
+  '  mention: {} — не заполняй, срабатывает само',
+  '  file/gitCommit: вместо projectId — folder (только у ГЛОБАЛЬНОЙ персоны, подпуть в домашней',
+  '  папке, "" = вся папка); с projectId вместе не задавать.' + PROJECT_HINT,
+  ] : []),
+].join('\n');
 
 const TOOLS = [
   {
@@ -326,33 +358,26 @@ const TOOLS = [
   ...(WRITE ? [{
     name: 'personas_create',
     description: `Создать персону — AI-собеседника с именем, ролью и характером. ${CONTEXT_NOTE} ` +
-      'scope: "global" — доступна во всех чатах (по умолчанию); "project" — привязана к проекту. ' +
-      'Заполняй ВСЕ слоты характера: character (на «ты»), tone, mustDo, mustNot, outputFormat, ' +
-      'speechExamples; приветствие — в greeting от лица персоны. specialty — функциональная ' +
-      'специализация для оркестрации (analyst/planner/reviewer/executor/…), если персона под неё ' +
-      '(executor или tester при access "full" даёт право править файлы и запускать команды ' +
-      'в сабагентах — выставляй осознанно).',
+      `Заполняй ВСЕ слоты характера — ${SEE_INSTRUCTIONS}.`,
     inputSchema: {
       type: 'object',
       required: ['name'],
       properties: {
         name: { type: 'string', description: 'Имя персоны' },
         ...PERSONA_FIELDS,
-        scope: { type: 'string', enum: ['global', 'project'], description: 'Зона персоны (по умолчанию global)' },
-        projectId: { type: 'string', description: 'ID проекта для scope=project (по умолчанию — проект текущей сессии)' },
-        avatarPrompt: { type: 'string', description: 'Описание внешности для фото-аватара (необязательно; ' +
-          'пусто — промпт строится из имени и роли). Фото генерируется автоматически при создании.' },
+        scope: { type: 'string', enum: ['global', 'project'], description: 'Зона персоны: global (дефолт) — во всех чатах; project — в своём проекте' },
+        projectId: { type: 'string', description: 'ID проекта для scope=project (дефолт — проект сессии)' },
+        avatarPrompt: { type: 'string', description: 'Внешность для фото-аватара; пусто — из имени и роли (фото создаётся само)' },
         ...BINDING_CREATE_FIELDS,
       },
     },
   },
   {
     name: 'personas_update',
-    description: 'Изменить персону: передавай только изменяемые поля. Пустая строка очищает ' +
-      'role/model/effort/color/greeting. specialty — функциональная специализация для ' +
-      'оркестрации (none сбрасывает; executor или tester при access "full" даёт право править ' +
-      'файлы и запускать команды в сабагентах — выставляй осознанно). Смена scope на "project" требует projectId.' +
-      (BINDINGS ? ' bindings — ПОЛНАЯ замена набора привязок (свои собственные привязки менять нельзя).' : ''),
+    description: 'Изменить персону: поля как при создании, передавай только изменяемые. ' +
+      'Пустая строка очищает role/model/effort/color/greeting (specialty — "none"). ' +
+      'Смена scope на "project" требует projectId.' +
+      (BINDINGS ? ' bindings — ПОЛНАЯ замена набора привязок (свои собственные менять нельзя).' : ''),
     inputSchema: {
       type: 'object',
       required: ['id'],
@@ -405,35 +430,32 @@ const TOOLS = [
     }] : []),
     {
       name: 'knowledge_search',
-      description: 'Гибридный поиск (смысловой + полнотекстовый по ключевым словам) по привязанной ' +
-        'базе знаний (Dify) по её datasetId. Используй, когда выполняется условие привязки-«базы ' +
-        'знаний» из твоего контекста: подставь datasetId из строки привязки и запрос по смыслу ' +
-        'вопроса пользователя (можно включать точные термины/имена — их найдёт полнотекстовая часть). ' +
-        'Возвращает: metadataFields (по каким полям можно фильтровать) и hits — выдержки (документ, ' +
-        'score, текст, metadata: напр. дата встречи/источник) — используй их, чтобы датировать и ' +
-        'атрибутировать факты. Фильтровать можно ТОЛЬКО по полям из metadataFields; если поля нет — ' +
-        'вернётся ошибка со списком доступных. Диапазоны дат не поддерживаются (дата хранится строкой) — ' +
-        'для периода используй contains/start with по году или году-месяцу («2025-09», «2026»).',
+      description: 'Гибридный поиск (смысловой + полнотекстовый) по привязанной базе знаний (Dify) ' +
+        'по её datasetId. Используй, когда выполняется условие привязки-«базы знаний» из твоего ' +
+        'контекста. Возвращает metadataFields (по каким полям можно фильтровать) и hits — выдержки ' +
+        '(документ, score, текст, metadata: напр. дата встречи/источник), по ним датируй и ' +
+        'атрибутируй факты. Диапазоны дат не поддерживаются — для периода бери contains/start with ' +
+        'по «2025-09»/«2026».',
       inputSchema: {
         type: 'object',
         required: ['datasetId', 'query'],
         properties: {
-          datasetId: { type: 'string', description: 'ID датасета из строки привязки (mcp__personas__knowledge_search datasetId "…")' },
-          query: { type: 'string', description: 'Поисковый запрос на естественном языке (по смыслу вопроса)' },
-          topK: { type: 'integer', minimum: 1, maximum: 20, description: 'Сколько выдержек вернуть (по умолчанию 6)' },
+          datasetId: { type: 'string', description: 'ID датасета из строки привязки' },
+          query: { type: 'string', description: 'Запрос на естественном языке (по смыслу вопроса)' },
+          topK: { type: 'integer', minimum: 1, maximum: 20, description: 'Сколько выдержек (дефолт 6)' },
           filters: {
             type: 'array',
-            description: 'Необязательные фильтры по метаданным документов. Фильтруй только по полям из ' +
-              'metadataFields (сделай сначала поиск без фильтра, чтобы их увидеть).',
+            description: 'Фильтры по метаданным документов — только по полям из metadataFields ' +
+              '(сделай сначала поиск без фильтра, чтобы их увидеть)',
             items: {
               type: 'object',
               required: ['name', 'operator'],
               properties: {
-                name: { type: 'string', description: 'Имя поля метаданных (напр. meeting_date, meeting_source, meeting_id)' },
+                name: { type: 'string', description: 'Имя поля метаданных (напр. meeting_date, meeting_source)' },
                 operator: {
                   type: 'string',
                   enum: ['contains', 'not contains', 'start with', 'end with', 'is', 'is not', 'empty', 'not empty'],
-                  description: 'Строковый оператор. Для периода дат — contains/start with по «2025-09»/«2026»',
+                  description: 'Строковый оператор',
                 },
                 value: { type: 'string', description: 'Значение (не нужно для empty/not empty)' },
               },
@@ -534,17 +556,16 @@ const TOOLS = [
   },
   {
     name: 'personas_ai_team',
-    description: 'Сгенерировать команду персон (роли, характеры, аватары) под задачу/проект. ' +
-      'ИИ по промпту и контексту проекта (CLAUDE.md) предлагает сбалансированный состав 3-6 персон. ' +
-      'Возвращает ЧЕРНОВИКИ (поле members) — НЕ создаёт персон: покажи состав пользователю и создай ' +
-      'нужных через personas_create (поля черновика совпадают с параметрами создания). ' +
-      'Требуется проект: projectId обязателен (по умолчанию — проект текущей сессии; вне проекта — укажи явно).',
+    description: 'Сгенерировать команду персон под задачу/проект: ИИ по промпту и CLAUDE.md проекта ' +
+      'предлагает состав 3-6 персон. Возвращает ЧЕРНОВИКИ (members), персон НЕ создаёт — покажи ' +
+      'состав пользователю и заведи нужных через personas_create (поля черновика те же). ' +
+      'Требуется проект: вне проекта укажи projectId явно.',
     inputSchema: {
       type: 'object',
       required: ['prompt'],
       properties: {
         prompt: { type: 'string', description: 'Какая команда нужна и подо что (задача/цели проекта)' },
-        projectId: { type: 'string', description: 'ID проекта, под который формируется команда (по умолчанию — проект текущей сессии)' },
+        projectId: { type: 'string', description: 'ID проекта команды (дефолт — проект сессии)' },
       },
     },
   }] : []),
@@ -554,19 +575,17 @@ const TOOLS = [
   ...(MENTIONS ? [{
     name: 'persona_ask',
     description: 'Спросить другую персону: она ответит от своего лица, в своём характере и со своей ' +
-      'долгой памятью. Используй, когда пользователь упоминает @handle персоны или когда нужна её ' +
-      'экспертиза (например, мнение ревьюера о плане). handle персоны есть в personas_list. ' +
-      'Вопрос формулируй самодостаточно — персона не видит этот разговор; важный контекст передай ' +
-      'в поле context. Если тёзка есть в нескольких проектах (кросс-проектная привязка) — вызов по ' +
-      'handle вернёт список кандидатов с их id и проектом; повтори вызов с personaId вместо handle.',
+      'долгой памятью. Зови, когда пользователь упоминает @handle персоны или нужна её экспертиза. ' +
+      'Вопрос формулируй самодостаточно — персона не видит этот разговор; контекст передай в context. ' +
+      'Тёзки из разных проектов: вызов по handle вернёт кандидатов — повтори с personaId.',
     inputSchema: {
       type: 'object',
       required: ['question'],
       properties: {
-        handle: { type: 'string', description: 'handle персоны (без @), см. personas_list. Не нужен, если указан personaId' },
-        personaId: { type: 'string', description: 'ID персоны — однозначная альтернатива handle (используй при коллизии тёзок из разных проектов)' },
+        handle: { type: 'string', description: 'handle персоны (без @), см. personas_list; не нужен при personaId' },
+        personaId: { type: 'string', description: 'ID персоны — однозначная альтернатива handle' },
         question: { type: 'string', description: 'Самодостаточный вопрос к персоне' },
-        context: { type: 'string', description: 'Необязательный контекст разговора (кратко, только нужное для ответа)' },
+        context: { type: 'string', description: 'Контекст разговора (кратко, только нужное для ответа)' },
       },
     },
   }] : []),
@@ -859,6 +878,7 @@ async function handleMessage(msg) {
           protocolVersion: params?.protocolVersion ?? '2024-11-05',
           capabilities: { tools: {} },
           serverInfo: { name: 'personas', version: '1.0.0' },
+          instructions: INSTRUCTIONS,
         });
         break;
       case 'tools/list':

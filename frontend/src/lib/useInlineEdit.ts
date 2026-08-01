@@ -7,9 +7,10 @@ export function useInlineEdit(onSave: (id: string, text: string) => Promise<unkn
   const [editingId, setEditingId] = useState<string | null>(null);
   const [text, setText] = useState('');
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const start = (id: string, initial: string) => { setEditingId(id); setText(initial); };
-  const cancel = () => setEditingId(null);
+  const start = (id: string, initial: string) => { setEditingId(id); setText(initial); setError(null); };
+  const cancel = () => { setEditingId(null); setError(null); };
 
   const save = async () => {
     const trimmed = text.trim();
@@ -18,10 +19,15 @@ export function useInlineEdit(onSave: (id: string, text: string) => Promise<unkn
     try {
       await onSave(editingId, trimmed);
       setEditingId(null);
+      setError(null);
+    } catch (e) {
+      // Ошибку (напр. 400 «длиннее 1000 символов») показываем прямо в карточке —
+      // редактирование остаётся открытым, набранный текст не пропадает.
+      setError(e instanceof Error ? e.message : 'Не удалось сохранить изменения');
     } finally {
       setSaving(false);
     }
   };
 
-  return { editingId, text, setText, saving, start, cancel, save };
+  return { editingId, text, setText, saving, error, start, cancel, save };
 }

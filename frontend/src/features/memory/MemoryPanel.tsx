@@ -39,6 +39,9 @@ export interface MemoryPanelProps<TType extends string> {
   addHint: string;
   addPlaceholder: string;
   onAdd: (type: TType, text: string) => Promise<unknown>;
+  // Лимит длины записи (символов) — известен только там, где бэкенд его гейтит
+  // (память команды, TeamMemoryService.MaxTextLength); без пропа счётчик не рисуется.
+  maxLength?: number;
 
   // Действия карточки
   onEdit: (id: string, text: string) => Promise<unknown>;
@@ -53,7 +56,7 @@ export interface MemoryPanelProps<TType extends string> {
 
 export function MemoryPanel<TType extends string>({
   entries, error, onRetry, typeMeta, typeOrder,
-  addHint, addPlaceholder, onAdd,
+  addHint, addPlaceholder, onAdd, maxLength,
   onEdit, onRemove, onConfirm, onToNote,
   emptyIcon, emptyTitle, emptyHint,
 }: MemoryPanelProps<TType>) {
@@ -63,8 +66,10 @@ export function MemoryPanel<TType extends string>({
   const [addType, setAddType] = useState<TType>(typeOrder[0]);
   const [addText, setAddText] = useState('');
   const [adding, setAdding] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
   const [removingId, setRemovingId] = useState<string | null>(null);
   const edit = useInlineEdit(onEdit);
+  const overLimit = maxLength != null && addText.trim().length > maxLength;
 
   const loading = entries === null;
   const all = useMemo(() => entries ?? [], [entries]);
@@ -107,10 +112,18 @@ export function MemoryPanel<TType extends string>({
 
   const submit = async () => {
     const text = addText.trim();
-    if (!text || adding) return;
+    if (!text || adding || overLimit) return;
     setAdding(true);
-    try { await onAdd(addType, text); setAddText(''); }
-    finally { setAdding(false); }
+    try {
+      await onAdd(addType, text);
+      setAddText('');
+      setAddError(null);
+    } catch (e) {
+      // Текст остаётся в поле — иначе набранная запись пропадает молча при 400.
+      setAddError(e instanceof Error ? e.message : 'Не удалось сохранить запись');
+    } finally {
+      setAdding(false);
+    }
   };
 
   const remove = async (id: string) => {
@@ -134,14 +147,20 @@ export function MemoryPanel<TType extends string>({
           </select>
           <TextArea
             value={addText}
-            onChange={setAddText}
+            onChange={v => { setAddText(v); if (addError) setAddError(null); }}
             autoGrow
             minHeight={44}
             placeholder={addPlaceholder}
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void submit(); } }}
           />
-          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-            <Button variant="primary" size="sm" loading={adding} disabled={adding || !addText.trim()} onClick={() => void submit()}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'flex-end' }}>
+            {addError && <span style={{ fontSize: 12, color: C.dangerText, fontFamily: FONT.sans, marginRight: 'auto' }}>{addError}</span>}
+            {maxLength != null && (
+              <span style={{ fontSize: 11.5, color: overLimit ? C.dangerText : C.textMuted, fontFamily: FONT.sans }}>
+                {addText.trim().length} / {maxLength}
+              </span>
+            )}
+            <Button variant="primary" size="sm" loading={adding} disabled={adding || !addText.trim() || overLimit} onClick={() => void submit()}>
               {adding ? 'Сохраняю…' : 'Запомнить'}
             </Button>
           </div>
@@ -207,6 +226,7 @@ export function MemoryPanel<TType extends string>({
                 editing={edit.editingId === e.id} editText={edit.text} onEditTextChange={edit.setText}
                 onStartEdit={() => edit.start(e.id, e.text)} onSaveEdit={() => void edit.save()}
                 onCancelEdit={edit.cancel} savingEdit={edit.saving}
+                editError={edit.editingId === e.id ? edit.error : null} editMaxLength={maxLength}
               />
             ))}
           </div>

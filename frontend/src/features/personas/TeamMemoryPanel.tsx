@@ -15,6 +15,8 @@ const TYPE_META: Record<TeamMemoryType, MemoryTypeMeta> = {
   glossary:   { title: 'Термин',     hint: 'значение в проекте',    color: C.plan,    softBg: C.planLight },
 };
 const TYPE_ORDER: TeamMemoryType[] = ['decision', 'convention', 'fact', 'glossary'];
+// Держим в синхроне с бэком: TeamMemoryService.MaxTextLength (ProjectsController гейтит 400-кой).
+const MAX_TEXT_LENGTH = 1000;
 
 // Явное поле Source с бэка (в отличие от памяти персоны — там источник выводится из
 // sourceSessionId): manual → ручное, autoTurn/autoMeeting → авто с уточнением.
@@ -51,6 +53,7 @@ export function TeamMemoryPanel({ mem, onAdd, onUpdate, onRemove, stripe }: {
         addHint="Запись увидят все персоны команды проекта наравне с личной памятью."
         addPlaceholder="Напр.: ревью через PR, не напрямую в main; релизы по пятницам"
         onAdd={add}
+        maxLength={MAX_TEXT_LENGTH}
         onEdit={onUpdate}
         onRemove={onRemove}
         emptyIcon="👥"

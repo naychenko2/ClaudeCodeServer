@@ -49,7 +49,7 @@ export const productHistorySeenKey = (userId?: string | null) =>
 export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenExternal, project, onOpenProjectSettings }: Props) {
   const isMobile = useIsMobile();
   // Планшет (601–1199): вкладки хаба занимают всю ширину центра, и текст логотипа
-  // «AI Home» рядом с крошкой проекта уже не помещается — левая секция обрезается.
+  // «Home AI» рядом с крошкой проекта уже не помещается — левая секция обрезается.
   // Сворачиваем логотип до одной favicon-кнопки «Домой», отдавая место главному
   // ориентиру «где я» — имени проекта. На полном десктопе места хватает обоим.
   const w = useWindowWidth();
@@ -145,7 +145,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
       <img src="/favicon.svg" alt="" width={26} height={26} style={{ display: 'block', flexShrink: 0 }} />
       {!isTablet && (
         <span style={{ fontFamily: FONT.serif, fontSize: 18, fontWeight: 500, color: C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-          AI Home
+          Home AI
         </span>
       )}
     </div>

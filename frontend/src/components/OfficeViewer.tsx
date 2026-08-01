@@ -44,13 +44,13 @@ const DOC_TYPES: Record<string, string> = {
   vstx: 'diagram', vstm: 'diagram',
 };
 
-// Цвета темы AI Home — пишем в localStorage перед инициализацией OO,
+// Цвета темы Home AI — пишем в localStorage перед инициализацией OO,
 // чтобы themeinit.js внутри iframe применил правильный CSS ещё на старте.
 // OO iframe и наш сайт на одном origin → localStorage общий.
 const CLAUDE_HOME_THEME = {
   id: 'theme-claude-home',
   type: 'light',
-  name: 'AI Home',
+  name: 'Home AI',
   colors: {
     'toolbar-header-document': '#EDE7DC',
     'toolbar-header-spreadsheet': '#EDE7DC',
@@ -155,7 +155,7 @@ const CLAUDE_HOME_THEME = {
 const CLAUDE_HOME_THEME_DARK = {
   id: 'theme-claude-home-dark',
   type: 'dark',
-  name: 'AI Home Dark',
+  name: 'Home AI Dark',
   colors: {
     'toolbar-header-document': '#272320',
     'toolbar-header-spreadsheet': '#272320',

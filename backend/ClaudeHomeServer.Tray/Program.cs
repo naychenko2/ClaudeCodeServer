@@ -69,7 +69,7 @@ sealed class ServerSupervisor : IDisposable
         {
             Icon = _appIcon,
             Visible = true,
-            Text = "AI Home",
+            Text = "Home AI",
             ContextMenuStrip = BuildMenu(),
         };
         _icon.DoubleClick += (_, _) => OpenBrowser(_cfg.Url);
@@ -132,7 +132,7 @@ sealed class ServerSupervisor : IDisposable
             if (!File.Exists(exe))
             {
                 WriteLog($"[tray] НЕ НАЙДЕН сервер: {exe}");
-                _icon.ShowBalloonTip(5000, "AI Home",$"Не найден {_cfg.ServerExe}", ToolTipIcon.Error);
+                _icon.ShowBalloonTip(5000, "Home AI",$"Не найден {_cfg.ServerExe}", ToolTipIcon.Error);
                 return;
             }
 
@@ -160,7 +160,7 @@ sealed class ServerSupervisor : IDisposable
             _startedAt = DateTime.Now;
 
             WriteLog($"[tray] сервер запущен PID={_server.Id} env={_cfg.Environment}");
-            _icon.Text = $"AI Home —работает (PID {_server.Id})";
+            _icon.Text = $"Home AI —работает (PID {_server.Id})";
         }
     }
 
@@ -174,7 +174,7 @@ sealed class ServerSupervisor : IDisposable
 
         // Неожиданное падение — авто-рестарт через 3с (супервизия).
         _restarts++;
-        _icon.Text = "AI Home —перезапуск…";
+        _icon.Text = "Home AI —перезапуск…";
         _ = Task.Run(async () =>
         {
             await Task.Delay(3000);
@@ -186,7 +186,7 @@ sealed class ServerSupervisor : IDisposable
     {
         StopServer();
         StartServer();
-        _icon.ShowBalloonTip(2000, "AI Home","Сервер перезапущен", ToolTipIcon.Info);
+        _icon.ShowBalloonTip(2000, "Home AI","Сервер перезапущен", ToolTipIcon.Info);
     }
 
     private void StopServer()
@@ -213,12 +213,12 @@ sealed class ServerSupervisor : IDisposable
     // снимается online-backup API SQLite. Гасить сервер незачем.
     private void RunBackup()
     {
-        _icon.ShowBalloonTip(2000, "AI Home", "Снимаю бэкап…", ToolTipIcon.Info);
+        _icon.ShowBalloonTip(2000, "Home AI", "Снимаю бэкап…", ToolTipIcon.Info);
         Task.Run(() =>
         {
             var (code, output) = RunServerExe(["--backup"], TimeSpan.FromMinutes(5));
             WriteLog($"[tray] бэкап: код={code}");
-            _icon.ShowBalloonTip(4000, "AI Home",
+            _icon.ShowBalloonTip(4000, "Home AI",
                 code == 0 ? "Бэкап готов" : $"Бэкап не удался: {LastLine(output)}",
                 code == 0 ? ToolTipIcon.Info : ToolTipIcon.Error);
         });
@@ -233,7 +233,7 @@ sealed class ServerSupervisor : IDisposable
             MessageBox.Show(
                 "Запущен ClaudeCodeServerRunner — он поднимет сервер посреди восстановления.\n" +
                 "Выйди из него и повтори.",
-                "AI Home", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                "Home AI", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
 
@@ -267,7 +267,7 @@ sealed class ServerSupervisor : IDisposable
             code == 0
                 ? "Данные восстановлены, сервер запущен.\n\nБазы знаний пересоберутся автоматически."
                 : $"Восстановление не выполнено:\n\n{LastLine(output)}\n\nСервер запущен на прежних данных.",
-            "AI Home", MessageBoxButtons.OK,
+            "Home AI", MessageBoxButtons.OK,
             code == 0 ? MessageBoxIcon.Information : MessageBoxIcon.Error);
     }
 
@@ -392,7 +392,7 @@ sealed class ServerSupervisor : IDisposable
             $"Окружение: {_cfg.Environment}\n" +
             $"URL: {_cfg.Url}";
 
-        MessageBox.Show(text, "AI Home —статистика", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        MessageBox.Show(text, "Home AI —статистика", MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 
     private void OpenLogs()

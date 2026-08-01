@@ -16,8 +16,8 @@
          windows-таргет (NETSDK1100). Свойство разрешает КОМПИЛЯЦИЮ на не-Windows
          (ref-паки Windows Desktop тянутся из NuGet); запуск, понятно, только на Windows. -->
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
-    <Product>AI Home</Product>
-    <AssemblyTitle>AI Home</AssemblyTitle>
+    <Product>Home AI</Product>
+    <AssemblyTitle>Home AI</AssemblyTitle>
   </PropertyGroup>
 
   <ItemGroup>

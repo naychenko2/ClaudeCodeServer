@@ -54,7 +54,7 @@ self.addEventListener('push', e => {
     badge: '/pwa-64x64.png',
     data: { url: payload.url },
   };
-  e.waitUntil(self.registration.showNotification(payload.title ?? 'AI Home', options));
+  e.waitUntil(self.registration.showNotification(payload.title ?? 'Home AI', options));
 });
 
 // Клик по уведомлению: фокусируем открытое окно приложения (с переходом по диплинку)

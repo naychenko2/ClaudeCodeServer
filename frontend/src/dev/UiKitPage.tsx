@@ -2539,7 +2539,7 @@ function HeadersSection() {
                 fontFamily: FONT.serif, fontWeight: 500,
                 fontSize: FS.md, color: C.textHeading,
               }}>
-                Claude Home
+                Home AI
               </span>
             </div>
 

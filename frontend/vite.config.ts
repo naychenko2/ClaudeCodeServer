@@ -64,8 +64,8 @@ export default defineConfig({
         maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
       },
       manifest: {
-        name: 'AI Home',
-        short_name: 'AIHome',
+        name: 'Home AI',
+        short_name: 'HomeAI',
         description: 'Веб-интерфейс для AI-ассистентов',
         theme_color: '#D97757',
         background_color: '#F4F0E8',

@@ -206,6 +206,67 @@ public class TurnAccumulatorTests : IDisposable
         file.Removed.Should().Be(5);
     }
 
+    // Модель хода приходит только с result, а посты к тому моменту уже созданы —
+    // проверяем, что она проставляется им задним числом (подпись модели у поста)
+    [Fact]
+    public async Task OnResultAsync_BackfillsModelToTurnTexts()
+    {
+        var acc = new TurnAccumulator([]);
+        acc.OnTextDelta("ответ");
+        await acc.OnResultAsync("success", 100, 1, null, null, null, null, _histSvc, usageModel: "claude-opus-4-8");
+
+        acc.GetAll().OfType<StoredTextMessage>().Single().Model.Should().Be("claude-opus-4-8");
+    }
+
+    // Текст сабагента мог идти другой моделью, чем главная модель хода — UsageModel
+    // про него ничего не говорит, поэтому его помечать нельзя
+    [Fact]
+    public async Task OnResultAsync_DoesNotBackfillModelToSubagentText()
+    {
+        var acc = new TurnAccumulator([]);
+        acc.OnToolUse("task1", "Task", new { });
+        acc.OnAgentText("task1", "текст сабагента");
+        await acc.OnResultAsync("success", 100, 1, null, null, null, null, _histSvc, usageModel: "claude-opus-4-8");
+
+        acc.GetAll().OfType<StoredTextMessage>()
+            .Single(m => m.ParentToolUseId == "task1").Model.Should().BeNull();
+    }
+
+    // Модель предыдущего хода не должна перебиваться моделью следующего: посты,
+    // уже помеченные, второй backfill не трогает
+    [Fact]
+    public async Task OnResultAsync_KeepsModelOfEarlierTurn()
+    {
+        var sessionId = Guid.NewGuid().ToString();
+        var acc = new TurnAccumulator([], sessionId);
+        acc.OnTextDelta("первый ход");
+        await acc.OnResultAsync("success", 100, 1, null, null, null, null, _histSvc, usageModel: "claude-haiku-4-5");
+        acc.OnTextDelta("второй ход");
+        await acc.OnResultAsync("success", 100, 1, null, null, null, null, _histSvc, usageModel: "claude-opus-4-8");
+
+        var texts = (await _histSvc.LoadAsync(sessionId)).OfType<StoredTextMessage>().ToList();
+        texts.Should().HaveCount(2);
+        texts[0].Model.Should().Be("claude-haiku-4-5");
+        texts[1].Model.Should().Be("claude-opus-4-8");
+    }
+
+    // Время пишется и сообщению человека, и посту ассистента — без него панель поста
+    // не сможет показать, когда он написан
+    [Fact]
+    public async Task OnResultAsync_StampsTimestampOnUserAndText()
+    {
+        var before = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var acc = new TurnAccumulator([]);
+        acc.OnUserMessage("вопрос", []);
+        acc.OnTextDelta("ответ");
+        await acc.OnResultAsync("success", 100, 1, null, null, null, null, _histSvc);
+        var after = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        var all = acc.GetAll();
+        all.OfType<StoredUserMessage>().Single().Timestamp.Should().BeInRange(before, after);
+        all.OfType<StoredTextMessage>().Single().Timestamp.Should().BeInRange(before, after);
+    }
+
     [Fact]
     public async Task OnResultAsync_FlushesBuffersAndSavesToHistory()
     {

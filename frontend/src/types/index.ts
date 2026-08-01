@@ -640,11 +640,11 @@ export type ServerMessage = { sessionId: string } & (
   // null/отсутствует — ход идёт там, куда его отправил сервер
   | { type: 'session_started'; claudeSessionId: string; isResume: boolean; model: string; mode: string; cwd?: string; toolCount?: number; mcpServers?: { name: string; status: string }[]; turnWorktree?: { path: string; name: string } | null }
   | { type: 'text_delta'; text: string }
-  | { type: 'user_message'; text: string; attachedPaths?: string[]; senderPersonaId?: string; auto?: boolean; senderOrigin?: string; senderChatName?: string; staffNote?: string }
+  | { type: 'user_message'; text: string; attachedPaths?: string[]; senderPersonaId?: string; auto?: boolean; senderOrigin?: string; senderChatName?: string; staffNote?: string; timestamp?: number }
   // Гостевая реплика персоны без агентского хода (0 токенов) — доклад о завершении
   // делегированной задачи (модель Z); маркер доклада распознаётся на рендере (см.
   // lib/delegationReport.ts). Живой аналог StoredTextMessage.PersonaId из истории.
-  | { type: 'guest_text'; text: string; personaId: string }
+  | { type: 'guest_text'; text: string; personaId: string; timestamp?: number }
   | { type: 'thinking_delta'; text: string }
   // Текст/thinking сабагента (Task/Agent) — целыми блоками, с привязкой к родительскому tool_use
   | { type: 'agent_text'; parentToolUseId: string; text: string }
@@ -662,7 +662,9 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'file_changed'; path: string; added: number; removed: number }
   // contextTokens — размер контекста последнего запроса хода (оценка заполнения окна).
   // usage для этого не годится: он суммирует все запросы хода, включая сабагентов.
-  | { type: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo; totalCostUsd?: number; apiErrorStatus?: string; permissionDenials?: string[]; contextTokens?: number }
+  // usageModel — фактическая модель хода (её же бэк проставляет постам в истории):
+  // на этом событии лента клеит модель постам текущего хода
+  | { type: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo; totalCostUsd?: number; apiErrorStatus?: string; permissionDenials?: string[]; contextTokens?: number; usageModel?: string }
   | { type: 'fal_cost'; requestId: string; endpointId?: string; costUsd: number; outputUnits?: number; unitPrice?: number }
   // Завершённая генерация glif: счётчик + кредиты (если billing доехал в payload). Дедуп по jobId.
   | { type: 'glif_cost'; jobId: string; outputType?: string; mediaCount: number; credits?: number; model?: string }
@@ -1064,13 +1066,18 @@ export type ChatItem =
   // senderChatName — имя чата-отправителя: заголовок карточки, когда персоны у него нет
   // staffNote — служебный ход механики штаба (ответ на карточку, возврат в интервью, сводка
   // волны): рисуется компактной плашкой-разделителем с этой подписью, а не пузырём
-  | { kind: 'user_message'; text: string; attachedPaths?: string[]; viaAgent?: boolean; senderPersonaId?: string; systemDirective?: boolean; auto?: boolean; senderOrigin?: string; senderChatName?: string; staffNote?: string }
+  // ts — время отправки (Unix-мс UTC): подпись в панели действий поста. Отсутствует
+  // у истории, записанной до появления поля
+  | { kind: 'user_message'; text: string; attachedPaths?: string[]; viaAgent?: boolean; senderPersonaId?: string; systemDirective?: boolean; auto?: boolean; senderOrigin?: string; senderChatName?: string; staffNote?: string; ts?: number }
   | { kind: 'session_started'; model: string; mode: string; cwd?: string; toolCount?: number; mcpServers?: { name: string; status: string }[]; turnWorktree?: { path: string; name: string } | null }
   // personaId — авторство реплики (персона на момент хода); после смены собеседника
   // старые реплики сохраняют прежний аватар. Отсутствует у обычного ассистента.
   // parentToolUseId — текст/thinking сабагента: рендерится внутри карточки родительского
   // tool_use (секция «Активность»), а не в основной ленте.
-  | { kind: 'text'; text: string; personaId?: string; parentToolUseId?: string }
+  // model — чем написан ИМЕННО этот пост: приходит из истории либо клеится на result
+  // (модель хода известна только к его концу). ts — когда написан (Unix-мс UTC).
+  // Оба необязательны: у старой истории их нет, у сабагентского текста модели нет
+  | { kind: 'text'; text: string; personaId?: string; parentToolUseId?: string; model?: string; ts?: number }
   | { kind: 'thinking'; text: string; expanded: boolean; parentToolUseId?: string }
   // bgDone/bgAborted — завершение фонового агента (bg_agent_done / bgDone из истории);
   // workflowAborted — workflow восстановлен из истории прерванным (агенты уже не завершатся)

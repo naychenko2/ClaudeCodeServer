@@ -13,7 +13,21 @@ public sealed record GitResult(int ExitCode, string Stdout, string Stderr)
 }
 
 // git-фейл с текстом stderr — контроллер превращает его в 409/400.
-public sealed class GitCommandException(string message) : Exception(message);
+public class GitCommandException(string message) : Exception(message);
+
+// Частный случай: ветка разошлась с origin (push отклонён как non-fast-forward).
+// Отдельным типом, потому что у него есть лекарство — «Подтянуть и опубликовать»
+// (SyncAsync): контроллер отдаёт фронту флаг diverged, а тот предлагает действие
+// вместо тупика с сырым текстом git.
+public sealed class GitDivergedException(string message) : GitCommandException(message);
+
+// Подтянуть автоматически не вышло: правки сторон конфликтуют. Список файлов собирается
+// ДО отката rebase (после него признак конфликта исчезает) — UI показывает, что именно
+// не сошлось, и предлагает разобрать это в чате.
+public sealed class GitConflictException(string message, IReadOnlyList<string> files) : GitCommandException(message)
+{
+    public IReadOnlyList<string> Files { get; } = files;
+}
 
 // Креды HTTP-remote (Forgejo): логин + персональный токен пользователя
 public sealed record GitCredentials(string Username, string Token);
@@ -573,6 +587,31 @@ public sealed class GitService(ILauncherFactory launchers)
             new Dictionary<string, string> { ["GIT_REMOTE_TOKEN"] = creds.Token });
     }
 
+    // LC_ALL=C: stderr git на английском — по нему классифицируем отказ (IsDivergedStderr).
+    // Мержим в словарь кред, а не задаём отдельным: там уже живёт GIT_REMOTE_TOKEN,
+    // и подмена словаря целиком стоила бы токена (push по HTTP спросил бы пароль).
+    private static Dictionary<string, string> WithCLocale(Dictionary<string, string>? env)
+    {
+        var result = env is null ? [] : new Dictionary<string, string>(env);
+        result["LC_ALL"] = "C";
+        return result;
+    }
+
+    // Признаки отказа из-за расхождения с origin: на сервере есть коммиты, которых нет
+    // локально. Матчим английский stderr — его гарантирует LC_ALL=C выше.
+    private static bool IsDivergedStderr(string stderr) =>
+        stderr.Contains("non-fast-forward", StringComparison.OrdinalIgnoreCase)
+        || stderr.Contains("[rejected]", StringComparison.OrdinalIgnoreCase)
+        || stderr.Contains("fetch first", StringComparison.OrdinalIgnoreCase)
+        || stderr.Contains("Not possible to fast-forward", StringComparison.OrdinalIgnoreCase);
+
+    // Отказ git → исключение нужного типа: расхождение лечится «Подтянуть и опубликовать»,
+    // всё остальное — обычная ошибка с первой строкой stderr.
+    private static GitCommandException Fail(string stderr) =>
+        IsDivergedStderr(stderr)
+            ? new GitDivergedException("Ветка разошлась с origin: на сервере есть коммиты, которых нет локально. Подтяни изменения и опубликуй снова")
+            : new GitCommandException(FirstLine(stderr) ?? "git завершился с ошибкой");
+
     public Task FetchAsync(string? ownerId, string root, GitCredentials? creds = null, CancellationToken ct = default) =>
         NetworkOp(ownerId, root, ["fetch", "--prune"], creds, ct);
 
@@ -590,14 +629,70 @@ public sealed class GitService(ILauncherFactory launchers)
 
     private async Task NetworkOp(string? ownerId, string root, string[] args, GitCredentials? creds, CancellationToken ct)
     {
-        var (pre, env) = CredArgs(creds);
+        var (pre, credEnv) = CredArgs(creds);
         var sem = LockFor(root);
         await sem.WaitAsync(ct);
         try
         {
-            var r = await RunAsync(ownerId, root, [.. pre, .. args], env: env, timeoutMs: NetworkTimeoutMs, ct: ct);
-            if (!r.Ok)
-                throw new GitCommandException(FirstLine(r.Stderr) ?? "git завершился с ошибкой");
+            var r = await RunAsync(ownerId, root, [.. pre, .. args], env: WithCLocale(credEnv), timeoutMs: NetworkTimeoutMs, ct: ct);
+            if (!r.Ok) throw Fail(r.Stderr);
+        }
+        finally { sem.Release(); }
+    }
+
+    // «Подтянуть и опубликовать» одним действием: линеаризовать свои коммиты поверх origin
+    // и сразу отправить. Отдельно от PullAsync, потому что тот --ff-only и на разошедшейся
+    // ветке отказывает — а расхождение и есть наш случай (свои коммиты есть И origin ушёл вперёд).
+    //
+    // Оба шага под ОДНИМ локом и через сырой RunAsync, а не через NetworkOp/PushAsync:
+    // NetworkOp берёт тот же семафор, а он не реентрантный — вложенный вызов повесил бы
+    // себя сам. Ветку и наличие upstream вызывающий резолвит статусом ДО входа сюда
+    // (чтение статуса лока не берёт).
+    public async Task SyncAsync(
+        string? ownerId, string root, string? branch, bool hasUpstream,
+        GitCredentials? creds = null, CancellationToken ct = default)
+    {
+        if (!hasUpstream && string.IsNullOrWhiteSpace(branch))
+            throw new GitCommandException("Не удалось определить ветку для публикации");
+
+        var (pre, credEnv) = CredArgs(creds);
+        var env = WithCLocale(credEnv);
+        var sem = LockFor(root);
+        await sem.WaitAsync(ct);
+        try
+        {
+            // Ветка без upstream — подтягивать нечего (расхождению неоткуда взяться): сразу push -u
+            if (hasUpstream)
+            {
+                // --rebase, а не merge: история остаётся линейной (конвенция проекта).
+                // --autostash: публикуют и с непустым рабочим деревом — незафиксированные
+                // правки не должны блокировать rebase.
+                var pull = await RunAsync(ownerId, root, [.. pre, "pull", "--rebase", "--autostash"],
+                    env: env, timeoutMs: NetworkTimeoutMs, ct: ct);
+                if (!pull.Ok)
+                {
+                    // Какие файлы не сошлись — спрашиваем ДО отката: после rebase --abort
+                    // unmerged-пометки исчезают, и сказать пользователю будет уже нечего
+                    var unmerged = await RunAsync(ownerId, root, ["diff", "--name-only", "--diff-filter=U"], ct: ct);
+                    var files = unmerged.Stdout
+                        .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                        .Distinct()
+                        .ToArray();
+
+                    // Откатываем незавершённый rebase. Если он УСПЕЛ завершиться, а споткнулся
+                    // возврат автостэша, abort здесь — no-op («no rebase in progress»), и правки
+                    // остаются в стэше. Отличить случаи здесь нечем, поэтому текст нейтральный
+                    // и честный для обоих.
+                    await RunAsync(ownerId, root, ["rebase", "--abort"], ct: ct);
+                    throw new GitConflictException(
+                        "Не удалось автоматически подтянуть изменения с сервера: правки конфликтуют", files);
+                }
+            }
+
+            string[] pushArgs = hasUpstream ? ["push"] : ["push", "-u", "origin", branch!];
+            var push = await RunAsync(ownerId, root, [.. pre, .. pushArgs],
+                env: env, timeoutMs: NetworkTimeoutMs, ct: ct);
+            if (!push.Ok) throw Fail(push.Stderr);
         }
         finally { sem.Release(); }
     }

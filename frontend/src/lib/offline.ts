@@ -253,9 +253,14 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
       // Статус прикрепляем к ошибке — потребители (offline-очередь) отличают 404/4xx
       // (перманентно) от 5xx/сетевых (стоит повторить). Заголовки тоже отдаём наружу:
       // на них живут служебные маркеры вроде X-CodeGraph-Building («граф строится»).
-      const httpErr = new Error(err.error ?? res.statusText) as Error & { status?: number; responseHeaders?: Headers };
+      // Тело отдаём целиком: у ошибки бывают поля сверх error — по ним потребитель
+      // предлагает лекарство (git-публикация по diverged зовёт «Подтянуть и опубликовать»).
+      const httpErr = new Error(err.error ?? res.statusText) as Error & {
+        status?: number; responseHeaders?: Headers; body?: unknown;
+      };
       httpErr.status = res.status;
       httpErr.responseHeaders = res.headers;
+      httpErr.body = err;
       throw httpErr;
     }
 

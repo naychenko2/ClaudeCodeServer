@@ -12,10 +12,11 @@ import { GitBranch, FolderGit2, GitCommit, CloudUpload, ChevronDown } from 'luci
 import type { Project, Session } from '../types';
 import { C, FONT, FS, R, SP } from '../lib/design';
 import { basename } from '../lib/paths';
-import { ensureGit, useGitState, loadUnpushedLog, gitPush, workingDiffStat } from '../lib/git';
+import { ensureGit, useGitState, loadUnpushedLog, clearGitError, workingDiffStat } from '../lib/git';
 import type { TurnTree } from '../lib/turnWorktree';
 import { wsPanels } from '../pages/workspace/panelStackState';
-import { Modal, ModalActions, Menu } from './ui';
+import { PublishDialog } from './PublishDialog';
+import { Menu } from './ui';
 import { ICON_STROKE } from './ui/icons';
 
 // Строка меню коммита в стиле оглавления DocsPanel (TocRow): плотный текстовый ряд
@@ -79,6 +80,7 @@ export function ProjectGitBar({ project, session, turnTree = null, turnTreeLive 
 
   const diff = workingDiffStat(status);
   const ahead = status?.ahead ?? 0;
+  const behind = status?.behind ?? 0;
   const publishN = ahead > 0 ? ahead : st.unpushed.length;
   const canPublish = publishN > 0;
 
@@ -104,8 +106,11 @@ export function ProjectGitBar({ project, session, turnTree = null, turnTreeLive 
   };
 
   return (
-    // Отдельная плашка над композером: ширина — от общего контейнера ChatPanel
-    // (CHAT_MAX_W, ровно как у композера), высота — в размер карточки поля ввода
+    // Фрагмент: под плашкой должна вставать строка ошибки (родитель — вертикальный
+    // поток ChatPanel), а самой плашке нужен свой height и фон без лишних наследников
+    <>
+    {/* Отдельная плашка над композером: ширина — от общего контейнера ChatPanel
+        (CHAT_MAX_W, ровно как у композера), высота — в размер карточки поля ввода */}
     <div style={{
       display: 'flex', alignItems: 'center', gap: 12, margin: '10px 0 8px',
       height: 51, padding: '0 8px 0 12px',
@@ -123,6 +128,15 @@ export function ProjectGitBar({ project, session, turnTree = null, turnTreeLive 
           fontFamily: FONT.mono, fontSize: 12.5, color: C.textSecondary,
           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
         }}>{label}</span>
+        {/* Отставание от origin. Число best-effort: behind считается относительно локальной
+            копии origin/<branch>, а её обновляет fetch — точную сверку делает диалог
+            публикации при открытии. Здесь это подсказка «на сервере что-то есть», не счёт */}
+        {behind > 0 && (
+          <span
+            title={`На сервере есть коммиты, которых нет локально: ${behind}`}
+            style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, flexShrink: 0 }}
+          >↓{behind}</span>
+        )}
       </div>
 
       {/* Дерево ХОДА (агент ушёл в свой worktree внутри хода): нейтральный сегмент
@@ -219,33 +233,29 @@ export function ProjectGitBar({ project, session, turnTree = null, turnTreeLive 
         </button>
       )}
 
-      {/* Подтверждение публикации (аналог publishConfirm в панели «Изменения») */}
-      {publishConfirm && (
-        <Modal
-          width={440}
-          onClose={() => setPublishConfirm(false)}
-          title="Опубликовать изменения"
-          subtitle={<span>Отправить {publishN} коммит(ов) на сервер</span>}
-          footer={
-            <ModalActions
-              confirmLabel="Опубликовать"
-              // Панель «Изменения» (если открыта) после публикации возвращаем на
-              // «Не зафиксировано»: опубликованные коммиты ушли из её селектора
-              onConfirm={() => {
-                setPublishConfirm(false);
-                void gitPush(project.id).then(ok => {
-                  if (ok) window.dispatchEvent(new CustomEvent('cc-git-open-working'));
-                });
-              }}
-              onCancel={() => setPublishConfirm(false)}
-            />
-          }
-        >
-          <div style={{ fontSize: 13, color: C.textSecondary, fontFamily: FONT.sans, lineHeight: 1.5 }}>
-            Локальные коммиты ветки <span style={{ fontFamily: FONT.mono, color: C.textPrimary }}>{status.branch}</span> будут отправлены в удалённый репозиторий (git push).
-          </div>
-        </Modal>
-      )}
     </div>
+
+    {/* Ошибка git-операции: публикация запускается прямо из бара, и без этой строки
+        её провал (например отклонённый push) остался бы невидимым при закрытой
+        панели «Изменения». Клик — скрыть, как в самой панели */}
+    {st.error && (
+      <div
+        onClick={() => clearGitError(project.id)}
+        title="Скрыть"
+        style={{
+          margin: '0 0 8px', padding: `0 ${SP.md}px`, cursor: 'pointer',
+          fontFamily: FONT.sans, fontSize: 12, lineHeight: 1.4, color: C.dangerText,
+        }}
+      >
+        {st.error}
+      </div>
+    )}
+
+    {/* Подтверждение публикации: сверяется с origin и сам решает, звать push
+        или «Подтянуть и опубликовать» (общий диалог с панелью «Изменения») */}
+    {publishConfirm && (
+      <PublishDialog projectId={project.id} onClose={() => setPublishConfirm(false)} />
+    )}
+    </>
   );
 }

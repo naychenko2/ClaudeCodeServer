@@ -492,6 +492,32 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
             return Ok(await git.StatusAsync(Owner(p), RootFor(p), ct));
         }
         catch (KeyNotFoundException) { return NotFound(); }
+        // Расхождение с origin — не тупик: фронт по флагу diverged предложит «Подтянуть и опубликовать»
+        catch (GitDivergedException ex) { return Conflict(new { error = ex.Message, diverged = true }); }
+        catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }
+    }
+
+    // «Подтянуть и опубликовать»: rebase на origin + push одним действием. Нужен, когда ветка
+    // разошлась — обычный push отклоняется, а pull (--ff-only) в этом случае не проходит.
+    [HttpPost("sync")]
+    public async Task<IActionResult> Sync(string projectId, CancellationToken ct = default)
+    {
+        try
+        {
+            var p = GetProject(projectId);
+            var root = RootFor(p);
+            // Ветку и наличие upstream резолвим ДО SyncAsync: внутри он держит лок репозитория,
+            // а чтение статуса лока не берёт (иначе — самоблокировка)
+            var status = await git.StatusAsync(Owner(p), root, ct);
+            await git.SyncAsync(Owner(p), root, status.Branch, status.Upstream is not null, CredsFor(p), ct);
+            await NotifyChanged(projectId);
+            return Ok(await git.StatusAsync(Owner(p), root, ct));
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        // Origin мог уехать ещё раз, пока шёл rebase — предложение повторить остаётся в силе
+        catch (GitDivergedException ex) { return Conflict(new { error = ex.Message, diverged = true }); }
+        // Автоматика не справилась: отдаём файлы, чтобы UI показал их и позвал разобрать в чате
+        catch (GitConflictException ex) { return Conflict(new { error = ex.Message, conflictFiles = ex.Files }); }
         catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }
     }
 

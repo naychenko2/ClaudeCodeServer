@@ -385,7 +385,7 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
       // рассылает user_message в session-группу, поэтому их не дублируем.
       // 'queued' — баллон не нужен: карточку даст pending_messages, isWaiting удержит ход.
       if (outcome === 'started' && !auto) {
-        setState(sessionId, prev => ({ ...prev, items: [...prev.items, { kind: 'user_message', text, attachedPaths }] }));
+        setState(sessionId, prev => ({ ...prev, items: [...prev.items, { kind: 'user_message', text, attachedPaths, ts: Date.now() }] }));
       }
     } catch (err) {
       setState(sessionId, prev => ({

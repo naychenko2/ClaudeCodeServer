@@ -1,4 +1,5 @@
 import { useLayoutEffect, type RefObject } from 'react';
+import { CHAT_GUTTER_L } from './design';
 
 // Жёлоб слева от колонки сообщений — место под значок ожидания («домик» с дымком
 // из трубы). Значок намеренно вынесен ЗА левый край сообщений: под пузырями дым
@@ -19,9 +20,10 @@ import { useLayoutEffect, type RefObject } from 'react';
 // поэтому offsetWidth − clientWidth — величина устойчивая, а не мигающая от
 // появления полосы.
 
-// Сдвиг значка (29) плюс путь дыма влево (7) плюс запас
-export const CHAT_GUTTER_L = 40;
-
+// Ширина жёлоба — размерный токен (CHAT_GUTTER_L в design.ts): от неё же там
+// считается CHAT_COLUMN_W — полная горизонтальная потребность ленты, которую
+// раскладка спрашивает у токенов, а не у этого модуля.
+//
 // Геометрия области прокрутки: ширина коробки и внешний отступ справа,
 // компенсирующий жёлоб. contentWidth — ширина колонки сообщений (CHAT_MAX_W).
 export function gutterBox(contentWidth: number, scrollbarW: number): { maxWidth: number; marginRight: number } {

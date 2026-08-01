@@ -32,8 +32,11 @@ public record TextDeltaMessage(string Text)
 // клиент не добавлял его оптимистично — бродкастим, чтобы промпт появился в чате сразу,
 // а не по перезагрузке истории. Только для auto && !systemDirective (ввод пользователя уже
 // виден на клиенте, внутренние директивы цикла «до готово» показывать не нужно).
+// Timestamp (Unix-мс UTC) — время отправки для подписи в панели действий поста; тем же
+// числом оно уходит в историю, поэтому живая лента и перезагрузка показывают одно и то же.
 public record UserMessageMessage(string Text, IReadOnlyList<string>? AttachedPaths, string? SenderPersonaId, bool Auto,
-    string? SenderOrigin = null, string? SenderChatName = null, string? StaffNote = null)
+    string? SenderOrigin = null, string? SenderChatName = null, string? StaffNote = null,
+    long? Timestamp = null)
     : ServerMessage("user_message");
 
 // Очередь сообщений занятой сессии — полный снимок при каждом изменении (постановка,
@@ -63,7 +66,7 @@ public record ComposerRestoreMessage(string? Text, IReadOnlyList<string>? Attach
 // о завершении делегированной задачи (модель Z, TaskExecutionService.ReportToDelegatorAsync).
 // Live-аналог StoredTextMessage: клиент не получал текст через text_delta, бродкастим целиком,
 // как UserMessageMessage для сервер-инициированной отправки. PersonaId — автор реплики (её лицо).
-public record GuestTextMessage(string Text, string PersonaId)
+public record GuestTextMessage(string Text, string PersonaId, long? Timestamp = null)
     : ServerMessage("guest_text");
 
 public record ThinkingDeltaMessage(string Text)

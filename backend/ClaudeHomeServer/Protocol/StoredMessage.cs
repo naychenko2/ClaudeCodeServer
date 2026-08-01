@@ -23,8 +23,12 @@ public abstract class StoredMessage { }
 
 public class StoredUserMessage(string text, string[]? attachedPaths = null, bool? viaAgent = null,
     string? senderPersonaId = null, bool? systemDirective = null, bool? auto = null,
-    string? senderOrigin = null, string? senderChatName = null, string? staffNote = null) : StoredMessage
+    string? senderOrigin = null, string? senderChatName = null, string? staffNote = null,
+    long? timestamp = null) : StoredMessage
 {
+    // Когда отправлено сообщение (Unix-мс UTC) — см. StoredTextMessage.Timestamp
+    public long? Timestamp { get; init; } = timestamp;
+
     // Источник входящего сообщения, когда оно пришло ИЗ ДРУГОГО места: имя чужого проекта
     // либо «Вне проектов». Заполняет сервер, сравнив проекты отправителя и получателя;
     // null — источник тот же, чип в UI не нужен
@@ -61,7 +65,8 @@ public class StoredSessionStartedMessage(string model, string mode, TurnWorktree
     public TurnWorktreeInfo? TurnWorktree { get; init; } = turnWorktree;
 }
 
-public class StoredTextMessage(string text, string? personaId = null, string? parentToolUseId = null) : StoredMessage
+public class StoredTextMessage(string text, string? personaId = null, string? parentToolUseId = null,
+    long? timestamp = null) : StoredMessage
 {
     public string Text { get; init; } = text;
     // Персона, от лица которой написан ответ (на момент хода) — чтобы после смены
@@ -70,6 +75,16 @@ public class StoredTextMessage(string text, string? personaId = null, string? pa
     // Текст сабагента (Task/Agent): ссылка на родительский tool_use — рендерится внутри
     // его карточки, а не в основной ленте. null — текст основного агента.
     public string? ParentToolUseId { get; init; } = parentToolUseId;
+    // Когда написан пост (Unix-мс UTC) — подпись времени в панели действий поста.
+    // Именно число, а не DateTimeOffset: живая лента ставит время на фронте (Date.now()),
+    // и разнотипица «строка из истории vs число из ленты» ломала бы форматтер.
+    // null — история до этого поля.
+    public long? Timestamp { get; init; } = timestamp;
+    // Модель, которой написан пост. Заполняется НЕ при создании (в середине хода
+    // фактическая модель ещё не известна), а backfill'ом в OnResultAsync по
+    // ResultMessage.UsageModel — поэтому set, а не init. null — история до поля,
+    // текст сабагента либо ход без модели в usage.
+    public string? Model { get; set; }
 }
 
 public class StoredThinkingMessage(string text, string? parentToolUseId = null) : StoredMessage

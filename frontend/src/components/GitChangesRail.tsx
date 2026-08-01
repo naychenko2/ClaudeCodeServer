@@ -17,10 +17,11 @@ import { api } from '../lib/api';
 import { C, R, FONT, MODAL_W } from '../lib/design';
 import {
   useGitState, ensureGit, loadUnpushedLog, loadGitLog, loadGitRemote, loadGitBranches, loadGitStash,
-  gitStage, gitUnstage, gitDiscard, gitDiscardAll, gitCommit, gitPush, gitFetch, gitPull, gitCheckout, gitCreateBranch,
+  gitStage, gitUnstage, gitDiscard, gitDiscardAll, gitCommit, gitFetch, gitPull, gitCheckout, gitCreateBranch,
   gitStashPush, gitStashPop, gitStashDrop, clearGitError,
 } from '../lib/git';
 import { splitPath, relTime } from './GitPanel';
+import { PublishDialog } from './PublishDialog';
 import { ListDateDivider } from './ListDateDivider';
 import { dayGroupTitle } from '../lib/chatGroups';
 import { authorEmoji, authorName } from '../lib/authorEmoji';
@@ -352,16 +353,6 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
     await syncIndexToSelection();
     const ok = await gitCommit(project.id, msg, false);
     if (ok) { setSummary(''); setUnchecked(new Set()); setSelectMode(false); setMode('list'); void loadUnpushedLog(project.id); }
-  };
-
-  // Публикация: после успешного push опубликованные коммиты уходят из селектора
-  // скоупов — если активным был один из них, панель осталась бы на пустом месте.
-  // Возвращаем фокус на «Не зафиксировано».
-  const doPublish = async () => {
-    if (await gitPush(project.id)) {
-      setActiveScope('working');
-      setMode('list');
-    }
   };
 
   const toggleCheck = (path: string) =>
@@ -900,25 +891,11 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
         </Modal>
       )}
 
-      {/* === Подтверждение публикации (push) === */}
+      {/* === Подтверждение публикации: диалог сам сверяется с origin и выбирает
+             push либо «Подтянуть и опубликовать»; общий с git-баром чата. После
+             успеха он шлёт cc-git-open-working — панель вернётся на «Не зафиксировано» === */}
       {publishConfirm && (
-        <Modal
-          width={MODAL_W.confirm}
-          onClose={() => setPublishConfirm(false)}
-          title="Опубликовать изменения"
-          subtitle={<span>Отправить {ahead || st.unpushed.length} коммит(ов) на сервер</span>}
-          footer={
-            <ModalActions
-              confirmLabel="Опубликовать"
-              onConfirm={() => { setPublishConfirm(false); void doPublish(); }}
-              onCancel={() => setPublishConfirm(false)}
-            />
-          }
-        >
-          <div style={{ fontSize: 13, color: C.textSecondary, fontFamily: FONT.sans, lineHeight: 1.5 }}>
-            Локальные коммиты ветки <span style={{ fontFamily: FONT.mono, color: C.textPrimary }}>{status?.branch}</span> будут отправлены в удалённый репозиторий (git push).
-          </div>
-        </Modal>
+        <PublishDialog projectId={project.id} onClose={() => setPublishConfirm(false)} />
       )}
 
       {/* === Подтверждение удаления стэша === */}

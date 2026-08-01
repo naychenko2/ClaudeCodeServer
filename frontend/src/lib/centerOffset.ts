@@ -44,8 +44,13 @@ export interface CenterOffset {
   centerRef: (el: HTMLElement | null) => void;
 }
 
-// contentWidth — ширина контента внутри колонки (CHAT_MAX_W и т.п.). Не передана —
-// центр резиновый, компенсировать нечего: хук выключается.
+// contentWidth — сколько контент внутри колонки занимает ПО ГОРИЗОНТАЛИ целиком,
+// вместе со своей обвязкой (у чата это CHAT_COLUMN_W: колонка чтения + жёлоб +
+// место под полосу прокрутки, а не голый CHAT_MAX_W). Занизишь — хук сочтёт чужое
+// место свободным запасом и отдаст его под padding, а контент начнёт сжиматься
+// раньше времени, причём вдвое быстрее движения панели: колонка теряет пиксель на
+// движении панели и ещё пиксель на выросшей компенсации.
+// Не передана — центр резиновый, компенсировать нечего: хук выключается.
 export function useCenterOffset(contentWidth?: number): CenterOffset {
   const rootEl = useRef<HTMLElement | null>(null);
   const centerEl = useRef<HTMLElement | null>(null);

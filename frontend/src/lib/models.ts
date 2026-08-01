@@ -201,7 +201,9 @@ export function providerCapsByKey(key: string): ProviderCapabilities {
   return _providers[key] ?? CLAUDE_CAPS;
 }
 
-// Ключи настроенных CLI-провайдеров (без claude) — для generic-обвязки (вкладки «Использования»)
+// Ключи CLI-провайдеров (без claude) — для generic-обвязки (вкладки «Использования»).
+// ВСЕ из каталога, включая ненастроенные: у тех caps.configured === false, отсеивать их
+// (или показывать подсказку про ключ) — дело потребителя
 export function cliProviderKeys(): string[] {
   return Object.keys(_providers).filter(k => k !== 'claude');
 }

@@ -9,12 +9,24 @@ import { api } from '../../lib/api';
 import { C, FONT, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { relPathTree } from '../../lib/paths';
-import { useProjectFileIndex, lookupProjectFile } from '../../lib/projectFileIndex';
+import { useProjectFileIndex, lookupProjectFile, FILE_LIKE_MENTION } from '../../lib/projectFileIndex';
 import { ChatProjectContext, ChatTreePathContext, ChatOpenFileContext } from './contexts';
 
 // Абсолютный путь (Windows-диск или POSIX) — для A1: упоминание вне корня проекта тоже
 // становится ссылкой (открытие само покажет ошибку, если файла на самом деле нет).
 const ABS_PATH_RE = /^[A-Za-z]:[\\/]|^\//;
+// Windows-диск отдельно: POSIX-ветка (голый `/...`) требует ещё и «похоже на файл»
+// (FILE_LIKE_MENTION) — иначе роуты вида /api/mcp/calls, /hubs/session становятся
+// ссылками на несуществующий файл и ведут в 404 хост-вьювера.
+const WINDOWS_ABS_PATH_RE = /^[A-Za-z]:[\\/]/;
+
+// A1: абсолютный путь становится ссылкой без проверки существования в индексе — но
+// только если это Windows-путь (диск) либо POSIX-путь, похожий на файл (есть расширение).
+// Голый POSIX-роут без расширения (/api/mcp/calls, /hubs/session) — обычный текст.
+export function isFileLikeAbsPath(p: string): boolean {
+  if (!ABS_PATH_RE.test(p)) return false;
+  return WINDOWS_ABS_PATH_RE.test(p) || FILE_LIKE_MENTION.test(p);
+}
 
 // Картинка из markdown: внешние URL (http/https/data) — напрямую; локальный путь файла
 // проекта (например, картинка, скачанная Claude) — грузим через API и показываем как data-URL.
@@ -136,7 +148,7 @@ export function MarkdownContent({ text }: { text: string }) {
     let p = raw.trim().split(/[#?]/)[0];
     if (!p) return null;
     try { p = decodeURIComponent(p); } catch { /* не URL-экранирован — как есть */ }
-    if (!ABS_PATH_RE.test(p)) return null;
+    if (!isFileLikeAbsPath(p)) return null;
     const label = relPathTree(p, project.rootPath, treePath);
     return { path: p, label: label !== p ? label : undefined };
   };

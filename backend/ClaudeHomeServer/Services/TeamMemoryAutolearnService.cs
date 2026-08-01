@@ -34,6 +34,9 @@ public sealed class TeamMemoryAutolearnService : IHostedService
     // Длина транскрипта на момент последнего извлечения по сессии — гасит повторную работу на
     // каждый ResultMessage (в групповом чате/совещании каждый ход спикера = отдельный Result).
     private readonly ConcurrentDictionary<string, int> _lastLen = new();
+    // Гейт содержательности хода (Memory-диета) — см. PersonaMemoryAutolearnService, тот же смысл
+    private readonly int _minTurnChars;
+    private int _skipped;
 
     public TeamMemoryAutolearnService(SessionManager sessions, ProjectManager projects,
         TeamMemoryService memory, TeamMemoryConsolidationService consolidation,
@@ -51,6 +54,7 @@ public sealed class TeamMemoryAutolearnService : IHostedService
         _log = log;
         _hub = hub;
         _events = events;
+        _minTurnChars = int.TryParse(config["Memory:AutolearnMinTurnChars"], out var mtc) && mtc > 0 ? mtc : 400;
     }
 
     public Task StartAsync(CancellationToken ct)
@@ -77,6 +81,13 @@ public sealed class TeamMemoryAutolearnService : IHostedService
         // Гейт флага — внутри хука (переключается без рестарта, как recall-провайдеры)
         if (!_flags.IsEnabled(ownerId, FeatureFlagKeys.TeamMemoryAutolearn)) return Task.CompletedTask;
 
+        var skipReason = Memory.AutolearnGate.CheckSession(session);
+        if (skipReason != Memory.AutolearnSkipReason.None)
+        {
+            LogSkip(session.ProjectId!, session.Id, skipReason);
+            return Task.CompletedTask;
+        }
+
         // Источник: несколько участников → групповой чат/совещание; иначе — одиночный ход
         var source = session.Participants is { Count: > 0 }
             ? TeamMemorySource.AutoMeeting : TeamMemorySource.AutoTurn;
@@ -86,6 +97,13 @@ public sealed class TeamMemoryAutolearnService : IHostedService
         return Task.CompletedTask;
     }
 
+    private void LogSkip(string projectId, string sessionId, Memory.AutolearnSkipReason reason)
+    {
+        var total = Interlocked.Increment(ref _skipped);
+        _log.LogDebug("team-autolearn: проект {Project}, сессия {Session} — пропуск ({Reason}), всего пропусков {Total}",
+            projectId, sessionId, reason, total);
+    }
+
     private async Task LearnSafeAsync(string sessionId, string ownerId, string projectId, TeamMemorySource source)
     {
         try
@@ -93,6 +111,12 @@ public sealed class TeamMemoryAutolearnService : IHostedService
             var history = await _sessions.GetHistoryAsync(sessionId);
             var transcript = SessionSummaryService.BuildTranscript(history, TranscriptBudget);
             if (string.IsNullOrWhiteSpace(transcript)) return;
+
+            if (Memory.AutolearnGate.CheckContent(history, _minTurnChars) != Memory.AutolearnSkipReason.None)
+            {
+                LogSkip(projectId, sessionId, Memory.AutolearnSkipReason.LowContent);
+                return;
+            }
 
             // Анти-спам: извлекаем только если транскрипт заметно вырос с прошлого раза
             var minGrowth = int.TryParse(_config["TeamMemory:MinTranscriptGrowth"], out var g) && g > 0 ? g : 600;

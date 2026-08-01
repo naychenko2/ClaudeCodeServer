@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type CSSProperties, type HTM
 import { Children } from 'react';
 import { X, type LucideIcon } from 'lucide-react';
 import { C, ISLAND } from '../../lib/design';
+import { useCanHover } from '../../lib/pointer';
 import { ICON_STROKE } from './icons';
 import { IconButton } from './IconButton';
 import { Island, IslandHeader } from './Island';
@@ -143,8 +144,9 @@ export function PanelShell({
   // пока курсор на карточке — в покое шапка чистая: иконка панели, заголовок,
   // бейдж. На устройствах без наведения (тач) прятать нечем: контролы видны
   // всегда, иначе к ним было бы не подобраться.
-  const [hoverCapable] = useState(
-    () => typeof window !== 'undefined' && !!window.matchMedia?.('(hover: hover)').matches);
+  // Не media query, а реальный ввод: планшет с клавиатурой рапортует «умею
+  // наводить», и контролы схлопывались прямо под пальцем — см. lib/pointer
+  const hoverCapable = useCanHover();
   const [panelHover, setPanelHover] = useState(false);
   const controlsVisible = !hoverCapable || panelHover;
   // Общий стиль для всех трёх обёрток контролов шапки. Скрытые контролы не только

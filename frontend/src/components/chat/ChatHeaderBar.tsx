@@ -1,10 +1,11 @@
 import { useState, useEffect, type ReactNode } from 'react';
-import { Plus, Menu, Hourglass, FileText, Settings } from 'lucide-react';
+import { Plus, Menu, FileText } from 'lucide-react';
 import type { Project, Session, ClaudeBilling, Persona } from '../../types';
 import { api } from '../../lib/api';
 import { modelLabel, modelProvider, assistantName } from '../../lib/models';
 import { effortLabel } from '../../lib/effort';
-import { formatTimeLeft } from '../../lib/expiry';
+import { ExpiryButton } from './ExpiryButton';
+import { NotifyButton } from './NotifyButton';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { PersonaFace } from '../../features/personas/PersonaFace';
 import { GroupParticipantsPopover } from '../../features/personas/GroupParticipantsPopover';
@@ -741,7 +742,6 @@ interface ChatHeaderBarProps {
   // Не задан — переключать нельзя (не админ): показывается только текущий режим
   onBillingChange?: (b: ClaudeBilling) => void;
   rateWindows: RateWindow[];
-  onOpenSettings: () => void;
   isMobile?: boolean;
   onBack?: () => void;
   activeWorkflow?: { phasesDone: number; phasesTotal: number };
@@ -903,7 +903,7 @@ function ExtractTasksButton({ session, hasMessages, online }: { session: Session
   );
 }
 
-export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, onBillingChange, rateWindows, onOpenSettings, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, artifactsOpen, onToggleArtifacts, artifactFileCount, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, island, compact }: ChatHeaderBarProps) {
+export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, onBillingChange, rateWindows, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, artifactsOpen, onToggleArtifacts, artifactFileCount, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, island, compact }: ChatHeaderBarProps) {
   // Поповер управления участниками группового чата (клик по стеку аватаров)
   const [participantsOpen, setParticipantsOpen] = useState(false);
   // Клик по блоку персоны — карточка персоны: в проектном чате открывается в контентной зоне
@@ -1151,24 +1151,11 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // Бейдж последней запущенной механики команды (только на десктопе)
   const mechanicBadge = lastMechanic && !isMobile ? <TeamMechanicBadge id={lastMechanic} size="sm" /> : null;
 
-  // Пилюля временного чата: остаток до авто-удаления; клик — быстрый путь к настройке.
-  // На мобиле не показываем — шапка и так плотная, метка есть в списке чатов
-  const expiryLeft = formatTimeLeft(session);
-  const expiryBadge = expiryLeft && !isMobile ? (
-    <button
-      type="button"
-      onClick={online ? onOpenSettings : undefined}
-      title={`Временный чат — удалится ${expiryLeft}, если не будет активности. Нажмите, чтобы изменить.`}
-      style={{
-        display: 'flex', alignItems: 'center', gap: 5, padding: '3px 8px',
-        background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg, flexShrink: 0,
-        cursor: online ? 'pointer' : 'default',
-        fontFamily: FONT.sans, fontSize: 11, fontWeight: 600, color: C.textMuted, whiteSpace: 'nowrap',
-      }}
-    >
-      <Hourglass size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-      {expiryLeft}
-    </button>
+  // Время жизни чата: у временного — остаток до авто-удаления, у бессрочного —
+  // приглушённая иконка. Клик открывает выбор срока прямо здесь (в офлайне менять
+  // нечего — сохранение всё равно не пройдёт)
+  const expiryBadge = online ? (
+    <ExpiryButton session={session} isMobile={isMobile} onSessionUpdated={onSessionUpdated} />
   ) : null;
   // На мобиле прогресс workflow втянут в объединённый чип (costBadges) — отдельный
   // бейдж рисуем только на десктопе, где ряду хватает места.
@@ -1240,13 +1227,10 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       </div>
     </ToolbarIconButton>
   ) : null;
-  // compact (колонка стены): настройки чата не показываем — диалог шире самой
-  // колонки, а сам чат открывается в полном виде одной кнопкой из ярлыка колонки
-  const settingsBtn = online && !compact ? (
-    <ToolbarIconButton onClick={onOpenSettings} title="Настройки чата" isMobile={isMobile}>
-      <Settings size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-    </ToolbarIconButton>
-  ) : null;
+  // Тумблер браузерных уведомлений — сигнал о завершённом ходе, когда вкладка не в фокусе.
+  // compact (колонка стены): не показываем — настройка глобальная, и повторять её
+  // в каждой из нескольких колонок незачем (срок жизни у колонок свой, он остаётся)
+  const notifyBtn = online && !compact ? <NotifyButton isMobile={isMobile} /> : null;
 
   // На мобилке артефакты и настройки — плотная пара справа (gap 2 вместо TB.gap),
   // читаются как единая группа действий чата; на десктопе — как раньше, врозь.
@@ -1254,10 +1238,10 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   const extractBtn = <ExtractTasksButton session={session} hasMessages={hasMessages} online={online} />;
   const retitleBtn = <RetitleButton session={session} hasMessages={hasMessages} online={online} />;
   const actionBtns = isMobile
-    ? <div style={{ display: 'flex', alignItems: 'center', gap: 0, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{artifactsBtn}{settingsBtn}</div>
+    ? <div style={{ display: 'flex', alignItems: 'center', gap: 0, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{artifactsBtn}{notifyBtn}</div>
     // На десктопе кнопки — неразрывная группа: при переносе кластера уходят вниз целиком,
     // оставаясь последними у правого края (мышечная память на позицию)
-    : <div style={{ display: 'flex', alignItems: 'center', gap: TB.gap, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{artifactsBtn}{settingsBtn}</div>;
+    : <div style={{ display: 'flex', alignItems: 'center', gap: TB.gap, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{artifactsBtn}{notifyBtn}</div>;
 
   // Правый кластер шапки (бейджи + кнопки) единым flex-элементом: при тесноте узкого
   // десктопа переносится под заголовок ЦЕЛИКОМ (два чистых состояния вместо рваных

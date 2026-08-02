@@ -14,6 +14,17 @@ internal class TurnAccumulator
     private readonly Dictionary<string, StoredPlanReviewMessage> _pendingPlans = [];
     private readonly StringBuilder _textBuf = new();
     private readonly StringBuilder _thinkingBuf = new();
+    // Волна 7 (утечка маркеров протокола в сохранённой истории, прод 2026-08-02): весь сырой
+    // текст ХОДА целиком (не чистится в FlushBuffers, только на границе хода в FlushAsync) —
+    // маркер `<team:work>`/`<escalate:*>` в длинном структурированном ответе координатора может
+    // открыться до, а закрыться ПОСЛЕ вызова инструмента/карточки плана/вопроса (все они дёргают
+    // FlushBuffers), и раньше пара искалась в каждом куске между flush'ами по отдельности —
+    // разъехавшиеся половины маркера не находили друг друга и утекали в историю буквально.
+    // Считаем «безопасный» текст от ВСЕГО _teamRawText сразу, как это уже делает живая
+    // трансляция (SessionManager.OnMessageAsync, entry.TeamTurnText) — и берём только новый
+    // хвост поверх уже показанного (_teamShownLength), симметрично тому же приёму.
+    private readonly StringBuilder _teamRawText = new();
+    private int _teamShownLength;
     // Защищает ВСЁ изменяемое состояние (_history/_currentTurn/буферы/pending-словари):
     // мутации идут из пампа stdout, SignalR-вызовов (ответы на вопросы/планы) и фонового
     // опроса billing-events fal.ai, чтение — из HTTP-потоков (GetAll).
@@ -366,7 +377,7 @@ internal class TurnAccumulator
     {
         lock (_lock)
         {
-            FlushBuffers();
+            FlushBuffers(final: true);
             // Модель хода известна только сейчас (её несёт result), а посты этого хода уже
             // созданы — проставляем задним числом. Сабагентские тексты (ParentToolUseId)
             // пропускаем: они могли идти другой моделью, и UsageModel про них не говорит.
@@ -382,7 +393,7 @@ internal class TurnAccumulator
     {
         lock (_lock)
         {
-            FlushBuffers();
+            FlushBuffers(final: true);
             _currentTurn.Add(new StoredErrorMessage(text));
         }
         await FlushAsync(svc);
@@ -438,9 +449,17 @@ internal class TurnAccumulator
             // Включаем буферизованный текст/думание (ещё не зафиксированный в _currentTurn)
             if (_thinkingBuf.Length > 0)
                 result.Add(new StoredThinkingMessage(_thinkingBuf.ToString()));
+            // Превью непрокоммиченного хвоста — от полного сырого текста хода (см. _teamRawText),
+            // иначе снимок посреди хода показал бы половину маркера, которую итоговый FlushBuffers
+            // потом всё равно скроет/довырежет
             if (_textBuf.Length > 0)
-                result.Add(new StoredTextMessage(SessionManager.StripTeamProtocolMarkers(_textBuf.ToString()), _personaId,
-                    timestamp: _textBufStartedAt ?? NowMs()));
+            {
+                var raw = _teamRawText.ToString() + _textBuf;
+                var safe = SessionManager.TrimUnresolvedMarkerOpen(SessionManager.StripTeamProtocolMarkers(raw));
+                if (safe.Length > _teamShownLength)
+                    result.Add(new StoredTextMessage(safe[_teamShownLength..], _personaId,
+                        timestamp: _textBufStartedAt ?? NowMs()));
+            }
             return result;
         }
     }
@@ -460,19 +479,36 @@ internal class TurnAccumulator
         finally { _saveLock.Release(); }
     }
 
-    // Вызывать только под _lock
-    private void FlushBuffers()
+    // Вызывать только под _lock. final=true — конец хода (OnResultAsync/OnErrorAsync):
+    // дальше дельт не будет, поэтому хвост, придержанный TrimUnresolvedMarkerOpen как «вдруг
+    // маркер ещё не закрылся», можно просто показать как обычный текст — симметрично тому,
+    // что делает живая трансляция на result/error (SessionManager.OnMessageAsync, finalSafe).
+    private void FlushBuffers(bool final = false)
     {
         if (_textBuf.Length > 0)
         {
-            // Волна 6: маркеры протокола «Командной реализации» (`<team:work>`, `<escalate:*>`,
+            _teamRawText.Append(_textBuf);
+            _textBuf.Clear();
+        }
+        if (_teamRawText.Length > 0)
+        {
+            // Маркеры протокола «Командной реализации» (`<team:work>`, `<escalate:*>`,
             // `<team:talk/>`) — внутренняя договорённость координатора с бэкендом, в
             // сохранённой истории им не место (иначе после перезагрузки/reload они снова
-            // всплывают в ленте, даже если живая трансляция их уже отфильтровала).
-            _currentTurn.Add(new StoredTextMessage(SessionManager.StripTeamProtocolMarkers(_textBuf.ToString()), _personaId,
-                timestamp: _textBufStartedAt ?? NowMs()));
-            _textBuf.Clear();
-            _textBufStartedAt = null;
+            // всплывают в ленте, даже если живая трансляция их уже отфильтровала). Считаем
+            // от ВСЕГО _teamRawText — маркер мог открыться до и закрыться ПОСЛЕ вызова
+            // инструмента, разъехавшись между несколькими FlushBuffers.
+            var raw = _teamRawText.ToString();
+            var safe = final
+                ? SessionManager.StripTeamProtocolMarkers(raw)
+                : SessionManager.TrimUnresolvedMarkerOpen(SessionManager.StripTeamProtocolMarkers(raw));
+            if (safe.Length > _teamShownLength)
+            {
+                var delta = safe[_teamShownLength..];
+                _teamShownLength = safe.Length;
+                _currentTurn.Add(new StoredTextMessage(delta, _personaId, timestamp: _textBufStartedAt ?? NowMs()));
+                _textBufStartedAt = null;
+            }
         }
         if (_thinkingBuf.Length > 0)
         {
@@ -490,6 +526,8 @@ internal class TurnAccumulator
             _pendingTools.Clear();
             _pendingQuestions.Clear();
             _pendingPlans.Clear();
+            _teamRawText.Clear();
+            _teamShownLength = 0;
         }
         await SaveSnapshotAsync(svc);
     }

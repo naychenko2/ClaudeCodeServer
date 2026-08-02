@@ -353,6 +353,56 @@ public class TaskExecutionServiceJoinTests : IDisposable
             "доклада в исходном чате нет — разбираться идём в карточку задачи");
     }
 
+    // ─── (е2) прод 2026-08-02 (находка Веры): дубль доклада после перезапуска исполнения ──
+    // Координатор перезапустил уже доставленную под-задачу в ответ на разблокировку карточки
+    // остановки — запуски разнесены во времени, _launching (TOCTOU-гард гонки) тут ни при чём.
+
+    [Fact]
+    public async Task ExecuteAsync_ДокладУжеДоставлен_ОтказДажеЕслиСтатусПереоткрыт()
+    {
+        var user = _userStore.Add("relaunch-owner", "password123", "user");
+        var task = _tasks.Create(null, user.Id, new CreateTaskRequest("Перезапуск после доклада"));
+        _tasks.MarkClaudeStarted(task.Id, "sess-1", DateTime.UtcNow);
+        _tasks.MarkClaudeResult(task.Id, "success");
+        var tracked = _tasks.GetById(task.Id)!;
+        tracked.Status = TaskItemStatus.Done;
+        await _sut.TryDeliverCompletionAsync(tracked);
+        tracked.CompletionDelivered.Should().BeTrue();
+
+        // Гипотетический путь реопена (Status переведён обратно) — гард по CompletionDelivered
+        // обязан блокировать перезапуск независимо от Status, а не только пока он Done
+        tracked.Status = TaskItemStatus.InProgress;
+
+        var act = async () => await _sut.ExecuteAsync(tracked, auto: true);
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*доклад*доставлен*");
+    }
+
+    [Fact]
+    public async Task TryDeliverCompletionAsync_ПерезапускПослеДоставки_НеШлётВторойДоклад()
+    {
+        var task = CreateTrackedTask();
+        _tasks.MarkClaudeResult(task.Id, "success");
+        task.Status = TaskItemStatus.Done;
+        await _sut.TryDeliverCompletionAsync(task);
+        task.CompletionDelivered.Should().BeTrue();
+
+        // Перезапуск исполнения той же задачи (новая сессия): MarkClaudeStarted сбрасывает
+        // ClaudeResult (новая попытка), но CompletionDelivered трогать не должен
+        _tasks.MarkClaudeStarted(task.Id, "sess-2", DateTime.UtcNow);
+        var relaunched = _tasks.GetById(task.Id)!;
+        relaunched.ClaudeResult.Should().BeNull();
+        relaunched.CompletionDelivered.Should().BeTrue("доклад уже доставлен — перезапуск не должен это забыть");
+
+        // Запоздавшие R/D-сигналы (исходной или новой попытки) не должны породить второй доклад
+        _tasks.MarkClaudeResult(relaunched.Id, "success");
+        relaunched.Status = TaskItemStatus.Done;
+        await _sut.TryDeliverCompletionAsync(relaunched);
+
+        (await CountNotificationsAsync(task.OwnerId!)).Should().Be(1,
+            "доклад по задаче — один раз, даже после перезапуска исполнения");
+    }
+
     [Fact]
     public async Task OnSessionMessageAsync_УспешныйХодИУжеDone_ДоставляетСразу()
     {

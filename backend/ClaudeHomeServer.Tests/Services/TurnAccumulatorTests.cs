@@ -351,6 +351,41 @@ public class TurnAccumulatorTests : IDisposable
         all.Should().HaveCount(3);
     }
 
+    // Прод 2026-08-02 (находка Веры): в длинном ответе координатора вызов инструмента между
+    // открывающим и закрывающим тегом маркера дёргает FlushBuffers ДО того, как закрытие
+    // пришло следующей дельтой — раньше пара искалась в каждом куске между flush'ами
+    // независимо, и половина маркера (то открывающий тег, то осиротевший закрывающий)
+    // утекала в сохранённую историю буквально.
+    [Fact]
+    public async Task Маркер_РазъехалсяПоFlushBuffers_НеПротекаетИВырезаетсяЦеликом()
+    {
+        var sessionId = Guid.NewGuid().ToString();
+        var acc = new TurnAccumulator([], sessionId);
+        acc.OnTextDelta("Договорились. <team:work>сделать экспорт");
+        acc.OnToolUse("t1", "bash", new { }); // FlushBuffers посреди маркера
+        acc.OnTextDelta("</team> Готово.");
+        await acc.OnResultAsync("success", 100, 1, null, null, null, null, _histSvc);
+
+        var texts = acc.GetAll().OfType<StoredTextMessage>().Select(m => m.Text).ToList();
+        texts.Should().OnlyContain(t => !t.Contains("<team:work>") && !t.Contains("</team"));
+        string.Concat(texts).Should().Be("Договорились.  Готово.");
+    }
+
+    // Симметрично живой трансляции (ЖиваяТрансляция_ХодОборванПослеНезавершённогоХвоста в
+    // SessionManagerTests): маркер, который так и не закрылся к концу хода (обрыв), не должен
+    // теряться молча — конец хода довешивает его как обычный текст, а не съедает навсегда.
+    [Fact]
+    public async Task Маркер_НеЗакрылсяККонцуХода_ДовешиваетсяКакОбычныйТекстВИстории()
+    {
+        var sessionId = Guid.NewGuid().ToString();
+        var acc = new TurnAccumulator([], sessionId);
+        acc.OnTextDelta("Собираю план, минуту <team:wo");
+        await acc.OnErrorAsync("оборвался", _histSvc);
+
+        var texts = acc.GetAll().OfType<StoredTextMessage>().Select(m => m.Text).ToList();
+        string.Concat(texts).Should().Be("Собираю план, минуту <team:wo");
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_tempDir))

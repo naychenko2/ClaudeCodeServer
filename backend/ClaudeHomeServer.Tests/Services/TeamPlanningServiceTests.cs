@@ -286,6 +286,22 @@ public class TeamPlanningServiceTests : IDisposable
         prompt.Should().NotContain("\"changes\":");
     }
 
+    // Прод 2026-08-02 (находка Веры): планировщик выдал под-задачу с буквальным
+    // «<файл-1 в корне проекта>» вместо значения, которое человек указал в вводной —
+    // промпт обязан явно запрещать плейсхолдеры и требовать перенос конкретики или допущение.
+    [Fact]
+    public void BuildPlannerPrompt_ЗапрещаетПлейсхолдерыИТребуетКонкретику()
+    {
+        var dev = TeamPlanningService.BuildCard(MakePersona("Денис", "Backend-разработчик"));
+
+        var prompt = TeamPlanningService.BuildPlannerPrompt("Добавить экспорт в CSV",
+            [dev], "ClaudeCodeServer");
+
+        prompt.Should().Contain("плейсхолдер");
+        prompt.Should().Contain("<файл-1 в корне проекта>", "конкретный пример утечки из прода — по нему проверяется, что запрет адресный");
+        prompt.Should().Contain("assumptions", "неизвестное значение — в допущения, а не в заглушку");
+    }
+
     // --- Разбор плана ---
 
     [Fact]

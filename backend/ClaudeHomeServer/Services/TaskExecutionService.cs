@@ -95,6 +95,15 @@ public class TaskExecutionService
     {
         if (task.Status == TaskItemStatus.Done)
             throw new InvalidOperationException("Задача уже завершена");
+        // Прод 2026-08-02 (находка Веры): дубль доклада о завершении после того, как координатор
+        // перезапустил исполнение под-задачи в ответ на разблокировку карточки остановки —
+        // Status==Done выше блокирует релонч, ПОКА статус не переоткрыт в обход этого метода
+        // (например прямым PUT/tasks_update). CompletionDelivered — необратимый CAS-флаг
+        // (TaskManager.TryMarkCompletionDelivered): раз доклад уже ушёл, перезапуск той же
+        // задачи не должен порождать второй — независимая страховка поверх проверки статуса,
+        // не завязанная на то, что Status и CompletionDelivered меняются синхронно.
+        if (task.CompletionDelivered)
+            throw new InvalidOperationException("Доклад по этой задаче уже доставлен — перезапуск отключён");
         if (task.OwnerId is null)
             throw new InvalidOperationException("У задачи нет владельца");
 

@@ -4212,6 +4212,14 @@ public class SessionManager : IDisposable
         new(@"<team:work>[\s\S]*?</team(?::work)?>", System.Text.RegularExpressions.RegexOptions.Compiled);
     private static readonly System.Text.RegularExpressions.Regex TalkMarkerRegex =
         new(@"<team:talk\s*/>", System.Text.RegularExpressions.RegexOptions.Compiled);
+    // Осиротевший закрывающий тег без пары (прод 2026-08-02, находка Веры): в длинном
+    // структурированном ответе модель иногда закрывает маркер повторно или цитирует закрытие
+    // отдельно от открытия, которое уже вырезано парным регэкспом выше (например тем же именем
+    // маркера двумя абзацами раньше). Такой закрывающий тег — всегда служебный синтаксис
+    // нашего протокола (`</team>`/`</team:work>`, `</escalate>`/`</escalate:kind>`), человеку
+    // он не нужен ни в какой форме — вырезаем и его.
+    private static readonly System.Text.RegularExpressions.Regex OrphanCloserRegex =
+        new(@"</escalate(?::\w+)?>|</team(?::work)?>", System.Text.RegularExpressions.RegexOptions.Compiled);
 
     internal static string StripTeamProtocolMarkers(string text)
     {
@@ -4234,6 +4242,7 @@ public class SessionManager : IDisposable
         text = EscalateMarkerRegex.Replace(text, "");
         text = WorkMarkerRegex.Replace(text, "");
         text = TalkMarkerRegex.Replace(text, "");
+        text = OrphanCloserRegex.Replace(text, "");
         return text;
     }
 

@@ -73,6 +73,12 @@ interface Props {
   // Стиль Islands: чат живёт БЕЗ рамки прямо на холсте (корень прозрачный),
   // а шапка выделена в собственную карточку-остров с зазором снизу
   headerIsland?: boolean;
+  // Режим «Стены» (WallColumn): на экране НЕСКОЛЬКО инстансов ChatPanel разом, поэтому
+  // глобальные синглтоны одного хозяина (setGitSessionContext, setChatContext,
+  // --cc-fab-bottom) не трогаем — иначе инстансы перебивают друг друга, а анмаунт
+  // любого сбрасывает контекст всем. Git-бар скрыт (воркспейсный инструмент);
+  // шапка чата — штатная (канонический вид), ярлык колонки рисует WallColumn.
+  embedded?: boolean;
 }
 
 // Предел одной загрузки — совпадает с RequestSizeLimit эндпоинта загрузки вложений
@@ -119,7 +125,7 @@ function derivePlanPhase(items: ChatItem[], mode: Mode, isWaiting: boolean): Pla
   return null;
 }
 
-export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, attachedFiles, onAttachedFilesChange, artifactsOpen, onToggleArtifacts, greetingBubble, headerIsland }: Props) {
+export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, attachedFiles, onAttachedFilesChange, artifactsOpen, onToggleArtifacts, greetingBubble, headerIsland, embedded }: Props) {
   const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, workLoop: liveWorkLoop, teamImplement: liveTeamImplement, promptSuggestion, pending, composerRestore, consumeRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, respondTeamPlan, respondTeamEscalation, interrupt, compact, toggleThinking, noteCompanionSwitch, cancelPending } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
   // Цикл «до готово» (флаг work-loop): live-состояние из событий work_loop,
   // до первого события — из Session.workLoop; null — цикл выключен
@@ -197,10 +203,11 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   // Пока активен чат в worktree, все git-запросы проекта несут его sessionId —
   // бар/панель «Изменения» показывают и мутируют дерево чата, не корень проекта
   useEffect(() => {
-    if (!project) return;
+    // embedded: git-контекст — глобальный синглтон проекта, на стене им владеет воркспейс
+    if (!project || embedded) return;
     setGitSessionContext(project.id, session.worktreePath ? session.id : null);
     return () => setGitSessionContext(project.id, null);
-  }, [project, session.id, session.worktreePath]);
+  }, [project, session.id, session.worktreePath, embedded]);
   const [worktreeForceConfirm, setWorktreeForceConfirm] = useState(false);
   // Предупреждение перед сменой дерева (в обе стороны): переезд меняет рабочую папку
   // агента — без объяснения тумблер выглядит «кнопкой-сюрпризом»
@@ -452,10 +459,12 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   // FAB AI-хаба должен вставать НАД композером (иначе налезает на композер и кнопку
   // «вниз»): пробрасываем высоту композера в глобальную CSS-переменную, читаемую FAB.
   useEffect(() => {
+    // embedded: переменная глобальная, несколько колонок стены перебивали бы друг друга
+    if (embedded) return;
     const root = document.documentElement;
     root.style.setProperty('--cc-fab-bottom', `${composerH + 12}px`);
     return () => { root.style.setProperty('--cc-fab-bottom', '20px'); };
-  }, [composerH]);
+  }, [composerH, embedded]);
   // Контекст проекта для резолва локальных путей картинок в сообщениях
   const projectCtx = useMemo(() => project ? { id: project.id, rootPath: project.rootPath } : null, [project]);
 
@@ -762,9 +771,11 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   // Сообщаем AI-палитре, что чат открыт (переписка + хвост) — чтобы действия чата были
   // доступны и в проектных чатах, где активная сессия не отражается в nav.
   useEffect(() => {
+    // embedded: контекст AI-палитры один на приложение — стена его не трогает
+    if (embedded) return;
     setChatContext(true, hasMessages, chatTail);
     return () => setChatContext(false, false);
-  }, [hasMessages, chatTail]);
+  }, [hasMessages, chatTail, embedded]);
 
   // Триггер «завершение хода Claude»: по переходу isWaiting → false просим AI-хаб
   // переоценить контекст (уместно ли извлечь задачи, собрать итог в заметку и т.п.).
@@ -1321,7 +1332,9 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     <PersonaContext.Provider value={persona}>
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative', background: headerIsland ? 'transparent' : C.bgMain }}>
       {/* В режиме headerIsland шапка сама рисует себя hero-вариантом прямо на
-          холсте (ChatHeaderBar, ветка island) — обёртки не нужно */}
+          холсте (ChatHeaderBar, ветка island) — обёртки не нужно. На стене
+          (embedded) шапка тоже штатная — канонический вид чата; над ней колонка
+          рисует свою тонкую полосу-ярлык (проект + zoom), это не дубль шапки */}
       {headerBar}
 
       {/* Сообщения (нижний отступ = высота плавающего composer + зазор).
@@ -1486,7 +1499,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
               чата, дерево текущего хода, суммарный diff и кнопки «Зафиксировать»/
               «Опубликовать». Правой панели «Изменения» на мобиле нет — отсюда гейт
               !isMobile; на мобиле о дереве хода сообщает только отметка в ленте. */}
-          {project && !isMobile && <ProjectGitBar project={project} session={session} turnTree={turnTree} turnTreeLive={isWaiting} onCommitOwn={handleCommitOwn} onCommitAll={handleCommitAll} />}
+          {project && !isMobile && !embedded && <ProjectGitBar project={project} session={session} turnTree={turnTree} turnTreeLive={isWaiting} onCommitOwn={handleCommitOwn} onCommitAll={handleCommitAll} />}
           {/* Подъём композера над лентой даёт сама белая карточка (Composer), а не эта
               обёртка: полоса контролов вынесена из карточки, и тень на обёртке рисовала
               серый ореол вокруг пустой области под ней и полоску над полем ввода. */}

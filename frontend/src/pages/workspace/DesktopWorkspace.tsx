@@ -148,9 +148,9 @@ export function DesktopWorkspace(p: Props) {
 
   const personaOpen = !!p.selectedPersonaId || p.personaCreating;
 
-  // «Стена»: док и пункт меню карточек чата — только полный десктоп (на планшете
-  // колонкам стены всё равно не хватит места, WallPage там кажет заглушку)
-  const wallOn = !p.isTablet && !!p.onOpenWall;
+  // «Стена»: док и пункт меню карточек чата. Планшету она доступна (колонок туда
+  // влезает одна-две), отсекается только телефон — но мобильной ветки тут и нет
+  const wallOn = !!p.onOpenWall;
   const handleAddToWall = (s: Session) => {
     void addChatSafe(s).then(() => showToast('Стена', `«${s.name?.trim() || 'Чат'}» на стене`));
   };

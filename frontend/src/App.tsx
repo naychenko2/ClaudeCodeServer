@@ -28,6 +28,7 @@ import { navPush, navReplace, parseHash, getNav, type NavSnapshot } from './lib/
 import { api } from './lib/api'
 import { idbClear } from './lib/idb'
 import { setAllFlags } from './lib/featureFlags'
+import { isWallActive } from './lib/wallMode'
 import { setCtxThresholdsFromServer } from './lib/contextPrefs'
 import { useIsMobile } from './lib/breakpoints'
 import { loadModels } from './lib/models'
@@ -531,6 +532,14 @@ export default function App() {
         delete rest.historyOverlay
         navReplace(rest)
       }
+    }
+    // Возврат в рабочий режим: пока стена «активна», вкладка «Проекты» ведёт на неё,
+    // а не в воркспейс (выйти из режима — кнопкой «К проектам» на самой стене)
+    if (t === 'projects' && hubTab !== 'wall' && isWallActive()) {
+      localStorage.setItem(HUB_TAB_KEY, 'wall')
+      setHubTab('wall')
+      navPush({ screen: 'wall' })
+      return
     }
     // Повторный клик по активному разделу «Проекты» с открытым проектом — выход к списку.
     if (t === 'projects' && hubTab === 'projects' && project) {

@@ -162,6 +162,8 @@ export function WallColumn({ session, project, index, focused, onZoom, onOpenFil
             // Поле ввода видно у всех колонок; активная лишь забирает в него курсор
             // (сигнал растёт на переходе «стала активной») — кликнул и пишешь
             composerFocusSignal={focusSignal}
+            // Шапка чата — вторая ручка перетаскивания колонки (первая — ярлык выше)
+            headerDragProps={{ draggable: true, onDragStart: e => startOrderDrag(e, index) }}
             // Смена модели/режима/цикла из колонки — снимок в сторе стены обязан обновиться
             onSessionUpdated={updateChat}
           />

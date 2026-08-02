@@ -223,8 +223,16 @@ export function WallPage({ auth, onLogout, onHubTab }: Props) {
           toolsEnabled={!!focusedProject?.toolsEnabled}
           sessionPanels={sessionPanels}
           railFooter={
-            <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-              {focusedProject && <ProjectRail project={focusedProject} onOpenSettings={() => {}} />}
+            // flex: 1 — обёртка обязана забрать всю высоту под рельсой: по ней док
+            // проектов считает, сколько иконок показать (иначе все уезжают под лупу)
+            <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+              {/* Док проектов — ВСЕГДА, даже на пустой стене: с него и начинают
+                  («открыть проект» и «собрать стену» — соседние действия). Активного
+                  проекта без колонок нет, и подсвечивать в ряду просто нечего */}
+              <ProjectRail
+                project={focusedProject}
+                onOpenSettings={() => { if (focusedProject) setEditProject(focusedProject); }}
+              />
               <WallDock onExit={exitWall} slots={slots} />
             </div>
           }

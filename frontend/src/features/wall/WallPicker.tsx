@@ -75,7 +75,9 @@ export function WallPicker({ onClose }: { onClose: () => void }) {
         </label>
       </div>
 
-      <div style={{ maxHeight: '55vh', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
+      {/* Высота ФИКСИРОВАННАЯ, а не по содержимому: иначе диалог прыгал бы при
+          каждом переключении фильтра «активные сейчас» и на каждом добавленном чате */}
+      <div style={{ height: '55vh', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
         {candidates === null && (
           <div style={{ padding: 20, textAlign: 'center', fontFamily: FONT.sans, fontSize: FS.sm, color: C.textMuted }}>Загрузка…</div>
         )}

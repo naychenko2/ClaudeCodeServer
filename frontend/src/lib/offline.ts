@@ -175,6 +175,23 @@ export class OfflineError extends Error {
   }
 }
 
+// Сервер не ответил за отведённое время. Отдельно от OfflineError: связь может быть
+// цела, а запрос просто оказался дольше своего лимита (ход модели, git-операция на
+// большой репе). Раньше такой обрыв показывался как «Действие недоступно офлайн» —
+// человек чинил сеть вместо того, чтобы дать серверу время.
+// Бросается ТОЛЬКО при явном timeoutMs: у запросов с дефолтным лимитом зависание —
+// действительно признак проблем со связью, и там прежнее поведение сохранено
+// (офлайн-очереди задач и заметок ловят OfflineError по instanceof).
+export class RequestTimeoutError extends Error {
+  // Поле объявлено отдельно, а не parameter property: в проекте включён erasableSyntaxOnly
+  readonly timeoutMs: number;
+  constructor(timeoutMs: number) {
+    super(`Сервер не ответил за ${Math.round(timeoutMs / 1000)} с`);
+    this.name = 'RequestTimeoutError';
+    this.timeoutMs = timeoutMs;
+  }
+}
+
 // fetch при сетевом сбое реджектит с TypeError; HTTP-ошибки (4xx/5xx) — это res.ok=false (сервер доступен)
 function isNetworkError(e: unknown): boolean {
   return e instanceof TypeError;
@@ -205,7 +222,11 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
   // timeoutMs — оверрайд для заведомо долгих запросов (AI-генерация и т.п.)
   const { timeoutMs, ...fetchOptions } = options ?? {};
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs ?? FETCH_TIMEOUT_MS);
+  const effectiveTimeout = timeoutMs ?? FETCH_TIMEOUT_MS;
+  // Признак «прервали мы сами по таймауту»: AbortError от нашего таймера неотличим от
+  // прочих abort'ов, а причину надо назвать точно (см. RequestTimeoutError)
+  let timedOut = false;
+  const timeoutId = setTimeout(() => { timedOut = true; controller.abort(); }, effectiveTimeout);
   // Ранний таймер degraded: запрос «завис» >2с — сразу показываем нестабильность и
   // форсим проверку связи, не дожидаясь 30-секундного таймаута. На заведомо долгие
   // запросы (явный timeoutMs) не вешается — их длительность ожидаема.
@@ -275,16 +296,23 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
     clearReqTimers();
     // AbortError от нашего таймаута трактуем как сетевую проблему
     if (isNetworkError(e) || (e instanceof DOMException && e.name === 'AbortError')) {
-      // Уступчивый переход вместо резкого офлайна: первая ошибка — degraded,
-      // повтор из degraded — offline
-      if (_connectionState === 'online') setDegraded('сетевая ошибка запроса');
-      else if (_connectionState === 'degraded') setConnectionState('offline');
+      // Свой таймаут на заведомо долгом запросе (явный timeoutMs) — не улика против
+      // связи: сервер мог просто думать дольше отведённого. Состояние не трогаем,
+      // иначе успешная, но медленная операция уводила бы приложение в degraded/offline.
+      const ourTimeout = timedOut && timeoutMs !== undefined;
+      if (!ourTimeout) {
+        // Уступчивый переход вместо резкого офлайна: первая ошибка — degraded,
+        // повтор из degraded — offline
+        if (_connectionState === 'online') setDegraded('сетевая ошибка запроса');
+        else if (_connectionState === 'degraded') setConnectionState('offline');
+      }
+      // Кэш выручает GET независимо от причины обрыва — сначала пробуем его
       if (isGet) {
         const cached = await idbGet<T>(url).catch(() => undefined);
         if (cached) return cached.data;
-        throw new OfflineError('Нет сохранённых данных для офлайн-доступа');
       }
-      throw new OfflineError();
+      if (ourTimeout) throw new RequestTimeoutError(effectiveTimeout);
+      throw new OfflineError(isGet ? 'Нет сохранённых данных для офлайн-доступа' : undefined);
     }
     throw e; // HTTP-ошибка или прочее — пробрасываем как есть
   }

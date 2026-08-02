@@ -895,10 +895,12 @@ export const api = {
         `/sessions/${encodeURIComponent(sessionId)}/prompt/${encodeURIComponent(snapshotId)}/file?key=${encodeURIComponent(key)}`),
     // Разбор промпта моделью. includeText=true — человек разрешил приложить фрагменты
     // текста секций (по умолчанию уходят только метаданные)
+    // timeoutMs — это ход модели, дефолтных 30 с ему мало: обрыв по таймауту
+    // трактуется как сетевая ошибка и выглядит как «Действие недоступно офлайн»
     analyzePrompt: (sessionId: string, snapshotId: string, includeText: boolean) =>
       request<{ analysis: string }>(
         `/sessions/${encodeURIComponent(sessionId)}/prompt/${encodeURIComponent(snapshotId)}/analyze`,
-        { method: 'POST', body: JSON.stringify({ includeText }) }),
+        { method: 'POST', body: JSON.stringify({ includeText }), timeoutMs: 180_000 }),
   },
 
   // Чаты вне проекта (project-less)

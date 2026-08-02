@@ -17,6 +17,9 @@ async function login(request: APIRequestContext): Promise<string> {
 test.describe('раскрывашка «Обсудить с командой»', () => {
   let token: string;
   let chatId: string;
+  // Второй чат — под кейс автопоказа (имя уникально, чтобы найти строку в списке чатов)
+  let autoShowChatId: string;
+  const autoShowChatName = `E2E team-drawer autodiscuss ${Date.now()}`;
 
   test.beforeAll(async ({ playwright, baseURL }) => {
     const request = await playwright.request.newContext({ baseURL });
@@ -27,12 +30,20 @@ test.describe('раскрывашка «Обсудить с командой»',
     });
     expect(r.ok(), 'создание чата должно пройти').toBeTruthy();
     chatId = (await r.json()).id as string;
+
+    const r2 = await request.post('/api/chats', {
+      data: { mode: 'auto', name: autoShowChatName },
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(r2.ok(), 'создание второго чата должно пройти').toBeTruthy();
+    autoShowChatId = (await r2.json()).id as string;
     await request.dispose();
   });
 
   test.afterAll(async ({ playwright, baseURL }) => {
     const request = await playwright.request.newContext({ baseURL });
     await request.delete(`/api/chats/${chatId}`, { headers: { Authorization: `Bearer ${token}` } });
+    await request.delete(`/api/chats/${autoShowChatId}`, { headers: { Authorization: `Bearer ${token}` } });
     await request.dispose();
   });
 
@@ -53,5 +64,33 @@ test.describe('раскрывашка «Обсудить с командой»',
 
     // Выбор применился: плейсхолдер поля сменился на плейсхолдер этой механики
     await expect(textarea).toHaveAttribute('placeholder', 'Что реализовать командой?…');
+  });
+
+  test('карточка механики выбирается обычным кликом при автопоказе панели', async ({ page, context }) => {
+    // Регрессия (проверка на проде 2026-08-02, Вера): при автопоказе — переход в чат,
+    // где sessionStorage 'cc_auto_discuss' совпадает с id (см. TeamCommandCenter
+    // «Созвать команду» → Composer.tsx) — панель открывалась сама, и клик по карточке
+    // перехватывался невидимым слоем. Кликаем БЕЗ force как в тесте выше.
+    await context.addInitScript((tk) => localStorage.setItem('cc_token', tk as string), token);
+
+    await page.goto(`/#/chats/${chatId}`);
+    const textarea = page.locator('textarea.cc-composer-input');
+    await expect(textarea).toBeVisible();
+
+    // Имитируем сигнал «Созвать команду»: флаг ставится ДО перехода в целевой чат
+    await page.evaluate((id) => sessionStorage.setItem('cc_auto_discuss', id), autoShowChatId);
+
+    // Переход в целевой чат обычным кликом по строке списка (SPA-навигация, без
+    // reload) — так же, как после «Создать чат» в TeamCommandCenter
+    await page.getByText(autoShowChatName, { exact: false }).first().click();
+
+    const card = page.getByRole('button', { name: /Командная реализация/ });
+    await expect(card).toBeVisible();
+
+    // Панель открылась автоматически — обычный клик не должен перехватываться
+    await card.click();
+
+    const targetTextarea = page.locator('textarea.cc-composer-input');
+    await expect(targetTextarea).toHaveAttribute('placeholder', 'Что реализовать командой?…');
   });
 });

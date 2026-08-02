@@ -446,6 +446,10 @@ export function TeamPlanView({ item, online }: {
             {author.name} · планировщик
           </div>
         )}
+        {/* «Замысел» остаётся видимым и после старта волны (решение 2026-08-02, раунд 2):
+            человек по ходу работы сверяется, правильно ли команда поняла задачу — раньше
+            блок пропадал вместе с телом плана на подтверждении */}
+        {plan.intent && <IntentBlock text={plan.intent} />}
         {fileLinkRow}
         <CollapsedPlan plan={plan} isMobile={isMobile} rootPath={rootPath} />
       </div>

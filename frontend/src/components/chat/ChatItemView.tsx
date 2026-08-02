@@ -270,7 +270,10 @@ function PostActionBar({ align = 'left', children }: {
     <div className="cc-actions" style={{
       position: 'absolute', bottom: -POST_BAR_H, [align]: 4, zIndex: 2,
       display: 'flex', alignItems: 'center', gap: 7,
-      maxWidth: '100%',
+      // Ширина по содержимому, а не по пузырю: панель — оверлей, места в ленте не
+      // занимает, а «100%» резало подпись у коротких сообщений («16 мин наз…»).
+      // Прижата к своему краю, поэтому растёт внутрь ленты, а не за её пределы.
+      width: 'max-content', maxWidth: '92vw', whiteSpace: 'nowrap',
     }}>
       {children}
     </div>
@@ -279,22 +282,56 @@ function PostActionBar({ align = 'left', children }: {
 
 // Мета поста — модель и время простым текстом. Оба слагаемых необязательны: старая
 // история их не несёт, и тогда под постом остаются одни действия.
-function PostMeta({ model, ts }: { model?: string; ts?: number }) {
+// Имя модели — вход в шторку «что она получила»: отдельная иконка в панели действий
+// была лишней, а связка «модель → её контекст» читается сама собой. Без имени модели
+// (старая история) вместо него показывается иконка.
+function PostMeta({ model, ts, promptSnapshotId, turnContextTokens, turnCache }: {
+  model?: string; ts?: number; promptSnapshotId?: string;
+  turnContextTokens?: number | null;
+  turnCache?: { read: number; creation: number } | null;
+}) {
   const label = useModelLabel(model);
   const time = formatPostTime(ts);
   const timeFull = formatPostTimeFull(ts);
-  if (!model && !time) return null;
+  const sessionId = useContext(ChatSessionContext);
+  const [snapshotOpen, setSnapshotOpen] = useState(false);
+  const canOpen = !!(promptSnapshotId && sessionId);
+  if (!model && !time && !canOpen) return null;
   return (
     <span style={{
       display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0,
       fontFamily: FONT.sans, fontSize: 11, color: C.textMuted, whiteSpace: 'nowrap',
     }}>
-      {model && (
+      {model && (canOpen ? (
+        <button onClick={() => setSnapshotOpen(true)}
+          title={`${label} — показать, что она получила`}
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: 3, minWidth: 0,
+            background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+            fontFamily: 'inherit', fontSize: 'inherit', color: 'inherit',
+          }}
+          {...postIconHover}>
+          <Brain size={12} strokeWidth={2} style={{ flexShrink: 0 }} />
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</span>
+        </button>
+      ) : (
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, minWidth: 0 }}
           title={`Модель этого ответа: ${label}`}>
           <Brain size={12} strokeWidth={2} style={{ flexShrink: 0 }} />
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</span>
         </span>
+      ))}
+      {/* Модель неизвестна (история до появления поля) — вход остаётся иконкой */}
+      {!model && canOpen && (
+        <button onClick={() => setSnapshotOpen(true)} style={postIconBtn}
+          title="Что получила модель" aria-label="Что получила модель" {...postIconHover}>
+          <ScrollText size={13} strokeWidth={2} style={{ flexShrink: 0 }} />
+        </button>
+      )}
+      {snapshotOpen && sessionId && promptSnapshotId && (
+        <PromptSnapshotDialog sessionId={sessionId} snapshotId={promptSnapshotId}
+          contextTokens={turnContextTokens} turnCache={turnCache}
+          onClose={() => setSnapshotOpen(false)} />
       )}
       {time && (
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}
@@ -335,31 +372,6 @@ function usePostTap() {
   return { tapped, handleTap };
 }
 
-// Кнопка «какой промпт ушёл» — открывает шторку со снимком промпта этого хода.
-// Живёт в панели под постом рядом с копированием; без id сессии (вне ленты) не рендерится.
-function PromptSnapshotButton({ snapshotId, contextTokens, turnCache }: {
-  snapshotId: string; contextTokens?: number | null;
-  turnCache?: { read: number; creation: number } | null;
-}) {
-  const sessionId = useContext(ChatSessionContext);
-  const [open, setOpen] = useState(false);
-  if (!sessionId) return null;
-  return (
-    <>
-      <button onClick={() => setOpen(true)} style={postIconBtn}
-        title="Какой промпт ушёл на этом ходу" aria-label="Какой промпт ушёл на этом ходу"
-        {...postIconHover}>
-        <ScrollText size={13} strokeWidth={2} style={{ flexShrink: 0 }} />
-      </button>
-      {open && (
-        <PromptSnapshotDialog sessionId={sessionId} snapshotId={snapshotId}
-          contextTokens={contextTokens} turnCache={turnCache}
-          onClose={() => setOpen(false)} />
-      )}
-    </>
-  );
-}
-
 // Кнопка «Скопировать» с отметкой об успехе — одинаково нужна обоим видам постов
 function CopyButton({ text, label }: { text: string; label: string }) {
   const [copied, setCopied] = useState(false);
@@ -381,9 +393,10 @@ function CopyButton({ text, label }: { text: string; label: string }) {
 // Пузырь сообщения человека: та же панель по hover, но короче — копирование и время
 // (модель к своему сообщению отношения не имеет). Вынесен из switch, потому что
 // копирование и тап держат состояние, а хуки внутри case недопустимы.
-function UserMessageBubble({ text, ts, promptSnapshotId, turnContextTokens, turnCache, children }: {
-  text: string; ts?: number; promptSnapshotId?: string; turnContextTokens?: number | null;
-  turnCache?: { read: number; creation: number } | null;
+// Кнопки «что получила модель» тут нет намеренно: она описывает ход целиком и живёт
+// под ответом — там вопрос «на основании чего это написано» и возникает
+function UserMessageBubble({ text, ts, children }: {
+  text: string; ts?: number;
   children: React.ReactNode;
 }) {
   const { tapped, handleTap } = usePostTap();
@@ -399,9 +412,6 @@ function UserMessageBubble({ text, ts, promptSnapshotId, turnContextTokens, turn
       {/* Прижата вправо — по стороне, с которой стоит сам пузырь человека */}
       <PostActionBar align="right">
         <CopyButton text={text} label="Скопировать сообщение" />
-        {promptSnapshotId && (
-          <PromptSnapshotButton snapshotId={promptSnapshotId} contextTokens={turnContextTokens} turnCache={turnCache} />
-        )}
         <PostMeta ts={ts} />
       </PostActionBar>
     </div>
@@ -453,9 +463,6 @@ function TextMessageView({ text, online, onRetry, streaming, model, ts, promptSn
       {!streaming && (
         <PostActionBar>
           <CopyButton text={text} label="Скопировать ответ" />
-          {promptSnapshotId && (
-            <PromptSnapshotButton snapshotId={promptSnapshotId} contextTokens={turnContextTokens} turnCache={turnCache} />
-          )}
           {online && (
             <>
               {savedNoteId && (
@@ -484,7 +491,8 @@ function TextMessageView({ text, online, onRetry, streaming, model, ts, promptSn
             </button>
           )}
           {/* Модель и время — после действий, как подпись к посту */}
-          <PostMeta model={model} ts={ts} />
+          <PostMeta model={model} ts={ts} promptSnapshotId={promptSnapshotId}
+            turnContextTokens={turnContextTokens} turnCache={turnCache} />
         </PostActionBar>
       )}
     </div>
@@ -804,7 +812,7 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       return (
         <div style={{ alignSelf: 'flex-end', maxWidth: '80%', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
           <UserMessageBubble text={item.text} ts={item.ts}
-            promptSnapshotId={item.promptSnapshotId} turnContextTokens={turnContextTokens} turnCache={turnCache}>
+          >
             {teamInfo ? (
               /* Командный ход механики: вместо сырой слэш-команды/JSON — карточка
                  запроса (механика + тема + чипы параметров). Сырой текст остаётся

@@ -231,7 +231,8 @@ public static class ObservabilityExtensions
         services.AddSingleton(options);
         services.AddSingleton<Alerts.AlertStateStore>();
         services.AddSingleton<Alerts.SignozAlertsClient>();
-        services.AddHttpClient("signoz-alerts", c => c.Timeout = TimeSpan.FromSeconds(15));
+        services.AddHttpClient("signoz-alerts", c => c.Timeout = TimeSpan.FromSeconds(15))
+            .WithoutEgressProxy();
         services.AddHostedService<Alerts.AlertPollingService>();
     }
 

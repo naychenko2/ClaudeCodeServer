@@ -8,8 +8,14 @@ const hhmm = (d: Date) => d.toLocaleTimeString('ru-RU', { hour: '2-digit', minut
 
 const sameDay = (a: Date, b: Date) => a.toDateString() === b.toDateString();
 
-// Компактная подпись: сегодня — только часы, вчера — с пометкой, дальше — с датой.
-// Год добавляем лишь когда он не текущий (в переписке этого года он лишний шум).
+// Свежие посты подписываем по-человечески («только что», «5 мин назад»): в живой
+// переписке относительное время читается быстрее абсолютного — не надо сверяться
+// с часами. Дальше часа смысл меняется на «когда это было», и там уже время суток.
+const RECENT_MINUTES = 60;
+
+// Компактная подпись: только что / N мин назад — для свежего, дальше сегодня — часы,
+// вчера — с пометкой, ещё дальше — с датой. Год добавляем лишь когда он не текущий
+// (в переписке этого года он лишний шум).
 // null/undefined/битое значение → null: панель просто не рисует время (старая история).
 export function formatPostTime(ts?: number | null): string | null {
   if (ts === null || ts === undefined) return null;
@@ -17,6 +23,12 @@ export function formatPostTime(ts?: number | null): string | null {
   if (isNaN(d.getTime())) return null;
 
   const now = new Date();
+  const minutesAgo = Math.floor((now.getTime() - d.getTime()) / 60000);
+  // Будущее (расхождение часов клиента и сервера) относительным не подписываем —
+  // «-3 мин назад» выглядело бы поломкой
+  if (minutesAgo >= 0 && minutesAgo < 1) return 'только что';
+  if (minutesAgo >= 1 && minutesAgo < RECENT_MINUTES) return `${minutesAgo} мин назад`;
+
   if (sameDay(d, now)) return hhmm(d);
 
   const yesterday = new Date(now);

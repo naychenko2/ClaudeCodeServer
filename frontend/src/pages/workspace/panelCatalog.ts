@@ -15,7 +15,7 @@
 // это разные типы: там, где импортируются оба, брать один из них под алиасом.
 import {
   BookOpenText, ClipboardList, FolderTree, GitCompare, ListTodo, Bot, User, Users,
-  SquareTerminal, MonitorPlay, Network, MessageCircle, NotebookPen, Library,
+  SquareTerminal, MonitorPlay, Network, MessageCircle, NotebookPen, Library, Puzzle,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -28,7 +28,7 @@ export type Zone = 'left' | 'right';
 // решает сам экран (проп allowedKeys у PanelZone): в воркспейсе — инструменты
 // проекта и сессии, в разделах хаба — их собственные панели.
 export const PANEL_KEYS = [
-  'chats', 'files', 'docs', 'changes', 'tasks', 'graph', 'team', 'terminal', 'preview',
+  'chats', 'files', 'docs', 'changes', 'tasks', 'graph', 'team', 'skills', 'terminal', 'preview',
   'plan', 'agents', 'context',
   // Панели разделов хаба
   'notesList', 'notesGraph', 'knowledgeList', 'personasList', 'projectGroups',
@@ -49,6 +49,11 @@ export const PANEL_META: Record<PanelKey, { title: string; Icon: LucideIcon }> =
   tasks:    { title: 'Задачи',    Icon: ListTodo },
   graph:    { title: 'Граф',      Icon: Network },
   team:     { title: 'Команда',   Icon: Users },
+  // Навыки и агенты рабочей папки (.claude/skills, .claude/agents) — файловые
+  // умения CLI, а не персоны-контакты: поэтому отдельная панель рядом с «Командой»,
+  // а не вкладка внутри неё. Bot занят сессионными «Агентами» (артефакт хода),
+  // отсюда деталь пазла — навык как подключаемый кусок умения.
+  skills:   { title: 'Навыки',    Icon: Puzzle },
   terminal: { title: 'Терминал',  Icon: SquareTerminal },
   // Ключ остался preview (он лежит в сохранённых раскладках), подпись — «Сервисы»
   preview:  { title: 'Сервисы',   Icon: MonitorPlay },
@@ -79,6 +84,7 @@ export const PANEL_HOME: Record<PanelKey, Zone> = {
   tasks: 'right',
   graph: 'right',
   team: 'right',
+  skills: 'right',
   terminal: 'right',
   preview: 'right',
   plan: 'right',
@@ -94,7 +100,7 @@ export const PANEL_HOME: Record<PanelKey, Zone> = {
 
 // Наборы ключей по экранам — что вообще доступно в этой рельсе (проп allowedKeys)
 export const WORKSPACE_KEYS: readonly PanelKey[] = [
-  'chats', 'files', 'docs', 'changes', 'tasks', 'graph', 'team', 'terminal', 'preview',
+  'chats', 'files', 'docs', 'changes', 'tasks', 'graph', 'team', 'skills', 'terminal', 'preview',
   'plan', 'agents', 'context',
 ];
 // Раздел «Чаты»: список чатов плюс панели активной сессии (проекта там нет)

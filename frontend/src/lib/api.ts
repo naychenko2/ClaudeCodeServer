@@ -903,7 +903,7 @@ export const api = {
         { method: 'POST', body: JSON.stringify({ includeText }), timeoutMs: 180_000 }),
   },
 
-  // «Стена» (фича wall): per-user набор чатов колонками. Ресурс бэка — /api/me/wall
+  // «Стена»: per-user набор чатов колонками. Ресурс бэка — /api/me/wall
   // (MyWallController, конвенция per-user настроек), короткое имя здесь — для читаемости вызовов.
   wall: {
     // Состав стены — полные Session в порядке набора (мёртвые уже отфильтрованы сервером)

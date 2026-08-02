@@ -7,7 +7,7 @@ export interface WorkspaceUIState {
   activeSession: Session | null;
   openFile: string | null;
   fileFullscreen: boolean;
-  leftTab: 'sessions' | 'files' | 'tasks' | 'personas' | 'tools';
+  leftTab: 'sessions' | 'files' | 'tasks' | 'personas' | 'skills' | 'tools';
   fileSubTab?: 'files' | 'knowledge';
 }
 

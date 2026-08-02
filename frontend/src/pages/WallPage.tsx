@@ -1,5 +1,5 @@
-// «Стена» (фича wall): 2-5 чатов из РАЗНЫХ проектов рядом колонками — параллельное
-// ведение нескольких сессий. Вход — из воркспейса (док стены; вкладки в таббаре нет).
+// «Стена»: 2-5 чатов из РАЗНЫХ проектов рядом колонками — параллельное ведение
+// нескольких сессий. Вход — из воркспейса (док стены; вкладки в таббаре нет).
 //
 // Обвязка — ШТАТНАЯ, как в воркспейсе: те же зоны панелей (PanelZone слева и справа)
 // на ОБЩЕМ сторе раскладки (wsPanels — PanelZone берёт его по умолчанию), поэтому
@@ -17,8 +17,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Columns3, Plus } from 'lucide-react';
 import type { AuthState, Project, Session } from '../types';
 import { C, FONT, FS, ISLAND } from '../lib/design';
-import { useWindowWidth, TABLET_MAX } from '../lib/breakpoints';
-import { useFeature, FLAGS } from '../lib/featureFlags';
+import { useWindowWidth, MOBILE_MAX } from '../lib/breakpoints';
 import { setWallActive } from '../lib/wallMode';
 import { api } from '../lib/api';
 import { HubHeader } from '../components/HubHeader';
@@ -54,7 +53,6 @@ interface Props {
 }
 
 export function WallPage({ auth, onLogout, onHubTab }: Props) {
-  const wallOn = useFeature(FLAGS.wall);
   const w = useWindowWidth();
   const { loaded, chats, projects, focusId } = useWallState();
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -65,10 +63,14 @@ export function WallPage({ auth, onLogout, onHubTab }: Props) {
   // Общая с воркспейсом раскладка зон — нужна, чтобы прятать панели на входе
   const { zones, toggleCollapsed } = wsPanels.use();
 
-  // ЕДИНЫЙ гейт деградации — в рендере, а не в resize-обработчике: покрывает и сжатие
-  // окна на открытой стене, и старт по хешу #/wall на узком экране, и выключенный флаг.
-  const narrow = w <= TABLET_MAX;
-  const active = wallOn && !narrow;
+  // ЕДИНЫЙ гейт деградации — в рендере, а не в resize-обработчике: покрывает и
+  // сжатие окна на открытой стене, и старт по хешу #/wall на узком экране.
+  // Планшету стена доступна: колонок туда влезает одна-две, и это уже работает —
+  // отсекаем только телефон, где на колонку не остаётся места вовсе.
+  // Панели ВСЕГДА всплывают поверх колонок (floating), в том числе на планшете:
+  // компактный режим зон там ставил бы панель в поток и отжимал единственную
+  // колонку — ровно то, ради чего плавающий режим и заводился
+  const active = w > MOBILE_MAX;
 
   // Снимок и SignalR-группы — только когда стена реально работает
   useEffect(() => { if (active) initWall(auth.id ?? undefined); }, [auth.id, active]);
@@ -168,12 +170,10 @@ export function WallPage({ auth, onLogout, onHubTab }: Props) {
               <Columns3 size={ICON_SIZE.xl} strokeWidth={2} />
             </div>
             <div style={{ fontFamily: FONT.serif, fontWeight: 500, fontSize: 20, color: C.textHeading }}>
-              {wallOn ? 'Стене нужен широкий экран' : 'Стена выключена'}
+              Стене нужен экран пошире
             </div>
             <div style={{ fontSize: FS.sm, color: C.textSecondary, lineHeight: 1.55 }}>
-              {wallOn
-                ? 'Колонкам чатов не хватает места. Откройте окно шире 1200px или вернитесь к проектам.'
-                : 'Включите «Стену» в экспериментальных функциях (меню аватара).'}
+              На телефоне колонки чатов не помещаются. Откройте стену на планшете или компьютере — или вернитесь к проектам.
             </div>
             <Button variant="secondary" size="md" onClick={() => onHubTab('projects')} style={{ marginTop: 8 }}>
               К проектам

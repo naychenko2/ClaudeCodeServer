@@ -37,7 +37,7 @@ interface Props {
   // владельцу (WorkspacePage) обновить project.tagRegistry. Не задан — SessionList
   // держит реестр сам (optimistic state поверх props)
   onTagsReorder?: (registry: ProjectTag[]) => void;
-  // «На стену» (фича wall): пункт в меню карточки; в ПЛОСКОМ режиме карточки ещё и
+  // «На стену»: пункт в меню карточки; в ПЛОСКОМ режиме карточки ещё и
   // перетаскиваются на док стены (в Иерархии нативный drag сломал бы dnd-kit вложения).
   // Не задан — механики нет (мобила, флаг выключен).
   onAddToWall?: (s: Session) => void;

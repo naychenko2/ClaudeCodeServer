@@ -25,7 +25,6 @@ import { getDraft } from '../lib/drafts';
 import { useModelCaps, assistantName, modelProvider } from '../lib/models';
 import { Composer } from './Composer';
 import { ProjectGitBar } from './ProjectGitBar';
-import { EditSessionDialog } from './EditSessionDialog';
 import { C, R, SHADOW, CHAT_MAX_W, CHAT_GUTTER_L } from '../lib/design';
 import { VAR_SHIFT, VAR_W, useChatGutter } from '../lib/chatGutter';
 import { projectTopWash } from '../lib/projectTone';
@@ -454,7 +453,6 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       });
   };
   const [showAttachPicker, setShowAttachPicker] = useState(false);
-  const [showEdit, setShowEdit] = useState(false);
   // Скролл-механика ленты (прилипание к низу, восстановление позиции, кнопка «вниз») — hooks/useChatScroll
   const {
     bottomRef, scrollRef, contentRef, composerWrapRef, composerH,
@@ -1318,7 +1316,6 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       billing={claudeBilling}
       onBillingChange={canEditBilling ? changeBilling : undefined}
       rateWindows={rateWindows}
-      onOpenSettings={() => setShowEdit(true)}
       isMobile={isMobile}
       onBack={onBack}
       activeWorkflow={activeWorkflowInfo ?? undefined}
@@ -1609,15 +1606,6 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
           )}
           onClose={() => setShowAttachPicker(false)}
           onUpload={handleComposerFiles}
-        />
-      )}
-
-      {/* Настройки чата */}
-      {showEdit && (
-        <EditSessionDialog
-          session={session}
-          onSaved={s => onSessionUpdated?.(s)}
-          onClose={() => setShowEdit(false)}
         />
       )}
 

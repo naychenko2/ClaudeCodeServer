@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo, useLayoutEffect, type ReactNode } from 'react';
-import { Plus, MessageCircle, Network } from 'lucide-react';
+import { Plus, MessageCircle, Network, Puzzle } from 'lucide-react';
 import type { Project, Session, SkillsData, AuthState, Task, ProjectService } from '../types';
 import { SessionList } from '../components/SessionList';
 import { FileExplorer } from '../components/FileExplorer';
@@ -51,6 +51,7 @@ import type { PanelKey } from './workspace/panelStackState';
 import { TerminalPanelContent, PreviewPanelContent } from './workspace/panels';
 import { DocsPanel } from './workspace/DocsPanel';
 import { CodeGraphPanel } from '../features/codegraph/CodeGraphPanel';
+import { SkillsPanel } from '../components/SkillsPanel';
 import { CodeGraphDocument } from '../features/codegraph/CodeGraphDocument';
 import { buildCodeGraph } from '../lib/codeGraph';
 
@@ -63,7 +64,7 @@ interface Props {
   onLogout: () => void;
 }
 
-type LeftTab = 'sessions' | 'files' | 'tasks' | 'personas' | 'tools';
+type LeftTab = 'sessions' | 'files' | 'tasks' | 'personas' | 'skills' | 'tools';
 type FileSubTab = 'files' | 'knowledge';
 
 // Иконки вкладок проекта для мобильного компакт-режима (Feather-стиль, как HubTabs)
@@ -76,6 +77,8 @@ const LEFT_TAB_ICONS: Record<LeftTab, React.ReactNode> = {
   files: leftTabSvg(<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />),
   tasks: leftTabSvg(<><path d="M9 11l3 3L22 4" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" /></>),
   personas: leftTabSvg(<><circle cx="12" cy="8" r="4" /><path d="M4 20c0-4 3.6-6 8-6s8 2 8 6" /></>),
+  // Пазл — та же метафора, что у панели «Навыки» в рельсе (PANEL_META.skills)
+  skills: <Puzzle size={18} strokeWidth={2} />,
   tools: leftTabSvg(<><polyline points="4 17 10 11 4 5" /><line x1="12" y1="19" x2="20" y2="19" /></>),
 };
 
@@ -561,6 +564,9 @@ const windowWidth = useWindowWidth();
     { value: 'files', label: 'Файлы', icon: LEFT_TAB_ICONS.files },
     { value: 'tasks', label: 'Задачи', icon: LEFT_TAB_ICONS.tasks },
     { value: 'personas' as LeftTab, label: 'Команда', icon: LEFT_TAB_ICONS.personas },
+    // На десктопе навыки живут панелью в рельсе; на мобиле рельсы панелей проекта нет,
+    // поэтому им нужна своя вкладка — иначе доступ к ним с телефона пропадает совсем
+    { value: 'skills' as LeftTab, label: 'Навыки', icon: LEFT_TAB_ICONS.skills },
     ...(projectForEdit.toolsEnabled ? [{ value: 'tools' as LeftTab, label: 'Инструменты', icon: LEFT_TAB_ICONS.tools }] : []),
   ];
 
@@ -1192,6 +1198,8 @@ const windowWidth = useWindowWidth();
               ? <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={isMobile} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} groupTab={projectGroupTab} onGroupTab={setProjectGroupTab} filters={taskListFilters} onFilters={setTaskListFilters} />
               : leftTab === 'personas'
               ? <ProjectPersonasPanel project={project} selectedId={personaCreating ? null : selectedPersonaId} onSelect={handlePersonaSelect} onNew={handlePersonaNew} onShowTeam={handleShowTeam} teamActive={!selectedPersonaId && !personaCreating} />
+              : leftTab === 'skills'
+              ? <SkillsPanel projectId={project.id} onChanged={setSkillsData} />
               : leftTab === 'tools'
               ? <ToolsSidebar projectId={project.id} activeTab={toolsTab} onTabChange={setToolsTab}
                   terminals={terminals} onCreateTerminal={handleCreateTerminal}
@@ -1355,6 +1363,10 @@ const windowWidth = useWindowWidth();
             tasks: <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={false} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} groupTab={projectGroupTab} onGroupTab={setProjectGroupTab} filters={taskListFilters} onFilters={setTaskListFilters} />,
             team: <ProjectPersonasPanel project={project} selectedId={personaCreating ? null : selectedPersonaId} onSelect={handlePersonaSelect} onNew={handlePersonaNew} onShowTeam={() => { handlePersonaCleared(); setTeamCenterOpen(true); }} teamActive={teamCenterOpen && !selectedPersonaId && !personaCreating} />,
             graph: <CodeGraphPanel projectId={project.id} graphOpen={graphOpen} onEnsureGraphOpen={ensureGraphOpen} onOpenFile={handleOpenFileFromTree} onBuild={handleGraphBuild} />,
+            // Навыки и агенты рабочей папки. onChanged кладёт свежий состав в тот же
+            // skillsData, откуда композер берёт «/»-команды: установка навыка в панели
+            // видна в подсказке сразу, без перезагрузки страницы
+            skills: <SkillsPanel projectId={project.id} onChanged={setSkillsData} />,
             terminal: <TerminalPanelContent terminals={terminals} activeTerminalId={activeTerminalId} onSelect={handleSelectTerminal} onCreate={handleCreateTerminal} onStop={handleStopTerminal} onActivity={setTerminalBusy} />,
             preview: <PreviewPanelContent projectId={project.id} services={previewServices} activePreviewId={activePreviewId} onSelect={setActivePreviewId} onStart={startService} onStop={stopService} onRefresh={refreshServices} />,
           }}

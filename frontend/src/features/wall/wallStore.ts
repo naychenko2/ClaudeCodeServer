@@ -20,6 +20,9 @@ import { joinProject, joinUser, onMessage, onReconnected } from '../../lib/signa
 // Потолок видимых колонок: дальше это видеостена, а не работа; ширина всё равно
 // раньше упрётся в MIN_COL. Сервер держит свой потолок набора (24) — это про монеты.
 export const MAX_SLOTS = 5;
+// Потолок набора: столько же, сколько колонок влезает на самый широкий экран.
+// Больше — это уже не работа, а видеостена: каждый чат может вести свой ход.
+export const MAX_CHATS = 5;
 // Минимальная ширина колонки: уже — лента чата перестаёт читаться
 export const MIN_COL = 420;
 
@@ -178,18 +181,25 @@ export function initWall(ownerId: string | undefined): void {
 
 // --- Мутации состава (локально сразу + дебаунс-PUT) ---
 
-export function addChat(s: Session): void {
-  if (_state.chats.some(c => c.id === s.id)) return;
+// Исход добавления: чат встал на стену / он там уже был / набор полон.
+// Три состояния, а не boolean: «уже на стене» и «мест нет» — разные новости,
+// и одинаковый тост про переполнение на дубле откровенно врал.
+export type AddChatResult = 'added' | 'duplicate' | 'full';
+
+export function addChat(s: Session): AddChatResult {
+  if (_state.chats.some(c => c.id === s.id)) return 'duplicate';
+  if (_state.chats.length >= MAX_CHATS) return 'full';
   setState({ chats: [..._state.chats, s], focusId: s.id });
   void joinGroups(_ownerId);
   schedulePut();
+  return 'added';
 }
 
 // Добавление ИЗВНЕ стены (док воркспейса, пункт меню чата): состав мог быть ещё не
 // загружен, а PUT шлёт ПОЛНЫЙ список — без снимка дроп затёр бы существующие монеты.
-export async function addChatSafe(s: Session): Promise<void> {
+export async function addChatSafe(s: Session): Promise<AddChatResult> {
   if (!_state.loaded) await refresh();
-  addChat(s);
+  return addChat(s);
 }
 
 export function removeChat(id: string): void {
@@ -201,7 +211,54 @@ export function removeChat(id: string): void {
   schedulePut();
 }
 
-// Перестановка монеты (drag-sort рельсы): from/to — индексы в наборе
+// --- Перетаскивание для смены порядка (общее для монет рельсы и колонок) ---
+// Один протокол на оба места: тянуть можно и монету, и саму колонку, бросать —
+// на монету или на колонку. В dataTransfer кладём индекс позиции в наборе.
+export const WALL_ORDER_TYPE = 'cc-wall-order';
+
+// Что делает дроп: 'move' — перестановка (колонку тащат за ярлык), 'swap' — обмен
+// местами (кнопку чата, не влезшего на экран, роняют на конкретную колонку, чтобы
+// выбрать, какую именно он заменит).
+export type OrderDragMode = 'move' | 'swap';
+
+export function startOrderDrag(e: React.DragEvent, index: number, mode: OrderDragMode = 'move'): void {
+  e.dataTransfer.setData(WALL_ORDER_TYPE, JSON.stringify({ index, mode }));
+  e.dataTransfer.effectAllowed = 'move';
+}
+
+// Тащат именно перестановку (а не чат из списка чатов на док стены)
+export function isOrderDrag(e: React.DragEvent): boolean {
+  return e.dataTransfer.types.includes(WALL_ORDER_TYPE);
+}
+
+// Дроп на позицию index: переставляет набор («move») либо меняет местами («swap»).
+// Возвращает true, если что-то сделал
+export function dropOrder(e: React.DragEvent, index: number): boolean {
+  const raw = e.dataTransfer.getData(WALL_ORDER_TYPE);
+  if (!raw) return false;
+  e.preventDefault();
+  let from: number, mode: OrderDragMode;
+  try {
+    const d = JSON.parse(raw) as { index: number; mode: OrderDragMode };
+    from = d.index; mode = d.mode;
+  } catch { return false; }
+  if (!Number.isInteger(from) || from === index) return false;
+  if (mode === 'swap') swapChats(from, index); else reorderChat(from, index);
+  return true;
+}
+
+// Обмен местами двух позиций набора: так чат, не влезший на экран, встаёт вместо
+// выбранной колонки (а та уезжает на его место — за пределы видимой части)
+export function swapChats(a: number, b: number): void {
+  const n = _state.chats.length;
+  if (a === b || a < 0 || b < 0 || a >= n || b >= n) return;
+  const chats = [..._state.chats];
+  [chats[a], chats[b]] = [chats[b], chats[a]];
+  setState({ chats, focusId: chats[b].id });
+  schedulePut();
+}
+
+// Перестановка (drag-sort): from/to — индексы в наборе
 export function reorderChat(from: number, to: number): void {
   if (from === to || from < 0 || to < 0 || from >= _state.chats.length || to >= _state.chats.length) return;
   const chats = [..._state.chats];
@@ -231,6 +288,15 @@ export function focusChat(id: string): void {
 // Обновление Session после серверной мутации из колонки (смена модели/режима/цикла…):
 // ChatPanel зовёт onSessionUpdated, и без применения сюда снимок стора остаётся старым —
 // композер после ре-рендера показывал бы прежние настройки. Состав не меняется, PUT не нужен.
+// Обновление проекта в сторе (правки из диалога настроек): имя, иконка,
+// toolsEnabled фокусной колонки должны примениться без перезагрузки экрана
+export function updateProject(p: Project): void {
+  if (!_state.projects.has(p.id)) return;
+  const projects = new Map(_state.projects);
+  projects.set(p.id, p);
+  setState({ projects });
+}
+
 export function updateChat(s: Session): void {
   if (!_state.chats.some(c => c.id === s.id)) return;
   setState({ chats: _state.chats.map(c => (c.id === s.id ? s : c)) });

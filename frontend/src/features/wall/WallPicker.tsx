@@ -4,11 +4,12 @@ import { useEffect, useMemo, useState } from 'react';
 import { MessageCircle, Search } from 'lucide-react';
 import type { Session } from '../../types';
 import { C, FONT, FS, R } from '../../lib/design';
-import { Modal, Toggle, IconField } from '../../components/ui';
+import { Modal, Toggle, IconField, Button } from '../../components/ui';
 import { ICON_STROKE } from '../../components/ui/icons';
 import { api } from '../../lib/api';
 import { ProjectIcon } from '../projects/ProjectIcon';
-import { useWallState, addChat } from './wallStore';
+import { useWallState, addChat, MAX_CHATS } from './wallStore';
+import { showToast } from '../../lib/toast';
 
 export function WallPicker({ onClose }: { onClose: () => void }) {
   const { chats, projects } = useWallState();
@@ -48,7 +49,14 @@ export function WallPicker({ onClose }: { onClose: () => void }) {
   }, [candidates, query, busyOnly, projects]);
 
   return (
-    <Modal title="Добавить чат на стену" onClose={onClose} width={520}>
+    <Modal
+      title="Добавить чат на стену"
+      onClose={onClose}
+      width={520}
+      // Набирают несколько чатов подряд, поэтому выход — явной кнопкой, а клик по
+      // чату лишь добавляет его (строка сразу помечается «уже на стене»)
+      footer={<Button variant="primary" size="md" fullWidth onClick={onClose}>Готово</Button>}
+    >
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
         <IconField
           icon={<Search size={14} strokeWidth={ICON_STROKE} />}
@@ -63,7 +71,7 @@ export function WallPicker({ onClose }: { onClose: () => void }) {
         />
         <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontFamily: FONT.sans, fontSize: FS.xs, color: C.textSecondary, cursor: 'pointer', flexShrink: 0 }}>
           <Toggle checked={busyOnly} onChange={setBusyOnly} />
-          только занятые
+          активные сейчас
         </label>
       </div>
 
@@ -91,7 +99,15 @@ export function WallPicker({ onClose }: { onClose: () => void }) {
                   <button
                     key={s.id}
                     disabled={isTaken}
-                    onClick={() => { addChat(s); onClose(); }}
+                    // Пикер НЕ закрывается: набирают обычно несколько чатов подряд,
+                    // а добавленный тут же становится «уже на стене» — видно, что взял.
+                    // Мест не осталось — говорим об этом сразу, иначе клик молча ничего
+                    // не делает и выглядит как поломка
+                    onClick={() => {
+                      if (addChat(s) === 'full') {
+                        showToast('Стена', `На стене уже ${MAX_CHATS} чатов — уберите лишний`);
+                      }
+                    }}
                     style={{
                       display: 'flex', alignItems: 'center', gap: 8, width: '100%', textAlign: 'left',
                       padding: '7px 8px', border: `1px solid ${C.border}`, borderRadius: R.md,

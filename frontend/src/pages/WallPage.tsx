@@ -1,17 +1,25 @@
 // «Стена» (фича wall): 2-5 чатов из РАЗНЫХ проектов рядом колонками — параллельное
 // ведение нескольких сессий. Вход — из воркспейса (док стены; вкладки в таббаре нет).
-// Слева рельса набора (WallRail: выход, цифровые монеты, «+»), в центре колонки
-// (WallColumn: полоса-ярлык + штатный чат), справа рельса панелей фокусного чата и
-// его проекта (WallPanelRail: hover=peek, клик=закрепление). Результаты кликов из
-// панелей приземляются в ОВЕРЛЕЙ поверх колонок (WallOverlay: файл, коммит, задача,
-// персона, командный центр, граф, превью сервиса). Состав набора живёт на бэке
-// (/api/me/wall, wallStore), фокус/оверлей/геометрия — эфемерные.
-import { useEffect, useMemo, useState } from 'react';
-import { LayoutGrid, Plus } from 'lucide-react';
-import type { AuthState, Session } from '../types';
+//
+// Обвязка — ШТАТНАЯ, как в воркспейсе: те же зоны панелей (PanelZone слева и справа)
+// на ОБЩЕМ сторе раскладки (wsPanels — PanelZone берёт его по умолчанию), поэтому
+// панель, перетащенная в воркспейсе в левую зону, и здесь окажется слева; работают
+// тумблер режима зоны и «свернуть все». Под левой рельсой — те же доки: проекты и
+// стена. Своих кнопок-чатов у рельсы нет: набором управляют панель «Чаты»
+// (перетаскивание карточки на док / пункт «На стену»), перетаскивание самих колонок
+// и крестик в ярлыке колонки.
+//
+// Центр — колонки чатов (WallColumn: полоса-ярлык + штатный чат). Результаты кликов
+// из панелей приземляются в ОВЕРЛЕЙ поверх колонок (WallOverlay: файл, коммит,
+// задача, персона, командный центр, граф, превью сервиса). Состав набора живёт на
+// бэке (/api/me/wall, wallStore), фокус/оверлей/геометрия — эфемерные.
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Columns3, Plus } from 'lucide-react';
+import type { AuthState, Project, Session } from '../types';
 import { C, FONT, FS, ISLAND } from '../lib/design';
 import { useWindowWidth, TABLET_MAX } from '../lib/breakpoints';
 import { useFeature, FLAGS } from '../lib/featureFlags';
+import { setWallActive } from '../lib/wallMode';
 import { api } from '../lib/api';
 import { HubHeader } from '../components/HubHeader';
 import { CanvasBackdrop } from '../components/ui/CanvasBackdrop';
@@ -22,11 +30,17 @@ import type { PanelKey } from './workspace/panelCatalog';
 import { FileViewer } from '../components/FileViewer';
 import { GitCommitView } from '../components/GitCommitView';
 import { TaskDetailsPane } from '../features/tasks/TaskDetailsPane';
-import { useWallState, getWallState, initWall, slotCount, addChatSafe, focusChat } from '../features/wall/wallStore';
-import { WallRail } from '../features/wall/WallRail';
+import { EditDialog } from '../features/projects/dialogs/EditDialog';
+import { PanelZone } from './workspace/PanelZone';
+import { wsPanels, isZoneCollapsed } from './workspace/panelStackState';
+import type { Zone } from './workspace/panelCatalog';
+import { useSessionPanels } from './workspace/useSessionPanels';
+import { SessionList } from '../components/SessionList';
+import { ProjectRail } from '../features/projects/ProjectRail';
+import { useWallState, getWallState, initWall, slotCount, addChatSafe, focusChat, updateProject } from '../features/wall/wallStore';
 import { WallColumn } from '../features/wall/WallColumn';
 import { WallPicker } from '../features/wall/WallPicker';
-import { WallPanelRail } from '../features/wall/WallPanelRail';
+import { WallDock } from '../features/wall/WallDock';
 import { WallOverlay } from '../features/wall/WallOverlay';
 import { buildWallProjectPanels, WallPreviewOverlayBody, type WallOverlayTarget } from '../features/wall/useWallProjectPanels';
 import { ProjectPersonaPane } from '../features/personas/ProjectPersonasPanel';
@@ -44,10 +58,12 @@ export function WallPage({ auth, onLogout, onHubTab }: Props) {
   const w = useWindowWidth();
   const { loaded, chats, projects, focusId } = useWallState();
   const [pickerOpen, setPickerOpen] = useState(false);
-  // Закреплённая панель фокусного чата (рисует WallPanelRail)
-  const [pinned, setPinned] = useState<PanelKey | null>(null);
   // Оверлей-приземление кликов из панелей; относится к ФОКУСНОМУ проекту
   const [overlay, setOverlay] = useState<WallOverlayTarget | null>(null);
+  // Проект, открытый в диалоге настроек (шестерёнка в хлебной крошке)
+  const [editProject, setEditProject] = useState<Project | null>(null);
+  // Общая с воркспейсом раскладка зон — нужна, чтобы прятать панели на входе
+  const { zones, toggleCollapsed } = wsPanels.use();
 
   // ЕДИНЫЙ гейт деградации — в рендере, а не в resize-обработчике: покрывает и сжатие
   // окна на открытой стене, и старт по хешу #/wall на узком экране, и выключенный флаг.
@@ -56,6 +72,36 @@ export function WallPage({ auth, onLogout, onHubTab }: Props) {
 
   // Снимок и SignalR-группы — только когда стена реально работает
   useEffect(() => { if (active) initWall(auth.id ?? undefined); }, [auth.id, active]);
+
+  // Пока режим открыт — помним его: возврат во вкладку «Проекты» из других разделов
+  // приведёт обратно сюда (снимает флаг только явный выход «К проектам»)
+  useEffect(() => { if (active) setWallActive(true); }, [active]);
+
+  // Вход на стену прячет панели, выход — возвращает их как были. Раскладка общая с
+  // воркспейсом, поэтому «прячем» = СВОРАЧИВАЕМ зону (состав уезжает в stash и
+  // возвращается кнопкой рельсы), а не закрываем панели. Разворачиваем на выходе
+  // только те зоны, которые свернули сами: если человек уже на стене раскрыл панель
+  // руками, его выбор трогать нельзя.
+  const collapsedByWall = useRef<Zone[]>([]);
+  useEffect(() => {
+    if (!active) return;
+    const mine: Zone[] = [];
+    for (const side of ['left', 'right'] as const) {
+      if (!isZoneCollapsed(zones[side]) && zones[side].layout.flat().length > 0) {
+        toggleCollapsed(side);
+        mine.push(side);
+      }
+    }
+    collapsedByWall.current = mine;
+    return () => {
+      for (const side of collapsedByWall.current) toggleCollapsed(side);
+      collapsedByWall.current = [];
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- снимок раскладки нужен только на входе/выходе
+  }, [active]);
+
+  // Явный выход из режима: гасим флаг и уходим к проектам
+  const exitWall = () => { setWallActive(false); onHubTab('projects'); };
 
   const slots = slotCount(w);
   const visible = chats.slice(0, slots);
@@ -89,6 +135,28 @@ export function WallPage({ auth, onLogout, onHubTab }: Props) {
     [focusedProject, overlay],
   );
 
+  // Панели сессии фокусного чата — их зоны подмешивают сами (как в воркспейсе)
+  const sessionPanels = useSessionPanels(focused, focusedProject?.id, focusedProject?.rootPath);
+
+  // Панель «Чаты» — список чатов ФОКУСНОГО проекта, как в воркспейсе: оттуда
+  // карточки перетаскиваются на док стены, а пункт меню «На стену» добавляет их
+  // без перетаскивания. Своих кнопок-чатов у рельсы стены больше нет.
+  const zonePanels: Partial<Record<PanelKey, ReactNode>> = useMemo(() => ({
+    ...projectPanels,
+    chats: focusedProject ? (
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: C.bgWhite }}>
+        <SessionList
+          project={focusedProject}
+          activeSession={focused}
+          onSelect={s => openChatOnWall(s.id)}
+          isMobile={false}
+          onAddToWall={s => { void addChatSafe(s); }}
+        />
+      </div>
+    ) : undefined,
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- openChatOnWall — замыкание на сторе, стабильно по смыслу
+  }), [projectPanels, focusedProject, focused]);
+
   if (!active) {
     return (
       <div style={{ height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative', isolation: 'isolate' }}>
@@ -97,7 +165,7 @@ export function WallPage({ auth, onLogout, onHubTab }: Props) {
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', maxWidth: 380, gap: 10 }}>
             <div style={{ width: 56, height: 56, borderRadius: 16, background: C.bgPanel, color: C.accent, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <LayoutGrid size={ICON_SIZE.xl} strokeWidth={2} />
+              <Columns3 size={ICON_SIZE.xl} strokeWidth={2} />
             </div>
             <div style={{ fontFamily: FONT.serif, fontWeight: 500, fontSize: 20, color: C.textHeading }}>
               {wallOn ? 'Стене нужен широкий экран' : 'Стена выключена'}
@@ -133,12 +201,34 @@ export function WallPage({ auth, onLogout, onHubTab }: Props) {
   return (
     <div style={{ height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative', isolation: 'isolate' }}>
       <CanvasBackdrop />
-      <HubHeader value="wall" onTab={onHubTab} auth={auth} onLogout={onLogout} />
+      {/* Хлебная крошка у логотипа — проект ФОКУСНОЙ колонки (на стене чаты разных
+          проектов, и «где я» отвечает та колонка, в которой сейчас работают) вместе
+          с кнопкой его настроек — тот же диалог, что в воркспейсе */}
+      <HubHeader
+        value="wall" onTab={onHubTab} auth={auth} onLogout={onLogout}
+        project={focusedProject}
+        onOpenProjectSettings={focusedProject ? () => setEditProject(focusedProject) : undefined}
+      />
 
       {/* position: relative — якорь оверлея-лайтбокса (WallOverlay absolute inset) */}
       <div style={{ flex: 1, minHeight: 0, display: 'flex', position: 'relative', padding: `${ISLAND.gap}px 0 ${ISLAND.pad}px 0` }}>
-        {/* Рельса набора у левого края (капсула по контенту) */}
-        <WallRail slots={slots} onOpenPicker={() => setPickerOpen(true)} onExit={() => onHubTab('projects')} />
+        {/* Левая зона панелей — ШТАТНАЯ и с той же раскладкой, что у воркспейса:
+            PanelZone без пропа panelStack берёт общий стор wsPanels, поэтому
+            панель, перетащенная в воркспейсе влево, и здесь окажется слева.
+            Под рельсой — те же два дока: проекты и стена. */}
+        <PanelZone
+          side="left"
+          floating
+          panels={zonePanels}
+          toolsEnabled={!!focusedProject?.toolsEnabled}
+          sessionPanels={sessionPanels}
+          railFooter={
+            <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+              {focusedProject && <ProjectRail project={focusedProject} onOpenSettings={() => {}} />}
+              <WallDock onExit={exitWall} slots={slots} />
+            </div>
+          }
+        />
 
         {/* Колонки чатов */}
         <div style={{ flex: 1, minWidth: 0, display: 'flex', gap: ISLAND.gap, margin: `0 ${ISLAND.centerGap}px` }}>
@@ -146,7 +236,7 @@ export function WallPage({ auth, onLogout, onHubTab }: Props) {
             <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', maxWidth: 400, gap: 10 }}>
                 <div style={{ width: 56, height: 56, borderRadius: 16, background: C.bgPanel, color: C.accent, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <LayoutGrid size={ICON_SIZE.xl} strokeWidth={2} />
+                  <Columns3 size={ICON_SIZE.xl} strokeWidth={2} />
                 </div>
                 <div style={{ fontFamily: FONT.serif, fontWeight: 500, fontSize: 22, color: C.textHeading }}>
                   Соберите свою стену
@@ -160,13 +250,14 @@ export function WallPage({ auth, onLogout, onHubTab }: Props) {
               </div>
             </div>
           ) : (
-            visible.map(s => {
+            visible.map((s, i) => {
               const proj = s.projectId ? (projects.get(s.projectId) ?? null) : undefined;
               return (
                 <WallColumn
                   key={s.id}
                   session={s}
                   project={proj}
+                  index={i}
                   focused={focused?.id === s.id}
                   onZoom={() => zoom(s)}
                   // Клик по файлу в ленте → оверлей; только у колонок с проектом
@@ -179,10 +270,14 @@ export function WallPage({ auth, onLogout, onHubTab }: Props) {
           )}
         </div>
 
-        {/* Рельса панелей фокуса: полновысотная обёртка — якорь peek/закрепа */}
-        <div style={{ position: 'relative', display: 'flex', flexShrink: 0 }}>
-          <WallPanelRail session={focused} project={focusedProject} projectPanels={projectPanels} pinned={pinned} onPin={setPinned} />
-        </div>
+        {/* Правая зона — тот же общий стор раскладки (wsPanels), тоже всплывающая */}
+        <PanelZone
+          side="right"
+          floating
+          panels={zonePanels}
+          toolsEnabled={!!focusedProject?.toolsEnabled}
+          sessionPanels={sessionPanels}
+        />
 
         {/* Оверлей-приземление (файл/коммит/задача фокусного проекта) */}
         {overlay && focusedProject && (
@@ -254,6 +349,17 @@ export function WallPage({ auth, onLogout, onHubTab }: Props) {
       </div>
 
       {pickerOpen && <WallPicker onClose={() => setPickerOpen(false)} />}
+
+      {/* Настройки проекта из крошки. Обновлённый проект кладём в стор стены —
+          иконка, имя и toolsEnabled фокусной колонки должны обновиться на месте */}
+      {editProject && (
+        <EditDialog
+          project={editProject}
+          onSuccess={updated => { updateProject(updated); setEditProject(null); }}
+          onIconUpdated={updateProject}
+          onClose={() => setEditProject(null)}
+        />
+      )}
     </div>
   );
 }

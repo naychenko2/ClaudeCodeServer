@@ -101,7 +101,7 @@ export function parseHash(hash: string = window.location.hash): HashTarget | nul
       return target;
     }
     case 'notifications': return { screen: 'notifications' };
-    // «Стена» (фича wall) — экран без параметров; гейт ширины/флага стоит в самом WallPage
+    // «Стена» — экран без параметров; гейт ширины стоит в самом WallPage
     case 'wall': return { screen: 'wall' };
     case 'spend': return { screen: 'spend' };
     case 'telemetry': return { screen: 'telemetry' };

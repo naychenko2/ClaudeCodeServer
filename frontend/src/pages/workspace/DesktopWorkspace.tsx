@@ -14,7 +14,6 @@ import { ICON_SIZE } from '../../components/ui/icons';
 import { IslandSplitter } from '../../components/ui/IslandSplitter';
 import { SessionList } from '../../components/SessionList';
 import { ChatPanel } from '../../components/ChatPanel';
-import { useFeature, FLAGS } from '../../lib/featureFlags';
 import { showToast } from '../../lib/toast';
 import { addChatSafe } from '../../features/wall/wallStore';
 import { WallDock } from '../../features/wall/WallDock';
@@ -151,7 +150,7 @@ export function DesktopWorkspace(p: Props) {
 
   // «Стена»: док и пункт меню карточек чата — только полный десктоп (на планшете
   // колонкам стены всё равно не хватит места, WallPage там кажет заглушку)
-  const wallOn = useFeature(FLAGS.wall) && !p.isTablet && !!p.onOpenWall;
+  const wallOn = !p.isTablet && !!p.onOpenWall;
   const handleAddToWall = (s: Session) => {
     void addChatSafe(s).then(() => showToast('Стена', `«${s.name?.trim() || 'Чат'}» на стене`));
   };

@@ -284,8 +284,15 @@ public sealed class ProjectServiceDiscovery
         raw = raw.Replace("$PROJECT_DIR$", projectDir);
         try
         {
+            var rootFull = Path.GetFullPath(root);
             var full = Path.IsPathRooted(raw) ? Path.GetFullPath(raw) : Path.GetFullPath(Path.Combine(projectDir, raw));
-            return FileService.SafeJoinPublic(root, full);
+            // SafeJoin принимает путь ОТНОСИТЕЛЬНО корня и срезает ведущие разделители.
+            // Абсолютный путь ему давать нельзя: на Linux «/tmp/p/App.csproj» превращается
+            // в относительный «tmp/p/App.csproj» и приклеивается к корню — вместо отказа
+            // выходит путь-химера ВНУТРИ проекта, то есть заодно молча теряется проверка
+            // «ссылка наружу». На Windows этого не видно (Path.Combine отдаёт приоритет
+            // второму абсолютному пути), поэтому ловилось только в CI на ubuntu.
+            return FileService.SafeJoinPublic(root, Path.GetRelativePath(rootFull, full));
         }
         catch (UnauthorizedAccessException) { return null; }   // за пределами проекта
         catch (ArgumentException) { return null; }             // недопустимые символы в пути

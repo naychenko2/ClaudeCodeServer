@@ -1238,10 +1238,10 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   const extractBtn = <ExtractTasksButton session={session} hasMessages={hasMessages} online={online} />;
   const retitleBtn = <RetitleButton session={session} hasMessages={hasMessages} online={online} />;
   const actionBtns = isMobile
-    ? <div style={{ display: 'flex', alignItems: 'center', gap: 0, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{artifactsBtn}{notifyBtn}</div>
+    ? <div style={{ display: 'flex', alignItems: 'center', gap: 0, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{artifactsBtn}{notifyBtn}{expiryBadge}</div>
     // На десктопе кнопки — неразрывная группа: при переносе кластера уходят вниз целиком,
     // оставаясь последними у правого края (мышечная память на позицию)
-    : <div style={{ display: 'flex', alignItems: 'center', gap: TB.gap, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{artifactsBtn}{notifyBtn}</div>;
+    : <div style={{ display: 'flex', alignItems: 'center', gap: TB.gap, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{artifactsBtn}{notifyBtn}{expiryBadge}</div>;
 
   // Правый кластер шапки (бейджи + кнопки) единым flex-элементом: при тесноте узкого
   // десктопа переносится под заголовок ЦЕЛИКОМ (два чистых состояния вместо рваных
@@ -1252,7 +1252,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       display: 'flex', alignItems: 'center', gap: TB.gap, marginLeft: 'auto', minWidth: 0,
       ...(isMobile ? null : { flexWrap: 'wrap' as const, justifyContent: 'flex-end' as const }),
     }}>
-      {mechanicBadge}{expiryBadge}{workflowBadge}{costBadges}{actionBtns}
+      {mechanicBadge}{workflowBadge}{costBadges}{actionBtns}
     </div>
   );
 

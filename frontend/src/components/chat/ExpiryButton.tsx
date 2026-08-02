@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Hourglass } from 'lucide-react';
 import type { Session } from '../../types';
-import { C, FONT, R } from '../../lib/design';
+import { C, FONT, R, TB } from '../../lib/design';
 import { formatTimeLeft, expiresAt, formatExpiryDate } from '../../lib/expiry';
 import { updateChatFields } from '../../lib/chatUpdate';
 import { showToast } from '../../lib/toast';
@@ -64,10 +64,10 @@ export function ExpiryButton({ session, isMobile, onSessionUpdated }: {
           border: `1px solid ${temporary ? C.border : 'transparent'}`,
           borderRadius: R.lg, flexShrink: 0, cursor: saving ? 'default' : 'pointer',
           fontFamily: FONT.sans, fontSize: 11, fontWeight: 600,
-          color: C.textMuted, whiteSpace: 'nowrap',
-          // Бессрочный чат — голая приглушённая иконка: она сообщает не состояние,
-          // а доступное действие, и не должна спорить с бейджами статистики рядом
-          opacity: saving ? 0.6 : temporary ? 1 : 0.75,
+          // Тот же цвет, что у icon-кнопок шапки (TB.iconColor): кнопка стоит с ними
+          // в одном ряду, и приглушать её сильнее — читается как «неактивна»
+          color: TB.iconColor, whiteSpace: 'nowrap',
+          opacity: saving ? 0.6 : 1,
         }}
       >
         <Hourglass size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />

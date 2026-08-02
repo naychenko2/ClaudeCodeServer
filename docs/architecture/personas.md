@@ -45,6 +45,11 @@
   Планировщик (Прометей), Координатор (Атлант), Аналитик (Метида), Ревьюер (Мом),
   Консультант (Оракул), Библиотекарь (Клио); регламенты — сгенерированный partial
   `OmoPantheonCatalog.Instructions.cs` (docs/omo/gen-omo-prompts.ps1 из переводов).
+  Модель роль задаёт **уровнем** (`PantheonTemplate.ModelTier` → `Persona.ModelTier`), а не
+  конкретной моделью: зашитый Claude-алиас уводил персону и её исполнителя задач на Claude
+  даже на инстансе, целиком переведённом на стороннего провайдера (B3 приёмки «Командной
+  реализации»). Пины старых подключений переносятся на уровень при загрузке
+  (`PersonaManager.MigratePantheonModelPins`, только персоны с `TemplateKey`).
   `GET /api/personas/pantheon` — карточки + connectedPersonaId по `Persona.TemplateKey`;
   `POST /api/personas/pantheon/connect` {keys?} — идемпотентно создаёт ГЛОБАЛЬНЫЕ персоны
   с готовыми именами (советники — readOnly). **Роли видны всегда**: в селекторах собеседника,

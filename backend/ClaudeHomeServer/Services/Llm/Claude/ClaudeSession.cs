@@ -1551,9 +1551,9 @@ public class ClaudeSession : ILlmSessionAdapter
             {
                 var partTitle = part.Kind switch
                 {
-                    "builtin" => "Встроенный промпт продукта",
-                    "user" => "Промпт проекта",
-                    _ => "Автодополнение промпта (Dify, теги)",
+                    "builtin" => "Общие правила приложения",
+                    "user" => "Что вы написали в карточке проекта",
+                    _ => "Про базу знаний проекта",
                 };
                 Add($"project-{part.Kind}-{partIndex++}", partTitle, part.Content, group: "project");
             }
@@ -1569,7 +1569,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     "Если нужно уточнить что-то у пользователя и у вопроса есть 2–4 осмысленных варианта ответа — " +
                     "задай его инструментом AskUserQuestion (рекомендуемый вариант первым) вместо вопроса текстом: " +
                     "он покажет пользователю кнопки для выбора. Открытый вопрос без осмысленных вариантов — как обычно, текстом.";
-                Add("ask-question", "Подсказка про AskUserQuestion", askHint);
+                Add("ask-question", "Как задавать вопросы кнопками", askHint);
             }
 
             // Подсказка про систему задач — только когда tasks-server подключён
@@ -1609,7 +1609,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     "tasks_update, tasks_complete, tasks_delete, tasks_add_subtask, tasks_toggle_subtask, tasks_board_columns). " + scope + " " +
                     "Когда пользователь просит создать/найти/изменить задачу, напоминание или список дел — используй эти инструменты, " +
                     "а не файлы или собственный список. Даты — в формате YYYY-MM-DD, время HH:MM." + columnsHint + executeHint + personaExecHint + resultHint + crossProjectHint;
-                Add("mcp-tasks", "Подсказка про задачи (mcp__tasks__*)", tasksHint, group: "mcp");
+                Add("mcp-tasks", "Как работать с задачами", tasksHint, group: "mcp");
             }
 
             // Подсказка про базу заметок — только когда notes-server подключён
@@ -1636,7 +1636,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     "Связывай заметки друг с другом через [[Заголовок другой заметки]] — по этим ссылкам строится граф знаний. " +
                     "Когда пользователь просит записать/законспектировать/связать мысль или найти по заметкам — используй эти инструменты." +
                     annotationsHint;
-                Add("mcp-notes", "Подсказка про заметки (mcp__notes__*)", notesHint, group: "mcp");
+                Add("mcp-notes", "Как работать с заметками", notesHint, group: "mcp");
             }
 
             // Подсказка про виджеты — только когда widgets-server подключён
@@ -1652,7 +1652,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     "CSS-переменные var(--cc-bg), var(--cc-text), var(--cc-accent), var(--cc-border), var(--cc-muted). " +
                     "Верстай адаптивно: лента бывает узкой (320px). Виджет уже показан пользователю — не пересказывай " +
                     "его содержимое текстом, достаточно короткого комментария.";
-                Add("mcp-widgets", "Подсказка про виджеты (widget_show)", widgetsHint, group: "mcp");
+                Add("mcp-widgets", "Как показывать виджеты в чате", widgetsHint, group: "mcp");
             }
 
             // Подсказка про показ картинок — только у чата с проектом: локальный путь фронт
@@ -1675,7 +1675,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     "это показать её СЕБЕ, в ленте пользователя она так не появится; единственный способ показать " +
                     "ему — markdown-картинка на файл внутри проекта. Читай изображение в свой контекст, только если " +
                     "тебе самому нужно его рассмотреть: крупный файл дорого стоит и раздувает контекст.";
-                Add("images", "Подсказка про показ картинок", imagesHint, group: "project");
+                Add("images", "Как показывать картинки", imagesHint, group: "project");
             }
 
             // Манифест recall (F3): что персона подтянула в этот ход — заметки + память.
@@ -1689,7 +1689,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 RecallBlock? recallBlock = null;
                 try { recallBlock = await _recallProvider(text); }
                 catch { /* recall не должен ронять ход */ }
-                Add("recall-notes", "Auto-recall заметок", recallBlock?.Text, stable: false, group: "recall");
+                Add("recall-notes", "Заметки, подходящие к вопросу", recallBlock?.Text, stable: false, group: "recall");
                 if (recallBlock?.Items.Count > 0)
                 {
                     manifestItems ??= new List<RecallItem>();
@@ -1724,7 +1724,7 @@ public class ClaudeSession : ILlmSessionAdapter
                         ", personas_bindings_set — заменить набор; в personas_create — параметры bindings/autoBindings. " +
                         "Свои собственные привязки персона менять не может.";
                 }
-                Add("mcp-personas", "Подсказка про персон (mcp__personas__*)", personasHint, group: "persona");
+                Add("mcp-personas", "Как работать с персонами", personasHint, group: "persona");
             }
 
             // Подсказка про рабочее пространство — только когда workspace-server подключён
@@ -1776,7 +1776,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     "Когда пользователь спрашивает «где-то у меня было…» — начинай с search_unified." +
                     " Если вызов вернул «No such tool available» — сервер ещё подключается: " +
                     "подожди мгновение и повтори тот же вызов.";
-                Add("mcp-workspace", "Подсказка про рабочее пространство (mcp__wsp__*)", workspaceHint, group: "mcp");
+                Add("mcp-workspace", "Как искать по проектам и файлам", workspaceHint, group: "mcp");
             }
 
             // Подсказка про долгую память. Персонная сессия — личная (memory_*) + командная (team_*);
@@ -1811,13 +1811,13 @@ public class ClaudeSession : ILlmSessionAdapter
                             : " и полезно в дальнейшей работе над ним. Если пользователь просит «запомнить для команды/проекта» — используй team_memory_remember.");
                     memoryHint = memoryHint is null ? teamHint : memoryHint + teamHint;
                 }
-                Add("mcp-memory", "Подсказка про долгую память (mcp__memory__*)", memoryHint, group: "persona");
+                Add("mcp-memory", "Как пользоваться долгой памятью", memoryHint, group: "persona");
             }
 
             // Подсказка про @упоминания (список «@handle — Роль (Имя)» + persona_ask) —
             // только при включённом флаге persona-mentions и наличии других персон
             if (_personasMcp?.MentionsHint is { } mentionsHint)
-                Add("persona-mentions", "Подсказка про @упоминания персон", mentionsHint, group: "persona");
+                Add("persona-mentions", "Кого можно позвать через @", mentionsHint, group: "persona");
 
             // Подсказка про субагентов-персон в Workflow: перечисляем handle'ы доступных
             // .md-агентов (из --add-dir) — модель должна знать, что их можно вызывать
@@ -1833,7 +1833,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     "persona_ask задаёт одноразовый вопрос в отдельный чат, а не запускает субагента. " +
                     "Для Workflow всегда используй Task(agentType=\"handle\").\n" +
                     "Доступные agentType: " + string.Join(", ", personaAgents.AgentHandles) + ".";
-                Add("workflow-subagents", "Подсказка про персон-субагентов в Workflow", workflowHint, group: "persona");
+                Add("workflow-subagents", "Кого можно подключить к работе", workflowHint, group: "persona");
             }
 
             // Auto-recall долгой памяти персоны: релевантные записи по тексту хода.
@@ -1844,7 +1844,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 RecallBlock? memRecall = null;
                 try { memRecall = await _personaRecallProvider(text); }
                 catch { /* recall памяти не должен ронять ход */ }
-                Add("recall-memory", "Auto-recall долгой памяти персоны", memRecall?.Text, stable: false, group: "persona");
+                Add("recall-memory", "Что персона помнит по теме", memRecall?.Text, stable: false, group: "persona");
                 if (memRecall?.Items.Count > 0)
                 {
                     manifestItems ??= new List<RecallItem>();
@@ -1860,7 +1860,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 string? bindingsBlock = null;
                 try { bindingsBlock = await _bindingsProvider(text); }
                 catch { /* блок привязок не должен ронять ход */ }
-                Add("persona-bindings", "Привязанные знания и правила персоны", bindingsBlock, stable: false, group: "persona");
+                Add("persona-bindings", "Знания и правила, привязанные к персоне", bindingsBlock, stable: false, group: "persona");
             }
 
             // Slice top-10 god-nodes Code Graph: хабы по связности для холодного старта
@@ -1873,7 +1873,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 catch { /* блок графа не должен ронять ход */ }
                 // Граф меняется при пересборке, а не под текст хода, но и стабильным
                 // его не назовёшь: правки кода прилетают в промпт следующего же хода
-                Add("code-graph", "Slice графа кода (god-узлы)", codeGraphBlock, stable: false, group: "project");
+                Add("code-graph", "Главные узлы кода проекта", codeGraphBlock, stable: false, group: "project");
             }
 
             // Персональный слой: промпт персоны имеет приоритет
@@ -1891,14 +1891,14 @@ public class ClaudeSession : ILlmSessionAdapter
             // Слой персоны — тоже часть того, что ушло модели: кладём его секцией уже ПОСЛЕ
             // склейки (Combine принимает его отдельным аргументом, чтобы не спутать порядок).
             if (!string.IsNullOrWhiteSpace(agentPrompt))
-                sections.Add(new PromptSectionDto("persona-layer", "Слой персоны", agentPrompt,
-                    Group: "persona"));
+                sections.Add(new PromptSectionDto("persona-layer", "Кто она: роль и характер",
+                    agentPrompt, Group: "persona"));
 
             // Текст хода — не системный промпт, но модель видит именно его: сюда уже вклеены
             // обвязки OmO (SessionManager.BuildCliTurnText), разворот скилла и имена вложений,
             // а в ленте и истории лежит исходное сообщение человека. Kind = turn: в склейку
             // не идёт, в шторке — отдельным блоком.
-            sections.Add(new PromptSectionDto("turn-text", "Текст хода, ушедший CLI", text, "turn",
+            sections.Add(new PromptSectionDto("turn-text", "Ваше сообщение с добавками", text, "turn",
                 Stable: false, Group: "turn"));
 
             // Манифест recall (F3): что персона подтянула из памяти в этот ход — клиенту,
@@ -2323,10 +2323,10 @@ public class ClaudeSession : ILlmSessionAdapter
     private CliLayerDto BuildCliLayerFiles()
     {
         var files = new List<PromptSectionDto>();
-        AddClaudeMd(files, Path.Combine(_rootPath, "CLAUDE.md"), "CLAUDE.md рабочей папки");
-        AddClaudeMd(files, Path.Combine(_rootPath, ".claude", "CLAUDE.md"), ".claude/CLAUDE.md рабочей папки");
+        AddClaudeMd(files, Path.Combine(_rootPath, "CLAUDE.md"), "CLAUDE.md проекта");
+        AddClaudeMd(files, Path.Combine(_rootPath, ".claude", "CLAUDE.md"), "CLAUDE.md проекта (.claude)");
         if (_cliConfigRoot is { Length: > 0 } configRoot)
-            AddClaudeMd(files, Path.Combine(configRoot, "CLAUDE.md"), "CLAUDE.md профиля CLI");
+            AddClaudeMd(files, Path.Combine(configRoot, "CLAUDE.md"), "Ваш общий CLAUDE.md (для всех проектов)");
 
         var skills = new List<CliSkillDto>();
         if (_skills is not null)

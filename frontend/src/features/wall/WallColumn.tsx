@@ -15,11 +15,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { SquareArrowOutUpRight, X } from 'lucide-react';
 import type { Project, Session } from '../../types';
-import { C, FONT, FS, R, SHADOW, Z } from '../../lib/design';
+import { C, FONT, FS, ISLAND, R, SHADOW, Z } from '../../lib/design';
 import { Island, IconButton } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { ChatPanel } from '../../components/ChatPanel';
 import { ProjectIcon } from '../projects/ProjectIcon';
+import { projectTone, fadeTone, projectTopWash } from '../../lib/projectTone';
 import { chatStatus, focusChat, updateChat, removeChat, startOrderDrag, isOrderDrag, dropOrder } from './wallStore';
 
 // Слот иконки в ярлыке — как у шапки панели (PanelShell): место в потоке ровно
@@ -50,6 +51,16 @@ export function WallColumn({ session, project, index, focused, onZoom, onOpenFil
   const [hover, setHover] = useState(false);
   const dimmed = !focused && !hover;
 
+  // Рамка колонки — цветом её проекта: активная в полную силу, спящая едва
+  // заметным намёком (ряд из трёх ярких рамок читался бы как три акцента сразу)
+  const tone = projectTone(project);
+  const borderColor = dropTarget ? C.accent
+    : tone ? (focused ? tone : fadeTone(tone, 0.28))
+    : focused ? C.accent : undefined;
+  // Подпал цветом проекта под верхом колонки: подкрашивает ярлык и шапку чата
+  // (обе прозрачны в этом режиме) и растворяется к ленте. У спящей — слабее
+  const topWash = projectTopWash(project, focused);
+
   // Колонка стала активной — просим композер взять фокус (счётчик, а не флаг:
   // возврат к той же колонке должен срабатывать снова). Растим только на переходе
   // «не активна → активна», иначе любой ре-рендер воровал бы курсор из ленты.
@@ -65,9 +76,12 @@ export function WallColumn({ session, project, index, focused, onZoom, onOpenFil
       // Сильное стекло вместо плотной заливки: ряд колонок иначе закрывает холст
       // целиком, и дудл-фон продукта перестаёт читаться
       bg={C.glassStrong}
-      borderColor={dropTarget || focused ? C.accent : undefined}
       style={{
         flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column',
+        // Рамка толще островной: у колонки она несёт цвет проекта и метку фокуса,
+        // а волосяная линия на стеклянной подложке этого не вытягивает
+        border: `2px solid ${borderColor ?? ISLAND.border}`,
+        backgroundImage: topWash,
         // Неактивные колонки чуть приглушены — глаз сразу находит рабочую. Именно
         // прозрачность, а не размытие: текст остаётся читаемым, подсказка мягкая.
         opacity: dimmed ? 0.72 : 1,
@@ -122,10 +136,19 @@ export function WallColumn({ session, project, index, focused, onZoom, onOpenFil
           {project === null ? 'проект недоступен' : project ? project.name : 'Чат вне проекта'}
           {busy && <span style={{ color: status === 'waiting' ? C.danger : C.warning }}> · {status === 'working' ? 'идёт ход' : 'ждёт вас'}</span>}
         </span>
-        {/* Переход к чату в полном виде. Тултип свой, а не нативный: у нативного
-            секундная задержка, и на плотной полосе он читается как «подсказки нет» */}
+        {/* Переход к чату в полном виде — только под курсором колонки: в покое ярлык
+            держит смысл («чей столбец»), а кнопка на каждой карточке ряда шумит.
+            Тултип свой, а не нативный: у нативного секундная задержка, и на плотной
+            полосе он читается как «подсказки нет» */}
         <span
-          style={{ position: 'relative', display: 'flex', flexShrink: 0 }}
+          style={{
+            position: 'relative', display: 'flex', flexShrink: 0,
+            // Место под кнопку держим ВСЕГДА, прячем только саму кнопку: иначе её
+            // появление раздвигало бы ярлык и подпись проекта дёргалась под курсором
+            opacity: hover ? 1 : 0,
+            pointerEvents: hover ? 'auto' : 'none',
+            transition: 'opacity 0.14s ease-out',
+          }}
           onMouseEnter={() => setZoomTip(true)}
           onMouseLeave={() => setZoomTip(false)}
         >

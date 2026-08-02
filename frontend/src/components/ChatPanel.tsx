@@ -29,6 +29,7 @@ import { ProjectGitBar } from './ProjectGitBar';
 import { EditSessionDialog } from './EditSessionDialog';
 import { C, R, SHADOW, CHAT_MAX_W, CHAT_GUTTER_L } from '../lib/design';
 import { VAR_SHIFT, VAR_W, useChatGutter } from '../lib/chatGutter';
+import { projectTopWash } from '../lib/projectTone';
 import { setChatContext, AI_RECOMPUTE_EVENT } from '../lib/ai/chatContext';
 import { ChatHeaderBar, type CostStats, type FalCostStats } from './chat/ChatHeaderBar';
 import { computeGlifGenStats } from './chat/glifStats';
@@ -1299,6 +1300,9 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     // карточки консультаций пересобираются с активностью внутри
   }, [items, renderItem, lastTaskIdx, execZone, online, onOpenFile, project, handleRevert, personasVersion, sessionBusy, turnBoundaries]);
 
+  // Подпал цветом проекта под верхом чата (см. слой в разметке ниже)
+  const projectWash = projectTopWash(project);
+
   const headerBar = (
     <ChatHeaderBar
       island={headerIsland}
@@ -1341,7 +1345,23 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     <PersonaContext.Provider value={persona}>
     {/* embedded (колонка стены) — тоже прозрачный: подложку даёт стеклянный остров
         колонки, а собственный плотный фон закрывал бы дудл-холст под ней */}
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative', background: headerIsland || embedded ? 'transparent' : C.bgMain }}>
+    <div style={{
+      display: 'flex', flexDirection: 'column', height: '100%', position: 'relative',
+      background: headerIsland || embedded ? 'transparent' : C.bgMain,
+    }}>
+      {/* Подпал цветом проекта под верхом чата — ПО ШИРИНЕ ЛЕНТЫ, а не всего центра:
+          растянутый на всю ширину он читался бы как фон экрана, а не как метка этого
+          чата. На стене подпал рисует сам остров колонки (там он и есть карточка) */}
+      {!embedded && projectWash && (
+        <div style={{
+          position: 'absolute', top: 0, left: '50%', transform: 'translateX(-50%)',
+          width: '100%', maxWidth: CHAT_MAX_W, height: 96,
+          backgroundImage: projectWash, pointerEvents: 'none',
+          // Верхние углы скруглены — подпал читается как продолжение карточки
+          // чата, а не как прямоугольная плашка, наклеенная поверх
+          borderTopLeftRadius: R.xxl, borderTopRightRadius: R.xxl,
+        }} />
+      )}
       {/* В режиме headerIsland шапка сама рисует себя hero-вариантом прямо на
           холсте (ChatHeaderBar, ветка island) — обёртки не нужно. На стене
           (embedded) шапка тоже штатная — канонический вид чата; над ней колонка

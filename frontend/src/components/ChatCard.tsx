@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { AlertCircle, CheckCircle2, Clock, MoreVertical, Pencil, Pin, Tags, Trash2, Users, Wrench } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Clock, LayoutGrid, MoreVertical, Pencil, Pin, Tags, Trash2, Users, Wrench } from 'lucide-react';
 import type { Session } from '../types';
 import { C, R, SHADOW, FONT } from '../lib/design';
 import { IconButton, Menu, MenuItem } from './ui';
@@ -129,6 +129,8 @@ interface Props {
   // пункта нет. Отклонённый промис оставляет карточку в режиме правки с набранным
   // текстом: имя не сохранилось, и молча выкидывать пользователя из ввода нельзя
   onRename?: (name: string) => Promise<unknown>;
+  // «На стену» (фича wall, воркспейс): добавить чат в набор стены. Не задан — пункта нет
+  onAddToWall?: () => void;
 }
 
 /**
@@ -140,7 +142,7 @@ interface Props {
  */
 export function ChatCard({
   session: s, isActive, isMobile, fallbackName, online, hovered, workflowRunning,
-  onSelect, onHover, onDelete, onTogglePin, tags, onRemoveTag, onAssignTags, onRename,
+  onSelect, onHover, onDelete, onTogglePin, tags, onRemoveTag, onAssignTags, onRename, onAddToWall,
 }: Props) {
   // Чат от лица персоны: мини-аватар в строке названия и акцент её цвета
   const persona = s.personaId ? getPersonaById(s.personaId) : undefined;
@@ -415,7 +417,7 @@ export function ChatCard({
       {menu && !editing && (
         <Menu anchor={menu} onClose={() => setMenu(null)} minWidth={158}
           // Высота меню решает, куда его раскрыть (вверх/вниз) — считаем по составу
-          maxHeight={(1 + (canRename ? 1 : 0) + (onTogglePin ? 1 : 0) + (onAssignTags ? 1 : 0)) * 34 + 10}
+          maxHeight={(1 + (canRename ? 1 : 0) + (onTogglePin ? 1 : 0) + (onAssignTags ? 1 : 0) + (onAddToWall ? 1 : 0)) * 34 + 10}
           gap={4}>
           {canRename && (
             <MenuItem
@@ -438,6 +440,13 @@ export function ChatCard({
               // Меню маркировки открывается по тому же якорю: кнопка «⋮» уже
               // исчезнет вместе с этим меню, и её rect брать будет неоткуда
               onClick={e => { e.stopPropagation(); const anchor = menu; setMenu(null); onAssignTags(anchor); }}
+            />
+          )}
+          {onAddToWall && (
+            <MenuItem
+              icon={<LayoutGrid size={15} strokeWidth={2} />}
+              label="На стену"
+              onClick={e => { e.stopPropagation(); setMenu(null); onAddToWall(); }}
             />
           )}
           <MenuItem

@@ -14,6 +14,10 @@ import { ICON_SIZE } from '../../components/ui/icons';
 import { IslandSplitter } from '../../components/ui/IslandSplitter';
 import { SessionList } from '../../components/SessionList';
 import { ChatPanel } from '../../components/ChatPanel';
+import { useFeature, FLAGS } from '../../lib/featureFlags';
+import { showToast } from '../../lib/toast';
+import { addChatSafe } from '../../features/wall/wallStore';
+import { WallDock } from '../../features/wall/WallDock';
 import { FileViewer } from '../../components/FileViewer';
 import { GitCommitView } from '../../components/GitCommitView';
 import { TaskDetailsPane } from '../../features/tasks/TaskDetailsPane';
@@ -99,6 +103,8 @@ interface Props {
   onSessionsChanged: (n: number) => void;
   // Хук на явную активацию панели из рельсы (клик открыл панель) — проброс в RightPanelStack
   onPanelOpen?: (k: PanelKey) => void;
+  // Открыть режим «Стена» (док стены под доком проектов; вкладки в таббаре у стены нет)
+  onOpenWall?: () => void;
 }
 
 export function DesktopWorkspace(p: Props) {
@@ -143,6 +149,13 @@ export function DesktopWorkspace(p: Props) {
 
   const personaOpen = !!p.selectedPersonaId || p.personaCreating;
 
+  // «Стена»: док и пункт меню карточек чата — только полный десктоп (на планшете
+  // колонкам стены всё равно не хватит места, WallPage там кажет заглушку)
+  const wallOn = useFeature(FLAGS.wall) && !p.isTablet && !!p.onOpenWall;
+  const handleAddToWall = (s: Session) => {
+    void addChatSafe(s).then(() => showToast('Стена', `«${s.name?.trim() || 'Чат'}» на стене`));
+  };
+
   // Контент панели «Чаты» левой рельсы. Заголовок панели рисует PanelShell, поэтому
   // здесь только содержимое — список чатов на белом фоне контентной зоны, как у
   // панелей правой рельсы. Переключатель проектов жил сначала шапкой внутри этой
@@ -152,7 +165,7 @@ export function DesktopWorkspace(p: Props) {
   // chatCount === null — ещё считаем: панель показываем, чтобы она не мигала на старте.
   const chatsPanel = p.chatCount === 0 ? undefined : (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: C.bgWhite }}>
-      <SessionList project={p.project} activeSession={p.activeSession} onSelect={handleSelectSession} onSessionUpdated={p.onSessionUpdated} onSessionsChanged={p.onSessionsChanged} onCleared={p.onClearSession} isMobile={false} workflowRunningFor={p.workflowRunningFor} />
+      <SessionList project={p.project} activeSession={p.activeSession} onSelect={handleSelectSession} onSessionUpdated={p.onSessionUpdated} onSessionsChanged={p.onSessionsChanged} onCleared={p.onClearSession} isMobile={false} workflowRunningFor={p.workflowRunningFor} onAddToWall={wallOn ? handleAddToWall : undefined} />
     </div>
   );
 
@@ -242,7 +255,14 @@ export function DesktopWorkspace(p: Props) {
         toolsEnabled={p.toolsEnabled}
         sessionPanels={sessionPanels}
         onPanelOpen={p.onPanelOpen}
-        railFooter={<ProjectRail project={p.projectForEdit} onOpenSettings={p.onOpenProjectSettings} />}
+        railFooter={
+          // Вертикаль капсул у края окна: док проектов, под ним — док стены (вход в
+          // режим «Стена»: клик или дроп карточки чата из панели «Чаты»)
+          <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+            <ProjectRail project={p.projectForEdit} onOpenSettings={p.onOpenProjectSettings} />
+            {wallOn && <WallDock onOpenWall={p.onOpenWall!} />}
+          </div>
+        }
       />
 
       {/* === Центр: коммит → задача → персона → доска → файл (split/fullscreen) → чат === */}

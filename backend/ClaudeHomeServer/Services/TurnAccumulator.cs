@@ -439,7 +439,7 @@ internal class TurnAccumulator
             if (_thinkingBuf.Length > 0)
                 result.Add(new StoredThinkingMessage(_thinkingBuf.ToString()));
             if (_textBuf.Length > 0)
-                result.Add(new StoredTextMessage(_textBuf.ToString(), _personaId,
+                result.Add(new StoredTextMessage(SessionManager.StripTeamProtocolMarkers(_textBuf.ToString()), _personaId,
                     timestamp: _textBufStartedAt ?? NowMs()));
             return result;
         }
@@ -465,7 +465,11 @@ internal class TurnAccumulator
     {
         if (_textBuf.Length > 0)
         {
-            _currentTurn.Add(new StoredTextMessage(_textBuf.ToString(), _personaId,
+            // Волна 6: маркеры протокола «Командной реализации» (`<team:work>`, `<escalate:*>`,
+            // `<team:talk/>`) — внутренняя договорённость координатора с бэкендом, в
+            // сохранённой истории им не место (иначе после перезагрузки/reload они снова
+            // всплывают в ленте, даже если живая трансляция их уже отфильтровала).
+            _currentTurn.Add(new StoredTextMessage(SessionManager.StripTeamProtocolMarkers(_textBuf.ToString()), _personaId,
                 timestamp: _textBufStartedAt ?? NowMs()));
             _textBuf.Clear();
             _textBufStartedAt = null;

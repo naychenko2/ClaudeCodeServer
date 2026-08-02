@@ -33,6 +33,11 @@ public class SessionManager : IDisposable
         // не должна съедать маркер другого (оба режима могут быть включены разом).
         public System.Text.StringBuilder TeamTurnText = new();
         public readonly object TeamTurnLock = new();
+        // Сколько символов «очищенного от маркеров» текста текущего хода штаба уже ушло
+        // в живую трансляцию (волна 6): считаем от StripTeamProtocolMarkers(TeamTurnText),
+        // а не от длины самого TeamTurnText — иначе диффом в дельту попал бы вырезанный
+        // маркер. Живёт рядом с TeamTurnText, сбрасывается вместе с ним под TeamTurnLock.
+        public int TeamTurnShownLength;
         // В текущем ходу штаба координатор задал вопрос ASK-карточкой (Э8). Гард молчаливого
         // тупика по концу хода смотрит сюда: ход, закончившийся вопросами человеку, — это
         // работающее интервью, а не тупик, и карточка «вопросов не будет» там была бы враньём.
@@ -840,6 +845,14 @@ public class SessionManager : IDisposable
     // Единая точка подмены cwd — через неё идут обе funnel-точки LlmSessionContext.
     private static string EffectiveRoot(Session session, string fallbackRoot) =>
         session.WorktreePath ?? fallbackRoot;
+
+    // Корень, куда «Командная реализация» пишет файл полного плана (Э8-доп., 2026-08-02):
+    // worktree штаба, если он в нём работает, иначе корень проекта. null — чат вне проекта,
+    // писать план некуда (глобальный чат — раздел «Состав команды» продуктового плана).
+    private string? ResolveTeamPlanRoot(Session session) =>
+        session.ProjectId is { } pid && _projects.GetById(pid) is { } project
+            ? EffectiveRoot(session, project.RootPath)
+            : null;
 
     // Уборка за удалённым деревом чата (ADR-003): снимаем watcher его файлов и выбрасываем
     // снимок графа из data/code-graphs — иначе он остался бы сиротой на диске, а watcher
@@ -2029,6 +2042,7 @@ public class SessionManager : IDisposable
                         lock (entry.TeamTurnLock)
                         {
                             entry.TeamTurnText.Clear();
+                            entry.TeamTurnShownLength = 0;
                             entry.TeamTurnAsked = false;
                         }
                         entry.SkipNextTeamTurnEnd = false;
@@ -2967,6 +2981,7 @@ public class SessionManager : IDisposable
                 lock (entry.TeamTurnLock)
                 {
                     entry.TeamTurnText.Clear();
+                    entry.TeamTurnShownLength = 0;
                     entry.TeamTurnAsked = false;
                 }
                 entry.SkipNextTeamTurnEnd = false;
@@ -3322,6 +3337,20 @@ public class SessionManager : IDisposable
         var replanning = entry.Info.TeamImplement is { Replanning: true };
         plan.Version = replanning ? (entry.Info.TeamImplement?.PlanVersion ?? 0) + 1 : 1;
         plan.PlannerPersonaId ??= entry.Info.TeamImplement?.CoordinatorPersonaId ?? entry.Info.PersonaId;
+
+        // Полный план файлом (решение владельца 2026-08-02): сервер рендерит markdown из
+        // структуры плана и кладёт рядом с проектом — координатору писать файлы запрещено
+        // (CoordinatorWriteGuard). Версия — отдельный файл: plan.Version уже проставлен выше,
+        // поэтому перепланирование ложится рядом с предыдущим, не поверх него. Глобальный чат
+        // без проекта — писать некуда (null), карточка покажет только «Замысел»; ошибка записи
+        // не должна ронять публикацию карточки — TryWrite её не бросает.
+        if (ResolveTeamPlanRoot(entry.Info) is { } planRoot)
+        {
+            var ownerIdForLabels = ResolveOwnerId(entry.Info);
+            plan.PlanFilePath = TeamPlanFileRenderer.TryWrite(planRoot, entry.Info.Name, sessionId, plan,
+                personaId => personaId is not null && _personas.Get(personaId, ownerIdForLabels ?? "") is { } p
+                    ? PersonaManager.PersonaLabel(p) : personaId ?? "не назначен", _log);
+        }
 
         // Добавочный = в режиме уже был план (первый ставит PlanCardId). Отменённый план
         // обнуляет PlanCardId, поэтому после «Отменить» следующий снова требует подтверждения.
@@ -4167,6 +4196,104 @@ public class SessionManager : IDisposable
         return System.Text.RegularExpressions.Regex.IsMatch(stripped, @"<team:talk\s*/>");
     }
 
+    // Волна 6 (живая приёмка волны 5): маркеры протокола — внутренняя договорённость между
+    // координатором и бэкендом (их же разбирают Parse*/Has* выше), в реплике, которую видит
+    // человек, им не место. Модель периодически закрывает тег по имени длинного маркера
+    // (`</team:work>`, `</escalate:check>`) — парсер это уже терпит, а сырой текст хода
+    // раньше уходил в ленту/историю как есть, и закрывающий тег протекал буквально.
+    // Код-блоки не трогаем — симметрично тому, что их же исключают Parse*/Has* выше:
+    // модель вправе процитировать протокол примером, это не активный вызов.
+    private static readonly System.Text.RegularExpressions.Regex CodeSpanOrFenceRegex =
+        new("```[\\s\\S]*?```|`[^`\n]*`", System.Text.RegularExpressions.RegexOptions.Compiled);
+    private static readonly System.Text.RegularExpressions.Regex EscalateMarkerRegex =
+        new(@"<escalate:(?:deviation|check|decision|clarify)>[\s\S]*?</escalate(?::\w+)?>",
+            System.Text.RegularExpressions.RegexOptions.Compiled);
+    private static readonly System.Text.RegularExpressions.Regex WorkMarkerRegex =
+        new(@"<team:work>[\s\S]*?</team(?::work)?>", System.Text.RegularExpressions.RegexOptions.Compiled);
+    private static readonly System.Text.RegularExpressions.Regex TalkMarkerRegex =
+        new(@"<team:talk\s*/>", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    internal static string StripTeamProtocolMarkers(string text)
+    {
+        if (string.IsNullOrEmpty(text) || !text.Contains('<')) return text;
+        var sb = new System.Text.StringBuilder(text.Length);
+        var pos = 0;
+        foreach (System.Text.RegularExpressions.Match code in CodeSpanOrFenceRegex.Matches(text))
+        {
+            sb.Append(StripMarkersOutsideCode(text[pos..code.Index]));
+            sb.Append(text, code.Index, code.Length);
+            pos = code.Index + code.Length;
+        }
+        sb.Append(StripMarkersOutsideCode(text[pos..]));
+        return sb.ToString();
+    }
+
+    private static string StripMarkersOutsideCode(string text)
+    {
+        if (text.Length == 0 || !text.Contains('<')) return text;
+        text = EscalateMarkerRegex.Replace(text, "");
+        text = WorkMarkerRegex.Replace(text, "");
+        text = TalkMarkerRegex.Replace(text, "");
+        return text;
+    }
+
+    // Полные открывающие теги маркеров (без вариативных \s* — тем, которые их допускают,
+    // соответствует отдельная проверка ниже). Хвост текста, совпадающий с СОБСТВЕННЫМ
+    // префиксом одного из них, ещё может дорасти до настоящего маркера следующей дельтой —
+    // до этого момента показывать его нельзя (иначе полтега мелькнёт в стриме раньше, чем
+    // мы поймём, что это протокол).
+    private static readonly string[] MarkerOpenTags =
+    [
+        "<escalate:deviation>", "<escalate:check>", "<escalate:decision>", "<escalate:clarify>",
+        "<team:work>",
+    ];
+
+    internal static bool IsAmbiguousMarkerTail(string tail)
+    {
+        if (tail.Length == 0 || tail[0] != '<') return false;
+        foreach (var open in MarkerOpenTags)
+            if (open.Length > tail.Length && open.StartsWith(tail, StringComparison.Ordinal))
+                return true;
+        // `<team:talk/>` пробелы перед `/>` не фиксированы регэкспом разбора — сюда попадает
+        // только незавершённый префикс (полный маркер уже вырезан StripTeamProtocolMarkers)
+        return System.Text.RegularExpressions.Regex.IsMatch(tail, @"^<team:talk\s*/?$");
+    }
+
+    // Обрезает с хвоста текста потенциально незавершённый маркер (см. IsAmbiguousMarkerTail).
+    // Используется только при живой трансляции хода — на финальном тексте хода обрезка не
+    // нужна: дальше дельт не будет, и придержанный хвост можно просто показать как есть.
+    internal static string TrimAmbiguousMarkerTail(string text)
+    {
+        var idx = text.LastIndexOf('<');
+        if (idx < 0) return text;
+        var tail = text[idx..];
+        return IsAmbiguousMarkerTail(tail) ? text[..idx] : text;
+    }
+
+    // Полностью открытый маркер (открывающий тег уже целиком напечатан), у которого просто
+    // ЕЩЁ НЕ пришло закрытие, — IsAmbiguousMarkerTail его пропускает (он больше не префикс
+    // открывающего тега, он им равен), а StripTeamProtocolMarkers его не трогает (регэксп
+    // требует закрывающую часть). Раз открывающий тег буквально присутствует в уже очищенном
+    // от ЗАВЕРШЁННЫХ маркеров тексте — значит, этот конкретный маркер ещё не закрылся: прячем
+    // с его начала и до конца буфера (тело маркера — постановка для планировщика, не для
+    // человека, и в любом случае может дописываться следующими дельтами).
+    private static readonly string[] MarkerOpenLiterals =
+    [
+        "<escalate:deviation>", "<escalate:check>", "<escalate:decision>", "<escalate:clarify>",
+        "<team:work>", "<team:talk",
+    ];
+
+    internal static string TrimUnresolvedMarkerOpen(string strippedText)
+    {
+        var cut = strippedText.Length;
+        foreach (var open in MarkerOpenLiterals)
+        {
+            var idx = strippedText.IndexOf(open, StringComparison.Ordinal);
+            if (idx >= 0 && idx < cut) cut = idx;
+        }
+        return cut == strippedText.Length ? strippedText : strippedText[..cut];
+    }
+
     // Конец хода штаба (Э4 + Э5): маркеры координатора и переход в ожидание вводной.
     // Приоритет — эскалация: она останавливает практику, и разворачивать волну поверх
     // остановки незачем. Стадию «ожидание» ставим только на успешном ходу: упавший ход
@@ -4220,17 +4347,25 @@ public class SessionManager : IDisposable
             || (team.Stage == TeamImplementStage.Planning && team.WaveNumber == 0);
         if (stalledStage && !asked)
         {
-            var clarifyStall = team.Stage == TeamImplementStage.Interview && team.WaveNumber > 0;
-            var stalled = new TeamEscalation
-            {
-                Kind = TeamEscalationKind.ProductDecision,
-                Title = clarifyStall ? "Уточнения так и не пришли" : "Координатор не понял вводную",
-                Details = clarifyStall
-                    ? TeamImplementPrompts.ClarifyStallDetails(turnText, team.WaveNumber)
-                    : TeamImplementPrompts.SilentPlanningStallDetails(turnText),
-                Wave = team.WaveNumber,
-                Actions = TeamEscalationActions.For(TeamEscalationKind.ProductDecision),
-            };
+            // Волна 6 (живая приёмка волны 5): ход мог не завершиться маркером по ДВУМ разным
+            // причинам, и текст карточки должен их различать. «Координатор не понял вводную»/
+            // «Уточнения так и не пришли» — координатор ОТВЕТИЛ, но без маркера: это честная
+            // реакция на его текст (SilentPlanningStallDetails/ClarifyStallDetails цитируют
+            // turnText). А `failed` — ход оборван технически (рестарт сервера, упавший процесс,
+            // таймаут провайдера) ДО того, как координатор вообще успел ответить по существу:
+            // turnText в этом случае пуст или обрублен, и цитировать в карточке нечего, а текст
+            // «не понял вводную» отправляет человека переформулировать задачу, хотя проблема не
+            // в ней. Формулировка карточки-инфраструктурного обрыва согласована с владельцем.
+            var stalled = failed
+                ? new TeamEscalation
+                {
+                    Kind = TeamEscalationKind.ProductDecision,
+                    Title = "Ход прервался",
+                    Details = TeamImplementPrompts.TurnInterruptedDetails(),
+                    Wave = team.WaveNumber,
+                    Actions = TeamEscalationActions.For(TeamEscalationKind.ProductDecision),
+                }
+                : BuildSilentStallEscalation(team, turnText);
             if (TeamEscalationRaiser is { } raise) await raise(entry.Info, stalled);
             else await PublishTeamEscalationAsync(sessionId, stalled);
             return;
@@ -4261,6 +4396,23 @@ public class SessionManager : IDisposable
             await SaveTeamImplementStateAsync(sessionId);
             _log.LogInformation("Итерация чата-штаба {SessionId} завершена — режим ждёт следующей вводной", sessionId);
         }
+    }
+
+    // Карточка молчаливого тупика (ход завершился штатно, но без маркера) — вынесено из
+    // HandleTeamTurnEndAsync, чтобы её не спутать с веткой инфраструктурного обрыва (см. там).
+    private static TeamEscalation BuildSilentStallEscalation(SessionTeamImplement team, string turnText)
+    {
+        var clarifyStall = team.Stage == TeamImplementStage.Interview && team.WaveNumber > 0;
+        return new TeamEscalation
+        {
+            Kind = TeamEscalationKind.ProductDecision,
+            Title = clarifyStall ? "Уточнения так и не пришли" : "Координатор не понял вводную",
+            Details = clarifyStall
+                ? TeamImplementPrompts.ClarifyStallDetails(turnText, team.WaveNumber)
+                : TeamImplementPrompts.SilentPlanningStallDetails(turnText),
+            Wave = team.WaveNumber,
+            Actions = TeamEscalationActions.For(TeamEscalationKind.ProductDecision),
+        };
     }
 
     // Новая вводная разложена планировщиком и уходит в волну (Э5). Гард по стадии: работу
@@ -5006,6 +5158,10 @@ public class SessionManager : IDisposable
     private async Task OnMessageAsync(string sessionId, TurnAccumulator acc, ServerMessage msg, long runId = 0)
     {
         _sessions.TryGetValue(sessionId, out var entry);
+        // Волна 6: живая трансляция хода штаба фильтрует маркеры протокола (см. кейс ниже) —
+        // иногда дельте нечего транслировать (весь её текст — часть маркера/незавершённый
+        // хвост), тогда исходное сообщение до низового BroadcastAsync не доходит вовсе.
+        var sendBroadcast = true;
 
         // Аккумулятор — отдельный try, чтобы ошибка сохранения истории
         // не заблокировала обновление статуса и широковещание.
@@ -5024,9 +5180,30 @@ public class SessionManager : IDisposable
                     if (entry?.Info.WorkLoop is not null)
                         lock (entry.LoopTurnLock) entry.LoopTurnText.Append(m.Text);
                     // Режим «Командная реализация»: тем же способом ловим маркер эскалации
-                    // координатора (расхождение с планом, красная проверка, вопрос человеку)
+                    // координатора (расхождение с планом, красная проверка, вопрос человеку) —
+                    // и заодно решаем, что из накопленного уже безопасно показать человеку
+                    // (волна 6): маркеры — внутренний протокол, в живой ленте им не место.
+                    // Целиком завершённый маркер вырезаем, незавершённый хвост придерживаем
+                    // до следующей дельты — иначе полтега мелькнёт на экране раньше, чем мы
+                    // поймём, что это протокол, а не текст координатора.
                     if (entry?.Info.TeamImplement is not null)
-                        lock (entry.TeamTurnLock) entry.TeamTurnText.Append(m.Text);
+                    {
+                        string? displayDelta;
+                        lock (entry.TeamTurnLock)
+                        {
+                            entry.TeamTurnText.Append(m.Text);
+                            var safe = TrimAmbiguousMarkerTail(
+                                TrimUnresolvedMarkerOpen(StripTeamProtocolMarkers(entry.TeamTurnText.ToString())));
+                            if (safe.Length > entry.TeamTurnShownLength)
+                            {
+                                displayDelta = safe[entry.TeamTurnShownLength..];
+                                entry.TeamTurnShownLength = safe.Length;
+                            }
+                            else displayDelta = null;
+                        }
+                        if (string.IsNullOrEmpty(displayDelta)) sendBroadcast = false;
+                        else msg = m with { Text = displayDelta };
+                    }
                     break;
                 case ThinkingDeltaMessage m: acc.OnThinkingDelta(m.Text); break;
                 case AgentTextMessage m:
@@ -5229,13 +5406,23 @@ public class SessionManager : IDisposable
                     if (msg is ErrorMessage { ExpectResultFollows: true }) entry.SkipNextTeamTurnEnd = true;
                     string teamTurnText;
                     bool teamTurnAsked;
+                    string? catchUpDelta;
                     lock (entry.TeamTurnLock)
                     {
                         teamTurnText = entry.TeamTurnText.ToString();
+                        // Ход закончился — ждать больше нечего: то, что живая трансляция
+                        // придерживала как «вдруг это начало маркера» (TrimAmbiguousMarkerTail),
+                        // дальше не дорастёт ни во что — довешиваем как обычный текст.
+                        var finalSafe = StripTeamProtocolMarkers(teamTurnText);
+                        catchUpDelta = finalSafe.Length > entry.TeamTurnShownLength
+                            ? finalSafe[entry.TeamTurnShownLength..] : null;
+                        entry.TeamTurnShownLength = 0;
                         entry.TeamTurnText.Clear();
                         teamTurnAsked = entry.TeamTurnAsked;
                         entry.TeamTurnAsked = false;
                     }
+                    if (!string.IsNullOrEmpty(catchUpDelta))
+                        await BroadcastAsync(sessionId, new TextDeltaMessage(catchUpDelta));
                     var teamTurnFailed = msg is ErrorMessage or ResultMessage { Subtype: "error" };
                     _ = Task.Run(async () =>
                     {
@@ -5294,7 +5481,7 @@ public class SessionManager : IDisposable
             }
         }
 
-        await BroadcastAsync(sessionId, msg);
+        if (sendBroadcast) await BroadcastAsync(sessionId, msg);
 
         if (entry is not null && OnSessionMessage is { } observers)
         {

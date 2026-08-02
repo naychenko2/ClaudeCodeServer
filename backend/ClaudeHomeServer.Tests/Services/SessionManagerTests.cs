@@ -1566,6 +1566,128 @@ public class SessionManagerTests : IDisposable
         ti.PlanCardId.Should().Be(plan.Id);
     }
 
+    // --- «Замысел в карточке и полный план файлом» (решение владельца 2026-08-02) ---
+
+    [Fact]
+    public async Task CreateTeamPlan_СЗамыслом_ПишетФайлПланаИКладётПутьВКарточку()
+    {
+        var (session, backend, frontend) = await MakeTeamStabAsync("ti-plan-file");
+        _plannerAnswer = $$"""
+            {"summary":"Экспорт задач в CSV",
+             "intent":"Идём через готовый эндпоинт экспорта и кнопку в тулбаре, сложную фильтрацию не делаем.",
+             "subtasks":[
+               {"title":"Эндпоинт экспорта","goal":"GET /api/tasks/export",
+                "executorPersonaId":"{{backend.Id}}","executorRationale":"Серверная часть — его зона",
+                "files":["backend/Controllers/TasksController.cs"],"wave":1,"doneCriteria":"отдаёт CSV"},
+               {"title":"Кнопка «Экспорт»","goal":"Кнопка в тулбаре",
+                "executorPersonaId":"{{frontend.Id}}","executorRationale":"UI — её зона",
+                "files":["frontend/src/components/Toolbar.tsx"],"wave":2,"doneCriteria":"файл скачивается"}]}
+            """;
+
+        var (plan, reason) = await _sut.CreateTeamPlanAsync(session.Id, "Добавить экспорт в CSV", TestUserId);
+
+        reason.Should().BeNull();
+        plan.Should().NotBeNull();
+        plan!.Intent.Should().Contain("Идём через готовый эндпоинт");
+        plan.PlanFilePath.Should().NotBeNull()
+            .And.StartWith("docs/plans/team/").And.EndWith("plan-v1.md");
+
+        var project = _projectManager.GetById(session.ProjectId!)!;
+        var full = Path.Combine(project.RootPath, plan.PlanFilePath!.Replace('/', Path.DirectorySeparatorChar));
+        File.Exists(full).Should().BeTrue("сервер рендерит файл при публикации карточки, а не модель");
+        var content = File.ReadAllText(full);
+        content.Should().Contain("Эндпоинт экспорта").And.Contain("Идём через готовый эндпоинт")
+            .And.Contain("Серверная часть — его зона").And.Contain("`backend/Controllers/TasksController.cs`");
+
+        // Путь в карточке совпадает с записанным файлом — контракт для фронта
+        var card = _sentMessages.OfType<TeamPlanMessage>().Single();
+        card.Plan.PlanFilePath.Should().Be(plan.PlanFilePath);
+    }
+
+    [Fact]
+    public async Task CreateTeamPlan_Перепланирование_ДаётВторойФайлПерваяЦела()
+    {
+        var (session, plan, _) = await MakeStabWithPlanAndStarterAsync("ti-plan-replan");
+        await _sut.RespondTeamPlanAsync(session.Id, plan.Id, TeamPlanDecision.Run, userId: TestUserId);
+        var v1Path = plan.PlanFilePath;
+        v1Path.Should().NotBeNull().And.EndWith("plan-v1.md");
+
+        await _sut.HandleTeamTurnEndAsync(session.Id,
+            "<escalate:clarify>неясен формат</escalate>", failed: false);
+        _plannerAnswer = $$"""
+            {"summary":"Экспорт в XLSX","intent":"Меняем формат на XLSX по просьбе человека.",
+             "subtasks":[{"title":"Выгрузка XLSX","goal":"писать xlsx",
+              "executorPersonaId":"","executorRationale":"серверная часть",
+              "files":["backend/Export.cs"],"wave":1,"doneCriteria":"файл открывается"}]}
+            """;
+
+        await _sut.HandleTeamTurnEndAsync(session.Id,
+            "<team:work>переделать экспорт на XLSX</team>", failed: false);
+
+        var card = _sentMessages.OfType<TeamPlanMessage>().Last();
+        card.Plan.Version.Should().Be(2, "план vN после уточнений");
+        var v2Path = card.Plan.PlanFilePath;
+        v2Path.Should().NotBeNull().And.EndWith("plan-v2.md").And.NotBe(v1Path,
+            "версия плана — отдельный файл, перепланирование не перезаписывает предыдущий");
+
+        var project = _projectManager.GetById(session.ProjectId!)!;
+        string Full(string rel) => Path.Combine(project.RootPath, rel.Replace('/', Path.DirectorySeparatorChar));
+        File.Exists(Full(v1Path!)).Should().BeTrue();
+        File.Exists(Full(v2Path!)).Should().BeTrue();
+        File.ReadAllText(Full(v1Path!)).Should().NotContain("Выгрузка XLSX",
+            "перепланирование не должно перезаписывать первую версию");
+        File.ReadAllText(Full(v2Path!)).Should().Contain("Выгрузка XLSX");
+    }
+
+    [Fact]
+    public async Task CreateTeamPlan_ГлобальныйЧатБезПроекта_ПубликуетсяБезФайлаИБезОшибок()
+    {
+        // Чат вне проекта резолвит домашнюю папку через UserStore — нужен настоящий пользователь,
+        // а не голый TestUserId (тот заведён только в data проектов, не в UserStore)
+        var owner = _userStore.Add("ti-global-owner", "password123", "user");
+        Persona MkGlobal(string name, string role, PersonaSpecialty spec = PersonaSpecialty.None) =>
+            _personaManager.Create(owner.Id, name, role, null, null, null, null,
+                PersonaScope.Global, null, null, null, memoryEnabled: false, specialty: spec);
+
+        var coordinator = MkGlobal("Алекс-Г", "Тимлид", PersonaSpecialty.Coordinator);
+        var executor = MkGlobal("Денис-Г", "Бэкенд");
+        var session = await _sut.CreatePersonaChatAsync(owner.Id, coordinator.Id, ClaudeMode.Auto);
+        session.ProjectId.Should().BeNull("персона и чат глобальные — команды проекта нет");
+
+        await _sut.SetTeamImplementAsync(session.Id, enabled: true,
+            executorPersonaIds: [executor.Id], userId: owner.Id);
+        _plannerAnswer = $$"""
+            {"summary":"Сделать штуку","intent":"Коротко и по делу.",
+             "subtasks":[{"title":"Штука","executorPersonaId":"{{executor.Id}}",
+              "executorRationale":"его зона","wave":1}]}
+            """;
+
+        var (plan, reason) = await _sut.CreateTeamPlanAsync(session.Id, "Сделай штуку", owner.Id);
+
+        reason.Should().BeNull();
+        plan.Should().NotBeNull();
+        plan!.PlanFilePath.Should().BeNull("вне проекта писать план некуда — практика при этом работает как раньше");
+        _sentMessages.OfType<TeamPlanMessage>().Single().Plan.PlanFilePath.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task CreateTeamPlan_ОшибкаЗаписиФайла_ПубликацияНеПадает()
+    {
+        var (session, backend, frontend) = await MakeTeamStabAsync("ti-plan-write-fail");
+        SetPlannerAnswer(backend, frontend);
+        var project = _projectManager.GetById(session.ProjectId!)!;
+        // Занимаем ожидаемый путь файла директорией — запись бросит исключение
+        var rel = TeamPlanFileRenderer.RelativePath(session.Name, session.Id, 1);
+        Directory.CreateDirectory(Path.Combine(project.RootPath, rel.Replace('/', Path.DirectorySeparatorChar)));
+
+        var (plan, reason) = await _sut.CreateTeamPlanAsync(session.Id, "Экспорт", TestUserId);
+
+        reason.Should().BeNull("ошибка записи файла плана не должна ронять публикацию карточки");
+        plan.Should().NotBeNull();
+        plan!.PlanFilePath.Should().BeNull("запись не удалась — ссылки в карточке нет, а не отказ публикации");
+        _sentMessages.OfType<TeamPlanMessage>().Should().ContainSingle();
+    }
+
     // B2 приёмки: отказ обязан приходить ДО интервью, а не после потраченного хода
     [Fact]
     public async Task SetTeamImplement_ЧатБезПерсоны_ОтклоняетНаВходеИНеСоздаётСостояние()
@@ -2652,6 +2774,44 @@ public class SessionManagerTests : IDisposable
         card.Kind.Should().Be("productDecision");
     }
 
+    // Волна 6 (живая приёмка волны 5): ход, оборванный технически (рестарт сервера, упавший
+    // процесс), раньше падал в ТУ ЖЕ ветку молчаливого тупика, что и координатор, реально
+    // ответивший без маркера — карточка «Координатор не понял вводную» отправляла человека
+    // переформулировать задачу, хотя причина не в ней. failed=true обязан давать честный текст
+    // про обрыв хода, а не «не понял вводную».
+    [Fact]
+    public async Task КонецХода_ОборванТехническиВPlanning_ДаётЧестнуюКарточкуАНеНеПонялВводную()
+    {
+        var (session, _, _) = await MakeTeamStabAsync("ti-turn-interrupted");
+        // Stage по умолчанию planning, WaveNumber == 0 — до маркера дело не дошло
+
+        await _sut.HandleTeamTurnEndAsync(session.Id, "", failed: true);
+
+        var ti = _sut.GetById(session.Id)!.TeamImplement!;
+        ti.Stage.Should().Be(TeamImplementStage.AwaitingDecision);
+        var card = _sentMessages.OfType<TeamEscalationMessage>().Last();
+        card.Kind.Should().Be("productDecision");
+        card.Title.Should().Be("Ход прервался");
+        card.Title.Should().NotBe("Координатор не понял вводную",
+            "обрыв хода — техническая причина, а не непонятая вводная");
+        card.Details.Should().Contain("Повторить");
+    }
+
+    // Тот же честный текст обязан вытеснить и «Уточнения так и не пришли» — интервью,
+    // прерванное технически посреди волны, это не тупик clarify-раунда.
+    [Fact]
+    public async Task КонецХода_ОборванТехническиВОжиданииУточнений_ДаётЧестнуюКарточку()
+    {
+        var (session, _, _) = await MakeInterviewStabAsync("ti-turn-interrupted-clarify");
+        _sut.WithTeamState(session.Id, t => { t.WaveNumber = 1; return true; });
+
+        await _sut.HandleTeamTurnEndAsync(session.Id, "", failed: true);
+
+        var card = _sentMessages.OfType<TeamEscalationMessage>().Last();
+        card.Title.Should().Be("Ход прервался");
+        card.Title.Should().NotBe("Уточнения так и не пришли");
+    }
+
     // Minor «дубль уведомления эскалации» (волна 3): ветка is_error в ClaudeSession шлёт
     // синтетический ErrorMessage(ExpectResultFollows: true) и следом безусловно ResultMessage
     // того же хода — раньше OnMessageAsync независимо запускал HandleTeamTurnEndAsync на КАЖДОМ
@@ -2739,6 +2899,140 @@ public class SessionManagerTests : IDisposable
     {
         SessionManager.ParseWorkMarker("Протокол:\n```\n<team:work>пример</team>\n```\nотвечаю").Should().BeNull();
         SessionManager.ParseWorkMarker("Киру выбрал планировщик: фронт — её зона").Should().BeNull();
+    }
+
+    // Волна 6 (живая приёмка волны 5, скриншоты w5-02/w5-03): маркеры протокола протекали в
+    // видимый текст координатора — воспроизведено 4 раза, в т.ч. с закрытием тега по имени.
+    // StripTeamProtocolMarkers — общая функция очистки и для сохранённой истории (TurnAccumulator),
+    // и для живой трансляции (OnMessageAsync), поэтому тестируем сам разбор без харнесса сессии.
+    [Theory]
+    [InlineData("Каждый файл — отдельная подзадача.\n\n<team:work>распараллелить по файлам</team:work>",
+        "Каждый файл — отдельная подзадача.\n\n")]
+    [InlineData("Каждый файл — отдельная подзадача, можно запустить параллельно</team:work>",
+        "Каждый файл — отдельная подзадача, можно запустить параллельно</team:work>")] // без открывающего тега — не маркер, не трогаем
+    [InlineData("<team:work>добавить экспорт</team>", "")]
+    [InlineData("Либо исполнитель не прочитал источник.\n<escalate:check>суффикс не применён</escalate:check>",
+        "Либо исполнитель не прочитал источник.\n")]
+    [InlineData("<escalate:deviation>нужен доступ вне владения</escalate>", "")]
+    [InlineData("Понял, вопросов нет.<team:talk/>", "Понял, вопросов нет.")]
+    [InlineData("Понял, вопросов нет.<team:talk   />", "Понял, вопросов нет.")]
+    [InlineData("обычный текст без маркеров", "обычный текст без маркеров")]
+    public void StripTeamProtocolMarkers_ВырезаетЦеликомЗавершённыйМаркер(string input, string expected)
+    {
+        SessionManager.StripTeamProtocolMarkers(input).Should().Be(expected);
+    }
+
+    // Код-блок — цитата протокола, а не активный вызов (симметрично Parse*/Has* выше): человек
+    // мог явно попросить координатора объяснить формат, такую цитату вырезать нельзя.
+    [Fact]
+    public void StripTeamProtocolMarkers_НеТрогаетМаркерВКодБлоке()
+    {
+        var text = "Протокол:\n```\n<team:work>пример</team:work>\n```\nвот так это выглядит";
+        SessionManager.StripTeamProtocolMarkers(text).Should().Be(text);
+    }
+
+    // Маркер разъехался по нескольким чанкам стрима (закрывающий тег пришёл отдельной
+    // дельтой от открывающего) — функция работает на УЖЕ СКЛЕЕННОМ тексте (TeamTurnText —
+    // один StringBuilder на весь ход), поэтому границы исходных дельт для неё не видны.
+    [Fact]
+    public void StripTeamProtocolMarkers_МаркерСклеенныйИзНесколькихДельт_ВсёРавноВырезается()
+    {
+        var chunk1 = "Готовлю план. <team:wo";
+        var chunk2 = "rk>добавить экспорт";
+        var chunk3 = "</team:work> — всё по делу.";
+        SessionManager.StripTeamProtocolMarkers(chunk1 + chunk2 + chunk3)
+            .Should().Be("Готовлю план.  — всё по делу.");
+    }
+
+    [Theory]
+    [InlineData("текст <team:wo", "текст ")]
+    [InlineData("текст <escalate:che", "текст ")]
+    [InlineData("текст <team:talk", "текст ")]
+    [InlineData("текст <team:talk ", "текст ")]
+    [InlineData("текст <", "текст ")]
+    public void TrimAmbiguousMarkerTail_ПридерживаетНезавершённыйПрефиксМаркера(string input, string expected)
+    {
+        SessionManager.TrimAmbiguousMarkerTail(input).Should().Be(expected);
+    }
+
+    // Обычный текст, включая случайное «<», не должен придерживаться до бесконечности —
+    // иначе живая трансляция обычной прозы координатора зависала бы посреди хода.
+    [Theory]
+    [InlineData("сравнение 5 < 10 верно")]
+    [InlineData("обычный текст без служебных тегов")]
+    [InlineData("html-подобное <div> тоже не наш маркер")]
+    public void TrimAmbiguousMarkerTail_НеТрогаетТекстБезПротоколаНаХвосте(string input)
+    {
+        SessionManager.TrimAmbiguousMarkerTail(input).Should().Be(input);
+    }
+
+    // Открывающий тег напечатан ЦЕЛИКОМ, но закрытие ещё не пришло — IsAmbiguousMarkerTail
+    // такой хвост уже не ловит (он не префикс открывающего тега, он ему равен), поэтому нужна
+    // отдельная проверка «висит незакрытый маркер где-то в тексте».
+    [Theory]
+    [InlineData("Готовлю план. <team:work>", "Готовлю план. ")]
+    [InlineData("Готовлю план. <team:work>постановка ещё пишется", "Готовлю план. ")]
+    [InlineData("Нашёл проблему: <escalate:check>", "Нашёл проблему: ")]
+    [InlineData("Понял. <team:talk", "Понял. ")]
+    [InlineData("обычный текст без маркеров", "обычный текст без маркеров")]
+    public void TrimUnresolvedMarkerOpen_ПрячетТелоЕщёНеЗакрытогоМаркера(string input, string expected)
+    {
+        SessionManager.TrimUnresolvedMarkerOpen(input).Should().Be(expected);
+    }
+
+    // Волна 6: интеграционная проверка живой трансляции через реальный OnMessageAsync — маркер,
+    // разбитый на несколько TextDeltaMessage-чанков (как реально стримит CLI — символ за
+    // символом или короткими группами), не должен долетать до клиента ни целиком, ни частично
+    // ни в одной из дельт.
+    [Fact]
+    public async Task ЖиваяТрансляция_МаркерРазбитПоЧанкам_НеПротекаетНиВОднойДельте()
+    {
+        var (session, _, _) = await MakeTeamStabAsync("ti-stream-filter");
+        var acc = new TurnAccumulator(new List<StoredMessage>());
+        string[] chunks =
+        [
+            "Каждый файл — отдельная подзадача, ", "можно запустить параллельно.\n\n",
+            "<team:wo", "rk>", "постановка для планировщика ", "с деталями", "</team:work>",
+            " Готово.",
+        ];
+
+        foreach (var chunk in chunks)
+            await InvokeOnMessageAsync(session.Id, acc, new TextDeltaMessage(chunk), TestRunId);
+
+        var deltas = _sentMessages.OfType<TextDeltaMessage>().Select(m => m.Text).ToList();
+        deltas.Should().NotBeEmpty();
+        foreach (var d in deltas)
+        {
+            d.Should().NotContain("<team:work>");
+            d.Should().NotContain("</team");
+            d.Should().NotContain("<team:wo");
+        }
+        string.Concat(deltas).Should().Be(
+            "Каждый файл — отдельная подзадача, можно запустить параллельно.\n\n Готово.");
+    }
+
+    // Ход оборвался (рестарт/упавший процесс) СРАЗУ после незавершённого хвоста, похожего на
+    // начало маркера, — живая трансляция придержала его (TrimAmbiguousMarkerTail), а следующей
+    // дельты, которая подтвердила бы или опровергла маркер, уже не будет. Конец хода обязан
+    // довесить придержанный текст, а не потерять его молча.
+    [Fact]
+    public async Task ЖиваяТрансляция_ХодОборванПослеНезавершённогоХвоста_ДовешиваетЕгоНаКонцеХода()
+    {
+        var (session, _, _) = await MakeTeamStabAsync("ti-stream-catchup");
+        var acc = new TurnAccumulator(new List<StoredMessage>());
+
+        await InvokeOnMessageAsync(session.Id, acc,
+            new TextDeltaMessage("Собираю план, минуту <team:wo"), TestRunId);
+        _sentMessages.OfType<TextDeltaMessage>().Select(m => m.Text)
+            .Should().ContainSingle().Which.Should().Be("Собираю план, минуту ",
+                "хвост «<team:wo» ещё может дорасти до маркера следующей дельтой, поэтому придержан");
+
+        await InvokeOnMessageAsync(session.Id, acc,
+            new ErrorMessage("Сервер был перезапущен во время хода — ход прерван"), TestRunId);
+
+        var all = _sentMessages.OfType<TextDeltaMessage>().Select(m => m.Text).ToList();
+        string.Concat(all).Should().Be("Собираю план, минуту <team:wo",
+            "придержанный хвост дальше ничем не резолвится — конец хода обязан довесить его как есть");
     }
 
     [Fact]

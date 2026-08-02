@@ -29,6 +29,7 @@ public class TaskExecutionServiceJoinTests : IDisposable
     private readonly PersonaManager _personas;
     private readonly NotificationStore _notifStore;
     private readonly TaskExecutionService _sut;
+    private readonly UserStore _userStore;
 
     public TaskExecutionServiceJoinTests()
     {
@@ -38,10 +39,12 @@ public class TaskExecutionServiceJoinTests : IDisposable
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["DataPath"] = Path.Combine(_dir, "projects.json"),
+                ["DefaultProjectsPath"] = Path.Combine(_dir, "homes"),
             })
             .Build();
 
         var userStore = new UserStore(config, new ClaudeHomeServer.Tests.Helpers.FakeHostEnvironment(), NullLogger<UserStore>.Instance);
+        _userStore = userStore;
         var appSettings = new AppSettingsService(config);
         var projectManager = new ProjectManager(config, userStore, appSettings);
         var personas = new PersonaManager(config);
@@ -116,6 +119,44 @@ public class TaskExecutionServiceJoinTests : IDisposable
         var task = _tasks.Create(null, ownerId, new CreateTaskRequest("Проверка join-а"));
         _tasks.MarkClaudeStarted(task.Id, "sess-1", DateTime.UtcNow);
         return _tasks.GetById(task.Id)!;
+    }
+
+    // ─── (е) волна 6: гонка двух конкурентных ExecuteAsync одной задачи ─────
+
+    // Guard «одна живая сессия на задачу» в ExecuteAsync читает LinkedSessionId ДО того, как
+    // CreateAsync/MarkClaudeStarted успеют его выставить — окно в секунды на подъём CLI-процесса.
+    // Живая приёмка волны 5: первый вызов tasks_run_executor иногда «падал», координатор
+    // ретраил — и раньше второй конкурентный вызов проскакивал мимо гарда в это окно, поднимая
+    // ВТОРОГО исполнителя на ту же задачу (следствие — задвоенный доклад TryDeliverCompletionAsync,
+    // т.к. оба исполнителя её закрывают). In-memory claim (_launching) закрывает окно на входе
+    // метода: второй конкурентный вызов получает явный отказ вместо гонки.
+    [Fact]
+    public async Task ExecuteAsync_ДваКонкурентныхВызоваОднойЗадачи_ЗапускаетРовноОдногоИсполнителя()
+    {
+        var user = _userStore.Add("race-owner", "password123", "user");
+        var task = _tasks.Create(null, user.Id, new CreateTaskRequest("Гонка запуска исполнителя"));
+
+        var call1 = InvokeExecuteAsyncSafe(task);
+        var call2 = InvokeExecuteAsyncSafe(task);
+        var results = await Task.WhenAll(call1, call2);
+
+        results.Count(r => r.Ok).Should().Be(1, "исполнитель должен запуститься ровно один раз");
+        var failure = results.SingleOrDefault(r => !r.Ok);
+        failure.Error.Should().NotBeNull("второй конкурентный вызов обязан получить явный отказ");
+        failure.Error.Should().ContainAny("уже запускается", "уже работает сессия");
+    }
+
+    private async Task<(bool Ok, string? Error)> InvokeExecuteAsyncSafe(TaskItem task)
+    {
+        try
+        {
+            await _sut.ExecuteAsync(task, auto: false);
+            return (true, null);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return (false, ex.Message);
+        }
     }
 
     private async Task<int> CountNotificationsAsync(string ownerId) =>

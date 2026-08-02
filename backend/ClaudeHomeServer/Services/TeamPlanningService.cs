@@ -164,19 +164,23 @@ public class TeamPlanningService(
         sb.AppendLine("5. files — файлы/папки во владении под-задачи; doneCriteria — как проверить, что готово.");
         sb.AppendLine("6. assumptions — что ты додумал за человека: неочевидные решения, принятые без его ответа. " +
                       "Он утверждает их вместе с планом, поэтому пиши по делу и без воды. Нечего додумывать — пустой список.");
+        sb.AppendLine("7. intent — замысел на 3–5 строк: к чему идём, какие ключевые решения приняты и что " +
+                      "осознанно не делаем. Это то, что человек читает ПЕРВЫМ, ещё до состава под-задач, — " +
+                      "по нему он и проверяет, что команда поняла задачу верно. Без технических деталей — " +
+                      "им место в под-задачах.");
         if (previous is not null)
-            sb.AppendLine("7. changes — чем этот план отличается от предыдущего: по строке на изменение " +
+            sb.AppendLine("8. changes — чем этот план отличается от предыдущего: по строке на изменение " +
                           "(добавлено, убрано, переехало в другую волну, сменился исполнитель).");
         sb.AppendLine();
         sb.AppendLine("Ответь ТОЛЬКО JSON-объектом без пояснений и без markdown-обёртки:");
         sb.AppendLine(previous is null
             ? """
-            {"summary":"одна строка что делаем","assumptions":[""],
+            {"summary":"одна строка что делаем","intent":"замысел на 3-5 строк","assumptions":[""],
              "subtasks":[{"title":"","goal":"","executorPersonaId":"","executorRationale":"",
                           "files":[""],"wave":1,"doneCriteria":""}]}
             """
             : """
-            {"summary":"одна строка что делаем","assumptions":[""],"changes":[""],
+            {"summary":"одна строка что делаем","intent":"замысел на 3-5 строк","assumptions":[""],"changes":[""],
              "subtasks":[{"title":"","goal":"","executorPersonaId":"","executorRationale":"",
                           "files":[""],"wave":1,"doneCriteria":""}]}
             """);
@@ -257,6 +261,7 @@ public class TeamPlanningService(
                 // с ответами человека может не быть и допущений.
                 Assumptions = ReadStringArray(root, "assumptions"),
                 Changes = ReadStringArray(root, "changes"),
+                Intent = ReadString(root, "intent")?.Trim() ?? "",
             };
 
             foreach (var e in arr.EnumerateArray())

@@ -42,6 +42,16 @@ public class TaskExecutionService
     // Среда исполнения владельца: путь справочника в постановке должен быть адресуем
     // ИЗ неё, а не с хоста. null — считаем среду локальной (перевод тождественный).
     private readonly Execution.ILauncherFactory? _launchers;
+    // Волна 6 (живая приёмка волны 5): гард «не более одной живой сессии на задачу» ниже
+    // читает task.LinkedSessionId ДО того, как CreateAsync/MarkClaudeStarted успеют его
+    // выставить — секунды на подъём CLI-процесса. Второй конкурентный вызов ExecuteAsync той
+    // же задачи (координатор ретраит tasks_run_executor, решив, что первый вызов завис/упал)
+    // проскакивал в это окно мимо гарда и поднимал ВТОРОГО исполнителя на ту же задачу —
+    // отсюда и «падает без причины» у первого вызова, и задвоенный доклад о завершении у
+    // TaskExecutionService.ReportToDelegatorAsync (оба исполнителя её закрывают). In-memory
+    // claim на входе метода закрывает окно: конкурентный вызов получает мгновенный явный отказ
+    // вместо гонки, а не решает загадочную «первую» ошибку молча.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _launching = new();
 
     public TaskExecutionService(
         TaskManager tasks, SessionManager sessions, PersonaManager personas,
@@ -85,6 +95,31 @@ public class TaskExecutionService
     {
         if (task.Status == TaskItemStatus.Done)
             throw new InvalidOperationException("Задача уже завершена");
+        if (task.OwnerId is null)
+            throw new InvalidOperationException("У задачи нет владельца");
+
+        // Claim ДО гарда «одна сессия на задачу»: сам гард читает LinkedSessionId, который
+        // этот же метод выставит только через несколько строк ниже (после подъёма CLI-процесса)
+        // — без claim'а конкурентный вызов проходит гард мимо (см. комментарий у поля _launching).
+        if (!_launching.TryAdd(task.Id, 0))
+            throw new InvalidOperationException("По задаче уже запускается исполнитель — подождите и повторите");
+        try
+        {
+            return await ExecuteClaimedAsync(task, auto).ConfigureAwait(false);
+        }
+        finally
+        {
+            // Снимается и при успехе, и при провале: успешный запуск к этому моменту уже
+            // выставил LinkedSessionId (MarkClaudeStarted ниже) — дальнейшие повторные вызовы
+            // держит штатный гард «одна сессия на задачу», claim им больше не нужен.
+            _launching.TryRemove(task.Id, out _);
+        }
+    }
+
+    private async Task<TaskItem> ExecuteClaimedAsync(TaskItem task, bool auto)
+    {
+        // Инвариант проверен в ExecuteAsync ДО claim'а; повторяем ради nullability-анализа
+        // этого метода (граница методов рвёт поток null-check из вызывающего)
         if (task.OwnerId is null)
             throw new InvalidOperationException("У задачи нет владельца");
 

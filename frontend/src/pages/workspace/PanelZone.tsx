@@ -29,14 +29,14 @@ import { C, ISLAND, SHADOW, PANEL_ANIM } from '../../lib/design';
 import { ICON_STROKE } from '../../components/ui/icons';
 import { PanelShell } from '../../components/ui/PanelShell';
 import { PanelRail, RAIL_W, RAIL_GAP, type RailItem } from '../../components/ui/PanelRail';
-import { PanelDropGuide, PanelDropLine, PanelDropSpot, SEP_HIT, sepShift } from '../../components/ui/PanelDropGuide';
+import { PanelDropGuide, PanelDropLine, SEP_HIT, sepShift } from '../../components/ui/PanelDropGuide';
 import { IslandSplitter } from '../../components/ui/IslandSplitter';
 import { useWindowWidth } from '../../lib/breakpoints';
 import {
   PANEL_META, PANEL_KEYS, PROJECT_KEYS, SESSION_KEYS, TOOLS_KEYS, WORKSPACE_KEYS,
   isFullHeight, type PanelKey, type Zone,
 } from './panelCatalog';
-import { wsPanels, homeOf, isZoneCollapsed, nextPlacement, zoneOf, PANEL_MIN_H, type PanelZonesStore } from './panelStackState';
+import { wsPanels, homeOf, isZoneCollapsed, nextPlacement, zoneOf, type PanelZonesStore } from './panelStackState';
 import { usePanelColResize, usePanelDnd, usePanelRowResize, usePanelWidthDrag } from './zoneGestures';
 import { usePanelPeek } from './panelPeek';
 import { useRailHover } from './railHover';
@@ -78,7 +78,7 @@ interface Props {
   // Рельсу целиком прячем, когда показывать нечего (у чата без артефактов иначе
   // торчала бы пустая полоса)
   hideWhenEmpty?: boolean;
-  // Терминал и Preview доступны только при включённых инструментах проекта
+  // Терминал и Сервисы доступны только при включённых инструментах проекта
   toolsEnabled?: boolean;
   // Планшет/телефон: одна-две панели, drawer поверх на узком экране, без DnD и колонок
   compact?: boolean;
@@ -549,7 +549,7 @@ export function PanelZone({
         onMouseLeave: () => peeked.hide(),
       } : undefined}
       footer={railFooter}
-      // Три группы: содержимое ПРОЕКТА, инструменты запуска (Терминал, Preview) и
+      // Три группы: содержимое ПРОЕКТА, инструменты запуска (Терминал, Сервисы) и
       // панели ТЕКУЩЕЙ СЕССИИ. Разделители между ними PanelRail рисует сам и убирает
       // вместе с пустой группой — выключенные инструменты уносят и свою черту.
       groups={[railGroup(PROJECT_KEYS), railGroup(TOOLS_KEYS), railGroup(SESSION_KEYS)]}
@@ -620,28 +620,16 @@ export function PanelZone({
     />
   );
 
-  // Призрак места: пунктирная карточка с иконкой панели — тот же язык, что у
-  // большого места вставки при перетаскивании, только без мишени дропа.
+  // Призрак места: ВСЕГДА тонкая линия у кромки — «панель встанет сюда».
+  // Большой прямоугольник (PanelDropSpot) оставлен только за ПЕРЕТАСКИВАНИЕМ: там
+  // он ещё и мишень, в которую надо попасть курсором, поэтому обязан быть крупным.
+  // У наведения ловить нечего — карточка в полколонки, вспыхивающая под курсором
+  // при каждом проходе вдоль рельсы, шумит сильнее, чем подсказывает.
+  //
+  // Нулевая высота в потоке + absolute-линия у кромки: панели не сдвигаются,
+  // знак совпадает с местом вставки при перетаскивании (base 0, edge 'end').
   // pointerEvents: none — призрак висит в раскладке, но курсору не мешает.
-  // Знак места — тот же, что при перетаскивании, и по тому же правилу: если у
-  // колонки свободный низ (её панели стоят по контенту — ряд у центра), панель
-  // займёт его целиком, рисуем прямоугольник; если низа нет (ряд растянут до
-  // кромки) — она втиснется стыком к соседям, рисуем линию. Мишени у наведения
-  // нет: pointerEvents none.
-  const ghostRoomy = !ghostNewCol && ghostCol >= 0
-    && colByContent(columns[ghostCol].keys, ghostCol);
-  // Место в растянутой колонке: линию рисуем ОВЕРЛЕЕМ у её нижней кромки, а не
-  // блоком в потоке. Блок (flexShrink:0) отжимал бы растянутые панели вверх на свою
-  // высоту — «задирал» их при каждом наведении. Оверлей стоит ровно там, куда
-  // встаёт перетаскиваемая панель (та же геометрия, что у rowGuide 'end').
-  const ghostBox = ghostKey && (ghostRoomy ? (
-    <PanelDropSpot
-      icon={PANEL_META[ghostKey].Icon}
-      style={{ flex: 1, minHeight: PANEL_MIN_H, pointerEvents: 'none' }}
-    />
-  ) : (
-    // Нулевая высота в потоке + absolute-линия у кромки: панели не сдвигаются,
-    // знак совпадает с местом вставки при перетаскивании (base 0, edge 'end').
+  const ghostBox = ghostKey && (
     <div style={{ height: 0, position: 'relative', pointerEvents: 'none' }}>
       <div style={{
         position: 'absolute', left: 0, right: 0, top: -SEP_HIT / 2, height: SEP_HIT,
@@ -650,10 +638,7 @@ export function PanelZone({
         <PanelDropLine axis="y" shift={sepShift(0)} />
       </div>
     </div>
-  ));
-  // Зазор перед местом в занятой колонке — как между панелями. Линия свой воздух
-  // несёт сама (коридор SEP_HIT), поэтому зазор нужен только прямоугольнику.
-  const ghostGap = ghostRoomy ? <div style={{ height: GAP, flexShrink: 0 }} /> : null;
+  );
 
   // Вертикальная линия «здесь заведётся новая колонка». Геометрия дословно как у
   // крайней направляющей при перетаскивании (PanelDropGuide с base 0): нулевая
@@ -754,10 +739,11 @@ export function PanelZone({
                 доходить до кромки. */}
             {rowGuide(col, vi, col.keys.length, 0, 'end',
               colByContent(col.keys, vi) && ghostCol !== vi)}
-            {/* Место будущей панели забирает низ колонки целиком: растяжимая
-                направляющая рядом с ним не растягивается, иначе делила бы остаток
-                пополам и призрак отрывался бы от панели полосой пустоты */}
-            {ghostKey && ghostCol === vi && <>{ghostGap}{ghostBox}</>}
+            {/* Место будущей панели — линия у нижней кромки последней панели.
+                Растяжимая направляющая рядом с ним выключена (ghostCol !== vi
+                выше): она забрала бы свободный низ колонки и утащила линию к
+                самому низу, хотя панель встанет вплотную к соседке */}
+            {ghostKey && ghostCol === vi && ghostBox}
           </div>
         </Fragment>
       ))}

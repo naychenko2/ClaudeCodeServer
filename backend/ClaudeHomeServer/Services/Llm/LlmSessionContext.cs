@@ -176,4 +176,17 @@ public sealed record LlmSessionContext(
     // запуске CLI (ClaudeRuntimeSettings). Решение принимается по персоне, не по ходу —
     // Tool-ключ «browser» с дефолтом по роли (тестировщику включён). true — как раньше:
     // чат без персоны и все прочие пути ничего не теряют.
-    bool BrowserEnabled = true);
+    bool BrowserEnabled = true,
+    // Приёмник снимков промпта хода: принимает черновик, возвращает id записанного снимка
+    // (null — записать не удалось; снимок диагностический и ход не роняет). Замыкает
+    // Session.Id на стороне SessionManager — адаптер ключа хранилища не знает.
+    Func<PromptSnapshotDraft, string?>? PromptSnapshotSink = null,
+    // Дописать в уже записанный снимок состав инструментов и статусы MCP-серверов: они
+    // известны только из system/init, который приходит после старта процесса.
+    // Аргументы: id снимка, имена инструментов, серверы.
+    Action<string, IReadOnlyList<string>, IReadOnlyList<McpServerInfo>>? PromptSnapshotToolsSink = null,
+    // Корень профиля claude CLI (CLAUDE_CONFIG_DIR) этого хода: оттуда берутся глобальный
+    // CLAUDE.md и каталог скиллов для блока «слой CLI». Резолвится в SessionManager
+    // (ConfigRootFor знает раскладку профилей и песочницы), сюда приходит готовым;
+    // null — слой CLI собирается без файлов профиля.
+    string? CliConfigRoot = null);

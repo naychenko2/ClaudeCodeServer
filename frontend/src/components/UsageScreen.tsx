@@ -235,7 +235,8 @@ const CABINET_URL: Record<string, string> = {
 
 function ProviderTab({ providerKey, data }: { providerKey: string; data: ProviderUsage | null | undefined }) {
   const name = providerLabel(providerKey);
-  if (!providerCapsByKey(providerKey).hasBalance)
+  const caps = providerCapsByKey(providerKey);
+  if (!caps.hasBalance)
     return (
       <div style={{ padding: '36px 12px', textAlign: 'center', color: C.textMuted, fontSize: 12.5, lineHeight: 1.5 }}>
         <div style={{ fontSize: 24, marginBottom: 6, opacity: 0.5 }}>◌</div>
@@ -248,15 +249,17 @@ function ProviderTab({ providerKey, data }: { providerKey: string; data: Provide
         )}
       </div>
     );
-  if (data === undefined)
-    return <div style={{ padding: '40px 0', textAlign: 'center', color: C.textMuted, fontSize: 13 }}>Загрузка…</div>;
-  if (data === null)
+  // Ненастроенный провайдер (ключа нет) — за балансом не ходим вовсе, поэтому data
+  // остаётся undefined; подсказка та же, что и при отказе бэка
+  if (caps.configured === false || data === null)
     return (
       <div style={{ padding: '36px 12px', textAlign: 'center', color: C.textMuted, fontSize: 12.5, lineHeight: 1.5 }}>
         <div style={{ fontSize: 24, marginBottom: 6, opacity: 0.5 }}>◌</div>
         {name} не подключён. Добавьте API-ключ (<span style={{ fontFamily: FONT.mono }}>LlmProviders:{providerKey}:ApiKey</span>), чтобы видеть баланс и расход.
       </div>
     );
+  if (data === undefined)
+    return <div style={{ padding: '40px 0', textAlign: 'center', color: C.textMuted, fontSize: 13 }}>Загрузка…</div>;
 
   const snaps = data.snapshots ?? [];
   const cur = data.balance ? parseFloat(data.balance.totalBalance) : NaN;
@@ -567,7 +570,10 @@ export function UsageScreen({ onClose }: { onClose: () => void }) {
     api.fal.account(7).then(d => { if (!c) setFalBalance(d.enabled ? (d.balance ?? null) : null); }).catch(() => { if (!c) setFalBalance(null); });
     api.glif.account().then(d => { if (!c) setGlifBalance(d.enabled ? (d.balance ?? null) : null); }).catch(() => { if (!c) setGlifBalance(null); });
     for (const key of cliProviderKeys()) {
-      if (!providerCapsByKey(key).hasBalance) continue;
+      // Ненастроенный провайдер (configured=false) отдал бы 404 «Провайдер не настроен» —
+      // вкладка и без запроса знает, что показать
+      const caps = providerCapsByKey(key);
+      if (!caps.hasBalance || caps.configured === false) continue;
       api.providers.usage(key)
         .then(d => { if (!c) setProvData(prev => ({ ...prev, [key]: d })); })
         .catch(() => { if (!c) setProvData(prev => ({ ...prev, [key]: null })); });

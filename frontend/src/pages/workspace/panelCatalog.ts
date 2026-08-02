@@ -50,7 +50,8 @@ export const PANEL_META: Record<PanelKey, { title: string; Icon: LucideIcon }> =
   graph:    { title: 'Граф',      Icon: Network },
   team:     { title: 'Команда',   Icon: Users },
   terminal: { title: 'Терминал',  Icon: SquareTerminal },
-  preview:  { title: 'Preview',   Icon: MonitorPlay },
+  // Ключ остался preview (он лежит в сохранённых раскладках), подпись — «Сервисы»
+  preview:  { title: 'Сервисы',   Icon: MonitorPlay },
   plan:     { title: 'План',      Icon: ClipboardList },
   agents:   { title: 'Агенты',    Icon: Bot },
   // 'context' — досье персоны-собеседника (память/привязки/recall)

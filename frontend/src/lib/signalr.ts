@@ -202,6 +202,20 @@ export async function leaveProject(projectId: string): Promise<void> {
     await conn.invoke('LeaveProject', projectId);
 }
 
+// Подписка на вывод дев-сервера (вкладка «Логи» панели «Сервисы»). Накопленный буфер
+// приходит ОТВЕТОМ на этот вызов (а не сообщением — иначе при пере-монтировании вьюера
+// его ловят оба инстанса и лог задваивается), дальше вывод идёт событиями preview_log.
+export async function joinPreviewLog(projectId: string, serviceId: string): Promise<string | null> {
+  const conn = await ensureConnected();
+  return conn.invoke<string | null>('JoinPreviewLog', projectId, serviceId);
+}
+
+export async function leavePreviewLog(projectId: string, serviceId: string): Promise<void> {
+  const conn = getConnection();
+  if (conn.state === signalR.HubConnectionState.Connected)
+    await conn.invoke('LeavePreviewLog', projectId, serviceId);
+}
+
 // Группа для realtime-обновления списка чатов вне проекта (статусы)
 export async function joinUser(userId: string): Promise<void> {
   const conn = await ensureConnected();

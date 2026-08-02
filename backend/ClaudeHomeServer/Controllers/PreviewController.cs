@@ -43,17 +43,32 @@ public class PreviewController : ControllerBase
 
         var discovered = await _discovery.DiscoverAsync(project);
         var running = _devServer.GetRunning(projectId, UserId).ToDictionary(r => r.ServiceId);
-        var activeId = _devServer.GetActiveServiceId(projectId, UserId);
+        var activeId = _devServer.GetActiveServiceId(projectId, UserId)
+            ?? _devServer.GetActiveExternal(projectId)?.ServiceId;
+
+        // Сервисы с известным портом, которых мы не запускали, пробуем на слух: порт
+        // отвечает — значит сервис поднят снаружи (Rider, терминал, второй инстанс).
+        // Скана слушающих портов машины при этом не делаем: щупаем только свои порты.
+        var external = await ProbeExternalAsync(discovered, running);
 
         var services = new List<ServiceDto>();
         var covered = new HashSet<string>();
+        var byId = discovered.ToDictionary(s => s.Id);
         foreach (var s in discovered)
         {
-            running.TryGetValue(s.Id, out var run);
             covered.Add(s.Id);
+            if (s.Members is { Length: > 0 })
+            {
+                services.Add(GroupDto(s, byId, running, external));
+                continue;
+            }
+            running.TryGetValue(s.Id, out var run);
+            var isExternal = run is null && external.Contains(s.Id);
             services.Add(new ServiceDto(s.Id, s.Name, s.Source, s.Command, s.Args, s.Cwd,
                 s.SuggestedPort, s.AutoPort, s.Saved,
-                run?.Status ?? "idle", run?.Port, run?.Error));
+                run?.Status ?? (isExternal ? "external" : "idle"),
+                run?.Port ?? (isExternal ? s.SuggestedPort : null),
+                run?.Error, s.Members));
         }
         // Запущенные сервисы, которых нет в инференсе (напр. кастомная разовая команда).
         foreach (var run in running.Values)
@@ -66,10 +81,102 @@ public class PreviewController : ControllerBase
         return Ok(new { services, activeServiceId = activeId });
     }
 
+    /// <summary>
+    /// Статус группы — производная от участников: запущена, только когда живы все;
+    /// «starting», пока поднимается хоть один; ошибка первого упавшего видна целиком.
+    /// Порт берём у первого участника, которому есть что показать в превью.
+    /// </summary>
+    private static ServiceDto GroupDto(ProjectServiceInfo group, Dictionary<string, ProjectServiceInfo> byId,
+        Dictionary<string, RunningServiceInfo> running, HashSet<string> external)
+    {
+        var members = group.Members!.Where(byId.ContainsKey).ToArray();
+        var states = members.Select(id =>
+        {
+            running.TryGetValue(id, out var run);
+            return run?.Status ?? (external.Contains(id) ? "external" : "idle");
+        }).ToList();
+
+        var status = states.Count == 0 ? "idle"
+            : states.Any(s => s == "error") ? "error"
+            : states.Any(s => s == "starting") ? "starting"
+            : states.All(s => s is "started" or "external") ? "started"
+            // Часть поднята, часть нет — это не «запускается»: без своего статуса
+            // группа выглядела бы вечно стартующей
+            : states.Any(s => s is "started" or "external") ? "partial"
+            : "idle";
+
+        var port = members
+            .Select(id => running.TryGetValue(id, out var r) ? r.Port : (external.Contains(id) ? byId[id].SuggestedPort : null))
+            .FirstOrDefault(p => p is > 0);
+        var error = members
+            .Select(id => running.TryGetValue(id, out var r) ? r.Error : null)
+            .FirstOrDefault(e => !string.IsNullOrEmpty(e));
+
+        return new ServiceDto(group.Id, group.Name, group.Source, group.Command, group.Args, group.Cwd,
+            group.SuggestedPort, group.AutoPort, group.Saved, status, port, error, members);
+    }
+
+    /// <summary>
+    /// Id сервисов, чей порт слушается кем-то со стороны. Пробуем параллельно и только
+    /// те порты, которые вычислил discovery: чужие порты машины нас не касаются.
+    /// </summary>
+    private static async Task<HashSet<string>> ProbeExternalAsync(
+        List<ProjectServiceInfo> discovered, Dictionary<string, RunningServiceInfo> running)
+    {
+        var candidates = discovered
+            .Where(s => s.SuggestedPort is > 0 && !running.ContainsKey(s.Id))
+            .ToList();
+        if (candidates.Count == 0) return [];
+
+        var results = await Task.WhenAll(candidates.Select(async s =>
+            (s.Id, Listening: await DevServerService.IsPortListeningAsync(s.SuggestedPort!.Value))));
+        return results.Where(r => r.Listening).Select(r => r.Id).ToHashSet();
+    }
+
+    /// <summary>
+    /// Показать в превью сервис, поднятый вне продукта.
+    ///
+    /// Порт НЕ принимается от клиента: он берётся из конфигурации сервиса этого проекта.
+    /// Иначе эндпоинт превратился бы в туннель на любой localhost-порт хоста (соседний
+    /// инстанс продукта, Dify, чужая админка) — под авторизацией владельца проекта.
+    /// </summary>
+    [HttpPost("/api/projects/{projectId}/preview/active-external")]
+    public async Task<IActionResult> SetActiveExternal(string projectId, [FromBody] PreviewActiveRequest req)
+    {
+        var project = OwnedProject(projectId);
+        if (project is null) return Forbid();
+        if (string.IsNullOrWhiteSpace(req.ServiceId))
+            return BadRequest(new { error = "serviceId не указан" });
+
+        var svc = (await _discovery.DiscoverAsync(project)).FirstOrDefault(s => s.Id == req.ServiceId);
+        if (svc is null) return NotFound(new { error = "Сервис не найден" });
+        if (svc.SuggestedPort is not > 0)
+            return BadRequest(new { error = "У сервиса не задан порт — непонятно, где он слушает" });
+
+        if (!await DevServerService.IsPortListeningAsync(svc.SuggestedPort.Value))
+            return BadRequest(new { error = $"На порту {svc.SuggestedPort} никто не слушает" });
+
+        _devServer.SetActiveExternal(projectId, svc.Id, svc.SuggestedPort.Value);
+        _log.LogInformation("Проект {ProjectId}: превью указывает на внешний сервис {ServiceId} (:{Port})",
+            projectId, svc.Id, svc.SuggestedPort);
+        return Ok(new { activeServiceId = svc.Id, port = svc.SuggestedPort });
+    }
+
     [HttpPost("/api/projects/{projectId}/preview/start")]
     public async Task<IActionResult> Start(string projectId, [FromBody] PreviewStartRequest req)
     {
-        if (OwnedProject(projectId) is null) return Forbid();
+        var project = OwnedProject(projectId);
+        if (project is null) return Forbid();
+
+        // Составной запуск: команды у группы нет, поднимаем каждого участника его
+        // собственной конфигурацией. Порт возвращаем первого, кому есть что показать.
+        if (!string.IsNullOrWhiteSpace(req.ServiceId))
+        {
+            var known = await _discovery.DiscoverAsync(project);
+            var group = known.FirstOrDefault(s => s.Id == req.ServiceId && s.Members is { Length: > 0 });
+            if (group != null) return await StartGroupAsync(projectId, group, known);
+        }
+
         if (string.IsNullOrWhiteSpace(req.Command))
             return BadRequest(new { error = "Команда не указана" });
 
@@ -83,13 +190,54 @@ public class PreviewController : ControllerBase
         return Ok(new { status = result.Status, port = result.Port, error = result.Error, serviceId });
     }
 
+    private async Task<IActionResult> StartGroupAsync(string projectId, ProjectServiceInfo group,
+        List<ProjectServiceInfo> known)
+    {
+        var byId = known.ToDictionary(s => s.Id);
+        var results = new List<(string Id, DevServerStartResult Result)>();
+
+        // Последовательно, а не параллельно: у составных конфигураций порядок осмыслен
+        // (в Rider следующий шаг ждёт порта предыдущего), да и лог старта читается ровнее
+        foreach (var id in group.Members!)
+        {
+            if (!byId.TryGetValue(id, out var member)) continue;
+            // Участник уже поднят снаружи — запускать нечего, иначе упрёмся в занятый порт
+            if (member.SuggestedPort is > 0 &&
+                _devServer.GetRunning(projectId, UserId).All(r => r.ServiceId != id) &&
+                await DevServerService.IsPortListeningAsync(member.SuggestedPort.Value))
+            {
+                _devServer.SetActiveExternal(projectId, id, member.SuggestedPort.Value);
+                continue;
+            }
+            results.Add((id, await _devServer.StartAsync(projectId, UserId, id, member.Name,
+                member.Command, member.Args, member.Cwd, member.SuggestedPort, member.AutoPort, member.Env)));
+        }
+
+        var failed = results.FirstOrDefault(r => !r.Result.Success);
+        var port = results.Select(r => r.Result.Port).FirstOrDefault(p => p is > 0);
+        return Ok(new
+        {
+            status = failed.Id != null ? "error" : results.Count == 0 ? "idle" : "started",
+            port,
+            error = failed.Result?.Error,
+            serviceId = group.Id,
+        });
+    }
+
     [HttpPost("/api/projects/{projectId}/preview/stop")]
     public async Task<IActionResult> Stop(string projectId, [FromBody] PreviewStopRequest? req)
     {
-        if (OwnedProject(projectId) is null) return Forbid();
+        var project = OwnedProject(projectId);
+        if (project is null) return Forbid();
         if (string.IsNullOrWhiteSpace(req?.ServiceId))
             return BadRequest(new { error = "serviceId не указан" });
-        await _devServer.StopAsync(projectId, UserId, req.ServiceId!);
+
+        // Группу останавливаем целиком: её участники — обычные сервисы реестра
+        var group = (await _discovery.DiscoverAsync(project))
+            .FirstOrDefault(s => s.Id == req.ServiceId && s.Members is { Length: > 0 });
+        foreach (var id in group?.Members ?? [req.ServiceId!])
+            await _devServer.StopAsync(projectId, UserId, id);
+
         return Ok(new { status = "stopped" });
     }
 
@@ -138,7 +286,9 @@ public class PreviewController : ControllerBase
 public record ServiceDto(
     string Id, string Name, string Source, string Command, string[] Args, string? Cwd,
     int? SuggestedPort, bool AutoPort, bool Saved,
-    string Status, int? RunningPort, string? Error);
+    string Status, int? RunningPort, string? Error,
+    // Составной запуск: id входящих сервисов (у обычного сервиса — null)
+    string[]? Members = null);
 
 public record PreviewStartRequest(
     string Command, string[]? Args = null, int? Port = null,

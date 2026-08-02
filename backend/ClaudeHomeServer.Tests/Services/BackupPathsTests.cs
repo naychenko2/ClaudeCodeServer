@@ -47,6 +47,8 @@ public class BackupPathsTests
     [Theory]
     [InlineData("logs/server.log")]
     [InlineData("sandbox-tmp/turn-1/mcp.json")]
+    // Снимки промпта ходов — диагностический лог, восстанавливать нечего
+    [InlineData("prompt-snapshots/chat1/1700000000000-abcd.json.gz")]
     [InlineData("backups/ccs-old.zip")]
     [InlineData("backups-secrets/ccs-secrets-1.zip")]
     [InlineData(".backup-staging/users.json")]

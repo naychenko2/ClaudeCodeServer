@@ -54,7 +54,13 @@ public class FileService(
         relativePath.Equals(".claude/worktrees", StringComparison.OrdinalIgnoreCase) ||
         relativePath.StartsWith(".claude/worktrees/", StringComparison.OrdinalIgnoreCase);
 
-    // Защита от path traversal
+    // Защита от path traversal.
+    // ВАЖНО: второй аргумент — путь ОТНОСИТЕЛЬНО корня; ведущие разделители срезаются.
+    // Абсолютный путь сюда передавать нельзя: на Linux «/a/b» станет относительным «a/b»
+    // и приклеится к корню — вместо отказа получится путь внутри проекта, то есть проверка
+    // «ссылка наружу» молча исчезнет. На Windows подмена незаметна (Path.Combine отдаёт
+    // приоритет второму абсолютному пути), поэтому такое ловится только в CI на Linux.
+    // Есть абсолютный путь — сначала Path.GetRelativePath(root, full).
     internal static string SafeJoin(string root, string relativePath)
     {
         var full = Path.GetFullPath(Path.Combine(root, relativePath.TrimStart('/', '\\')));

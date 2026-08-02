@@ -21,7 +21,7 @@ export const RAW_COLOR_ALLOWED = [
   'src/components/MermaidDiagram.tsx',    // themeVariables Mermaid (обе темы)
   'src/components/CodeEditor.tsx',        // HighlightStyle CodeMirror
   'src/features/notes/NoteEditor.tsx',    // HighlightStyle CodeMirror
-  'src/components/terminal/TerminalView.tsx', // ANSI-палитра xterm.js
+  'src/lib/xtermTheme.ts',                // ANSI-палитра xterm.js (терминал + логи сервисов)
   'src/components/DrawioViewer.tsx',      // параметры темы iframe drawio
   'src/lib/widgetHtml.ts',                // тема виджета в sandbox-iframe (переменные хоста туда не доходят)
   // Палитры-данные

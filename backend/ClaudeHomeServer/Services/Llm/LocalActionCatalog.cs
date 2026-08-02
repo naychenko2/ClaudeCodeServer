@@ -82,6 +82,7 @@ public static class LocalActionCatalog
     public const string PersonaQuickCreate = "persona-quick-create";
     public const string PersonaAiTeam = "persona-ai-team";
     public const string Changelog = "changelog";
+    public const string PromptAudit = "prompt-audit";
 
     // Дефолты профилей. Переопределяются Ollama:Profiles:{small|text|large}:{NumCtx|NumPredict|TimeoutMs}.
     public static readonly IReadOnlyDictionary<CheapProfile, CheapProfileSpec> ProfileDefaults =
@@ -117,6 +118,11 @@ public static class LocalActionCatalog
         new(ChatTitle, "Заголовок чата", "Чаты", CheapProfile.Small, DefaultLocal: true),
         new(ChatRetitle, "Обновление названия чата", "Чаты", CheapProfile.Text, DefaultLocal: true),
         new(ChatExtractTasks, "Извлечение задач из чата", "Задачи", CheapProfile.Large, DefaultLocal: true),
+        // Разбор промпта хода («что тут лишнее»): вызывается человеком по кнопке, не фоном.
+        // Локаль по умолчанию выключена — разбор идёт по метаданным секций и требует
+        // рассуждения, слабая модель выдаёт общие слова вместо конкретных сокращений.
+        new(PromptAudit, "Разбор промпта хода", "Чаты", CheapProfile.Large,
+            DefaultLocal: false, Tier: ModelTier.Medium),
         // Планировщик режима «Командная реализация»: декомпозиция вводной и подбор
         // исполнителей по компетенциям. Локаль намеренно выключена — слабая модель
         // раздаёт работу случайно, а весь смысл места в осмысленном выборе персоны.

@@ -1,4 +1,4 @@
-import type { Project, ProjectGroup, ProjectTag, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, GlifAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo } from '../types';
+import type { Project, ProjectGroup, ProjectTag, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, GlifAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, PromptSnapshot, PromptSection } from '../types';
 import { request } from './offline';
 
 // Личные/админские слоты моделей: сильная/средняя/слабая.
@@ -368,6 +368,12 @@ export const api = {
       request<{ running: { serviceId: string; name: string; port: number | null; status: string; error: string | null }[]; activeServiceId: string | null }>(`/projects/${id}/preview/status`),
     previewActive: (id: string, serviceId: string) =>
       request<{ activeServiceId: string }>(`/projects/${id}/preview/active`, {
+        method: 'POST', body: JSON.stringify({ serviceId }),
+      }),
+    // Сервис поднят вне продукта (Rider, терминал) — показать его в превью.
+    // Порт выбирает сервер по конфигурации сервиса, клиент его не передаёт.
+    previewActiveExternal: (id: string, serviceId: string) =>
+      request<{ activeServiceId: string; port: number }>(`/projects/${id}/preview/active-external`, {
         method: 'POST', body: JSON.stringify({ serviceId }),
       }),
     getLaunchConfig: (id: string) =>
@@ -877,6 +883,24 @@ export const api = {
     cancelPending: (sessionId: string, messageId: string) =>
       request<void>(`/sessions/${encodeURIComponent(sessionId)}/pending/${encodeURIComponent(messageId)}`,
         { method: 'DELETE' }),
+    // Снимок промпта хода — что ушло модели (кнопка под постом). 404 — снимок вытеснен
+    // ретеншном последних 50 ходов чата
+    promptSnapshot: (sessionId: string, snapshotId: string) =>
+      request<PromptSnapshot>(
+        `/sessions/${encodeURIComponent(sessionId)}/prompt/${encodeURIComponent(snapshotId)}`),
+    // Текст одного файла слоя CLI (CLAUDE.md) — грузится, только когда строку раскрыли:
+    // в основной выдаче у него лишь размер, иначе открытие шторки тянуло бы десятки КБ
+    promptSnapshotFile: (sessionId: string, snapshotId: string, key: string) =>
+      request<PromptSection>(
+        `/sessions/${encodeURIComponent(sessionId)}/prompt/${encodeURIComponent(snapshotId)}/file?key=${encodeURIComponent(key)}`),
+    // Разбор промпта моделью. includeText=true — человек разрешил приложить фрагменты
+    // текста секций (по умолчанию уходят только метаданные)
+    // timeoutMs — это ход модели, дефолтных 30 с ему мало: обрыв по таймауту
+    // трактуется как сетевая ошибка и выглядит как «Действие недоступно офлайн»
+    analyzePrompt: (sessionId: string, snapshotId: string, includeText: boolean) =>
+      request<{ analysis: string }>(
+        `/sessions/${encodeURIComponent(sessionId)}/prompt/${encodeURIComponent(snapshotId)}/analyze`,
+        { method: 'POST', body: JSON.stringify({ includeText }), timeoutMs: 180_000 }),
   },
 
   // Чаты вне проекта (project-less)

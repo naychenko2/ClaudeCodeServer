@@ -29,6 +29,12 @@ public class StoredUserMessage(string text, string[]? attachedPaths = null, bool
     // Когда отправлено сообщение (Unix-мс UTC) — см. StoredTextMessage.Timestamp
     public long? Timestamp { get; init; } = timestamp;
 
+    // Снимок промпта, собранного для этого хода (кнопка «какой промпт ушёл» под постом).
+    // Заполняется НЕ при создании: снимок пишется позже, уже при запуске хода — поэтому set,
+    // а не init (см. TurnAccumulator.SetPromptSnapshot). null — история до этого поля,
+    // ход без нового сообщения (продолжение цикла «до готово») либо сбой записи снимка.
+    public string? PromptSnapshotId { get; set; }
+
     // Источник входящего сообщения, когда оно пришло ИЗ ДРУГОГО места: имя чужого проекта
     // либо «Вне проектов». Заполняет сервер, сравнив проекты отправителя и получателя;
     // null — источник тот же, чип в UI не нужен

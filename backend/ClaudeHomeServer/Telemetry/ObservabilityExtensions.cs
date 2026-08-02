@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using ClaudeHomeServer.Services.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -160,14 +161,20 @@ public static class ObservabilityExtensions
             var endpoint = ParseEndpoint(
                 section.GetValue<string>("Backends:Production:OtlpEndpoint"), "http://localhost:4318");
             if (endpoint is not null)
+            {
                 otelBuilder.UseOtlpExporter(OtlpExportProtocol.HttpProtobuf, endpoint);
+                QuietDownExportLogging(services);
+            }
         }
         else if (devEnabled && !exportDisabled)
         {
             var endpoint = ParseEndpoint(
                 section.GetValue<string>("Backends:Dev:OtlpEndpoint"), "http://localhost:4317");
             if (endpoint is not null)
+            {
                 otelBuilder.UseOtlpExporter(OtlpExportProtocol.Grpc, endpoint);
+                QuietDownExportLogging(services);
+            }
         }
 
         // Heartbeat — ВСЕГДА регистрируется (H4). Даже без backend'ов тики полезны
@@ -181,6 +188,32 @@ public static class ObservabilityExtensions
         AddAlerts(services, config);
 
         return services;
+    }
+
+    /// <summary>
+    /// Приглушение логов неудачного экспорта телеметрии.
+    ///
+    /// Экспортёры берут HttpClient из <c>IHttpClientFactory</c> под этими именами, а дефолтное
+    /// логирование <c>Microsoft.Extensions.Http</c> печатает каждый провалившийся запрос как
+    /// Error со стектрейсом. Коллектор поднят не всегда (на деве — почти никогда), экспорт идёт
+    /// по расписанию, и консоль превращается в ленту красных портянок, в которой не видно
+    /// настоящих ошибок. Меняем дефолтные логгеры на <see cref="QuietHttpLogger"/>:
+    /// Warning, одна строка, не чаще раза в пять минут.
+    ///
+    /// Вызывается только когда экспорт реально включён — иначе именованные клиенты никем
+    /// не создаются и настраивать нечего.
+    /// </summary>
+    private static void QuietDownExportLogging(IServiceCollection services)
+    {
+        // Общий профиль на все три клиента: троттлинг один, мёртвый коллектор = одна строка,
+        // а не три (трейсы, метрики и логи экспортируются по своим расписаниям).
+        var profile = new QuietHttpClientProfile(
+            Category: "ClaudeHomeServer.Telemetry.OtlpExport",
+            Subject: "OTLP-коллектором",
+            Consequence: "Телеметрия не уходит.");
+
+        foreach (var client in new[] { "OtlpTraceExporter", "OtlpMetricExporter", "OtlpLogExporter" })
+            services.AddQuietHttpClient(client, profile);
     }
 
     /// <summary>

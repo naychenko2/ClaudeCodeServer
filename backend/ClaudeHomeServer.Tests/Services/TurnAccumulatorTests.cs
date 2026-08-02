@@ -22,6 +22,30 @@ public class TurnAccumulatorTests : IDisposable
     }
 
     [Fact]
+    public void SetPromptSnapshot_ПривязываетСнимокКСообщениюХода()
+    {
+        var acc = new TurnAccumulator([]);
+        acc.OnUserMessage("почини сборку", []);
+
+        acc.SetPromptSnapshot("1700000000000-abcd");
+
+        acc.GetAll().OfType<StoredUserMessage>().Single()
+            .PromptSnapshotId.Should().Be("1700000000000-abcd");
+    }
+
+    [Fact]
+    public void SetPromptSnapshot_БезСообщенияХода_НеПадает()
+    {
+        // Продолжение цикла «до готово» идёт без нового сообщения человека: снимок
+        // остаётся на диске, но вешать его в ленте не на что
+        var acc = new TurnAccumulator([]);
+
+        var act = () => acc.SetPromptSnapshot("1700000000000-abcd");
+
+        act.Should().NotThrow();
+    }
+
+    [Fact]
     public void GetAll_EmptyAccumulator_ReturnsEmpty()
     {
         var acc = new TurnAccumulator([]);

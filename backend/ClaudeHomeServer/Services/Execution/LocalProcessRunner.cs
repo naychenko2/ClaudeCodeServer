@@ -31,7 +31,7 @@ public sealed class LocalProcessRunner : IProcessLauncher
     {
         var psi = new ProcessStartInfo
         {
-            FileName = spec.FileName,
+            FileName = ResolveExecutable(spec.FileName),
             UseShellExecute = false,
             RedirectStandardInput = spec.RedirectStdin,
             RedirectStandardOutput = true,
@@ -56,6 +56,57 @@ public sealed class LocalProcessRunner : IProcessLauncher
             foreach (var (k, v) in spec.Env) psi.Environment[k] = v;
 
         return psi;
+    }
+
+    /// <summary>
+    /// Имя исполняемого файла для запуска.
+    ///
+    /// На Windows `npm`, `npx`, `yarn`, `pnpm` — это .cmd-обёртки, а Process.Start с
+    /// UseShellExecute=false расширения из PATHEXT не подставляет: команда «npm» просто
+    /// не находится («Не удается найти указанный файл»). Из-за этого с хоста не стартовал
+    /// НИ ОДИН сервис, найденный разбором package.json.
+    ///
+    /// Разворачиваем имя в полный путь сами. Не нашли — возвращаем как было, чтобы
+    /// ошибка осталась прежней и понятной, а не подменялась нашей.
+    /// </summary>
+    public static string ResolveExecutable(string fileName)
+    {
+        if (!OperatingSystem.IsWindows() || string.IsNullOrWhiteSpace(fileName)) return fileName;
+        // Путь (хоть относительный) и имя с расширением ОС разбирает сама
+        if (fileName.Contains('/') || fileName.Contains('\\') || Path.HasExtension(fileName))
+            return fileName;
+
+        return FindInPath(fileName,
+            Environment.GetEnvironmentVariable("PATH"),
+            Environment.GetEnvironmentVariable("PATHEXT")) ?? fileName;
+    }
+
+    /// <summary>
+    /// Поиск команды по каталогам PATH с подстановкой расширений PATHEXT — как это делает
+    /// cmd: в каждом каталоге перебираются все расширения, и лишь потом берётся следующий.
+    /// Значения приходят параметрами, чтобы правило проверялось тестом на любой ОС.
+    /// </summary>
+    public static string? FindInPath(string fileName, string? path, string? pathext)
+    {
+        var exts = (string.IsNullOrWhiteSpace(pathext) ? ".COM;.EXE;.BAT;.CMD" : pathext)
+            .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var dirs = (path ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        foreach (var rawDir in dirs)
+        {
+            // Записи PATH нередко приходят в кавычках — Path.Combine на них спотыкается
+            var dir = rawDir.Trim('"');
+            foreach (var ext in exts)
+            {
+                try
+                {
+                    var candidate = Path.Combine(dir, fileName + ext);
+                    if (File.Exists(candidate)) return candidate;
+                }
+                catch (ArgumentException) { break; }   // мусорная запись в PATH
+            }
+        }
+        return null;
     }
 
     // Факт выброса системной переменной — в лог, по одному разу на ключ за жизнь процесса.

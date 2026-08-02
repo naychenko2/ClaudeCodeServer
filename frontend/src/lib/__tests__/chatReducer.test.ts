@@ -988,3 +988,29 @@ describe('teamImplementSnapshot', () => {
     expect(teamImplementSnapshot(rest({ modeLocked: false, savedMode: 'auto' })).modeLocked).toBe(false);
   });
 });
+
+// --- prompt_snapshot ---
+
+describe('applyServerMessage: снимок промпта хода', () => {
+  it('вешает id снимка на последнее сообщение человека', () => {
+    // Пузырь человека клиент добавляет оптимистично, событие догоняет его уже готовым
+    const s = run([
+      { type: 'user_message', text: 'почини сборку' },
+      { type: 'prompt_snapshot', snapshotId: '1700000000000-abcd', applied: true },
+    ]);
+
+    const last = s.items.findLast(i => i.kind === 'user_message');
+    expect(last && 'promptSnapshotId' in last ? last.promptSnapshotId : undefined)
+      .toBe('1700000000000-abcd');
+  });
+
+  it('без сообщения человека ленту не трогает', () => {
+    // Продолжение цикла «до готово» идёт без нового сообщения — вешать не на что
+    const before = state({ items: [{ kind: 'text', text: 'ответ' }] });
+    const s = applyServerMessage(before, msg({
+      type: 'prompt_snapshot', snapshotId: '1700000000000-abcd', applied: true,
+    }));
+
+    expect(s.items).toEqual(before.items);
+  });
+});

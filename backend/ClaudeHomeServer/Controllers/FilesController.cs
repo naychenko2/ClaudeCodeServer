@@ -568,6 +568,9 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
         return allowed.Contains(uri.Host);
     }
 
+    // Имя HttpClient для Command API OnlyOffice — под ним в Program.cs зарегистрирован тихий логгер
+    public const string OnlyOfficeCommandClient = "onlyoffice-command";
+
     // Активные edit-ключи: "{projectId}/{path}" → docKey
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _activeEditKeys = new();
     // Ключи для игнорирования в callback (пользователь нажал «Отмена»)
@@ -675,7 +678,9 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
         var ooInternalUrl = config["ReverseProxy:Clusters:onlyoffice:Destinations:default:Address"] ?? "http://localhost:8090";
         try
         {
-            var client = httpClientFactory.CreateClient();
+            // Именованный клиент с тихим логгером (Program.cs): OnlyOffice поднят не всегда,
+            // отказ здесь штатно ловится ниже и переходит в ожидание таймаута.
+            var client = httpClientFactory.CreateClient(OnlyOfficeCommandClient);
             var payload = System.Text.Json.JsonSerializer.Serialize(new { c = "forcesave", key = docKey });
             await client.PostAsync($"{ooInternalUrl}/coauthoring/CommandService.ashx",
                 new StringContent(payload, System.Text.Encoding.UTF8, "application/json"), ct);

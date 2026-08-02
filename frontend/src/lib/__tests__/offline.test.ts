@@ -128,6 +128,43 @@ describe('request: мутации офлайн', () => {
   });
 });
 
+describe('request: свой таймаут', () => {
+  // fetch, который висит до отмены и реджектит по abort — как настоящий
+  function hangUntilAbort() {
+    return (_url: string, init: RequestInit) => new Promise<never>((_resolve, reject) => {
+      init.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+    });
+  }
+
+  it('явный timeoutMs → RequestTimeoutError, связь не деградирует', async () => {
+    fetchMock.mockImplementation(hangUntilAbort());
+
+    const promise = offline.request('/sessions/s1/prompt/p1/analyze', {
+      method: 'POST', body: '{}', timeoutMs: 180_000,
+    });
+    // Ожидание вешаем ДО прокрутки таймеров: иначе реджект остаётся без обработчика
+    const assertion = expect(promise).rejects.toThrowError(offline.RequestTimeoutError);
+    await vi.advanceTimersByTimeAsync(180_000);
+    await assertion;
+
+    // Долгий ход модели — не улика против связи: приложение остаётся онлайн
+    expect(offline.getConnectionState()).toBe('online');
+  });
+
+  it('дефолтный таймаут → прежнее поведение: OfflineError и уход в офлайн', async () => {
+    fetchMock.mockImplementation(hangUntilAbort());
+
+    const promise = offline.request('/projects', { method: 'POST', body: '{}' });
+    const assertion = expect(promise).rejects.toThrowError(offline.OfflineError);
+    await vi.advanceTimersByTimeAsync(30_000);
+    await assertion;
+
+    // За 30 с успевает и ранний degraded-таймер (2 с), и промахи health-пинга —
+    // зависший запрос без явного лимита это и правда пропажа связи
+    expect(offline.getConnectionState()).toBe('offline');
+  });
+});
+
 describe('request: HTTP-ошибки', () => {
   it('401 с токеном → событие cc-unauthorized (логаут) и Error с текстом сервера', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ error: 'ключ отозван' }, 401));

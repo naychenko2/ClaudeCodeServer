@@ -32,7 +32,7 @@ import { VAR_SHIFT, VAR_W, useChatGutter } from '../lib/chatGutter';
 import { setChatContext, AI_RECOMPUTE_EVENT } from '../lib/ai/chatContext';
 import { ChatHeaderBar, type CostStats, type FalCostStats } from './chat/ChatHeaderBar';
 import { computeGlifGenStats } from './chat/glifStats';
-import { ChatProjectContext, ChatTreePathContext, ChatOpenFileContext, FalCostContext, GlifCostContext, AssistantNameContext, MediaVisibilityContext, PersonaContext, TeamPlanContext, TeamEscalationContext, type TeamPlanChatContext, type TeamEscalationChatContext } from './chat/contexts';
+import { ChatProjectContext, ChatTreePathContext, ChatSessionContext, ChatOpenFileContext, FalCostContext, GlifCostContext, AssistantNameContext, MediaVisibilityContext, PersonaContext, TeamPlanContext, TeamEscalationContext, type TeamPlanChatContext, type TeamEscalationChatContext } from './chat/contexts';
 import { WaitingIndicator } from './ui/WaitingIndicator';
 import { Modal, ModalActions } from './ui';
 import { ChatEmptyState } from './chat/EmptyState';
@@ -935,6 +935,39 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   }, [items]);
   const taskTodos = useMemo(() => (lastTaskIdx >= 0 ? computeTodos(items) : []), [items, lastTaskIdx]);
 
+  // Снимок промпта и размер контекста ДЛЯ КАЖДОГО индекса ленты: у постов ассистента
+  // своего snapshotId нет — он лежит на сообщении, которым начался ход, а contextTokens
+  // приходит только в result в конце хода. Оба разносим по ходу одним проходом:
+  // сообщение человека открывает ход, result его закрывает. ChatItemView списка items
+  // не видит, поэтому считаем здесь и отдаём пропами.
+  const turnMeta = useMemo(() => {
+    const snapshots: (string | undefined)[] = new Array(items.length);
+    const contextTokens: (number | undefined)[] = new Array(items.length);
+    let currentSnapshot: string | undefined;
+    // Границы хода: от user_message до его result. Идём вперёд за снимком, назад — за токенами
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      if (it.kind === 'user_message') currentSnapshot = it.promptSnapshotId;
+      snapshots[i] = currentSnapshot;
+    }
+    // Кэш промптов из usage того же result — единственные точные числа про кэш
+    const cache: ({ read: number; creation: number } | undefined)[] = new Array(items.length);
+    let currentTokens: number | undefined;
+    let currentCache: { read: number; creation: number } | undefined;
+    for (let i = items.length - 1; i >= 0; i--) {
+      const it = items[i];
+      if (it.kind === 'result') {
+        currentTokens = it.contextTokens;
+        currentCache = it.usage
+          ? { read: it.usage.cacheReadTokens, creation: it.usage.cacheCreationTokens }
+          : undefined;
+      }
+      contextTokens[i] = currentTokens;
+      cache[i] = currentCache;
+    }
+    return { snapshots, contextTokens, cache };
+  }, [items]);
+
   // Краткий контекст чата для командной механики «Панель экспертов» (attachContext):
   // последние ~6 реплик диалога (пользователь + ассистент), каждая обрезана до 300 символов
   const chatContext = useMemo(() => {
@@ -981,12 +1014,16 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       agentActivity={extras?.agentActivity}
       agentRenderChild={extras?.agentRenderChild}
       turnBoundaryKind={item.kind === 'session_started' ? turnBoundaries.get(i) : undefined}
+      promptSnapshotId={turnMeta.snapshots[i]}
+      turnContextTokens={turnMeta.contextTokens[i]}
+      turnCache={turnMeta.cache[i]}
     />
   ), [
     online, isWaiting, items.length, lastResultIndex, toggleThinking, allowPermission,
     denyPermission, allowAlways, answerQuestion, handleRespondPlan, planVersions,
     lastApprovedPlanIdx, mode, onOpenFile, project, handleRevert, handleRetry,
     interrupt, handleMigrateProvider, lastTaskIdx, taskTodos, changeMode, turnBoundaries,
+    turnMeta,
   ]);
 
   // Блок действий: подряд идущие карточки инструментов + изменения файлов объединяем
@@ -1334,7 +1371,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
           )
         )}
 
-        <FalCostContext.Provider value={falCostByRequest}><GlifCostContext.Provider value={glifCostByJob}><MediaVisibilityContext.Provider value={mediaVisibility}><ChatProjectContext.Provider value={projectCtx}><ChatTreePathContext.Provider value={treePathCtx}><ChatOpenFileContext.Provider value={onOpenFile ?? null}><TeamPlanContext.Provider value={teamPlanCtx}><TeamEscalationContext.Provider value={teamEscalationCtx}>{renderedItems}</TeamEscalationContext.Provider></TeamPlanContext.Provider></ChatOpenFileContext.Provider></ChatTreePathContext.Provider></ChatProjectContext.Provider></MediaVisibilityContext.Provider></GlifCostContext.Provider></FalCostContext.Provider>
+        <FalCostContext.Provider value={falCostByRequest}><GlifCostContext.Provider value={glifCostByJob}><MediaVisibilityContext.Provider value={mediaVisibility}><ChatProjectContext.Provider value={projectCtx}><ChatTreePathContext.Provider value={treePathCtx}><ChatSessionContext.Provider value={session.id}><ChatOpenFileContext.Provider value={onOpenFile ?? null}><TeamPlanContext.Provider value={teamPlanCtx}><TeamEscalationContext.Provider value={teamEscalationCtx}>{renderedItems}</TeamEscalationContext.Provider></TeamPlanContext.Provider></ChatOpenFileContext.Provider></ChatSessionContext.Provider></ChatTreePathContext.Provider></ChatProjectContext.Provider></MediaVisibilityContext.Provider></GlifCostContext.Provider></FalCostContext.Provider>
 
         {online && showWaiting && (
           // Текст индикатора ставим по левому краю чата (как пузыри), а домик уезжает

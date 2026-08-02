@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, type ReactNode } from 'react';
 import { Plus, Menu, Hourglass, FileText, Settings } from 'lucide-react';
 import type { Project, Session, ClaudeBilling, Persona } from '../../types';
 import { api } from '../../lib/api';
@@ -946,13 +946,10 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   const personaZoneText = personaIsProject
     ? (personaZoneName ? `Проект · ${personaZoneName}` : 'Проект')
     : 'Глобальный';
-  // Происхождение чата (задача/автоматизация). На мобиле — компактной иконкой в подзаголовке
-  // titleBlock (не отдельным чипом в ряду), на десктопе — полным бейджем в тулбаре.
+  // Происхождение чата (задача/автоматизация) — рисуется в мета-строке заголовка
+  // (см. metaRow): на мобиле компактной иконкой, на десктопе коротким бейджем.
   const origin = resolveChatOrigin(session);
-  const originInline = origin && isMobile ? <ChatOriginBadge origin={origin} iconOnly style={{ flexShrink: 0 }} /> : null;
-  // Блок названия чата + подзаголовок (режим/модель). На мобиле он целиком кликабелен как «назад».
-  // При наличии персоны — её идентификация доминирует: аватар + роль (serif, цвет персоны)
-  // и вторая строка «имя · зона · модель». session.name уходит в тултип, чтобы не потеряться.
+  // Блок названия чата. На мобиле он целиком кликабелен как «назад».
   // Кликабельный стек аватаров группового чата (активный спикер — с цветным
   // кольцом) + поповер управления составом. Размер аватара параметром: компактный
   // в тулбарной шапке, крупнее в hero-шапке. stopPropagation — на мобиле стек
@@ -1008,89 +1005,135 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // На десктопе заголовок держит минимум ~20 символов (не ужимается в «З…»);
   // при нехватке места правый кластер бейджей уходит второй строкой (flexWrap ряда)
   const titleMinW = isMobile ? 0 : 180;
-  const titleBlock = participants && participants.length > 1 ? (
-    // Групповой чат: стек аватаров участников вместо одиночного блока персоны;
-    // вторая строка — «Отвечает: Роль (Имя)».
+
+  // === Единая формула шапки: одна разметка на все типы чата и оба размера ===
+  // Заголовок — собеседник, когда он есть: персона «Роль · Имя», команда — имена
+  // участников. У чата без собеседника заголовок занимает название чата. Вторая
+  // строка (мета) везде одного состава и порядка: название чата → происхождение →
+  // активный спикер (команда) → зона → агент → усилие. Раньше здесь жили шесть
+  // разных разметок с тремя разными правилами «что главное», и название чата в
+  // паре с персоной не показывалось вовсе — только тултипом.
+  const isGroup = !!participants && participants.length > 1;
+  const chatName = session.name?.trim() || null;
+  const personaLines = persona ? personaTitleLines(persona) : null;
+  // Состав команды в заголовке: имена участников, при переполнении — «и ещё N»
+  // (кто именно — читается по стеку аватаров слева и через поповер состава)
+  const groupNames = isGroup ? participants!.map(p => p.name) : null;
+  const groupTitle = groupNames
+    ? (groupNames.length > 3
+        ? `${groupNames.slice(0, 3).join(', ')} и ещё ${groupNames.length - 3}`
+        : groupNames.join(', '))
+    : null;
+  const titleText = groupTitle ?? personaLines?.primary ?? chatName ?? 'Новый чат';
+  // Имя персоны — приглушённый хвост заголовка: роль ведёт, имя уточняет
+  const titleSuffix = groupTitle ? null : personaLines?.secondary ?? null;
+  // В мете название чата нужно, только когда заголовок занят собеседником
+  const metaChatName = (groupTitle || personaLines) ? chatName : null;
+  // Пилюля зоны — только когда зона персоны ОТЛИЧАЕТСЯ от контекста чата
+  // (глобальная персона в проектном чате и т.п.): совпадающая зона — шум,
+  // проект и так виден в сайдбаре воркспейса
+  const zoneDiffers = personaIsProject ? !project : !!project;
+  const speakerName = personaLines ? personaLines.secondary ?? personaLines.primary : null;
+
+  // Мета-строка шапки: слоты опциональны и схлопываются. Ужимается первым название
+  // чата — бейджи и пилюли короткие и места не уступают.
+  const metaRow = (hero: boolean) => {
+    const fs = hero ? 12 : 11.5;
+    const slots: ReactNode[] = [];
+    if (metaChatName) slots.push(
+      <span key="name" style={{ minWidth: 0, fontSize: fs, color: C.textSecondary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {metaChatName}
+      </span>
+    );
+    // Происхождение живёт здесь в ОБОИХ размерах и на обеих платформах: в правом
+    // ряду длинный заголовок задачи выдавливал чипы и резался на 220px
+    if (origin) slots.push(
+      <ChatOriginBadge key="origin" origin={origin} compact iconOnly={isMobile} style={{ flexShrink: 0, maxWidth: 260 }} />
+    );
+    if (groupTitle) slots.push(
+      <span key="speaker" style={{ flexShrink: 0, fontSize: fs, color: C.textMuted, whiteSpace: 'nowrap' }}>
+        отвечает {speakerName ?? '—'}
+      </span>
+    );
+    if (persona && personaAccent && zoneDiffers) slots.push(
+      <span key="zone" style={{
+        flexShrink: 0, fontSize: 10, fontWeight: 600, letterSpacing: '0.02em',
+        padding: '1px 7px', borderRadius: R.pill,
+        background: `${personaAccent}${personaIsProject ? '2E' : '17'}`, color: personaAccent,
+      }}>
+        {personaZoneText}
+      </span>
+    );
+    // .md-агент чата — лёгкая пометка: цветная точка + имя (не персона-блок)
+    if (agent && !persona && !isGroup) slots.push(
+      <span key="agent" style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: fs, fontWeight: 600, color: C.textSecondary, whiteSpace: 'nowrap' }}>
+        <span style={{ width: 7, height: 7, borderRadius: '50%', background: agentDotColor(agent.color), display: 'inline-block', flexShrink: 0 }} />
+        {agent.name}
+      </span>
+    );
+    // Только усилие, и только выбранное ЯВНО: метка «По умолчанию» ничего не сообщает.
+    // Модель ушла к постам — в шапке она врала после смены модели по ходу разговора
+    if (session.effort && !isMobile) slots.push(
+      <span key="effort" style={{ flexShrink: 0, fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, whiteSpace: 'nowrap' }}>
+        {effortLabel(session.effort)}
+      </span>
+    );
+    if (!slots.length) return null;
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, marginTop: hero ? 3 : 1 }}>
+        {slots}
+      </div>
+    );
+  };
+
+  // Слот идентичности слева: стек участников (команда), аватар персоны, иначе пусто.
+  // В hero у персоны — фото скруглённым квадратом с чётким краем (вариант A).
+  const identity = (hero: boolean) => {
+    if (isGroup) return participantsStack(hero ? 34 : (isMobile ? 24 : 26));
+    if (!persona) return null;
+    return hero ? (
+      <PersonaFace
+        persona={persona} align="center" fontSize={24}
+        style={{
+          width: 52, height: 52, flexShrink: 0,
+          borderRadius: R.xl, border: `1px solid ${C.borderLight}`, boxSizing: 'border-box',
+        }}
+      />
+    ) : <PersonaAvatar persona={persona} size={28} />;
+  };
+
+  // Заголовок целиком. hero — крупная шапка-остров на холсте, иначе тулбарная строка.
+  // У чата с персоной весь блок — ссылка на её карточку (personaCardLink): клик, Enter/Space
+  // и подчёркивание заголовка по наведению.
+  const titleContent = (hero: boolean) => (
     <div
-      style={{ minWidth: titleMinW, flex: 1, display: 'flex', alignItems: 'center', gap: 10 }}
+      {...(persona ? (personaCardLink ?? {}) : {})}
+      title={persona && personaCardLink
+        ? `${chatName ? `${chatName} · ` : ''}Открыть карточку персоны`
+        : (chatName ?? undefined)}
+      style={{
+        minWidth: hero ? 240 : titleMinW, flex: 1, display: 'flex', alignItems: 'center', gap: hero ? 12 : 9,
+        cursor: persona && personaCardLink ? 'pointer' : undefined,
+      }}
     >
-      {participantsStack(isMobile ? 24 : 26)}
-      <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-        <span style={{ fontFamily: FONT.serif, fontSize: 16, fontWeight: 600, color: personaAccent ?? C.textHeading, letterSpacing: '-0.01em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {session.name ?? 'Групповой чат'}
-        </span>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, marginTop: 1 }}>
-          {originInline}
-          <span style={{ fontSize: 11.5, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            Отвечает: {persona ? personaTitleLines(persona).primary + (personaTitleLines(persona).secondary ? ` (${personaTitleLines(persona).secondary})` : '') : '—'}
-          </span>
-          {/* Модель здесь больше не пишем: она у каждого поста своя (её показывает
-              строка действий под постом), а в шапке вводила в заблуждение после смены */}
-          {!isMobile && session.effort && (
-            <span style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
-              · {effortLabel(session.effort)}
-            </span>
+      {identity(hero)}
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{
+          fontFamily: FONT.serif, fontSize: hero ? 28 : 16, fontWeight: hero ? 500 : 600,
+          color: personaAccent ?? C.textHeading, letterSpacing: '-0.01em', lineHeight: hero ? 1.25 : 1.3,
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          textDecoration: persona && personaHover ? 'underline' : undefined,
+        }}>
+          {titleText}
+          {titleSuffix && (
+            <span style={{ color: C.textMuted, fontSize: hero ? 21 : 13.5 }}> · {titleSuffix}</span>
           )}
         </div>
-      </div>
-    </div>
-  ) : persona && personaAccent ? (
-    <div
-      {...(personaCardLink ?? {})}
-      title={personaCardLink
-        ? `${session.name ? `${session.name} · ` : ''}Открыть карточку персоны`
-        : (session.name ?? undefined)}
-      style={{ minWidth: titleMinW, flex: 1, display: 'flex', alignItems: 'center', gap: 9, cursor: personaCardLink ? 'pointer' : undefined }}>
-      <PersonaAvatar persona={persona} size={28} />
-      <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-        {/* Роль — заголовок (serif, цвет персоны); hover — подчёркивание как у ссылки */}
-        <span style={{ fontFamily: FONT.serif, fontSize: 16, fontWeight: 600, color: personaAccent, letterSpacing: '-0.01em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textDecoration: personaHover ? 'underline' : undefined }}>
-          {personaTitleLines(persona).primary}
-        </span>
-        {/* Строка 2: имя персоны + пилюля зоны + модель/effort (компактно) */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, marginTop: 1 }}>
-          {originInline}
-          {personaTitleLines(persona).secondary && (
-            <span style={{ flexShrink: 0, fontSize: 11.5, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {personaTitleLines(persona).secondary}
-            </span>
-          )}
-          <span style={{
-            flexShrink: 0, fontSize: 10, fontWeight: 600, letterSpacing: '0.02em',
-            padding: '1px 7px', borderRadius: R.pill,
-            background: `${personaAccent}${personaIsProject ? '2E' : '17'}`, color: personaAccent,
-          }}>
-            {personaZoneText}
-          </span>
-          {!isMobile && session.effort && (
-            <span style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
-              {effortLabel(session.effort)}
-            </span>
-          )}
-        </div>
-      </div>
-    </div>
-  ) : (
-    <div style={{ minWidth: titleMinW, flex: 1 }}>
-      <div style={{ fontSize: 17, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        {session.name ?? 'Новый чат'}
-      </div>
-      <div style={{ fontFamily: FONT.mono, fontSize: 12, color: C.textMuted, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        {originInline && <span style={{ marginRight: 4, verticalAlign: 'middle' }}>{originInline}</span>}
-        {/* .md-агент чата — лёгкая пометка: цветная точка + имя (не персона-блок) */}
-        {agent && (
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginRight: 4, verticalAlign: 'baseline' }}>
-            <span style={{ width: 7, height: 7, borderRadius: '50%', background: agentDotColor(agent.color), display: 'inline-block', flexShrink: 0 }} />
-            <span style={{ fontFamily: FONT.sans, fontWeight: 600, color: C.textSecondary }}>{agent.name}</span>
-            <span> ·</span>
-          </span>
-        )}
-        {/* На мобиле имя проекта не дублируем — оно доступно через кнопку «назад» */}
-        {!isMobile && <span>{project ? project.name : 'без проекта'}</span>}
-        {session.effort && <span>{!isMobile && ' · '}{effortLabel(session.effort)}</span>}
+        {metaRow(hero)}
       </div>
     </div>
   );
+  const titleBlock = titleContent(false);
   // Элементы шапки — выносим, чтобы отрендерить в двух раскладках (с центр. переключателем и без)
   const openBtn = onOpenSidebar && !isMobile ? (
     <ToolbarIconButton onClick={onOpenSidebar} title="Открыть панель" isMobile={isMobile}>
@@ -1100,14 +1143,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   const titleEl = isMobile && onBack
     ? <BackButton onClick={onBack} style={{ flex: 1 }} title="Назад к списку">{titleBlock}</BackButton>
     : titleBlock;
-  // На десктопе происхождение — полный бейдж в ряду; на мобиле оно уже встроено
-  // в подзаголовок titleBlock (originInline), поэтому в ряду его не дублируем.
-  // compact + потолок ширины: длинное название задачи иначе выдавливает из ряда
-  // остальные чипы; при тесноте чип уступает место первым (flexShrink)
-  const originBadge = origin && !isMobile
-    ? <ChatOriginBadge origin={origin} compact style={{ maxWidth: 220, minWidth: 0, flexShrink: 1 }} />
-    : null;
-  // Бейдж последней запущенной механики команды (как origin — только на десктопе)
+  // Бейдж последней запущенной механики команды (только на десктопе)
   const mechanicBadge = lastMechanic && !isMobile ? <TeamMechanicBadge id={lastMechanic} size="sm" /> : null;
 
   // Пилюля временного чата: остаток до авто-удаления; клик — быстрый путь к настройке.
@@ -1222,7 +1258,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       display: 'flex', alignItems: 'center', gap: TB.gap, marginLeft: 'auto', minWidth: 0,
       ...(isMobile ? null : { flexWrap: 'wrap' as const, justifyContent: 'flex-end' as const }),
     }}>
-      {originBadge}{mechanicBadge}{expiryBadge}{workflowBadge}{costBadges}{actionBtns}
+      {mechanicBadge}{expiryBadge}{workflowBadge}{costBadges}{actionBtns}
     </div>
   );
 
@@ -1230,97 +1266,9 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // на холсте — как шапка «Календаря». У персоны слева фото скруглённым квадратом
   // с чётким краем (не в круге); рядом крупная serif-идентификация, справа контролы.
   if (island && !isMobile) {
-    // Пилюля зоны — только когда зона персоны ОТЛИЧАЕТСЯ от контекста чата
-    // (глобальная персона в проектном чате и т.п.): совпадающая зона — шум,
-    // проект и так виден в сайдбаре воркспейса
-    const zoneDiffers = personaIsProject ? !project : !!project;
-    const zonePill = persona && personaAccent && zoneDiffers && (
-      <span style={{
-        flexShrink: 0, fontSize: 10, fontWeight: 600, letterSpacing: '0.02em',
-        padding: '1px 7px', borderRadius: R.pill,
-        background: `${personaAccent}${personaIsProject ? '2E' : '17'}`, color: personaAccent,
-      }}>
-        {personaZoneText}
-      </span>
-    );
-    // Только усилие, и только выбранное ЯВНО: метка «По умолчанию» ничего не сообщает.
-    // Модель ушла к постам — в шапке она врала после смены модели по ходу разговора
-    const modelBits = session.effort ? effortLabel(session.effort) : '';
-    const modelLine = modelBits ? (
-      <span style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
-        {modelBits}
-      </span>
-    ) : null;
-    const heroTitle = participants && participants.length > 1 ? (
-      // Группа — тот же hero-стиль: крупный стек участников + имя чата serif,
-      // второй строкой «Отвечает: …» и модель. minWidth 240 — serif-28 при меньшем ломается
-      <div style={{ minWidth: 240, flex: 1, display: 'flex', alignItems: 'center', gap: 12 }}>
-        {participantsStack(34)}
-        <div style={{ minWidth: 0, flex: 1 }}>
-          <div style={{ fontFamily: FONT.serif, fontSize: 28, fontWeight: 500, color: personaAccent ?? C.textHeading, letterSpacing: '-0.01em', lineHeight: 1.25, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {session.name ?? 'Групповой чат'}
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, marginTop: 3 }}>
-            <span style={{ fontSize: 12, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 0 }}>
-              Отвечает: {persona ? personaTitleLines(persona).primary + (personaTitleLines(persona).secondary ? ` (${personaTitleLines(persona).secondary})` : '') : '—'}
-            </span>
-            {modelLine}
-          </div>
-        </div>
-      </div>
-    ) : persona && personaAccent ? (
-      <div
-        {...(personaCardLink ?? {})}
-        style={{ minWidth: 240, flex: 1, display: 'flex', alignItems: 'center', gap: 12, cursor: personaCardLink ? 'pointer' : undefined }}
-        title={personaCardLink
-          ? `${session.name ? `${session.name} · ` : ''}Открыть карточку персоны`
-          : (session.name ?? undefined)}>
-        {/* Фото персоны: скруглённый квадрат с чётким краем (вариант A) */}
-        <PersonaFace
-          persona={persona} align="center" fontSize={24}
-          style={{
-            width: 52, height: 52, flexShrink: 0,
-            borderRadius: R.xl, border: `1px solid ${C.borderLight}`, boxSizing: 'border-box',
-          }}
-        />
-        <div style={{ minWidth: 0, flex: 1 }}>
-          <div style={{ fontFamily: FONT.serif, fontSize: 28, fontWeight: 500, color: personaAccent, letterSpacing: '-0.01em', lineHeight: 1.25, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textDecoration: personaHover ? 'underline' : undefined }}>
-            {personaTitleLines(persona).primary}
-            {personaTitleLines(persona).secondary && (
-              <span style={{ color: C.textMuted, fontSize: 21 }}> · {personaTitleLines(persona).secondary}</span>
-            )}
-          </div>
-          {/* Вторая строка — только когда есть что сказать (иначе заголовок один) */}
-          {(zonePill || modelLine) && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, marginTop: 3 }}>
-              {zonePill}
-              {modelLine}
-            </div>
-          )}
-        </div>
-      </div>
-    ) : (
-      <div style={{ minWidth: 240, flex: 1 }}>
-        <div style={{ fontFamily: FONT.serif, fontSize: 28, fontWeight: 500, color: C.textHeading, letterSpacing: '-0.01em', lineHeight: 1.25, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {session.name ?? 'Новый чат'}
-        </div>
-        {/* Вторая строка — только агент и явно выбранная модель/усилие: имя проекта
-            не дублируем (оно в сайдбаре воркспейса), «без проекта» и «По умолчанию»
-            ничего не сообщают */}
-        {(agent || modelLine) && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, marginTop: 3, fontFamily: FONT.mono, fontSize: 11, color: C.textMuted }}>
-            {agent && (
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
-                <span style={{ width: 7, height: 7, borderRadius: '50%', background: agentDotColor(agent.color), display: 'inline-block', flexShrink: 0 }} />
-                <span style={{ fontFamily: FONT.sans, fontWeight: 600, color: C.textSecondary }}>{agent.name}</span>
-                {modelLine && <span>·</span>}
-              </span>
-            )}
-            {modelLine}
-          </div>
-        )}
-      </div>
-    );
+    // Та же формула, что и в тулбарной шапке — крупным кеглем (minWidth 240:
+    // serif-28 при меньшей ширине ломается)
+    const heroTitle = titleContent(true);
     return (
       // Полоса снизу — мягкая граница шапки к ленте (как у тулбара, но на холсте).
       // Шапка не растягивается на всю зону: её ширина = колонке ленты чата

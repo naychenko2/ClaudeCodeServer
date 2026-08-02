@@ -4,7 +4,6 @@ import type { Project, ProjectTag, Session } from '../types';
 import { api } from '../lib/api';
 import { onMessage, onReconnected } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
-import { EditSessionDialog } from './EditSessionDialog';
 import { C, FS, GROUP_COLORS, MODAL_W, R } from '../lib/design';
 import { Modal, ModalActions } from './ui';
 import { usePersonas, usePersonasVersion } from '../lib/personas';
@@ -60,7 +59,6 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   // этому числу решает показывать ли панель, схлопнул бы её сразу после открытия
   const [loaded, setLoaded] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
-  const [editTarget, setEditTarget] = useState<Session | null>(null);
   // Карточка под курсором — на ней показываем действия (на тач-устройствах hover нет, там действия видны всегда)
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const initializedRef = useRef(false);
@@ -117,6 +115,11 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         setSessions(prev => prev.map(x => (x.id === s.id ? { ...x, tags: prevTags } : x)));
       });
   };
+
+  // Переименование из карточки списка: ответ раскладывается тем же путём, что и теги —
+  // в список и (если чат открыт) владельцу, чтобы шапка панели не отстала
+  const renameSession = (s: Session, name: string) =>
+    api.sessions.update(project.id, s.id, { name }).then(updated => handleSessionUpdated(updated));
 
   const toggleTag = (s: Session, name: string) => {
     const tags = s.tags ?? [];
@@ -361,11 +364,11 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
       workflowRunning={workflowRunningFor === s.id}
       onSelect={() => onSelect(s)}
       onHover={h => setHoveredId(h ? s.id : null)}
-      onEdit={() => setEditTarget(s)}
       onDelete={() => setDeleteTarget(s)}
       tags={chatTagsSorted(s, registry).map(name => ({ name, color: tagColor(registry, name) }))}
       onRemoveTag={online ? name => toggleTag(s, name) : undefined}
       onAssignTags={online ? anchor => setTagMenu(prev => prev?.sessionId === s.id ? null : { sessionId: s.id, anchor }) : undefined}
+      onRename={online ? name => renameSession(s, name) : undefined}
     />
   );
 
@@ -525,13 +528,6 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         );
       })()}
 
-      {editTarget && (
-        <EditSessionDialog
-          session={editTarget}
-          onSaved={handleSessionUpdated}
-          onClose={() => setEditTarget(null)}
-        />
-      )}
 
       {deleteTarget && (
         <Modal

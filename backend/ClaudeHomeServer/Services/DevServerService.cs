@@ -22,21 +22,40 @@ internal sealed class DevServerInstance : IDisposable
     public string? Error { get; set; }
     public DateTime LastActivity { get; set; }
 
-    // Хвост вывода (stdout+stderr) — для диагностики, когда старт провалился
-    private readonly object _outLock = new();
-    private readonly Queue<string> _outputTail = new();
-    public void AppendOutput(string line)
+    // Вывод (stdout+stderr) живёт ровно столько, сколько инстанс в реестре, на диск не
+    // пишется. Служит двум целям: реплей вкладке «Логи» при подписке и хвост для текста
+    // ошибки, когда сервис не поднялся.
+    private const int ErrorTailLines = 40;
+    private readonly OutputRingBuffer _output = new();
+
+    // Очередь на рассылку. Строки не уходят подписчикам поштучно: `dotnet build` и
+    // `vite` печатают их тысячами, и каждая означала бы отдельное сообщение SignalR
+    // и отдельный write в xterm. Копим и отдаём тиком раз в LogFlushMs.
+    private readonly object _pendingLock = new();
+    private readonly System.Text.StringBuilder _pending = new();
+
+    public void AppendOutput(string chunk)
     {
-        lock (_outLock)
+        _output.Append(chunk);
+        lock (_pendingLock) _pending.Append(chunk);
+    }
+
+    /// <summary>Забрать накопленное на рассылку. Пусто — null.</summary>
+    public string? TakePending()
+    {
+        lock (_pendingLock)
         {
-            _outputTail.Enqueue(line);
-            while (_outputTail.Count > 40) _outputTail.Dequeue();
+            if (_pending.Length == 0) return null;
+            var text = _pending.ToString();
+            _pending.Clear();
+            return text;
         }
     }
-    public string OutputTail()
-    {
-        lock (_outLock) return string.Join("\n", _outputTail);
-    }
+
+    public string GetBufferedOutput() => _output.GetAll();
+
+    /// <summary>Последние строки вывода — текст ошибки, когда сервис не начал слушать порт.</summary>
+    public string OutputTail() => _output.TailLines(ErrorTailLines);
 
     // Драйвер среды, запустивший процесс + метка хода: в песочнице убить процесс
     // может только он (Kill docker-клиента не трогает процесс в контейнере)
@@ -79,6 +98,9 @@ public sealed class DevServerService : IDisposable
     private readonly ConcurrentDictionary<string, DevServerInstance> _servers = new();
     // projectId → serviceId активного для превью сервиса
     private readonly ConcurrentDictionary<string, string> _activePreview = new();
+    // projectId → сервис, запущенный ВНЕ продукта (Rider, терминал), выбранный для превью.
+    // Процесс не наш: остановить его нельзя и логов у него нет — только проксируем порт.
+    private readonly ConcurrentDictionary<string, (string ServiceId, int Port)> _externalPreview = new();
     private readonly ProjectManager _projects;
     private readonly IHubContext<SessionHub> _hub;
     private readonly ILogger<DevServerService> _log;
@@ -86,6 +108,10 @@ public sealed class DevServerService : IDisposable
     private readonly Execution.SandboxManager _sandbox;
     private readonly CancellationTokenSource _shutdownCts = new();
     private readonly Timer _cleanupTimer;
+    private readonly Timer _logFlushTimer;
+    // Тик рассылки логов. 100 мс: глазу неотличимо от мгновенного, а поток из тысяч
+    // строк схлопывается в десяток сообщений в секунду вместо тысяч.
+    private const int LogFlushMs = 100;
 
     private static readonly Regex PortRegex = new(
         @"https?://(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]):(\d+)",
@@ -100,6 +126,8 @@ public sealed class DevServerService : IDisposable
         _launchers = launchers;
         _sandbox = sandbox;
         _cleanupTimer = new Timer(_ => CleanupStale(), null, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1));
+        _logFlushTimer = new Timer(_ => FlushLogs(), null,
+            TimeSpan.FromMilliseconds(LogFlushMs), TimeSpan.FromMilliseconds(LogFlushMs));
     }
 
     // Порт из опубликованного пула песочницы, не занятый другим сервисом
@@ -126,7 +154,7 @@ public sealed class DevServerService : IDisposable
         {
             if (existing.Status == "started")
             {
-                _activePreview[projectId] = serviceId;
+                SetActivePreview(projectId, serviceId);
                 return new DevServerStartResult(true, existing.Port, "started");
             }
             if (existing.Status == "starting")
@@ -219,7 +247,7 @@ public sealed class DevServerService : IDisposable
             if (instance.Port != 0 && await IsPortListeningAsync(instance.Port))
             {
                 instance.Status = "started";
-                _activePreview[projectId] = serviceId;
+                SetActivePreview(projectId, serviceId);
                 await BroadcastStatus(projectId, serviceId, "started", instance.Port);
                 return new DevServerStartResult(true, instance.Port, "started");
             }
@@ -230,7 +258,11 @@ public sealed class DevServerService : IDisposable
         var exited = SafeHasExited(process);
         var exitCode = exited ? SafeExitCode(process) : -1;
         var tail = instance.OutputTail();
-        var reason = exited ? $"Процесс завершился с кодом {exitCode}." : "Таймаут: сервис не начал слушать порт.";
+        // Занятый порт — самая частая причина: тот же сервис уже поднят снаружи (Rider,
+        // терминал, второй инстанс продукта). Голый хвост лога об этом не говорит.
+        var reason = LooksLikePortInUse(tail) && instance.Port > 0
+            ? $"Порт {instance.Port} уже занят — возможно, сервис запущен снаружи."
+            : exited ? $"Процесс завершился с кодом {exitCode}." : "Таймаут: сервис не начал слушать порт.";
         instance.Status = "error";
         instance.Error = string.IsNullOrWhiteSpace(tail) ? reason : reason + "\n" + tail;
         // Удаляем ТОЛЬКО свой инстанс: за время ожидания под этим ключом мог оказаться
@@ -241,6 +273,21 @@ public sealed class DevServerService : IDisposable
         await BroadcastStatus(projectId, serviceId, "error", null, instance.Error);
         return new DevServerStartResult(false, null, "error", instance.Error);
     }
+
+    // Диагностики «порт занят» у разных рантаймов. Список неполон по определению —
+    // это подсказка пользователю, а не признак, на котором строится логика.
+    private static readonly string[] PortInUseMarkers =
+    [
+        "EADDRINUSE",                       // Node (Vite, webpack, express)
+        "address already in use",           // Kestrel/Linux, Go, Python
+        "only one usage of each socket",    // Winsock (WSAEADDRINUSE)
+        "failed to bind to address",        // ASP.NET Core
+        "port is already allocated",        // docker compose
+    ];
+
+    private static bool LooksLikePortInUse(string output) =>
+        !string.IsNullOrEmpty(output) &&
+        PortInUseMarkers.Any(m => output.Contains(m, StringComparison.OrdinalIgnoreCase));
 
     private static int SafeExitCode(Process p)
     {
@@ -269,8 +316,13 @@ public sealed class DevServerService : IDisposable
         catch (InvalidOperationException) { return true; }
     }
 
-    /// <summary>Проверить, принимает ли кто-то соединения на 127.0.0.1:port (готовность dev-сервера).</summary>
-    private static async Task<bool> IsPortListeningAsync(int port)
+    /// <summary>
+    /// Проверить, принимает ли кто-то соединения на 127.0.0.1:port. Используется и как
+    /// признак готовности своего dev-сервера, и как проба «сервис уже поднят снаружи».
+    /// Проба именно с хоста: туда же ходит preview-прокси, включая порты песочницы —
+    /// они проброшены на 127.0.0.1.
+    /// </summary>
+    public static async Task<bool> IsPortListeningAsync(int port)
     {
         try
         {
@@ -290,6 +342,9 @@ public sealed class DevServerService : IDisposable
         {
             if (instance.UserId != userId)
                 throw new UnauthorizedAccessException("Доступ запрещён");
+            // Хвост вывода (причина падения, прощальные строки) — до удаления инстанса:
+            // после Dispose забирать его будет неоткуда
+            await FlushLog(instance);
             _servers.TryRemove(Key(projectId, serviceId), out _);
             instance.Dispose();
             if (_activePreview.TryGetValue(projectId, out var active) && active == serviceId)
@@ -300,7 +355,27 @@ public sealed class DevServerService : IDisposable
     }
 
     /// <summary>Назначить активный для превью сервис (на его порт указывает iframe-прокси).</summary>
-    public void SetActivePreview(string projectId, string serviceId) => _activePreview[projectId] = serviceId;
+    public void SetActivePreview(string projectId, string serviceId)
+    {
+        _activePreview[projectId] = serviceId;
+        // Активный ровно один: свой процесс вытесняет выбранный внешний
+        _externalPreview.TryRemove(projectId, out _);
+    }
+
+    /// <summary>
+    /// Назначить для превью сервис, поднятый вне продукта. Порт сюда приходит уже
+    /// проверенным вызывающим (см. PreviewController): он обязан быть портом сервиса
+    /// ЭТОГО проекта, иначе прокси стал бы универсальным туннелем на любой локальный порт.
+    /// </summary>
+    public void SetActiveExternal(string projectId, string serviceId, int port)
+    {
+        _externalPreview[projectId] = (serviceId, port);
+        _activePreview.TryRemove(projectId, out _);
+    }
+
+    /// <summary>Внешний сервис, выбранный для превью (для отдачи фронту).</summary>
+    public (string ServiceId, int Port)? GetActiveExternal(string projectId) =>
+        _externalPreview.TryGetValue(projectId, out var ext) ? ext : null;
 
     /// <summary>Порт активного для превью сервиса проекта. Владельца проверяет вызывающий
     /// (preview-middleware сверяет OwnerId по токену до вызова); фолбэк ограничен тем же projectId.</summary>
@@ -310,6 +385,9 @@ public sealed class DevServerService : IDisposable
             _servers.TryGetValue(Key(projectId, serviceId), out var inst) &&
             inst.Status == "started" && inst.Port > 0)
             return inst.Port;
+
+        // Выбранный внешний процесс — он не в реестре, статуса и порта из него не узнать
+        if (_externalPreview.TryGetValue(projectId, out var ext)) return ext.Port;
 
         // Фолбэк: первый запущенный сервис проекта, если активный не задан.
         var prefix = projectId + ":";
@@ -395,6 +473,7 @@ public sealed class DevServerService : IDisposable
     {
         _shutdownCts.Cancel();
         _cleanupTimer.Dispose();
+        _logFlushTimer.Dispose();
         foreach (var (_, instance) in _servers) instance.Dispose();
         _servers.Clear();
     }
@@ -404,6 +483,7 @@ public sealed class DevServerService : IDisposable
         if (_servers.TryGetValue(key, out var inst) && inst.Status == "started")
         {
             inst.Status = "stopped";
+            _ = FlushLog(inst);   // последние строки процесса не должны пропасть
             if (_activePreview.TryGetValue(inst.ProjectId, out var active) && active == inst.ServiceId)
                 _activePreview.TryRemove(inst.ProjectId, out _);
             _ = BroadcastStatus(inst.ProjectId, inst.ServiceId, "stopped", null);
@@ -412,13 +492,17 @@ public sealed class DevServerService : IDisposable
 
     private async Task DrainStreams(Process process, DevServerInstance instance)
     {
+        // stdout и stderr дренируются одинаково: оба идут в один буфер в порядке появления
         async Task Pump(TextReader reader)
         {
             string? line;
             while ((line = await reader.ReadLineAsync()) != null)
             {
                 instance.LastActivity = DateTime.UtcNow;
-                instance.AppendOutput(line);
+                // CRLF, а не LF: xterm переносит строку только по возврату каретки.
+                // Подписчикам строка уйдёт тиком FlushLogs — дренаж не ждёт сети:
+                // застопорится он, переполнится буфер процесса, и сервис повиснет.
+                instance.AppendOutput(line + "\r\n");
                 // Порт из вывода нужен только если он не задан заранее; готовность проверит StartAsync.
                 if (instance.Port != 0) continue;
                 var m = PortRegex.Match(line);
@@ -443,6 +527,43 @@ public sealed class DevServerService : IDisposable
         var port = ((IPEndPoint)listener.LocalEndpoint).Port;
         listener.Stop();
         return port;
+    }
+
+    /// <summary>
+    /// Имя SignalR-группы подписчиков логов сервиса. Группа на КОНКРЕТНЫЙ сервис, а не на
+    /// владельца: иначе вывод дев-сервера сыпался бы во все открытые вкладки пользователя.
+    /// </summary>
+    public static string LogGroup(string projectId, string serviceId) => $"preview_{projectId}:{serviceId}";
+
+    /// <summary>
+    /// Накопленный вывод сервиса — реплей новому подписчику. null, если сервис не запущен.
+    /// </summary>
+    public string? GetLogBuffer(string projectId, string serviceId, string userId)
+    {
+        if (!_servers.TryGetValue(Key(projectId, serviceId), out var inst)) return null;
+        if (inst.UserId != userId) throw new UnauthorizedAccessException("Доступ запрещён");
+        return inst.GetBufferedOutput();
+    }
+
+    /// <summary>Тик рассылки: у каждого живого сервиса забираем накопленное и шлём одним сообщением.</summary>
+    private void FlushLogs()
+    {
+        foreach (var (_, instance) in _servers) _ = FlushLog(instance);
+    }
+
+    private async Task FlushLog(DevServerInstance instance)
+    {
+        var data = instance.TakePending();
+        if (data is null) return;
+        try
+        {
+            await _hub.Clients.Group(LogGroup(instance.ProjectId, instance.ServiceId))
+                .SendAsync("message", new PreviewLogMessage(instance.ServiceId, data));
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug(ex, "Не удалось разослать лог сервиса {ServiceId}", instance.ServiceId);
+        }
     }
 
     private async Task BroadcastStatus(string projectId, string serviceId, string status, int? port, string? error = null)

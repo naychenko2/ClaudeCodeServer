@@ -6,6 +6,7 @@ using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Execution;
+using ClaudeHomeServer.Services.Http;
 using ClaudeHomeServer.Services.Mcp;
 using ClaudeHomeServer.Services.TriggerSources;
 using ClaudeHomeServer.Services.Modules;
@@ -206,6 +207,15 @@ AddHosted<ClaudeHomeServer.Services.Spend.SpendMaintenanceService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.OneShotClaudeRunner>();
 // AI-хаб: локальное ранжирование действий через Ollama (бесплатно, мимо claude CLI)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.OllamaClient>();
+// Локальная модель опциональна: погашенная Ollama — штатная ситуация, а не авария
+// (OllamaClient ловит её сам и уходит в фолбэк). Тихий логгер вместо дефолтного, иначе
+// каждый вызов даёт Error со стектрейсом на весь экран.
+builder.Services.AddQuietHttpClient(
+    ClaudeHomeServer.Services.Llm.OllamaClient.HttpClientName,
+    new ClaudeHomeServer.Services.Http.QuietHttpClientProfile(
+        Category: "ClaudeHomeServer.Llm.Ollama",
+        Subject: "локальной моделью Ollama",
+        Consequence: "Фоновые действия уйдут облачной модели."));
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.OllamaActionRankService>();
 // Прямой HTTP-адаптер бесплатных моделей OpenRouter для фоновых one-shot задач
 // (второй транспорт рядом с провайдером через claude CLI; модели — курируемый список
@@ -240,6 +250,8 @@ builder.Services.AddSingleton<SkillGenerationService>();
 builder.Services.AddSingleton<FileWatcherService>();
 builder.Services.AddSingleton<ConnectionDiagnostics>();
 builder.Services.AddSingleton<ChatHistoryService>();
+builder.Services.AddSingleton<PromptSnapshotStore>();
+builder.Services.AddSingleton<PromptAuditService>();
 builder.Services.AddSingleton<WorkspaceKnowledgeStore>();
 builder.Services.AddSingleton<FalCostService>();
 builder.Services.AddSingleton<FalAccountService>();
@@ -301,9 +313,25 @@ builder.Services.AddHttpClient("proxy");
 // чтобы редирект на приватный хост не обошёл SSRF-проверку (см. SsrfGuard).
 builder.Services.AddHttpClient("safe-download")
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
-builder.Services.AddHttpClient("dify");
+// Dify и fal — опциональные зависимости: локальный Dify поднят не всегда, fal живёт за DPI,
+// и оба вызывающих ловят отказ сами (KnowledgeService деградирует, FalImageService возвращает
+// пустой список). Тихий клиент вместо дефолтного — иначе каждый запрос печатает Error
+// со стектрейсом; см. Services/Http/QuietHttpLogger.
+builder.Services.AddQuietHttpClient("dify", new QuietHttpClientProfile(
+    Category: "ClaudeHomeServer.Knowledge.Dify",
+    Subject: "базой знаний Dify",
+    Consequence: "Семантический поиск по заметкам и знаниям не работает."));
 builder.Services.AddHttpClient("forgejo");
-builder.Services.AddHttpClient("fal");
+builder.Services.AddQuietHttpClient("fal", new QuietHttpClientProfile(
+    Category: "ClaudeHomeServer.Media.Fal",
+    Subject: "сервисом fal.ai",
+    Consequence: "Генерация изображений и учёт расхода недоступны."));
+builder.Services.AddQuietHttpClient(
+    ClaudeHomeServer.Controllers.FilesController.OnlyOfficeCommandClient,
+    new QuietHttpClientProfile(
+        Category: "ClaudeHomeServer.Files.OnlyOffice",
+        Subject: "Command API OnlyOffice",
+        Consequence: "Принудительное сохранение документа ждёт таймаут."));
 builder.Services.AddHttpClient("glif");
 builder.Services.AddHttpClient("llm-provider");
 builder.Services.AddHttpClient("anthropic-oauth");
@@ -959,14 +987,31 @@ app.MapControllers();
 app.MapHub<SessionHub>("/hubs/session");
 app.MapHub<TerminalHub>("/hubs/terminal");
 
-// Graceful shutdown: гасим все живые процессы claude, терминалы и dev-серверы
+// Graceful shutdown: гасим все живые процессы claude, терминалы и dev-серверы.
+//
+// Ссылки берём СЕЙЧАС, а не в колбэке: если хост не смог подняться (занятый порт —
+// обычное дело, когда рядом уже крутится второй инстанс), провайдер успевает
+// освободиться раньше, чем сработает ApplicationStopping, и резолв падал с
+// ObjectDisposedException — гасить процессы было уже нечем. Все три сервиса —
+// синглтоны, так что заранее взятая ссылка та же самая.
+var shutdownSessions = app.Services.GetRequiredService<SessionManager>();
+var shutdownTerminals = app.Services.GetRequiredService<TerminalService>();
+var shutdownDevServers = app.Services.GetRequiredService<DevServerService>();
+
 app.Lifetime.ApplicationStopping.Register(() =>
 {
-    app.Services.GetRequiredService<SessionManager>().KillAllProcesses();
-    app.Services.GetRequiredService<TerminalService>().Dispose();
-    app.Services.GetRequiredService<DevServerService>().Dispose();
+    // Каждый шаг отдельно: упавшая уборка одного не должна оставить процессы других
+    static void Safe(Action step, string what)
+    {
+        try { step(); }
+        catch (Exception ex) { Console.Error.WriteLine($"Shutdown: {what} — {ex.Message}"); }
+    }
+
+    Safe(shutdownSessions.KillAllProcesses, "процессы claude");
+    Safe(shutdownTerminals.Dispose, "терминалы");
+    Safe(shutdownDevServers.Dispose, "dev-серверы");
     // Тот же pid-файл принадлежит боевому серверу — копия его не трогает
-    if (!inspectionMode) ProcessRegistry.KillAll();
+    if (!inspectionMode) Safe(ProcessRegistry.KillAll, "реестр процессов");
 });
 
 app.Run();

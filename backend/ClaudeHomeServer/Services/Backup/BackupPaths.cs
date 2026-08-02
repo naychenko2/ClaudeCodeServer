@@ -55,6 +55,9 @@ public static class BackupPaths
         if (root.Equals("logs", StringComparison.OrdinalIgnoreCase)) return false;
         // Конфиги MCP на один ход и cwd one-shot вызовов — живут минуты
         if (root.Equals("sandbox-tmp", StringComparison.OrdinalIgnoreCase)) return false;
+        // Снимки промпта ходов — диагностический лог (последние 50 ходов на чат):
+        // восстанавливать нечего, а в облако они бы поехали десятками мегабайт
+        if (root.Equals("prompt-snapshots", StringComparison.OrdinalIgnoreCase)) return false;
         if (root.Equals(StagingDirName, StringComparison.OrdinalIgnoreCase)) return false;
 
         // Кеш CodeGraph: code-graphs/{hash}/cache/ — не едет в облако (пересобирается).

@@ -15,6 +15,10 @@ export const ChatTreePathContext = createContext<string | null>(null);
 // в тексте ассистента нужны в каждом её отпрыске.
 export const ChatOpenFileContext = createContext<((path: string) => void) | null>(null);
 
+// Id текущей сессии — шторке «какой промпт ушёл» под постом: она грузит снимок по REST,
+// а ChatItemView сидит глубоко в ленте и id сессии пропом не получает.
+export const ChatSessionContext = createContext<string | null>(null);
+
 // Персона текущего чата, если он ведётся от её лица.
 // Провайдится в ChatPanel — лента показывает её аватар у реплик ассистента,
 // не таща persona-проп через все вложенные компоненты.

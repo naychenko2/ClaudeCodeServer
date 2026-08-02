@@ -37,24 +37,11 @@ internal sealed class TerminalInstance : IDisposable
 
     // Кольцевой буфер недавнего вывода — реплеится новому вьюеру при Connect
     // (уход с вкладки/reconnect/другое устройство размонтируют xterm и теряют его буфер).
-    private readonly object _bufLock = new();
-    private readonly System.Text.StringBuilder _outputBuffer = new();
-    private const int MaxOutputBufferChars = 200_000;
+    // Тот же примитив, что у дев-серверов, см. OutputRingBuffer.
+    private readonly OutputRingBuffer _output = new();
 
-    public void AppendOutput(string chunk)
-    {
-        lock (_bufLock)
-        {
-            _outputBuffer.Append(chunk);
-            if (_outputBuffer.Length > MaxOutputBufferChars)
-                _outputBuffer.Remove(0, _outputBuffer.Length - MaxOutputBufferChars);
-        }
-    }
-
-    public string GetBufferedOutput()
-    {
-        lock (_bufLock) return _outputBuffer.ToString();
-    }
+    public void AppendOutput(string chunk) => _output.Append(chunk);
+    public string GetBufferedOutput() => _output.GetAll();
 
     // Драйвер среды, запустивший процесс + метка: в песочнице убить процесс
     // может только он (Kill docker-клиента не трогает процесс в контейнере)

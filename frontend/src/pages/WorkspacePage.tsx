@@ -114,7 +114,7 @@ function useViewportHeight() {
 // ремонтирует всё поддерево — xterm пересоздаётся, экран чернеет, ввод/вывод теряются.
 function ToolsPaneView({
   projectId, toolsTab, terminals, activeTerminalId, activeTerminalName, terminalBusy,
-  onTerminalActivity, previewServices, activePreviewId, onStopPreview, onBack,
+  onTerminalActivity, previewServices, activePreviewId, onStopPreview, onClosePreview, onBack,
 }: {
   projectId: string
   toolsTab: 'terminal' | 'preview'
@@ -126,6 +126,7 @@ function ToolsPaneView({
   previewServices: ProjectService[]
   activePreviewId: string | null
   onStopPreview: (id: string) => void
+  onClosePreview: () => void
   onBack?: () => void
 }) {
   const activePreview = previewServices.find(s => s.id === activePreviewId);
@@ -156,7 +157,7 @@ function ToolsPaneView({
             </svg>
           )}
           <span style={{ fontSize: 14, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {toolsTab === 'terminal' ? (activeTerminalName ?? 'Терминал') : 'Preview'}
+            {toolsTab === 'terminal' ? (activeTerminalName ?? 'Терминал') : 'Сервисы'}
           </span>
           {/* Индикатор активности терминала */}
           {toolsTab === 'terminal' && activeTerminalId && (
@@ -201,6 +202,8 @@ function ToolsPaneView({
             service={activePreview}
             projectId={projectId}
             onStop={onStopPreview}
+            onClose={onClosePreview}
+            services={previewServices}
           />
         ) : (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: C.textMuted, fontSize: 14 }}>
@@ -483,7 +486,7 @@ const windowWidth = useWindowWidth();
   const viewportH = useViewportHeight();
   const isMobile = windowWidth <= MOBILE_MAX;
   const isTablet = windowWidth > MOBILE_MAX && windowWidth <= TABLET_MAX;
-  // Выбранный в панельке «Preview» сервис — его окно живёт в центре нового режима
+  // Выбранный в панельке «Сервисы» сервис — его окно живёт в центре нового режима
   const ccActivePreview = previewServices.find(s => s.id === activePreviewId) ?? null;
 
   // Задачи (за фич-флагом): вкладка «Задачи» в сайдбаре + карточка задачи в центре.
@@ -1108,7 +1111,14 @@ const windowWidth = useWindowWidth();
     setActivePreviewId(id);
     setToolsTab('preview');
     if (isMobile && id) setMobileView('chat');
-    if (id) void api.projects.previewActive(project.id, id).catch(() => {});
+    if (!id) return;
+    // Внешний сервис (поднят вне продукта) наш реестр не знает — у него свой эндпоинт,
+    // где порт берётся из конфигурации сервиса
+    const external = previewServices.find(s => s.id === id)?.status === 'external';
+    const call = external
+      ? api.projects.previewActiveExternal(project.id, id)
+      : api.projects.previewActive(project.id, id);
+    void call.catch(() => {});
   };
 
   const handleToggleFileFullscreen = () => setFileFullscreen(v => !v);
@@ -1181,6 +1191,7 @@ const windowWidth = useWindowWidth();
     projectId: project.id, toolsTab, terminals, activeTerminalId, activeTerminalName, terminalBusy,
     onTerminalActivity: setTerminalBusy, previewServices, activePreviewId,
     onStopPreview: stopService,
+    onClosePreview: () => setActivePreviewId(null),
   };
 
 
@@ -1393,7 +1404,7 @@ const windowWidth = useWindowWidth();
           boardOpen={projectBoard}
           boardArea={ProjectBoardArea}
           previewOpen={!!ccActivePreview}
-          previewArea={ccActivePreview ? <PreviewView service={ccActivePreview} projectId={project.id} onStop={stopService} /> : null}
+          previewArea={ccActivePreview ? <PreviewView service={ccActivePreview} projectId={project.id} onStop={stopService} onClose={() => setActivePreviewId(null)} services={previewServices} /> : null}
           onClosePreview={() => setActivePreviewId(null)}
           graphOpen={graphOpen}
           graphArea={<CodeGraphDocument projectId={project.id} isMobile={false} onClose={handleGraphClose} onOpenFile={handleOpenFileFromTree} onBuild={handleGraphBuild} />}

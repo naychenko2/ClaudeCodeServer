@@ -16,13 +16,16 @@ public class SessionHub : Hub
     private readonly ProjectManager _projects;
     private readonly FileWatcherService _watcher;
     private readonly ConnectionDiagnostics _diag;
+    private readonly DevServerService _devServer;
 
-    public SessionHub(SessionManager sessions, ProjectManager projects, FileWatcherService watcher, ConnectionDiagnostics diag)
+    public SessionHub(SessionManager sessions, ProjectManager projects, FileWatcherService watcher,
+        ConnectionDiagnostics diag, DevServerService devServer)
     {
         _sessions = sessions;
         _projects = projects;
         _watcher = watcher;
         _diag = diag;
+        _devServer = devServer;
     }
 
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
@@ -92,11 +95,25 @@ public class SessionHub : Hub
                 new PendingMessagesMessage(queued) with { SessionId = sessionId });
     }
 
+    // Уход из чата: зрителя снимаем всегда (сервер снова вправе слать push/тост о конце хода),
+    // а вот из группы выходим ТОЛЬКО когда ход не идёт. Иначе события начатого хода (дельты,
+    // tool_use, result) летят мимо вкладки, и восстановить ленту можно лишь снимком истории —
+    // ровно так терялся хвост ответа, когда пользователь уходил в другой чат, не дождавшись
+    // ответа. Оставшийся в группе клиент копит события в модульном сторе useSession, поэтому
+    // при возврате лента уже целая. Группа отпустится сама при обрыве связи (OnDisconnectedAsync).
     public async Task LeaveSession(string sessionId)
     {
         _sessions.RemoveViewer(sessionId, Context.ConnectionId);
+        if (TurnInProgress(sessionId)) return;
         await Groups.RemoveFromGroupAsync(Context.ConnectionId, sessionId);
     }
+
+    // Идёт ли ход прямо сейчас — та же тройка статусов, что считают живой сессию
+    // BoardService и TaskExecutionService. Waiting входит: чат ждёт ответа на карточку
+    // разрешения/вопроса, и она приходит в группу.
+    private bool TurnInProgress(string sessionId) =>
+        _sessions.GetSessionInfo(sessionId)?.Status
+            is SessionStatus.Starting or SessionStatus.Working or SessionStatus.Waiting;
 
     public async Task JoinProject(string projectId)
     {
@@ -110,6 +127,27 @@ public class SessionHub : Hub
         await Groups.RemoveFromGroupAsync(Context.ConnectionId, "project_" + projectId);
         _watcher.Unwatch(projectId, Context.ConnectionId);
     }
+
+    // Подписка на вывод дев-сервера (вкладка «Логи» панели «Сервисы»). Группа — на
+    // конкретный сервис, поэтому подписок ровно столько, сколько открытых вкладок логов.
+    //
+    // Накопленный буфер ВОЗВРАЩАЕТСЯ вызывающему, а не рассылается сообщением. Рассылка
+    // (даже адресная, Clients.Caller) приходит в соединение, а не в конкретный вьюер:
+    // при быстром пере-монтировании — а в dev его гарантирует StrictMode — свежий вьюер
+    // ловил и свой реплей, и чужой, и весь лог показывался дважды.
+    //
+    // Снимок берём ДО входа в группу: строка, пришедшая ровно в этот зазор, потеряется,
+    // но задвоиться не может. Из двух зол в логе виднее второе.
+    public async Task<string?> JoinPreviewLog(string projectId, string serviceId)
+    {
+        if (!OwnsProject(projectId)) throw Denied();
+        var buffered = _devServer.GetLogBuffer(projectId, serviceId, UserId!);
+        await Groups.AddToGroupAsync(Context.ConnectionId, DevServerService.LogGroup(projectId, serviceId));
+        return buffered;
+    }
+
+    public Task LeavePreviewLog(string projectId, string serviceId) =>
+        Groups.RemoveFromGroupAsync(Context.ConnectionId, DevServerService.LogGroup(projectId, serviceId));
 
     // Группа для realtime-обновления списка чатов вне проекта (без файлового watcher).
     // Подписаться можно только на самого себя.

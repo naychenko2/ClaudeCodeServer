@@ -708,6 +708,10 @@ export type ServerMessage = { sessionId: string } & (
   // personaId — автор карточки (Э8, координатор на момент публикации)
   | { type: 'team_escalation'; escalationId: string; kind: TeamEscalationKind; title: string; details: string; actions: TeamEscalationAction[]; taskId: string | null; wave: number; resolved: boolean; chosenActionId: string | null; personaId?: string | null }
   | { type: 'preview_status'; status: string; port?: number; error?: string; serviceId?: string }
+  // Вывод дев-сервера — приходит только подписчикам группы конкретного сервиса
+  // (JoinPreviewLog), а не всем вкладкам пользователя. data — накопленное за тик
+  // (~100 мс) сразу куском: построчная рассылка захлёбывалась на сборках
+  | { type: 'preview_log'; serviceId: string; data: string }
   | { type: 'notification'; title: string; body: string; url?: string; kind: 'reminder' | 'claude' | 'info' | 'success' | 'meeting'; notificationId?: string; notifType?: string; projectId?: string; sessionId?: string; taskId?: string; source?: string; tag?: string; personaId?: string; personaName?: string; personaRole?: string; personaColor?: string; personaHasAvatar?: boolean; projectName?: string }
   | { type: 'recall_manifest'; items: RecallItem[] }
   // Полный снимок очереди сообщений занятой сессии (постановка/отмена/доставка).
@@ -721,7 +725,63 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'composer_restore'; text?: string | null; attachedPaths?: string[] | null; mode?: string | null }
   // Подсказка следующего сообщения — чип в композере
   | { type: 'prompt_suggestion'; text: string }
+  // Снимок промпта хода записан: id для кнопки «какой промпт ушёл» под постом.
+  // Текст сюда не кладём — шторка забирает его отдельным REST-запросом.
+  // applied=false — ход доигрывался в живом процессе, и этот промпт модели не уходил
+  | { type: 'prompt_snapshot'; snapshotId: string; applied: boolean; inheritedFromId?: string }
 );
+
+// Снимок промпта хода (GET /api/sessions/{id}/prompt/{snapshotId})
+export interface PromptSection {
+  key: string;
+  title: string;
+  text: string;
+  // system — часть --append-system-prompt; turn — текст сообщения хода с обвязками;
+  // cli-file — файл слоя CLI (CLAUDE.md с раскрытыми импортами)
+  kind: 'system' | 'turn' | 'cli-file';
+  // Длина оригинального текста, когда сам текст в выдаче опущен (файлы слоя CLI
+  // грузятся по требованию — они весят десятки КБ)
+  size?: number | null;
+  // Кусок одинаков от хода к ходу → живёт в кэшируемом префиксе запроса.
+  // false — пересчитывается под текст хода (recall, привязки, граф, само сообщение)
+  stable?: boolean;
+  // Чья это часть промпта: persona | mcp | project | recall | turn | cli | misc.
+  // Слой персоны размазан по пяти секциям — по группе считается его суммарная цена
+  group?: string;
+}
+
+export interface CliSkill {
+  name: string;
+  description?: string | null;
+  // profile — каталог скиллов профиля CLI, project — .claude/skills рабочей папки
+  source: string;
+}
+
+// Доступная часть слоя claude CLI. Недоступны и потому отсутствуют: текст встроенного
+// системного промпта Anthropic и текстовые описания инструментов
+// Незаполненные поля сервер отдаёт как null (сериализатор контроллеров их не прячет),
+// поэтому все они nullable: проверять надо typeof, а не !== undefined
+export interface CliLayer {
+  tools?: string[] | null;
+  mcpServers?: { name: string; status: string }[] | null;
+  files?: PromptSection[] | null;
+  skills?: CliSkill[] | null;
+  transcriptBytes?: number | null;
+  transcriptMessages?: number | null;
+}
+
+export interface PromptSnapshot {
+  id: string;
+  createdAt: number;
+  applied: boolean;
+  inheritedFromId?: string | null;
+  sections: PromptSection[];
+  cliArgs: string[];
+  mcpServers: string[];
+  model?: string | null;
+  mode?: string | null;
+  cliLayer?: CliLayer | null;
+}
 
 export interface UsageInfo {
   inputTokens: number;
@@ -741,9 +801,14 @@ export interface ProjectService {
   suggestedPort: number | null;
   autoPort: boolean;
   saved: boolean;               // из .claude/launch.json — можно редактировать/удалять
-  status: string;               // idle | starting | started | stopped | error
+  // idle | starting | started | stopped | error | external (порт слушает процесс,
+  // запущенный вне продукта — остановить его нельзя и логов у него нет)
+  status: string;
   runningPort: number | null;
   error: string | null;
+  // Составной запуск (Rider multilaunch): id входящих сервисов. Своей команды у
+  // группы нет — она поднимает участников, статус и порт производные от них
+  members?: string[] | null;
 }
 
 // Одна конфигурация из .claude/launch.json (формат Claude Desktop)
@@ -1068,7 +1133,10 @@ export type ChatItem =
   // волны): рисуется компактной плашкой-разделителем с этой подписью, а не пузырём
   // ts — время отправки (Unix-мс UTC): подпись в панели действий поста. Отсутствует
   // у истории, записанной до появления поля
-  | { kind: 'user_message'; text: string; attachedPaths?: string[]; viaAgent?: boolean; senderPersonaId?: string; systemDirective?: boolean; auto?: boolean; senderOrigin?: string; senderChatName?: string; staffNote?: string; ts?: number }
+  // promptSnapshotId — снимок промпта, собранного для хода, который начался этим
+  // сообщением: по нему шторка «какой промпт ушёл». Нет у истории до появления поля,
+  // у ходов без нового сообщения и при сбое записи снимка
+  | { kind: 'user_message'; text: string; attachedPaths?: string[]; viaAgent?: boolean; senderPersonaId?: string; systemDirective?: boolean; auto?: boolean; senderOrigin?: string; senderChatName?: string; staffNote?: string; ts?: number; promptSnapshotId?: string }
   | { kind: 'session_started'; model: string; mode: string; cwd?: string; toolCount?: number; mcpServers?: { name: string; status: string }[]; turnWorktree?: { path: string; name: string } | null }
   // personaId — авторство реплики (персона на момент хода); после смены собеседника
   // старые реплики сохраняют прежний аватар. Отсутствует у обычного ассистента.

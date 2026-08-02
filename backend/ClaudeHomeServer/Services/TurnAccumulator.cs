@@ -60,6 +60,23 @@ internal class TurnAccumulator
                 senderOrigin, staffNote: staffNote, timestamp: NowMs()));
     }
 
+    // Снимок промпта хода записан — привязываем его к сообщению, которым ход начался
+    // (кнопка «какой промпт ушёл» живёт под этим постом). Сообщения может не быть:
+    // продолжение цикла «до готово» идёт без нового сообщения человека — тогда снимок
+    // остаётся на диске, но кнопки под постом не будет.
+    public void SetPromptSnapshot(string snapshotId)
+    {
+        lock (_lock)
+        {
+            for (var i = _currentTurn.Count - 1; i >= 0; i--)
+                if (_currentTurn[i] is StoredUserMessage user)
+                {
+                    user.PromptSnapshotId = snapshotId;
+                    return;
+                }
+        }
+    }
+
     public void OnSessionStarted(string model, string mode, TurnWorktreeInfo? worktree = null)
     {
         lock (_lock) _currentTurn.Add(new StoredSessionStartedMessage(model, mode, worktree));

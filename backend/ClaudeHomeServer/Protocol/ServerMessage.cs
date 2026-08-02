@@ -183,6 +183,13 @@ public record ChatRenamedMessage(string Name)
 public record PreviewStatusMessage(string Status, int? Port = null, string? Error = null, string? ServiceId = null)
     : ServerMessage("preview_status");
 
+// Вывод дев-сервера (Data — накопленный за тик фрагмент текста с CRLF). Уходит только
+// подписчикам группы конкретного сервиса, см. DevServerService.LogGroup.
+// stdout и stderr склеены в порядке появления: разделять их флагом было бы враньём —
+// в батче за тик перемешаны оба потока.
+public record PreviewLogMessage(string ServiceId, string Data)
+    : ServerMessage("preview_log");
+
 public record StatusChangedMessage(string Status, string? LastMessage = null, int MessageCount = 0)
     : ServerMessage("status_changed");
 
@@ -364,6 +371,13 @@ public record NotificationMessage(string Title, string Body, string? Url = null,
 public record RecallItemDto(string Kind, string? Ref, string Title, string? Snippet);
 public record RecallManifestMessage(IReadOnlyList<RecallItemDto> Items)
     : ServerMessage("recall_manifest");
+
+// Снимок промпта хода записан: id для кнопки «какой промпт ушёл» под постом.
+// Текст по SignalR не гоняем — фронт забирает его отдельным REST-запросом при открытии.
+// Applied=false — ход доигрывался в живом процессе, и этот промпт модели не уходил;
+// действует снимок старта прогона (InheritedFromId).
+public record PromptSnapshotMessage(string SnapshotId, bool Applied, string? InheritedFromId = null)
+    : ServerMessage("prompt_snapshot");
 
 // Подсказка следующего сообщения: текст от claude CLI после хода.
 // Эфемерное событие — в history.json не пишется (нет case в OnMessageAsync и StoredMessage).

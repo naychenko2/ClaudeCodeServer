@@ -1,4 +1,5 @@
 import { useState, type HTMLAttributes, type ReactNode } from 'react';
+import { useCanHover } from '../../lib/pointer';
 import { IconButton, type IconButtonVariant } from './IconButton';
 import { RailFlyout, type RailFlyoutAction } from './RailFlyout';
 import { RAIL_W } from './RailCapsule';
@@ -11,6 +12,13 @@ import { RAIL_W } from './RailCapsule';
 // hover живёт здесь, а не в IconButton: тому он нужен только для собственных
 // цветов и наружу не отдаётся, а рельсе он нужен снаружи — по нему подменяется
 // иконка (крестик у открытой панели) и показывается подпись.
+
+// Пальцем наведения нет вовсе: браузер шлёт эмулированный mouseenter при тапе, а
+// mouseleave не приходит, пока не тапнут в другое место, — подпись висела на экране
+// до следующего тапа. Гасить её по клику мало (тапают и мимо кнопок), поэтому hover
+// там просто не заводится: имя кнопки на планшете и так читает ariaLabel. Способ
+// узнать про палец — useCanHover: media query на планшете с клавиатурой врёт, см.
+// lib/pointer.
 export function RailIconButton({
   side, label, action, active, disabled, variant, wrapper, hoverSuppressed, onClick, onHoverChange, children,
 }: {
@@ -40,7 +48,12 @@ export function RailIconButton({
   children: ReactNode | ((hover: boolean) => ReactNode);
 }) {
   const [hover, setHover] = useState(false);
-  const set = (v: boolean) => { setHover(v); onHoverChange?.(v); };
+  const canHover = useCanHover();
+  const set = (v: boolean) => {
+    if (v && !canHover) return;
+    setHover(v);
+    onHoverChange?.(v);
+  };
   return (
     <span
       {...wrapper}

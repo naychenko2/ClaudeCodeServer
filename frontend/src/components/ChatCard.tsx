@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { AlertCircle, CheckCircle2, Clock, LayoutGrid, MoreVertical, Pencil, Pin, Tags, Trash2, Users, Wrench } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Clock, Columns3, MoreVertical, Pencil, Pin, Tags, Trash2, Users, Wrench } from 'lucide-react';
 import type { Session } from '../types';
 import { C, R, SHADOW, FONT } from '../lib/design';
 import { IconButton, Menu, MenuItem } from './ui';
@@ -444,7 +444,7 @@ export function ChatCard({
           )}
           {onAddToWall && (
             <MenuItem
-              icon={<LayoutGrid size={15} strokeWidth={2} />}
+              icon={<Columns3 size={15} strokeWidth={2} />}
               label="На стену"
               onClick={e => { e.stopPropagation(); setMenu(null); onAddToWall(); }}
             />

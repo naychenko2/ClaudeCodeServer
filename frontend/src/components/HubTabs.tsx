@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { Activity, Book, Calendar, Coins, Folder, House, LayoutGrid, MessageCircle, Puzzle, Share2, Users } from 'lucide-react';
+import { Activity, Book, Calendar, Coins, Columns3, Folder, House, MessageCircle, Puzzle, Share2, Users } from 'lucide-react';
 import { PillSwitch } from './Toolbar';
 import { useModules } from '../lib/modules';
 
@@ -20,7 +20,7 @@ export function moduleIdOf(v: HubTabValue): string | null {
 const TAB_ICONS: Record<HubTab, ReactNode> = {
   home: <House size={18} strokeWidth={2} />,
   chats: <MessageCircle size={18} strokeWidth={2} />,
-  wall: <LayoutGrid size={18} strokeWidth={2} />,
+  wall: <Columns3 size={18} strokeWidth={2} />,
   projects: <Folder size={18} strokeWidth={2} />,
   calendar: <Calendar size={18} strokeWidth={2} />,
   notes: <Share2 size={18} strokeWidth={2} />,

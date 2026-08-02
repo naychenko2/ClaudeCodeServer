@@ -3,7 +3,7 @@
 // компонент: выбранная механика и настройки живут у родителя (Composer), сюда приходят
 // пропсами. Тему пользователь пишет в самом поле композера.
 import { ShieldAlert } from 'lucide-react';
-import { C, FONT, FS, R, SHADOW } from '../../lib/design';
+import { C, FONT, FS, R, SHADOW, Z } from '../../lib/design';
 import { ICON_STROKE } from '../../components/ui/icons';
 import { teamImplementModeWarning, teamImplementSwitchesMode } from '../../lib/teamImplement';
 import type { Mode } from '../../lib/modes';
@@ -477,6 +477,13 @@ export function TeamDrawer({ open, mech, settings, candidates, availableSkills, 
 
   return (
     <div style={{
+      position: 'relative',
+      // Без этого div — position:static — красится НИЖЕ соседнего поля ввода композера
+      // (оно position:relative): по правилам стекинга позиционированные элементы с
+      // z-index:auto красятся поверх статичных, даже если раскрывашка идёт раньше по DOM
+      // и обычно не пересекается с полем геометрически. zIndex держит её сверху и в
+      // краевых случаях (другой набор механик, другая высота контента/вьюпорта).
+      zIndex: Z.dropdown,
       overflow: 'hidden',
       maxHeight: open ? 560 : 0,
       opacity: open ? 1 : 0,

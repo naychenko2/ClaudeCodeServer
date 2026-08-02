@@ -103,7 +103,7 @@ const INLINE_CODE: CSSProperties = {
 // Ссылка на файл проекта в тексте ассистента: открывает файл на просмотр там же, где
 // дерево и карточки инструментов. Рендерится только для файлов, которые реально есть
 // в проекте — битых ссылок и «открыл, а там 404» не бывает.
-function FileLink({ path, onOpen, mono, children }: {
+export function FileLink({ path, onOpen, mono, children }: {
   path: string;
   onOpen: (path: string) => void;
   mono?: boolean;

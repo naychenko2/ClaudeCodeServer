@@ -2,7 +2,7 @@ import { useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Users, Play, Zap, ChevronDown, RotateCcw, AlertTriangle, Check } from 'lucide-react';
 import type { ChatItem, Persona, TeamPlan, TeamPlanSubtask } from '../../types';
 import { C, FS, FONT, R, SHADOW, SP } from '../../lib/design';
-import { relPath } from '../../lib/paths';
+import { relPath, basename } from '../../lib/paths';
 import { useIsMobile } from '../../lib/breakpoints';
 import { ensurePersonasLoaded, getPersonaById, usePersonas, usePersonasVersion } from '../../lib/personas';
 import { agentDotColor } from '../AgentSelector';
@@ -11,7 +11,8 @@ import { teamPlanRunLabel } from '../../lib/teamImplement';
 import { Button } from '../ui/Button';
 import { Dot } from '../ui/Dot';
 import { Menu } from '../ui/Menu';
-import { ChatProjectContext, TeamPlanContext } from './contexts';
+import { FileLink } from './MarkdownContent';
+import { ChatProjectContext, ChatOpenFileContext, TeamPlanContext } from './contexts';
 
 // Склонение числительного (ру): 1 под-задача, 2 под-задачи, 5 под-задач
 function plural(n: number, one: string, few: string, many: string): string {
@@ -70,6 +71,56 @@ function AnnotationBlock({ label, items, note }: { label: string; items: string[
           {note}
         </div>
       )}
+    </div>
+  );
+}
+
+// Блок «Замысел» (решение 2026-08-02): 3–5 строк от планировщика над списком под-задач —
+// к чему идём, ключевые решения, что осознанно не делаем. Тон обычный (не warning) — это
+// суть плана, а не предупреждение. Ограничение высоты + fade — на случай, если планировщик
+// не удержался в объёме (та же защита, что у тела длинного плана).
+function IntentBlock({ text }: { text: string }) {
+  const trimmed = text.trim();
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const [overflowing, setOverflowing] = useState(false);
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+    setOverflowing(el.scrollHeight - el.clientHeight > 8);
+  }, [trimmed]);
+  if (!trimmed) return null;
+  return (
+    <div style={{ position: 'relative', margin: '10px 0' }}>
+      <div style={{
+        fontSize: FS.xs, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase',
+        color: C.textMuted, marginBottom: 4,
+      }}>
+        Замысел
+      </div>
+      <div ref={bodyRef} style={{
+        fontSize: FS.base, color: C.textSecondary, lineHeight: 1.5,
+        whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 180, overflow: 'auto',
+      }}>
+        {trimmed}
+      </div>
+      {overflowing && (
+        <div style={{
+          position: 'absolute', left: 0, right: 0, bottom: 0, height: 28,
+          background: `linear-gradient(to bottom, transparent, ${C.bgCard})`,
+          pointerEvents: 'none',
+        }} />
+      )}
+    </div>
+  );
+}
+
+// Строка-ссылка на файл полного плана (решение 2026-08-02): имя — хвост пути, открывает
+// файл в правой панели предпросмотра тем же механизмом, что MarkdownContent/PersonaTaskView.
+// Рендерится и у свёрнутой (resolved) карточки — план остаётся ценным ориентиром после запуска волн.
+function PlanFileLinkRow({ path, onOpen }: { path: string; onOpen: (path: string) => void }) {
+  return (
+    <div style={{ fontSize: FS.sm, color: C.textSecondary, margin: '6px 0 2px' }}>
+      Полный план — <FileLink path={path} onOpen={onOpen} mono>{basename(path)}</FileLink>
     </div>
   );
 }
@@ -327,6 +378,7 @@ export function TeamPlanView({ item, online }: {
 }) {
   const ctx = useContext(TeamPlanContext);
   const project = useContext(ChatProjectContext);
+  const onOpenFile = useContext(ChatOpenFileContext);
   const isMobile = useIsMobile();
   const personas = usePersonas();
   usePersonasVersion();
@@ -337,6 +389,11 @@ export function TeamPlanView({ item, online }: {
 
   const plan = item.plan;
   const rootPath = project?.rootPath;
+  // Ссылка на файл полного плана — общая для всех состояний карточки (в т.ч. свёрнутых,
+  // Э8): null у глобального чата без проекта или когда запись на сервере не удалась
+  const fileLinkRow = onOpenFile && plan.planFilePath
+    ? <PlanFileLinkRow path={plan.planFilePath} onOpen={onOpenFile} />
+    : null;
 
   // Автор карточки (Э8): планировщик ИЗ ПЛАНА, не из текущего состояния режима — авторство
   // истории не должно меняться при смене координатора/планировщика. null у штаба без персоны —
@@ -389,6 +446,7 @@ export function TeamPlanView({ item, online }: {
             {author.name} · планировщик
           </div>
         )}
+        {fileLinkRow}
         <CollapsedPlan plan={plan} isMobile={isMobile} rootPath={rootPath} />
       </div>
     );
@@ -412,6 +470,7 @@ export function TeamPlanView({ item, online }: {
             {author.name} · планировщик
           </div>
         )}
+        {fileLinkRow}
         <CollapsedPlan plan={plan} isMobile={isMobile} rootPath={rootPath} />
       </div>
     );
@@ -476,6 +535,11 @@ export function TeamPlanView({ item, online }: {
       {plan.summary && (
         <div style={{ fontSize: FS.base, color: C.textSecondary, lineHeight: 1.45 }}>{plan.summary}</div>
       )}
+
+      {/* «Замысел» (решение 2026-08-02): 3–5 строк от планировщика — над списком под-задач,
+          чтобы расхождение с задачей было видно ДО подтверждения распределения работ */}
+      {plan.intent && <IntentBlock text={plan.intent} />}
+      {fileLinkRow}
 
       {/* «Что изменилось» (Э8, только у v2+) — над телом плана: человек уже читал v1,
           подтверждает именно дельту. Подпись — дословно из спеки */}

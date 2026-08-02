@@ -45,6 +45,8 @@ import { TerminalView } from '../components/terminal/TerminalView';
 import { PreviewView } from '../components/preview/PreviewView';
 import * as terminalApi from '../lib/terminalSignalr';
 import { DesktopWorkspace } from './workspace/DesktopWorkspace';
+import { useProjectTerminals } from '../hooks/useProjectTerminals';
+import { useProjectServices } from '../hooks/useProjectServices';
 import type { PanelKey } from './workspace/panelStackState';
 import { TerminalPanelContent, PreviewPanelContent } from './workspace/panels';
 import { DocsPanel } from './workspace/DocsPanel';
@@ -288,93 +290,21 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
   const [projectForEdit, setProjectForEdit] = useState(project);
   type ToolsTab = 'terminal' | 'preview';
   const [toolsTab, setToolsTab] = useState<ToolsTab>('terminal');
-  const [activeTerminalId, setActiveTerminalId] = useState<string | null>(null);
-  const [activePreviewId, setActivePreviewId] = useState<string | null>(null);
-  const [previewServices, setPreviewServices] = useState<ProjectService[]>([]);
   const [terminalBusy, setTerminalBusy] = useState(false);
-  // Список терминалов проекта — поднят сюда (не в ToolsSidebar): нужен и хедеру ToolsPane
-  // для имени активного, а на мобиле сайдбар и контент — разные вью и не смонтированы разом.
-  const [terminals, setTerminals] = useState<terminalApi.TerminalInfo[]>([]);
+
+  // Терминалы и сервисы — общие хуки (их же зовёт «Стена»); воркспейсная навигация
+  // осталась здесь: старт сервиса переключает вкладку инструментов (onStarted)
+  const {
+    terminals, activeTerminalId, setActiveTerminalId,
+    create: handleCreateTerminal, stop: handleStopTerminal, rename: handleRenameTerminal,
+  } = useProjectTerminals(project.id);
   const activeTerminalName = terminals.find(t => t.id === activeTerminalId)?.name;
 
-  const refreshTerminals = useCallback(async () => {
-    try { setTerminals(await terminalApi.listTerminals(project.id)); } catch { /* офлайн */ }
-  }, [project.id]);
-
-  // Список терминалов держим всегда: он нужен и вкладке «Инструменты», и панельке
-  // терминала в интерфейсе панелей проекта (она доступна независимо от активной вкладки)
-  useEffect(() => {
-    void refreshTerminals();
-    return terminalApi.onTerminalMessage(msg => {
-      if (msg.type === 'terminal_status') void refreshTerminals();
-      else if (msg.type === 'terminal_renamed' && msg.terminalId) {
-        setTerminals(prev => prev.map(t => t.id === msg.terminalId ? { ...t, name: msg.name ?? t.name } : t));
-      }
-    });
-  }, [leftTab, refreshTerminals]);
-
-  const handleCreateTerminal = useCallback(async () => {
-    try {
-      const t = await terminalApi.createTerminal(project.id);
-      setTerminals(prev => [...prev.filter(x => x.id !== t.id), t]);
-      setActiveTerminalId(t.id);
-    } catch { /* офлайн */ }
-  }, [project.id]);
-
-  const handleStopTerminal = useCallback(async (id: string) => {
-    await terminalApi.stopTerminal(id);
-    setActiveTerminalId(prev => prev === id ? null : prev);
-    void refreshTerminals();
-  }, [refreshTerminals]);
-
-  const handleRenameTerminal = useCallback(async (id: string, name: string) => {
-    try {
-      const updated = await terminalApi.renameTerminal(id, name);
-      if (updated) setTerminals(prev => prev.map(t => t.id === id ? updated : t));
-    } catch { /* офлайн */ }
-  }, []);
-
-  // ── Preview: список сервисов проекта + запуск/остановка ─────────────────
-  const refreshServices = useCallback(async () => {
-    try {
-      const r = await api.projects.services(project.id);
-      setPreviewServices(r.services);
-      if (r.activeServiceId) setActivePreviewId(r.activeServiceId);
-    } catch { /* офлайн — оставляем как есть */ }
-  }, [project.id]);
-
-  const startService = useCallback(async (svc: ProjectService) => {
-    setPreviewServices(prev => prev.map(s => s.id === svc.id ? { ...s, status: 'starting', error: null } : s));
-    setActivePreviewId(svc.id);
-    setToolsTab('preview');
-    try {
-      const r = await api.projects.previewStart(project.id, {
-        serviceId: svc.id, name: svc.name, command: svc.command, args: svc.args,
-        cwd: svc.cwd ?? undefined, port: svc.suggestedPort ?? undefined, autoPort: svc.autoPort,
-      });
-      setPreviewServices(prev => prev.map(s => s.id === svc.id
-        ? { ...s, status: r.status, runningPort: r.port ?? null, error: r.error ?? null }
-        : s));
-    } catch {
-      setPreviewServices(prev => prev.map(s => s.id === svc.id ? { ...s, status: 'error' } : s));
-    }
-  }, [project.id]);
-
-  const stopService = useCallback(async (serviceId: string) => {
-    try { await api.projects.previewStop(project.id, serviceId); } catch { /* ignore */ }
-    setPreviewServices(prev => prev.map(s => s.id === serviceId ? { ...s, status: 'stopped', runningPort: null } : s));
-  }, [project.id]);
-
-  // Живой статус сервисов из broadcast preview_status (группа user_*)
-  useEffect(() => {
-    return onMessage(msg => {
-      if (msg.type !== 'preview_status' || !msg.serviceId) return;
-      const sid = msg.serviceId;
-      setPreviewServices(prev => prev.map(s => s.id === sid
-        ? { ...s, status: msg.status, runningPort: msg.port ?? s.runningPort, error: msg.error ?? null }
-        : s));
-    });
-  }, []);
+  const onServiceStarted = useCallback(() => setToolsTab('preview'), []);
+  const {
+    services: previewServices, activePreviewId, setActivePreviewId,
+    refresh: refreshServices, start: startService, stop: stopService,
+  } = useProjectServices(project.id, { onStarted: onServiceStarted });
 
   const activeSessionRef = useRef<Session | null>(null);
   activeSessionRef.current = activeSession;
@@ -1360,6 +1290,7 @@ const windowWidth = useWindowWidth();
           isTablet={isTablet}
           project={project}
           projectForEdit={projectForEdit}
+          onOpenWall={() => onSwitchHub('wall')}
           railCounts={railCounts}
           chatCount={chatCount}
           onSessionsChanged={setChatCount}

@@ -1,17 +1,22 @@
-using ClaudeHomeServer.Telemetry;
+using ClaudeHomeServer.Services.Http;
 using FluentAssertions;
 using Microsoft.Extensions.Logging;
 using Xunit;
 
-namespace ClaudeHomeServer.Tests.Telemetry;
+namespace ClaudeHomeServer.Tests.Http;
 
 /// <summary>
-/// Логгер неудачного экспорта телеметрии: недоступный коллектор — это Warning в одну строку
-/// и не чаще раза в интервал, а не Error со стектрейсом на каждую попытку экспорта.
+/// Логгер опциональной зависимости: недоступный хост — это Warning в одну строку и не чаще
+/// раза в интервал, а не Error со стектрейсом на каждый запрос.
 /// </summary>
-public class OtlpExportHttpLoggerTests
+public class QuietHttpLoggerTests
 {
     private static readonly Uri Endpoint = new("http://localhost:4318/v1/traces");
+
+    private static readonly QuietHttpClientProfile Profile = new(
+        Category: "Tests.Quiet",
+        Subject: "OTLP-коллектором",
+        Consequence: "Телеметрия не уходит.");
 
     [Fact]
     public void LogRequestFailed_ПишетОдинWarningБезСтектрейса()
@@ -23,7 +28,12 @@ public class OtlpExportHttpLoggerTests
         sink.Entries.Should().ContainSingle();
         var entry = sink.Entries[0];
         entry.Level.Should().Be(LogLevel.Warning);
-        entry.Message.Should().Contain("http://localhost:4318").And.Contain("недоступен");
+        entry.Message.Should()
+            .Contain("OTLP-коллектором").And
+            .Contain("http://localhost:4318").And
+            .Contain("Телеметрия не уходит.").And
+            // Точка сообщения исключения не должна складываться с точкой шаблона
+            .NotContain("..");
         // Исключение в запись не кладём: стектрейс здесь всегда один и тот же.
         entry.HasException.Should().BeFalse();
     }
@@ -34,10 +44,10 @@ public class OtlpExportHttpLoggerTests
         var (logger, sink) = Build(out var clock);
 
         Fail(logger);
-        clock.Advance(OtlpExportHttpLogger.ReportInterval - TimeSpan.FromSeconds(1));
+        clock.Advance(QuietHttpLogger.ReportInterval - TimeSpan.FromSeconds(1));
         Fail(logger);
 
-        sink.Entries.Should().ContainSingle("экспорт идёт по расписанию — жалоба не чаще раза в интервал");
+        sink.Entries.Should().ContainSingle("зависимость дёргается часто — жалоба не чаще раза в интервал");
     }
 
     [Fact]
@@ -46,30 +56,30 @@ public class OtlpExportHttpLoggerTests
         var (logger, sink) = Build(out var clock);
 
         Fail(logger);
-        clock.Advance(OtlpExportHttpLogger.ReportInterval + TimeSpan.FromSeconds(1));
+        clock.Advance(QuietHttpLogger.ReportInterval + TimeSpan.FromSeconds(1));
         Fail(logger);
 
         sink.Entries.Should().HaveCount(2);
     }
 
     [Fact]
-    public void УспешныйЭкспортСбрасываетТроттлинг()
+    public void УспешныйЗапросСбрасываетТроттлинг()
     {
         var (logger, sink) = Build(out var clock);
 
         Fail(logger);
         clock.Advance(TimeSpan.FromSeconds(5));
-        // Коллектор поднялся...
+        // Зависимость поднялась...
         logger.LogRequestStop(null, Request(), new HttpResponseMessage(System.Net.HttpStatusCode.OK), TimeSpan.Zero);
         clock.Advance(TimeSpan.FromSeconds(5));
-        // ...и снова упал — об этом надо узнать сразу, а не через интервал тишины.
+        // ...и снова упала — об этом надо узнать сразу, а не через интервал тишины.
         Fail(logger);
 
         sink.Entries.Should().HaveCount(2);
     }
 
     [Fact]
-    public void ОтказКоллектораПоКодуОтветаТожеWarning()
+    public void ОтказПоКодуОтветаТожеWarning()
     {
         var (logger, sink) = Build(out _);
 
@@ -81,7 +91,7 @@ public class OtlpExportHttpLoggerTests
         sink.Entries[0].Message.Should().Contain("503");
     }
 
-    private static void Fail(OtlpExportHttpLogger logger) =>
+    private static void Fail(QuietHttpLogger logger) =>
         logger.LogRequestFailed(
             null, Request(), null,
             new HttpRequestException("Подключение не установлено", new Exception("отказ в подключении")),
@@ -89,7 +99,7 @@ public class OtlpExportHttpLoggerTests
 
     private static HttpRequestMessage Request() => new(HttpMethod.Post, Endpoint);
 
-    private static (OtlpExportHttpLogger Logger, CollectingSink Sink) Build(out FakeClock clock)
+    private static (QuietHttpLogger Logger, CollectingSink Sink) Build(out FakeClock clock)
     {
         var sink = new CollectingSink();
         var factory = LoggerFactory.Create(b =>
@@ -99,7 +109,7 @@ public class OtlpExportHttpLoggerTests
         });
         var c = new FakeClock();
         clock = c;
-        return (new OtlpExportHttpLogger(factory, () => c.Now), sink);
+        return (new QuietHttpLogger(factory, Profile, () => c.Now), sink);
     }
 
     private sealed class FakeClock

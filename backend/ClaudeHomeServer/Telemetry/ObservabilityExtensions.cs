@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using ClaudeHomeServer.Services.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -196,7 +197,7 @@ public static class ObservabilityExtensions
     /// логирование <c>Microsoft.Extensions.Http</c> печатает каждый провалившийся запрос как
     /// Error со стектрейсом. Коллектор поднят не всегда (на деве — почти никогда), экспорт идёт
     /// по расписанию, и консоль превращается в ленту красных портянок, в которой не видно
-    /// настоящих ошибок. Меняем дефолтные логгеры на <see cref="OtlpExportHttpLogger"/>:
+    /// настоящих ошибок. Меняем дефолтные логгеры на <see cref="QuietHttpLogger"/>:
     /// Warning, одна строка, не чаще раза в пять минут.
     ///
     /// Вызывается только когда экспорт реально включён — иначе именованные клиенты никем
@@ -204,13 +205,15 @@ public static class ObservabilityExtensions
     /// </summary>
     private static void QuietDownExportLogging(IServiceCollection services)
     {
-        services.AddSingleton<OtlpExportHttpLogger>();
+        // Общий профиль на все три клиента: троттлинг один, мёртвый коллектор = одна строка,
+        // а не три (трейсы, метрики и логи экспортируются по своим расписаниям).
+        var profile = new QuietHttpClientProfile(
+            Category: "ClaudeHomeServer.Telemetry.OtlpExport",
+            Subject: "OTLP-коллектором",
+            Consequence: "Телеметрия не уходит.");
 
-        // Синглтон один на все три клиента: троттлинг общий, один сбой коллектора = одна строка.
         foreach (var client in new[] { "OtlpTraceExporter", "OtlpMetricExporter", "OtlpLogExporter" })
-            services.AddHttpClient(client)
-                .RemoveAllLoggers()
-                .AddLogger(sp => sp.GetRequiredService<OtlpExportHttpLogger>());
+            services.AddQuietHttpClient(client, profile);
     }
 
     /// <summary>

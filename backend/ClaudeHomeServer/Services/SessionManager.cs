@@ -4610,20 +4610,38 @@ public class SessionManager : IDisposable
                 case RateLimitMessage m:
                     _usage.Record(m.LimitType, m.Utilization, m.Status, m.IsUsingOverage, m.ResetsAt, m.OverageStatus, m.OverageResetsAt, subscriptionKey: entry?.Info.Provider, source: "turn");
                     _activity?.Touch(entry?.Info.Provider);
-                    // Исчерпание лимита подписки → помечаем exhausted в пуле, чтобы новые чаты
-                    // пошли на другую подписку. "rejected" — CLI отклонил ход; utilization >= 1.0
-                    // без overage — окно выбрано (с overage ходы ещё проходят).
-                    if (entry is not null && (m.Status == "rejected" || (m.Utilization >= 1.0 && !m.IsUsingOverage)))
+                    // Состояние пула правим только по известным окнам (IsExhaustionWindow):
+                    // rejected неизвестного окна — транзитная телеметрия CLI, она попадает
+                    // в usage для экрана, но ротацию не трогает.
+                    if (entry is not null && ClaudeSubscriptionPool.IsExhaustionWindow(m.LimitType))
                     {
-                        var resetsAt = m.ResetsAt is not null && DateTime.TryParse(m.ResetsAt, out var dt)
-                            ? (DateTime?)dt.ToUniversalTime() : null;
-                        _subscriptionPool.MarkExhausted(entry.Info.Provider, resetsAt);
-                        // Сразу перевозим чат на здоровый аккаунт пула — кнопка «Повторить»
-                        // упавшего хода пойдёт уже через него. Если переключиться некуда,
-                        // а ход реально отбит — предлагаем сторонний провайдер карточкой.
-                        TryPoolFailover(sessionId, entry);
-                        if (m.Status == "rejected")
-                            await OfferProviderFallbackAsync(sessionId, m.ResetsAt);
+                        // Исчерпание лимита подписки → помечаем exhausted в пуле, чтобы новые чаты
+                        // пошли на другую подписку. "rejected" — CLI отклонил ход; utilization >= 1.0
+                        // без overage — окно выбрано (с overage ходы ещё проходят).
+                        if (m.Status == "rejected" || (m.Utilization >= 1.0 && !m.IsUsingOverage))
+                        {
+                            var resetsAt = m.ResetsAt is not null && DateTime.TryParse(m.ResetsAt, out var dt)
+                                ? (DateTime?)dt.ToUniversalTime() : null;
+                            _subscriptionPool.MarkExhausted(entry.Info.Provider, resetsAt);
+                            // Сразу перевозим чат на здоровый аккаунт пула — кнопка «Повторить»
+                            // упавшего хода пойдёт уже через него. Если переключиться некуда,
+                            // а ход реально отбит — предлагаем сторонний провайдер карточкой.
+                            TryPoolFailover(sessionId, entry);
+                            if (m.Status == "rejected")
+                                await OfferProviderFallbackAsync(sessionId, m.ResetsAt);
+                        }
+                        // Самолечение: живой ход через аккаунт — сильнейший сигнал, что он
+                        // работает; снимаем пометку, как это делает идл-пинг warmup
+                        // (RecordAndGuard). Без этого ложный бан висел до resetsAt: активные
+                        // аккаунты warmup не пингует, а ходовой обработчик только маркировал.
+                        // Компромисс осознанный: allowed по five_hour снимет пометку и при
+                        // реально выбранном seven_day — следующий ход тут же перемаркирует,
+                        // false-negative на минуты дешевле false-positive на сутки.
+                        else if (_subscriptionPool.IsExhausted(entry.Info.Provider))
+                        {
+                            _subscriptionPool.Reset(entry.Info.Provider);
+                            Console.WriteLine($"[SessionManager] Подписка «{entry.Info.Provider}» отвечает (ход {sessionId}) — снята пометка исчерпания");
+                        }
                     }
                     break;
                 case ErrorMessage m:

@@ -118,6 +118,34 @@ public class SubscriptionUsageWarmupServiceTests : IDisposable
         pool.IsExhausted("second").Should().BeFalse();
     }
 
+    [Fact]
+    public void RecordAndGuard_RejectedНеизвестногоОкна_НеВыводитИзРотации()
+    {
+        // Инцидент 2026-08-02: seven_day_overage_included с rejected — транзитная телеметрия
+        // CLI, ходы на аккаунте продолжали проходить. Пишем снимок, но пул не трогаем.
+        var (svc, pool, usage, _) = MkService(subKeys: ["second"]);
+        var msg = new RateLimitMessage("seven_day_overage_included",
+            DateTime.UtcNow.AddDays(5).ToString("o"), "rejected", null, false);
+
+        svc.RecordAndGuard("second", msg);
+
+        pool.IsExhausted("second").Should().BeFalse();
+        usage.GetAll().Should().ContainSingle(s => s.LimitType == "seven_day_overage_included");
+    }
+
+    [Fact]
+    public void RecordAndGuard_НеизвестноеОкно_НеСнимаетПометкуИсчерпания()
+    {
+        // Симметрия: неизвестное окно не банит и не разбанивает.
+        var (svc, pool, _, _) = MkService(subKeys: ["second"]);
+        pool.MarkExhausted("second", DateTime.UtcNow.AddHours(2));
+
+        svc.RecordAndGuard("second", new RateLimitMessage("seven_day_overage_included",
+            DateTime.UtcNow.AddDays(5).ToString("o"), "allowed_warning", 0.3, false));
+
+        pool.IsExhausted("second").Should().BeTrue();
+    }
+
     // --- IdlePingMinutes: 0 выключает механизм ---
 
     [Fact]

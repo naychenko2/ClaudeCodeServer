@@ -31,6 +31,7 @@ public class SessionManagerTests : IDisposable
     private readonly ClaudeHomeServer.Services.Llm.LocalActionOverridesStore _actionOverrides;
     private readonly UsageService _usage;
     private readonly SubscriptionActivityTracker _activity;
+    private readonly ClaudeSubscriptionPool _subPool;
     private readonly SessionManager _sut;
     private readonly Mock<IClientProxy> _clientProxy;
     private readonly List<ServerMessage> _sentMessages = new();
@@ -80,6 +81,7 @@ public class SessionManagerTests : IDisposable
 
         var llmProviders = new ClaudeHomeServer.Services.Llm.LlmProviderRegistry(config);
         var subPool = new ClaudeSubscriptionPool(config);
+        _subPool = subPool;
         var adapters = new ClaudeHomeServer.Services.Llm.LlmSessionAdapterFactory(
             config, new SkillsService(), new WorkspaceKnowledgeStore(config), llmProviders, subPool);
         var falCost = new FalCostService(new Mock<IHttpClientFactory>().Object, config);
@@ -3632,6 +3634,57 @@ public class SessionManagerTests : IDisposable
         snap.Source.Should().Be("turn");
         snap.SubscriptionKey.Should().Be(ClaudeSubscriptionPool.PrimaryKey);
         _activity.IsIdle(ClaudeSubscriptionPool.PrimaryKey, TimeSpan.FromMinutes(10)).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task RateLimitMessage_ЗдоровоеОкноНаИсчерпанномАккаунте_СнимаетПометку()
+    {
+        // Самолечение: аккаунт помечен исчерпанным (ложно или окно уже отпустило), но ход
+        // через него проходит — пометка снимается прямо на ходу, не дожидаясь resetsAt.
+        var dir = MkProjectDir("ratelimit-heal");
+        var project = _projectManager.Create("RLH", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        var acc = new TurnAccumulator(new List<StoredMessage>());
+        _subPool.MarkExhausted(ClaudeSubscriptionPool.PrimaryKey, DateTime.UtcNow.AddDays(5));
+
+        await InvokeOnMessageAsync(session.Id, acc, new RateLimitMessage("five_hour",
+            DateTime.UtcNow.AddHours(2).ToString("o"), "allowed_warning", 0.64, false));
+
+        _subPool.IsExhausted(ClaudeSubscriptionPool.PrimaryKey).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task RateLimitMessage_RejectedНеизвестногоОкна_НеПомечаетИсчерпанной()
+    {
+        // Инцидент 2026-08-02: одиночное rejected по окну seven_day_overage_included
+        // выводило живой аккаунт из ротации на пять суток. Такое окно только пишется в usage.
+        var dir = MkProjectDir("ratelimit-unknown");
+        var project = _projectManager.Create("RLU", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        var acc = new TurnAccumulator(new List<StoredMessage>());
+
+        await InvokeOnMessageAsync(session.Id, acc, new RateLimitMessage("seven_day_overage_included",
+            DateTime.UtcNow.AddDays(5).ToString("o"), "rejected", null, false));
+
+        _subPool.IsExhausted(ClaudeSubscriptionPool.PrimaryKey).Should().BeFalse();
+        _usage.GetAll().Should().Contain(s => s.LimitType == "seven_day_overage_included");
+    }
+
+    [Fact]
+    public async Task RateLimitMessage_НеизвестноеОкно_НеСнимаетПометкуИсчерпания()
+    {
+        // Симметрия белого списка: неизвестное окно не банит и не разбанивает — иначе
+        // транзитное allowed_warning по overage-окну сняло бы реальный бан по неделе.
+        var dir = MkProjectDir("ratelimit-unknown-heal");
+        var project = _projectManager.Create("RLUH", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        var acc = new TurnAccumulator(new List<StoredMessage>());
+        _subPool.MarkExhausted(ClaudeSubscriptionPool.PrimaryKey, DateTime.UtcNow.AddDays(2));
+
+        await InvokeOnMessageAsync(session.Id, acc, new RateLimitMessage("seven_day_overage_included",
+            DateTime.UtcNow.AddDays(5).ToString("o"), "allowed_warning", 0.3, false));
+
+        _subPool.IsExhausted(ClaudeSubscriptionPool.PrimaryKey).Should().BeTrue();
     }
 
     // --- Per-persona рубильники MCP-серверов (Off-привязка type: tool, target: <ключ>) ---

@@ -180,6 +180,48 @@ public class ClaudeSubscriptionPoolTests : IDisposable
     }
 
     [Fact]
+    public void Restore_RejectedНеизвестногоОкна_НеПомечает()
+    {
+        // Инцидент 2026-08-02: CLI прислал по ЖИВОМУ аккаунту одиночное rejected по окну
+        // seven_day_overage_included со сбросом через пять суток. Такой снимок не должен
+        // выводить подписку из ротации — ни на ходу, ни при восстановлении после рестарта.
+        var config = Config("second");
+        var usage = new UsageService(config);
+        usage.Record("seven_day_overage_included", null, "rejected", isUsingOverage: false,
+            resetsAt: DateTime.UtcNow.AddDays(5).ToString("o"), subscriptionKey: "second", source: "turn");
+
+        var pool = new ClaudeSubscriptionPool(config, usage);
+
+        pool.IsExhausted("second").Should().BeFalse();
+    }
+
+    [Fact]
+    public void Restore_RejectedНедельногоОкна_Помечает()
+    {
+        // Обратная сторона белого списка: базовые окна подписки маркируют как и раньше.
+        var config = Config("second");
+        var usage = new UsageService(config);
+        usage.Record("seven_day", null, "rejected", isUsingOverage: false,
+            resetsAt: DateTime.UtcNow.AddDays(2).ToString("o"), subscriptionKey: "second", source: "turn");
+
+        var pool = new ClaudeSubscriptionPool(config, usage);
+
+        pool.IsExhausted("second").Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("five_hour", true)]
+    [InlineData("seven_day", true)]
+    [InlineData("seven_day_overage_included", false)]
+    [InlineData("seven_day_opus", false)]
+    [InlineData("extra_usage", false)]
+    [InlineData(null, false)]
+    public void IsExhaustionWindow_БелыйСписокОкон(string? limitType, bool expected)
+    {
+        ClaudeSubscriptionPool.IsExhaustionWindow(limitType).Should().Be(expected);
+    }
+
+    [Fact]
     public void Restore_БолееПоздныйOAuthСнимок_НеМаскируетРанееЗафиксированноеИсчерпание()
     {
         // Дыра ротации: SubscriptionOAuthUsageService.RecordWindow пишет status="allowed"
@@ -275,6 +317,22 @@ public class ClaudeSubscriptionPoolTests : IDisposable
         // Все помечены исчерпанными — fallback на наименее загруженную (second), не на основную.
         for (var i = 0; i < 20; i++)
             pool.Pick().Should().Be("second");
+    }
+
+    [Fact]
+    public void Pick_ВсеИсчерпаны_БерётСБлижайшимСбросом()
+    {
+        // Инцидент 2026-08-02: оба аккаунта помечены исчерпанными, utilization 5h-окна у обоих
+        // нулевая (при rejected CLI её не присылает) → tie-break по загрузке был случайным и
+        // гнал новые чаты на аккаунт, лежащий до конца недели. Берём того, кто оживёт раньше.
+        var config = Config(ClaudeSubscriptionPool.PrimaryKey, "claude-2");
+        var pool = new ClaudeSubscriptionPool(config, new UsageService(config));
+        pool.MarkExhausted(ClaudeSubscriptionPool.PrimaryKey, DateTime.UtcNow.AddDays(2));
+        pool.MarkExhausted("claude-2", DateTime.UtcNow.AddHours(3));
+
+        for (var i = 0; i < 20; i++)
+            pool.Pick().Should().Be("claude-2");
+        pool.PickForDisplay().Should().Be("claude-2");
     }
 
     [Fact]

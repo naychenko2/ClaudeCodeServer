@@ -123,4 +123,18 @@ public static class QuietHttpClientExtensions
             .RemoveAllLoggers()
             .AddLogger(sp => sp.GetRequiredKeyedService<QuietHttpLogger>(profile.Category));
     }
+
+    /// <summary>
+    /// Отключает системный прокси для клиента. Нужно всем, кто ходит к НАШИМ ЖЕ сервисам
+    /// (Dify, Forgejo, OnlyOffice, телеметрия, dev-серверы): переменные HTTP_PROXY/HTTPS_PROXY
+    /// задают egress в интернет, и запрос к соседнему хосту уходил бы в этот прокси — тот
+    /// локальные адреса не обслуживает и отвечает 503.
+    ///
+    /// Почему не NO_PROXY: переменная наследуется от окружения запуска, а не читается заново.
+    /// Процесс, стартовавший из окна, открытого до её правки, молча получает старое значение —
+    /// поломка невидима и воспроизводится только на конкретной машине. Адреса наших сервисов
+    /// приходят из конфига, так что проксировать их не нужно никогда.
+    /// </summary>
+    public static IHttpClientBuilder WithoutEgressProxy(this IHttpClientBuilder builder) =>
+        builder.ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { UseProxy = false });
 }

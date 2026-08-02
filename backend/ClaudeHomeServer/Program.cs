@@ -308,7 +308,9 @@ builder.Services.AddSingleton<TerminalService>();
 builder.Services.AddSingleton<DevServerService>();
 builder.Services.AddSingleton<LaunchConfigService>();
 builder.Services.AddSingleton<ProjectServiceDiscovery>();
-builder.Services.AddHttpClient("proxy");
+// "proxy" ходит только к нашим же сервисам: dev-серверы проектов и скачивание готового
+// документа у OnlyOffice в office-callback. Egress-прокси им не нужен — см. WithoutEgressProxy.
+builder.Services.AddHttpClient("proxy").WithoutEgressProxy();
 // Загрузка произвольных пользовательских URL (save-from-url): без авто-редиректов,
 // чтобы редирект на приватный хост не обошёл SSRF-проверку (см. SsrfGuard).
 builder.Services.AddHttpClient("safe-download")
@@ -320,8 +322,9 @@ builder.Services.AddHttpClient("safe-download")
 builder.Services.AddQuietHttpClient("dify", new QuietHttpClientProfile(
     Category: "ClaudeHomeServer.Knowledge.Dify",
     Subject: "базой знаний Dify",
-    Consequence: "Семантический поиск по заметкам и знаниям не работает."));
-builder.Services.AddHttpClient("forgejo");
+    Consequence: "Семантический поиск по заметкам и знаниям не работает."))
+    .WithoutEgressProxy();
+builder.Services.AddHttpClient("forgejo").WithoutEgressProxy();
 builder.Services.AddQuietHttpClient("fal", new QuietHttpClientProfile(
     Category: "ClaudeHomeServer.Media.Fal",
     Subject: "сервисом fal.ai",
@@ -331,7 +334,8 @@ builder.Services.AddQuietHttpClient(
     new QuietHttpClientProfile(
         Category: "ClaudeHomeServer.Files.OnlyOffice",
         Subject: "Command API OnlyOffice",
-        Consequence: "Принудительное сохранение документа ждёт таймаут."));
+        Consequence: "Принудительное сохранение документа ждёт таймаут."))
+    .WithoutEgressProxy();
 builder.Services.AddHttpClient("glif");
 builder.Services.AddHttpClient("llm-provider");
 builder.Services.AddHttpClient("anthropic-oauth");
@@ -341,7 +345,8 @@ builder.Services.AddHttpForwarder();
 // и контроллер статуса, и middleware проброса /telemetry-proxy/** ниже.
 builder.Services.AddSingleton(
     ClaudeHomeServer.Telemetry.TelemetryUiOptions.FromConfig(builder.Configuration));
-builder.Services.AddHttpClient("telemetry-ui", c => c.Timeout = TimeSpan.FromSeconds(3));
+builder.Services.AddHttpClient("telemetry-ui", c => c.Timeout = TimeSpan.FromSeconds(3))
+    .WithoutEgressProxy();
 builder.Services.AddReverseProxy()
     .LoadFromConfig(builder.Configuration.GetSection("ReverseProxy"))
     .ConfigureHttpClient((_, handler) =>

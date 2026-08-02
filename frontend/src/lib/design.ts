@@ -179,6 +179,7 @@ export const ISLAND = {
 // === Слои (z-index) ===
 export const Z = {
   dropdown: 50,    // выпадающие меню (composer и т.п.)
+  overlay:  900,   // полноэкранные оверлеи поверх контента (лайтбокс «Стены») — ниже модалок
   modal:    1000,  // модальные окна и шторки
 } as const
 

@@ -38,6 +38,7 @@ import { ensureNotificationsSubscribed } from './lib/notifications'
 import { KnowledgePage } from './features/knowledge/KnowledgePage'
 import { NotificationsPage } from './features/notifications/NotificationsPage'
 import { HomePage } from './pages/HomePage'
+import { WallPage } from './pages/WallPage'
 import { SpendPage } from './features/spend/SpendPage'
 import { TelemetryPage } from './features/telemetry/TelemetryPage'
 import { OPEN_SPEND_EVENT, type SpendOpenContext } from './lib/spend'
@@ -112,6 +113,7 @@ export default function App() {
     if (initialHash?.screen === 'home') return 'home'
     if (initialHash?.screen === 'calendar') return 'calendar'
     if (initialHash?.screen === 'chats') return 'chats'
+    if (initialHash?.screen === 'wall') return 'wall'
     if (initialHash?.screen === 'notes') return 'notes'
     if (initialHash?.screen === 'personas') return 'personas'
     if (initialHash?.screen === 'knowledge') return 'knowledge'
@@ -338,7 +340,7 @@ export default function App() {
     // поэтому стандартный seed ниже сбросил бы URL на дефолт (#/home) → hashchange listener
     // погасил бы uiKitMode, и витрина закрылась бы сразу после открытия.
     if (isDevUiKitHash()) return;
-    const seed: NavSnapshot = { screen: hubTab === 'home' ? 'home' : hubTab === 'chats' ? 'chats' : hubTab === 'calendar' ? 'calendar' : hubTab === 'notes' ? 'notes' : hubTab === 'personas' ? 'personas' : hubTab === 'knowledge' ? 'knowledge' : hubTab === 'spend' ? 'spend' : hubTab === 'telemetry' ? 'telemetry' : hubTab === 'notifications' ? 'notifications' : 'projects' }
+    const seed: NavSnapshot = { screen: hubTab === 'home' ? 'home' : hubTab === 'chats' ? 'chats' : hubTab === 'wall' ? 'wall' : hubTab === 'calendar' ? 'calendar' : hubTab === 'notes' ? 'notes' : hubTab === 'personas' ? 'personas' : hubTab === 'knowledge' ? 'knowledge' : hubTab === 'spend' ? 'spend' : hubTab === 'telemetry' ? 'telemetry' : hubTab === 'notifications' ? 'notifications' : 'projects' }
     // Диплинк #/notes/{id}: сохраняем заметку в снимок, иначе сид затрёт id в URL
     if (seed.screen === 'notes' && initialHash?.screen === 'notes') seed.note = initialHash.noteId ?? null
     // Диплинк #/personas/{id}: сохраняем персону в снимок, иначе сид затрёт id в URL
@@ -386,6 +388,9 @@ export default function App() {
       } else if (s?.screen === 'chats') {
         // Раздел «Чаты» — открытый проект «спит», его не сбрасываем (навигационная память)
         if (hubTab !== 'chats') { localStorage.setItem(HUB_TAB_KEY, 'chats'); setHubTab('chats') }
+      } else if (s?.screen === 'wall') {
+        // «Стена» — проект «спит», как в остальных разделах хаба
+        if (hubTab !== 'wall') { localStorage.setItem(HUB_TAB_KEY, 'wall'); setHubTab('wall') }
       } else if (s?.screen === 'calendar') {
         // Раздел «Календарь» — проект тоже «спит»
         if (hubTab !== 'calendar') { localStorage.setItem(HUB_TAB_KEY, 'calendar'); setHubTab('calendar') }
@@ -541,7 +546,7 @@ export default function App() {
     const moduleId = moduleIdOf(t)
     const dest: NavSnapshot = moduleId
       ? { screen: 'module', moduleId }
-      : { screen: t === 'home' ? 'home' : t === 'chats' ? 'chats' : t === 'calendar' ? 'calendar' : t === 'notes' ? 'notes' : t === 'personas' ? 'personas' : t === 'knowledge' ? 'knowledge' : t === 'spend' ? 'spend' : t === 'telemetry' ? 'telemetry' : t === 'notifications' ? 'notifications' : 'projects' }
+      : { screen: t === 'home' ? 'home' : t === 'chats' ? 'chats' : t === 'wall' ? 'wall' : t === 'calendar' ? 'calendar' : t === 'notes' ? 'notes' : t === 'personas' ? 'personas' : t === 'knowledge' ? 'knowledge' : t === 'spend' ? 'spend' : t === 'telemetry' ? 'telemetry' : t === 'notifications' ? 'notifications' : 'projects' }
     // Если на текущем табе открыто «глубокое» состояние (заметка/файл/задача/персона/база) — уходя,
     // сохраняем его в истории (navPush), чтобы Back вернул именно к нему. Уход С дашборда
     // «Домой» — тоже push: дашборд — хаб-центр, Back с любого раздела возвращает на него.
@@ -771,6 +776,8 @@ export default function App() {
             ? <HomePage auth={auth} onLogout={logout} onHubTab={switchHubTab} onOpenProject={openProjectFromHome} />
           : effectiveHubTab === 'chats'
             ? <ChatsPage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
+          : effectiveHubTab === 'wall'
+            ? <WallPage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
             : effectiveHubTab === 'calendar'
               ? <CalendarPage auth={auth} onLogout={logout} onHubTab={switchHubTab} onOpenTask={openTaskInProject} />
             : effectiveHubTab === 'notes'

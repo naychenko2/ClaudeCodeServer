@@ -5,7 +5,7 @@ import type { Project } from '../types';
 // отражается в hash-части URL (#/calendar, #/project/{id}/task/{taskId}…) —
 // адрес можно копировать/обновлять, серверного роутинга под пути не нужно.
 export interface NavSnapshot {
-  screen: 'home' | 'projects' | 'project' | 'chats' | 'calendar' | 'notes' | 'personas' | 'knowledge' | 'notifications' | 'spend' | 'telemetry' | 'module';
+  screen: 'home' | 'projects' | 'project' | 'chats' | 'wall' | 'calendar' | 'notes' | 'personas' | 'knowledge' | 'notifications' | 'spend' | 'telemetry' | 'module';
   moduleId?: string;              // когда screen === 'module' (внешний модуль платформы)
   project?: Project;              // когда screen === 'project'
   chatId?: string;                // активный чат: screen === 'chats' — глобальный, screen === 'project' — проектный
@@ -23,6 +23,7 @@ function toHash(s: NavSnapshot): string {
   switch (s.screen) {
     case 'home': return '#/home';
     case 'chats': return s.chatId ? `#/chats/${encodeURIComponent(s.chatId)}` : '#/chats';
+    case 'wall': return '#/wall';
     case 'calendar': return s.board ? '#/calendar/board' : '#/calendar';
     case 'notes': return s.note ? `#/notes/${encodeURIComponent(s.note)}` : '#/notes';
     case 'personas': return s.persona ? `#/personas/${encodeURIComponent(s.persona)}` : '#/personas';
@@ -47,7 +48,7 @@ function toHash(s: NavSnapshot): string {
 
 // Разбор hash при загрузке страницы (диплинк/обновление)
 export interface HashTarget {
-  screen: 'home' | 'projects' | 'chats' | 'calendar' | 'project' | 'notes' | 'personas' | 'knowledge' | 'notifications' | 'spend' | 'telemetry' | 'module';
+  screen: 'home' | 'projects' | 'chats' | 'wall' | 'calendar' | 'project' | 'notes' | 'personas' | 'knowledge' | 'notifications' | 'spend' | 'telemetry' | 'module';
   projectId?: string;
   moduleId?: string;             // #/module/{id}
   taskId?: string;
@@ -100,6 +101,8 @@ export function parseHash(hash: string = window.location.hash): HashTarget | nul
       return target;
     }
     case 'notifications': return { screen: 'notifications' };
+    // «Стена» (фича wall) — экран без параметров; гейт ширины/флага стоит в самом WallPage
+    case 'wall': return { screen: 'wall' };
     case 'spend': return { screen: 'spend' };
     case 'telemetry': return { screen: 'telemetry' };
     case 'module': {

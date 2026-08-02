@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo, useCallback, Fragment } from 'react';
+import { useState, useRef, useEffect, useMemo, useCallback, Fragment, type HTMLAttributes } from 'react';
 import { ArrowDown, RotateCw, CircleHelp } from 'lucide-react';
 import type { Project, Session, ChatItem, SkillInfo, AgentInfo, ClaudeBilling, Persona, WorkLoopState, SessionTeamImplement, TeamPlanDecision } from '../types';
 import { useSession } from '../hooks/useSession';
@@ -81,6 +81,10 @@ interface Props {
   embedded?: boolean;
   // Растущий счётчик «поставь курсор в поле ввода» (колонка стены стала активной)
   composerFocusSignal?: number;
+  // Атрибуты перетаскивания для ШАПКИ чата (колонка стены): за неё двигают саму
+  // колонку — так же, как за её ярлык. Тащить карточку принято за её верх, и шапка
+  // чата — самая заметная его часть.
+  headerDragProps?: HTMLAttributes<HTMLDivElement>;
 }
 
 // Предел одной загрузки — совпадает с RequestSizeLimit эндпоинта загрузки вложений
@@ -127,7 +131,7 @@ function derivePlanPhase(items: ChatItem[], mode: Mode, isWaiting: boolean): Pla
   return null;
 }
 
-export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, attachedFiles, onAttachedFilesChange, artifactsOpen, onToggleArtifacts, greetingBubble, headerIsland, embedded, composerFocusSignal }: Props) {
+export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, attachedFiles, onAttachedFilesChange, artifactsOpen, onToggleArtifacts, greetingBubble, headerIsland, embedded, composerFocusSignal, headerDragProps }: Props) {
   const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, workLoop: liveWorkLoop, teamImplement: liveTeamImplement, promptSuggestion, pending, composerRestore, consumeRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, respondTeamPlan, respondTeamEscalation, interrupt, compact, toggleThinking, noteCompanionSwitch, cancelPending } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
   // Цикл «до готово» (флаг work-loop): live-состояние из событий work_loop,
   // до первого события — из Session.workLoop; null — цикл выключен
@@ -1341,8 +1345,9 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       {/* В режиме headerIsland шапка сама рисует себя hero-вариантом прямо на
           холсте (ChatHeaderBar, ветка island) — обёртки не нужно. На стене
           (embedded) шапка тоже штатная — канонический вид чата; над ней колонка
-          рисует свою тонкую полосу-ярлык (проект + zoom), это не дубль шапки */}
-      {headerBar}
+          рисует свою тонкую полосу-ярлык (проект + zoom), это не дубль шапки.
+          headerDragProps — шапка работает второй ручкой перетаскивания колонки */}
+      {headerDragProps ? <div {...headerDragProps}>{headerBar}</div> : headerBar}
 
       {/* Сообщения (нижний отступ = высота плавающего composer + зазор).
           Прокручивается НЕ вся ширина области, а колонка сообщений: иначе полоса

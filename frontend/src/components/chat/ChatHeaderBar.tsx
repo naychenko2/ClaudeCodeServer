@@ -918,7 +918,10 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
         window.dispatchEvent(new CustomEvent('cc-open-url', { detail: { url } }));
       }
     : null;
-  const personaCardLink = openPersonaCard && !(isMobile && onBack) ? {
+  // compact (колонка стены): блок персоны — просто подпись, без перехода. Уводить
+  // с экрана из шапки колонки нельзя: единственный выход отсюда — кнопка перехода
+  // в ярлыке колонки, и она ведёт к самому чату, а не в чужой раздел.
+  const personaCardLink = openPersonaCard && !compact && !(isMobile && onBack) ? {
     role: 'button' as const, tabIndex: 0,
     onClick: openPersonaCard,
     onKeyDown: (e: React.KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openPersonaCard(); } },

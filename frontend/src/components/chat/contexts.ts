@@ -34,6 +34,9 @@ export function useAssistantName(): string {
 export interface TeamPlanChatContext {
   autoWaves: boolean;
   waveNumber: number;
+  // Id текущего плана режима — свёрнутая карточка отличает по нему «свой» ход волн
+  // от чужого (старая версия плана после перепланирования ходом не владеет)
+  planCardId: string | null;
   // Явно выбранный состав исполнителей; пустой — вся команда проекта
   executorPersonaIds: string[];
   onRespond: (planId: string, decision: TeamPlanDecision, subtaskId?: string, executorPersonaId?: string) => void;

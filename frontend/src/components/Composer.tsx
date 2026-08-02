@@ -606,10 +606,17 @@ export function Composer({
       if (!isProjectChat && teamSettings.participants.length === 0) { setTeamOpen(true); return; }
       // Режим уже включён — сообщение уходит как новая вводная, не пересобирая состояние
       if (!teamImplement && onEnableTeamImplement) {
-        await onEnableTeamImplement({
-          autoWaves: teamSettings.modeAutoWaves,
-          executorPersonaIds: teamSettings.participants.map(p => p.id),
-        });
+        try {
+          await onEnableTeamImplement({
+            autoWaves: teamSettings.modeAutoWaves,
+            executorPersonaIds: teamSettings.participants.map(p => p.id),
+          });
+        } catch {
+          // Включение не удалось (причину уже показал тост) — вводную НЕ отправляем
+          // обычным сообщением (M11): текст остаётся в поле, механика не сбрасывается,
+          // человек может повторить или разобраться с причиной отказа
+          return;
+        }
       }
       setLastMechanic(sessionId, 'implementMode');
       onSend(t, attachments);
@@ -1298,6 +1305,7 @@ export function Composer({
           availableSkills={skills.map(s => s.name)}
           isProjectChat={isProjectChat}
           chatMode={mode}
+          implementActive={!!teamImplement}
           isMobile={isMobile}
           onPick={id => { setTeamMech(id); textareaRef.current?.focus(); }}
           onSettings={setTeamSettings}

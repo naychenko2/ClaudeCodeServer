@@ -160,7 +160,9 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     }
   }, [session.id, teamImplementState, onSessionUpdated]);
   // Включение режима из карточки механики «Командная реализация» (композер): состав
-  // пустой = вся команда проекта, координатора бэкенд берёт из собеседника чата
+  // пустой = вся команда проекта, координатора бэкенд берёт из собеседника чата.
+  // Ошибку ПРОКИДЫВАЕМ после тоста (M11): композер по ней отменяет отправку вводной —
+  // иначе при провале включения текст задачи утекал обычным сообщением в обычный чат
   const handleEnableTeamImplement = useCallback(async (opts: { autoWaves: boolean; executorPersonaIds: string[] }) => {
     try {
       const updated = await api.chats.setTeamImplement(session.id, true, {
@@ -170,6 +172,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       onSessionUpdated?.(updated);
     } catch (err) {
       showToast('Командная реализация', err instanceof Error ? err.message : 'Не удалось включить режим');
+      throw err;
     }
   }, [session.id, onSessionUpdated]);
   const handleDisableTeamImplement = useCallback(async () => {
@@ -715,6 +718,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   const teamPlanCtx = useMemo<TeamPlanChatContext | null>(() => teamImplementState ? {
     autoWaves: teamImplementState.autoWaves,
     waveNumber: teamImplementState.waveNumber,
+    planCardId: teamImplementState.planCardId ?? null,
     executorPersonaIds: teamImplementState.executorPersonaIds,
     onRespond: handleRespondTeamPlan,
     onSendMessage: handleTeamPlanMessage,

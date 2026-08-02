@@ -3,7 +3,7 @@ import type { ChatItem, ServerMessage, RateLimitInfo, WorkLoopState, TeamImpleme
 import { joinSession, joinProject, leaveSession, onMessage, onReconnected, sendMessage, respondPermission, interruptSession, compactSession, answerQuestion as sendAnswer, respondPlan as sendPlanDecision, respondTeamPlan as sendTeamPlanDecision, respondTeamEscalation as sendTeamEscalationDecision, setMode as sendSetMode } from '../lib/signalr';
 import { setRecallManifest } from '../lib/recallManifest';
 import { api } from '../lib/api';
-import { applyServerMessage, normalizeHistory, serverHistoryNewer, initialChatState, consumeComposerRestore, type ChatState, type PendingChatMessage, type ComposerRestore } from '../lib/chatReducer';
+import { applyServerMessage, normalizeHistory, serverHistoryNewer, initialChatState, consumeComposerRestore, teamImplementSnapshot, type ChatState, type PendingChatMessage, type ComposerRestore } from '../lib/chatReducer';
 
 // --- Модульный персистентный стор ---
 // Состояние живёт на уровне модуля и переживает переключение между сессиями.
@@ -63,6 +63,18 @@ async function reloadHistory(sid: string, projectId?: string) {
       return { ...prev, items, isWaiting: historyTurnFinished(items) ? false : prev.isWaiting };
     });
   } catch { /* история недоступна — не блокируем */ }
+}
+
+// Авторитетное состояние режима «Командная реализация» с сервера (M10/M12).
+// JoinSession реплеит статус, но НЕ снапшот team_implement, а live-объект в сторе
+// «прилипает» после первого события навсегда: всё, что случилось за разрыв (смена
+// стадии, лок селектора, выключение режима), врало бы до F5. Перечитываем сессию
+// и подменяем live-снимок — включая выключенный режим (неактивный снимок, не undefined).
+async function refreshTeamImplement(sid: string) {
+  try {
+    const s = await api.chats.get(sid);
+    setState(sid, prev => ({ ...prev, teamImplement: teamImplementSnapshot(s.teamImplement ?? null) }));
+  } catch { /* сеть — живём на живых событиях, следующее освежение поправит */ }
 }
 
 function getState(sid: string): SessionState {
@@ -239,6 +251,8 @@ function ensureHandler() {
               }));
             }
           } catch { /* история недоступна — не блокируем */ }
+          // Состояние режима «Командная реализация» не реплеится — освежаем REST'ом
+          await refreshTeamImplement(sid);
         }
       } catch { /* пропускаем — не блокируем остальные */ }
     }
@@ -327,6 +341,7 @@ async function joinAndLoadHistory(sid: string, projectId?: string) {
       // всё, что появится позже этого снимка, гарантированно доедет живьём.
       return reloadHistory(sid, projectId);
     })
+    .then(() => refreshTeamImplement(sid))
     .catch(() => { /* офлайн — остаёмся без группы, читаем из кэша */ });
 }
 
@@ -361,6 +376,9 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
       // авторитетный статус реплеем — открытие чата всегда лечит рассинхрон.
       reconcile(sessionId);
       if (!st.isWaiting) reloadHistory(sessionId, projectId);
+      // Live-состояние режима могло устареть, пока чат был закрыт (события шли мимо
+      // либо их реплея нет вовсе) — заход в чат подтягивает авторитетный снимок
+      void refreshTeamImplement(sessionId);
     }
     // Появился зритель — у занятого чата poll без мутации состояния не завёлся бы
     syncWaitPoll();

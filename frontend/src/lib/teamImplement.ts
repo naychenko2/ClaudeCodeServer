@@ -2,7 +2,7 @@
 // бейджа/маркера. Тексты — дословно из docs/architecture/team-implement-mode.md («Тексты»)
 // и макета docs/mockups/team-implement-mode.html (короткие формы маркера).
 
-import type { SessionTeamImplement, TeamEscalationKind, TeamImplementBudget, TeamImplementStage } from '../types';
+import type { SessionTeamImplement, TeamEscalationKind, TeamImplementBudget, TeamImplementStage, TeamPlan } from '../types';
 import { MODE_META, type Mode } from './modes';
 
 // Тон по тому, кто должен действовать: work — команда работает (accent),
@@ -65,10 +65,23 @@ export const TEAM_IMPLEMENT_DESCRIPTION =
   'Чат работает как штаб: задачи ставятся исполнителям, их чаты видны под этим в списке. ' +
   'Напишите, что ещё нужно сделать — команда возьмёт в работу';
 
-// Тултип чипа «Авто» (текст тумблера + подпись из плана)
+// Тултип чипа «Авто» (текст тумблера + подпись из плана, дословно из спеки)
 export const TEAM_IMPLEMENT_AUTO_TITLE =
   'Авто-волны — не спрашивать после каждой волны. ' +
-  'План согласуете один раз, дальше команда работает сама, пока хватает бюджета';
+  'План согласуете один раз. Дальше команда работает сама, пока хватает бюджета';
+
+// Подпись свёрнутой карточки запущенного плана. «Идёт волна N из M» — только когда
+// волна реально идёт (waveNumber > 0: на стадии idle бэкенд обнуляет номер) И карточка —
+// текущий план режима: у старой версии (v1 после перепланирования) ход волн относится
+// к чужому плану, и карточка вечно врала бы «идёт волна». Иначе — просто «План запущен».
+export function teamPlanRunLabel(
+  plan: TeamPlan,
+  ctx: { waveNumber: number; planCardId: string | null } | null,
+): string {
+  const live = !!ctx && ctx.waveNumber > 0 && ctx.planCardId === plan.id;
+  if (!live || plan.waveCount <= 1) return 'План запущен';
+  return `План запущен — идёт волна ${Math.min(ctx.waveNumber, plan.waveCount)} из ${plan.waveCount}`;
+}
 
 // Правило «Координатор не пишет код» — строка состояния в поповере бейджа
 export const TEAM_IMPLEMENT_NO_CODE_ON = 'Координатор не пишет код — любая работа идёт задачей исполнителю';

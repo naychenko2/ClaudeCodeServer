@@ -3,8 +3,39 @@
 // тестировать без рендера React. Побочные эффекты (загрузка истории, SignalR)
 // остаются в хуке; редьюсер только считает следующее состояние.
 
-import type { ChatItem, ServerMessage, RateLimitInfo, WorkLoopState, TeamImplementState } from '../types';
+import type { ChatItem, ServerMessage, RateLimitInfo, WorkLoopState, TeamImplementState, SessionTeamImplement } from '../types';
 import { isBgLaunchResult } from './agentTail';
+
+// Live-состояние режима «Командная реализация» из REST-гидратации (Session.teamImplement):
+// та же нормализация полей, что у события team_implement в редьюсере. Освежение по REST
+// (переподключение, вход в чат) подменяет live-объект, не ломая держащийся за него UI.
+// null — режим выключен: возвращаем неактивный снимок, а не undefined, чтобы перекрыть
+// устаревший live-объект (undefined означало бы «событий не было» и отдало бы слово
+// живущему в сторе stale-состоянию)
+export function teamImplementSnapshot(ti: SessionTeamImplement | null): TeamImplementState {
+  return {
+    active: ti !== null,
+    stage: ti?.stage ?? 'idle',
+    waveNumber: ti?.waveNumber ?? 0,
+    plannedWaves: ti?.plannedWaves ?? 0,
+    autoWaves: ti?.autoWaves ?? true,
+    coordinatorPersonaId: ti?.coordinatorPersonaId ?? null,
+    plannerPersonaId: ti?.plannerPersonaId ?? null,
+    executorPersonaIds: ti?.executorPersonaIds ?? [],
+    budget: ti?.budget ?? {
+      tasksUsed: 0, wavesUsed: 0, runsUsed: 0, retriesUsed: 0, wakeupsUsed: 0,
+      maxTasks: 0, maxWaves: 0, maxRuns: 0, maxRetries: 0, maxWakeups: 0,
+    },
+    coordinatorNoCode: ti?.coordinatorNoCode ?? true,
+    stopped: ti?.stopped ?? false,
+    planCardId: ti?.planCardId ?? null,
+    // У live-события modeLocked приходит посчитанным; на REST считаем из savedMode —
+    // то же правило, что у teamImplementModeLocked для гидратации до первого события
+    modeLocked: ti?.modeLocked ?? (ti?.savedMode != null),
+    planVersion: ti?.planVersion ?? 0,
+    savedMode: ti?.savedMode ?? null,
+  };
+}
 
 // Часть состояния сессии, которой управляет редьюсер
 export interface ChatState {

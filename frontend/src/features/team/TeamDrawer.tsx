@@ -3,7 +3,7 @@
 // компонент: выбранная механика и настройки живут у родителя (Composer), сюда приходят
 // пропсами. Тему пользователь пишет в самом поле композера.
 import { ShieldAlert } from 'lucide-react';
-import { C, FONT, R, SHADOW } from '../../lib/design';
+import { C, FONT, FS, R, SHADOW } from '../../lib/design';
 import { ICON_STROKE } from '../../components/ui/icons';
 import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { teamImplementModeWarning, teamImplementSwitchesMode } from '../../lib/teamImplement';
@@ -32,6 +32,10 @@ export interface TeamDrawerProps {
   // Текущий режим прав чата: «Командная реализация» с правилом «координатор не пишет код»
   // переключает его на «Авто» — предупреждаем, пока переключать есть что
   chatMode?: Mode;
+  // Режим «Командная реализация» уже включён в этом чате: повторный выбор механики
+  // не применяет состав/авто-волны (handleSend шлёт сообщение как новую вводную) —
+  // вместо мёртвых настроек показываем, где они меняются на самом деле
+  implementActive?: boolean;
   isMobile?: boolean;
   onPick: (id: TeamMechanicId) => void;
   onSettings: (s: TeamMechanicSettings) => void;
@@ -137,7 +141,7 @@ function SLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
-export function TeamDrawer({ open, mech, settings, candidates, availableSkills, isProjectChat, chatMode, isMobile, onPick, onSettings, onClose, onResetModes }: TeamDrawerProps) {
+export function TeamDrawer({ open, mech, settings, candidates, availableSkills, isProjectChat, chatMode, implementActive, isMobile, onPick, onSettings, onClose, onResetModes }: TeamDrawerProps) {
   // Кандидаты — только реальные персоны; виртуальные роли пантеона из селекторов
   // убраны (подключение — через раздел «Персоны»)
   const allCandidates = candidates;
@@ -344,6 +348,17 @@ export function TeamDrawer({ open, mech, settings, candidates, availableSkills, 
         }
         break;
       case 'implementMode':
+        // Режим уже включён: handleSend проигнорирует правки состава/авто-волн —
+        // не обманываем мёртвыми контролами, говорим, где настройки живут
+        if (implementActive) {
+          parts.push(
+            <span key="active" style={{ fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.sans, lineHeight: 1.4 }}>
+              Режим уже включён: состав и авто-волны меняются в бейдже «Командная реализация» у поля ввода,
+              а сообщение уйдёт команде как новая вводная.
+            </span>,
+          );
+          break;
+        }
         parts.push(
           <span key="p" style={{ display: 'inline-flex', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
             <SLabel>Исполнители (по умолчанию — вся команда проекта):</SLabel>

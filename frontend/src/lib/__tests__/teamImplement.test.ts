@@ -2,12 +2,12 @@
 // числа волн (plannedWaves), а не из потолка бюджета — иначе план в 2 волны показывался
 // бы как «волна 1 из 4» (потолок maxWaves).
 import { describe, it, expect } from 'vitest';
-import type { TeamEscalationKind } from '../../types';
+import type { TeamEscalationKind, TeamPlan } from '../../types';
 import {
   teamImplementBadgeText, teamImplementStageShort, teamImplementTone,
   teamEscalationTone, teamEscalationInformational, teamEscalationDetailsLines,
   teamImplementSwitchesMode, teamImplementModeHeld, teamImplementModeWarning,
-  TEAM_IMPLEMENT_MODE_HELD,
+  teamPlanRunLabel, TEAM_IMPLEMENT_MODE_HELD, TEAM_IMPLEMENT_AUTO_TITLE,
 } from '../teamImplement';
 
 // Включение режима меняет чужую настройку — режим прав чата (SessionManager.
@@ -56,6 +56,20 @@ describe('подписи бейджа командной реализации', 
     expect(teamImplementBadgeText('idle', 2, 3)).toBe('Командная реализация · ждёт задачу');
   });
 
+  // Интервью и проверка — стадии непрерывного контура (Э8/Э6): бейдж обязан их
+  // показывать дословно, пока штаб спрашивает человека и пока идёт проверка волны
+  it('стадии interview и checking подписаны и имеют короткие формы маркера', () => {
+    expect(teamImplementBadgeText('interview', 0, 0)).toBe('Командная реализация · интервью');
+    expect(teamImplementStageShort('interview', 0, 0)).toBe('вопросы');
+    expect(teamImplementBadgeText('checking', 1, 2)).toBe('Командная реализация · проверка');
+    expect(teamImplementStageShort('checking', 1, 2)).toBe('проверка');
+  });
+
+  it('тон стадий: интервью ждёт человека, проверка — работа команды', () => {
+    expect(teamImplementTone('interview')).toBe('wait');
+    expect(teamImplementTone('checking')).toBe('work');
+  });
+
   // Ожидание вводной — не работа и не «стоит и ждёт решения»: тон muted (в бейдже
   // из-за него же гаснет пульс точки), в узкой строке списка чатов — «ожидает»
   it('стадия idle — muted-тон и короткая форма для маркера чата', () => {
@@ -79,6 +93,14 @@ describe('карточка эскалации: тон и разбор детал
     expect(teamEscalationTone('waveGate')).toBe('success');
     expect(teamEscalationTone('stopped')).toBe('muted');
     expect(teamEscalationInformational('waveGate')).toBe(false);
+  });
+
+  // «Нужны уточнения» (Э8) — пауза, а не проблема: планировщику нужны ответы человека,
+  // поэтому тон спокойный, как у остановки по команде, а не warning «что-то сломалось».
+  // Карточка при этом ждёт решения — информационной она не является
+  it('needsClarification — спокойный тон паузы, но карточка ждёт решения', () => {
+    expect(teamEscalationTone('needsClarification')).toBe('muted');
+    expect(teamEscalationInformational('needsClarification')).toBe(false);
   });
 
   // Бэкенд заводит новые виды раньше, чем фронт про них узнаёт: незнакомый токен
@@ -111,5 +133,43 @@ describe('карточка эскалации: тон и разбор детал
       { kind: 'text', text: 'Кира: нет доступа к базе' },
     ]);
     expect(teamEscalationDetailsLines('')).toEqual([]);
+  });
+});
+
+// Свёрнутая карточка запущенного плана: «идёт волна N из M» — только у текущего
+// плана и только пока волна реально идёт. После завершения итерации (idle,
+// waveNumber=0) и у старой версии плана (v1 после перепланирования) карточка
+// обязана показывать честное «План запущен», а не вечную «волну 1 из 2»
+describe('подпись свёрнутой карточки запущенного плана', () => {
+  const plan = (id: string, waveCount: number) =>
+    ({ id, waveCount }) as TeamPlan;
+
+  it('идущая волна текущего плана подписана номером и потолком самого плана', () => {
+    expect(teamPlanRunLabel(plan('p1', 2), { waveNumber: 1, planCardId: 'p1' }))
+      .toBe('План запущен — идёт волна 1 из 2');
+  });
+
+  it('после завершения итерации (idle, waveNumber=0) волна не «идёт»', () => {
+    expect(teamPlanRunLabel(plan('p1', 2), { waveNumber: 0, planCardId: 'p1' }))
+      .toBe('План запущен');
+  });
+
+  it('старая версия плана не берёт ход волн чужого (текущего) плана', () => {
+    expect(teamPlanRunLabel(plan('p1', 2), { waveNumber: 1, planCardId: 'p2' }))
+      .toBe('План запущен');
+  });
+
+  it('план в одну волну и режим выключен (ctx=null) — без номера волны', () => {
+    expect(teamPlanRunLabel(plan('p1', 1), { waveNumber: 1, planCardId: 'p1' }))
+      .toBe('План запущен');
+    expect(teamPlanRunLabel(plan('p1', 3), null)).toBe('План запущен');
+  });
+});
+
+describe('тексты по спеке', () => {
+  // Пунктуация тултипа чипа «Авто» — дословно из team-implement-mode.md:
+  // «План согласуете один раз. Дальше команда работает сама…» (два предложения)
+  it('тултип чипа «Авто» не склеивает два предложения запятой', () => {
+    expect(TEAM_IMPLEMENT_AUTO_TITLE).toContain('один раз. Дальше команда работает сама');
   });
 });

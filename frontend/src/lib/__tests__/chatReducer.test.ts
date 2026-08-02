@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import type { ChatItem, ServerMessage, TeamEscalationKind } from '../../types';
-import { applyServerMessage, normalizeHistory, serverHistoryNewer, initialChatState, consumeComposerRestore, type ChatState } from '../chatReducer';
+import type { ChatItem, ServerMessage, TeamEscalationKind, SessionTeamImplement } from '../../types';
+import { applyServerMessage, normalizeHistory, serverHistoryNewer, initialChatState, consumeComposerRestore, teamImplementSnapshot, type ChatState } from '../chatReducer';
 
 // --- Хелперы ---
 
@@ -948,5 +948,43 @@ describe('serverHistoryNewer', () => {
     const prev: ChatItem[] = [u('в'), { kind: 'interrupted' }, t('час')];
     const server: ChatItem[] = [u('в'), t('частичный ответ'), { kind: 'result', subtype: 'success', durationMs: 1, numTurns: 1 }];
     expect(serverHistoryNewer(server, prev)).toBe(true);
+  });
+});
+
+// --- teamImplementSnapshot: снимок режима из REST-гидратации (M10/M12) ---
+
+describe('teamImplementSnapshot', () => {
+  // REST-объект Session.teamImplement в минимальной форме (как приходит с бэка)
+  const rest = (over: Partial<SessionTeamImplement> = {}): SessionTeamImplement => ({
+    stage: 'interview', waveNumber: 0, plannedWaves: 0, autoWaves: true, stopped: false,
+    executorPersonaIds: [], coordinatorNoCode: true, planVersion: 0,
+    budget: { tasksUsed: 0, wavesUsed: 0, runsUsed: 0, retriesUsed: 0, wakeupsUsed: 0,
+      maxTasks: 12, maxWaves: 4, maxRuns: 20, maxRetries: 3, maxWakeups: 10 },
+    ...over,
+  });
+
+  it('null (режим выключен) → НЕАКТИВНЫЙ снимок, а не undefined: он перекрывает устаревший live-объект', () => {
+    const snap = teamImplementSnapshot(null);
+    expect(snap.active).toBe(false);
+    expect(snap.stage).toBe('idle');
+    expect(snap.modeLocked).toBe(false);
+  });
+
+  it('savedMode на REST означает навязанный план-режим — modeLocked считается из него', () => {
+    const snap = teamImplementSnapshot(rest({ savedMode: 'auto' }));
+    expect(snap.active).toBe(true);
+    expect(snap.modeLocked).toBe(true);
+    expect(snap.stage).toBe('interview');
+  });
+
+  it('план-режим не навязан (savedMode null) — селектор свободен', () => {
+    const snap = teamImplementSnapshot(rest({ stage: 'wave', waveNumber: 2, savedMode: null }));
+    expect(snap.modeLocked).toBe(false);
+    expect(snap.waveNumber).toBe(2);
+  });
+
+  it('явный modeLocked с провода сильнее вычисленного из savedMode', () => {
+    expect(teamImplementSnapshot(rest({ modeLocked: true, savedMode: null })).modeLocked).toBe(true);
+    expect(teamImplementSnapshot(rest({ modeLocked: false, savedMode: 'auto' })).modeLocked).toBe(false);
   });
 });

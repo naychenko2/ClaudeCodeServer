@@ -32,8 +32,9 @@ services:
       DefaultProjectsPath: /projects
       DataPath: /data/projects.json
       McpConfigPath: /app/.mcp.docker.json
-      # Внешние сервисы — через хост-шлюз
-      Dify__ApiUrl: http://host.docker.internal:8080/v1
+      # Внешние сервисы — через хост-шлюз. Хост параметризован: сервис может быть вынесен
+      # на другую машину (значение в .env), дефолт — контейнеры на этом же хосте.
+      Dify__ApiUrl: http://${DIFY_HOST:-host.docker.internal}:8080/v1
       # Ключ Dify Knowledge (dataset-...) — секрет, значение в .env / .env.prod
       Dify__ApiKey: ${DIFY_API_KEY:-}
       # Platform API-ключ fal.ai для учёта стоимости генераций (billing-events).
@@ -60,17 +61,19 @@ services:
       FileWatcher__UsePolling: "true"
       # CLI навыков предустановлен в образе (npm i -g skills) — зовём бинарь напрямую, без npx
       Skills__Command: skills
-      ReverseProxy__Clusters__onlyoffice__Destinations__default__Address: http://host.docker.internal:8090
+      ReverseProxy__Clusters__onlyoffice__Destinations__default__Address: http://${ONLYOFFICE_HOST:-host.docker.internal}:8090
       # draw.io self-hosted (контейнер drawio из docker-compose.yml) — YARP проксирует /drawio/*
-      ReverseProxy__Clusters__drawio__Destinations__default__Address: http://host.docker.internal:8091
+      ReverseProxy__Clusters__drawio__Destinations__default__Address: http://${DRAWIO_HOST:-host.docker.internal}:8091
       # Egress в интернет через прокси (вызовы API Claude). Пусто = прямой интернет.
-      # NO_PROXY исключает локальные адреса (host.docker.internal — Dify/OnlyOffice).
+      # NO_PROXY исключает локальные адреса (host.docker.internal — Dify/OnlyOffice)
+      # и машину с вынесенными сервисами (DOCKER_HOST_B) — иначе запросы к ним ушли бы
+      # в egress-прокси. Дефолт localhost = безвредный дубль, когда переменной нет.
       HTTP_PROXY: ${CLAUDE_EGRESS_PROXY:-}
       HTTPS_PROXY: ${CLAUDE_EGRESS_PROXY:-}
       http_proxy: ${CLAUDE_EGRESS_PROXY:-}
       https_proxy: ${CLAUDE_EGRESS_PROXY:-}
-      NO_PROXY: localhost,127.0.0.1,::1,host.docker.internal
-      no_proxy: localhost,127.0.0.1,::1,host.docker.internal
+      NO_PROXY: localhost,127.0.0.1,::1,host.docker.internal,${DOCKER_HOST_B:-localhost}
+      no_proxy: localhost,127.0.0.1,::1,host.docker.internal,${DOCKER_HOST_B:-localhost}
     volumes:
       - ${CLAUDE_PROJECTS_DIR:-C:/ClaudeProjects}:/projects
       - claude-data:/data

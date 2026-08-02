@@ -160,14 +160,20 @@ public static class ObservabilityExtensions
             var endpoint = ParseEndpoint(
                 section.GetValue<string>("Backends:Production:OtlpEndpoint"), "http://localhost:4318");
             if (endpoint is not null)
+            {
                 otelBuilder.UseOtlpExporter(OtlpExportProtocol.HttpProtobuf, endpoint);
+                QuietDownExportLogging(services);
+            }
         }
         else if (devEnabled && !exportDisabled)
         {
             var endpoint = ParseEndpoint(
                 section.GetValue<string>("Backends:Dev:OtlpEndpoint"), "http://localhost:4317");
             if (endpoint is not null)
+            {
                 otelBuilder.UseOtlpExporter(OtlpExportProtocol.Grpc, endpoint);
+                QuietDownExportLogging(services);
+            }
         }
 
         // Heartbeat — ВСЕГДА регистрируется (H4). Даже без backend'ов тики полезны
@@ -181,6 +187,30 @@ public static class ObservabilityExtensions
         AddAlerts(services, config);
 
         return services;
+    }
+
+    /// <summary>
+    /// Приглушение логов неудачного экспорта телеметрии.
+    ///
+    /// Экспортёры берут HttpClient из <c>IHttpClientFactory</c> под этими именами, а дефолтное
+    /// логирование <c>Microsoft.Extensions.Http</c> печатает каждый провалившийся запрос как
+    /// Error со стектрейсом. Коллектор поднят не всегда (на деве — почти никогда), экспорт идёт
+    /// по расписанию, и консоль превращается в ленту красных портянок, в которой не видно
+    /// настоящих ошибок. Меняем дефолтные логгеры на <see cref="OtlpExportHttpLogger"/>:
+    /// Warning, одна строка, не чаще раза в пять минут.
+    ///
+    /// Вызывается только когда экспорт реально включён — иначе именованные клиенты никем
+    /// не создаются и настраивать нечего.
+    /// </summary>
+    private static void QuietDownExportLogging(IServiceCollection services)
+    {
+        services.AddSingleton<OtlpExportHttpLogger>();
+
+        // Синглтон один на все три клиента: троттлинг общий, один сбой коллектора = одна строка.
+        foreach (var client in new[] { "OtlpTraceExporter", "OtlpMetricExporter", "OtlpLogExporter" })
+            services.AddHttpClient(client)
+                .RemoveAllLoggers()
+                .AddLogger(sp => sp.GetRequiredService<OtlpExportHttpLogger>());
     }
 
     /// <summary>

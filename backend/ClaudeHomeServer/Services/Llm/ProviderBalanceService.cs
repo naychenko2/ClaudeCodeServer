@@ -68,6 +68,9 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
                 "openrouter" => await FetchOpenRouterAsync(p, ct),
                 "glm" => await FetchGlmAsync(p, ct),
                 "kimi" => await FetchKimiAsync(p, ct),
+                // MiniMax pay-as-you-go: публичного эндпоинта баланса нет, списания
+                // приходят в usage каждого ответа — отдельный fetcher не нужен
+                "minimax" => null,
                 _ => null,
             };
             // Протухший лучше, чем ничего: AsOf в нём остаётся временем прошлого

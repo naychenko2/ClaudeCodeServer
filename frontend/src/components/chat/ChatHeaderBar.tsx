@@ -770,6 +770,8 @@ interface ChatHeaderBarProps {
   // Шапка живёт в собственном острове (Islands): фон и нижнюю границу даёт
   // карточка-остров, тулбар рисуется прозрачным и без borderBottom
   island?: boolean;
+  // Узкая колонка «Стены»: прячем кнопку настроек чата (её диалог шире колонки)
+  compact?: boolean;
 }
 
 // «Итог сессии в заметку» — теперь запускается ТОЛЬКО через AI-палитру (действие
@@ -901,7 +903,7 @@ function ExtractTasksButton({ session, hasMessages, online }: { session: Session
   );
 }
 
-export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, onBillingChange, rateWindows, onOpenSettings, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, artifactsOpen, onToggleArtifacts, artifactFileCount, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, island }: ChatHeaderBarProps) {
+export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, onBillingChange, rateWindows, onOpenSettings, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, artifactsOpen, onToggleArtifacts, artifactFileCount, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, island, compact }: ChatHeaderBarProps) {
   // Поповер управления участниками группового чата (клик по стеку аватаров)
   const [participantsOpen, setParticipantsOpen] = useState(false);
   // Клик по блоку персоны — карточка персоны: в проектном чате открывается в контентной зоне
@@ -916,7 +918,10 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
         window.dispatchEvent(new CustomEvent('cc-open-url', { detail: { url } }));
       }
     : null;
-  const personaCardLink = openPersonaCard && !(isMobile && onBack) ? {
+  // compact (колонка стены): блок персоны — просто подпись, без перехода. Уводить
+  // с экрана из шапки колонки нельзя: единственный выход отсюда — кнопка перехода
+  // в ярлыке колонки, и она ведёт к самому чату, а не в чужой раздел.
+  const personaCardLink = openPersonaCard && !compact && !(isMobile && onBack) ? {
     role: 'button' as const, tabIndex: 0,
     onClick: openPersonaCard,
     onKeyDown: (e: React.KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openPersonaCard(); } },
@@ -1194,7 +1199,10 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   const spendBadge = (
     <SpendBadge sessionId={session.id} chatName={session.name} resultCount={cost.results} isMobile={isMobile} />
   );
-  const costBadges = isMobile ? (
+  // compact (колонка стены): плашек контекста, стоимости и расхода нет — в узкой
+  // шапке они занимают всю ширину и переносят строку, а следить за деньгами и
+  // контекстом уместнее в полном виде чата (открывается кнопкой из ярлыка колонки)
+  const costBadges = compact ? null : isMobile ? (
     // Мобилка: один объединённый чип (контекст + стоимость/расход) — не распирает шапку
     <>
       <MobileCombinedBadge
@@ -1232,7 +1240,9 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       </div>
     </ToolbarIconButton>
   ) : null;
-  const settingsBtn = online ? (
+  // compact (колонка стены): настройки чата не показываем — диалог шире самой
+  // колонки, а сам чат открывается в полном виде одной кнопкой из ярлыка колонки
+  const settingsBtn = online && !compact ? (
     <ToolbarIconButton onClick={onOpenSettings} title="Настройки чата" isMobile={isMobile}>
       <Settings size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
     </ToolbarIconButton>
@@ -1288,7 +1298,9 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   }
 
   return (
-    <Toolbar isMobile={isMobile} noBorder={island} bg={island ? 'transparent' : undefined}
+    // compact (колонка стены): фон прозрачный — подложку даёт стеклянный остров
+    // колонки, плотный тулбар закрывал бы дудл-холст под шапкой
+    <Toolbar isMobile={isMobile} noBorder={island} bg={island || compact ? 'transparent' : undefined}
       style={{
         ...(personaAccent ? { borderLeft: `3px solid ${personaAccent}` } : null),
         // Узкий десктоп: фиксированную высоту отпускаем, кластер переносится второй строкой

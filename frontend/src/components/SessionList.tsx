@@ -20,6 +20,7 @@ import { ListDateDivider } from './ListDateDivider';
 import { groupChats, groupByTags, sortChatsFlat, chatTagsSorted, type TagChatGroup } from '../lib/chatGroups';
 import { tagColor } from '../lib/tagRegistry';
 import { TagAssignMenu } from './TagChip';
+import { WALL_DRAG_TYPE } from '../features/wall/WallDock';
 
 interface Props {
   project: Project;
@@ -36,6 +37,10 @@ interface Props {
   // владельцу (WorkspacePage) обновить project.tagRegistry. Не задан — SessionList
   // держит реестр сам (optimistic state поверх props)
   onTagsReorder?: (registry: ProjectTag[]) => void;
+  // «На стену» (фича wall): пункт в меню карточки; в ПЛОСКОМ режиме карточки ещё и
+  // перетаскиваются на док стены (в Иерархии нативный drag сломал бы dnd-kit вложения).
+  // Не задан — механики нет (мобила, флаг выключен).
+  onAddToWall?: (s: Session) => void;
 }
 
 // Кнопка порядка ▲▼ у заголовка секции тегов
@@ -46,7 +51,7 @@ const orderBtnStyle = (disabled: boolean): React.CSSProperties => ({
   background: 'transparent', color: disabled ? C.border : C.textMuted,
 });
 
-export function SessionList({ project, activeSession, onSelect, onSessionUpdated, onSessionsChanged, onCleared, isMobile = false, workflowRunningFor, onTagsReorder }: Props) {
+export function SessionList({ project, activeSession, onSelect, onSessionUpdated, onSessionsChanged, onCleared, isMobile = false, workflowRunningFor, onTagsReorder, onAddToWall }: Props) {
   const online = useOnline();
   // Подписка на стор персон — перерисоваться, когда список подгрузится (аватары сессий персон)
   usePersonasVersion();
@@ -352,25 +357,43 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     ? sortChatsFlat(filteredSessions, sortOrder)
     : null;
 
-  const renderCard = (s: Session) => (
-    <ChatCard
-      key={s.id}
-      session={s}
-      isActive={activeSession?.id === s.id}
-      isMobile={isMobile}
-      fallbackName={`Чат #${numberById.get(s.id) ?? 1}`}
-      online={online}
-      hovered={hoveredId === s.id}
-      workflowRunning={workflowRunningFor === s.id}
-      onSelect={() => onSelect(s)}
-      onHover={h => setHoveredId(h ? s.id : null)}
-      onDelete={() => setDeleteTarget(s)}
-      tags={chatTagsSorted(s, registry).map(name => ({ name, color: tagColor(registry, name) }))}
-      onRemoveTag={online ? name => toggleTag(s, name) : undefined}
-      onAssignTags={online ? anchor => setTagMenu(prev => prev?.sessionId === s.id ? null : { sessionId: s.id, anchor }) : undefined}
-      onRename={online ? name => renameSession(s, name) : undefined}
-    />
-  );
+  const renderCard = (s: Session) => {
+    const card = (
+      <ChatCard
+        key={s.id}
+        session={s}
+        isActive={activeSession?.id === s.id}
+        isMobile={isMobile}
+        fallbackName={`Чат #${numberById.get(s.id) ?? 1}`}
+        online={online}
+        hovered={hoveredId === s.id}
+        workflowRunning={workflowRunningFor === s.id}
+        onSelect={() => onSelect(s)}
+        onHover={h => setHoveredId(h ? s.id : null)}
+        onDelete={() => setDeleteTarget(s)}
+        tags={chatTagsSorted(s, registry).map(name => ({ name, color: tagColor(registry, name) }))}
+        onRemoveTag={online ? name => toggleTag(s, name) : undefined}
+        onAssignTags={online ? anchor => setTagMenu(prev => prev?.sessionId === s.id ? null : { sessionId: s.id, anchor }) : undefined}
+        onRename={online ? name => renameSession(s, name) : undefined}
+        onAddToWall={onAddToWall ? () => onAddToWall(s) : undefined}
+      />
+    );
+    // Перетаскивание на док стены — ТОЛЬКО в плоском режиме: в Иерархии строки уже
+    // держит dnd-kit (ChatTreeRow.useDraggable), и нативный drag глушил бы вложение
+    if (!onAddToWall || hierarchy) return card;
+    return (
+      <div
+        key={s.id}
+        draggable
+        onDragStart={e => {
+          e.dataTransfer.setData(WALL_DRAG_TYPE, JSON.stringify(s));
+          e.dataTransfer.effectAllowed = 'copy';
+        }}
+      >
+        {card}
+      </div>
+    );
+  };
 
   // Заголовок секции режима «Теги»: цветовая точка, имя, счётчик чатов, кнопки
   // порядка ▲▼ (только у реестровых тегов; сироты и «Без тегов» неупорядочены)

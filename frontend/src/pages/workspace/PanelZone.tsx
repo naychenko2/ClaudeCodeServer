@@ -23,9 +23,9 @@
 // высоту по весам, там же живёт хендл ресайза. Колонки разной длины посреди зоны
 // читались бы как рваная раскладка, поэтому одиночную «по контенту» держим лишь у
 // самого центра. Ширину колонок делит сплиттер между ними (colFlex).
-import { Fragment, useEffect, useState, type DragEvent, type ReactNode } from 'react';
+import { Fragment, useEffect, useRef, useState, type DragEvent, type ReactNode } from 'react';
 import { Pin } from 'lucide-react';
-import { C, ISLAND, SHADOW, PANEL_ANIM } from '../../lib/design';
+import { C, ISLAND, SHADOW, PANEL_ANIM, Z } from '../../lib/design';
 import { ICON_STROKE } from '../../components/ui/icons';
 import { PanelShell } from '../../components/ui/PanelShell';
 import { PanelRail, RAIL_W, RAIL_GAP, type RailItem } from '../../components/ui/PanelRail';
@@ -91,12 +91,16 @@ interface Props {
   // панелей он отношения не имеет, но живёт в той же вертикали у края окна, поэтому
   // держит зону на экране даже когда открывать в ней нечего.
   railFooter?: ReactNode;
+  // Плавающий режим («Стена»): открытые панели не занимают место в раскладке, а
+  // всплывают поверх контента у своей рельсы и закрываются кликом мимо них. Кнопки,
+  // раскладка и перенос между зонами — те же, что в обычном режиме (общий стор).
+  floating?: boolean;
 }
 
 export function PanelZone({
   side, panels, railCounts, panelStack,
   allowedKeys = WORKSPACE_KEYS, hideWhenEmpty, toolsEnabled, compact, sessionPanels, onPanelOpen,
-  railFooter,
+  railFooter, floating,
 }: Props) {
   const usePanels = (panelStack ?? wsPanels).use;
   const { zones, toggle, closeTo, evict, setMode, setWidth, setWeights, setColFlex, toggleCollapsed, swapWith, replaceWith, moveAt, moveToNewColumn } = usePanels();
@@ -153,8 +157,11 @@ export function PanelZone({
   // рваная. Во втором и дальних рядах панели тянутся всегда; панели полной высоты
   // (FULL_HEIGHT_KEYS, напр. Документация) — тянутся всегда, даже одиночкой у
   // центра. colLen — число панелей в колонке.
+  // floating: панели всплывают поверх контента, и «высота по содержимому» там
+  // означала бы попап, который прыгает в размере от панели к панели. Слой всегда
+  // одной высоты — открытие следующей панели не дёргает картинку.
   const panelStretched = (k: PanelKey, vi: number, colLen: number): boolean =>
-    isFullHeight(k) || vi !== centerVi || colLen > 1;
+    !!floating || isFullHeight(k) || vi !== centerVi || colLen > 1;
   // Колонка стоит по контенту целиком — под ней свободный низ (место для новой
   // панели, растяжимая направляющая, укороченный сплиттер ширины).
   const colByContent = (keys: PanelKey[], vi: number): boolean =>
@@ -205,6 +212,28 @@ export function PanelZone({
   useEffect(() => {
     evict(side, allowedKeys);
   }, [evict, side, allowedKeys, layout, zoneState.stash]);
+
+  // Плавающие панели закрываются кликом мимо: слой висит поверх контента, и
+  // «убрать его с глаз» должно быть так же дёшево, как открыть. Клик по самой
+  // панели, по рельсе и по докам под ней — не «мимо» (иначе кнопка закрывала бы
+  // панель ровно в тот момент, когда её открывает).
+  const floatRef = useRef<HTMLDivElement | null>(null);
+  const railBoxRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!floating || openKeys.length === 0 || isZoneCollapsed(zoneState)) return;
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (floatRef.current?.contains(t) || railBoxRef.current?.contains(t)) return;
+      // Клик в модалку/меню, живущие порталом поверх всего, панели не касается
+      if ((t as HTMLElement).closest?.('[data-portal-layer]')) return;
+      // СВОРАЧИВАЕМ зону, а не закрываем панели: закрытые пришлось бы открывать
+      // заново по одной, а свёрнутые возвращает та же кнопка рельсы, которой их
+      // прячут вручную — состав раскладки при этом цел.
+      toggleCollapsed(side);
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [floating, openKeys, toggleCollapsed, side, zoneState]);
 
   const dnd = usePanelDnd({
     zone: side,
@@ -264,9 +293,11 @@ export function PanelZone({
   // Drawer компактного режима не считаем — он overlay и живёт поверх контента сам.
   // Кромку занимает и док под рельсой: даже при схлопнутой рельсе панелей он стоит
   // на своём месте, и FAB, посчитанный по нулю, уехал бы под него.
+  // В плавающем режиме панели лежат ПОВЕРХ контента и кромки не занимают — иначе
+  // FAB отпрыгивал бы от каждого открытия панели вместе с центром
   const zoneEdgeW = !showRail ? (railFooter ? RAIL_W + RAIL_GAP : 0) : RAIL_W + RAIL_GAP + (compact
     ? (tabletKeys.length > 0 && tabletInline ? width + GAP * 2 : 0)
-    : (columns.length > 0 ? zoneW + RAIL_GAP : 0));
+    : (columns.length > 0 && !floating ? zoneW + RAIL_GAP : 0));
   useEffect(() => {
     const prop = isLeft ? '--cc-fab-left' : '--cc-fab-right';
     document.documentElement.style.setProperty(prop, `${zoneEdgeW + 20}px`);
@@ -555,7 +586,11 @@ export function PanelZone({
       groups={[railGroup(PROJECT_KEYS), railGroup(TOOLS_KEYS), railGroup(SESSION_KEYS)]}
       // Свой зазор до центра нужен только при закрытых панелях: иначе его даёт
       // прокладка перед зоной
-      gapToCenter={openKeys.length === 0 ? RAIL_GAP : 0}
+      // Зазор до центра обычно даёт сама зона (её сплиттер/крайняя направляющая), но
+      // при закрытых панелях — и ВСЕГДА в плавающем режиме — его держит рельса: там
+      // зона места не занимает вовсе, и без этого зазора центр прыгал бы на 8px при
+      // каждом открытии панели
+      gapToCenter={openKeys.length === 0 || floating ? RAIL_GAP : 0}
       // Тумблер режима и «свернуть все» в компактном и однопанельном режимах не
       // нужны — там управлять нечем
       modeToggle={compact || singlePanelMode ? undefined : {
@@ -813,6 +848,31 @@ export function PanelZone({
       ? (isLeft ? <>{railGapBox}{zoneBody}{splitter}</> : <>{splitter}{zoneBody}{railGapBox}</>)
       : (acceptsForeign ? emptyDropZone : null)
   );
+
+  // Плавающий режим («Стена»): панели не раздвигают контент, а всплывают поверх него
+  // у своей рельсы. Кнопки и раскладка при этом ОБЩИЕ с обычным режимом — панель
+  // просто рисуется другим слоем. Клик мимо панелей закрывает их (обработчик ниже).
+  if (floating && !compact) {
+    return (
+      <>
+        {isLeft ? <div ref={railBoxRef} style={{ display: 'flex', alignItems: 'stretch', height: '100%' }}>{rail}</div> : null}
+        {columns.length > 0 && (
+          <div
+            ref={floatRef}
+            style={{
+              position: 'absolute', top: 0, bottom: 0, zIndex: Z.dropdown,
+              ...(isLeft ? { left: RAIL_W + RAIL_GAP } : { right: RAIL_W + RAIL_GAP }),
+              display: 'flex', alignItems: 'stretch', padding: `0 ${RAIL_GAP}px`,
+              boxSizing: 'border-box', pointerEvents: 'auto',
+            }}
+          >
+            {zoneBody}
+          </div>
+        )}
+        {!isLeft ? <div ref={railBoxRef} style={{ display: 'flex', alignItems: 'stretch', height: '100%' }}>{rail}</div> : null}
+      </>
+    );
+  }
 
   return isLeft ? <>{rail}{body}</> : <>{body}{rail}</>;
 }

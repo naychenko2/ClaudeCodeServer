@@ -1,9 +1,9 @@
 import type { ReactNode } from 'react';
-import { Activity, Book, Calendar, Coins, Folder, House, MessageCircle, Puzzle, Share2, Users } from 'lucide-react';
+import { Activity, Book, Calendar, Coins, Columns3, Folder, House, MessageCircle, Puzzle, Share2, Users } from 'lucide-react';
 import { PillSwitch } from './Toolbar';
 import { useModules } from '../lib/modules';
 
-export type HubTab = 'home' | 'chats' | 'projects' | 'calendar' | 'notes' | 'personas' | 'knowledge' | 'notifications' | 'spend' | 'telemetry';
+export type HubTab = 'home' | 'chats' | 'wall' | 'projects' | 'calendar' | 'notes' | 'personas' | 'knowledge' | 'notifications' | 'spend' | 'telemetry';
 
 // Значение таба хаба: фиксированный раздел ЛИБО внешний модуль (`module:{id}`, ТЗ R6).
 // Модульные табы приходят из реестра (GET /api/modules) и генерятся динамически.
@@ -20,6 +20,7 @@ export function moduleIdOf(v: HubTabValue): string | null {
 const TAB_ICONS: Record<HubTab, ReactNode> = {
   home: <House size={18} strokeWidth={2} />,
   chats: <MessageCircle size={18} strokeWidth={2} />,
+  wall: <Columns3 size={18} strokeWidth={2} />,
   projects: <Folder size={18} strokeWidth={2} />,
   calendar: <Calendar size={18} strokeWidth={2} />,
   notes: <Share2 size={18} strokeWidth={2} />,
@@ -32,7 +33,7 @@ const TAB_ICONS: Record<HubTab, ReactNode> = {
 
 // Подписи разделов (единый источник для таббара и overflow-меню «Разделы»)
 export const TAB_LABELS: Record<HubTab, string> = {
-  home: 'Домой', chats: 'Чаты', projects: 'Проекты', calendar: 'Календарь', notes: 'Заметки',
+  home: 'Домой', chats: 'Чаты', wall: 'Стена', projects: 'Проекты', calendar: 'Календарь', notes: 'Заметки',
   personas: 'Персоны', knowledge: 'Знания', notifications: 'Уведомления', spend: 'Аналитика',
   telemetry: 'Телеметрия',
 };
@@ -42,7 +43,10 @@ const DEFAULT_TABS: HubTab[] = ['chats', 'projects', 'calendar', 'notes', 'perso
 // не в таббаре, а в шапке — логотип «Домой», колокольчик «Уведомления», меню
 // аватара «Знания» и «Аналитика токенов». Всплывающая только внутри раздела
 // вкладка-призрак сбивает с толку: набор таббара скачет от того, где ты находишься.
-const TABLESS: HubTab[] = ['home', 'notifications', 'knowledge', 'spend', 'telemetry'];
+// «Стена» вкладки не имеет ВООБЩЕ: вход — из воркспейса (док стены под доком
+// проектов), членство в TABLESS запрещает дописывать вкладку даже когда стена
+// активна (экран открыт по доку/диплинку #/wall — PillSwitch умеет «нет выбранного»).
+const TABLESS: HubTab[] = ['home', 'notifications', 'knowledge', 'spend', 'telemetry', 'wall'];
 
 // Сегмент-переключатель хаба «Чаты | Проекты | Календарь | Заметки | Персоны» — на общем PillSwitch.
 // mobile: компакт-режим — неактивные сегменты иконками, подпись только у активного

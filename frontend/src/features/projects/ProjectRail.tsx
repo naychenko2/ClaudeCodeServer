@@ -126,7 +126,10 @@ function ProjectDockIcon({ p, activity, active, outline, dragging, dragActive, s
 }
 
 export function ProjectRail({ project, onOpenSettings, side = 'left' }: {
-  project: Project;             // активный проект (свежая версия из WorkspacePage)
+  // Активный проект (свежая версия из WorkspacePage). undefined — активного нет:
+  // так док выглядит на пустой «Стене», где фокусной колонки ещё не существует.
+  // Ряд проектов при этом полноценный, просто ни одна иконка не подсвечена.
+  project?: Project;
   onOpenSettings: () => void;   // настройки текущего проекта — из его контекст-меню
   // Сторона окна: в какую сторону раскрываются подписи кнопок
   side?: 'left' | 'right';
@@ -136,7 +139,7 @@ export function ProjectRail({ project, onOpenSettings, side = 'left' }: {
   const switcherOrder = useSwitcherOrder();
   const activity = useProjectActivity();
 
-  useEffect(() => { recordSwitcherProject(project.id); }, [project.id]);
+  useEffect(() => { if (project) recordSwitcherProject(project.id); }, [project]);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number; p: Project } | null>(null);
   // Курсор в доке — цвет возвращается ВСЕМ иконкам сразу, а не той, что под ним:
@@ -148,13 +151,22 @@ export function ProjectRail({ project, onOpenSettings, side = 'left' }: {
   const boxRef = useRef<HTMLDivElement>(null);
   const colRef = useRef<HTMLDivElement>(null);
   const [boxH, setBoxH] = useState(0);
+  // Меряем РОДИТЕЛЯ (свободное место зоны), а не себя: сам док стоит по контенту,
+  // иначе он растягивался бы на весь остаток и выталкивал соседние капсулы (док
+  // «Стены») к нижней кромке окна. Родитель — тот, кто отдал доку место.
   useLayoutEffect(() => {
-    const el = boxRef.current;
+    const el = boxRef.current?.parentElement;
     if (!el) return;
-    setBoxH(el.getBoundingClientRect().height);
-    const ro = new ResizeObserver(entries => setBoxH(entries[0]?.contentRect.height ?? 0));
+    // borderBoxSize, а не contentRect: у родителя может быть padding, и «место под
+    // иконки» считается по внешней коробке. Плюс перезамер следующим кадром —
+    // на первом проходе колонка ещё не растянута флексом, и док решил бы, что
+    // высоты нет (все проекты уезжали под лупу «ещё N»).
+    const measure = () => setBoxH(el.getBoundingClientRect().height);
+    measure();
+    const raf = requestAnimationFrame(measure);
+    const ro = new ResizeObserver(measure);
     ro.observe(el);
-    return () => ro.disconnect();
+    return () => { cancelAnimationFrame(raf); ro.disconnect(); };
   }, []);
 
   // Проекты дока в СТАБИЛЬНОМ порядке: закреплённые (в порядке закрепления), затем
@@ -172,12 +184,12 @@ export function ProjectRail({ project, onOpenSettings, side = 'left' }: {
     };
     pinnedIds.forEach(push);
     switcherOrder.forEach(push);
-    if (!seen.has(project.id)) {
+    if (project && !seen.has(project.id)) {
       const p = byId.get(project.id);
       if (p) out.push(p);
     }
     return out;
-  }, [projects, project.id, pinnedIds, switcherOrder]);
+  }, [projects, project, pinnedIds, switcherOrder]);
 
   // Сколько иконок влезает в свободную высоту. Пока высота не измерена (первый кадр) —
   // не режем: иначе док мигнул бы пустым.
@@ -186,7 +198,7 @@ export function ProjectRail({ project, onOpenSettings, side = 'left' }: {
     : Math.min(MAX_SLOTS, items.length);
   let shown = items.slice(0, slots);
   // Активный обязан быть виден: он и есть точка отсчёта для всего дока
-  if (slots > 0 && !shown.some(p => p.id === project.id)) {
+  if (project && slots > 0 && !shown.some(p => p.id === project.id)) {
     const a = items.find(p => p.id === project.id);
     if (a) shown = [...items.slice(0, slots - 1), a];
   }
@@ -323,10 +335,11 @@ export function ProjectRail({ project, onOpenSettings, side = 'left' }: {
   const dragProject = dragView ? projects.find(p => p.id === dragView.id) : null;
 
   return (
-    // Обёртка забирает остаток высоты зоны (по нему считаются слоты), капсула внутри
-    // стоит по контенту. pointerEvents возвращаем: у обёртки рельсы они сняты.
+    // Обёртка стоит ПО КОНТЕНТУ (высоту свободного места меряем у родителя — см. выше):
+    // так следующая капсула в колонке встаёт сразу под доком, а не улетает вниз.
+    // pointerEvents возвращаем: у обёртки рельсы они сняты.
     <div ref={boxRef} style={{
-      flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', alignItems: 'center',
+      flexShrink: 0, minHeight: 0, display: 'flex', flexDirection: 'column', alignItems: 'center',
       pointerEvents: 'auto',
     }}>
       <style>{`
@@ -387,10 +400,10 @@ export function ProjectRail({ project, onOpenSettings, side = 'left' }: {
                 <ProjectDockIcon
                   p={p}
                   side={side}
-                  active={p.id === project.id}
+                  active={p.id === project?.id}
                   // Курсор в рельсе (или там тащат иконку) — ряд просыпается целиком
                   // и показывает проекты как есть, картинками в цвете
-                  outline={railHover || dragView ? undefined : (p.id === project.id ? 'strong' : 'muted')}
+                  outline={railHover || dragView ? undefined : (p.id === project?.id ? 'strong' : 'muted')}
                   activity={activity.get(p.id)}
                   dragging={dragView?.id === p.id}
                   dragActive={!!dragView}
@@ -454,7 +467,7 @@ export function ProjectRail({ project, onOpenSettings, side = 'left' }: {
         document.body,
       )}
 
-      {paletteOpen && <ProjectPalette currentProjectId={project.id} onClose={() => setPaletteOpen(false)} />}
+      {paletteOpen && <ProjectPalette currentProjectId={project?.id} onClose={() => setPaletteOpen(false)} />}
 
       {menu && createPortal(
         <div onClick={() => setMenu(null)} onContextMenu={e => { e.preventDefault(); setMenu(null); }}
@@ -470,7 +483,7 @@ export function ProjectRail({ project, onOpenSettings, side = 'left' }: {
             {/* Настройки — только у текущего проекта: диалог правит ТОТ, что открыт в
                 воркспейсе. Отдельной кнопки под них в рельсе нет, и это единственный
                 вход — пункт меню обязан быть. */}
-            {menu.p.id === project.id && (
+            {menu.p.id === project?.id && (
               <button style={menuItemStyle}
                 onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; }}
                 onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}

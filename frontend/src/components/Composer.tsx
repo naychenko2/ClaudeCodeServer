@@ -108,6 +108,9 @@ export interface ComposerProps {
   restore?: { text: string | null; attachedPaths: string[] | null; mode: string | null; seq: number } | null;
   // Замена всего списка вложений при restore (родитель владеет attachedFiles).
   onReplaceAttachments?: (paths: string[]) => void;
+  // Сигнал «поставь курсор в поле»: растущее число (на стене — фокус колонки).
+  // Именно счётчик, а не boolean: повторный запрос на то же значение не сработал бы.
+  focusSignal?: number;
 }
 
 // Ступени полосы контролов («губы» под полем ввода) — по ширине САМОЙ полосы, не окна.
@@ -374,6 +377,7 @@ export function Composer({
   rateWindow,
   restore = null,
   onReplaceAttachments,
+  focusSignal,
 }: ComposerProps) {
   const asstName = useAssistantName();
   // Черновик per-session: инициализируем из стора и синхронизируем при переключении чата
@@ -427,6 +431,15 @@ export function Composer({
     textareaRef.current?.focus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [restore?.seq, sessionId]);
+
+  // Внешний запрос фокуса (колонка «Стены» стала активной). Ждём кадр: композер
+  // в этот момент ещё проявляется, а фокус на скрытом поле браузер игнорирует.
+  useEffect(() => {
+    if (!focusSignal) return;
+    const id = requestAnimationFrame(() => textareaRef.current?.focus());
+    return () => cancelAnimationFrame(id);
+  }, [focusSignal]);
+
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   // Опасный режим (bypass) ждёт подтверждения в модалке перед применением

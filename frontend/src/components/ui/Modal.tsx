@@ -52,7 +52,13 @@ export function Modal({
   const isMobile = useIsMobile();
 
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    // preventDefault — сигнал нижележащим слоям (оверлей «Стены» и любой будущий),
+    // что Escape уже обработан: без него одно нажатие закрывало и модалку, и слой под ней
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      e.preventDefault();
+      onClose();
+    };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
   }, [onClose]);

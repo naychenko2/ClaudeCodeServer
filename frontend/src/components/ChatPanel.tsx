@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo, useCallback, Fragment } from 'react';
+import { useState, useRef, useEffect, useMemo, useCallback, Fragment, type HTMLAttributes } from 'react';
 import { ArrowDown, RotateCw, CircleHelp } from 'lucide-react';
 import type { Project, Session, ChatItem, SkillInfo, AgentInfo, ClaudeBilling, Persona, WorkLoopState, SessionTeamImplement, TeamPlanDecision } from '../types';
 import { useSession } from '../hooks/useSession';
@@ -29,6 +29,7 @@ import { ProjectGitBar } from './ProjectGitBar';
 import { EditSessionDialog } from './EditSessionDialog';
 import { C, R, SHADOW, CHAT_MAX_W, CHAT_GUTTER_L } from '../lib/design';
 import { VAR_SHIFT, VAR_W, useChatGutter } from '../lib/chatGutter';
+import { projectTopWash } from '../lib/projectTone';
 import { setChatContext, AI_RECOMPUTE_EVENT } from '../lib/ai/chatContext';
 import { ChatHeaderBar, type CostStats, type FalCostStats } from './chat/ChatHeaderBar';
 import { computeGlifGenStats } from './chat/glifStats';
@@ -73,6 +74,18 @@ interface Props {
   // Стиль Islands: чат живёт БЕЗ рамки прямо на холсте (корень прозрачный),
   // а шапка выделена в собственную карточку-остров с зазором снизу
   headerIsland?: boolean;
+  // Режим «Стены» (WallColumn): на экране НЕСКОЛЬКО инстансов ChatPanel разом, поэтому
+  // глобальные синглтоны одного хозяина (setGitSessionContext, setChatContext,
+  // --cc-fab-bottom) не трогаем — иначе инстансы перебивают друг друга, а анмаунт
+  // любого сбрасывает контекст всем. Git-бар скрыт (воркспейсный инструмент);
+  // шапка чата — штатная (канонический вид), ярлык колонки рисует WallColumn.
+  embedded?: boolean;
+  // Растущий счётчик «поставь курсор в поле ввода» (колонка стены стала активной)
+  composerFocusSignal?: number;
+  // Атрибуты перетаскивания для ШАПКИ чата (колонка стены): за неё двигают саму
+  // колонку — так же, как за её ярлык. Тащить карточку принято за её верх, и шапка
+  // чата — самая заметная его часть.
+  headerDragProps?: HTMLAttributes<HTMLDivElement>;
 }
 
 // Предел одной загрузки — совпадает с RequestSizeLimit эндпоинта загрузки вложений
@@ -119,7 +132,7 @@ function derivePlanPhase(items: ChatItem[], mode: Mode, isWaiting: boolean): Pla
   return null;
 }
 
-export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, attachedFiles, onAttachedFilesChange, artifactsOpen, onToggleArtifacts, greetingBubble, headerIsland }: Props) {
+export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, attachedFiles, onAttachedFilesChange, artifactsOpen, onToggleArtifacts, greetingBubble, headerIsland, embedded, composerFocusSignal, headerDragProps }: Props) {
   const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, workLoop: liveWorkLoop, teamImplement: liveTeamImplement, promptSuggestion, pending, composerRestore, consumeRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, respondTeamPlan, respondTeamEscalation, interrupt, compact, toggleThinking, noteCompanionSwitch, cancelPending } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
   // Цикл «до готово» (флаг work-loop): live-состояние из событий work_loop,
   // до первого события — из Session.workLoop; null — цикл выключен
@@ -200,10 +213,11 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   // Пока активен чат в worktree, все git-запросы проекта несут его sessionId —
   // бар/панель «Изменения» показывают и мутируют дерево чата, не корень проекта
   useEffect(() => {
-    if (!project) return;
+    // embedded: git-контекст — глобальный синглтон проекта, на стене им владеет воркспейс
+    if (!project || embedded) return;
     setGitSessionContext(project.id, session.worktreePath ? session.id : null);
     return () => setGitSessionContext(project.id, null);
-  }, [project, session.id, session.worktreePath]);
+  }, [project, session.id, session.worktreePath, embedded]);
   const [worktreeForceConfirm, setWorktreeForceConfirm] = useState(false);
   // Предупреждение перед сменой дерева (в обе стороны): переезд меняет рабочую папку
   // агента — без объяснения тумблер выглядит «кнопкой-сюрпризом»
@@ -451,14 +465,18 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   } = useChatScroll(session.id, items, isHistoryLoading, online);
   // Жёлоб под значок ожидания слева от ленты (на мобиле его роль играет обычный
   // боковой отступ) — см. lib/chatGutter
-  useChatGutter(scrollRef, CHAT_MAX_W, !isMobile);
+  // На стене жёлоб не считаем: там лента прокручивается во всю ширину колонки
+  // (полоса у её правого края), и компенсировать перекос нечему
+  useChatGutter(scrollRef, CHAT_MAX_W, !isMobile && !embedded);
   // FAB AI-хаба должен вставать НАД композером (иначе налезает на композер и кнопку
   // «вниз»): пробрасываем высоту композера в глобальную CSS-переменную, читаемую FAB.
   useEffect(() => {
+    // embedded: переменная глобальная, несколько колонок стены перебивали бы друг друга
+    if (embedded) return;
     const root = document.documentElement;
     root.style.setProperty('--cc-fab-bottom', `${composerH + 12}px`);
     return () => { root.style.setProperty('--cc-fab-bottom', '20px'); };
-  }, [composerH]);
+  }, [composerH, embedded]);
   // Контекст проекта для резолва локальных путей картинок в сообщениях
   const projectCtx = useMemo(() => project ? { id: project.id, rootPath: project.rootPath } : null, [project]);
 
@@ -766,9 +784,11 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   // Сообщаем AI-палитре, что чат открыт (переписка + хвост) — чтобы действия чата были
   // доступны и в проектных чатах, где активная сессия не отражается в nav.
   useEffect(() => {
+    // embedded: контекст AI-палитры один на приложение — стена его не трогает
+    if (embedded) return;
     setChatContext(true, hasMessages, chatTail);
     return () => setChatContext(false, false);
-  }, [hasMessages, chatTail]);
+  }, [hasMessages, chatTail, embedded]);
 
   // Триггер «завершение хода Claude»: по переходу isWaiting → false просим AI-хаб
   // переоценить контекст (уместно ли извлечь задачи, собрать итог в заметку и т.п.).
@@ -1284,9 +1304,13 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     // карточки консультаций пересобираются с активностью внутри
   }, [items, renderItem, lastTaskIdx, execZone, online, onOpenFile, project, handleRevert, personasVersion, sessionBusy, turnBoundaries]);
 
+  // Подпал цветом проекта под верхом чата (см. слой в разметке ниже)
+  const projectWash = projectTopWash(project);
+
   const headerBar = (
     <ChatHeaderBar
       island={headerIsland}
+      compact={embedded}
       session={session}
       project={project}
       hasMessages={hasMessages}
@@ -1323,10 +1347,31 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   return (
     <AssistantNameContext.Provider value={asstName}>
     <PersonaContext.Provider value={persona}>
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative', background: headerIsland ? 'transparent' : C.bgMain }}>
+    {/* embedded (колонка стены) — тоже прозрачный: подложку даёт стеклянный остров
+        колонки, а собственный плотный фон закрывал бы дудл-холст под ней */}
+    <div style={{
+      display: 'flex', flexDirection: 'column', height: '100%', position: 'relative',
+      background: headerIsland || embedded ? 'transparent' : C.bgMain,
+    }}>
+      {/* Подпал цветом проекта под верхом чата — ПО ШИРИНЕ ЛЕНТЫ, а не всего центра:
+          растянутый на всю ширину он читался бы как фон экрана, а не как метка этого
+          чата. На стене подпал рисует сам остров колонки (там он и есть карточка) */}
+      {!embedded && projectWash && (
+        <div style={{
+          position: 'absolute', top: 0, left: '50%', transform: 'translateX(-50%)',
+          width: '100%', maxWidth: CHAT_MAX_W, height: 96,
+          backgroundImage: projectWash, pointerEvents: 'none',
+          // Верхние углы скруглены — подпал читается как продолжение карточки
+          // чата, а не как прямоугольная плашка, наклеенная поверх
+          borderTopLeftRadius: R.xxl, borderTopRightRadius: R.xxl,
+        }} />
+      )}
       {/* В режиме headerIsland шапка сама рисует себя hero-вариантом прямо на
-          холсте (ChatHeaderBar, ветка island) — обёртки не нужно */}
-      {headerBar}
+          холсте (ChatHeaderBar, ветка island) — обёртки не нужно. На стене
+          (embedded) шапка тоже штатная — канонический вид чата; над ней колонка
+          рисует свою тонкую полосу-ярлык (проект + zoom), это не дубль шапки.
+          headerDragProps — шапка работает второй ручкой перетаскивания колонки */}
+      {headerDragProps ? <div {...headerDragProps}>{headerBar}</div> : headerBar}
 
       {/* Сообщения (нижний отступ = высота плавающего composer + зазор).
           Прокручивается НЕ вся ширина области, а колонка сообщений: иначе полоса
@@ -1341,8 +1386,11 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         // разошлась бы с композером, который центрируется отдельно. Ширину коробки и
         // компенсацию перекоса считает useChatGutter (они зависят от ширины полосы, а
         // её приходится мерить) и кладёт в переменные, которые читают эти два свойства.
-        maxWidth: isMobile ? CHAT_MAX_W + 12 * 2 : `var(${VAR_W}, ${CHAT_MAX_W + CHAT_GUTTER_L}px)`,
-        marginRight: isMobile ? undefined : `var(${VAR_SHIFT}, 0px)`,
+        // embedded (колонка стены): колонка узкая, центрировать ленту внутри неё
+        // незачем — прокрутка идёт по ВСЕЙ ширине, и полоса встаёт у правого края
+        // самой колонки, как в любом списке. Компенсация перекоса тут не нужна.
+        maxWidth: isMobile ? CHAT_MAX_W + 12 * 2 : embedded ? undefined : `var(${VAR_W}, ${CHAT_MAX_W + CHAT_GUTTER_L}px)`,
+        marginRight: isMobile || embedded ? undefined : `var(${VAR_SHIFT}, 0px)`,
         paddingLeft: isMobile ? 12 : CHAT_GUTTER_L,
         scrollbarGutter: isMobile ? undefined : 'stable',
         overflowY: 'auto', overflowX: 'hidden', position: 'relative', paddingTop: isMobile ? 16 : 20, paddingRight: isMobile ? 12 : 0, paddingBottom: 8,
@@ -1367,7 +1415,8 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
           effectiveGreeting ?? (
             <ChatEmptyState hasProject={!!project} hasCLAUDEmd={hasCLAUDEmd} onHint={handleHint}
               session={session} project={project} onSessionUpdated={onSessionUpdated} isMobile={isMobile}
-              personas={ctxPersonas} selectedPersonaId={session.personaId} onPickPersona={handlePersonaChange} />
+              personas={ctxPersonas} selectedPersonaId={session.personaId} onPickPersona={handlePersonaChange}
+              compact={embedded} />
           )
         )}
 
@@ -1490,7 +1539,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
               чата, дерево текущего хода, суммарный diff и кнопки «Зафиксировать»/
               «Опубликовать». Правой панели «Изменения» на мобиле нет — отсюда гейт
               !isMobile; на мобиле о дереве хода сообщает только отметка в ленте. */}
-          {project && !isMobile && <ProjectGitBar project={project} session={session} turnTree={turnTree} turnTreeLive={isWaiting} onCommitOwn={handleCommitOwn} onCommitAll={handleCommitAll} />}
+          {project && !isMobile && !embedded && <ProjectGitBar project={project} session={session} turnTree={turnTree} turnTreeLive={isWaiting} onCommitOwn={handleCommitOwn} onCommitAll={handleCommitAll} />}
           {/* Подъём композера над лентой даёт сама белая карточка (Composer), а не эта
               обёртка: полоса контролов вынесена из карточки, и тень на обёртке рисовала
               серый ореол вокруг пустой области под ней и полоску над полем ввода. */}
@@ -1547,6 +1596,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
             rateWindow={worstRate}
             restore={composerRestore}
             onReplaceAttachments={onAttachedFilesChange}
+            focusSignal={composerFocusSignal}
           />
           </div>
         </div>

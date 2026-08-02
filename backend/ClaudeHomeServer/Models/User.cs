@@ -43,6 +43,10 @@ public class User
     public string? ForgejoToken { get; set; }
     // Пароль веб-входа в Forgejo (открыто, как токен) — приватные репо анониму отдают 404
     public string? ForgejoPassword { get; set; }
+    // Состав «Стены» (фича wall): id чатов в порядке монет рельсы. null/пусто — стена
+    // не настроена. Мёртвые id (чат удалён/протух) не каскадятся — фильтруются лениво
+    // при чтении и вычищаются при следующем сохранении (MyWallController).
+    public List<string>? WallChatIds { get; set; }
 }
 
 // Значения User.ExecutionEnvironment

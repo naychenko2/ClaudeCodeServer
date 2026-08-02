@@ -356,6 +356,36 @@ public class UserStore
     private static string? NormalizeTier(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
+    /// <summary>Состав «Стены» пользователя (id чатов в порядке монет); пусто — не настроена.</summary>
+    public IReadOnlyList<string> GetWallChatIds(string id)
+    {
+        lock (_lock)
+        {
+            var user = _users.FirstOrDefault(u => u.Id == id);
+            return user?.WallChatIds ?? [];
+        }
+    }
+
+    /// <summary>
+    /// Сохраняет состав «Стены». Список приходит уже отвалидированным (дедуп, только свои
+    /// живые чаты, потолок) — стор лишь фиксирует его. Возвращает false, если пользователь не найден.
+    /// </summary>
+    public bool SetWallChatIds(string id, IReadOnlyList<string> chatIds)
+    {
+        lock (_lock)
+        {
+            var user = _users.FirstOrDefault(u => u.Id == id);
+            if (user is null) return false;
+            // null и пустой список — одно и то же «стена не настроена»: без ?? [] каждый
+            // PUT пустого состава поверх null переписывал бы users.json вхолостую
+            if ((user.WallChatIds ?? []).SequenceEqual(chatIds)) return true; // без лишней записи файла
+
+            user.WallChatIds = chatIds.Count > 0 ? [.. chatIds] : null;
+            Save();
+            return true;
+        }
+    }
+
     /// <summary>
     /// Устанавливает per-user пороги индикатора контекста (null — сброс к дефолтам).
     /// Возвращает false если пользователь не найден.

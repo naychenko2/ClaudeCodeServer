@@ -258,7 +258,9 @@ export function DesktopWorkspace(p: Props) {
         railFooter={
           // Вертикаль капсул у края окна: док проектов, под ним — док стены (вход в
           // режим «Стена»: клик или дроп карточки чата из панели «Чаты»)
-          <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+          // flex: 1 — по высоте этой обёртки док проектов считает число видимых
+          // иконок; без неё они все уезжали бы под лупу «ещё N»
+          <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
             <ProjectRail project={p.projectForEdit} onOpenSettings={p.onOpenProjectSettings} />
             {wallOn && <WallDock onOpenWall={p.onOpenWall!} />}
           </div>

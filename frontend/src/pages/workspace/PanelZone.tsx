@@ -855,7 +855,7 @@ export function PanelZone({
   if (floating && !compact) {
     return (
       <>
-        {isLeft ? <div ref={railBoxRef} style={{ display: 'flex' }}>{rail}</div> : null}
+        {isLeft ? <div ref={railBoxRef} style={{ display: 'flex', alignItems: 'stretch', height: '100%' }}>{rail}</div> : null}
         {columns.length > 0 && (
           <div
             ref={floatRef}
@@ -869,7 +869,7 @@ export function PanelZone({
             {zoneBody}
           </div>
         )}
-        {!isLeft ? <div ref={railBoxRef} style={{ display: 'flex' }}>{rail}</div> : null}
+        {!isLeft ? <div ref={railBoxRef} style={{ display: 'flex', alignItems: 'stretch', height: '100%' }}>{rail}</div> : null}
       </>
     );
   }

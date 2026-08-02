@@ -6,6 +6,11 @@ import { RailCapsule, RAIL_W, RAIL_GAP } from './RailCapsule';
 import { RailIconButton } from './RailIconButton';
 import { RailSep } from './RailSep';
 
+// Высота капсулы с ОДНОЙ кнопкой: паддинги 4+4, бокс кнопки 32, рамка 1+1.
+// Столько места держим за схлопнутой рельсой, чтобы соседние капсулы (док
+// проектов) не подпрыгивали, когда панелей на экране не осталось.
+const RAIL_MIN_H = 42;
+
 // Вертикальная рельса иконок у края окна — полукапсула-остров, из которой
 // открываются панели-карточки. Общая для ОБЕИХ зон: RightPanelStack (инструменты
 // проекта и сессии) и LeftPanelStack (сайдбары разделов).
@@ -159,6 +164,7 @@ export function PanelRail({ side, groups, visible = true, gapToCenter = 0, modeT
   const isLeft = side === 'left';
   const dropping = !!drop?.active;
 
+
   // Пустые группы отбрасываем ДО отрисовки сепараторов — иначе между скрытой
   // группой и соседней остался бы висячий разделитель.
   const shownGroups = groups.filter(g => g.length > 0);
@@ -299,7 +305,11 @@ export function PanelRail({ side, groups, visible = true, gapToCenter = 0, modeT
       {footer && (
         <div style={{
           flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column',
-          marginTop: visible ? ISLAND.gap : 0,
+          // Рельса схлопнулась (панелей на экране нет) — её место всё равно
+          // резервируем высотой капсулы с одной кнопкой: иначе док проектов
+          // подпрыгивает к верхней кромке, стоит панелям исчезнуть, и вертикаль
+          // рельс «дышит» на каждом переключении экрана.
+          marginTop: visible ? ISLAND.gap : RAIL_MIN_H + ISLAND.gap,
           ...(isLeft ? { marginRight: gapToCenter } : { marginLeft: gapToCenter }),
         }}>
           {footer}

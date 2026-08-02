@@ -4,7 +4,9 @@ import type { Session, Project, ProjectTag } from '../../types';
 import { api } from '../../lib/api';
 import { useModels, useModelCaps, modelCaps, modelProvider, useModelLabel, USAGE } from '../../lib/models';
 import { effortsForProvider, effortLabel } from '../../lib/effort';
-import { EXPIRY_PRESETS, expiryOptionLabel } from '../../lib/expiry';
+import { expiryOptionLabel } from '../../lib/expiry';
+import { updateChatFields, type ChatFieldsPatch } from '../../lib/chatUpdate';
+import { ExpiryPicker } from './ExpiryPicker';
 import { ModelPicker } from '../ModelPicker';
 import { SegmentedControl } from '../ui';
 import { TagPickerBody } from '../TagChip';
@@ -52,24 +54,11 @@ export function NewChatSetup({ session, project, onSessionUpdated, isMobile }: {
   useEffect(() => { setRegistryOverride(null); }, [project?.id, project?.tagRegistry]);
   const registry = registryOverride ?? project?.tagRegistry ?? [];
 
-  // Update на бэке — полная замена (Name/Model/Effort перезаписываются целиком, отсутствующее → null),
-  // поэтому шлём весь набор, подмешивая текущие значения сессии; иначе выбор усилия затёр бы модель/имя.
-  const persist = async (next: { model?: string | null; effort?: string | null; expiresAfterMinutes?: number | null; tags?: string[] }) => {
+  // Полная замена полей на бэке и выбор эндпоинта по projectId — в updateChatFields
+  const persist = async (next: ChatFieldsPatch) => {
     setSaving(true);
     try {
-      const data = {
-        name: session.name ?? null,
-        model: next.model !== undefined ? next.model : (session.model ?? null),
-        effort: next.effort !== undefined ? next.effort : (session.effort ?? null),
-        // Время жизни и теги — sentinel-семантика на бэке: отсутствие поля = не менять
-        ...(next.expiresAfterMinutes !== undefined && { expiresAfterMinutes: next.expiresAfterMinutes }),
-        ...(next.tags !== undefined && { tags: next.tags }),
-      };
-      // Проектная сессия — через /projects/{id}/sessions, чат вне проекта — через /chats (как в EditSessionDialog)
-      const updated = session.projectId
-        ? await api.sessions.update(session.projectId, session.id, data)
-        : await api.chats.update(session.id, data);
-      onSessionUpdated?.(updated);
+      onSessionUpdated?.(await updateChatFields(session, next));
     } catch {
       // молча: не критично — значение просто не применится
     } finally {
@@ -89,8 +78,7 @@ export function NewChatSetup({ session, project, onSessionUpdated, isMobile }: {
     if (v !== (session.effort ?? '')) persist({ effort: v || null });
     setPanel(null);
   };
-  const pickExpiry = (v: string) => {
-    const minutes = v ? Number(v) : null;
+  const pickExpiry = (minutes: number | null) => {
     if (minutes !== (session.expiresAfterMinutes ?? null)) persist({ expiresAfterMinutes: minutes });
     setPanel(null);
   };
@@ -190,17 +178,7 @@ export function NewChatSetup({ session, project, onSessionUpdated, isMobile }: {
               onCreate={createTag}
             />
           ) : (
-            <>
-              <div style={{ fontSize: 11.5, color: C.textMuted, marginBottom: 8, lineHeight: 1.4 }}>
-                Временный чат удалится сам вместе с историей, если не будет активности выбранное время.
-              </div>
-              <SegmentedControl
-                value={session.expiresAfterMinutes ? String(session.expiresAfterMinutes) : ''}
-                options={[{ value: '', label: 'Бессрочно' }, ...EXPIRY_PRESETS.map(p => ({ value: String(p.minutes), label: p.label }))]}
-                onChange={pickExpiry}
-                columns={3}
-              />
-            </>
+            <ExpiryPicker value={session.expiresAfterMinutes} onChange={pickExpiry} />
           )}
         </div>
       )}

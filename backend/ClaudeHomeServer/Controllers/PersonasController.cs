@@ -161,6 +161,8 @@ public class PersonasController : ControllerBase
                 tools = t.Tools,
                 access = t.Access,
                 model = t.Model,
+                // Роль каталога задаёт уровень модели, а не конкретную (см. PantheonTemplate.ModelTier)
+                modelTier = t.ModelTier?.ToString().ToLowerInvariant(),
                 effort = t.Effort,
                 specialty = t.Specialty,
                 connectedPersonaId = _personas.GetByTemplateKey(UserId, t.Key)?.Id,

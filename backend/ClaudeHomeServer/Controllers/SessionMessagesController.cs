@@ -97,6 +97,7 @@ public class SessionMessagesController(SessionManager sessions, ProjectManager p
         // ход — значит расходует ту же квоту пробуждения, что и доклад-блокер. Без этого
         // бюджет обходился бы соседним инструментом: chats_send вместо chats_report_up.
         // Ход человека и фронта сюда не попадает — только вызовы MCP (есть CallerHeader).
+        var wakeSpent = false;
         if (Request.Headers.ContainsKey(DenyOnDelegatedTurnAttribute.CallerHeader))
         {
             var wake = sessions.TryConsumeTeamWakeup(sessionId);
@@ -106,6 +107,7 @@ public class SessionMessagesController(SessionManager sessions, ProjectManager p
                     error = $"Сообщение в чат-штаб недоступно: {wake.Reason}. Доложи результат "
                         + "в своей задаче — координатор увидит его, когда человек разрешит продолжить.",
                 });
+            wakeSpent = wake.TeamMode;
         }
 
         var waitTurn = !string.Equals(req.Wait, "none", StringComparison.OrdinalIgnoreCase);
@@ -119,6 +121,14 @@ public class SessionMessagesController(SessionManager sessions, ProjectManager p
             result = await sessions.SendMessageAndWaitAsync(sessionId, text, timeout, agentDepth, senderPersonaId, senderOrigin, senderChatName);
         }
         catch (InvalidOperationException) { return NotFound(); }
+
+        // Квота списана авансом, а сообщение не дошло (дубль, переполнение очереди, занято
+        // ожиданием человека) — возвращаем единицу, как ReportBlockerAsync на TooDeep:
+        // иначе наивные ретраи агента выжигали бы MaxWakeups без единого реального хода.
+        // Принятое в очередь (не дубль) не рефандим — доставка по концу хода ход поднимет.
+        if (wakeSpent && result is SendAndWaitResult.Queued { Duplicate: true }
+            or SendAndWaitResult.QueueFull or SendAndWaitResult.Busy)
+            sessions.RefundTeamWakeup(sessionId);
 
         return result switch
         {

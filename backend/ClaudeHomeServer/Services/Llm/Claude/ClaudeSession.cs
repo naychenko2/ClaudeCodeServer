@@ -1102,6 +1102,23 @@ public class ClaudeSession : ILlmSessionAdapter
 
         if (toolName == "AskUserQuestion")
         {
+            // Лимит раундов интервью (Minor, волна 3): раньше InterviewProtocol только ПРОСИЛ
+            // модель остановиться словами («лимит исчерпан, больше не спрашивай») — факт бэкенд
+            // не проверял, и 3-й раунд так же уходил в карточку. Раунд сверх MaxInterviewRounds
+            // отклоняем прямо на permission-канале — тем же приёмом, что CoordinatorWriteGuard
+            // (см. DecidePermissionAsync), только для другого инструмента.
+            if (Info.TeamImplement is { Stage: TeamImplementStage.Interview } team
+                && TeamImplementPrompts.InterviewRoundsExhausted(team))
+            {
+                SendControlResponse(requestId, new
+                {
+                    behavior = "deny",
+                    message = $"Лимит раундов интервью ({TeamImplementPrompts.MaxInterviewRounds}) уже " +
+                              "исчерпан — больше не спрашивай, оформи остаток неясностей допущениями " +
+                              "и заверши интервью маркером работы."
+                });
+                return;
+            }
             // Ждём выбор пользователя — control_response отправит AnswerQuestion.
             // Статус Waiting выставит SessionManager по AskQuestionMessage
             _pendingQuestions[toolUseId] = requestId;
@@ -2432,7 +2449,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 if (isErrorFlag
                     && root.TryGetProperty("result", out var resText) && resText.ValueKind == JsonValueKind.String
                     && !string.IsNullOrWhiteSpace(resText.GetString()))
-                    await _onMessage(new ErrorMessage(resText.GetString()!));
+                    await _onMessage(new ErrorMessage(resText.GetString()!, ExpectResultFollows: true));
                 // Статус Error/Active выставит SessionManager по ResultMessage
                 var ctxTokens = _lastContextTokens > 0 ? _lastContextTokens : (int?)null;
                 await _onMessage(new ResultMessage(subtype, durationMs, numTurns, usage, totalCost, apiErr, denials, ctxTokens, ParseUsageModel(root)));

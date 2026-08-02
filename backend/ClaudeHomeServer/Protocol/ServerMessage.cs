@@ -135,7 +135,11 @@ public record TruncatedMessage() : ServerMessage("truncated");
 // Скрытое (зашифрованное) размышление — блок redacted_thinking
 public record RedactedThinkingMessage() : ServerMessage("redacted_thinking");
 
-public record ErrorMessage(string Text)
+// ExpectResultFollows — синтетический ErrorMessage из ветки is_error (ClaudeSession):
+// следом БЕЗУСЛОВНО идёт ResultMessage того же хода, поэтому терминальные обработчики
+// «конец хода» (штаб, цикл «до готово») не должны дёргаться на нём дважды — см.
+// SessionManager.OnMessageAsync, SessionEntry.SkipNextTeamTurnEnd.
+public record ErrorMessage(string Text, bool ExpectResultFollows = false)
     : ServerMessage("error");
 
 // Телеметрия лимитов подписки (rate_limit_event, ~каждый ход). Utilization (0..1) — доля

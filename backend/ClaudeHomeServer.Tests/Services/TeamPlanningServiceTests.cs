@@ -245,6 +245,47 @@ public class TeamPlanningServiceTests : IDisposable
         prompt.Should().Contain("бэкенд — бэкендеру");
     }
 
+    // Дыра покрытия (волна 3): «previous»-путь перепланирования (Э8) — промпт обязан нести
+    // предыдущую версию плана и просить блок «changes», иначе «Что изменилось» в карточке
+    // человеку взять неоткуда.
+    [Fact]
+    public void BuildPlannerPrompt_ПерепланированиеСПредыдущимПланом_НесётЕгоИТребуетChanges()
+    {
+        var dev = TeamPlanningService.BuildCard(MakePersona("Денис", "Backend-разработчик"));
+        var previous = new TeamImplementPlan
+        {
+            Version = 1,
+            Summary = "Экспорт задач в CSV",
+            Subtasks =
+            [
+                new TeamImplementSubtask { Title = "Эндпоинт экспорта", Wave = 1, TaskId = "task-1" },
+                new TeamImplementSubtask { Title = "Кнопка «Экспорт»", Wave = 2 },
+            ],
+        };
+
+        var prompt = TeamPlanningService.BuildPlannerPrompt("Добавить экспорт в CSV, но в XLSX",
+            [dev], "ClaudeCodeServer", previous);
+
+        prompt.Should().Contain("ПРЕДЫДУЩИЙ ПЛАН (версия 1)");
+        prompt.Should().Contain("Эндпоинт экспорта (волна 1, уже роздана исполнителю)",
+            "розданная под-задача — сигнал планировщику не плодить её заново");
+        prompt.Should().Contain("Кнопка «Экспорт» (волна 2)");
+        prompt.Should().Contain("changes", "блок «что изменилось» обязателен только при перепланировании");
+        prompt.Should().Contain("\"changes\":");
+    }
+
+    [Fact]
+    public void BuildPlannerPrompt_БезПредыдущегоПлана_НеТребуетChanges()
+    {
+        var dev = TeamPlanningService.BuildCard(MakePersona("Денис", "Backend-разработчик"));
+
+        var prompt = TeamPlanningService.BuildPlannerPrompt("Добавить экспорт в CSV",
+            [dev], "ClaudeCodeServer");
+
+        prompt.Should().NotContain("ПРЕДЫДУЩИЙ ПЛАН");
+        prompt.Should().NotContain("\"changes\":");
+    }
+
     // --- Разбор плана ---
 
     [Fact]

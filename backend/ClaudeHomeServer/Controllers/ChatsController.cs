@@ -144,10 +144,19 @@ public class ChatsController(SessionManager sessions, FileService files, ILogger
     public async Task<IActionResult> SetTeamImplement(string id, [FromBody] SetTeamImplementRequest req)
     {
         if (sessions.GetOwned(id, UserId) is null) return NotFound();
-        var updated = await sessions.SetTeamImplementAsync(id, req.Enabled,
-            req.AutoWaves, req.CoordinatorPersonaId, req.PlannerPersonaId,
-            req.ExecutorPersonaIds, UserId, req.CoordinatorNoCode);
-        return updated is null ? NotFound() : Ok(updated);
+        try
+        {
+            var updated = await sessions.SetTeamImplementAsync(id, req.Enabled,
+                req.AutoWaves, req.CoordinatorPersonaId, req.PlannerPersonaId,
+                req.ExecutorPersonaIds, UserId, req.CoordinatorNoCode);
+            return updated is null ? NotFound() : Ok(updated);
+        }
+        // Гард на входе (B2): нет координатора либо состава. Код отказа машинный — фронт по
+        // нему показывает пикер и НЕ отправляет вводную обычным сообщением.
+        catch (Services.TeamImplementSetupException ex)
+        {
+            return BadRequest(new { error = ex.Message, code = ex.Code });
+        }
     }
 
     // «Остановить» (Э4): текущие исполнители дорабатывают, новые волны не стартуют.

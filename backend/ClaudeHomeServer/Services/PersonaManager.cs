@@ -43,6 +43,8 @@ public class PersonaManager
         Load();
         // Каталог пантеона мог обновиться с релизом — подтянуть регламенты нетронутых персон
         RefreshPantheonInstructions();
+        // Разовый перенос зашитых Claude-пинов пантеона на уровни (B3 приёмки «Командной реализации»)
+        MigratePantheonModelPins();
     }
 
     // Папка с ассетами персон (аватары): data/personas/
@@ -329,7 +331,10 @@ public class PersonaManager
                 var persona = Create(userId, t.Name, t.Role, t.Description, systemPrompt: null,
                     t.Model, t.Effort, PersonaScope.Global, projectId: null,
                     t.Color, t.Greeting, memoryEnabled: true, t.Tools, t.Contract, t.Access,
-                    specialty: t.Specialty);
+                    specialty: t.Specialty,
+                    // Роль каталога требует УРОВЕНЬ модели, а не конкретную: слот резолвится
+                    // по провайдеру инстанса (см. комментарий к PantheonTemplate.ModelTier)
+                    modelTier: t.ModelTier?.ToString().ToLowerInvariant());
                 persona.TemplateKey = t.Key;
                 persona.TemplateInstructionsHash = HashInstructions(t.Contract.Instructions);
                 result.Add(persona);
@@ -365,6 +370,39 @@ public class PersonaManager
         {
             Save();
             Console.WriteLine($"[PersonaManager] Пантеон: обновлены регламенты {updated} нетронутых персон(ы)");
+        }
+    }
+
+    // Перенос зашитого Claude-алиаса пантеонной персоны на уровень модели (B3 приёмки).
+    // До этого каталог пинил opus/sonnet/haiku конкретной моделью, и на инстансе, переведённом
+    // на стороннего провайдера, такая персона молча уходила в Claude — а её исполнитель задачи
+    // упирался в лимит подписки. Алиас и есть уровень, так что смысл роли сохраняется.
+    // Трогаем ТОЛЬКО подключённых из каталога (TemplateKey) и только три алиас-значения:
+    // конкретную модель, выбранную человеком (kimi-k3, claude-fable-5), не перетираем.
+    private void MigratePantheonModelPins()
+    {
+        var migrated = 0;
+        foreach (var persona in _personas.Values)
+        {
+            if (persona.TemplateKey is null || persona.ModelTier is not null) continue;
+            var tier = persona.Model?.Trim().ToLowerInvariant() switch
+            {
+                "opus" => ModelTier.Strong,
+                "sonnet" => ModelTier.Medium,
+                "haiku" => ModelTier.Weak,
+                _ => (ModelTier?)null,
+            };
+            if (tier is null) continue;
+
+            persona.Model = null;
+            persona.ModelTier = tier;
+            persona.UpdatedAt = DateTime.UtcNow;
+            migrated++;
+        }
+        if (migrated > 0)
+        {
+            Save();
+            Console.WriteLine($"[PersonaManager] Пантеон: пины моделей переведены на уровни у {migrated} персон(ы)");
         }
     }
 

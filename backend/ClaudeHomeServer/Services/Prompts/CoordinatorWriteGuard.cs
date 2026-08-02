@@ -31,9 +31,11 @@ public static class CoordinatorWriteGuard
 
     private static readonly Regex WritePattern = new(
         @"<<-?\s*['""]?[A-Za-z_]\w*['""]?" +                             // heredoc: cat > f << 'EOF'
-        @"|\b(echo|printf|cat)\b[^\n]*(?<!\d)>{1,2}(?!&)" +               // echo/printf/cat + редирект в файл
+        @"|\b(echo|printf|cat|awk)\b[^\n]*(?<!\d)>{1,2}(?!&)" +           // echo/printf/cat/awk + редирект в файл
         @"|\btee\b" +                                                     // ... | tee file
-        @"|\bsed\b[^\n]*-i\b" +                                           // sed -i (правка на месте)
+        @"|\bsed\b[^\n]*(-i\b|(?<!\d)>{1,2}(?!&))" +                      // sed -i, либо sed 'expr' f > f2 (без -i)
+        @"|\b(mv|cp)\b" +                                                 // mv/cp — запись/перезапись мимо Edit/Write
+        @"|^\s*['""][^'""\n]*['""]\s*>{1,2}(?!&)" +                       // PowerShell: 'текст' > file
         @"|\b(Set-Content|Add-Content|Out-File|New-Item|Copy-Item)\b",    // PowerShell: запись содержимого
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 

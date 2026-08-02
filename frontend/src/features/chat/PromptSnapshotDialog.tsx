@@ -1,9 +1,12 @@
-import { useEffect, useState } from 'react';
-import { ChevronRight, ChevronDown, Check, Copy, EyeOff, Sparkles, Snowflake, RefreshCw } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { ChevronRight, ChevronDown, Check, EyeOff, Sparkles, Database, CircleDollarSign,
+  UserRound } from 'lucide-react';
 import { Modal } from '../../components/ui/Modal';
 import { Button } from '../../components/ui/Button';
 import { SegmentedControl } from '../../components/ui/Segmented';
+import { MarkdownContent } from '../../components/chat/MarkdownContent';
 import { api } from '../../lib/api';
+import { useModelLabel } from '../../lib/models';
 import { C, FS, SP, R, FONT } from '../../lib/design';
 import type { PromptSnapshot, PromptSection, CliSkill } from '../../types';
 
@@ -44,33 +47,6 @@ const shareOpacity = (i: number, count: number) =>
 // рядом с точными числами из usage — чтобы прикидка не выдавала себя за факт.
 const approxTokens = (chars: number) => Math.round(chars / 3);
 
-// Сворачивающийся блок с произвольным содержимым — для того, что нужно редко
-// (аргументы запуска CLI: длинный список путей и флагов, в глаза лезть не должен)
-function Collapsible({ title, hint, children }: {
-  title: string; hint?: string; children: React.ReactNode;
-}) {
-  const [open, setOpen] = useState(false);
-  const Icon = open ? ChevronDown : ChevronRight;
-  return (
-    <div style={{ border: `1px solid ${C.border}`, borderRadius: R.md, overflow: 'hidden' }}>
-      <button
-        onClick={() => setOpen(o => !o)}
-        style={{
-          display: 'flex', alignItems: 'center', gap: SP.sm, width: '100%',
-          padding: `9px ${SP.md}px`, background: 'none', border: 'none', cursor: 'pointer',
-          fontFamily: FONT.sans, fontSize: FS.base, color: C.textPrimary, textAlign: 'left',
-        }}>
-        <Icon size={15} color={C.textMuted} style={{ flexShrink: 0 }} />
-        <span style={{ flex: 1, minWidth: 0 }}>{title}</span>
-        {hint && (
-          <span style={{ color: C.textMuted, fontSize: FS.sm, whiteSpace: 'nowrap' }}>{hint}</span>
-        )}
-      </button>
-      {open && <div style={{ padding: `0 ${SP.md}px ${SP.md}px` }}>{children}</div>}
-    </div>
-  );
-}
-
 // Инструменты хода, разложенные по владельцам. Именно они — главный едок контекста:
 // CLI отдаёт модели ОПИСАНИЕ каждого инструмента, а нам наружу — только имена, поэтому
 // вес показываем числом штук, а не токенами (врать точной цифрой нельзя).
@@ -98,13 +74,19 @@ function ToolsRow({ tools, servers }: {
           fontFamily: FONT.sans, fontSize: FS.base, color: C.textPrimary, textAlign: 'left',
         }}>
         <Icon size={15} color={C.textMuted} style={{ flexShrink: 0 }} />
-        <span style={{ flex: 1, minWidth: 0 }}>Инструменты модели</span>
-        <span style={{ color: C.textMuted, fontSize: FS.sm, fontVariantNumeric: 'tabular-nums' }}>
-          {tools.length}
-        </span>
+        <span style={{ flex: 1, minWidth: 0 }}>Инструменты, которые она может вызвать</span>
+        {/* Состав от сообщения к сообщению не меняется — значит идёт из кэша */}
+        <span style={MARKS_COL}><CacheMark stable /></span>
+        <span style={SIZE_COL}>{tools.length} шт.</span>
       </button>
       {open && (
         <div style={{ padding: `0 ${SP.md}px ${SP.md}px 34px` }}>
+          {/* Оговорка первой строкой: иначе непонятно, почему у самой жирной части
+              нет веса, а есть только количество */}
+          <div style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.5, marginBottom: SP.sm }}>
+            Каждый инструмент модель получает вместе с описанием — это и есть главный
+            расход места. Сами описания CLI не показывает, поэтому веса у них нет.
+          </div>
           {sorted.map(([owner, list]) => (
             <div key={owner} style={{ marginBottom: SP.sm }}>
               <div style={{
@@ -130,22 +112,30 @@ function ToolsRow({ tools, servers }: {
               </div>
             </div>
           ))}
-          <div style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.5 }}>
-            Каждый инструмент уходит модели вместе с описанием — их текст CLI наружу
-            не отдаёт, поэтому вес показан числом, а не токенами.
-          </div>
         </div>
       )}
     </div>
   );
 }
 
-// Каталог скиллов: имя + описание (их CLI кладёт модели списком)
-function SkillsRow({ skills }: { skills: CliSkill[] }) {
+// Вес каталога навыков: имя + описание каждого. В отличие от инструментов, их текст
+// у нас на руках, поэтому размер считаем, а не гадаем
+const skillsChars = (skills: CliSkill[]) =>
+  skills.reduce((sum, s) => sum + s.name.length + (s.description?.length ?? 0), 0);
+
+// Каталог навыков: имя + описание (их CLI кладёт модели списком)
+function SkillsRow({ skills, share, hovered, onHover, onLeave }: {
+  skills: CliSkill[]; share?: number;
+  hovered?: boolean; onHover?: () => void; onLeave?: () => void;
+}) {
   const [open, setOpen] = useState(false);
   const Icon = open ? ChevronDown : ChevronRight;
+  const chars = skillsChars(skills);
   return (
-    <div style={{ borderBottom: `1px solid ${C.borderLight}` }}>
+    <div style={{
+      borderBottom: `1px solid ${C.borderLight}`,
+      background: hovered ? C.bgSelected : 'transparent', transition: 'background 120ms',
+    }} onMouseEnter={onHover} onMouseLeave={onLeave}>
       <button onClick={() => setOpen(o => !o)}
         style={{
           display: 'flex', alignItems: 'center', gap: SP.sm, width: '100%',
@@ -153,9 +143,11 @@ function SkillsRow({ skills }: { skills: CliSkill[] }) {
           fontFamily: FONT.sans, fontSize: FS.base, color: C.textPrimary, textAlign: 'left',
         }}>
         <Icon size={15} color={C.textMuted} style={{ flexShrink: 0 }} />
-        <span style={{ flex: 1, minWidth: 0 }}>Скиллы в каталоге</span>
-        <span style={{ color: C.textMuted, fontSize: FS.sm, fontVariantNumeric: 'tabular-nums' }}>
-          {skills.length}
+        <span style={{ flex: 1, minWidth: 0 }}>Навыки, о которых она знает</span>
+        <span style={MARKS_COL}><CacheMark stable /></span>
+        <span style={SIZE_COL}>
+          {chars.toLocaleString('ru')}
+          {share !== undefined && ` · ${share}%`}
         </span>
       </button>
       {open && (
@@ -177,20 +169,55 @@ function SkillsRow({ skills }: { skills: CliSkill[] }) {
   );
 }
 
-// Строка «метка — значение» без раскрытия: то, у чего нет текста (счётчики слоя CLI)
-function MetaRow({ label, value }: { label: string; value: string }) {
+// Ключ для связки «сегмент полосы ↔ строка списка». Полос в шторке несколько, а
+// состояние наведения одно, поэтому ключ несёт имя своей полосы: без этого наведение
+// на файл в блоке claude подсвечивало бы одноимённый сегмент в другом блоке.
+const barKey = (bar: string, key: string) => `${bar}:${key}`;
+
+// Колонка значков и колонка чисел — одной ширины во всех строках списка: так значки
+// стоят друг под другом, а не разъезжаются от длины числа
+const MARKS_COL: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', justifyContent: 'flex-end',
+  gap: SP.xs, width: 30, flexShrink: 0,
+};
+const SIZE_COL: React.CSSProperties = {
+  color: C.textMuted, fontSize: FS.sm, whiteSpace: 'nowrap',
+  fontVariantNumeric: 'tabular-nums', textAlign: 'right',
+  minWidth: 88, flexShrink: 0,
+};
+
+// Значок «платим каждый раз / берётся из кэша» — одинаковый у всех строк, чтобы взгляд
+// не искал исключения. Монетка именно потому, что это про деньги, а не про технику
+function CacheMark({ stable }: { stable: boolean }) {
   return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: SP.sm, padding: `9px ${SP.md}px`,
-      borderBottom: `1px solid ${C.borderLight}`, fontSize: FS.base, color: C.textPrimary,
-    }}>
-      <span style={{ flex: 1, minWidth: 0 }}>{label}</span>
-      <span style={{
-        color: C.textMuted, fontSize: FS.sm, whiteSpace: 'nowrap',
-        fontVariantNumeric: 'tabular-nums',
+    <span style={{ display: 'inline-flex', flexShrink: 0 }}
+      title={stable
+        ? 'Один и тот же каждый раз — берётся из кэша'
+        : 'Собирается заново под каждое сообщение — платите за него каждый раз'}>
+      {stable
+        ? <Database size={12} color={C.textMuted} />
+        : <CircleDollarSign size={12} color={C.textMuted} />}
+    </span>
+  );
+}
+
+// Строка «метка — значение» без раскрытия: то, у чего нет текста (счётчики слоя CLI)
+function MetaRow({ label, value, icon, hovered, onHover, onLeave }: {
+  label: string; value: string; icon?: React.ReactNode;
+  hovered?: boolean; onHover?: () => void; onLeave?: () => void;
+}) {
+  return (
+    <div
+      onMouseEnter={onHover}
+      onMouseLeave={onLeave}
+      style={{
+        display: 'flex', alignItems: 'center', gap: SP.sm, padding: `9px ${SP.md}px`,
+        borderBottom: `1px solid ${C.borderLight}`, fontSize: FS.base, color: C.textPrimary,
+        background: hovered ? C.bgSelected : 'transparent', transition: 'background 120ms',
       }}>
-        {value}
-      </span>
+      {icon}
+      <span style={{ flex: 1, minWidth: 0 }}>{label}</span>
+      <span style={SIZE_COL}>{value}</span>
     </div>
   );
 }
@@ -227,10 +254,13 @@ function ShareBar({ parts, hovered, onHover }: {
 }
 
 // Раскрывающаяся секция промпта: заголовок, размер, доля, текст.
-// Наведение связано с полосой долей через общий hovered-ключ.
+// Наведение связано с полосой долей через общий hovered-ключ. Ключ ОБЯЗАН нести префикс
+// своей полосы (см. barKey): состояние одно на всю шторку, и без префикса наведение
+// в одном блоке подсвечивало бы сегмент в другом — ключи там совпадают.
 // loadText — ленивый догруз (файлы слоя CLI приходят без текста, только с размером).
-function SectionRow({ section, share, hovered, onHover, loadText }: {
+function SectionRow({ section, share, hoverKey, hovered, onHover, loadText }: {
   section: PromptSection; share?: number;
+  hoverKey?: string;
   hovered?: string | null;
   onHover?: (key: string | null) => void;
   loadText?: (key: string) => Promise<string>;
@@ -239,7 +269,8 @@ function SectionRow({ section, share, hovered, onHover, loadText }: {
   const [lazyText, setLazyText] = useState<string | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const Icon = open ? ChevronDown : ChevronRight;
-  const isHot = hovered === section.key;
+  const myKey = hoverKey ?? section.key;
+  const isHot = hovered === myKey;
   const size = section.text.length || section.size || 0;
   const text = section.text || lazyText;
 
@@ -255,7 +286,7 @@ function SectionRow({ section, share, hovered, onHover, loadText }: {
   };
   return (
     <div style={{ borderBottom: `1px solid ${C.borderLight}` }}
-      onMouseEnter={() => onHover?.(section.key)}
+      onMouseEnter={() => onHover?.(myKey)}
       onMouseLeave={() => onHover?.(null)}>
       <button
         onClick={toggle}
@@ -275,28 +306,20 @@ function SectionRow({ section, share, hovered, onHover, loadText }: {
             Снежинка — кусок стабилен и живёт в кэшируемом префиксе; стрелки — пересчитан
             под этот ход и ломает кэш с себя и дальше. Что попало в кэш фактически,
             знает только API (точные цифры — в шапке, из usage) */}
-        <span style={{ display: 'inline-flex', flexShrink: 0 }}
-          title={section.stable === false
-            ? 'Пересчитывается под текст хода — кэш префикса с этого места не переиспользуется'
-            : 'Одинакова от хода к ходу — попадает в кэшируемый префикс'}>
-          {section.stable === false
-            ? <RefreshCw size={12} color={C.warningText} />
-            : <Snowflake size={12} color={C.textMuted} />}
+        {/* Колонки фиксированной ширины: иначе значки прыгали бы по горизонтали вслед
+            за длиной чисел, и глазу не за что зацепиться */}
+        <span style={MARKS_COL}>
+          {/* Персона размазана по пяти кускам — метим их, чтобы её цена была видна */}
+          {section.group === 'persona' && (
+            <span style={{ display: 'inline-flex' }} title="Часть персоны">
+              <UserRound size={12} color={C.textMuted} />
+            </span>
+          )}
+          {/* Монетка — кусок собирается заново под это сообщение, за него платите каждый
+              раз; база — он один и тот же, модель берёт из кэша */}
+          <CacheMark stable={section.stable !== false} />
         </span>
-        {/* Персона размазана по пяти секциям — метим их, чтобы её цена была видна */}
-        {section.group === 'persona' && (
-          <span title="Часть слоя персоны"
-            style={{
-              flexShrink: 0, fontSize: FS.xs, color: C.planText, background: C.planLight,
-              borderRadius: R.sm, padding: '1px 6px', whiteSpace: 'nowrap',
-            }}>
-            персона
-          </span>
-        )}
-        <span style={{
-          color: C.textMuted, fontSize: FS.sm, whiteSpace: 'nowrap',
-          fontVariantNumeric: 'tabular-nums',
-        }}>
+        <span style={SIZE_COL}>
           {size.toLocaleString('ru')}
           {share !== undefined && ` · ${share}%`}
         </span>
@@ -318,18 +341,19 @@ export function PromptSnapshotDialog({ sessionId, snapshotId, contextTokens, tur
   const [snapshot, setSnapshot] = useState<PromptSnapshot | null>(null);
   // 'loading' | 'ready' | 'gone' (снимок вытеснен ретеншном) | 'error'
   const [state, setState] = useState<'loading' | 'ready' | 'gone' | 'error'>('loading');
-  const [copied, setCopied] = useState(false);
   const [includeText, setIncludeText] = useState(false);
   const [analysis, setAnalysis] = useState<string | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
+  // Блок разбора живёт в самом низу списка секций — после ответа подводим к нему сами
+  const analysisRef = useRef<HTMLDivElement>(null);
   // Открыть снимок старта прогона вместо унаследованного (кнопка на плашке)
   const [shownId, setShownId] = useState(snapshotId);
   // Ключ секции под курсором: связывает сегмент полосы со строкой списка
   const [hovered, setHovered] = useState<string | null>(null);
-  // Вид: 'source' — по источнику (как это устроено), 'all' — единый список всех кусков
-  // по весу (на что уходит контекст). Разные вопросы — разные разрезы
-  const [view, setView] = useState<'source' | 'all'>('source');
+  // Вид: 'source' — откуда что взялось, 'all' — все куски одним списком по весу,
+  // 'fresh' — только то, что собирается заново каждый раз (за это платим всегда)
+  const [view, setView] = useState<'source' | 'all' | 'fresh'>('source');
 
   useEffect(() => {
     let alive = true;
@@ -349,10 +373,8 @@ export function PromptSnapshotDialog({ sessionId, snapshotId, contextTokens, tur
   const systemSections = snapshot?.sections.filter(s => s.kind === 'system') ?? [];
   const turnSection = snapshot?.sections.find(s => s.kind === 'turn');
   const totalChars = systemSections.reduce((sum, s) => sum + s.text.length, 0);
-  // Ровно то, что ушло в --append-system-prompt: текст хода сюда не входит.
-  // Порядок — ИСХОДНЫЙ, как в промпте: копируем то, что реально видела модель
-  const fullPrompt = systemSections.map(s => s.text).join('\n\n');
-  // А показываем от самых жирных: вопрос «на что уходит контекст» важнее порядка склейки
+  // Показываем от самых жирных: вопрос «на что уходит контекст» важнее порядка склейки
+
   const bySize = [...systemSections].sort((a, b) => b.text.length - a.text.length);
 
   // Вид «всё вместе»: один список без деления на источники — системные секции, текст хода
@@ -371,11 +393,11 @@ export function PromptSnapshotDialog({ sessionId, snapshotId, contextTokens, tur
   // и по одной строке цену не понять
   const GROUP_TITLES: Record<string, string> = {
     persona: 'Персона',
-    mcp: 'Подсказки MCP',
-    project: 'Проект',
-    recall: 'Recall заметок',
-    turn: 'Текст хода',
-    cli: 'Файлы CLI',
+    mcp: 'Как пользоваться инструментами',
+    project: 'Про этот проект',
+    recall: 'Подтянутые заметки',
+    turn: 'Ваше сообщение',
+    cli: 'Файлы CLAUDE.md',
     misc: 'Прочее',
   };
   const byGroup = [...allParts.reduce((acc, s) => {
@@ -383,13 +405,18 @@ export function PromptSnapshotDialog({ sessionId, snapshotId, contextTokens, tur
     acc.set(g, (acc.get(g) ?? 0) + sizeOf(s));
     return acc;
   }, new Map<string, number>())].sort((a, b) => b[1] - a[1]);
-  const personaChars = byGroup.find(([g]) => g === 'persona')?.[1] ?? 0;
 
-  const copyAll = () => {
-    navigator.clipboard?.writeText(fullPrompt)
-      .then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); })
-      .catch(() => {});
-  };
+  // Куски, которые собираются заново под каждое сообщение: их модель получает целиком
+  // каждый раз, кэш тут не помогает
+  const freshParts = allParts.filter(s => s.stable === false);
+  const freshTotal = freshParts.reduce((sum, s) => sum + sizeOf(s), 0);
+
+  // Верхняя полоса повторяет три блока ниже: сообщение, инструкции приложения и всё,
+  // что добавил CLI. Первые два считаем по своим символам, третий — остатком: описания
+  // инструментов внутри него нам неизвестны, и вычитание честнее выдуманного числа
+  const turnTokens = Math.min(approxTokens(turnSection ? sizeOf(turnSection) : 0), contextTokens ?? 0);
+  const ownTokens = Math.min(approxTokens(totalChars), Math.max(0, (contextTokens ?? 0) - turnTokens));
+  const cliTokens = Math.max(0, (contextTokens ?? 0) - turnTokens - ownTokens);
 
   // Догруз текста файла слоя CLI — только когда его строку раскрыли (см. SectionRow)
   const loadFileText = (key: string) =>
@@ -401,15 +428,100 @@ export function PromptSnapshotDialog({ sessionId, snapshotId, contextTokens, tur
     setAnalysisError(null);
     api.sessions.analyzePrompt(sessionId, shownId, includeText)
       .then(r => setAnalysis(r.analysis))
-      .catch(() => setAnalysisError('Не удалось разобрать'))
+      // Показываем настоящую причину: чаще всего это «модель для разбора не настроена»
+      // или протухший вход в claude — по глухому «не удалось» такое не починишь
+      .catch((e: unknown) => setAnalysisError(
+        e instanceof Error && e.message ? e.message : 'Не удалось разобрать'))
       .finally(() => setAnalyzing(false));
   };
 
+  // Разбор занимает до полутора минут, а его результат оказывается ниже всего списка —
+  // без подводки человек смотрит на неизменившийся экран и думает, что ничего не вышло
+  useEffect(() => {
+    if (analysis || analysisError) {
+      analysisRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, [analysis, analysisError]);
+
   const cli = snapshot?.cliLayer;
+  // Пустая модель у снимка = «по умолчанию»; хук сам подставит подпись из каталога
+  const modelLabel = useModelLabel(snapshot?.model);
+
+  // Доли внутри блока claude. Считаем по тому, что реально измеримо: файлы CLAUDE.md,
+  // каталог навыков и вес прошлой переписки. Описания инструментов сюда не входят —
+  // их текста у нас нет, и подставлять выдуманное число нельзя
+  const cliParts = [
+    ...(cli?.files ?? []).map(f => ({ key: f.key, size: sizeOf(f) })),
+    ...(cli?.skills?.length ? [{ key: 'skills', size: skillsChars(cli.skills) }] : []),
+    ...(typeof cli?.transcriptBytes === 'number'
+      ? [{ key: 'transcript', size: cli.transcriptBytes }] : []),
+  ].sort((a, b) => b.size - a.size);
+  const cliTotal = cliParts.reduce((sum, p) => sum + p.size, 0);
+
+  // Строки блока CLI в том же порядке, что и сегменты полосы — по убыванию веса.
+  // Инструменты сюда не входят: их вес неизвестен, они рендерятся отдельно в конце
+  const cliShare = (size: number) => (cliTotal > 0 ? Math.round(size * 100 / cliTotal) : 0);
+  const cliRows: { key: string; size: number; render: () => React.ReactNode }[] = [
+    ...(cli?.files ?? []).map(f => ({
+      key: f.key,
+      size: sizeOf(f),
+      render: () => (
+        <SectionRow key={f.key} section={f} loadText={loadFileText}
+          hoverKey={barKey('cli', f.key)} hovered={hovered} onHover={setHovered}
+          share={cliShare(sizeOf(f))} />
+      ),
+    })),
+    ...(cli?.skills?.length ? [{
+      key: 'skills',
+      size: skillsChars(cli.skills),
+      render: () => (
+        <SkillsRow key="skills" skills={cli.skills!}
+          hovered={hovered === barKey('cli', 'skills')}
+          onHover={() => setHovered(barKey('cli', 'skills'))}
+          onLeave={() => setHovered(null)}
+          share={cliShare(skillsChars(cli.skills!))} />
+      ),
+    }] : []),
+    ...(typeof cli?.transcriptBytes === 'number' ? [{
+      key: 'transcript',
+      size: cli.transcriptBytes,
+      render: () => (
+        <MetaRow key="transcript" label="Прошлая переписка в этом чате"
+          hovered={hovered === barKey('cli', 'transcript')}
+          onHover={() => setHovered(barKey('cli', 'transcript'))}
+          onLeave={() => setHovered(null)}
+          value={`${Math.round(cli.transcriptBytes! / 1024).toLocaleString('ru')} КБ · ${
+            cliShare(cli.transcriptBytes!)}%`} />
+      ),
+    }] : []),
+  ].sort((a, b) => b.size - a.size);
 
   return (
-    <Modal width={620} title="Что ушло модели на этом ходу" onClose={onClose}
-      subtitle={snapshot ? [snapshot.model, snapshot.mode].filter(Boolean).join(' · ') : undefined}>
+    <Modal width={620} title="Что модель знала, когда отвечала" onClose={onClose}
+      // Подпись модели — та же, что под постом (id → человеческое имя): иначе в ленте
+      // «Opus 5», а в шапке шторки сырой claude-opus-5, и это выглядит как разные модели
+      subtitle={snapshot ? [modelLabel, snapshot.mode].filter(Boolean).join(' · ') : undefined}
+      // Высота фиксированная: содержимое сильно разное от хода к ходу, и прыгающая
+      // карточка мешала бы сравнивать. Низ с действиями прижат, середина скроллится
+      cardStyle={{ height: 'calc(100vh - 32px)' }}
+      footer={state === 'ready' ? (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: SP.md, width: '100%', flexWrap: 'wrap',
+        }}>
+          <label style={{
+            display: 'flex', alignItems: 'center', gap: SP.sm, fontSize: FS.sm,
+            color: C.textSecondary, lineHeight: 1.4, cursor: 'pointer', flex: 1, minWidth: 220,
+          }}>
+            <input type="checkbox" checked={includeText} style={{ flexShrink: 0 }}
+              onChange={e => setIncludeText(e.target.checked)} />
+            <span>Показать модели сам текст, а не только размеры</span>
+          </label>
+          <Button variant="ghost" size="sm" onClick={analyze} loading={analyzing}
+            leftIcon={<Sparkles size={14} />}>
+            {analyzing ? 'Смотрю…' : 'Что тут лишнее?'}
+          </Button>
+        </div>
+      ) : undefined}>
 
       {state === 'loading' && (
         <div style={{ padding: SP.lg, color: C.textMuted, fontSize: FS.base }}>Загружаю…</div>
@@ -417,13 +529,13 @@ export function PromptSnapshotDialog({ sessionId, snapshotId, contextTokens, tur
 
       {state === 'gone' && (
         <div style={{ padding: SP.lg, color: C.textSecondary, fontSize: FS.base, lineHeight: 1.6 }}>
-          Снимок вытеснен: хранятся последние 50 ходов чата.
+          Не сохранилось: храним последние 50 сообщений в чате, это было раньше.
         </div>
       )}
 
       {state === 'error' && (
         <div style={{ padding: SP.lg, color: C.dangerText, fontSize: FS.base }}>
-          Не удалось загрузить снимок промпта.
+          Не удалось загрузить.
         </div>
       )}
 
@@ -441,8 +553,8 @@ export function PromptSnapshotDialog({ sessionId, snapshotId, contextTokens, tur
               : <EyeOff size={16} style={{ flexShrink: 0, marginTop: 1 }} />}
             <span>
               {snapshot.applied
-                ? 'Применён этим ходом — процесс стартовал с этим промптом.'
-                : 'Унаследован: ход доигрывался в живом процессе, и этот промпт модели не уходил. '}
+                ? 'Это то, что модель получила на этом сообщении.'
+                : 'Модель этого не видела: сообщение ушло в уже работающий процесс, а он читает то, что получил при запуске. '}
               {!snapshot.applied && (snapshot.inheritedFromId
                 ? (
                   <button onClick={() => setShownId(snapshot.inheritedFromId!)}
@@ -450,10 +562,10 @@ export function PromptSnapshotDialog({ sessionId, snapshotId, contextTokens, tur
                       background: 'none', border: 'none', padding: 0, cursor: 'pointer',
                       color: C.accent, fontSize: FS.base, fontFamily: 'inherit',
                     }}>
-                    Открыть действующий снимок
+                    Показать, что она видела на самом деле
                   </button>
                 )
-                : 'Снимок старта прогона недоступен.')}
+                : 'Что она видела на самом деле — уже не сохранилось.')}
             </span>
           </div>
 
@@ -465,190 +577,232 @@ export function PromptSnapshotDialog({ sessionId, snapshotId, contextTokens, tur
                 display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
                 marginBottom: SP.xs, fontSize: FS.base, color: C.textPrimary,
               }}>
-                <span>Контекст запроса</span>
+                <span>Всего получила модель</span>
                 <span style={{ color: C.textMuted, fontVariantNumeric: 'tabular-nums' }}>
                   {contextTokens.toLocaleString('ru')} токенов
                 </span>
               </div>
+              {/* Ровно три части — те же, что блоками ниже */}
               <ShareBar parts={[
-                { key: 'ccs', size: Math.min(approxTokens(totalChars), contextTokens), opacity: 1 },
-                { key: 'cli', size: Math.max(0, contextTokens - approxTokens(totalChars)), opacity: 0.18 },
+                { key: 'turn', size: turnTokens, opacity: 1 },
+                { key: 'ccs', size: ownTokens, opacity: 0.55 },
+                { key: 'cli', size: cliTokens, opacity: 0.18 },
               ]} />
               <div style={{
-                display: 'flex', gap: SP.md, marginTop: SP.xs,
+                display: 'flex', gap: SP.md, marginTop: SP.xs, flexWrap: 'wrap',
                 fontSize: FS.xs, color: C.textMuted,
               }}>
                 <span>
                   <span style={{ ...dotStyle, background: C.accent }} />
-                  промпт CCS ≈ {approxTokens(totalChars).toLocaleString('ru')} (
-                  {Math.min(100, Math.round(approxTokens(totalChars) * 100 / contextTokens))}%)
+                  ваше сообщение ≈ {turnTokens.toLocaleString('ru')} (
+                  {Math.round(turnTokens * 100 / contextTokens)}%)
+                </span>
+                <span>
+                  <span style={{ ...dotStyle, background: C.accentMuted }} />
+                  инструкции приложения ≈ {ownTokens.toLocaleString('ru')} (
+                  {Math.round(ownTokens * 100 / contextTokens)}%)
                 </span>
                 <span>
                   <span style={{ ...dotStyle, background: C.border }} />
-                  слой CLI и история — остальное
+                  добавил claude CLI ≈ {cliTokens.toLocaleString('ru')} (
+                  {Math.round(cliTokens * 100 / contextTokens)}%)
                 </span>
               </div>
-              {/* Единственные точные числа про кэш, что у нас есть: сам факт из usage хода */}
+              {/* Точные числа про кэш есть только здесь — из ответа API. Формулируем
+                  по-разному: «взято 0, записано N» человеку ничего не говорит */}
               {turnCache && (turnCache.read > 0 || turnCache.creation > 0) && (
-                <div style={{ marginTop: SP.xs, fontSize: FS.xs, color: C.textMuted }}>
-                  Кэш промптов: взято {turnCache.read.toLocaleString('ru')}, записано{' '}
-                  {turnCache.creation.toLocaleString('ru')} токенов. Кэш экономит деньги,
-                  но место в окне контекста занимает всё равно.
+                <div style={{ marginTop: SP.xs, fontSize: FS.xs, color: C.textMuted, lineHeight: 1.5 }}>
+                  {turnCache.read > 0 ? (
+                    <>
+                      Скидка за повтор: {turnCache.read.toLocaleString('ru')} токенов модель
+                      уже видела в прошлых сообщениях и посчитала дешевле
+                      {turnCache.creation > 0 &&
+                        `, ещё ${turnCache.creation.toLocaleString('ru')} запомнила на будущее`}.
+                    </>
+                  ) : (
+                    <>
+                      Скидки за повтор не было: {turnCache.creation.toLocaleString('ru')} токенов
+                      модель запомнила только сейчас. Так бывает на первом сообщении, после
+                      паузы (запомненное живёт минуты) или когда начало промпта изменилось —
+                      что именно случилось, из ответа модели не видно.
+                    </>
+                  )}
                 </div>
               )}
             </div>
           )}
 
-          {/* Два разреза одних и тех же данных: «как устроено» и «кто съел контекст» */}
+          {/* Три взгляда на одни данные: откуда взялось, что весит больше всего,
+              и за что платим каждый раз */}
           <div style={{ marginTop: SP.md }}>
             <SegmentedControl value={view} onChange={setView} options={[
-              { value: 'source', label: 'По источнику' },
-              { value: 'all', label: 'Всё вместе' },
+              { value: 'source', label: 'Откуда взялось' },
+              { value: 'all', label: 'Что весит больше' },
+              { value: 'fresh', label: 'Без кэша' },
             ]} />
           </div>
 
+          {view === 'fresh' && (
+            <>
+              <SectionLabel>
+                Собирается заново для каждого сообщения · {freshTotal.toLocaleString('ru')} символов
+                {allTotal > 0 && ` (${Math.round(freshTotal * 100 / allTotal)}% от всего)`}
+              </SectionLabel>
+              {freshParts.length === 0 ? (
+                <div style={{
+                  padding: `${SP.sm}px ${SP.md}px`, borderRadius: R.md, background: C.bgInset,
+                  fontSize: FS.base, color: C.textSecondary, lineHeight: 1.5,
+                }}>
+                  Здесь всё одинаково от сообщения к сообщению — модель берёт это из кэша.
+                </div>
+              ) : (
+                <>
+                  <div style={{ marginBottom: SP.sm }}>
+                    <ShareBar hovered={hovered} onHover={setHovered}
+                      parts={freshParts.map((s, i) => ({
+                        key: barKey('fresh', s.key), size: sizeOf(s),
+                        opacity: shareOpacity(i, freshParts.length),
+                      }))} />
+                  </div>
+                  <div style={{ border: `1px solid ${C.border}`, borderRadius: R.md, overflow: 'hidden' }}>
+                    {freshParts.map(s => (
+                      <SectionRow key={s.key} section={s} hoverKey={barKey('fresh', s.key)}
+                        hovered={hovered} onHover={setHovered}
+                        loadText={s.kind === 'cli-file' ? loadFileText : undefined}
+                        share={freshTotal > 0 ? Math.round(sizeOf(s) * 100 / freshTotal) : 0} />
+                    ))}
+                  </div>
+                </>
+              )}
+              <div style={{ marginTop: SP.sm, fontSize: FS.xs, color: C.textMuted, lineHeight: 1.5 }}>
+                Всё остальное — те же слова, что и в прошлый раз: модель узнаёт их и берёт
+                из кэша дешевле. Место в своей памяти они всё равно занимают.
+              </div>
+            </>
+          )}
+
           {view === 'all' && (
             <>
-              <SectionLabel>По подсистемам</SectionLabel>
+              <SectionLabel>На что уходит место</SectionLabel>
+              <div style={{ marginBottom: SP.sm }}>
+                <ShareBar hovered={hovered} onHover={setHovered}
+                  parts={byGroup.map(([g, chars], i) => ({
+                    key: barKey('grp', g), size: chars, opacity: shareOpacity(i, byGroup.length),
+                  }))} />
+              </div>
               <div style={{ border: `1px solid ${C.border}`, borderRadius: R.md, overflow: 'hidden' }}>
                 {byGroup.map(([g, chars]) => (
                   <MetaRow key={g} label={GROUP_TITLES[g] ?? g}
+                    hovered={hovered === barKey('grp', g)}
+                    onHover={() => setHovered(barKey('grp', g))}
+                    onLeave={() => setHovered(null)}
                     value={`${chars.toLocaleString('ru')} · ${
                       allTotal > 0 ? Math.round(chars * 100 / allTotal) : 0}%`} />
                 ))}
               </div>
-              {personaChars > 0 && (
-                <div style={{ marginTop: SP.sm, fontSize: FS.sm, color: C.textSecondary, lineHeight: 1.5 }}>
-                  Персона стоит {personaChars.toLocaleString('ru')} символов
-                  {' '}(≈ {approxTokens(personaChars).toLocaleString('ru')} токенов) на каждом ходу —
-                  контракт, память, привязки и подсказки про её инструменты вместе.
-                </div>
-              )}
 
               <SectionLabel>
-                Все куски по весу · {allTotal.toLocaleString('ru')} символов
+                Всё по кускам · {allTotal.toLocaleString('ru')} символов
               </SectionLabel>
               <div style={{ marginBottom: SP.sm }}>
                 <ShareBar hovered={hovered} onHover={setHovered}
                   parts={allParts.map((s, i) => ({
-                    key: s.key, size: sizeOf(s), opacity: shareOpacity(i, allParts.length),
+                    key: barKey('all', s.key), size: sizeOf(s),
+                    opacity: shareOpacity(i, allParts.length),
                   }))} />
               </div>
               <div style={{ border: `1px solid ${C.border}`, borderRadius: R.md, overflow: 'hidden' }}>
                 {allParts.map(s => (
-                  <SectionRow key={s.key} section={s} hovered={hovered} onHover={setHovered}
+                  <SectionRow key={s.key} section={s} hoverKey={barKey('all', s.key)}
+                    hovered={hovered} onHover={setHovered}
                     loadText={s.kind === 'cli-file' ? loadFileText : undefined}
                     share={allTotal > 0 ? Math.round(sizeOf(s) * 100 / allTotal) : 0} />
                 ))}
               </div>
               <div style={{ marginTop: SP.sm, fontSize: FS.xs, color: C.textMuted, lineHeight: 1.5 }}>
-                Описания {cli?.tools?.length ?? 0} инструментов сюда не входят — их текст CLI
-                наружу не отдаёт, хотя модели они уходят вместе со всем остальным.
+                Сюда не входят описания {cli?.tools?.length ?? 0} инструментов: модель их
+                получает, а нам CLI их текст не показывает.
               </div>
             </>
           )}
 
           {view === 'source' && (<>
-          <SectionLabel>
-            Системный промпт · {totalChars.toLocaleString('ru')} символов
-            {' '}(≈ {approxTokens(totalChars).toLocaleString('ru')} токенов)
-          </SectionLabel>
-          <div style={{ marginBottom: SP.sm }}>
-            <ShareBar hovered={hovered} onHover={setHovered}
-              parts={bySize.map((s, i) => ({
-                key: s.key, size: s.text.length, opacity: shareOpacity(i, bySize.length),
-              }))} />
-          </div>
-          <div style={{ border: `1px solid ${C.border}`, borderRadius: R.md, overflow: 'hidden' }}>
-            {bySize.map(s => (
-              <SectionRow key={s.key} section={s} hovered={hovered} onHover={setHovered}
-                share={totalChars > 0 ? Math.round(s.text.length * 100 / totalChars) : 0} />
-            ))}
-          </div>
-
+          {/* Сначала то, что человек написал сам: от него отталкивается всё остальное */}
           {turnSection && (
             <>
-              <SectionLabel>Текст хода, ушедший CLI — это не системный промпт</SectionLabel>
+              <SectionLabel>Ваше сообщение — с добавками, которых нет в ленте</SectionLabel>
               <div style={{ border: `1px solid ${C.border}`, borderRadius: R.md, overflow: 'hidden' }}>
                 <SectionRow section={turnSection} />
               </div>
             </>
           )}
 
-          <SectionLabel>Запуск CLI</SectionLabel>
-          <Collapsible title="Аргументы запуска" hint={`${snapshot.cliArgs.length} шт.`}>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs }}>
-              {snapshot.mcpServers.length > 0 && (
-                <span style={chipStyle}>mcp: {snapshot.mcpServers.join(', ')}</span>
-              )}
-              {snapshot.cliArgs.map((a, i) => <span key={i} style={chipStyle}>{a}</span>)}
-            </div>
-          </Collapsible>
-
-          {/* Слой claude CLI: то, что он подмешивает поверх нашего промпта */}
-          <SectionLabel>Слой claude CLI</SectionLabel>
-          {/* Сервер отдаёт незаполненные поля как null, поэтому проверяем тип, а не
-              !== undefined: у хода, упавшего до старта процесса, их попросту нет */}
+          <SectionLabel>
+            Инструкции от приложения · {totalChars.toLocaleString('ru')} символов
+            {' '}(≈ {approxTokens(totalChars).toLocaleString('ru')} токенов)
+          </SectionLabel>
+          <div style={{ marginBottom: SP.sm }}>
+            <ShareBar hovered={hovered} onHover={setHovered}
+              parts={bySize.map((s, i) => ({
+                key: barKey('sys', s.key), size: s.text.length,
+                opacity: shareOpacity(i, bySize.length),
+              }))} />
+          </div>
           <div style={{ border: `1px solid ${C.border}`, borderRadius: R.md, overflow: 'hidden' }}>
-            {cli?.tools && cli.tools.length > 0 && (
-              <ToolsRow tools={cli.tools} servers={cli.mcpServers ?? undefined} />
-            )}
-            {cli?.skills && cli.skills.length > 0 && <SkillsRow skills={cli.skills} />}
-            {typeof cli?.transcriptBytes === 'number' && (
-              <MetaRow label="История разговора (--resume)"
-                value={`${Math.round(cli.transcriptBytes / 1024).toLocaleString('ru')} КБ${
-                  typeof cli.transcriptMessages === 'number' ? ` · ${cli.transcriptMessages} сообщ.` : ''}`} />
-            )}
-            {cli?.files?.map(f => (
-              <SectionRow key={f.key} section={f} loadText={loadFileText} />
+            {bySize.map(s => (
+              <SectionRow key={s.key} section={s} hoverKey={barKey('sys', s.key)}
+                hovered={hovered} onHover={setHovered}
+                share={totalChars > 0 ? Math.round(s.text.length * 100 / totalChars) : 0} />
             ))}
           </div>
 
-          <div style={{
-            marginTop: SP.sm, padding: `${SP.sm}px ${SP.md}px`, borderRadius: R.md,
-            background: C.warningBg, color: C.warningText, fontSize: FS.sm, lineHeight: 1.55,
-          }}>
-            Файлы CLAUDE.md — наша реконструкция: импорты раскрыты нами, цепочка родительских
-            CLAUDE.md и импорты вида @~/… не собираются. Текст встроенного промпта Anthropic
-            и описания инструментов CLI наружу не отдаёт вовсе.
-          </div>
-          </>)}
-
-          {/* Разбор промпта моделью. По умолчанию наружу уходят только метаданные секций */}
-          <SectionLabel>Разбор промпта</SectionLabel>
-          <label style={{
-            display: 'flex', alignItems: 'flex-start', gap: SP.sm, fontSize: FS.sm,
-            color: C.textSecondary, lineHeight: 1.5, cursor: 'pointer', marginBottom: SP.sm,
-          }}>
-            <input type="checkbox" checked={includeText} style={{ marginTop: 2 }}
-              onChange={e => setIncludeText(e.target.checked)} />
-            <span>
-              Приложить фрагменты текста секций. Без галочки исполнителю уходят только размеры
-              и заголовки — recall заметок и память персоны машину не покидают.
-            </span>
-          </label>
-
-          {analysis && (
-            <div style={{
-              padding: SP.md, borderRadius: R.md, background: C.bgInset,
-              fontSize: FS.base, color: C.textPrimary, lineHeight: 1.6, whiteSpace: 'pre-wrap',
-            }}>
-              {analysis}
+          {/* То, что добавляет сам claude поверх наших инструкций */}
+          {/* Именно «claude CLI», а не имя ассистента: этот слой добавляет обёртка,
+              через которую идут ВСЕ провайдеры — и DeepSeek, и GLM запускаются тем же
+              claude CLI, и файлы у них те же CLAUDE.md */}
+          <SectionLabel>
+            Что добавил claude CLI · {cliTotal.toLocaleString('ru')} символов
+          </SectionLabel>
+          {cliTotal > 0 && (
+            <div style={{ marginBottom: SP.sm }}>
+              <ShareBar hovered={hovered} onHover={setHovered}
+                parts={cliParts.map((p, i) => ({
+                  key: barKey('cli', p.key), size: p.size,
+                  opacity: shareOpacity(i, cliParts.length),
+                }))} />
             </div>
           )}
-          {analysisError && (
-            <div style={{ color: C.dangerText, fontSize: FS.sm }}>{analysisError}</div>
-          )}
+          {/* Сервер отдаёт незаполненные поля как null, поэтому проверяем тип, а не
+              !== undefined: у хода, упавшего до старта процесса, их попросту нет */}
+          <div style={{ border: `1px solid ${C.border}`, borderRadius: R.md, overflow: 'hidden' }}>
+            {/* Строки — по убыванию веса, как сегменты полосы. Инструменты всегда
+                последние: у них веса нет, и в отсортированном списке им нет места */}
+            {cliRows.map(r => r.render())}
+            {cli?.tools && cli.tools.length > 0 && (
+              <ToolsRow tools={cli.tools} servers={cli.mcpServers ?? undefined} />
+            )}
+          </div>
 
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: SP.sm, marginTop: SP.lg }}>
-            <Button variant="ghost" size="sm" onClick={analyze} loading={analyzing}
-              leftIcon={<Sparkles size={14} />}>
-              {analyzing ? 'Разбираю…' : 'Проанализировать'}
-            </Button>
-            <Button variant="ghost" size="sm" onClick={copyAll}
-              leftIcon={copied ? <Check size={14} color={C.success} /> : <Copy size={14} />}>
-              {copied ? 'Скопировано' : 'Скопировать промпт'}
-            </Button>
+          </>)}
+
+          {/* Разбор промпта моделью. По умолчанию наружу уходят только метаданные секций.
+              Якорь автоскролла: ответ приходит в самый низ длинного списка, и без него
+              человек не видит, что кнопка вообще сработала */}
+          <div ref={analysisRef}>
+            {analysis && (<>
+              <SectionLabel>Что модель думает про этот промпт</SectionLabel>
+              <div style={{
+                padding: SP.md, borderRadius: R.md, background: C.bgInset,
+                fontSize: FS.base, color: C.textPrimary, lineHeight: 1.6,
+              }}>
+                {/* Модель отвечает markdown-списком — рендерим тем же компонентом, что
+                    и ленту чата, иначе на экране сырые звёздочки и решётки */}
+                <MarkdownContent text={analysis} />
+              </div>
+            </>)}
+            {analysisError && (
+              <div style={{ color: C.dangerText, fontSize: FS.sm }}>{analysisError}</div>
+            )}
           </div>
         </div>
       )}
@@ -662,8 +816,3 @@ const dotStyle: React.CSSProperties = {
   marginRight: SP.xs, verticalAlign: 'baseline',
 };
 
-const chipStyle: React.CSSProperties = {
-  fontFamily: FONT.mono, fontSize: FS.sm, background: C.bgInset,
-  borderRadius: R.sm, padding: '3px 8px', color: C.textSecondary,
-  wordBreak: 'break-all',
-};

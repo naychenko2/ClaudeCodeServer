@@ -89,9 +89,16 @@ warn: ClaudeHomeServer.Telemetry.OtlpExport[0]
 `Microsoft.Extensions.Http` печатает каждый провалившийся запрос как **Error** с полным
 стектрейсом `HttpRequestException`. Экспорт идёт по расписанию (трейсы и логи — раз в 5 с,
 метрики — раз в минуту), так что консоль забивалась красными портянками, в которых тонули
-настоящие ошибки. `ObservabilityExtensions.QuietDownExportLogging` снимает у этих трёх
-клиентов дефолтные логгеры и ставит `OtlpExportHttpLogger` (Warning + троттлинг; успешный
-экспорт троттлинг сбрасывает, чтобы следующий сбой был виден сразу).
+настоящие ошибки. `ObservabilityExtensions.QuietDownExportLogging` подключает эти три клиента
+через общий механизм тихих клиентов — `services.AddQuietHttpClient(name, profile)`
+([Services/Http/QuietHttpLogger.cs](../../backend/ClaudeHomeServer/Services/Http/QuietHttpLogger.cs)):
+дефолтные логгеры снимаются, вместо них Warning + троттлинг. Успешный экспорт троттлинг
+сбрасывает, чтобы следующий сбой был виден сразу.
+
+Механизм общий, не телеметрийный: тем же профилем подключена локальная Ollama
+(`OllamaClient.HttpClientName`, категория `ClaudeHomeServer.Llm.Ollama`) — она тоже опциональна
+и тоже давала портянку на каждый вызов. Клиенты с одним профилем делят логгер, а значит
+и интервал жалоб: три экспортёра OTLP дают одну строку, а не три.
 
 Нюанс на будущее: логирование этих клиентов включается только когда в DI зарегистрирован
 `IHttpClientFactory` — без него экспортёр создаёт HttpClient сам и молчит. В CCS фабрика

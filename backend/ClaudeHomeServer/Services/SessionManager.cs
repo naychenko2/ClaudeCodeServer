@@ -3040,9 +3040,9 @@ public class SessionManager : IDisposable
             loop is not null, loop?.Iteration ?? 0, loop?.MaxIterations ?? 0, loop?.Phase));
     }
 
-    // Режим «Командная реализация» (флаг team-implement-mode): вкл/выкл режима чата-штаба.
-    // При включении задаётся начальный состав (пустой список исполнителей = вся команда
-    // проекта) и стартовый бюджет итерации из дефолтов/конфига. Выкл обнуляет поле — как work-loop.
+    // Режим «Командная реализация»: вкл/выкл режима чата-штаба. При включении задаётся
+    // начальный состав (пустой список исполнителей = вся команда проекта) и стартовый
+    // бюджет итерации из дефолтов/конфига. Выкл обнуляет поле — как work-loop.
     public async Task<Session?> SetTeamImplementAsync(string sessionId, bool enabled,
         bool autoWaves = true, string? coordinatorPersonaId = null, string? plannerPersonaId = null,
         IReadOnlyCollection<string>? executorPersonaIds = null, string? userId = null,

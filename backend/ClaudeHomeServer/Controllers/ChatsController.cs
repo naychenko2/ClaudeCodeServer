@@ -137,9 +137,9 @@ public class ChatsController(SessionManager sessions, FileService files, ILogger
         return updated is null ? NotFound() : Ok(updated);
     }
 
-    // Режим «Командная реализация» (флаг team-implement-mode): вкл/выкл режима чата-штаба.
-    // При включении можно сразу задать состав (пустой/null список исполнителей = вся команда
-    // проекта). Как loop, работает и для проектной сессии (GetOwned резолвит владельца).
+    // Режим «Командная реализация»: вкл/выкл режима чата-штаба. При включении можно сразу
+    // задать состав (пустой/null список исполнителей = вся команда проекта). Как loop,
+    // работает и для проектной сессии (GetOwned резолвит владельца).
     [HttpPut("{id}/team-implement")]
     public async Task<IActionResult> SetTeamImplement(string id, [FromBody] SetTeamImplementRequest req)
     {

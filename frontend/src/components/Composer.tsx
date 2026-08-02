@@ -76,7 +76,7 @@ export interface ComposerProps {
   // Promise — чтобы автопилот с «до готово» мог дождаться включения цикла до отправки
   workLoop?: WorkLoopState | null;
   onToggleWorkLoop?: () => void | Promise<void>;
-  // Режим «Командная реализация» (флаг team-implement-mode): состояние (live с фолбэком
+  // Режим «Командная реализация»: состояние (live с фолбэком
   // на Session.teamImplement); null — режим выключен. Бейдж виден при заданных обработчиках
   teamImplement?: SessionTeamImplement | null;
   onToggleTeamImplementAuto?: () => void | Promise<void>;
@@ -901,7 +901,7 @@ export function Composer({
     />
   ) : null;
 
-  // Режим «Командная реализация» (флаг team-implement-mode): бейдж стадии + чип «Авто»
+  // Режим «Командная реализация»: бейдж стадии + чип «Авто»
   const teamImplementBadge = teamImplement && onToggleTeamImplementAuto && onDisableTeamImplement ? (
     <TeamImplementBadge
       state={teamImplement}

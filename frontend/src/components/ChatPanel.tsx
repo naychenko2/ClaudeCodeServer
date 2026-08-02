@@ -2,7 +2,6 @@ import { useState, useRef, useEffect, useMemo, useCallback, Fragment, type HTMLA
 import { ArrowDown, RotateCw, CircleHelp } from 'lucide-react';
 import type { Project, Session, ChatItem, SkillInfo, AgentInfo, ClaudeBilling, Persona, WorkLoopState, SessionTeamImplement, TeamPlanDecision } from '../types';
 import { useSession } from '../hooks/useSession';
-import { useFeature, FLAGS } from '../lib/featureFlags';
 import { usePersonasVersion, getPersonaById, getPersonasSnapshot, ensurePersonasLoaded, personaLabel } from '../lib/personas';
 import { findConsultedPersona } from './chat/PersonaTaskView';
 import { showToast } from '../lib/toast';
@@ -151,18 +150,16 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     }
   }, [session.id, workLoopState, onSessionUpdated]);
 
-  // Режим «Командная реализация» (флаг team-implement-mode): live-состояние из событий
-  // team_implement, до первого события — из Session.teamImplement; null — режим выключен
-  const teamImplementOn = useFeature(FLAGS.teamImplementMode);
+  // Режим «Командная реализация»: live-состояние из событий team_implement,
+  // до первого события — из Session.teamImplement; null — режим выключен
   const teamImplementState = useMemo<SessionTeamImplement | null>(() => {
-    if (!teamImplementOn) return null;
     if (liveTeamImplement !== undefined) {
       if (!liveTeamImplement.active) return null;
       const { active: _active, ...rest } = liveTeamImplement;
       return rest;
     }
     return session.teamImplement ?? null;
-  }, [teamImplementOn, liveTeamImplement, session.teamImplement]);
+  }, [liveTeamImplement, session.teamImplement]);
   const handleToggleTeamImplementAuto = useCallback(async () => {
     if (!teamImplementState) return;
     try {
@@ -1587,7 +1584,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
             onToggleTeamImplementAuto={teamImplementState ? handleToggleTeamImplementAuto : undefined}
             onDisableTeamImplement={teamImplementState ? handleDisableTeamImplement : undefined}
             onStopTeamImplement={teamImplementState ? handleStopTeamImplement : undefined}
-            onEnableTeamImplement={teamImplementOn ? handleEnableTeamImplement : undefined}
+            onEnableTeamImplement={handleEnableTeamImplement}
             isProjectChat={!!project}
             worktreeBranch={session.worktreeBranch}
             onToggleWorktree={project ? openWorktreeConfirm : undefined}

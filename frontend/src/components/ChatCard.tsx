@@ -16,7 +16,6 @@ import { PersonaBackdrop } from '../features/personas/PersonaFace';
 import { TeamMechanicBadge } from '../features/team/TeamMechanicBadge';
 import { teamTurnPreview } from '../features/team/teamMechanics';
 import { getLastMechanic } from '../lib/lastMechanic';
-import { useFeature, FLAGS } from '../lib/featureFlags';
 import { teamImplementTone, teamImplementStageShort, teamImplementBadgeText } from '../lib/teamImplement';
 
 // Ширина правой зоны под лицо собеседника; на её левой кромке стоит столбик действий
@@ -163,8 +162,6 @@ export function ChatCard({
   const displayName = (taskChat ? taskChat.title : s.name) || fallbackName;
   // Последняя запущенная в чате механика команды — компактный бейдж
   const mechanic = getLastMechanic(s.id);
-  // Режим «Командная реализация» — маркер стадии в строке названия (за фич-флагом)
-  const teamImplementOn = useFeature(FLAGS.teamImplementMode);
   // Открытое меню действий: rect кнопки-триггера (null — закрыто)
   const [menu, setMenu] = useState<DOMRect | null>(null);
   // Правка названия прямо в карточке: пункт меню превращает заголовок в поле ввода —
@@ -334,7 +331,7 @@ export function ChatCard({
               {displayName}
             </span>
           )}
-          {teamImplementOn && <TeamImplementMarker session={s} />}
+          <TeamImplementMarker session={s} />
           <ExpiryBadge session={s} />
           {/* Закрепление: иконка-признак, сама кнопка живёт в блоке действий */}
           {s.isPinned && (

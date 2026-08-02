@@ -297,7 +297,7 @@ public record TeamEscalationMessage(
         string? PersonaId = null)
     : ServerMessage("team_escalation");
 
-// Состояние режима «Командная реализация» (флаг team-implement-mode): для бейджа в композере
+// Состояние режима «Командная реализация»: для бейджа в композере
 // и маркера в списке чатов. Stage — wire-токен стадии (planning/confirming/wave/…).
 // PlannedWaves — плановое число волн текущей итерации (Э3): бейдж «волна N из M» берёт
 // M отсюда; 0 — план ещё не запускался (тогда M показывать нечем).

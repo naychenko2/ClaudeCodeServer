@@ -5,7 +5,6 @@
 import { ShieldAlert } from 'lucide-react';
 import { C, FONT, FS, R, SHADOW } from '../../lib/design';
 import { ICON_STROKE } from '../../components/ui/icons';
-import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { teamImplementModeWarning, teamImplementSwitchesMode } from '../../lib/teamImplement';
 import type { Mode } from '../../lib/modes';
 import type { Persona } from '../../types';
@@ -145,11 +144,6 @@ export function TeamDrawer({ open, mech, settings, candidates, availableSkills, 
   // Кандидаты — только реальные персоны; виртуальные роли пантеона из селекторов
   // убраны (подключение — через раздел «Персоны»)
   const allCandidates = candidates;
-  // Механики за фич-флагом: без включённого флага карточки в списке нет вовсе
-  const flagValues: Record<string, boolean> = {
-    [FLAGS.teamImplementMode]: useFeature(FLAGS.teamImplementMode),
-  };
-  const mechanics = TEAM_MECHANICS.filter(mc => !mc.featureFlag || flagValues[mc.featureFlag]);
 
   const m = mech ? teamMechanic(mech) : null;
   // Лимит участников: командная реализация — вся команда (до 8), ревью-консилиум — 5
@@ -479,7 +473,7 @@ export function TeamDrawer({ open, mech, settings, candidates, availableSkills, 
 
   // Группы в порядке первого появления в реестре
   const groups: string[] = [];
-  for (const mc of mechanics) if (!groups.includes(mc.group)) groups.push(mc.group);
+  for (const mc of TEAM_MECHANICS) if (!groups.includes(mc.group)) groups.push(mc.group);
 
   return (
     <div style={{
@@ -546,7 +540,7 @@ export function TeamDrawer({ open, mech, settings, candidates, availableSkills, 
                 color: C.textMuted, paddingLeft: 2, fontFamily: FONT.sans,
               }}>{g}</span>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {mechanics.filter(mc => mc.group === g).map(card)}
+                {TEAM_MECHANICS.filter(mc => mc.group === g).map(card)}
               </div>
             </div>
           ))}

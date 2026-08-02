@@ -7,8 +7,6 @@ import {
   BadgeCheck, Boxes, FlaskConical, GraduationCap, HelpCircle, MessagesSquare,
   Rocket, Route, Scale, ScanSearch, Swords, Users,
 } from 'lucide-react';
-import { FLAGS } from '../../lib/featureFlags';
-
 // `implement` — быстрый workflow-ход «Командный спринт» (субагенты внутри одного хода);
 // id менять нельзя: по нему детектятся старые ходы `/team-implement` в лентах.
 // `implementMode` — режим чата «Командная реализация» (чат-штаб): включается REST-вызовом,
@@ -93,8 +91,6 @@ export interface TeamMechanic {
   placeholder: string;
   /** Имя скилла, который должен быть в окружении (см. api.skills); null — работает всегда */
   requiredSkill: string | null;
-  /** Фич-флаг механики (см. lib/featureFlags); без него карточка не показывается вовсе */
-  featureFlag?: string;
   /** Карточка следующей итерации — показывается задизейбленной */
   soon?: boolean;
 }
@@ -128,7 +124,7 @@ export const TEAM_MECHANICS: TeamMechanic[] = [
   {
     id: 'implementMode', group: 'Сделать', name: 'Командная реализация', shortName: 'КР', icon: Users, cost: 3,
     desc: 'Штаб фичи: план, задачи, исполнители', placeholder: 'Что реализовать командой?…',
-    requiredSkill: null, featureFlag: FLAGS.teamImplementMode,
+    requiredSkill: null,
   },
   {
     id: 'implement', group: 'Сделать', name: 'Командный спринт', shortName: 'КС', icon: Boxes, cost: 3,

@@ -12,7 +12,6 @@ export const FLAGS = {
   teamMemoryAutolearn: 'team-memory-autolearn',
   docAnnotations: 'doc-annotations',
   aiLocalSuggest: 'ai-local-suggest',
-  teamImplementMode: 'team-implement-mode',
   wall: 'wall',
 } as const;
 

@@ -48,7 +48,7 @@ public class SessionWorkLoop
     public string Phase { get; set; } = "working";
 }
 
-// Стадии режима «Командная реализация» (флаг team-implement-mode) — непрерывный контур.
+// Стадии режима «Командная реализация» — непрерывный контур.
 // Wire-токены отдаёт ToWireToken (camelCase), совпадают с метками бейджа режима на фронте.
 public enum TeamImplementStage
 {
@@ -140,7 +140,7 @@ public class TeamImplementBudget
         : ExceededReason();
 }
 
-// Состояние режима «Командная реализация» (флаг team-implement-mode): чат работает как
+// Состояние режима «Командная реализация»: чат работает как
 // штаб фичи — план, задачи на персон-исполнителей, волны, проверка. Наличие объекта у
 // сессии = режим активен; выключение обнуляет поле (как SessionWorkLoop).
 // Здесь только состояние; планирование живёт в TeamPlanningService, волны и эскалации —
@@ -268,8 +268,8 @@ public class Session
     public int? ExpiresAfterMinutes { get; set; }
     // Цикл «до готово» (флаг work-loop): не null — ход автопродолжается до маркера завершения
     public SessionWorkLoop? WorkLoop { get; set; }
-    // Режим «Командная реализация» (флаг team-implement-mode): не null — чат работает как
-    // штаб фичи (план, задачи на исполнителей, волны, проверка). Каркас без логики волн — Э2–Э5.
+    // Режим «Командная реализация»: не null — чат работает как
+    // штаб фичи (план, задачи на исполнителей, волны, проверка).
     public SessionTeamImplement? TeamImplement { get; set; }
     // Сессия-исполнитель задачи (создана TaskExecutionService): tasks-MCP форсируется включённым
     // независимо от Persona.Tools — исполнитель обязан управлять задачей через mcp__tasks__*.

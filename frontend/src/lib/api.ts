@@ -960,7 +960,7 @@ export const api = {
         method: 'PUT',
         body: JSON.stringify({ enabled }),
       }),
-    // Режим «Командная реализация» (флаг team-implement-mode): вкл/выкл режима чата-штаба.
+    // Режим «Командная реализация»: вкл/выкл режима чата-штаба.
     // При включении можно сразу задать авто-волны и состав (пустой список = вся команда)
     setTeamImplement: (id: string, enabled: boolean, opts?: { autoWaves?: boolean; coordinatorPersonaId?: string; plannerPersonaId?: string; executorPersonaIds?: string[] }) =>
       request<Session>(`/chats/${id}/team-implement`, {

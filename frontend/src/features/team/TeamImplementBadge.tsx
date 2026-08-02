@@ -15,7 +15,7 @@ import {
 import { teamMechanic } from './teamMechanics';
 import type { Mode } from '../../lib/modes';
 
-// Бейдж режима «Командная реализация» в композере (флаг team-implement-mode).
+// Бейдж режима «Командная реализация» в композере.
 // По образцу loopBadge цикла «до готово»: pill 24/26, FS.xs, weight 600 — но с иконкой
 // Users и пульс-точкой, плюс рядом переключаемый чип «Авто». Три тона — по тому, кто
 // должен действовать (макет docs/mockups/team-implement-mode.html, секция 1):

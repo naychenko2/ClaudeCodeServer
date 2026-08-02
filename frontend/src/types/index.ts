@@ -440,7 +440,7 @@ export interface Session {
   expiresAfterMinutes?: number | null;
   // Цикл «до готово» (флаг work-loop); null/отсутствует — цикл выключен
   workLoop?: { promise: string; iteration: number; maxIterations: number; phase: 'working' | 'verifying' } | null;
-  // Режим «Командная реализация» (флаг team-implement-mode); null/отсутствует — режим выключен
+  // Режим «Командная реализация»; null/отсутствует — режим выключен
   teamImplement?: SessionTeamImplement | null;
   // Отдельное git worktree чата: рабочая папка сессии вместо корня проекта.
   // null/отсутствует — чат в основном дереве. Только у проектных чатов.
@@ -972,7 +972,7 @@ export interface WorkLoopState {
   phase: string | null;
 }
 
-// === Режим «Командная реализация» (флаг team-implement-mode) ===
+// === Режим «Командная реализация» ===
 // Стадии непрерывного контура — совпадают с wire-токенами TeamImplementStage на бэке
 export type TeamImplementStage =
   | 'interview'         // координатор спрашивает человека, прежде чем планировать (Э8)
@@ -1031,7 +1031,7 @@ export interface SessionTeamImplement {
   planVersion: number;
 }
 
-// Live-состояние режима (из события team_implement; флаг team-implement-mode)
+// Live-состояние режима (из события team_implement)
 export interface TeamImplementState extends SessionTeamImplement {
   active: boolean;
 }

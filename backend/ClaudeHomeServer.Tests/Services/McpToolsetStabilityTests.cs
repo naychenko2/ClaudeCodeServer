@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using FluentAssertions;
 using Xunit;
 
@@ -56,8 +57,12 @@ public class McpToolsetStabilityTests
         Skip.If(path is null, "ClaudeSession.cs не найден (сборка вне дерева репозитория)");
 
         var source = File.ReadAllText(path!);
-        var start = source.IndexOf("private (string? Path, string ServerKeys) BuildTurnMcpConfig", StringComparison.Ordinal);
-        start.Should().BeGreaterThan(0, "метод сборки MCP-конфига хода обязан существовать");
+        // Сигнатуру ищем регулярным выражением, а не точной строкой: кортеж возврата растёт
+        // (Path, ServerKeys, потом ServerNames…), и на каждом расширении сторож падал «метод
+        // не найден» — то есть сообщал не о нарушении инварианта, а о собственной хрупкости.
+        var signature = Regex.Match(source, @"private \([^)]*\) BuildTurnMcpConfig\(");
+        signature.Success.Should().BeTrue("метод сборки MCP-конфига хода обязан существовать");
+        var start = signature.Index;
 
         // Конец метода — начало следующего (MapMcpPath идёт сразу за ним)
         var end = source.IndexOf("private string? MapMcpPath", start, StringComparison.Ordinal);

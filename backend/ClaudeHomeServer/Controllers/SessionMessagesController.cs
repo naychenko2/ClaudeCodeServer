@@ -87,12 +87,24 @@ public class SessionMessagesController(SessionManager sessions, ProjectManager p
         var snapshot = promptSnapshots.Load(session.Id, snapshotId);
         if (snapshot is null) return NotFound();
 
-        var result = await promptAudit.AnalyzeAsync(
-            session.Id, snapshot, req?.IncludeText ?? false, UserId, ct);
+        string? result;
+        try
+        {
+            result = await promptAudit.AnalyzeAsync(
+                session.Id, snapshot, req?.IncludeText ?? false, UserId, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Исполнитель места prompt-audit не настроен либо вход в claude протух —
+            // отдаём причину текстом: по «не удалось разобрать» человек ничего не починит
+            return BadRequest(new { error = $"Разбор не удался: {ex.Message}" });
+        }
 
         // null — по этой сессии разбор уже идёт: второй вызов был бы вторым платным
-        return result is null
-            ? Conflict(new { error = "Разбор этого чата уже идёт" })
+        if (result is null) return Conflict(new { error = "Разбор этого чата уже идёт" });
+
+        return string.IsNullOrWhiteSpace(result)
+            ? BadRequest(new { error = "Модель для разбора вернула пустой ответ — проверьте, кто назначен на место «Разбор промпта хода» в «Поставщиках моделей»" })
             : Ok(new { analysis = result });
     }
 

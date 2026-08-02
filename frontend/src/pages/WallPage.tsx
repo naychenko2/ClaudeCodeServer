@@ -17,7 +17,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Columns3, Plus } from 'lucide-react';
 import type { AuthState, Project, Session } from '../types';
 import { C, FONT, FS, ISLAND } from '../lib/design';
-import { useWindowWidth, MOBILE_MAX, TABLET_MAX } from '../lib/breakpoints';
+import { useWindowWidth, MOBILE_MAX } from '../lib/breakpoints';
 import { setWallActive } from '../lib/wallMode';
 import { api } from '../lib/api';
 import { HubHeader } from '../components/HubHeader';
@@ -67,9 +67,10 @@ export function WallPage({ auth, onLogout, onHubTab }: Props) {
   // сжатие окна на открытой стене, и старт по хешу #/wall на узком экране.
   // Планшету стена доступна: колонок туда влезает одна-две, и это уже работает —
   // отсекаем только телефон, где на колонку не остаётся места вовсе.
+  // Панели ВСЕГДА всплывают поверх колонок (floating), в том числе на планшете:
+  // компактный режим зон там ставил бы панель в поток и отжимал единственную
+  // колонку — ровно то, ради чего плавающий режим и заводился
   const active = w > MOBILE_MAX;
-  // Планшет: панели зон в компактном режиме (drawer поверх), как в воркспейсе
-  const isTablet = w <= TABLET_MAX;
 
   // Снимок и SignalR-группы — только когда стена реально работает
   useEffect(() => { if (active) initWall(auth.id ?? undefined); }, [auth.id, active]);
@@ -218,9 +219,6 @@ export function WallPage({ auth, onLogout, onHubTab }: Props) {
         <PanelZone
           side="left"
           floating
-          // Планшет: панели уходят в компактный режим (drawer поверх контента) —
-          // плавающая карточка в 380px там накрыла бы половину единственной колонки
-          compact={isTablet}
           panels={zonePanels}
           toolsEnabled={!!focusedProject?.toolsEnabled}
           sessionPanels={sessionPanels}
@@ -284,7 +282,6 @@ export function WallPage({ auth, onLogout, onHubTab }: Props) {
         <PanelZone
           side="right"
           floating
-          compact={isTablet}
           panels={zonePanels}
           toolsEnabled={!!focusedProject?.toolsEnabled}
           sessionPanels={sessionPanels}

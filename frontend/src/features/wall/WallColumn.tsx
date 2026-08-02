@@ -20,6 +20,7 @@ import { Island, IconButton } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { ChatPanel } from '../../components/ChatPanel';
 import { ProjectIcon } from '../projects/ProjectIcon';
+import { useCanHover } from '../../lib/pointer';
 import { projectTone, fadeTone, projectTopWash } from '../../lib/projectTone';
 import { chatStatus, focusChat, updateChat, removeChat, startOrderDrag, isOrderDrag, dropOrder } from './wallStore';
 
@@ -50,6 +51,11 @@ export function WallColumn({ session, project, index, focused, onZoom, onOpenFil
   // того, как кликнешь — иначе, чтобы разглядеть соседний чат, пришлось бы менять фокус
   const [hover, setHover] = useState(false);
   const dimmed = !focused && !hover;
+  // На тач-экране наведения не бывает: кнопки, которые на десктопе всплывают под
+  // курсором (убрать со стены, перейти в чат), там показываем постоянно — иначе
+  // до них не добраться вовсе
+  const hoverCapable = useCanHover();
+  const controlsVisible = !hoverCapable || hover;
 
   // Рамка колонки — цветом её проекта: активная в полную силу, спящая едва
   // заметным намёком (ряд из трёх ярких рамок читался бы как три акцента сразу)
@@ -115,7 +121,7 @@ export function WallColumn({ session, project, index, focused, onZoom, onOpenFil
           position: 'relative', width: ICON_SLOT, height: ICON_SLOT, flexShrink: 0,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
         }}>
-          {labelHover ? (
+          {(hoverCapable && labelHover) ? (
             <span
               draggable={false}
               onDragStart={e => e.preventDefault()}
@@ -136,6 +142,15 @@ export function WallColumn({ session, project, index, focused, onZoom, onOpenFil
           {project === null ? 'проект недоступен' : project ? project.name : 'Чат вне проекта'}
           {busy && <span style={{ color: status === 'waiting' ? C.danger : C.warning }}> · {status === 'working' ? 'идёт ход' : 'ждёт вас'}</span>}
         </span>
+        {/* Тач-экран: «убрать со стены» отдельной кнопкой — подменять ею иконку
+            проекта нельзя (без наведения подмена стала бы постоянной, и «чей это
+            столбец» пропало бы), а других путей убрать чат с планшета нет.
+            Ровно та же развилка, что у панелей: closeMode 'icon' против 'button' */}
+        {!hoverCapable && (
+          <IconButton size="xs" ariaLabel="Убрать со стены" onClick={() => removeChat(session.id)}>
+            <X size={ICON_SIZE.xs} strokeWidth={2} />
+          </IconButton>
+        )}
         {/* Переход к чату в полном виде — только под курсором колонки: в покое ярлык
             держит смысл («чей столбец»), а кнопка на каждой карточке ряда шумит.
             Тултип свой, а не нативный: у нативного секундная задержка, и на плотной
@@ -145,8 +160,8 @@ export function WallColumn({ session, project, index, focused, onZoom, onOpenFil
             position: 'relative', display: 'flex', flexShrink: 0,
             // Место под кнопку держим ВСЕГДА, прячем только саму кнопку: иначе её
             // появление раздвигало бы ярлык и подпись проекта дёргалась под курсором
-            opacity: hover ? 1 : 0,
-            pointerEvents: hover ? 'auto' : 'none',
+            opacity: controlsVisible ? 1 : 0,
+            pointerEvents: controlsVisible ? 'auto' : 'none',
             transition: 'opacity 0.14s ease-out',
           }}
           onMouseEnter={() => setZoomTip(true)}

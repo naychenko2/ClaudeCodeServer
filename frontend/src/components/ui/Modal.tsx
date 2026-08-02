@@ -148,7 +148,10 @@ export function Modal({
         <div style={{
           padding: footer ? '26px 28px 20px' : 28,
           display: 'flex', flexDirection: 'column', gap: 18,
-          overflowY: 'auto',
+          // flex:1 нужен модалкам с заданной высотой карточки (cardStyle.height):
+          // без него контент занимает своё, и футер повисает посередине вместо низа.
+          // Карточке по контенту это ничего не меняет — расти всё равно не от чего.
+          overflowY: 'auto', flex: 1, minHeight: 0,
         }}>
           {header}
           {children}

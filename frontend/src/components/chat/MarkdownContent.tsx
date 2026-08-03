@@ -43,6 +43,35 @@ function cacheImage(key: string, dataUrl: string): void {
   _imageCache.set(key, dataUrl);
 }
 
+// Дедуп идущих загрузок: пока base64 картинки в полёте, повторные рендеры (лента
+// перерисовывается на каждом обновлении объекта проекта) переиспользуют один и тот же
+// промис, а не плодят дублирующие запросы. Без этого на медленном канале десятки
+// перезапросов одной картинки забивали пул соединений браузера (HTTP/1.1 ~6 на origin),
+// из-за чего health-ping не пролезал и приложение мигало online/offline.
+const _imageInflight = new Map<string, Promise<string | null>>();
+
+// Загрузка картинки проекта как data-URL с дедупом и модульным кэшем.
+// null — контент не картинка либо сбой. Реальный fetch к одному cacheKey — ровно один.
+function loadProjectImage(projectId: string, rel: string, cacheKey: string): Promise<string | null> {
+  const hit = _imageCache.get(cacheKey);
+  if (hit) return Promise.resolve(hit);
+  const flying = _imageInflight.get(cacheKey);
+  if (flying) return flying;
+  const p = api.files.getContent(projectId, rel)
+    .then(r => {
+      if (r.isImage && r.base64) {
+        const dataUrl = `data:${r.mimeType ?? 'image/png'};base64,${r.base64}`;
+        cacheImage(cacheKey, dataUrl);
+        return dataUrl;
+      }
+      return null;
+    })
+    .catch(() => null)
+    .finally(() => { _imageInflight.delete(cacheKey); });
+  _imageInflight.set(cacheKey, p);
+  return p;
+}
+
 // Путь картинки относительно корня проекта (Claude мог дать абсолютный путь внутри проекта)
 function toProjectRelative(src: string, rootPath: string): string {
   let rel = src.replace(/\\/g, '/');
@@ -57,7 +86,11 @@ function ChatImage({ src, alt }: { src?: string; alt?: string }) {
   const project = useContext(ChatProjectContext);
   // /api/proxy?... — уже проксированный URL (от urlTransform)
   const isRemote = !!src && /^(https?:|data:|\/api\/proxy)/i.test(src);
-  const cacheKey = src && !isRemote && project ? `${project.id}|${toProjectRelative(src, project.rootPath)}` : null;
+  // Примитивы (id/rel/ключ), а не объект project — в зависимостях эффекта: смена ССЫЛКИ
+  // projectCtx при неизменных id/rootPath не должна дёргать перезагрузку картинки.
+  const projectId = !isRemote ? project?.id ?? null : null;
+  const rel = src && !isRemote && project ? toProjectRelative(src, project.rootPath) : null;
+  const cacheKey = projectId && rel ? `${projectId}|${rel}` : null;
   // Кэш читаем на рендере, а не через setState в эффекте: после перемонтирования картинка
   // должна стоять сразу, без промежуточного «Загрузка…» — это и есть мигание.
   const cached = cacheKey ? _imageCache.get(cacheKey) ?? null : null;
@@ -65,21 +98,17 @@ function ChatImage({ src, alt }: { src?: string; alt?: string }) {
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
-    if (!src || isRemote || !project || !cacheKey || cached) return;
+    if (!projectId || !rel || !cacheKey || cached) return;
     let cancelled = false;
-    api.files.getContent(project.id, toProjectRelative(src, project.rootPath))
-      .then(r => {
+    // Через loadProjectImage: параллельные рендеры дедуплицируются в один fetch.
+    loadProjectImage(projectId, rel, cacheKey)
+      .then(dataUrl => {
         if (cancelled) return;
-        if (r.isImage && r.base64) {
-          const dataUrl = `data:${r.mimeType ?? 'image/png'};base64,${r.base64}`;
-          cacheImage(cacheKey, dataUrl);
-          setResolved(dataUrl);
-        }
+        if (dataUrl) setResolved(dataUrl);
         else setFailed(true);
-      })
-      .catch(() => { if (!cancelled) setFailed(true); });
+      });
     return () => { cancelled = true; };
-  }, [src, isRemote, project, cacheKey, cached]);
+  }, [projectId, rel, cacheKey, cached]);
 
   const finalSrc = isRemote ? src : cached ?? resolved;
 

@@ -5,6 +5,7 @@ import { C, FONT } from '../../lib/design';
 import { relPath, stripRoot } from '../../lib/paths';
 import { splitAgentResultTail, formatTailTokens, formatTailDuration, isAsyncLaunchAck, asyncLaunchAckNote } from '../../lib/agentTail';
 import { ChatProjectContext, FalCostContext, GlifCostContext } from './contexts';
+import { CodeBlockFrame } from './CodeCopyButton';
 import { MediaBlock, extractMediaMeta, mediaLabel } from './MediaBlock';
 import { useVisibleMedia } from './mediaDedup';
 
@@ -167,6 +168,12 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
       return { body: asyncLaunchAckNote(item.bgAborted), tail: null };
     return splitAgentResultTail(item.result);
   }, [isAgentTool, item.result, item.bgAborted]);
+  // Полный текст вывода (без обрезки до 4000 символов, которая идёт только в показ) —
+  // то, что уходит в буфер по кнопке копирования.
+  const outputText = useMemo(() => {
+    if (item.result == null) return '';
+    return stripRoot(agentSplit?.body ?? item.result, project?.rootPath);
+  }, [item.result, agentSplit, project?.rootPath]);
   // Медиа (изображения + видео) из результата MCP-инструментов. Сквозной дедуп ленты
   // (glif project_update + media_view одного URL) применяется картой из контекста
   const rawMedia = useVisibleMedia(item);
@@ -256,24 +263,23 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
       {open && hasDiff && <DiffBody hunks={editHunks} />}
       {open && !hasDiff && hasResult && !hasMedia && (
         <>
-          <pre style={{
-            margin: agentSplit?.tail ? '0 0 4px' : '0 0 9px', padding: '8px 10px', borderRadius: 7,
-            // Bash → тёмный терминал; остальное → светлая панель вывода
-            background: isConsole ? C.termBg : C.outputBg,
-            border: isConsole ? 'none' : `1px solid ${C.outputBorder}`,
-            // На светлой панели ошибку красим в danger; на тёмной — светлый «терминальный» оттенок
-            color: isConsole
-              ? (item.isError ? C.termError : C.termText)
-              : (item.isError ? C.dangerText : C.textPrimary),
-            fontFamily: FONT.mono,
-            fontSize: 11.5, lineHeight: 1.5, maxHeight: 280, overflow: 'auto',
-            whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-          }}>
-            {(() => {
-              const r = stripRoot(agentSplit?.body ?? item.result!, project?.rootPath);
-              return r.length > 4000 ? r.slice(0, 4000) + '\n…(обрезано)' : r;
-            })()}
-          </pre>
+          <CodeBlockFrame text={outputText}>
+            <pre style={{
+              margin: agentSplit?.tail ? '0 0 4px' : '0 0 9px', padding: '8px 10px', borderRadius: 7,
+              // Bash → тёмный терминал; остальное → светлая панель вывода
+              background: isConsole ? C.termBg : C.outputBg,
+              border: isConsole ? 'none' : `1px solid ${C.outputBorder}`,
+              // На светлой панели ошибку красим в danger; на тёмной — светлый «терминальный» оттенок
+              color: isConsole
+                ? (item.isError ? C.termError : C.termText)
+                : (item.isError ? C.dangerText : C.textPrimary),
+              fontFamily: FONT.mono,
+              fontSize: 11.5, lineHeight: 1.5, maxHeight: 280, overflow: 'auto',
+              whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+            }}>
+              {outputText.length > 4000 ? outputText.slice(0, 4000) + '\n…(обрезано)' : outputText}
+            </pre>
+          </CodeBlockFrame>
           {/* Метрики сабагента из системного хвоста — вместо сырых строк CLI */}
           {agentSplit?.tail && (
             <div style={{

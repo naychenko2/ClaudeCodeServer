@@ -5,6 +5,7 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { FileText } from 'lucide-react';
 import { MermaidDiagram } from '../MermaidDiagram';
+import { CodeBlockFrame } from './CodeCopyButton';
 import { api } from '../../lib/api';
 import { C, FONT, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
@@ -228,21 +229,25 @@ export const MarkdownContent = memo(function MarkdownContent({ text }: { text: s
           }
           if (language) {
             return (
-              <SyntaxHighlighter
-                language={language}
-                style={oneDark}
-                customStyle={{ borderRadius: 8, fontSize: 12.5, margin: '6px 0', padding: '10px 14px', fontFamily: FONT.mono, overflowX: 'auto' }}
-              >
-                {text}
-              </SyntaxHighlighter>
+              <CodeBlockFrame text={text}>
+                <SyntaxHighlighter
+                  language={language}
+                  style={oneDark}
+                  customStyle={{ borderRadius: 8, fontSize: 12.5, margin: '6px 0', padding: '10px 14px', fontFamily: FONT.mono, overflowX: 'auto' }}
+                >
+                  {text}
+                </SyntaxHighlighter>
+              </CodeBlockFrame>
             );
           }
           if (text.includes('\n')) {
             // Код без указания языка — на светлой панели вывода (лёгкий тёплый фон вместо тёмного)
             return (
-              <pre style={{ background: C.outputBg, border: `1px solid ${C.outputBorder}`, borderRadius: 8, padding: '10px 14px', margin: '6px 0', overflowX: 'auto' }}>
-                <code style={{ fontFamily: FONT.mono, fontSize: 12.5, color: C.textPrimary, lineHeight: 1.5 }} {...props}>{text}</code>
-              </pre>
+              <CodeBlockFrame text={text}>
+                <pre style={{ background: C.outputBg, border: `1px solid ${C.outputBorder}`, borderRadius: 8, padding: '10px 14px', margin: '6px 0', overflowX: 'auto' }}>
+                  <code style={{ fontFamily: FONT.mono, fontSize: 12.5, color: C.textPrimary, lineHeight: 1.5 }} {...props}>{text}</code>
+                </pre>
+              </CodeBlockFrame>
             );
           }
           // Путь к файлу проекта в бэктиках — кликабельная ссылка на просмотр

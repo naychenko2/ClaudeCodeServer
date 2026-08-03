@@ -364,6 +364,35 @@ describe('useSession: снапшот после входа в группу', () 
   });
 });
 
+describe('useSession: второй наблюдатель уже присоединённого занятого чата', () => {
+  it('открытие чата с isWaiting=true всё равно подтягивает историю (снята !isWaiting)', async () => {
+    const sid = nextSid();
+    m.getHistory.mockResolvedValue([...DONE_TURN]);
+    const chat = openChat(sid);
+    await flush();
+    await chat.first.send('второй');
+    expect(chat.render().isWaiting).toBe(true);
+    expect(chat.render().isJoined).toBe(true);
+
+    // Первый компонент (например ChatPanel) остаётся смонтированным — сессия не покидает
+    // группу. Пока чат считался занятым, сервер дописал конец хода (карточка отчёта и т.п.).
+    m.getHistory.mockResolvedValue([...DONE_TURN, user('второй'), text('ответ 2'), result()]);
+    const before = m.getHistory.mock.calls.length;
+
+    // Второй наблюдатель того же sessionId (ArtifactsPanel) монтируется, пока сессия уже joined.
+    const second = openChat(sid);
+    await flush();
+
+    expect(m.getHistory.mock.calls.length).toBeGreaterThan(before);
+    const st = second.render();
+    expect(st.isWaiting).toBe(false);
+    expect(st.items.at(-1)!.kind).toBe('result');
+
+    chat.unmount();
+    second.unmount();
+  });
+});
+
 describe('useSession: членство в группе', () => {
   const joinsFor = (sid: string) => m.joinSession.mock.calls.filter(c => c[0] === sid).length;
 

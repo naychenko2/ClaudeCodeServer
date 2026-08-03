@@ -49,4 +49,21 @@ public class TeamImplementPromptsTests
         clarifyTurn.Should().Contain("допущением");
         protocol.Should().Contain("больше не спрашивай");
     }
+
+    // Прод 2026-08-03 (находка Веры): просили hello5.txt/«QA smoke test file 5», а координатор
+    // отдал в маркере работы smoke5.txt/«smoke run 5 ok» — конкретика из вводной подменена ещё
+    // ДО планировщика, самим маркером <team:work> (протокол требовал сжать постановку до
+    // «одной-двух фраз», не оговаривая точные значения). Обе точки, где координатор формулирует
+    // маркер работы, обязаны требовать дословный перенос.
+    [Fact]
+    public void WorkClassificationProtocol_ТребуетДословныйПереносЗначений()
+    {
+        TeamImplementPrompts.WorkClassificationProtocol.Should().Contain("дословно");
+    }
+
+    [Fact]
+    public void InterviewProtocol_МаркерРаботы_ТребуетДословныйПереносЗначений()
+    {
+        TeamImplementPrompts.InterviewProtocol(MkTeam(0)).Should().Contain("дословно");
+    }
 }

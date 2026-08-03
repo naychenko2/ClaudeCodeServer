@@ -72,6 +72,20 @@ describe('TeamPlanView — блок «Замысел» и ссылка на по
     expect(html).toContain('plan-v1.md');
   });
 
+  // Прод-баг (Вера, 2026-08-03): «Замысел» не показывался в развёрнутой карточке ПОСЛЕ
+  // старта волны (resolved && approved) — прошлый тест этой ветки проверял только ссылку
+  // на файл, без intent, и дефект прошёл мимо. Обе вещи должны рендериться вместе.
+  it('запущенный план (resolved && approved) с intent — «Замысел» рендерится рядом со ссылкой на файл', () => {
+    const html = render(card(
+      { intent: 'Идём через SafeJoin, авторизацию не трогаем.', planFilePath: 'docs/plans/team/abc123/plan-v1.md' },
+      { resolved: true, approved: true },
+    ));
+    expect(html).toContain('Замысел');
+    expect(html).toContain('Идём через SafeJoin, авторизацию не трогаем.');
+    expect(html).toContain('Полный план');
+    expect(html).toContain('plan-v1.md');
+  });
+
   it('отменённый план — ссылка тоже рендерится', () => {
     const html = render(card(
       { planFilePath: 'docs/plans/team/abc123/plan-v1.md' },

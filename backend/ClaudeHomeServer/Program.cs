@@ -316,9 +316,10 @@ builder.Services.AddHttpClient("proxy").WithoutEgressProxy();
 // чтобы редирект на приватный хост не обошёл SSRF-проверку (см. SsrfGuard).
 builder.Services.AddHttpClient("safe-download")
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
-// Ридер (ADR-005): без кук/креденшалов/авто-редиректов — цепочку хопов ведёт сам ReaderService,
-// перепроверяя SsrfGuard на каждом. Хендлер (ConnectCallback — вторая, TOCTOU-safe линия
-// обороны) вынесен в ReaderHttpHandlerFactory, чтобы её можно было проверить тестом напрямую.
+// Ридер (ADR-005): без кук/креденшалов/авто-редиректов/системного egress-прокси — цепочку
+// хопов ведёт сам ReaderService, перепроверяя SsrfGuard на каждом. Хендлер (UseProxy=false +
+// ConnectCallback — вторая, TOCTOU-safe линия обороны) вынесен в ReaderHttpHandlerFactory,
+// чтобы её можно было проверить тестом напрямую.
 builder.Services.AddHttpClient(ReaderService.HttpClientName, client =>
 {
     client.Timeout = Timeout.InfiniteTimeSpan; // таймауты — явные, в ReaderService (заголовки/операция)

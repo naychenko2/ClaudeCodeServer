@@ -114,13 +114,13 @@ public class TurnFileWatcherTests : IDisposable
     }
 
     [Fact]
-    public async Task ВнешняяПравка_БезИзмененияЧислаСтрок_НеДоходитДоЛентыВообще()
+    public async Task ЗаменаСтроки_БезИзмененияЧислаСтрок_ДоходитДоЛентыСЧестнымиЧислами()
     {
-        // Ключевая находка: CountLineDiff (TurnFileWatcher.cs:176-181) считает только
-        // newCount - oldCount. Правка, заменяющая содержимое строки без добавления/удаления
-        // строк, даёт added=0 и removed=0 — OnFileSystemEvent возвращается на строке 113,
-        // ДО вызова _onMessage. Карточка не приходит вообще, а не просто теряет External —
-        // это и объясняет отчёт Веры (git-панель прирост увидела, лента — нет).
+        // Регресс на находку: раньше CountLineDiff считал только newCount - oldCount.
+        // Правка, заменяющая содержимое строки без добавления/удаления строк, давала
+        // added=0 и removed=0 — OnFileSystemEvent возвращался ДО вызова _onMessage,
+        // карточка не приходила вообще. Теперь diff — мультисет по содержимому строк:
+        // замена одной строки даёт 1 добавлена (новое содержимое) + 1 удалена (старое).
         var path = Path.Combine(_root, "file.txt");
         File.WriteAllText(path, "line1\nline2\nline3");
 
@@ -139,11 +139,39 @@ public class TurnFileWatcherTests : IDisposable
 
         // Реальная проверка: меняем содержимое строки, число строк то же (3 -> 3)
         File.WriteAllText(path, "line1\nline2Y\nline3");
+        var msg = await WaitForMessageAsync(signal, received, TimeSpan.FromSeconds(3));
+
+        msg.Should().NotBeNull("замена содержимого строки — реальная правка, карточка обязана дойти");
+        msg!.Added.Should().Be(1, "line2Y — новая строка, которой не было в старом содержимом");
+        msg.Removed.Should().Be(1, "line2X — старая строка, которой нет в новом содержимом");
+    }
+
+    [Fact]
+    public async Task ПравкаБезИзмененияСодержимого_НеДоходитДоЛенты()
+    {
+        // Условие раннего выхода теперь — точное равенство содержимого (oldContent ==
+        // newContent), а не added==0 && removed==0 от diff-алгоритма. Перезапись файла
+        // тем же текстом (touch/re-save без реальных изменений) по-прежнему не должна
+        // порождать карточку.
+        var path = Path.Combine(_root, "file.txt");
+        File.WriteAllText(path, "line1\nline2\nline3");
+
+        var received = new ConcurrentQueue<FileChangedMessage>();
+        var signal = new SemaphoreSlim(0);
+        using var watcher = CreateWatcher(_root, received, signal);
+        watcher.Start();
+        await Task.Delay(200);
+
+        // Прогрев кэша.
+        File.WriteAllText(path, "line1\nline2X\nline3");
+        var warmup = await WaitForMessageAsync(signal, received, TimeSpan.FromSeconds(3));
+        warmup.Should().NotBeNull("прогрев кэша обязателен — иначе тест ничего не проверяет");
+
+        // Перезапись тем же самым содержимым — реального изменения нет.
+        File.WriteAllText(path, "line1\nline2X\nline3");
         var msg = await WaitForMessageAsync(signal, received, TimeSpan.FromMilliseconds(1500));
 
-        msg.Should().BeNull(
-            "CountLineDiff не видит правку без изменения числа строк — FileChangedMessage не уходит вовсе, " +
-            "поэтому пометка «Изменение вне чата» для такой правки в принципе не может появиться");
+        msg.Should().BeNull("содержимое не изменилось — карточка не должна приходить");
     }
 
     [Fact]

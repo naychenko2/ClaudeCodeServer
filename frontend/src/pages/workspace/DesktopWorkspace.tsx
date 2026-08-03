@@ -78,6 +78,15 @@ interface Props {
   autoEditTaskId: string | null;
   onOpenTaskSession: (sessionId: string) => void;
   onOpenFileFromTree: (path: string, line?: number) => void;
+  // Переход по md-ссылке из FileViewer (клик в открытом md) — открыть файл на месте,
+  // не меняя режим просмотра. anchor — слаг раздела для скролла к заголовку.
+  onOpenDocLink?: (path: string, anchor?: string) => void;
+  scrollToAnchor?: string | null;
+  // Back/Forward по истории открытых файлов (кнопки в тулбаре FileViewer)
+  onFileBack?: () => void;
+  onFileForward?: () => void;
+  canFileBack?: boolean;
+  canFileForward?: boolean;
   onCloseTask: () => void;
   // Персона из панельки «Команда» — студия в центре (приоритет ниже задачи, выше доски)
   selectedPersonaId: string | null;
@@ -348,7 +357,7 @@ export function DesktopWorkspace(p: Props) {
           <IslandSplitter orientation="v" active={dragging === 'split'} onMouseDown={handleSplitDrag} />
           <Island bg={C.bgMain} style={{ flex: 1, minWidth: 200 }}>
             <div style={{ flex: 1, overflow: 'hidden' }}>
-              <FileViewer project={p.project} filePath={p.openFile} onClose={p.onCloseFile} onToggleFullscreen={p.onToggleFullscreen} initialTab={p.openFileDiffMode ? 'diff' : undefined} gitStagePath={p.gitStagePath ?? undefined} />
+              <FileViewer project={p.project} filePath={p.openFile} onClose={p.onCloseFile} onToggleFullscreen={p.onToggleFullscreen} initialTab={p.openFileDiffMode ? 'diff' : undefined} gitStagePath={p.gitStagePath ?? undefined} onOpenFile={p.onOpenDocLink} scrollToAnchor={p.scrollToAnchor} onFileBack={p.onFileBack} onFileForward={p.onFileForward} canFileBack={p.canFileBack} canFileForward={p.canFileForward} />
             </div>
           </Island>
         </div>
@@ -357,7 +366,7 @@ export function DesktopWorkspace(p: Props) {
       {p.openFile && (p.fileFullscreen || p.isTablet) && centerIsland(
         <div style={{ flex: 1, overflow: 'hidden' }}>
           {/* На планшете сплита нет — тумблер режима не показываем */}
-          <FileViewer project={p.project} filePath={p.openFile} onClose={p.onCloseFile} onToggleFullscreen={p.isTablet ? undefined : p.onToggleFullscreen} fullscreen={p.fileFullscreen} initialTab={p.openFileDiffMode ? 'diff' : undefined} gitStagePath={p.gitStagePath ?? undefined} />
+          <FileViewer project={p.project} filePath={p.openFile} onClose={p.onCloseFile} onToggleFullscreen={p.isTablet ? undefined : p.onToggleFullscreen} fullscreen={p.fileFullscreen} initialTab={p.openFileDiffMode ? 'diff' : undefined} gitStagePath={p.gitStagePath ?? undefined} onOpenFile={p.onOpenDocLink} scrollToAnchor={p.scrollToAnchor} onFileBack={p.onFileBack} onFileForward={p.onFileForward} canFileBack={p.canFileBack} canFileForward={p.canFileForward} />
         </div>
       )}
 

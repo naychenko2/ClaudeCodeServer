@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { AlertTriangle, X, File, Trash2, Maximize2, Columns2, RotateCcw, Save, Download, Music, Menu, SquarePen, Eye, Code, Copy, Check, FileDiff, History, Users, MessageCircle } from 'lucide-react';
+import { AlertTriangle, X, File, Trash2, Maximize2, Columns2, RotateCcw, Save, Download, Music, Menu, SquarePen, Eye, Code, Copy, Check, FileDiff, History, Users, MessageCircle, ChevronLeft, ChevronRight } from 'lucide-react';
 import SyntaxHighlighter from 'react-syntax-highlighter/dist/esm/prism-light';
 import { oneLight, oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import tsx from 'react-syntax-highlighter/dist/esm/languages/prism/tsx';
@@ -22,7 +22,7 @@ import markup from 'react-syntax-highlighter/dist/esm/languages/prism/markup';
 import type { Project, GitBlameLine, GitLogEntry } from '../types';
 import { api } from '../lib/api';
 import { basename } from '../lib/paths';
-import { resolveDocImage } from '../lib/docsLinks';
+import { resolveDocImage, resolveDocLink, slugify } from '../lib/docsLinks';
 import { OfflineError } from '../lib/offline';
 import { useGitState, ensureGit, gitRestoreFile, loadGitRemote } from '../lib/git';
 import { parseDiffToHunks, buildHunkPatch, buildLinesPatch } from '../lib/gitPatch';
@@ -30,6 +30,7 @@ import { relTime } from './GitPanel';
 import { toggleSyncMark, useSyncMarks, computeSyncState, isDownloaded, loadSyncMarks, loadDownloadedSet } from '../lib/sync';
 import { onFilesChanged } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
+import { useHeadings } from '../hooks/useHeadings';
 import { EmptyState } from './EmptyState';
 import { getLanguage } from '../lib/getLanguage';
 import { MarkdownViewer } from './MarkdownViewer';
@@ -97,6 +98,18 @@ interface Props {
   gitStagePath?: string;
   // Номер строки для скролла после открытия (из графа / ссылок на строку)
   scrollToLine?: number;
+  // Открыть другой файл в центре (переход по ссылке из md). anchor — слаг раздела,
+  // если ссылка вида «foo.md#раздел»: FileViewer проскроллит к нему после рендера.
+  onOpenFile?: (path: string, anchor?: string) => void;
+  // Слаг заголовка для скролла после открытия файла (ставит WorkspacePage, когда
+  // файл открыт переходом по md-ссылке с якорем). null/undefined — скроллить не нужно.
+  scrollToAnchor?: string | null;
+  // Back/Forward по истории открытых файлов (браузерная навигация в пределах сессии).
+  // Кнопки видны, пока есть куда идти (canFileBack/canFileForward); неактивная — disabled.
+  onFileBack?: () => void;
+  onFileForward?: () => void;
+  canFileBack?: boolean;
+  canFileForward?: boolean;
 }
 
 interface FileContent {
@@ -125,6 +138,12 @@ type ViewTab = 'file' | 'diff' | 'blame' | 'history';
 // Вкладка «Код» — HTML-файл в исходнике: отдельный сегмент того же трека, что и остальные
 // вкладки (раньше рядом стоял второй, одинаковый по форме, переключатель «Просмотр | Код»)
 type TabKey = ViewTab | 'code';
+
+// Центральной области неважно, документ ли области или файл кода — любой путь открывается
+// здесь же FileViewer-ом (md тоже отрендерится). Поэтому knownDocs пуст: резолв ссылок
+// отличает только «якорь текущего документа» (kind 'doc', скроллим) от «другой файл»
+// (kind 'repo', открываем) — внешние MarkdownViewer уводит в новую вкладку сам.
+const EMPTY_DOCS: ReadonlySet<string> = new Set();
 
 // Ступени шапки по ширине ПАНЕЛИ (не окна — в сплите панель живёт своей жизнью).
 // comfort — подписи, cozy/narrow — иконки, tight — вкладки уезжают в меню.
@@ -299,7 +318,7 @@ function AudioFilePlayer({ src, mimeType, fileName, fileSizeMb }: {
   );
 }
 
-export function FileViewer({ project, filePath, onClose, onToggleFullscreen, fullscreen, isMobile, onOpenSidebar, initialTab, gitStagePath, scrollToLine }: Props) {
+export function FileViewer({ project, filePath, onClose, onToggleFullscreen, fullscreen, isMobile, onOpenSidebar, initialTab, gitStagePath, scrollToLine, onOpenFile, scrollToAnchor, onFileBack, onFileForward, canFileBack, canFileForward }: Props) {
   const online = useOnline();
   // Хост-режим: путь абсолютный (вне корня проекта) — файл открыт карточкой инструмента/
   // изменённого файла чата, живущего в другом дереве. Контент — через /host-files/content,
@@ -427,6 +446,57 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
 
   const content = fileContent?.content ?? '';
   const hasUnsavedChanges = editing && editContent !== content;
+
+  // Оглавление md для скролла к якорю: снимается с DOM контент-зоны (md внутри
+  // DocCommentedMarkdown — вложенность querySelectorAll не мешает). Используется и для
+  // клика по «#раздел» текущего документа, и для якоря при открытии файла по ссылке.
+  const headings = useHeadings(contentAreaRef, content);
+  // Якорь, ждущий отрисовки md. Привязан к пути: между сменой файла и пересбором
+  // оглавления есть кадр, где headings ещё от прежнего — без проверки пути якорь
+  // искался бы в чужом оглавлении. В ref, а не в состоянии: значение нужно эффекту.
+  const pendingAnchorRef = useRef<{ path: string; anchor: string } | null>(null);
+
+  // Скролл заголовка в зону просмотра. scrollIntoView здесь ненадёжен: md лежит внутри
+  // DocCommentedMarkdown (flex-рядок со sticky-сайдбаром комментариев), и нативный
+  // scrollIntoView на этом layout молчит. Скроллим контейнер руками по смещению элемента
+  // от верха зоны (минус padding, чтобы заголовок не прилипал под самый тулбар).
+  const scrollDocTo = useCallback((el: HTMLElement) => {
+    const container = contentAreaRef.current;
+    if (!container) return;
+    const delta = el.getBoundingClientRect().top - container.getBoundingClientRect().top - 16;
+    container.scrollBy({ top: delta, behavior: 'smooth' });
+  }, []);
+
+  // Открытие файла по md-ссылке с якорем: WorkspacePage ставит scrollToAnchor, здесь
+  // запоминаем его (привязав к текущему пути) — сработает эффектом ниже, когда md отрисован
+  useEffect(() => {
+    if (scrollToAnchor) pendingAnchorRef.current = { path: filePath, anchor: scrollToAnchor };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scrollToAnchor]);
+
+  useEffect(() => {
+    const pending = pendingAnchorRef.current;
+    if (!pending || pending.path !== filePath || !content || headings.length === 0) return;
+    const target = headings.find(h => slugify(h.text) === pending.anchor);
+    if (!target) return;
+    scrollDocTo(target.el);
+    pendingAnchorRef.current = null;
+  }, [filePath, content, headings, scrollDocTo]);
+
+  // Клик по ссылке в md (режим документации MarkdownViewer): резолв относительного пути
+  // и якоря. Якорь текущего документа — скролл; другой файл — onOpenFile (с якорем);
+  // внешние MarkdownViewer уводит в _blank сам, сюда они не доходят.
+  const handleDocLink = useCallback((href: string) => {
+    if (!filePath) return;
+    const link = resolveDocLink(filePath, href, EMPTY_DOCS);
+    if (!link || link.kind === 'external') return;
+    if (link.kind === 'doc' && link.target === filePath && link.anchor) {
+      const target = headings.find(h => slugify(h.text) === link.anchor);
+      if (target) scrollDocTo(target.el);
+      return;
+    }
+    onOpenFile?.(link.target, link.anchor ?? undefined);
+  }, [filePath, headings, onOpenFile, scrollDocTo]);
   const syncState = computeSyncState(marks, filePath);
   // Помечен, но содержимое ещё не скачано → спиннер
   const pending = !!syncState && !isDownloaded(project.id, filePath);
@@ -1208,17 +1278,31 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
       <Toolbar isMobile={isMobile}>
         <div ref={stripRef} style={{ display: 'flex', alignItems: 'center', gap: rowGap, flex: 1, minWidth: 0 }}>
         {/* Левый фиксированный блок: «назад» на мобиле, ☰ на широких ступенях десктопа
-            (на узких ☰ уезжает в «···») */}
-        {(isMobile || (onOpenSidebar && !iconTier)) && (
+            (на узких ☰ уезжает в «···»). Здесь же — back/forward по истории открытых
+            файлов: их ширина обязана войти в fixedLeftRef, иначе useToolbarOverflow
+            не учтёт её и неправильно посчитает число влезающих вторичных кнопок */}
+        {(isMobile || (onOpenSidebar && !iconTier) || canFileBack || canFileForward) && (
           <div ref={fixedLeftRef} style={{ display: 'flex', alignItems: 'center', gap: rowGap, flexShrink: 0 }}>
             {isMobile ? (
               <BackButton onClick={handleClose} title="К списку файлов" style={{ height: 32 }}>
                 <span style={{ fontSize: FS.base, fontWeight: 600, color: C.textSecondary }}>Файлы</span>
               </BackButton>
-            ) : (
+            ) : onOpenSidebar && !iconTier ? (
               <ToolbarIconButton onClick={onOpenSidebar} title="Открыть панель" isMobile={isMobile}>
                 <Menu size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
               </ToolbarIconButton>
+            ) : null}
+            {/* Back/Forward: видимы, пока есть хотя бы одно направление навигации;
+                неактивная — disabled. На мобиле рядом с «Файлы», на десктопе — после ☰ */}
+            {(canFileBack || canFileForward) && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                <ToolbarIconButton isMobile={isMobile} onClick={onFileBack} disabled={!canFileBack} title="Назад по истории файлов">
+                  <ChevronLeft size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+                </ToolbarIconButton>
+                <ToolbarIconButton isMobile={isMobile} onClick={onFileForward} disabled={!canFileForward} title="Вперёд по истории файлов">
+                  <ChevronRight size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+                </ToolbarIconButton>
+              </div>
             )}
           </div>
         )}
@@ -1626,14 +1710,16 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
                   : isMarkdown && isHostMode
                   // Хост-режим: без комментариев к документу и резолва картинок —
                   // обе фичи проектные (scope=project.id), для файла вне проекта не годятся
-                  ? <div data-selection-scope="doc" data-selection-priority="2"><MarkdownViewer content={content} /></div>
+                  ? <div data-selection-scope="doc" data-selection-priority="2"><MarkdownViewer content={content} onDocLink={handleDocLink} /></div>
                   : isMarkdown
                   ? <div data-selection-scope="doc" data-selection-priority="2"><DocCommentedMarkdown
                       scope={project.id} docPath={filePath} content={content} isMobile={isMobile}
                       onCounts={onCommentCounts}
                       // Логотип и скриншоты README лежат рядом в репозитории: путь в src
-                      // относителен документа, грузить их надо через файловый эндпоинт
-                      viewer={{ resolveImageSrc: src => {
+                      // относителен документа, грузить их надо через файловый эндпоинт.
+                      // onDocLink — переход по md-ссылкам внутри файла (другой файл/якорь),
+                      // иначе клик уводил бы браузер из SPA на главный экран
+                      viewer={{ onDocLink: handleDocLink, resolveImageSrc: src => {
                         const target = resolveDocImage(filePath, src);
                         return target ? api.files.fileUrl(project.id, target) : undefined;
                       } }}

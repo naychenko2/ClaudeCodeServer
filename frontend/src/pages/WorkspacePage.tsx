@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo, useLayoutEffect, type ReactNode } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo, useLayoutEffect, useReducer, type ReactNode } from 'react';
 import { Plus, MessageCircle, Network, Puzzle } from 'lucide-react';
 import type { Project, Session, SkillsData, AuthState, Task, ProjectService } from '../types';
 import { SessionList } from '../components/SessionList';
@@ -222,6 +222,51 @@ function ToolsPaneView({
   );
 }
 
+// ── История открытых файлов (back/forward в тулбаре FileViewer) ──
+// Запись — полный контекст открытия: путь + якорь/строка для скролла + режим diff/stage,
+// чтобы навигация туда-обратно восстанавливала вид, в котором файл открывали.
+interface FileHistoryEntry {
+  path: string;
+  anchor?: string;        // слаг раздела md («foo.md#раздел»)
+  line?: number;          // строка кода (из графа / ссылок на строку)
+  diffMode?: boolean;     // открытие на вкладке Diff
+  gitStagePath?: string | null;  // unstaged-файл для зернистого stage
+}
+
+interface FileHistoryState { entries: FileHistoryEntry[]; cursor: number }
+
+type FileHistoryAction =
+  | { type: 'push'; entry: FileHistoryEntry }
+  | { type: 'back' }
+  | { type: 'forward' };
+
+// Дедуп: подряд тот же путь в том же виде — не дублируем (двойной клик по той же ссылке,
+// повторное открытие из дерева). Якорь/строка/diff/stage должны совпасть тоже.
+function sameHistEntry(a: FileHistoryEntry, b: FileHistoryEntry): boolean {
+  return a.path === b.path
+    && (a.anchor ?? null) === (b.anchor ?? null)
+    && (a.line ?? null) === (b.line ?? null)
+    && !!a.diffMode === !!b.diffMode
+    && (a.gitStagePath ?? null) === (b.gitStagePath ?? null);
+}
+
+function histReducer(s: FileHistoryState, a: FileHistoryAction): FileHistoryState {
+  switch (a.type) {
+    case 'push': {
+      const cur = s.cursor >= 0 ? s.entries[s.cursor] : undefined;
+      if (cur && sameHistEntry(cur, a.entry)) return s;
+      // Обрезаем «форвард» после курсора — как в браузере: новая навигация
+      // аннулирует всё, что было прокручено вперёд кнопкой «назад»
+      const trimmed = s.entries.slice(0, s.cursor + 1);
+      return { entries: [...trimmed, a.entry], cursor: trimmed.length };
+    }
+    case 'back':
+      return s.cursor > 0 ? { ...s, cursor: s.cursor - 1 } : s;
+    case 'forward':
+      return s.cursor < s.entries.length - 1 ? { ...s, cursor: s.cursor + 1 } : s;
+  }
+}
+
 export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLogout }: Props) {
   // Восстанавливаем состояние окна для этого проекта (компонент перемонтируется при входе в проект)
   const [leftTab, setLeftTab] = useState<LeftTab>(() => {
@@ -253,6 +298,13 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
   const [gitStagePath, setGitStagePath] = useState<string | null>(null);
   // Номер строки для скролла при открытии файла (из графа) — сбрасывается после применения
   const [scrollToLine, setScrollToLine] = useState<number | undefined>(undefined);
+  // Слаг раздела для скролла при открытии md по ссылке с якорем («foo.md#раздел»).
+  // null — якоря нет; FileViewer сбрасывает потребление через ref, здесь только источник
+  const [scrollToAnchor, setScrollToAnchor] = useState<string | null>(null);
+  // История открытых файлов для back/forward. cursor = -1 — история пуста (файл ещё не открыт).
+  const [hist, histDispatch] = useReducer(histReducer, { entries: [], cursor: -1 });
+  const canFileBack = hist.cursor > 0;
+  const canFileForward = hist.cursor >= 0 && hist.cursor < hist.entries.length - 1;
   // Коммит открыт из git-панели «История» → просмотр в контентной области
   const [openCommitSha, setOpenCommitSha] = useState<string | null>(null);
   // Файл коммита, на котором сразу открыть diff (клик по файлу в стеке «Изменения»); null — первый
@@ -970,6 +1022,23 @@ const windowWidth = useWindowWidth();
     setGraphOpen(false);
     setScrollToLine(line);
     navPush({ screen: 'project', project, view: mobileView, file: filePath });
+    histDispatch({ type: 'push', entry: { path: filePath, line } });
+  };
+
+  // Переход по md-ссылке из центрального FileViewer (клик по ссылке в открытом md).
+  // В отличие от дерева, НЕ переключает режим просмотра (сплит/полный экран остаётся
+  // прежним) — читатель остаётся в том же виде, где был. anchor — слаг раздела для скролла.
+  const handleOpenDocLink = (filePath: string, anchor?: string) => {
+    reader.actions.closeReader();
+    setOpenCommitSha(null);
+    setOpenFile(filePath);
+    setOpenFileDiffMode(false);
+    setGitStagePath(null);
+    setGraphOpen(false);
+    setScrollToLine(undefined);
+    setScrollToAnchor(anchor ?? null);
+    navPush({ screen: 'project', project, view: mobileView, file: filePath });
+    histDispatch({ type: 'push', entry: { path: filePath, anchor } });
   };
 
   // из чата → split на десктопе, fullscreen на планшете/мобайле
@@ -982,6 +1051,7 @@ const windowWidth = useWindowWidth();
     setFileFullscreen(isMobile || isTablet);
     setGraphOpen(false);
     navPush({ screen: 'project', project, view: mobileView, file: filePath });
+    histDispatch({ type: 'push', entry: { path: filePath } });
   };
 
   // из git-панели «Изменения» → тот же FileViewer, но сразу на вкладке Diff;
@@ -995,6 +1065,32 @@ const windowWidth = useWindowWidth();
     setFileFullscreen(true);
     setGraphOpen(false);
     navPush({ screen: 'project', project, view: mobileView, file: filePath });
+    histDispatch({ type: 'push', entry: { path: filePath, diffMode: true, gitStagePath: staged ? null : filePath } });
+  };
+
+  // Back/Forward по истории открытых файлов. Восстанавливают контекст записи
+  // (путь + режим diff/stage + скролл), НЕ трогая режима просмотра (split/fullscreen),
+  // граф и читалку — это переключение файла, а не новое открытие. push при этом не идёт,
+  // иначе каждая навигация плодила бы копии и кнопка «вперёд» обрезалась бы.
+  const applyHistEntry = (e: FileHistoryEntry) => {
+    setOpenFile(e.path);
+    setOpenFileDiffMode(!!e.diffMode);
+    setGitStagePath(e.gitStagePath ?? null);
+    setScrollToLine(e.line);
+    setScrollToAnchor(e.anchor ?? null);
+    navPush({ screen: 'project', project, view: mobileView, file: e.path });
+  };
+  const handleFileBack = () => {
+    if (hist.cursor <= 0) return;
+    const entry = hist.entries[hist.cursor - 1];
+    histDispatch({ type: 'back' });
+    applyHistEntry(entry);
+  };
+  const handleFileForward = () => {
+    if (hist.cursor < 0 || hist.cursor >= hist.entries.length - 1) return;
+    const entry = hist.entries[hist.cursor + 1];
+    histDispatch({ type: 'forward' });
+    applyHistEntry(entry);
   };
 
   // Открыть URL в ридере (кнопка-компаньон у внешней ссылки в чате) — как открытие
@@ -1269,7 +1365,7 @@ const windowWidth = useWindowWidth();
         {/* Просмотр файла — FileViewer имеет свою шапку */}
         {openFile && (
           <div style={{ flex: 1, overflow: 'hidden' }}>
-            <FileViewer project={project} filePath={openFile} isMobile onClose={backFromFile} initialTab={openFileDiffMode ? 'diff' : undefined} gitStagePath={gitStagePath ?? undefined} scrollToLine={scrollToLine} />
+            <FileViewer project={project} filePath={openFile} isMobile onClose={backFromFile} initialTab={openFileDiffMode ? 'diff' : undefined} gitStagePath={gitStagePath ?? undefined} scrollToLine={scrollToLine} onOpenFile={handleOpenDocLink} scrollToAnchor={scrollToAnchor} onFileBack={handleFileBack} onFileForward={handleFileForward} canFileBack={canFileBack} canFileForward={canFileForward} />
           </div>
         )}
         {/* Просмотр коммита из git-«Истории» */}
@@ -1341,6 +1437,12 @@ const windowWidth = useWindowWidth();
           gitStagePath={gitStagePath}
           fileFullscreen={fileFullscreen}
           onToggleFullscreen={handleToggleFileFullscreen}
+          onOpenDocLink={handleOpenDocLink}
+          scrollToAnchor={scrollToAnchor}
+          onFileBack={handleFileBack}
+          onFileForward={handleFileForward}
+          canFileBack={canFileBack}
+          canFileForward={canFileForward}
           openCommitSha={openCommitSha}
           openCommitFile={openCommitFile}
           onCloseCommit={closeCommitView}

@@ -255,6 +255,9 @@ export default function App() {
   const isMobileView = useIsMobile()
 
   const online = useOnline()
+  const onlineRef = useRef(online)
+  onlineRef.current = online
+  const useOnlineRef = useRef(() => onlineRef.current)
   // Текущий проект — приоритет для снапшота при выходе из офлайна (без ре-триггера при смене проекта)
   const projectIdRef = useRef<string | undefined>(undefined)
   projectIdRef.current = project?.id
@@ -446,13 +449,34 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth?.serverUrl])
 
-  // Прогрев/синхронизация: при входе и при возврате в онлайн — все проекты, начиная с текущего
+  // Снэпшот/drain — только при устойчивом онлайне. На мобиле связь часто «мигает»
+  // (online → degraded → online за секунды), и каждое возвращение дёргать полную
+  // синхронизацию — перегружать канал и снова ронять связь. Задержка 5с + потолок
+  // раз в минуту оставляют только осмысленные возвраты.
+  const lastHeavySyncRef = useRef(0)
+  const stableOnlineTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => {
-    if (auth && online) {
-      // Сперва проигрываем офлайн-очереди (задачи/заметки) на сервер, затем прогреваем кэш —
-      // независимо от того, какой раздел открыт (подписки в разделах заводятся при монтировании)
+    if (stableOnlineTimerRef.current !== null) {
+      clearTimeout(stableOnlineTimerRef.current)
+      stableOnlineTimerRef.current = null
+    }
+    if (!auth || !online) return
+    const now = Date.now()
+    const sinceLast = now - lastHeavySyncRef.current
+    if (lastHeavySyncRef.current > 0 && sinceLast < 60_000) return
+    stableOnlineTimerRef.current = setTimeout(() => {
+      stableOnlineTimerRef.current = null
+      // Проверяем, что за 5с нас не унесло обратно в degraded/offline.
+      if (!useOnlineRef.current()) return
+      lastHeavySyncRef.current = Date.now()
       void drainOfflineQueues()
       runOfflineSnapshot(projectIdRef.current)
+    }, 5_000)
+    return () => {
+      if (stableOnlineTimerRef.current !== null) {
+        clearTimeout(stableOnlineTimerRef.current)
+        stableOnlineTimerRef.current = null
+      }
     }
   }, [auth, online])
 

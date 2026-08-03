@@ -302,6 +302,20 @@ public class TeamPlanningServiceTests : IDisposable
         prompt.Should().Contain("assumptions", "неизвестное значение — в допущения, а не в заглушку");
     }
 
+    // Прод 2026-08-03 (находка Веры): просили hello5.txt/«QA smoke test file 5», получили
+    // smoke5.txt/«smoke run 5 ok» — это НЕ плейсхолдер (запрет 6a его уже покрывает), а прямая
+    // подмена названного человеком значения своим. Правило обязано отдельно запрещать и это.
+    [Fact]
+    public void BuildPlannerPrompt_ЗапрещаетПодменуНазванныхЗначенийСвоими()
+    {
+        var dev = TeamPlanningService.BuildCard(MakePersona("Денис", "Backend-разработчик"));
+
+        var prompt = TeamPlanningService.BuildPlannerPrompt("Создай hello5.txt", [dev], "ClaudeCodeServer");
+
+        prompt.Should().Contain("дословно");
+        prompt.Should().Contain("hello5.txt", "конкретный пример утечки из прода — по нему проверяется, что запрет адресный");
+    }
+
     // --- Разбор плана ---
 
     [Fact]

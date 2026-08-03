@@ -10,6 +10,7 @@ namespace ClaudeHomeServer.Services;
 // (CoordinatorWriteGuard, правило «любая работа — через задачу»), а рендер из структуры
 // гарантирует, что файл соответствует тому, что человек утвердит, а не тому, что модель решила
 // написать. Версия плана = отдельный файл — перепланирование (Э8) не перезаписывает предыдущий.
+// Подпапка на вводную (iterN, см. RelativePath) той же логикой разводит РАЗНЫЕ вводные одного чата.
 public static class TeamPlanFileRenderer
 {
     // Папка планов команды относительно корня проекта (или worktree чата)
@@ -38,10 +39,15 @@ public static class TeamPlanFileRenderer
         return slug.Length == 0 ? suffix : $"{slug}-{suffix}";
     }
 
-    // Относительный путь файла версии плана. SafeJoin в TryWrite — вторая линия защиты:
-    // ChatSlug уже безопасен по построению, но проверка остаётся на случай будущих правок.
-    public static string RelativePath(string? chatName, string sessionId, int version) =>
-        $"{PlansDir}/{ChatSlug(chatName, sessionId)}/plan-v{version}.md";
+    // Относительный путь файла версии плана. Подпапка iterN разводит РАЗНЫЕ вводные одного
+    // чата: слаг папки строится из имени чата и не меняется по ходу разговора, а PlanVersion
+    // у каждой новой вводной снова стартует с 1 — без подпапки вторая вводная того же чата
+    // писала бы в тот же путь, что и первая, и ссылка карточки вела бы на чужой файл
+    // (прод 2026-08-03, находка Веры). iteration — SessionTeamImplement.IterationNumber на
+    // момент публикации плана; 0 (легаси-состояния до этой правки) трактуется как первая вводная.
+    // SafeJoin в TryWrite — вторая линия защиты: ChatSlug уже безопасен по построению.
+    public static string RelativePath(string? chatName, string sessionId, int iteration, int version) =>
+        $"{PlansDir}/{ChatSlug(chatName, sessionId)}/iter{Math.Max(1, iteration)}/plan-v{version}.md";
 
     // Markdown файла: замысел, под-задачи по волнам (Goal/DoneCriteria/файлы/исполнитель
     // с обоснованием), допущения, а с v2 — «Что изменилось».
@@ -101,10 +107,10 @@ public static class TeamPlanFileRenderer
     // Записать файл версии плана. Никогда не бросает наружу: ошибка записи (нет прав, путь
     // занят) не должна ронять публикацию карточки — план публикуется, ссылки просто нет,
     // а в лог уходит предупреждение (см. краевые случаи продуктового плана).
-    public static string? TryWrite(string rootPath, string? chatName, string sessionId,
+    public static string? TryWrite(string rootPath, string? chatName, string sessionId, int iteration,
         TeamImplementPlan plan, Func<string?, string> executorLabel, ILogger? log = null)
     {
-        var rel = RelativePath(chatName, sessionId, plan.Version);
+        var rel = RelativePath(chatName, sessionId, iteration, plan.Version);
         try
         {
             var full = FileService.SafeJoinPublic(rootPath, rel);

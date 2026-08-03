@@ -1795,6 +1795,59 @@ public class SessionManagerTests : IDisposable
         File.ReadAllText(Full(v2Path!)).Should().Contain("Выгрузка XLSX");
     }
 
+    // Прод 2026-08-03 (находка Веры): в пятом прогоне того же чата карточка плана ссылалась
+    // на файл ЧЕТВЁРТОГО прогона — слаг папки строится из имени чата (не меняется по ходу
+    // разговора), а версия плана у каждой новой вводной снова стартует с v1. Две вводные
+    // подряд в одном чате обязаны дать два разных файла с рабочими ссылками, и файл первой
+    // вводной не должен быть тронут второй.
+    [Fact]
+    public async Task ДвеВводныеПодряд_ДваРазныхФайлаПлана_ПерваяЦела()
+    {
+        var (session, backend, frontend) = await MakeTeamStabAsync("ti-two-briefs");
+        SetPlannerAnswer(backend, frontend);
+
+        // Первая вводная — настоящим приёмом сообщения (как в проде): ResetTeamIterationOnUserInput
+        // открывает вводную №1 ДО того, как координатор классифицирует её работой.
+        await _sut.SendMessageAsync(session.Id, "добавить экспорт в CSV", []);
+        SetTeamTurnFromHuman(GetEntry(session.Id), true);
+        await _sut.HandleTeamTurnEndAsync(session.Id,
+            "<team:work>добавить экспорт в CSV</team>", failed: false);
+
+        var plan1 = _sentMessages.OfType<TeamPlanMessage>().Last();
+        plan1.Plan.PlanFilePath.Should().NotBeNull().And.EndWith("iter1/plan-v1.md");
+        await _sut.RespondTeamPlanAsync(session.Id, plan1.PlanId, TeamPlanDecision.Run, userId: TestUserId);
+
+        // Волна отработала, проверка подведена — режим ждёт следующую вводную (как MakeIdleStabAsync)
+        await _sut.HandleTeamTurnEndAsync(session.Id, "итог: всё готово", failed: false);
+        _sut.GetById(session.Id)!.TeamImplement!.Stage = TeamImplementStage.Checking;
+        await _sut.HandleTeamTurnEndAsync(session.Id,
+            "Итерация завершена: 2 задачи, проверка пройдена", failed: false);
+        _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.Idle);
+
+        // Вторая вводная — новый запрос в том же чате, то же имя чата (слаг папки не меняется)
+        SetAdditionalPlannerAnswer(backend);
+        session.Status = SessionStatus.Working;
+        await _sut.SendMessageAsync(session.Id, "теперь добавь выгрузку в XLSX", []);
+        SetTeamTurnFromHuman(GetEntry(session.Id), true);
+        await _sut.HandleTeamTurnEndAsync(session.Id,
+            "Понял, беру в работу.\n<team:work>добавить выгрузку в XLSX</team>", failed: false);
+
+        var plan2 = _sentMessages.OfType<TeamPlanMessage>().Last();
+        var path1 = plan1.Plan.PlanFilePath!;
+        var path2 = plan2.Plan.PlanFilePath;
+
+        path2.Should().NotBeNull().And.EndWith("iter2/plan-v1.md")
+            .And.NotBe(path1, "вторая вводная того же чата обязана писать в свой файл");
+
+        var project = _projectManager.GetById(session.ProjectId!)!;
+        string Full(string rel) => Path.Combine(project.RootPath, rel.Replace('/', Path.DirectorySeparatorChar));
+        File.Exists(Full(path1)).Should().BeTrue("ссылка первой карточки обязана вести на существующий файл");
+        File.Exists(Full(path2!)).Should().BeTrue("ссылка второй карточки обязана вести на существующий файл");
+        File.ReadAllText(Full(path1)).Should().Contain("Эндпоинт экспорта")
+            .And.NotContain("XLSX-выгрузка", "файл первой вводной не должен быть тронут второй");
+        File.ReadAllText(Full(path2!)).Should().Contain("XLSX-выгрузка");
+    }
+
     [Fact]
     public async Task CreateTeamPlan_ГлобальныйЧатБезПроекта_ПубликуетсяБезФайлаИБезОшибок()
     {
@@ -1833,7 +1886,7 @@ public class SessionManagerTests : IDisposable
         SetPlannerAnswer(backend, frontend);
         var project = _projectManager.GetById(session.ProjectId!)!;
         // Занимаем ожидаемый путь файла директорией — запись бросит исключение
-        var rel = TeamPlanFileRenderer.RelativePath(session.Name, session.Id, 1);
+        var rel = TeamPlanFileRenderer.RelativePath(session.Name, session.Id, 1, 1);
         Directory.CreateDirectory(Path.Combine(project.RootPath, rel.Replace('/', Path.DirectorySeparatorChar)));
 
         var (plan, reason) = await _sut.CreateTeamPlanAsync(session.Id, "Экспорт", TestUserId);

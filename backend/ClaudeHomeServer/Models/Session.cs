@@ -221,6 +221,13 @@ public class SessionTeamImplement
     // «уже второй раунд интервью» (ответ человека, сбрасывать нечего) — оба со Stage=Interview
     // и PlanCardId=null.
     public bool FirstIterationOpened { get; set; }
+    // Порядковый номер вводной чата-штаба (растёт на каждой НОВОЙ вводной — ResetTeamIterationOnUserInput
+    // и ветка Idle в StartTeamWorkAsync; перепланирование Э8 внутри той же вводной его не трогает,
+    // там растёт PlanVersion). Только для файловых путей плана (TeamPlanFileRenderer): слаг папки
+    // строится из имени чата, а PlanVersion у каждой новой вводной снова стартует с 1 — без этого
+    // счётчика вторая вводная того же чата ссылалась бы на файл первой (прод 2026-08-03, находка Веры).
+    // 0 — легаси-состояния до этой правки; рендерер трактует 0 как первую вводную.
+    public int IterationNumber { get; set; }
 }
 
 public class Session

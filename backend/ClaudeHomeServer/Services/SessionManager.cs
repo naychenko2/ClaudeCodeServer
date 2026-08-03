@@ -3448,13 +3448,15 @@ public class SessionManager : IDisposable
         // Полный план файлом (решение владельца 2026-08-02): сервер рендерит markdown из
         // структуры плана и кладёт рядом с проектом — координатору писать файлы запрещено
         // (CoordinatorWriteGuard). Версия — отдельный файл: plan.Version уже проставлен выше,
-        // поэтому перепланирование ложится рядом с предыдущим, не поверх него. Глобальный чат
-        // без проекта — писать некуда (null), карточка покажет только «Замысел»; ошибка записи
-        // не должна ронять публикацию карточки — TryWrite её не бросает.
+        // поэтому перепланирование ложится рядом с предыдущим, не поверх него. Подпапка на
+        // IterationNumber той же логикой разводит разные вводные одного чата (прод 2026-08-03).
+        // Глобальный чат без проекта — писать некуда (null), карточка покажет только «Замысел»;
+        // ошибка записи не должна ронять публикацию карточки — TryWrite её не бросает.
         if (ResolveTeamPlanRoot(entry.Info) is { } planRoot)
         {
             var ownerIdForLabels = ResolveOwnerId(entry.Info);
-            plan.PlanFilePath = TeamPlanFileRenderer.TryWrite(planRoot, entry.Info.Name, sessionId, plan,
+            plan.PlanFilePath = TeamPlanFileRenderer.TryWrite(planRoot, entry.Info.Name, sessionId,
+                entry.Info.TeamImplement?.IterationNumber ?? 0, plan,
                 personaId => personaId is not null && _personas.Get(personaId, ownerIdForLabels ?? "") is { } p
                     ? PersonaManager.PersonaLabel(p) : personaId ?? "не назначен", _log);
         }
@@ -4581,6 +4583,11 @@ public class SessionManager : IDisposable
                 t.Stage = TeamImplementStage.Planning;
                 t.InterviewRounds = 0;
                 t.Replanning = false;
+                // Новая вводная после Idle (М6) — тоже НОВАЯ вводная в счёте IterationNumber,
+                // отдельно от ResetTeamIterationOnUserInput (та ловит только самую первую):
+                // без этого файл плана снова писался бы в тот же путь, что и у прошлой (прод
+                // 2026-08-03, находка Веры).
+                t.IterationNumber++;
                 return true;
             });
             // План-режим — с классификации, а не с приёма сообщения: разговорный ход в
@@ -4687,6 +4694,9 @@ public class SessionManager : IDisposable
             t.InterviewRounds = 0;
             t.Replanning = false;
             t.FirstIterationOpened = true;
+            // Э8-фикс (прод 2026-08-03): счёт вводных — под файловые пути плана, растёт
+            // на каждой новой (см. IterationNumber).
+            t.IterationNumber++;
             return true;
         });
         // План-режим ставим ПОСЛЕ смены стадии: ход по этой самой вводной уже уйдёт в CLI

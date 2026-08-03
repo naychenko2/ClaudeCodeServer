@@ -91,12 +91,34 @@ public class TeamPlanFileRendererTests : IDisposable
     [Fact]
     public void RelativePath_ВсегдаВПапкеПлановКоманды()
     {
-        var rel = TeamPlanFileRenderer.RelativePath("../../evil", "session-xxxxxxxx", 1);
+        var rel = TeamPlanFileRenderer.RelativePath("../../evil", "session-xxxxxxxx", 1, 1);
 
         rel.Should().StartWith("docs/plans/team/").And.EndWith("/plan-v1.md");
         // SafeJoin — вторая линия защиты: путь обязан резолвиться внутри корня без исключения
         var act = () => FileService.SafeJoinPublic(_root, rel);
         act.Should().NotThrow();
+    }
+
+    // Прод 2026-08-03 (находка Веры): ссылка карточки на пятой вводной в чате вела на файл
+    // ЧЕТВЁРТОЙ — слаг папки не менялся (имя чата ставится по первой вводной), а PlanVersion
+    // новой вводной снова стартовал с 1. Подпапка iterN разводит вводные одного чата.
+    [Fact]
+    public void RelativePath_РазныеИтерацииОдногоЧата_РазныеПути()
+    {
+        var iter1 = TeamPlanFileRenderer.RelativePath("Чат", "session-xxxxxxxx", 1, 1);
+        var iter2 = TeamPlanFileRenderer.RelativePath("Чат", "session-xxxxxxxx", 2, 1);
+
+        iter1.Should().NotBe(iter2, "у каждой вводной свой файл, даже когда версия плана снова v1");
+        iter1.Should().Contain("/iter1/");
+        iter2.Should().Contain("/iter2/");
+    }
+
+    [Fact]
+    public void RelativePath_ИтерацияНоль_ТрактуетсяКакПервая()
+    {
+        // Легаси-состояния до этой правки (IterationNumber == 0) — не должны падать в /iter0/
+        TeamPlanFileRenderer.RelativePath("Чат", "session-xxxxxxxx", 0, 1)
+            .Should().Contain("/iter1/");
     }
 
     // --- Содержимое файла ---
@@ -150,7 +172,7 @@ public class TeamPlanFileRendererTests : IDisposable
     {
         var plan = MakePlan();
 
-        var rel = TeamPlanFileRenderer.TryWrite(_root, "Экспорт в CSV", "session-abcdefgh", plan, Label);
+        var rel = TeamPlanFileRenderer.TryWrite(_root, "Экспорт в CSV", "session-abcdefgh", 1, plan, Label);
 
         rel.Should().NotBeNull();
         var full = Path.Combine(_root, rel!.Replace('/', Path.DirectorySeparatorChar));
@@ -165,8 +187,8 @@ public class TeamPlanFileRendererTests : IDisposable
         var v2 = MakePlan(version: 2);
         v2.Changes = ["Добавлена валидация формата"];
 
-        var relV1 = TeamPlanFileRenderer.TryWrite(_root, "Экспорт", "session-abcdefgh", v1, Label)!;
-        var relV2 = TeamPlanFileRenderer.TryWrite(_root, "Экспорт", "session-abcdefgh", v2, Label)!;
+        var relV1 = TeamPlanFileRenderer.TryWrite(_root, "Экспорт", "session-abcdefgh", 1, v1, Label)!;
+        var relV2 = TeamPlanFileRenderer.TryWrite(_root, "Экспорт", "session-abcdefgh", 1, v2, Label)!;
 
         relV1.Should().NotBe(relV2);
         relV1.Should().EndWith("plan-v1.md");
@@ -180,11 +202,11 @@ public class TeamPlanFileRendererTests : IDisposable
     public void TryWrite_ОшибкаЗаписи_ВозвращаетNullИНеБросает()
     {
         var plan = MakePlan();
-        var rel = TeamPlanFileRenderer.RelativePath("Экспорт", "session-abcdefgh", plan.Version);
+        var rel = TeamPlanFileRenderer.RelativePath("Экспорт", "session-abcdefgh", 1, plan.Version);
         // Занимаем путь файла директорией — File.WriteAllText по нему бросит
         Directory.CreateDirectory(Path.Combine(_root, rel.Replace('/', Path.DirectorySeparatorChar)));
 
-        var act = () => TeamPlanFileRenderer.TryWrite(_root, "Экспорт", "session-abcdefgh", plan, Label);
+        var act = () => TeamPlanFileRenderer.TryWrite(_root, "Экспорт", "session-abcdefgh", 1, plan, Label);
 
         act.Should().NotThrow();
         act().Should().BeNull();

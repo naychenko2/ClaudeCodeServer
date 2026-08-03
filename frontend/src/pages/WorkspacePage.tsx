@@ -54,6 +54,10 @@ import { CodeGraphPanel } from '../features/codegraph/CodeGraphPanel';
 import { SkillsPanel } from '../components/SkillsPanel';
 import { CodeGraphDocument } from '../features/codegraph/CodeGraphDocument';
 import { buildCodeGraph } from '../lib/codeGraph';
+import { ReaderRailContent, ReaderExpandedOverlay } from './workspace/reader/ReaderPanel';
+import { useReaderPanel } from './workspace/reader/useReaderPanel';
+import { buildReaderPanelHeaders } from './workspace/reader/readerPanelHeaders';
+import { FLAGS, useFeature } from '../lib/featureFlags';
 
 interface Props {
   project: Project;
@@ -259,6 +263,10 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
   // что и openFile: крестик возвращает центр к чату, открытие любого другого документа
   // (файл/задача/чат) закрывает граф. Открывается из панели «Граф» в рельсе.
   const [graphOpen, setGraphOpen] = useState(false);
+  // Панель «Чтение»: один экземпляр состояния на страницу (общий для рельсы, кастомной
+  // шапки и оверлея «Развёрнуто» — см. ReaderPanel.tsx)
+  const readerFlag = useFeature(FLAGS.linkReader);
+  const reader = useReaderPanel();
   const [fileFullscreen, setFileFullscreen] = useState(() => loadWorkspaceState(project.id)?.fileFullscreen ?? false);
   const [workflowRunningFor, setWorkflowRunningFor] = useState<string | null>(null);
   const [showUsage, setShowUsage] = useState(false);
@@ -1348,6 +1356,8 @@ const windowWidth = useWindowWidth();
           graphOpen={graphOpen}
           graphArea={<CodeGraphDocument projectId={project.id} isMobile={false} onClose={handleGraphClose} onOpenFile={handleOpenFileFromTree} onBuild={handleGraphBuild} />}
           onPanelOpen={handlePanelOpen}
+          onOpenReader={readerFlag ? reader.actions.openUrl : undefined}
+          panelHeaders={buildReaderPanelHeaders(reader.state, reader.actions)}
           // Из projectForEdit, а не из project: настройки правят именно его, и по
           // старому объекту Терминал с Preview появлялись в рельсе только после
           // перезагрузки страницы
@@ -1369,8 +1379,11 @@ const windowWidth = useWindowWidth();
             skills: <SkillsPanel projectId={project.id} onChanged={setSkillsData} />,
             terminal: <TerminalPanelContent terminals={terminals} activeTerminalId={activeTerminalId} onSelect={handleSelectTerminal} onCreate={handleCreateTerminal} onStop={handleStopTerminal} onActivity={setTerminalBusy} />,
             preview: <PreviewPanelContent projectId={project.id} services={previewServices} activePreviewId={activePreviewId} onSelect={setActivePreviewId} onStart={startService} onStop={stopService} onRefresh={refreshServices} />,
+            // Развёрнута — рельса ничего не показывает, содержимое живёт в ReaderExpandedOverlay
+            reader: readerFlag && !reader.state.expanded ? <ReaderRailContent state={reader.state} actions={reader.actions} /> : undefined,
           }}
         />
+        <ReaderExpandedOverlay state={reader.state} actions={reader.actions} />
 
       </div>
 

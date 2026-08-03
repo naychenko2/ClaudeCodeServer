@@ -31,7 +31,7 @@ import { projectTopWash } from '../lib/projectTone';
 import { setChatContext, AI_RECOMPUTE_EVENT } from '../lib/ai/chatContext';
 import { ChatHeaderBar, type CostStats, type FalCostStats } from './chat/ChatHeaderBar';
 import { computeGlifGenStats } from './chat/glifStats';
-import { ChatProjectContext, ChatTreePathContext, ChatSessionContext, ChatOpenFileContext, FalCostContext, GlifCostContext, AssistantNameContext, MediaVisibilityContext, PersonaContext, TeamPlanContext, TeamEscalationContext, type TeamPlanChatContext, type TeamEscalationChatContext } from './chat/contexts';
+import { ChatProjectContext, ChatTreePathContext, ChatSessionContext, ChatOpenFileContext, ChatOpenReaderContext, FalCostContext, GlifCostContext, AssistantNameContext, MediaVisibilityContext, PersonaContext, TeamPlanContext, TeamEscalationContext, type TeamPlanChatContext, type TeamEscalationChatContext } from './chat/contexts';
 import { WaitingIndicator } from './ui/WaitingIndicator';
 import { Modal, ModalActions, ConfirmDialog } from './ui';
 import { ChatEmptyState } from './chat/EmptyState';
@@ -51,6 +51,9 @@ interface Props {
   // Отсутствует для чата вне проекта (project-less) — тогда скрываем файловые возможности
   project?: Project;
   onOpenFile?: (path: string) => void;
+  // Открыть URL в панели «Чтение» — из кнопки-компаньона у внешней ссылки (флаг link-reader).
+  // Отсутствует — MarkdownContent не рисует кнопку вовсе, лента как без фичи
+  onOpenReader?: (url: string) => void;
   pendingMessage?: string;
   onPendingMessageSent?: () => void;
   onSessionUpdated?: (session: Session) => void;
@@ -130,7 +133,7 @@ function derivePlanPhase(items: ChatItem[], mode: Mode, isWaiting: boolean): Pla
   return null;
 }
 
-export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, attachedFiles, onAttachedFilesChange, artifactsOpen, onToggleArtifacts, greetingBubble, headerIsland, embedded, composerFocusSignal, headerDragProps }: Props) {
+export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, attachedFiles, onAttachedFilesChange, artifactsOpen, onToggleArtifacts, greetingBubble, headerIsland, embedded, composerFocusSignal, headerDragProps }: Props) {
   const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, workLoop: liveWorkLoop, teamImplement: liveTeamImplement, promptSuggestion, pending, composerRestore, consumeRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, respondTeamPlan, respondTeamEscalation, interrupt, compact, toggleThinking, noteCompanionSwitch, cancelPending } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
   // Цикл «до готово» (флаг work-loop): live-состояние из событий work_loop,
   // до первого события — из Session.workLoop; null — цикл выключен
@@ -1425,7 +1428,7 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
           )
         )}
 
-        <FalCostContext.Provider value={falCostByRequest}><GlifCostContext.Provider value={glifCostByJob}><MediaVisibilityContext.Provider value={mediaVisibility}><ChatProjectContext.Provider value={projectCtx}><ChatTreePathContext.Provider value={treePathCtx}><ChatSessionContext.Provider value={session.id}><ChatOpenFileContext.Provider value={onOpenFile ?? null}><TeamPlanContext.Provider value={teamPlanCtx}><TeamEscalationContext.Provider value={teamEscalationCtx}>{renderedItems}</TeamEscalationContext.Provider></TeamPlanContext.Provider></ChatOpenFileContext.Provider></ChatSessionContext.Provider></ChatTreePathContext.Provider></ChatProjectContext.Provider></MediaVisibilityContext.Provider></GlifCostContext.Provider></FalCostContext.Provider>
+        <FalCostContext.Provider value={falCostByRequest}><GlifCostContext.Provider value={glifCostByJob}><MediaVisibilityContext.Provider value={mediaVisibility}><ChatProjectContext.Provider value={projectCtx}><ChatTreePathContext.Provider value={treePathCtx}><ChatSessionContext.Provider value={session.id}><ChatOpenFileContext.Provider value={onOpenFile ?? null}><ChatOpenReaderContext.Provider value={onOpenReader ?? null}><TeamPlanContext.Provider value={teamPlanCtx}><TeamEscalationContext.Provider value={teamEscalationCtx}>{renderedItems}</TeamEscalationContext.Provider></TeamPlanContext.Provider></ChatOpenReaderContext.Provider></ChatOpenFileContext.Provider></ChatSessionContext.Provider></ChatTreePathContext.Provider></ChatProjectContext.Provider></MediaVisibilityContext.Provider></GlifCostContext.Provider></FalCostContext.Provider>
 
         {online && showWaiting && (
           // Текст индикатора ставим по левому краю чата (как пузыри), а домик уезжает

@@ -93,6 +93,10 @@ interface Props {
   // Контент общий для обеих зон — панель рисует та зона, в которой она лежит.
   toolsEnabled: boolean;
   panels: Partial<Record<PanelKey, ReactNode>>;
+  // Кастомные шапки отдельных панелей (сегодня — только «Чтение») — см. PanelZone.panelHeaders
+  panelHeaders?: Partial<Record<PanelKey, { content: (onClose: () => void) => ReactNode; height: number }>>;
+  // Открыть URL в панели «Чтение» — из кнопки-компаньона у внешней ссылки в чате
+  onOpenReader?: (url: string) => void;
   // Числа-кружки на кнопках проекта в рельсе (changes/tasks/terminal/preview)
   railCounts?: Partial<Record<PanelKey, number>>;
   // Сколько чатов у проекта; null — ещё не знаем. Пока чатов нет, панель «Чаты»
@@ -180,7 +184,7 @@ export function DesktopWorkspace(p: Props) {
   // (headerIsland), в split рядом с файлом — обычный вид внутри своего острова
   const chatPanel = (headerIsland: boolean) => p.activeSession ? (
     <ChatPanel
-      session={p.activeSession} project={p.project} onOpenFile={p.onOpenFileFromChat}
+      session={p.activeSession} project={p.project} onOpenFile={p.onOpenFileFromChat} onOpenReader={p.onOpenReader}
       pendingMessage={p.pendingMessage} onPendingMessageSent={p.onPendingMessageSent}
       onSessionUpdated={p.onSessionUpdated} isMobile={false} onWorkflowRunning={p.onWorkflowRunning}
       skills={p.skills} agents={p.agents}
@@ -250,6 +254,7 @@ export function DesktopWorkspace(p: Props) {
       <PanelZone
         side="left"
         panels={zonePanels}
+        panelHeaders={p.panelHeaders}
         railCounts={p.railCounts}
         toolsEnabled={p.toolsEnabled}
         sessionPanels={sessionPanels}
@@ -354,6 +359,7 @@ export function DesktopWorkspace(p: Props) {
         side="right"
         compact={p.isTablet}
         panels={zonePanels}
+        panelHeaders={p.panelHeaders}
         railCounts={p.railCounts}
         toolsEnabled={p.toolsEnabled}
         sessionPanels={sessionPanels}

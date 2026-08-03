@@ -66,6 +66,13 @@ interface Props {
   // Готовый контент ВСЕХ панелей экрана — обе зоны получают один и тот же набор
   // и рисуют из него то, что лежит именно в них
   panels: Partial<Record<PanelKey, ReactNode>>;
+  // Замена стандартной шапки (icon+title+40px) для отдельных панелей — см.
+  // PanelShell.headerContent. Единственный сегодняшний пользователь — «Чтение»
+  // (52px, заголовок страницы + домен); остальные панели через этот проп не идут.
+  // content — функция, а не готовый узел: настоящее закрытие панели (closeTo/
+  // tabletPanels) знает только эта зона, и кнопка ✕ в кастомной шапке обязана
+  // звать именно его, а не собственный колбэк владельца panels.
+  panelHeaders?: Partial<Record<PanelKey, { content: (onClose: () => void) => ReactNode; height: number }>>;
   // Числа-кружки на иконках рельсы (changes/tasks/terminal/preview/chats).
   // Сессионные свои числа берут из sessionPanels.
   railCounts?: Partial<Record<PanelKey, number>>;
@@ -98,7 +105,7 @@ interface Props {
 }
 
 export function PanelZone({
-  side, panels, railCounts, panelStack,
+  side, panels, panelHeaders, railCounts, panelStack,
   allowedKeys = WORKSPACE_KEYS, hideWhenEmpty, toolsEnabled, compact, sessionPanels, onPanelOpen,
   railFooter, floating,
 }: Props) {
@@ -489,6 +496,8 @@ export function PanelZone({
     const stretched = vi === undefined
       ? multiInCol || isFullHeight(k)
       : panelStretched(k, vi, multiInCol ? 2 : 1);
+    const onCloseThis = compact ? () => setTabletPanels(cur => cur.filter(x => x !== k)) : () => closeTo(side, k);
+    const headerOverride = panelHeaders?.[k];
     const shell = (
       <PanelShell
         icon={<Icon size={15} strokeWidth={ICON_STROKE} color={C.textSecondary} style={{ flexShrink: 0 }} />}
@@ -497,8 +506,9 @@ export function PanelZone({
         // Закрытие из шапки: на десктопе иконка панели под курсором сама
         // становится крестиком, в компактном режиме (тач, hover'а нет) остаётся
         // отдельная кнопка справа. Закрываем В СВОЮ ЗОНУ — кнопка панели остаётся
-        // там, где её только что закрыли.
-        onClose={compact ? () => setTabletPanels(cur => cur.filter(x => x !== k)) : () => closeTo(side, k)}
+        // там, где её только что закрыли. Игнорируется, когда есть headerContent —
+        // там своя кнопка закрытия, вызывающая тот же onCloseThis напрямую.
+        onClose={onCloseThis}
         closeMode={compact ? 'button' : 'icon'}
         fill={stretched}
         flash={flash?.key === k}
@@ -513,6 +523,13 @@ export function PanelZone({
         // требует — она и так до низа.
         rootRef={stretched ? undefined : panelHeightRef(k)}
         {...dnd.panelProps(k)}
+        // headerContent/headerHeight/draggable — ПОСЛЕ спреда DnD-пропсов, чтобы
+        // переопределить их: кастомная шапка не тащит панель за собой (её место
+        // занимают title/домен и собственные кнопки, а не хват за пустое поле) —
+        // перенести панель между зонами всё ещё можно перетаскиванием иконки в рельсе.
+        headerContent={headerOverride?.content(onCloseThis)}
+        headerHeight={headerOverride?.height}
+        draggable={headerOverride ? false : dnd.panelProps(k).draggable}
       >
         {content(k)}
       </PanelShell>

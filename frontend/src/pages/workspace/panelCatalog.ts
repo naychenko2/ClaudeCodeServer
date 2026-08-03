@@ -16,6 +16,7 @@
 import {
   BookOpenText, ClipboardList, FolderTree, GitCompare, ListTodo, Bot, User, Users,
   SquareTerminal, MonitorPlay, Network, MessageCircle, NotebookPen, Library, Puzzle,
+  Newspaper,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -29,6 +30,7 @@ export type Zone = 'left' | 'right';
 // проекта и сессии, в разделах хаба — их собственные панели.
 export const PANEL_KEYS = [
   'chats', 'files', 'docs', 'changes', 'tasks', 'graph', 'team', 'skills', 'terminal', 'preview',
+  'reader',
   'plan', 'agents', 'context',
   // Панели разделов хаба
   'notesList', 'notesGraph', 'knowledgeList', 'personasList', 'projectGroups',
@@ -57,6 +59,10 @@ export const PANEL_META: Record<PanelKey, { title: string; Icon: LucideIcon }> =
   terminal: { title: 'Терминал',  Icon: SquareTerminal },
   // Ключ остался preview (он лежит в сохранённых раскладках), подпись — «Сервисы»
   preview:  { title: 'Сервисы',   Icon: MonitorPlay },
+  // Режим чтения внешних ссылок рядом с чатом (docs/adr/ADR-005-link-reader-server.md).
+  // Газета: страница, вытащенная из чужого сайта в чистый текст, — не «Документация»
+  // (тот BookOpenText занят корпусом РЕПОЗИТОРИЯ) и не «Файлы»
+  reader:   { title: 'Чтение',    Icon: Newspaper },
   plan:     { title: 'План',      Icon: ClipboardList },
   agents:   { title: 'Агенты',    Icon: Bot },
   // 'context' — досье персоны-собеседника (память/привязки/recall)
@@ -87,6 +93,7 @@ export const PANEL_HOME: Record<PanelKey, Zone> = {
   skills: 'right',
   terminal: 'right',
   preview: 'right',
+  reader: 'right',
   plan: 'right',
   agents: 'right',
   context: 'right',
@@ -101,6 +108,7 @@ export const PANEL_HOME: Record<PanelKey, Zone> = {
 // Наборы ключей по экранам — что вообще доступно в этой рельсе (проп allowedKeys)
 export const WORKSPACE_KEYS: readonly PanelKey[] = [
   'chats', 'files', 'docs', 'changes', 'tasks', 'graph', 'team', 'skills', 'terminal', 'preview',
+  'reader',
   'plan', 'agents', 'context',
 ];
 // Раздел «Чаты»: список чатов плюс панели активной сессии (проекта там нет)

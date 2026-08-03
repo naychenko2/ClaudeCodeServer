@@ -1,4 +1,4 @@
-import type { Project, ProjectGroup, ProjectTag, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, GlifAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, PromptSnapshot, PromptSection } from '../types';
+import type { Project, ProjectGroup, ProjectTag, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, GlifAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode } from '../types';
 import { request } from './offline';
 
 // Личные/админские слоты моделей: сильная/средняя/слабая.
@@ -1433,4 +1433,51 @@ export const api = {
     remove: (projectId: string, path: string) =>
       request<void>(`/projects/${projectId}/sync?path=${encodeURIComponent(path)}`, { method: 'DELETE' }),
   },
+
+  reader: {
+    // Контракт ADR-005 (docs/adr/ADR-005-link-reader-server.md): успех — { title, siteName?,
+    // byline?, markdown }, отказ — { error: { code, httpStatus? } }. Отказ — ОЖИДАЕМЫЙ исход
+    // (часть сайтов не читается, это норма, а не поломка), поэтому здесь гасим исключение
+    // request() при non-2xx и возвращаем обе ветки как данные — вызывающему нечего ловить.
+    read: (url: string) => readReaderPage(url),
+  },
 };
+
+function normalizeReaderError(raw: unknown, httpStatus?: number | null): { code: ReaderErrorCode; httpStatus?: number | null } {
+  const code = raw && typeof raw === 'object' && 'code' in raw && typeof (raw as { code?: unknown }).code === 'string'
+    ? (raw as { code: string }).code
+    : null;
+  const known = code != null && READER_ERROR_CODES.has(code as ReaderErrorCode);
+  const rawStatus = raw && typeof raw === 'object' && 'httpStatus' in raw
+    ? (raw as { httpStatus?: number | null }).httpStatus
+    : null;
+  return { code: known ? (code as ReaderErrorCode) : 'server-error', httpStatus: rawStatus ?? httpStatus ?? null };
+}
+
+const READER_ERROR_CODES = new Set<ReaderErrorCode>([
+  'invalid-url', 'local-address', 'dns-failed', 'unreachable', 'tls-invalid',
+  'timeout', 'auth-required', 'blocked-by-site', 'not-found', 'server-error',
+  'too-many-redirects', 'not-a-page', 'pdf', 'too-large', 'not-readable',
+]);
+
+export type ReaderReadResult =
+  | { ok: true; page: ReaderPage }
+  | { ok: false; error: { code: ReaderErrorCode; httpStatus?: number | null } };
+
+// Backend может сигналить отказ ЛИБО non-2xx статусом (request() бросает исключение,
+// тело ошибки летит в err.body), ЛИБО 200 с discriminated union в теле — конвенция ещё
+// не устоялась (эндпоинт делает Денис параллельно), поэтому распознаём оба варианта.
+async function readReaderPage(url: string): Promise<ReaderReadResult> {
+  try {
+    const data = await request<ReaderPage | { error: unknown }>('/reader/read', {
+      method: 'POST', body: JSON.stringify({ url }),
+    });
+    if (data && typeof data === 'object' && 'error' in data) {
+      return { ok: false, error: normalizeReaderError((data as { error: unknown }).error) };
+    }
+    return { ok: true, page: data as ReaderPage };
+  } catch (e) {
+    const err = e as Error & { status?: number; body?: { error?: unknown } };
+    return { ok: false, error: normalizeReaderError(err.body?.error, err.status) };
+  }
+}

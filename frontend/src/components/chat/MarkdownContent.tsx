@@ -6,6 +6,7 @@ import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { FileText } from 'lucide-react';
 import { MermaidDiagram } from '../MermaidDiagram';
 import { CodeBlockFrame } from './CodeCopyButton';
+import { ReaderLinkWrap } from './ReaderLinkButton';
 import { api } from '../../lib/api';
 import { C, FONT, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
@@ -273,9 +274,11 @@ export const MarkdownContent = memo(function MarkdownContent({ text }: { text: s
           const mention = resolveFileMention(href);
           if (mention) return <FileLink path={mention.path} onOpen={onOpenFile!}>{children}</FileLink>;
           return (
-            <a href={href} style={{ color: C.accent, textDecoration: 'underline' }} target="_blank" rel="noopener noreferrer">
-              {children}
-            </a>
+            <ReaderLinkWrap href={href}>
+              <a href={href} style={{ color: C.accent, textDecoration: 'underline' }} target="_blank" rel="noopener noreferrer">
+                {children}
+              </a>
+            </ReaderLinkWrap>
           );
         },
         // Картинки из markdown: внешние URL — напрямую, локальные пути файлов проекта — через API

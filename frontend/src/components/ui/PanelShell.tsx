@@ -27,6 +27,13 @@ interface PanelShellProps {
   icon?: ReactNode;
   title: string;
   badge?: string | null;
+  // Полная замена стандартной шапки (icon+title+badge+actions) произвольным контентом
+  // своей высоты. Единственное исключение в системе — панель «Чтение»: 52px вместо 40,
+  // заголовок страницы и домен в две строки (docs/adr/ADR-005-link-reader-server.md).
+  // headerContent сам несёт свои кнопки (закрытие в т.ч.) — headerActions/onClose игнорируются.
+  headerContent?: ReactNode;
+  // Высота кастомной шапки — обязательна вместе с headerContent (стандартная ISLAND.headerH тут не подходит)
+  headerHeight?: number;
   // Контролы справа в шапке — кнопки закрытия, настройки, DnD-хендлы.
   // Это системные кнопки самой оболочки; контролы САМОЙ панели (переключатели
   // видов, фильтры, «создать») кладутся не сюда, а изнутри панели через
@@ -101,6 +108,8 @@ export function PanelShell({
   icon,
   title,
   badge,
+  headerContent,
+  headerHeight,
   headerActions,
   toolbar,
   children,
@@ -295,6 +304,23 @@ export function PanelShell({
     </span>
   );
 
+  // Атрибуты корня шапки — общие для стандартного IslandHeader и для headerContent
+  // (перетаскивание панели за шапку работает одинаково в обоих случаях)
+  const mergedHeaderProps = {
+    ...headerProps,
+    ref: setHeaderEl,
+    // Над кнопками карточка не тащится: draggable снимается с шапки, пока
+    // курсор в зоне контролов. Одного draggable={false} на самих кнопках мало —
+    // dragstart рождается на шапке (она источник), их обработчики его не видят,
+    // и попытка нажать кнопку уезжала перетаскиванием панели
+    draggable: draggable && !overControls,
+    title: draggable && !overControls ? 'Перетащите, чтобы поменять панели местами' : headerProps?.title,
+    style: {
+      ...headerProps?.style,
+      cursor: draggable && !overControls ? 'grab' : 'default',
+    },
+  };
+
   return (
     <PanelHeaderSlotContext.Provider value={slotValue}>
     <Island
@@ -326,6 +352,18 @@ export function PanelShell({
       }}
       rootRef={setRoots}
     >
+      {headerContent ? (
+        // Полная замена стандартной шапки — см. комментарий у пропа headerContent.
+        // Слоты PanelHeaderSlot тут не рендерятся: у headerContent нет портальных
+        // зон, его строит сама панель напрямую (кнопки — часть headerContent).
+        <div {...mergedHeaderProps} style={{
+          flexShrink: 0, height: headerHeight, display: 'flex', alignItems: 'center',
+          borderBottom: `1px solid ${C.border}`, background: C.bgMain,
+          ...mergedHeaderProps.style,
+        }}>
+          {headerContent}
+        </div>
+      ) : (
       <IslandHeader
         icon={headerIcon}
         title={title}
@@ -334,20 +372,7 @@ export function PanelShell({
         // Левый слот — у самого названия панели (PanelHeaderSlot side="left")
         leading={<div ref={setSlotLeftEl} draggable={false} onDragStart={e => e.preventDefault()}
           style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 4, ...controlsFade }} />}
-        headerProps={{
-          ...headerProps,
-          ref: setHeaderEl,
-          // Над кнопками карточка не тащится: draggable снимается с шапки, пока
-          // курсор в зоне контролов. Одного draggable={false} на самих кнопках мало —
-          // dragstart рождается на шапке (она источник), их обработчики его не видят,
-          // и попытка нажать кнопку уезжала перетаскиванием панели
-          draggable: draggable && !overControls,
-          title: draggable && !overControls ? 'Перетащите, чтобы поменять панели местами' : headerProps?.title,
-          style: {
-            ...headerProps?.style,
-            cursor: draggable && !overControls ? 'grab' : 'default',
-          },
-        }}
+        headerProps={mergedHeaderProps}
       >
         {/* Слот контролов панели: сюда порталом приезжает содержимое PanelHeaderSlot.
             Наведение отслеживается нативно (см. эффект выше) */}
@@ -375,6 +400,7 @@ export function PanelShell({
           }}
         />
       </IslandHeader>
+      )}
 
       {/* Тулбар под шапкой — полоса с фильтрами/переключателями/кнопкой "Новый".
           Раньше каждый сайдбар делал это через div padding borderBottom руками. */}

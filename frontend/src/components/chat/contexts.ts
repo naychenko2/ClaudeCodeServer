@@ -15,6 +15,11 @@ export const ChatTreePathContext = createContext<string | null>(null);
 // в тексте ассистента нужны в каждом её отпрыске.
 export const ChatOpenFileContext = createContext<((path: string) => void) | null>(null);
 
+// Открыть URL в панели «Чтение» — та же логика: MarkdownContent сидит глубоко в ленте,
+// а кнопка-компаньон у внешней ссылки нужна в каждом её отпрыске. null — фича выключена
+// (флаг link-reader) или чат не поддерживает ридер: кнопка-компаньон просто не рисуется.
+export const ChatOpenReaderContext = createContext<((url: string) => void) | null>(null);
+
 // Id текущей сессии — шторке «какой промпт ушёл» под постом: она грузит снимок по REST,
 // а ChatItemView сидит глубоко в ленте и id сессии пропом не получает.
 export const ChatSessionContext = createContext<string | null>(null);

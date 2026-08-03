@@ -8,8 +8,9 @@ namespace ClaudeHomeServer.Services;
 // УБЕРИ САМО-ЗАВЕРШЕНИЕ: между волнами агентов раннер делает паузы, и если
 // ватчер умрёт — новые агенты не попали бы в workflow_progress (см. реальный
 // кейс: Yuliya появилась через 45+ секунд после Sergey — ватчер уже диспознулся).
-// Вместо этого живём, пока жива сессия: при Interrupt/смерти процесса ClaudeSession
-// зовёт AbortAsync (финальный isDone=true), при закрытии сессии — Dispose.
+// Вместо этого живём, пока жива сессия: при Interrupt/смерти процесса ClaudeSession зовёт
+// NoteOwnerProcessGone (короткая проверка активности, а не немедленный абort — Workflow-агенты
+// независимы от процесса хода и обычно переживают его смерть), при закрытии сессии — Dispose.
 // PollInterval 5с — копеечная операция.
 public sealed class WorkflowWatcher : IDisposable
 {
@@ -20,6 +21,11 @@ public sealed class WorkflowWatcher : IDisposable
     private FileSystemWatcher? _fsWatcher;
     private Timer? _debounceTimer;
     private Timer? _timeoutTimer;
+    // Короткая проверка после смерти хода-владельца (Interrupt/обычное завершение
+    // процесса/смена адаптера при миграции провайдера) — см. NoteOwnerProcessGone
+    private Timer? _ownerGoneTimer;
+    private DateTime? _ownerGoneAt;
+    private readonly TimeSpan _ownerGoneGrace;
     private DateTime _lastChange = DateTime.UtcNow;
     // Момент ближайшего запланированного тика (MaxValue — не взведён); под _gate
     private DateTime _nextFire = DateTime.MaxValue;
@@ -56,12 +62,18 @@ public sealed class WorkflowWatcher : IDisposable
     // ActivityGrace дедлайн продлевается ещё на MaxDuration (см. ForceFinishAsync)
     private static readonly TimeSpan MaxDuration = TimeSpan.FromMinutes(60);
     private static readonly TimeSpan ActivityGrace = TimeSpan.FromMinutes(10);
+    // Окно проверки после смерти хода-владельца — см. NoteOwnerProcessGone
+    private static readonly TimeSpan OwnerGoneGrace = TimeSpan.FromSeconds(90);
 
-    public WorkflowWatcher(string wfPath, string toolUseId, Func<ServerMessage, Task> onMessage)
+    // ownerGoneGrace — переопределение окна NoteOwnerProcessGone для тестов (прод — null,
+    // берёт статический OwnerGoneGrace); 90с в реальном таймере юнит-тест ждать не может.
+    public WorkflowWatcher(string wfPath, string toolUseId, Func<ServerMessage, Task> onMessage,
+        TimeSpan? ownerGoneGrace = null)
     {
         _wfPath = wfPath;
         _toolUseId = toolUseId;
         _onMessage = onMessage;
+        _ownerGoneGrace = ownerGoneGrace ?? OwnerGoneGrace;
     }
 
     public void Start()
@@ -249,9 +261,49 @@ public sealed class WorkflowWatcher : IDisposable
         await FinishAsync();
     }
 
-    // Процесс сессии убит вместе с workflow-раннерами — агенты уже не завершатся:
-    // шлём финальный isDone=true и диспозимся. Повторные вызовы — no-op.
+    // Немедленный хард-стоп: шлём финальный isDone=true и диспозимся. Повторные вызовы — no-op.
+    // Для «ход-владелец умер» используй NoteOwnerProcessGone — Workflow-агенты независимы
+    // от процесса хода и переживают его смерть (см. её комментарий).
     public Task AbortAsync() => FinishAsync();
+
+    // Ход, которому принадлежал этот прогон, погиб (Interrupt, обычное завершение процесса,
+    // смена адаптера при миграции провайдера) — раньше это СРАЗУ хоронило карточку («прерван»)
+    // в предположении «процесс убит вместе с workflow-раннерами». Предположение ложно:
+    // агенты Workflow — независимые процессы, не дети CLI-хода (живой инцидент 2026-08-03 —
+    // DeepSeek-прогон дописал файлы и прошёл verify уже ПОСЛЕ того, как ход считался мёртвым,
+    // а карточка молча показала «прерван», хотя итог всё равно случился). Вместо немедленного
+    // AbortAsync даём короткое окно: если за OwnerGoneGrace появилась новая активность —
+    // работа жива, следим как обычно (MaxDuration/ActivityGrace не трогаем); тишина —
+    // тогда действительно мертва, хороним. Идемпотентно: повторный вызов просто
+    // переставляет окно проверки заново.
+    public void NoteOwnerProcessGone()
+    {
+        lock (_gate)
+        {
+            if (_disposed || _finished) return;
+            _ownerGoneAt = DateTime.UtcNow;
+            try
+            {
+                if (_ownerGoneTimer is null)
+                    _ownerGoneTimer = new Timer(async _ => await CheckOwnerGoneAsync(), null, _ownerGoneGrace, Timeout.InfiniteTimeSpan);
+                else
+                    _ownerGoneTimer.Change(_ownerGoneGrace, Timeout.InfiniteTimeSpan);
+            }
+            catch (ObjectDisposedException) { /* гонка с Dispose — проверка уже не нужна */ }
+        }
+    }
+
+    private async Task CheckOwnerGoneAsync()
+    {
+        bool stillGone;
+        lock (_gate)
+        {
+            if (_disposed || _finished) return;
+            // Активность после NoteOwnerProcessGone (новый файл/дозапись) — работа жива
+            stillGone = _ownerGoneAt is { } at && _lastChange <= at;
+        }
+        if (stillGone) await FinishAsync();
+    }
 
     // Финальный workflow_progress (isDone=true) + Dispose — единственная точка завершения
     private async Task FinishAsync()
@@ -291,6 +343,7 @@ public sealed class WorkflowWatcher : IDisposable
             _fsWatcher?.Dispose();
             _debounceTimer?.Dispose();
             _timeoutTimer?.Dispose();
+            _ownerGoneTimer?.Dispose();
         }
     }
 }

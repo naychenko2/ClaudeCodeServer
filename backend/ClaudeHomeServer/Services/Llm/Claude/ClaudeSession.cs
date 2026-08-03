@@ -1380,11 +1380,12 @@ public class ClaudeSession : ILlmSessionAdapter
     public void Interrupt()
     {
         if (_currentProcess is { } proc) _launcher.Kill(proc, _currentTurnId);
-        // Процесс убит вместе с workflow-раннерами — агенты уже не завершатся: закрываем
-        // карточки workflow финальным isDone (fire-and-forget, повторный вызов — no-op)
+        // Ход убит, но Workflow-агенты — независимые процессы и не обязаны погибнуть вместе
+        // с ним (см. NoteOwnerProcessGone): даём им короткое окно доказать, что работа жива,
+        // вместо немедленного «прерван»
         List<WorkflowWatcher> workflowWatchers;
         lock (_workflowWatchers) workflowWatchers = _workflowWatchers.Where(w => !w.IsDisposed).ToList();
-        foreach (var w in workflowWatchers) _ = w.AbortAsync();
+        foreach (var w in workflowWatchers) w.NoteOwnerProcessGone();
         // Отменяем все ожидающие permission-диалоги: процесс убит, ответа не будет
         foreach (var tcs in _permissionWaiters.Values)
             tcs.TrySetCanceled();
@@ -2247,16 +2248,17 @@ public class ClaudeSession : ILlmSessionAdapter
                 Console.Error.WriteLine($"[ClaudeSession] Не удалось удалить temp MCP-конфиг {run.TurnMcpPath}: {ex.Message}");
             }
 
-        // Процесс мёртв — живых workflow в нём нет: недобитые ватчеры ЭТОГО прогона
-        // закрываем финальным isDone (Interrupt мог успеть раньше — повторный AbortAsync
-        // no-op), потом чистим список. Чужие (нового прогона при опоздавшей финализации
-        // замещённого) не трогаем — их workflow живы.
+        // Процесс мёртв, но Workflow-агенты — независимые процессы и не обязаны погибнуть
+        // вместе с ним (см. NoteOwnerProcessGone) — недобитые ватчеры ЭТОГО прогона получают
+        // короткое окно доказать, что работа жива, вместо немедленного «прерван» (Interrupt
+        // мог успеть раньше — повторный вызов idempotent). Чужие (нового прогона при
+        // опоздавшей финализации замещённого) не трогаем — их workflow живы.
         List<WorkflowWatcher> lingeringWatchers;
         lock (_workflowWatchers)
             lingeringWatchers = _workflowWatchers
                 .Where(w => !w.IsDisposed && (w.Owner is null || ReferenceEquals(w.Owner, run)))
                 .ToList();
-        foreach (var w in lingeringWatchers) await w.AbortAsync();
+        foreach (var w in lingeringWatchers) w.NoteOwnerProcessGone();
         lock (_workflowWatchers) _workflowWatchers.RemoveAll(w => w.IsDisposed);
 
         if (wasCurrent)

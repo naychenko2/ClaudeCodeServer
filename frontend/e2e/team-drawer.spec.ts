@@ -66,6 +66,53 @@ test.describe('раскрывашка «Обсудить с командой»',
     await expect(textarea).toHaveAttribute('placeholder', 'Что реализовать командой?…');
   });
 
+  test('нижняя карточка секции «Сделать» выбирается обычным кликом', async ({ page, context }) => {
+    // Регрессия (третий заход, Вера/QA 2026-08-03): предыдущий кейс кликал по «Командная
+    // реализация» — средней карточке «Сделать», она проходила и до фикса. Баг был именно
+    // в нижней карточке секции: область карточек имела свой жёсткий maxHeight (330px/38vh),
+    // меньший, чем реально оставался бюджет высоты у корня раскрывашки (см. TeamDrawer.tsx) —
+    // при переносе сетки групп на 2+ строки (обычная ширина композера ~900px: CHAT_MAX_W=950
+    // не даёт использовать всю ширину окна даже на широком мониторе) нижняя карточка
+    // обрезалась выше своего реального места, и клик по исходной (не проскроленной) позиции
+    // проваливался мимо неё. При широком дефолтном вьюпорте Playwright (1280×720) сетка групп
+    // умещается в одну строку и баг не проявляется — вьюпорт сужен явно, чтобы тест реально
+    // ловил регресс.
+    //
+    // page.mouse ВМЕСТО locator.click(): Playwright перед обычным click() сам скроллит цель
+    // в видимую область (scrollIntoViewIfNeeded) — это маскирует баг, тест был бы зелёным
+    // независимо от фикса. Координаты берём ДО какого-либо скролла — так же, как курсор
+    // реального пользователя, который целится в карточку по тому, что видит на экране.
+    await page.setViewportSize({ width: 900, height: 820 });
+    await context.addInitScript((tk) => localStorage.setItem('cc_token', tk as string), token);
+
+    await page.goto(`/#/chats/${chatId}`);
+    const textarea = page.locator('textarea.cc-composer-input');
+    await expect(textarea).toBeVisible();
+
+    await page.locator('button[title="Обсудить с командой"]').click();
+    const card = page.getByRole('button', { name: /Командный спринт/ });
+    await expect(card).toBeVisible();
+
+    const box = await card.boundingBox();
+    expect(box, 'у карточки должен быть boundingBox').not.toBeNull();
+    const x = box!.x + box!.width / 2;
+    const y = box!.y + box!.height / 2;
+    // Хит-тест ровно как у QA в баг-репорте: elementFromPoint в центре карточки должен
+    // вернуть саму кнопку, а не что-то из соседней раскладки (композер, зону настроек и т.п.)
+    const hitsCard = await page.evaluate(([x, y]) => {
+      const el = document.elementFromPoint(x, y);
+      const btn = el?.closest('button');
+      return !!btn && (btn.textContent || '').includes('Командный спринт');
+    }, [x, y] as const);
+    expect(hitsCard, 'elementFromPoint в центре карточки должен возвращать саму кнопку').toBe(true);
+
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.up();
+
+    await expect(textarea).toHaveAttribute('placeholder', 'Что сделать спринтом?…');
+  });
+
   test('карточка механики выбирается обычным кликом при автопоказе панели', async ({ page, context }) => {
     // Регрессия (проверка на проде 2026-08-02, Вера): при автопоказе — переход в чат,
     // где sessionStorage 'cc_auto_discuss' совпадает с id (см. TeamCommandCenter

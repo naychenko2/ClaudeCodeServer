@@ -485,7 +485,17 @@ export function TeamDrawer({ open, mech, settings, candidates, availableSkills, 
       // краевых случаях (другой набор механик, другая высота контента/вьюпорта).
       zIndex: Z.dropdown,
       overflow: 'hidden',
-      maxHeight: open ? 560 : 0,
+      // Раскрывашка — flex-колонка: шапка и зона настроек держат свой размер (flexShrink:0),
+      // а карточкам достаётся весь ОСТАЛЬНОЙ бюджет высоты внутри maxHeight. Раньше у
+      // карточек был свой отдельный жёсткий maxHeight (330 / 38vh) — меньше, чем реально
+      // остаётся от общего бюджета после шапки и зоны настроек. Как только сетка групп
+      // переносилась на 2+ строки (обычная десктопная ширина ~900px, не только мобиль),
+      // нижняя карточка «Сделать» обрезалась этим меньшим лимитом ДО границы композера —
+      // клик по обрезанному пикселю проваливался на поле ввода под панелью (баг «клик по
+      // механикам перехватывается композером»). Единый бюджет через flex убирает рассинхрон.
+      display: 'flex',
+      flexDirection: 'column',
+      maxHeight: open ? 'min(640px, 78vh)' : 0,
       opacity: open ? 1 : 0,
       marginBottom: open ? 8 : 0,
       // visibility — вторая (независимая от pointer-events) защита от невидимого кликабельного
@@ -502,7 +512,7 @@ export function TeamDrawer({ open, mech, settings, candidates, availableSkills, 
       pointerEvents: open ? 'auto' : 'none',
     }}>
       {/* Шапка */}
-      <div style={{ display: 'flex', alignItems: 'center', padding: '12px 16px 4px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', padding: '12px 16px 4px', flexShrink: 0 }}>
         <h3 style={{ margin: 0, fontFamily: FONT.serif, fontSize: 15, fontWeight: 700, color: C.textHeading }}>
           Обсудить с командой
         </h3>
@@ -543,8 +553,11 @@ export function TeamDrawer({ open, mech, settings, candidates, availableSkills, 
         </button>
       </div>
 
-      {/* Карточки механик: группы-колонки, на узких экранах переносятся (auto-fit) */}
-      <div style={{ padding: '8px 16px 2px', overflowY: 'auto', maxHeight: isMobile ? '38vh' : 330 }}>
+      {/* Карточки механик: группы-колонки, на узких экранах переносятся (auto-fit).
+          flex:1 + minHeight:0 — забирает весь бюджет высоты, оставшийся от шапки и зоны
+          настроек (см. комментарий у maxHeight корня); overflowY:auto прокручивает,
+          только если групп реально больше, чем влезает в общий бюджет */}
+      <div style={{ padding: '8px 16px 2px', overflowY: 'auto', flex: '1 1 auto', minHeight: 0 }}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(172px, 1fr))', gap: '12px 14px' }}>
           {groups.map(g => (
             <div key={g} style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
@@ -564,6 +577,7 @@ export function TeamDrawer({ open, mech, settings, candidates, availableSkills, 
       <div style={{
         padding: '10px 16px 14px', borderTop: `1px dashed ${C.divider}`, marginTop: 8,
         display: 'flex', flexWrap: 'wrap', gap: '10px 22px', alignItems: 'center', minHeight: 56,
+        flexShrink: 0,
       }}>
         {renderSettings()}
       </div>

@@ -1,6 +1,7 @@
 ﻿using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using System.Threading;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
@@ -2793,14 +2794,83 @@ public class SessionManager : IDisposable
     }
 
     // Заголовок чата из первого сообщения: первая строка, обрезанная до разумной длины.
+    // Ход командной механики (/team-implement {...}, /oh-my-claudecode:ralplan "тема"…) — не
+    // текст для человека, поэтому сначала пробуем вытащить тему из обвязки (см.
+    // ExtractTeamMechanicTopic), а к сырому тексту падаем только если распознать не удалось.
     private static string MakeChatTitle(string text)
     {
-        var t = text.Trim();
+        var topic = ExtractTeamMechanicTopic(text);
+        var t = (string.IsNullOrWhiteSpace(topic) ? text : topic).Trim();
         var nl = t.IndexOfAny(['\n', '\r']);
         if (nl >= 0) t = t[..nl].Trim();
         const int max = 48;
         if (t.Length > max) t = string.Concat(t.AsSpan(0, max).TrimEnd(), "…");
         return t;
+    }
+
+    // Слаги командных механик с JSON-аргументами — тема лежит в одном из полей ниже
+    // (порядок — приоритет: первое непустое). Зеркалит describeTeamTurn во frontend/teamMechanics.ts.
+    private static readonly string[] JsonMechanicSlugs =
+        ["/panel-of-experts", "/review-consilium", "/red-team", "/team-implement"];
+    private static readonly string[] JsonTopicKeys = ["task", "topic", "target", "brief"];
+
+    // Слаги строковых механик — тема в кавычках (см. quoteTopic во frontend/teamMechanics.ts:
+    // внутренние " заменены на «», поэтому кавычки темы — первая и единственная пара).
+    private static readonly string[] QuotedTopicSlugs =
+    [
+        "/oh-my-claudecode:ralplan", "/oh-my-claudecode:deep-interview",
+        "/oh-my-claudecode:autopilot", "/oh-my-claudecode:trace", "/oh-my-claudecode:sciomc",
+    ];
+    private const string UltraqaSlug = "/oh-my-claudecode:ultraqa";
+    private static readonly Regex QuotedTopicRegex = new("\"([^\"]*)\"", RegexOptions.Compiled);
+
+    // Тема хода командной механики или null, если текст — не вызов известной механики
+    // (обычное сообщение, режим «Командная реализация» без обвязки — тема уходит как есть).
+    private static string? ExtractTeamMechanicTopic(string text)
+    {
+        var trimmed = text.TrimStart();
+        if (trimmed.Length == 0 || trimmed[0] != '/') return null;
+
+        foreach (var slug in JsonMechanicSlugs)
+        {
+            if (!trimmed.StartsWith(slug, StringComparison.Ordinal)) continue;
+            var braceIdx = trimmed.IndexOf('{');
+            if (braceIdx < 0) return null;
+            try
+            {
+                using var doc = JsonDocument.Parse(trimmed[braceIdx..]);
+                foreach (var key in JsonTopicKeys)
+                {
+                    if (doc.RootElement.TryGetProperty(key, out var val) && val.ValueKind == JsonValueKind.String)
+                    {
+                        var s = val.GetString();
+                        if (!string.IsNullOrWhiteSpace(s)) return s;
+                    }
+                }
+            }
+            catch (JsonException) { /* битый JSON — падаем к обрезке сырого текста */ }
+            return null;
+        }
+
+        foreach (var slug in QuotedTopicSlugs)
+        {
+            if (!trimmed.StartsWith(slug, StringComparison.Ordinal)) continue;
+            var m = QuotedTopicRegex.Match(trimmed);
+            return m.Success ? m.Groups[1].Value : null;
+        }
+
+        if (trimmed.StartsWith(UltraqaSlug, StringComparison.Ordinal))
+        {
+            var rest = trimmed[UltraqaSlug.Length..].TrimStart();
+            if (rest.StartsWith("--", StringComparison.Ordinal))
+            {
+                var spaceIdx = rest.IndexOf(' ');
+                rest = spaceIdx >= 0 ? rest[(spaceIdx + 1)..] : "";
+            }
+            return rest.Trim();
+        }
+
+        return null;
     }
 
     // Уточнение авто-заголовка чата локальной моделью (действие chat-title): по первому

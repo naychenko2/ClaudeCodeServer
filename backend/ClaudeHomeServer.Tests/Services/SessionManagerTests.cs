@@ -4877,4 +4877,94 @@ public class SessionManagerTests : IDisposable
             InvokePrivate("BuildWidgetsContext", TestUserId, persona).Should().NotBeNull($"ход {turn}");
         }
     }
+
+    // --- Имя чата у командных механик: тема из JSON/строкового вызова вместо сырой обвязки ---
+
+    private static string MakeChatTitle(string text)
+    {
+        var method = typeof(SessionManager).GetMethod("MakeChatTitle",
+            BindingFlags.NonPublic | BindingFlags.Static)!;
+        return (string)method.Invoke(null, [text])!;
+    }
+
+    [Fact]
+    public void MakeChatTitle_TeamImplement_ТемаИзTask()
+    {
+        MakeChatTitle("/team-implement {\"task\":\"добавить экспорт в CSV\",\"worktree\":false,\"verify\":true}")
+            .Should().Be("добавить экспорт в CSV");
+    }
+
+    [Fact]
+    public void MakeChatTitle_PanelOfExperts_ТемаИзTopic()
+    {
+        MakeChatTitle("/panel-of-experts {\"topic\":\"выбрать очередь сообщений\",\"rounds\":2}")
+            .Should().Be("выбрать очередь сообщений");
+    }
+
+    [Fact]
+    public void MakeChatTitle_ReviewConsilium_ТемаИзTarget()
+    {
+        MakeChatTitle("/review-consilium {\"target\":\"текущий дифф\",\"lenses\":[\"security\"]}")
+            .Should().Be("текущий дифф");
+    }
+
+    [Fact]
+    public void MakeChatTitle_RedTeam_ТемаИзTarget()
+    {
+        MakeChatTitle("/red-team {\"target\":\"план миграции БД\",\"angles\":[\"security\"]}")
+            .Should().Be("план миграции БД");
+    }
+
+    [Fact]
+    public void MakeChatTitle_PanelOfExperts_БезTopic_ПадаетНаBrief()
+    {
+        MakeChatTitle("/panel-of-experts {\"topic\":\"\",\"brief\":\"контекст из чата\",\"rounds\":2}")
+            .Should().Be("контекст из чата");
+    }
+
+    [Theory]
+    [InlineData("/oh-my-claudecode:ralplan --interactive \"выбрать подход к кэшу\"", "выбрать подход к кэшу")]
+    [InlineData("/oh-my-claudecode:deep-interview --standard \"формат экспорта\"", "формат экспорта")]
+    [InlineData("/oh-my-claudecode:autopilot \"починить флаки-тест\"", "починить флаки-тест")]
+    [InlineData("/oh-my-claudecode:trace \"почему падает воркер\"", "почему падает воркер")]
+    [InlineData("/oh-my-claudecode:sciomc \"разобрать утечку памяти\"", "разобрать утечку памяти")]
+    public void MakeChatTitle_СтроковыеМеханики_ТемаИзКавычек(string turnText, string expected)
+    {
+        MakeChatTitle(turnText).Should().Be(expected);
+    }
+
+    [Fact]
+    public void MakeChatTitle_Ultraqa_ТемаПослеФлага()
+    {
+        MakeChatTitle("/oh-my-claudecode:ultraqa --frontend починить регрессию формы")
+            .Should().Be("починить регрессию формы");
+    }
+
+    [Fact]
+    public void MakeChatTitle_ПустаяТема_ПадаетНаОбрезкуСырогоТекста()
+    {
+        MakeChatTitle("/team-implement {\"task\":\"\",\"worktree\":false,\"verify\":true}")
+            .Should().StartWith("/team-implement {\"task\"");
+    }
+
+    [Fact]
+    public void MakeChatTitle_БитыйJson_НеПадаетИВозвращаетОбрезку()
+    {
+        MakeChatTitle("/team-implement {\"task\":\"незакрытый")
+            .Should().StartWith("/team-implement {\"task\"");
+    }
+
+    [Fact]
+    public void MakeChatTitle_ОбычноеСообщение_РаботаетКакРаньше()
+    {
+        MakeChatTitle("Помоги разобраться с багом в SessionManager").Should().Be("Помоги разобраться с багом в SessionManager");
+    }
+
+    [Fact]
+    public void MakeChatTitle_ДлинныйJson_ОбрезаетсяДо48Символов()
+    {
+        var longTask = new string('а', 100);
+        MakeChatTitle($"/team-implement {{\"task\":\"{longTask}\"}}")
+            .Should().Be(new string('а', 48) + "…");
+    }
 }

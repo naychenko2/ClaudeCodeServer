@@ -100,11 +100,15 @@ export function ReaderBody({ state, actions, onClose, maxWidth = 680 }: Props) {
   return (
     <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: `${SP.lg}px ${SP.lg}px 28px`, background: C.bgPanel }}>
       <div style={{ maxWidth, margin: '0 auto' }}>
+        {/* Плашка объясняет саму механику ридера (сервер идёт по ссылке, не браузер) —
+            показывается при первом открытии НЕЗАВИСИМО от того, загрузилась статья
+            или нет (ошибка/загрузка — тоже открытие панели), иначе на ошибающемся
+            сервере пользователь её вообще ни разу не увидит */}
+        {!state.bannerDismissed && <PrivacyBanner onDismiss={actions.dismissBanner} />}
         {state.loading && <Skeleton />}
         {!state.loading && state.error && <ErrorView state={state} actions={actions} onClose={onClose} />}
         {!state.loading && !state.error && state.page && (
           <>
-            {!state.bannerDismissed && <PrivacyBanner onDismiss={actions.dismissBanner} />}
             <div style={{
               display: 'flex', alignItems: 'center', gap: SP.sm, fontSize: FS.xs, color: C.textMuted,
               background: C.bgInset, border: `1px solid ${C.borderLight}`, borderRadius: R.md,

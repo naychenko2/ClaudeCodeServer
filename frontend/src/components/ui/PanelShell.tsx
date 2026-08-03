@@ -27,13 +27,6 @@ interface PanelShellProps {
   icon?: ReactNode;
   title: string;
   badge?: string | null;
-  // Полная замена стандартной шапки (icon+title+badge+actions) произвольным контентом
-  // своей высоты. Единственное исключение в системе — панель «Чтение»: 52px вместо 40,
-  // заголовок страницы и домен в две строки (docs/adr/ADR-005-link-reader-server.md).
-  // headerContent сам несёт свои кнопки (закрытие в т.ч.) — headerActions/onClose игнорируются.
-  headerContent?: ReactNode;
-  // Высота кастомной шапки — обязательна вместе с headerContent (стандартная ISLAND.headerH тут не подходит)
-  headerHeight?: number;
   // Контролы справа в шапке — кнопки закрытия, настройки, DnD-хендлы.
   // Это системные кнопки самой оболочки; контролы САМОЙ панели (переключатели
   // видов, фильтры, «создать») кладутся не сюда, а изнутри панели через
@@ -108,8 +101,6 @@ export function PanelShell({
   icon,
   title,
   badge,
-  headerContent,
-  headerHeight,
   headerActions,
   toolbar,
   children,
@@ -304,8 +295,7 @@ export function PanelShell({
     </span>
   );
 
-  // Атрибуты корня шапки — общие для стандартного IslandHeader и для headerContent
-  // (перетаскивание панели за шапку работает одинаково в обоих случаях)
+  // Атрибуты корня шапки IslandHeader — перетаскивание панели держится на них
   const mergedHeaderProps = {
     ...headerProps,
     ref: setHeaderEl,
@@ -352,18 +342,6 @@ export function PanelShell({
       }}
       rootRef={setRoots}
     >
-      {headerContent ? (
-        // Полная замена стандартной шапки — см. комментарий у пропа headerContent.
-        // Слоты PanelHeaderSlot тут не рендерятся: у headerContent нет портальных
-        // зон, его строит сама панель напрямую (кнопки — часть headerContent).
-        <div {...mergedHeaderProps} style={{
-          flexShrink: 0, height: headerHeight, display: 'flex', alignItems: 'center',
-          borderBottom: `1px solid ${C.border}`, background: C.bgMain,
-          ...mergedHeaderProps.style,
-        }}>
-          {headerContent}
-        </div>
-      ) : (
       <IslandHeader
         icon={headerIcon}
         title={title}
@@ -400,7 +378,6 @@ export function PanelShell({
           }}
         />
       </IslandHeader>
-      )}
 
       {/* Тулбар под шапкой — полоса с фильтрами/переключателями/кнопкой "Новый".
           Раньше каждый сайдбар делал это через div padding borderBottom руками. */}

@@ -149,6 +149,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
       onSessionUpdated?.(updated);
     } catch (err) {
       showToast('Цикл «до готово»', err instanceof Error ? err.message : 'Не удалось переключить цикл');
+      throw err;
     }
   }, [session.id, workLoopState, onSessionUpdated]);
 

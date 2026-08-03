@@ -22,6 +22,7 @@ import { type Mode, MODE_META, MODES, ModeIcon, isDangerMode } from '../lib/mode
 import { DangerModeConfirm } from './DangerModeConfirm';
 import { useAssistantName } from './chat/contexts';
 import { getDraft, setDraft } from '../lib/drafts';
+import { showToast } from '../lib/toast';
 import { Modal } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { useVoiceInput } from '../hooks/useVoiceInput';
@@ -676,18 +677,19 @@ export function Composer({
       const topicOptional = teamMech === 'qa' || teamMech === 'review' || teamMech === 'redteam';
       if (!t && !topicOptional) { setTeamOpen(true); return; }
       if ((teamMech === 'discuss' || teamMech === 'implement') && teamSettings.participants.length === 0) { setTeamOpen(true); return; }
-      // «Остановиться на плане» у автопилота = честный консенсус-план (ralplan):
-      // у скилла autopilot нет флага «стоп на плане», а ralplan делает ровно это —
-      // план через спор до одобрения критика, без исполнения
-      const effective: TeamMechanicId =
-        teamMech === 'autopilot' && !teamSettings.untilDone ? 'consensus' : teamMech;
-      // Автопилот «до готово»: включаем цикл work-loop ДО отправки (PUT /chats/{id}/loop),
-      // только если он ещё не активен — тумблер переключает состояние
-      if (teamMech === 'autopilot' && teamSettings.untilDone && !workLoop?.active && onToggleWorkLoop) {
-        await onToggleWorkLoop();
+      // Автопилот работает только через цикл «до готово»: включаем work-loop ДО отправки
+      // (PUT /chats/{id}/loop), только если он ещё не активен. Включение может не удаться
+      // (чат занят, 4xx/5xx, обрыв) — тогда ход НЕ отправляем (как с «Командной реализацией»
+      // выше): иначе человек думает, что автопилот работает, а ушёл один обычный ход
+      if (teamMech === 'autopilot' && !workLoop?.active && onToggleWorkLoop) {
+        try {
+          await onToggleWorkLoop();
+        } catch {
+          return;
+        }
       }
-      setLastMechanic(sessionId, effective);
-      onSend(buildTeamTurnText(effective, t, teamSettings, chatContext), [], { auto: true });
+      setLastMechanic(sessionId, teamMech);
+      onSend(buildTeamTurnText(teamMech, t, teamSettings, chatContext), [], { auto: true });
       setTeamMech(null);
       setTeamOpen(false);
       resetInput();
@@ -869,11 +871,16 @@ export function Composer({
   ) : null;
 
   // Цикл «до готово»: выключен — круглая кнопка в ряду, включён — пилюля в группе
-  // состояния, чей сегмент-иконка и есть кнопка (клик останавливает цикл, без confirm)
+  // состояния, чей сегмент-иконка и есть кнопка (клик останавливает цикл, без confirm).
+  // При провале onToggleWorkLoop сам показывает тост и бросает (для guard'а в handleSend) —
+  // тумблерные кнопки ход не отправляют, им остаётся только не уронить необработанный reject
   const loopActive = !!workLoop?.active;
+  const toggleWorkLoopSafe = onToggleWorkLoop
+    ? () => { void Promise.resolve(onToggleWorkLoop()).catch(() => {}); }
+    : undefined;
   const loopButton = onToggleWorkLoop && !loopActive ? (
     <button
-      onClick={onToggleWorkLoop}
+      onClick={toggleWorkLoopSafe}
       title="Цикл «до готово»: агент работает итерациями, пока не отчитается о завершении, затем верификационный ход"
       style={{
         width: isMobile ? 36 : 32, height: isMobile ? 36 : 32, borderRadius: R.pill, border: 'none',
@@ -891,7 +898,7 @@ export function Composer({
       isMobile={isMobile}
       icon={<RefreshCw size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
       leadTitle="Остановить цикл «до готово»"
-      onLeadClick={() => void onToggleWorkLoop()}
+      onLeadClick={toggleWorkLoopSafe}
       valueTitle={workLoop.phase === 'verifying'
         ? 'Цикл «до готово»: верификационный ход'
         : `Цикл «до готово»: итерация ${workLoop.iteration} из ${workLoop.maxIterations}`}
@@ -1257,7 +1264,7 @@ export function Composer({
   const collapsible = [
     { key: 'attach', node: attachButton, item: { key: 'attach', icon: <Plus size={16} strokeWidth={ICON_STROKE} />, label: 'Прикрепить файл', sublabel: 'Добавить файл к сообщению', onClick: onAttach } },
     slashButton && { key: 'slash', node: slashButton, item: { key: 'slash', icon: <span style={{ fontFamily: FONT.mono, fontSize: 15, fontWeight: 700, lineHeight: 1 }}>/</span>, label: 'Вставить скилл', sublabel: 'Список навыков через «/»', onClick: handleSlashButton } },
-    loopButton && { key: 'loop', node: loopButton, item: { key: 'loop', icon: <RefreshCw size={16} strokeWidth={ICON_STROKE} />, label: 'Цикл «до готово»', sublabel: 'Повторять итерациями, пока не готово', toggle: loopActive, onClick: () => { void onToggleWorkLoop?.(); } } },
+    loopButton && { key: 'loop', node: loopButton, item: { key: 'loop', icon: <RefreshCw size={16} strokeWidth={ICON_STROKE} />, label: 'Цикл «до готово»', sublabel: 'Повторять итерациями, пока не готово', toggle: loopActive, onClick: () => toggleWorkLoopSafe?.() } },
     worktreeButton && { key: 'worktree', node: worktreeButton, item: { key: 'worktree', icon: <FolderGit2 size={16} strokeWidth={ICON_STROKE} />, label: 'Отдельное дерево', sublabel: worktreeToggleDisabled ? (worktreeActive ? `Включено · ${worktreeBranch} · идёт ход…` : 'Пока идёт ход, недоступно') : (worktreeActive ? `Включено · ${worktreeBranch}` : 'Чат в изолированном git worktree'), toggle: worktreeActive, disabled: worktreeToggleDisabled, onClick: () => { if (!worktreeToggleDisabled) void onToggleWorktree?.(); } } },
     discussButton && { key: 'discuss', node: discussButton, item: { key: 'discuss', icon: <Users size={16} strokeWidth={ICON_STROKE} />, label: 'Обсудить с командой', sublabel: 'Выбрать механику совместной работы', toggle: teamOpen, onClick: () => setTeamOpen(o => !o) } },
   ].filter(Boolean) as { key: string; node: React.ReactNode; item: OverflowItem }[];
@@ -1307,7 +1314,7 @@ export function Composer({
   const activeModeItems = ([
     badgesOverflowed && loopActive && workLoop && onToggleWorkLoop && { key: 'loop-on', icon: <RefreshCw size={16} strokeWidth={ICON_STROKE} />, label: 'Цикл «до готово»',
       sublabel: workLoop.phase === 'verifying' ? 'Включено · верификация' : `Включено · итерация ${workLoop.iteration}/${workLoop.maxIterations}`,
-      toggle: true, onClick: () => { void onToggleWorkLoop(); } },
+      toggle: true, onClick: () => toggleWorkLoopSafe?.() },
     (collapsedAny || badgesOverflowed) && teamMechMeta && { key: 'discuss-on', icon: <Users size={16} strokeWidth={ICON_STROKE} />, label: 'Обсудить с командой',
       sublabel: `Включено · ${teamMechMeta.name}`, toggle: true,
       onClick: () => setTeamMech(null) },
@@ -1358,8 +1365,10 @@ export function Composer({
           onClose={() => setTeamOpen(false)}
           onResetModes={skills.some(s => s.name === 'oh-my-claudecode:cancel')
             ? () => {
-                // Тихий ход: чистит state зависших OMC-режимов (autopilot/ultraqa/ralph)
+                // Тихий ход: чистит state зависших OMC-режимов (autopilot/ultraqa/ralph).
+                // Признака «было ли что чистить» на фронте нет — тост нейтральный
                 onSend('/oh-my-claudecode:cancel', [], { auto: true });
+                showToast('Командные режимы', 'Запрос на сброс отправлен');
                 setTeamOpen(false);
               }
             : undefined}

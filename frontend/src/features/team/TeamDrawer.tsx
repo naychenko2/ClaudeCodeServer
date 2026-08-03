@@ -274,14 +274,9 @@ export function TeamDrawer({ open, mech, settings, candidates, availableSkills, 
         break;
       case 'autopilot':
         parts.push(
-          <span key="l" style={{ display: 'inline-flex', alignItems: 'center' }}>
-            <SLabel>Завершение:</SLabel>
-            <Seg
-              options={['plan', 'done'] as const}
-              value={settings.untilDone ? 'done' : 'plan'}
-              onChange={v => onSettings({ ...settings, untilDone: v === 'done' })}
-              fmt={v => v === 'plan' ? 'Остановиться на плане' : 'Цикл «до готово»'}
-            />
+          <span key="d" style={{ fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.sans, lineHeight: 1.4 }}>
+            Работает без остановок, пока не отчитается о готовности. Порядок работы выбирает сам —
+            если нужен предсказуемый план с проверкой, начните с «Консенсус-плана».
           </span>,
         );
         break;
@@ -401,14 +396,11 @@ export function TeamDrawer({ open, mech, settings, candidates, availableSkills, 
         );
         break;
     }
-    // «Остановиться на плане» подменяет автопилот на консенсус-план при сборке текста
-    // (см. Composer) — оценку тяжести показываем от фактической механики
-    const estId: TeamMechanicId = mech === 'autopilot' && !settings.untilDone ? 'consensus' : mech;
     return (
       <>
         {parts}
         <span style={{ marginLeft: 'auto', fontSize: 11, color: C.textMuted, fontFamily: FONT.sans, whiteSpace: 'nowrap' }}>
-          {costEstimate(estId, settings)}
+          {costEstimate(mech, settings)}
         </span>
       </>
     );

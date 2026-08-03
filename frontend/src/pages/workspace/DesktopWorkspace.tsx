@@ -26,6 +26,9 @@ import { PanelZone } from './PanelZone';
 import { useSessionPanels } from './useSessionPanels';
 import { startPointerDrag } from '../../lib/pointerDrag';
 import type { PanelKey } from './panelCatalog';
+import { ReaderHeaderBar } from './reader/ReaderHeaderBar';
+import { ReaderBody } from './reader/ReaderBody';
+import type { ReaderPanelActions, ReaderPanelState } from './reader/useReaderPanel';
 
 export type SidebarMode = 'pinned' | 'collapsed';
 
@@ -64,6 +67,13 @@ interface Props {
   onCloseCommit: () => void;
   onOpenFileFromChat: (path: string) => void;
   onCloseFile: () => void;
+  // Ридер ссылок — открывается по кнопке-компаньону у внешней ссылки в чате, живёт
+  // в центре как просмотр файла: split с чатом либо на всю контентную зону
+  // («Развернуть»/«Свернуть» в собственной шапке — см. ReaderHeaderBar). Открытие
+  // ридера и открытие файла взаимно вытесняют друг друга — состояние обоих
+  // держит WorkspacePage.
+  readerState: ReaderPanelState;
+  readerActions: ReaderPanelActions;
   selectedTask: Task | null;
   autoEditTaskId: string | null;
   onOpenTaskSession: (sessionId: string) => void;
@@ -93,8 +103,6 @@ interface Props {
   // Контент общий для обеих зон — панель рисует та зона, в которой она лежит.
   toolsEnabled: boolean;
   panels: Partial<Record<PanelKey, ReactNode>>;
-  // Кастомные шапки отдельных панелей (сегодня — только «Чтение») — см. PanelZone.panelHeaders
-  panelHeaders?: Partial<Record<PanelKey, { content: (onClose: () => void) => ReactNode; height: number }>>;
   // Открыть URL в панели «Чтение» — из кнопки-компаньона у внешней ссылки в чате
   onOpenReader?: (url: string) => void;
   // Числа-кружки на кнопках проекта в рельсе (changes/tasks/terminal/preview)
@@ -221,7 +229,7 @@ export function DesktopWorkspace(p: Props) {
   // резиновые: им положено занимать всю колонку целиком).
   // Ширина — CHAT_COLUMN_W, а не CHAT_MAX_W: компенсации отдаётся только то, что
   // остаётся сверх ПОЛНОЙ потребности ленты (колонка + жёлоб + полоса прокрутки).
-  const chatOnly = !p.openFile && !p.openCommitSha && !p.selectedTask && !personaOpen
+  const chatOnly = !p.openFile && !p.readerState.open && !p.openCommitSha && !p.selectedTask && !personaOpen
     && !p.teamCenterOpen && !p.boardOpen && !p.previewOpen && !p.graphOpen;
   const { rootRef: offsetRootRef, centerRef: offsetCenterRef } = useCenterOffset(chatOnly ? CHAT_COLUMN_W : undefined);
 
@@ -254,7 +262,6 @@ export function DesktopWorkspace(p: Props) {
       <PanelZone
         side="left"
         panels={zonePanels}
-        panelHeaders={p.panelHeaders}
         railCounts={p.railCounts}
         toolsEnabled={p.toolsEnabled}
         sessionPanels={sessionPanels}
@@ -271,14 +278,14 @@ export function DesktopWorkspace(p: Props) {
         }
       />
 
-      {/* === Центр: коммит → задача → персона → доска → файл (split/fullscreen) → чат === */}
-      {!p.openFile && p.openCommitSha && centerIsland(
+      {/* === Центр: коммит → задача → персона → доска → файл/ридер (split/fullscreen) → чат === */}
+      {!p.openFile && !p.readerState.open && p.openCommitSha && centerIsland(
         <div style={{ flex: 1, overflow: 'hidden', display: 'flex' }}>
           <GitCommitView project={p.project} sha={p.openCommitSha} initialPath={p.openCommitFile} onClose={p.onCloseCommit} />
         </div>
       )}
 
-      {!p.openFile && !p.openCommitSha && p.selectedTask && centerIsland(
+      {!p.openFile && !p.readerState.open && !p.openCommitSha && p.selectedTask && centerIsland(
         <div style={{ flex: 1, overflow: 'hidden' }}>
           <TaskDetailsPane key={p.selectedTask.id} task={p.selectedTask} project={p.project} startInEdit={p.selectedTask.id === p.autoEditTaskId} onOpenSession={p.onOpenTaskSession} onOpenFile={p.onOpenFileFromTree} onClose={p.onCloseTask} onDeleted={p.onCloseTask} />
         </div>
@@ -286,35 +293,35 @@ export function DesktopWorkspace(p: Props) {
 
       {/* Студия персоны из панельки «Команда»: закрытие — крестиком справа
           (левой стрелки «назад» на десктопе нет) */}
-      {!p.openFile && !p.openCommitSha && !p.selectedTask && personaOpen && centerIsland(
+      {!p.openFile && !p.readerState.open && !p.openCommitSha && !p.selectedTask && personaOpen && centerIsland(
         <div style={{ flex: 1, overflow: 'hidden' }}>
           <ProjectPersonaPane project={p.project} personaId={p.personaCreating ? null : p.selectedPersonaId} creating={p.personaCreating} onOpenChat={p.onOpenPersonaChat} onSelectPersona={p.onPersonaSelectAfterCreate} onCleared={p.onPersonaCleared} onClose={p.onPersonaCleared} />
         </div>
       )}
 
       {/* Командный центр (кнопка «Команда» в панельке персон) */}
-      {!p.openFile && !p.openCommitSha && !p.selectedTask && !personaOpen && p.teamCenterOpen && centerIsland(
+      {!p.openFile && !p.readerState.open && !p.openCommitSha && !p.selectedTask && !personaOpen && p.teamCenterOpen && centerIsland(
         <div style={{ flex: 1, overflow: 'hidden' }}>
           {p.teamCenterArea}
         </div>
       )}
 
       {/* Доска задач (вкладка «Доска» в панельке задач) */}
-      {!p.openFile && !p.openCommitSha && !p.selectedTask && !personaOpen && !p.teamCenterOpen && p.boardOpen && centerIsland(
+      {!p.openFile && !p.readerState.open && !p.openCommitSha && !p.selectedTask && !personaOpen && !p.teamCenterOpen && p.boardOpen && centerIsland(
         <div style={{ flex: 1, overflow: 'hidden' }}>
           {p.boardArea}
         </div>
       )}
 
       {/* Превью dev-сервиса (выбран в панельке «Preview») */}
-      {!p.openFile && !p.openCommitSha && !p.selectedTask && !personaOpen && !p.teamCenterOpen && !p.boardOpen && p.previewOpen && centerIsland(
+      {!p.openFile && !p.readerState.open && !p.openCommitSha && !p.selectedTask && !personaOpen && !p.teamCenterOpen && !p.boardOpen && p.previewOpen && centerIsland(
         <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
           {p.previewArea}
         </div>
       )}
 
       {/* Документ «Граф зависимостей» (открыт из панельки «Граф») */}
-      {!p.openFile && !p.openCommitSha && !p.selectedTask && !personaOpen && !p.teamCenterOpen && !p.boardOpen && !p.previewOpen && p.graphOpen && centerIsland(
+      {!p.openFile && !p.readerState.open && !p.openCommitSha && !p.selectedTask && !personaOpen && !p.teamCenterOpen && !p.boardOpen && !p.previewOpen && p.graphOpen && centerIsland(
         <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
           {p.graphArea}
         </div>
@@ -354,12 +361,38 @@ export function DesktopWorkspace(p: Props) {
         </div>
       )}
 
+      {/* Split чат|ридер — тот же приём, что у файла: два острова, общий сплиттер
+          (файл и ридер взаимно вытесняют друг друга — одновременно не бывают) */}
+      {!p.openFile && p.readerState.open && !p.readerState.expanded && !p.isTablet && (
+        <div ref={splitContainerRef} style={{ flex: 1, display: 'flex', overflow: 'hidden', minWidth: 0, margin: `0 ${ISLAND.centerGap}px` }}>
+          <Island bg={C.bgMain} style={{ flex: chatFlex, minWidth: 200 }}>
+            <div style={{ flex: 1, overflow: 'hidden' }}>
+              {chatPanel(false)}
+            </div>
+          </Island>
+          <IslandSplitter orientation="v" active={dragging === 'split'} onMouseDown={handleSplitDrag} />
+          <Island bg={C.bgMain} style={{ flex: 1, minWidth: 200 }}>
+            <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+              <ReaderHeaderBar state={p.readerState} actions={p.readerActions} onClose={p.readerActions.closeReader} />
+              <ReaderBody state={p.readerState} actions={p.readerActions} onClose={p.readerActions.closeReader} />
+            </div>
+          </Island>
+        </div>
+      )}
+
+      {!p.openFile && p.readerState.open && (p.readerState.expanded || p.isTablet) && centerIsland(
+        <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+          {/* На планшете сплита нет — тумблер режима не показываем */}
+          <ReaderHeaderBar state={p.readerState} actions={p.readerActions} onClose={p.readerActions.closeReader} isTablet={p.isTablet} />
+          <ReaderBody state={p.readerState} actions={p.readerActions} onClose={p.readerActions.closeReader} />
+        </div>
+      )}
+
       {/* === Справа: стек рабочих панелей + рельса иконок === */}
       <PanelZone
         side="right"
         compact={p.isTablet}
         panels={zonePanels}
-        panelHeaders={p.panelHeaders}
         railCounts={p.railCounts}
         toolsEnabled={p.toolsEnabled}
         sessionPanels={sessionPanels}

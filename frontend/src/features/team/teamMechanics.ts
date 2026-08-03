@@ -47,7 +47,6 @@ export interface TeamMechanicSettings {
   interviewFirst: boolean;          // consensus: интервью перед планом (--interactive)
   deliberate: boolean;              // consensus: тщательный режим
   depth: 'quick' | 'standard' | 'deep'; // interview
-  untilDone: boolean;               // autopilot: включить цикл «до готово» (work-loop)
   qaTarget: 'tests' | 'build' | 'lint' | 'typecheck'; // qa
   reviewLenses: ReviewLens[];       // review: оси ревью
   reviewVerify: boolean;            // review: adversarial-проверка находок
@@ -65,7 +64,6 @@ export const DEFAULT_TEAM_SETTINGS: TeamMechanicSettings = {
   interviewFirst: false,
   deliberate: false,
   depth: 'standard',
-  untilDone: true,
   qaTarget: 'tests',
   reviewLenses: ['correctness', 'security', 'tests'],
   reviewVerify: true,
@@ -118,7 +116,7 @@ export const TEAM_MECHANICS: TeamMechanic[] = [
   },
   {
     id: 'autopilot', group: 'Сделать', name: 'Автопилот', shortName: 'Автопилот', icon: Rocket, cost: 3,
-    desc: 'От идеи до работающего кода', placeholder: 'Что построить?…',
+    desc: 'Делает задачу до конца, не переспрашивая', placeholder: 'Что построить?…',
     requiredSkill: 'oh-my-claudecode:autopilot',
   },
   {
@@ -181,7 +179,7 @@ function quoteTopic(t: string): string {
 
 /**
  * Собирает текст хода для механики. Тема берётся из композера; настройки — из раскрывашки.
- * Для autopilot с untilDone цикл «до готово» включается ОТДЕЛЬНО (PUT /chats/{id}/loop) —
+ * Для autopilot цикл «до готово» включается ОТДЕЛЬНО (PUT /chats/{id}/loop) —
  * в тексте хода это не отражается.
  */
 export function buildTeamTurnText(
@@ -290,7 +288,7 @@ export function costEstimate(id: TeamMechanicId, s: TeamMechanicSettings): strin
     case 'panel': return `до ${s.rounds * 4 + 1} субагентов`;
     case 'consensus': return 'консенсус до 5 итераций';
     case 'interview': return `${{ quick: '3–5', standard: '5–9', deep: '9+' }[s.depth]} вопросов`;
-    case 'autopilot': return s.untilDone ? 'фазы + автопродолжение' : 'до готового кода';
+    case 'autopilot': return 'цикл «до готово»';
     case 'qa': return 'до 5 циклов починки';
     case 'trace': return '3 гипотезы + опровержение';
     case 'sci': return 'параллельные агенты + синтез';

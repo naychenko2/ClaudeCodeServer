@@ -2873,13 +2873,12 @@ public class SessionManager : IDisposable
         return null;
     }
 
-    // Уточнение авто-заголовка чата локальной моделью (действие chat-title): по первому
-    // сообщению строим осмысленный короткий заголовок и заменяем обрезку. Гейт по UsesLocal —
-    // уточняем только когда действие реально идёт на бесплатную локаль (не платим claude за
-    // каждый чат). Best-effort: молчим при любой проблеме, не трогаем имя, переименованное вручную.
+    // Уточнение авто-заголовка чата (действие chat-title) по маршруту, назначенному месту в
+    // «Поставщиках моделей» (локаль/direct-модель/слот — решает CheapTextRunner.RunAsync).
+    // Best-effort: молчим при любой проблеме, не трогаем имя, переименованное вручную.
     private async Task RefineChatTitleAsync(string sessionId, string firstMessage, string expectedTitle, string? ownerId)
     {
-        if (_cheap is null || !_cheap.UsesLocal(Llm.LocalActionCatalog.ChatTitle)) return;
+        if (_cheap is null) return;
         try
         {
             var prompt =

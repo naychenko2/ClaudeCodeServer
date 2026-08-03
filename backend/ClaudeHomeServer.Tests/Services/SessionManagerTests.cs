@@ -7,6 +7,7 @@ using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Prompts;
+using ClaudeHomeServer.Services.TriggerSources;
 using FluentAssertions;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Configuration;
@@ -4966,5 +4967,158 @@ public class SessionManagerTests : IDisposable
         var longTask = new string('а', 100);
         MakeChatTitle($"/team-implement {{\"task\":\"{longTask}\"}}")
             .Should().Be(new string('а', 48) + "…");
+    }
+
+    // --- Фоновые действия идут по маршруту места, а не только «работает только на локали» ---
+
+    // Подставной раннер для действий-«украшений»: response вызывается лениво в RunAsync,
+    // поэтому может как отдать ответ, так и бросить исключение (эмуляция отказа исполнителя).
+    private sealed class StubTitleCheapRunner(bool usesLocal, Func<string> response) : ICheapTextRunner
+    {
+        public bool UsesLocal(string actionKey) => usesLocal;
+
+        public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
+            string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default) =>
+            Task.FromResult(response());
+
+        public Task<string?> RunFreeAsync(string actionKey, string prompt, object? jsonFormat = null,
+            CancellationToken ct = default) => Task.FromResult<string?>(null);
+
+        public Task<string?> RunLocalOnlyAsync(string actionKey, string prompt, CancellationToken ct = default) =>
+            Task.FromResult<string?>(null);
+
+        public Task<OneShotResult> RunDetailedAsync(string actionKey, string prompt, string? fallbackModel = null,
+            string? ownerId = null, TimeSpan? timeout = null, int? maxTokens = null, object? jsonFormat = null,
+            CancellationToken ct = default) => throw new NotSupportedException();
+    }
+
+    [Fact]
+    public async Task RefineChatTitle_НеЛокальныйМаршрут_УточняетЗаголовок()
+    {
+        var dir = MkProjectDir("refine-remote");
+        var project = _projectManager.Create("RT", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        session.Name = "обрезка сообщения";
+
+        typeof(SessionManager).GetField("_cheap", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .SetValue(_sut, new StubTitleCheapRunner(usesLocal: false, () => """{"title":"Уточнённый заголовок"}"""));
+
+        await (Task)InvokePrivate("RefineChatTitleAsync", session.Id, "первое сообщение чата",
+            "обрезка сообщения", TestUserId)!;
+
+        _sut.GetOwned(session.Id, TestUserId)!.Name.Should().Be("Уточнённый заголовок",
+            "заголовок обязан уточняться по маршруту места chat-title, а не только на локали");
+    }
+
+    [Fact]
+    public async Task RefineChatTitle_ОшибкаИсполнителя_ОставляетОбрезкуБезИсключения()
+    {
+        var dir = MkProjectDir("refine-error");
+        var project = _projectManager.Create("RE", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        session.Name = "обрезка сообщения";
+
+        typeof(SessionManager).GetField("_cheap", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .SetValue(_sut, new StubTitleCheapRunner(usesLocal: false,
+                () => throw new InvalidOperationException("исполнитель недоступен")));
+
+        await (Task)InvokePrivate("RefineChatTitleAsync", session.Id, "первое сообщение чата",
+            "обрезка сообщения", TestUserId)!;
+
+        _sut.GetOwned(session.Id, TestUserId)!.Name.Should().Be("обрезка сообщения",
+            "отказ исполнителя — best-effort: имя остаётся обрезкой, исключение наружу не идёт");
+    }
+
+    // Собирает изолированный PersonaAutomationService поверх уже готового _sut (тот же
+    // SessionManager, что и у остальных тестов файла) — не дублирует его тяжёлую сборку.
+    private (PersonaAutomationService Service, AutomationStateStore State) BuildAutomationService(
+        ICheapTextRunner cheap, [System.Runtime.CompilerServices.CallerMemberName] string suffix = "")
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(_tempDir, "automation-" + suffix, "projects.json"),
+            })
+            .Build();
+        var notifStore = new NotificationStore(config, NullLogger<NotificationStore>.Instance);
+        var pushStore = new PushSubscriptionStore(config);
+        var jwt = new JwtService(config, _userStore, NullLogger<JwtService>.Instance);
+        var push = new PushService(config, pushStore, jwt, NullLogger<PushService>.Instance);
+        var clients = new Mock<IHubClients>();
+        clients.Setup(c => c.Group(It.IsAny<string>())).Returns(new Mock<IClientProxy>().Object);
+        var hub = new Mock<IHubContext<SessionHub>>();
+        hub.Setup(h => h.Clients).Returns(clients.Object);
+        var notif = new NotificationService(notifStore, hub.Object, push, _personaManager, _projectManager,
+            NullLogger<NotificationService>.Instance);
+        var state = new AutomationStateStore(config);
+        var mentions = new MentionTriggerSource(_personaManager);
+        var roots = new AutomationRootResolver(_projectManager, _appSettings);
+
+        var service = new PersonaAutomationService(_personaManager, _sut, push, hub.Object, notif,
+            state, mentions, _projectManager, _userStore, roots, Array.Empty<ITriggerSource>(),
+            config, cheap, NullLogger<PersonaAutomationService>.Instance);
+        return (service, state);
+    }
+
+    [Fact]
+    public async Task PersonaAutomation_ГейтOnlyIf_ОцениваетсяПриНеЛокальномМаршруте()
+    {
+        var dir = MkProjectDir("automation-gate");
+        var project = _projectManager.Create("AG", dir, TestUserId, TestUsername);
+        var persona = _personaManager.Create(TestUserId, "Гейт-персона", role: null, description: null,
+            systemPrompt: null, model: null, effort: null, scope: PersonaScope.Project,
+            projectId: project.Id, color: null, greeting: null, memoryEnabled: false);
+
+        // UsesLocal=false — маршрут места automation-gate НЕ локальный (слот/direct-модель);
+        // раньше это молча пропускало гейт целиком (условие оценивалось только внутри хода)
+        var (automation, state) = BuildAutomationService(
+            new StubTitleCheapRunner(usesLocal: false, () => "нет"));
+
+        var rule = new PersonaAutomationRule
+        {
+            Name = "Только про деплой",
+            Trigger = new AutomationTrigger(),
+            Condition = new AutomationCondition { OnlyIf = "касается деплоя" },
+        };
+        var ev = new TriggerEvent(rule.Id, AutomationTriggerType.Timer, "Обновлена документация README");
+
+        var fireAsync = typeof(PersonaAutomationService).GetMethod("FireAsync",
+            BindingFlags.NonPublic | BindingFlags.Instance)!;
+        await (Task)fireAsync.Invoke(automation, [persona, rule, TimeZoneInfo.Utc, ev, CancellationToken.None, false])!;
+
+        state.GetRule(persona.Id, rule.Id).LastResult.Should().Be("gated",
+            "гейт OnlyIf обязан оцениваться (и отсекать) при любом маршруте места automation-gate, не только на локали");
+    }
+
+    [Fact]
+    public async Task PersonaAutomation_СводкаУведомления_СтроитсяПриНеЛокальномМаршруте()
+    {
+        var dir = MkProjectDir("automation-summary");
+        var project = _projectManager.Create("AS", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+
+        // Форсируем чтение истории с диска (как после рестарта сервера) — accumulator=null
+        var sessionsDict = typeof(SessionManager).GetField("_sessions", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .GetValue(_sut)!;
+        var args = new object?[] { session.Id, null };
+        ((bool)sessionsDict.GetType().GetMethod("TryGetValue")!.Invoke(sessionsDict, args)!).Should().BeTrue();
+        var entry = args[1]!;
+        entry.GetType().GetField("Accumulator", BindingFlags.Public | BindingFlags.Instance)!.SetValue(entry, null);
+
+        var claudeSessionId = "csid-" + Guid.NewGuid().ToString("N");
+        session.ClaudeSessionId = claudeSessionId;
+        await _historyService.SaveAsync(claudeSessionId,
+            [new Protocol.StoredTextMessage("Готово: обновил конфиг и перезапустил сервис.")]);
+
+        // UsesLocal=false — маршрут места notification-summary НЕ локальный
+        var (automation, _) = BuildAutomationService(
+            new StubTitleCheapRunner(usesLocal: false, () => "Обновил конфиг и перезапустил сервис."));
+
+        var summarize = typeof(PersonaAutomationService).GetMethod("TrySummarizeLastReplyAsync",
+            BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var result = await (Task<string?>)summarize.Invoke(automation, [session.Id, TestUserId])!;
+
+        result.Should().Be("Обновил конфиг и перезапустил сервис.",
+            "суть уведомления обязана строиться по маршруту места notification-summary, не только на локали");
     }
 }

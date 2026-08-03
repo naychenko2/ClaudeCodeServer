@@ -11,8 +11,9 @@ using Moq;
 namespace ClaudeHomeServer.Tests.Services;
 
 /// <summary>
-/// Уход из чата (LeaveSession): пока ход идёт, соединение обязано остаться в группе
-/// сессии — иначе дельты и result улетают мимо вкладки и хвост ответа теряется.
+/// Уход из чата (LeaveSession): соединение остаётся в группе сессии независимо от статуса —
+/// иначе события идущего хода или внеходовые сообщения (отчёт делегированной задачи,
+/// эскалация, team_plan) улетают мимо вкладки без возможности повторной доставки.
 /// Зритель при этом снимается всегда, чтобы сервер снова мог слать push/тост.
 /// </summary>
 public class SessionHubLeaveTests : IDisposable
@@ -133,35 +134,23 @@ public class SessionHubLeaveTests : IDisposable
     [InlineData(SessionStatus.Starting)]
     [InlineData(SessionStatus.Working)]
     [InlineData(SessionStatus.Waiting)]
-    public async Task LeaveSession_ХодИдёт_ОстаётсяВГруппе(SessionStatus status)
-    {
-        var (hub, sessions, sessionId) = Arrange(status);
-
-        await hub.LeaveSession(sessionId);
-
-        _groups.Verify(g => g.RemoveFromGroupAsync(ConnectionId, sessionId, It.IsAny<CancellationToken>()),
-            Times.Never, "события идущего хода должны и дальше доходить до вкладки");
-        sessions.HasViewers(sessionId).Should().BeFalse("зритель ушёл — конец хода придёт push/тостом");
-    }
-
-    [Theory]
     [InlineData(SessionStatus.Active)]
     [InlineData(SessionStatus.Finished)]
     [InlineData(SessionStatus.Error)]
     [InlineData(SessionStatus.Orphaned)]
-    public async Task LeaveSession_ХодаНет_ПокидаетГруппу(SessionStatus status)
+    public async Task LeaveSession_ЛюбойСтатус_ОстаётсяВГруппе(SessionStatus status)
     {
         var (hub, sessions, sessionId) = Arrange(status);
 
         await hub.LeaveSession(sessionId);
 
         _groups.Verify(g => g.RemoveFromGroupAsync(ConnectionId, sessionId, It.IsAny<CancellationToken>()),
-            Times.Once, "подписку на простаивающий чат держать незачем");
-        sessions.HasViewers(sessionId).Should().BeFalse();
+            Times.Never, "внеходовые и ходовые события должны и дальше доходить до вкладки");
+        sessions.HasViewers(sessionId).Should().BeFalse("зритель ушёл — конец хода придёт push/тостом");
     }
 
     [Fact]
-    public async Task LeaveSession_НеизвестнаяСессия_ПокидаетГруппу()
+    public async Task LeaveSession_НеизвестнаяСессия_ОстаётсяВГруппе()
     {
         var (hub, _, _) = Arrange(SessionStatus.Finished);
         var unknown = Guid.NewGuid().ToString();
@@ -169,6 +158,6 @@ public class SessionHubLeaveTests : IDisposable
         await hub.LeaveSession(unknown);
 
         _groups.Verify(g => g.RemoveFromGroupAsync(ConnectionId, unknown, It.IsAny<CancellationToken>()),
-            Times.Once, "про несуществующую сессию ход не идёт — подписку снимаем");
+            Times.Never, "из группы теперь не выходим никогда");
     }
 }

@@ -1,4 +1,4 @@
-import { memo, useState, useEffect, useContext } from 'react';
+import { memo, useState, useEffect, useContext, useRef } from 'react';
 import { Check } from 'lucide-react';
 import { api, type WorkflowAgentInfo, type WorkflowAgentBlock } from '../../lib/api';
 import { parseWorkflowMeta } from '../../lib/workflowMeta';
@@ -29,8 +29,10 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
 }) {
   // Блок Workflow раскрыт сразу — сверху видны этапы; сворачивается вручную
   const [expanded, setExpanded] = useState(true);
-  // Секция «Агенты» внизу свёрнута по умолчанию (раскрывается своим шевроном)
-  const [agentsOpen, setAgentsOpen] = useState(false);
+  // Секция «Агенты» раскрыта по умолчанию — единственное место, где видна реальная
+  // активность (промпт, счётчик инструментов) в течение долгой фазы без завершённых
+  // агентов; сворачивается вручную своим шевроном
+  const [agentsOpen, setAgentsOpen] = useState(true);
   const [expandedAgents, setExpandedAgents] = useState<Set<string>>(new Set());
 
   // Персоны владельца: агенты workflow с agentType == handle персоны рендерятся
@@ -89,6 +91,24 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
         phases.length - 1  // не помечать все фазы done пока workflow не завершён
       )
     : 0;
+
+  // Длительность активной фазы (замечена на клиенте, не серверный таймстамп —
+  // такого поля нет в WorkflowAgentInfo): без него долгая фаза без завершённых
+  // агентов выглядит как зависание (см. тикет — DeepSeek Pro, первый агент ~10 мин).
+  // Тик раз в 20с двигает текст, пока карточка смонтирована
+  const [, setDurationTick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setDurationTick(v => v + 1), 20000);
+    return () => clearInterval(t);
+  }, []);
+  const phaseStartRef = useRef<Map<number, number>>(new Map());
+  const activePhaseIdx = !isSettled && phases.length > 0 && completedPhaseCount < phases.length ? completedPhaseCount : -1;
+  if (activePhaseIdx >= 0 && !phaseStartRef.current.has(activePhaseIdx)) {
+    phaseStartRef.current.set(activePhaseIdx, Date.now());
+  }
+  const activePhaseMinutes = activePhaseIdx >= 0
+    ? Math.floor((Date.now() - (phaseStartRef.current.get(activePhaseIdx) ?? Date.now())) / 60000)
+    : null;
 
   // Фоллбэк-загрузка для старых сессий (где серверный ватчер не работал)
   useEffect(() => {
@@ -150,6 +170,7 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
             {phases.length > 0 && (
               <span style={{ fontFamily: FONT.sans, fontSize: 11, color: C.textMuted, flexShrink: 0, whiteSpace: 'nowrap' }}>
                 {completedPhaseCount}/{phases.length}
+                {activePhaseMinutes !== null && activePhaseMinutes >= 1 ? ` · работает ${activePhaseMinutes} мин` : ''}
               </span>
             )}
             {/* Когда фаз нет — счётчик агентов + бар */}
@@ -192,7 +213,12 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
                       : <div style={{ width: 7, height: 7, borderRadius: '50%', background: C.border }} />}
                   </span>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontFamily: FONT.sans, fontSize: 13, fontWeight: 500, color: C.textPrimary, lineHeight: 1.4 }}>{phase.title}</div>
+                    <div style={{ fontFamily: FONT.sans, fontSize: 13, fontWeight: 500, color: C.textPrimary, lineHeight: 1.4 }}>
+                      {phase.title}
+                      {phaseActive && activePhaseMinutes !== null && activePhaseMinutes >= 1 && (
+                        <span style={{ fontWeight: 400, color: C.textMuted, fontSize: 11 }}> · работает {activePhaseMinutes} мин</span>
+                      )}
+                    </div>
                     {phase.detail && (
                       <div style={{ fontFamily: FONT.sans, fontSize: 12, color: C.textSecondary, lineHeight: 1.4, marginTop: 1 }}>{phase.detail}</div>
                     )}

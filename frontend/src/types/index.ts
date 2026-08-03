@@ -697,6 +697,9 @@ export type ServerMessage = { sessionId: string } & (
   // чат на стороннем провайдере (карточка с кнопками)
   | { type: 'provider_limit'; resetsAt?: string; providers: ProviderFallbackOption[] }
   | { type: 'work_loop'; active: boolean; iteration: number; maxIterations: number; phase: string | null }
+  // Явная остановка цикла «до готово» в ленту — человекочитаемый текст (лимит/ошибка/ручной
+  // стоп), готовый с сервера. reason ∈ limit|error|manual (см. WorkLoopStoppedMessage)
+  | { type: 'work_loop_stopped'; reason: string; text: string }
   // Режим «Командная реализация»: приходит при каждом изменении (вкл/стадия/волна/авто/стоп)
   // modeLocked/planVersion — Э8: план-режим навязан чату (интервью/планирование),
   // версия текущего плана итерации
@@ -1188,6 +1191,9 @@ export type ChatItem =
   // resolved — миграция состоялась (карточка гаснет)
   | { kind: 'provider_limit'; resetsAt?: string; providers: ProviderFallbackOption[]; resolved?: boolean }
   | { kind: 'git_turn_commit'; projectId: string; sha: string; subject: string }
+  // Остановка цикла «до готово»: текст готов на сервере (лимит/ошибка/ручной стоп),
+  // фронт его не собирает — иначе разъедется с сервером при смене лимита
+  | { kind: 'work_loop_stopped'; reason: string; text: string }
   | { kind: 'error'; text: string; canRetry?: boolean };
 
 // Скиллы и агенты

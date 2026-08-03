@@ -1106,6 +1106,161 @@ public class SessionManagerTests : IDisposable
         _sut.GetPending(session.Id).Should().ContainSingle();
     }
 
+    // --- Цикл «до готово»: явная остановка в ленту (B3/B5/B6 — ContinueWorkLoopAsync
+    // ни разу не был покрыт тестами: ни лимит итераций, ни LoopTurnFailed, ни verifying) ---
+
+    private static async Task WaitForConditionAsync(Func<bool> condition, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            if (condition()) return;
+            await Task.Delay(10);
+        }
+    }
+
+    private static TurnAccumulator GetAccumulator(object entry) =>
+        (TurnAccumulator)entry.GetType().GetField("Accumulator")!.GetValue(entry)!;
+
+    private static void SetLoopTurnInFlight(object entry, bool value) =>
+        entry.GetType().GetField("LoopTurnInFlight")!.SetValue(entry, value);
+
+    [Fact]
+    public async Task ContinueWorkLoop_ЛимитИтераций_ЯвноеСообщениеИСниманиеЦикла()
+    {
+        var session = await MkBusySessionAsync("loop-limit", SessionStatus.Working);
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
+        var loop = _sut.GetById(session.Id)!.WorkLoop!;
+        loop.MaxIterations = 3;
+        loop.Iteration = 2; // следующая итерация (после ++) упрётся в лимит
+        var entry = GetEntry(session.Id);
+        SetLoopTurnInFlight(entry, true);
+
+        await InvokeOnMessageAsync(session.Id, GetAccumulator(entry),
+            new ResultMessage("success", 10, 1, null, null), TestRunId);
+        await WaitForConditionAsync(() => _sut.GetById(session.Id)!.WorkLoop is null, TimeSpan.FromSeconds(2));
+
+        _sut.GetById(session.Id)!.WorkLoop.Should().BeNull();
+        var msg = _sentMessages.OfType<WorkLoopStoppedMessage>().Should().ContainSingle().Subject;
+        msg.Reason.Should().Be("limit");
+        msg.Text.Should().Contain("3 ходов");
+    }
+
+    [Fact]
+    public async Task ContinueWorkLoop_ОшибкаХода_ЯвноеСообщениеИСниманиеЦикла()
+    {
+        var session = await MkBusySessionAsync("loop-error", SessionStatus.Working);
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
+        var entry = GetEntry(session.Id);
+        SetLoopTurnInFlight(entry, true);
+
+        // ErrorMessage выставляет LoopTurnFailed=true (SessionManager.OnMessageAsync) —
+        // именно эта ветка ContinueWorkLoopAsync тестируется
+        await InvokeOnMessageAsync(session.Id, GetAccumulator(entry),
+            new ErrorMessage("подписка недоступна"), TestRunId);
+        await WaitForConditionAsync(() => _sut.GetById(session.Id)!.WorkLoop is null, TimeSpan.FromSeconds(2));
+
+        _sut.GetById(session.Id)!.WorkLoop.Should().BeNull();
+        var msg = _sentMessages.OfType<WorkLoopStoppedMessage>().Should().ContainSingle().Subject;
+        msg.Reason.Should().Be("error");
+        msg.Text.Should().Be("Цикл остановлен: ход завершился ошибкой.");
+    }
+
+    [Fact]
+    public async Task ContinueWorkLoop_НайденПромис_ПереходитВVerifying_БезСообщенияОстановки()
+    {
+        // Переход в verifying — штатный шаг цикла (не остановка с неясным исходом), поэтому
+        // WorkLoopStoppedMessage тут не шлётся, а WorkLoop остаётся активным
+        var session = await MkBusySessionAsync("loop-verify", SessionStatus.Working);
+        session.Name = "есть имя";
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+        SetLoopTurnInFlight(entry, true);
+
+        var loop = _sut.GetById(session.Id)!.WorkLoop!;
+        lock (entry.GetType().GetField("LoopTurnLock")!.GetValue(entry)!)
+        {
+            var buf = (System.Text.StringBuilder)entry.GetType().GetField("LoopTurnText")!.GetValue(entry)!;
+            buf.Append($"готово <promise>{loop.Promise}</promise>");
+        }
+
+        await InvokeOnMessageAsync(session.Id, GetAccumulator(entry),
+            new ResultMessage("success", 10, 1, null, null), TestRunId);
+        await WaitForConditionAsync(() => _sut.GetById(session.Id)?.WorkLoop?.Phase == "verifying",
+            TimeSpan.FromSeconds(2));
+
+        _sut.GetById(session.Id)!.WorkLoop.Should().NotBeNull();
+        _sut.GetById(session.Id)!.WorkLoop!.Phase.Should().Be("verifying");
+        _sentMessages.OfType<WorkLoopStoppedMessage>().Should().BeEmpty();
+        await WaitForSendAsync(adapter, TimeSpan.FromSeconds(2));
+        adapter.Verify(a => a.SendMessageAsync(
+            It.Is<string>(t => t.Contains("ВЕРИФИКАЦИЯ")), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()), Times.Once());
+    }
+
+    [Fact]
+    public async Task SetWorkLoop_РучнойСтоп_ШлётЯвноеСообщение()
+    {
+        var session = await MkBusySessionAsync("loop-manual-stop", SessionStatus.Active);
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
+
+        await _sut.SetWorkLoopAsync(session.Id, enabled: false, userId: TestUserId, manual: true);
+
+        var msg = _sentMessages.OfType<WorkLoopStoppedMessage>().Should().ContainSingle().Subject;
+        msg.Reason.Should().Be("manual");
+        msg.Text.Should().Be("Цикл остановлен вами. Текущий ход продолжает работу.");
+    }
+
+    [Fact]
+    public async Task SetWorkLoop_Включение_НеШлётСообщениеОстановки()
+    {
+        var session = await MkBusySessionAsync("loop-manual-on", SessionStatus.Active);
+
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId, manual: true);
+
+        _sentMessages.OfType<WorkLoopStoppedMessage>().Should().BeEmpty("это включение, а не остановка");
+    }
+
+    // --- Гард B4: автопилот и «Командная реализация» не сочетаются в одном чате ---
+
+    [Fact]
+    public async Task SetWorkLoop_ПриАктивнойКомандаРеализации_Отказ()
+    {
+        var session = await MakeStabForModeAsync("mode-conflict-1");
+        await _sut.SetTeamImplementAsync(session.Id, enabled: true, userId: TestUserId);
+
+        var act = () => _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
+
+        (await act.Should().ThrowAsync<SessionModeConflictException>())
+            .WithMessage("*Командной реализации*");
+        _sut.GetById(session.Id)!.WorkLoop.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task SetTeamImplement_ПриАктивномАвтопилоте_Отказ()
+    {
+        var session = await MakeStabForModeAsync("mode-conflict-2");
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
+
+        var act = () => _sut.SetTeamImplementAsync(session.Id, enabled: true, userId: TestUserId);
+
+        (await act.Should().ThrowAsync<SessionModeConflictException>())
+            .WithMessage("*Автопилот*");
+        _sut.GetById(session.Id)!.TeamImplement.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task SetTeamImplement_БезАктивногоАвтопилота_РаботаетКакРаньше()
+    {
+        var session = await MakeStabForModeAsync("mode-noconflict");
+
+        var updated = await _sut.SetTeamImplementAsync(session.Id, enabled: true, userId: TestUserId);
+
+        updated!.TeamImplement.Should().NotBeNull();
+    }
+
     [Fact]
     public async Task SendMessageAndWait_ЧатШтаба_НеПрерывает()
     {
@@ -4932,6 +5087,23 @@ public class SessionManagerTests : IDisposable
     public void MakeChatTitle_СтроковыеМеханики_ТемаИзКавычек(string turnText, string expected)
     {
         MakeChatTitle(turnText).Should().Be(expected);
+    }
+
+    // B6: путь QuotedTopicRegex не был покрыт пустыми кавычками и переводом строки —
+    // для JSON-пути (JsonTopicKeys) такие тесты уже были (пустая тема/битый JSON), для
+    // строкового — нет
+    [Fact]
+    public void MakeChatTitle_КавычкиПустые_ПадаетНаОбрезкуСырогоТекста()
+    {
+        var turnText = "/oh-my-claudecode:ralplan \"\"";
+        MakeChatTitle(turnText).Should().Be(turnText);
+    }
+
+    [Fact]
+    public void MakeChatTitle_КавычкиСПереводомСтроки_ОбрезаетсяДоПервойСтроки()
+    {
+        MakeChatTitle("/oh-my-claudecode:deep-interview \"первая строка\nвторая строка\"")
+            .Should().Be("первая строка");
     }
 
     [Fact]

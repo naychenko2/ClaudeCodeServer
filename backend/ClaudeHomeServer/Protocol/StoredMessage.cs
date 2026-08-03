@@ -19,6 +19,7 @@ namespace ClaudeHomeServer.Protocol;
 [JsonDerivedType(typeof(StoredCompactBoundaryMessage), "compact_boundary")]
 [JsonDerivedType(typeof(StoredErrorMessage), "error")]
 [JsonDerivedType(typeof(StoredWorkflowProgressMessage), "workflow_progress")]
+[JsonDerivedType(typeof(StoredWorkLoopStoppedMessage), "work_loop_stopped")]
 public abstract class StoredMessage { }
 
 public class StoredUserMessage(string text, string[]? attachedPaths = null, bool? viaAgent = null,
@@ -128,6 +129,16 @@ public class StoredResultMessage(string subtype, long durationMs, int numTurns,
 
 public class StoredErrorMessage(string text) : StoredMessage
 {
+    public string Text { get; init; } = text;
+}
+
+// Явная остановка цикла «до готово» (B5): лимит итераций/ошибка хода/ручной стоп — иначе в
+// ленте гаснет только бейдж, и не видно, доделана работа или брошена. Живёт в истории — как
+// и остальные внеходовые записи (см. StoredTeamEscalationMessage), переживает перезагрузку.
+// Reason ∈ limit|error|manual — контракт для фронта.
+public class StoredWorkLoopStoppedMessage(string reason, string text) : StoredMessage
+{
+    public string Reason { get; init; } = reason;
     public string Text { get; init; } = text;
 }
 

@@ -2185,8 +2185,12 @@ public class SessionManager : IDisposable
             : null;
         await entry.Process!.SendMessageAsync(BuildCliTurnText(entry, text), attachedPaths,
             suppressTasksExecute: suppressTasksExecute);
-        // Превью чата (LastMessage выставляет адаптер из текста для CLI) — исходным сообщением
-        entry.Info.LastMessage = text.Length > 100 ? text[..100] + "…" : text;
+        // Превью чата (LastMessage выставляет адаптер из текста для CLI) — исходным сообщением.
+        // Служебные директивы цикла (verifying/continuation) пропускаем: их сырой текст
+        // («[СИСТЕМНАЯ ДИРЕКТИВА — …]») человеку в списке чатов не адресован (MINOR B-п.5) —
+        // превью остаётся тем, что видел человек в последний раз
+        if (!systemDirective)
+            entry.Info.LastMessage = text.Length > 100 ? text[..100] + "…" : text;
     }
 
     // Текст хода для CLI: исходное сообщение + обвязки.
@@ -3100,11 +3104,22 @@ public class SessionManager : IDisposable
         return entry.Info;
     }
 
-    public async Task<Session?> SetWorkLoopAsync(string sessionId, bool enabled, string? userId = null)
+    // manual=true — отключение по кнопке «Остановить цикл» в UI (в отличие от внутренних
+    // отключений из ContinueWorkLoopAsync по лимиту/ошибке — те шлют СВОЁ сообщение сами,
+    // до вызова этого метода, и manual=false, чтобы не задваивать ленту).
+    public async Task<Session?> SetWorkLoopAsync(string sessionId, bool enabled, string? userId = null,
+        bool manual = false)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
         if (userId is not null && ResolveOwnerId(entry.Info) != userId) return null;
 
+        // Гард B4: автопилот и «Командная реализация» одновременно ломают ход — см.
+        // SessionModeConflictException.
+        if (enabled && entry.Info.TeamImplement is not null)
+            throw new SessionModeConflictException(
+                "Автопилот недоступен в чате «Командной реализации» — здесь работа идёт через задачи исполнителям.");
+
+        var wasEnabled = entry.Info.WorkLoop is not null;
         entry.Info.WorkLoop = enabled
             ? new SessionWorkLoop
             {
@@ -3114,7 +3129,24 @@ public class SessionManager : IDisposable
         lock (entry.LoopTurnLock) entry.LoopTurnText.Clear();
         SaveSessions();
         await BroadcastWorkLoopAsync(sessionId, entry);
+
+        // Явное сообщение в ленту (B5): иначе гаснет только бейдж, и непонятно, доделана
+        // работа или брошена — вторая фраза важна, текущий ход после снятия цикла продолжается.
+        if (manual && wasEnabled && !enabled)
+            await AddWorkLoopStoppedNoticeAsync(sessionId, entry, "manual",
+                "Цикл остановлен вами. Текущий ход продолжает работу.");
+
         return entry.Info;
+    }
+
+    // Персистит и рассылает явную остановку цикла «до готово» (B5) — лимит итераций, ошибка
+    // хода или ручной стоп. Reason ∈ limit|error|manual — контракт для фронта (Кира, п.5).
+    private async Task AddWorkLoopStoppedNoticeAsync(string sessionId, SessionEntry entry, string reason, string text)
+    {
+        if (entry.Accumulator is not { } acc) return;
+        acc.Append(new StoredWorkLoopStoppedMessage(reason, text));
+        await acc.SaveSnapshotAsync(_history);
+        await BroadcastAsync(sessionId, new WorkLoopStoppedMessage(reason, text));
     }
 
     private Task BroadcastWorkLoopAsync(string sessionId, SessionEntry entry)
@@ -3134,6 +3166,12 @@ public class SessionManager : IDisposable
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
         if (userId is not null && ResolveOwnerId(entry.Info) != userId) return null;
+
+        // Гард B4 (симметрично SetWorkLoopAsync): автопилот и «Командная реализация» не
+        // сочетаются в одном чате — см. SessionModeConflictException.
+        if (enabled && entry.Info.WorkLoop is not null)
+            throw new SessionModeConflictException(
+                "Командная реализация недоступна, пока в чате активен Автопилот — сначала выключите цикл «до готово».");
 
         // Гард на входе (B2 приёмки): чат без координатора или без состава исполнителей режимом
         // не станет. Раньше те же проверки жили только в CreateTeamPlanAsync — отказ приходил
@@ -4971,6 +5009,7 @@ public class SessionManager : IDisposable
 
         if (entry.LoopTurnFailed)
         {
+            await AddWorkLoopStoppedNoticeAsync(sessionId, entry, "error", "Цикл остановлен: ход завершился ошибкой.");
             await SetWorkLoopAsync(sessionId, false);
             return;
         }
@@ -4979,7 +5018,9 @@ public class SessionManager : IDisposable
 
         if (loop.Phase == "verifying")
         {
-            // Верификационный ход отработал — цикл завершён независимо от исхода
+            // Верификационный ход отработал — цикл завершён независимо от исхода (штатное
+            // окончание, свидетельства уже в самом верификационном посте — отдельное
+            // сообщение-остановка тут не нужна, в отличие от лимита/ошибки/ручного стопа)
             await SetWorkLoopAsync(sessionId, false);
             return;
         }
@@ -4997,6 +5038,9 @@ public class SessionManager : IDisposable
         loop.Iteration++;
         if (loop.Iteration >= loop.MaxIterations)
         {
+            await AddWorkLoopStoppedNoticeAsync(sessionId, entry, "limit",
+                $"Цикл остановлен: исчерпан лимит в {loop.MaxIterations} ходов. " +
+                "Работа могла остаться незавершённой — проверьте результат.");
             await SetWorkLoopAsync(sessionId, false);
             return;
         }

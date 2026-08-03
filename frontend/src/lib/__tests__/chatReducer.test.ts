@@ -674,6 +674,22 @@ describe('composer_restore', () => {
 
 // --- normalizeHistory ---
 
+// --- work_loop_stopped: остановка цикла «до готово» ---
+
+describe('applyServerMessage: work_loop_stopped', () => {
+  it('добавляет системную строку с готовым текстом и причиной', () => {
+    const next = run([{ type: 'work_loop_stopped', reason: 'limit', text: 'Цикл остановлен: исчерпан лимит в 10 ходов.' }]);
+    expect(next.items).toEqual([
+      { kind: 'work_loop_stopped', reason: 'limit', text: 'Цикл остановлен: исчерпан лимит в 10 ходов.' },
+    ]);
+  });
+
+  it('переживает перезагрузку — persisted kind, поднимается из истории как есть', () => {
+    const raw = [{ kind: 'work_loop_stopped', reason: 'manual', text: 'Цикл остановлен вами. Текущий ход продолжает работу.' }];
+    expect(normalizeHistory(raw)).toEqual(raw);
+  });
+});
+
 describe('normalizeHistory', () => {
   it('thinking из истории свёрнут, error без повтора, остальное как есть', () => {
     const raw = [

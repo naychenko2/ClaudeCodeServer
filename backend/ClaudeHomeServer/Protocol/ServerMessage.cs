@@ -270,6 +270,11 @@ public record SpeakerChangedMessage(string PersonaId, string Label)
 public record WorkLoopMessage(bool Active, int Iteration, int MaxIterations, string? Phase)
     : ServerMessage("work_loop");
 
+// Явная остановка цикла «до готово» в ленту (B5, см. StoredWorkLoopStoppedMessage) — WorkLoopMessage
+// гасит только бейдж, тут — человекочитаемый текст. Reason ∈ limit|error|manual (контракт с фронтом).
+public record WorkLoopStoppedMessage(string Reason, string Text)
+    : ServerMessage("work_loop_stopped");
+
 // Карточка плана режима «Командная реализация» (Э2): структурный план в ленту штаба.
 // Аналог plan_review, но план — объект (под-задачи, исполнители, обоснование, волны),
 // а не текст. Ответ — SessionHub.RespondTeamPlan. Событие переиздаётся при смене

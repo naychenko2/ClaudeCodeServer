@@ -1356,6 +1356,20 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
         </div>
       );
 
+    case 'work_loop_stopped':
+      // Остановка цикла «до готово» — та же визуальная семья, что и «Ход остановлен
+      // пользователем»: текст готов с сервера (лимит/ошибка/ручной стоп), не пересобираем
+      return (
+        <div style={{
+          alignSelf: 'center', display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap', justifyContent: 'center',
+          background: C.bgSelected, border: `1px solid ${C.border}`, borderRadius: 8, padding: '6px 12px', fontSize: 12, color: C.textSecondary,
+          maxWidth: '100%', textAlign: 'center',
+        }}>
+          <svg width="11" height="11" viewBox="0 0 24 24" fill={C.textMuted} style={{ flexShrink: 0 }}><rect x="5" y="5" width="14" height="14" rx="2" /></svg>
+          <span>{item.text}</span>
+        </div>
+      );
+
     case 'truncated':
       return (
         <div style={{

@@ -133,8 +133,18 @@ public class ChatsController(SessionManager sessions, FileService files, ILogger
     public async Task<IActionResult> SetWorkLoop(string id, [FromBody] SetWorkLoopRequest req)
     {
         if (sessions.GetOwned(id, UserId) is null) return NotFound();
-        var updated = await sessions.SetWorkLoopAsync(id, req.Enabled);
-        return updated is null ? NotFound() : Ok(updated);
+        try
+        {
+            // manual: true — эндпоинт дёргает только человек через тумблер UI; явное
+            // сообщение об остановке (B5) шлётся внутри SetWorkLoopAsync на переходе true→false
+            var updated = await sessions.SetWorkLoopAsync(id, req.Enabled, manual: true);
+            return updated is null ? NotFound() : Ok(updated);
+        }
+        // Гард B4: автопилот и «Командная реализация» не сочетаются в одном чате
+        catch (Services.SessionModeConflictException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
     }
 
     // Режим «Командная реализация»: вкл/выкл режима чата-штаба. При включении можно сразу
@@ -156,6 +166,11 @@ public class ChatsController(SessionManager sessions, FileService files, ILogger
         catch (Services.TeamImplementSetupException ex)
         {
             return BadRequest(new { error = ex.Message, code = ex.Code });
+        }
+        // Гард B4: автопилот и «Командная реализация» не сочетаются в одном чате
+        catch (Services.SessionModeConflictException ex)
+        {
+            return BadRequest(new { error = ex.Message });
         }
     }
 

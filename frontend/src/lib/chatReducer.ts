@@ -185,6 +185,7 @@ export const PERSISTED_KINDS = new Set<ChatItem['kind']>([
   'user_message', 'session_started', 'text', 'thinking', 'tool_use',
   'ask_question', 'plan_review', 'team_plan', 'team_escalation',
   'file_changed', 'result', 'fal_cost', 'glif_cost', 'compact_boundary', 'error',
+  'work_loop_stopped',
 ]);
 
 // Стоит ли заменить живую ленту историей с сервера: сравнение длин БЕЗ live-only
@@ -572,6 +573,11 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
         ...prev,
         workLoop: { active: msg.active, iteration: msg.iteration, maxIterations: msg.maxIterations, phase: msg.phase },
       };
+
+    case 'work_loop_stopped':
+      // Явная остановка цикла «до готово» (лимит/ошибка/ручной стоп) — системная строка
+      // в ленту, текст готов с сервера. Персистится в историю (см. PERSISTED_KINDS)
+      return withItems([...prev.items, { kind: 'work_loop_stopped', reason: msg.reason, text: msg.text }]);
 
     case 'team_implement':
       // Режим «Командная реализация»: приходит при каждом изменении (вкл/стадия/волна/авто/стоп).

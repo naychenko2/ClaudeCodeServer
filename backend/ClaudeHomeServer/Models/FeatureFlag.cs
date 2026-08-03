@@ -88,8 +88,7 @@ public static class FeatureFlagCatalog
             Stage: "dev"),
 
         // Панель «Чтение»: содержимое внешней страницы вытащено в чистый текст рядом
-        // с чатом (см. ADR-005). Серверная часть (эндпоинт /api/reader/read) реализуется
-        // отдельно — до неё панель и кнопка доступны, но чтение будет отвечать ошибкой.
+        // с чатом (см. ADR-005). Серверная часть — ReaderController/ReaderService.
         new FeatureFlagDefinition(
             Key: FeatureFlagKeys.LinkReader,
             Title: "Режим чтения ссылок",

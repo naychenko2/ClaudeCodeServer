@@ -70,4 +70,60 @@ public class SsrfGuardTests
         var uri = new Uri("http://nonexistent.invalid/");
         (await SsrfGuard.IsPubliclyRoutableAsync(uri, CancellationToken.None)).Should().BeFalse();
     }
+
+    [Theory]
+    [InlineData("224.0.0.1")]      // multicast 224/4
+    [InlineData("239.255.255.255")]
+    [InlineData("240.0.0.1")]      // reserved 240/4
+    [InlineData("255.255.255.255")] // broadcast
+    [InlineData("198.18.0.1")]     // benchmark 198.18/15
+    [InlineData("198.19.255.255")]
+    public void IsPublic_ДопДиапазоныIPv4_False(string ip)
+    {
+        SsrfGuard.IsPublic(IPAddress.Parse(ip)).Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData("198.17.255.255")] // сразу перед benchmark
+    [InlineData("198.20.0.1")]     // сразу за benchmark
+    [InlineData("223.255.255.255")] // сразу перед multicast
+    public void IsPublic_ДопДиапазоныГраницыIPv4_True(string ip)
+    {
+        SsrfGuard.IsPublic(IPAddress.Parse(ip)).Should().BeTrue();
+    }
+
+    [Fact]
+    public void IsPublic_NAT64ЗавёрнутыйLoopback_False()
+    {
+        // 64:ff9b::7f00:1 — NAT64-представление 127.0.0.1
+        SsrfGuard.IsPublic(IPAddress.Parse("64:ff9b::7f00:1")).Should().BeFalse();
+    }
+
+    [Fact]
+    public void IsPublic_NAT64ЗавёрнутыйПубличныйАдрес_True()
+    {
+        // 64:ff9b::0808:0808 — NAT64-представление 8.8.8.8
+        SsrfGuard.IsPublic(IPAddress.Parse("64:ff9b::808:808")).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Check_ПриватныйЛитерал_Private()
+    {
+        var uri = new Uri("http://127.0.0.1/");
+        (await SsrfGuard.CheckAsync(uri, CancellationToken.None)).Should().Be(SsrfGuard.AddressCheck.Private);
+    }
+
+    [Fact]
+    public async Task Check_НерезолвящийсяХост_DnsFailed()
+    {
+        var uri = new Uri("http://nonexistent.invalid/");
+        (await SsrfGuard.CheckAsync(uri, CancellationToken.None)).Should().Be(SsrfGuard.AddressCheck.DnsFailed);
+    }
+
+    [Fact]
+    public async Task Check_ПубличныйЛитерал_Public()
+    {
+        var uri = new Uri("http://8.8.8.8/");
+        (await SsrfGuard.CheckAsync(uri, CancellationToken.None)).Should().Be(SsrfGuard.AddressCheck.Public);
+    }
 }

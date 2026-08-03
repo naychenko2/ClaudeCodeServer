@@ -8,6 +8,7 @@ using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Http;
 using ClaudeHomeServer.Services.Mcp;
+using ClaudeHomeServer.Services.Reader;
 using ClaudeHomeServer.Services.TriggerSources;
 using ClaudeHomeServer.Services.Modules;
 using ClaudeHomeServer.Telemetry;
@@ -315,6 +316,20 @@ builder.Services.AddHttpClient("proxy").WithoutEgressProxy();
 // чтобы редирект на приватный хост не обошёл SSRF-проверку (см. SsrfGuard).
 builder.Services.AddHttpClient("safe-download")
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+// Ридер (ADR-005): без кук/креденшалов/авто-редиректов — цепочку хопов ведёт сам ReaderService,
+// перепроверяя SsrfGuard на каждом. Хендлер (ConnectCallback — вторая, TOCTOU-safe линия
+// обороны) вынесен в ReaderHttpHandlerFactory, чтобы её можно было проверить тестом напрямую.
+builder.Services.AddHttpClient(ReaderService.HttpClientName, client =>
+{
+    client.Timeout = Timeout.InfiniteTimeSpan; // таймауты — явные, в ReaderService (заголовки/операция)
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("ClaudeCodeServer-Reader/1.0");
+    client.DefaultRequestHeaders.Accept.ParseAdd("text/html,application/xhtml+xml");
+    client.DefaultRequestHeaders.AcceptLanguage.ParseAdd(
+        builder.Configuration.GetValue("Reader:AcceptLanguage", "en-US,en;q=0.9")!);
+})
+.ConfigurePrimaryHttpMessageHandler(ReaderHttpHandlerFactory.Create);
+builder.Services.AddSingleton<ReaderQuotaService>();
+builder.Services.AddSingleton<ReaderService>();
 // Dify и fal — опциональные зависимости: локальный Dify поднят не всегда, fal живёт за DPI,
 // и оба вызывающих ловят отказ сами (KnowledgeService деградирует, FalImageService возвращает
 // пустой список). Тихий клиент вместо дефолтного — иначе каждый запрос печатает Error

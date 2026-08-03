@@ -12,6 +12,8 @@ import { C, FONT, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { relPathTree } from '../../lib/paths';
 import { useProjectFileIndex, lookupProjectFile, FILE_LIKE_MENTION } from '../../lib/projectFileIndex';
+import { withImageLimit } from '../../lib/concurrency';
+import { useInView } from '../../lib/useInView';
 import { ChatProjectContext, ChatTreePathContext, ChatOpenFileContext } from './contexts';
 
 // Абсолютный путь (Windows-диск или POSIX) — для A1: упоминание вне корня проекта тоже
@@ -59,7 +61,7 @@ function loadProjectImage(projectId: string, rel: string, cacheKey: string): Pro
   if (hit) return Promise.resolve(hit);
   const flying = _imageInflight.get(cacheKey);
   if (flying) return flying;
-  const p = api.files.getContent(projectId, rel)
+  const p = withImageLimit(() => api.files.getContent(projectId, rel))
     .then(r => {
       if (r.isImage && r.base64) {
         const dataUrl = `data:${r.mimeType ?? 'image/png'};base64,${r.base64}`;
@@ -98,11 +100,16 @@ function ChatImage({ src, alt }: { src?: string; alt?: string }) {
   const cached = cacheKey ? _imageCache.get(cacheKey) ?? null : null;
   const [resolved, setResolved] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
+  // Не фетчим, пока картинка вне viewport: лента не виртуализирована, и без этого все картинки
+  // разных сообщений фетчатся разом, забивая пул браузера. Remote (http/data/proxy) тут не нужен —
+  // они идут через нативный <img loading="lazy">, а эффект для них делает ранний return по !projectId.
+  const [wrapRef, inView] = useInView({ rootMargin: '300px' });
 
   useEffect(() => {
-    if (!projectId || !rel || !cacheKey || cached) return;
+    if (!projectId || !rel || !cacheKey || cached || !inView) return;
     let cancelled = false;
-    // Через loadProjectImage: параллельные рендеры дедуплицируются в один fetch.
+    // Через loadProjectImage: параллельные рендеры дедуплицируются в один fetch, а withImageLimit
+    // (внутри) ограничивает общую параллельность — слоты под health-ping остаются свободными.
     loadProjectImage(projectId, rel, cacheKey)
       .then(dataUrl => {
         if (cancelled) return;
@@ -110,7 +117,7 @@ function ChatImage({ src, alt }: { src?: string; alt?: string }) {
         else setFailed(true);
       });
     return () => { cancelled = true; };
-  }, [projectId, rel, cacheKey, cached]);
+  }, [projectId, rel, cacheKey, cached, inView]);
 
   const finalSrc = isRemote ? src : cached ?? resolved;
 
@@ -118,7 +125,7 @@ function ChatImage({ src, alt }: { src?: string; alt?: string }) {
   if (!finalSrc) return <span style={{ fontSize: 13, color: C.textMuted }}>Загрузка изображения…</span>;
 
   return (
-    <a href={finalSrc} target="_blank" rel="noopener noreferrer" style={{ display: 'block', margin: '6px 0' }}>
+    <a ref={wrapRef} href={finalSrc} target="_blank" rel="noopener noreferrer" style={{ display: 'block', margin: '6px 0' }}>
       <img src={finalSrc} alt={alt ?? ''} loading="lazy" onError={() => setFailed(true)}
         style={{ maxWidth: '100%', height: 'auto', display: 'block', borderRadius: 8, border: `1px solid ${C.border}` }} />
     </a>

@@ -100,11 +100,14 @@ public class StoredThinkingMessage(string text, string? parentToolUseId = null) 
     public string? ParentToolUseId { get; init; } = parentToolUseId;
 }
 
-public class StoredFileChangedMessage(string path, int added, int removed) : StoredMessage
+public class StoredFileChangedMessage(string path, int added, int removed, bool external = false) : StoredMessage
 {
     public string Path { get; init; } = path;
     public int Added { get; init; } = added;
     public int Removed { get; init; } = removed;
+    // См. FileChangedMessage.External — сохраняется, чтобы после перезагрузки ленты
+    // (F5, повторная загрузка истории) пометка «вне чата» и снятая кнопка «Откатить» не терялись
+    public bool External { get; init; } = external;
 }
 
 public class StoredResultMessage(string subtype, long durationMs, int numTurns,

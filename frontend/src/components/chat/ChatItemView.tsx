@@ -240,7 +240,9 @@ export const FileChangedRow = memo(function FileChangedRow({ item, online, onOpe
       </span>
       <span style={{ fontSize: 11.5, color: C.diffAddText, fontFamily: FONT.mono, flexShrink: 0 }}>+{item.added}</span>
       <span style={{ fontSize: 11.5, color: C.diffRemText, fontFamily: FONT.mono, flexShrink: 0 }}>-{item.removed}</span>
-      {online && onRevert && (
+      {item.external ? (
+        <span style={{ fontSize: 11, color: C.textMuted, flexShrink: 0 }}>вне чата</span>
+      ) : online && onRevert && (
         <button onClick={() => onRevert(item.path)}
           style={{ fontSize: 11, padding: '2px 8px', borderRadius: 6, border: `1px solid ${C.border}`, background: C.bgWhite, cursor: 'pointer', color: C.dangerText, flexShrink: 0 }}>
           Откатить
@@ -1088,6 +1090,14 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
             <span style={{ fontSize: 13, fontWeight: 600, color: C.textHeading, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {isNote ? `Заметка · ${noteTitle}` : fileName}
             </span>
+            {item.external && (
+              <span style={{
+                fontSize: 11, fontWeight: 500, color: C.textMuted, background: C.bgInset,
+                borderRadius: 6, padding: '2px 7px', flexShrink: 0,
+              }}>
+                Изменение вне чата
+              </span>
+            )}
             <span style={{ fontSize: 11.5, color: C.diffAddText, fontFamily: FONT.mono }}>
               +{item.added}
             </span>
@@ -1107,7 +1117,7 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
                 {isNote ? 'Открыть заметку' : 'Открыть'}
               </button>
             )}
-            {online && onRevert && (
+            {!item.external && online && onRevert && (
               <button
                 onClick={() => onRevert(item.path)}
                 style={{

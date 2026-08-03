@@ -230,6 +230,27 @@ public class TurnAccumulatorTests : IDisposable
         file.Removed.Should().Be(5);
     }
 
+    [Fact]
+    public void OnFileChanged_External_СохраняетПометку()
+    {
+        var acc = new TurnAccumulator([]);
+        acc.OnFileChanged("src/file.cs", 10, 3, external: true);
+
+        var changed = acc.GetAll().OfType<StoredFileChangedMessage>().Single();
+        changed.External.Should().BeTrue();
+    }
+
+    [Fact]
+    public void OnFileChanged_ОдинВкладОтМодели_СнимаетExternalСоВсейСтроки()
+    {
+        var acc = new TurnAccumulator([]);
+        acc.OnFileChanged("src/file.cs", 10, 3, external: true);
+        acc.OnFileChanged("src/file.cs", 5, 2, external: false);
+
+        var changed = acc.GetAll().OfType<StoredFileChangedMessage>().Single();
+        changed.External.Should().BeFalse();
+    }
+
     // Модель хода приходит только с result, а посты к тому моменту уже созданы —
     // проверяем, что она проставляется им задним числом (подпись модели у поста)
     [Fact]

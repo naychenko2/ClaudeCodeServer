@@ -33,7 +33,7 @@ import { ChatHeaderBar, type CostStats, type FalCostStats } from './chat/ChatHea
 import { computeGlifGenStats } from './chat/glifStats';
 import { ChatProjectContext, ChatTreePathContext, ChatSessionContext, ChatOpenFileContext, FalCostContext, GlifCostContext, AssistantNameContext, MediaVisibilityContext, PersonaContext, TeamPlanContext, TeamEscalationContext, type TeamPlanChatContext, type TeamEscalationChatContext } from './chat/contexts';
 import { WaitingIndicator } from './ui/WaitingIndicator';
-import { Modal, ModalActions } from './ui';
+import { Modal, ModalActions, ConfirmDialog } from './ui';
 import { ChatEmptyState } from './chat/EmptyState';
 import { AttachPicker } from './chat/AttachPicker';
 import { ToolGroupBlock, AgentActionsBlock, itemKey, type ActivityEntry } from './chat/timeline';
@@ -748,11 +748,19 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     ? { onRespond: handleRespondTeamEscalation }
     : null, [teamImplementState, handleRespondTeamEscalation]);
 
-  // Откат файла — стабильный колбэк для карточек file_changed в ленте
+  // Откат файла — стабильный колбэк для карточек file_changed в ленте. Действие бьёт
+  // по git checkout HEAD и стирает ЛЮБЫЕ несохранённые правки файла (не только модели),
+  // поэтому спрашивает подтверждение, а не бьёт сразу
   const projectId = project?.id;
+  const [revertPath, setRevertPath] = useState<string | null>(null);
   const handleRevert = useCallback((path: string) => {
-    if (projectId) api.files.revert(projectId, path);
-  }, [projectId]);
+    setRevertPath(path);
+  }, []);
+  const confirmRevert = useCallback(() => {
+    const path = revertPath;
+    setRevertPath(null);
+    if (projectId && path) api.files.revert(projectId, path);
+  }, [projectId, revertPath]);
 
   // Индекс последнего result — у него показываем плашку токенов/времени, у прошлых скрываем
   const lastResultIndex = useMemo(
@@ -1204,7 +1212,10 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
         for (const [it] of slice) {
           if (it.kind !== 'file_changed') continue;
           const prev = fileAgg.get(it.path);
-          fileAgg.set(it.path, prev ? { ...it, added: prev.added + it.added, removed: prev.removed + it.removed } : it);
+          // external — по И: если хоть один вклад был от модели этого чата, строка в целом не «чужая»
+          fileAgg.set(it.path, prev
+            ? { ...it, added: prev.added + it.added, removed: prev.removed + it.removed, external: (prev.external ?? false) && (it.external ?? false) }
+            : it);
         }
         // Единый рендер элемента группы — и в раскрытом виде (children), и в свёрнутой
         // шапке (summary, куда попадают агенты и агрегированные изменения файлов)
@@ -1656,6 +1667,19 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
             )}
           </div>
         </Modal>
+      )}
+
+      {/* Откат файла из карточки file_changed: git checkout HEAD стирает любые несохранённые
+          правки файла, не только модели — предупреждаем честно перед действием */}
+      {revertPath && (
+        <ConfirmDialog
+          title="Вернуть файл к последнему коммиту?"
+          subtitle="Файл вернётся к состоянию последнего коммита. Все незафиксированные правки — и Claude, и ваши — пропадут без возможности восстановить."
+          confirmLabel="Вернуть к коммиту"
+          confirmVariant="danger"
+          onConfirm={confirmRevert}
+          onCancel={() => setRevertPath(null)}
+        />
       )}
 
       {/* Выключение worktree при несохранённых правках: подтверждение принудительного удаления */}

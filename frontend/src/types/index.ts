@@ -659,7 +659,9 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'permission_request'; requestId: string; toolName: string; toolInput: unknown }
   | { type: 'ask_question'; toolUseId: string; input: unknown }
   | { type: 'plan_review'; requestId: string; plan: string }
-  | { type: 'file_changed'; path: string; added: number; removed: number }
+  // external — правку сделали не Edit/Write этого чата (человек в IDE, форматтер);
+  // фронт снимает кнопку «Откатить» и помечает карточку «Изменение вне чата»
+  | { type: 'file_changed'; path: string; added: number; removed: number; external?: boolean }
   // contextTokens — размер контекста последнего запроса хода (оценка заполнения окна).
   // usage для этого не годится: он суммирует все запросы хода, включая сабагентов.
   // usageModel — фактическая модель хода (её же бэк проставляет постам в истории):
@@ -1166,7 +1168,7 @@ export type ChatItem =
   // Карточка остановки командной реализации: причина, суть и кнопки решения.
   // Сверяется по escalationId — ответ человека переиздаёт ту же карточку решённой
   | { kind: 'team_escalation'; escalationId: string; escalation: TeamEscalation }
-  | { kind: 'file_changed'; path: string; added: number; removed: number }
+  | { kind: 'file_changed'; path: string; added: number; removed: number; external?: boolean }
   | { kind: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo; totalCostUsd?: number; apiErrorStatus?: string; permissionDenials?: string[]; contextTokens?: number }
   | { kind: 'fal_cost'; requestId: string; endpointId?: string; costUsd: number; outputUnits?: number; unitPrice?: number }
   | { kind: 'glif_cost'; jobId: string; outputType?: string; mediaCount: number; credits?: number; model?: string }

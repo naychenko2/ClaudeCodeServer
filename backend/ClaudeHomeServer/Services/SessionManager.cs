@@ -5316,7 +5316,7 @@ public class SessionManager : IDisposable
                     acc.OnBgAgentsDone(m.ToolUseIds);
                     await acc.SaveSnapshotAsync(_history);
                     break;
-                case FileChangedMessage m:  acc.OnFileChanged(m.Path, m.Added, m.Removed); break;
+                case FileChangedMessage m:  acc.OnFileChanged(m.Path, m.Added, m.Removed, m.External); break;
                 case CompactBoundaryMessage m:
                     acc.OnCompactBoundary(m.Trigger, m.PreTokens, m.PostTokens);
                     await acc.SaveSnapshotAsync(_history); // авто-компакт бывает посреди хода — фиксируем сразу

@@ -438,9 +438,22 @@ describe('applyServerMessage: завершение хода', () => {
       { type: 'file_changed', path: 'src/a.ts', added: 5, removed: 4 },
     ]);
     expect(next.items).toEqual([
-      { kind: 'file_changed', path: 'src/a.ts', added: 8, removed: 5 },
+      { kind: 'file_changed', path: 'src/a.ts', added: 8, removed: 5, external: false },
       { kind: 'file_changed', path: 'src/b.ts', added: 2, removed: 0 },
     ]);
+  });
+
+  it('file_changed: внешняя правка (без заявки) помечается external', () => {
+    const next = run([{ type: 'file_changed', path: 'src/a.ts', added: 3, removed: 1, external: true }]);
+    expect(next.items).toEqual([{ kind: 'file_changed', path: 'src/a.ts', added: 3, removed: 1, external: true }]);
+  });
+
+  it('file_changed: если хоть один вклад от модели — итог не external', () => {
+    const next = run([
+      { type: 'file_changed', path: 'src/a.ts', added: 3, removed: 1, external: true },
+      { type: 'file_changed', path: 'src/a.ts', added: 2, removed: 0, external: false },
+    ]);
+    expect(next.items).toEqual([{ kind: 'file_changed', path: 'src/a.ts', added: 5, removed: 1, external: false }]);
   });
 
   it('file_changed того же файла в РАЗНЫХ ходах (через result) — две строки', () => {

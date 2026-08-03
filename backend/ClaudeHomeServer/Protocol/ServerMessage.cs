@@ -109,7 +109,10 @@ public record AskQuestionMessage(string ToolUseId, object Input)
 public record PlanReviewMessage(string RequestId, string Plan)
     : ServerMessage("plan_review");
 
-public record FileChangedMessage(string Path, int Added, int Removed)
+// External — правка пришла не от модели этого чата (нет заявки FileChangeAttributor):
+// человек в IDE, форматтер, Bash-команда без Edit/Write. Фронт снимает кнопку «Откатить»
+// и показывает пометку «Изменение вне чата» — см. FileChangeAttributor.
+public record FileChangedMessage(string Path, int Added, int Removed, bool External = false)
     : ServerMessage("file_changed");
 
 // ContextTokens — размер контекста ПОСЛЕДНЕГО запроса к API за ход (input + cache_read +

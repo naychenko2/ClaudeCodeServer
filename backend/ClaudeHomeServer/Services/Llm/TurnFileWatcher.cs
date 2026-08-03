@@ -113,9 +113,15 @@ public sealed class TurnFileWatcher : IDisposable
                 if (added == 0 && removed == 0) return;
                 // Путь только что заявлен ДРУГОЙ живой сессией (параллельный ход того же
                 // проекта) — карточку покажет её собственный watcher, здесь дублировать не надо
-                if (_attributor is not null && _ownerSessionId is not null
-                    && _attributor.IsClaimedByOther(_ownerSessionId, fullPath)) return;
-                _ = _onMessage(new FileChangedMessage(rel, added, removed));
+                var external = false;
+                if (_attributor is not null && _ownerSessionId is not null)
+                {
+                    if (_attributor.IsClaimedByOther(_ownerSessionId, fullPath)) return;
+                    // Нет заявки вообще ни от кого (в т.ч. от своей сессии) — правку сделал
+                    // не Claude Edit/Write, а нечто снаружи процесса (человек, форматтер)
+                    external = !_attributor.IsClaimedBySelf(_ownerSessionId, fullPath);
+                }
+                _ = _onMessage(new FileChangedMessage(rel, added, removed, external));
             }
             catch { /* файл занят/удалён между событиями watcher-а — пропускаем */ }
         }, TaskScheduler.Default);

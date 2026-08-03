@@ -215,23 +215,25 @@ internal class TurnAccumulator
         }
     }
 
-    public void OnFileChanged(string path, int added, int removed)
+    public void OnFileChanged(string path, int added, int removed, bool external = false)
     {
         lock (_lock)
         {
             FlushBuffers();
             // Дедуп за ход: повторная правка того же файла обновляет существующую строку
             // (дельты суммируем), а не плодит новую — иначе командные ходы (OmO, workflow)
-            // спамят ленту десятками строк по одним и тем же файлам
+            // спамят ленту десятками строк по одним и тем же файлам. External — по И: если
+            // хоть один вклад был от модели этого чата, строка в целом не «чужая»
             for (var i = _currentTurn.Count - 1; i >= 0; i--)
             {
                 if (_currentTurn[i] is StoredFileChangedMessage prev && prev.Path == path)
                 {
-                    _currentTurn[i] = new StoredFileChangedMessage(path, prev.Added + added, prev.Removed + removed);
+                    _currentTurn[i] = new StoredFileChangedMessage(path, prev.Added + added, prev.Removed + removed,
+                        prev.External && external);
                     return;
                 }
             }
-            _currentTurn.Add(new StoredFileChangedMessage(path, added, removed));
+            _currentTurn.Add(new StoredFileChangedMessage(path, added, removed, external));
         }
     }
 

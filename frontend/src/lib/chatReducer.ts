@@ -399,11 +399,15 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
         if (it.kind === 'result') break;
         if (it.kind === 'file_changed' && it.path === msg.path) {
           const items = prev.items.slice();
-          items[i] = { ...it, added: it.added + msg.added, removed: it.removed + msg.removed };
+          // external — по И: если хоть один вклад был от модели этого чата, строка в целом не «чужая»
+          items[i] = {
+            ...it, added: it.added + msg.added, removed: it.removed + msg.removed,
+            external: (it.external ?? false) && (msg.external ?? false),
+          };
           return withItems(items);
         }
       }
-      return withItems([...prev.items, { kind: 'file_changed', path: msg.path, added: msg.added, removed: msg.removed }]);
+      return withItems([...prev.items, { kind: 'file_changed', path: msg.path, added: msg.added, removed: msg.removed, external: msg.external }]);
     }
 
     case 'result': {

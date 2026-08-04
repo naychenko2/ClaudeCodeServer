@@ -897,12 +897,152 @@ public class SessionManagerTests : IDisposable
         // «Стоп» замораживает очередь: агентское сообщение остаётся ждать возобновления,
         // а не вычищается (как было раньше) — иначе сразу после прерывания хлынул бы ход
         var session = await MkBusySessionAsync("interrupt");
+        SetProcess(GetEntry(session.Id), StubAdapter(GetEntry(session.Id)).Object);
         await _sut.SendMessageAndWaitAsync(session.Id, "не доставлять", TimeSpan.Zero);
 
         _sut.Interrupt(session.Id);
 
         _sut.GetPending(session.Id).Should().ContainSingle()
             .Which.Text.Should().Be("не доставлять");
+    }
+
+    // --- Гейт протухших ответов и реанимация зависшего чата ---
+
+    private static void SetPendingInteraction(object entry, ServerMessage? msg) =>
+        entry.GetType().GetField("PendingInteraction")!.SetValue(entry, msg);
+
+    private static object? GetProcess(object entry) =>
+        entry.GetType().GetField("Process")!.GetValue(entry);
+
+    [Fact]
+    public async Task RespondPermission_КарточкиУжеНет_НеТрогаетАдаптерИСтатус()
+    {
+        // Гонка: ватчдог оборвал зависший ход (карточку снял обработчик конца хода), а клик
+        // пользователя долетел позже. Раньше такой ответ ставил Working на мёртвом процессе
+        var session = await MkBusySessionAsync("stale-perm", SessionStatus.Error);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+
+        _sut.RespondPermission(session.Id, "req-1", "allow");
+
+        await Task.Delay(100);
+        adapter.Verify(a => a.RespondPermission(It.IsAny<string>(), It.IsAny<string>()), Times.Never());
+        _sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Error);
+    }
+
+    [Fact]
+    public async Task AnswerQuestion_КарточкиУжеНет_НеТрогаетАдаптерИСтатус()
+    {
+        var session = await MkBusySessionAsync("stale-question", SessionStatus.Error);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+
+        _sut.AnswerQuestion(session.Id, "tool-1", "{\"answers\":[]}");
+
+        await Task.Delay(100);
+        adapter.Verify(a => a.AnswerQuestion(It.IsAny<string>(), It.IsAny<string>()), Times.Never());
+        _sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Error);
+    }
+
+    [Fact]
+    public async Task RespondPlan_КарточкиУжеНет_НеТрогаетАдаптерИСтатус()
+    {
+        var session = await MkBusySessionAsync("stale-plan", SessionStatus.Error);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+
+        _sut.RespondPlan(session.Id, "req-1", approve: true, feedback: null);
+
+        await Task.Delay(100);
+        adapter.Verify(a => a.RespondPlan(It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<string>()), Times.Never());
+        _sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Error);
+    }
+
+    [Fact]
+    public async Task RespondPermission_КарточкаЖива_ОтветУходитАдаптеруИЧатВРаботу()
+    {
+        // Контроль гейта: обычный сценарий не задет
+        var session = await MkBusySessionAsync("live-perm", SessionStatus.Waiting);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+        SetPendingInteraction(entry, new PermissionRequestMessage("req-1", "Bash", new { }));
+
+        _sut.RespondPermission(session.Id, "req-1", "allow");
+
+        await WaitForConditionAsync(() => _sut.GetById(session.Id)!.Status == SessionStatus.Working,
+            TimeSpan.FromSeconds(2));
+        adapter.Verify(a => a.RespondPermission("req-1", "allow"), Times.Once());
+        _sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Working);
+    }
+
+    [Fact]
+    public async Task Interrupt_ЗанятыйЧатБезЖивогоПрогона_РеанимируетЧат()
+    {
+        // Working без хода терминален: сообщения уходят в Pending, разбор которой ждёт конца
+        // хода, а хода уже нет. «Стоп» вместо no-op сбрасывает чат в рабочее состояние
+        var session = await MkBusySessionAsync("revive", SessionStatus.Working);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        adapter.SetupGet(a => a.HasLiveTurn).Returns(false); // ход умер, адаптер осиротел
+        SetProcess(entry, adapter.Object);
+        SetPendingInteraction(entry, new PermissionRequestMessage("req-1", "Bash", new { }));
+
+        _sut.Interrupt(session.Id);
+
+        await WaitForConditionAsync(() => _sut.GetById(session.Id)!.Status == SessionStatus.Active,
+            TimeSpan.FromSeconds(2));
+        _sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Active);
+        GetProcess(entry).Should().BeNull("отравленный адаптер выброшен — следующий ход поднимет свежий");
+        _sut.GetPendingInteraction(session.Id).Should().BeNull();
+        adapter.Verify(a => a.DisposeAsync(), Times.Once());
+        var notice = _sentMessages.OfType<WorkLoopStoppedMessage>().Should().ContainSingle().Subject;
+        notice.Reason.Should().Be("stuck_reset");
+        notice.Text.Should().Be("Зависший ход сброшен — чат снова доступен.");
+        (await _sut.GetHistoryAsync(session.Id)).OfType<StoredWorkLoopStoppedMessage>()
+            .Should().ContainSingle("карточка сброса переживает перезагрузку страницы");
+    }
+
+    [Fact]
+    public async Task Interrupt_ЗанятыйЧатБезЖивогоПрогона_ОчередьНеЗамораживает()
+    {
+        // Заморозка снимается концом хода, которого не будет — отложенное застряло бы навсегда
+        var session = await MkBusySessionAsync("revive-queue", SessionStatus.Working);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        adapter.SetupGet(a => a.HasLiveTurn).Returns(false);
+        SetProcess(entry, adapter.Object);
+        await _sut.SendMessageAndWaitAsync(session.Id, "от агента", TimeSpan.Zero);
+
+        _sut.Interrupt(session.Id);
+
+        await WaitForConditionAsync(() => _sut.GetById(session.Id)!.Status == SessionStatus.Active,
+            TimeSpan.FromSeconds(2));
+        entry.GetType().GetField("QueueFrozen")!.GetValue(entry).Should().Be(false);
+        _sut.GetPending(session.Id).Should().ContainSingle().Which.Text.Should().Be("от агента");
+    }
+
+    [Fact]
+    public async Task Interrupt_ЖивойПрогон_ПрежнееПоведение()
+    {
+        // Контроль: у честно занятого чата «Стоп» по-прежнему бьёт по адаптеру, статус
+        // синхронно не трогает (его сменит exited убитого хода) и реанимации не устраивает
+        var session = await MkBusySessionAsync("revive-control", SessionStatus.Working);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry); // HasLiveTurn = true
+        SetProcess(entry, adapter.Object);
+
+        _sut.Interrupt(session.Id);
+
+        await Task.Delay(100);
+        adapter.Verify(a => a.Interrupt(), Times.Once());
+        adapter.Verify(a => a.DisposeAsync(), Times.Never());
+        _sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Working);
+        GetProcess(entry).Should().NotBeNull();
+        _sentMessages.OfType<WorkLoopStoppedMessage>().Should().BeEmpty();
     }
 
     [Fact]
@@ -995,6 +1135,7 @@ public class SessionManagerTests : IDisposable
         // «Стоп» замораживает очередь и возвращает в композер ПОСЛЕДНЕЕ пользовательское:
         // оно изымается, агентские и более ранние пользовательские остаются ждать возобновления
         var session = await MkBusySessionAsync("uqfreeze");
+        SetProcess(GetEntry(session.Id), StubAdapter(GetEntry(session.Id)).Object);
         await _sut.SendMessageAndWaitAsync(session.Id, "от агента", TimeSpan.Zero);       // agent
         await _sut.SendMessageAsync(session.Id, "user-1", []);                              // user
         await _sut.SendMessageAsync(session.Id, "user-последнее", []);                      // user (последнее)
@@ -2310,6 +2451,9 @@ public class SessionManagerTests : IDisposable
         var adapter = new Mock<ILlmSessionAdapter>();
         var info = (Session)entry.GetType().GetField("Info")!.GetValue(entry)!;
         adapter.SetupGet(a => a.Info).Returns(info);
+        // Подставной адаптер изображает занятый чат с идущим ходом: без этого «Стоп»
+        // принял бы его за зависший и пошёл бы в реанимацию (SessionManager.Interrupt)
+        adapter.SetupGet(a => a.HasLiveTurn).Returns(true);
         adapter.Setup(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
             It.IsAny<int>(), It.IsAny<bool>())).Returns(Task.CompletedTask);
         return adapter;
@@ -4773,6 +4917,7 @@ public class SessionManagerTests : IDisposable
         // Симулируем прерванный пользовательский ход: задаём CurrentTurnSnapshot напрямую
         var session = await MkBusySessionAsync("freeze", SessionStatus.Working);
         var entry = GetEntry(session.Id);
+        SetProcess(entry, StubAdapter(entry).Object); // ход идёт — иначе «Стоп» уходит в реанимацию
 
         SetCurrentTurnSnapshot(entry, "текст прерванного хода", ["file.txt"], "plan");
 
@@ -4794,6 +4939,7 @@ public class SessionManagerTests : IDisposable
     {
         var session = await MkBusySessionAsync("freeze2", SessionStatus.Working);
         var entry = GetEntry(session.Id);
+        SetProcess(entry, StubAdapter(entry).Object); // ход идёт — иначе «Стоп» уходит в реанимацию
 
         SetCurrentTurnSnapshot(entry, "старый текст", ["old.txt"], "auto");
 
@@ -4811,6 +4957,8 @@ public class SessionManagerTests : IDisposable
     public async Task FreezePending_БезSnapshot_ВозвращаетRestoreСNullТекстом()
     {
         var session = await MkBusySessionAsync("freeze3", SessionStatus.Working);
+        var entry = GetEntry(session.Id);
+        SetProcess(entry, StubAdapter(entry).Object); // ход идёт — иначе «Стоп» уходит в реанимацию
 
         _sut.Interrupt(session.Id);
         var restores = await WaitForComposerRestoresAsync(1);

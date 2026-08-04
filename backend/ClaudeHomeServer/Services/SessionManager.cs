@@ -3029,9 +3029,25 @@ public class SessionManager : IDisposable
         return entry.Info;
     }
 
+    // Ответ на карточку, которой уже нет, — протухший: конец хода (result/error/exited) снял её
+    // сам. Гонка живая: ватчдог обрывает зависший ход, а клик пользователя долетает мгновением
+    // позже — раньше такой ответ безусловно ставил Working на мёртвом процессе, и чат залипал
+    // в нём навсегда (новые сообщения уходят в Pending, разбор которой ждёт конца хода, а хода
+    // уже не будет). Сверяем только наличие карточки, но не id: у одного хода их может быть
+    // несколько (параллельные tool_use ждут каждый своего ответа), и ответ на неактуальную
+    // из них — законный.
+    private static bool IsStaleInteractionAnswer(string sessionId, SessionEntry entry, string what)
+    {
+        if (entry.PendingInteraction is not null) return false;
+        Console.Error.WriteLine(
+            $"[SessionManager] Протухший ответ ({what}) в сессии {sessionId}: карточки уже нет — игнорируем");
+        return true;
+    }
+
     public void RespondPermission(string sessionId, string requestId, string behavior)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return;
+        if (IsStaleInteractionAnswer(sessionId, entry, $"permission {requestId}")) return;
         entry.Process?.RespondPermission(requestId, behavior);
         entry.PendingInteraction = null;
         FireAndForget(ApplyStatusAsync(sessionId, entry, SessionStatus.Working),
@@ -3050,9 +3066,19 @@ public class SessionManager : IDisposable
                 SaveSessions();
                 _ = BroadcastWorkLoopAsync(sessionId, entry);
             }
+            // Чат числится занятым, а живого прогона нет: ход убил ватчдог/сбой, а статус
+            // остался (или его выставил протухший ответ на карточку). Такой Working терминален —
+            // сообщения уходят в Pending, разбор которой ждёт конца несуществующего хода.
+            // «Стоп» — единственная кнопка пользователя в этом состоянии, поэтому вместо
+            // прежнего no-op реанимируем чат (ниже, после общей уборки состояния хода).
+            var stuck = entry.Info.Status is SessionStatus.Working or SessionStatus.Waiting
+                && entry.Process is null or { HasLiveTurn: false };
             // «Стоп» замораживает очередь (не чистит): сообщения остаются ждать возобновления,
-            // а последнее пользовательское возвращается в композер (composer_restore)
-            _ = FreezePendingAsync(sessionId, entry);
+            // а последнее пользовательское возвращается в композер (composer_restore).
+            // При реанимации не замораживаем: размораживающего конца хода уже не будет,
+            // и отложенные сообщения застряли бы в очереди насовсем.
+            if (!stuck)
+                _ = FreezePendingAsync(sessionId, entry);
             // M5: тот же сброс буфера маркеров, что при прерывании очередью (SendMessageAsync):
             // убитый ход даёт exited без result, буфер не потребляется — маркер мёртвого хода
             // (<escalate:*>, <team:work>) доклеился бы к следующему и применился задним числом
@@ -3067,8 +3093,37 @@ public class SessionManager : IDisposable
                 }
                 entry.SkipNextTeamTurnEnd = false;
             }
-            entry.Process?.Interrupt();
+            if (stuck)
+                ReviveStuckSession(sessionId, entry);
+            else
+                entry.Process?.Interrupt();
         }
+    }
+
+    // Возврат зависшего чата в рабочее состояние: снимаем ожидающую карточку, выбрасываем
+    // отравленный адаптер и переводим статус в Active. Просто сбросить статус мало — у адаптера
+    // мог остаться захваченный зависшей финализацией _turnLock, и первое же сообщение встало бы
+    // намертво снова; DisposeAsync (в нём _cts.Cancel) разблокирует ожидателей. Следующий ход
+    // поднимет свежий адаптер через EnsureProcessAsync с --resume по ClaudeSessionId —
+    // контекст переписки цел.
+    private void ReviveStuckSession(string sessionId, SessionEntry entry)
+    {
+        entry.PendingInteraction = null;
+        if (entry.Process is { } dead)
+        {
+            entry.Process = null;
+            FireAndForget(dead.DisposeAsync().AsTask(),
+                $"уборка адаптера зависшего хода ({sessionId})");
+        }
+        FireAndForget(ReviveStuckSessionAsync(sessionId, entry),
+            $"реанимация зависшего чата ({sessionId})");
+    }
+
+    private async Task ReviveStuckSessionAsync(string sessionId, SessionEntry entry)
+    {
+        await ApplyStatusAsync(sessionId, entry, SessionStatus.Active);
+        await AddWorkLoopStoppedNoticeAsync(sessionId, entry, "stuck_reset",
+            "Зависший ход сброшен — чат снова доступен.");
     }
 
     // Включение/выключение цикла «до готово» (флаг work-loop). Включение сбрасывает
@@ -5137,6 +5192,7 @@ public class SessionManager : IDisposable
     public void AnswerQuestion(string sessionId, string toolUseId, string answerText)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return;
+        if (IsStaleInteractionAnswer(sessionId, entry, $"вопрос {toolUseId}")) return;
         entry.Process?.AnswerQuestion(toolUseId, answerText);
         entry.PendingInteraction = null;
         // Фиксируем ответ в истории, чтобы карточка вопроса пережила перезагрузку
@@ -5164,6 +5220,7 @@ public class SessionManager : IDisposable
     public void RespondPlan(string sessionId, string requestId, bool approve, string? feedback)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return;
+        if (IsStaleInteractionAnswer(sessionId, entry, $"план {requestId}")) return;
         entry.Process?.RespondPlan(requestId, approve, feedback);
         entry.PendingInteraction = null;
         // Фиксируем решение по плану в истории, чтобы карточка пережила перезагрузку

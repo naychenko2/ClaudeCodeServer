@@ -25,6 +25,10 @@ public interface ILlmSessionAdapter : IAsyncDisposable
     // запуск исполнителя на нём запрещён даже при agentDepth = 0 (см. suppressTasksExecute).
     bool CurrentTurnSuppressTasksExecute { get; }
 
+    // Есть ли у адаптера живой прогон CLI. По нему SessionManager отличает честно занятый
+    // чат от зависшего в Working/Waiting без хода (см. Interrupt: реанимация мёртвого статуса).
+    bool HasLiveTurn { get; }
+
     Task StartAsync();
     // agentDepth > 0 — ход инициирован агентом из другой сессии (chats_send):
     // адаптер урезает инструменты делегирования на этот ход, чтобы не допустить рекурсию агентов.

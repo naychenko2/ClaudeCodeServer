@@ -1,13 +1,18 @@
 namespace ClaudeHomeServer.Services.Llm;
 
-// Профиль вызова локальной модели: задаёт размер контекстного окна, лимит вывода и
-// таймаут. Разные фоновые задачи грузят модель по-разному — от мелкой классификации
-// (short) до суммаризации большого транскрипта (large). num_ctx особенно важен:
+// Профиль вызова: задаёт размер контекстного окна, лимит вывода и таймауты. Разные
+// фоновые задачи грузят модель по-разному — от мелкой классификации (short) до
+// суммаризации большого транскрипта (large). num_ctx особенно важен:
 // Ollama по умолчанию режет вход до ~4k токенов и МОЛЧА теряет хвост промпта.
 public enum CheapProfile { Small, Text, Large }
 
 // Базовые параметры профиля (переопределяются секцией Ollama:Profiles в конфиге).
-public sealed record CheapProfileSpec(int NumCtx, int NumPredict, int TimeoutMs);
+// Таймаутов два — по числу маршрутов: TimeoutMs для локальной модели (Ollama на своём
+// железе, параметры под неё и калибровались), CloudTimeoutMs для облачных маршрутов
+// (слот/провайдерская модель через CLI и direct:-адаптер). Облачная сильная модель
+// на сложной задаче отвечает заметно дольше локали, и локальный потолок её обрывал
+// (прод 2026-08-04: планировщик «Командной реализации» на opus не уложился в 90 с).
+public sealed record CheapProfileSpec(int NumCtx, int NumPredict, int TimeoutMs, int CloudTimeoutMs);
 
 // Одно место применения модели. Исторически — фоновое one-shot действие, с v2 каталог
 // накрывает и агентные места (группа «Чаты и персоны»): им тоже назначается исполнитель.
@@ -84,13 +89,17 @@ public static class LocalActionCatalog
     public const string Changelog = "changelog";
     public const string PromptAudit = "prompt-audit";
 
-    // Дефолты профилей. Переопределяются Ollama:Profiles:{small|text|large}:{NumCtx|NumPredict|TimeoutMs}.
+    // Дефолты профилей. Переопределяются
+    // Ollama:Profiles:{small|text|large}:{NumCtx|NumPredict|TimeoutMs|CloudTimeoutMs}.
+    // CloudTimeoutMs растёт с профилем: мелкой задаче на облаке хватает общего дефолта
+    // раннера (120 с), тяжёлой нужно заметно больше — планировщик на сильной модели
+    // с большим промптом отвечает до нескольких минут.
     public static readonly IReadOnlyDictionary<CheapProfile, CheapProfileSpec> ProfileDefaults =
         new Dictionary<CheapProfile, CheapProfileSpec>
         {
-            [CheapProfile.Small] = new(NumCtx: 4096, NumPredict: 256, TimeoutMs: 20_000),
-            [CheapProfile.Text] = new(NumCtx: 8192, NumPredict: 768, TimeoutMs: 45_000),
-            [CheapProfile.Large] = new(NumCtx: 16384, NumPredict: 1024, TimeoutMs: 90_000),
+            [CheapProfile.Small] = new(NumCtx: 4096, NumPredict: 256, TimeoutMs: 20_000, CloudTimeoutMs: 120_000),
+            [CheapProfile.Text] = new(NumCtx: 8192, NumPredict: 768, TimeoutMs: 45_000, CloudTimeoutMs: 180_000),
+            [CheapProfile.Large] = new(NumCtx: 16384, NumPredict: 1024, TimeoutMs: 90_000, CloudTimeoutMs: 300_000),
         };
 
     private static readonly IReadOnlyList<LocalAction> Builtin =

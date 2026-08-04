@@ -530,9 +530,10 @@ public class TeamPlanningServiceTests : IDisposable
         var sut = new TeamPlanningService(_personas, cheap);
         var session = MakeSession(coordinator.Id, executors: team.Select(p => p.Id).ToList());
 
-        var plan = await sut.CreatePlanAsync(session, UserId,
+        var (plan, timedOut) = await sut.CreatePlanAsync(session, UserId,
             "Добавить экспорт задач в CSV", "ClaudeCodeServer");
 
+        timedOut.Should().BeFalse();
         plan.Should().NotBeNull();
         plan!.Subtasks.Should().HaveCount(3);
         // Главный критерий Э2: работа ушла по профилю персон
@@ -552,7 +553,8 @@ public class TeamPlanningServiceTests : IDisposable
         var coord = MakePersona("Алекс", "Тимлид", scope: PersonaScope.Global);
         var session = MakeSession(coord.Id, projectId: null);
 
-        (await _sut.CreatePlanAsync(session, UserId, "сделай что-нибудь")).Should().BeNull();
+        var (plan, _) = await _sut.CreatePlanAsync(session, UserId, "сделай что-нибудь");
+        plan.Should().BeNull();
     }
 
     [Fact]
@@ -569,7 +571,7 @@ public class TeamPlanningServiceTests : IDisposable
             """);
         var sut = new TeamPlanningService(_personas, cheap);
 
-        var plan = await sut.CreatePlanAsync(MakeSession(coord.Id), UserId, "Экспорт в CSV", "CCS");
+        var (plan, _) = await sut.CreatePlanAsync(MakeSession(coord.Id), UserId, "Экспорт в CSV", "CCS");
 
         plan.Should().NotBeNull();
         plan!.PlannerPersonaId.Should().Be(planner.Id, "план построил подобранный планировщик");
@@ -587,12 +589,30 @@ public class TeamPlanningServiceTests : IDisposable
         MakePersona("Денис", "Бэкенд");
         var sut = new TeamPlanningService(_personas, new FakeCheapRunner(throwOnRun: true));
 
-        (await sut.CreatePlanAsync(MakeSession(coord.Id), UserId, "задача")).Should().BeNull(
-            "падение планировщика не роняет ход — человек получает причину отказа");
+        var (plan, timedOut) = await sut.CreatePlanAsync(MakeSession(coord.Id), UserId, "задача");
+        plan.Should().BeNull("падение планировщика не роняет ход — человек получает причину отказа");
+        timedOut.Should().BeFalse("обычный сбой — не таймаут, текст отказа другой");
     }
 
-    // Подставной раннер: запоминает вызов и отдаёт заготовленный ответ
-    private sealed class FakeCheapRunner(string answer = "", bool throwOnRun = false) : ICheapTextRunner
+    [Fact]
+    public async Task CreatePlanAsync_Таймаут_NullСПризнакомТаймаута()
+    {
+        // Обрыв по таймауту отличается от прочих отказов: причина не в постановке человека,
+        // и SessionManager показывает другой текст карточки (PlannerTimeoutReason).
+        var coord = MakePersona("Алекс", "Тимлид");
+        MakePersona("Денис", "Бэкенд");
+        var sut = new TeamPlanningService(_personas, new FakeCheapRunner(throwTimeout: true));
+
+        var (plan, timedOut) = await sut.CreatePlanAsync(MakeSession(coord.Id), UserId, "задача");
+
+        plan.Should().BeNull();
+        timedOut.Should().BeTrue();
+    }
+
+    // Подставной раннер: запоминает вызов и отдаёт заготовленный ответ.
+    // throwOnRun — обычный сбой, throwTimeout — обрыв по таймауту (LlmTimeoutException).
+    private sealed class FakeCheapRunner(string answer = "", bool throwOnRun = false,
+        bool throwTimeout = false) : ICheapTextRunner
     {
         public string? LastActionKey { get; private set; }
         public string LastPrompt { get; private set; } = "";
@@ -604,6 +624,7 @@ public class TeamPlanningServiceTests : IDisposable
         {
             LastActionKey = actionKey;
             LastPrompt = prompt;
+            if (throwTimeout) throw new LlmTimeoutException();
             return throwOnRun
                 ? throw new InvalidOperationException("модель недоступна")
                 : Task.FromResult(answer);

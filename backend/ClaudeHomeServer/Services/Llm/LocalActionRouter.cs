@@ -61,7 +61,8 @@ public sealed class LocalActionRouter
             _profiles[profile] = new CheapProfileSpec(
                 NumCtx: s.GetValue("NumCtx", def.NumCtx),
                 NumPredict: s.GetValue("NumPredict", def.NumPredict),
-                TimeoutMs: s.GetValue("TimeoutMs", def.TimeoutMs));
+                TimeoutMs: s.GetValue("TimeoutMs", def.TimeoutMs),
+                CloudTimeoutMs: s.GetValue("CloudTimeoutMs", def.CloudTimeoutMs));
         }
     }
 
@@ -108,6 +109,13 @@ public sealed class LocalActionRouter
         var p = LocalActionCatalog.Find(actionKey)?.Profile ?? CheapProfile.Text;
         return _profiles[p];
     }
+
+    // Таймаут вызова ПО МАРШРУТУ: локаль живёт со своим (Ollama-параметры), облачные
+    // маршруты — со своим, заметно большим (см. CheapProfileSpec). Когда вызов реально
+    // идёт на локаль (UsesLocal требует живую Ollama) — локальный потолок; иначе цепочка
+    // может закончиться на claude, и потолок обязан быть облачным.
+    public int TimeoutMsFor(string actionKey) =>
+        UsesLocal(actionKey) ? ProfileFor(actionKey).TimeoutMs : ProfileFor(actionKey).CloudTimeoutMs;
 
     // Модель, которой пойдёт локальный вызов (для UI использования)
     public string LocalModel => _ollama.TextModel;

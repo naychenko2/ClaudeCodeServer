@@ -18,6 +18,14 @@ public sealed record OneShotUsage(
 // (нераспознанный формат ответа) — потребитель должен это пережить.
 public sealed record OneShotResult(string Text, OneShotUsage? Usage, long DurationMs);
 
+// Отказ one-shot вызова по таймауту. Наследник InvalidOperationException — потребители,
+// ловящие её, ведут себя как раньше; отдельный тип нужен, чтобы CheapTextRunner мог
+// сделать ОДИН повтор (обрыв по таймауту — не приговор), а человек увидел честную
+// причину отказа вместо «уточните задачу». Сообщение не меняется: по нему
+// ChangelogService.DescribeFailure различает таймаут и сбой CLI.
+public sealed class LlmTimeoutException()
+    : InvalidOperationException("AI не ответил за отведённое время");
+
 // Абстракция one-shot вызова LLM — для мокирования в тестах.
 // В DI интерфейс указывает на тот же singleton OneShotClaudeRunner.
 public interface IOneShotRunner
@@ -211,7 +219,7 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
         catch (OperationCanceledException)
         {
             launcher.Kill(process, turnId);
-            throw new InvalidOperationException("AI не ответил за отведённое время");
+            throw new LlmTimeoutException();
         }
     }
 

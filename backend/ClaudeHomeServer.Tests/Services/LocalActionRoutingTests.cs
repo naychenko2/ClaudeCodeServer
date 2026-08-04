@@ -58,16 +58,22 @@ public class LocalActionRoutingTests
 
     // Фейковый claude-раннер: помечает ответ, чтобы отличить claude-путь от локали.
     // failModel — модель, вызов которой имитирует сбой провайдера (как реальный раннер,
-    // бросающий InvalidOperationException); emptyModel — успешный, но пустой ответ.
-    private sealed class FakeOneShot(string? failModel = null, string? emptyModel = null) : IOneShotRunner
+    // бросающий InvalidOperationException); emptyModel — успешный, но пустой ответ;
+    // timeouts — сколько первых вызовов обрываются таймаутом (LlmTimeoutException).
+    private sealed class FakeOneShot(string? failModel = null, string? emptyModel = null,
+        int timeouts = 0) : IOneShotRunner
     {
         public readonly List<string?> Calls = [];
+        public readonly List<TimeSpan?> Timeouts = [];
+        private int _timeoutsLeft = timeouts;
 
         public string? NormalizeModel(string? model) => model;
         public Task<string> RunAsync(string prompt, string? model = null, TimeSpan? timeout = null,
             CancellationToken ct = default, string? ownerId = null, string? effort = null, string? label = null)
         {
             Calls.Add(model);
+            Timeouts.Add(timeout);
+            if (_timeoutsLeft > 0) { _timeoutsLeft--; throw new LlmTimeoutException(); }
             if (model is not null && model == failModel)
                 throw new InvalidOperationException($"claude завершился с кодом 1: провайдер {model} недоступен");
             if (model is not null && model == emptyModel) return Task.FromResult("");
@@ -428,6 +434,141 @@ public class LocalActionRoutingTests
         var keys = LocalActionCatalog.All.Select(a => a.Key).ToList();
         Assert.Equal(keys.Count, keys.Distinct().Count());
         Assert.All(LocalActionCatalog.All, a => Assert.True(LocalActionCatalog.IsKnown(a.Key)));
+    }
+
+    // --- Таймауты по маршруту: локаль и облако живут со своими потолками ---
+    // Локальные значения калибровались под Ollama; облачная сильная модель на сложной
+    // задаче отвечает заметно дольше (прод 2026-08-04: планировщик КР на opus).
+
+    [Fact]
+    public void Профили_ОблачныйТаймаутОтдельныйИБольшеЛокального()
+    {
+        foreach (var (profile, spec) in LocalActionCatalog.ProfileDefaults)
+            Assert.True(spec.CloudTimeoutMs > spec.TimeoutMs,
+                $"профиль {profile}: облачный потолок обязан быть больше локального");
+    }
+
+    [Fact]
+    public async Task CheapRunner_ОблачныйМаршрут_ТаймаутНеЛокальный()
+    {
+        // Дефолт team-implement-plan — маршрут-слот; Ollama выключена → цепочка
+        // заканчивается на claude. Раннер обязан получить ОБЛАЧНЫЙ потолок профиля,
+        // а не локальный (90 с), который оборвал планировщик на проде.
+        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });
+        var router = new LocalActionRouter(Ollama(config), Store(config), config,
+            NullLogger<LocalActionRouter>.Instance);
+        var claude = new FakeOneShot();
+        var runner = new CheapTextRunner(router, Ollama(config), Cloud(config), claude,
+            NullLogger<CheapTextRunner>.Instance);
+
+        await runner.RunAsync(LocalActionCatalog.TeamImplementPlan, "prompt-text", "haiku");
+
+        var spec = router.ProfileFor(LocalActionCatalog.TeamImplementPlan);
+        var timeout = Assert.Single(claude.Timeouts);
+        Assert.Equal(TimeSpan.FromMilliseconds(spec.CloudTimeoutMs), timeout);
+        Assert.NotEqual(TimeSpan.FromMilliseconds(spec.TimeoutMs), timeout);
+    }
+
+    [Fact]
+    public async Task CheapRunnerDetailed_ОблачныйТаймаут_ПереопределяетсяИзКонфига()
+    {
+        var config = ConfigWithTempData(new()
+        {
+            ["Ollama:Model"] = "",
+            ["Ollama:Profiles:large:CloudTimeoutMs"] = "600000",
+        });
+        var router = new LocalActionRouter(Ollama(config), Store(config), config,
+            NullLogger<LocalActionRouter>.Instance);
+        var claude = new FakeOneShot();
+        var runner = new CheapTextRunner(router, Ollama(config), Cloud(config), claude,
+            NullLogger<CheapTextRunner>.Instance);
+
+        await runner.RunDetailedAsync(LocalActionCatalog.TeamImplementPlan, "prompt-text", "haiku");
+
+        Assert.Equal(TimeSpan.FromMilliseconds(600_000), Assert.Single(claude.Timeouts));
+    }
+
+    [Fact]
+    public void TimeoutMsFor_ЗависитОтМаршрута()
+    {
+        // Ollama настроена, действие рекомендовано локали → локальный потолок
+        var router = Router(new() { ["Ollama:Model"] = "qwen3:14b", ["Ollama:BaseUrl"] = "http://localhost:11434" });
+        Assert.Equal(router.ProfileFor(LocalActionCatalog.NotesTags).TimeoutMs,
+            router.TimeoutMsFor(LocalActionCatalog.NotesTags));
+        // Действие не на локали → облачный потолок
+        Assert.Equal(router.ProfileFor(LocalActionCatalog.TeamImplementPlan).CloudTimeoutMs,
+            router.TimeoutMsFor(LocalActionCatalog.TeamImplementPlan));
+
+        // Ollama выключена → цепочка любого действия может закончиться на claude
+        var off = Router(new() { ["Ollama:Model"] = "" });
+        Assert.Equal(off.ProfileFor(LocalActionCatalog.NotesTags).CloudTimeoutMs,
+            off.TimeoutMsFor(LocalActionCatalog.NotesTags));
+    }
+
+    // --- Один ретрай при таймауте финального claude-шага ---
+
+    [Fact]
+    public async Task CheapRunner_ТаймаутClaude_ОдинПовтор()
+    {
+        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });
+        var router = new LocalActionRouter(Ollama(config), Store(config), config,
+            NullLogger<LocalActionRouter>.Instance);
+        var claude = new FakeOneShot(timeouts: 1);
+        var runner = new CheapTextRunner(router, Ollama(config), Cloud(config), claude,
+            NullLogger<CheapTextRunner>.Instance);
+
+        var result = await runner.RunAsync(LocalActionCatalog.TeamImplementPlan, "prompt-text", "haiku");
+
+        Assert.Equal("CLAUDE[haiku]:prompt-text", result);
+        Assert.Equal(2, claude.Calls.Count); // обрыв + ровно один повтор
+    }
+
+    [Fact]
+    public async Task CheapRunner_ДваТаймаута_ОтказБезТретьейПопытки()
+    {
+        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });
+        var router = new LocalActionRouter(Ollama(config), Store(config), config,
+            NullLogger<LocalActionRouter>.Instance);
+        var claude = new FakeOneShot(timeouts: 2);
+        var runner = new CheapTextRunner(router, Ollama(config), Cloud(config), claude,
+            NullLogger<CheapTextRunner>.Instance);
+
+        await Assert.ThrowsAsync<LlmTimeoutException>(
+            () => runner.RunAsync(LocalActionCatalog.TeamImplementPlan, "prompt-text", "haiku"));
+        Assert.Equal(2, claude.Calls.Count); // третий раз не пробуем
+    }
+
+    [Fact]
+    public async Task CheapRunner_ОбычныйСбойClaude_БезПовтора()
+    {
+        // Не-таймаут (exit code, провайдер недоступен) повторяется прежним путём —
+        // фолбэком по цепочке, а не слепым ретраем.
+        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });
+        var router = new LocalActionRouter(Ollama(config), Store(config), config,
+            NullLogger<LocalActionRouter>.Instance);
+        var claude = new FakeOneShot(failModel: "haiku");
+        var runner = new CheapTextRunner(router, Ollama(config), Cloud(config), claude,
+            NullLogger<CheapTextRunner>.Instance);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => runner.RunAsync(LocalActionCatalog.NotesTags, "prompt-text", "haiku"));
+        Assert.Single(claude.Calls);
+    }
+
+    [Fact]
+    public async Task CheapRunnerDetailed_ТаймаутClaude_ОдинПовтор()
+    {
+        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });
+        var router = new LocalActionRouter(Ollama(config), Store(config), config,
+            NullLogger<LocalActionRouter>.Instance);
+        var claude = new FakeOneShot(timeouts: 1);
+        var runner = new CheapTextRunner(router, Ollama(config), Cloud(config), claude,
+            NullLogger<CheapTextRunner>.Instance);
+
+        var result = await runner.RunDetailedAsync(LocalActionCatalog.TeamImplementPlan, "prompt-text", "haiku");
+
+        Assert.Equal("CLAUDE[haiku]:prompt-text", result.Text);
+        Assert.Equal(2, claude.Calls.Count);
     }
 
     // --- Маршруты-слоты (tier:strong|medium|weak) ---

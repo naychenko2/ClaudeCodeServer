@@ -381,6 +381,7 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
   // иначе останется висеть недоступный режим. При включении вкладка появится сама
   // (leftTabOptions пересчитывается из projectForEdit) — перезагрузка не нужна.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- увод с вкладки «Инструменты» при её отключении в настройках
     if (leftTab === 'tools' && !projectForEdit.toolsEnabled) setLeftTab('sessions');
   }, [projectForEdit.toolsEnabled, leftTab]);
 
@@ -540,6 +541,7 @@ const windowWidth = useWindowWidth();
   const [boardColumns, setBoardColumns] = useState<BoardColumn[] | undefined>(project.boardColumns);
   const [columnsDialog, setColumnsDialog] = useState(false);
   // Проект мог освежиться серверными данными (App refetch) — подхватываем колонки из пропа
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- синхронизация колонок доски с данными проекта
   useEffect(() => { setBoardColumns(project.boardColumns); }, [project]);
   const projectColumns = useMemo(() => resolveColumns(boardColumns), [boardColumns]);
   // Число задач в каждой колонке — для предупреждения при удалении непустой колонки
@@ -703,6 +705,7 @@ const windowWidth = useWindowWidth();
     const [pid, path] = sep === -1 ? [project.id, raw] : [raw.slice(0, sep), raw.slice(sep + 1)];
     if (pid !== project.id) return;
     sessionStorage.removeItem('cc_pending_file');
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- одноразовое потребление диплинка из sessionStorage
     setOpenFile(path);
     setFileFullscreen(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps

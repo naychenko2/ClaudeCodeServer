@@ -64,6 +64,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
   useEffect(() => {
     if (commentTotal > 0 && !autoTabRef.current) { setSideTab('comments'); autoTabRef.current = true; }
   }, [commentTotal]);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс панели в начальное состояние при смене заметки
   useEffect(() => { autoTabRef.current = false; setSideTab('connections'); setCommentTotal(0); }, [noteId]);
   const [note, setNote] = useState<NoteDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -106,6 +107,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
 
   useEffect(() => {
     let alive = true;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- индикатор загрузки перед перечитыванием заметки
     setLoading(true);
     // Читаем через офлайн-слой (черновик/кэш офлайн, сеть онлайн)
     getNoteForView(noteId)
@@ -159,6 +161,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
   const [annReplyDraft, setAnnReplyDraft] = useState('');
   const [annReplySending, setAnnReplySending] = useState(false);
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс устаревших ответов перед загрузкой ответов аннотации
     if (!note || !ann || ann.isReply) { setAnnReplies(null); return; }
     let alive = true;
     api.notes.replies(note.id).then(r => { if (alive) setAnnReplies(r); }).catch(() => {});
@@ -263,6 +266,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
   };
   useEffect(() => {
     if (dailyJob.status === 'done' && dailyJob.result) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- применение результата AI-задачи: замена заметки по завершении
       setNote(dailyJob.result);
       bumpNotes();
       resetAiJob(dailyKey);

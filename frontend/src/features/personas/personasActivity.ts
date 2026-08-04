@@ -42,6 +42,7 @@ export function usePersonasActivity(personas: Persona[]): { items: ActivityItem[
 
   useEffect(() => {
     let alive = true;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс сырых данных перед перезагрузкой набора персон
     setRaw(null);
     if (personas.length === 0) { setRaw({ chats: [], memory: [] }); return; }
 

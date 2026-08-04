@@ -49,6 +49,7 @@ export function ToolTargetPicker({ personaId, bindings, onSetMode, onOpenRule }:
 
   useEffect(() => {
     let alive = true;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс списка перед перезагрузкой целей
     setItems(null);
     setLoadError(false);
     fetchBindingTargets('tool', undefined, personaId)

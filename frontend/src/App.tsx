@@ -281,6 +281,7 @@ export default function App() {
   // При наличии сохранённых credentials — немедленно зондируем сервер, чтобы _online
   // выставился правильно ещё до первого рендера страниц (navigator.onLine ≠ «сервер доступен»)
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- одноразовый зонд доступности сервера по сохранённым credentials
     if (!auth) { setAuthChecking(false); return }
     // Максимум 3 секунды на проверку доступности сервера.
     // Если не ответил — показываем приложение в текущем (возможно офлайн) состоянии.

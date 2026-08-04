@@ -40,6 +40,7 @@ export function PreviewView({ service, projectId, onStop, onClose, services }: P
   // Пока сервис поднимается, смотреть в пустой iframe незачем — интересен вывод
   const [tab, setTab] = useState<Tab>(starting ? 'logs' : 'preview')
   // Смена сервиса — заново: у нового своя вкладка по умолчанию
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс вкладки на preview при смене сервиса
   useEffect(() => { setTab('preview') }, [service.id])
   const activeTab: Tab = hasLogs ? tab : 'preview'
 

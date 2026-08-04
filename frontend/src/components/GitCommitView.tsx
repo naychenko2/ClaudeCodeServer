@@ -88,6 +88,7 @@ export function GitCommitView({ project, sha, initialPath, onClose, isMobile = f
   };
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс состояния предыдущего коммита перед загрузкой нового
     setDetail(null); setNotFound(false); setActivePath(null); setDiff(null);
     setFilter(''); setMobileShowDiff(false); setBodyExpanded(false);
     let cancelled = false;
@@ -114,12 +115,14 @@ export function GitCommitView({ project, sha, initialPath, onClose, isMobile = f
   // Смена запрошенного файла при уже открытом коммите (клик по другому файлу того же коммита)
   useEffect(() => {
     if (initialPath && detail?.files.some(f => f.path === initialPath)) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- выбор файла initialPath после загрузки списка файлов
       setActivePath(initialPath);
       if (isMobile) setMobileShowDiff(true);
     }
   }, [initialPath, detail, isMobile]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- диффа нет, когда нет активного файла
     if (!activePath) { setDiff(null); return; }
     let cancelled = false;
     setDiffLoading(true);

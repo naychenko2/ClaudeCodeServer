@@ -80,6 +80,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   // PUT (с нормализованным order) заменяет state; владелец может подхватить через
   // onTagsReorder и обновить project — тогда sync-эффект применит ту же правку.
   const [registry, setRegistry] = useState<ProjectTag[]>(() => project.tagRegistry ?? []);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- синхронизация оптимистичного реестра тегов с project.tagRegistry
   useEffect(() => { setRegistry(project.tagRegistry ?? []); }, [project.id, project.tagRegistry]);
   // Открытое меню маркировки: чат + якорь кнопки (fixed-позиция, скролл списка закрывает)
   const [tagMenu, setTagMenu] = useState<{ sessionId: string; anchor: DOMRect } | null>(null);
@@ -252,6 +253,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   // не дожидаясь 5-секундного поллинга.
   useEffect(() => {
     if (!activeSession) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- подхват правок активной сессии в список, не дожидаясь поллинга
     setSessions(prev => {
       if (prev.some(s => s.id === activeSession.id)) {
         return prev.map(s =>

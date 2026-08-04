@@ -24,6 +24,7 @@ export function ToolGroupBlock({ isGroupDone, toolCount, summary, children }: {
   // Группа из одних file_changed (toolCount 0) не сворачивается — иначе строка «0 действий»
   const collapsible = isGroupDone && toolCount > 0;
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- автосворачивание группы file_changed по завершении
     if (collapsible) setExpanded(false);
   }, [collapsible]);
 

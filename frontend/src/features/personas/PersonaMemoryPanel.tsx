@@ -62,6 +62,7 @@ export function PersonaMemoryPanel({ persona, onBack, isMobile, embedded }: {
 
   // Первичная загрузка при смене персоны
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- начальная загрузка памяти персоны
     setLoading(true);
     void load();
   }, [load]);

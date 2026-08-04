@@ -22,6 +22,7 @@ export function PersonaContextTab({ personaId, sessionId }: { personaId: string;
 
   useEffect(() => {
     let alive = true;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс и перезагрузка памяти/задач при смене персоны
     setMem(null); setTasks(null);
     api.personas.memory(personaId).then(m => { if (alive) setMem(m); }).catch(() => { if (alive) setMem([]); });
     api.tasks.listByPersona(personaId).then(t => { if (alive) setTasks(t); }).catch(() => { if (alive) setTasks([]); });
@@ -32,6 +33,7 @@ export function PersonaContextTab({ personaId, sessionId }: { personaId: string;
   // (данные общие для всех персон проекта, не персональные)
   useEffect(() => {
     let alive = true;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс командной памяти при смене персоны/проекта
     setTeamMem(null);
     if (!projectId) { setTeamMem([]); return; }
     api.projects.teamMemory(projectId).then(t => { if (alive) setTeamMem(t); }).catch(() => { if (alive) setTeamMem([]); });

@@ -78,6 +78,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
   useEffect(() => {
     ensureNotificationsSubscribed();
     void ensureUnreadCountLoaded();
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- инициализация бейджа непрочитанных уведомлений из хранилища/подписки
     setNotifBadge(getUnreadCount());
     return subscribeToNotifications(() => setNotifBadge(getUnreadCount()));
   }, []);
@@ -90,6 +91,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
     let seen: string | null = null;
     try { seen = localStorage.getItem(productHistorySeenKey(auth.id)); } catch { /* ignore */ }
     if (!seen) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- синхронизация флага «не видел историю» с localStorage
       setNeverSeen(true); // первый заход — точка-индикатор без числа
     } else {
       setNeverSeen(false);

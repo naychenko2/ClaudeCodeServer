@@ -377,6 +377,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
   const [hasCLAUDEmd, setHasCLAUDEmd] = useState<boolean | null>(null);
   useEffect(() => {
     // Для чата вне проекта файлов нет — баннер CLAUDE.md не показываем
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- guard: без проекта баннер CLAUDE.md не нужен
     if (!project) { setHasCLAUDEmd(false); return; }
     api.files.list(project.id)
       .then(files => setHasCLAUDEmd(files.some(f => !f.isDirectory && f.name === 'CLAUDE.md')))

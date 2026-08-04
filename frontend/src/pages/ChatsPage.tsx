@@ -53,6 +53,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
   useEffect(() => { void ensureTasksLoaded(); }, []);
 
   // Вложения относятся к конкретному чату — сбрасываем при смене активного
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- очистка вложений при смене активного чата
   useEffect(() => { setAttachedFiles([]); }, [activeId]);
 
   // Видимость и ширина панели чатов целиком на LeftPanelStack (стор

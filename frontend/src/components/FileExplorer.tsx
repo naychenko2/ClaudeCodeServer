@@ -617,6 +617,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
     inFlight.current.clear();
     const st = _explorerStore.get(project.id);
     if (st) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- восстановление кэша проводника при смене проекта
       setDirCache(st.dirCache);
       setExpanded(st.expanded);
       setMobileDir(st.mobileDir);

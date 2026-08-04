@@ -94,6 +94,7 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
   // prop (обновляется через realtime personas_changed после сохранения).
   const [allAccess, setAllAccess] = useState(persona.allProjectsAccess ?? false);
   const [allAccessBusy, setAllAccessBusy] = useState(false);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- черновик флага «все проекты» зеркалирует состояние персоны
   useEffect(() => { setAllAccess(persona.allProjectsAccess ?? false); }, [persona.id, persona.allProjectsAccess]);
 
   const toggleAllAccess = async (next: boolean) => {
@@ -148,6 +149,7 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
   }, [persona.id]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс и перезагрузка привязок при смене персоны
     setBindings(null);
     void load();
   }, [load]);
@@ -358,6 +360,7 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
   useEffect(() => {
     if (condJob.status === 'done' && condJob.result != null && expanded) {
       const cond = condJob.result;
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- запись AI-сгенерированного условия в черновик по завершении
       setCondDraft(cond);
       void putBinding(expanded, { condition: cond });
       resetAiJob(condKey);
@@ -370,6 +373,7 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
 
   useEffect(() => {
     if (panelCondJob.status === 'done' && panelCondJob.result != null && panel) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- запись AI-сгенерированного условия в черновик панели по завершении
       setPanel({ ...panel, condition: panelCondJob.result });
       resetAiJob(panelCondKey);
     } else if (panelCondJob.status === 'error') {
@@ -1137,6 +1141,7 @@ function TargetPicker({ panel, ownProjectId, toolPicker, onChange }: {
     // У инструментов свой пикер с собственной загрузкой (нужен personaId в запросе)
     if (type === 'tool') return;
     let alive = true;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- загрузка каталога целей при смене типа цели
     setItems(null);
     setLoadError(false);
     fetchBindingTargets(catalogType, type === 'notes' && notesSource ? notesSource.id : undefined)
@@ -1289,6 +1294,7 @@ function PersonasSubPicker({ panel, onChange }: {
 
   useEffect(() => {
     let alive = true;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- загрузка списка персон для привязки при смене проекта
     setItems(null);
     setLoadError(false);
     fetchBindingTargets('personasInProject', projectId)

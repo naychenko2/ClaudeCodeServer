@@ -54,6 +54,7 @@ function useWide(bp = MOBILE_MAX + 1) {
   useEffect(() => {
     const mq = window.matchMedia(`(min-width: ${bp}px)`);
     const h = (e: MediaQueryListEvent) => setWide(e.matches);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- подписка matchMedia: синхронизация при смене порога
     setWide(mq.matches);
     if (mq.addEventListener) mq.addEventListener('change', h); else mq.addListener(h);
     return () => { if (mq.removeEventListener) mq.removeEventListener('change', h); else mq.removeListener(h); };
@@ -98,11 +99,13 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
   useEffect(() => {
     if (sessionStorage.getItem('cc_pending_new_project')) {
       sessionStorage.removeItem('cc_pending_new_project');
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- одноразовое открытие диалога по флагу из sessionStorage
       setActiveDialog({ type: 'add' });
     }
   }, []);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс состояния загрузки перед запросом
     setLoadState('loading');
     Promise.all([api.projects.list(), api.projectGroups.list().catch(() => [] as ProjectGroup[])])
       .then(async ([list, grps]) => {

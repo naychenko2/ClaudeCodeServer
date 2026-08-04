@@ -32,6 +32,7 @@ export function ModuleHost({ module, theme, user, onTitleChange }: {
 
   useEffect(() => {
     let alive = true;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс вкладки/ошибки перед загрузкой нового remote-модуля
     setTab(null);
     setError(null);
     loadModuleTab(module)

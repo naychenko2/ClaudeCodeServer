@@ -115,6 +115,7 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
   // Диплинк/выбор указывает на проектную персону — в глобальном разделе её нет, сбрасываем выбор
   useEffect(() => {
     if (selectedId && allPersonas.some(p => p.id === selectedId) && !personas.some(p => p.id === selectedId)) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс выбора, если персоны диплинка нет в проекте
       setSelectedId(null); setMobileView('list');
       if (getNav()?.persona) navReplace({ screen: 'personas' });
     }

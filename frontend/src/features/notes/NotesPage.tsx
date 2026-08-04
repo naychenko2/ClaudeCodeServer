@@ -135,6 +135,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   // Диплинк #/notes/{id}
   useEffect(() => {
     const t = parseHash();
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- диплинк из хэша #/notes/{id} при монтировании
     if (t?.screen === 'notes' && t.noteId) { setSelectedId(t.noteId); setMobileView('note'); }
   }, []);
 
@@ -203,6 +204,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   }, [semanticAvailable, leaveGraph]);
   useEffect(() => {
     const q = query.trim();
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- часть debounce-эффекта: очистка результатов на пустом запросе
     if (!q) { setResults(null); setSemanticHits(null); return; }
     // Офлайн — фильтруем кэшированный список локально (серверный поиск/семантика недоступны)
     if (!online) {

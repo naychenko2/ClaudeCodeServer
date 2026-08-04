@@ -425,6 +425,7 @@ export function Composer({
     if (!r || r.seq === 0) return;
     if (getDraft(sessionId).trim()) return;          // черновик важнее
     if (r.text == null) return;                      // нечего восстанавливать
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- восстановление прерванного сообщения из события composer_restore
     setText(r.text);
     if (r.attachedPaths && r.attachedPaths.length > 0 && onReplaceAttachments) {
       onReplaceAttachments(r.attachedPaths);
@@ -521,6 +522,7 @@ export function Composer({
     if (!sessionId) return;
     if (sessionStorage.getItem('cc_auto_discuss') === sessionId) {
       sessionStorage.removeItem('cc_auto_discuss');
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- одноразовое открытие «Команды» по флагу из sessionStorage
       setTeamOpen(true);
     }
   }, [sessionId]);
@@ -730,6 +732,7 @@ export function Composer({
 
   // Подсказка следующего сообщения: дисмисс крестиком живёт до прихода новой подсказки
   const [suggestionDismissed, setSuggestionDismissed] = useState(false);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс «скрыто» при приходе новой подсказки
   useEffect(() => { setSuggestionDismissed(false); }, [promptSuggestion]);
   const suggestionVisible = !!promptSuggestion && text.trim() === '' && !suggestionDismissed && !isGenerating && !isListening;
   const acceptSuggestion = useCallback(() => {

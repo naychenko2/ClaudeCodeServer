@@ -84,6 +84,7 @@ export function useVoiceInput({ onResult, onKeyboardFallback }: VoiceInputOption
 
   // Таймер записи голоса
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- таймер секунд записи на время слушания
     if (!isListening) { setRecSeconds(0); return; }
     setRecSeconds(0);
     const id = setInterval(() => setRecSeconds(s => s + 1), 1000);

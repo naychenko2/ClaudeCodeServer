@@ -133,6 +133,7 @@ export function AiLauncher() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, gradedFab]);
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс активного пункта на 0 при смене поиска
   useEffect(() => { setIdx(0); }, [q, open]);
   // Держим активный (стрелками) пункт в видимой области списка. block:'nearest' —
   // не дёргает, если пункт уже виден (напр. при наведении мышью).

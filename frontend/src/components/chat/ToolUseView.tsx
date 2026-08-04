@@ -203,6 +203,7 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
   // изображение под другим аккаунтом fal.ai — его нет в текущем billing), убираем метку через 30с.
   const [pendingExpired, setPendingExpired] = useState(false);
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- автоснятие метки pending по таймеру 30с
     if (!costPending) { setPendingExpired(false); return; }
     const t = setTimeout(() => setPendingExpired(true), 30000);
     return () => clearTimeout(t);

@@ -120,6 +120,7 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
     if (!isDone || localAgents !== null) return;
     const dir = parseTranscriptDir(workflow.result as string | undefined);
     if (!dir) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- фолбэк-загрузка агентов из локальной транскрипции
     setLocalLoading(true);
     api.workflow.getAgents(dir)
       .then(r => setLocalAgents(r.agents))

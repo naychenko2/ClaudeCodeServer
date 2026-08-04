@@ -290,6 +290,7 @@ function ActivitySection({ activity, running, accent, online, onOpenFile, render
 }) {
   const [userOpen, setUserOpen] = useState<boolean | null>(null);
   // Смена фазы running сбрасывает ручной выбор — секция снова следует автоповедению
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс ручного раскрытия при завершении фазы
   useEffect(() => { setUserOpen(null); }, [running]);
   const open = userOpen ?? running;
   // «Действия» — только вызовы инструментов; текст/thinking считать действиями странно

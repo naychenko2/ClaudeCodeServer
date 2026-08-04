@@ -47,6 +47,7 @@ function GitHistorySection({ project }: { project: Project }) {
     } catch { /* оффлайн/ошибка — секция покажет «недоступно» через isRepo=false без карточек? нет: просто молчим */ }
     finally { setLoading(false); }
   };
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- загрузка состояния git-репозитория при смене проекта
   useEffect(() => { void reload(); }, [project.id]);
 
   const run = async (op: () => Promise<unknown>) => {

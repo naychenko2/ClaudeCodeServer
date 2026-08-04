@@ -70,6 +70,7 @@ export function useGraphSettings(key: string | null) {
   const [settings, setSettings] = useState(() => key ? loadGraphSettings(key) : GRAPH_DEFAULTS);
   const keyRef = useRef(key);
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- загрузка настроек при смене storage-ключа
     if (keyRef.current !== key) { keyRef.current = key; if (key) setSettings(loadGraphSettings(key)); }
   }, [key]);
   // Дебаунс записи: слайдеры шлют изменения на каждый пиксель

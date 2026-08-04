@@ -99,6 +99,7 @@ export function SpendAnalysis({ st, patch, range, showUsers, isMobile, overview,
   // Смена среза/уровней — дерево строится заново
   const levelsKey = levels.join('>');
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- перестройка сводного дерева при смене среза/фильтров
     setChunks({});
     setExpanded(new Set());
     setSelNode(null);
@@ -110,6 +111,7 @@ export function SpendAnalysis({ st, patch, range, showUsers, isMobile, overview,
 
   // Значения для подменю «+ фильтр → разрез»
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс значений подфильтра при смене меню
     if (!menu?.startsWith('fvals:')) { setFvals(null); return; }
     const dim = menu.slice(6) as SpendDim;
     let cancelled = false;
@@ -124,6 +126,7 @@ export function SpendAnalysis({ st, patch, range, showUsers, isMobile, overview,
   const selTurnId = st.selKey?.startsWith('turn:') ? st.selKey.slice(5) : null;
   const [turnDetail, setTurnDetail] = useState<SpendTurnDetailResponse | null | 'error'>(null);
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- скелетон вместо старого хода при смене выбора
     if (!selTurnId) { setTurnDetail(null); return; }
     let cancelled = false;
     setTurnDetail(null);
@@ -136,6 +139,7 @@ export function SpendAnalysis({ st, patch, range, showUsers, isMobile, overview,
   // ---- Свод выбранного узла (панель деталей) ----
   const [nodeOv, setNodeOv] = useState<SpendOverviewResponse | null | 'error'>(null);
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- скелетон вместо старого обзора узла при смене выбора
     if (!selNode) { setNodeOv(null); return; }
     let cancelled = false;
     setNodeOv(null);

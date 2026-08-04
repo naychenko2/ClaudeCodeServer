@@ -111,6 +111,7 @@ export function WallPage({ auth, onLogout, onHubTab }: Props) {
   const focusedProject = focused?.projectId ? projects.get(focused.projectId) : undefined;
 
   // Смена фокуса закрывает оверлей: контент чужого проекта поверх нового фокуса — враньё
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- закрытие оверлея при смене фокусного чата
   useEffect(() => { setOverlay(null); }, [focused?.id]);
 
   // Открыть чат колонкой по id (ссылки из задач/командного центра): резолв через

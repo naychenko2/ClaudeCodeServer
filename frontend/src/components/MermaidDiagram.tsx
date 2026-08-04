@@ -225,6 +225,7 @@ export function MermaidDiagram({ code }: { code: string }) {
   useEffect(() => {
     // Уже в кэше (для текущей темы) — перерисовывать нечего, берём готовый SVG.
     const cached = mermaidSvgCache.get(cacheKey(code));
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- быстрая отдача кэшированного SVG диаграммы
     if (cached) { setSvg(cached); setFailed(false); return; }
     let cancelled = false;
     setFailed(false);

@@ -41,6 +41,7 @@ export function KnowledgePage({ auth, onLogout, onHubTab }: {
   // Диплинк #/knowledge/{id}
   useEffect(() => {
     const t = parseHash();
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- диплинк из хэша #/knowledge/{id} при монтировании
     if (t?.screen === 'knowledge' && t.knowledgeId) { setSelectedId(t.knowledgeId); setMobileView('item'); }
   }, []);
 
@@ -77,6 +78,7 @@ export function KnowledgePage({ auth, onLogout, onHubTab }: {
   // Удалённую из списка базу (с другого устройства) — снимаем выбор
   useEffect(() => {
     if (selectedId && !items.some(i => i.id === selectedId)) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- защита от залипания на удалённой базе знаний
       setSelectedId(null); setMobileView('list');
     }
   }, [items, selectedId]);

@@ -75,6 +75,7 @@ export function SpendScreen({ ctx, isAdmin, onClose, embedded }: {
   const [ovTick, setOvTick] = useState(0);
   useEffect(() => {
     let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс overview/ошибки перед запросом при смене диапазона
     setOverview(null);
     setOvError(false);
     api.spend.overview(spendQuery({ from: range.from, to: range.to, scope: st.scope, filters: st.filters }))

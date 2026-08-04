@@ -88,6 +88,7 @@ export function PillSwitch<T extends string>({ value, options, onChange, fill, i
     // Активного сегмента нет — прячем пилюлю (и чистим память позиции, чтобы новый
     // инстанс не возник на чужом месте)
     if (activeIndex < 0) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- геометрия пилюли меряется по DOM, при рендере не вычисляется
       setThumb(null);
       if (persistKey) pillMemory.delete(persistKey);
       return;
@@ -104,6 +105,7 @@ export function PillSwitch<T extends string>({ value, options, onChange, fill, i
     setThumb(next);
   }, [activeIndex, labelsKey, isMobile, fill, persistKey, compact]);
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- highlight при drag намеренно расходится с активным сегментом
   useEffect(() => { setHighlight(activeIndex); }, [activeIndex]);
 
   // Пересчёт при ресайзе контейнера (адаптив, смена шрифта/масштаба) — мгновенно.

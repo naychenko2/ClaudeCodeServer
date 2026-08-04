@@ -222,6 +222,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
 
   // Файлы выбранного скоупа (read-only) — коммит или стэш; грузим при активации
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- быстрый сброс commitFiles в scope, где файлы уже видны
     if (activeScope === 'working' || activeScope === 'branch') { setCommitFiles([]); return; }
     let alive = true;
     const stashIdx = activeScope.startsWith('stash:') ? Number(activeScope.slice(6)) : null;

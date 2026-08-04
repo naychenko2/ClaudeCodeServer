@@ -519,6 +519,7 @@ function SpendLane({ period, setPeriod, isMobile, pad, onClose }: { period: stri
 
   useEffect(() => {
     let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс spend/error перед новым запросом при смене периода
     setSpend(null);
     setError(false);
     const { from, to } = periodRange(period);
@@ -677,6 +678,7 @@ export function UsageScreen({ onClose }: { onClose: () => void }) {
     api.usage.get().then(d => { if (!c) setUsage(d); }).catch(() => { if (!c) setUsage({ snapshots: [] }); });
     api.fal.account(7).then(d => { if (!c) setFal(d); }).catch(() => { if (!c) setFal(null); });
     api.glif.account().then(d => { if (!c) setGlif(d); }).catch(() => { if (!c) setGlif(null); });
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- параллельная инициализация аккаунтов/балансов при монтировании
     for (const key of balanceKeys) loadProvider(key);
     return () => { c = true; };
     // balanceKeys вычисляется из каталога моделей и на время жизни экрана постоянен;

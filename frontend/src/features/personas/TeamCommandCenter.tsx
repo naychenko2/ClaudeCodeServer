@@ -68,6 +68,7 @@ export function TeamCommandCenter({
     try { setMem(await api.projects.teamMemory(project.id)); } catch { setMem([]); }
     try { setTasks(await api.tasks.listByProject(project.id)); } catch { setTasks([]); }
   };
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- начальная загрузка ленты с интервалом поллинга
   useEffect(() => { void refresh(); }, [project.id, limit]);
 
   // Realtime: перечитываем ленту/память/задачи по событиям изменений (с дебаунсом) —

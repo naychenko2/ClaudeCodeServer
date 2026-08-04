@@ -133,6 +133,7 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
 
   useEffect(() => {
     if (descJob.status === 'done' && descJob.result != null) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- применение AI-описания по завершении джоба
       setDescription(descJob.result);
       setDescEditing(false);   // сразу показываем результат в превью
       resetAiJob(descKey);
@@ -147,6 +148,7 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
     if (subsJob.status === 'done' && subsJob.result != null) {
       const existing = new Set(subtasks.map(s => s.title.toLowerCase()));
       const fresh = subsJob.result.filter(t => !existing.has(t.toLowerCase()));
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- дописка AI-подзадач по завершении джоба
       setSubtasks(prev => [...prev, ...fresh.map(t => ({ id: '', title: t, isDone: false }))]);
       resetAiJob(subsKey);
     } else if (subsJob.status === 'error') {
@@ -159,6 +161,7 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
   // AI-хаб: если в правку вошли по действию из палитры/подсказки — сразу запускаем генерацию
   useEffect(() => {
     if (!pendingAi) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- одноразовый запуск генерации по флагу pendingAi от родителя
     if (pendingAi === 'task.description') generateDescription();
     else if (pendingAi === 'task.subtasks') generateSubtasks();
     onPendingConsumed?.();

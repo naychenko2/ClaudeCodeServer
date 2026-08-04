@@ -49,6 +49,7 @@ export function SkillsPanel({ projectId, onChanged }: Props) {
       .finally(() => setLoading(false));
   }, [projectId]);
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- начальная загрузка списка скиллов
   useEffect(() => { void load(); }, [load]);
 
   const confirmRemoveSkill = async () => {

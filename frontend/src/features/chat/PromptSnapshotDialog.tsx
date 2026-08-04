@@ -357,6 +357,7 @@ export function PromptSnapshotDialog({ sessionId, snapshotId, contextTokens, tur
 
   useEffect(() => {
     let alive = true;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- загрузка снимка промпта при смене сессии
     setState('loading');
     setAnalysis(null);
     api.sessions.promptSnapshot(sessionId, shownId)

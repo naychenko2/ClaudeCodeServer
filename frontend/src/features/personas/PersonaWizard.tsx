@@ -84,9 +84,10 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
 
   const [wizScope, setWizScope] = useState<PersonaScope>(scope);
   const [wizProjectId, setWizProjectId] = useState(projectId ?? projects[0]?.id ?? '');
-  useEffect(() => {
-    if (wizScope === 'project' && !wizProjectId && projects.length > 0) setWizProjectId(projects[0].id);
-  }, [wizScope, wizProjectId, projects]);
+  // Проект по умолчанию, если выбора ещё нет (список проектов мог доехать позже
+  // монтирования): вычисляется при рендере вместо синхронизирующего эффекта —
+  // все места чтения и так смотрят на значение только при wizScope === 'project'
+  const effProjectId = wizProjectId || projects[0]?.id || '';
 
   // Персона-черновик: null до первого создания (quick-create на шаге 1 либо
   // create в конце шага 2) — дальше все PUT идут по этому id
@@ -188,7 +189,7 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
       model: model || undefined,
       effort: effort || undefined,
       scope: wizScope,
-      projectId: wizScope === 'project' ? wizProjectId : undefined,
+      projectId: wizScope === 'project' ? effProjectId : undefined,
       color,
       greeting: greeting.trim() || undefined,
       memoryEnabled,
@@ -280,7 +281,7 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
   // === Навигация по шагам ===
 
   const canProceedStep1 = method === 'ai' ? aiPrompt.trim().length > 0 : method === 'template' ? !!selectedTemplateKey : true;
-  const canProceedStep2 = name.trim().length > 0 && !(wizScope === 'project' && !wizProjectId);
+  const canProceedStep2 = name.trim().length > 0 && !(wizScope === 'project' && !effProjectId);
   const canProceed = step === 1 ? canProceedStep1 : step === 2 ? canProceedStep2 : true;
 
   async function goNext() {
@@ -292,7 +293,7 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
         try {
           const created = await api.personas.quickCreate({
             prompt: aiPrompt.trim(), scope: wizScope,
-            projectId: wizScope === 'project' ? wizProjectId : undefined,
+            projectId: wizScope === 'project' ? effProjectId : undefined,
           });
           hydrateFromPersona(created);
           setPersona(created);
@@ -495,7 +496,7 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
                     options={[{ value: 'global', label: 'Глобальная' }, { value: 'project', label: 'Проект' }]}
                   />
                   {wizScope === 'project' && (
-                    <select value={wizProjectId} onChange={e => setWizProjectId(e.target.value)} style={selectStyle} aria-label="Проект">
+                    <select value={effProjectId} onChange={e => setWizProjectId(e.target.value)} style={selectStyle} aria-label="Проект">
                       {projects.length === 0 && <option value="">— нет доступных проектов —</option>}
                       {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                     </select>
@@ -780,7 +781,7 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
                   )}
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 12 }}>
                     <Tag>{model ? model : 'модель по умолчанию'}{caps.supportsEffort && effort ? ` · ${effort}` : ''}</Tag>
-                    <Tag>{wizScope === 'project' ? (projects.find(p => p.id === wizProjectId)?.name ?? 'Проект') : 'Глобальная'}</Tag>
+                    <Tag>{wizScope === 'project' ? (projects.find(p => p.id === effProjectId)?.name ?? 'Проект') : 'Глобальная'}</Tag>
                     <Tag>{access === 'full' ? 'Полный доступ' : access === 'readOnly' ? 'Только чтение' : 'Свой доступ'}</Tag>
                     <Tag>{memoryEnabled ? 'Память включена' : 'Память выключена'}</Tag>
                     {bindingsCount != null && <Tag>{bindingsCount} {bindingsCount === 1 ? 'умение' : 'умений'}</Tag>}

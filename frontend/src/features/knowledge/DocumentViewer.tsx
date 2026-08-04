@@ -33,6 +33,7 @@ export function DocumentViewer({ kbId, doc, onClose, isMobile }: {
   // Загружаем содержимое документа. Перестарт при смене doc.id.
   useEffect(() => {
     let alive = true;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- загрузка содержимого документа при его смене
     setLoading(true);
     setError(null);
     setData(null);

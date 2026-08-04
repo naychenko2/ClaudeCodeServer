@@ -347,6 +347,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   const notesVersion = useNotesVersion();
   const [noteDetail, setNoteDetail] = useState<NoteDetail | null>(null);
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс noteDetail для не-заметочных файлов; сама загрузка асинхронная
     if (!isNotesFile) { setNoteDetail(null); return; }
     let alive = true;
     const title = filePath.split('/').pop()!.replace(/\.md$/i, '');
@@ -363,6 +364,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   // Навигация по ссылкам/backlinks внутри вьювера: открываем другую заметку на месте,
   // не уводя в раздел «Заметки» (сброс при смене файла в дереве)
   const [noteIdOverride, setNoteIdOverride] = useState<string | null>(null);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс навигационного оверрайда при смене файла
   useEffect(() => { setNoteIdOverride(null); }, [filePath]);
   const openWikilinkInPlace = (target: string) => {
     const name = target.split('/').pop()!.split('#')[0].trim().toLowerCase();
@@ -421,6 +423,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   const [imgDims, setImgDims] = useState<{ w: number; h: number } | null>(null);
   // Счётчики комментариев к документу — чип в тулбаре (данные поднимает DocCommentedMarkdown)
   const [commentCounts, setCommentCounts] = useState<{ total: number; open: number } | null>(null);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс счётчиков комментариев при смене файла
   useEffect(() => { setCommentCounts(null); }, [filePath]);
   const onCommentCounts = useCallback((total: number, open: number) => setCommentCounts({ total, open }), []);
   const drawioRef = useRef<DrawioHandle>(null);
@@ -508,6 +511,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
     : api.files.getDiff(project.id, filePath);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- массовый сброс промежуточного UI-состояния перед загрузкой нового файла
     setEditing(false);
     setTab('file');
     setHtmlTab('preview');
@@ -545,6 +549,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   // Blame — лениво при первом открытии вкладки «Авторы» (кэш до смены файла)
   useEffect(() => {
     if (tab !== 'blame' || blame || blameLoading || blameError) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- ленивая однократная загрузка blame; guard предотвращает повтор
     setBlameLoading(true);
     api.git.blame(project.id, filePath)
       .then(b => setBlame(b))
@@ -555,6 +560,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   // История файла — лениво при первом открытии вкладки (кэш до смены файла)
   useEffect(() => {
     if (tab !== 'history' || fileLog || fileLogLoading) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- ленивая однократная загрузка истории; guard предотвращает повтор
     setFileLogLoading(true);
     void loadGitRemote(project.id);
     api.git.fileLog(project.id, filePath)
@@ -570,6 +576,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   useEffect(() => {
     if (tab !== 'history' || !versionSha) return;
     let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- однократный fetch диффа выбранной версии git
     setVersionDiffLoading(true);
     setVersionContent(null);
     api.git.commitFileDiff(project.id, versionSha, filePath)
@@ -583,6 +590,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   useEffect(() => {
     if (tab !== 'history' || versionView !== 'content' || !versionSha || versionContent !== null) return;
     let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- однократный fetch содержимого версии; guard versionContent===null
     setVersionContentLoading(true);
     api.git.fileAtCommit(project.id, versionSha, filePath)
       .then(r => { if (!cancelled) setVersionContent(r.content ?? ''); })
@@ -615,6 +623,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   // основного, чтобы перебить его сброс на 'file'; срабатывает и когда тот же файл
   // повторно открывают уже в diff-режиме)
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- однократное применение initialTab из git-панели
     if (initialTab) setTab(initialTab);
   }, [initialTab, filePath]);
 

@@ -21,6 +21,7 @@ export function GraphSettingsBody({ settings, onChange, sources, tags, localMode
   const docAnnotationsOn = useFeature(FLAGS.docAnnotations);
   // Поиск с дебаунсом — не дёргать фильтрацию/симуляцию на каждый символ
   const [search, setSearch] = useState(settings.filters.search);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- зеркалирование search-пропа в локальный input с debounce
   useEffect(() => { setSearch(settings.filters.search); }, [settings.filters.search]);
   useEffect(() => {
     const t = setTimeout(() => {

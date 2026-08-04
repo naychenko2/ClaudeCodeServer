@@ -853,6 +853,29 @@ export interface RateLimitInfo {
   overageResetsAt?: string;
 }
 
+// Одно окно квоты CLI-провайдера подписки (GET /api/providers/{key}/balance|usage):
+// unit 'percent' — value остаток в процентах ("97.3"), 'count' — уже отформатированная
+// строка вида "120/300" (число вызовов со знаменателем), рисуется как есть без суффиксов
+export type ProviderQuotaWindowUnit = 'percent' | 'count';
+export interface ProviderQuotaWindow {
+  label: string;
+  value: string;
+  resetsAt: string | null;
+  unit: ProviderQuotaWindowUnit;
+}
+
+// Баланс CLI-провайдера. windows — ВСЕ окна квоты (включая основное), только у квотных
+// провайдеров (GLM/Kimi/MiniMax); у денежных (deepseek/moonshot/openrouter) отсутствует/пусто —
+// totalBalance/resetsAt остаются единственным источником (обратная совместимость + график)
+export interface ProviderBalanceInfo {
+  available: boolean;
+  currency: string;
+  totalBalance: string;
+  asOf?: string;
+  resetsAt?: string | null;
+  windows?: ProviderQuotaWindow[] | null;
+}
+
 // Снимок использования окна во времени (история с бэка, data/usage.json) — для экрана usage и тренда
 export interface UsageSnapshot {
   timestamp: string;

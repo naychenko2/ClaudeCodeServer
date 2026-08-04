@@ -271,6 +271,15 @@ function providerBalanceTone(balance: ProviderBalance | null): 'warn' | 'danger'
   return balNum < 0.2 ? 'danger' : balNum < 1 ? 'warn' : undefined;
 }
 
+// Квоту подписки бэкенд отдаёт остатком окна, а шапка и экран «Использование» говорят
+// языком расхода — переводим остаток в израсходованное (как UsageScreen.providerWindows).
+function quotaUsedPct(balance: ProviderBalance | null): number | null {
+  if (!balance) return null;
+  const remaining = parseFloat(balance.totalBalance);
+  if (isNaN(remaining)) return null;
+  return Math.round(Math.min(100, Math.max(0, 100 - remaining)));
+}
+
 // Тело поповера статистики CLI-провайдера (стоимость/токены/ходы + баланс аккаунта).
 function ProviderCostPopoverBody({ providerName, stats, balance }: {
   providerName: string; stats: CostStats; balance: ProviderBalance | null;
@@ -278,6 +287,7 @@ function ProviderCostPopoverBody({ providerName, stats, balance }: {
   const tone = providerBalanceTone(balance);
   const hasCost = stats.cost > 0;
   const isQuota = balance?.currency === '%';
+  const usedPct = isQuota ? quotaUsedPct(balance) : null;
   return (
     <>
       <div style={badgeTitleStyle}>{hasCost ? 'Стоимость' : 'Расход'} {providerName}</div>
@@ -291,11 +301,12 @@ function ProviderCostPopoverBody({ providerName, stats, balance }: {
       {balance && (
         <>
           <div style={badgeSectionStyle}>{isQuota ? 'Квота подписки' : 'Баланс аккаунта'}</div>
-          <BadgeRow k={isQuota ? 'Осталось (5 ч)' : 'Остаток'} v={`${balance.totalBalance} ${balance.currency}`} />
+          <BadgeRow k={isQuota ? 'Израсходовано' : 'Остаток'}
+            v={isQuota ? (usedPct !== null ? `${usedPct}%` : '—') : `${balance.totalBalance} ${balance.currency}`} />
           {tone && (
             <div style={{ fontFamily: FONT.sans, fontSize: 11, color: RATE_COLORS[tone].text, marginTop: 4, lineHeight: 1.4 }}>
               {isQuota
-                ? (tone === 'danger' ? 'Квота почти исчерпана — обновится в следующем 5-часовом окне.' : 'Квота на исходе.')
+                ? (tone === 'danger' ? 'Квота почти исчерпана — дождитесь сброса окна.' : 'Квота на исходе.')
                 : (tone === 'danger' ? 'Баланс почти исчерпан — пополните аккаунт.' : 'Баланс на исходе.')}
             </div>
           )}
@@ -305,7 +316,7 @@ function ProviderCostPopoverBody({ providerName, stats, balance }: {
         {hasCost
           ? `${providerName} работает по балансовой модели — стоимость списывается с аккаунта по факту.`
           : isQuota
-            ? `${providerName} работает по подписке Coding Plan — показываем остаток квоты 5-часового окна; расход в токенах для справки.`
+            ? `${providerName} работает по подписке — показываем, сколько квоты израсходовано; расход в токенах для справки.`
             : `${providerName} не отдаёт цены через API — показываем расход в токенах. Квоты смотрите в кабинете провайдера.`}
       </div>
     </>
@@ -320,13 +331,15 @@ function ProviderCostBadge({ providerName, stats, balance, isMobile }: {
   const tone = providerBalanceTone(balance);
   const hasCost = stats.cost > 0;
   const totalTokens = stats.input + stats.output;
+  const isQuota = balance?.currency === '%';
+  const usedPct = isQuota ? quotaUsedPct(balance) : null;
   // Сумма в пилюле: деньги, если считаем стоимость; иначе токены; иначе прочерк
   const amountNode = (
     <>
       <span>{hasCost ? fmtUsd(stats.cost) : totalTokens > 0 ? `${fmtTokens(totalTokens)} ток.` : '—'}</span>
       {tone && balance && (
         <span style={{ marginLeft: 5, color: RATE_COLORS[tone].text, fontWeight: 700 }}>
-          · {balance.totalBalance} {balance.currency}
+          · {isQuota ? (usedPct !== null ? `${usedPct}%` : '—') : <>{balance.totalBalance} {balance.currency}</>}
         </span>
       )}
     </>

@@ -59,10 +59,11 @@ public class TestWebApplicationFactory : WebApplicationFactory<Program>, IDispos
             config.AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["DataPath"] = Path.Combine(TempDir, "projects.json"),
-                // Домашняя база local-пользователей: без override берётся дефолт "/projects"
-                // из appsettings.json. На Windows он молча резолвится в C:\projects\…, а на
-                // Linux CI это корень ФС — Directory.CreateDirectory падает с Permission denied
-                // (ResolveChatRoot при создании чата вне проекта). Уводим в temp — уберётся с TempDir.
+                // Домашняя база local-пользователей: без override берётся пустая строка из
+                // appsettings.Testing.json — UserHomeResolver вернёт null с явным сообщением
+                // «Не задана папка проектов по умолчанию», что лучше молчаливого попадания
+                // в продовую папку через контейнерный монтирование /projects. Уводим в temp
+                // — уберётся с TempDir.
                 ["DefaultProjectsPath"] = Path.Combine(TempDir, "projects"),
                 ["ClaudeUserProfileDir"] = emptyClaudeProfile,
                 // страховка от прогрева подписок реальными claude.exe «ping»-ходами:

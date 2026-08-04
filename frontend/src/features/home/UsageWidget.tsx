@@ -12,13 +12,17 @@ import { WidgetCard, WidgetAction, WidgetEmpty } from './WidgetCard';
 const POLL_MS = 5 * 60_000;
 const LOW_BALANCE = 5;
 
-// Строка окна лимита: название, время сброса, процент (или «в пределах нормы») + шкала
+// Строка окна лимита: название, время сброса, «израсходовано N%» (или «в пределах
+// нормы») + шкала. Доля всегда подписана словом расхода — голый процент рядом со
+// временем сброса читался как остаток (та же инверсия, что вычищена в модалке и шапке чата)
 function WindowRow({ w }: { w: RateWindow }) {
   const c = RATE_COLORS[w.level];
   const reset = fmtReset(w.resetsAt);
   return (
     <div>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+      {/* flexWrap: на узкой карточке «израсходовано N%» переносится на вторую строку —
+          перенос допустим, горизонтальный скролл нет */}
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
         <span style={{ fontFamily: FONT.sans, fontSize: 12.5, color: C.textPrimary, flex: 1, minWidth: 0 }}>
           {windowLabel(w.limitType)}
         </span>
@@ -26,16 +30,19 @@ function WindowRow({ w }: { w: RateWindow }) {
           <span style={{ fontFamily: FONT.sans, fontSize: 11, color: C.textMuted }}>сброс {reset}</span>
         )}
         <span
-          style={{
-            fontFamily: w.hasUtil ? FONT.mono : FONT.sans, fontSize: w.hasUtil ? 13 : 11,
-            fontWeight: w.hasUtil ? 700 : 400,
-            color: w.hasUtil ? (w.level === 'normal' ? C.textHeading : c.text) : C.textMuted,
-          }}
+          style={{ display: 'inline-flex', alignItems: 'baseline', gap: 5, whiteSpace: 'nowrap' }}
           // Долю CLI присылает только при приближении к лимиту, и молчание —
           // это «расход невелик», а не «ноль». Поясняем, чтобы прочерк не выглядел сбоем.
           title={w.hasUtil ? undefined : 'Claude сообщает долю использования только при приближении к лимиту'}
         >
-          {w.hasUtil ? `${w.pct}%` : 'в пределах нормы'}
+          {w.hasUtil ? (
+            <>
+              <span style={{ fontFamily: FONT.sans, fontSize: 11, color: C.textMuted }}>израсходовано</span>
+              <span style={{ fontFamily: FONT.mono, fontSize: 13, fontWeight: 700, color: w.level === 'normal' ? C.textHeading : c.text }}>{w.pct}%</span>
+            </>
+          ) : (
+            <span style={{ fontFamily: FONT.sans, fontSize: 11, color: C.textMuted }}>в пределах нормы</span>
+          )}
         </span>
       </div>
       {/* Шкалу рисуем ТОЛЬКО с реальными данными: пустая полоса читалась как
@@ -65,7 +72,10 @@ export function UsageWidget() {
         .then(d => { if (!cancelled) setUsage(d); })
         .catch(() => { if (!cancelled) setUsage({ snapshots: [] }); });
       for (const key of cliProviderKeys()) {
-        if (!providerCapsByKey(key).hasBalance) continue;
+        // Ненастроенный провайдер (configured === false) не запрашиваем — без ключа
+        // баланс вернёт 404 и забьёт консоль (та же проверка, что в UsageScreen)
+        const caps = providerCapsByKey(key);
+        if (!caps.hasBalance || caps.configured === false) continue;
         api.providers.usage(key)
           .then(d => {
             const v = d.balance ? parseFloat(d.balance.totalBalance) : NaN;
@@ -162,11 +172,15 @@ export function UsageWidget() {
               display: 'flex', alignItems: 'baseline', gap: 6, borderRadius: 10,
               padding: '7px 11px', background: C.bgCard, border: `1px solid ${C.borderLight}`,
             }}>
-              <span style={{
-                fontFamily: w.hasUtil ? FONT.mono : FONT.sans, fontSize: w.hasUtil ? 15 : 12, fontWeight: 700,
-                color: w.level === 'normal' ? C.textHeading : RATE_COLORS[w.level].text,
-              }}>
-                {w.hasUtil ? `${w.pct}%` : 'в норме'}
+              <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 5, whiteSpace: 'nowrap' }}>
+                {w.hasUtil ? (
+                  <>
+                    <span style={{ fontFamily: FONT.sans, fontSize: 11, fontWeight: 400, color: C.textMuted }}>израсходовано</span>
+                    <span style={{ fontFamily: FONT.mono, fontSize: 15, fontWeight: 700, color: w.level === 'normal' ? C.textHeading : RATE_COLORS[w.level].text }}>{w.pct}%</span>
+                  </>
+                ) : (
+                  <span style={{ fontFamily: FONT.sans, fontSize: 12, fontWeight: 700, color: w.level === 'normal' ? C.textHeading : RATE_COLORS[w.level].text }}>в норме</span>
+                )}
               </span>
               <span style={{ fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted }}>
                 {providerLabel(key)} · {windowLabel(w.limitType)}

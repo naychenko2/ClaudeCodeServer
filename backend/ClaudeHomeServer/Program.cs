@@ -353,7 +353,13 @@ builder.Services.AddQuietHttpClient(
         Consequence: "Принудительное сохранение документа ждёт таймаут."))
     .WithoutEgressProxy();
 builder.Services.AddHttpClient("glif");
-builder.Services.AddHttpClient("llm-provider");
+// Сторонний провайдер — опциональная зависимость: баланс уходит в протухший кэш, каталог
+// моделей — в дефолтный список, фоновое действие — к другой модели. Мёртвый провайдер
+// не должен засыпать консоль стектрейсами (см. QuietHttpLogger)
+builder.Services.AddQuietHttpClient("llm-provider", new QuietHttpClientProfile(
+    Category: "ClaudeHomeServer.Llm.Provider",
+    Subject: "API стороннего провайдера моделей",
+    Consequence: "Баланс и каталог моделей не обновятся, фоновое действие уйдёт другой модели."));
 builder.Services.AddHttpClient("anthropic-oauth");
 builder.Services.AddHttpForwarder();
 // Раздел «Телеметрия»: опции проброса SigNoz UI (Telemetry:Ui) + короткий HTTP-клиент

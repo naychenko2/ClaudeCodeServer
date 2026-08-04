@@ -647,6 +647,7 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
       const card: ChatItem = {
         kind: 'team_plan', planId: msg.planId, plan: msg.plan,
         resolved: msg.resolved, approved: msg.approved,
+        ...(msg.supersededBy != null ? { supersededBy: msg.supersededBy } : {}),
       };
       if (idx < 0) return withItems([...prev.items, card]);
       const items = prev.items.slice();

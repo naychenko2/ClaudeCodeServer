@@ -285,7 +285,10 @@ public record TeamPlanMessage(
         string PlanId,
         Models.TeamImplementPlan Plan,
         bool Resolved,
-        bool? Approved)
+        bool? Approved,
+        // Версия, заменившая эту карточку (перепланирование): фронт рисует «заменена
+        // версией vN» вместо «план отменён». null — прочие исходы (запуск, отмена, открыта).
+        int? SupersededBy = null)
     : ServerMessage("team_plan");
 
 // Карточка остановки режима «Командная реализация» (Э4): блокер исполнителя, провал задачи,

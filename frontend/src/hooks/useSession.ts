@@ -584,9 +584,10 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
 
   // Решение по карточке плана командной реализации. Оптимистично применяем видимую
   // часть (смена исполнителя / решённое состояние) — сервер переиздаст карточку
-  // событием team_plan с тем же planId и приведёт её к своему состоянию.
+  // событием team_plan с тем же planId и приведёт её к своему состоянию (у edit —
+  // резолвит с supersededBy, точный номер версии оптимистично не угадываем).
   const respondTeamPlan = useCallback(async (planId: string, decision: TeamPlanDecision,
-    subtaskId?: string, executorPersonaId?: string) => {
+    subtaskId?: string, executorPersonaId?: string, feedback?: string) => {
     if (!sessionId) return;
     setState(sessionId, prev => ({
       ...prev,
@@ -607,7 +608,7 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
       }),
     }));
     await joinTracked(sessionId); // гарантируем группу перед ответом
-    await sendTeamPlanDecision(sessionId, planId, decision, subtaskId, executorPersonaId);
+    await sendTeamPlanDecision(sessionId, planId, decision, subtaskId, executorPersonaId, feedback);
   }, [sessionId]);
 
   // Решение по карточке остановки. Гасим карточку оптимистично — сервер переиздаст её

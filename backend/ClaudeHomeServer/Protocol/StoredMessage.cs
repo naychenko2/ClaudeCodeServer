@@ -228,6 +228,11 @@ public class StoredTeamPlanMessage : StoredMessage
     public Models.TeamImplementPlan Plan { get; set; } = new();
     public bool Resolved { get; set; }
     public bool? Approved { get; set; }
+    // Версия плана, заменившая эту карточку (перепланирование по правке человека или
+    // clarify): карточка погашена НЕ решением человека, а выходом новой версии — фронт
+    // рисует её «заменена версией vN», а не «план отменён». null — отмена человеком,
+    // запуск либо карточка ещё открыта.
+    public int? SupersededBy { get; set; }
     // Автор карточки (Э8): планировщик на момент публикации. В истории — чтобы после
     // рестарта и смены координатора карточка осталась речью того, кто её написал.
     public string? PersonaId { get; set; }

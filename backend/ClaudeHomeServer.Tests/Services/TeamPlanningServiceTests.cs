@@ -286,6 +286,38 @@ public class TeamPlanningServiceTests : IDisposable
         prompt.Should().NotContain("\"changes\":");
     }
 
+    // Правка человека («Изменить план», прод 2026-08-04): уходит планировщику отдельным
+    // блоком поверх предыдущего плана — это причина пересборки, терять её нельзя.
+    [Fact]
+    public void BuildPlannerPrompt_ПравкаЧеловека_ИдётОтдельнымБлокомПоверхПредыдущегоПлана()
+    {
+        var dev = TeamPlanningService.BuildCard(MakePersona("Денис", "Backend-разработчик"));
+        var previous = new TeamImplementPlan
+        {
+            Version = 1,
+            Subtasks = [new TeamImplementSubtask { Title = "Эндпоинт экспорта", Wave = 1 }],
+        };
+
+        var prompt = TeamPlanningService.BuildPlannerPrompt("Добавить экспорт в CSV",
+            [dev], "ClaudeCodeServer", previous, feedback: "убери ревью из плана");
+
+        prompt.Should().Contain("ПРАВКА ЧЕЛОВЕКА К ПЛАНУ");
+        prompt.Should().Contain("убери ревью из плана");
+        prompt.Should().Contain("ПРЕДЫДУЩИЙ ПЛАН (версия 1)");
+    }
+
+    [Fact]
+    public void BuildPlannerPrompt_ПравкаБезПредыдущегоПлана_Игнорируется()
+    {
+        var dev = TeamPlanningService.BuildCard(MakePersona("Денис", "Backend-разработчик"));
+
+        var prompt = TeamPlanningService.BuildPlannerPrompt("Добавить экспорт в CSV",
+            [dev], "ClaudeCodeServer", previous: null, feedback: "убери ревью");
+
+        prompt.Should().NotContain("ПРАВКА ЧЕЛОВЕКА",
+            "без предыдущего плана пересобирать нечего — правка не имеет смысла");
+    }
+
     // Прод 2026-08-02 (находка Веры): планировщик выдал под-задачу с буквальным
     // «<файл-1 в корне проекта>» вместо значения, которое человек указал в вводной —
     // промпт обязан явно запрещать плейсхолдеры и требовать перенос конкретики или допущение.

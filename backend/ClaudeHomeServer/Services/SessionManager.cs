@@ -3402,9 +3402,11 @@ public class SessionManager : IDisposable
     // планировщик не ответил) — вызывающая сторона показывает её человеку.
     // fromHuman (M7) — вводная пришла от человека: только тогда добавочный план может
     // авто-подтвердиться. Прямые вызовы (кнопки человека) не передают параметр — true.
+    // feedback — правка человека к текущему плану («Изменить план»): уходит планировщику
+    // вместе с предыдущей версией (см. TeamPlanningService.BuildPlannerPrompt).
     public async Task<(TeamImplementPlan? Plan, string? Reason)> CreateTeamPlanAsync(
         string sessionId, string request, string? userId = null, CancellationToken ct = default,
-        bool fromHuman = true)
+        bool fromHuman = true, string? feedback = null)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return (null, "Чат не найден");
         var ownerId = ResolveOwnerId(entry.Info);
@@ -3429,14 +3431,15 @@ public class SessionManager : IDisposable
         var previous = entry.Info.TeamImplement is { Replanning: true, PlanCardId: { } prevId }
             ? await GetTeamPlanAsync(sessionId, prevId)
             : null;
-        var (plan, timedOut) = await _teamPlanning.CreatePlanAsync(entry.Info, ownerId, request, projectHint, ct, previous);
+        var (plan, timedOut) = await _teamPlanning.CreatePlanAsync(entry.Info, ownerId, request, projectHint, ct, previous, feedback);
         if (plan is null)
             return (null, timedOut
                 ? TeamPlanningService.PlannerTimeoutReason
                 : "Планировщик не смог построить план — уточните задачу");
 
-        // План построен — сохранённая вводная отказа отработана
-        WithTeamState(sessionId, t => { t.LastPlanRequest = null; return true; });
+        // План построен — сохранённая вводная и правка отказа отработаны (повтор по кнопке
+        // «Повторить планирование» после успеха не нужен)
+        WithTeamState(sessionId, t => { t.LastPlanRequest = null; t.LastPlanFeedback = null; return true; });
         await PublishTeamPlanAsync(sessionId, entry, plan, fromHuman);
         return (plan, null);
     }
@@ -3518,6 +3521,12 @@ public class SessionManager : IDisposable
         }
         finally { _falPersistLock.Release(); }
 
+        // Страховка инварианта «перепланирование ⇒ старая карточка погашена»: обычно её
+        // гасит вход в перепланирование (правка человека, clarify), но легаси-состояние могло
+        // дойти до публикации и без него — у устаревшей версии не должно оставаться кнопок.
+        if (replanning)
+            await SupersedeCurrentPlanCardAsync(sessionId, entry, plan.Version);
+
         if (entry.Info.TeamImplement is not null)
         {
             WithTeamState(sessionId, t =>
@@ -3587,10 +3596,11 @@ public class SessionManager : IDisposable
     // Ответ человека по карточке плана (SessionHub.RespondTeamPlan).
     // Run — согласование получено, стадия уходит в «волна» (раздача — Э3);
     // Reassign — сменить исполнителя под-задачи, карточка остаётся открытой;
-    // Cancel — план отклонён, режим возвращается к планированию.
+    // Cancel — план отклонён, режим возвращается к планированию;
+    // Edit — правка плана текстом feedback: сервер сам пересобирает план (см. ветку ниже).
     public async Task<TeamImplementPlan?> RespondTeamPlanAsync(string sessionId, string planId,
         TeamPlanDecision decision, string? subtaskId = null, string? executorPersonaId = null,
-        string? userId = null)
+        string? userId = null, string? feedback = null)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
         var ownerId = ResolveOwnerId(entry.Info);
@@ -3613,6 +3623,53 @@ public class SessionManager : IDisposable
         {
             await ResolveStalePlanCardAsync(sessionId, entry, current, planId, plan);
             return null;
+        }
+
+        // Edit («Изменить план», прод 2026-08-04): серверное перепланирование. Правка —
+        // решение по карточке, а не сообщение в чат: ход координатору не выдаётся, сервер
+        // сам гасит текущую карточку как заменённую и запускает планировщик с правкой.
+        // Итог детерминирован: либо карточка версии vN+1 на подтверждении, либо карточка
+        // с причиной сбоя и кнопкой повтора — молчаливого тупика нет ни в каком исходе.
+        if (decision == TeamPlanDecision.Edit)
+        {
+            var team = entry.Info.TeamImplement;
+            if (team is null || string.IsNullOrWhiteSpace(feedback)) return null;
+            // Правка жива только для плана на подтверждении: запущенный план уже раздаёт
+            // волны (остаток меняется карточкой «Изменить остаток плана»), а отменённый
+            // нечему править. Отклоняем тихо: кнопка в этих стадиях не рендерится.
+            if (team.Stage is not (TeamImplementStage.Confirming or TeamImplementStage.Planning))
+            {
+                _log.LogInformation("Правка плана {PlanId} в чате {SessionId} пропущена: стадия {Stage}",
+                    planId, sessionId, team.Stage);
+                return null;
+            }
+
+            // Правка видна в ленте и остаётся в истории: при серверном перехвате хода
+            // координатору не выдаётся, и без записи текст человека исчез бы из чата
+            // (раньше кнопка слала его обычным сообщением).
+            var editTs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            await AppendStoredAsync(sessionId,
+                new StoredUserMessage(feedback.Trim(), timestamp: editTs),
+                new UserMessageMessage(feedback.Trim(), null, null, false, Timestamp: editTs));
+
+            var nextVersion = team.PlanVersion + 1;
+            WithTeamState(sessionId, t =>
+            {
+                t.Stage = TeamImplementStage.Planning;
+                // Тот же контур, что у clarify (Э8): следующий план — версия vN+1,
+                // подтверждение обязательно даже при включённых авто-волнах.
+                t.Replanning = true;
+                return true;
+            });
+            await SupersedeCurrentPlanCardAsync(sessionId, entry, nextVersion);
+            entry.Info.UpdatedAt = DateTime.UtcNow;
+            SaveSessions();
+            await BroadcastTeamImplementAsync(sessionId, entry);
+
+            // Планировщик зовётся напрямую: вводная — Request самой карточки (последняя
+            // накопленная постановка итерации), правка уходит отдельным блоком промпта.
+            await RunTeamPlanningAsync(sessionId, plan.Request, feedback, fromHuman: true);
+            return plan;
         }
 
         if (decision == TeamPlanDecision.Reassign)
@@ -3733,6 +3790,37 @@ public class SessionManager : IDisposable
         var ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         await AppendStoredAsync(sessionId, new StoredTextMessage(text, personaId: personaId, timestamp: ts),
             new GuestTextMessage(text, personaId, ts));
+    }
+
+    // Погасить ТЕКУЩУЮ карточку плана как заменённую версией nextVersion. Зовётся при
+    // входе в перепланирование (правка человека кнопкой или маркер работы в подтверждении)
+    // и страховочно при публикации новой версии: у устаревшей карточки не должно оставаться
+    // живых кнопок вовсе — гард M8 ловит клик, но человек не должен его делать.
+    // Идемпотентна: уже разрешённую карточку (запуск/отмена/повторный вход) не трогает.
+    private async Task SupersedeCurrentPlanCardAsync(string sessionId, SessionEntry entry, int nextVersion)
+    {
+        if (entry.Info.TeamImplement is not { PlanCardId: { } oldId }) return;
+
+        var plan = entry.Accumulator?.FindTeamPlanAny(oldId)
+            ?? (entry.Accumulator is null ? await GetTeamPlanAsync(sessionId, oldId) : null);
+
+        bool changed;
+        if (entry.Accumulator is { } acc)
+        {
+            changed = acc.OnTeamPlanSuperseded(oldId, nextVersion);
+            if (changed)
+                FireAndForget(acc.SaveSnapshotAsync(_history),
+                    $"сохранение истории после гашения заменённой карточки плана ({sessionId})");
+        }
+        else
+        {
+            changed = await MutateStoredAsync<StoredTeamPlanMessage>(entry, sessionId,
+                m => m.PlanId == oldId && !m.Resolved,
+                m => { m.Resolved = true; m.Approved = false; m.SupersededBy = nextVersion; });
+        }
+        if (!changed || plan is null) return;
+
+        await BroadcastAsync(sessionId, new TeamPlanMessage(oldId, plan, true, false, nextVersion));
     }
 
     // Хук раздачи волны (Э3): назначается TeamWaveService при старте — так разрывается
@@ -4220,12 +4308,16 @@ public class SessionManager : IDisposable
 
         // retryPlan (сбой планирования): повтор идёт НАПРЯМУЮ по сохранённой вводной —
         // без хода координатору (интервью уже пройдено, текст маркера сохранён дословно).
-        // Не получится снова — StartTeamWorkAsync опубликует новую карточку с той же кнопкой.
+        // Правка плана («Изменить план») повторяется С НЕЙ ЖЕ — иначе повтор вернул бы
+        // прежний план, и правка человека потерялась бы. Стадию уже поставили Planning выше,
+        // гарды StartTeamWorkAsync повтору не нужны. Не получится снова — RunTeamPlanningAsync
+        // опубликует новую карточку с той же кнопкой.
         if (actionId == "retryPlan")
         {
-            var retryRequest = entry.Info.TeamImplement?.LastPlanRequest;
-            if (!string.IsNullOrWhiteSpace(retryRequest))
-                await StartTeamWorkAsync(sessionId, retryRequest);
+            var teamState = entry.Info.TeamImplement;
+            if (!string.IsNullOrWhiteSpace(teamState?.LastPlanRequest))
+                await RunTeamPlanningAsync(sessionId, teamState.LastPlanRequest,
+                    teamState.LastPlanFeedback, entry.TeamTurnFromHuman);
             else
                 _log.LogWarning("Повтор планирования в чате {SessionId}: сохранённая вводная пуста", sessionId);
             return true;
@@ -4283,6 +4375,9 @@ public class SessionManager : IDisposable
     // Инструмента для этого не заводим — состав tools/list не должен зависеть от режима хода
     // (перезапуск CLI со всеми MCP), а маркер в тексте у нас уже работает в цикле «до готово».
     // Как и там, ищем вне код-блоков: модель часто цитирует протокол, прежде чем им пользоваться.
+    // `decision` в протоколе координатора больше нет — вопрос в живом ходу задаётся ASK;
+    // парсер терпит маркер как фолбэк (старые транскрипты, привычка модели) — карточка с полем
+    // лучше молчаливого зависания.
     internal static (TeamEscalationKind Kind, string Text)? ParseEscalationMarker(string text)
     {
         if (string.IsNullOrWhiteSpace(text)) return null;
@@ -4442,6 +4537,27 @@ public class SessionManager : IDisposable
         return cut == strippedText.Length ? strippedText : strippedText[..cut];
     }
 
+    // Отсечки сторожа волн, погашенные вопросом ASK (OnStabAskQuestionAsync), возвращаются
+    // по завершении хода — ответ получен, либо ход прерван (прерывание без result приходит
+    // сюда же, а чистый ExitedMessage обрабатывает зовущий). Без возврата волна осталась бы
+    // без надзора: настоящий stall никто бы не поймал, а «молчаливых пауз не бывает».
+    // Волна должна быть живой: закрытая (ClosedWave == WaveNumber) или нулевая — не в счёт.
+    private void RestoreWaveWatchdogIfPaused(string sessionId, SessionEntry entry)
+    {
+        if (entry.Info.TeamImplement is not { } team) return;
+        if (team.Stage != TeamImplementStage.Wave || team.WaveStartedAt is not null) return;
+        if (team.WaveNumber == 0 || team.ClosedWave >= team.WaveNumber) return;
+
+        WithTeamState(sessionId, t =>
+        {
+            t.WaveStartedAt = DateTime.UtcNow;
+            t.WaveActivityAt = DateTime.UtcNow;
+            return true;
+        });
+        entry.Info.UpdatedAt = DateTime.UtcNow;
+        SaveSessions();
+    }
+
     // Конец хода штаба (Э4 + Э5): маркеры координатора и переход в ожидание вводной.
     // Приоритет — эскалация: она останавливает практику, и разворачивать волну поверх
     // остановки незачем. Стадию «ожидание» ставим только на успешном ходу: упавший ход
@@ -4454,6 +4570,12 @@ public class SessionManager : IDisposable
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return;
         if (entry.Info.TeamImplement is not { } team) return;
+
+        // Вопрос ASK в волне гасил отсечки сторожа (OnStabAskQuestionAsync): ход завершился —
+        // ответ получен или ход прерван, волна снова под надзором. Стадию не трогаем: если
+        // дальше по ходу маркер эскалации, публикация карточки сама переведёт практику в
+        // ожидание и снова обнулит отсечки.
+        RestoreWaveWatchdogIfPaused(sessionId, entry);
 
         if (ParseEscalationMarker(turnText) is { } marker)
         {
@@ -4575,14 +4697,20 @@ public class SessionManager : IDisposable
     // вторую поверх первой. «Остановить» удерживает маркеры в стадиях идущей итерации, но
     // не новую вводную в ожидании: классифицированная как работа — она и есть решение
     // человека продолжить (спека «Бюджет»: «Остановить» относится к прошлой итерации).
-    private async Task StartTeamWorkAsync(string sessionId, string request)
+    // feedback — правка человека к текущему плану («Изменить план»): планировщик
+    // пересобирает план под неё (см. TeamPlanningService.BuildPlannerPrompt).
+    private async Task StartTeamWorkAsync(string sessionId, string request, string? feedback = null)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return;
         if (entry.Info.TeamImplement is not { } team) return;
         // Э8: интервью — легальная точка выхода в план (маркером его и закрывает координатор).
+        // Confirming (правка плана текстом, прод 2026-08-04): координатор получил правку и
+        // обязан пересобрать план маркером работы (PlanEditProtocol) — до фикса маркер здесь
+        // молча проглатывался, и человек оставался со старой карточкой.
         if ((team.Stopped && team.Stage != TeamImplementStage.Idle)
             || team.Stage is not (TeamImplementStage.Interview
-                or TeamImplementStage.Planning or TeamImplementStage.Idle))
+                or TeamImplementStage.Planning or TeamImplementStage.Idle
+                or TeamImplementStage.Confirming))
         {
             _log.LogInformation("Маркер работы в чате-штабе {SessionId} пропущен: стадия {Stage}, остановка {Stopped}",
                 sessionId, team.Stage, team.Stopped);
@@ -4596,6 +4724,26 @@ public class SessionManager : IDisposable
         if (team.Stage == TeamImplementStage.Interview)
         {
             WithTeamState(sessionId, t => { t.Stage = TeamImplementStage.Planning; return true; });
+            entry.Info.UpdatedAt = DateTime.UtcNow;
+            SaveSessions();
+            await BroadcastTeamImplementAsync(sessionId, entry);
+        }
+
+        // Правка плана на подтверждении: тот же контур, что у clarify (Э8) — старая карточка
+        // гаснет как заменённая, новый план публикуется версией vN+1 с обязательным
+        // подтверждением. План-режим уже навязан (Confirming живёт в нём со стадии интервью).
+        if (team.Stage == TeamImplementStage.Confirming)
+        {
+            var nextVersion = team.PlanVersion + 1;
+            WithTeamState(sessionId, t =>
+            {
+                t.Stage = TeamImplementStage.Planning;
+                t.Replanning = true;
+                t.WaveStartedAt = null;
+                t.WaveActivityAt = null;
+                return true;
+            });
+            await SupersedeCurrentPlanCardAsync(sessionId, entry, nextVersion);
             entry.Info.UpdatedAt = DateTime.UtcNow;
             SaveSessions();
             await BroadcastTeamImplementAsync(sessionId, entry);
@@ -4635,37 +4783,62 @@ public class SessionManager : IDisposable
             await BroadcastTeamImplementAsync(sessionId, entry);
         }
 
-        // Вводная сохраняется на состоянии ДО планировщика: при его отказе человек сможет
-        // повторить планирование кнопкой карточки, не проходя интервью заново.
-        WithTeamState(sessionId, t => { t.LastPlanRequest = request; return true; });
+        await RunTeamPlanningAsync(sessionId, request, feedback, entry.TeamTurnFromHuman);
+    }
 
+    // Собственно планирование: вводная (и правка к плану) сохраняются для повтора, зовётся
+    // планировщик, а при отказе публикуется карточка с причиной и кнопкой повтора. Гардов
+    // по стадии нет — состояние готовит вызывающий (StartTeamWorkAsync для вводной,
+    // RespondTeamPlanAsync для правки «Изменить план», retryPlan для повтора после сбоя).
+    // Молчаливых тупиков не бывает ни в одном исходе: успех даёт карточку плана, сбой и
+    // таймаут — карточку отказа.
+    private async Task RunTeamPlanningAsync(string sessionId, string request, string? feedback,
+        bool fromHuman)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return;
+        if (entry.Info.TeamImplement is not { } team) return;
+
+        // Вводная и правка сохраняются на состоянии ДО планировщика: при его отказе человек
+        // сможет повторить планирование кнопкой карточки, не проходя интервью заново и не
+        // теряя правку (повтор обязан пересобирать план по той же правке).
+        WithTeamState(sessionId, t =>
+        {
+            t.LastPlanRequest = request;
+            t.LastPlanFeedback = feedback;
+            return true;
+        });
+
+        var isEdit = !string.IsNullOrWhiteSpace(feedback);
         // Флаг живого планирования: гард молчаливого тупика по концу хода (см.
-        // HandleTeamTurnEndAsync) не поднимает тревогу, пока планировщик реально строит
-        // план. Снимается в finally — успех даёт карточку плана, сбой и таймаут дают свою
-        // карточку ниже, так что после снятия флага тишины не будет в любом исходе.
+        // HandleTeamTurnEndAsync) не поднимает тревогу, пока планировщик реально строит план.
         entry.TeamPlanningInFlight = true;
         try
         {
             var (plan, reason) = await CreateTeamPlanAsync(sessionId, request,
-                fromHuman: entry.TeamTurnFromHuman);
+                fromHuman: fromHuman, feedback: feedback);
             if (plan is not null) return;
 
-            // Молчаливых тупиков в режиме не бывает: человек написал вводную и ждёт волну —
-            // значит про несостоявшийся план он должен узнать карточкой, а не по тишине.
-            // Таймаут планировщика — отдельный случай: причина не в постановке человека,
-            // и текст карточки называет её как есть (PlanTimeoutDetails).
+            // Молчаливых тупиков в режиме не бывает: человек ждёт план — значит про
+            // несостоявшийся план он должен узнать карточкой, а не по тишине. Таймаут
+            // планировщика — отдельный случай: причина не в постановке человека, и текст
+            // карточки называет её как есть. У правки текст свой: старая карточка уже
+            // погашена как заменённая, и без карточки отказа человек остался бы вообще без плана.
             var timedOut = reason == TeamPlanningService.PlannerTimeoutReason;
             var failed = new TeamEscalation
             {
                 Kind = TeamEscalationKind.ProductDecision,
-                Title = timedOut
-                    ? "План не построился: планировщик не уложился во время"
-                    : "План по вашей вводной не построился",
-                Details = timedOut
-                    ? TeamImplementPrompts.PlanTimeoutDetails(request)
-                    : TeamImplementPrompts.PlanFailedDetails(request, reason),
+                Title = isEdit
+                    ? (timedOut ? "План не пересобрался: планировщик не уложился во время"
+                                : "Правка не привела к новой версии плана")
+                    : (timedOut ? "План не построился: планировщик не уложился во время"
+                                : "План по вашей вводной не построился"),
+                Details = isEdit
+                    ? TeamImplementPrompts.PlanEditFailedDetails(feedback!, reason)
+                    : (timedOut
+                        ? TeamImplementPrompts.PlanTimeoutDetails(request)
+                        : TeamImplementPrompts.PlanFailedDetails(request, reason)),
                 Wave = team.WaveNumber,
-                // Кнопка повторяет планирование по сохранённой вводной (retryPlan в
+                // Кнопка повторяет планирование по сохранённой вводной и правке (retryPlan в
                 // RespondTeamEscalationAsync) — без хода координатору и без повторного интервью.
                 Actions = [new TeamEscalationAction("retryPlan", "Повторить планирование")],
             };
@@ -4821,6 +4994,8 @@ public class SessionManager : IDisposable
         // сюда можно попасть и после рестарта сервера, и повторным вопросом того же раунда.
         var alreadyInterview = team.Stage == TeamImplementStage.Interview;
 
+        var hadPlan = team.PlanCardId is not null;
+        var nextVersion = team.PlanVersion + 1;
         WithTeamState(sessionId, t =>
         {
             t.Stage = TeamImplementStage.Interview;
@@ -4833,6 +5008,9 @@ public class SessionManager : IDisposable
             t.WaveActivityAt = null;
             return true;
         });
+        // План в итерации уже был — его карточка гаснет как заменённая: пока готовится версия
+        // vN+1, по старой нельзя ни запустить волну, ни решить что-либо (кнопок у неё нет).
+        if (hadPlan) await SupersedeCurrentPlanCardAsync(sessionId, entry, nextVersion);
         EnterPlanPhaseMode(sessionId, entry);
         entry.Info.UpdatedAt = DateTime.UtcNow;
         SaveSessions();
@@ -4859,28 +5037,43 @@ public class SessionManager : IDisposable
     }
 
     // Координатор задал вопрос ASK-карточкой (Э8). В интервью это очередной раунд (их не
-    // больше двух на вводную — счёт ведёт бэкенд, модель своих раундов не помнит); в волне
-    // или ожидании — сигнал «требования неясны», и практика возвращается в интервью.
-    // Добавочная вводная тем и отличается от первой: интервью на ней случается только по
-    // реальному вопросу планировщика, а не потому, что стадия обязательна.
+    // больше двух на вводную — счёт ведёт бэкенд, модель своих раундов не помнит).
+    // Вне интервью вопрос живёт внутри хода и практику НЕ останавливает (решение по запросу
+    // владельца 2026-08-04 — единый канал вопросов): продуктовая развилка или уточнение
+    // задаётся ASK, ответ приходит в тот же ход и работа продолжается с того же места.
+    // Возврат в интервью с паузой волн и перепланированием остался только за явным маркером
+    // <escalate:clarify> («требования неясны и действовать нельзя») — прежний вход сюда из
+    // ASK делал из любого вопроса пересборку плана.
     internal async Task OnStabAskQuestionAsync(string sessionId)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return;
         if (entry.Info.TeamImplement is not { } team) return;
 
-        WithTeamState(sessionId, t => { t.InterviewRounds++; return true; });
         if (team.Stage == TeamImplementStage.Interview)
         {
+            WithTeamState(sessionId, t => { t.InterviewRounds++; return true; });
             entry.Info.UpdatedAt = DateTime.UtcNow;
             SaveSessions();
             await BroadcastTeamImplementAsync(sessionId, entry);
         }
-        else
-            await EnterInterviewAsync(sessionId, "координатор задал вопрос по постановке", withTurn: false);
+        else if (team.Stage == TeamImplementStage.Wave)
+        {
+            // Пока человек отвечает на ASK, гасим отсечки сторожа волн — ожидание человека
+            // не зависание (тот же приём, что у стадии «ждёт решения» в
+            // PublishTeamEscalationAsync). Иначе при долгом ответе карточка WaveStalled легла
+            // бы поверх живого вопроса. Отсечки вернёт конец хода (HandleTeamTurnEndAsync).
+            WithTeamState(sessionId, t =>
+            {
+                t.WaveStartedAt = null;
+                t.WaveActivityAt = null;
+                return true;
+            });
+            entry.Info.UpdatedAt = DateTime.UtcNow;
+            SaveSessions();
+        }
 
-        // Вопрос ждёт человека: уведомление и push, если его нет в чате. Отдельно от карточки
-        // возврата в интервью — вопросы второго раунда карточку не переиздают, а звать
-        // человека всё равно надо (иначе интервью молча ждёт ответа).
+        // Вопрос ждёт человека: уведомление и push, если его нет в чате — звать человека
+        // надо в любой стадии, иначе ход молча ждёт клика («молчаливых пауз не бывает»).
         if (TeamQuestionNotifier is { } notify)
         {
             try { await notify(entry.Info); }
@@ -4892,7 +5085,8 @@ public class SessionManager : IDisposable
     }
 
     // Эскалация, поднятая самим координатором маркером в ходе (расхождение с планом, красная
-    // проверка, продуктовый вопрос). Заголовки — из таблицы «Эскалация и остановки».
+    // проверка; продуктовый вопрос ушёл в ASK — маркер decision здесь только фолбэк).
+    // Заголовки — из таблицы «Эскалация и остановки».
     private async Task RaiseCoordinatorEscalationAsync(string sessionId, TeamEscalationKind kind, string details)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return;
@@ -5539,6 +5733,12 @@ public class SessionManager : IDisposable
                     break;
             }
         }
+
+        // Ход оборвался без result (прерывание, смерть процесса посреди ASK): HandleTeamTurnEndAsync
+        // по такому ходу не зовётся, поэтому отсечки сторожа, погашенные вопросом, возвращаем здесь.
+        // Для штатного хода это no-op: result уже отдал восстановление ему, повтор идемпотентен.
+        if (entry is not null && msg is ExitedMessage && entry.Info.TeamImplement is not null)
+            RestoreWaveWatchdogIfPaused(sessionId, entry);
 
         // Обновление статуса — всегда, независимо от аккумулятора; SessionManager —
         // ЕДИНСТВЕННЫЙ владелец переходов Session.Status (ClaudeSession статус не пишет).

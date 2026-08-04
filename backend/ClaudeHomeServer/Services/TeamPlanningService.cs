@@ -118,8 +118,10 @@ public class TeamPlanningService(
     // Промпт планировщика. Главное требование Э2: у КАЖДОЙ под-задачи есть исполнитель
     // из списка кандидатов и одна строка обоснования — бэкендовая часть уходит бэкендеру,
     // фронтовая фронтендеру. Отсюда и жёсткий контракт ответа: только JSON.
+    // feedback — правка человека к текущему плану («Изменить план»): план пересобирается
+    // именно под неё; без previous она смысла не имеет и игнорируется.
     public static string BuildPlannerPrompt(string request, IReadOnlyList<TeamCandidateCard> cards,
-        string? projectHint = null, TeamImplementPlan? previous = null)
+        string? projectHint = null, TeamImplementPlan? previous = null, string? feedback = null)
     {
         var sb = new StringBuilder();
         sb.AppendLine("Ты планировщик командной реализации. Разбей задачу на под-задачи и раздай их " +
@@ -141,6 +143,15 @@ public class TeamPlanningService(
             foreach (var s in previous.Subtasks)
                 sb.AppendLine($"- {s.Title} (волна {s.Wave}" +
                               (s.TaskId is not null ? ", уже роздана исполнителю" : "") + ")");
+            sb.AppendLine();
+        }
+        // Правка человека («Изменить план»): причина пересборки. Стоит отдельным блоком,
+        // а не вливается в ЗАДАЧУ — планировщик обязан применить её дословно, как значения
+        // из вводной, и отразить в changes.
+        if (previous is not null && !string.IsNullOrWhiteSpace(feedback))
+        {
+            sb.AppendLine("ПРАВКА ЧЕЛОВЕКА К ПЛАНУ — применить в точности, это и есть причина пересборки:");
+            sb.AppendLine(feedback.Trim());
             sb.AppendLine();
         }
         sb.AppendLine("ИСПОЛНИТЕЛИ (выбирать ТОЛЬКО из них, по personaId):");
@@ -211,7 +222,9 @@ public class TeamPlanningService(
         string request, string? projectHint = null, CancellationToken ct = default,
         // Перепланирование после интервью (Э8): предыдущая версия плана, поверх которой
         // строится vN — из неё берётся блок «Что изменилось».
-        TeamImplementPlan? previous = null)
+        TeamImplementPlan? previous = null,
+        // Правка человека к плану («Изменить план»): план пересобирается под неё.
+        string? feedback = null)
     {
         if (cheap is null) return (null, false);
         if (string.IsNullOrWhiteSpace(request)) return (null, false);
@@ -221,7 +234,7 @@ public class TeamPlanningService(
 
         var planner = ResolvePlanner(session, ownerId, candidates);
         var cards = candidates.Select(BuildCard).ToList();
-        var prompt = BuildPlannerPrompt(request, cards, projectHint, previous);
+        var prompt = BuildPlannerPrompt(request, cards, projectHint, previous, feedback);
 
         string raw;
         try

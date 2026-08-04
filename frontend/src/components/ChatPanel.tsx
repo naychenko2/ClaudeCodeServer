@@ -728,26 +728,22 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
   }, [respondPlan]);
 
   // Обвязка карточки плана «Командной реализации»: состояние режима + действия.
-  // Решение уходит в хаб (run/reassign/cancel), правка плана — обычным сообщением
-  // координатору. Контекст, а не пропы: карточка лежит глубоко в ленте.
+  // Решение (в т.ч. edit — правка плана текстом) уходит в хаб, координатору ход не
+  // выдаётся: сервер сам гасит карточку и пересобирает план. Контекст, а не пропы —
+  // карточка лежит глубоко в ленте.
   const handleRespondTeamPlan = useCallback((planId: string, decision: TeamPlanDecision,
-    subtaskId?: string, executorPersonaId?: string) => {
-    respondTeamPlan(planId, decision, subtaskId, executorPersonaId).catch(err => {
+    subtaskId?: string, executorPersonaId?: string, feedback?: string) => {
+    respondTeamPlan(planId, decision, subtaskId, executorPersonaId, feedback).catch(err => {
       showToast('Командная реализация', err instanceof Error ? err.message : 'Не удалось отправить решение по плану');
     });
   }, [respondTeamPlan]);
-  const handleTeamPlanMessage = useCallback((text: string) => {
-    atBottomRef.current = true;
-    send(text, [], modeRef.current);
-  }, [send]);
   const teamPlanCtx = useMemo<TeamPlanChatContext | null>(() => teamImplementState ? {
     autoWaves: teamImplementState.autoWaves,
     waveNumber: teamImplementState.waveNumber,
     planCardId: teamImplementState.planCardId ?? null,
     executorPersonaIds: teamImplementState.executorPersonaIds,
     onRespond: handleRespondTeamPlan,
-    onSendMessage: handleTeamPlanMessage,
-  } : null, [teamImplementState, handleRespondTeamPlan, handleTeamPlanMessage]);
+  } : null, [teamImplementState, handleRespondTeamPlan]);
 
   // Обвязка карточек остановки (Э4): решение уходит в хаб, карточка гаснет.
   // Контекст живёт, пока включён режим — в выключенном чате карточки только читаются

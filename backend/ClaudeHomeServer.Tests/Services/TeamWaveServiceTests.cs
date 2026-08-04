@@ -980,7 +980,10 @@ public class TeamWaveServiceTests : IDisposable
         text.Should().Contain("задачи 3/12");
         text.Should().Contain("<escalate:deviation>");
         text.Should().Contain("<escalate:check>");
-        text.Should().Contain("<escalate:decision>");
+        // Продуктовая развилка ушла из маркеров в ASK (единый канал вопросов с интервью):
+        // в живом ходу координатор спрашивает инструментом, а не публикует карточку с полем
+        text.Should().NotContain("<escalate:decision>");
+        text.Should().Contain("AskUserQuestion");
     }
 
     [Fact]

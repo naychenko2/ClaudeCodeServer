@@ -152,11 +152,12 @@ export async function respondPlan(sessionId: string, requestId: string, approve:
 }
 
 // Решение по карточке плана командной реализации. reassign требует subtaskId +
-// executorPersonaId (карточка остаётся открытой), run/cancel закрывают карточку.
+// executorPersonaId (карточка остаётся открытой), edit требует feedback (сервер сам
+// пересобирает план), run/cancel закрывают карточку.
 export async function respondTeamPlan(sessionId: string, planId: string, decision: TeamPlanDecision,
-  subtaskId?: string, executorPersonaId?: string): Promise<void> {
+  subtaskId?: string, executorPersonaId?: string, feedback?: string): Promise<void> {
   const conn = await ensureConnected();
-  await conn.invoke('RespondTeamPlan', sessionId, planId, decision, subtaskId ?? null, executorPersonaId ?? null);
+  await conn.invoke('RespondTeamPlan', sessionId, planId, decision, subtaskId ?? null, executorPersonaId ?? null, feedback ?? null);
 }
 
 // Решение по карточке остановки: кнопка (actionId) и/или комментарий человека.

@@ -706,7 +706,7 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'team_implement'; active: boolean; stage: TeamImplementStage | null; waveNumber: number; autoWaves: boolean; coordinatorPersonaId: string | null; plannerPersonaId: string | null; executorPersonaIds: string[] | null; budget: TeamImplementBudget | null; planCardId: string | null; plannedWaves?: number; coordinatorNoCode?: boolean; stopped?: boolean; modeLocked?: boolean; planVersion?: number }
   // Карточка плана командной реализации. Переиздаётся при каждой правке (смена исполнителя,
   // решение человека) с тем же planId — клиент обновляет карточку, а не плодит дубли
-  | { type: 'team_plan'; planId: string; plan: TeamPlan; resolved: boolean; approved: boolean | null }
+  | { type: 'team_plan'; planId: string; plan: TeamPlan; resolved: boolean; approved: boolean | null; supersededBy?: number | null }
   // Карточка остановки командной реализации: причина + кнопки решения. Переиздаётся при
   // ответе человека (resolved=true) с тем же escalationId — клиент обновляет карточку.
   // Поля плоские (в истории та же карточка лежит вложенным объектом escalation)
@@ -1105,8 +1105,9 @@ export interface TeamPlan {
   planFilePath?: string | null;
 }
 
-// Решение человека по карточке плана (метод хаба RespondTeamPlan)
-export type TeamPlanDecision = 'run' | 'reassign' | 'cancel';
+// Решение человека по карточке плана (метод хаба RespondTeamPlan). edit — правка плана
+// текстом (feedback): сервер сам гасит текущую карточку и пересобирает план версией vN+1
+export type TeamPlanDecision = 'run' | 'reassign' | 'cancel' | 'edit';
 
 // Триггер остановки практики — wire-токены TeamEscalationKind с бэка.
 // waveGate — не проблема, а гейт «волна закрыта, запускать следующую?» при снятом авто;
@@ -1190,7 +1191,7 @@ export type ChatItem =
   | { kind: 'plan_review'; requestId: string; plan: string; resolved: boolean; approved?: boolean; feedback?: string }
   // Карточка плана командной реализации: структурный план (под-задачи, исполнители,
   // волны) с кнопками «Запустить» / «Изменить план» / «Отменить». Сверяется по planId
-  | { kind: 'team_plan'; planId: string; plan: TeamPlan; resolved: boolean; approved?: boolean | null }
+  | { kind: 'team_plan'; planId: string; plan: TeamPlan; resolved: boolean; approved?: boolean | null; supersededBy?: number | null }
   // Карточка остановки командной реализации: причина, суть и кнопки решения.
   // Сверяется по escalationId — ответ человека переиздаёт ту же карточку решённой
   | { kind: 'team_escalation'; escalationId: string; escalation: TeamEscalation }

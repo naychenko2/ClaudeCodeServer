@@ -48,9 +48,8 @@ export interface TeamPlanChatContext {
   planCardId: string | null;
   // Явно выбранный состав исполнителей; пустой — вся команда проекта
   executorPersonaIds: string[];
-  onRespond: (planId: string, decision: TeamPlanDecision, subtaskId?: string, executorPersonaId?: string) => void;
-  // Правка плана уходит координатору обычным сообщением (как «Ответить» у эскалаций)
-  onSendMessage: (text: string) => void;
+  // feedback — правка плана (decision 'edit'): сервер сам гасит карточку и пересобирает план
+  onRespond: (planId: string, decision: TeamPlanDecision, subtaskId?: string, executorPersonaId?: string, feedback?: string) => void;
 }
 export const TeamPlanContext = createContext<TeamPlanChatContext | null>(null);
 

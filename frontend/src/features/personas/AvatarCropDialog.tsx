@@ -144,7 +144,7 @@ export function AvatarCropDialog({ src, initial, title, onApply, onClose }: Prop
             cursor: 'grab', touchAction: 'none',
           }}
         >
-          {/* eslint-disable-next-line jsx-a11y/alt-text */}
+          {/* Служебный источник кропа, а не контент: alt не нужен, из дерева доступности скрыт */}
           <img ref={imgRef} src={src} aria-hidden draggable={false} onLoad={onImgLoad} style={imgStyle} />
           {/* Круглая маска поверх: всё вне круга затемняется */}
           <div style={{

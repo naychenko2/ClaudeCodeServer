@@ -446,7 +446,6 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   useImperativeHandle(ref, () => ({
     save,
     remove: () => { if (persona && onDelete) onDelete(persona); },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }), [save, persona, onDelete]);
 
   // Сообщаем родителю состояние формы (для кнопок тулбара)

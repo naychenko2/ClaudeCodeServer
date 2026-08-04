@@ -133,7 +133,6 @@ export function WallPage({ auth, onLogout, onHubTab }: Props) {
       selectedTaskId: overlay?.kind === 'task' ? overlay.task.id : null,
       graphOverlayOpen: overlay?.kind === 'graph',
     }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- openChatOnWall стабилен по смыслу (замыкание на сторе)
     [focusedProject, overlay],
   );
 
@@ -156,7 +155,6 @@ export function WallPage({ auth, onLogout, onHubTab }: Props) {
         />
       </div>
     ) : undefined,
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- openChatOnWall — замыкание на сторе, стабильно по смыслу
   }), [projectPanels, focusedProject, focused]);
 
   if (!active) {

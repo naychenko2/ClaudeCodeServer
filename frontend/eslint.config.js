@@ -54,7 +54,7 @@ export const designSystem = [
 ]
 
 export default defineConfig([
-  globalIgnores(['dist']),
+  globalIgnores(['dist', 'dev-dist']),   // dev-dist — сгенерированный workbox PWA
   {
     files: ['**/*.{ts,tsx}'],
     extends: [

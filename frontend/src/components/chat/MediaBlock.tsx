@@ -515,7 +515,7 @@ export function MediaBlock({
                 value={saveDialog.baseName}
                 onChange={e => setSaveDialog({ ...saveDialog, baseName: e.target.value })}
                 placeholder="имя файла"
-                // eslint-disable-next-line jsx-a11y/no-autofocus
+                // Автофокус осознанный: диалог сохранения сразу ждёт ввода имени файла
                 autoFocus
                 onKeyDown={e => {
                   if (e.key === 'Enter' && saveDialog.baseName.trim()) {

@@ -119,7 +119,6 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
         setActiveSessions(ids);
       })
       .catch(e => setLoadState(e instanceof OfflineError ? 'offline' : 'error'));
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [online, retryKey]);
 
   const filtered = projects.filter(p =>

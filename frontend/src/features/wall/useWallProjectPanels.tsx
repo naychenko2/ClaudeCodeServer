@@ -172,7 +172,7 @@ export function WallPreviewOverlayBody({ projectId, serviceId, onClose }: {
 }) {
   const s = useProjectServices(projectId);
   // Снимок сервисов грузится лениво — до его приезда рисовать нечего
-  useEffect(() => { void s.refresh(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+  useEffect(() => { void s.refresh(); }, []);
   const svc = s.services.find(x => x.id === serviceId);
   if (!svc) return null;
   return <PreviewView service={svc} projectId={projectId} onStop={s.stop} onClose={onClose} services={s.services} />;

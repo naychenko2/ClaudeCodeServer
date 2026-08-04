@@ -67,7 +67,7 @@ export function TeamCommandCenter({
     try { setMem(await api.projects.teamMemory(project.id)); } catch { setMem([]); }
     try { setTasks(await api.tasks.listByProject(project.id)); } catch { setTasks([]); }
   };
-  useEffect(() => { void refresh(); /* eslint-disable-next-line */ }, [project.id, limit]);
+  useEffect(() => { void refresh(); }, [project.id, limit]);
 
   // Realtime: перечитываем ленту/память/задачи по событиям изменений (с дебаунсом) —
   // иначе «Активность» и индикаторы «в работе»/«на связи» заморожены до перемонтирования.

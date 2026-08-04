@@ -10,14 +10,6 @@ import reactHooks from 'eslint-plugin-react-hooks'
 import reactRefresh from 'eslint-plugin-react-refresh'
 import { designSystem } from './eslint.config.js'
 
-// Заглушки правил из плагинов, которые в проекте НЕ подключены, но на которые в коде
-// остались eslint-disable (jsx-a11y и расширенный набор typescript-eslint). Без них прогон
-// падает с «Definition for rule was not found» — к дизайн-системе это отношения не имеет.
-// Заглушка ничего не проверяет и не мешает подключить настоящий плагин позже.
-const stubPlugin = (...ruleNames) => ({
-  rules: Object.fromEntries(ruleNames.map(n => [n, { create: () => ({}) }])),
-})
-
 export default defineConfig([
   globalIgnores(['dist', 'dev-dist']),   // dev-dist — сгенерированный workbox PWA
   {
@@ -33,7 +25,6 @@ export default defineConfig([
       '@typescript-eslint': tseslint.plugin,
       'react-hooks': reactHooks,
       'react-refresh': reactRefresh,
-      'jsx-a11y': stubPlugin('no-autofocus', 'alt-text'),
     },
   },
   ...designSystem,

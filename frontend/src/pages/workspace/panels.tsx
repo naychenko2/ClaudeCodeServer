@@ -126,7 +126,7 @@ export function PreviewPanelContent({ projectId, services, activePreviewId, onSe
   onRefresh: () => void;
 }) {
   // Список сервисов подгружается при открытии панельки (как вкладка preview в ToolsSidebar)
-  useEffect(() => { onRefresh(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+  useEffect(() => { onRefresh(); }, []);
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <PreviewServiceList

@@ -41,7 +41,6 @@ export function DocumentViewer({ kbId, doc, onClose, isMobile }: {
       .catch(e => { if (alive) setError(e instanceof Error ? e.message : 'Не удалось загрузить документ'); })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kbId, doc.id]);
 
   // Закрытие по Escape — как в любых диалогах/панелях проекта.

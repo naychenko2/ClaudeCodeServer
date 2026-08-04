@@ -23,6 +23,34 @@ public class UsageControllerTests : IClassFixture<TestWebApplicationFactory>
         _factory = factory;
     }
 
+    // Приёмка-2 (задача 977c3ee5): «вторая подписка не отображается». Пул из двух
+    // подписок обязан отдать обе в блоке subscriptions — экран рисует ровно то,
+    // что пришло, и терять ключи не должен ни контроллер, ни пул.
+    [Fact]
+    public async Task GetUsage_ПулИзДвухПодписок_ОтдаётОбеВБлокеSubscriptions()
+    {
+        using var withPool = _factory.WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureAppConfiguration((_, config) =>
+            {
+                config.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    [$"{ClaudeSubscriptionPool.Section}:claude:OAuthToken"] = "token-one",
+                    [$"{ClaudeSubscriptionPool.Section}:claude:DisplayName"] = "Claude 1 (Max)",
+                    [$"{ClaudeSubscriptionPool.Section}:claude-2:OAuthToken"] = "token-two",
+                    [$"{ClaudeSubscriptionPool.Section}:claude-2:DisplayName"] = "Claude 2 (Max)",
+                });
+            });
+        });
+        var client = await AuthenticateAsync(withPool);
+
+        var usage = await client.GetFromJsonAsync<JsonElement>("/api/usage");
+
+        var subs = usage.GetProperty("subscriptions");
+        subs.GetProperty("claude").GetProperty("name").GetString().Should().Be("Claude 1 (Max)");
+        subs.GetProperty("claude-2").GetProperty("name").GetString().Should().Be("Claude 2 (Max)");
+    }
+
     [Fact]
     public async Task GetUsage_АккаунтПула_ОтдаётLoginCommandСПутёмПрофиля()
     {

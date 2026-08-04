@@ -24,8 +24,12 @@ public class SessionManagerTests : IDisposable
     private readonly string _tempDir;
     private readonly ProjectManager _projectManager;
     private readonly TeamPlanningService _teamPlanning;
+    private readonly StubCheapRunner _plannerStub;
     // Ответ подставного планировщика для тестов карточки плана (Э2)
     private string _plannerAnswer = "";
+    // Исключение подставного планировщика (null — не бросать): так тесты имитируют
+    // сбой и таймаут планировщика (карточка отказа и повтор по кнопке).
+    private Exception? _plannerException;
     private readonly ChatHistoryService _historyService;
     private readonly UserStore _userStore;
     private readonly PersonaManager _personaManager;
@@ -112,8 +116,13 @@ public class SessionManagerTests : IDisposable
         var assignments = new ClaudeHomeServer.Services.Llm.ModelAssignmentResolver(appSettings, _actionOverrides,
             new ClaudeHomeServer.Services.Llm.UserModelTierResolver(userStore, appSettings));
         // Планирование «Командной реализации» (Э2): раннер планировщика подставной —
-        // ответ задаётся тестом через _plannerAnswer
-        _teamPlanning = new TeamPlanningService(personas, new StubCheapRunner(() => _plannerAnswer));
+        // ответ задаётся тестом через _plannerAnswer, сбой — через _plannerException
+        _plannerStub = new StubCheapRunner(() =>
+        {
+            if (_plannerException is not null) throw _plannerException;
+            return _plannerAnswer;
+        });
+        _teamPlanning = new TeamPlanningService(personas, _plannerStub);
         // Git — настоящий CLI: нужен привязке чата к существующему дереву (AttachWorktreeAsync
         // сверяет путь с «git worktree list»); остальные тесты его не трогают
         _sut = new SessionManager(_projectManager, hub.Object, _historyService, config, adapters, falCost, _usage, appSettings, userStore, jwt, server.Object, llmProviders, notesKb, flags, personas, personaMemory, bindings, promptBuilder, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox, git: new ClaudeHomeServer.Services.Git.GitService(TestLauncherFactory.Instance), assignments: assignments, teamPlanning: _teamPlanning, activity: _activity);
@@ -2016,11 +2025,19 @@ public class SessionManagerTests : IDisposable
     // Подставной раннер планировщика: отдаёт заготовленный тестом ответ
     private sealed class StubCheapRunner(Func<string> answer) : ClaudeHomeServer.Services.Llm.ICheapTextRunner
     {
+        // Сколько раз звали планировщика и какой промпт пришёл последним (повтор по кнопке)
+        public int Calls { get; private set; }
+        public string LastPrompt { get; private set; } = "";
+
         public bool UsesLocal(string actionKey) => false;
 
         public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
-            string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default) =>
-            Task.FromResult(answer());
+            string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
+        {
+            Calls++;
+            LastPrompt = prompt;
+            return Task.FromResult(answer());
+        }
 
         public Task<string?> RunFreeAsync(string actionKey, string prompt, object? jsonFormat = null,
             CancellationToken ct = default) => Task.FromResult<string?>(answer());
@@ -3266,6 +3283,56 @@ public class SessionManagerTests : IDisposable
         card.Kind.Should().Be("productDecision");
         card.Title.Should().Contain("не построился");
         card.Details.Should().Contain("Уточните задачу");
+        // Повторить планирование можно кнопкой — без повторного интервью
+        card.Actions.Select(a => a.Id).Should().Equal("retryPlan");
+        _sut.GetById(session.Id)!.TeamImplement!.LastPlanRequest.Should().Be("сделай хорошо");
+    }
+
+    [Fact]
+    public async Task МаркерРаботы_ТаймаутПланировщика_ЧестнаяКарточка()
+    {
+        // Прод 2026-08-04: планировщик оборвался по таймауту, а человек прочитал
+        // «уточните задачу» — теперь карточка называет настоящую причину.
+        var (session, _, _) = await MakeTeamStabAsync("ti-work-timeout");
+        _plannerException = new ClaudeHomeServer.Services.Llm.LlmTimeoutException();
+
+        await _sut.HandleTeamTurnEndAsync(session.Id, "<team:work>большая фича с кучей частей</team>", failed: false);
+
+        var card = _sentMessages.OfType<TeamEscalationMessage>().Last();
+        card.Kind.Should().Be("productDecision");
+        card.Title.Should().Contain("не уложился");
+        card.Details.Should().Contain("не уложился во время", "причина отказа — таймаут, а не постановка")
+            .And.NotContain("Уточните задачу");
+        card.Actions.Select(a => a.Id).Should().Equal("retryPlan");
+        var ti = _sut.GetById(session.Id)!.TeamImplement!;
+        ti.Stage.Should().Be(TeamImplementStage.AwaitingDecision);
+        ti.LastPlanRequest.Should().Be("большая фича с кучей частей");
+    }
+
+    [Fact]
+    public async Task КнопкаПовторитьПланирование_СтроитПланБезПовторногоИнтервью()
+    {
+        var (session, backend, frontend) = await MakeTeamStabAsync("ti-work-retry");
+        _plannerException = new ClaudeHomeServer.Services.Llm.LlmTimeoutException();
+        await _sut.HandleTeamTurnEndAsync(session.Id, "<team:work>сделай экспорт задач в CSV</team>", failed: false);
+        var card = _sentMessages.OfType<TeamEscalationMessage>().Last();
+
+        // Планировщик ожил — человек жмёт «Повторить планирование»
+        _plannerException = null;
+        SetPlannerAnswer(backend, frontend);
+        var ok = await _sut.RespondTeamEscalationAsync(session.Id, card.EscalationId, "retryPlan",
+            userId: TestUserId);
+
+        ok.Should().BeTrue();
+        _plannerStub.Calls.Should().Be(2, "первая попытка + один повтор по кнопке");
+        _plannerStub.LastPrompt.Should().Contain("сделай экспорт задач в CSV",
+            "повтор идёт по сохранённой вводной дословно, без нового хода координатору");
+        // Интервью заново не проходится: сразу карточка плана на подтверждение
+        var planCard = _sentMessages.OfType<TeamPlanMessage>().Last();
+        planCard.Resolved.Should().BeFalse();
+        var ti = _sut.GetById(session.Id)!.TeamImplement!;
+        ti.Stage.Should().Be(TeamImplementStage.Confirming);
+        ti.LastPlanRequest.Should().BeNull("успешный план обнуляет сохранённую вводную");
     }
 
     [Fact]

@@ -199,20 +199,25 @@ public class TeamPlanningService(
         return sb.ToString();
     }
 
+    // Причина отказа для человека: таймаут — НЕ ошибка постановки («уточните задачу»
+    // здесь виновато выглядит), поэтому SessionManager показывает отдельный текст карточки.
+    public const string PlannerTimeoutReason = "Планировщик не уложился во время";
+
     // Построить план: промпт планировщику → JSON → валидация исполнителей.
-    // null — нет кандидатов, не настроен раннер или модель не вернула валидный план;
-    // вызывающая сторона (SessionManager) объясняет это человеку карточкой/сообщением.
-    public async Task<TeamImplementPlan?> CreatePlanAsync(Session session, string ownerId,
+    // Plan = null — нет кандидатов, не настроен раннер или модель не вернула валидный план;
+    // TimedOut уточняет причину отказа (см. PlannerTimeoutReason) — вызывающая сторона
+    // (SessionManager) объясняет её человеку карточкой/сообщением.
+    public async Task<(TeamImplementPlan? Plan, bool TimedOut)> CreatePlanAsync(Session session, string ownerId,
         string request, string? projectHint = null, CancellationToken ct = default,
         // Перепланирование после интервью (Э8): предыдущая версия плана, поверх которой
         // строится vN — из неё берётся блок «Что изменилось».
         TeamImplementPlan? previous = null)
     {
-        if (cheap is null) return null;
-        if (string.IsNullOrWhiteSpace(request)) return null;
+        if (cheap is null) return (null, false);
+        if (string.IsNullOrWhiteSpace(request)) return (null, false);
 
         var candidates = ResolveCandidates(session, ownerId);
-        if (candidates.Count == 0) return null;
+        if (candidates.Count == 0) return (null, false);
 
         var planner = ResolvePlanner(session, ownerId, candidates);
         var cards = candidates.Select(BuildCard).ToList();
@@ -225,16 +230,22 @@ public class TeamPlanningService(
             raw = await cheap.RunAsync(LocalActionCatalog.TeamImplementPlan, prompt,
                 fallbackModel: planner?.Model, ownerId: ownerId, ct: ct);
         }
+        catch (LlmTimeoutException ex)
+        {
+            log?.LogWarning(ex, "Планировщик командной реализации не уложился во время (сессия {SessionId})",
+                session.Id);
+            return (null, true);
+        }
         catch (Exception ex)
         {
             log?.LogWarning(ex, "Планировщик командной реализации не ответил (сессия {SessionId})", session.Id);
-            return null;
+            return (null, false);
         }
 
         var plan = ParsePlan(raw, request, candidates);
-        if (plan is null) return null;
+        if (plan is null) return (null, false);
         plan.PlannerPersonaId = planner?.Id;
-        return plan;
+        return (plan, false);
     }
 
     // Разбор ответа планировщика. Под-задачи без валидного исполнителя не выбрасываем:

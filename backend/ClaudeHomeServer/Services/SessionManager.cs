@@ -3383,9 +3383,14 @@ public class SessionManager : IDisposable
         var previous = entry.Info.TeamImplement is { Replanning: true, PlanCardId: { } prevId }
             ? await GetTeamPlanAsync(sessionId, prevId)
             : null;
-        var plan = await _teamPlanning.CreatePlanAsync(entry.Info, ownerId, request, projectHint, ct, previous);
-        if (plan is null) return (null, "Планировщик не смог построить план — уточните задачу");
+        var (plan, timedOut) = await _teamPlanning.CreatePlanAsync(entry.Info, ownerId, request, projectHint, ct, previous);
+        if (plan is null)
+            return (null, timedOut
+                ? TeamPlanningService.PlannerTimeoutReason
+                : "Планировщик не смог построить план — уточните задачу");
 
+        // План построен — сохранённая вводная отказа отработана
+        WithTeamState(sessionId, t => { t.LastPlanRequest = null; return true; });
         await PublishTeamPlanAsync(sessionId, entry, plan, fromHuman);
         return (plan, null);
     }
@@ -4003,8 +4008,9 @@ public class SessionManager : IDisposable
 
     // Решение человека по карточке остановки (SessionHub.RespondTeamEscalation).
     // Кнопка — это ярлык: карточка гаснет, а координатору уходит ход с текстом решения,
-    // как если бы человек написал его сам. Три действия дополнительно двигают бэкенд:
-    // addBudget расширяет потолки, runNext раздаёт следующую волну, resume снимает «Стоп».
+    // как если бы человек написал его сам. Часть действий дополнительно двигает бэкенд:
+    // addBudget расширяет потолки, runNext раздаёт следующую волну, resume снимает «Стоп»,
+    // retryPlan повторяет планирование по сохранённой вводной (без хода координатору).
     public async Task<bool> RespondTeamEscalationAsync(string sessionId, string escalationId,
         string? actionId, string? comment = null, string? userId = null)
     {
@@ -4076,6 +4082,9 @@ public class SessionManager : IDisposable
                     "finish" or "finishWithIssues" => TeamImplementStage.Checking,
                     "stop" => team.Stage,
                     "keepFixing" => TeamImplementStage.Checking,
+                    // Повтор планирования по сохранённой вводной: интервью уже пройдено,
+                    // сразу в планирование — даже когда волна уже была (сбой перепланирования)
+                    "retryPlan" => TeamImplementStage.Planning,
                     // editRest (Minor, волна 3): «Изменить остаток плана» — не «продолжай как
                     // есть» (Wave), а перепланирование. EnterInterviewAsync ниже переставит
                     // стадию и корректно обнулит отсечки сторожа сам — здесь стадию не трогаем,
@@ -4160,6 +4169,19 @@ public class SessionManager : IDisposable
         {
             await EnterInterviewAsync(sessionId, "человек попросил изменить остаток плана",
                 withTurn: true);
+            return true;
+        }
+
+        // retryPlan (сбой планирования): повтор идёт НАПРЯМУЮ по сохранённой вводной —
+        // без хода координатору (интервью уже пройдено, текст маркера сохранён дословно).
+        // Не получится снова — StartTeamWorkAsync опубликует новую карточку с той же кнопкой.
+        if (actionId == "retryPlan")
+        {
+            var retryRequest = entry.Info.TeamImplement?.LastPlanRequest;
+            if (!string.IsNullOrWhiteSpace(retryRequest))
+                await StartTeamWorkAsync(sessionId, retryRequest);
+            else
+                _log.LogWarning("Повтор планирования в чате {SessionId}: сохранённая вводная пуста", sessionId);
             return true;
         }
 
@@ -4560,19 +4582,32 @@ public class SessionManager : IDisposable
             await BroadcastTeamImplementAsync(sessionId, entry);
         }
 
+        // Вводная сохраняется на состоянии ДО планировщика: при его отказе человек сможет
+        // повторить планирование кнопкой карточки, не проходя интервью заново.
+        WithTeamState(sessionId, t => { t.LastPlanRequest = request; return true; });
+
         var (plan, reason) = await CreateTeamPlanAsync(sessionId, request,
             fromHuman: entry.TeamTurnFromHuman);
         if (plan is not null) return;
 
         // Молчаливых тупиков в режиме не бывает: человек написал вводную и ждёт волну —
         // значит про несостоявшийся план он должен узнать карточкой, а не по тишине.
+        // Таймаут планировщика — отдельный случай: причина не в постановке человека,
+        // и текст карточки называет её как есть (PlanTimeoutDetails).
+        var timedOut = reason == TeamPlanningService.PlannerTimeoutReason;
         var failed = new TeamEscalation
         {
             Kind = TeamEscalationKind.ProductDecision,
-            Title = "План по вашей вводной не построился",
-            Details = TeamImplementPrompts.PlanFailedDetails(request, reason),
+            Title = timedOut
+                ? "План не построился: планировщик не уложился во время"
+                : "План по вашей вводной не построился",
+            Details = timedOut
+                ? TeamImplementPrompts.PlanTimeoutDetails(request)
+                : TeamImplementPrompts.PlanFailedDetails(request, reason),
             Wave = team.WaveNumber,
-            Actions = TeamEscalationActions.For(TeamEscalationKind.ProductDecision),
+            // Кнопка повторяет планирование по сохранённой вводной (retryPlan в
+            // RespondTeamEscalationAsync) — без хода координатору и без повторного интервью.
+            Actions = [new TeamEscalationAction("retryPlan", "Повторить планирование")],
         };
         if (TeamEscalationRaiser is { } raise) await raise(entry.Info, failed);
         else await PublishTeamEscalationAsync(sessionId, failed);

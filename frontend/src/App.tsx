@@ -54,8 +54,17 @@ const UiKitPage = import.meta.env.DEV
   ? lazy(() => import('./dev/UiKitPage').then(m => ({ default: m.UiKitPage })))
   : null;
 
+// Симуляция паузы планирования (индикатор «Команда готовит план…») — тоже dev-only
+const TeamPlanSimPage = import.meta.env.DEV
+  ? lazy(() => import('./dev/TeamPlanSimPage').then(m => ({ default: m.TeamPlanSimPage })))
+  : null;
+
 function isDevUiKitHash(): boolean {
   return window.location.hash === '#/ui-kit';
+}
+
+function isDevTeamPlanSimHash(): boolean {
+  return window.location.hash === '#/team-plan-sim';
 }
 
 // Диплинк из hash-URL (#/calendar, #/project/{id}/task/{tid}…) — читаем один раз
@@ -131,6 +140,7 @@ export default function App() {
   // работает без авторизации (на экране входа тоже). В prod UiKitPage === null,
   // условие всегда ложно и режим не активируется.
   const [uiKitMode, setUiKitMode] = useState(() => isDevUiKitHash())
+  const [teamPlanSimMode, setTeamPlanSimMode] = useState(() => isDevTeamPlanSimHash())
 
   // «Что нового» — продуктовая история по всем проектам. Overlay на верхнем уровне,
   // открывается из HubHeader (событие) из любого раздела.
@@ -344,6 +354,7 @@ export default function App() {
     // поэтому стандартный seed ниже сбросил бы URL на дефолт (#/home) → hashchange listener
     // погасил бы uiKitMode, и витрина закрылась бы сразу после открытия.
     if (isDevUiKitHash()) return;
+    if (isDevTeamPlanSimHash()) return;
     const seed: NavSnapshot = { screen: hubTab === 'home' ? 'home' : hubTab === 'chats' ? 'chats' : hubTab === 'wall' ? 'wall' : hubTab === 'calendar' ? 'calendar' : hubTab === 'notes' ? 'notes' : hubTab === 'personas' ? 'personas' : hubTab === 'knowledge' ? 'knowledge' : hubTab === 'spend' ? 'spend' : hubTab === 'telemetry' ? 'telemetry' : hubTab === 'notifications' ? 'notifications' : 'projects' }
     // Диплинк #/notes/{id}: сохраняем заметку в снимок, иначе сид затрёт id в URL
     if (seed.screen === 'notes' && initialHash?.screen === 'notes') seed.note = initialHash.noteId ?? null
@@ -513,6 +524,13 @@ export default function App() {
   // Dev-витрина #/ui-kit — переключение hash (вход/выход из режима) без перезагрузки.
   useEffect(() => {
     const onHash = () => setUiKitMode(isDevUiKitHash());
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
+
+  // Dev-симуляция паузы планирования #/team-plan-sim — тот же механизм
+  useEffect(() => {
+    const onHash = () => setTeamPlanSimMode(isDevTeamPlanSimHash());
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
@@ -793,6 +811,15 @@ export default function App() {
     return (
       <Suspense fallback={<div style={{ minHeight: '100vh', background: C.bgMain }} />}>
         <UiKitPage />
+      </Suspense>
+    );
+  }
+
+  // Early-return в режиме #/team-plan-sim — та же механика, что у витрины UI-кита
+  if (teamPlanSimMode && TeamPlanSimPage) {
+    return (
+      <Suspense fallback={<div style={{ minHeight: '100vh', background: C.bgMain }} />}>
+        <TeamPlanSimPage />
       </Suspense>
     );
   }

@@ -2,7 +2,7 @@
 // бейджа/маркера. Тексты — дословно из docs/architecture/team-implement-mode.md («Тексты»)
 // и макета docs/mockups/team-implement-mode.html (короткие формы маркера).
 
-import type { SessionTeamImplement, TeamEscalationKind, TeamImplementBudget, TeamImplementStage, TeamPlan } from '../types';
+import type { ChatItem, SessionTeamImplement, TeamEscalationKind, TeamImplementBudget, TeamImplementStage, TeamPlan } from '../types';
 import { MODE_META, type Mode } from './modes';
 
 // Тон по тому, кто должен действовать: work — команда работает (accent),
@@ -211,6 +211,39 @@ export function teamEscalationDetailsLines(details: string): TeamEscalationDetai
 // блокер («Ответить» — что делать исполнителю) и продуктовая развилка (свой вариант)
 export function teamEscalationNeedsComment(kind: TeamEscalationKind): boolean {
   return kind === 'blocker' || kind === 'productDecision';
+}
+
+// === Индикатор паузы планирования ===
+// Между концом интервью и карточкой плана лента молчит минутами (потолок планировщика
+// 300с), и тишина читается как «всё встало» (прод 2026-08-04). На время стадии planning
+// в ленте живёт спокойная плашка; исчезает она с появлением карточки плана или отказа.
+
+// Тексты плашки: смысл — «это нормально и займёт время», планирование большой фичи
+// идёт минутами, а не секундами
+export const TEAM_PLANNING_TITLE = 'Команда готовит план…';
+export const TEAM_PLANNING_TEXT = 'Изучает задачу и собирает план — это может занять несколько минут';
+
+// Видна ли плашка планирования. Стадия planning приходит событием team_implement и из
+// REST-гидратации, момент входа фронт знает. Двух сообщений об одном быть не должно:
+// карточка отказа (или любая другая открытая карточка остановки) означает, что план
+// прямо сейчас НЕ готовится — практика ждёт человека, поэтому плашка гаснет. «Остановить»
+// на стадии планирования свою карточку не шлёт (Stopped приходит без неё) — отсюда
+// отдельная проверка stopped.
+export function teamPlanningIndicatorVisible(
+  state: SessionTeamImplement | null | undefined,
+  items: ChatItem[],
+): boolean {
+  if (!state || state.stage !== 'planning' || state.stopped) return false;
+  return !items.some(it => it.kind === 'team_escalation' && !it.escalation.resolved);
+}
+
+// Признак течения времени на плашке — тот же приём, что «работает N мин» у фаз
+// workflow-карточки: отсчёт от момента, когда клиент УВИДЕЛ стадию (таймстампа начала
+// стадии на проводе нет), поэтому после перезагрузки посреди планирования счёт идёт
+// от нуля. Первую минуту не считаем: «меньше минуты» спокойнее мелькающих секунд.
+export function teamPlanningElapsedLabel(startedAt: number, now: number): string {
+  const mins = Math.floor(Math.max(0, now - startedAt) / 60000);
+  return mins < 1 ? 'меньше минуты' : `уже ${mins} мин`;
 }
 
 // Подписи поля ответа. У блокера — ответ исполнителю, у развилки — свой вариант

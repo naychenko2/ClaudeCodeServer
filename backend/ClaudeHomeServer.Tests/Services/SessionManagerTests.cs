@@ -2183,15 +2183,19 @@ public class SessionManagerTests : IDisposable
         // Сколько раз звали планировщика и какой промпт пришёл последним (повтор по кнопке)
         public int Calls { get; private set; }
         public string LastPrompt { get; private set; } = "";
+        // Калитка «долгого планировщика»: RunAsync ждёт её, имитируя живой вызов (потолок
+        // 300 с), пока тест проверяет поведение конца хода на фоне работающего планирования.
+        public Func<Task>? Gate;
 
         public bool UsesLocal(string actionKey) => false;
 
-        public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
+        public async Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
             string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
         {
             Calls++;
             LastPrompt = prompt;
-            return Task.FromResult(answer());
+            if (Gate is not null) await Gate();
+            return answer();
         }
 
         public Task<string?> RunFreeAsync(string actionKey, string prompt, object? jsonFormat = null,
@@ -3036,6 +3040,60 @@ public class SessionManagerTests : IDisposable
         var card = _sentMessages.OfType<TeamEscalationMessage>().Last();
         card.Title.Should().Be("Ход прервался");
         card.Title.Should().NotBe("Уточнения так и не пришли");
+    }
+
+    // Прод 2026-08-04 (чат «Второй заход»): гард молчаливого тупика поднял «Координатор не
+    // понял вводную» ПОСРЕДИ живого планирования. Ход закончился маркером работы, планировщик
+    // строил план (потолок 300 с), и за это время в чате закончился ещё один ход — честный
+    // ответ «ждём карточку плана» без маркера: Planning && WaveNumber == 0 совпало с условием
+    // гарда, и тревога повисла красной, хотя через 28 секунд пришёл готовый план. Пока
+    // планировщик жив, конец чужого хода без маркера — не тупик координатора.
+    [Fact]
+    public async Task КонецХода_БезМаркераПокаПланированиеЖиво_НеДаётЛожнойТревоги()
+    {
+        var (session, backend, frontend) = await MakeTeamStabAsync("ti-planning-inflight");
+        SetPlannerAnswer(backend, frontend);
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _plannerStub.Gate = () => gate.Task;
+
+        // Ход с маркером работы запускает планирование; не await — он жив, пока калитка закрыта
+        var markerTurn = _sut.HandleTeamTurnEndAsync(session.Id,
+            "<team:work>добавить экспорт в CSV</team>", failed: false);
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (_plannerStub.Calls == 0 && DateTime.UtcNow < deadline) await Task.Delay(20);
+        _plannerStub.Calls.Should().Be(1, "маркер работы обязан запустить планировщика");
+        _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.Planning);
+
+        // Пока планирование живо, в чате заканывается ещё один ход — без маркера
+        await _sut.HandleTeamTurnEndAsync(session.Id, "Ждём карточку плана команды.", failed: false);
+
+        _sentMessages.OfType<TeamEscalationMessage>().Should().BeEmpty(
+            "планировщик жив — стадия Planning && WaveNumber == 0 это работа, а не тупик");
+
+        // Планирование завершается планом: человек получает карточку плана, тревоги не было
+        gate.SetResult();
+        await markerTurn;
+
+        _sentMessages.OfType<TeamEscalationMessage>().Should().BeEmpty();
+        _sentMessages.OfType<TeamPlanMessage>().Should().ContainSingle();
+        _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.Confirming);
+    }
+
+    // Парная страховка к тесту выше: тот же конец хода без маркера в Planning && WaveNumber == 0,
+    // но планировщик НЕ жив — это настоящий молчаливый тупик, и гард обязан позвать человека.
+    // Защита, ради которой гард делался (Э7-фикс), не теряется.
+    [Fact]
+    public async Task КонецХода_БезМаркераИПланировщикНеЖив_ПоПрежнемуДаётКарточку()
+    {
+        var (session, _, _) = await MakeTeamStabAsync("ti-planning-deadend");
+        _sut.GetById(session.Id)!.TeamImplement!.Stage = TeamImplementStage.Planning;
+
+        await _sut.HandleTeamTurnEndAsync(session.Id, "Хорошо, посмотрю что тут можно сделать.", failed: false);
+
+        var card = _sentMessages.OfType<TeamEscalationMessage>().Should().ContainSingle()
+            .Which;
+        card.Title.Should().Be("Координатор не понял вводную");
+        _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.AwaitingDecision);
     }
 
     // Minor «дубль уведомления эскалации» (волна 3): ветка is_error в ClaudeSession шлёт

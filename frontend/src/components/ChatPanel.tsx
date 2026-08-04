@@ -14,6 +14,7 @@ import { ensureGit, loadUnpushedLog } from '../lib/git';
 import { slugify } from '../lib/slug';
 import { parseWorkflowMeta } from '../lib/workflowMeta';
 import { detectTeamMechanic } from '../features/team/teamMechanics';
+import { teamPlanningIndicatorVisible } from '../lib/teamImplement';
 import { setLastMechanic } from '../lib/lastMechanic';
 import { toRateWindows, worstWindow } from '../lib/rateLimit';
 import { estimateContext } from '../lib/context';
@@ -45,6 +46,7 @@ import { buildMediaVisibility } from './chat/mediaDedup';
 import { isTasksCreate } from './chat/TaskCreatedView';
 import { isWidgetShow } from './chat/WidgetView';
 import { WorkflowBlockView } from './chat/WorkflowBlockView';
+import { TeamPlanningIndicator } from './chat/TeamPlanningIndicator';
 
 interface Props {
   session: Session;
@@ -163,6 +165,12 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
     }
     return session.teamImplement ?? null;
   }, [liveTeamImplement, session.teamImplement]);
+  // Плашка «Команда готовит план…» в ленте: живёт на стадии планирования и гаснет
+  // с карточкой плана/отказа (см. teamPlanningIndicatorVisible)
+  const showTeamPlanningIndicator = useMemo(
+    () => teamPlanningIndicatorVisible(teamImplementState, items),
+    [teamImplementState, items],
+  );
   const handleToggleTeamImplementAuto = useCallback(async () => {
     if (!teamImplementState) return;
     try {
@@ -1430,6 +1438,11 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
         )}
 
         <FalCostContext.Provider value={falCostByRequest}><GlifCostContext.Provider value={glifCostByJob}><MediaVisibilityContext.Provider value={mediaVisibility}><ChatProjectContext.Provider value={projectCtx}><ChatTreePathContext.Provider value={treePathCtx}><ChatSessionContext.Provider value={session.id}><ChatOpenFileContext.Provider value={onOpenFile ?? null}><ChatOpenReaderContext.Provider value={onOpenReader ?? null}><TeamPlanContext.Provider value={teamPlanCtx}><TeamEscalationContext.Provider value={teamEscalationCtx}>{renderedItems}</TeamEscalationContext.Provider></TeamPlanContext.Provider></ChatOpenReaderContext.Provider></ChatOpenFileContext.Provider></ChatSessionContext.Provider></ChatTreePathContext.Provider></ChatProjectContext.Provider></MediaVisibilityContext.Provider></GlifCostContext.Provider></FalCostContext.Provider>
+
+        {/* Плашка «Команда готовит план…»: стадия планирования идёт минутами (потолок
+            планировщика 300с), и молчащая лента читалась как «всё встало» (прод 2026-08-04).
+            Гаснет сама: стадия уходит с planning при карточке плана или отказа */}
+        {showTeamPlanningIndicator && <TeamPlanningIndicator />}
 
         {online && showWaiting && (
           // Текст индикатора ставим по левому краю чата (как пузыри), а домик уезжает

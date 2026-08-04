@@ -44,6 +44,14 @@ public class SessionManager : IDisposable
         // работающее интервью, а не тупик, и карточка «вопросов не будет» там была бы враньём.
         // Живёт рядом с TeamTurnText и чистится вместе с ним (под TeamTurnLock).
         public bool TeamTurnAsked;
+        // Планировщик прямо сейчас строит план по вводной (StartTeamWorkAsync обернул
+        // CreateTeamPlanAsync). Гард молчаливого тупика по концу хода смотрит сюда: пока
+        // планирование живо, «Planning && WaveNumber == 0» — это работающий планировщик,
+        // а не тупик координатора, и карточка «Координатор не понял вводную» была бы ложной
+        // тревогой (прод 2026-08-04: тревога поднялась на живом планировании, а через 28 с
+        // пришёл готовый план). Память, а не стор: рестарт сервера убивает сам планировщик,
+        // и «планирование живо» после него неправда по определению.
+        public volatile bool TeamPlanningInFlight;
         // Дубль уведомления эскалации (Minor, волна 3): ветка is_error в ClaudeSession шлёт
         // синтетический ErrorMessage(ExpectResultFollows: true) И следом ResultMessage того же
         // хода — оба матчили `msg is ResultMessage or ErrorMessage` и параллельно дёргали
@@ -4483,9 +4491,16 @@ public class SessionManager : IDisposable
         // «только до первой волны» не распространялся, и клятва карточки «сейчас придут
         // вопросы» нарушалась молча: вопросов нет, маркера нет, сторож волн в Interview
         // не тикает. Теперь стадия интервью под гардом при любом номере волны.
+        // Прод 2026-08-04: гард обязан молчать, пока живо планирование по этой вводной
+        // (TeamPlanningInFlight). Планировщик работает ДОЛЬШЕ хода (потолок 300 с), и за
+        // это время в чате спокойно заканчиваются другие ходы — их конец без маркера при
+        // Planning && WaveNumber == 0 не тупик координатора: план уже строится и придёт
+        // карточкой (а не построится — карточку даст сбой/таймаут планировщика). Без флага
+        // тревога «Координатор не понял вводную» поднималась на живой работе и висела
+        // красной рядом с пришедшим планом.
         var stalledStage = team.Stage == TeamImplementStage.Interview
             || (team.Stage == TeamImplementStage.Planning && team.WaveNumber == 0);
-        if (stalledStage && !asked)
+        if (stalledStage && !asked && !entry.TeamPlanningInFlight)
         {
             // Волна 6 (живая приёмка волны 5): ход мог не завершиться маркером по ДВУМ разным
             // причинам, и текст карточки должен их различать. «Координатор не понял вводную»/
@@ -4624,31 +4639,43 @@ public class SessionManager : IDisposable
         // повторить планирование кнопкой карточки, не проходя интервью заново.
         WithTeamState(sessionId, t => { t.LastPlanRequest = request; return true; });
 
-        var (plan, reason) = await CreateTeamPlanAsync(sessionId, request,
-            fromHuman: entry.TeamTurnFromHuman);
-        if (plan is not null) return;
-
-        // Молчаливых тупиков в режиме не бывает: человек написал вводную и ждёт волну —
-        // значит про несостоявшийся план он должен узнать карточкой, а не по тишине.
-        // Таймаут планировщика — отдельный случай: причина не в постановке человека,
-        // и текст карточки называет её как есть (PlanTimeoutDetails).
-        var timedOut = reason == TeamPlanningService.PlannerTimeoutReason;
-        var failed = new TeamEscalation
+        // Флаг живого планирования: гард молчаливого тупика по концу хода (см.
+        // HandleTeamTurnEndAsync) не поднимает тревогу, пока планировщик реально строит
+        // план. Снимается в finally — успех даёт карточку плана, сбой и таймаут дают свою
+        // карточку ниже, так что после снятия флага тишины не будет в любом исходе.
+        entry.TeamPlanningInFlight = true;
+        try
         {
-            Kind = TeamEscalationKind.ProductDecision,
-            Title = timedOut
-                ? "План не построился: планировщик не уложился во время"
-                : "План по вашей вводной не построился",
-            Details = timedOut
-                ? TeamImplementPrompts.PlanTimeoutDetails(request)
-                : TeamImplementPrompts.PlanFailedDetails(request, reason),
-            Wave = team.WaveNumber,
-            // Кнопка повторяет планирование по сохранённой вводной (retryPlan в
-            // RespondTeamEscalationAsync) — без хода координатору и без повторного интервью.
-            Actions = [new TeamEscalationAction("retryPlan", "Повторить планирование")],
-        };
-        if (TeamEscalationRaiser is { } raise) await raise(entry.Info, failed);
-        else await PublishTeamEscalationAsync(sessionId, failed);
+            var (plan, reason) = await CreateTeamPlanAsync(sessionId, request,
+                fromHuman: entry.TeamTurnFromHuman);
+            if (plan is not null) return;
+
+            // Молчаливых тупиков в режиме не бывает: человек написал вводную и ждёт волну —
+            // значит про несостоявшийся план он должен узнать карточкой, а не по тишине.
+            // Таймаут планировщика — отдельный случай: причина не в постановке человека,
+            // и текст карточки называет её как есть (PlanTimeoutDetails).
+            var timedOut = reason == TeamPlanningService.PlannerTimeoutReason;
+            var failed = new TeamEscalation
+            {
+                Kind = TeamEscalationKind.ProductDecision,
+                Title = timedOut
+                    ? "План не построился: планировщик не уложился во время"
+                    : "План по вашей вводной не построился",
+                Details = timedOut
+                    ? TeamImplementPrompts.PlanTimeoutDetails(request)
+                    : TeamImplementPrompts.PlanFailedDetails(request, reason),
+                Wave = team.WaveNumber,
+                // Кнопка повторяет планирование по сохранённой вводной (retryPlan в
+                // RespondTeamEscalationAsync) — без хода координатору и без повторного интервью.
+                Actions = [new TeamEscalationAction("retryPlan", "Повторить планирование")],
+            };
+            if (TeamEscalationRaiser is { } raise) await raise(entry.Info, failed);
+            else await PublishTeamEscalationAsync(sessionId, failed);
+        }
+        finally
+        {
+            entry.TeamPlanningInFlight = false;
+        }
     }
 
     // Выход из интервью без работы (M6, маркер `<team:talk/>`): координатор честно разобрал

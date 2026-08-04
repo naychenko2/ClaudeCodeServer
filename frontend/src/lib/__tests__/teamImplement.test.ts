@@ -2,13 +2,16 @@
 // числа волн (plannedWaves), а не из потолка бюджета — иначе план в 2 волны показывался
 // бы как «волна 1 из 4» (потолок maxWaves).
 import { describe, it, expect } from 'vitest';
-import type { TeamEscalationKind, TeamPlan } from '../../types';
+import type { ChatItem, ServerMessage, SessionTeamImplement, TeamEscalationKind, TeamPlan } from '../../types';
 import {
   teamImplementBadgeText, teamImplementStageShort, teamImplementTone,
   teamEscalationTone, teamEscalationInformational, teamEscalationDetailsLines,
   teamImplementSwitchesMode, teamImplementModeHeld, teamImplementModeWarning,
   teamPlanRunLabel, TEAM_IMPLEMENT_MODE_HELD, TEAM_IMPLEMENT_AUTO_TITLE,
+  teamPlanningIndicatorVisible, teamPlanningElapsedLabel,
+  TEAM_PLANNING_TITLE, TEAM_PLANNING_TEXT,
 } from '../teamImplement';
+import { applyServerMessage, initialChatState, type ChatState } from '../chatReducer';
 
 // Включение режима меняет чужую настройку — режим прав чата (SessionManager.
 // SetTeamImplementAsync переводит acceptEdits/bypass в auto). Предупреждение показываем
@@ -171,5 +174,141 @@ describe('тексты по спеке', () => {
   // «План согласуете один раз. Дальше команда работает сама…» (два предложения)
   it('тултип чипа «Авто» не склеивает два предложения запятой', () => {
     expect(TEAM_IMPLEMENT_AUTO_TITLE).toContain('один раз. Дальше команда работает сама');
+  });
+});
+
+// Плашка «Команда готовит план…» на стадии планирования: появляется с входом
+// в стадию и гаснет с карточкой плана или отказа (двух сообщений об одном быть
+// не должно). Фикстуры повторяют форму событий team_implement/team_escalation.
+describe('индикатор паузы планирования', () => {
+  const state = (over: Partial<SessionTeamImplement> = {}): SessionTeamImplement => ({
+    stage: 'planning', waveNumber: 0, plannedWaves: 0, autoWaves: true, stopped: false,
+    executorPersonaIds: [], coordinatorNoCode: true, planVersion: 0,
+    budget: {
+      tasksUsed: 0, wavesUsed: 0, runsUsed: 0, retriesUsed: 0, wakeupsUsed: 0,
+      maxTasks: 6, maxWaves: 4, maxRuns: 20, maxRetries: 3, maxWakeups: 3,
+    },
+    ...over,
+  });
+
+  const escalation = (resolved: boolean): ChatItem => ({
+    kind: 'team_escalation', escalationId: 'e1',
+    escalation: {
+      id: 'e1', kind: 'productDecision', title: 'План не построился', details: '',
+      actions: [{ id: 'retryPlan', label: 'Повторить планирование' }],
+      taskId: null, wave: 0, resolved, chosenActionId: null,
+    },
+  });
+
+  it('виден на стадии планирования', () => {
+    expect(teamPlanningIndicatorVisible(state(), [])).toBe(true);
+  });
+
+  it('вне планирования не показывается — interview трогать нельзя, остальные стадии не молчат', () => {
+    for (const stage of ['interview', 'confirming', 'wave', 'awaitingDecision', 'checking', 'idle'] as const)
+      expect(teamPlanningIndicatorVisible(state({ stage }), [])).toBe(false);
+  });
+
+  it('остановленная практика не «готовит план»', () => {
+    expect(teamPlanningIndicatorVisible(state({ stopped: true }), [])).toBe(false);
+  });
+
+  it('открытая карточка отказа гасит плашку — двух сообщений об одном быть не должно', () => {
+    expect(teamPlanningIndicatorVisible(state(), [escalation(false)])).toBe(false);
+  });
+
+  it('погашенная карточка (повторное планирование) плашку возвращает', () => {
+    expect(teamPlanningIndicatorVisible(state(), [escalation(true)])).toBe(true);
+  });
+
+  it('режим выключен (null) — плашки нет', () => {
+    expect(teamPlanningIndicatorVisible(null, [])).toBe(false);
+    expect(teamPlanningIndicatorVisible(undefined, [])).toBe(false);
+  });
+
+  it('течение времени: первую минуту «меньше минуты», дальше — полные минуты', () => {
+    const t0 = 1_000_000;
+    expect(teamPlanningElapsedLabel(t0, t0)).toBe('меньше минуты');
+    expect(teamPlanningElapsedLabel(t0, t0 + 59_000)).toBe('меньше минуты');
+    expect(teamPlanningElapsedLabel(t0, t0 + 60_000)).toBe('уже 1 мин');
+    expect(teamPlanningElapsedLabel(t0, t0 + 150_000)).toBe('уже 2 мин');
+    expect(teamPlanningElapsedLabel(t0, t0 + 4 * 60_000 + 30_000)).toBe('уже 4 мин');
+  });
+
+  it('отрицательная разница (рассинхрон часов) не роняет подпись', () => {
+    expect(teamPlanningElapsedLabel(2_000, 1_000)).toBe('меньше минуты');
+  });
+
+  it('тексты объясняют, что пауза нормальна и займёт время', () => {
+    expect(TEAM_PLANNING_TITLE).toBe('Команда готовит план…');
+    expect(TEAM_PLANNING_TEXT).toContain('может занять несколько минут');
+  });
+});
+
+// Симуляция потока событий: те же wire-сообщения, что шлёт бэкенд, прогоняются
+// через редьюсер; плашка обязана появиться на входе в планирование и уйти при
+// карточке плана (стадия confirming) или карточке отказа (стадия остаётся planning)
+describe('индикатор планирования: поток событий через редьюсер', () => {
+  const teamImplementMsg = (over: Partial<Extract<ServerMessage, { type: 'team_implement' }>> = {}) =>
+    ({
+      type: 'team_implement', active: true, stage: 'planning', waveNumber: 0,
+      autoWaves: true, coordinatorPersonaId: 'p-coord', plannerPersonaId: 'p-plan',
+      executorPersonaIds: ['p-1'], budget: null, planCardId: null, modeLocked: true,
+      ...over,
+    }) as unknown as ServerMessage;
+
+  const teamPlanMsg: ServerMessage = {
+    type: 'team_plan', planId: 'plan-1', resolved: false, approved: null,
+    plan: {
+      id: 'plan-1', request: 'сделать фичу', summary: 'делаем фичу', createdAt: '2026-08-04T12:00:00Z',
+      waveCount: 1, executorCount: 1, subtasks: [], version: 1, assumptions: [], changes: [],
+    },
+  };
+
+  const visible = (s: ChatState) => teamPlanningIndicatorVisible(
+    s.teamImplement && s.teamImplement.active ? s.teamImplement : null, s.items);
+
+  it('планирование → карточка плана: плашка появляется и уходит', () => {
+    let s = applyServerMessage(initialChatState(), teamImplementMsg());
+    expect(visible(s)).toBe(true);
+    // Бэкенд сначала двигает стадию в confirming, затем публикует карточку плана
+    s = applyServerMessage(s, teamImplementMsg({ stage: 'confirming', planCardId: 'plan-1', modeLocked: false }));
+    expect(visible(s)).toBe(false);
+    s = applyServerMessage(s, teamPlanMsg);
+    expect(visible(s)).toBe(false);
+    expect(s.items.some(i => i.kind === 'team_plan')).toBe(true);
+  });
+
+  it('планирование → отказ планировщика: плашку гасит карточка, стадия остаётся planning', () => {
+    let s = applyServerMessage(initialChatState(), teamImplementMsg());
+    expect(visible(s)).toBe(true);
+    s = applyServerMessage(s, {
+      type: 'team_escalation', escalationId: 'e1', kind: 'productDecision',
+      title: 'План не построился: планировщик не уложился во время', details: '',
+      actions: [{ id: 'retryPlan', label: 'Повторить планирование' }],
+      taskId: null, wave: 0, resolved: false, chosenActionId: null,
+    });
+    // Стадия не менялась — планирование по-прежнему, но практика ждёт человека
+    expect(s.teamImplement?.stage).toBe('planning');
+    expect(visible(s)).toBe(false);
+  });
+
+  it('повторное планирование после отказа: карточка погашена, плашка снова видна', () => {
+    let s = applyServerMessage(initialChatState(), teamImplementMsg());
+    s = applyServerMessage(s, {
+      type: 'team_escalation', escalationId: 'e1', kind: 'productDecision',
+      title: 'План не построился', details: '',
+      actions: [{ id: 'retryPlan', label: 'Повторить планирование' }],
+      taskId: null, wave: 0, resolved: false, chosenActionId: null,
+    });
+    // Ответ человека переиздаёт карточку погашенной и возвращает стадию planning
+    s = applyServerMessage(s, {
+      type: 'team_escalation', escalationId: 'e1', kind: 'productDecision',
+      title: 'План не построился', details: '',
+      actions: [{ id: 'retryPlan', label: 'Повторить планирование' }],
+      taskId: null, wave: 0, resolved: true, chosenActionId: 'retryPlan',
+    });
+    s = applyServerMessage(s, teamImplementMsg());
+    expect(visible(s)).toBe(true);
   });
 });

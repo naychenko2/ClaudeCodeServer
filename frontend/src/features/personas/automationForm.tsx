@@ -15,7 +15,7 @@ import type {
 } from '../../types';
 import { C, FONT, R } from '../../lib/design';
 import { EXPIRY_PRESETS } from '../../lib/expiry';
-import { TRIGGER_META, TRIGGER_TYPE_ORDER, triggerDetails } from './automationMeta';
+import { TRIGGER_META, TRIGGER_TYPE_ORDER, triggerDetails, type TriggerArgs } from './automationMeta';
 
 export type ScheduleType = 'daily' | 'weekdays' | 'weekly' | 'interval';
 
@@ -67,8 +67,8 @@ export const TRIGGER_OPTIONS: { value: AutomationTriggerType; label: string }[] 
 const WEEKDAY_LABELS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']; // индексы 0..6 → ISO 1..7
 
 export function initialForm(rule: PersonaAutomationRule | null, projects: Project[]): FormState {
-  const a = (rule?.trigger.args ?? {}) as Record<string, any>;
-  const sched = (a.schedule ?? {}) as Record<string, any>;
+  const a = (rule?.trigger.args ?? {}) as TriggerArgs;
+  const sched = a.schedule ?? {};
   const firstProject = projects[0]?.id ?? '';
   return {
     name: rule?.name ?? '',

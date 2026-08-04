@@ -10,6 +10,33 @@ import {
 // и живой движок ошибочно попадал в клавиатурный фоллбэк.
 const MIC_WATCHDOG_MS = 6000;
 
+// Минимальная форма Web Speech API: стандартных типов в lib.dom нет
+// (движок с вендорным префиксом, состав событий различается по браузерам)
+interface SpeechRecognitionLike {
+  lang: string;
+  interimResults: boolean;
+  continuous: boolean;
+  maxAlternatives: number;
+  start(): void;
+  stop(): void;
+  abort(): void;
+  onstart: (() => void) | null;
+  onaudiostart: (() => void) | null;
+  onsoundstart: (() => void) | null;
+  onspeechstart: (() => void) | null;
+  onresult: ((e: SpeechResultEventLike) => void) | null;
+  onend: (() => void) | null;
+  onerror: ((e: { error?: string }) => void) | null;
+}
+
+// Результат распознавания: из вариантов берём только финальный транскрипт
+interface SpeechResultEventLike {
+  results: {
+    length: number;
+    [i: number]: { isFinal?: boolean; [i: number]: { transcript?: string } };
+  };
+}
+
 export interface VoiceInputOptions {
   // Распознанный кусок текста — вызывающий сам решает, куда его дописать
   onResult: (chunk: string) => void;
@@ -34,7 +61,7 @@ export interface VoiceInput {
 export function useVoiceInput({ onResult, onKeyboardFallback }: VoiceInputOptions): VoiceInput {
   const [isListening, setIsListening] = useState(false);
   const [recSeconds, setRecSeconds] = useState(0);
-  const recognitionRef = useRef<any>(null);
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const recCancelRef = useRef(false);
   const micWatchdogRef = useRef<number | null>(null); // детект «мёртвого» Web Speech (нет признаков жизни)
 
@@ -72,9 +99,15 @@ export function useVoiceInput({ onResult, onKeyboardFallback }: VoiceInputOption
       return;
     }
 
-    const SpeechRecognitionCtor =
-      (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition;
-    const rec = new SpeechRecognitionCtor() as any;
+    const w = window as Window & {
+      SpeechRecognition?: new () => SpeechRecognitionLike;
+      webkitSpeechRecognition?: new () => SpeechRecognitionLike;
+    };
+    const SpeechRecognitionCtor = w.SpeechRecognition ?? w.webkitSpeechRecognition;
+    // Проверка hasSpeech выше уже проходила, но свойство может отсутствовать —
+    // тогда клавиатурный фоллбэк вместо падения на `new undefined`
+    if (!SpeechRecognitionCtor) { onFallbackRef.current(); return; }
+    const rec = new SpeechRecognitionCtor();
     rec.lang = 'ru-RU';
     rec.interimResults = true;
     rec.continuous = false;
@@ -96,7 +129,7 @@ export function useVoiceInput({ onResult, onKeyboardFallback }: VoiceInputOption
     rec.onsoundstart = alive;
     rec.onspeechstart = alive;
 
-    rec.onresult = (e: any) => {
+    rec.onresult = (e: SpeechResultEventLike) => {
       alive();
       let last = '';
       for (let i = 0; i < e.results.length; i++) {
@@ -108,7 +141,7 @@ export function useVoiceInput({ onResult, onKeyboardFallback }: VoiceInputOption
     };
 
     rec.onend = () => { clearWatchdog(); setIsListening(false); };
-    rec.onerror = (e: any) => {
+    rec.onerror = (e: { error?: string }) => {
       clearWatchdog();
       setIsListening(false);
       // Причина сбоя — прямо в тост: без неё на устройстве не понять, что именно не так

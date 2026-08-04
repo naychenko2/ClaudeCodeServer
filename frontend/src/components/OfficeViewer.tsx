@@ -5,7 +5,9 @@ import { getEffectiveTheme } from '../lib/themeMode';
 interface OfficeConfig {
   serverUrl: string;
   document: { fileType: string; key: string; title: string; url: string };
-  editorConfig: { mode: string; lang: string };
+  // customization сервер кладёт всегда (uiTheme, anonymous, compactToolbar, …) —
+  // мерж ниже сохраняет его поля, добавляя только logo
+  editorConfig: { mode: string; lang: string; customization?: { logo?: { visible?: boolean } } };
 }
 
 interface Props {
@@ -331,7 +333,7 @@ export function OfficeViewer({ projectId, filePath, mode = 'view', cacheKey, onR
 
       editorRef.current = new window.DocsAPI.DocEditor(containerId, {
         document: cfg.document,
-        editorConfig: { ...cfg.editorConfig, customization: { ...(cfg.editorConfig as any).customization, logo: { visible: false } } },
+        editorConfig: { ...cfg.editorConfig, customization: { ...cfg.editorConfig.customization, logo: { visible: false } } },
         documentType: docType,
         height: '100%',
         width: '100%',

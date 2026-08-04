@@ -322,8 +322,8 @@ function AddUserDialog({ onClose, onCreated }: {
         username: username.trim(), password, role, executionEnvironment: env,
       });
       onCreated(user);
-    } catch (e: any) {
-      setError(e.message ?? 'Ошибка создания');
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Ошибка создания');
       setLoading(false);
     }
   };
@@ -395,8 +395,8 @@ function DeleteUserDialog({ user, onClose, onDeleted }: {
     try {
       await api.users.delete(user.id);
       onDeleted();
-    } catch (e: any) {
-      setError(e.message ?? 'Ошибка удаления');
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Ошибка удаления');
       setLoading(false);
     }
   };
@@ -442,8 +442,8 @@ function ResetPasswordDialog({ user, onClose }: {
     try {
       await api.users.resetPassword(user.id, newPassword);
       onClose();
-    } catch (e: any) {
-      setError(e.message ?? 'Ошибка сброса пароля');
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Ошибка сброса пароля');
       setLoading(false);
     }
   };

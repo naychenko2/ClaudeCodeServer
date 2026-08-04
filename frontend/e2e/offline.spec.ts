@@ -53,11 +53,12 @@ test.describe('офлайн-режим', () => {
   test.afterAll(async ({ playwright, baseURL }) => {
     const request = await playwright.request.newContext({ baseURL });
     const t = await login(request);
-    const tasks = await (await request.get('/api/tasks', { headers: auth(t) })).json();
-    for (const task of tasks.filter((x: any) => x.title === TASK_TITLE))
+    // Ответы API — чужой JSON: на границе структурный тип вместо any
+    const tasks = (await (await request.get('/api/tasks', { headers: auth(t) })).json()) as Array<{ id: string; title: string }>;
+    for (const task of tasks.filter((x) => x.title === TASK_TITLE))
       await request.delete(`/api/tasks/${task.id}`, { headers: auth(t) });
-    const notes = await (await request.get('/api/notes', { headers: auth(t) })).json();
-    for (const n of notes.filter((x: any) => x.title === NOTE_TITLE))
+    const notes = (await (await request.get('/api/notes', { headers: auth(t) })).json()) as Array<{ id: string; title: string }>;
+    for (const n of notes.filter((x) => x.title === NOTE_TITLE))
       await request.delete(`/api/notes/${encodeURIComponent(n.id)}`, { headers: auth(t) });
     await request.dispose();
   });
@@ -111,10 +112,10 @@ test.describe('офлайн-режим', () => {
     await expect.poll(() => idbCount(page, 'notesOutbox'), { timeout: 30_000 }).toBe(0);
 
     // Сервер получил ровно по одному — без дублей
-    const serverTasks = await (await request.get('/api/tasks', { headers: auth(token) })).json();
-    expect(serverTasks.filter((t: any) => t.title === TASK_TITLE)).toHaveLength(1);
+    const serverTasks = (await (await request.get('/api/tasks', { headers: auth(token) })).json()) as Array<{ title: string }>;
+    expect(serverTasks.filter((t) => t.title === TASK_TITLE)).toHaveLength(1);
 
-    const serverNotes = await (await request.get('/api/notes', { headers: auth(token) })).json();
-    expect(serverNotes.filter((n: any) => n.title === NOTE_TITLE)).toHaveLength(1);
+    const serverNotes = (await (await request.get('/api/notes', { headers: auth(token) })).json()) as Array<{ title: string }>;
+    expect(serverNotes.filter((n) => n.title === NOTE_TITLE)).toHaveLength(1);
   });
 });

@@ -52,7 +52,7 @@ function GitHistorySection({ project }: { project: Project }) {
   const run = async (op: () => Promise<unknown>) => {
     setBusy(true); setErr('');
     try { await op(); await reload(); }
-    catch (e: any) { setErr(e.message ?? 'Не получилось'); }
+    catch (e: unknown) { setErr(e instanceof Error ? e.message : 'Не получилось'); }
     finally { setBusy(false); }
   };
 
@@ -194,8 +194,8 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onC
       });
       invalidateProjectsCache(); // полка/палитра проектов подхватывают новое имя/иконку
       onSuccess(updated);
-    } catch (e: any) {
-      setError(e.message);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Не удалось сохранить');
     }
   };
 

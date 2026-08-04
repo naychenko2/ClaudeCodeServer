@@ -80,7 +80,7 @@ export function ProjectIconSection({ project, name, onNameChange, color, onColor
         const r = await api.projects.generateIcon(project.id, { prompt, count: 4 });
         setCandidates(r.candidates);
       }
-    } catch (e: any) { setErr(e.message ?? 'Не удалось сгенерировать'); }
+    } catch (e: unknown) { setErr(e instanceof Error ? e.message : 'Не удалось сгенерировать'); }
     finally { setGenerating(false); }
   };
 
@@ -97,7 +97,7 @@ export function ProjectIconSection({ project, name, onNameChange, color, onColor
         applyUpdated(await api.projects.selectIcon(project.id, item));
       }
       setCandidates(null); setShowGen(false); setMenuOpen(false);
-    } catch (e: any) { setErr(e.message ?? 'Не удалось выбрать'); }
+    } catch (e: unknown) { setErr(e instanceof Error ? e.message : 'Не удалось выбрать'); }
     finally { setBusy(false); }
   };
 
@@ -145,7 +145,7 @@ export function ProjectIconSection({ project, name, onNameChange, color, onColor
     }
     setBusy(true); setErr('');
     try { applyUpdated(await api.projects.setIconMode(project.id, kind)); setMenuOpen(false); }
-    catch (e: any) { setErr(e.message ?? 'Не удалось переключить'); }
+    catch (e: unknown) { setErr(e instanceof Error ? e.message : 'Не удалось переключить'); }
     finally { setBusy(false); }
   };
 

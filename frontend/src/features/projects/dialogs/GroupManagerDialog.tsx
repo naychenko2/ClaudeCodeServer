@@ -29,7 +29,7 @@ export function GroupManagerDialog({ groups, onChange, onClose }: Props) {
     try {
       const updated = await api.projectGroups.update(id, { name });
       sync(list.map(x => x.id === id ? updated : x));
-    } catch (e: any) { setError(e.message); }
+    } catch (e: unknown) { setError(e instanceof Error ? e.message : 'Не удалось переименовать'); }
   };
 
   const handleColor = async (id: string, color: string) => {
@@ -37,7 +37,7 @@ export function GroupManagerDialog({ groups, onChange, onClose }: Props) {
     try {
       const updated = await api.projectGroups.update(id, { color });
       sync(list.map(x => x.id === id ? updated : x));
-    } catch (e: any) { setError(e.message); }
+    } catch (e: unknown) { setError(e instanceof Error ? e.message : 'Не удалось изменить цвет'); }
   };
 
   const handleMove = async (id: string, dir: -1 | 1) => {
@@ -50,7 +50,7 @@ export function GroupManagerDialog({ groups, onChange, onClose }: Props) {
     try {
       const server = await api.projectGroups.reorder(next.map(x => x.id));
       sync(server);
-    } catch (e: any) { setError(e.message); }
+    } catch (e: unknown) { setError(e instanceof Error ? e.message : 'Не удалось изменить порядок'); }
   };
 
   const handleDelete = async (id: string) => {
@@ -58,7 +58,7 @@ export function GroupManagerDialog({ groups, onChange, onClose }: Props) {
     try {
       await api.projectGroups.delete(id);
       sync(list.filter(x => x.id !== id));
-    } catch (e: any) { setError(e.message); }
+    } catch (e: unknown) { setError(e instanceof Error ? e.message : 'Не удалось удалить'); }
   };
 
   const handleCreate = async () => {
@@ -71,7 +71,7 @@ export function GroupManagerDialog({ groups, onChange, onClose }: Props) {
       const created = await api.projectGroups.create(name, color);
       sync([...list, created]);
       setNewName('');
-    } catch (e: any) { setError(e.message); }
+    } catch (e: unknown) { setError(e instanceof Error ? e.message : 'Не удалось создать'); }
     finally { setBusy(false); }
   };
 

@@ -188,7 +188,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
 
   const setView = (v: 'list' | 'tree') => { setViewMode(v); try { localStorage.setItem(VIEW_KEY, v); } catch { /* квота */ } };
   const toggleDir = (p: string) =>
-    setCollapsedDirs(prev => { const n = new Set(prev); n.has(p) ? n.delete(p) : n.add(p); return n; });
+    setCollapsedDirs(prev => { const n = new Set(prev); if (n.has(p)) n.delete(p); else n.add(p); return n; });
 
   const workingFiles = useMemo(
     () => status ? mergeWorking(status.staged, status.unstaged, status.untracked) : [],
@@ -356,7 +356,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
   };
 
   const toggleCheck = (path: string) =>
-    setUnchecked(prev => { const n = new Set(prev); n.has(path) ? n.delete(path) : n.add(path); return n; });
+    setUnchecked(prev => { const n = new Set(prev); if (n.has(path)) n.delete(path); else n.add(path); return n; });
 
   const ahead = status?.ahead ?? 0;
   // Кнопку «Опубликовать» показываем при незапушенных коммитах ИЛИ непустом стеке

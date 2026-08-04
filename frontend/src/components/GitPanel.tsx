@@ -99,7 +99,7 @@ export function GitChangesPanel({ project, onOpenDiff, onOpenFile }: ChangesProp
   }, [project.id]);
 
   const toggleSection = (key: SectionKey) =>
-    setCollapsed(prev => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
+    setCollapsed(prev => { const n = new Set(prev); if (n.has(key)) n.delete(key); else n.add(key); return n; });
 
   const openBranchMenu = () => {
     if (!branchMenu) void loadGitBranches(project.id);

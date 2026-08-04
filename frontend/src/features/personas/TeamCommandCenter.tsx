@@ -10,6 +10,7 @@ import { api } from '../../lib/api';
 import { onMessage } from '../../lib/signalr';
 import { showToast } from '../../lib/toast';
 import { useIsMobile } from '../../lib/breakpoints';
+import { useNow } from '../../lib/useNow';
 import { usePersonas, personaLabel } from '../../lib/personas';
 import { projectColor } from '../../lib/tasks';
 import { C, FONT, R, SHADOW } from '../../lib/design';
@@ -88,11 +89,14 @@ export function TeamCommandCenter({
     for (const t of tasks ?? []) if (t.personaId && t.claudeStartedAt && !t.claudeResult && t.status !== 'done') m.set(t.personaId, t.title);
     return m;
   }, [tasks]);
+  // «Текущее время» — обновляемое состояние (useNow), а не Date.now() в мемо
+  // (purity): окно «на связи» переоценивается каждым тиком, как раньше обновлением events
+  const now = useNow(60_000);
   const onlineSet = useMemo(() => {
-    const s = new Set<string>(); const now = Date.now();
+    const s = new Set<string>();
     for (const e of events ?? []) if (e.type === 'chat_turn' && e.actor && e.actor !== 'user' && e.actor !== 'system' && now - new Date(e.ts).getTime() < 10 * 60_000) s.add(e.actor);
     return s;
-  }, [events]);
+  }, [events, now]);
   const tasksActive = (tasks ?? []).filter(t => t.status !== 'done').length;
   const chatsToday = useMemo(() => {
     const today = new Date().toISOString().slice(0, 10); const s = new Set<string>();
@@ -378,9 +382,10 @@ function ActivityPanel({ events, personaById, filter, setFilter, actorFilter, se
 function Timeline({ events, personaById, onOpen }: {
   events: EventRow[]; personaById: (id: string) => Persona | undefined; onOpen: (e: EventRow) => void;
 }) {
+  const now = useNow(60_000);
   const groups = useMemo(() => {
-    const today = new Date().toISOString().slice(0, 10);
-    const yest = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+    const today = new Date(now).toISOString().slice(0, 10);
+    const yest = new Date(now - 86_400_000).toISOString().slice(0, 10);
     const m = new Map<string, EventRow[]>();
     for (const e of events) {
       const d = e.ts.slice(0, 10);
@@ -388,7 +393,7 @@ function Timeline({ events, personaById, onOpen }: {
       (m.get(label) ?? m.set(label, []).get(label)!).push(e);
     }
     return [...m.entries()];
-  }, [events]);
+  }, [events, now]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>

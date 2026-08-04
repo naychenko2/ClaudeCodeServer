@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Search } from 'lucide-react';
+import { Search, type LucideIcon } from 'lucide-react';
 import type { BindingTarget, PersonaBinding, PersonaBindingMode } from '../../types';
 import { C, FONT, FS, R, SP } from '../../lib/design';
 import { Button, IconField, InlineSegmented, WaitingIndicator } from '../../components/ui';
@@ -24,6 +24,13 @@ const MODE_SEGMENTS: { value: PersonaBindingMode; label: string; tone: { bg: str
 
 // Единый паддинг строк-состояний (загрузка/ошибка/пусто)
 const STATE_PAD = `${SP.md}px ${SP.lg}px`;
+
+// Адаптер иконки инструмента: toolIcon() отдаёт стабильный LucideIcon из маппы
+// модуля, но переменный JSX-тег правило считает компонентом, «созданным в рендере».
+// Пропуск иконки пропом через модульный компонент находку снимает.
+function ToolRowIcon({ icon: Icon }: { icon: LucideIcon }) {
+  return <Icon size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />;
+}
 
 export function ToolTargetPicker({ personaId, bindings, onSetMode, onOpenRule }: {
   personaId: string;
@@ -155,7 +162,6 @@ function ToolRow({ target, binding, pending, isMobile, onPick, onOpenRule }: {
   onOpenRule: (t: BindingTarget) => void;
 }) {
   const group = TOOL_GROUPS[toolGroupOf(target.id)];
-  const Icon = toolIcon(target.id);
   const caption = binding ? null : toolDefaultCaption(target);
   // hover/focus/press — inline-стилям недоступны псевдоклассы, ведём вручную
   const [hot, setHot] = useState(false);
@@ -182,7 +188,7 @@ function ToolRow({ target, binding, pending, isMobile, onPick, onOpenRule }: {
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         background: group.bg, color: group.fg,
       }}>
-        <Icon size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+        <ToolRowIcon icon={toolIcon(target.id)} />
       </span>
       <span style={{ flex: 1, minWidth: 0 }}>
         <span style={{

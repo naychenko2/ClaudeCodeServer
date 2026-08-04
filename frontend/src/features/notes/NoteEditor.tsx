@@ -323,7 +323,7 @@ export function NoteEditor({ value, onChange, minHeight = 280, placeholder, onWi
         }),
         // Ctrl/Cmd+клик по вики-ссылке — переход к заметке
         EditorView.domEventHandlers({
-          mousedown: (e, _view) => {
+          mousedown: (e) => {
             if (!(e.ctrlKey || e.metaKey)) return false;
             const el = (e.target as HTMLElement).closest?.('.cm-wikilink') as HTMLElement | null;
             if (!el?.dataset.target) return false;

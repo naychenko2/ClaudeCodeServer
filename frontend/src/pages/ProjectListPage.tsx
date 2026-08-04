@@ -152,7 +152,8 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
   // Секции для десктопа в зависимости от выбранного пункта сайдбара
   type Section = { key: string; name: string; color?: string; items: Project[] };
   const UNGROUPED_COLOR = C.textMuted;
-  let sections: Section[] = [];
+  // Инициализатор не нужен: все ветки ниже (all/sleeping/группа) гарантированно присваивают
+  let sections: Section[];
   let title = 'Проекты';
   if (view === 'all') {
     sections = byGroup.map(({ group, items }) => ({ key: group.id, name: group.name, color: group.color, items }));

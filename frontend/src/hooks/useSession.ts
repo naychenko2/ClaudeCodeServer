@@ -227,7 +227,8 @@ function ensureHandler() {
       if (s.projectId) projectIds.add(s.projectId);
     }
     for (const pid of projectIds) {
-      try { await joinProject(pid); } catch { }
+      // Осознанно: неудача переподключения project-группы не критична — догонится следующим join
+      try { await joinProject(pid); } catch { /* ignore */ }
     }
 
     for (const [sid, s] of _store) {

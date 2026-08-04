@@ -295,7 +295,7 @@ export function OfficeViewer({ projectId, filePath, mode = 'view', cacheKey, onR
         );
         if (!res.ok) throw new Error(`config ${res.status}`);
         cfg = await res.json();
-      } catch (e) {
+      } catch {
         if (!cancelled) setError('Не удалось получить конфиг документа');
         return;
       }
@@ -346,7 +346,7 @@ export function OfficeViewer({ projectId, filePath, mode = 'view', cacheKey, onR
       const themeInterval = setInterval(() => {
         if (cancelled) { clearInterval(themeInterval); return; }
         const iframe = document.querySelector<HTMLIFrameElement>('iframe');
-        let idoc: Document | null = null;
+        let idoc: Document | null;
         try { idoc = iframe?.contentDocument ?? null; } catch { clearInterval(themeInterval); return; }
         if (!idoc?.body || !idoc.head) return;
         // Уже инжектировали — не дублируем

@@ -395,7 +395,7 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
           </div>
         ) : (
         <div
-          onClick={() => setCollapsed(prev => { const next = new Set(prev); isCollapsed ? next.delete(key) : next.add(key); return next; })}
+          onClick={() => setCollapsed(prev => { const next = new Set(prev); if (isCollapsed) next.delete(key); else next.add(key); return next; })}
           onContextMenu={e => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY, kind: 'folder', source, node }); }}
           {...longPress((x, y) => setCtxMenu({ x, y, kind: 'folder', source, node }))}
           onMouseEnter={() => setHoveredKey(key)}
@@ -472,7 +472,7 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
     return (
       <div key={key}>
         <div
-          onClick={() => setCollapsed(prev => { const next = new Set(prev); isCollapsed ? next.delete(key) : next.add(key); return next; })}
+          onClick={() => setCollapsed(prev => { const next = new Set(prev); if (isCollapsed) next.delete(key); else next.add(key); return next; })}
           title={ghost ? `${dg.docPath} — документ удалён` : dg.docPath}
           style={{
             cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6,

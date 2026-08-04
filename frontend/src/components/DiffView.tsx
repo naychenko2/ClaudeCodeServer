@@ -73,7 +73,7 @@ export function DiffView({ diff, staging }: { diff: string; staging?: DiffStagin
   useEffect(() => { setSelected(new Set()); }, [diff]);
 
   const toggleLine = (key: string) =>
-    setSelected(prev => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
+    setSelected(prev => { const n = new Set(prev); if (n.has(key)) n.delete(key); else n.add(key); return n; });
 
   const handleStageSelected = () => {
     if (!staging || selected.size === 0) return;

@@ -32,7 +32,7 @@ const h = vi.hoisted(() => {
     // Управляемое тестом тройное состояние связи (имитация поведения offline.ts)
     connState: 'online' as string,
     setConnectionState: vi.fn((v: string) => { h.connState = v; }),
-    setDegraded: vi.fn((_reason: string) => { if (h.connState === 'online') h.connState = 'degraded'; }),
+    setDegraded: vi.fn(() => { if (h.connState === 'online') h.connState = 'degraded'; }),
   };
 });
 

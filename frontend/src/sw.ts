@@ -41,7 +41,8 @@ interface PushPayload {
 
 self.addEventListener('push', e => {
   if (!e.data) return;
-  let payload: PushPayload = {};
+  // Инициализатор не нужен: и try, и catch гарантированно присваивают
+  let payload: PushPayload;
   try { payload = e.data.json() as PushPayload; }
   catch { payload = { body: e.data.text() }; }
 

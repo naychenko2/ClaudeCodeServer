@@ -4,6 +4,7 @@ import { api, type WorkflowAgentInfo, type WorkflowAgentBlock } from '../../lib/
 import { parseWorkflowMeta } from '../../lib/workflowMeta';
 import { usePersonas, ensurePersonasLoaded } from '../../lib/personas';
 import { C, FONT, R } from '../../lib/design';
+import { useNow } from '../../lib/useNow';
 import { ToolUseView, toolWord, type ToolUseItem } from './ToolUseView';
 import { splitAgentResultTail } from '../../lib/agentTail';
 import { PersonaConsultCard, PersonaTaskView, findConsultedPersona, findPersonaByAgentType } from './PersonaTaskView';
@@ -16,6 +17,12 @@ function parseTranscriptDir(result: string | undefined): string | null {
   if (!result) return null;
   const m = result.match(/Transcript dir:\s*(.+)/);
   return m ? m[1].trim() : null;
+}
+
+// Галочка завершённого workflow. Вынесена из рендера (static-components):
+// компонент, объявленный внутри тела, пересоздавался бы на каждый рендер.
+function DoneIcon() {
+  return <Check size={14} color={C.success} strokeWidth={2.5} style={{ flexShrink: 0 }} />;
 }
 
 // React.memo: пропсы (workflow-элемент, массивы агентов) пересоздаются только при
@@ -95,19 +102,16 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
   // Длительность активной фазы (замечена на клиенте, не серверный таймстамп —
   // такого поля нет в WorkflowAgentInfo): без него долгая фаза без завершённых
   // агентов выглядит как зависание (см. тикет — DeepSeek Pro, первый агент ~10 мин).
-  // Тик раз в 20с двигает текст, пока карточка смонтирована
-  const [, setDurationTick] = useState(0);
-  useEffect(() => {
-    const t = setInterval(() => setDurationTick(v => v + 1), 20000);
-    return () => clearInterval(t);
-  }, []);
+  // useNow раз в 20с двигает текст, пока карточка смонтирована. Теперь now — состояние,
+  // а не Date.now() в рендере (purity).
+  const now = useNow(20000);
   const phaseStartRef = useRef<Map<number, number>>(new Map());
   const activePhaseIdx = !isSettled && phases.length > 0 && completedPhaseCount < phases.length ? completedPhaseCount : -1;
   if (activePhaseIdx >= 0 && !phaseStartRef.current.has(activePhaseIdx)) {
-    phaseStartRef.current.set(activePhaseIdx, Date.now());
+    phaseStartRef.current.set(activePhaseIdx, now);
   }
   const activePhaseMinutes = activePhaseIdx >= 0
-    ? Math.floor((Date.now() - (phaseStartRef.current.get(activePhaseIdx) ?? Date.now())) / 60000)
+    ? Math.floor((now - (phaseStartRef.current.get(activePhaseIdx) ?? now)) / 60000)
     : null;
 
   // Фоллбэк-загрузка для старых сессий (где серверный ватчер не работал)
@@ -128,10 +132,6 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
     if (next.has(id)) next.delete(id); else next.add(id);
     return next;
   });
-
-  const DoneIcon = () => (
-    <Check size={14} color={C.success} strokeWidth={2.5} style={{ flexShrink: 0 }} />
-  );
 
   return (
     <div style={{ border: `1px solid ${C.border}`, borderRadius: R.lg, overflow: 'hidden', background: C.bgPanel }}>

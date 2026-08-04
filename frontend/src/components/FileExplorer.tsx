@@ -486,7 +486,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
       for (const c of list) {
         const p = normPath(c.path).replace(/\/+$/, '');
         files.add(p);
-        let i = p.lastIndexOf('/');
+        const i = p.lastIndexOf('/');
         let d = i < 0 ? '' : p.slice(0, i);
         while (d) {
           dirs.add(d);
@@ -1079,9 +1079,11 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
 
     const handleRowClick = () => {
       if (isRenaming) return;
-      entry.isDirectory
-        ? (mobileNav ? enterMobileDir(entry.path) : handleToggleDir(entry))
-        : onOpenFile(entry.path);
+      if (entry.isDirectory) {
+        if (mobileNav) enterMobileDir(entry.path); else handleToggleDir(entry);
+      } else {
+        onOpenFile(entry.path);
+      }
     };
 
     return (

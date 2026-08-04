@@ -19,6 +19,7 @@ import { NoteTasksSection } from './NoteTasksSection';
 import { DocCommentedMarkdown, PersonaAssignMenu, filterAssignablePersonas } from './DocComments';
 import { useOnline } from '../../hooks/useOnline';
 import { OfflineError } from '../../lib/offline';
+import { useNow } from '../../lib/useNow';
 import { getNoteForView, saveNoteOffline, deleteNoteOffline, offlineResolve } from '../../lib/notesOffline';
 import { showToast } from '../../lib/toast';
 import { beginAiBusy, endAiBusy } from '../../lib/ai/busy';
@@ -72,6 +73,10 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
   const [saving, setSaving] = useState(false);
   const editingRef = useRef(false);
   editingRef.current = editing;
+  // Живые часы для бейджа срока истечения: Date.now() в рендере нечистый (purity),
+  // а без тика отсчёт замирал до случайного перерендера. Интервал нужен только
+  // когда бейдж реально виден.
+  const now = useNow(30_000, !!note?.expiresAt && !editing);
   // Фидбек кнопки «Скопировать» + корень отрендеренного markdown (для копии с форматированием)
   const [copied, setCopied] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -455,7 +460,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
           </button>
         )}
         {!editing && note.expiresAt && (() => {
-          const left = new Date(note.expiresAt).getTime() - Date.now();
+          const left = new Date(note.expiresAt).getTime() - now;
           if (left <= 0) return <span style={{ fontSize: 11, color: C.warning, flex: 'none', whiteSpace: 'nowrap' }}>⏳ скоро</span>;
           const min = Math.round(left / 60_000);
           const urgent = min < 60;

@@ -157,8 +157,10 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
   // до первого события — из Session.teamImplement; null — режим выключен
   const teamImplementState = useMemo<SessionTeamImplement | null>(() => {
     if (liveTeamImplement !== undefined) {
-      if (!liveTeamImplement.active) return null;
-      const { active: _active, ...rest } = liveTeamImplement;
+      // Деструктуризация снимает поле active (TeamImplementState → SessionTeamImplement);
+      // проверка active сразу использует её, не оставляя неиспользуемую переменную
+      const { active, ...rest } = liveTeamImplement;
+      if (!active) return null;
       return rest;
     }
     return session.teamImplement ?? null;

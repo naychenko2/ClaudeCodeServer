@@ -196,7 +196,7 @@ function AudioFilePlayer({ src, mimeType, fileName, fileSizeMb }: {
   const toggle = () => {
     const a = audioRef.current;
     if (!a) return;
-    playing ? a.pause() : a.play().catch(() => {});
+    if (playing) a.pause(); else void a.play().catch(() => {});
   };
 
   const seek = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1939,7 +1939,8 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
           onConfirm={async () => {
             setOfficeDiscardDialog(false);
             setOfficeSwitching(true);
-            try { await api.files.officeDiscard(project.id, filePath); } catch {}
+            // Осознанно глотаем сбой: сброс правок не должен блокировать переход в просмотр
+            try { await api.files.officeDiscard(project.id, filePath); } catch { /* ignore */ }
             setOfficeMode('view');
           }}
           onCancel={() => setOfficeDiscardDialog(false)}

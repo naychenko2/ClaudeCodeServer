@@ -222,6 +222,24 @@ function lastAgentBlock(items: ChatItem[], kind: 'text' | 'thinking', parentTool
   return null;
 }
 
+// Хвостовой дедуп «докладов» (guest_text, user_message-доклад без персоны): сервер
+// рассылает такие события ДВАЖДЫ — в session-группу SignalR и в project_/user_-группу
+// (BroadcastSessionMessageAsync, SessionManager.cs) — клиент открытого чата состоит в обеих
+// и получает одно и то же событие дважды, пока история не перезагрузится. Для этих событий
+// сервер намеренно ставит один и тот же timestamp в обе рассылки (см. reportTs в
+// SessionManager.ReportUpAsync и TaskExecutionService.ReportToDelegatorAsync) — совпадение
+// timestamp + текста надёжно отличает призрачный повтор от двух легитимных сообщений подряд.
+// Смотрим только хвост ленты — полный проход по items не нужен.
+const DEDUP_TAIL_WINDOW = 5;
+
+function hasTailDuplicate(items: ChatItem[], match: (item: ChatItem) => boolean): boolean {
+  const from = Math.max(0, items.length - DEDUP_TAIL_WINDOW);
+  for (let i = items.length - 1; i >= from; i--) {
+    if (match(items[i])) return true;
+  }
+  return false;
+}
+
 // Применяет сообщение сервера к состоянию. Возвращает prev той же ссылкой,
 // если сообщение состояние не меняет (подписчиков можно не будить).
 // Generic: работает и с ChatState, и с расширяющим его SessionState хука.
@@ -249,13 +267,21 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
       return withItems([...prev.items, { kind: 'text', text: msg.text, ts: Date.now() }]);
     }
 
-    case 'user_message':
+    case 'user_message': {
       // Сервер-инициированная отправка (автоматизация/задача) — клиент не добавлял её
-      // оптимистично, поэтому сообщение приходит живьём. Дублей нет: ввод пользователя
-      // (auto=false) этим событием не рассылается.
+      // оптимистично, поэтому сообщение приходит живьём. Ввод пользователя (auto=false)
+      // этим событием не рассылается — дублей у него нет и дедуп его не касается.
+      // «Доклад» без персоны (senderChatName) сервер иногда шлёт эхом дважды — см.
+      // hasTailDuplicate. Дедуп только когда сервер прислал timestamp явно (общий
+      // reportTs для обоих проходов) — на fallback Date.now() полагаться нельзя.
+      const ts = msg.timestamp ?? Date.now();
+      if (msg.timestamp !== undefined && msg.senderChatName
+        && hasTailDuplicate(prev.items, it =>
+          it.kind === 'user_message' && it.ts === ts && it.text === msg.text && it.senderChatName === msg.senderChatName))
+        return prev;
       return withItems([...prev.items, {
         kind: 'user_message', text: msg.text,
-        ts: msg.timestamp ?? Date.now(),
+        ts,
         ...(msg.attachedPaths ? { attachedPaths: msg.attachedPaths } : {}),
         ...(msg.senderPersonaId ? { senderPersonaId: msg.senderPersonaId } : {}),
         ...(msg.senderOrigin ? { senderOrigin: msg.senderOrigin } : {}),
@@ -263,6 +289,7 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
         ...(msg.staffNote ? { staffNote: msg.staffNote } : {}),
         ...(msg.auto ? { auto: true } : {}),
       }]);
+    }
 
     case 'pending_messages':
       // Полный снимок очереди — заменяем целиком. Доставленное сообщение исчезает отсюда
@@ -283,11 +310,18 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
         },
       };
 
-    case 'guest_text':
+    case 'guest_text': {
       // Модель Z: гостевая реплика исполнителя-персоны, вставленная без агентского хода.
       // Рендерится как обычная text-реплика с её личностью (personaId) — маркер доклада
-      // распознаётся в ChatItemView (parseDelegationReport), не здесь.
-      return withItems([...prev.items, { kind: 'text', text: msg.text, personaId: msg.personaId, ts: msg.timestamp ?? Date.now() }]);
+      // распознаётся в ChatItemView (parseDelegationReport), не здесь. Сервер шлёт такой
+      // «доклад» эхом дважды — см. hasTailDuplicate; дедуп только при явном timestamp.
+      const ts = msg.timestamp ?? Date.now();
+      if (msg.timestamp !== undefined
+        && hasTailDuplicate(prev.items, it =>
+          it.kind === 'text' && it.ts === ts && it.text === msg.text && it.personaId === msg.personaId))
+        return prev;
+      return withItems([...prev.items, { kind: 'text', text: msg.text, personaId: msg.personaId, ts }]);
+    }
 
     case 'thinking_delta': {
       const last = prev.items[prev.items.length - 1];

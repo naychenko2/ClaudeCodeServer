@@ -715,13 +715,18 @@ public class TaskExecutionService
         // («Задача: починить билд»), тот же вид, что у входящих сообщений без персоны
         var reportText = BuildDelegationReportText(task);
         var executorChatName = executorSession?.Name;
+        // Время доклада ставим один раз и кладём в оба слоя (история + живая лента) —
+        // тот же приём, что у reportTs в ReportUpAsync: фронт дедупит призрачный повтор
+        // (BroadcastSessionMessageAsync шлёт событие и в session-, и в project_/user_-группу)
+        // по совпадению timestamp+текста, без общего timestamp дедуп ключа не было бы.
+        var reportTs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         await _sessions.AppendStoredAsync(targetSessionId,
             executor is not null
-                ? new StoredTextMessage(reportText, personaId: executor.Id)
-                : new StoredUserMessage(reportText, viaAgent: true, senderChatName: executorChatName),
+                ? new StoredTextMessage(reportText, personaId: executor.Id, timestamp: reportTs)
+                : new StoredUserMessage(reportText, viaAgent: true, senderChatName: executorChatName, timestamp: reportTs),
             executor is not null
-                ? new GuestTextMessage(reportText, executor.Id)
-                : new UserMessageMessage(reportText, null, null, true, null, executorChatName));
+                ? new GuestTextMessage(reportText, executor.Id, reportTs)
+                : new UserMessageMessage(reportText, null, null, true, null, executorChatName, Timestamp: reportTs));
 
         // ШАГ 2 (платный авто-ход постановщика) — только при живом постановщике-персоне.
         // Задачу мог поставить человек из обычного чата (без персоны): тогда ход не от чьего

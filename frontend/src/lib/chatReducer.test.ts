@@ -133,3 +133,46 @@ describe('PERSISTED_KINDS ↔ StoredMessage.cs', () => {
     expect([...PERSISTED_KINDS].sort()).toEqual([...expected].sort());
   });
 });
+
+// Регрессия: BroadcastSessionMessageAsync рассылает «доклад» о делегированной задаче
+// И в session-группу, И в project_/user_-группу SignalR — клиент открытого чата состоит
+// в обеих и получает одно и то же событие дважды (карточка дублируется до перезагрузки
+// истории). Сервер ставит один и тот же timestamp в оба прохода — applyServerMessage
+// дедупит по хвосту ленты (timestamp + текст, + personaId у guest_text).
+describe('applyServerMessage: дедуп эха «доклада» о делегированной задаче', () => {
+  it('повторный guest_text с тем же timestamp+текстом не добавляет второй элемент', () => {
+    const once = feed(initialChatState(),
+      { type: 'guest_text', text: 'Отчёт готов', personaId: 'p1', timestamp: 1000 });
+    expect(once.items).toHaveLength(1);
+
+    const twice = applyServerMessage(once, { sessionId: SID, type: 'guest_text', text: 'Отчёт готов', personaId: 'p1', timestamp: 1000 } as ServerMessage);
+    expect(twice.items).toHaveLength(1);
+    expect(twice).toBe(once); // та же ссылка — подписчики не будятся
+  });
+
+  it('повторный user_message с viaAgent (senderChatName) не добавляет второй элемент', () => {
+    const once = feed(initialChatState(),
+      { type: 'user_message', text: 'Отчёт готов', senderChatName: 'Задача: починить билд', auto: true, timestamp: 2000 });
+    expect(once.items).toHaveLength(1);
+
+    const twice = applyServerMessage(once, { sessionId: SID, type: 'user_message', text: 'Отчёт готов', senderChatName: 'Задача: починить билд', auto: true, timestamp: 2000 } as ServerMessage);
+    expect(twice.items).toHaveLength(1);
+    expect(twice).toBe(once);
+  });
+
+  it('два guest_text с одинаковым текстом, но разными timestamp — добавляются оба', () => {
+    const state = feed(initialChatState(),
+      { type: 'guest_text', text: 'Отчёт готов', personaId: 'p1', timestamp: 1000 },
+      { type: 'guest_text', text: 'Отчёт готов', personaId: 'p1', timestamp: 1001 },
+    );
+    expect(state.items).toHaveLength(2);
+  });
+
+  it('обычные user_message пользователя (без timestamp/senderChatName) не дедупятся — два подряд легитимны', () => {
+    const state = feed(initialChatState(),
+      { type: 'user_message', text: 'привет' },
+      { type: 'user_message', text: 'привет' },
+    );
+    expect(state.items).toHaveLength(2);
+  });
+});

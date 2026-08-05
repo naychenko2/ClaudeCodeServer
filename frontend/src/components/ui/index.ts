@@ -10,7 +10,7 @@ export { IslandSidebarSplitter } from './IslandSidebarSplitter';
 export { IslandScaffold } from './IslandScaffold';
 export { PanelShell } from './PanelShell';
 export { PanelHeaderSlot } from './PanelHeaderSlot';
-export { useHasPanelHeader } from './panelHeaderSlotContext';
+export { useHasPanelHeader, usePanelHeaderHold } from './panelHeaderSlotContext';
 export { RailFlyout } from './RailFlyout';
 export type { RailFlyoutAction } from './RailFlyout';
 export { RailCapsule, RAIL_W, RAIL_GAP, RAIL_ITEM_GAP } from './RailCapsule';

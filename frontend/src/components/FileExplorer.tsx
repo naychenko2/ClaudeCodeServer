@@ -34,9 +34,9 @@ import { copyMarkdown } from '../lib/selectionScope';
 import { useGitState, ensureGit } from '../lib/git';
 import { useOnline } from '../hooks/useOnline';
 import { EmptyState } from './EmptyState';
-import { C, R, FS, FONT, MODAL_W } from '../lib/design';
+import { C, R, FS, SP, FONT, MODAL_W } from '../lib/design';
 import { useThemeMode, getEffectiveTheme } from '../lib/themeMode';
-import { Modal, ModalActions, TextField, IconButton, Button, Menu, MenuItem, PanelHeaderSlot, useHasPanelHeader } from './ui';
+import { Modal, ModalActions, TextField, IconButton, Button, Menu, MenuItem, PanelHeaderSlot, useHasPanelHeader, usePanelHeaderHold } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 
 interface Props {
@@ -519,7 +519,10 @@ const FileRow = memo(function FileRow(p: FileRowProps) {
         paddingLeft: 8 + depth * INDENT, paddingRight: stickyIcons ? 0 : 8,
         paddingTop: touch ? 9 : 1,
         paddingBottom: touch ? 9 : 1,
-        minHeight: touch ? ROW_H_TOUCH : ROW_H,
+        // Высота ЖЁСТКАЯ, а не минимальная: кнопки наведения (24) выше строки (22),
+        // и на minHeight строка раздвигалась под курсором — список дёргался целиком.
+        // Теперь кнопка выступает за кромку на пиксель, а строка стоит на месте.
+        ...(touch ? { minHeight: ROW_H_TOUCH } : { height: ROW_H }),
         borderRadius: R.md, cursor: p.dragging ? 'grabbing' : 'pointer',
         width: '100%', boxSizing: 'border-box',
         opacity: p.dragging ? 0.4 : p.pressing ? 0.6 : 1,
@@ -584,16 +587,20 @@ const FileRow = memo(function FileRow(p: FileRowProps) {
             }}
           />
         ) : (
+          // Гарнитура, размер и цвет — как в строке «Документации»: панели стоят рядом
+          // в одной рельсе, и разный шрифт читался бы как разный раздел. Выделяется
+          // только выбранное (тёмный + 600), остальное — вторичным
           <span title={notesRoot ? 'Заметки (папка notes)' : entry.name} style={{
-            // Имя файла остаётся моноширинным: это идентификатор, а не заголовок
-            fontFamily: notesRoot ? undefined : "'JetBrains Mono', monospace",
+            fontFamily: FONT.sans,
             fontSize: FS.sm,
-            fontWeight: entry.isDirectory ? 700 : 500,
+            lineHeight: 1.35,
+            fontWeight: p.active || entry.isDirectory ? 600 : 400,
             color: notesRoot ? C.accent
               : (!entry.isDirectory && p.indexed) ? C.successText
-              : C.textHeading,
+              : p.active ? C.textHeading
+              : C.textSecondary,
             ...(isMobile
-              ? { whiteSpace: 'normal', wordBreak: 'break-all', lineHeight: 1.35 }
+              ? { whiteSpace: 'normal', wordBreak: 'break-all' }
               : { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }),
           }}>{notesRoot ? 'Заметки' : entry.name}</span>
         )}
@@ -682,6 +689,9 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   // Поиск разворачивается кнопкой-лупой: в узкой колонке поле не должно стоять
   // постоянной полосой ради действия, которое нужно изредка
   const [searchOpen, setSearchOpen] = useState(false);
+  // Пока открыт любой попап панели, контролы шапки не гаснут: курсор ушёл на меню
+  // (оно в портале), но кнопка, которой его открыли, обязана остаться на месте
+  usePanelHeaderHold(!!sortMenu || !!createMenu || searchOpen);
   const changeSortMode = (m: FileSortMode) => {
     setSortMode(m);
     localStorage.setItem(SORT_MODE_KEY, m);
@@ -1361,19 +1371,22 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
           <span style={{ position: 'absolute', top: 1, right: 1, width: 5, height: 5, borderRadius: '50%', background: C.accent, pointerEvents: 'none' }} />
         )}
       </span>
-      {/* Главное действие панели — последним в ряду (конвенция шапки) */}
-      {online && (
-        <Button
-          size="xs"
-          variant="primary"
-          leftIcon={<Plus size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
-          onClick={e => setCreateMenu(createMenu ? null : e.currentTarget.getBoundingClientRect())}
-        >
-          Новый
-        </Button>
-      )}
     </>
   );
+
+  // Главное действие панели — в ЗАКРЕПЛЁННОМ слоте: оно видно всегда, а не только
+  // под курсором (как «+ Чат» и «+ Задача» у соседей). На пустом дереве иначе
+  // непонятно, чем его наполнить
+  const createControl = online ? (
+    <Button
+      size="xs"
+      variant="primary"
+      leftIcon={<Plus size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+      onClick={e => setCreateMenu(createMenu ? null : e.currentTarget.getBoundingClientRect())}
+    >
+      Новый
+    </Button>
+  ) : null;
 
   // Меню «вида» и «создать» — порталом по якорю кнопки
   const sortMenuEl = sortMenu && (
@@ -1437,10 +1450,14 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
       {/* Шапки может не быть (мобильная вкладка сайдбара) — тогда те же контролы
           рисуются своей строкой в теле панели */}
       {hasPanelHeader
-        ? <PanelHeaderSlot>{controls}</PanelHeaderSlot>
+        ? <>
+            <PanelHeaderSlot>{controls}</PanelHeaderSlot>
+            {createControl && <PanelHeaderSlot pinned>{createControl}</PanelHeaderSlot>}
+          </>
         : (
           <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6, padding: '6px 12px 8px' }}>
             {controls}
+            {createControl}
           </div>
         )}
       {sortMenuEl}
@@ -1456,27 +1473,28 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         onChange={e => handleUploadFiles(e.target.files)}
       />
 
-      {/* Строка поиска — разворачивается кнопкой-лупой из шапки */}
+      {/* Строка поиска — разворачивается кнопкой-лупой из шапки. Поле, отступы и
+          кнопка закрытия — те же, что в «Документации»: одинаковый жест должен и
+          выглядеть одинаково */}
       {searchOpen && (
-        <div style={{ padding: '0 12px 8px', flexShrink: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg, padding: '0 11px', height: 32 }}>
-            <span style={{ color: C.textMuted, marginRight: 8, display: 'flex', flexShrink: 0 }}>
-              <Search size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-            </span>
-            <input
-              placeholder="Поиск…"
+        <div style={{
+          flexShrink: 0, display: 'flex', alignItems: 'center', gap: SP.xs,
+          padding: `${SP.xs}px ${SP.md}px ${SP.sm}px`, borderBottom: `1px solid ${C.border}`,
+        }}>
+          <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
+            <Search size={ICON_SIZE.xs} strokeWidth={ICON_STROKE}
+              style={{ position: 'absolute', left: SP.sm, top: '50%', transform: 'translateY(-50%)', color: C.textMuted, pointerEvents: 'none' }} />
+            <TextField
               value={search}
+              onChange={handleSearch}
+              placeholder="Поиск по файлам"
               autoFocus
-              onChange={e => handleSearch(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Escape') { handleSearch(''); setSearchOpen(false); } }}
-              style={{ flex: 1, minWidth: 0, border: 'none', background: 'none', fontSize: 13, fontFamily: FONT.mono, color: C.textHeading, outline: 'none' }}
+              style={{ height: 30, fontSize: FS.sm, paddingLeft: 28 }}
             />
-            {search && (
-              <button onClick={() => handleSearch('')} title="Очистить" style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.textMuted, padding: 0, display: 'flex', alignItems: 'center' }}>
-                <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-              </button>
-            )}
           </div>
+          <IconButton size="sm" title="Закрыть поиск (Esc)" onClick={() => { handleSearch(''); setSearchOpen(false); }}>
+            <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+          </IconButton>
         </div>
       )}
       {uploadError && (
@@ -1518,7 +1536,8 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
       )}
 
       {/* Tree / список папки / результаты поиска */}
-      <div ref={scrollRef} onScroll={handleScroll} style={{ flex: 1, overflowX: isMobile ? 'hidden' : 'auto', overflowY: 'auto', padding: '0 4px 12px' }}>
+      {/* Дерево: сверху воздух, чтобы первая строка не липла к кромке шапки */}
+      <div ref={scrollRef} onScroll={handleScroll} style={{ flex: 1, overflowX: isMobile ? 'hidden' : 'auto', overflowY: 'auto', padding: `${SP.sm}px 4px 12px` }}>
         {searchResults !== null ? (
           searchResults.length === 0 ? (
             <EmptyState

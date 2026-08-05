@@ -28,7 +28,7 @@ import { EmptyState } from './EmptyState';
 import { dayGroupTitle } from '../lib/chatGroups';
 import { authorEmoji, authorName } from '../lib/authorEmoji';
 import { getExtMeta } from './FileExplorer';
-import { Modal, ModalActions, TextArea, TextField, IconButton, Button, Menu, MenuItem, PanelHeaderSlot, IconSegmented, useHasPanelHeader } from './ui';
+import { Modal, ModalActions, TextArea, TextField, IconButton, Button, Menu, MenuItem, PanelHeaderSlot, IconSegmented, useHasPanelHeader, usePanelHeaderHold } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 
 const COMMIT_SUMMARY_MAX = 72;
@@ -181,6 +181,9 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
   const [forgejoCreds, setForgejoCreds] = useState<{ login: string; password: string | null } | null>(null);
   const [credsBusy, setCredsBusy] = useState(false);
   const [savingNow, setSavingNow] = useState(false);                           // «Сохранить сейчас» (документный режим)
+  // Меню настроек репозитория живёт порталом: пока оно открыто, контролы шапки не
+  // гаснут — иначе кнопка, которой его открыли, исчезает под курсором
+  usePanelHeaderHold(!!repoMenu);
 
   // Загрузка стора + стека незапушенных + remote при монтировании панели
   useEffect(() => {

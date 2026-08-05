@@ -6,7 +6,7 @@ import { api } from '../lib/api';
 import { onMessage } from '../lib/signalr';
 import { C, R, SHADOW, FONT } from '../lib/design';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
-import { IconButton, PanelHeaderSlot, useHasPanelHeader } from './ui';
+import { IconButton, PanelHeaderSlot, useHasPanelHeader, usePanelHeaderHold } from './ui';
 
 interface Props {
   project: Project;
@@ -413,6 +413,8 @@ export function KnowledgePanel({ project, isMobile = false, alwaysShowIcons = fa
   const [searchQuery, setSearchQuery] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
   const hasPanelHeader = useHasPanelHeader();
+  // Открытый поиск держит контролы шапки: иначе лупа гаснет, пока печатаешь в поле
+  usePanelHeaderHold(searchOpen);
   const [notification, setNotification] = useState<{ message: string; type: 'error' | 'success' } | null>(null);
   const notifTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 

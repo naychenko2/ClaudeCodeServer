@@ -114,6 +114,32 @@ public class DocsController(DocsIndexService docs, ProjectManager projects) : Co
         catch (UnauthorizedAccessException e) { return StatusCode(500, new { error = $"Нет доступа к {DocsIndexService.ScopeFileName}: {e.Message}" }); }
     }
 
+    // Порядок страниц папки: пишет .order в рабочее дерево. Правка репозитория, поэтому
+    // только по явному жесту пользователя (перетаскивание строки), никогда фоном.
+    //
+    // items — имена без расширения в новом порядке; сервис сам разводит 404 (папки нет в
+    // области) и 400 (имя, которого в папке нет). Ответ — свежий индекс: перечитывать его
+    // вторым запросом нечестно, порядок обязан приехать вместе с подтверждением
+    [HttpPut("order")]
+    public IActionResult SetOrder(string projectId, [FromBody] SetDocsOrderRequest req)
+    {
+        try
+        {
+            var p = GetProject(projectId);
+            var scope = docs.ResolveScope(p);
+            var result = docs.WriteOrder(p.RootPath, req.Folder, req.Items ?? [], scope);
+            return result.Status switch
+            {
+                DocsIndexService.OrderWriteStatus.FolderNotInScope => NotFound(new { error = result.Error }),
+                DocsIndexService.OrderWriteStatus.BadItems => BadRequest(new { error = result.Error }),
+                _ => Ok(docs.GetIndex(p.RootPath, scope)),
+            };
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (IOException e) { return StatusCode(500, new { error = $"Не удалось записать .order: {e.Message}" }); }
+        catch (UnauthorizedAccessException e) { return StatusCode(500, new { error = $"Нет доступа к .order: {e.Message}" }); }
+    }
+
     // Вынести текущую область в файл репозитория: с этого момента она версионируется и
     // одинакова у всех, кто открыл репозиторий. Отдельным действием, а не автоматически —
     // продукт не создаёт файлы в чужом рабочем дереве без спроса.
@@ -133,3 +159,6 @@ public class DocsController(DocsIndexService docs, ProjectManager projects) : Co
 }
 
 public record SetDocsScopeRequest(List<string>? Folders, List<string>? RootFiles, List<string>? Types, string? Home = null);
+
+// Folder = null или «» — корень репозитория: там тоже бывает свой .order
+public record SetDocsOrderRequest(string? Folder, List<string>? Items);

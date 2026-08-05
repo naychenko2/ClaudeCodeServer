@@ -905,6 +905,134 @@ public sealed partial class DocsIndexService
         return i < 0 ? folder : folder[(i + 1)..];
     }
 
+    // ---------- запись порядка ----------
+
+    public enum OrderWriteStatus { Ok, FolderNotInScope, BadItems }
+
+    // Результат записи .order: причина отказа нужна контроллеру, чтобы развести 404 и 400
+    public sealed record OrderWriteResult(OrderWriteStatus Status, string? Error = null);
+
+    // Переставить строки .order указанной папки. items — имена БЕЗ расширения (как в файле)
+    // в новом порядке; это подмножество уровня, а не весь его состав: панель показывает
+    // документы папки и её разделы разными группами, и присылает то, что пользователь
+    // реально видел.
+    //
+    // Перестановка идёт ПО ЗАНЯТЫМ ПОЗИЦИЯМ: строки, которых в items нет (раздел между
+    // документами, документ с временно снятым типом, строка от чужой ветки), остаются на
+    // своих местах. Иначе жест мышью выбрасывал бы из порядка то, чего пользователь не видел.
+    public OrderWriteResult WriteOrder(string rootPath, string? folder,
+        IReadOnlyList<string> items, DocsScope? scope = null)
+    {
+        var root = Path.GetFullPath(rootPath);
+
+        string target;
+        if (string.IsNullOrWhiteSpace(folder)) target = "";     // корень репозитория тоже уровень
+        else
+        {
+            var normalized = NormalizeFolder(folder);
+            if (normalized is null)
+                return new OrderWriteResult(OrderWriteStatus.FolderNotInScope, $"Недопустимая папка: {folder}");
+            target = normalized;
+        }
+
+        var corpus = GetCorpus(root, scope);
+        var level = LevelNames(corpus, target);
+        if (level is null)
+            return new OrderWriteResult(OrderWriteStatus.FolderNotInScope,
+                $"Папка вне области документации: {(target.Length == 0 ? "корень проекта" : target)}");
+
+        // Имена сверяем с фактическим составом уровня: .order — не место для произвольных
+        // строк от клиента, чужую строку туда может дописать только сам пользователь в git
+        var wanted = new List<string>(items.Count);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var raw in items)
+        {
+            var name = raw?.Trim() ?? "";
+            if (name.Length == 0)
+                return new OrderWriteResult(OrderWriteStatus.BadItems, "Пустое имя в списке порядка");
+            if (!level.Contains(name, StringComparer.OrdinalIgnoreCase))
+                return new OrderWriteResult(OrderWriteStatus.BadItems,
+                    $"В папке нет документа или раздела «{name}»");
+            if (!seen.Add(name))
+                return new OrderWriteResult(OrderWriteStatus.BadItems, $"Имя повторяется: «{name}»");
+            wanted.Add(name);
+        }
+
+        var dir = target.Length == 0 ? root : Path.Combine(root, target.Replace('/', Path.DirectorySeparatorChar));
+        var file = Path.Combine(dir, OrderFileName);
+        var existing = File.Exists(file) ? File.ReadAllText(file) : null;
+
+        // Файла не было — фиксируем ВЕСЬ текущий порядок уровня, а не одну перетащенную
+        // строку: иначе остальные документы стали бы неперечисленными и уехали в хвост,
+        // то есть жест сломал бы порядок вместо того, чтобы его задать
+        List<string> lines = existing is null ? [.. level] : SplitOrderLines(existing);
+
+        // Появившееся мимо панели (git pull параллельно) дописываем в хвост: без этого
+        // перетаскивание молча выкинуло бы чужой документ из порядка
+        foreach (var name in level)
+            if (!lines.Contains(name, StringComparer.OrdinalIgnoreCase))
+                lines.Add(name);
+
+        var slots = new List<int>(wanted.Count);
+        for (var i = 0; i < lines.Count; i++)
+            if (wanted.Contains(lines[i], StringComparer.OrdinalIgnoreCase)) slots.Add(i);
+        for (var k = 0; k < slots.Count && k < wanted.Count; k++) lines[slots[k]] = wanted[k];
+
+        // Стиль концов строк сохраняем: файл лежит в репозитории, и смена CRLF на LF
+        // показала бы в диффе весь файл вместо одной перестановки. Новый пишем с \n —
+        // git применит autocrlf сам. BOM не пишем никогда
+        var eol = existing is not null && existing.Contains("\r\n") ? "\r\n" : "\n";
+        File.WriteAllText(file, string.Join(eol, lines) + eol, new UTF8Encoding(false));
+        return new OrderWriteResult(OrderWriteStatus.Ok);
+    }
+
+    // Строки существующего .order как есть (без пустых и краёв-пробелов) — их порядок
+    // и состав переживают запись, включая имена, которым сейчас не соответствует файл
+    private static List<string> SplitOrderLines(string text)
+    {
+        var result = new List<string>();
+        foreach (var raw in text.Split('\n'))
+        {
+            var name = raw.Trim('﻿', ' ', '\t', '\r');
+            if (name.Length > 0) result.Add(name);
+        }
+        return result;
+    }
+
+    // Имена узлов уровня в нынешнем порядке: markdown-документы самой папки и её подпапки.
+    // Порядок берём из индекса — он уже уплощён деревом, поэтому первое появление имени и
+    // есть его место среди соседей. Не-markdown в состав не входит: .order обязан оставаться
+    // wiki-совместимым, а «cover» без «cover.md» там просто мусор.
+    // null — папки в области нет вовсе (гейт эндпоинта).
+    private static List<string>? LevelNames(DocsCorpus corpus, string folder)
+    {
+        var prefix = folder.Length == 0 ? "" : $"{folder}/";
+        var names = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var known = folder.Length == 0;     // корень существует, пока в области есть хоть что-то
+
+        foreach (var doc in corpus.Docs)
+        {
+            if (prefix.Length > 0 && !doc.Path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) continue;
+            known = true;
+            var rest = doc.Path[prefix.Length..];
+            var slash = rest.IndexOf('/');
+            if (slash < 0)
+            {
+                if (!IsMarkdown(rest)) continue;
+                var name = Path.GetFileNameWithoutExtension(rest);
+                if (seen.Add(name)) names.Add(name);
+            }
+            // Документ глубже уровнем: его место в .order занимает первый сегмент — раздел
+            else if (seen.Add(rest[..slash])) names.Add(rest[..slash]);
+        }
+
+        return known && corpus.Docs.Count > 0 ? names : null;
+    }
+
+    private static bool IsMarkdown(string path) =>
+        Path.GetExtension(path).Equals(".md", StringComparison.OrdinalIgnoreCase);
+
     // README любого поддерживаемого расширения: в корне лежит и README.md, и README.txt
     private static bool IsReadme(string relativePath) =>
         !relativePath.Contains('/') &&

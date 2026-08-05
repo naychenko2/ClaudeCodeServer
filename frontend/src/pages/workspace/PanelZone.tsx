@@ -37,7 +37,7 @@ import {
   isPanelKey, type PanelKey, type Zone,
 } from './panelCatalog';
 import { PanelFillContext, usePanelFillRequests } from './panelFill';
-import { wsPanels, homeOf, isTucked, isZoneCollapsed, nextPlacement, sortRail, zoneOf, COL_CAP, PANEL_MIN_H, type PanelZonesStore } from './panelStackState';
+import { wsPanels, homeOf, isTucked, isZoneCollapsed, placeByRail, sortRail, zoneOf, COL_CAP, PANEL_MIN_H, type PanelZonesStore } from './panelStackState';
 import { usePanelColResize, usePanelDnd, usePanelRowResize, usePanelWidthDrag } from './zoneGestures';
 import { usePanelPeek } from './panelPeek';
 import { useRailHover } from './railHover';
@@ -306,6 +306,15 @@ export function PanelZone({
   // Кнопки, стоящие в столбце прямо сейчас: по ним решается, есть ли что убирать
   // в ящик (последнюю кнопку рельсы туда не отдаём).
   const columnKeys = stashRevealed ? availableAll : availableAll.filter(k => railKeyVisible(k));
+  // Порядок кнопок столбца СВЕРХУ ВНИЗ — по нему панель встаёт на своё место в
+  // раскладке, и по нему же рисуется призрак места (placeByRail). Собирается ровно
+  // тем же способом, что и сами кнопки (см. railGroup): группы подряд, внутри
+  // группы — пользовательский порядок railOrder. Разойдись эти два фильтра,
+  // обещание рельсы разъехалось бы с её собственным видом.
+  const railSeq = RAIL_GROUPS.flatMap(g => sortRail(
+    zones.railOrder,
+    g.filter(k => (stashRevealed ? railKeyVisible(k, false) : railKeyVisible(k))),
+  ));
   // Счёт «есть ли зоне что показать» идёт по availableAll: спрятанные кнопки со
   // столбца ушли, но рельса нужна — без неё ящик вместе с ними исчез бы с экрана.
   const railHidden = !!hideWhenEmpty && availableAll.length === 0 && openKeys.length === 0;
@@ -395,8 +404,8 @@ export function PanelZone({
   const hoverKey = hovered.key;
 
   // Место, куда встанет панель под курсором: та же логика, что у открытия
-  // (nextPlacement = правило addPanel). В solo-режиме показывать нечего — там
-  // новая панель просто заменяет единственную.
+  // (общее правило placeByRail — панель встаёт на своё место в порядке кнопок).
+  // В solo-режиме показывать нечего — там новая панель просто заменяет единственную.
   const ghostKey = !compact && !soloMode && !dnd.active
     && hoverKey && !openKeys.includes(hoverKey) && keyAvailable(hoverKey)
     ? hoverKey : null;
@@ -406,13 +415,23 @@ export function PanelZone({
   // чему относится кнопка. Для закрытой панели этим занимаются ghost/peek.
   const railHighlightKey = !compact && !dnd.active && hoverKey && openKeys.includes(hoverKey)
     ? hoverKey : null;
-  const ghostAt = ghostKey ? nextPlacement(layout, side, colCapNow()) : null;
+  const ghostAt = ghostKey ? placeByRail(layout, ghostKey, side, colCapNow(), railSeq) : null;
   // Колонка призрака в ВИДИМЫХ координатах: раскладка может держать колонки из
   // недоступных на этом экране панелей, и их индексы со списком columns не совпадают
-  const ghostCol = ghostAt && 'ci' in ghostAt ? columns.findIndex(c => c.ci === ghostAt.ci) : -1;
+  const ghostCol = ghostAt && !ghostAt.newColumn ? columns.findIndex(c => c.ci === ghostAt.ci) : -1;
   // Своя колонка нужна и когда место — новая колонка, и когда целевая колонка
   // раскладки на этом экране не показана
   const ghostNewCol = !!ghostAt && ghostCol < 0;
+  // Строка призрака в ВИДИМЫХ координатах — обратный пересчёт к layoutRowFor:
+  // недоступные на этом экране панели раскладка держит, но не рисует, и по их
+  // числу выше места вставки линия уехала бы мимо своего стыка.
+  const ghostRow = ghostAt && ghostCol >= 0
+    ? (layout[ghostAt.ci] ?? []).slice(0, ghostAt.ri).filter(k => columns[ghostCol].keys.includes(k)).length
+    : 0;
+  // У какой кромки зоны родится новая колонка. Обычно это центр: панель встаёт в
+  // колонку у рельсы, а вытесненный ею «хвост» уезжает от рельсы (см. placeByRail).
+  // Пустая зона — исключение: там первая колонка и есть колонка у рельсы.
+  const ghostAtStart = ghostAt?.newColumn && layout.length > 0 ? ghostAt.ci === 0 : isLeft;
 
   // Ширина зоны: колонки по width плюс зазоры МЕЖДУ ними (крайние направляющие
   // в покое нулевые: зазор к рельсе даёт отдельная прокладка, к центру — сплиттер).
@@ -651,10 +670,13 @@ export function PanelZone({
         // Панель открывается в колонку, стоящую по контенту — соседи сохраняют
         // свою высоту, новая забирает свободный низ (см. keepHeightsOnInsert)
         if (!isOpen && !soloMode) {
-          const at = nextPlacement(layout, side, cap);
-          if ('ci' in at) keepHeightsOnInsert(k, at.ci);
+          const at = placeByRail(layout, k, side, cap, railSeq);
+          // Место вставки передаём целиком (колонка И строка): панель встаёт по
+          // порядку кнопок, то есть может попасть в середину — высоту ей уступает
+          // сосед сверху от ЭТОГО места, а не последняя панель колонки.
+          if (!at.newColumn) keepHeightsOnInsert(k, at.ci, at.ri);
         }
-        toggle(side, k, cap);
+        toggle(side, k, cap, railSeq);
       }
       // Панель в результате клика ОТКРЫЛАСЬ — сообщаем подписчику (граф и т.п.)
       if (!isOpen) onPanelOpen?.(k);
@@ -746,7 +768,7 @@ export function PanelZone({
       iconAction={{
         Icon: Pin,
         title: 'Закрепить панель',
-        onClick: () => { peeked.clear(); setPinned(peek); toggle(side, peek, colCapNow()); onPanelOpen?.(peek); },
+        onClick: () => { peeked.clear(); setPinned(peek); toggle(side, peek, colCapNow(), railSeq); onPanelOpen?.(peek); },
       }}
       fill={peekFull}
       // Временный слой обозначаем ТЕНЬЮ, а не цветной рамкой: акцентная обводка
@@ -851,9 +873,9 @@ export function PanelZone({
               // остальное (закрытие своей / переезд кнопки) делает closeTo
               else if (!railWillClose && zoneOf(zones, from) !== null) {
                 const cap = colCapNow();
-                const at = nextPlacement(layout, side, cap);
-                if ('ci' in at) keepHeightsOnInsert(from, at.ci);
-                toggle(side, from, cap);
+                const at = placeByRail(layout, from, side, cap, railSeq);
+                if (!at.newColumn) keepHeightsOnInsert(from, at.ci, at.ri);
+                toggle(side, from, cap, railSeq);
               } else closeTo(side, from);
             }),
           }
@@ -902,13 +924,19 @@ export function PanelZone({
   // pointerEvents: none — призрак висит в раскладке, но курсору не мешает.
   // accent: наведение на кнопку — точное «кликнешь — встанет сюда», поэтому линия
   // контрастная акцентным цветом, но остаётся штриховой (не сплошной, как дроп).
-  const ghostBox = ghostKey && (
+  //
+  // Панель встаёт по порядку кнопок, поэтому место бывает и В СЕРЕДИНЕ колонки.
+  // Линия рисуется у кромки СОСЕДНЕЙ панели и отодвигается от неё в зазор: сверху
+  // (up — место над самой первой панелью) или снизу (место под панелью выше). Тот
+  // же приём, что у крайних направляющих дропа: edge 'start' → −sepShift,
+  // 'end' → +sepShift.
+  const ghostBox = (up: boolean) => (
     <div style={{ height: 0, position: 'relative', pointerEvents: 'none' }}>
       <div style={{
         position: 'absolute', left: 0, right: 0, top: -SEP_HIT / 2, height: SEP_HIT,
         display: 'flex', alignItems: 'center',
       }}>
-        <PanelDropLine axis="y" accent shift={sepShift(0)} />
+        <PanelDropLine axis="y" accent shift={up ? -sepShift(0) : sepShift(0)} />
       </div>
     </div>
   );
@@ -916,11 +944,13 @@ export function PanelZone({
   // Вертикальная линия «здесь заведётся новая колонка». Геометрия дословно как у
   // крайней направляющей при перетаскивании (PanelDropGuide с base 0): нулевая
   // ширина в потоке, хит-зона центром на кромке, линия отодвинута наружу на
-  // sepShift. Знак сдвига — по стороне: у правой зоны колонка у ПРАВОГО края
-  // (edge 'end', сдвиг наружу вправо, +sepShift), у левой — у ЛЕВОГО (edge 'start',
-  // сдвиг влево, −sepShift). Одним знаком на обе стороны линия у левой рельсы
-  // уезжала вправо от настоящего места вставки. Считать «на глаз» уже пробовали.
-  const newColShift = isLeft ? -sepShift(0) : sepShift(0);
+  // sepShift. Знак сдвига — по КРОМКЕ, у которой колонка родится: у левой
+  // (ghostAtStart, edge 'start') линия отодвигается влево (−sepShift), у правой
+  // (edge 'end') — вправо (+sepShift). Одним знаком на обе стороны линия у левой
+  // рельсы уезжала вправо от настоящего места вставки. Считать «на глаз» уже
+  // пробовали. Кромка не равна стороне зоны: переполненная колонка у рельсы
+  // выталкивает «хвост» к ЦЕНТРУ, и новая колонка рождается там (см. placeByRail).
+  const newColShift = ghostAtStart ? -sepShift(0) : sepShift(0);
   const newColGhost = (
     <div style={{ width: 0, flexShrink: 0, position: 'relative', alignSelf: 'stretch' }}>
       <div style={{
@@ -945,9 +975,10 @@ export function PanelZone({
       overflow: 'visible',
       transition: widthDragging ? 'none' : `width ${PANEL_ANIM}`,
     }}>
-      {/* Новая колонка левой зоны рождается у рельсы (слева) — линию рисуем перед
-          колонками, зеркально правой зоне */}
-      {ghostKey && ghostNewCol && isLeft && newColGhost}
+      {/* Новая колонка родится у ЛЕВОЙ кромки зоны — линию рисуем перед колонками
+          (какая это кромка, решает ghostAtStart: у пустой зоны — та, что у рельсы,
+          иначе та, куда уедет вытесненный «хвост») */}
+      {ghostKey && ghostNewCol && ghostAtStart && newColGhost}
       {columns.map((col, vi) => (
         <Fragment key={col.ci}>
           {/* Между колонками: в покое — сплиттер ширины (перетягивает доли пары),
@@ -1000,7 +1031,14 @@ export function PanelZone({
                           />
                         : <div style={{ height: GAP, flexShrink: 0 }} />
                   )}
+                  {/* Место будущей панели НАД самой первой в колонке: своей
+                      «панели сверху» у него нет, поэтому линия рисуется у верхней
+                      кромки этой и отодвигается вверх */}
+                  {ghostKey && ghostCol === vi && ghostRow === 0 && ri === 0 && ghostBox(true)}
                   {renderPanel(k, col.keys.length > 1, vi)}
+                  {/* Место под ЭТОЙ панелью (в том числе последнее в колонке):
+                      линия у её нижней кромки, отодвинутая в зазор */}
+                  {ghostKey && ghostCol === vi && ghostRow === ri + 1 && ghostBox(false)}
                 </Fragment>
               );
             })}
@@ -1010,23 +1048,18 @@ export function PanelZone({
                 — мучение. Растянутый ряд доходит до низа сам, и растяжимая
                 направляющая отбирала бы у его панелей долю: колонка переставала бы
                 доходить до кромки. */}
+            {/* Растяжимая направляющая выключена, пока в колонке стоит призрак
+                (ghostCol !== vi): она забрала бы свободный низ колонки и утащила
+                линию к самому низу, хотя панель встанет вплотную к соседке */}
             {rowGuide(col, vi, col.keys.length, 0, 'end',
               colByContent(col.keys, vi) && ghostCol !== vi)}
-            {/* Место будущей панели — линия у нижней кромки последней панели.
-                Растяжимая направляющая рядом с ним выключена (ghostCol !== vi
-                выше): она забрала бы свободный низ колонки и утащила линию к
-                самому низу, хотя панель встанет вплотную к соседке */}
-            {ghostKey && ghostCol === vi && ghostBox}
           </div>
         </Fragment>
       ))}
-      {/* Панель заведёт свою колонку — обещаем это вертикальной линией У РЕЛЬСЫ
-          (новая колонка рождается там, см. addPanel), ровно как направляющая между
-          колонками при перетаскивании. Линия висит оверлеем в нулевой ширине:
-          раскладка не «дышит». У правой зоны рельса справа — линия в конце ряда
-          колонок; у левой рельса слева — линию рисуем ПЕРЕД колонками, иначе она
-          уезжала к центру. */}
-      {ghostKey && ghostNewCol && !isLeft && newColGhost}
+      {/* Панель заведёт свою колонку у ПРАВОЙ кромки зоны — обещаем это вертикальной
+          линией, ровно как направляющая между колонками при перетаскивании. Линия
+          висит оверлеем в нулевой ширине: раскладка не «дышит». */}
+      {ghostKey && ghostNewCol && !ghostAtStart && newColGhost}
       {colGuide(columns.length, 0, 'end')}
     </div>
   );

@@ -93,8 +93,12 @@ export function parseLayout(rawLayout: string | null, rawLegacyOpen: string | nu
 // пушится в конец), у левой слева (её колонка — первая, новая встаёт в начало).
 // Раньше сторону не учитывали и новая колонка всегда лезла в конец — у левой зоны
 // это центр, а не край.
-export function addPanel(layout: PanelKey[][], k: PanelKey, side: Zone = 'right', cap = COL_CAP): PanelKey[][] {
+export function addPanel(layout: PanelKey[][], k: PanelKey, side: Zone = 'right', cap = COL_CAP, railSeq?: readonly PanelKey[]): PanelKey[][] {
   if (layout.flat().includes(k)) return layout;
+  // Порядок кнопок известен — панель встаёт на СВОЁ место в нём (см. placeByRail).
+  // Без него (внешний показ панели из гит-бара, дефолты, миграции) остаётся
+  // прежнее правило «в конец колонки у рельсы».
+  if (railSeq && railSeq.length > 0) return placeByRail(layout, k, side, cap, railSeq).layout;
   const out = layout.map(c => [...c]);
   const railIdx = side === 'left' ? 0 : out.length - 1;
   const railCol = out[railIdx];
@@ -104,14 +108,99 @@ export function addPanel(layout: PanelKey[][], k: PanelKey, side: Zone = 'right'
   return out;
 }
 
-// Куда встанет ЕЩЁ НЕ ОТКРЫТАЯ панель — то же правило, что у addPanel, но без
-// самой вставки: нужно рельсе, чтобы под курсором показать место будущей панели
-// (призрак в раскладке). Возвращает индекс колонки, либо newColumn — панель
-// заведёт свою колонку у рельсы.
-export function nextPlacement(layout: PanelKey[][], side: Zone = 'right', cap = COL_CAP): { ci: number } | { newColumn: true } {
-  const railIdx = side === 'left' ? 0 : layout.length - 1;
-  const railCol = layout[railIdx];
-  return railCol && railCol.length < cap ? { ci: railIdx } : { newColumn: true };
+// Ранг кнопки в вертикальном порядке рельсы (railSeq — плоский список кнопок
+// столбца сверху вниз). Кнопки в списке нет — ранг бесконечный: такую панель
+// считаем самой нижней. Так себя ведут ключи, которых на этом экране в рельсе
+// не показывают; спорить с ними за место в середине колонки не за что.
+function railRank(railSeq: readonly PanelKey[], k: PanelKey): number {
+  const i = railSeq.indexOf(k);
+  return i < 0 ? Number.MAX_SAFE_INTEGER : i;
+}
+
+export interface RailPlacement {
+  // Раскладка ПОСЛЕ вставки — ею пользуется addPanel
+  layout: PanelKey[][];
+  // Где панель оказалась. ci — индекс колонки в ИСХОДНОЙ раскладке (призрак
+  // рисуется по ней, до вставки); при newColumn он равен месту вставки новой
+  // колонки, то есть тоже исходной координате.
+  ci: number;
+  ri: number;
+  // Панель завела НОВУЮ колонку (место ci — куда та встанет)
+  newColumn: boolean;
+}
+
+// Размещение панели ПО ПОРЯДКУ КНОПОК РЕЛЬСЫ — единое правило и для вставки
+// (addPanel), и для прогноза под курсором (призрак места). Считать их порознь
+// нельзя: обещание рельсы и итог клика обязаны совпадать.
+//
+// Правило: панель идёт в колонку у рельсы на место, где столько же панелей стоит
+// ВЫШЕ неё в столбце кнопок. Позиция считается пересчётом, а не поиском первой
+// «панели ниже», потому что колонка не обязана быть отсортирована по рельсе:
+// раскладку правят перетаскиванием, переносом из соседней зоны и миграцией со
+// старого формата — там порядок любой, и правило обязано давать однозначный
+// результат на ЛЮБОЙ колонке.
+//
+// Переполнение: колонка переросла вместимость — «хвост по порядку» (панель с
+// самым нижним рангом, а не нижняя по месту: колонка может быть неотсортирована)
+// уезжает в соседнюю колонку К ЦЕНТРУ и встаёт там по тому же правилу. Дальше
+// каскадом: соседняя тоже могла переполниться. Некуда — заводится новая колонка
+// у центра. Так колонки читаются как продолжение одного упорядоченного потока:
+// у рельсы начало порядка, к центру — продолжение.
+//
+// Вместимость на весь каскад ОДНА (её считает зона по колонке у рельсы) —
+// осознанное упрощение: настоящая вместимость соседней колонки зависит от высот
+// её панелей, а живого DOM у чистой функции нет.
+export function placeByRail(
+  layout: PanelKey[][],
+  k: PanelKey,
+  side: Zone,
+  cap: number,
+  railSeq: readonly PanelKey[],
+): RailPlacement {
+  const capN = Math.max(1, cap);
+  const rank = (x: PanelKey) => railRank(railSeq, x);
+  // origin — индекс колонки в ИСХОДНОЙ раскладке (null у заведённой здесь же):
+  // перелив может добавить колонку и сдвинуть индексы, а призраку нужны
+  // координаты той раскладки, которую человек видит под курсором.
+  const cols: { origin: number | null; keys: PanelKey[] }[] =
+    layout.map((keys, i) => ({ origin: i, keys: [...keys] }));
+
+  if (cols.length === 0) return { layout: [[k]], ci: 0, ri: 0, newColumn: true };
+
+  const railIdx = side === 'left' ? 0 : cols.length - 1;
+  const at = cols[railIdx].keys.filter(x => rank(x) < rank(k)).length;
+  cols[railIdx].keys.splice(at, 0, k);
+
+  // Направление перелива — от рельсы К ЦЕНТРУ: у левой зоны рельса слева
+  // (центр — в сторону роста индексов), у правой наоборот.
+  const dir = side === 'left' ? 1 : -1;
+  let newAt: number | null = null;
+  let i = railIdx;
+  while (cols[i].keys.length > capN) {
+    const col = cols[i].keys;
+    let tail = 0;
+    for (let j = 1; j < col.length; j++) if (rank(col[j]) > rank(col[tail])) tail = j;
+    const moved = col.splice(tail, 1)[0];
+    const next = i + dir;
+    if (next < 0 || next >= cols.length) {
+      // Колонки у центра больше нет — заводим. Новая с одной панелью вместимость
+      // не превысит, поэтому каскад на ней и заканчивается.
+      newAt = dir > 0 ? layout.length : 0;
+      cols.splice(dir > 0 ? cols.length : 0, 0, { origin: null, keys: [moved] });
+      break;
+    }
+    const nc = cols[next].keys;
+    nc.splice(nc.filter(x => rank(x) < rank(moved)).length, 0, moved);
+    i = next;
+  }
+
+  const home = cols.find(c => c.keys.includes(k))!;
+  return {
+    layout: cols.map(c => c.keys),
+    ci: home.origin ?? newAt ?? 0,
+    ri: home.keys.indexOf(k),
+    newColumn: home.origin == null,
+  };
 }
 
 // Закрытие панели: удалить, пустые колонки схлопнуть
@@ -480,18 +569,18 @@ export function reorderRail(
 // зоны панель уходит. В solo-режиме целевой зоны раскладка схлопывается до неё.
 // cap — вместимость колонки у рельсы (сколько панелей влезает по высоте), её
 // считает зона: см. COL_CAP.
-export function openPanelIn(zones: PanelZones, zone: Zone, k: PanelKey, cap = COL_CAP): PanelZones {
+export function openPanelIn(zones: PanelZones, zone: Zone, k: PanelKey, cap = COL_CAP, railSeq?: readonly PanelKey[]): PanelZones {
   const base = closePanel(zones, k);
   return withZone(base, zone, z => ({
     ...z,
-    layout: z.mode === 'solo' ? [[k]] : addPanel(z.layout, k, zone, cap),
+    layout: z.mode === 'solo' ? [[k]] : addPanel(z.layout, k, zone, cap, railSeq),
   }));
 }
 
 // Клик по иконке рельсы: панель открыта В ЭТОЙ зоне — закрыть, иначе открыть
 // здесь (в том числе забрав из соседней зоны).
-export function togglePanelIn(zones: PanelZones, zone: Zone, k: PanelKey, cap = COL_CAP): PanelZones {
-  return zoneOf(zones, k) === zone ? closePanel(zones, k) : openPanelIn(zones, zone, k, cap);
+export function togglePanelIn(zones: PanelZones, zone: Zone, k: PanelKey, cap = COL_CAP, railSeq?: readonly PanelKey[]): PanelZones {
+  return zoneOf(zones, k) === zone ? closePanel(zones, k) : openPanelIn(zones, zone, k, cap, railSeq);
 }
 
 // Дроп панели НА панель — они меняются местами, в том числе через границу зон:
@@ -685,7 +774,9 @@ export interface PanelZonesApi {
   zones: PanelZones;
   // Клик по иконке рельсы зоны. cap — вместимость колонки у рельсы по живой
   // высоте (см. COL_CAP): её знает только зона, состояние пикселей не хранит.
-  toggle: (zone: Zone, k: PanelKey, cap?: number) => void;
+  // railSeq — порядок кнопок столбца сверху вниз: по нему панель встаёт на своё
+  // место среди уже открытых (см. placeByRail). Знает его тоже только зона.
+  toggle: (zone: Zone, k: PanelKey, cap?: number, railSeq?: readonly PanelKey[]) => void;
   // Закрыть панель, где бы она ни лежала (её иконка остаётся в прежней зоне)
   close: (k: PanelKey) => void;
   // Дроп панели на рельсу: закрыть и положить иконку ИМЕННО в эту зону — панель
@@ -806,9 +897,9 @@ function createPanelZones(ns: string, opts?: {
   function usePanelZones(): PanelZonesApi {
     const zones = useSyncExternalStore(subscribe, () => _zones);
 
-    const toggle = useCallback((zone: Zone, k: PanelKey, cap?: number) => {
+    const toggle = useCallback((zone: Zone, k: PanelKey, cap?: number, railSeq?: readonly PanelKey[]) => {
       ensureWeight(k);
-      commit(togglePanelIn(_zones, zone, k, cap));
+      commit(togglePanelIn(_zones, zone, k, cap, railSeq));
     }, []);
 
     const close = useCallback((k: PanelKey) => { commit(closePanel(_zones, k)); }, []);

@@ -3,7 +3,7 @@
 // ключей localStorage, валидация мусора и нормализация весов.
 import { describe, it, expect } from 'vitest';
 import {
-  sanitizeLayout, parseLayout, addPanel, nextPlacement, removePanel, swapPanels, movePanelToNewColumn, movePanelAt,
+  sanitizeLayout, parseLayout, addPanel, placeByRail, removePanel, swapPanels, movePanelToNewColumn, movePanelAt,
   parseWeights, parseWidth, normalizeWeights, parseColFlex, normalizeColFlex,
   sanitizeZones, emptyZones, zoneOf, openPanelIn, togglePanelIn, closePanel,
   swapAcross, moveAcrossAt, moveAcrossToNewColumn, isZoneCollapsed, migrateZones, revealPanel,
@@ -74,12 +74,76 @@ describe('addPanel — дефолтная расстановка', () => {
     expect(l).toEqual([['tasks'], ['plan', 'files']]);
   });
 
-  it('nextPlacement учитывает сторону: у левой зоны новая колонка с индексом 0', () => {
-    expect(nextPlacement([['plan', 'files']], 'left')).toEqual({ newColumn: true });
-    expect(nextPlacement([['plan']], 'left')).toEqual({ ci: 0 });
-    // правая (дефолт) — прежнее правило: колонка у конца
-    expect(nextPlacement([['plan', 'files']], 'right')).toEqual({ newColumn: true });
-    expect(nextPlacement([['plan']])).toEqual({ ci: 0 });
+});
+
+describe('placeByRail — панель встаёт по порядку кнопок рельсы', () => {
+  // Порядок кнопок столбца сверху вниз
+  const seq = ['plan', 'files', 'tasks', 'team'] as const;
+  const place = (layout: string[][], k: string, side: 'left' | 'right' = 'right', cap = 4) =>
+    placeByRail(layout as never, k as never, side, cap, seq as never);
+
+  it('встаёт в СЕРЕДИНУ колонки — между кнопками, что выше и ниже её в рельсе', () => {
+    // plan(0) и tasks(2) открыты, открываем files(1) — его место между ними
+    const r = place([['plan', 'tasks']], 'files');
+    expect(r.layout).toEqual([['plan', 'files', 'tasks']]);
+    expect(r).toMatchObject({ ci: 0, ri: 1, newColumn: false });
+  });
+
+  it('самая верхняя кнопка встаёт первой, самая нижняя — последней', () => {
+    expect(place([['files', 'tasks']], 'plan').layout).toEqual([['plan', 'files', 'tasks']]);
+    expect(place([['plan', 'files']], 'team').layout).toEqual([['plan', 'files', 'team']]);
+  });
+
+  it('колонка не отсортирована (перетащили руками) — место по числу панелей выше в рельсе', () => {
+    // В колонке порядок team(3), plan(0). У files(1) выше по рельсе только plan —
+    // значит место одно: после первой панели, а не «перед первой, что ниже».
+    const r = place([['team', 'plan']], 'files');
+    expect(r.layout).toEqual([['team', 'files', 'plan']]);
+    expect(r.ri).toBe(1);
+  });
+
+  it('пустая зона — первая колонка', () => {
+    expect(place([], 'files')).toMatchObject({ layout: [['files']], ci: 0, ri: 0, newColumn: true });
+  });
+
+  it('перелив: колонка переполнена — «хвост по порядку» уезжает к центру', () => {
+    // cap 2, в колонке plan(0) и tasks(2); открываем files(1) — он встаёт между
+    // ними, а нижний по порядку tasks выталкивается в новую колонку у ЦЕНТРА
+    // (у правой зоны центр — начало массива)
+    const r = placeByRail([['plan', 'tasks']] as never, 'files' as never, 'right', 2, seq as never);
+    expect(r.layout).toEqual([['tasks'], ['plan', 'files']]);
+    expect(r).toMatchObject({ ci: 0, ri: 1, newColumn: false });
+  });
+
+  it('перелив у левой зоны зеркален: хвост уезжает вправо, к центру', () => {
+    const r = placeByRail([['plan', 'tasks']] as never, 'files' as never, 'left', 2, seq as never);
+    expect(r.layout).toEqual([['plan', 'files'], ['tasks']]);
+  });
+
+  it('вытесненная панель встаёт в соседнюю колонку ПО ПОРЯДКУ, а не в конец', () => {
+    // Правая зона: колонка у рельсы последняя. Хвост tasks(2) уезжает в соседнюю
+    // [team(3)] и встаёт ПЕРЕД team — он выше в рельсе.
+    const r = placeByRail([['team'], ['plan', 'tasks']] as never, 'files' as never, 'right', 2, seq as never);
+    expect(r.layout).toEqual([['tasks', 'team'], ['plan', 'files']]);
+  });
+
+  it('каскад: соседняя колонка тоже переполнилась — перелив идёт дальше к центру', () => {
+    // По одной панели на колонку (cap 1). files встаёт под plan в колонке у рельсы
+    // и выталкивает сам себя дальше (он ниже plan по рельсе), в колонке с tasks
+    // встаёт ПЕРЕД ним, а уже tasks уезжает новой колонкой к центру. Итог читается
+    // от рельсы к центру ровно порядком кнопок: plan → files → tasks.
+    const r = placeByRail([['tasks'], ['plan']] as never, 'files' as never, 'right', 1, seq as never);
+    expect(r.layout).toEqual([['tasks'], ['files'], ['plan']]);
+    expect(r).toMatchObject({ ci: 0, ri: 0, newColumn: false });
+  });
+
+  it('панель уже открыта — addPanel не дублирует её даже с порядком кнопок', () => {
+    expect(addPanel([['plan']] as never, 'plan' as never, 'right', 4, seq as never)).toEqual([['plan']]);
+  });
+
+  it('addPanel без порядка кнопок работает по-старому (внешний показ панели)', () => {
+    // Без railSeq — прежнее правило «в конец колонки у рельсы»
+    expect(addPanel([['tasks']] as never, 'plan' as never)).toEqual([['tasks', 'plan']]);
   });
 });
 

@@ -1092,6 +1092,15 @@ export const api = {
           method: 'POST',
           body: JSON.stringify({ path, newName, updateLinks }),
         }),
+    // Удалить документ или раздел. Раздел уходит парой «страница + папка» со всем
+    // содержимым, включая файлы, которых панель не показывала (removedFiles).
+    // brokenLinks — сколько ссылок на удалённое осталось: починить их нечем
+    remove: (projectId: string, path: string) =>
+      request<{ removed: string[]; brokenLinks: number; removedFiles: number; index: DocEntry[] }>(
+        `/projects/${projectId}/docs/delete`, {
+          method: 'POST',
+          body: JSON.stringify({ path }),
+        }),
     setOrder: (projectId: string, folder: string, items: string[]) =>
       request<DocEntry[]>(`/projects/${projectId}/docs/order`, {
         method: 'PUT',

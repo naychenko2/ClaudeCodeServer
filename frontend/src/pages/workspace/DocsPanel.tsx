@@ -13,13 +13,13 @@ import { DndContext, MouseSensor, TouchSensor, closestCenter, useSensor, useSens
 import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 // ChevronsDownUp/ChevronsUpDown вернутся вместе с кнопками уровней папок (см. controls)
-import { BookOpenText, BookText, Check, ChevronDown, ChevronRight, ChevronsRight, FileQuestion, Folder, FolderCog, FolderTree, Home, Link2, List, Maximize2, MessageSquarePlus, PanelBottom, PenLine, Pin, PinOff, Plus, Search, SlidersHorizontal, X } from 'lucide-react';
+import { BookOpenText, BookText, Check, ChevronDown, ChevronRight, ChevronsRight, FileQuestion, Folder, FolderCog, FolderTree, Home, Link2, List, Maximize2, MessageSquarePlus, PanelBottom, PenLine, Pin, PinOff, Plus, Search, SlidersHorizontal, Trash2, X } from 'lucide-react';
 import type { Project, DocEntry, DocDetail, DocSearchHit, DocsScopeInfo } from '../../types';
 import { api } from '../../lib/api';
 import { onFilesChanged } from '../../lib/signalr';
 import { C, FONT, FS, R, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
-import { Button, EmptyState, IconButton, IconSegmented, Menu, MenuItem, PanelHeaderSlot, TextField, TocRow, useHasPanelHeader, usePanelHeaderHold } from '../../components/ui';
+import { Button, ConfirmDialog, EmptyState, IconButton, IconSegmented, Menu, MenuItem, MenuSep, PanelHeaderSlot, TextField, TocRow, useHasPanelHeader, usePanelHeaderHold } from '../../components/ui';
 import { DocsScopeDialog } from './DocsScopeDialog';
 import { DocsCreateDialog } from './DocsCreateDialog';
 import { DocsRenameDialog } from './DocsRenameDialog';
@@ -131,6 +131,15 @@ type DocBlock = {
 function folderOf(path: string): string {
   const i = path.lastIndexOf('/');
   return i < 0 ? '' : path.slice(0, i);
+}
+
+// Слово «документ» в правильной форме для числа — как chatCountWord у списка чатов
+function docCountWord(n: number): string {
+  const m10 = n % 10;
+  const m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return 'документ';
+  if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return 'документа';
+  return 'документов';
 }
 
 // Имя строки .order: файл без папки и без расширения («docs/vision.md» → «vision»)
@@ -596,6 +605,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
   // Держим и сам документ, и точку клика: меню рисуется по курсору
   const [rowMenu, setRowMenu] = useState<{ doc: DocEntry; rect: DOMRect } | null>(null);
   const [renaming, setRenaming] = useState<DocEntry | null>(null);
+  const [deleting, setDeleting] = useState<DocEntry | null>(null);
   // Итог переименования строкой над списком: сколько ссылок починено и сколько осталось
   // битыми. Без него о пределе механизма («видно только область») никто бы не узнал
   const [renameNote, setRenameNote] = useState<string | null>(null);
@@ -1485,6 +1495,31 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
         : 'Переименовано');
   };
 
+  // Удаление: раздел уходит парой со всем содержимым, поэтому после ответа чистим всё,
+  // что помнит исчезнувшие пути, — закреплённые, превью и файл в центре
+  const applyDelete = async (doc: DocEntry) => {
+    try {
+      const res = await api.docs.remove(project.id, doc.path);
+      const gone = new Set(res.removed ?? [doc.path]);
+      setDeleting(null);
+      setIndex(res.index ?? null);
+      loadIndex();
+      savePinned(pinnedOrder.filter(p => !gone.has(p)));
+      if (selected && gone.has(selected)) closeDoc();
+      if (activeFilePath && gone.has(activeFilePath)) onCloseFile?.();
+      // Битые ссылки чинить нечем — цели больше нет; узнать о них надо здесь, а не
+      // при публикации wiki
+      const docs = res.removed?.length ?? 1;
+      setRenameNote(
+        `Удалено: ${docs} ${docCountWord(docs)}`
+        + (res.removedFiles > 0 ? `, вместе с ними файлов вне области: ${res.removedFiles}` : '')
+        + (res.brokenLinks > 0 ? `. Ссылок на удалённое осталось: ${res.brokenLinks}` : ''));
+    } catch {
+      setDeleting(null);
+      setError('Не удалось удалить документ');
+    }
+  };
+
   const closeCreateMenu = () => { setCreateMenu(null); setPickingFolder(false); };
 
   const createMenuEl = createMenu && (
@@ -1648,6 +1683,13 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
             icon={<PenLine size={15} strokeWidth={ICON_STROKE} />}
             label={rowMenu.doc.sectionFolder ? 'Переименовать раздел' : 'Переименовать'}
             onClick={() => { setRenaming(rowMenu.doc); setRowMenu(null); }}
+          />
+          <MenuSep />
+          <MenuItem
+            icon={<Trash2 size={15} strokeWidth={ICON_STROKE} />}
+            label={rowMenu.doc.sectionFolder ? 'Удалить раздел' : 'Удалить'}
+            danger
+            onClick={() => { setDeleting(rowMenu.doc); setRowMenu(null); }}
           />
         </Menu>
       )}
@@ -2082,6 +2124,34 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
       )}
       {scopeDialog}
       {createDialog}
+      {/* Удаление — общий ConfirmDialog продукта. У раздела в подзаголовке считаем, что
+          именно уйдёт: одна строка списка стоит целой ветки на диске, и узнать об этом
+          надо до нажатия, а не из git diff */}
+      {deleting && (
+        <ConfirmDialog
+          title={deleting.sectionFolder ? 'Удалить раздел?' : 'Удалить документ?'}
+          subtitle={
+            <span>
+              <span style={{ fontFamily: FONT.mono, color: C.textPrimary }}>{deleting.path}</span>
+              {deleting.sectionFolder && (() => {
+                const inside = (index ?? []).filter(d =>
+                  d.path.toLowerCase().startsWith(`${deleting.sectionFolder!.toLowerCase()}/`)).length;
+                return (
+                  <span style={{ display: 'block', marginTop: SP.xs }}>
+                    Папка <span style={{ fontFamily: FONT.mono }}>{deleting.sectionFolder}/</span> удаляется
+                    целиком{inside > 0 ? ` — вместе с ней уйдёт ${inside} вложенных ${docCountWord(inside)}` : ''} и всё,
+                    что в ней лежит помимо документации.
+                  </span>
+                );
+              })()}
+            </span>
+          }
+          confirmLabel="Удалить"
+          confirmVariant="danger"
+          onConfirm={() => applyDelete(deleting)}
+          onCancel={() => setDeleting(null)}
+        />
+      )}
       {renaming && (
         <DocsRenameDialog
           projectId={project.id}

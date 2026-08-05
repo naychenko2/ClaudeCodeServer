@@ -1079,13 +1079,11 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   }, [commitRename]);
 
   // === Context menu handlers ===
-  useEffect(() => {
-    if (!contextMenu) return;
-    const close = () => setContextMenu(null);
-    // небольшая задержка — иначе правый клик, открывающий меню, сразу его закроет
-    const timer = setTimeout(() => document.addEventListener('mousedown', close), 0);
-    return () => { clearTimeout(timer); document.removeEventListener('mousedown', close); };
-  }, [contextMenu]);
+  // Закрытие по клику вне обеспечивает сама оболочка меню: у ui/Menu своя подложка,
+  // у Modal (мобильная шторка) — тоже. Свой document-listener на mousedown здесь
+  // жил со времён самодельного попапа, где пункты срабатывали на onPointerDown.
+  // С обычными MenuItem (onClick) он успевал закрыть меню ДО клика, и пункты
+  // «Переименовать», «Переместить», «Удалить» просто не отрабатывали.
 
   const handleContextMenu = useCallback((e: React.MouseEvent, entry: FileEntry) => {
     e.preventDefault();

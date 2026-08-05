@@ -13,7 +13,7 @@ import { DndContext, MouseSensor, TouchSensor, closestCenter, useSensor, useSens
 import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 // ChevronsDownUp/ChevronsUpDown вернутся вместе с кнопками уровней папок (см. controls)
-import { BookOpenText, BookText, Check, ChevronDown, ChevronRight, ChevronsRight, FileQuestion, FolderCog, Home, Link2, List, Maximize2, MessageSquarePlus, PanelBottom, Pin, PinOff, Search, SlidersHorizontal, X } from 'lucide-react';
+import { BookOpenText, BookText, Check, ChevronDown, ChevronRight, ChevronsRight, FileQuestion, Folder, FolderCog, FolderTree, Home, Link2, List, Maximize2, MessageSquarePlus, PanelBottom, Pin, PinOff, Plus, Search, SlidersHorizontal, X } from 'lucide-react';
 import type { Project, DocEntry, DocDetail, DocSearchHit, DocsScopeInfo } from '../../types';
 import { api } from '../../lib/api';
 import { onFilesChanged } from '../../lib/signalr';
@@ -21,6 +21,7 @@ import { C, FONT, FS, R, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { Button, EmptyState, IconButton, IconSegmented, Menu, MenuItem, PanelHeaderSlot, TextField, TocRow, useHasPanelHeader, usePanelHeaderHold } from '../../components/ui';
 import { DocsScopeDialog } from './DocsScopeDialog';
+import { DocsCreateDialog } from './DocsCreateDialog';
 import { useRequestPanelFill } from './panelFill';
 import { MarkdownViewer } from '../../components/MarkdownViewer';
 import { ListDateDivider, LIST_FLASH_CLASS, LIST_FLASH_MS } from '../../components/ListDateDivider';
@@ -93,6 +94,11 @@ const PINNED_KEY = 'cc_docs_pinned';
 // Ключ группы закреплённых. С нулевым символом: имя папки таким быть не может,
 // а значит группа не столкнётся с настоящей папкой в состоянии свёрнутых
 const PINNED_GROUP = '\u0000pinned';
+
+// Корень репозитория как цель создания. Тем же приёмом, что группа закреплённых: сам
+// корень — пустая строка, а она в выборе означала бы «не выбрано», и отличить одно
+// от другого было бы нечем
+const ROOT_TARGET = ' root';
 
 // Подстраховка на случай, если браузер не знает scrollend (он есть не везде): дольше
 // этого плавная прокрутка списка всё равно не длится
@@ -578,6 +584,16 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
   // на диске — надо ли перечитывать индекс (isDocPath ниже)
   const [scopeInfo, setScopeInfo] = useState<DocsScopeInfo | null>(null);
   const [scopeOpen, setScopeOpen] = useState(false);
+  // Создание идёт двумя шагами, как в «Файлах»: меню видов по кнопке «Новый», затем
+  // модалка с названием. Здесь — якорь меню и выбранный вид (null — модалка закрыта)
+  const [createMenu, setCreateMenu] = useState<DOMRect | null>(null);
+  const [createKind, setCreateKind] = useState<'doc' | 'section' | null>(null);
+  // Папка, выбранная в меню создания явно. null — берётся та, в которой пользователь
+  // сейчас находится: обычно создают рядом с тем, что читают, и лишний выбор ни к чему
+  const [createInFolder, setCreateInFolder] = useState<string | null>(null);
+  // Меню создания показывает список папок вместо видов — второй «страницей» того же
+  // меню, а не вторым поповером: у него один якорь и одно закрытие кликом вне
+  const [pickingFolder, setPickingFolder] = useState(false);
   // Список папок — то же, что оглавление для документа, только для самого списка:
   // групп до десятка, а документов десятки, и мотать до нужной надоедает
   // Прямоугольник кнопки-якоря: поповер рисуется fixed по нему (Menu), иначе
@@ -588,7 +604,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
   // Пока открыт попап или поиск — контролы шапки не гаснут (общее решение,
   // как у FileExplorer/GitChangesRail): меню живёт порталом в body, курсор
   // уходит с карточки, и без удержания кнопка-триггер пропадала под попапом
-  usePanelHeaderHold(!!foldersAnchor || !!settingsAnchor || searchOpen);
+  usePanelHeaderHold(!!foldersAnchor || !!settingsAnchor || !!createMenu || searchOpen);
 
   const folderRefs = useRef(new Map<string, HTMLDivElement>());
   // Папка, к которой только что прокрутили: подсвечиваем на секунду, иначе после
@@ -1273,6 +1289,48 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
     />
   );
 
+  // Куда создавать: папка, в которой пользователь сейчас находится, иначе первая папка
+  // области. Корень репозитория не годится — документ там попадёт в область, только если
+  // его имя стоит в «файлах корня», и созданный файл просто не появился бы в списке
+  // '' — корень репозитория: там живут файлы корня области (README.md, docs.md), и
+  // создавать рядом с ними законно. Выбор корня — осознанный (ROOT_TARGET), а не
+  // «ничего не выбрано», поэтому он отдельным значением, а не пустой строкой
+  const createFolder = createInFolder === ROOT_TARGET ? ''
+    : createInFolder
+    || (activeFolder && activeFolder !== PINNED_GROUP ? activeFolder : '')
+    || scopeInfo?.selected.folders[0]
+    || blocks.find(b => b.folder)?.folder
+    || '';
+
+  // Куда можно создавать: папки области (в том числе пока пустые — их в индексе нет) и
+  // все папки дерева, включая только что созданные разделы. Порядок как в списке папок:
+  // сперва настроенные корни, дальше остальное в порядке обхода
+  const createTargets = useMemo(() => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const f of [...(scopeInfo?.selected.folders ?? []), ...folderCounts.map(([f]) => f)])
+      if (f && !seen.has(f)) { seen.add(f); out.push(f); }
+    return out;
+  }, [scopeInfo, folderCounts]);
+
+  // Пустая папка — это корень репозитория, законная цель: проверять здесь нечего
+  const createDialog = createKind && (
+    <DocsCreateDialog
+      projectId={project.id}
+      folder={createFolder}
+      kind={createKind}
+      onClose={() => setCreateKind(null)}
+      onCreated={path => {
+        setCreateKind(null);
+        loadIndex();
+        // Созданный документ идут наполнять — открываем его в центре, как README
+        // из пустого состояния; домашний вид при этом уступает место списку
+        setHome(false);
+        onOpenFile(path);
+      }}
+    />
+  );
+
   // Контролы панели: штатное место для них — шапка карточки (PanelHeaderSlot),
   // а не собственный ряд под ней. Раньше ряд занимал целую полосу высоты в узкой
   // колонке ради иконок, которые прекрасно живут рядом с заголовком.
@@ -1303,16 +1361,9 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
       )}
       {/* Остальные — только в режиме «Документы»: в «Начале» ими нечем управлять */}
       {!homeView && <>
-        {/* Поиск кнопкой, а не полем: колонка узкая, а поле занимало её почти
-            целиком ради действия, которое нужно изредка */}
-        <IconButton
-          title={searchOpen ? 'Закрыть поиск' : 'Поиск по документам'}
-          active={searchOpen || query.length > 0}
-          onClick={() => searchOpen ? closeSearch() : setSearchOpen(true)}
-          size="sm"
-        >
-          <Search size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-        </IconButton>
+        {/* Поиск переехал в меню настроек: ряд в шапке узкий, а поиск по документам
+            нужен изредка — держать под него постоянную кнопку дороже, чем один
+            лишний клик. Открытая строка поиска закрывается крестиком и Esc */}
         {/* Папки списка — оглавление для самого списка. Появляется, только когда групп
             больше одной: с единственной папкой кнопка вела бы в никуда */}
         {hasFolderNav && (
@@ -1361,6 +1412,116 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
     </>
   );
 
+  // Главное действие панели — в ЗАКРЕПЛЁННОМ слоте шапки, как «Новый» в «Файлах»:
+  // оно видно всегда, а не только под курсором. Жест тот же самый (кнопка → меню
+  // видов → модалка с именем), и расходиться этим двум панелям нельзя
+  const createControl = !homeView ? (
+    <Button
+      size="xs"
+      variant="primary"
+      leftIcon={<Plus size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+      // Прямоугольник снимаем СРАЗУ: внутри функционального апдейта React уже
+      // обнулил currentTarget, и обращение к нему роняло панель
+      onClick={e => {
+        const rect = e.currentTarget.getBoundingClientRect();
+        setCreateMenu(m => (m ? null : rect));
+      }}
+    >
+      Новый
+    </Button>
+  ) : null;
+
+  // Меню видов создания. Куда попадёт созданное — подписью в подвале, как в «Файлах»:
+  // вопрос возникает ровно в момент создания. Целевая папка — та, в которой пользователь
+  // сейчас находится (последний открытый документ или группа)
+  const closeCreateMenu = () => { setCreateMenu(null); setPickingFolder(false); };
+
+  const createMenuEl = createMenu && (
+    <Menu anchor={createMenu} minWidth={240} maxHeight={320} onClose={closeCreateMenu}>
+      {pickingFolder ? (
+        <>
+          {/* Корень репозитория — первым: там живут файлы корня области (README.md и
+              соседи), и создавать рядом с ними законно. Имя нового файла продукт сам
+              допишет в «файлы корня» — папкой корень не выбирают */}
+          <MenuItem
+            icon={createFolder === '' && createInFolder === ROOT_TARGET
+              ? <Check size={15} strokeWidth={2.4} style={{ color: C.accent }} />
+              : <Home size={15} strokeWidth={ICON_STROKE} />}
+            label="Корень репозитория"
+            onClick={() => { setCreateInFolder(ROOT_TARGET); setPickingFolder(false); }}
+          />
+          {/* Дальше — папки области и все папки дерева, включая только что созданные
+              разделы. Названы своими заголовками, а не путями, — как в списке папок */}
+          {createTargets.map(folder => {
+            const { title, subtitle } = groupTitle(folder);
+            return (
+              <MenuItem
+                key={folder}
+                icon={folder === createFolder
+                  ? <Check size={15} strokeWidth={2.4} style={{ color: C.accent }} />
+                  : <Folder size={15} strokeWidth={ICON_STROKE} />}
+                label={subtitle ? `${title} · ${subtitle}` : title}
+                onClick={() => { setCreateInFolder(folder); setPickingFolder(false); }}
+              />
+            );
+          })}
+        </>
+      ) : (
+        <>
+          <MenuItem
+            icon={<BookText size={15} strokeWidth={ICON_STROKE} />}
+            label="Документ"
+            onClick={() => { closeCreateMenu(); setCreateKind('doc'); }}
+          />
+          {/* Раздел в корне не создаётся: это была бы новая папка документации, то есть
+              правка области, а не создание страницы */}
+          <MenuItem
+            icon={<FolderTree size={15} strokeWidth={ICON_STROKE} />}
+            label="Раздел"
+            disabled={!createFolder}
+            onClick={() => { closeCreateMenu(); setCreateKind('section'); }}
+          />
+          {/* Куда попадёт созданное — подписью в подвале, как в «Файлах»: вопрос
+              возникает ровно в момент создания. По умолчанию это папка, в которой
+              пользователь находится, а «сменить» открывает список папок */}
+          <div style={{
+            borderTop: `1px solid ${C.border}`, margin: '4px 0 0', padding: '6px 10px 2px',
+            display: 'flex', alignItems: 'center', gap: 6,
+          }}>
+            <span style={{
+              display: 'flex', alignItems: 'center', gap: 4, minWidth: 0, flex: 1,
+              fontSize: 11, color: C.textMuted, fontFamily: FONT.mono,
+            }}>
+              {createFolder
+                ? <Folder size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+                : <Home size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+              {/* Путь режем СЛЕВА: у вложенного раздела важен хвост («…/decisions/»),
+                  а не общее для всех начало */}
+              <span title={createFolder || 'корень репозитория'} style={{
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                direction: 'rtl', textAlign: 'left',
+              }}>
+                {createFolder ? `${createFolder}/` : 'корень репозитория'}
+              </span>
+            </span>
+            {(createTargets.length > 0 || createFolder) && (
+              <button
+                onClick={() => setPickingFolder(true)}
+                title="Выбрать другую папку"
+                style={{
+                  flexShrink: 0, border: 'none', background: 'none', cursor: 'pointer',
+                  padding: '2px 4px', fontSize: 11, color: C.accent, fontFamily: FONT.sans,
+                }}
+              >
+                сменить
+              </button>
+            )}
+          </div>
+        </>
+      )}
+    </Menu>
+  );
+
   if (error && !index)
     return <div style={emptyStyle}>{error}</div>;
 
@@ -1375,6 +1536,10 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
           «что показываем», а не «что сделать», и в правой группе кнопок терялся */}
       {hasDocs && hasPanelHeader && homePath && (
         <PanelHeaderSlot side="left">{viewSwitch}</PanelHeaderSlot>
+      )}
+      {/* Главное действие — в закреплённой зоне: видно всегда, как «Новый» в «Файлах» */}
+      {hasDocs && hasPanelHeader && createControl && (
+        <PanelHeaderSlot pinned>{createControl}</PanelHeaderSlot>
       )}
       {hasDocs && (hasPanelHeader
         ? <PanelHeaderSlot>{controls}</PanelHeaderSlot>
@@ -1405,6 +1570,13 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
               </span>
             }
           />
+          {/* Поиск по документам: строка разворачивается над списком. Постоянной кнопки
+              в шапке у него нет — ряд там узкий, а ищут в документации изредка */}
+          <MenuItem
+            icon={<Search size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+            label={searchOpen ? 'Закрыть поиск' : 'Поиск по документам'}
+            onClick={() => { searchOpen ? closeSearch() : setSearchOpen(true); setSettingsAnchor(null); }}
+          />
           {/* Область документации: дефолт docs/, но соглашение о папке в проектах разное */}
           <MenuItem
             icon={<FolderCog size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
@@ -1413,6 +1585,9 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
           />
         </Menu>
       )}
+
+      {/* Меню видов создания — порталом по якорю кнопки «Новый» */}
+      {createMenuEl}
 
       {foldersAnchor && (
         <Menu anchor={foldersAnchor} minWidth={260} maxHeight={320} onClose={() => setFoldersAnchor(null)}>
@@ -1575,8 +1750,11 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
                         hidden={docs.length}
                         onToggle={() => toggleFolder(folder)}
                         // У папки с парной страницей подпись открывает её — как узел
-                        // дерева в wiki; сворачивание переезжает на шеврон
-                        onOpenPage={page ? () => handleRowClick(page.path) : undefined}
+                        // дерева в wiki; сворачивание переезжает на шеврон.
+                        // Текущей при этом становится САМА папка раздела, а не её родитель
+                        // (страница-то лежит уровнем выше): открыть раздел — значит войти
+                        // в него, и создавать дальше надо внутри
+                        onOpenPage={page ? () => { handleRowClick(page.path); setActiveFolder(folder); } : undefined}
                         pagePath={page?.path}
                         pinned={!!page && pinned.has(page.path)}
                         onTogglePin={page ? () => togglePin(page.path) : undefined}
@@ -1818,6 +1996,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
         </>
       )}
       {scopeDialog}
+      {createDialog}
     </div>
   );
 }

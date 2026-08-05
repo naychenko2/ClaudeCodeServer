@@ -1074,6 +1074,14 @@ export const api = {
     // пользователя. items — имена БЕЗ расширения в новом порядке (как строки в файле);
     // это подмножество папки, остальные её строки сервер оставляет на своих местах.
     // Ответ — свежий индекс: порядок приезжает вместе с подтверждением
+    // Создать документ или раздел. name — ЧЕЛОВЕЧЕСКОЕ название: имя файла из него делает
+    // сервер (пробелы → дефисы), а само название становится заголовком первой строки.
+    // Раздел создаётся парой «страница + папка» — в wiki он существует только так
+    create: (projectId: string, folder: string, name: string, kind: 'doc' | 'section') =>
+      request<{ path: string; index: DocEntry[] }>(`/projects/${projectId}/docs/create`, {
+        method: 'POST',
+        body: JSON.stringify({ folder, name, kind }),
+      }),
     setOrder: (projectId: string, folder: string, items: string[]) =>
       request<DocEntry[]>(`/projects/${projectId}/docs/order`, {
         method: 'PUT',

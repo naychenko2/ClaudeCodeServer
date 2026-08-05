@@ -3,11 +3,22 @@ import type { Session } from '../types';
 // Состояние окна воркспейса, запоминаемое для каждого проекта:
 // активный чат, открытый файл, режимы панелей. Зеркалируется в localStorage,
 // поэтому переживает и переключение проектов, и перезагрузку PWA.
+// Вкладки левой панели проекта — источник правды и для типа, и для восстановления
+// из localStorage. Раньше union жил двумя копиями (здесь и в WorkspacePage), а
+// рядом стоял третий, рукописный список допустимых значений при чтении — из-за
+// чего «Навыки» не переживали перезагрузку: вкладку добавили, в список забыли.
+export const LEFT_TABS = ['sessions', 'files', 'changes', 'tasks', 'personas', 'skills', 'tools'] as const;
+export type LeftTab = typeof LEFT_TABS[number];
+
+export function isLeftTab(v: unknown): v is LeftTab {
+  return typeof v === 'string' && (LEFT_TABS as readonly string[]).includes(v);
+}
+
 export interface WorkspaceUIState {
   activeSession: Session | null;
   openFile: string | null;
   fileFullscreen: boolean;
-  leftTab: 'sessions' | 'files' | 'tasks' | 'personas' | 'skills' | 'tools';
+  leftTab: LeftTab;
   fileSubTab?: 'files' | 'knowledge';
 }
 

@@ -27,7 +27,7 @@ import { ListDateDivider } from './ListDateDivider';
 import { dayGroupTitle } from '../lib/chatGroups';
 import { authorEmoji, authorName } from '../lib/authorEmoji';
 import { getExtMeta } from './FileExplorer';
-import { Modal, ModalActions, TextArea, TextField, IconButton, Button, Menu, MenuItem, PanelHeaderSlot, IconSegmented } from './ui';
+import { Modal, ModalActions, TextArea, TextField, IconButton, Button, Menu, MenuItem, PanelHeaderSlot, IconSegmented, useHasPanelHeader } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 
 const COMMIT_SUMMARY_MAX = 72;
@@ -148,6 +148,7 @@ function buildTree(files: RowFile[]): TreeNode[] {
 export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, activeFilePath, activeCommitSha, onCommit, onScopeChange }: Props) {
   const st = useGitState(project.id);
   const status = st.status;
+  const hasPanelHeader = useHasPanelHeader();
 
   const [activeScope, setActiveScope] = useState<'working' | string>('working'); // string = sha коммита
   const [mode, setMode] = useState<'list' | 'commit'>('list');
@@ -560,8 +561,12 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
   // его контролы живут под !isBranch. А настройки репозитория нужны в ЛЮБОМ скоупе
   // (в документном режиме панель открывается сразу на ветке — там их и ищут), и
   // потому стоят вне этого условия.
-  const headerControls = (
-    <PanelHeaderSlot>
+  //
+  // Шапки может не быть — на телефоне панель живёт вкладкой сайдбара, без карточки
+  // PanelShell. Тогда те же контролы рисуются своей строкой в теле (приём DocsPanel):
+  // без этого слот молча ничего не отрендерит и управление панелью пропадёт.
+  const controls = (
+    <>
         {!isBranch && <>
         {/* Режим выбора файлов (чекбоксы) — только для текущих изменений */}
         {isWorking && rows.length > 0 && (
@@ -609,8 +614,17 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
             <Settings size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
           </IconButton>
         )}
-    </PanelHeaderSlot>
+    </>
   );
+
+  const headerControls = hasPanelHeader
+    ? <PanelHeaderSlot>{controls}</PanelHeaderSlot>
+    : (
+      <div style={{
+        flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4,
+        padding: '8px 12px', borderBottom: `1px solid ${C.border}`,
+      }}>{controls}</div>
+    );
 
   // Меню настроек репозитория — портал по якорю кнопки в шапке
   const repoMenuEl = repoMenu && remote && (

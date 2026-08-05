@@ -400,6 +400,12 @@ export function PanelZone({
   const ghostKey = !compact && !soloMode && !dnd.active
     && hoverKey && !openKeys.includes(hoverKey) && keyAvailable(hoverKey)
     ? hoverKey : null;
+
+  // Курсор на кнопке УЖЕ ОТКРЫТОЙ панели в рельсе — подсвечиваем её карточку
+  // акцентным кольцом (статично, не вспышкой flash), чтобы глаз сразу нашёл, к
+  // чему относится кнопка. Для закрытой панели этим занимаются ghost/peek.
+  const railHighlightKey = !compact && !dnd.active && hoverKey && openKeys.includes(hoverKey)
+    ? hoverKey : null;
   const ghostAt = ghostKey ? nextPlacement(layout, side, colCapNow()) : null;
   // Колонка призрака в ВИДИМЫХ координатах: раскладка может держать колонки из
   // недоступных на этом экране панелей, и их индексы со списком columns не совпадают
@@ -678,6 +684,7 @@ export function PanelZone({
         closeMode={compact ? 'button' : 'icon'}
         fill={stretched}
         flash={flash?.key === k}
+        highlighted={railHighlightKey === k}
         slideDirection={isLeft ? 'left' : 'up'}
         // Анимация появления — только когда карточка действительно возникла на
         // новом месте: закреплённый попап уже стоит перед глазами, а при переносе
@@ -893,15 +900,15 @@ export function PanelZone({
   // Нулевая высота в потоке + absolute-линия у кромки: панели не сдвигаются,
   // знак совпадает с местом вставки при перетаскивании (base 0, edge 'end').
   // pointerEvents: none — призрак висит в раскладке, но курсору не мешает.
-  // over: наведение на кнопку — не «одно из возможных мест», а точное «кликнешь —
-  // встанет сюда», поэтому линия контрастная сплошная акцентная, а не штриховая.
+  // accent: наведение на кнопку — точное «кликнешь — встанет сюда», поэтому линия
+  // контрастная акцентным цветом, но остаётся штриховой (не сплошной, как дроп).
   const ghostBox = ghostKey && (
     <div style={{ height: 0, position: 'relative', pointerEvents: 'none' }}>
       <div style={{
         position: 'absolute', left: 0, right: 0, top: -SEP_HIT / 2, height: SEP_HIT,
         display: 'flex', alignItems: 'center',
       }}>
-        <PanelDropLine axis="y" over shift={sepShift(0)} />
+        <PanelDropLine axis="y" accent shift={sepShift(0)} />
       </div>
     </div>
   );
@@ -920,7 +927,7 @@ export function PanelZone({
         position: 'absolute', top: 0, bottom: 0, left: -SEP_HIT / 2, width: SEP_HIT,
         display: 'flex', alignItems: 'stretch', justifyContent: 'center', pointerEvents: 'none',
       }}>
-        <PanelDropLine axis="x" over shift={newColShift} />
+        <PanelDropLine axis="x" accent shift={newColShift} />
       </div>
     </div>
   );

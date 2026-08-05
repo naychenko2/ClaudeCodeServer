@@ -111,7 +111,24 @@ body {
   inherits: true;
   initial-value: 20px;
 }
-:root { transition: --cc-fab-bottom 0.3s ease; }
+/* Отступ FAB от краёв экрана: обычно 20px (уютный угол), но когда справа распахнута
+   панель во всю высоту, PanelZone ставит 6px и кнопка прижимается плотнее к краю.
+   Регистрируем как длину, чтобы смена 20↔6 проигрывалась плавно (смещение), а не снапом. */
+@property --cc-fab-inset {
+  syntax: '<length>';
+  inherits: true;
+  initial-value: 20px;
+}
+/* Размер FAB: по умолчанию 54 (панель не распахнута), 36 когда справа распахнута панель
+   во всю высоту (ставит PanelZone). Регистрируем как длину — уменьшение/увеличение плавное. */
+@property --cc-fab-size {
+  syntax: '<length>';
+  inherits: true;
+  initial-value: 54px;
+}
+/* --cc-fab-size НЕ анимируем на :root: смену размера проигрывает transition width/height
+   самой кнопки (registered @property триггерит его). Иначе выходит двойная анимация в 2 шага. */
+:root { transition: --cc-fab-bottom 0.3s ease, --cc-fab-inset 0.22s ease; }
 
 
 /* Поле ввода чата: прячем скроллбар (поле растёт до maxHeight, дальше скроллится
@@ -401,7 +418,8 @@ body {
   55%      { transform: translateY(-2px); }
   68%      { transform: translateY(0); }
 }
-.cc-fab-hop { animation: cc-fab-hop 1.6s ease-in-out infinite; }
+/* 3 прыжка и замирает; перезапуск на новую подсказку — ре-триггером класса в AiLauncher */
+.cc-fab-hop { animation: cc-fab-hop 1.6s ease-in-out 3; }
 @keyframes cc-fab-huff {
   0%, 100% { transform: scale(1); }
   50%      { transform: scale(.95) translateY(1px); }

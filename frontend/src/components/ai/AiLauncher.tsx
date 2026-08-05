@@ -30,6 +30,7 @@ export function AiLauncher() {
   const [idx, setIdx] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const fabRef = useRef<HTMLButtonElement>(null);
   const hoverTimer = useRef<number | null>(null);
   // Push-слой: активная проактивная подсказка + состояние тумблера
   const [suggestion, setSuggestion] = useState<Suggestion | null>(null);
@@ -267,6 +268,20 @@ export function AiLauncher() {
   const fabDim = fabLevel !== 'strong';
   const fabStrong = fabLevel === 'strong';
 
+  // Прыжок «есть идея»: ровно 3 раза (CSS-count), потом замирает — не скачет без конца.
+  // Новая сильная подсказка перезапускает 3 прыжка заново. «Новизну» ловим по сигнатуре
+  // повода (ключ подсказки / id топовой рекомендации): пока он тот же — не дёргаем, класс
+  // уже отыграл; сменился — ре-триггерим анимацию через reflow (снять класс → reflow → надеть).
+  const hopSig = fabStrong && !aiBusy ? (suggestion?.key ?? recs[0]?.id ?? 'strong') : null;
+  useEffect(() => {
+    const el = fabRef.current;
+    if (!el) return;
+    el.classList.remove('cc-fab-hop');
+    if (!hopSig) return;
+    void el.offsetWidth; // форс reflow — анимация начнётся с нуля
+    el.classList.add('cc-fab-hop');
+  }, [hopSig]);
+
   return (
     <>
       {/* Проактивная подсказка (push) — тихий балун у кнопки. При наведении на FAB
@@ -334,10 +349,10 @@ export function AiLauncher() {
       {/* Плавающая кнопка */}
       {!open && (
         <button
+          ref={fabRef}
           onClick={() => { setQ(''); setOpen(true); }}
           aria-label="AI-действия (Ctrl/⌘ + K)"
           title="AI-действия · ⌘K"
-          className={fabStrong && !aiBusy ? 'cc-fab-hop' : undefined}
           style={{
             ...fabStyle,
             // Ореол сохраняем, но нейтральный: SHADOW.fab из fabStyle — accent-свечение
@@ -345,10 +360,17 @@ export function AiLauncher() {
             // логотип), и оранжевый ореол выглядел беспричинным. Цвет свечения должен
             // идти от самой кнопки — отсюда парный токен той же геометрии.
             background: 'none', padding: 0, overflow: 'visible', boxShadow: SHADOW.fabNeutral,
-            ...(isMobile ? { right: 16, width: FAB_MOBILE, height: FAB_MOBILE } : {}),
+            // Размер: базовый из var --cc-fab-size (54 без панели / 36 при распахнутой панели),
+            // при наведении на десктопе — всегда 54. Растёт влево-вверх (угол приклеен к краю).
+            // На мобиле размер фиксирован (36, там наведения и распахнутых панелей нет).
+            ...(fabHover && !isMobile ? { width: 54, height: 54 } : {}),
+            ...(isMobile ? { right: 16, width: 36, height: 36 } : {}),
+            // Наведение на десктопе: в большом состоянии подъём (--cc-fab-lift = -2px), в
+            // малом подъёма нет (0px) — там кнопка вместо этого растёт до 54.
+            transform: fabHover && !isMobile ? 'translateY(var(--cc-fab-lift, -2px))' : undefined,
           }}
-          onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-2px)'; enterFab(); }}
-          onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)'; leaveFab(); }}
+          onMouseEnter={enterFab}
+          onMouseLeave={leaveFab}
         >
           {/* Логотип «AI Home» (домик с трубой) на весь круг. Покой — серый; идея — подскок
               (cc-fab-hop на кнопке); работа — «пыхтит» (cc-fab-huff) + дым из трубы. */}
@@ -358,7 +380,7 @@ export function AiLauncher() {
             style={{
               position: 'absolute', inset: 0, width: '100%', height: '100%',
               objectFit: 'cover', borderRadius: '50%', display: 'block',
-              ...(fabDim && !aiBusy ? { opacity: 0.55, filter: 'grayscale(0.9)' } : {}),
+              ...(fabDim && !aiBusy && !fabHover ? { opacity: 0.55, filter: 'grayscale(0.9)' } : {}),
             }}
           />
           {aiBusy && <span className="cc-smoke cc-fab-smoke" aria-hidden><i /><i /><i /><i /></span>}
@@ -486,22 +508,22 @@ function Kbd({ children }: { children: React.ReactNode }) {
   );
 }
 
-// На мобиле кнопка мельче в полтора раза (54 → 36): на телефоне она ближе к контенту
-// и в полный размер заметно его перекрывала
-const FAB_MOBILE = 36;
-
 const fabStyle: React.CSSProperties = {
-  // --cc-fab-bottom задаёт страница снизу (в чате — высота композера + зазор), чтобы
-  // FAB вставал НАД композером и не сталкивался с кнопкой «вниз». Дефолт — угол 20px.
-  // --cc-fab-right сдвигает FAB влево, когда правую кромку занимают панели
-  // нового интерфейса проекта (ставит RightPanelStack); дефолт — угол 20px
-  position: 'fixed', right: 'var(--cc-fab-right, 20px)', bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px))',
-  width: 54, height: 54, borderRadius: '50%', border: 'none', cursor: 'pointer',
+  // Всегда в правом нижнем углу экрана. Отступ по обоим краям — var --cc-fab-inset: обычно
+  // 20px (уютный угол), но когда справа открыт остров-панель во всю высоту, PanelZone ставит
+  // 6px и кнопка прижимается плотнее к краю (меньше налезает на остров). Снизу — safe-area.
+  position: 'fixed', right: 'var(--cc-fab-inset, 20px)',
+  bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-inset, 20px))',
+  // Базовый размер — var --cc-fab-size: по умолчанию 54 (панель не распахнута), а когда
+  // справа распахнута панель во всю высоту, PanelZone ставит 36 (компактный, не мешает).
+  // При наведении переопределяется на 54 (см. button inline). Меняется плавно (transition).
+  width: 'var(--cc-fab-size, 54px)', height: 'var(--cc-fab-size, 54px)',
+  borderRadius: '50%', border: 'none', cursor: 'pointer',
   background: C.accent, color: C.onAccent, boxShadow: SHADOW.fab,
-  // bottom едет плавно за счёт анимируемой @property --cc-fab-bottom (см. index.css)
   // Ниже выпадающих меню (Z.dropdown): FAB висит в том же углу, что и попапы кнопок
   // композера, и на Z.modal-1 перекрывал их собой. Выше обычного контента остаётся.
-  display: 'grid', placeItems: 'center', zIndex: Z.dropdown - 1, transition: 'transform .16s',
+  display: 'grid', placeItems: 'center', zIndex: Z.dropdown - 1,
+  transition: 'width .18s ease, height .18s ease, transform .16s ease',
 };
 
 const overlayStyle: React.CSSProperties = {
@@ -555,7 +577,9 @@ const toggleThumb: React.CSSProperties = {
 };
 
 const balloonStyle: React.CSSProperties = {
-  position: 'fixed', right: 'var(--cc-fab-right, 20px)', bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px) + 66px)',
+  // Над кнопкой в покое — отступ края как у FAB (var) + текущая высота кнопки (var, −8 нахлёст)
+  position: 'fixed', right: 'var(--cc-fab-inset, 20px)',
+  bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-inset, 20px) + var(--cc-fab-size, 54px) - 8px)',
   width: 280, background: C.bgCard, border: `1px solid ${C.accentMuted}`, borderRadius: R.xl,
   boxShadow: SHADOW.modal, padding: '13px 14px 12px', zIndex: Z.modal - 1, fontFamily: FONT.sans,
 };
@@ -574,7 +598,9 @@ const balloonGhost: React.CSSProperties = {
 
 // Hover-балун со списком рекомендаций (шире проактивного, с прокруткой при длинном списке)
 const hoverBalloonStyle: React.CSSProperties = {
-  position: 'fixed', right: 'var(--cc-fab-right, 20px)', bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px) + 66px)',
+  // Показывается на наведении, когда кнопка выросла до 54 — отступ края как у FAB (var) + её высота
+  position: 'fixed', right: 'var(--cc-fab-inset, 20px)',
+  bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-inset, 20px) + 46px)',
   width: 300, maxHeight: '60vh', overflowY: 'auto', background: C.bgCard, border: `1px solid ${C.accentMuted}`,
   borderRadius: R.xl, boxShadow: SHADOW.modal, padding: '12px 12px 10px', zIndex: Z.modal - 1, fontFamily: FONT.sans,
 };

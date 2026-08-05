@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { AlertTriangle, X, File, Trash2, Maximize2, Columns2, RotateCcw, Save, Download, Music, Menu, SquarePen, Eye, Code, Copy, Check, FileDiff, History, Users, MessageCircle, ChevronLeft, ChevronRight } from 'lucide-react';
+import { AlertTriangle, X, File, Trash2, Maximize2, Columns2, RotateCcw, Save, Download, Music, Menu, SquarePen, Eye, Code, Copy, Check, FileDiff, History, Users, MessageCircle, ChevronLeft, ChevronRight, TableOfContents } from 'lucide-react';
 import SyntaxHighlighter from 'react-syntax-highlighter/dist/esm/prism-light';
 import { oneLight, oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import tsx from 'react-syntax-highlighter/dist/esm/languages/prism/tsx';
@@ -53,6 +53,9 @@ import { useToolbarOverflow } from '../hooks/useToolbarOverflow';
 import { BackButton, Modal, ModalActions, Button, ConfirmDialog, useIsMobileModal, Menu as UiMenu, MenuItem } from './ui';
 import { DiffView } from './DiffView';
 import { registerCopyDoc, copyMarkdown, copyRenderedHtml } from '../lib/selectionScope';
+// Тумблер панели «Оглавление» правит раскладку зон напрямую — тем же каналом, что
+// кнопка «Открыть изменения» в git-баре над композером (ProjectGitBar)
+import { wsPanels, zoneOf } from '../pages/workspace/panelStackState';
 import { useThemeMode, getEffectiveTheme } from '../lib/themeMode';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 
@@ -930,6 +933,23 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   // осталась бы висеть с оглавлением закрытого документа
   useEffect(() => () => onTocChange?.(null), [onTocChange]);
 
+  // Тумблер панели «Оглавление» в тулбаре. Кнопка рельсы стоит у самого края окна и
+  // при чтении оказывается далеко от глаз, поэтому оглавление зовётся и отсюда —
+  // от документа, к которому относится.
+  //
+  // Раскладку правим напрямую через стор зон (как «Открыть изменения» в git-баре):
+  // панель может лежать в любой из рельс, и знать это просмотрщику незачем — reveal
+  // открывает закрытую в её домашней зоне, close убирает открытую где бы то ни было.
+  const { zones: panelZones, reveal: revealPanelKey, close: closePanelKey } = wsPanels.use();
+  const tocPanelOpen = zoneOf(panelZones, 'toc') !== null;
+  // Тумблер нужен, только когда панели есть куда открыться: без onTocChange контент
+  // панели никто не собирает (мобильная вёрстка), и кнопка вела бы в пустоту
+  const tocToggleVisible = tocAvailable && !isMobile && !!onTocChange;
+  const toggleTocPanel = () => {
+    if (tocPanelOpen) closePanelKey('toc');
+    else revealPanelKey('toc');
+  };
+
   // Ctrl+C без выделения: отдаём исходник открытого текстового файла (см. selectionScope)
   const copySourceRef = useRef<() => string | null>(() => null);
   copySourceRef.current = () => (isCopyableText ? (fileContent?.content ?? null) : null);
@@ -1132,6 +1152,26 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   // --- Вторичные действия: одинаковые кнопки, лишние уезжают в «···» справа налево ---
   const secondary: { key: string; node: ReactNode; item: OverflowItem }[] = [];
   if (!loading) {
+    // Оглавление — первым: при чтении документа к нему обращаются чаще прочих
+    // вторичных действий, а в «···» уезжают последние в этом списке
+    if (tocToggleVisible) {
+      const tocTitle = tocPanelOpen ? 'Скрыть оглавление' : 'Оглавление документа';
+      secondary.push({
+        key: 'toc',
+        node: (
+          <ToolbarIconButton
+            isMobile={isMobile} onClick={toggleTocPanel} title={tocTitle}
+            color={tocPanelOpen ? C.accent : undefined}
+          >
+            <TableOfContents size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+          </ToolbarIconButton>
+        ),
+        item: {
+          key: 'toc', icon: <TableOfContents size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
+          label: tocTitle, onClick: toggleTocPanel,
+        },
+      });
+    }
     if (!loadError && tab === 'file' && isCopyableText && !isDrawio && !(isHtml && htmlTab === 'preview')) {
       const copyTitle = copied ? 'Скопировано'
         : isMarkdown ? 'Скопировать Markdown (Shift — с форматированием)' : 'Скопировать содержимое';

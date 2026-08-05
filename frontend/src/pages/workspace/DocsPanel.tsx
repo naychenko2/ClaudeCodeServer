@@ -107,11 +107,21 @@ const DEFAULT_DOC_EXTS = ['.md'];
 // Кто именно — решает бэкенд; панель только помечает его домиком и открывает на всю высоту
 const HOME_KEY = 'cc_docs_home';
 
+// Блок списка: подряд идущие документы одной папки. Не «папка целиком» — одна папка даёт
+// столько блоков, сколько раз её документы прерываются разделом. Так порядок из .order
+// (где документы и разделы вперемешку) переносится в плоский список без вложенности.
+type DocBlock = {
+  key: string;        // папка + номер блока: подписи одной папки повторяются
+  folder: string;     // '' — корень проекта, у него подписи нет
+  docs: DocEntry[];
+};
+
 // Папка пути («docs/adr/x.md» → «docs/adr»); файл в корне — пустая строка
 function folderOf(path: string): string {
   const i = path.lastIndexOf('/');
   return i < 0 ? '' : path.slice(0, i);
 }
+
 
 // Папка как подпись группы: слеш читается как «путь к файлу», а здесь это ветка
 // оглавления — точка-разделитель ведёт взгляд по уровням и не спорит с путями документов
@@ -153,14 +163,63 @@ function DocBadge({ path, home }: { path: string; home?: boolean }) {
 // Отличать «прилипла / не прилипла» пробовали наблюдателем, но в панели несколько
 // вложенных скроллеров (список, превью, закреплённые папки), и корень наблюдения
 // приходилось угадывать — постоянный фон делает то же самое без единого условия.
-function FolderSticky({ folder, flash, collapsed, hidden, onToggle }: {
+function FolderSticky({ folder, title: titleProp, subtitle, flash, collapsed, hidden, onToggle, onOpenPage }: {
   folder: string;
+  // Подпись группы: у раздела это заголовок его страницы («Расширения»), у обычной папки —
+  // её путь (значение по умолчанию). Считает панель: она знает, есть ли у папки пара
+  title?: string;
+  // Родительский раздел приглушённо после подписи — заменяет собой путь целиком
+  subtitle?: string;
   flash: boolean;
   collapsed: boolean;
   // Сколько документов скрыто — показываем только у свёрнутой: у развёрнутой они и так видны
   hidden: number;
   onToggle: () => void;
+  // Есть у папки с парной страницей: клик по подписи открывает её, как узел дерева wiki.
+  // Тогда шеврон выносится из подписи наружу — иначе кнопка сворачивания оказалась бы
+  // вложена в кнопку открытия, а вложенные кнопки html не разрешает
+  onOpenPage?: () => void;
 }) {
+  const title = titleProp ?? groupLabel(folder);
+  const chevron = (
+    <ChevronRight
+      size={12} strokeWidth={2.4}
+      style={{
+        color: flash ? C.accent : C.textMuted,
+        transform: collapsed ? 'none' : 'rotate(90deg)', transition: 'transform .15s ease',
+      }}
+    />
+  );
+  if (onOpenPage) return (
+    <div style={{
+      position: 'sticky', top: -(SP.xs + 5), zIndex: 1,
+      background: C.bgWhite, margin: `0 -${SP.xs}px`, padding: `${SP.xs}px ${SP.xs}px 0 ${SP.sm}px`,
+      display: 'flex', alignItems: 'center',
+    }}>
+      <button
+        onClick={onToggle}
+        title={`${title} — ${collapsed ? 'показать' : 'скрыть'} документы раздела`}
+        style={{
+          width: 16, flexShrink: 0, height: 20, padding: 0, border: 'none',
+          background: 'transparent', cursor: 'pointer',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}
+      >
+        {chevron}
+      </button>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <ListDateDivider
+          title={title} subtitle={subtitle}
+          align="left" dense flash={flash}
+          onClick={onOpenPage}
+          titleAttr={`${title} — открыть страницу раздела`}
+          trailing={collapsed
+            ? <span style={{ flexShrink: 0, fontSize: 10, color: C.textMuted }}>{hidden}</span>
+            : undefined}
+        />
+      </div>
+    </div>
+  );
   return (
     // Фон — ровно полотно панели: в потоке подпись выглядит как раньше, а прилипнув
     // перекрывает уезжающие строки. Отрицательные поля тянут подложку на всю ширину
@@ -176,10 +235,10 @@ function FolderSticky({ folder, flash, collapsed, hidden, onToggle }: {
       background: C.bgWhite, margin: `0 -${SP.xs}px`, padding: `${SP.xs}px ${SP.xs}px 0 ${SP.sm}px`,
     }}>
       <ListDateDivider
-        title={groupLabel(folder)}
+        title={title} subtitle={subtitle}
         align="left" dense flash={flash}
         onClick={onToggle}
-        titleAttr={`${groupLabel(folder)} — ${collapsed ? 'показать' : 'скрыть'} документы`}
+        titleAttr={`${title} — ${collapsed ? 'показать' : 'скрыть'} документы`}
         leading={
           // Ширина как у бейджа расширения: шеврон встаёт с документами в одну колонку,
           // и левый край списка читается одной линией сверху вниз
@@ -518,19 +577,86 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
     () => new Set((index ?? []).map(d => d.path.toLowerCase())),
     [index]);
 
-  // Документы по папкам: README и прочий корень — в безымянной группе сверху,
-  // дальше подписанные группы («docs», «docs/adr», …) в алфавитном порядке
-  const groups = useMemo<[string, DocEntry[]][]>(() => {
-    const byFolder = new Map<string, DocEntry[]>();
-    for (const d of index ?? []) {
-      const slash = d.path.lastIndexOf('/');
-      const folder = slash < 0 ? '' : d.path.slice(0, slash);
-      const list = byFolder.get(folder);
-      if (list) list.push(d); else byFolder.set(folder, [d]);
-    }
-    return [...byFolder.entries()].sort(([a], [b]) =>
-      a === '' ? -1 : b === '' ? 1 : a.localeCompare(b));
+  // Страницы разделов: папка → документ, который её открывает («docs/decisions» →
+  // «docs/decisions.md»). Пара приходит с бэкенда — там известен точный состав области
+  const sectionPages = useMemo(() => {
+    const m = new Map<string, DocEntry>();
+    for (const d of index ?? []) if (d.sectionFolder) m.set(d.sectionFolder, d);
+    return m;
   }, [index]);
+
+  // Блоки списка: одна папка — один блок. Сначала документы, лежащие прямо в папке, следом
+  // её разделы со своими дочерними — в том порядке, в каком разделы стоят в .order.
+  // Порядок НЕ пересортировывается: индекс приходит упорядоченным (бэкенд читает .order
+  // каждой папки), и localeCompare здесь затирал бы его.
+  //
+  // Страница раздела строкой не показывается: она и есть подпись своего блока
+  // («Расширения» вместо «docs · extensions») и открывается кликом по ней.
+  const blocks = useMemo<DocBlock[]>(() => {
+    const docsOf = new Map<string, DocEntry[]>();     // папка → её собственные документы
+    const subsOf = new Map<string, string[]>();       // папка → подпапки в порядке появления
+
+    // Регистрируем ВСЮ цепочку папок до корня: папка-посредник может не иметь своих
+    // документов («spikes/» с одной подпапкой внутри), и без цепочки обход до её
+    // содержимого просто не дошёл бы
+    const chain = (folder: string) => {
+      let f = folder;
+      while (f) {
+        const parent = folderOf(f);
+        const list = subsOf.get(parent) ?? [];
+        if (list.includes(f)) break;    // выше по цепочке уже регистрировали
+        list.push(f);
+        subsOf.set(parent, list);
+        f = parent;
+      }
+    };
+    const own = (folder: string) => {
+      const list = docsOf.get(folder) ?? [];
+      docsOf.set(folder, list);
+      return list;
+    };
+
+    for (const d of index ?? []) {
+      const parent = folderOf(d.path);
+      // Страница раздела задаёт МЕСТО раздела среди соседей — по своей строке в .order,
+      // а не по первому дочернему документу: иначе пустой раздел не появился бы вовсе
+      if (d.sectionFolder) { own(d.sectionFolder); chain(d.sectionFolder); continue; }
+      own(parent).push(d);
+      // Папка без парной страницы всё равно должна встать в список — местом ей служит
+      // первый её документ
+      chain(parent);
+    }
+
+    // Обход сверху вниз: сначала документы самой папки, следом её разделы со своими
+    // дочерними. Так «Бизнес-описание» остаётся в docs, а не уезжает под раздел, стоящий
+    // выше него в .order
+    const out: DocBlock[] = [];
+    const walk = (folder: string) => {
+      if (docsOf.has(folder)) out.push({ key: folder, folder, docs: docsOf.get(folder)! });
+      for (const child of subsOf.get(folder) ?? []) walk(child);
+    };
+    walk('');
+    return out;
+  }, [index]);
+
+  // Подпись группы: у раздела — заголовок его страницы, у прочих папок — путь как раньше.
+  // Родитель приписывается приглушённо: полный путь в подписи читается хуже, чем
+  // «Расширения · docs», а знать, где ты находишься, всё равно нужно
+  const groupTitle = useCallback((folder: string): { title: string; subtitle?: string } => {
+    const page = sectionPages.get(folder);
+    if (!page) return { title: groupLabel(folder) };
+    const parent = folderOf(folder);
+    const parentPage = parent ? sectionPages.get(parent) : undefined;
+    return { title: page.title, subtitle: parentPage ? parentPage.title : parent || undefined };
+  }, [sectionPages]);
+
+  // Список папок для поповера переходов. Блоки одной папки складываются в одну строку:
+  // в списке переходов ждут папку, а не её куски
+  const folderCounts = useMemo<[string, number][]>(() => {
+    const m = new Map<string, number>();
+    for (const b of blocks) if (b.folder) m.set(b.folder, (m.get(b.folder) ?? 0) + b.docs.length);
+    return [...m.entries()];
+  }, [blocks]);
 
   // Закреплённые дублируются ОТДЕЛЬНЫМ блоком у нижнего края списка: их закрепляют,
   // чтобы держать под рукой, а до нужного места длинного списка ещё надо домотать.
@@ -554,6 +680,10 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
     const p = raw.replace(/\\/g, '/');
     const lower = p.toLowerCase();
     if (knownDocs.has(lower)) return true;
+    // Служебные файлы документации: сами документами не являются, но меняют порядок
+    // страниц и состав области. Без них правка .order в git не перечитывала бы индекс —
+    // и порядок в панели оставался бы прежним, хотя на диске он уже другой
+    if (lower === '.docs' || lower.endsWith('/.order') || lower === '.order') return true;
     if (scopeInfo) {
       const { folders, rootFiles, types } = scopeInfo.selected;
       // Файл корня — только поимённо: там же лежит код, и расширение ни о чём не говорит
@@ -824,9 +954,12 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
     />
   );
 
+
   // Кнопка и блок нужны, только когда есть что выбирать: с единственной папкой
   // список папок вёл бы сам в себя
-  const hasFolderNav = groups.filter(([f]) => f).length > 1;
+  // Считаем по всем папкам дерева, а не по группам верхнего уровня: вложенные разделы
+  // тоже точки перехода, и без них список выглядел бы обрезанным
+  const hasFolderNav = folderCounts.length > 1;
 
   // Уровни папок. Кнопки «свернуть/развернуть уровень» в шапку не переехали, поэтому
   // и обработчики лежат закомментированными — вернуть можно вместе с кнопками (см.
@@ -1018,7 +1151,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
           стоило ей стать пониже */}
       {foldersAnchor && (
         <Menu anchor={foldersAnchor} minWidth={260} maxHeight={320} onClose={() => setFoldersAnchor(null)}>
-          {groups.map(([folder, docs]) => folderRow(folder, docs.length, folder === activeFolder))}
+          {folderCounts.map(([folder, count]) => folderRow(folder, count, folder === activeFolder))}
         </Menu>
       )}
 
@@ -1100,7 +1233,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
                   flexShrink: 0, height: foldersH, overflowY: 'auto',
                   padding: `${SP.xs}px ${SP.xs}px`,
                 }}>
-                  {groups.map(([folder, docs]) => folderRow(folder, docs.length, folder === activeFolder))}
+                  {folderCounts.map(([folder, count]) => folderRow(folder, count, folder === activeFolder))}
                 </div>
                 <div
                   onPointerDown={e => startResize(e, {
@@ -1144,12 +1277,14 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
                     }
                   />
                 )}
-                {groups.map(([folder, docs]) => {
+                {blocks.map(({ key, folder, docs }) => {
                   // Корневая группа без подписи — сворачивать её нечем и незачем
                   const isCollapsed = !!folder && collapsed.has(folder);
+                  const page = sectionPages.get(folder);
+                  const { title, subtitle } = groupTitle(folder);
                   return (
                   <div
-                    key={folder}
+                    key={key}
                     // Мигает вся секция целиком — подпись и её документы, чтобы после
                     // прыжка было видно границы группы, а не только её заголовок
                     className={flashFolder === folder ? LIST_FLASH_CLASS : undefined}
@@ -1164,10 +1299,15 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
                     {folder && (
                       <FolderSticky
                         folder={folder}
+                        title={title}
+                        subtitle={subtitle}
                         flash={flashFolder === folder}
                         collapsed={isCollapsed}
                         hidden={docs.length}
                         onToggle={() => toggleFolder(folder)}
+                        // У папки с парной страницей подпись открывает её — как узел
+                        // дерева в wiki; сворачивание переезжает на шеврон
+                        onOpenPage={page ? () => handleRowClick(page.path) : undefined}
                       />
                     )}
                     {/* Сворачивание высотой grid-строки: она анимируется от 0fr к 1fr, и

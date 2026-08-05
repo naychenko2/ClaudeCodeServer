@@ -16,12 +16,15 @@ import { IconButton } from './IconButton';
 //    PanelShell держит transform ради анимации появления, и меню внутри панели
 //    уезжало на её смещение и обрезалось overflow острова.
 // Закрытие по Esc/скроллу в anchor-режиме — на вызывающей стороне (поведение, не контрол).
-export function Menu({ onClose, align = 'right', top = 30, bottom, minWidth = 200, anchor, maxHeight = 300, gap = 6, anchorSide, inertBackdrop, children }: {
+export function Menu({ onClose, align = 'right', top = 30, bottom, minWidth = 200, maxWidth = 380, anchor, maxHeight = 300, gap = 6, anchorSide, inertBackdrop, children }: {
   onClose: () => void;
   align?: 'left' | 'right';
   top?: number;
   bottom?: number;
   minWidth?: number;
+  // Предел ширины: карточка растёт по содержимому, и длинный путь или заголовок
+  // внутри уводил её за кромку окна. Пункты обрезаются многоточием сами
+  maxWidth?: number;
   // rect кнопки-триггера; задан — режим fixed (align/top/bottom игнорируются)
   anchor?: DOMRect;
   // высота меню для выбора направления в anchor-режиме (вверх, если снизу не влезает)
@@ -59,6 +62,9 @@ export function Menu({ onClose, align = 'right', top = 30, bottom, minWidth = 20
     const left = Math.max(8, Math.min(anchor.right - minWidth, window.innerWidth - minWidth - 8));
     pos = {
       position: 'fixed', left,
+      // Потолок ширины считаем ОТ ЛЕВОГО КРАЯ карточки: позиция выбрана по minWidth, а
+      // растёт карточка по содержимому — длинный пункт уводил её правый край за окно
+      maxWidth: Math.min(maxWidth, window.innerWidth - left - 8),
       ...(openUp ? { bottom: window.innerHeight - anchor.top + gap } : { top: anchor.bottom + gap }),
     };
   } else {
@@ -71,9 +77,15 @@ export function Menu({ onClose, align = 'right', top = 30, bottom, minWidth = 20
         onClick={onClose}
       />
       <div style={{
-        ...pos, zIndex: Z.dropdown + 1,
+        zIndex: Z.dropdown + 1,
         background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
         boxShadow: SHADOW.dropdown, padding: 5, minWidth, display: 'flex', flexDirection: 'column',
+        // Общий потолок ширины: карточка растёт по содержимому, и длинная строка внутри
+        // (путь к папке, заголовок документа) уводила её за кромку окна. Пункты
+        // обрезаются многоточием сами — им нужен только предел. В anchor-режиме pos
+        // ниже перебивает его точным расчётом от левого края карточки
+        maxWidth: `min(${maxWidth}px, calc(100vw - 16px))`,
+        ...pos,
         // В боковом режиме карточка встаёт от кромки окна и расти ей некуда: высоту
         // ограничиваем, а прокрутку содержимое организует само (так у него остаётся
         // возможность держать прилипший футер вне скролла)
@@ -134,7 +146,14 @@ export function MenuItem({ icon, label, onClick, danger, disabled, wrapper, acti
           {icon}
         </span>
       )}
-      {label}
+      {/* Подпись в одну строку с многоточием: пункты бывают длинные (путь к папке,
+          заголовок документа), а карточка ограничена по ширине — без обрезки они
+          расползались бы на две строки и ломали ритм списка */}
+      <span style={{
+        flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      }}>
+        {label}
+      </span>
     </button>
   );
   const row = action ? (

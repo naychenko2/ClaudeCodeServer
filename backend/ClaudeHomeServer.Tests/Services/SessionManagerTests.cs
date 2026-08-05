@@ -37,6 +37,11 @@ public class SessionManagerTests : IDisposable
     private readonly SessionManager _sut;
     private readonly Mock<IClientProxy> _clientProxy;
     private readonly List<ServerMessage> _sentMessages = new();
+    // Broadcast'ы из фоновых задач (OnMessageAsync запускает HandleTeamTurnEnd fire-and-forget)
+    // пишут в _sentMessages параллельно с чтением из WaitForEscalationCardsAsync — синхронизируем
+    // запись и намеренно параллельное чтение, иначе Add попадает в момент перечисления ToList()
+    // («Collection was modified», плавуче на слабом CI-раннере).
+    private readonly object _sentMessagesLock = new();
 
     public SessionManagerTests()
     {
@@ -69,7 +74,8 @@ public class SessionManagerTests : IDisposable
             .Callback<string, object[], CancellationToken>((method, args, _) =>
             {
                 if (args.Length > 0 && args[0] is ServerMessage msg)
-                    _sentMessages.Add(msg);
+                    lock (_sentMessagesLock)
+                        _sentMessages.Add(msg);
             })
             .Returns(Task.CompletedTask);
         // Захватываем только session-группу; project_/user_-группы дублировали бы сообщения
@@ -3047,8 +3053,12 @@ public class SessionManagerTests : IDisposable
     private async Task<IReadOnlyList<TeamEscalationMessage>> WaitForEscalationCardsAsync(
         string sessionId, int minCount, TimeSpan? timeout = null)
     {
-        List<TeamEscalationMessage> Snapshot() => _sentMessages.OfType<TeamEscalationMessage>()
-            .Where(m => m.SessionId == sessionId && !m.Resolved).ToList();
+        List<TeamEscalationMessage> Snapshot()
+        {
+            lock (_sentMessagesLock)
+                return _sentMessages.OfType<TeamEscalationMessage>()
+                    .Where(m => m.SessionId == sessionId && !m.Resolved).ToList();
+        }
 
         var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(5));
         while (DateTime.UtcNow < deadline)

@@ -33,6 +33,7 @@ export { Toggle } from './Toggle';
 export { PillSwitch } from './PillSwitch';
 export { EmptyState } from './EmptyState';
 export { CanvasBackdrop } from './CanvasBackdrop';
+export { PageCanvas } from './PageCanvas';
 export { Dot } from './Dot';
 export { BackButton } from './BackButton';
 export { WaitingIndicator } from './WaitingIndicator';

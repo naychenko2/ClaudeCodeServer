@@ -1412,6 +1412,105 @@ public sealed partial class DocsIndexService(FileService? files = null)
         return link.Replace(" ", "%20");
     }
 
+    // ---------- удаление ----------
+
+    public enum DocDeleteStatus { Ok, NotFound, Failed }
+
+    // Removed — что реально исчезло с диска (страница и весь подкорпус раздела); BrokenLinks —
+    // сколько ссылок на удалённое осталось у ОСТАВШИХСЯ документов. Починить их нечем —
+    // цели больше нет, — поэтому цифру показываем пользователю, а не прячем
+    public sealed record DocDeleteResult(
+        DocDeleteStatus Status, IReadOnlyList<string>? Removed = null, int BrokenLinks = 0,
+        int RemovedFiles = 0, string? Error = null);
+
+    // Удалить документ или раздел.
+    //
+    // У раздела удаляется ПАРА целиком: страница и её папка со всем содержимым. Половина
+    // пары в wiki — это либо пустой узел, либо осиротевшая страница, поэтому «удалить
+    // только файл» здесь не вариант. Вместе с папкой уходит и то, чего панель не
+    // показывала (картинки, файлы невыбранных типов) — число таких файлов возвращаем
+    // отдельно, чтобы диалог мог предупредить до, а не после.
+    public DocDeleteResult DeleteDoc(string rootPath, string path, DocsScope? rawScope = null)
+    {
+        if (files is null)
+            return new DocDeleteResult(DocDeleteStatus.Failed, Error: "Файловый сервис недоступен");
+
+        var root = Path.GetFullPath(rootPath);
+        var scope = NormalizeScope(rawScope);
+        var corpus = GetCorpus(root, scope);
+        var key = NormalizePath(path);
+        if (key is null || !corpus.ByPath.TryGetValue(key, out var entry))
+            return new DocDeleteResult(DocDeleteStatus.NotFound, Error: $"Документ вне области документации: {path}");
+
+        // Что исчезнет из КОРПУСА: сама страница плюс документы её раздела
+        var removed = new List<string> { entry.Path };
+        var section = entry.SectionFolder;
+        if (section is not null)
+            foreach (var doc in corpus.Docs)
+                if (doc.Path.StartsWith($"{section}/", StringComparison.OrdinalIgnoreCase))
+                    removed.Add(doc.Path);
+
+        // Ссылки на удаляемое из документов, которые остаются: чинить их нечем, но знать
+        // о них надо. Считаем до удаления — после корпус уже другой
+        var gone = new HashSet<string>(removed, StringComparer.OrdinalIgnoreCase);
+        var broken = 0;
+        foreach (var target in removed)
+            if (corpus.Backlinks.TryGetValue(target, out var backs))
+                broken += backs.Count(b => !gone.Contains(b.Path));
+
+        // Сколько файлов внутри папки раздела уйдёт помимо документов корпуса — картинки,
+        // вложения, файлы невыбранных типов. Панель их не показывает, а удаление уносит
+        var extraFiles = 0;
+        if (section is not null)
+        {
+            var dir = Path.Combine(root, section.Replace('/', Path.DirectorySeparatorChar));
+            try
+            {
+                if (Directory.Exists(dir))
+                    extraFiles = Directory.GetFiles(dir, "*", SearchOption.AllDirectories).Length - (removed.Count - 1);
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+
+        try
+        {
+            // Через FileService: SafeJoin и уведомление OnMutated (синк базы знаний)
+            files.Delete(root, entry.Path);
+            if (section is not null) files.Delete(root, section);
+        }
+        // FileNotFoundException — тоже IOException: файл мог исчезнуть между обходом и удалением
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return new DocDeleteResult(DocDeleteStatus.Failed, Error: e.Message);
+        }
+
+        // Строку из .order убираем: имя, которому больше нечего соответствовать, — мусор,
+        // который автор в свой файл не клал
+        RemoveFromOrder(root, Folder(entry.Path), Path.GetFileNameWithoutExtension(entry.Path));
+
+        return new DocDeleteResult(DocDeleteStatus.Ok, removed, broken, Math.Max(extraFiles, 0));
+    }
+
+    // Убрать имя из .order родительской папки. Файла нет — ничего не создаём
+    private static void RemoveFromOrder(string root, string folder, string name)
+    {
+        var dir = folder.Length == 0 ? root : Path.Combine(root, folder.Replace('/', Path.DirectorySeparatorChar));
+        var file = Path.Combine(dir, OrderFileName);
+        if (!File.Exists(file)) return;
+
+        string existing;
+        try { existing = File.ReadAllText(file); }
+        catch (IOException) { return; }
+        catch (UnauthorizedAccessException) { return; }
+
+        var lines = SplitOrderLines(existing);
+        if (lines.RemoveAll(l => string.Equals(l, name, StringComparison.OrdinalIgnoreCase)) == 0) return;
+
+        var eol = existing.Contains("\r\n") ? "\r\n" : "\n";
+        File.WriteAllText(file, lines.Count == 0 ? "" : string.Join(eol, lines) + eol, new UTF8Encoding(false));
+    }
+
     // Папка входит в область: сама выбрана в настройке либо лежит внутри выбранной.
     // Проверяем по НАСТРОЙКЕ, а не по индексу (как гейт .order): в пустой папке области
     // документов ещё нет, а создать в ней первый документ — законное действие

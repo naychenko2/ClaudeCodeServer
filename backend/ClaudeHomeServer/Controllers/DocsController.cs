@@ -245,6 +245,50 @@ public class DocsController(DocsIndexService docs, ProjectManager projects,
         catch (UnauthorizedAccessException e) { return StatusCode(500, new { error = $"Нет доступа: {e.Message}" }); }
     }
 
+    // Удалить документ или раздел. Раздел уходит парой «страница + папка» со всем
+    // содержимым — включая файлы, которых панель не показывала.
+    //
+    // Ссылки на удалённое починить нечем (цели больше нет), поэтому их число просто
+    // возвращается: пользователь должен узнать о них здесь, а не при публикации wiki
+    [HttpPost("delete")]
+    public IActionResult Delete(string projectId, [FromBody] DeleteDocRequest req)
+    {
+        try
+        {
+            var p = GetProject(projectId);
+            var scope = docs.ResolveScope(p);
+            var result = docs.DeleteDoc(p.RootPath, req.Path ?? "", scope);
+            switch (result.Status)
+            {
+                case DocsIndexService.DocDeleteStatus.NotFound: return NotFound(new { error = result.Error });
+                case DocsIndexService.DocDeleteStatus.Failed: return StatusCode(500, new { error = result.Error });
+            }
+
+            var removed = result.Removed ?? [];
+            // «Начало» указывало на удалённый документ — возвращаем авто-выбор: иначе
+            // панель открывалась бы на путь, которого больше нет
+            if (scope.Home is { } home && removed.Contains(home, StringComparer.OrdinalIgnoreCase))
+            {
+                if (docs.ReadScopeFile(p.RootPath).Scope is not null)
+                    docs.WriteScopeFile(p.RootPath, scope with { Home = null });
+                else
+                    projects.SetDocsScope(projectId, scope.Folders, scope.RootFiles, scope.Types, "");
+                scope = docs.ResolveScope(GetProject(projectId));
+            }
+
+            return Ok(new
+            {
+                removed,
+                brokenLinks = result.BrokenLinks,
+                removedFiles = result.RemovedFiles,
+                index = docs.GetIndex(p.RootPath, scope),
+            });
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (IOException e) { return StatusCode(500, new { error = $"Не удалось удалить: {e.Message}" }); }
+        catch (UnauthorizedAccessException e) { return StatusCode(500, new { error = $"Нет доступа: {e.Message}" }); }
+    }
+
     // Вынести текущую область в файл репозитория: с этого момента она версионируется и
     // одинакова у всех, кто открыл репозиторий. Отдельным действием, а не автоматически —
     // продукт не создаёт файлы в чужом рабочем дереве без спроса.
@@ -275,3 +319,7 @@ public record CreateDocRequest(string? Folder, string? Name, string? Kind);
 // NewName — новое НАЗВАНИЕ (не имя файла): правила те же, что при создании. UpdateLinks —
 // чинить ли ссылки в остальных документах; false — оставить как есть и сообщить их число
 public record RenameDocRequest(string? Path, string? NewName, bool UpdateLinks = true);
+
+// Раздел удаляется парой со всем содержимым — отдельного флага «с папкой» нет: половина
+// пары в wiki это либо пустой узел, либо осиротевшая страница
+public record DeleteDocRequest(string? Path);

@@ -19,7 +19,7 @@ export { RailSep } from './RailSep';
 export { PanelRail } from './PanelRail';
 export type { RailItem } from './PanelRail';
 export { PanelDropGuide } from './PanelDropGuide';
-export { Menu, MenuItem } from './Menu';
+export { Menu, MenuItem, MenuSep } from './Menu';
 export { TocRow } from './TocRow';
 export { Modal } from './Modal';
 export { ModalActions, useIsMobileModal } from './ModalActions';

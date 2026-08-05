@@ -711,6 +711,166 @@ public class DocsIndexTests : IDisposable
         error.Should().BeNull();
     }
 
+    // ─── Переименование ─────────────────────────────────────────────────────
+
+    private string Read(params string[] segments) => File.ReadAllText(Path.Combine([_root, .. segments]));
+
+    [Fact]
+    public void Переименование_Документа_ФайлИВходящиеСсылки()
+    {
+        Write("# Vision\n\nсм. [журнал](decisions.md)", "docs", "vision.md");
+        Write("# Журнал", "docs", "decisions.md");
+
+        var result = Creating().RenameDoc(_root, "docs/decisions.md", "Журнал решений", updateLinks: true);
+
+        result.Status.Should().Be(DocsIndexService.DocRenameStatus.Ok);
+        result.Path.Should().Be("docs/Журнал-решений.md");
+        File.Exists(Path.Combine(_root, "docs", "Журнал-решений.md")).Should().BeTrue();
+        // Подпись ссылки — авторский текст, её не трогаем; меняется только цель
+        Read("docs", "vision.md").Should().Contain("[журнал](Журнал-решений.md)");
+        result.UpdatedDocs.Should().Be(1);
+    }
+
+    [Fact]
+    public void Переименование_Раздела_ПараИВсёПоддерево()
+    {
+        Write("# Журнал", "docs", "decisions.md");
+        Write("# Первое", "docs", "decisions", "0001.md");
+        Write("# Второе", "docs", "decisions", "0002.md");
+
+        var result = Creating().RenameDoc(_root, "docs/decisions.md", "Журнал решений", updateLinks: true);
+
+        result.Status.Should().Be(DocsIndexService.DocRenameStatus.Ok);
+        Directory.Exists(Path.Combine(_root, "docs", "Журнал-решений")).Should().BeTrue();
+        Directory.Exists(Path.Combine(_root, "docs", "decisions")).Should().BeFalse();
+        // Карта переезда покрывает всё поддерево: по ней контроллер чинит привязки заметок
+        result.Moved!.Keys.Should().BeEquivalentTo(
+            ["docs/decisions.md", "docs/decisions/0001.md", "docs/decisions/0002.md"]);
+        result.Moved["docs/decisions/0002.md"].Should().Be("docs/Журнал-решений/0002.md");
+    }
+
+    [Fact]
+    public void Переименование_Раздела_СсылкаИзнутриНаСтраницу()
+    {
+        Write("# Журнал", "docs", "decisions.md");
+        Write("# Первое\n\nназад к [журналу](../decisions.md)", "docs", "decisions", "0001.md");
+
+        Creating().RenameDoc(_root, "docs/decisions.md", "Журнал", updateLinks: true);
+
+        // Документ переехал вместе с папкой, но ссылка смотрит на переименованную
+        // страницу уровнем выше — её и пересчитываем
+        Read("docs", "Журнал", "0001.md").Should().Contain("(../Журнал.md)");
+    }
+
+    [Fact]
+    public void Переименование_Раздела_СсылкиВнутриПоддереваНеТрогаем()
+    {
+        Write("# Журнал", "docs", "decisions.md");
+        Write("# Первое\n\nсм. [второе](0002.md)", "docs", "decisions", "0001.md");
+        Write("# Второе", "docs", "decisions", "0002.md");
+
+        Creating().RenameDoc(_root, "docs/decisions.md", "Журнал", updateLinks: true);
+
+        // Оба документа переехали одинаково — относительный путь между ними тот же
+        Read("docs", "Журнал", "0001.md").Should().Contain("[второе](0002.md)");
+    }
+
+    [Fact]
+    public void Переименование_СтрокаOrder_НаПрежнейПозиции()
+    {
+        Write("# Vision", "docs", "vision.md");
+        Write("# Журнал", "docs", "decisions.md");
+        Write("# Бриф", "docs", "brief.md");
+        Write("vision\ndecisions\nbrief\n", "docs", ".order");
+
+        Creating().RenameDoc(_root, "docs/decisions.md", "Журнал", updateLinks: true);
+
+        // Позиция в порядке чтения к имени отношения не имеет
+        ReadOrderFile("docs").Should().Be("vision\nЖурнал\nbrief\n");
+    }
+
+    [Fact]
+    public void Переименование_БезOrder_ФайлНеСоздаётся()
+    {
+        Write("# Журнал", "docs", "decisions.md");
+
+        Creating().RenameDoc(_root, "docs/decisions.md", "Журнал", updateLinks: true);
+
+        File.Exists(Path.Combine(_root, "docs", ".order")).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Переименование_БезПочинкиСсылок_СообщаетЧислоБитых()
+    {
+        Write("# Vision\n\nсм. [журнал](decisions.md)", "docs", "vision.md");
+        Write("# Бриф\n\nтоже [журнал](decisions.md)", "docs", "brief.md");
+        Write("# Журнал", "docs", "decisions.md");
+
+        var result = Creating().RenameDoc(_root, "docs/decisions.md", "Журнал", updateLinks: false);
+
+        result.BrokenLinks.Should().Be(2);
+        result.UpdatedDocs.Should().Be(0);
+        // Чужие файлы не тронуты — молчаливая правка чужого текста хуже битой ссылки
+        Read("docs", "vision.md").Should().Contain("(decisions.md)");
+    }
+
+    [Fact]
+    public void Переименование_ТолькоРегистр_ЭтоНеКоллизия()
+    {
+        Write("# Api", "docs", "api.md");
+
+        var result = Creating().RenameDoc(_root, "docs/api.md", "API", updateLinks: true);
+
+        result.Status.Should().Be(DocsIndexService.DocRenameStatus.Ok);
+        result.Path.Should().Be("docs/API.md");
+        // На регистрозависимой ФС (Linux в CI) файл обязан называться точно так
+        Directory.GetFiles(Path.Combine(_root, "docs"), "*.md")
+            .Select(Path.GetFileName).Should().BeEquivalentTo(["API.md"]);
+    }
+
+    [Fact]
+    public void Переименование_ЗанятоеИмя_ЭтоКонфликт()
+    {
+        Write("# Первый", "docs", "a.md");
+        Write("# Второй", "docs", "b.md");
+
+        var result = Creating().RenameDoc(_root, "docs/a.md", "b", updateLinks: true);
+
+        result.Status.Should().Be(DocsIndexService.DocRenameStatus.Conflict);
+        Read("docs", "b.md").Should().Be("# Второй");
+    }
+
+    [Fact]
+    public void Переименование_ДокументаВнеОбласти_ЭтоОтказ()
+    {
+        Write("# Док", "docs", "a.md");
+        Write("# Чужой", "backend", "NOTES.md");
+
+        Creating().RenameDoc(_root, "backend/NOTES.md", "Заметки", updateLinks: true)
+            .Status.Should().Be(DocsIndexService.DocRenameStatus.NotFound);
+    }
+
+    [Fact]
+    public void Переименование_НепригодноеИмя_ЭтоОтказ()
+    {
+        Write("# Док", "docs", "a.md");
+
+        Creating().RenameDoc(_root, "docs/a.md", "CON", updateLinks: true)
+            .Status.Should().Be(DocsIndexService.DocRenameStatus.BadName);
+        File.Exists(Path.Combine(_root, "docs", "a.md")).Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("docs/a.md", "docs/b.md", "b.md")]
+    [InlineData("docs/a.md", "docs/sub/b.md", "sub/b.md")]
+    [InlineData("docs/sub/a.md", "docs/b.md", "../b.md")]
+    [InlineData("docs/sub/a.md", "docs/other/b.md", "../other/b.md")]
+    [InlineData("README.md", "docs/b.md", "docs/b.md")]
+    public void Ссылка_ОтносительныйПуть_КакПишутРуками(string from, string to, string expected)
+    {
+        DocsIndexService.RelativeLink(from, to).Should().Be(expected);
+    }
+
     // ─── Область из файла .docs ─────────────────────────────────────────────
 
     // Проект с настройкой области в хранилище продукта — она должна уступать файлу

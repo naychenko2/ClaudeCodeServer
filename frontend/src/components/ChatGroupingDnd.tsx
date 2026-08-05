@@ -5,7 +5,7 @@
 //
 // Во «Плоском» режиме не подключается: там вместо дерева группы по датам (chatGroups),
 // и результат перетаскивания было бы не видно.
-import { createContext, useContext, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   DndContext, DragOverlay, MouseSensor, TouchSensor, pointerWithin,
   useDroppable, useSensor, useSensors,
@@ -18,24 +18,11 @@ import { collectDescendants } from '../lib/chatTree';
 import { DRAG_MOUSE_ACTIVATION, DRAG_TOUCH_ACTIVATION } from '../lib/dnd';
 import { api } from '../lib/api';
 import type { Session } from '../types';
+import { ChatDragContext } from './useChatDrag';
+import type { DragState } from './useChatDrag';
 
 // id drop-зоны «вынести в корень» — не пересекается с id чатов (те GUID-подобные)
 export const ROOT_DROP_ID = '__chat-root__';
-
-interface DragState {
-  draggingId: string | null;
-  // Допустимая цель: любой чат, кроме потомков перетаскиваемого. Сам перетаскиваемый
-  // чат допустим — drop на себя означает «вынести из группы».
-  isValidTarget: (id: string) => boolean;
-}
-
-const ChatDragContext = createContext<DragState>({ draggingId: null, isValidTarget: () => false });
-
-// Состояние перетаскивания для строки списка (ChatTreeRow). Вне провайдера —
-// нейтральный дефолт, поэтому строку можно рендерить и без DnD.
-export function useChatDrag() {
-  return useContext(ChatDragContext);
-}
 
 interface Props {
   chats: Session[];

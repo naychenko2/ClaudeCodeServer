@@ -16,8 +16,9 @@ import { SectionLabel } from '../tasks/bits';
 import {
   BINDING_ICONS, BINDING_TYPE_META, BINDING_TYPE_ORDER, MODE_HINT,
   BindingModeBadge, BindingTypeIcon, bindingsCounter,
-  fetchBindingTargets, useBindingLabels,
+  fetchBindingTargets,
 } from './bindingMeta';
+import { useBindingLabels } from './useBindingLabels';
 import { Stepper, Crumb } from './stepperUi';
 import { ToolTargetPicker } from './ToolTargetPicker';
 

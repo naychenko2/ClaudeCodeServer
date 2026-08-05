@@ -26,9 +26,10 @@ import { beginAiBusy, endAiBusy } from '../../lib/ai/busy';
 import { registerCopyDoc, copyMarkdown, copyRenderedHtml } from '../../lib/selectionScope';
 import { ensurePersonasLoaded, personaLabel, usePersonas } from '../../lib/personas';
 import {
-  SourceBadge, usePanelWidth,
+  SourceBadge,
   IconTrash, IconLink, IconSparkle, IconFolder, IconFolderMove,
 } from './shared';
+import { usePanelWidth } from './usePanelWidth';
 
 // Просмотр и правка одной заметки; связи (backlinks/исходящие/упоминания/граф) —
 // в правом сайдбаре на десктопе, снизу на мобильном.

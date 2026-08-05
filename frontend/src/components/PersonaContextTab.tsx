@@ -6,7 +6,8 @@ import { useRecallManifest } from '../lib/recallManifest';
 import type { PersonaBinding, PersonaMemoryEntry, PersonaMemoryType, Task, TeamMemoryEntry } from '../types';
 import { C, FONT, R, SHADOW } from '../lib/design';
 import { PersonaAvatar } from '../features/personas/PersonaAvatar';
-import { BINDING_ICONS, useBindingLabels } from '../features/personas/bindingMeta';
+import { BINDING_ICONS } from '../features/personas/bindingMeta';
+import { useBindingLabels } from '../features/personas/useBindingLabels';
 
 // Вкладка «Контекст персоны» в ArtifactsPanel (①-L2a + ①-L2b): показывает рядом с чатом то,
 // что делает персону «не stateless» — долгую память, привязанные знания и активные задачи,

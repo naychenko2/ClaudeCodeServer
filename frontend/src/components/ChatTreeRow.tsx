@@ -3,7 +3,7 @@ import { ChevronRight } from 'lucide-react';
 import { useDraggable, useDroppable } from '@dnd-kit/core';
 import { C, R, FONT, FS } from '../lib/design';
 import { formatGroupCount, type ChatTreeRowData } from '../lib/chatTree';
-import { useChatDrag } from './ChatGroupingDnd';
+import { useChatDrag } from './useChatDrag';
 
 // === Строка дерева чатов: отступ + connector-линии + chevron вокруг ChatCard ===
 // Линии и контрол рисуются здесь, а НЕ в карточке: у ChatCard overflow:hidden,

@@ -1,12 +1,12 @@
 // Богатый hover-тултип задачи (десктоп): детальная карточка с управлением —
 // смена статуса и отметка подзадач прямо из тултипа, не уходя со списка.
 //
-// Использование: const hover = useTaskHover();
+// Использование: const hover = useTaskHover();   // хук — в ./useTaskHover
 //   <div {...hover.bind(task, projectName)}>…</div>  +  {hover.popover}
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import type { Task, TaskStatus } from '../../types';
+import type { TaskStatus } from '../../types';
 import { C, FONT, R, SHADOW, Z } from '../../lib/design';
 import { MarkdownViewer } from '../../components/MarkdownViewer';
 import {
@@ -14,20 +14,18 @@ import {
 } from '../../lib/tasks';
 import { AssigneeBadge, DueChip, LabelChip, PriorityFlag, SubtaskCheck } from './bits';
 
-const OPEN_DELAY = 400;
-const CLOSE_DELAY = 180;
 const WIDTH = 340;
 const STATUSES: TaskStatus[] = ['todo', 'inProgress', 'done'];
 
-interface Anchor {
+export interface TaskHoverAnchor {
   taskId: string;
   rect: DOMRect;
   projectName?: string;
 }
 
 // Сам тултип: живая задача из стора (обновления подзадач/статуса видны сразу)
-function HoverCard({ anchor, onKeepAlive, onLeave, onClose }: {
-  anchor: Anchor;
+export function HoverCard({ anchor, onKeepAlive, onLeave, onClose }: {
+  anchor: TaskHoverAnchor;
   onKeepAlive: () => void;
   onLeave: () => void;
   onClose: () => void;
@@ -189,49 +187,3 @@ function HoverCard({ anchor, onKeepAlive, onLeave, onClose }: {
   );
 }
 
-// Хук: bind(task, projectName?) → onMouseEnter/onMouseLeave для якоря; popover — рендерить рядом
-export function useTaskHover() {
-  const [anchor, setAnchor] = useState<Anchor | null>(null);
-  const openTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => () => {
-    if (openTimer.current) clearTimeout(openTimer.current);
-    if (closeTimer.current) clearTimeout(closeTimer.current);
-  }, []);
-
-  const cancelClose = () => {
-    if (closeTimer.current) { clearTimeout(closeTimer.current); closeTimer.current = null; }
-  };
-
-  const scheduleClose = () => {
-    cancelClose();
-    closeTimer.current = setTimeout(() => setAnchor(null), CLOSE_DELAY);
-  };
-
-  const bind = (task: Task, projectName?: string) => ({
-    onMouseEnter: (e: React.MouseEvent<HTMLElement>) => {
-      // Только устройства с настоящим hover (не тач)
-      if (!window.matchMedia('(hover: hover)').matches) return;
-      cancelClose();
-      const rect = e.currentTarget.getBoundingClientRect();
-      if (openTimer.current) clearTimeout(openTimer.current);
-      openTimer.current = setTimeout(() => setAnchor({ taskId: task.id, rect, projectName }), OPEN_DELAY);
-    },
-    onMouseLeave: () => {
-      if (openTimer.current) { clearTimeout(openTimer.current); openTimer.current = null; }
-      scheduleClose();
-    },
-  });
-
-  const popover = anchor ? (
-    <HoverCard
-      anchor={anchor}
-      onKeepAlive={cancelClose}
-      onLeave={scheduleClose}
-      onClose={() => setAnchor(null)}
-    />
-  ) : null;
-
-  return { bind, popover };
-}

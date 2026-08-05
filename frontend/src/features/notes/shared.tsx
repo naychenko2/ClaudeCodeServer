@@ -1,45 +1,10 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import {
   Search, Plus, Eye, SquarePen, MessageCircle, Share2, StickyNote, Undo2, ExternalLink,
   Trash2, ArrowLeft, CalendarDays, Folder, FolderOutput, Sparkles, Link2,
 } from 'lucide-react';
 import { C, FONT, R } from '../../lib/design';
 import { projectColor } from '../../lib/tasks';
-
-// Перетаскиваемая ширина панели (пара к ui/Splitter): персист в localStorage, клампы.
-// rightSide — панель справа: тянем влево → ширина растёт (как артефакты в Workspace).
-export function usePanelWidth(storageKey: string, def: number, min: number, max: number, rightSide = false) {
-  const [width, setWidth] = useState(() => {
-    const v = localStorage.getItem(storageKey);
-    return v ? Math.max(min, Math.min(max, Number(v))) : def;
-  });
-  useEffect(() => { localStorage.setItem(storageKey, String(width)); }, [width, storageKey]);
-  const [dragging, setDragging] = useState(false);
-
-  const startDrag = (e: React.PointerEvent) => {
-    e.preventDefault();
-    setDragging(true);
-    const startX = e.clientX;
-    const startW = width;
-    const onMove = (ev: PointerEvent) => {
-      const d = ev.clientX - startX;
-      setWidth(Math.max(min, Math.min(max, rightSide ? startW - d : startW + d)));
-    };
-    const onUp = () => {
-      document.removeEventListener('pointermove', onMove);
-      document.removeEventListener('pointerup', onUp);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-      setDragging(false);
-    };
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-    document.addEventListener('pointermove', onMove);
-    document.addEventListener('pointerup', onUp);
-  };
-
-  return [width, dragging, startDrag] as const;
-}
 
 // Цвет источника заметки: личный vault — accent, проект — детерминированный цвет проекта.
 export function sourceColor(source: string): string {

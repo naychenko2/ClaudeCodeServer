@@ -8,7 +8,7 @@ import {
   sanitizeZones, emptyZones, zoneOf, openPanelIn, togglePanelIn, closePanel,
   swapAcross, moveAcrossAt, moveAcrossToNewColumn, isZoneCollapsed, migrateZones, revealPanel,
   enforceZoneInvariant, homeOf, trackHome, parseHome, closePanelTo, evictForeign, replacePanelWith,
-  isTucked, tuckPanel, untuckPanel, parseTucked,
+  isTucked, tuckPanel, untuckPanel, parseKeyList, sortRail, reorderRail,
   COL_DEFAULT, COL_MIN, COL_MAX,
   type PanelZones,
 } from '../../pages/workspace/panelStackState';
@@ -475,10 +475,10 @@ describe('tuckPanel / untuckPanel — ящик рельсы («…»)', () => {
     expect(back.left.layout).toEqual([['chats']]);
   });
 
-  it('parseTucked отбрасывает мусор, дубли и переводит упразднённые ключи', () => {
-    expect(parseTucked(['tasks', 'personas', 'мусор', 'tasks', 7])).toEqual(['tasks', 'team']);
-    expect(parseTucked(null)).toEqual([]);
-    expect(parseTucked({ tasks: true })).toEqual([]);
+  it('parseKeyList отбрасывает мусор, дубли и переводит упразднённые ключи', () => {
+    expect(parseKeyList(['tasks', 'personas', 'мусор', 'tasks', 7])).toEqual(['tasks', 'team']);
+    expect(parseKeyList(null)).toEqual([]);
+    expect(parseKeyList({ tasks: true })).toEqual([]);
   });
 
   it('переживает сериализацию состояния', () => {
@@ -486,6 +486,70 @@ describe('tuckPanel / untuckPanel — ящик рельсы («…»)', () => {
     const restored = sanitizeZones(JSON.parse(JSON.stringify(saved)));
     expect(isTucked(restored, 'tasks')).toBe(true);
     expect(homeOf(restored, 'tasks')).toBe('right');
+  });
+});
+
+describe('sortRail / reorderRail — порядок кнопок рельсы', () => {
+  // Группа рельсы — набор ключей каталога; здесь берём её укороченный вид,
+  // чтобы тесты не зависели от состава PROJECT_KEYS
+  const GROUP = ['files', 'docs', 'changes', 'tasks'] as const;
+
+  it('без сохранённого порядка группа идёт как есть (каталожная очерёдность)', () => {
+    expect(sortRail([], GROUP)).toEqual(['files', 'docs', 'changes', 'tasks']);
+  });
+
+  it('ключи вне сохранённого порядка уходят в ХВОСТ, сохраняя каталожную очерёдность', () => {
+    // Порядок задавали, когда «Документации» ещё не было: она встаёт последней,
+    // а не туда, где стоит в реестре
+    expect(sortRail(['tasks', 'files', 'changes'], GROUP)).toEqual(['tasks', 'files', 'changes', 'docs']);
+  });
+
+  it('перестановка материализует ВСЮ группу, а не один сдвинутый ключ', () => {
+    const z = reorderRail(emptyZones(), GROUP, 'tasks', 'files');
+    expect(z.railOrder).toEqual(['tasks', 'files', 'docs', 'changes']);
+    expect(sortRail(z.railOrder, GROUP)).toEqual(['tasks', 'files', 'docs', 'changes']);
+  });
+
+  it('before=null отправляет кнопку в конец группы', () => {
+    const z = reorderRail(emptyZones(), GROUP, 'files', null);
+    expect(sortRail(z.railOrder, GROUP)).toEqual(['docs', 'changes', 'tasks', 'files']);
+  });
+
+  it('порядок, дающий ту же очерёдность, состояние не меняет', () => {
+    const base = emptyZones();
+    // «Файлы» и так стоят перед «Документацией» — писать нечего
+    expect(reorderRail(base, GROUP, 'files', 'docs')).toBe(base);
+    // Ключ не из этой группы и дроп на себя — тоже
+    expect(reorderRail(base, GROUP, 'plan', 'files')).toBe(base);
+    expect(reorderRail(base, GROUP, 'files', 'files')).toBe(base);
+  });
+
+  it('перестановка в одной группе не трогает порядок другой', () => {
+    const SESSION = ['plan', 'agents', 'context'] as const;
+    const withSession = reorderRail(emptyZones(), SESSION, 'context', 'plan');
+    const both = reorderRail(withSession, GROUP, 'tasks', 'files');
+    expect(sortRail(both.railOrder, SESSION)).toEqual(['context', 'plan', 'agents']);
+    expect(sortRail(both.railOrder, GROUP)).toEqual(['tasks', 'files', 'docs', 'changes']);
+  });
+
+  it('кнопка, закрытая в другой зоне или спрятанная в ящик, места в группе не теряет', () => {
+    // Место задаётся СОСЕДОМ, а не индексом: «Изменения» лежат в ящике и в столбце
+    // их не видно, но в порядке группы они остаются между «Документацией» и «Задачами»
+    const base = sanitizeZones({ left: { layout: [] }, right: { layout: [] }, tucked: ['changes'] });
+    const z = reorderRail(base, GROUP, 'tasks', 'docs');
+    expect(sortRail(z.railOrder, GROUP)).toEqual(['files', 'tasks', 'docs', 'changes']);
+  });
+
+  it('переживает сериализацию состояния', () => {
+    const saved = reorderRail(zones([['chats']], [['tasks']]), GROUP, 'tasks', 'files');
+    const restored = sanitizeZones(JSON.parse(JSON.stringify(saved)));
+    expect(sortRail(restored.railOrder, GROUP)).toEqual(['tasks', 'files', 'docs', 'changes']);
+  });
+
+  it('порядок и переезд кнопки на чужую рельсу живут независимо', () => {
+    const moved = closePanelTo(reorderRail(zones([['chats']], [['tasks']]), GROUP, 'tasks', 'files'), 'left', 'tasks');
+    expect(homeOf(moved, 'tasks')).toBe('left');
+    expect(sortRail(moved.railOrder, GROUP)).toEqual(['tasks', 'files', 'docs', 'changes']);
   });
 });
 

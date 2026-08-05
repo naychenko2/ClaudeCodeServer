@@ -243,6 +243,15 @@ export interface PanelZones {
   // каждой: в какой рельсе показывать строку, и так решает home — второй список
   // пришлось бы синхронизировать при каждом переезде кнопки между сторонами.
   tucked: PanelKey[];
+  // Порядок кнопок в столбце рельсы, заданный перетаскиванием. Пусто — порядок
+  // каталожный (PANEL_KEYS). Список ОБЩИЙ на обе зоны по тем же основаниям, что и
+  // tucked: сторона кнопки живёт в home, и второй список пришлось бы синхронизировать
+  // с ним при каждом переезде.
+  //
+  // Плоский на все группы рельсы, хотя переставлять можно только ВНУТРИ группы:
+  // sortRail сравнивает лишь ключи переданного набора, поэтому чужие индексы в
+  // сравнение не попадают и разводить список по группам незачем.
+  railOrder: PanelKey[];
 }
 
 export function emptyZone(): ZoneState {
@@ -250,7 +259,7 @@ export function emptyZone(): ZoneState {
 }
 
 export function emptyZones(): PanelZones {
-  return { left: emptyZone(), right: emptyZone(), weights: {}, home: {}, tucked: [] };
+  return { left: emptyZone(), right: emptyZone(), weights: {}, home: {}, tucked: [], railOrder: [] };
 }
 
 // Зона, в которой панель показывает свою иконку, когда закрыта
@@ -335,14 +344,17 @@ export function sanitizeZones(raw: unknown): PanelZones {
     right: readZone(src.right),
     weights: parseWeights(JSON.stringify(src.weights ?? {})),
     home: parseHome((src as { home?: unknown }).home),
-    tucked: parseTucked((src as { tucked?: unknown }).tucked),
+    tucked: parseKeyList((src as { tucked?: unknown }).tucked),
+    railOrder: parseKeyList((src as { railOrder?: unknown }).railOrder),
   });
 }
 
-// Спрятанные в ящик кнопки из сохранённого состояния: чужие ключи отбрасываем,
-// упразднённые имена переводим (как у весов и привязок к зонам), дубли снимаем —
-// список рисуется как есть, и повтор дал бы две одинаковые строки в меню.
-export function parseTucked(raw: unknown): PanelKey[] {
+// Список ключей панелей из сохранённого состояния (спрятанные в ящик, порядок
+// кнопок рельсы): чужие ключи отбрасываем, упразднённые имена переводим (как у
+// весов и привязок к зонам), дубли снимаем — оба списка читаются позиционно, и
+// повтор дал бы либо две одинаковые строки в меню, либо спор двух мест за одну
+// кнопку.
+export function parseKeyList(raw: unknown): PanelKey[] {
   if (!Array.isArray(raw)) return [];
   const out: PanelKey[] = [];
   for (const v of raw) {
@@ -421,6 +433,47 @@ export function untuckPanel(zones: PanelZones, zone: Zone, k: PanelKey): PanelZo
     tucked: base.tucked.filter(x => x !== k),
     home: { ...base.home, [k]: zone },
   };
+}
+
+// Порядок кнопок ОДНОЙ группы рельсы: сначала те, что человек расставил сам (по
+// индексам railOrder), затем незнакомые — хвостом, в исходном каталожном порядке.
+//
+// Незнакомые появляются у группы, которую ещё ни разу не переставляли, и у панели,
+// добавленной в продукт после того, как порядок был задан: в сохранённом списке её
+// нет, и место ей остаётся только в конце. Каталожный порядок при этом сохраняется —
+// новые панели встают в реестровой очерёдности между собой, а не как попало.
+export function sortRail(order: readonly PanelKey[], keys: readonly PanelKey[]): PanelKey[] {
+  if (order.length === 0) return [...keys];
+  const known: PanelKey[] = [];
+  const rest: PanelKey[] = [];
+  for (const k of keys) (order.includes(k) ? known : rest).push(k);
+  known.sort((a, b) => order.indexOf(a) - order.indexOf(b));
+  return [...known, ...rest];
+}
+
+// Перестановка кнопки внутри своей группы: moved встаёт ПЕРЕД before (null — в
+// конец группы). Место задаётся соседом, а не индексом, потому что рельса считает
+// его по ВИДИМЫМ кнопкам, а порядок хранится для всей группы целиком — вместе с
+// теми, что сейчас закрыты в соседней зоне или лежат в ящике. По индексу такие
+// кнопки молча съезжали бы на чужие места.
+//
+// Группа материализуется в railOrder ЦЕЛИКОМ при первой же перестановке: храни мы
+// только сдвинутый ключ, он всплывал бы поверх нетронутых соседей (у тех индекса
+// нет вовсе, и они уходят в хвост).
+export function reorderRail(
+  zones: PanelZones,
+  keys: readonly PanelKey[],
+  moved: PanelKey,
+  before: PanelKey | null,
+): PanelZones {
+  if (!keys.includes(moved) || moved === before) return zones;
+  const cur = sortRail(zones.railOrder, keys);
+  const next = cur.filter(k => k !== moved);
+  const at = before ? next.indexOf(before) : -1;
+  next.splice(at >= 0 ? at : next.length, 0, moved);
+  // Порядок не изменился — не будим подписчиков и не пишем localStorage
+  if (next.every((k, i) => k === cur[i])) return zones;
+  return { ...zones, railOrder: [...zones.railOrder.filter(k => !keys.includes(k)), ...next] };
 }
 
 // Открыть панель В ЗОНЕ. Если она открыта в другой — это перенос: из прежней
@@ -592,8 +645,10 @@ export function migrateZones(read: (key: string) => string | null, ns: string, l
     // Привязки к зонам старое состояние не знало — их проставит trackHome по
     // фактическому расположению панелей при первой же записи
     home: {},
-    // Ящик рельсы появился позже раздельных ключей — переносить нечего
+    // Ящик рельсы и свой порядок кнопок появились позже раздельных ключей —
+    // переносить нечего
     tucked: [],
+    railOrder: [],
   });
 }
 
@@ -646,6 +701,10 @@ export interface PanelZonesApi {
   // возвращается туда, куда её бросили.
   tuck: (zone: Zone, k: PanelKey) => void;
   untuck: (zone: Zone, k: PanelKey) => void;
+  // Перестановка кнопки в столбце рельсы: moved встаёт перед before (null — в конец).
+  // keys — ПОЛНЫЙ набор её группы (перетаскивать можно только внутри своей), см.
+  // reorderRail.
+  reorder: (keys: readonly PanelKey[], moved: PanelKey, before: PanelKey | null) => void;
   // Дроп панели на панель (в том числе через границу зон)
   swapWith: (a: PanelKey, b: PanelKey) => void;
   // Дроп панели из рельсы на открытую панель: гость встаёт в её слот, хозяин
@@ -760,6 +819,12 @@ function createPanelZones(ns: string, opts?: {
 
     const untuck = useCallback((zone: Zone, k: PanelKey) => { commit(untuckPanel(_zones, zone, k)); }, []);
 
+    const reorder = useCallback((keys: readonly PanelKey[], moved: PanelKey, before: PanelKey | null) => {
+      const next = reorderRail(_zones, keys, moved, before);
+      // Порядок не изменился — операция вернула то же состояние, писать нечего
+      if (next !== _zones) commit(next);
+    }, []);
+
     const evict = useCallback((zone: Zone, allowed: readonly PanelKey[]) => {
       // null — выселять нечего: молчим, чтобы не будить подписчиков на каждый рендер
       const next = evictForeign(_zones, zone, allowed);
@@ -846,7 +911,7 @@ function createPanelZones(ns: string, opts?: {
       return wasOpen;
     }, []);
 
-    return { zones, toggle, close, closeTo, tuck, untuck, evict, swapWith, replaceWith, moveAt, moveToNewColumn, setMode, setWidth, toggleCollapsed, setWeights, setColFlex, reveal };
+    return { zones, toggle, close, closeTo, tuck, untuck, reorder, evict, swapWith, replaceWith, moveAt, moveToNewColumn, setMode, setWidth, toggleCollapsed, setWeights, setColFlex, reveal };
   }
 
   return { use: usePanelZones };

@@ -30,9 +30,13 @@ if (typeof document !== 'undefined' && !document.getElementById('cc-list-flash-s
  * div их теряет. leading/trailing — место под шеврон и счётчик скрытых строк.
  */
 export function ListDateDivider({
-  title, align = 'center', dense = false, flash = false, onClick, leading, trailing, titleAttr,
+  title, subtitle, align = 'center', dense = false, flash = false, onClick, leading, trailing, titleAttr,
 }: {
   title: string;
+  // Приписка сразу после подписи, приглушённо: у групп документации это родительский
+  // раздел. Название группы при этом остаётся коротким — путь целиком в него не влезает
+  // и читается хуже, чем «где я» одним словом
+  subtitle?: string;
   align?: 'center' | 'left';
   dense?: boolean;
   // Кратко подсветить и мигнуть — «вот сюда прокрутили»
@@ -56,6 +60,14 @@ export function ListDateDivider({
       }}>
         {title}
       </span>
+      {subtitle && (
+        <span style={{
+          fontSize: 10, fontWeight: 400, whiteSpace: 'nowrap',
+          color: C.textMuted, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis',
+        }}>
+          {subtitle}
+        </span>
+      )}
       <div style={line} />
       {trailing}
     </>

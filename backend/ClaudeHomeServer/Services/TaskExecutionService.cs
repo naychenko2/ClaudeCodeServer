@@ -42,6 +42,10 @@ public class TaskExecutionService
     // Среда исполнения владельца: путь справочника в постановке должен быть адресуем
     // ИЗ неё, а не с хоста. null — считаем среду локальной (перевод тождественный).
     private readonly Execution.ILauncherFactory? _launchers;
+    // Стор настроек специальностей: маршрут модели по специальности персоны (ADR
+    // model-resolution-and-fallback, шаг 3 цепочки резолва). null — настройка не
+    // подключена, шаг специальности в цепочке молча пропускается.
+    private readonly SpecialtySettingsStore? _specialtySettings;
     // Волна 6 (живая приёмка волны 5): гард «не более одной живой сессии на задачу» ниже
     // читает task.LinkedSessionId ДО того, как CreateAsync/MarkClaudeStarted успеют его
     // выставить — секунды на подъём CLI-процесса. Второй конкурентный вызов ExecuteAsync той
@@ -60,12 +64,14 @@ public class TaskExecutionService
         NotificationService notif,
         ILogger<TaskExecutionService> log, IConfiguration config,
         Llm.UserModelTierResolver? tiers = null, Llm.LlmProviderRegistry? providers = null,
-        PersonaAgentFileSync? agentFiles = null, Execution.ILauncherFactory? launchers = null)
+        PersonaAgentFileSync? agentFiles = null, Execution.ILauncherFactory? launchers = null,
+        SpecialtySettingsStore? specialtySettings = null)
     {
         _tiers = tiers;
         _providers = providers;
         _agentFiles = agentFiles;
         _launchers = launchers;
+        _specialtySettings = specialtySettings;
         _tasks = tasks;
         _sessions = sessions;
         _personas = personas;
@@ -149,7 +155,12 @@ public class TaskExecutionService
         }
 
         var name = "Задача: " + (task.Title.Length > 60 ? task.Title[..60] + "…" : task.Title);
-        var model = ResolveExecutorModel(task, persona);
+        // Шаг 3 цепочки ADR: маршрут по специальности персоны. Резолвим здесь (а не внутри
+        // ResolveExecutorModel), чтобы метод остался чистой функцией и его можно было гонять
+        // в тестах без поднятия стора. null у персоны, None-специальность или пустой пресет —
+        // specialtyRoute остаётся null, и цепочка в ResolveExecutorModel проходит мимо.
+        var specialtyRoute = ResolveSpecialtyRoute(task.OwnerId!, persona);
+        var model = ResolveExecutorModel(task, persona, specialtyRoute);
         // taskExecution: true — форсирует tasks-MCP даже у персоны с ограничением Persona.Tools
         // (без «tasks»): исполнитель обязан управлять задачей через mcp__tasks__*.
         var session = task.ProjectId is not null
@@ -196,17 +207,29 @@ public class TaskExecutionService
 
     /// <summary>
     /// Модель чата-исполнителя: уровень задачи (её ставит постановщик под конкретную работу)
-    /// сильнее конкретной модели персоны, та — сильнее уровня персоны. Уровень отдаём маркером
-    /// «tier:*»: в модель его развернёт ModelAssignmentResolver (единая точка склейки слотов).
-    /// null — модель не задана: сессия возьмёт её по назначению места (tasks-executor).
+    /// сильнее конкретной модели персоны, та — сильнее уровня персоны, тот — сильнее
+    /// специальности (ADR model-resolution-and-fallback, раздел 1). Уровень и маршрут
+    /// специальности отдаём «как есть» — в модель их развернёт ModelAssignmentResolver
+    /// (единая точка склейки слотов). null — ни один шаг не сработал: сессия возьмёт
+    /// модель по назначению места (tasks-executor).
     /// </summary>
-    internal static string? ResolveExecutorModel(TaskItem task, Persona? persona)
+    internal static string? ResolveExecutorModel(TaskItem task, Persona? persona, string? specialtyRoute = null)
     {
         if (task.ModelTier is { } taskTier) return Llm.LocalActionOverridesStore.TierRoute(taskTier);
         if (!string.IsNullOrWhiteSpace(persona?.Model)) return persona.Model;
-        return persona?.ModelTier is { } personaTier
-            ? Llm.LocalActionOverridesStore.TierRoute(personaTier)
-            : null;
+        if (persona?.ModelTier is { } personaTier) return Llm.LocalActionOverridesStore.TierRoute(personaTier);
+        if (!string.IsNullOrWhiteSpace(specialtyRoute)) return specialtyRoute;
+        return null;
+    }
+
+    // Маршрут специальности персоны из стора. null — либо специальность не задана (None),
+    // либо стор не подключён, либо ни один пресет не сработал; во всех случаях цепочка
+    // резолва просто перескакивает шаг 3 и идёт на место каталога (как до этой правки).
+    private string? ResolveSpecialtyRoute(string ownerId, Persona? persona)
+    {
+        if (persona is null || persona.Specialty == PersonaSpecialty.None) return null;
+        if (_specialtySettings is null) return null;
+        return _specialtySettings.ResolveRoute(ownerId, persona.Specialty);
     }
 
     // Алиасы тиров владельца для таблицы уровней в постановке: слот → модель → её алиас

@@ -12,20 +12,48 @@ namespace ClaudeHomeServer.Services.Llm;
 public sealed class ModelAssignmentResolver(
     AppSettingsService appSettings,
     LocalActionOverridesStore? store = null,
-    UserModelTierResolver? userTiers = null)
+    UserModelTierResolver? userTiers = null,
+    SpecialtySettingsStore? specialty = null)
 {
     /// <summary>
     /// Модель персоны как «явная» для места: своя модель сильнее её уровня, уровень —
-    /// сильнее назначения места (тот же порядок, что у исполнителя задач). Уровень
-    /// разворачиваем сразу в модель: маркер «tier:*» наружу не отдаём, иначе он осел бы
-    /// в Session.Model. null — ни модели, ни уровня (или слот пуст): решает место.
+    /// сильнее специальности, специальность — сильнее назначения места (ADR
+    /// model-resolution-and-fallback, раздел 1). Уровень и «tier:*» из специальности
+    /// разворачиваем сразу в модель: маркер наружу не отдаём, иначе он осел бы
+    /// в Session.Model. null — ни один шаг не сработал: решает место.
     /// </summary>
     public string? PersonaModel(Models.Persona? persona, string? ownerId = null)
     {
         if (!string.IsNullOrWhiteSpace(persona?.Model)) return persona.Model;
-        if (persona?.ModelTier is not { } tier) return null;
-        var model = userTiers?.ModelFor(tier, ownerId) ?? appSettings.TierModel(tier);
-        return string.IsNullOrWhiteSpace(model) ? null : model;
+        if (persona?.ModelTier is { } tier)
+        {
+            var model = userTiers?.ModelFor(tier, ownerId) ?? appSettings.TierModel(tier);
+            if (!string.IsNullOrWhiteSpace(model)) return model;
+        }
+        // Шаг 3 ADR: специальность персоны. Маршрут стора может быть либо конкретной
+        // моделью, либо «tier:*» — разворачиваем через userTiers (единственная точка
+        // склейки слотов, дубль логики личного/глобального слотов тут не заводим).
+        // ownerId может быть null: ResolveRoute при этом всё равно работает (берёт только
+        // глобальные пресеты — личные защищены по per-owner ключу стора).
+        if (persona is not null && persona.Specialty != Models.PersonaSpecialty.None
+            && specialty is not null)
+        {
+            var route = specialty.ResolveRoute(ownerId ?? "", persona.Specialty);
+            if (!string.IsNullOrWhiteSpace(route))
+            {
+                if (LocalActionOverridesStore.ParseTierRoute(route) is { } routeTier)
+                {
+                    var m = userTiers?.ModelFor(routeTier, ownerId) ?? appSettings.TierModel(routeTier);
+                    if (!string.IsNullOrWhiteSpace(m)) return m;
+                    // Слот по тиру пуст — не выдаём маркер наружу, идём дальше
+                }
+                else
+                {
+                    return route;
+                }
+            }
+        }
+        return null;
     }
 
     public string? Resolve(string usageKey, string? explicitModel = null, string? ownerId = null)

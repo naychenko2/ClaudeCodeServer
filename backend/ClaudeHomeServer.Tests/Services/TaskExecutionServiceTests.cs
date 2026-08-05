@@ -69,6 +69,108 @@ public class TaskExecutionServiceTests
             .Should().BeNull();
     }
 
+    // ─── Шаг 3 ADR: специальность персоны в резолве исполнителя задач ─────
+    // specialtyRoute — это уже резолвленный через SpecialtySettingsStore маршрут
+    // (вызывающий код в ExecuteClaimedAsync делает ResolveRoute сам и передаёт
+    // результат сюда, чтобы метод остался чистой функцией).
+
+    [Fact]
+    public void ResolveExecutorModel_СпециальностьСМаршрутом_ОтдаётМаршрут()
+    {
+        // У персоны задана специальность BackendExecutor, маршрут специальности
+        // (через пресет) ведёт в конкретную модель — она и должна победить
+        var task = new TaskItem { Title = "t" };
+        var persona = new Persona { Specialty = PersonaSpecialty.BackendExecutor };
+
+        TaskExecutionService.ResolveExecutorModel(task, persona, specialtyRoute: "glm-5.2")
+            .Should().Be("glm-5.2");
+    }
+
+    [Fact]
+    public void ResolveExecutorModel_СпециальностьСTier_ОтдаётМаркер()
+    {
+        // Маршрут специальности — «tier:strong»: в модель его развернёт
+        // ModelAssignmentResolver (единая точка склейки слотов), здесь отдаём
+        // маркер как есть
+        var task = new TaskItem { Title = "t" };
+        var persona = new Persona { Specialty = PersonaSpecialty.BackendExecutor };
+
+        TaskExecutionService.ResolveExecutorModel(task, persona, specialtyRoute: "tier:strong")
+            .Should().Be("tier:strong");
+    }
+
+    [Fact]
+    public void ResolveExecutorModel_УровеньЗадачи_СильнееСпециальности()
+    {
+        // Постановщик явно задал уровень задачи — он бьёт и модель персоны, и специальность
+        var task = new TaskItem { Title = "t", ModelTier = ModelTier.Weak };
+        var persona = new Persona
+        {
+            Specialty = PersonaSpecialty.BackendExecutor,
+            Model = "glm-5.2",
+        };
+
+        TaskExecutionService.ResolveExecutorModel(task, persona, specialtyRoute: "opus")
+            .Should().Be("tier:weak");
+    }
+
+    [Fact]
+    public void ResolveExecutorModel_МодельПерсоны_СильнееСпециальности()
+    {
+        // Явная модель персоны — шаг 1 ADR, сильнее специальности (шаг 3)
+        var task = new TaskItem { Title = "t" };
+        var persona = new Persona
+        {
+            Model = "glm-5.2",
+            Specialty = PersonaSpecialty.BackendExecutor,
+        };
+
+        TaskExecutionService.ResolveExecutorModel(task, persona, specialtyRoute: "opus")
+            .Should().Be("glm-5.2");
+    }
+
+    [Fact]
+    public void ResolveExecutorModel_УровеньПерсоны_СильнееСпециальности()
+    {
+        // Уровень персоны (шаг 2) — сильнее специальности (шаг 3)
+        var task = new TaskItem { Title = "t" };
+        var persona = new Persona
+        {
+            ModelTier = ModelTier.Medium,
+            Specialty = PersonaSpecialty.BackendExecutor,
+        };
+
+        TaskExecutionService.ResolveExecutorModel(task, persona, specialtyRoute: "opus")
+            .Should().Be("tier:medium");
+    }
+
+    [Fact]
+    public void ResolveExecutorModel_СпециальностьБезМаршрута_ЦепочкаИдётДальше()
+    {
+        // Преcет специальности не задан (ResolveRoute вернул null) — шаг 3 молча
+        // пропускается, цепочка возвращает null (как до появления шага специальности)
+        var task = new TaskItem { Title = "t" };
+        var persona = new Persona { Specialty = PersonaSpecialty.BackendExecutor };
+
+        TaskExecutionService.ResolveExecutorModel(task, persona, specialtyRoute: null)
+            .Should().BeNull();
+        // Пустая строка тоже считается «не задан маршрут»
+        TaskExecutionService.ResolveExecutorModel(task, persona, specialtyRoute: "")
+            .Should().BeNull();
+    }
+
+    [Fact]
+    public void ResolveExecutorModel_СпециальностьNone_ЦепочкаИдётДальше()
+    {
+        // У персоны Specialty == None — вызывающий код ResolveSpecialtyRoute должен
+        // вернуть null, и метод не должен его подменять; защищаемся от случайной передачи
+        var task = new TaskItem { Title = "t" };
+        var persona = new Persona { Specialty = PersonaSpecialty.None };
+
+        TaskExecutionService.ResolveExecutorModel(task, persona, specialtyRoute: null)
+            .Should().BeNull();
+    }
+
     // ─── Отслеживание сессии ─────────────────────────────────────────────────
 
     [Fact]

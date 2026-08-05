@@ -784,6 +784,192 @@ public class LocalActionRoutingTests
             resolver.PersonaModel(new Persona(), user.Id), user.Id));
     }
 
+    // --- Шаг 3 ADR: специальность персоны (между уровнем персоны и местом каталога) ---
+
+    private static SpecialtySettingsStore Specialty(IConfiguration config) =>
+        new(config, NullLogger<SpecialtySettingsStore>.Instance);
+
+    private static SpecialtySettingsLayer SpecialtyLayer(
+        params (PersonaSpecialty Specialty, string Route)[] rules)
+    {
+        // Каждое правило кладём в один именованный пресет — порядок правил внутри пресета
+        // не важен для теста, важна обходимость через ResolveRoute
+        var preset = new ModelRoutePreset
+        {
+            Name = "TestPreset",
+            Rules = rules.Select(r => new ModelRouteRule
+            {
+                Specialty = r.Specialty == PersonaSpecialty.None
+                    ? SpecialtyCatalog.AnySpecialtyKey
+                    : SpecialtyCatalog.KeyOf(r.Specialty),
+                Route = r.Route,
+            }).ToList(),
+        };
+        return new SpecialtySettingsLayer { Presets = [preset] };
+    }
+
+    [Fact]
+    public void Resolver_СпециальностьСМаршрутом_ВозвращаетКонкретнуюМодель()
+    {
+        // Маршрут специальности указывает на конкретную модель — она и отдаётся
+        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });
+        var appSettings = new AppSettingsService(config);
+        appSettings.Save(new AppSettings { ModelTierStrong = "opus" });
+        var users = new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
+        var user = users.Add("u1", "password123", "user");
+        var specialty = Specialty(config);
+        specialty.SetGlobal(SpecialtyLayer((PersonaSpecialty.BackendExecutor, "glm-5.2")));
+        var resolver = new ModelAssignmentResolver(appSettings, Store(config),
+            new UserModelTierResolver(users, appSettings), specialty);
+
+        Assert.Equal("glm-5.2", resolver.PersonaModel(
+            new Persona { Specialty = PersonaSpecialty.BackendExecutor }, user.Id));
+    }
+
+    [Fact]
+    public void Resolver_СпециальностьСТиром_РазворачиваетсяВСлот()
+    {
+        // Маршрут специальности — «tier:strong». Резолвер ОБЯЗАН развернуть его в модель
+        // через userTiers.ModelFor, иначе маркер ушёл бы наружу и осел в Session.Model.
+        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });
+        var appSettings = new AppSettingsService(config);
+        appSettings.Save(new AppSettings { ModelTierStrong = "global-opus" });
+        var users = new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
+        var user = users.Add("u1", "password123", "user");
+        users.SetModelTiers(user.Id, "user-sonnet", null, null);
+        var specialty = Specialty(config);
+        specialty.SetGlobal(SpecialtyLayer((PersonaSpecialty.BackendExecutor, "tier:strong")));
+        var resolver = new ModelAssignmentResolver(appSettings, Store(config),
+            new UserModelTierResolver(users, appSettings), specialty);
+
+        // per-user слот владельца
+        Assert.Equal("user-sonnet", resolver.PersonaModel(
+            new Persona { Specialty = PersonaSpecialty.BackendExecutor }, user.Id));
+        // Без ownerId — глобальный слот инстанса
+        Assert.Equal("global-opus", resolver.PersonaModel(
+            new Persona { Specialty = PersonaSpecialty.BackendExecutor }, ownerId: null));
+    }
+
+    [Fact]
+    public void Resolver_МодельПерсоны_СильнееСпециальности()
+    {
+        // ADR шаг 1 (явная модель сущности) сильнее шага 3 (специальность)
+        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });
+        var appSettings = new AppSettingsService(config);
+        appSettings.Save(new AppSettings { ModelTierStrong = "opus" });
+        var specialty = Specialty(config);
+        specialty.SetGlobal(SpecialtyLayer((PersonaSpecialty.BackendExecutor, "glm-5.2")));
+        var resolver = new ModelAssignmentResolver(appSettings, Store(config),
+            new UserModelTierResolver(new UserStore(config, new FakeHostEnvironment(),
+                NullLogger<UserStore>.Instance), appSettings), specialty);
+
+        Assert.Equal("haiku", resolver.PersonaModel(
+            new Persona { Model = "haiku", Specialty = PersonaSpecialty.BackendExecutor },
+            ownerId: "u1"));
+    }
+
+    [Fact]
+    public void Resolver_УровеньПерсоны_СильнееСпециальности()
+    {
+        // ADR шаг 2 (уровень сущности) сильнее шага 3 (специальность)
+        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });
+        var appSettings = new AppSettingsService(config);
+        appSettings.Save(new AppSettings { ModelTierWeak = "haiku" });
+        var specialty = Specialty(config);
+        specialty.SetGlobal(SpecialtyLayer((PersonaSpecialty.BackendExecutor, "opus")));
+        var resolver = new ModelAssignmentResolver(appSettings, Store(config),
+            new UserModelTierResolver(new UserStore(config, new FakeHostEnvironment(),
+                NullLogger<UserStore>.Instance), appSettings), specialty);
+
+        Assert.Equal("haiku", resolver.PersonaModel(
+            new Persona { ModelTier = ModelTier.Weak, Specialty = PersonaSpecialty.BackendExecutor },
+            ownerId: "u1"));
+    }
+
+    [Fact]
+    public void Resolver_ЛичнаяНастройкаСпециальности_СильнееГлобальной()
+    {
+        // Per-owner пресет перебивает глобальный (та же логика слоёв, что у слотов)
+        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });
+        var appSettings = new AppSettingsService(config);
+        appSettings.Save(new AppSettings { ModelTierStrong = "opus" });
+        var users = new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
+        var u1 = users.Add("u1", "password123", "user").Id;
+        var u2 = users.Add("u2", "password123", "user").Id;
+        var specialty = Specialty(config);
+        specialty.SetGlobal(SpecialtyLayer((PersonaSpecialty.BackendExecutor, "global-model")));
+        specialty.SetOwner(u1, SpecialtyLayer((PersonaSpecialty.BackendExecutor, "owner-model")));
+        var resolver = new ModelAssignmentResolver(appSettings, Store(config),
+            new UserModelTierResolver(users, appSettings), specialty);
+
+        // u1 — личный пресет
+        Assert.Equal("owner-model", resolver.PersonaModel(
+            new Persona { Specialty = PersonaSpecialty.BackendExecutor }, u1));
+        // u2 — глобальный
+        Assert.Equal("global-model", resolver.PersonaModel(
+            new Persona { Specialty = PersonaSpecialty.BackendExecutor }, u2));
+    }
+
+    [Fact]
+    public void Resolver_ЧужаяЛичнаяНастройка_НеВидна()
+    {
+        // Личный пресет u1 не виден u2 (per-owner изоляция — данные владельца только ему)
+        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });
+        var appSettings = new AppSettingsService(config);
+        appSettings.Save(new AppSettings { ModelTierStrong = "opus" });
+        var users = new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
+        var u1 = users.Add("u1", "password123", "user").Id;
+        var u2 = users.Add("u2", "password123", "user").Id;
+        var specialty = Specialty(config);
+        // Глобального пресета нет — только личный u1. u2 не должен ничего увидеть
+        specialty.SetOwner(u1, SpecialtyLayer((PersonaSpecialty.BackendExecutor, "secret-model")));
+        var resolver = new ModelAssignmentResolver(appSettings, Store(config),
+            new UserModelTierResolver(users, appSettings), specialty);
+
+        Assert.Equal("secret-model", resolver.PersonaModel(
+            new Persona { Specialty = PersonaSpecialty.BackendExecutor }, u1));
+        // u2 — ни пресета, ни дефолта: null (место решает само)
+        Assert.Null(resolver.PersonaModel(
+            new Persona { Specialty = PersonaSpecialty.BackendExecutor }, u2));
+    }
+
+    [Fact]
+    public void Resolver_СпециальностьБезНастройки_ИдётДальше()
+    {
+        // Ни глобального, ни личного пресета по специальности — шаг 3 молча
+        // пропускается, цепочка возвращает null (место решает само)
+        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });
+        var appSettings = new AppSettingsService(config);
+        appSettings.Save(new AppSettings { ModelTierStrong = "opus" });
+        var specialty = Specialty(config);
+        var resolver = new ModelAssignmentResolver(appSettings, Store(config),
+            new UserModelTierResolver(new UserStore(config, new FakeHostEnvironment(),
+                NullLogger<UserStore>.Instance), appSettings), specialty);
+
+        Assert.Null(resolver.PersonaModel(
+            new Persona { Specialty = PersonaSpecialty.BackendExecutor }, "u1"));
+    }
+
+    [Fact]
+    public void Resolver_СпециальностьNone_НеЗадействована()
+    {
+        // Specialty == None — вызывающий код ResolveSpecialtyRoute не опрашивает стор;
+        // и тут мы защищаемся: ни одна ветка не сработает
+        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });
+        var appSettings = new AppSettingsService(config);
+        appSettings.Save(new AppSettings { ModelTierStrong = "opus" });
+        var specialty = Specialty(config);
+        specialty.SetGlobal(SpecialtyLayer((PersonaSpecialty.BackendExecutor, "glm-5.2")));
+        var resolver = new ModelAssignmentResolver(appSettings, Store(config),
+            new UserModelTierResolver(new UserStore(config, new FakeHostEnvironment(),
+                NullLogger<UserStore>.Instance), appSettings), specialty);
+
+        // Стор задан с правилом под BackendExecutor, но у персоны Specialty == None —
+        // правило не должно сработать. null — ни модель, ни уровень не заданы.
+        Assert.Null(resolver.PersonaModel(
+            new Persona { Specialty = PersonaSpecialty.None }, "u1"));
+    }
+
     [Fact]
     public void Resolver_БезНазначения_СлотКаталога()
     {

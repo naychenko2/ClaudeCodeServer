@@ -68,6 +68,12 @@ export function RailFlyout({ side, label, open, action, railWidth, children }: {
   // бы прямо под ним, на полпути к кнопке
   const shown = open || onFlyout || lingering;
 
+  // Кнопка-действие стоит на стороне, обращённой К ЦЕНТРУ окна: плашка правой
+  // рельсы растёт влево, и действие в её хвосте оказалось бы зажатым между текстом
+  // и кромкой капсулы — то есть у самого края экрана, дальше всего от того места,
+  // куда идёт курсор. У левой рельсы центр справа, и хвост как раз туда и смотрит.
+  const actionFirst = side === 'right';
+
   useLayoutEffect(() => {
     if (!shown) return;
     const el = hostRef.current;
@@ -88,7 +94,8 @@ export function RailFlyout({ side, label, open, action, railWidth, children }: {
             // От внешней кромки рельсы: язычок выезжает ИЗ-ПОД панели
             ...(side === 'left' ? { left: railWidth } : { right: railWidth }),
             height: FLYOUT_H, display: 'flex', alignItems: 'center',
-            padding: action ? '0 3px 0 10px' : '0 10px',
+            // Поле у кнопки уже текстового: она сама держит свой бокс
+            padding: action ? (actionFirst ? '0 10px 0 3px' : '0 3px 0 10px') : '0 10px',
             maxWidth: 280, boxSizing: 'border-box',
             background: C.bgWhite,
             border: `1px solid ${C.border}`,
@@ -104,12 +111,20 @@ export function RailFlyout({ side, label, open, action, railWidth, children }: {
             whiteSpace: 'nowrap', gap: 4,
           }}
         >
-          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</span>
-          {action && (
-            <IconButton size="xs" title={action.title} onClick={action.onClick}>
-              <action.Icon size={14} strokeWidth={ICON_STROKE} />
-            </IconButton>
-          )}
+          {(() => {
+            const btn = action && (
+              <IconButton size="xs" title={action.title} onClick={action.onClick}>
+                <action.Icon size={14} strokeWidth={ICON_STROKE} />
+              </IconButton>
+            );
+            return (
+              <>
+                {actionFirst && btn}
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</span>
+                {!actionFirst && btn}
+              </>
+            );
+          })()}
         </div>,
         document.body,
       )}

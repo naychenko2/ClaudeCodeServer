@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { CSSProperties, HTMLAttributes, MouseEvent, ReactNode } from 'react';
 import { C, R, FONT, SHADOW, Z } from '../../lib/design';
+import { IconButton } from './IconButton';
 
 // Единое выпадающее меню: карточка + подложка для закрытия по клику вне.
 // Два режима позиционирования:
@@ -93,7 +94,7 @@ export function MenuSep() {
 }
 
 // Единый пункт выпадающего меню.
-export function MenuItem({ icon, label, onClick, danger, disabled, wrapper }: {
+export function MenuItem({ icon, label, onClick, danger, disabled, wrapper, action }: {
   icon?: ReactNode;
   label: ReactNode;
   onClick?: (e: MouseEvent) => void;
@@ -103,13 +104,22 @@ export function MenuItem({ icon, label, onClick, danger, disabled, wrapper }: {
   // у строк, которые можно вытащить из меню. Как у RailIconButton — дырявить API
   // самой кнопки ради этого не стоит.
   wrapper?: HTMLAttributes<HTMLElement>;
+  // Второе действие строки — кнопка-иконка справа (у своего пункта меню есть и
+  // основной клик, и побочная команда). Отдельной кнопкой, а не иконкой ВНУТРИ
+  // пункта: <button> в <button> вложить нельзя, поэтому строка становится
+  // flex-обёрткой, а подсветка наведения переезжает на неё.
+  action?: { icon: ReactNode; title: string; onClick: () => void };
 }) {
   const [hover, setHover] = useState(false);
   const color = disabled ? C.textMuted : (danger ? C.danger : C.textPrimary);
+  const hovered = hover && !disabled;
   const style: CSSProperties = {
     display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left',
-    background: hover && !disabled ? C.bgSelected : 'none', border: 'none', borderRadius: R.md,
+    // При действии-спутнике фон рисует обёртка: иначе подсветка обрывалась бы
+    // ровно перед кнопкой справа
+    background: hovered && !action ? C.bgSelected : 'none', border: 'none', borderRadius: R.md,
     padding: '9px 10px', cursor: disabled ? 'default' : 'pointer', color, fontSize: 13.5, fontFamily: FONT.sans,
+    ...(action ? { flex: 1, minWidth: 0, paddingRight: 4 } : null),
   };
   const item = (
     <button
@@ -127,6 +137,22 @@ export function MenuItem({ icon, label, onClick, danger, disabled, wrapper }: {
       {label}
     </button>
   );
+  const row = action ? (
+    <span
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        display: 'flex', alignItems: 'center', width: '100%', minWidth: 0,
+        borderRadius: R.md, paddingRight: 4,
+        background: hovered ? C.bgSelected : 'none',
+      }}
+    >
+      {item}
+      <IconButton size="xs" title={action.title} onClick={e => { e.stopPropagation(); action.onClick(); }}>
+        {action.icon}
+      </IconButton>
+    </span>
+  ) : item;
   // Обёртка только когда её просят: лишний span в разметке меню ни к чему
-  return wrapper ? <span {...wrapper} style={{ display: 'flex', ...wrapper.style }}>{item}</span> : item;
+  return wrapper ? <span {...wrapper} style={{ display: 'flex', ...wrapper.style }}>{row}</span> : row;
 }

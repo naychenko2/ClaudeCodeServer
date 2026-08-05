@@ -370,6 +370,45 @@ describe('applyServerMessage: ожидание ответа пользовате
   });
 });
 
+// Жизненный цикл вызова планировщика (три состояния контракта: start / success / отказ).
+// Транзитное событие — карточку плана/отказа не подменяет, только ведёт живой флаг
+// ChatState.teamPlanning (плашка «идёт» в ChatPanel) и добавляет строку-итог на успехе
+describe('applyServerMessage: team_planning', () => {
+  const planningMsg = (over: Partial<Extract<ServerMessage, { type: 'team_planning' }>> = {}) =>
+    ({
+      type: 'team_planning' as const, start: false, success: false,
+      subtaskCount: 0, waveCount: 0, elapsedMs: 0, route: null, failure: null,
+      promptChars: 0, responseChars: 0,
+      ...over,
+    });
+
+  it('start=true — teamPlanning взводится, в ленту ничего не добавляется', () => {
+    const next = run([planningMsg({ start: true })]);
+    expect(next.items).toEqual([]);
+    expect(next.teamPlanning).toEqual({ startedAt: expect.any(Number) });
+  });
+
+  it('success=true — teamPlanning гасится, в ленту добавляется одна строка-итог', () => {
+    const running = run([planningMsg({ start: true })]);
+    const next = applyServerMessage(running, msg(planningMsg({
+      start: false, success: true, subtaskCount: 5, waveCount: 2, elapsedMs: 46_000,
+    })));
+    expect(next.teamPlanning).toBeNull();
+    expect(next.items).toEqual([
+      { kind: 'team_planning_done', subtaskCount: 5, waveCount: 2, elapsedMs: 46_000 },
+    ]);
+  });
+
+  it('success=false (отказ) — teamPlanning гасится, лента не трогается (карточка отказа придёт своим путём)', () => {
+    const running = run([planningMsg({ start: true })]);
+    const next = applyServerMessage(running, msg(planningMsg({
+      start: false, success: false, failure: 'Планировщик не уложился во время',
+    })));
+    expect(next.teamPlanning).toBeNull();
+    expect(next.items).toEqual([]);
+  });
+});
+
 // --- result / error / exited / file_changed ---
 
 describe('applyServerMessage: завершение хода', () => {

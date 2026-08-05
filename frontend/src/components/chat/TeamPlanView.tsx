@@ -1,5 +1,5 @@
 import { useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { Users, Play, Zap, ChevronDown, RotateCcw, AlertTriangle, Check } from 'lucide-react';
+import { Users, Play, Zap, ChevronDown, RotateCcw, AlertTriangle, Check, ArrowRight } from 'lucide-react';
 import type { ChatItem, Persona, TeamPlan, TeamPlanSubtask } from '../../types';
 import { C, FS, FONT, R, SHADOW, SP } from '../../lib/design';
 import { relPath, basename } from '../../lib/paths';
@@ -456,6 +456,31 @@ export function TeamPlanView({ item, online }: {
     );
   }
 
+  // === Решённое состояние: карточка заменена версией vN (правка человека или clarify) ===
+  // Не «отменена» — правка принята и живёт в новой версии, старая остаётся ориентиром
+  if (item.resolved && item.approved === false && item.supersededBy != null) {
+    return (
+      <div style={{
+        border: `1px solid ${C.border}`, borderLeft: `3px solid ${C.textMuted}`,
+        borderRadius: R.xl, padding: '11px 14px', background: C.bgWhite,
+        display: 'flex', flexDirection: 'column', gap: 6,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, fontSize: FS.base, fontWeight: 600, color: C.textSecondary }}>
+          <ArrowRight size={15} color={C.textMuted} strokeWidth={2} style={{ flexShrink: 0 }} />
+          Эта версия заменена — смотрите план v{item.supersededBy} ниже
+        </div>
+        {author && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: FS.xs, color: C.textMuted }}>
+            <PersonaAvatar persona={author} size={16} />
+            {author.name} · планировщик
+          </div>
+        )}
+        {fileLinkRow}
+        <CollapsedPlan plan={plan} isMobile={isMobile} rootPath={rootPath} />
+      </div>
+    );
+  }
+
   // === Решённое состояние: план отменён ===
   if (item.resolved && item.approved === false) {
     return (
@@ -488,7 +513,7 @@ export function TeamPlanView({ item, online }: {
   const sendEdit = () => {
     const text = feedback.trim();
     if (!text || !ctx) return;
-    ctx.onSendMessage(text);
+    ctx.onRespond(item.planId, 'edit', undefined, undefined, text);
     setEditing(false);
     setFeedback('');
   };

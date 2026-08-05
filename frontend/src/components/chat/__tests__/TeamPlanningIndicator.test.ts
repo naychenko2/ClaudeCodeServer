@@ -29,4 +29,11 @@ describe('TeamPlanningIndicator', () => {
     expect(html).not.toContain('background:var(--c-accent)');
     expect(html).not.toContain('var(--c-warning');
   });
+
+  it('принимает startedAt из события team_planning, не падает без него', () => {
+    // SSR-рендер не гоняет эффекты — начальное состояние то же «меньше минуты»,
+    // startedAt влияет на отсчёт только в браузере (useEffect); тест лишь ловит падения
+    const withStartedAt = renderToStaticMarkup(createElement(TeamPlanningIndicator, { startedAt: Date.now() - 5_000 }));
+    expect(withStartedAt).toContain(TEAM_PLANNING_TITLE);
+  });
 });

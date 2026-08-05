@@ -94,4 +94,18 @@ describe('TeamPlanView — блок «Замысел» и ссылка на по
     expect(html).toContain('Полный план');
     expect(html).toContain('plan-v1.md');
   });
+
+  // Правка плана человеком («Изменить план») гасит старую карточку не как отменённую,
+  // а как заменённую версией vN — иначе выглядит будто план отменили, хотя правка принята
+  it('карточка с supersededBy показывает «заменена версией vN», а не «план отменён»', () => {
+    const html = render(card({}, { resolved: true, approved: false, supersededBy: 2 }));
+    expect(html).toContain('заменена');
+    expect(html).toContain('v2');
+    expect(html).not.toContain('План отменён');
+  });
+
+  it('resolved/approved=false без supersededBy — по-прежнему «план отменён»', () => {
+    const html = render(card({}, { resolved: true, approved: false }));
+    expect(html).toContain('План отменён');
+  });
 });

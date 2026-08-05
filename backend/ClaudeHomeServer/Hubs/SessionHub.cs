@@ -215,9 +215,11 @@ public class SessionHub : Hub
 
     // Ответ по карточке плана «Командной реализации» (Э2). decision: run — запустить
     // (единственное согласование итерации), reassign — сменить исполнителя под-задачи
-    // (нужны subtaskId + executorPersonaId, карточка остаётся открытой), cancel — отменить.
+    // (нужны subtaskId + executorPersonaId, карточка остаётся открытой), cancel — отменить,
+    // edit — правка плана человеком (нужен feedback): сервер сам пересобирает план и
+    // публикует версию vN+1, погасив текущую карточку как заменённую.
     public async Task RespondTeamPlan(string sessionId, string planId, string decision,
-        string? subtaskId = null, string? executorPersonaId = null)
+        string? subtaskId = null, string? executorPersonaId = null, string? feedback = null)
     {
         if (!OwnsSession(sessionId)) throw Denied();
         var parsed = decision?.ToLowerInvariant() switch
@@ -225,10 +227,12 @@ public class SessionHub : Hub
             "run" => TeamPlanDecision.Run,
             "reassign" => TeamPlanDecision.Reassign,
             "cancel" => TeamPlanDecision.Cancel,
+            "edit" => TeamPlanDecision.Edit,
             _ => (TeamPlanDecision?)null,
         };
         if (parsed is null) throw new HubException($"Неизвестное решение по плану: {decision}");
-        await _sessions.RespondTeamPlanAsync(sessionId, planId, parsed.Value, subtaskId, executorPersonaId);
+        await _sessions.RespondTeamPlanAsync(sessionId, planId, parsed.Value, subtaskId, executorPersonaId,
+            feedback: feedback);
     }
 
     // Решение человека по карточке остановки «Командной реализации» (Э4). actionId — id

@@ -41,6 +41,10 @@ public sealed class CloudCheapClient
 
     public IReadOnlyList<Source> Sources => _sources;
 
+    // Ответ прямого адаптера: текст + флаг обрыва по лимиту вывода (см. GenerateDetailedAsync).
+    // Text == null — шаг не удался (ошибка/429/таймаут/пусто), вызывающий идёт дальше по цепочке.
+    public readonly record struct CloudTextResult(string? Text, bool Truncated);
+
     public record Source(string Key, string ProviderKey, string ApiBaseUrl, string ApiKey, IReadOnlyList<string> Models)
     {
         public bool Configured => !string.IsNullOrWhiteSpace(ApiBaseUrl) && !string.IsNullOrWhiteSpace(ApiKey);
@@ -121,12 +125,16 @@ public sealed class CloudCheapClient
     // Свободнотекстовая генерация выбранной моделью (контракт совпадает с
     // OllamaClient.GenerateTextAsync). maxTokens — лимит вывода профиля. Возвращает null при
     // любой ошибке/таймауте/пустом ответе — вызывающий откатывается на следующий маршрут.
-    public async Task<string?> GenerateTextAsync(
+    // ВАЖНО: вернувшийся FinishReason=length сам по себе null не возвращает — он попадает в
+    // результат отдельным флагом (Truncated) на генераторе: парсер потребителя должен
+    // увидеть, что ответ оборван, иначе симптом неотличим от таймаута (прод 2026-08-05:
+    // планировщик командной реализации дважды не собрал план из-за 1024 токенов вывода).
+    public async Task<CloudTextResult> GenerateDetailedAsync(
         string model, string prompt, TimeSpan timeout, int maxTokens,
         string? ownerId = null, string? label = null, CancellationToken ct = default)
     {
         var source = ResolveSource(model);
-        if (source is null || !source.Configured) return null;
+        if (source is null || !source.Configured) return new CloudTextResult(null, false);
 
         try
         {
@@ -154,7 +162,7 @@ public sealed class CloudCheapClient
                 // не шумим ошибкой, вызывающий уходит на следующий маршрут
                 _logger.LogDebug("{Source} /chat/completions вернул {Status} для {Model}",
                     source.Key, resp.StatusCode, model);
-                return null;
+                return new CloudTextResult(null, false);
             }
 
             var json = await resp.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct);
@@ -166,16 +174,46 @@ public sealed class CloudCheapClient
                 && msg.TryGetProperty("content", out var c)
                     ? c.GetString()
                     : null;
-            if (string.IsNullOrWhiteSpace(content)) return null;
+            // FinishReason="length" — ответ оборван по лимиту max_tokens. OpenAI-совместимые
+            // источники в этом случае кладут причину в choice.finish_reason, у некоторых
+            // (ollama-совместимые) — в choice.stop_reason. Проверяем обе в логе.
+            var truncated = false;
+            if (choices.ValueKind == JsonValueKind.Array && choices.GetArrayLength() > 0
+                && choices[0].ValueKind == JsonValueKind.Object)
+            {
+                truncated = IsTruncatedFinish(choices[0]);
+                if (truncated)
+                    _logger.LogWarning(
+                        "{Source} ответ обрезан по лимиту {MaxTokens} токенов (модель {Model}, label={Label})",
+                        source.Key, maxTokens, model, label ?? "-");
+            }
+            if (string.IsNullOrWhiteSpace(content)) return new CloudTextResult(null, truncated);
             RecordSpend(model, source.Key, json, ownerId, label);
-            return content;
+            return new CloudTextResult(content, truncated);
         }
         catch (Exception ex)
         {
             _logger.LogDebug(ex, "{Source} недоступен, фолбэк на следующий маршрут", source.Key);
-            return null;
+            return new CloudTextResult(null, false);
         }
     }
+
+    // Свободнотекстовая генерация: обратная совместимость со старыми потребителями,
+    // которым неотличимость обрыва от таймаута не важна (короткие ответы, у которых
+    // лимита вывода хватает с запасом). Прямой обрыв с логом, но без bail-а.
+    public async Task<string?> GenerateTextAsync(
+        string model, string prompt, TimeSpan timeout, int maxTokens,
+        string? ownerId = null, string? label = null, CancellationToken ct = default)
+    {
+        var result = await GenerateDetailedAsync(model, prompt, timeout, maxTokens, ownerId, label, ct);
+        return result.Text;
+    }
+
+    private static bool IsTruncatedFinish(JsonElement choice) =>
+        (choice.TryGetProperty("finish_reason", out var fr) && fr.ValueKind == JsonValueKind.String
+            && string.Equals(fr.GetString(), "length", StringComparison.OrdinalIgnoreCase))
+        || (choice.TryGetProperty("stop_reason", out var sr) && sr.ValueKind == JsonValueKind.String
+            && string.Equals(sr.GetString(), "length", StringComparison.OrdinalIgnoreCase));
 
     // Расход прямого вызова в аналитику: токены из usage OpenAI-совместимого ответа,
     // стоимость 0 (модели бесплатные). Источник spend провайдера — {sourceKey}-direct.

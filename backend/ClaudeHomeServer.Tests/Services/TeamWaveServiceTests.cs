@@ -980,7 +980,10 @@ public class TeamWaveServiceTests : IDisposable
         text.Should().Contain("задачи 3/12");
         text.Should().Contain("<escalate:deviation>");
         text.Should().Contain("<escalate:check>");
-        text.Should().Contain("<escalate:decision>");
+        // Продуктовая развилка ушла из маркеров в ASK (единый канал вопросов с интервью):
+        // в живом ходу координатор спрашивает инструментом, а не публикует карточку с полем
+        text.Should().NotContain("<escalate:decision>");
+        text.Should().Contain("AskUserQuestion");
     }
 
     [Fact]
@@ -1157,6 +1160,7 @@ public class TeamWaveServiceTests : IDisposable
     private sealed class StubPlanner(Func<string> answer) : ClaudeHomeServer.Services.Llm.ICheapTextRunner
     {
         public bool UsesLocal(string actionKey) => false;
+        public string DescribeRoute(string actionKey, string? fallbackModel) => "claude";
 
         public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
             string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default) =>

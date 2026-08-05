@@ -66,4 +66,68 @@ public class TeamImplementPromptsTests
     {
         TeamImplementPrompts.InterviewProtocol(MkTeam(0)).Should().Contain("дословно");
     }
+
+    // Единый канал вопросов (запрос владельца 2026-08-04): интервью спрашивает ASK-карточками,
+    // и эскалации в живом ходу обязаны тем же каналом — а не карточкой-«простынёй» с полем.
+    [Fact]
+    public void EscalationProtocol_Вопросы_ТолькоИнструментом_КакВИнтервью()
+    {
+        var protocol = TeamImplementPrompts.EscalationProtocol;
+
+        protocol.Should().Contain("AskUserQuestion");
+        protocol.Should().Contain("не пиши вопросы текстом",
+            "формулировка согласована с InterviewProtocol — оба протокола запрещают вопросы текстом");
+        protocol.Should().Contain("Другое",
+            "свободный ответ текстом остаётся запасным путём — в ASK это вариант «Другое»");
+    }
+
+    [Fact]
+    public void EscalationProtocol_ПродуктоваяРазвилка_УшлаИзМаркеровВОпрос()
+    {
+        // Живой вопрос координатора задаётся ASK; маркер <escalate:decision> из протокола ушёл
+        // (парсер терпит его только как фолбэк). Останавливающие маркеры остались.
+        var protocol = TeamImplementPrompts.EscalationProtocol;
+
+        protocol.Should().NotContain("escalate:decision");
+        protocol.Should().Contain("<escalate:deviation>");
+        protocol.Should().Contain("<escalate:check>");
+        protocol.Should().Contain("<escalate:clarify>");
+    }
+
+    [Fact]
+    public void EscalationProtocol_ВопросНеОстанавливаетРаботу()
+    {
+        // Развилка по природе случая: ASK живёт внутри хода и продолжает его после ответа,
+        // в отличие от карточки, которая публикуется, когда ход уже завершён.
+        TeamImplementPrompts.EscalationProtocol.Should().Contain("продолжай");
+    }
+
+    // Правка плана на подтверждении (прод 2026-08-04): текстовая правка обязана стать
+    // перепланированием через маркер работы — ответ «план готов, жду согласования» текстом
+    // оставляет человека со старой карточкой. Правило сформулировано так же жёстко, как
+    // запрет вопросов текстом в интервью.
+    [Fact]
+    public void PlanEditProtocol_ЗапрещаетОтветТекстом_ТребуетМаркерРаботы()
+    {
+        var protocol = TeamImplementPrompts.PlanEditProtocol;
+
+        protocol.Should().Contain("<team:work>");
+        protocol.Should().Contain("ЗАПРЕЩЕНО", "жёсткость — как у правила про AskUserQuestion");
+        protocol.Should().Contain("жду согласования",
+            "названа ровно та формулировка, что зависла на проде");
+    }
+
+    [Fact]
+    public void CoordinatorTurn_ВСтадииПодтверждения_СодержитПротоколПравки()
+    {
+        var turn = TeamImplementPrompts.CoordinatorTurn(new SessionTeamImplement
+        {
+            Stage = TeamImplementStage.Confirming,
+        });
+
+        turn.Should().Contain("ждёт подтверждения");
+        turn.Should().Contain("<team:work>",
+            "координатор в Confirming обязан знать путь пересборки плана маркером");
+        turn.Should().Contain("ЗАПРЕЩЕНО");
+    }
 }

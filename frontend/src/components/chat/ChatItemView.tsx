@@ -32,6 +32,7 @@ import { AskQuestionView } from './AskQuestionView';
 import { PlanReviewView } from './PlanReviewView';
 import { TeamPlanView } from './TeamPlanView';
 import { TeamEscalationView } from './TeamEscalationView';
+import { teamPlanningDoneText } from '../../lib/teamImplement';
 
 // Разбор input инструмента TodoWrite → пункты чек-листа (каждый вызов несет полный список)
 function parseTodoWriteInput(input: unknown): TodoItem[] {
@@ -1346,6 +1347,26 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
         </div>
       );
     }
+
+    case 'team_planning_done':
+      // Итог планировщика — короткая строка в потоке (та же плашка-разделитель, что у смены
+      // собеседника/провайдера): план целиком покажет карточка team_plan следом, тут только
+      // факт и время, которых у карточки нет
+      return (
+        <div style={{ alignSelf: 'center', display: 'flex', alignItems: 'center', gap: 8, maxWidth: '100%' }}>
+          <div style={{ flex: 1, minWidth: 24, height: 1, background: C.border }} />
+          <span style={{
+            display: 'flex', alignItems: 'center', gap: 5,
+            fontSize: 12, color: C.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden',
+            textOverflow: 'ellipsis', padding: '3px 10px', borderRadius: 999,
+            background: C.bgSelected, border: `1px solid ${C.border}`,
+          }}>
+            <Check size={11} strokeWidth={2.6} color={C.success} style={{ flexShrink: 0 }} />
+            {teamPlanningDoneText(item.subtaskCount, item.waveCount, item.elapsedMs)}
+          </span>
+          <div style={{ flex: 1, minWidth: 24, height: 1, background: C.border }} />
+        </div>
+      );
 
     case 'provider_switched':
       // Разделитель «Продолжено на …» — явная миграция чата на другого провайдера

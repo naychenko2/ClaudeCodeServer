@@ -401,7 +401,7 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
     };
   }, [sessionId, projectId, isGroup]);
 
-  const state = sessionId ? getState(sessionId) : { items: [] as ChatItem[], isWaiting: false, isJoined: false, isHistoryLoading: false, rateLimits: {} as Record<string, RateLimitInfo>, isCompacting: false, compactNote: undefined as string | undefined, workLoop: undefined as WorkLoopState | undefined, teamImplement: undefined as TeamImplementState | undefined, promptSuggestion: null as string | null, pending: [] as PendingChatMessage[], composerRestore: null as ComposerRestore | null };
+  const state = sessionId ? getState(sessionId) : { items: [] as ChatItem[], isWaiting: false, isJoined: false, isHistoryLoading: false, rateLimits: {} as Record<string, RateLimitInfo>, isCompacting: false, compactNote: undefined as string | undefined, workLoop: undefined as WorkLoopState | undefined, teamImplement: undefined as TeamImplementState | undefined, teamPlanning: undefined as { startedAt: number } | null | undefined, promptSuggestion: null as string | null, pending: [] as PendingChatMessage[], composerRestore: null as ComposerRestore | null };
 
   // Снять сообщение из очереди (крестик на карточке-призраке). Ответ сервера придёт
   // событием pending_messages — локально состояние не правим, чтобы не разъехалось.
@@ -584,9 +584,10 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
 
   // Решение по карточке плана командной реализации. Оптимистично применяем видимую
   // часть (смена исполнителя / решённое состояние) — сервер переиздаст карточку
-  // событием team_plan с тем же planId и приведёт её к своему состоянию.
+  // событием team_plan с тем же planId и приведёт её к своему состоянию (у edit —
+  // резолвит с supersededBy, точный номер версии оптимистично не угадываем).
   const respondTeamPlan = useCallback(async (planId: string, decision: TeamPlanDecision,
-    subtaskId?: string, executorPersonaId?: string) => {
+    subtaskId?: string, executorPersonaId?: string, feedback?: string) => {
     if (!sessionId) return;
     setState(sessionId, prev => ({
       ...prev,
@@ -607,7 +608,7 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
       }),
     }));
     await joinTracked(sessionId); // гарантируем группу перед ответом
-    await sendTeamPlanDecision(sessionId, planId, decision, subtaskId, executorPersonaId);
+    await sendTeamPlanDecision(sessionId, planId, decision, subtaskId, executorPersonaId, feedback);
   }, [sessionId]);
 
   // Решение по карточке остановки. Гасим карточку оптимистично — сервер переиздаст её
@@ -641,5 +642,5 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
     sendSetMode(sessionId, mode).catch(() => {});
   }, [sessionId]);
 
-  return { items: state.items, isWaiting: state.isWaiting, isJoined: state.isJoined, isHistoryLoading: state.isHistoryLoading, rateLimits: state.rateLimits, isCompacting: state.isCompacting, compactNote: state.compactNote, workLoop: state.workLoop, teamImplement: state.teamImplement, promptSuggestion: state.promptSuggestion, pending: state.pending, composerRestore: state.composerRestore, consumeRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, respondTeamPlan, respondTeamEscalation, interrupt, compact, toggleThinking, noteCompanionSwitch, changeMode, cancelPending };
+  return { items: state.items, isWaiting: state.isWaiting, isJoined: state.isJoined, isHistoryLoading: state.isHistoryLoading, rateLimits: state.rateLimits, isCompacting: state.isCompacting, compactNote: state.compactNote, workLoop: state.workLoop, teamImplement: state.teamImplement, teamPlanning: state.teamPlanning, promptSuggestion: state.promptSuggestion, pending: state.pending, composerRestore: state.composerRestore, consumeRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, respondTeamPlan, respondTeamEscalation, interrupt, compact, toggleThinking, noteCompanionSwitch, changeMode, cancelPending };
 }

@@ -357,6 +357,24 @@ internal class TurnAccumulator
         }
     }
 
+    // Погасить карточку плана как ЗАМЕНЁННУЮ новой версией (перепланирование по правке
+    // человека или clarify): не решение «отменено», а устаревание — фронт по SupersededBy
+    // рисует её иначе. Идемпотентна: уже разрешённую карточку не трогает.
+    // false — карточки с таким id нет либо она уже разрешена.
+    public bool OnTeamPlanSuperseded(string planId, int supersededByVersion)
+    {
+        lock (_lock)
+        {
+            var card = _currentTurn.Concat(_history).OfType<StoredTeamPlanMessage>()
+                .LastOrDefault(m => m.PlanId == planId && !m.Resolved);
+            if (card is null) return false;
+            card.Resolved = true;
+            card.Approved = false;
+            card.SupersededBy = supersededByVersion;
+            return true;
+        }
+    }
+
     // Карточка плана по id — источник правды при ответе хаба (правка исполнителя приходит
     // после рестарта сервера, когда состояние есть только в истории).
     public Models.TeamImplementPlan? FindTeamPlan(string planId)

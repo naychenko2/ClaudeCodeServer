@@ -1066,6 +1066,10 @@ export const api = {
           home: scope.home === undefined ? null : scope.home,
         }),
       }),
+    // Вынести текущую область в файл .docs репозитория: дальше она версионируется и
+    // одинакова у всех, кто открыл репозиторий, а setScope правит уже файл
+    saveScopeFile: (projectId: string) =>
+      request<DocsScopeInfo>(`/projects/${projectId}/docs/scope-file`, { method: 'POST' }),
   },
 
   // Раздел «Телеметрия»: статус проброса SigNoz — фронт решает, показать iframe или заглушку

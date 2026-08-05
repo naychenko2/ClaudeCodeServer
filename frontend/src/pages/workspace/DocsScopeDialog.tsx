@@ -17,6 +17,11 @@ import { C, FONT, FS, R, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { Button, IconButton, Modal, ModalActions, TextField } from '../../components/ui';
 
+// Имя файла области в репозитории — оно же в бэкенде (DocsIndexService.ScopeFileName).
+// Показываем его буквально: настройка версионируется, и человек должен знать, что
+// коммитить и что искать в git status
+const SCOPE_FILE = '.docs';
+
 interface Props {
   projectId: string;
   onClose: () => void;
@@ -140,6 +145,16 @@ export function DocsScopeDialog({ projectId, onClose, onSaved }: Props) {
       .catch(() => { setSaving(false); setError('Не удалось сохранить'); });
   };
 
+  // Вынести область в репозиторий. Сначала сохраняем набранное в диалоге, потом переносим
+  // в файл: иначе кнопка записала бы то, что было до правок, — а нажимают её как раз после
+  const saveToRepo = () => {
+    setSaving(true);
+    api.docs.setScope(projectId, { folders, rootFiles, types })
+      .then(() => api.docs.saveScopeFile(projectId))
+      .then(saved => { onSaved(saved); onClose(); })
+      .catch(() => { setSaving(false); setError(`Не удалось записать ${SCOPE_FILE} в репозиторий`); });
+  };
+
   const toDefaults = () => {
     if (!info) return;
     setFolders(info.defaults.folders);
@@ -173,6 +188,37 @@ export function DocsScopeDialog({ projectId, onClose, onSaved }: Props) {
 
       {info && (
         <>
+          {/* Где живёт настройка. Это не украшение: от источника зависит, увидят ли её
+              остальные — файл версионируется вместе с документами, настройка продукта
+              своя у каждого владельца папки */}
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap',
+            padding: `${SP.xs}px ${SP.sm}px`, borderRadius: R.md, background: C.bgInset,
+            fontSize: FS.sm, color: C.textSecondary,
+          }}>
+            {info.scopeSource === 'file' ? (
+              <span>
+                Хранится в <code style={{ fontFamily: FONT.mono }}>{SCOPE_FILE}</code> репозитория —
+                одинаково у всех, кто его открыл.
+              </span>
+            ) : (
+              <>
+                <span style={{ flex: 1, minWidth: 180 }}>
+                  Хранится в продукте: у каждого, кто подключил эту папку, своя.
+                </span>
+                <Button variant="ghost" size="sm" onClick={saveToRepo} disabled={saving}>
+                  Вынести в репозиторий
+                </Button>
+              </>
+            )}
+          </div>
+          {info.scopeFileError && (
+            <div style={{ fontSize: FS.sm, color: C.danger }}>
+              Файл <code style={{ fontFamily: FONT.mono }}>{SCOPE_FILE}</code> не разобран, действует
+              настройка продукта: {info.scopeFileError}
+            </div>
+          )}
+
           {/* Типы файлов — первой секцией: они решают, что вообще попадёт в списки ниже.
               Группами, а не расширениями: расширений три десятка, и списком они не читаются */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>

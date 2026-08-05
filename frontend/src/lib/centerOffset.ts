@@ -57,6 +57,9 @@ export function useCenterOffset(contentWidth?: number): CenterOffset {
   // Версия узлов: меняется, когда любой из ref'ов получил новый элемент, — это и
   // перезапускает эффект с наблюдателем (сами ref'ы реактивность не дают)
   const [nodes, setNodes] = useState(0);
+  // Пересборка подписок наблюдателя — ею пользуется эффект «на каждый рендер» ниже.
+  // null, когда компенсация выключена (нет ширины контента или узлов)
+  const observeRef = useRef<(() => void) | null>(null);
 
   const rootRef = useCallback((el: HTMLElement | null) => {
     if (rootEl.current === el) return;
@@ -97,11 +100,31 @@ export function useCenterOffset(contentWidth?: number): CenterOffset {
       center.style.paddingLeft = shift < 0 ? `${-shift}px` : '';
     };
 
+    // Наблюдаем не только корень с колонкой, но и ЗОНЫ по бокам — прямых детей корня.
+    // Без них ловится не всё: когда одна панель закрывается, а другая такой же ширины
+    // открывается (перенос панели на другую сторону), ширина колонки не меняется ни на
+    // одном кадре анимации — меняется только её положение, и наблюдатель за колонкой
+    // молчит от начала до конца. Ширина же самих зон при этом ходит туда-сюда, и по ней
+    // перекос виден. Подписки пересобираются на каждый рендер (состав зон меняется):
+    // disconnect + observe заново сам даёт стартовый колбэк, то есть и пересчёт.
     const ro = new ResizeObserver(apply);
-    ro.observe(root);
-    ro.observe(center);
-    return () => { ro.disconnect(); clear(); };
+    const observeAll = () => {
+      ro.disconnect();
+      ro.observe(root);
+      ro.observe(center);
+      for (const zone of Array.from(root.children)) ro.observe(zone);
+    };
+    observeRef.current = observeAll;
+    observeAll();
+    return () => { observeRef.current = null; ro.disconnect(); clear(); };
   }, [contentWidth, nodes]);
+
+  // Пересборка подписок на КАЖДЫЙ рендер: зоны — живые узлы, они появляются и исчезают
+  // (панель открыли, перенесли на другую сторону, свернули все разом). Наблюдатель,
+  // подписанный один раз при монтировании, после такой перестановки следил бы за
+  // выброшенными узлами и не видел новых. Заодно это и пересчёт: disconnect + observe
+  // всегда даёт стартовый колбэк. Эффект без зависимостей, порядок — после основного.
+  useLayoutEffect(() => { observeRef.current?.(); });
 
   return { rootRef, centerRef };
 }

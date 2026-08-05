@@ -143,6 +143,7 @@ export const SHADOW = {
   focus:    'var(--shadow-focus)',      // focus-ring контролов
   card:     'var(--shadow-card)',       // лёгкая тень карточек
   island:   'var(--shadow-island)',     // панель-остров: заметнее card (контакт + разлёт)
+  islandDrop: 'var(--drop-island)',     // та же тень для CSS filter: повторяет контур (SVG, PNG с прозрачностью)
   lift:     'var(--shadow-lift)',       // тот же подъём, но ВВЕРХ — для стоящих на кромке холста
   dropdown: 'var(--shadow-dropdown)',   // выпадающие меню
   modal:    'var(--shadow-modal)',      // модальные окна

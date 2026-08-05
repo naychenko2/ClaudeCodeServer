@@ -29,7 +29,10 @@ export type Zone = 'left' | 'right';
 // решает сам экран (проп allowedKeys у PanelZone): в воркспейсе — инструменты
 // проекта и сессии, в разделах хаба — их собственные панели.
 export const PANEL_KEYS = [
-  'chats', 'files', 'docs', 'knowledge', 'changes', 'tasks', 'graph', 'team', 'skills', 'terminal', 'preview',
+  // Порядок рельсы: сначала работа с проектом «здесь и сейчас» — дерево файлов,
+  // его изменения, задачи по ним; дальше справочное (документация, знания, граф)
+  // и командное
+  'chats', 'files', 'changes', 'tasks', 'docs', 'knowledge', 'graph', 'team', 'skills', 'terminal', 'preview',
   'plan', 'agents', 'context',
   'toc',
   // Панели разделов хаба
@@ -113,7 +116,7 @@ export const PANEL_HOME: Record<PanelKey, Zone> = {
 
 // Наборы ключей по экранам — что вообще доступно в этой рельсе (проп allowedKeys)
 export const WORKSPACE_KEYS: readonly PanelKey[] = [
-  'chats', 'files', 'docs', 'knowledge', 'changes', 'tasks', 'graph', 'team', 'skills', 'terminal', 'preview',
+  'chats', 'files', 'changes', 'tasks', 'docs', 'knowledge', 'graph', 'team', 'skills', 'terminal', 'preview',
   'plan', 'agents', 'context', 'toc',
 ];
 // Раздел «Чаты»: список чатов плюс панели активной сессии (проекта там нет)

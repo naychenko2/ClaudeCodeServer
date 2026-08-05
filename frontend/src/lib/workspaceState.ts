@@ -7,7 +7,7 @@ import type { Session } from '../types';
 // из localStorage. Раньше union жил двумя копиями (здесь и в WorkspacePage), а
 // рядом стоял третий, рукописный список допустимых значений при чтении — из-за
 // чего «Навыки» не переживали перезагрузку: вкладку добавили, в список забыли.
-export const LEFT_TABS = ['sessions', 'files', 'knowledge', 'changes', 'tasks', 'personas', 'skills', 'tools'] as const;
+export const LEFT_TABS = ['sessions', 'files', 'changes', 'tasks', 'knowledge', 'personas', 'skills', 'tools'] as const;
 export type LeftTab = typeof LEFT_TABS[number];
 
 export function isLeftTab(v: unknown): v is LeftTab {

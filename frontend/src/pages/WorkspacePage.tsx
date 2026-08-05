@@ -624,11 +624,12 @@ const windowWidth = useWindowWidth();
   const leftTabOptions: { value: LeftTab; label: string; icon?: ReactNode }[] = [
     { value: 'sessions', label: 'Чаты', icon: LEFT_TAB_ICONS.sessions },
     { value: 'files', label: 'Файлы', icon: LEFT_TAB_ICONS.files },
-    // Git и знания — рядом с файлами: все три про содержимое проекта. На десктопе
-    // это панели рельсы, здесь рельсы нет — иначе с телефона они недоступны совсем
+    // Порядок тот же, что у панелей в рельсе (PANEL_KEYS): файлы → их изменения →
+    // задачи по ним, дальше справочное. На десктопе это панели, здесь рельсы нет —
+    // иначе git и знания с телефона недоступны совсем
     { value: 'changes' as LeftTab, label: 'Изменения', icon: LEFT_TAB_ICONS.changes },
-    { value: 'knowledge' as LeftTab, label: 'Знания', icon: LEFT_TAB_ICONS.knowledge },
     { value: 'tasks', label: 'Задачи', icon: LEFT_TAB_ICONS.tasks },
+    { value: 'knowledge' as LeftTab, label: 'Знания', icon: LEFT_TAB_ICONS.knowledge },
     { value: 'personas' as LeftTab, label: 'Команда', icon: LEFT_TAB_ICONS.personas },
     // На десктопе навыки живут панелью в рельсе; на мобиле рельсы панелей проекта нет,
     // поэтому им нужна своя вкладка — иначе доступ к ним с телефона пропадает совсем

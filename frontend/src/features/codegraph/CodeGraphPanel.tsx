@@ -1,14 +1,26 @@
-// Панель «Граф» в правой рельсе инструментов — инспектор отображения графа:
-// поиск типа, фильтр по типу связи (чипы-тогглы), сворачиваемая легенда типов и
-// god-узлов, паспорт выбранного типа. Деградирует при empty (только сборка),
-// контролы блокируются при loading. Сама панель живёт в PanelShell рельсы
-// (RightPanelStack), который даёт шапку острова и кнопку закрытия — здесь только тело.
-import { useEffect, useMemo } from 'react';
-import { Search, ChevronRight, FileCode, RefreshCw, AlertTriangle, Loader } from 'lucide-react';
+// Панель «Граф» в правой рельсе инструментов — инспектор графа: поиск типа,
+// фильтры отображения, god-узлы, паспорт выбранного типа и мини-карта проекта внизу.
+// Деградирует при empty (только сборка), контролы блокируются при loading. Сама панель
+// живёт в PanelShell рельсы, который даёт шапку острова и кнопку закрытия — здесь только тело.
+//
+// Контролы (поиск, фильтры, перестроить, развернуть) живут в ШАПКЕ панели через
+// PanelHeaderSlot — как у «Файлов», «Изменений» и «Задач». Раньше они стояли в теле
+// стопкой секций с разделителями во всю ширину, и панель читалась как форма настроек
+// посреди списков-навигаторов. Тело теперь — одна прокручиваемая колонка.
+import { useEffect, useMemo, useState } from 'react';
+import {
+  Search, ChevronRight, FileCode, RefreshCw, AlertTriangle, Loader, Filter,
+  Check, Unlink,
+} from 'lucide-react';
 import { C, FONT, FS, R, SP } from '../../lib/design';
-import { Button, Dot, IconField, EmptyState, WaitingIndicator, Toggle } from '../../components/ui';
+import {
+  Button, Dot, IconField, EmptyState, WaitingIndicator, Toggle, IconButton,
+  Menu, MenuItem, MenuSep, PanelHeaderSlot, useHasPanelHeader, usePanelHeaderHold,
+} from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { useCodeGraph, useCodeGraphActions, GRAPH_RELATIONS } from '../../lib/codeGraph';
+import { useRequestPanelFill } from '../../pages/workspace/panelFill';
+import { CodeGraphMiniMap } from './CodeGraphMiniMap';
 import { focusNeighbours, graphDegree, isTestSourceFile } from './graphFocus';
 import {
   EDGE_COLOR, EDGE_BG, KIND_COLOR, KIND_RING, KIND_GLYPH, RELATION_LABEL,
@@ -17,27 +29,48 @@ import type { CodeGraphRelation, CodeGraphNode, CodeGraph, CodeGraphEdge } from 
 
 interface Props {
   projectId: string;
-  // Открыт ли сейчас документ графа в центре — кнопка «Показать граф в центре»
-  // нужна, только когда он закрыт (по макету сценария «граф закрыт»)
+  // Открыт ли сейчас документ графа в центре: пока закрыт — панель показывает
+  // мини-карту и кнопку «Развернуть», при открытом и то и другое лишнее
   graphOpen?: boolean;
-  // Открыть документ графа в центре (если закрыт). Любое режимное действие панели
-  // (фильтр, god-узел, поиск, переход в паспорте) открывает документ — правило макета.
+  // Открыть документ графа в центре. Дёргается ТОЛЬКО явным действием (кнопка
+  // «Развернуть», клик по мини-карте): режимные действия панели (фильтр, поиск,
+  // god-узел, переход по связи в паспорте) центр не трогают — они меняют вид графа,
+  // а не место чтения. Раньше их открывал каждый, и панель невозможно было
+  // использовать как инспектор, не выбросив документ поверх чата.
   onEnsureGraphOpen: () => void;
+  // Свернуть документ центра к чату — кнопка встаёт на место «Развернуть» в углу карты.
+  // Не задан (мобильная шторка поверх самого документа) — остаётся только «Развернуть»
+  onCollapseGraph?: () => void;
+  // Панель показана ВНУТРИ самого документа (мобильная шторка): карта там была бы
+  // третьим холстом поверх того, что уже на экране
+  hideMap?: boolean;
   onOpenFile: (path: string, line?: number) => void;
   onBuild: () => void;
 }
 
-export function CodeGraphPanel({ projectId, graphOpen, onEnsureGraphOpen, onOpenFile, onBuild }: Props) {
+export function CodeGraphPanel({ projectId, graphOpen, onEnsureGraphOpen, onCollapseGraph, hideMap, onOpenFile, onBuild }: Props) {
   const s = useCodeGraph();
   const a = useCodeGraphActions();
+  const inHeader = useHasPanelHeader();
+  // Поиск разворачивается лупой — как в «Файлах»: в узкой колонке поле не должно
+  // стоять постоянной полосой ради действия, которое нужно изредка
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [filtersAnchor, setFiltersAnchor] = useState<DOMRect | null>(null);
+  // Пока открыто меню фильтров или поле поиска, контролы шапки не гаснут
+  usePanelHeaderHold(!!filtersAnchor || searchOpen);
 
   // Первичная загрузка при монтировании панели. loadCodeGraph идемпотентна —
   // безопасно вызывать на каждом рендере, сетевых дублей не будет
   useEffect(() => { a.load(projectId); }, [a, projectId]);
 
+  // Панель с данными просит всю высоту колонки: внизу живёт мини-карта, и по
+  // контенту она сжалась бы до полоски. Признак — наличие данных, а не статус:
+  // обновление поверх готового графа (status='loading') не должно ронять высоту.
+  useRequestPanelFill(!!s.data);
+
   const degree = useMemo(() => (s.data ? graphDegree(s.data) : undefined), [s.data]);
 
-  // Счётчики рёбер по типу связи — для подписи чипов
+  // Счётчики рёбер по типу связи — для подписи в меню фильтров
   const relCounts = useMemo(() => {
     const c: Record<CodeGraphRelation, number> = { Calls: 0, Implements: 0, References: 0 };
     if (s.data) for (const e of s.data.edges) c[e.relation]++;
@@ -58,7 +91,7 @@ export function CodeGraphPanel({ projectId, graphOpen, onEnsureGraphOpen, onOpen
     );
   }, [s.query, s.data]);
 
-  // Счётчики скрытых узлов для подписи под фильтрами
+  // Счётчики скрытых узлов — для сводки активных фильтров
   const hiddenTestCount = useMemo(() => {
     if (!s.hideTestNodes || !s.data) return 0;
     return s.data.nodes.filter(n => isTestSourceFile(n.sourceFile)).length;
@@ -73,9 +106,9 @@ export function CodeGraphPanel({ projectId, graphOpen, onEnsureGraphOpen, onOpen
 
   const disabled = s.status === 'loading' || s.status === 'building';
   const empty = s.status === 'empty';
-
-  // Режимное действие (меняет вид графа) → помимо эффекта, открывает документ в центре
-  const withEnsureOpen = (fn: () => void) => () => { fn(); onEnsureGraphOpen(); };
+  const allRelations = s.filters.Calls && s.filters.Implements && s.filters.References;
+  const filtersOn = !allRelations || s.hideTestNodes || s.hideOrphanNodes;
+  const isStale = !!s.data?.metadata.isStale;
 
   if (s.status === 'building') {
     // Сборка запущена (кнопкой или бэкендом) — ждём: polling сам переведёт в ready.
@@ -118,7 +151,7 @@ export function CodeGraphPanel({ projectId, graphOpen, onEnsureGraphOpen, onOpen
   if (s.status === 'error') {
     return (
       <EmptyState compact
-        icon={<AlertTriangle size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} />}
+        icon={<Unlink size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} />}
         title="Не удалось загрузить"
         subtitle={s.error ?? 'Повторите позже.'}
         action={<Button variant="secondary" size="sm" fullWidth onClick={() => a.load(projectId, true)}>Повторить</Button>}
@@ -126,194 +159,239 @@ export function CodeGraphPanel({ projectId, graphOpen, onEnsureGraphOpen, onOpen
     );
   }
 
+  // Главное действие панели — пересборка графа. Живёт в закреплённом слоте шапки
+  // (pinned): нейтральные иконки проявляются по наведению на карточку, а эта кнопка
+  // нужна видимой всегда — граф устаревает от каждой правки кода.
+  // Вход в документ центра сюда не входит: его открывает мини-карта над телом панели.
+  const mainAction = (
+    <Button variant="primary" size="xs" onClick={() => a.build(projectId)}
+      title={isStale ? 'Код изменился после сборки — перестроить граф' : 'Перестроить граф'}
+      leftIcon={<RefreshCw size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}>
+      Перестроить
+    </Button>
+  );
+
+  // Вспомогательные контролы панели — нейтральными иконками
+  const controls = (
+    <>
+      <IconButton size="xs" title="Поиск типа" active={searchOpen}
+        onClick={() => { const next = !searchOpen; setSearchOpen(next); if (!next) a.setQuery(''); }}>
+        <Search size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+      </IconButton>
+      {/* rect берём СРАЗУ, а не внутри апдейтера: тот вызывается на фазе рендера,
+          когда синтетическое событие уже обнулило currentTarget (падало в ErrorBoundary) */}
+      <IconButton size="xs" title="Фильтры отображения" active={filtersOn || !!filtersAnchor}
+        onClick={e => {
+          const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+          setFiltersAnchor(f => (f ? null : rect));
+        }}>
+        <Filter size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+      </IconButton>
+    </>
+  );
+
   return (
     <div style={{
       display: 'flex', flexDirection: 'column', minHeight: 0, flex: 1,
       opacity: disabled ? 0.45 : 1, pointerEvents: disabled ? 'none' : 'auto',
     }}>
-      {/* Stale-предупреждение: граф может отставать от кода */}
-      {s.data?.metadata.isStale && (
-        <div style={{ padding: SP.sm, background: C.warningBg, borderBottom: `1px solid ${C.borderLight}` }}>
-          <div style={{ display: 'flex', gap: 6, alignItems: 'flex-start', fontSize: FS.xs, color: C.warningText, lineHeight: 1.45 }}>
+      {inHeader
+        ? (
+          <>
+            <PanelHeaderSlot>{controls}</PanelHeaderSlot>
+            <PanelHeaderSlot pinned>{mainAction}</PanelHeaderSlot>
+          </>
+        )
+        // Шапки нет (мобильная шторка) — те же контролы своим рядом
+        : <div style={{
+            flexShrink: 0, display: 'flex', alignItems: 'center', gap: SP.xs,
+            padding: `${SP.sm}px ${SP.md}px`, borderBottom: `1px solid ${C.borderLight}`,
+          }}>{controls}{mainAction}</div>
+      }
+
+      {/* Меню фильтров: что скрыть на холсте и какие связи показывать */}
+      {filtersAnchor && (
+        <Menu anchor={filtersAnchor} minWidth={240} maxHeight={320} onClose={() => setFiltersAnchor(null)}>
+          <MenuItem
+            label={<CheckLabel on={s.hideTestNodes}>Скрыть тесты{s.hideTestNodes ? ` · ${hiddenTestCount}` : ''}</CheckLabel>}
+            onClick={() => a.toggleHideTestNodes()}
+          />
+          <MenuItem
+            label={<CheckLabel on={s.hideOrphanNodes}>Скрыть сироты{s.hideOrphanNodes ? ` · ${hiddenOrphanCount}` : ''}</CheckLabel>}
+            onClick={() => a.toggleHideOrphanNodes()}
+          />
+          <MenuSep />
+          {GRAPH_RELATIONS.map(rel => (
+            <MenuItem key={rel}
+              icon={<Dot color={s.filters[rel] ? EDGE_COLOR[rel] : C.textMuted} />}
+              label={<CheckLabel on={s.filters[rel]}>{RELATION_LABEL[rel]} · {relCounts[rel]}</CheckLabel>}
+              onClick={() => a.toggleFilter(rel)}
+            />
+          ))}
+          {filtersOn && (
+            <>
+              <MenuSep />
+              <MenuItem label="Сбросить фильтры" onClick={() => { a.resetFilters(); setFiltersAnchor(null); }} />
+            </>
+          )}
+        </Menu>
+      )}
+
+      {/* Карта проекта с навигацией — она же вход в документ центра и выход из него.
+          Стоит НАД инспектором: это ответ на вопрос «что за проект», а поиск и паспорт —
+          уже разбор деталей. Показывается и при открытом документе: карта остаётся
+          навигатором, а кнопка в её углу переключается на «Свернуть» */}
+      {!hideMap && <CodeGraphMiniMap graphOpen={graphOpen} onExpand={onEnsureGraphOpen} onCollapse={onCollapseGraph} />}
+
+      {/* Инспектор — одна прокручиваемая колонка. Скролл общий, а не у паспорта:
+          иначе карта над ним отъезжала бы вместе с содержимым */}
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+        {/* Stale-предупреждение: граф может отставать от кода */}
+        {isStale && (
+          <div style={{
+            display: 'flex', gap: SP.xs, alignItems: 'flex-start', padding: `${SP.sm}px ${SP.md}px`,
+            background: C.warningBg, fontSize: FS.xs, color: C.warningText, lineHeight: 1.45,
+          }}>
             <AlertTriangle size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0, marginTop: 1 }} />
             <span>Код изменился после сборки — граф может отставать.</span>
           </div>
-          <Button variant="primary" size="sm" fullWidth style={{ marginTop: SP.sm }}
-            onClick={() => a.build(projectId)}
-            leftIcon={<RefreshCw size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}>
-            Перестроить
-          </Button>
-        </div>
-      )}
+        )}
 
-      {/* Поиск типа */}
-      <Section>
-        <IconField
-          icon={<Search size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
-          value={s.query}
-          onChange={v => { a.setQuery(v); if (v) onEnsureGraphOpen(); }}
-          placeholder="Поиск типа…"
-          height={34}
-          radius={R.xl}
-          fontSize={FS.sm}
-        />
-        {/* Список результатов поиска — до 20, остальные счётчиком */}
-        {s.query.trim() && searchResults.length > 0 && (
-          <div style={{ marginTop: SP.sm, maxHeight: 240, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
-            {searchResults.slice(0, SEARCH_LIMIT).map(n => (
-              <div key={n.id} onClick={() => { a.select(n.id); onEnsureGraphOpen(); }}
-                style={searchHitStyle}>
-                <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, fontWeight: 600, color: C.textHeading, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{n.label}</span>
-                <span style={{ fontSize: 10, color: C.textMuted, fontFamily: FONT.mono, flexShrink: 0 }}>{KIND_GLYPH[n.kind]}</span>
-                <span style={{ fontSize: 10, color: C.textMuted, flexShrink: 0, maxWidth: 100, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{n.sourceFile}:{n.sourceLocation}</span>
-                <span style={{ fontSize: 10, color: C.textMuted, fontFamily: FONT.mono, flexShrink: 0 }}>{degree?.get(n.id) ?? '?'}</span>
+        {/* Поиск типа — полосой, пока открыт лупой */}
+        {searchOpen && (
+          <div style={{ padding: `${SP.sm}px ${SP.md}px 0` }}>
+            <IconField
+              icon={<Search size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+              value={s.query}
+              onChange={a.setQuery}
+              placeholder="Поиск типа…"
+              height={32}
+              radius={R.lg}
+              fontSize={FS.sm}
+            />
+          </div>
+        )}
+
+        {/* Результаты поиска — до 20, остальные счётчиком */}
+        {searchOpen && s.query.trim() && (
+          <div style={{ padding: `${SP.sm}px ${SP.sm}px 0` }}>
+            {searchResults.length === 0 && (
+              <div style={{ fontSize: FS.xs, color: C.textMuted, padding: `${SP.xs}px ${SP.sm}px` }}>
+                Ничего не найдено
               </div>
+            )}
+            {searchResults.slice(0, SEARCH_LIMIT).map(n => (
+              <Row key={n.id} onClick={() => a.select(n.id)} active={n.id === s.selectedId}>
+                <RowName>{n.label}</RowName>
+                <RowMeta mono>{KIND_GLYPH[n.kind]}</RowMeta>
+                <RowMeta style={{ maxWidth: 100, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {n.sourceFile}:{n.sourceLocation}
+                </RowMeta>
+                <RowMeta mono>{degree?.get(n.id) ?? '?'}</RowMeta>
+              </Row>
             ))}
             {searchResults.length > SEARCH_LIMIT && (
-              <div style={{ fontSize: FS.xs, color: C.textMuted, padding: '4px 8px', textAlign: 'center' }}>
+              <div style={{ fontSize: FS.xs, color: C.textMuted, padding: `${SP.xs}px ${SP.sm}px`, textAlign: 'center' }}>
                 + ещё {searchResults.length - SEARCH_LIMIT}
               </div>
             )}
           </div>
         )}
-        {s.query.trim() && searchResults.length === 0 && (
-          <div style={{ fontSize: FS.xs, color: C.textMuted, marginTop: SP.sm, padding: '4px 0' }}>
-            Ничего не найдено
+
+        {/* Сводка активных фильтров: контролы уехали в шапку, и без неё непонятно,
+            почему на холсте не весь граф */}
+        {filtersOn && (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: SP.xs,
+            padding: `${SP.sm}px ${SP.md}px 0`, fontSize: FS.xs, color: C.textMuted,
+          }}>
+            <span style={{ flex: 1, minWidth: 0 }}>
+              {[
+                s.hideTestNodes ? `тесты скрыты · ${hiddenTestCount}` : null,
+                s.hideOrphanNodes ? `сироты скрыты · ${hiddenOrphanCount}` : null,
+                !allRelations ? `связи: ${GRAPH_RELATIONS.filter(r => s.filters[r]).length} из 3` : null,
+              ].filter(Boolean).join(' · ')}
+            </span>
+            <LinkAction onClick={() => a.resetFilters()}>сбросить</LinkAction>
           </div>
         )}
-      </Section>
 
-      {/* Фильтры отображения — чипы-тогглы */}
-      <Section title="Фильтры">
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          <Button variant={s.hideTestNodes ? 'ghostFilled' : 'ghost'} size="sm" pill
-            style={{ padding: '4px 10px', minHeight: 26, fontSize: FS.xs }}
-            onClick={withEnsureOpen(() => a.toggleHideTestNodes())}>
-            <span style={{ color: s.hideTestNodes ? C.textHeading : C.textMuted }}>скрыть тесты</span>
-          </Button>
-          <Button variant={s.hideOrphanNodes ? 'ghostFilled' : 'ghost'} size="sm" pill
-            style={{ padding: '4px 10px', minHeight: 26, fontSize: FS.xs }}
-            onClick={withEnsureOpen(() => a.toggleHideOrphanNodes())}>
-            <span style={{ color: s.hideOrphanNodes ? C.textHeading : C.textMuted }}>скрыть сироты</span>
-          </Button>
-        </div>
-        {/* Подпись сколько скрыто */}
-        {s.data && (s.hideTestNodes || s.hideOrphanNodes) && (
-          <div style={{ fontSize: FS.xs, color: C.textMuted, marginTop: SP.xs }}>
-            {[s.hideTestNodes ? hiddenTestCount : null, s.hideOrphanNodes ? hiddenOrphanCount : null]
-              .filter(Boolean).join(' · ')}
-          </div>
-        )}
-      </Section>
-
-      {/* Связи — строка чипов-тогглов */}
-      <Section
-        title="Связи"
-        aside={!(s.filters.Calls && s.filters.Implements && s.filters.References)
-          ? <LinkAction onClick={() => a.resetFilters()}>сбросить</LinkAction> : undefined}
-      >
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          {GRAPH_RELATIONS.map(rel => {
-            const on = s.filters[rel];
-            return (
-              <Button key={rel} variant={on ? 'ghostFilled' : 'ghost'} size="sm" pill
-                style={{ padding: '4px 10px', minHeight: 26, fontSize: FS.xs }}
-                leftIcon={<Dot color={on ? EDGE_COLOR[rel] : C.textMuted} />}
-                onClick={withEnsureOpen(() => a.toggleFilter(rel))}>
-                <span style={{ color: on ? C.textHeading : C.textMuted }}>{RELATION_LABEL[rel]}</span>
-                <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, marginLeft: 2 }}>{relCounts[rel]}</span>
-              </Button>
-            );
-          })}
-        </div>
-      </Section>
-
-      {/* Фокус холста — появляется, когда узел выбран (холст показывает его окрестность) */}
-      {s.selectedId && s.data && (
-        <Section title="Фокус">
-          <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm }}>
-            <span style={{ fontSize: FS.sm, color: C.textPrimary, flex: 1 }}>Глубина 2</span>
-            <Toggle checked={s.focusDepth2} onChange={() => a.toggleFocusDepth2()} width={36} height={21}
-              ariaLabel="Показывать второе кольцо соседей" />
-          </div>
-          <p style={{ fontSize: FS.xs, color: C.textMuted, marginTop: SP.xs, marginBottom: 0, lineHeight: 1.45 }}>
-            Второе кольцо строится только для 6 самых связанных соседей — полная окрестность
-            глубины 2 у крупного типа это сотни узлов.
-          </p>
-          {/* Раскрытый хвост: то, что не поместилось на холст и ушло в заглушку «+N» */}
-          {s.focusTail && (
-            <FocusTail graph={s.data} centerId={s.selectedId} side={s.focusTail}
-              filters={s.filters} hideTests={s.hideTestNodes} degree={degree}
-              onSelect={id => { a.refocus(id); onEnsureGraphOpen(); }}
-              onClose={() => a.setFocusTail(null)} />
-          )}
-        </Section>
-      )}
-
-      {/* Легенда и god-узлы — сворачиваемая секция (по умолчанию свёрнута) */}
-      <div style={{ borderBottom: `1px solid ${C.borderLight}` }}>
-        <button onClick={() => a.setLegendOpen(!s.legendOpen)} disabled={disabled}
-          style={collapseHeadStyle}>
-          <span style={sectionTitleStyle}>Легенда и god-узлы</span>
-          <ChevronRight size={ICON_SIZE.xs} strokeWidth={ICON_STROKE}
-            style={{ marginLeft: 'auto', color: C.textMuted, transform: s.legendOpen ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' }} />
-        </button>
-        {s.legendOpen && (
-          <div style={{ padding: `${SP.xs} ${SP.md} ${SP.md}` }}>
-            {/* Легенда типов */}
-            {(['Class', 'Interface', 'Struct', 'Enum'] as const).map(k => (
-              <LegendRow key={k} color={KIND_RING[k]} glyph={KIND_GLYPH[k]} label={k} />
-            ))}
-            {/* god-узлы: порог minDegree=10 даёт 140 узлов, показываем топ-15 пока бэкенд не поправлен */}
-            {s.data && s.data.godNodes.length > 0 && (
-              <>
-                <div style={{ ...sectionTitleStyle, marginTop: SP.sm, marginBottom: SP.xs }}>
-                  God-узлы <Dot color={C.accent} size={7} />
-                </div>
-                {s.data.godNodes.slice(0, 15).map(id => {
-                  const node = s.data!.nodes.find(n => n.id === id);
-                  if (!node) return null;
-                  const deg = degree?.get(id) ?? 0;
-                  return (
-                    <div key={id} onClick={withEnsureOpen(() => a.select(id))} style={godItemStyle}>
-                      <span style={{ width: 8, height: 8, borderRadius: R.full, background: C.accent, flexShrink: 0, boxShadow: `0 0 0 3px ${C.accentLight}` }} />
-                      <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, fontWeight: 600, color: C.textHeading, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{node.label}</span>
-                      <span style={{ fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.mono }}>{deg}</span>
-                    </div>
-                  );
-                })}
-                <p style={{ fontSize: FS.xs, color: C.textMuted, marginTop: 6, lineHeight: 1.5 }}>
-                  Точки перегруза — кандидаты на разбиение.
-                </p>
-              </>
+        {/* Фокус — настройки окрестности выбранного типа. Нужны и без открытого
+            документа: карта в панели показывает тот же фокус, и глубина с раскрытым
+            хвостом «+N» управляют им ровно так же */}
+        {s.selectedId && s.data && (
+          <Section title="Фокус">
+            <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm }}>
+              <span style={{ fontSize: FS.sm, color: C.textPrimary, flex: 1 }}>Глубина 2</span>
+              <Toggle checked={s.focusDepth2} onChange={() => a.toggleFocusDepth2()} width={36} height={21}
+                ariaLabel="Показывать второе кольцо соседей" />
+            </div>
+            <p style={{ fontSize: FS.xs, color: C.textMuted, marginTop: SP.xs, marginBottom: 0, lineHeight: 1.45 }}>
+              Второе кольцо строится только для 6 самых связанных соседей — полная окрестность
+              глубины 2 у крупного типа это сотни узлов.
+            </p>
+            {/* Раскрытый хвост: то, что не поместилось на холст и ушло в заглушку «+N» */}
+            {s.focusTail && (
+              <FocusTail graph={s.data} centerId={s.selectedId} side={s.focusTail}
+                filters={s.filters} hideTests={s.hideTestNodes} degree={degree}
+                onSelect={a.refocus}
+                onClose={() => a.setFocusTail(null)} />
             )}
-          </div>
+          </Section>
         )}
-      </div>
 
-      {/* Паспорт выбранного типа — нижняя (и главная) секция */}
-      <div style={{ padding: SP.md, flex: 1, minHeight: 0, overflowY: 'auto' }}>
-        <div style={sectionTitleStyle}>Паспорт типа</div>
-        {selected ? (
-          <Passport node={selected} graph={s.data!} onSelect={id => { a.refocus(id); onEnsureGraphOpen(); }} onOpenFile={onOpenFile} />
-        ) : (
-          <p style={{ fontSize: FS.sm, color: C.textMuted, textAlign: 'center', padding: `${SP.md} ${SP.xs}`, lineHeight: 1.5 }}>
-            Выберите узел на графе —<br />здесь появится его паспорт
-          </p>
-        )}
-      </div>
-
-      {/* Явное открытие документа — только когда граф в центре закрыт
-          (по макету сценария «граф закрыт»: секция «Документ», кнопка во всю ширину
-          с заливкой и рамкой — ghostFilled, системный аналог макетной .btn-secondary) */}
-      {!graphOpen && (
-        <div style={{ padding: SP.md, borderTop: `1px solid ${C.borderLight}` }}>
-          <div style={{ ...sectionTitleStyle, marginBottom: SP.sm }}>Документ</div>
-          <Button variant="ghostFilled" size="sm" fullWidth onClick={onEnsureGraphOpen}>
-            Показать граф в центре
-          </Button>
+        {/* Легенда и god-узлы — сворачиваемая секция (по умолчанию свёрнута) */}
+        <div>
+          <button onClick={() => a.setLegendOpen(!s.legendOpen)} disabled={disabled}
+            style={collapseHeadStyle}>
+            <span style={sectionTitleStyle}>Легенда и god-узлы</span>
+            <ChevronRight size={ICON_SIZE.xs} strokeWidth={ICON_STROKE}
+              style={{ marginLeft: 'auto', color: C.textMuted, transform: s.legendOpen ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' }} />
+          </button>
+          {s.legendOpen && (
+            <div style={{ padding: `0 ${SP.md}px ${SP.md}px` }}>
+              {/* Легенда типов */}
+              {(['Class', 'Interface', 'Struct', 'Enum'] as const).map(k => (
+                <LegendRow key={k} color={KIND_RING[k]} glyph={KIND_GLYPH[k]} label={k} />
+              ))}
+              {/* god-узлы: порог minDegree=10 даёт 140 узлов, показываем топ-15 пока бэкенд не поправлен */}
+              {s.data && s.data.godNodes.length > 0 && (
+                <>
+                  <div style={{ ...sectionTitleStyle, marginTop: SP.sm, marginBottom: SP.xs }}>
+                    God-узлы <Dot color={C.accent} size={7} />
+                  </div>
+                  {s.data.godNodes.slice(0, GOD_LIMIT).map(id => {
+                    const node = s.data!.nodes.find(n => n.id === id);
+                    if (!node) return null;
+                    return (
+                      <Row key={id} onClick={() => a.select(id)} active={id === s.selectedId}>
+                        <span style={{ width: 8, height: 8, borderRadius: R.full, background: C.accent, flexShrink: 0, boxShadow: `0 0 0 3px ${C.accentLight}` }} />
+                        <RowName>{node.label}</RowName>
+                        <RowMeta mono>{degree?.get(id) ?? 0}</RowMeta>
+                      </Row>
+                    );
+                  })}
+                  <p style={{ fontSize: FS.xs, color: C.textMuted, marginTop: SP.xs, lineHeight: 1.5 }}>
+                    Точки перегруза — кандидаты на разбиение.
+                  </p>
+                </>
+              )}
+            </div>
+          )}
         </div>
-      )}
+
+        {/* Паспорт выбранного типа — главная секция инспектора */}
+        <div style={{ padding: SP.md }}>
+          <div style={sectionTitleStyle}>Паспорт типа</div>
+          {selected ? (
+            <Passport node={selected} graph={s.data!} onSelect={a.refocus} onOpenFile={onOpenFile} />
+          ) : (
+            <p style={{ fontSize: FS.sm, color: C.textMuted, textAlign: 'center', padding: `${SP.md}px ${SP.xs}px`, lineHeight: 1.5 }}>
+              Выберите тип на карте или в поиске —<br />здесь появится его паспорт
+            </p>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -338,21 +416,21 @@ function FocusTail({ graph, centerId, side, filters, hideTests, degree, onSelect
 
   return (
     <div style={{ marginTop: SP.sm }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: SP.xs }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, marginBottom: SP.xs }}>
         <span style={sectionTitleStyle}>
           {side === 'in' ? 'Зависят от него' : 'От кого зависит он'} · {list.length}
         </span>
         <LinkAction onClick={onClose}>свернуть</LinkAction>
       </div>
       {list.length ? (
-        <div style={{ maxHeight: 220, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <div style={{ maxHeight: 220, overflowY: 'auto' }}>
           {list.map(o => (
-            <div key={o.node.id} onClick={() => onSelect(o.node.id)} style={searchHitStyle}>
-              <span style={{ color: C.textMuted, fontSize: FS.xs, flexShrink: 0 }}>{side === 'in' ? '←' : '→'}</span>
+            <Row key={o.node.id} onClick={() => onSelect(o.node.id)}>
+              <RowMeta>{side === 'in' ? '←' : '→'}</RowMeta>
               <Dot color={EDGE_COLOR[o.relations[0] ?? 'Calls']} />
-              <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textHeading, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.node.label}</span>
-              <span style={{ fontFamily: FONT.mono, fontSize: 10, color: C.textMuted, flexShrink: 0 }}>{o.degree}</span>
-            </div>
+              <RowName weight={400}>{o.node.label}</RowName>
+              <RowMeta mono>{o.degree}</RowMeta>
+            </Row>
           ))}
         </div>
       ) : <RelEmpty />}
@@ -376,35 +454,35 @@ function Passport({ node, graph, onSelect, onOpenFile }: {
     const other = graph.nodes.find(n => n.id === otherId);
     if (!other) return null;
     return (
-      <div key={`${e.source}-${e.target}-${e.relation}`} onClick={() => onSelect(otherId)} style={relLinkStyle}>
-        <span style={{ color: C.textMuted, fontSize: FS.xs, flexShrink: 0 }}>{out ? '→' : '←'}</span>
+      <Row key={`${e.source}-${e.target}-${e.relation}`} onClick={() => onSelect(otherId)}>
+        <RowMeta>{out ? '→' : '←'}</RowMeta>
         <Dot color={EDGE_COLOR[e.relation]} />
-        <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textHeading, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{other.label}</span>
+        <RowName weight={400}>{other.label}</RowName>
         <span style={{ fontSize: FS.xs, color: C.textMuted, textTransform: 'uppercase', letterSpacing: '0.3px', fontStyle: e.confidence === 'Inferred' ? 'italic' : 'normal' }}>
           {RELATION_LABEL[e.relation]}{e.confidence === 'Inferred' ? ' · inferred' : ''}
         </span>
-      </div>
+      </Row>
     );
   };
 
   return (
     <div>
       {/* kind-бейдж + god-метка */}
-      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', gap: SP.xs, alignItems: 'center', flexWrap: 'wrap' }}>
         <span style={{ ...kindBadgeStyle, background: EDGE_BG_forKind(node.kind), color: KIND_COLOR[node.kind] }}>
           <Dot color={KIND_COLOR[node.kind]} size={7} />{node.kind}
         </span>
         {isGod && (
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: FS.xs, fontWeight: 600, color: C.accent, background: C.accentLight, padding: '2px 8px', borderRadius: R.sm }}>
+          <span style={{ ...kindBadgeStyle, color: C.accent, background: C.accentLight, textTransform: 'none' }}>
             <Dot color={C.accent} size={7} />god-node
           </span>
         )}
       </div>
-      <div style={{ fontFamily: FONT.serif, fontSize: FS.lg, fontWeight: 700, color: C.textHeading, marginTop: 6 }}>{node.label}</div>
-      <div style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textSecondary, marginTop: 3, wordBreak: 'break-all' }}>{node.fullyQualifiedName}</div>
+      <div style={{ fontFamily: FONT.serif, fontSize: FS.lg, fontWeight: 700, color: C.textHeading, marginTop: SP.xs }}>{node.label}</div>
+      <div style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textSecondary, marginTop: SP.xxs, wordBreak: 'break-all' }}>{node.fullyQualifiedName}</div>
       {/* Переход к исходнику — открываем на конкретной строке */}
       <div onClick={() => onOpenFile(node.sourceFile, parseSourceLine(node.sourceLocation))} title="Открыть во вкладке «Файлы»"
-        style={{ display: 'flex', alignItems: 'flex-start', gap: 7, fontFamily: FONT.mono, fontSize: FS.xs, color: C.info, background: C.infoBg, borderRadius: R.lg, padding: '7px 9px', cursor: 'pointer', margin: '8px 0', wordBreak: 'break-all' }}>
+        style={{ display: 'flex', alignItems: 'flex-start', gap: SP.xs, fontFamily: FONT.mono, fontSize: FS.xs, color: C.info, background: C.infoBg, borderRadius: R.lg, padding: `${SP.xs}px ${SP.sm}px`, cursor: 'pointer', margin: `${SP.sm}px 0`, wordBreak: 'break-all' }}>
         <FileCode size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0, marginTop: 1 }} />
         <span style={{ textDecoration: 'underline' }}>{node.sourceFile}:{node.sourceLocation}</span>
       </div>
@@ -419,11 +497,62 @@ function Passport({ node, graph, onSelect, onOpenFile }: {
 }
 
 // === Мелкие презентационные куски ===
+
+// Строка списка панели — одна на всех (результат поиска, god-узел, связь паспорта,
+// сосед фокуса). Раньше у каждого из четырёх мест был свой почти одинаковый стиль
+// и ни у одного не было наведения — строки не читались как кликабельные.
+function Row({ onClick, active, children }: { onClick?: () => void; active?: boolean; children: React.ReactNode }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <div onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        display: 'flex', alignItems: 'center', gap: SP.xs,
+        padding: `${SP.xs}px ${SP.sm}px`, borderRadius: R.lg, fontSize: FS.xs,
+        cursor: onClick ? 'pointer' : 'default',
+        background: active ? C.bgSelected : (hover ? C.bgInset : 'transparent'),
+      }}>
+      {children}
+    </div>
+  );
+}
+
+// Имя типа в строке — забирает свободное место и режется многоточием
+function RowName({ children, weight = 600 }: { children: React.ReactNode; weight?: number }) {
+  return (
+    <span style={{
+      fontFamily: FONT.mono, fontSize: FS.xs, fontWeight: weight, color: C.textHeading,
+      flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+    }}>{children}</span>
+  );
+}
+
+// Приписка в строке: путь, связность, глиф вида
+function RowMeta({ children, mono, style }: { children: React.ReactNode; mono?: boolean; style?: React.CSSProperties }) {
+  return (
+    <span style={{
+      fontSize: FS.xs, color: C.textMuted, flexShrink: 0,
+      ...(mono ? { fontFamily: FONT.mono } : null), ...style,
+    }}>{children}</span>
+  );
+}
+
+// Пункт меню-тумблера: галка слева от подписи появляется у включённого
+function CheckLabel({ on, children }: { on: boolean; children: React.ReactNode }) {
+  return (
+    <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: SP.sm, flex: 1 }}>
+      <span>{children}</span>
+      {on && <Check size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={C.accent} />}
+    </span>
+  );
+}
+
 function Section({ title, aside, children }: { title?: string; aside?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <div style={{ padding: SP.md, borderBottom: `1px solid ${C.borderLight}` }}>
+    <div style={{ padding: `${SP.md}px ${SP.md}px 0` }}>
       {title && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: SP.sm }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, marginBottom: SP.sm }}>
           <span style={sectionTitleStyle}>{title}</span>
           {aside}
         </div>
@@ -435,7 +564,7 @@ function Section({ title, aside, children }: { title?: string; aside?: React.Rea
 
 function LegendRow({ color, glyph, label }: { color: string; glyph: string; label: string }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, fontSize: FS.xs, color: C.textSecondary, padding: '3px 0' }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, fontSize: FS.xs, color: C.textSecondary, padding: `${SP.xxs}px 0` }}>
       <span style={{ width: 13, height: 13, borderRadius: R.full, border: `2px solid ${color}`, background: C.bgCard, flexShrink: 0 }} />
       <span style={{ fontFamily: FONT.mono, fontWeight: 600, color, width: 12 }}>{glyph}</span>
       <span>{label}</span>
@@ -452,7 +581,7 @@ function LinkAction({ onClick, children }: { onClick: () => void; children: Reac
 }
 
 function RelEmpty() {
-  return <div style={{ fontSize: FS.xs, color: C.textMuted, padding: `2px 7px` }}>нет</div>;
+  return <div style={{ fontSize: FS.xs, color: C.textMuted, padding: `${SP.xxs}px ${SP.sm}px` }}>нет</div>;
 }
 
 // Фон kind-бейджа — soft-подложка под цвет типа (для контраста цветной точки)
@@ -471,6 +600,7 @@ function parseSourceLine(loc: string): number | undefined {
 }
 
 const SEARCH_LIMIT = 20;
+const GOD_LIMIT = 15;
 
 // === Общие стили секций (inline) ===
 const sectionTitleStyle: React.CSSProperties = {
@@ -478,22 +608,10 @@ const sectionTitleStyle: React.CSSProperties = {
   color: C.textMuted, fontWeight: 600,
 };
 const collapseHeadStyle: React.CSSProperties = {
-  width: '100%', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer',
-  padding: `${SP.sm} ${SP.md}`, background: 'transparent', border: 'none', fontFamily: 'inherit',
-};
-const godItemStyle: React.CSSProperties = {
-  display: 'flex', alignItems: 'center', gap: SP.sm, padding: '6px 8px',
-  borderRadius: R.lg, cursor: 'pointer', fontSize: FS.sm,
-};
-const relLinkStyle: React.CSSProperties = {
-  display: 'flex', alignItems: 'center', gap: 7, padding: '4px 7px',
-  borderRadius: R.lg, fontSize: FS.xs, cursor: 'pointer',
+  width: '100%', display: 'flex', alignItems: 'center', gap: SP.xs, cursor: 'pointer',
+  padding: `${SP.md}px ${SP.md}px ${SP.sm}px`, background: 'transparent', border: 'none', fontFamily: 'inherit',
 };
 const kindBadgeStyle: React.CSSProperties = {
-  display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: FS.xs, fontWeight: 600,
-  textTransform: 'uppercase', letterSpacing: '0.5px', padding: '2px 8px', borderRadius: R.sm,
-};
-const searchHitStyle: React.CSSProperties = {
-  display: 'flex', alignItems: 'center', gap: 6, padding: '5px 8px',
-  borderRadius: R.lg, cursor: 'pointer', fontSize: FS.xs,
+  display: 'inline-flex', alignItems: 'center', gap: SP.xs, fontSize: FS.xs, fontWeight: 600,
+  textTransform: 'uppercase', letterSpacing: '0.5px', padding: `${SP.xxs}px ${SP.sm}px`, borderRadius: R.sm,
 };

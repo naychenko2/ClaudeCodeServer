@@ -1,5 +1,5 @@
-import type { ReactNode } from 'react';
-import { C } from '../lib/design';
+import { useState, type ReactNode } from 'react';
+import { C, R } from '../lib/design';
 
 // Мигание при переходе к группе списка: одно короткое затухание по прозрачности — без
 // подложки, чтобы не спорить с выделением строки. Класс экспортируется: вешать его можно и
@@ -31,6 +31,7 @@ if (typeof document !== 'undefined' && !document.getElementById('cc-list-flash-s
  */
 export function ListDateDivider({
   title, subtitle, align = 'center', dense = false, flash = false, onClick, leading, trailing, titleAttr,
+  highlightOnHover = false, onLineClick, lineTitleAttr,
 }: {
   title: string;
   // Приписка сразу после подписи, приглушённо: у групп документации это родительский
@@ -46,7 +47,15 @@ export function ListDateDivider({
   trailing?: ReactNode;
   // Подсказка при наведении: у кликабельного разделителя объясняет, что будет по клику
   titleAttr?: string;
+  // Подсветить подложку под курсором. Включаем там, где клик ОТКРЫВАЕТ документ (страница
+  // раздела), а не просто сворачивает группу: подложка обещает переход к контенту
+  highlightOnHover?: boolean;
+  // Свой обработчик на правую линию: когда сама подпись открывает документ, черта справа
+  // остаётся под сворачивание группы — как шеврон. Клик по ней не всплывает к onClick
+  onLineClick?: () => void;
+  lineTitleAttr?: string;
 }) {
+  const [hover, setHover] = useState(false);
   const lineColor = flash ? C.accent : C.divider;
   const line = { flex: 1, height: 1, background: lineColor };
   const stub = { width: 10, height: 1, background: lineColor, flexShrink: 0 };
@@ -61,14 +70,35 @@ export function ListDateDivider({
         {title}
       </span>
       {subtitle && (
-        <span style={{
-          fontSize: 10, fontWeight: 400, whiteSpace: 'nowrap',
-          color: C.textMuted, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis',
-        }}>
-          {subtitle}
-        </span>
+        <>
+          {/* Центральная точка между папкой и родителем: разделяет их отчётливее пробела,
+              вертикально по центру строки. Декоративная — скринридеру не нужна */}
+          <span aria-hidden style={{ fontSize: 10, color: C.textMuted, flexShrink: 0, margin: '0 -4px' }}>·</span>
+          <span style={{
+            fontSize: 10, fontWeight: 400, whiteSpace: 'nowrap',
+            color: C.textMuted, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis',
+          }}>
+            {subtitle}
+          </span>
+        </>
       )}
-      <div style={line} />
+      {onLineClick ? (
+        // Зона клика во всю высоту строки, черта в 1px — по центру: попасть по линии
+        // толщиной в пиксель мышью нельзя, поэтому кликабельна вся правая колонка.
+        // stopPropagation держит жест отдельно от onClick подписи (та открывает документ)
+        <div
+          onClick={e => { e.stopPropagation(); onLineClick(); }}
+          title={lineTitleAttr}
+          style={{
+            flex: 1, alignSelf: 'stretch', cursor: 'pointer',
+            display: 'flex', alignItems: 'center',
+          }}
+        >
+          <div style={{ flex: 1, height: 1, background: lineColor }} />
+        </div>
+      ) : (
+        <div style={line} />
+      )}
       {trailing}
     </>
   );
@@ -80,10 +110,14 @@ export function ListDateDivider({
   return (
     <button
       onClick={onClick}
+      onMouseEnter={highlightOnHover ? () => setHover(true) : undefined}
+      onMouseLeave={highlightOnHover ? () => setHover(false) : undefined}
       title={titleAttr}
       style={{
         ...layout,
-        width: '100%', border: 'none', background: 'transparent',
+        width: '100%', border: 'none',
+        background: highlightOnHover && hover ? C.bgInset : 'transparent',
+        borderRadius: highlightOnHover ? R.md : undefined,
         cursor: 'pointer', font: 'inherit', textAlign: 'left',
       }}
     >

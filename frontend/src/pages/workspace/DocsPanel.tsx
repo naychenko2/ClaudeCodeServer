@@ -134,6 +134,18 @@ function groupLabel(folder: string): string {
   return folder === PINNED_GROUP ? 'Закреплённые' : folderLabel(folder);
 }
 
+// Ведущий эмодзи с заголовка. У родительской папки в линии папок он лишний: это
+// приглушённый контекст, а не самостоятельная строка, и книжка/колба перед именем
+// только зашумляют. Срезаем кластер целиком (эмодзи + variation selector + ZWJ-
+// последовательности) и пробелы за ним. Заголовок из одного эмодзи откатываем к
+// оригиналу — пустая подпись хуже эмодзи
+function stripLeadingEmoji(title: string): string {
+  const stripped = title
+    .replace(/^(?:\p{Extended_Pictographic}|\p{M}|\p{Cf}|\s)+/u, '')
+    .trim();
+  return stripped || title;
+}
+
 // Настоящая папка: у корневой группы подписи нет, а у закреплённых она своя — ни ту,
 // ни другую кнопки уровней не трогают и в глубину не считают. Нужна вместе с ними
 // (см. закомментированные collapseLevel/expandLevel).
@@ -212,6 +224,9 @@ function FolderSticky({ folder, title: titleProp, subtitle, flash, collapsed, hi
           title={title} subtitle={subtitle}
           align="left" dense flash={flash}
           onClick={onOpenPage}
+          highlightOnHover
+          onLineClick={onToggle}
+          lineTitleAttr={`${title} — ${collapsed ? 'показать' : 'скрыть'} документы раздела`}
           titleAttr={`${title} — открыть страницу раздела`}
           trailing={collapsed
             ? <span style={{ flexShrink: 0, fontSize: 10, color: C.textMuted }}>{hidden}</span>
@@ -320,7 +335,9 @@ function DocRow({ doc, selected, home, pinned, onOpen, onExpand, onTogglePin }: 
       onMouseLeave={() => { setHover(false); setPinHover(false); }}
       style={{
         display: 'flex', alignItems: 'center', borderRadius: R.md,
-        background: selected ? C.bgSelected : 'transparent',
+        // Наведение подсвечивает открываемую строку: документ откроется по клику,
+        // и подложка под курсором это обещает. Выбранное сильнее — своя заливка
+        background: selected ? C.bgSelected : hover ? C.bgInset : 'transparent',
         minHeight: ROW_H, paddingLeft: SP.sm,
       }}
     >
@@ -647,7 +664,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
     if (!page) return { title: groupLabel(folder) };
     const parent = folderOf(folder);
     const parentPage = parent ? sectionPages.get(parent) : undefined;
-    return { title: page.title, subtitle: parentPage ? parentPage.title : parent || undefined };
+    return { title: page.title, subtitle: parentPage ? stripLeadingEmoji(parentPage.title) : parent || undefined };
   }, [sectionPages]);
 
   // Список папок для поповера переходов. Блоки одной папки складываются в одну строку:

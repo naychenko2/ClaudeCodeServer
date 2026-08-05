@@ -34,7 +34,7 @@ import { copyMarkdown } from '../lib/selectionScope';
 import { useGitState, ensureGit } from '../lib/git';
 import { useOnline } from '../hooks/useOnline';
 import { EmptyState } from './EmptyState';
-import { C, R, FONT, MODAL_W } from '../lib/design';
+import { C, R, FS, FONT, MODAL_W } from '../lib/design';
 import { useThemeMode, getEffectiveTheme } from '../lib/themeMode';
 import { Modal, ModalActions, TextField, IconButton, Button, Menu, MenuItem, PanelHeaderSlot, useHasPanelHeader } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
@@ -197,12 +197,12 @@ export function getExtMeta(name: string) {
 }
 
 function FolderIcon() {
-  return <Folder size={ICON_SIZE.md} strokeWidth={ICON_STROKE} color={C.accent} />;
+  return <Folder size={14} strokeWidth={ICON_STROKE} color={C.accent} />;
 }
 
 // Иконка папки «Заметки» (vault проекта) — единая IconNotes в accent-цвете
 function NotesFolderIcon() {
-  return <span style={{ color: C.accent, display: 'flex' }}><IconNotes size={17} /></span>;
+  return <span style={{ color: C.accent, display: 'flex' }}><IconNotes size={14} /></span>;
 }
 
 function CloudIcon({ variant }: { variant: 'direct' | 'inherited' | 'idle' }) {
@@ -384,6 +384,13 @@ interface ContextMenuState {
   entry: FileEntry;
 }
 
+// Плотность дерева — общая с «Документацией» (DocsPanel.ROW_H): панели стоят рядом
+// в одной рельсе, и разная высота строки читалась бы как разный масштаб интерфейса.
+// На тач-раскладке строка выше: 22px пальцем не попасть.
+const ROW_H = 22;
+const ROW_H_TOUCH = 40;
+const INDENT = 12;   // отступ на уровень вложенности
+
 // Строка дерева — отдельный компонент ради СОБСТВЕННОГО состояния наведения.
 // Пока hover жил в панели, каждое движение мыши перерисовывало весь список: в
 // раскрытом дереве это сотни строк с инлайновыми стилями на каждый mousemove.
@@ -508,12 +515,12 @@ const FileRow = memo(function FileRow(p: FileRowProps) {
       onTouchMove={touch ? p.onTouchCancel : undefined}
       onTouchCancel={touch ? p.onTouchCancel : undefined}
       style={{
-        display: 'flex', alignItems: isMobile ? 'flex-start' : 'center', gap: 6,
-        paddingLeft: 8 + depth * 16, paddingRight: stickyIcons ? 0 : 8,
-        paddingTop: touch ? 10 : 6,
-        paddingBottom: touch ? 10 : 6,
-        minHeight: touch ? 44 : 36,
-        borderRadius: 8, cursor: p.dragging ? 'grabbing' : 'pointer',
+        display: 'flex', alignItems: isMobile ? 'flex-start' : 'center', gap: 5,
+        paddingLeft: 8 + depth * INDENT, paddingRight: stickyIcons ? 0 : 8,
+        paddingTop: touch ? 9 : 1,
+        paddingBottom: touch ? 9 : 1,
+        minHeight: touch ? ROW_H_TOUCH : ROW_H,
+        borderRadius: R.md, cursor: p.dragging ? 'grabbing' : 'pointer',
         width: '100%', boxSizing: 'border-box',
         opacity: p.dragging ? 0.4 : p.pressing ? 0.6 : 1,
         transform: p.pressing ? 'scale(0.98)' : 'none',
@@ -525,10 +532,14 @@ const FileRow = memo(function FileRow(p: FileRowProps) {
         transition: 'background 0.1s, box-shadow 0.1s, opacity 0.1s, transform 0.1s',
       }}
     >
-      {/* toggle-стрелка дерева — только десктоп/планшет */}
+      {/* toggle-стрелка дерева — только десктоп/планшет. Chevron с поворотом вместо
+          текстовых ▸/▾: шрифтовые глифы разной ширины дёргали строку при раскрытии */}
       {!p.mobileNav && (
-        <span style={{ width: 12, flexShrink: 0, textAlign: 'center', userSelect: 'none', color: C.textMuted, fontSize: 9, lineHeight: 1 }}>
-          {entry.isDirectory ? (p.loading ? '·' : (p.expanded ? '▾' : '▸')) : ''}
+        <span style={{ width: 12, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textMuted }}>
+          {entry.isDirectory && (p.loading
+            ? <span style={{ fontSize: 9, lineHeight: 1 }}>·</span>
+            : <ChevronRight size={11} strokeWidth={ICON_STROKE}
+                style={{ transform: p.expanded ? 'rotate(90deg)' : 'none', transition: 'transform .15s ease' }} />)}
         </span>
       )}
       {entry.isDirectory ? (
@@ -537,10 +548,10 @@ const FileRow = memo(function FileRow(p: FileRowProps) {
         </span>
       ) : (
         <span style={{
-          width: 23, height: 23, borderRadius: 6,
+          width: 16, height: 16, borderRadius: 4,
           background: em!.bg, color: em!.fg,
           fontFamily: "'JetBrains Mono', monospace",
-          fontSize: 8.5, fontWeight: 700,
+          fontSize: 7.5, fontWeight: 700,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           flexShrink: 0, letterSpacing: '-0.02em',
         }}>{em!.label}</span>
@@ -560,7 +571,7 @@ const FileRow = memo(function FileRow(p: FileRowProps) {
             onClick={e => e.stopPropagation()}
             style={{
               fontFamily: "'JetBrains Mono', monospace",
-              fontSize: 13,
+              fontSize: FS.sm,
               fontWeight: entry.isDirectory ? 700 : 500,
               color: C.textHeading,
               background: C.bgWhite,
@@ -574,8 +585,9 @@ const FileRow = memo(function FileRow(p: FileRowProps) {
           />
         ) : (
           <span title={notesRoot ? 'Заметки (папка notes)' : entry.name} style={{
+            // Имя файла остаётся моноширинным: это идентификатор, а не заголовок
             fontFamily: notesRoot ? undefined : "'JetBrains Mono', monospace",
-            fontSize: 13,
+            fontSize: FS.sm,
             fontWeight: entry.isDirectory ? 700 : 500,
             color: notesRoot ? C.accent
               : (!entry.isDirectory && p.indexed) ? C.successText
@@ -587,7 +599,7 @@ const FileRow = memo(function FileRow(p: FileRowProps) {
         )}
         {parentDir && (
           <span title={normPath(entry.path)} style={{
-            fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5, color: C.textMuted,
+            fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: C.textMuted,
             ...(isMobile ? { whiteSpace: 'normal', wordBreak: 'break-all' } : { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }),
           }}>{parentDir}</span>
         )}
@@ -707,17 +719,17 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   }, [gitState.status]);
 
   // Фильтр активен только в git-репо: изменённый файл / папка на пути к изменению.
-  // Пути untracked-папок git отдаёт как «dir/» — такие покрывает префикс-проверка.
+  // Обе проверки — по готовым множествам: dirs собраны из родителей изменённых
+  // путей, а files покрывает untracked-папки, которые git отдаёт как «dir/» (хвостовой
+  // слеш снят выше). Раньше для папок шёл линейный перебор всех изменённых файлов на
+  // КАЖДУЮ строку дерева — O(строки × изменения) на каждый рендер.
   const passesChangedFilter = useCallback((entry: FileEntry): boolean => {
     if (entry.isModified || entry.isNew) return true;
     if (!changedSets) return false;
     const p = normPath(entry.path);
-    if (entry.isDirectory) {
-      if (changedSets.dirs.has(p)) return true;
-      for (const f of changedSets.files) if (f.startsWith(p + '/')) return true;
-      return false;
-    }
-    return changedSets.files.has(p);
+    return entry.isDirectory
+      ? changedSets.dirs.has(p) || changedSets.files.has(p)
+      : changedSets.files.has(p);
   }, [changedSets]);
 
   const [search, setSearch] = useState(() => initial?.search ?? '');

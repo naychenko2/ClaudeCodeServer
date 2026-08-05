@@ -2193,6 +2193,7 @@ public class SessionManagerTests : IDisposable
         public Func<Task>? Gate;
 
         public bool UsesLocal(string actionKey) => false;
+        public string DescribeRoute(string actionKey, string? fallbackModel) => "claude";
 
         public async Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
             string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
@@ -3492,6 +3493,10 @@ public class SessionManagerTests : IDisposable
     [Fact]
     public async Task МаркерРаботы_ПланировщикНеСмог_ЧеловекПолучаетКарточку()
     {
+        // «не понял задачу» — не JSON, без открытой скобки: парсер даёт InvalidJson.
+        // Раньше текст карточки был общий «уточните задачу», теперь — отдельный
+        // «вернул неразборчивый план» (прод 2026-08-05). Сбой планировщика и сбой
+        // парсера — разные вещи: парсер советует «повторите», не «уточните».
         var (session, _, _) = await MakeIdleStabAsync("ti-work-noplan");
         _plannerAnswer = "не понял задачу";
 
@@ -3500,7 +3505,7 @@ public class SessionManagerTests : IDisposable
         var card = _sentMessages.OfType<TeamEscalationMessage>().Last();
         card.Kind.Should().Be("productDecision");
         card.Title.Should().Contain("не построился");
-        card.Details.Should().Contain("Уточните задачу");
+        card.Details.Should().Contain("неразборчивый план");
         // Повторить планирование можно кнопкой — без повторного интервью
         card.Actions.Select(a => a.Id).Should().Equal("retryPlan");
         _sut.GetById(session.Id)!.TeamImplement!.LastPlanRequest.Should().Be("сделай хорошо");
@@ -5630,6 +5635,7 @@ public class SessionManagerTests : IDisposable
     private sealed class StubTitleCheapRunner(bool usesLocal, Func<string> response) : ICheapTextRunner
     {
         public bool UsesLocal(string actionKey) => usesLocal;
+        public string DescribeRoute(string actionKey, string? fallbackModel) => "claude";
 
         public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
             string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default) =>

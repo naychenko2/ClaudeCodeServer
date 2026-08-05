@@ -9,19 +9,22 @@ import { TEAM_PLANNING_TITLE, TEAM_PLANNING_TEXT, teamPlanningElapsedLabel } fro
 // с появлением карточки плана/отказа — видимость считает ChatPanel, сам компонент
 // только рисуется и ведёт отсчёт.
 //
-// Отсчёт времени — тот же приём, что у фаз workflow-карточки («работает N мин»):
-// от момента, когда клиент увидел стадию (таймстампа начала стадии на проводе нет).
-// После перезагрузки посреди планирования счёт идёт от нуля.
-export function TeamPlanningIndicator() {
-  // Начало отсчёта — момент монтирования плашки (клиент увидел стадию planning).
-  // До первого тика показываем честное для нуля секунд значение; setState живёт
-  // в интервале, а не в теле эффекта — каскадных рендеров нет
-  const [elapsed, setElapsed] = useState('меньше минуты');
+// Отсчёт времени — тот же приём, что у фаз workflow-карточки («работает N мин»),
+// но точку старта берём из события team_planning, когда она есть (см. ChatState.teamPlanning) —
+// она переживает ремонт плашки внутри одной живой сессии вкладки (переключение вкладок
+// туда-обратно не сбрасывает счёт, в отличие от Date.now() при монтировании). startedAt не
+// пришёл (чат открыли уже посреди планирования, событий не видели) — считаем от монтирования,
+// как раньше; после ПЕРЕЗАГРУЗКИ страницы счёт в любом случае идёт с нуля — таймстампа начала
+// стадии на проводе нет.
+export function TeamPlanningIndicator({ startedAt: liveStartedAt }: { startedAt?: number }) {
+  // Точка отсчёта фиксируется один раз при монтировании (ленивый инициализатор useState,
+  // а не эффект) — иначе синхронный setState в теле эффекта плодит лишний рендер
+  const [startedAt] = useState(() => liveStartedAt ?? Date.now());
+  const [elapsed, setElapsed] = useState(() => teamPlanningElapsedLabel(startedAt, Date.now()));
   useEffect(() => {
-    const startedAt = Date.now();
     const t = setInterval(() => setElapsed(teamPlanningElapsedLabel(startedAt, Date.now())), 10_000);
     return () => clearInterval(t);
-  }, []);
+  }, [startedAt]);
 
   return (
     <div

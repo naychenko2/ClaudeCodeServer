@@ -62,7 +62,8 @@ public sealed class LocalActionRouter
                 NumCtx: s.GetValue("NumCtx", def.NumCtx),
                 NumPredict: s.GetValue("NumPredict", def.NumPredict),
                 TimeoutMs: s.GetValue("TimeoutMs", def.TimeoutMs),
-                CloudTimeoutMs: s.GetValue("CloudTimeoutMs", def.CloudTimeoutMs));
+                CloudTimeoutMs: s.GetValue("CloudTimeoutMs", def.CloudTimeoutMs),
+                CloudNumPredict: s.GetValue("CloudNumPredict", def.CloudNumPredict));
         }
     }
 

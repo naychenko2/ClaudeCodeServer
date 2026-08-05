@@ -7,12 +7,21 @@ namespace ClaudeHomeServer.Services.Llm;
 public enum CheapProfile { Small, Text, Large }
 
 // Базовые параметры профиля (переопределяются секцией Ollama:Profiles в конфиге).
-// Таймаутов два — по числу маршрутов: TimeoutMs для локальной модели (Ollama на своём
-// железе, параметры под неё и калибровались), CloudTimeoutMs для облачных маршрутов
-// (слот/провайдерская модель через CLI и direct:-адаптер). Облачная сильная модель
-// на сложной задаче отвечает заметно дольше локали, и локальный потолок её обрывал
-// (прод 2026-08-04: планировщик «Командной реализации» на opus не уложился в 90 с).
-public sealed record CheapProfileSpec(int NumCtx, int NumPredict, int TimeoutMs, int CloudTimeoutMs);
+// Параметров по ДВА на каждый ограничитель — по числу маршрутов, и по одной и той же
+// причине: локальные значения калибровались под Ollama на своём железе, облачным моделям
+// они малы.
+//  • TimeoutMs / CloudTimeoutMs — потолок времени. Облачная сильная модель на сложной
+//    задаче отвечает заметно дольше локали, и локальный потолок её обрывал (прод
+//    2026-08-04: планировщик «Командной реализации» на opus не уложился в 90 с).
+//  • NumPredict / CloudNumPredict — потолок ВЫВОДА. Локальный бережёт память Ollama
+//    (num_predict), облачный уходит в max_tokens запроса. Тот же перекос и та же цена:
+//    у профиля Large на облаке 1024 токена вывода обрывали JSON плана на полуслове,
+//    ParsePlan возвращал null, и человек видел «план не построился» — симптом,
+//    неотличимый от таймаута (прод 2026-08-05). Облачные значения — с запасом на
+//    крупный структурный ответ, но не выше 8k: это потолок вывода, который держат
+//    практически все модели агрегатора, а больший провайдер может отбить 400-й.
+public sealed record CheapProfileSpec(
+    int NumCtx, int NumPredict, int TimeoutMs, int CloudTimeoutMs, int CloudNumPredict);
 
 // Одно место применения модели. Исторически — фоновое one-shot действие, с v2 каталог
 // накрывает и агентные места (группа «Чаты и персоны»): им тоже назначается исполнитель.
@@ -90,16 +99,20 @@ public static class LocalActionCatalog
     public const string PromptAudit = "prompt-audit";
 
     // Дефолты профилей. Переопределяются
-    // Ollama:Profiles:{small|text|large}:{NumCtx|NumPredict|TimeoutMs|CloudTimeoutMs}.
-    // CloudTimeoutMs растёт с профилем: мелкой задаче на облаке хватает общего дефолта
-    // раннера (120 с), тяжёлой нужно заметно больше — планировщик на сильной модели
-    // с большим промптом отвечает до нескольких минут.
+    // Ollama:Profiles:{small|text|large}:{NumCtx|NumPredict|TimeoutMs|CloudTimeoutMs|CloudNumPredict}.
+    // CloudTimeoutMs и CloudNumPredict растут с профилем: мелкой задаче на облаке хватает
+    // общего дефолта раннера (120 с) и короткого ответа, тяжёлой нужно заметно больше —
+    // планировщик на сильной модели с большим промптом отвечает до нескольких минут и
+    // выдаёт многокилобайтный JSON.
     public static readonly IReadOnlyDictionary<CheapProfile, CheapProfileSpec> ProfileDefaults =
         new Dictionary<CheapProfile, CheapProfileSpec>
         {
-            [CheapProfile.Small] = new(NumCtx: 4096, NumPredict: 256, TimeoutMs: 20_000, CloudTimeoutMs: 120_000),
-            [CheapProfile.Text] = new(NumCtx: 8192, NumPredict: 768, TimeoutMs: 45_000, CloudTimeoutMs: 180_000),
-            [CheapProfile.Large] = new(NumCtx: 16384, NumPredict: 1024, TimeoutMs: 90_000, CloudTimeoutMs: 300_000),
+            [CheapProfile.Small] = new(NumCtx: 4096, NumPredict: 256,
+                TimeoutMs: 20_000, CloudTimeoutMs: 120_000, CloudNumPredict: 1024),
+            [CheapProfile.Text] = new(NumCtx: 8192, NumPredict: 768,
+                TimeoutMs: 45_000, CloudTimeoutMs: 180_000, CloudNumPredict: 4096),
+            [CheapProfile.Large] = new(NumCtx: 16384, NumPredict: 1024,
+                TimeoutMs: 90_000, CloudTimeoutMs: 300_000, CloudNumPredict: 8192),
         };
 
     private static readonly IReadOnlyList<LocalAction> Builtin =

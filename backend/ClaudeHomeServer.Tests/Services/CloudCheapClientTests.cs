@@ -119,4 +119,75 @@ public class CloudCheapClientTests
         Assert.NotNull(source);
         Assert.Equal("openrouter", source.Key); // legacy openrouter — первый configured источник
     }
+
+    // Обрыв по лимиту вывода (прод 2026-08-05): провайдер кладёт finish_reason="length" в choice,
+    // контент в ответе обрезан. CloudCheapClient обязан отдать Truncated=true, иначе планировщик
+    // «Командной реализации» спутает обрез с таймаутом. Тест идёт через подставной HTTP — JSON
+    // ровно как у OpenRouter-compatible источника с content=обрезанный фрагмент и finish_reason.
+    [Fact]
+    public async Task GenerateDetailedAsync_FinishReasonLength_Truncated()
+    {
+        var truncated = """
+            {
+              "choices": [{
+                "index": 0,
+                "finish_reason": "length",
+                "message": {"role": "assistant", "content": "{\"summary\":\"Экспорт\",\"subtasks\":[{\"title\":\"A\""}
+              }],
+              "usage": {"prompt_tokens": 7, "completion_tokens": 1024}
+            }
+            """;
+        var config = TestConfig.Build(WithOpenRouter(new()));
+        var providers = new LlmProviderRegistry(config);
+        var capture = new CaptureLogger();
+        var client = new CloudCheapClient(new StubHttpFactory(truncated), config, providers, capture);
+
+        var result = await client.GenerateDetailedAsync("direct:nvidia/nemotron:free", "p",
+            TimeSpan.FromSeconds(5), maxTokens: 1024, ownerId: "u", label: "team-implement-plan");
+
+        Assert.True(result.Truncated, "finish_reason=length даёт Truncated=true — иначе симптом неотличим от таймаута");
+        Assert.NotNull(result.Text);
+        Assert.Contains("обрез", string.Join(" | ", capture.Warnings), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task GenerateDetailedAsync_FinishReasonStop_NotTruncated()
+    {
+        var ok = """
+            {
+              "choices": [{
+                "index": 0,
+                "finish_reason": "stop",
+                "message": {"role": "assistant", "content": "{\"summary\":\"X\"}"}
+              }],
+              "usage": {"prompt_tokens": 3, "completion_tokens": 4}
+            }
+            """;
+        var config = TestConfig.Build(WithOpenRouter(new()));
+        var providers = new LlmProviderRegistry(config);
+        var client = new CloudCheapClient(new StubHttpFactory(ok), config, providers, new CaptureLogger());
+
+        var result = await client.GenerateDetailedAsync("direct:nvidia/nemotron:free", "p",
+            TimeSpan.FromSeconds(5), maxTokens: 1024);
+
+        Assert.False(result.Truncated);
+        Assert.Equal("{\"summary\":\"X\"}", result.Text);
+    }
+
+    // Подставной HTTP для unit-тестов CloudCheapClient: отдаёт заготовленный JSON
+    // без проверки URL, заголовков и тела. Достаточно для проверки парсинга ответа.
+    private sealed class StubHttpFactory(string json) : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name) => new(new StubHandler(json));
+    }
+
+    private sealed class StubHandler(string json) : System.Net.Http.HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json"),
+            });
+    }
 }

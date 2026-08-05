@@ -153,6 +153,31 @@ public class LocalActionRoutingTests
         Assert.Equal(9000, overridden.ProfileFor(LocalActionCatalog.NotesTags).NumCtx);
     }
 
+    // Локальный лимит вывода и облачный — разные потолки (прод 2026-08-05): локаль
+    // бережёт память Ollama, облачный заходит в max_tokens запроса к провайдеру и должен
+    // быть достаточным для крупного JSON-плана. Дефолты каталога это уже учитывают,
+    // но конфиг может сократить — тест проверяет, что сокращение РАЗДЕЛЬНОЕ.
+    [Fact]
+    public void ProfileFor_CloudNumPredict_ОтдельноОтЛокального()
+    {
+        var router = Router(new() { ["Ollama:Model"] = "qwen3:14b" });
+        var spec = router.ProfileFor(LocalActionCatalog.TeamImplementPlan);
+        // Large по дефолту: 1024 локально, 8192 облачно — паритет 1:8, как раз под план.
+        Assert.Equal(1024, spec.NumPredict);
+        Assert.Equal(8192, spec.CloudNumPredict);
+        Assert.True(spec.CloudNumPredict > spec.NumPredict,
+            "облачный лимит вывода обязан быть больше локального — иначе план оборвётся");
+
+        // Конфиг умеет сократить каждый по отдельности.
+        var overridden = Router(new()
+        {
+            ["Ollama:Model"] = "qwen3:14b",
+            ["Ollama:Profiles:large:CloudNumPredict"] = "4096",
+        });
+        Assert.Equal(4096, overridden.ProfileFor(LocalActionCatalog.TeamImplementPlan).CloudNumPredict);
+        Assert.Equal(1024, overridden.ProfileFor(LocalActionCatalog.TeamImplementPlan).NumPredict);
+    }
+
     // --- Админские оверрайды маршрута (рантайм-переключение из UI) ---
 
     [Fact]
@@ -1026,5 +1051,69 @@ public class LocalActionRoutingTests
 
         Assert.Equal("CLAUDE[user-sonnet]:prompt-text", result.Text);
         Assert.Equal(["user-sonnet"], claude.Calls);
+    }
+
+    // Direct-маршрут через CloudCheapClient пробрасывает ОБЛАЧНЫЙ лимит вывода
+    // (CloudNumPredict профиля), а не локальный NumPredict — иначе план с большим JSON
+    // обрежется по лимиту (прод 2026-08-05). Тест перехватывает HTTP и читает max_tokens
+    // прямо из тела запроса к провайдеру: 8192 (Large.CloudNumPredict), не 1024 (Large.NumPredict).
+    [Fact]
+    public async Task CheapRunner_DirectМаршрут_ПробрасываетОблачныйЛимит()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "cc-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var cfg = new Dictionary<string, string?>
+        {
+            ["Ollama:Model"] = "",
+            ["DataPath"] = Path.Combine(dir, "projects.json"),
+            // Включаем openrouter в Cloud, чтобы direct-маршрут реально пошёл в HTTP.
+            ["LlmProviders:openrouter:ApiKey"] = "test-key",
+            ["LlmProviders:openrouter:AnthropicBaseUrl"] = "https://openrouter.ai/api",
+            ["LlmProviders:openrouter:ApiBaseUrl"] = "https://openrouter.ai/api/v1",
+            ["OpenRouter:Provider"] = "openrouter",
+            ["OpenRouter:DirectModels:0:Id"] = "nvidia/nemotron:free",
+        };
+        var config = TestConfig.Build(cfg);
+        var store = Store(config);
+        // Перенаправляем team-implement-plan на direct-модель: это Large-профиль
+        // (1024 локально, 8192 облачно). Без этого fix'a 1024 уйдёт в max_tokens.
+        store.Set(LocalActionCatalog.TeamImplementPlan, CloudCheapClient.RoutePrefix + "nvidia/nemotron:free");
+        var router = new LocalActionRouter(Ollama(config), store, config, NullLogger<LocalActionRouter>.Instance);
+        var capture = new CapturingHttpHandler();
+        var cloud = new CloudCheapClient(new SingleFactory(capture), config, new LlmProviderRegistry(config),
+            NullLogger<CloudCheapClient>.Instance);
+        var claude = new FakeOneShot();
+        var runner = new CheapTextRunner(router, Ollama(config), cloud, claude,
+            NullLogger<CheapTextRunner>.Instance);
+
+        await runner.RunAsync(LocalActionCatalog.TeamImplementPlan, "p", ownerId: "u");
+
+        var body = capture.LastBody;
+        Assert.NotNull(body);
+        Assert.Contains("\"max_tokens\":8192", body);
+        Assert.DoesNotContain("\"max_tokens\":1024", body);
+    }
+
+    private sealed class SingleFactory(System.Net.Http.HttpMessageHandler handler) : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name) => new(handler);
+    }
+
+    private sealed class CapturingHttpHandler : System.Net.Http.HttpMessageHandler
+    {
+        public string? LastBody { get; private set; }
+        private const string OpenRouterJson = """
+            {"choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"OK"}}],
+             "usage":{"prompt_tokens":1,"completion_tokens":1}}
+            """;
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            LastBody = request.Content is null ? null : await request.Content.ReadAsStringAsync();
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(OpenRouterJson, System.Text.Encoding.UTF8, "application/json"),
+            };
+        }
     }
 }

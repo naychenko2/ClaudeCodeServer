@@ -8,7 +8,7 @@ import {
   teamEscalationTone, teamEscalationInformational, teamEscalationDetailsLines,
   teamImplementSwitchesMode, teamImplementModeHeld, teamImplementModeWarning,
   teamPlanRunLabel, TEAM_IMPLEMENT_MODE_HELD, TEAM_IMPLEMENT_AUTO_TITLE,
-  teamPlanningIndicatorVisible, teamPlanningElapsedLabel,
+  teamPlanningIndicatorVisible, teamPlanningElapsedLabel, teamPlanningDoneText,
   TEAM_PLANNING_TITLE, TEAM_PLANNING_TEXT,
 } from '../teamImplement';
 import { applyServerMessage, initialChatState, type ChatState } from '../chatReducer';
@@ -242,6 +242,44 @@ describe('индикатор паузы планирования', () => {
   it('тексты объясняют, что пауза нормальна и займёт время', () => {
     expect(TEAM_PLANNING_TITLE).toBe('Команда готовит план…');
     expect(TEAM_PLANNING_TEXT).toContain('может занять несколько минут');
+  });
+
+  // Событие team_planning (live) точнее стадии: не ждёт записи файла плана на диск
+  // между «планировщик закончил» и переключением стадии режима
+  it('live=null — событие уже сказало «закончил», плашка гаснет даже если стадия ещё planning', () => {
+    expect(teamPlanningIndicatorVisible(state(), [], null)).toBe(false);
+  });
+
+  it('live={startedAt} — плашка видна даже если стадия ещё не долетела (planning)', () => {
+    expect(teamPlanningIndicatorVisible(state(), [], { startedAt: 1_000 })).toBe(true);
+  });
+
+  it('live не пришёл (undefined) — решает только стадия, как раньше', () => {
+    expect(teamPlanningIndicatorVisible(state(), [], undefined)).toBe(true);
+    expect(teamPlanningIndicatorVisible(state({ stage: 'confirming' }), [], undefined)).toBe(false);
+  });
+
+  it('остановка и отказ сильнее live: stopped и открытая карточка всё равно гасят', () => {
+    expect(teamPlanningIndicatorVisible(state({ stopped: true }), [], { startedAt: 1_000 })).toBe(false);
+    expect(teamPlanningIndicatorVisible(state(), [escalation(false)], { startedAt: 1_000 })).toBe(false);
+  });
+});
+
+// Строка-итог успешного планирования («видно, что он сделал») — короткая, без состава плана
+// (тот несёт карточка team_plan следом), только счётчики и грубое время
+describe('teamPlanningDoneText', () => {
+  it('склоняет под-задачи и волны, время — в секундах до минуты', () => {
+    expect(teamPlanningDoneText(1, 1, 5_000)).toBe('План собран — 1 под-задача · 1 волна · за 5 с');
+    expect(teamPlanningDoneText(5, 2, 46_000)).toBe('План собран — 5 под-задач · 2 волны · за 46 с');
+    expect(teamPlanningDoneText(3, 3, 3_000)).toBe('План собран — 3 под-задачи · 3 волны · за 3 с');
+  });
+
+  it('от минуты и дальше — целые минуты', () => {
+    expect(teamPlanningDoneText(2, 1, 90_000)).toBe('План собран — 2 под-задачи · 1 волна · за 2 мин');
+  });
+
+  it('waveCount=0 — волну не упоминаем (план ещё не считал волны)', () => {
+    expect(teamPlanningDoneText(1, 0, 1_000)).toBe('План собран — 1 под-задача · за 1 с');
   });
 });
 

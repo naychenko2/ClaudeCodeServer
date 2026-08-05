@@ -136,7 +136,7 @@ function derivePlanPhase(items: ChatItem[], mode: Mode, isWaiting: boolean): Pla
 }
 
 export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, attachedFiles, onAttachedFilesChange, artifactsOpen, onToggleArtifacts, greetingBubble, headerIsland, embedded, composerFocusSignal, headerDragProps }: Props) {
-  const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, workLoop: liveWorkLoop, teamImplement: liveTeamImplement, promptSuggestion, pending, composerRestore, consumeRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, respondTeamPlan, respondTeamEscalation, interrupt, compact, toggleThinking, noteCompanionSwitch, cancelPending } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
+  const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, workLoop: liveWorkLoop, teamImplement: liveTeamImplement, teamPlanning: liveTeamPlanning, promptSuggestion, pending, composerRestore, consumeRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, respondTeamPlan, respondTeamEscalation, interrupt, compact, toggleThinking, noteCompanionSwitch, cancelPending } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
   // Цикл «до готово» (флаг work-loop): live-состояние из событий work_loop,
   // до первого события — из Session.workLoop; null — цикл выключен
   const workLoopState = useMemo<WorkLoopState | null>(() => {
@@ -168,8 +168,8 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
   // Плашка «Команда готовит план…» в ленте: живёт на стадии планирования и гаснет
   // с карточкой плана/отказа (см. teamPlanningIndicatorVisible)
   const showTeamPlanningIndicator = useMemo(
-    () => teamPlanningIndicatorVisible(teamImplementState, items),
-    [teamImplementState, items],
+    () => teamPlanningIndicatorVisible(teamImplementState, items, liveTeamPlanning),
+    [teamImplementState, items, liveTeamPlanning],
   );
   const handleToggleTeamImplementAuto = useCallback(async () => {
     if (!teamImplementState) return;
@@ -1438,7 +1438,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
         {/* Плашка «Команда готовит план…»: стадия планирования идёт минутами (потолок
             планировщика 300с), и молчащая лента читалась как «всё встало» (прод 2026-08-04).
             Гаснет сама: стадия уходит с planning при карточке плана или отказа */}
-        {showTeamPlanningIndicator && <TeamPlanningIndicator />}
+        {showTeamPlanningIndicator && <TeamPlanningIndicator startedAt={liveTeamPlanning?.startedAt} />}
 
         {online && showWaiting && (
           // Текст индикатора ставим по левому краю чата (как пузыри), а домик уезжает

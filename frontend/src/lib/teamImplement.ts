@@ -229,12 +229,50 @@ export const TEAM_PLANNING_TEXT = 'Изучает задачу и собирае
 // прямо сейчас НЕ готовится — практика ждёт человека, поэтому плашка гаснет. «Остановить»
 // на стадии планирования свою карточку не шлёт (Stopped приходит без неё) — отсюда
 // отдельная проверка stopped.
+//
+// live — состояние из события team_planning (см. ChatState.teamPlanning): точнее стадии
+// режима, потому что не зависит от записи файла плана на диск между «планировщик закончил»
+// и переключением стадии на confirming/planning-заново. undefined — событий не было в этой
+// сессии (например, чат открыли посреди планирования) — тогда решает только стадия, как
+// раньше; null — событие уже сказало «планировщик закончил», плашка гаснет НЕМЕДЛЕННО, не
+// дожидаясь стадии (иначе между отказом и карточкой team_escalation плашка соврала бы,
+// что штаб всё ещё думает)
 export function teamPlanningIndicatorVisible(
   state: SessionTeamImplement | null | undefined,
   items: ChatItem[],
+  live?: { startedAt: number } | null,
 ): boolean {
-  if (!state || state.stage !== 'planning' || state.stopped) return false;
+  if (!state || state.stopped) return false;
+  if (live === null) return false;
+  if (state.stage !== 'planning' && !live) return false;
   return !items.some(it => it.kind === 'team_escalation' && !it.escalation.resolved);
+}
+
+// Склонение числительного (ру) — своя копия, как и в остальных местах проекта
+// (TeamPlanView, ProductHistory, BackupWidget…): маленькая и специфичная, шарить не стоит.
+function pluralRu(n: number, one: string, few: string, many: string): string {
+  const m10 = n % 10, m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return one;
+  if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return few;
+  return many;
+}
+
+// Время планирования коротко: секунды до минуты, дальше — целые минуты (та же грубость,
+// что у teamPlanningElapsedLabel — точность до секунды тут не нужна)
+function teamPlanningElapsedShort(elapsedMs: number): string {
+  const totalSec = Math.round(elapsedMs / 1000);
+  if (totalSec < 60) return `за ${totalSec} с`;
+  return `за ${Math.round(totalSec / 60)} мин`;
+}
+
+// Итоговая строка успешного планирования — «строчка в потоке», не карточка: план целиком
+// (под-задачи, исполнители) уже покажет карточка team_plan следом, эта строка — только
+// закрытие плашки «идёт работа» фактом и временем, которого у карточки плана нет
+export function teamPlanningDoneText(subtaskCount: number, waveCount: number, elapsedMs: number): string {
+  const parts = [`${subtaskCount} ${pluralRu(subtaskCount, 'под-задача', 'под-задачи', 'под-задач')}`];
+  if (waveCount > 0) parts.push(`${waveCount} ${pluralRu(waveCount, 'волна', 'волны', 'волн')}`);
+  parts.push(teamPlanningElapsedShort(elapsedMs));
+  return `План собран — ${parts.join(' · ')}`;
 }
 
 // Признак течения времени на плашке — тот же приём, что «работает N мин» у фаз

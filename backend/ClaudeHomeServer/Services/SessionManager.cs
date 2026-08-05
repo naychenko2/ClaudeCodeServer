@@ -3431,18 +3431,69 @@ public class SessionManager : IDisposable
         var previous = entry.Info.TeamImplement is { Replanning: true, PlanCardId: { } prevId }
             ? await GetTeamPlanAsync(sessionId, prevId)
             : null;
-        var (plan, timedOut) = await _teamPlanning.CreatePlanAsync(entry.Info, ownerId, request, projectHint, ct, previous, feedback);
-        if (plan is null)
-            return (null, timedOut
-                ? TeamPlanningService.PlannerTimeoutReason
-                : "Планировщик не смог построить план — уточните задачу");
+        // Событие «планировщик запущен» сразу после резолва кандидатов: фронт рисует
+        // «Штаб планирует…», а сам факт не путается с долгим молчанием (контракт для Киры).
+        var empty = new TeamPlanningService.Result(null, TeamPlanningService.Failure.Failed, null, 0, 0, TimeSpan.Zero);
+        await BroadcastTeamPlanningStartedAsync(sessionId, empty);
+
+        var planning = await _teamPlanning.CreatePlanAsync(entry.Info, ownerId, request, projectHint, ct, previous, feedback);
+        if (planning.Plan is null)
+        {
+            // Событие «планировщик закончил» с отказом — фронт снимет спиннер и покажет
+            // причину в плашке рядом с карточкой отказа (контракт для Киры, см. docs).
+            await BroadcastTeamPlanningFinishedAsync(sessionId, planning);
+            return (null, PlannerFailureReason(planning.Failure));
+        }
 
         // План построен — сохранённая вводная и правка отказа отработаны (повтор по кнопке
         // «Повторить планирование» после успеха не нужен)
         WithTeamState(sessionId, t => { t.LastPlanRequest = null; t.LastPlanFeedback = null; return true; });
-        await PublishTeamPlanAsync(sessionId, entry, plan, fromHuman);
-        return (plan, null);
+        await BroadcastTeamPlanningFinishedAsync(sessionId, planning);
+        await PublishTeamPlanAsync(sessionId, entry, planning.Plan, fromHuman);
+        return (planning.Plan, null);
     }
+
+    // Текст причины отказа для карточки (по Failure): разные советы под разные корни —
+    // обрыв по токенам не то же, что «уточните задачу», и таймаут не вина человека.
+    private static string PlannerFailureReason(TeamPlanningService.Failure f) => f switch
+    {
+        TeamPlanningService.Failure.TimedOut => TeamPlanningService.PlannerTimeoutReason,
+        TeamPlanningService.Failure.Truncated => TeamPlanningService.PlannerTruncatedReason,
+        TeamPlanningService.Failure.InvalidJson => TeamPlanningService.PlannerInvalidJsonReason,
+        _ => "Планировщик не смог построить план — уточните задачу",
+    };
+
+    // Событие жизненного цикла планировщика для ленты. Контракт (для Киры):
+    //  • start=true  — планировщик запущен, фронт рисует «Штаб планирует…» и блокирует
+    //                   кнопки повтора. Остальные поля диагностические (для логов).
+    //  • start=false — планировщик закончил: Success=true → SubtaskCount/WaveCount/Route;
+    //                   Success=false → Failure (тот же текст, что в карточке отказа).
+    // Событие ТРАНЗИТНОЕ: в историю не пишется (карточка плана или карточка отказа уже там,
+    // дублировать не надо), и при рестарте сервера не восстанавливается — спиннер просто
+    // не показывается, карточка подтянется через /api/.../history.
+    private Task BroadcastTeamPlanningStartedAsync(string sessionId, TeamPlanningService.Result r) =>
+        BroadcastAsync(sessionId, new TeamPlanningMessage(
+            Start: true,
+            Success: false,
+            SubtaskCount: 0,
+            WaveCount: 0,
+            ElapsedMs: 0,
+            Route: r.Route?.Model,
+            Failure: null,
+            PromptChars: r.PromptChars,
+            ResponseChars: 0));
+
+    private Task BroadcastTeamPlanningFinishedAsync(string sessionId, TeamPlanningService.Result r) =>
+        BroadcastAsync(sessionId, new TeamPlanningMessage(
+            Start: false,
+            Success: r.Plan is not null,
+            SubtaskCount: r.Plan?.Subtasks.Count ?? 0,
+            WaveCount: r.Plan?.WaveCount ?? 0,
+            ElapsedMs: (long)r.Elapsed.TotalMilliseconds,
+            Route: r.Route?.Model,
+            Failure: r.Plan is null ? PlannerFailureReason(r.Failure) : null,
+            PromptChars: r.PromptChars,
+            ResponseChars: r.ResponseChars));
 
     // Публикация карточки плана: история (переживает рестарт) + WS + стадия «ждёт подтверждения».
     // Добавочный план (Э5) при включённых авто-волнах подтверждения не ждёт: первоначальный
@@ -4823,20 +4874,16 @@ public class SessionManager : IDisposable
             // планировщика — отдельный случай: причина не в постановке человека, и текст
             // карточки называет её как есть. У правки текст свой: старая карточка уже
             // погашена как заменённая, и без карточки отказа человек остался бы вообще без плана.
-            var timedOut = reason == TeamPlanningService.PlannerTimeoutReason;
+            // Обрыв по токенам и невалидный JSON — третья и четвёртая ветки (прод 2026-08-05):
+            // совет другой, текст другой, без подмены «таймаут».
+            var (title, details) = isEdit
+                ? EditFailureText(feedback!, reason)
+                : FreshFailureText(request, reason);
             var failed = new TeamEscalation
             {
                 Kind = TeamEscalationKind.ProductDecision,
-                Title = isEdit
-                    ? (timedOut ? "План не пересобрался: планировщик не уложился во время"
-                                : "Правка не привела к новой версии плана")
-                    : (timedOut ? "План не построился: планировщик не уложился во время"
-                                : "План по вашей вводной не построился"),
-                Details = isEdit
-                    ? TeamImplementPrompts.PlanEditFailedDetails(feedback!, reason)
-                    : (timedOut
-                        ? TeamImplementPrompts.PlanTimeoutDetails(request)
-                        : TeamImplementPrompts.PlanFailedDetails(request, reason)),
+                Title = title,
+                Details = details,
                 Wave = team.WaveNumber,
                 // Кнопка повторяет планирование по сохранённой вводной и правке (retryPlan в
                 // RespondTeamEscalationAsync) — без хода координатору и без повторного интервью.
@@ -4850,6 +4897,44 @@ public class SessionManager : IDisposable
             entry.TeamPlanningInFlight = false;
         }
     }
+
+    // Заголовок и тело карточки отказа планировщика: для СВЕЖЕЙ вводной (не правки).
+    // reason — строковый ключ причины (PlannerTimeoutReason / PlannerTruncatedReason /
+    // PlannerInvalidJsonReason / fallback «Планировщик не смог…»). У каждой причины —
+    // своё название и свой совет: таймаут «не ваша вина, повторите», обрыв «план не
+    // уместился в лимит, попробуйте короче», невалидный JSON «повторите».
+    private static (string Title, string Details) FreshFailureText(string request, string? reason) =>
+        reason switch
+        {
+            TeamPlanningService.PlannerTimeoutReason => (
+                "План не построился: планировщик не уложился во время",
+                TeamImplementPrompts.PlanTimeoutDetails(request)),
+            TeamPlanningService.PlannerTruncatedReason => (
+                "План не построился: планировщик не уместил план в лимит вывода",
+                TeamImplementPrompts.PlanTruncatedDetails(request)),
+            TeamPlanningService.PlannerInvalidJsonReason => (
+                "План не построился: планировщик вернул неразборчивый план",
+                TeamImplementPrompts.PlanInvalidJsonDetails(request)),
+            _ => (
+                "План по вашей вводной не построился",
+                TeamImplementPrompts.PlanFailedDetails(request, reason)),
+        };
+
+    // Заголовок и тело карточки отказа для ПРАВКИ: «Изменить план» отдельно от
+    // первоначальной вводной, потому что старая карточка уже погашена.
+    private static (string Title, string Details) EditFailureText(string feedback, string? reason) =>
+        reason switch
+        {
+            TeamPlanningService.PlannerTimeoutReason => (
+                "План не пересобрался: планировщик не уложился во время",
+                TeamImplementPrompts.PlanEditTimeoutDetails(feedback)),
+            TeamPlanningService.PlannerTruncatedReason => (
+                "План не пересобрался: планировщик не уместил правку в лимит вывода",
+                TeamImplementPrompts.PlanEditTruncatedDetails(feedback)),
+            _ => (
+                "Правка не привела к новой версии плана",
+                TeamImplementPrompts.PlanEditFailedDetails(feedback, reason)),
+        };
 
     // Выход из интервью без работы (M6, маркер `<team:talk/>`): координатор честно разобрал
     // сообщение — это разговор, практику на пустом месте не разворачиваем. Свежая «итерация»

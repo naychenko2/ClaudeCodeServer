@@ -712,6 +712,12 @@ export type ServerMessage = { sessionId: string } & (
   // Поля плоские (в истории та же карточка лежит вложенным объектом escalation)
   // personaId — автор карточки (Э8, координатор на момент публикации)
   | { type: 'team_escalation'; escalationId: string; kind: TeamEscalationKind; title: string; details: string; actions: TeamEscalationAction[]; taskId: string | null; wave: number; resolved: boolean; chosenActionId: string | null; personaId?: string | null }
+  // Жизненный цикл вызова планировщика (не путать с team_implement — тот про стадию режима).
+  // Транзитное: в историю не пишется, после рестарта не восстанавливается — карточка плана
+  // (team_plan) или отказа (team_escalation) уже несут итог. start=true — планировщик запущен;
+  // start=false — закончил: success=true → subtaskCount/waveCount/elapsedMs, success=false →
+  // failure (готовый текст причины, тот же, что уйдёт в title карточки отказа следом)
+  | { type: 'team_planning'; start: boolean; success: boolean; subtaskCount: number; waveCount: number; elapsedMs: number; route: string | null; failure: string | null; promptChars: number; responseChars: number }
   | { type: 'preview_status'; status: string; port?: number; error?: string; serviceId?: string }
   // Вывод дев-сервера — приходит только подписчикам группы конкретного сервиса
   // (JoinPreviewLog), а не всем вкладкам пользователя. data — накопленное за тик
@@ -1195,6 +1201,9 @@ export type ChatItem =
   // Карточка остановки командной реализации: причина, суть и кнопки решения.
   // Сверяется по escalationId — ответ человека переиздаёт ту же карточку решённой
   | { kind: 'team_escalation'; escalationId: string; escalation: TeamEscalation }
+  // Итог успешного вызова планировщика — короткая строка в потоке (не персистится, живёт
+  // только в ленте вкладки; после планировщика следом приходит карточка team_plan)
+  | { kind: 'team_planning_done'; subtaskCount: number; waveCount: number; elapsedMs: number }
   | { kind: 'file_changed'; path: string; added: number; removed: number; external?: boolean }
   | { kind: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo; totalCostUsd?: number; apiErrorStatus?: string; permissionDenials?: string[]; contextTokens?: number }
   | { kind: 'fal_cost'; requestId: string; endpointId?: string; costUsd: number; outputUnits?: number; unitPrice?: number }

@@ -14,7 +14,7 @@
 // Стор параметризован неймспейсом (createPanelZones): воркспейс и раздел «Чаты»
 // держат НЕЗАВИСИМЫЕ раскладки, не мешая друг другу.
 import { useCallback, useSyncExternalStore } from 'react';
-import { PANEL_HOME, isPanelKey, migrateLegacyKey, type PanelKey, type Zone } from './panelCatalog';
+import { PANEL_HOME, RAIL_GROUPS, isPanelKey, migrateLegacyKey, type PanelKey, type Zone } from './panelCatalog';
 
 // Реестр панелей (ключи, мета, домашние зоны) — соседний panelCatalog.ts.
 // Здесь только раскладка: что где лежит и какого размера.
@@ -566,6 +566,20 @@ export function sortRail(order: readonly PanelKey[], keys: readonly PanelKey[]):
   return [...known, ...rest];
 }
 
+// Порядок кнопок рельсы СВЕРХУ ВНИЗ по одному состоянию, без оглядки на экран:
+// группы реестра подряд, внутри группы — пользовательский порядок railOrder.
+//
+// Нужен ФОЛБЭКУ внешнего показа панели (revealPanel), когда спросить настоящий
+// порядок не у кого — зона на этом экране не смонтирована. Своих фильтров видимости
+// здесь нет намеренно: зона выбрасывает из столбца часть кнопок (чужая сторона,
+// ящик, сессионные без содержимого), но фильтрация ПОРЯДОК СОХРАНЯЕТ, а место в
+// колонке считается по относительному рангу панелей (placeByRail) — на нём выпавшие
+// ключи не сказываются. Полный список при этом строже: у ключа, которого в столбце
+// нет, ранга не было бы вовсе, и панель считалась бы самой нижней.
+export function railSequence(railOrder: readonly PanelKey[]): PanelKey[] {
+  return RAIL_GROUPS.flatMap(g => sortRail(railOrder, g));
+}
+
 // Перестановка кнопки внутри своей группы: moved встаёт ПЕРЕД before (null — в
 // конец группы). Место задаётся соседом, а не индексом, потому что рельса считает
 // его по ВИДИМЫМ кнопкам, а порядок хранится для всей группы целиком — вместе с
@@ -713,9 +727,17 @@ export function isZoneCollapsed(z: ZoneState): boolean {
 // Показать панель по внешнему запросу (git-бар над композером просит «Изменения»).
 // Открытую НЕ трогаем и не перетаскиваем через полэкрана: вызывающий вместо этого
 // просит её мигнуть. Закрытая открывается в своей домашней зоне.
+//
+// ФОЛБЭК-путь: обычно внешний показ исполняет сама зона (registerOpener), потому что
+// правило размещения опирается на живую высоту колонки и настоящий порядок кнопок.
+// Здесь — то же правило (placeByRail через openPanelIn), но по каноническому порядку
+// кнопок и с фолбэк-вместимостью COL_CAP: зоны на экране нет, спросить не у кого.
+// Раньше этот путь шёл мимо правила рельсы вовсе: панель дописывалась в конец колонки,
+// не глядя на порядок кнопок, и высоты соседей при этом делились заново.
 export function revealPanel(zones: PanelZones, k: PanelKey): { zones: PanelZones; wasOpen: boolean } {
   if (zoneOf(zones, k)) return { zones, wasOpen: true };
-  return { zones: openPanelIn(zones, homeOf(zones, k), k), wasOpen: false };
+  const home = homeOf(zones, k);
+  return { zones: openPanelIn(zones, home, k, COL_CAP, railSequence(zones.railOrder)), wasOpen: false };
 }
 
 // ---------- миграция со старых раздельных ключей ----------
@@ -839,6 +861,11 @@ export interface PanelZonesApi {
   // Показать панель по внешнему запросу (git-бар над композером). Возвращает
   // true, если она УЖЕ была открыта — тогда вызывающий просит её мигнуть.
   reveal: (k: PanelKey) => boolean;
+  // Зона объявляет стору, как она открывает у себя панель (её правило размещения:
+  // живая вместимость колонки, порядок кнопок, сохранение высот соседей). Стор
+  // сам этого не умеет и не должен: правило зависит от пикселей на экране.
+  // Возвращает функцию отписки — вызывать в useEffect зоны.
+  registerOpener: (zone: Zone, open: (k: PanelKey) => void) => () => void;
 }
 
 export type PanelZonesStore = { use: () => PanelZonesApi };
@@ -911,6 +938,15 @@ function createPanelZones(ns: string, opts?: {
   const listeners = new Set<() => void>();
   function emit() { listeners.forEach(l => l()); }
   function subscribe(l: () => void) { listeners.add(l); return () => { listeners.delete(l); }; }
+
+  // Открыватели смонтированных зон (см. registerOpener): по одному на сторону.
+  // Императивный реестр, а не поле состояния, СОЗНАТЕЛЬНО — это не данные, а канал
+  // к тому, кто знает пиксели: внешний показ панели обязан идти по тому же правилу,
+  // что и клик по кнопке рельсы, а оно считается по живой высоте колонки. Через
+  // состояние это была бы отложенная заявка с гонками (кто её исполнил, что делать
+  // с зависшей), здесь же вызов синхронный, и reveal по-прежнему сразу отвечает
+  // вызывающему, была ли панель открыта.
+  const openers = new Map<Zone, (k: PanelKey) => void>();
 
   function persist() { lsSet(KEY, JSON.stringify(_zones)); }
 
@@ -1051,13 +1087,26 @@ function createPanelZones(ns: string, opts?: {
       emit();
     }, []);
 
-    const reveal = useCallback((k: PanelKey) => {
-      const { zones: next, wasOpen } = revealPanel(_zones, k);
-      if (!wasOpen) commit(next);
-      return wasOpen;
+    const registerOpener = useCallback((zone: Zone, open: (k: PanelKey) => void) => {
+      openers.set(zone, open);
+      // Снимаем только СВОЙ открыватель: зона могла перемонтироваться, и её место
+      // уже занял новый — стереть его отпиской старого значило бы обезоружить стор.
+      return () => { if (openers.get(zone) === open) openers.delete(zone); };
     }, []);
 
-    return { zones, toggle, close, closeTo, tuck, untuck, reorder, evict, swapWith, replaceWith, moveAt, moveToNewColumn, setMode, setWidth, toggleCollapsed, setWeights, setColFlex, reveal };
+    const reveal = useCallback((k: PanelKey) => {
+      if (zoneOf(_zones, k)) return true;
+      // Открывает ЗОНА — правило размещения одно на все входы (клик по кнопке,
+      // перенос с чужой рельсы, этот показ). Вес панели она заведёт сама (toggle).
+      const open = openers.get(homeOf(_zones, k));
+      if (open) { open(k); return false; }
+      // Домашняя зона не смонтирована (другой экран, первый кадр) — раскладку правим
+      // сами, по тому же правилу, но с фолбэк-вместимостью: см. revealPanel
+      commit(revealPanel(_zones, k).zones);
+      return false;
+    }, []);
+
+    return { zones, toggle, close, closeTo, tuck, untuck, reorder, evict, swapWith, replaceWith, moveAt, moveToNewColumn, setMode, setWidth, toggleCollapsed, setWeights, setColFlex, reveal, registerOpener };
   }
 
   return { use: usePanelZones };

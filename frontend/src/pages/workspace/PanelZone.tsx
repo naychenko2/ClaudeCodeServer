@@ -33,7 +33,7 @@ import { PanelDropGuide, PanelDropLine, SEP_HIT, sepShift } from '../../componen
 import { IslandSplitter } from '../../components/ui/IslandSplitter';
 import { useWindowWidth } from '../../lib/breakpoints';
 import {
-  PANEL_META, PANEL_KEYS, CENTER_KEYS, PROJECT_KEYS, SESSION_KEYS, TOOLS_KEYS, WORKSPACE_KEYS,
+  PANEL_META, PANEL_KEYS, RAIL_GROUPS, SESSION_KEYS, WORKSPACE_KEYS,
   isPanelKey, type PanelKey, type Zone,
 } from './panelCatalog';
 import { PanelFillContext, usePanelFillRequests } from './panelFill';
@@ -56,23 +56,10 @@ const TABLET_INLINE_MIN = 1000;
 // окна — мучение. Полоса живёт только пока панель тащат.
 const EMPTY_DROP_W = 28;
 
-// Группы кнопок рельсы сверху вниз: содержимое ПРОЕКТА, инструменты запуска
-// (Терминал, Сервисы) и всё, что относится к текущему контексту — панели сессии
-// (План, Агенты, Персона) и центральной области (Оглавление). Последние две
-// категории разделены в реестре (у них разные источники видимости), но в рельсе
-// идут ОДНОЙ группой: это соседи по смыслу — «что сейчас перед глазами», и черта
-// между ними делила бы рельсу там, где деления нет.
-//
-// Группа — ещё и предел перестановки кнопок: порядок внутри неё пользовательский,
-// а между группами — нет (разделители отделяют разные по смыслу наборы). Отсюда
-// общий список: и рельса, и запись порядка обязаны видеть одни и те же границы.
-const RAIL_GROUPS: readonly (readonly PanelKey[])[] = [
-  PROJECT_KEYS,
-  TOOLS_KEYS,
-  [...SESSION_KEYS, ...CENTER_KEYS],
-];
+// Группа, внутри которой кнопку разрешено переставлять (null — ключ не из рельсы).
+// Состав групп — RAIL_GROUPS из реестра панелей: тот же список задаёт и порядок
+// кнопок, и место панели в раскладке, и его же читает стор (см. railSequence).
 
-// Группа, внутри которой кнопку разрешено переставлять (null — ключ не из рельсы)
 const railGroupOf = (k: PanelKey): readonly PanelKey[] | null => RAIL_GROUPS.find(g => g.includes(k)) ?? null;
 
 // Попап-превью панели по наведению на иконку рельсы временно выключен: механика
@@ -121,7 +108,7 @@ export function PanelZone({
   railFooter, floating, centerFileOpen,
 }: Props) {
   const usePanels = (panelStack ?? wsPanels).use;
-  const { zones, toggle, closeTo, tuck, untuck, reorder, evict, setMode, setWidth, setWeights, setColFlex, toggleCollapsed, swapWith, replaceWith, moveAt, moveToNewColumn } = usePanels();
+  const { zones, toggle, closeTo, tuck, untuck, reorder, evict, setMode, setWidth, setWeights, setColFlex, toggleCollapsed, swapWith, replaceWith, moveAt, moveToNewColumn, registerOpener } = usePanels();
   const zoneState = zones[side];
   const { layout, mode, width, colFlex } = zoneState;
   const windowWidth = useWindowWidth();
@@ -325,6 +312,43 @@ export function PanelZone({
     zones.railOrder,
     g.filter(k => (stashRevealed ? railKeyVisible(k, false) : railKeyVisible(k))),
   ));
+  // ПРАВИЛО РАЗМЕЩЕНИЯ — единственная реализация на все входы: клик по кнопке рельсы,
+  // перенос панели с чужой рельсы и внешний показ (гит-бар просит «Изменения» — см.
+  // registerOpener ниже). Живёт здесь, потому что опирается на пиксели: вместимость
+  // колонки считается по её живой высоте, а порядок кнопок — по составу столбца.
+  // Раньше внешний показ считал раскладку сам, в сторе, и новая колонка у него росла
+  // в другую сторону — к рельсе вместо центра.
+  //
+  // Вызывать только для НЕ показанной панели: toggle показанную закроет. Проверка на
+  // стороне вызывающих — у каждого она своя (openKeys здесь, zoneOf в сторе).
+  const placeHere = (k: PanelKey) => {
+    if (compact) {
+      // До двух панелей: третья вытесняет самую старую (FIFO)
+      setTabletPanels(cur => [...cur.filter(x => x !== k), k].slice(-2));
+      return;
+    }
+    // Вместимость колонки считаем ОДИН раз: и место панели, и веса должны исходить
+    // из одной и той же высоты
+    const cap = colCapNow();
+    // Панель открывается в колонку, стоящую по контенту — соседи сохраняют свою
+    // высоту, новая забирает свободный низ (см. keepHeightsOnInsert)
+    if (!soloMode) {
+      const at = placeByRail(layout, k, side, cap, railSeq);
+      // Место вставки передаём целиком (колонка И строка): панель встаёт по порядку
+      // кнопок, то есть может попасть в середину — высоту ей уступает сосед сверху
+      // от ЭТОГО места, а не последняя панель колонки.
+      if (!at.newColumn) keepHeightsOnInsert(k, at.ci, at.ri);
+    }
+    toggle(side, k, cap, railSeq);
+  };
+
+  // Стору правило недоступно (пикселей он не знает), поэтому зона объявляет его сама.
+  // Подписка обновляется КАЖДЫЙ рендер (эффект без списка зависимостей): placeHere
+  // замыкает раскладку и высоты своего кадра, и зарегистрируй мы её один раз, стор
+  // звал бы правило по состоянию первого кадра. Отписка снимает только свой
+  // открыватель, поэтому перерегистрация ничего не теряет (см. registerOpener).
+  useEffect(() => registerOpener(side, placeHere));
+
   // Счёт «есть ли зоне что показать» идёт по availableAll: спрятанные кнопки со
   // столбца ушли, но рельса нужна — без неё ящик вместе с ними исчез бы с экрана.
   const railHidden = !!hideWhenEmpty && availableAll.length === 0 && openKeys.length === 0;
@@ -692,7 +716,6 @@ export function PanelZone({
       onTuck: () => { hovered.leave(); peeked.clear(); tuck(side, k); },
     }),
     onClick: () => {
-      const isOpen = openKeys.includes(k);
       // Клик прерывает попап: назначенный уже не нужен, а показанный сменится
       // настоящей панелью. Если попап этой панели сейчас на экране — это
       // закрепление (кнопка под курсором и выглядит булавкой), и панель обязана
@@ -704,24 +727,13 @@ export function PanelZone({
       // openKeys.
       peeked.clear();
       setPinned(peek === k ? k : null);
-      if (compact) {
-        // До двух панелей: третья вытесняет самую старую (FIFO)
-        setTabletPanels(cur => cur.includes(k) ? cur.filter(x => x !== k) : [...cur, k].slice(-2));
-      } else {
-        // Вместимость колонки считаем ОДИН раз на клик: и место панели, и веса
-        // должны исходить из одной и той же высоты
-        const cap = colCapNow();
-        // Панель открывается в колонку, стоящую по контенту — соседи сохраняют
-        // свою высоту, новая забирает свободный низ (см. keepHeightsOnInsert)
-        if (!isOpen && !soloMode) {
-          const at = placeByRail(layout, k, side, cap, railSeq);
-          // Место вставки передаём целиком (колонка И строка): панель встаёт по
-          // порядку кнопок, то есть может попасть в середину — высоту ей уступает
-          // сосед сверху от ЭТОГО места, а не последняя панель колонки.
-          if (!at.newColumn) keepHeightsOnInsert(k, at.ci, at.ri);
-        }
-        toggle(side, k, cap, railSeq);
-      }
+      // Показанную панель клик закрывает, закрытую — открывает по общему правилу
+      // (placeHere): своей копии правила у клика больше нет.
+      if (!openKeys.includes(k)) placeHere(k);
+      else if (compact) setTabletPanels(cur => cur.filter(x => x !== k));
+      // Закрытие: вместимость и порядок кнопок ни при чём — togglePanelIn видит
+      // панель в этой зоне и просто закрывает её
+      else toggle(side, k);
     },
   }));
 
@@ -810,7 +822,9 @@ export function PanelZone({
       iconAction={{
         Icon: Pin,
         title: 'Закрепить панель',
-        onClick: () => { peeked.clear(); setPinned(peek); toggle(side, peek, colCapNow(), railSeq); },
+        // Закрепление — это открытие панели, поэтому идёт общим правилом (placeHere):
+        // попап показывался закрытой панелью, значит закрывать тут нечего
+        onClick: () => { peeked.clear(); setPinned(peek); placeHere(peek); },
       }}
       fill={peekFull}
       // Временный слой обозначаем ТЕНЬЮ, а не цветной рамкой: акцентная обводка
@@ -914,14 +928,11 @@ export function PanelZone({
               // Кнопку вернули из ящика на рельсу: панель не открываем — возвращают
               // именно кнопку (открытие — это дроп в раскладку)
               if (dnd.fromTucked) untuck(side, from);
-              // Открытую панель на чужой рельсе ОТКРЫВАЕМ в этой зоне (перенос);
-              // остальное (закрытие своей / переезд кнопки) делает closeTo
-              else if (!railWillClose && zoneOf(zones, from) !== null) {
-                const cap = colCapNow();
-                const at = placeByRail(layout, from, side, cap, railSeq);
-                if (!at.newColumn) keepHeightsOnInsert(from, at.ci, at.ri);
-                toggle(side, from, cap, railSeq);
-              } else closeTo(side, from);
+              // Открытую панель на чужой рельсе ОТКРЫВАЕМ в этой зоне (перенос) — по
+              // тому же правилу, что и клик: у переноса нет причин класть панель
+              // иначе. Остальное (закрытие своей / переезд кнопки) делает closeTo.
+              else if (!railWillClose && zoneOf(zones, from) !== null) placeHere(from);
+              else closeTo(side, from);
             }),
           }
         : undefined}

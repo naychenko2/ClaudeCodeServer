@@ -10,7 +10,7 @@ import {
   GitBranch, GitCommit, ChevronDown, ChevronRight, RefreshCw, ArrowDownToLine,
   Settings, Sparkles, Undo2, Pencil, X, List, ListTree, Wand2, FolderClosed,
   ListChecks, CheckCheck, FoldVertical, UnfoldVertical, MessageSquarePlus, MessageSquare,
-  Check, Plus, Archive, ArchiveRestore, Trash2,
+  Check, Plus, Archive, ArchiveRestore, Trash2, UploadCloud,
 } from 'lucide-react';
 import type { Project, GitFileChange, GitLogEntry, GitStashEntry } from '../types';
 import { api } from '../lib/api';
@@ -34,14 +34,18 @@ const VIEW_KEY = 'cc_git_changes_view';
 const SCOPE_H_KEY = 'cc_git_scope_h';   // высота стека коммитов зоны скоупов (ресайз)
 const SCOPE_H_DEFAULT = 4 * 34;         // по умолчанию видно ~4 скоупа
 
-// Кнопка действия в строке скоупа: белая у «Зафиксировать», акцентная у публикации
-// (она перекрывает фон в своём месте использования). Ширина фиксированная и общая —
-// кнопки стоят одна под другой, и разъезжающиеся по длине текста края читались бы
-// как небрежность
-const scopeActionStyle: CSSProperties = {
-  flexShrink: 0, width: 110, fontSize: 11, fontWeight: 600, color: C.textHeading, background: C.bgWhite,
-  border: `1px solid ${C.border}`, borderRadius: 6, padding: '3px 0', textAlign: 'center',
-  cursor: 'pointer', whiteSpace: 'nowrap',
+// Квадратная кнопка-действие иконкой (вместо текста) в нижней зоне: галка
+// «Зафиксировать» в белой обводке и accent-заливка у публикации. Габарит 28 —
+// как у соседних IconButton (fetch/pull, отмена всех), чтобы ряд не рябил
+const scopeIconBtnBase: CSSProperties = {
+  flexShrink: 0, width: 28, height: 28, borderRadius: R.md, cursor: 'pointer',
+  display: 'flex', alignItems: 'center', justifyContent: 'center',
+};
+const commitIconStyle: CSSProperties = {
+  ...scopeIconBtnBase, background: C.bgWhite, border: `1px solid ${C.border}`, color: C.textHeading,
+};
+const publishIconStyle: CSSProperties = {
+  ...scopeIconBtnBase, background: C.accent, border: 'none', color: C.onAccent,
 };
 
 // Светлая компактная кнопка делегирования фиксации чату (в форме)
@@ -683,8 +687,10 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
                     <button
                       onClick={e => { e.stopPropagation(); void openCommitForm(); }}
                       title="Зафиксировать изменения"
-                      style={scopeActionStyle}
-                    >Зафиксировать</button>
+                      style={commitIconStyle}
+                    >
+                      <Check size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+                    </button>
                   </>
                 )}
               </div>
@@ -745,52 +751,58 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
         </div>
       )}
 
-      {/* === Ветка: строка в стиле скоупа (селектор ветки + fetch/pull); в режиме фиксации скрыта === */}
+      {/* === Ветка: капсула split-button (тело = коммиты ветки, стрелка = меню веток)
+             + fetch/pull/публикация иконками; в режиме фиксации скрыта === */}
       {mode === 'list' && (
-      <div style={{ padding: '0 8px 6px', flexShrink: 0 }}>
-        {/* Весь ряд ветки = один скоуп: подсветка на всю длину, включая fetch/pull */}
-        <div
-          onMouseEnter={() => setHoveredRow('branch')}
-          onMouseLeave={() => setHoveredRow(null)}
-          style={{
-            display: 'flex', alignItems: 'center', gap: 6, borderRadius: 8, padding: '0 2px 0 0',
-            background: (isBranch || branchMenu) ? C.accentLight : hoveredRow === 'branch' ? C.bgSelected : 'transparent',
-          }}
-        >
+      <div style={{ padding: '0 8px 8px', flexShrink: 0 }}>
+        {/* Разделитель + воздух: отбиваем ряд ветки от скролла скоупов выше */}
+        <div style={{ height: 1, background: C.borderLight, margin: '2px 6px 8px' }} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <div style={{ position: 'relative', flex: 1, minWidth: 0, display: 'flex' }}>
-            {/* Тело строки = выбор скоупа «ветка» (история в верхней зоне);
-                стрелка вниз — отдельная кнопка, открывает меню выбора/создания ветки */}
+            {/* Капсула с рамкой = явный контрол (читается кликабельной и без ховера,
+                живёт на тач). Активный скоуп «ветка» / открытое меню — accent */}
             <div
-              onClick={() => selectScope('branch')}
-              title={status?.branch ?? undefined}
               style={{
-                flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 7, minHeight: 32,
-                padding: '4px 4px 4px 8px', borderRadius: 8, cursor: 'pointer', textAlign: 'left',
-                background: 'transparent',
+                flex: 1, minWidth: 0, display: 'flex', alignItems: 'stretch', overflow: 'hidden',
+                border: `1px solid ${(isBranch || branchMenu) ? C.accent : C.border}`, borderRadius: 8,
+                background: (isBranch || branchMenu) ? C.accentLight : C.bgWhite,
               }}
             >
-              {st.busy
-                ? <span style={{ width: 13, height: 13, flexShrink: 0, borderRadius: '50%', border: `2px solid ${C.track}`, borderTopColor: C.accent, animation: 'cc-spin 0.6s linear infinite' }} />
-                : <GitBranch size={13} strokeWidth={ICON_STROKE} color={isBranch ? C.accent : C.textSecondary} style={{ flexShrink: 0 }} />}
-              <span style={{ flex: 1, minWidth: 0, fontSize: 12, color: isBranch ? C.accent : C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {status?.detached ? `${status.branch ?? 'HEAD'} (detached)` : (status?.branch ?? '—')}
-              </span>
-              {(ahead > 0 || (status?.behind ?? 0) > 0) && (
-                <span style={{ fontFamily: FONT.mono, fontSize: 10, color: isBranch ? C.accent : C.textMuted, flexShrink: 0, display: 'flex', gap: 3 }}>
-                  {ahead > 0 && <span>↑{ahead}</span>}
-                  {(status?.behind ?? 0) > 0 && <span>↓{status?.behind}</span>}
+              {/* Тело = выбор скоупа «ветка»: список её коммитов открывается в верхней зоне */}
+              <div
+                onClick={() => selectScope('branch')}
+                title={status?.branch ?? undefined}
+                style={{
+                  flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 7, minHeight: 32,
+                  padding: '4px 8px', cursor: 'pointer', textAlign: 'left',
+                }}
+              >
+                {st.busy
+                  ? <span style={{ width: 13, height: 13, flexShrink: 0, borderRadius: '50%', border: `2px solid ${C.track}`, borderTopColor: C.accent, animation: 'cc-spin 0.6s linear infinite' }} />
+                  : <GitBranch size={13} strokeWidth={ICON_STROKE} color={isBranch ? C.accent : C.textSecondary} style={{ flexShrink: 0 }} />}
+                <span style={{ flex: 1, minWidth: 0, fontSize: 12, fontWeight: 500, color: isBranch ? C.accent : C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {status?.detached ? `${status.branch ?? 'HEAD'} (detached)` : (status?.branch ?? '—')}
                 </span>
-              )}
+                {(ahead > 0 || (status?.behind ?? 0) > 0) && (
+                  <span style={{ fontFamily: FONT.mono, fontSize: 10, color: isBranch ? C.accent : C.textMuted, flexShrink: 0, display: 'flex', gap: 3 }}>
+                    {ahead > 0 && <span>↑{ahead}</span>}
+                    {(status?.behind ?? 0) > 0 && <span>↓{status?.behind}</span>}
+                  </span>
+                )}
+              </div>
+              {/* Вертикальный разделитель отбивает стрелку от тела — видно, что это
+                  отдельное действие (меню веток), а не часть выбора скоупа */}
+              <div style={{ width: 1, flexShrink: 0, background: (isBranch || branchMenu) ? C.accentMuted : C.border }} />
               <button
                 onClick={e => { e.stopPropagation(); openBranchMenu(); }}
                 disabled={st.busy}
                 title="Выбрать ветку"
                 style={{
-                  display: 'flex', alignItems: 'center', flexShrink: 0, padding: '3px 4px', margin: '-3px 0',
-                  border: 'none', background: 'transparent', borderRadius: 6, cursor: st.busy ? 'default' : 'pointer',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, width: 30,
+                  border: 'none', background: 'transparent', cursor: st.busy ? 'default' : 'pointer',
                 }}
               >
-                <ChevronDown size={12} strokeWidth={ICON_STROKE} color={branchMenu ? C.accent : C.textMuted} />
+                <ChevronDown size={14} strokeWidth={ICON_STROKE} color={(branchMenu || isBranch) ? C.accent : C.textMuted} />
               </button>
             </div>
             {branchMenu && (
@@ -819,10 +831,9 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
           <IconButton size="sm" title="Забрать и слить (pull)" disabled={st.busy} onClick={() => void gitPull(project.id)}>
             <ArrowDownToLine size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
           </IconButton>
-          {/* Публикация — тем же стилем, что «Зафиксировать»: только подпись, без
-              иконки и числа (счёт коммитов и так виден стрелкой ↑N в строке ветки).
-              Кнопка на месте всегда (нечего публиковать → приглушена и не нажимается),
-              чтобы ряд не прыгал */}
+          {/* Публикация — accent-иконкой (главное действие панели); число коммитов не
+              дублируем, оно видно стрелкой ↑N в капсуле. Нечего публиковать → гаснет,
+              но остаётся на месте (ряд не прыгает) */}
           <button
             onClick={() => setPublishConfirm(true)}
             disabled={!canPublish || st.busy}
@@ -830,18 +841,12 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
               ? `Опубликовать (git push): ${ahead || st.unpushed.length} коммит(ов)`
               : 'Публиковать нечего'}
             style={{
-              // Габариты общие с «Зафиксировать», вид — акцентный: публикация
-              // остаётся главным действием панели
-              ...scopeActionStyle,
-              background: C.accent, color: C.onAccent, border: 'none',
+              ...publishIconStyle,
               cursor: canPublish && !st.busy ? 'pointer' : 'default',
               opacity: canPublish && !st.busy ? 1 : 0.4,
-              // Правый край в одну линию с «Зафиксировать»: строка скоупа отступает
-              // от края на 8px, а ряд ветки — на 2px, добираем разницу
-              marginRight: 6,
             }}
           >
-            Опубликовать
+            <UploadCloud size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
           </button>
         </div>
       </div>

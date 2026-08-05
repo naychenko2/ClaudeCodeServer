@@ -6,6 +6,7 @@ import { api } from '../lib/api';
 import { onMessage } from '../lib/signalr';
 import { C, R, SHADOW, FONT } from '../lib/design';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
+import { IconButton, PanelHeaderSlot, useHasPanelHeader } from './ui';
 
 interface Props {
   project: Project;
@@ -410,6 +411,8 @@ export function KnowledgePanel({ project, isMobile = false, alwaysShowIcons = fa
   const [retryingId, setRetryingId] = useState<string | null>(null);
   const [tagEditDoc, setTagEditDoc] = useState<DifyDocument | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchOpen, setSearchOpen] = useState(false);
+  const hasPanelHeader = useHasPanelHeader();
   const [notification, setNotification] = useState<{ message: string; type: 'error' | 'success' } | null>(null);
   const notifTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -496,43 +499,79 @@ export function KnowledgePanel({ project, isMobile = false, alwaysShowIcons = fa
     }
   };
 
+  // Контролы панели — в шапке карточки. Поиск кнопкой, а не полем: колонка узкая,
+  // а поле занимало её целиком ради действия, которое нужно изредка (приём DocsPanel).
+  // Объявлены ДО ранних возвратов: иначе на каждую загрузку контролы шапки моргали бы.
+  const controls = (
+    <IconButton
+      size="xs"
+      title={searchOpen ? 'Закрыть поиск' : 'Поиск по знаниям'}
+      active={searchOpen || searchQuery.length > 0}
+      onClick={() => { if (searchOpen) { setSearchOpen(false); setSearchQuery(''); } else setSearchOpen(true); }}
+    >
+      <Search size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+    </IconButton>
+  );
+
+  // Строка поиска: разворачивается кнопкой из шапки, Esc и крестик закрывают
+  const searchRow = searchOpen && (
+    <div style={{
+      flexShrink: 0, display: 'flex', alignItems: 'center', gap: 6,
+      padding: '4px 12px 10px',
+    }}>
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg, padding: '0 11px', height: 32 }}>
+        <span style={{ color: C.textMuted, marginRight: 8, display: 'flex', flexShrink: 0 }}>
+          <Search size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+        </span>
+        <input
+          value={searchQuery}
+          autoFocus
+          onChange={e => setSearchQuery(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Escape') { setSearchOpen(false); setSearchQuery(''); } }}
+          placeholder="Поиск по знаниям…"
+          style={{
+            flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent',
+            fontSize: 13, color: C.textPrimary, fontFamily: FONT.sans,
+          }}
+        />
+        {searchQuery && (
+          <button
+            onClick={() => setSearchQuery('')}
+            title="Очистить"
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.textMuted, padding: 0, display: 'flex', marginLeft: 4 }}
+          >
+            <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+          </button>
+        )}
+      </div>
+    </div>
+  );
+
+  // Шапки может не быть (мобильная вкладка сайдбара) — там контролы идут своей строкой
+  const header = hasPanelHeader
+    ? <PanelHeaderSlot>{controls}</PanelHeaderSlot>
+    : (
+      <div style={{
+        flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'flex-end',
+        gap: 4, padding: '6px 12px', borderBottom: `1px solid ${C.border}`,
+      }}>{controls}</div>
+    );
+
   if (loading) {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
-        <div style={{ fontSize: 13, color: C.textMuted }}>Загрузка…</div>
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+        {header}
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ fontSize: 13, color: C.textMuted }}>Загрузка…</div>
+        </div>
       </div>
     );
   }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-      {/* Поиск по знаниям */}
-      <div style={{ padding: '4px 12px 10px', flexShrink: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg, padding: '0 11px', height: 36 }}>
-            <span style={{ color: C.textMuted, marginRight: 8, display: 'flex', flexShrink: 0 }}>
-              <Search size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-            </span>
-            <input
-              value={searchQuery}
-              onChange={e => setSearchQuery(e.target.value)}
-              placeholder="Поиск по знаниям…"
-              style={{
-                flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent',
-                fontSize: 13, color: C.textPrimary, fontFamily: FONT.sans,
-              }}
-            />
-            {searchQuery && (
-              <button
-                onClick={() => setSearchQuery('')}
-                style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.textMuted, padding: 0, display: 'flex', marginLeft: 4 }}
-              >
-                <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
+      {header}
+      {searchRow}
 
       {/* Ошибка */}
       {error && (

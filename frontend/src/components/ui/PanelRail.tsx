@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState, type DragEvent, type HTMLAttributes, type ReactNode } from 'react';
-import { ChevronsLeft, ChevronsRight, Columns2, Ellipsis, Pin, Square, X, type LucideIcon } from 'lucide-react';
+import { ArrowDownToLine, ArrowLeftToLine, ArrowRightToLine, ChevronsLeft, ChevronsRight, Columns2, Ellipsis, Pin, Square, X, type LucideIcon } from 'lucide-react';
 import { C, FONT, FS, ISLAND, R, Z } from '../../lib/design';
 import { ICON_STROKE } from './icons';
 import { Menu, MenuItem } from './Menu';
@@ -45,6 +45,10 @@ export interface RailItem {
   // Под курсором иконка становится булавкой: рядом висит попап-превью, и клик
   // его закрепит. Без попапа булавке взяться неоткуда — обычная иконка панели.
   pinnable?: boolean;
+  // Убрать кнопку в ящик рельсы («…»). Живёт в плашке подписи отдельной кнопкой:
+  // перетаскивание на «…» остаётся, но целиться мышью в 40px-полосу необязательно.
+  // Не задан — прятать эту кнопку нельзя (последняя в столбце, компактный режим).
+  onTuck?: () => void;
 }
 
 interface Props {
@@ -72,6 +76,11 @@ interface Props {
     // Панель тащат по экрану: подложка меню на это время перестаёт ловить события,
     // иначе места дропа под ней не получат ни одного dragover
     dragActive?: boolean;
+    // Вернуть кнопку из ящика в столбец рельсы. Кнопка-спутник в строке меню:
+    // обратный жест (перетащить строку на рельсу) остаётся, но мышью попасть в
+    // 40px-полосу труднее, чем нажать кнопку, а клик по самой строке занят
+    // открытием панели.
+    onRestore?: (key: string) => void;
     // Кнопка «…» как приёмник: дроп сюда убирает кнопку панели в ящик
     drop?: {
       active: boolean;
@@ -125,13 +134,21 @@ interface Props {
 // у спрятанных панелей свои кружки не видны, и «…» показывает их сумму.
 // inline — кружок в строке меню ящика: там он не наездник на иконке, а обычный
 // элемент строки справа от названия.
-function RailBadge({ value, inline }: { value: number; inline?: boolean }) {
+// muted — тихий вариант: им ящик сообщает, СКОЛЬКО кнопок в нём лежит. Это не
+// новость, а состав содержимого, и акцент тут спорил бы с настоящими бейджами
+// непрочитанного — те остаются оранжевыми.
+function RailBadge({ value, inline, muted }: { value: number; inline?: boolean; muted?: boolean }) {
   return (
     <span style={{
       ...(inline ? null : { position: 'absolute', top: -6, right: -7 }),
       minWidth: 14, height: 14, padding: '0 3px', flexShrink: 0,
-      borderRadius: 7, background: C.accent, color: C.onAccent,
-      fontFamily: FONT.sans, fontSize: 9, fontWeight: 700, lineHeight: '14px', textAlign: 'center',
+      borderRadius: 7,
+      background: muted ? C.bgSelected : C.accent,
+      color: muted ? C.textSecondary : C.onAccent,
+      // Тихий кружок сидит на капсуле почти того же тона — без обводки он
+      // расплывался бы в ней пятном
+      ...(muted ? { boxShadow: `0 0 0 1px ${C.border}` } : null),
+      fontFamily: FONT.sans, fontSize: 9, fontWeight: muted ? 600 : 700, lineHeight: '14px', textAlign: 'center',
     }}>
       {value}
     </span>
@@ -146,7 +163,10 @@ function RailBadge({ value, inline }: { value: number; inline?: boolean }) {
 // мишень, под курсором — акцентная. Мишень капсулы («убрать панель с глаз») её не
 // накрывает — оверлей дропа рисуется только над столбцом иконок.
 function RailOverflow({ side, overflow }: { side: 'left' | 'right'; overflow: NonNullable<Props['overflow']> }) {
-  const { items, modeToggle, badge, dragActive, drop } = overflow;
+  const { items, modeToggle, badge, dragActive, drop, onRestore } = overflow;
+  // Стрелка возврата смотрит В СТОРОНУ своей рельсы (она у края окна, меню — от неё
+  // внутрь экрана): «кнопка уедет обратно туда»
+  const RestoreIcon = side === 'left' ? ArrowLeftToLine : ArrowRightToLine;
   const hostRef = useRef<HTMLDivElement>(null);
   // rect кнопки — якорь меню. Держим сам rect, а не флаг: меню живёт порталом и
   // считает своё место от координат окна.
@@ -182,7 +202,12 @@ function RailOverflow({ side, overflow }: { side: 'left' | 'right'; overflow: No
       >
         <div style={{ position: 'relative', display: 'flex' }}>
           <Ellipsis size={17} strokeWidth={ICON_STROKE} />
-          {badge ? <RailBadge value={badge} /> : null}
+          {/* Непрочитанное спрятанных панелей важнее их числа: акцентный кружок
+              вытесняет тихий, иначе на 17px-иконке столкнулись бы два. Пустой ящик
+              не считаем — многоточие и так стоит ради режима зоны. */}
+          {badge
+            ? <RailBadge value={badge} />
+            : items.length > 0 ? <RailBadge value={items.length} muted /> : null}
         </div>
       </RailIconButton>
 
@@ -224,6 +249,14 @@ function RailOverflow({ side, overflow }: { side: 'left' | 'right'; overflow: No
                     </>
                   }
                   onClick={() => { it.onClick(); close(); }}
+                  // Кнопка-спутник справа: вернуть иконку в столбец, не открывая панель.
+                  // Меню держим открытым — кнопки обычно возвращают пачкой; закрываем,
+                  // только когда ящик опустел (показывать пустой список незачем).
+                  action={onRestore && {
+                    icon: <RestoreIcon size={14} strokeWidth={ICON_STROKE} />,
+                    title: 'Вернуть кнопку на рельсу',
+                    onClick: () => { onRestore(it.key); if (items.length <= 1) close(); },
+                  }}
                   // Строка — ручка перетаскивания. Меню закрываем в КОНЦЕ жеста, а не
                   // на старте: исчезнувший источник не дождался бы dragend, и
                   // состояние перетаскивания залипло бы на весь экран.
@@ -316,6 +349,12 @@ function RailButton({ item, side }: { item: RailItem; side: 'left' | 'right' }) 
       label={item.active ? `Скрыть «${item.title}»` : item.title}
       active={item.active}
       onClick={item.onClick}
+      // Кнопка в плашке подписи — «убрать в ящик»: тот же жест, что дроп иконки на
+      // «…», только кликом. Знак — стрелка ВНИЗ к черте: ящик стоит последней
+      // кнопкой столбца, туда иконка и уезжает. Парная ей стрелка вбок в строках
+      // ящика возвращает кнопку обратно. Пока кнопку тащат, плашки нет вовсе
+      // (hoverSuppressed), так что действие жесту не мешает.
+      action={item.onTuck && { Icon: ArrowDownToLine, title: 'Убрать кнопку в «Ещё»', onClick: item.onTuck }}
       // Пока кнопку тащат, подпись не нужна: она вылезала бы поверх места вставки
       hoverSuppressed={dragging}
       onHoverChange={h => (h ? item.onHoverStart?.() : item.onHoverEnd?.())}

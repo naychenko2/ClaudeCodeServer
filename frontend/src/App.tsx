@@ -17,7 +17,7 @@ import { OPEN_GLOBAL_SEARCH_EVENT } from './lib/ai/actions'
 import { PRODUCT_HISTORY_EVENT, productHistorySeenKey } from './components/HubHeader'
 import { initConnectivity } from './lib/offline'
 import { installSelectionScopes } from './lib/selectionScope'
-import { C } from './lib/design'
+import { PageCanvas } from './components/ui/PageCanvas'
 import { recordRecentProject } from './lib/pinnedProjects'
 import { useOnline } from './hooks/useOnline'
 import { showToast } from './lib/toast'
@@ -57,6 +57,13 @@ const UiKitPage = import.meta.env.DEV
 function isDevUiKitHash(): boolean {
   return window.location.hash === '#/ui-kit';
 }
+
+// Экран ошибки — dev-only просмотр: #/boom роняет рендер намеренно, чтобы
+// посмотреть заглушку ErrorBoundary глазами (иначе её видно только при реальном
+// сбое). Признак снимается ЗДЕСЬ, при загрузке модуля: навигация ниже приводит
+// незнакомый hash к известному экрану ещё до первого рендера, и проверка внутри
+// компонента уже не увидела бы #/boom. В prod ветка вырезается вместе с DEV.
+const devBoom = import.meta.env.DEV && window.location.hash === '#/boom';
 
 // Диплинк из hash-URL (#/calendar, #/project/{id}/task/{tid}…) — читаем один раз
 // при загрузке страницы, до первого рендера (WorkspacePage заберёт pending-значения)
@@ -131,6 +138,11 @@ export default function App() {
   // работает без авторизации (на экране входа тоже). В prod UiKitPage === null,
   // условие всегда ложно и режим не активируется.
   const [uiKitMode, setUiKitMode] = useState(() => isDevUiKitHash())
+
+  // Демо экрана ошибки #/boom (dev). Начальное значение — из константы модуля:
+  // на старте hash успевают нормализовать до первого рендера. Обратно режим не
+  // выключается: из упавшего дерева возвращают кнопки самой заглушки.
+  const [boomMode, setBoomMode] = useState(devBoom)
 
   // «Что нового» — продуктовая история по всем проектам. Overlay на верхнем уровне,
   // открывается из HubHeader (событие) из любого раздела.
@@ -511,8 +523,13 @@ export default function App() {
   useEffect(() => { ensureNotificationsSubscribed(); }, []);
 
   // Dev-витрина #/ui-kit — переключение hash (вход/выход из режима) без перезагрузки.
+  // Тем же слушателем ловим #/boom: иначе демо экрана ошибки открывалось бы только
+  // с полной перезагрузкой, а вписанный в адресную строку hash ничего не делал.
   useEffect(() => {
-    const onHash = () => setUiKitMode(isDevUiKitHash());
+    const onHash = () => {
+      setUiKitMode(isDevUiKitHash());
+      if (import.meta.env.DEV && window.location.hash === '#/boom') setBoomMode(true);
+    };
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
@@ -811,11 +828,14 @@ export default function App() {
     setAuth(null)
   }
 
+  // Намеренное падение для просмотра экрана ошибки (см. devBoom выше)
+  if (boomMode) throw new Error('Демо экрана ошибки: #/boom в dev-режиме');
+
   // Early-return в режиме #/ui-kit: показываем витрину раньше UpdatePrompt/authChecking.
   // В prod UiKitPage === null → ветка недостижима и вырезается компилятором.
   if (uiKitMode && UiKitPage) {
     return (
-      <Suspense fallback={<div style={{ minHeight: '100vh', background: C.bgMain }} />}>
+      <Suspense fallback={<PageCanvas />}>
         <UiKitPage />
       </Suspense>
     );
@@ -826,7 +846,7 @@ export default function App() {
       <UpdatePrompt />
       {auth && !authChecking && <NotificationToasts onNavigate={openNotificationUrl} />}
       {authChecking
-        ? <div style={{ minHeight: '100vh', background: C.bgMain }} />
+        ? <PageCanvas />
         : !auth
           ? <LoginPage onConnect={setAuth} />
           : effectiveHubTab === 'home'

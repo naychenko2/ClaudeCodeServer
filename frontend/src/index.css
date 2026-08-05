@@ -328,6 +328,9 @@ body {
   .cc-pulse-ring { animation: none; }
   .cc-smoke i { animation: none; }
   .cc-shimmer-text { animation: none; -webkit-text-fill-color: var(--c-text-muted); color: var(--c-text-muted); }
+  /* Скелетон перестаёт бежать, но подложка обязана остаться видимой — иначе на месте
+     загрузки просто пустота. Отсюда ровная заливка вместо градиента. */
+  .cc-skel { animation: none; background: var(--c-bg-selected); }
   .cc-overlay, .cc-modal-card, .cc-sheet-card { animation: none; }
   /* Заставка остаётся видимой, просто перестаёт дышать и проявляться */
   .cc-boot-logo { animation: none; }

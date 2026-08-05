@@ -13,7 +13,7 @@ import { DndContext, MouseSensor, TouchSensor, closestCenter, useSensor, useSens
 import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 // ChevronsDownUp/ChevronsUpDown вернутся вместе с кнопками уровней папок (см. controls)
-import { BookOpenText, BookText, Check, ChevronDown, ChevronRight, ChevronsRight, FileQuestion, Folder, FolderCog, FolderTree, Home, Link2, List, Maximize2, MessageSquarePlus, PanelBottom, Pin, PinOff, Plus, Search, SlidersHorizontal, X } from 'lucide-react';
+import { BookOpenText, BookText, Check, ChevronDown, ChevronRight, ChevronsRight, FileQuestion, Folder, FolderCog, FolderTree, Home, Link2, List, Maximize2, MessageSquarePlus, PanelBottom, PenLine, Pin, PinOff, Plus, Search, SlidersHorizontal, X } from 'lucide-react';
 import type { Project, DocEntry, DocDetail, DocSearchHit, DocsScopeInfo } from '../../types';
 import { api } from '../../lib/api';
 import { onFilesChanged } from '../../lib/signalr';
@@ -22,6 +22,7 @@ import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { Button, EmptyState, IconButton, IconSegmented, Menu, MenuItem, PanelHeaderSlot, TextField, TocRow, useHasPanelHeader, usePanelHeaderHold } from '../../components/ui';
 import { DocsScopeDialog } from './DocsScopeDialog';
 import { DocsCreateDialog } from './DocsCreateDialog';
+import { DocsRenameDialog } from './DocsRenameDialog';
 import { useRequestPanelFill } from './panelFill';
 import { MarkdownViewer } from '../../components/MarkdownViewer';
 import { ListDateDivider, LIST_FLASH_CLASS, LIST_FLASH_MS } from '../../components/ListDateDivider';
@@ -213,8 +214,10 @@ function DocBadge({ path, home }: { path: string; home?: boolean }) {
 // Отличать «прилипла / не прилипла» пробовали наблюдателем, но в панели несколько
 // вложенных скроллеров (список, превью, закреплённые папки), и корень наблюдения
 // приходилось угадывать — постоянный фон делает то же самое без единого условия.
-function FolderSticky({ folder, title: titleProp, subtitle, flash, collapsed, hidden, onToggle, onOpenPage, onCollapseSubtree, subtreeCollapsed = false, pagePath, pinned = false, onTogglePin }: {
+function FolderSticky({ folder, title: titleProp, subtitle, flash, collapsed, hidden, onToggle, onOpenPage, onCollapseSubtree, subtreeCollapsed = false, pagePath, pinned = false, onTogglePin, onContextMenu }: {
   folder: string;
+  // Действия раздела правым кликом — те же, что у строки документа (переименование)
+  onContextMenu?: (e: React.MouseEvent) => void;
   // Подпись группы: у раздела это заголовок его страницы («Расширения»), у обычной папки —
   // её путь (значение по умолчанию). Считает панель: она знает, есть ли у папки пара
   title?: string;
@@ -290,6 +293,7 @@ function FolderSticky({ folder, title: titleProp, subtitle, flash, collapsed, hi
   );
   if (onOpenPage) return (
     <div
+      onContextMenu={onContextMenu}
       onMouseEnter={() => setRowHover(true)}
       onMouseLeave={() => setRowHover(false)}
       style={{
@@ -452,7 +456,7 @@ function FolderRow({ label, parent, count, current, onJump }: {
 // и держать его в панели значило бы перерисовывать все строки на каждое движение мыши.
 // Бейдж расширения под курсором превращается в булавку — отдельной кнопки закрепления
 // в строке нет места, а место иконки всё равно занято состоянием документа
-function DocRow({ doc, selected, home, pinned, onOpen, onExpand, onTogglePin }: {
+function DocRow({ doc, selected, home, pinned, onOpen, onExpand, onTogglePin, onContextMenu }: {
   doc: DocEntry;
   selected: boolean;
   home: boolean;
@@ -460,12 +464,16 @@ function DocRow({ doc, selected, home, pinned, onOpen, onExpand, onTogglePin }: 
   onOpen: () => void;
   onExpand: () => void;
   onTogglePin: () => void;
+  // Действия строки (переименование) — правым кликом, как в «Файлах»: в узкой колонке
+  // постоянной кнопке «…» места нет, а жест у панелей должен быть один
+  onContextMenu?: (e: React.MouseEvent) => void;
 }) {
   const [hover, setHover] = useState(false);
   const [pinHover, setPinHover] = useState(false);
   const showPin = hover || pinned;
   return (
     <div
+      onContextMenu={onContextMenu}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => { setHover(false); setPinHover(false); }}
       style={{
@@ -584,6 +592,13 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
   // на диске — надо ли перечитывать индекс (isDocPath ниже)
   const [scopeInfo, setScopeInfo] = useState<DocsScopeInfo | null>(null);
   const [scopeOpen, setScopeOpen] = useState(false);
+  // Действия строки — правым кликом по документу или по подписи раздела, как в «Файлах».
+  // Держим и сам документ, и точку клика: меню рисуется по курсору
+  const [rowMenu, setRowMenu] = useState<{ doc: DocEntry; rect: DOMRect } | null>(null);
+  const [renaming, setRenaming] = useState<DocEntry | null>(null);
+  // Итог переименования строкой над списком: сколько ссылок починено и сколько осталось
+  // битыми. Без него о пределе механизма («видно только область») никто бы не узнал
+  const [renameNote, setRenameNote] = useState<string | null>(null);
   // Создание идёт двумя шагами, как в «Файлах»: меню видов по кнопке «Новый», затем
   // модалка с названием. Здесь — якорь меню и выбранный вид (null — модалка закрыта)
   const [createMenu, setCreateMenu] = useState<DOMRect | null>(null);
@@ -1434,6 +1449,42 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
   // Меню видов создания. Куда попадёт созданное — подписью в подвале, как в «Файлах»:
   // вопрос возникает ровно в момент создания. Целевая папка — та, в которой пользователь
   // сейчас находится (последний открытый документ или группа)
+  // Правый клик по строке или подписи раздела: меню действий по курсору. Меню общее
+  // (Menu в anchor-режиме), поэтому точку заворачиваем в вырожденный прямоугольник
+  const openRowMenu = (doc: DocEntry, e: React.MouseEvent) => {
+    e.preventDefault();
+    setRowMenu({ doc, rect: new DOMRect(e.clientX, e.clientY, 0, 0) });
+  };
+
+  // Переименование прошло: индекс приезжает с ответом, а по карте переезда чиним всё,
+  // что помнит СТАРЫЕ пути, — закреплённые, открытый документ и файл в центре. Иначе
+  // строка молча пропадала бы из закреплённых, а превью показывало исчезнувший путь
+  const applyRename = (res: {
+    path: string; moved: Record<string, string>;
+    updatedDocs: number; brokenLinks: number; index: DocEntry[];
+  }) => {
+    const moved = res.moved ?? {};
+    setRenaming(null);
+    setIndex(res.index ?? null);
+    loadIndex();
+
+    const to = (p: string | null | undefined) => (p && moved[p]) || p;
+    if (Object.keys(moved).length > 0) {
+      savePinned(pinnedOrder.map(p => moved[p] ?? p));
+      const nextSelected = to(selected);
+      if (nextSelected && nextSelected !== selected) setSelected(nextSelected);
+      const nextActive = to(activeFilePath);
+      if (nextActive && nextActive !== activeFilePath) onOpenFile(nextActive);
+    }
+    // Что вышло по ссылкам — единственный способ узнать про оставшиеся битые: чинится
+    // только область документации, а ссылки из кода механизму не видны
+    setRenameNote(res.brokenLinks > 0
+      ? `Переименовано. Ссылок обновлено в ${res.updatedDocs} документах, осталось битых: ${res.brokenLinks}`
+      : res.updatedDocs > 0
+        ? `Переименовано. Ссылки обновлены в ${res.updatedDocs} документах`
+        : 'Переименовано');
+  };
+
   const closeCreateMenu = () => { setCreateMenu(null); setPickingFolder(false); };
 
   const createMenuEl = createMenu && (
@@ -1589,6 +1640,18 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
       {/* Меню видов создания — порталом по якорю кнопки «Новый» */}
       {createMenuEl}
 
+      {/* Действия строки по правому клику. Пока пункт один — переименование; удаление
+          придёт сюда же, когда появится */}
+      {rowMenu && (
+        <Menu anchor={rowMenu.rect} minWidth={210} maxHeight={140} onClose={() => setRowMenu(null)}>
+          <MenuItem
+            icon={<PenLine size={15} strokeWidth={ICON_STROKE} />}
+            label={rowMenu.doc.sectionFolder ? 'Переименовать раздел' : 'Переименовать'}
+            onClick={() => { setRenaming(rowMenu.doc); setRowMenu(null); }}
+          />
+        </Menu>
+      )}
+
       {foldersAnchor && (
         <Menu anchor={foldersAnchor} minWidth={260} maxHeight={320} onClose={() => setFoldersAnchor(null)}>
           {folderCounts.map(([folder, count]) => folderRow(folder, count, folder === activeFolder))}
@@ -1693,6 +1756,23 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
             )}
             */}
 
+            {/* Итог переименования: сколько ссылок починено и сколько осталось битыми.
+                Строкой над списком, а не тостом, — цифру про битые ссылки надо успеть
+                прочитать, и закрывает её сам пользователь */}
+            {renameNote && (
+              <div style={{
+                flexShrink: 0, display: 'flex', alignItems: 'center', gap: SP.xs,
+                margin: `${SP.xs}px ${SP.xs}px 0`, padding: `${SP.xs}px ${SP.sm}px`,
+                borderRadius: R.md, background: C.bgInset,
+                fontFamily: FONT.sans, fontSize: FS.xs, color: C.textSecondary,
+              }}>
+                <span style={{ flex: 1, minWidth: 0 }}>{renameNote}</span>
+                <IconButton title="Скрыть" onClick={() => setRenameNote(null)} size="sm">
+                  <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+                </IconButton>
+              </div>
+            )}
+
             <div ref={listRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: `${SP.xs}px ${SP.xs}px` }}>
                 {index?.length === 0 && (
                   // Общий примитив, а не своя вёрстка: пустые состояния в продукте
@@ -1755,6 +1835,9 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
                         // (страница-то лежит уровнем выше): открыть раздел — значит войти
                         // в него, и создавать дальше надо внутри
                         onOpenPage={page ? () => { handleRowClick(page.path); setActiveFolder(folder); } : undefined}
+                        // Правый клик по подписи раздела — те же действия, что у строки
+                        // документа: переименование раздела начинается с его страницы
+                        onContextMenu={page ? e => openRowMenu(page, e) : undefined}
                         pagePath={page?.path}
                         pinned={!!page && pinned.has(page.path)}
                         onTogglePin={page ? () => togglePin(page.path) : undefined}
@@ -1798,6 +1881,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
                               onOpen={() => handleRowClick(d.path)}
                               onExpand={() => handleRowDoubleClick(d.path)}
                               onTogglePin={() => togglePin(d.path)}
+                              onContextMenu={e => openRowMenu(d, e)}
                             />
                           </SortableRow>
                         ))}
@@ -1853,6 +1937,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
                               onOpen={() => handleRowClick(d.path)}
                               onExpand={() => handleRowDoubleClick(d.path)}
                               onTogglePin={() => togglePin(d.path)}
+                              onContextMenu={e => openRowMenu(d, e)}
                             />
                           </SortableRow>
                         ))}
@@ -1997,6 +2082,16 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
       )}
       {scopeDialog}
       {createDialog}
+      {renaming && (
+        <DocsRenameDialog
+          projectId={project.id}
+          path={renaming.path}
+          title={renaming.title}
+          sectionFolder={renaming.sectionFolder}
+          onClose={() => setRenaming(null)}
+          onRenamed={applyRename}
+        />
+      )}
     </div>
   );
 }

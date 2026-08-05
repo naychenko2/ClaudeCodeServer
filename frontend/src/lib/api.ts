@@ -1082,6 +1082,16 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ folder, name, kind }),
       }),
+    // Переименовать документ или раздел. Раздел переезжает парой со всем поддеревом:
+    // moved — карта «старый путь → новый» по каждому переехавшему документу, по ней
+    // панель чинит закреплённые и открытый документ. updateLinks=false оставляет чужие
+    // файлы нетронутыми и возвращает число ссылок, оставшихся битыми
+    rename: (projectId: string, path: string, newName: string, updateLinks: boolean) =>
+      request<{ path: string; updatedDocs: number; brokenLinks: number; moved: Record<string, string>; index: DocEntry[] }>(
+        `/projects/${projectId}/docs/rename`, {
+          method: 'POST',
+          body: JSON.stringify({ path, newName, updateLinks }),
+        }),
     setOrder: (projectId: string, folder: string, items: string[]) =>
       request<DocEntry[]>(`/projects/${projectId}/docs/order`, {
         method: 'PUT',

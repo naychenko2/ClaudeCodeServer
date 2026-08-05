@@ -371,8 +371,28 @@ public sealed class GitService(ILauncherFactory launchers)
         WriteOp(ownerId, root, ["add", "-A"], ct: ct);
 
     // Откат правок файла к HEAD (теряет несохранённые изменения — вызывающий гейтит опасность).
-    public Task DiscardAsync(string? ownerId, string root, string relPath, CancellationToken ct = default) =>
-        WriteOp(ownerId, root, ["checkout", "HEAD", "--", ValidateRel(root, relPath)], ct: ct);
+    // Откат ОДНОГО файла. Для отслеживаемого — вернуть содержимое из HEAD; для нового
+    // (untracked) вернуть нечего, его откат — удаление. Раньше здесь был только
+    // checkout HEAD --, и на новом файле git отвечал «pathspec did not match», а
+    // пользователь видел лишь то, что кнопка «Отменить» ничего не делает.
+    public async Task DiscardAsync(string? ownerId, string root, string relPath, CancellationToken ct = default)
+    {
+        var rel = ValidateRel(root, relPath);
+        var sem = LockFor(root);
+        await sem.WaitAsync(ct);
+        try
+        {
+            // Пустой вывод ls-files = файл git-у неизвестен
+            var tracked = await RunAsync(ownerId, root, ["ls-files", "--", rel], ct: ct);
+            if (string.IsNullOrWhiteSpace(tracked.Stdout))
+                // -f обязательно (иначе clean откажется), -d — если это новая папка.
+                // .gitignore уважается: игнорируемое чистится только с -x, его не даём
+                await RunOkAsync(ownerId, root, ["clean", "-fd", "--", rel], ct: ct);
+            else
+                await RunOkAsync(ownerId, root, ["checkout", "HEAD", "--", rel], ct: ct);
+        }
+        finally { sem.Release(); }
+    }
 
     // Откат ВСЕХ изменений рабочего дерева: отслеживаемые (индекс+дерево) к HEAD +
     // удаление неотслеживаемых файлов/папок (clean -fd уважает .gitignore — сборки/артефакты

@@ -11,7 +11,7 @@
 // не отдельная вкладка, а место, куда приводит клик по типу. Крошки одинаково понимают
 // оба вида шагов (группа → обзор с раскрытием, тип → фокус) — см. lib/codeGraph.ts.
 import { useMemo, useState, useEffect } from 'react';
-import { Network, RefreshCw, X, SlidersHorizontal, AlertTriangle } from 'lucide-react';
+import { Network, RefreshCw, X, SlidersHorizontal, AlertTriangle, Loader, Unlink } from 'lucide-react';
 import { C, FONT, FS, R, SP, SHADOW } from '../../lib/design';
 import { Button, WaitingIndicator, BackButton, EmptyState } from '../../components/ui';
 import { Toolbar, ToolbarIconButton } from '../../components/Toolbar';
@@ -23,6 +23,7 @@ import { buildFocusModel } from './graphFocus';
 import { buildOverviewScene, layoutOverview, defaultExpandedGroups, type OverviewItem } from './graphOverview';
 import { CodeGraphFocusCanvas, CodeGraphOverviewCanvas } from './CodeGraphCanvas';
 import { CodeGraphPanel } from './CodeGraphPanel';
+import { CodeGraphNavBar } from './CodeGraphNav';
 
 interface Props {
   projectId: string;
@@ -39,12 +40,6 @@ function formatBuiltAt(iso?: string | null): string | null {
   if (isNaN(d.getTime())) return null;
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${pad(d.getDate())}.${pad(d.getMonth() + 1)} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
-interface CrumbDisplay {
-  key: string;
-  label: string;
-  step: number;   // индекс в s.navPath, -1 — корень «Обзора»
 }
 
 export function CodeGraphDocument({ projectId, isMobile, onClose, onOpenFile, onBuild }: Props) {
@@ -87,7 +82,7 @@ export function CodeGraphDocument({ projectId, isMobile, onClose, onOpenFile, on
   }, [s.data, s.viewMode, overviewExpanded, s.overviewTypesGroup, s.hideTestNodes, s.filters, isMobile]);
 
   const overviewLayout = useMemo(
-    () => (overviewScene ? layoutOverview(overviewScene, { mobile: isMobile }) : null),
+    () => (overviewScene ? layoutOverview(overviewScene, { size: isMobile ? 'mobile' : 'desktop' }) : null),
     [overviewScene, isMobile],
   );
 
@@ -97,23 +92,6 @@ export function CodeGraphDocument({ projectId, isMobile, onClose, onOpenFile, on
     () => s.navPath.filter(step => step.kind === 'group').map(g => `${g.group}:${g.drilled}`).join('>'),
     [s.navPath],
   );
-
-  // Единая цепочка крошек: «Обзор» (корень, всегда первый) + шаги навигации — группа
-  // ведёт в обзор с соответствующим раскрытием, тип — в фокус на нём. Не растёт
-  // неограниченно: середина сворачивается в «…» (на мобиле — агрессивнее).
-  const crumbs = useMemo<CrumbDisplay[]>(() => {
-    const root: CrumbDisplay = { key: 'root', label: 'Обзор', step: -1 };
-    if (!s.navPath.length) return [root];
-    const byId = s.data ? new Map(s.data.nodes.map(n => [n.id, n])) : null;
-    const steps: CrumbDisplay[] = s.navPath.map((step, i) => step.kind === 'node'
-      ? { key: `n:${step.id}:${i}`, label: byId?.get(step.id)?.label ?? step.id, step: i }
-      : { key: `g:${step.group}:${i}`, label: step.group.split('.').pop() ?? step.group, step: i });
-    const maxTail = isMobile ? 2 : 4;
-    if (steps.length <= maxTail) return [root, ...steps];
-    const tail = steps.slice(-maxTail);
-    const ellipsis: CrumbDisplay = { key: 'ellipsis', label: '…', step: steps.length - maxTail - 1 };
-    return [root, ellipsis, ...tail];
-  }, [s.navPath, s.data, isMobile]);
 
   // Клик по группе «Обзора»: есть куда раскрыть глубже — раскрываем на уровень, иначе —
   // сразу до типов. Двойной клик — всегда до типов. Клик по типу — переход в «Фокус»
@@ -158,6 +136,13 @@ export function CodeGraphDocument({ projectId, isMobile, onClose, onOpenFile, on
             <span style={{ fontSize: 13, fontWeight: 600, color: C.textSecondary }}>Чат</span>
           </BackButton>
         )}
+        {/* Закрыть — слева, как у открытого файла: у документов центра одно место
+            выхода, и искать его в разных концах шапки не приходится */}
+        {!isMobile && (
+          <ToolbarIconButton isMobile={isMobile} onClick={onClose} title="Закрыть">
+            <X size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+          </ToolbarIconButton>
+        )}
         <Network size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} color={C.textSecondary} style={{ flexShrink: 0 }} />
         <span style={{ fontFamily: FONT.sans, fontWeight: 600, fontSize: 14, color: C.textHeading, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           Граф зависимостей
@@ -177,38 +162,38 @@ export function CodeGraphDocument({ projectId, isMobile, onClose, onOpenFile, on
             <AlertTriangle size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />устаревает
           </span>
         )}
-        <Button variant={isStale ? 'primary' : 'secondary'} size="sm" pill
-          style={{ flexShrink: 0 }}
+        {/* Главное действие документа — той же формой, что «Править»/«Сохранить»
+            у открытого файла: залитая кнопка size="sm" с иконкой и подписью */}
+        <Button variant="primary" size="sm"
+          style={{ flexShrink: 0, whiteSpace: 'nowrap' }}
           loading={s.status === 'loading' || s.status === 'building'}
           onClick={() => a.build(projectId)}
           leftIcon={<RefreshCw size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
           title="Перестроить граф">
           {!isMobile && 'Перестроить'}
         </Button>
-        {/* Крестик закрытия — только на десктопе (на мобиле его роль у BackButton) */}
-        {!isMobile && (
-          <ToolbarIconButton isMobile={isMobile} onClick={onClose} title="Закрыть">
-            <X size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-          </ToolbarIconButton>
-        )}
       </Toolbar>
 
       {/* Тело документа */}
       <div style={{ flex: 1, minHeight: 0, position: 'relative', display: 'flex', flexDirection: 'column' }}>
+        {/* Ожидание — тем же EmptyState, что empty/error ниже: в одном документе
+            состояния обязаны говорить одним голосом */}
         {(s.status === 'loading' || s.status === 'idle') && (
-          <Center>
-            <WaitingIndicator />
-            <div style={{ ...serifTitle, marginTop: SP.md }}>Анализирую зависимости</div>
-            <p style={centerNote}>Roslyn разбирает исходники, извлекает типы и рёбра между ними.</p>
-          </Center>
+          <EmptyState
+            icon={<Loader size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} />}
+            title="Анализирую зависимости"
+            subtitle="Roslyn разбирает исходники, извлекает типы и рёбра между ними."
+            action={<WaitingIndicator />}
+          />
         )}
 
         {s.status === 'building' && (
-          <Center>
-            <WaitingIndicator hint="Сборка займёт около минуты — граф появится сам" />
-            <div style={{ ...serifTitle, marginTop: SP.md }}>Строю граф зависимостей</div>
-            <p style={centerNote}>Сборка запущена — документ обновится автоматически, закрывать его не нужно.</p>
-          </Center>
+          <EmptyState
+            icon={<Loader size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} />}
+            title="Строю граф зависимостей"
+            subtitle="Сборка запущена — документ обновится автоматически, закрывать его не нужно."
+            action={<WaitingIndicator hint="Сборка займёт около минуты — граф появится сам" />}
+          />
         )}
 
         {s.status === 'empty' && (
@@ -222,7 +207,7 @@ export function CodeGraphDocument({ projectId, isMobile, onClose, onOpenFile, on
 
         {s.status === 'error' && (
           <EmptyState
-            icon={<AlertTriangle size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} />}
+            icon={<Unlink size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} />}
             title="Не удалось загрузить граф"
             subtitle={s.error ?? 'Повторите попытку позже.'}
             action={<Button variant="secondary" size="md" onClick={() => a.load(projectId, true)}>Повторить</Button>}
@@ -231,45 +216,20 @@ export function CodeGraphDocument({ projectId, isMobile, onClose, onOpenFile, on
 
         {s.status === 'ready' && s.data && (
           <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-            {/* Единая цепочка крошек: «Назад» — один шаг; клик по ступени — возврат
-                ровно на неё, всё правее отбрасывается */}
-            <div style={{
-              display: 'flex', alignItems: 'center', gap: SP.sm, padding: `${SP.sm} ${SP.md}`,
-              borderBottom: `1px solid ${C.borderLight}`, background: C.bgPanel, flexShrink: 0,
-              overflowX: 'auto', whiteSpace: 'nowrap',
-            }}>
-              <BackButton onClick={() => a.back()} title="Назад"
-                iconSize={ICON_SIZE.xs}
-                style={{ opacity: s.navPath.length ? 1 : 0.4, pointerEvents: s.navPath.length ? 'auto' : 'none' }}>
-                <span style={{ fontSize: FS.xs, color: C.textSecondary }}>Назад</span>
-              </BackButton>
-              <span style={{ width: 1, height: 14, background: C.borderLight, flexShrink: 0 }} />
-              {crumbs.map((c, i) => {
-                const last = i === crumbs.length - 1;
-                return (
-                  <span key={c.key} style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs, flexShrink: 0 }}>
-                    {i > 0 && <span style={{ color: C.textMuted, fontSize: FS.xs }}>›</span>}
-                    <span
-                      onClick={last ? undefined : () => a.toStep(c.step)}
-                      title={last ? undefined : `Вернуться к ${c.label}`}
-                      style={{
-                        fontFamily: FONT.mono, fontSize: FS.xs,
-                        color: last ? C.textHeading : C.info,
-                        fontWeight: last ? 600 : 400,
-                        cursor: last ? 'default' : 'pointer',
-                        padding: '2px 6px', borderRadius: R.sm,
-                      }}>{c.label}</span>
+            {/* Навигация — общий компонент с картой в панели: «Назад» — один шаг,
+                клик по ступени — возврат ровно на неё, всё правее отбрасывается */}
+            <CodeGraphNavBar isMobile={isMobile}
+              trailing={!isMobile && focus
+                ? (
+                  <span style={{ marginLeft: 'auto', fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, paddingLeft: SP.sm }}>
+                    {focus.center.fullyQualifiedName}
                   </span>
-                );
-              })}
-              {!isMobile && focus && (
-                <span style={{ marginLeft: 'auto', fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, paddingLeft: SP.sm }}>
-                  {focus.center.fullyQualifiedName}
-                </span>
-              )}
-            </div>
+                )
+                : undefined} />
 
-            <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
+            {/* Полотно холста — фон карточки: в центре граф читается как документ,
+                а не как отдельная поверхность внутри острова */}
+            <div style={{ flex: 1, minHeight: 0, position: 'relative', background: C.bgCard }}>
             {s.viewMode === 'focus' && focus && (
               <CodeGraphFocusCanvas
                 focus={focus}
@@ -309,33 +269,25 @@ export function CodeGraphDocument({ projectId, isMobile, onClose, onOpenFile, on
 
             {/* Счётчик фокуса: честно проговаривает, сколько показано и сколько скрыто */}
             {s.viewMode === 'focus' && focus && (
-              <div style={{
-                flexShrink: 0, padding: `${SP.xs} ${SP.md}`, borderTop: `1px solid ${C.borderLight}`,
-                background: C.bgInset, fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted,
-                overflowX: 'auto', whiteSpace: 'nowrap',
-              }}>
-                {`показано ${focus.shownCount} из ${s.data.nodes.length} узлов · глубина ${s.focusDepth2 ? 2 : 1}`}
+              <StatusBar>
+                {`Показано ${focus.shownCount} из ${s.data.nodes.length} узлов · глубина ${s.focusDepth2 ? 2 : 1}`}
                 {s.focusDepth2 && ` (второе кольцо: ${focus.secondShown} из ${focus.secondTotal}, остальные скрыты)`}
                 {` · связей у центра: ${focus.centerDegree}`}
                 {(focus.incoming.length > focus.limit || focus.outgoing.length > focus.limit)
                   && ` · в заглушках: ${Math.max(0, focus.incoming.length - focus.limit) + Math.max(0, focus.outgoing.length - focus.limit)}`}
-              </div>
+              </StatusBar>
             )}
 
             {/* Счётчик обзора: сколько элементов на холсте и сколько типов/связей за ними стоит */}
             {s.viewMode === 'overview' && overviewScene && (
-              <div style={{
-                flexShrink: 0, padding: `${SP.xs} ${SP.md}`, borderTop: `1px solid ${C.borderLight}`,
-                background: C.bgInset, fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted,
-                overflowX: 'auto', whiteSpace: 'nowrap',
-              }}>
+              <StatusBar>
                 {(() => {
                   const groups = overviewScene.items.filter(it => it.kind !== 'node').length;
                   const types = overviewScene.items.filter(it => it.kind === 'node').length;
-                  return `на холсте ${overviewScene.items.length} элементов (${groups} групп + ${types} типов) · `
+                  return `На холсте ${overviewScene.items.length} элементов (${groups} групп + ${types} типов) · `
                     + `${overviewScene.totalTypeCount - types} типов свёрнуты в группы · ${overviewScene.bundles.length} пучков связей`;
                 })()}
-              </div>
+              </StatusBar>
             )}
           </div>
         )}
@@ -352,13 +304,6 @@ export function CodeGraphDocument({ projectId, isMobile, onClose, onOpenFile, on
 }
 
 // === Мелкие презентационные куски ===
-function Center({ children }: { children: React.ReactNode }) {
-  return (
-    <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: SP.md, padding: SP.xl, textAlign: 'center' }}>
-      {children}
-    </div>
-  );
-}
 
 function MetaChip({ children }: { children: React.ReactNode }) {
   return (
@@ -369,6 +314,16 @@ function MetaChip({ children }: { children: React.ReactNode }) {
   );
 }
 
+// Строка состояния под холстом: что именно сейчас показано и что скрыто. Обычным
+// текстом, а не моноширинной телеметрией — это подпись к картинке, а не лог
+function StatusBar({ children }: { children: React.ReactNode }) {
+  return (
+    <div style={{
+      flexShrink: 0, padding: `${SP.xs}px ${SP.md}px`, borderTop: `1px solid ${C.borderLight}`,
+      background: C.bgInset, fontFamily: FONT.sans, fontSize: FS.xs, color: C.textMuted,
+      overflowX: 'auto', whiteSpace: 'nowrap',
+    }}>{children}</div>
+  );
+}
+
 const monoBold: React.CSSProperties = { color: C.textHeading, fontWeight: 600, fontFamily: FONT.mono };
-const serifTitle: React.CSSProperties = { fontFamily: FONT.serif, fontSize: FS.xl, color: C.textHeading };
-const centerNote: React.CSSProperties = { fontSize: FS.sm, color: C.textSecondary, maxWidth: 400, lineHeight: 1.55 };

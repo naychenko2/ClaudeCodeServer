@@ -21,6 +21,33 @@ export const OVERVIEW_VIEW_W = FOCUS_VIEW_W;
 export const OVERVIEW_VIEW_H = FOCUS_VIEW_H;
 export const OVERVIEW_VIEW_W_MOBILE = FOCUS_VIEW_W_MOBILE;
 export const OVERVIEW_VIEW_H_MOBILE = FOCUS_VIEW_H_MOBILE;
+// Превью в панели рельсы — третий формат, а не «мобильный поменьше»: мобильный
+// холст вытянут вверх (390×620), и в широкой невысокой полосе панели он вписался бы
+// по высоте, заняв треть ширины. Здесь пропорции обратные — карта слоёв поперёк.
+export const OVERVIEW_VIEW_W_PANEL = 340;
+export const OVERVIEW_VIEW_H_PANEL = 250;
+
+// Формат холста «Обзора». Влияет на размеры viewBox, плотность ряда и радиусы —
+// втроём они и делают раскладку читаемой на своём носителе.
+export type OverviewSize = 'desktop' | 'mobile' | 'panel';
+
+interface SizeSpec {
+  viewW: number;
+  viewH: number;
+  maxPerLine: number;
+  // Потолок радиуса: узла-типа и группы соответственно, плюс множитель роста группы
+  nodeRMax: number;
+  groupRMax: number;
+  groupRScale: number;
+  // Запас снизу: подпись узла рисуется ПОД кружком, и без него нижний ряд обрезался
+  bottomMargin: number;
+}
+
+const SIZE_SPECS: Record<OverviewSize, SizeSpec> = {
+  desktop: { viewW: OVERVIEW_VIEW_W, viewH: OVERVIEW_VIEW_H, maxPerLine: 6, nodeRMax: 22, groupRMax: 36, groupRScale: 3.4, bottomMargin: 14 },
+  mobile: { viewW: OVERVIEW_VIEW_W_MOBILE, viewH: OVERVIEW_VIEW_H_MOBILE, maxPerLine: 3, nodeRMax: 18, groupRMax: 26, groupRScale: 2.4, bottomMargin: 14 },
+  panel: { viewW: OVERVIEW_VIEW_W_PANEL, viewH: OVERVIEW_VIEW_H_PANEL, maxPerLine: 3, nodeRMax: 12, groupRMax: 17, groupRScale: 1.7, bottomMargin: 18 },
+};
 
 // Фиксированный порядок слоёв сверху вниз. Индекс — «глубина»: чем больше,
 // тем ниже на холсте. Порядок проверки важен: `Tests` идёт первым, потому что
@@ -369,6 +396,9 @@ export interface OverviewLayout {
   viewW: number;
   viewH: number;
   mobile: boolean;
+  // Формат холста — по нему отрисовка решает, что показывать: в панельной мини-карте
+  // подписи слоёв съедали бы левый край и налезали на кружки
+  size: OverviewSize;
   positions: Map<string, OverviewPlacedItem>;
   rows: OverviewLayoutRow[];
 }
@@ -376,10 +406,12 @@ export interface OverviewLayout {
 // Раскладка по слоям: детерминированная, без Math.random и force-симуляции.
 // Занятые слои сжимаются в ряды подряд (пустых слоёв не бывает — не тратим место
 // на слой, в котором сейчас ничего не раскрыто).
-export function layoutOverview(scene: OverviewScene, opts: { mobile?: boolean } = {}): OverviewLayout {
-  const mobile = !!opts.mobile;
-  const viewW = mobile ? OVERVIEW_VIEW_W_MOBILE : OVERVIEW_VIEW_W;
-  const viewH = mobile ? OVERVIEW_VIEW_H_MOBILE : OVERVIEW_VIEW_H;
+export function layoutOverview(scene: OverviewScene, opts: { size?: OverviewSize } = {}): OverviewLayout {
+  const size = opts.size ?? 'desktop';
+  const spec = SIZE_SPECS[size];
+  const { viewW, viewH } = spec;
+  // Компактный — всё, что уже десктопа: холст рисует по нему длину подписей
+  const mobile = size !== 'desktop';
 
   const byLayer = new Map<number, OverviewItem[]>();
   for (const it of scene.items) {
@@ -387,9 +419,11 @@ export function layoutOverview(scene: OverviewScene, opts: { mobile?: boolean } 
     if (list) list.push(it); else byLayer.set(it.layer, [it]);
   }
   const occupied = [...byLayer.keys()].sort((a, b) => a - b);
-  const topMargin = 28;
-  const rowH = (viewH - topMargin) / Math.max(occupied.length, 1);
-  const maxPerLine = mobile ? 3 : 6;
+  // Подписи слоёв рисуются у верхней кромки ряда; в панельном формате их нет —
+  // и верхний запас там не нужен
+  const topMargin = size === 'panel' ? 12 : 28;
+  const rowH = (viewH - topMargin - spec.bottomMargin) / Math.max(occupied.length, 1);
+  const maxPerLine = spec.maxPerLine;
 
   const positions = new Map<string, OverviewPlacedItem>();
   const rows: OverviewLayoutRow[] = [];
@@ -407,8 +441,8 @@ export function layoutOverview(scene: OverviewScene, opts: { mobile?: boolean } 
       const j = i - line * perLine;
       const step = viewW / (inLineCount + 1);
       const r = it.kind === 'node'
-        ? Math.max(11, Math.min(mobile ? 18 : 22, 11 + (it.degree ?? 0) / 6))
-        : Math.max(13, Math.min(mobile ? 26 : 36, 11 + Math.sqrt(it.count) * (mobile ? 2.4 : 3.4)));
+        ? Math.max(11, Math.min(spec.nodeRMax, 11 + (it.degree ?? 0) / 6))
+        : Math.max(13, Math.min(spec.groupRMax, 11 + Math.sqrt(it.count) * spec.groupRScale));
       positions.set(it.key, {
         key: it.key,
         x: step * (j + 1),
@@ -420,5 +454,5 @@ export function layoutOverview(scene: OverviewScene, opts: { mobile?: boolean } 
     rows.push({ layer: layerIdx, title: LAYER_TITLES[layerIdx] ?? 'Прочее', y0, y1: y0 + rowH });
   });
 
-  return { viewW, viewH, mobile, positions, rows };
+  return { viewW, viewH, mobile, size, positions, rows };
 }

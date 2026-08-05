@@ -20,7 +20,7 @@ import {
   gitStage, gitUnstage, gitDiscard, gitDiscardAll, gitCommit, gitFetch, gitPull, gitCheckout, gitCreateBranch,
   gitStashPush, gitStashPop, gitStashDrop, clearGitError,
 } from '../lib/git';
-import { splitPath, relTime } from './GitPanel';
+import { splitPath, relTime } from '../lib/gitFormat';
 import { PublishDialog } from './PublishDialog';
 import { ListDateDivider } from './ListDateDivider';
 import { dayGroupTitle } from '../lib/chatGroups';

@@ -15,6 +15,7 @@ import {
 } from '../lib/git';
 import { Modal, ModalActions, TextField, TextArea, IconButton, Button, Menu, MenuItem, Toggle } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
+import { splitPath, relTime } from '../lib/gitFormat';
 
 // Цвета статус-бейджа по односимвольному коду git (экспорт — переиспользуется в GitChangesRail)
 export function statusBadge(status: string): { fg: string; bg: string } {
@@ -29,33 +30,11 @@ export function statusBadge(status: string): { fg: string; bg: string } {
   }
 }
 
-// [папка-родитель, имя файла] из относительного пути (экспорт — переиспользуется в GitChangesRail)
-export function splitPath(p: string): [string, string] {
-  const norm = p.replace(/\\/g, '/').replace(/\/+$/, '');
-  const i = norm.lastIndexOf('/');
-  return i < 0 ? ['', norm] : [norm.slice(0, i), norm.slice(i + 1)];
-}
-
 // Детерминированный цвет из палитры групп по имени автора
 function colorFor(name: string): string {
   let h = 0;
   for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) | 0;
   return GROUP_COLORS[Math.abs(h) % GROUP_COLORS.length];
-}
-
-// Относительная дата: «2 ч назад», «5 мин назад», дальше — обычная дата
-// (экспорт — переиспользуется во вкладке «Авторы» FileViewer)
-export function relTime(iso: string): string {
-  const t = Date.parse(iso);
-  if (isNaN(t)) return '';
-  const diffMin = Math.floor((Date.now() - t) / 60_000);
-  if (diffMin < 1) return 'только что';
-  if (diffMin < 60) return `${diffMin} мин назад`;
-  const h = Math.floor(diffMin / 60);
-  if (h < 24) return `${h} ч назад`;
-  const d = Math.floor(h / 24);
-  if (d < 30) return `${d} дн назад`;
-  return new Date(t).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
 const COMMIT_SUMMARY_MAX = 72;

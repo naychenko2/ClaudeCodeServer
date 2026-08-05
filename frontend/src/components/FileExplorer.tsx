@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef, memo, type ReactNode } from 'react';
 import { X, Folder, FolderPlus, ChevronRight, SquarePen, Trash2, ArrowRight, Paperclip, BookOpen, Search, Plus, Check, Copy, Upload, Monitor, Server, GitBranch, SlidersHorizontal } from 'lucide-react';
 import type { Project, FileEntry } from '../types';
 import { api } from '../lib/api';
@@ -320,27 +320,6 @@ function FilesRootEmptyState({ onCreateFile }: { onCreateFile?: () => void }) {
   );
 }
 
-// Иконка карандаша для переименования
-function RenameIcon() {
-  return <SquarePen size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />;
-}
-
-// Иконка корзины для удаления
-function TrashIcon() {
-  return <Trash2 size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />;
-}
-
-// Иконка книги с минусом — «удалить из знаний» (в строке файла, 15×15)
-function BookMinusIcon() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/>
-      <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>
-      <line x1="14" y1="10" x2="22" y2="10"/>
-    </svg>
-  );
-}
-
 // Иконки для контекстного меню — 16×16, currentColor, Lucide-style
 function MI_Attach() {
   return <Paperclip size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />;
@@ -404,6 +383,270 @@ interface ContextMenuState {
   y: number;
   entry: FileEntry;
 }
+
+// Строка дерева — отдельный компонент ради СОБСТВЕННОГО состояния наведения.
+// Пока hover жил в панели, каждое движение мыши перерисовывало весь список: в
+// раскрытом дереве это сотни строк с инлайновыми стилями на каждый mousemove.
+// Тот же приём, что у DocRow/FolderRow в «Документации».
+interface FileRowProps {
+  entry: FileEntry;
+  depth: number;
+  showPath: boolean;      // результаты поиска — второй строкой путь до файла
+  mobileNav: boolean;     // мобильная навигация по папкам (вместо дерева)
+  isMobile: boolean;
+  alwaysShowIcons: boolean;
+  online: boolean;
+  active: boolean;
+  expanded: boolean;
+  loading: boolean;
+  renaming: boolean;
+  isDropTarget: boolean;
+  dragging: boolean;
+  pressing: boolean;
+  flash: boolean;         // подсветка только что созданного файла
+  syncState: 'direct' | 'inherited' | null;
+  pendingDownload: boolean;
+  folderSyncing: boolean;
+  indexed: boolean;       // файл в базе знаний проекта
+  indexing: boolean;
+  canAttach: boolean;
+  renameValue: string;
+  onRenameChange: (v: string) => void;
+  onRenameCommit: () => void;
+  onRenameCancel: () => void;
+  onRenameBlur: () => void;
+  onOpen: (entry: FileEntry) => void;
+  onRename: (entry: FileEntry) => void;
+  onContextMenu: (e: React.MouseEvent, entry: FileEntry) => void;
+  onDragStart: (e: React.DragEvent, entry: FileEntry) => void;
+  onDragOver: (e: React.DragEvent, entry: FileEntry) => void;
+  onDragLeave: (e: React.DragEvent, entry: FileEntry) => void;
+  onDrop: (e: React.DragEvent, entry: FileEntry) => void;
+  onDragEnd: () => void;
+  onTouchStart: (entry: FileEntry) => void;
+  onTouchCancel: () => void;
+  onTouchEndPreventDefault: () => boolean;
+  onAttach: ((path: string) => void) | undefined;
+  onToggleSync: (entry: FileEntry, e: React.MouseEvent) => void;
+}
+
+const FileRow = memo(function FileRow(p: FileRowProps) {
+  const { entry, depth, isMobile, alwaysShowIcons, online } = p;
+  const [hover, setHover] = useState(false);
+  const touch = isMobile || alwaysShowIcons;
+  // Ref инпута переименования держит сама строка: пока он приезжал пропом из
+  // панели, react-hooks/refs считал доступом к рефу ЛЮБОЕ чтение пропсов строки
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const inlineRename = p.renaming && !touch;
+  // Фокус и выделение имени БЕЗ расширения: правят обычно его, а не «.tsx»
+  useEffect(() => {
+    if (!inlineRename) return;
+    const raf = requestAnimationFrame(() => {
+      const input = inputRef.current;
+      if (!input) return;
+      input.focus();
+      const dot = input.value.lastIndexOf('.');
+      input.setSelectionRange(0, dot > 0 ? dot : input.value.length);
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [inlineRename]);
+  const notesRoot = isNotesRoot(entry);
+  const em = entry.isDirectory ? null : getExtMeta(entry.name);
+  const parentDir = p.showPath ? normPath(entry.path).split('/').slice(0, -1).join('/') : '';
+
+  const rowBg = p.isDropTarget || p.active ? C.accentMuted
+    : hover ? C.bgSelected
+    : p.flash ? C.accentLight
+    : notesRoot ? C.accentLight
+    : 'transparent';
+  // Десктоп: кластер иконок липнет к правому краю видимой области при горизонтальном скролле
+  const stickyIcons = !isMobile;
+
+  // Тоггл офлайн-синхронизации: состояние важнее наведения — залитое облачко
+  // видно всегда, пустое проявляется под курсором (на тач-раскладке — постоянно)
+  const syncControl = (() => {
+    const btnStyle: React.CSSProperties = { background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', flexShrink: 0 };
+    if (p.pendingDownload || p.folderSyncing) {
+      if (online && p.syncState === 'direct') {
+        return <button onClick={e => p.onToggleSync(entry, e)} title="Отменить синхронизацию" style={btnStyle}><SyncSpinner /></button>;
+      }
+      return <span style={{ ...btnStyle, cursor: 'default' }} title="Загружается…"><SyncSpinner /></span>;
+    }
+    if (p.syncState === 'inherited') {
+      return <span style={{ ...btnStyle, cursor: 'default' }} title="Синхронизируется (через папку/проект)"><CloudIcon variant="inherited" /></span>;
+    }
+    if (online) {
+      if (p.syncState === 'direct') {
+        return <button onClick={e => p.onToggleSync(entry, e)} title="Отключить синхронизацию" style={btnStyle}><CloudIcon variant="direct" /></button>;
+      }
+      if (touch || hover) {
+        return <button onClick={e => p.onToggleSync(entry, e)} title="Синхронизировать для офлайна" style={btnStyle}><CloudIcon variant="idle" /></button>;
+      }
+      return null;
+    }
+    if (p.syncState === 'direct') {
+      return <span style={{ ...btnStyle, cursor: 'default' }} title="Синхронизирован"><CloudIcon variant="direct" /></span>;
+    }
+    return null;
+  })();
+
+  return (
+    <div
+      draggable={!touch && !p.renaming && !notesRoot}
+      onClick={() => { if (!p.renaming) p.onOpen(entry); }}
+      onDoubleClick={!isMobile && !entry.isDirectory ? e => { e.stopPropagation(); p.onRename(entry); } : undefined}
+      onContextMenu={e => p.onContextMenu(e, entry)}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      onDragStart={!touch ? e => p.onDragStart(e, entry) : undefined}
+      onDragOver={!touch && entry.isDirectory ? e => p.onDragOver(e, entry) : undefined}
+      onDragLeave={!touch && entry.isDirectory ? e => p.onDragLeave(e, entry) : undefined}
+      onDrop={!touch && entry.isDirectory ? e => p.onDrop(e, entry) : undefined}
+      onDragEnd={!touch ? p.onDragEnd : undefined}
+      onTouchStart={touch ? () => p.onTouchStart(entry) : undefined}
+      onTouchEnd={touch ? e => { if (p.onTouchEndPreventDefault()) e.preventDefault(); p.onTouchCancel(); } : undefined}
+      onTouchMove={touch ? p.onTouchCancel : undefined}
+      onTouchCancel={touch ? p.onTouchCancel : undefined}
+      style={{
+        display: 'flex', alignItems: isMobile ? 'flex-start' : 'center', gap: 6,
+        paddingLeft: 8 + depth * 16, paddingRight: stickyIcons ? 0 : 8,
+        paddingTop: touch ? 10 : 6,
+        paddingBottom: touch ? 10 : 6,
+        minHeight: touch ? 44 : 36,
+        borderRadius: 8, cursor: p.dragging ? 'grabbing' : 'pointer',
+        width: '100%', boxSizing: 'border-box',
+        opacity: p.dragging ? 0.4 : p.pressing ? 0.6 : 1,
+        transform: p.pressing ? 'scale(0.98)' : 'none',
+        background: rowBg,
+        boxShadow: p.isDropTarget
+          ? `inset 0 0 0 2px ${C.accent}`
+          : p.active ? `inset 2px 0 0 ${C.accent}`
+          : 'none',
+        transition: 'background 0.1s, box-shadow 0.1s, opacity 0.1s, transform 0.1s',
+      }}
+    >
+      {/* toggle-стрелка дерева — только десктоп/планшет */}
+      {!p.mobileNav && (
+        <span style={{ width: 12, flexShrink: 0, textAlign: 'center', userSelect: 'none', color: C.textMuted, fontSize: 9, lineHeight: 1 }}>
+          {entry.isDirectory ? (p.loading ? '·' : (p.expanded ? '▾' : '▸')) : ''}
+        </span>
+      )}
+      {entry.isDirectory ? (
+        <span style={{ flexShrink: 0, display: 'flex', color: C.accent }}>
+          {notesRoot ? <NotesFolderIcon /> : <FolderIcon />}
+        </span>
+      ) : (
+        <span style={{
+          width: 23, height: 23, borderRadius: 6,
+          background: em!.bg, color: em!.fg,
+          fontFamily: "'JetBrains Mono', monospace",
+          fontSize: 8.5, fontWeight: 700,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          flexShrink: 0, letterSpacing: '-0.02em',
+        }}>{em!.label}</span>
+      )}
+      <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1, paddingTop: isMobile ? 3 : 0 }}>
+        {/* Inline-редактирование только на десктопе; мобила/планшет → Modal */}
+        {inlineRename ? (
+          <input
+            ref={inputRef}
+            value={p.renameValue}
+            onChange={e => p.onRenameChange(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') { e.stopPropagation(); p.onRenameCommit(); }
+              if (e.key === 'Escape') { e.stopPropagation(); p.onRenameCancel(); }
+            }}
+            onBlur={p.onRenameBlur}
+            onClick={e => e.stopPropagation()}
+            style={{
+              fontFamily: "'JetBrains Mono', monospace",
+              fontSize: 13,
+              fontWeight: entry.isDirectory ? 700 : 500,
+              color: C.textHeading,
+              background: C.bgWhite,
+              border: `1.5px solid ${C.accent}`,
+              borderRadius: 4,
+              padding: '1px 4px',
+              outline: 'none',
+              width: '100%',
+              boxSizing: 'border-box',
+            }}
+          />
+        ) : (
+          <span title={notesRoot ? 'Заметки (папка notes)' : entry.name} style={{
+            fontFamily: notesRoot ? undefined : "'JetBrains Mono', monospace",
+            fontSize: 13,
+            fontWeight: entry.isDirectory ? 700 : 500,
+            color: notesRoot ? C.accent
+              : (!entry.isDirectory && p.indexed) ? C.successText
+              : C.textHeading,
+            ...(isMobile
+              ? { whiteSpace: 'normal', wordBreak: 'break-all', lineHeight: 1.35 }
+              : { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }),
+          }}>{notesRoot ? 'Заметки' : entry.name}</span>
+        )}
+        {parentDir && (
+          <span title={normPath(entry.path)} style={{
+            fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5, color: C.textMuted,
+            ...(isMobile ? { whiteSpace: 'normal', wordBreak: 'break-all' } : { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }),
+          }}>{parentDir}</span>
+        )}
+      </span>
+      {/* Кластер правых иконок: на десктопе — sticky, не уезжает при горизонтальном скролле.
+          Быстрых действий здесь ровно два — «прикрепить к чату» и офлайн-облачко: у них
+          нет другого дешёвого пути. Переименование, удаление и знания живут в контекстном
+          меню, где и были; шесть иконок в строке читались как приборная панель. */}
+      <span style={{
+        display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
+        ...(stickyIcons ? {
+          position: 'sticky' as const, right: 0,
+          alignSelf: 'stretch',
+          paddingLeft: 4, paddingRight: 8,
+          // Прозрачный на невыделенной строке: собственный фон-заглушка выдавал бы
+          // «хвост» справа, когда он не совпадает с фоном панели (та бывает и белой)
+          background: rowBg,
+          borderRadius: '0 8px 8px 0',
+        } : {}),
+      }}>
+        {entry.isModified && (
+          <span style={{ fontSize: 9, fontWeight: 700, color: C.accent, background: C.accentLight, width: 16, height: 16, borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>M</span>
+        )}
+        {entry.isNew && (
+          <span style={{ fontSize: 9, fontWeight: 700, color: C.successText, background: C.successBg, width: 16, height: 16, borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>+</span>
+        )}
+        {/* Индикатор базы знаний: спиннер во время индексации, книга — когда файл в ней.
+            Управление (добавить/убрать) — в контекстном меню */}
+        {!entry.isDirectory && p.indexing && (
+          <span style={{ padding: 2, display: 'flex', alignItems: 'center', flexShrink: 0, color: C.successText }}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <style>{`@keyframes kb-spin{to{transform:rotate(360deg)}} .kb-spin{transform-origin:center;animation:kb-spin 0.8s linear infinite}`}</style>
+              <circle className="kb-spin" cx="12" cy="12" r="9" strokeDasharray="40 20" />
+            </svg>
+          </span>
+        )}
+        {!entry.isDirectory && !p.indexing && p.indexed && (
+          <span title="В базе знаний" style={{ padding: 2, display: 'flex', alignItems: 'center', flexShrink: 0, color: C.successText }}>
+            <BookOpen size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+          </span>
+        )}
+        {/* Прикрепить к чату — десктоп при наведении; на тач-раскладке через long-press */}
+        {!entry.isDirectory && p.canAttach && p.onAttach && !touch && hover && (
+          <IconButton
+            size="xs"
+            tone="accent"
+            onClick={e => { e.stopPropagation(); p.onAttach!(entry.path); }}
+            title="Добавить в чат"
+          >
+            <Paperclip size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+          </IconButton>
+        )}
+        {syncControl}
+        {/* Намёк «войти в папку» — только мобильная навигация */}
+        {p.mobileNav && entry.isDirectory && <ChevronRight size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} />}
+      </span>
+    </div>
+  );
+});
 
 export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = false, alwaysShowIcons = false, onAddToKnowledge, onAddFolderToKnowledge, onRemoveFromKnowledge, indexedFileNames, indexingFiles, indexingFolders, onAttachToChat }: Props) {
   const online = useOnline();
@@ -480,7 +723,6 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   const [search, setSearch] = useState(() => initial?.search ?? '');
   const [searchResults, setSearchResults] = useState<FileEntry[] | null>(() => initial?.searchResults ?? null);
   const [searchError, setSearchError] = useState<string | null>(null);
-  const [hoveredPath, setHoveredPath] = useState<string | null>(null);
   const [showCreateFile, setShowCreateFile] = useState(false);
   const [newFileName, setNewFileName] = useState('');
   const [createInDir, setCreateInDir] = useState(() => initial?.createInDir ?? '');
@@ -494,7 +736,6 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   const [renamingPath, setRenamingPath] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const renameCancelledRef = useRef(false);
-  const renameInputRef = useRef<HTMLInputElement>(null);
   // Модальный диалог переименования — для мобилы/планшета (клавиатура не сбивает blur)
   const [showRenameModal, setShowRenameModal] = useState(false);
   const renameModalInputRef = useRef<HTMLInputElement>(null);
@@ -713,20 +954,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   };
 
   // === Rename handlers ===
-
-  // Фокус и выделение имени без расширения для inline-редактирования (десктоп)
-  useEffect(() => {
-    if (!renamingPath || showRenameModal) return;
-    const raf = requestAnimationFrame(() => {
-      const input = renameInputRef.current;
-      if (!input) return;
-      input.focus();
-      const dotIdx = renameValue.lastIndexOf('.');
-      const end = dotIdx > 0 ? dotIdx : renameValue.length;
-      input.setSelectionRange(0, end);
-    });
-    return () => cancelAnimationFrame(raf);
-  }, [renamingPath]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Фокусом inline-инпута заведует сама строка (FileRow): ref живёт там же, где поле.
 
   // Фокус и выделение имени без расширения для модального диалога (мобила/планшет).
   // Задержка 280мс на тач-устройствах — клавиатура выезжает ПОСЛЕ того, как модал
@@ -1014,273 +1242,73 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
 
   const mobileDirLoading = !dirCache.has(mobileDir) && loadingDirs.has(mobileDir);
 
+  // Клик по строке: папка раскрывается (или открывается в мобильной навигации),
+  // файл открывается в центре. Стабильная ссылка — иначе memo строки бесполезен
+  const handleRowOpen = useCallback((entry: FileEntry) => {
+    if (entry.isDirectory) {
+      if (isMobile) void enterMobileDir(entry.path);
+      else void handleToggleDir(entry);
+    } else {
+      onOpenFile(entry.path);
+    }
+    // enterMobileDir/handleToggleDir пересоздаются каждый рендер (замыкают dirCache),
+    // но их поведение зависит только от актуального состояния на момент клика
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isMobile, onOpenFile]);
+
+  const handleRenameBlur = useCallback(() => {
+    if (renameCancelledRef.current) { renameCancelledRef.current = false; return; }
+    void commitRename();
+  }, [commitRename]);
+
+  // Долгое нажатие уже отработало → тап по строке не должен открывать файл
+  const touchEndPreventDefault = useCallback(() => !longPressTimer.current, []);
+
   const renderFileRow = (entry: FileEntry, depth: number, showPath = false, mobileNav = false) => {
-    const parentDir = showPath ? normPath(entry.path).split('/').slice(0, -1).join('/') : '';
-    const isExpanded = expanded.has(entry.path);
-    const isLoading = loadingDirs.has(entry.path);
-    const em = entry.isDirectory ? null : getExtMeta(entry.name);
-    // «Заметки» (vault проекта) — выделенная строка с русским именем и своей иконкой
-    const notesRoot = isNotesRoot(entry);
-    const isActive = !entry.isDirectory && activeNorm !== '' && normPath(entry.path) === activeNorm;
     const sstate = computeSyncState(marks, entry.path);
-    const pending = !entry.isDirectory && !!sstate && !isDownloaded(project.id, entry.path);
-    const folderSyncing = entry.isDirectory && isSyncing(project.id, entry.path);
-    const isDropTgt = dropTarget === entry.path;
-    const isDragging = dragPath === entry.path;
-    const isRenaming = renamingPath === entry.path;
-
-    const rowBg = isDropTgt
-      ? C.accentMuted
-      : isActive ? C.accentMuted
-      : hoveredPath === entry.path ? C.bgSelected
-      : normPath(entry.path) === newlyCreatedPath ? C.accentLight
-      : notesRoot ? C.accentLight
-      : 'transparent';
-    // Десктоп: кластер иконок липнет к правому краю видимой области при горизонтальном скролле
-    const stickyIcons = !isMobile;
-
-    const handleRowClick = () => {
-      if (isRenaming) return;
-      entry.isDirectory
-        ? (mobileNav ? enterMobileDir(entry.path) : handleToggleDir(entry))
-        : onOpenFile(entry.path);
-    };
-
     return (
-      <div
+      <FileRow
         key={entry.path}
-        draggable={!isMobile && !alwaysShowIcons && !isRenaming && !notesRoot}
-        onClick={handleRowClick}
-        onDoubleClick={!isMobile && !entry.isDirectory ? e => { e.stopPropagation(); startRename(entry); } : undefined}
-        onContextMenu={e => handleContextMenu(e, entry)}
-        onMouseEnter={() => setHoveredPath(entry.path)}
-        onMouseLeave={() => setHoveredPath(null)}
-        onDragStart={!isMobile && !alwaysShowIcons ? e => handleDragStart(e, entry) : undefined}
-        onDragOver={!isMobile && !alwaysShowIcons && entry.isDirectory ? e => handleDragOver(e, entry) : undefined}
-        onDragLeave={!isMobile && !alwaysShowIcons && entry.isDirectory ? e => handleDragLeave(e, entry) : undefined}
-        onDrop={!isMobile && !alwaysShowIcons && entry.isDirectory ? e => handleDrop(e, entry) : undefined}
-        onDragEnd={!isMobile && !alwaysShowIcons ? handleDragEnd : undefined}
-        onTouchStart={isMobile || alwaysShowIcons ? () => handleTouchStart(entry) : undefined}
-        onTouchEnd={isMobile || alwaysShowIcons ? (e) => {
-          if (!longPressTimer.current) e.preventDefault();
-          handleTouchCancel();
-        } : undefined}
-        onTouchMove={isMobile || alwaysShowIcons ? handleTouchCancel : undefined}
-        onTouchCancel={isMobile || alwaysShowIcons ? handleTouchCancel : undefined}
-        style={{
-          display: 'flex', alignItems: isMobile ? 'flex-start' : 'center', gap: 6,
-          paddingLeft: 8 + depth * 16, paddingRight: stickyIcons ? 0 : 8,
-          paddingTop: isMobile || alwaysShowIcons ? 10 : 6,
-          paddingBottom: isMobile || alwaysShowIcons ? 10 : 6,
-          // фикс высоты: hover-иконки (24) чуть выше контента строки — держим 36, чтобы строка не «прыгала»
-          minHeight: isMobile || alwaysShowIcons ? 44 : 36,
-          borderRadius: 8, cursor: isDragging ? 'grabbing' : 'pointer',
-          width: '100%', boxSizing: 'border-box',
-          opacity: isDragging ? 0.4 : pressingPath === entry.path ? 0.6 : 1,
-          transform: pressingPath === entry.path ? 'scale(0.98)' : 'none',
-          background: rowBg,
-          boxShadow: isDropTgt
-            ? `inset 0 0 0 2px ${C.accent}`
-            : isActive ? `inset 2px 0 0 ${C.accent}`
-            : 'none',
-          transition: 'background 0.1s, box-shadow 0.1s, opacity 0.1s, transform 0.1s',
-        }}
-      >
-        {/* toggle-стрелка дерева — только десктоп/планшет */}
-        {!mobileNav && (
-          <span style={{ width: 12, flexShrink: 0, textAlign: 'center', userSelect: 'none', color: C.textMuted, fontSize: 9, lineHeight: 1 }}>
-            {entry.isDirectory ? (isLoading ? '·' : (isExpanded ? '▾' : '▸')) : ''}
-          </span>
-        )}
-        {entry.isDirectory ? (
-          <span style={{ flexShrink: 0, display: 'flex', color: C.accent }}>
-            {notesRoot ? <NotesFolderIcon /> : <FolderIcon />}
-          </span>
-        ) : (
-          <span style={{
-            width: 23, height: 23, borderRadius: 6,
-            background: em!.bg, color: em!.fg,
-            fontFamily: "'JetBrains Mono', monospace",
-            fontSize: 8.5, fontWeight: 700,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            flexShrink: 0, letterSpacing: '-0.02em',
-          }}>{em!.label}</span>
-        )}
-        <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1, paddingTop: isMobile ? 3 : 0 }}>
-          {/* Inline-редактирование только на десктопе; мобила/планшет → Modal */}
-          {isRenaming && !isMobile && !alwaysShowIcons ? (
-            <input
-              ref={renameInputRef}
-              value={renameValue}
-              onChange={e => setRenameValue(e.target.value)}
-              onKeyDown={e => {
-                if (e.key === 'Enter') { e.stopPropagation(); commitRename(); }
-                if (e.key === 'Escape') { e.stopPropagation(); cancelRename(); }
-              }}
-              onBlur={() => {
-                if (renameCancelledRef.current) { renameCancelledRef.current = false; return; }
-                commitRename();
-              }}
-              onClick={e => e.stopPropagation()}
-              style={{
-                fontFamily: "'JetBrains Mono', monospace",
-                fontSize: 13,
-                fontWeight: entry.isDirectory ? 700 : 500,
-                color: C.textHeading,
-                background: C.bgWhite,
-                border: `1.5px solid ${C.accent}`,
-                borderRadius: 4,
-                padding: '1px 4px',
-                outline: 'none',
-                width: '100%',
-                boxSizing: 'border-box',
-              }}
-            />
-          ) : (
-            <span title={notesRoot ? 'Заметки (папка notes)' : entry.name} style={{
-              fontFamily: notesRoot ? undefined : "'JetBrains Mono', monospace",
-              fontSize: 13,
-              fontWeight: entry.isDirectory ? 700 : 500,
-              color: notesRoot ? C.accent
-                : (!entry.isDirectory && indexedFileNames?.has(entry.path))
-                ? C.successText
-                : C.textHeading,
-              ...(isMobile
-                ? { whiteSpace: 'normal', wordBreak: 'break-all', lineHeight: 1.35 }
-                : { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }),
-            }}>{notesRoot ? 'Заметки' : entry.name}</span>
-          )}
-          {parentDir && (
-            <span title={normPath(entry.path)} style={{
-              fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5, color: C.textMuted,
-              ...(isMobile ? { whiteSpace: 'normal', wordBreak: 'break-all' } : { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }),
-            }}>{parentDir}</span>
-          )}
-        </span>
-        {/* Кластер правых иконок: на десктопе — sticky, не уезжает при горизонтальном скролле */}
-        <span style={{
-          display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
-          ...(stickyIcons ? {
-            position: 'sticky' as const, right: 0,
-            alignSelf: 'stretch',
-            paddingLeft: 4, paddingRight: 8,
-            // Прозрачный на невыделенной строке: собственный фон-заглушка выдавал бы
-            // «хвост» справа, когда он не совпадает с фоном панели (та бывает и белой)
-            background: rowBg,
-            borderRadius: '0 8px 8px 0',
-          } : {}),
-        }}>
-        {entry.isModified && (
-          <span style={{ fontSize: 9, fontWeight: 700, color: C.accent, background: C.accentLight, width: 16, height: 16, borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>M</span>
-        )}
-        {entry.isNew && (
-          <span style={{ fontSize: 9, fontWeight: 700, color: C.successText, background: C.successBg, width: 16, height: 16, borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>+</span>
-        )}
-        {/* Hover-иконки: переименовать + удалить — только десктоп при hover.
-            Корень «Заметки» (vault) не переименовываем/не удаляем. */}
-        {online && !isRenaming && !isMobile && hoveredPath === entry.path && !isNotesRoot(entry) && (
-          <>
-            <IconButton
-              size="xs"
-              onClick={e => { e.stopPropagation(); startRename(entry); }}
-              title="Переименовать (F2)"
-            >
-              <RenameIcon />
-            </IconButton>
-            <IconButton
-              size="xs"
-              tone="danger"
-              color={C.danger}
-              onClick={e => { e.stopPropagation(); setDeleteConfirm(entry); }}
-              title="Удалить"
-            >
-              <TrashIcon />
-            </IconButton>
-          </>
-        )}
-        {/* Кнопка «добавить в чат» — десктоп hover; мобила/планшет — через long-press меню */}
-        {!entry.isDirectory && onAttachToChat && !isMobile && !alwaysShowIcons && (
-          hoveredPath === entry.path ? (
-            <IconButton
-              size="xs"
-              tone="accent"
-              onClick={e => { e.stopPropagation(); onAttachToChat(entry.path); }}
-              title="Добавить в чат"
-            >
-              <Paperclip size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-            </IconButton>
-          ) : null
-        )}
-        {/* Иконка знаний: спиннер при индексации; при hover — добавить или удалить.
-            Заметки (notes/*.md) в файловые «Знания» не индексируем — свой семантический индекс. */}
-        {!entry.isDirectory && !inNotesVault(entry.path) && (
-          indexingFiles?.has(entry.path) ? (
-            <span style={{ padding: 2, display: 'flex', alignItems: 'center', flexShrink: 0, color: C.successText }}>
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                <style>{`@keyframes kb-spin{to{transform:rotate(360deg)}} .kb-spin{transform-origin:center;animation:kb-spin 0.8s linear infinite}`}</style>
-                <circle className="kb-spin" cx="12" cy="12" r="9" strokeDasharray="40 20" />
-              </svg>
-            </span>
-          ) : indexedFileNames?.has(entry.path) ? (
-            !isMobile && !alwaysShowIcons && hoveredPath === entry.path && onRemoveFromKnowledge ? (
-              <IconButton
-                size="xs"
-                tone="danger"
-                color={C.danger}
-                onClick={e => { e.stopPropagation(); onRemoveFromKnowledge(entry.path); }}
-                title="Удалить из знаний"
-              >
-                <BookMinusIcon />
-              </IconButton>
-            ) : (
-              <span style={{ padding: 2, display: 'flex', alignItems: 'center', flexShrink: 0, color: C.successText }}>
-                <BookOpen size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-              </span>
-            )
-          ) : (
-            // Не в знаниях — показать «добавить» при hover (только десктоп)
-            onAddToKnowledge && isKnowledgeIndexable(entry.name) && !isMobile && !alwaysShowIcons && hoveredPath === entry.path ? (
-              <IconButton
-                size="xs"
-                color={C.successText}
-                onClick={e => { e.stopPropagation(); onAddToKnowledge(entry.path); }}
-                title="Добавить в базу знаний"
-              >
-                <BookOpen size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-              </IconButton>
-            ) : null
-          )
-        )}
-        {/* Маркер/тоггл синхронизации */}
-        {(() => {
-          const btnStyle: React.CSSProperties = { background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', flexShrink: 0 };
-          if (pending || folderSyncing) {
-            if (online && sstate === 'direct') {
-              return <button onClick={e => handleToggleSync(entry, e)} title="Отменить синхронизацию" style={btnStyle}><SyncSpinner /></button>;
-            }
-            return <span style={{ ...btnStyle, cursor: 'default' }} title="Загружается…"><SyncSpinner /></span>;
-          }
-          if (sstate === 'inherited') {
-            return <span style={{ ...btnStyle, cursor: 'default' }} title="Синхронизируется (через папку/проект)"><CloudIcon variant="inherited" /></span>;
-          }
-          if (online) {
-            if (sstate === 'direct') {
-              return <button onClick={e => handleToggleSync(entry, e)} title="Отключить синхронизацию" style={btnStyle}><CloudIcon variant="direct" /></button>;
-            }
-            if (isMobile || alwaysShowIcons || hoveredPath === entry.path) {
-              return <button onClick={e => handleToggleSync(entry, e)} title="Синхронизировать для офлайна" style={btnStyle}><CloudIcon variant="idle" /></button>;
-            }
-            return null;
-          }
-          if (sstate === 'direct') {
-            return <span style={{ ...btnStyle, cursor: 'default' }} title="Синхронизирован"><CloudIcon variant="direct" /></span>;
-          }
-          return null;
-        })()}
-        {/* Намёк «войти в папку» — только мобильная навигация */}
-        {mobileNav && entry.isDirectory && <ChevronRight size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} />}
-        </span>
-      </div>
+        entry={entry}
+        depth={depth}
+        showPath={showPath}
+        mobileNav={mobileNav}
+        isMobile={isMobile}
+        alwaysShowIcons={alwaysShowIcons}
+        online={online}
+        active={!entry.isDirectory && activeNorm !== '' && normPath(entry.path) === activeNorm}
+        expanded={expanded.has(entry.path)}
+        loading={loadingDirs.has(entry.path)}
+        renaming={renamingPath === entry.path}
+        isDropTarget={dropTarget === entry.path}
+        dragging={dragPath === entry.path}
+        pressing={pressingPath === entry.path}
+        flash={normPath(entry.path) === newlyCreatedPath}
+        syncState={sstate}
+        pendingDownload={!entry.isDirectory && !!sstate && !isDownloaded(project.id, entry.path)}
+        folderSyncing={entry.isDirectory && isSyncing(project.id, entry.path)}
+        indexed={!!indexedFileNames?.has(entry.path)}
+        indexing={!!indexingFiles?.has(entry.path)}
+        canAttach={!!onAttachToChat}
+        renameValue={renameValue}
+        onRenameChange={setRenameValue}
+        onRenameCommit={commitRename}
+        onRenameCancel={cancelRename}
+        onRenameBlur={handleRenameBlur}
+        onOpen={handleRowOpen}
+        onRename={startRename}
+        onContextMenu={handleContextMenu}
+        onDragStart={handleDragStart}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        onDragEnd={handleDragEnd}
+        onTouchStart={handleTouchStart}
+        onTouchCancel={handleTouchCancel}
+        onTouchEndPreventDefault={touchEndPreventDefault}
+        onAttach={onAttachToChat}
+        onToggleSync={handleToggleSync}
+      />
     );
   };
 

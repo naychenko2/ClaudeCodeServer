@@ -17,7 +17,10 @@ namespace ClaudeHomeServer.Services.Docs;
 // Кеш живёт на КОРЕНЬ ПАПКИ, а не на проект: у соседей по папке (один RootPath, разные
 // владельцы) документация одна и та же, разбирать её дважды незачем. Доступ проверяет
 // контроллер — сюда попадает уже разрешённый корень.
-public sealed partial class DocsIndexService
+// files необязателен (DI подставляет): нужен только созданию документов — писать в рабочее
+// дерево продукт обязан через файловый сервис, там SafeJoin и уведомление OnMutated, на
+// котором висит синк базы знаний. Юнит-тестам чтения он ни к чему.
+public sealed partial class DocsIndexService(FileService? files = null)
 {
     // Область по умолчанию, пока проект не настроил свою: docs/ + README.md + markdown.
     // Имена точные: на Linux файловая система регистрозависима, и «Docs/» — другая папка.
@@ -647,9 +650,16 @@ public sealed partial class DocsIndexService
         foreach (var f in files.OrderBy(x => x, StringComparer.Ordinal))
         {
             var info = new FileInfo(f);
-            sb.Append(Relative(root, f)).Append('|')
+            var rel = Relative(root, f);
+            sb.Append(rel).Append('|')
               .Append(info.Exists ? info.LastWriteTimeUtc.Ticks : 0).Append('|')
-              .Append(info.Exists ? info.Length : -1).Append('\n');
+              .Append(info.Exists ? info.Length : -1);
+            // Есть ли рядом одноимённая папка — то есть документ ли это или страница
+            // раздела. Ни один файл при появлении пустой папки не меняется, и без этого
+            // признака новый раздел не показался бы до следующей правки документов
+            if (IsMarkdown(rel))
+                sb.Append(SectionDirExists(root, rel[..^3]) ? "|s" : "|_");
+            sb.Append('\n');
         }
         return sb.ToString();
     }
@@ -748,7 +758,7 @@ public sealed partial class DocsIndexService
 
         // Пары «страница + папка» проставляем до сортировки: порядок опирается на эту связь —
         // страница раздела и его дочерние документы идут в дереве одной строкой .order
-        MarkSections(docs, byPath);
+        MarkSections(root, docs, byPath);
 
         return new DocsCorpus
         {
@@ -762,7 +772,7 @@ public sealed partial class DocsIndexService
     // Документ, рядом с которым лежит одноимённая папка, — страница её раздела
     // («docs/decisions.md» + «docs/decisions/»). Записи в списке и в словаре подменяются
     // вместе: DocEntry неизменяем, а расходиться этим двум представлениям нельзя.
-    private static void MarkSections(List<DocEntry> docs, Dictionary<string, DocEntry> byPath)
+    private static void MarkSections(string root, List<DocEntry> docs, Dictionary<string, DocEntry> byPath)
     {
         // Канонический путь папки (в том регистре, в каком он пришёл из ФС) — фронту нужно
         // ровно то же значение, что стоит у дочерних документов в Folder(Path)
@@ -780,11 +790,31 @@ public sealed partial class DocsIndexService
             var parent = Folder(doc.Path);
             var name = Path.GetFileNameWithoutExtension(doc.Path);
             var candidate = parent.Length == 0 ? name : $"{parent}/{name}";
-            if (!folders.TryGetValue(candidate, out var canonical)) continue;
+            // Папка ЕЩЁ ПУСТА (только что созданный раздел) — документов в ней нет, и по
+            // ним её не найти. Спрашиваем файловую систему: без этого новый раздел
+            // выглядел бы обычной строкой, и войти в него, чтобы наполнить, было нечем
+            if (!folders.TryGetValue(candidate, out var canonical))
+            {
+                if (!IsMarkdown(doc.Path) || !SectionDirExists(root, candidate)) continue;
+                canonical = candidate;
+            }
             var updated = doc with { SectionFolder = canonical };
             docs[i] = updated;
             byPath[doc.Path] = updated;
         }
+    }
+
+    // Лежит ли рядом с документом одноимённая папка. Отдельным методом, потому что ту же
+    // проверку делает отпечаток: без неё появление папки в git не инвалидировало бы кеш —
+    // ни один файл при этом не менялся, и раздел не появлялся бы до следующей правки
+    private static bool SectionDirExists(string root, string relativeFolder)
+    {
+        try
+        {
+            return Directory.Exists(Path.Combine(root, relativeFolder.Replace('/', Path.DirectorySeparatorChar)));
+        }
+        catch (IOException) { return false; }
+        catch (UnauthorizedAccessException) { return false; }
     }
 
     // Узел уровня: имя без расширения, документы с этим именем и одноимённая папка.
@@ -986,6 +1016,25 @@ public sealed partial class DocsIndexService
         return new OrderWriteResult(OrderWriteStatus.Ok);
     }
 
+    // Дописать имя в конец .order, ЕСЛИ файл в папке уже есть. Нет файла — не создаём:
+    // порядок в такой папке задан правилом индекса (README первым, дальше по заголовку),
+    // и одно нажатие «Создать» не должно рожать в чужом репозитории файл на весь состав
+    // папки, которого никто не просил. Появится он от перетаскивания — жеста, который
+    // и означает «я задаю порядок сам».
+    private static void AppendToOrder(string root, string folder, string name)
+    {
+        var dir = folder.Length == 0 ? root : Path.Combine(root, folder.Replace('/', Path.DirectorySeparatorChar));
+        var file = Path.Combine(dir, OrderFileName);
+        if (!File.Exists(file)) return;
+
+        var existing = File.ReadAllText(file);
+        var lines = SplitOrderLines(existing);
+        if (lines.Contains(name, StringComparer.OrdinalIgnoreCase)) return;
+        lines.Add(name);
+        var eol = existing.Contains("\r\n") ? "\r\n" : "\n";
+        File.WriteAllText(file, string.Join(eol, lines) + eol, new UTF8Encoding(false));
+    }
+
     // Строки существующего .order как есть (без пустых и краёв-пробелов) — их порядок
     // и состав переживают запись, включая имена, которым сейчас не соответствует файл
     private static List<string> SplitOrderLines(string text)
@@ -1032,6 +1081,145 @@ public sealed partial class DocsIndexService
 
     private static bool IsMarkdown(string path) =>
         Path.GetExtension(path).Equals(".md", StringComparison.OrdinalIgnoreCase);
+
+    // ---------- создание документов и разделов ----------
+
+    public enum DocCreateStatus { Ok, FolderNotInScope, BadName, Conflict }
+
+    public sealed record DocCreateResult(DocCreateStatus Status, string? Path = null, string? Error = null);
+
+    // Azure DevOps wiki не открывает страницу, полный путь которой длиннее этого. Ограничение
+    // чужое, но проверяем его мы: узнать о нём при публикации, когда документов уже сотня,
+    // дороже, чем отказать в момент создания
+    private const int MaxDocPathLength = 235;
+
+    // Имена, которыми на Windows нельзя назвать файл ни с каким расширением: «CON.md» не
+    // создастся, а на Linux создастся и сломается при первом клоне на Windows
+    private static readonly HashSet<string> ReservedNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "CON", "PRN", "AUX", "NUL",
+        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    };
+
+    // Имя файла из названия по правилам wiki: пробелы становятся дефисами (в wiki обратное
+    // преобразование делает заголовок страницы). null — название непригодно, причина в error.
+    public static string? DocFileName(string? title, out string? error)
+    {
+        error = null;
+        var name = (title ?? "").Trim().Replace(' ', '-');
+        if (name.Length == 0) { error = "Название пустое"; return null; }
+
+        // Точка по краям: «.order» стал бы скрытым файлом, «имя.» Windows молча срежет
+        if (name.StartsWith('.') || name.EndsWith('.'))
+        {
+            error = "Название не может начинаться или заканчиваться точкой";
+            return null;
+        }
+        // '#' формально допустим в имени файла, но в markdown-ссылке он открывает якорь,
+        // и ссылка на такой документ не соберётся ни в панели, ни в wiki
+        var invalid = new HashSet<char>(Path.GetInvalidFileNameChars()) { '#', '/', '\\' };
+        foreach (var ch in name)
+            if (invalid.Contains(ch))
+            {
+                error = $"Название содержит недопустимый символ «{ch}»";
+                return null;
+            }
+        if (ReservedNames.Contains(name))
+        {
+            error = $"«{name}» — зарезервированное имя Windows";
+            return null;
+        }
+        return name;
+    }
+
+    // Создать документ или раздел в папке области.
+    //
+    // Раздел — это ПАРА «<имя>.md + <имя>/»: в code wiki раздел существует только так, и
+    // папка без парного файла открывается пустой страницей. Ради этого дефекта всё и
+    // затевалось, поэтому продукт создаёт обе половины сразу — и достраивает недостающую,
+    // если половина уже лежит на диске.
+    public DocCreateResult CreateDoc(string rootPath, string? folder, string? title,
+        bool section, DocsScope? rawScope = null)
+    {
+        if (files is null)
+            return new DocCreateResult(DocCreateStatus.BadName, Error: "Файловый сервис недоступен");
+
+        var root = Path.GetFullPath(rootPath);
+        var scope = NormalizeScope(rawScope);
+        // Корень репозитория — законная цель: в области рядом с docs/ живут и файлы корня
+        // (README.md, docs.md). Документ там попадёт в панель, только если его имя стоит
+        // в «файлах корня», — дописывает его контроллер по флагу InRoot ниже
+        var target = string.IsNullOrWhiteSpace(folder) ? "" : NormalizeFolder(folder);
+        if (target is null || (target.Length > 0 && !InScope(scope, target)))
+            return new DocCreateResult(DocCreateStatus.FolderNotInScope,
+                Error: $"Папка вне области документации: {folder}");
+
+        // Раздел в корне — это новая папка документации, то есть правка области, а не
+        // создание страницы: продукт не расширяет область молча, за спиной у остальных
+        // владельцев репозитория
+        if (section && target.Length == 0)
+            return new DocCreateResult(DocCreateStatus.BadName,
+                Error: "Раздел в корне репозитория не создаётся — выберите папку документации");
+
+        var name = DocFileName(title, out var nameError);
+        if (name is null) return new DocCreateResult(DocCreateStatus.BadName, Error: nameError);
+
+        var docPath = target.Length == 0 ? $"{name}.md" : $"{target}/{name}.md";
+        if (docPath.Length > MaxDocPathLength)
+            return new DocCreateResult(DocCreateStatus.BadName,
+                Error: $"Путь длиннее {MaxDocPathLength} символов — wiki такую страницу не откроет");
+
+        // Сравнение без учёта регистра: на Windows «API.md» и «api.md» — один файл, и
+        // создание второго молча затёрло бы первый
+        var dir = target.Length == 0 ? root : Path.Combine(root, target.Replace('/', Path.DirectorySeparatorChar));
+        var pageExists = EntryExists(dir, $"{name}.md", directory: false);
+        var folderExists = EntryExists(dir, name, directory: true);
+        if (section ? pageExists && folderExists : pageExists)
+            return new DocCreateResult(DocCreateStatus.Conflict,
+                Error: $"«{name}» в этой папке уже есть");
+
+        // Через FileService, а не File.WriteAllText: там SafeJoin и уведомление OnMutated,
+        // на котором висит синк базы знаний
+        if (!pageExists)
+        {
+            files.CreateFile(root, docPath);
+            files.WriteFile(root, docPath, $"# {(title ?? "").Trim()}\n");
+        }
+        if (section && !folderExists) files.CreateDirectory(root, $"{target}/{name}");
+
+        // Строка в .order РОДИТЕЛЬСКОЙ папки — одна и та же для документа и для раздела:
+        // «decisions» задаёт место и страницы раздела, и всего его содержимого
+        AppendToOrder(root, target, name);
+        return new DocCreateResult(DocCreateStatus.Ok, docPath);
+    }
+
+    // Папка входит в область: сама выбрана в настройке либо лежит внутри выбранной.
+    // Проверяем по НАСТРОЙКЕ, а не по индексу (как гейт .order): в пустой папке области
+    // документов ещё нет, а создать в ней первый документ — законное действие
+    private static bool InScope(DocsScope scope, string folder)
+    {
+        foreach (var f in scope.Folders)
+            if (string.Equals(folder, f, StringComparison.OrdinalIgnoreCase) ||
+                folder.StartsWith($"{f}/", StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
+    // Существует ли в папке файл или каталог с таким именем — с точностью до регистра.
+    // File.Exists на Linux регистрозависим, а имя, отличающееся регистром, при клоне на
+    // Windows схлопнется с существующим
+    private static bool EntryExists(string dir, string name, bool directory)
+    {
+        try
+        {
+            var entries = directory ? Directory.GetDirectories(dir) : Directory.GetFiles(dir);
+            foreach (var entry in entries)
+                if (string.Equals(Path.GetFileName(entry), name, StringComparison.OrdinalIgnoreCase)) return true;
+        }
+        catch (DirectoryNotFoundException) { /* папки ещё нет — конфликтовать не с чем */ }
+        catch (UnauthorizedAccessException) { }
+        return false;
+    }
 
     // README любого поддерживаемого расширения: в корне лежит и README.md, и README.txt
     private static bool IsReadme(string relativePath) =>

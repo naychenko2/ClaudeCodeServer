@@ -140,6 +140,50 @@ public class DocsController(DocsIndexService docs, ProjectManager projects) : Co
         catch (UnauthorizedAccessException e) { return StatusCode(500, new { error = $"Нет доступа к .order: {e.Message}" }); }
     }
 
+    // Создать документ или раздел в папке области. Раздел — сразу парой «страница + папка»:
+    // в wiki он существует только так, иначе узел дерева открывается пустой страницей.
+    //
+    // Ответ — путь созданного документа и свежий индекс: панель откроет его сразу, не ожидая
+    // следующего запроса. 400 — непригодное название, 404 — папка вне области, 409 — занято
+    [HttpPost("create")]
+    public IActionResult Create(string projectId, [FromBody] CreateDocRequest req)
+    {
+        try
+        {
+            var p = GetProject(projectId);
+            var scope = docs.ResolveScope(p);
+            var result = docs.CreateDoc(p.RootPath, req.Folder, req.Name, req.Kind == "section", scope);
+            switch (result.Status)
+            {
+                case DocsIndexService.DocCreateStatus.FolderNotInScope: return NotFound(new { error = result.Error });
+                case DocsIndexService.DocCreateStatus.BadName: return BadRequest(new { error = result.Error });
+                case DocsIndexService.DocCreateStatus.Conflict: return Conflict(new { error = result.Error });
+            }
+
+            // Документ в КОРНЕ репозитория попадает в область только поимённо (папкой корень
+            // не выбирают — это был бы обход всего репозитория). Дописываем имя сами: иначе
+            // созданный файл не появился бы в панели, и действие выглядело бы несработавшим.
+            // Куда писать — туда же, куда пишет настройка области: в файл .docs, если он есть
+            if (result.Path is { } created && !created.Contains('/'))
+            {
+                var rootFiles = new List<string>(scope.RootFiles);
+                if (!rootFiles.Contains(created, StringComparer.OrdinalIgnoreCase))
+                {
+                    rootFiles.Add(created);
+                    if (docs.ReadScopeFile(p.RootPath).Scope is not null)
+                        docs.WriteScopeFile(p.RootPath, scope with { RootFiles = rootFiles });
+                    else
+                        projects.SetDocsScope(projectId, scope.Folders, rootFiles, scope.Types, null);
+                    scope = docs.ResolveScope(GetProject(projectId));
+                }
+            }
+            return Ok(new { path = result.Path, index = docs.GetIndex(p.RootPath, scope) });
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (IOException e) { return StatusCode(500, new { error = $"Не удалось создать документ: {e.Message}" }); }
+        catch (UnauthorizedAccessException e) { return StatusCode(500, new { error = $"Нет доступа к папке: {e.Message}" }); }
+    }
+
     // Вынести текущую область в файл репозитория: с этого момента она версионируется и
     // одинакова у всех, кто открыл репозиторий. Отдельным действием, а не автоматически —
     // продукт не создаёт файлы в чужом рабочем дереве без спроса.
@@ -162,3 +206,7 @@ public record SetDocsScopeRequest(List<string>? Folders, List<string>? RootFiles
 
 // Folder = null или «» — корень репозитория: там тоже бывает свой .order
 public record SetDocsOrderRequest(string? Folder, List<string>? Items);
+
+// Name — НАЗВАНИЕ страницы: имя файла из него делает сервис (пробелы → дефисы), а само
+// название уходит в первую строку документа заголовком. Kind: «doc» либо «section»
+public record CreateDocRequest(string? Folder, string? Name, string? Kind);

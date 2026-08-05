@@ -9,8 +9,9 @@ using Microsoft.AspNetCore.Mvc;
 namespace ClaudeHomeServer.Controllers;
 
 /// <summary>
-/// Режим чтения ссылок (ADR-005): сервер сам идёт по внешнему URL и возвращает markdown статьи.
-/// За флагом <see cref="FeatureFlagKeys.LinkReader"/> — гейтит эндпоинт, а не только кнопку.
+/// Режим чтения ссылок (ADR-005): сервер сам идёт по внешнему URL и возвращает markdown статьи;
+/// проба встраиваемости для iframe-режима панели (ADR-006, §1).
+/// За флагом <see cref="FeatureFlagKeys.LinkReader"/> — гейтит эндпоинты, а не только кнопку.
 /// </summary>
 [ApiController]
 [Authorize]
@@ -42,6 +43,30 @@ public class ReaderController(ReaderService reader, ReaderQuotaService quota, Fe
             return Ok(new { error = new { code = outcome.Error!.Value.ToWireName(), httpStatus = outcome.HttpStatus } });
 
         return Ok(new { title = outcome.Title, siteName = outcome.SiteName, byline = outcome.Byline, markdown = outcome.Markdown });
+    }
+
+    // Проба встраиваемости (ADR-006, §1): headers-only GET тем же клиентом "link-reader",
+    // вердикт по заголовкам финального ответа. URL в теле POST, а не в query — адрес страницы
+    // не должен попадать в стандартный лог запросов и в реверс-прокси (ADR-005 §1).
+    // Квота: rate-счётчик общий с /read (квота существует ради IP-репутации сервера, а это
+    // исходящий запрос); concurrency-слот не занимаем — запрос без тела, короткий.
+    [HttpPost("embed-check")]
+    public async Task<IActionResult> EmbedCheck([FromBody] ReadRequest req, CancellationToken ct)
+    {
+        var userId = UserId;
+        if (userId is null) return Unauthorized();
+        if (!flags.IsEnabled(userId, FeatureFlagKeys.LinkReader)) return Forbid();
+
+        if (string.IsNullOrWhiteSpace(req.Url))
+            return Ok(new { embeddable = false, reason = "invalid-url" });
+
+        if (!quota.TryAcquireRate(userId))
+            return StatusCode(StatusCodes.Status429TooManyRequests);
+
+        var result = await reader.CheckEmbedAsync(req.Url, ct);
+        return result.Embeddable
+            ? Ok(new { embeddable = true })
+            : Ok(new { embeddable = false, reason = result.Reason });
     }
 
     // Прокси картинок статьи через тот же SsrfGuard (продуктовое решение поверх ADR-005 —

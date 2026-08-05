@@ -45,6 +45,139 @@ public sealed partial class ReaderService(
     }
 
     /// <summary>
+    /// Проба встраиваемости (ADR-006, §1): headers-only GET тем же клиентом и тем же конвейером
+    /// рубежей, что /read; вердикт — по заголовкам финального ответа цепочки редиректов.
+    /// Таймаут — только 5 с на заголовки хопа (ADR-005 §5): тело не читается, общая операция
+    /// из §5 здесь неприменима. Любая ошибка пробы — <c>embeddable: false</c> с reason из §6,
+    /// то есть молчаливый MD-фолбэк, а не 500.
+    /// </summary>
+    public async Task<EmbedCheckResult> CheckEmbedAsync(string rawUrl, CancellationToken ct)
+    {
+        var sw = Stopwatch.StartNew();
+        EmbedCheckResult result;
+        try
+        {
+            result = await CheckEmbedCoreAsync(rawUrl, ct);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            result = EmbedCheckResult.No(ReaderErrorCode.Timeout.ToWireName());
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Ридер: неожиданная ошибка пробы встраиваемости");
+            result = EmbedCheckResult.No(ReaderErrorCode.Unreachable.ToWireName());
+        }
+
+        LogEmbedCheck(rawUrl, result, sw.Elapsed);
+        return result;
+    }
+
+    private async Task<EmbedCheckResult> CheckEmbedCoreAsync(string rawUrl, CancellationToken ct)
+    {
+        var headerTimeout = TimeSpan.FromSeconds(config.GetValue("Reader:HeaderTimeoutSeconds", 5));
+        var maxRedirects = config.GetValue("Reader:MaxRedirects", 5);
+
+        var walk = await WalkToFinalResponseAsync(rawUrl, headerTimeout, maxRedirects, ct);
+        if (!walk.IsFinal)
+            return EmbedCheckResult.No(walk.Error!.Value.ToWireName());
+
+        using var response = walk.Response!;
+        var status = (int)response.StatusCode;
+
+        if (!response.IsSuccessStatusCode)
+            return EmbedCheckResult.No(StatusReason(status, response));
+
+        // В sandbox-iframe без plugins отрисуются только HTML-документы — PDF и прочее
+        // уходят в MD-режим отдельным reason (ADR-006 §1).
+        var mediaType = response.Content.Headers.ContentType?.MediaType?.ToLowerInvariant() ?? "";
+        if (mediaType is not ("text/html" or "application/xhtml+xml"))
+            return EmbedCheckResult.No("not-html");
+
+        if (XFrameOptionsDeny(response) || FrameAncestorsDeny(response))
+            return EmbedCheckResult.No("frame-denied");
+
+        return EmbedCheckResult.Yes();
+    }
+
+    /// <summary>
+    /// reason по статусу финального ответа — коды ADR-005 §6. Тело не читается принципиально,
+    /// поэтому маркеры бот-щита здесь — только заголовочные (cf-mitigated/cf-ray), без «Just a
+    /// moment» в теле.
+    /// </summary>
+    private static string StatusReason(int status, HttpResponseMessage response)
+    {
+        if (status is 404 or 410) return ReaderErrorCode.NotFound.ToWireName();
+        if (status == 429) return ReaderErrorCode.BlockedBySite.ToWireName();
+        if (status is 401 or 403 or 503)
+        {
+            if (HasBotShieldHeaders(response)) return ReaderErrorCode.BlockedBySite.ToWireName();
+            return status == 503 ? ReaderErrorCode.ServerError.ToWireName() : ReaderErrorCode.AuthRequired.ToWireName();
+        }
+        return ReaderErrorCode.ServerError.ToWireName();
+    }
+
+    /// <summary>
+    /// X-Frame-Options: ЛЮБОЕ валидное значение (DENY, SAMEORIGIN, устаревший ALLOW-FROM) — запрет.
+    /// Невалидные значения (ALLOWALL, мусор) игнорируются — как делают браузеры: строже браузера
+    /// быть не нужно (ADR-006 §1).
+    /// </summary>
+    private static bool XFrameOptionsDeny(HttpResponseMessage response)
+    {
+        if (!response.Headers.TryGetValues("X-Frame-Options", out var values)) return false;
+        foreach (var part in values.SelectMany(v => v.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)))
+        {
+            if (part.Equals("DENY", StringComparison.OrdinalIgnoreCase)) return true;
+            if (part.Equals("SAMEORIGIN", StringComparison.OrdinalIgnoreCase)) return true;
+            if (IsAllowFrom(part)) return true;
+        }
+        return false;
+    }
+
+    private static bool IsAllowFrom(string token) =>
+        token.StartsWith("ALLOW-FROM", StringComparison.OrdinalIgnoreCase) &&
+        (token.Length == "ALLOW-FROM".Length || token["ALLOW-FROM".Length] is ' ' or '=');
+
+    /// <summary>
+    /// CSP frame-ancestors: только enforced-заголовок Content-Security-Policy (Report-Only не
+    /// блокирует и игнорируется). 'none', 'self' и явный список источников — запрет; свой origin
+    /// в списке НЕ матчится (инстансов несколько, чужой сайт нас не назовёт, консервативный false
+    /// всегда даёт рабочий MD-фолбэк). '*' и схемные вайлдкарды http:/https: — не запрет (ADR-006 §1).
+    /// </summary>
+    private static bool FrameAncestorsDeny(HttpResponseMessage response)
+    {
+        if (!response.Headers.TryGetValues("Content-Security-Policy", out var policies)) return false;
+        // Заголовок может нести несколько политик через запятую — действие должно выполняться
+        // для всех, поэтому запрет в ЛЮБОЙ из них запретывает встраивание.
+        foreach (var directive in policies
+            .SelectMany(p => p.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            .SelectMany(p => p.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)))
+        {
+            var spaceIdx = directive.IndexOf(' ');
+            var name = spaceIdx < 0 ? directive : directive[..spaceIdx];
+            if (!name.Equals("frame-ancestors", StringComparison.OrdinalIgnoreCase)) continue;
+
+            // Пустой список источников запретывает всё, как 'none'.
+            var sources = spaceIdx < 0
+                ? []
+                : directive[(spaceIdx + 1)..].Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            var permissive = sources.Any(s =>
+                s is "*" || s.Equals("http:", StringComparison.OrdinalIgnoreCase) || s.Equals("https:", StringComparison.OrdinalIgnoreCase));
+            if (!permissive) return true;
+        }
+        return false;
+    }
+
+    private void LogEmbedCheck(string rawUrl, EmbedCheckResult result, TimeSpan elapsed)
+    {
+        // Формула «домен + исход + длительность» — полный URL в лог не идёт никогда (ADR-005 §1).
+        var domain = Uri.TryCreate(rawUrl, UriKind.Absolute, out var u) ? u.Host : "?";
+        var verdict = result.Embeddable ? "embeddable" : result.Reason;
+        logger.LogInformation("Ридер-проба: {Domain} -> {Verdict} за {ElapsedMs} мс",
+            domain, verdict, (int)elapsed.TotalMilliseconds);
+    }
+
+    /// <summary>
     /// Проксирует картинку статьи через тот же SsrfGuard (продуктовое решение поверх ADR-005 —
     /// без него браузер человека ходил бы за картинкой на CDN сайта напрямую своим IP, и обещание
     /// «сайт видит только сервер» держалось бы только для текста). null — любой отказ; коду вызова
@@ -139,23 +272,42 @@ public sealed partial class ReaderService(
         var maxRedirects = config.GetValue("Reader:MaxRedirects", 5);
         var maxElemsToParse = config.GetValue("Reader:MaxElemsToParse", 100_000);
 
-        if (!TryParseUrl(rawUrl, out var currentUri))
-            return ReaderOutcome.Fail(ReaderErrorCode.InvalidUrl);
-
         using var overallCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         overallCts.CancelAfter(totalTimeout);
+
+        var walk = await WalkToFinalResponseAsync(rawUrl, headerTimeout, maxRedirects, overallCts.Token);
+        if (!walk.IsFinal)
+            return ReaderOutcome.Fail(walk.Error!.Value, walk.HttpStatus);
+
+        using var response = walk.Response!;
+        return await HandleResponseAsync(walk.Uri, response, maxBodyBytes, maxElemsToParse, overallCts.Token);
+    }
+
+    /// <summary>
+    /// Общий конвейер рубежей 1–4 (ADR-005, §2) для /read и пробы встраиваемости (ADR-006, §1):
+    /// разбор URL (схема http/https, порт 80/443, без userinfo, #fragment отброшен), SsrfGuard,
+    /// редиректы ≤ <paramref name="maxRedirects"/> с перепроверкой схемы, порта и адреса НА КАЖДОМ
+    /// хопе. Ходит тем же клиентом <see cref="HttpClientName"/> (общий хендлер с /read — без кук,
+    /// без прокси, ConnectCallback с SSRF-фильтром). Возвращает финальный ответ, НЕ читая тело:
+    /// соединение закрывается после заголовков, ответ утилизирует вызывающий.
+    /// </summary>
+    private async Task<WalkResult> WalkToFinalResponseAsync(
+        string rawUrl, TimeSpan hopTimeout, int maxRedirects, CancellationToken ct)
+    {
+        if (!TryParseUrl(rawUrl, out var currentUri))
+            return WalkResult.Fail(ReaderErrorCode.InvalidUrl);
 
         var client = httpClientFactory.CreateClient(HttpClientName);
         var redirects = 0;
 
         while (true)
         {
-            var addressCheck = await SsrfGuard.CheckAsync(currentUri, overallCts.Token);
-            if (addressCheck == SsrfGuard.AddressCheck.Private) return ReaderOutcome.Fail(ReaderErrorCode.LocalAddress);
-            if (addressCheck == SsrfGuard.AddressCheck.DnsFailed) return ReaderOutcome.Fail(ReaderErrorCode.DnsFailed);
+            var addressCheck = await SsrfGuard.CheckAsync(currentUri, ct);
+            if (addressCheck == SsrfGuard.AddressCheck.Private) return WalkResult.Fail(ReaderErrorCode.LocalAddress);
+            if (addressCheck == SsrfGuard.AddressCheck.DnsFailed) return WalkResult.Fail(ReaderErrorCode.DnsFailed);
 
-            using var hopCts = CancellationTokenSource.CreateLinkedTokenSource(overallCts.Token);
-            hopCts.CancelAfter(headerTimeout);
+            using var hopCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            hopCts.CancelAfter(hopTimeout);
 
             using var request = new HttpRequestMessage(HttpMethod.Get, currentUri);
 
@@ -166,34 +318,44 @@ public sealed partial class ReaderService(
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
-                return ReaderOutcome.Fail(ReaderErrorCode.Timeout);
+                return WalkResult.Fail(ReaderErrorCode.Timeout);
             }
             catch (HttpRequestException ex)
             {
-                return ReaderOutcome.Fail(MapHttpException(ex));
+                return WalkResult.Fail(MapHttpException(ex));
             }
+
+            if (!IsRedirect(response.StatusCode))
+                return WalkResult.Final(currentUri, response);
 
             using (response)
             {
-                if (IsRedirect(response.StatusCode))
-                {
-                    var location = response.Headers.Location;
-                    if (location is null) return ReaderOutcome.Fail(ReaderErrorCode.Unreachable, (int)response.StatusCode);
+                var location = response.Headers.Location;
+                if (location is null) return WalkResult.Fail(ReaderErrorCode.Unreachable, (int)response.StatusCode);
 
-                    redirects++;
-                    if (redirects > maxRedirects) return ReaderOutcome.Fail(ReaderErrorCode.TooManyRedirects);
+                redirects++;
+                if (redirects > maxRedirects) return WalkResult.Fail(ReaderErrorCode.TooManyRedirects);
 
-                    var next = location.IsAbsoluteUri ? location : new Uri(currentUri, location);
-                    if (!IsAllowedScheme(next) || !IsAllowedPort(next) || HasUserInfo(next))
-                        return ReaderOutcome.Fail(ReaderErrorCode.InvalidUrl);
+                var next = location.IsAbsoluteUri ? location : new Uri(currentUri, location);
+                if (!IsAllowedScheme(next) || !IsAllowedPort(next) || HasUserInfo(next))
+                    return WalkResult.Fail(ReaderErrorCode.InvalidUrl);
 
-                    currentUri = StripFragment(next);
-                    continue;
-                }
-
-                return await HandleResponseAsync(currentUri, response, maxBodyBytes, maxElemsToParse, overallCts.Token);
+                currentUri = StripFragment(next);
             }
         }
+    }
+
+    /// <summary>Итог конвейера хопов: либо финальный ответ (не утилизирован), либо код ошибки ADR-005 §6.</summary>
+    private sealed class WalkResult(Uri uri, HttpResponseMessage? response, ReaderErrorCode? error, int? httpStatus)
+    {
+        public Uri Uri { get; } = uri;
+        public HttpResponseMessage? Response { get; } = response;
+        public ReaderErrorCode? Error { get; } = error;
+        public int? HttpStatus { get; } = httpStatus;
+        public bool IsFinal => Response is not null;
+
+        public static WalkResult Final(Uri uri, HttpResponseMessage response) => new(uri, response, null, null);
+        public static WalkResult Fail(ReaderErrorCode error, int? httpStatus = null) => new(null!, null, error, httpStatus);
     }
 
     private async Task<ReaderOutcome> HandleResponseAsync(

@@ -1,7 +1,11 @@
-// Кнопка-компаньон «Открыть рядом» у внешней ссылки в ленте чата (докс/ADR-005).
-// Оборачивает обычную ссылку в inline-flex вместе со значком: клик по самой ссылке
-// не меняется (новая вкладка), кнопка — отдельное действие.
-import { useContext, type ReactNode } from 'react';
+// Внешняя http(s)-ссылка в ленте чата (докс/ADR-005, ADR-006 §2/§5).
+// Клик по самой ссылке открывает панель «Чтение» — и в ответах ассистента, и в
+// сообщениях пользователя; клик с модификатором (Ctrl/Cmd/Shift/Alt) и средняя
+// кнопка мыши уводят в браузер, как раньше. Кнопка-компаньон «Открыть рядом» —
+// отдельное видимое действие рядом со ссылкой. Какой ссылке положено открытие в
+// панели — решает общий фильтр readerEligibility, единый для iframe- и MD-режима:
+// второго списка не заводим. Автооткрытия панели по факту отправки ссылки нет.
+import { useContext, type MouseEvent, type ReactNode } from 'react';
 import { PanelRight } from 'lucide-react';
 import { C, R } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
@@ -30,16 +34,36 @@ if (typeof document !== 'undefined' && !document.getElementById(STYLE_ID)) {
   document.head.appendChild(el);
 }
 
+// Стиль ссылки в ленте (раньше жил в a-компоненте MarkdownContent)
+const LINK_STYLE = { color: C.accent, textDecoration: 'underline' } as const;
+
 export function ReaderLinkWrap({ href, children }: { href?: string; children: ReactNode }) {
   const onOpenReader = useContext(ChatOpenReaderContext);
   const enabled = useFeature(FLAGS.linkReader);
   const domain = enabled && onOpenReader && href ? readerEligibleDomain(href) : null;
+
+  // Перехватываем только чистый клик левой кнопкой; любой модификатор или другая
+  // кнопка — поведение браузера по умолчанию (новая вкладка/окно)
+  const onClick = domain ? (e: MouseEvent<HTMLAnchorElement>) => {
+    if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    onOpenReader!(href!);
+  } : undefined;
+
+  const anchor = (
+    <a href={href} style={LINK_STYLE} target="_blank" rel="noopener noreferrer" onClick={onClick}>
+      {children}
+    </a>
+  );
+
   // Фича выключена, контекста нет (мобильный «тонкий» чат без ридера) или ссылка не
-  // годится под кнопку — молчим, ссылка ведёт себя ровно как раньше
-  if (!domain) return <>{children}</>;
+  // годится под панель — молчим, ссылка ведёт себя ровно как раньше (новая вкладка)
+  if (!domain) return anchor;
+
   return (
     <span className="cc-reader-wrap" style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}>
-      {children}
+      {anchor}
       <button
         type="button"
         className="cc-reader-btn"

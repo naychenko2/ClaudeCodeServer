@@ -1,7 +1,13 @@
 import { memo, useState, useContext, useEffect } from 'react';
 import { SquareCheck, SquarePen, Check, Copy, AlertCircle, RotateCcw, AlertTriangle, X, Brain, Clock, ScrollText, Zap } from 'lucide-react';
 import type { ChatItem, Persona, ProviderFallbackOption } from '../../types';
-import { splitFallbackOptions, formatSubscriptionMeta, providerSwitchReasonLabel } from '../../lib/providerLimit';
+import {
+  splitFallbackOptions, formatSubscriptionMeta, providerSwitchReasonLabel,
+  providerAvailabilityFromBalance, splitByAvailability, nearestReturn,
+  providersPlural, fmtReturnTime, invalidateExhaustedVerdict,
+} from '../../lib/providerLimit';
+import type { ProviderAvailabilityVerdict } from '../../lib/providerLimit';
+import { api } from '../../lib/api';
 import type { TodoItem } from '../../hooks/useSessionArtifacts';
 import type { Mode } from '../../lib/modes';
 import { C, FONT, SHADOW, R } from '../../lib/design';
@@ -632,6 +638,12 @@ interface ItemProps {
 // (транскрипт переезжает, контекст сохраняется); у опции пула передаём её key как
 // subscriptionKey — явный выбор вместо автовыбора пулом. После миграции карточка
 // гаснет по provider_switched (resolved в chatReducer).
+// Кнопки рисуются ТОЛЬКО для доступных прямо сейчас провайдеров: доступность берётся
+// из уже имеющихся данных о квотах (баланс /api/providers/{key}/balance). Недоступные
+// уходят в серую некликабельную сноску («Ещё N на паузе» + ближайший возврат), а когда
+// доступных не осталось вовсе — карточка становится нейтральным пустым состоянием
+// (не warning: нажимать нечего, это не авария). Раскладка — макет
+// docs/mockups/provider-limit-reader-header-v1.html.
 // export — для dev-витрины UiKitPage (демо обеих секций без живого лимита)
 export function ProviderLimitCard({ item, online, onMigrate }: {
   item: Extract<ChatItem, { kind: 'provider_limit' }>;
@@ -641,9 +653,45 @@ export function ProviderLimitCard({ item, online, onMigrate }: {
   // Busy по ключу опции, не по модели: у аккаунтов пула модель одна и та же
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Вердикты доступности сторонних провайдеров + ссылка на список опций, для
+  // которого они собраны: список сменился — вердикты считаются заново. Нет
+  // вердикта — запрос баланса ещё в полёте и кнопки провайдеров не рисуются:
+  // провайдер на паузе не должен мелькнуть в кнопках ни на мгновение
+  const [verdicts, setVerdicts] = useState<{
+    source: ProviderFallbackOption[] | null;
+    map: Record<string, ProviderAvailabilityVerdict>;
+  }>({ source: null, map: {} });
+
+  useEffect(() => {
+    const { providers: providerOptions } = splitFallbackOptions(item.providers);
+    if (providerOptions.length === 0) return;
+    let cancelled = false;
+    for (const p of providerOptions) {
+      const apply = (v: ProviderAvailabilityVerdict) => {
+        if (cancelled) return;
+        // Первый ответ для нового списка опций начинает карту заново —
+        // устаревшие вердикты от прежней карточки не подмешиваются
+        setVerdicts(prev => ({
+          source: item.providers,
+          map: { ...(prev.source === item.providers ? prev.map : {}), [p.key]: v },
+        }));
+      };
+      // Сбой/404 (баланс не настроен) — не повод прятать провайдера
+      api.providers.balance(p.key)
+        .then(b => apply(providerAvailabilityFromBalance(b)))
+        .catch(() => apply({ available: true, resetsAt: null }));
+    }
+    return () => { cancelled = true; };
+  }, [item.providers]);
+
   if (item.resolved || item.providers.length === 0) return null;
 
   const { subscriptions, providers } = splitFallbackOptions(item.providers);
+  const verdictMap = verdicts.source === item.providers ? verdicts.map : {};
+  const verdictsReady = providers.every(p => p.key in verdictMap);
+  const { available: availableProviders, hidden } = splitByAvailability(providers, verdictMap);
+  const nearest = nearestReturn(hidden);
+  const hasButtons = subscriptions.length > 0 || availableProviders.length > 0;
 
   let when = '';
   if (item.resetsAt) {
@@ -665,6 +713,12 @@ export function ProviderLimitCard({ item, online, onMigrate }: {
       await onMigrate(option.model, option.kind === 'subscription' ? option.key : undefined);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Не удалось переключить чат');
+      // Ответ об исчерпании лимита у именно этого провайдера — источника новой попытки:
+      // его кэшированный /balance ещё до 5 минут будет врать «доступен», поэтому вердикт
+      // перекрывается на месте, и кнопка не предлагается повторно в этой же карточке
+      if (option.kind !== 'subscription') {
+        setVerdicts(prev => ({ source: prev.source, map: invalidateExhaustedVerdict(prev.map, option.key) }));
+      }
     } finally {
       setBusyKey(null);
     }
@@ -677,6 +731,34 @@ export function ProviderLimitCard({ item, online, onMigrate }: {
     opacity: !online || (busyKey !== null && busyKey !== key) ? 0.55 : 1,
     fontFamily: 'inherit',
   });
+
+  // Доступных не осталось — вместо кнопок пустое состояние в нейтральном тоне
+  // (C.bgCard/C.border вместо warning): действия для человека сейчас нет,
+  // алармировать нечем. Текст объясняет причину и зовёт вернуться к сроку
+  // ближайшего возврата, если он известен
+  if (verdictsReady && !hasButtons) {
+    const emptyBold: React.CSSProperties = { color: C.textHeading, fontWeight: 600 };
+    return (
+      <div style={{
+        alignSelf: 'center', maxWidth: '100%',
+        background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: 10,
+        padding: '10px 14px', fontSize: 12.5, color: C.textPrimary,
+        display: 'flex', flexDirection: 'column', gap: 8,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 15, lineHeight: 1.4, color: C.textMuted }}>⏸</span>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <span style={{ fontWeight: 600, color: C.textHeading }}>Продолжить пока не на чем</span>
+            <span style={{ color: C.textSecondary }}>
+              {nearest && nearest.resetsAt
+                ? <>Лимит подписки исчерпан, а все остальные провайдеры сейчас тоже на паузе. Ближайший — <b style={emptyBold}>{nearest.option.displayName}</b> — освободится {fmtReturnTime(nearest.resetsAt)}.</>
+                : <>Лимит подписки исчерпан, а остальные провайдеры сейчас на паузе — когда освободится ближайший, пока неизвестно. Как только один из них станет доступен, этот чат можно будет продолжить с сохранением контекста.</>}
+            </span>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={{
@@ -719,9 +801,18 @@ export function ProviderLimitCard({ item, online, onMigrate }: {
           </span>
         </div>
       )}
-      {providers.length > 0 && (
+      {/* Балансы сторонних провайдеров в полёте — заглушка вместо пустого места: без неё
+          карточка на медленном соединении секунду-другую выглядит как «вариантов нет» */}
+      {!verdictsReady && providers.length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: C.textMuted }}>
+          <span style={{ display: 'inline-block', animation: 'cc-provider-limit-pulse 1.2s ease-in-out infinite' }}>⏳</span>
+          <span>Проверяем, где можно продолжить…</span>
+          <style>{'@keyframes cc-provider-limit-pulse{0%,100%{opacity:.4}50%{opacity:1}}'}</style>
+        </div>
+      )}
+      {verdictsReady && availableProviders.length > 0 && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          {providers.map(p => (
+          {availableProviders.map(p => (
             <button
               key={p.key}
               onClick={() => void migrate(p)}
@@ -733,6 +824,23 @@ export function ProviderLimitCard({ item, online, onMigrate }: {
           ))}
           <span style={{ fontSize: 11.5, color: C.textMuted }}>
             Оплата — с баланса провайдера, модель сменится
+          </span>
+        </div>
+      )}
+      {/* Сноска о скрытых (недоступных) провайдерах: справочная строка, не кнопка —
+          без onClick и hover. Рендерится только при наличии скрытых, иначе узла нет */}
+      {verdictsReady && hidden.length > 0 && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 6,
+          fontSize: 11.5, color: C.textMuted,
+          paddingTop: 6, borderTop: `1px dashed ${C.border}`,
+        }}>
+          <span>⏸</span>
+          <span>
+            {`Ещё ${hidden.length} ${providersPlural(hidden.length)} на паузе`}
+            {nearest && nearest.resetsAt
+              ? ` · ${nearest.option.displayName} вернётся ${fmtReturnTime(nearest.resetsAt)}`
+              : ''}
           </span>
         </div>
       )}

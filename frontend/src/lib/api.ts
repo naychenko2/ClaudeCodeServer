@@ -1454,8 +1454,27 @@ export const api = {
     // (часть сайтов не читается, это норма, а не поломка), поэтому здесь гасим исключение
     // request() при non-2xx и возвращаем обе ветки как данные — вызывающему нечего ловить.
     read: (url: string) => readReaderPage(url),
+    // Серверная проба встраиваемости (ADR-006 §1): POST /api/reader/embed-check, вердикт по
+    // заголовкам финального ответа (X-Frame-Options / CSP frame-ancestors). Поле reason —
+    // телеметрия/отладка; фронт на него НЕ ветвится — любой исход, кроме явного
+    // embeddable:true (включая 401/403/429 и сетевые сбои), означает «не встраивается»
+    // и тихо уводит панель в MD-режим.
+    embedCheck: (url: string) => checkReaderEmbeddable(url),
   },
 };
+
+async function checkReaderEmbeddable(url: string): Promise<{ embeddable: boolean }> {
+  try {
+    const data = await request<{ embeddable?: unknown }>('/reader/embed-check', {
+      method: 'POST',
+      body: JSON.stringify({ url }),
+    });
+    return { embeddable: !!data && data.embeddable === true };
+  } catch {
+    // Сбой пробы — не исключение для показа, а сигнал идти MD-путём (ADR-006 §1)
+    return { embeddable: false };
+  }
+}
 
 function normalizeReaderError(raw: unknown, httpStatus?: number | null): { code: ReaderErrorCode; httpStatus?: number | null } {
   const code = raw && typeof raw === 'object' && 'code' in raw && typeof (raw as { code?: unknown }).code === 'string'

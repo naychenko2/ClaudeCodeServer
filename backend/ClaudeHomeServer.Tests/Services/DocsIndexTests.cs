@@ -871,6 +871,100 @@ public class DocsIndexTests : IDisposable
         DocsIndexService.RelativeLink(from, to).Should().Be(expected);
     }
 
+    // ─── Удаление ───────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Удаление_Документа_ФайлИСтрокаOrder()
+    {
+        Write("# A", "docs", "a.md");
+        Write("# B", "docs", "b.md");
+        Write("a\nb\n", "docs", ".order");
+
+        var result = Creating().DeleteDoc(_root, "docs/a.md");
+
+        result.Status.Should().Be(DocsIndexService.DocDeleteStatus.Ok);
+        result.Removed.Should().BeEquivalentTo(["docs/a.md"]);
+        File.Exists(Path.Combine(_root, "docs", "a.md")).Should().BeFalse();
+        // Имя, которому больше нечего соответствовать, — мусор в версионируемом файле
+        ReadOrderFile("docs").Should().Be("b\n");
+    }
+
+    [Fact]
+    public void Удаление_Раздела_ПараЦеликомСПоддеревом()
+    {
+        Write("# Журнал", "docs", "decisions.md");
+        Write("# Первое", "docs", "decisions", "0001.md");
+        Write("# Второе", "docs", "decisions", "0002.md");
+
+        var result = Creating().DeleteDoc(_root, "docs/decisions.md");
+
+        // Половина пары в wiki — либо пустой узел, либо осиротевшая страница
+        Directory.Exists(Path.Combine(_root, "docs", "decisions")).Should().BeFalse();
+        File.Exists(Path.Combine(_root, "docs", "decisions.md")).Should().BeFalse();
+        result.Removed.Should().BeEquivalentTo(
+            ["docs/decisions.md", "docs/decisions/0001.md", "docs/decisions/0002.md"]);
+    }
+
+    [Fact]
+    public void Удаление_Раздела_СчитаетНевидимыеПанелиФайлы()
+    {
+        Write("# Журнал", "docs", "decisions.md");
+        Write("# Первое", "docs", "decisions", "0001.md");
+        Write("PNG", "docs", "decisions", "схема.png");     // не документ выбранного типа
+
+        // Вместе с папкой уходит и то, чего панель не показывала: об этом диалог
+        // предупреждает ДО удаления, а не сообщает после
+        Creating().DeleteDoc(_root, "docs/decisions.md").RemovedFiles.Should().Be(1);
+    }
+
+    [Fact]
+    public void Удаление_СообщаетЧислоБитыхСсылок()
+    {
+        Write("# Vision\n\nсм. [журнал](decisions.md)", "docs", "vision.md");
+        Write("# Бриф\n\nтоже [журнал](decisions.md) и [первое](decisions/0001.md)", "docs", "brief.md");
+        Write("# Журнал", "docs", "decisions.md");
+        Write("# Первое", "docs", "decisions", "0001.md");
+
+        var result = Creating().DeleteDoc(_root, "docs/decisions.md");
+
+        // Чинить их нечем — цели больше нет; знать о них пользователь обязан
+        result.BrokenLinks.Should().Be(3);
+    }
+
+    [Fact]
+    public void Удаление_СсылкиИзУдаляемогоПоддерева_НеСчитаютсяБитыми()
+    {
+        Write("# Журнал", "docs", "decisions.md");
+        Write("# Первое\n\nназад к [журналу](../decisions.md)", "docs", "decisions", "0001.md");
+
+        // Документ-источник исчезает вместе с целью — считать эту ссылку битой не за что
+        Creating().DeleteDoc(_root, "docs/decisions.md").BrokenLinks.Should().Be(0);
+    }
+
+    [Fact]
+    public void Удаление_ДокументаВнеОбласти_ЭтоОтказ()
+    {
+        Write("# Док", "docs", "a.md");
+        Write("# Чужой", "backend", "NOTES.md");
+
+        Creating().DeleteDoc(_root, "backend/NOTES.md").Status.Should()
+            .Be(DocsIndexService.DocDeleteStatus.NotFound);
+        File.Exists(Path.Combine(_root, "backend", "NOTES.md")).Should().BeTrue();
+    }
+
+    [Fact]
+    public void Удаление_ПоследнейСтрокиOrder_ОставляетПустойФайл()
+    {
+        Write("# A", "docs", "a.md");
+        Write("a\n", "docs", ".order");
+
+        Creating().DeleteDoc(_root, "docs/a.md");
+
+        // Сам файл не сносим: его завёл автор, и пустой .order — это его решение,
+        // а не наша уборка
+        ReadOrderFile("docs").Should().BeEmpty();
+    }
+
     // ─── Область из файла .docs ─────────────────────────────────────────────
 
     // Проект с настройкой области в хранилище продукта — она должна уступать файлу

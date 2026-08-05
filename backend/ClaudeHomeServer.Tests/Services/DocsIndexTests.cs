@@ -360,6 +360,114 @@ public class DocsIndexTests : IDisposable
         _svc.GetIndex(_root).Should().OnlyContain(d => d.SectionFolder == null);
     }
 
+    // ─── Область из файла .docs ─────────────────────────────────────────────
+
+    // Проект с настройкой области в хранилище продукта — она должна уступать файлу
+    private Project ProjectWith(IReadOnlyList<string>? folders = null, string? home = null) => new()
+    {
+        Id = "p1", Name = "test", RootPath = _root, OwnerId = "u1",
+        DocsFolders = folders is null ? null : [.. folders],
+        DocsHome = home,
+    };
+
+    [Fact]
+    public void ФайлОбласти_СильнееНастройкиПроекта()
+    {
+        Write("# Из файла", "wiki", "a.md");
+        Write("# Из проекта", "manual", "b.md");
+        Write("""{ "folders": ["wiki"] }""", ".docs");
+
+        var scope = _svc.ResolveScope(ProjectWith(["manual"]));
+
+        scope.Folders.Should().BeEquivalentTo(["wiki"]);
+        _svc.GetIndex(_root, scope).Select(d => d.Path).Should().Contain("wiki/a.md");
+    }
+
+    [Fact]
+    public void ФайлОбласти_ОтсутствующаяОсь_ЭтоДефолт()
+    {
+        // В файле только папки — остальные оси берут умолчание, а не пустоту
+        Write("""{ "folders": ["wiki"] }""", ".docs");
+
+        var scope = _svc.ResolveScope(ProjectWith());
+
+        scope.RootFiles.Should().BeEquivalentTo(DocsIndexService.DefaultScope.RootFiles);
+        scope.Types.Should().BeEquivalentTo(DocsIndexService.DefaultScope.Types);
+    }
+
+    [Fact]
+    public void ФайлОбласти_ПустойМассив_ЭтоНеДефолт()
+    {
+        // «Снял все галки» — осознанный выбор, и подменять его умолчанием нельзя
+        Write("""{ "folders": [], "rootFiles": [] }""", ".docs");
+
+        var scope = _svc.ResolveScope(ProjectWith());
+
+        scope.Folders.Should().BeEmpty();
+        scope.RootFiles.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ФайлОбласти_РегистрПолейИЛишниеПоля_НеМешают()
+    {
+        // Файл правят руками и читают разные версии продукта: незнакомое поле не повод падать
+        Write("""{ "Folders": ["wiki"], "somethingNew": 42 }""", ".docs");
+
+        _svc.ResolveScope(ProjectWith()).Folders.Should().BeEquivalentTo(["wiki"]);
+    }
+
+    [Fact]
+    public void ФайлОбласти_БитыйJson_ОткатываетсяКНастройкеПроекта()
+    {
+        Write("# Из проекта", "manual", "b.md");
+        Write("{ это не json", ".docs");
+
+        var project = ProjectWith(["manual"]);
+        _svc.ResolveScope(project).Folders.Should().BeEquivalentTo(["manual"]);
+
+        var info = _svc.Describe(project);
+        info.ScopeSource.Should().Be("project");
+        info.ScopeFileError.Should().NotBeNullOrEmpty();
+    }
+
+    [Fact]
+    public void ФайлОбласти_Описание_СообщаетИсточник()
+    {
+        Write("# Док", "wiki", "a.md");
+        _svc.Describe(ProjectWith()).ScopeSource.Should().Be("project");
+
+        Write("""{ "folders": ["wiki"] }""", ".docs");
+
+        var info = _svc.Describe(ProjectWith());
+        info.ScopeSource.Should().Be("file");
+        info.ScopeFileError.Should().BeNull();
+    }
+
+    [Fact]
+    public void ФайлОбласти_Запись_ЧитаетсяОбратно()
+    {
+        _svc.WriteScopeFile(_root, new DocsScope(["wiki"], ["INDEX.md"], ["markdown"], "wiki/a.md"));
+
+        var written = File.ReadAllText(Path.Combine(_root, ".docs"));
+        written.Should().StartWith("{");
+        written.Should().Contain("\"folders\"");     // camelCase, как в API
+        written.Should().NotContain("﻿");       // без BOM: файл лежит в репозитории
+
+        var scope = _svc.ReadScopeFile(_root).Scope!;
+        scope.Folders.Should().BeEquivalentTo(["wiki"]);
+        scope.RootFiles.Should().BeEquivalentTo(["INDEX.md"]);
+        scope.Home.Should().Be("wiki/a.md");
+    }
+
+    [Fact]
+    public void ФайлОбласти_НетФайла_ЭтоНеОшибка()
+    {
+        var result = _svc.ReadScopeFile(_root);
+
+        result.Scope.Should().BeNull();
+        result.Error.Should().BeNull();
+    }
+
     // ─── Поиск ──────────────────────────────────────────────────────────────
 
     [Fact]

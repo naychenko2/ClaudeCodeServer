@@ -2,15 +2,16 @@
 // Две зоны: вверху файлы активного скоупа (текущие изменения ИЛИ выбранный коммит),
 // внизу селектор скоупов (строка «Не зафиксировано» + стек незапушенных коммитов).
 // Данные/мутации — через стор lib/git.ts; форма фиксации и диалог промпта — локально.
-// Отдельный компонент (панель «Файлы»/GitChangesPanel не трогаем).
+// Здесь же настройки самого репозитория (авто-ведение истории, вход в Forgejo) —
+// единственная git-поверхность продукта после того, как «Файлы» вернулись к дереву.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import {
   GitBranch, GitCommit, ChevronDown, ChevronRight, RefreshCw, ArrowDownToLine,
   Settings, Sparkles, Undo2, Pencil, X, List, ListTree, Wand2, FolderClosed,
   ListChecks, CheckCheck, FoldVertical, UnfoldVertical, MessageSquarePlus, MessageSquare,
-  Check, Plus, Archive, ArchiveRestore, Trash2, UploadCloud,
+  Check, Plus, Archive, ArchiveRestore, Trash2, UploadCloud, ExternalLink,
 } from 'lucide-react';
 import type { Project, GitFileChange, GitLogEntry, GitStashEntry } from '../types';
 import { api } from '../lib/api';
@@ -18,7 +19,7 @@ import { C, R, FONT, MODAL_W } from '../lib/design';
 import {
   useGitState, ensureGit, loadUnpushedLog, loadGitLog, loadGitRemote, loadGitBranches, loadGitStash,
   gitStage, gitUnstage, gitDiscard, gitDiscardAll, gitCommit, gitFetch, gitPull, gitCheckout, gitCreateBranch,
-  gitStashPush, gitStashPop, gitStashDrop, clearGitError,
+  gitStashPush, gitStashPop, gitStashDrop, clearGitError, gitSetAutoCommit, gitSaveNow,
 } from '../lib/git';
 import { splitPath, relTime } from '../lib/gitFormat';
 import { PublishDialog } from './PublishDialog';
@@ -172,6 +173,10 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
   const [newBranchName, setNewBranchName] = useState('');
   const [pendingCheckout, setPendingCheckout] = useState<string | null>(null); // ветка, ждущая подтверждения (грязное дерево)
   const [stashDropConfirm, setStashDropConfirm] = useState<GitStashEntry | null>(null); // стэш, ждущий подтверждения удаления
+  const [repoMenu, setRepoMenu] = useState<DOMRect | null>(null);              // меню настроек репозитория (шапка)
+  const [forgejoCreds, setForgejoCreds] = useState<{ login: string; password: string | null } | null>(null);
+  const [credsBusy, setCredsBusy] = useState(false);
+  const [savingNow, setSavingNow] = useState(false);                           // «Сохранить сейчас» (документный режим)
 
   // Загрузка стора + стека незапушенных + remote при монтировании панели
   useEffect(() => {
@@ -180,6 +185,17 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
     void loadGitRemote(project.id);
     void loadGitStash(project.id);
   }, [project.id]);
+
+  // Документный режим (авто-коммит после хода ИИ): историю ведёт сервер, и ручная
+  // фиксация пользователю не нужна — панель открывается на ветке, а не на «Не
+  // зафиксировано». Ровно один раз за монтирование, когда приехал remote: дальше
+  // скоуп выбирает пользователь, и переставлять его под ним нельзя.
+  const autoScopeApplied = useRef(false);
+  useEffect(() => {
+    if (autoScopeApplied.current || !st.remote) return;
+    autoScopeApplied.current = true;
+    if (st.remote.autoCommit) setActiveScope('branch');
+  }, [st.remote]);
 
   // Git-бар чата просит показать текущие изменения: сбрасываем скоуп на «Не
   // зафиксировано» (если панель была открыта на коммите/стэше/ветке). При закрытой
@@ -242,6 +258,36 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
     if (scope !== activeScope) onScopeChange?.();  // смена скоупа — сбросить центр к чату
     setActiveScope(scope);
     setMode('list');
+  };
+
+  // === Настройки репозитория (меню в шапке панели) ===
+  const remote = st.remote;
+  const handleToggleAutoCommit = () => {
+    if (!remote) return;
+    // Выключение авто-коммита выключает и авто-пуш (он без коммитов бессмыслен)
+    void gitSetAutoCommit(project.id, !remote.autoCommit, !remote.autoCommit ? remote.autoPush : false);
+  };
+  const handleToggleAutoPush = () => {
+    if (!remote?.autoCommit) return;
+    void gitSetAutoCommit(project.id, true, !remote.autoPush);
+  };
+  const openForgejoCreds = async () => {
+    try { setForgejoCreds(await api.git.forgejoCredentials(project.id)); }
+    catch { /* сервер не настроен/аккаунта нет — пункт меню и так за serverEnabled */ }
+  };
+  const resetForgejoPass = async () => {
+    setCredsBusy(true);
+    try { setForgejoCreds(await api.git.resetForgejoPassword(project.id)); }
+    catch { /* молча */ }
+    finally { setCredsBusy(false); }
+  };
+
+  // Документный режим: сохранить накопленное сейчас, не дожидаясь хода ИИ
+  const docMode = remote?.autoCommit === true;
+  const pendingCount = (status?.staged.length ?? 0) + (status?.unstaged.length ?? 0) + (status?.untracked.length ?? 0);
+  const handleSaveNow = async () => {
+    setSavingNow(true);
+    try { await gitSaveNow(project.id); } finally { setSavingNow(false); }
   };
 
   // Ветки: список грузим лениво при открытии меню, чекаут — только на другую ветку
@@ -509,9 +555,14 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
   // кнопки живут в шапке панели, а подпись убрана — активный скоуп и так подсвечен
   // в нижнем селекторе. Состояние (вид, режим выбора, свёрнутые папки) остаётся
   // внутри компонента: наружу уходит не узел, а портал в слот шапки.
-  // История ветки списком файлов не управляется — кнопок там нет.
-  const headerControls = isBranch ? null : (
+  //
+  // Разделение внутри слота: списком файлов история ветки не управляется, поэтому
+  // его контролы живут под !isBranch. А настройки репозитория нужны в ЛЮБОМ скоупе
+  // (в документном режиме панель открывается сразу на ветке — там их и ищут), и
+  // потому стоят вне этого условия.
+  const headerControls = (
     <PanelHeaderSlot>
+        {!isBranch && <>
         {/* Режим выбора файлов (чекбоксы) — только для текущих изменений */}
         {isWorking && rows.length > 0 && (
           <>
@@ -548,12 +599,58 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
             { value: 'tree', label: 'Деревом', icon: <ListTree size={14} strokeWidth={ICON_STROKE} /> },
           ]}
         />
+        </>}
+        {/* Настройки репозитория: авто-ведение истории и веб-UI git-сервера.
+            anchor-режим меню — слот шапки лежит внутри карточки с transform,
+            и absolute-позиционирование уехало бы вместе с ней */}
+        {remote && (
+          <IconButton size="xs" title="Настройки репозитория" active={!!repoMenu}
+            onClick={e => setRepoMenu(repoMenu ? null : e.currentTarget.getBoundingClientRect())}>
+            <Settings size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+          </IconButton>
+        )}
     </PanelHeaderSlot>
+  );
+
+  // Меню настроек репозитория — портал по якорю кнопки в шапке
+  const repoMenuEl = repoMenu && remote && (
+    <Menu anchor={repoMenu} minWidth={260} maxHeight={200} onClose={() => setRepoMenu(null)}>
+      <MenuItem
+        icon={remote.autoCommit ? <Check size={15} strokeWidth={2} /> : <></>}
+        label={
+          <span title="Каждый ход ИИ фиксируется коммитом. Для документов; не для кода с параллельной ручной работой">
+            Авто-сохранение после хода ИИ
+          </span>
+        }
+        onClick={handleToggleAutoCommit}
+      />
+      <MenuItem
+        disabled={!remote.autoCommit}
+        icon={remote.autoCommit && remote.autoPush ? <Check size={15} strokeWidth={2} /> : <></>}
+        label="…и отправлять на сервер"
+        onClick={handleToggleAutoPush}
+      />
+      {remote.serverEnabled && (
+        <MenuItem
+          icon={<ExternalLink size={15} strokeWidth={ICON_STROKE} />}
+          label="Вход в Forgejo…"
+          onClick={() => { setRepoMenu(null); void openForgejoCreds(); }}
+        />
+      )}
+      {remote.htmlUrl && (
+        <MenuItem
+          icon={<ExternalLink size={15} strokeWidth={ICON_STROKE} />}
+          label="Открыть в Forgejo"
+          onClick={() => { setRepoMenu(null); window.open(remote.htmlUrl!, '_blank', 'noopener'); }}
+        />
+      )}
+    </Menu>
   );
 
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
       {headerControls}
+      {repoMenuEl}
       {st.error && (
         <div onClick={() => clearGitError(project.id)} title="Скрыть"
           style={{ margin: '8px 12px', fontSize: 12, color: C.dangerText, fontFamily: FONT.sans, lineHeight: 1.4, cursor: 'pointer' }}>
@@ -587,6 +684,30 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
             : rows.map(f => renderFileRow(f, 0, true))}
         </div>
       </div>
+
+      {/* Плашка документного режима — над селектором скоупов: она про рабочее дерево,
+          и стоять должна рядом со строкой «Не зафиксировано», которую замещает по
+          смыслу. Видна в любом скоупе: состояние «сохранено / ждёт хода» одинаково
+          важно и когда смотришь историю. Кнопки push здесь нет — публикацией
+          заведует «Опубликовать» в ряду ветки. */}
+      {docMode && mode === 'list' && (
+        <div style={{
+          margin: '0 10px 8px', padding: '9px 12px', borderRadius: R.lg, flexShrink: 0,
+          background: pendingCount === 0 ? C.successBg : C.warningBg,
+          display: 'flex', alignItems: 'center', gap: 8,
+        }}>
+          <span style={{ flex: 1, minWidth: 0, fontSize: 12, fontFamily: FONT.sans, lineHeight: 1.4, color: pendingCount === 0 ? C.successText : C.warningText }}>
+            {pendingCount === 0
+              ? 'Все изменения сохранены — история ведётся автоматически'
+              : `Изменений: ${pendingCount} — сохранятся после хода ИИ`}
+          </span>
+          {pendingCount > 0 && (
+            <Button size="sm" variant="primary" disabled={savingNow || st.busy} onClick={() => void handleSaveNow()}>
+              {savingNow ? 'Сохраняю…' : 'Сохранить сейчас'}
+            </Button>
+          )}
+        </div>
+      )}
 
       {/* === Нижняя зона: форма фиксации ИЛИ селектор скоупов === */}
       {mode === 'commit' ? (
@@ -921,6 +1042,33 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
         >
           <div style={{ fontSize: 13, color: C.textSecondary, fontFamily: FONT.sans, lineHeight: 1.5 }}>
             Отложенные изменения будут удалены безвозвратно.
+          </div>
+        </Modal>
+      )}
+
+      {/* === Данные входа в веб-UI Forgejo (приватные репо анониму отдают 404) === */}
+      {forgejoCreds && (
+        <Modal
+          width={MODAL_W.confirm}
+          onClose={() => setForgejoCreds(null)}
+          title="Вход в Forgejo"
+          subtitle="Логин и пароль для веб-интерфейса git-сервера"
+          footer={<ModalActions confirmLabel="Готово" onConfirm={() => setForgejoCreds(null)} onCancel={() => setForgejoCreds(null)} />}
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontFamily: FONT.mono, fontSize: 13 }}>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <span style={{ color: C.textMuted, width: 64, flexShrink: 0, fontFamily: FONT.sans, fontSize: 12.5 }}>Логин</span>
+              <span style={{ color: C.textHeading, userSelect: 'all' }}>{forgejoCreds.login}</span>
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <span style={{ color: C.textMuted, width: 64, flexShrink: 0, fontFamily: FONT.sans, fontSize: 12.5 }}>Пароль</span>
+              {forgejoCreds.password
+                ? <span style={{ color: C.textHeading, userSelect: 'all', overflowWrap: 'anywhere' }}>{forgejoCreds.password}</span>
+                : <span style={{ color: C.textMuted, fontFamily: FONT.sans, fontSize: 12.5 }}>не сохранён — сбросьте</span>}
+            </div>
+            <Button size="sm" variant="dashed" disabled={credsBusy} onClick={() => void resetForgejoPass()} style={{ alignSelf: 'flex-start', marginTop: 2 }}>
+              {credsBusy ? 'Сбрасываю…' : 'Сбросить пароль'}
+            </Button>
           </div>
         </Modal>
       )}

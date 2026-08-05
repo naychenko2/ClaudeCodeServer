@@ -34,7 +34,7 @@ public class DocsController(DocsIndexService docs, ProjectManager projects) : Co
         try
         {
             var p = GetProject(projectId);
-            return Ok(docs.GetIndex(p.RootPath, DocsIndexService.ScopeOf(p)));
+            return Ok(docs.GetIndex(p.RootPath, docs.ResolveScope(p)));
         }
         catch (KeyNotFoundException) { return NotFound(); }
     }
@@ -48,7 +48,7 @@ public class DocsController(DocsIndexService docs, ProjectManager projects) : Co
         try
         {
             var p = GetProject(projectId);
-            var detail = docs.GetDoc(p.RootPath, path, DocsIndexService.ScopeOf(p));
+            var detail = docs.GetDoc(p.RootPath, path, docs.ResolveScope(p));
             return detail is null ? NotFound() : Ok(detail);
         }
         catch (KeyNotFoundException) { return NotFound(); }
@@ -60,19 +60,19 @@ public class DocsController(DocsIndexService docs, ProjectManager projects) : Co
         try
         {
             var p = GetProject(projectId);
-            return Ok(docs.Search(p.RootPath, q, DocsIndexService.ScopeOf(p)));
+            return Ok(docs.Search(p.RootPath, q, docs.ResolveScope(p)));
         }
         catch (KeyNotFoundException) { return NotFound(); }
     }
 
     // Настройка области: что выбрано, что можно выбрать (папки, файлы корня, типы файлов)
+    // и откуда она взята — файл репозитория или настройка продукта
     [HttpGet("scope")]
     public IActionResult Scope(string projectId)
     {
         try
         {
-            var p = GetProject(projectId);
-            return Ok(docs.Describe(p.RootPath, DocsIndexService.ScopeOf(p)));
+            return Ok(docs.Describe(GetProject(projectId)));
         }
         catch (KeyNotFoundException) { return NotFound(); }
     }
@@ -80,16 +80,55 @@ public class DocsController(DocsIndexService docs, ProjectManager projects) : Co
     // Сохранить область. У каждой оси null — вернуть к дефолту, [] — «ничего отсюда».
     // Нормализация и отсев мусора — в сервисе, поэтому ответ отдаёт уже сохранённое значение,
     // а не присланное: фронт должен показать галки ровно такими, какими они легли в стор.
+    //
+    // Куда писать, решает наличие .docs: есть файл — правим его, нет — настройку проекта.
+    // Разводить это по двум эндпоинтам нельзя: единственный существующий потребитель
+    // (кнопка «вернуть README в область» в панели) молча перестал бы работать на проектах
+    // с файлом — писал бы в хранилище, которое больше не читается.
     [HttpPut("scope")]
     public IActionResult SetScope(string projectId, [FromBody] SetDocsScopeRequest req)
     {
         try
         {
-            GetProject(projectId);   // владение проверяем до записи
-            var saved = projects.SetDocsScope(projectId, req.Folders, req.RootFiles, req.Types, req.Home);
-            return Ok(docs.Describe(saved.RootPath, DocsIndexService.ScopeOf(saved)));
+            var project = GetProject(projectId);   // владение проверяем до записи
+            var file = docs.ReadScopeFile(project.RootPath);
+            if (file.Scope is null)
+            {
+                var saved = projects.SetDocsScope(projectId, req.Folders, req.RootFiles, req.Types, req.Home);
+                return Ok(docs.Describe(saved));
+            }
+
+            // null оси — «вернуть к дефолту», поэтому в файл уезжает дефолтное значение.
+            // Home устроен иначе (как color и groupId у проекта): null — «не менять»,
+            // пустая строка — сброс к авто. Иначе запрос без home (та самая кнопка про
+            // README) стирал бы выбранную домашнюю страницу
+            docs.WriteScopeFile(project.RootPath, new DocsScope(
+                req.Folders ?? DocsIndexService.DefaultScope.Folders,
+                req.RootFiles ?? DocsIndexService.DefaultScope.RootFiles,
+                req.Types ?? DocsIndexService.DefaultScope.Types,
+                req.Home is null ? file.Scope.Home : DocsIndexService.NormalizeHome(req.Home)));
+            return Ok(docs.Describe(project));
         }
         catch (KeyNotFoundException) { return NotFound(); }
+        catch (IOException e) { return StatusCode(500, new { error = $"Не удалось записать {DocsIndexService.ScopeFileName}: {e.Message}" }); }
+        catch (UnauthorizedAccessException e) { return StatusCode(500, new { error = $"Нет доступа к {DocsIndexService.ScopeFileName}: {e.Message}" }); }
+    }
+
+    // Вынести текущую область в файл репозитория: с этого момента она версионируется и
+    // одинакова у всех, кто открыл репозиторий. Отдельным действием, а не автоматически —
+    // продукт не создаёт файлы в чужом рабочем дереве без спроса.
+    [HttpPost("scope-file")]
+    public IActionResult SaveScopeFile(string projectId)
+    {
+        try
+        {
+            var project = GetProject(projectId);
+            docs.WriteScopeFile(project.RootPath, docs.ResolveScope(project));
+            return Ok(docs.Describe(project));
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (IOException e) { return StatusCode(500, new { error = $"Не удалось записать {DocsIndexService.ScopeFileName}: {e.Message}" }); }
+        catch (UnauthorizedAccessException e) { return StatusCode(500, new { error = $"Нет доступа к {DocsIndexService.ScopeFileName}: {e.Message}" }); }
     }
 }
 

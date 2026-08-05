@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using ClaudeHomeServer.Models;
 
@@ -83,6 +85,33 @@ public sealed partial class DocsIndexService
     // в каком её увидит читатель опубликованной wiki: алфавит по заголовку разрушает
     // выстроенный автором маршрут чтения.
     private const string OrderFileName = ".order";
+
+    // Описание области в корне репозитория. Настройка проекта живёт в хранилище продукта и
+    // у каждого владельца своя; файл версионируется вместе с документами, поэтому у всех,
+    // кто открыл репозиторий, документация одна и та же.
+    public const string ScopeFileName = ".docs";
+
+    // Имена полей — camelCase, как в API. Регистр игнорируем, неизвестные поля отбрасываем:
+    // файл переживёт и старый бэкенд, и новое поле в формате.
+    private static readonly JsonSerializerOptions ScopeFileJson = new()
+    {
+        PropertyNameCaseInsensitive = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        WriteIndented = true,
+        // Пустое поле не пишем: «home: null» в файле читается как выбранный пустой путь,
+        // хотя означает ровно противоположное — «начальный документ выбирается сам»
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    };
+
+    // Сырой файл: все оси необязательны. Отсутствующая — «как по умолчанию», пустой массив —
+    // осознанное «ничего отсюда» (это разные вещи, и нормализаторы их различают).
+    private sealed record ScopeFileShape(
+        List<string>? Folders, List<string>? RootFiles, List<string>? Types, string? Home);
+
+    // Результат чтения .docs: область либо причина, по которой файл не применился.
+    // Ошибку показываем в диалоге — молча игнорировать битый файл нельзя, иначе «почему
+    // не применилось» выясняется только по логам сервера.
+    public record ScopeFileResult(DocsScope? Scope, string? Error);
 
     private readonly ConcurrentDictionary<string, CachedIndex> _cache = new(StringComparer.OrdinalIgnoreCase);
 
@@ -241,6 +270,57 @@ public sealed partial class DocsIndexService
         project.DocsRootFiles ?? DefaultScope.RootFiles,
         project.DocsTypes ?? DefaultScope.Types,
         project.DocsHome));
+
+    // Единственная точка резолва области: файл репозитория сильнее настройки проекта.
+    // Иначе двое владельцев одной папки видели бы разную документацию — ровно то, от чего
+    // уходили, вынося настройку в репозиторий. Файл читается на каждый вызов (он крошечный):
+    // правку из git панель обязана заметить без перезапуска.
+    public DocsScope ResolveScope(Project project) =>
+        ReadScopeFile(project.RootPath).Scope ?? ScopeOf(project);
+
+    // Область из файла .docs. Scope = null — файла нет либо он не разобран; тогда действует
+    // настройка проекта, а причина уезжает во фронт вместе с описанием области.
+    public ScopeFileResult ReadScopeFile(string rootPath)
+    {
+        var file = Path.Combine(Path.GetFullPath(rootPath), ScopeFileName);
+        string json;
+        try
+        {
+            if (!File.Exists(file)) return new ScopeFileResult(null, null);
+            json = File.ReadAllText(file);
+        }
+        catch (IOException) { return new ScopeFileResult(null, null); }          // пишут прямо сейчас
+        catch (UnauthorizedAccessException) { return new ScopeFileResult(null, null); }
+
+        ScopeFileShape? parsed;
+        try { parsed = JsonSerializer.Deserialize<ScopeFileShape>(json, ScopeFileJson); }
+        catch (JsonException e) { return new ScopeFileResult(null, e.Message); }
+
+        // Пустой файл или «null» — то же, что отсутствие: описания области в нём нет
+        if (parsed is null) return new ScopeFileResult(null, null);
+
+        // Нормализаторы вызываются поштучно, а не через NormalizeScope: у каждой оси свой
+        // дефолт на null, и общий конструктор DocsScope такой формы не принимает
+        return new ScopeFileResult(new DocsScope(
+            NormalizeFolders(parsed.Folders),
+            NormalizeRootFiles(parsed.RootFiles),
+            NormalizeTypes(parsed.Types),
+            NormalizeHome(parsed.Home)), null);
+    }
+
+    // Записать область в файл репозитория. Пишем все оси явно: файл читают и правят руками,
+    // и «чего нет — то по умолчанию» в сохранённом виде сбивало бы с толку. Home опускается,
+    // когда его нет: пустая строка в файле выглядела бы как выбранный пустой путь.
+    public void WriteScopeFile(string rootPath, DocsScope scope)
+    {
+        var normalized = NormalizeScope(scope);
+        var shape = new ScopeFileShape(
+            [.. normalized.Folders], [.. normalized.RootFiles], [.. normalized.Types], normalized.Home);
+        var file = Path.Combine(Path.GetFullPath(rootPath), ScopeFileName);
+        // Без BOM и с \n: файл лежит в репозитории, и лишние байты дают шум в диффе
+        File.WriteAllText(file, JsonSerializer.Serialize(shape, ScopeFileJson).ReplaceLineEndings("\n") + "\n",
+            new UTF8Encoding(false));
+    }
 
     // Папки: прямые слэши, без краёв-разделителей, без дублей и без выходов за корень
     public static IReadOnlyList<string> NormalizeFolders(IReadOnlyList<string>? folders)
@@ -448,6 +528,20 @@ public sealed partial class DocsIndexService
                 queue.Enqueue(sub);
             }
         }
+    }
+
+    // Настройка области проекта вместе с источником: файл репозитория или настройка продукта.
+    // Отдельный метод от Describe(rootPath, scope), потому что источник знает только резолв —
+    // а диалогу без него не понять, что именно он правит
+    public DocsScopeInfo Describe(Project project)
+    {
+        var file = ReadScopeFile(project.RootPath);
+        var info = Describe(project.RootPath, file.Scope ?? ScopeOf(project));
+        return info with
+        {
+            ScopeSource = file.Scope is not null ? "file" : "project",
+            ScopeFileError = file.Error,
+        };
     }
 
     // Настройка области целиком: что выбрано, что можно выбрать, что было бы по умолчанию

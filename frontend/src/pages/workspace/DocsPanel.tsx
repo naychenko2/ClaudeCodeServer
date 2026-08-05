@@ -19,13 +19,16 @@ import { api } from '../../lib/api';
 import { onFilesChanged } from '../../lib/signalr';
 import { C, FONT, FS, R, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
-import { Button, EmptyState, IconButton, IconSegmented, Menu, PanelHeaderSlot, TextField, useHasPanelHeader } from '../../components/ui';
+import { Button, EmptyState, IconButton, IconSegmented, Menu, PanelHeaderSlot, TextField, TocRow, useHasPanelHeader } from '../../components/ui';
 import { DocsScopeDialog } from './DocsScopeDialog';
 import { MarkdownViewer } from '../../components/MarkdownViewer';
 import { ListDateDivider, LIST_FLASH_CLASS, LIST_FLASH_MS } from '../../components/ListDateDivider';
 import { getExtMeta as extMeta } from '../../components/FileExplorer';
 import { useHeadings, scrollToHeading } from '../../hooks/useHeadings';
 import { resolveDocImage, resolveDocLink, sliceSection, slugify } from '../../lib/docsLinks';
+// Цитата раздела в композер: тем же каналом, что «Про файл …» в FileViewer и затравки
+// AI-хаба — текст ложится в ПУСТОЕ поле композера, набранный черновик важнее
+import { prefillComposer } from '../../lib/ai/startChat';
 import { DRAG_MOUSE_ACTIVATION, DRAG_TOUCH_ACTIVATION } from '../../lib/dnd';
 
 interface Props {
@@ -235,36 +238,6 @@ function FolderRow({ folder, count, current, onJump }: {
   );
 }
 
-// Строка оглавления документа. Тот же вид, что у строки папки в списке переходов:
-// это одна и та же роль — «прыгнуть к месту», и разной плотностью они бы спорили
-function TocRow({ text, indent, onJump, onQuote }: {
-  text: string;
-  indent: number;
-  onJump: () => void;
-  onQuote: () => void;
-}) {
-  const [hover, setHover] = useState(false);
-  return (
-    <button
-      onClick={onJump}
-      // Раздел в чат — правым кликом. Раньше для этого у каждой строки висела стрелка,
-      // но в узком поповере ряд иконок забирал больше внимания, чем сами заголовки
-      onContextMenu={e => { e.preventDefault(); onQuote(); }}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      title={`${text}\nПравый клик — раздел в чат цитатой`}
-      style={{
-        ...rowStyle, minHeight: ROW_H,
-        paddingLeft: SP.sm + indent,
-        background: hover ? C.bgInset : 'transparent',
-        color: hover ? C.textHeading : C.textSecondary,
-      }}
-    >
-      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{text}</span>
-    </button>
-  );
-}
-
 // Строка документа. Отдельным компонентом ради состояния наведения: список длинный,
 // и держать его в панели значило бы перерисовывать все строки на каждое движение мыши.
 // Бейдж расширения под курсором превращается в булавку — отдельной кнопки закрепления
@@ -352,13 +325,6 @@ function SortablePinnedRow({ doc, children }: { doc: DocEntry; children: ReactNo
       {children}
     </div>
   );
-}
-
-// Цитата раздела в композер: тем же механизмом, что «Про файл …» в FileViewer —
-// текст ложится в ПУСТОЕ поле композера, набранный черновик важнее
-function prefillComposer(text: string): void {
-  sessionStorage.setItem('cc_pending_chat_prompt', text);
-  window.dispatchEvent(new Event('cc-compose-prefill'));
 }
 
 export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath, onCloseFile }: Props) {
@@ -1359,9 +1325,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
                       <TocRow
                         key={i}
                         text={h.text}
-                        // Уровень заголовка — отступом: иначе плоский список не показывает
-                        // вложенность разделов
-                        indent={(h.level - 1) * SP.md}
+                        level={h.level}
                         onJump={() => { scrollToHeading(h); setTocAnchor(null); }}
                         onQuote={() => quoteSection(slugify(h.text), h.text)}
                       />

@@ -20,6 +20,7 @@ export { PanelRail } from './PanelRail';
 export type { RailItem } from './PanelRail';
 export { PanelDropGuide } from './PanelDropGuide';
 export { Menu, MenuItem } from './Menu';
+export { TocRow } from './TocRow';
 export { Modal } from './Modal';
 export { ModalActions, useIsMobileModal } from './ModalActions';
 export { ConfirmDialog } from './ConfirmDialog';
